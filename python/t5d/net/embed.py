@@ -1,0 +1,73 @@
+"""Input embeddings (A2, A3, B8; spec sections 2.2, 2.3, 5.3).
+
+Square tokens: learned embeddings of piece type (13 incl. empty), colour (none, white,
+black) and the has-moved flag, summed (A2). Coordinates are not embedded here: they
+reach attention through the 4D RoPE (B4).
+
+Every token of a board - its squares and its per-board registers - additionally gets
+the board's flag embeddings (head/superseded, active/inactive timeline, side to move;
+section 2.3: "added to every token on the board") and its Delta-t-to-present embedding
+(A3). Delta-t is continuous: a small learned MLP over the features
+``(dt / dt_scale, sign(dt) * log1p|dt|, [dt == 0])``, so the binary "present" flag is
+kept as Delta-t's zero (section 2.3) while the distance to the present stays readable
+at any range (implementation choice: the spec says only "embedded per board").
+
+Register tokens get a register-type embedding (per-board slot 0..R-1, or global index
+0..G-1) plus one learned "not a square" embedding (section 5.3) instead of piece/colour/
+has-moved. Global registers hold no board, so they get no board flags and no Delta-t.
+Padding tokens embed to zero (they are masked out of attention as keys).
+"""
+
+from __future__ import annotations
+
+import torch
+from torch import nn
+
+from .config import NetConfig
+from .state import N_COLOURS, N_PIECE_TYPES, TOKEN_BOARD_REGISTER, TOKEN_GLOBAL_REGISTER, TOKEN_SQUARE, Batch
+
+
+class InputEmbedding(nn.Module):
+    def __init__(self, cfg: NetConfig) -> None:
+        super().__init__()
+        d = cfg.d_model
+        self.cfg = cfg
+        self.piece = nn.Embedding(N_PIECE_TYPES, d)
+        self.colour = nn.Embedding(N_COLOURS, d)
+        self.moved = nn.Embedding(2, d)
+        self.head_flag = nn.Embedding(2, d)  # 0 superseded, 1 head
+        self.active_flag = nn.Embedding(2, d)  # 0 inactive, 1 active timeline
+        self.stm_flag = nn.Embedding(2, d)  # 0 white to move on the board, 1 black
+        self.dt_in = nn.Linear(3, cfg.dt_hidden)
+        self.dt_out = nn.Linear(cfg.dt_hidden, d)
+        self.board_register = nn.Embedding(max(cfg.regs_per_board, 1), d)
+        self.global_register = nn.Embedding(max(cfg.global_regs, 1), d)
+        self.not_square = nn.Parameter(torch.empty(d))
+
+    def dt_features(self, dt: torch.Tensor) -> torch.Tensor:
+        dt = dt.float()
+        return torch.stack([dt / self.cfg.dt_scale, torch.sign(dt) * torch.log1p(dt.abs()), (dt == 0).float()], dim=-1)
+
+    def forward(self, batch: Batch) -> torch.Tensor:
+        kind = batch.kind
+        is_square = (kind == TOKEN_SQUARE).unsqueeze(-1)
+        is_breg = (kind == TOKEN_BOARD_REGISTER).unsqueeze(-1)
+        is_greg = (kind == TOKEN_GLOBAL_REGISTER).unsqueeze(-1)
+        on_board = is_square | is_breg
+
+        square = self.piece(batch.piece) + self.colour(batch.colour) + self.moved(batch.moved)
+        board = (
+            self.head_flag(batch.is_head)
+            + self.active_flag(batch.active)
+            + self.stm_flag(batch.stm)
+            + self.dt_out(torch.nn.functional.gelu(self.dt_in(self.dt_features(batch.dt))))
+        )
+        slots = batch.reg_index.clamp(min=0)
+        breg = self.board_register(slots.clamp(max=self.board_register.num_embeddings - 1)) + self.not_square
+        greg = self.global_register(slots.clamp(max=self.global_register.num_embeddings - 1)) + self.not_square
+
+        zero = torch.zeros((), dtype=square.dtype, device=square.device)
+        x = torch.where(is_square, square, zero)
+        x = x + torch.where(is_breg, breg, zero)
+        x = x + torch.where(on_board, board, zero)
+        return x + torch.where(is_greg, greg, zero)

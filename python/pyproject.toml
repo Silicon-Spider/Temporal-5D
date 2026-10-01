@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+# Licence: the repository's LICENSE (GPL-3.0, register M11) governs; it is not
+# restated here so that this file cannot drift from it.
+[project]
+name = "t5d"
+version = "0.0.1"
+description = "Network stack of the Temporal 5D chess engine (untrained build, design spec section 15)"
+requires-python = ">=3.12"
+dependencies = ["torch", "numpy"]
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[tool.setuptools.packages.find]
+include = ["t5d*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-ra"
+
+[tool.ruff]
+line-length = 140
+target-version = "py312"
+src = [".", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "UP", "SIM", "RET", "PLE", "PLW", "I"]
