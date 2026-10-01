@@ -10,6 +10,23 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-01 - CHECKPOINT 1: the check disagreements, clustered and traced
+
+- `docs/checkpoints/checkpoint-1-check-clusters.md`: the 78 check disagreements
+  between ftxi and Chess in 5D (all at positions where both hold the same state,
+  H30) in seven clusters by the attacker's situation, four rule questions, every
+  oracle's verdict at a representative position drawn board by board, and the
+  traces of the two mate disagreements (a Chess in 5D mate-search defect) and of
+  the 52-vs-54 count (an ftxi move-generator defect for black pawns' two-timeline
+  steps, beside rules question Q15). Written by a collector, a clusterer, three
+  skeptics (16 findings, all applied) and a finaliser, from fresh runs of the
+  pinned oracles; nothing adjudicated, no oracle's side taken.
+- `docs/BUILD_LOG.md`: the checkpoint summary, the questions put to the user, and
+  everything parked until the check ruling.
+- Spec: §11.0 "Triage by cluster; settle by rulebook" (H31) - the triage is done;
+  the settling waits on the user's ruling and the rulebook question (proposed spec
+  edit 10). No spec text changes.
+
 ### 2026-10-01 - The tiered CI is green on Linux (H35)
 
 - Pushed to the remote for the first time. The commit tier (run 36827435595) and

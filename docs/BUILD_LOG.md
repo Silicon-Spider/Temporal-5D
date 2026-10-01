@@ -179,6 +179,54 @@ Design (from a six-agent investigation of the harness and every oracle, 2026-10-
 
 ### 3. CHECKPOINT 1 and the ruling-independent engine work - in progress
 
+**CHECKPOINT 1 - reported 2026-10-01** (full report:
+`docs/checkpoints/checkpoint-1-check-clusters.md`; evidence in
+`oracles/.cache/reports/checkpoint1/`, regenerable). After H30, all 81 positions
+involved hold the same state in every source. The 78 check disagreements (ftxi
+"check", Chess in 5D "no check") come from one difference: before looking for a
+royal capture, ftxi passes every board the side to move may play (rules reference
+Q10, reading 5), Chess in 5D only the mandatory ones (reading 2). All 217 of
+ftxi's captures start on an optional board of the side to move that Chess in 5D
+does not pass. Seven clusters, four rule questions, **all about which boards
+count as sources of attack (spec §11.0 item 1)**:
+
+| Cluster | Attacker's board | Capture | Positions | Question | Representative |
+|---|---|---|---|---|---|
+| CHK-A1 | active timeline, ahead of the present | same board | 40 | RQ1 | `cwmtt/silly@28` |
+| CHK-A2 | active, ahead | onto a royal on a history board; branch active | 5 | RQ1 | `notation/Bg2@19` |
+| CHK-A3 | active, ahead | onto a royal on a history board; branch **inactive** | 17 | RQ2 | `cwmtt/niceAndrey@57` |
+| CHK-A4 | active, ahead | non-branching jump onto a royal's board | 2 | RQ1 | `cwmtt/silly@16` |
+| CHK-A5 | active, ahead | onto a royal on another optional board (two passes) | 5 | RQ1 | `cwmtt/niceAndrey@41` |
+| CHK-I1 | inactive timeline, behind the present | same board | 3 | RQ3 | `cwmtt/manyChecks@20` |
+| CHK-I2 | inactive, behind | onto a royal on a history board; branch inactive | 6 | RQ4 | `cwmtt/standard@13` |
+
+- RQ1: do pieces on an active optional board ahead of the present attack (is that
+  timeline "eligible" for the phantom advance)? RQ2: as RQ1, and does a capture
+  that would branch into an inactive timeline count? RQ3: do pieces on an inactive
+  timeline's board attack? RQ4: RQ3 plus the branch question. Q1 (activation when
+  the creator is behind on count) moves 18 CHK-A positions under its
+  "consecutive" reading. The rules reference today (C6 medium, C7 medium) gives
+  Chess in 5D's answer at all 78; readings 4 ([41]) or 5 (wiki.gg only) give
+  ftxi's. No terminal verdict in the corpus turns on these 78 (a legal action
+  exists at each).
+- **The two mate disagreements** (Chess in 5D "checkmate", ftxi counts actions)
+  trace to a Chess in 5D defect, not a cluster: its exhaustive BFS hands
+  `boardFuncs.moves` a tree node instead of a board, generates nothing and
+  answers checkmate; its own enumerator lists the same 25 / 21 legal actions as
+  ftxi (and cwmtt). Rule: C5 (a legal turn exists). Every other Chess in 5D
+  checkmate in the corpus is corroborated by another source.
+- **52 vs 54** (`notation/1.2@15`): an ftxi defect - the black branch of its
+  timeline double step is guarded by the white piece types, so it never generates
+  a black pawn's or brawn's two-timeline step (it does generate white's). The two
+  extra actions are black pawns stepping two timelines onto a history board
+  (branching). Whether that step exists at all is rules reference Q15 (4.6 vs
+  [72]); ftxi is wrong for one colour either way.
+- **Asked of the user:** the check ruling (RQ1-RQ4, with Q1); which text is the
+  rulebook (proposed: `docs/rules/README.md`); Q15 (pawn timeline double step);
+  the repetition rules (the game documents none - D2, Q23 - so it is a project
+  decision, register part K); castling's attack test (spec §11.0 item 4 vs rules
+  S2, spec issue 10); whether to report the two oracle defects upstream.
+
 Engine stage E1 (C++ scaffold, immutable board, persistent multiverse, 5DFEN,
 fingerprint, 5D Zobrist, C API skeleton) and network stage N1 (dense v1 with
 random weights) are being written; neither is committed before CI is green on
@@ -262,7 +310,20 @@ project `.venv`; the network is PyTorch on CPU under `python/`.
 
 ## Parked, and why
 
-Nothing parked yet beyond the rows above that wait on the check ruling or on 6b.
+Waiting on the check ruling (CHECKPOINT 1, 2026-10-01), as the brief directs:
+- the engine's check detection (H22 item 1) and the phantom-board definition;
+- turn legality at submission - the royal-safety half (C4); the present-shift half
+  is built (E2);
+- naive mate detection and the hypercuboid detector (H22 item 3);
+- castling's cross-board attack option (spec issue 10);
+- the scanner (H1-H5, H10-H17, H19) and experiment 6b (M8), hence the NNUE (F4);
+- search on real positions (E1-E9 on 5D states), and the typed edges' "check"
+  relation (B11);
+- the legal-move re-measure of movegen throughput (M9) and the |E| curve from
+  legal moves (M7) - their pseudo-legal versions proceed now.
+Waiting on the user (no ruling yet): repetition rules (register part K) - every
+consumer of repetition (MCGS graph-history, solved-store keys, df-pn, activation
+semantics, variant terminal values).
 
 ## Spec issues (wrong, ambiguous, contradictory, silent)
 
