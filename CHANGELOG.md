@@ -10,6 +10,25 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-01 - Upstream drafts of the two oracle defects; network CI fix
+
+- `docs/checkpoints/upstream/`: draft bug reports for the user to file (rulebook
+  R7) - 5d-chess-js's exhaustive mate search passes a search-tree node where a board
+  is expected, generates no moves and reports checkmate where a legal turn exists;
+  ftxi's move generator never gives a Black pawn or brawn the two-timeline double
+  step. Each has a hand-built minimal record verified on the pinned code, the root
+  cause at the pinned commit, a fix checked in a scratch copy, and the rule from
+  public sources; the README lists what to check before filing.
+- `python/t5d/net/heads.py`: the value head's bin centres are computed from
+  integers. `torch.linspace` put the middle centre at 2.2e-8 on Linux, not 0, and
+  the first Linux run of the network job failed on it (446 of 447 passed); a draw
+  must sit exactly on a centre.
+- `.gitignore`: agent worktrees (`.claude/worktrees/`).
+- `docs/BUILD_LOG.md`: the 18 Q1 positions confirmed unmoved under the count rule
+  from the checkpoint's data; the drafts' state and two further ftxi leads.
+- Spec: §11.0 "Triage by cluster" and H31 (the defects found by triage);
+  §8.3 / D3 (the value head's 51 bins - no spec change); nothing else.
+
 ### 2026-10-01 - The network stack, stages N1 and N2 (random weights)
 
 - `python/` (package `t5d`, PyTorch on CPU; `cd python; py -m pytest`), built to
