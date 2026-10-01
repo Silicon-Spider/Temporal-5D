@@ -8,6 +8,28 @@ part of the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-01 - CI: oracle builds cached, toolchains installed only for stale builds
+
+- `.github/workflows/oracle-nightly.yml`: the oracle builds
+  (`oracles/.cache/build`) are restored and saved as separate steps - saved as
+  soon as they are built, so they survive a run whose gate then fails (a single
+  cache step saves only when the whole job succeeds). After a driver or recipe
+  change the newest older cache is restored, and the harness rebuilds only the
+  builds whose own keys moved. GHC 9.10.3 is installed only when a stale build
+  needs it - only cwmtt's does - so a nightly run with a current cwmtt build
+  skips the heaviest toolchain entirely.
+- `oracles/.cache/build/ftxi` in `oracle-commit.yml` is restored and saved the
+  same way. That workflow can now also be started by hand.
+- New: `python oracles/harness.py build --plan` builds nothing and prints, as one
+  line `tools=<names>`, the build tools the oracles without an up-to-date build
+  still need (`build.tools_needed()`, tested in `oracles/tests/test_build.py`).
+  The workflow asks the harness instead of naming an oracle: CI configuration may
+  not name an oracle's package, and cwmtt's repository name is its Haskell
+  package name, which the boundary check refuses there.
+- Why: H35 asks for the tiered CI green on Linux, and the nightly tier has to stay
+  cheap enough to run every night.
+- Spec: §11.0 ("Tiered CI") describes the tiers, not how CI caches; not changed.
+
 ### 2026-10-01 - Agent permissions: push allowed, force-push and GitHub file writes denied
 
 - `.claude/settings.json`: `git push` is allowed without a prompt, from both the

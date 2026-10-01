@@ -1,3 +1,4 @@
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -76,6 +77,30 @@ class BuildKeyTests(unittest.TestCase):
             build.prune_siblings(oracle / "bbbb")
             self.assertEqual(sorted(path.name for path in oracle.iterdir()), ["bbbb"])
             self.assertTrue(other.exists())
+
+
+class ToolsNeededTests(unittest.TestCase):
+    """`build --plan`: what CI must install before `build` (only the tools of what is not built)."""
+
+    def setUp(self):
+        self.lock = lockfile.load()
+
+    def test_every_recipe_names_its_tools(self):
+        for oracle in build.buildable(self.lock):
+            self.assertTrue(build.recipe_tools(oracle), oracle)
+
+    def test_an_up_to_date_build_needs_no_tools(self):
+        with tempfile.TemporaryDirectory() as folder, mock.patch.dict(os.environ, {"ORACLE_HARNESS_CACHE": folder}):
+            everything = build.buildable(self.lock)
+            self.assertIn("ghc", build.tools_needed(self.lock, everything))
+            pin = self.lock.pin("cwmtt")
+            root = build.build_root(pin)
+            root.mkdir(parents=True)
+            (root / "cwmtt").write_bytes(b"")
+            build._finish(pin, root, {"cli": "cwmtt"}, {})
+            self.assertNotIn("ghc", build.tools_needed(self.lock, everything))
+            self.assertEqual(build.tools_needed(self.lock, ["cwmtt"]), [])
+            self.assertEqual(build.tools_needed(self.lock, ["ftxi"]), sorted(build.recipe_tools("ftxi")))
 
 
 if __name__ == "__main__":

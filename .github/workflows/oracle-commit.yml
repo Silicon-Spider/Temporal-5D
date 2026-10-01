@@ -8,6 +8,7 @@ name: oracle gate - commit tier
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -34,8 +35,11 @@ jobs:
       - name: Static checks - pins, corpus, known divergences, boundary, provenance, golden files
         run: python oracles/harness.py verify --tracked-only
 
-      - name: Cache the ftxi build
-        uses: actions/cache@v6
+      # Restored and saved as separate steps, so that a build is kept even when a
+      # later step of the same run fails.
+      - name: Restore the ftxi build
+        id: ftxi-cache
+        uses: actions/cache/restore@v6
         with:
           path: oracles/.cache/build/ftxi
           key: oracle-ftxi-${{ runner.os }}-${{ hashFiles('oracles/oracles.lock.toml', 'oracles/drivers/ftxi/**', 'oracles/oracle_harness/build.py') }}
@@ -44,6 +48,13 @@ jobs:
         run: |
           python oracles/harness.py doctor
           python oracles/harness.py build --oracle ftxi
+
+      - name: Save the ftxi build
+        if: steps.ftxi-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: oracles/.cache/build/ftxi
+          key: ${{ steps.ftxi-cache.outputs.cache-primary-key }}
 
       - name: Harness self-tests
         run: python oracles/harness.py selftest

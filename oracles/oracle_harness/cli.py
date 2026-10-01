@@ -56,6 +56,10 @@ def cmd_build(args: argparse.Namespace) -> int:
     blocking = lockfile.verify(lock)
     if blocking:
         return _report([("pins", blocking)])
+    if args.plan:
+        # One `key=value` line, so CI can append it to its step outputs.
+        print(f"tools={','.join(build.tools_needed(lock, args.oracle or build.buildable(lock)))}")
+        return 0
     for oracle in args.oracle or build.buildable(lock):
         built = build.build(lock.pin(oracle), lock, bootstrap=args.bootstrap, force=args.force, log=_say)
         for key, value in built.info.items():
@@ -163,6 +167,8 @@ def parser() -> argparse.ArgumentParser:
     sub.add_argument("--bootstrap", action="store_true",
                      help="fetch missing pinned tools (CMake/Ninja wheels, GHC archive) into the harness cache")
     sub.add_argument("--force", action="store_true", help="rebuild even if an up-to-date build exists")
+    sub.add_argument("--plan", action="store_true",
+                     help="build nothing; print the build tools still needed, as one line `tools=<names>`")
 
     sub = add("observe", cmd_observe, "Print what one source says about one corpus record.")
     sub.add_argument("--source", required=True, choices=ORACLE_SOURCES)
