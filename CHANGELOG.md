@@ -10,6 +10,20 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-01 - The tiered CI is green on Linux (H35)
+
+- Pushed to the remote for the first time. The commit tier (run 36827435595) and
+  the nightly tier (run 36827459456, started by hand) both passed on ubuntu-24.04
+  at their first run: the golden files recorded on Windows reproduce exactly on
+  Linux (ftxi, cwmtt, Chess in 5D and the notation parser 100%). The naive
+  searches reproduce less on the slower runner (ftxi:naive 95.9%, cwmtt:naive
+  98.4%) and pass only by the coverage floors that H32 replaces next.
+- `CLAUDE.md`, `AGENTS.md`, `CONTRIBUTING.md` and `oracles/README.md` no longer
+  say the workflows have never run; they say the workflows run on Linux and are
+  not yet required checks on the branch.
+- Spec: §11.0 "Linux CI before engine code" and §15.1 (Phase 0 order) - H35 is
+  met; register H35 is done. No spec text changes.
+
 ### 2026-10-01 - The gate matches states, not move counts (H30)
 
 - **Every source now says what it set up, at every position.** Before the position

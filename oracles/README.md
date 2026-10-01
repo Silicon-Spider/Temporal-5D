@@ -118,8 +118,9 @@ Every build starts from `git archive` of the locked commit, so what runs is the
 pinned tree whatever state the checkout is in; nothing is ever built inside, or
 written to, `third_party/`.
 
-All of this has been run on Windows only. The CI workflows target Ubuntu and have
-never run (see "What this is not, yet").
+It runs on Windows (where it was written) and on Linux (CI, ubuntu-24.04): both
+workflows first went green on 2026-10-01, and the golden files recorded on Windows
+reproduce exactly on Linux.
 
 ## What is compared
 
@@ -587,11 +588,10 @@ position can be compared action by action.
 ## What this is not, yet
 
 - **Not a passed gate.** No engine has been compared with anything.
-- **Not enforced.** The two workflows have never run: nothing has been pushed to the remote.
-  Nothing here has been built or run on Linux, which is what they target, and
-  ftxi's own CI builds its Python module and its WebAssembly target there, not the
-  `5dtools` program the harness builds. Until the workflows run and are made
-  required checks, the rules bind whoever runs `verify`.
+- **Not enforced as a required check.** The two workflows run on Linux - the
+  commit tier on every push and pull request, the nightly tier every night - and
+  first went green on 2026-10-01. They are not yet required status checks on the
+  branch, so until they are, the rules bind whoever runs `verify`.
 - **Not a large corpus.** The records are the `.5dpgn` test records the pinned
   projects ship, the notation repository's sample games, and four records written
   here to cover what those lack (two stalemates, a checkmate beside them, an

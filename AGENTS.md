@@ -4,8 +4,9 @@ These rules bind you exactly as they bind human contributors (`CONTRIBUTING.md`)
 The first applies to every change. The rest come from design spec §11.0 and
 decisions H23–H29; `python oracles/harness.py verify` checks most of them
 mechanically and both CI workflows run it, so do not spend effort routing around
-them. (The workflows have not run yet - nothing has been pushed to the remote - so for now
-the check is only as good as your running it. Run it.)
+them. (The workflows run on Linux - the commit tier on every push, the nightly tier
+every night - but they are not yet required checks on the branch, so the check is
+also only as good as your running it. Run it.)
 
 ## Every change: the changelog and the spec
 

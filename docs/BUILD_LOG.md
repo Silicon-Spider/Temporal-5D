@@ -15,13 +15,25 @@ M5 - building it would break a rule).
 
 ## Where things stand
 
-*Updated 2026-10-01.*
+*Updated 2026-10-01, evening.*
 
-- **Current step:** 1 - commit the pending work, push, get the tiered CI green on
-  Linux (H35).
-- **Next:** step 2 - finish the gate (H30 fingerprints, H32 stable answers, H33
-  integrity, H34 telltales), then CHECKPOINT 1 (check-disagreement clusters).
-- **Waiting on the user:** nothing yet.
+- **Done:** pre-flight; step 1 (pushed; the commit and nightly tiers green on
+  Linux - H35 holds, so engine commits may land); step 2A (H30 state
+  fingerprints in every oracle, the notation parser as a parse-only oracle,
+  golden files schema 2); the cited rules reference `docs/rules/README.md`;
+  engine stage E1 and network stage N1 (both built and reviewed, not yet
+  committed - see below).
+- **Running:** CHECKPOINT 1 analysis (check clusters and the mate/count traces);
+  engine stage E2 (rules mechanics, pseudo-legal movegen, the 5dpgn parser, the
+  parse-mode gate adapter); network stage N2 (move-graph mask, routing, typed
+  edges, smolgen, a memory-efficient attention path).
+- **Next:** commit E1+E2 and N1+N2 when their workflows finish (each stage is
+  committed as soon as it completes from now on); step 2B (H32 stable answers, H33
+  integrity, H34 telltales, the engine parse mode in the gate) with one golden
+  re-record using the CI runner's speed for the H32 margin; report CHECKPOINT 1;
+  then movegen throughput (M9) and the |E| upper bound (M7) on pseudo-legal moves.
+- **Waiting on the user:** nothing blocking yet; CHECKPOINT 1's report will ask for
+  the check ruling (and which text is the rulebook), and the repetition rules.
 
 ## The brief - standing rules for every session
 
@@ -91,11 +103,27 @@ helpers' baked path had already been made relative by an amend to a56beb4, never
 pushed); `oracles/.cache` is ignored (`.gitignore:6`); `git ls-remote origin`
 and `git push --dry-run origin HEAD` succeeded. The remote is private.
 
-### 1. Commit, push, Linux CI (H35) - in progress
+### 1. Commit, push, Linux CI (H35) - done 2026-10-01
 
-Commits so far: the design documents (`docs/design/`), the oracle harness (H27),
-agent permissions, CI caching with `build --plan`, and this log with the licence
-record (M11).
+- Commits: the design documents (`docs/design/`), the oracle harness (H27), agent
+  permissions, CI caching with `build --plan`, this log with the licence record
+  (M11), the rules reference, and step 2A (H30). Pushed 2026-10-01
+  (`f62ceed..a04678c`) once the gh token had the `workflow` scope (the user
+  signed in).
+- Commit tier, run 36827435595: green on the first try - verify, the ftxi and
+  notation builds, selftest (462 tests; 16 skipped: live tests of oracles this
+  tier does not build), gate: ftxi 7760/7760 and notation 2765/2765 recorded
+  values reproduced. The golden files recorded on Windows reproduce exactly on
+  Linux.
+- Nightly tier, run 36827459456 (started by hand): green - GHC 9.10.3 installed
+  (cache miss), all four oracles built, selftest 462 tests with no skip, gate
+  nightly ok: ftxi, cwmtt, chessin5d and notation 100%; **ftxi:naive 6728/7016
+  (95.9%) and cwmtt:naive 4876/4957 (98.4%)** against 99.1% / 99.3% on the
+  desktop - the runner is slower, more naive searches hit their 120 s budget, and
+  the gate passes only by the coverage floors that H32 removes. The nightly gate
+  step took about 30 minutes on the runner.
+- Not yet: the workflows as required status checks on `main` (branch protection
+  is a repository setting - for the user).
 
 ### 2. Finish the gate - in progress
 
@@ -184,10 +212,10 @@ project `.venv`; the network is PyTorch on CPU under `python/`.
 | H23 | built | The gate (oracle side); engine side waits for the engine |
 | H24, H26, H28 | not started | In-house generator and parser (step 3) |
 | H27 | built, tested | The oracle harness, committed 2026-10-01 |
-| H30 | not started | Step 2 |
+| H30 | built, tested | Step 2A (a04678c): every oracle reports its boards per ply; no placement divergence across the corpus |
 | H31 | not started | Step 3 (CHECKPOINT 1) |
 | H32-H34 | not started | Step 2 |
-| H35 | in progress | Step 1 |
+| H35 | done | Commit and nightly tiers green on Linux, 2026-10-01 (runs 36827435595, 36827459456) |
 
 ### A-G, I - representation, network, search, training
 
