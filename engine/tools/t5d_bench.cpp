@@ -1112,8 +1112,11 @@ void write_text(const std::string& path, const std::string& text) {
 }
 
 std::uint64_t class_seed(std::uint64_t seed, int boards, int active, int game) {
-  return seed + 1000003ull * static_cast<std::uint64_t>(boards) +
-         10007ull * static_cast<std::uint64_t>(active) + 37ull * static_cast<std::uint64_t>(game);
+  // std::uint64_t throughout: with `ull` literals, g++ 13/14 on Linux (where
+  // uint64_t is unsigned long) warn under -Wsign-conversion.
+  return seed + std::uint64_t{1000003} * static_cast<std::uint64_t>(boards) +
+         std::uint64_t{10007} * static_cast<std::uint64_t>(active) +
+         std::uint64_t{37} * static_cast<std::uint64_t>(game);
 }
 
 // The band of a quantity that every level can fill: the overlap of the
@@ -1533,7 +1536,8 @@ int main(int argc, char** argv) {
       const auto add_stream = [&](std::size_t l, FlatKind kind, std::vector<FlatItem> items) {
         // A fixed shuffle (consecutive positions from different games), at
         // most flat_max.
-        t5d::synthetic::Rng rng(0x5EEDull + 7919ull * l + 104729ull * static_cast<unsigned>(kind));
+        t5d::synthetic::Rng rng(std::uint64_t{0x5EED} + std::uint64_t{7919} * l +
+                                std::uint64_t{104729} * static_cast<unsigned>(kind));
         for (std::size_t i = items.size(); i > 1; --i) std::swap(items[i - 1], items[rng.below(i)]);
         if (items.size() > opt.flat_max) items.resize(opt.flat_max);
         if (items.empty()) return;

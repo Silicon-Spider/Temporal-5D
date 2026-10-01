@@ -10,6 +10,14 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-02 - Engine CI: t5d-bench builds on Linux
+
+- `engine/tools/t5d_bench.cpp`: the synthetic seeds are computed with
+  `std::uint64_t` literals. With `ull` literals, g++ 13 and 14 on Linux - where
+  `uint64_t` is `unsigned long`, not `unsigned long long` as on MinGW - warn under
+  `-Wsign-conversion`, and the engine job failed on E3's commit.
+- Spec: no part of the spec describes the build.
+
 ### 2026-10-02 - Engine stage E3: expansion, its C API, the Phase 1 measurement tools
 
 - `engine/`: `expand()` (`t5d/expand.hpp`, `src/expand.cpp`, `t5d/records.h`)
