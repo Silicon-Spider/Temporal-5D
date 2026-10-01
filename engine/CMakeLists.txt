@@ -129,6 +129,7 @@ target_link_libraries(t5d-tests PRIVATE t5d_core)
 # Stage E4's tests.
 target_sources(t5d-tests PRIVATE
   tests/test_check.cpp
+  tests/test_detectors.cpp
   tests/test_search.cpp)
 
 add_executable(t5d-gate tools/t5d_gate.cpp)

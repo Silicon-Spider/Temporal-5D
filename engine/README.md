@@ -669,6 +669,137 @@ moves reach one state, which is searched once). It is fast where legal actions a
 and exponential in the number of boards where they are scarce: near mate it examines
 every combination of moves.
 
+### The hypercuboid detector: design
+
+The idea - a turn as one *semimove* per timeline, "play nothing here" among them,
+searched as a product space - is the design spec's (§11.0 item 3), which credits it to
+penteract's cwmtt and its adaptation in ftxi's 5dchess_engine. This design was worked
+out from the spec's description and the rulebook alone; neither oracle's source or
+documentation was read for it (AGENTS.md: the oracles are what it is compared with).
+
+**The space.** At the turn's start S0 the *axes* are the mover's playable boards
+A1..Ak (the timelines whose latest board has the mover to move). Every move of a
+legal action starts on one of them: the boards a move creates are the opponent's (T2,
+T7). Each axis has a list of *values* - its share of the turn:
+
+- `Pass` - the board is not played;
+- `Physical(m)` - a move within the board;
+- `Depart(m)` and `Arrive(m)` - the two halves of a jump onto another axis's board,
+  which plays both (J4); a point is *consistent* when every `Depart` is matched by the
+  same move's `Arrive` on the other axis and the other way round;
+- `Branch(m)` - a jump onto a history board (J3, J5), which plays only its source.
+  Among them, J6's: a jump onto another axis's board *after* that board was played
+  (its former latest board is history by then) - the same squares as the
+  non-branching jump, branching, and allowed only if that axis is not `Pass` and its
+  move comes first.
+
+A *point* - one value per axis - with an order for its branching moves (which numbers
+the timelines they create, J9) describes at most one action; every legal action is
+such a point. The candidate moves come from generating every axis's moves at S0 with
+the two activity-dependent restrictions lifted (castling only on mandatory boards,
+Q21; no landing on an inactive timeline's history, Q20), plus J6's branching twins of
+the jumps between axes: mid-action no other move can appear - the mover's moves visit
+only boards of the mover's colour, and an action changes those only by playing them
+(their contents unchanged). Whether a point's moves really are pseudo-legal, in an
+order, is then decided by the state machine itself (below).
+
+**A point's verdict.** For a point x: (1) consistency; (2) J6's order; (3) its
+*realisation*: the orders in which its moves can be played, each ending with the
+obligations met (T5) - one final state per order of its branching moves, found by
+replaying through `GameState` (each move checked by `is_pseudo_legal` in the state it
+is played in); (4) royal safety (C4) of each final state. A safe final state is a
+legal action.
+
+Realisation under the rules where only the order of the branching moves and the move
+that shifts the present matter - the default activity rules (count rule, no play
+activation, `Rewinds`), Q4's default, and an opponent with no inactive timeline (so
+no creation reactivates anything, T11): for each order of the branching moves, the
+moves that create no timeline (ascending source timeline), then the branching ones,
+then one last move L, tried for each candidate L. Those rules make a state depend only
+on which moves were made and on the order of the creations, and make the obligations
+monotone in the moves made, so if any order works, one of these does. Under every
+other ruleset (or when a reactivation is possible) the realisation is a depth-first
+search over all orders of the point's moves, with a table of the states reached:
+exact for any rules, slower.
+
+**Eliminating whole boxes.** The search keeps the unexplored part of the space as
+disjoint *boxes* (a box: one subset of values per axis; the start: everything). It
+takes a box, picks a point in it, judges the point, and removes from the box a
+*region* - itself a box - that contains the point and, provably, no legal action; what
+is left of the box is split into at most one box per constrained axis
+(B minus R = the union over the constrained axes j of: R's subsets on the axes before
+j, B's subset minus R's on j, B's subsets elsewhere). Regions:
+
+- *inconsistency*: `Depart(m)` on axis i with anything but `Arrive(m)` on j (and the
+  converse) - such a point is no action;
+- *J6*: a J6 `Branch` onto axis j with `Pass` on j;
+- *a J6 cycle*: J6 branches around a cycle of axes, each needing the next one's board
+  played first - no order plays them; every combination of such branches around the
+  same cycle fails alike;
+- *the present never shifts* (T5; under the realisation's fast rules): a mandatory
+  axis on `Pass` and, on every axis, no branching move whose new board would lie
+  before the present (only such a creation can rewind it, T8) - under Q5's
+  alternative, any active axis on `Pass`;
+- *a royal capture* (C4): the final state's capture C of a royal rests on a fixed set
+  of places (`capture_places`: the attacker's square, every square it crosses, the
+  royal's square). Places on boards that existed at S0 never change. A place on the
+  board an axis's move creates (its successor, at the next half-turn) is constrained:
+  that axis may take only values whose successor holds the same piece there (empty
+  for a crossed square; under Q18 a crossed place may also stay void, `Pass`). Every
+  point that agrees there has C too, in every order - so the box of those values is
+  eliminated whole. A capture made *within* one board that a branching move created
+  depends on that board alone - a copy of the move's destination with the arriving
+  piece (J5) - whatever its timeline's number: it constrains the creating axis to the
+  branching moves that leave the same pieces on the capture's squares. Any other
+  capture that touches a created timeline is used only when the point creates exactly
+  one timeline (its number and board are then fixed): the region keeps that branching
+  move and allows no other. Under Q20's alternative a capture landing on a history
+  board depends on activity and is not used. Of the captures found, the one that
+  removes the largest share of the box is used;
+- otherwise the single point.
+
+Before a point is picked, the box is *narrowed* by the same reasoning, value by value
+and without judging anything: a jump's half whose other half has left the box, a J6
+branch whose board can no longer be played, and - under the fast scheme's rules -
+`Pass` on a mandatory board when no value left in the box could rewind the present
+(under Q5's alternative, `Pass` on any active board) are removed, until nothing
+changes; a box left with an empty axis is dropped. The point is then picked
+consistent where the box allows (a jump's halves together, a J6 branch's board
+played; mandatory boards played, optional ones left).
+
+As built, every region is checked to hold its own point (else the search throws: a
+region that missed it would loop), and a final state's boards are checked against
+the values that made them (likewise).
+
+A legal point found while counting is removed alone. The search ends when no box is
+left: every point was judged or lay in an eliminated region, so the search was
+exhaustive - which is what a checkmate or stalemate verdict needs (H37). Each step
+removes at least its point, so it terminates.
+
+**Why it is faster near mate.** Where legal actions are scarce, most points fail on a
+royal capture that rests on a few boards; one region then removes every combination of
+the other boards' moves at once, where the naive search tries each. Where legal actions
+abound, both find one at once.
+
+### The two detectors compared
+
+Measured on this machine (Release, g++ 16.2; `build/` scratch benchmark, not a test):
+
+| Position | naive | hypercuboid |
+|---|---|---|
+| A checkmate on timeline 0 with 2n further mandatory boards each holding a knight whose moves cannot help (`detectors_the_hypercuboid_stays_small_near_mate`), n = 1 (3 timelines) | 2,407 nodes | 86 nodes |
+| the same, n = 2 (5 timelines) | 817,875 nodes, 0.6 s | 144 nodes, <1 ms |
+| the same, n = 3 (7 timelines) | stopped at 60,000,000 nodes after 90 s: `unknown` | 208 nodes, <1 ms |
+| Random legal play from every named variant, 551 positions (verdict + count to 40 + successor set, each) | 2.3 s in all | 0.2 s |
+| Random play from sparse starts that run into mates, 798 positions | 13.8 s | 5.2 s |
+| The same under four alternative rulesets (Q1-Q6, Q18-Q20, J3), 920 positions | 15.9 s | 7.8 s |
+
+The last three rows are the long cross-check (`t5d-tests --long`): on 2,269 positions
+the two detectors gave the same verdict wherever both proved one (2,123 positions,
+among them 57 checkmates and 48 stalemates), the same count to 40 wherever both knew
+it (2,107) and the same successor states wherever both were exhaustive (1,021) - no
+disagreement. The default run plays fewer games (`detectors_agree_*`, about 2 s).
+
 ## 5DFEN
 
 `parse_fen_board` reads one board string, `[pieces:timeline:turn:colour]`, for a

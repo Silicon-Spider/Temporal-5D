@@ -264,9 +264,10 @@ std::string board_text(int timeline, int half_turn, bool even) {
 // The hooks of the engine's check ruling (t5d/state.hpp).
 Verdict royals_safe_hook(const GameState& s) { return royals_safe(s) ? Verdict::Yes : Verdict::No; }
 Verdict in_check_hook(const GameState& s) { return in_check(s) ? Verdict::Yes : Verdict::No; }
-// C5, exhaustively (no budget: never Unknown - H37).
+// C5, exhaustively (no budget: never Unknown - H37), by the hypercuboid
+// detector (the faster near mate).
 Verdict has_legal_action_hook(const GameState& s) {
-  switch (detect_mate(s, Detector::Naive).verdict) {
+  switch (detect_mate(s, Detector::Hypercuboid).verdict) {
     case Outcome::Ongoing: return Verdict::Yes;
     case Outcome::Checkmate:
     case Outcome::Stalemate: return Verdict::No;
