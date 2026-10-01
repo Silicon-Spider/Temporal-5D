@@ -1,0 +1,18 @@
+# The oracle harness is its own project. It is never a member of the engine's
+# workspace, never installed into the engine's environment, and has no
+# third-party Python dependencies: run it with `python oracles/harness.py`.
+[project]
+name = "oracle-harness"
+version = "1"
+description = "Differential-testing harness over the pinned 5D chess rules oracles. Test infrastructure; never a dependency of the engine."
+requires-python = ">=3.12"
+dependencies = []
+
+[tool.ruff]
+line-length = 140
+# Other people's code, and the cache that holds exports of it.
+extend-exclude = ["third_party", ".cache"]
+src = [".", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "UP", "SIM", "RET", "PLE", "PLW", "I"]

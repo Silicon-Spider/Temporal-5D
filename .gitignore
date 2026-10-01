@@ -1,2 +1,8 @@
 # graft's local graph cache — regenerable, not committed (run `graft build`).
 /graft/
+
+# Oracle harness: toolchains, oracle builds and run reports — regenerable from
+# the pins in oracles/oracles.lock.toml (run `python oracles/harness.py build`).
+/oracles/.cache/
+__pycache__/
+*.pyc

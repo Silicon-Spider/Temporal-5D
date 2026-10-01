@@ -1,0 +1,135 @@
+# Pins for every third-party repository the oracle harness touches, and for the
+# toolchains that build them.
+#
+# This file is the single source of truth. `python oracles/harness.py verify`
+# checks .gitmodules, the gitlinks in the index, the checked-out submodules, the
+# corpus manifest, the golden observations and PROVENANCE.md against it.
+#
+# Changing a pin is a reviewed change, never a routine update. The procedure is
+# in CONTRIBUTING.md ("Changing a pin"); in short: edit the entry here, `sync`,
+# `git add` the submodule path so the gitlink follows, update the corpus manifest
+# for any record whose blob moved, `build`, re-verify the known divergences bound
+# to the old pin, `golden --write` and read the diff, `provenance --write`.
+schema = 1
+
+[repo.ftxi]
+role = "oracle"
+tier = "commit"
+upstream = "ftxi/5dchess_engine"
+url = "https://github.com/ftxi/5dchess_engine"
+submodule = "oracle-ftxi"
+path = "oracles/third_party/ftxi"
+commit = "2ea9f1b82880f08faa9400d1ac20b20102604187"
+tree = "41d9f936eeb582e7c530ed1acc9e30eae61bee17"
+ref = "v0.4.10"
+committed = "2026-09-15"
+licence = "BSD-2-Clause"
+licence_file = "LICENSE"
+licence_sha256 = "c36ba7d9587abbf62264a9e096f35b9c9c57805e6a4ae169cfe6e03de5b79e5f"
+summary = "C++23 bitboard rules engine: move generation, check detection, hypercuboid and naive action searches"
+used_as = "Built from an export of the pinned commit. Queried through oracles/drivers/ftxi (links its core library; part of that driver is adapted from its tools/position_tools.cpp and carries its licence notice) and cross-checked against its stock 5dtools CLI."
+notes = [
+    "Pinned at the latest release tag rather than main: the eight commits after v0.4.10 rework the hypercuboid hot path and have not been released.",
+    "Its own submodules (extern/pybind11, extern/client) are not needed and are never initialised; extern/client is declared with an SSH URL, so never update submodules recursively.",
+    "Its test/pgn/README.txt lists twelve of its sixteen test records as taken from cwmtt, under the GPL-3.0. A thirteenth (100timelines) is cwmtt's 100_timelines again under another name, and is left out of the corpus; the other three are its own. All are read in place through the corpus manifest, never copied.",
+    "At the pin a coordinate packs into 32 bits: 12 for the timeline, 12 for the turn, 4 each for rank and file (src/misc/vec4.h), so timelines and turns each span -2048..2047. The register's 'its 8-bit coordinate packing' (H24) describes an earlier tree.",
+]
+dependency_names = ["5dchess_engine", "5dchess_core", "5dchess_client"]
+
+[repo.cwmtt]
+role = "oracle"
+tier = "nightly"
+upstream = "penteract/cwmtt"
+url = "https://github.com/penteract/cwmtt"
+submodule = "oracle-cwmtt"
+path = "oracles/third_party/cwmtt"
+commit = "9632e9969dd455c6e3d6c27c57c1936c251d7e97"
+tree = "45da1b7bdaea8d1b59a43f049e50d615e146994b"
+ref = "master"
+committed = "2026-05-18"
+licence = "GPL-3.0 (LICENSE file); cwmtt.cabal declares BSD3 - treated as GPL-3.0 until upstream resolves the conflict"
+licence_file = "LICENSE"
+licence_sha256 = "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+summary = "Haskell rules implementation and the original hypercuboid mate search, with a naive search beside it"
+used_as = "Built from an export of the pinned commit with the pinned GHC. Queried through its stock CLI (`cwmtt count`)."
+dependency_names = ["cwmtt", "Game.Chess.TimeTravel"]
+notes = [
+    "No z3 in the program at this commit. Upstream removed the z3-based search in 65e1bf9 (2023-03-26) because it was slower than the plain hypercuboid search; the design spec's 'Haskell and z3' describes the older tree. Its README still mentions z3 and its stack.yaml still lists the z3 package, but cwmtt.cabal depends only on base and containers, so GHC alone builds it.",
+    "Its CLI reports whether a legal action exists, not why none does: it cannot tell checkmate from stalemate, and it has no check verdict.",
+    "A Board header it does not know - or that its parser does not reach - is silently replayed on the Standard layout, 5DFEN boards are skipped and a Promotions header is never read; the adapter refuses such records instead of trusting the answer.",
+    "Its parser stops without failing at the first thing it does not read (an annotation glyph, castling, a variation) and replays what it had. When that leaves the last action half read, the adapter reports the record as unsupported from there instead of passing the fragment's fate off as a verdict.",
+]
+
+[repo.chessin5d]
+role = "oracle"
+tier = "nightly"
+upstream = "5d-chess/5d-chess-js"
+url = "https://gitlab.com/5d-chess/5d-chess-js.git"
+submodule = "oracle-chessin5d"
+path = "oracles/third_party/chessin5d"
+commit = "ee403c80e8c132fc4d168f5b99ddd9b8fe5cc17b"
+tree = "f3997f396da0ece00fff6cfc7e65743ec979305e"
+ref = "master"
+committed = "2022-06-15"
+licence = "AGPL-3.0-or-later"
+licence_file = "LICENSE"
+licence_sha256 = "6f551a3f45c2c2235ec9b9e2d93c5896babab36caed027781b3e90df90876097"
+summary = "JavaScript rules library behind Chess in 5D (chessin5d.net): the most independent of the three implementations"
+used_as = "Exported at the pinned commit; its three runtime npm dependencies are installed from its own package-lock.json. Queried through oracles/drivers/chessin5d, in a separate Node process per record."
+dependency_names = ["5d-chess-js"]
+notes = [
+    "Chess in 5D's client (gitlab.com/5d-chess/chess-in-5d, AGPL-3.0) takes its rules from this library (dependency 5d-chess-js ^1.2.1). Only the rules library is pinned; the client adds no rules.",
+    "Runtime npm dependencies, all MIT: module-alias 2.2.2, blueimp-md5 2.18.0, present 1.0.0.",
+    "Defects at the pin, and what the driver does about each without touching rules logic: inCheckmate and inStalemate answer true when their search runs out of time (the driver calls the search itself and reads its timed-out flag); that search can exhaust memory on wide positions (it runs in a worker with its own heap limit); a Board header the library does not know, or that its header reader does not match, is silently replayed on the Standard layout, and 5DFEN boards are ignored unless Board is custom (the driver asks the library which variant it set up and refuses the record when that is not the one declared); a PGN result token at the end of the move text is read as moves (it is dropped); actions('object') throws a ReferenceError (not used).",
+    "Its action enumeration yields ordered move sequences under its own options, so it contributes check and mate verdicts and move legality, not action counts.",
+]
+
+[repo.notation]
+role = "corpus-source"
+upstream = "adri326/5dchess-notation"
+url = "https://github.com/adri326/5dchess-notation"
+submodule = "corpus-notation"
+path = "oracles/third_party/notation"
+commit = "99f6163a9c95a6a9740b20fb5f3c7f6503a166a0"
+tree = "a592a0ca229aeb508ac73e7c15f6a269f3ac051f"
+ref = "master (v1.4.3-13)"
+committed = "2021-07-25"
+licence = "X11 (MIT-style, with a no-advertising clause)"
+licence_file = "LICENSE"
+licence_sha256 = "8d4c0ecb12b11ec195afed72693869a24cea48e8b160d2cc4b8f03d08f42a0ae"
+summary = "The 5dpgn / 5dfen notation specification, with sample game records"
+used_as = "Source of corpus records (test/*.5dpgn) and the pinned text of the notation the corpus is written in. Not an oracle."
+dependency_names = ["5dchess-notation"]
+notes = [
+    "Not in the design spec's oracle table: pinned so the corpus has real game records that do not come from an oracle's own test suite.",
+    "Its bundled JavaScript parser is not an oracle and is as off limits to the engine as everything else under third_party: the engine's parser is written from the specification (decision H28).",
+]
+
+# --- Toolchains -------------------------------------------------------------
+# What builds the oracles. Compilers do not change rules logic, so these are
+# pinned for reproducibility of the build, not of the verdicts.
+
+[toolchain.ghc]
+version = "9.10.3"
+reason = "The compiler of Stackage lts-24.40, the resolver cwmtt's stack.yaml names at the pin. cwmtt needs only GHC's boot packages, so no package snapshot is fetched."
+
+[toolchain.ghc.dist.windows-x86_64]
+url = "https://downloads.haskell.org/~ghc/9.10.3/ghc-9.10.3-x86_64-unknown-mingw32.tar.xz"
+sha256 = "ad17bdbee5f195d50024da1447f458071d9d8a34f90d76907c873abaf95d893f"
+
+[toolchain.cmake]
+min_version = "3.20"
+bootstrap_pip = "cmake==4.4.3"
+reason = "Configures ftxi's own CMake project and the harness driver built against it."
+
+[toolchain.ninja]
+bootstrap_pip = "ninja==1.13.2"
+reason = "CMake generator: required on Windows, used elsewhere when present."
+
+[toolchain.cxx]
+requires = "g++ 13 or newer"
+reason = "ftxi/5dchess_engine is C++23. Its own CI also builds with Apple Clang and MSVC 14.40; the harness looks only for g++ (set CXX to point at one)."
+
+[toolchain.node]
+min_version = "18"
+reason = "Runs the Chess in 5D library; npm installs its three pinned runtime dependencies from its own lockfile."
