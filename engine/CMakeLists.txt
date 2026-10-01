@@ -4,7 +4,7 @@
 #   t5d_core   static library - the rules engine itself
 #   t5d        shared library - the C API (include/t5d/capi.h), for Python ctypes
 #   t5d-tests  the in-house test runner
-#   t5d-gate   the differential-testing gate's engine adapter (parse mode)
+#   t5d-gate   the differential-testing gate's engine adapter (full and parse mode)
 #
 # Build with `py engine/build.py [--test]` (see README.md), or by hand:
 #   cmake -S engine -B build/engine -G Ninja && cmake --build build/engine

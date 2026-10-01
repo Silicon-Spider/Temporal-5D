@@ -10,12 +10,15 @@ notation specification (H28).
 
 It is C++20, with a C API (a shared library) for Python and other callers.
 
-## Status: stage E2b
+## Status: stage E4
 
 Stage E1 built the parts of the engine that need no movement rules; stage E2a added
 the rules mechanics and pseudo-legal move generation (§11.0 items 4-5 and the
 movement rules); stage E2b adds the in-house 5dpgn reader (H28), the named variants,
-the replay of a record, and the gate adapter in parse mode. Rule IDs (L*, T*, J*, 4.*,
+the replay of a record, and the gate adapter in parse mode; stage E4, after the
+CHECKPOINT 1 rulings, adds check status and submission legality (H36), the legal
+actions and their count, the naive and hypercuboid mate detectors (H37), and the gate
+adapter's full mode (§11.0 items 1-3). Rule IDs (L*, T*, J*, 4.*,
 S*, Q*, V*) are those of the project's rules reference, `docs/rules/README.md`, which
 the code cites throughout.
 
@@ -38,12 +41,12 @@ the code cites throughout.
 | **E2b:** the named variants (rules reference V1-V4) | `include/t5d/variants.hpp` | §12.6 |
 | **E2b:** the gate adapter's protocol, parse mode | `include/t5d/gate.hpp`, `tools/t5d_gate.cpp` | H23, H30 |
 | **E4:** check status and submission legality; the engine's check ruling | `include/t5d/check.hpp` | §11.0 items 1-2, H36 |
-| The C API (unchanged by E2a and E2b) | `include/t5d/capi.h` | - |
+| **E4:** legal actions, their count and listing; the naive and hypercuboid mate detectors | `include/t5d/search.hpp`, `src/search.cpp`, `src/hypercuboid.cpp` | §11.0 item 3, H37 |
+| **E4:** the gate adapter's full mode and its diagnostics | `include/t5d/gate.hpp`, `tools/t5d_gate.cpp` | H23, H36, H37 |
+| The C API (unchanged by E2a, E2b and E4) | `include/t5d/capi.h` | - |
 
-Next: after the check ruling (§11.0, "Running the gate") - check detection, turn
-legality at submission and mate detection, which plug into the hooks described
-below, and the gate adapter's full mode on top of them; the C API for moves and
-records.
+Next: the gate run with the engine configured (parse mode, then full mode); the C API
+for moves, records and verdicts.
 
 **Moves are pseudo-legal; turns are legal.** A move is pseudo-legal when it obeys
 every movement rule and the action's bookkeeping; legality is judged per action, at
@@ -60,7 +63,10 @@ py engine/build.py --test          # Windows (python3 elsewhere)
 configures `build/engine` (git-ignored), builds everything and runs `t5d-tests`.
 Other options: `--clean`, `--config Debug`, `--werror`, and arguments for the test
 runner after `--` (`py engine/build.py --test -- zobrist` runs the tests whose names
-contain "zobrist"; `-- --list` lists them).
+contain "zobrist"; `-- --list` lists them). The default run takes a few seconds in
+Release; the long cross-checks of the two mate detectors (tests named `long_*`) run
+only with `-- --long` (or a fragment that names them, `-- long_detectors`): about a
+minute.
 
 Needs a C++20 compiler (g++ 13 or newer; on Windows the MSYS2 ucrt64 g++ on PATH),
 CMake 3.20 or newer and, preferably, Ninja. `build.py` takes CMake and Ninja from
@@ -82,7 +88,7 @@ Targets (all in `build/engine`):
 | `t5d_core` | static library: the engine |
 | `t5d` | shared library with the C API: `t5d.dll` on Windows, `libt5d.so` elsewhere |
 | `t5d-tests` | the test runner (exit status non-zero on any failure) |
-| `t5d-gate` | the gate's engine adapter: parse mode (see "The gate adapter") |
+| `t5d-gate` | the gate's engine adapter: full mode and parse mode (see "The gate adapter") |
 
 Release builds use -O2; every target builds with `-Wall -Wextra -Wpedantic -Wshadow
 -Wconversion -Wsign-conversion`, warning-free (`--werror` makes that binding). On
@@ -474,16 +480,61 @@ The protocol is the gate's engine contract, in the harness's manual
 (`oracles/README.md`, "The engine contract"); as implemented:
 
 ```
-t5d-gate --parse-only [--cap N]   replay the record: states, no verdicts
-t5d-gate [--cap N]                full mode: unsupported until the check ruling
+t5d-gate [--cap N]                full mode: states, check, legal actions, terminal
+t5d-gate --parse-only [--cap N]   replay pseudo-legally: states, no verdicts
 ```
 
 It reads one 5dpgn record on standard input (UTF-8; read in binary, CR-LF or LF) and
 writes one JSON object per line, flushed, with no other output on standard output.
-`--cap N` (the gate appends it) is accepted and ignored. Human-readable notes - why a
-record was rejected, with the token, line and column - go to standard error.
+`--cap N` (the gate appends it) caps the count of legal actions (1000 when not given,
+the manual's cap). Human-readable notes - why a record was rejected, with the token,
+line and column, or the capture that makes an action illegal - go to standard error.
 
-Parse mode: for every position K (0 = the set-up, K = after K submitted actions),
+**Full mode** (stage E4): for every position K (0 = the set-up, K = after K submitted
+actions),
+
+```
+{"event":"state","index":K,"size":"WxH","markers":true,"boards":["<L>:<T>:<c>:<placement>",...]}
+{"event":"position","index":K,"side":"white"|"black","in_check":true|false,"legal_actions":N,"terminal":"none"|"checkmate"|"stalemate"}
+```
+
+- The state event as in parse mode (below), printed before the position is searched.
+- `in_check`: rules R1's check status (`t5d/check.hpp`). The harness's manual still
+  describes `in_check` as the "phantom" check of an earlier spec revision ("once every
+  eligible timeline has been advanced to its phantom board"); R1 replaced that
+  definition (spec §11.0 item 1 as revised) - the manual's wording needs bringing in
+  line.
+- `legal_actions`: `min(count, N)`, the count being the distinct legal successor
+  states ("Legal actions and their count" in "Stage E4": the contract leaves
+  "distinct" undefined).
+- `terminal`: `none` if a legal action exists, else `checkmate` if in check, else
+  `stalemate` (C5, C13) - never `unknown`: the count is an exhaustive search with no
+  budget (H37), so a mate verdict is always a proof; the harness's own timeout bounds
+  the run. At least one action is sought even with `--cap 0`, so `terminal` is known.
+- The hypercuboid detector counts; the naive detector cross-checks it at every
+  position (spec §11.0 item 3) under a node budget (50,000 nodes): where it finishes
+  and its count differs, the run ends `error` ("the detectors disagree", with both
+  counts). Where it does not finish it confirms nothing (H37).
+- The replay is legal: an action is accepted when every move is pseudo-legal, the
+  turn rules allow it, the present has shifted (T5) **and** no royal of the mover's is
+  left capturable (C4, R1) - otherwise `rejected`, `cannot_submit`.
+
+On this machine full mode replays the notation specification's own real game
+(Shad vs PseudoAbstractMeta, Half Reflected, 45 actions, eight timelines) in 0.7 s:
+every action legal, 46 positions answered; the naive detector alone, cross-checked by
+the hypercuboid, gives the same 46 answers in 25 s.
+
+**Diagnostics** - for investigating a record by hand, never for the gate's
+configuration (`gate.toml`): `--moves-after-shift` (rules Q4's other reading),
+`--rule NAME=VALUE` (any `RuleOptions` field: `true`/`false`, or an enumerator such as
+`activation=consecutive`, `mandatory=all_active`, `promotions=QRBN`),
+`--lenient-annotations` (`~`, `(>Lx)`, `(~Tx)` not checked), `--pgn NAME=VALUE` (any
+`PgnOptions` field, `castling_shortcuts=any_king` ...), `--actions K` (position K's
+legal actions on standard error: their count, then one line per distinct successor
+state, the canonical action texts sorted), `--detector naive|hypercuboid` (which one
+counts; the other cross-checks), `--cross-check-nodes N`, `--no-cross-check`.
+
+**Parse mode** (`--parse-only`): for every position K,
 
 ```
 {"event":"state","index":K,"size":"WxH","markers":true,"boards":["<L>:<T>:<c>:<placement>",...]}
@@ -495,11 +546,11 @@ Parse mode: for every position K (0 = the set-up, K = after K submitted actions)
   even game's central pair, signed otherwise (`+1`, `-1`); `T` the turn as displayed;
   `c` the colour to move on the board; the placement the canonical 5DFEN pieces field,
   `*` on exactly the pawns, rooks, kings and brawns that have not moved.
-- `side`: the player to move. `in_check`, `legal_actions` and `terminal` are null:
-  they wait on the check ruling.
-- An action is accepted when every move is pseudo-legal and allowed by the turn rules
-  and the present has shifted (T5); the royal-safety test at submission (C4) is not
-  made.
+- `side`: the player to move. `in_check`, `legal_actions` and `terminal` are null.
+- The replay is pseudo-legal: an action is accepted when every move is pseudo-legal
+  and allowed by the turn rules and the present has shifted (T5); the royal-safety
+  test at submission (C4) is not made (`CheckRuling::none()`), so parse mode follows a
+  record past an illegal action to compare what was set up.
 
 Then exactly one end event; every end event carries `actions_accepted`:
 
@@ -508,7 +559,7 @@ Then exactly one end event; every end event carries `actions_accepted`:
 | `ok` | every action read was replayed | `"actions_accepted":N` |
 | `rejected` | `"reason":"illegal_move"`, `"cannot_submit"` or `"unreadable"` (text, an ambiguous move, a disagreeing annotation, an action by the player not to move; also a set-up that cannot be built - see below) | `"actions_accepted":N,"reason":...` |
 | `unsupported` | before position 0: a game the engine does not play - mode, variant, custom boards over 8x8, a promotion set it does not implement - whatever else is wrong with the record | `"actions_accepted":0,"reason":"<what>"` |
-| `error` | an internal failure (none is known) | `"actions_accepted":N,"reason":"<what>"` |
+| `error` | an internal failure (none is known), or - full mode - the two detectors disagreeing | `"actions_accepted":N,"reason":"<what>"` |
 
 Position 0 is reported whenever the record's set-up can be built - the set-up never
 reads the move text, so a first action by the wrong player is refused at action 1,
@@ -525,9 +576,8 @@ its reasons are `illegal_move` and `cannot_submit` only): it needs amending to a
 `unreadable` - after positions and, with `actions_accepted` 0, before any - along with
 parse mode's null verdicts.
 
-Full mode prints only `{"event":"end","status":"unsupported","actions_accepted":0,
-"reason":"full mode waits on the check ruling"}`. Exit status: 0 for `ok`, `rejected`
-and `unsupported`, 1 for `error`, 2 for a bad command line. The adapter answers from
+Exit status: 0 for `ok`, `rejected` and `unsupported`, 1 for `error`, 2 for a bad
+command line. The adapter answers from
 the engine alone; it never runs, loads or reads the harness or an oracle.
 
 ### The specification's examples
@@ -954,6 +1004,21 @@ Each is recorded where it is made (the header comments) and listed here:
   exact-store facts kept apart: `RuleOptions::family` gives it an ID of its own. Other
   variants with fairy pieces (unicorns, brawns) share the standard ID: their positions
   name their pieces, whose rules are the same under every ruleset.
+
+- **What "distinct legal actions" counts** (stage E4; the gate contract's
+  `legal_actions`): distinct legal successor states, compared in full but for
+  `Timeline::origin` - see "Legal actions and their count". Counting move sequences
+  or move sets would count the same position several times.
+- **Check status passes the active boards in the present whatever Q5 says** (R1's
+  words: "all active boards in the present"): under Q5's alternative, which makes
+  boards ahead of the present mandatory too, they are still not passed.
+- **Parse mode stays pseudo-legal** (stage E4): it was introduced to compare what was
+  set up before the check ruling, and keeps following a record past an action that
+  leaves a royal capturable; full mode refuses that action (`cannot_submit`).
+- **An ambiguous move is still unreadable** (stage E4): the notation's "Omission" lets
+  a writer leave out a piece that a pin rules out, but legality is judged per action,
+  at submission, so a "pin" is no per-move notion; the reader does not try each
+  candidate in the context of the whole action.
 
 ## The independence rule
 
