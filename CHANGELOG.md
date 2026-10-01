@@ -8,6 +8,22 @@ part of the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-01 - Agent permissions: push allowed, force-push and GitHub file writes denied
+
+- `.claude/settings.json`: `git push` is allowed without a prompt, from both the
+  Bash and the PowerShell tool. Force pushes are denied, and deny rules beat
+  allow rules: `--force` and `--force-with-lease` anywhere in the command, `-f`
+  as its own argument, and a `+refspec`. The GitHub MCP server's three
+  file-writing tools (`create_or_update_file`, `push_files`, `delete_file`) are
+  denied, so an agent cannot commit to the remote except through a local commit
+  and a push.
+- The rules match the command's text, so they are a guard, not a boundary. They
+  do not catch `git -C <dir> push -f`, a combined short flag such as `-uf`, a git
+  alias, or a push run from a script. Checked by running each force form
+  against a remote that does not exist, with `--dry-run`: every one was denied
+  in both tools, and a plain push was not.
+- Spec: no section describes the developer tooling; not changed.
+
 ### 2026-10-01 - The design documents, under docs/design/
 
 - Added the design spec (`docs/design/5d-chess-transformer-design.md`), the
