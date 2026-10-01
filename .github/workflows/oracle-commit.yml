@@ -1,0 +1,60 @@
+# Commit tier of the oracle gate (design spec 11.0, decision H27): on every push
+# and pull request, check the boundary, the pins, the corpus and the golden
+# observations, then run the per-commit oracle (ftxi/5dchess_engine).
+#
+# The heavier oracles (cwmtt, Chess in 5D) run in oracle-nightly.yml.
+name: oracle gate - commit tier
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oracle-commit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  commit-tier:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Not recursive: the oracles' own submodules are not needed, and one
+          # of them is declared with an SSH URL (see oracles/oracles.lock.toml).
+          submodules: true
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Static checks - pins, corpus, known divergences, boundary, provenance, golden files
+        run: python oracles/harness.py verify --tracked-only
+
+      - name: Cache the ftxi build
+        uses: actions/cache@v6
+        with:
+          path: oracles/.cache/build/ftxi
+          key: oracle-ftxi-${{ runner.os }}-${{ hashFiles('oracles/oracles.lock.toml', 'oracles/drivers/ftxi/**', 'oracles/oracle_harness/build.py') }}
+
+      - name: Build the per-commit oracle
+        run: |
+          python oracles/harness.py doctor
+          python oracles/harness.py build --oracle ftxi
+
+      - name: Harness self-tests
+        run: python oracles/harness.py selftest
+
+      - name: Gate - commit tier
+        run: python oracles/harness.py gate --tier commit --tracked-only
+
+      - name: Keep the gate report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: oracle-gate-commit
+          path: oracles/.cache/reports/
+          if-no-files-found: ignore

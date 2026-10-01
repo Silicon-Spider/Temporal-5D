@@ -1,0 +1,84 @@
+# Nightly and release tiers of the oracle gate (design spec 11.0, decision H27):
+# all three oracles - ftxi/5dchess_engine, penteract/cwmtt and Chess in 5D - over
+# the whole pinned corpus.
+#
+#   nightly  every night, and on demand
+#   release  before any generator release or proof-channel enablement: run it by
+#            hand (workflow_dispatch, tier = release) or push a generator-v* tag.
+#            It fails unless an engine was compared against the oracles and came
+#            through at least one ruleset.
+name: oracle gate - nightly and release tiers
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      tier:
+        description: Gate tier to run
+        type: choice
+        options: [nightly, release]
+        default: nightly
+  push:
+    tags:
+      - "generator-v*"
+
+permissions:
+  contents: read
+
+env:
+  # A generator tag runs the release tier; the schedule runs nightly.
+  TIER: ${{ github.event_name == 'push' && 'release' || inputs.tier || 'nightly' }}
+
+jobs:
+  gate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: true  # not recursive - see oracle-commit.yml
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+
+      # Must be exactly the version pinned in oracles/oracles.lock.toml
+      # ([toolchain.ghc]); the harness refuses any other.
+      - uses: haskell-actions/setup@v2
+        with:
+          ghc-version: "9.10.3"
+          enable-stack: false
+          cabal-update: false
+
+      - name: Static checks - pins, corpus, known divergences, boundary, provenance, golden files
+        run: python oracles/harness.py verify --tracked-only
+
+      - name: Cache the oracle builds
+        uses: actions/cache@v6
+        with:
+          path: oracles/.cache/build
+          key: oracle-builds-${{ runner.os }}-${{ hashFiles('oracles/oracles.lock.toml', 'oracles/drivers/**', 'oracles/oracle_harness/build.py') }}
+
+      - name: Build every oracle
+        run: |
+          python oracles/harness.py doctor
+          python oracles/harness.py build
+
+      - name: Harness self-tests
+        run: python oracles/harness.py selftest
+
+      - name: Gate - ${{ env.TIER }} tier
+        run: python oracles/harness.py gate --tier "$TIER" --tracked-only
+
+      - name: Keep the gate report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: oracle-gate-${{ env.TIER }}
+          path: oracles/.cache/reports/
+          if-no-files-found: ignore

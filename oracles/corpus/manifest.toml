@@ -1,0 +1,520 @@
+# The pinned game-record corpus.
+#
+# Third-party records are not copied into this repository. Each entry names a file
+# inside a pinned submodule by path, git blob id and SHA-256; the harness reads the
+# bytes from that submodule's object store at its locked commit. A record cannot
+# change without this file changing, and no record is redistributed from here.
+#
+# Records are fed to every source as stored, with CRLF folded to LF.
+#
+#   board    the variant the record declares, exactly: its Board header, or its
+#            Variant header when it has no Board header (ftxi reads one in place
+#            of the other); empty when it has neither
+#   fen      true when the record sets up its own position with 5DFEN boards. Such
+#            a record counts towards no named variant: whatever its headers say,
+#            the gate files it under "(custom positions)" - as it does a record
+#            whose board is a custom set-up ("Custom...", "Even", "Odd")
+#   tier     the cheapest gate tier that runs the record (commit | nightly)
+#   also_at  other pinned locations holding the identical blob
+#
+# This is a seed corpus: the .5dpgn test records the pinned projects ship (not
+# cwmtt's tests in its own .tn format, nor the games embedded in 5d-chess-js's
+# JavaScript tests), the sample games of the notation repository, and a few records
+# written here. It spans a dozen board variants, but it is small, and most of it
+# was written as test cases rather than played as games. No oracle reads all of
+# it: each knows only some variants and some notation.
+#
+# Adding records: `python oracles/harness.py corpus --unlisted` prints a stub for
+# every .5dpgn file in a pinned source that is neither listed nor excluded here;
+# records of our own go under oracles/corpus/records/ with source = "local" (that
+# directory is exempt from line-ending conversion, see .gitattributes, because a
+# record is pinned by the hash of its bytes).
+# Every record states the licence it is used under.
+schema = 1
+
+[[record]]
+id = "cwmtt/100_timelines"
+source = "cwmtt"
+path = "tests/5dpgn/100_timelines.5dpgn"
+blob = "21c0df383415fb72af349c6c7f9a99c4e9256257"
+sha256 = "caee1585fdb2ff207c4fb592633d8f9e63b71402a346e087ebbd682b939714ec"
+size = 3924
+board = "Standard - Turn Zero"
+licence = "GPL-3.0, as part of penteract/cwmtt"
+tier = "commit"
+notes = "Wide: about a hundred timelines. Slow for the naive searches and for Chess in 5D."
+
+[[record]]
+id = "cwmtt/another"
+source = "cwmtt"
+path = "tests/5dpgn/another.5dpgn"
+blob = "411112fc40ac07c8664c4518c003432cb3292ef4"
+sha256 = "b7e3752b5301c7adce1b8a0a9231152954635a5a03f5fcad043b32a3ccda1ff5"
+size = 167
+board = "Standard"
+licence = "GPL-3.0, as part of penteract/cwmtt"
+tier = "commit"
+also_at = ["ftxi:test/pgn/another.5dpgn"]
+
+[[record]]
+id = "cwmtt/brawnsPuzzles-another"
+source = "cwmtt"
+path = "tests/brawnsPuzzles/another.5dpgn"
+blob = "8d5208147d82033c8b5af06f6ce71a9351001af6"
+sha256 = "916fb64d48c2e03bfda7763e12bd8a06b510855f0a1320a028b2ae6a99af4359"
+size = 95
+board = "Focused - Just Brawns"
+licence = "GPL-3.0, as part of penteract/cwmtt"
+tier = "commit"
+
+[[record]]
+id = "cwmtt/chessin5d-illegal-move-example"
+source = "cwmtt"
+path = "tests/5dpgn/chessin5d-illegal-move-example.5dpgn"
+blob = "928eac60b47fcca85f4ec4e9cd1a0e07b3f4d625"
+sha256 = "cc81474db893323f41df29d7754efb8cf3773633b3aacf0671ff149df0981102"
+size = 816
+board = "Standard"
+licence = "GPL-3.0, as part of penteract/cwmtt"
+tier = "commit"
+notes = "Named by cwmtt's author after a move Chess in 5D accepted that cwmtt held illegal. At the pins every source accepts every action of it; what they disagree on is the last position, which Chess in 5D calls checkmate and the other two do not."
+
+[[record]]
+id = "cwmtt/ctp1"
+source = "cwmtt"
+path = "tests/5dpgn/ctp1.5dpgn"
+blob = "9183d977869c766dc311283abb4efce4d9f2f12f"
+sha256 = "0d7d578842945521487c0b0cb9b5fe8129f2307e720eaa905ea16704016078c6"
+size = 328
+board = "Very Small - Open"
+licence = "GPL-3.0, as part of penteract/cwmtt"
+tier = "commit"
+also_at = ["ftxi:test/pgn/ctp1.5dpgn"]
+
+[[record]]
+id = "cwmtt/ctp2"
+source = "cwmtt"
+path = "tests/5dpgn/ctp2.5dpgn"
+blob = "27c93350cbff9dab77fef42a51b4a68f640c1bad"
+sha256 = "3080dce9aaf77f082c67e6158e7c02fc4aeee7d0b3688b39a41962371fda94c4"
+size = 663
+board = "Misc - Timeline Battleground"
+licence = "GPL-3.0, as part of penteract/cwmtt"
+tier = "commit"
+
+[[record]]
+id = "cwmtt/exiledKings"
+source = "cwmtt"
+path = "tests/5dpgn/exiledKings.5dpgn"
+blob = "a522c9e573dfbd56d57f06930f9876584298ec68"
+sha256 = "7a8b1b55e0c05a41ecfa40d59e94128a37902f25b4d1d14906a1c4d21c3ef032"
+size = 510
+board = "Standard - Turn Zero"
+licence = "GPL-3.0, as part of penteract/cwmtt"
+tier = "commit"
+also_at = ["ftxi:test/pgn/exiledKings.5dpgn"]
+
+[[record]]
+id = "cwmtt/futures"
+source = "cwmtt"
+path = "tests/5dpgn/futures.5dpgn"
+blob = "1c8d569c4f92e0661b038aa5ef68616a721ecc4e"
+sha256 = "c8f0cc9ca72fae1bd125fe2220d874ecb7734db2dec141a132f32fdbe0e1228c"
+size = 3259
+board = "Standard - Turn Zero"
+licence = "GPL-3.0, as part of penteract/cwmtt"
+tier = "commit"
+
+[[record]]
+id = "cwmtt/JustKings"
+source = "cwmtt"
+path = "tests/5dpgn/JustKings.5dpgn"
+blob = "8c60ab37d39bee7a998af76f82c66493424172e1"
+sha256 = "2497b5bac1a8de2628c7abe2b9283672eb1360fac9f33a39841ea388920a49f9"
+size = 82
+board = "Focused - Just Kings"
+licence = "GPL-3.0, as part of penteract/cwmtt"
+tier = "commit"
+
+[[record]]
+id = "cwmtt/many2"
+source = "cwmtt"
+path = "tests/5dpgn/many2.5dpgn"
+blob = "53de9978f913b4aaca24ae2478942cf0662bc0a5"
+sha256 = "e14438e9dbf71f845f8f3f99bb616e4cbf05dd3a47f1c4fa9041458c3d6d3ccd"
+size = 4088
+board = "Standard"
+licence = "GPL-3.0, as part of penteract/cwmtt"
+tier = "commit"
+
+[[record]]
+id = "cwmtt/manyChecks"
+source = "cwmtt"
+path = "tests/5dpgn/manyChecks.5dpgn"
+blob = "81c1f39ca2a298412314ff68bd81db01f570fe61"
+sha256 = "8fc05bbce2e8c40ae61de785a2b0675680ae57ced92946cfbcfe06b53d7f2506"
+size = 1669
+board = "Standard"
+licence = "GPL-3.0, as part of penteract/cwmtt"
+tier = "commit"
+also_at = ["ftxi:test/pgn/manyChecks.5dpgn"]
+
+[[record]]
+id = "cwmtt/niceAndrey"
+source = "cwmtt"
+path = "tests/5dpgn/niceAndrey.5dpgn"
+blob = "dfd9f77d8abfa4e6baa13aab931d8fa1ac55643a"
+sha256 = "b8bd7c5a63378445e3e1b72be8a6eaf072d65a93e7aaf7d833ea693d87da67a8"
+size = 4510
+board = "Standard - Reversed Royalty"
+licence = "GPL-3.0, as part of penteract/cwmtt"
+tier = "commit"
+
+[[record]]
+id = "cwmtt/NP"
+source = "cwmtt"
+path = "tests/5dpgn/NP.5dpgn"
+blob = "94d8ec0d1b00da6a8b96db014eed7c75368383e8"
+sha256 = "f5f052bc66b1fedda68f510aa1ff3b049903a019708606e4350786421b80fd0e"
+size = 2207
+board = "Standard"
+licence = "GPL-3.0, as part of penteract/cwmtt"
+tier = "commit"
+also_at = ["ftxi:test/pgn/NP.5dpgn"]
+notes = "Differs from cwmtt/NP0 only at the end: one leaves legal actions, the other does not."
+
+[[record]]
+id = "cwmtt/NP0"
+source = "cwmtt"
+path = "tests/5dpgn/NP0.5dpgn"
+blob = "c0dc77a9db8de1a60ecb37b291697bb4356f6355"
+sha256 = "b56e58cc44b3ea523a99a7f56c9ec3bb9db276163996e2b55c2aa7289fbb42f5"
+size = 2207
+board = "Standard"
+licence = "GPL-3.0, as part of penteract/cwmtt"
+tier = "commit"
+also_at = ["ftxi:test/pgn/NP0.5dpgn"]
+
+[[record]]
+id = "cwmtt/silly"
+source = "cwmtt"
+path = "tests/5dpgn/silly.5dpgn"
+blob = "28b8a28c735ebb6c530df83ad0d8795da2df47d5"
+sha256 = "369a53e5f25e75898f811ff429529e5082f2036e216f66340537c4eeffaf7a70"
+size = 869
+board = "Standard"
+licence = "GPL-3.0, as part of penteract/cwmtt"
+tier = "commit"
+also_at = ["ftxi:test/pgn/silly.5dpgn"]
+
+[[record]]
+id = "cwmtt/small"
+source = "cwmtt"
+path = "tests/5dpgn/small.5dpgn"
+blob = "6428c2fba85644f271c4159af6eb4b315fdfae1d"
+sha256 = "77a235e96537a81c548bc3ba9746b33d7d737ad93a1c2ffd8aabe378b9833461"
+size = 103
+board = "Standard - Turn Zero"
+licence = "GPL-3.0, as part of penteract/cwmtt"
+tier = "commit"
+also_at = ["ftxi:test/pgn/small.5dpgn"]
+
+[[record]]
+id = "cwmtt/smallTest"
+source = "cwmtt"
+path = "tests/5dpgn/smallTest.5dpgn"
+blob = "3998f7e519a226953b5075197142b65ee55cfdfd"
+sha256 = "4c1b1eea3d331877b5768add6a149bcb9053a2f85b00e36df2a0232e0bfe3b80"
+size = 80
+board = "Focused - Just Pawns"
+licence = "GPL-3.0, as part of penteract/cwmtt"
+tier = "commit"
+
+[[record]]
+id = "cwmtt/standard"
+source = "cwmtt"
+path = "tests/5dpgn/standard.5dpgn"
+blob = "71877cfd0c546b4a96a178b8e83ee1b7f27978b2"
+sha256 = "2c6b6f9cbfde9d7471716eb64aa8b977a9ae9fb076b9f58c5347fb142f58ccae"
+size = 221
+board = "Standard"
+licence = "GPL-3.0, as part of penteract/cwmtt"
+tier = "commit"
+also_at = ["ftxi:test/pgn/standard.5dpgn"]
+
+[[record]]
+id = "cwmtt/tesseractMageOChicken"
+source = "cwmtt"
+path = "tests/5dpgn/tesseractMageOChicken.5dpgn"
+blob = "392cd114e67beb4342cc751a905b317c6b8f9a31"
+sha256 = "715f98bc8c031f83351ecf1dbe1ce8e8d76125f821453fadc88d67b61bd82534"
+size = 821
+board = "Standard - Turn Zero"
+licence = "GPL-3.0, as part of penteract/cwmtt"
+tier = "commit"
+
+[[record]]
+id = "cwmtt/test1"
+source = "cwmtt"
+path = "tests/5dpgn/test1.5dpgn"
+blob = "9f793e4c7ad4e5a257926ce25ba7b5b5350da538"
+sha256 = "9c8ab591d15e26cdcd6e417f8614841c57ad9fddaa212d94537f2692c29b8832"
+size = 565
+board = "Standard - Half Reflected"
+licence = "GPL-3.0, as part of penteract/cwmtt"
+tier = "commit"
+
+[[record]]
+id = "cwmtt/wide"
+source = "cwmtt"
+path = "tests/5dpgn/wide.5dpgn"
+blob = "33f48f3cba53ee19bcbdfd470def9f1a366e9cc9"
+sha256 = "acc12925f03d8c03c6b6dbcab9187d1e16c6e35f6deeebb0d6583bb28f4ea53c"
+size = 6105
+board = "Standard"
+licence = "GPL-3.0, as part of penteract/cwmtt"
+tier = "commit"
+also_at = ["ftxi:test/pgn/wide.5dpgn"]
+
+[[record]]
+id = "ftxi/futures"
+source = "ftxi"
+path = "test/pgn/futures.5dpgn"
+blob = "8def1f13528419ec2a0390bcb9f05734c4d01302"
+sha256 = "924f2ec59a4eff26fe8bdbbe397eb0b6ebb45f63cfdef75caf38eb486dd97254"
+size = 3258
+board = "Standard - Turn Zero"
+licence = "GPL-3.0: adapted from cwmtt (ftxi test/pgn/README.txt)"
+tier = "commit"
+notes = "cwmtt/futures with one capture marker removed from move 9 (ftxi test/pgn/README.txt)."
+
+[[record]]
+id = "ftxi/niceAndrey"
+source = "ftxi"
+path = "test/pgn/niceAndrey.5dpgn"
+blob = "d26f7c73a2d011c6738b6a3451aab03511196ebf"
+sha256 = "ce6412f78444ce25aed510a51c85650c787d2253c08f2d98ea551329056bbba8"
+size = 4583
+board = "Standard - Reversed Royalty"
+licence = "GPL-3.0: adapted from cwmtt (ftxi test/pgn/README.txt)"
+fen = true
+tier = "commit"
+notes = "cwmtt/niceAndrey with the Reversed Royalty start position added as an explicit 5DFEN header."
+
+[[record]]
+id = "ftxi/number1"
+source = "ftxi"
+path = "test/pgn/number1.5dpgn"
+blob = "198ec6f4de534e413a624ece5b6af6e16248b800"
+sha256 = "75092e175928b2116cb4842d42bba7f03cab99e6775b8552e4cdd600e6c040e4"
+size = 305
+board = "Custom"
+licence = "BSD-2-Clause, as part of ftxi/5dchess_engine"
+fen = true
+tier = "commit"
+
+[[record]]
+id = "ftxi/softmate"
+source = "ftxi"
+path = "test/pgn/softmate.5dpgn"
+blob = "ffb38fc21866881f91cb57603f7d34e7579b64bd"
+sha256 = "93dc91f17dcbe5bbdee29566d5227fdab2c6875a9cf3e6638f91da4635560bb6"
+size = 445
+board = "Standard"
+licence = "BSD-2-Clause, as part of ftxi/5dchess_engine"
+tier = "commit"
+notes = "Contains parenthesised variations (branched 5dpgn); only ftxi's parser reads those."
+
+[[record]]
+id = "ftxi/verysmall"
+source = "ftxi"
+path = "test/pgn/verysmall.5dpgn"
+blob = "80d95fc9e4d585e4f5da7f268b73c7dfe1237551"
+sha256 = "287bd6133b2ed0f7c345c4b24e53c0043b8ee3b0100c5b80a72369a3c9a16de1"
+size = 89
+board = "Very Small - Open"
+licence = "BSD-2-Clause, as part of ftxi/5dchess_engine"
+tier = "commit"
+
+[[record]]
+id = "notation/1.1"
+source = "notation"
+path = "test/1.1.5dpgn"
+blob = "6463109e84b48b96bbd141dc44cb7d32ae6a0f6b"
+sha256 = "6e2b2a8ccbe4b50a15a046aa899e132edc580a58e96d4ad9e239590ba18bb1ca"
+size = 187
+board = "Standard"
+licence = "X11, as part of adri326/5dchess-notation"
+tier = "commit"
+notes = "Written in an early version of the notation."
+
+[[record]]
+id = "notation/1.2"
+source = "notation"
+path = "test/1.2.5dpgn"
+blob = "9614ebb9d15eac358f2015076a2527b5d1cd2525"
+sha256 = "78a249d00200ea284f19845a7d340f0030c3a9e7bbd8d8079ea138ea63684bac"
+size = 372
+board = "Standard - Turn Zero"
+licence = "X11, as part of adri326/5dchess-notation"
+tier = "commit"
+notes = "Written in an early version of the notation."
+
+[[record]]
+id = "notation/1.4"
+source = "notation"
+path = "test/1.4.5dpgn"
+blob = "22bf4faac2ab9e114c1bad58a60e24b327e7f16b"
+sha256 = "86d2cafd6f94bea2271ea99fe6abe9b7fa1b9c7aecf8f4c1c20994ad3b98c7ab"
+size = 102
+board = "custom"
+licence = "X11, as part of adri326/5dchess-notation"
+fen = true
+tier = "commit"
+notes = "A custom 5x5 position given as a 5DFEN board, under `variant`, `size` and `puzzle` headers and no Board header (its board field is the Variant header's value). Of the three oracles only ftxi sets it up."
+
+[[record]]
+id = "notation/aivsai"
+source = "notation"
+path = "test/aivsai.5dpgn"
+blob = "30b7265efb9ed18987e2cd186fef0ddebf633e0d"
+sha256 = "4816a78590f822018c6545e669c5c802ca00dde003afbe43d388e063e3f0bd61"
+size = 1696
+board = "Standard"
+licence = "X11, as part of adri326/5dchess-notation"
+tier = "commit"
+
+[[record]]
+id = "notation/Bg2"
+source = "notation"
+path = "test/Bg2.5dpgn"
+blob = "2f6f89fe840058732c99713785dcb7eeeaf00fca"
+sha256 = "689c9ab81c12daf25f0a9279cf0b22e962aaf6830a979862c546ca70b7819516"
+size = 658
+board = "Standard"
+licence = "X11, as part of adri326/5dchess-notation"
+tier = "commit"
+
+[[record]]
+id = "notation/e3"
+source = "notation"
+path = "test/e3.5dpgn"
+blob = "44817053a091a2bc85ae6d146efaec83c81eafb7"
+sha256 = "e93ce1ff0f983b6ff162d15aa041ae2a18ce50bf4a9e179238a349418c67098e"
+size = 546
+board = "Standard"
+licence = "X11, as part of adri326/5dchess-notation"
+tier = "commit"
+
+[[record]]
+id = "notation/game"
+source = "notation"
+path = "test/game.5dpgn"
+blob = "fab2e7b34122e0fa8226766fc0de06677231f21b"
+sha256 = "c3942bea20fb9e81e9d38746b8b40c14d6cea0839310795ff2a4194ccf68a4ae"
+size = 425
+board = "Misc - Small"
+licence = "X11, as part of adri326/5dchess-notation"
+tier = "commit"
+
+[[record]]
+id = "notation/game-2"
+source = "notation"
+path = "test/game-2.5dpgn"
+blob = "6320c3370ec157c777dd7bd76fbd5a08fbdda203"
+sha256 = "be8c0c860570568073f1d8b6b7fa5168daf6be79058edfe7b194381eeda108a8"
+size = 1071
+board = "Standard"
+licence = "X11, as part of adri326/5dchess-notation"
+tier = "commit"
+
+[[record]]
+id = "notation/game-3"
+source = "notation"
+path = "test/game-3.5dpgn"
+blob = "2c756bd7a66e3763eff66bfdc59264b61e1fa19c"
+sha256 = "0b01b6a0807b5dc5faabbcdb37fa6c2e64414b7fc4ecc4bccc964a704dfcc9c9"
+size = 485
+board = "Standard"
+licence = "X11, as part of adri326/5dchess-notation"
+tier = "commit"
+
+[[record]]
+id = "notation/invasion"
+source = "notation"
+path = "test/invasion.5dpgn"
+blob = "1c9d319981997cc7c2733764b211f245ff35187f"
+sha256 = "3197841dae1c42d023893af4cbd5a0a4f3d7676029368e67e31200d8c0a9b007"
+size = 949
+board = "Misc - Timeline Invasion"
+licence = "X11, as part of adri326/5dchess-notation"
+tier = "commit"
+
+[[record]]
+id = "notation/marauders"
+source = "notation"
+path = "test/marauders.5dpgn"
+blob = "801e3368ca99422e37ebd470ef8f1d625ecab190"
+sha256 = "ba58043b7a626b939e3c4364f25774a2272ac3e76b1685b2e3d7947ab7f0d6d3"
+size = 103
+board = "Misc - Timeline Marauders"
+licence = "X11, as part of adri326/5dchess-notation"
+tier = "commit"
+
+# --- Records written for this project ------------------------------------------
+# The pinned sources hold no stalemate, and no game in which an action is refused
+# by every oracle for a reason the rules give. These four are the smallest records
+# that do. They contain no third-party material.
+
+[[record]]
+id = "local/stalemate"
+source = "local"
+path = "oracles/corpus/records/stalemate.5dpgn"
+sha256 = "ae8bec1ab964d81d27d3e5092ac6b93b681c54cdba23dd72c72cc4867751096d"
+size = 67
+board = "Custom"
+fen = true
+licence = "written for this project; no third-party content"
+tier = "commit"
+notes = "King and queen against a bare king on one 5x5 board: after White's move Black has no legal action and is not in check."
+
+[[record]]
+id = "local/checkmate"
+source = "local"
+path = "oracles/corpus/records/checkmate.5dpgn"
+sha256 = "9a7d42471708746d7fec1db62e1cc26265ce8190a738a13ac82a86855d45db17"
+size = 68
+board = "Custom"
+fen = true
+licence = "written for this project; no third-party content"
+tier = "commit"
+notes = "The same material as local/stalemate, one square different: after White's move Black has no legal action and is in check."
+
+[[record]]
+id = "local/stalemate-with-a-past"
+source = "local"
+path = "oracles/corpus/records/stalemate-with-a-past.5dpgn"
+sha256 = "0fe871eb677304b7094bd69ce243a8d1d46175d9cf0a47251c34a0c05dcbc41a"
+size = 95
+board = "Custom"
+fen = true
+licence = "written for this project; no third-party content"
+tier = "commit"
+notes = "The stalemate of local/stalemate reached on the second turn, so that an earlier board exists for the king to travel to. Every such move is illegal as well."
+
+[[record]]
+id = "local/ignores-check"
+source = "local"
+path = "oracles/corpus/records/ignores-check.5dpgn"
+sha256 = "746b727931cbc7ba9e96c9796672ff38b5e67ff400e5ceaae62cc86e4072f0f3"
+size = 55
+board = "Standard"
+licence = "written for this project; no third-party content"
+tier = "commit"
+notes = "Not a legal game, on purpose: Black's last action ignores a check. A rules implementation has to refuse it."
+
+# Records in pinned sources that are deliberately left out.
+[[excluded]]
+source = "ftxi"
+path = "test/pgn/100timelines.5dpgn"
+reason = "the same game as cwmtt/100_timelines: it differs only in line endings and in a final newline"

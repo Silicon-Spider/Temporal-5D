@@ -1,0 +1,9 @@
+# One line-ending convention on every platform. The oracle harness pins files by
+# hash (the lock file, the corpus manifest, the golden observations), so the same
+# bytes must come out of a checkout on Windows and on Linux.
+* text=auto eol=lf
+
+# Game records of our own are pinned by the hash of their bytes (the manifest in
+# oracles/corpus/), and some oracles are sensitive to line endings: git must hand
+# them back exactly as they were committed.
+oracles/corpus/records/** -text

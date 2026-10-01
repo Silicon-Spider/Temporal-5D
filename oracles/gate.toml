@@ -1,0 +1,146 @@
+# How the gate runs. Pins live in oracles.lock.toml; this file holds policy.
+schema = 1
+
+[observe]
+# Legal actions are counted up to this cap; a count equal to the cap means "at
+# least this many". It is part of every golden file's signature, so changing it
+# means re-recording them.
+cap = 1000
+
+[engine]
+# argv of the engine-under-test adapter: a command that reads a 5dpgn record on
+# stdin and writes the observation protocol on stdout (oracles/README.md,
+# "Engine contract"). The harness appends `--cap N` and runs it from the
+# repository root. The adapter is the engine's, and lives with it: a command that
+# names anything inside oracles/ is refused.
+#
+# Empty until the rules engine exists. While it is empty no engine has been
+# compared against the oracles, and the proof channel stays disabled (H23).
+command = []
+
+# --- Tiers (design spec 11.0) -------------------------------------------------
+# sources       which oracle searches run
+# record_tiers  which corpus records run (each record names its cheapest tier)
+# timeout_s     wall clock per (source, record); what was answered before the
+#               deadline is kept, the rest is unknown
+# min_coverage  share of the golden values a run must reproduce to count as a check
+# min_checked   for the engine: a ruleset is gated only if, for each of check,
+#               count and mate, the oracles give a verdict at no less than this
+#               share of the positions the engine reports in it. No oracle reads
+#               every record, so the share is below 1; the gate prints the
+#               numbers it found. It can never be 0: a ruleset whose only oracle
+#               has no check verdict must not come out "gated".
+
+[tier.commit]
+sources = ["ftxi"]
+record_tiers = ["commit"]
+timeout_s = 60
+min_coverage = 1.0
+min_checked = 0.75
+
+# The naive searches are exhaustive and run out of time on wide positions; that
+# is expected, which is why their budgets and coverage floors are lower. The
+# floors only guard against a vacuous pass (a run where nearly everything timed
+# out or crashed); a contradiction fails the gate whatever the coverage.
+[tier.nightly]
+sources = ["ftxi", "ftxi:naive", "cwmtt", "cwmtt:naive", "chessin5d"]
+record_tiers = ["commit", "nightly"]
+timeout_s = 300
+mate_budget_ms = 20000
+min_coverage = 0.9
+min_checked = 0.75
+
+[tier.nightly.source_timeout_s]
+"ftxi:naive" = 120
+"cwmtt:naive" = 120
+# cwmtt's hypercuboid search needs a minute and a half on its widest record on a
+# fast desktop; a CI runner is several times slower.
+cwmtt = 900
+chessin5d = 600
+
+[tier.nightly.source_min_coverage]
+"ftxi:naive" = 0.6
+"cwmtt:naive" = 0.6
+cwmtt = 0.8
+
+# Before any generator release or proof-channel enablement. Fails unless an
+# engine was compared and came through at least one ruleset. Only a tier that
+# requires an engine and runs every source over every record tier can enable the
+# proof channel. Golden files are recorded under these budgets.
+[tier.release]
+sources = ["ftxi", "ftxi:naive", "cwmtt", "cwmtt:naive", "chessin5d"]
+record_tiers = ["commit", "nightly"]
+timeout_s = 600
+mate_budget_ms = 60000
+min_coverage = 0.95
+min_checked = 0.75
+require_engine = true
+
+[tier.release.source_timeout_s]
+"ftxi:naive" = 300
+"cwmtt:naive" = 300
+cwmtt = 1200
+chessin5d = 900
+
+[tier.release.source_min_coverage]
+"ftxi:naive" = 0.8
+"cwmtt:naive" = 0.8
+cwmtt = 0.9
+
+# --- Boundary -----------------------------------------------------------------
+# Every file outside oracles/ is checked. These lists sort the files into kinds,
+# and the kind decides what is looked for (the rules are listed at the top of
+# oracle_harness/boundary.py). Patterns match the repository-relative path or the
+# file name, ignoring case; "*" also matches "/". A file that matches none is
+# source code.
+
+[boundary]
+# Prose. May cite the harness and the oracles freely; only copied code is looked for.
+documentation = [
+    "*.md", "*.rst", "*.adoc", "*.bib", "CITATION.cff",
+    "README*", "CHANGELOG*", "LICENSE*", "COPYING*", "NOTICE*", "AUTHORS*",
+    "docs/design/*.md",
+]
+# Repository and tool configuration, which has to name the harness (CI runs it,
+# git pins it). May not fetch or name an oracle's repository or package, nor hold
+# copied code. Git's own files are not checked at all.
+plumbing = [
+    ".gitmodules", ".gitignore", ".gitattributes", ".ignore", ".mailmap",
+    ".github/*", ".claude/*", ".vscode/*", ".idea/*", ".mcp.json",
+    ".editorconfig", "CODEOWNERS", ".*ignore", ".pre-commit-config.yaml",
+]
+# Build files and scripts. Here an oracle's package name is a dependency wherever
+# it appears, and the harness directory may not be listed, except under a key
+# that excludes it. A recipe file (Makefile, justfile, package.json, tox.ini) may
+# run the gate's entry point, oracles/harness.py.
+manifests = [
+    "Cargo.toml", "Cargo.lock", "build.rs", "rust-toolchain.toml",
+    "pyproject.toml", "setup.py", "setup.cfg", "requirements*.txt", "constraints*.txt", "Pipfile", "Pipfile.lock",
+    "poetry.lock", "uv.lock", "tox.ini", "noxfile.py", "pytest.ini", "environment.yml", "environment.yaml",
+    "package.json", "package-lock.json", "pnpm-workspace.yaml", "yarn.lock", "deno.json", "deno.jsonc",
+    "*.config.js", "*.config.cjs", "*.config.mjs", "*.config.ts", "*.config.cts", "*.config.mts",
+    "CMakeLists.txt", "*.cmake", "Makefile", "GNUmakefile", "*.mk", "meson.build", "justfile",
+    "SConstruct", "SConscript", "xmake.lua", "premake5.lua", "vcpkg.json", "conanfile.txt", "conanfile.py",
+    "*.cabal", "stack.yaml", "package.yaml", "cabal.project",
+    "BUILD", "BUILD.bazel", "WORKSPACE", "*.bzl", "go.mod", "go.work", "*.nix",
+    "*.gradle", "*.gradle.kts", "pom.xml", "*.csproj", "*.vcxproj", "*.sln", "Gemfile", "*.gemspec",
+    "Dockerfile*", "*.dockerfile", "Containerfile",
+    "*.sh", "*.bash", "*.zsh", "*.ps1", "*.psm1", "*.bat", "*.cmd",
+]
+# No file outside the harness may share this many consecutive logic lines (each
+# at least copy_min_line_chars long, a run of white space counting as one) with
+# an oracle's source - nor a single logic line of at least copy_long_line_chars
+# (white space not counted), which is how a data table gets copied. Lines are
+# compared with white space dropped and quotes unified.
+copy_window_lines = 6
+copy_min_line_chars = 12
+copy_long_line_chars = 160
+
+# A reviewed exception, if one is ever needed. A waiver excuses one rule in one
+# file, wherever the offending text - the path, name or import the rule found -
+# contains `text`; a waiver that no longer excuses anything fails the check.
+# [[boundary.waiver]]
+# path = "tools/prepush.py"
+# rule = "references-harness"
+# text = "oracles/harness.py"
+# reason = "a developer script that runs the gate; it reads nothing the gate produces"

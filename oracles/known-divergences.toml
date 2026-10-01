@@ -1,0 +1,45 @@
+# Known divergences: places where an oracle is wrong and the engine is right.
+#
+# When the engine and an oracle disagree, the rulebook decides. If the engine is
+# wrong, fix the engine. If the oracle is wrong, record it here - with the rule
+# that settles it - and report it upstream. Any disagreement that is not recorded
+# here fails the gate.
+#
+# An entry excuses exactly one observation: this oracle, at this pin, on this
+# record, at this position, saying this, where the engine says that. It stops
+# matching (and the gate fails) if either value changes, if the oracle's pin
+# moves, or if the disagreement stops occurring. What it says the oracle answers
+# is checked against the golden files. It is not a way to make a red gate green:
+# an entry without a citation is rejected.
+#
+# The citation is to the rulebook - except for one kind of entry. An oracle that
+# refuses an action because it could not match the move text to a move
+# (oracle_value "rejected:no_matching_move", "rejected:ambiguous_move",
+# "rejected:notation_mismatch" or "rejected:unrecognised"), or that read a
+# different number of actions (kind "length"), may be stopped by notation it
+# does not read and not by a rule. If that is what it is, cite the notation
+# specification instead: give `notation = "..."` in place of `rulebook`. If the
+# oracle really does hold the move illegal, it is a rules matter after all and
+# needs the rulebook like any other.
+#
+# Empty for now: there is no engine yet, so nothing has been adjudicated. The
+# points where the oracles contradict each other are listed, unadjudicated, in
+# DISAGREEMENTS.md - those are where the first entries will come from.
+#
+# [[divergence]]
+# id = "KD-0001"
+# oracle = "chessin5d"            # the source that is wrong: ftxi | ftxi:naive | cwmtt | cwmtt:naive | chessin5d
+#                                 # (for kind legality or length: the implementation - ftxi | cwmtt | chessin5d)
+# pin = "ee403c80e8c132fc4d168f5b99ddd9b8fe5cc17b"   # that oracle's locked commit when this was verified
+# record = "cwmtt/standard"       # corpus record id
+# record_sha256 = "..."           # its sha256 in corpus/manifest.toml
+# kind = "in_check"               # side | in_check | legal_actions | terminal | legality | length
+# index = 13                      # position index (action number for legality and length)
+# engine_value = "True"           # both values exactly as the gate prints them
+# oracle_value = "False"
+# rulebook = "..."                # the rule that settles it, and where it is stated
+#                                 # (or, for unread move text only: notation = "...")
+# upstream = "https://..."        # the report, or "unreported: <why>"
+# added = "2026-10-01"
+# notes = ""
+schema = 1

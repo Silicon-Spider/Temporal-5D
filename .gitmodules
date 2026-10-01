@@ -1,0 +1,12 @@
+[submodule "oracle-ftxi"]
+	path = oracles/third_party/ftxi
+	url = https://github.com/ftxi/5dchess_engine
+[submodule "oracle-cwmtt"]
+	path = oracles/third_party/cwmtt
+	url = https://github.com/penteract/cwmtt
+[submodule "oracle-chessin5d"]
+	path = oracles/third_party/chessin5d
+	url = https://gitlab.com/5d-chess/5d-chess-js.git
+[submodule "corpus-notation"]
+	path = oracles/third_party/notation
+	url = https://github.com/adri326/5dchess-notation
