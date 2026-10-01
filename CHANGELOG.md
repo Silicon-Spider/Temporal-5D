@@ -1,12 +1,37 @@
 # Changelog
 
 Every change to this repository is recorded here, in the same edit that makes it,
-and the spec is brought in line with it (the rule is in `CLAUDE.md`). Newest first.
-Each entry says what changed and why, and ends with a `Spec:` line: which sections
-of the design spec and the decision register were updated to match, or that no
-part of the spec describes the change.
+and the spec is brought in line with it - upstream: the spec and the register are
+not edited here, and the edits they need are proposed in `docs/BUILD_LOG.md` (the
+rule is in `AGENTS.md`). Newest first. Each entry says what changed and why, and
+ends with a `Spec:` line: which sections of the design spec and the decision
+register the change bears on and what was proposed for them, or that no part of
+the spec describes the change.
 
 ## Unreleased
+
+### 2026-10-01 - Project licence recorded (M11); the build log; spec edits proposed, not made
+
+- `PROVENANCE.md` records the project's licence: the GPL-3.0, the `LICENSE` file
+  from the repository's initial commit (register M11). Its obligations attach on
+  distribution of source or binaries, not on private use or on running the engine
+  as a service; the BSD-2 code adapted into the ftxi driver is compatible, with its
+  notice kept; Stockfish and Lc0 code stays out to keep sole copyright (H29);
+  whether the licence reaches trained weights is open, to decide before any are
+  distributed. Its section on where the spec and the pinned reality differ now
+  says which differences the current spec has corrected (J20, H26) and which
+  remain.
+- `docs/BUILD_LOG.md`: the resume document for the untrained build (spec §15) -
+  the standing rules of the build, what is done, parked and next keyed by register
+  ID, the spec issues found, and the spec edits proposed. `docs/MEASUREMENTS.md`:
+  every measured figure with its conditions, and the §15.6 verdicts.
+- The spec and the register are maintained upstream: `AGENTS.md`,
+  `CONTRIBUTING.md` and `CLAUDE.md` now say they are never edited here - an edit
+  they need is proposed in the build log and applied upstream, and a measured
+  figure goes into `docs/MEASUREMENTS.md` with its write-back (M4) proposed.
+- Spec: M11 is recorded as the register states it; no spec text changes.
+  Proposed: §11.0 "Tiered CI" should say ftxi runs through a C++ driver, not its
+  Python bindings (`docs/BUILD_LOG.md`, proposed spec edit 1).
 
 ### 2026-10-01 - CI: oracle builds cached, toolchains installed only for stale builds
 

@@ -12,18 +12,21 @@ A change is finished only when, in the same commit as the change itself:
 
 1. **`CHANGELOG.md` records it.** Add an entry at the top of `## Unreleased`: the
    date, what changed and why, and a `Spec:` line that names the sections of the
-   design spec and the register you updated - or says that no part of the spec
-   describes what changed. Code, tests, configuration and documents all count;
-   related edits share one entry.
-2. **The spec says what is now true.** Wherever the design spec
-   (`docs/design/5d-chess-transformer-design.md`) or the decision
-   register (`docs/design/5d-chess-decisions.md`) describes what you
-   changed, update it to match: the reasoning in the spec, the status in the
-   register, both together - a register that lags the spec is worse than none.
+   design spec and the register the change bears on - or says that no part of the
+   spec describes what changed. Code, tests, configuration and documents all
+   count; related edits share one entry.
+2. **The spec is brought in line - upstream.** The design spec
+   (`docs/design/5d-chess-transformer-design.md`) and the decision register
+   (`docs/design/5d-chess-decisions.md`) are maintained upstream and copied in;
+   they are not edited in this repository. Wherever they describe what you
+   changed, write the edit they need under "Proposed spec edits" in
+   `docs/BUILD_LOG.md` (where, what it says now, what it should say, why), and
+   name it in the `Spec:` line. Upstream, the reasoning in the spec and the status
+   in the register change together - a register that lags the spec is worse than
+   none. Measured figures go into `docs/MEASUREMENTS.md` with their conditions.
 
 Bringing the spec in line never replaces deciding. If a change would contradict a
-committed decision, or you cannot tell what the spec should now say, raise it
-before changing either.
+committed decision, or you cannot tell what the spec should say, raise it first.
 
 ## Why the oracles exist
 

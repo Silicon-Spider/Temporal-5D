@@ -17,6 +17,8 @@ verification layer beside it.
 | `PROVENANCE.md` | What came from where, under which licence, in which role. |
 | `CONTRIBUTING.md`, `AGENTS.md` | The rules around the oracles, for people and for agents. |
 | `CHANGELOG.md` | Every change, newest first, with what it changed in the spec. |
+| `docs/BUILD_LOG.md` | **Start here when resuming the build.** What is done, parked and next, keyed by register ID; the standing rules of the build; proposed spec edits. |
+| `docs/MEASUREMENTS.md` | Every measured figure with its conditions, and the §15.6 verdicts. |
 
 The build order is spec §15.1. Phase 0 is: the rules engine, the differential gate
 over pinned oracles, and the repetition / present-line rules pinned against the
@@ -29,21 +31,21 @@ exist is the rules engine, in-house (H24), with its own 5dpgn/5dfen parser (H28)
 
 ## Every change: the changelog and the spec
 
-Every change is recorded in `CHANGELOG.md`, and the design spec and the decision
-register are brought in line with it, in the same edit. The rule in full is the
-first section of `AGENTS.md`, imported above; it binds you like the rest of that
-file.
+Every change is recorded in `CHANGELOG.md`, in the same edit. The spec and the
+register are maintained upstream and **never edited here**: an edit they need is
+proposed in `docs/BUILD_LOG.md` and applied upstream. The rule in full is the first
+section of `AGENTS.md`, imported above; it binds you like the rest of that file.
 
 ## Working with the spec
 
 - The spec holds reasoning; the register holds status. **A decision changes in both
-  in the same edit** - a register that lags the spec is worse than none.
+  in the same edit** (upstream) - a register that lags the spec is worse than none.
 - Before refusing or re-proposing a technique, search spec §14 (rejected
   approaches) and register part J (reversals). The process note at the end of
   §14.4 records what went wrong when a refusal was made from memory instead.
-- Nothing in the spec has been measured. When a figure is measured, it replaces its
-  estimate in the section that uses it, with its conditions, in the same edit as
-  the §15.3 table and the register (M4).
+- Nothing in the spec has been measured. A measured figure goes into
+  `docs/MEASUREMENTS.md` with its conditions, and the edit that writes it back over
+  its estimate (M4) is proposed in `docs/BUILD_LOG.md`.
 - The most load-bearing open item is the 5D repetition rules (register part K):
   five consumers wait on it. Resolve it first when the generator is written.
 
