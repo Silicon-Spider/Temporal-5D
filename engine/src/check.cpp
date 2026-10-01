@@ -12,6 +12,7 @@
 #include <utility>
 
 #include "t5d/board.hpp"
+#include "t5d/search.hpp"
 #include "t5d/timeline.hpp"
 
 namespace t5d {
@@ -263,6 +264,16 @@ std::string board_text(int timeline, int half_turn, bool even) {
 // The hooks of the engine's check ruling (t5d/state.hpp).
 Verdict royals_safe_hook(const GameState& s) { return royals_safe(s) ? Verdict::Yes : Verdict::No; }
 Verdict in_check_hook(const GameState& s) { return in_check(s) ? Verdict::Yes : Verdict::No; }
+// C5, exhaustively (no budget: never Unknown - H37).
+Verdict has_legal_action_hook(const GameState& s) {
+  switch (detect_mate(s, Detector::Naive).verdict) {
+    case Outcome::Ongoing: return Verdict::Yes;
+    case Outcome::Checkmate:
+    case Outcome::Stalemate: return Verdict::No;
+    case Outcome::Unknown: break;
+  }
+  return Verdict::Unknown;
+}
 
 }  // namespace
 
@@ -375,6 +386,7 @@ CheckRuling standard_check_ruling() noexcept {
   CheckRuling r;
   r.royals_safe = &royals_safe_hook;
   r.in_check = &in_check_hook;
+  r.has_legal_action = &has_legal_action_hook;
   return r;
 }
 

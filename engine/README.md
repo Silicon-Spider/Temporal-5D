@@ -614,6 +614,61 @@ until they meet a piece, void or the multiverse's bounds - no allocation. Check 
 adds one copy of the multiverse (a pointer per timeline) and one board per passed
 timeline.
 
+### Legal actions and their count (`t5d/search.hpp`; C5)
+
+A **legal action** is a sequence of moves by the side to move - at most one from each
+board it starts on (T3), as the state machine allows them (the present and its shift;
+Q4's default that no move is made once the present has shifted) - that ends in a
+submittable state (T5) leaving every royal of the mover's safe (C4, R1).
+
+**Counting.** The harness's manual asks for "distinct legal actions (whole turns)"
+and leaves "distinct" undefined. The engine counts **distinct legal successor
+states**: the positions after submission, compared in full - the same boards in the
+same places, the timelines and their creators, the player to move, activity -
+through the Zobrist key, with an exact comparison whenever two keys match
+(`same_position`). Two orders of the same moves therefore count once; two orders of
+the same branching moves count twice when the timelines they create differ (J9).
+The board a timeline branched from (`Timeline::origin`) is not compared: no rule reads
+it, and neither the key nor the fingerprint holds it (`GameState`'s `==` does). A
+count stops at a cap: `count_legal_actions(state, cap, detector)` answers
+`min(count, cap)` (count == cap: "at least cap"). For example, two kings a side on
+-0 and +0 (White's on a1, Black's on a5, 5x5) have 33 legal actions: 9 pairs of moves
+within the two boards, 6 jumps from one board onto the other (each plays both, J4), and
+18 in which one king moves and the other then jumps onto that board's former head -
+history by then, so the jump branches (J6).
+
+`list_legal_actions` lists them, one per successor, sorted by `action_text`: the
+moves in the 5dpgn export form, first those that create no timeline (by ascending
+source timeline), then the branching ones in the order they were made (which numbers
+their timelines). That text names the action; it is not always an order in which
+the moves can be played (Q4 puts the move that shifts the present last), so each
+listed action also carries its moves in a playable order. Where two actions reach one
+successor, the one with the least text is listed.
+
+### Mate detection and H37
+
+`detect_mate(state, detector, budget)` answers at the start of a turn (C5): **none**
+(`Outcome::Ongoing`: a legal action exists, and one is returned), **checkmate** (none
+exists and the side to move is in check, R1), **stalemate** (none exists and it is
+not in check - C13: a side with no royal is never in check), or **unknown**.
+`SearchBudget` limits nodes (one per move applied and one per finished action tested
+for royal safety), wall-clock time and memory (positions held). **H37: a checkmate or
+stalemate verdict is a proof** - it is given only by a search that examined every
+action and terminated (`stats.exhaustive`); a search a budget stopped answers
+`Unknown`, never checkmate or stalemate (`stats.stopped_by_budget`). The searches are
+deterministic, so a search that needs K nodes completes with a budget of K and answers
+`Unknown` with any budget below K - the tests run every budget from 0 to K on mates,
+stalemates and positions with legal actions, and check the property on random play.
+`standard_check_ruling()`'s `has_legal_action` is an exhaustive search (no budget).
+
+**The naive detector** searches move sequences depth-first, as the state machine
+generates them: every pseudo-legal move of the mover, applied to a copy, recursively;
+a state whose obligations are met is a finished action, legal if its royals are safe.
+Its pruning is a transposition table of every state reached (two orders of the same
+moves reach one state, which is searched once). It is fast where legal actions abound
+and exponential in the number of boards where they are scarce: near mate it examines
+every combination of moves.
+
 ## 5DFEN
 
 `parse_fen_board` reads one board string, `[pieces:timeline:turn:colour]`, for a
