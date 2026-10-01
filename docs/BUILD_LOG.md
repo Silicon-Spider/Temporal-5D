@@ -15,25 +15,29 @@ M5 - building it would break a rule).
 
 ## Where things stand
 
-*Updated 2026-10-01, evening.*
+*Updated 2026-10-01, night.*
 
-- **Done:** pre-flight; step 1 (pushed; the commit and nightly tiers green on
-  Linux - H35 holds, so engine commits may land); step 2A (H30 state
-  fingerprints in every oracle, the notation parser as a parse-only oracle,
-  golden files schema 2); the cited rules reference `docs/rules/README.md`;
-  engine stage E1 and network stage N1 (both built and reviewed, not yet
-  committed - see below).
-- **Running:** CHECKPOINT 1 analysis (check clusters and the mate/count traces);
-  engine stage E2 (rules mechanics, pseudo-legal movegen, the 5dpgn parser, the
-  parse-mode gate adapter); network stage N2 (move-graph mask, routing, typed
-  edges, smolgen, a memory-efficient attention path).
-- **Next:** commit E1+E2 and N1+N2 when their workflows finish (each stage is
-  committed as soon as it completes from now on); step 2B (H32 stable answers, H33
-  integrity, H34 telltales, the engine parse mode in the gate) with one golden
-  re-record using the CI runner's speed for the H32 margin; report CHECKPOINT 1;
-  then movegen throughput (M9) and the |E| upper bound (M7) on pseudo-legal moves.
-- **Waiting on the user:** nothing blocking yet; CHECKPOINT 1's report will ask for
-  the check ruling (and which text is the rulebook), and the repetition rules.
+- **Done:** pre-flight; step 1 (CI green on Linux, H35); step 2A (H30
+  fingerprints, the notation parse-only oracle); the rules reference; CHECKPOINT 1
+  - reported, then **ruled by the user** (register H36-H40 and I11 in the updated
+  design documents, committed 666c4a0; rulings R1-R7 recorded in
+  `docs/rules/README.md`, now the rulebook, H38); engine E1+E2 (ae35da3, CI green
+  on g++ 13 and 14); network N1+N2 (built and reviewed; being committed).
+- **Running:** step 2B (H32 stable answers, H33 integrity, H34 telltales, the
+  engine parse mode in the gate); engine E3 (expansion: the move graph, W(k) and
+  E(k), side-to-move typed relations; the `t5d-measure` and `t5d-bench` tools);
+  engine E4 in a separate worktree (check status and submission legality per H36,
+  legal-action enumeration, the naive and hypercuboid mate detectors per H37, the
+  gate adapter's full mode); the upstream drafts of the two oracle defects.
+- **Next:** merge E3 and E4; wire the rulings into the gate (known-divergence
+  entries for ftxi's 78 check verdicts and for both oracle defects, as telltales;
+  the rulebook pin, H38; the engine configured, parse mode then full mode); the
+  golden re-record with `--repeat 2`; M9 then M7 with legal moves; the scanner
+  and 6b.
+- **Waiting on the user:** rules Q4 (moves after the present has shifted) - the
+  engine follows the Guide's reading, and nine corpus records make such moves
+  (step 3); real game records for the |E| curve (M7: the corpus's real games
+  reach about 130 boards; the verdict's phases run to 600).
 
 ## The brief - standing rules for every session
 
@@ -177,7 +181,7 @@ Design (from a six-agent investigation of the harness and every oracle, 2026-10-
   --repeat 2` → DISAGREEMENTS.md re-rendered → parse divergences settled against
   the notation spec.
 
-### 3. CHECKPOINT 1 and the ruling-independent engine work - in progress
+### 3. CHECKPOINT 1 and the ruling-independent engine work - done (ruled 2026-10-01)
 
 **CHECKPOINT 1 - reported 2026-10-01** (full report:
 `docs/checkpoints/checkpoint-1-check-clusters.md`; evidence in
@@ -226,6 +230,43 @@ count as sources of attack (spec §11.0 item 1)**:
   the repetition rules (the game documents none - D2, Q23 - so it is a project
   decision, register part K); castling's attack test (spec §11.0 item 4 vs rules
   S2, spec issue 10); whether to report the two oracle defects upstream.
+- **Ruled 2026-10-01** by the user (register H36-H40 and I11; rulebook entries
+  R1-R7): check status passes all *active* boards *in the present*, so RQ1-RQ4 are
+  all "no" - ftxi's "check" at the 78 positions is wrong, Chess in 5D's "no check"
+  right - and a royal capture counts even if it would branch into an inactive
+  timeline; submission legality is a separate test, on the actual turn: any royal
+  capture from any of the opponent's playable boards, active or inactive, makes
+  it illegal; moving into check mid-turn is allowed (H36). A mate verdict needs an
+  exhaustive search that terminated; an exhausted budget is "unknown" (H37).
+  `docs/rules/README.md` is the rulebook, pinned, sources ranked (H38).
+  Activation is the count rule (Q1 closed): under it none of the 18 positions Q1
+  would have moved changes cluster - to be confirmed by the engine's own check
+  detection. The pawn's double step exists along both axes for both colours (Q15
+  in part; ftxi's missing Black step is the defect). No repetition rule, a project
+  decision (H39); self-play's turn cap is a convention scored as a draw (I11).
+  Castling and en passant attack tests are per-board (H40; the engine's reading
+  already). The two oracle defects are drafted for upstream in
+  `docs/checkpoints/upstream/` (the user files them) and go into the
+  known-divergences file as telltales.
+- **The engine's parse mode on the corpus** (`t5d-gate --parse-only`, before the
+  harness's parse mode exists): 647 positions; the early stops fall into three
+  kinds. (a) Rules Q4, moves after the present has shifted: the engine follows
+  the Guide's reading and refuses them; nine records make such moves (cwmtt NP,
+  NP0, niceAndrey, 100_timelines, futures, another; ftxi futures; notation 1.2 and
+  game-2) - played records from three authors, which bears on Q4, a question for
+  the user. (b) Present and timeline annotations that do not match the state -
+  `(~T2)` after a first branch in cwmtt silly, wide and
+  chessin5d-illegal-move-example: the notation spec calls these tokens "purely for
+  better human comprehension" that "should match"; the engine rejects a mismatch
+  (`verify_annotations`), the oracles ignore them. (c) Notation outside the
+  notation spec: a long form `(0T1)Pe2(0T1)e3` (cwmtt many2), a jump without its
+  source square `(-1T3)K>>(0T2)c3` (cwmtt ctp1) or without any coordinate `N>>d3`
+  (ftxi verysmall), parenthesised variations (ftxi softmate), 5DFEN boards under a
+  named variant (ftxi niceAndrey), a repeated turn number (notation aivsai), and
+  two variants with no independent source (Timeline Invasion, Marauders). Kind (c)
+  is classified against the notation spec when the harness's parse mode lands;
+  kind (b) needs a parser policy (lenient by default is proposed: the spec says
+  the tokens are for humans); kind (a) waits on Q4.
 
 The engine core is C++20 (g++; no Rust or MSVC on the machine), a shared library
 with a C API for Python (ctypes), built with CMake/Ninja from a project `.venv`;
@@ -250,7 +291,14 @@ the network is PyTorch on CPU under `python/`.
 - **Network N1** (dense v1 with random weights; 152 tests) is built and reviewed;
   N2 (the attention structure) is running; `python/` is committed when N2 lands.
 
-### 4. After the ruling - parked (needs the check ruling)
+### 4. After the ruling - in progress (unparked 2026-10-01)
+
+Engine stage E4, in its own worktree while E3 finishes in the main tree: check
+status and submission legality exactly as H36 and rules R1 state them, the
+legal-action enumeration the gate's counts need, naive mate detection and the
+hypercuboid detector under H37 (a budget-limited search can only return
+"unknown" - a test pins it), the two detectors cross-checked, and
+`t5d-gate`'s full mode. Then each against the gate.
 
 ### 5. Phase 1 measurements - not started
 
@@ -262,8 +310,8 @@ the network is PyTorch on CPU under `python/`.
 
 | ID | Status | Notes |
 |---|---|---|
-| H1-H5 | parked | The scanner needs check detection and legal evasions (proofs need all-evasions generation): waits on the check ruling |
-| H6 | parked | Material eval v1 with the scanner; NNUE v2 waits on 6b (M8) |
+| H1-H5 | not started | The scanner: after check detection and legality (E4) and the movegen measurement (M10) |
+| H6 | not started | Material eval v1 with the scanner; NNUE v2 waits on 6b (M8) |
 | H7 | not built (rule) | NNUE training: no training runs; NNUE waits on 6b |
 | H8, H9, H20, H21 | not built (rule) | Held open / refused |
 | H10-H14 | parked | Async ladder rungs: with the scanner |
@@ -272,14 +320,19 @@ the network is PyTorch on CPU under `python/`.
 | H17 | parked | Lazy SMP: with the scanner |
 | H18 | built, tested | 5D Zobrist: coordinate-free content hash per board, multiply-rotate with (timeline, half-turn), addition across boards, ruleset ID, player to move, parity, creators, board size; incremental equals from-scratch; duplicated boards never cancel (engine E1, E2) |
 | H19 | parked | Proof export: with the scanner |
-| H22 | built in part | Items 2 (the present-shift half), 4 (castling with the on-board attack test, en passant, promotion) and 5 (the present, activation, submission) built and tested; item 1 (check), the royal-safety half of 2 (C4) and item 3 (mate) parked for the check ruling, behind hooks |
+| H22 | built in part | Items 2 (the present-shift half), 4 (castling with the on-board attack test, en passant, promotion) and 5 (the present, activation, submission) built and tested; item 1 (check), the royal-safety half of 2 (C4) and item 3 (mate) in engine E4 (H36, H37) |
 | H23 | built | The gate (oracle side); engine side waits for the engine |
 | H24, H26, H28 | built, tested | The generator and the 5dpgn/5DFEN parser are in-house (`engine/`), written from `docs/rules/README.md` and the notation spec's text; 259 engine tests; boundary clean |
 | H27 | built, tested | The oracle harness, committed 2026-10-01 |
 | H30 | built, tested | Step 2A (a04678c): every oracle reports its boards per ply; no placement divergence across the corpus |
-| H31 | not started | Step 3 (CHECKPOINT 1) |
+| H31 | done | CHECKPOINT 1: seven clusters triaged (903f4ae), settled by the user's rulings (H36-H40) |
 | H32-H34 | not started | Step 2 |
 | H35 | done | Commit and nightly tiers green on Linux, 2026-10-01 (runs 36827435595, 36827459456) |
+| H36 | building | Check status and submission legality: engine E4 |
+| H37 | building | Mate verdicts are proofs; budget exhausted = "unknown": engine E4, with the test H37 asks for |
+| H38 | done (gate pin pending) | `docs/rules/README.md` is the rulebook: source ranking, rulings R1-R7; the gate's pin of it is step 2's follow-up |
+| H39 | done | No repetition rule; the engine has none to build |
+| H40 | built | Castling's attack test per-board (S2) and en passant per-board (S7): already the engine's defaults; `CastlingAttacks::AnyBoard` to be removed |
 
 ### A-G, I - representation, network, search, training
 
@@ -315,32 +368,31 @@ the network is PyTorch on CPU under `python/`.
 | G2 | not started | FP8 attention - no FP8 kernels on this machine |
 | G3, G4, G5, G6 | not built (rule) | Deferred / held open / refused |
 | I1-I10 | not started | Training code may be written and smoke-tested only; I7 and I8 not built (M5) |
+| I11 | not started | Self-play's turn cap from the state, scored as a draw, its frequency logged: with self-play |
 
 ### M - the plan itself
 
 | ID | Status | Notes |
 |---|---|---|
 | M7 | not started | Window verdict (step 5) |
-| M8 | parked | Scanner verdict (needs the scanner) |
+| M8 | not started | Scanner verdict (6b), after M9 (M10's order) |
 | M9 | not started | Movegen verdict, pseudo-legal first (provisional) |
 | M11 | built | Licence recorded in PROVENANCE.md |
 
 ## Parked, and why
 
-Waiting on the check ruling (CHECKPOINT 1, 2026-10-01), as the brief directs:
-- the engine's check detection (H22 item 1) and the phantom-board definition;
-- turn legality at submission - the royal-safety half (C4); the present-shift half
-  is built (E2);
-- naive mate detection and the hypercuboid detector (H22 item 3);
-- castling's cross-board attack option (spec issue 10);
-- the scanner (H1-H5, H10-H17, H19) and experiment 6b (M8), hence the NNUE (F4);
-- search on real positions (E1-E9 on 5D states), and the typed edges' "check"
-  relation (B11);
-- the legal-move re-measure of movegen throughput (M9) and the |E| curve from
-  legal moves (M7) - their pseudo-legal versions proceed now.
-Waiting on the user (no ruling yet): repetition rules (register part K) - every
-consumer of repetition (MCGS graph-history, solved-store keys, df-pn, activation
-semantics, variant terminal values).
+Unparked by the CHECKPOINT 1 rulings (2026-10-01): check detection, submission
+legality, the mate detectors, the scanner and 6b, search on real positions, the
+typed edges' check and pin relations, and the legal-move measurements (M9, M7).
+Closed by them: repetition (H39 - there is none) and castling's cross-board attack
+option (H40 - the per-board test is the rule, so `CastlingAttacks::AnyBoard` goes).
+
+Still parked:
+- the window code (C5, C7): until the |E| verdict (M5, M7);
+- the NNUE (F4): until 6b passes (M5, M8);
+- the M7 verdict's phases above about 130 boards: the corpus's real games end
+  there (spec §10.4.2 asks for real game records) - waiting on game records from
+  the user.
 
 ## Spec issues (wrong, ambiguous, contradictory, silent)
 
@@ -439,6 +491,8 @@ decision), and what is parked.
     engine implements the rules reference by default; the spec's cross-board
     reading is a named parameter, unimplemented because it needs the attack
     definition of the pending check ruling. For the user, beside the check ruling.
+    **Resolved 2026-10-01** upstream: H40 and reversal 21 make the per-board test
+    the rule; spec §11.0 item 4 now says so.
 11. **Reversed Royalty's king: spec §11.0 item 1 vs the rules reference.** The spec
     says royals are "one king per timeline, plus the royal queen in Reversed
     Royalty"; the rules reference (V3) gives Reversed Royalty a royal queen and a
@@ -512,7 +566,8 @@ says now, what it should say, why.
 10. **§11.0 "Running the gate" (settle by rulebook) and §15.1 Phase 0**: name the
     rulebook. Proposed: `docs/rules/README.md` - the cited rules reference built
     from the in-game Guide and community sources, never from an oracle - with its
-    open questions settled by the user's rulings and recorded there.
+    open questions settled by the user's rulings and recorded there. **Applied
+    upstream 2026-10-01** (H38; spec §11.0 "Triage by cluster").
 11. **§11.0 item 1**: "plus the royal queen in Reversed Royalty" - proposed: "in
     Reversed Royalty the royal is the queen; its king is a common king, not royal"
     (spec issue 11).
