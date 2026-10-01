@@ -7,6 +7,11 @@
 #            hand (workflow_dispatch, tier = release) or push a generator-v* tag.
 #            It fails unless an engine was compared against the oracles and came
 #            through at least one ruleset.
+#
+# The oracle builds are cached, and the harness decides which of them are stale:
+# `build --plan` names the tools the stale ones need, and only those are
+# installed. The heavy toolchain is GHC, which only cwmtt's build needs - a
+# cached, up-to-date cwmtt build runs without a compiler.
 name: oracle gate - nightly and release tiers
 
 on:
@@ -47,27 +52,47 @@ jobs:
         with:
           node-version: "24"
 
+      - name: Static checks - pins, corpus, known divergences, boundary, provenance, golden files
+        run: python oracles/harness.py verify --tracked-only
+
+      # Restored and saved as separate steps, so that builds are kept even when a
+      # later step of the same run fails. After a driver or recipe change, the
+      # newest older cache is restored: it still holds the builds the change did
+      # not touch, and the harness rebuilds only the stale ones.
+      - name: Restore the oracle builds
+        id: build-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: oracles/.cache/build
+          key: oracle-builds-${{ runner.os }}-${{ hashFiles('oracles/oracles.lock.toml', 'oracles/drivers/**', 'oracles/oracle_harness/build.py') }}
+          restore-keys: |
+            oracle-builds-${{ runner.os }}-
+
+      - name: Which build tools the stale builds need
+        id: plan
+        run: python oracles/harness.py build --plan | tee -a "$GITHUB_OUTPUT"
+
       # Must be exactly the version pinned in oracles/oracles.lock.toml
       # ([toolchain.ghc]); the harness refuses any other.
-      - uses: haskell-actions/setup@v2
+      - name: Install GHC (only when a stale build needs it)
+        if: contains(format(',{0},', steps.plan.outputs.tools), ',ghc,')
+        uses: haskell-actions/setup@v2
         with:
           ghc-version: "9.10.3"
           enable-stack: false
           cabal-update: false
 
-      - name: Static checks - pins, corpus, known divergences, boundary, provenance, golden files
-        run: python oracles/harness.py verify --tracked-only
-
-      - name: Cache the oracle builds
-        uses: actions/cache@v6
-        with:
-          path: oracles/.cache/build
-          key: oracle-builds-${{ runner.os }}-${{ hashFiles('oracles/oracles.lock.toml', 'oracles/drivers/**', 'oracles/oracle_harness/build.py') }}
-
       - name: Build every oracle
         run: |
           python oracles/harness.py doctor
           python oracles/harness.py build
+
+      - name: Save the oracle builds
+        if: steps.build-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: oracles/.cache/build
+          key: ${{ steps.build-cache.outputs.cache-primary-key }}
 
       - name: Harness self-tests
         run: python oracles/harness.py selftest

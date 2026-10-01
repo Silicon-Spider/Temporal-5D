@@ -172,6 +172,21 @@ def _build_chessin5d(pin: Pin, lock: Lock, root: Path, bootstrap: bool, log: Log
 _RECIPES = {"ftxi": _build_ftxi, "cwmtt": _build_cwmtt, "chessin5d": _build_chessin5d}
 
 
+def recipe_tools(oracle: str) -> tuple[str, ...]:
+    """The build tools a recipe uses, by the names `doctor` prints them under."""
+    tools = {"ftxi": ("c++", "cmake"), "cwmtt": ("ghc",), "chessin5d": ("node", "npm")}[oracle]
+    return (*tools, "ninja") if oracle == "ftxi" and is_windows() else tools
+
+
+def tools_needed(lock: Lock, oracles: list[str]) -> list[str]:
+    """The build tools still needed to build ``oracles``: those of the ones with no up-to-date build.
+
+    An up-to-date build is used as it is, without its toolchain - which is what
+    lets CI skip installing a compiler when a cached build is still current.
+    """
+    return sorted({tool for oracle in oracles if load(lock.pin(oracle)) is None for tool in recipe_tools(oracle)})
+
+
 def buildable(lock: Lock) -> list[str]:
     return [pin.id for pin in lock.oracles() if pin.id in _RECIPES]
 
