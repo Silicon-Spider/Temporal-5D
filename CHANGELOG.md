@@ -10,6 +10,30 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-01 - A cited rules reference, from public non-oracle sources
+
+- `docs/rules/README.md`: the rules of *5D Chess With Multiverse Time Travel* as
+  testable statements (lattice and coordinates, turns and the present, active
+  timelines, super-physical moves and branching, every piece's movement, castling,
+  en passant, promotion, check, checkmate, stalemate, softmate, draws and
+  repetition, variant starting positions), each with a confidence and verbatim
+  citations, and 28 open questions where sources are silent or disagree. No rules
+  implementation or its documentation was used, and no oracle was run or its
+  output read: the reference has to be able to judge the oracles. Its official
+  sources are the game's in-game Guide texts, read as text from the client
+  installed on the development machine (no program logic inspected; the client is
+  never an oracle, H25), and developer posts; community sources are weighted by
+  author, so that implementers whose independence is unknown never carry a rule
+  alone. Written by five researchers, a synthesizer, three citation skeptics (68
+  problems found and fixed) and a reviser.
+- Why: nothing in the repository pinned a rulebook (spec issue 1 in
+  `docs/BUILD_LOG.md`); the engine's rules are written from this reference, and
+  its open questions - which boards a check test passes (Q10), activation (Q1-Q3),
+  repetition (Q23) - go to the user as rulings.
+- Spec: §11.0 says disagreements are settled "by rulebook" and names none; the
+  reference is proposed as the project's rulebook in `docs/BUILD_LOG.md`
+  (proposed spec edit 10), pending the user's choice.
+
 ### 2026-10-01 - Project licence recorded (M11); the build log; spec edits proposed, not made
 
 - `PROVENANCE.md` records the project's licence: the GPL-3.0, the `LICENSE` file
