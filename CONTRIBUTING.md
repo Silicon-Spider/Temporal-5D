@@ -47,8 +47,9 @@ protect.
 > Nothing outside `oracles/` may use anything under `oracles/`.
 
 `python oracles/harness.py boundary` checks it, and both CI workflows run it.
-(The workflows have not run yet: nothing has been pushed to the remote. Until they do, and
-are made required checks, the check binds only those who run it - so run it.)
+(The workflows run on Linux, the commit tier on every push and the nightly tier
+every night, but they are not yet required checks on the branch: until they are,
+the check binds only those who run it - so run it.)
 Outside `oracles/` you may not:
 
 - import, include, link or load anything from `oracles/`, or name a path into it;

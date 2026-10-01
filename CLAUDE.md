@@ -83,5 +83,8 @@ python oracles/harness.py gate --tier commit   # per-commit gate; nightly and re
   does not mean the generator has passed the gate: read the last lines of the gate
   output, which say whether the engine was compared and whether the proof channel
   may be enabled.
-- The CI workflows under `.github/workflows/` have never run: nothing has been
-  pushed to the remote yet. Nothing about the harness has been tried on Linux.
+- CI (`.github/workflows/`, ubuntu-24.04): the commit tier runs on every push and
+  pull request, the nightly tier every night and on demand (`gh workflow run
+  oracle-nightly.yml -f tier=nightly`). Both first went green on 2026-10-01, and
+  the golden files recorded on Windows reproduce exactly on Linux. They are not yet
+  required status checks on `main`.
