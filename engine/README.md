@@ -37,6 +37,7 @@ the code cites throughout.
 | **E2b:** the 5dpgn reader and the replay of a record | `include/t5d/pgn.hpp` | H28, §11.0 |
 | **E2b:** the named variants (rules reference V1-V4) | `include/t5d/variants.hpp` | §12.6 |
 | **E2b:** the gate adapter's protocol, parse mode | `include/t5d/gate.hpp`, `tools/t5d_gate.cpp` | H23, H30 |
+| **E4:** check status and submission legality; the engine's check ruling | `include/t5d/check.hpp` | §11.0 items 1-2, H36 |
 | The C API (unchanged by E2a and E2b) | `include/t5d/capi.h` | - |
 
 Next: after the check ruling (§11.0, "Running the gate") - check detection, turn
@@ -44,10 +45,11 @@ legality at submission and mate detection, which plug into the hooks described
 below, and the gate adapter's full mode on top of them; the C API for moves and
 records.
 
-**Pseudo-legal only.** Nothing here decides check. A move is pseudo-legal when it
-obeys every movement rule and the action's bookkeeping; whether a submitted action
-leaves a royal piece capturable (C4) is the check ruling's, which is pending, and
-`GameState::submission_status` says `Unchecked` until a test is installed.
+**Moves are pseudo-legal; turns are legal.** A move is pseudo-legal when it obeys
+every movement rule and the action's bookkeeping; legality is judged per action, at
+submission (C4): `GameState::submission_status` and `submit` apply the engine's check
+ruling by default (rulebook R1, register H36; see "Stage E4") and say `Safe` or
+`Unsafe`. `CheckRuling::none()` submits pseudo-legal play, untested (`Unchecked`).
 
 ## Building and testing
 
@@ -235,7 +237,7 @@ values, appended at the end of the stream: no existing key changed).
 
 | Parameter | Default | Alternative | Rules |
 |---|---|---|---|
-| `activation` | `Count`: the count rule | `Consecutive`: a player's creation right after their own previous one is inactive | T10, Q1 |
+| `activation` | `Count`: the count rule - **the rule** since R2 closed Q1 (2026-10-01) | `Consecutive`: a player's creation right after their own previous one is inactive (a reading R2 rejected; kept for comparison) | T10, Q1, R2 |
 | `initial_credit` | `None`: initial timelines count for neither side | `MinusZeroToBlack`: in an even start, Black counts as having created "-0" | T10, T13, Q2 |
 | `play_activates` | false | a move by the non-creator on or onto an inactive timeline activates it | T11, Q3 |
 | `moves_after_shift` | false: no move once the present has shifted (G) | moves until submission | T5, Q4 |
@@ -248,7 +250,7 @@ values, appended at the end of the stream: no existing key changed).
 | `inactive_history_is_destination` | true: J3 makes no exception (presumed) | a history board of an inactive timeline is no destination | J3, Q20 |
 | `brawn_rank_timeline_capture` | true: the Guide's literal reading, 9 brawn captures | Perseus's 8 | 4.7, Q14 |
 | `double_step_right` | `UnmovedFlag` (5DFEN's `*`) | `HomeRank`: the second rank | 4.6, Q15 |
-| `timeline_double_step` | true (G: "one or two squares") | no timeline double step | 4.6, Q15 |
+| `timeline_double_step` | true (G: "one or two squares"), for both colours - R4 settled that the double step exists along either forward axis for both | no timeline double step (the reading R4 rejected) | 4.6, Q15, R4 |
 | `double_step_over_void` | false: void blocks | a timeline double step may pass a missing board | 4.6, J8, Q15 |
 | `branch_copies_keep_unmoved` | true: the copy keeps every piece (J5) | the copy's pieces lose their flags | J5, Q15, Q21 |
 | `jumps_keep_unmoved` | false: any move clears the moving piece's flag | a pawn or brawn moving between boards keeps it | 4.6, Q15 |
@@ -256,7 +258,6 @@ values, appended at the end of the stream: no existing key changed).
 | `brawns_promote` | true (medium) | brawns never promote | S8, 4.7, Q17 |
 | `brawn_cross_board_promotion` | true: any arrival on the last rank promotes (S8's general statement) | a brawn arriving on its last rank of another board stays a brawn; only an arrival within its own board promotes | S8, 4.7, Q17 |
 | `promotions` | the queen (the base game) | any set of pieces but pawn and brawn (a 5dpgn `Promotions` header, a client extension) | S8, Q17 |
-| `castling_attacks` | `OnBoard`: attacks by enemy pieces on the castling board (S2, the developer's ruling) | `AnyBoard`, the design spec's 5D query - **not implemented** (it waits on the check ruling; `validate()` refuses it) | S2, §11.0 item 4 |
 | `castling_empty_between` | true (as in ordinary chess) | only the two destination squares must be free | S2, Q21 |
 | `castling_destination_test` | false (S3) | the king's destination must not be attacked on the board either | S3, Q21 |
 | `castling_rook_path_test` | false | the squares the rook crosses must not be attacked on the board | Q21 |
@@ -290,27 +291,23 @@ Not parameterised, and why:
 
 ### The check ruling's hooks (`t5d/state.hpp`)
 
-Not implemented, by instruction - which boards count as sources of attack, and what
-"check" means for checkmate versus stalemate, are being decided (Q10, C3, C6, C7):
+Filled by stage E4 (see "Stage E4"); `standard_check_ruling()` is the engine's:
 
-- `CheckRuling::royals_safe` - C4's test at submission. Without it,
-  `submission_status()` is `Unchecked` (the obligations are met; royal safety was
-  not tested) and `submit()` proceeds; with it, `Safe` or `Unsafe` (refused).
+- `CheckRuling::royals_safe` - C4's test at submission. `submission_status()` and
+  `submit()` use the engine's by default: `Safe` or `Unsafe` (refused). With
+  `CheckRuling::none()` - no hook - it is `Unchecked` (the obligations are met;
+  royal safety was not tested) and `submit()` proceeds: pseudo-legal play.
 - `CheckRuling::in_check` and `CheckRuling::has_legal_action` - C6 and C5, read by
   `outcome()`, which answers `Unknown` without them and implements no rule itself.
-- `CastlingAttacks::AnyBoard` - the 5D attack test for castling, refused by
-  `RuleOptions::validate()` until the ruling defines cross-board attacks.
 - `append_moves_of(multiverse, rules, colour, timeline, out, inactive_timelines)`
   (`t5d/movegen.hpp`) - the moves of either colour from a playable board on which
-  that colour is to move, whatever the turn, over a plain `Multiverse`: what a check
-  detector generates ("every move by the attacking colour that captures an enemy
-  royal", §11.0 item 1), on the real multiverse or a hypothetical one (C6's boards
-  advanced without a move). A `Multiverse` holds no activity, so the caller passes
-  the inactive timelines (a state's `inactive_timelines()`) for the one option that
+  that colour is to move, whatever the turn, over a plain `Multiverse`, the real one
+  or a hypothetical one. A `Multiverse` holds no activity, so the caller passes the
+  inactive timelines (a state's `inactive_timelines()`) for the one option that
   reads them (`inactive_history_is_destination`). Setup is O(1), so calling it once
-  per timeline is O(timelines) in all. Unused by this stage. (A hypothetical pass
-  that appends a board unchanged also copies its en-passant square; the check
-  ruling's code should clear it, as a passed board is advanced by no double step.)
+  per timeline is O(timelines) in all. The check code does not call it (its own scan
+  stops at the first royal capture without building move lists); the tests hold the
+  two equal.
 
 ### Performance notes
 
@@ -556,6 +553,66 @@ hand in its comments:
 - **Shad vs PseudoAbstractMeta (2021, Half Reflected).** Replays to the end: 45
   actions, 85 boards, eight timelines; every `~` and `(>Lx)` agrees with the state;
   the empty action before `1-0` is dropped.
+
+## Stage E4: check, legality, legal actions, mate
+
+Built after the user's CHECKPOINT 1 rulings (rulebook "Rulings" R1-R7; register
+H36-H40). Rule IDs are the rulebook's (`docs/rules/README.md`).
+
+### Check status and submission legality (`t5d/check.hpp`, H36)
+
+Both rest on one question asked of a multiverse: can a piece of the attacker's,
+standing on one of the attacker's **playable** boards (the latest board of its
+timeline with the attacker to move, L5), capture a **royal** piece of the other
+colour - a king or a royal queen, never a common king (4.11-4.13, C1) - by a
+pseudo-legal move? A royal on any board counts, history boards included (C2): a
+capture that would branch counts, even into a timeline that would be inactive (R1).
+The attacker's pins do not matter: capturing a royal is all that is asked (C3).
+`royal_capture_exists` answers it by the move generator's rules exactly - the same
+paths (J7, J8, Q18, Q19), destinations (J2, L4, Q8, Q20) and pawn and brawn captures
+(4.6, 4.7, Q14); castling and en passant never take a royal - but without building
+move lists: it walks each piece's lines and stops at the first royal capture. A test
+holds it equal to the generator's royal captures (`append_moves_of`) on 1500 random
+multiverses under the default rules and every option the generator reads per probe.
+`for_each_royal_capture` lists the captures with their lines (`capture_places`:
+every place a capture rests on), which the hypercuboid detector uses.
+
+- **Check status** (R1; C6): at the start of its turn the side to move S is in
+  check iff, S passing - a null move: the board advanced unchanged to a copy with
+  the opponent to move, unmoved flags kept, no en-passant square - on every
+  **active** board **in the present** (`passed_timelines`: its mandatory boards under
+  the default T6, whatever Q5's option says; optional boards ahead of the present and
+  boards on inactive timelines are not passed), the opponent could capture one of S's
+  royals from **any** of its playable boards: the passed copies and every other board
+  on which it is to move, on active or inactive timelines. The passed boards are
+  really there (`passed_multiverse`): a slide may cross them (J7, J8). A side with no
+  royal is never in check (C13). `in_check`, `check_witness`.
+- **Submission legality** (R1; C4): a separate test, on the actual turn - after the
+  mover's moves, no piece on any of the opponent's playable boards (active or
+  inactive timelines; a board on which the mover is still to move is not the
+  opponent's) may be able to capture any of the mover's royals. No pass. A move into
+  check during the turn is allowed: only the submitted position is tested.
+  `royals_safe`, `submission_witness`.
+- **The engine's check ruling** (`standard_check_ruling()`, `t5d/state.hpp`):
+  `royals_safe` and `in_check` as above; `has_legal_action` (C5) an exhaustive search
+  (below). `GameState::submission_status()` and `submit()` use it by default; a
+  caller that plays pseudo-legally (the movement rules' own tests, the gate's parse
+  mode) passes `CheckRuling::none()`.
+- **The replay** (`PgnReplay`) submits under the engine's ruling by default, so an
+  action that leaves a royal capturable is `CannotSubmit`, its message naming the
+  capture ("the queen on (0T3)h5 can capture the king on (0T3)e8"); parse mode sets
+  `CheckRuling::none()`. The reader still refuses a move written ambiguously: the
+  notation's "Omission" lets a writer leave out a piece that a pin rules out, but a
+  pin is no per-move notion here - legality is judged per action, at submission.
+- **Castling** keeps its per-board attack test (S2; R6, H40): a king in check from
+  another board may castle, and the turn is then legal only if every royal is safe.
+  `CastlingAttacks::AnyBoard` is gone (bit 17 of the ruleset encoding is unused, so
+  no ruleset ID changed).
+
+What a scan costs: one pass over the attacker's playable boards, each piece's lines
+until they meet a piece, void or the multiverse's bounds - no allocation. Check status
+adds one copy of the multiverse (a pointer per timeline) and one board per passed
+timeline.
 
 ## 5DFEN
 

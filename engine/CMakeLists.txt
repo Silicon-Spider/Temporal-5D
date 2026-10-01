@@ -77,6 +77,9 @@ target_include_directories(t5d_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(t5d_core PUBLIC t5d_options)
 # The core is linked into the shared library, so it must be position-independent.
 set_target_properties(t5d_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
+# Stage E4: check status and submission legality, legal actions, mate detection.
+target_sources(t5d_core PRIVATE
+  src/check.cpp)
 
 # ---- the C API shared library -----------------------------------------------------
 
@@ -121,6 +124,9 @@ add_executable(t5d-tests
   src/capi.cpp)
 target_include_directories(t5d-tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
 target_link_libraries(t5d-tests PRIVATE t5d_core)
+# Stage E4's tests.
+target_sources(t5d-tests PRIVATE
+  tests/test_check.cpp)
 
 add_executable(t5d-gate tools/t5d_gate.cpp)
 target_link_libraries(t5d-gate PRIVATE t5d_core)

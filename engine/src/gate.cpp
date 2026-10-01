@@ -118,6 +118,9 @@ int run(std::string_view record, const Options& options, const Emit& emit, const
   bool positions = false;  // whether position 0 was reported
   try {
     PgnReplay replay(read_pgn(record));
+    // Parse mode replays pseudo-legally: royal safety at submission (C4) is
+    // full mode's, with the verdicts.
+    replay.set_check_ruling(CheckRuling::none());
     emit(state_event(replay.state(), 0));
     emit(position_event(replay.state(), 0));
     positions = true;

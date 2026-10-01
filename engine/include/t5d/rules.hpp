@@ -16,11 +16,10 @@
 // and a hash of the canonical encoding otherwise, and GameState stamps it on
 // its multiverse (t5d/state.hpp), so the Zobrist key carries it.
 //
-// The check ruling is pending (Q10, C3, C6, C7: which boards count as sources
-// of attack, and what "check" means for checkmate versus stalemate), so no
-// parameter here concerns check. The one castling parameter that would need a
-// cross-board attack test, CastlingAttacks::AnyBoard, exists but is refused by
-// validate() until that ruling lands.
+// No parameter here concerns check: the check ruling (rulebook R1, register
+// H36; t5d/check.hpp) closed Q10, and its definitions are the rules. Castling's
+// attack test is per-board (S2; R6, register H40), so the design spec's former
+// cross-board reading is no option either.
 
 #ifndef T5D_RULES_HPP
 #define T5D_RULES_HPP
@@ -98,19 +97,6 @@ enum class DoubleStepRight : std::uint8_t {
   /// Q15's alternative: the rank, not the piece - a pawn or brawn on its
   /// colour's second rank (white rank 2, black rank H-1) may double-step.
   HomeRank = 1,
-};
-
-/// S2 vs design spec §11.0 item 4: which attacks bar castling.
-enum class CastlingAttacks : std::uint8_t {
-  /// Default (S2, high: the developer's ruling): only an attack by an enemy
-  /// piece ON THE CASTLING BOARD bars castling; attacks through time or from
-  /// other timelines do not. This needs no cross-board attack definition.
-  OnBoard = 0,
-  /// The design spec's reading (§11.0 item 4: every "is this square
-  /// attacked?" query inside castling is a 5D query). NOT IMPLEMENTED: it needs
-  /// the cross-board attack definition the check ruling will settle (Q10, C3).
-  /// validate() refuses it.
-  AnyBoard = 1,
 };
 
 /// Design spec §12.6 / §11.3 (I9): the rule family a ruleset belongs to. A
@@ -285,9 +271,9 @@ struct RuleOptions {
   // Only a royal king castles (S4) - never a royal queen, and never a common
   // king, whose unmoved state 5DFEN cannot even record ("5DFEN Strictness"
   // tracks pawns, rooks, kings and brawns), so S4's alternative is not offered.
+  // Castling is barred only by attacks from enemy pieces ON THE CASTLING BOARD
+  // (S2, the developer's ruling; R6, register H40): no option.
 
-  /// S2 vs spec §11.0 item 4. AnyBoard is not implemented (see the enum).
-  CastlingAttacks castling_attacks = CastlingAttacks::OnBoard;
   /// S2 / Q21: must every square between the king and the rook be empty?
   /// Default true (as in ordinary chess, medium). False: only the two
   /// destination squares must be free.
@@ -320,9 +306,8 @@ struct RuleOptions {
   /// part of the ruleset ID.
   RuleFamily family = RuleFamily::Standard;
 
-  /// Throws std::invalid_argument for an option that is not implemented
-  /// (CastlingAttacks::AnyBoard) or a malformed one (an empty promotion set, a
-  /// pawn or brawn in it).
+  /// Throws std::invalid_argument for a malformed option (an empty promotion
+  /// set, a pawn or brawn in it).
   void validate() const;
 
   /// The canonical 64-bit encoding: 0 for the defaults, one bit per
