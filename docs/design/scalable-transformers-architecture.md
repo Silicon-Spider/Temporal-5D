@@ -695,6 +695,12 @@ through a non-cancelling operation — multiply-rotate, not XOR — before combi
 in from the start; discovered later, it presents as results that are mysteriously,
 irreproducibly wrong.
 
+A related gift of append-only state: if every step adds to the state, the full state can
+never recur within an episode, so repetition rules have nothing to act on and
+graph-history interaction cannot arise — values depend on the state alone, and
+transposition sharing is sound without path bookkeeping. Check the domain's rules for
+any other path-dependent term (move counters, repetition clauses) before relying on it.
+
 ---
 
 ## 9. The cost model
@@ -1243,7 +1249,9 @@ repository, confined to the test harness; everything else from them enters as id
 enforces: a gate left to discretion is skipped precisely when it is needed, and the path
 of least resistance under pressure is copying an oracle's code into the core. Oracles can
 be wrong too — record known divergences with the evidence that settles them, and fail on
-any new one. Four operating rules make the comparison mean something: **compare states, not
+any new one. A terminal verdict that rests on search — "no legal action exists" — is a proof
+only if the search was exhaustive and terminated; an exhausted budget is "unknown", never
+the verdict, which is the failure behind most false terminal claims. Four operating rules make the comparison mean something: **compare states, not
 indices** — each implementation fingerprints the state it parsed, and a mismatch is a
 parse divergence, triaged before any verdict at that step and settled against the pinned
 format specification, as verdicts are against the rule source; **settle disagreements from

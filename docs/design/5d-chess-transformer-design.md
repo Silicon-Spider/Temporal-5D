@@ -912,11 +912,12 @@ Mechanics: key nodes with the §11.3 5D-Zobrist scheme — already specified; re
 use residual-correction backup (Czech et al.) to avoid value double-counting through
 shared nodes.
 
-Caveat: graph-history interaction. Repetition-dependent values poison shared nodes whose
-value depends on the path, and 5D's repetition rules are an unresolved design item.
-Resolve them first — YaneuraOu's rule-specific repetition scoring is the worked pattern:
-encode draw/forced-loss repetition outcomes as exact terminal values feeding the proof
-channel. Ablation 6k, measured jointly with 6g.
+Graph-history interaction does not arise. 5D has no repetition rule, and the full state
+cannot recur within a game — passing is impossible and every move creates a board
+(§11.0 item 5) — so values depend only on the state (and the refresh epoch, §7.9). The
+one addition, self-play's turn cap (§12.3), is defined from the state, so it adds no path
+dependence. (An earlier revision held this open as the design's most load-bearing
+unresolved item.) Ablation 6k, measured jointly with 6g.
 
 ### 8.6 Time management — when the move commits
 
@@ -1056,9 +1057,8 @@ evals, accumulators — persist, so a line abandoned this move that transposes b
 move re-hits everything for free. The solved store and asset map are never deleted; they
 are position facts, not line opinions.
 
-Caveat: once 5D repetition rules exist, position-keyed proofs inherit §8.5's
-graph-history-interaction problem — a "proof" that depended on repetition state is not
-purely position-keyed. Resolve alongside the repetition rules.
+Position-keyed proofs are sound: with no repetition rule (§11.0 item 5), no proof can
+depend on how the position was reached.
 
 #### Pondering is the same mechanism
 
@@ -1439,10 +1439,9 @@ minimal heads-plus-reachable-plus-flagged variant.
 **"Live timelines" resolves into the existing machinery.** Rules-**active** timelines get
 W bands — obligations bind, heads act. Rules-**inactive** timelines carry no obligations,
 but their boards remain travel destinations: they are **E-material**, in scope exactly
-when reachable, with no separate decision needed. (Hedge: the exact activation rules —
-and whether inactive timelines can originate checks — need pinning against the rulebook
-alongside the repetition-rules item; the generator decides, and scope follows the
-generator.)
+when reachable, with no separate decision needed. (Pinned at CHECKPOINT 1: activation follows the
+documented rule in docs/rules/README.md, and a board on an inactive timeline where the
+side to move would have to play first does not originate check — §11.0 item 1.)
 
 **Refused: pruning by strategic deadness.** A rules-active timeline that looks hopeless
 **stays in scope** — its obligations still bind, its boards remain reachable, and "looks
@@ -1510,14 +1509,24 @@ manufactures false proofs that persist.
    implemented directly by generating every move by the attacking colour that captures
    an enemy royal. Those captures come from any board the attacker could move on and run
    through time and across timelines. Royals are plural — one king per timeline, plus
-   the royal queen in Reversed Royalty (§12.6). For the checkmate-versus-stalemate
-   verdict when no legal turn exists, check is evaluated after advancing every eligible
-   timeline to its "phantom" board (in effect, the timeline's next board with no move
-   played on it).
+   the royal queen in Reversed Royalty (§12.6). **Check status** (ruled at CHECKPOINT 1,
+   docs/rules/README.md): a royal is in check if, passing on all *active boards in the
+   present*, the opponent could capture it from any of their playable boards. Optional
+   boards ahead of the present and boards on inactive timelines are not passed — the
+   opponent can move there only if the side to move plays there first, and the
+   submission test (item 2) catches any royal capture that results. A royal capture
+   counts even if it would branch into a timeline that would be inactive: activity
+   governs the present, not whether a capture is legal. Status decides checkmate versus
+   stalemate. (This replaces an earlier paraphrase — "advance every eligible timeline to
+   its phantom board" — that matched ftxi's over-broad reading; all 78 oracle check
+   disagreements came from exactly this definition.)
 2. **Legality is per turn, not per move.** A turn — an *action* — is a set of moves across
    boards, submitted together. Being in check midway through a turn is legal; only the
    submitted turn must leave every royal safe. The obligation to move on the boards the
-   present line requires is enforced at submission too. Consequence for the ply split:
+   present line requires is enforced at submission too. **Submission legality is a
+   separate test from check status:** it applies to the actual turn, not a passing
+   hypothetical — after it, a royal capture from any of the opponent's playable boards,
+   active or inactive, makes the submission illegal. Consequence for the ply split:
    §8.2.
 3. **Checkmate and stalemate — the genuinely hard one.** "Does any legal turn exist?" is a
    search over combinations of per-timeline choices, combinatorial in the number of
@@ -1526,15 +1535,25 @@ manufactures false proofs that persist.
    timeline — one timeline's share of the turn, with "play nothing here" a valid
    semimove — and searches that product space, with better worst-case performance,
    especially near mate where legal turns are sparse. Run both: naive as the fast path,
-   hypercuboid for near-mate positions — the positions proofs come from. The hypercuboid
+   hypercuboid for near-mate positions — the positions proofs come from. **A mate
+   verdict is a proof, so it requires an exhaustive search that terminated.** An
+   exhausted budget yields "unknown", never "mate" — the failure behind the official
+   client's false mate claims and Chess in 5D's (CHECKPOINT 1). The two detectors are
+   cross-checked against each other in the gate. The hypercuboid
    method originates in penteract's cwmtt and is adapted, with improvements, in ftxi's
    5dchess_engine.
-4. **Ordinary chess rules** — castling, en passant, promotion — apply board by board, but
-   every "is this square attacked?" query inside them (castling through check, for one)
-   is a 5D query.
+4. **Ordinary chess rules** — castling, en passant, promotion — apply board by board, and
+   so do their attack tests: castling is blocked only if the king or the square it
+   passes through is attacked by a piece *on the castling board*, and en passant is
+   per-board only. A king in check from another board may castle, but the turn still
+   cannot be submitted until that check is resolved somewhere. (Corrected — an earlier
+   revision called these 5D queries without a source; the documented rule is per-board.)
 5. **Game-state bookkeeping** — the present line, active and inactive timelines, whose
-   turn it is on which board, submission — is an exact state machine. Repetition is the
-   open item with five consumers (§8.5).
+   turn it is on which board, submission — is an exact state machine. Activation follows
+   the documented rule (docs/rules/README.md). **There is no repetition rule** (project
+   decision): passing is impossible and every move creates at least one board, so the
+   full state can never recur within a game. Values therefore depend only on the state,
+   and graph-history interaction does not arise (§8.5, §8.7).
 
 #### The correctness gate — differential testing
 
@@ -1639,8 +1658,12 @@ first commit:
   the known-divergences file with its citation. Two oracles agreeing is not evidence on
   its own (ftxi adapts cwmtt's method). **Check disagreements first** — check decides
   checkmate versus stalemate — and the engine's check detection is not written until they
-  are settled. The expectation: they concentrate in which boards count as sources of
-  attack, the phantom-board definition flagged as a paraphrase in item 1 above.
+  are settled. The expectation — that they would concentrate in which boards count as
+  sources of attack — was confirmed at CHECKPOINT 1: all seven clusters did. **The
+  rulebook is docs/rules/README.md**: sources ranked (the in-game Guide, then cited
+  developer rulings, then established references, then forums), every entry cited with
+  a confidence level, silent cases labelled project decisions and mirrored in the
+  register, never an oracle as a source; pinned, with the gate re-run when it changes.
 - **Stable answers only.** An oracle that does not reproduce its own recorded answers is
   nondeterministic or limited by its search budget. Budget-limited answers are recorded
   as "unknown at budget X", or the budget is raised until they are stable;
@@ -2243,7 +2266,10 @@ against held-out adversaries.)
 moves-left steering active — prefer faster wins and slower losses once the outcome is
 settled (Lc0's MLH pattern). The
 now-calibrated value head earns resign thresholds and early adjudication in self-play,
-buying back a meaningful slice of generation compute.
+buying back a meaningful slice of generation compute. Self-play also carries a **turn
+cap defined from the state**, scored as a draw — a convention for ending runaway games,
+not a game rule (5D has no repetition rule to end them, §11.0 item 5); log how often it
+binds.
 
 ### 12.4 Auxiliary training targets
 
@@ -2408,9 +2434,9 @@ standard game — nearly-free training diversity.
   economy — shield the queen, spend the king — close to an adversarial distribution
   shift for a standard-trained net.
 - **Accumulating small items:** scanner v1 material values per new piece; NNUE
-  feature-table extension and retrain; per-variant repetition terminal values — the
-  **fifth consumer** of the unresolved repetition-rules item (§8.5, §8.7, §10.4.3,
-  §14.4).
+  feature-table extension and retrain; per-variant repetition terminal values — none needed,
+  since no variant adds a repetition rule and the full state cannot recur (§11.0
+  item 5).
 
 **One net or many.** KataGo trains a single net across board sizes and rule sets via
 input conditioning, and gains from the shared game-sense. This design is better placed
@@ -2863,9 +2889,9 @@ learned-verifier estimates entering any loss.
   cross-board layer every third; cache-compatible, ~2.4× cheaper per node, K/V stored only
   at global layers (649 → ~203 MB at 600 boards). Layer-level fallback to head-level
   routing; committed-class; a 6a arm.
-- **Dedicated df-pn long-mate thread** (dlshogi's root solver) — v2; gated on resolving
-  5D repetition rules (graph-history interaction) and on a 5D dominance definition that
-  does not yet exist for the df-pn+ accelerations.
+- **Dedicated df-pn long-mate thread** (dlshogi's root solver) — v2. Its repetition gate
+  is gone (§11.0 item 5); it still needs a 5D dominance definition for the df-pn+
+  accelerations.
 - **Same-board NNUE threat features** (§11.1) — v2/v3, with the accumulator-shrink
   ablation (6q); the head-only cross-board overlay is v3-speculative at most.
 - **Early exit / adaptive depth** (§10.3) — confidence-family inference saving; allowable

@@ -150,7 +150,7 @@ must be decided before it); **R** = retrofittable; — = process or principle.
 | H18 | 5D Zobrist: content hash mixed with (timeline, time) by multiply-rotate; **ruleset ID in every exact-store key** | Committed | — | — | 11.3 |
 | H19 | Proofs export to the permanent solved store immediately; never TT-only | Committed | — | — | 11.3 |
 | H20 | Within-scanner correction history | Held open (v2) | R | — | 14.4 |
-| H21 | Dedicated df-pn long-mate thread | Held open (v2; GHI-gated) | R | — | 14.4 |
+| H21 | Dedicated df-pn long-mate thread | Held open (v2; needs a 5D dominance definition — the repetition gate is gone) | R | — | 14.4 |
 | H22 | Rules engine: every rule in the generator — royal-capture check detection (phantom boards for the mate-vs-stalemate verdict), turn-level legality at submission, mate/stalemate via naive DFS + hypercuboid, per-board chess rules as 5D queries, exact bookkeeping | Committed | — | — | 11.0 |
 | H23 | Differential-testing gate against ftxi/5dchess_engine, penteract/cwmtt and Chess in 5D — move counts, check and mate verdicts over 5dpgn corpora; proof channel disabled until it passes; re-run per generator change and per variant | Committed (process) | — | — | 11.0 |
 | H24 | Build the generator in-house; ftxi's engine as reference oracle, not the core — the generator must emit outputs no existing engine produces, and reuse would forfeit ftxi as an oracle (H26); oracle internals as pinned are recorded in PROVENANCE.md | Committed | — | — | 11.0 |
@@ -165,6 +165,11 @@ must be decided before it); **R** = retrofittable; — = process or principle.
 | H33 | Recorded-answer integrity: immutable, content-hashed, verified before every comparison; comparison logic outside the engine adapter's reach; harness changes reviewed | Committed | — | — | 11.0 |
 | H34 | Telltales: every recorded oracle error doubles as a copy detector — an engine that reproduces one probably copied that oracle's logic | Committed | — | — | 11.0 |
 | H35 | Tiered CI green on Linux before the first engine commit | Committed (process) | — | — | 11.0, 15.1 |
+| H36 | Check status vs submission legality (CHECKPOINT 1): status = passing on all active boards in the present, the opponent could capture a royal from any of their playable boards — optional boards ahead of the present and inactive timelines are not passed; legality = after the actual turn, a royal capture from any of the opponent's playable boards, active or inactive, makes the submission illegal; a capture counts even if it would branch into an inactive timeline | Committed | — | — | 11.0 |
+| H37 | Mate verdicts are proofs: an exhaustive search that terminated; an exhausted budget is "unknown", never "mate"; the two detectors are cross-checked in the gate | Committed | — | — | 11.0 |
+| H38 | The rulebook is docs/rules/README.md: sources ranked (in-game Guide > cited developer rulings > established references > forums), each entry cited with confidence, silent cases labelled project decisions and mirrored here, never an oracle as a source; pinned, gate re-run on change | Committed (process) | — | — | 11.0 |
+| H39 | No repetition rule (project decision): passing is impossible and every move creates a board, so the full state cannot recur; graph-history interaction does not arise | Committed | — | — | 11.0, 8.5 |
+| H40 | Castling and en passant attack tests are per-board: castling blocked only by attacks from pieces on the castling board, en passant per-board only | Committed | — | — | 11.0 |
 
 ## I. Training (§12)
 
@@ -180,6 +185,7 @@ must be decided before it); **R** = retrofittable; — = process or principle.
 | I8 | Variants: standard net absorbs rule-identical variants (self-identification principle); Reversed Royalty specialist warm-started with a scratch control; Princess interim specialist | Committed | — | 6r | 12.6 |
 | I9 | Exact stores are per ruleset | Committed | — | — | 11.3, 12.6 |
 | I10 | Calibration monitoring of the categorical variance by N and phase; trained error head as fallback | Committed (monitoring) | — | 6m | 14.4 |
+| I11 | Self-play turn cap defined from the state, scored as a draw — a convention for ending runaway games, not a game rule; frequency logged | Committed | — | — | 12.3 |
 
 ---
 
@@ -210,12 +216,13 @@ moment they were made.
 | 18 | Refresh ladder "no training commitment"; refresh training unspecified | Conditioning-offset training specified; the no-commitment claim holds only given it | Evaluations below a refresh see history conditioned on an ancestor — a regime dense training never shows (§7.9) |
 | 19 | Summary: the window "determines whether the caching architecture is worth asking"; "run it with FP8"; window measured first | Window measured early because it sets throughput on every path (composes with the cache); FP8 later; rules engine and gate come first | The summary was never reread after §7.5's composition correction — reversal 16's lesson, one section over |
 | 20 | §11.0 oracle facts taken from web research: cwmtt's checkmate tool uses z3; ftxi packs coordinates at 8 bits per axis (one of H24's two reasons) | Removed — neither is true at the pinned commits; PROVENANCE.md is authoritative on oracle internals; H24 stands on its remaining reasons | READMEs and docs describe a moment; pinned code is the ground truth. Caught by the implementation phase — what §15 is for |
+| 21 | §11.0 item 4: castling's attacked-square test is a 5D query | Per-board only, for both castling out of and through check; en passant per-board | The documented rule (Wikipedia's rules summary, a developer ruling) contradicted an unsourced claim in the spec; raised by the rules reference at CHECKPOINT 1 |
 
 ## K. Open items
 
 | Item | Gates | Where |
 |---|---|---|
-| **5D repetition rules** — the most load-bearing unresolved item | MCGS graph-history interaction (§8.5); solved-store position-keying (§8.7); df-pn thread (§14.4); inactive-timeline activation semantics (§10.4.3); per-variant repetition terminal values (§12.6) — *five consumers*. Resolve first at implementation, YaneuraOu-style rule-specific terminal values | 8.5 |
+| ~~5D repetition rules~~ — **resolved at CHECKPOINT 1**: no repetition rule; the full state cannot recur (H39). Its five consumers are closed (§8.5, §8.7, §10.4.3, §12.6, §14.4) | — | 11.0 |
 | Scanner horizon per node budget | NNUE v2 (6d), the quiet screen (6h), quiet-only NNUE training | 11.1, 6b |
 | Stand-pat validity / 5D zugzwang | Null-move import into the scanner | 11.1 |
 | §8.2 ply-split vs whole turn | Couples MCGS; measured jointly | 8.2, 6g, 6k |
@@ -233,6 +240,7 @@ moment they were made.
 | Windowed wins equal-wall-clock under the cached config (~80%); unwindowed wins equal-sims only ~55/45 (attention-dilution contrarian case); falsifier = coordinate-gap learning failure | *Conversation only — not yet pinned* |
 | Windowed shows the higher initial exploit rate on scope-targeted attacks; filler tuning narrows it; closure open | §12.7 |
 | Early in training small exploiters find most holes; at maturity only large or from-scratch ones do | §12.7 |
+| Oracle check disagreements concentrate in which boards count as sources of attack — **confirmed at CHECKPOINT 1**: all seven clusters did | §11.0 |
 | 6i demotion-refutation rate drops when uncertainty weighting lands — overlapping defences, not audit failure | §8.4 |
 | Raw-variance sampling overfits aleatoric positions (6u) | Ablation 6u |
 | Difficulty-weighted allocation's gain concentrates in the late game | §8.6 |
