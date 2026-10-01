@@ -167,6 +167,13 @@ itself or anything it makes.
 
 ## What here did not originate here
 
+The engine (`engine/`) is written for this project from `docs/rules/README.md`,
+the design spec and the notation specification's text. Two pieces follow published
+algorithms rather than code: `engine/src/md5.cpp` implements MD5 from RFC 1321
+(its algorithm and test vectors), and `engine/src/zobrist.cpp` uses published
+numeric constants (SplitMix64, the MurmurHash3 finaliser, xxHash64's primes) to
+generate its keys. No code was copied into either.
+
 | Where | From | Licence | What |
 |---|---|---|---|
 | `oracles/drivers/ftxi/ftxi_driver.cpp`: `apply_action()`, `mainline_action_count()`, and in `main()` the set-up that parses the record and the main-line walk | ftxi/5dchess_engine, `tools/position_tools.cpp` (`apply_action()`, `mainline_action_count()`, `read_position()`), at the pinned commit | BSD-2-Clause; the copyright notice and licence text are kept at the top of the file | About sixty lines that read a record and replay it through the oracle's own API. Adapted: each failure carries a reason, and an action is tested with the oracle's own legality test before it is submitted. |

@@ -10,6 +10,39 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-01 - The rules engine, first stages (E1, E2): representation, turn rules, moves, parser
+
+- `engine/` (C++20, CMake; `py engine/build.py --test`; manual `engine/README.md`),
+  written from `docs/rules/README.md`, the design spec and the notation
+  specification's text - never from an oracle (H24, H26, H28):
+  - E1: immutable boards (A4) in a persistent multiverse; 5DFEN read and write;
+    the H30 fingerprint (the notation spec's full-state hash; both published
+    hashes reproduce) with an MD5 written from RFC 1321; the 5D Zobrist key (H18:
+    a per-board content hash mixed with (timeline, half-turn) by multiply-rotate,
+    combined by addition so duplicated boards never cancel, with the ruleset ID,
+    player to move, parity, creators and board size); a C API for Python.
+  - E2: the present, timeline activation and reactivation, the turn state machine
+    and submission's present-shift test (T1-T13); pseudo-legal moves for every
+    piece in 4D (4.1-4.13, J1-J9); move application with branching and timeline
+    numbering; castling with the on-board attack test (S2), en passant within a
+    board, promotion; the 5dpgn/5DFEN parser and the variants that have an
+    independent source; `t5d-gate --parse-only`, the engine's gate adapter.
+  - Every open question of the rules reference is a named ruleset parameter with
+    the documented default. Check detection, the royal-safety test at submission
+    and mate detection are hooks only: they wait on the check ruling (CHECKPOINT 1).
+  - 259 tests, warning-free with -Werror, also under an undefined-behaviour
+    sanitizer; the parser survived 300,000 fuzzed records. Each stage was reviewed
+    adversarially (the one major finding - every move copied its timelines' whole
+    history - is fixed by sharing history in chunks).
+- `.github/workflows/engine.yml`: builds and tests the engine on ubuntu-24.04 with
+  g++ 13 and 14, warnings as errors, without checking out any submodule.
+- `CLAUDE.md` describes the engine; `PROVENANCE.md` notes that its MD5 follows RFC
+  1321 and its Zobrist key generator uses published constants, with no code
+  copied; `.gitignore` ignores the build tree and the project `.venv`.
+- Spec: §11.0 (the rules engine's five pieces: items 2, 4 and 5 built; 1 and 3
+  parked), §11.3 (the Zobrist key - proposed spec edit 2), H18, H22, H24, H28,
+  H30; spec issues 11-15 and proposed spec edit 11 in `docs/BUILD_LOG.md`.
+
 ### 2026-10-01 - CHECKPOINT 1: the check disagreements, clustered and traced
 
 - `docs/checkpoints/checkpoint-1-check-clusters.md`: the 78 check disagreements
