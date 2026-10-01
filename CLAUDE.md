@@ -6,7 +6,7 @@ verification layer beside it.
 
 ## State of the repository
 
-**Specification plus the oracle layer. There is no engine code yet.**
+**Specification, the oracle layer and gate, and the rules engine's first stages (`engine/`). The network (`python/`) is being built.**
 
 | Path | What it is |
 |---|---|
@@ -19,11 +19,15 @@ verification layer beside it.
 | `CHANGELOG.md` | Every change, newest first, with what it changed in the spec. |
 | `docs/BUILD_LOG.md` | **Start here when resuming the build.** What is done, parked and next, keyed by register ID; the standing rules of the build; proposed spec edits. |
 | `docs/MEASUREMENTS.md` | Every measured figure with its conditions, and the §15.6 verdicts. |
+| `docs/rules/README.md` | The cited rules reference the engine is written from (proposed as the rulebook); open questions Q1-Q28. |
+| `docs/checkpoints/` | Checkpoint reports - CHECKPOINT 1, the check disagreements, awaits the user's ruling. |
+| `engine/` | The rules engine, C++20 (H24): immutable boards, the multiverse, 5DFEN, the H30 fingerprint, 5D Zobrist (H18), the turn rules, pseudo-legal move generation, the 5dpgn parser (H28) and the gate adapter (parse mode). Its manual is `engine/README.md`. Check detection, legality and mate detection wait on the check ruling. |
 
-The build order is spec §15.1. Phase 0 is: the rules engine, the differential gate
-over pinned oracles, and the repetition / present-line rules pinned against the
-rulebook. Of those, only the oracle side of the gate is built. The next thing to
-exist is the rules engine, in-house (H24), with its own 5dpgn/5dfen parser (H28).
+The build order is spec §15.1; where the build stands, and what is parked and why,
+is in `docs/BUILD_LOG.md`. Build and test the engine with `py engine/build.py
+--test` (CMake and Ninja from the project's `.venv`, see `engine/README.md`); the
+engine is written from `docs/rules/README.md` and the notation specification text,
+never from an oracle.
 
 ## Rules you must follow
 

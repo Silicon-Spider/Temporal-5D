@@ -1,0 +1,39 @@
+# The rules engine (engine/): build it and run its tests on Linux, the
+# deployment platform, with both compilers CI supports, on every push and pull
+# request. Warnings are errors.
+#
+# No submodule is checked out: the engine needs nothing from the oracle harness,
+# and building without it shows that.
+name: engine
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: engine-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        cxx: [g++-13, g++-14]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Build and test (${{ matrix.cxx }})
+        env:
+          CXX: ${{ matrix.cxx }}
+        run: python engine/build.py --clean --werror --test

@@ -227,12 +227,28 @@ count as sources of attack (spec §11.0 item 1)**:
   decision, register part K); castling's attack test (spec §11.0 item 4 vs rules
   S2, spec issue 10); whether to report the two oracle defects upstream.
 
-Engine stage E1 (C++ scaffold, immutable board, persistent multiverse, 5DFEN,
-fingerprint, 5D Zobrist, C API skeleton) and network stage N1 (dense v1 with
-random weights) are being written; neither is committed before CI is green on
-Linux (H35). The engine core is C++20 (g++; no Rust or MSVC on the machine), a
-shared library with a C API for Python (ctypes), built with CMake/Ninja from a
-project `.venv`; the network is PyTorch on CPU under `python/`.
+The engine core is C++20 (g++; no Rust or MSVC on the machine), a shared library
+with a C API for Python (ctypes), built with CMake/Ninja from a project `.venv`;
+the network is PyTorch on CPU under `python/`.
+
+- **Engine E1 + E2 - committed 2026-10-01** (`engine/`, 259 tests, warning-free,
+  also under an undefined-behaviour sanitizer; CI builds it with g++ 13 and 14 on
+  Linux): board, multiverse (persistent, history shared in chunks of 16), 5DFEN,
+  the H30 fingerprint (both published notation hashes reproduce), 5D Zobrist
+  (H18), the C API; the present, activation and reactivation, the turn state
+  machine and submission's present-shift test; pseudo-legal moves for every piece
+  kind in 4D; move application (non-branching and branching jumps, timeline
+  numbering, J6's order dependence); castling with the on-board attack test (S2),
+  en passant within a board, promotion; the 5dpgn parser written from the
+  notation spec's text (300,000 fuzzed records, no protocol violation); the
+  variants that have an independent source (rules V3); `t5d-gate --parse-only`
+  speaking the harness protocol. Every open question of the rules reference is a
+  named `RuleOptions` / `PgnOptions` parameter with the documented default (table
+  in `engine/README.md`); a non-default choice changes the ruleset ID and so the
+  Zobrist key. Hooks for the check ruling: `CheckRuling::royals_safe` (C4),
+  `in_check` (C6), `has_legal_action` (C5), `CastlingAttacks::AnyBoard`.
+- **Network N1** (dense v1 with random weights; 152 tests) is built and reviewed;
+  N2 (the attention structure) is running; `python/` is committed when N2 lands.
 
 ### 4. After the ruling - parked (needs the check ruling)
 
@@ -254,11 +270,11 @@ project `.venv`; the network is PyTorch on CPU under `python/`.
 | H15 | parked | Synchronous debug mode: with the scanner and search |
 | H16, H25, H29 | not built (rule) | Refused |
 | H17 | parked | Lazy SMP: with the scanner |
-| H18 | not started | 5D Zobrist - step 3 (ruling-independent) |
+| H18 | built, tested | 5D Zobrist: coordinate-free content hash per board, multiply-rotate with (timeline, half-turn), addition across boards, ruleset ID, player to move, parity, creators, board size; incremental equals from-scratch; duplicated boards never cancel (engine E1, E2) |
 | H19 | parked | Proof export: with the scanner |
-| H22 | not started | Rules engine: representation, parser, per-board movegen in step 3; check, legality, mate in step 4 |
+| H22 | built in part | Items 2 (the present-shift half), 4 (castling with the on-board attack test, en passant, promotion) and 5 (the present, activation, submission) built and tested; item 1 (check), the royal-safety half of 2 (C4) and item 3 (mate) parked for the check ruling, behind hooks |
 | H23 | built | The gate (oracle side); engine side waits for the engine |
-| H24, H26, H28 | not started | In-house generator and parser (step 3) |
+| H24, H26, H28 | built, tested | The generator and the 5dpgn/5DFEN parser are in-house (`engine/`), written from `docs/rules/README.md` and the notation spec's text; 259 engine tests; boundary clean |
 | H27 | built, tested | The oracle harness, committed 2026-10-01 |
 | H30 | built, tested | Step 2A (a04678c): every oracle reports its boards per ply; no placement divergence across the corpus |
 | H31 | not started | Step 3 (CHECKPOINT 1) |
@@ -269,7 +285,8 @@ project `.venv`; the network is PyTorch on CPU under `python/`.
 
 | ID | Status | Notes |
 |---|---|---|
-| A1-A4 | not started | Tokens, features, flags, immutability (step 3/6) |
+| A1-A3 | built, tested | Network N1: tokens, features, per-board flags, Δt-to-present (committed with `python/`) |
+| A4 | built, tested | Engine: every board immutable once published; persistent multiverse sharing history in chunks |
 | A5 | not started | Piece-centric tokenisation, behind a flag |
 | B1, B2, B4, B8, B9, B14 | not started | Committed network items |
 | B5, B6, B10, B11, B12 | not started | Provisional / prototype: behind flags |
@@ -422,6 +439,34 @@ decision), and what is parked.
     engine implements the rules reference by default; the spec's cross-board
     reading is a named parameter, unimplemented because it needs the attack
     definition of the pending check ruling. For the user, beside the check ruling.
+11. **Reversed Royalty's king: spec §11.0 item 1 vs the rules reference.** The spec
+    says royals are "one king per timeline, plus the royal queen in Reversed
+    Royalty"; the rules reference (V3) gives Reversed Royalty a royal queen and a
+    common king, which is not royal (4.12). The engine follows the rules
+    reference. Proposed spec edit 11.
+12. **The fingerprint cannot see en-passant rights** (H30; 5DFEN has no en-passant
+    field). Two states that differ only in an en-passant right share a
+    fingerprint, so a parse divergence confined to one is invisible to the gate's
+    state comparison (it still shows as a count or legality difference). The
+    engine keeps the right in its Zobrist key only while it can be used. Noted;
+    no change.
+13. **The engine contract and set-ups that cannot be built.** A record whose
+    set-up cannot be built (a custom position without board strings,
+    contradictory headers) can only end `rejected` / `unreadable` with no
+    position; the harness contract allows a run with no position only for
+    `unsupported`. The contract is amended with the parse mode (step 2B).
+14. **Notation readings found by engine stage E2b.** S6 is silent on the
+    notation's "more than one king for either player" clause (the parser reads
+    O-O board by board; the whole-start reading is a parameter); the board names
+    `Even`, `Odd` and `Custom ...` come from the harness contract, not the
+    notation spec; the notation spec's own "Actual game" record holds two moves
+    that are impossible as written (15. (1T13)Ba4+ and 16. (0T14)Bg2).
+15. **Transposition families are smaller than factorial** (an interaction, not a
+    contradiction). §8.5 and §11.3 say a multi-board turn yields a factorial
+    family of move orders; under the Guide's reading of Q4, optional moves come
+    before the move that shifts the present, a rewinding branch comes last, and J6
+    makes some orders reach different states. It bears on MCGS (C11) and the TT's
+    expected hit rate.
 
 ## Proposed spec edits
 
@@ -468,6 +513,9 @@ says now, what it should say, why.
     rulebook. Proposed: `docs/rules/README.md` - the cited rules reference built
     from the in-game Guide and community sources, never from an oracle - with its
     open questions settled by the user's rulings and recorded there.
+11. **§11.0 item 1**: "plus the royal queen in Reversed Royalty" - proposed: "in
+    Reversed Royalty the royal is the queen; its king is a common king, not royal"
+    (spec issue 11).
 
 ## Session log
 

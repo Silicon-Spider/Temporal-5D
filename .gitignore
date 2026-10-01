@@ -6,3 +6,9 @@
 /oracles/.cache/
 __pycache__/
 *.pyc
+
+# The engine: CMake build trees and the project's Python virtual environment.
+/build/
+/.venv/
+*.egg-info/
+.pytest_cache/
