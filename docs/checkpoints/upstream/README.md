@@ -1,0 +1,13 @@
+# Upstream bug reports (drafts)
+
+These are draft bug reports for two of the pinned oracle projects, written for the project owner to file in each project's own issue tracker (ruling R7 in `docs/rules/README.md`); nothing here has been filed yet. Each draft stands without this repository and gives a minimal reproduction, the expected and the actual output, the root cause at the pinned commit, and the rule cited from public sources. The evidence behind them is in `docs/checkpoints/checkpoint-1-check-clusters.md` ("Mate traces" and "Count trace"). Every reproduction was re-run against the pinned code on 2026-10-01: 5d-chess-js was loaded at its pinned commit, with its suggested fix also checked by applying it in memory, and ftxi was run as its stock `5dtools`, built from its pinned commit.
+
+- `5d-chess-js-mate-search.md`: 5d-chess-js (`ee403c8`). Its exhaustive checkmate search hands `boardFuncs.moves()` a search-tree node instead of a board, so it reports checkmate where a legal turn exists.
+- `ftxi-black-pawn-timeline-double-step.md`: ftxi/5dchess_engine (`2ea9f1b`, v0.4.10). Its move generator never gives a Black pawn or brawn the two-timeline double step, though it gives White's.
+
+**Before filing:**
+
+- Re-check one quotation against the live Wikipedia article: the lead-in "If the player whose turn it is has no way to legally complete their turn, then the game ends in one of two ways:" was read through a summarising fetch, not copied from the page. The Guide quotations come from the rulebook's sources [108] and [80].
+- Both drafts quote a line or two of the receiving project's own code, at the pinned commit, so that the maintainers can find the fault. The ftxi draft names the other implementations compared (penteract/cwmtt, 5d-chess-js); drop the names if you prefer. Its public-record reproduction links the notation repository's record rather than quoting it.
+- Neither defect had been reported: 5d-chess-js has 7 issues, none about mate detection, and no commits since 2022; ftxi has 11 issues and pull requests, none about pawns, and the faulty line is unchanged on `main` at `fd824c9` (2026-09-29).
+- Two further ftxi problems turned up while these were verified and are **not** in the drafts (not yet checked against the rulebook): with a White brawn, `5dtools` lists the non-capturing two-axis step `(1T1)Wc2>>(0T1)c3` three times; and `5dtools count --at 0 naive` (also `all ... naive` and `diff`) crashes with a segmentation fault on the mirror record. And 5d-chess-js takes a custom set-up's side to move from timeline 0 alone (`index.js` lines 195-197), so it reads the Black-to-move ftxi record as White to move.

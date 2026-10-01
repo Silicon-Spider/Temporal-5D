@@ -59,6 +59,7 @@ target_compile_definitions(t5d_options INTERFACE T5D_VERSION_STRING="${PROJECT_V
 
 add_library(t5d_core STATIC
   src/board.cpp
+  src/expand.cpp
   src/fen.cpp
   src/fingerprint.cpp
   src/gate.cpp
@@ -101,9 +102,13 @@ endif()
 
 add_executable(t5d-tests
   tests/test_main.cpp
+  tests/test_alloc.cpp
   tests/test_apply.cpp
   tests/test_board.cpp
   tests/test_capi.cpp
+  tests/test_capi_game.cpp
+  tests/test_expand.cpp
+  tests/test_expand_reference.cpp
   tests/test_fen.cpp
   tests/test_fingerprint.cpp
   tests/test_gate.cpp
@@ -118,6 +123,7 @@ add_executable(t5d-tests
   tests/test_rules.cpp
   tests/test_special_moves.cpp
   tests/test_state.cpp
+  tests/test_synthetic.cpp
   tests/test_timeline.cpp
   tests/test_types.cpp
   tests/test_variants.cpp
@@ -125,7 +131,7 @@ add_executable(t5d-tests
   # The C API is tested linked in statically: the same source as the library.
   src/capi.cpp)
 target_include_directories(t5d-tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
-target_link_libraries(t5d-tests PRIVATE t5d_core)
+target_link_libraries(t5d-tests PRIVATE t5d_core t5d_tools)
 # Stage E4's tests.
 target_sources(t5d-tests PRIVATE
   tests/test_check.cpp
@@ -134,6 +140,30 @@ target_sources(t5d-tests PRIVATE
 
 add_executable(t5d-gate tools/t5d_gate.cpp)
 target_link_libraries(t5d-gate PRIVATE t5d_core)
+
+# The measurement tools (stage E3) and what they share: SYNTHETIC positions by
+# random play (for throughput only), record input, ruleset options.
+add_library(t5d_tools STATIC
+  tools/synthetic.cpp
+  tools/tool_support.cpp)
+target_include_directories(t5d_tools PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/tools)
+target_link_libraries(t5d_tools PUBLIC t5d_core)
+
+add_executable(t5d-measure tools/t5d_measure.cpp)
+target_link_libraries(t5d-measure PRIVATE t5d_tools)
+
+# The benchmark names its build in its output: the build type and the flags.
+find_package(Threads REQUIRED)
+add_executable(t5d-bench tools/t5d_bench.cpp)
+target_link_libraries(t5d-bench PRIVATE t5d_tools Threads::Threads)
+string(TOUPPER "${CMAKE_BUILD_TYPE}" T5D_BUILD_TYPE_UPPER)
+string(STRIP "${CMAKE_CXX_FLAGS} ${CMAKE_CXX_FLAGS_${T5D_BUILD_TYPE_UPPER}}" T5D_FLAGS_TEXT)
+target_compile_definitions(t5d-bench PRIVATE
+  "T5D_BUILD_TYPE=\"${CMAKE_BUILD_TYPE}\""
+  "T5D_CXX_FLAGS=\"${T5D_FLAGS_TEXT}\"")
+if(WIN32)
+  target_link_libraries(t5d-bench PRIVATE advapi32)  # RegGetValueA: the CPU's name
+endif()
 
 # ---- MinGW: no dependence on the toolchain's runtime DLLs --------------------------
 #
@@ -148,6 +178,8 @@ if(MINGW)
   target_link_options(t5d PRIVATE -static-libgcc -static-libstdc++ -static)
   target_link_options(t5d-tests PRIVATE -static)
   target_link_options(t5d-gate PRIVATE -static)
+  target_link_options(t5d-measure PRIVATE -static)
+  target_link_options(t5d-bench PRIVATE -static)
 endif()
 
 # ---- tests -------------------------------------------------------------------

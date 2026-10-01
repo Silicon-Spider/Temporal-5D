@@ -2,6 +2,7 @@
 
 #include "t5d/rules.hpp"
 
+#include <cstdio>
 #include <stdexcept>
 #include <string>
 
@@ -72,6 +73,51 @@ std::uint64_t RuleOptions::encode() const noexcept {
   e |= std::uint64_t{static_cast<std::uint8_t>(family) & 0xFu} << 28;
   e |= std::uint64_t{static_cast<std::uint16_t>(promotions.mask() ^ d.promotions.mask())} << 32;
   return e;
+}
+
+RuleOptions RuleOptions::decode(std::uint64_t e) {
+  const RuleOptions d{};
+  RuleOptions r;
+  const auto bit = [e](int i) { return ((e >> i) & 1u) != 0; };
+  if (bit(0)) r.activation = ActivationRule::Consecutive;
+  if (bit(1)) r.initial_credit = InitialTimelineCredit::MinusZeroToBlack;
+  if (bit(2)) r.play_activates = !d.play_activates;
+  if (bit(3)) r.moves_after_shift = !d.moves_after_shift;
+  if (bit(4)) r.mandatory = MandatoryBoards::AllActive;
+  if (bit(5)) r.reactivation = Reactivation::Deferred;
+  if (bit(6)) r.turn_zero_reachable = !d.turn_zero_reachable;
+  if (bit(7)) r.sliders_cross_void = !d.sliders_cross_void;
+  if (bit(8)) r.past_self_blocks = !d.past_self_blocks;
+  if (bit(9)) r.brawn_rank_timeline_capture = !d.brawn_rank_timeline_capture;
+  if (bit(10)) r.double_step_right = DoubleStepRight::HomeRank;
+  if (bit(11)) r.timeline_double_step = !d.timeline_double_step;
+  if (bit(12)) r.double_step_over_void = !d.double_step_over_void;
+  if (bit(13)) r.branch_copies_keep_unmoved = !d.branch_copies_keep_unmoved;
+  if (bit(14)) r.jumps_keep_unmoved = !d.jumps_keep_unmoved;
+  if (bit(15)) r.en_passant_brawns = !d.en_passant_brawns;
+  if (bit(16)) r.brawns_promote = !d.brawns_promote;
+  if (bit(18)) r.castling_empty_between = !d.castling_empty_between;
+  if (bit(19)) r.castling_destination_test = !d.castling_destination_test;
+  if (bit(20)) r.castling_rook_path_test = !d.castling_rook_path_test;
+  if (bit(22)) r.castling_any_rank = !d.castling_any_rank;
+  if (bit(23)) r.castling_rook_two_away = !d.castling_rook_two_away;
+  if (bit(24)) r.castling_on_optional_boards = !d.castling_on_optional_boards;
+  if (bit(25)) r.earlier_playable_jump_branches = !d.earlier_playable_jump_branches;
+  if (bit(26)) r.inactive_history_is_destination = !d.inactive_history_is_destination;
+  if (bit(27)) r.brawn_cross_board_promotion = !d.brawn_cross_board_promotion;
+  r.family = static_cast<RuleFamily>((e >> 28) & 0xFu);
+  r.promotions = PromotionSet::from_mask(
+      static_cast<std::uint16_t>(d.promotions.mask() ^ static_cast<std::uint16_t>(e >> 32)));
+  // Whatever no valid ruleset produces (bit 17 - castling_attacks = AnyBoard,
+  // never implemented - bit 21, bits 48-63, a family number with no family)
+  // does not read back.
+  if (r.encode() != e || static_cast<std::uint8_t>(r.family) > 1) {
+    char hex[24];
+    std::snprintf(hex, sizeof hex, "0x%llx", static_cast<unsigned long long>(e));
+    throw std::invalid_argument(std::string("ruleset encoding ") + hex +
+                                " is not the encoding of any ruleset (RuleOptions::encode)");
+  }
+  return r;
 }
 
 std::uint32_t RuleOptions::ruleset_id() const noexcept {
