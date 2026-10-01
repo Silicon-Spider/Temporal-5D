@@ -10,6 +10,23 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-01 - Design documents: the CHECKPOINT 1 rulings, from upstream
+
+- `docs/design/` replaced with the upstream revision that records the user's
+  rulings on CHECKPOINT 1: register rows H36 (check status - pass on all active
+  boards in the present - versus submission legality - any royal capture from any
+  of the opponent's playable boards after the actual turn), H37 (a mate verdict is
+  a proof: an exhaustive search that terminated; an exhausted budget is
+  "unknown"), H38 (`docs/rules/README.md` is the rulebook), H39 (no repetition
+  rule, a project decision), H40 (castling and en passant attack tests are
+  per-board), I11 (self-play's turn cap, a convention scored as a draw); spec
+  §11.0 items 1, 2, 3, 4 and 5 rewritten accordingly, §8.5, §8.7, §10.4.3, §12.3,
+  §12.6 and §14.4 follow from H39, reversal 21 (castling's attack test) recorded,
+  and the architecture document gains the append-only-state and terminal-proof
+  notes. Copied in unchanged; nothing here edits them.
+- Spec: the documents themselves (§8.5, §8.7, §10.4.3, §11.0, §12.3, §12.6, §14.4;
+  H21, H36-H40, I11, part J reversal 21, part K).
+
 ### 2026-10-01 - Engine CI: build on g++ 13 and 14
 
 - The engine's first Linux run failed: g++ 13 and 14 at -O2 warn, wrongly, that
