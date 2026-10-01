@@ -26,6 +26,30 @@ what it describes.
   text, and not the oracles' messages, which quote it.
 - Build tools fetched by `build --bootstrap` are third-party too, and are never
   committed: see "Fetched at build time" below.
+- The project's own code is licensed under the **GPL-3.0** (`LICENSE`): see "The
+  project's licence" below.
+
+## The project's licence
+
+The project is licensed under the **GNU General Public License, version 3** - the
+`LICENSE` file, the GPL-3.0 text, from the repository's initial commit (decision
+M11).
+
+- Its obligations attach when source or binaries are **distributed**. Private use,
+  and running the engine as a service, distribute nothing and are unaffected.
+- Code from elsewhere keeps its own licence, listed below. The BSD-2-Clause code
+  adapted into the ftxi driver (`oracles/drivers/ftxi/ftxi_driver.cpp`, under
+  "What here did not originate here") is GPL-compatible; its copyright notice and
+  licence text are kept at the top of that file, as its licence requires. The
+  oracles are pinned submodules under their own licences, used only by the test
+  harness, and never part of the engine.
+- Stockfish and Lc0 are GPL-3.0 too, so copying their code would be
+  licence-compatible - and is still refused (H29): it would end sole copyright,
+  which is what keeps relicensing or dual-licensing possible. Their ideas enter
+  reimplemented, from papers and the Chess Programming Wiki; their code does not.
+- **Trained weights** are an open question (register part K, M11): weights are
+  data, and whether the licence reaches them is to be decided before any weights
+  are distributed. None exist yet.
 
 ## Roles
 
@@ -161,28 +185,30 @@ which git ignores; none of it is committed, and none of it is used by the engine
 
 ## Where the design spec and the pinned reality differ
 
-The spec was written before the oracles were pinned. What pinning found:
+The spec was written before the oracles were pinned. What pinning found, and where
+the spec stands on each now (this file is authoritative on oracle internals, §11.0):
 
-- **cwmtt no longer uses z3.** The spec calls it "Haskell and z3" and describes its
-  checkmate tool as z3-based. Upstream removed the z3 search in March 2023 (it was
+- **cwmtt no longer uses z3.** Upstream removed the z3 search in March 2023 (it was
   slower than the plain hypercuboid search); at the pinned commit the program
   depends only on GHC's boot packages (its `stack.yaml` still lists the z3 package,
   which nothing uses). cwmtt is still the heavier oracle to build, because it needs
-  a Haskell compiler.
-- **ftxi no longer packs coordinates into 8 bits.** The register (H24) gives "its
-  8-bit coordinate packing caps timelines and time" as a reason not to build on
-  ftxi. At the pinned commit a coordinate is 32 bits: 12 for the timeline, 12 for
-  the turn, 4 each for rank and file. The other reasons in H24 stand; this one
-  needs re-reading when the generator is written.
+  a Haskell compiler. *Corrected in the spec: register J20 removes the claim.*
+- **ftxi no longer packs coordinates into 8 bits.** At the pinned commit a
+  coordinate is 32 bits: 12 for the timeline, 12 for the turn, 4 each for rank and
+  file. *Corrected: J20 removes it from H24's reasons, and H24 stands on the rest.*
+- **A fourth repository is pinned:** the notation specification, as a corpus
+  source and the text the engine's parser is written from. It is not a rules
+  oracle; its bundled parser code counts as a parse-only oracle. *Now in the spec:
+  H26 and the §11.0 table.*
+- **ftxi is driven through a C++ driver and its stock CLI, not its Python
+  bindings.** The bindings expose no query for the check verdict the gate compares.
+  *Still differs: §11.0 ("Tiered CI") says "Python bindings"; an edit is proposed
+  in `docs/BUILD_LOG.md`.*
 - **cwmtt's licence is declared two ways.** Its `LICENSE` file is the GPL-3.0; its
   `cwmtt.cabal` says `BSD3`. It is treated as GPL-3.0 here.
 - **"Chess in 5D" means its rules library.** The site's client takes its rules from
   the separate `5d-chess-js` library (AGPL-3.0-or-later); that library is what is
   pinned.
-- **ftxi is driven through a C++ driver and its stock CLI, not its Python
-  bindings.** The bindings expose no query for the check verdict the gate compares.
-- **A fourth repository is pinned:** the notation specification, as a corpus
-  source. It is not in the spec's table and it is not an oracle.
 - **The oracles disagree with each other** in places. Those are listed, not yet
   adjudicated, in `oracles/DISAGREEMENTS.md`.
 - **No oracle answers everything.** The spec asks for a cross-check of move

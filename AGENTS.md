@@ -13,18 +13,23 @@ A change is finished only when, in the same edit as the change itself:
 
 1. **`CHANGELOG.md` records it.** Add an entry at the top of `## Unreleased`: the
    date, what changed and why, and a `Spec:` line that names the sections of the
-   design spec and the register you updated - or says that no part of the spec
-   describes what changed. Code, tests, configuration and documents all count;
-   related edits share one entry.
-2. **The spec says what is now true.** Wherever the design spec
-   (`docs/design/5d-chess-transformer-design.md`) or the decision
-   register (`docs/design/5d-chess-decisions.md`) describes what you
-   changed, update it to match: the reasoning in the spec, the status in the
-   register, both together.
+   design spec and the register the change bears on - or says that no part of the
+   spec describes what changed. Code, tests, configuration and documents all
+   count; related edits share one entry.
+2. **The spec is brought in line - upstream.** The design spec
+   (`docs/design/5d-chess-transformer-design.md`) and the decision register
+   (`docs/design/5d-chess-decisions.md`) are maintained upstream and copied in;
+   **never edit them here.** Wherever they describe what you changed, write the
+   edit they need under "Proposed spec edits" in `docs/BUILD_LOG.md` - where, what
+   it says now, what it should say, why - and name it in the `Spec:` line. The
+   spec and the register still change together, upstream; a measured figure goes
+   into `docs/MEASUREMENTS.md` with its conditions, and its write-back (M4) is
+   proposed the same way.
 
 Bringing the spec in line never replaces deciding. If a change would contradict a
-committed decision, or you cannot tell what the spec should now say, stop and ask
-before changing either. Never report a change as done without its changelog entry.
+committed decision, or you cannot tell what the spec should say, stop and ask.
+Never report a change as done without its changelog entry. Keep
+`docs/BUILD_LOG.md` current: it is how the next session resumes.
 
 ## The oracles are not yours to reuse
 
