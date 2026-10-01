@@ -10,6 +10,27 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-01 - The rulebook records the CHECKPOINT 1 rulings
+
+- `docs/rules/README.md` is now the project's rulebook (H38): a preamble ranks the
+  sources (in-game Guide > cited developer rulings > established references >
+  forums), labels silent cases as project decisions, never cites an oracle, and
+  says the gate pins the file. A new **Rulings** section records R1-R7 with the
+  sources the user cited: check status and submission legality (R1, H36);
+  activation is the count rule (R2, closing Q1); the rulebook itself (R3, H38);
+  the pawn's double step along both axes for both colours (R4, Q15 in part); no
+  repetition rule, a project decision, and self-play's turn cap a convention (R5,
+  H39, I11); castling and en passant attack tests per-board (R6, H40); the two
+  oracle defects go upstream (R7). The entries they settle say so: T10, 4.6, C3,
+  C4, C6, C7, D2, S2, S7, Q1, Q10, Q15, Q21, Q23. One addition is marked
+  *derived*, not ruled: a pinned attacker counts (C3, from R1's "could capture").
+- `docs/BUILD_LOG.md`: CHECKPOINT 1 marked ruled; step 4 unparked; the parked list
+  rewritten; the engine's parse-mode reading of the corpus classified (Q4, the
+  annotation policy, notation outside the spec); register status for H31 and
+  H36-H40, I11; spec issue 10 and proposed edit 10 resolved upstream.
+- Spec: §11.0 items 1-5 and "Triage by cluster" (H31, H36-H40), §12.3 (I11) - in
+  the documents already; no proposed edit.
+
 ### 2026-10-01 - Design documents: the CHECKPOINT 1 rulings, from upstream
 
 - `docs/design/` replaced with the upstream revision that records the user's
