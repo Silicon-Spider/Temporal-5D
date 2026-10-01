@@ -78,8 +78,13 @@ SQUARE_LABELS: tuple[str, ...] = (
 
 
 def value_bin_centres(n_bins: int = 51, device: torch.device | str | None = None) -> torch.Tensor:
-    """Bin centres on [-1, 1]: ``-1 + 2k/(n-1)``; 51 bins put -1, 0 and +1 on centres."""
-    return torch.linspace(-1.0, 1.0, n_bins, dtype=torch.float32, device=device)
+    """Bin centres on [-1, 1]: ``(2k - (n-1)) / (n-1)``; 51 bins put -1, 0 and +1 on centres.
+
+    Computed from integers rather than with ``torch.linspace``, whose rounding differs by
+    platform (on Linux the middle centre came out 2.2e-8, not 0): a draw must sit exactly
+    on a centre."""
+    k = torch.arange(n_bins, dtype=torch.float64, device=device)
+    return ((2.0 * k - (n_bins - 1)) / (n_bins - 1)).to(torch.float32)
 
 
 def categorical_probs(logits: torch.Tensor) -> torch.Tensor:

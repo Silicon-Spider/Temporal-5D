@@ -240,15 +240,26 @@ count as sources of attack (spec §11.0 item 1)**:
   it illegal; moving into check mid-turn is allowed (H36). A mate verdict needs an
   exhaustive search that terminated; an exhausted budget is "unknown" (H37).
   `docs/rules/README.md` is the rulebook, pinned, sources ranked (H38).
-  Activation is the count rule (Q1 closed): under it none of the 18 positions Q1
-  would have moved changes cluster - to be confirmed by the engine's own check
-  detection. The pawn's double step exists along both axes for both colours (Q15
+  Activation is the count rule (Q1 closed). The 18 positions Q1 would have moved
+  stay where the count rule filed them: in the checkpoint's own data (clusters.json,
+  whose count-rule activity matched cwmtt's at all 611 positions it reports) every
+  one of them is check only under Q10's readings 4 and 5 - an attacker on an active
+  optional board ahead of the present - so none is check under R1 and none flips.
+  The engine's check detection is to confirm it independently once it can read
+  those records (cwmtt niceAndrey and wide need Q4's ruling and the lenient
+  annotation reading). The pawn's double step exists along both axes for both colours (Q15
   in part; ftxi's missing Black step is the defect). No repetition rule, a project
   decision (H39); self-play's turn cap is a convention scored as a draw (I11).
   Castling and en passant attack tests are per-board (H40; the engine's reading
   already). The two oracle defects are drafted for upstream in
   `docs/checkpoints/upstream/` (the user files them) and go into the
-  known-divergences file as telltales.
+  known-divergences file as telltales. The drafts are done: each has a hand-built
+  minimal record reproduced on the pinned code, the root cause at the pinned commit,
+  a fix checked in a scratch copy (5d-chess-js: pass the node's board, `mate.js`
+  157 and 161; ftxi: the Black guard at `multiverse_base.cpp` 937), and the rule
+  from public sources. Two further ftxi leads, not yet checked against the
+  rulebook: a White brawn's non-capturing two-axis step listed three times, and a
+  segmentation fault in `5dtools ... naive` on a 5x5 custom record.
 - **The engine's parse mode on the corpus** (`t5d-gate --parse-only`, before the
   harness's parse mode exists): 647 positions; the early stops fall into three
   kinds. (a) Rules Q4, moves after the present has shifted: the engine follows

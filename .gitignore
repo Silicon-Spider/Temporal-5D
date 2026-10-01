@@ -12,3 +12,6 @@ __pycache__/
 /.venv/
 *.egg-info/
 .pytest_cache/
+
+# Agent worktrees (Claude Code): never part of the tree.
+/.claude/worktrees/
