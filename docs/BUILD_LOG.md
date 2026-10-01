@@ -22,7 +22,8 @@ M5 - building it would break a rule).
   - reported, then **ruled by the user** (register H36-H40 and I11 in the updated
   design documents, committed 666c4a0; rulings R1-R7 recorded in
   `docs/rules/README.md`, now the rulebook, H38); engine E1+E2 (ae35da3, CI green
-  on g++ 13 and 14); network N1+N2 (built and reviewed; being committed).
+  on g++ 13 and 14); network N1+N2 (committed 2026-10-01; 447 tests; CI job
+  `network` on Linux whenever `python/` changes).
 - **Running:** step 2B (H32 stable answers, H33 integrity, H34 telltales, the
   engine parse mode in the gate); engine E3 (expansion: the move graph, W(k) and
   E(k), side-to-move typed relations; the `t5d-measure` and `t5d-bench` tools);
@@ -288,8 +289,20 @@ the network is PyTorch on CPU under `python/`.
   in `engine/README.md`); a non-default choice changes the ruleset ID and so the
   Zobrist key. Hooks for the check ruling: `CheckRuling::royals_safe` (C4),
   `in_check` (C6), `has_legal_action` (C5), `CastlingAttacks::AnyBoard`.
-- **Network N1** (dense v1 with random weights; 152 tests) is built and reviewed;
-  N2 (the attention structure) is running; `python/` is committed when N2 lands.
+- **Network N1 + N2 - committed 2026-10-01** (`python/`, PyTorch on CPU, random
+  weights; 447 tests, ruff clean; 41 + 32 injected mutants killed). N1: tokens
+  (66N + 16, board-major), piece and per-board features with Δt-to-present, 4D
+  RoPE (file 3 / rank 3 / timeline 4 / time 6 pairs, FP32), 2 + 16 registers, the
+  dense trunk (d 256, L 16, 8 heads, FFN 8x, BF16 autocast), the bilinear pointer
+  policy, the 51-bin value head and the auxiliary heads (21,358,601 parameters,
+  F1; the L24-ff12 preset is 44.5M, F2). N2: the move-graph mask on 2 heads (B9),
+  the routing table (B10), typed edge biases (B11) and board-pair smolgen (B12)
+  behind flags, and B14's block-sparse attention in a CPU gather form - 4-board
+  query blocks over whole key boards, plans built once per forward, per-block
+  recomputation under autograd - with chunked and dense paths as references; at
+  240 boards one FP32 forward takes about 9 s and 0.86 GB on the dev CPU
+  (indicative, not a §15.3 figure). Every committed-class ambiguity is a named
+  parameter with a placeholder default (spec issues 9 and 16).
 
 ### 4. After the ruling - in progress (unparked 2026-10-01)
 
@@ -338,11 +351,14 @@ hypercuboid detector under H37 (a budget-limited search can only return
 
 | ID | Status | Notes |
 |---|---|---|
-| A1-A3 | built, tested | Network N1: tokens, features, per-board flags, Δt-to-present (committed with `python/`) |
+| A1-A3 | built, tested | Network N1: tokens, features, per-board flags, Δt-to-present |
 | A4 | built, tested | Engine: every board immutable once published; persistent multiverse sharing history in chunks |
 | A5 | not started | Piece-centric tokenisation, behind a flag |
-| B1, B2, B4, B8, B9, B14 | not started | Committed network items |
-| B5, B6, B10, B11, B12 | not started | Provisional / prototype: behind flags |
+| B1, B2, B4, B8 | built, tested | Network N1: one weight set, unified attention, 4D RoPE, 2 + 16 registers |
+| B9 | built, tested | Network N2: move-graph mask on 2 heads (direction and register queries are placeholders, spec issue 16) |
+| B14 | built in part | Network N2: block-sparse attention in a CPU gather form; the FlexAttention / GPU kernel is not built (no CUDA here) |
+| B5, B6 | built, tested | Network N1, behind flags |
+| B10, B11, B12 | built, tested | Network N2, behind flags (B12 as relative board-pair cells, full rank) |
 | B3 | not built (rule) | Contingency only; no trigger |
 | B7 | not built (rule) | Deferred; no §15.2/§15.3 need (d_head is a config value anyway) |
 | B13 | not built (rule) | Refused |
@@ -356,15 +372,15 @@ hypercuboid detector under H37 (a budget-limited search can only return
 | C15 | not started | FP8 KV storage, varlen |
 | C16 | not built (rule) | Deferred; last, only if node-starved |
 | C21 | not built (rule) | Refused |
-| D1, D3, D4 | not started | Output heads (step 6) |
+| D1, D3, D4 | built, tested | Network N1: pointer policy, 51-bin value head, auxiliary heads (D4's reply space, label set and moves-left unit are placeholders, spec issue 9) |
 | D2 | not started | Undecided: both arms awaited by trained ablations 6g/6k |
 | E1, E5, E7, E9 | not started | Search |
 | E2, E3, E8 | not started | Behind flags |
 | E6 | not built (rule) | Refused |
-| F1, F2 | not started | Model config; F2 behind a flag |
+| F1, F2 | built, tested | 21,358,601 parameters (F1); the L24-ff12 preset, 44.5M (F2) |
 | F3 | not built (rule) | Refused |
 | F4 | parked | NNUE only after 6b passes (M8) |
-| G1 | not started | Precision rules |
+| G1 | built, tested | BF16 trunk under autocast; FP32 heads and RoPE |
 | G2 | not started | FP8 attention - no FP8 kernels on this machine |
 | G3, G4, G5, G6 | not built (rule) | Deferred / held open / refused |
 | I1-I10 | not started | Training code may be written and smoke-tested only; I7 and I8 not built (M5) |
@@ -521,6 +537,20 @@ decision), and what is parked.
     before the move that shifts the present, a rewinding branch comes last, and J6
     makes some orders reach different states. It bears on MCGS (C11) and the TT's
     expected hit rate.
+16. **Network N2's committed-class placeholders** (each a parameter, default
+    first; nothing in the spec or register decides them): (a) `move_graph_direction`
+    = symmetric - B9's mask direction; (b) `masked_head_registers` = read - what a
+    register query on a masked head reads when no relation covers it; (c)
+    `same_board_registers` = own_board - whether B10's "same board only" covers
+    per-board registers as queries; (d) `relations_head_types` = all six B11 types
+    (the narrow reading is attack and defence); (e) `relations_head_direction` =
+    follows (a); (f) `rope_roles_source` = table; (g) under the routing table,
+    `move_graph_heads` is not used and the table has one move-graph head. Also: §6
+    calls board-pair smolgen "full-rank" while §9.2's sizing implies a rank-32
+    bilinear form; the built default is full rank over relative board-pair cells,
+    the bilinear form an option; and "14.7 MMAC per head per layer" is the cost of
+    a 256-wide output over every pair, not of the generator. Proposed spec edits
+    12-18.
 
 ## Proposed spec edits
 
@@ -571,6 +601,28 @@ says now, what it should say, why.
 11. **§11.0 item 1**: "plus the royal queen in Reversed Royalty" - proposed: "in
     Reversed Royalty the royal is the queen; its king is a common king, not royal"
     (spec issue 11).
+12. **§6 / B9**: state the mask's direction, that a token always reads itself,
+    what register queries on masked heads read, and that padding is excluded
+    (spec issue 16a, b).
+13. **§6 table / B9-B10**: say whether B9's "at least 2 heads" counts the
+    relations head; define "attack/defend relations" in B11's types and that
+    head's direction; state that "same board only" covers per-board registers as
+    queries (16c-e, g).
+14. **§4.1 / B5**: what per-head specialisation means when the routing table is
+    off (16f).
+15. **§6, §9.2, §14.4 / B12**: keep "full-rank" and specify the generator - the
+    global latent read through a per-head table over relative board-pair cells,
+    bilinear in (latent, cell), with no absolute board index; record the
+    board-descriptor bilinear form as the rank-32 alternative; correct "14.7 MMAC
+    per head per layer" (that is 256 x 240^2, a 256-wide output over every pair);
+    say that pairs with a global register get no smolgen bias.
+16. **§6 / B11**: one learned scalar per head per relation type, shared across
+    layers, every head carrying every type.
+17. **§6.1, §10.1 row 4, §13.1 item 6 / B14**: block-sparse attention is built in
+    a CPU gather form; the FlexAttention kernel is still to build; under autograd
+    the memory bound needs per-block recomputation.
+18. **§6 vs §11**: say what the generator exports as "the move graph" (the side to
+    move's moves - engine stage E3's reading - or both colours).
 
 ## Session log
 

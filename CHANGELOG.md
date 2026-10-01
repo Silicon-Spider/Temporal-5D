@@ -10,6 +10,36 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-01 - The network stack, stages N1 and N2 (random weights)
+
+- `python/` (package `t5d`, PyTorch on CPU; `cd python; py -m pytest`), built to
+  spec §2-§9 with random weights - no training run:
+  - N1, dense v1: the token layout (66N + 16, board-major) and its input contract
+    (`t5d/net/state.py`, the boundary the rules engine will fill); piece and
+    per-board features with Δt-to-present; 4D RoPE with asymmetric pairs in FP32;
+    2 per-board and 16 global registers; the trunk (d 256, L 16, 8 heads, FFN 8x)
+    under BF16 autocast; the bilinear pointer policy over candidate moves, the
+    51-bin value head and the auxiliary heads; 21,358,601 parameters (F1) and the
+    L24-ff12 preset (F2); synthetic positions and a training smoke test of a few
+    optimiser steps on synthetic data (allowed by the brief - no training run).
+  - N2, the attention structure: the move-graph mask on 2 heads (B9); the routing
+    table (B10), typed edge biases (B11) and board-pair smolgen (B12, full rank
+    over relative board-pair cells) behind flags; B14's block-sparse attention in
+    a CPU gather form, the default, with per-block recomputation under autograd,
+    and chunked and dense paths as references.
+  - 447 tests: masks against brute-force key sets, chunked and block-sparse equal
+    dense (outputs and gradients), invariances (board order, translation, batch
+    composition), precision bounds, parameter counts, no inert switch; 73
+    injected mutants across the two stages, all killed. Each stage was reviewed
+    adversarially and every finding (15 for N1, 12 for N2) fixed.
+- `.github/workflows/network.yml`: lint and test on ubuntu-24.04 when `python/`
+  changes, with PyTorch 2.13.0 (CPU), NumPy 2.5.2 and ruff 0.16.5.
+- Spec: §2.1-§2.3, §3.1-§3.2, §4.1, §5, §6, §6.1, §8.1, §8.3, §9.2, §10.1, §10.2,
+  §12.4, §13.1 item 6, §14.4; A1-A3, B1-B2, B4-B6, B8-B12, B14, D1, D3, D4, F1,
+  F2, G1. Committed-class ambiguities are parameters with placeholder defaults
+  (spec issues 9 and 16); proposed spec edits 5-9 (N1) and 12-18 (N2) in
+  `docs/BUILD_LOG.md`.
+
 ### 2026-10-01 - The rulebook records the CHECKPOINT 1 rulings
 
 - `docs/rules/README.md` is now the project's rulebook (H38): a preamble ranks the
