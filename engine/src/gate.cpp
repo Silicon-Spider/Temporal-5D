@@ -59,11 +59,13 @@ const char* terminal_name(Outcome o) {
   throw std::logic_error("t5d-gate: a terminal verdict is never unknown (H37: exhaustive)");
 }
 
-// "NAME=VALUE" split; nullopt without '='.
-std::optional<std::pair<std::string_view, std::string_view>> split(std::string_view text) {
+// "NAME=VALUE" split; false without '='.
+bool split(std::string_view text, std::string_view& name, std::string_view& value) {
   const std::size_t eq = text.find('=');
-  if (eq == std::string_view::npos) return std::nullopt;
-  return std::make_pair(text.substr(0, eq), text.substr(eq + 1));
+  if (eq == std::string_view::npos) return false;
+  name = text.substr(0, eq);
+  value = text.substr(eq + 1);
+  return true;
 }
 
 bool read_bool(std::string_view value, bool& out) {
@@ -267,9 +269,11 @@ bool set_rule_option(RuleOptions& r, std::string_view assignment, std::string* e
     if (error != nullptr) *error = why;
     return false;
   };
-  const auto parts = split(assignment);
-  if (!parts) return fail("expected NAME=VALUE, got \"" + std::string(assignment) + "\"");
-  const auto [name, value] = *parts;
+  std::string_view name;
+  std::string_view value;
+  if (!split(assignment, name, value)) {
+    return fail("expected NAME=VALUE, got \"" + std::string(assignment) + "\"");
+  }
   struct Flag {
     std::string_view name;
     bool RuleOptions::*field;
@@ -359,9 +363,11 @@ bool set_pgn_option(PgnOptions& o, std::string_view assignment, std::string* err
     if (error != nullptr) *error = why;
     return false;
   };
-  const auto parts = split(assignment);
-  if (!parts) return fail("expected NAME=VALUE, got \"" + std::string(assignment) + "\"");
-  const auto [name, value] = *parts;
+  std::string_view name;
+  std::string_view value;
+  if (!split(assignment, name, value)) {
+    return fail("expected NAME=VALUE, got \"" + std::string(assignment) + "\"");
+  }
   bool* flag = nullptr;
   if (name == "verify_annotations") flag = &o.verify_annotations;
   if (name == "require_capture_marks") flag = &o.require_capture_marks;
