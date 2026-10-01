@@ -36,4 +36,4 @@ jobs:
       - name: Build and test (${{ matrix.cxx }})
         env:
           CXX: ${{ matrix.cxx }}
-        run: python engine/build.py --clean --werror --test
+        run: python engine/build.py --clean --werror --keep-going --test
