@@ -10,6 +10,16 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-01 - Engine CI: build on g++ 13 and 14
+
+- The engine's first Linux run failed: g++ 13 and 14 at -O2 warn, wrongly, that
+  copying a disengaged `std::optional<Colour>` may read its payload
+  (`-Wmaybe-uninitialized`), and warnings are errors. `engine/tests/test_zobrist.cpp`
+  now assigns the optional only when it holds a value.
+- `engine/build.py --keep-going` builds every target it can, so one run reports
+  every compile error; the engine workflow uses it.
+- Spec: no part of the spec describes the build scripts.
+
 ### 2026-10-01 - The rules engine, first stages (E1, E2): representation, turn rules, moves, parser
 
 - `engine/` (C++20, CMake; `py engine/build.py --test`; manual `engine/README.md`),

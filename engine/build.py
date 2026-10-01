@@ -7,6 +7,7 @@
     py engine/build.py --clean         start again from an empty build tree
     py engine/build.py --config Debug  another build type (default Release)
     py engine/build.py --werror        treat compiler warnings as errors
+    py engine/build.py --keep-going   report every compile error, not only the first
 
 Tools: CMake and Ninja from the project's virtual environment (.venv) when it
 has them, otherwise from PATH. Without Ninja, Makefiles are used (MinGW
@@ -107,6 +108,11 @@ def main() -> int:
     parser.add_argument("--werror", action="store_true", help="treat warnings as errors")
     parser.add_argument("--jobs", type=int, default=os.cpu_count() or 2, help="parallel build jobs")
     parser.add_argument(
+        "--keep-going",
+        action="store_true",
+        help="build every target that can be built, so one run reports every error",
+    )
+    parser.add_argument(
         "test_args", nargs="*", help="after --: arguments for t5d-tests (name fragments, --list)"
     )
     args = parser.parse_args()
@@ -144,10 +150,10 @@ def main() -> int:
     configure += compiler_arguments()
     if run(configure) != 0:
         return 1
-    if (
-        run([cmake, "--build", str(BUILD), "--config", args.config, "--parallel", str(args.jobs)])
-        != 0
-    ):
+    build = [cmake, "--build", str(BUILD), "--config", args.config, "--parallel", str(args.jobs)]
+    if args.keep_going:
+        build += ["--", "-k", "0"] if generator == "Ninja" else ["--", "-k"]
+    if run(build) != 0:
         return 1
 
     if args.test:

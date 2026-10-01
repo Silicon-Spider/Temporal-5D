@@ -32,7 +32,9 @@ NewTimeline timeline_at(int position, int first_half_turn, std::vector<BoardRef>
   nt.position = position;
   nt.first_half_turn = first_half_turn;
   nt.boards = std::move(boards);
-  nt.creator = creator;
+  // Assigned only when present: g++ 13 and 14 at -O2 warn, wrongly, that copying
+  // a disengaged optional<Colour> may read its uninitialised payload.
+  if (creator.has_value()) nt.creator = *creator;
   nt.creation_order = order;
   return nt;
 }
