@@ -64,8 +64,8 @@ typedef int32_t t5d_status;
 #define T5D_ERR_INTERNAL 4 /* anything else: a bug */
 #define T5D_ERR_UNSUPPORTED 5 /* a game or a feature the engine does not implement: a variant
                                  it does not set up, a relation it does not build */
-#define T5D_ERR_ILLEGAL 6     /* a move or a submission the rules refuse (pseudo-legally:
-                                 the royal-safety test, C4/R1, is stage E4's) */
+#define T5D_ERR_ILLEGAL 6     /* a move or a submission the rules refuse - a submission
+                                 that leaves a royal piece capturable included (C4, R1) */
 
 /* ---- parity: does the game start with an even number of timelines? ------- */
 
@@ -172,9 +172,9 @@ T5D_API t5d_status t5d_state_board(const t5d_state* state, size_t index, int32_t
 /* =============================================================================
  * Games (stage E3): a game state under the rules - the player to move, the
  * present, the action in progress - with its expansion (t5d/expand.hpp, the
- * engine README's "Expansion"). Moves are PSEUDO-LEGAL: check status and
- * submission legality are stage E4's (ruled: rules reference R1), so no
- * submission is refused for leaving a royal piece capturable.
+ * engine README's "Expansion"). Moves are pseudo-legal; submissions are
+ * LEGAL: a submission that leaves a royal piece of the mover's capturable is
+ * refused (C4, R1; stage E4), and a game read from a record replays it so.
  *
  * A t5d_game handle is not thread-safe (it holds the expansion's buffers);
  * different handles may be used from different threads at once.
@@ -223,7 +223,7 @@ typedef struct t5d_game_summary {
   int32_t active_timelines; /* T10 */
   int32_t obligations_met;  /* 1: the present has shifted to the opponent (T5) */
   int32_t may_move;         /* 1: a move may be made now (Q4) */
-  int32_t may_submit;       /* 1: the action may be submitted - pseudo-legally (T5; C4 untested) */
+  int32_t may_submit;       /* 1: the action may be submitted: the present shifted (T5), every royal safe (C4) */
   uint32_t ruleset;         /* the ruleset ID (0: standard) */
   uint64_t rules;           /* the ruleset's canonical encoding */
 } t5d_game_summary;
@@ -320,9 +320,10 @@ T5D_API t5d_status t5d_game_info(const t5d_game* game, t5d_game_summary* out);
 T5D_API t5d_status t5d_game_record_actions(const t5d_game* game, size_t* total, size_t* played,
                                            int32_t* truncated);
 
-/* Replays the record's next action - its moves, then the submission, as the
- * gate adapter's parse mode does. On failure the game is unchanged:
- * T5D_ERR_ILLEGAL (an illegal move or a submission the turn rules refuse),
+/* Replays the record's next action - its moves, then the submission, under
+ * the game's legality (t5d_game_set_legality: by default legally, as the
+ * gate adapter's full mode does). On failure the game is unchanged:
+ * T5D_ERR_ILLEGAL (an illegal move or a submission the rules refuse),
  * T5D_ERR_NOTATION (a move that cannot be read, or fits several moves),
  * T5D_ERR_ARGUMENT (no action left, or the game has left its record by
  * t5d_game_apply or t5d_game_submit). */
@@ -339,10 +340,18 @@ T5D_API t5d_status t5d_game_apply(t5d_game* game, const t5d_move* move, char** e
 T5D_API t5d_status t5d_game_apply_expanded(t5d_game* game, size_t index, char** error);
 
 /* Submits the action (T5). T5D_ERR_ILLEGAL while the present has not shifted
- * to the opponent, or if the game's ruling finds a royal piece of the mover's
- * left capturable (C4) - which it does not test until stage E4's legality is
- * wired into the C API: pseudo-legal play. */
+ * to the opponent, or if a royal piece of the mover's is left capturable (C4,
+ * R1). */
 T5D_API t5d_status t5d_game_submit(t5d_game* game, char** error);
+
+/* What a game's submissions - and its record's replay - are tested for:
+ * T5D_LEGAL (the default: the present's shift, T5, and every royal piece of
+ * the mover's safe, C4/R1) or T5D_PSEUDO_LEGAL (the present's shift only -
+ * for replaying pseudo-legal play, such as synthetic records, as the gate
+ * adapter's parse mode does). T5D_ERR_ARGUMENT for any other value. */
+#define T5D_PSEUDO_LEGAL 0
+#define T5D_LEGAL 1
+T5D_API t5d_status t5d_game_set_legality(t5d_game* game, int32_t legality, char** error);
 
 /* Expands the current state into the handle's buffers and describes them in
  * *out. `options` may be NULL: k = 8, every board's features, no relations. */
