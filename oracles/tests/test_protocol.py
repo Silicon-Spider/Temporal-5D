@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from oracle_harness.adapters import EngineSource, RunOptions
+from oracle_harness.adapters import EngineSource, RunOptions, Source
 from oracle_harness.adapters import chessin5d as chessin5d_adapter
 from oracle_harness.adapters.base import code_sha256, parse_jsonl
 from oracle_harness.adapters.cwmtt import (
@@ -32,6 +32,24 @@ def position(index, side="white", in_check=False, legal=20, terminal="none"):
 
 def end(status="ok", accepted=0, **extra):
     return {"event": "end", "status": status, "actions_accepted": accepted, **extra}
+
+
+START = "r*nbqk*bnr*/p*p*p*p*p*p*p*p*/8/8/8/8/P*P*P*P*P*P*P*P*/R*NBQK*BNR*"
+AFTER_E3 = "r*nbqk*bnr*/p*p*p*p*p*p*p*p*/8/8/8/4P3/P*P*P*P*1P*P*P*/R*NBQK*BNR*"
+# Boards of the Standard start, and after 1. e3: the start board, and the board
+# that move made, with black to move on it.
+BOARDS = {0: [f"0:1:w:{START}"], 1: [f"0:1:w:{START}", f"0:1:b:{AFTER_E3}"]}
+START_HASH = "d574889fd9da3f2bc65249ff27249b00"  # the notation specification's own example
+
+
+def state(index, boards=None, markers=True, **extra):
+    return {"event": "state", "index": index, "size": "8x8", "markers": markers,
+            "boards": boards if boards is not None else BOARDS[min(index, 1)], **extra}
+
+
+def turn(index, **answers):
+    """What a source prints for one position: its state, then its answers."""
+    return [state(index), position(index, **answers)]
 
 
 class JsonLinesTests(unittest.TestCase):
@@ -113,6 +131,185 @@ class JsonLinesTests(unittest.TestCase):
         self.assertEqual((observation.status, observation.reason), ("error", "malformed_output"))
 
 
+class StateEventTests(unittest.TestCase):
+    """What a source says it set up (decision H30), read beside its answers."""
+
+    def parse(self, stdout: bytes, *, returncode=0, timed_out=False, exact_fields=False):
+        done = Completed(None if timed_out else returncode, stdout, b"", timed_out)
+        return parse_jsonl("src", "r/1", done, 1000, 0.5, exact_fields=exact_fields)
+
+    def test_a_state_event_is_read_into_its_position(self):
+        observation = self.parse(lines(*turn(0), *turn(1, side="black"), end(accepted=1)))
+        self.assertEqual(observation.status, "ok")
+        first, second = observation.positions
+        self.assertEqual((first.fingerprint, first.boards, first.pieces), (START_HASH, 1, 32))
+        self.assertEqual((second.side, second.boards, second.pieces), ("black", 2, 64))
+        self.assertNotEqual(second.fingerprint, first.fingerprint)
+        self.assertEqual(len(second.placement), 32)
+
+    def test_a_source_that_cannot_say_what_it_set_up_says_nothing(self):
+        observation = self.parse(lines(position(0), position(1, side="black"), end(accepted=1)))
+        self.assertEqual(observation.status, "ok")
+        self.assertTrue(all(p.fingerprint is None and p.placement is None and p.boards is None for p in observation.positions))
+        # Without markers there is no fingerprint, only the placement.
+        unmarked = [f"0:1:w:{START.replace('*', '')}"]
+        observation = self.parse(lines(state(0, unmarked, markers=False), position(0), end()))
+        self.assertIsNone(observation.positions[0].fingerprint)
+        self.assertIsNotNone(observation.positions[0].placement)
+
+    def test_a_search_cut_short_keeps_what_was_set_up(self):
+        # The state is printed before the search: a time-out in the search loses the answers, not the state.
+        stdout = lines(*turn(0), state(1))
+        for outcome in (dict(timed_out=True), dict(returncode=137)):
+            observation = self.parse(stdout, **outcome)
+            self.assertEqual(len(observation.positions), 2, outcome)
+            cut = observation.positions[1]
+            self.assertEqual((cut.side, cut.in_check, cut.legal_actions, cut.terminal), (None, None, None, None))
+            self.assertEqual((cut.boards, cut.pieces), (2, 64))
+            self.assertEqual(observation.actions_accepted, 1)
+        self.assertEqual(self.parse(stdout, timed_out=True).status, "timeout")
+        self.assertEqual(self.parse(stdout, returncode=137).reason, "crash")
+        # A driver that failed during the search, and said so, is an error with the state kept.
+        failed = self.parse(stdout + lines(end("error", 1, reason="exception", detail="out of memory")))
+        self.assertEqual((failed.status, failed.reason, len(failed.positions)), ("error", "exception", 2))
+
+    def test_a_run_that_says_it_finished_must_report_every_position_it_set_up(self):
+        for status in ("ok", "rejected", "unsupported"):
+            observation = self.parse(lines(*turn(0), state(1), end(status, 1, reason="illegal_move")))
+            self.assertEqual((observation.status, observation.reason), ("error", "malformed_output"), status)
+            self.assertIn("has no position event", observation.detail)
+
+    def test_state_events_come_one_per_position_and_first(self):
+        cases = {
+            "after its position": [position(0), state(0), end()],
+            "for a later position": [state(1), position(0), end()],
+            "twice": [state(0), state(0), position(0), end()],
+            "skipping a position": [state(0), state(1), position(0), end()],
+            "with no position first": [*turn(0), state(2), end(accepted=1)],
+        }
+        for name, events in cases.items():
+            observation = self.parse(lines(*events))
+            self.assertEqual((observation.status, observation.reason), ("error", "malformed_output"), name)
+            self.assertIn("invalid state event", observation.detail, name)
+
+    def test_a_malformed_state_event_is_not_trusted(self):
+        bad = state(0, ["0:1:w:8/8/8/8/8/8/8"])
+        observation = self.parse(lines(bad, position(0), end()))
+        self.assertEqual((observation.status, observation.reason), ("error", "malformed_output"))
+        self.assertIn("7 rank(s), but the board is 8 high", observation.detail)
+
+    def test_a_drivers_own_fields_are_kept_but_never_compared(self):
+        timed = {**position(0), "ms": 12.5, "limit": "mate search heap"}
+        observation = self.parse(lines(state(0), timed, end()))
+        self.assertEqual(observation.status, "ok")
+        self.assertEqual(observation.extras, {0: {"ms": 12.5, "limit": "mate search heap"}})
+        self.assertEqual(observation.positions[0].fingerprint, START_HASH)
+        # A timing is a duration in milliseconds, or the driver is broken.
+        for ms in (-1, "fast", True, None):
+            observation = self.parse(lines({**position(0), "ms": ms}, end()))
+            self.assertEqual(observation.reason, "malformed_output", ms)
+        self.assertEqual(self.parse(b'{"event":"position","index":0,"side":null,"in_check":null,"legal_actions":null,'
+                                    b'"terminal":null,"ms":NaN}\n' + lines(end())).reason, "malformed_output")
+
+    def test_diagnostics_are_kept_apart_from_the_answers(self):
+        explain = {"event": "explain", "index": 0, "phantom_timelines": ["0"]}
+        actions = {"event": "actions", "index": 0, "count": 0, "truncated": False, "actions": []}
+        observation = self.parse(lines(state(0), explain, actions, position(0), end()))
+        self.assertEqual(observation.status, "ok")
+        self.assertEqual(observation.diagnostics, [explain, actions])
+        self.assertEqual(len(observation.positions), 1)
+        self.assertEqual(self.parse(lines(state(0), position(0), end())).diagnostics, [])
+
+    def test_exact_fields_cover_the_state_event(self):
+        extra = state(0, note="hello")
+        self.assertEqual(self.parse(lines(extra, position(0), end())).status, "ok")
+        observation = self.parse(lines(extra, position(0), end()), exact_fields=True)
+        self.assertEqual((observation.status, observation.reason), ("error", "malformed_output"))
+
+    def test_a_broken_event_is_not_hidden_by_a_time_out(self):
+        # A label leak, a "*" after a bishop, a wrong rank count: the run was
+        # broken before it was killed, and says so - it is not an ordinary time-out.
+        broken = lines(*turn(0), state(1, ["0:1:w:BAD"]), position(1))
+        for outcome in (dict(timed_out=True), dict()):
+            observation = self.parse(broken, **outcome)
+            self.assertEqual((observation.status, observation.reason), ("error", "malformed_output"), outcome)
+            self.assertIn("1 rank(s), but the board is 8 high", observation.detail)
+            self.assertEqual(len(observation.positions), 1)
+        self.assertIn("killed for time", self.parse(broken, timed_out=True).detail)
+        bad_position = lines(*turn(0), state(1), {**position(1), "side": "purple"})
+        self.assertEqual(self.parse(bad_position, timed_out=True).reason, "malformed_output")
+
+    def test_only_the_last_line_of_a_killed_run_may_be_cut_off(self):
+        cut = lines(*turn(0), state(1)) + b'{"event":"position","ind'
+        self.assertEqual(self.parse(cut, timed_out=True).status, "timeout")
+        # A line nobody can read, with more output after it, is not what a kill leaves behind.
+        garbled = lines(*turn(0)) + b"Board destroyed: 8/8/8\n" + lines(state(1))
+        observation = self.parse(garbled, timed_out=True)
+        self.assertEqual((observation.status, observation.reason), ("error", "malformed_output"))
+        self.assertIn("Board destroyed", observation.detail)
+
+    def test_a_source_that_says_what_it_set_up_says_it_at_every_position(self):
+        cases = {
+            "a position without its state": ([*turn(0), position(1, side="black"), *turn(2), end(accepted=2)],
+                                             "no state event for position 1"),
+            "states only from position 1": ([position(0), *turn(1, side="black"), end(accepted=1)],
+                                            "first state event is for position 1"),
+            "markers that change": ([*turn(0), state(1, [f"0:1:w:{START.replace('*', '')}",
+                                                         f"0:1:b:{AFTER_E3.replace('*', '')}"], markers=False),
+                                     position(1, side="black"), end(accepted=1)],
+                                    "markers is false here and was true before"),
+        }
+        for name, (events, words) in cases.items():
+            observation = self.parse(lines(*events))
+            self.assertEqual((observation.status, observation.reason), ("error", "malformed_output"), name)
+            self.assertIn(words, observation.detail, name)
+
+    def test_an_oracles_own_hash_is_held_to_the_fingerprint(self):
+        # The harness's canonical form against one it did not write.
+        agreed = self.parse(lines(state(0, hash=START_HASH), position(0), end()))
+        self.assertEqual((agreed.status, agreed.positions[0].fingerprint), ("ok", START_HASH))
+        for name, event in {
+            "a different hash": state(0, hash="0" * 32),
+            "a hash with no markers": state(0, [f"0:1:w:{START.replace('*', '')}"], markers=False, hash=START_HASH),
+            "not a string": state(0, hash=7),
+        }.items():
+            observation = self.parse(lines(event, position(0), end()))
+            self.assertEqual((observation.status, observation.reason), ("error", "malformed_output"), name)
+        # The engine may add nothing to its state event, a hash included.
+        refused = self.parse(lines(state(0, hash=START_HASH), position(0), end()), exact_fields=True)
+        self.assertEqual(refused.reason, "malformed_output")
+
+    def test_numbers_too_long_to_convert_are_malformed_output_not_a_crash(self):
+        # Python refuses to convert a string of more than 4300 digits; nothing a
+        # source prints may take the harness down with it.
+        huge = "1" * 5000
+        for event in (state(0, [f"0:1:w:{huge}/8/8/8/8/8/8/8"]), state(0, [f"0:{huge}:w:{START}"]),
+                      state(0, [f"{huge}:1:w:{START}"]), state(0, size=f"{huge}x8")):
+            observation = self.parse(lines(event, position(0), end()))
+            self.assertEqual((observation.status, observation.reason), ("error", "malformed_output"))
+        too_many = b'{"event":"position","index":0,"side":"white","in_check":false,"legal_actions":' + \
+            huge.encode() + b',"terminal":"none"}\n'
+        observation = self.parse(too_many + lines(end()))
+        self.assertEqual((observation.status, observation.reason), ("error", "malformed_output"))
+
+
+class DiagnosticArgumentTests(unittest.TestCase):
+    """The hook through which `observe` asks a driver for its diagnostic events."""
+
+    class Driven(Source):
+        diagnostics = ("explain", "actions")
+
+    def test_the_common_flags_for_what_a_source_can_print(self):
+        source = self.Driven()
+        self.assertEqual(source.diagnostic_args(RunOptions()), [])
+        self.assertEqual(source.diagnostic_args(RunOptions(explain=True)), ["--explain"])
+        self.assertEqual(source.diagnostic_args(RunOptions(explain=True, actions_at=0)), ["--explain", "--actions", "0"])
+
+    def test_a_source_that_prints_none_is_asked_for_none(self):
+        self.assertEqual(Source().diagnostic_args(RunOptions(explain=True, actions_at=4)), [])
+        self.assertEqual(EngineSource(["engine"]).diagnostic_args(RunOptions(explain=True, actions_at=4)), [])
+
+
 class SignatureTests(unittest.TestCase):
     def test_code_hash_follows_content_and_name_but_not_line_endings(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -147,6 +344,7 @@ class EngineCommandTests(unittest.TestCase):
         observation = self.run_engine(
             "record = sys.stdin.read()\n"
             "cap = int(sys.argv[sys.argv.index('--cap') + 1])\n"
+            f"print(json.dumps({state(0)!r}))\n"
             "print(json.dumps({'event': 'position', 'index': 0, 'side': 'white', 'in_check': False,\n"
             "                  'legal_actions': min(cap, len(record)), 'terminal': 'none'}))\n"
             "print(json.dumps({'event': 'end', 'status': 'ok', 'actions_accepted': 0}))\n"
@@ -156,6 +354,7 @@ class EngineCommandTests(unittest.TestCase):
         self.assertGreater(len(self.RECORD), 7)
         self.assertEqual(observation.positions[0].legal_actions, 7)
         self.assertEqual(observation.cap, 7)
+        self.assertEqual(observation.positions[0].fingerprint, START_HASH)
 
     def test_an_engine_that_dies_is_an_error_not_a_verdict(self):
         observation = self.run_engine("sys.exit(3)\n")
@@ -168,45 +367,73 @@ class EngineCommandTests(unittest.TestCase):
         # An oracle may say nothing. The engine is what is being certified: a
         # null from it would be a verdict nobody compared.
         for field in ("side", "in_check", "legal_actions", "terminal"):
-            observation = self.run_engine(self.emit({**position(0), field: None}, end()))
+            observation = self.run_engine(self.emit(state(0), {**position(0), field: None}, end()))
             self.assertEqual((observation.status, observation.reason), ("error", "malformed_output"), field)
             self.assertIn(field, observation.detail)
 
+    def test_the_engine_says_what_it_set_up_before_every_position(self):
+        # Without it nothing shows that the engine and an oracle are answering
+        # about the same position (decision H30).
+        fine = self.run_engine(self.emit(*turn(0), *turn(1, side="black"), end("ok", 1)))
+        self.assertEqual(fine.status, "ok")
+        self.assertEqual([p.boards for p in fine.positions], [1, 2])
+        for name, (events, words) in {
+            "no state at all": ([position(0), end()], "a state event with markers true"),
+            # Any source that says what it set up says it at every position: the protocol itself refuses this.
+            "no state for the second position": ([*turn(0), position(1, side="black"), end("ok", 1)],
+                                                 "no state event for position 1"),
+            "no unmoved markers": ([state(0, [f"0:1:w:{START.replace('*', '')}"], markers=False), position(0), end()],
+                                   "a state event with markers true"),
+        }.items():
+            observation = self.run_engine(self.emit(*events))
+            self.assertEqual((observation.status, observation.reason), ("error", "malformed_output"), name)
+            self.assertIn(words, observation.detail, name)
+
+    def test_the_engines_state_event_has_exactly_the_protocols_fields(self):
+        for event in (state(0, ms=0.1), {key: value for key, value in state(0).items() if key != "size"}):
+            observation = self.run_engine(self.emit(event, position(0), end()))
+            self.assertEqual((observation.status, observation.reason), ("error", "malformed_output"), event)
+            self.assertIn("invalid state event", observation.detail)
+
     def test_the_engine_must_say_which_kind_of_end_it_is(self):
-        observation = self.run_engine(self.emit(position(0, legal=0, terminal="no_action"), end()))
+        observation = self.run_engine(self.emit(state(0), position(0, legal=0, terminal="no_action"), end()))
         self.assertEqual((observation.status, observation.reason), ("error", "malformed_output"))
 
     def test_the_engine_refuses_an_action_only_as_illegal(self):
         for reason in SOFT_REJECTIONS:
-            observation = self.run_engine(self.emit(position(0), end("rejected", reason=reason)))
+            observation = self.run_engine(self.emit(*turn(0), end("rejected", reason=reason)))
             self.assertEqual((observation.status, observation.reason), ("error", "malformed_output"), reason)
         for reason in HARD_REJECTIONS:
-            observation = self.run_engine(self.emit(position(0), end("rejected", reason=reason)))
+            observation = self.run_engine(self.emit(*turn(0), end("rejected", reason=reason)))
             self.assertEqual((observation.status, observation.reason), ("rejected", reason))
 
     def test_the_engine_says_exactly_what_the_protocol_asks(self):
         # A field of its own - a timing, say - is refused: an oracle driver's
         # output handed on as the engine's carries fields like that.
-        observation = self.run_engine(self.emit({**position(0), "ms": 0.1}, end()))
+        observation = self.run_engine(self.emit(state(0), {**position(0), "ms": 0.1}, end()))
         self.assertEqual((observation.status, observation.reason), ("error", "malformed_output"))
         missing = {key: value for key, value in position(0).items() if key != "terminal"}
-        self.assertEqual(self.run_engine(self.emit(missing, end())).status, "error")
+        self.assertEqual(self.run_engine(self.emit(state(0), missing, end())).status, "error")
 
     def test_an_engine_that_loses_count_is_an_error(self):
         # Two positions, and a claim of five accepted actions.
-        observation = self.run_engine(self.emit(position(0), position(1, side="black"), end("ok", 5)))
+        observation = self.run_engine(self.emit(*turn(0), *turn(1, side="black"), end("ok", 5)))
         self.assertEqual((observation.status, observation.reason), ("error", "malformed_output"))
         self.assertIn("claims 5 accepted action(s)", observation.detail)
 
     def test_unsupported_is_said_before_the_first_position(self):
         self.assertEqual(self.run_engine(self.emit(end("unsupported", reason="variant"))).status, "unsupported")
-        late = self.run_engine(self.emit(position(0), end("unsupported", reason="variant")))
+        late = self.run_engine(self.emit(*turn(0), end("unsupported", reason="variant")))
         self.assertEqual((late.status, late.reason), ("error", "malformed_output"))
 
     def test_contract_violation_reads_a_report(self):
-        full = [Position(0, "white", False, 20, "none"), Position(1, "black", True, 0, "checkmate")]
+        known = dict(fingerprint="a" * 32, placement="b" * 32, boards=1, pieces=32)
+        full = [Position(0, "white", False, 20, "none", **known), Position(1, "black", True, 0, "checkmate", **known)]
         fine = Observation(source="engine", record="r/1", status="ok", positions=full, actions_accepted=1, cap=7)
         self.assertIsNone(contract_violation(fine))
+        unmarked = Observation(source="engine", record="r/1", status="ok", actions_accepted=0, cap=7,
+                               positions=[Position(0, "white", False, 20, "none", placement="b" * 32, boards=1, pieces=32)])
+        self.assertIn("markers true", contract_violation(unmarked))
         failed = Observation(source="engine", record="r/1", status="error", reason="crash", actions_accepted=0)
         self.assertIsNone(contract_violation(failed))  # already an error; nothing more to say
 

@@ -10,7 +10,11 @@ gate has not run, and the proof channel stays disabled (decision H23).
 
 The engine is held to a stricter contract than an oracle. An oracle may say
 nothing about a question it cannot answer; the engine is the thing being
-certified, so a silence from it would be a verdict that was never compared.
+certified, so a silence from it would be a verdict that was never compared. The
+same goes for what it set up: an oracle that cannot export its state prints no
+state event, but the engine prints one before every position it reports, with
+the unmoved markers (markers true) - otherwise nothing would show that it and an
+oracle are answering about the same position (decision H30).
 """
 
 from __future__ import annotations
@@ -29,6 +33,9 @@ def contract_violation(observation: Observation) -> str | None:
     """What an engine report does that the engine contract forbids, if anything."""
     if observation.status in ("ok", "rejected"):
         for position in observation.positions:
+            if position.fingerprint is None:
+                return (f"position {position.index}: the engine must say what it set up there - a state event "
+                        "with markers true before the position event")
             for name in ("side", "in_check", "legal_actions", "terminal"):
                 if getattr(position, name) is None:
                     return f"position {position.index}: the engine must answer every observable, and `{name}` is null"
@@ -47,7 +54,7 @@ def contract_violation(observation: Observation) -> str | None:
 class EngineSource(Source):
     name = "engine"
     oracle = None
-    answers = ("side", "in_check", "legal_actions", "terminal", "legality")
+    answers = ("state", "side", "in_check", "legal_actions", "terminal", "legality")
 
     def __init__(self, command: list[str]):
         self.command = list(command)
@@ -62,8 +69,9 @@ class EngineSource(Source):
 
     def observe(self, record_id: str, data: bytes, options: RunOptions) -> Observation:
         argv = [*self.command, "--cap", str(options.cap)]
-        # Exactly the protocol's fields: an oracle driver's output passed off as
-        # the engine's carries fields of its own, and is refused here.
+        # Exactly the protocol's fields, in state and position events alike: an
+        # oracle driver's output passed off as the engine's carries fields of its
+        # own, and is refused here.
         observation = run_protocol(self.name, record_id, argv, data, options, options.cap, cwd=paths.REPO_ROOT,
                                    exact_fields=True)
         violation = contract_violation(observation)

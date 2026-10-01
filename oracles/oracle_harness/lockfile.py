@@ -17,7 +17,14 @@ from . import gitutil, paths
 from .util import Finding, HarnessError, load_toml, sha256_bytes
 
 SCHEMA = 1
-ROLES = ("oracle", "corpus-source")
+# oracle         an independent implementation of the rules, run at test time and compared with the engine
+# parse-oracle   an independent reader of the notation, run at test time and compared at every ply for the
+#                position it read - never for a rules verdict (adapters.PARSE_ONLY_SOURCES)
+# corpus-source  a repository the corpus reads records from, and nothing more: never built, never run
+# Any pin may also be a corpus source: the role says what else the harness does with it.
+ROLES = ("oracle", "parse-oracle", "corpus-source")
+# The roles the harness builds and runs as sources of observations, each from a CI tier on.
+RUN_ROLES = ("oracle", "parse-oracle")
 TIERS = ("commit", "nightly")
 _SHA1 = re.compile(r"^[0-9a-f]{40}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -40,13 +47,18 @@ class Pin:
     licence_sha256: str
     summary: str
     used_as: str
-    tier: str = ""  # oracles only: the cheapest CI tier that runs it
+    tier: str = ""  # oracles (rules and parse-only) only: the cheapest CI tier that runs it
     notes: tuple[str, ...] = ()
     dependency_names: tuple[str, ...] = ()  # package-manager names the core must never depend on
 
     @property
     def checkout(self) -> Path:
         return paths.REPO_ROOT / self.path
+
+    @property
+    def parse_only(self) -> bool:
+        """A parse-only oracle: it reads the notation, and judges nothing."""
+        return self.role == "parse-oracle"
 
 
 @dataclass(frozen=True)
@@ -61,7 +73,8 @@ class Lock:
             raise HarnessError(f"no pinned repository named '{pin_id}' in {paths.LOCK_FILE.name}") from None
 
     def oracles(self) -> list[Pin]:
-        return [pin for pin in self.pins.values() if pin.role == "oracle"]
+        """Every pin the harness builds and runs: the rules oracles and the parse-only ones."""
+        return [pin for pin in self.pins.values() if pin.role in RUN_ROLES]
 
 
 def _require(table: dict, key: str, where: str) -> str:
@@ -83,8 +96,10 @@ def load(path: Path | None = None) -> Lock:
         if role not in ROLES:
             raise HarnessError(f"{where}: role must be one of {ROLES}")
         tier = table.get("tier", "")
-        if role == "oracle" and tier not in TIERS:
-            raise HarnessError(f"{where}: an oracle needs tier = one of {TIERS}")
+        if role in RUN_ROLES and tier not in TIERS:
+            raise HarnessError(f"{where}: a pin the harness runs (role {role}) needs tier = one of {TIERS}")
+        if role not in RUN_ROLES and tier:
+            raise HarnessError(f"{where}: a {role} is never run, so it takes no tier")
         commit = _require(table, "commit", where)
         tree = _require(table, "tree", where)
         if not _SHA1.match(commit) or not _SHA1.match(tree):

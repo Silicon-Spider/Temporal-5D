@@ -31,8 +31,11 @@ command = []
 #               numbers it found. It can never be 0: a ruleset whose only oracle
 #               has no check verdict must not come out "gated".
 
+# "notation" is the notation repository's parser, a parse-only oracle: it says
+# what position it read at every ply and how far it read, and answers no rules
+# question. It is fast and deterministic, so every tier runs it.
 [tier.commit]
-sources = ["ftxi"]
+sources = ["ftxi", "notation"]
 record_tiers = ["commit"]
 timeout_s = 60
 min_coverage = 1.0
@@ -43,7 +46,7 @@ min_checked = 0.75
 # floors only guard against a vacuous pass (a run where nearly everything timed
 # out or crashed); a contradiction fails the gate whatever the coverage.
 [tier.nightly]
-sources = ["ftxi", "ftxi:naive", "cwmtt", "cwmtt:naive", "chessin5d"]
+sources = ["ftxi", "ftxi:naive", "cwmtt", "cwmtt:naive", "chessin5d", "notation"]
 record_tiers = ["commit", "nightly"]
 timeout_s = 300
 mate_budget_ms = 20000
@@ -68,7 +71,7 @@ cwmtt = 0.8
 # requires an engine and runs every source over every record tier can enable the
 # proof channel. Golden files are recorded under these budgets.
 [tier.release]
-sources = ["ftxi", "ftxi:naive", "cwmtt", "cwmtt:naive", "chessin5d"]
+sources = ["ftxi", "ftxi:naive", "cwmtt", "cwmtt:naive", "chessin5d", "notation"]
 record_tiers = ["commit", "nightly"]
 timeout_s = 600
 mate_budget_ms = 60000

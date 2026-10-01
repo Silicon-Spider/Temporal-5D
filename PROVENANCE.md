@@ -56,7 +56,8 @@ M11).
 | Role | Meaning |
 |---|---|
 | oracle | An independent implementation of the rules, run at test time and compared with the engine. Never linked into, imported by or copied into the engine. |
-| corpus-source | A repository the game-record corpus reads records from, in place. Not an oracle. |
+| parse-oracle | An independent reader of the notation, run at test time and compared with the engine and the oracles for the position it reads at every ply and how many actions it reads - never for a rules verdict (decision H26). Never linked into, imported by or copied into the engine. |
+| corpus-source | A repository the game-record corpus reads records from, in place, and nothing more: never built, never run. (A pin in either role above may be a source of records too.) |
 
 ## Inventory
 
@@ -69,7 +70,7 @@ M11).
 | `ftxi` | [ftxi/5dchess_engine](https://github.com/ftxi/5dchess_engine) | `2ea9f1b82880f08faa9400d1ac20b20102604187` (v0.4.10, 2026-09-15) | BSD-2-Clause | oracle | commit |
 | `cwmtt` | [penteract/cwmtt](https://github.com/penteract/cwmtt) | `9632e9969dd455c6e3d6c27c57c1936c251d7e97` (master, 2026-05-18) | GPL-3.0 (LICENSE file); cwmtt.cabal declares BSD3 - treated as GPL-3.0 until upstream resolves the conflict | oracle | nightly |
 | `chessin5d` | [5d-chess/5d-chess-js](https://gitlab.com/5d-chess/5d-chess-js.git) | `ee403c80e8c132fc4d168f5b99ddd9b8fe5cc17b` (master, 2022-06-15) | AGPL-3.0-or-later | oracle | nightly |
-| `notation` | [adri326/5dchess-notation](https://github.com/adri326/5dchess-notation) | `99f6163a9c95a6a9740b20fb5f3c7f6503a166a0` (master (v1.4.3-13), 2021-07-25) | X11 (MIT-style, with a no-advertising clause) | corpus-source | - |
+| `notation` | [adri326/5dchess-notation](https://github.com/adri326/5dchess-notation) | `99f6163a9c95a6a9740b20fb5f3c7f6503a166a0` (master (v1.4.3-13), 2021-07-25) | X11 (MIT-style, with a no-advertising clause) | parse-oracle | commit |
 
 #### `ftxi` - ftxi/5dchess_engine
 
@@ -85,7 +86,7 @@ M11).
 #### `cwmtt` - penteract/cwmtt
 
 - **What it is:** Haskell rules implementation and the original hypercuboid mate search, with a naive search beside it
-- **How it is used:** Built from an export of the pinned commit with the pinned GHC. Queried through its stock CLI (`cwmtt count`).
+- **How it is used:** Built from an export of the pinned commit with the pinned GHC. Its counts, and how far it replays a record, come from its stock CLI (`cwmtt count`), unmodified. Beside it runs oracles/drivers/cwmtt, a state driver of the harness's own compiled against the same modules with the same flags (it calls them and copies nothing), which replays the record and reports, at every position, the boards cwmtt holds and the side to move - the CLI has no command for either; the adapter pairs the two only where they read and replayed the record alike.
 - **Where:** `oracles/third_party/cwmtt` (submodule `oracle-cwmtt`)
 - **Licence file:** `LICENSE`, SHA-256 `3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986`
 - No z3 in the program at this commit. Upstream removed the z3-based search in 65e1bf9 (2023-03-26) because it was slower than the plain hypercuboid search; the design spec's 'Haskell and z3' describes the older tree. Its README still mentions z3 and its stack.yaml still lists the z3 package, but cwmtt.cabal depends only on base and containers, so GHC alone builds it.
@@ -101,17 +102,19 @@ M11).
 - **Licence file:** `LICENSE`, SHA-256 `6f551a3f45c2c2235ec9b9e2d93c5896babab36caed027781b3e90df90876097`
 - Chess in 5D's client (gitlab.com/5d-chess/chess-in-5d, AGPL-3.0) takes its rules from this library (dependency 5d-chess-js ^1.2.1). Only the rules library is pinned; the client adds no rules.
 - Runtime npm dependencies, all MIT: module-alias 2.2.2, blueimp-md5 2.18.0, present 1.0.0.
-- Defects at the pin, and what the driver does about each without touching rules logic: inCheckmate and inStalemate answer true when their search runs out of time (the driver calls the search itself and reads its timed-out flag); that search can exhaust memory on wide positions (it runs in a worker with its own heap limit); a Board header the library does not know, or that its header reader does not match, is silently replayed on the Standard layout, and 5DFEN boards are ignored unless Board is custom (the driver asks the library which variant it set up and refuses the record when that is not the one declared); a PGN result token at the end of the move text is read as moves (it is dropped); actions('object') throws a ReferenceError (not used).
+- Defects at the pin, and what the driver does about each without touching rules logic: inCheckmate and inStalemate answer true when their search runs out of time (the driver calls the search itself and reads its timed-out flag); that search can exhaust memory on wide positions (it runs in a worker with its own heap limit); a Board header the library does not know, or that its header reader does not match, is silently replayed on the Standard layout, and 5DFEN boards are ignored unless Board is custom (the driver asks the library which variant it set up and refuses the record when that is not the one declared); a PGN result token at the end of the move text is read as moves (it is dropped); chess.actions() throws in its 'object' and 'json' formats (a ReferenceError) and in '5dpgn' (a TypeError), and in every format passes its promotion pieces where boardFuncs.moves() takes its 'spatial moves only' switch, so it would list no move through time or across timelines (not used: the driver's observe --actions diagnostic calls actionFuncs.actions() itself, with that switch off).
 - Its action enumeration yields ordered move sequences under its own options, so it contributes check and mate verdicts and move legality, not action counts.
 
 #### `notation` - adri326/5dchess-notation
 
-- **What it is:** The 5dpgn / 5dfen notation specification, with sample game records
-- **How it is used:** Source of corpus records (test/*.5dpgn) and the pinned text of the notation the corpus is written in. Not an oracle.
+- **What it is:** The 5dpgn / 5dfen notation specification, with sample game records and a parser written beside it
+- **How it is used:** The pinned text of the notation the corpus is written in, and a source of corpus records (test/*.5dpgn). Its bundled parser (parsers/pgn.js and parsers/game.js, which need no package) is exported at the pinned commit and run as a parse-only oracle through oracles/drivers/notation, in a separate Node process per record: at every position, the boards it holds and the side it reads as moving next, and how many actions it read - never a rules verdict.
 - **Where:** `oracles/third_party/notation` (submodule `corpus-notation`)
 - **Licence file:** `LICENSE`, SHA-256 `8d4c0ecb12b11ec195afed72693869a24cea48e8b160d2cc4b8f03d08f42a0ae`
-- Not in the design spec's oracle table: pinned so the corpus has real game records that do not come from an oracle's own test suite.
-- Its bundled JavaScript parser is not an oracle and is as off limits to the engine as everything else under third_party: the engine's parser is written from the specification (decision H28).
+- Not in the design spec's table of rules oracles: pinned so the corpus has real game records that do not come from an oracle's own test suite, and so that the engine's parser is written from the specification (decision H28). Its bundled parser is a parse-only oracle (H26), and as off limits to the engine as everything else under third_party.
+- The parser applies each move as written. It has no check, legality or end-of-game logic, and finds the moving piece with a movement test of its own only where the move text leaves the origin square out. So its acceptance of an action is no verdict - it accepts an action that leaves a king in check - and a move it cannot apply is a soft rejection.
+- Defects at the pin, and what the harness does about each without touching the parser: it reports an error by printing it to stdout and calling process.exit(1) (the driver captures what it prints and turns the exit into an exception); a Board name it does not know gives one silently empty board, and a named layout is set up on boards of the Size header's size, or 8x8, never its own (both refused, by the adapter and again by the driver); it reads 5DFEN board strings only under Board "custom" (refused under any other); its tokeniser loops forever on a comment that is never closed (refused before it runs); it stores a 5DFEN "-0" board as a signed zero, which it writes back as "0" (left alone: a set-up that mixes it with "+0" is refused under a reason of its own, signed_zero, so that the recorded outcome names the defect; any other shows in the fingerprints); it drops the unmoved marker "*" (its state events say markers false); it splits a long-algebraic pawn move such as e2e4 into two moves (it then finds no pawn for the first, a soft rejection).
+- X11 licence: the export the driver loads is the whole pinned tree, LICENSE included, in the harness cache, never committed or distributed; the project never uses the author's name to promote itself.
 
 ### Toolchains
 
@@ -121,7 +124,7 @@ M11).
 | cmake | 3.20 or newer; `--bootstrap` installs cmake==4.4.3 | Configures ftxi's own CMake project and the harness driver built against it. |
 | ninja | any; `--bootstrap` installs ninja==1.13.2 | CMake generator: required on Windows, used elsewhere when present. |
 | cxx | g++ 13 or newer | ftxi/5dchess_engine is C++23. Its own CI also builds with Apple Clang and MSVC 14.40; the harness looks only for g++ (set CXX to point at one). |
-| node | 18 or newer | Runs the Chess in 5D library; npm installs its three pinned runtime dependencies from its own lockfile. |
+| node | 18 or newer | Runs the Chess in 5D library, whose three pinned runtime dependencies npm installs from its own lockfile, and the notation repository's parser, which needs none. |
 
 ### Corpus records
 
@@ -138,21 +141,29 @@ M11).
 
 ## Programs of ours that run third-party code
 
-Two small programs in the harness load an oracle's code into their own process,
+Small programs in the harness load an oracle's code into their own process,
 because that oracle offers no other way to ask the question:
 
 | Program | Loads | Why |
 |---|---|---|
-| `oracles/drivers/ftxi/` (C++) | ftxi's core library, compiled from the pinned export, plus its `tools/search_tools.cpp` | Its stock CLI has no per-position check verdict, and its replay tools do not test a recorded action for royal safety. Where the stock `5dtools` CLI does answer - whether an action exists, the verdict when none does, the action count, the side to move - every gate run holds the driver to it. The check verdict at a position that still has a legal action has no stock counterpart to be held to. |
+| `oracles/drivers/ftxi/` (C++) | ftxi's core library, compiled from the pinned export, plus its `tools/search_tools.cpp` | Its stock CLI has no per-position check verdict, and its replay tools do not test a recorded action for royal safety. Where the stock `5dtools` CLI does answer - whether an action exists, the verdict when none does, the action count, the side to move, the number and size of the boards - every gate run holds the driver to it. The check verdict at a position that still has a legal action has no stock counterpart to be held to. |
+| `oracles/drivers/cwmtt/Driver.hs` (Haskell) | cwmtt's own modules - its parser, its set-up, its replay and its two searches - compiled from the pinned export with the pinned GHC and the CLI's flags | Its stock CLI prints counts, and draws the boards only as a picture of the last position (`print`): never the boards it holds at each position, nor the side to move. The driver reads and replays the record with the cwmtt code the CLI's `count` runs - its parser, its set-up, and the replay step both replays scan - and prints at every position the boards cwmtt holds and the side to move (and, asked by `observe`, its diagnostics); it answers nothing the CLI answers. The adapter holds the two to each other on every run - same layout, same text left unread, same replay failure, same positions - and pairs a count with a state only then. |
 | `oracles/drivers/chessin5d/driver.js` (Node) | the 5d-chess-js library, from the pinned export | The library is an API. It ships a development console (`src/cli.js`), but no command that reports verdicts. |
+| `oracles/drivers/notation/driver.js` (Node) | the parser bundled with the notation specification (`parsers/pgn.js` and `parsers/game.js`), from the pinned export | It is a parse-only oracle (H26). The parser's one entry point reads a whole record and ends the process on an error; its command-line program converts records and reports no position. The driver watches the parser through the module objects it reaches its own helpers through, and reports the boards it holds at every position; it changes nothing in it. |
 
-cwmtt is driven through its own stock command-line program, unmodified.
+cwmtt's counts, and how far it replays a record, still come from its own stock
+command-line program, unmodified; its state driver adds what cwmtt set up and the
+side to move, and nothing else.
 
 These are test-time programs. They are built into `oracles/.cache/` (never
 committed) and they are never shipped with or linked into the engine. The oracle
 code they load stays in the oracle's repository under the oracle's licence. If the
 harness is ever distributed in a form that bundles them with an oracle's code, that
-oracle's licence governs the bundle - read it before doing so.
+oracle's licence governs the bundle - read it before doing so. The notation
+repository's parser is under the X11 licence: its notice goes with any copy, which
+the export does (it is the whole pinned tree, `LICENSE` included), and its
+no-advertising clause means the project never uses the author's name to promote
+itself or anything it makes.
 
 ## What here did not originate here
 
@@ -166,11 +177,13 @@ The harness also *describes* how the oracles read their input, in code of its ow
 so that it can tell when an oracle would misread a record: `cwmtt_tags()` in
 `oracles/oracle_harness/adapters/cwmtt.py` follows cwmtt's tag grammar;
 `would_misread()` in `adapters/chessin5d.py` and the result-token handling in
-`oracles/drivers/chessin5d/driver.js` follow how 5d-chess-js splits move text; and
+`oracles/drivers/chessin5d/driver.js` follow how 5d-chess-js splits move text;
 `ends_in_a_variation()` in `adapters/ftxi.py` follows which continuation ftxi
-replays. All were written from reading or probing the oracle, in another language
-or for another purpose; none copies it. That is permitted inside `oracles/` and
-nowhere else.
+replays; and `would_misread()` in `adapters/notation.py` and the set-up checks in
+`oracles/drivers/notation/driver.js` follow how the notation repository's parser
+reads headers, board names and board sizes. All were written from reading or
+probing the oracle, in another language or for another purpose; none copies it.
+That is permitted inside `oracles/` and nowhere else.
 
 ## Fetched at build time
 
@@ -199,8 +212,9 @@ the spec stands on each now (this file is authoritative on oracle internals, §1
   file. *Corrected: J20 removes it from H24's reasons, and H24 stands on the rest.*
 - **A fourth repository is pinned:** the notation specification, as a corpus
   source and the text the engine's parser is written from. It is not a rules
-  oracle; its bundled parser code counts as a parse-only oracle. *Now in the spec:
-  H26 and the §11.0 table.*
+  oracle; its bundled parser code counts as a parse-only oracle, and the harness
+  runs it as one (source `notation`, role `parse-oracle`, every tier). *Now in the
+  spec: H26 and the §11.0 table.*
 - **ftxi is driven through a C++ driver and its stock CLI, not its Python
   bindings.** The bindings expose no query for the check verdict the gate compares.
   *Still differs: §11.0 ("Tiered CI") says "Python bindings"; an edit is proposed

@@ -11,6 +11,21 @@ Variant header when it has none - and refuses the record if the library would
 set up any other game for it. A Timeline header, which the library does not read,
 and two notations its move-text reader gets wrong without noticing are refused
 here, before it runs.
+
+At every position the driver also says what the library holds there (decision
+H30): every board, as the library's own 5DFEN export writes it - the string its
+full-state hash is taken of - with the library's own timeline and turn labels
+and unmoved markers, and that hash itself (chess.hash), which the harness's
+fingerprint must equal (base.py). A custom set-up whose boards the library names
+at other coordinates than the record's is refused, like any other misreading.
+When `observe` asks, it adds two diagnostics, never compared: what the library's
+check test advanced and the captures it found (--explain), and the legal actions
+at one position as the library's own enumerator lists them, kept where the
+library's move() plays each move and its check and present tests pass the result
+- the tests submit() applies to an action; not its mate search, which submit()
+runs first (--actions K). A mate search that did not finish leaves its position
+event a "limit" naming what stopped it. The driver's header says how each is
+obtained.
 """
 
 from __future__ import annotations
@@ -19,7 +34,7 @@ import re
 import shutil
 from pathlib import Path
 
-from .. import build, headers, paths
+from .. import build, fingerprint, headers, paths
 from ..lockfile import Lock
 from ..observations import Observation
 from . import base
@@ -53,7 +68,10 @@ def would_misread(data: bytes) -> tuple[str, str] | None:
 class ChessIn5dSource(Source):
     name = "chessin5d"
     oracle = "chessin5d"
-    answers = ("side", "in_check", "terminal", "legality")
+    answers = ("state", "side", "in_check", "terminal", "legality")
+    # The driver speaks the common flags (--explain, --actions K), so the base
+    # class's diagnostic_args() asks for these.
+    diagnostics = ("explain", "actions")
 
     def __init__(self, lock: Lock):
         self.pin = lock.pin("chessin5d")
@@ -71,7 +89,8 @@ class ChessIn5dSource(Source):
 
     def signature(self, options: RunOptions) -> dict:
         return {"pin": self.pin.commit, "mate_heap_mb": _MATE_HEAP_MB, "driver_sha256": code_sha256(self.driver),
-                "adapter_sha256": code_sha256(Path(__file__), Path(base.__file__), Path(headers.__file__))}
+                "adapter_sha256": code_sha256(Path(__file__), Path(base.__file__), Path(fingerprint.__file__),
+                                              Path(headers.__file__))}
 
     def observe(self, record_id: str, data: bytes, options: RunOptions) -> Observation:
         refused = would_misread(data)
@@ -80,5 +99,6 @@ class ChessIn5dSource(Source):
                                detail=refused[1], actions_accepted=0)
         declared = headers.declared_board(data) or "Standard"
         argv = [shutil.which("node"), self.driver, self._build().artifact("root"), "--board", declared,
-                "--mate-budget-ms", str(options.mate_budget_ms), "--mate-heap-mb", str(_MATE_HEAP_MB)]
+                "--mate-budget-ms", str(options.mate_budget_ms), "--mate-heap-mb", str(_MATE_HEAP_MB),
+                *self.diagnostic_args(options)]
         return run_protocol(self.name, record_id, argv, data, options, None)

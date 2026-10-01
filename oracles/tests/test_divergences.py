@@ -7,6 +7,7 @@ from oracle_harness import corpus, divergences, golden, lockfile
 from oracle_harness.divergences import Divergence
 from oracle_harness.observations import Disagreement, Observation, Position
 from oracle_harness.util import HarnessError
+from support import golden_files_predate_this_schema
 
 RULE = "Rulebook, section on check: a royal attacked on any board after a pass is in check."
 SPEC = "5dpgn specification, section on jumps: the capture marker on a jump is optional."
@@ -61,6 +62,26 @@ class DivergenceTests(unittest.TestCase):
         self.assertEqual(codes(self.verify(**hard)), ["divergence-citation"])
         engine_refuses = {**hard, "engine_value": "rejected:illegal_move", "oracle_value": "accepted"}
         self.assertEqual(codes(self.verify(**engine_refuses)), ["divergence-citation"])
+
+    def test_a_parse_divergence_is_settled_by_the_notation_specification(self):
+        placement = dict(kind="placement", index=4, engine_value="a" * 32 + " (1 board, 32 pieces)",
+                         oracle_value="b" * 32 + " (1 board, 32 pieces)", rulebook="", notation=SPEC)
+        self.assertEqual(self.verify(**placement), [])
+        # Two readings of the move text: never the rulebook's to settle.
+        self.assertEqual(codes(self.verify(**{**placement, "rulebook": RULE, "notation": ""})), ["divergence-citation"])
+        self.assertEqual(codes(self.verify(**{**placement, "notation": ""})), ["divergence-citation"])
+        self.assertEqual(codes(self.verify(**{**placement, "notation": "TBD"})), ["divergence-citation"])
+        # Which pieces carry the unmoved marker is the notation's; what having moved means, the rulebook's.
+        unmoved = {**placement, "kind": "unmoved"}
+        self.assertEqual(self.verify(**unmoved), [])
+        self.assertEqual(self.verify(**{**unmoved, "rulebook": RULE, "notation": ""}), [])
+        self.assertEqual(codes(self.verify(**{**unmoved, "rulebook": RULE})), ["divergence-citation"])
+
+    def test_a_parse_divergence_may_name_any_search(self):
+        # Each search says what it set up, and each is compared: an entry is per search, like a verdict's.
+        naive = dict(kind="placement", index=4, engine_value="a" * 32, oracle_value="b" * 32, rulebook="",
+                     notation=SPEC, oracle="ftxi:naive", pin=self.lock.pin("ftxi").commit)
+        self.assertEqual(self.verify(**naive), [])
 
     def test_how_a_record_is_replayed_belongs_to_the_implementation(self):
         # Legality is compared through the primary source only, so an entry for
@@ -139,7 +160,27 @@ class GoldenCrossCheckTests(unittest.TestCase):
         for recorded in (self.recorded([quiet]), self.recorded([quiet, silent]), lambda source, record_id: None):
             self.assertEqual(codes(self.verify(self.entry(), recorded)), ["divergence-golden"])
 
+    def test_an_entry_about_what_an_oracle_set_up_is_checked_too(self):
+        positions = [Position(0, "white", False, None, "none", fingerprint="1" * 32, placement="2" * 32, boards=1, pieces=32)]
+        report = Observation(source="chessin5d", record="cwmtt/standard", status="ok", positions=positions,
+                             actions_accepted=0, cap=1000)
+
+        def recorded(source, record_id):
+            return report if (source, record_id) == ("chessin5d", "cwmtt/standard") else None
+
+        said = "2" * 32 + " (1 board, 32 pieces)"
+        entry = self.entry(kind="placement", index=0, engine_value="3" * 32 + " (1 board, 32 pieces)", oracle_value=said,
+                           rulebook="", notation=SPEC)
+        self.assertEqual(self.verify(entry, recorded), [])
+        unmoved = dataclasses.replace(entry, kind="unmoved", oracle_value="1" * 32 + " (1 board, 32 pieces)")
+        self.assertEqual(self.verify(unmoved, recorded), [])
+        misquoted = dataclasses.replace(entry, oracle_value="2" * 32)  # without the counts the gate prints
+        self.assertEqual(codes(self.verify(misquoted, recorded)), ["divergence-golden"])
+
     def test_the_repository_golden_files_are_what_an_entry_is_checked_against(self):
+        stale = golden_files_predate_this_schema("chessin5d")
+        if stale:
+            self.skipTest(stale)
         recorded = golden.lookup()
         said = recorded("chessin5d", "cwmtt/standard")
         self.assertIsNotNone(said)
@@ -217,6 +258,37 @@ class LookedAtTests(unittest.TestCase):
         self.assertTrue(divergences.looked_at(legality, done, refused))
         self.assertFalse(divergences.looked_at(legality, done, self.report([known], status="timeout")))
         self.assertFalse(divergences.looked_at(legality, done, self.report([], status="unsupported")))
+
+    @staticmethod
+    def placed(report, *placements, marked=False):
+        report.positions = [dataclasses.replace(position, placement=f"{placement:032x}", boards=1, pieces=32,
+                                                fingerprint=f"{placement + 100:032x}" if marked else None)
+                            for position, placement in zip(report.positions, placements, strict=True)]
+        return report
+
+    def test_a_parse_entry_needs_both_reports_to_say_what_they_set_up(self):
+        known = ("white", False, 20, "none")
+        placement = dataclasses.replace(self.entry, kind="placement")
+        both = self.placed(self.report([known, known]), 1, 2)
+        self.assertTrue(divergences.looked_at(placement, both, self.placed(self.report([known, known]), 1, 3)))
+        self.assertFalse(divergences.looked_at(placement, both, self.report([known, known])))
+        unmoved = dataclasses.replace(self.entry, kind="unmoved")
+        self.assertFalse(divergences.looked_at(unmoved, both, both))  # placements only: no markers to compare
+        marked = self.placed(self.report([known, known]), 1, 2, marked=True)
+        self.assertTrue(divergences.looked_at(unmoved, marked, marked))
+
+    def test_nothing_after_two_reports_part_is_looked_at(self):
+        # They part at position 1: an entry about check there, or about an action
+        # played after it, was not looked at - only the parting itself was.
+        known = ("white", False, 20, "none")
+        engine = self.placed(self.report([known, known, known]), 1, 2, 3)
+        oracle = self.placed(self.report([known, known, known]), 1, 9, 9)
+        self.assertFalse(divergences.looked_at(self.entry, engine, oracle))
+        self.assertTrue(divergences.looked_at(dataclasses.replace(self.entry, kind="placement"), engine, oracle))
+        self.assertFalse(divergences.looked_at(dataclasses.replace(self.entry, kind="placement", index=2), engine, oracle))
+        self.assertFalse(divergences.looked_at(dataclasses.replace(self.entry, kind="unmoved"), engine, oracle))
+        self.assertFalse(divergences.looked_at(dataclasses.replace(self.entry, kind="length", index=2), engine, oracle))
+        self.assertTrue(divergences.looked_at(dataclasses.replace(self.entry, index=0), engine, oracle))
 
 
 class FileTests(unittest.TestCase):

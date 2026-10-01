@@ -99,10 +99,10 @@ If you are stuck, say so. Do not reach for the oracle's implementation.
   changed line there is an answer an oracle changed (or, for a run that timed out,
   how far it got), and it must be explained.
 - The adapters and drivers (`oracles/oracle_harness/adapters/`,
-  `oracles/oracle_harness/headers.py`, `oracles/drivers/`) in passing. They stand
-  between an oracle and its recorded answers: editing one - a comment included -
-  makes the golden files of the oracles it serves stale, and re-recording them
-  takes about half an hour.
+  `oracles/oracle_harness/headers.py`, `oracles/oracle_harness/fingerprint.py`,
+  `oracles/drivers/`) in passing. They stand between an oracle and its recorded
+  answers: editing one - a comment included - makes the golden files of the
+  oracles it serves stale, and re-recording them takes about half an hour.
 - Never run `git submodule update --init --recursive`. Use
   `python oracles/harness.py sync`.
 

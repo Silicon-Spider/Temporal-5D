@@ -72,9 +72,11 @@ python oracles/harness.py gate --tier commit   # per-commit gate; nightly and re
 - The oracles disagree with each other in places (`oracles/DISAGREEMENTS.md`).
   That is data, not a harness bug. Do not "fix" it.
 - Editing an adapter or driver (`oracles/oracle_harness/adapters/`,
-  `oracles/oracle_harness/headers.py`, `oracles/drivers/`) - even a comment -
-  makes the golden files stale by design; editing the ftxi driver also means
-  rebuilding ftxi (`build --oracle ftxi`). Re-record them with
+  `oracles/oracle_harness/headers.py`, `oracles/oracle_harness/fingerprint.py`,
+  `oracles/drivers/`) - even a comment - makes the golden files stale by design;
+  editing the ftxi driver also means rebuilding ftxi (`build --oracle ftxi`), and
+  editing cwmtt's state driver (`oracles/drivers/cwmtt/Driver.hs`) rebuilding
+  cwmtt (`build --oracle cwmtt`). Re-record them with
   `python oracles/harness.py golden --write --jobs 8` (about half an hour; run it in
   the background) and read the diff. Do not edit those files while it runs.
 - A green gate with no engine configured means the *oracle layer* is healthy. It

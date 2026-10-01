@@ -11,6 +11,15 @@ reads the Size, Timeline and Promotions headers, and reads 5DFEN boards whatever
 the header says. It needs one against a record that ends in a parenthesised
 variation: its replay follows the last continuation written at each point, which
 there is the variation.
+
+At every position the driver also says what ftxi holds there (decision H30): every
+board, as ftxi's own 5DFEN writer prints its pieces, with ftxi's turn, colour and
+unmoved markers and the timeline named from ftxi's own parity. Its position event
+repeats the board size beside its timing, for the driver check (fidelity.py). When
+`observe` asks, it adds two diagnostics, never compared: the timelines ftxi
+advances to phantom boards for its check test and the royal captures it finds
+there (--explain), and the legal actions at one position as the search counts
+them (--actions K). The driver's header says how each is obtained.
 """
 
 from __future__ import annotations
@@ -18,7 +27,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from .. import build, paths
+from .. import build, fingerprint, paths
 from ..lockfile import Lock
 from ..observations import Observation
 from ..util import Completed, run
@@ -57,7 +66,10 @@ def _turn(actions: int) -> str:
 
 class FtxiSource(Source):
     oracle = "ftxi"
-    answers = ("side", "in_check", "legal_actions", "terminal", "legality")
+    answers = ("state", "side", "in_check", "legal_actions", "terminal", "legality")
+    # The driver speaks the common flags (--explain, --actions K), so the base
+    # class's diagnostic_args() asks for these.
+    diagnostics = ("explain", "actions")
 
     def __init__(self, name: str, lock: Lock):
         self.name = name
@@ -74,7 +86,7 @@ class FtxiSource(Source):
         driver = paths.DRIVERS / "ftxi"
         return {"pin": self.pin.commit, "policy": self.policy, "cap": options.cap,
                 "driver_sha256": code_sha256(driver / "ftxi_driver.cpp", driver / "CMakeLists.txt"),
-                "adapter_sha256": code_sha256(Path(__file__), Path(base.__file__))}
+                "adapter_sha256": code_sha256(Path(__file__), Path(base.__file__), Path(fingerprint.__file__))}
 
     def observe(self, record_id: str, data: bytes, options: RunOptions) -> Observation:
         if ends_in_a_variation(data):
@@ -82,7 +94,7 @@ class FtxiSource(Source):
                                detail="the record ends with a parenthesised variation, which ftxi replays as the main line",
                                actions_accepted=0, cap=options.cap)
         driver = self._build().artifact("driver")
-        argv = [driver, "--cap", str(options.cap), "--policy", self.policy]
+        argv = [driver, "--cap", str(options.cap), "--policy", self.policy, *self.diagnostic_args(options)]
         return run_protocol(self.name, record_id, argv, data, options, options.cap)
 
     # The calls below go to the oracle's stock CLI. They exist so the harness
@@ -98,3 +110,7 @@ class FtxiSource(Source):
     def stock_stats(self, data: bytes, actions: int, timeout_s: float) -> Completed:
         argv = [self._build().artifact("tools"), "stats", "--at", _turn(actions), "--format", "json"]
         return run(argv, stdin=data, timeout=timeout_s)
+
+    def stock_print(self, data: bytes, actions: int, timeout_s: float) -> Completed:
+        """Every board ftxi holds after ``actions`` actions, drawn by its own `print` command."""
+        return run([self._build().artifact("tools"), "print", "--at", _turn(actions)], stdin=data, timeout=timeout_s)

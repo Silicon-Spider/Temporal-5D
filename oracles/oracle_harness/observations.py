@@ -17,6 +17,20 @@ Each oracle answers with its own reading of these definitions - which timelines
 count as eligible, for one. Where the readings differ the reports disagree, and
 the rulebook, not the harness, says who is right.
 
+Before any of that, the two reports must be about the same position. Each source
+says what it set up at every position (its state event, fingerprint.py), and the
+harness compares those first (decision H30): where two sources hold different
+boards - different pieces, or the same pieces on boards at other coordinates -
+they read the record's moves as different positions. That is a parse divergence,
+"placement", and none of their rules answers from that position on is compared,
+because they would be answers about different positions. Where they hold the
+same boards and pieces but disagree about which pieces have not moved, that is
+the other parse divergence, "unmoved": one is reported where each run of such
+positions begins, and it suppresses no comparison, so a rules disagreement it
+causes shows beside it. A placement divergence is settled against the notation
+specification; a marker-only one against the notation's "5DFEN Strictness" or
+the rulebook (what having moved means); a rules divergence against the rulebook.
+
 Every field may be None: an oracle that cannot answer a question, or ran out of
 time, says nothing rather than something. Nothing is ever inferred on an
 oracle's behalf, and an unknown never disagrees with anything.
@@ -26,12 +40,27 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from .fingerprint import is_hash
+
 SIDES = ("white", "black")
 TERMINALS = ("none", "checkmate", "stalemate", "no_action")
 STATUSES = ("ok", "rejected", "unsupported", "error", "timeout")
 # The three things the gate exists to cross-check (design spec 11.0): move
 # counts, check verdicts, and mate/stalemate verdicts.
 OBSERVABLES = ("in_check", "legal_actions", "terminal")
+# What a source answers at a position: the side to move, and the three above.
+ANSWERS = ("side", *OBSERVABLES)
+# What a source says it set up at a position (its state event): the full-state
+# hash with unmoved markers, the same without them, and the board and piece counts.
+FINGERPRINT_FIELDS = ("fingerprint", "placement", "boards", "pieces")
+# The two parse divergences (decision H30), and the field each is read from.
+PARSE_KINDS = ("placement", "unmoved")
+PARSE_FIELD = {"placement": "placement", "unmoved": "fingerprint"}
+# How a source replays the record, as opposed to what it says about a position.
+REPLAY_KINDS = ("legality", "length")
+# The columns of a golden row, in order. A column is added by appending it here
+# (and raising the golden schema); everything that reads or writes rows follows this.
+ROW_FIELDS = (*ANSWERS, *FINGERPRINT_FIELDS)
 
 # Why a source stopped replaying a record. The soft reasons cannot tell a rules
 # disagreement from a notation the source does not read: both surface as "no
@@ -47,9 +76,17 @@ class Position:
     in_check: bool | None = None
     legal_actions: int | None = None
     terminal: str | None = None
+    # What the source says it set up here (fingerprint.py): the full-state hash
+    # with unmoved markers - None from a source that does not track them - the
+    # same without them, and how many boards and pieces the multiverse holds.
+    fingerprint: str | None = None
+    placement: str | None = None
+    boards: int | None = None
+    pieces: int | None = None
 
     def known(self) -> int:
-        return sum(value is not None for value in (self.side, self.in_check, self.legal_actions, self.terminal))
+        """How many of the answers this position has. What the source set up is not an answer."""
+        return sum(getattr(self, name) is not None for name in ANSWERS)
 
 
 @dataclass
@@ -64,6 +101,14 @@ class Observation:
     last_action: bool | None = None  # a rejected action was the record's final one
     cap: int | None = None
     elapsed_s: float = 0.0
+    # Fields a source printed in a position event beside the protocol's - a
+    # driver's timing ("ms"), the limit a question it left unanswered ran into
+    # ("limit") - by position index. Kept for budgeting; never compared, never
+    # recorded in a golden file.
+    extras: dict[int, dict] = field(default_factory=dict)
+    # Diagnostic events ("explain", "actions") a source printed because
+    # `observe` asked for them, in order. Never compared, never recorded.
+    diagnostics: list[dict] = field(default_factory=list)
 
     def known(self) -> int:
         return sum(position.known() for position in self.positions)
@@ -74,7 +119,7 @@ class Disagreement:
     record: str
     a: str
     b: str
-    kind: str  # side | in_check | legal_actions | terminal | legality | length
+    kind: str  # side | in_check | legal_actions | terminal | legality | length | placement | unmoved
     index: int
     a_value: str
     b_value: str
@@ -84,9 +129,15 @@ class Disagreement:
         return (self.record, self.a, self.b, self.kind, self.index)
 
     def describe(self) -> str:
-        where = f"action {self.index}" if self.kind in ("legality", "length") else f"position {self.index}"
-        soft = " (soft: may be notation, not rules)" if self.soft else ""
-        return f"{self.record} {where}: {self.kind}: {self.a}={self.a_value} vs {self.b}={self.b_value}{soft}"
+        where = f"action {self.index}" if self.kind in REPLAY_KINDS else f"position {self.index}"
+        note = " (soft: may be notation, not rules)" if self.soft else ""
+        if self.kind == "placement":
+            note = (" (parse divergence: different boards - their pieces or their coordinates; nothing from here on "
+                    "is compared)")
+        elif self.kind == "unmoved":
+            note = (" (parse divergence: the same boards and pieces, marked unmoved differently from here until "
+                    "the markers agree again)")
+        return f"{self.record} {where}: {self.kind}: {self.a}={self.a_value} vs {self.b}={self.b_value}{note}"
 
 
 def validate(observation: Observation) -> list[str]:
@@ -118,6 +169,26 @@ def validate(observation: Observation) -> list[str]:
         dead_end = count == 0 or position.terminal not in (None, "none")
         if dead_end and expected + 1 < len(positions):
             problems.append(f"{where}: no legal action exists, yet action {expected + 1} was accepted")
+        for name in ("fingerprint", "placement"):
+            value = getattr(position, name)
+            if value is not None and not is_hash(value):
+                problems.append(f"{where}: {name} {value!r} is not 32 lower-case hex digits")
+        for name in ("boards", "pieces"):
+            value = getattr(position, name)
+            if value is not None and (not isinstance(value, int) or isinstance(value, bool) or value < 0):
+                problems.append(f"{where}: {name} {value!r} is not a whole number")
+        if position.fingerprint is not None and position.placement is None:
+            problems.append(f"{where}: a fingerprint without the placement it includes")
+        if position.placement is not None and None in (position.boards, position.pieces):
+            problems.append(f"{where}: a placement without its board and piece counts (one state event gives all three)")
+        if expected and position.placement is not None and positions[expected - 1].placement is None:
+            problems.append(f"{where} says what was set up there, and position {expected - 1} does not: a source says it "
+                            "at every position from the start or at none (only the last ones may be missing, where "
+                            "it stopped saying it)")
+    marked = {position.fingerprint is not None for position in positions if position.placement is not None}
+    if len(marked) > 1:
+        problems.append("the unmoved markers are given at some positions and not at others: a source tracks them "
+                        "throughout a run, or not at all")
     # Position k exists exactly when k actions were accepted, whatever ended the run.
     if observation.actions_accepted != max(len(positions) - 1, 0):
         problems.append(f"actions_accepted is {observation.actions_accepted}, but {len(positions)} position(s) were reported")
@@ -174,11 +245,80 @@ def decisive(name: str, value: object) -> bool:
     return value is not None and not (name == "terminal" and value == "no_action")
 
 
+def _plural(count: int, noun: str) -> str:
+    return f"{count} {noun}{'' if count == 1 else 's'}"
+
+
+def counts_text(position: Position) -> str:
+    """"2 boards, 63 pieces" where the position's state is known; "" where it is not."""
+    if position.boards is None or position.pieces is None:
+        return ""
+    return f"{_plural(position.boards, 'board')}, {_plural(position.pieces, 'piece')}"
+
+
+def _state_text(position: Position, name: str) -> str:
+    """A hash as compare() prints it: with the board and piece counts it was computed from."""
+    counts = counts_text(position)
+    return f"{getattr(position, name)} ({counts})" if counts else str(getattr(position, name))
+
+
+def judges_actions(source: str) -> bool:
+    """Is this source's playing an action a statement that the action is legal?
+
+    A parse-only source (adapters.PARSE_ONLY_SOURCES) applies any move it can
+    place, legal or not: that it played on says only that it read the move. So
+    it contradicts a refusal only where the refusal was a failure to read the
+    move text (a soft one), never where another source held the action illegal.
+    """
+    from .adapters import PARSE_ONLY_SOURCES, oracle_of  # the adapters import this module: not at the top
+
+    return oracle_of(source) not in PARSE_ONLY_SOURCES
+
+
+def first_placement_divergence(a: Observation, b: Observation) -> int | None:
+    """The first position at which both reports say what they set up, and say different things.
+
+    From there on the two are answering about different positions, so nothing
+    they say is compared; see compare().
+    """
+    for pa, pb in zip(a.positions, b.positions, strict=False):
+        if pa.placement is not None and pb.placement is not None and pa.placement != pb.placement:
+            return pa.index
+    return None
+
+
+def aligned(pa: Position, pb: Position) -> bool | None:
+    """Do two reports' positions hold the same boards and pieces? None when one says nothing about it.
+
+    That is what shows the two read the record's moves alike, so that counting
+    actions lined them up. The unmoved markers are not compared: see same_state().
+    """
+    if pa.placement is None or pb.placement is None:
+        return None
+    return pa.placement == pb.placement
+
+
+def same_state(pa: Position, pb: Position) -> bool | None:
+    """Do two positions hold the same state, unmoved markers included?
+
+    None where either has no fingerprint: it said nothing of what it set up, or
+    it does not track which pieces have not moved.
+    """
+    if pa.fingerprint is None or pb.fingerprint is None:
+        return None
+    return pa.fingerprint == pb.fingerprint
+
+
 def value_at(observation: Observation, kind: str, index: int) -> str | None:
     """What a report says about one observation, in the words compare() prints; None if it says nothing.
 
     For legality and length, ``index`` is an action number, counted from 1.
     """
+    if kind in PARSE_KINDS:
+        if index < 0 or index >= len(observation.positions):
+            return None
+        position = observation.positions[index]
+        return None if getattr(position, PARSE_FIELD[kind]) is None else _state_text(position, PARSE_FIELD[kind])
     if kind == "legality":
         if index < 1:
             return None
@@ -202,6 +342,20 @@ def value_at(observation: Observation, kind: str, index: int) -> str | None:
 def compare(a: Observation, b: Observation, *, replay: bool = True) -> list[Disagreement]:
     """Every point at which two reports on the same record contradict each other.
 
+    What the two set up is compared first (decision H30). At the first position
+    where their placements differ there is one "placement" disagreement, and
+    nothing from that position on is compared - no observable at it or after
+    it, no legality or length of an action after it - because the two are no
+    longer answering about the same position. Before that, positions where the
+    boards and pieces agree and the unmoved markers do not come in runs: each
+    run - from a position whose markers differ, after one whose markers agreed
+    or at the first whose markers both know, to the next whose markers agree -
+    is one "unmoved" disagreement, at its first position, and it suppresses
+    nothing. (So one known-divergence entry excuses one run, and markers that
+    part again after agreeing are a new disagreement.) Both kinds are compared
+    between any two reports, two searches of one implementation included: they
+    must parse alike.
+
     ``replay=False`` leaves out legality and length. Those describe how an
     implementation replays the record, which does not depend on which of its
     searches counted the actions - so they are compared once per implementation,
@@ -214,8 +368,23 @@ def compare(a: Observation, b: Observation, *, replay: bool = True) -> list[Disa
     def add(kind: str, index: int, a_value: object, b_value: object, soft: bool = False) -> None:
         found.append(Disagreement(a.record, a.source, b.source, kind, index, str(a_value), str(b_value), soft))
 
-    # Compared up to the shorter report: what one source did not reach is unknown.
-    for pa, pb in zip(a.positions, b.positions, strict=False):
+    diverged = first_placement_divergence(a, b)
+    # Compared up to the shorter report - what one source did not reach is
+    # unknown - and never past the point where the two parted.
+    shared = list(zip(a.positions, b.positions, strict=False))[:diverged]
+    differing = False  # inside a run of positions whose markers differ
+    for pa, pb in shared:
+        same = same_state(pa, pb)  # before the parting, the boards and pieces agree wherever both are known
+        if same is None:
+            continue  # a position whose markers one side does not give neither starts nor ends a run
+        if not same and not differing:
+            add("unmoved", pa.index, _state_text(pa, "fingerprint"), _state_text(pb, "fingerprint"))
+        differing = not same
+    if diverged is not None:
+        add("placement", diverged, _state_text(a.positions[diverged], "placement"),
+            _state_text(b.positions[diverged], "placement"))
+
+    for pa, pb in shared:
         if pa.side is not None and pb.side is not None and pa.side != pb.side:
             add("side", pa.index, pa.side, pb.side)
         if pa.in_check is not None and pb.in_check is not None and pa.in_check != pb.in_check:
@@ -228,13 +397,18 @@ def compare(a: Observation, b: Observation, *, replay: bool = True) -> list[Disa
     if not replay:
         return found
 
-    # Legality: one source refused an action the other went on to play.
+    def parted_before(action: int) -> bool:
+        """Is this action played from a position the two no longer share?"""
+        return diverged is not None and action > diverged
+
+    # Legality: one source refused an action the other went on to play - where
+    # the other's playing it is a verdict (see judges_actions).
     for first, second, flipped in ((a, b, False), (b, a, True)):
         if first.status != "rejected" or first.actions_accepted is None:
             continue
         refused = first.actions_accepted + 1
-        if len(second.positions) > refused:
-            soft = first.reason in SOFT_REJECTIONS
+        soft = first.reason in SOFT_REJECTIONS
+        if len(second.positions) > refused and not parted_before(refused) and (soft or judges_actions(second.source)):
             values = (f"rejected:{first.reason}", "accepted")
             add("legality", refused, *(values[::-1] if flipped else values), soft=soft)
 
@@ -243,7 +417,8 @@ def compare(a: Observation, b: Observation, *, replay: bool = True) -> list[Disa
     # reading early would otherwise look like one that agrees about everything
     # it saw, and would never have to say whether the next action is legal.)
     for first, second, flipped in ((a, b, False), (b, a, True)):
-        if first.status == "ok" and _actions_seen(second) > _actions_seen(first):
+        if first.status == "ok" and _actions_seen(second) > _actions_seen(first) \
+                and not parted_before(_actions_seen(first) + 1):
             values = (_length_text(first), _length_text(second))
             soft = second.status == "rejected" and second.reason in SOFT_REJECTIONS
             add("length", _actions_seen(first) + 1, *(values[::-1] if flipped else values), soft=soft)
@@ -282,11 +457,15 @@ def status_changed(golden: Observation, fresh: Observation) -> str | None:
 
 
 def coverage(golden: Observation, fresh: Observation) -> tuple[int, int]:
-    """(golden values the fresh run also produced, golden values) - guards against a vacuous pass."""
+    """(golden values the fresh run also produced, golden values) - guards against a vacuous pass.
+
+    What a source set up counts as well as what it answered: a source that
+    stops exporting its state loses coverage like one that stops answering.
+    """
     total = reproduced = 0
     for index, position in enumerate(golden.positions):
         other = fresh.positions[index] if index < len(fresh.positions) else Position(index)
-        for name in ("side", "in_check", "legal_actions", "terminal"):
+        for name in ROW_FIELDS:
             if getattr(position, name) is not None:
                 total += 1
                 reproduced += getattr(other, name) is not None
@@ -295,6 +474,23 @@ def coverage(golden: Observation, fresh: Observation) -> tuple[int, int]:
 
 # --- serialisation (golden files and run reports) ---------------------------
 
+_SIDE_LETTERS = {"w": "white", "b": "black", None: None}
+
+
+def to_row(position: Position) -> list:
+    """One position as a golden row: the values of ROW_FIELDS, the side as "w" or "b"."""
+    return [(position.side[0] if position.side else None) if name == "side" else getattr(position, name)
+            for name in ROW_FIELDS]
+
+
+def from_row(index: int, row: object) -> Position:
+    if not isinstance(row, list) or len(row) != len(ROW_FIELDS):
+        raise ValueError(f"position {index}: a row has {len(ROW_FIELDS)} columns ({', '.join(ROW_FIELDS)})")
+    values = dict(zip(ROW_FIELDS, row, strict=True))
+    values["side"] = _SIDE_LETTERS[values["side"]]
+    return Position(index, **values)
+
+
 def to_json(observation: Observation) -> dict:
     return {
         "status": observation.status,
@@ -302,15 +498,12 @@ def to_json(observation: Observation) -> dict:
         "detail": observation.detail[:300],
         "actions_accepted": observation.actions_accepted,
         "last_action": observation.last_action,
-        "positions": [[p.side[0] if p.side else None, p.in_check, p.legal_actions, p.terminal] for p in observation.positions],
+        "positions": [to_row(position) for position in observation.positions],
     }
 
 
 def from_json(source: str, record: str, cap: int | None, data: dict) -> Observation:
-    sides = {"w": "white", "b": "black", None: None}
-    positions = [
-        Position(index, sides[row[0]], row[1], row[2], row[3]) for index, row in enumerate(data.get("positions", []))
-    ]
+    positions = [from_row(index, row) for index, row in enumerate(data.get("positions", []))]
     return Observation(
         source=source, record=record, status=data["status"], positions=positions,
         actions_accepted=data.get("actions_accepted"), reason=data.get("reason", ""),

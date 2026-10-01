@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import json
 import os
 import shutil
 import stat
@@ -12,7 +13,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from oracle_harness import config, paths
+from oracle_harness import config, golden, paths
 from oracle_harness.lockfile import Lock, Pin
 from oracle_harness.util import sha256_bytes
 
@@ -56,6 +57,25 @@ FAKE_RECORD = '[Board "Standard"]\r\n[Mode "5D"]\r\n\r\n1. e3 / e6\r\n'
 # The repository's own boundary policy, without its waivers: the tests hold the
 # check to the lists it will actually be run with.
 BOUNDARY = dataclasses.replace(config.load().boundary, waivers=())
+
+
+def golden_files_predate_this_schema(source: str) -> str | None:
+    """Why a test of the repository's own golden files cannot run yet, if it cannot.
+
+    Golden files written in an older schema are refused by the harness, and
+    `verify` reports them stale until they are re-recorded (golden --write). Until
+    then a test that reads them has nothing to read: it is skipped with this
+    reason, while `verify` fails. Any other problem with the files is not excused.
+    """
+    path = golden.golden_path(source)
+    try:
+        schema = json.loads(path.read_text(encoding="utf-8")).get("schema")
+    except (OSError, ValueError, AttributeError):
+        return None
+    if schema == golden.SCHEMA:
+        return None
+    return (f"{path.name} is in golden schema {schema}, not {golden.SCHEMA}: re-record the golden files "
+            "(python oracles/harness.py golden --write)")
 
 
 def git(repo: Path, *args: str) -> str:

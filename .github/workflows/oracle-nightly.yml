@@ -1,6 +1,6 @@
 # Nightly and release tiers of the oracle gate (design spec 11.0, decision H27):
-# all three oracles - ftxi/5dchess_engine, penteract/cwmtt and Chess in 5D - over
-# the whole pinned corpus.
+# all three rules oracles - ftxi/5dchess_engine, penteract/cwmtt and Chess in 5D -
+# and the notation repository's parser (parse-only), over the whole pinned corpus.
 #
 #   nightly  every night, and on demand
 #   release  before any generator release or proof-channel enablement: run it by

@@ -1,6 +1,8 @@
+import dataclasses
 import unittest
 
 from oracle_harness import observations
+from oracle_harness.adapters import PARSE_ONLY_SOURCES
 from oracle_harness.observations import Observation, Position
 
 
@@ -15,6 +17,22 @@ def obs(source, rows, status="ok", cap=1000, accepted=None, reason="", last_acti
 START = ("white", False, 20, "none")
 REPLY = ("black", False, 20, "none")
 MATE = ("white", True, 0, "checkmate")
+
+
+def hashed(number: int) -> str:
+    """A stand-in hash: 32 lower-case hex digits."""
+    return f"{number:032x}"
+
+
+def set_up(observation, placements, fingerprints=None, boards=1, pieces=32):
+    """Give the positions of a report what the source set up: placement hashes, and fingerprints if marked."""
+    fingerprints = fingerprints or [None] * len(placements)
+    observation.positions = [
+        dataclasses.replace(position, placement=None if placement is None else hashed(placement),
+                            fingerprint=None if marked is None else hashed(marked),
+                            boards=None if placement is None else boards, pieces=None if placement is None else pieces)
+        for position, placement, marked in zip(observation.positions, placements, fingerprints, strict=True)]
+    return observation
 
 
 class CompareTests(unittest.TestCase):
@@ -128,6 +146,144 @@ class CompareTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             observations.compare(obs("a", [START]), other)
 
+    def test_a_parse_only_source_playing_on_is_no_verdict_against_a_refusal(self):
+        # It applies any move it can place, legal or not (adapters.PARSE_ONLY_SOURCES):
+        # playing on says only that it read the move.
+        reader = PARSE_ONLY_SOURCES[0]
+        read_on = obs(reader, [START, REPLY, START])
+        held_illegal = obs("b", [START, REPLY], status="rejected", reason="cannot_submit")
+        self.assertEqual(self.kinds(read_on, held_illegal), [])
+        self.assertEqual(self.kinds(held_illegal, read_on), [])
+        # Against a refusal that was a failure to read the move text, it shows the text can be read.
+        unread = obs("b", [START, REPLY], status="rejected", reason="no_matching_move")
+        self.assertEqual(self.kinds(read_on, unread), [("legality", 2, "accepted", "rejected:no_matching_move", True)])
+        # Its own failure to read a move is a soft refusal like any other.
+        stuck = obs(reader, [START, REPLY], status="rejected", reason="no_matching_move")
+        self.assertEqual(self.kinds(obs("b", [START, REPLY, START]), stuck),
+                         [("legality", 2, "accepted", "rejected:no_matching_move", True)])
+        self.assertFalse(observations.judges_actions(reader))
+        self.assertTrue(observations.judges_actions("ftxi:naive"))
+
+
+class ParseComparisonTests(unittest.TestCase):
+    """What the two sources set up is compared first (decision H30)."""
+
+    def kinds(self, a, b, **options):
+        return [(item.kind, item.index, item.a_value, item.b_value) for item in observations.compare(a, b, **options)]
+
+    def test_the_same_positions_agree(self):
+        a = set_up(obs("a", [START, REPLY, START]), [1, 2, 3], [11, 12, 13])
+        b = set_up(obs("b", [START, REPLY, START]), [1, 2, 3], [11, 12, 13])
+        self.assertEqual(self.kinds(a, b), [])
+
+    def test_a_placement_divergence_is_reported_once_at_the_first_position(self):
+        a = set_up(obs("a", [START, REPLY, START, REPLY]), [1, 2, 3, 4])
+        b = set_up(obs("b", [START, REPLY, START, REPLY]), [1, 2, 7, 8], boards=2, pieces=31)
+        self.assertEqual(self.kinds(a, b), [("placement", 2, f"{hashed(3)} (1 board, 32 pieces)",
+                                             f"{hashed(7)} (2 boards, 31 pieces)")])
+        self.assertEqual(observations.first_placement_divergence(a, b), 2)
+
+    def test_nothing_is_compared_from_a_placement_divergence_on(self):
+        # Every answer from position 2 on differs - and none of it is listed:
+        # it is about two different positions.
+        a = set_up(obs("a", [START, REPLY, START, REPLY]), [1, 2, 3, 4])
+        b = set_up(obs("b", [START, REPLY, ("black", True, 5, "none"), ("white", True, 0, "checkmate")]), [1, 2, 7, 8])
+        self.assertEqual([kind for kind, *_ in self.kinds(a, b)], ["placement"])
+        # Nor is an action played from a position the two no longer share: refused or read past the end.
+        refused = set_up(obs("b", [START, REPLY, START], status="rejected", reason="illegal_move"), [1, 2, 7])
+        self.assertEqual([kind for kind, *_ in self.kinds(a, refused)], ["placement"])
+        ended = set_up(obs("b", [START, REPLY, START]), [1, 2, 7])
+        self.assertEqual([kind for kind, *_ in self.kinds(a, ended)], ["placement"])
+        # Before the divergence everything is compared as usual.
+        early = set_up(obs("b", [("black", False, 20, "none"), REPLY, START, REPLY]), [1, 2, 7, 8])
+        self.assertEqual([kind for kind, *_ in self.kinds(a, early)], ["placement", "side"])
+        # And where the two never parted, a refusal is a legality disagreement as before.
+        stopped = set_up(obs("b", [START, REPLY], status="rejected", reason="illegal_move"), [1, 2])
+        self.assertEqual([kind for kind, *_ in self.kinds(a, stopped)], ["legality"])
+
+    def test_a_marker_only_divergence_suppresses_nothing(self):
+        # The same pieces, marked differently from position 1 on (a source that
+        # keeps a rook's marker after its king has moved, say): reported once,
+        # beside a rules disagreement that is still compared.
+        a = set_up(obs("a", [START, REPLY, START]), [1, 2, 3], [11, 12, 13])
+        b = set_up(obs("b", [START, ("black", True, 20, "none"), START]), [1, 2, 3], [11, 22, 23])
+        self.assertEqual(self.kinds(a, b), [
+            ("unmoved", 1, f"{hashed(12)} (1 board, 32 pieces)", f"{hashed(22)} (1 board, 32 pieces)"),
+            ("in_check", 1, "False", "True"),
+        ])
+
+    def test_each_run_of_differing_markers_is_reported_where_it_begins(self):
+        # Differ at 1 and 2, agree at 3, differ again at 4: two runs, two entries.
+        a = set_up(obs("a", [START, REPLY, START, REPLY, START]), [1, 2, 3, 4, 5], [11, 12, 13, 14, 15])
+        b = set_up(obs("b", [START, REPLY, START, REPLY, START]), [1, 2, 3, 4, 5], [11, 22, 23, 14, 25])
+        self.assertEqual([(kind, index) for kind, index, *_ in self.kinds(a, b)], [("unmoved", 1), ("unmoved", 4)])
+        # A position whose markers one side does not give neither ends a run nor starts one.
+        gap = set_up(obs("b", [START, REPLY, START, REPLY, START]), [1, 2, 3, 4, 5], [11, 22, None, 24, 25])
+        self.assertEqual([(kind, index) for kind, index, *_ in self.kinds(a, gap)], [("unmoved", 1)])
+
+    def test_the_same_state_includes_the_markers(self):
+        def at(placement, fingerprint=None):
+            return Position(0, placement=hashed(placement), fingerprint=None if fingerprint is None else hashed(fingerprint))
+
+        self.assertTrue(observations.same_state(at(1, 11), at(1, 11)))
+        self.assertFalse(observations.same_state(at(1, 11), at(1, 21)))
+        self.assertTrue(observations.aligned(at(1, 11), at(1, 21)))  # the same boards and pieces all the same
+        self.assertIsNone(observations.same_state(at(1, 11), at(1)))  # one side does not track the markers
+        self.assertIsNone(observations.same_state(at(1, 11), Position(0)))
+
+    def test_a_marker_only_divergence_is_looked_for_only_before_the_two_part(self):
+        a = set_up(obs("a", [START, REPLY, START]), [1, 2, 3], [11, 12, 13])
+        b = set_up(obs("b", [START, REPLY, START]), [1, 9, 3], [11, 19, 23])
+        self.assertEqual([(kind, index) for kind, index, *_ in self.kinds(a, b)], [("placement", 1)])
+        c = set_up(obs("c", [START, REPLY, START]), [1, 2, 9], [21, 12, 19])
+        self.assertEqual([(kind, index) for kind, index, *_ in self.kinds(a, c)], [("unmoved", 0), ("placement", 2)])
+
+    def test_a_source_that_says_nothing_about_its_state_never_diverges(self):
+        a = set_up(obs("a", [START, REPLY]), [1, 2], [11, 12])
+        silent = obs("b", [START, REPLY])
+        self.assertEqual(self.kinds(a, silent), [])
+        unmarked = set_up(obs("b", [START, REPLY]), [1, 2])  # placements only: no fingerprint
+        self.assertEqual(self.kinds(a, unmarked), [])
+        partly = set_up(obs("b", [START, REPLY]), [None, 5])
+        self.assertEqual([(kind, index) for kind, index, *_ in self.kinds(a, partly)], [("placement", 1)])
+
+    def test_two_searches_of_one_implementation_must_parse_alike(self):
+        # Legality and length are left out between searches; what was set up is not.
+        a = set_up(obs("a", [START, REPLY]), [1, 2])
+        b = set_up(obs("b", [START, REPLY]), [1, 3])
+        self.assertEqual([kind for kind, *_ in self.kinds(a, b, replay=False)], ["placement"])
+
+    def test_the_description_says_what_a_parse_divergence_means(self):
+        a = set_up(obs("a", [START]), [1], [11])
+        b = set_up(obs("b", [START]), [2], [12])
+        described = observations.compare(a, b)[0].describe()
+        self.assertTrue(described.startswith(f"r/1 position 0: placement: a={hashed(1)} (1 board, 32 pieces) vs b="))
+        self.assertIn("parse divergence", described)
+
+
+class ParseValueTests(unittest.TestCase):
+    def test_value_at_prints_what_compare_prints(self):
+        a = set_up(obs("a", [START, REPLY, START]), [1, 2, 3], [11, 12, 13])
+        for b in (set_up(obs("b", [START, REPLY, START]), [1, 2, 9], [11, 12, 19]),
+                  set_up(obs("b", [START, REPLY, START]), [1, 2, 3], [11, 22, 13])):
+            found = observations.compare(a, b)
+            self.assertTrue(found)
+            for item in found:
+                self.assertEqual(observations.value_at(a, item.kind, item.index), item.a_value, item)
+                self.assertEqual(observations.value_at(b, item.kind, item.index), item.b_value, item)
+
+    def test_value_at_is_silent_where_nothing_was_said(self):
+        a = set_up(obs("a", [START, REPLY]), [1, None])
+        self.assertIsNone(observations.value_at(a, "placement", 1))
+        self.assertIsNone(observations.value_at(a, "unmoved", 0))  # no markers
+        self.assertIsNone(observations.value_at(a, "placement", 5))
+        self.assertEqual(observations.value_at(a, "placement", 0), f"{hashed(1)} (1 board, 32 pieces)")
+
+    def test_aligned(self):
+        self.assertTrue(observations.aligned(Position(0, placement=hashed(1)), Position(0, placement=hashed(1))))
+        self.assertFalse(observations.aligned(Position(0, placement=hashed(1)), Position(0, placement=hashed(2))))
+        self.assertIsNone(observations.aligned(Position(0, placement=hashed(1)), Position(0)))
+
 
 class ValueAtTests(unittest.TestCase):
     """value_at() is what a known-divergence entry is checked against: it must print what compare() prints."""
@@ -211,6 +367,36 @@ class ValidateTests(unittest.TestCase):
         broken.positions[1] = Position(7, *REPLY)
         self.assertTrue(observations.validate(broken))
 
+    def test_what_was_set_up_is_well_formed(self):
+        self.assertEqual(observations.validate(set_up(obs("a", [START, REPLY]), [1, 2], [11, 12])), [])
+        self.assertEqual(observations.validate(set_up(obs("a", [START, REPLY]), [1, None])), [])
+        cases = {
+            "upper-case hex": dict(placement="A" * 32, boards=1, pieces=32),
+            "too short": dict(placement="a" * 31, boards=1, pieces=32),
+            "not a string": dict(placement=7, boards=1, pieces=32),
+            "a bad fingerprint": dict(fingerprint="x" * 32, placement="a" * 32, boards=1, pieces=32),
+            "negative boards": dict(placement="a" * 32, boards=-1, pieces=32),
+            "boolean pieces": dict(placement="a" * 32, boards=1, pieces=True),
+            "a fingerprint without a placement": dict(fingerprint="a" * 32, boards=1, pieces=32),
+            "a placement without counts": dict(placement="a" * 32),
+        }
+        for name, fields in cases.items():
+            report = obs("a", [START])
+            report.positions[0] = Position(0, *START, **fields)
+            self.assertTrue(observations.validate(report), name)
+
+    def test_what_was_set_up_is_said_from_the_start_and_marked_throughout(self):
+        # Said at every position, or only up to where the source stopped saying it.
+        self.assertEqual(observations.validate(set_up(obs("a", [START, REPLY, START]), [1, 2, None])), [])
+        gap = observations.validate(set_up(obs("a", [START, REPLY, START]), [1, None, 3]))
+        self.assertEqual(len(gap), 1)
+        self.assertIn("position 2 says what was set up there, and position 1 does not", gap[0])
+        self.assertTrue(observations.validate(set_up(obs("a", [START, REPLY]), [None, 2])))
+        # Markers at one position and not at another.
+        mixed = observations.validate(set_up(obs("a", [START, REPLY]), [1, 2], [11, None]))
+        self.assertEqual(len(mixed), 1)
+        self.assertIn("unmoved markers are given at some positions and not at others", mixed[0])
+
 
 class GoldenSupportTests(unittest.TestCase):
     def test_status_change_is_reported(self):
@@ -252,6 +438,15 @@ class GoldenSupportTests(unittest.TestCase):
         self.assertEqual(observations.coverage(golden, obs("a", [START], status="timeout")), (4, 8))
         self.assertEqual(observations.coverage(golden, obs("a", [(None, None, 20, None), REPLY])), (5, 8))
 
+    def test_a_source_that_stops_saying_what_it_set_up_loses_coverage(self):
+        golden = set_up(obs("a", [START, REPLY]), [1, 2], [11, 12])
+        self.assertEqual(observations.coverage(golden, set_up(obs("a", [START, REPLY]), [1, 2], [11, 12])), (16, 16))
+        self.assertEqual(observations.coverage(golden, obs("a", [START, REPLY])), (8, 16))
+        self.assertEqual(observations.coverage(golden, set_up(obs("a", [START, REPLY]), [1, 2])), (14, 16))
+        # A search cut short after the state was printed keeps what was set up.
+        cut = set_up(obs("a", [START, (None, None, None, None)], status="timeout"), [1, 2], [11, 12])
+        self.assertEqual(observations.coverage(golden, cut), (12, 16))
+
     def test_what_settles_a_question(self):
         self.assertTrue(observations.decisive("in_check", False))
         self.assertTrue(observations.decisive("legal_actions", 0))
@@ -263,11 +458,22 @@ class GoldenSupportTests(unittest.TestCase):
     def test_json_round_trip(self):
         original = obs("a", [START, ("black", True, 20, "none"), (None, None, None, None)],
                        status="rejected", reason="cannot_submit", accepted=2, last_action=True)
+        set_up(original, [1, 2, 3], [11, None, 13])
         original.detail = "why"
         restored = observations.from_json("a", "r/1", 1000, observations.to_json(original))
         self.assertEqual(restored.positions, original.positions)
         for name in ("status", "reason", "detail", "actions_accepted", "last_action", "cap"):
             self.assertEqual(getattr(restored, name), getattr(original, name), name)
+
+    def test_a_row_holds_the_answers_then_what_was_set_up(self):
+        report = set_up(obs("a", [START]), [1], [11], boards=3, pieces=60)
+        self.assertEqual(observations.to_json(report)["positions"],
+                         [["w", False, 20, "none", hashed(11), hashed(1), 3, 60]])
+        self.assertEqual(observations.ROW_FIELDS, ("side", "in_check", "legal_actions", "terminal",
+                                                   "fingerprint", "placement", "boards", "pieces"))
+        # A row of the old four columns is not read as one of the new.
+        with self.assertRaises(ValueError):
+            observations.from_json("a", "r/1", 1000, {"status": "ok", "positions": [["w", False, 20, "none"]]})
 
 
 if __name__ == "__main__":
