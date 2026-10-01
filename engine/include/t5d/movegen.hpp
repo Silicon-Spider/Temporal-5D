@@ -54,7 +54,9 @@
 #define T5D_MOVEGEN_HPP
 
 #include <cstddef>
+#include <cstdint>
 #include <span>
+#include <vector>
 
 #include "t5d/board.hpp"
 #include "t5d/move.hpp"
@@ -69,6 +71,54 @@ namespace t5d {
 /// of the mover's colour. Clears `out` first; reusing one list across calls
 /// avoids reallocating. Empty when no move may be made now (Q4).
 void generate_moves(const GameState& state, MoveList& out);
+
+/// A geometric relation of one of the mover's pieces (design spec §6, "Typed
+/// edge biases"; register B11 - PROVISIONAL; t5d/expand.hpp builds the typed
+/// relations on these). Found by the move generator's own geometry, so a
+/// relation and a move never disagree about what a piece reaches:
+///
+///  * Defence: the target square holds a piece of the mover's that the
+///    source piece's movement geometry reaches with only that piece in the
+///    way - the capture the source would make if that piece were an enemy
+///    (the same paths, J7, J8, and the same landing rules, Q8, Q20).
+///  * XRay (sliders only): along a ray, the first piece's square - of either
+///    colour - is passed as if empty, the ray continues under the same rules
+///    and stops at the next piece, of either colour, which is the target -
+///    recorded when a capture or defence of it would be (its board a
+///    destination under the ruleset).
+///
+/// Neither reads what counts as an attack on a royal piece (check and pins:
+/// check detection, stage E4's under the ruling, R1).
+struct GeometricRelation {
+  enum class Kind : std::uint8_t { Defence = 0, XRay = 1 };
+
+  std::int32_t from_timeline = 0;
+  std::int32_t from_half_turn = 0;
+  std::int32_t to_timeline = 0;
+  std::int32_t to_half_turn = 0;
+  std::int8_t from_square = kNoSquare;
+  std::int8_t to_square = kNoSquare;
+  Kind kind = Kind::Defence;
+
+  friend constexpr bool operator==(const GeometricRelation&,
+                                   const GeometricRelation&) noexcept = default;
+};
+
+using RelationList = std::vector<GeometricRelation>;
+
+/// Which geometric relations to collect.
+struct RelationKinds {
+  bool defence = false;
+  bool xray = false;
+};
+
+/// generate_moves - the same moves, in the same order - and, in the same pass,
+/// the geometric relations `kinds` asks for, of the same pieces (the mover's
+/// pieces on the boards the moves start from; none when no move may be made
+/// now, Q4). Clears both lists first. Order: the moves' (playable boards by
+/// ascending timeline, pieces by ascending square, directions in table order).
+void generate_moves(const GameState& state, MoveList& out, RelationList& relations,
+                    RelationKinds kinds);
 
 /// The pseudo-legal moves from timeline p's playable board, appended to `out`
 /// (nothing if that board is not the mover's or no move may be made now).

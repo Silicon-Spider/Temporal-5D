@@ -15,20 +15,44 @@ M5 - building it would break a rule).
 
 ## Where things stand
 
-*Updated 2026-10-01, night.*
+*Updated 2026-10-02.* Work in the tree that is not yet committed is listed under
+**In the tree, uncommitted** - a session that resumes starts there.
 
 - **Done:** pre-flight; step 1 (CI green on Linux, H35); step 2A (H30
   fingerprints, the notation parse-only oracle); the rules reference; CHECKPOINT 1
   - reported, then **ruled by the user** (register H36-H40 and I11 in the updated
   design documents, committed 666c4a0; rulings R1-R7 recorded in
   `docs/rules/README.md`, now the rulebook, H38); engine E1+E2 (ae35da3, CI green
-  on g++ 13 and 14); network N1+N2 (built and reviewed; being committed).
-- **Running:** step 2B (H32 stable answers, H33 integrity, H34 telltales, the
-  engine parse mode in the gate); engine E3 (expansion: the move graph, W(k) and
-  E(k), side-to-move typed relations; the `t5d-measure` and `t5d-bench` tools);
-  engine E4 in a separate worktree (check status and submission legality per H36,
-  legal-action enumeration, the naive and hypercuboid mate detectors per H37, the
-  gate adapter's full mode); the upstream drafts of the two oracle defects.
+  on g++ 13 and 14); network N1+N2 (bafa2c4; 447 tests; CI job `network`); the
+  upstream drafts of the two oracle defects (3277bb2); engine E3 - expansion and
+  the Phase 1 measurement tools (committed 2026-10-02; 299 tests).
+- **In the tree, uncommitted (2026-10-02):**
+  - *Step 2B* (H32 stable answers - required sets at 100%, `golden --write
+    --repeat 2`, per-position cost files, calibration probe; H33 - golden
+    `MANIFEST`, one verified snapshot per run, the harness-modified check,
+    CODEOWNERS; H34 telltales; the engine's parse mode; H36's `in_check`
+    definition; H37's guard against budget-limited verdicts; H38's rulebook pin in
+    `gate.toml` with `harness.py rulebook --pin`): built and fixed after review
+    (17 findings), selftest 589 OK. `verify` fails only on the golden files, which
+    need `py oracles/harness.py golden --write --repeat 2 --jobs 8` - **on a quiet
+    machine** (the recording measures each answer's cost, and the costs decide the
+    required sets). Commit 2B with the re-recorded golden files, never without
+    them. Also to apply with it: AGENTS.md's list of forbidden ways to make the
+    gate pass (the coverage floors are gone - name budgets, `[stability] margin`,
+    `proof_share`, re-recording on a loaded machine, hand-editing cost files,
+    `calibration.json` or `MANIFEST`, moving the rulebook pin unreviewed) and
+    CLAUDE.md's commands (`--repeat 2`, `rulebook`).
+  - *Engine E4* (check status and submission legality per H36/R1, legal actions
+    counted as distinct successor states, the naive and hypercuboid detectors
+    under H37, `t5d-gate` full mode): committed on branch
+    `worktree-agent-a6b6e1b848a0af712` (a371893..1113269, 299 tests), not yet
+    merged; under adversarial review (rules fidelity, detectors and counting, gate
+    contract and tests). Merging it after E3: E4 makes `submit()` test royal
+    safety by default, so E3's random pseudo-legal play must pass
+    `CheckRuling::none()`.
+  - *Network N3* (block-causal scope, the cached path, root refresh and the rung-1
+    fork, KV precision, the §15.2 equivalence tests, §15.3 cost figures): being
+    built in `python/`.
 - **Next:** merge E3 and E4; wire the rulings into the gate (known-divergence
   entries for ftxi's 78 check verdicts and for both oracle defects, as telltales;
   the rulebook pin, H38; the engine configured, parse mode then full mode); the
@@ -239,15 +263,26 @@ count as sources of attack (spec §11.0 item 1)**:
   it illegal; moving into check mid-turn is allowed (H36). A mate verdict needs an
   exhaustive search that terminated; an exhausted budget is "unknown" (H37).
   `docs/rules/README.md` is the rulebook, pinned, sources ranked (H38).
-  Activation is the count rule (Q1 closed): under it none of the 18 positions Q1
-  would have moved changes cluster - to be confirmed by the engine's own check
-  detection. The pawn's double step exists along both axes for both colours (Q15
+  Activation is the count rule (Q1 closed). The 18 positions Q1 would have moved
+  stay where the count rule filed them: in the checkpoint's own data (clusters.json,
+  whose count-rule activity matched cwmtt's at all 611 positions it reports) every
+  one of them is check only under Q10's readings 4 and 5 - an attacker on an active
+  optional board ahead of the present - so none is check under R1 and none flips.
+  The engine's check detection is to confirm it independently once it can read
+  those records (cwmtt niceAndrey and wide need Q4's ruling and the lenient
+  annotation reading). The pawn's double step exists along both axes for both colours (Q15
   in part; ftxi's missing Black step is the defect). No repetition rule, a project
   decision (H39); self-play's turn cap is a convention scored as a draw (I11).
   Castling and en passant attack tests are per-board (H40; the engine's reading
   already). The two oracle defects are drafted for upstream in
   `docs/checkpoints/upstream/` (the user files them) and go into the
-  known-divergences file as telltales.
+  known-divergences file as telltales. The drafts are done: each has a hand-built
+  minimal record reproduced on the pinned code, the root cause at the pinned commit,
+  a fix checked in a scratch copy (5d-chess-js: pass the node's board, `mate.js`
+  157 and 161; ftxi: the Black guard at `multiverse_base.cpp` 937), and the rule
+  from public sources. Two further ftxi leads, not yet checked against the
+  rulebook: a White brawn's non-capturing two-axis step listed three times, and a
+  segmentation fault in `5dtools ... naive` on a 5x5 custom record.
 - **The engine's parse mode on the corpus** (`t5d-gate --parse-only`, before the
   harness's parse mode exists): 647 positions; the early stops fall into three
   kinds. (a) Rules Q4, moves after the present has shifted: the engine follows
@@ -288,8 +323,20 @@ the network is PyTorch on CPU under `python/`.
   in `engine/README.md`); a non-default choice changes the ruleset ID and so the
   Zobrist key. Hooks for the check ruling: `CheckRuling::royals_safe` (C4),
   `in_check` (C6), `has_legal_action` (C5), `CastlingAttacks::AnyBoard`.
-- **Network N1** (dense v1 with random weights; 152 tests) is built and reviewed;
-  N2 (the attention structure) is running; `python/` is committed when N2 lands.
+- **Network N1 + N2 - committed 2026-10-01** (`python/`, PyTorch on CPU, random
+  weights; 447 tests, ruff clean; 41 + 32 injected mutants killed). N1: tokens
+  (66N + 16, board-major), piece and per-board features with Δt-to-present, 4D
+  RoPE (file 3 / rank 3 / timeline 4 / time 6 pairs, FP32), 2 + 16 registers, the
+  dense trunk (d 256, L 16, 8 heads, FFN 8x, BF16 autocast), the bilinear pointer
+  policy, the 51-bin value head and the auxiliary heads (21,358,601 parameters,
+  F1; the L24-ff12 preset is 44.5M, F2). N2: the move-graph mask on 2 heads (B9),
+  the routing table (B10), typed edge biases (B11) and board-pair smolgen (B12)
+  behind flags, and B14's block-sparse attention in a CPU gather form - 4-board
+  query blocks over whole key boards, plans built once per forward, per-block
+  recomputation under autograd - with chunked and dense paths as references; at
+  240 boards one FP32 forward takes about 9 s and 0.86 GB on the dev CPU
+  (indicative, not a §15.3 figure). Every committed-class ambiguity is a named
+  parameter with a placeholder default (spec issues 9 and 16).
 
 ### 4. After the ruling - in progress (unparked 2026-10-01)
 
@@ -300,7 +347,39 @@ hypercuboid detector under H37 (a budget-limited search can only return
 "unknown" - a test pins it), the two detectors cross-checked, and
 `t5d-gate`'s full mode. Then each against the gate.
 
-### 5. Phase 1 measurements - not started
+### 5. Phase 1 measurements - tools built, measurements pending a quiet machine
+
+Engine E3 (committed 2026-10-02) built what M9 and M7 need: `expand()` (the
+mover's moves, the move graph, W(k) and E(k), side-to-move typed relations, board
+and square features), its C API, `t5d-measure` (per-position W/E at k = 0/4/8/16,
+and `--summary`, a curve de-duplicated by position and by game) and `t5d-bench`
+(search-like streams, interleaved rounds, thread CPU time, per-round thread
+scaling, raw / caliper-matched / no-move flatness series - labels, never
+verdicts). Moves are still pseudo-legal; `expansion_moves()` in `src/expand.cpp`
+is the one place to switch to E4's legal actions after the merge.
+
+Preliminary figures (2026-10-02, dev, g++ 16.2 -O2, SYNTHETIC random-play
+positions, 16 games per class; **machine loaded 17-97%, so not measurements**):
+scope+relations expansion 41.6k/s per thread at N240 T8 (|E(8)| 12.9, 810 moves)
+and 24.3k/s at N600 T12 (|E(8)| 38.1, 1,601 moves) - both about 2x M9's per-GPU
+targets on one thread; 12 threads 9-11x. The history term left after the O(N)
+restructure is about 0.7 ns per board (2% of an expansion at N600). Matched
+flatness, three loaded rounds: +13% [-6, +17] - inconclusive. The corpus |E|
+curve (with `--moves-after-shift`; distinct positions) reaches only 240-399
+boards in 2 games: it cannot decide M7 (spec issue 26).
+
+**Reading of the brief's STOP band** (the brief, not the spec, says "a §15.6
+result within ±10% of its threshold" stops the run; spec issue 27): ±10% relative
+to the threshold's value - throughput 18,000-22,000/s at 240 boards and
+9,000-11,000/s at 600; flatness growth of 9-11% from 100 to 600 boards; the 6b
+percentages 45-55% of positions (and 2.7-3.3 / 4.5-5.5 forcing half-turns at the
+median). A result inside a band stops for the user.
+
+Next: the quiet-machine run - `build/engine/t5d-bench --samples 15 --emit
+build/m9/pos --json build/m9/m9.json` (accept only if the 1-thread load median is
+near the bench's own) - then M9's verdict in `docs/MEASUREMENTS.md`, re-measured on
+legal moves after E4; M7 on the corpus as an upper bound and a request to the user
+for game records.
 
 ### 6. Phases 2-3 - not started
 
@@ -338,11 +417,14 @@ hypercuboid detector under H37 (a budget-limited search can only return
 
 | ID | Status | Notes |
 |---|---|---|
-| A1-A3 | built, tested | Network N1: tokens, features, per-board flags, Δt-to-present (committed with `python/`) |
+| A1-A3 | built, tested | Network N1: tokens, features, per-board flags, Δt-to-present |
 | A4 | built, tested | Engine: every board immutable once published; persistent multiverse sharing history in chunks |
 | A5 | not started | Piece-centric tokenisation, behind a flag |
-| B1, B2, B4, B8, B9, B14 | not started | Committed network items |
-| B5, B6, B10, B11, B12 | not started | Provisional / prototype: behind flags |
+| B1, B2, B4, B8 | built, tested | Network N1: one weight set, unified attention, 4D RoPE, 2 + 16 registers |
+| B9 | built, tested | Network N2: move-graph mask on 2 heads (direction and register queries are placeholders, spec issue 16) |
+| B14 | built in part | Network N2: block-sparse attention in a CPU gather form; the FlexAttention / GPU kernel is not built (no CUDA here) |
+| B5, B6 | built, tested | Network N1, behind flags |
+| B10, B11, B12 | built, tested | Network N2, behind flags (B12 as relative board-pair cells, full rank) |
 | B3 | not built (rule) | Contingency only; no trigger |
 | B7 | not built (rule) | Deferred; no §15.2/§15.3 need (d_head is a config value anyway) |
 | B13 | not built (rule) | Refused |
@@ -356,15 +438,15 @@ hypercuboid detector under H37 (a budget-limited search can only return
 | C15 | not started | FP8 KV storage, varlen |
 | C16 | not built (rule) | Deferred; last, only if node-starved |
 | C21 | not built (rule) | Refused |
-| D1, D3, D4 | not started | Output heads (step 6) |
+| D1, D3, D4 | built, tested | Network N1: pointer policy, 51-bin value head, auxiliary heads (D4's reply space, label set and moves-left unit are placeholders, spec issue 9) |
 | D2 | not started | Undecided: both arms awaited by trained ablations 6g/6k |
 | E1, E5, E7, E9 | not started | Search |
 | E2, E3, E8 | not started | Behind flags |
 | E6 | not built (rule) | Refused |
-| F1, F2 | not started | Model config; F2 behind a flag |
+| F1, F2 | built, tested | 21,358,601 parameters (F1); the L24-ff12 preset, 44.5M (F2) |
 | F3 | not built (rule) | Refused |
 | F4 | parked | NNUE only after 6b passes (M8) |
-| G1 | not started | Precision rules |
+| G1 | built, tested | BF16 trunk under autocast; FP32 heads and RoPE |
 | G2 | not started | FP8 attention - no FP8 kernels on this machine |
 | G3, G4, G5, G6 | not built (rule) | Deferred / held open / refused |
 | I1-I10 | not started | Training code may be written and smoke-tested only; I7 and I8 not built (M5) |
@@ -374,9 +456,9 @@ hypercuboid detector under H37 (a budget-limited search can only return
 
 | ID | Status | Notes |
 |---|---|---|
-| M7 | not started | Window verdict (step 5) |
+| M7 | tools built | `t5d-measure`; the corpus cannot decide it (spec issue 26) - game records requested |
 | M8 | not started | Scanner verdict (6b), after M9 (M10's order) |
-| M9 | not started | Movegen verdict, pseudo-legal first (provisional) |
+| M9 | tools built | `t5d-bench`; preliminary only (loaded machine); the quiet-machine run is next |
 | M11 | built | Licence recorded in PROVENANCE.md |
 
 ## Parked, and why
@@ -521,6 +603,61 @@ decision), and what is parked.
     before the move that shifts the present, a rewinding branch comes last, and J6
     makes some orders reach different states. It bears on MCGS (C11) and the TT's
     expected hit rate.
+16. **Network N2's committed-class placeholders** (each a parameter, default
+    first; nothing in the spec or register decides them): (a) `move_graph_direction`
+    = symmetric - B9's mask direction; (b) `masked_head_registers` = read - what a
+    register query on a masked head reads when no relation covers it; (c)
+    `same_board_registers` = own_board - whether B10's "same board only" covers
+    per-board registers as queries; (d) `relations_head_types` = all six B11 types
+    (the narrow reading is attack and defence); (e) `relations_head_direction` =
+    follows (a); (f) `rope_roles_source` = table; (g) under the routing table,
+    `move_graph_heads` is not used and the table has one move-graph head. Also: §6
+    calls board-pair smolgen "full-rank" while §9.2's sizing implies a rank-32
+    bilinear form; the built default is full rank over relative board-pair cells,
+    the bilinear form an option; and "14.7 MMAC per head per layer" is the cost of
+    a 256-wide output over every pair, not of the generator. Proposed spec edits
+    12-18.
+17. **E's "some live piece"** (§10.4.1) is read as the mover's pieces: E comes
+    from the move generator at the node, and the opponent's destinations enter at
+    the child (§10.4.3's "search re-partitions per node"). R1 now makes the
+    both-colours reading buildable; whether to is a scope choice, not built.
+18. **Source boards outside W** (src_extra / src_only): the head of an inactive
+    timeline is playable but gets no band; the spec does not say whether scope
+    must hold the source square of a move for the policy pointer. Live in the
+    corpus: src_only(8) > 0 at 9/7/7/8/13 distinct positions by size bucket.
+    Counted apart, never folded into |E|.
+19. **Travel-threat** is named in §6 and B11 and used as a class of forcing moves
+    in §11.1; no edge is defined. Not built.
+20. **"Per GPU's CPU allocation"** (§15.6 M9) is undefined: how many cores is one
+    GPU's share? The bench reports per thread and per machine.
+21. **What M9's "expansion" includes**: moves only, + move graph, + W/E, + typed
+    relations, + per-board features? The full per-board feature export is O(N) by
+    construction (it writes every board), so "flat in N" can hold only for the
+    windowed expansion.
+22. **"At fixed |E|"** (M9 flatness): |E| cannot be held fixed along a game; the
+    bench approximates it by caliper-matching moves, |E(8)| and the mover's pieces
+    within 10%.
+23. **Branch origins: mandatory core or filler?** §10.4.3 lists them after the
+    heads' recent k; §15.6's W column ((k+2)T - 1) counts them. |W(8)| with and
+    without origins on the corpus: 34.5/33, 68/62, 122/114, 185/174 by bucket.
+    The engine reports both.
+24. **W(k)'s unit and the present band**: k counts half-turns (one board each);
+    the present band is read as the active heads.
+25. **5DFEN records no branch origins** (or creation order), so a position read
+    from 5DFEN has a smaller W and no lineage parent - matters for the network's
+    lineage-based causal scope (N3) too.
+26. **The corpus cannot decide M7.** Real games in the corpus: 5 / 3 / 2 / 0 games
+    in the 100-159 / 160-239 / 240-399 / 400+ buckets, at 8 / 16 / 24 timelines
+    against §15.6's assumed 7-12, and only under the Q4 reading the engine does
+    not use by default. §10.4.2 asks for real game records; requested from the
+    user.
+27. **The STOP band is the brief's, not the spec's.** "A §15.6 result within
+    ±10% of its threshold" stops the run; the band's reading (relative to the
+    threshold) is recorded in step 5. Not a spec edit.
+28. **What is a "legal move" for the expansion after E4?** R1 judges legality per
+    action ("moving into check during a turn is allowed"): a single move is legal
+    if it is part of some legal action. The expansion will offer the moves that
+    begin a legal action (E4's enumeration), to be confirmed at the merge.
 
 ## Proposed spec edits
 
@@ -571,6 +708,39 @@ says now, what it should say, why.
 11. **§11.0 item 1**: "plus the royal queen in Reversed Royalty" - proposed: "in
     Reversed Royalty the royal is the queen; its king is a common king, not royal"
     (spec issue 11).
+12. **§6 / B9**: state the mask's direction, that a token always reads itself,
+    what register queries on masked heads read, and that padding is excluded
+    (spec issue 16a, b).
+13. **§6 table / B9-B10**: say whether B9's "at least 2 heads" counts the
+    relations head; define "attack/defend relations" in B11's types and that
+    head's direction; state that "same board only" covers per-board registers as
+    queries (16c-e, g).
+14. **§4.1 / B5**: what per-head specialisation means when the routing table is
+    off (16f).
+15. **§6, §9.2, §14.4 / B12**: keep "full-rank" and specify the generator - the
+    global latent read through a per-head table over relative board-pair cells,
+    bilinear in (latent, cell), with no absolute board index; record the
+    board-descriptor bilinear form as the rank-32 alternative; correct "14.7 MMAC
+    per head per layer" (that is 256 x 240^2, a 256-wide output over every pair);
+    say that pairs with a global register get no smolgen bias.
+16. **§6 / B11**: one learned scalar per head per relation type, shared across
+    layers, every head carrying every type.
+17. **§6.1, §10.1 row 4, §13.1 item 6 / B14**: block-sparse attention is built in
+    a CPU gather form; the FlexAttention kernel is still to build; under autograd
+    the memory bound needs per-block recomputation.
+18. **§6 vs §11**: say what the generator exports as "the move graph" (the side to
+    move's moves - engine stage E3's reading - or both colours).
+19. **§10.4.1**: define E as the out-of-window travel destinations of the
+    mover's moves, a branching move counting at the history board it targets
+    (spec issue 17).
+20. **§10.4.3**: define W(k) - unit, present band - and say whether branch
+    origins are core or filler (issues 23, 24).
+21. **§15.6 / M9**: define the CPU allocation per GPU, what "expansion" includes,
+    and how flatness at fixed |E| is measured (issues 20-22).
+22. **§6 / B11**: define the travel-threat relation, or drop it and cite §11.1's
+    forcing-move class instead (issue 19).
+23. **§2.2**: the has-moved flag exists only for pawns, rooks, kings and brawns
+    (5DFEN's `*`); say so.
 
 ## Session log
 

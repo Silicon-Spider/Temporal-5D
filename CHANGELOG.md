@@ -10,6 +10,93 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-02 - Engine CI: t5d-bench builds on Linux
+
+- `engine/tools/t5d_bench.cpp`: the synthetic seeds are computed with
+  `std::uint64_t` literals. With `ull` literals, g++ 13 and 14 on Linux - where
+  `uint64_t` is `unsigned long`, not `unsigned long long` as on MinGW - warn under
+  `-Wsign-conversion`, and the engine job failed on E3's commit.
+- Spec: no part of the spec describes the build.
+
+### 2026-10-02 - Engine stage E3: expansion, its C API, the Phase 1 measurement tools
+
+- `engine/`: `expand()` (`t5d/expand.hpp`, `src/expand.cpp`, `t5d/records.h`)
+  produces, for the player to move, the pseudo-legal moves (with capture, travel
+  and branching flags), the move graph (B9), W(k) - each active timeline's band of
+  k half-turns plus branch origins, reported apart - and E(k), the out-of-window
+  travel destinations (§10.4.1), with source boards outside W counted apart;
+  side-to-move typed relations behind flags (attack, defence, x-ray - B11,
+  provisional; pin and check are E4's; travel-threat is undefined); board and
+  square features in `python/t5d/net/state.py`'s layout, plus the lineage parent.
+  No per-frozen-board work - per-board arrays are computed on first use - and no
+  allocation in steady state. Moves are chosen in one place, ready for E4's legal
+  actions.
+- C API games: from a record, 5DFEN or a variant; replay, apply and submit under a
+  per-game check ruling; expand into flat arrays.
+- Tools: `t5d-measure` (per-position W/E at k = 0/4/8/16, and `--summary`, a curve
+  de-duplicated by position and game) and `t5d-bench` (search-like streams,
+  interleaved rounds, thread CPU time, thread scaling, raw / matched / no-move
+  flatness series, reported as ranges and labels, never verdicts); a seeded
+  generator of SYNTHETIC positions for throughput only.
+- 40 new tests (299), including a ruleset-aware from-scratch reference; reviewed
+  adversarially (19 findings, all dealt with: 18 fixed, one a question about the
+  brief's STOP band); 20 injected mutants killed.
+- `docs/BUILD_LOG.md`: step 5's state, preliminary figures (loaded machine - not
+  measurements), the reading of the brief's ±10% STOP band, spec issues 17-28,
+  proposed spec edits 19-23.
+- Spec: §6 (B9, B11), §10.4.1-§10.4.3 (C5, C7 - measurement only; no window
+  code), §11.1, §15.6 (M7, M9); spec issues 17-28 and proposed edits 19-23 in the
+  build log.
+
+### 2026-10-01 - Upstream drafts of the two oracle defects; network CI fix
+
+- `docs/checkpoints/upstream/`: draft bug reports for the user to file (rulebook
+  R7) - 5d-chess-js's exhaustive mate search passes a search-tree node where a board
+  is expected, generates no moves and reports checkmate where a legal turn exists;
+  ftxi's move generator never gives a Black pawn or brawn the two-timeline double
+  step. Each has a hand-built minimal record verified on the pinned code, the root
+  cause at the pinned commit, a fix checked in a scratch copy, and the rule from
+  public sources; the README lists what to check before filing.
+- `python/t5d/net/heads.py`: the value head's bin centres are computed from
+  integers. `torch.linspace` put the middle centre at 2.2e-8 on Linux, not 0, and
+  the first Linux run of the network job failed on it (446 of 447 passed); a draw
+  must sit exactly on a centre.
+- `.gitignore`: agent worktrees (`.claude/worktrees/`).
+- `docs/BUILD_LOG.md`: the 18 Q1 positions confirmed unmoved under the count rule
+  from the checkpoint's data; the drafts' state and two further ftxi leads.
+- Spec: §11.0 "Triage by cluster" and H31 (the defects found by triage);
+  §8.3 / D3 (the value head's 51 bins - no spec change); nothing else.
+
+### 2026-10-01 - The network stack, stages N1 and N2 (random weights)
+
+- `python/` (package `t5d`, PyTorch on CPU; `cd python; py -m pytest`), built to
+  spec §2-§9 with random weights - no training run:
+  - N1, dense v1: the token layout (66N + 16, board-major) and its input contract
+    (`t5d/net/state.py`, the boundary the rules engine will fill); piece and
+    per-board features with Δt-to-present; 4D RoPE with asymmetric pairs in FP32;
+    2 per-board and 16 global registers; the trunk (d 256, L 16, 8 heads, FFN 8x)
+    under BF16 autocast; the bilinear pointer policy over candidate moves, the
+    51-bin value head and the auxiliary heads; 21,358,601 parameters (F1) and the
+    L24-ff12 preset (F2); synthetic positions and a training smoke test of a few
+    optimiser steps on synthetic data (allowed by the brief - no training run).
+  - N2, the attention structure: the move-graph mask on 2 heads (B9); the routing
+    table (B10), typed edge biases (B11) and board-pair smolgen (B12, full rank
+    over relative board-pair cells) behind flags; B14's block-sparse attention in
+    a CPU gather form, the default, with per-block recomputation under autograd,
+    and chunked and dense paths as references.
+  - 447 tests: masks against brute-force key sets, chunked and block-sparse equal
+    dense (outputs and gradients), invariances (board order, translation, batch
+    composition), precision bounds, parameter counts, no inert switch; 73
+    injected mutants across the two stages, all killed. Each stage was reviewed
+    adversarially and every finding (15 for N1, 12 for N2) fixed.
+- `.github/workflows/network.yml`: lint and test on ubuntu-24.04 when `python/`
+  changes, with PyTorch 2.13.0 (CPU), NumPy 2.5.2 and ruff 0.16.5.
+- Spec: §2.1-§2.3, §3.1-§3.2, §4.1, §5, §6, §6.1, §8.1, §8.3, §9.2, §10.1, §10.2,
+  §12.4, §13.1 item 6, §14.4; A1-A3, B1-B2, B4-B6, B8-B12, B14, D1, D3, D4, F1,
+  F2, G1. Committed-class ambiguities are parameters with placeholder defaults
+  (spec issues 9 and 16); proposed spec edits 5-9 (N1) and 12-18 (N2) in
+  `docs/BUILD_LOG.md`.
+
 ### 2026-10-01 - The rulebook records the CHECKPOINT 1 rulings
 
 - `docs/rules/README.md` is now the project's rulebook (H38): a preamble ranks the

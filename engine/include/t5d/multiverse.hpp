@@ -139,6 +139,18 @@ class BoardSequence {
   const_iterator begin() const noexcept { return const_iterator(this, 0); }
   const_iterator end() const noexcept { return const_iterator(this, size_); }
 
+  /// Calls f(board) for every board, oldest first - chunk by chunk, without
+  /// operator[]'s per-board lookup of its chunk (for walks over every board).
+  template <class F>
+  void for_each(F&& f) const {
+    if (chunks_) {
+      for (const std::shared_ptr<const Chunk>& chunk : *chunks_) {
+        for (const BoardRef& board : chunk->boards) f(board);
+      }
+    }
+    for (std::size_t i = 0; i < tail_size_; ++i) f(tail_[i]);
+  }
+
  private:
   struct Chunk {
     std::array<BoardRef, kChunkSize> boards;

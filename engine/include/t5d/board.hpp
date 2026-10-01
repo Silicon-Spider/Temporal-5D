@@ -99,6 +99,14 @@ class Board {
   /// The en-passant square, or kNoSquare. Reserved for stage E2.
   int en_passant() const noexcept { return d_.en_passant; }
 
+  /// The mailbox as bytes: Piece::code() of every square, index = square
+  /// (64 bytes, whatever the board's size; squares off the board are 0). For
+  /// readers that decode many squares at once (t5d/expand.hpp's features).
+  const std::uint8_t* codes() const noexcept {
+    static_assert(sizeof(Piece) == 1, "a Piece is its one-byte code");
+    return reinterpret_cast<const std::uint8_t*>(d_.squares.data());
+  }
+
   int piece_count() const noexcept { return std::popcount(occupied()); }
 
   /// The coordinate-free content hash (t5d/zobrist.hpp), computed as the board
