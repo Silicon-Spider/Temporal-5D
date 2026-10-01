@@ -72,7 +72,22 @@
       "Bash(graft:*)",
       "Bash(npx graft:*)",
       "Bash(graft-dev:*)",
-      "Bash(node dist/cli.js:*)"
+      "Bash(node dist/cli.js:*)",
+      "Bash(git push:*)",
+      "PowerShell(git push:*)"
+    ],
+    "deny": [
+      "Bash(git push *--force*)",
+      "Bash(git push -f*)",
+      "Bash(git push * -f*)",
+      "Bash(git push * +*)",
+      "PowerShell(git push *--force*)",
+      "PowerShell(git push -f*)",
+      "PowerShell(git push * -f*)",
+      "PowerShell(git push * +*)",
+      "mcp__github__create_or_update_file",
+      "mcp__github__push_files",
+      "mcp__github__delete_file"
     ]
   }
 }
