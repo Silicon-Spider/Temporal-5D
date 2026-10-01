@@ -8,7 +8,7 @@ import signal
 import sys
 import unittest
 
-from . import boundary, build, config, corpus, gate, lockfile, observations, paths, provenance, toolchain
+from . import boundary, build, config, corpus, fingerprint, gate, lockfile, observations, paths, provenance, toolchain
 from .adapters import ORACLE_SOURCES, RunOptions, make_source
 from .util import Finding, HarnessError, format_findings, kill_running
 
@@ -67,6 +67,16 @@ def cmd_build(args: argparse.Namespace) -> int:
     return 0
 
 
+def _diagnostic_line(event: dict) -> str:
+    """A diagnostic event as `observe` prints it: an actions event with its lists sorted, as the harness sorts them."""
+    if event.get("event") == "actions":
+        try:
+            event = fingerprint.canonical_actions(event)
+        except ValueError as error:  # a StateError, or anything else a driver's output trips
+            print(f"malformed actions event, shown as printed: {error}", file=sys.stderr)
+    return json.dumps(event)
+
+
 def cmd_observe(args: argparse.Namespace) -> int:
     lock = lockfile.load()
     cfg = config.load()
@@ -75,14 +85,35 @@ def cmd_observe(args: argparse.Namespace) -> int:
     reason = source.available()
     if reason:
         raise HarnessError(reason)
-    options = RunOptions(cap=cfg.cap, timeout_s=args.timeout, mate_budget_ms=args.mate_budget_ms)
+    asked = [name for name, wanted in (("explain", args.explain), ("actions", args.actions is not None)) if wanted]
+    for name in asked:
+        if name not in source.diagnostics:
+            print(f"note: {source.name} prints no {name} events", file=sys.stderr)
+    options = RunOptions(cap=cfg.cap, timeout_s=args.timeout, mate_budget_ms=args.mate_budget_ms,
+                         explain=args.explain, actions_at=args.actions)
     observation = source.observe(record.id, corpus.read(record, lock), options)
     print(json.dumps({"source": observation.source, "record": observation.record, "cap": observation.cap,
                       "elapsed_s": round(observation.elapsed_s, 3), **observations.to_json(observation)}, indent=1))
     problems = observations.validate(observation)
     for problem in problems:
         print(f"self-contradiction: {problem}", file=sys.stderr)
+    # The diagnostics come after the report, one JSON object per line. They are
+    # never compared, and never recorded.
+    for event in observation.diagnostics:
+        print(_diagnostic_line(event))
+    listed = any(event.get("event") == "actions" for event in observation.diagnostics)
+    if args.actions is not None and "actions" in source.diagnostics and not listed:
+        reached = f"positions 0 to {len(observation.positions) - 1}" if observation.positions else "no position"
+        print(f"note: no actions event for position {args.actions}; the run reported {reached} "
+              f"({observation.status}{': ' + observation.reason if observation.reason else ''})", file=sys.stderr)
     return 1 if problems else 0
+
+
+def _position_index(text: str) -> int:
+    value = int(text)
+    if value < 0:
+        raise argparse.ArgumentTypeError("a position is a whole number from 0")
+    return value
 
 
 def cmd_corpus(args: argparse.Namespace) -> int:
@@ -171,10 +202,14 @@ def parser() -> argparse.ArgumentParser:
                      help="build nothing; print the build tools still needed, as one line `tools=<names>`")
 
     sub = add("observe", cmd_observe, "Print what one source says about one corpus record.")
-    sub.add_argument("--source", required=True, choices=ORACLE_SOURCES)
+    sub.add_argument("--source", required=True, help=f"the source to ask ({', '.join(ORACLE_SOURCES)}, ...)")
     sub.add_argument("--record", required=True)
     sub.add_argument("--timeout", type=float, default=600.0)
     sub.add_argument("--mate-budget-ms", type=int, default=20000)
+    sub.add_argument("--explain", action="store_true",
+                     help="also print what the source's check test looked at, after each position's state (diagnostic)")
+    sub.add_argument("--actions", type=_position_index, metavar="K",
+                     help="also print the source's legal actions at position K, sorted (diagnostic)")
 
     sub = add("corpus", cmd_corpus, "List and verify the pinned corpus.")
     sub.add_argument("--unlisted", action="store_true", help="print manifest stubs for records in pinned sources that are not listed")

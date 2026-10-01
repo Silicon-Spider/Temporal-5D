@@ -51,7 +51,7 @@ licence = "GPL-3.0 (LICENSE file); cwmtt.cabal declares BSD3 - treated as GPL-3.
 licence_file = "LICENSE"
 licence_sha256 = "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
 summary = "Haskell rules implementation and the original hypercuboid mate search, with a naive search beside it"
-used_as = "Built from an export of the pinned commit with the pinned GHC. Queried through its stock CLI (`cwmtt count`)."
+used_as = "Built from an export of the pinned commit with the pinned GHC. Its counts, and how far it replays a record, come from its stock CLI (`cwmtt count`), unmodified. Beside it runs oracles/drivers/cwmtt, a state driver of the harness's own compiled against the same modules with the same flags (it calls them and copies nothing), which replays the record and reports, at every position, the boards cwmtt holds and the side to move - the CLI has no command for either; the adapter pairs the two only where they read and replayed the record alike."
 dependency_names = ["cwmtt", "Game.Chess.TimeTravel"]
 notes = [
     "No z3 in the program at this commit. Upstream removed the z3-based search in 65e1bf9 (2023-03-26) because it was slower than the plain hypercuboid search; the design spec's 'Haskell and z3' describes the older tree. Its README still mentions z3 and its stack.yaml still lists the z3 package, but cwmtt.cabal depends only on base and containers, so GHC alone builds it.",
@@ -80,12 +80,13 @@ dependency_names = ["5d-chess-js"]
 notes = [
     "Chess in 5D's client (gitlab.com/5d-chess/chess-in-5d, AGPL-3.0) takes its rules from this library (dependency 5d-chess-js ^1.2.1). Only the rules library is pinned; the client adds no rules.",
     "Runtime npm dependencies, all MIT: module-alias 2.2.2, blueimp-md5 2.18.0, present 1.0.0.",
-    "Defects at the pin, and what the driver does about each without touching rules logic: inCheckmate and inStalemate answer true when their search runs out of time (the driver calls the search itself and reads its timed-out flag); that search can exhaust memory on wide positions (it runs in a worker with its own heap limit); a Board header the library does not know, or that its header reader does not match, is silently replayed on the Standard layout, and 5DFEN boards are ignored unless Board is custom (the driver asks the library which variant it set up and refuses the record when that is not the one declared); a PGN result token at the end of the move text is read as moves (it is dropped); actions('object') throws a ReferenceError (not used).",
+    "Defects at the pin, and what the driver does about each without touching rules logic: inCheckmate and inStalemate answer true when their search runs out of time (the driver calls the search itself and reads its timed-out flag); that search can exhaust memory on wide positions (it runs in a worker with its own heap limit); a Board header the library does not know, or that its header reader does not match, is silently replayed on the Standard layout, and 5DFEN boards are ignored unless Board is custom (the driver asks the library which variant it set up and refuses the record when that is not the one declared); a PGN result token at the end of the move text is read as moves (it is dropped); chess.actions() throws in its 'object' and 'json' formats (a ReferenceError) and in '5dpgn' (a TypeError), and in every format passes its promotion pieces where boardFuncs.moves() takes its 'spatial moves only' switch, so it would list no move through time or across timelines (not used: the driver's observe --actions diagnostic calls actionFuncs.actions() itself, with that switch off).",
     "Its action enumeration yields ordered move sequences under its own options, so it contributes check and mate verdicts and move legality, not action counts.",
 ]
 
 [repo.notation]
-role = "corpus-source"
+role = "parse-oracle"
+tier = "commit"
 upstream = "adri326/5dchess-notation"
 url = "https://github.com/adri326/5dchess-notation"
 submodule = "corpus-notation"
@@ -97,12 +98,14 @@ committed = "2021-07-25"
 licence = "X11 (MIT-style, with a no-advertising clause)"
 licence_file = "LICENSE"
 licence_sha256 = "8d4c0ecb12b11ec195afed72693869a24cea48e8b160d2cc4b8f03d08f42a0ae"
-summary = "The 5dpgn / 5dfen notation specification, with sample game records"
-used_as = "Source of corpus records (test/*.5dpgn) and the pinned text of the notation the corpus is written in. Not an oracle."
+summary = "The 5dpgn / 5dfen notation specification, with sample game records and a parser written beside it"
+used_as = "The pinned text of the notation the corpus is written in, and a source of corpus records (test/*.5dpgn). Its bundled parser (parsers/pgn.js and parsers/game.js, which need no package) is exported at the pinned commit and run as a parse-only oracle through oracles/drivers/notation, in a separate Node process per record: at every position, the boards it holds and the side it reads as moving next, and how many actions it read - never a rules verdict."
 dependency_names = ["5dchess-notation"]
 notes = [
-    "Not in the design spec's oracle table: pinned so the corpus has real game records that do not come from an oracle's own test suite.",
-    "Its bundled JavaScript parser is not an oracle and is as off limits to the engine as everything else under third_party: the engine's parser is written from the specification (decision H28).",
+    "Not in the design spec's table of rules oracles: pinned so the corpus has real game records that do not come from an oracle's own test suite, and so that the engine's parser is written from the specification (decision H28). Its bundled parser is a parse-only oracle (H26), and as off limits to the engine as everything else under third_party.",
+    "The parser applies each move as written. It has no check, legality or end-of-game logic, and finds the moving piece with a movement test of its own only where the move text leaves the origin square out. So its acceptance of an action is no verdict - it accepts an action that leaves a king in check - and a move it cannot apply is a soft rejection.",
+    "Defects at the pin, and what the harness does about each without touching the parser: it reports an error by printing it to stdout and calling process.exit(1) (the driver captures what it prints and turns the exit into an exception); a Board name it does not know gives one silently empty board, and a named layout is set up on boards of the Size header's size, or 8x8, never its own (both refused, by the adapter and again by the driver); it reads 5DFEN board strings only under Board \"custom\" (refused under any other); its tokeniser loops forever on a comment that is never closed (refused before it runs); it stores a 5DFEN \"-0\" board as a signed zero, which it writes back as \"0\" (left alone: a set-up that mixes it with \"+0\" is refused under a reason of its own, signed_zero, so that the recorded outcome names the defect; any other shows in the fingerprints); it drops the unmoved marker \"*\" (its state events say markers false); it splits a long-algebraic pawn move such as e2e4 into two moves (it then finds no pawn for the first, a soft rejection).",
+    "X11 licence: the export the driver loads is the whole pinned tree, LICENSE included, in the harness cache, never committed or distributed; the project never uses the author's name to promote itself.",
 ]
 
 # --- Toolchains -------------------------------------------------------------
@@ -132,4 +135,4 @@ reason = "ftxi/5dchess_engine is C++23. Its own CI also builds with Apple Clang 
 
 [toolchain.node]
 min_version = "18"
-reason = "Runs the Chess in 5D library; npm installs its three pinned runtime dependencies from its own lockfile."
+reason = "Runs the Chess in 5D library, whose three pinned runtime dependencies npm installs from its own lockfile, and the notation repository's parser, which needs none."

@@ -12,11 +12,21 @@ the rule that settles it, so that it stays expected without hiding anything else
   * if the disagreement stops occurring, the entry is stale and the gate fails;
   * an entry with no citation is not an entry.
 
-The citation is normally to the rulebook (`rulebook = "..."`). One kind of
-disagreement is not about the rules at all: an oracle that stops at move text it
-cannot read ("no move I can generate matches this") where the engine plays on.
-That may be the oracle's notation, not its rules, and then the authority is the
-notation specification: such an entry cites it with `notation = "..."` instead.
+The citation is normally to the rulebook (`rulebook = "..."`). Some
+disagreements are not about the rules at all, and then the authority is the
+notation specification, cited with `notation = "..."` instead:
+
+  * a parse divergence (kind "placement"): the oracle read the record's moves as
+    a different position from the engine's - always the notation's to settle;
+  * a marker-only parse divergence (kind "unmoved"): the same boards and
+    pieces, marked unmoved differently - the notation's "5DFEN Strictness" says
+    which pieces carry the marker, and the rulebook what having moved means, so
+    either may settle it. Its index is the first position of a run of positions
+    whose markers differ, and the entry excuses that run;
+  * an oracle that stops at move text it cannot read ("no move I can generate
+    matches this") where the engine plays on: that may be the oracle's
+    notation, not its rules.
+
 An entry carries exactly one of the two.
 """
 
@@ -32,14 +42,14 @@ from . import observations, paths
 from .adapters import ORACLE_SOURCES, PRIMARY_SOURCES, oracle_of
 from .corpus import Record
 from .lockfile import Lock
-from .observations import SOFT_REJECTIONS, Disagreement, Observation
+from .observations import PARSE_FIELD, PARSE_KINDS, REPLAY_KINDS, SOFT_REJECTIONS, Disagreement, Observation
 from .util import Finding, HarnessError, load_toml
 
 SCHEMA = 1
-KINDS = ("side", "in_check", "legal_actions", "terminal", "legality", "length")
-# Kinds that describe how an implementation replays the record. They are
-# compared once per implementation, through its primary source.
-REPLAY_KINDS = ("legality", "length")
+KINDS = ("side", "in_check", "legal_actions", "terminal", "legality", "length", *PARSE_KINDS)
+# REPLAY_KINDS (legality, length) describe how an implementation replays the
+# record. They are compared once per implementation, through its primary source.
+# The parse kinds are compared for every search, like the observables.
 _ID = re.compile(r"^KD-\d{4}$")
 _PLACEHOLDER = re.compile(r"^\W*(tbd|todo|unknown|n/?a|none|fixme|\?+)\W*$", re.I)
 _MIN_CITATION = 20
@@ -98,8 +108,8 @@ def load(path: Path | None = None) -> list[Divergence]:
 
 
 def _may_be_notation(entry: Divergence) -> bool:
-    """Is this the one kind of disagreement the notation specification can settle?"""
-    if entry.kind == "length":
+    """Is this a disagreement the notation specification can settle?"""
+    if entry.kind in ("length", *PARSE_KINDS):
         return True
     soft = tuple(f"rejected:{reason}" for reason in SOFT_REJECTIONS)
     return entry.kind == "legality" and entry.oracle_value in soft
@@ -164,12 +174,17 @@ def verify(entries: list[Divergence], lock: Lock, records: list[Record], recorde
         if rulebook and notation:
             findings.append(Finding(
                 "divergence-citation", f"{tag}: cites both the rulebook and the notation specification - say which one settles it"))
+        elif entry.kind == "placement" and not notation:
+            findings.append(Finding(
+                "divergence-citation",
+                f"{tag}: a placement divergence is two readings of the record's move text, which the notation "
+                "specification settles - cite it with notation = \"...\", not the rulebook"))
         elif notation and known_kind and valid_values and not _may_be_notation(entry):
             findings.append(Finding(
                 "divergence-citation",
-                f"{tag}: only an oracle that could not match the move text (rejected:{'|'.join(SOFT_REJECTIONS)}), "
-                "or read a different number of actions, can be settled by the notation specification - "
-                "this one needs the rulebook"))
+                f"{tag}: only a parse divergence ({' or '.join(PARSE_KINDS)}), an oracle that could not match the "
+                f"move text (rejected:{'|'.join(SOFT_REJECTIONS)}), or one that read a different number of actions "
+                "(length) can be settled by the notation specification - this one needs the rulebook"))
         else:
             citation = rulebook or notation
             if len(citation) < _MIN_CITATION or _PLACEHOLDER.match(citation):
@@ -206,12 +221,20 @@ def looked_at(entry: Divergence, engine: Observation, oracle: Observation) -> bo
     """Did both reports actually cover the observation this entry is about?
 
     Only then can its absence mean the divergence is gone. A run that was cut
-    short before reaching it has simply not looked.
+    short before reaching it has simply not looked - and neither has a pair of
+    reports that parted (a placement divergence) before it: from there on
+    nothing is compared.
     """
+    parted = observations.first_placement_divergence(engine, oracle)
     if entry.kind in REPLAY_KINDS:
+        if parted is not None and entry.index > parted:
+            return False
         return all(report.status in ("ok", "rejected") for report in (engine, oracle))
+    if parted is not None and (entry.index > parted or (entry.index == parted and entry.kind != "placement")):
+        return False
+    name = PARSE_FIELD.get(entry.kind, entry.kind)
     for report in (engine, oracle):
-        if entry.index >= len(report.positions) or getattr(report.positions[entry.index], entry.kind, None) is None:
+        if entry.index >= len(report.positions) or getattr(report.positions[entry.index], name, None) is None:
             return False
     return True
 

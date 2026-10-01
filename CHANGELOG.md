@@ -10,6 +10,60 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-01 - The gate matches states, not move counts (H30)
+
+- **Every source now says what it set up, at every position.** Before the position
+  event and any search, each driver prints a `state` event listing every board it
+  holds (`L:T:c:placement`). The harness alone (`oracles/oracle_harness/fingerprint.py`)
+  validates, canonicalises and hashes it: `fingerprint` is the notation
+  specification's full-state hash (MD5 of the sorted `[placement:L:T:c]` strings,
+  -0 before +0, then turn, then white before black - the notation is silent on the
+  colour order), `placement` the same without unmoved markers, plus board and
+  piece counts. Both published hashes of the notation spec are conformance tests.
+- **Parse divergences are their own class** (`placement`, `unmoved`). A placement
+  divergence ends every comparison of that pair from that position on, and a
+  known-divergence entry for one must cite the notation specification; a
+  marker-only run is reported per run and stops the confirmation, not the
+  comparison. The engine contract now requires a `state` event at every position.
+- **Drivers.** ftxi: the board walk of its own API, held to the stock `5dtools`
+  (`stats` board count and size, and its `print` drawing read back into a
+  placement hash). Chess in 5D: the library's own full-state export, and its own
+  hash must equal the harness's at every position; custom set-ups it relabels are
+  refused. cwmtt: a new Haskell state driver (`oracles/drivers/cwmtt/Driver.hs`)
+  compiled against cwmtt's modules runs beside the stock CLI, which still answers
+  the counts; the adapter pairs the two only where they read and replayed the
+  record alike, and cwmtt now reports the side to move. New: the notation
+  repository's bundled parser is a parse-only oracle, `notation` (decision H26, as
+  the brief asked), run through `oracles/drivers/notation/driver.js` in every tier;
+  the commit workflow now sets up Node for it.
+- **Diagnostics** for the check-cluster triage, never compared or recorded:
+  `harness.py observe --explain` (ftxi: the timelines it advances to phantom boards
+  and the checking moves it finds) and `observe --actions K` (every source's legal
+  actions at position K, canonicalised for diffing).
+- **Golden files re-recorded (schema 2)**: four new columns per position, and a
+  `notation.json`. No answer of ftxi, Chess in 5D or cwmtt changed. cwmtt's
+  positions now carry the side to move (1,598 filled, no conflict). A run cut by
+  its time budget now keeps the position it was searching, with its boards and no
+  answers, so the timed-out naive runs show one more position each. One recorded
+  answer was lost to time: cwmtt:naive's final verdict on `cwmtt/ctp1` (about
+  257 s of a 300 s budget on this desktop) timed out under load - the
+  budget-limited case H32 classifies next.
+- **Result:** across the whole corpus, no two sources hold different boards at any
+  shared position, so every check, count and mate disagreement in
+  `oracles/DISAGREEMENTS.md` is a rules disagreement. The one parse-layer difference
+  is markers-only on Very Small - Open (ftxi's built-in layout holds the kings and
+  rooks as moved), which leaves that variant ungated until settled. `verify`
+  clean; `gate --tier commit`: ftxi 7760/7760 and notation 2765/2765 recorded values
+  reproduced; selftest 454 tests.
+- Also: `CLAUDE.md`, `AGENTS.md` and `CONTRIBUTING.md` list `fingerprint.py` among
+  the files whose edit stales the golden files, and the cwmtt state driver among
+  those that need a rebuild.
+- Spec: §11.0 "Running the gate" (H30) and its oracle table (the notation parser as
+  a parse-only oracle in every tier, H26/H27) - proposed edit 3 in
+  `docs/BUILD_LOG.md` (the fingerprint, its readings, marker-only runs, the oracle
+  hash check); spec issue 2h (what "unmoved" means). Register H30 is built; its row
+  is unchanged.
+
 ### 2026-10-01 - A cited rules reference, from public non-oracle sources
 
 - `docs/rules/README.md`: the rules of *5D Chess With Multiverse Time Travel* as

@@ -41,6 +41,8 @@ def _driver_inputs(oracle: str) -> list[Path]:
     """Harness files compiled into a build (they change the key when edited)."""
     if oracle == "ftxi":
         return [paths.DRIVERS / "ftxi" / "CMakeLists.txt", paths.DRIVERS / "ftxi" / "ftxi_driver.cpp"]
+    if oracle == "cwmtt":
+        return [paths.DRIVERS / "cwmtt" / "Driver.hs"]
     return []
 
 
@@ -140,16 +142,24 @@ def _build_cwmtt(pin: Pin, lock: Lock, root: Path, bootstrap: bool, log: Log) ->
     ghc = toolchain.find_ghc(lock, bootstrap)
     source = _export(pin, root, log)
     output = root / exe("cwmtt")
-    log(f"  compiling with GHC {ghc.version}")
+    driver = root / exe("cwmtt_state_driver")
+    env = toolchain.build_env(ghc, ceiling=root)
     # The flags of cwmtt.cabal (Haskell2010, -Wno-x-partial) at cabal's default
     # optimisation level. Its only dependencies are GHC boot packages.
-    check_run(
-        [ghc.path, "--make", "-O1", "-XHaskell2010", "-Wno-x-partial", "-i.",
-         "-outputdir", root / "obj", "-o", output, "Game/Chess/TimeTravel/Main.hs"],
-        cwd=source, env=toolchain.build_env(ghc, ceiling=root), timeout=3600,
-    )
+    flags = ["--make", "-O1", "-XHaskell2010", "-Wno-x-partial", "-i."]
+    log(f"  compiling the stock CLI with GHC {ghc.version}")
+    check_run([ghc.path, *flags, "-outputdir", root / "obj", "-o", output, "Game/Chess/TimeTravel/Main.hs"],
+              cwd=source, env=env, timeout=3600)
+    # The harness's state driver (it reports what the CLI has no command for:
+    # the boards cwmtt holds at each position), against the same modules with
+    # the same flags. Both programs are module Main, so the driver is compiled
+    # into an object directory of its own.
+    log("  compiling the harness's state driver against the same modules")
+    check_run([ghc.path, *flags, "-outputdir", root / "driver-obj", "-o", driver,
+               paths.DRIVERS / "cwmtt" / "Driver.hs"],
+              cwd=source, env=env, timeout=3600)
     layouts = cwmtt_layouts((source / "Game" / "Chess" / "TimeTravel" / "Layouts.hs").read_text(encoding="utf-8"))
-    return _finish(pin, root, {"cli": output.name}, {"ghc": ghc.version, "layouts": layouts})
+    return _finish(pin, root, {"cli": output.name, "driver": driver.name}, {"ghc": ghc.version, "layouts": layouts})
 
 
 def _build_chessin5d(pin: Pin, lock: Lock, root: Path, bootstrap: bool, log: Log) -> Build:
@@ -169,12 +179,51 @@ def _build_chessin5d(pin: Pin, lock: Lock, root: Path, bootstrap: bool, log: Log
     return _finish(pin, root, {"root": "src"}, {"node": node.version, "npm": npm.version, "dependencies": dependencies})
 
 
-_RECIPES = {"ftxi": _build_ftxi, "cwmtt": _build_cwmtt, "chessin5d": _build_chessin5d}
+# Prints the notation parser's table of named boards - the BOARDS object its
+# game.js exports, which pgn.parse() looks a Board header up in - as JSON,
+# {upper-case name: "WxH"}. Run by node on the export; it reads the table only.
+_NOTATION_BOARDS_JS = (
+    "const table = require(process.argv[1]).BOARDS;"
+    "process.stdout.write(JSON.stringify(Object.fromEntries("
+    "Object.entries(table).map((entry) => [entry[0], entry[1][2]]))));"
+)
+
+
+def notation_boards(output: str) -> dict[str, str]:
+    """The notation parser's named boards, by the upper-case name it looks them up under, with their size.
+
+    The parser sets up one empty board, without a word, for a Board it does not
+    know, and sets a named layout up on boards of the Size header's size (8x8
+    without one), never its own. The adapter needs this table to refuse both.
+    """
+    try:
+        table = json.loads(output)
+    except json.JSONDecodeError:
+        table = None
+    if (not isinstance(table, dict) or "STANDARD" not in table
+            or not all(isinstance(name, str) and name == name.upper() and isinstance(size, str)
+                       and re.fullmatch(r"[1-9]\d*x[1-9]\d*", size) for name, size in table.items())):
+        raise HarnessError("notation: the parser's BOARDS table is not a table of upper-case names and \"WxH\" "
+                           "sizes with Standard among them - the adapter needs updating for this pin")
+    return dict(sorted(table.items()))
+
+
+def _build_notation(pin: Pin, lock: Lock, root: Path, bootstrap: bool, log: Log) -> Build:
+    node = toolchain.find_node(lock)
+    source = _export(pin, root, log)
+    # parsers/pgn.js and parsers/game.js require nothing but each other: no package is installed.
+    log("  reading the parser's table of named boards")
+    boards = notation_boards(check_run([node.path, "-e", _NOTATION_BOARDS_JS, source / "parsers" / "game.js"],
+                                       env=toolchain.build_env(node, ceiling=root), timeout=120))
+    return _finish(pin, root, {"root": "src", "parser": "src/parsers/pgn.js"}, {"node": node.version, "boards": boards})
+
+
+_RECIPES = {"ftxi": _build_ftxi, "cwmtt": _build_cwmtt, "chessin5d": _build_chessin5d, "notation": _build_notation}
 
 
 def recipe_tools(oracle: str) -> tuple[str, ...]:
     """The build tools a recipe uses, by the names `doctor` prints them under."""
-    tools = {"ftxi": ("c++", "cmake"), "cwmtt": ("ghc",), "chessin5d": ("node", "npm")}[oracle]
+    tools = {"ftxi": ("c++", "cmake"), "cwmtt": ("ghc",), "chessin5d": ("node", "npm"), "notation": ("node",)}[oracle]
     return (*tools, "ninja") if oracle == "ftxi" and is_windows() else tools
 
 

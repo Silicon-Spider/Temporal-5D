@@ -5,8 +5,9 @@ import json
 import unittest
 
 from oracle_harness import build, config, corpus, gitutil, lockfile
-from oracle_harness.adapters import ORACLE_SOURCES, RunOptions, make_source
+from oracle_harness.adapters import ORACLE_SOURCES, PARSE_ONLY_SOURCES, RunOptions, make_source
 from oracle_harness.util import run
+from support import golden_files_predate_this_schema
 
 
 class ConfigurationTests(unittest.TestCase):
@@ -17,11 +18,12 @@ class ConfigurationTests(unittest.TestCase):
 
     def test_tiers_follow_the_design(self):
         # Design spec 11.0: ftxi on every commit; cwmtt and Chess in 5D nightly
-        # and before any generator release or proof-channel enablement.
-        self.assertEqual(self.cfg.tier("commit").sources, ("ftxi",))
+        # and before any generator release or proof-channel enablement. The
+        # notation repository's parser (parse-only, H26) is fast: every tier.
+        self.assertEqual(self.cfg.tier("commit").sources, ("ftxi", "notation"))
         for name in ("nightly", "release"):
             oracles = {source.split(":")[0] for source in self.cfg.tier(name).sources}
-            self.assertEqual(oracles, {"ftxi", "cwmtt", "chessin5d"}, name)
+            self.assertEqual(oracles, {"ftxi", "cwmtt", "chessin5d", "notation"}, name)
         self.assertTrue(self.cfg.tier("release").require_engine)
         self.assertFalse(self.cfg.tier("commit").require_engine)
 
@@ -99,12 +101,13 @@ class LiveOracleTests(unittest.TestCase):
 
     def test_an_oracle_is_never_asked_about_a_game_it_would_misread(self):
         # "Misc - Small" is a board none of the three knows; two of them would
-        # silently replay it on the Standard layout.
-        for name in ("cwmtt", "chessin5d"):
+        # silently replay it on the Standard layout, and the notation's parser
+        # on a single empty board.
+        for name in ("cwmtt", "chessin5d", "notation"):
             observation = self.observe(name, "notation/game")
             self.assertEqual((observation.status, observation.reason, observation.positions), ("unsupported", "variant", []), name)
         # A record that sets up its own position with 5DFEN boards.
-        for name in ("cwmtt", "chessin5d"):
+        for name in ("cwmtt", "chessin5d", "notation"):
             observation = self.observe(name, "ftxi/niceAndrey")
             self.assertEqual((observation.status, observation.reason, observation.positions), ("unsupported", "fen", []), name)
 
@@ -120,8 +123,10 @@ class LiveOracleTests(unittest.TestCase):
         # An oracle that "accepts" that has not checked the action, and its
         # acceptance of any other action would mean nothing. (ftxi's own replay
         # tools do accept it; the harness driver asks ftxi's legality test
-        # before submitting.)
+        # before submitting.) A parse-only source judges no action, and is not asked.
         for name in ORACLE_SOURCES:
+            if name in PARSE_ONLY_SOURCES:
+                continue
             observation = self.observe(name, "local/ignores-check")
             self.assertEqual((observation.status, observation.reason, observation.actions_accepted, observation.last_action),
                              ("rejected", "cannot_submit", 3, None if name.startswith("cwmtt") else True), name)
@@ -213,6 +218,10 @@ class LiveOracleTests(unittest.TestCase):
         # This keeps that explanation honest when a pin or the corpus moves.
         if not _built("ftxi"):
             self.skipTest("ftxi is not built")
+        for source in ("ftxi", "chessin5d"):
+            stale = golden_files_predate_this_schema(source)
+            if stale:
+                self.skipTest(stale)
         from oracle_harness import golden
 
         tools = build.load(self.lock.pin("ftxi")).artifact("tools")

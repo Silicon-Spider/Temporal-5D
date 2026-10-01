@@ -1,6 +1,7 @@
 # Commit tier of the oracle gate (design spec 11.0, decision H27): on every push
 # and pull request, check the boundary, the pins, the corpus and the golden
-# observations, then run the per-commit oracle (ftxi/5dchess_engine).
+# observations, then run the per-commit oracles (ftxi/5dchess_engine, and the
+# notation repository's parser, which is parse-only).
 #
 # The heavier oracles (cwmtt, Chess in 5D) run in oracle-nightly.yml.
 name: oracle gate - commit tier
@@ -32,6 +33,11 @@ jobs:
         with:
           python-version: "3.12"
 
+      # The notation repository's parser (a parse-only oracle) runs in every tier.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+
       - name: Static checks - pins, corpus, known divergences, boundary, provenance, golden files
         run: python oracles/harness.py verify --tracked-only
 
@@ -44,10 +50,11 @@ jobs:
           path: oracles/.cache/build/ftxi
           key: oracle-ftxi-${{ runner.os }}-${{ hashFiles('oracles/oracles.lock.toml', 'oracles/drivers/ftxi/**', 'oracles/oracle_harness/build.py') }}
 
-      - name: Build the per-commit oracle
+      # The notation parser's build is an export and one node call: not worth caching.
+      - name: Build the per-commit oracles
         run: |
           python oracles/harness.py doctor
-          python oracles/harness.py build --oracle ftxi
+          python oracles/harness.py build --oracle ftxi --oracle notation
 
       - name: Save the ftxi build
         if: steps.ftxi-cache.outputs.cache-hit != 'true'

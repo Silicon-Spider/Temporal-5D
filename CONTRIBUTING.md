@@ -149,11 +149,12 @@ Never update submodules recursively (`git submodule update --init --recursive`):
 the oracles' own submodules are not needed, and one is declared with an SSH URL.
 Use `python oracles/harness.py sync`.
 
-Editing a driver (`oracles/drivers/`), an adapter, or the `base.py` and
-`headers.py` the adapters share (`oracles/oracle_harness/adapters/`,
-`oracles/oracle_harness/headers.py`) makes the golden files stale in the same way
-as a pin bump - even when the edit is to a comment: each golden file's signature
-holds a hash of the code that produced it. Re-record them and read the diff.
+Editing a driver (`oracles/drivers/`), an adapter, or the `base.py`,
+`fingerprint.py` and `headers.py` the adapters share (`oracles/oracle_harness/adapters/`,
+`oracles/oracle_harness/fingerprint.py`, `oracles/oracle_harness/headers.py`) makes
+the golden files stale in the same way as a pin bump - even when the edit is to a
+comment: each golden file's signature holds a hash of the code that produced it.
+Re-record them and read the diff.
 
 ## Adding game records
 

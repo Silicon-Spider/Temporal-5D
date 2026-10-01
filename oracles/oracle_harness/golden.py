@@ -11,8 +11,11 @@ does three jobs:
 
 A golden value is a statement by that oracle, not a statement of truth.
 
-The files hold verdicts only. An oracle's free-text messages stay out of them:
-they quote the record they are about, and no record is redistributed from here.
+The files hold verdicts, and hashes of what each oracle set up - never an
+oracle's free-text messages, which quote the record they are about, and no
+record is redistributed from here. A row is one position: the columns of
+observations.ROW_FIELDS, the answers and then the fingerprint, placement hash,
+and board and piece counts of the oracle's state event (schema 2).
 """
 
 from __future__ import annotations
@@ -24,12 +27,16 @@ from pathlib import Path
 from . import observations, paths
 from .adapters import ORACLE_SOURCES, PRIMARY_SOURCES, RunOptions, Source, oracle_of
 from .corpus import Record
-from .observations import OBSERVABLES, Disagreement, Observation
+from .observations import OBSERVABLES, PARSE_FIELD, PARSE_KINDS, Disagreement, Observation
 from .runner import Results
 from .util import Finding, HarnessError
 
-SCHEMA = 1
+SCHEMA = 2
 _RECORDED = ("status", "reason", "actions_accepted", "last_action")
+
+
+class StaleSchema(HarnessError):
+    """A golden file written in a schema this harness no longer reads."""
 
 
 @dataclass
@@ -81,15 +88,20 @@ def load(source: str) -> Golden:
             f"run: python {paths.HARNESS_REL}/harness.py golden --write") from None
     except json.JSONDecodeError as error:
         raise HarnessError(f"{path.name}: invalid JSON: {error}") from None
-    if data.get("schema") != SCHEMA or data.get("source") != source:
-        raise HarnessError(f"{path.name}: not a schema-{SCHEMA} golden file for '{source}'")
+    if not isinstance(data, dict) or data.get("source") != source:
+        raise HarnessError(f"{path.name}: not a golden file for '{source}'")
+    if data.get("schema") != SCHEMA:
+        raise StaleSchema(
+            f"{path.name}: written in golden schema {data.get('schema')}, and this harness reads schema {SCHEMA} "
+            "(a position also records what the oracle set up there) - re-record it: "
+            f"python {paths.HARNESS_REL}/harness.py golden --write")
     signature = data.get("signature", {})
     golden = Golden(source=source, signature=signature, sha256={}, observations={})
     for record_id, entry in data.get("records", {}).items():
         try:
             golden.sha256[record_id] = entry.get("sha256", "")
             golden.observations[record_id] = observations.from_json(source, record_id, _cap(signature), entry)
-        except (AttributeError, KeyError, IndexError, TypeError) as error:
+        except (AttributeError, KeyError, IndexError, TypeError, ValueError) as error:
             raise HarnessError(f"{path.name}: the entry for {record_id} is malformed ({error!r})") from None
     return golden
 
@@ -117,6 +129,9 @@ def verify_static(sources: list[Source], options: RunOptions, records: list[Reco
     for source in sources:
         try:
             golden = load(source.name)
+        except StaleSchema as error:
+            findings.append(Finding("golden-stale", str(error)))
+            continue
         except HarnessError as error:
             findings.append(Finding("golden-missing", str(error)))
             continue
@@ -196,15 +211,34 @@ def disagreements(records: list[Record]) -> list[Disagreement]:
     return found
 
 
-def _agreement(a: Observation, b: Observation, name: str) -> tuple[int, int, int, int]:
-    """(both answered, equal, compatible but not equal, contradictory) for one observable."""
-    both = equal = loose = contradictory = 0
+def _shared(a: Observation, b: Observation) -> list[tuple[observations.Position, observations.Position]]:
+    """The positions two reports both reached, up to where they parted (a placement divergence)."""
+    return list(zip(a.positions, b.positions, strict=False))[:observations.first_placement_divergence(a, b)]
+
+
+def _agreement(a: Observation, b: Observation, name: str) -> tuple[int, int, int, int, int, int, int]:
+    """(both answered, equal, compatible but not equal, contradictory, same state, same boards, unverified).
+
+    For one observable. Only positions before the two parted are counted: from a
+    placement divergence on they answer about different positions, and are not
+    compared. Each position counted is one of three: the same state - both said
+    what they set up, unmoved markers included, and it is the same; the same
+    boards - the same boards and pieces, but markers that differ or that one of
+    the two does not give; or unverified - one said nothing of what it set up.
+    """
+    both = equal = loose = contradictory = exact = boards = unverified = 0
     clashes = {item.index for item in observations.compare(a, b, replay=False) if item.kind == name}
-    for pa, pb in zip(a.positions, b.positions, strict=False):
+    for pa, pb in _shared(a, b):
         va, vb = getattr(pa, name), getattr(pb, name)
         if va is None or vb is None:
             continue
         both += 1
+        if observations.same_state(pa, pb):
+            exact += 1
+        elif observations.aligned(pa, pb):
+            boards += 1
+        else:
+            unverified += 1
         if pa.index in clashes:
             contradictory += 1
         elif name == "legal_actions" and a.cap is not None and b.cap is not None and va >= a.cap and vb >= b.cap:
@@ -213,7 +247,101 @@ def _agreement(a: Observation, b: Observation, name: str) -> tuple[int, int, int
             equal += 1
         else:
             loose += 1  # "no_action" beside a checkmate or stalemate, or a capped count beside a larger one
-    return both, equal, loose, contradictory
+    return both, equal, loose, contradictory, exact, boards, unverified
+
+
+def _parse_agreement(a: Observation, b: Observation) -> tuple[int, int, int, int]:
+    """(both described, same boards and pieces, both marked, same markers) for one pair of reports.
+
+    Counted up to and including the position where the two parted, if they
+    did: after it they describe different games.
+    """
+    parted = observations.first_placement_divergence(a, b)
+    stop = None if parted is None else parted + 1
+    described = same = marked = same_marks = 0
+    for pa, pb in list(zip(a.positions, b.positions, strict=False))[:stop]:
+        match = observations.aligned(pa, pb)
+        if match is None:
+            continue
+        described += 1
+        same += match
+        if match and None not in (pa.fingerprint, pb.fingerprint):
+            marked += 1
+            same_marks += pa.fingerprint == pb.fingerprint
+    return described, same, marked, same_marks
+
+
+def _state_cell(report: Observation, item: Disagreement) -> str:
+    position = report.positions[item.index]
+    counts = observations.counts_text(position)
+    return f"`{getattr(position, PARSE_FIELD[item.kind])}`" + (f" ({counts})" if counts else "")
+
+
+def _parse_section(records: list[Record], loaded: dict[str, Golden], found: list[Disagreement]) -> list[str]:
+    lines = [
+        "## Parse divergences",
+        "",
+        "Each source says what it set up at every position, and two sources' positions are",
+        "compared there before anything else (decision H30). A **placement** divergence is the",
+        "first position at which the two hold different boards - different pieces, or the same",
+        "pieces on boards at other coordinates: from there on they answer about different",
+        "positions, so nothing either says there or after it is compared, and no rules",
+        "disagreement from there on is listed below. It is settled against the notation",
+        "specification. A **marker-only** divergence is a run of positions at which they hold",
+        "the same boards and pieces but mark different ones as unmoved, listed where it begins;",
+        "it suppresses nothing, and it is settled against the notation specification's \"5DFEN",
+        "Strictness\" or the rulebook (what having moved means). The hashes are the notation",
+        "specification's full-state hash - without the unmoved markers for a placement",
+        "divergence, with them for a marker-only one. Two searches of one implementation replay",
+        "the record with the same code, so a parse divergence between them is a bug in the",
+        "harness or its driver, not a reading.",
+        "",
+    ]
+    parse = [item for item in found if item.kind in PARSE_KINDS]
+    if parse:
+        lines += [
+            "| Record | Between | Position | Divergence | First source | Second source | Not compared |",
+            "|---|---|---|---|---|---|---|",
+        ]
+        for item in parse:
+            a = loaded[item.a].observations[item.record]
+            b = loaded[item.b].observations[item.record]
+            if item.kind == "placement":
+                kind, skipped = "placement", str(min(len(a.positions), len(b.positions)) - item.index)
+            else:
+                kind, skipped = "marker-only", "-"
+            same = " (one implementation)" if oracle_of(item.a) == oracle_of(item.b) else ""
+            lines.append(f"| `{item.record}` | `{item.a}` vs `{item.b}`{same} | {item.index} | {kind} "
+                         f"| {_state_cell(a, item)} | {_state_cell(b, item)} | {skipped} |")
+        lines += ["", "\"Not compared\" counts the positions both sources reached from the divergence on.", ""]
+    totals: dict[tuple[str, str], list[int]] = {}
+    for first, second in _pairs():
+        for record in records:
+            a = loaded[first].observations.get(record.id)
+            b = loaded[second].observations.get(record.id)
+            if a is not None and b is not None:
+                counts = _parse_agreement(a, b)
+                totals[(first, second)] = [x + y for x, y in zip(totals.get((first, second), [0] * 4), counts, strict=True)]
+    rows = [(pair, counts) for pair, counts in totals.items() if counts[0]]
+    if not rows:
+        lines += ["No two sources said what they set up at the same position: nothing was compared.", ""]
+        return lines
+    if not parse:
+        lines += ["None.", ""]
+    lines += [
+        "Positions at which both sources of a pair said what they set up, and how many of",
+        "those held the same boards and pieces; then the positions at which both also marked",
+        "the unmoved pieces (a source that does not track them says only which boards it holds",
+        "and where the pieces are), and how many of those were marked the same way.",
+        "",
+        "| Between | Both described | Same boards | Both marked | Same markers |",
+        "|---|---|---|---|---|",
+    ]
+    for (first, second), counts in rows:
+        same = " (one implementation)" if oracle_of(first) == oracle_of(second) else ""
+        lines.append(f"| `{first}` vs `{second}`{same} | " + " | ".join(str(count) for count in counts) + " |")
+    lines.append("")
+    return lines
 
 
 def render_disagreements(records: list[Record]) -> str:
@@ -233,19 +361,29 @@ def render_disagreements(records: list[Record]) -> str:
         "",
         "An oracle that cannot answer a question (or ran out of time) says nothing, and a",
         "silence never counts as a disagreement. \"Soft\" legality entries cannot tell a rules",
-        "disagreement from notation the rejecting oracle does not read.",
+        "disagreement from notation the rejecting oracle does not read. Two oracles that read",
+        "the record's moves as different positions are a parse divergence, listed first: what",
+        "they say about the rules from there on is about two different positions, and is not",
+        "compared.",
         "",
         "## What each oracle could say",
         "",
-        "| Source | ok | rejected | unsupported | error | timeout | positions | known values |",
-        "|---|---|---|---|---|---|---|---|",
+        "\"Known values\" counts answers; \"described\" counts the positions at which the oracle",
+        "said what it had set up, and \"with markers\" those at which it also said which pieces",
+        "had not moved.",
+        "",
+        "| Source | ok | rejected | unsupported | error | timeout | positions | known values | described | with markers |",
+        "|---|---|---|---|---|---|---|---|---|---|",
     ]
     for source in ORACLE_SOURCES:
         items = [loaded[source].observations[record.id] for record in records if record.id in loaded[source].observations]
         counts = {status: sum(item.status == status for item in items) for status in observations.STATUSES}
+        described = sum(position.placement is not None for item in items for position in item.positions)
+        marked = sum(position.fingerprint is not None for item in items for position in item.positions)
         lines.append(
             f"| `{source}` | {counts['ok']} | {counts['rejected']} | {counts['unsupported']} | {counts['error']} "
-            f"| {counts['timeout']} | {sum(len(item.positions) for item in items)} | {sum(item.known() for item in items)} |"
+            f"| {counts['timeout']} | {sum(len(item.positions) for item in items)} | {sum(item.known() for item in items)} "
+            f"| {described} | {marked} |"
         )
 
     lines += [
@@ -293,13 +431,21 @@ def render_disagreements(records: list[Record]) -> str:
         "the cap (only \"at least that many\" was compared), or one source says only that no",
         "action exists where the other says which kind of end it is. Pairs of searches inside",
         "one implementation are included: they are the check on the search, not on the rules.",
+        "\"Same state\" counts the positions known to be the same position: both sources said",
+        "what they had set up there, unmoved markers included, and it was the same. \"Same",
+        "boards\" counts those at which they held the same boards and pieces, but marked",
+        "different pieces as unmoved or one of them does not give the markers; \"unverified\"",
+        "those at which one of the two said nothing of what it set up, so that the two are",
+        "aligned only by counting actions. Positions from a placement divergence on are not",
+        "compared, and not counted.",
         "",
-        "| Between | Observable | Both answered | Equal | Loosely | Contradictory |",
-        "|---|---|---|---|---|---|",
+        "| Between | Observable | Both answered | Equal | Loosely | Contradictory | Same state | Same boards "
+        "| Unverified |",
+        "|---|---|---|---|---|---|---|---|---|",
     ]
     for first, second in _pairs():
         for name in OBSERVABLES:
-            totals = [0, 0, 0, 0]
+            totals = [0] * 7
             for record in records:
                 a = loaded[first].observations.get(record.id)
                 b = loaded[second].observations.get(record.id)
@@ -309,7 +455,8 @@ def render_disagreements(records: list[Record]) -> str:
                 same = " (one implementation)" if oracle_of(first) == oracle_of(second) else ""
                 lines.append(f"| `{first}` vs `{second}`{same} | {name} | " + " | ".join(str(total) for total in totals) + " |")
 
-    lines += ["", "## Summary", ""]
+    lines += ["", *_parse_section(records, loaded, found)]
+    lines += ["## Summary", ""]
     if not found:
         lines.append("No disagreements.")
     else:
@@ -320,9 +467,11 @@ def render_disagreements(records: list[Record]) -> str:
         lines += ["| Between | Kind | Count |", "|---|---|---|"]
         for (a, b, kind), count in sorted(tally.items()):
             lines.append(f"| `{a}` vs `{b}` | {kind} | {count} |")
-        lines += ["", "## Detail", ""]
+    rules = [item for item in found if item.kind not in PARSE_KINDS]
+    if rules:
+        lines += ["", "## Detail", "", "The rules disagreements; the parse divergences are listed above.", ""]
         current = None
-        for item in found:
+        for item in rules:
             if item.record != current:
                 if current is not None:
                     lines.append("")

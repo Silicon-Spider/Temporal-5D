@@ -11,17 +11,25 @@ decides, and the oracle that turns out to be wrong gets an entry in
 
 An oracle that cannot answer a question (or ran out of time) says nothing, and a
 silence never counts as a disagreement. "Soft" legality entries cannot tell a rules
-disagreement from notation the rejecting oracle does not read.
+disagreement from notation the rejecting oracle does not read. Two oracles that read
+the record's moves as different positions are a parse divergence, listed first: what
+they say about the rules from there on is about two different positions, and is not
+compared.
 
 ## What each oracle could say
 
-| Source | ok | rejected | unsupported | error | timeout | positions | known values |
-|---|---|---|---|---|---|---|---|
-| `ftxi` | 28 | 4 | 9 | 0 | 0 | 970 | 3880 |
-| `ftxi:naive` | 20 | 4 | 9 | 0 | 8 | 873 | 3492 |
-| `cwmtt` | 26 | 1 | 14 | 0 | 0 | 896 | 1792 |
-| `cwmtt:naive` | 17 | 1 | 14 | 0 | 9 | 702 | 1404 |
-| `chessin5d` | 26 | 2 | 13 | 0 | 0 | 874 | 2608 |
+"Known values" counts answers; "described" counts the positions at which the oracle
+said what it had set up, and "with markers" those at which it also said which pieces
+had not moved.
+
+| Source | ok | rejected | unsupported | error | timeout | positions | known values | described | with markers |
+|---|---|---|---|---|---|---|---|---|---|
+| `ftxi` | 28 | 4 | 9 | 0 | 0 | 970 | 3880 | 970 | 970 |
+| `ftxi:naive` | 20 | 4 | 9 | 0 | 8 | 881 | 3492 | 881 | 881 |
+| `cwmtt` | 26 | 1 | 14 | 0 | 0 | 896 | 2688 | 896 | 896 |
+| `cwmtt:naive` | 16 | 1 | 14 | 0 | 10 | 711 | 2113 | 711 | 711 |
+| `chessin5d` | 26 | 2 | 13 | 0 | 0 | 874 | 2608 | 874 | 874 |
+| `notation` | 27 | 2 | 12 | 0 | 0 | 698 | 671 | 698 | 0 |
 
 ## Which rulesets each oracle replays
 
@@ -31,21 +39,21 @@ answer from at least one oracle. "(custom positions)" gathers the records that s
 their own position, with 5DFEN boards or a custom board: they exercise the rules, but
 they are evidence about no named variant.
 
-| Ruleset | Records | `ftxi` | `ftxi:naive` | `cwmtt` | `cwmtt:naive` | `chessin5d` | Positions | check | counts | mate |
-|---|---|---|---|---|---|---|---|---|---|---|
-| (custom positions) | 6 | 6 | 5 | 0 | 0 | 4 | 140 | 140 | 140 | 140 |
-| Focused - Just Brawns | 1 | 0 | 0 | 1 | 1 | 0 | 8 | 0 | 8 | 8 |
-| Focused - Just Kings | 1 | 0 | 0 | 1 | 1 | 0 | 4 | 0 | 4 | 4 |
-| Focused - Just Pawns | 1 | 0 | 0 | 1 | 1 | 0 | 4 | 0 | 4 | 4 |
-| Misc - Small | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| Misc - Timeline Battleground | 1 | 0 | 0 | 1 | 1 | 0 | 19 | 0 | 19 | 18 |
-| Misc - Timeline Invasion | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| Misc - Timeline Marauders | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| Standard | 17 | 16 | 14 | 13 | 9 | 16 | 667 | 605 | 622 | 666 |
-| Standard - Half Reflected | 1 | 0 | 0 | 1 | 1 | 1 | 21 | 21 | 21 | 21 |
-| Standard - Reversed Royalty | 1 | 1 | 0 | 1 | 0 | 1 | 122 | 122 | 122 | 122 |
-| Standard - Turn Zero | 7 | 7 | 4 | 6 | 2 | 6 | 144 | 138 | 144 | 143 |
-| Very Small - Open | 2 | 2 | 1 | 2 | 2 | 0 | 23 | 23 | 23 | 23 |
+| Ruleset | Records | `ftxi` | `ftxi:naive` | `cwmtt` | `cwmtt:naive` | `chessin5d` | `notation` | Positions | check | counts | mate |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| (custom positions) | 6 | 6 | 5 | 0 | 0 | 4 | 5 | 140 | 140 | 140 | 140 |
+| Focused - Just Brawns | 1 | 0 | 0 | 1 | 1 | 0 | 0 | 8 | 0 | 8 | 8 |
+| Focused - Just Kings | 1 | 0 | 0 | 1 | 1 | 0 | 0 | 4 | 0 | 4 | 4 |
+| Focused - Just Pawns | 1 | 0 | 0 | 1 | 1 | 0 | 0 | 4 | 0 | 4 | 4 |
+| Misc - Small | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| Misc - Timeline Battleground | 1 | 0 | 0 | 1 | 1 | 0 | 0 | 19 | 0 | 19 | 18 |
+| Misc - Timeline Invasion | 1 | 0 | 0 | 0 | 0 | 0 | 1 | 23 | 0 | 0 | 0 |
+| Misc - Timeline Marauders | 1 | 0 | 0 | 0 | 0 | 0 | 1 | 3 | 0 | 0 | 0 |
+| Standard | 17 | 16 | 14 | 13 | 9 | 16 | 15 | 668 | 605 | 622 | 666 |
+| Standard - Half Reflected | 1 | 0 | 0 | 1 | 1 | 1 | 1 | 21 | 21 | 21 | 21 |
+| Standard - Reversed Royalty | 1 | 1 | 0 | 1 | 0 | 1 | 0 | 122 | 122 | 122 | 122 |
+| Standard - Turn Zero | 7 | 7 | 4 | 6 | 2 | 6 | 6 | 144 | 138 | 144 | 143 |
+| Very Small - Open | 2 | 2 | 1 | 2 | 1 | 0 | 0 | 23 | 23 | 23 | 23 |
 
 ## How much two oracles were compared
 
@@ -54,56 +62,128 @@ the two answers are compatible but do not pin each other down: both counts stopp
 the cap (only "at least that many" was compared), or one source says only that no
 action exists where the other says which kind of end it is. Pairs of searches inside
 one implementation are included: they are the check on the search, not on the rules.
+"Same state" counts the positions known to be the same position: both sources said
+what they had set up there, unmoved markers included, and it was the same. "Same
+boards" counts those at which they held the same boards and pieces, but marked
+different pieces as unmoved or one of them does not give the markers; "unverified"
+those at which one of the two said nothing of what it set up, so that the two are
+aligned only by counting actions. Positions from a placement divergence on are not
+compared, and not counted.
 
-| Between | Observable | Both answered | Equal | Loosely | Contradictory |
-|---|---|---|---|---|---|
-| `ftxi` vs `ftxi:naive` (one implementation) | in_check | 873 | 873 | 0 | 0 |
-| `ftxi` vs `ftxi:naive` (one implementation) | legal_actions | 873 | 473 | 400 | 0 |
-| `ftxi` vs `ftxi:naive` (one implementation) | terminal | 873 | 873 | 0 | 0 |
-| `ftxi` vs `cwmtt` | legal_actions | 759 | 414 | 344 | 1 |
-| `ftxi` vs `cwmtt` | terminal | 759 | 749 | 10 | 0 |
-| `ftxi` vs `cwmtt:naive` | legal_actions | 621 | 398 | 222 | 1 |
-| `ftxi` vs `cwmtt:naive` | terminal | 621 | 616 | 5 | 0 |
-| `ftxi` vs `chessin5d` | in_check | 795 | 717 | 0 | 78 |
-| `ftxi` vs `chessin5d` | terminal | 781 | 779 | 0 | 2 |
-| `ftxi:naive` vs `cwmtt` | legal_actions | 683 | 402 | 280 | 1 |
-| `ftxi:naive` vs `cwmtt` | terminal | 683 | 678 | 5 | 0 |
-| `ftxi:naive` vs `cwmtt:naive` | legal_actions | 618 | 396 | 221 | 1 |
-| `ftxi:naive` vs `cwmtt:naive` | terminal | 618 | 614 | 4 | 0 |
-| `ftxi:naive` vs `chessin5d` | in_check | 720 | 667 | 0 | 53 |
-| `ftxi:naive` vs `chessin5d` | terminal | 711 | 709 | 0 | 2 |
-| `cwmtt` vs `cwmtt:naive` (one implementation) | legal_actions | 702 | 452 | 250 | 0 |
-| `cwmtt` vs `cwmtt:naive` (one implementation) | terminal | 702 | 694 | 8 | 0 |
-| `cwmtt` vs `chessin5d` | terminal | 749 | 739 | 9 | 1 |
-| `cwmtt:naive` vs `chessin5d` | terminal | 622 | 616 | 5 | 1 |
+| Between | Observable | Both answered | Equal | Loosely | Contradictory | Same state | Same boards | Unverified |
+|---|---|---|---|---|---|---|---|---|
+| `ftxi` vs `ftxi:naive` (one implementation) | in_check | 873 | 873 | 0 | 0 | 873 | 0 | 0 |
+| `ftxi` vs `ftxi:naive` (one implementation) | legal_actions | 873 | 473 | 400 | 0 | 873 | 0 | 0 |
+| `ftxi` vs `ftxi:naive` (one implementation) | terminal | 873 | 873 | 0 | 0 | 873 | 0 | 0 |
+| `ftxi` vs `cwmtt` | legal_actions | 759 | 414 | 344 | 1 | 736 | 23 | 0 |
+| `ftxi` vs `cwmtt` | terminal | 759 | 749 | 10 | 0 | 736 | 23 | 0 |
+| `ftxi` vs `cwmtt:naive` | legal_actions | 620 | 397 | 222 | 1 | 598 | 22 | 0 |
+| `ftxi` vs `cwmtt:naive` | terminal | 620 | 616 | 4 | 0 | 598 | 22 | 0 |
+| `ftxi` vs `chessin5d` | in_check | 795 | 717 | 0 | 78 | 795 | 0 | 0 |
+| `ftxi` vs `chessin5d` | terminal | 781 | 779 | 0 | 2 | 781 | 0 | 0 |
+| `ftxi:naive` vs `cwmtt` | legal_actions | 683 | 402 | 280 | 1 | 661 | 22 | 0 |
+| `ftxi:naive` vs `cwmtt` | terminal | 683 | 678 | 5 | 0 | 661 | 22 | 0 |
+| `ftxi:naive` vs `cwmtt:naive` | legal_actions | 618 | 396 | 221 | 1 | 596 | 22 | 0 |
+| `ftxi:naive` vs `cwmtt:naive` | terminal | 618 | 614 | 4 | 0 | 596 | 22 | 0 |
+| `ftxi:naive` vs `chessin5d` | in_check | 720 | 667 | 0 | 53 | 720 | 0 | 0 |
+| `ftxi:naive` vs `chessin5d` | terminal | 711 | 709 | 0 | 2 | 711 | 0 | 0 |
+| `cwmtt` vs `cwmtt:naive` (one implementation) | legal_actions | 701 | 451 | 250 | 0 | 701 | 0 | 0 |
+| `cwmtt` vs `cwmtt:naive` (one implementation) | terminal | 701 | 694 | 7 | 0 | 701 | 0 | 0 |
+| `cwmtt` vs `chessin5d` | terminal | 749 | 739 | 9 | 1 | 749 | 0 | 0 |
+| `cwmtt:naive` vs `chessin5d` | terminal | 622 | 616 | 5 | 1 | 622 | 0 | 0 |
+
+## Parse divergences
+
+Each source says what it set up at every position, and two sources' positions are
+compared there before anything else (decision H30). A **placement** divergence is the
+first position at which the two hold different boards - different pieces, or the same
+pieces on boards at other coordinates: from there on they answer about different
+positions, so nothing either says there or after it is compared, and no rules
+disagreement from there on is listed below. It is settled against the notation
+specification. A **marker-only** divergence is a run of positions at which they hold
+the same boards and pieces but mark different ones as unmoved, listed where it begins;
+it suppresses nothing, and it is settled against the notation specification's "5DFEN
+Strictness" or the rulebook (what having moved means). The hashes are the notation
+specification's full-state hash - without the unmoved markers for a placement
+divergence, with them for a marker-only one. Two searches of one implementation replay
+the record with the same code, so a parse divergence between them is a bug in the
+harness or its driver, not a reading.
+
+| Record | Between | Position | Divergence | First source | Second source | Not compared |
+|---|---|---|---|---|---|---|
+| `cwmtt/ctp1` | `ftxi` vs `cwmtt` | 0 | marker-only | `d2c9497bf0c2e7644ce38ffb5d5b61da` (1 board, 10 pieces) | `766312fd4b977c55487b7f5465932937` (1 board, 10 pieces) | - |
+| `cwmtt/ctp1` | `ftxi` vs `cwmtt:naive` | 0 | marker-only | `d2c9497bf0c2e7644ce38ffb5d5b61da` (1 board, 10 pieces) | `766312fd4b977c55487b7f5465932937` (1 board, 10 pieces) | - |
+| `cwmtt/ctp1` | `ftxi:naive` vs `cwmtt` | 0 | marker-only | `d2c9497bf0c2e7644ce38ffb5d5b61da` (1 board, 10 pieces) | `766312fd4b977c55487b7f5465932937` (1 board, 10 pieces) | - |
+| `cwmtt/ctp1` | `ftxi:naive` vs `cwmtt:naive` | 0 | marker-only | `d2c9497bf0c2e7644ce38ffb5d5b61da` (1 board, 10 pieces) | `766312fd4b977c55487b7f5465932937` (1 board, 10 pieces) | - |
+| `ftxi/verysmall` | `ftxi` vs `cwmtt` | 0 | marker-only | `d2c9497bf0c2e7644ce38ffb5d5b61da` (1 board, 10 pieces) | `766312fd4b977c55487b7f5465932937` (1 board, 10 pieces) | - |
+| `ftxi/verysmall` | `ftxi` vs `cwmtt:naive` | 0 | marker-only | `d2c9497bf0c2e7644ce38ffb5d5b61da` (1 board, 10 pieces) | `766312fd4b977c55487b7f5465932937` (1 board, 10 pieces) | - |
+| `ftxi/verysmall` | `ftxi:naive` vs `cwmtt` | 0 | marker-only | `d2c9497bf0c2e7644ce38ffb5d5b61da` (1 board, 10 pieces) | `766312fd4b977c55487b7f5465932937` (1 board, 10 pieces) | - |
+| `ftxi/verysmall` | `ftxi:naive` vs `cwmtt:naive` | 0 | marker-only | `d2c9497bf0c2e7644ce38ffb5d5b61da` (1 board, 10 pieces) | `766312fd4b977c55487b7f5465932937` (1 board, 10 pieces) | - |
+
+"Not compared" counts the positions both sources reached from the divergence on.
+
+Positions at which both sources of a pair said what they set up, and how many of
+those held the same boards and pieces; then the positions at which both also marked
+the unmoved pieces (a source that does not track them says only which boards it holds
+and where the pieces are), and how many of those were marked the same way.
+
+| Between | Both described | Same boards | Both marked | Same markers |
+|---|---|---|---|---|
+| `ftxi` vs `ftxi:naive` (one implementation) | 881 | 881 | 881 | 881 |
+| `ftxi` vs `cwmtt` | 759 | 759 | 759 | 736 |
+| `ftxi` vs `cwmtt:naive` | 628 | 628 | 628 | 605 |
+| `ftxi` vs `chessin5d` | 795 | 795 | 795 | 795 |
+| `ftxi` vs `notation` | 586 | 586 | 0 | 0 |
+| `ftxi:naive` vs `cwmtt` | 690 | 690 | 690 | 667 |
+| `ftxi:naive` vs `cwmtt:naive` | 626 | 626 | 626 | 603 |
+| `ftxi:naive` vs `chessin5d` | 726 | 726 | 726 | 726 |
+| `ftxi:naive` vs `notation` | 550 | 550 | 0 | 0 |
+| `cwmtt` vs `cwmtt:naive` (one implementation) | 711 | 711 | 711 | 711 |
+| `cwmtt` vs `chessin5d` | 763 | 763 | 763 | 763 |
+| `cwmtt` vs `notation` | 555 | 555 | 0 | 0 |
+| `cwmtt:naive` vs `chessin5d` | 632 | 632 | 632 | 632 |
+| `cwmtt:naive` vs `notation` | 508 | 508 | 0 | 0 |
+| `chessin5d` vs `notation` | 657 | 657 | 0 | 0 |
 
 ## Summary
 
 | Between | Kind | Count |
 |---|---|---|
+| `chessin5d` vs `notation` | legality (soft) | 1 |
 | `cwmtt` vs `chessin5d` | legality (soft) | 1 |
 | `cwmtt` vs `chessin5d` | terminal | 1 |
+| `cwmtt` vs `notation` | legality (soft) | 2 |
 | `cwmtt:naive` vs `chessin5d` | terminal | 1 |
 | `ftxi` vs `chessin5d` | in_check | 78 |
 | `ftxi` vs `chessin5d` | legality (soft) | 1 |
 | `ftxi` vs `chessin5d` | terminal | 2 |
 | `ftxi` vs `cwmtt` | legal_actions | 1 |
 | `ftxi` vs `cwmtt` | legality (soft) | 3 |
+| `ftxi` vs `cwmtt` | unmoved | 2 |
 | `ftxi` vs `cwmtt:naive` | legal_actions | 1 |
+| `ftxi` vs `cwmtt:naive` | unmoved | 2 |
+| `ftxi` vs `notation` | legality (soft) | 3 |
 | `ftxi:naive` vs `chessin5d` | in_check | 53 |
 | `ftxi:naive` vs `chessin5d` | terminal | 2 |
 | `ftxi:naive` vs `cwmtt` | legal_actions | 1 |
+| `ftxi:naive` vs `cwmtt` | unmoved | 2 |
 | `ftxi:naive` vs `cwmtt:naive` | legal_actions | 1 |
+| `ftxi:naive` vs `cwmtt:naive` | unmoved | 2 |
 
 ## Detail
+
+The rules disagreements; the parse divergences are listed above.
 
 ### `cwmtt/100_timelines`
 
 - position 13, in_check: `ftxi` = True; `chessin5d` = False
 - position 15, in_check: `ftxi` = True; `chessin5d` = False
 - position 20, in_check: `ftxi` = True; `chessin5d` = False
+- action 1, legality *(soft)*: `ftxi` = accepted; `notation` = rejected:no_matching_move
 - position 13, in_check: `ftxi:naive` = True; `chessin5d` = False
 - position 15, in_check: `ftxi:naive` = True; `chessin5d` = False
+- action 1, legality *(soft)*: `cwmtt` = accepted; `notation` = rejected:no_matching_move
+- action 1, legality *(soft)*: `chessin5d` = accepted; `notation` = rejected:no_matching_move
 
 ### `cwmtt/NP`
 
@@ -140,11 +220,13 @@ one implementation are included: they are the check on the search, not on the ru
 
 - action 17, legality *(soft)*: `ftxi` = rejected:no_matching_move; `cwmtt` = accepted
 - action 17, legality *(soft)*: `ftxi` = rejected:no_matching_move; `chessin5d` = accepted
+- action 17, legality *(soft)*: `ftxi` = rejected:no_matching_move; `notation` = accepted
 
 ### `cwmtt/many2`
 
 - action 1, legality *(soft)*: `ftxi` = rejected:no_matching_move; `cwmtt` = accepted
 - action 1, legality *(soft)*: `cwmtt` = accepted; `chessin5d` = rejected:no_matching_move
+- action 1, legality *(soft)*: `cwmtt` = accepted; `notation` = rejected:no_matching_move
 
 ### `cwmtt/manyChecks`
 
@@ -251,6 +333,7 @@ one implementation are included: they are the check on the search, not on the ru
 ### `cwmtt/tesseractMageOChicken`
 
 - action 28, legality *(soft)*: `ftxi` = rejected:no_matching_move; `cwmtt` = accepted
+- action 28, legality *(soft)*: `ftxi` = rejected:no_matching_move; `notation` = accepted
 
 ### `cwmtt/wide`
 

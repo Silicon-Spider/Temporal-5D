@@ -1,10 +1,11 @@
+import dataclasses
 import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
 from oracle_harness import gate, paths
-from oracle_harness.adapters import ORACLE_SOURCES, EngineSource, Source
+from oracle_harness.adapters import ORACLE_SOURCES, PARSE_ONLY_SOURCES, EngineSource, Source
 from oracle_harness.corpus import CUSTOM_POSITIONS, Record
 from oracle_harness.divergences import Divergence
 from oracle_harness.gate import Gated, GateResult
@@ -40,7 +41,28 @@ def obs(source, record_id, rows, status="ok", reason=""):
                        actions_accepted=max(len(positions) - 1, 0), cap=1000)
 
 
-class EngineDifferentialTests(unittest.TestCase):
+def hashed(number):
+    return f"{number:032x}"
+
+
+def described(observation, placements, fingerprints=None):
+    """The same report, saying what it set up at each position (one board, 32 pieces)."""
+    fingerprints = fingerprints or [None] * len(placements)
+    observation.positions = [
+        dataclasses.replace(position, placement=hashed(placement), fingerprint=None if marked is None else hashed(marked),
+                            boards=1, pieces=32)
+        for position, placement, marked in zip(observation.positions, placements, fingerprints, strict=True)]
+    return observation
+
+
+def state_text(number):
+    """A hash as the gate prints it."""
+    return f"{hashed(number)} (1 board, 32 pieces)"
+
+
+class DifferentialCase(unittest.TestCase):
+    """The engine differential's fixtures: three oracle searches over two records of two rulesets."""
+
     def setUp(self):
         self.engine = EngineSource(["engine"])
         self.oracles = [Named("ftxi"), Named("ftxi:naive"), Named("chessin5d")]
@@ -64,6 +86,15 @@ class EngineDifferentialTests(unittest.TestCase):
         """Oracle reports saying these sources do not read that record."""
         return {(name, record_id): obs(name, record_id, [], status="unsupported", reason=reason) for name in names}
 
+    def divergence(self, **changes):
+        values = dict(id="KD-0001", oracle="chessin5d", pin="p", record="r/std", record_sha256="s", kind="in_check",
+                      index=1, engine_value="True", oracle_value="False", rulebook="x" * 30,
+                      upstream="https://example.com/1", added="2026-10-01")
+        values.update(changes)
+        return Divergence(**values)
+
+
+class EngineDifferentialTests(DifferentialCase):
     def test_an_engine_that_agrees_with_every_oracle_passes_every_ruleset(self):
         findings, gated, ungated = self.run_differential()
         self.assertEqual(findings, [])
@@ -78,13 +109,6 @@ class EngineDifferentialTests(unittest.TestCase):
         self.assertIn("r/tz position 1: in_check: engine=True vs ftxi=False", findings[0].message)
         self.assertEqual(list(gated), ["Standard"])
         self.assertEqual(ungated, {TZ: "unexplained divergence"})
-
-    def divergence(self, **changes):
-        values = dict(id="KD-0001", oracle="chessin5d", pin="p", record="r/std", record_sha256="s", kind="in_check",
-                      index=1, engine_value="True", oracle_value="False", rulebook="x" * 30,
-                      upstream="https://example.com/1", added="2026-10-01")
-        values.update(changes)
-        return Divergence(**values)
 
     def test_a_known_divergence_is_excused_where_it_was_recorded(self):
         # The engine and ftxi say check; Chess in 5D says no check, and that is on record.
@@ -270,6 +294,154 @@ class EngineDifferentialTests(unittest.TestCase):
         self.assertEqual((gated["Standard"].records, gated[CUSTOM_POSITIONS].records), (1, 2))
 
 
+class ParseDifferentialTests(DifferentialCase):
+    """What the engine set up is compared with what each oracle set up, first (decision H30)."""
+
+    def everyone(self, record_id, rows, placements, fingerprints=None, names=("ftxi", "ftxi:naive", "chessin5d")):
+        return {(name, record_id): described(obs(name, record_id, rows), placements, fingerprints) for name in names}
+
+    def placement_entries(self, engine_says, oracle_says, names=("ftxi", "ftxi:naive", "chessin5d")):
+        return [self.divergence(id=f"KD-000{number}", oracle=name, record="r/tz", kind="placement", index=1,
+                                engine_value=state_text(engine_says), oracle_value=state_text(oracle_says),
+                                rulebook="", notation="x" * 30)
+                for number, name in enumerate(names, 1)]
+
+    def test_positions_set_up_alike_are_counted_as_aligned(self):
+        engine = {item.id: described(obs("engine", item.id, [W, B]), [1, 2], [11, 12]) for item in self.records}
+        reports = {**self.everyone("r/std", [W, B], [1, 2], [11, 12]), **self.everyone("r/tz", [W, B], [1, 2], [11, 12])}
+        findings, gated, ungated = self.run_differential(engine, reports)
+        self.assertEqual((findings, ungated), ([], {}))
+        self.assertEqual(gated[TZ], Gated(records=1, positions=2, checked=FULL, oracles=2, aligned=2, matched=2))
+        self.assertIn("2 positions; an oracle held the engine's boards and pieces at 2 of them, and its exact state "
+                      "(markers included) at 2;", gated[TZ].describe())
+
+    def test_an_oracle_that_does_not_track_markers_verifies_the_boards_only(self):
+        engine = {item.id: described(obs("engine", item.id, [W, B]), [1, 2], [11, 12]) for item in self.records}
+        reports = {**self.everyone("r/std", [W, B], [1, 2]), **self.everyone("r/tz", [W, B], [1, 2])}
+        findings, gated, _ = self.run_differential(engine, reports)
+        self.assertEqual(findings, [])
+        self.assertEqual((gated[TZ].aligned, gated[TZ].matched), (2, 0))
+        self.assertEqual(gated[TZ].checked, FULL)  # nothing known to differ: its answers count
+
+    def test_an_oracle_that_says_nothing_of_its_state_leaves_the_alignment_unverified(self):
+        engine = {item.id: described(obs("engine", item.id, [W, B]), [1, 2]) for item in self.records}
+        _, gated, _ = self.run_differential(engine)
+        self.assertEqual((gated[TZ].aligned, gated[TZ].matched), (0, 0))
+
+    def test_a_placement_divergence_is_a_finding_and_nothing_after_it_is_compared(self):
+        # The engine reads r/tz's first action as another position than every
+        # oracle does - and then, there, disagrees about check. Only the parse
+        # divergence is reported: the check verdicts are about different positions.
+        engine = {"r/tz": described(obs("engine", "r/tz", [W, B_CHECK]), [1, 2])}
+        reports = self.everyone("r/tz", [W, B], [1, 3])
+        findings, gated, ungated = self.run_differential(engine, reports)
+        self.assertEqual([item.code for item in findings], ["divergence"] * 3)  # one per oracle source
+        self.assertTrue(findings[0].message.startswith(
+            f"r/tz position 1: placement: engine={state_text(2)} vs ftxi={state_text(3)} (parse divergence"))
+        self.assertTrue(all("placement" in item.message for item in findings))
+        self.assertEqual((list(gated), ungated), (["Standard"], {TZ: "unexplained divergence"}))
+
+    def test_an_excused_placement_divergence_still_leaves_the_oracle_unable_to_stand_behind_the_record(self):
+        engine = {"r/tz": described(obs("engine", "r/tz", [W, B]), [1, 2])}
+        reports = self.everyone("r/tz", [W, B], [1, 3])
+        findings, gated, ungated = self.run_differential(engine, reports, self.placement_entries(2, 3))
+        self.assertEqual(findings, [])
+        self.assertEqual(ungated, {TZ: "no oracle followed r/tz as far as the engine went"})
+
+    def test_answers_from_where_an_oracle_parted_from_the_engine_check_nothing(self):
+        # ftxi parts from the engine at position 1, and an entry excuses that. Its
+        # count there is about another position, and Chess in 5D gives no count:
+        # position 1's count stands unchecked.
+        engine = {"r/tz": described(obs("engine", "r/tz", [W, B]), [1, 2])}
+        reports = {**self.everyone("r/tz", [W, B], [1, 3], names=("ftxi", "ftxi:naive")),
+                   **self.everyone("r/tz", [W_VERDICT, B_VERDICT], [1, 2], names=("chessin5d",))}
+        entries = self.placement_entries(2, 3, names=("ftxi", "ftxi:naive"))
+        findings, gated, ungated = self.run_differential(engine, reports, entries)
+        self.assertEqual(findings, [])
+        self.assertEqual(ungated, {TZ: "the oracles give a count verdict at only 1 of the engine's 2 positions "
+                                       "(the floor is 100%)"})
+
+    def unmoved_entries(self, index, engine_says, oracle_says, names=("ftxi", "ftxi:naive", "chessin5d"), first=1):
+        return [self.divergence(id=f"KD-{number:04d}", oracle=name, record="r/tz", kind="unmoved", index=index,
+                                engine_value=state_text(engine_says), oracle_value=state_text(oracle_says),
+                                rulebook="", notation="x" * 30)
+                for number, name in enumerate(names, first)]
+
+    def test_a_marker_only_divergence_is_a_finding_that_suppresses_nothing(self):
+        engine = {"r/tz": described(obs("engine", "r/tz", [W, B_CHECK]), [1, 2], [11, 12])}
+        reports = self.everyone("r/tz", [W, B], [1, 2], [11, 22])
+        findings, gated, _ = self.run_differential(engine, reports)
+        kinds = sorted(item.message.split(": ")[1] for item in findings)
+        self.assertEqual(kinds, ["in_check"] * 3 + ["unmoved"] * 3)  # the check disagreement is still there
+
+    def test_an_oracle_whose_markers_differ_follows_the_record_but_checks_nothing_there(self):
+        # Excused, the oracles still stand behind the record - they read the same
+        # moves to the same pieces - but at position 1 they hold other unmoved
+        # markers than the engine: their answers there are about another position.
+        entries = self.unmoved_entries(1, 12, 22)
+        engine = {"r/tz": described(obs("engine", "r/tz", [W, B]), [1, 2], [11, 12])}
+        reports = self.everyone("r/tz", [W, B], [1, 2], [11, 22])
+        findings, gated, ungated = self.run_differential(engine, reports, entries)
+        self.assertEqual(findings, [])
+        self.assertEqual(ungated[TZ], "the oracles give a check verdict at only 1 of the engine's 2 positions (the "
+                                      "floor is 100%); at 1 more, the only check verdict that agrees comes from an "
+                                      "oracle whose unmoved markers differ from the engine's there, which does not count")
+        # Where an oracle that holds the engine's exact state answers too, the position is checked.
+        self.oracles.append(Named("cwmtt"))
+        reports[("cwmtt", "r/tz")] = described(obs("cwmtt", "r/tz", [W, B]), [1, 2], [11, 12])
+        findings, gated, ungated = self.run_differential(engine, reports, entries)
+        self.assertEqual((findings, ungated), ([], {}))
+        self.assertEqual(gated[TZ], Gated(records=1, positions=2, checked=FULL, oracles=3, aligned=2, matched=2))
+
+    def test_each_run_of_differing_markers_is_its_own_divergence(self):
+        # The markers differ at positions 1 and 2, agree at 3, and differ again at 4:
+        # two runs, two divergences - one entry cannot excuse what comes after the markers met again.
+        rows = [W, B, W, B, W]
+        engine = {"r/tz": described(obs("engine", "r/tz", rows), [1, 2, 3, 4, 5], [11, 12, 13, 14, 15])}
+        reports = self.everyone("r/tz", rows, [1, 2, 3, 4, 5], [11, 22, 23, 14, 25])
+        findings, _, _ = self.run_differential(engine, reports)
+        self.assertEqual(sorted(item.message.split(":")[0] for item in findings),
+                         ["r/tz position 1"] * 3 + ["r/tz position 4"] * 3)
+        findings, _, _ = self.run_differential(engine, reports, self.unmoved_entries(1, 12, 22))
+        self.assertEqual([item.message.split(" vs ")[0] for item in findings],
+                         [f"r/tz position 4: unmoved: engine={state_text(15)}"] * 3)
+        both = self.unmoved_entries(1, 12, 22) + self.unmoved_entries(4, 15, 25, first=4)
+        findings, _, _ = self.run_differential(engine, reports, both)
+        self.assertEqual(findings, [])
+
+    def test_a_parse_only_source_stands_behind_no_replay_and_checks_no_verdict(self):
+        # The parser reads all of r/tz as the engine does, and nothing else reads it:
+        # what was set up is verified, but no rules oracle followed the record.
+        reader = PARSE_ONLY_SOURCES[0]
+        self.oracles = [Named("ftxi"), Named(reader)]
+        engine = {"r/tz": described(obs("engine", "r/tz", [W, B]), [1, 2])}
+        reports = {**self.silence("ftxi"), (reader, "r/tz"): described(obs(reader, "r/tz", [("white", None, None, None),
+                                                                                          ("black", None, None, None)]), [1, 2])}
+        findings, gated, ungated = self.run_differential(engine, reports, min_checked=0.5)
+        self.assertEqual(findings, [])
+        self.assertEqual(ungated, {TZ: "no oracle followed r/tz as far as the engine went"})
+        # And its playing on is no verdict against the engine's refusal of an action.
+        refused = described(obs("engine", "r/tz", [W], status="rejected", reason="illegal_move"), [1])
+        findings, _, _ = self.run_differential({"r/tz": refused}, reports, min_checked=0.5)
+        self.assertEqual(findings, [])
+
+    def test_a_placement_entry_that_no_longer_occurs_is_stale(self):
+        engine = {"r/tz": described(obs("engine", "r/tz", [W, B]), [1, 2])}
+        reports = self.everyone("r/tz", [W, B], [1, 2])
+        findings, _, _ = self.run_differential(engine, reports, self.placement_entries(2, 3))
+        self.assertEqual([item.code for item in findings], ["divergence-stale"] * 3)
+
+    def test_an_entry_about_a_position_after_the_parting_is_neither_used_nor_stale(self):
+        # The engine and ftxi now part at position 0: nothing after it was compared,
+        # so an entry about check at position 1 was not looked at.
+        engine = {"r/tz": described(obs("engine", "r/tz", [W, B]), [5, 2])}
+        reports = self.everyone("r/tz", [W, B], [1, 2])
+        check = self.divergence(record="r/tz", oracle="chessin5d", index=1)
+        findings, _, _ = self.run_differential(engine, reports, [check])
+        self.assertEqual([item.code for item in findings], ["divergence"] * 3)
+        self.assertTrue(all("position 0: placement" in item.message for item in findings))
+
+
 class WriteGoldenTests(unittest.TestCase):
     class Signed(Named):
         def __init__(self, name, drifts):
@@ -329,8 +501,9 @@ class EngineCommandTests(unittest.TestCase):
 
 
 class ResultTests(unittest.TestCase):
-    ONE = Gated(records=1, positions=2, checked=FULL, oracles=1)
-    THREE = Gated(records=4, positions=90, checked={"in_check": 80, "legal_actions": 85, "terminal": 90}, oracles=3)
+    ONE = Gated(records=1, positions=2, checked=FULL, oracles=1, aligned=2, matched=2)
+    THREE = Gated(records=4, positions=90, checked={"in_check": 80, "legal_actions": 85, "terminal": 90}, oracles=3,
+                  aligned=88, matched=70)
 
     def result(self, tier="commit", engine="not configured", findings=(), engine_findings=(), gated=None, partial=False,
                require_engine=False, full_strength=False, coverage=None):
@@ -367,10 +540,13 @@ class ResultTests(unittest.TestCase):
     def test_only_a_complete_run_of_a_full_strength_tier_that_requires_an_engine_enables_the_proof_channel(self):
         passed = dict(engine="passed", gated={"Standard": self.THREE, "Very Small - Open": self.ONE})
         channel = self.release(**passed).proof_channel
-        self.assertTrue(channel.startswith("may be enabled for: Standard (4 records, 90 positions; "), channel)
+        self.assertTrue(channel.startswith(
+            "may be enabled for: Standard (4 records, 90 positions; an oracle held the engine's boards and pieces "
+            "at 88 of them, and its exact state (markers included) at 70; "), channel)
         self.assertIn("independently answered: check 80, count 85, mate 90", channel)
         self.assertIn("at least 3 oracles", channel)
-        self.assertIn("Very Small - Open (1 record, 2 positions; ", channel)
+        self.assertIn("Very Small - Open (1 record, 2 positions; an oracle held the engine's boards and pieces at 2 "
+                      "of them, and its exact state (markers included) at 2; ", channel)
         # A tier is judged by what it runs, not by what it is called.
         self.assertTrue(self.result(tier="release", require_engine=True, **passed).proof_channel.startswith("DISABLED"))
         self.assertTrue(self.result(tier="nightly", full_strength=True, **passed).proof_channel.startswith("DISABLED"))
@@ -420,7 +596,9 @@ class ResultTests(unittest.TestCase):
         result = self.result(engine="passed", gated={"Standard": self.THREE})
         result.ungated = {"Misc - Small": "no oracle followed notation/game as far as the engine went"}
         text = gate.summarise(result)
-        self.assertIn("gated:     Standard (4 records, 90 positions; independently answered: check 80, count 85, mate 90; "
+        self.assertIn("gated:     Standard (4 records, 90 positions; an oracle held the engine's boards and pieces at "
+                      "88 of them, and its exact state (markers included) at 70; "
+                      "independently answered: check 80, count 85, mate 90; "
                       "each record followed as far as the engine went by at least 3 oracles)", text)
         self.assertIn("NOT gated: Misc - Small - no oracle followed notation/game as far as the engine went", text)
 

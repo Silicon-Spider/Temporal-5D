@@ -23,7 +23,16 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from . import boundary, config, corpus, divergences, fidelity, golden, lockfile, observations, paths, provenance, runner
-from .adapters import ORACLE_SOURCES, PRIMARY_SOURCES, EngineSource, RunOptions, Source, make_source, oracle_of
+from .adapters import (
+    ORACLE_SOURCES,
+    PARSE_ONLY_SOURCES,
+    PRIMARY_SOURCES,
+    EngineSource,
+    RunOptions,
+    Source,
+    make_source,
+    oracle_of,
+)
 from .adapters.ftxi import FtxiSource
 from .corpus import CUSTOM_POSITIONS, Record
 from .lockfile import Lock
@@ -51,10 +60,18 @@ class Gated:
     positions: int  # positions the engine reported, over all the ruleset's records
     checked: dict[str, int]  # observable -> positions at which some oracle's answer settles it and agrees with the engine
     oracles: int  # the fewest independent implementations that followed any one record as far as the engine
+    # Positions at which some oracle held the engine's boards and pieces (equal
+    # placement hashes): the record's moves read alike, markers not compared.
+    aligned: int = 0
+    # Of those, positions at which some oracle held exactly the engine's state,
+    # unmoved markers included (equal fingerprints).
+    matched: int = 0
 
     def describe(self) -> str:
         checked = ", ".join(f"{_LABELS[name]} {self.checked[name]}" for name in OBSERVABLES)
         return (f"{self.records} record{'s' if self.records != 1 else ''}, {self.positions} positions; "
+                f"an oracle held the engine's boards and pieces at {self.aligned} of them, and its exact state "
+                f"(markers included) at {self.matched}; "
                 f"independently answered: {checked}; each record followed as far as the engine went by at least "
                 f"{self.oracles} oracle{'s' if self.oracles != 1 else ''}")
 
@@ -213,6 +230,18 @@ def engine_differential(
 ) -> tuple[list[Finding], dict[str, Gated], dict[str, str]]:
     """Compare the engine with every oracle report; returns (findings, gated, ungated).
 
+    What the engine set up is compared with what each oracle set up before
+    anything else: where an oracle's placement parts from the engine's, that is
+    a parse divergence - a finding unless a known divergence excuses it - and
+    from that position on the oracle answers about another position, so it
+    cannot stand behind the record and none of its answers there or after
+    counts as checking the engine. Where only the unmoved markers differ, the
+    oracle read the same moves to the same pieces and still stands behind the
+    record (a difference that decides an action shows as a legality
+    divergence), but at each position where its markers differ from the
+    engine's - excused or not - its answers are about a position with other
+    rights to castle or to step twice, and do not count as checking the engine.
+
     A ruleset counts as gated only if, over all of its records:
 
       * the engine replayed each one, and no unexplained divergence remains;
@@ -230,6 +259,9 @@ def engine_differential(
     vouched: dict[str, set[str]] = {}
     reported: dict[str, int] = {}
     settled: dict[str, dict[str, int]] = {}
+    unsettled: dict[str, dict[str, int]] = {}  # answered only by oracles whose markers differ from the engine's there
+    aligned: dict[str, int] = {}
+    matched: dict[str, int] = {}
     for record in records:
         observed = engine_results[(engine.name, record.id)]
         if observed.status in ("error", "timeout"):
@@ -237,39 +269,65 @@ def engine_differential(
                 "engine-failed", f"engine on {record.id}: {observed.status} ({observed.reason}) {observed.detail[:300]}"))
         answers = {source.name: results.get((source.name, record.id)) for source in oracle_sources}
         compared = {}
+        parted: dict[str, int] = {}  # implementation -> the first position at which it set up something else
         for name, answer in answers.items():
             if answer is not None:
                 # How a record is replayed belongs to the implementation, not to
                 # each of its searches: one entry excuses one such disagreement.
                 compared[name] = observations.compare(observed, answer, replay=name in PRIMARY_SOURCES)
                 found += compared[name]
+                index = observations.first_placement_divergence(observed, answer)
+                if index is not None:
+                    parted[oracle_of(name)] = min(parted.get(oracle_of(name), index), index)
         # An implementation that read the record differently from the engine -
-        # an action accepted by one and refused by the other, or a record that
-        # ends earlier for one of them - does not stand behind the engine's
-        # replay of it, even where a known divergence excuses the difference.
+        # an action accepted by one and refused by the other, a record that ends
+        # earlier for one of them, a move read as another position - does not
+        # stand behind the engine's replay of it, even where a known divergence
+        # excuses the difference.
         misread = {oracle_of(name) for name, items in compared.items()
-                   if any(item.kind in divergences.REPLAY_KINDS for item in items)}
+                   if any(item.kind in divergences.REPLAY_KINDS for item in items)} | set(parted)
+        # A parse-only source plays any move it can place, legal or not: it says
+        # what it read, and stands behind no replay as a rules oracle does.
         vouched[record.id] = {oracle_of(name) for name, answer in answers.items()
-                              if answer is not None and oracle_of(name) not in misread and _vouches(answer, observed)}
+                              if answer is not None and name not in PARSE_ONLY_SOURCES
+                              and oracle_of(name) not in misread and _vouches(answer, observed)}
         # A position's question counts as independently answered only where an
         # oracle's answer settles it and agrees with the engine's. An answer the
         # engine contradicts confirms nothing - also when the contradiction is on
-        # record as the oracle's error.
+        # record as the oracle's error - and an answer about another position
+        # confirms nothing either: from where the oracle parted from the engine,
+        # and wherever its unmoved markers differ from the engine's.
         answered = [dict.fromkeys(OBSERVABLES, False) for _ in observed.positions]
+        withheld = [dict.fromkeys(OBSERVABLES, False) for _ in observed.positions]
+        boards_held = [False for _ in observed.positions]  # some oracle held the engine's boards and pieces
+        state_held = [False for _ in observed.positions]  # some oracle held exactly the engine's state
         for name, answer in answers.items():
             if answer is None:
                 continue
             clashes = {(item.kind, item.index) for item in compared[name]}
-            for slot, theirs in zip(answered, answer.positions, strict=False):
+            shared = list(zip(answered, withheld, observed.positions, answer.positions, strict=False))
+            for slot, held, mine, theirs in shared[:parted.get(oracle_of(name))]:
+                boards_held[mine.index] = boards_held[mine.index] or bool(observations.aligned(mine, theirs))
+                exact = observations.same_state(mine, theirs)
+                state_held[mine.index] = state_held[mine.index] or bool(exact)
                 for observable in OBSERVABLES:
                     agrees = (observable, theirs.index) not in clashes
-                    slot[observable] = slot[observable] or (agrees and observations.decisive(observable, getattr(theirs, observable)))
+                    confirms = agrees and observations.decisive(observable, getattr(theirs, observable))
+                    if exact is False:
+                        held[observable] = held[observable] or confirms
+                    else:
+                        slot[observable] = slot[observable] or confirms
             looked.update(
                 entry.id for entry in entries
                 if (entry.oracle, entry.record) == (name, record.id)
                 and divergences.looked_at(entry, observed, answer))
         reported[record.id] = len(observed.positions)
         settled[record.id] = {observable: sum(slot[observable] for slot in answered) for observable in OBSERVABLES}
+        unsettled[record.id] = {observable: sum(held[observable] and not slot[observable]
+                                                for slot, held in zip(answered, withheld, strict=True))
+                                for observable in OBSERVABLES}
+        aligned[record.id] = sum(boards_held)
+        matched[record.id] = sum(state_held)
 
     unexplained, stale = divergences.apply(entries, found, looked)
     for item in unexplained:
@@ -302,9 +360,15 @@ def engine_differential(
             name = thin[0]
             ungated[ruleset] = (f"the oracles give a {_LABELS[name]} verdict at only {checked[name]} of the engine's "
                                 f"{positions} positions (the floor is {min_checked:.0%})")
+            other = sum(unsettled[item.id][name] for item in items)
+            if other:
+                ungated[ruleset] += (f"; at {other} more, the only {_LABELS[name]} verdict that agrees comes from an "
+                                     "oracle whose unmoved markers differ from the engine's there, which does not count")
         else:
             gated[ruleset] = Gated(records=len(items), positions=positions, checked=checked,
-                                   oracles=min(len(vouched[item.id]) for item in items))
+                                   oracles=min(len(vouched[item.id]) for item in items),
+                                   aligned=sum(aligned[item.id] for item in items),
+                                   matched=sum(matched[item.id] for item in items))
     return findings, gated, ungated
 
 
@@ -362,6 +426,8 @@ def run_tier(
     for source in sources:
         try:
             found, stats = golden.check_run(source.name, records, results, tier.min_coverage_for(source.name))
+        except golden.StaleSchema as error:
+            found, stats = [Finding("golden-stale", str(error))], (0, 0)
         except HarnessError as error:
             found, stats = [Finding("golden-missing", str(error))], (0, 0)
         golden_findings += found

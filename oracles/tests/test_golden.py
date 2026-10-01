@@ -1,3 +1,5 @@
+import dataclasses
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -9,6 +11,20 @@ from oracle_harness.corpus import CUSTOM_POSITIONS, Record
 from oracle_harness.observations import Observation, Position
 
 OPTIONS = RunOptions(cap=1000)
+
+
+def hashed(number: int) -> str:
+    return f"{number:032x}"
+
+
+def described(observation, placements, fingerprints=None, boards=1, pieces=32):
+    """The same report, with what the source set up at each position."""
+    fingerprints = fingerprints or [None] * len(placements)
+    observation.positions = [
+        dataclasses.replace(position, placement=hashed(placement), fingerprint=None if marked is None else hashed(marked),
+                            boards=boards, pieces=pieces)
+        for position, placement, marked in zip(observation.positions, placements, fingerprints, strict=True)]
+    return observation
 
 
 class FakeSource(Source):
@@ -68,16 +84,40 @@ class GoldenFileTests(unittest.TestCase):
     def test_round_trip(self):
         source = FakeSource("ftxi")
         results = self.results("ftxi")
+        described(results[("ftxi", "r/1")], [1, 2, 3], [11, 12, 13])
         text = self.write(source, results)
         loaded = golden.load("ftxi")
         self.assertEqual(loaded.signature, {"pin": "p1", "cap": 1000, "adapter_sha256": "a1"})
         self.assertEqual(loaded.sha256, {"r/1": "a" * 64, "r/2": "b" * 64})
         self.assertEqual(loaded.observations["r/1"].positions, results[("ftxi", "r/1")].positions)
+        self.assertEqual(loaded.observations["r/2"].positions, results[("ftxi", "r/2")].positions)
         self.assertEqual(golden.dump(source, OPTIONS, self.records, results), text)  # deterministic
+        self.assertIn('"schema": 2,', text)
 
     def test_one_position_per_line(self):
-        text = self.write(FakeSource("ftxi"), self.results("ftxi"))
-        self.assertIn('        ["w", true, 0, "checkmate"]\n', text)
+        results = self.results("ftxi")
+        described(results[("ftxi", "r/1")], [1, 2, 3], [11, 12, None], boards=2, pieces=63)
+        text = self.write(FakeSource("ftxi"), results)
+        # The answers, then the fingerprint, placement hash, and board and piece counts.
+        self.assertIn(f'        ["w", true, 0, "checkmate", null, "{hashed(3)}", 2, 63]\n', text)
+        self.assertIn(f'        ["b", false, 20, "none", "{hashed(12)}", "{hashed(2)}", 2, 63],\n', text)
+        self.assertIn('        ["b", false, 20, "none", null, null, null, null]\n', text)  # r/2: nothing said
+
+    def test_a_schema_1_file_is_refused_and_the_message_says_to_re_record(self):
+        self.write(FakeSource("ftxi"), self.results("ftxi"))
+        path = golden.golden_path("ftxi")
+        old = json.loads(path.read_text(encoding="utf-8"))
+        old["schema"] = 1
+        for entry in old["records"].values():
+            entry["positions"] = [row[:4] for row in entry["positions"]]
+        path.write_text(json.dumps(old), encoding="utf-8")
+        with self.assertRaises(golden.StaleSchema) as caught:
+            golden.load("ftxi")
+        self.assertIn("golden --write", str(caught.exception))
+        found = golden.verify_static([FakeSource("ftxi")], OPTIONS, self.records)
+        self.assertEqual([item.code for item in found], ["golden-stale"])
+        self.assertIn("schema 1", found[0].message)
+        self.assertIsNone(golden.lookup()("ftxi", "r/1"))  # reported by verify, not here
 
     def test_an_oracles_own_words_are_not_recorded(self):
         # They quote the record they are about, and no record is redistributed from here.
@@ -174,7 +214,9 @@ class GoldenFileTests(unittest.TestCase):
     def test_disagreements_are_derived_from_the_golden_files(self):
         self.write_all({("chessin5d", "r/2"): [W, ("black", True, 20, "none")]})
         found = golden.disagreements(self.records)
-        self.assertEqual({(item.a, item.b) for item in found}, {(name, "chessin5d") for name in ORACLE_SOURCES[:-1]})
+        self.assertEqual({(item.a, item.b) for item in found},
+                         {tuple(sorted((name, "chessin5d"), key=ORACLE_SOURCES.index)) for name in ORACLE_SOURCES
+                          if name != "chessin5d"})
         self.assertTrue(all((item.record, item.kind, item.index) == ("r/2", "in_check", 1) for item in found))
         text = golden.render_disagreements(self.records)
         self.assertIn("| `ftxi` vs `chessin5d` | in_check | 1 |", text)
@@ -188,7 +230,8 @@ class GoldenFileTests(unittest.TestCase):
                  for name in ("ftxi", "ftxi:naive")}
         self.write_all(stuck)
         found = [item for item in golden.disagreements(self.records) if item.kind == "legality"]
-        self.assertEqual([(item.a, item.b, item.soft) for item in found], [("ftxi", "cwmtt", True), ("ftxi", "chessin5d", True)])
+        self.assertEqual([(item.a, item.b, item.soft) for item in found],
+                         [("ftxi", "cwmtt", True), ("ftxi", "chessin5d", True), ("ftxi", "notation", True)])
 
     def test_the_report_says_how_much_was_actually_compared(self):
         capped = ("white", False, 1000, "none")
@@ -200,12 +243,71 @@ class GoldenFileTests(unittest.TestCase):
         })
         text = golden.render_disagreements(self.records)
         # ftxi and cwmtt both counted three positions of r/1 and two of r/2: four counts
-        # are equal and one pair is equal only in having stopped at the cap.
-        self.assertIn("| `ftxi` vs `cwmtt` | legal_actions | 5 | 4 | 1 | 0 |", text)
+        # are equal and one pair is equal only in having stopped at the cap. Neither
+        # said what it set up, so none of the five is known to be the same position.
+        self.assertIn("| `ftxi` vs `cwmtt` | legal_actions | 5 | 4 | 1 | 0 | 0 | 0 | 5 |", text)
         # On the end of r/1 cwmtt says only that nothing can be played.
-        self.assertIn("| `ftxi` vs `cwmtt` | terminal | 5 | 4 | 1 | 0 |", text)
+        self.assertIn("| `ftxi` vs `cwmtt` | terminal | 5 | 4 | 1 | 0 | 0 | 0 | 5 |", text)
         # Two searches of one implementation are marked as such; the timed-out one compared one position.
-        self.assertIn("| `ftxi` vs `ftxi:naive` (one implementation) | in_check | 3 | 3 | 0 | 0 |", text)
+        self.assertIn("| `ftxi` vs `ftxi:naive` (one implementation) | in_check | 3 | 3 | 0 | 0 | 0 | 0 | 3 |", text)
+        self.assertIn("No two sources said what they set up at the same position: nothing was compared.", text)
+
+    def described_all(self, changes=None):
+        """Golden files in which every source also says what it set up, the same everywhere.
+
+        ``changes`` maps (source, record id) to the (rows, placements, fingerprints) of that report instead.
+        """
+        changes = changes or {}
+        reports = {}
+        for name in ORACLE_SOURCES:
+            for record_id, usual_rows, usual_placements in (("r/1", [W, B, MATE], [1, 2, 3]), ("r/2", [W, B], [1, 4])):
+                usual = (usual_rows, usual_placements, [placement + 10 for placement in usual_placements])
+                rows, placements, fingerprints = changes.get((name, record_id), usual)
+                reports[(name, record_id)] = described(obs(name, record_id, rows), placements, fingerprints)
+        self.write_all(reports)
+
+    def test_aligned_positions_are_counted_where_both_said_what_they_set_up(self):
+        self.described_all()
+        text = golden.render_disagreements(self.records)
+        self.assertIn("| `ftxi` vs `chessin5d` | in_check | 5 | 5 | 0 | 0 | 5 | 0 | 0 |", text)
+        self.assertIn("| `ftxi` vs `chessin5d` | 5 | 5 | 5 | 5 |", text)  # both described, same boards, both marked, same markers
+        self.assertIn("## Parse divergences", text)
+        self.assertIn("None.", text)
+        self.assertIn("| `ftxi` | 2 | 0 | 0 | 0 | 0 | 5 | 20 | 5 | 5 |", text)  # described, with markers
+
+    def test_a_parse_divergence_is_listed_first_and_hides_what_it_makes_meaningless(self):
+        # chessin5d reads r/2's first action as another position - and says, there,
+        # that black is in check. That is not a check disagreement: it is about another position.
+        self.described_all({("chessin5d", "r/2"): ([W, ("black", True, 20, "none")], [1, 9], [11, 19])})
+        text = golden.render_disagreements(self.records)
+        found = golden.disagreements(self.records)
+        self.assertTrue(found)
+        self.assertEqual({(item.kind, item.index, "chessin5d" in (item.a, item.b)) for item in found}, {("placement", 1, True)})
+        parse = text.index("## Parse divergences")
+        self.assertLess(parse, text.index("## Summary"))
+        self.assertIn(f"| `r/2` | `ftxi` vs `chessin5d` | 1 | placement | `{hashed(4)}` (1 board, 32 pieces) "
+                      f"| `{hashed(9)}` (1 board, 32 pieces) | 1 |", text)
+        self.assertIn("| `ftxi` vs `chessin5d` | placement | 1 |", text)  # in the summary
+        self.assertNotIn("## Detail", text)  # no rules disagreement is left to detail
+        # Position 1 of r/2 is not compared, so it is not counted as compared either.
+        self.assertIn("| `ftxi` vs `chessin5d` | in_check | 4 | 4 | 0 | 0 | 4 | 0 | 0 |", text)
+        self.assertIn("| `ftxi` vs `chessin5d` | 5 | 4 | 4 | 4 |", text)
+
+    def test_a_marker_only_divergence_is_listed_and_hides_nothing(self):
+        # Same pieces at r/1 position 1, marked differently - and a check disagreement there, still compared.
+        self.described_all({("chessin5d", "r/1"): ([W, ("black", True, 20, "none"), MATE], [1, 2, 3], [11, 99, 13])})
+        text = golden.render_disagreements(self.records)
+        self.assertIn(f"| `r/1` | `ftxi` vs `chessin5d` | 1 | marker-only | `{hashed(12)}` (1 board, 32 pieces) "
+                      f"| `{hashed(99)}` (1 board, 32 pieces) | - |", text)
+        self.assertIn("| `ftxi` vs `chessin5d` | in_check | 5 | 4 | 0 | 1 | 4 | 1 | 0 |", text)
+        self.assertIn("| `ftxi` vs `chessin5d` | 5 | 5 | 5 | 4 |", text)
+        self.assertIn("- position 1, in_check: `ftxi` = False; `chessin5d` = True", text)  # in the rules detail
+        self.assertEqual(text, golden.render_disagreements(self.records))  # deterministic
+
+    def test_searches_of_one_implementation_must_set_up_the_same_positions(self):
+        self.described_all({("ftxi:naive", "r/1"): ([W, B, MATE], [1, 2, 5], [11, 12, 15])})
+        kinds = {(item.a, item.b, item.kind) for item in golden.disagreements(self.records)}
+        self.assertIn(("ftxi", "ftxi:naive", "placement"), kinds)
 
     def test_the_report_files_records_by_ruleset(self):
         self.records = [record("r/1"), record("r/2", "b" * 64, board="Standard - Reversed Royalty", fen=True)]
@@ -213,9 +315,10 @@ class GoldenFileTests(unittest.TestCase):
         text = golden.render_disagreements(self.records)
         header = next(line for line in text.splitlines() if line.startswith("| Ruleset |"))
         self.assertTrue(header.endswith("| Positions | check | counts | mate |"))
-        # ruleset, records, records replayed by each of the five sources, positions, then positions with each verdict
-        self.assertIn(f"| {CUSTOM_POSITIONS} | 1 | 1 | 1 | 1 | 1 | 0 | 2 | 2 | 2 | 2 |", text)
-        self.assertIn("| Standard | 1 | 1 | 1 | 1 | 1 | 1 | 3 | 3 | 3 | 3 |", text)
+        # ruleset, records, records replayed by each source, positions, then positions with each verdict
+        replayed = " | ".join("0" if name == "chessin5d" else "1" for name in ORACLE_SOURCES)
+        self.assertIn(f"| {CUSTOM_POSITIONS} | 1 | {replayed} | 2 | 2 | 2 | 2 |", text)
+        self.assertIn(f"| Standard | 1 | {' | '.join('1' for _ in ORACLE_SOURCES)} | 3 | 3 | 3 | 3 |", text)
         self.assertNotIn("| Standard - Reversed Royalty |", text)
 
     def test_lookup_reads_the_files_once_and_survives_a_missing_one(self):

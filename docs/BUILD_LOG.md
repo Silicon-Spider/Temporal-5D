@@ -109,7 +109,8 @@ Design (from a six-agent investigation of the harness and every oracle, 2026-10-
   without `*`, plus board and piece counts. Golden rows store hashes and counts
   only. Parse divergences are their own kinds: `placement` (suppresses every
   rules comparison from that position on) and `unmoved` (marker-only; suppresses
-  nothing - ftxi legitimately keeps `R*` after its king moves). ftxi: driver walks
+  nothing; counted per run of positions; an oracle's answers at positions where its
+  markers differ from the engine's do not count as confirmation). ftxi: driver walks
   its boards (`get_fen<true>`); chessin5d: the library's own `fen(null, true)`
   export; cwmtt: a new Haskell driver (beside the stock CLI, which keeps answering
   the counts; merged by index); the notation repository's bundled parser becomes
@@ -135,7 +136,16 @@ Design (from a six-agent investigation of the harness and every oracle, 2026-10-
 - **H34 telltales.** In the engine differential: an engine answer equal to a
   known divergence's recorded oracle error, at that position, is a telltale
   finding (fails the gate), ahead of "divergence-stale".
-- Order: 2A = H30 (running) → 2B = H32 + H33 + H34 → one `golden --write
+- **2A result (2026-10-01):** every oracle now reports its boards at every ply;
+  across the whole corpus no two sources ever hold different boards at a shared
+  position (ftxi-cwmtt 759 positions, ftxi-chessin5d 795, ftxi-notation 586,
+  cwmtt-chessin5d 763, cwmtt-notation 555, chessin5d-notation 657). So the check,
+  count and mate disagreements in `oracles/DISAGREEMENTS.md` are rules
+  disagreements, not parse divergences. The only parse-layer difference is
+  markers-only on Very Small - Open (ftxi's built-in layout holds the kings and
+  rooks as moved; cwmtt marks them unmoved) - which leaves that variant ungated at
+  the current pins until it is settled against the notation spec.
+- Order: 2A = H30 (done) → 2B = H32 + H33 + H34 → one `golden --write
   --repeat 2` → DISAGREEMENTS.md re-rendered → parse divergences settled against
   the notation spec.
 
@@ -251,7 +261,11 @@ decision), and what is parked.
    both; (f) `Promotions` is space-separated in one README place and
    comma-separated in another - the parser accepts both; (g) whether `Variant`
    substitutes for `Board` (fen.ebnf names `variant`) - accepted as a synonym when
-   `Board` is absent, as the harness already does.
+   `Board` is absent, as the harness already does. (h) "5DFEN Strictness" says pawns, rooks,
+   kings and brawns are marked unmoved "if needed"; the 5DFEN section says a
+   move-sensitive piece that "hasn't moved yet" must carry `*`. Read as "when
+   unmoved" (the fingerprint marks every unmoved pawn, rook, king and brawn,
+   whatever castling or double-step rights remain).
 3. **Notation spec "Hashing" leaves the full-state order open within a turn**
    (README:486-492 sorts by timeline then turn; each turn has a white and a black
    board). The canonical fingerprint puts white's board before black's (time
@@ -312,6 +326,13 @@ decision), and what is parked.
    until the §6 input relations are fixed; (i) D4's moves-left unit
    (board-moves or turns) depends on D2; (j) D3's pooling operator ("pooled from
    global registers"; mean is used).
+10. **Castling's attacked-square test: spec §11.0 item 4 vs the rules reference.**
+    The spec says every "is this square attacked?" query inside castling is a 5D
+    query; the rules reference (S2, high, a developer ruling) says castling is
+    barred only by attacks from an enemy piece on the castling board. Done: the
+    engine implements the rules reference by default; the spec's cross-board
+    reading is a named parameter, unimplemented because it needs the attack
+    definition of the pending check ruling. For the user, beside the check ruling.
 
 ## Proposed spec edits
 
@@ -333,7 +354,10 @@ says now, what it should say, why.
    notation specification's full-state MD5 ("Hashing"), with white's board before
    black's within a turn (the notation is silent), beside a placement-only hash
    and board and piece counts; and to say the harness, not each implementation,
-   canonicalises and hashes (H33).
+   canonicalises and hashes (H33); that the unmoved marker means "has not moved"
+   (spec issue 2h); that a marker-only difference is reported per run and stops
+   confirmation, not comparison; and that a source exporting its own hash (as
+   5d-chess-js does) is held to the harness's fingerprint.
 4. **§12.6, the ±0 note**: proposed to record the mapping the engine uses: `-0`
    → -1, `+0` → 0, `-n` → -(n+1), `+n` → n, so adjacent timelines differ by one.
 5. **§9.2 "Aux heads" row**: says global aux heads pool from the global
