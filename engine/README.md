@@ -10,14 +10,18 @@ notation specification (H28).
 
 It is C++20, with a C API (a shared library) for Python and other callers.
 
-## Status: stage E2b
+## Status: stage E3
 
 Stage E1 built the parts of the engine that need no movement rules; stage E2a added
 the rules mechanics and pseudo-legal move generation (§11.0 items 4-5 and the
 movement rules); stage E2b adds the in-house 5dpgn reader (H28), the named variants,
-the replay of a record, and the gate adapter in parse mode. Rule IDs (L*, T*, J*, 4.*,
-S*, Q*, V*) are those of the project's rules reference, `docs/rules/README.md`, which
-the code cites throughout.
+the replay of a record, and the gate adapter in parse mode; stage E3 adds the
+expansion - everything search and the network take from one position: moves, the
+move graph, the window W(k), the travel destinations E(k), typed relations,
+features - its C API, and the Phase 1 measurement tools (§15.1, §15.6: movegen
+throughput, M9, and the |E| curve, M7). Rule IDs (L*, T*, J*, 4.*, S*, Q*, V*) are
+those of the project's rules reference, `docs/rules/README.md`, which the code cites
+throughout.
 
 | Part | Where | Spec |
 |---|---|---|
@@ -37,12 +41,15 @@ the code cites throughout.
 | **E2b:** the 5dpgn reader and the replay of a record | `include/t5d/pgn.hpp` | H28, §11.0 |
 | **E2b:** the named variants (rules reference V1-V4) | `include/t5d/variants.hpp` | §12.6 |
 | **E2b:** the gate adapter's protocol, parse mode | `include/t5d/gate.hpp`, `tools/t5d_gate.cpp` | H23, H30 |
-| The C API (unchanged by E2a and E2b) | `include/t5d/capi.h` | - |
+| **E3:** expansion: moves as records, the move graph, W(k), E(k), src_extra(k), typed relations (provisional), board and square features | `include/t5d/expand.hpp`, `include/t5d/records.h` | §6, §10.4, B9, B11, M7, M9 |
+| **E3:** geometric relations in the move generator's pass (defence, x-ray) | `include/t5d/movegen.hpp` | §6, B11 |
+| The C API: states (E1); games and their expansion (E3) | `include/t5d/capi.h` | - |
+| **E3:** the measurement tools, and SYNTHETIC positions by random play | `tools/t5d_measure.cpp`, `tools/t5d_bench.cpp`, `tools/synthetic.hpp` | §15.6, M7, M9 |
 
 Next: after the check ruling (§11.0, "Running the gate") - check detection, turn
 legality at submission and mate detection, which plug into the hooks described
-below, and the gate adapter's full mode on top of them; the C API for moves and
-records.
+below, and the gate adapter's full mode on top of them; then the expansion's legal
+moves, its pin and check relations, and the M7/M9 re-measurement on legal moves.
 
 **Pseudo-legal only.** Nothing here decides check. A move is pseudo-legal when it
 obeys every movement rule and the action's bookkeeping; whether a submitted action
@@ -81,6 +88,9 @@ Targets (all in `build/engine`):
 | `t5d` | shared library with the C API: `t5d.dll` on Windows, `libt5d.so` elsewhere |
 | `t5d-tests` | the test runner (exit status non-zero on any failure) |
 | `t5d-gate` | the gate's engine adapter: parse mode (see "The gate adapter") |
+| `t5d_tools` | static library of the tools: synthetic positions, record input |
+| `t5d-measure` | W(k), E(k), src_extra(k) at every position of records (see "t5d-measure") |
+| `t5d-bench` | expansion throughput (see "t5d-bench") |
 
 Release builds use -O2; every target builds with `-Wall -Wextra -Wpedantic -Wshadow
 -Wconversion -Wsign-conversion`, warning-free (`--werror` makes that binding). On
@@ -102,6 +112,9 @@ engine/
   src/               the implementation
   tests/             test_framework.hpp, test_main.cpp, one test file per part
   tools/t5d_gate.cpp the gate adapter's command line (the protocol is src/gate.cpp)
+  tools/t5d_measure.cpp, t5d_bench.cpp   the measurement tools (stage E3)
+  tools/synthetic.*  SYNTHETIC positions by seeded random play (tools and tests)
+  tools/tool_support.*  what the tools share: reading records, ruleset options
 ```
 
 ## Conventions
@@ -557,6 +570,326 @@ hand in its comments:
   actions, 85 boards, eight timelines; every `~` and `(>Lx)` agrees with the state;
   the empty action before `1-0` is dropped.
 
+## Stage E3: expansion, and the measurement tools
+
+**Provisional throughout.** Moves are pseudo-legal: check status and submission
+legality are stage E4's (ruled at CHECKPOINT 1: rules reference R1, register H36),
+and when E4 is merged the expansion switches to its legal moves in one place
+(`src/expand.cpp`, `expansion_moves`). Until then every |E| measured here is an
+upper bound, every throughput figure is re-measured once legality exists, and nothing
+below depends on what attacks a royal piece (check, pins). The other places that
+meet E4: a C API game submits under its `ruling` (`src/capi.cpp`, `t5d_game::ruling`:
+none - royal safety untested - until E4's is wired in there); the synthetic player
+submits with no ruling (its games are pseudo-legal by design: a default-constructed
+`CheckRuling`, E4's `CheckRuling::none()`); and the tools replay records as the gate
+adapter's parse mode does (`tools::parse_mode`, which turns E4's royal-safety test
+off where `PgnReplay` has one), so a record's positions do not depend on whether its
+actions were legal.
+
+### Expansion (`t5d/expand.hpp`)
+
+`expand(state, options, out)` computes, for the player to move, everything search and
+the network take from one position (§6, §10.4, §15.6: "expansion - legal moves,
+attention masks, typed edges and E"), into an `Expansion` that is reused from call to
+call. Boards are indices in the canonical order - ascending timeline, then half-turn
+(the fingerprint's order) - and `board_index(p, h)` maps back. Two square indices
+are in use, and the names say which (`t5d/records.h`): a **square** is the engine's
+rank × 8 + file; a **cell** is the network's rank × width + file
+(`python/t5d/net/state.py`: "square index s = y*W + x"). They agree on 8x8 boards.
+Every array made for the network (features, edges, relations) uses cells; a move
+record carries both.
+
+- **(a) moves**: `moves()` - the generator's own list (for `GameState::apply`) - and
+  `move_records()`, the same moves as plain `t5d_move` records (`t5d/records.h`, 32
+  bytes): source and destination (timeline, half-turn, square, cell, board index),
+  the moving piece's type id, the captured piece's (en passant: the pawn taken), the
+  promotion's (0 for none), and flags - capture, branching (J3), castle, en passant,
+  double step, promotion (t5d::Move's bits) and **travel**: the destination board is
+  not the source board. A branching move's destination is the history board it
+  targets, never the board it creates.
+- **(b) move_edges** (§6, B9: "which squares reach which, across all boards"): one
+  edge (source board, source cell, destination board, destination cell) per distinct
+  pair of (a) - promotions merge. In move order; promotions are generated one after
+  another, so a pair repeats only right after itself.
+- **(c) window(k)**, W(k): for every **active** timeline (T10), its head, the up-to-k
+  boards of its own immediately before the head (one board per half-turn, so k
+  counts half-turns) - its **band** - and its branch origin if it was created by
+  branching (`Timeline::origin`; possibly in the set already, possibly on an inactive
+  timeline). These are the first three tiers of §10.4.3's queue ("present band →
+  heads' recent k → branch origins"); §10.4.3's budget mechanics call only the first
+  two the "mandatory core" and leave the origins among the budgeted filler, so every
+  count is also given against the bands alone (`Window::BandsOnly`; per board
+  `band_depth()` and `board_is_origin()`; `origins()`). Inactive timelines get no
+  band ("their boards remain travel destinations: they are E-material").
+  `window_depth()` gives each board the least k with it in W(k) (an origin: 0;
+  `kNoWindow` = INT32_MAX: none - a k that large is taken as INT32_MAX - 1, so it
+  takes every band whole and still no inactive timeline), so every k is answered
+  after one expansion. The spec's arithmetic holds: T active timelines at least
+  k + 1 boards long, all but one branched, give |W(k)| = (k + 2)T - 1 - §15.6's "W
+  at k = 8" column (59, 69, 79, 99, 119 at T = 6, 7, 8, 10, 12) and §10.4.3's scope
+  column (40 / 72 / 104 / 136 / 168 at k = 0 / 4 / 8 / 12 / 16 with T = 8 and
+  |E| = 25); the T - 1 term is the origins (the test
+  `expand_window_takes_each_active_timelines_band_and_branch_origin` checks it). A
+  position read from 5DFEN records no origins (`origins_unknown()` counts the active
+  timelines created by branching whose origin is missing).
+- **(d) e_boards(k)**, E(k) - §10.4.1's "out-of-window boards that are legal travel
+  destinations": the boards outside W(k) on which a **travel** move of (a) lands (a
+  move within a board lands on its own source board and is no travel).
+  **src_extra(k)**: the boards outside W(k) that hold a move's source square (the
+  head of an inactive timeline: playable, band-less). src_extra is never part of
+  |E|; a board is in both only if some piece travels onto it, and **src_only(k)**
+  counts the boards of src_extra(k) outside E(k) - what W(k) + E(k) misses of the
+  policy pointer's source squares. `travel_destinations()` and `source_boards()`
+  list them whatever the window.
+- **(e) typed relations** (§6 "Typed edge biases", B11 - **provisional**, each off by
+  default: `ExpandOptions::attack`, `defence`, `xray`). Rows of (source board, source
+  cell, target board, target cell, relation id), the ids those of
+  `python/t5d/net/state.py` (`RELATION_TYPES`: move 0, attack 1, defence 2, pin 3,
+  x-ray 4, check 5, travel-threat 6). Only the subset that check detection cannot
+  change, for the player to move's pieces on the boards (a)'s moves start from:
+  - **attack**: source square → the square of the enemy piece a capture of (a)
+    takes (en passant: the pawn taken, not the square moved to); once per pair;
+  - **defence**: source square → a piece of the mover's that the source piece's
+    movement geometry reaches with only that piece in the way - the capture it would
+    make if that piece were an enemy (the same paths, J7/J8 and Q18/Q19, and landing
+    rules, Q8/Q20; pawns and brawns by their capture geometry, Q14 included);
+  - **x-ray** (sliders): the first piece along a ray, of either colour, is passed as
+    if empty; the ray goes on under the same rules and stops at the next piece, of
+    either colour, which is the target (recorded where a capture or defence of it
+    would be, its board a destination under the ruleset);
+  - **not built, reserved**: *pin* and *check* need check detection - stage E4's
+    (ruled: R1, H36); *travel-threat* is named by §6 and register B11 and used by
+    §11.1 as a class of forcing moves ("branching moves that create a timeline with
+    an immediate threat"), but no edge - source and target squares - is defined
+    anywhere. Asking for any of the three throws (the C API:
+    `T5D_ERR_UNSUPPORTED`).
+
+  Defence and x-ray come from the move generator's own geometry, in the same pass as
+  the moves (`generate_moves(state, moves, relations, kinds)` in `t5d/movegen.hpp`),
+  so a relation and a move never disagree about what a piece reaches.
+- **(f) features**: per board (every board) - timeline position p (the engine's
+  mapping, "-0" → -1), half-turn h = 2T + (black to move), head, active timeline,
+  side to move (h & 1), **playable now** (the head of its timeline with the mover to
+  move on it, L5, while a move may be made, Q4 - exactly the boards (a)'s moves
+  start from), and the network contract's lineage, **parent** (`board_parent()`:
+  the timeline's previous board, or for a timeline's first board its branch origin;
+  -1 for an initial timeline or an origin not recorded). These arrays are computed
+  on first access after an expansion (O(boards)); `board_info(i)` gives one board's
+  entries without them. Per square, in cells: piece type id (0 empty, 1-12 = P N B R
+  Q K U D S W C Y), colour (0 none, 1 white, 2 black), has-moved.
+  `square_features` chooses the boards: `All` (the full-history input), `Scope`
+  (W(k) + E(k) + src_extra(k): the windowed input) or `None`; `feature_boards()`
+  lists them, and the feature arrays hold one block per board in that order. The
+  Scope is a **board set, not a position**: it can hold a history board of a
+  timeline without that timeline's head (an E board on an inactive timeline), which
+  `python/t5d/net/state.py`'s `PositionState` refuses (one head per timeline) - what
+  a windowed position holds is the window code's to define.
+
+**Readings** (each a reading of the spec, for the build log):
+
+- **"Some live piece"** (§10.4.1's E) is read as the player to move's pieces on their
+  playable boards: E "comes from the move generator" at the node, and the opponent's
+  destinations enter at the child ("Search re-partitions per node", §10.4.3).
+  Reading it as both colours - the opponent's moves from the boards it cannot move on
+  now, which `append_moves_of` can generate - is a choice of scope the spec does not
+  make, and is not built.
+- **E is travel destinations**: a move within a board adds nothing to E (§10.4.1:
+  "travel destinations"); a band-less playable board whose pieces only move on it is
+  src_extra, not E.
+- **src_extra** is reported apart from |E| (the spec does not say whether scope must
+  include source boards for the policy pointer); src_only says how many boards it
+  would add.
+- **The origins** are W's third tier, reported apart (above).
+- **Has-moved** is 1 exactly on a pawn, rook, king or brawn without its unmoved
+  marker (5DFEN's `*`), and 0 on every other piece and square: no rule reads the
+  history of the other kinds, and 5DFEN does not record it.
+- **W's present band** is the active heads (every active head is in W at every k).
+
+**Cost.** Allocation-free once an `Expansion`'s buffers have grown (the test
+`expand_allocates_nothing_in_steady_state` counts every `operator new`, the per-board
+arrays included): records, edges and relations are written in place into buffers
+that only grow. `expand()` does **no work per frozen board**: moves start only on
+playable boards, so frozen boards are read only along a move's path, and the rest
+is per timeline (bands, origins), per move (records, edges, relations, the boards'
+roles - kept as bitsets, N/64 words), or per board of the scope (W, E, src_extra and
+their features). Move generation's work grows with the moves - and the pseudo-legal
+travel into a longer past grows with history, by the rules - not with the boards
+(per move it falls). The per-board arrays (f) are O(boards) and computed only when
+read; the square features of every board under `SquareFeatures::All` are
+O(boards × squares) - the network's full-history input itself - decoded from each
+board's mailbox (`Board::codes()`) sixteen cells at a time (the GCC/Clang vector
+extension; scalar elsewhere). Under `Scope` the features are O(scope).
+
+### The C API for games (`t5d/capi.h`)
+
+A `t5d_game` is a state under the rules with its expansion buffers:
+`t5d_game_new_from_pgn` (a 5dpgn record, set up at its first position; then
+`t5d_game_replay_next`, `t5d_game_record_actions`), `t5d_game_new_from_fen`,
+`t5d_game_new_variant`; `t5d_game_apply` (a move given as its source, destination
+and promotion), `t5d_game_apply_expanded` (by index into the last expansion),
+`t5d_game_submit`; `t5d_game_expand` (`t5d_expand_options`; NULL for k = 8, every
+board's features, no relations), which fills a `t5d_expansion`: counts, and pointers
+to the flat arrays above (per board: timeline, half-turn, head, active, side,
+playable, window depth, band depth, origin, parent) - valid until the handle is next
+changed; `t5d_game_info`, `t5d_game_state` (a `t5d_state` copy, for the fingerprint
+and the boards), `t5d_game_copy`, `t5d_game_destroy`. Rulesets are passed as
+`RuleOptions::encode()`'s 64-bit encoding (`RuleOptions::decode` reads it back; 0 is
+standard, `T5D_RULES_MOVES_AFTER_SHIFT` is bit 3). New statuses:
+`T5D_ERR_UNSUPPORTED` (a variant or a relation not built) and `T5D_ERR_ILLEGAL` (a
+move or a submission the rules refuse - pseudo-legally until E4). The arrays are the
+network contract's (`python/t5d/net/state.py`), so a Python binding copies them; a
+square's token is board × (cells + registers) + cell.
+
+### Synthetic positions (`tools/synthetic.hpp`)
+
+No record in the repository reaches the 100-600 boards of §1 and §15.6, so the
+benchmark plays its own: seeded random pseudo-legal play (xorshift64*, the same on
+every platform), under the ruleset given. Each move is uniform among the pseudo-legal
+moves - never one that takes a royal piece (4.13) - until the present has shifted
+(T5); then the action is submitted. A game stuck with no move and no submission
+stops. One knob steers the **active** timelines towards a target: below it, a move
+branches with probability `branch_percent` when a branch would create an active
+timeline; at it, no move branches unless every move does. So the classes can have
+the spec's assumed T at each N, and one game can be taken at N = 100 ... 600 with T
+held (the flatness series). Every record written carries a `Synthetic` header (with
+its seed, settings and, if not standard, the ruleset) and replays in the engine's own
+reader to the same state, branch origins included (5DFEN would lose them); every tool
+output marks synthetic positions (t5d-bench files synthetic records given as input
+in buckets of their own, and t5d-measure's summary leaves them out). **They are
+random play: for throughput and stress only, never evidence for the |E| verdict
+(M7), which needs real games.**
+
+### t5d-measure
+
+```
+t5d-measure [--moves-after-shift] [--rules ENCODING] [--name NAME] [--summary] [RECORD ...]
+```
+
+Replays each 5dpgn record as the gate adapter's parse mode does (no RECORD, or `-`:
+standard input), under the ruleset given (`--moves-after-shift` is Q4's other
+reading; `--rules` takes any encoding, decimal or `0x` hex), and prints one JSON
+object per line, deterministically:
+
+- `{"event":"record","record":...,"game":...,"synthetic":...,"rules":...,"rules_encoding":"0x..","actions_in_record":N}`
+- at every action start, position 0 included: `{"event":"position","record":...,
+  "synthetic":...,"index":K,"side":...,"boards":N,"timelines":...,"active":...,
+  "present":h,"present_turn":T,"moves":...,"move_edges":...,
+  "travel_destinations":...,"sources":...,"origins":...,"origins_unknown":...,
+  "w_k0":...,"e_k0":...,"src_extra_k0":...,"src_only_k0":...,"w_bands_k0":...,
+  "e_bands_k0":...,"src_only_bands_k0":...}`, the same seven for k = 4, 8 and 16,
+  and the position's `"fingerprint"` (H30);
+- `{"event":"end","record":...,"status":"ok"|"rejected"|"unsupported"|"error",
+  "positions":...,"actions_accepted":...,"actions_in_record":...,"truncated":...,
+  "reason":...,"detail":...}` - how far it read, and why it stopped;
+- with `--summary`, after the records, the |E| curve M7 reads, made so that a game
+  counts once: positions are distinct by fingerprint and side to move (a position
+  reached in several records - a standard start, a game recorded twice - is one
+  position), and records are grouped into games (a record whose positions are a
+  prefix of another's, or that shares its first 10 positions or more and at least
+  half of the shorter record with another - two endings of one game - is that game;
+  `{"event":"summary_game",...}` lists each group). Then per N bucket (1-49, 50-99,
+  100-159, 160-239, 240-399, 400-599, 600+): `{"event":"summary","bucket":...,
+  "positions":...,"games":...,"active_median":...,"w_k8_median":...,
+  "w_bands_k8_median":...,"e_k0":{"median","p95","max","n"}` and the same for k = 4,
+  8, 16 (quantiles interpolated linearly between order statistics),
+  `"e_k8_game_medians"` and `"e_k4_game_medians"` (the spread of the games' own
+  medians), `"positions_with_src_only_k8"`, and the synthetic positions left out.
+
+Example, on the records of the pinned corpus (input data on the command line; the
+engine itself never names anything under `oracles/`):
+
+```
+build/engine/t5d-measure --summary --moves-after-shift oracles/third_party/cwmtt/tests/5dpgn/NP.5dpgn ...
+```
+
+Several corpus records make moves after the present has shifted (Q4): under the
+default reading they stop with `illegal_move`, under `--moves-after-shift` they read
+to the end - the output says which ruleset was used.
+
+### t5d-bench
+
+```
+t5d-bench [--classes N:T,...] [--no-synthetic] [--games G] [--children C]
+          [--flatness T] [--flatness-boards N,...] [--flat-games G] [--flat-window P]
+          [--flat-children C] [--flat-max M] [--no-flatness]
+          [--seed S] [--branch-percent P] [--threads 1,2,4,...]
+          [--samples S] [--sample-ms MS] [--flat-ms MS] [--no-loop] [--no-pin]
+          [--quick] [--emit DIR] [--json FILE]
+          [--moves-after-shift] [--rules ENCODING] [RECORD ...]
+```
+
+Expansion throughput (§15.6, M9), and how it changes with the length of the history.
+Moves are pseudo-legal: every figure is provisional.
+
+*Positions.* Synthetic classes at §15.6's assumed (N, T) - 100:6, 160:7, 240:8,
+400:10, 600:12 - `--games` games each (16 by default; a game's seed is a function of
+the base seed, N, T and the game's number only, so one class can be re-measured
+alone), played under the ruleset given; and every action start of any RECORD given,
+grouped by N (synthetic records in buckets of their own, marked). *What is timed* is
+a search-like **stream**: the one-move children of the class positions (the
+positions a search expands next), `--children` per position per worker thread, each
+worker's disjoint from the others' wherever a position has the moves, rebuilt on
+boards of its own, and started at a different game (so that threads running at once -
+SMT siblings included - expand different games). Cycling the class positions
+themselves lets the branch predictor learn them; that **loop** is reported apart,
+as an upper bound.
+
+*Configurations.* `movegen` (generate_moves alone, the reference), `expand` (moves +
+move edges + W(8) + E(8) + every board's features - the full-history input),
+`expand+relations` (the same with attack, defence and x-ray), `expand-scope` (the
+same as `expand` but the features of W(8) + E(8) + src_extra(8) only: the windowed
+input), and `scope+relations` - §15.6's expansion, "legal moves, attention masks,
+typed edges and E", with the windowed input. The full-history ones and
+`scope+relations` also run on 1, 2, 4, 8, 12 and 24 threads.
+
+*Method.* A pool of worker threads, pinned one per physical core first, then on the
+cores' second logical processors (`--no-pin`: unpinned), each with its own
+`Expansion`. A measurement - (class, configuration, threads, stream or loop) - is
+taken in samples of `--sample-ms`, and the samples are **interleaved**: round after
+round over every measurement, after a warm-up round, so that a drift of the
+machine's load spreads over all of them, and every ratio - the thread scaling, a
+flatness growth - is taken between samples of the **same round**, then reported as
+the median and range over the rounds. Each worker counts its expansions to a shared
+steady_clock deadline and reads its own **thread CPU time** (QueryThreadCycleTime at
+the measured TSC rate on Windows, `CLOCK_THREAD_CPUTIME_ID` elsewhere): the CPU
+microseconds per expansion are the figure other load disturbs least (time spent
+descheduled is not counted, though SMT siblings and shared caches still are). The
+machine's busy fraction is read around every sample and reported. Every result feeds
+a printed sink, so nothing is optimised away. The output names the compiler, the
+flags, the build type, the CPU, its cores and logical processors, the thread counts,
+the clock and the load. For the 240- and 600-board classes the 1-thread stream rates
+are set against M9's targets (20,000/s and 10,000/s) as a range over the rounds -
+never a verdict.
+
+*Flatness* (§15.6: "flat in N at fixed |E| - ≤ 10% growth from 100 to 600
+boards"). `--flat-games` games (24) with the active timelines held at `--flatness`
+(8), taken at every action start whose N lies in a level's window [N, N +
+`--flat-window`%) for each level of `--flatness-boards` (100, 160, 240, 400, 600);
+the candidates are the one-move children of the positions along the action that
+follows (so every level has positions of every depth into an action). Three series,
+each timed on one thread, interleaved, the levels of a configuration back to back
+(ascending in even rounds, descending in odd ones):
+
+- **raw**: every candidate - moves, |E| and the material change with N along a game
+  (random play loses material; the pseudo-legal travel into a longer past grows), so
+  its growth is reported with them, and per generated move;
+- **matched**: anchors at the first level whose move count and |E(8)| lie in the
+  bands every level covers (the overlap of the levels' interquartile ranges, else
+  inter-decile), each paired at every other level with its nearest position in
+  (moves, |E(8)|, the mover's pieces) within a caliper - moves and the mover's pieces
+  within 10%, |E(8)| within max(1, 20%) - or dropped (`--flat-children`, 48 per action
+  start, sets how many anchors find partners); the levels' means and the pairs'
+  mismatch are printed - this is the series M9's "at fixed |E|" asks about, and its growth is
+  labelled "below/above +10% in every round" or "rounds straddle +10%: inconclusive";
+- **no_moves**: the positions after the action's moves are played, where no move may
+  be made (Q4): everything an expansion does but move generation - the history-length
+  term measured directly, as nanoseconds per board (a least-squares slope over the
+  levels) and as its share of a matched `scope+relations` expansion at the top level.
+
+`--json` writes the machine-readable summary (positions with their seeds and
+fingerprints, every measurement's statistics, the flatness series), `--emit` each
+synthetic position's record; `--quick` is a smoke test, not a measurement.
+
 ## 5DFEN
 
 `parse_fen_board` reads one board string, `[pieces:timeline:turn:colour]`, for a
@@ -625,9 +958,11 @@ the two-timeline start or a list of 5DFEN board strings (with a size, an even/od
 and the player to move, each of which can be inferred - the player to move only where
 the boards settle it); copy, destroy; read the fingerprint, the canonical string, the
 Zobrist key, a summary, and every board's (timeline, half-turn, board string). Every
-function that can fail returns a status (`t5d_version`, `t5d_free` and
-`t5d_state_destroy` cannot fail and return none); no exception crosses the boundary.
-Strings the library returns are freed with `t5d_free`. Stage E2 extends it.
+function that can fail returns a status (`t5d_version`, `t5d_free`,
+`t5d_state_destroy` and `t5d_game_destroy` cannot fail and return none); no exception
+crosses the boundary. Strings the library returns are freed with `t5d_free`. Stage E3
+adds games - a state under the rules, moved, replayed, submitted and expanded (see
+"The C API for games").
 
 ## Choices the spec leaves open
 

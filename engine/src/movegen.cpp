@@ -92,6 +92,11 @@ struct Gen {
   int p = 0;
   int h = 0;
   const Board* board = nullptr;
+  // The geometric relations to collect, if any (the functions' kRel
+  // instantiation; t5d/movegen.hpp, GeometricRelation).
+  RelationList* relations = nullptr;
+  bool want_defence = false;
+  bool want_xray = false;
 };
 
 inline Place place_at(const Gen& g, int timeline, int half_turn) noexcept {
@@ -160,6 +165,21 @@ inline Move make_move(const Gen& g, int from, Piece piece, const Place& place, i
   return m;
 }
 
+// A geometric relation of the piece on `from` (the source board) to square
+// `to` of the board at `place` on `timeline`.
+inline void push_relation(Gen& g, int from, const Place& place, int timeline, int to,
+                          GeometricRelation::Kind kind) {
+  GeometricRelation r;
+  r.from_timeline = g.p;
+  r.from_half_turn = g.h;
+  r.to_timeline = timeline;
+  r.to_half_turn = place.half_turn;
+  r.from_square = static_cast<std::int8_t>(from);
+  r.to_square = static_cast<std::int8_t>(to);
+  r.kind = kind;
+  g.relations->push_back(r);
+}
+
 // A pawn's or brawn's move: one per promotion piece when it promotes (S8),
 // else one.
 inline void push_pawnlike(Gen& g, Move m, bool promotes) {
@@ -177,7 +197,45 @@ inline void push_pawnlike(Gen& g, Move m, bool promotes) {
 
 // ---- sliders (J7, J8; Q18, Q19) --------------------------------------------------------
 
+// X-ray (t5d/movegen.hpp, GeometricRelation): a slide along `d` from the
+// source square `from` has stopped on a piece at (x, y, l, ht); the ray goes on
+// past it as if it were empty, under the slide's own rules, to the next piece.
 template <bool kPlain>
+void xray(Gen& g, int from, Piece piece, Vec4 d, int x, int y, int l, int ht) {
+  const bool physical = d.physical();
+  const bool past_self_passes = !g.rules.past_self_blocks && d.x == 0 && d.y == 0 && d.l == 0;
+  for (;;) {
+    x += d.x;
+    y += d.y;
+    l += d.l;
+    ht += 2 * d.t;
+    if (!g.size.contains(x, y)) return;
+    Place place{g.board, false, g.h};
+    if (!physical) {
+      if (l < g.bounds.min_timeline || l > g.bounds.max_timeline || ht < 0 ||
+          ht > g.bounds.max_half_turn) {
+        return;
+      }
+      place = place_at(g, l, ht);
+      if (place.board == nullptr) {
+        if (g.rules.sliders_cross_void) continue;
+        return;
+      }
+    }
+    const int to = make_square(x, y);
+    const Piece occupant = place.board->at(to);
+    if (occupant.empty()) continue;
+    if (past_self_passes && occupant.colour() == g.mover && occupant.kind() == piece.kind()) {
+      continue;  // Q19's alternative: a past self is never in the way
+    }
+    if (landable<kPlain>(g, place, l)) {
+      push_relation(g, from, place, l, to, GeometricRelation::Kind::XRay);
+    }
+    return;
+  }
+}
+
+template <bool kPlain, bool kRel>
 void slide(Gen& g, int from, Piece piece, Vec4 d) {
   const bool physical = d.physical();
   // Q19: only a slide straight back in time on its own square and timeline can
@@ -215,10 +273,19 @@ void slide(Gen& g, int from, Piece piece, Vec4 d) {
     }
     if (occupant.colour() == g.mover) {
       if (past_self_passes && occupant.kind() == piece.kind()) continue;
+      if constexpr (kRel) {
+        if (g.want_defence && landable<kPlain>(g, place, l)) {
+          push_relation(g, from, place, l, to, GeometricRelation::Kind::Defence);
+        }
+        if (g.want_xray) xray<kPlain>(g, from, piece, d, x, y, l, ht);
+      }
       return;
     }
     if (landable<kPlain>(g, place, l)) {
       g.out.push_back(make_move<kPlain>(g, from, piece, place, l, to, occupant));
+    }
+    if constexpr (kRel) {
+      if (g.want_xray) xray<kPlain>(g, from, piece, d, x, y, l, ht);
     }
     return;
   }
@@ -226,7 +293,7 @@ void slide(Gen& g, int from, Piece piece, Vec4 d) {
 
 // ---- leapers and steppers (4.4, 4.5, 4.12) ------------------------------------------
 
-template <bool kPlain>
+template <bool kPlain, bool kRel>
 void leap(Gen& g, int from, Piece piece, Vec4 d) {
   const int x = file_of(from) + d.x;
   const int y = rank_of(from) + d.y;
@@ -236,7 +303,14 @@ void leap(Gen& g, int from, Piece piece, Vec4 d) {
   if (place.board == nullptr || !landable<kPlain>(g, place, g.p + d.l)) return;
   const int to = make_square(x, y);
   const Piece occupant = place.board->at(to);
-  if (!occupant.empty() && occupant.colour() == g.mover) return;
+  if (!occupant.empty() && occupant.colour() == g.mover) {
+    if constexpr (kRel) {
+      if (g.want_defence) {
+        push_relation(g, from, place, g.p + d.l, to, GeometricRelation::Kind::Defence);
+      }
+    }
+    return;
+  }
   g.out.push_back(make_move<kPlain>(g, from, piece, place, g.p + d.l, to, occupant));
 }
 
@@ -246,7 +320,7 @@ inline bool takes_part_in_en_passant(const RuleOptions& r, PieceKind k) noexcept
   return k == PieceKind::Pawn || (r.en_passant_brawns && k == PieceKind::Brawn);
 }
 
-template <bool kPlain>
+template <bool kPlain, bool kRel>
 void pawnlike(Gen& g, int from, Piece piece) {
   const bool brawn = piece.kind() == PieceKind::Brawn;
   const int fy = geometry::forward_rank(g.mover);
@@ -306,7 +380,8 @@ void pawnlike(Gen& g, int from, Piece piece) {
     }
   }
 
-  // Captures: only onto an enemy piece.
+  // Captures: only onto an enemy piece. (A piece of the mover's there is
+  // defended: the capture the pawn would make if it were an enemy.)
   const auto capture = [&](Vec4 v) {
     const int x = x0 + v.x;
     const int y = y0 + v.y;
@@ -315,7 +390,15 @@ void pawnlike(Gen& g, int from, Piece piece) {
     if (place.board == nullptr || !landable<kPlain>(g, place, g.p + v.l)) return;
     const int to = make_square(x, y);
     const Piece occupant = place.board->at(to);
-    if (occupant.empty() || occupant.colour() == g.mover) return;
+    if (occupant.empty()) return;
+    if (occupant.colour() == g.mover) {
+      if constexpr (kRel) {
+        if (g.want_defence) {
+          push_relation(g, from, place, g.p + v.l, to, GeometricRelation::Kind::Defence);
+        }
+      }
+      return;
+    }
     push_pawnlike(g, make_move<kPlain>(g, from, piece, place, g.p + v.l, to, occupant),
                   promotes(y, !v.physical()));
   };
@@ -424,26 +507,26 @@ void castling(Gen& g, int from, Piece king) {
 
 // ---- dispatch ------------------------------------------------------------------------------
 
-template <bool kPlain>
+template <bool kPlain, bool kRel>
 void piece_moves(Gen& g, int square, Piece piece) {
   switch (piece.kind()) {
     case PieceKind::Pawn:
     case PieceKind::Brawn:
-      pawnlike<kPlain>(g, square, piece);
+      pawnlike<kPlain, kRel>(g, square, piece);
       break;
     case PieceKind::Knight:
-      for (const Vec4 v : geometry::knight_leaps()) leap<kPlain>(g, square, piece, v);
+      for (const Vec4 v : geometry::knight_leaps()) leap<kPlain, kRel>(g, square, piece, v);
       break;
     case PieceKind::King:
-      for (const Vec4 v : geometry::all_directions()) leap<kPlain>(g, square, piece, v);
+      for (const Vec4 v : geometry::all_directions()) leap<kPlain, kRel>(g, square, piece, v);
       castling<kPlain>(g, square, piece);
       break;
     case PieceKind::CommonKing:
-      for (const Vec4 v : geometry::all_directions()) leap<kPlain>(g, square, piece, v);
+      for (const Vec4 v : geometry::all_directions()) leap<kPlain, kRel>(g, square, piece, v);
       break;
     default:
       for (const Vec4 v : geometry::slider_directions(piece.kind())) {
-        slide<kPlain>(g, square, piece, v);
+        slide<kPlain, kRel>(g, square, piece, v);
       }
       break;
   }
@@ -451,9 +534,9 @@ void piece_moves(Gen& g, int square, Piece piece) {
 
 void any_piece_moves(Gen& g, int square, Piece piece) {
   if (g.plain) {
-    piece_moves<true>(g, square, piece);
+    piece_moves<true, false>(g, square, piece);
   } else {
-    piece_moves<false>(g, square, piece);
+    piece_moves<false, false>(g, square, piece);
   }
 }
 
@@ -467,26 +550,45 @@ bool set_source(Gen& g, const Timeline* t) noexcept {
   return true;
 }
 
-template <bool kPlain>
+template <bool kPlain, bool kRel>
 void board_moves_of(Gen& g) {
   for (std::uint64_t bits = g.board->pieces(g.mover); bits != 0; bits &= bits - 1) {
     const int square = std::countr_zero(bits);
-    piece_moves<kPlain>(g, square, g.board->at(square));
+    piece_moves<kPlain, kRel>(g, square, g.board->at(square));
   }
 }
 
 void board_moves(Gen& g) {
-  if (g.plain) {
-    board_moves_of<true>(g);
+  if (g.relations != nullptr) {
+    if (g.plain) {
+      board_moves_of<true, true>(g);
+    } else {
+      board_moves_of<false, true>(g);
+    }
+  } else if (g.plain) {
+    board_moves_of<true, false>(g);
   } else {
-    board_moves_of<false>(g);
+    board_moves_of<false, false>(g);
   }
 }
 
 Gen make_gen(const GameState* state, const Multiverse& mv, const RuleOptions& rules,
              Colour mover, std::span<const int> inactive, MoveList& out) {
-  return Gen{state, mv, rules, out, mover, mv.board_size(), bounds_of(mv), inactive,
-             plain_rules(rules), 0, 0, nullptr};
+  return Gen{state,
+             mv,
+             rules,
+             out,
+             mover,
+             mv.board_size(),
+             bounds_of(mv),
+             inactive,
+             plain_rules(rules),
+             0,
+             0,
+             nullptr,
+             nullptr,
+             false,
+             false};
 }
 
 Gen make_gen(const GameState& state, MoveList& out) {
@@ -502,6 +604,22 @@ void generate_moves(const GameState& state, MoveList& out) {
   out.clear();
   if (!state.may_move()) return;
   Gen g = make_gen(state, out);
+  for (const TimelineRef& t : g.mv.timelines()) {
+    if (set_source(g, t.get())) board_moves(g);
+  }
+}
+
+void generate_moves(const GameState& state, MoveList& out, RelationList& relations,
+                    RelationKinds kinds) {
+  out.clear();
+  relations.clear();
+  if (!state.may_move()) return;
+  Gen g = make_gen(state, out);
+  if (kinds.defence || kinds.xray) {
+    g.relations = &relations;
+    g.want_defence = kinds.defence;
+    g.want_xray = kinds.xray;
+  }
   for (const TimelineRef& t : g.mv.timelines()) {
     if (set_source(g, t.get())) board_moves(g);
   }

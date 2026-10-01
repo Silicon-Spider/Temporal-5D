@@ -330,6 +330,12 @@ struct RuleOptions {
   /// promotion set (XOR the default) in bits 32-47.
   std::uint64_t encode() const noexcept;
 
+  /// The options whose encode() is `encoding` - how the C API and the tools
+  /// take a ruleset. Throws std::invalid_argument for an encoding that no
+  /// options produce (an unused bit, an unknown rule family). The result is
+  /// not validated (validate()).
+  static RuleOptions decode(std::uint64_t encoding);
+
   /// The ruleset ID folded into the Zobrist key (§11.3, I9): 0 for the
   /// defaults, otherwise a non-zero 32-bit hash of encode().
   std::uint32_t ruleset_id() const noexcept;
