@@ -79,7 +79,9 @@ target_link_libraries(t5d_core PUBLIC t5d_options)
 set_target_properties(t5d_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 # Stage E4: check status and submission legality, legal actions, mate detection.
 target_sources(t5d_core PRIVATE
-  src/check.cpp)
+  src/check.cpp
+  src/hypercuboid.cpp
+  src/search.cpp)
 
 # ---- the C API shared library -----------------------------------------------------
 
@@ -126,7 +128,8 @@ target_include_directories(t5d-tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
 target_link_libraries(t5d-tests PRIVATE t5d_core)
 # Stage E4's tests.
 target_sources(t5d-tests PRIVATE
-  tests/test_check.cpp)
+  tests/test_check.cpp
+  tests/test_search.cpp)
 
 add_executable(t5d-gate tools/t5d_gate.cpp)
 target_link_libraries(t5d-gate PRIVATE t5d_core)
