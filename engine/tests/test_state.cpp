@@ -60,7 +60,7 @@ TEST(state_the_present_advances_one_half_step_per_turn) {
   CHECK(s.obligations_met());
   CHECK(!s.may_move());  // Q4's default: no move once the present has shifted
   CHECK(t5d_test::moves_of(s).empty());
-  CHECK(s.submission_status() == SubmitStatus::Unchecked);
+  CHECK(s.submission_status() == SubmitStatus::Safe);  // C4 (R1): no royal is left capturable
   s.submit();
   CHECK(s.to_move() == Colour::Black);
   CHECK_EQ(s.present(), half_turn(1, Colour::Black));
@@ -116,7 +116,7 @@ TEST(state_only_active_boards_in_the_present_are_mandatory) {
   CHECK(!s.obligations_met());
   play(s, "(0T2)Ra1(0T2)a2");
   CHECK(s.obligations_met());
-  CHECK(s.submission_status() == SubmitStatus::Unchecked);
+  CHECK(s.submission_status() == SubmitStatus::Safe);  // no royal piece at all (C13)
 }
 
 TEST(state_optional_boards_after_the_shift_q4) {
@@ -134,7 +134,7 @@ TEST(state_optional_boards_after_the_shift_q4) {
   CHECK(t5d_test::has_move(loose, "(+1T3)Ra1(+1T3)a2"));
   CHECK(t5d_test::has_move(loose, "(+2T1)Ra1(+2T1)a2"));
   play(loose, "(+2T1)Ra1(+2T1)a2");
-  CHECK(loose.submission_status() == SubmitStatus::Unchecked);
+  CHECK(loose.submission_status() == SubmitStatus::Safe);  // no royal piece at all (C13)
 }
 
 TEST(state_every_active_board_is_mandatory_under_q5) {
@@ -517,11 +517,13 @@ Verdict say_unknown(const GameState&) { return Verdict::Unknown; }
 }  // namespace
 
 TEST(state_submission_consults_the_royal_safety_hook) {
-  // C4 is a hook, not implemented here: without it, a submittable action is
-  // Unchecked; with one, its verdict decides.
+  // C4 is reached through a hook: by default the engine's (t5d/check.hpp);
+  // without one (CheckRuling::none()), a submittable action is Unchecked;
+  // with any other, its verdict decides.
   GameState s(standard_start());
   play(s, "(0T1)Pe2(0T1)e4");
-  CHECK(s.submission_status() == SubmitStatus::Unchecked);
+  CHECK(s.submission_status() == SubmitStatus::Safe);
+  CHECK(s.submission_status(CheckRuling::none()) == SubmitStatus::Unchecked);
   CheckRuling unsafe;
   unsafe.royals_safe = &say_no;
   CHECK(s.submission_status(unsafe) == SubmitStatus::Unsafe);

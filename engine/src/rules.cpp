@@ -22,12 +22,6 @@ constexpr std::uint64_t kRulesetSalt = 0x7435642D72756C31ull;
 }  // namespace
 
 void RuleOptions::validate() const {
-  if (castling_attacks == CastlingAttacks::AnyBoard) {
-    throw std::invalid_argument(
-        "ruleset option castling_attacks = AnyBoard (design spec §11.0 item 4: cross-board "
-        "attacks bar castling) is not implemented: it needs the cross-board attack definition "
-        "that the check ruling will settle (Q10, C3); the default is the developer's ruling, S2");
-  }
   if (promotions.empty()) {
     throw std::invalid_argument("ruleset option promotions: a pawn must be able to promote "
                                 "to at least one kind of piece");
@@ -61,7 +55,7 @@ std::uint64_t RuleOptions::encode() const noexcept {
   e |= flag(jumps_keep_unmoved != d.jumps_keep_unmoved, 14);
   e |= flag(en_passant_brawns != d.en_passant_brawns, 15);
   e |= flag(brawns_promote != d.brawns_promote, 16);
-  e |= flag(castling_attacks != d.castling_attacks, 17);
+  // bit 17: unused (castling_attacks, removed when H40 closed it)
   e |= flag(castling_empty_between != d.castling_empty_between, 18);
   e |= flag(castling_destination_test != d.castling_destination_test, 19);
   e |= flag(castling_rook_path_test != d.castling_rook_path_test, 20);
@@ -117,7 +111,6 @@ std::string describe(const RuleOptions& r) {
   add(!r.brawns_promote, "brawns_promote=false (Q17)");
   add(!r.brawn_cross_board_promotion, "brawn_cross_board_promotion=false (Q17)");
   add(r.promotions != d.promotions, "promotions (S8)");
-  add(r.castling_attacks == CastlingAttacks::AnyBoard, "castling_attacks=AnyBoard (S2)");
   add(!r.castling_empty_between, "castling_empty_between=false (Q21)");
   add(r.castling_destination_test, "castling_destination_test (S3)");
   add(r.castling_rook_path_test, "castling_rook_path_test (Q21)");

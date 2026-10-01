@@ -35,11 +35,11 @@
 //    be made after that (Q4); the action is then submitted.
 //  * SUBMISSION (T5, C4): allowed once the obligations are met, and - C4 - only
 //    if no royal piece of the mover's is left capturable. That test is the
-//    check ruling's, which is pending: it is a hook (CheckRuling::royals_safe)
-//    that the engine does not implement. Without it, submission_status() says
-//    Unchecked - the movement rules are satisfied and royal safety was NOT
-//    tested - and submit() proceeds: everything built on this stage is
-//    pseudo-legal.
+//    check ruling's (R1, H36; t5d/check.hpp), reached through a hook
+//    (CheckRuling::royals_safe): submission_status() and submit() apply the
+//    engine's ruling by default (standard_check_ruling) and say Safe or
+//    Unsafe. CheckRuling::none() leaves royal safety untested (Unchecked):
+//    pseudo-legal play, for the movement rules' own tests and parse mode.
 //
 // Like a Multiverse, a GameState is a value: copies share every board and
 // every timeline they have not edited, and apply() and submit() change only
@@ -73,12 +73,12 @@ class GameState;
 /// A three-valued answer: the hooks below may not be installed.
 enum class Verdict : std::uint8_t { Unknown = 0, Yes, No };
 
-/// The hooks the check ruling will fill (spec §11.0 items 1-3; rules
-/// reference C1-C9, C13; open question Q10). NONE IS IMPLEMENTED in this
-/// stage, deliberately: which boards count as sources of attack, and how
-/// "check" is defined for checkmate versus stalemate, are being decided
-/// (C3, C6, C7, Q10). A null hook means "not decided": every function that
-/// consults one answers Unknown/Unchecked rather than guess.
+/// The check ruling's hooks (spec §11.0 items 1-3; rulebook R1, C1-C9, C13;
+/// register H36, H37). The engine's own ruling is standard_check_ruling()
+/// (below; t5d/check.hpp and t5d/search.hpp implement it); a default-
+/// constructed CheckRuling - CheckRuling::none() - has no hook. A null hook
+/// means "not tested": every function that consults one answers
+/// Unknown/Unchecked rather than guess.
 struct CheckRuling {
   /// C4: in `after_action` - the state reached by the mover's moves, with
   /// the obligations met and before submission - can no enemy attacker
@@ -90,15 +90,27 @@ struct CheckRuling {
   /// C5: does the player to move have a legal action (a sequence of moves
   /// that shifts the present and leaves every royal piece safe)?
   Verdict (*has_legal_action)(const GameState& turn_start) = nullptr;
+
+  /// No hook: pseudo-legal play - submission tests the present's shift (T5)
+  /// alone, and outcome() answers Unknown.
+  static constexpr CheckRuling none() noexcept { return CheckRuling{}; }
 };
+
+/// The engine's check ruling (H36, H37): royals_safe is C4's submission test
+/// and in_check R1's check status (t5d/check.hpp); has_legal_action is C5's,
+/// an exhaustive search for a legal action (t5d/search.hpp: it never answers
+/// Unknown, and can take as long as the position needs). GameState's
+/// submission uses it unless told otherwise.
+CheckRuling standard_check_ruling() noexcept;
 
 /// Whether the action in progress may be submitted.
 enum class SubmitStatus : std::uint8_t {
   /// T5: the present has not shifted to the opponent (or, Q5 AllActive, an
   /// active board of the mover's is unplayed). Not submittable.
   ObligationsUnmet = 0,
-  /// The obligations are met; royal safety (C4) was NOT tested - no test is
-  /// installed (the check ruling is pending). Submittable, pseudo-legally.
+  /// The obligations are met; royal safety (C4) was NOT tested - the ruling
+  /// given has no royals_safe hook (CheckRuling::none()), or it answered
+  /// Unknown. Submittable, pseudo-legally.
   Unchecked,
   /// The obligations are met and the installed test found every royal safe.
   Safe,
@@ -215,12 +227,14 @@ class GameState {
 
   // -- submission (T5, C4) ------------------------------------------------------
 
-  /// Whether the action may be submitted; consults ruling.royals_safe.
-  SubmitStatus submission_status(const CheckRuling& ruling = {}) const;
+  /// Whether the action may be submitted; consults ruling.royals_safe once the
+  /// obligations are met - by default the engine's (C4, R1): Safe or Unsafe.
+  SubmitStatus submission_status(const CheckRuling& ruling = standard_check_ruling()) const;
   /// Ends the action and begins the opponent's turn. Throws std::logic_error,
   /// leaving the state unchanged, if the status is ObligationsUnmet or Unsafe.
-  /// Unchecked is accepted: see SubmitStatus.
-  void submit(const CheckRuling& ruling = {});
+  /// Unchecked is accepted (pass CheckRuling::none() to submit pseudo-legal
+  /// play): see SubmitStatus.
+  void submit(const CheckRuling& ruling = standard_check_ruling());
 
   // -- key -----------------------------------------------------------------------
 
@@ -291,7 +305,8 @@ GameState game_from_fen(const std::vector<std::string>& boards, BoardSize size, 
 
 /// C5 from the hooks: has_legal_action Yes -> Ongoing; No -> in_check Yes ->
 /// Checkmate, No -> Stalemate; Unknown wherever a hook is missing or answers
-/// Unknown. Meaningful at the start of a turn. Implements no rule itself.
+/// Unknown. Meaningful at the start of a turn. Implements no rule itself
+/// (the engine's verdict with its search statistics: t5d/search.hpp).
 Outcome outcome(const GameState& turn_start, const CheckRuling& ruling);
 
 }  // namespace t5d
