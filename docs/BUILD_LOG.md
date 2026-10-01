@@ -15,21 +15,44 @@ M5 - building it would break a rule).
 
 ## Where things stand
 
-*Updated 2026-10-01, night.*
+*Updated 2026-10-02.* Work in the tree that is not yet committed is listed under
+**In the tree, uncommitted** - a session that resumes starts there.
 
 - **Done:** pre-flight; step 1 (CI green on Linux, H35); step 2A (H30
   fingerprints, the notation parse-only oracle); the rules reference; CHECKPOINT 1
   - reported, then **ruled by the user** (register H36-H40 and I11 in the updated
   design documents, committed 666c4a0; rulings R1-R7 recorded in
   `docs/rules/README.md`, now the rulebook, H38); engine E1+E2 (ae35da3, CI green
-  on g++ 13 and 14); network N1+N2 (committed 2026-10-01; 447 tests; CI job
-  `network` on Linux whenever `python/` changes).
-- **Running:** step 2B (H32 stable answers, H33 integrity, H34 telltales, the
-  engine parse mode in the gate); engine E3 (expansion: the move graph, W(k) and
-  E(k), side-to-move typed relations; the `t5d-measure` and `t5d-bench` tools);
-  engine E4 in a separate worktree (check status and submission legality per H36,
-  legal-action enumeration, the naive and hypercuboid mate detectors per H37, the
-  gate adapter's full mode); the upstream drafts of the two oracle defects.
+  on g++ 13 and 14); network N1+N2 (bafa2c4; 447 tests; CI job `network`); the
+  upstream drafts of the two oracle defects (3277bb2); engine E3 - expansion and
+  the Phase 1 measurement tools (committed 2026-10-02; 299 tests).
+- **In the tree, uncommitted (2026-10-02):**
+  - *Step 2B* (H32 stable answers - required sets at 100%, `golden --write
+    --repeat 2`, per-position cost files, calibration probe; H33 - golden
+    `MANIFEST`, one verified snapshot per run, the harness-modified check,
+    CODEOWNERS; H34 telltales; the engine's parse mode; H36's `in_check`
+    definition; H37's guard against budget-limited verdicts; H38's rulebook pin in
+    `gate.toml` with `harness.py rulebook --pin`): built and fixed after review
+    (17 findings), selftest 589 OK. `verify` fails only on the golden files, which
+    need `py oracles/harness.py golden --write --repeat 2 --jobs 8` - **on a quiet
+    machine** (the recording measures each answer's cost, and the costs decide the
+    required sets). Commit 2B with the re-recorded golden files, never without
+    them. Also to apply with it: AGENTS.md's list of forbidden ways to make the
+    gate pass (the coverage floors are gone - name budgets, `[stability] margin`,
+    `proof_share`, re-recording on a loaded machine, hand-editing cost files,
+    `calibration.json` or `MANIFEST`, moving the rulebook pin unreviewed) and
+    CLAUDE.md's commands (`--repeat 2`, `rulebook`).
+  - *Engine E4* (check status and submission legality per H36/R1, legal actions
+    counted as distinct successor states, the naive and hypercuboid detectors
+    under H37, `t5d-gate` full mode): committed on branch
+    `worktree-agent-a6b6e1b848a0af712` (a371893..1113269, 299 tests), not yet
+    merged; under adversarial review (rules fidelity, detectors and counting, gate
+    contract and tests). Merging it after E3: E4 makes `submit()` test royal
+    safety by default, so E3's random pseudo-legal play must pass
+    `CheckRuling::none()`.
+  - *Network N3* (block-causal scope, the cached path, root refresh and the rung-1
+    fork, KV precision, the §15.2 equivalence tests, §15.3 cost figures): being
+    built in `python/`.
 - **Next:** merge E3 and E4; wire the rulings into the gate (known-divergence
   entries for ftxi's 78 check verdicts and for both oracle defects, as telltales;
   the rulebook pin, H38; the engine configured, parse mode then full mode); the
@@ -324,7 +347,39 @@ hypercuboid detector under H37 (a budget-limited search can only return
 "unknown" - a test pins it), the two detectors cross-checked, and
 `t5d-gate`'s full mode. Then each against the gate.
 
-### 5. Phase 1 measurements - not started
+### 5. Phase 1 measurements - tools built, measurements pending a quiet machine
+
+Engine E3 (committed 2026-10-02) built what M9 and M7 need: `expand()` (the
+mover's moves, the move graph, W(k) and E(k), side-to-move typed relations, board
+and square features), its C API, `t5d-measure` (per-position W/E at k = 0/4/8/16,
+and `--summary`, a curve de-duplicated by position and by game) and `t5d-bench`
+(search-like streams, interleaved rounds, thread CPU time, per-round thread
+scaling, raw / caliper-matched / no-move flatness series - labels, never
+verdicts). Moves are still pseudo-legal; `expansion_moves()` in `src/expand.cpp`
+is the one place to switch to E4's legal actions after the merge.
+
+Preliminary figures (2026-10-02, dev, g++ 16.2 -O2, SYNTHETIC random-play
+positions, 16 games per class; **machine loaded 17-97%, so not measurements**):
+scope+relations expansion 41.6k/s per thread at N240 T8 (|E(8)| 12.9, 810 moves)
+and 24.3k/s at N600 T12 (|E(8)| 38.1, 1,601 moves) - both about 2x M9's per-GPU
+targets on one thread; 12 threads 9-11x. The history term left after the O(N)
+restructure is about 0.7 ns per board (2% of an expansion at N600). Matched
+flatness, three loaded rounds: +13% [-6, +17] - inconclusive. The corpus |E|
+curve (with `--moves-after-shift`; distinct positions) reaches only 240-399
+boards in 2 games: it cannot decide M7 (spec issue 26).
+
+**Reading of the brief's STOP band** (the brief, not the spec, says "a §15.6
+result within ±10% of its threshold" stops the run; spec issue 27): ±10% relative
+to the threshold's value - throughput 18,000-22,000/s at 240 boards and
+9,000-11,000/s at 600; flatness growth of 9-11% from 100 to 600 boards; the 6b
+percentages 45-55% of positions (and 2.7-3.3 / 4.5-5.5 forcing half-turns at the
+median). A result inside a band stops for the user.
+
+Next: the quiet-machine run - `build/engine/t5d-bench --samples 15 --emit
+build/m9/pos --json build/m9/m9.json` (accept only if the 1-thread load median is
+near the bench's own) - then M9's verdict in `docs/MEASUREMENTS.md`, re-measured on
+legal moves after E4; M7 on the corpus as an upper bound and a request to the user
+for game records.
 
 ### 6. Phases 2-3 - not started
 
@@ -401,9 +456,9 @@ hypercuboid detector under H37 (a budget-limited search can only return
 
 | ID | Status | Notes |
 |---|---|---|
-| M7 | not started | Window verdict (step 5) |
+| M7 | tools built | `t5d-measure`; the corpus cannot decide it (spec issue 26) - game records requested |
 | M8 | not started | Scanner verdict (6b), after M9 (M10's order) |
-| M9 | not started | Movegen verdict, pseudo-legal first (provisional) |
+| M9 | tools built | `t5d-bench`; preliminary only (loaded machine); the quiet-machine run is next |
 | M11 | built | Licence recorded in PROVENANCE.md |
 
 ## Parked, and why
@@ -562,6 +617,47 @@ decision), and what is parked.
     the bilinear form an option; and "14.7 MMAC per head per layer" is the cost of
     a 256-wide output over every pair, not of the generator. Proposed spec edits
     12-18.
+17. **E's "some live piece"** (§10.4.1) is read as the mover's pieces: E comes
+    from the move generator at the node, and the opponent's destinations enter at
+    the child (§10.4.3's "search re-partitions per node"). R1 now makes the
+    both-colours reading buildable; whether to is a scope choice, not built.
+18. **Source boards outside W** (src_extra / src_only): the head of an inactive
+    timeline is playable but gets no band; the spec does not say whether scope
+    must hold the source square of a move for the policy pointer. Live in the
+    corpus: src_only(8) > 0 at 9/7/7/8/13 distinct positions by size bucket.
+    Counted apart, never folded into |E|.
+19. **Travel-threat** is named in §6 and B11 and used as a class of forcing moves
+    in §11.1; no edge is defined. Not built.
+20. **"Per GPU's CPU allocation"** (§15.6 M9) is undefined: how many cores is one
+    GPU's share? The bench reports per thread and per machine.
+21. **What M9's "expansion" includes**: moves only, + move graph, + W/E, + typed
+    relations, + per-board features? The full per-board feature export is O(N) by
+    construction (it writes every board), so "flat in N" can hold only for the
+    windowed expansion.
+22. **"At fixed |E|"** (M9 flatness): |E| cannot be held fixed along a game; the
+    bench approximates it by caliper-matching moves, |E(8)| and the mover's pieces
+    within 10%.
+23. **Branch origins: mandatory core or filler?** §10.4.3 lists them after the
+    heads' recent k; §15.6's W column ((k+2)T - 1) counts them. |W(8)| with and
+    without origins on the corpus: 34.5/33, 68/62, 122/114, 185/174 by bucket.
+    The engine reports both.
+24. **W(k)'s unit and the present band**: k counts half-turns (one board each);
+    the present band is read as the active heads.
+25. **5DFEN records no branch origins** (or creation order), so a position read
+    from 5DFEN has a smaller W and no lineage parent - matters for the network's
+    lineage-based causal scope (N3) too.
+26. **The corpus cannot decide M7.** Real games in the corpus: 5 / 3 / 2 / 0 games
+    in the 100-159 / 160-239 / 240-399 / 400+ buckets, at 8 / 16 / 24 timelines
+    against §15.6's assumed 7-12, and only under the Q4 reading the engine does
+    not use by default. §10.4.2 asks for real game records; requested from the
+    user.
+27. **The STOP band is the brief's, not the spec's.** "A §15.6 result within
+    ±10% of its threshold" stops the run; the band's reading (relative to the
+    threshold) is recorded in step 5. Not a spec edit.
+28. **What is a "legal move" for the expansion after E4?** R1 judges legality per
+    action ("moving into check during a turn is allowed"): a single move is legal
+    if it is part of some legal action. The expansion will offer the moves that
+    begin a legal action (E4's enumeration), to be confirmed at the merge.
 
 ## Proposed spec edits
 
@@ -634,6 +730,17 @@ says now, what it should say, why.
     the memory bound needs per-block recomputation.
 18. **§6 vs §11**: say what the generator exports as "the move graph" (the side to
     move's moves - engine stage E3's reading - or both colours).
+19. **§10.4.1**: define E as the out-of-window travel destinations of the
+    mover's moves, a branching move counting at the history board it targets
+    (spec issue 17).
+20. **§10.4.3**: define W(k) - unit, present band - and say whether branch
+    origins are core or filler (issues 23, 24).
+21. **§15.6 / M9**: define the CPU allocation per GPU, what "expansion" includes,
+    and how flatness at fixed |E| is measured (issues 20-22).
+22. **§6 / B11**: define the travel-threat relation, or drop it and cite §11.1's
+    forcing-move class instead (issue 19).
+23. **§2.2**: the has-moved flag exists only for pawns, rooks, kings and brawns
+    (5DFEN's `*`); say so.
 
 ## Session log
 

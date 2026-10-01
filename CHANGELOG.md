@@ -10,6 +10,36 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-02 - Engine stage E3: expansion, its C API, the Phase 1 measurement tools
+
+- `engine/`: `expand()` (`t5d/expand.hpp`, `src/expand.cpp`, `t5d/records.h`)
+  produces, for the player to move, the pseudo-legal moves (with capture, travel
+  and branching flags), the move graph (B9), W(k) - each active timeline's band of
+  k half-turns plus branch origins, reported apart - and E(k), the out-of-window
+  travel destinations (§10.4.1), with source boards outside W counted apart;
+  side-to-move typed relations behind flags (attack, defence, x-ray - B11,
+  provisional; pin and check are E4's; travel-threat is undefined); board and
+  square features in `python/t5d/net/state.py`'s layout, plus the lineage parent.
+  No per-frozen-board work - per-board arrays are computed on first use - and no
+  allocation in steady state. Moves are chosen in one place, ready for E4's legal
+  actions.
+- C API games: from a record, 5DFEN or a variant; replay, apply and submit under a
+  per-game check ruling; expand into flat arrays.
+- Tools: `t5d-measure` (per-position W/E at k = 0/4/8/16, and `--summary`, a curve
+  de-duplicated by position and game) and `t5d-bench` (search-like streams,
+  interleaved rounds, thread CPU time, thread scaling, raw / matched / no-move
+  flatness series, reported as ranges and labels, never verdicts); a seeded
+  generator of SYNTHETIC positions for throughput only.
+- 40 new tests (299), including a ruleset-aware from-scratch reference; reviewed
+  adversarially (19 findings, all dealt with: 18 fixed, one a question about the
+  brief's STOP band); 20 injected mutants killed.
+- `docs/BUILD_LOG.md`: step 5's state, preliminary figures (loaded machine - not
+  measurements), the reading of the brief's ±10% STOP band, spec issues 17-28,
+  proposed spec edits 19-23.
+- Spec: §6 (B9, B11), §10.4.1-§10.4.3 (C5, C7 - measurement only; no window
+  code), §11.1, §15.6 (M7, M9); spec issues 17-28 and proposed edits 19-23 in the
+  build log.
+
 ### 2026-10-01 - Upstream drafts of the two oracle defects; network CI fix
 
 - `docs/checkpoints/upstream/`: draft bug reports for the user to file (rulebook
