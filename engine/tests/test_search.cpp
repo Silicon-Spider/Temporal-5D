@@ -30,7 +30,7 @@ namespace {
 
 constexpr BoardSize k5x5{5, 5};
 
-const std::vector<Detector> kDetectors = {Detector::Naive};
+const std::vector<Detector> kDetectors = {Detector::Naive, Detector::Hypercuboid};
 
 Outcome verdict_of(const GameState& s, Detector d) { return detect_mate(s, d).verdict; }
 

@@ -1,8 +1,10 @@
-// The test runner: t5d-tests [--list] [name-fragment ...]
+// The test runner: t5d-tests [--list] [--long] [name-fragment ...]
 //
 // Runs every registered test, or only those whose names contain one of the
-// fragments. Prints one line per test and a summary; exits 1 if any test
-// failed (or if the fragments matched nothing), 0 otherwise.
+// fragments. Tests whose names begin with "long_" (long cross-checks) run only
+// with --long or when a fragment names them. Prints one line per test and a
+// summary; exits 1 if any test failed (or if the fragments matched nothing), 0
+// otherwise.
 
 #include <cstdio>
 #include <cstring>
@@ -34,21 +36,28 @@ void record_failure(const char* file, int line, const std::string& message) {
 int main(int argc, char** argv) {
   using namespace t5d_test;
   bool list = false;
+  bool long_tests = false;
   std::vector<std::string> filters;
   for (int i = 1; i < argc; ++i) {
     if (std::strcmp(argv[i], "--list") == 0) {
       list = true;
+    } else if (std::strcmp(argv[i], "--long") == 0) {
+      long_tests = true;
     } else if (std::strcmp(argv[i], "--help") == 0 || std::strcmp(argv[i], "-h") == 0) {
-      std::puts("usage: t5d-tests [--list] [name-fragment ...]");
+      std::puts("usage: t5d-tests [--list] [--long] [name-fragment ...]");
       return 0;
     } else {
       filters.emplace_back(argv[i]);
     }
   }
   const auto selected = [&](const TestCase& test) {
-    if (filters.empty()) return true;
+    const std::string name(test.name);
+    const bool is_long = name.rfind("long_", 0) == 0;
+    if (filters.empty()) return !is_long || long_tests;
     for (const std::string& f : filters) {
-      if (std::string(test.name).find(f) != std::string::npos) return true;
+      if (name.find(f) == std::string::npos) continue;
+      // A fragment selects a long test only if it names it as long.
+      if (!is_long || long_tests || f.rfind("long_", 0) == 0) return true;
     }
     return false;
   };
