@@ -146,7 +146,7 @@ positions = 38
 # rulebook as a side effect, and the recorded answers do not depend on it.
 [rulebook]
 path = "docs/rules/README.md"
-sha256 = "e1fb718af64b643a852069e20e98dba0e736ec60e940f2d69008e15c838e7a1c"
+sha256 = "c9755eae3c0096b66008a490cfd44680dce3c4ad0a02251b3fb67cfc9c1dddc6"
 
 # --- Boundary -----------------------------------------------------------------
 # Every file outside oracles/ is checked. These lists sort the files into kinds,

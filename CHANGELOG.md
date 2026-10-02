@@ -10,6 +10,22 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-02 - The rulebook records the CHECKPOINT 2 rulings on Q4 and Q5
+
+- `docs/rules/README.md`: **R8** - a player may keep moving after the present has
+  shifted; the turn ends only at submission (Q4, register D8), with its sources
+  (Wikipedia's "The player may also optionally make moves on any playable board
+  where it is their turn" and the "Submit Moves" button; wiki.gg's Action page as
+  support; the corpus records as client evidence). **R9** - only the active boards
+  in the present are mandatory (Q5), settled from the ranked sources as the user
+  asked: the in-game Guide's "A player can ignore any timelines that are not needed
+  to advance or rewind The Present" outranks Wikipedia's former paragraph. T5's open
+  clause, Q4 and Q5 marked accordingly. Q2 stays open: its sources are silent.
+- `oracles/gate.toml`: the rulebook re-pinned (H38) after review; no known
+  divergence cites T5, T6, Q4 or Q5 (their "RQ4" is CHECKPOINT 1's rule question 4);
+  the commit-tier gate re-run: the oracle layer ok.
+- Spec: §8.2 and §11.0 item 2 (D8, H38); no spec edit (the documents already say it).
+
 ### 2026-10-02 - Design documents: the CHECKPOINT 2 rulings, from upstream
 
 - `docs/design/` replaced with the upstream revision recording the user's rulings at
