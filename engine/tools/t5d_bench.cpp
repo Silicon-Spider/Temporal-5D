@@ -38,8 +38,8 @@
 // rate, and the load. Every result feeds a printed sink, so nothing is
 // optimised away. The output names the compiler, the flags, the CPU, its
 // cores and logical processors, and the thread counts. Moves are PSEUDO-LEGAL
-// (check and legality are stage E4's, R1, not merged yet): every figure is
-// provisional.
+// in every configuration but the "+legal" ones (--legal: the legal moves only,
+// ExpandOptions::legal_moves - provisional, R1; build-log spec issue 28).
 //
 // FLATNESS (§15.6: "Scaling at fixed |E| - flat in N - <= 10% growth from 100
 // to 600 boards"). Games with their active timelines held at T, taken at every
@@ -643,7 +643,7 @@ struct Config {
   bool threaded = false;
 };
 
-std::vector<Config> configs() {
+std::vector<Config> configs(bool legal) {
   std::vector<Config> out;
   Config movegen;
   movegen.name = "movegen";
@@ -679,6 +679,20 @@ std::vector<Config> configs() {
   m9.options.attack = m9.options.defence = m9.options.xray = true;
   m9.threaded = true;
   out.push_back(m9);
+  if (legal) {
+    // --legal: the same with the legal moves only (ExpandOptions::legal_moves).
+    Config scope_legal = scope;
+    scope_legal.name = "expand-scope+legal";
+    scope_legal.what = "expand-scope with the legal moves only (a search per move: the moves after "
+                       "which the action can be finished legally)";
+    scope_legal.options.legal_moves = true;
+    out.push_back(scope_legal);
+    Config m9_legal = m9;
+    m9_legal.name = "scope+relations+legal";
+    m9_legal.what = "scope+relations with the legal moves only";
+    m9_legal.options.legal_moves = true;
+    out.push_back(m9_legal);
+  }
   return out;
 }
 
@@ -922,6 +936,7 @@ struct Options {
   std::size_t flat_max = 64;       // positions per flatness stream
   bool loop = true;
   bool pin = true;
+  bool legal = false;
   std::string emit_dir;
   std::string json_path;
   t5d::RuleOptions rules{};
@@ -955,6 +970,8 @@ void print_usage(std::FILE* stream) {
       "  --flat-ms MS          length of a flatness sample (default 50)\n"
       "  --no-loop             skip the loop over the class positions (the upper bound)\n"
       "  --no-pin              do not pin the worker threads\n"
+      "  --legal               also time expand-scope and scope+relations with the legal\n"
+      "                        moves only (ExpandOptions::legal_moves)\n"
       "  --quick               a smoke test: --samples 3 --sample-ms 50 --flat-ms 10\n"
       "                        --games 4 --children 4 --flat-games 4 --flat-max 24\n"
       "  --emit DIR            write every synthetic position's 5dpgn record into DIR\n"
@@ -964,8 +981,8 @@ void print_usage(std::FILE* stream) {
       "  RECORD ...            5dpgn records: every action start is a position\n"
       "\n"
       "Synthetic positions are random play: throughput and stress only, never the |E|\n"
-      "verdict. Moves are pseudo-legal (check and legality are stage E4's): every\n"
-      "figure is provisional.\n",
+      "verdict. Moves are pseudo-legal but in the --legal configurations (the legal\n"
+      "moves only, ExpandOptions::legal_moves: provisional).\n",
       stream);
 }
 
@@ -1053,6 +1070,8 @@ Options parse_options(int argc, char** argv) {
       o.flat_s = count(i) / 1000.0;
     } else if (a == "--no-loop") {
       o.loop = false;
+    } else if (a == "--legal") {
+      o.legal = true;
     } else if (a == "--no-pin") {
       o.pin = false;
     } else if (a == "--quick") {
@@ -1227,7 +1246,7 @@ int main(int argc, char** argv) {
 
   try {
     Plan plan;
-    plan.configs = configs();
+    plan.configs = configs(opt.legal);
     plan.workers = opt.threads.back();
     std::vector<std::shared_ptr<const t5d::synthetic::Game>> games;
 
@@ -1593,7 +1612,7 @@ int main(int argc, char** argv) {
     const std::string clock_method = calibrate_thread_clock(clock_check);
 
     std::printf("t5d-bench %s - expansion throughput (spec §15.6, M9); PSEUDO-LEGAL moves "
-                "(check and legality are stage E4's, not merged yet): provisional\n",
+                "but in the +legal configurations (ExpandOptions::legal_moves): provisional\n",
                 T5D_VERSION_STRING);
     std::printf("machine: %s, %llu physical cores, %u logical processors, %s\n", cpu.c_str(),
                 static_cast<unsigned long long>(cores.size()), hw, os_text().c_str());
@@ -1690,8 +1709,8 @@ int main(int argc, char** argv) {
 
     std::string json =
         "{\"event\":\"summary\",\"tool\":\"t5d-bench\",\"version\":\"" T5D_VERSION_STRING "\"";
-    json += ",\"provisional\":\"pseudo-legal moves (check and legality are stage E4's, R1, "
-            "not merged yet)\"";
+    json += ",\"provisional\":\"pseudo-legal moves but in the +legal configurations "
+            "(ExpandOptions::legal_moves; R1, build-log spec issue 28)\"";
     json += ",\"machine\":{\"cpu\":" + json_string(cpu) + ",\"physical_cores\":" +
             std::to_string(cores.size()) + ",\"logical_processors\":" + std::to_string(hw) +
             ",\"os\":" + json_string(os_text()) + "}";

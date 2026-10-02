@@ -15,6 +15,7 @@
 
 #include "t5d/board.hpp"
 #include "t5d/multiverse.hpp"
+#include "t5d/search.hpp"
 
 namespace t5d {
 
@@ -143,14 +144,13 @@ constexpr std::uint8_t type_id(Piece p) noexcept {
 // large (INT32_MAX) is taken as the largest k that leaves it out.
 constexpr int window_k_of(int k) noexcept { return k < kNoWindow ? k : kNoWindow - 1; }
 
-// THE MOVES AN EXPANSION HOLDS - the one place they are chosen. Pseudo-legal
-// (t5d/movegen.hpp) until stage E4 is merged: check status and submission
-// legality are E4's (ruled at CHECKPOINT 1: rules reference R1, register H36),
-// and when they exist this function switches the expansion - its moves, the
-// move graph, attacks, E(k), src_extra(k) and the playable boards' roles,
-// everything below is derived from this list - to E4's legal moves. The
-// geometric relations (defence, x-ray) come from the same pass; they depend on
-// no rule about royal safety.
+// THE MOVES AN EXPANSION HOLDS - the one place they are chosen: pseudo-legal
+// (t5d/movegen.hpp), or with options.legal_moves the legal ones - those after
+// which the action can still be finished legally (t5d/search.hpp; C4, R1;
+// build-log spec issue 28). Everything below - the move graph, attacks, E(k),
+// src_extra(k) and the playable boards' roles - is derived from this list.
+// The geometric relations (defence, x-ray) come from the same pass; they
+// depend on no rule about royal safety, so the filter leaves them whole.
 void expansion_moves(const GameState& state, const ExpandOptions& options, MoveList& moves,
                      RelationList& geometric) {
   if (options.defence || options.xray) {
@@ -159,6 +159,7 @@ void expansion_moves(const GameState& state, const ExpandOptions& options, MoveL
     generate_moves(state, moves);
     geometric.clear();
   }
+  if (options.legal_moves) keep_legal_moves(state, moves);
 }
 
 }  // namespace
@@ -351,8 +352,8 @@ void expand(const GameState& state, const ExpandOptions& options, Expansion& out
   }
   if (options.pin || options.check) {
     throw std::invalid_argument(
-        "expand: the pin and check relations are not built - they need check detection, "
-        "stage E4's (ruled: rules reference R1, register H36), which is not merged yet");
+        "expand: the pin and check relations are not built (they would read check "
+        "detection, t5d/check.hpp: rules reference R1, register H36)");
   }
   if (options.travel_threat) {
     throw std::invalid_argument(

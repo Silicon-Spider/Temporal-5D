@@ -7,7 +7,8 @@
 // headroom" (§15.6, "Movegen throughput"). expand() computes, for the player to
 // move:
 //
-//  a. moves - the pseudo-legal moves (t5d/movegen.hpp, generate_moves), each
+//  a. moves - the pseudo-legal moves (t5d/movegen.hpp, generate_moves) - or,
+//     with ExpandOptions::legal_moves, the legal moves only - each
 //     also as a plain record (t5d/records.h): source and destination (timeline,
 //     half-turn, square), their board indices and cells, the pieces, the
 //     promotion, and the flags - capture, branching (J3), cross-board travel
@@ -38,8 +39,8 @@
 //     policy pointer's source squares.
 //  e. relations - the typed relations of §6 (B11, PROVISIONAL, each off by
 //     default): attack, defence, x-ray. Reserved, not built: pin and check
-//     (they need check detection - stage E4's, ruled at CHECKPOINT 1: rules
-//     reference R1, register H36 - not merged yet), and travel-threat (§6 and
+//     (they would read check detection, t5d/check.hpp - stage E4 built that,
+//     not these relations), and travel-threat (§6 and
 //     B11 name the relation; §11.1 uses "travel threats" as a class of
 //     forcing moves, "branching moves that create a timeline with an
 //     immediate threat", but no edge - source and target squares - is
@@ -60,11 +61,15 @@
 //    node", §10.4.3). Reading it as both colours would add the opponent's
 //    moves from boards it cannot move on now (append_moves_of, t5d/movegen.hpp,
 //    can generate them) - a choice of scope the spec does not make.
-//  * Moves are PSEUDO-LEGAL. Check status and submission legality are stage
-//    E4's (ruled at CHECKPOINT 1: rules reference R1, register H36); when E4
-//    is merged the expansion switches to its legal moves in one place
-//    (expand.cpp, expansion_moves). Until then every |E| is an upper bound and
-//    every throughput figure provisional.
+//  * Moves are PSEUDO-LEGAL by default. ExpandOptions::legal_moves (off by
+//    default, provisional) restricts them - and everything derived from them
+//    - to the LEGAL moves: those that begin, or during an action continue, a
+//    legal action (t5d/search.hpp, legal_moves). R1 judges legality per action
+//    ("moving into check during a turn is allowed"), so that is a single
+//    move's legality (build-log spec issue 28). One place chooses the moves
+//    (expand.cpp, expansion_moves). With pseudo-legal moves every |E| is an
+//    upper bound; the switch costs a search per move (the engine README gives
+//    its cost on t5d-bench's classes).
 //  * has-moved is 1 exactly on a pawn, rook, king or brawn that has lost its
 //    unmoved marker (5DFEN's '*'); 0 on every other piece and empty square:
 //    no rule reads the history of the other kinds, and 5DFEN does not record it.
@@ -141,6 +146,12 @@ struct ExpandOptions {
   /// band (INT32_MAX included). The tools report k in {0, 4, 8, 16}.
   int window_k = 8;
   SquareFeatures square_features = SquareFeatures::All;
+  /// The legal moves only (t5d/search.hpp, legal_moves): the pseudo-legal
+  /// moves after which the action can still be finished legally (C4, R1;
+  /// build-log spec issue 28). PROVISIONAL, off by default: each move costs a
+  /// search (to its first legal finish, by the hypercuboid detector), and the
+  /// expansion then allocates.
+  bool legal_moves = false;
 
   // The typed relations (§6, B11) - PROVISIONAL, each off by default. Only the
   // subset that check detection cannot change, for the player to move's
@@ -158,10 +169,10 @@ struct ExpandOptions {
 
   // Reserved: expand() throws std::invalid_argument if one is set.
 
-  /// Needs check detection - what attacks a royal piece; pins follow from it.
-  /// Stage E4's (ruled: rules reference R1, register H36), not merged yet.
+  /// Would read check detection - what attacks a royal piece; pins follow
+  /// from it (t5d/check.hpp, stage E4; R1, H36). Not built.
   bool pin = false;
-  /// Needs check detection (stage E4's; R1, H36).
+  /// Would read check detection (t5d/check.hpp; R1, H36). Not built.
   bool check = false;
   /// Named by §6 and B11; §11.1's "travel threats" are a class of forcing
   /// moves, and no edge (source and target squares) is defined.

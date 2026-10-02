@@ -225,8 +225,8 @@ t5d::ExpandOptions expand_options_from(const t5d_expand_options* o) {
   }
   if ((o->relations & kReserved) != 0) {
     throw NotImplemented(
-        "relations: pin and check need check detection, stage E4's (ruled: rules reference "
-        "R1, register H36), which is not merged yet, and travel-threat has no edge defined by "
+        "relations: pin and check are not built (they would read check detection: rules "
+        "reference R1, register H36), and travel-threat has no edge defined by "
         "the design spec (§6, B11; §11.1 uses travel threats only as a class of forcing "
         "moves) - none is built");
   }

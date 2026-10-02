@@ -39,7 +39,7 @@
 // |E(8)| and |E(4)|, and how many positions have a source outside W(8) and
 // E(8) (src_only). Synthetic records are left out of it, and counted.
 //
-// Moves are PSEUDO-LEGAL (check and legality are stage E4's, R1, not merged yet):
+// Moves are PSEUDO-LEGAL (the expansion's default, legal_moves off):
 // every |E| is an upper bound. Records marked synthetic ("Synthetic" header)
 // are random play, never evidence for the |E| verdict.
 
@@ -91,7 +91,7 @@ void print_usage(std::FILE* stream) {
       "  --help, --version\n"
       "\n"
       "One JSON object per line (see the engine README, \"t5d-measure\"). Moves are\n"
-      "pseudo-legal (check and legality are stage E4's): every |E| is an upper bound.\n",
+      "pseudo-legal (the expansion's default): every |E| is an upper bound.\n",
       stream);
 }
 
