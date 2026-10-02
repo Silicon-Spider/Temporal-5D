@@ -1815,6 +1815,279 @@ under Q4's ruled reading. The shares of roots reaching 5 forcing half-turns were
   over the sample, 5 threads must resolve at least one thread's depth (one retry, for
   timing noise).
 
+## Stage E8: the verification layer's redesign (M14, a prototype until 6b′)
+
+6b failed from 50 boards up even after E5c (CHECKPOINT 3, spec §11.1 "The redesign
+after 6b"): the brute-force scanner paid turn-level exactness - completing every
+forcing line into a legal turn, listing every legal action in check, scanning for
+royal captures - on every line, whether the line could end in a proof or only in an
+estimate. Stage E8 builds the redesign the ruling (register M14) describes, as a
+prototype for experiment 6b′ (M15) to decide. The E5b/E5c scanner is kept unchanged
+beside it: below 50 boards M15 keeps whichever of brute force and df-pn decides more
+roots, so both stay measurable.
+
+This section is the design, written before the code (the brief asked for it in that
+order); the parts' headers restate it next to the code.
+
+### The channel split (H2, §11.1 part 1; architecture §13.2.7)
+
+- **The proof channel** (`t5d/prover.hpp`) pays every exactness cost: legal actions
+  only, every defence of the defender, terminal verdicts by E4's exhaustive
+  detectors (H37). It answers one question at a root and nothing else (below).
+- **The estimate channel** (`t5d/estimate.hpp`) pays none of them: a cheap, inexact
+  local search over capture and threat sequences, *without turn completion* - a move
+  is followed at once by the opponent's reply, as if the move were the whole turn -
+  with the v1 material eval (H6). Its output is a score and a "tactically live"
+  flag: soft priors and force-expansion hints only (H2). Its errors cost search
+  efficiency, never correctness: it proves nothing, exports nothing to the solved
+  store, and no move it makes reaches the tree - moves reach the tree only through
+  the generator, which is exact.
+
+### The proof channel: depth-limited df-pn over semimoves
+
+**The question.** At a root - a turn start, its side to move the *attacker* A, the
+other side the *defender* D - the channel asks: *does A force checkmate within d
+forcing half-turns?* (d = 5 by default: A, D, A, D, A - mate-in-3, §15.6's
+"dlshogi's leaf-solver level", M15). The answer is one of
+- **proven** - A mates within d whatever D does: an exact game fact, exported at once
+  to the solved store as `Win(k)`, k <= d the proof's own distance (H19);
+- **disproven** - no such mate exists *within the attacker's forcing class* (below):
+  recorded as such ("no mate within d", with the class) in the disproof store;
+- **unknown** - the budget ran out first. Never "mate" on an exhausted budget (H37):
+  a node is proven only from exact sub-results.
+
+**The attacker's forcing class** (the spec defines none; each part a parameter,
+`ProverOptions`, with a placeholder default and a spec issue):
+- *seeds* - which first moves A's forcing actions may begin with: `Checks` (default,
+  dlshogi's tsume rule: checking moves by the scanner's definition (b) - a piece of
+  A's on a board the move creates, that board passed, can capture a royal);
+  `Forcing` (the scanner's whole forcing set: captures, checks, branch threats);
+  `All` (every pseudo-legal move - the literal "mate within d", used by the tests);
+- *completion* - how a seed becomes a whole action: `Canonical` (default, 6b's unit
+  - one action per seed, the first legal completion in a fixed preference order,
+  below) or `Every` (every legal completion: the action space beginning with the
+  seed, exactly).
+Proofs are real-game facts whatever the class (A's options are a subset of its legal
+actions; D's are all of them). Disproofs are facts about the class. With seeds `All`
+and completion `Every` the question is exactly "mate within d" and the tests hold the
+channel to the brute-force game tree both ways.
+
+**The defender's turn: every legal action.** D gets no stand-pat and no forcing
+restriction: an AND node is proven only when every legal action of D's leads to a
+proven mate (or D has none and is in check: checkmate).
+
+**OR and AND nodes when a turn is a sequence of semimoves.** A *semimove* is one
+timeline's share of a turn (§8.2, §11.0 item 3): on one of the mover's playable
+boards, "play nothing here" or one move from that board. Every node of the tree is
+either a *turn node* - a turn start - or a *semimove node* - a partial action, some
+of the mover's semimoves decided. A node is an **OR** node when A chooses there (A's
+turn nodes and A's partial actions) and an **AND** node when D does. So one
+half-turn is a chain of nodes of one kind: an AND turn node, its AND semimove nodes,
+and at the end of each complete legal action a *submit* edge to an OR turn node -
+the half-turn boundary, where the depth counter drops by one.
+
+**How a turn decomposes - the canonical order, exactly.** At the turn start the
+mover's playable boards are the *axes*, in an order fixed by the turn start (A's
+turns: ascending timeline; D's turns: the boards a check rests on first, then the
+mandatory ones, then the optional ones, ascending within each group - see "Evasions
+per semimove"). A partial action is built in two phases:
+1. **Plain phase.** Axis by axis in that order: if the axis's board has been played
+   already (by a jump that landed on it), it is skipped; otherwise the mover chooses
+   `Pass` or one of the board's *non-branching* moves (within the board, or a jump
+   onto another axis's still-unplayed board, J4) - generated by the state machine at
+   the partial state, so every move is pseudo-legal where it is made.
+2. **Branch phase.** Then any sequence of *branching* moves (J3, J5; J6's twins
+   included) from axes still unplayed, each generated at the partial state; and,
+   whenever the obligations are met (T5), the choice to submit - legal iff every
+   royal of the mover's is safe (C4).
+This tree holds every legal action exactly once (as a set of moves with its creations
+in order) **when the order of a turn's moves does not matter beyond the creations'
+order**: under Q4 "moves after the shift allowed" (`moves_after_shift`, the rules
+ruled at CHECKPOINT 2 and main's default from E7), activity changed by creations
+alone (the count rule, `Rewinds`, no play activation) and castling allowed on
+optional boards. The argument: the mover's moves visit only boards of its own colour,
+and an action creates only boards of the opponent's colour, so a move's path and
+landing squares never change during the action - only whether a jump onto another
+axis's board lands on a playable board (J4) or, once that board is played, on
+history (J6's branching twin); non-branching moves on different boards append boards
+to different timelines and commute; a branch only adds an opponent-coloured board and
+changes activity and the present, which no non-branching move reads under those
+rules. So any legal action can be replayed with its non-branching moves first, in
+axis order, and its branches after them in their creation order - every move still
+pseudo-legal and the final state the same - and each such sequence is one path of the
+tree. Under any other ruleset (Q4's default among them, which puts the move that
+shifts the present last; Q1's consecutive rule, Q3, Q6, Q21's alternative) the turn
+is not decomposed: the node's children are E4's listing of the legal actions
+(`list_legal_actions`, exhaustive, capped), and a capped listing makes the node
+unprovable (AND) or undisprovable (OR) - never a false verdict.
+
+**How a turn is completed incrementally, not re-solved per line.** A partial action
+is a node of the tree, so its completions are searched once and shared by every line
+through it - the scanner instead completed each forcing seed into a legal turn per
+line ("the quietest move on each mandatory board; else E4's first legal finish"),
+38-64% of its work at 100+ boards. Dead completions are cut where they arise, by
+three sound tests:
+- **A standing capture.** If, after some of the mover's moves, a piece of the
+  opponent's on one of its playable boards can capture a royal of the mover's, that
+  capture stands to the end of the action (E5a's tier 0: the mover moves only on its
+  own colour's boards, boards never change, a new board appears only where there was
+  void, which no existing capture crosses), so no completion is legal: the node is
+  dead at once. This is C4 asked of a partial action, answered by the incremental
+  royal-attack map (below) - so an AND node in check keeps only the moves that
+  answer the check, the moment they are made. (Off under Q18's alternative, where a
+  new board could block a capture across void.)
+- **A pass that cannot be made good.** `Pass` on a mandatory board leaves it to be
+  played by a branch from it later, or relieved by a creation that moves the present
+  (T8, T12). It is offered only where the axis has a branching move (or a jump onto
+  another axis, a possible J6 twin) or a relief is possible - the mover's next
+  creation would be active and could land behind the present, or the opponent has an
+  inactive timeline whose reactivation could move the present back (T11, T12).
+- **E5a's tiers** (optional, `ProverOptions::legality_tiers`): the fast tiers classify
+  a semimove node's moves; a move proved illegal (no legal finish at all) is not
+  made.
+A **canonical completion** (A's default) is the first legal leaf of the seed's
+completion subtree in a fixed preference order - on an optional board `Pass` first,
+then its non-branching moves from the quietest (a move within the board, capturing
+nothing, by the least valuable piece; the scanner's order); on a mandatory board the
+quietest move first and `Pass` last; then the branch phase, submitting as soon as the
+obligations are met and C4 holds, else branches in generator order. A depth-first
+search with the three tests, at most `completion_max_nodes` steps (2,000, the
+scanner's fallback cap: a placeholder); a seed it cannot complete within them has no
+action in the class - deterministic, so the class is well defined. It is computed
+once per (turn start, seed) - when the turn node is expanded - and held by the tree.
+
+**Evasions per semimove instead of listed whole.** An AND node never lists D's
+actions: its children are one axis's semimoves. D's axes are ordered so that the
+boards a check rests on come first (R1's captures in the passed multiverse: the
+boards whose passed copies hold a place of one), then the mandatory boards, then the
+optional ones. So the moves that do not answer a check die at the first axis - each
+leaves a standing capture - and the free boards behind it are explored only below a
+real evasion, lazily, in the order df-pn asks for them. E4 still decides the turn
+node itself: before expanding an AND turn node, one quick escape search (the same
+depth-first search as a completion, escape moves first, `escape_probe_nodes` steps)
+looks for a legal action; if it finds none, E4's hypercuboid detector gives the
+exhaustive verdict (`detect_mate`): checkmate - proven, distance 0, exported as
+`Loss(0)` (H37: an exhaustive search that terminated); stalemate - disproven
+(exported as `Draw`); a legal action - the node is expanded, that action's successor
+first among its children (a duplicate of one of the semimove tree's leaves: harmless
+for an AND node, and the first escape df-pn tries). At the last half-turn (no depth
+left) an AND node is decided by that test alone.
+
+**Proof and disproof numbers, thresholds.** Plain df-pn (Nagai's depth-first
+proof-number search; the precedent is dlshogi's df-pn mate solver, cited, not
+copied). Each node holds (pn, dn): proven (0, ∞), disproven (∞, 0), a fresh leaf
+(1, 1). An OR node's pn is its children's least pn and its dn their sum; an AND
+node's pn is the sum and its dn the least. `mid(n, thpn, thdn)` searches below n until
+pn >= thpn or dn >= thdn: it picks the child with the least pn (OR) or dn (AND) and
+gives it the thresholds `min(thpn, pn2 + 1)` and `thdn - dn(n) + dn(c)` (OR; AND
+symmetrically, pn2/dn2 the second-best). The root is searched with infinite
+thresholds until it is decided or the budget is spent. Sums saturate below ∞. A node
+that can never be proven (an AND node whose legal actions E4 could not list within
+its cap or memory ceiling) keeps pn just below ∞ and its dn: never proven, still
+disprovable. A dead semimove node (no legal completion) is not an option of the
+mover's: an AND-side one is proven, an OR-side one disproven. Distances: a proven
+node keeps k, the half-turns its proof needs (an AND turn node checkmated now 0; a
+submit edge adds 1; an OR node takes its proving child's, an AND node its longest
+child's), so the root's proof is `Win(k)`, k <= d.
+
+**The tree and the transposition table.** Each search thread keeps an explicit tree
+(children made on expansion, the move or action leading to each; states recomputed
+along the path as the search descends), because a node's children - one board's moves,
+each applied and C4-tested, or a seed's completion - cost too much to regenerate at
+every visit. Turn nodes also meet across paths and threads through a shared,
+lockless **transposition table** of (pn, dn) *estimates*, keyed by the 5D Zobrist key
+with the ruleset ID (H18), the node's role (A or D to move) and its remaining depth.
+Solved facts never live only there (§11.3): a proof goes to the solved store and a
+disproof to the disproof store the moment it is found, both keyed by position with a
+full comparison on a key match, and a turn node consults both when it is created.
+Read back: `Win(k)` for A with k within the depth left proves an OR node, `Loss(k)` for
+D proves an AND node (proofs are real-game facts, so a proof from the scanner may
+prove a df-pn node); `Win` or `Draw` for D, `Loss` for A, or a recorded disproof of the
+same class at least as deep, disproves. GHI does not arise: there is no repetition rule
+and every move creates a board, so the full state never recurs (H39) and the tree is
+acyclic; proofs and disproofs depend only on the position and the depth left.
+
+**Depth limiting.** A turn node carries the half-turns left. An OR turn node with r
+left expands A's actions, each submit edge to an AND turn node with r - 1; an AND
+turn node with 0 left is decided by the mate test alone (checkmate proven, otherwise
+disproven). Proven at r is proven at any r' >= r; disproven at r is disproven at any
+r' <= r; the stores and the TT key keep the depth.
+
+**Parallelism (M13: 5 threads).** Lazy-SMP-style: every thread runs `mid` from the
+root over a tree of its own; they share the TT (estimates), the solved store and the
+disproof store, and a thread that decides the root stops the others. Diversity: a
+helper thread breaks ties between equally good children by a per-thread hash, and
+searches with thresholds raised by a per-thread factor (the "1 + ε" trick), so the
+threads leave the main thread's path at different points. Soundness is unaffected: a
+node is solved only from its own exact children or a store's exact fact, the TT is
+never read as a fact, and the stores refuse contradictions (`std::logic_error`). One
+thread is the deterministic mode (H15): with a node budget and no clock, the same
+root, options and stores give the same search, node for node.
+
+**Budget.** Work is counted in nodes, one unit for all of it: a node expanded, a move
+applied, an attack-map query, a node of an E4 search the channel calls. A node
+budget and a wall-clock limit (6b′: 50 ms) stop the search; what was decided before
+the stop stands (it was exact), the rest is unknown.
+
+### Incremental royal-attack maps (§11.1 part 3)
+
+`RoyalAttackMap` (`t5d/attacks.hpp`) holds, for one colour and one multiverse, what
+`royal_capture_exists` asks - can a piece of that colour, on one of its playable
+boards, capture an enemy royal? - but kept as a record per *source* (a playable
+board): the captures found from it, and every line from it that stopped at *void* (a
+place with no board, J8), with where it stopped. A new board can only appear where
+there was void, so moving to a multiverse that extends this one (`advanced`) needs:
+- sources no longer playable (their board superseded) dropped;
+- new playable boards scanned as new sources;
+- for each new board's place, only the lines that stopped at void exactly there
+  resumed from it - every other line is unchanged, because boards never change (A4)
+  and a line that stopped at a piece or a board's edge cannot be reopened.
+A source's record is computed once and shared, unchanged, by every map derived from
+the one that made it: a board that is not played keeps its record from turn start to
+turn start, and a superseded board is never scanned again - it is only crossed.
+Under rules where a board's landability depends on activity or on its being history
+(Q8's, Q20's alternatives) or a slide crosses void (Q18's), `advanced` recomputes from
+scratch: always equal to a from-scratch scan, and the tests hold it so on random
+positions and move sequences under every ruleset.
+
+The proof channel derives each turn's maps from the previous turn's along the path:
+C4 for the mover's partial actions asks the opponent's map, advanced by the boards the
+action has made so far (each one an opponent source, plus the lines that stopped where
+it now stands); R1's check status after an action asks the mover's map advanced by
+the passed copies.
+
+### The estimate channel (§11.1 part 1)
+
+A negamax alpha-beta over *single moves*: the side to move makes one capture (or, in
+its first `threat_plies` plies, one checking move or branch threat), and the opponent
+replies at once from the boards that move made and its other playable boards - no
+completion of the turn, no obligations, no C4 test (a royal left capturable is simply
+captured, for a large score). Stand-pat (the static material eval) everywhere, delta
+pruning (§11.1: speculative pruning is estimate-channel only), MVV-LVA ordering, a ply
+limit and a node cap. Its result is the score after the sequence, the swing against
+the static eval, and whether the position is tactically live (a swing of at least
+`live_margin`). It is meant for rung 1 (§11.2): a per-leaf scan while the leaf waits
+for its batched evaluation - which 6b′ tests.
+
+### Experiment 6b′ (M15): `t5d-scan6bp`
+
+The same positions as 6b (the records' turn starts and one leaf per root two
+half-turns of random legal play below it, made as `t5d-scan6b` makes them), read per
+board-count range, never pooled:
+- **the proof channel** at each root: 50 ms of wall clock, 5 threads; *decided* = proven
+  or disproven. Pass: >= 50% of roots decided;
+- **the estimate channel** at each leaf: its cost in nodes, against the rung-1 leaf
+  budget. *Fits*, operationalised before measuring: the leaf budget is what M13's 5
+  scanner threads can spend while one leaf waits for its batched evaluation -
+  5 x (the channel's measured nodes per second of thread CPU time) / (§15.6's design
+  evaluation rate, size-matched: 9,600/s below 420 boards, 4,600/s from 420) - and the
+  channel fits a range when the 90th percentile of its per-leaf cost there is within
+  that budget. The per-leaf wall time against 5 / rate is printed beside it;
+- **brute force against df-pn below 50 boards**: the E5c scanner's 6b root scan (50 ms,
+  5 threads; decided = 5 forcing half-turns resolved, or a proof, or an exhausted
+  tree) beside df-pn's, roots decided by each.
+The summary applies M15's outcome rules mechanically.
+
 ## 5DFEN
 
 `parse_fen_board` reads one board string, `[pieces:timeline:turn:colour]`, for a
