@@ -542,6 +542,14 @@ TEST(pgn_play_all_reports_the_unread_tail) {
 
 // ---- annotations (T15) ------------------------------------------------------------------
 
+// The annotation tests read with mismatches as errors; the default lets them pass
+// with a warning (annotations_disagreeing_play_with_a_warning, below).
+PgnOptions strict_annotations() {
+  PgnOptions o;
+  o.annotation_mismatch_is_error = true;
+  return o;
+}
+
 TEST(pgn_annotations_are_checked_against_the_state_t15) {
   // White's knight jumps a turn back: an active branch (T10), +1, whose first
   // board, (+1T1, black), lies before the present (T2, white) - the present
@@ -551,16 +559,16 @@ TEST(pgn_annotations_are_checked_against_the_state_t15) {
   CHECK(plays(start + "~ (>L1)"));
   CHECK(plays(start + "~ (>L+1) (~T1)"));
   CHECK(plays(start));  // tokens left out are never an error
-  CHECK(fails_with(start + "~ (>L2)", RecordFault::Unreadable, "it created +1"));
-  CHECK(fails_with(start + " (>L-1)", RecordFault::Unreadable, "it created +1"));
-  CHECK(fails_with(start + " (~T2)", RecordFault::Unreadable, "it is at turn 1"));
-  CHECK(fails_with("1. e4~", RecordFault::Unreadable, "does not branch"));
-  CHECK(fails_with("1. e4 (>L1)", RecordFault::Unreadable, "creates none"));
+  CHECK(fails_with(start + "~ (>L2)", RecordFault::Unreadable, "it created +1", strict_annotations()));
+  CHECK(fails_with(start + " (>L-1)", RecordFault::Unreadable, "it created +1", strict_annotations()));
+  CHECK(fails_with(start + " (~T2)", RecordFault::Unreadable, "it is at turn 1", strict_annotations()));
+  CHECK(fails_with("1. e4~", RecordFault::Unreadable, "does not branch", strict_annotations()));
+  CHECK(fails_with("1. e4 (>L1)", RecordFault::Unreadable, "creates none", strict_annotations()));
   // White's second branch while Black has made none is inactive (T10): it
   // never moves the present (T8), so '~' is wrong.
   const std::string second = start + "~ / (1T1)e6\n3. (1T2)Nf5>>x(0T2)f7";
   CHECK(plays(second));
-  CHECK(fails_with(second + "~", RecordFault::Unreadable, "inactive"));
+  CHECK(fails_with(second + "~", RecordFault::Unreadable, "inactive", strict_annotations()));
   PgnReplay r = replay(second);
   r.play_all();
   CHECK(!r.state().active(2));
@@ -569,6 +577,22 @@ TEST(pgn_annotations_are_checked_against_the_state_t15) {
   off.verify_annotations = false;
   CHECK(plays(start + "~ (>L5) (~T9)", off));
   CHECK(plays("1. e4~", off));
+}
+
+TEST(pgn_annotations_disagreeing_play_with_a_warning) {
+  // By default a ~, (>Lx) or (~Tx) that disagrees with the state is the
+  // writer's slip (the notation calls the tokens "purely for better human
+  // comprehension"): the move is played, the disagreement kept as a warning.
+  const std::string start = "1. Nf3 / Nf6\n2. (0T2)Nf3>>(0T1)f5";
+  PgnReplay r = replay(start + " (~T2) (>L-1) / (1T1)Nf6");
+  r.play_all();
+  CHECK(r.finished());
+  REQUIRE_EQ(r.warnings().size(), std::size_t{1});
+  CHECK(r.warnings()[0].find("but it created +1") != std::string::npos);
+  CHECK(r.warnings()[0].find("played anyway") != std::string::npos);
+  PgnReplay clean = replay(start + "~ (>L1) / (1T1)Nf6");
+  clean.play_all();
+  CHECK(clean.warnings().empty());
 }
 
 TEST(pgn_annotation_present_moved_needs_a_branch_before_the_present_t15) {
@@ -587,7 +611,7 @@ TEST(pgn_annotation_present_moved_needs_a_branch_before_the_present_t15) {
   }
   set_up += "[4k/5/5/5/KN3:-1:2:w]\n";
   CHECK(fails_with(set_up + "1. (0T5)Nb1>>(0T4)b3~ (-1T2)Kb2", RecordFault::Unreadable,
-                   "its first board (+1T4, black to move) lies after the present (T4, T8)"));
+                   "its first board (+1T4, black to move) lies after the present (T4, T8)", strict_annotations()));
   CHECK(plays(set_up + "1. (0T5)Nb1>>(0T4)b3 (-1T2)Kb2"));
   CHECK(plays(set_up + "1. (0T5)Nb1>>(0T4)b3 (>L1) (~T2) (-1T2)Kb2"));
   PgnReplay r = replay(set_up + "1. (0T5)Nb1>>(0T4)b3 (-1T2)Kb2");
@@ -613,9 +637,9 @@ TEST(pgn_annotation_created_timelines_in_the_order_made_j9) {
   CHECK(plays(set_up + first + " (>L2)" + second + " (>L3)"));
   CHECK(plays(set_up + first + " (>L+2)" + second + "(>L+3)"));
   CHECK(fails_with(set_up + first + " (>L3)" + second + " (>L2)", RecordFault::Unreadable,
-                   "move 2 \"(-1T1)Nb1>>(0T1)b3 (>L3)\""));
+                   "move 2 \"(-1T1)Nb1>>(0T1)b3 (>L3)\"", strict_annotations()));
   CHECK(fails_with(set_up + first + second + " (>L2)", RecordFault::Unreadable,
-                   "it created +3 (L7, J9)"));
+                   "it created +3 (L7, J9)", strict_annotations()));
   PgnReplay r = replay(set_up + first + " (>L2)" + second + " (>L3)");
   r.play_all();
   REQUIRE_EQ(r.state().multiverse().max_timeline(), 3);

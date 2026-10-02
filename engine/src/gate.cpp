@@ -268,8 +268,15 @@ int run(std::string_view record, const Options& options, const Emit& emit, const
     };
     report(0);
     positions = true;
+    std::size_t warned = 0;
+    const auto warn = [&] {
+      for (; warned < replay.warnings().size(); ++warned) {
+        note("t5d-gate: warning: " + replay.warnings()[warned]);
+      }
+    };
     while (!replay.finished()) {
       replay.play_next();
+      warn();
       accepted = replay.actions_played();
       report(accepted);
     }
@@ -413,6 +420,7 @@ bool set_pgn_option(PgnOptions& o, std::string_view assignment, std::string* err
   }
   bool* flag = nullptr;
   if (name == "verify_annotations") flag = &o.verify_annotations;
+  if (name == "annotation_mismatch_is_error") flag = &o.annotation_mismatch_is_error;
   if (name == "require_capture_marks") flag = &o.require_capture_marks;
   if (name == "infer_omitted_boards") flag = &o.infer_omitted_boards;
   if (name == "check_turn_numbers") flag = &o.check_turn_numbers;

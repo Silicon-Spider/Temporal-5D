@@ -10,6 +10,24 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-02 - Engine: a disagreeing annotation is a warning, not a refusal
+
+- `engine/`: a `~`, `(>Lx)` or `(~Tx)` that disagrees with the state no longer
+  makes the move unreadable by default (`PgnOptions::annotation_mismatch_is_error`,
+  false): the move is played and the disagreement kept in `PgnReplay::warnings()`,
+  which `t5d-gate` prints on stderr; `--strict-annotations` restores the refusal.
+  The notation specification calls these tokens "purely for better human
+  comprehension" that "should match" the state; a wrong one is the writer's slip,
+  and refusing hid the rest of three corpus records from the gate: cwmtt/silly now
+  replays all 38 actions (CHECKPOINT 1's CHK-A1 representative, position 28, is
+  not check under R1 - 37 legal actions, as ftxi and cwmtt count) and
+  chessin5d-illegal-move-example all 66 (position 66: in check, 25 legal actions,
+  not the checkmate Chess in 5D's mate search reported); cwmtt/wide now stops at
+  rules Q4 instead. Tests: the strict reading kept for the annotation tests, a new
+  test of the default.
+- Spec: §11.0 "Running the gate" (H28, H30: what the engine reads); rules T15, Q26;
+  no spec text changes.
+
 ### 2026-10-02 - Phase 1 measurements: movegen throughput (M9) and the corpus |E| curve (M7)
 
 - `docs/MEASUREMENTS.md`: M9 measured on a quiet machine with `t5d-bench`.
