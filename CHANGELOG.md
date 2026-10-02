@@ -10,6 +10,17 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-03 - Build log: CHECKPOINT 3's rulings, Q2 written out, the timing-test rule
+
+- `docs/BUILD_LOG.md`: the CHECKPOINT 3 rulings (the M14 redesign as a prototype
+  and 6b′ with M15's outcome rules; the unpause order E7 -> E6a -> the gate -> N5;
+  cwmtt/many2's conversion and how it is carried out; t0database approved), what
+  is running and what follows; Q2 quoted with its candidate readings and what each
+  changes (only even-start variants; nothing in today's corpus or t0database
+  distinguishes them); a standing rule and a log for the Lazy SMP timing test
+  before any merge that touches the scanner.
+- Spec: §11.1, §15.6 (M14, M15); rules T10, T13, Q2; no spec change.
+
 ### 2026-10-03 - Real game records: t0database, pinned, for the |E| curve
 
 - `data/t0database/`: MageOfficial/t0database's `Data.csv` and `LICENSE` (MIT) at
