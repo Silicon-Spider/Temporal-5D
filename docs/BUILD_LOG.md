@@ -112,8 +112,22 @@ with branch origins, C23); N3's CPU wall times.
     what the engine is given, so it would not remove that difference - asked which
     is meant (the harness normalising the record for every source; cwmtt's driver
     refusing the export form as the engine does; or an entry).
-  - Real game records: candidate sources being researched, to propose with
-    provenance; the window verdict (M7) stays provisional.
+  - **Real game records - proposed (2026-10-02), awaiting approval to download:**
+    (1) **MageOfficial/t0database** (github.com/MageOfficial/t0database, MIT,
+    "Copyright (c) 2022 MageOChicken"), `Data.csv` at commit
+    `d49da4054d02fec577fd3c53368993fe453c586e` (blob `35eb1010d066…`, 608,066
+    bytes): 761 real human games, 2021-2025 (World Championships 2022 and 2024,
+    leagues, tournaments), 5dpgn move text without headers (the repository's own
+    server adds `[Board "Standard - Turn Zero"]`), 468 of them with the official
+    client recorder's clock comments; about 186 boards at most - 19 games reach 100,
+    none 200. Before use: confirm with its author that MIT covers the games and where
+    they came from (record it in PROVENANCE.md); refuse, never edit, rows that do
+    not replay. (2) chessin5d.net's game server - possibly the largest archive - no
+    longer answers; it needs its operator (and 5d-chess-js, the pinned oracle, must
+    not be used to convert it on the engine side). (3) The community Discord servers -
+    only with the admins' and players' permission. No public source reaches 200-600
+    boards; the window verdict above 200 boards needs self-play or permission-based
+    sources. M7 stays provisional.
 
 ## The brief - standing rules for every session
 

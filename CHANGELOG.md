@@ -10,6 +10,15 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-02 - Build log: public sources of real game records, proposed
+
+- `docs/BUILD_LOG.md`: the game-record sources found (CHECKPOINT 2, item 6), for the
+  user's approval - MageOfficial/t0database's 761 real games (MIT; pinned commit
+  and blob recorded; up to about 186 boards), chessin5d.net's offline server and
+  the community Discord servers (both need their owners). No public source reaches
+  200-600 boards; M7 stays provisional. Nothing downloaded into the project.
+- Spec: §15.6 (M7); the register's open item on real game records.
+
 ### 2026-10-02 - Build log: CHECKPOINT 2 ruled, the run resumed
 
 - `docs/BUILD_LOG.md`: the STOP section becomes CHECKPOINT 2's record - the rulings
