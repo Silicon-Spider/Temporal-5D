@@ -250,6 +250,7 @@ struct ReferenceTally {
   int boxes_removed = 0;   // positions where the hypercuboid removed a box whole
   int mid_action = 0;      // states after a first move, compared too
   int order_regions = 0;   // positions where the hypercuboid took captures order by order
+  int memory_stops = 0;    // detector runs stopped by the memory ceiling (not compared)
 };
 
 std::optional<GameState> tiny_position(t5d_test::Rng& rng, int max_axes, bool kings,
@@ -352,6 +353,13 @@ void against_reference(int positions, int max_axes, std::uint64_t seed, Referenc
       const ActionCount successors = count_legal_successors(*s, 1000000, d);
       const ActionList list = list_legal_actions(*s, 1000000, d);
       const MateResult mate = detect_mate(*s, d);
+      // A search stopped by its memory ceiling answers nothing (H37), and is
+      // compared with nothing: counted, and it must not happen often.
+      if (actions.stats.stopped_by_memory || successors.stats.stopped_by_memory ||
+          list.stats.stopped_by_memory || mate.stats.stopped_by_memory) {
+        ++t.memory_stops;
+        continue;
+      }
       std::set<std::string> keys;
       for (const LegalAction& a : list.actions) {
         keys.insert(t5d_test::Reference::key(a.moves, s->multiverse().even()));
@@ -390,6 +398,11 @@ void against_reference(int positions, int max_axes, std::uint64_t seed, Referenc
       for (const Detector d : {Detector::Naive, Detector::Hypercuboid}) {
         const ActionCount c = count_legal_actions(child, 1000000, d);
         const std::optional<bool> finish = can_finish_legally(child, d);
+        if (c.stats.stopped_by_memory || !finish) {
+          ++t.memory_stops;  // no answer (H37): compared with nothing
+          all_known = false;
+          continue;
+        }
         const bool agree = c.stats.exhaustive && c.count == rest.actions.size() &&
                            finish == std::optional<bool>(!rest.actions.empty());
         if (!agree) {
@@ -413,9 +426,10 @@ void against_reference(int positions, int max_axes, std::uint64_t seed, Referenc
 void report(const char* what, const ReferenceTally& t) {
   std::printf("  [%s] %d positions (%d with legal actions, %d with inactive timelines, %d with an "
               "action creating two timelines or more; the hypercuboid removed whole boxes in %d), "
-              "and %d states after a first move; captures taken order by order in %d\n",
+              "and %d states after a first move; captures taken order by order in %d; %d "
+              "searches stopped by the memory ceiling, not compared\n",
               what, t.positions, t.with_actions, t.with_inactive, t.two_branches, t.boxes_removed,
-              t.mid_action, t.order_regions);
+              t.mid_action, t.order_regions, t.memory_stops);
 }
 
 }  // namespace
@@ -439,6 +453,7 @@ TEST(long_detectors_agree_with_the_brute_force_reference) {
   report("reference, long", t);
   CHECK_EQ(t.positions, 4000);
   CHECK(t.order_regions > 0);  // the order-by-order capture regions were exercised
+  CHECK(t.memory_stops < 20);  // the ceiling is for runaway searches, not these
 }
 
 TEST(detectors_agree_on_every_variant) {
