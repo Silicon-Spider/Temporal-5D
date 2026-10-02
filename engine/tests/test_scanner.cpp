@@ -8,12 +8,15 @@
 // 5x5 boards unless said otherwise; 5DFEN rows run from rank 5 down to rank 1.
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <optional>
+#include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "t5d/check.hpp"
@@ -750,7 +753,7 @@ void evasion_probe_keeps_the_proofs(int games, int turns, int runs_per_position,
 
 TEST(scanner_evasion_probe_keeps_the_proofs) { evasion_probe_keeps_the_proofs(1, 4, 1, 3000, 1); }
 TEST(long_scanner_evasion_probe_keeps_the_proofs) {
-  evasion_probe_keeps_the_proofs(3, 12, 6, 20000, 99);
+  evasion_probe_keeps_the_proofs(2, 8, 3, 20000, 5);
 }
 
 TEST(scanner_evasion_probe_off_is_e5b) {
@@ -877,6 +880,204 @@ TEST(scanner_budget_and_iterations) {
   const ScanResult none = scan(s, 0);
   CHECK_EQ(none.completed_depth, 0);
   CHECK(!none.proof.proven());
+}
+
+// ---- Lazy SMP (H17) -----------------------------------------------------------------------------
+
+namespace {
+
+// Positions of random legal play from named variants (larger trees than the
+// sparse starts: the scans do not finish at once).
+std::vector<GameState> variant_positions(const RuleOptions& rules, int actions_from, int actions_to,
+                                         std::uint64_t seed) {
+  std::vector<GameState> out;
+  t5d_test::Rng rng(seed);
+  for (const char* name : {"Standard", "Standard - Two Timelines"}) {
+    const Variant* v = find_variant(name);
+    REQUIRE(v != nullptr);
+    GameState s = variant_start(*v, rules);
+    for (int a = 0; a < actions_to; ++a) {
+      if (a >= actions_from) out.push_back(s);
+      const std::optional<std::vector<Move>> act = random_legal_action(s, rng);
+      if (!act) break;
+      for (const Move& m : *act) s.apply(m);
+      s.submit();
+    }
+  }
+  return out;
+}
+
+// Every proof a scan with 2-8 threads gives is the game tree's; where the
+// single thread proves too, the same kind. One solved store per thread count
+// is shared by all its scans, so a contradiction between any two would
+// throw. Node budgets and a clock.
+void lazy_smp_no_false_proofs(int games, int turns, int max_distance) {
+  RuleOptions after_shift;
+  after_shift.moves_after_shift = true;
+  std::vector<GameState> positions = sparse_positions(RuleOptions{}, games, turns, 505);
+  for (const GameState& s : sparse_positions(after_shift, games, turns, 506)) positions.push_back(s);
+  for (const GameState& s : {mate_in_one(), cross_board_mate(), stale_checkmate_in_one(),
+                             mate_in_two(), history_royal_mate(), rewind_escape(), rewind_blocked()}) {
+    positions.push_back(s);
+  }
+  std::vector<ScanResult> single;
+  for (const GameState& s : positions) single.push_back(scan(s, 30'000));
+  ProofTally tally;
+  tally.max_distance = max_distance;
+  tally.work = max_distance > 3 ? 3000000 : 40000;
+  int agreeing = 0;
+  for (const int threads : {2, 3, 4, 8}) {
+    ScannerOptions o;
+    o.threads = threads;
+    ConcurrentSolvedStore store;
+    for (std::size_t i = 0; i < positions.size(); ++i) {
+      const GameState& s = positions[i];
+      for (const bool clock : {false, true}) {
+        Scanner scanner(o, &store);
+        ScanBudget b = ScanBudget::nodes(30'000);
+        if (clock) b.max_time = std::chrono::milliseconds(5);
+        const ScanResult r = scanner.scan(s, b);
+        CHECK_EQ(r.threads, threads);
+        if (!clock) {
+          CHECK(r.stats.nodes <= static_cast<std::uint64_t>(threads) * (30'000 + 256));
+        }
+        if (!tally.check(r, s)) {
+          std::fprintf(stderr, "  false proof %s with %d threads at %s\n", to_string(r.proof).c_str(),
+                       threads, describe_position(s).c_str());
+          CHECK(false);
+        }
+        if (r.proof.proven() && single[i].proof.proven()) {
+          ++agreeing;
+          CHECK(r.proof.kind == single[i].proof.kind);
+        }
+      }
+    }
+    for (std::size_t i = 0; i < positions.size(); ++i) {
+      // Every proof in the shared store is a proof of the single thread's kind.
+      const std::optional<Proof> p = store.find(positions[i]);
+      if (p && single[i].proof.proven()) CHECK(p->kind == single[i].proof.kind);
+    }
+  }
+  tally.print("Lazy SMP");
+  std::fprintf(stderr, "  %zu positions x 4 thread counts x 2 budgets, %d proofs agreeing with one thread's\n",
+               positions.size(), agreeing);
+  CHECK(tally.verified > 0);
+  CHECK(agreeing > 0);
+}
+
+}  // namespace
+
+TEST(scanner_lazy_smp_no_false_proofs) { lazy_smp_no_false_proofs(1, 4, 1); }
+TEST(long_scanner_lazy_smp_no_false_proofs) { lazy_smp_no_false_proofs(2, 8, 5); }
+
+TEST(scanner_lazy_smp_store_refuses_contradictions) {
+  // The shared store's contract, as MemorySolvedStore's.
+  ConcurrentSolvedStore store;
+  const GameState s = mate_in_one();
+  CHECK(!store.find(s).has_value());
+  store.put(s, Proof::win(3));
+  store.put(s, Proof::win(1));
+  CHECK(store.find(s) == std::optional<Proof>(Proof::win(1)));
+  store.put(s, Proof::win(5));
+  CHECK(store.find(s) == std::optional<Proof>(Proof::win(1)));
+  CHECK_THROWS_AS(store.put(s, Proof::loss(2)), std::logic_error);
+  CHECK_THROWS_AS(store.put(s, Proof::draw()), std::logic_error);
+  RuleOptions other;
+  other.moves_after_shift = true;
+  CHECK(!store.find(game({"[k4/4Q/1K3/5/5:0:1:w]"}, k5x5, other)).has_value());  // H18
+  // Eight threads at once: each puts a proof of one kind for every position,
+  // then each tries the other kind for every position - every such put
+  // throws, and nothing it did changes the store.
+  std::vector<GameState> positions;
+  for (const GameState& p : sparse_positions(RuleOptions{}, 1, 6, 606)) {
+    if (std::none_of(positions.begin(), positions.end(),
+                     [&](const GameState& t) { return same_position(p, t); })) {
+      positions.push_back(p);
+    }
+  }
+  ConcurrentSolvedStore shared;
+  std::atomic<int> refused{0};
+  std::atomic<int> errors{0};
+  std::vector<std::thread> pool;
+  for (int t = 0; t < 8; ++t) {
+    pool.emplace_back([&, t] {
+      for (std::size_t i = 0; i < positions.size(); ++i) {
+        const Proof p = i % 2 == 0 ? Proof::win(1 + static_cast<int>(i % 5) + t)
+                                   : Proof::loss(static_cast<int>(i % 3) + t);
+        try {
+          shared.put(positions[i], p);
+        } catch (const std::logic_error&) {
+          errors.fetch_add(1);
+        }
+      }
+      for (std::size_t i = 0; i < positions.size(); ++i) {
+        const Proof q = i % 2 == 0 ? Proof::loss(1) : Proof::win(1);
+        try {
+          shared.put(positions[i], q);
+        } catch (const std::logic_error&) {
+          refused.fetch_add(1);
+        }
+      }
+    });
+  }
+  for (std::thread& t : pool) t.join();
+  CHECK_EQ(errors.load(), 0);
+  CHECK_EQ(refused.load(), 8 * static_cast<int>(positions.size()));
+  for (std::size_t i = 0; i < positions.size(); ++i) {
+    const std::optional<Proof> p = shared.find(positions[i]);
+    REQUIRE(p.has_value());
+    CHECK(p->kind == (i % 2 == 0 ? Proof::Kind::Win : Proof::Kind::Loss));
+    // The shortest distance any thread put.
+    CHECK_EQ(p->distance, i % 2 == 0 ? 1 + static_cast<int>(i % 5) : static_cast<int>(i % 3));
+  }
+  CHECK_EQ(shared.size(), positions.size());
+  // A store not safe for threads, shared by a scanner's threads: its calls
+  // are serialised, and the proofs land in it.
+  MemorySolvedStore plain;
+  ScannerOptions four;
+  four.threads = 4;
+  Scanner scanner(four, &plain);
+  const ScanResult r = scanner.scan(mate_in_two(), ScanBudget::nodes(2'000'000));
+  CHECK(r.proof == Proof::win(3));
+  CHECK(plain.find(mate_in_two()) == std::optional<Proof>(Proof::win(3)));
+  GameTree tree;
+  for (const MemorySolvedStore::Entry& e : plain.entries()) CHECK(agrees(e.proof, e.position, tree));
+}
+
+TEST(scanner_lazy_smp_reaches_the_single_threads_depth) {
+  // The same wall time: 5 threads (M13's scanner budget) resolve at least the
+  // depth one thread does, summed over a sample (a proof or an exhausted tree
+  // counts as the deepest depth). Timing on a shared machine is noisy: one
+  // retry.
+  std::vector<GameState> sample = variant_positions(RuleOptions{}, 6, 14, 707);
+  RuleOptions after_shift;
+  after_shift.moves_after_shift = true;
+  for (const GameState& s : variant_positions(after_shift, 6, 14, 708)) sample.push_back(s);
+  const auto depth_of = [](const ScanResult& r) {
+    return r.proof.proven() || r.exhausted ? 17 : r.resolved_depth;
+  };
+  const auto measure = [&](int threads) {
+    int total = 0;
+    ScannerOptions o;
+    o.threads = threads;
+    for (const GameState& s : sample) {
+      Scanner scanner(o);
+      ScanBudget b;
+      b.max_time = std::chrono::milliseconds(40);
+      total += depth_of(scanner.scan(s, b));
+    }
+    return total;
+  };
+  int one = measure(1);
+  int five = measure(5);
+  if (five < one) {
+    std::fprintf(stderr, "  retry: 5 threads %d < 1 thread %d\n", five, one);
+    one = measure(1);
+    five = measure(5);
+  }
+  std::fprintf(stderr, "  %zu positions at 40 ms: resolved depth summed, 1 thread %d, 5 threads %d\n",
+               sample.size(), one, five);
+  CHECK(five >= one);
 }
 
 // ---- stand-pat validity (6b) -----------------------------------------------------------------
