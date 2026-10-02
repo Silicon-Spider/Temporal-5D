@@ -2,6 +2,7 @@
 // from a variant; replayed, moved, submitted; expanded - every array the C API
 // hands out equal to the C++ expansion of the same state; errors; ownership.
 
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <string>
@@ -98,6 +99,9 @@ void check_view(const t5d_expansion& v, const Expansion& x) {
   CHECK(same(v.window, x.window(), v.window_count));
   CHECK(same(v.e_boards, x.e_boards(), v.e_count));
   CHECK(same(v.src_extra, x.src_extra(), v.src_extra_count));
+  CHECK_EQ(v.acting_player, index_of(x.acting_player()));
+  CHECK_EQ(v.submit_possible, x.submit_possible() ? 1 : 0);
+  CHECK_EQ(v.submit_legal, x.submit_legal() ? 1 : 0);
 }
 
 synthetic::Game sample_game() {
@@ -431,6 +435,70 @@ TEST(capi_game_submissions_are_legal_by_default) {
   REQUIRE_EQ(t5d_game_new_variant("Standard", T5D_RULES_STANDARD, &game.p, nullptr), T5D_OK);
   CHECK_EQ(t5d_game_set_legality(game.p, 7, nullptr), T5D_ERR_ARGUMENT);
   CHECK_EQ(t5d_game_set_legality(nullptr, T5D_LEGAL, nullptr), T5D_ERR_ARGUMENT);
+}
+
+TEST(capi_expansion_says_who_acts_and_whether_submitting_is_legal_d8) {
+  // Register D8 (rulebook R8): turns have variable length, so submitting is
+  // an action. Appended to t5d_expansion at stage E7, after every older field
+  // (python/t5d/engine/capi.py mirrors the layout): acting_player,
+  // submit_possible, submit_legal - three int32, in that order.
+  static_assert(offsetof(t5d_expansion, acting_player) >=
+                offsetof(t5d_expansion, src_extra) + sizeof(const int32_t*));
+  static_assert(offsetof(t5d_expansion, submit_possible) ==
+                offsetof(t5d_expansion, acting_player) + sizeof(int32_t));
+  static_assert(offsetof(t5d_expansion, submit_legal) ==
+                offsetof(t5d_expansion, submit_possible) + sizeof(int32_t));
+  static_assert(sizeof(t5d_expansion) >= offsetof(t5d_expansion, submit_legal) + sizeof(int32_t));
+
+  // 1. e4 / f6 2. Qh5: Black to move, the queen on h5 eyes the king on e8.
+  const std::string record = "1. e4 / f6 2. Qh5\n";
+  for (const uint64_t rules : {T5D_RULES_STANDARD, T5D_RULES_NO_MOVES_AFTER_SHIFT}) {
+    Game game;
+    REQUIRE_EQ(t5d_game_new_from_pgn(record.data(), record.size(), rules, &game.p, nullptr), T5D_OK);
+    for (int a = 0; a < 3; ++a) REQUIRE_EQ(t5d_game_replay_next(game.p, nullptr), T5D_OK);
+    t5d_expansion v{};
+    REQUIRE_EQ(t5d_game_expand(game.p, nullptr, &v, nullptr), T5D_OK);
+    CHECK_EQ(v.acting_player, 1);
+    CHECK_EQ(v.acting_player, v.to_move);
+    CHECK_EQ(v.present & 1, 1);  // the turn's start: the present is Black's
+    CHECK_EQ(v.submit_possible, 0);
+    CHECK_EQ(v.submit_legal, 0);
+    // ... a6 ignores the queen: the present shifts to White, so submitting is
+    // possible - but not legal (C4, R1): the queen can take the king.
+    t5d_move a6{};
+    a6.from_timeline = a6.to_timeline = 0;
+    a6.from_half_turn = a6.to_half_turn = 2 * 2 + 1;  // (0T2), Black to move
+    a6.from_square = 6 * 8 + 0;                        // a7
+    a6.to_square = 5 * 8 + 0;                          // a6
+    REQUIRE_EQ(t5d_game_apply(game.p, &a6, nullptr), T5D_OK);
+    REQUIRE_EQ(t5d_game_expand(game.p, nullptr, &v, nullptr), T5D_OK);
+    CHECK_EQ(v.acting_player, 1);  // still Black's action
+    CHECK_EQ(v.present & 1, 0);    // though the present is White's
+    CHECK_EQ(v.submit_possible, 1);
+    CHECK_EQ(v.submit_legal, 0);
+    CHECK_EQ(v.may_move, rules == T5D_RULES_STANDARD ? 1 : 0);  // R8, or Q4's Guide-literal reading
+    CHECK_EQ(v.move_count, size_t{0});  // either way: the one board has been played
+    CHECK_EQ(t5d_game_submit(game.p, nullptr), T5D_ERR_ILLEGAL);
+    t5d_game_summary info{};
+    CHECK_EQ(t5d_game_info(game.p, &info), T5D_OK);
+    CHECK_EQ(info.obligations_met, 1);
+    CHECK_EQ(info.may_submit, 0);
+  }
+  // A legal submission: 1. e3 - possible and legal.
+  Game game;
+  REQUIRE_EQ(t5d_game_new_variant("Standard", T5D_RULES_STANDARD, &game.p, nullptr), T5D_OK);
+  t5d_move e3{};
+  e3.from_half_turn = e3.to_half_turn = 2;  // (0T1), White to move
+  e3.from_square = 1 * 8 + 4;               // e2
+  e3.to_square = 2 * 8 + 4;                 // e3
+  REQUIRE_EQ(t5d_game_apply(game.p, &e3, nullptr), T5D_OK);
+  t5d_expansion v{};
+  REQUIRE_EQ(t5d_game_expand(game.p, nullptr, &v, nullptr), T5D_OK);
+  CHECK_EQ(v.acting_player, 0);
+  CHECK_EQ(v.present & 1, 1);
+  CHECK_EQ(v.submit_possible, 1);
+  CHECK_EQ(v.submit_legal, 1);
+  CHECK_EQ(t5d_game_submit(game.p, nullptr), T5D_OK);
 }
 
 TEST(rule_options_decode_inverts_encode) {

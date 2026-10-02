@@ -378,6 +378,8 @@ struct Coverage {
   long long unknown_origins = 0;
   long long origins_on_inactive = 0;
   long long no_moves = 0;
+  long long submit_possible = 0;  // (g): submitting possible
+  long long submit_illegal = 0;   // ... but not legal (C4)
 };
 Coverage coverage;
 
@@ -426,6 +428,15 @@ void compare(const GameState& s, bool relations_on) {
     }
     CHECK_EQ(x.origin_count(), r.origins.size());
     CHECK_EQ(x.origins_unknown(), r.origins_unknown);
+    // (g) the action (D8): the acting player, and the submit action as the
+    // state machine's own submission test sees it (T5, C4)
+    CHECK(x.acting_player() == s.to_move());
+    CHECK_EQ(x.acting_player() != s.present_colour(), s.present_shifted());
+    const SubmitStatus submit = s.submission_status();
+    CHECK_EQ(x.submit_possible(), submit != SubmitStatus::ObligationsUnmet);
+    CHECK_EQ(x.submit_legal(), submit == SubmitStatus::Safe);
+    if (x.submit_possible()) ++coverage.submit_possible;
+    if (x.submit_possible() && !x.submit_legal()) ++coverage.submit_illegal;
     // (f) squares
     const std::size_t cells = static_cast<std::size_t>(s.multiverse().board_size().square_count());
     REQUIRE_EQ(x.square_pieces().size(), x.feature_boards().size() * cells);
@@ -557,6 +568,9 @@ void run(const char* variant, std::uint64_t seed, int target_boards, int target_
     mid.apply(g.actions[a].front());
     if (a % 4 == 1) compare(mid, true);
     for (const Move& m : g.actions[a]) s.apply(m);
+    // The action played, before its submission (D8: submit possible; legal or
+    // not - the synthetic games are pseudo-legal).
+    if (a % 4 == 3) compare(s, false);
     s.submit(CheckRuling{});  // the synthetic games are pseudo-legal
   }
   compare(s, true);
@@ -590,14 +604,17 @@ TEST(expand_agrees_with_the_reference_on_random_positions) {
   CHECK(coverage.inactive > 10);
   CHECK(coverage.src_extra > 0);
   CHECK(coverage.src_only > 0);
+  CHECK(coverage.submit_possible > 20);
+  CHECK(coverage.submit_illegal > 5);
   std::printf("  reference: %d expansions; relations %lld/%lld/%lld (attack/defence/x-ray); "
               "E boards %lld; src_extra %lld (src_only %lld); branching moves %lld; with inactive "
               "timelines %lld; small boards %lld; unknown origins %lld; origins on inactive "
-              "timelines %lld; no moves %lld\n",
+              "timelines %lld; no moves %lld; submit possible %lld (not legal %lld)\n",
               checked, coverage.relations[kRelationAttack], coverage.relations[kRelationDefence],
               coverage.relations[kRelationXRay], coverage.e_boards, coverage.src_extra,
               coverage.src_only, coverage.branching, coverage.inactive, coverage.small_boards,
-              coverage.unknown_origins, coverage.origins_on_inactive, coverage.no_moves);
+              coverage.unknown_origins, coverage.origins_on_inactive, coverage.no_moves,
+              coverage.submit_possible, coverage.submit_illegal);
 }
 
 TEST(expand_agrees_with_the_reference_when_moves_follow_the_shift) {

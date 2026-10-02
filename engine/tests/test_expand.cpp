@@ -25,6 +25,7 @@
 #include "t5d/records.h"
 #include "t5d/state.hpp"
 #include "test_framework.hpp"
+#include "test_positions.hpp"
 
 using namespace t5d;
 
@@ -840,4 +841,84 @@ TEST(expand_reuses_one_expansion_for_different_positions) {
   CHECK_EQ(x.board_count(), std::size_t{19});
   CHECK_EQ(x.moves().size(), std::size_t{23});
   CHECK_EQ(x.e_count(4), std::size_t{7});
+}
+
+TEST(expand_the_acting_player_and_the_submit_action_d8) {
+  // Register D8 (rulebook R8): turns have variable length, so submitting is an
+  // action - possible once the obligations are met (T5), legal when C4 holds
+  // too - and the acting player is an input of its own.
+  //
+  // White rooks on a1 of 0 (T1, the present: mandatory) and of +1 (T2, ahead:
+  // optional - +1 is White's first creation, active, T10). No royal piece, so
+  // every submission is safe (C13).
+  GameState s = t5d_test::game({"[5/5/5/5/R4:0:1:w]", "[5/5/5/5/R4:+1:2:w]"}, BoardSize{5, 5});
+  Expansion x;
+  expand(s, ExpandOptions{}, x);
+  CHECK(x.acting_player() == Colour::White);
+  CHECK_EQ(x.present(), 2);  // (T1, White)
+  CHECK(!x.submit_possible());
+  CHECK(!x.submit_legal());
+  // 0's rook moves: the present shifts to (T1, Black) - Black's colour - but
+  // the action is still White's, and +1's rook may still move (R8).
+  t5d_test::play(s, "(0T1)Ra1(0T1)a2");
+  expand(s, ExpandOptions{}, x);
+  CHECK(x.acting_player() == Colour::White);
+  CHECK_EQ(x.present(), 3);
+  CHECK(x.submit_possible());
+  CHECK(x.submit_legal());
+  CHECK(x.may_move());
+  CHECK_EQ(x.move_records().size(), std::size_t{8});  // the rook on (+1T2)a1: a2-a5, b1-e1
+  // The per-board features are those of any state: +1's head is playable.
+  const int plus_one = x.board_index(1, 4);
+  REQUIRE(plus_one >= 0);
+  CHECK_EQ(x.board_playable()[static_cast<std::size_t>(plus_one)], std::uint8_t{1});
+  CHECK_EQ(x.board_side_to_move()[static_cast<std::size_t>(plus_one)], std::uint8_t{0});
+  t5d_test::play(s, "(+1T2)Ra1(+1T2)a2");
+  expand(s, ExpandOptions{}, x);
+  CHECK(x.submit_possible());
+  CHECK(x.submit_legal());
+  CHECK(x.move_records().empty());  // every board played: submitting is all that is left
+  // Under Q4's Guide-literal reading the action ends at the shift: submitting
+  // is possible and legal, and no move is left.
+  RuleOptions guide;
+  guide.moves_after_shift = false;
+  GameState g = t5d_test::game({"[5/5/5/5/R4:0:1:w]", "[5/5/5/5/R4:+1:2:w]"}, BoardSize{5, 5},
+                               guide);
+  t5d_test::play(g, "(0T1)Ra1(0T1)a2");
+  expand(g, ExpandOptions{}, x);
+  CHECK(x.acting_player() == Colour::White);
+  CHECK(x.submit_possible());
+  CHECK(x.submit_legal());
+  CHECK(!x.may_move());
+  CHECK(x.move_records().empty());
+
+  // Possible but not legal: a black rook on b5 commands the b-file. White's
+  // king steps to b1 (pseudo-legal; moving into check is allowed during an
+  // action, R1): the present has shifted, but the rook can capture the king
+  // (C4) - the submit action is illegal. Stepping to a2 instead, it is legal.
+  const GameState k = t5d_test::game({"[1r2k/5/5/5/K4:0:1:w]"}, BoardSize{5, 5});
+  GameState bad = k;
+  t5d_test::play(bad, "(0T1)Ka1(0T1)b1");
+  expand(bad, ExpandOptions{}, x);
+  CHECK(x.acting_player() == Colour::White);
+  CHECK(x.submit_possible());
+  CHECK(!x.submit_legal());
+  CHECK(bad.submission_status() == SubmitStatus::Unsafe);
+  GameState good = k;
+  t5d_test::play(good, "(0T1)Ka1(0T1)a2");
+  expand(good, ExpandOptions{}, x);
+  CHECK(x.submit_possible());
+  CHECK(x.submit_legal());
+  // Black's action: the acting player is Black, the present White's once it
+  // has shifted.
+  good.submit();
+  expand(good, ExpandOptions{}, x);
+  CHECK(x.acting_player() == Colour::Black);
+  CHECK(!x.submit_possible());
+  t5d_test::play(good, "(0T1)Ke5(0T1)e4");
+  expand(good, ExpandOptions{}, x);
+  CHECK(x.acting_player() == Colour::Black);
+  CHECK_EQ(x.present() & 1, 0);
+  CHECK(x.submit_possible());
+  CHECK(x.submit_legal());
 }

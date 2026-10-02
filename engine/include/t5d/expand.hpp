@@ -52,6 +52,15 @@
 //     and per-square features - piece type id, colour, has-moved - for every
 //     board or only for the scope W(k) + E(k) + src_extra(k)
 //     (ExpandOptions::square_features).
+//  g. the action (register D8, rulebook R8: turns have variable length, so
+//     submitting is an action): the ACTING PLAYER - whose action this is,
+//     which after the present has shifted inside the action is no longer the
+//     colour to move on the present - and the SUBMIT action: whether
+//     submitting is possible now (the obligations met, T5) and legal (C4
+//     holds too: the submission test itself, exact). Under the ply split the
+//     submit action stands beside the moves of (a); under whole-turn
+//     generation it ends every enumerated action. Global, not per board: the
+//     per-board features of (f) are unchanged by it.
 //
 // READINGS (engine README, "Expansion"):
 //
@@ -215,7 +224,7 @@ class Expansion {
 
   BoardSize board_size() const noexcept { return size_; }
   bool even() const noexcept { return even_; }
-  /// The player to move.
+  /// The player to move - the acting player (acting_player()).
   Colour to_move() const noexcept { return to_move_; }
   /// The present (T4): a half-turn.
   int present() const noexcept { return present_; }
@@ -223,6 +232,26 @@ class Expansion {
   /// submission); under Q4's Guide-literal reading, only before the present
   /// has shifted. False: (a) is empty.
   bool may_move() const noexcept { return may_move_; }
+
+  // -- the action (register D8; rulebook R8): who acts, and the submit action --
+
+  /// The ACTING PLAYER: the side whose action this is - the player to move,
+  /// who moves until they submit. Once the present has shifted within the
+  /// action (T5) it differs from the colour to move on the present (present()
+  /// & 1), which is why the network needs it as an input of its own (D8;
+  /// build-log spec issue 48): the boards' side-to-move flags cannot say
+  /// whether the player has already submitted. The same value as to_move().
+  Colour acting_player() const noexcept { return to_move_; }
+  /// Whether submitting is POSSIBLE now: the action's obligations are met
+  /// (T5; under Q5's alternative, every active board of the mover's played).
+  /// Under the ply split submitting is then an action beside the moves of (a)
+  /// (D8) - before that, it is no action at all.
+  bool submit_possible() const noexcept { return submit_possible_; }
+  /// Whether submitting is LEGAL now: possible, and no royal piece of the
+  /// acting player's is left capturable (C4, R1: the submission test itself,
+  /// t5d/check.hpp royals_safe - exact, and one scan of the opponent's
+  /// playable boards). The submit action's legality mask (D8).
+  bool submit_legal() const noexcept { return submit_legal_; }
   int timeline_count() const noexcept { return timeline_count_; }
   int active_timeline_count() const noexcept { return active_count_; }
   /// Active timelines created by branching whose origin is unknown (a position
@@ -394,6 +423,8 @@ class Expansion {
   Colour to_move_ = Colour::White;
   int present_ = 0;
   bool may_move_ = false;
+  bool submit_possible_ = false;
+  bool submit_legal_ = false;
   int timeline_count_ = 0;
   int active_count_ = 0;
   int origins_unknown_ = 0;

@@ -276,6 +276,9 @@ void describe(const t5d::Expansion& x, t5d_expansion& out) {
   out.window = x.window().data();
   out.e_boards = x.e_boards().data();
   out.src_extra = x.src_extra().data();
+  out.acting_player = t5d::index_of(x.acting_player());
+  out.submit_possible = x.submit_possible() ? 1 : 0;
+  out.submit_legal = x.submit_legal() ? 1 : 0;
 }
 
 bool submittable(t5d::SubmitStatus s) noexcept {
