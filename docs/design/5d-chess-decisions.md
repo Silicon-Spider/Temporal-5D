@@ -132,16 +132,16 @@ must be decided before it); **R** = retrofittable; — = process or principle.
 
 | # | Decision | Status | Class | Gate | § |
 |---|---|---|---|---|---|
-| H1 | Scanner: brute-force node-limited alpha-beta over forcing moves, **permanently on**; differently-wrong principle | Committed | R | 6b | 11.1 |
+| H1 | Scanner, **permanently on**; differently-wrong principle — brute-force forcing alpha-beta failed 6b from 50 boards up; **under redesign** (M14): channel split, df-pn proof channel, incremental attack maps | Committed (shape under redesign) | R | 6b′ | 11.1 |
 | H2 | Two channels: proofs (all-evasions) → solved bounds; estimates → prior boosts only | Committed | — | — | 11.1 |
 | H3 | Node cap, not depth cap — termination unconditional; horizon-per-budget measured | Committed | — | 6b | 11.1 |
 | H4 | Scanner move ordering is net-free (MVV-LVA, killers, history, continuation) | Committed | — | — | 11.1 |
 | H5 | Pruning discipline: no speculative pruning on proof lines; ProbCut/futility/null-move estimate-only; LMR banned on evasions; null-move waits on the zugzwang answer | Committed | — | — | 11.1 |
-| H6 | Scanner eval: material count v1 → 5D-NNUE v2 | Committed sequence | R | 6d (after 6b) | 11.1 |
+| H6 | Scanner eval: material count v1 → 5D-NNUE v2 — **deferred**: quiet-leaf reach failed every range at CHECKPOINT 3 | Committed sequence (deferred) | R | 6d (after 6b′) | 11.1 |
 | H7 | NNUE trained on scanner-labelled, quiet-only data; never distilled either way | Committed | — | — | 11.1 |
 | H8 | NNUE threat features: same-board adopt (v2/v3); cross-board refused; head-only overlay v3-speculative | Held open / Refused | R | 6q | 11.1 |
 | H9 | Attention over head-board accumulators (v3 cross-board awareness) | Held open | R | — | 11.1, 14.4 |
-| H10 | Async priority ladder rungs 1–5, budgeted against shared movegen | Committed | R | 6e | 11.2 |
+| H10 | Async priority ladder rungs 1–5, budgeted against shared movegen — **rung 1 dropped** under its 6b rule; it returns, estimate channel only, if 6b′'s leaf test passes | Committed | R | 6e, 6b′ | 11.2 |
 | H11 | Rung 2 two-sided: demotion audit at 2–3×, NNUE-vs-value disagreement → curriculum | Committed | R | 6i | 11.2 |
 | H12 | Rung 3 two-stage: NNUE screen of the discard pile → forcing scan | Committed (v2-gated) | R | 6h | 11.2 |
 | H13 | Rung 4 asset map via the destination head, once per superseded board | Committed | R | — | 11.2 |
@@ -219,6 +219,7 @@ moment they were made.
 | 19 | Summary: the window "determines whether the caching architecture is worth asking"; "run it with FP8"; window measured first | Window measured early because it sets throughput on every path (composes with the cache); FP8 later; rules engine and gate come first | The summary was never reread after §7.5's composition correction — reversal 16's lesson, one section over |
 | 20 | §11.0 oracle facts taken from web research: cwmtt's checkmate tool uses z3; ftxi packs coordinates at 8 bits per axis (one of H24's two reasons) | Removed — neither is true at the pinned commits; PROVENANCE.md is authoritative on oracle internals; H24 stands on its remaining reasons | READMEs and docs describe a moment; pinned code is the ground truth. Caught by the implementation phase — what §15 is for |
 | 21 | §11.0 item 4: castling's attacked-square test is a 5D query | Per-board only, for both castling out of and through check; en passant per-board | The documented rule (Wikipedia's rules summary, a developer ruling) contradicted an unsourced claim in the spec; raised by the rules reference at CHECKPOINT 1 |
+| 22 | Brute-force node-limited forcing alpha-beta as the verification layer at every board count | Under redesign: channel split, df-pn proof channel, incremental attack maps (M14), decided by 6b′ | It failed 6b from 50 boards up even after optimisation and at 5 threads; the forcing move is a chess unit — in 5D a move is part of a turn, so every line paid turn-level exactness (CHECKPOINT 3) |
 
 ## K. Open items
 
@@ -244,6 +245,7 @@ moment they were made.
 | Windowed shows the higher initial exploit rate on scope-targeted attacks; filler tuning narrows it; closure open | §12.7 |
 | Early in training small exploiters find most holes; at maturity only large or from-scratch ones do | §12.7 |
 | Oracle check disagreements concentrate in which boards count as sources of attack — **confirmed at CHECKPOINT 1**: all seven clusters did | §11.0 |
+| The 6b optimisation pass rescues some of 50–199 boards but not 200+ — **wrong at CHECKPOINT 3**: 50–199 still failed (31.4%, 24.7%) | §15.6 |
 | 6i demotion-refutation rate drops when uncertainty weighting lands — overlapping defences, not audit failure | §8.4 |
 | Raw-variance sampling overfits aleatoric positions (6u) | Ablation 6u |
 | Difficulty-weighted allocation's gain concentrates in the late game | §8.6 |
@@ -266,6 +268,8 @@ moment they were made.
 | M11 | Project licence: GPL-3.0 — LICENSE from the repository's initial commit, recorded in PROVENANCE.md; obligations attach on distribution of source or binaries, not private use or running as a service; BSD-2 code adapted into the ftxi driver is compatible with its notice retained; whether the licence reaches trained weights is open, to decide before any weights are distributed | Committed | — | — | 11.0 |
 | M12 | 6b read per board-count range, never pooled (the stricter reading); scanner measured at its design thread budget; one bounded optimisation pass on in-check enumeration and horizon mate tests, then 6b re-run unchanged. Outcomes: all ranges ≥ 50 boards pass → as designed; 50–199 pass and 200+ fail → phase-dependent verification, df-pn the leading candidate above; 50–199 fail → STOP for redesign. Rung 1 and quiet-leaf reach re-judged on the re-run | Committed (pre-registered) | — | 6b | 15.6 |
 | M13 | CPU allocation: 8 cores per GPU as reference (replace with the self-play machine's real count) — 2 expansion, 1 search and batching, 5 scanner; M9 judged on the 2 expansion cores | Committed | — | Phase 1 | 15.6 |
+| M14 | Verification redesign (CHECKPOINT 3): (1) split the scanner by channel — exactness only where a proof can result; the estimate channel a cheap, inexact local search without turn completion, soft priors only; (2) proof channel = depth-limited df-pn over the semimove-decomposed turn tree with hypercuboid-pruned completion — proven / disproven / unknown, never "mate" on budget exhaustion; (3) incremental royal-attack maps | Committed (prototype until 6b′) | — | 6b′ | 11.1 |
+| M15 | 6b′ (pre-registered): same positions, per range, 5 threads; proof channel passes if ≥ 50% of roots are decided (mate within 5 half-turns proven or disproven) in 50 ms; estimate channel passes if it fits the rung-1 leaf budget at p90 (then rung 1 returns). Outcomes: all ranges ≥ 50 pass → adopt (below 50, keep whichever decides more); 50–199 pass, 200+ fail → phase-dependent, proofs only at the root and PV transitions above 200, gap recorded in §13; 50–199 fail → STOP for a design review | Committed (pre-registered) | — | 6b′ | 15.6 |
 
 ---
 

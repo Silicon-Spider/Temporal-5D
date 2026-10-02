@@ -1265,6 +1265,18 @@ answers immutable**, hash-verified, outside the reach of the code under test. A 
 recorded oracle error doubles as a copy detector — an implementation that reproduces it
 probably borrowed that oracle's logic.
 
+
+### 13.2.7 Pay exactness only where a proof can result
+
+A checker's search unit is borrowed from its source domain at a cost. Where an action is
+atomic, a forcing line pays nothing for legality; where an action is composite — a turn
+of several moves — every line must be completed into a legal action before anything about
+it is exact, and that cost scales with the action's width. Split the checker by channel:
+pay full exactness (completion, all replies, terminal checks) only on lines that can end
+in a proof, and let the estimate channel run cheap and inexact, since its outputs are soft
+priors and the generator remains the gate for legality. For the proof channel itself,
+prefer best-first proof search (proof-number methods) over a decomposed action tree,
+completing actions incrementally rather than re-solving them per line.
 ### 13.3 Separate the mechanism from the failure
 
 Recurring confusion in this problem class: *does an architectural restriction cause
