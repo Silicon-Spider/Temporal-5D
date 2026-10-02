@@ -1355,6 +1355,181 @@ equal to the reference's; one naive search stopped by the memory ceiling and was
 compared. No disagreement. The default run plays fewer (`detectors_agree_*`, a few
 seconds).
 
+## Stage E5a: the legal moves in tiers (`t5d/legal.hpp`)
+
+A move is **legal** when the action under way can still be finished legally after it
+(C4, R1: legality is judged per action; build-log spec issue 28). A search per move
+answers that exactly but slowly. `classify_moves(state, moves, out, budget, stats)`
+answers it in tiers and calls each move `Legal`, `Illegal` or `Unknown`. Every tier is
+sound. It calls a move legal only with a legal finish in hand or an argument that one
+exists, and illegal only with a proof. Whatever no tier settles goes to a search. The
+state may be a turn's start or a state during an action.
+
+0. **A standing capture.** A royal capture that already stands - from a board on
+   which the opponent is to move, onto a royal on a board of the opponent's colour -
+   lasts to the end of the action:
+   - the mover moves only on boards of its own colour, so it can neither take the
+     attacker nor move the royal;
+   - boards never change (a move makes a new one), so nothing the capture rests on
+     changes either.
+
+   No move is then legal. Under Q18's alternative (`sliders_cross_void`), a later
+   move could put a board on a void the capture crosses, so only captures that cross
+   no void count as standing.
+1. **The stripped multiverse.** Give every playable board of the mover's a successor
+   that keeps the board's opponent pieces and the mover's royals, and none of the
+   mover's other pieces. Call a move **quiet** when it creates no timeline and moves
+   no royal. A quiet action ends in a position whose royal captures are among the
+   stripped multiverse's, for three reasons:
+   - it has the same attackers or fewer, and the same royals;
+   - it has more blockers;
+   - where a board was not played, it has void where the stripped multiverse has a
+     board, and a slide does not cross void (the tier is off under Q18's
+     alternative, and when play activates timelines).
+
+   So when the stripped multiverse holds no capture, every quiet action is safe, and
+   a quiet move is legal iff the boards still to play can be played by quiet moves -
+   decided per move in O(1). A capture found there is removed first, if it can be:
+   - keep the mover's piece the capture crosses (a **kept blocker**); that piece's
+     moves leave the tier;
+   - or drop an optional board from the multiverse; its moves leave the tier.
+
+   **Branches.** A branching move adds an outermost timeline, one board, a copy of
+   its destination. One scan per destination board, on a stripped copy, decides
+   every quiet branch onto it. The branch's effect on the present (T8, T10, T11,
+   T12) - which boards still count, whether the new timeline is active - comes from
+   a model of one creation followed by moves within boards (`PresentModel`). The
+   model is used only where creations alone change activity
+   (`Reactivation::Rewinds`, play not activating, inactive history a destination).
+
+   Where a capture remains, two more arguments apply:
+   - **A passed board refutes.** Take the state with board p played as it is (a
+     successor of the opponent's colour, nothing moved). If that holds a capture, the
+     capture stands by tier 0's lemma after any move on p that changes none of the
+     squares it rests on (from, to, a castling rook's squares, an en passant victim).
+     Such a move is illegal. One scan with every board passed comes first. Without
+     Q18's alternative, adding boards takes no capture away, so only the boards
+     that some capture there rests on need a scan of their own.
+   - **Around a finish.** Take one legal finish A0, made greedily (a move within the
+     board on each board to play, replayed and tested; a few tries) or found by one
+     search. Each board that A0 plays within the board is stripped alone in A0's end
+     position, the other boards fixed as A0 leaves them. If that holds no capture,
+     every quiet move on that board, put in place of A0's move there, finishes
+     legally too. The present is taken from one replay per board.
+2. **Per move** (each a check of the budget). The move is illegal if a capture
+   stands after it (tier 0's lemma). It is legal if any of these holds:
+   - it ends a legal action;
+   - the stripped multiverse is capture-free, and stays so with the move's own
+     successor boards put in it (stripped the same way, its royals and kept pieces
+     where they are), and the boards still to play can be played quietly. This is
+     tier 1's argument for the moves tier 1 leaves out: a royal's, a kept piece's,
+     a castling;
+   - a finish is replayed through the state machine and tested (C4): A0's moves on
+     the other boards after it, or quiet moves on the boards still to play.
+3. **Search.**
+   - First, one search from the state (unless a finish is already known). If the
+     action has no legal finish at all, nothing is legal.
+   - Then a search per remaining move, within the budget.
+   - Every finish found also proves the moves that can lead it (replayed with each
+     one first).
+
+**Modes** (`LegalityOptions`):
+
+| Mode | Options | `Unknown` | What it runs |
+|---|---|---|---|
+| exact | `exact()`, the default | never (except a search stopped by the memory ceiling, kept as not proven illegal) | every tier; the tail is that of mate detection: proving that no legal finish exists can take a search of the whole action |
+| budgeted | `budgeted(checks, nodes)` | yes | `checks`: tier 2's per-move checks, the greedy tries, the branch scans; `nodes`: every search together (tier 3) |
+| fast | `budgeted(0, 0)` | yes | tier 0, tier 1's quiet moves and the passed-board refutations: a few scans per playable board |
+
+A node budget bounds a search's time because the hypercuboid charges each box's
+abstract check by its steps (see "The two detectors compared"): a few microseconds
+per node - 4.7 µs in a root search on cwmtt/manyChecks (13 timelines; 28,813 nodes
+in 136 ms, and stopped at 2,000 in 4.2 ms), 3.6 µs in a 600-board synthetic class.
+The cost of a check grows with the number of boards (a state copy, a replay, a
+scan).
+
+**The expansion.** `ExpandOptions::legal_moves` classifies under
+`ExpandOptions::legality`:
+- a move proved illegal is dropped;
+- a move left unknown is kept;
+- `Expansion::move_legality()` gives each kept move's status, and `legality_stats()`
+  says how the moves were settled.
+
+`legal_moves` and `keep_legal_moves` (`t5d/search.hpp`) use the exact classification.
+`t5d-measure --legal` measures |E| from legal moves; `t5d-bench --legal-profile`
+profiles the modes.
+
+**Tests.**
+- `detectors_agree_with_the_brute_force_reference`: every third tiny position is on
+  2x1 boards (moves within a board: quiet moves, kept blockers, passed boards). Each
+  state's moves are classified exact and under three budgets. Exact must equal the
+  reference; a budget must never contradict it.
+- `legal_moves_agree_with_a_search_per_move`: random games from the 5x5 to 8x8
+  sparse starts and their one-move children; the exact classification against a
+  search from every child.
+- `long_` versions of both add the variants and the alternative rulesets.
+
+| Test | Classifications | Disagreements |
+|---|---|---|
+| default reference run | 9,208 | 0 |
+| long reference run | 93,284 | 0 |
+| default per-move run | 3,103 | 0 |
+| long per-move run | 19,984 (10 searches stopped by their budget, not compared) | 0 |
+
+The tiers that settled the long per-move run's moves: standing at the start 2,304,
+stripped quiet 2,837, stripped branches 582, refuted by a passed board 1,138,
+finished 6,638, standing after 2,837, no finish at all 1,096, searched 2,405.
+
+**What it costs.** Measured 2026-10-02 with `t5d-bench --legal-profile`:
+- dev machine, Release, g++ 16.2 `-O2`, one thread;
+- the machine was shared with other builds and tests, so these are not quiet-machine
+  figures;
+- each cell is median / p95 / worst per expansion of `scope+relations` (moves, move
+  graph, W/E scope, relations), with the classification inside it;
+- in brackets, the share of the moves left unknown.
+
+The synthetic M9 classes: 4 games per class, each position and 4 one-move children,
+20 expansions per class.
+
+| Class | pseudo-legal | fast | budgeted 64,2000 | exact |
+|---|---|---|---|---|
+| N100 T6 | 21 µs / 43 µs / 43 µs | 86 µs / 114 µs / 114 µs (46%) | 2.0 ms / 2.9 ms / 2.9 ms (14%) | 1.5 ms / 17 ms / 17 ms |
+| N160 T7 | 23 µs / 38 µs / 38 µs | 95 µs / 119 µs / 119 µs (64%) | 2.1 ms / 3.0 ms / 3.0 ms (44%) | 5.4 ms / 59 ms / 59 ms |
+| N240 T8 | 26 µs / 46 µs / 46 µs | 102 µs / 162 µs / 162 µs (33%) | 2.5 ms / 4.1 ms / 4.1 ms (20%) | 7.3 ms / 148 ms / 148 ms |
+| N400 T10 | 40 µs / 55 µs / 55 µs | 142 µs / 232 µs / 232 µs (47%) | 2.4 ms / 10 ms / 10 ms (25%) | 17 ms / 145 s / 145 s |
+| N600 T12 | 54 µs / 84 µs / 84 µs | 162 µs / 273 µs / 273 µs (27%) | 0.75 ms / 11 ms / 11 ms (7%) | 0.72 ms / 200 s / 200 s |
+
+The corpus records: every action start and its children, by N bucket, under
+`--moves-after-shift`.
+
+| Boards | expansions | pseudo-legal | fast | budgeted 64,2000 | exact |
+|---|---|---|---|---|---|
+| 1-49 | 858 | 2 µs / 8 µs / 25 µs | 6 µs / 27 µs / 96 µs (39%) | 22 µs / 454 µs / 2.1 ms (2%) | 25 µs / 422 µs / 22 ms |
+| 50-99 | 319 | 4 µs / 21 µs / 60 µs | 16 µs / 106 µs / 218 µs (45%) | 0.41 ms / 2.0 ms / 3.4 ms (11%) | 0.26 ms / 4.0 ms / 33 ms |
+| 100-159 | 261 | 11 µs / 42 µs / 109 µs | 55 µs / 186 µs / 418 µs (43%) | 1.1 ms / 3.2 ms / 8.1 ms (16%) | 0.82 ms / 14 ms / 3.5 s |
+| 160-239 | 180 | 12 µs / 70 µs / 281 µs | 131 µs / 262 µs / 700 µs (47%) | 1.1 ms / 3.5 ms / 4.9 ms (24%) | 0.85 ms / 14 ms / 2.6 s |
+| 240-399 | 138 | 67 µs / 327 µs / 359 µs | 288 µs / 1.6 ms / 2.1 ms (55%) | 3.9 ms / 11 ms / 18 ms (33%) | 7.1 ms / 144 ms / 250 ms |
+
+The figures by mode:
+- **Fast** costs 3-5 times the pseudo-legal expansion (11 times in the records'
+  160-239 bucket), and its worst case stays within 2.1 ms.
+- **Budgeted** is bounded by its budget: a node costs a few microseconds and a check
+  more with more boards. At 64 checks and 2,000 nodes the worst case was 18 ms.
+- **Exact** has a median of 7 ms at 240 boards; the E4 filter took 157 ms. Its tail is
+  the searches': up to 145 s and 200 s in the synthetic 400- and 600-board classes
+  (the E4 filter: up to 247 s and 522 s).
+
+How the moves were settled depends on the position. Random play leaves kings
+attacked on many boards, so in the synthetic classes the stripped multiverse rarely
+holds no capture:
+- standing captures and passed boards settle 36-73% of the moves, as illegal;
+- the fast mode proves few moves legal: 14% at 100 boards, none above.
+
+In the records, the stripped multiverse alone proves 28-46% of the moves legal in the
+fast mode (35-49% in the others), and its branches another 9-17% when they may be
+scanned. `t5d-bench
+--legal-profile` prints every tier's share.
+
 ## 5DFEN
 
 `parse_fen_board` reads one board string, `[pieces:timeline:turn:colour]`, for a
