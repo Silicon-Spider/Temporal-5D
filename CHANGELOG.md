@@ -10,6 +10,16 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-02 - Build log: CHECKPOINT 2 ruled, the run resumed
+
+- `docs/BUILD_LOG.md`: the STOP section becomes CHECKPOINT 2's record - the rulings
+  (M12's 6b re-run and its outcome rules, M13's CPU allocation, Q4 = yes with D8's
+  submit action and acting-player input, C23's ancestry, Q5 settled from the
+  sources), what is running (engine E7 and E5c, the game-record research), what
+  follows, and the two questions put back to the user (Q2, whose sources are
+  silent; what "normalise it in the cwmtt driver" means for cwmtt/many2).
+- Spec: none (status only).
+
 ### 2026-10-02 - The rulebook records the CHECKPOINT 2 rulings on Q4 and Q5
 
 - `docs/rules/README.md`: **R8** - a player may keep moving after the present has
