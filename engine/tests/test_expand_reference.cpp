@@ -601,13 +601,21 @@ TEST(expand_agrees_with_the_reference_on_random_positions) {
 }
 
 TEST(expand_agrees_with_the_reference_when_moves_follow_the_shift) {
-  // Q4's other reading: moves after the present has shifted, so positions in
-  // mid-action where every board but the playable ones is done.
+  // Q4's ruled reading (R8, the default since stage E7): moves after the
+  // present has shifted, so positions in mid-action where every board but the
+  // playable ones is done - and, for comparison, the same games under the
+  // Guide-literal reading (no move once the present has shifted).
   RuleOptions r;
   r.moves_after_shift = true;
   checked = 0;
   run("Standard", 21, 60, 4, r);
   run("Standard - Two Timelines", 22, 50, 3, r);
+  CHECK(checked > 40);
+  RuleOptions guide;
+  guide.moves_after_shift = false;
+  checked = 0;
+  run("Standard", 21, 60, 4, guide);
+  run("Standard - Two Timelines", 22, 50, 3, guide);
   CHECK(checked > 40);
 }
 
@@ -638,7 +646,7 @@ TEST(expand_agrees_with_the_reference_under_the_rulesets_alternatives) {
     RuleOptions r;
     r.brawn_rank_timeline_capture = false;
     r.earlier_playable_jump_branches = true;
-    r.moves_after_shift = true;
+    r.moves_after_shift = false;  // Q4's Guide-literal reading (R8 is the default)
     rulesets.emplace_back("Q14+J3+Q4", r);
   }
   {
@@ -693,7 +701,7 @@ TEST(expand_relations_never_change_the_moves_under_any_ruleset) {
     RuleOptions r;
     r.earlier_playable_jump_branches = true;
     r.brawn_cross_board_promotion = false;
-    r.moves_after_shift = true;
+    r.moves_after_shift = false;  // Q4's Guide-literal reading (R8 is the default)
     rulesets.push_back(r);
   }
   int positions = 0;

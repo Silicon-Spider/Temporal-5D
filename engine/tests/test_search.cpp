@@ -419,35 +419,46 @@ TEST(search_outcome_through_the_engines_check_ruling) {
 
 // ---- the hypercuboid's cost: regression bounds ------------------------------------------
 
-TEST(search_the_hypercuboid_stays_small_when_every_branch_rewinds) {
-  // 1x1 boards on timelines -n..+n (each side has created n: all active,
-  // T10), each with empty boards from T1 to T3 and a White queen at T4
-  // (White's turn; all mandatory, T6). A queen on 1x1 meets its own queens
-  // across the timelines at T4; its moves are the branches into the past:
-  // back along its own timeline to T3, T2 or T1, and diagonally (one
-  // timeline per turn back) up to three turns, as far as the timelines go
-  // (L5). Each is active (White's (n+1)-th creation, Black has n) and lands
-  // before the present, which it rewinds (T8): the action ends with it (Q4),
-  // the other boards unplayed. So the legal actions are the single branches:
-  // 3 per queen back along its timeline, and diagonally 3 + 3 per queen less
-  // 1 + 2 + 3 at each edge - 3(2n+1) + 2(3(2n+1) - 6) = 18n - 3 for n >= 2.
-  // A successor is fixed by the queen that moved and how far back (every
-  // destination is an empty board): 3(2n+1). The product space has
-  // (19)^(2n+1) points; the hypercuboid once spent 34 million nodes on n = 3.
-  const auto position = [](int n) {
-    std::vector<std::string> boards;
-    for (int p = -n; p <= n; ++p) {
-      const std::string label = p == 0 ? "0" : (p > 0 ? "+" : "") + std::to_string(p);
-      for (int t = 1; t <= 3; ++t) {
-        boards.push_back("[1:" + label + ":" + std::to_string(t) + ":w]");
-        boards.push_back("[1:" + label + ":" + std::to_string(t) + ":b]");
-      }
-      boards.push_back("[Q:" + label + ":4:w]");
+namespace {
+
+// 1x1 boards on timelines -n..+n (each side has created n: all active, T10),
+// each with empty boards from T1 to T3 and a White queen at T4 (White's turn;
+// all mandatory, T6). A queen on 1x1 meets its own queens across the
+// timelines at T4; its moves are the branches into the past: back along its
+// own timeline to T3, T2 or T1, and diagonally (one timeline per turn back) up
+// to three turns, as far as the timelines go (L5) - 3 per queen back along its
+// timeline, and diagonally 3 + 3 per queen less 1 + 2 + 3 at each edge. The
+// first branch is active (White's (n+1)-th creation, Black has n) and lands
+// before the present, which it rewinds (T8) onto Black's colour: the
+// obligations are met, and the other boards are unplayed and optional now.
+GameState every_branch_rewinds(int n, const RuleOptions& rules = {}) {
+  std::vector<std::string> boards;
+  for (int p = -n; p <= n; ++p) {
+    const std::string label = p == 0 ? "0" : (p > 0 ? "+" : "") + std::to_string(p);
+    for (int t = 1; t <= 3; ++t) {
+      boards.push_back("[1:" + label + ":" + std::to_string(t) + ":w]");
+      boards.push_back("[1:" + label + ":" + std::to_string(t) + ":b]");
     }
-    return game(boards, BoardSize{1, 1});
-  };
+    boards.push_back("[Q:" + label + ":4:w]");
+  }
+  return game(boards, BoardSize{1, 1}, rules);
+}
+
+}  // namespace
+
+TEST(search_the_hypercuboid_stays_small_when_every_branch_rewinds) {
+  // every_branch_rewinds under Q4's Guide-literal reading (the hypercuboid's
+  // Ordered regime): the action ends with its first branch. So the legal
+  // actions are the single branches: 3(2n+1) + 2(3(2n+1) - 6) = 18n - 3 for
+  // n >= 2. A successor is fixed by the queen that moved and how far back
+  // (every destination is an empty board): 3(2n+1). The product space has
+  // (19)^(2n+1) points; the hypercuboid once spent 34 million nodes on n = 3.
+  // (Under the default, R8, the other queens may go on branching:
+  // search_moves_after_the_shift_multiply_the_actions_r8, below.)
+  RuleOptions guide;
+  guide.moves_after_shift = false;
   for (int n = 2; n <= 6; ++n) {
-    const GameState s = position(n);
+    const GameState s = every_branch_rewinds(n, guide);
     for (const Detector d : kDetectors) {
       const ActionCount actions = count_legal_actions(s, 100000, d);
       CHECK(actions.stats.exhaustive);
@@ -460,6 +471,48 @@ TEST(search_the_hypercuboid_stays_small_when_every_branch_rewinds) {
       CHECK_EQ(successors.count, static_cast<std::size_t>(3 * (2 * n + 1)));
     }
   }
+}
+
+TEST(search_moves_after_the_shift_multiply_the_actions_r8) {
+  // every_branch_rewinds under the default rules (R8: moves until
+  // submission). Once the first branch has shifted the present, every other
+  // queen may still branch - and each later creation is inactive (White's
+  // (n+2)-th and on, Black has n: T10), so the present stays shifted and the
+  // action may be submitted after any of them (no royal: C13). An action is
+  // then a non-empty set S of queens, each with one of its m_p moves, in a
+  // creation order: sum over S of |S|! * prod m_p. n = 1: m = 5, 5, 5 (3 back
+  // along the timeline, 2 diagonally) - 3 * 5 + 3 * 2! * 25 + 3! * 125 =
+  // 15 + 150 + 750 = 915 (the Guide-literal reading: 15). A successor is fixed
+  // by the queens that moved and the depths of the new timelines in creation
+  // order (every new board is an empty board's copy with the queen, J5): 3^|S|
+  // per set, 4^(2n+1) - 1 in all - 63 at n = 1, 1023 at n = 2.
+  const GameState s1 = every_branch_rewinds(1);
+  for (const Detector d : kDetectors) {
+    const ActionCount actions = count_legal_actions(s1, 100000, d);
+    CHECK(actions.stats.exhaustive);
+    CHECK_EQ(actions.count, std::size_t{915});
+    const ActionCount successors = count_legal_successors(s1, 100000, d);
+    CHECK(successors.stats.exhaustive);
+    CHECK_EQ(successors.count, std::size_t{63});
+  }
+  const GameState s2 = every_branch_rewinds(2);
+  for (const Detector d : kDetectors) {
+    const ActionCount successors = count_legal_successors(s2, 100000, d);
+    CHECK(successors.stats.exhaustive);
+    CHECK_EQ(successors.count, std::size_t{1023});
+  }
+  // Along one action: after the first branch and after each further one the
+  // action may end (obligations met, every royal - none - safe) or go on,
+  // until every board has been played.
+  GameState t = s1;
+  CHECK(!t.obligations_met());
+  for (int i = 0; i < 3; ++i) {
+    t.apply(t5d_test::moves_of(t).front());
+    CHECK(t.obligations_met());
+    CHECK(t.may_move());
+    CHECK(t.submission_status() == SubmitStatus::Safe);
+  }
+  CHECK(t5d_test::moves_of(t).empty());  // every board played: only submitting is left
 }
 
 TEST(search_the_hypercuboid_finds_actions_past_reactivations) {

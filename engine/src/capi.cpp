@@ -562,7 +562,8 @@ t5d_status t5d_game_apply(t5d_game* game, const t5d_move* move, char** error) {
     if (game == nullptr || move == nullptr) throw std::invalid_argument("game or move is NULL");
     if (!game->state.may_move()) {
       throw IllegalAction("no move may be made now: the action's obligations are met (the "
-                          "present has shifted to the opponent), so it must be submitted (T5, Q4)");
+                          "present has shifted to the opponent), so it must be submitted (T5) - under "
+                          "Q4's Guide-literal reading (moves_after_shift = false)");
     }
     t5d::MoveList moves;
     t5d::append_piece_moves(game->state, move->from_timeline, move->from_square, moves);

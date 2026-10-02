@@ -8,8 +8,10 @@
 //
 //   t5d-measure [options] [RECORD ...]      no RECORD, or "-": standard input
 //
-//   --moves-after-shift   rules Q4's other reading (moves after the present
-//                         has shifted, until submission)
+//   --no-moves-after-shift   a diagnostic: rules Q4's Guide-literal reading (no
+//                         move once the present has shifted; the default, R8,
+//                         allows moves until submission)
+//   --moves-after-shift   accepted and ignored: R8 made it the default
 //   --rules ENCODING      any ruleset: RuleOptions' canonical encoding
 //   --name NAME           the name printed for a record read from standard input
 //   --summary             after the records, the |E| curve: one line per N bucket
@@ -83,7 +85,10 @@ void print_usage(std::FILE* stream) {
       " - |W(k)|, |E(k)| and src_extra(k) at every position of 5dpgn records.\n"
       "\n"
       "usage: t5d-measure [options] [RECORD ...]   (no RECORD, or -, reads standard input)\n"
-      "  --moves-after-shift   rules Q4's other reading: moves until submission\n"
+      "  --no-moves-after-shift  a diagnostic: rules Q4's Guide-literal reading, no move\n"
+      "                        once the present has shifted (the default, R8: moves until\n"
+      "                        submission)\n"
+      "  --moves-after-shift   accepted and ignored: R8 made it the default\n"
       "  --rules ENCODING      any ruleset (RuleOptions::encode; decimal or 0x hex)\n"
       "  --name NAME           the name of a record read from standard input\n"
       "  --summary             after the records, the |E| curve per N bucket (distinct\n"

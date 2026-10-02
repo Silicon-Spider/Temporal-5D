@@ -26,15 +26,19 @@ std::string read_stdin();
 /// A count or encoding: decimal, or hexadecimal after "0x".
 std::optional<std::uint64_t> parse_number(std::string_view text) noexcept;
 
-/// The ruleset options both tools take. Returns how many arguments it used at
+/// The ruleset options the tools take. Returns how many arguments it used at
 /// argv[i] (0: not a ruleset option); throws std::invalid_argument for a
-/// malformed one.
+/// malformed one. The default is the engine's: moves may be made after the
+/// present has shifted, until the action is submitted (Q4, ruled R8).
 ///
-///   --moves-after-shift   rules reference Q4's other reading: moves may be
-///                         made after the present has shifted, until the
-///                         action is submitted (RuleOptions::moves_after_shift)
-///   --rules ENCODING      any ruleset, as RuleOptions' canonical encoding
-///                         (RuleOptions::encode; bit 3 is --moves-after-shift)
+///   --no-moves-after-shift   a DIAGNOSTIC: Q4's Guide-literal reading - no
+///                            move once the present has shifted
+///                            (RuleOptions::moves_after_shift = false)
+///   --moves-after-shift      accepted and ignored: R8 made it the default
+///   --rules ENCODING         any ruleset, as RuleOptions' canonical encoding
+///                            (RuleOptions::encode; bit 3 is
+///                            --no-moves-after-shift). Combined with
+///                            --no-moves-after-shift in either order.
 int ruleset_option(int argc, char** argv, int i, RuleOptions& rules);
 
 /// "standard", or the non-default choices (t5d::describe).

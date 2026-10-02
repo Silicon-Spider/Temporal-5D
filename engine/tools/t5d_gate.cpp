@@ -46,7 +46,10 @@ void print_usage(std::FILE* stream) {
       "       t5d-gate --help | --version\n"
       "\n"
       "Diagnostics - for investigating a record by hand, never for gate.toml:\n"
-      "  --moves-after-shift          rules Q4's other reading (moves after the present shifts)\n"
+      "  --no-moves-after-shift       rules Q4's Guide-literal reading: no move once the present\n"
+      "                               has shifted (also --rule moves_after_shift=false; the\n"
+      "                               default is ruling R8's: moves until submission)\n"
+      "  --moves-after-shift          accepted and ignored: R8 made it the default\n"
       "  --rule NAME=VALUE            any other rule option (RuleOptions, t5d/rules.hpp)\n"
       "  --lenient-annotations        do not check ~, (>Lx), (~Tx) against the state\n"
       "  --strict-annotations         a ~, (>Lx) or (~Tx) that disagrees is unreadable\n"
@@ -103,8 +106,10 @@ int main(int argc, char** argv) {
     } else if (arg == "--cap" && has_value && read_count(argv[i + 1], n)) {
       options.cap = static_cast<std::size_t>(n);
       ++i;
+    } else if (arg == "--no-moves-after-shift") {
+      options.rules.moves_after_shift = false;
     } else if (arg == "--moves-after-shift") {
-      options.rules.moves_after_shift = true;
+      // The default since R8 (Q4): accepted, so that old command lines still run.
     } else if (arg == "--lenient-annotations") {
       options.pgn.verify_annotations = false;
     } else if (arg == "--strict-annotations") {

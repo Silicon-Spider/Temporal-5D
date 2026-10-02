@@ -219,7 +219,9 @@ class Expansion {
   Colour to_move() const noexcept { return to_move_; }
   /// The present (T4): a half-turn.
   int present() const noexcept { return present_; }
-  /// Whether a move may be made now (Q4); false: (a) is empty.
+  /// Whether a move may be made now: always by default (R8: until
+  /// submission); under Q4's Guide-literal reading, only before the present
+  /// has shifted. False: (a) is empty.
   bool may_move() const noexcept { return may_move_; }
   int timeline_count() const noexcept { return timeline_count_; }
   int active_timeline_count() const noexcept { return active_count_; }

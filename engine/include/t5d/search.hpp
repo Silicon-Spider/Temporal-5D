@@ -3,8 +3,9 @@
 //
 // A LEGAL ACTION (C5) is a sequence of moves by the side to move - at most
 // one from each board it starts on (T3), as the state machine allows them
-// (t5d/state.hpp: the present, its shift, Q4's default that no move is made
-// once the present has shifted) - that ends in a submittable state (T5) in
+// (t5d/state.hpp: the present, its shift, and - Q4, ruled R8 - further moves
+// after the shift until the mover submits; under Q4's Guide-literal reading no
+// move once it has shifted) - that ends in a submittable state (T5) in
 // which every royal piece of the mover's is safe (C4, R1; t5d/check.hpp).
 //
 // COUNTING, two ways:
@@ -230,7 +231,8 @@ void keep_legal_moves(const GameState& state, MoveList& moves,
 /// timeline, by ascending source timeline, then the branching moves in the
 /// order they were made (that order numbers the timelines they create, J9).
 /// It names the action; it is not always an order in which the moves could be
-/// played (Q4's default puts the move that shifts the present last).
+/// played (under Q4's Guide-literal reading the move that shifts the present
+/// comes last).
 std::string action_text(const std::vector<Move>& moves, bool even);
 
 /// Whether two states are the same position for counting: equal in all but
