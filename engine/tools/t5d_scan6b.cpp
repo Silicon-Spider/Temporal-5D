@@ -321,6 +321,7 @@ struct Options {
       "  --completion quiet|greedy|detector     --branch-threat none|arrival|any\n"
       "  --branch-threat-value V    --no-checks    --promotions-forcing\n"
       "  --stand-pat on|off|bind    --stand-pat-bind B    --evasion-cap N\n"
+      "  --evasion-probe N          in check: seeds made into actions before E4 (64; 0: E4 first)\n"
       "  --fallback-max-nodes N     a completion fallback's node cap (2000)\n"
       "  --max-depth D              --tt-entries N         --no-stalemate-test\n"
       "  --values P,N,B,R,Q,K,U,D,S,W,C,Y      piece values (centipawns)\n"
@@ -463,6 +464,8 @@ Options parse(int argc, char** argv) {
       o.scanner.fallback_max_nodes = number(value());
     } else if (a == "--evasion-cap") {
       o.scanner.evasion_cap = static_cast<std::size_t>(number(value()));
+    } else if (a == "--evasion-probe") {
+      o.scanner.evasion_probe = static_cast<std::size_t>(number(value()));
     } else if (a == "--max-depth") {
       o.scanner.max_depth = static_cast<int>(number(value()));
     } else if (a == "--tt-entries") {
@@ -887,7 +890,8 @@ int main(int argc, char** argv) {
        (o.scanner.stand_pat == t5d::StandPat::On    ? "on"
         : o.scanner.stand_pat == t5d::StandPat::Off ? "off"
                                                      : "off where obligations bind") +
-       ", evasion cap " + std::to_string(o.scanner.evasion_cap) + ", completion fallback cap " +
+       ", evasion cap " + std::to_string(o.scanner.evasion_cap) + ", evasion probe " +
+       std::to_string(o.scanner.evasion_probe) + " seeds, completion fallback cap " +
        std::to_string(o.scanner.fallback_max_nodes) + " nodes, max depth " +
        std::to_string(o.scanner.max_depth) + ", TT " + std::to_string(o.scanner.tt_entries) +
        " entries");
@@ -973,6 +977,71 @@ int main(int argc, char** argv) {
              1) +
          " nodes each), " + std::to_string(sum.capped_nodes) + " capped in-check nodes, " +
          std::to_string(sum.completion_fallbacks) + " completion fallbacks");
+  }
+  // The profile of the exhaustive paths, by board count (M12's optimisation
+  // pass reads it).
+  {
+    const char* names[4] = {"< 50 boards", "50-99", "100-199", "200+"};
+    struct Sum {
+      std::uint64_t nodes = 0, evasion = 0, fallback = 0, horizon = 0, visits = 0, fail_highs = 0,
+                    lists = 0, listed = 0, tests = 0, mates = 0, capped = 0, on_mates = 0,
+                    probe_seeds = 0, probe_actions = 0, probe_cutoffs = 0, probe_hits = 0,
+                    probe_nodes = 0;
+      double seconds = 0, evasion_s = 0, horizon_s = 0, fallback_s = 0, probe_s = 0;
+    };
+    Sum by[4];
+    for (const Result& r : results) {
+      if (!r.scanned) continue;
+      const int b = r.boards < 50 ? 0 : r.boards < 100 ? 1 : r.boards < 200 ? 2 : 3;
+      const t5d::ScanStats& x = r.scan.stats;
+      Sum& s = by[b];
+      s.nodes += x.nodes;
+      s.evasion += x.evasion_nodes;
+      s.fallback += x.fallback_nodes;
+      s.horizon += x.horizon_mate_nodes;
+      s.visits += x.evasion_visits;
+      s.fail_highs += x.evasion_fail_highs;
+      s.lists += x.evasion_lists;
+      s.listed += x.evasion_listed;
+      s.tests += x.horizon_mate_tests;
+      s.mates += x.horizon_mates;
+      s.on_mates += x.horizon_mate_nodes_on_mates;
+      s.probe_seeds += x.probe_seeds;
+      s.probe_actions += x.probe_actions;
+      s.probe_cutoffs += x.probe_cutoffs;
+      s.probe_hits += x.horizon_probe_hits;
+      s.probe_nodes += x.probe_nodes;
+      s.probe_s += x.probe_seconds;
+      s.capped += x.capped_nodes;
+      s.seconds += x.seconds - x.measurement_seconds;
+      s.evasion_s += x.evasion_seconds;
+      s.horizon_s += x.horizon_mate_seconds;
+      s.fallback_s += x.fallback_seconds;
+    }
+    line("  profile by board count (nodes; wall time inside the scans):");
+    for (int b = 0; b < 4; ++b) {
+      const Sum& s = by[b];
+      if (s.nodes == 0) continue;
+      const auto share = [&](std::uint64_t part) {
+        return fmt(100.0 * static_cast<double>(part) / static_cast<double>(s.nodes)) + "%";
+      };
+      const auto tshare = [&](double part) {
+        return s.seconds <= 0 ? std::string("-") : fmt(100.0 * part / s.seconds) + "%";
+      };
+      line(std::string("    ") + names[b] + ": " + std::to_string(s.nodes) + " nodes, " +
+           fmt(s.seconds, 1) + " s; in-check listing " + share(s.evasion) + " of nodes, " +
+           tshare(s.evasion_s) + " of time (" + std::to_string(s.lists) + " listings, " +
+           fmt(s.lists == 0 ? 0.0 : static_cast<double>(s.listed) / static_cast<double>(s.lists), 1) +
+           " actions each; " + std::to_string(s.visits) + " in-check nodes, " +
+           std::to_string(s.fail_highs) + " failed high, " + std::to_string(s.capped) +
+           " capped); horizon mate tests " + share(s.horizon) + ", " + tshare(s.horizon_s) + " (" +
+           std::to_string(s.tests) + " tests, " + std::to_string(s.probe_hits) +
+           " answered by the probe, " + std::to_string(s.mates) + " mates taking " +
+           share(s.on_mates) + "); fallbacks " + share(s.fallback) + ", " + tshare(s.fallback_s) +
+           "; probe " + share(s.probe_nodes) + ", " + tshare(s.probe_s) + " (" +
+           std::to_string(s.probe_seeds) + " seeds, " + std::to_string(s.probe_actions) +
+           " actions searched, " + std::to_string(s.probe_cutoffs) + " cutoffs)");
+    }
   }
   line("");
 
@@ -1312,6 +1381,7 @@ int main(int argc, char** argv) {
          ",\"promotions_forcing\":" + (o.scanner.promotions_forcing ? "true" : "false") +
          ",\"stand_pat\":" + std::to_string(static_cast<int>(o.scanner.stand_pat)) +
          ",\"evasion_cap\":" + std::to_string(o.scanner.evasion_cap) +
+         ",\"evasion_probe\":" + std::to_string(o.scanner.evasion_probe) +
          ",\"fallback_max_nodes\":" + std::to_string(o.scanner.fallback_max_nodes) +
          ",\"max_depth\":" + std::to_string(o.scanner.max_depth) +
          ",\"tt_entries\":" + std::to_string(o.scanner.tt_entries) + ",\"values\":[";

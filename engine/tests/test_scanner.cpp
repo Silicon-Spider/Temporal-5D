@@ -668,6 +668,103 @@ void proofs_under_every_alternative_ruleset(int games, int turns, std::uint64_t 
 
 }  // namespace
 
+namespace {
+
+// The in-check stage (ScannerOptions::evasion_probe) against E4 first (0):
+// random play from the sparse starts under the default rules and under Q4's
+// ruled reading (moves after the shift, rulebook R8), and the constructed
+// positions, at a generous budget and at random ones. Every proof of either
+// is the game tree's; where both prove, they prove the same; and with ample
+// nodes the stage loses no proof E4-first finds in a tree it exhausts.
+void evasion_probe_keeps_the_proofs(int games, int turns, int runs_per_position, int most_nodes,
+                                    int max_distance) {
+  RuleOptions after_shift;
+  after_shift.moves_after_shift = true;
+  std::vector<GameState> positions = sparse_positions(RuleOptions{}, games, turns, 303);
+  for (const GameState& s : sparse_positions(after_shift, games, turns, 304)) positions.push_back(s);
+  for (const GameState& s : {mate_in_one(), cross_board_mate(), stale_checkmate_in_one(),
+                             mate_in_two(), history_royal_mate(), rewind_escape(), rewind_blocked()}) {
+    positions.push_back(s);
+  }
+  ProofTally tally;
+  tally.max_distance = max_distance;
+  tally.work = max_distance > 3 ? 3000000 : 40000;
+  ScannerOptions first;
+  first.evasion_probe = 0;
+  ScannerOptions narrow;
+  narrow.evasion_probe = 1;
+  t5d_test::Rng rng(91);
+  int both = 0;
+  int one_way = 0;
+  int in_check_positions = 0;
+  std::uint64_t probe_cutoffs = 0;
+  std::uint64_t probe_hits = 0;
+  for (const GameState& s : positions) {
+    if (in_check(s)) ++in_check_positions;
+    const ScanResult a = scan(s, 100'000, first);
+    const ScanResult b = scan(s, 100'000);
+    const ScanResult c = scan(s, 100'000, narrow);
+    probe_cutoffs += b.stats.probe_cutoffs;
+    probe_hits += b.stats.horizon_probe_hits;
+    for (const ScanResult* r : {&a, &b, &c}) {
+      if (!tally.check(*r, s)) {
+        std::fprintf(stderr, "  false proof %s at %s\n", to_string(r->proof).c_str(),
+                     describe_position(s).c_str());
+        CHECK(false);
+      }
+    }
+    for (const ScanResult* r : {&b, &c}) {
+      if (a.proof.proven() && r->proof.proven()) {
+        ++both;
+        CHECK(a.proof.kind == r->proof.kind);
+      } else if (a.proof.proven() != r->proof.proven()) {
+        ++one_way;  // alpha-beta's windows differ with the order: information
+      }
+    }
+    for (int i = 0; i < runs_per_position; ++i) {
+      const auto budget = static_cast<std::uint64_t>(rng.below(most_nodes));
+      const ScanResult r = scan(s, budget);
+      CHECK(r.stats.nodes <= budget);
+      if (!tally.check(r, s)) {
+        std::fprintf(stderr, "  false proof %s at budget %llu at %s\n", to_string(r.proof).c_str(),
+                     static_cast<unsigned long long>(budget), describe_position(s).c_str());
+        CHECK(false);
+      }
+      if (r.proof.proven() && b.proof.proven()) CHECK(r.proof.kind == b.proof.kind);
+    }
+  }
+  tally.print("evasion probe");
+  std::fprintf(stderr,
+               "  %zu positions (%d in check), %d proofs found both ways, %d one way only, %llu "
+               "probe cutoffs, %llu horizon tests answered by the probe\n",
+               positions.size(), in_check_positions, both, one_way,
+               static_cast<unsigned long long>(probe_cutoffs),
+               static_cast<unsigned long long>(probe_hits));
+  CHECK(tally.verified > 0);
+  CHECK(both > 0);
+  CHECK(probe_cutoffs > 0);
+  CHECK(probe_hits > 0);
+}
+
+}  // namespace
+
+TEST(scanner_evasion_probe_keeps_the_proofs) { evasion_probe_keeps_the_proofs(1, 4, 1, 3000, 1); }
+TEST(long_scanner_evasion_probe_keeps_the_proofs) {
+  evasion_probe_keeps_the_proofs(3, 12, 6, 20000, 99);
+}
+
+TEST(scanner_evasion_probe_off_is_e5b) {
+  // evasion_probe 0 is E5b's scanner, the in-check stage left out: in check,
+  // E4's enumeration first, every time, and E4's detector at the horizon.
+  ScannerOptions first;
+  first.evasion_probe = 0;
+  for (const GameState& s : sparse_positions(RuleOptions{}, 1, 6, 404)) {
+    const ScanResult r = scan(s, 20'000, first);
+    CHECK_EQ(r.stats.probe_seeds, std::uint64_t{0});
+    CHECK_EQ(r.stats.evasion_lists, r.stats.evasion_visits);
+  }
+}
+
 TEST(scanner_proofs_agree_with_the_game_tree) { proofs_agree_with_the_game_tree(1, 6, 20'000, 3); }
 TEST(long_scanner_proofs_agree_with_the_game_tree) {
   proofs_agree_with_the_game_tree(4, 12, 200'000, 99);

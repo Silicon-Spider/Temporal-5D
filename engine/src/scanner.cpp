@@ -94,6 +94,10 @@ std::uint32_t move_key(const Move& m) noexcept {
   return key == 0 ? 1u : key;
 }
 
+double seconds_since(std::chrono::steady_clock::time_point t0) {
+  return std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+}
+
 int score_of(const Proof& p, int ply) noexcept {
   switch (p.kind) {
     case Proof::Kind::Win: return kScanMate - (ply + p.distance);
@@ -428,40 +432,57 @@ struct Scanner::Impl {
     return best;
   }
 
+  // The completion rule's own moves from `t` (an action under way, `moves` so
+  // far): on each mandatory board left, choose()'s move; then C4 (R1). The
+  // action, submitted, if that is legal - built through the state machine
+  // and tested, so it is a legal action; nullopt if it is not, if a board
+  // cannot be played from itself, or if the scan stopped.
+  std::optional<BuiltAction> finish_by_rule(GameState t, std::vector<Move> moves) {
+    MoveList& board_moves = scratch_list(0);
+    while (!t.obligations_met()) {
+      if (!t.may_move()) return std::nullopt;
+      const std::vector<int> mandatory = t.mandatory_timelines();
+      board_moves.clear();
+      append_board_moves(t, mandatory.front(), board_moves);
+      if (board_moves.empty()) return std::nullopt;  // not playable from itself
+      const Move m = board_moves[choose(board_moves)];
+      if (!spend()) return std::nullopt;
+      applied(t, m);
+      moves.push_back(m);
+    }
+    if (!spend()) return std::nullopt;
+    ++st().scans;
+    if (!royals_safe(t)) return std::nullopt;  // C4, R1
+    t.submit(CheckRuling::none());             // legal: tested just above
+    return BuiltAction{std::move(moves), std::move(t)};
+  }
+
+  // The legal action `seed` and the completion rule's moves make, with no
+  // fallback (the in-check stage: a seed that is no evasion costs a few
+  // applied moves and one scan).
+  std::optional<BuiltAction> quick_action(const GameState& start_state, const Move& seed) {
+    ScanStats& x = st();
+    ++x.probe_seeds;
+    const std::uint64_t n0 = x.nodes;
+    const auto t0 = std::chrono::steady_clock::now();
+    std::optional<BuiltAction> a;
+    GameState t = start_state;
+    if (spend()) {
+      applied(t, seed);
+      a = finish_by_rule(std::move(t), std::vector<Move>{seed});
+    }
+    x.probe_nodes += x.nodes - n0;
+    x.probe_seconds += seconds_since(t0);
+    return a;
+  }
+
   std::optional<BuiltAction> complete(const GameState& start_state, const Move& seed) {
     GameState after_seed = start_state;
     if (!spend()) return std::nullopt;
     applied(after_seed, seed);
     if (opt.completion != Completion::Detector) {
-      GameState t = after_seed;
-      std::vector<Move> moves{seed};
-      bool ok = true;
-      MoveList& board_moves = scratch_list(0);
-      while (!t.obligations_met()) {
-        if (!t.may_move()) {
-          ok = false;
-          break;
-        }
-        const std::vector<int> mandatory = t.mandatory_timelines();
-        board_moves.clear();
-        append_board_moves(t, mandatory.front(), board_moves);
-        if (board_moves.empty()) {
-          ok = false;  // the board cannot be played from itself: E4 below
-          break;
-        }
-        const Move m = board_moves[choose(board_moves)];
-        if (!spend()) return std::nullopt;
-        applied(t, m);
-        moves.push_back(m);
-      }
-      if (ok) {
-        if (!spend()) return std::nullopt;
-        ++st().scans;
-        if (royals_safe(t)) {  // C4, R1
-          t.submit(CheckRuling::none());  // legal: tested just above
-          return BuiltAction{std::move(moves), std::move(t)};
-        }
-      }
+      if (std::optional<BuiltAction> a = finish_by_rule(after_seed, std::vector<Move>{seed})) return a;
+      if (stopped) return std::nullopt;
       ++st().completion_fallbacks;
     }
     // E4's first legal finish from the state after the seed, within the
@@ -469,8 +490,12 @@ struct Scanner::Impl {
     SearchBudget b = detector_budget();
     const bool local_cap = b.max_nodes > opt.fallback_max_nodes;
     if (local_cap) b.max_nodes = opt.fallback_max_nodes;
+    const auto t0 = std::chrono::steady_clock::now();
     const ActionList l = list_legal_actions(after_seed, 1, Detector::Hypercuboid, b);
-    if (charging) st().fallback_nodes += l.stats.nodes;
+    if (charging) {
+      st().fallback_nodes += l.stats.nodes;
+      st().fallback_seconds += seconds_since(t0);
+    }
     if (local_cap && l.stats.stopped_by_budget && !l.stats.stopped_by_memory &&
         l.stats.nodes >= opt.fallback_max_nodes) {
       // Its own cap, not the scan's budget: charge the nodes, drop the seed.
@@ -631,9 +656,10 @@ struct Scanner::Impl {
     }
     if (!spend()) return Node{};
     ++st().scans;
-    const bool check = in_check(s);  // R1
-    return check ? evasions(s, depth, alpha, beta, ply, prev, board_moves, key, tt_best)
-                 : forcing(s, depth, alpha, beta, ply, prev, board_moves, key, tt_best);
+    // R1's check status (in_check), with one capture of a royal it rests on.
+    const std::optional<RoyalCapture> witness = check_witness(s);
+    return witness ? evasions(s, depth, alpha, beta, ply, prev, board_moves, key, tt_best, witness)
+                   : forcing(s, depth, alpha, beta, ply, prev, board_moves, key, tt_best);
   }
 
   // A child's result, for this node.
@@ -709,15 +735,93 @@ struct Scanner::Impl {
     return Node{t.best, proof};
   }
 
-  // In check (R1): every legal action (H2).
+  // -- in check -------------------------------------------------------------------------------------
+
+  // The order in which the in-check stage tries its seeds (net-free, H4):
+  // the TT's move; a capture of the checking piece (`witness`, one capture of
+  // a royal that R1's check status found); a move of a royal; a move onto a
+  // square the check's line crosses (a block); any other capture (MVV-LVA);
+  // the rest by killers and histories.
+  std::vector<Candidate> evasion_seeds(const GameState& s, const std::optional<RoyalCapture>& witness,
+                                       std::uint32_t tt_best, std::uint32_t prev, int ply) {
+    MoveList moves;
+    generate_moves(s, moves);
+    std::vector<CapturePlace> places;
+    if (witness) places = capture_places(*witness);
+    std::vector<Candidate> out;
+    out.reserve(moves.size());
+    for (const Move& m : moves) {
+      Candidate c;
+      c.seed = m;
+      c.key = move_key(m);
+      // The board a move lands on, advanced by the pass R1's status reads.
+      const auto lands_on = [&](const CapturePlace& p) {
+        return m.to_timeline == p.timeline && m.to_half_turn + 1 == p.half_turn &&
+               m.to_square == p.square;
+      };
+      std::int64_t cls = 0;
+      if (m.capture() && !places.empty() && lands_on(places.front())) {
+        cls = 5;  // takes the checking piece
+      } else if (m.piece.royal()) {
+        cls = 4;
+      } else if (places.size() > 2 && std::any_of(places.begin() + 1, places.end() - 1, lands_on)) {
+        cls = 3;  // blocks the line
+      } else if (m.capture()) {
+        cls = 2;
+      } else {
+        cls = 1;
+      }
+      c.order = (cls << 44) + (m.capture() ? mvv_lva(m) : quiet_order(c.key, prev, ply));
+      if (c.key == tt_best) c.order += std::int64_t{1} << 50;
+      out.push_back(c);
+    }
+    std::stable_sort(out.begin(), out.end(),
+                     [](const Candidate& a, const Candidate& b) { return a.order > b.order; });
+    return out;
+  }
+
+  // In check (R1): every legal action (H2), in two stages.
+  //  1. Up to evasion_probe seeds, in evasion_seeds' order, each made into a
+  //     legal action by the completion rule (quick_action: the state machine
+  //     and C4's test - a seed whose completion leaves a royal capturable is
+  //     passed over), each searched as soon as it is built. A cutoff there
+  //     ends the node: a legal action that scores at least beta is a lower
+  //     bound whatever the other actions are, so the node is resolved and
+  //     needs no enumeration (and an action leading to a proven loss of the
+  //     opponent's is a Win proof, ∃).
+  //  2. No cutoff: E4's enumeration, exhaustive or capped, as before; the
+  //     successors not searched in stage 1 are searched. A Loss proof needs
+  //     the enumeration exhaustive and every child - of both stages - a
+  //     proven win of the opponent's (∀).
+  // At the horizon (depth 0) the question is only "is this a mate?": one
+  // legal action from stage 1's seeds answers no (an estimate leaf); only if
+  // none of them completes legally does E4's exhaustive detector decide.
   Node evasions(const GameState& s, int depth, int alpha, int beta, int ply, std::uint32_t prev,
-                int board_moves, std::uint64_t key, std::uint32_t tt_best) {
+                int board_moves, std::uint64_t key, std::uint32_t tt_best,
+                const std::optional<RoyalCapture>& witness) {
+    std::vector<Candidate> seeds;
+    if (opt.evasion_probe > 0) seeds = evasion_seeds(s, witness, tt_best, prev, ply);
+    const std::size_t probe = std::min(seeds.size(), opt.evasion_probe);
     if (depth == 0) {
       horizon_met = true;
+      ++st().horizon_mate_tests;
+      for (std::size_t i = 0; i < probe; ++i) {
+        const std::optional<BuiltAction> a = quick_action(s, seeds[i].seed);
+        if (stopped) return Node{};
+        if (a) {
+          ++st().horizon_probe_hits;  // a legal action: no mate (C5)
+          ++leaves.horizon_in_check;
+          return Node{evaluate(s), Proof{}};
+        }
+      }
+      const auto t0 = std::chrono::steady_clock::now();
       const MateResult r = detect_mate(s, Detector::Hypercuboid, detector_budget());
       st().horizon_mate_nodes += r.stats.nodes;
+      st().horizon_mate_seconds += seconds_since(t0);
       if (!account(r.stats)) return Node{};
       if (r.verdict == Outcome::Checkmate) {
+        ++st().horizon_mates;
+        st().horizon_mate_nodes_on_mates += r.stats.nodes;
         ++leaves.terminal;
         const Proof p = Proof::loss(0);
         export_proof(s, p);
@@ -727,12 +831,50 @@ struct Scanner::Impl {
       ++leaves.horizon_in_check;
       return Node{evaluate(s), Proof{}};
     }
+    ++st().evasion_visits;
+    const int alpha_orig = alpha;
+    Tally t;
+    // The successors searched so far, one child each (two actions may reach
+    // one state).
+    std::vector<GameState> searched;
+    const auto seen = [&](const GameState& r) {
+      const std::uint64_t k = r.zobrist();
+      for (const GameState& x : searched) {
+        if (x.zobrist() == k && same_position(x, r)) return true;
+      }
+      return false;
+    };
+    // Stage 1.
+    for (std::size_t i = 0; i < probe; ++i) {
+      const std::optional<BuiltAction> a = quick_action(s, seeds[i].seed);
+      if (stopped) return Node{};
+      if (!a || seen(a->successor)) continue;
+      ++st().probe_actions;
+      searched.push_back(a->successor);
+      const std::uint32_t k = move_key(representative(a->moves));
+      if (!child(a->successor, a->moves, k, depth, alpha, beta, ply, board_moves, t)) {
+        if (stopped) return Node{};
+        ++st().probe_cutoffs;
+        ++st().evasion_fail_highs;
+        return finish(s, depth, alpha_orig, beta, ply, prev, key, t, false, false);
+      }
+    }
+    // Stage 2.
     const std::size_t cap = opt.evasion_cap;
+    const auto t0 = std::chrono::steady_clock::now();
     const ActionList list = list_legal_actions(s, cap + 1, Detector::Hypercuboid, detector_budget());
     st().evasion_nodes += list.stats.nodes;
+    ++st().evasion_lists;
+    st().evasion_listed += list.actions.size();
+    st().evasion_seconds += seconds_since(t0);
     if (!account(list.stats)) return Node{};
     const bool exhaustive = list.stats.exhaustive && !list.reached_cap;
     if (exhaustive && list.actions.empty()) {
+      if (!searched.empty()) {
+        // Stage 1 built a legal action the exhaustive enumeration does not
+        // have: a contradiction in the rules code.
+        throw std::logic_error("scanner: E4 lists no legal action where the completion built one");
+      }
       ++leaves.terminal;  // checkmate (C5, R1): E4's exhaustive verdict
       const Proof p = Proof::loss(0);
       export_proof(s, p);
@@ -745,29 +887,15 @@ struct Scanner::Impl {
       ++st().capped_nodes;
     }
     std::vector<Candidate> cands;
-    {
-      std::vector<std::uint64_t> keys;
-      std::vector<const GameState*> seen;
-      for (const LegalAction& a : list.actions) {
-        // One child per distinct successor (two actions may reach one state).
-        bool dup = false;
-        const std::uint64_t k = a.result.zobrist();
-        for (std::size_t i = 0; i < keys.size(); ++i) {
-          if (keys[i] == k && same_position(*seen[i], a.result)) {
-            dup = true;
-            break;
-          }
-        }
-        if (dup) continue;
-        keys.push_back(k);
-        seen.push_back(&a.result);
-        Candidate c;
-        c.action = BuiltAction{a.moves, a.result};
-        const Move& rep = representative(a.moves);
-        c.seed = rep;
-        c.key = move_key(rep);
-        cands.push_back(std::move(c));
-      }
+    for (const LegalAction& a : list.actions) {
+      if (seen(a.result)) continue;
+      searched.push_back(a.result);
+      Candidate c;
+      c.action = BuiltAction{a.moves, a.result};
+      const Move& rep = representative(a.moves);
+      c.seed = rep;
+      c.key = move_key(rep);
+      cands.push_back(std::move(c));
     }
     for (Candidate& c : cands) {
       c.order = c.seed.capture() ? (std::int64_t{1} << 40) + mvv_lva(c.seed)
@@ -776,9 +904,7 @@ struct Scanner::Impl {
     }
     std::stable_sort(cands.begin(), cands.end(),
                      [](const Candidate& a, const Candidate& b) { return a.order > b.order; });
-    const int alpha_orig = alpha;
-    Tally t;
-    t.capped = !exhaustive;
+    t.capped = t.capped || !exhaustive;
     bool all = true;
     for (Candidate& c : cands) {
       if (!child(c.action->successor, c.action->moves, c.key, depth, alpha, beta, ply, board_moves,
@@ -794,6 +920,7 @@ struct Scanner::Impl {
       t.best = evaluate(s);
       ++leaves.horizon_in_check;
     }
+    if (t.best >= beta) ++st().evasion_fail_highs;
     return finish(s, depth, alpha_orig, beta, ply, prev, key, t, all, exhaustive);
   }
 
