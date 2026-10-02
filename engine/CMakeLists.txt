@@ -95,6 +95,7 @@ target_sources(t5d_core PRIVATE
 
 add_library(t5d SHARED src/capi.cpp)
 target_link_libraries(t5d PRIVATE t5d_core)
+target_sources(t5d PRIVATE src/capi_search.cpp)  # stage E6a: the search's C API
 target_compile_definitions(t5d PRIVATE T5D_BUILDING_DLL)
 if(WIN32)
   set_target_properties(t5d PROPERTIES PREFIX "")  # t5d.dll, not libt5d.dll
@@ -147,11 +148,14 @@ target_sources(t5d-tests PRIVATE
   tests/test_search.cpp)
 
 # Stage E6a's tests: the search's invariants (§15.4), self-play end to end,
-# t5d-play's records through t5d-gate.
+# t5d-play's records through t5d-gate, the search's C API (linked in, as
+# capi.cpp is).
 target_sources(t5d-tests PRIVATE
+  tests/test_capi_search.cpp
   tests/test_mcts.cpp
   tests/test_play_exe.cpp
-  tests/test_selfplay.cpp)
+  tests/test_selfplay.cpp
+  src/capi_search.cpp)
 
 add_executable(t5d-gate tools/t5d_gate.cpp)
 target_link_libraries(t5d-gate PRIVATE t5d_core)
