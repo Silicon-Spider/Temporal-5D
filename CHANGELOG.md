@@ -10,6 +10,17 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-02 - Engine: a turn number that does not count the turns is a warning
+
+- `engine/`: by default (`PgnOptions::turn_number_mismatch_is_error`, false) a turn
+  number that does not count the turns is kept in `PgnRecord::warnings` (and
+  `PgnReplay::warnings()`, printed by `t5d-gate`) and reading goes on; a turn
+  really missing still shows, since the next action's moves are checked like any
+  other. notation/aivsai (turn 25 written twice) now replays all 54 actions. The
+  same policy as the annotations below: the gate compares more, never less.
+- Spec: §11.0 "Running the gate" (H28: what the engine reads); the notation's
+  "Turns"; no spec text changes.
+
 ### 2026-10-02 - Engine: a disagreeing annotation is a warning, not a refusal
 
 - `engine/`: a `~`, `(>Lx)` or `(~Tx)` that disagrees with the state no longer

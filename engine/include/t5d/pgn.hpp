@@ -161,6 +161,12 @@ struct PgnOptions {
   /// action before it (the first action may have any number from 1). False
   /// ignores the numbers (the colours must alternate all the same).
   bool check_turn_numbers = true;
+  /// What a turn number that does not count the turns does. Default false:
+  /// reading goes on and the mismatch is kept in PgnRecord::warnings - a turn
+  /// number is bookkeeping, and a turn really missing still shows, as the
+  /// next action's moves are checked like any other. True: the record is
+  /// unreadable from there.
+  bool turn_number_mismatch_is_error = false;
 };
 
 // ---------------------------------------------------------------------------
@@ -273,6 +279,9 @@ struct PgnRecord {
   /// read, and where. `actions` then holds the actions before the one in which
   /// reading stopped; replaying the record ends there, Unreadable.
   std::optional<std::string> unreadable;
+  /// What the reader let pass (PgnOptions::turn_number_mismatch_is_error
+  /// false): what, and where, in the order met.
+  std::vector<std::string> warnings;
 
   /// The value of the header `name` (compared without regard to case: the
   /// specification writes "Board" and "Size" in its README and "variant" and
