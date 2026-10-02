@@ -1,0 +1,1097 @@
+// The tactical scanner (see t5d/scanner.hpp): node-capped alpha-beta over
+// forcing actions, a material eval, proofs and estimates kept apart. Rule IDs
+// refer to the rulebook, docs/rules/README.md. Written from the design spec
+// (§11.1-§11.3) and the rulebook; alpha-beta, MVV-LVA, killers, history and
+// continuation history are the textbook techniques (Chess Programming Wiki),
+// written afresh - no engine's code was consulted.
+
+#include "t5d/scanner.hpp"
+
+#include <algorithm>
+#include <array>
+#include <bit>
+#include <cstdint>
+#include <stdexcept>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "t5d/board.hpp"
+#include "t5d/check.hpp"
+#include "t5d/movegen.hpp"
+#include "t5d/multiverse.hpp"
+
+namespace t5d {
+
+// ---- proofs and the solved store ---------------------------------------------------
+
+std::string to_string(const Proof& proof) {
+  switch (proof.kind) {
+    case Proof::Kind::None: return "none";
+    case Proof::Kind::Win: return "win " + std::to_string(proof.distance);
+    case Proof::Kind::Loss: return "loss " + std::to_string(proof.distance);
+    case Proof::Kind::Draw: return "draw";
+  }
+  return "?";
+}
+
+std::optional<Proof> MemorySolvedStore::find(const GameState& position) const {
+  const auto it = index_.find(position.zobrist());
+  if (it == index_.end()) return std::nullopt;
+  for (const std::size_t i : it->second) {
+    if (same_position(entries_[i].position, position)) return entries_[i].proof;
+  }
+  return std::nullopt;
+}
+
+void MemorySolvedStore::put(const GameState& position, const Proof& proof) {
+  if (!proof.proven()) return;
+  std::vector<std::size_t>& slot = index_[position.zobrist()];
+  for (const std::size_t i : slot) {
+    Entry& e = entries_[i];
+    if (!same_position(e.position, position)) continue;
+    if (e.proof.kind != proof.kind) {
+      throw std::logic_error("solved store: contradictory proofs for one position (" +
+                             to_string(e.proof) + " and " + to_string(proof) +
+                             "): a false proof");
+    }
+    if (proof.distance < e.proof.distance) e.proof.distance = proof.distance;
+    return;
+  }
+  slot.push_back(entries_.size());
+  entries_.push_back(Entry{position, proof});
+}
+
+void MemorySolvedStore::clear() noexcept {
+  index_.clear();
+  entries_.clear();
+}
+
+// ---- the scanner -------------------------------------------------------------------------
+
+namespace {
+
+constexpr int kInfinity = kScanMate + 1;
+// Scores beyond this are mate scores (a mate within 1000 half-turns).
+constexpr int kMateBound = kScanMate - 1000;
+
+enum class Bound : std::uint8_t { Upper = 0, Lower, Exact };
+
+// The ordering key of a move: its piece, squares and displacement - the same
+// move on another timeline or turn shares a key (history generalises along
+// the 4D lattice).
+std::uint32_t move_key(const Move& m) noexcept {
+  std::uint64_t k = static_cast<std::uint64_t>(m.piece.as_moved().code());
+  k = k * 131 + static_cast<std::uint64_t>(static_cast<std::uint8_t>(m.from_square));
+  k = k * 131 + static_cast<std::uint64_t>(static_cast<std::uint8_t>(m.to_square));
+  k = k * 131 + static_cast<std::uint64_t>(static_cast<std::uint32_t>(m.to_timeline - m.from_timeline) & 0xFFu);
+  k = k * 131 + static_cast<std::uint64_t>(static_cast<std::uint32_t>(m.to_half_turn - m.from_half_turn) & 0xFFu);
+  k = k * 131 + static_cast<std::uint64_t>(m.flags & (Move::kCapture | Move::kBranching));
+  k ^= k >> 29;
+  k *= 0xBF58476D1CE4E5B9ull;
+  k ^= k >> 32;
+  const std::uint32_t key = static_cast<std::uint32_t>(k);
+  return key == 0 ? 1u : key;
+}
+
+int score_of(const Proof& p, int ply) noexcept {
+  switch (p.kind) {
+    case Proof::Kind::Win: return kScanMate - (ply + p.distance);
+    case Proof::Kind::Loss: return -(kScanMate - (ply + p.distance));
+    default: return 0;
+  }
+}
+
+// Mate scores are stored relative to the node (the usual adjustment).
+int to_tt(int score, int ply) noexcept {
+  if (score > kMateBound) return score + ply;
+  if (score < -kMateBound) return score - ply;
+  return score;
+}
+int from_tt(int score, int ply) noexcept {
+  if (score > kMateBound) return score - ply;
+  if (score < -kMateBound) return score + ply;
+  return score;
+}
+
+}  // namespace
+
+struct Scanner::Impl {
+  explicit Impl(const ScannerOptions& o, SolvedStore* s) : opt(o), store(s != nullptr ? s : &own) {
+    std::size_t n = 1;
+    while (n < opt.tt_entries) n <<= 1;
+    tt.assign(n, TTEntry{});
+    tt_mask = n - 1;
+    history.assign(std::size_t{1} << 14, 0);
+    conthist.assign(std::size_t{1} << 16, 0);
+    lists.resize(2);  // complete()'s and branch_threat()'s: never reallocated under them
+  }
+
+  struct TTEntry {
+    std::uint64_t key = 0;
+    std::int32_t score = 0;
+    std::int16_t depth = -1;
+    Bound bound = Bound::Upper;
+    bool horizon = false;  // the subtree met the depth limit
+    bool capped = false;   // the subtree held a capped node: not fully resolved
+    std::uint32_t best = 0;
+  };
+
+  // One action a node may search: how to build it, and its ordering score.
+  struct Candidate {
+    Move seed;
+    /// The action, once built (at once for an evasion from E4's listing).
+    std::optional<BuiltAction> action;
+    std::int64_t order = 0;
+    std::uint32_t key = 0;
+  };
+
+  struct Node {
+    int score = 0;
+    Proof proof;
+  };
+
+  ScannerOptions opt;
+  MemorySolvedStore own;
+  SolvedStore* store;
+
+  std::vector<TTEntry> tt;
+  std::size_t tt_mask = 0;
+  std::vector<std::array<std::uint32_t, 2>> killers;
+  std::vector<std::int32_t> history;
+  std::vector<std::int32_t> conthist;
+
+  // The scan in progress.
+  const ScanBudget* budget = nullptr;  // the caller's, during a scan
+  ScanStats* stats = nullptr;
+  ScanStats scratch_stats;  // for the tool functions, outside a scan
+  std::chrono::steady_clock::time_point start;
+  bool stopped = false;
+  bool charging = true;  // false: classify_leaves' measurement (not charged)
+  // The iteration in progress.
+  bool capped = false;
+  bool horizon_met = false;
+  int max_board_moves = 0;
+  LeafStats leaves;
+  std::vector<Move> root_best;
+
+  // -- budget -------------------------------------------------------------------------------
+
+  ScanStats& st() { return stats != nullptr ? *stats : scratch_stats; }
+
+  bool spend(std::uint64_t n = 1) {
+    if (!charging) {
+      st().measurement_nodes += n;
+      return true;
+    }
+    if (stopped) return false;
+    ScanStats& s = st();
+    if (stats != nullptr && s.nodes + n > budget->max_nodes) {
+      s.stopped_by_nodes = true;
+      stopped = true;
+      return false;
+    }
+    s.nodes += n;
+    if (stats != nullptr && budget->max_time && (s.nodes & 255u) < n &&
+        std::chrono::steady_clock::now() - start > *budget->max_time) {
+      s.stopped_by_time = true;
+      stopped = true;
+      return false;
+    }
+    return true;
+  }
+
+  std::uint64_t remaining() const {
+    if (stats == nullptr || !charging) return std::numeric_limits<std::uint64_t>::max();
+    return budget->max_nodes > stats->nodes ? budget->max_nodes - stats->nodes : 0;
+  }
+
+  SearchBudget detector_budget() const {
+    SearchBudget b;
+    b.max_nodes = remaining();
+    b.max_bytes = opt.detector_max_bytes;
+    if (stats != nullptr && charging && budget->max_time) {
+      const auto used = std::chrono::steady_clock::now() - start;
+      const auto left = *budget->max_time - std::chrono::duration_cast<std::chrono::nanoseconds>(used);
+      b.max_time = left.count() > 0 ? left : std::chrono::nanoseconds(0);
+    }
+    return b;
+  }
+
+  // Accounts an E4 search: its nodes are the scanner's. Returns false if it
+  // stopped on the scanner's budget (nodes or time): the scan must stop. A
+  // search stopped by its memory ceiling answers nothing, and the scan goes on.
+  bool account(const SearchStats& s) {
+    ScanStats& x = st();
+    ++x.detector_calls;
+    x.detector_nodes += s.nodes;
+    if (!charging) {
+      x.measurement_nodes += s.nodes;
+      return true;
+    }
+    x.nodes += s.nodes;
+    if (s.stopped_by_memory) {
+      x.stopped_by_memory = true;
+      return true;
+    }
+    if (s.stopped_by_budget && stats != nullptr) {
+      if (budget->max_time && std::chrono::steady_clock::now() - start > *budget->max_time) {
+        x.stopped_by_time = true;
+      } else {
+        x.stopped_by_nodes = true;
+      }
+      stopped = true;
+      return false;
+    }
+    return true;
+  }
+
+  void applied(GameState& s, const Move& m) {
+    ++st().applies;
+    s.apply(m);
+  }
+
+  // -- eval ------------------------------------------------------------------------------------
+
+  int material(const GameState& s, Colour c) const {
+    int total = 0;
+    for (const TimelineRef& t : s.multiverse().timelines()) {
+      const Board& b = *t->head();
+      for (int k = 0; k < kPieceKindCount; ++k) {
+        const int v = opt.values.value[static_cast<std::size_t>(k)];
+        if (v == 0) continue;
+        total += v * std::popcount(b.pieces(c, static_cast<PieceKind>(k)));
+      }
+    }
+    return total;
+  }
+
+  int evaluate(const GameState& s) const {
+    return material(s, s.to_move()) - material(s, opposite(s.to_move()));
+  }
+
+  int value(Piece p) const { return p.empty() ? 0 : opt.values.of(p.kind()); }
+
+  // -- the forcing set ---------------------------------------------------------------------
+
+  // The piece a move leaves on its destination.
+  static Piece arrived(const Move& m) {
+    return m.promotes() ? Piece(m.promotion, m.piece.colour()) : m.piece.as_moved();
+  }
+
+  // Whether a plain move within a board can be judged in place, over the
+  // multiverse before the move: it creates one board, and the rules read the
+  // history board it leaves behind as they read a playable one (the history
+  // flag only names a capture branching, and landability reads it only under
+  // Q8's and Q20's alternatives). Exact where it applies.
+  static bool in_place(const GameState& s, const Move& m) {
+    return m.physical() && !m.castle() && !m.en_passant() && s.rules().turn_zero_reachable &&
+           s.rules().inactive_history_is_destination;
+  }
+
+  // The multiverse after `m` with every board `m` created advanced by a pass
+  // (an unchanged copy with the mover to move again, no en-passant square):
+  // the place every forcing test below reads.
+  struct Passed {
+    Multiverse mv;
+    std::vector<int> inactive;
+    std::array<ScanSource, 2> sources{};
+    int count = 0;
+    int new_timeline = 0;  // a branch's
+  };
+
+  std::optional<Passed> materialise(const GameState& s, const Move& m) {
+    const Colour mover = s.to_move();
+    GameState t = s;
+    if (!spend()) return std::nullopt;
+    applied(t, m);
+    Passed out{t.multiverse(), t.inactive_timelines(), {}, 0, 0};
+    std::array<int, 2> created{m.from_timeline, 0};
+    int n = 1;
+    if (!m.physical()) {
+      out.new_timeline = mover == Colour::White ? out.mv.max_timeline() : out.mv.min_timeline();
+      created[1] = m.branching() ? out.new_timeline : m.to_timeline;
+      n = 2;
+    }
+    for (int i = 0; i < n; ++i) {
+      const int p = created[static_cast<std::size_t>(i)];
+      BoardBuilder pass(*out.mv.head(p));
+      pass.set_en_passant(kNoSquare);
+      out.mv.append_board(p, pass.publish());
+      out.sources[static_cast<std::size_t>(i)] =
+          ScanSource{p, out.mv.timeline(p)->last_half_turn(), out.mv.head(p)};
+    }
+    out.count = n;
+    return out;
+  }
+
+  // (b) in place (see in_place).
+  bool checks_in_place(const GameState& s, const Move& m) {
+    BoardBuilder b(*s.multiverse().board_at(m.from_timeline, m.from_half_turn));
+    b.remove(m.from_square);
+    b.put(m.to_square, arrived(m));
+    const BoardRef created = b.publish();
+    const ScanSource src{m.from_timeline, m.from_half_turn + 2, created.get()};
+    if (!spend()) return false;
+    ++st().scans;
+    return royal_capture_from(s.multiverse(), s.rules(), s.to_move(), s.inactive_timelines(),
+                              std::span<const ScanSource>(&src, 1));
+  }
+
+  // (b): a piece of the mover's on one of the passed boards can capture a
+  // royal of the opponent's.
+  bool checks_passed(const GameState& s, const Passed& p) {
+    if (!spend()) return false;
+    ++st().scans;
+    return royal_capture_from(
+        p.mv, s.rules(), s.to_move(), p.inactive,
+        std::span<const ScanSource>(p.sources.data(), static_cast<std::size_t>(p.count)));
+  }
+
+  // (c): a branch whose new timeline, passed, holds an immediate threat.
+  bool threat_passed(const GameState& s, const Move& m, const Passed& p) {
+    if (opt.branch_threat == BranchThreat::None || !m.branching()) return false;
+    if (!spend()) return false;
+    ++st().scans;
+    MoveList& out = scratch_list(1);
+    out.clear();
+    append_moves_of(p.mv, s.rules(), s.to_move(), p.new_timeline, out, p.inactive);
+    for (const Move& r : out) {
+      if (!r.capture() || r.captured.empty()) continue;
+      if (opt.branch_threat == BranchThreat::ArrivalCapture && r.from_square != m.to_square) continue;
+      if (value(r.captured) >= opt.branch_threat_value) return true;
+    }
+    return false;
+  }
+
+  bool checks(const GameState& s, const Move& m) {
+    if (in_place(s, m)) return checks_in_place(s, m);
+    const std::optional<Passed> p = materialise(s, m);
+    return p && checks_passed(s, *p);
+  }
+
+  // Whether `m` is forcing, and of which class (0 not forcing, 1 capture,
+  // 2 check, 3 branch threat, 4 promotion).
+  int forcing_class(const GameState& s, const Move& m) {
+    if (m.capture()) return 1;
+    const bool threat_test = m.branching() && opt.branch_threat != BranchThreat::None;
+    if (in_place(s, m)) {
+      if (opt.checks && checks_in_place(s, m)) return 2;
+    } else if (opt.checks || threat_test) {
+      const std::optional<Passed> p = materialise(s, m);
+      if (!p) return 0;
+      if (opt.checks && checks_passed(s, *p)) return 2;
+      if (threat_test && threat_passed(s, m, *p)) return 3;
+    }
+    if (stopped) return 0;
+    if (opt.promotions_forcing && m.promotes()) return 4;
+    return 0;
+  }
+
+  std::vector<MoveList> lists;
+  MoveList& scratch_list(std::size_t i) {
+    if (lists.size() <= i) lists.resize(i + 1);
+    return lists[i];
+  }
+
+  // -- completion -------------------------------------------------------------------------------
+
+  // The completion rule's choice among a board's moves.
+  std::size_t choose(const MoveList& moves) const {
+    std::size_t best = 0;
+    if (opt.completion == Completion::Greedy) {
+      int top = -1;
+      for (std::size_t i = 0; i < moves.size(); ++i) {
+        const Move& m = moves[i];
+        if (!m.capture()) continue;
+        const int mvv = value(m.captured) * 64 - (m.piece.royal() ? 0 : value(m.piece) / 16);
+        if (mvv > top) {
+          top = mvv;
+          best = i;
+        }
+      }
+      if (top >= 0) return best;
+    }
+    // The quietest: a move within the board capturing nothing, by the least
+    // valuable piece (royals last), in generator order.
+    long rank = -1;
+    for (std::size_t i = 0; i < moves.size(); ++i) {
+      const Move& m = moves[i];
+      long r = (m.piece.royal() ? 100000L : static_cast<long>(value(m.piece)));
+      if (!m.physical()) r += 1000000L;
+      if (m.capture()) r += 2000000L;
+      if (rank < 0 || r < rank) {
+        rank = r;
+        best = i;
+      }
+    }
+    return best;
+  }
+
+  std::optional<BuiltAction> complete(const GameState& start_state, const Move& seed) {
+    GameState after_seed = start_state;
+    if (!spend()) return std::nullopt;
+    applied(after_seed, seed);
+    if (opt.completion != Completion::Detector) {
+      GameState t = after_seed;
+      std::vector<Move> moves{seed};
+      bool ok = true;
+      MoveList& board_moves = scratch_list(0);
+      while (!t.obligations_met()) {
+        if (!t.may_move()) {
+          ok = false;
+          break;
+        }
+        const std::vector<int> mandatory = t.mandatory_timelines();
+        board_moves.clear();
+        append_board_moves(t, mandatory.front(), board_moves);
+        if (board_moves.empty()) {
+          ok = false;  // the board cannot be played from itself: E4 below
+          break;
+        }
+        const Move m = board_moves[choose(board_moves)];
+        if (!spend()) return std::nullopt;
+        applied(t, m);
+        moves.push_back(m);
+      }
+      if (ok) {
+        if (!spend()) return std::nullopt;
+        ++st().scans;
+        if (royals_safe(t)) {  // C4, R1
+          t.submit(CheckRuling::none());  // legal: tested just above
+          return BuiltAction{std::move(moves), std::move(t)};
+        }
+      }
+      ++st().completion_fallbacks;
+    }
+    // E4's first legal finish from the state after the seed, within the
+    // fallback's own cap: a seed it cannot finish in time is dropped.
+    SearchBudget b = detector_budget();
+    const bool local_cap = b.max_nodes > opt.fallback_max_nodes;
+    if (local_cap) b.max_nodes = opt.fallback_max_nodes;
+    const ActionList l = list_legal_actions(after_seed, 1, Detector::Hypercuboid, b);
+    if (charging) st().fallback_nodes += l.stats.nodes;
+    if (local_cap && l.stats.stopped_by_budget && !l.stats.stopped_by_memory &&
+        l.stats.nodes >= opt.fallback_max_nodes) {
+      // Its own cap, not the scan's budget: charge the nodes, drop the seed.
+      ScanStats& x = st();
+      ++x.detector_calls;
+      x.detector_nodes += l.stats.nodes;
+      if (charging) {
+        x.nodes += l.stats.nodes;
+      } else {
+        x.measurement_nodes += l.stats.nodes;
+      }
+      return std::nullopt;
+    }
+    if (!account(l.stats) || l.actions.empty()) return std::nullopt;
+    std::vector<Move> moves{seed};
+    moves.insert(moves.end(), l.actions.front().moves.begin(), l.actions.front().moves.end());
+    return BuiltAction{std::move(moves), l.actions.front().result};
+  }
+
+  // -- ordering ------------------------------------------------------------------------------------
+
+  std::int64_t mvv_lva(const Move& m) const {
+    return static_cast<std::int64_t>(value(m.captured)) * 64 -
+           (m.piece.royal() ? 0 : static_cast<std::int64_t>(value(m.piece)) / 16);
+  }
+
+  std::int64_t quiet_order(std::uint32_t key, std::uint32_t prev, int ply) const {
+    std::int64_t o = 0;
+    if (static_cast<std::size_t>(ply) < killers.size()) {
+      if (killers[static_cast<std::size_t>(ply)][0] == key) o += 1'000'000;
+      else if (killers[static_cast<std::size_t>(ply)][1] == key) o += 900'000;
+    }
+    o += history[key & (history.size() - 1)];
+    o += conthist[(key ^ (prev * 0x9E3779B1u)) & (conthist.size() - 1)];
+    return o;
+  }
+
+  void reward(std::uint32_t key, std::uint32_t prev, int ply, int depth, bool capture) {
+    if (capture) return;  // MVV-LVA orders captures
+    if (killers.size() <= static_cast<std::size_t>(ply)) killers.resize(static_cast<std::size_t>(ply) + 1, {0, 0});
+    auto& k = killers[static_cast<std::size_t>(ply)];
+    if (k[0] != key) {
+      k[1] = k[0];
+      k[0] = key;
+    }
+    const std::int32_t bonus = depth * depth;
+    std::int32_t& h = history[key & (history.size() - 1)];
+    h = std::min(h + bonus, 1 << 20);
+    std::int32_t& c = conthist[(key ^ (prev * 0x9E3779B1u)) & (conthist.size() - 1)];
+    c = std::min(c + bonus, 1 << 20);
+  }
+
+  // An action's representative move: its best capture (MVV-LVA), else its
+  // first move.
+  const Move& representative(const std::vector<Move>& moves) const {
+    const Move* best = &moves.front();
+    for (const Move& m : moves) {
+      if (m.capture() && (!best->capture() || mvv_lva(m) > mvv_lva(*best))) best = &m;
+    }
+    return *best;
+  }
+
+  // -- TT ------------------------------------------------------------------------------------------
+
+  TTEntry* probe(std::uint64_t key) {
+    TTEntry& e = tt[static_cast<std::size_t>(key) & tt_mask];
+    return e.key == key && e.depth >= 0 ? &e : nullptr;
+  }
+  void save(std::uint64_t key, int depth, int score, Bound bound, std::uint32_t best, bool horizon,
+            bool was_capped, int ply) {
+    TTEntry& e = tt[static_cast<std::size_t>(key) & tt_mask];  // always replace: deterministic
+    e.key = key;
+    e.depth = static_cast<std::int16_t>(depth);
+    e.score = to_tt(score, ply);
+    e.bound = bound;
+    e.best = best;
+    e.horizon = horizon;
+    e.capped = was_capped;
+  }
+
+  // -- proofs ------------------------------------------------------------------------------------
+
+  void export_proof(const GameState& s, const Proof& p) {
+    store->put(s, p);  // H19: at once, never only in the TT
+    ++st().proofs_exported;
+  }
+
+  // -- the search ----------------------------------------------------------------------------------
+
+  // The triangular principal-line table: pv[ply] is the best line found from
+  // the node at that ply, its actions in order.
+  std::vector<std::vector<std::vector<Move>>> pv;
+
+  std::vector<std::vector<Move>>& pv_at(int ply) {
+    if (pv.size() <= static_cast<std::size_t>(ply) + 1) pv.resize(static_cast<std::size_t>(ply) + 2);
+    return pv[static_cast<std::size_t>(ply)];
+  }
+
+  void note_pv(int ply, const std::vector<Move>& moves) {
+    std::vector<std::vector<Move>>& here = pv_at(ply);
+    const std::vector<std::vector<Move>>& below = pv[static_cast<std::size_t>(ply) + 1];
+    here.assign(1, moves);
+    here.insert(here.end(), below.begin(), below.end());
+    if (ply == 0) root_best = moves;
+  }
+
+  bool quiet_now(const GameState& s) {
+    // Measurement only: not charged, not counted in the nodes (nor in the
+    // scan's tallies of applies and scans).
+    const auto t0 = std::chrono::steady_clock::now();
+    const bool was = charging;
+    const std::uint64_t applies = st().applies;
+    const std::uint64_t scans = st().scans;
+    charging = false;
+    bool quiet = !in_check(s);
+    if (quiet) {
+      MoveList moves;
+      generate_moves(s, moves);
+      for (const Move& m : moves) {
+        if (forcing_class(s, m) != 0) {
+          quiet = false;
+          break;
+        }
+      }
+    }
+    charging = was;
+    st().applies = applies;
+    st().scans = scans;
+    st().measurement_seconds +=
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    return quiet;
+  }
+
+  Node search(const GameState& s, int depth, int alpha, int beta, int ply, std::uint32_t prev,
+              int board_moves) {
+    ++st().positions;
+    max_board_moves = std::max(max_board_moves, board_moves);
+    pv_at(ply).clear();
+    if (const std::optional<Proof> p = store->find(s)) {
+      ++st().solved_hits;
+      ++leaves.solved;
+      return Node{score_of(*p, ply), *p};
+    }
+    const std::uint64_t key = s.zobrist();
+    std::uint32_t tt_best = 0;
+    if (const TTEntry* e = probe(key)) {
+      tt_best = e->best;
+      if (ply > 0 && e->depth >= depth) {
+        const int sc = from_tt(e->score, ply);
+        if (e->bound == Bound::Exact || (e->bound == Bound::Lower && sc >= beta) ||
+            (e->bound == Bound::Upper && sc <= alpha)) {
+          ++st().tt_hits;
+          if (e->horizon) horizon_met = true;
+          if (e->capped) capped = true;
+          return Node{sc, Proof{}};
+        }
+      }
+    }
+    if (!spend()) return Node{};
+    ++st().scans;
+    const bool check = in_check(s);  // R1
+    return check ? evasions(s, depth, alpha, beta, ply, prev, board_moves, key, tt_best)
+                 : forcing(s, depth, alpha, beta, ply, prev, board_moves, key, tt_best);
+  }
+
+  // A child's result, for this node.
+  struct Tally {
+    int best = -kInfinity;
+    std::vector<Move> best_moves;
+    std::uint32_t best_key = 0;
+    Proof win;            // the shortest win found (some child is a proven loss)
+    bool all_lost = true; // every child searched so far is a proven win for the opponent
+    int longest_loss = 0;
+    bool horizon = false;  // some child's subtree met the depth limit
+    bool capped = false;   // ... or held a capped node, or this node is capped
+  };
+
+  // Searches one child; false: stop searching this node's children (the scan
+  // stopped, a cutoff, or the fastest mate).
+  bool child(const GameState& successor, const std::vector<Move>& moves, std::uint32_t key,
+             int depth, int& alpha, int beta, int ply, int board_moves, Tally& t) {
+    const bool horizon_before = horizon_met;
+    const bool capped_before = capped;
+    horizon_met = false;
+    capped = false;
+    const Node r = search(successor, depth - 1, -beta, -alpha, ply + 1, key,
+                          board_moves + static_cast<int>(moves.size()));
+    t.horizon = t.horizon || horizon_met;
+    t.capped = t.capped || capped;
+    horizon_met = horizon_met || horizon_before;
+    capped = capped || capped_before;
+    if (stopped) return false;
+    const int score = -r.score;
+    if (r.proof.kind == Proof::Kind::Loss) {
+      if (!t.win.proven() || r.proof.distance + 1 < t.win.distance) {
+        t.win = Proof::win(r.proof.distance + 1);
+      }
+    }
+    if (r.proof.kind == Proof::Kind::Win) {
+      t.longest_loss = std::max(t.longest_loss, r.proof.distance + 1);
+    } else {
+      t.all_lost = false;
+    }
+    if (score > t.best) {
+      t.best = score;
+      t.best_moves = moves;
+      t.best_key = key;
+      note_pv(ply, moves);
+    }
+    if (score > alpha) alpha = score;
+    if (t.win.proven() && t.win.distance == 1) return false;  // the fastest mate there is
+    return alpha < beta;
+  }
+
+  Node finish(const GameState& s, int depth, int alpha_orig, int beta, int ply, std::uint32_t prev,
+              std::uint64_t key, Tally& t, bool all_searched, bool exhaustive) {
+    Proof proof;
+    if (t.win.proven()) {
+      proof = t.win;  // ∃: one action leads to a proven loss of the opponent's
+    } else if (exhaustive && all_searched && t.all_lost) {
+      proof = Proof::loss(t.longest_loss);  // ∀: every legal action loses, proven
+    }
+    if (proof.proven()) {
+      export_proof(s, proof);
+      t.best = score_of(proof, ply);
+    }
+    const Bound bound = t.best <= alpha_orig ? Bound::Upper
+                        : t.best >= beta      ? Bound::Lower
+                                              : Bound::Exact;
+    if (t.best >= beta && !t.best_moves.empty()) {
+      reward(t.best_key, prev, ply, depth, representative(t.best_moves).capture());
+    }
+    save(key, depth, t.best, bound, t.best_key, t.horizon, t.capped, ply);
+    if (t.horizon) horizon_met = true;
+    if (t.capped) capped = true;
+    return Node{t.best, proof};
+  }
+
+  // In check (R1): every legal action (H2).
+  Node evasions(const GameState& s, int depth, int alpha, int beta, int ply, std::uint32_t prev,
+                int board_moves, std::uint64_t key, std::uint32_t tt_best) {
+    if (depth == 0) {
+      horizon_met = true;
+      const MateResult r = detect_mate(s, Detector::Hypercuboid, detector_budget());
+      st().horizon_mate_nodes += r.stats.nodes;
+      if (!account(r.stats)) return Node{};
+      if (r.verdict == Outcome::Checkmate) {
+        ++leaves.terminal;
+        const Proof p = Proof::loss(0);
+        export_proof(s, p);
+        return Node{score_of(p, ply), p};
+      }
+      if (r.verdict == Outcome::Unknown) capped = true;  // its memory ceiling: unresolved
+      ++leaves.horizon_in_check;
+      return Node{evaluate(s), Proof{}};
+    }
+    const std::size_t cap = opt.evasion_cap;
+    const ActionList list = list_legal_actions(s, cap + 1, Detector::Hypercuboid, detector_budget());
+    st().evasion_nodes += list.stats.nodes;
+    if (!account(list.stats)) return Node{};
+    const bool exhaustive = list.stats.exhaustive && !list.reached_cap;
+    if (exhaustive && list.actions.empty()) {
+      ++leaves.terminal;  // checkmate (C5, R1): E4's exhaustive verdict
+      const Proof p = Proof::loss(0);
+      export_proof(s, p);
+      return Node{score_of(p, ply), p};
+    }
+    if (!exhaustive) {
+      // Capped (or E4's memory ceiling): the actions listed so far are
+      // searched - an estimate, never a loss proof.
+      capped = true;
+      ++st().capped_nodes;
+    }
+    std::vector<Candidate> cands;
+    {
+      std::vector<std::uint64_t> keys;
+      std::vector<const GameState*> seen;
+      for (const LegalAction& a : list.actions) {
+        // One child per distinct successor (two actions may reach one state).
+        bool dup = false;
+        const std::uint64_t k = a.result.zobrist();
+        for (std::size_t i = 0; i < keys.size(); ++i) {
+          if (keys[i] == k && same_position(*seen[i], a.result)) {
+            dup = true;
+            break;
+          }
+        }
+        if (dup) continue;
+        keys.push_back(k);
+        seen.push_back(&a.result);
+        Candidate c;
+        c.action = BuiltAction{a.moves, a.result};
+        const Move& rep = representative(a.moves);
+        c.seed = rep;
+        c.key = move_key(rep);
+        cands.push_back(std::move(c));
+      }
+    }
+    for (Candidate& c : cands) {
+      c.order = c.seed.capture() ? (std::int64_t{1} << 40) + mvv_lva(c.seed)
+                                 : quiet_order(c.key, prev, ply);
+      if (c.key == tt_best) c.order += std::int64_t{1} << 50;
+    }
+    std::stable_sort(cands.begin(), cands.end(),
+                     [](const Candidate& a, const Candidate& b) { return a.order > b.order; });
+    const int alpha_orig = alpha;
+    Tally t;
+    t.capped = !exhaustive;
+    bool all = true;
+    for (Candidate& c : cands) {
+      if (!child(c.action->successor, c.action->moves, c.key, depth, alpha, beta, ply, board_moves,
+                 t)) {
+        if (stopped) return Node{};
+        all = (&c == &cands.back());
+        break;
+      }
+    }
+    if (t.best == -kInfinity) {
+      // E4 stopped at its memory ceiling before listing any action: an
+      // estimate.
+      t.best = evaluate(s);
+      ++leaves.horizon_in_check;
+    }
+    return finish(s, depth, alpha_orig, beta, ply, prev, key, t, all, exhaustive);
+  }
+
+  bool stand_pat_on(const GameState& s) const {
+    switch (opt.stand_pat) {
+      case StandPat::On: return true;
+      case StandPat::Off: return false;
+      case StandPat::OffWhereObligationsBind: return s.mandatory_count() < opt.stand_pat_bind_boards;
+    }
+    return true;
+  }
+
+  // Not in check: stand-pat, then the forcing actions in stages.
+  Node forcing(const GameState& s, int depth, int alpha, int beta, int ply, std::uint32_t prev,
+               int board_moves, std::uint64_t key, std::uint32_t tt_best) {
+    const int stand = evaluate(s);
+    if (depth == 0) {
+      horizon_met = true;
+      ++leaves.horizon;
+      if (opt.classify_leaves && quiet_now(s)) ++leaves.horizon_quiet;
+      return Node{stand, Proof{}};
+    }
+    const bool pat = stand_pat_on(s);
+    const int alpha_orig = alpha;
+    if (pat) {
+      if (stand >= beta) {
+        ++leaves.stand_pat_cutoffs;
+        if (opt.classify_leaves && quiet_now(s)) ++leaves.stand_pat_quiet;
+        return Node{stand, Proof{}};  // an estimate: the opponent may decline
+      }
+      alpha = std::max(alpha, stand);
+    }
+    Tally t;
+    if (pat) t.best = stand;
+    t.all_lost = false;  // not every legal action is searched: no ∀ proof here
+    MoveList all_moves;
+    generate_moves(s, all_moves);
+    bool any = false;
+    std::vector<std::uint64_t> done;
+    // Stage 1: captures, MVV-LVA (the TT's move first).
+    std::vector<Candidate> stage;
+    for (const Move& m : all_moves) {
+      if (!m.capture()) continue;
+      Candidate c;
+      c.seed = m;
+      c.key = move_key(m);
+      c.order = mvv_lva(m) + (c.key == tt_best ? (std::int64_t{1} << 40) : 0);
+      stage.push_back(c);
+    }
+    bool go_on = true;
+    const auto run_stage = [&](std::vector<Candidate>& cands) {
+      std::stable_sort(cands.begin(), cands.end(),
+                       [](const Candidate& a, const Candidate& b) { return a.order > b.order; });
+      for (Candidate& c : cands) {
+        std::optional<BuiltAction> a = complete(s, c.seed);
+        if (stopped) return;
+        if (!a) continue;
+        const std::uint64_t k = a->successor.zobrist();
+        if (std::find(done.begin(), done.end(), k) != done.end()) continue;
+        done.push_back(k);
+        any = true;
+        if (!child(a->successor, a->moves, c.key, depth, alpha, beta, ply, board_moves, t)) {
+          go_on = false;
+          return;
+        }
+      }
+    };
+    run_stage(stage);
+    if (stopped) return Node{};
+    // Stage 2: checks; stage 3: branch threats; stage 4: promotions - killers,
+    // history and continuation history first.
+    if (go_on) {
+      stage.clear();
+      for (const Move& m : all_moves) {
+        if (m.capture()) continue;
+        const int cls = forcing_class(s, m);
+        if (stopped) return Node{};
+        if (cls == 0) continue;
+        Candidate c;
+        c.seed = m;
+        c.key = move_key(m);
+        c.order = (static_cast<std::int64_t>(5 - cls) << 44) + quiet_order(c.key, prev, ply) +
+                  (c.key == tt_best ? (std::int64_t{1} << 42) : 0);
+        stage.push_back(c);
+      }
+      run_stage(stage);
+      if (stopped) return Node{};
+    }
+    if (!any) {
+      // No forcing action: a quiet node - unless no legal action at all.
+      if (opt.quiet_stalemate_test) {
+        const MateResult r = detect_mate(s, Detector::Hypercuboid, detector_budget());
+        st().stalemate_test_nodes += r.stats.nodes;
+        if (!account(r.stats)) return Node{};
+        if (r.verdict == Outcome::Stalemate) {
+          ++leaves.terminal;
+          const Proof p = Proof::draw();  // C5, C13: E4's exhaustive verdict
+          export_proof(s, p);
+          return Node{0, p};
+        }
+        if (r.verdict == Outcome::Checkmate) {
+          // Not in check, so impossible (C5): a contradiction in the rules code.
+          throw std::logic_error("scanner: a checkmate verdict without check");
+        }
+        if (r.verdict == Outcome::Unknown) capped = true;
+      }
+      ++leaves.quiet;
+      return Node{stand, Proof{}};
+    }
+    if (t.best == -kInfinity) t.best = stand;  // stand-pat off, every child failed? (never)
+    return finish(s, depth, alpha_orig, beta, ply, prev, key, t, false, false);
+  }
+
+  // -- iterative deepening ------------------------------------------------------------------------
+
+  ScanResult scan(const GameState& root, const ScanBudget& b) {
+    ScanResult result;
+    budget = &b;
+    stats = &result.stats;
+    start = std::chrono::steady_clock::now();
+    stopped = false;
+    charging = true;
+    for (int d = 1; d <= opt.max_depth; ++d) {
+      capped = false;
+      horizon_met = false;
+      max_board_moves = 0;
+      leaves = LeafStats{};
+      pv.clear();
+      root_best.clear();
+      const Node r = search(root, d, -kInfinity, kInfinity, 0, 0, 0);
+      IterationStats it;
+      it.depth = d;
+      it.completed = !stopped;
+      it.capped = capped;
+      it.exhausted = !stopped && !horizon_met;
+      it.score = r.score;
+      it.proof = stopped ? Proof{} : r.proof;
+      it.nodes = result.stats.nodes;
+      it.positions = result.stats.positions;
+      it.max_board_moves = max_board_moves;
+      it.leaves = leaves;
+      it.seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+      if (!stopped && !pv.empty()) {
+        int moves = 0;
+        for (const std::vector<Move>& a : pv.front()) moves += static_cast<int>(a.size());
+        it.pv_board_moves = moves;
+        it.pv_half_turns = static_cast<int>(pv.front().size());
+      }
+      result.iterations.push_back(it);
+      if (stopped) break;
+      result.completed_depth = d;
+      if (!capped) result.resolved_depth = d;
+      result.score = r.score;
+      result.best_action = root_best;
+      if (r.proof.proven()) break;
+      if (it.exhausted) {
+        result.exhausted = true;
+        break;
+      }
+    }
+    // A proof found by an iteration the budget then stopped is still a proof
+    // (its own subtree was complete): the store has it.
+    if (const std::optional<Proof> p = store->find(root)) result.proof = *p;
+    result.stats.seconds =
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+    stats = nullptr;
+    budget = nullptr;
+    stopped = false;
+    return result;
+  }
+};
+
+Scanner::Scanner(const ScannerOptions& options, SolvedStore* store)
+    : impl_(std::make_unique<Impl>(options, store)) {}
+Scanner::~Scanner() = default;
+
+ScanResult Scanner::scan(const GameState& root, const ScanBudget& budget) {
+  return impl_->scan(root, budget);
+}
+
+void Scanner::clear() {
+  std::fill(impl_->tt.begin(), impl_->tt.end(), Impl::TTEntry{});
+  impl_->killers.clear();
+  std::fill(impl_->history.begin(), impl_->history.end(), 0);
+  std::fill(impl_->conthist.begin(), impl_->conthist.end(), 0);
+}
+
+const ScannerOptions& Scanner::options() const noexcept { return impl_->opt; }
+SolvedStore& Scanner::store() noexcept { return *impl_->store; }
+
+int Scanner::evaluate(const GameState& state) const { return impl_->evaluate(state); }
+
+MoveList Scanner::forcing_moves(const GameState& turn_start) {
+  MoveList moves;
+  generate_moves(turn_start, moves);
+  MoveList out;
+  for (const Move& m : moves) {
+    if (impl_->forcing_class(turn_start, m) != 0) out.push_back(m);
+  }
+  return out;
+}
+
+bool Scanner::has_forcing_move(const GameState& turn_start) {
+  MoveList moves;
+  generate_moves(turn_start, moves);
+  for (const Move& m : moves) {
+    if (impl_->forcing_class(turn_start, m) != 0) return true;
+  }
+  return false;
+}
+
+bool Scanner::checks(const GameState& turn_start, const Move& move) {
+  return impl_->checks(turn_start, move);
+}
+
+std::optional<BuiltAction> Scanner::complete(const GameState& turn_start, const Move& seed) {
+  return impl_->complete(turn_start, seed);
+}
+
+// ---- stand-pat validity ------------------------------------------------------------------------
+
+StandPatVerdict stand_pat_validity(const GameState& q, const ScannerOptions& options,
+                                   const StandPatCheck& check) {
+  StandPatVerdict v;
+  v.mandatory_boards = q.mandatory_count();
+  Scanner probe(options);
+  if (in_check(q) || probe.has_forcing_move(q)) return v;  // NotQuiet
+  v.eval = probe.evaluate(q);
+  const std::size_t most = static_cast<std::size_t>(std::max(check.max_actions, 1));
+  // The actions: every one, when there are few enough; else a sample.
+  std::vector<GameState> successors;
+  const auto add = [&](const GameState& s) {
+    for (const GameState& t : successors) {
+      if (t.zobrist() == s.zobrist() && same_position(t, s)) return;
+    }
+    successors.push_back(s);
+  };
+  SearchBudget lb = SearchBudget::nodes(200000);
+  lb.max_bytes = options.detector_max_bytes;
+  const ActionList all = list_legal_actions(q, most + 1, Detector::Hypercuboid, lb);
+  v.nodes += all.stats.nodes;
+  if (all.stats.exhaustive && !all.reached_cap) {
+    if (all.actions.empty()) {
+      v.kind = StandPatVerdict::Kind::NoAction;
+      v.exhaustive = true;
+      return v;
+    }
+    for (const LegalAction& a : all.actions) add(a.result);
+    v.exhaustive = true;
+  } else {
+    MoveList moves;
+    generate_moves(q, moves);
+    for (const Move& m : moves) {
+      if (successors.size() >= most) break;
+      if (const std::optional<BuiltAction> a = probe.complete(q, m)) add(a->successor);
+    }
+    for (const LegalAction& a : all.actions) {
+      if (successors.size() >= most) break;
+      add(a.result);
+    }
+  }
+  ScannerOptions reply = options;
+  reply.max_depth = check.reply_depth;
+  reply.classify_leaves = false;
+  for (const GameState& s : successors) {
+    Scanner scanner(reply);
+    const ScanResult r = scanner.scan(s, ScanBudget::nodes(check.reply_nodes));
+    v.nodes += r.stats.nodes;
+    ++v.actions;
+    int for_mover = 0;
+    bool known = true;
+    if (r.proof.kind == Proof::Kind::Win) {
+      for_mover = -kScanMate;
+    } else if (r.proof.kind == Proof::Kind::Loss) {
+      for_mover = kScanMate;
+    } else if (r.proof.kind == Proof::Kind::Draw) {
+      for_mover = 0;
+    } else if (r.exhausted || r.completed_depth >= check.reply_depth) {
+      for_mover = -r.score;
+    } else {
+      known = false;
+    }
+    if (!known) {
+      ++v.unknown;
+    } else if (for_mover >= v.eval) {
+      ++v.holding;
+    } else {
+      ++v.losing;
+    }
+  }
+  if (v.holding > 0) {
+    v.kind = StandPatVerdict::Kind::Valid;
+  } else if (v.unknown > 0 || v.actions == 0) {
+    v.kind = StandPatVerdict::Kind::Undetermined;
+  } else {
+    v.kind = StandPatVerdict::Kind::Invalid;
+  }
+  return v;
+}
+
+}  // namespace t5d

@@ -123,6 +123,27 @@ std::optional<RoyalCapture> find_royal_capture(const Multiverse& multiverse,
                                                const RuleOptions& rules, Colour attacker,
                                                std::span<const int> inactive_timelines = {});
 
+/// A board a royal-capture scan reads as one of the attacker's playable boards
+/// at (timeline, half_turn) - a place the multiverse need not hold: what the
+/// scanner (t5d/scanner.hpp) asks of the boards a move would create, advanced
+/// by a pass. `board` is the board's content (its size the multiverse's).
+struct ScanSource {
+  int timeline = 0;
+  int half_turn = 0;
+  const Board* board = nullptr;
+};
+
+/// Whether a piece of `attacker` standing on one of `sources` can capture a
+/// royal piece of the other colour, by royal_capture_exists' rules - the same
+/// lines, destinations and landing rules - every place but the source's own
+/// board read from `multiverse`. Only the sources are scanned, not the
+/// multiverse's playable boards. A source's place is not added to the
+/// multiverse: no line from another source crosses it, and a board the
+/// multiverse holds at a source's place is read as the multiverse has it.
+bool royal_capture_from(const Multiverse& multiverse, const RuleOptions& rules, Colour attacker,
+                        std::span<const int> inactive_timelines,
+                        std::span<const ScanSource> sources);
+
 // ---------------------------------------------------------------------------
 // Check status (R1, C6)
 // ---------------------------------------------------------------------------
