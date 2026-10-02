@@ -173,9 +173,20 @@ if(WIN32)
   target_link_libraries(t5d-bench PRIVATE advapi32)  # RegGetValueA: the CPU's name
 endif()
 
-# Stage E5b: the tactical scanner and its tests.
+# Stage E5b: the tactical scanner and its tests; experiment 6b's tool.
 target_sources(t5d_core PRIVATE src/scanner.cpp)
 target_sources(t5d-tests PRIVATE tests/test_scanner.cpp)
+add_executable(t5d-scan6b tools/t5d_scan6b.cpp)
+target_link_libraries(t5d-scan6b PRIVATE t5d_tools Threads::Threads)
+target_compile_definitions(t5d-scan6b PRIVATE
+  "T5D_BUILD_TYPE=\"${CMAKE_BUILD_TYPE}\""
+  "T5D_CXX_FLAGS=\"${T5D_FLAGS_TEXT}\"")
+if(WIN32)
+  target_link_libraries(t5d-scan6b PRIVATE advapi32)  # RegGetValueA: the CPU's name
+endif()
+if(MINGW)
+  target_link_options(t5d-scan6b PRIVATE -static)
+endif()
 
 # ---- MinGW: no dependence on the toolchain's runtime DLLs --------------------------
 #

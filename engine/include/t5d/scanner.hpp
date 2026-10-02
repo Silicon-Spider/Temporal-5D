@@ -344,8 +344,10 @@ struct ScanStats {
   std::uint64_t proofs_exported = 0;
   std::uint64_t completion_fallbacks = 0;
   std::uint64_t capped_nodes = 0;
-  /// classify_leaves' work, not charged to the budget.
+  /// classify_leaves' work, not charged to the budget, and its wall time
+  /// (for a caller timing the search without it).
   std::uint64_t measurement_nodes = 0;
+  double measurement_seconds = 0;
   bool stopped_by_nodes = false;
   bool stopped_by_time = false;
   bool stopped_by_memory = false;

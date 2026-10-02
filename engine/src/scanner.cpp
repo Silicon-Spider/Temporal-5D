@@ -162,7 +162,7 @@ struct Scanner::Impl {
   std::vector<std::int32_t> conthist;
 
   // The scan in progress.
-  ScanBudget budget;
+  const ScanBudget* budget = nullptr;  // the caller's, during a scan
   ScanStats* stats = nullptr;
   ScanStats scratch_stats;  // for the tool functions, outside a scan
   std::chrono::steady_clock::time_point start;
@@ -186,14 +186,14 @@ struct Scanner::Impl {
     }
     if (stopped) return false;
     ScanStats& s = st();
-    if (stats != nullptr && s.nodes + n > budget.max_nodes) {
+    if (stats != nullptr && s.nodes + n > budget->max_nodes) {
       s.stopped_by_nodes = true;
       stopped = true;
       return false;
     }
     s.nodes += n;
-    if (stats != nullptr && budget.max_time && (s.nodes & 255u) < n &&
-        std::chrono::steady_clock::now() - start > *budget.max_time) {
+    if (stats != nullptr && budget->max_time && (s.nodes & 255u) < n &&
+        std::chrono::steady_clock::now() - start > *budget->max_time) {
       s.stopped_by_time = true;
       stopped = true;
       return false;
@@ -203,16 +203,16 @@ struct Scanner::Impl {
 
   std::uint64_t remaining() const {
     if (stats == nullptr || !charging) return std::numeric_limits<std::uint64_t>::max();
-    return budget.max_nodes > stats->nodes ? budget.max_nodes - stats->nodes : 0;
+    return budget->max_nodes > stats->nodes ? budget->max_nodes - stats->nodes : 0;
   }
 
   SearchBudget detector_budget() const {
     SearchBudget b;
     b.max_nodes = remaining();
     b.max_bytes = opt.detector_max_bytes;
-    if (stats != nullptr && charging && budget.max_time) {
+    if (stats != nullptr && charging && budget->max_time) {
       const auto used = std::chrono::steady_clock::now() - start;
-      const auto left = *budget.max_time - std::chrono::duration_cast<std::chrono::nanoseconds>(used);
+      const auto left = *budget->max_time - std::chrono::duration_cast<std::chrono::nanoseconds>(used);
       b.max_time = left.count() > 0 ? left : std::chrono::nanoseconds(0);
     }
     return b;
@@ -235,7 +235,7 @@ struct Scanner::Impl {
       return true;
     }
     if (s.stopped_by_budget && stats != nullptr) {
-      if (budget.max_time && std::chrono::steady_clock::now() - start > *budget.max_time) {
+      if (budget->max_time && std::chrono::steady_clock::now() - start > *budget->max_time) {
         x.stopped_by_time = true;
       } else {
         x.stopped_by_nodes = true;
@@ -580,6 +580,7 @@ struct Scanner::Impl {
   bool quiet_now(const GameState& s) {
     // Measurement only: not charged, not counted in the nodes (nor in the
     // scan's tallies of applies and scans).
+    const auto t0 = std::chrono::steady_clock::now();
     const bool was = charging;
     const std::uint64_t applies = st().applies;
     const std::uint64_t scans = st().scans;
@@ -598,6 +599,8 @@ struct Scanner::Impl {
     charging = was;
     st().applies = applies;
     st().scans = scans;
+    st().measurement_seconds +=
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
     return quiet;
   }
 
@@ -908,7 +911,7 @@ struct Scanner::Impl {
 
   ScanResult scan(const GameState& root, const ScanBudget& b) {
     ScanResult result;
-    budget = b;
+    budget = &b;
     stats = &result.stats;
     start = std::chrono::steady_clock::now();
     stopped = false;
@@ -957,6 +960,7 @@ struct Scanner::Impl {
     result.stats.seconds =
         std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
     stats = nullptr;
+    budget = nullptr;
     stopped = false;
     return result;
   }
