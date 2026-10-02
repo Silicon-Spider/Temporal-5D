@@ -247,7 +247,46 @@ itself, not |E|, dominates the scope (at 160-239 boards W(8) = 122 against the
 table's 69). The rule needs real game records (spec issue 26; requested from the
 user); the window code stays parked (M5, M7).
 
-### The scanner: 6b (M8) - ROOT SCAN FAILS ABOVE 50 BOARDS; IN THE STOP BAND UNDER Q4'S OTHER READING - STOP
+### The scanner: 6b (M8, M12) - RE-RUN AFTER THE OPTIMISATION PASS: 50-199 BOARDS FAIL - M12 OUTCOME: STOP
+
+**The re-run (M12), 2026-10-03.** Engine at 8841f4b (E5c merged: the bounded
+optimisation pass on in-check enumeration and the horizon mate tests, and Lazy
+SMP). Quiet machine (busy 5.8% over the run; 17.0% during the 5-thread wall-clock
+phase - the tool's own 5 of 24 logical processors). `t5d-scan6b --max-nodes 100000
+--jobs 1 --per-position --moves-after-shift` (Q4 ruled "yes", R8) over the 41
+corpus records: 805 roots, 780 leaves, median 27 boards, max 378. The scanner at
+M13's design budget: 5 threads, Lazy SMP, 50 ms of wall clock per root; rung 1's
+budget = 5 threads x 787,018 nodes/s per thread / the evaluation rate (§15.6's
+design rates, size-matched). Every test definition, threshold, budget and position
+set unchanged from the first run. Read per board-count range (M12); pooled figures
+are information. Raw output: `build/6b/e5c-quiet.*` (git-ignored; reproducible).
+
+| Test | < 50 boards | 50-99 | 100-199 | 200+ | pooled (not a verdict) |
+|---|---|---|---|---|---|
+| (iii) root scan, 50 ms at 5 threads, ≥ 5 forcing half-turns in ≥ 50% | **76.7% PASS** (527) | **31.4% FAIL** (140) | **24.7% FAIL** (97) | **2.4% FAIL** (41) | 58.8% |
+| (iii) the first run, same reading (1 thread, before the pass) | 64.7% | 25.7% | 18.6% | 2.4% | 49.2% |
+| (iii) 1 thread now, 39,350 nodes (information) | 74.8% | 28.6% | 23.7% | 2.4% | 56.9% |
+| (ii) rung 1, 5 threads, size-matched, ≥ 3 in ≥ 50% of leaves | 37.0% FAIL | 6.4% FAIL | 3.0% FAIL | 0.0% FAIL | 25.0% |
+| (iv) quiet-leaf reach at that budget, ≥ 50% | 7.0% FAIL | 2.9% FAIL | 2.2% FAIL | 0.0% FAIL | 6.4% |
+| (v) stand-pat invalid | 3.6% of 166 - fine | 1 of 1 decided (too few) | - | - | 4.2% |
+
+What the 50-199 passes rest on: at 50-99 boards 44 roots (8 iterations to depth,
+10 exhausted trees, 26 proofs); at 100-199, 24 (0, 5, 19). Above 50 boards the
+scanner reaches 5 forcing half-turns essentially only where it proves a result.
+Where the nodes go now: E4 searches 53.7% (listing in check 23.2%, completion
+fallbacks 23.9%, horizon mate tests 6.4%), moves applied 22.2%, royal-capture scans
+24.1%; 36.5 nodes per tree position (84 before the pass). By board count the
+completion fallbacks lead at 100-199 (38.1% of nodes) and 200+ (63.5%). Speed:
+787,018 nodes/s per thread alone, 566,458 per thread at 5 threads (72%).
+Stand-pat at 2-3 mandatory boards: 20.0% of 10 decided - on a band edge, from too
+few positions to read.
+
+**M12's outcome, applied as pre-registered: 50-199 boards fail -> STOP: redesign
+the verification layer.** Rung 1: dropped in every range (its own rule). Quiet-leaf
+reach: NNUE v2 and quiet-only training deferred (M8).
+
+**The first run (2026-10-02, before the pass)** - superseded by the re-run above;
+kept for the record.
 
 **Conditions.** dev, quiet machine (busy 5.4% over the run, all processes - the
 tool itself), g++ 16.2 `-O2 -DNDEBUG`, engine at bde62c5 (E5b's scanner merged with

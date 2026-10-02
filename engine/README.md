@@ -10,7 +10,7 @@ notation specification (H28).
 
 It is C++20, with a C API (a shared library) for Python and other callers.
 
-## Status: stages E3 to E5b, and E7
+## Status: stages E3 to E5c, and E7
 
 Stage E1 built the parts of the engine that need no movement rules; stage E2a added
 the rules mechanics and pseudo-legal move generation (§11.0 items 4-5 and the
@@ -57,6 +57,7 @@ rules reference, `docs/rules/README.md`, which the code cites throughout.
 | **E4:** the gate adapter's full mode and its diagnostics | `include/t5d/gate.hpp`, `tools/t5d_gate.cpp` | H23, H36, H37 |
 | **E5a:** the legal moves in tiers: exact, budgeted, fast | `include/t5d/legal.hpp`, `src/legal.cpp` | C4, R1; build-log spec issues 28, 46 |
 | **E5b:** the tactical scanner: forcing actions, proofs and estimates, the solved store; experiment 6b's tool | `include/t5d/scanner.hpp`, `tools/t5d_scan6b.cpp` | §11.1-§11.3, §15.6, H1-H6, H15, H19, M8 |
+| **E5c:** the scanner's in-check stage (M12's optimisation pass), Lazy SMP and the shared solved store; 6b per board-count range at the design thread budget | `include/t5d/scanner.hpp`, `tools/t5d_scan6b.cpp` | §11.3, §15.6, H17, H19, M12, M13 |
 | **E7:** Q4 as ruled (R8) by default; the acting player and the submit action in the expansion and the C API | `include/t5d/rules.hpp`, `include/t5d/expand.hpp`, `include/t5d/capi.h` | §8.2, §11.0 item 2, D8 |
 
 Next: the gate run with the engine configured in full mode - Q4's ruling (R8) is
@@ -1607,7 +1608,9 @@ definition in full; in brief:
   royal capturable or a board unplayable, by E4's first legal finish (within 2,000
   nodes; a seed it cannot finish in time is dropped - the estimate channel's loss).
 - **Search.** Negamax alpha-beta, iterative deepening, node-capped (H3). In check: every
-  legal action, by E4's enumeration (`list_legal_actions`), up to `evasion_cap` (512);
+  legal action - first up to 64 actions built from seeds in an evasion order, each
+  searched as it is built, so that a cutoff ends the node (stage E5c, below); then, if
+  none cut off, E4's enumeration (`list_legal_actions`), up to `evasion_cap` (512);
   beyond it the node is *capped* - searched over the actions E4 listed, an estimate,
   and its iteration is not fully resolved. Otherwise stand-pat, then
   captures (MVV-LVA), then checks and branch threats (killers, history, continuation
@@ -1624,8 +1627,9 @@ definition in full; in brief:
 - **Material eval** (H6 v1): the side to move's material on every timeline's latest
   board minus the opponent's. P N B R Q are the chess convention; U 250, D 200, S 700,
   W 125, C 300 are placeholders (`PieceValues`); royals 0.
-- **Determinism** (H15): single-threaded; with a node budget and no clock the same
-  position gives the same search node for node. Lazy SMP waits for Phase 2.
+- **Determinism** (H15): with one thread (the default), a node budget and no clock,
+  the same position gives the same search node for node. Lazy SMP (H17) behind
+  `ScannerOptions::threads`: stage E5c, below.
 - **Nodes**: a move applied, a royal-capture scan, or a node of an E4 search the
   scanner calls - one unit for all the work.
 - **Stand-pat validity** (6b's fifth test; `stand_pat_validity`), operationalised
@@ -1649,30 +1653,219 @@ variants check every proof, of any distance, on larger samples.
 
 ```
 t5d-scan6b [--every K] [--leaves N] [--leaf-depth D] [--max-nodes N] [--budgets B,...]
-           [--threads T,...] [--eval-rates R,...] [--nps N] [--root-ms MS] [--root-wall]
+           [--scanner-threads T] [--threads T,...] [--eval-rates R,...] [--nps N]
+           [--root-ms MS] [--no-root-wall]
            [--synthetic-variants V,... --synthetic-games G] [--synthetic-classes N:T,...]
            [--jobs N] [--json FILE] [--summary FILE] [--per-position]
            [scanner options] [--no-moves-after-shift] [--rules ENCODING] [RECORD ...]
 ```
 
-Roots are the turn starts of the records given (replayed as parse mode does) and
-SYNTHETIC positions (labelled, never in a verdict); leaves are a few half-turns of
-random legal play below each root. A position whose side to move could capture a
-royal (its last action broke C4) or that has no legal action is counted, not
-scanned. Every position is scanned once, deterministically, to `--max-nodes`; since a
-smaller budget follows the same path, that one curve gives the depth any budget
-resolves (the deepest iteration completed, and not capped, within it; a proof or an
-exhausted tree resolves every depth). From it: (i) the horizon per budget; (ii) rung
-1 at threads x nodes/s / evaluation rate (§15.6's design rates, 9,600/s and 4,600/s, for
-1 thread and the physical cores minus one); (iii) the root scan at 50 ms x nodes/s
-(`--root-wall` also runs it by the clock); (iv) quiet-leaf reach at the rung-1 budget;
-(v) stand-pat validity. Each verdict is printed with the brief's STOP rules (a share
-within 45-55%, a median depth within ±10% of its threshold), with what the passes rest
-on (iterations to depth, exhausted trees, proofs) and the shares by board count. The
-nodes/s is measured over the scans (thread CPU time, less the leaf classification's)
-unless `--nps` fixes it, so that a quiet-machine figure can be applied to the same
-curves; larger positions run fewer nodes per second, which `--root-wall` shows. The
-records are input on the command line; the tool names nothing under the oracle harness.
+**Positions.**
+- Roots are the turn starts of the records given, replayed as parse mode does.
+- SYNTHETIC positions are labelled and never in a verdict.
+- Leaves are a few half-turns of random legal play below each root.
+- A position whose side to move could capture a royal (its last action broke C4), or
+  that has no legal action, is counted but not scanned.
+
+**The deterministic curve.** Every position is scanned once, deterministically, by one
+thread to `--max-nodes`. A smaller budget follows the same path, so that one curve
+gives the depth any budget resolves: the deepest iteration completed, and not capped,
+within it (a proof or an exhausted tree resolves every depth). Each job keeps its
+solved store across its positions, so the curves depend on `--jobs`: use 1 for a
+reproducible run.
+
+**The measures**, all read per board-count range - under 50, 50-99, 100-199 and 200+
+boards - and never pooled (register M12). Pooled lines are printed as information,
+labelled "not a verdict (M12)". The scanner's design thread budget, `--scanner-threads`,
+is 5 (M13).
+- (i) The horizon per budget.
+- (ii) Rung 1, at `--scanner-threads` x nodes/s per thread / evaluation rate. The
+  verdict uses the size-matched rate: §15.6's design rates, 9,600/s below 420 boards
+  and 4,600/s above. Other thread counts (`--threads`) and fixed rates are printed as
+  information.
+- (iii) The root scan. After the deterministic scans, each root is scanned alone for 50
+  ms of wall clock by `--scanner-threads` threads (Lazy SMP), with a fresh scanner and
+  store. The one-thread reading at 50 ms x nodes/s from the deterministic curve is
+  printed beside it, as information.
+- (iv) Quiet-leaf reach at the rung-1 budget.
+- (v) Stand-pat validity, by board count and by mandatory boards.
+
+**The verdicts.** Each is printed with the brief's STOP rules: a share within 45-55%,
+or a median depth within ±10% of its threshold. The output also says what the passes
+rest on: iterations to depth, exhausted trees or proofs. The summary applies M12's
+outcome rules to (iii) mechanically:
+- every range from 50 boards up passes: continue as designed;
+- 50-199 pass and 200+ fails: phase-dependent verification;
+- 50-199 fail: STOP.
+
+Rung 1 and quiet-leaf reach are judged by their own rules, range by range.
+
+**Speed.** The nodes/s per thread is measured over the deterministic scans (thread CPU
+time, less the leaf classification's) unless `--nps` fixes it, so that a quiet-machine
+figure can be applied to the same curves. The wall-clock phase reports its own nodes/s
+per thread and how busy the machine was. The profile of the exhaustive paths is
+printed by board count.
+
+The records are input on the command line; the tool names nothing under the oracle
+harness.
+
+## Stage E5c: the bounded optimisation pass
+
+CHECKPOINT 2's ruling on 6b (register M12) asked for one bounded optimisation pass on
+the two paths where the first measurement spent 85% of the scanner's nodes - listing
+every legal action in check, and the mate tests at the horizon - and then 6b re-run
+unchanged. Nothing else in the scanner changed: its search, forcing set, eval and the
+6b tests are as they were.
+
+### The in-check stage (`ScannerOptions::evasion_probe`, 64)
+
+The profile (below) said why the two paths cost so much. In-check interior nodes
+failed high 50-85% of the time, yet each listed up to 513 legal actions first; and
+84-96% of the horizon mate tests answered "no mate", each by a hypercuboid search for
+one legal action. So, in check:
+
+- **Interior nodes.** The pseudo-legal moves are ordered as evasions: the TT's move, a
+  capture of the checking piece (R1's status gives one capture of a royal it rests
+  on, `check_witness`), a royal's move, a move onto a square the check's line crosses,
+  other captures (MVV-LVA), then the rest by killers and histories. Up to 64 of them,
+  in that order, are each made into an action by the completion rule's own moves and
+  searched as soon as it is built. Only if none cuts off does E4's enumeration run, as
+  before, and its successors not yet searched are searched.
+- **Horizon nodes.** The same seeds are tried until one makes a legal action: then the
+  answer is "no mate" and the node is an in-check leaf, as before. Only if none of the
+  64 does does E4's mate detector decide.
+
+Why this is sound (H2, H37):
+- A seed's action is built through the state machine and tested by C4's test
+  (`royals_safe`, R1). A seed it leaves unsafe is passed over, with no fallback search.
+  So every action of the stage is a legal action.
+- A cutoff by a legal action is a lower bound on the node whatever the other actions
+  are, so the node is resolved without the enumeration. Only a Win proof can come of
+  it: some action leads to a proven loss of the opponent's (∃).
+- A Loss proof still needs E4's enumeration, exhaustive, and every child of both
+  stages a proven win of the opponent's (∀).
+- At the horizon, one legal action in hand is an exact "not mate" (C5). A checkmate
+  is still only E4's exhaustive verdict.
+- A capped node, a TT hit and stand-pat give no proof, as before.
+
+`evasion_probe = 0` is E5b's scanner exactly: on the corpus (805 roots and 780 leaves,
+100,000-node scans) it searched the same trees as E5b, node for node.
+
+**Tests.** `scanner_evasion_probe_keeps_the_proofs` and its `long_` version scan the
+sparse starts' random play, under both readings of Q4 - the Guide-literal one, asked
+for explicitly, and the ruled one (R8), the default since stage E7 - and the
+constructed positions. Each is scanned with the stage off, at 64 and at 1, at a
+generous budget and at random ones. Every proof of up to 1 half-turn (3 in the `long_`
+version) is checked against the game tree, and where two settings both prove, they
+prove the same. `scanner_evasion_probe_off_is_e5b` checks that 0 leaves the stage out.
+
+**The profile**, from `t5d-scan6b` on the corpus records under Q4's ruled reading
+(then `--moves-after-shift`; the default since stage E7), 100,000-node deterministic scans, one job. The machine was
+shared with other builds and tests, so the times are not quiet-machine figures. Each
+cell is the share of the scans' nodes, then of their wall time.
+
+| Boards | E5b: listing in check | E5b: horizon mate tests | E5c: listing in check | E5c: horizon mate tests | E5c: the in-check stage | completion fallbacks (E5b → E5c) |
+|---|---|---|---|---|---|---|
+| < 50 | 62.7% / 59.7% | 17.7% / 8.2% | 25.6% / 22.2% | 5.9% / 3.3% | 19.4% / 15.6% | 4.7% → 12.6% of nodes |
+| 50-99 | 44.2% / 48.8% | 23.4% / 11.6% | 25.2% / 25.8% | 7.7% / 3.6% | 16.0% / 13.4% | 17.6% → 23.3% |
+| 100-199 | 32.6% / 38.5% | 31.1% / 24.5% | 20.1% / 21.3% | 9.4% / 7.3% | 15.0% / 14.7% | 26.1% → 38.1% |
+| 200+ | 16.8% / 21.9% | 32.7% / 20.1% | 10.6% / 9.3% | 1.0% / 0.5% | 4.9% / 6.0% | 40.4% → 63.5% |
+
+What changed:
+- **The two paths together.** They fell from 64-80% of the nodes below 200 boards to
+  45-51%, and at 200+ from 50% to 16%.
+- **Nodes per tree position.** They fell from 84 to 37.
+- **The probe's reach.** It resolved 87-96% of the in-check interior nodes by a cutoff.
+  It answered 87-99% of the horizon tests.
+- **Capped nodes.** In-check nodes capped fell from 8,196 to 3,475.
+
+At 100 boards and more, the work is now led by the completion fallbacks (E4's first
+legal finish when the quiet completion leaves a royal capturable): 38% of the nodes at
+100-199 boards and 64% at 200+. That path is outside the pass M12 ruled.
+
+### Lazy SMP (H17, `ScannerOptions::threads`)
+
+The scanner's design budget is 5 threads (M13: 5 of the 8 cores per GPU). With
+`threads` > 1 every thread searches the same root by iterative deepening (spec §11.3).
+They share two things:
+- **The TT.** It is keyed by the 5D Zobrist key with the ruleset ID (H18) and holds
+  estimates only. It is lockless: a slot holds its entry packed in one word and, beside
+  it, the key XORed with that word, so a slot another thread is writing reads as a
+  miss, never as another position's entry. The best move's key, an ordering hint, sits
+  in a third word, where a torn write only reorders moves.
+- **The solved store.** Proofs go there the moment they are found (H19).
+  `ConcurrentSolvedStore` (a scanner's own) spreads positions over 64 shards by key,
+  each behind a reader-writer lock, and keeps `MemorySolvedStore`'s contract: it
+  compares positions in full on a key match (`same_position`, §11.3's hashing trap) and
+  refuses two kinds of proof for one position. A store that is not safe for threads
+  has its calls serialised.
+
+Everything else is per thread: killers, history and continuation history (§11.3).
+They carry over from scan to scan until `clear()`, which is meant for between games.
+
+**Diversity.** Two standard Lazy SMP means:
+- **Staggered depths.** The main thread searches every depth. Helper `i` searches depth
+  `d` only in alternate blocks of `1 + (i - 1) / 2` depths, shifted by `i`, so helpers
+  are already at `d + 1` and `d + 2` while the main thread is at `d`.
+- **Perturbed order.** A helper perturbs its order of quiet moves by a hash of the move
+  and its index, below a killer's weight.
+
+**Stopping and the result.**
+- A thread that proves the root or exhausts its tree stops the others.
+- The node budget is shared: each thread adds its nodes in batches of 256, so several
+  threads may overrun it by a few hundred nodes each. The clock is shared too.
+- The result is the deepest iteration any thread completed. `resolved_depth` is the
+  deepest that completed uncapped.
+- The root's proof is the store's. Every thread's root proof must agree with it, or
+  the scan throws `std::logic_error`. An exception in any thread is rethrown by `scan`.
+
+**Soundness.** It is unchanged: the TT never answers with a proof, a proof is built
+only as in the single thread, and the store refuses a contradiction.
+
+**Contention.** Threads that copy one state share its timelines and boards by reference
+count, and contend on those counts at every copy and every move. So each helper
+searches from its own copy of the root, rebuilt board by board (`isolated_copy`; where
+the state cannot be rebuilt from its boards alone, because play decided its activity
+under Q1's consecutive rule, Q3 or Q6, it shares the root).
+
+`threads = 1` is the deterministic mode (H15). On the corpus (805 roots and 780
+leaves, 100,000-node scans) it searched the same trees as the scanner before Lazy SMP,
+node for node.
+
+**Scaling on the dev machine.** This machine was shared with other work.
+- **Long scans.** On 1-second scans of 68-105-board positions each thread ran at 94%
+  of a lone thread's speed with 2 threads, and at 82% with 5.
+- **The corpus's 50 ms root scans.** With 5 threads each ran at 61% of one thread's
+  speed. Many of those scans are short, so starting the threads and copying the root
+  weigh more.
+- **Five processes.** Five separate processes each ran at 96%.
+
+At 50 ms, 5 threads resolved at least one thread's depth in every board-count range,
+under Q4's ruled reading. The shares of roots reaching 5 forcing half-turns were:
+
+| Boards | 1 thread | 5 threads |
+|---|---|---|
+| < 50 | 75.7% | 76.5% |
+| 50-99 | 28.6% | 30.7% |
+| 100-199 | 22.7% | 24.7% |
+| 200+ | 2.4% | 2.4% |
+
+**Tests.**
+- `scanner_lazy_smp_no_false_proofs` (and its `long_` version) scans with 2, 3, 4 and 8
+  threads, by node budget and by the clock, over the sparse starts' random play under
+  both readings of Q4 (the Guide-literal one asked for explicitly; R8's the default),
+  and over the constructed positions. All
+  scans of a thread count share one store. Every proof of up to 1 half-turn (3 in the
+  `long_` version) is checked against the game tree, and every proof against one
+  thread's.
+- `scanner_lazy_smp_store_refuses_contradictions` checks the shared store's contract.
+  Eight threads put proofs at once and then contradictions: every contradiction is
+  refused, and the shortest distance is kept. A plain `MemorySolvedStore` shared by
+  four threads gets every proof, each checked against the game tree.
+- `scanner_lazy_smp_reaches_the_single_threads_depth` gives 5 threads and 1 thread the
+  same 40 ms on a sample of positions from Standard and Two Timelines play. Summed
+  over the sample, 5 threads must resolve at least one thread's depth (one retry, for
+  timing noise).
 
 ## Stage E7: Q4 as ruled, and the submit action (D8)
 

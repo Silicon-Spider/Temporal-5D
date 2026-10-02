@@ -10,6 +10,84 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-03 - Design documents: the CHECKPOINT 3 ruling, from upstream
+
+- `docs/design/` replaced with the upstream revision recording CHECKPOINT 3: §11.1
+  "The redesign after 6b" (split the scanner by channel - exactness only where a
+  proof can result; the proof channel a depth-limited df-pn over the
+  semimove-decomposed turn tree with hypercuboid-pruned completion; incremental
+  royal-attack maps), §15.6's CHECKPOINT 3 block (6b′'s tests and outcome rules),
+  §13's note that exact verification may not reach depth at high board counts;
+  register rows H1, H6, H10 updated, M14 (the redesign, a prototype until 6b′) and
+  M15 (6b′, pre-registered), reversal 22; the architecture document's §13.2.7 "Pay
+  exactness only where a proof can result". Copied in unchanged.
+- Spec: the documents themselves (§11.1, §13, §15.6; H1, H6, H10, M14, M15).
+
+### 2026-10-03 - Engine CI: the Lazy SMP timing test needs cores to test anything
+
+- `engine/tests/test_scanner.cpp`: the test that 5 Lazy SMP threads resolve at
+  least one thread's depth in the same 40 ms of wall clock failed on CI's runners,
+  which have 2-4 cores: there the 5 threads oversubscribe the machine and the claim
+  is not being tested. It now runs only where the machine has at least 6 hardware
+  threads, and says so when it skips. On the development machine it runs and passes
+  as before.
+- Spec: §11.3 (H17), M13; no spec change.
+
+### 2026-10-03 - 6b re-run after the optimisation pass: M12's outcome is STOP
+
+- `docs/MEASUREMENTS.md`: experiment 6b re-run as M12 rules - after E5c's bounded
+  pass, at the scanner's design budget (5 threads, Lazy SMP), every definition
+  unchanged, read per board-count range, on a quiet machine. The 50 ms root scan
+  resolves 5 forcing half-turns in 76.7% of positions under 50 boards (pass), 31.4%
+  at 50-99, 24.7% at 100-199 and 2.4% at 200+ (fail); rung 1 and quiet-leaf reach
+  fail in every range. M12's pre-registered outcome: "50-199 boards fail -> STOP:
+  redesign the verification layer".
+- `docs/BUILD_LOG.md`: the STOP, what it asks of the user, and what is paused
+  (engine E7 and E6a on their branches); register rows M8, M12, M13, H17.
+- Spec: §15.6 (6b, M8, M12, M13), §11.1 (the kill condition), §11.3 (H17).
+
+### 2026-10-03 - Engine E5c: M12's optimisation pass, Lazy SMP, 6b per board-count range
+
+- `engine/` (merged from its worktree branch; M12, M13, H17, H19): the in-check
+  stage - M12's one bounded pass on the two paths where 6b's first run spent 85% of
+  its nodes. In check, up to 64 seeds in evasion order (the TT move, a capture of
+  the checker, a royal move, a block, other captures, the rest) are made into legal
+  actions and searched as each is built: a cutoff resolves the node, otherwise E4's
+  enumeration runs as before; at the horizon one legal action answers "no mate",
+  E4's detector deciding only failing that. Proofs as before (H2, H37);
+  `evasion_probe = 0` reproduces E5b node for node. The two paths fell from 64-80%
+  of the nodes below 200 boards to 45-51%, and from 50% to 16% at 200+; the
+  completion fallbacks now lead at 100+ boards. Lazy SMP (H17) behind
+  `ScannerOptions::threads`: a lockless shared TT (estimates only), a sharded
+  concurrent solved store (proofs exported at once, contradictions refused, H19),
+  per-thread histories, staggered depths and perturbed move orders; one thread is
+  the deterministic mode (H15).
+- `t5d-scan6b`: the scanner at M13's 5 threads - the 50 ms root scan by the wall
+  clock, rung 1's budget - every measure per board-count range with M12's outcome
+  rules applied; pooled lines labelled "not a verdict (M12)".
+- Tests: 383 (5 new by default; 2 new long tests - no false proof with 2-8 threads).
+- Spec: §11.1, §11.3, §15.6; H2, H15, H17, H19, H37, M8, M12, M13. The re-run of
+  6b on a quiet machine follows.
+
+### 2026-10-02 - Build log: public sources of real game records, proposed
+
+- `docs/BUILD_LOG.md`: the game-record sources found (CHECKPOINT 2, item 6), for the
+  user's approval - MageOfficial/t0database's 761 real games (MIT; pinned commit
+  and blob recorded; up to about 186 boards), chessin5d.net's offline server and
+  the community Discord servers (both need their owners). No public source reaches
+  200-600 boards; M7 stays provisional. Nothing downloaded into the project.
+- Spec: §15.6 (M7); the register's open item on real game records.
+
+### 2026-10-02 - Build log: CHECKPOINT 2 ruled, the run resumed
+
+- `docs/BUILD_LOG.md`: the STOP section becomes CHECKPOINT 2's record - the rulings
+  (M12's 6b re-run and its outcome rules, M13's CPU allocation, Q4 = yes with D8's
+  submit action and acting-player input, C23's ancestry, Q5 settled from the
+  sources), what is running (engine E7 and E5c, the game-record research), what
+  follows, and the two questions put back to the user (Q2, whose sources are
+  silent; what "normalise it in the cwmtt driver" means for cwmtt/many2).
+- Spec: none (status only).
+
 ### 2026-10-02 - The rulebook records the CHECKPOINT 2 rulings on Q4 and Q5
 
 - `docs/rules/README.md`: **R8** - a player may keep moving after the present has
