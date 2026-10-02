@@ -315,6 +315,7 @@ void accumulate(ScanStats& into, const ScanStats& x) {
   into.probe_actions += x.probe_actions;
   into.probe_cutoffs += x.probe_cutoffs;
   into.horizon_probe_hits += x.horizon_probe_hits;
+  into.shared_roots += x.shared_roots;
   into.evasion_seconds += x.evasion_seconds;
   into.horizon_mate_seconds += x.horizon_mate_seconds;
   into.fallback_seconds += x.fallback_seconds;
@@ -1327,6 +1328,10 @@ struct Worker {
     const GameState& root = own_root.has_value() ? *own_root : shared_root;
     WorkerRun& result = run;
     stats = &result.stats;
+    if (own_root.has_value() && !shared_root.multiverse().empty() &&
+        own_root->multiverse().timelines().front() == shared_root.multiverse().timelines().front()) {
+      ++result.stats.shared_roots;  // not rebuildable from its boards: shared
+    }
     flushed = 0;
     stopped = false;
     charging = true;

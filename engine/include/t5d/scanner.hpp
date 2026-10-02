@@ -106,8 +106,11 @@
 // result is an estimate unless it is a proof, built as above, and the
 // threads' proofs agree. Killers, history and continuation history are per
 // thread (§11.3), carried from scan to scan until clear() (between games).
-// Diversity: helper threads start at depth 1 or 2 by the parity of their
-// index and perturb their order of quiet moves by a per-thread hash. A
+// Diversity: helper threads search staggered blocks of depths (ahead of the
+// main thread) and perturb their order of quiet moves by a per-thread hash.
+// Each helper searches its own copy of the root, rebuilt board by board, so
+// that the threads do not contend on shared reference counts (a state that
+// cannot be rebuilt from its boards is shared: stats.shared_roots). A
 // thread that proves the root or exhausts its tree stops the others; the
 // node budget is shared (each thread adds its nodes in batches of 256, so
 // several threads may overrun it by a few hundred nodes each), and so is
@@ -430,6 +433,9 @@ struct ScanStats {
   std::uint64_t probe_actions = 0;
   std::uint64_t probe_cutoffs = 0;
   std::uint64_t horizon_probe_hits = 0;
+  /// Lazy SMP: helper threads that searched the caller's root itself, shared,
+  /// because it could not be rebuilt from its boards (see THREADS).
+  std::uint64_t shared_roots = 0;
   std::uint64_t tt_hits = 0;
   std::uint64_t solved_hits = 0;
   std::uint64_t proofs_exported = 0;
