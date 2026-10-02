@@ -388,7 +388,7 @@ What is read:
 | Promotions | `=X` before the marks | Required when the ruleset offers more than one piece |
 | Castling | `O-O`, `O-O-O`; or the king's move, `Ke1g1`, `Kg1` | See `castling_shortcuts` |
 | Marks | `+`, `#`, `*` (softmate), then `~`, then `!`/`?` (the examples' assessments, up to two) | `+`, `#`, `*` are read and never checked: a writer's mark is never a check verdict (the engine's is R1's, `t5d/check.hpp`) |
-| Annotations | `(>Lx)`, `(~Tx)`, attached or after whitespace or a comment | Checked against the state (`verify_annotations`) |
+| Annotations | `(>Lx)`, `(~Tx)`, attached or after whitespace or a comment | Checked against the state (`verify_annotations`); a disagreement is a warning by default (`annotation_mismatch_is_error`) |
 | Comments | `{...}`, not nested | Anywhere between tokens |
 | Results | `1-0`, `0-1`, `1/2-1/2`, `*` | Only comments may follow |
 
@@ -405,9 +405,11 @@ open, ambiguous or contradicts itself:
 |---|---|---|---|
 | `castling_shortcuts` | `EFileOnly`: `O-O`/`O-O-O` are `Ke1g1`/`Ke8g8` and `Ke1c1`/`Ke8c8` - the king's move from e1/e8 only - usable only when every king of the starting position stands on e1 (White) or e8 (Black) - "more than one king" read per board, so Two Timelines and Turn Zero use them, Half Reflected and Reversed Royalty do not; otherwise unreadable | `AnyKing`: castling towards file h / file a from wherever the king stands - the specification's own 2020 example game castles `O-O` from d1. `EFileOneKing`: the specification's letter, "more than one king for either player" read over the whole starting position - as `EFileOnly`, but not in Two Timelines or Turn Zero (two kings a side), where the king's move is written | S6 (high), Q26; notation "Castling" |
 | `require_capture_marks` | false: a missing `x` is read (the squares determine the move, so it never makes one ambiguous); a written `x` must capture | true: SAN's letter - a capture without `x` is unreadable | "Moves", "Jumps" |
-| `verify_annotations` | true: a written `~`, `(>Lx)`, `(~Tx)` must agree with the state, or the move is unreadable; one left out is never an error | false: ignored | T15 ("should match"), Q26 |
+| `verify_annotations` | true: a written `~`, `(>Lx)`, `(~Tx)` is checked against the state; one left out is never an error | false: ignored | T15 ("should match"), Q26 |
+| `annotation_mismatch_is_error` | false: a token that disagrees is a warning (`PgnReplay::warnings()`; `t5d-gate` prints it on stderr) and the move is played - the notation calls these tokens "purely for better human comprehension", so a wrong one is the writer's slip, and refusing would hide the record's later positions from the gate | true: the move is unreadable (`t5d-gate --strict-annotations`) | T15, Q26 |
 | `infer_omitted_boards` | false: a move without its board while there are several timelines is unreadable | true: matched on every playable board of the mover's, unreadable if ambiguous | "Moves" ("must be preceded") |
 | `check_turn_numbers` | true | false: numbers ignored, colours still alternate | "Turns" |
+| `turn_number_mismatch_is_error` | false: a number that does not count the turns is a warning (`PgnRecord::warnings`, passed on to `PgnReplay::warnings()`; `t5d-gate` prints it) and reading goes on - a missing turn still shows, as the next action's moves are checked like any other | true: unreadable from there | "Turns" |
 
 `~` is checked one way: written, the move must branch, the new timeline must be
 active (T10) and its first board no later than the column after the present - T8's
@@ -571,7 +573,7 @@ niceAndrey 19.9 s for 122 positions (48 MB).
 configuration (`gate.toml`): `--moves-after-shift` (rules Q4's other reading),
 `--rule NAME=VALUE` (any `RuleOptions` field: `true`/`false`, or an enumerator such as
 `activation=consecutive`, `mandatory=all_active`, `promotions=QRBN`),
-`--lenient-annotations` (`~`, `(>Lx)`, `(~Tx)` not checked), `--pgn NAME=VALUE` (any
+`--lenient-annotations` (`~`, `(>Lx)`, `(~Tx)` not checked), `--strict-annotations` (a disagreeing one is unreadable), `--pgn NAME=VALUE` (any
 `PgnOptions` field, `castling_shortcuts=any_king` ...), `--actions K` (position K's
 legal actions on standard error: their count, then one line per action, the
 canonical action texts sorted - a second order of two branching moves is a line of
