@@ -753,7 +753,7 @@ void evasion_probe_keeps_the_proofs(int games, int turns, int runs_per_position,
 
 TEST(scanner_evasion_probe_keeps_the_proofs) { evasion_probe_keeps_the_proofs(1, 4, 1, 3000, 1); }
 TEST(long_scanner_evasion_probe_keeps_the_proofs) {
-  evasion_probe_keeps_the_proofs(2, 8, 3, 20000, 5);
+  evasion_probe_keeps_the_proofs(3, 12, 4, 20000, 3);
 }
 
 TEST(scanner_evasion_probe_off_is_e5b) {
@@ -968,7 +968,7 @@ void lazy_smp_no_false_proofs(int games, int turns, int max_distance) {
 }  // namespace
 
 TEST(scanner_lazy_smp_no_false_proofs) { lazy_smp_no_false_proofs(1, 4, 1); }
-TEST(long_scanner_lazy_smp_no_false_proofs) { lazy_smp_no_false_proofs(2, 8, 5); }
+TEST(long_scanner_lazy_smp_no_false_proofs) { lazy_smp_no_false_proofs(3, 10, 3); }
 
 TEST(scanner_lazy_smp_store_refuses_contradictions) {
   // The shared store's contract, as MemorySolvedStore's.
