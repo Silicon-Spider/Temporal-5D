@@ -46,3 +46,4 @@ def _no_grad_by_default(request):
 
 def pytest_configure(config):
     config.addinivalue_line("markers", "grad: the test needs autograd")
+    config.addinivalue_line("markers", "slow: a long test (the full 16-layer network); deselect with -m 'not slow'")

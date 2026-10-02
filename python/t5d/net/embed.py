@@ -16,6 +16,12 @@ Register tokens get a register-type embedding (per-board slot 0..R-1, or global 
 0..G-1) plus one learned "not a square" embedding (section 5.3) instead of piece/colour/
 has-moved. Global registers hold no board, so they get no board flags and no Delta-t.
 Padding tokens embed to zero (they are masked out of attention as keys).
+
+Under the block-causal scope with ``frozen_features="intrinsic"`` (stage N3, an open
+committed-class point - ``NetConfig.frozen_features``), a superseded board's tokens get
+neither of the two flags that change after the board is frozen - Delta-t-to-present and
+the active/inactive timeline flag - so that a frozen board's input depends on the board
+alone; head boards keep both. The model passes ``frozen_intrinsic`` for that scope only.
 """
 
 from __future__ import annotations
@@ -48,7 +54,9 @@ class InputEmbedding(nn.Module):
         dt = dt.float()
         return torch.stack([dt / self.cfg.dt_scale, torch.sign(dt) * torch.log1p(dt.abs()), (dt == 0).float()], dim=-1)
 
-    def forward(self, batch: Batch) -> torch.Tensor:
+    def forward(self, batch: Batch, frozen_intrinsic: bool = False) -> torch.Tensor:
+        """Token embeddings ``(B, L, d)``. ``frozen_intrinsic``: superseded boards' tokens
+        get no Delta-t and no active flag (see the module docstring)."""
         kind = batch.kind
         is_square = (kind == TOKEN_SQUARE).unsqueeze(-1)
         is_breg = (kind == TOKEN_BOARD_REGISTER).unsqueeze(-1)
@@ -62,6 +70,10 @@ class InputEmbedding(nn.Module):
             + self.stm_flag(batch.stm)
             + self.dt_out(torch.nn.functional.gelu(self.dt_in(self.dt_features(batch.dt))))
         )
+        if frozen_intrinsic:
+            # Superseded boards: the flags that cannot change once a board is frozen only.
+            frozen = self.head_flag(batch.is_head) + self.stm_flag(batch.stm)
+            board = torch.where((batch.is_head == 1).unsqueeze(-1), board, frozen)
         slots = batch.reg_index.clamp(min=0)
         breg = self.board_register(slots.clamp(max=self.board_register.num_embeddings - 1)) + self.not_square
         greg = self.global_register(slots.clamp(max=self.global_register.num_embeddings - 1)) + self.not_square

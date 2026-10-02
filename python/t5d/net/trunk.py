@@ -18,9 +18,16 @@ the master weights stay FP32; RoPE is FP32 regardless (``rope.py``).
 
 Each block hands its attention the context of its own layer (``AttnContext.for_layer``):
 board-pair smolgen (B12) generates that layer's biases from the block's normed input.
+
+``kv_hook(layer, k, v) -> (k, v)`` (stage N3) sees each layer's keys and values before
+attention: the cached path captures them (a refresh, the root history) and the reference
+of the two-level mask injects a refreshed history through it (``cache.py``).
 """
 
 from __future__ import annotations
+
+from collections.abc import Callable
+from functools import partial
 
 import torch
 from torch import nn
@@ -47,9 +54,9 @@ class Block(nn.Module):
         self.norm_ffn = nn.LayerNorm(cfg.d_model, eps=cfg.norm_eps)
         self.ffn = FeedForward(cfg)
 
-    def forward(self, x: torch.Tensor, ctx: AttnContext) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, ctx: AttnContext, kv_hook: Callable | None = None) -> torch.Tensor:
         h = self.norm_attn(x)
-        x = x + self.attn(h, ctx.for_layer(h))
+        x = x + self.attn(h, ctx.for_layer(h), kv_hook)
         return x + self.ffn(self.norm_ffn(x))
 
 
@@ -59,9 +66,9 @@ class Trunk(nn.Module):
         self.blocks = nn.ModuleList(Block(cfg) for _ in range(cfg.n_layers))
         self.final_norm = nn.LayerNorm(cfg.d_model, eps=cfg.norm_eps)
 
-    def forward(self, x: torch.Tensor, ctx: AttnContext) -> torch.Tensor:
-        for block in self.blocks:
-            x = block(x, ctx)
+    def forward(self, x: torch.Tensor, ctx: AttnContext, kv_hook: Callable | None = None) -> torch.Tensor:
+        for i, block in enumerate(self.blocks):
+            x = block(x, ctx, None if kv_hook is None else partial(kv_hook, i))
         return self.final_norm(x.float())
 
     def attention_probabilities(self, x: torch.Tensor, ctx: AttnContext, layer: int) -> torch.Tensor:

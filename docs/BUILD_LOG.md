@@ -25,7 +25,9 @@ M5 - building it would break a rule).
   `docs/rules/README.md`, now the rulebook, H38); engine E1+E2 (ae35da3, CI green
   on g++ 13 and 14); network N1+N2 (bafa2c4; 447 tests; CI job `network`); the
   upstream drafts of the two oracle defects (3277bb2); engine E3 - expansion and
-  the Phase 1 measurement tools (committed 2026-10-02; 299 tests).
+  the Phase 1 measurement tools (committed 2026-10-02; 299 tests); network N3 - the
+  block-causal scope, the cached path and the §15.2 network rows (committed
+  2026-10-02; 558 tests).
 - **In the tree, uncommitted (2026-10-02):**
   - *Step 2B* (H32 stable answers - required sets at 100%, `golden --write
     --repeat 2`, per-position cost files, calibration probe; H33 - golden
@@ -50,18 +52,31 @@ M5 - building it would break a rule).
     contract and tests). Merging it after E3: E4 makes `submit()` test royal
     safety by default, so E3's random pseudo-legal play must pass
     `CheckRuling::none()`.
-  - *Network N3* (block-causal scope, the cached path, root refresh and the rung-1
-    fork, KV precision, the §15.2 equivalence tests, §15.3 cost figures): being
-    built in `python/`.
+  - *Network N3's CPU wall timings* (the code is committed): need a quiet machine.
+    From `python/`: `py -m t5d.net.cache_bench --boards 240 --idle-processes
+    t5d-gate.exe t5d-measure.exe t5d-bench.exe t5d-tests-long.exe --skip-existing
+    --out <dir>`, then `--boards 600 --dtype fp32` and `--boards 600 --dtype bf16`
+    (about 45, 70 and 45 minutes); the benchmark itself refuses a loaded machine.
 - **Next:** merge E3 and E4; wire the rulings into the gate (known-divergence
   entries for ftxi's 78 check verdicts and for both oracle defects, as telltales;
   the rulebook pin, H38; the engine configured, parse mode then full mode); the
   golden re-record with `--repeat 2`; M9 then M7 with legal moves; the scanner
   and 6b.
-- **Waiting on the user:** rules Q4 (moves after the present has shifted) - the
-  engine follows the Guide's reading, and nine corpus records make such moves
-  (step 3); real game records for the |E| curve (M7: the corpus's real games
-  reach about 130 boards; the verdict's phases run to 600).
+- **Waiting on the user:**
+  - **Rules Q4** (may a player keep moving after the present has shifted?). The
+    engine follows the Guide's "no". Evidence gathered since: nine corpus records
+    by three authors make such moves; all three oracles allow them; and E4's
+    review found that every legal-action count where an oracle counts more than
+    the engine is explained by Q4 - under the other reading the engine matches
+    ftxi and cwmtt. So Q4 decides whether the gate can pass on most of the
+    corpus. Under the other reading the engine is ready except for search time
+    (E4 fix round).
+  - **Q5's alternative under R1**: with `mandatory = AllActive` (every active
+    timeline must be played, not only those in the present), R1 still passes only
+    the active boards in the present, so a stuck mandatory board ahead of the
+    present gives stalemate, not checkmate. Default rules are unaffected.
+  - Real game records for the |E| curve (M7: the corpus's real games reach about
+    240-399 boards in two games, and only under Q4's other reading).
 
 ## The brief - standing rules for every session
 
@@ -428,16 +443,19 @@ for game records.
 | B3 | not built (rule) | Contingency only; no trigger |
 | B7 | not built (rule) | Deferred; no §15.2/§15.3 need (d_head is a config value anyway) |
 | B13 | not built (rule) | Refused |
-| C1, C4, C17, C19, C20 | not started | Dense first; the cached-path rows are needed by §15.2 |
-| C2, C10 | not started | Deferred, but §15.2/§15.3 need the cached path |
-| C3, C3a (rung 1) | not started | Behind flags; §15.2/§15.3 need them |
+| C1 | built, tested | `attn_scope = "dense"` is the default |
+| C4 | built, tested | Full MHA (N1) |
+| C17, C19, C20 | built, tested | Network N3: the block-causal scope (`attn_scope = "block_causal"`), the live set fully bidirectional, supersession recomputed once under the state-defined mask; the causal past is a parameter (spec issues 5, 29) |
+| C2 | built (for §15.2/§15.3) | Network N3's cached path; the decision itself stays deferred (6c, §7.7) |
+| C10 | parked | Lazy K/V for boards entering E: with the window, after M7 |
+| C3, C3a (rung 1) | built, tested | Root refresh and the travel-triggered, visit-gated rung-1 fork (copy-on-write epochs), behind flags |
 | C3a (rungs 2-3), C18, C22 | not built (rule) | Held open (M5 for rungs 2-3) |
 | C5, C7 | parked | Window code only after the \|E\| verdict (M7) |
 | C11 | not started | MCGS behind a flag; search on real positions waits on legality |
-| C12, C13 | not started | Persistence (search) |
-| C15 | not started | FP8 KV storage, varlen |
+| C12, C13 | not started | Persistence (search); frozen K/V already persist across roots under C20's first reading |
+| C15 | built in part | FP8 e4m3 frozen K/V (`frozen_kv_format = "fp8"`, applied by the forward itself); varlen/ragged kernels not built (none on CPU); C15 vs G1 is spec issue 34 |
 | C16 | not built (rule) | Deferred; last, only if node-starved |
-| C21 | not built (rule) | Refused |
+| C21 | not built (rule) | Refused; a mutant that snapshots is caught by the tests |
 | D1, D3, D4 | built, tested | Network N1: pointer policy, 51-bin value head, auxiliary heads (D4's reply space, label set and moves-left unit are placeholders, spec issue 9) |
 | D2 | not started | Undecided: both arms awaited by trained ablations 6g/6k |
 | E1, E5, E7, E9 | not started | Search |
@@ -446,7 +464,7 @@ for game records.
 | F1, F2 | built, tested | 21,358,601 parameters (F1); the L24-ff12 preset, 44.5M (F2) |
 | F3 | not built (rule) | Refused |
 | F4 | parked | NNUE only after 6b passes (M8) |
-| G1 | built, tested | BF16 trunk under autocast; FP32 heads and RoPE |
+| G1 | built, tested | BF16 trunk under autocast; FP32 heads and RoPE; the cache stores K/V in the live format (§15.2 row (e)) |
 | G2 | not started | FP8 attention - no FP8 kernels on this machine |
 | G3, G4, G5, G6 | not built (rule) | Deferred / held open / refused |
 | I1-I10 | not started | Training code may be written and smoke-tested only; I7 and I8 not built (M5) |
@@ -525,7 +543,9 @@ decision), and what is parked.
    order - not state-defined across transpositions (§8.5). Done: the cached path is
    built generic over a state-defined causal-past relation, and the §15.2
    equivalence tests run with each candidate. **Parked: the choice** (for the user,
-   with the cached-path decision C2).
+   with the cached-path decision C2). Built in N3 (2026-10-02) as `causal_past` =
+   `lineage` (arrival side, the placeholder default) | `two_parent` (also the
+   board a travelling piece departed from) | `creation`; see issues 29-30 and 35.
 6. **§11.3 / I9 key exact stores by ruleset, but §12.6's small-board structure
    variants share the rules**: a 5x5 position and the same pieces on 8x8 collided
    in the first Zobrist key (found by review). Done: the board size is a key
@@ -658,6 +678,57 @@ decision), and what is parked.
     action ("moving into check during a turn is allowed"): a single move is legal
     if it is part of some legal action. The expansion will offer the moves that
     begin a legal action (E4's enumeration), to be confirmed at the merge.
+29. **C17's causal past** (issue 5) is built three ways. `lineage`: a board's
+    timeline predecessor and, for a branch's first board, its origin - the arrival
+    side only; `two_parent`: also the board a travelling piece departed from;
+    `creation`: every board created earlier (path-dependent - two move orders
+    reaching one multiverse evaluate differently - and it cascades, issue 35). The
+    time-axis reading breaks freezing and is not built. Lineage is the placeholder.
+30. **The MCGS node key** (§8.5, C11, H18). Under lineage the network tells apart
+    two states that differ only in a branch origin (a test pins it), but the 5D
+    Zobrist key omits origins and 5DFEN records none; under two-parent the key
+    also needs each travel's departure board; under creation no node key works
+    (creation order is not a property of the state).
+31. **A3 against C2/C17**: a frozen board's Δt-to-present and active flag change
+    after it freezes. `frozen_features = intrinsic` (placeholder: frozen boards
+    carry neither; a refresh gives them the anchor's values) | `current` (every
+    shift of the present recomputes every frozen board, a cost §7.1 does not price).
+32. **C20's "causal past plus the conditioned history of its refresh epoch"**:
+    `supersession_scope = causal_past` (placeholder) | `past_and_epoch_history`. The
+    union has a cycle under the creation reading unless the epoch's history is a
+    fixed block (history boards read only history), which is how it is built.
+33. **The §6 structure on frozen rows**: under the cached configuration the move
+    graph, the relations head, typed biases and smolgen open or bias live query
+    rows only (forced: they are present information).
+34. **C15 against G1.** §10.3 says FP8 K/V obey §10.2 (cache and live share
+    precision); that holds only for an FP8 trunk (G2, not built) or a network
+    trained with FP8 frozen K/V (`frozen_kv_format = fp8`, built). With a BF16
+    trunk, FP8 frozen K/V are RMS 8.7e-3 from the BF16 network - 3.8x the
+    BF16-vs-FP32 gap.
+35. **§7.3's supersession bound** (+12-24% upper bound) assumes one board reading
+    all of T. Under the creation reading the cascade breaks it (analytic +194% to
+    +966%; CPU +3,273% at 600 boards, 23 timelines, 280 boards recomputed for one
+    jump); under lineage the counted cost is 0.3-12%.
+36. **§7.1's "~8 live head boards" against real games.** The corpus's real games
+    have 24 timelines at 240-399 boards: the paper cached-vs-dense ratio is then
+    9.9x at 240 boards (not 29x) and 24.8x at 600 (not 49x), and the live-set
+    ratio 10.8x (not 3.7x).
+37. **§10.2's per-node tree memory** assumes about 528 novel tokens stored per
+    node; under C19 the heads are recomputed every node and only superseded boards
+    are stored: 1.08 MB each in BF16, 1-2 per node.
+38. **§15.3's "KV memory per state"** counts every token; the cache holds frozen
+    boards only (plus their trunk outputs, about 16 MB at 240 boards).
+39. **"One refresh ≈ 10 node-evaluations"** is the windowed figure; with full
+    history the model gives 29x at 240 boards and 49x at 600. The row stays
+    unmeasured until the window exists.
+40. **§7.6 says 0.164 TF per node; §7.9's table uses 0.159 TF** (528 queries, no
+    global registers), giving +3.8% at 800 sims where §15.3 says +3.6%.
+41. **Rung 1's trigger**: a move that creates a timeline (a non-branching jump does
+    not); a fork moves the node and its descendants still in the old epoch.
+42. **C15's varlen/ragged kernels** do not exist on CPU; not built.
+43. **The block-causal full pass** (training under the scope, and history builds)
+    costs 2.3-2.8x a dense pass on this CPU: per-row scope masks defeat the fast
+    path. A block-sparse scope selection would fix it; not built.
 
 ## Proposed spec edits
 
@@ -741,6 +812,30 @@ says now, what it should say, why.
     forcing-move class instead (issue 19).
 23. **§2.2**: the has-moved flag exists only for pawns, rooks, kings and brawns
     (5DFEN's `*`); say so.
+27. **§7.3 / C17**: define a board's causal past (the chosen reading, spec issue
+    29), and say that a frozen board reads only itself and frozen boards of its
+    past.
+28. **§8.5, §11.3, C11, H18**: the node key includes each timeline's branch origin
+    under the lineage reading (and each travel's departure board under two-parent);
+    the creation reading has no node key (issue 30).
+29. **§2.3 / A3 with §7.3**: what a frozen board's state-dependent features are
+    under the cached configuration (issue 31).
+30. **§7.3 / C20**: what "plus" means, and the epoch's history as a fixed block
+    (issue 32).
+31. **§6 / B9-B12**: under the cached configuration, edge-derived masks, biases and
+    smolgen apply to live query rows only (issue 33).
+32. **§10.3 / C15 with G1**: FP8 frozen K/V need an FP8 trunk or FP8-frozen-K/V
+    training (issue 34).
+33. **§7.3**: the supersession bound depends on the causal-past reading; record the
+    creation cascade (issue 35).
+34. **§7.1, §13, §15.3**: restate the paper ratios per timeline count - 8 against
+    the 24 the corpus's real games have (issue 36).
+35. **§10.2's GQA memory table and §10.3**: the per-node delta is superseded boards
+    only; KV per state counts frozen boards (issues 37, 38).
+36. **§7.6, §7.9, §15.3**: reconcile 0.164 TF / 0.159 TF and +3.6% / +3.8% (issue
+    40).
+37. **§15.3 rows**: write back the measured figures (M4) once the quiet-machine
+    wall timings exist, CPU-labelled; `docs/MEASUREMENTS.md` holds the counts now.
 
 ## Session log
 

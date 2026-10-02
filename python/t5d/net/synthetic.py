@@ -18,6 +18,13 @@ What the generator guarantees, so that tests can rely on it:
   piece move per new board, so neighbouring boards share most of their content;
   some boards are exact duplicates of their predecessor (``duplicate_prob``);
 * deep travel: some branches start from the earliest boards (``deep_travel_prob``);
+* lineage (stage N3, ``PositionState.parent`` / ``creation``): every board records the
+  board it was made from - its timeline's previous board, or for a branch's first board
+  the superseded board the branch started from (its origin) - and the order in which the
+  boards were created. One quirk of the generator is recorded rather than hidden: when a
+  branch step comes before any board has been superseded (an early step, or N = 2), it
+  branches from a head, which no real game does (travel onto a head continues that
+  timeline); such a branch's origin is recorded as unknown (-1);
 * a move graph and typed relations from simplified 4D movement geometry (``reach_graph``):
   every piece on every board reaches along its piece's 4D directions - sliders until
   blocked, within ``max_reach`` steps - across boards along the time and timeline axes
@@ -67,6 +74,8 @@ class _Board:
     piece: np.ndarray
     colour: np.ndarray
     moved: np.ndarray
+    creation: int = 0  # index in creation order
+    parent_creation: int = -1  # the parent's creation index (-1: none or unknown)
 
 
 def default_timelines(n_boards: int) -> int:
@@ -156,9 +165,9 @@ def synthetic_state(
     boards: list[_Board] = []
     timelines: dict[int, list[int]] = {}  # p -> board indices in increasing h
 
-    def add(p: int, h: int, content) -> None:
+    def add(p: int, h: int, content, parent: int = -1) -> None:
         piece, colour, moved = content
-        boards.append(_Board(p, h, piece, colour, moved))
+        boards.append(_Board(p, h, piece, colour, moved, creation=len(boards), parent_creation=parent))
         timelines.setdefault(p, []).append(len(boards) - 1)
 
     first = _initial_board(rng, width, height, fairy_prob)
@@ -187,7 +196,8 @@ def synthetic_state(
                 pool = np.flatnonzero(past & (hs <= hs[past].min() + 1))
             else:
                 pool = np.flatnonzero(past & (hs >= hs[past].max() - 4))
-            dest = boards[int(rng.choice(pool))]
+            dest_index = int(rng.choice(pool))
+            dest = boards[dest_index]
             mover = COLOUR_WHITE if dest.h % 2 == 0 else COLOUR_BLACK
             if mover == COLOUR_WHITE:
                 p_new = next_white  # "+n" -> n in both conventions
@@ -195,7 +205,10 @@ def synthetic_state(
             else:
                 p_new = -next_black - 1 if even_start else -next_black  # even start: "-n" -> -n-1
                 next_black += 1
-            add(p_new, dest.h + 1, _arrive(rng, dest, mover, fairy_prob))
+            # The origin is the destination board - unless it is a head (the quirk in the
+            # module docstring), when it is recorded as unknown.
+            origin = -1 if dest_index in heads else dest_index
+            add(p_new, dest.h + 1, _arrive(rng, dest, mover, fairy_prob), parent=origin)
         else:
             # Extend a head, preferring timelines that lag behind (heads at varying times).
             ps = list(timelines)
@@ -208,7 +221,7 @@ def synthetic_state(
                 content = (head.piece.copy(), head.colour.copy(), head.moved.copy())
             else:
                 content = _apply_random_move(rng, head, mover)
-            add(p, head.h + 1, content)
+            add(p, head.h + 1, content, parent=timelines[p][-1])
 
     # Active timelines: a player's k-th timeline is active while k <= opponent's count + 1.
     n_white = next_white - 1
@@ -227,6 +240,9 @@ def synthetic_state(
     assert n == n_boards
     p_arr = np.array([b.p for b in boards], dtype=np.int64)
     h_arr = np.array([b.h for b in boards], dtype=np.int64)
+    index_of = {b.creation: i for i, b in enumerate(boards)}
+    parent = np.array([index_of[b.parent_creation] if b.parent_creation >= 0 else -1 for b in boards], dtype=np.int64)
+    creation = np.array([b.creation for b in boards], dtype=np.int64)
     head = np.zeros(n, dtype=bool)
     for p in np.unique(p_arr):
         idx = np.flatnonzero(p_arr == p)
@@ -245,6 +261,8 @@ def synthetic_state(
         moved=np.stack([b.moved for b in boards]),
         regs_per_board=regs_per_board,
         global_regs=global_regs,
+        parent=parent,
+        creation=creation,
     )
     probe = PositionState(**state_kwargs)
     layout = probe.layout

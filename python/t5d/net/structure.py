@@ -75,6 +75,13 @@ stand for "no board" and are zero): B6's binned Delta-time/Delta-timeline biases
 on the two tokens' boards only, so they are one board-pair table per batch; B12's
 smolgen (``smolgen.py``) adds a table per layer. A token pair's bias is the table at
 (query's board, key's board); global registers and padding have no board and get none.
+
+**Under the block-causal scope** (stage N3, ``scope.py``) the edge-derived masks and
+biases (B9's move graph, B10's relations head, B11's typed biases) and B12's smolgen
+biases open and bias live query rows only (``build_structure(live=...)``): they are
+generated per position, and a frozen token that read through them would read the
+present. ``scope.py`` documents the reading. The geometric roles (same board, same
+square) and B6's biases are unchanged.
 """
 
 from __future__ import annotations
@@ -140,6 +147,14 @@ class Pairs:
 
     def __len__(self) -> int:
         return int(self.q.shape[0])
+
+    def live_queries(self, live: torch.Tensor | None) -> Pairs:
+        """The pairs whose query is a live token (``live`` ``(B, L)`` bool; None: all)."""
+        if live is None:
+            return self
+        keep = live[self.b, self.q]
+        pick = lambda x: None if x is None else x[keep]  # noqa: E731
+        return Pairs(self.b[keep], self.q[keep], self.k[keep], pick(self.t), pick(self.o))
 
 
 def _endpoints(batch: Batch, relation_ids: list[int]) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -220,6 +235,9 @@ class AttnStructure:
     smolgen_in: SmolgenInputs | None = None
     pair_table: torch.Tensor | None = None  # this layer's board-pair table (B6 + B12)
     layer_ready: bool = True  # False until ``for_layer`` has added this layer's smolgen table
+    #: (B, Nb) bool: the query boards whose rows carry B12's biases (None: every board) -
+    #: the live boards under the block-causal scope.
+    smolgen_rows: torch.Tensor | None = None
     #: Block-sparse plans by (role, block, kernel keys, fraction), shared by every layer's
     #: copy of the structure (``for_layer`` copies the reference).
     plans: dict = field(default_factory=dict, repr=False)
@@ -248,7 +266,10 @@ class AttnStructure:
         """This structure with the board-pair table of one layer, whose normed input is ``h``."""
         if self.smolgen is None:
             return self
-        table = F.pad(self.smolgen(h, self.smolgen_in).float(), (0, 1, 0, 1))
+        table = self.smolgen(h, self.smolgen_in).float()
+        if self.smolgen_rows is not None:
+            table = table * self.smolgen_rows[:, None, :, None].to(table.dtype)
+        table = F.pad(table, (0, 1, 0, 1))
         if self.base_pair_table is not None:
             table = table + self.base_pair_table
         return replace(self, pair_table=table, layer_ready=True)
@@ -489,9 +510,14 @@ def build_structure(
     typed_edges: TypedEdgeBias | None = None,
     binned_bias: nn.Module | None = None,
     smolgen: BoardPairSmolgen | None = None,
+    live: torch.Tensor | None = None,
+    live_boards: torch.Tensor | None = None,
 ) -> AttnStructure | None:
     """The batch's attention structure, or None when every head is dense and nothing adds
-    a bias (then attention needs only the padding mask)."""
+    a bias (then attention needs only the padding mask). ``live`` ``(B, L)`` /
+    ``live_boards`` ``(B, Nb)``: under the block-causal scope, the tokens and boards whose
+    rows the edge-derived masks and biases and B12's smolgen may open or bias (None:
+    every row - the dense scope)."""
     roles = cfg.head_roles
     structured = any(role != "dense" for role in roles)
     if not (structured or typed_edges is not None or binned_bias is not None or smolgen is not None):
@@ -502,12 +528,12 @@ def build_structure(
     square_id = torch.where(batch.square_mask, xy[..., 1] * 4096 + xy[..., 0], torch.full_like(xy[..., 0], -1))
     move = rel = typed = None
     if "move_graph" in roles:
-        move = mask_pairs(batch, [RELATION_IDS["move"]], cfg.move_graph_direction)
+        move = mask_pairs(batch, [RELATION_IDS["move"]], cfg.move_graph_direction).live_queries(live)
     if "relations" in roles:
-        rel = mask_pairs(batch, [RELATION_IDS[name] for name in cfg.relations_head_types], cfg.relations_direction)
+        rel = mask_pairs(batch, [RELATION_IDS[name] for name in cfg.relations_head_types], cfg.relations_direction).live_queries(live)
     table = None
     if typed_edges is not None:
-        typed = typed_pairs(batch, cfg.typed_edge_directed)
+        typed = typed_pairs(batch, cfg.typed_edge_directed).live_queries(live)
         table = typed_edges.table
     ph = board_coordinates(batch, coords).round() if (binned_bias is not None or smolgen is not None) else None
     base = None
@@ -530,4 +556,5 @@ def build_structure(
         smolgen_in=None if smolgen is None else smolgen_inputs(batch, cfg, ph),
         pair_table=base,
         layer_ready=smolgen is None,
+        smolgen_rows=live_boards if smolgen is not None else None,
     )

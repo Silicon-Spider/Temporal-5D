@@ -6,12 +6,18 @@ random weights. Stage N2: the attention structure of section 6 - the move-graph 
 and B14's attention paths, block-sparse (the default) and chunked, which build masks and
 biases one query block at a time - ``structure.py``, ``smolgen.py``, ``attention.py``
 (B14's FlexAttention ``score_mod`` is not built: no compiler or GPU here). Stage N3: the
-cached path. See ``config.py`` for which register rows are built here and which are
-flags for later stages.
+block-causal scope (C17, C19 - ``scope.py``, ``NetConfig.attn_scope``), the lineage it rests
+on (``PositionState.parent`` / ``creation``), the cached evaluation path with supersession
+recompute, prefix sharing, refresh epochs and FP8 storage (C2, C3, C3a rung 1, C15, C20 -
+``cache.py``), a search-tree fixture (``tree.py``), and section 15.3's cost model and
+benchmark (``cost.py``, ``cache_bench.py``). See ``config.py`` for which register rows are
+built here and which are flags for later stages.
 """
 
+from .cache import CacheConfig, CachedEvaluator, Epoch, KVStore, reference_output
 from .config import F1, F2_LARGER_ARM, PRESETS, NetConfig
 from .model import NetOutput, T5DNet, build_model, parameter_breakdown
+from .scope import BlockCausalScope, board_scope
 from .state import (
     PIECE_IDS,
     PIECE_LETTERS,
@@ -27,8 +33,18 @@ from .state import (
     translate,
 )
 from .synthetic import synthetic_state, synthetic_states
+from .tree import Multiverse, SearchTree
 
 __all__ = [
+    "BlockCausalScope",
+    "CacheConfig",
+    "CachedEvaluator",
+    "Epoch",
+    "KVStore",
+    "Multiverse",
+    "SearchTree",
+    "board_scope",
+    "reference_output",
     "F1",
     "F2_LARGER_ARM",
     "PRESETS",
