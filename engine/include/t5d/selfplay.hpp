@@ -80,6 +80,13 @@ struct GameRecord {
   std::uint64_t nodes = 0;            ///< nodes created by the searches
   std::uint64_t search_turn_caps = 0; ///< capped positions the searches met (I11)
   double seconds = 0;
+  // Where the time went (the searches' SearchStats, summed; and the game's own
+  // turn-start verdicts and exact verifications of chosen moves).
+  double seconds_search_mate = 0;
+  double seconds_search_expand = 0;
+  double seconds_search_listing = 0;
+  double seconds_search_verify = 0;
+  double seconds_verdicts = 0;
 
   bool cap_bound() const noexcept { return end == GameEnd::TurnCap; }
   /// The 5dpgn result: "1-0", "0-1", "1/2-1/2" (stalemate), or "*" (not ended

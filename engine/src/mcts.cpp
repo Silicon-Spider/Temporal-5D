@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <bit>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <map>
@@ -171,6 +172,10 @@ std::uint64_t combine(std::uint64_t h, std::uint64_t v) noexcept {
 
 std::uint64_t bits_of(double d) noexcept { return std::bit_cast<std::uint64_t>(d); }
 
+double seconds_since(std::chrono::steady_clock::time_point t0) noexcept {
+  return std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+}
+
 }  // namespace detail
 
 using detail::Edge;
@@ -231,11 +236,11 @@ std::uint64_t node_key(const GameState& state, NodeKey keying) noexcept {
     // Each timeline's branch origin (the lineage reading of spec issue 30):
     // not in the 5D Zobrist key, which holds only what the rules read.
     for (const TimelineRef& t : state.multiverse().timelines()) {
-      const std::optional<BoardCoord> origin = t->origin();
-      if (!origin.has_value()) continue;
+      if (!t->origin().has_value()) continue;
+      const BoardCoord origin = t->origin().value();  // no optional copied (g++ 13/14 warn)
       const auto p = static_cast<std::uint64_t>(static_cast<std::uint32_t>(t->position()));
-      const auto ot = static_cast<std::uint64_t>(static_cast<std::uint32_t>(origin->timeline));
-      const auto oh = static_cast<std::uint64_t>(static_cast<std::uint32_t>(origin->half_turn));
+      const auto ot = static_cast<std::uint64_t>(static_cast<std::uint32_t>(origin.timeline));
+      const auto oh = static_cast<std::uint64_t>(static_cast<std::uint32_t>(origin.half_turn));
       key = detail::combine(key, detail::mix64((p << 32) ^ 0x6F726967696E7321ull) ^
                                      detail::mix64((ot << 32) | oh));
     }
@@ -383,9 +388,14 @@ const Evaluation* EvalCache::find(std::uint64_t key, std::uint64_t epoch, const 
 
 void EvalCache::insert(std::uint64_t key, std::uint64_t epoch, const GameState& state,
                        const Evaluation& evaluation) {
-  if (entries_.size() >= capacity_) return;
+  // An entry's cost, estimated: its logits, its value, the state's timeline
+  // list (boards are shared with the search), and the map's overhead.
+  const std::size_t cost = evaluation.logits.size() * sizeof(float) + sizeof(Entry) +
+                           static_cast<std::size_t>(state.multiverse().timeline_count()) * 24 + 64;
+  if (entries_.size() >= capacity_ || bytes_ + cost > max_bytes_) return;
   if (find(key, epoch, state, true) != nullptr) return;
   entries_.emplace(key, Entry{state, epoch, evaluation});
+  bytes_ += cost;
 }
 
 // ---------------------------------------------------------------------------
@@ -418,7 +428,7 @@ struct Search::Impl {
     if (cache) {
       cache_ = std::move(cache);
     } else if (params_.eval_cache_entries > 0) {
-      cache_ = std::make_shared<EvalCache>(params_.eval_cache_entries);
+      cache_ = std::make_shared<EvalCache>(params_.eval_cache_entries, params_.eval_cache_bytes);
     }
     if (params_.split == TurnSplit::WholeTurn && !turn_start) {
       throw std::invalid_argument("the whole-turn split searches from turn starts only");
@@ -480,7 +490,9 @@ struct Search::Impl {
     SearchBudget budget;
     budget.max_nodes = params_.mate_nodes;
     budget.max_bytes = params_.mate_bytes;
+    const auto t0 = std::chrono::steady_clock::now();
     const MateResult r = detect_mate(n.state, params_.detector, budget);
+    stats_.seconds_mate += detail::seconds_since(t0);
     switch (r.verdict) {
       case Outcome::Checkmate:
         n.terminal = Terminal::Checkmate;
@@ -609,11 +621,13 @@ struct Search::Impl {
   // the budget SearchParams::legality: proved-illegal moves dropped, legal and
   // unknown ones kept (Expansion::move_legality says which); under the
   // whole-turn split, the pseudo-legal moves the action prior is read from.
-  void leaf_expansion(const Node& n, Expansion& out) const {
+  void leaf_expansion(const Node& n, Expansion& out) {
+    const auto t0 = std::chrono::steady_clock::now();
     ExpandOptions o = params_.expand;
     o.legal_moves = params_.split == TurnSplit::BoardMove && params_.legal_moves_only;
     o.legality = params_.legality;
     expand(n.state, o, out);
+    stats_.seconds_expand += detail::seconds_since(t0);
   }
 
   // (c) An edge's move classified under `options`: Legal, Illegal or Unknown.
@@ -644,7 +658,9 @@ struct Search::Impl {
 
   // (c) Verifies an unknown edge once: Illegal prunes it.
   MoveLegality verify_edge(NodeId pid, std::size_t ei, const LegalityOptions& options) {
+    const auto t0 = std::chrono::steady_clock::now();
     const MoveLegality v = classify_edge(pid, ei, options);
+    stats_.seconds_verify += detail::seconds_since(t0);
     Edge& e = nodes_[pid].edges[ei];
     e.verified = true;
     switch (v) {
@@ -665,8 +681,10 @@ struct Search::Impl {
     SearchBudget budget;
     budget.max_nodes = params_.listing_nodes;
     budget.max_bytes = params_.mate_bytes;
+    const auto t0 = std::chrono::steady_clock::now();
     const ActionList list =
         list_legal_actions(n.state, params_.max_actions, params_.detector, budget);
+    stats_.seconds_listing += detail::seconds_since(t0);
     n.action_moves.clear();
     n.action_offsets.assign(1, 0);
     for (const LegalAction& a : list.actions) {

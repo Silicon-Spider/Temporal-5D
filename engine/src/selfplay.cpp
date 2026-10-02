@@ -76,7 +76,7 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
   sp.turn_cap = params.turn_cap;
   if (params.match_play) sp.root_noise = false;  // §12.3: noise off at match play
   std::shared_ptr<EvalCache> cache;
-  if (sp.eval_cache_entries > 0) cache = std::make_shared<EvalCache>(sp.eval_cache_entries);
+  if (sp.eval_cache_entries > 0) cache = std::make_shared<EvalCache>(sp.eval_cache_entries, sp.eval_cache_bytes);
   std::uint64_t rng = mix(params.seed ^ 0x73656C66706C6179ull);
   const auto uniform = [&rng] {
     rng += 0x9E3779B97F4A7C15ull;
@@ -89,7 +89,9 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
   verdict_budget.max_bytes = sp.mate_bytes;
   for (;;) {
     // A turn start: the rules first, then the cap's convention.
+    const auto v0 = std::chrono::steady_clock::now();
     const MateResult r = detect_mate(s, sp.detector, verdict_budget);
+    g.seconds_verdicts += std::chrono::duration<double>(std::chrono::steady_clock::now() - v0).count();
     if (r.verdict == Outcome::Checkmate) {
       g.end = GameEnd::Checkmate;
       g.winner = index_of(opposite(s.to_move()));
@@ -130,11 +132,6 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
       }
       const SearchStats before = search->stats();
       search->run(evaluator, Limits{params.playouts});
-      const SearchStats& after = search->stats();
-      g.playouts += after.playouts - before.playouts;
-      g.evaluations += after.evaluations - before.evaluations;
-      g.nodes += after.nodes_created - before.nodes_created;
-      g.search_turn_caps += after.turn_caps - before.turn_caps;
       const auto choose_now = [&]() -> std::size_t {
         bool visited = false;
         for (const RootChild& c : search->root_children()) visited = visited || c.visits > 0;
@@ -172,6 +169,15 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
         }
         pick = best;
       }
+      const SearchStats& after = search->stats();
+      g.playouts += after.playouts - before.playouts;
+      g.evaluations += after.evaluations - before.evaluations;
+      g.nodes += after.nodes_created - before.nodes_created;
+      g.search_turn_caps += after.turn_caps - before.turn_caps;
+      g.seconds_search_mate += after.seconds_mate - before.seconds_mate;
+      g.seconds_search_expand += after.seconds_expand - before.seconds_expand;
+      g.seconds_search_listing += after.seconds_listing - before.seconds_listing;
+      g.seconds_search_verify += after.seconds_verify - before.seconds_verify;
       ++g.decisions;
       const RootChild& c = children.at(pick);
       if (sp.split == TurnSplit::WholeTurn) {

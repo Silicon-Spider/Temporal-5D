@@ -152,6 +152,7 @@ typedef struct t5d_search_params {
   int32_t turn_cap_turns;      /* 0: none */
   int32_t turn_cap_boards;     /* 0: none */
   uint64_t eval_cache_entries; /* 0: no cache */
+  uint64_t eval_cache_bytes;   /* its memory ceiling (estimated) */
 } t5d_search_params;
 
 /* One leaf of a gathered batch. */

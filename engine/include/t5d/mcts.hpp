@@ -293,6 +293,7 @@ struct SearchParams {
 
   // ---- state-keyed evaluations ---------------------------------------------------------
   std::size_t eval_cache_entries = std::size_t{1} << 16;  ///< 0: no cache
+  std::size_t eval_cache_bytes = std::size_t{256} << 20;  ///< its memory ceiling (estimated)
 };
 
 /// What a search may spend in one run().
@@ -406,7 +407,11 @@ bool final_eligible(std::span<const FinalCandidate> children, std::size_t i,
 
 class EvalCache {
  public:
-  explicit EvalCache(std::size_t capacity = std::size_t{1} << 16) : capacity_(capacity) {}
+  /// At most `capacity` entries and about `max_bytes` bytes (an entry's
+  /// logits and its state's timeline list, estimated).
+  explicit EvalCache(std::size_t capacity = std::size_t{1} << 16,
+                     std::size_t max_bytes = std::size_t{256} << 20)
+      : capacity_(capacity), max_bytes_(max_bytes) {}
   /// The cached evaluation of `state` at `epoch`, compared exactly (keys may
   /// collide), or nullptr.
   const Evaluation* find(std::uint64_t key, std::uint64_t epoch, const GameState& state,
@@ -416,7 +421,11 @@ class EvalCache {
               const Evaluation& evaluation);
   std::size_t size() const noexcept { return entries_.size(); }
   std::size_t capacity() const noexcept { return capacity_; }
-  void clear() noexcept { entries_.clear(); }
+  std::size_t bytes() const noexcept { return bytes_; }
+  void clear() noexcept {
+    entries_.clear();
+    bytes_ = 0;
+  }
 
  private:
   struct Entry {
@@ -425,6 +434,8 @@ class EvalCache {
     Evaluation evaluation;
   };
   std::size_t capacity_;
+  std::size_t max_bytes_;
+  std::size_t bytes_ = 0;
   std::unordered_multimap<std::uint64_t, Entry> entries_;
 };
 
@@ -459,6 +470,11 @@ struct SearchStats {
   std::uint64_t nodes_created = 0;
   std::uint64_t nodes_collected = 0;   ///< deleted by re-rooting
   std::uint64_t reroots = 0;
+  // Wall-clock seconds in the rules engine's calls (not part of digest()):
+  double seconds_mate = 0;     ///< turn starts' terminal checks (detect_mate)
+  double seconds_expand = 0;   ///< leaves' expansions (legality classification included)
+  double seconds_listing = 0;  ///< whole-turn: the actions listed
+  double seconds_verify = 0;   ///< (c) verifications of unknown edges
 };
 
 /// A node as the tests and tools read it.
