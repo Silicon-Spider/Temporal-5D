@@ -41,16 +41,21 @@ from pathlib import Path
 from .. import build, fingerprint, headers, paths
 from ..lockfile import Lock
 from ..observations import FINGERPRINT_FIELDS, Observation, Position
-from ..util import Completed, run
+from ..util import Completed, Stop, run
 from . import base
 from .base import RunOptions, Source, code_sha256
 
 _DRIVER = paths.DRIVERS / "cwmtt" / "Driver.hs"
+# The "limit" a merged position carries (in Observation.extras) where the state
+# driver ran out of time before it said what cwmtt set up there: the side to move
+# and the state are unknown at the deadline, the CLI's answers stand.
+DRIVER_DEADLINE = "state_driver_deadline"
 
 _ALGORITHMS = {"cwmtt": "fast", "cwmtt:naive": "naive"}
 # A count is only trusted once the space that follows it has been printed: the
 # CLI writes unbuffered, so a killed run can end in half a number.
 _COUNT = re.compile(r"(\d+) ")
+_COUNT_BYTES = re.compile(rb"(\d+) ")
 # The escapes Haskell's `show` writes into a string literal (Haskell 2010 report,
 # section 2.6): a decimal, hex or octal code, a control character, an ASCII
 # name, the empty escape \& and the single-letter ones, and a string gap.
@@ -176,6 +181,43 @@ def _cli_output(done: Completed) -> tuple[str, list[int], str]:
     return unparsed, counts, done.err_text().strip()
 
 
+def count_arrivals(done: Completed) -> list[float | None]:
+    """When each count of a `cwmtt count` run arrived - when the space after it did; None where not measured.
+
+    The CLI prints its counts as a stream on one line, a count as soon as it
+    has it: this reads the same line as _cli_output does, as bytes.
+    """
+    chosen: tuple[int, bytes] | None = None
+    start = 0
+    for raw in done.stdout.split(b"\n"):
+        line = raw[:-1] if raw.endswith(b"\r") else raw
+        if line and not line.startswith(b"Unparsed: "):
+            chosen = (start, line)
+        start += len(raw) + 1
+    if chosen is None:
+        return []
+    offset, line = chosen
+    return [done.arrived(offset + match.end() - 1) for match in _COUNT_BYTES.finditer(line)]
+
+
+def watch_counts(needed: int) -> Stop:
+    """A stop condition for util.run: a `cwmtt count` run has printed ``needed`` whole counts."""
+    current = bytearray()
+
+    def arrived(chunk: bytes) -> bool:
+        *finished, rest = chunk.split(b"\n")
+        lines = []
+        if finished:
+            lines = [bytes(current) + finished[0], *finished[1:]]
+            current[:] = rest
+        else:
+            current.extend(rest)
+        lines.append(bytes(current))
+        return any(not line.startswith(b"Unparsed: ") and len(_COUNT_BYTES.findall(line)) >= needed for line in lines)
+
+    return arrived
+
+
 def parse_count_output(source: str, record_id: str, done: Completed, cap: int, elapsed: float) -> Observation:
     unparsed, counts, warning = _cli_output(done)
     positions = [
@@ -184,8 +226,9 @@ def parse_count_output(source: str, record_id: str, done: Completed, cap: int, e
     ]
     observation = Observation(source=source, record=record_id, status="ok", positions=positions, cap=cap, elapsed_s=elapsed)
     unread = remainder_kind(unparsed) if unparsed else "none"
-    if done.timed_out:
-        observation.status, observation.reason = "timeout", "timeout"
+    if done.killed:
+        # Cut short: its time ran out, or the gate stopped it with every count it needed in hand.
+        observation.status, observation.reason = "timeout", "stopped" if done.stopped else "timeout"
     elif done.returncode != 0 or not positions:
         observation.status, observation.reason = "error", "crash"
         observation.detail = f"exit code {done.returncode}; {warning[-300:]}"
@@ -208,6 +251,9 @@ def parse_count_output(source: str, record_id: str, done: Completed, cap: int, e
         observation.status, observation.reason = "unsupported", "notation"
         observation.detail = unparsed[:300]
     observation.actions_accepted = max(len(positions) - 1, 0)
+    observation.arrival_s = count_arrivals(done)[:len(positions)]
+    if not done.killed:
+        observation.ended_s = done.elapsed_s or None
     return observation
 
 
@@ -379,6 +425,38 @@ def _cut_short_driver(counted: Observation, cli: Completed, driven: Observation,
     return "", ""
 
 
+def _unstated(merged: Observation) -> Observation:
+    """Mark each position the state driver did not reach before its deadline (CwmttSource.limits)."""
+    for position in merged.positions:
+        if position.placement is None:
+            merged.extras.setdefault(position.index, {})["limit"] = DRIVER_DEADLINE
+    return merged
+
+
+def _timed(merged: Observation, cli_arrivals: list[float | None], driven: Observation) -> Observation:
+    """When each merged position had arrived: its count from the CLI, and its state from the driver if it was paired.
+
+    The two programs run one after the other, each against its own deadline, so
+    each time is from the start of the program it came from; a position has
+    arrived when both of its halves have. The outcome is known when the later of
+    the two ended.
+    """
+    def at(times: list[float | None], index: int) -> float | None:
+        return times[index] if index < len(times) else None
+
+    arrival = []
+    for position in merged.positions:
+        times = [at(cli_arrivals, position.index)]
+        if position.placement is not None:
+            times.append(at(driven.arrival_s, position.index))
+        known = [time for time in times if time is not None]
+        arrival.append(max(known) if known else None)
+    merged.arrival_s = arrival
+    if merged.ended_s is not None and driven.ended_s is not None:
+        merged.ended_s = max(merged.ended_s, driven.ended_s)
+    return merged
+
+
 def merge(source: str, record_id: str, cli: Completed, driver: Completed, declared: str, cap: int,
           elapsed: float) -> Observation:
     """One report from a stock CLI run and a state driver run on the same record.
@@ -396,8 +474,13 @@ def merge(source: str, record_id: str, cli: Completed, driver: Completed, declar
     declared layout and left the CLI's text unread.
     """
     counted = parse_count_output(source, record_id, cli, cap, elapsed)
+    cli_arrivals = list(counted.arrival_s)
     driven = base.parse_jsonl(source, record_id, driver, None, elapsed)
     counted.diagnostics = driven.diagnostics
+    return _timed(_merged(counted, cli, driven, driver, declared), cli_arrivals, driven)
+
+
+def _merged(counted: Observation, cli: Completed, driven: Observation, driver: Completed, declared: str) -> Observation:
     start, end = _event(driver, "start"), _event(driver, "end")
 
     def failed(reason: str, problem: str) -> Observation:
@@ -417,9 +500,9 @@ def merge(source: str, record_id: str, cli: Completed, driver: Completed, declar
             return failed(kind, f"the state driver ran out of time, and {problem}")
         if problem:
             noted(f"the state driver ran out of time: {problem}; no state is paired")
-            return counted
+            return _unstated(counted)
         noted(f"the state driver ran out of time after {len(driven.positions)} position(s)")
-        return _pair(counted, driven.positions, _fragment(start["unparsed"], start.get("parsed_actions")))
+        return _unstated(_pair(counted, driven.positions, _fragment(start["unparsed"], start.get("parsed_actions"))))
     problem = _driver_problem(driven, start, end)
     if problem:
         return failed("driver_error", problem)
@@ -433,11 +516,20 @@ class CwmttSource(Source):
     oracle = "cwmtt"
     answers = ("state", "side", "legal_actions", "terminal", "legality")
     diagnostics = ("explain", "actions")
+    # The count and the verdict come from the CLI's search; the side to move,
+    # like what cwmtt set up, from the state driver, which searches nothing.
+    searched = ("legal_actions", "terminal")
 
     def __init__(self, name: str, lock: Lock):
         self.name = name
         self.algorithm = _ALGORITHMS[name]
         self.pin = lock.pin("cwmtt")
+
+    def limits(self, observation: Observation, index: int, options: RunOptions) -> dict[str, str]:
+        """Where the state driver ran out of time before a position, its side to move and its state are unknown there."""
+        if observation.extras.get(index, {}).get("limit") != DRIVER_DEADLINE:
+            return {}
+        return dict.fromkeys(("side", *FINGERPRINT_FIELDS), f"timeout_s={base.number(options.timeout_s)}")
 
     def _build(self) -> build.Build | None:
         return build.load(self.pin)
@@ -457,10 +549,18 @@ class CwmttSource(Source):
         if refused:
             return Observation(source=self.name, record=record_id, status="unsupported", reason=refused[0],
                                detail=refused[1], actions_accepted=0, cap=options.cap)
+        # A gate run that needs nothing past a position stops the CLI once its
+        # count is in (or, where only what cwmtt set up there is needed, the one
+        # before it). The driver is never stopped: it searches nothing, and
+        # every state it prints is held to the CLI's reading of the record.
+        stop = None
+        if options.stop_after is not None:
+            index, kind = options.stop_after
+            stop = watch_counts(index + 1 if kind == "position" else index)
         started = time.monotonic()
         try:
             cli = run([built.artifact("cli"), "count", self.algorithm, str(options.cap)],
-                      stdin=data, timeout=options.timeout_s)
+                      stdin=data, timeout=options.timeout_s, stop=stop)
             driver = run([built.artifact("driver"), "--algorithm", self.algorithm, *self.diagnostic_args(options)],
                          stdin=data, timeout=options.timeout_s)
         except OSError as error:

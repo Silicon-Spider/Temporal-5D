@@ -1,7 +1,8 @@
 {
-  "schema": 2,
+  "schema": 3,
   "source": "chessin5d",
-  "signature": {"adapter_sha256": "718085aa8892c6f48a5d3a4e1321dbbc94bf08b233a6f23e1543faad8688a403", "driver_sha256": "d8fbdbfdfeb3be70a2a51809000e64b141723518b497f7329dfee1717ff1c4f5", "mate_heap_mb": 1024, "pin": "ee403c80e8c132fc4d168f5b99ddd9b8fe5cc17b"},
+  "signature": {"adapter_sha256": "d0c44289a17068f48b75362be2c087951881f8adec4a7be5bfc3ec5bd7ff12af", "budget": {"mate_budget_ms": 60000, "mate_heap_mb": 1024, "timeout_s": 900.0}, "driver_sha256": "d8fbdbfdfeb3be70a2a51809000e64b141723518b497f7329dfee1717ff1c4f5", "pin": "ee403c80e8c132fc4d168f5b99ddd9b8fe5cc17b"},
+  "recordings": 2,
   "records": {
     "cwmtt/100_timelines": {
       "sha256": "caee1585fdb2ff207c4fb592633d8f9e63b71402a346e087ebbd682b939714ec",
@@ -9,6 +10,7 @@
       "reason": "",
       "actions_accepted": 21,
       "last_action": null,
+      "unknown": {"21": {"terminal": "mate_budget_ms=60000"}},
       "positions": [
         ["w", false, null, "none", "86d9a9eb3a9902c94379d438bcf18de1", "af6e344e57b49ae62ed63ce48037815c", 2, 64],
         ["b", false, null, "none", "ddd9930e72342fac5ace85f94048b900", "7742766315e4d211ebcbe207f3f1442d", 3, 96],
@@ -420,6 +422,7 @@
       "reason": "",
       "actions_accepted": 52,
       "last_action": null,
+      "unknown": {"41": {"terminal": "mate_heap_mb=1024"}, "52": {"terminal": "mate_budget_ms=60000"}},
       "positions": [
         ["w", false, null, "none", "d574889fd9da3f2bc65249ff27249b00", "2b8fa7fec7e4d7f2ecade5e01de08d0a", 1, 32],
         ["b", false, null, "none", "74550a402b7fb6d3d259369b06cab8ab", "ca748ad018674807cd3bb7682687d962", 2, 64],
@@ -482,6 +485,7 @@
       "reason": "",
       "actions_accepted": 121,
       "last_action": null,
+      "unknown": {"52": {"terminal": "mate_heap_mb=1024"}, "54": {"terminal": "mate_heap_mb=1024"}, "72": {"terminal": "mate_heap_mb=1024"}, "74": {"terminal": "mate_heap_mb=1024"}, "78": {"terminal": "mate_heap_mb=1024"}, "80": {"terminal": "mate_heap_mb=1024"}, "82": {"terminal": "mate_heap_mb=1024"}, "114": {"terminal": "mate_heap_mb=1024"}},
       "positions": [
         ["w", false, null, "none", "14c8effca0ad8a6144ce4750c8af2a05", "e1b6a3b36221361696fad6467348a569", 1, 32],
         ["b", false, null, "none", "70a83fe2a1a51e39d3353e3042d57e08", "0aece68cf50bad6175a7ed5718ec78da", 2, 64],
@@ -772,6 +776,7 @@
       "reason": "",
       "actions_accepted": 47,
       "last_action": null,
+      "unknown": {"9": {"terminal": "mate_heap_mb=1024"}, "13": {"terminal": "mate_heap_mb=1024"}, "19": {"terminal": "mate_heap_mb=1024"}},
       "positions": [
         ["w", false, null, "none", "d574889fd9da3f2bc65249ff27249b00", "2b8fa7fec7e4d7f2ecade5e01de08d0a", 1, 32],
         ["b", false, null, "none", "74550a402b7fb6d3d259369b06cab8ab", "ca748ad018674807cd3bb7682687d962", 2, 64],

@@ -1,0 +1,16 @@
+{
+ "cpu_count": 24,
+ "platform": "windows-x86_64 (Windows-11-10.0.26200-SP0)",
+ "positions": 38,
+ "record": "cwmtt/manyChecks",
+ "schema": 1,
+ "seconds": 8.48,
+ "signature": {
+  "adapter_sha256": "10c18e65b8726374a8d3c721aa97277c5aec6b60263e20dab8d97ee2876a14f5",
+  "cap": 1000,
+  "driver_sha256": "56ec6c1cc15526d6de09583f330cbb71dd96ad99000d5ae04f6969c3958f5296",
+  "pin": "2ea9f1b82880f08faa9400d1ac20b20102604187",
+  "policy": "naive"
+ },
+ "source": "ftxi:naive"
+}

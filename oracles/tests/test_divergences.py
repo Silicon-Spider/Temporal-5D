@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from oracle_harness import corpus, divergences, golden, lockfile
+from oracle_harness import corpus, divergences, lockfile, snapshot
 from oracle_harness.divergences import Divergence
 from oracle_harness.observations import Disagreement, Observation, Position
 from oracle_harness.util import HarnessError
@@ -53,6 +53,17 @@ class DivergenceTests(unittest.TestCase):
         # Not both, and not a placeholder.
         self.assertEqual(codes(self.verify(**{**soft, "rulebook": RULE})), ["divergence-citation"])
         self.assertEqual(codes(self.verify(**{**soft, "notation": "TBD"})), ["divergence-citation"])
+
+    def test_move_text_the_engine_could_not_read_is_settled_by_the_notation_specification(self):
+        # The engine, in either mode, refuses as "unreadable" text an oracle played - an action's, or at index 0 the
+        # record's set-up: whether that text is valid is the specification's to say, and only it can excuse that.
+        unread = dict(kind="legality", index=17, engine_value="rejected:unreadable", oracle_value="accepted",
+                      oracle="ftxi", pin=self.lock.pin("ftxi").commit, rulebook="", notation=SPEC)
+        self.assertEqual(self.verify(**unread), [])
+        self.assertEqual(self.verify(**{**unread, "index": 0}), [])
+        found = self.verify(**{**unread, "rulebook": RULE, "notation": ""})
+        self.assertEqual(codes(found), ["divergence-citation"])
+        self.assertIn("cite it with notation", found[0].message)
 
     def test_nothing_else_is_settled_by_the_notation_specification(self):
         # A verdict on a position, or an action the oracle holds illegal, is a matter of the rules.
@@ -181,7 +192,7 @@ class GoldenCrossCheckTests(unittest.TestCase):
         stale = golden_files_predate_this_schema("chessin5d")
         if stale:
             self.skipTest(stale)
-        recorded = golden.lookup()
+        recorded = snapshot.take(["chessin5d"]).recorded
         said = recorded("chessin5d", "cwmtt/standard")
         self.assertIsNotNone(said)
         final = len(said.positions) - 1
@@ -229,6 +240,116 @@ class ApplyTests(unittest.TestCase):
         self.assertEqual(stale, [])
 
 
+class TelltaleTests(unittest.TestCase):
+    """H34: every recorded oracle error is a copy detector. An engine that reproduces one was probably copied."""
+
+    def entry(self, **changes):
+        values = dict(id="KD-0001", oracle="chessin5d", pin="p", record="r/1", record_sha256="s", kind="in_check",
+                      index=1, engine_value="True", oracle_value="False", rulebook="x" * 30,
+                      upstream="https://example.com/1", added="2026-10-01")
+        values.update(changes)
+        return Divergence(**values)
+
+    @staticmethod
+    def report(rows, status="ok", reason=""):
+        positions = [Position(index, *row) for index, row in enumerate(rows)]
+        return Observation(source="engine", record="r/1", status=status, positions=positions, reason=reason,
+                           actions_accepted=max(len(positions) - 1, 0), cap=1000)
+
+    def test_an_engine_that_gives_the_recorded_error_is_a_telltale(self):
+        copied = self.report([("white", False, 20, "none"), ("black", False, 20, "none")])
+        self.assertEqual(divergences.telltales([self.entry()], {"r/1": copied}), [(self.entry(), "False")])
+        right = self.report([("white", False, 20, "none"), ("black", True, 20, "none")])
+        self.assertEqual(divergences.telltales([self.entry()], {"r/1": right}), [])
+        # An engine that did not reach the place, or did not run the record, says nothing either way.
+        self.assertEqual(divergences.telltales([self.entry()], {"r/1": self.report([("white", False, 20, "none")])}), [])
+        self.assertEqual(divergences.telltales([self.entry()], {}), [])
+
+    def test_every_kind_is_a_telltale_parse_kinds_and_replays_included(self):
+        placed = self.report([("white", False, 20, "none")])
+        placed.positions = [dataclasses.replace(placed.positions[0], placement="b" * 32, fingerprint="c" * 32,
+                                                boards=1, pieces=32)]
+        state = "b" * 32 + " (1 board, 32 pieces)"
+        placement = self.entry(kind="placement", index=0, engine_value="a" * 32 + " (1 board, 32 pieces)",
+                               oracle_value=state)
+        self.assertEqual(len(divergences.telltales([placement], {"r/1": placed})), 1)
+        refused = self.report([("white", False, 20, "none")], status="rejected", reason="cannot_submit")
+        legality = self.entry(kind="legality", index=1, engine_value="accepted", oracle_value="rejected:cannot_submit")
+        self.assertEqual(divergences.telltales([legality], {"r/1": refused}), [(legality, "rejected:cannot_submit")])
+
+    @staticmethod
+    def oracle(source, rows, status="ok", reason=""):
+        positions = [Position(index, *row) for index, row in enumerate(rows)]
+        report = Observation(source=source, record="r/1", status=status, positions=positions, reason=reason,
+                             actions_accepted=max(len(positions) - 1, 0), cap=1000)
+        return lambda name, record_id: report if (name, record_id) == (source, "r/1") else None
+
+    def test_agreeing_with_the_error_by_the_comparisons_rule_is_reproducing_it(self):
+        # ftxi could not match action 2's text (a soft refusal); an engine whose parser fails on the same text -
+        # refusing it as unreadable, or calling it illegal - reproduces that, whatever reason it gives.
+        quiet = ("white", False, 20, "none")
+        entry = self.entry(oracle="ftxi", kind="legality", index=2, engine_value="accepted",
+                           oracle_value="rejected:no_matching_move")
+        ftxi = self.oracle("ftxi", [quiet, quiet], status="rejected", reason="no_matching_move")
+        for reason in ("illegal_move", "unreadable", "cannot_submit"):
+            copied = self.report([quiet, quiet], status="rejected", reason=reason)
+            self.assertEqual(divergences.telltales([entry], {"r/1": copied}, ftxi), [(entry, f"rejected:{reason}")])
+            self.assertEqual(len(divergences.telltales([entry], {"r/1": copied})), 1)  # no recorded report at hand
+        self.assertEqual(divergences.telltales([entry], {"r/1": self.report([quiet] * 3)}, ftxi), [])
+        # A hard refusal reproduced for another reason is reproduced all the same.
+        cannot = self.entry(oracle="cwmtt", kind="legality", index=2, engine_value="accepted",
+                            oracle_value="rejected:cannot_submit")
+        cwmtt = self.oracle("cwmtt", [(None, None, 20, "none")] * 2, status="rejected", reason="cannot_submit")
+        illegal = self.report([quiet, quiet], status="rejected", reason="illegal_move")
+        self.assertEqual(divergences.telltales([cannot], {"r/1": illegal}, cwmtt), [(cannot, "rejected:illegal_move")])
+
+    def test_a_verdict_that_only_says_no_action_is_reproduced_by_either_end(self):
+        # cwmtt wrongly finds no action at position 1; an engine that calls it checkmate or stalemate agrees.
+        rows = [(None, None, 20, "none"), (None, None, 0, "no_action")]
+        cwmtt = self.oracle("cwmtt", rows)
+        count = self.entry(oracle="cwmtt", kind="legal_actions", engine_value="25", oracle_value="0")
+        verdict = self.entry(id="KD-0002", oracle="cwmtt", kind="terminal", engine_value="none", oracle_value="no_action")
+        copied = self.report([("white", False, 20, "none"), ("black", True, 0, "checkmate")])
+        self.assertEqual(divergences.telltales([count, verdict], {"r/1": copied}, cwmtt),
+                         [(count, "0"), (verdict, "checkmate")])
+        right = self.report([("white", False, 20, "none"), ("black", False, 25, "none")])
+        self.assertEqual(divergences.telltales([count, verdict], {"r/1": right}, cwmtt), [])
+        # A count at the cap agrees with any as large.
+        capped = self.entry(oracle="cwmtt", kind="legal_actions", engine_value="998", oracle_value=">=1000")
+        wide = self.oracle("cwmtt", [(None, None, 20, "none"), (None, None, 1000, "none")])
+        at_cap = self.report([("white", False, 20, "none"), ("black", False, 1000, "none")])
+        self.assertEqual(divergences.telltales([capped], {"r/1": at_cap}, wide), [(capped, ">=1000")])
+
+    def test_only_while_the_record_still_says_what_the_entry_says(self):
+        copied = self.report([("white", False, 20, "none"), ("black", False, 20, "none")])
+        moved = self.oracle("chessin5d", [("white", False, None, "none"), ("black", True, None, "none")])
+        self.assertEqual(divergences.telltales([self.entry()], {"r/1": copied}, moved), [])
+
+    def test_in_parse_mode_playing_an_action_reproduces_no_oracles_acceptance_of_it(self):
+        # Chess in 5D wrongly plays action 2. An engine in parse mode plays what it reads: that is no verdict.
+        quiet = ("white", None, None, None)
+        entry = self.entry(kind="legality", index=2, engine_value="rejected:illegal_move", oracle_value="accepted")
+        c5 = self.oracle("chessin5d", [("white", False, None, "none")] * 3)
+        reader = self.report([quiet, quiet, quiet])
+        self.assertEqual(divergences.telltales([entry], {"r/1": reader}, c5), [(entry, "accepted")])  # full mode
+        self.assertEqual(divergences.telltales([entry], {"r/1": reader}, c5, judges_actions=False), [])
+        # Its refusing an action is a statement, in parse mode as in full mode.
+        cwmtt = self.entry(oracle="cwmtt", kind="legality", index=2, engine_value="accepted",
+                           oracle_value="rejected:illegal_move")
+        refuses = self.oracle("cwmtt", [(None, None, 20, "none")] * 2, status="rejected", reason="illegal_move")
+        unread = self.report([quiet, quiet], status="rejected", reason="unreadable")
+        self.assertEqual(divergences.telltales([cwmtt], {"r/1": unread}, refuses, judges_actions=False),
+                         [(cwmtt, "rejected:unreadable")])
+
+    def test_a_telltale_is_never_called_stale(self):
+        # The disagreement no longer occurs because the engine now says what the oracle wrongly says:
+        # "remove it" would be exactly the wrong advice.
+        _, stale = divergences.apply([self.entry()], [], {"KD-0001"}, telltales={"KD-0001"})
+        self.assertEqual(stale, [])
+        _, stale = divergences.apply([self.entry()], [], {"KD-0001"})
+        self.assertEqual([item.id for item in stale], ["KD-0001"])
+
+
 class LookedAtTests(unittest.TestCase):
     def setUp(self):
         self.entry = Divergence(
@@ -258,6 +379,25 @@ class LookedAtTests(unittest.TestCase):
         self.assertTrue(divergences.looked_at(legality, done, refused))
         self.assertFalse(divergences.looked_at(legality, done, self.report([known], status="timeout")))
         self.assertFalse(divergences.looked_at(legality, done, self.report([], status="unsupported")))
+
+    def test_in_parse_mode_an_action_the_engine_played_is_looked_at_only_beside_a_failure_to_read_it(self):
+        # The engine in parse mode plays what it reads: beside an oracle's hard refusal or its acceptance, its
+        # playing an action is no verdict, and an entry about it is not looked at (so never stale).
+        known = ("white", None, None, None)
+        played = self.report([known, known])
+        entry = dataclasses.replace(self.entry, kind="legality", index=1)
+        illegal = self.report([known], status="rejected")
+        illegal.reason = "illegal_move"
+        unread = self.report([known], status="rejected")
+        unread.reason = "no_matching_move"
+        self.assertTrue(divergences.looked_at(entry, played, illegal))
+        self.assertFalse(divergences.looked_at(entry, played, illegal, judges_actions=False))
+        self.assertFalse(divergences.looked_at(entry, played, played, judges_actions=False))
+        self.assertTrue(divergences.looked_at(entry, played, unread, judges_actions=False))
+        # Its refusal is a statement: looked at.
+        refused = self.report([known], status="rejected")
+        refused.reason = "unreadable"
+        self.assertTrue(divergences.looked_at(entry, refused, played, judges_actions=False))
 
     @staticmethod
     def placed(report, *placements, marked=False):
@@ -294,7 +434,17 @@ class LookedAtTests(unittest.TestCase):
 class FileTests(unittest.TestCase):
     def test_the_repository_file_loads_and_is_valid(self):
         entries = divergences.load()
-        self.assertEqual(divergences.verify(entries, lockfile.load(), corpus.load(), golden.lookup()), [])
+        self.assertEqual(divergences.verify(entries, lockfile.load(), corpus.load(), snapshot.take().recorded), [])
+
+    def test_the_file_can_be_read_from_the_bytes_already_in_hand(self):
+        # A gate run parses the very bytes it hashed (snapshot.py): no second read to race.
+        body = "\n".join(('schema = 1', '[[divergence]]', 'id = "KD-0001"', 'oracle = "ftxi"', 'pin = "p"',
+                          'record = "r/1"', 'record_sha256 = "s"', 'kind = "in_check"', 'index = 1',
+                          'engine_value = "True"', 'oracle_value = "False"', 'rulebook = "x"',
+                          'upstream = "unreported: test"', 'added = "2026-10-01"', '')).encode()
+        self.assertEqual([entry.id for entry in divergences.load(data=body)], ["KD-0001"])
+        with self.assertRaises(HarnessError):
+            divergences.load(data=b"schema = [")
 
     def test_a_missing_field_is_an_error(self):
         with tempfile.TemporaryDirectory() as folder:

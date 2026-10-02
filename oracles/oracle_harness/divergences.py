@@ -25,14 +25,23 @@ notation specification, cited with `notation = "..."` instead:
     whose markers differ, and the entry excuses that run;
   * an oracle that stops at move text it cannot read ("no move I can generate
     matches this") where the engine plays on: that may be the oracle's
-    notation, not its rules.
+    notation, not its rules;
+  * the engine refusing as unreadable text an oracle played (engine_value
+    "rejected:unreadable", in either mode) - action 0 being the record's set-up,
+    its headers and board strings: whether that text is valid is the
+    notation's to say, so such an entry must cite it, like a placement one.
 
 An entry carries exactly one of the two.
+
+Every entry is also a telltale (decision H34): an engine that comes to agree
+with the oracle's recorded error, by the comparison's own rule, has probably
+taken that oracle's logic (telltales()).
 """
 
 from __future__ import annotations
 
 import re
+import tomllib
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date
@@ -42,7 +51,16 @@ from . import observations, paths
 from .adapters import ORACLE_SOURCES, PRIMARY_SOURCES, oracle_of
 from .corpus import Record
 from .lockfile import Lock
-from .observations import PARSE_FIELD, PARSE_KINDS, REPLAY_KINDS, SOFT_REJECTIONS, Disagreement, Observation
+from .observations import (
+    ORACLE_SOFT_REJECTIONS,
+    PARSE_FIELD,
+    PARSE_KINDS,
+    REPLAY_KINDS,
+    SOFT_REJECTIONS,
+    UNREADABLE,
+    Disagreement,
+    Observation,
+)
 from .util import Finding, HarnessError, load_toml
 
 SCHEMA = 1
@@ -87,9 +105,16 @@ class Divergence:
         )
 
 
-def load(path: Path | None = None) -> list[Divergence]:
+def load(path: Path | None = None, data: bytes | None = None) -> list[Divergence]:
+    """The entries of the known-divergences file - read from ``data`` when given, the bytes a snapshot already holds."""
     path = path or paths.DIVERGENCES_FILE
-    data = load_toml(path)
+    if data is None:
+        data = load_toml(path)
+    else:
+        try:
+            data = tomllib.loads(data.decode("utf-8"))
+        except (UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
+            raise HarnessError(f"{path}: invalid TOML: {error}") from None
     if data.get("schema") != SCHEMA:
         raise HarnessError(f"{path.name}: expected schema = {SCHEMA}")
     entries = []
@@ -108,11 +133,17 @@ def load(path: Path | None = None) -> list[Divergence]:
 
 
 def _may_be_notation(entry: Divergence) -> bool:
-    """Is this a disagreement the notation specification can settle?"""
+    """Is this a disagreement the notation specification can settle?
+
+    A parse divergence, a different number of actions read, or a refusal that is
+    a failure to read the move text - the oracle's (it could not match the text
+    to a move), or the engine's (its parser could not read text an oracle
+    played): whether that text is valid notation is the specification's.
+    """
     if entry.kind in ("length", *PARSE_KINDS):
         return True
     soft = tuple(f"rejected:{reason}" for reason in SOFT_REJECTIONS)
-    return entry.kind == "legality" and entry.oracle_value in soft
+    return entry.kind == "legality" and (entry.oracle_value in soft or entry.engine_value in soft)
 
 
 def verify(entries: list[Divergence], lock: Lock, records: list[Record], recorded: Recorded | None = None) -> list[Finding]:
@@ -179,12 +210,20 @@ def verify(entries: list[Divergence], lock: Lock, records: list[Record], recorde
                 "divergence-citation",
                 f"{tag}: a placement divergence is two readings of the record's move text, which the notation "
                 "specification settles - cite it with notation = \"...\", not the rulebook"))
+        elif entry.engine_value == f"rejected:{UNREADABLE}" and not notation:
+            findings.append(Finding(
+                "divergence-citation",
+                f"{tag}: the engine could not read text an oracle played (engine_value rejected:{UNREADABLE}) - "
+                "whether that text is valid notation is the notation specification's to say: cite it with "
+                "notation = \"...\", not the rulebook"))
         elif notation and known_kind and valid_values and not _may_be_notation(entry):
             findings.append(Finding(
                 "divergence-citation",
                 f"{tag}: only a parse divergence ({' or '.join(PARSE_KINDS)}), an oracle that could not match the "
-                f"move text (rejected:{'|'.join(SOFT_REJECTIONS)}), or one that read a different number of actions "
-                "(length) can be settled by the notation specification - this one needs the rulebook"))
+                f"move text (oracle_value rejected:{'|'.join(ORACLE_SOFT_REJECTIONS)}), the engine "
+                f"refusing as unreadable text an oracle played (engine_value rejected:{UNREADABLE}), or a source that "
+                "read a different number of actions (length) can be settled by the notation specification - this "
+                "one needs the rulebook"))
         else:
             citation = rulebook or notation
             if len(citation) < _MIN_CITATION or _PLACEHOLDER.match(citation):
@@ -217,19 +256,34 @@ def verify(entries: list[Divergence], lock: Lock, records: list[Record], recorde
     return findings
 
 
-def looked_at(entry: Divergence, engine: Observation, oracle: Observation) -> bool:
+def _soft_refusal(value: str | None) -> bool:
+    return value is not None and value.startswith("rejected:") and value.split(":", 1)[1] in SOFT_REJECTIONS
+
+
+def looked_at(entry: Divergence, engine: Observation, oracle: Observation, *, judges_actions: bool = True) -> bool:
     """Did both reports actually cover the observation this entry is about?
 
     Only then can its absence mean the divergence is gone. A run that was cut
     short before reaching it has simply not looked - and neither has a pair of
     reports that parted (a placement divergence) before it: from there on
     nothing is compared.
+
+    ``judges_actions`` is False for an engine in parse mode, which plays any
+    action it reads: its having played one is no verdict, and is compared only
+    with an oracle's failure to read it (a soft refusal). An entry about an
+    action it played is otherwise not looked at. (Its having read a record's
+    set-up, action 0, is a statement about the notation like any other.)
     """
     parted = observations.first_placement_divergence(engine, oracle)
     if entry.kind in REPLAY_KINDS:
         if parted is not None and entry.index > parted:
             return False
-        return all(report.status in ("ok", "rejected") for report in (engine, oracle))
+        if not all(report.status in ("ok", "rejected") for report in (engine, oracle)):
+            return False
+        if entry.kind == "legality" and entry.index >= 1 and not judges_actions \
+                and observations.value_at(engine, "legality", entry.index) == "accepted":
+            return _soft_refusal(observations.value_at(oracle, "legality", entry.index))
+        return True
     if parted is not None and (entry.index > parted or (entry.index == parted and entry.kind != "placement")):
         return False
     name = PARSE_FIELD.get(entry.kind, entry.kind)
@@ -243,11 +297,14 @@ def apply(
     entries: list[Divergence],
     disagreements: list[Disagreement],
     checked: set[str],
+    telltales: set[str] | None = None,
 ) -> tuple[list[Disagreement], list[Divergence]]:
     """Sort engine-vs-oracle disagreements into (unexplained, stale entries).
 
     ``checked`` holds the ids of the entries whose observation this run looked at
-    (see looked_at); an entry is stale when it was looked at and did not occur.
+    (see looked_at); an entry is stale when it was looked at and did not occur -
+    unless the engine reproduced the error it records (``telltales``): that is
+    never "stale", and its remedy is never to remove the entry.
     """
     unexplained = []
     used: set[str] = set()
@@ -257,5 +314,53 @@ def apply(
             unexplained.append(disagreement)
         else:
             used.add(match.id)
-    stale = [entry for entry in entries if entry.id not in used and entry.id in checked]
+    told = telltales or set()
+    stale = [entry for entry in entries if entry.id not in used and entry.id in checked and entry.id not in told]
     return unexplained, stale
+
+
+def telltales(entries: list[Divergence], reports: dict[str, Observation], recorded: Recorded | None = None,
+              *, judges_actions: bool = True) -> list[tuple[Divergence, str]]:
+    """Every recorded oracle error the engine reproduces (decision H34), with the value it gave.
+
+    Each entry records an answer of an oracle's that the rulebook (or the
+    notation specification) shows to be wrong. An engine that comes to agree
+    with that answer at that same place has, very likely, the oracle's logic -
+    and so the known-divergences file doubles as a copy detector that sees what
+    the boundary check cannot: a port, or a paste with its names changed.
+
+    Agreeing is judged by the comparison's own rule (observations.agrees), not by
+    the same words: an engine that refuses an action the oracle wrongly refused,
+    for any reason, reproduces the error - and so does one that calls checkmate
+    a position the oracle wrongly holds to have no action. The entry then no
+    longer matches any disagreement, and would otherwise be reported stale, with
+    exactly the wrong remedy (remove it).
+
+    ``reports`` maps a record id to the engine's report on it. The oracle need
+    not have run at all: ``recorded`` gives what the golden file records it
+    saying (the entry's oracle_value is held to it by verify()), and the engine's
+    answer counts only where the engine holds the position the oracle held when
+    it gave the wrong one - not after the two parted (looked_at) - and only while
+    the record still says what the entry says. Without a recorded report, the
+    entry's oracle_value stands in for it. ``judges_actions`` is False for an
+    engine in parse mode: its having played an action is no verdict, so it
+    reproduces no oracle's acceptance of one.
+    """
+    found = []
+    for entry in entries:
+        report = reports.get(entry.record)
+        if report is None or not isinstance(entry.index, int) or isinstance(entry.index, bool) or entry.kind not in KINDS:
+            continue
+        said = observations.value_at(report, entry.kind, entry.index)
+        if said is None or (entry.kind == "legality" and entry.index >= 1 and not judges_actions and said == "accepted"):
+            continue
+        oracle = recorded(entry.oracle, entry.record) if recorded is not None else None
+        if oracle is None:
+            if not observations.texts_agree(entry.kind, said, str(entry.oracle_value)):
+                continue
+        elif observations.value_at(oracle, entry.kind, entry.index) != entry.oracle_value \
+                or not looked_at(entry, report, oracle, judges_actions=judges_actions) \
+                or not observations.agrees(report, oracle, entry.kind, entry.index):
+            continue
+        found.append((entry, said))
+    return found

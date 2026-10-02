@@ -43,23 +43,47 @@ def run_sources(
     sources: list[Source],
     records: list[Record],
     lock: Lock,
-    options_for: Callable[[Source], RunOptions],
+    options_for: Callable[[Source, Record], RunOptions],
     *,
     jobs: int | None = None,
     progress: Callable[[Observation], None] | None = None,
 ) -> Results:
     """Ask every source about every record. Each (source, record) is one subprocess."""
+    recorded = record_sources(sources, records, lock, options_for, repeat=1, jobs=jobs, progress=progress)
+    return {key: runs[0] for key, runs in recorded.items()}
+
+
+def record_sources(
+    sources: list[Source],
+    records: list[Record],
+    lock: Lock,
+    options_for: Callable[[Source, Record], RunOptions],
+    *,
+    repeat: int = 1,
+    jobs: int | None = None,
+    progress: Callable[[Observation], None] | None = None,
+) -> dict[tuple[str, str], list[Observation]]:
+    """Ask every source about every record ``repeat`` times, each time in a process of its own.
+
+    Independent recordings are what tell a stable answer from one that depends
+    on the run (H32). Every run of every (source, record) goes into one pool.
+    """
+    if repeat < 1:
+        raise ValueError("repeat must be at least 1")
     data = {record.id: corpus.read(record, lock) for record in records}
-    tasks = [(source, record) for source in sources for record in records]
+    tasks = [(source, record) for _ in range(repeat) for source in sources for record in records]
 
     def one(task: tuple[Source, Record]) -> Observation:
         source, record = task
-        observation = source.observe(record.id, data[record.id], options_for(source))
+        observation = source.observe(record.id, data[record.id], options_for(source, record))
         if progress:
             progress(observation)
         return observation
 
-    return {(observation.source, observation.record): observation for observation in parallel_map(one, tasks, jobs)}
+    found: dict[tuple[str, str], list[Observation]] = {}
+    for observation in parallel_map(one, tasks, jobs):
+        found.setdefault((observation.source, observation.record), []).append(observation)
+    return found
 
 
 def self_consistency(results: Results) -> list[Finding]:

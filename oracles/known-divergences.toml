@@ -34,6 +34,18 @@
 #     rule. If that is what it is, cite the notation specification. If the
 #     oracle really does hold the move illegal, it is a rules matter after all
 #     and needs the rulebook like any other.
+#   * The engine refusing as unreadable text an oracle played, in either mode
+#     (kind "legality", engine_value "rejected:unreadable", oracle_value
+#     "accepted"), at the action it could not read - index 0 being the
+#     record's set-up, its headers or board strings. Whether that text is valid
+#     is the notation specification's to say: such an entry must cite it, never
+#     the rulebook.
+#
+# Every entry is also a telltale (decision H34): an engine that comes to agree
+# with the oracle's recorded error - by the comparison's own rule, so refusing
+# an action the oracle wrongly refused for any reason counts - fails the gate,
+# and the entry is never reported stale for it. Never remove an entry to make
+# that finding go away.
 #
 # Empty for now: there is no engine yet, so nothing has been adjudicated. The
 # points where the oracles contradict each other are listed, unadjudicated, in
@@ -47,7 +59,7 @@
 # record = "cwmtt/standard"       # corpus record id
 # record_sha256 = "..."           # its sha256 in corpus/manifest.toml
 # kind = "in_check"               # side | in_check | legal_actions | terminal | legality | length | placement | unmoved
-# index = 13                      # position index (action number for legality and length)
+# index = 13                      # position index (action number for legality and length; 0 is the set-up)
 # engine_value = "True"           # both values exactly as the gate prints them (for placement and
 # oracle_value = "False"          # unmoved: the hash with its counts, "<32 hex digits> (2 boards, 63 pieces)")
 # rulebook = "..."                # the rule that settles it, and where it is stated

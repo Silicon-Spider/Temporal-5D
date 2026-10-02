@@ -47,5 +47,56 @@ class RunTests(unittest.TestCase):
         self.assertIn("no such pin", str(raised.exception))
 
 
+# Prints a line, waits, prints another: the second must be seen to arrive later.
+PACED = "import sys, time\nprint('first', flush=True)\ntime.sleep(1.5)\nprint('second', flush=True)\n"
+# Prints a line a second, forever.
+TICKING = "import time\nfor n in range(1000):\n    print(f'tick {n}', flush=True)\n    time.sleep(0.2)\n"
+
+
+class ArrivalTests(unittest.TestCase):
+    """When each line arrived is the cost of an answer (H32): the output is read as it comes."""
+
+    def test_each_line_is_timed_as_it_arrives(self):
+        done = util.run([sys.executable, "-c", PACED], timeout=30)
+        self.assertEqual(done.out_text().split(), ["first", "second"])
+        first = done.arrived(done.stdout.index(b"first"))
+        second = done.arrived(done.stdout.index(b"second"))
+        self.assertIsNotNone(first)
+        self.assertGreater(second - first, 1.0)
+        self.assertGreaterEqual(done.elapsed_s, second)
+        self.assertIsNone(done.arrived(len(done.stdout)))  # never arrived
+        # A stand-in with nothing measured knows nothing of when anything arrived.
+        self.assertIsNone(util.Completed(0, b"x\n", b"", False).arrived(0))
+
+    def test_a_stop_condition_ends_the_command_once_it_has_what_it_needs(self):
+        seen = bytearray()
+
+        def third_tick(chunk: bytes) -> bool:
+            seen.extend(chunk)
+            return b"tick 2" in seen
+
+        started = time.monotonic()
+        done = util.run([sys.executable, "-c", TICKING], timeout=60, stop=third_tick)
+        self.assertLess(time.monotonic() - started, 30)
+        self.assertTrue(done.stopped)
+        self.assertFalse(done.timed_out)
+        self.assertTrue(done.killed)
+        self.assertIsNone(done.returncode)
+        self.assertIn("tick 2", done.out_text())
+
+    def test_a_broken_stop_condition_never_stops_a_command(self):
+        def broken(chunk: bytes) -> bool:
+            raise RuntimeError("a bug in the condition")
+
+        done = util.run([sys.executable, "-c", PACED], timeout=30, stop=broken)
+        self.assertFalse(done.stopped)
+        self.assertEqual((done.returncode, done.out_text().split()), (0, ["first", "second"]))
+
+    def test_a_time_out_is_not_a_stop(self):
+        done = util.run([sys.executable, "-c", TICKING], timeout=1, stop=lambda chunk: False)
+        self.assertEqual((done.timed_out, done.stopped), (True, False))
+        self.assertIn("tick 0", done.out_text())
+
+
 if __name__ == "__main__":
     unittest.main()

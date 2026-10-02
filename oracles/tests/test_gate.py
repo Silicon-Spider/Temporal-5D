@@ -1,16 +1,21 @@
+import contextlib
 import dataclasses
+import json
+import sys
 import tempfile
 import unittest
+from collections import Counter
 from pathlib import Path
 from unittest import mock
 
-from oracle_harness import gate, paths
-from oracle_harness.adapters import ORACLE_SOURCES, PARSE_ONLY_SOURCES, EngineSource, Source
+import support
+from oracle_harness import config, fingerprint, gate, golden, integrity, lockfile, paths, snapshot, stability
+from oracle_harness.adapters import ORACLE_SOURCES, PARSE_ONLY_SOURCES, EngineSource, RunOptions, Source
 from oracle_harness.corpus import CUSTOM_POSITIONS, Record
 from oracle_harness.divergences import Divergence
 from oracle_harness.gate import Gated, GateResult
 from oracle_harness.observations import Observation, Position
-from oracle_harness.util import Finding
+from oracle_harness.util import Finding, HarnessError
 
 W = ("white", False, 20, "none")
 B = ("black", False, 20, "none")
@@ -68,8 +73,8 @@ class DifferentialCase(unittest.TestCase):
         self.oracles = [Named("ftxi"), Named("ftxi:naive"), Named("chessin5d")]
         self.records = [record("r/std"), record("r/tz", TZ)]
 
-    def run_differential(self, engine_rows=None, oracle_reports=None, entries=(), min_checked=1.0):
-        """Every source says [W, B] about every record unless told otherwise."""
+    def reports(self, engine_rows=None, oracle_reports=None):
+        """(oracle results, engine results): every source says [W, B] about every record unless told otherwise."""
         engine_rows = engine_rows or {}
         oracle_reports = oracle_reports or {}
         results, engine_results = {}, {}
@@ -79,8 +84,12 @@ class DifferentialCase(unittest.TestCase):
                 results[(oracle.name, item.id)] = value if isinstance(value, Observation) else obs(oracle.name, item.id, value)
             value = engine_rows.get(item.id, [W, B])
             engine_results[("engine", item.id)] = value if isinstance(value, Observation) else obs("engine", item.id, value)
+        return results, engine_results
+
+    def run_differential(self, engine_rows=None, oracle_reports=None, entries=(), min_checked=1.0, recorded=None):
+        results, engine_results = self.reports(engine_rows, oracle_reports)
         return gate.engine_differential(self.engine, self.oracles, self.records, results, engine_results,
-                                        list(entries), min_checked)
+                                        list(entries), min_checked, recorded)
 
     def silence(self, *names, record_id="r/tz", reason="variant"):
         """Oracle reports saying these sources do not read that record."""
@@ -127,8 +136,39 @@ class EngineDifferentialTests(DifferentialCase):
         self.assertEqual((list(gated), list(ungated)), (["Standard"], [TZ]))
 
     def test_a_known_divergence_that_stops_occurring_is_stale(self):
-        findings, _, _ = self.run_differential(entries=[self.divergence()])
+        # Chess in 5D now says check, as the engine does: the oracle's error is gone.
+        fixed = {(name, "r/std"): [W, B_CHECK] for name in ("ftxi", "ftxi:naive", "chessin5d")}
+        findings, _, _ = self.run_differential({"r/std": [W, B_CHECK]}, fixed, entries=[self.divergence()])
         self.assertEqual([item.code for item in findings], ["divergence-stale"])
+        self.assertIn("remove it, or find out why", findings[0].message)
+
+    def test_an_engine_that_reproduces_a_recorded_oracle_error_is_a_telltale(self):
+        # H34. The entry says Chess in 5D is wrong to call position 1 "no check". An engine
+        # that says "no check" there too has, probably, Chess in 5D's logic. The disagreement
+        # no longer occurs - and the remedy is never "remove it".
+        findings, gated, ungated = self.run_differential(entries=[self.divergence()])
+        self.assertEqual([item.code for item in findings], ["telltale"])
+        self.assertEqual(findings[0].message,
+                         "KD-0001: the engine reproduces chessin5d's recorded error at r/std position 1 (in_check = "
+                         "False): its logic may have been copied from that oracle")
+        self.assertNotIn("Standard", gated)
+        self.assertEqual(ungated["Standard"], "the engine reproduces a recorded oracle error (telltale)")
+
+    def test_a_telltale_needs_no_run_of_the_oracle_it_points_at(self):
+        # Chess in 5D does not run in this tier; what it recorded is in the golden file.
+        self.oracles = [Named("ftxi"), Named("ftxi:naive")]
+        recorded = obs("chessin5d", "r/std", [W_VERDICT, B_VERDICT])
+        engine = {"r/std": [W, B]}
+        findings, _, _ = self.run_differential(engine, entries=[self.divergence()],
+                                               recorded=lambda source, record_id: recorded if source == "chessin5d" else None)
+        self.assertEqual([item.code for item in findings], ["telltale"])
+        # Not where the engine holds another position than the one the oracle answered about.
+        placed = described(obs("chessin5d", "r/std", [W_VERDICT, B_VERDICT]), [1, 3])
+        elsewhere = {"r/std": described(obs("engine", "r/std", [W, B]), [1, 2], [11, 12])}
+        reports = {(name, "r/std"): described(obs(name, "r/std", [W, B]), [1, 2]) for name in ("ftxi", "ftxi:naive")}
+        findings, _, _ = self.run_differential(elsewhere, reports, entries=[self.divergence()],
+                                               recorded=lambda source, record_id: placed if source == "chessin5d" else None)
+        self.assertEqual(findings, [])
 
     def test_a_known_divergence_the_oracle_never_reached_is_not_stale(self):
         # Chess in 5D ran out of time before position 1: nothing was looked at.
@@ -185,6 +225,45 @@ class EngineDifferentialTests(DifferentialCase):
         findings, gated, _ = self.run_differential({"r/tz": refused}, agreeing)
         self.assertEqual(findings, [])
         self.assertEqual(gated[TZ].oracles, 1)
+
+    def test_text_the_engine_could_not_read_is_a_soft_divergence_only_the_notation_can_excuse(self):
+        # Full mode: the engine's parser could not read r/tz's first action, which every oracle played.
+        unread = obs("engine", "r/tz", [W], status="rejected", reason="unreadable")
+        findings, gated, ungated = self.run_differential({"r/tz": unread})
+        self.assertEqual([item.code for item in findings], ["divergence"] * 2)  # ftxi and Chess in 5D
+        self.assertTrue(all("action 1: legality: engine=rejected:unreadable vs" in item.message and "(soft" in item.message
+                            for item in findings))
+        self.assertEqual(ungated[TZ], "unexplained divergence")
+        # Excused by entries citing the notation specification, it is still no verdict: the ruleset stays ungated.
+        entries = [self.divergence(id=f"KD-000{number}", oracle=name, record="r/tz", kind="legality", index=1,
+                                   engine_value="rejected:unreadable", oracle_value="accepted", rulebook="",
+                                   notation="x" * 30)
+                   for number, name in enumerate(("ftxi", "chessin5d"), 1)]
+        findings, gated, ungated = self.run_differential({"r/tz": unread}, entries=entries)
+        self.assertEqual(findings, [])
+        self.assertEqual(list(gated), ["Standard"])
+        self.assertEqual(ungated, {TZ: "the engine could not read r/tz (a refusal as unreadable is no verdict)"})
+        # Not even an oracle that refuses the same action as illegal stands behind a refusal to read it.
+        refusing = {(oracle.name, "r/tz"): obs(oracle.name, "r/tz", [W], status="rejected", reason="illegal_move")
+                    for oracle in self.oracles}
+        findings, gated, ungated = self.run_differential({"r/tz": unread}, refusing)
+        self.assertEqual(findings, [])
+        self.assertEqual(ungated, {TZ: "the engine could not read r/tz (a refusal as unreadable is no verdict)"})
+
+    def test_a_set_up_the_engine_could_not_read_is_a_soft_divergence_at_action_0(self):
+        refused = obs("engine", "r/tz", [], status="rejected", reason="unreadable")
+        findings, gated, ungated = self.run_differential({"r/tz": refused})
+        self.assertEqual([item.code for item in findings], ["divergence"] * 2)
+        self.assertTrue(all("action 0 (the record's set-up): legality: engine=rejected:unreadable vs" in item.message
+                            and "(soft" in item.message for item in findings))
+        entries = [self.divergence(id=f"KD-000{number}", oracle=name, record="r/tz", kind="legality", index=0,
+                                   engine_value="rejected:unreadable", oracle_value="accepted", rulebook="",
+                                   notation="x" * 30)
+                   for number, name in enumerate(("ftxi", "chessin5d"), 1)]
+        findings, gated, ungated = self.run_differential({"r/tz": refused}, entries=entries)
+        self.assertEqual(findings, [])
+        self.assertEqual(list(gated), ["Standard"])
+        self.assertEqual(ungated, {TZ: "the engine could not read r/tz (a refusal as unreadable is no verdict)"})
 
     def test_a_ruleset_whose_only_oracle_has_no_check_verdict_is_not_gated(self):
         # cwmtt is the only oracle that knows several variants, and it says
@@ -442,9 +521,193 @@ class ParseDifferentialTests(DifferentialCase):
         self.assertTrue(all("position 0: placement" in item.message for item in findings))
 
 
+class EngineParseModeTests(DifferentialCase):
+    """An engine in parse mode: compared on what it set up, whose move it is and how it replayed each record."""
+
+    def setUp(self):
+        super().setUp()
+        self.engine = EngineSource(["engine"], "parse")
+
+    def parsed(self, record_id, placements, sides=("white", "black", "white"), status="ok", reason=""):
+        rows = [(side, None, None, None) for side in sides[:len(placements)]]
+        return described(obs("engine", record_id, rows, status=status, reason=reason), placements,
+                         [placement + 10 for placement in placements])
+
+    def stated(self, name, record_id, rows, placements, **options):
+        return described(obs(name, record_id, rows, **options), placements, [placement + 10 for placement in placements])
+
+    def run_parse(self, engine_rows=None, oracle_reports=None, entries=()):
+        engine_rows = engine_rows or {item.id: self.parsed(item.id, [1, 2]) for item in self.records}
+        oracle_reports = oracle_reports if oracle_reports is not None else {
+            (oracle.name, item.id): self.stated(oracle.name, item.id, [W, B], [1, 2])
+            for oracle in self.oracles for item in self.records}
+        results, engine_results = self.reports(engine_rows, oracle_reports)
+        return gate.parse_differential(self.engine, self.oracles, self.records, results, engine_results, list(entries))
+
+    def test_an_engine_that_reads_every_record_as_the_oracles_do_agrees_and_gates_nothing(self):
+        findings, agreement = self.run_parse()
+        self.assertEqual(findings, [])
+        # Two records, two positions each; ftxi and Chess in 5D each replayed both (ftxi:naive is ftxi's second search).
+        self.assertEqual(agreement, gate.ParseAgreement(records=2, read=2, positions=4, described=4, boards=4, states=4,
+                                                        sides=4, sides_agreed=4, replays=4, replays_agreed=4))
+        self.assertIn("the engine read 2 of 2 records (4 positions)", agreement.describe())
+        self.assertIn("check, counts and mate were not compared, and no ruleset is gated", agreement.describe())
+
+    def test_check_counts_and_mate_are_never_compared(self):
+        # Every oracle says check at position 1; the engine, in parse mode, says nothing about it.
+        reports = {(oracle.name, item.id): self.stated(oracle.name, item.id, [W, B_CHECK], [1, 2])
+                   for oracle in self.oracles for item in self.records}
+        findings, _ = self.run_parse(oracle_reports=reports)
+        self.assertEqual(findings, [])
+
+    def test_what_it_set_up_and_whose_move_it_is_are_compared(self):
+        engine = {"r/std": self.parsed("r/std", [1, 3]), "r/tz": self.parsed("r/tz", [1, 2], sides=("white", "white"))}
+        findings, agreement = self.run_parse(engine)
+        kinds = sorted({item.message.split(": ")[1] for item in findings})
+        self.assertEqual(kinds, ["placement", "side"])
+        self.assertTrue(all(item.code == "divergence" for item in findings))
+        self.assertEqual((agreement.boards, agreement.sides_agreed), (3, 2))
+
+    def test_how_it_replayed_each_record_is_compared_with_each_implementation(self):
+        # It could not read the second action, which every oracle played: a soft legality divergence, from ftxi and Chess in 5D.
+        unread = self.parsed("r/std", [1], status="rejected", reason="unreadable")
+        findings, agreement = self.run_parse({"r/std": unread, "r/tz": self.parsed("r/tz", [1, 2])})
+        self.assertEqual([item.code for item in findings], ["divergence"] * 2)
+        self.assertTrue(all("legality: engine=rejected:unreadable vs" in item.message for item in findings))
+        self.assertTrue(all("(soft" in item.message for item in findings))
+        self.assertEqual((agreement.replays, agreement.replays_agreed), (4, 2))
+        # It read fewer actions than the oracles found, and called the record over: a length divergence.
+        short = self.parsed("r/std", [1])
+        findings, _ = self.run_parse({"r/std": short, "r/tz": self.parsed("r/tz", [1, 2])})
+        self.assertEqual(sorted({item.message.split(": ")[1] for item in findings}), ["length"])
+
+    def test_playing_an_action_an_oracle_holds_illegal_is_no_verdict_in_parse_mode(self):
+        # Without check detection the engine plays what it reads, as a parse-only source does.
+        refusals = {(oracle.name, "r/std"): self.stated(oracle.name, "r/std", [W], [1], status="rejected",
+                                                         reason="cannot_submit") for oracle in self.oracles}
+        findings, agreement = self.run_parse(oracle_reports={**refusals, **{
+            (oracle.name, "r/tz"): self.stated(oracle.name, "r/tz", [W, B], [1, 2]) for oracle in self.oracles}})
+        self.assertEqual(findings, [])
+        # Not counted as agreeing either: the two replays differ there, and nothing says who is right.
+        self.assertEqual((agreement.replays, agreement.replays_agreed, agreement.replays_unjudged), (4, 2, 2))
+        self.assertIn("and with 2 more but for actions it played that the oracle held illegal (no verdict in parse mode)",
+                      agreement.describe())
+        # Its refusing one an oracle played as illegal is still compared.
+        illegal = self.parsed("r/std", [1], status="rejected", reason="illegal_move")
+        findings, _ = self.run_parse({"r/std": illegal, "r/tz": self.parsed("r/tz", [1, 2])})
+        self.assertTrue(findings)
+        self.assertTrue(all("rejected:illegal_move" in item.message and "(soft" not in item.message for item in findings))
+
+    def test_an_engine_that_read_nothing_has_not_passed(self):
+        declined = {item.id: obs("engine", item.id, [], status="unsupported", reason="variant") for item in self.records}
+        findings, agreement = self.run_parse(declined)
+        self.assertEqual([item.code for item in findings], ["engine-nothing-compared"])
+        self.assertEqual(agreement.read, 0)
+
+    def test_a_telltale_is_a_telltale_in_parse_mode_too(self):
+        # The entry says ftxi sets up position 1 wrongly; the engine sets up exactly what ftxi does.
+        entry = self.divergence(oracle="ftxi", record="r/std", kind="placement", index=1,
+                                engine_value=state_text(9), oracle_value=state_text(2), rulebook="", notation="x" * 30)
+        findings, _ = self.run_parse(entries=[entry])
+        self.assertEqual([item.code for item in findings], ["telltale"])
+
+    def everyone_reads(self):
+        return {(oracle.name, item.id): self.stated(oracle.name, item.id, [W, B], [1, 2])
+                for oracle in self.oracles for item in self.records}
+
+    def test_an_engine_that_crashes_or_runs_out_of_time_fails(self):
+        for status, reason in (("error", "crash"), ("timeout", "timeout")):
+            broken = self.parsed("r/tz", [1], status=status, reason=reason)
+            findings, agreement = self.run_parse({"r/std": self.parsed("r/std", [1, 2]), "r/tz": broken})
+            self.assertEqual([item.code for item in findings], ["engine-failed"], status)
+            self.assertEqual(agreement.read, 1, status)  # the record it broke on was not read
+
+    def test_an_action_an_oracle_could_not_read_and_the_engine_played_is_a_soft_divergence(self):
+        reports = self.everyone_reads()
+        for oracle in self.oracles:
+            reports[(oracle.name, "r/std")] = self.stated(oracle.name, "r/std", [W], [1], status="rejected",
+                                                          reason="no_matching_move")
+        findings, agreement = self.run_parse(oracle_reports=reports)
+        self.assertEqual([item.code for item in findings], ["divergence"] * 2)  # ftxi and Chess in 5D
+        self.assertTrue(all("action 1: legality: engine=accepted vs" in item.message and "(soft" in item.message
+                            for item in findings))
+        self.assertEqual((agreement.replays, agreement.replays_agreed, agreement.replays_unjudged), (4, 2, 0))
+
+    def test_an_entry_that_no_longer_occurs_is_stale_in_parse_mode_too(self):
+        entry = self.divergence(oracle="ftxi", record="r/std", kind="placement", index=1,
+                                engine_value=state_text(9), oracle_value=state_text(3), rulebook="", notation="x" * 30)
+        findings, _ = self.run_parse(entries=[entry])
+        self.assertEqual([item.code for item in findings], ["divergence-stale"])
+
+    def test_a_rules_entry_about_an_action_the_engine_played_is_neither_stale_nor_a_telltale(self):
+        # From full mode: ftxi wrongly refuses r/std action 1 as illegal. The engine in parse mode plays it - no
+        # verdict - so the entry is not looked at, and not stale.
+        reports = self.everyone_reads()
+        for name in ("ftxi", "ftxi:naive"):
+            reports[(name, "r/std")] = self.stated(name, "r/std", [W], [1], status="rejected", reason="illegal_move")
+        refused = self.divergence(oracle="ftxi", kind="legality", index=1, engine_value="accepted",
+                                  oracle_value="rejected:illegal_move")
+        findings, agreement = self.run_parse(oracle_reports=reports, entries=[refused])
+        self.assertEqual(findings, [])
+        self.assertEqual((agreement.replays_agreed, agreement.replays_unjudged), (3, 1))
+        # Chess in 5D wrongly plays it (the engine, in full mode, refuses it). Playing it in parse mode reproduces
+        # nothing: no telltale, and not stale either.
+        played = self.divergence(kind="legality", index=1, engine_value="rejected:illegal_move", oracle_value="accepted")
+        findings, _ = self.run_parse(entries=[played])
+        self.assertEqual(findings, [])
+
+    def test_a_set_up_the_engine_could_not_read_is_a_soft_divergence_the_notation_can_settle(self):
+        refused = obs("engine", "r/std", [], status="rejected", reason="unreadable")
+        engine = {"r/std": refused, "r/tz": self.parsed("r/tz", [1, 2])}
+        findings, agreement = self.run_parse(engine)
+        self.assertEqual([item.code for item in findings], ["divergence"] * 2)  # ftxi and Chess in 5D set it up
+        self.assertTrue(all("action 0 (the record's set-up): legality: engine=rejected:unreadable vs" in item.message
+                            and "(soft" in item.message for item in findings))
+        self.assertEqual((agreement.read, agreement.setups_refused, agreement.replays), (1, 1, 2))
+        self.assertIn("refused the set-up of 1", agreement.describe())
+        entries = [self.divergence(id=f"KD-000{number}", oracle=name, kind="legality", index=0,
+                                   engine_value="rejected:unreadable", oracle_value="accepted", rulebook="",
+                                   notation="x" * 30)
+                   for number, name in enumerate(("ftxi", "chessin5d"), 1)]
+        findings, _ = self.run_parse(engine, entries=entries)
+        self.assertEqual(findings, [])
+        # An engine that comes to set it up, as each oracle wrongly does, reproduces their errors.
+        findings, _ = self.run_parse(entries=entries)
+        self.assertEqual([item.code for item in findings], ["telltale", "telltale"])
+
+    def test_the_agreement_counts_an_exact_state_only_where_the_markers_agree_too(self):
+        reports = {(oracle.name, item.id): described(obs(oracle.name, item.id, [W, B]), [1, 2], [11, 99])
+                   for oracle in self.oracles for item in self.records}
+        findings, agreement = self.run_parse(oracle_reports=reports)
+        self.assertEqual((agreement.described, agreement.boards, agreement.states), (4, 4, 2))
+        self.assertEqual({item.message.split(": ")[1] for item in findings}, {"unmoved"})
+
+    def test_where_an_oracle_parted_from_the_engine_it_described_another_position(self):
+        engine = {"r/std": self.parsed("r/std", [1, 3]), "r/tz": self.parsed("r/tz", [1, 2])}
+        _, agreement = self.run_parse(engine)
+        self.assertEqual((agreement.described, agreement.boards, agreement.states), (4, 3, 3))
+
+    def test_a_replay_an_oracle_did_not_finish_is_not_compared(self):
+        reports = self.everyone_reads()
+        reports[("ftxi", "r/std")] = self.stated("ftxi", "r/std", [W], [1], status="timeout", reason="timeout")
+        findings, agreement = self.run_parse(oracle_reports=reports)
+        self.assertEqual(findings, [])
+        self.assertEqual((agreement.replays, agreement.replays_agreed), (3, 3))
+
+    def test_an_engine_compared_with_nothing_has_not_passed(self):
+        # It read both records - and no oracle read either: no state compared, no replay compared.
+        reports = {**self.silence("ftxi", "ftxi:naive", "chessin5d", record_id="r/std"),
+                   **self.silence("ftxi", "ftxi:naive", "chessin5d", record_id="r/tz")}
+        findings, agreement = self.run_parse(oracle_reports=reports)
+        self.assertEqual([item.code for item in findings], ["engine-nothing-compared"])
+        self.assertEqual((agreement.read, agreement.described, agreement.replays), (2, 0, 0))
+
+
 class WriteGoldenTests(unittest.TestCase):
+    """golden --write [--repeat N]: every value classified across the recordings, and every file vouched for (H32, H33)."""
+
     class Signed(Named):
-        def __init__(self, name, drifts):
+        def __init__(self, name, drifts=False):
             super().__init__(name)
             self.drifts, self.looks = drifts, 0
 
@@ -455,27 +718,84 @@ class WriteGoldenTests(unittest.TestCase):
             self.looks += 1
             return {"adapter_sha256": str(self.looks) if self.drifts else "same"}
 
-    def write(self, source):
-        directory = Path(self.enterContext(tempfile.TemporaryDirectory()))
-        for target, name, value in (
-                (gate.lockfile, "verify", []), (gate.corpus, "load", [record("r/1")]), (gate.corpus, "verify", []),
-                (gate, "make_source", source),
-                (gate.runner, "run_sources", {(source.name, "r/1"): obs(source.name, "r/1", [W])}),
-                (gate, "render_disagreements", None)):
-            self.enterContext(mock.patch.object(target, name, return_value=value))
-        self.enterContext(mock.patch.object(paths, "REPO_ROOT", directory))
-        self.enterContext(mock.patch.object(paths, "GOLDEN_DIR", directory / "golden"))
-        return [finding.code for finding in gate.write_golden(only_sources=[source.name], log=lambda _: None)], directory
+    PROBE = golden.Calibration(source="ftxi:naive", record="r/1", positions=1, signature={"pin": "p"}, seconds=12.5,
+                               platform="test", cpu_count=4)
 
-    def test_the_answers_are_signed_by_the_code_that_produced_them(self):
-        codes, directory = self.write(self.Signed("ftxi", drifts=False))
+    def setUp(self):
+        self.directory = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.enterContext(mock.patch.object(paths, "GOLDEN_DIR", self.directory / "golden"))
+        self.enterContext(mock.patch.object(paths, "DISAGREEMENTS_FILE", self.directory / "DISAGREEMENTS.md"))
+        for target, name, value in ((gate.lockfile, "verify", []), (gate.corpus, "load", [record("r/1")]),
+                                    (gate.corpus, "verify", []), (gate, "render_disagreements", None),
+                                    (gate, "_measure_probe", self.PROBE)):
+            self.enterContext(mock.patch.object(target, name, return_value=value))
+
+    def write(self, source, *runs, repeat=None):
+        """golden --write for one source whose recordings of r/1 are ``runs``."""
+        self.recorder = self.enterContext(mock.patch.object(
+            gate.runner, "record_sources", return_value={(source.name, "r/1"): list(runs)}))
+        self.enterContext(mock.patch.object(gate, "make_source", return_value=source))
+        found = gate.write_golden(only_sources=[source.name], repeat=repeat or len(runs), log=lambda _: None)
+        return [finding.code for finding in found]
+
+    def text(self, name):
+        return (self.directory / "golden" / name).read_text(encoding="utf-8")
+
+    def test_the_answers_are_signed_by_the_code_that_produced_them_and_the_budget_they_had(self):
+        codes = self.write(self.Signed("ftxi"), obs("ftxi", "r/1", [W]))
         self.assertEqual(codes, [])
-        self.assertIn('"adapter_sha256": "same"', (directory / "golden" / "ftxi.json").read_text(encoding="utf-8"))
+        self.assertIn('"adapter_sha256": "same"', self.text("ftxi.json"))
+        self.assertIn('"budget": {"timeout_s": 600.0}', self.text("ftxi.json"))  # the release tier's, which records
+        self.assertIn('"recordings": 1', self.text("ftxi.json"))
 
     def test_nothing_is_written_when_the_code_changed_while_the_oracles_ran(self):
-        codes, directory = self.write(self.Signed("ftxi", drifts=True))
+        codes = self.write(self.Signed("ftxi", drifts=True), obs("ftxi", "r/1", [W]))
         self.assertEqual(codes, ["golden-code-changed"])
-        self.assertFalse((directory / "golden").exists())
+        self.assertFalse((self.directory / "golden").exists())
+
+    def test_each_source_is_recorded_n_times_and_what_differed_is_unstable(self):
+        first = obs("ftxi", "r/1", [W, B])
+        second = obs("ftxi", "r/1", [W, ("black", False, 21, "none")])
+        codes = self.write(self.Signed("ftxi"), first, second)
+        self.assertEqual(codes, [])
+        self.assertEqual(self.recorder.call_args.kwargs["repeat"], 2)
+        self.assertIn('"unstable": {"1": {"legal_actions": [20, 21]}}', self.text("ftxi.json"))
+        self.assertIn('        ["b", false, null, "none", null, null, null, null]\n', self.text("ftxi.json"))
+        self.assertIn('"recordings": 2', self.text("ftxi.cost.json"))
+        # MANIFEST vouches for every file written: the answers, their costs, the calibration reference.
+        self.assertEqual(sorted(integrity.read_manifest()), ["calibration.json", "ftxi.cost.json", "ftxi.json"])
+        self.assertEqual(integrity.verify_manifest(), [])
+        self.assertEqual(json.loads(self.text("calibration.json"))["seconds"], 12.5)
+
+    def test_recordings_that_ended_differently_write_nothing(self):
+        codes = self.write(self.Signed("ftxi"), obs("ftxi", "r/1", [W, B]),
+                           obs("ftxi", "r/1", [W], status="rejected", reason="illegal_move"))
+        self.assertEqual(codes, ["golden-unstable-outcome"])
+        self.assertFalse((self.directory / "golden").exists())
+
+    def test_a_file_this_run_does_not_rewrite_keeps_its_hash_only_if_it_still_matches(self):
+        self.assertEqual(self.write(self.Signed("ftxi"), obs("ftxi", "r/1", [W])), [])
+        planted = self.directory / "golden" / "cwmtt.json"
+        # Recording ftxi again: cwmtt.json is not rewritten, and MANIFEST does not vouch for it.
+        planted.write_text("{}", encoding="utf-8")
+        self.assertEqual(self.write(self.Signed("ftxi"), obs("ftxi", "r/1", [W])), ["golden-integrity"])
+        planted.unlink()
+        # A file it keeps that was edited since MANIFEST was written is not laundered into a new MANIFEST:
+        # here the calibration reference, kept because the probe's source cannot run on this machine.
+        calibration = self.directory / "golden" / "calibration.json"
+        calibration.write_text(calibration.read_text(encoding="utf-8").replace("12.5", "1.0"), encoding="utf-8")
+        unavailable = self.Signed("ftxi:naive")
+        unavailable.available = lambda: "not built"
+
+        def make(name, lock):
+            return unavailable if name == "ftxi:naive" else self.Signed("ftxi")
+
+        recordings = {("ftxi", "r/1"): [obs("ftxi", "r/1", [W])]}
+        with mock.patch.object(gate, "make_source", side_effect=make), \
+                mock.patch.object(gate.runner, "record_sources", return_value=recordings):
+            found = gate.write_golden(only_sources=["ftxi"], log=lambda _: None)
+        self.assertEqual([finding.code for finding in found], ["golden-integrity"])
+        self.assertIn("calibration.json does not match MANIFEST", found[0].message)
 
 
 class EngineCommandTests(unittest.TestCase):
@@ -506,10 +826,10 @@ class ResultTests(unittest.TestCase):
                   aligned=88, matched=70)
 
     def result(self, tier="commit", engine="not configured", findings=(), engine_findings=(), gated=None, partial=False,
-               require_engine=False, full_strength=False, coverage=None):
+               require_engine=False, full_strength=False, mode="full", parse=None, calibration=None, tallies=None):
         result = GateResult(tier=tier, engine=engine, gated=dict(gated or {}), partial=partial,
-                            require_engine=require_engine, full_strength=full_strength,
-                            coverage=dict(coverage if coverage is not None else {name: (10, 10) for name in ORACLE_SOURCES}))
+                            require_engine=require_engine, full_strength=full_strength, engine_mode=mode, parse=parse,
+                            margin=4.0, calibration=calibration, tallies=dict(tallies or {}))
         result.sections.append(("section", list(findings)))
         if engine != "not configured":
             result.engine_sections.append(("engine vs oracles", list(engine_findings)))
@@ -565,16 +885,49 @@ class ResultTests(unittest.TestCase):
         self.assertNotIn(CUSTOM_POSITIONS, both.proof_channel)
         self.assertIn(CUSTOM_POSITIONS, gate.summarise(both))  # still reported as gated
 
-    def test_a_source_that_was_listed_but_not_heard_keeps_the_proof_channel_shut(self):
-        # A tier can list every source and still starve one of time; what counts is what it answered.
-        passed = dict(engine="passed", gated={"Standard": self.THREE})
-        heard = {name: (95, 100) for name in ORACLE_SOURCES}
-        self.assertTrue(self.release(coverage=heard, **passed).proof_channel.startswith("may be enabled"))
-        starved = {**heard, "chessin5d": (0, 2614)}
-        channel = self.release(coverage=starved, **passed).proof_channel
-        self.assertTrue(channel.startswith("DISABLED - chessin5d reproduced less than 90%"), channel)
-        missing = {name: stats for name, stats in heard.items() if name != "cwmtt:naive"}
-        self.assertIn("cwmtt:naive", self.release(coverage=missing, **passed).proof_channel)
+    def test_a_required_set_that_is_too_thin_fails_the_gate_not_a_ratio_at_run_time(self):
+        # The 90% coverage ratio is gone: verify's static check of the tier's required sets (H32)
+        # is a finding of the oracle layer, and any finding fails the gate and keeps the channel shut.
+        thin = Finding("proof-channel-vacuous", "tier 'release' requires 10 of chessin5d's 2614 stable recorded values")
+        result = self.release(engine="passed", gated={"Standard": self.THREE}, findings=[thin])
+        self.assertFalse(result.ok)
+        self.assertEqual(result.proof_channel, "DISABLED - the gate failed")
+        self.assertFalse(hasattr(gate, "PROOF_CHANNEL_COVERAGE"))
+
+    def test_an_engine_in_parse_mode_gates_nothing_and_never_opens_the_proof_channel(self):
+        agreement = gate.ParseAgreement(records=41, read=30, positions=612, described=600, boards=600, states=590,
+                                        sides=600, sides_agreed=600, replays=70, replays_agreed=70)
+        passed = self.result(engine="passed", mode="parse", parse=agreement)
+        self.assertTrue(passed.ok)
+        self.assertEqual(passed.proof_channel, "DISABLED - parse mode: the engine was compared on what it set up and how "
+                                               "it replayed each record, never on check, counts or mate (H23)")
+        text = gate.summarise(passed)
+        self.assertIn("engine differential: PARSE MODE - PASSED: the engine read 30 of 41 records (612 positions)", text)
+        self.assertTrue(text.splitlines()[-2].startswith("engine differential: PARSE MODE"), text)
+        # Not even in the tier that could enable it, and that tier fails without a full engine.
+        release = self.release(engine="passed", mode="parse", parse=agreement)
+        self.assertFalse(release.ok)
+        self.assertTrue(release.proof_channel.startswith("DISABLED - parse mode"))
+        self.assertIn("this tier requires an engine compared on the rules, not in parse mode: FAILED", gate.summarise(release))
+        failed = self.result(engine="failed", mode="parse", parse=agreement,
+                             engine_findings=[Finding("divergence", "r/1 position 3: placement: ...")])
+        self.assertFalse(failed.ok)
+        self.assertIn("engine differential: PARSE MODE - FAILED", gate.summarise(failed))
+
+    def test_the_summary_counts_what_was_required_and_says_how_slow_the_runner_was(self):
+        tally = stability.Tally(values=100, missing=4, outcomes=1, outcomes_missing=1, outside=7,
+                                unknown=Counter({"unknown at budget timeout_s=120": 3}))
+        probe = gate.Probe(source="ftxi:naive", record="cwmtt/manyChecks", positions=38, seconds=30.5, reference_s=12.2)
+        lost = Finding("golden-unreproduced", "ftxi:naive on cwmtt/ctp1: the run was cut at timeout_s=120 ...")
+        text = gate.summarise(self.result(findings=[lost], tallies={"ftxi:naive": tally}, calibration=probe))
+        self.assertIn("required ftxi:naive: 96 of 100 required values reproduced (4 not produced, 0 produced otherwise), "
+                      "0 of 1 required outcomes; 7 more recorded values produced outside the required set (each "
+                      "compared); unknown at budget timeout_s=120: 3 recorded values not produced", text)
+        self.assertIn("calibration: ftxi:naive over the first 38 positions of cwmtt/manyChecks: 30.50 s on this machine, "
+                      "12.20 s on the recording machine - this machine took 2.50x the recording machine's time", text)
+        self.assertIn("this runner is 2.5x slower than the recording machine; margin 4", text)
+        # Said only where a required value went missing.
+        self.assertNotIn("this runner is", gate.summarise(self.result(tallies={"ftxi:naive": tally}, calibration=probe)))
 
     def test_any_finding_fails_the_gate(self):
         result = self.release(engine="passed", gated={"Standard": self.THREE}, findings=[Finding("x", "y")])
@@ -601,6 +954,333 @@ class ResultTests(unittest.TestCase):
                       "independently answered: check 80, count 85, mate 90; "
                       "each record followed as far as the engine went by at least 3 oracles)", text)
         self.assertIn("NOT gated: Misc - Small - no oracle followed notation/game as far as the engine went", text)
+
+
+
+# --- the whole gate, in a world of its own ---------------------------------------------
+
+START = "r*nbqk*bnr*/p*p*p*p*p*p*p*p*/8/8/8/8/P*P*P*P*P*P*P*P*/R*NBQK*BNR*"
+AFTER_E3 = "r*nbqk*bnr*/p*p*p*p*p*p*p*p*/8/8/8/4P3/P*P*P*P*1P*P*P*/R*NBQK*BNR*"
+STATES = [{"event": "state", "index": 0, "size": "8x8", "markers": True, "boards": [f"0:1:w:{START}"]},
+          {"event": "state", "index": 1, "size": "8x8", "markers": True,
+           "boards": [f"0:1:w:{START}", f"0:1:b:{AFTER_E3}"]}]
+
+# The engine fixture: it prints the lines its plan holds for the record on stdin - and,
+# before it does, does to the harness whatever the plan says. A stand-in for the engine
+# adapter, in a temporary directory: what it plants is planted on purpose, to show
+# that the gate catches it.
+ENGINE = r"""
+import json, sys
+plan = json.load(open(sys.argv[1], encoding="utf-8"))
+record = sys.stdin.buffer.read().decode()
+for action in plan.get("tamper", []):
+    with open(action["path"], "a", encoding="utf-8") as handle:
+        handle.write(action["text"])
+for event in plan["records"][record]:
+    if event["event"] == "state" and plan.get("stateless"):
+        continue
+    if "--parse-only" in sys.argv and event["event"] == "position" and not plan.get("answers"):
+        event = {**event, "in_check": None, "legal_actions": None, "terminal": None}
+    print(json.dumps(event), flush=True)
+"""
+
+
+class Canned(Source):
+    """An oracle search that answers from a table, and remembers what it was asked."""
+
+    def __init__(self, name, table, asked):
+        self.name, self.oracle = name, name.split(":")[0]
+        self.table, self.asked = table, asked
+
+    def available(self):
+        return None
+
+    def signature(self, options):
+        return {"pin": "canned", "search": self.name, "cap": options.cap}
+
+    def observe(self, record_id, data, options):
+        self.asked.append((self.name, record_id, options))
+        return dataclasses.replace(self.table[(self.name, record_id)])
+
+
+class GateRunTests(unittest.TestCase):
+    """run_tier end to end: canned oracles, golden files written by the harness's own writers, a real engine process."""
+
+    RECORDS = [record("r/std"), record("r/tz", TZ)]
+
+    def setUp(self):
+        self.folder = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        for name, target in (("GOLDEN_DIR", self.folder / "golden"), ("GATE_FILE", self.folder / "gate.toml"),
+                             ("DIVERGENCES_FILE", self.folder / "known-divergences.toml"),
+                             ("DISAGREEMENTS_FILE", self.folder / "DISAGREEMENTS.md")):
+            self.enterContext(mock.patch.object(paths, name, target))
+        paths.DIVERGENCES_FILE.write_text("schema = 1\n", encoding="utf-8")
+        self.gate_toml()
+        self.summaries = [fingerprint.parse_state(event).summary() for event in STATES]
+        self.asked = []
+        self.table = {(name, item.id): self.answer(name, item.id) for name in ORACLE_SOURCES for item in self.RECORDS}
+        for target, name, value in ((gate.corpus, "load", self.RECORDS), (gate.corpus, "verify", []),
+                                    (gate.corpus, "verify_local", []), (gate.corpus, "verify_excluded", []),
+                                    (gate.corpus, "load_excluded", []), (gate.lockfile, "verify", []),
+                                    (gate.boundary, "check", []), (gate.provenance, "check", []),
+                                    (gate.rulebook, "verify", [])):
+            self.enterContext(mock.patch.object(target, name, return_value=value))
+        self.enterContext(mock.patch.object(gate.corpus, "read", side_effect=lambda item, lock: self.text(item.id).encode()))
+        self.enterContext(mock.patch.object(gate, "make_source",
+                                            side_effect=lambda name, lock: Canned(name, self.table, self.asked)))
+        self.report = self.enterContext(mock.patch.object(gate, "_write_report"))
+        self.cfg = config.load()
+        self.record_golden()
+
+    @staticmethod
+    def text(record_id):
+        return f'[Board "Standard"]\n{record_id}\n'
+
+    def gate_toml(self, *, command=(), mode="full", naive_timeout=None):
+        text = (paths.HARNESS_ROOT / "gate.toml").read_text(encoding="utf-8")
+        text = text.replace("\ncommand = []\n", f"\ncommand = {json.dumps(list(command))}\n")
+        text = text.replace('mode = "full"', f'mode = "{mode}"')
+        text = text.replace('source = "ftxi:naive"\nrecord = "cwmtt/manyChecks"\npositions = 38',
+                            'source = "ftxi"\nrecord = "r/std"\npositions = 1')
+        if naive_timeout is not None:
+            text = text.replace('[tier.commit]\nsources = ["ftxi", "notation"]',
+                                '[tier.commit]\nsources = ["ftxi", "ftxi:naive", "notation"]')
+            text = text.replace("min_checked = 0.75\n\n# The naive searches",
+                                f'min_checked = 0.75\n\n[tier.commit.source_timeout_s]\n"ftxi:naive" = {naive_timeout}\n\n'
+                                "# The naive searches", 1)
+        paths.GATE_FILE.write_text(text, encoding="utf-8")
+        if (paths.GOLDEN_DIR / "MANIFEST").exists():
+            # What each tier requires is a table of DISAGREEMENTS.md, rendered from gate.toml's budgets too. (A test
+            # that has broken a golden file on purpose wants its run to find that, not this.)
+            with contextlib.suppress(HarnessError):
+                gate.render_disagreements(log=lambda _: None)
+
+    def answer(self, name, record_id, *, cut_at=None):
+        rows = [W, B] if name not in PARSE_ONLY_SOURCES else [("white", None, None, None), ("black", None, None, None)]
+        positions = [Position(index, *row, **summary)
+                     for index, (row, summary) in enumerate(zip(rows, self.summaries, strict=True))]
+        status, reason = "ok", ""
+        if cut_at is not None:
+            positions = positions[:cut_at] + [Position(cut_at, **self.summaries[cut_at])]
+            status, reason = "timeout", "timeout"
+        return Observation(source=name, record=record_id, status=status, reason=reason, positions=positions,
+                           actions_accepted=len(positions) - 1, cap=1000,
+                           arrival_s=[0.01 * (index + 1) for index in range(len(positions))],
+                           ended_s=None if cut_at is not None else 0.05, elapsed_s=0.05)
+
+    def record_golden(self, costs=None, unstable=None):
+        """Golden, cost and calibration files and MANIFEST, as golden --write would write them for the canned answers."""
+        costs = costs or {}
+        unstable = unstable or {}
+        for name in ORACLE_SOURCES:
+            source = Canned(name, self.table, [])
+            answers = {item.id: support.recorded(self.table[(name, item.id)], costs.get((name, item.id)),
+                                                 unstable=unstable.get((name, item.id)))
+                       for item in self.RECORDS}
+            support.write_recorded(name, golden.signature(source, gate.recording_options(self.cfg, source)), self.RECORDS,
+                                   answers, manifest=False)
+        probe = golden.Calibration(source="ftxi", record="r/std", positions=1, platform="test", cpu_count=1, seconds=0.5,
+                                   signature=Canned("ftxi", self.table, []).signature(RunOptions(cap=self.cfg.cap)))
+        golden.calibration_path().write_text(golden.dump_calibration(probe), encoding="utf-8", newline="\n")
+        support.vouch()
+        gate.render_disagreements(log=lambda _: None)
+
+    def engine(self, flips=(), tamper=(), mode="full", naive_timeout=None, **breach):
+        """The engine fixture: it says what the oracles say, except check at each (record, position) in ``flips``.
+
+        ``breach`` breaks the contract on purpose: answers=True answers the rules questions in parse mode too,
+        stateless=True prints no state event.
+        """
+        plan = {"records": {}, "tamper": list(tamper), **breach}
+        for item in self.RECORDS:
+            events = []
+            for index, state in enumerate(STATES):
+                row = (W, B)[index]
+                events.append(state)
+                events.append({"event": "position", "index": index, "side": row[0],
+                               "in_check": (item.id, index) in flips or row[1], "legal_actions": row[2],
+                               "terminal": row[3]})
+            events.append({"event": "end", "status": "ok", "actions_accepted": 1})
+            plan["records"][self.text(item.id)] = events
+        (self.folder / "plan.json").write_text(json.dumps(plan), encoding="utf-8")
+        (self.folder / "engine.py").write_text(ENGINE, encoding="utf-8")
+        self.gate_toml(command=[sys.executable, str(self.folder / "engine.py"), str(self.folder / "plan.json")], mode=mode,
+                       naive_timeout=naive_timeout)
+
+    def run_gate(self, tier="commit"):
+        return gate.run_tier(tier, include_untracked=False, log=lambda _: None)
+
+    @staticmethod
+    def codes(result):
+        return sorted({finding.code for finding in result.findings()})
+
+    @staticmethod
+    def entry(oracle):
+        return (f'\n[[divergence]]\nid = "KD-0001"\noracle = "{oracle}"\npin = "{lockfile.load().pin(oracle).commit}"\n'
+                'record = "r/std"\nrecord_sha256 = "s"\nkind = "in_check"\nindex = 1\nengine_value = "True"\n'
+                'oracle_value = "False"\nrulebook = "A made-up citation, long enough to pass, for a test of the mechanism."\n'
+                'upstream = "unreported: planted by a test"\nadded = "2026-10-01"\n')
+
+    def test_an_honest_engine_passes(self):
+        self.engine()
+        result = self.run_gate()
+        self.assertEqual(result.findings(), [])
+        self.assertEqual((result.engine, result.ok), ("passed", True))
+        self.assertEqual(sorted(result.gated), ["Standard", TZ])
+        self.assertIn("harness unchanged while the gate ran", [title for title, _ in result.sections])
+        self.assertIn("rulebook", [title for title, _ in result.sections])
+        self.assertEqual(result.tallies["ftxi"].values, 32)  # two records, two positions, eight values each
+        self.assertEqual(result.tallies["ftxi"].outcomes, 2)
+        self.assertEqual(result.calibration.seconds, 0.01)  # position 0's answers arrived at 0.01 s
+        self.assertEqual(result.calibration.factor, 0.02)
+        self.report.assert_called_once()
+
+    def test_a_rulebook_that_changed_since_its_pin_fails_every_tier(self):
+        # H38: the rulebook is pinned, and the gate is re-run on a change - after the change is reviewed and pinned.
+        self.engine()
+        changed = Finding("rulebook-changed", "the rulebook changed: re-run the gate and update the pin with ...")
+        with mock.patch.object(gate.rulebook, "verify", return_value=[changed]) as verify:
+            result = self.run_gate()
+        verify.assert_called_once_with(self.cfg.rulebook)
+        self.assertEqual(self.codes(result), ["rulebook-changed"])
+        self.assertFalse(result.ok)
+
+    def test_an_engine_that_writes_itself_a_known_divergence_while_it_runs_fails(self):
+        # It contradicts every oracle about check at r/std position 1, and appends the entry that would excuse it.
+        self.engine(flips={("r/std", 1)}, tamper=[{"path": str(paths.DIVERGENCES_FILE), "text": self.entry("ftxi")}])
+        result = self.run_gate()
+        self.assertFalse(result.ok)
+        # The entry it wrote excuses nothing: the run compares against the divergences read when it began.
+        self.assertEqual(self.codes(result), ["divergence", "harness-modified"])
+        modified = [finding.message for finding in result.findings() if finding.code == "harness-modified"]
+        self.assertTrue(any("known-divergences.toml changed while the gate ran" in message for message in modified))
+
+    def test_an_engine_that_edits_a_golden_file_while_it_runs_fails(self):
+        self.engine(tamper=[{"path": str(golden.golden_path("ftxi")), "text": " "}])
+        result = self.run_gate()
+        self.assertFalse(result.ok)
+        self.assertEqual(self.codes(result), ["harness-modified"])
+        self.assertIn("golden/ftxi.json changed while the gate ran", result.findings()[0].message)
+
+    def test_a_golden_file_edited_before_the_run_is_never_compared(self):
+        path = golden.golden_path("ftxi")
+        path.write_text(path.read_text(encoding="utf-8").replace('"none"', '"stalemate"', 1), encoding="utf-8")
+        self.engine()
+        result = self.run_gate()
+        self.assertFalse(result.ok)
+        self.assertIn("golden-integrity", self.codes(result))
+        self.assertNotIn("ftxi", result.tallies)  # nothing was compared with it
+
+    def test_an_engine_that_reproduces_a_recorded_oracle_error_is_caught_where_that_oracle_does_not_run(self):
+        # The entry says Chess in 5D - which the commit tier does not run - is wrong to say "no check"
+        # at r/std position 1. The engine says "no check" there too: a telltale (H34).
+        paths.DIVERGENCES_FILE.write_text("schema = 1\n" + self.entry("chessin5d"), encoding="utf-8")
+        self.engine()
+        result = self.run_gate()
+        self.assertEqual(self.codes(result), ["telltale"])
+        self.assertFalse(result.ok)
+        self.assertIn("the engine reproduces chessin5d's recorded error at r/std position 1 (in_check = False)",
+                      result.findings()[0].message)
+
+    def test_the_gate_requires_every_required_value_and_none_that_its_budget_cannot_reach(self):
+        # ftxi:naive runs in this commit tier with a 120 s budget, and is cut while it searches r/std position 1.
+        self.table[("ftxi:naive", "r/std")] = self.answer("ftxi:naive", "r/std", cut_at=1)
+        # Recorded at 2 ms, position 1 is required (0.002 x 4 << 120): losing it fails the gate, by name.
+        self.engine(naive_timeout=120)
+        result = self.run_gate()
+        self.assertEqual(self.codes(result), ["golden-unreproduced"])
+        self.assertTrue(all("ftxi:naive on r/std" in finding.message for finding in result.findings()))
+        # Recorded at 50 s - beyond 120 / 4, within the release tier's 300 / 4 - it is not required here: it is
+        # counted as unknown at the budget.
+        self.table[("ftxi:naive", "r/std")] = self.answer("ftxi:naive", "r/std")
+        self.record_golden(costs={("ftxi:naive", "r/std"): [0.001, 50.0]})
+        self.table[("ftxi:naive", "r/std")] = self.answer("ftxi:naive", "r/std", cut_at=1)
+        result = self.run_gate()
+        self.assertEqual(result.findings(), [])
+        tally = result.tallies["ftxi:naive"]
+        self.assertEqual((tally.missing, tally.unknown), (0, Counter({"unknown at budget timeout_s=120": 4})))
+
+    def test_a_run_stops_early_only_where_no_engine_needs_the_rest(self):
+        # Position 1 of ftxi:naive cost 50 s on record: at 120 s nothing past position 0 is required.
+        self.record_golden(costs={("ftxi:naive", item.id): [0.001, 50.0] for item in self.RECORDS})
+        self.gate_toml(naive_timeout=120)
+        self.run_gate()
+        stops = {(name, record_id): options.stop_after for name, record_id, options in self.asked if name == "ftxi:naive"}
+        self.assertEqual(stops, {("ftxi:naive", "r/std"): (0, "position"), ("ftxi:naive", "r/tz"): (0, "position")})
+        # Where an engine is compared, every oracle answer may confirm or contradict it: no run is stopped.
+        self.asked.clear()
+        self.engine(naive_timeout=120)
+        self.run_gate()
+        self.assertTrue(all(options.stop_after is None for name, _, options in self.asked if name == "ftxi:naive"))
+
+    def test_the_tier_that_can_enable_the_proof_channel_fails_on_a_vacuous_required_set(self):
+        # ftxi:naive's r/std position 1 cost 200 s on record: beyond the release tier's 300 / 4. That leaves its
+        # required set there 24 of 32 recorded values, below the reviewed share (90%).
+        self.record_golden(costs={("ftxi:naive", "r/std"): [0.001, 200.0]})
+        release = self.run_gate("release")
+        self.assertEqual(self.codes(release), ["proof-channel-vacuous"])
+        self.assertIn(gate.PROOF_SECTION, [title for title, items in release.sections if items])
+        self.assertTrue(release.proof_channel.startswith("DISABLED"))
+        # A tier that can enable nothing is not failed for it; verify only reports it.
+        self.assertEqual(self.run_gate("commit").findings(), [])
+        found = gate.proof_channel_readiness(self.cfg, self.RECORDS, snapshot.take())
+        self.assertEqual([item.code for item in found], ["proof-channel-vacuous"])
+
+    def test_no_oracle_run_is_stopped_where_an_engine_in_parse_mode_is_compared(self):
+        self.record_golden(costs={("ftxi:naive", item.id): [0.001, 50.0] for item in self.RECORDS})
+        self.engine(mode="parse", naive_timeout=120)
+        self.run_gate()
+        naive = [options for name, _, options in self.asked if name == "ftxi:naive"]
+        self.assertEqual([options.stop_after for options in naive], [None, None])
+
+    def test_an_engine_in_parse_mode_that_breaks_its_contract_fails(self):
+        for breach in ({"answers": True}, {"stateless": True}):
+            self.engine(mode="parse", **breach)
+            result = self.run_gate()
+            self.assertEqual((result.engine, result.ok), ("failed", False), breach)
+            failed = [finding.message for finding in result.findings() if finding.code == "engine-failed"]
+            self.assertTrue(failed and all("engine contract" in message for message in failed), breach)
+
+    def test_a_value_the_recordings_disagreed_about_is_compared_with_nothing(self):
+        # ftxi's two recordings of r/std differed about check at position 1: it is unstable, recorded as null. This
+        # run says check there, where the engine says no check: that neither fails the engine nor stands behind it.
+        recorded = self.answer("ftxi", "r/std")
+        recorded.positions[1] = dataclasses.replace(recorded.positions[1], in_check=None)
+        self.table[("ftxi", "r/std")] = recorded
+        self.record_golden(unstable={("ftxi", "r/std"): {1: {"in_check": [False, True]}}})
+        fresh = self.answer("ftxi", "r/std")
+        fresh.positions[1] = dataclasses.replace(fresh.positions[1], in_check=True)
+        self.table[("ftxi", "r/std")] = fresh
+        self.engine()
+        result = self.run_gate()
+        self.assertEqual(result.findings(), [])
+        self.assertEqual(result.engine, "passed")
+
+    def test_a_lowered_budget_is_a_changed_line_of_what_each_tier_requires(self):
+        # H32: what a tier requires is a table of DISAGREEMENTS.md, re-rendered by verify from the golden and cost
+        # files and gate.toml - a budget lowered (here the commit tier's, 60 s to 30 s) cannot shrink it unseen.
+        self.record_golden(costs={("ftxi", item.id): [0.001, 10.0] for item in self.RECORDS})
+        self.assertIn("| commit | `ftxi` | timeout_s=60 | 32 | 32 | 2 | 2 | 0 | 0 |",
+                      paths.DISAGREEMENTS_FILE.read_text(encoding="utf-8"))
+        lowered = paths.GATE_FILE.read_text(encoding="utf-8").replace("timeout_s = 60", "timeout_s = 30", 1)
+        paths.GATE_FILE.write_text(lowered, encoding="utf-8")
+        sections = dict(gate.static_checks(lockfile.load(), config.load(), self.RECORDS, snapshot.take(),
+                                           include_untracked=False))
+        self.assertEqual([item.code for item in sections["golden observations"]], ["disagreements-stale"])
+        gate.render_disagreements(log=lambda _: None)
+        self.assertIn("| commit | `ftxi` | timeout_s=30 | 16 | 32 | 0 | 2 | 0 | 0 |",
+                      paths.DISAGREEMENTS_FILE.read_text(encoding="utf-8"))
+
+    def test_an_engine_in_parse_mode_is_compared_on_its_reading_only(self):
+        # It would contradict every oracle about check at r/std position 1; in parse mode it answers no check at all.
+        self.engine(flips={("r/std", 1)}, mode="parse")
+        result = self.run_gate()
+        self.assertEqual(result.findings(), [])
+        self.assertEqual((result.engine_mode, result.engine, result.gated), ("parse", "passed", {}))
+        self.assertEqual(result.parse.read, 2)
+        text = gate.summarise(result)
+        self.assertIn("engine differential: PARSE MODE - PASSED: the engine read 2 of 2 records (4 positions)", text)
+        self.assertTrue(result.proof_channel.startswith("DISABLED - parse mode"))
 
 
 if __name__ == "__main__":

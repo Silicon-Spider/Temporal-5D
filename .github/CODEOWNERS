@@ -1,0 +1,14 @@
+# Harness changes require review (design spec 11.0 "Recorded-answer integrity",
+# decision H33): the oracle harness - its comparison logic, the drivers, the
+# recorded answers and their hashes (golden/MANIFEST), the known divergences, the
+# gate's policy and the corpus - is owned here, so a pull request that touches any
+# of it asks for its owner's review. So is .github/: the workflows decide which
+# tier CI runs, with which restrictions, and whether `verify` runs at all - a
+# weaker invocation would make CI green without touching the harness - and this
+# file says who reviews; a pull request runs its own edited workflow, and GitHub
+# applies the base branch's CODEOWNERS, so both must be owned.
+#
+# This binds only once branch protection on `main` requires a review from a code
+# owner ("Require review from Code Owners"); until then it only requests one.
+/oracles/ @Silicon-Spider
+/.github/ @Silicon-Spider

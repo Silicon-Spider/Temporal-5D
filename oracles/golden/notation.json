@@ -1,7 +1,8 @@
 {
-  "schema": 2,
+  "schema": 3,
   "source": "notation",
-  "signature": {"adapter_sha256": "f28c899164fed36acc5f76baf4bfd677ee4309f3fde2986f6d551745c3158cc0", "driver_sha256": "6d165428493a8b8475f688421b9978efd4b43dfcb87d36a9b4ab234100228a8d", "pin": "99f6163a9c95a6a9740b20fb5f3c7f6503a166a0"},
+  "signature": {"adapter_sha256": "a1c4e53ce0e127706eb5f5a5fe24615cc20cd9a3c1b11579abb6e5abad512b88", "budget": {"timeout_s": 600.0}, "driver_sha256": "6d165428493a8b8475f688421b9978efd4b43dfcb87d36a9b4ab234100228a8d", "pin": "99f6163a9c95a6a9740b20fb5f3c7f6503a166a0"},
+  "recordings": 2,
   "records": {
     "cwmtt/100_timelines": {
       "sha256": "caee1585fdb2ff207c4fb592633d8f9e63b71402a346e087ebbd682b939714ec",

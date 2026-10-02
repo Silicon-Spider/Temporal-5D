@@ -308,8 +308,11 @@ class ValueAtTests(unittest.TestCase):
         self.assertEqual(observations.value_at(played, "length", 3), "2 actions")
         self.assertEqual(observations.value_at(refused, "length", 2), "at least 2 actions")  # it read the one it refused
         self.assertIsNone(observations.value_at(obs("a", [], status="unsupported"), "length", 1))
-        # Actions are counted from 1, and a length disagreement sits next to the actions read.
-        self.assertIsNone(observations.value_at(played, "legality", 0))
+        # Actions are counted from 1 - action 0 is the record's set-up, which a source that reported position 0
+        # read - and a length disagreement sits next to the actions read.
+        self.assertEqual(observations.value_at(played, "legality", 0), "accepted")
+        self.assertIsNone(observations.value_at(obs("a", [], status="unsupported"), "legality", 0))
+        self.assertIsNone(observations.value_at(played, "legality", -1))
         self.assertIsNone(observations.value_at(played, "length", 9999))
         self.assertIsNone(observations.value_at(played, "length", 0))
         self.assertIsNone(observations.value_at(refused, "length", 3))
@@ -320,6 +323,75 @@ class ValueAtTests(unittest.TestCase):
         for item in observations.compare(a, b):
             self.assertEqual(observations.value_at(a, item.kind, item.index), item.a_value, item)
             self.assertEqual(observations.value_at(b, item.kind, item.index), item.b_value, item)
+
+
+class SetUpRefusalTests(unittest.TestCase):
+    """An engine in parse mode that cannot read a record's headers or board strings refuses its set-up: action 0."""
+
+    def refusal(self):
+        return obs("engine", [], status="rejected", reason="unreadable")
+
+    def test_it_is_a_refusal_of_action_0(self):
+        refusal = self.refusal()
+        self.assertTrue(observations.refused_setup(refusal))
+        self.assertEqual(observations.refused_action(refusal), 0)
+        self.assertEqual(observations.value_at(refusal, "legality", 0), "rejected:unreadable")
+        self.assertIsNone(observations.value_at(refusal, "legality", 1))
+        self.assertIsNone(observations.value_at(refusal, "length", 1))
+        self.assertEqual(observations.validate(refusal), [])
+        # A refusal of an action, or a run that reported nothing for any other reason, is not one.
+        self.assertEqual(observations.refused_action(obs("a", [START], status="rejected", reason="unreadable")), 1)
+        self.assertFalse(observations.refused_setup(obs("a", [], status="unsupported")))
+        self.assertTrue(observations.validate(obs("a", [], status="rejected", reason="illegal_move")))
+
+    def test_a_source_that_set_the_record_up_contradicts_it_softly_and_nothing_else_is_compared(self):
+        for rows in ([START], [START, REPLY, MATE]):
+            oracle = obs("ftxi", rows)
+            found = observations.compare(self.refusal(), oracle)
+            self.assertEqual([(item.kind, item.index, item.a_value, item.b_value, item.soft) for item in found],
+                             [("legality", 0, "rejected:unreadable", "accepted", True)])
+            self.assertIn("action 0 (the record's set-up): legality: engine=rejected:unreadable vs ftxi=accepted",
+                          found[0].describe())
+        # A parse-only source that set it up contradicts it too: the refusal is a failure to read.
+        self.assertEqual(len(observations.compare(self.refusal(), obs(PARSE_ONLY_SOURCES[0], [START]))), 1)
+        # A source that did not set it up either agrees.
+        for other in (self.refusal(), obs("cwmtt", [], status="unsupported", reason="fen")):
+            self.assertEqual(observations.compare(self.refusal(), other), [])
+
+
+class AgreementTests(unittest.TestCase):
+    """Two reports agree about an observation by compare()'s own rule - the telltales' measure (H34)."""
+
+    def test_by_the_comparisons_rule_not_by_the_same_words(self):
+        capped = obs("a", [START, ("black", False, 1000, "none")])
+        larger = obs("b", [START, ("black", False, 1000, "none")], cap=5000)
+        larger.positions[1] = dataclasses.replace(larger.positions[1], legal_actions=1200)
+        self.assertTrue(observations.agrees(capped, larger, "legal_actions", 1))
+        self.assertFalse(observations.agrees(capped, obs("c", [START, ("black", False, 999, "none")]), "legal_actions", 1))
+        no_action = obs("cwmtt", [START, (None, None, 0, "no_action")])
+        self.assertTrue(observations.agrees(obs("e", [START, MATE]), no_action, "terminal", 1))
+        self.assertFalse(observations.agrees(obs("e", [START, REPLY]), no_action, "terminal", 1))
+        # Two refusals of one action agree, whatever reason each gives; a refusal and a play do not.
+        soft = obs("ftxi", [START], status="rejected", reason="no_matching_move")
+        hard = obs("engine", [START], status="rejected", reason="illegal_move")
+        self.assertTrue(observations.agrees(hard, soft, "legality", 1))
+        self.assertFalse(observations.agrees(obs("engine", [START, REPLY]), soft, "legality", 1))
+        self.assertIsNone(observations.agrees(obs("engine", [START, REPLY]), soft, "in_check", 1))  # one says nothing
+        # Two readings of a record's length agree where neither ends before an action the other found.
+        self.assertTrue(observations.agrees(obs("a", [START, REPLY]), obs("b", [START, REPLY]), "length", 2))
+        self.assertFalse(observations.agrees(obs("a", [START, REPLY]), obs("b", [START, REPLY, START]), "length", 2))
+        marked = set_up(obs("a", [START]), [1], [11])
+        self.assertTrue(observations.agrees(marked, set_up(obs("b", [START]), [1], [11]), "unmoved", 0))
+        self.assertFalse(observations.agrees(marked, set_up(obs("b", [START]), [1], [12]), "unmoved", 0))
+        self.assertTrue(observations.agrees(marked, set_up(obs("b", [START]), [1], [12]), "placement", 0))
+
+    def test_printed_values_agree_by_the_same_rule(self):
+        self.assertTrue(observations.texts_agree("legal_actions", ">=1000", "1200"))
+        self.assertFalse(observations.texts_agree("legal_actions", "998", "1000"))
+        self.assertTrue(observations.texts_agree("terminal", "checkmate", "no_action"))
+        self.assertTrue(observations.texts_agree("legality", "rejected:illegal_move", "rejected:no_matching_move"))
+        self.assertFalse(observations.texts_agree("legality", "accepted", "rejected:cannot_submit"))
+        self.assertTrue(observations.texts_agree("in_check", "False", "False"))
 
 
 class ValidateTests(unittest.TestCase):
@@ -432,20 +504,33 @@ class GoldenSupportTests(unittest.TestCase):
             self.assertIsNotNone(observations.status_changed(died, done), reason)
         self.assertFalse(observations.cut_short(obs("a", [START], status="error", reason="crash")))
 
-    def test_coverage_counts_recorded_values_that_were_reproduced(self):
-        golden = obs("a", [START, REPLY])
-        self.assertEqual(observations.coverage(golden, obs("a", [START, REPLY])), (8, 8))
-        self.assertEqual(observations.coverage(golden, obs("a", [START], status="timeout")), (4, 8))
-        self.assertEqual(observations.coverage(golden, obs("a", [(None, None, 20, None), REPLY])), (5, 8))
-
-    def test_a_source_that_stops_saying_what_it_set_up_loses_coverage(self):
-        golden = set_up(obs("a", [START, REPLY]), [1, 2], [11, 12])
-        self.assertEqual(observations.coverage(golden, set_up(obs("a", [START, REPLY]), [1, 2], [11, 12])), (16, 16))
-        self.assertEqual(observations.coverage(golden, obs("a", [START, REPLY])), (8, 16))
-        self.assertEqual(observations.coverage(golden, set_up(obs("a", [START, REPLY]), [1, 2])), (14, 16))
-        # A search cut short after the state was printed keeps what was set up.
+    def test_the_values_of_a_report_are_its_answers_and_what_it_set_up(self):
+        # What a golden file records, and what required sets are made of (H32).
+        self.assertEqual(observations.values(obs("a", [START, (None, None, 20, None)])),
+                         [(0, "side"), (0, "in_check"), (0, "legal_actions"), (0, "terminal"), (1, "legal_actions")])
+        described = set_up(obs("a", [START]), [1], [11])
+        self.assertEqual(len(observations.values(described)), 8)
+        # Without markers there is no fingerprint: one value fewer.
+        self.assertEqual(len(observations.values(set_up(obs("a", [START]), [1]))), 7)
         cut = set_up(obs("a", [START, (None, None, None, None)], status="timeout"), [1, 2], [11, 12])
-        self.assertEqual(observations.coverage(golden, cut), (12, 16))
+        self.assertEqual([name for index, name in observations.values(cut) if index == 1],
+                         ["fingerprint", "placement", "boards", "pieces"])
+
+    def test_a_value_is_read_by_position_and_field(self):
+        report = obs("a", [START, REPLY])
+        self.assertEqual(observations.value(report, 1, "side"), "black")
+        self.assertIsNone(observations.value(report, 2, "side"))  # never reached
+        self.assertIsNone(observations.value(report, -1, "side"))
+
+    def test_unreadable_is_a_soft_rejection(self):
+        # The engine's parser in parse mode could not read the move text: notation, maybe not rules.
+        self.assertIn("unreadable", observations.SOFT_REJECTIONS)
+        full = obs("a", [START, REPLY, START])
+        unread = obs("engine", [START, REPLY], status="rejected", reason="unreadable")
+        self.assertEqual(self.kinds(full, unread), [("legality", 2, "accepted", "rejected:unreadable", True)])
+
+    def kinds(self, a, b, **options):
+        return [(item.kind, item.index, item.a_value, item.b_value, item.soft) for item in observations.compare(a, b, **options)]
 
     def test_what_settles_a_question(self):
         self.assertTrue(observations.decisive("in_check", False))

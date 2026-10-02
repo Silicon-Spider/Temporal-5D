@@ -10,26 +10,41 @@ cap = 1000
 [engine]
 # argv of the engine-under-test adapter: a command that reads a 5dpgn record on
 # stdin and writes the observation protocol on stdout (oracles/README.md,
-# "Engine contract"). The harness appends `--cap N` and runs it from the
+# "The engine contract"). The harness appends `--cap N` and runs it from the
 # repository root. The adapter is the engine's, and lives with it: a command that
 # names anything inside oracles/ is refused.
 #
 # Empty until the rules engine exists. While it is empty no engine has been
 # compared against the oracles, and the proof channel stays disabled (H23).
 command = []
+# "full": the engine answers every question at every position.
+# "parse": the harness appends `--parse-only` after `--cap N`; the engine says what
+# it set up, whose move it is and how it replayed the record, and answers none of
+# check, counts and mate. The gate compares those and gates nothing; the proof
+# channel stays disabled.
+mode = "full"
 
 # --- Tiers (design spec 11.0) -------------------------------------------------
 # sources       which oracle searches run
 # record_tiers  which corpus records run (each record names its cheapest tier)
-# timeout_s     wall clock per (source, record); what was answered before the
-#               deadline is kept, the rest is unknown
-# min_coverage  share of the golden values a run must reproduce to count as a check
+# timeout_s     wall clock per (source, record): what arrived before the deadline
+#               is kept, the rest is unknown at that budget
+# mate_budget_ms  Chess in 5D's mate search, per position
 # min_checked   for the engine: a ruleset is gated only if, for each of check,
 #               count and mate, the oracles give a verdict at no less than this
 #               share of the positions the engine reports in it. No oracle reads
 #               every record, so the share is below 1; the gate prints the
 #               numbers it found. It can never be 0: a ruleset whose only oracle
 #               has no check verdict must not come out "gated".
+#
+# There is no coverage floor (H32). A tier requires 100% of its required set -
+# every recorded value whose recorded cost x [stability] margin fits the tier's
+# budget for that source - and a run that loses one of them fails, by name. The
+# recorded values outside the set are reported as counts, "unknown at budget X".
+# What each tier requires of each source is a table in DISAGREEMENTS.md, rendered
+# from these budgets and the cost files: change a budget and `verify` fails until
+# `golden --render` writes the table again - its diff is the change in what the
+# gate checks, reviewed as such.
 
 # "notation" is the notation repository's parser, a parse-only oracle: it says
 # what position it read at every ply and how far it read, and answers no rules
@@ -38,19 +53,17 @@ command = []
 sources = ["ftxi", "notation"]
 record_tiers = ["commit"]
 timeout_s = 60
-min_coverage = 1.0
 min_checked = 0.75
 
 # The naive searches are exhaustive and run out of time on wide positions; that
-# is expected, which is why their budgets and coverage floors are lower. The
-# floors only guard against a vacuous pass (a run where nearly everything timed
-# out or crashed); a contradiction fails the gate whatever the coverage.
+# is expected, which is why their budgets are lower: what they cannot reach in
+# time (with the margin) is outside the required set, and is counted as unknown
+# at that budget. A contradiction fails the gate whatever the budget.
 [tier.nightly]
 sources = ["ftxi", "ftxi:naive", "cwmtt", "cwmtt:naive", "chessin5d", "notation"]
 record_tiers = ["commit", "nightly"]
 timeout_s = 300
 mate_budget_ms = 20000
-min_coverage = 0.9
 min_checked = 0.75
 
 [tier.nightly.source_timeout_s]
@@ -61,21 +74,17 @@ min_checked = 0.75
 cwmtt = 900
 chessin5d = 600
 
-[tier.nightly.source_min_coverage]
-"ftxi:naive" = 0.6
-"cwmtt:naive" = 0.6
-cwmtt = 0.8
-
 # Before any generator release or proof-channel enablement. Fails unless an
 # engine was compared and came through at least one ruleset. Only a tier that
 # requires an engine and runs every source over every record tier can enable the
-# proof channel. Golden files are recorded under these budgets.
+# proof channel; it runs every search to its budget (no run is stopped early).
+# The golden files are recorded under these budgets ([stability] recording_tier):
+# a change here marks them stale.
 [tier.release]
 sources = ["ftxi", "ftxi:naive", "cwmtt", "cwmtt:naive", "chessin5d", "notation"]
 record_tiers = ["commit", "nightly"]
 timeout_s = 600
 mate_budget_ms = 60000
-min_coverage = 0.95
 min_checked = 0.75
 require_engine = true
 
@@ -85,10 +94,59 @@ require_engine = true
 cwmtt = 1200
 chessin5d = 900
 
-[tier.release.source_min_coverage]
-"ftxi:naive" = 0.8
-"cwmtt:naive" = 0.8
-cwmtt = 0.9
+# --- Stable answers (H32) -----------------------------------------------------
+[stability]
+# The golden files are recorded under this tier's budgets (golden --write, which
+# records every source twice, the fewest independent recordings verify accepts).
+recording_tier = "release"
+# A recorded value is required in a tier when its recorded cost - when it arrived,
+# from the start of its run, the most over the recordings - times this margin fits
+# the tier's budget for that source (and, for a Chess in 5D mate verdict, when its
+# mate search's cost times the margin fits the tier's mate budget). At least 1, so
+# no tier can require what its own deadline cut on the recording machine. 4 to
+# start: the first CI run (2026-10-01, ubuntu-24.04) reproduced 95.9% and 98.4% of
+# the two naive searches' recorded values at the 120 s nightly budget, against
+# 99.1% and 99.3% on the recording desktop. Revisit it with the calibration
+# probe's figures from CI (each gate report records them).
+margin = 4
+# For the tier that can enable the proof channel: the least share its required
+# set must hold of what each source would have recorded but for its recording
+# budget - its stable values, the values behind its horizons (counted from the
+# length of a complete replay of the record), those a limit left unknown and the
+# unstable ones - beside every terminal verdict it recorded, or another source
+# recorded where its recording was cut, which it must hold without exception. A
+# run of that tier fails below it, and `verify` reports it: a source listed in
+# that tier but starved of time - a low budget, or a recording made on a loaded
+# machine - moves values behind horizons, where they still count against it.
+# Reviewed 2026-10-01 against a two-recording measurement on the recording
+# desktop: the release tier required 84.9% of what ftxi:naive would record and
+# 77.3% of cwmtt:naive's, all of every other source's, and cut off 5 and 8 final
+# verdicts of theirs - the proof channel cannot be enabled at these budgets.
+proof_share = 0.9
+
+# The calibration probe: a fixed, deterministic workload timed at the start of
+# every gate run and by golden --write (whose time on the recording machine is
+# committed, golden/calibration.json), so that a slow runner's failure can say
+# how much slower than the recording machine it is. About 12 s on the recording
+# desktop. Changing it means re-recording (golden --write).
+[calibration]
+source = "ftxi:naive"
+record = "cwmtt/manyChecks"
+positions = 38
+
+# --- The rulebook (H38) -------------------------------------------------------
+# When the engine and an oracle disagree, the rulebook decides, and every known
+# divergence cites it. It is pinned: `sha256` is the SHA-256 of its text (CRLF
+# folded to LF), and `verify` - so every gate tier - fails once the file no
+# longer matches it. A change to the rulebook is a reviewed change: read it,
+# re-check every known divergence that cites it, update this pin with
+# `python oracles/harness.py rulebook --pin`, and re-run the gate. The pin lives
+# here, with the gate's policy, rather than in golden/MANIFEST, which every
+# `golden --write` rewrites - re-recording the oracles must never re-pin the
+# rulebook as a side effect, and the recorded answers do not depend on it.
+[rulebook]
+path = "docs/rules/README.md"
+sha256 = "e1fb718af64b643a852069e20e98dba0e736ec60e940f2d69008e15c838e7a1c"
 
 # --- Boundary -----------------------------------------------------------------
 # Every file outside oracles/ is checked. These lists sort the files into kinds,

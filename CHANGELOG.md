@@ -10,6 +10,53 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-02 - The gate, step 2B: stable answers, integrity, telltales, parse mode, the rulebook pin
+
+- `oracles/` (H32): every source is recorded twice (`golden --write --repeat 2`);
+  a value that differs between recordings is unstable and compared by nothing, one
+  a limit stopped is "unknown at budget X". Per-position costs go in
+  `golden/<source>.cost.json`. A tier requires exactly the stable values whose
+  recorded cost x `[stability] margin` fits its budget - and 100% of them: the
+  coverage floors and the proof channel's 90% ratio are gone, replaced by a
+  static non-vacuity check. A calibration probe reports how much slower a runner
+  is than the recording machine. The golden files are re-recorded (schema 3).
+- H33: `golden/MANIFEST` holds every recorded file's SHA-256, verified before any
+  comparison; each gate run loads one verified snapshot (closing the window in
+  which an engine could append a known divergence excusing itself); the harness's
+  files are re-hashed after the engine runs and a change fails the run;
+  `harness.py` imports its own modules from source only, so a planted bytecode or
+  extension module is never loaded. `.github/CODEOWNERS` owns `/oracles/` and
+  `/.github/`.
+- H34: an engine answer that agrees with a known divergence's recorded oracle
+  error, by the comparison's own rule, is a telltale: it fails the gate and is
+  never reported stale.
+- The engine's parse mode (`[engine] mode = "parse"`) compares states, replay
+  length and acceptance, never check, counts or mate, and never enables the proof
+  channel. In either mode an engine's `rejected`/`unreadable` - after positions,
+  or refusing a set-up - is a soft legality divergence that only a notation
+  citation can excuse, and the ruleset stays ungated.
+- The CHECKPOINT 1 rulings: `in_check` means H36's check status; a source that
+  names a search limit and still gives a verdict is malformed (H37); the rulebook
+  is pinned in `gate.toml` (`harness.py rulebook`, `rulebook --pin`), and `verify`
+  fails when it changes until it is re-pinned (H38).
+- `legal_actions` is defined: an action is its set of moves, with its
+  timeline-creating moves in the order they create timelines - two orders of two
+  branching moves are two actions. ftxi and cwmtt list exactly that at every
+  position both read; a protocol definition, not a rules ruling.
+- `.github/workflows/oracle-commit.yml`, `oracle-nightly.yml`: the engine's gate
+  adapter is built before the gate, and the build is checked to have changed
+  nothing under `oracles/` (the harness-modified check only sees changes made
+  while the gate runs).
+- Reviewed adversarially (17 findings, all applied). 601 harness tests. The golden
+  files were re-recorded on a quiet machine (the commit tier's calibration probe
+  then ran at 1.00x the recording machine's time); no recorded answer changed.
+- `AGENTS.md` and `CONTRIBUTING.md`: the forbidden ways of making the gate pass now
+  name budgets, the margin, `proof_share`, cost files, `calibration.json`,
+  `MANIFEST`, re-recording on a loaded machine and moving the rulebook pin
+  unreviewed; `CLAUDE.md`: the two-recording command and `rulebook`.
+- Spec: §11.0 "Running the gate" (H32, H33, H34, H36, H37, H38); proposed spec
+  edits 24-26 in `docs/BUILD_LOG.md`.
+
 ### 2026-10-02 - Engine: the hypercuboid lets a castling precede moves that rewind the present
 
 - `engine/src/hypercuboid.cpp`: the general realisation (alternative rulesets only)

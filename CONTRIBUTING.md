@@ -137,9 +137,13 @@ A pin is not updated routinely. When one has to move:
    blob changed (`verify` names them), and look at `corpus --unlisted` for new ones.
 5. `python oracles/harness.py build`.
 6. Re-verify every entry in `known-divergences.toml` bound to the old pin.
-7. `python oracles/harness.py golden --write`, and **read the diff**. Apart from
-   each file's signature line, a changed line in `oracles/golden/` is an answer
-   that changed - or, for a run that ran out of time, a change in how far it got.
+7. `python oracles/harness.py golden --write` (it records every source twice), and
+   **read the diff**. Apart from each file's signature line, a changed line in
+   `oracles/golden/` is an answer that changed - or, for a run that ran out of time,
+   a change in how far it got. Read too what it lists at the end - verdicts,
+   outcomes or positions the new recording no longer holds - and any changed line
+   of "What each tier requires" in `oracles/DISAGREEMENTS.md`: those are losses of
+   checking, never routine churn.
 8. `python oracles/harness.py provenance --write`, and re-read the hand-written
    notes about that oracle in the lock file and in `oracles/README.md`.
 9. Record the bump in `CHANGELOG.md` - the answers that moved, and any line of
@@ -196,7 +200,11 @@ The gate has three tiers: `commit` (ftxi, on every push), `nightly` (all three
 oracles), and `release` (all three, and it fails unless an engine was compared and
 came through at least one named variant). Only a complete run of a tier that
 requires an engine and runs every oracle over the whole corpus - with every oracle
-search reproducing at least 90% of its recorded answers - allows the proof channel
-to be enabled, and only for the named variants that pass. Until the engine has an
+search reproducing 100% of that tier's required set of recorded answers, a set
+that must hold every terminal verdict recorded (or cut off by the search's budget)
+and the reviewed share of what the search would record but for its budget
+(`oracles/README.md`, "Stable answers") - allows the proof channel
+to be enabled, and only for the named variants that pass, with the engine compared
+in full mode. Until the engine has an
 adapter configured in `oracles/gate.toml`, the proof channel is disabled, whatever
 colour CI is.

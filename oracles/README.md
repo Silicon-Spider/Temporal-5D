@@ -1,13 +1,15 @@
 # Oracle harness
 
 The differential-testing gate for the rules engine (design spec §11.0; decisions
-H23–H30), and everything it needs: three independent implementations of the rules
+H23–H34 and H36–H38), and everything it needs: three independent implementations of the rules
 and an independent reader of the notation, pinned; a pinned corpus of game records;
 the machinery that runs the one over the other; and the check that keeps all of it
 out of the engine.
 
-**There is no engine yet.** What is here is the oracle side of the gate, built and
-running, with the engine's slot empty.
+**No engine is configured yet.** What is here is the oracle side of the gate, built
+and running, with the engine's slot in `gate.toml` empty; the engine's adapter,
+which reads records but does not yet judge them, is to be compared in parse mode
+first ("The engine contract", below).
 
 ## The rule
 
@@ -75,12 +77,17 @@ checked is tabulated, per variant, at the top of `DISAGREEMENTS.md`.
 oracles/
   harness.py              entry point: python oracles/harness.py <command>
   oracles.lock.toml       the pins: repositories, commits, licences, toolchains
-  gate.toml               tiers, budgets, the engine command, boundary policy
+  gate.toml               tiers, budgets, the stability policy, the rulebook pin, the engine command,
+                          boundary policy
   known-divergences.toml  where an oracle is wrong, with the rule that says so
-  DISAGREEMENTS.md        what the oracles cover, and where they contradict each other (generated)
+  DISAGREEMENTS.md        what the oracles cover, what each tier requires of them, and where they
+                          contradict each other (generated)
   corpus/manifest.toml    the pinned game records, by source, blob and hash
   corpus/records/         the few records written for this project
-  golden/                 what each oracle says about each record (generated, reviewed)
+  golden/                 what each oracle says about each record (generated, reviewed): the
+                          answers (<source>.json), when they arrived (<source>.cost.json), the
+                          calibration probe's time on the recording machine (calibration.json),
+                          and the SHA-256 of each of those files (MANIFEST)
   drivers/                the programs of ours that load oracle code
   oracle_harness/         the harness (Python, standard library only)
   tests/                  its own tests
@@ -131,10 +138,23 @@ it, plus legality itself:
 | Observable | Meaning |
 |---|---|
 | state | What the source set up: every board of the multiverse. The harness hashes it (below); two sources that set up different boards are compared no further, and two whose unmoved markers alone differ are compared with that difference reported beside. |
-| `in_check` | The "phantom" check of spec §11.0: can the opponent capture a royal once every eligible timeline has been advanced to its phantom board? |
-| `legal_actions` | Number of distinct legal actions (whole turns), counted up to a cap of 1000. A count equal to the cap means "at least that many". |
-| `terminal` | `none` while a legal action exists; otherwise `checkmate` or `stalemate` (`no_action` from a source that cannot tell which). |
+| `in_check` | Check status (decision H36, the rulebook's R1): passing on all **active** boards **in the present**, could the opponent capture a royal from any of their playable boards? Optional boards ahead of the present and boards on inactive timelines are not passed; a capture counts even if it would branch into an inactive timeline. (Submission legality - whether an action may be submitted - is a separate test, on the actual turn: it shows as legality, below.) |
+| `legal_actions` | Number of legal actions (whole turns), counted up to a cap of 1000. A count equal to the cap means "at least that many". An action is counted as the set of its moves, with its timeline-creating (branching) moves in the order they create their timelines: the order of its other moves does not count, and two orders of two branching moves are two actions - even where they reach the same state (rulebook J6: order matters within an action). That is what ftxi and cwmtt count, with both searches of each (below the table). It is the protocol's definition, chosen so that counts are comparable - not a rules ruling - and it is not the number of distinct states the mover can reach, which a search may count instead, separately. |
+| `terminal` | `none` while a legal action exists; otherwise `checkmate` or `stalemate` (`no_action` from a source that cannot tell which). A verdict is a proof - an exhaustive search that terminated (H37): a search that ran out of its budget answers nothing (below). |
 | legality | Whether each recorded action is accepted. One source refusing an action another went on to play is a disagreement; so is one source saying the record ends where another found a further action, whether it played that action or refused it. |
+
+What the oracles count as an action was checked on their own listings
+(`observe --actions K`, 2026-10-02). At eight positions that both read - among
+them `cwmtt/ctp1` position 13 (195 actions), `cwmtt/NP` 60 (567) and
+`notation/1.2` 10 (916) - ftxi and cwmtt listed exactly the same actions, ftxi's
+naive search as well at `cwmtt/ctp1` 13, and the four searches' recorded counts
+agree there. In every listing a set of moves with *b* branching moves appears
+*b*! times, and every other set once. At `cwmtt/JustKings` position 3, which only
+cwmtt reads, its 27 actions are 25 sets of moves, two of them in both orders of
+their two branching moves; one of those pairs - two king jumps onto `(0T1)c2` -
+reaches the same state either way, and is still two actions. Chess in 5D gives
+the gate no count; its own enumerator, shown only by `observe --actions`, lists
+each set of moves once (560 at `cwmtt/NP` 60, 904 at `notation/1.2` 10).
 
 Positions are aligned by counting submitted actions. On its own that cannot tell a
 rules disagreement from two parsers that read one move as two different legal
@@ -202,15 +222,21 @@ action was held illegal; and it never stands behind the engine's replay of a
 record, as a rules oracle that followed it would. What it set up is compared like
 any other source's.
 
-Each oracle answers with its own reading of these definitions - which timelines
-count as "eligible", for one. Where the readings differ, the reports disagree, and
-the rulebook, not the harness, says who is right (see "What the disagreements are"
-below).
+Each oracle answers with its own reading of these definitions - which boards its
+check test passes, for one. Where the readings differ, the reports disagree, and
+the rulebook (`docs/rules/README.md`, pinned - "Known divergences", below), not
+the harness, says who is right (see "What the disagreements are" below).
 
 Three principles keep the comparison honest:
 
 - **An unknown never disagrees with anything.** A source that cannot answer a
   question, or ran out of time, says nothing. Nothing is inferred on its behalf.
+  A mate verdict in particular is a proof, from an exhaustive search that
+  terminated, and an exhausted budget is unknown, never mate (H37): a search cut at
+  the run's deadline answers nothing at that position, and Chess in 5D's mate search,
+  whose library answers "checkmate" when it runs out of time, leaves its verdict
+  null and names the limit it ran into. A position that names a limit and gives a
+  verdict anyway makes the run malformed.
 - **A source is never asked about a game it would misread.** cwmtt and 5d-chess-js
   both replay a board variant they do not know on the Standard layout without a
   word; both do the same when their own reader skips the record's Board header,
@@ -252,7 +278,9 @@ A rejection is **soft** when the source could not match the move text to any mov
 it can generate (`no_matching_move`, `ambiguous_move`, `notation_mismatch`, or a
 message the adapter does not know, `unrecognised`): that may be a rules
 disagreement or a notation the source does not read, and the harness cannot tell
-which. `illegal_move` and `cannot_submit` are hard.
+which. The engine's `unreadable` - its own parser could not read the move text,
+or the record's set-up ("The engine contract") - is soft too. `illegal_move` and
+`cannot_submit` are hard.
 
 How a record is replayed - which actions are accepted, how many are read - belongs
 to the implementation, not to each of its searches, so it is compared once per
@@ -282,19 +310,34 @@ however the CLI's run ended.
 |---|---|---|---|
 | `commit` | every push and pull request | `ftxi`, `notation` | three positions per record in the driver check (below) |
 | `nightly` | every night | all six | the naive searches get shorter budgets; they time out on wide positions by design |
-| `release` | before any generator release or proof-channel enablement | all six | the longest budgets, and it **fails unless an engine was compared and came through at least one named variant** |
+| `release` | before any generator release or proof-channel enablement | all six | the longest budgets - the golden files are recorded under them - and it **fails unless an engine was compared and came through at least one named variant** |
 
 Workflows: `.github/workflows/oracle-commit.yml` and `oracle-nightly.yml` (the
 latter also runs the release tier, by hand or on a `generator-v*` tag). Each runs
 `verify`, builds the oracles its tier needs, runs the harness's own tests
 (`selftest`), and then the gate.
 
-Each tier run does, in order: the static checks; the oracle runs; a
-self-consistency check of every report; a comparison of the fresh run with the
-golden observations; a check of the ftxi driver against ftxi's stock CLI; and,
-when an engine is configured, the engine differential. The last lines of the
-output say whether the engine was compared and whether the proof channel may be
-enabled.
+Each tier run does, in order: it reads everything it compares against once, and
+verifies it (the golden, cost and calibration files against `golden/MANIFEST`,
+and `known-divergences.toml`), and hashes every harness file; the static checks;
+the calibration probe; the oracle runs; a self-consistency check of every report;
+a comparison of each fresh run with its tier's required set of recorded answers -
+and of every other recorded answer it gave, or failed to give where no budget
+explains it; a check of the ftxi driver against ftxi's stock CLI; when an engine
+is configured, the engine differential; and last, a check that no harness file
+changed while it ran. The last lines of the output say whether the engine was
+compared and whether the proof channel may be enabled.
+
+A tier has no coverage floor: it requires **100% of its required set** - every
+recorded value its budgets can be shown to reach - and loses none of them without
+failing ("Stable answers", below). A run of an oracle search that has everything
+its tier requires of it, and of which nothing further is needed, is stopped there
+(it shows as `stopped`): the values past that point are outside the required set
+anyway. No run is stopped where an engine is compared - every oracle answer may
+confirm or contradict it - nor in a tier that can enable the proof channel, which
+runs every search to its budget. What stopping gives up is the comparison of
+values past the required set, and the driver check of a record whose run was
+stopped.
 
 What the driver check covers: for each ftxi search, whether an action exists at
 each position, the verdict where none does, the action count, the side to move,
@@ -322,25 +365,74 @@ entry in `DISAGREEMENTS.md` at least one oracle is wrong or reads the rules
 differently, and none has been adjudicated.
 
 ```
-python oracles/harness.py golden --write   # re-run every oracle over the corpus and record it
-python oracles/harness.py golden --render  # only re-render DISAGREEMENTS.md
+python oracles/harness.py golden --write --repeat 2   # run every oracle over the corpus twice, and record it
+python oracles/harness.py golden --render             # only re-render DISAGREEMENTS.md
 ```
 
-Each file opens with a signature: the pin, the search and its settings, the cap
-where the oracle counts actions, and hashes of the adapter and driver code that
-stood between the oracle and the file. If any of them changes, the file is stale
-and `verify` says which. Editing a driver, an adapter, or the `base.py`,
-`fingerprint.py` and `headers.py` the adapters share - even a comment in one -
-therefore means `golden --write`, and a review of every verdict that moved.
-(`fingerprint.py` computes the hashes the files record of what each oracle set
-up.) The files hold verdicts
-and, per position, the hashes and board and piece counts of what the oracle set up
-(schema 2) - never the boards themselves, and never an oracle's free-text messages,
-because they quote the record.
+`DISAGREEMENTS.md` is rendered from the golden files, their cost files and the
+tiers' budgets in `gate.toml`: besides where the oracles contradict each other, it
+holds what each tier requires of each source ("What each tier requires", below).
+`verify` renders it again and fails if the committed one differs, so a changed
+budget or cost shows in review as a changed line of that table.
 
-Time-outs are never pinned: a fresh run is compared with the golden values it
-reproduced, and a separate coverage floor per tier fails a run in which too much
-timed out to call it a check. A crash is pinned like any other outcome.
+Each file opens with a signature: the pin, the search and its settings, the cap
+where the oracle counts actions, the budget it was recorded under (the run's
+`timeout_s`; for Chess in 5D also its mate search's `mate_budget_ms` and heap,
+`mate_heap_mb`), and hashes of the adapter and driver code that stood between the
+oracle and the file. If any of them changes, the file is stale and `verify` says
+which. Editing a driver, an adapter, or the `base.py`, `fingerprint.py` and
+`headers.py` the adapters share - even a comment in one - therefore means
+`golden --write`, and a review of every verdict that moved. So does changing the
+release tier's budgets, which the files are recorded under (`[stability]
+recording_tier` in `gate.toml`). (`fingerprint.py` computes the hashes the files
+record of what each oracle set up.) The files hold verdicts and, per position, the
+hashes and board and piece counts of what the oracle set up (schema 3) - never the
+boards themselves, and never an oracle's free-text messages, because they quote
+the record. A crash is pinned like any other outcome.
+
+What an oracle did not answer is recorded too, and why (schema 3, decision H32):
+
+| Entry | Means |
+|---|---|
+| `"horizon": {"position": K, "budget": "timeout_s=300"}` | the run was cut at its deadline while it searched position K: what it set up there is recorded, its answers are not, and nothing after it - everything from there on is unknown at that budget |
+| `"unknown": {"K": {"terminal": "mate_budget_ms=60000"}}` | a value missing inside the answered positions because a limit stopped it: Chess in 5D's mate search ran out of its time budget, or of its heap (`mate_heap_mb=1024`). A null with no limit beside it is a question the source never answers |
+| `"unstable": {"K": {"legal_actions": [20, 21]}}` | a value that differed between independent recordings; the position's value is null, so nothing is compared with it |
+
+`--repeat N` (default 2) records every source N times, each run a process of its
+own. A value the same in every recording is recorded; one present in some
+recordings and absent from others because a run hit its budget is unknown at that
+budget (a horizon, or an `unknown` entry); one that differs, or is absent for no
+reason a budget gives, is unstable. Recordings that end differently - not because
+one ran out of time - replay the record nondeterministically: that is a finding,
+and nothing is written. Each file says how many recordings it holds
+(`"recordings"`), and `verify` refuses a file that holds fewer than two: one
+recording cannot show a value unstable, so every value in it would be required.
+The re-recording after a pin bump, a driver change or a budget change is
+`golden --write --repeat 2`.
+
+When it has written the files, `golden --write` compares what it recorded with
+the files it replaced, and lists every terminal verdict and outcome they held that
+the new recording does not, and every run now cut at an earlier position. Each is
+a loss of checking - most often a budget lowered, or a recording made on a busy
+machine - and is reviewed as such: re-record on a quiet machine, or raise the
+budget; never commit a loss to make a gate run pass.
+
+Beside each golden file is its **cost file**, `<source>.cost.json`, one record per
+line: when the answers about each position arrived, in seconds from the start of
+the run (the line that completed the position - its position event; for cwmtt the
+later of the CLI's count, timed as it streams in, and the state driver's state),
+when the outcome arrived (`end`), and the record's cost, its slowest answer; for
+Chess in 5D also each position's mate search (`mate`, from its driver's own
+timing). Costs are rounded up to two significant figures, are the most over the
+recordings, and are cumulative: a position is reported only after every position
+before it (cwmtt's only once its CLI has counted every earlier one, whenever its
+state driver printed the boards), so its cost is at least theirs. They change
+with every recording, so they are kept out of the golden files, whose diff stays
+a diff of verdicts. They are the evidence for the required sets below - and what
+those sets come to, per tier and source, is the table in `DISAGREEMENTS.md`, so
+that a cost that moved far enough to change what a tier requires shows there.
+`calibration.json` holds the time the calibration probe took on the recording
+machine.
 
 ### What the disagreements are, at the current pins
 
@@ -356,8 +448,11 @@ Read this with `DISAGREEMENTS.md` open; revisit it when a pin or the corpus move
   royal capture, ftxi advances every timeline on which the side to move may play
   (`state::phantom`), while 5d-chess-js advances only the timelines at the present
   (`blankAction`). This is a difference in what "check" means, and it decides
-  checkmate versus stalemate when no action exists - so the rulebook has to settle
-  it before the engine's check verdict can be gated against either.
+  checkmate versus stalemate when no action exists. The rulebook has settled it
+  (R1, decision H36, CHECKPOINT 1): check status passes all active boards in the
+  present, so at these positions ftxi's "check" is wrong and Chess in 5D's "no
+  check" right. Until known divergences record ftxi's answers there, an engine
+  that follows the rulebook disagrees with ftxi at each of them.
 - **Two mate verdicts.** Chess in 5D calls two final positions checkmate where ftxi
   counts legal actions. On one of them, the record cwmtt's author named
   `chessin5d-illegal-move-example`, cwmtt counts legal actions too; the other is a
@@ -392,6 +487,182 @@ that answered exactly as ftxi does would pass the commit tier and then fail the
 nightly tier at every entry of `DISAGREEMENTS.md` that has ftxi on one side - the
 ruleset each entry sits in stays ungated until the entry is adjudicated and the
 losing oracle's answer is recorded in `known-divergences.toml`.
+
+## Stable answers: the required sets (H32)
+
+An oracle that does not reproduce its own recorded answers is nondeterministic or
+limited by its search budget (design spec §11.0). Budget-limited answers are
+recorded as unknown at their budget, nondeterministic ones as unstable, and each
+tier then requires 100% of the stable answers it can reach - a tolerance would
+hide regressions inside itself.
+
+A recorded value is **required** in a tier when it is recorded (not unknown, not
+unstable) and its recorded cost times the margin (`[stability] margin` in
+`gate.toml`, 4 to start) fits the tier's budget for that source - and, for a Chess
+in 5D mate verdict, when its mate search's cost times the margin also fits the
+tier's mate budget. The outcome of a run (its status, reason and actions
+accepted) is required in the same way, by when it arrived. The margin is at least
+1, so no tier can require an answer that arrived after its own deadline on the
+recording machine: a required value a tier's budget cannot reach is impossible by
+construction. `verify` prints, for every tier and source, how many values are
+required and how many are not, and why: unknown at the tier's budget (recorded
+too late for it), unknown at the recording budget (cut, or stopped by a limit),
+or unstable.
+
+A gate run then:
+
+- **reproduces every required value, identically.** One it does not produce is a
+  finding, `golden-unreproduced`, naming the source, record, position and field,
+  the value's recorded cost and how long the run took - and a run cut at its
+  deadline before its last required position is one finding with all of that.
+  The summary counts a required value produced with another value, and a
+  required outcome that changed, as not reproduced too;
+- **agrees with every other recorded value it produces** - required or not, a
+  value that differs from the recording is `golden-mismatch`, and an outcome that
+  differs `golden-status`;
+- **accounts for every recorded value it did not produce outside the required
+  set.** A budget explains one only where the run never got to its position (it
+  was cut, or stopped, before it), where it was cut while it searched that very
+  position and the value comes from that search, or where the run names a limit
+  it ran into there (Chess in 5D's mate search; cwmtt's state driver running out
+  of time). Those are counted by the budget that put them outside the set
+  ("unknown at budget timeout_s=120: 71 recorded values not produced") - a count,
+  never a ratio. Any other is `golden-unreproduced`: a run that reached a position
+  and no longer gives an answer it used to has lost it to no budget, whether or
+  not the tier requires it.
+
+Every gate report (`oracles/.cache/reports/gate-<tier>.json`) records each source's
+budgets and signature, the margin, the number of jobs, the platform and CPU
+count, and the **calibration probe**: a fixed workload (`[calibration]` in
+`gate.toml`: ftxi's naive search over the first 38 positions of
+`cwmtt/manyChecks`, about 12 s on the recording desktop) timed before the oracles
+run, beside its time on the recording machine. When a required value goes
+missing, the summary says how much slower the runner is ("this runner is 2.5x
+slower than the recording machine; margin 4"), so that a slow machine can be told
+from a regression.
+
+The tier that can enable the proof channel is held to more, statically
+(`proof-channel-vacuous`). Each source's required set there must hold:
+
+- every terminal verdict (checkmate, stalemate, "no action exists") the source
+  recorded;
+- every terminal verdict another source recorded where this one's recording was
+  cut at its budget - at or after its horizon, on a record the other source read
+  as this one did (another search of the same implementation is named first);
+- at least a reviewed share (`[stability] proof_share`, 90%) of what the source
+  would have recorded but for its recording budget: its stable values, the values
+  behind its horizons (the positions a complete replay of the record reaches -
+  another search of the implementation that was not cut, or failing that any
+  source that was not - at as many values a position as the source gives), the
+  values a limit left unknown and the unstable ones. A source that recorded
+  nothing on the tier's records fails it outright.
+
+The recording budget is this tier's, so starving a source - a lower budget, a
+recording made on a loaded machine - moves its answers behind a horizon, where
+they still count against it: the check gets harder, not easier. Otherwise a
+source could be listed in the tier and starved of time, and the tier would pass
+on answers nobody asked for. This replaces a 90% ratio of reproduced answers
+that used to be fixed in the code, and like it, it is about enabling the proof
+channel: `verify` prints it, and a run of that tier fails on it; a run of any
+other tier, which can enable nothing, does not. Its remedy is the tier's budget
+for the source - which is also the recording budget, so changing it means
+re-recording.
+
+At the current pins and budgets the naive searches do not meet it: their
+recordings are cut at 300 s on records whose last position another search calls
+checkmate or "no action", and on a two-recording measurement on the recording
+desktop (2026-10-01) the release tier required 84.9% of what `ftxi:naive` would
+record and 77.3% of what `cwmtt:naive` would. The proof channel stays shut until
+the release budgets, or the policy, change.
+
+### What each tier requires
+
+`DISAGREEMENTS.md` holds a table of every tier and source: its budget, how many
+values and outcomes the tier requires of it and how many are recorded, and how
+many of its recorded terminal verdicts are required. It is rendered from the
+golden and cost files and `gate.toml`, and `verify` renders it again: a budget
+lowered, a cost file edited, or a recording that moved answers behind a horizon
+changes a line of it, and reviewing that line is reviewing what the gate checks.
+
+## Recorded-answer integrity (H33)
+
+Recorded answers are immutable, with committed content hashes verified before
+every comparison; the comparison logic lives in harness code the engine adapter
+cannot modify; harness changes require review (design spec §11.0).
+
+- `golden/MANIFEST` holds the SHA-256 of every file in `golden/` - the golden
+  files, their cost files and the calibration reference - in `sha256sum`'s format
+  (`cd oracles/golden && sha256sum -c MANIFEST` checks it without the harness; the
+  harness folds CRLF to LF before hashing). `golden --write` writes it, after the
+  files it vouches for; a run that records only some sources keeps the other
+  files' hashes only once they are shown to match. Every read of a recorded answer
+  verifies its file against it first, and `verify` checks the whole directory: a
+  file edited by hand, a file nobody recorded, a file that went missing
+  (`golden-integrity`). It lives beside the files it covers rather than in the lock
+  file, which holds the pins - a reviewed change with its own procedure that every
+  re-recording would otherwise touch.
+- What MANIFEST catches is an edit that does not rewrite MANIFEST as well: an
+  accident, a partial edit, a bad merge, a file changed while a run lasts. A file
+  edited together with its line of MANIFEST - one `sha256sum` away - passes it;
+  only review catches that. What makes such an edit visible in review is that
+  MANIFEST changes only with the files it covers, and that what each tier requires
+  is the table in `DISAGREEMENTS.md`, which `verify` renders again from the golden
+  and cost files: a cost file edited to shrink a required set changes a line of it.
+- A gate run reads the golden, cost and calibration files and
+  `known-divergences.toml` once, when it starts, verified, and hands that one
+  snapshot to every consumer: nothing is read from them again while it runs, so the
+  divergences that excuse the engine are the ones on record before it ran.
+- Every file under `oracles/` is hashed when a run starts and again when it ends -
+  the harness's code and tests, its entry point, the drivers, `golden/`,
+  `known-divergences.toml`, `gate.toml`, the corpus, `DISAGREEMENTS.md`, the lock
+  file - but for the caches (`.cache/` and other dot-directories, `__pycache__/`)
+  and the pinned oracles under `third_party/`. Anything that changed, appeared or
+  went while it ran fails it (`harness-modified`): a module planted beside the
+  harness's code as surely as an edit to it.
+- The entry point, `harness.py`, runs nothing from the tree but source. Python
+  would otherwise run a `.pyc` planted in a `__pycache__` directory whose header
+  copies its source file's time and size (the source, and so its hash, unchanged),
+  would import a file beside `harness.py` in place of a standard-library module
+  of the same name, and would load an extension module (`gate.cp314-win_amd64.pyd`,
+  `gate.cpython-314-x86_64-linux-gnu.so`) ahead of the source file beside it - each
+  planted once, and run by every later run. So before anything else is imported,
+  `harness.py` takes its own directory off the module search path, writes no
+  bytecode and reads none from beside the source (Python's cache points at a
+  fresh, empty directory of its own), imports a module from any directory of the
+  harness only from its source file, and loads the harness's package from its
+  source by path. Run the harness through `harness.py`, never as
+  `python -m oracle_harness`.
+- What is not hashed is the oracle builds under `.cache/build`, which a run
+  executes: what they answer is held to the golden files - every required value
+  identically, and every other recorded one where it is produced.
+- `.github/CODEOWNERS` puts `oracles/` and `.github/` - the workflows that decide
+  which tier CI runs, and how, and CODEOWNERS itself - under its owner's review.
+  It binds once branch protection on `main` requires a review from a code owner.
+
+What remains is trust in review.
+
+## Telltales (H34)
+
+Every entry of `known-divergences.toml` records an oracle's error. An engine that
+gives the same wrong answer at the same place - while it holds the position the
+oracle held when it gave it - probably has that oracle's logic, copied, ported or
+renamed past the boundary check. So in the engine differential, an engine answer
+that agrees with an entry's recorded oracle answer at its record and position
+(parse kinds and replays included) is a **telltale**: a finding that fails the
+gate - "the engine reproduces chessin5d's recorded error at r/std position 1
+(in_check = False): its logic may have been copied from that oracle". Agreeing is
+judged by the comparison's own rule, not by the same words: an engine that
+refuses an action the oracle wrongly refused reproduces the error whatever reason
+each gives (a parser that fails where the oracle's could not match the move text,
+say), one that calls checkmate or stalemate a position the oracle wrongly holds to
+have no action reproduces that, and a count at the cap agrees with any as large.
+It is checked for every entry whose record the engine replayed, whether or not
+that oracle runs in the tier - against the golden file, while it still records the
+entry's `oracle_value` (`verify` holds the entry to it) - and it is never reported
+as `divergence-stale`, whose remedy - remove the entry - would be exactly the wrong
+one. In parse mode the engine's having played an action is no verdict, so it
+reproduces no oracle's acceptance of one; its refusals, and its reading of a
+record's set-up, count as in full mode.
 
 ## The engine contract
 
@@ -438,23 +709,44 @@ given (`verify` refuses such a command) - that:
   the size, spells each label one way, and computes the fingerprint itself. Like
   any source that says what it set up, it says it at every position, from
   position 0, with `markers` the same throughout;
-- answers **every** field of every position: `legal_actions` as `min(count, N)`,
-  and `terminal` as `none`, `checkmate` or `stalemate`. An oracle may leave a
+- answers **every** field of every position: `legal_actions` as `min(count, N)` -
+  counting actions as "What is compared" defines them (a set of moves, the
+  branching ones in creation order), not the distinct states they reach - and
+  `terminal` as `none`, `checkmate` or `stalemate`. An oracle may leave a
   question unanswered, and may say nothing of its state; the engine is what is
-  being certified, and a null from it would be a verdict nobody compared;
+  being certified, and a null from it would be a verdict nobody compared. Its
+  `terminal` is a proof (H37): an engine whose search did not terminate says
+  neither `checkmate` nor `stalemate` - it ends the record with `error`, or the
+  gate's deadline cuts it, and either fails the gate;
 - puts exactly the five fields shown in each state event and the six in each
   position event, and no others (the oracle drivers add timings of their own, so
   an oracle's output passed off as the engine's is refused);
 - ends with exactly one `end` event, whose `status` is
   `ok` (every action replayed),
-  `rejected` (the next action is not legal: `reason` is `illegal_move` or
-  `cannot_submit`),
+  `rejected` (the next action is not legal - `reason` is `illegal_move` or
+  `cannot_submit` - or the engine's parser could not read its move text:
+  `unreadable`),
   `unsupported` (a ruleset the engine does not implement, said before the first
-  position - allowed, but that ruleset is then not gated), or `error`.
+  position - allowed, but that ruleset is then not gated), or `error`;
+- may refuse the record's set-up - headers or board strings it cannot read, or
+  that contradict each other - by ending `rejected`, with `reason` `unreadable`
+  and `actions_accepted` 0, before its first position (and so with no state or
+  position event at all). That is refusing "action 0", and it is compared like
+  any refusal. Only as `unreadable`: a set-up is no action that can be illegal.
+
+A refusal as `unreadable` is no rules verdict. Of an action an oracle played, or
+of a set-up an oracle set up (action 0), it is a soft legality divergence: a
+finding unless `known-divergences.toml` excuses it with an entry that cites the
+notation specification (whether the text is valid notation is the
+specification's to say, never the rulebook's). Excused or not, a record the
+engine could not read is not one it replayed: its ruleset is not gated, and no
+oracle - not even one that refuses the same action as illegal - stands behind it.
 
 Breaking the contract, an `error` and a time-out each fail the gate. So does every
 disagreement with an oracle - a parse divergence included - unless
-`known-divergences.toml` records it. An entry for a placement divergence cites the
+`known-divergences.toml` records it. An oracle value that differed between the
+recordings (unstable) is taken out of each fresh oracle report before it is
+compared with the engine: it can neither fail the engine nor stand behind it. An entry for a placement divergence cites the
 notation specification, never the rulebook; one for a marker-only divergence may
 cite either. And an oracle that set up something other than the engine did checks
 nothing there, excused or not:
@@ -477,7 +769,8 @@ boards or a custom board (`Custom ...`, `Even`, `Odd`): then it counts towards n
 named variant and is filed under "(custom positions)". A ruleset is **gated** when,
 over all of its records:
 
-1. the engine replayed each one, and none holds an unexplained divergence;
+1. the engine replayed each one - to its end, or to an action it holds illegal
+   (not one it could not read) - and none holds an unexplained divergence;
 2. each one was followed as far as the engine went by at least one oracle - and
    where the engine refuses an action, by an oracle that refuses the same action as
    illegal (one that could not match the move's text confirms nothing). An oracle
@@ -511,20 +804,77 @@ so the two positions play alike - but the harness does not know the rules, and
 does not count an answer about another position.
 
 An engine that contradicts nothing but comes through no ruleset has **failed**:
-agreeing with the oracles about nothing is not a pass.
+agreeing with the oracles about nothing is not a pass. Nor has one that gives an
+answer a known divergence records as an oracle's error (a telltale, H34, above).
 
 The proof channel may be enabled only by a complete run of a tier that requires an
-engine and runs every oracle search over the whole corpus (the `release` tier), in
-which every oracle search reproduced at least 90% of its recorded answers - a
-floor fixed in the code, not in `gate.toml`, so that no tier can list an oracle and
-then starve it of time - and only for the named variants it gated, never on the
-strength of custom positions.
+engine and runs every oracle search over the whole corpus (the `release` tier),
+with the engine compared in full mode, and only for the named variants it gated,
+never on the strength of custom positions. Such a run passes only with 100% of
+every source's required set reproduced, and `verify` holds those required sets
+to every terminal verdict recorded and the reviewed share of the stable values
+(`[stability] proof_share`), so that no tier can list an oracle and then starve it
+of time.
+
+### Parse mode
+
+An engine that reads records but does not yet judge them - no check detection,
+no counts, no mate - is compared in **parse mode**: set `[engine] mode = "parse"`
+in `gate.toml`. The harness then appends `--parse-only` after `--cap N`, and the
+engine:
+
+- prints, for every position *k*, the `state` event exactly as above (the five
+  fields, `markers` true) and a `position` event with exactly the six fields, in
+  which `side` is set and `in_check`, `legal_actions` and `terminal` are `null` -
+  never a guess: an answer there breaks the contract;
+- ends as above, and may refuse an action, or the record's set-up, as above -
+  `unreadable`, `illegal_move` or `cannot_submit`, the set-up only as
+  `unreadable`; `unsupported` is still said only before the first position.
+
+The gate then compares what the engine set up with what every oracle set up
+(placement and marker-only divergences are findings unless excused, as above),
+its side to move, and how it replayed each record - how many actions it read,
+which it accepted and which it refused - with each implementation's replay. A
+refusal as `unreadable` is a soft legality divergence, as in full mode. Its
+playing an action an oracle holds illegal is no
+verdict (it has no check detection, and plays what it reads, as a parse-only
+source does): it is not a divergence, a known divergence about it is not looked
+at (so it is never reported stale), and it reproduces no oracle's acceptance of
+an action (no telltale). It never compares or gates check, counts or mate, never
+marks a ruleset "gated", and the proof channel stays disabled ("parse mode");
+telltales are otherwise checked as in full mode. The last lines of the output say
+`engine differential: PARSE MODE - PASSED` (or `FAILED`) with the agreement
+numbers: records read (and set-ups refused); positions at which an oracle said
+what it set up - up to and including where it parted from the engine - and of
+those, at which it held the engine's boards, and its exact state; sides compared
+and agreed; and implementation replays compared, agreed, and agreed but for an
+action the engine played that the oracle held illegal (counted apart: that is no
+verdict either way). An engine in parse mode that replays no record of the tier,
+or whose replays no oracle described and no implementation's replay was compared
+with, has failed. The release tier, which requires an engine, fails in parse mode.
 
 ## Known divergences
 
 When the engine and an oracle disagree, the rulebook decides. If the oracle is
 wrong, the disagreement goes into `known-divergences.toml` with the citation that
-settles it and a link to the upstream report. An entry excuses exactly one
+settles it and a link to the upstream report.
+
+The rulebook is `docs/rules/README.md` (decision H38), and it is pinned:
+`gate.toml` `[rulebook]` holds the SHA-256 of its text (CRLF folded to LF), and
+`verify` - and so every gate tier - fails with `rulebook-changed` once the file no
+longer matches it ("the rulebook changed: re-run the gate and update the pin with
+..."). A change to the rulebook is a reviewed change: read its diff, re-check every
+entry that cites it, move the pin, and re-run the gate.
+
+```
+python oracles/harness.py rulebook         # is the rulebook still the text gate.toml pins?
+python oracles/harness.py rulebook --pin   # pin its current text (after that review)
+```
+
+The pin lives in `gate.toml`, with the gate's policy and under the same review,
+not in `golden/MANIFEST`: every `golden --write` rewrites MANIFEST, so
+re-recording the oracles would re-pin the rulebook as a side effect - and the
+recorded answers do not depend on the rulebook at all. An entry excuses exactly one
 observation - this oracle, at this pin, on this record, at this position, saying
 this, where the engine says that - and the gate fails if it stops matching for any
 reason, including the disagreement going away. What an entry says the oracle
@@ -541,7 +891,12 @@ Some entries cite the notation specification in place of the rulebook:
 - a **length** divergence, or a **legality** one where the oracle stopped because it
   could not match a move's text (a soft rejection) and the engine played on, may
   cite it where the cause is notation the oracle does not read and no rule at all.
-  If the oracle really does hold the move illegal, it is a rules matter after all.
+  If the oracle really does hold the move illegal, it is a rules matter after all;
+- a **legality** one where the engine, in either mode, refused as unreadable
+  text an oracle played (`engine_value = "rejected:unreadable"`) - an action's, or
+  at action 0 the record's set-up: its headers or board strings - must cite it:
+  whether the text is valid notation is the specification's to say, never the
+  rulebook's.
 
 Every other kind needs the rulebook. The file's header says how. The file is empty
 until there is an engine to disagree with anything.
@@ -583,7 +938,9 @@ source found: the number listed, or more where it went on counting past the list
 own (5d-chess-js: `complete`, `sequences`, `accepted`, `limit`, `error`, `caveat`; cwmtt: `error`) say why a
 list stopped, and are shown as printed. The harness spells the labels one way and
 sorts the moves of each action and then the actions, so two sources' lists of one
-position can be compared action by action.
+position can be compared action by action. Sorting drops the order of an action's
+moves: the same entry listed twice is one set of moves in two orders of its
+branching moves, which count as two actions (`legal_actions`, above).
 
 ## What this is not, yet
 
@@ -605,9 +962,10 @@ position can be compared action by action.
   uneven: counts are capped at 1000, so on wide positions two oracles are compared
   only as "both at least 1000"; several variants have one oracle, or none; and
   stalemate is exercised only by the records written here.
-- **Not adjudicated.** The oracle disagreements are listed, not settled. Settling
-  them needs the rulebook pinned, which is part of writing the generator
-  (spec §15.1, Phase 0).
+- **Not adjudicated, entry by entry.** The rulebook is pinned (H38) and has ruled
+  on the check disagreements (R1) and two oracle defects (R7), but
+  `known-divergences.toml` is still empty: an entry records the engine's answer
+  beside the oracle's, and the rest of `DISAGREEMENTS.md` is listed, not settled.
 - **Not a repetition oracle.** None of the three observables touches the 5D
   repetition rules, the most load-bearing open item in the register.
 - **Not proof against a port.** The boundary check finds pasted code. An oracle's
@@ -616,10 +974,12 @@ position can be compared action by action.
 - **Not proof against a dishonest adapter.** The gate trusts that the `[engine]
   command` asks the engine. A shim that printed what the oracles say would pass
   everything. The gate refuses a command inside the harness, the boundary check
-  refuses engine code that names a path into it, and an oracle driver's output
-  passed through unchanged carries fields the engine's may not - but a shim that
-  took the answers some other way and rewrote them would go unseen. That is left
-  to review.
+  refuses engine code that names a path into it, an oracle driver's output
+  passed through unchanged carries fields the engine's may not, a harness file
+  changed while the gate ran fails it, and an engine that repeats a recorded
+  oracle error is caught by its telltale - but a shim that took the answers some
+  other way and rewrote them, where no oracle is on record as wrong, would go
+  unseen. That is left to review.
 - **Not a check that two parsers read the same move, where a source cannot say
   what it set up.** Two readings of one move are caught by the fingerprints only
   where both sources export a state event. A source that cannot is aligned with

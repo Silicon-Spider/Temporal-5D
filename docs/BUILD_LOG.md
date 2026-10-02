@@ -30,33 +30,28 @@ M5 - building it would break a rule).
   2026-10-02; 558 tests); engine E4 - check status and submission legality
   (H36), legal actions as the harness counts them, the naive and hypercuboid
   detectors under H37, `t5d-gate`'s full mode (merged 2026-10-02; 355 tests; the
-  full corpus in 8.3 s).
+  full corpus in 8.3 s); step 2B - the gate's stable answers, integrity,
+  telltales, parse mode and rulebook pin (committed 2026-10-02 with the golden
+  files re-recorded twice, schema 3).
 - **In the tree, uncommitted (2026-10-02):**
-  - *Step 2B* (H32 stable answers - required sets at 100%, `golden --write
-    --repeat 2`, per-position cost files, calibration probe; H33 - golden
-    `MANIFEST`, one verified snapshot per run, the harness-modified check,
-    CODEOWNERS; H34 telltales; the engine's parse mode; H36's `in_check`
-    definition; H37's guard against budget-limited verdicts; H38's rulebook pin in
-    `gate.toml` with `harness.py rulebook --pin`): built and fixed after review
-    (17 findings), selftest 589 OK. `verify` fails only on the golden files, which
-    need `py oracles/harness.py golden --write --repeat 2 --jobs 8` - **on a quiet
-    machine** (the recording measures each answer's cost, and the costs decide the
-    required sets). Commit 2B with the re-recorded golden files, never without
-    them. Also to apply with it: AGENTS.md's list of forbidden ways to make the
-    gate pass (the coverage floors are gone - name budgets, `[stability] margin`,
-    `proof_share`, re-recording on a loaded machine, hand-editing cost files,
-    `calibration.json` or `MANIFEST`, moving the rulebook pin unreviewed) and
-    CLAUDE.md's commands (`--repeat 2`, `rulebook`).
   - *Network N3's CPU wall timings* (the code is committed): need a quiet machine.
     From `python/`: `py -m t5d.net.cache_bench --boards 240 --idle-processes
     t5d-gate.exe t5d-measure.exe t5d-bench.exe t5d-tests-long.exe --skip-existing
     --out <dir>`, then `--boards 600 --dtype fp32` and `--boards 600 --dtype bf16`
     (about 45, 70 and 45 minutes); the benchmark itself refuses a loaded machine.
-- **Next:** merge E3 and E4; wire the rulings into the gate (known-divergence
-  entries for ftxi's 78 check verdicts and for both oracle defects, as telltales;
-  the rulebook pin, H38; the engine configured, parse mode then full mode); the
-  golden re-record with `--repeat 2`; M9 then M7 with legal moves; the scanner
-  and 6b.
+- **Next, in order:** (1) the
+  engine reads mismatched `(~T)`/`(>L)` annotations with a warning instead of a
+  refusal (the notation spec calls them "purely for better human comprehension";
+  refusing hides cwmtt silly, wide and chessin5d-illegal-move-example from the
+  gate); (2) `[engine] command = ["build/engine/t5d-gate"]` and a local gate run,
+  every engine-vs-oracle difference triaged: ftxi's check verdicts (rulebook R1)
+  and the two oracle defects become known-divergence entries (telltales, H34);
+  records the engine cannot read get entries only where the notation spec rules
+  their text out; the count and legality differences that Q4 explains wait for the
+  user's Q4 ruling - until then the engine is not configured in the committed
+  `gate.toml`; (3) the quiet-machine measurements: N3's CPU wall times, then M9
+  (`t5d-bench`), M9 again on legal moves, the M7 upper bound; (4) the scanner and
+  6b (plan in step 5, "The scanner and 6b").
 - **Waiting on the user:**
   - **Rules Q4** (may a player keep moving after the present has shifted?). The
     engine follows the Guide's "no". Evidence gathered since: nine corpus records
@@ -163,7 +158,33 @@ and `git push --dry-run origin HEAD` succeeded. The remote is private.
 - Not yet: the workflows as required status checks on `main` (branch protection
   is a repository setting - for the user).
 
-### 2. Finish the gate - in progress
+### 2. Finish the gate - 2A and 2B done; the engine's entry into the gate next
+
+**Step 2B (committed 2026-10-02).** H32: every source recorded twice
+(`golden --write --repeat 2`); a value that differs between recordings is
+unstable and compared by nothing; one a limit stopped is "unknown at budget X";
+per-position costs in `oracles/golden/<source>.cost.json`; a tier requires
+exactly the stable values whose recorded cost x `[stability] margin` (4) fits
+its budget, and requires 100% of them - the coverage floors are gone; a
+calibration probe says how much slower a runner is than the recording machine.
+H33: `oracles/golden/MANIFEST` (SHA-256 of every recorded file, written by
+`golden --write`, verified before any comparison); one verified snapshot per run;
+the harness's files re-hashed after the engine runs (a change fails the run);
+the harness imports its modules from source only; CODEOWNERS over `/oracles/`
+and `/.github/` (binding once branch protection requires code-owner review).
+H34: an engine answer that agrees, by the comparison's own rule, with a known
+divergence's recorded oracle error is a telltale and fails the gate. The
+engine's parse mode (`[engine] mode = "parse"`): states, replay length and
+acceptance compared, never check, counts or mate. `rejected`/`unreadable` from
+the engine, in either mode, is a soft legality divergence excusable only by a
+notation citation, and keeps the ruleset ungated. `legal_actions` is defined:
+an action is its set of moves with its timeline-creating moves in creation
+order (ftxi and cwmtt list exactly that at every position both read). H36's
+`in_check`; H37's guard (a source that names a limit and still gives a verdict
+is malformed); H38's rulebook pin (`[rulebook]` in `gate.toml`,
+`harness.py rulebook [--pin]`). The proof channel stays shut: the naive
+searches' required sets fall short of `proof_share` (verify's
+`proof-channel-vacuous`) until their release budgets are raised.
 
 Design (from a six-agent investigation of the harness and every oracle, 2026-10-01):
 
@@ -419,6 +440,34 @@ near the bench's own) - then M9's verdict in `docs/MEASUREMENTS.md`, re-measured
 legal moves after E4; M7 on the corpus as an upper bound and a request to the user
 for game records.
 
+**The scanner and 6b - plan** (after M9: M10's order; and after E4, done):
+- *Scanner* (H1, H3, H4, H5, H6 v1): node-capped (not depth-capped) alpha-beta over
+  forcing moves - captures including cross-board and time-travel captures, checks
+  including across timelines, branching moves that create a timeline with an
+  immediate threat ("immediate threat" is undefined: a parameter and a spec
+  issue). Material-count eval (5D piece values are a project parameter table -
+  the spec gives none). Net-free ordering: MVV-LVA, killers, history,
+  continuation history. TT keyed by the 5D Zobrist key with the ruleset ID (and
+  branch origins if the lineage reading is adopted, spec issue 30). In check,
+  ALL legal actions are generated (E4's enumeration) - that is what makes a mate
+  found a proof (H2); a proof also needs the subtree searched exhaustively within
+  the horizon, and a node cap reached inside a proof line yields an estimate,
+  never a proof (H37's spirit). No speculative pruning on proof lines;
+  ProbCut/futility estimate-only; LMR banned on evasions; null-move not built
+  (it waits on the zugzwang answer). Depth counted in forcing half-turns (one
+  side's whole action of forcing moves), board-move depth reported beside it.
+  Synchronous debug mode (H15). Lazy SMP (H17) waits for Phase 2.
+- *6b tool*: over turn-start positions of real records (verdicts) and synthetic
+  ones (labelled): the horizon a node budget buys (deepest d fully resolved);
+  rung 1's leaf budget = threads x measured scanner nodes/s / evaluation rate (the
+  measured rate if one exists, else §15.6's ~9,600 nodes/s at 240 boards and
+  ~4,600 at 600 - stated); the 50 ms root scan; quiet-leaf reach; stand-pat
+  validity under 5D move obligations, operationalised before measuring (proposed:
+  at a quiet position stand-pat is invalid if every legal action of the side to
+  move loses material to the opponent's best forcing reply within a short fixed
+  check). M8's thresholds, with the brief's ±10% STOP band; a failed root scan
+  STOPS the run.
+
 ### 6. Phases 2-3 - not started
 
 ## Register status
@@ -443,11 +492,13 @@ for game records.
 | H27 | built, tested | The oracle harness, committed 2026-10-01 |
 | H30 | built, tested | Step 2A (a04678c): every oracle reports its boards per ply; no placement divergence across the corpus |
 | H31 | done | CHECKPOINT 1: seven clusters triaged (903f4ae), settled by the user's rulings (H36-H40) |
-| H32-H34 | not started | Step 2 |
+| H32 | built, tested | Required sets at 100%, two recordings, cost files, calibration (2B) |
+| H33 | built, tested | MANIFEST, verified snapshot, harness-modified check, CODEOWNERS (2B) |
+| H34 | built, tested | Telltales by the comparison's rule (2B); the entries arrive with the engine's first full-mode gate run |
 | H35 | done | Commit and nightly tiers green on Linux, 2026-10-01 (runs 36827435595, 36827459456) |
 | H36 | built, tested | Engine E4: check status and submission legality per R1; the gate's comparison with the oracles is next |
 | H37 | built, tested | Engine E4: verdicts only from exhaustive searches; node, time and memory budgets answer "unknown" (tested for every budget below the need) |
-| H38 | done (gate pin pending) | `docs/rules/README.md` is the rulebook: source ranking, rulings R1-R7; the gate's pin of it is step 2's follow-up |
+| H38 | done | `docs/rules/README.md` is the rulebook (rulings R1-R7), pinned in `gate.toml`; `verify` fails when it changes until re-pinned |
 | H39 | done | No repetition rule; the engine has none to build |
 | H40 | built | Castling's attack test per-board (S2) and en passant per-board (S7); `CastlingAttacks::AnyBoard` removed (E4) |
 
@@ -851,6 +902,18 @@ says now, what it should say, why.
     forcing-move class instead (issue 19).
 23. **§2.2**: the has-moved flag exists only for pawns, rooks, kings and brawns
     (5DFEN's `*`); say so.
+24. **§11.0 "Stable answers only"**: say how the required set is drawn - the
+    stable values whose recorded cost times a margin fits the tier's budget,
+    recorded at least twice - and that the gate requires 100% of it (H32).
+25. **§11.0 "Recorded-answer integrity"**: name the mechanisms - the manifest
+    verified before every comparison, the re-hash of the harness after the engine
+    runs, imports from source only - and say plainly that the manifest protects
+    against accident, not against an edit of both a golden file and the manifest:
+    that is review's job (H33).
+26. **§11.0 "Running the gate"**: add the engine's parse mode as the stage before
+    full mode, and define `legal_actions` (an action is its set of moves, with
+    its timeline-creating moves in creation order) - a protocol definition, not a
+    rule.
 27. **§7.3 / C17**: define a board's causal past (the chosen reading, spec issue
     29), and say that a frozen board reads only itself and frozen boards of its
     past.

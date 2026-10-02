@@ -84,10 +84,13 @@ If you are stuck, say so. Do not reach for the oracle's implementation.
   oracle that merely cannot read a move's notation is cited against the notation
   specification instead - see the header of that file.)
 - Never make the gate pass by deleting a corpus record, moving a record to a later
-  tier, lowering a coverage floor or `min_checked`, adding a boundary waiver,
-  editing a golden file by hand, making the engine adapter report `unsupported` or
-  leave a field out, or adding a divergence entry you cannot justify. If one of
-  those looks necessary, stop and ask.
+  tier, lowering a tier's budget or `min_checked`, raising `[stability] margin`,
+  lowering `proof_share`, adding a boundary waiver, editing a golden file, a cost
+  file, `calibration.json` or `MANIFEST` by hand, re-recording the golden files on
+  a loaded machine (their costs decide what each tier requires), moving the
+  rulebook pin without reviewing the rulebook's change, making the engine adapter
+  report `unsupported` or leave a field out, or adding a divergence entry you
+  cannot justify. If one of those looks necessary, stop and ask.
 
 ## Things you must not touch without being asked
 
@@ -95,8 +98,9 @@ If you are stuck, say so. Do not reach for the oracle's implementation.
   is modified).
 - The pins in `oracles/oracles.lock.toml`. A pin bump is a reviewed change with its
   own procedure (`CONTRIBUTING.md`).
-- `oracles/golden/*.json` and `oracles/DISAGREEMENTS.md` by hand. They are written
-  by `python oracles/harness.py golden --write`. Apart from the signature line, a
+- `oracles/golden/*` (answers, costs, `calibration.json`, `MANIFEST`) and
+  `oracles/DISAGREEMENTS.md` by hand. They are written by
+  `python oracles/harness.py golden --write --repeat 2`. Apart from the signature line, a
   changed line there is an answer an oracle changed (or, for a run that timed out,
   how far it got), and it must be explained.
 - The adapters and drivers (`oracles/oracle_harness/adapters/`,

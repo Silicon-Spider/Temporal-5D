@@ -56,6 +56,23 @@ class ConfigurationTests(unittest.TestCase):
         for pin in self.lock.pins.values():
             self.assertTrue(pin.dependency_names, pin.id)
 
+    def test_the_golden_files_are_recorded_under_the_budgets_of_the_tier_that_runs_everything_to_its_end(self):
+        # H32: the release tier runs every search to its budget, and the required sets are measured against it.
+        self.assertEqual(self.cfg.stability.recording_tier, "release")
+        self.assertGreaterEqual(self.cfg.stability.margin, 1.0)
+        release = self.cfg.tier("release")
+        for tier in self.cfg.tiers.values():
+            for source in tier.sources:
+                self.assertLessEqual(tier.timeout_for(source), release.timeout_for(source), (tier.name, source))
+            self.assertLessEqual(tier.mate_budget_ms, release.mate_budget_ms, tier.name)
+
+    def test_the_calibration_probe_runs_in_every_tier(self):
+        # It is timed at the start of every gate run, so its oracle is one every tier builds.
+        probe = self.cfg.calibration
+        self.assertIn(probe.record, {record.id for record in corpus.load()})
+        for tier in self.cfg.tiers.values():
+            self.assertIn(probe.source.split(":")[0], {source.split(":")[0] for source in tier.sources}, tier.name)
+
 
 def _built(oracle: str) -> bool:
     lock = lockfile.load()
