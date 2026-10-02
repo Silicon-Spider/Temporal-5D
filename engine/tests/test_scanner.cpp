@@ -1056,6 +1056,7 @@ TEST(scanner_lazy_smp_reaches_the_single_threads_depth) {
   const auto depth_of = [](const ScanResult& r) {
     return r.proof.proven() || r.exhausted ? 17 : r.resolved_depth;
   };
+  std::uint64_t shared_roots = 0;
   const auto measure = [&](int threads) {
     int total = 0;
     ScannerOptions o;
@@ -1064,7 +1065,9 @@ TEST(scanner_lazy_smp_reaches_the_single_threads_depth) {
       Scanner scanner(o);
       ScanBudget b;
       b.max_time = std::chrono::milliseconds(40);
-      total += depth_of(scanner.scan(s, b));
+      const ScanResult r = scanner.scan(s, b);
+      total += depth_of(r);
+      shared_roots += r.stats.shared_roots;
     }
     return total;
   };
@@ -1078,6 +1081,9 @@ TEST(scanner_lazy_smp_reaches_the_single_threads_depth) {
   std::fprintf(stderr, "  %zu positions at 40 ms: resolved depth summed, 1 thread %d, 5 threads %d\n",
                sample.size(), one, five);
   CHECK(five >= one);
+  // Every helper searched its own copy of the root (count-rule activity: the
+  // state is rebuilt from its boards).
+  CHECK_EQ(shared_roots, std::uint64_t{0});
 }
 
 // ---- stand-pat validity (6b) -----------------------------------------------------------------
