@@ -1,7 +1,8 @@
 {
-  "schema": 2,
+  "schema": 3,
   "source": "cwmtt:naive",
-  "signature": {"adapter_sha256": "67f8c177d72d01af4f5ef8b97b61bf5a54a6ac76e99e7f6bb0f47c623b5fa079", "algorithm": "naive", "cap": 1000, "driver_sha256": "39b617d8f5d4f148468085f078d1ab55c826245d28c1dc093b6e50daa6be2015", "pin": "9632e9969dd455c6e3d6c27c57c1936c251d7e97"},
+  "signature": {"adapter_sha256": "1dfd3c58a75110877a68ec083b36c98910083584465c824e364495b5c3b5ae1b", "algorithm": "naive", "budget": {"timeout_s": 300.0}, "cap": 1000, "driver_sha256": "39b617d8f5d4f148468085f078d1ab55c826245d28c1dc093b6e50daa6be2015", "pin": "9632e9969dd455c6e3d6c27c57c1936c251d7e97"},
+  "recordings": 2,
   "records": {
     "cwmtt/100_timelines": {
       "sha256": "caee1585fdb2ff207c4fb592633d8f9e63b71402a346e087ebbd682b939714ec",
@@ -9,6 +10,7 @@
       "reason": "timeout",
       "actions_accepted": 16,
       "last_action": null,
+      "horizon": {"position": 16, "budget": "timeout_s=300"},
       "positions": [
         ["w", null, 20, "none", "86d9a9eb3a9902c94379d438bcf18de1", "af6e344e57b49ae62ed63ce48037815c", 2, 64],
         ["b", null, 22, "none", "ddd9930e72342fac5ace85f94048b900", "7742766315e4d211ebcbe207f3f1442d", 3, 96],
@@ -344,6 +346,7 @@
       "reason": "timeout",
       "actions_accepted": 16,
       "last_action": null,
+      "horizon": {"position": 16, "budget": "timeout_s=300"},
       "positions": [
         ["w", null, 9, "none", "766312fd4b977c55487b7f5465932937", "6dd164ebbea15c7717608eadbf0bf5e8", 1, 10],
         ["b", null, 4, "none", "b35c1c76a6b113c0581c454cb2afe9b2", "49482c9890047987e1334a0304c33815", 2, 20],
@@ -398,6 +401,7 @@
       "reason": "timeout",
       "actions_accepted": 20,
       "last_action": null,
+      "horizon": {"position": 20, "budget": "timeout_s=300"},
       "positions": [
         ["w", null, 20, "none", "86d9a9eb3a9902c94379d438bcf18de1", "af6e344e57b49ae62ed63ce48037815c", 2, 64],
         ["b", null, 22, "none", "850d94c81cce477c2c72c662a8ebe6fc", "f4169450109c65f4a13d5a9136b96dd0", 3, 96],
@@ -428,6 +432,7 @@
       "reason": "timeout",
       "actions_accepted": 19,
       "last_action": null,
+      "horizon": {"position": 19, "budget": "timeout_s=300"},
       "positions": [
         ["w", null, 20, "none", "86d9a9eb3a9902c94379d438bcf18de1", "af6e344e57b49ae62ed63ce48037815c", 2, 64],
         ["b", null, 22, "none", "9dd9a9958b5fda607995f3a25496eddc", "d706401cb6a3e3af04c299363c11e6aa", 3, 96],
@@ -457,6 +462,7 @@
       "reason": "timeout",
       "actions_accepted": 8,
       "last_action": null,
+      "horizon": {"position": 8, "budget": "timeout_s=300"},
       "positions": [
         ["w", null, 20, "none", "d574889fd9da3f2bc65249ff27249b00", "2b8fa7fec7e4d7f2ecade5e01de08d0a", 1, 32],
         ["b", null, 20, "none", "cfa62590aca17479283b376c71f35527", "843b6b571ba89be4f6fff5e96dccda18", 2, 64],
@@ -475,6 +481,7 @@
       "reason": "timeout",
       "actions_accepted": 43,
       "last_action": null,
+      "horizon": {"position": 43, "budget": "timeout_s=300"},
       "positions": [
         ["w", null, 20, "none", "d574889fd9da3f2bc65249ff27249b00", "2b8fa7fec7e4d7f2ecade5e01de08d0a", 1, 32],
         ["b", null, 20, "none", "74550a402b7fb6d3d259369b06cab8ab", "ca748ad018674807cd3bb7682687d962", 2, 64],
@@ -528,6 +535,7 @@
       "reason": "timeout",
       "actions_accepted": 51,
       "last_action": null,
+      "horizon": {"position": 51, "budget": "timeout_s=300"},
       "positions": [
         ["w", null, 20, "none", "14c8effca0ad8a6144ce4750c8af2a05", "e1b6a3b36221361696fad6467348a569", 1, 32],
         ["b", null, 20, "none", "70a83fe2a1a51e39d3353e3042d57e08", "0aece68cf50bad6175a7ed5718ec78da", 2, 64],
@@ -589,6 +597,7 @@
       "reason": "timeout",
       "actions_accepted": 27,
       "last_action": null,
+      "horizon": {"position": 27, "budget": "timeout_s=300"},
       "positions": [
         ["w", null, 20, "none", "d574889fd9da3f2bc65249ff27249b00", "2b8fa7fec7e4d7f2ecade5e01de08d0a", 1, 32],
         ["b", null, 20, "none", "74550a402b7fb6d3d259369b06cab8ab", "ca748ad018674807cd3bb7682687d962", 2, 64],
@@ -751,6 +760,7 @@
       "reason": "timeout",
       "actions_accepted": 11,
       "last_action": null,
+      "horizon": {"position": 11, "budget": "timeout_s=300"},
       "positions": [
         ["w", null, 20, "none", "d574889fd9da3f2bc65249ff27249b00", "2b8fa7fec7e4d7f2ecade5e01de08d0a", 1, 32],
         ["b", null, 20, "none", "74550a402b7fb6d3d259369b06cab8ab", "ca748ad018674807cd3bb7682687d962", 2, 64],
@@ -772,6 +782,7 @@
       "reason": "timeout",
       "actions_accepted": 19,
       "last_action": null,
+      "horizon": {"position": 19, "budget": "timeout_s=300"},
       "positions": [
         ["w", null, 20, "none", "86d9a9eb3a9902c94379d438bcf18de1", "af6e344e57b49ae62ed63ce48037815c", 2, 64],
         ["b", null, 22, "none", "9dd9a9958b5fda607995f3a25496eddc", "d706401cb6a3e3af04c299363c11e6aa", 3, 96],

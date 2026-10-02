@@ -19,8 +19,8 @@ verification layer beside it.
 | `CHANGELOG.md` | Every change, newest first, with what it changed in the spec. |
 | `docs/BUILD_LOG.md` | **Start here when resuming the build.** What is done, parked and next, keyed by register ID; the standing rules of the build; proposed spec edits. |
 | `docs/MEASUREMENTS.md` | Every measured figure with its conditions, and the §15.6 verdicts. |
-| `docs/rules/README.md` | The cited rules reference the engine is written from (proposed as the rulebook); open questions Q1-Q28. |
-| `docs/checkpoints/` | Checkpoint reports - CHECKPOINT 1, the check disagreements, awaits the user's ruling. |
+| `docs/rules/README.md` | The rulebook (H38): the cited rules the engine is written from, the user's rulings R1-R7, the open questions; pinned by the gate. |
+| `docs/checkpoints/` | Checkpoint reports - CHECKPOINT 1, the check disagreements (ruled 2026-10-01) - and `upstream/`, drafts of oracle bug reports for the user to file. |
 | `engine/` | The rules engine, C++20 (H24): immutable boards, the multiverse, 5DFEN, the H30 fingerprint, 5D Zobrist (H18), the turn rules, pseudo-legal move generation, the 5dpgn parser (H28), check status and submission legality (H36), legal actions, the naive and hypercuboid mate detectors (H37), the expansion and its measurement tools, and the gate adapter (parse and full mode). Its manual is `engine/README.md`. |
 
 The build order is spec §15.1; where the build stands, and what is parked and why,
@@ -61,6 +61,7 @@ python oracles/harness.py doctor               # which build tools and oracle bu
 python oracles/harness.py build --bootstrap    # build the oracles; fetch missing pinned tools into oracles/.cache/
 python oracles/harness.py verify               # static checks: pins, corpus, boundary, provenance, golden files
 python oracles/harness.py selftest             # the harness's own unit tests
+python oracles/harness.py rulebook             # is docs/rules/README.md the pinned rulebook? (--pin after review)
 python oracles/harness.py gate --tier commit   # per-commit gate; nightly and release run all three oracles
 ```
 
@@ -81,8 +82,10 @@ python oracles/harness.py gate --tier commit   # per-commit gate; nightly and re
   editing the ftxi driver also means rebuilding ftxi (`build --oracle ftxi`), and
   editing cwmtt's state driver (`oracles/drivers/cwmtt/Driver.hs`) rebuilding
   cwmtt (`build --oracle cwmtt`). Re-record them with
-  `python oracles/harness.py golden --write --jobs 8` (about half an hour; run it in
-  the background) and read the diff. Do not edit those files while it runs.
+  `python oracles/harness.py golden --write --repeat 2 --jobs 8` (about half an hour
+  per recording; run it in the background, on a quiet machine - each answer's
+  recorded cost decides which tiers require it) and read the diff. Do not edit
+  those files while it runs.
 - A green gate with no engine configured means the *oracle layer* is healthy. It
   does not mean the generator has passed the gate: read the last lines of the gate
   output, which say whether the engine was compared and whether the proof channel

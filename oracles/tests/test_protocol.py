@@ -4,18 +4,21 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from oracle_harness import lockfile, observations
 from oracle_harness.adapters import EngineSource, RunOptions, Source
 from oracle_harness.adapters import chessin5d as chessin5d_adapter
-from oracle_harness.adapters.base import code_sha256, parse_jsonl
+from oracle_harness.adapters.base import code_sha256, parse_jsonl, run_protocol, stop_condition, watch_events
 from oracle_harness.adapters.cwmtt import (
     classify_warning,
+    count_arrivals,
     cwmtt_tags,
     parse_count_output,
     remainder_kind,
     unparsed_is_only_trailer,
+    watch_counts,
     would_misread,
 )
-from oracle_harness.adapters.engine import contract_violation
+from oracle_harness.adapters.engine import REJECTIONS, contract_violation
 from oracle_harness.adapters.ftxi import ends_in_a_variation
 from oracle_harness.observations import HARD_REJECTIONS, SOFT_REJECTIONS, Observation, Position
 from oracle_harness.util import Completed
@@ -129,6 +132,69 @@ class JsonLinesTests(unittest.TestCase):
     def test_an_invented_rejection_reason_is_not_a_rejection(self):
         observation = self.parse(lines(position(0), end("rejected", reason="did_not_like_it")))
         self.assertEqual((observation.status, observation.reason), ("error", "malformed_output"))
+
+
+def timed(events: list[dict], every: float = 1.0, *, timed_out=False, stopped=False, returncode=0) -> Completed:
+    """A run that printed one event per line, the k-th line arriving at (k+1) x ``every`` seconds."""
+    data, arrivals = b"", []
+    for number, event in enumerate(events, 1):
+        data += (json.dumps(event) + "\n").encode()
+        arrivals.append((len(data), number * every))
+    killed = timed_out or stopped
+    return Completed(None if killed else returncode, data, b"", timed_out, arrivals=tuple(arrivals), stopped=stopped,
+                     elapsed_s=len(events) * every + 0.5)
+
+
+class ArrivalTimeTests(unittest.TestCase):
+    """The cost of each position's answers: when its last line arrived (H32)."""
+
+    def test_each_position_is_timed_by_the_line_that_completed_it(self):
+        done = timed([*turn(0), *turn(1, side="black"), end(accepted=1)])
+        observation = parse_jsonl("src", "r/1", done, 1000, 9.0)
+        self.assertEqual(observation.arrival_s, [2.0, 4.0])  # the position events, not the state events
+        self.assertEqual(observation.ended_s, 5.0)
+
+    def test_a_search_cut_short_is_timed_by_its_state(self):
+        done = timed([*turn(0), state(1)], timed_out=True)
+        observation = parse_jsonl("src", "r/1", done, 1000, 9.0)
+        self.assertEqual((observation.status, observation.arrival_s, observation.ended_s), ("timeout", [2.0, 3.0], None))
+
+    def test_a_run_stopped_with_everything_it_needed_is_cut_short_not_failed(self):
+        done = timed([*turn(0), state(1)], stopped=True)
+        observation = parse_jsonl("src", "r/1", done, 1000, 9.0)
+        self.assertEqual((observation.status, observation.reason), ("timeout", "stopped"))
+        # A line cut off mid-write is what a stop leaves behind, as a time-out does.
+        cut = Completed(None, lines(*turn(0)) + b'{"event":"state","ind', b"", False, stopped=True)
+        self.assertEqual(parse_jsonl("src", "r/1", cut, 1000, 1.0).reason, "stopped")
+
+    def test_a_stop_condition_watches_for_the_event_it_was_given(self):
+        for kind, events, expected in (
+                ("position", [state(0), position(0), state(1)], False),
+                ("position", [state(0), position(0), state(1), position(1, side="black")], True),
+                ("state", [state(0), position(0), state(1)], True),
+                ("state", [state(0), position(0)], False)):
+            watch = watch_events(1, kind)
+            data = lines(*events)
+            # Fed in awkward pieces: a line may arrive in several.
+            fired = [watch(data[start:start + 7]) for start in range(0, len(data), 7)]
+            self.assertEqual(any(fired), expected, (kind, events))
+        self.assertIsNone(stop_condition(RunOptions()))
+        with self.assertRaises(ValueError):
+            stop_condition(RunOptions(stop_after=(1, "end")))
+
+    def test_a_protocol_run_is_stopped_once_its_last_needed_event_is_in(self):
+        script = ("import json, time\n"
+                  "for k in range(100):\n"
+                  "    print(json.dumps({'event': 'position', 'index': k, 'side': 'white', 'in_check': False,\n"
+                  "                      'legal_actions': 1, 'terminal': 'none'}), flush=True)\n"
+                  "    time.sleep(0.05)\n")
+        observation = run_protocol("src", "r/1", [sys.executable, "-c", script], b"", RunOptions(timeout_s=60,
+                                                                                                 stop_after=(3, "position")),
+                                   1000)
+        self.assertEqual((observation.status, observation.reason), ("timeout", "stopped"))
+        self.assertGreaterEqual(len(observation.positions), 4)
+        self.assertLess(len(observation.positions), 100)
+        self.assertTrue(all(isinstance(at, float) for at in observation.arrival_s))
 
 
 class StateEventTests(unittest.TestCase):
@@ -329,11 +395,11 @@ class EngineCommandTests(unittest.TestCase):
 
     RECORD = b'[Board "Standard"]\n1. e3 / e6\n'
 
-    def run_engine(self, body: str, cap: int = 7) -> Observation:
+    def run_engine(self, body: str, cap: int = 7, mode: str = "full") -> Observation:
         with tempfile.TemporaryDirectory() as folder:
             script = Path(folder) / "engine.py"
             script.write_text("import json, sys\n" + body, encoding="utf-8")
-            engine = EngineSource([sys.executable, str(script)])
+            engine = EngineSource([sys.executable, str(script)], mode)
             self.assertIsNone(engine.available())
             return engine.observe("r/1", self.RECORD, RunOptions(cap=cap, timeout_s=30))
 
@@ -399,13 +465,17 @@ class EngineCommandTests(unittest.TestCase):
         observation = self.run_engine(self.emit(state(0), position(0, legal=0, terminal="no_action"), end()))
         self.assertEqual((observation.status, observation.reason), ("error", "malformed_output"))
 
-    def test_the_engine_refuses_an_action_only_as_illegal(self):
-        for reason in SOFT_REJECTIONS:
+    def test_the_engine_refuses_an_action_as_illegal_or_as_unreadable_and_nothing_else(self):
+        # An oracle's reasons for not matching the move text are not the engine's to give.
+        for reason in ("no_matching_move", "ambiguous_move", "notation_mismatch", "unrecognised"):
             observation = self.run_engine(self.emit(*turn(0), end("rejected", reason=reason)))
             self.assertEqual((observation.status, observation.reason), ("error", "malformed_output"), reason)
-        for reason in HARD_REJECTIONS:
+            self.assertIn("refuses an action as one of", observation.detail)
+        # Its own parser could not read the move text: "unreadable", in full mode as in parse mode.
+        for reason in (*HARD_REJECTIONS, "unreadable"):
             observation = self.run_engine(self.emit(*turn(0), end("rejected", reason=reason)))
             self.assertEqual((observation.status, observation.reason), ("rejected", reason))
+        self.assertEqual(set(SOFT_REJECTIONS) & set(REJECTIONS), {"unreadable"})
 
     def test_the_engine_says_exactly_what_the_protocol_asks(self):
         # A field of its own - a timing, say - is refused: an oracle driver's
@@ -436,6 +506,95 @@ class EngineCommandTests(unittest.TestCase):
         self.assertIn("markers true", contract_violation(unmarked))
         failed = Observation(source="engine", record="r/1", status="error", reason="crash", actions_accepted=0)
         self.assertIsNone(contract_violation(failed))  # already an error; nothing more to say
+
+    # --- parse mode -------------------------------------------------------------------
+
+    def parsed(self, index, side="white"):
+        """What an engine in parse mode prints for one position: its state, and a position event with no answers."""
+        return [state(index), {"event": "position", "index": index, "side": side, "in_check": None,
+                               "legal_actions": None, "terminal": None}]
+
+    def test_parse_mode_asks_for_it_after_the_cap(self):
+        observation = self.run_engine(
+            "assert sys.argv[1:] == ['--cap', '7', '--parse-only'], sys.argv\n"
+            + self.emit(*self.parsed(0), *self.parsed(1, "black"), end("ok", 1)), mode="parse")
+        self.assertEqual((observation.status, observation.actions_accepted), ("ok", 1))
+        self.assertEqual([p.side for p in observation.positions], ["white", "black"])
+        self.assertTrue(all(p.in_check is None and p.legal_actions is None and p.terminal is None
+                            for p in observation.positions))
+        self.assertEqual(observation.positions[0].fingerprint, START_HASH)
+        # Full mode asks no such thing, and holds the engine to every answer.
+        self.assertEqual(self.run_engine(self.emit(*self.parsed(0), end())).reason, "malformed_output")
+        self.assertEqual(EngineSource(["e"], "parse").argv(RunOptions(cap=3)), ["e", "--cap", "3", "--parse-only"])
+        with self.assertRaises(ValueError):
+            EngineSource(["e"], "half")
+
+    def test_in_parse_mode_the_engine_answers_no_rules_question(self):
+        # A guess at check, a count or a verdict is refused: nothing would compare it.
+        for name, value in (("in_check", False), ("legal_actions", 20), ("terminal", "none")):
+            event = {**self.parsed(0)[1], name: value}
+            observation = self.run_engine(self.emit(state(0), event, end()), mode="parse")
+            self.assertEqual((observation.status, observation.reason), ("error", "malformed_output"), name)
+            self.assertIn(name, observation.detail)
+        # Its side to move and what it set up it must still give.
+        silent = self.run_engine(self.emit(state(0), {**self.parsed(0)[1], "side": None}, end()), mode="parse")
+        self.assertIn("`side` is null", silent.detail)
+        stateless = self.run_engine(self.emit(self.parsed(0)[1], end()), mode="parse")
+        self.assertIn("markers true", stateless.detail)
+
+    def test_in_parse_mode_the_engine_refuses_an_action_as_unreadable_illegal_or_unsubmittable(self):
+        for reason in REJECTIONS:
+            observation = self.run_engine(self.emit(*self.parsed(0), end("rejected", reason=reason)), mode="parse")
+            self.assertEqual((observation.status, observation.reason), ("rejected", reason))
+        for reason in ("no_matching_move", "ambiguous_move"):
+            observation = self.run_engine(self.emit(*self.parsed(0), end("rejected", reason=reason)), mode="parse")
+            self.assertEqual((observation.status, observation.reason), ("error", "malformed_output"), reason)
+        # And unsupported is still said before the first position.
+        late = self.run_engine(self.emit(*self.parsed(0), end("unsupported", reason="variant")), mode="parse")
+        self.assertEqual(late.reason, "malformed_output")
+        self.assertEqual(self.run_engine(self.emit(end("unsupported", reason="variant")), mode="parse").status,
+                         "unsupported")
+
+    def test_the_engine_is_never_stopped_early(self):
+        # A gate run may stop an oracle once its required positions are in; never the engine.
+        observation = self.run_engine(self.emit(*turn(0), *turn(1, side="black"), end("ok", 1)))
+        self.assertEqual(observation.status, "ok")
+        with tempfile.TemporaryDirectory() as folder:
+            script = Path(folder) / "engine.py"
+            script.write_text("import json\n" + self.emit(*turn(0), *turn(1, side="black"), end("ok", 1)), encoding="utf-8")
+            engine = EngineSource([sys.executable, str(script)])
+            stopped = engine.observe("r/1", self.RECORD, RunOptions(cap=7, timeout_s=30, stop_after=(0, "position")))
+        self.assertEqual((stopped.status, len(stopped.positions)), ("ok", 2))
+
+    def test_the_engine_may_refuse_a_records_set_up_as_unreadable_in_either_mode(self):
+        # Its parser cannot read the record's headers or board strings: there is no position 0 to report.
+        refusal = end("rejected", reason="unreadable")
+        for mode in ("parse", "full"):
+            observation = self.run_engine(self.emit(refusal), mode=mode)
+            self.assertEqual((observation.status, observation.reason, observation.actions_accepted, observation.positions),
+                             ("rejected", "unreadable", 0, []), mode)
+            self.assertTrue(observations.refused_setup(observation), mode)
+            self.assertEqual(observations.validate(observation), [], mode)
+            # Only as unreadable: a set-up is no action that can be illegal.
+            for reason in HARD_REJECTIONS:
+                refused = self.run_engine(self.emit(end("rejected", reason=reason)), mode=mode)
+                self.assertEqual((refused.status, refused.reason), ("error", "malformed_output"), (mode, reason))
+        # Never from an oracle's driver.
+        done = Completed(0, lines(refusal), b"", False)
+        self.assertEqual(parse_jsonl("ftxi", "r/1", done, 1000, 0.1).reason, "malformed_output")
+
+    def test_in_parse_mode_the_engine_prints_exactly_the_protocols_fields(self):
+        # An oracle driver's own timing, passed off as the engine's, is refused - in parse mode as in full mode.
+        timed = {**self.parsed(0)[1], "ms": 3}
+        observation = self.run_engine(self.emit(state(0), timed, end()), mode="parse")
+        self.assertEqual((observation.status, observation.reason), ("error", "malformed_output"))
+        # And a field left out is not a null: the six fields, every one of them.
+        short = {key: value for key, value in self.parsed(0)[1].items() if key != "terminal"}
+        observation = self.run_engine(self.emit(state(0), short, end()), mode="parse")
+        self.assertEqual((observation.status, observation.reason), ("error", "malformed_output"))
+        extra_state = state(0, hash=START_HASH)
+        observation = self.run_engine(self.emit(extra_state, self.parsed(0)[1], end()), mode="parse")
+        self.assertEqual((observation.status, observation.reason), ("error", "malformed_output"))
 
 
 class CwmttOutputTests(unittest.TestCase):
@@ -499,6 +658,30 @@ class CwmttOutputTests(unittest.TestCase):
         self.assertEqual(observation.status, "timeout")
         self.assertEqual([p.legal_actions for p in observation.positions], [20, 20])
         self.assertEqual(observation.actions_accepted, 1)
+
+    def test_each_count_is_timed_as_it_arrives(self):
+        # The CLI streams its counts on one line; the space after a count says it is whole.
+        data = b'Unparsed: "1-0\\n"\n20 20 32 \n'
+        start = data.index(b"20 20")
+        arrivals = ((start + 3, 1.0), (start + 6, 2.5), (len(data), 4.0))  # "20 " / "20 " / "32 \n"
+        done = Completed(0, data, b"", False, arrivals=arrivals, elapsed_s=4.2)
+        self.assertEqual(count_arrivals(done), [1.0, 2.5, 4.0])
+        observation = parse_count_output("cwmtt", "r/1", done, 1000, 4.2)
+        self.assertEqual((observation.arrival_s, observation.ended_s), ([1.0, 2.5, 4.0], 4.2))
+        # Digits inside the Unparsed: line are not counts.
+        self.assertEqual(count_arrivals(Completed(0, b'Unparsed: "12 34 "\n7 \n', b"", False)), [None])
+
+    def test_a_count_run_may_be_stopped_once_it_has_the_counts_needed(self):
+        watch = watch_counts(3)
+        self.assertFalse(watch(b'Unparsed: "1 2 3 4 5 '))  # not counts
+        self.assertFalse(watch(b'"\n20 2'))
+        self.assertFalse(watch(b"0 3"))  # "20 20 " and an unfinished "3"
+        self.assertTrue(watch(b"2 1"))  # "20 32 ..." : three whole counts
+        stopped = self.parse("20 20 32 ", timed_out=False)
+        self.assertEqual(stopped.status, "ok")
+        done = Completed(None, b"20 20 32 ", b"", False, stopped=True)
+        observation = parse_count_output("cwmtt", "r/1", done, 1000, 1.0)
+        self.assertEqual((observation.status, observation.reason, len(observation.positions)), ("timeout", "stopped", 3))
 
     def test_a_crash_is_an_error(self):
         self.assertEqual(self.parse("", "cwmtt: Irrefutable pattern failed", returncode=1).status, "error")
@@ -628,6 +811,32 @@ class NotationGuardTests(unittest.TestCase):
         self.assertFalse(ends_in_a_variation(b"1. e4 / e5\n(2. d4 / d5)\n2. Nf3 / Nc6\n"))
         self.assertFalse(ends_in_a_variation(b"1. (0T1)e3 / (0T1)e6 (>L1)\n"))  # an annotation, not a variation
         self.assertFalse(ends_in_a_variation(b"1. e4 / e5 {(2. d4) was also possible}\n"))
+
+
+class MateProofTests(unittest.TestCase):
+    """A mate verdict is a proof - an exhaustive search that terminated; an exhausted budget is unknown (H37)."""
+
+    @staticmethod
+    def chessin5d(*events):
+        return parse_jsonl("chessin5d", "r/1", Completed(0, lines(*events), b"", False), None, 0.1)
+
+    def test_a_search_that_ran_out_of_its_budget_gives_no_verdict(self):
+        limited = {**position(0, legal=None, terminal=None), "ms": 60000.5, "limit": "mate_budget_ms"}
+        observation = self.chessin5d(state(0), limited, end())
+        self.assertIsNone(chessin5d_adapter.verdict_beyond_its_limit(observation))
+        self.assertIsNone(observation.positions[0].terminal)
+        source = chessin5d_adapter.ChessIn5dSource(lockfile.load())
+        self.assertEqual(source.limits(observation, 0, RunOptions(mate_budget_ms=60000)), {"terminal": "mate_budget_ms=60000"})
+
+    def test_a_verdict_beside_the_limit_its_search_ran_into_is_no_proof(self):
+        for terminal in ("checkmate", "stalemate", "none"):
+            claimed = {**position(0, legal=None, terminal=terminal), "ms": 60000.5, "limit": "mate_budget_ms"}
+            problem = chessin5d_adapter.verdict_beyond_its_limit(self.chessin5d(state(0), claimed, end()))
+            self.assertIsNotNone(problem, terminal)
+            self.assertIn("an exhausted budget is unknown, never a verdict (H37)", problem)
+        # A verdict from a search that finished is one.
+        finished = {**position(0, legal=None, terminal="checkmate"), "ms": 12.0}
+        self.assertIsNone(chessin5d_adapter.verdict_beyond_its_limit(self.chessin5d(state(0), finished, end())))
 
 
 if __name__ == "__main__":

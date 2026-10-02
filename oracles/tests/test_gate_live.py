@@ -50,10 +50,18 @@ from support import golden_files_predate_this_schema
 #   unmark:<record>@<k>     at position k, one unmoved marker fewer: the same pieces, marked otherwise
 #   stateless               no state events at all
 #   unsupported             decline every record
+#   tamper:<path>           append a line to that file before answering (a harness file - a test's copy of it)
+# The harness appends --cap N, and --parse-only in parse mode: then the stand-in answers
+# no rules question at all (in_check, legal_actions and terminal null).
 ENGINE = r'''
 import json, hashlib, sys
 recorded = json.load(open(sys.argv[1], encoding="utf-8"))
-modes = dict(spec.partition(":")[::2] for spec in sys.argv[2:])
+parse_only = "--parse-only" in sys.argv
+specs = [spec for spec in sys.argv[2:sys.argv.index("--cap")]]
+modes = dict(spec.partition(":")[::2] for spec in specs)
+if "tamper" in modes:
+    with open(modes["tamper"], "a", encoding="utf-8") as handle:
+        handle.write("# written by the engine while the gate ran\n")
 entry = recorded.get(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())
 if "unsupported" in modes or entry is None or entry["lines"] is None:
     print(json.dumps({"event": "end", "status": "unsupported", "actions_accepted": 0, "reason": "variant"}), flush=True)
@@ -87,6 +95,8 @@ for line in entry["lines"].splitlines():
             out["in_check"] = not out["in_check"]
         if at("null", index):
             out["in_check"] = None
+        if parse_only:
+            out.update(in_check=None, legal_actions=None, terminal=None)
     elif kind == "end":
         # The engine reads the notation with its own parser: where the oracle could not
         # match a move, the engine's way of stopping at the same action is to call it illegal.
@@ -155,12 +165,13 @@ class GateWithAStandInEngineTests(unittest.TestCase):
         cls.engine.write_text(ENGINE, encoding="utf-8")
         cls.root = root
 
-    def run_gate(self, *modes: str, divergences_text: str = "schema = 1\n"):
+    def run_gate(self, *modes: str, divergences_text: str = "schema = 1\n", mode: str = "full"):
         command = json.dumps([sys.executable, str(self.engine), str(self.recorded), *(modes or ("-",))])
         gate_file = self.root / "gate.toml"
         text = paths.GATE_FILE.read_text(encoding="utf-8")
         self.assertIn("\ncommand = []\n", text)
-        gate_file.write_text(text.replace("\ncommand = []\n", f"\ncommand = {command}\n"), encoding="utf-8")
+        text = text.replace("\ncommand = []\n", f"\ncommand = {command}\n").replace('mode = "full"', f'mode = "{mode}"')
+        gate_file.write_text(text, encoding="utf-8")
         divergences_file = self.root / "known-divergences.toml"
         divergences_file.write_text(divergences_text, encoding="utf-8")
         # A test run must not overwrite the report of a real gate run. It runs the
@@ -278,9 +289,13 @@ added = "2026-10-01"
         self.assertEqual(accepted.findings(), [])
         self.assertEqual(accepted.engine, "passed")
 
-        # The same entry, with the engine now agreeing with the oracle: stale.
-        stale = self.run_gate(divergences_text=entry)
-        self.assertEqual([finding.code for finding in stale.findings()], ["divergence-stale"])
+        # The same entry, with the engine now saying what the oracle is on record as getting wrong: a
+        # telltale (H34) - its logic may come from that oracle - and never "stale", whose remedy is to remove it.
+        copied = self.run_gate(divergences_text=entry)
+        self.assertEqual([finding.code for finding in copied.findings()], ["telltale"])
+        self.assertIn(f"the engine reproduces ftxi's recorded error at {record_id} position {index} (in_check = False)",
+                      copied.findings()[0].message)
+        self.assertFalse(copied.ok)
 
         # The same entry without its citation is refused before anything runs.
         bare = entry.replace("A made-up citation, long enough to pass, for a test of the mechanism only.", "TBD")
@@ -293,6 +308,27 @@ added = "2026-10-01"
             'engine_value = "True"', 'engine_value = "False"')
         refused = self.run_gate(divergences_text=misquoted)
         self.assertIn("divergence-golden", [finding.code for finding in refused.findings()])
+
+    def test_an_engine_that_writes_to_the_harness_while_it_runs_fails(self):
+        # The stand-in appends a line to the known-divergences file (the test's copy) while it runs.
+        result = self.run_gate(f"tamper:{self.root / 'known-divergences.toml'}")
+        self.assertFalse(result.ok)
+        self.assertEqual({finding.code for finding in result.findings()}, {"harness-modified"})
+
+    def test_an_engine_in_parse_mode_is_compared_on_its_reading_only(self):
+        # A wrong check verdict is never seen in parse mode: it answers none.
+        record, index = WRONG_AT
+        result = self.run_gate(f"flip:{record}@{index}", mode="parse")
+        self.assertEqual(result.findings(), [])
+        self.assertEqual((result.engine_mode, result.engine, result.gated), ("parse", "passed", {}))
+        self.assertGreater(result.parse.boards, 0)
+        self.assertEqual(result.parse.boards, result.parse.described)
+        self.assertIn("engine differential: PARSE MODE - PASSED", gate.summarise(result))
+        self.assertTrue(result.proof_channel.startswith("DISABLED - parse mode"))
+        # What it set up is still compared.
+        misread = self.run_gate(f"misread:{record}@{index}", mode="parse")
+        self.assertEqual([finding.code for finding in misread.findings()], ["divergence"])
+        self.assertIn("placement", misread.findings()[0].message)
 
 
 if __name__ == "__main__":

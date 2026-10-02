@@ -40,6 +40,12 @@ for them (Source.diagnostic_args) - are kept on the Observation for `observe` to
 show, and are never compared. Fields a driver adds to a position event (its
 timing, "ms"; the limit an unanswered question ran into, "limit") are kept on
 the Observation too, and never compared. Any other event is ignored.
+
+When each line arrived is kept as well (Observation.arrival_s, ended_s): the
+cost of an answer is the time from the start of the run until it arrived, which
+is what a deadline cuts (H32). A gate run that needs nothing past a position may
+stop the run once that position has arrived (RunOptions.stop_after); the run is
+then cut short like one that ran out of time, with the reason "stopped".
 """
 
 from __future__ import annotations
@@ -53,10 +59,13 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .. import fingerprint
-from ..observations import HARD_REJECTIONS, SIDES, SOFT_REJECTIONS, STATUSES, TERMINALS, Observation, Position
-from ..util import Completed, run
+from ..observations import ANSWERS, HARD_REJECTIONS, SIDES, SOFT_REJECTIONS, STATUSES, TERMINALS, Observation, Position
+from ..util import Completed, Stop, run
 
 DIAGNOSTIC_EVENTS = ("explain", "actions")
+# What a run may be stopped after: the state event of a position (what was set
+# up there), or its position event (its answers too).
+STOP_EVENTS = ("state", "position")
 
 
 @dataclass(frozen=True)
@@ -67,6 +76,14 @@ class RunOptions:
     # Diagnostics, which only `observe` asks for - never a gate run, never golden --write:
     explain: bool = False  # an "explain" event after each state event
     actions_at: int | None = None  # an "actions" event listing the legal actions at this position
+    # (index, "state" | "position"): the run may be stopped once that event of that
+    # position has arrived - a gate run that needs nothing after it (H32). None: run to the end or the deadline.
+    stop_after: tuple[int, str] | None = None
+
+
+def number(value: float) -> str:
+    """A budget as a limit names it: 300.0 -> "300", 0.5 -> "0.5"."""
+    return str(int(value)) if float(value).is_integer() else repr(float(value))
 
 
 class Source:
@@ -76,6 +93,27 @@ class Source:
     oracle: str | None = None  # pin id whose build this source needs; None for the engine
     answers: tuple[str, ...] = ()  # observables this source can report
     diagnostics: tuple[str, ...] = ()  # the diagnostic events its driver can print: "explain", "actions"
+    # The RunOptions fields that bound this source's answers. They are its budget,
+    # which a golden file's signature records: answers recorded under one budget
+    # are not the answers of another (H32).
+    budget_fields: tuple[str, ...] = ("timeout_s",)
+    # The fields of a position a run has only once it has searched that position:
+    # they arrive with its position event, after what it set up (its state event).
+    # A run cut while it searched a position has its state, not these (H32).
+    searched: tuple[str, ...] = ANSWERS
+
+    def budget(self, options: RunOptions) -> dict:
+        """The limits this source runs under with these options, by name: {"timeout_s": 300, ...}."""
+        return {name: getattr(options, name) for name in self.budget_fields}
+
+    def limits(self, observation: Observation, index: int, options: RunOptions) -> dict[str, str]:
+        """The answers at one position that a limit left unanswered, each with the limit ("mate_budget_ms=60000").
+
+        A null that no limit explains stays a bare null: the source never answers
+        that question there. The deadline of the whole run is not one of these:
+        a run cut at its deadline is cut from the position it was searching on.
+        """
+        return {}
 
     def diagnostic_args(self, options: RunOptions) -> list[str]:
         """Driver arguments asking for the diagnostic events ``options`` wants and this source can print.
@@ -168,27 +206,85 @@ def _bad_timing(event: dict) -> bool:
     return not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(value) or value < 0
 
 
+def output_lines(done: Completed) -> list[tuple[str, float | None]]:
+    """The non-empty lines a run printed, each with when it had arrived (None where that was not measured).
+
+    A line has arrived when its last byte has - its newline, or for a last line
+    cut off mid-write, the last byte printed.
+    """
+    data = done.stdout
+    found = []
+    start = 0
+    while start < len(data):
+        stop = data.find(b"\n", start)
+        end = len(data) if stop < 0 else stop
+        text = data[start:end].decode("utf-8", "replace").strip()
+        if text:
+            found.append((text, done.arrived(min(end, len(data) - 1))))
+        start = end + 1
+    return found
+
+
+def watch_events(index: int, kind: str) -> Stop:
+    """A stop condition for util.run: the run's ``kind`` event ("state" or "position") for ``index``, or a later one, has arrived."""
+    pending = bytearray()
+    needle = f'"{kind}"'.encode()
+
+    def arrived(chunk: bytes) -> bool:
+        pending.extend(chunk)
+        while (cut := pending.find(b"\n")) >= 0:
+            line = bytes(pending[:cut])
+            del pending[:cut + 1]
+            if needle not in line:
+                continue
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(event, dict) and event.get("event") == kind and isinstance(event.get("index"), int) \
+                    and not isinstance(event.get("index"), bool) and event["index"] >= index:
+                return True
+        return False
+
+    return arrived
+
+
+def stop_condition(options: RunOptions) -> Stop | None:
+    """The stop condition of a protocol run with these options, if it may be stopped early."""
+    if options.stop_after is None:
+        return None
+    index, kind = options.stop_after
+    if kind not in STOP_EVENTS:
+        raise ValueError(f"stop_after names an event the protocol does not have: {kind!r}")
+    return watch_events(index, kind)
+
+
 def parse_jsonl(source: str, record_id: str, done: Completed, cap: int | None, elapsed: float,
-                *, exact_fields: bool = False) -> Observation:
+                *, exact_fields: bool = False, setup_refusals: tuple[str, ...] = ()) -> Observation:
     """Turn a protocol run into an Observation, distrusting everything in it.
 
     ``exact_fields`` refuses state and position events that carry anything
     beyond the protocol's fields (the oracle drivers add timings; the engine
-    may not).
+    may not). ``setup_refusals`` are the reasons with which this source may end
+    "rejected" before its first position, refusing the record's set-up - only the
+    engine may, as "unreadable" (observations.refused_setup).
     """
     positions: list[Position] = []
+    arrival: list[float | None] = []  # when each position's last line arrived
     extras: dict[int, dict] = {}
     diagnostics: list[dict] = []
     pending: fingerprint.State | None = None  # the state event of the position still to come
+    pending_at: float | None = None  # when it arrived
     markers: bool | None = None  # what the run's state events say of the unmoved markers, once it has printed one
     end: dict | None = None
+    ended_at: float | None = None
     # Two kinds of bad output. An event that was read and breaks the protocol is
     # never excused. A line that cannot be read at all is excused only where a
     # killed process leaves one behind: as its last line, cut off mid-write.
     invalid = ""
     unreadable: list[int] = []  # the numbers of the lines that are not a JSON event
-    lines = [line for line in (raw.strip() for raw in done.out_text().splitlines()) if line]
-    for number, line in enumerate(lines):
+    lines = output_lines(done)
+    for number, (line, at) in enumerate(lines):
         try:
             event = json.loads(line)
             kind = event["event"]
@@ -200,7 +296,7 @@ def parse_jsonl(source: str, record_id: str, done: Completed, cap: int | None, e
             if problem:
                 invalid = f"invalid state event ({problem}): {line[:160]}"
                 break
-            pending, markers = state, state.markers
+            pending, pending_at, markers = state, at, state.markers
         elif kind == "position":
             side, in_check = event.get("side"), event.get("in_check")
             count, terminal = event.get("legal_actions"), event.get("terminal")
@@ -217,14 +313,15 @@ def parse_jsonl(source: str, record_id: str, done: Completed, cap: int | None, e
             index = len(positions)
             set_up = pending.summary() if pending is not None else {}
             positions.append(Position(index, side, in_check, count, terminal, **set_up))
-            pending = None
+            arrival.append(at)
+            pending, pending_at = None, None
             extra = {key: value for key, value in event.items() if key not in POSITION_FIELDS}
             if extra:
                 extras[index] = extra
         elif kind in DIAGNOSTIC_EVENTS:
             diagnostics.append(event)
         elif kind == "end":
-            end = event
+            end, ended_at = event, at
             break
 
     # A state event whose position event never came: the search at that
@@ -233,25 +330,29 @@ def parse_jsonl(source: str, record_id: str, done: Completed, cap: int | None, e
     dangling = pending is not None
     if dangling:
         positions.append(Position(len(positions), **pending.summary()))
+        arrival.append(pending_at)
 
     # Position k exists exactly when k actions were accepted: the positions are
     # what was observed, so they - not the run's own tally - say how far it got.
     reached = max(len(positions) - 1, 0)
     observation = Observation(source=source, record=record_id, status="error", positions=positions,
                               actions_accepted=reached, cap=cap, elapsed_s=elapsed, extras=extras,
-                              diagnostics=diagnostics)
+                              diagnostics=diagnostics, arrival_s=arrival, ended_s=ended_at)
     if invalid:
         # Broken before it was killed, if it was: the time-out does not hide it.
         observation.reason = "malformed_output"
-        observation.detail = invalid + (" - and the run was then killed for time" if done.timed_out else "")
+        killed = " - and the run was then killed for time" if done.timed_out else ""
+        observation.detail = invalid + (" - and the run was then stopped" if done.stopped else killed)
         return observation
-    cut_off = done.timed_out and unreadable == [len(lines) - 1]
+    cut_off = done.killed and unreadable == [len(lines) - 1]
     if unreadable and not cut_off:
         observation.reason = "malformed_output"
-        observation.detail = f"unreadable output line: {lines[unreadable[0]][:120]}"
+        observation.detail = f"unreadable output line: {lines[unreadable[0]][0][:120]}"
         return observation
-    if done.timed_out:
-        observation.status, observation.reason = "timeout", "timeout"
+    if done.killed:
+        # Cut short: its time ran out, or the gate stopped it with everything it needed in hand.
+        observation.status, observation.reason = "timeout", "stopped" if done.stopped else "timeout"
+        observation.ended_s = None
         return observation
     if end is None:
         observation.reason = "crash"
@@ -269,7 +370,7 @@ def parse_jsonl(source: str, record_id: str, done: Completed, cap: int | None, e
         problem = "actions_accepted is not a number"
     elif status != "error" and accepted != reached:
         problem = f"claims {accepted} accepted action(s) but reported {len(positions)} position(s)"
-    elif status in ("ok", "rejected") and not positions:
+    elif status in ("ok", "rejected") and not positions and not (status == "rejected" and reason in setup_refusals):
         problem = "replayed the record without reporting even its starting position"
     elif status == "rejected" and reason not in (*HARD_REJECTIONS, *SOFT_REJECTIONS):
         problem = f"unknown rejection reason '{reason}'"
@@ -284,11 +385,17 @@ def parse_jsonl(source: str, record_id: str, done: Completed, cap: int | None, e
 
 
 def run_protocol(source: str, record_id: str, argv: Sequence, data: bytes, options: RunOptions,
-                 cap: int | None, cwd=None, env=None, *, exact_fields: bool = False) -> Observation:
+                 cap: int | None, cwd=None, env=None, *, exact_fields: bool = False,
+                 setup_refusals: tuple[str, ...] = ()) -> Observation:
     started = time.monotonic()
     try:
-        done = run(argv, stdin=data, timeout=options.timeout_s, cwd=cwd, env=env)
+        done = run(argv, stdin=data, timeout=options.timeout_s, cwd=cwd, env=env, stop=stop_condition(options))
     except OSError as error:
         return Observation(source=source, record=record_id, status="error", reason="spawn", detail=str(error),
                            actions_accepted=0, cap=cap)
-    return parse_jsonl(source, record_id, done, cap, time.monotonic() - started, exact_fields=exact_fields)
+    observation = parse_jsonl(source, record_id, done, cap, time.monotonic() - started, exact_fields=exact_fields,
+                              setup_refusals=setup_refusals)
+    if observation.ended_s is None and not done.killed:
+        # It ended without an end event (it died): its outcome was known when the process ended.
+        observation.ended_s = done.elapsed_s or None
+    return observation

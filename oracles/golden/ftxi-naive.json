@@ -1,7 +1,8 @@
 {
-  "schema": 2,
+  "schema": 3,
   "source": "ftxi:naive",
-  "signature": {"adapter_sha256": "035749ef7c1d233e159368d2c25a7ce99810d39586f3e1769350b853ac35bfc3", "cap": 1000, "driver_sha256": "56ec6c1cc15526d6de09583f330cbb71dd96ad99000d5ae04f6969c3958f5296", "pin": "2ea9f1b82880f08faa9400d1ac20b20102604187", "policy": "naive"},
+  "signature": {"adapter_sha256": "10c18e65b8726374a8d3c721aa97277c5aec6b60263e20dab8d97ee2876a14f5", "budget": {"timeout_s": 300.0}, "cap": 1000, "driver_sha256": "56ec6c1cc15526d6de09583f330cbb71dd96ad99000d5ae04f6969c3958f5296", "pin": "2ea9f1b82880f08faa9400d1ac20b20102604187", "policy": "naive"},
+  "recordings": 2,
   "records": {
     "cwmtt/100_timelines": {
       "sha256": "caee1585fdb2ff207c4fb592633d8f9e63b71402a346e087ebbd682b939714ec",
@@ -9,6 +10,7 @@
       "reason": "timeout",
       "actions_accepted": 19,
       "last_action": null,
+      "horizon": {"position": 19, "budget": "timeout_s=300"},
       "positions": [
         ["w", false, 20, "none", "86d9a9eb3a9902c94379d438bcf18de1", "af6e344e57b49ae62ed63ce48037815c", 2, 64],
         ["b", false, 22, "none", "ddd9930e72342fac5ace85f94048b900", "7742766315e4d211ebcbe207f3f1442d", 3, 96],
@@ -333,6 +335,7 @@
       "reason": "timeout",
       "actions_accepted": 16,
       "last_action": null,
+      "horizon": {"position": 16, "budget": "timeout_s=300"},
       "positions": [
         ["w", false, 9, "none", "d2c9497bf0c2e7644ce38ffb5d5b61da", "6dd164ebbea15c7717608eadbf0bf5e8", 1, 10],
         ["b", true, 4, "none", "15380ab7f301df00b57007bf049dae47", "49482c9890047987e1334a0304c33815", 2, 20],
@@ -367,6 +370,7 @@
       "reason": "timeout",
       "actions_accepted": 18,
       "last_action": null,
+      "horizon": {"position": 18, "budget": "timeout_s=300"},
       "positions": [
         ["w", false, 20, "none", "86d9a9eb3a9902c94379d438bcf18de1", "af6e344e57b49ae62ed63ce48037815c", 2, 64],
         ["b", false, 22, "none", "850d94c81cce477c2c72c662a8ebe6fc", "f4169450109c65f4a13d5a9136b96dd0", 3, 96],
@@ -431,6 +435,7 @@
       "reason": "timeout",
       "actions_accepted": 43,
       "last_action": null,
+      "horizon": {"position": 43, "budget": "timeout_s=300"},
       "positions": [
         ["w", false, 20, "none", "d574889fd9da3f2bc65249ff27249b00", "2b8fa7fec7e4d7f2ecade5e01de08d0a", 1, 32],
         ["b", false, 20, "none", "74550a402b7fb6d3d259369b06cab8ab", "ca748ad018674807cd3bb7682687d962", 2, 64],
@@ -484,6 +489,7 @@
       "reason": "timeout",
       "actions_accepted": 101,
       "last_action": null,
+      "horizon": {"position": 101, "budget": "timeout_s=300"},
       "positions": [
         ["w", false, 20, "none", "14c8effca0ad8a6144ce4750c8af2a05", "e1b6a3b36221361696fad6467348a569", 1, 32],
         ["b", false, 20, "none", "70a83fe2a1a51e39d3353e3042d57e08", "0aece68cf50bad6175a7ed5718ec78da", 2, 64],
@@ -735,6 +741,7 @@
       "reason": "timeout",
       "actions_accepted": 11,
       "last_action": null,
+      "horizon": {"position": 11, "budget": "timeout_s=300"},
       "positions": [
         ["w", false, 20, "none", "d574889fd9da3f2bc65249ff27249b00", "2b8fa7fec7e4d7f2ecade5e01de08d0a", 1, 32],
         ["b", false, 20, "none", "74550a402b7fb6d3d259369b06cab8ab", "ca748ad018674807cd3bb7682687d962", 2, 64],
@@ -756,6 +763,7 @@
       "reason": "timeout",
       "actions_accepted": 19,
       "last_action": null,
+      "horizon": {"position": 19, "budget": "timeout_s=300"},
       "positions": [
         ["w", false, 20, "none", "86d9a9eb3a9902c94379d438bcf18de1", "af6e344e57b49ae62ed63ce48037815c", 2, 64],
         ["b", false, 22, "none", "9dd9a9958b5fda607995f3a25496eddc", "d706401cb6a3e3af04c299363c11e6aa", 3, 96],
@@ -785,6 +793,7 @@
       "reason": "timeout",
       "actions_accepted": 101,
       "last_action": null,
+      "horizon": {"position": 101, "budget": "timeout_s=300"},
       "positions": [
         ["w", false, 20, "none", "14c8effca0ad8a6144ce4750c8af2a05", "e1b6a3b36221361696fad6467348a569", 1, 32],
         ["b", false, 20, "none", "70a83fe2a1a51e39d3353e3042d57e08", "0aece68cf50bad6175a7ed5718ec78da", 2, 64],

@@ -8,7 +8,7 @@ import unittest
 
 from oracle_harness import build, corpus, lockfile
 from oracle_harness.adapters import RunOptions, make_source
-from oracle_harness.adapters.cwmtt import merge
+from oracle_harness.adapters.cwmtt import DRIVER_DEADLINE, merge
 from oracle_harness.observations import validate
 from oracle_harness.util import Completed, run
 
@@ -163,6 +163,13 @@ class MergeTests(unittest.TestCase):
         self.assertEqual([p.legal_actions for p in observation.positions], [20, 20])
         self.assertEqual([p.fingerprint for p in observation.positions], [STANDARD_START_HASH, None])
         self.assertEqual(validate(observation), [])
+        # Where it did not get to, the side and the state are unknown at its deadline (H32): a run that loses them
+        # there has lost them to a budget.
+        self.assertEqual(observation.extras, {1: {"limit": DRIVER_DEADLINE}})
+        source = make_source("cwmtt", lockfile.load())
+        self.assertEqual(source.limits(observation, 1, RunOptions(timeout_s=120)),
+                         dict.fromkeys(("side", "fingerprint", "placement", "boards", "pieces"), "timeout_s=120"))
+        self.assertEqual(source.limits(observation, 0, RunOptions(timeout_s=120)), {})
         # A CLI that refused an action keeps its verdict.
         refused = merged(cli("20 20 \n", "In check\n"), driver(2, end=False, timed_out=True, parsed=2))
         self.assertEqual((refused.status, refused.reason), ("rejected", "cannot_submit"))
@@ -198,6 +205,32 @@ class MergeTests(unittest.TestCase):
         # Nor by a driver cut short.
         cut = merged(cli(record + "20 20 \n"), driver(2, unparsed="=Q / Kd7\n", end=False, timed_out=True))
         self.assertEqual((cut.status, len(cut.positions)), ("unsupported", 1))
+
+    def test_a_merged_position_has_arrived_when_both_its_halves_have(self):
+        # The CLI's counts at 1, 2 and 3 s; the driver's states a little after its own start. Each
+        # program runs against its own deadline, so each half is timed from its own program's start.
+        counts = b"20 20 20 \n"
+        cli_run = Completed(0, counts, b"", False, arrivals=((3, 1.0), (6, 2.0), (len(counts), 3.0)), elapsed_s=3.2)
+        plain = driver(3)
+        offsets = [index for index, byte in enumerate(plain.stdout) if byte == ord("\n")]
+        # The driver's lines a half second apart: its position events (the 3rd, 5th and 7th lines) at 1.5, 2.5, 3.5 s.
+        arrivals = tuple((offset + 1, 0.5 * (number + 1)) for number, offset in enumerate(offsets))
+        timed = Completed(0, plain.stdout, b"", False, arrivals=arrivals, elapsed_s=4.0)
+        observation = merged(cli_run, timed)
+        self.assertEqual(observation.status, "ok")
+        self.assertEqual(observation.arrival_s, [1.5, 2.5, 3.5])  # each the later of its count and its state
+        self.assertEqual(observation.ended_s, 4.0)  # the later of the CLI's end and the driver's end event
+        # Where the driver's state is not paired (the two read the record differently), only the count is timed.
+        mismatched = merged(cli_run, Completed(0, driver(2).stdout, b"", False, arrivals=arrivals[:5], elapsed_s=4.0))
+        self.assertEqual((mismatched.reason, mismatched.arrival_s), ("driver_mismatch", [1.0, 2.0, 3.0]))
+
+    def test_a_cli_stopped_once_it_had_every_count_needed_keeps_the_next_state(self):
+        # A gate run that needs only positions 0 and 1 stops the CLI; the driver runs to its end.
+        observation = merged(Completed(None, b"20 20 2", b"", False, stopped=True), driver(3))
+        self.assertEqual((observation.status, observation.reason), ("timeout", "stopped"))
+        self.assertEqual([p.legal_actions for p in observation.positions], [20, 20, None])
+        self.assertEqual(observation.positions[2].boards, 3)  # what cwmtt set up where the CLI stopped
+        self.assertEqual(validate(observation), [])
 
     def test_diagnostics_are_passed_on(self):
         explain = {"event": "explain", "index": 0, "playable": [{"L": "0", "T": 1, "c": "w"}], "present": 1}

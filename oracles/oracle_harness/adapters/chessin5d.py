@@ -24,8 +24,10 @@ at one position as the library's own enumerator lists them, kept where the
 library's move() plays each move and its check and present tests pass the result
 - the tests submit() applies to an action; not its mate search, which submit()
 runs first (--actions K). A mate search that did not finish leaves its position
-event a "limit" naming what stopped it. The driver's header says how each is
-obtained.
+event a "limit" naming what stopped it, and no verdict: a mate verdict is a proof,
+and an exhausted budget is unknown, never mate (H37) - a position that names a
+limit and gives a verdict anyway makes the run malformed. The driver's header
+says how each is obtained.
 """
 
 from __future__ import annotations
@@ -65,6 +67,24 @@ def would_misread(data: bytes) -> tuple[str, str] | None:
     return None
 
 
+def verdict_beyond_its_limit(observation: Observation) -> str | None:
+    """What is wrong with a run that gives a mate verdict where its mate search ran into a limit, if it does.
+
+    A mate verdict is a proof - an exhaustive search that terminated - and an
+    exhausted budget is "unknown", never "mate" (decision H37). The library's own
+    search answers checkmate when it runs out of time; the driver turns that into
+    a null and names the limit. A position that names a limit and still gives a
+    verdict (checkmate, stalemate, or "none") is a claim nothing proved: the run
+    is malformed, and nothing in it is compared or recorded.
+    """
+    for position in observation.positions:
+        limit = observation.extras.get(position.index, {}).get("limit")
+        if limit is not None and position.terminal is not None:
+            return (f"position {position.index}: a mate verdict ({position.terminal}) beside the limit its mate search "
+                    f"ran into ({limit}) - an exhausted budget is unknown, never a verdict (H37)")
+    return None
+
+
 class ChessIn5dSource(Source):
     name = "chessin5d"
     oracle = "chessin5d"
@@ -72,6 +92,8 @@ class ChessIn5dSource(Source):
     # The driver speaks the common flags (--explain, --actions K), so the base
     # class's diagnostic_args() asks for these.
     diagnostics = ("explain", "actions")
+    # Its mate verdicts are bounded by the mate search's budget and heap as well as by the run's deadline.
+    budget_fields = ("timeout_s", "mate_budget_ms")
 
     def __init__(self, lock: Lock):
         self.pin = lock.pin("chessin5d")
@@ -87,8 +109,26 @@ class ChessIn5dSource(Source):
             return "node is not on PATH"
         return None
 
+    def budget(self, options: RunOptions) -> dict:
+        return {**super().budget(options), "mate_heap_mb": _MATE_HEAP_MB}
+
+    def limits(self, observation: Observation, index: int, options: RunOptions) -> dict[str, str]:
+        """The driver names what stopped a mate search that did not finish ("limit"): its terminal is unknown at that limit.
+
+        The library's own time-out flag and the driver's deadline past it are
+        both the mate search's time budget; "mate_heap_mb" is the worker's heap.
+        """
+        if index >= len(observation.positions) or observation.positions[index].terminal is not None:
+            return {}
+        limit = observation.extras.get(index, {}).get("limit")
+        if limit in ("mate_budget_ms", "deadline"):
+            return {"terminal": f"mate_budget_ms={base.number(options.mate_budget_ms)}"}
+        if limit == "mate_heap_mb":
+            return {"terminal": f"mate_heap_mb={_MATE_HEAP_MB}"}
+        return {"terminal": str(limit)} if isinstance(limit, str) and limit else {}
+
     def signature(self, options: RunOptions) -> dict:
-        return {"pin": self.pin.commit, "mate_heap_mb": _MATE_HEAP_MB, "driver_sha256": code_sha256(self.driver),
+        return {"pin": self.pin.commit, "driver_sha256": code_sha256(self.driver),
                 "adapter_sha256": code_sha256(Path(__file__), Path(base.__file__), Path(fingerprint.__file__),
                                               Path(headers.__file__))}
 
@@ -101,4 +141,9 @@ class ChessIn5dSource(Source):
         argv = [shutil.which("node"), self.driver, self._build().artifact("root"), "--board", declared,
                 "--mate-budget-ms", str(options.mate_budget_ms), "--mate-heap-mb", str(_MATE_HEAP_MB),
                 *self.diagnostic_args(options)]
-        return run_protocol(self.name, record_id, argv, data, options, None)
+        observation = run_protocol(self.name, record_id, argv, data, options, None)
+        problem = verdict_beyond_its_limit(observation)
+        if problem:
+            # The positions are kept for whoever debugs the driver; the status makes sure nothing is concluded from them.
+            observation.status, observation.reason, observation.detail = "error", "malformed_output", problem
+        return observation

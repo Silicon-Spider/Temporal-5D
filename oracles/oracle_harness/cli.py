@@ -8,7 +8,23 @@ import signal
 import sys
 import unittest
 
-from . import boundary, build, config, corpus, fingerprint, gate, lockfile, observations, paths, provenance, toolchain
+from . import (
+    boundary,
+    build,
+    config,
+    corpus,
+    fingerprint,
+    gate,
+    golden,
+    lockfile,
+    observations,
+    paths,
+    provenance,
+    rulebook,
+    snapshot,
+    stability,
+    toolchain,
+)
 from .adapters import ORACLE_SOURCES, RunOptions, make_source
 from .util import Finding, HarnessError, format_findings, kill_running
 
@@ -42,8 +58,22 @@ def cmd_sync(args: argparse.Namespace) -> int:
 
 def cmd_verify(args: argparse.Namespace) -> int:
     lock = lockfile.load()
-    sections = gate.static_checks(lock, config.load(), corpus.load(), include_untracked=not args.tracked_only)
-    return _report(sections)
+    cfg = config.load()
+    records = corpus.load()
+    frozen = snapshot.take()
+    sections = gate.static_checks(lock, cfg, records, frozen, include_untracked=not args.tracked_only)
+    code = _report(sections)
+    # What each tier requires of each source, and why the rest is not required (H32).
+    print()
+    for line in stability.describe(cfg, records, frozen):
+        print(line)
+    # Whether the tier that can enable the proof channel requires enough to enable it. A
+    # run of that tier fails on these; verify, which every tier runs, reports them.
+    readiness = gate.proof_channel_readiness(cfg, records, frozen)
+    if readiness is not None:
+        print()
+        print(format_findings(f"{gate.PROOF_SECTION} (a run of such a tier fails on these; verify does not)", readiness))
+    return code
 
 
 def cmd_boundary(args: argparse.Namespace) -> int:
@@ -116,6 +146,13 @@ def _position_index(text: str) -> int:
     return value
 
 
+def _at_least_one(text: str) -> int:
+    value = int(text)
+    if value < 1:
+        raise argparse.ArgumentTypeError("a whole number from 1")
+    return value
+
+
 def cmd_corpus(args: argparse.Namespace) -> int:
     lock = lockfile.load()
     records = corpus.load()
@@ -131,11 +168,15 @@ def cmd_corpus(args: argparse.Namespace) -> int:
 
 def cmd_golden(args: argparse.Namespace) -> int:
     if args.write:
-        findings = gate.write_golden(only_sources=args.source, jobs=args.jobs, log=_say)
+        findings = gate.write_golden(only_sources=args.source, jobs=args.jobs, repeat=args.repeat, log=_say)
         if findings:
             return _report([("golden --write", findings)])
         print("Golden observations rewritten. Review the diff before committing: apart from the signature line, every\n"
-              "changed line is an answer that changed - or, for a run that timed out, a change in how far it got.")
+              "changed line of a golden file is an answer that changed - or, for a run cut at its budget, a change in\n"
+              "how far it got (its horizon), a value a limit left unknown, or one that differed between recordings\n"
+              "(unstable). A horizon that moved earlier, a verdict or an outcome that went (listed above, if any) and a\n"
+              "changed line of 'What each tier requires' in DISAGREEMENTS.md are losses of checking, not churn: never\n"
+              "commit one to make a gate run pass. The cost files and MANIFEST change with every recording.")
         return 0
     gate.render_disagreements(log=_say)
     return 0
@@ -157,6 +198,25 @@ def cmd_provenance(args: argparse.Namespace) -> int:
         print("PROVENANCE.md inventory " + ("updated" if changed else "already up to date"))
         return 0
     return _report([("provenance", provenance.check(lock, records))])
+
+
+def cmd_rulebook(args: argparse.Namespace) -> int:
+    """The rulebook pin (H38): check it (default), or move it to the rulebook's current text (--pin)."""
+    spec = config.load().rulebook
+    if args.pin:
+        old, new = rulebook.pin()
+        if old == new:
+            print(f"{spec.path} is already pinned at {new}")
+            return 0
+        print(f"{spec.path}: pin moved from {old} to {new} in {paths.HARNESS_REL}/gate.toml [rulebook].\n"
+              "The rulebook decides every disagreement between the engine and an oracle (H38): review its diff,\n"
+              "re-check every known divergence that cites it, re-run the gate (gate --tier commit here; the nightly\n"
+              "tier in CI), and record the change in CHANGELOG.md.")
+        return 0
+    findings = rulebook.verify(spec)
+    if not findings:
+        print(f"{spec.path} is the text gate.toml pins ({spec.sha256})")
+    return _report([("rulebook", findings)])
 
 
 def cmd_selftest(args: argparse.Namespace) -> int:
@@ -187,7 +247,8 @@ def parser() -> argparse.ArgumentParser:
     # work tree, which in a fresh checkout is what was committed.
     tracked_only = "boundary check: skip untracked files (tracked ones are read as they are in the work tree)"
 
-    sub = add("verify", cmd_verify, "Static checks: pins, corpus, known divergences, boundary, provenance, golden files.")
+    sub = add("verify", cmd_verify,
+              "Static checks: pins, corpus, known divergences, the rulebook pin, boundary, provenance, golden files.")
     sub.add_argument("--tracked-only", action="store_true", help=tracked_only)
 
     sub = add("boundary", cmd_boundary, "Check that nothing outside oracles/ depends on the harness or on an oracle.")
@@ -219,6 +280,9 @@ def parser() -> argparse.ArgumentParser:
     mode.add_argument("--write", action="store_true", help="re-run the oracles over the whole corpus and rewrite the golden files")
     mode.add_argument("--render", action="store_true", help="only re-render DISAGREEMENTS.md from the golden files")
     sub.add_argument("--source", action="append", choices=ORACLE_SOURCES, help="limit --write to these sources")
+    sub.add_argument("--repeat", type=_at_least_one, default=golden.MIN_RECORDINGS, metavar="N",
+                     help="record each source N times, in independent processes; a value that differs between them "
+                          f"is recorded as unstable (default {golden.MIN_RECORDINGS}, the fewest verify accepts)")
     sub.add_argument("--jobs", type=int)
 
     sub = add("gate", cmd_gate, "Run a gate tier: static checks, oracle runs against golden, engine differential.")
@@ -227,6 +291,10 @@ def parser() -> argparse.ArgumentParser:
     sub.add_argument("--record", action="append", help="restrict to these records (marks the run partial)")
     sub.add_argument("--jobs", type=int)
     sub.add_argument("--tracked-only", action="store_true", help=tracked_only)
+
+    sub = add("rulebook", cmd_rulebook, "Check the rulebook pin (H38), or move it to the rulebook's current text (--pin).")
+    sub.add_argument("--pin", action="store_true",
+                     help="write the rulebook's current SHA-256 into gate.toml [rulebook] - after reviewing the change")
 
     sub = add("provenance", cmd_provenance, "Check (default) or rewrite (--write) the generated inventory in PROVENANCE.md.")
     sub.add_argument("--write", action="store_true")

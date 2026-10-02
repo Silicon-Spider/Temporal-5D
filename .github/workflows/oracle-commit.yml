@@ -66,6 +66,14 @@ jobs:
       - name: Harness self-tests
         run: python oracles/harness.py selftest
 
+      # The engine under test (gate.toml's [engine] command is build/engine/t5d-gate).
+      # Built before the gate, and checked to have changed nothing under oracles/:
+      # the gate's own harness-modified check only sees changes made while it runs.
+      - name: Build the engine's gate adapter
+        run: |
+          python engine/build.py --werror
+          test -z "$(git status --porcelain -- oracles/)" || { git status --porcelain -- oracles/; echo "the engine build changed files under oracles/"; exit 1; }
+
       - name: Gate - commit tier
         run: python oracles/harness.py gate --tier commit --tracked-only
 

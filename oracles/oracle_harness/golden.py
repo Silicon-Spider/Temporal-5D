@@ -15,28 +15,71 @@ The files hold verdicts, and hashes of what each oracle set up - never an
 oracle's free-text messages, which quote the record they are about, and no
 record is redistributed from here. A row is one position: the columns of
 observations.ROW_FIELDS, the answers and then the fingerprint, placement hash,
-and board and piece counts of the oracle's state event (schema 2).
+and board and piece counts of the oracle's state event.
+
+Schema 3 (decision H32, stable answers only) adds what was not answered, and why:
+
+  * the signature records the budget the answers were recorded under (the
+    run's timeout_s; for Chess in 5D the mate search's budget and heap too), so
+    answers recorded under another budget are stale;
+  * "horizon": {"position": K, "budget": "timeout_s=300"} - the run was cut at
+    its deadline while it was searching position K (whose state is recorded,
+    its answers are not): from there on everything is unknown at that budget;
+  * "unknown": {"<k>": {"<field>": "<limit>"}} - a null inside the answered
+    positions that a limit caused (Chess in 5D's mate search: its time budget or
+    its heap). A null with no limit stays a bare null: the source never answers
+    that question;
+  * "unstable": {"<k>": {"<field>": [v1, v2, ...]}} - a value that differed
+    between independent recordings (golden --write --repeat N). The position's
+    value is null, so nothing is compared with it.
+
+Beside each golden file is its cost file (<source>.cost.json): for each record,
+when each position's answers arrived, in seconds from the start of the run -
+the evidence for which answers each tier can require (stability.py). Costs vary
+from one recording to the next, so they are kept out of the golden files: a diff
+of a golden file is a diff of verdicts. calibration.json holds the reference time
+of the calibration probe on the recording machine. MANIFEST commits to the hash
+of every one of these files (integrity.py, H33), and every load verifies it.
 """
 
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+import math
+from dataclasses import dataclass, field
+from decimal import ROUND_CEILING, Decimal
 from pathlib import Path
 
-from . import observations, paths
+from . import integrity, observations, paths
 from .adapters import ORACLE_SOURCES, PRIMARY_SOURCES, RunOptions, Source, oracle_of
 from .corpus import Record
-from .observations import OBSERVABLES, PARSE_FIELD, PARSE_KINDS, Disagreement, Observation
-from .runner import Results
-from .util import Finding, HarnessError
+from .integrity import MIN_RECORDINGS, RERECORD
+from .observations import ANSWERS, OBSERVABLES, PARSE_FIELD, PARSE_KINDS, ROW_FIELDS, Disagreement, Observation
+from .util import Finding, HarnessError, sha256_text
 
-SCHEMA = 2
+SCHEMA = 3
+COST_SCHEMA = 1
+CALIBRATION_SCHEMA = 1
+CALIBRATION_FILE = "calibration.json"
 _RECORDED = ("status", "reason", "actions_accepted", "last_action")
+# What schema 3 added, for the message that asks for a re-recording.
+_SCHEMA_NOTE = "budgets, horizons, unknown and unstable values, cost files, MANIFEST"
 
 
 class StaleSchema(HarnessError):
     """A golden file written in a schema this harness no longer reads."""
+
+
+@dataclass(frozen=True)
+class Horizon:
+    """Where a recording run was cut at its deadline."""
+
+    position: int | None  # the position it was searching (its state is recorded, its answers are not); None: none reached
+    budget: str  # the limit that cut it: "timeout_s=300"
+
+    def describe(self) -> str:
+        where = "before its first position" if self.position is None else f"at position {self.position}"
+        return f"cut at {self.budget} {where}"
 
 
 @dataclass
@@ -45,27 +88,131 @@ class Golden:
     signature: dict
     sha256: dict[str, str]  # record id -> hash of the record these answers are about
     observations: dict[str, Observation]
+    recordings: int = 1
+    horizon: dict[str, Horizon] = field(default_factory=dict)  # record id -> where its run was cut
+    unknown: dict[str, dict[int, dict[str, str]]] = field(default_factory=dict)  # record -> position -> field -> limit
+    unstable: dict[str, dict[int, dict[str, list]]] = field(default_factory=dict)  # record -> position -> field -> values
+    digest: str = ""  # SHA-256 of the bytes this was read from
+
+
+@dataclass(frozen=True)
+class RecordCost:
+    """When one source's answers about one record arrived: seconds from the start of its run, rounded up."""
+
+    positions: tuple[float | None, ...]  # per position, when what is recorded about it had arrived
+    end: float | None  # when the outcome had (None: the run was cut, and has none)
+    mate: tuple[float | None, ...] = ()  # Chess in 5D: per position, how long its check test and mate search took
+
+    @property
+    def cost(self) -> float:
+        """The cost of the slowest answer: the record's cost."""
+        known = [value for value in (*self.positions, self.end) if value is not None]
+        return max(known, default=0.0)
+
+
+@dataclass
+class Costs:
+    source: str
+    signature: dict
+    recordings: int
+    records: dict[str, RecordCost]
+    digest: str = ""
+
+
+@dataclass(frozen=True)
+class Calibration:
+    """The calibration probe as measured on the machine the golden files were recorded on."""
+
+    source: str
+    record: str
+    positions: int
+    signature: dict
+    seconds: float
+    platform: str
+    cpu_count: int | None
+    digest: str = ""
+
+
+@dataclass
+class Recorded:
+    """One source's answers about one record, ready to write: merged over its recordings and classified (H32)."""
+
+    observation: Observation
+    cost: RecordCost
+    horizon: Horizon | None = None
+    unknown: dict[int, dict[str, str]] = field(default_factory=dict)
+    unstable: dict[int, dict[str, list]] = field(default_factory=dict)
 
 
 def golden_path(source: str) -> Path:
     return paths.GOLDEN_DIR / f"{source.replace(':', '-')}.json"
 
 
+def cost_path(source: str) -> Path:
+    return paths.GOLDEN_DIR / f"{source.replace(':', '-')}.cost.json"
+
+
+def calibration_path() -> Path:
+    return paths.GOLDEN_DIR / CALIBRATION_FILE
+
+
+def signature(source: Source, options: RunOptions) -> dict:
+    """What determines a source's answers: its own signature (pin, search, cap, code) and its budget (H32)."""
+    return {**source.signature(options), "budget": source.budget(options)}
+
+
+def round_up(seconds: float | None) -> float | None:
+    """A cost in seconds, rounded up to two significant figures (0.01234 -> 0.013, 123.4 -> 130.0)."""
+    if seconds is None:
+        return None
+    if not math.isfinite(seconds) or seconds <= 0:
+        return 0.0
+    value = Decimal(repr(float(seconds)))
+    return float(value.quantize(Decimal(1).scaleb(value.adjusted() - 1), rounding=ROUND_CEILING))
+
+
 def _cap(signature: dict) -> int | None:
     return signature.get("cap")
 
 
-def dump(source: Source, options: RunOptions, records: list[Record], results: Results) -> str:
+def row_value(name: str, value: object) -> object:
+    """A value as a golden row holds it: the side as "w" or "b", everything else as it is."""
+    return value[0] if name == "side" and isinstance(value, str) else value
+
+
+def _from_row_value(name: str, value: object) -> object:
+    return {"w": "white", "b": "black"}.get(value, value) if name == "side" else value
+
+
+def _by_index(mapping: dict[int, dict[str, object]]) -> str:
+    """{position: {field: x}} as one line of JSON, positions in order and fields in row order."""
+    ordered = {str(index): {name: mapping[index][name] for name in ROW_FIELDS if name in mapping[index]}
+               for index in sorted(mapping)}
+    return json.dumps(ordered)
+
+
+# --- writing --------------------------------------------------------------------
+
+
+def dump(source: str, signature: dict, records: list[Record], recorded: dict[str, Recorded], *, recordings: int) -> str:
     """Deterministic text, one position per line, so a changed verdict is a one-line diff."""
-    lines = ["{", f'  "schema": {SCHEMA},', f'  "source": {json.dumps(source.name)},',
-             f'  "signature": {json.dumps(source.signature(options), sort_keys=True)},', '  "records": {']
+    lines = ["{", f'  "schema": {SCHEMA},', f'  "source": {json.dumps(source)},',
+             f'  "signature": {json.dumps(signature, sort_keys=True)},', f'  "recordings": {recordings},',
+             '  "records": {']
     ordered = sorted(records, key=lambda record: record.id)
     for number, record in enumerate(ordered):
-        data = observations.to_json(results[(source.name, record.id)])
+        item = recorded[record.id]
+        data = observations.to_json(item.observation)
         lines.append(f"    {json.dumps(record.id)}: {{")
         lines.append(f'      "sha256": {json.dumps(record.sha256)},')
         for key in _RECORDED:
             lines.append(f'      "{key}": {json.dumps(data[key])},')
+        if item.horizon is not None:
+            lines.append(f'      "horizon": {json.dumps({"position": item.horizon.position, "budget": item.horizon.budget})},')
+        if item.unknown:
+            lines.append(f'      "unknown": {_by_index(item.unknown)},')
+        if item.unstable:
+            lines.append(f'      "unstable": {_by_index(item.unstable)},')
         if data["positions"]:
             lines.append('      "positions": [')
             rows = [f"        {json.dumps(row)}" for row in data["positions"]]
@@ -78,71 +225,239 @@ def dump(source: Source, options: RunOptions, records: list[Record], results: Re
     return "\n".join(lines) + "\n"
 
 
-def load(source: str) -> Golden:
-    path = golden_path(source)
+def dump_costs(source: str, signature: dict, records: list[Record], recorded: dict[str, Recorded], *,
+               recordings: int) -> str:
+    """One record per line: its cost, when its outcome arrived, and when each position's answers did."""
+    lines = ["{", f'  "schema": {COST_SCHEMA},', f'  "source": {json.dumps(source)},',
+             f'  "signature": {json.dumps(signature, sort_keys=True)},', f'  "recordings": {recordings},',
+             '  "unit": "seconds from the start of the run until it had arrived, rounded up to 2 significant figures; '
+             'the most over the recordings",',
+             '  "records": {']
+    ordered = sorted(records, key=lambda record: record.id)
+    for number, record in enumerate(ordered):
+        cost = recorded[record.id].cost
+        entry: dict[str, object] = {"cost": cost.cost, "end": cost.end, "positions": list(cost.positions)}
+        if cost.mate:
+            entry["mate"] = list(cost.mate)
+        lines.append(f"    {json.dumps(record.id)}: {json.dumps(entry)}" + ("," if number + 1 < len(ordered) else ""))
+    lines += ["  }", "}"]
+    return "\n".join(lines) + "\n"
+
+
+def dump_calibration(calibration: Calibration) -> str:
+    body = {"schema": CALIBRATION_SCHEMA, "source": calibration.source, "record": calibration.record,
+            "positions": calibration.positions, "signature": calibration.signature, "seconds": calibration.seconds,
+            "platform": calibration.platform, "cpu_count": calibration.cpu_count}
+    return json.dumps(body, indent=1, sort_keys=True) + "\n"
+
+
+# --- reading --------------------------------------------------------------------
+
+
+def peek_schema(path: Path) -> object:
+    """The schema a file says it is in, without trusting anything else in it; None when it cannot be read."""
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data.get("schema") if isinstance(data, dict) else None
+
+
+def _read(path: Path, manifest: dict[str, str] | None, what: str) -> tuple[dict, str]:
+    try:
+        raw = integrity.verified_bytes(path, manifest)
     except FileNotFoundError:
-        raise HarnessError(
-            f"no golden observations for '{source}' ({path.name}); "
-            f"run: python {paths.HARNESS_REL}/harness.py golden --write") from None
-    except json.JSONDecodeError as error:
+        raise HarnessError(f"no {what} ({path.name}); record it: {RERECORD}") from None
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise HarnessError(f"{path.name}: invalid JSON: {error}") from None
-    if not isinstance(data, dict) or data.get("source") != source:
+    if not isinstance(data, dict):
+        raise HarnessError(f"{path.name}: not a JSON object")
+    return data, sha256_text(raw)
+
+
+def _int_keys(value: object, where: str) -> dict[int, dict]:
+    if not isinstance(value, dict):
+        raise ValueError(f"{where} is not an object")
+    found = {}
+    for key, fields in value.items():
+        if not (isinstance(key, str) and key.isdigit()) or not isinstance(fields, dict) or not fields:
+            raise ValueError(f"{where}: {key!r} is not a position with fields")
+        if any(name not in ROW_FIELDS for name in fields):
+            raise ValueError(f"{where} at position {key}: a field that is not a column ({', '.join(fields)})")
+        found[int(key)] = fields
+    return found
+
+
+def load(source: str, manifest: dict[str, str] | None = None) -> Golden:
+    """A golden file, read only once its bytes are shown to be the ones MANIFEST commits to (H33)."""
+    path = golden_path(source)
+    manifest = integrity.read_manifest() if manifest is None else manifest
+    schema = peek_schema(path)
+    if schema is not None and schema != SCHEMA:
+        raise StaleSchema(f"{path.name}: golden schema {schema}; this harness reads schema {SCHEMA} ({_SCHEMA_NOTE}) - "
+                          f"re-record: {RERECORD}")
+    data, digest = _read(path, manifest, f"golden observations for '{source}'")
+    if data.get("source") != source:
         raise HarnessError(f"{path.name}: not a golden file for '{source}'")
     if data.get("schema") != SCHEMA:
-        raise StaleSchema(
-            f"{path.name}: written in golden schema {data.get('schema')}, and this harness reads schema {SCHEMA} "
-            "(a position also records what the oracle set up there) - re-record it: "
-            f"python {paths.HARNESS_REL}/harness.py golden --write")
+        raise StaleSchema(f"{path.name}: written in golden schema {data.get('schema')}, not {SCHEMA}")
     signature = data.get("signature", {})
-    golden = Golden(source=source, signature=signature, sha256={}, observations={})
+    recordings = data.get("recordings", 1)
+    golden = Golden(source=source, signature=signature, sha256={}, observations={},
+                    recordings=recordings if isinstance(recordings, int) and not isinstance(recordings, bool) else 0,
+                    digest=digest)
     for record_id, entry in data.get("records", {}).items():
         try:
             golden.sha256[record_id] = entry.get("sha256", "")
             golden.observations[record_id] = observations.from_json(source, record_id, _cap(signature), entry)
+            if "horizon" in entry:
+                horizon = entry["horizon"]
+                position, budget = horizon["position"], horizon["budget"]
+                if not (position is None or (isinstance(position, int) and not isinstance(position, bool))) \
+                        or not isinstance(budget, str):
+                    raise ValueError("horizon needs a position (a whole number, or null) and a budget")
+                golden.horizon[record_id] = Horizon(position, budget)
+            if "unknown" in entry:
+                golden.unknown[record_id] = _int_keys(entry["unknown"], "unknown")
+            if "unstable" in entry:
+                golden.unstable[record_id] = {
+                    index: {name: [_from_row_value(name, value) for value in values] for name, values in fields.items()}
+                    for index, fields in _int_keys(entry["unstable"], "unstable").items()}
         except (AttributeError, KeyError, IndexError, TypeError, ValueError) as error:
             raise HarnessError(f"{path.name}: the entry for {record_id} is malformed ({error!r})") from None
     return golden
 
 
-def lookup():
-    """(source, record id) -> the golden observation, or None. Files are read on first use."""
-    loaded: dict[str, Golden | None] = {}
+def load_costs(source: str, manifest: dict[str, str] | None = None) -> Costs:
+    path = cost_path(source)
+    manifest = integrity.read_manifest() if manifest is None else manifest
+    data, digest = _read(path, manifest, f"cost file for '{source}'")
+    if data.get("source") != source:
+        raise HarnessError(f"{path.name}: not a cost file for '{source}'")
+    if data.get("schema") != COST_SCHEMA:
+        raise StaleSchema(f"{path.name}: written in cost schema {data.get('schema')}, and this harness reads "
+                          f"{COST_SCHEMA} - re-record it: {RERECORD}")
 
-    def recorded(source: str, record_id: str) -> Observation | None:
-        if source not in loaded:
-            try:
-                loaded[source] = load(source)
-            except HarnessError:
-                loaded[source] = None  # reported by verify_static
-        golden = loaded[source]
-        return None if golden is None else golden.observations.get(record_id)
+    def seconds(value: object) -> float | None:
+        if value is None:
+            return None
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
+            raise ValueError(f"{value!r} is not a number of seconds")
+        return float(value)
 
-    return recorded
+    records: dict[str, RecordCost] = {}
+    for record_id, entry in data.get("records", {}).items():
+        try:
+            records[record_id] = RecordCost(positions=tuple(seconds(value) for value in entry["positions"]),
+                                            end=seconds(entry["end"]),
+                                            mate=tuple(seconds(value) for value in entry.get("mate", ())))
+        except (AttributeError, KeyError, TypeError, ValueError) as error:
+            raise HarnessError(f"{path.name}: the entry for {record_id} is malformed ({error!r})") from None
+    recordings = data.get("recordings", 1)
+    return Costs(source=source, signature=data.get("signature", {}), records=records, digest=digest,
+                 recordings=recordings if isinstance(recordings, int) and not isinstance(recordings, bool) else 0)
 
 
-def verify_static(sources: list[Source], options: RunOptions, records: list[Record]) -> list[Finding]:
-    """Do the committed golden files still describe the current pins, drivers and corpus?"""
-    findings: list[Finding] = []
+def load_calibration(manifest: dict[str, str] | None = None) -> Calibration:
+    path = calibration_path()
+    manifest = integrity.read_manifest() if manifest is None else manifest
+    data, digest = _read(path, manifest, "calibration reference")
+    if data.get("schema") != CALIBRATION_SCHEMA:
+        raise StaleSchema(f"{path.name}: written in schema {data.get('schema')}, not {CALIBRATION_SCHEMA}")
+    try:
+        seconds = data["seconds"]
+        if isinstance(seconds, bool) or not isinstance(seconds, (int, float)) or seconds <= 0:
+            raise ValueError("seconds must be a positive number")
+        return Calibration(source=str(data["source"]), record=str(data["record"]), positions=int(data["positions"]),
+                           signature=dict(data["signature"]), seconds=float(seconds), platform=str(data["platform"]),
+                           cpu_count=data.get("cpu_count"), digest=digest)
+    except (KeyError, TypeError, ValueError) as error:
+        raise HarnessError(f"{path.name}: malformed ({error!r})") from None
+
+
+def read_previous(source: str) -> dict[str, Observation] | None:
+    """What the golden file on disk records ``source`` saying, read leniently - or None where it cannot be read.
+
+    Any schema whose rows this harness reads, and no MANIFEST check: this is
+    only for `golden --write` to say what a new recording no longer holds that
+    the file it replaces did (stability.losses), never for a comparison.
+    """
+    try:
+        data = json.loads(golden_path(source).read_text(encoding="utf-8"))
+        cap = _cap(data.get("signature", {}))
+        return {record_id: observations.from_json(source, record_id, cap, entry)
+                for record_id, entry in data["records"].items()}
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, IndexError):
+        return None
+
+
+# --- static checks --------------------------------------------------------------
+
+
+def _problems(golden: Golden, record_id: str) -> list[str]:
+    """What is wrong with one record's classification: a horizon, unknown or unstable entry that does not fit its row."""
+    found = []
+    observation = golden.observations[record_id]
+    horizon = golden.horizon.get(record_id)
+    last = len(observation.positions) - 1 if observation.positions else None
+    if (observation.status == "timeout") != (horizon is not None):
+        found.append("a run cut at its deadline (status timeout) and a horizon go together")
+    elif horizon is not None:
+        if horizon.position != last:
+            found.append(f"the horizon is at position {horizon.position}, but the run's last position is {last}")
+        if not horizon.budget.strip():
+            found.append("the horizon does not say which budget cut the run")
+    for kind, table in (("unknown", golden.unknown.get(record_id, {})), ("unstable", golden.unstable.get(record_id, {}))):
+        for index, fields in table.items():
+            if index >= len(observation.positions):
+                found.append(f"an {kind} entry for position {index}, which the run did not reach")
+                continue
+            for name, detail in fields.items():
+                if getattr(observation.positions[index], name) is not None:
+                    found.append(f"position {index}: {name} is listed as {kind} and has a value")
+                if kind == "unknown" and (not isinstance(detail, str) or not detail.strip()):
+                    found.append(f"position {index}: {name} is unknown without the limit that caused it")
+                if kind == "unknown" and name not in ANSWERS:
+                    found.append(f"position {index}: {name} is not an answer a limit can leave unknown")
+                if kind == "unstable" and (not isinstance(detail, list) or len(detail) < 2):
+                    found.append(f"position {index}: {name} is unstable without the values that differed")
+    return found
+
+
+def verify_static(sources: list[Source], options_for, records: list[Record], snapshot) -> list[Finding]:
+    """Do the committed golden and cost files still describe the current pins, drivers, budgets and corpus?
+
+    ``options_for(source)`` gives the options each source is recorded under;
+    ``snapshot`` holds the files as they were read and verified (snapshot.py).
+    """
+    findings: list[Finding] = list(snapshot.manifest_problems)
     expected = {record.id: record.sha256 for record in records}
     for source in sources:
-        try:
-            golden = load(source.name)
-        except StaleSchema as error:
-            findings.append(Finding("golden-stale", str(error)))
+        problem = snapshot.problems.get(source.name)
+        if problem:
+            findings += problem
             continue
-        except HarnessError as error:
-            findings.append(Finding("golden-missing", str(error)))
-            continue
+        golden, costs = snapshot.golden[source.name], snapshot.costs[source.name]
         name = golden_path(source.name).name
-        current = source.signature(options)
+        current = signature(source, options_for(source))
         if golden.signature != current:
-            changed = sorted(key for key in golden.signature.keys() | current.keys() if golden.signature.get(key) != current.get(key))
+            changed = sorted(key for key in golden.signature.keys() | current.keys()
+                             if golden.signature.get(key) != current.get(key))
             findings.append(Finding(
                 "golden-stale",
-                f"{name}: recorded under a different {', '.join(changed)} - "
-                "regenerate with `golden --write` and review the diff"))
+                f"{name}: recorded under a different {', '.join(changed)} - re-record ({RERECORD}) and review the diff"))
+        if golden.recordings < MIN_RECORDINGS:
+            findings.append(Finding(
+                "golden-stale",
+                f"{name}: recorded {golden.recordings} time(s); the gate needs {MIN_RECORDINGS} independent recordings of "
+                "every source, so that a value that differs between them is marked unstable instead of being required "
+                f"(H32) - re-record: {RERECORD}"))
+        if costs.signature != golden.signature or costs.recordings != golden.recordings:
+            findings.append(Finding("golden-stale", f"{cost_path(source.name).name}: its signature or its number of "
+                                                    "recordings is not its golden file's - the costs were measured for "
+                                                    "other answers"))
         for record_id in sorted(expected.keys() - golden.sha256.keys()):
             findings.append(Finding("golden-incomplete", f"{name}: no entry for corpus record {record_id}"))
         for record_id in sorted(golden.sha256.keys() - expected.keys()):
@@ -150,54 +465,32 @@ def verify_static(sources: list[Source], options: RunOptions, records: list[Reco
         for record_id in sorted(expected.keys() & golden.sha256.keys()):
             if golden.sha256[record_id] != expected[record_id]:
                 findings.append(Finding("golden-stale", f"{name}: {record_id} was recorded for different record content"))
-            for problem in observations.validate(golden.observations[record_id]):
-                findings.append(Finding("golden-invalid", f"{name}: {record_id}: {problem}"))
+            observation = golden.observations[record_id]
+            for problem_text in [*observations.validate(observation), *_problems(golden, record_id)]:
+                findings.append(Finding("golden-invalid", f"{name}: {record_id}: {problem_text}"))
+            cost = costs.records.get(record_id)
+            if cost is None:
+                findings.append(Finding("golden-incomplete", f"{cost_path(source.name).name}: no entry for {record_id}"))
+            elif len(cost.positions) != len(observation.positions) or None in cost.positions \
+                    or (cost.end is None) != (observation.status == "timeout") \
+                    or (cost.mate and len(cost.mate) != len(observation.positions)):
+                findings.append(Finding("golden-invalid", f"{cost_path(source.name).name}: {record_id}: the costs do "
+                                                          "not fit the recorded positions and outcome"))
+        for record_id in sorted(costs.records.keys() - golden.sha256.keys()):
+            findings.append(Finding("golden-orphan", f"{cost_path(source.name).name}: entry for {record_id}, which has "
+                                                     "no golden entry"))
     return findings
 
 
-def check_run(source: str, records: list[Record], results: Results, min_coverage: float) -> tuple[list[Finding], tuple[int, int]]:
-    """Does a fresh run say what the golden file says?"""
-    findings: list[Finding] = []
-    golden = load(source)
-    reproduced = total = 0
-    for record in records:
-        recorded = golden.observations.get(record.id)
-        fresh = results.get((source, record.id))
-        if recorded is None or fresh is None:
-            continue
-        recorded.source = f"{source}@golden"
-        for disagreement in observations.compare(recorded, fresh):
-            findings.append(Finding("golden-mismatch", disagreement.describe()))
-        changed = observations.status_changed(recorded, fresh)
-        if changed:
-            findings.append(Finding("golden-status", f"{source} on {record.id}: {changed}"))
-        # A checkmate or stalemate verdict is rare and it is what the gate is
-        # for: one that the fresh run reached and could not repeat is a finding,
-        # not a point of coverage lost.
-        for position in recorded.positions:
-            if position.terminal in ("checkmate", "stalemate") and position.index < len(fresh.positions) \
-                    and fresh.positions[position.index].terminal is None:
-                findings.append(Finding(
-                    "golden-lost-verdict",
-                    f"{source} on {record.id}: position {position.index} was recorded as {position.terminal}; "
-                    "the fresh run reached it and gave no verdict"))
-        got, want = observations.coverage(recorded, fresh)
-        reproduced, total = reproduced + got, total + want
-    if total and reproduced / total < min_coverage:
-        findings.append(Finding(
-            "golden-coverage",
-            f"{source}: reproduced only {reproduced}/{total} recorded values "
-            f"({reproduced / total:.1%} < {min_coverage:.0%}) - too many time-outs or failures to call this run a check"))
-    return findings, (reproduced, total)
+# --- what a recording says, for DISAGREEMENTS.md ---------------------------------
 
 
 def _pairs() -> list[tuple[str, str]]:
     return [(first, second) for index, first in enumerate(ORACLE_SOURCES) for second in ORACLE_SOURCES[index + 1:]]
 
 
-def disagreements(records: list[Record]) -> list[Disagreement]:
+def disagreements(records: list[Record], loaded: dict[str, Golden]) -> list[Disagreement]:
     """Every contradiction between two oracles' golden answers, in a stable order."""
-    loaded = {source: load(source) for source in ORACLE_SOURCES}
     found: list[Disagreement] = []
     for record in sorted(records, key=lambda item: item.id):
         for first, second in _pairs():
@@ -344,13 +637,19 @@ def _parse_section(records: list[Record], loaded: dict[str, Golden], found: list
     return lines
 
 
-def render_disagreements(records: list[Record]) -> str:
-    loaded = {source: load(source) for source in ORACLE_SOURCES}
-    found = disagreements(records)
+def render_disagreements(records: list[Record], loaded: dict[str, Golden], required: list[str] | None = None) -> str:
+    """DISAGREEMENTS.md, from the golden files of every oracle source (as read and verified).
+
+    ``required`` is the section that says what each tier requires of each
+    source (stability.required_table), rendered from the cost files and
+    gate.toml as well.
+    """
+    found = disagreements(records, loaded)
     lines = [
         "# Oracle disagreements",
         "",
-        "<!-- Generated by `python oracles/harness.py golden --write` from oracles/golden/*.json. Do not edit. -->",
+        "<!-- Generated by `python oracles/harness.py golden --write` (or `golden --render`) from oracles/golden/ "
+        "and oracles/gate.toml. Do not edit. -->",
         "",
         "Where the pinned oracles contradict each other on the pinned corpus. At each of",
         "these points at least one oracle is wrong, or reads the rules differently; **none of",
@@ -370,21 +669,32 @@ def render_disagreements(records: list[Record]) -> str:
         "",
         "\"Known values\" counts answers; \"described\" counts the positions at which the oracle",
         "said what it had set up, and \"with markers\" those at which it also said which pieces",
-        "had not moved.",
+        "had not moved. \"Timeout\" counts the records whose recording was cut at its deadline",
+        "(from the position it was searching on, everything is unknown at that budget);",
+        "\"unknown at a limit\" the answers a limit left out inside the positions it answered",
+        "(a mate search's time or memory), and \"unstable\" the values that differed between",
+        "independent recordings - neither is compared with anything.",
         "",
-        "| Source | ok | rejected | unsupported | error | timeout | positions | known values | described | with markers |",
-        "|---|---|---|---|---|---|---|---|---|---|",
+        "| Source | ok | rejected | unsupported | error | timeout | positions | known values | unknown at a limit "
+        "| unstable | described | with markers |",
+        "|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for source in ORACLE_SOURCES:
-        items = [loaded[source].observations[record.id] for record in records if record.id in loaded[source].observations]
+        golden = loaded[source]
+        present = [record for record in records if record.id in golden.observations]
+        items = [golden.observations[record.id] for record in present]
         counts = {status: sum(item.status == status for item in items) for status in observations.STATUSES}
         described = sum(position.placement is not None for item in items for position in item.positions)
         marked = sum(position.fingerprint is not None for item in items for position in item.positions)
+        unknown = sum(len(fields) for record in present for fields in golden.unknown.get(record.id, {}).values())
+        unstable = sum(len(fields) for record in present for fields in golden.unstable.get(record.id, {}).values())
         lines.append(
             f"| `{source}` | {counts['ok']} | {counts['rejected']} | {counts['unsupported']} | {counts['error']} "
             f"| {counts['timeout']} | {sum(len(item.positions) for item in items)} | {sum(item.known() for item in items)} "
-            f"| {described} | {marked} |"
+            f"| {unknown} | {unstable} | {described} | {marked} |"
         )
+    if required is not None:
+        lines += ["", *required]
 
     lines += [
         "",

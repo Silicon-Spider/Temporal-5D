@@ -8,6 +8,11 @@ Tiers (design spec 11.0):
            in nightly, and it fails unless an engine was compared and at least
            one ruleset came through
 
+Each run reads what it compares against once, verified (snapshot.py, H33); then
+requires 100% of each tier's required set of recorded answers (stability.py,
+H32); fails on any engine answer that reproduces a recorded oracle error
+(divergences.telltales, H34); and fails if any harness file changed while it ran.
+
 No proof may enter the solved store until the generator has passed this gate
 (decision H23). While there is no engine to compare, the oracle layer can be
 green, but the differential gate has not run and the result says so.
@@ -15,14 +20,33 @@ green, but the differential gate has not run and the result says so.
 
 from __future__ import annotations
 
+import dataclasses
 import json
+import os
+import platform
 import re
 import time
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-from . import boundary, config, corpus, divergences, fidelity, golden, lockfile, observations, paths, provenance, runner
+from . import (
+    boundary,
+    config,
+    corpus,
+    divergences,
+    fidelity,
+    golden,
+    integrity,
+    lockfile,
+    observations,
+    paths,
+    provenance,
+    rulebook,
+    runner,
+    snapshot,
+    stability,
+)
 from .adapters import (
     ORACLE_SOURCES,
     PARSE_ONLY_SOURCES,
@@ -33,11 +57,13 @@ from .adapters import (
     make_source,
     oracle_of,
 )
+from .adapters.base import number
 from .adapters.ftxi import FtxiSource
 from .corpus import CUSTOM_POSITIONS, Record
 from .lockfile import Lock
-from .observations import HARD_REJECTIONS, OBSERVABLES, Observation
-from .util import Finding, HarnessError
+from .observations import HARD_REJECTIONS, OBSERVABLES, REPLAY_KINDS, UNREADABLE, Observation
+from .snapshot import Snapshot
+from .util import Finding, HarnessError, platform_key, sha256_text
 
 Log = Callable[[str], None]
 Section = tuple[str, list[Finding]]
@@ -45,11 +71,8 @@ Section = tuple[str, list[Finding]]
 # A report that followed the record to its end, or to the action it refuses.
 _COMPLETE = ("ok", "rejected")
 _LABELS = {"in_check": "check", "legal_actions": "count", "terminal": "mate"}
-# The share of its recorded answers every oracle search must reproduce in a run
-# that can enable the proof channel. Deliberately not in gate.toml: a tier can
-# list a source and still starve it of time, or set its floor to nothing, and its
-# list of sources would say it ran.
-PROOF_CHANNEL_COVERAGE = 0.9
+# How long the calibration probe may take, on any machine.
+PROBE_TIMEOUT_S = 900.0
 
 
 @dataclass(frozen=True)
@@ -76,8 +99,67 @@ class Gated:
                 f"{self.oracles} oracle{'s' if self.oracles != 1 else ''}")
 
 
-def _share(stats: tuple[int, int] | None) -> float:
-    return stats[0] / stats[1] if stats and stats[1] else 0.0
+@dataclass(frozen=True)
+class ParseAgreement:
+    """How far an engine in parse mode was compared, and how far it agreed."""
+
+    records: int = 0  # records the tier ran
+    read: int = 0  # of them, the records the engine replayed to their end, or to an action it refused
+    positions: int = 0  # positions the engine reported over those
+    # Positions at which some oracle said what it set up, up to and including where it parted from the engine:
+    # where it parted, it described a position other than the engine's.
+    described: int = 0
+    boards: int = 0  # positions at which some oracle held the engine's boards and pieces
+    states: int = 0  # positions at which some oracle held its exact state, unmoved markers included
+    sides: int = 0  # positions at which some oracle gave the side to move
+    sides_agreed: int = 0  # of them, positions at which every oracle that gave one gave the engine's
+    replays: int = 0  # implementation reports whose replay of a record was compared with the engine's
+    replays_agreed: int = 0  # of them, those that read, accepted and refused the same actions
+    # Of them, those that differed only where the engine played an action the oracle held illegal: in parse mode
+    # that is no verdict (the engine has no check detection), so it is neither a disagreement nor an agreement.
+    replays_unjudged: int = 0
+    setups_refused: int = 0  # records whose set-up the engine refused as unreadable (action 0)
+
+    def describe(self) -> str:
+        refused = f", and refused the set-up of {self.setups_refused}" if self.setups_refused else ""
+        unjudged = (f", and with {self.replays_unjudged} more but for actions it played that the oracle held illegal "
+                    "(no verdict in parse mode)") if self.replays_unjudged else ""
+        return (f"the engine read {self.read} of {self.records} records ({self.positions} positions){refused}; an "
+                f"oracle said what it set up at {self.described} of those positions, held the engine's boards and "
+                f"pieces at {self.boards} and its exact state (markers included) at {self.states}; the side to move "
+                f"was compared at {self.sides} and agreed at {self.sides_agreed}; the engine's replay - the actions it "
+                f"read, accepted and refused - was compared with {self.replays} implementation reports and agreed "
+                f"with {self.replays_agreed}{unjudged}; check, counts and mate were not compared, and no ruleset is "
+                "gated")
+
+
+@dataclass(frozen=True)
+class Probe:
+    """The calibration probe: a fixed workload, timed here and on the machine the golden files were recorded on."""
+
+    source: str
+    record: str
+    positions: int
+    seconds: float | None = None  # on this machine
+    reference_s: float | None = None  # on the recording machine
+    note: str = ""
+
+    @property
+    def factor(self) -> float | None:
+        """How many times slower this machine ran the probe than the recording machine did."""
+        if self.seconds is None or not self.reference_s:
+            return None
+        return self.seconds / self.reference_s
+
+    def describe(self) -> str:
+        what = f"{self.source} over the first {self.positions} positions of {self.record}"
+        if self.seconds is None:
+            return f"{what}: not measured ({self.note})"
+        here = f"{what}: {self.seconds:.2f} s on this machine"
+        if self.factor is None:
+            return f"{here}; no reference from the recording machine ({self.note or 'none recorded'})"
+        return (f"{here}, {self.reference_s:.2f} s on the recording machine - this machine took "
+                f"{self.factor:.2f}x the recording machine's time")
 
 
 @dataclass
@@ -85,14 +167,18 @@ class GateResult:
     tier: str
     sections: list[Section] = field(default_factory=list)  # the oracle layer
     engine_sections: list[Section] = field(default_factory=list)  # the engine against it
-    coverage: dict[str, tuple[int, int]] = field(default_factory=dict)
+    tallies: dict[str, stability.Tally] = field(default_factory=dict)  # source -> its runs against their required sets
     engine: str = "not configured"  # not configured | passed | failed
+    engine_mode: str = "full"  # full | parse
     gated: dict[str, Gated] = field(default_factory=dict)
     ungated: dict[str, str] = field(default_factory=dict)  # ruleset -> why it is not gated
+    parse: ParseAgreement | None = None  # an engine compared in parse mode
     partial: bool = False
     require_engine: bool = False
     # The tier runs every oracle search over the whole corpus. A tier's name promises nothing.
     full_strength: bool = False
+    margin: float = 1.0
+    calibration: Probe | None = None
 
     def findings(self) -> list[Finding]:
         return [finding for _, items in (*self.sections, *self.engine_sections) for finding in items]
@@ -111,6 +197,10 @@ class GateResult:
         if not self.oracle_layer_ok or self.engine == "failed":
             return False
         if self.engine == "passed":
+            if self.engine_mode == "parse":
+                # An engine compared in parse mode gates nothing; a tier that
+                # requires an engine requires one compared on the rules.
+                return not self.require_engine
             # An engine that contradicted nothing and came through no ruleset
             # was not compared with anything; a tier that requires an engine
             # requires it to come through a variant a proof could be about.
@@ -121,15 +211,14 @@ class GateResult:
     def proof_channel(self) -> str:
         if self.engine == "not configured":
             return "DISABLED - no engine has been compared against the oracles (H23)"
+        if self.engine_mode == "parse":
+            return ("DISABLED - parse mode: the engine was compared on what it set up and how it replayed each record, "
+                    "never on check, counts or mate (H23)")
         if not self.ok:
             return "DISABLED - the gate failed"
         if self.partial or not (self.require_engine and self.full_strength):
             return ("DISABLED - only a complete run of a tier that requires an engine and runs every oracle "
                     "over the whole corpus can enable it")
-        starved = [name for name in ORACLE_SOURCES if _share(self.coverage.get(name)) < PROOF_CHANNEL_COVERAGE]
-        if starved:
-            return (f"DISABLED - {', '.join(starved)} reproduced less than {PROOF_CHANNEL_COVERAGE:.0%} of its recorded "
-                    "answers in this run, so it was listed but not heard")
         if not self.variants:
             return "DISABLED - the engine came through no named variant"
         return "may be enabled for: " + "; ".join(_describe_gated(self.variants))
@@ -139,13 +228,20 @@ def _describe_gated(gated: dict[str, Gated]) -> list[str]:
     return [f"{ruleset} ({item.describe()})" for ruleset, item in sorted(gated.items())]
 
 
-def _options(cfg: config.GateConfig, timeout_s: float, mate_budget_ms: int) -> RunOptions:
-    return RunOptions(cap=cfg.cap, timeout_s=timeout_s, mate_budget_ms=mate_budget_ms)
+def _options(cfg: config.GateConfig, timeout_s: float, mate_budget_ms: int,
+             stop_after: tuple[int, str] | None = None) -> RunOptions:
+    return RunOptions(cap=cfg.cap, timeout_s=timeout_s, mate_budget_ms=mate_budget_ms, stop_after=stop_after)
+
+
+def recording_options(cfg: config.GateConfig, source: Source) -> RunOptions:
+    """The options a source's golden file is recorded under: the recording tier's budgets."""
+    return _options(cfg, cfg.recording.timeout_for(source.name), cfg.recording.mate_budget_ms)
 
 
 def _progress(log: Log) -> Callable[[Observation], None]:
     def report(observation: Observation) -> None:
-        log(f"  {observation.source:<12} {observation.record:<40} {observation.status:<11} "
+        status = "stopped" if observation.reason == "stopped" else observation.status
+        log(f"  {observation.source:<12} {observation.record:<40} {status:<11} "
             f"{len(observation.positions):>4} positions  {observation.elapsed_s:6.1f}s")
 
     return report
@@ -176,31 +272,77 @@ def engine_command_findings(command: tuple[str, ...] | list[str]) -> list[Findin
     return findings
 
 
-def static_checks(lock: Lock, cfg: config.GateConfig, records: list[Record], *, include_untracked: bool = True) -> list[Section]:
-    """Everything that can be checked without building or running an oracle."""
+def _calibration_findings(cfg: config.GateConfig, lock: Lock, records: list[Record], frozen: Snapshot) -> list[Finding]:
+    """Is the calibration reference the one for the probe gate.toml names, measured with the current code?"""
+    spec = cfg.calibration
+    if spec.record not in {record.id for record in records}:
+        return [Finding("calibration", f"gate.toml [calibration] record '{spec.record}' is not in the corpus")]
+    if frozen.calibration is None:
+        return [Finding("golden-missing", frozen.calibration_problem or f"no {golden.CALIBRATION_FILE}")]
+    recorded = frozen.calibration
+    current = make_source(spec.source, lock).signature(RunOptions(cap=cfg.cap))
+    if (recorded.source, recorded.record, recorded.positions) != (spec.source, spec.record, spec.positions) \
+            or recorded.signature != current:
+        return [Finding("golden-stale", f"{golden.CALIBRATION_FILE}: measured with another probe, or with other code, "
+                                        f"than gate.toml [calibration] names - re-record: {golden.RERECORD}")]
+    return []
+
+
+def _rendered(cfg: config.GateConfig, records: list[Record], frozen: Snapshot) -> str:
+    """DISAGREEMENTS.md as the snapshot's golden and cost files and gate.toml make it."""
+    return golden.render_disagreements(records, frozen.golden,
+                                       stability.required_table(cfg, records, frozen.golden, frozen.costs))
+
+
+def static_checks(lock: Lock, cfg: config.GateConfig, records: list[Record], frozen: Snapshot, *,
+                  include_untracked: bool = True) -> list[Section]:
+    """Everything that can be checked without building or running an oracle, against one verified snapshot."""
     sections: list[Section] = [
         ("pins", lockfile.verify(lock)),
         ("corpus", corpus.verify(records, lock) + corpus.verify_local(records)
          + corpus.verify_excluded(corpus.load_excluded(), lock)),
-        ("known divergences", divergences.verify(divergences.load(), lock, records, golden.lookup())),
+        ("known divergences", divergences.verify(frozen.divergences, lock, records, frozen.recorded)),
+        # The rulebook the known divergences cite, still the text they were adjudicated against (H38).
+        ("rulebook", rulebook.verify(cfg.rulebook)),
         ("boundary", boundary.check(lock, cfg.boundary, include_untracked=include_untracked)
          + engine_command_findings(cfg.engine_command)),
         ("provenance", provenance.check(lock, records)),
     ]
     sources = [make_source(name, lock) for name in ORACLE_SOURCES]
-    golden_findings = golden.verify_static(sources, RunOptions(cap=cfg.cap), records)
+    golden_findings = golden.verify_static(sources, lambda source: recording_options(cfg, source), records, frozen)
+    golden_findings += _calibration_findings(cfg, lock, records, frozen)
     if not golden_findings:
-        rendered = golden.render_disagreements(records)
+        # Rendered from the golden files, their costs and gate.toml's budgets: what a tier requires is a table in
+        # it, so a required set cannot shrink without a reviewed line of it changing (H32, H33).
+        rendered = _rendered(cfg, records, frozen)
         on_disk = ""
         if paths.DISAGREEMENTS_FILE.exists():
             on_disk = paths.DISAGREEMENTS_FILE.read_text(encoding="utf-8").replace("\r\n", "\n")
         if on_disk != rendered:
             golden_findings.append(Finding(
                 "disagreements-stale",
-                f"{paths.DISAGREEMENTS_FILE.name} does not match the golden files "
-                f"(run: python {paths.HARNESS_REL}/harness.py golden --render)"))
+                f"{paths.DISAGREEMENTS_FILE.name} does not match the golden files, their costs and gate.toml's budgets "
+                f"(run: python {paths.HARNESS_REL}/harness.py golden --render, and review the diff - a changed line in "
+                "'What each tier requires' is a change in what the gate checks)"))
     sections.append(("golden observations", golden_findings))
     return sections
+
+
+PROOF_SECTION = "required sets of a tier that can enable the proof channel"
+
+
+def proof_channel_readiness(cfg: config.GateConfig, records: list[Record], frozen: Snapshot) -> list[Finding] | None:
+    """The static non-vacuity check of every tier that can enable the proof channel (H32), or None when not computable.
+
+    It replaces a ratio of recorded answers fixed in the code (90%): such a tier
+    must require every terminal verdict each source recorded and the reviewed
+    share of its stable values ([stability] proof_share). Like that ratio, it
+    is about enabling the proof channel: `verify` prints it, and a run of such a
+    tier fails on it - a run of any other tier, which can enable nothing, does not.
+    """
+    if any(frozen.problems.get(name) for name in ORACLE_SOURCES) or frozen.manifest_problems:
+        return None  # the golden files say why
+    return stability.proof_channel_findings(cfg, records, frozen)
 
 
 def _vouches(answer: Observation, observed: Observation) -> bool:
@@ -210,13 +352,69 @@ def _vouches(answer: Observation, observed: Observation) -> bool:
     action as illegal stands behind it. One that merely stopped reading there
     does not, and neither does one that could not match the move's text: that
     may be notation it does not read, which confirms nothing about the move.
+    And where the engine could not read the action itself, it gave no verdict
+    for anything to stand behind.
     """
-    if not observed.positions:
+    if not observed.positions or _unread(observed):
         return False
     if observed.status == "rejected":
         return (answer.status == "rejected" and answer.reason in HARD_REJECTIONS
                 and answer.actions_accepted == observed.actions_accepted)
     return len(answer.positions) >= len(observed.positions)
+
+
+def _unread(observed: Observation) -> bool:
+    """Did the engine stop because it could not read the record - an action's text, or its set-up?"""
+    return observed.status == "rejected" and observed.reason == UNREADABLE
+
+
+def _telltale_findings(entries: list[divergences.Divergence], engine: EngineSource, records: list[Record],
+                       engine_results: runner.Results, recorded: divergences.Recorded, *, judges_actions: bool = True
+                       ) -> tuple[list[Finding], set[str], set[str]]:
+    """(findings, the ids of the entries reproduced, the records they are about) - H34."""
+    reports = {record.id: engine_results[(engine.name, record.id)] for record in records
+               if (engine.name, record.id) in engine_results}
+    findings, ids, about = [], set(), set()
+    for entry, value in divergences.telltales(entries, reports, recorded, judges_actions=judges_actions):
+        where = f"action {entry.index}" if entry.kind in REPLAY_KINDS else f"position {entry.index}"
+        said = f"{entry.kind} = {value}" if value == entry.oracle_value else \
+            f"{entry.kind}: the engine says {value}, {entry.oracle} recorded {entry.oracle_value}"
+        findings.append(Finding(
+            "telltale",
+            f"{entry.id}: the engine reproduces {entry.oracle}'s recorded error at {entry.record} {where} "
+            f"({said}): its logic may have been copied from that oracle"))
+        ids.add(entry.id)
+        about.add(entry.record)
+    return findings, ids, about
+
+
+def without_unstable(results: runner.Results, frozen: Snapshot | None) -> runner.Results:
+    """The fresh oracle reports with every value their recording marks unstable taken out (H32).
+
+    A value that differed between independent recordings is excluded from every
+    comparison: it can neither fail the engine nor stand behind it.
+    """
+    if frozen is None:
+        return results
+    masked: runner.Results = {}
+    for (name, record_id), report in results.items():
+        unstable = frozen.golden[name].unstable.get(record_id, {}) if name in frozen.golden else {}
+        masked[(name, record_id)] = report if not unstable else dataclasses.replace(report, positions=[
+            dataclasses.replace(position, **dict.fromkeys(unstable.get(position.index, {}), None))
+            for position in report.positions])
+    return masked
+
+
+def _fresh(results: runner.Results) -> divergences.Recorded:
+    """The fresh oracle reports, standing in for the recorded ones."""
+    return lambda source, record_id: results.get((source, record_id))
+
+
+def _stale_findings(stale: list[divergences.Divergence]) -> list[Finding]:
+    return [Finding("divergence-stale",
+                    f"{entry.id}: no longer occurs ({entry.oracle} on {entry.record}, {entry.kind} at {entry.index}) - "
+                    "remove it, or find out why")
+            for entry in stale]
 
 
 def engine_differential(
@@ -227,6 +425,7 @@ def engine_differential(
     engine_results: runner.Results,
     entries: list[divergences.Divergence],
     min_checked: float = 1.0,
+    recorded: divergences.Recorded | None = None,
 ) -> tuple[list[Finding], dict[str, Gated], dict[str, str]]:
     """Compare the engine with every oracle report; returns (findings, gated, ungated).
 
@@ -242,9 +441,17 @@ def engine_differential(
     engine's - excused or not - its answers are about a position with other
     rights to castle or to step twice, and do not count as checking the engine.
 
+    An engine answer equal to a known divergence's recorded oracle error, at
+    that place, is a telltale (H34): a finding ahead of everything else, and
+    never "stale". ``recorded`` gives each oracle's recorded answers (the
+    snapshot's golden files) - where the oracle did not run, they are all
+    there is; by default the fresh oracle reports stand in for them.
+
     A ruleset counts as gated only if, over all of its records:
 
-      * the engine replayed each one, and no unexplained divergence remains;
+      * the engine replayed each one - read it to its end, or to an action it
+        holds illegal (a refusal as unreadable is no verdict) - and no
+        unexplained divergence or telltale remains;
       * each one was followed as far as the engine went by at least one oracle;
       * for each observable - check, count, mate - some oracle gave an answer
         that settles it at no less than ``min_checked`` of the engine's positions.
@@ -329,14 +536,13 @@ def engine_differential(
         aligned[record.id] = sum(boards_held)
         matched[record.id] = sum(state_held)
 
-    unexplained, stale = divergences.apply(entries, found, looked)
+    told, told_ids, told_records = _telltale_findings(entries, engine, records, engine_results,
+                                                      recorded or _fresh(results))
+    findings = told + findings
+    unexplained, stale = divergences.apply(entries, found, looked, told_ids)
     for item in unexplained:
         findings.append(Finding("divergence", item.describe()))
-    for entry in stale:
-        findings.append(Finding(
-            "divergence-stale",
-            f"{entry.id}: no longer occurs ({entry.oracle} on {entry.record}, {entry.kind} at {entry.index}) - "
-            "remove it, or find out why"))
+    findings += _stale_findings(stale)
 
     diverged = {item.record for item in unexplained}
     rulesets: dict[str, list[Record]] = {}
@@ -346,14 +552,19 @@ def engine_differential(
     ungated: dict[str, str] = {}
     for ruleset, items in sorted(rulesets.items()):
         unplayed = [item.id for item in items if engine_results[(engine.name, item.id)].status not in _COMPLETE]
+        unread = [item.id for item in items if _unread(engine_results[(engine.name, item.id)])]
         alone = [item.id for item in items if not vouched[item.id]]
         positions = sum(reported[item.id] for item in items)
         checked = {name: sum(settled[item.id][name] for item in items) for name in OBSERVABLES}
         thin = [name for name in OBSERVABLES if checked[name] < min_checked * positions]
-        if any(item.id in diverged for item in items):
+        if any(item.id in told_records for item in items):
+            ungated[ruleset] = "the engine reproduces a recorded oracle error (telltale)"
+        elif any(item.id in diverged for item in items):
             ungated[ruleset] = "unexplained divergence"
         elif unplayed:
             ungated[ruleset] = f"the engine did not replay {_some(unplayed)}"
+        elif unread:
+            ungated[ruleset] = f"the engine could not read {_some(unread)} (a refusal as unreadable is no verdict)"
         elif alone:
             ungated[ruleset] = f"no oracle followed {_some(alone)} as far as the engine went"
         elif thin:
@@ -372,9 +583,142 @@ def engine_differential(
     return findings, gated, ungated
 
 
+def parse_differential(
+    engine: EngineSource,
+    oracle_sources: list[Source],
+    records: list[Record],
+    results: runner.Results,
+    engine_results: runner.Results,
+    entries: list[divergences.Divergence],
+    recorded: divergences.Recorded | None = None,
+) -> tuple[list[Finding], ParseAgreement]:
+    """Compare an engine in parse mode with every oracle report; returns (findings, agreement).
+
+    What is compared: what the engine set up with what each oracle set up
+    (placement and marker-only divergences, findings unless excused), the side to
+    move, and how it replayed each record - how many actions it read, which it
+    accepted and which it refused - with each implementation's replay. Never
+    check, counts or mate: the engine answers none of them in parse mode. Like a
+    parse-only source, an engine in parse mode plays any action it reads, so its
+    playing one an oracle holds illegal is no verdict against the oracle - nor,
+    for a known divergence, a look at it or a telltale; its refusal of one an
+    oracle played is compared like any other, and so is its refusal of a
+    record's set-up (action 0) that an oracle set up. Nothing is gated.
+    """
+    findings: list[Finding] = []
+    found: list[observations.Disagreement] = []
+    looked: set[str] = set()
+    tally = dict.fromkeys(("read", "positions", "described", "boards", "states", "sides", "sides_agreed",
+                           "replays", "replays_agreed", "replays_unjudged", "setups_refused"), 0)
+    for record in records:
+        observed = engine_results[(engine.name, record.id)]
+        if observed.status in ("error", "timeout"):
+            findings.append(Finding(
+                "engine-failed", f"engine on {record.id}: {observed.status} ({observed.reason}) {observed.detail[:300]}"))
+        refused_setup = observations.refused_setup(observed)
+        tally["setups_refused"] += refused_setup
+        complete = observed.status in _COMPLETE and not refused_setup
+        if complete:
+            tally["read"] += 1
+            tally["positions"] += len(observed.positions)
+        described = [False] * len(observed.positions)
+        boards = [False] * len(observed.positions)
+        states = [False] * len(observed.positions)
+        sides = [False] * len(observed.positions)
+        clashed = [False] * len(observed.positions)
+        for source in oracle_sources:
+            answer = results.get((source.name, record.id))
+            if answer is None:
+                continue
+            compared = observations.compare(observed, answer, replay=source.name in PRIMARY_SOURCES)
+            # The engine's playing an action this oracle holds illegal is no verdict in parse mode.
+            unjudged = [item for item in compared
+                        if item.kind == "legality" and item.a_value == "accepted" and not item.soft]
+            items = [item for item in compared if item not in unjudged]
+            found += items
+            clashes = {(item.kind, item.index) for item in items}
+            parted = observations.first_placement_divergence(observed, answer)
+            shared = list(zip(observed.positions, answer.positions, strict=False))
+            for mine, theirs in shared[:None if parted is None else parted + 1]:
+                held = observations.aligned(mine, theirs)
+                described[mine.index] = described[mine.index] or held is not None
+                if mine.index == parted:
+                    continue  # where it parted from the engine, it described another position
+                boards[mine.index] = boards[mine.index] or bool(held)
+                states[mine.index] = states[mine.index] or bool(observations.same_state(mine, theirs))
+                if theirs.side is not None:
+                    sides[mine.index] = True
+                    clashed[mine.index] = clashed[mine.index] or ("side", mine.index) in clashes
+            if source.name in PRIMARY_SOURCES and complete and answer.status in _COMPLETE:
+                tally["replays"] += 1
+                if not any(item.kind in REPLAY_KINDS for item in items):
+                    tally["replays_unjudged" if unjudged else "replays_agreed"] += 1
+            looked.update(entry.id for entry in entries
+                          if (entry.oracle, entry.record) == (source.name, record.id)
+                          and divergences.looked_at(entry, observed, answer, judges_actions=False))
+        if complete:
+            tally["described"] += sum(described)
+            tally["boards"] += sum(boards)
+            tally["states"] += sum(states)
+            tally["sides"] += sum(sides)
+            tally["sides_agreed"] += sum(given and not clash for given, clash in zip(sides, clashed, strict=True))
+
+    told, told_ids, _ = _telltale_findings(entries, engine, records, engine_results, recorded or _fresh(results),
+                                           judges_actions=False)
+    findings = told + findings
+    unexplained, stale = divergences.apply(entries, found, looked, told_ids)
+    findings += [Finding("divergence", item.describe()) for item in unexplained]
+    findings += _stale_findings(stale)
+    agreement = ParseAgreement(records=len(records), **tally)
+    # Agreeing with the oracles about nothing is not a pass.
+    if not agreement.read:
+        findings.append(Finding("engine-nothing-compared",
+                                "in parse mode the engine replayed no record of this tier, so nothing was compared"))
+    elif not agreement.described and not agreement.replays:
+        findings.append(Finding("engine-nothing-compared",
+                                f"in parse mode the engine replayed {agreement.read} record(s), but no oracle said what it "
+                                "set up at any of their positions, and no implementation's replay of them was compared: "
+                                "nothing was compared"))
+    return findings, agreement
+
+
 def _some(names: list[str], limit: int = 3) -> str:
     shown = ", ".join(names[:limit])
     return shown if len(names) <= limit else f"{shown} and {len(names) - limit} more"
+
+
+def calibrate(lock: Lock, cfg: config.GateConfig, records: list[Record], reference: golden.Calibration | None) -> Probe:
+    """Time the calibration probe ([calibration] in gate.toml) on this machine, alone.
+
+    A fixed, deterministic workload - one search over the first N positions of
+    one record - timed by when position N-1's answers arrived. Beside the time
+    the recording machine took for it, it says how much slower this machine is,
+    so that a required value a slow runner fails to reach can be told from a
+    regression: "this runner is k x slower than the recording machine; margin 4".
+    """
+    spec = cfg.calibration
+    # A reference measured for another probe says nothing about this one (verify reports it stale).
+    same = reference is not None and (reference.source, reference.record, reference.positions) == (
+        spec.source, spec.record, spec.positions)
+    probe = Probe(source=spec.source, record=spec.record, positions=spec.positions,
+                  reference_s=reference.seconds if same else None,
+                  note='' if same or reference is None else 'the recorded reference is for another probe')
+    record = next((item for item in records if item.id == spec.record), None)
+    if record is None:
+        return dataclasses.replace(probe, note=f"record {spec.record} is not in the corpus")
+    source = make_source(spec.source, lock)
+    reason = source.available()
+    if reason:
+        return dataclasses.replace(probe, note=reason)
+    options = RunOptions(cap=cfg.cap, timeout_s=PROBE_TIMEOUT_S, mate_budget_ms=cfg.recording.mate_budget_ms,
+                         stop_after=(spec.positions - 1, "position"))
+    observation = source.observe(record.id, corpus.read(record, lock), options)
+    index = spec.positions - 1
+    arrived = observation.arrival_s[index] if index < len(observation.arrival_s) else None
+    if arrived is None or index >= len(observation.positions) or not observation.positions[index].known():
+        return dataclasses.replace(probe, note=(f"it did not reach position {index} ({observation.status}"
+                                                f"{'/' + observation.reason if observation.reason else ''})"))
+    return dataclasses.replace(probe, seconds=round(arrived, 3))
 
 
 def run_tier(
@@ -390,8 +734,16 @@ def run_tier(
     cfg = config.load()
     tier = cfg.tier(tier_name)
     all_records = corpus.load()
-    result = GateResult(tier=tier_name, require_engine=tier.require_engine, full_strength=tier.full_strength)
-    result.sections += static_checks(lock, cfg, all_records, include_untracked=include_untracked)
+    # Everything compared against is read once, here, and verified (H33).
+    frozen = snapshot.take()
+    result = GateResult(tier=tier_name, require_engine=tier.require_engine, full_strength=tier.full_strength,
+                        engine_mode=cfg.engine_mode, margin=cfg.stability.margin)
+    result.sections += static_checks(lock, cfg, all_records, frozen, include_untracked=include_untracked)
+    if tier.can_enable_proof_channel:
+        # H32: a tier that can enable the proof channel must not require next to nothing.
+        readiness = proof_channel_readiness(cfg, all_records, frozen)
+        if readiness is not None:  # otherwise the golden files cannot be read, and their section says why
+            result.sections.append((PROOF_SECTION, readiness))
 
     names = list(tier.sources)
     if only_sources:
@@ -415,8 +767,32 @@ def run_tier(
             sources.append(source)
     result.sections.append(("oracle builds", unavailable))
 
-    def options_for(source: Source) -> RunOptions:
-        return _options(cfg, tier.timeout_for(source.name), tier.mate_budget_ms)
+    engine = EngineSource(list(cfg.engine_command), cfg.engine_mode)
+    engine_runs = engine.available() is None
+    log("timing the calibration probe")
+    result.calibration = calibrate(lock, cfg, all_records, frozen.calibration)
+    log(f"  {result.calibration.describe()}")
+
+    # What this tier requires of each source on each record (H32). A run that
+    # needs nothing more may be stopped once its last required position is in -
+    # but never where an engine is compared (every oracle answer may confirm or
+    # contradict it) and never in a tier that can enable the proof channel, which
+    # runs every search to the recording budget.
+    early = not engine_runs and not tier.can_enable_proof_channel
+    requirements: dict[tuple[str, str], stability.Requirement] = {}
+    for source in sources:
+        if not frozen.complete(source.name):
+            continue
+        for record in records:
+            if record.id in frozen.golden[source.name].observations and record.id in frozen.costs[source.name].records:
+                requirements[(source.name, record.id)] = stability.requirement(
+                    frozen.golden[source.name], frozen.costs[source.name], record.id, tier.timeout_for(source.name),
+                    tier.mate_budget_ms, cfg.stability.margin, source.searched)
+
+    def options_for(source: Source, record: Record) -> RunOptions:
+        need = requirements.get((source.name, record.id))
+        stop = need.stop_after if early and need is not None else None
+        return _options(cfg, tier.timeout_for(source.name), tier.mate_budget_ms, stop)
 
     log(f"running {len(sources)} source(s) over {len(records)} record(s)")
     results = runner.run_sources(sources, records, lock, options_for, jobs=jobs, progress=_progress(log))
@@ -424,15 +800,16 @@ def run_tier(
 
     golden_findings: list[Finding] = []
     for source in sources:
-        try:
-            found, stats = golden.check_run(source.name, records, results, tier.min_coverage_for(source.name))
-        except golden.StaleSchema as error:
-            found, stats = [Finding("golden-stale", str(error))], (0, 0)
-        except HarnessError as error:
-            found, stats = [Finding("golden-missing", str(error))], (0, 0)
+        if not frozen.complete(source.name):
+            reasons = "; ".join(problem.message for problem in frozen.problems.get(source.name, []))
+            golden_findings.append(Finding("golden-missing", f"{source.name}: not compared with its recorded answers - "
+                                                             f"{reasons or 'they could not be read'}"))
+            continue
+        found, tally = stability.check_run(source, records, results, frozen.golden[source.name],
+                                           frozen.costs[source.name], tier, cfg.stability.margin)
         golden_findings += found
-        result.coverage[source.name] = stats
-    result.sections.append(("fresh run vs golden observations", golden_findings))
+        result.tallies[source.name] = tally
+    result.sections.append(("fresh run vs required sets", golden_findings))
 
     drivers = [source for source in sources if isinstance(source, FtxiSource)]
     if drivers:
@@ -446,30 +823,50 @@ def run_tier(
                                                 timeout_s=tier.timeout_for(source.name), full=full, jobs=jobs)
         result.sections.append(("ftxi driver vs stock 5dtools", fidelity_findings))
 
-    engine = EngineSource(list(cfg.engine_command))
-    if engine.available() is None:
-        log("running the engine adapter")
-        engine_results = runner.run_sources([engine], records, lock, options_for, jobs=jobs, progress=_progress(log))
+    if engine_runs:
+        log(f"running the engine adapter ({cfg.engine_mode} mode)")
+        engine_results = runner.run_sources([engine], records, lock,
+                                            lambda source, record: _options(cfg, tier.timeout_s, tier.mate_budget_ms),
+                                            jobs=jobs, progress=_progress(log))
         engine_findings = runner.self_consistency(engine_results)
-        differential, result.gated, result.ungated = engine_differential(
-            engine, sources, records, results, engine_results, divergences.load(), tier.min_checked)
-        engine_findings += differential
-        if not engine_findings and not result.gated:
-            # Agreeing with the oracles about nothing is not a pass.
-            engine_findings.append(Finding(
-                "engine-nothing-gated",
-                "the engine contradicted no oracle, but it came through no ruleset either: "
-                + "; ".join(f"{ruleset} - {reason}" for ruleset, reason in sorted(result.ungated.items()))))
+        # The divergences are the snapshot's, read before the engine ran: an
+        # engine cannot excuse itself by writing to the file (H33). And what an
+        # oracle's recordings disagreed about is compared with nothing (H32).
+        answers = without_unstable(results, frozen)
+        if cfg.engine_mode == "parse":
+            differential, result.parse = parse_differential(engine, sources, records, answers, engine_results,
+                                                            frozen.divergences, frozen.recorded)
+            engine_findings += differential
+        else:
+            differential, result.gated, result.ungated = engine_differential(
+                engine, sources, records, answers, engine_results, frozen.divergences, tier.min_checked,
+                frozen.recorded)
+            engine_findings += differential
+            if not engine_findings and not result.gated:
+                # Agreeing with the oracles about nothing is not a pass.
+                engine_findings.append(Finding(
+                    "engine-nothing-gated",
+                    "the engine contradicted no oracle, but it came through no ruleset either: "
+                    + "; ".join(f"{ruleset} - {reason}" for ruleset, reason in sorted(result.ungated.items()))))
         result.engine_sections.append(("engine vs oracles", engine_findings))
         result.engine = "failed" if engine_findings else "passed"
         results.update(engine_results)
-    _write_report(result, results)
+    # Nothing the run compared against or executed may have changed while it ran (H33).
+    result.sections.append(("harness unchanged while the gate ran", integrity.changes(frozen.harness, integrity.hash_harness())))
+    _write_report(result, results, cfg, tier, sources, jobs, frozen)
     return result
 
 
-def _write_report(result: GateResult, results: runner.Results) -> Path:
+def _write_report(result: GateResult, results: runner.Results, cfg: config.GateConfig | None = None,
+                  tier: config.Tier | None = None, sources: list[Source] | None = None, jobs: int | None = None,
+                  frozen: Snapshot | None = None) -> Path:
     reports = paths.cache_dir() / "reports"
     reports.mkdir(parents=True, exist_ok=True)
+    budgets, signatures = {}, {}
+    for source in sources or []:
+        options = _options(cfg, tier.timeout_for(source.name), tier.mate_budget_ms)
+        budgets[source.name] = source.budget(options)
+        signatures[source.name] = golden.signature(source, options)
     body = {
         "tier": result.tier,
         "when": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
@@ -477,10 +874,21 @@ def _write_report(result: GateResult, results: runner.Results) -> Path:
         "oracle_layer_ok": result.oracle_layer_ok,
         "partial": result.partial,
         "engine": result.engine,
+        "engine_mode": result.engine_mode,
         "gated": {ruleset: asdict(item) for ruleset, item in result.gated.items()},
         "ungated": result.ungated,
+        "parse_agreement": asdict(result.parse) if result.parse is not None else None,
         "proof_channel": result.proof_channel,
-        "coverage": {name: list(stats) for name, stats in result.coverage.items()},
+        # What a reader needs to tell a slow runner from a regression (H32).
+        "budgets": budgets,
+        "margin": result.margin,
+        "jobs": jobs or runner.default_jobs(),
+        "platform": {"key": platform_key(), "system": platform.platform(), "python": platform.python_version()},
+        "cpu_count": os.cpu_count(),
+        "signatures": signatures,
+        "recorded_signatures": {name: item.signature for name, item in (frozen.golden.items() if frozen else ())},
+        "calibration": {**asdict(result.calibration), "factor": result.calibration.factor} if result.calibration else None,
+        "required": {name: {**asdict(tally), "unknown": dict(tally.unknown)} for name, tally in result.tallies.items()},
         "findings": [{"section": title, "code": item.code, "message": item.message}
                      for title, items in (*result.sections, *result.engine_sections) for item in items],
         "observations": {f"{source}|{record}": {**observations.to_json(item), "elapsed_s": round(item.elapsed_s, 3)}
@@ -504,15 +912,24 @@ def _summarise_sections(sections: list[Section]) -> list[str]:
 
 def summarise(result: GateResult) -> str:
     lines = _summarise_sections(result.sections)
-    for name, (reproduced, total) in result.coverage.items():
-        share = f"{reproduced / total:.1%}" if total else "n/a"
-        lines.append(f"        coverage {name}: {reproduced}/{total} recorded values reproduced ({share})")
+    for name, tally in result.tallies.items():
+        lines.append(f"        required {name}: {tally.describe()}")
+    if result.calibration is not None:
+        lines.append(f"        calibration: {result.calibration.describe()}")
+    unreproduced = any(finding.code == "golden-unreproduced" for finding in result.findings())
+    if unreproduced and result.calibration is not None and result.calibration.factor is not None:
+        factor = result.calibration.factor
+        speed = f"{factor:.1f}x slower than" if factor >= 1 else f"faster than ({factor:.1f}x the time of)"
+        lines.append(f"        this runner is {speed} the recording machine; margin {number(result.margin)}")
     lines += _summarise_sections(result.engine_sections)
     lines.append("")
     scope = " (PARTIAL RUN - restricted sources or records)" if result.partial else ""
     lines.append(f"oracle layer [{result.tier}]: {'ok' if result.oracle_layer_ok else 'FAILED'}{scope}")
     if result.engine == "not configured":
         lines.append("engine differential: NOT RUN - no engine adapter is configured in oracles/gate.toml")
+    elif result.engine_mode == "parse":
+        agreement = result.parse.describe() if result.parse is not None else "nothing was compared"
+        lines.append(f"engine differential: PARSE MODE - {result.engine.upper()}{scope}: {agreement}")
     else:
         lines.append(f"engine differential: {result.engine.upper()}{scope}")
         for described in _describe_gated(result.gated):
@@ -522,51 +939,159 @@ def summarise(result: GateResult) -> str:
     lines.append(f"proof channel: {result.proof_channel}")
     if result.require_engine and result.engine == "not configured":
         lines.append("this tier requires an engine: FAILED")
+    elif result.require_engine and result.engine_mode == "parse":
+        lines.append("this tier requires an engine compared on the rules, not in parse mode: FAILED")
     return "\n".join(lines)
 
 
-def write_golden(*, only_sources: list[str] | None = None, jobs: int | None = None, log: Log = print) -> list[Finding]:
-    """Re-run the oracles over the whole corpus and record what they say."""
+def _measure_probe(lock: Lock, cfg: config.GateConfig, records: list[Record], log: Log) -> golden.Calibration | None:
+    probe = calibrate(lock, cfg, records, None)
+    log(f"  calibration probe: {probe.describe()}")
+    if probe.seconds is None:
+        return None
+    spec = cfg.calibration
+    return golden.Calibration(source=spec.source, record=spec.record, positions=spec.positions,
+                              signature=make_source(spec.source, lock).signature(RunOptions(cap=cfg.cap)),
+                              seconds=probe.seconds, platform=f"{platform_key()} ({platform.platform()})",
+                              cpu_count=os.cpu_count())
+
+
+def write_golden(*, only_sources: list[str] | None = None, jobs: int | None = None,
+                 repeat: int = golden.MIN_RECORDINGS, log: Log = print) -> list[Finding]:
+    """Re-run the oracles over the whole corpus, ``repeat`` times each, and record what they say (H32, H33).
+
+    Recorded under the recording tier's budgets ([stability] recording_tier).
+    Every value is classified across the recordings (stability.merge): what
+    differed is unstable, what a budget cut is unknown at that budget. Then the
+    golden files, their cost files, the calibration reference and MANIFEST are
+    written together, and DISAGREEMENTS.md is rendered from what was written.
+    Last, it says what the new recording no longer holds that the files it
+    replaced did (stability.losses): a verdict or an outcome gone, a run cut
+    earlier - each a loss of checking for review, never routine churn.
+    """
+    if repeat < 1:
+        raise HarnessError("--repeat must be at least 1")
     lock = lockfile.load()
     cfg = config.load()
     records = corpus.load()
     blocking = lockfile.verify(lock) + corpus.verify(records, lock)
     if blocking:
         return blocking
-    # Recorded under the release tier's budgets: the longest ones, so as few
-    # answers as possible are lost to time-outs.
-    budget = cfg.tier("release")
     names = only_sources or list(ORACLE_SOURCES)
     sources = [make_source(name, lock) for name in names]
     missing = [Finding("source-unavailable", f"{source.name}: {source.available()}") for source in sources if source.available()]
     if missing:
         return missing
 
-    def options_for(source: Source) -> RunOptions:
-        return _options(cfg, budget.timeout_for(source.name), budget.mate_budget_ms)
+    # A file this run does not rewrite keeps its hash in MANIFEST - once it is
+    # shown to match it: re-hashing whatever is on disk would launder an edit.
+    try:
+        manifest = integrity.read_manifest()
+    except integrity.IntegrityError as error:
+        return [Finding("golden-integrity", str(error))]
+    probe_source = make_source(cfg.calibration.source, lock)
+    rewritten = {path.name for source in sources for path in (golden.golden_path(source.name), golden.cost_path(source.name))}
+    if probe_source.available() is None:
+        rewritten.add(golden.CALIBRATION_FILE)
+    kept = [path for path in integrity.recorded_files() if path.name not in rewritten]
+    if kept:
+        if manifest is None:
+            return [Finding("golden-integrity",
+                            f"there is no {integrity.MANIFEST} to vouch for {', '.join(path.name for path in kept)}, which "
+                            "this run would not rewrite: record every source (golden --write without --source)")]
+        tampered = [path.name for path in kept if manifest.get(path.name) != sha256_text(path.read_bytes())]
+        if tampered:
+            return [Finding("golden-integrity",
+                            f"{name} does not match {integrity.MANIFEST}, and this run would not rewrite it: restore it, "
+                            "or record its source as well") for name in tampered]
 
-    before = {source.name: source.signature(options_for(source)) for source in sources}
-    results = runner.run_sources(sources, records, lock, options_for, jobs=jobs, progress=_progress(log))
-    contradictions = runner.self_consistency(results)
+    def options_for(source: Source, record: Record | None = None) -> RunOptions:
+        return recording_options(cfg, source)
+
+    previous = {source.name: golden.read_previous(source.name) for source in sources}
+    before = {source.name: golden.signature(source, options_for(source)) for source in sources}
+    calibration = None
+    if golden.CALIBRATION_FILE in rewritten:
+        log("timing the calibration probe on this machine")
+        calibration = _measure_probe(lock, cfg, records, log)
+        if calibration is None:
+            return [Finding("calibration", "the calibration probe could not be timed on this machine; nothing was written")]
+    log(f"recording {len(sources)} source(s) over {len(records)} record(s), {repeat} time(s) each")
+    runs = runner.record_sources(sources, records, lock, options_for, repeat=repeat, jobs=jobs, progress=_progress(log))
+    contradictions = [Finding("self-contradiction", f"{run.source} on {run.record}: {problem}")
+                      for found in runs.values() for run in found for problem in observations.validate(run)]
     if contradictions:
         return contradictions
+    merged: dict[tuple[str, str], golden.Recorded] = {}
+    unstable: list[Finding] = []
+    for source in sources:
+        for record in records:
+            outcome = stability.merge(source, options_for(source), runs[(source.name, record.id)])
+            if isinstance(outcome, Finding):
+                unstable.append(outcome)
+            else:
+                merged[(source.name, record.id)] = outcome
+                for problem in observations.validate(outcome.observation):
+                    unstable.append(Finding("golden-invalid", f"{source.name} on {record.id}, merged over its "
+                                                              f"recordings: {problem}"))
+    if unstable:
+        return unstable
     # The signature names the code that produced the answers. Code edited while
     # the oracles ran would be named for answers it did not produce.
-    moved = [source.name for source in sources if source.signature(options_for(source)) != before[source.name]]
+    moved = [source.name for source in sources if golden.signature(source, options_for(source)) != before[source.name]]
     if moved:
         return [Finding("golden-code-changed",
-                        f"{name}: its adapter or driver changed while it ran - nothing was written; run golden --write again")
+                        f"{name}: its adapter or driver changed while it ran - nothing was written; run it again: {golden.RERECORD}")
                 for name in moved]
     paths.GOLDEN_DIR.mkdir(parents=True, exist_ok=True)
+    hashes = {path.name: manifest[path.name] for path in kept} if kept else {}
+    written: dict[Path, str] = {}
     for source in sources:
-        text = golden.dump(source, options_for(source), records, results)
-        golden.golden_path(source.name).write_text(text, encoding="utf-8", newline="\n")
-        log(f"wrote {golden.golden_path(source.name).relative_to(paths.REPO_ROOT).as_posix()}")
+        recorded = {record.id: merged[(source.name, record.id)] for record in records}
+        signed = before[source.name]
+        written[golden.golden_path(source.name)] = golden.dump(source.name, signed, records, recorded, recordings=repeat)
+        written[golden.cost_path(source.name)] = golden.dump_costs(source.name, signed, records, recorded,
+                                                                    recordings=repeat)
+    if calibration is not None:
+        written[golden.calibration_path()] = golden.dump_calibration(calibration)
+    # The answers first, then the hashes that vouch for them: an interrupted write
+    # leaves files MANIFEST does not match, which verify reports.
+    for path, text in written.items():
+        path.write_text(text, encoding="utf-8", newline="\n")
+        hashes[path.name] = sha256_text(text.encode("utf-8"))
+        log(f"wrote {_shown(path)}")
+    integrity.write_manifest(hashes)
+    log(f"wrote {_shown(integrity.manifest_path())}")
     render_disagreements(log=log)
+    lost = [line for source in sources if previous[source.name] is not None
+            for line in stability.losses(source.name, previous[source.name],
+                                         {record.id: merged[(source.name, record.id)] for record in records})]
+    if lost:
+        log("")
+        log(f"Compared with the golden files it replaced, this recording no longer holds {len(lost)} thing(s). Each "
+            "is a loss of checking, not churn: re-record on a quiet machine, or raise the budget - never accept one to "
+            "make a gate run pass.")
+        for line in lost:
+            log(f"  {line}")
     return []
 
 
+def _shown(path: Path) -> str:
+    """A path as the log shows it: from the repository root, where it is inside it."""
+    try:
+        return path.resolve().relative_to(paths.REPO_ROOT.resolve()).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
 def render_disagreements(*, log: Log = print) -> None:
-    text = golden.render_disagreements(corpus.load())
+    """Render DISAGREEMENTS.md from the golden and cost files, each read only once verified against MANIFEST,
+    and gate.toml's budgets (what each tier requires)."""
+    frozen = snapshot.take()
+    problems = [problem.message for source in ORACLE_SOURCES for problem in frozen.problems.get(source, [])
+                if source not in frozen.golden]
+    if problems:
+        raise HarnessError(f"{paths.DISAGREEMENTS_FILE.name} was not rendered: {problems[0]}")
+    text = _rendered(config.load(), corpus.load(), frozen)
     paths.DISAGREEMENTS_FILE.write_text(text, encoding="utf-8", newline="\n")
-    log(f"wrote {paths.DISAGREEMENTS_FILE.relative_to(paths.REPO_ROOT).as_posix()}")
+    log(f"wrote {_shown(paths.DISAGREEMENTS_FILE)}")

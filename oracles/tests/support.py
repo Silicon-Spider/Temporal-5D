@@ -63,7 +63,8 @@ def golden_files_predate_this_schema(source: str) -> str | None:
     """Why a test of the repository's own golden files cannot run yet, if it cannot.
 
     Golden files written in an older schema are refused by the harness, and
-    `verify` reports them stale until they are re-recorded (golden --write). Until
+    `verify` reports them stale until they are re-recorded (golden --write); so
+    are golden files without the MANIFEST that vouches for them (H33). Until
     then a test that reads them has nothing to read: it is skipped with this
     reason, while `verify` fails. Any other problem with the files is not excused.
     """
@@ -72,10 +73,49 @@ def golden_files_predate_this_schema(source: str) -> str | None:
         schema = json.loads(path.read_text(encoding="utf-8")).get("schema")
     except (OSError, ValueError, AttributeError):
         return None
-    if schema == golden.SCHEMA:
-        return None
-    return (f"{path.name} is in golden schema {schema}, not {golden.SCHEMA}: re-record the golden files "
-            "(python oracles/harness.py golden --write)")
+    if schema != golden.SCHEMA:
+        return f"{path.name} is in golden schema {schema}, not {golden.SCHEMA}: re-record the golden files ({golden.RERECORD})"
+    if not (paths.GOLDEN_DIR / "MANIFEST").exists():
+        return f"oracles/golden has no MANIFEST yet: re-record the golden files ({golden.RERECORD})"
+    return None
+
+
+def recorded(observation, costs=None, *, end=None, mate=(), horizon=None, unknown=None, unstable=None) -> golden.Recorded:
+    """One record's answers as golden --write would write them; costs default to a millisecond a position."""
+    count = len(observation.positions)
+    costs = tuple(costs) if costs is not None else tuple(0.001 * (index + 1) for index in range(count))
+    if end is None and observation.status != "timeout":
+        end = max(costs, default=0.0)
+    return golden.Recorded(observation=observation, cost=golden.RecordCost(positions=costs, end=end, mate=tuple(mate)),
+                           horizon=horizon, unknown=dict(unknown or {}), unstable=dict(unstable or {}))
+
+
+def write_recorded(source: str, signature: dict, records, answers: dict, *, manifest: bool = True,
+                   recordings: int = golden.MIN_RECORDINGS) -> None:
+    """Write one source's golden and cost files into paths.GOLDEN_DIR, and (by default) vouch for them in MANIFEST.
+
+    ``answers`` maps a record id to a golden.Recorded (see recorded()), or to an
+    Observation, which gets the default costs. The files say they hold
+    ``recordings`` recordings - by default as many as `verify` asks for.
+    """
+    from oracle_harness.observations import Observation
+
+    paths.GOLDEN_DIR.mkdir(parents=True, exist_ok=True)
+    items = {key: recorded(value) if isinstance(value, Observation) else value for key, value in answers.items()}
+    files = {golden.golden_path(source): golden.dump(source, signature, records, items, recordings=recordings),
+             golden.cost_path(source): golden.dump_costs(source, signature, records, items, recordings=recordings)}
+    for path, text in files.items():
+        path.write_text(text, encoding="utf-8", newline="\n")
+    if manifest:
+        vouch()
+
+
+def vouch() -> None:
+    """(Re)write MANIFEST over every file now in paths.GOLDEN_DIR - what golden --write does after writing them."""
+    from oracle_harness import integrity
+    from oracle_harness.util import sha256_text
+
+    integrity.write_manifest({path.name: sha256_text(path.read_bytes()) for path in integrity.recorded_files()})
 
 
 def git(repo: Path, *args: str) -> str:

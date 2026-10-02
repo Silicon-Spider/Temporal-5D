@@ -23,12 +23,47 @@ class TierConfigTests(unittest.TestCase):
         tiers = config.load().tiers
         self.assertEqual(set(tiers), {"commit", "nightly", "release"})
 
-    def test_a_coverage_floor_near_nothing_is_refused(self):
-        # A source starved of time reproduces nothing; with no floor it would pass.
+    def test_a_coverage_floor_is_refused_not_ignored(self):
+        # H32: no tolerance. A file that still sets one must not let anyone believe a floor is in force.
+        for line in ("min_coverage = 0.95\n", "[tier.release.source_min_coverage]\nchessin5d = 0.9\n"):
+            with self.assertRaises(HarnessError) as raised:
+                self.load({"require_engine = true\n": f"require_engine = true\n{line}"})
+            self.assertIn("100%", str(raised.exception))
+
+    def test_the_stability_policy(self):
+        stability = config.load().stability
+        self.assertGreaterEqual(stability.margin, 1.0)
+        self.assertEqual(config.load().recording.name, stability.recording_tier)
+        # Below 1 a tier could require an answer that came after its own deadline on the recording machine.
         with self.assertRaises(HarnessError):
-            self.load({"[tier.release.source_min_coverage]\n": "[tier.release.source_min_coverage]\nchessin5d = 0.0\n"})
+            self.load({"margin = 4\n": "margin = 0.5\n"})
+        # The golden files are recorded under a tier that runs every source.
         with self.assertRaises(HarnessError):
-            self.load({"min_coverage = 0.95\n": "min_coverage = 0.2\n"})
+            self.load({'recording_tier = "release"\n': 'recording_tier = "commit"\n'})
+        with self.assertRaises(HarnessError):
+            self.load({'recording_tier = "release"\n': 'recording_tier = "weekly"\n'})
+        for share in ("0", "1.5"):
+            with self.assertRaises(HarnessError):
+                self.load({"proof_share = 0.9\n": f"proof_share = {share}\n"})
+        self.assertEqual(self.load({"margin = 4\n": "margin = 1\n"}).stability.margin, 1.0)
+
+    def test_the_calibration_probe_is_a_named_workload(self):
+        probe = config.load().calibration
+        self.assertGreaterEqual(probe.positions, 1)
+        for old, new in (('source = "ftxi:naive"\n', 'source = "stockfish"\n'), ("positions = 38\n", "positions = 0\n"),
+                         ('record = "cwmtt/manyChecks"\n', 'record = ""\n')):
+            with self.assertRaises(HarnessError, msg=new):
+                self.load({old: new})
+
+    def test_the_engine_mode(self):
+        self.assertEqual(config.load().engine_mode, "full")
+        self.assertEqual(self.load({'mode = "full"\n': 'mode = "parse"\n'}).engine_mode, "parse")
+        with self.assertRaises(HarnessError):
+            self.load({'mode = "full"\n': 'mode = "rules-ish"\n'})
+
+    def test_only_a_tier_that_requires_an_engine_and_runs_everything_can_enable_the_proof_channel(self):
+        tiers = config.load().tiers
+        self.assertEqual([name for name, tier in tiers.items() if tier.can_enable_proof_channel], ["release"])
 
     def test_budgets_for_a_source_the_tier_does_not_run_are_refused(self):
         # Probably a typo - and a budget that silently applies to nothing.
@@ -42,6 +77,11 @@ class TierConfigTests(unittest.TestCase):
     def test_min_checked_cannot_be_zero(self):
         with self.assertRaises(HarnessError):
             self.load({"min_checked = 0.75\nrequire_engine": "min_checked = 0\nrequire_engine"})
+
+    def test_a_mate_budget_is_a_positive_whole_number_of_milliseconds(self):
+        for value in ("0", "2.5", '"60s"'):
+            with self.assertRaises(HarnessError, msg=value):
+                self.load({"mate_budget_ms = 60000\n": f"mate_budget_ms = {value}\n"})
 
     def test_a_waiver_needs_the_text_it_excuses_and_a_reason(self):
         waiver = '\n[[boundary.waiver]]\npath = "tools/x.py"\nrule = "references-harness"\nreason = "because"\n'
