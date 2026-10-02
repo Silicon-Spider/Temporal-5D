@@ -192,6 +192,11 @@ if(MINGW)
   target_link_options(t5d-scan6b PRIVATE -static)
 endif()
 
+# Stage E8: the verification layer's redesign (M14) - incremental royal-attack
+# maps, the proof channel (df-pn over semimoves), the estimate channel; 6b'.
+target_sources(t5d_core PRIVATE src/attacks.cpp)
+target_sources(t5d-tests PRIVATE tests/test_attacks.cpp)
+
 # ---- MinGW: no dependence on the toolchain's runtime DLLs --------------------------
 #
 # With MSYS2's MinGW-w64 g++, the C++ runtime (libstdc++, libgcc) and winpthreads
