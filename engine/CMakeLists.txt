@@ -85,6 +85,10 @@ target_sources(t5d_core PRIVATE
   src/search.cpp)
 # Stage E5a: the legal moves, in tiers.
 target_sources(t5d_core PRIVATE src/legal.cpp)
+# Stage E6a: the main search (MCTS / MCGS) and its built-in evaluators.
+target_sources(t5d_core PRIVATE
+  src/mcts.cpp
+  src/mcts_evaluators.cpp)
 
 # ---- the C API shared library -----------------------------------------------------
 
@@ -140,6 +144,10 @@ target_sources(t5d-tests PRIVATE
   tests/test_detectors.cpp
   tests/test_gate_exe.cpp
   tests/test_search.cpp)
+
+# Stage E6a's tests: the search's invariants (§15.4), self-play end to end.
+target_sources(t5d-tests PRIVATE
+  tests/test_mcts.cpp)
 
 add_executable(t5d-gate tools/t5d_gate.cpp)
 target_link_libraries(t5d-gate PRIVATE t5d_core)
