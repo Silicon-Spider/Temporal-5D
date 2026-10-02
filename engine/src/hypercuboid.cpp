@@ -182,7 +182,7 @@ constexpr int kNever = std::numeric_limits<int>::max();
 
 // The most steps one abstract check may take (see Hyper::feasible); beyond
 // it the check answers "unknown" and the search goes on without it.
-constexpr std::size_t kAbstractSteps = 1u << 14;
+constexpr std::size_t kAbstractSteps = 1u << 12;
 
 // How a point's moves may be ordered - which realisation is exact.
 enum class Regime : std::uint8_t {
@@ -237,6 +237,13 @@ class Hyper {
       std::vector<int> x;
       if (regime_ != Regime::General) {
         const Feasibility f = feasible(box, abstract_);
+        // Its work counts against the budget: a node for the box, and one per
+        // step of the check (a step costs a few microseconds at a dozen boards,
+        // about what a node of the realisation does).
+        if (!budget_.spend_many(1 + abstract_.steps)) {
+          stopped = true;
+          break;
+        }
         if (f == Feasibility::No) {
           ++run_.stats.regions;  // the whole box: no skeleton of it is realisable
           ++run_.stats.unrealisable_boxes;

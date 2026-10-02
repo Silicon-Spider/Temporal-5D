@@ -451,7 +451,10 @@ TEST(search_the_hypercuboid_stays_small_when_every_branch_rewinds) {
       const ActionCount actions = count_legal_actions(s, 100000, d);
       CHECK(actions.stats.exhaustive);
       CHECK_EQ(actions.count, static_cast<std::size_t>(18 * n - 3));
-      CHECK(actions.stats.nodes <= 2 * actions.count);  // a move and a test per action
+      // A move and a test per action - and, for the hypercuboid, a node per box
+      // it takes up and per step of its abstract check: 16 per action at
+      // n = 6, where the search once took 34 million nodes in all.
+      CHECK(actions.stats.nodes <= 20 * actions.count);
       const ActionCount successors = count_legal_successors(s, 100000, d);
       CHECK_EQ(successors.count, static_cast<std::size_t>(3 * (2 * n + 1)));
     }
@@ -491,7 +494,7 @@ TEST(search_the_hypercuboid_finds_actions_past_reactivations) {
     const ActionCount c = count_legal_actions(s, 1000, d);
     CHECK(c.reached_cap);
     CHECK_EQ(c.count, std::size_t{1000});
-    if (d == Detector::Hypercuboid) CHECK(c.stats.nodes < 8000);
+    if (d == Detector::Hypercuboid) CHECK(c.stats.nodes < 12000);  // 8,671: boxes and abstract steps counted
   }
 }
 
