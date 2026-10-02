@@ -173,6 +173,10 @@ if(WIN32)
   target_link_libraries(t5d-bench PRIVATE advapi32)  # RegGetValueA: the CPU's name
 endif()
 
+# Stage E5b: the tactical scanner and its tests.
+target_sources(t5d_core PRIVATE src/scanner.cpp)
+target_sources(t5d-tests PRIVATE tests/test_scanner.cpp)
+
 # ---- MinGW: no dependence on the toolchain's runtime DLLs --------------------------
 #
 # With MSYS2's MinGW-w64 g++, the C++ runtime (libstdc++, libgcc) and winpthreads
