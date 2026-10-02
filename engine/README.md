@@ -2070,13 +2070,15 @@ t5d-play [--variant NAME] [--evaluator uniform|random|material] [--playouts N]
          [--e2] [--e3] [--batch N] [--synchronous] [--match] [--final visits|lcb]
          [--temperature T] [--temperature-decisions N] [--noise] [--cap-turns N]
          [--cap-boards N] [--max-actions N] [--listing-cap N] [--mate-nodes N]
-         [--seed S] [--moves-after-shift] [--rules ENCODING]
+         [--max-seconds S] [--seed S] [--moves-after-shift] [--rules ENCODING]
 ```
 
 Defaults: Standard, uniform, 64 playouts per decision, the board-move split, a tree,
 self-play, a cap of 20 turns (uniform play branches freely: by turn 12 a game can
 hold 300 boards on 50 timelines). `--mate-nodes N` sets the search's terminal-check
-budget. The summary on standard error says where the time went: the search's
+budget; `--max-actions` and `--max-seconds` are safety stops (checked at turn starts;
+the record ends `*`, its Termination header naming the stop). The summary on standard
+error says where the time went: the search's
 terminal checks, leaf expansions (the legality classification included), action
 listings and verifications, and the game's own turn-start verdicts.
 
