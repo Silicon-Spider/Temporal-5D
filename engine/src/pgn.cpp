@@ -1434,7 +1434,20 @@ void PgnReplay::play_next() {
       if (annotated) {
         const GameState before = s;
         s.apply(m);
-        check_annotations(before, s, m, w);
+        if (options_.annotation_mismatch_is_error) {
+          check_annotations(before, s, m, w);
+        } else {
+          try {
+            check_annotations(before, s, m, w);
+          } catch (const RecordError& e) {
+            std::string where = name + ", move " + std::to_string(j + 1) + " " + quoted(w.text);
+            if (w.line != 0) {
+              where += " (line " + std::to_string(w.line) + ", column " + std::to_string(w.column) +
+                       ")";
+            }
+            warnings_.push_back(where + ": " + e.what() + " - played anyway (annotation only)");
+          }
+        }
       } else {
         s.apply(m);
       }

@@ -143,6 +143,13 @@ struct PgnOptions {
   /// ("+", "#" and "*" are never checked: they are the writer's claims about
   /// check, mate and softmate - never a verdict.)
   bool verify_annotations = true;
+  /// What a checked token that disagrees with the state does. Default false:
+  /// the move is played and the disagreement kept in PgnReplay::warnings() -
+  /// the notation calls these tokens "purely for better human comprehension",
+  /// so a wrong one is the writer's slip, not a different game, and refusing
+  /// the record would hide its later positions from the gate. True: the move
+  /// is unreadable.
+  bool annotation_mismatch_is_error = false;
   /// "Moves": a physical move "must be preceded by their board's coordinates
   /// if there is more than one timeline". Default false: a move without its
   /// board is unreadable then. True: it is matched against every playable
@@ -335,6 +342,9 @@ class PgnReplay {
   std::size_t actions_played() const noexcept { return played_; }
   /// Whether every action read has been played.
   bool finished() const noexcept { return played_ == record_.actions.size(); }
+  /// Every annotation that disagreed with the state and was let pass
+  /// (PgnOptions::annotation_mismatch_is_error false), in the order met.
+  const std::vector<std::string>& warnings() const noexcept { return warnings_; }
 
   /// Plays the next action: its moves in order, then the submission under
   /// check_ruling() (CannotSubmit if the present has not shifted, T5, or a
@@ -380,6 +390,7 @@ class PgnReplay {
   std::size_t played_ = 0;
   GameState state_;
   CheckRuling ruling_ = standard_check_ruling();
+  std::vector<std::string> warnings_;
 };
 
 }  // namespace t5d
