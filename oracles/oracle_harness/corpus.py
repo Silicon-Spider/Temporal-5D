@@ -9,6 +9,15 @@ redistributing it.
 The harness treats a record as opaque text. It never parses 5dpgn: each oracle
 reads the record with its own parser, the engine with its own (decision H28),
 and positions are aligned by counting submitted actions.
+
+With one exception, ruled at CHECKPOINT 3: a record of cwmtt's written in the
+official client's export form, whose moves name their board twice, is converted
+to the notation specification's 5dpgn before any source reads it
+(export_form.py), and every source - the engine included - reads the converted
+text; one with a move the specification cannot express is given to no source.
+The manifest pins what the sources read as it pins the stored bytes: such a
+record's entry says `converted`, the SHA-256 of the converted text (or
+"unsupported"), and feed() refuses to hand over anything else.
 """
 
 from __future__ import annotations
@@ -17,12 +26,13 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import gitutil, paths
+from . import export_form, gitutil, paths
 from .headers import board_header, declared_board, has_fen_boards
 from .lockfile import Lock
 from .util import Finding, HarnessError, load_toml, sha256_bytes
 
-__all__ = ["CUSTOM_POSITIONS", "LOCAL", "TIERS", "Excluded", "Record", "board_header", "declared_board", "has_fen_boards"]
+__all__ = ["CONVERTED_SOURCE", "CUSTOM_POSITIONS", "EXPORT_FORM", "LOCAL", "TIERS", "UNSUPPORTED", "Excluded", "Feed",
+           "Record", "board_header", "declared_board", "has_fen_boards"]
 
 SCHEMA = 1
 LOCAL = "local"
@@ -30,6 +40,14 @@ TIERS = ("commit", "nightly")
 # The ruleset of every record that sets up its own position. Such a record
 # exercises the rules, but it is evidence about no named variant.
 CUSTOM_POSITIONS = "(custom positions)"
+# The pinned source whose records are converted from the official client's
+# export form before any source reads them (export_form.py; CHECKPOINT 3).
+CONVERTED_SOURCE = "cwmtt"
+# A manifest's `converted` for a record in the export form with a move the
+# notation specification cannot express: no source is given it.
+UNSUPPORTED = "unsupported"
+# The reason every source gives for such a record (status "unsupported").
+EXPORT_FORM = "export_form"
 _ID = re.compile(r"^[a-z0-9]+/[A-Za-z0-9._-]+$")
 _RECORD_SUFFIX = ".5dpgn"
 
@@ -48,6 +66,29 @@ class Record:
     fen: bool = False  # the record sets up its own position with 5DFEN boards
     also_at: tuple[str, ...] = ()
     notes: str = ""
+    # Only for a record in the official client's export form (CONVERTED_SOURCE's):
+    # the SHA-256 of the 5dpgn text every source reads instead (export_form.py),
+    # or UNSUPPORTED where a move of it has no form in the notation specification.
+    converted: str = ""
+
+    @property
+    def fed_sha256(self) -> str:
+        """The SHA-256 of what the sources' answers about this record are about.
+
+        The stored record's, except for a record read as converted from the
+        export form: then the converted text's, which is what every source read.
+        """
+        return self.converted if self.converted not in ("", UNSUPPORTED) else self.sha256
+
+    @property
+    def reading(self) -> str:
+        """How the sources read this record, where it is not as stored: for reports and DISAGREEMENTS.md."""
+        if self.converted == UNSUPPORTED:
+            return ("in the official client's export form, with a move the notation specification cannot express: "
+                    f"given to no source (every source: unsupported, {EXPORT_FORM})")
+        if self.converted:
+            return "read as converted from the official client's export form to the notation specification's 5dpgn"
+        return ""
 
     @property
     def ruleset(self) -> str:
@@ -78,6 +119,7 @@ def load(path: Path | None = None) -> list[Record]:
                 sha256=table["sha256"], size=int(table["size"]), board=table.get("board", ""),
                 licence=table["licence"], tier=table["tier"], fen=bool(table.get("fen", False)),
                 also_at=tuple(table.get("also_at", ())), notes=table.get("notes", ""),
+                converted=table.get("converted", ""),
             ))
         except KeyError as missing:
             raise HarnessError(f"{where}: missing key {missing}") from None
@@ -110,17 +152,60 @@ def _stored_bytes(record: Record, lock: Lock) -> bytes:
     return gitutil.read_blob(lock.pin(record.source).checkout, record.blob)
 
 
-def read(record: Record, lock: Lock) -> bytes:
-    """The record as it is fed to every source: stored bytes with CRLF folded to LF.
+@dataclass(frozen=True)
+class Feed:
+    """What every source is given for one record."""
+
+    data: bytes  # the bytes every source reads (for a refused record: the record, which no source is given)
+    converted: int = 0  # export moves rewritten in the specification's form (export_form.py)
+    unsupported: str = ""  # why no source is given the record; empty when every source is
+
+
+def _conversion(record: Record, fed: bytes) -> tuple[export_form.Conversion | None, str]:
+    """(the conversion of a record of CONVERTED_SOURCE's, or None; what its manifest entry's `converted` must say)."""
+    if record.source != CONVERTED_SOURCE:
+        return None, ""
+    conversion = export_form.convert(fed)
+    if not conversion.export_form:
+        return conversion, ""
+    return conversion, UNSUPPORTED if conversion.refused else sha256_bytes(conversion.text)
+
+
+def feed(record: Record, lock: Lock) -> Feed:
+    """The record as it is fed to every source: stored bytes with CRLF folded to LF - and,
+    for a record of CONVERTED_SOURCE's in the official client's export form, converted
+    to the notation specification's 5dpgn (export_form.py, CHECKPOINT 3).
 
     Some records are stored with CRLF line endings. Folding them keeps the input
     identical across platforms (a C++ oracle on Windows folds CRLF itself when it
     reads stdin in text mode; on Linux it would not).
+
+    What the sources read is pinned like the stored bytes: a converted text, or a
+    refusal, that is not what the manifest's `converted` says stops the run here
+    (verify names the value).
     """
     data = _stored_bytes(record, lock)
     if sha256_bytes(data) != record.sha256:
         raise HarnessError(f"corpus record {record.id}: content does not match its pinned SHA-256")
-    return data.replace(b"\r\n", b"\n")
+    fed = data.replace(b"\r\n", b"\n")
+    conversion, pinned = _conversion(record, fed)
+    if pinned != record.converted:
+        raise HarnessError(
+            f"corpus record {record.id}: the manifest says converted = {record.converted!r}, and converting it from "
+            f"the export form gives {pinned!r} (run: python {paths.HARNESS_REL}/harness.py verify)")
+    if conversion is None or not conversion.export_form:
+        return Feed(data=fed)
+    if conversion.refused:
+        return Feed(data=fed, unsupported=f"the record is in the official client's export form, and {conversion.refused}")
+    return Feed(data=conversion.text, converted=conversion.moves)
+
+
+def read(record: Record, lock: Lock) -> bytes:
+    """The bytes every source reads for this record (feed()); an error for a record no source is given."""
+    given = feed(record, lock)
+    if given.unsupported:
+        raise HarnessError(f"corpus record {record.id} is given to no source: {given.unsupported}")
+    return given.data
 
 
 def verify(records: list[Record], lock: Lock) -> list[Finding]:
@@ -192,6 +277,16 @@ def verify(records: list[Record], lock: Lock) -> list[Finding]:
                 "record-fen",
                 f"{tag}: the record {'carries' if not record.fen else 'carries no'} 5DFEN boards, "
                 f"manifest says fen = {str(record.fen).lower()}"))
+        conversion, pinned = _conversion(record, fed)
+        if record.converted != pinned:
+            if conversion is None:
+                why = f"only {CONVERTED_SOURCE}'s records are converted from the export form: drop converted"
+            elif not pinned:
+                why = "the record is not in the official client's export form: drop converted"
+            else:
+                why = ("the record is in the official client's export form; converting it gives "
+                       f'converted = "{pinned}"' + (f" ({conversion.refused})" if conversion.refused else ""))
+            findings.append(Finding("record-converted", f"{tag}: manifest says converted = {record.converted!r}; {why}"))
     return findings
 
 
@@ -260,6 +355,10 @@ def describe_candidate(pin_id: str, path: str, blob: str, lock: Lock) -> dict:
     }
     if has_fen_boards(fed):
         stub["fen"] = True
+    if pin_id == CONVERTED_SOURCE:
+        conversion = export_form.convert(fed)
+        if conversion.export_form:
+            stub["converted"] = UNSUPPORTED if conversion.refused else sha256_bytes(conversion.text)
     return stub
 
 
