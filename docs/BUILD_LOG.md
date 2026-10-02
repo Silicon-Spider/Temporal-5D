@@ -49,8 +49,9 @@ M5 - building it would break a rule).
   records the engine cannot read get entries only where the notation spec rules
   their text out; the count and legality differences that Q4 explains wait for the
   user's Q4 ruling - until then the engine is not configured in the committed
-  `gate.toml`; (3) the quiet-machine measurements: N3's CPU wall times, then M9
-  (`t5d-bench`), M9 again on legal moves, the M7 upper bound; (4) the scanner and
+  `gate.toml`; (3) M9 and M7 are measured (2026-10-02): the legal-moves filter
+  must get fast before search (engine E5a, with `t5d-measure --legal` for a tighter
+  |E|), and N3's CPU wall times still need a quiet machine; (4) the scanner and
   6b (plan in step 5, "The scanner and 6b").
 - **Waiting on the user:**
   - **Rules Q4** (may a player keep moving after the present has shifted?). The
@@ -548,9 +549,9 @@ for game records.
 
 | ID | Status | Notes |
 |---|---|---|
-| M7 | tools built | `t5d-measure`; the corpus cannot decide it (spec issue 26) - game records requested |
+| M7 | measured, no verdict | The corpus's curve recorded (MEASUREMENTS); 2-3 games above 160 boards, none above 400 - game records requested (spec issue 26) |
 | M8 | not started | Scanner verdict (6b), after M9 (M10's order) |
-| M9 | tools built | `t5d-bench`; preliminary only (loaded machine); the quiet-machine run is next |
+| M9 | measured | Pseudo-legal: throughput PASS (2.2x / 2.5x the targets on one thread), flatness of the history term 2%; with the legal-moves filter: FAIL by orders of magnitude - fix before search (MEASUREMENTS) |
 | M11 | built | Licence recorded in PROVENANCE.md |
 
 ## Parked, and why

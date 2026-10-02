@@ -10,6 +10,20 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-02 - Phase 1 measurements: movegen throughput (M9) and the corpus |E| curve (M7)
+
+- `docs/MEASUREMENTS.md`: M9 measured on a quiet machine with `t5d-bench`.
+  Pseudo-legal expansion (moves, move graph, W/E scope, typed relations) runs at
+  44,047/s at 240 boards and 24,951/s at 600 on one thread - 2.2x and 2.5x M9's
+  targets, outside the ±10% STOP band; the frozen-history term is 0.48 ns per board
+  (2% of an expansion at 600 boards); matched flatness of the spec's expansion is
+  +7% median, inconclusive by rounds. With the legal-moves filter the expansion
+  takes milliseconds to minutes: a fail to fix before search. M7: the corpus curve
+  recorded (upper bounds); no verdict - real games reach 240-399 boards in two
+  games and run 16-24 active timelines.
+- `docs/BUILD_LOG.md`: register rows M7, M9; the plan.
+- Spec: §15.6 (M7, M9), §15.3 (movegen throughput); spec issues 20, 21, 26, 46.
+
 ### 2026-10-02 - The gate, step 2B: stable answers, integrity, telltales, parse mode, the rulebook pin
 
 - `oracles/` (H32): every source is recorded twice (`golden --write --repeat 2`);

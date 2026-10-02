@@ -39,7 +39,7 @@ the run for the user.
 | Local/global interleave | 0.067 TF per node | - | | | |
 | Leaf-batching gain | 1.2-1.5× | - | | | |
 | NNUE eval | ~10k MACs, sub-µs | - | | | |
-| Movegen throughput | ≥ 20,000/s at 240; ≥ 10,000/s at 600 (§15.6) | - | | | |
+| Movegen throughput | ≥ 20,000/s at 240; ≥ 10,000/s at 600 (§15.6) | pseudo-legal expansion, 1 thread: 44,047/s at 240 boards, 24,951/s at 600 (scope + relations); with the legal-moves filter: milliseconds to minutes per expansion | M9 section below | 2.2x / 2.5x the target (pseudo-legal); far below it with the filter | 2026-10-02, 2740e66 |
 | Scanner nodes/s | no figure | - | | | |
 
 ### Network N3 - the cached path, counted (2026-10-02)
@@ -109,8 +109,94 @@ Not an M9 figure: M9 measures the expansion without this filter (spec issue 46).
 
 ## §15.6 verdicts
 
-### Movegen throughput (M9) - not yet measured
+### Movegen throughput (M9) - pseudo-legal: PASS (provisional); with legality: FAIL (fix before search)
 
-### The window: |E| phase curve (M7) - not yet measured
+**Conditions.** dev, quiet machine (the bench measured the machine busy 4-5%
+during 1-thread samples - itself), Windows 11, g++ 16.2 `-O2 -DNDEBUG`, static
+`t5d-bench --samples 15` at 2740e66 (15 interleaved rounds of 200 ms after a
+warm-up; worker threads pinned, one per physical core first; thread CPU time by
+QueryThreadCycleTime). SYNTHETIC positions from seeded random play, 16 games per
+class, at the spec's assumed timeline counts (N100 T6 ... N600 T12); timed streams
+are the positions' one-move children (6 per position per worker, disjoint across
+workers). Integer work: no precision or batch. Window setting: W(8) and E(8)
+computed (no network). Moves PSEUDO-LEGAL except where marked. Raw output and
+JSON: `build/m9/` (git-ignored; reproducible from the command).
+
+**Throughput, one thread** (wall /s, median over rounds [min, max]):
+
+| Class | movegen | expand (every board's features) | expand + relations | expand-scope | **scope + relations** | M9 target |
+|---|---|---|---|---|---|---|
+| N100 T6 | 171,804 | 103,077 | 72,762 | 104,089 | 72,681 | - |
+| N160 T7 | 139,053 | 79,681 | 57,311 | 82,731 | 59,008 | - |
+| N240 T8 | 102,263 | 58,810 | 42,631 | 62,292 | **44,047 [32,544, 44,733]** | 20,000 |
+| N400 T10 | 80,213 | 42,967 | 31,969 | 47,268 | 34,100 | - |
+| N600 T12 | 58,002 | 30,374 | 23,183 | 34,156 | **24,951 [22,636, 25,129]** | 10,000 |
+
+"scope + relations" is the configuration closest to the spec's "expansion - legal
+moves, attention masks, typed edges and E" (spec issue 21): the moves, the move
+graph, W/E scope with its features, the typed relations. It clears M9's targets
+on ONE thread by 2.2x at 240 boards (1.63x in the slowest round) and 2.5x at 600:
+outside the ±10% STOP band. With t threads it scales to 10.5x at 12 (one per
+physical core) and 13.2x at 24; "per GPU's CPU allocation" is undefined (spec
+issue 20), and one core already suffices.
+
+**Flatness in N at fixed |E|** (M9: ≤ 10% growth from 100 to 600 boards).
+SYNTHETIC flatness series at T = 8, 24 games, one thread, interleaved; growth =
+N600 against N100 per round, median [min, max] over 15 rounds. *Matched*: 52
+positions per level paired on moves, |E(8)| and the mover's pieces (within 10% /
+max(1, 20%) / 10%; achieved mismatch ≤ 3.7% / 0.35 / 4.5%):
+
+| Configuration | µs per expansion N100 → N160 → N240 → N400 → N600 | growth | reading |
+|---|---|---|---|
+| movegen | 3.11 → 4.13 → 4.74 → 4.39 → 2.96 | -5% [-28%, +5%] | below +10% in every round |
+| expand-scope | 6.34 → 8.61 → 9.33 → 9.32 → 7.18 | +13% [+12%, +35%] | above +10% in every round, but not monotonic in N |
+| **scope + relations** | 9.32 → 12.78 → 13.37 → 12.81 → 10.03 | **+7% [-17%, +13%]** | rounds straddle +10%: inconclusive |
+| expand (every board) | 6.19 → 9.06 → 11.13 → 13.52 → 13.65 | +120% | O(N) by construction (spec issue 21) |
+
+*No moves* (the history term alone - what M9's flatness test is after, "frozen
+boards' move and attack sets are not being cached"): the windowed expansion's
+per-board cost is **0.48 ns per board [0.41, 0.68] = 2% of a matched expansion at
+N600**; frozen boards are not being re-processed. The matched series' level-to-
+level variation (N160-N400 above both ends) is larger than its N100-N600 growth:
+position sampling, not an N trend, dominates it.
+
+**Verdict (provisional, pseudo-legal):** throughput PASS at both sizes, outside
+the STOP band. Flatness: the history term is flat (2%); the spec's expansion
+reads +7% median, inconclusive by rounds, none of the medians inside the 9-11%
+STOP band; expand-scope's +13% is flagged (non-monotonic). Re-measure with legal
+moves once the filter below is fast.
+
+**With legality** (`ExpandOptions::legal_moves`: only moves after which the
+action can still be finished legally; scratch harness, machine loaded): median
+11 ms (N100), 50 ms (N160), 157 ms (N240), 218 ms (N400) per expansion, with a
+tail of 0.8 s - 522 s - three to four orders of magnitude below M9's target.
+Under the rule ("search is CPU-bound: optimise movegen before Phase 2") this is a
+**FAIL to fix before search**, not a STOP: what the expansion offers (pseudo-legal
+moves, legal first moves, or whole actions - D2's ply split) is open (spec issue
+46), and the filter's algorithm has headroom (engine work queued).
+
+### The window: |E| phase curve (M7) - NO VERDICT: the corpus cannot decide it
+
+`t5d-measure --summary` over the 41 corpus records (2026-10-02, 2740e66),
+PSEUDO-LEGAL destinations (every |E| an upper bound), distinct positions, records
+grouped into games (NP, NP0 and many2 one game; standard and softmate one; the two
+futures one). Under Q4's other reading (`--moves-after-shift`, which the nine
+records that play on after the shift need):
+
+| N bucket | positions | games | active T (median) | \|W(8)\| (bands only) | \|E(8)\| median / p95 / max | \|E(4)\| median / p95 / max | games' medians of \|E(8)\| |
+|---|---|---|---|---|---|---|---|
+| 1-49 | 508 | 34 | 1 | 9 (9) | 0 / 3 / 17 | 1 / 5 / 19 | 0 [0, 2] |
+| 50-99 | 90 | 7 | 4 | 34.5 (33) | 2 / 11 / 20 | 6.5 / 19 / 21 | 3 [0, 5] |
+| 100-159 | 57 | 5 | 8 | 68 (62) | 3 / 20.2 / 24 | 9 / 27 / 34 | 4 [2, 19] |
+| 160-239 | 42 | 3 | 16 | 122 (114) | 15.5 / 27 / 37 | 28 / 39 / 45 | 19 [10.5, 22] |
+| 240-399 | 23 | 2 | 24 | 185 (174) | 10 / 23 / 23 | 27 / 46 / 50 | 11.5 [5, 18] |
+| 400+ | 0 | 0 | | | | | |
+
+Under the engine's default Q4 reading nothing reaches 160 boards. No verdict: the
+phases above 160 boards rest on 2-3 games, the 400-600 phases on none, and the
+real games run 16-24 active timelines where §15.6's table assumes 7-12 - so W
+itself, not |E|, dominates the scope (at 160-239 boards W(8) = 122 against the
+table's 69). The rule needs real game records (spec issue 26; requested from the
+user); the window code stays parked (M5, M7).
 
 ### The scanner: 6b (M8) - not yet measured
