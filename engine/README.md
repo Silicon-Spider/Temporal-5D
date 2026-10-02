@@ -1704,9 +1704,9 @@ Why this is sound (H2, H37):
 **Tests.** `scanner_evasion_probe_keeps_the_proofs` and its `long_` version scan the
 sparse starts' random play, under the default rules and under Q4's ruled reading, and
 the constructed positions. Each is scanned with the stage off, at 64 and at 1, at a
-generous budget and at random ones. Every proof is checked against the game tree, and
-where two settings both prove, they prove the same. `scanner_evasion_probe_off_is_e5b`
-checks that 0 leaves the stage out.
+generous budget and at random ones. Every proof of up to 1 half-turn (3 in the `long_`
+version) is checked against the game tree, and where two settings both prove, they
+prove the same. `scanner_evasion_probe_off_is_e5b` checks that 0 leaves the stage out.
 
 **The profile**, from `t5d-scan6b` on the corpus records under Q4's ruled reading
 (`--moves-after-shift`), 100,000-node deterministic scans, one job. The machine was
@@ -1803,8 +1803,9 @@ under Q4's ruled reading. The shares of roots reaching 5 forcing half-turns were
 - `scanner_lazy_smp_no_false_proofs` (and its `long_` version) scans with 2, 3, 4 and 8
   threads, by node budget and by the clock, over the sparse starts' random play under
   the default rules and Q4's ruled reading, and over the constructed positions. All
-  scans of a thread count share one store. Every proof is checked against the game
-  tree and against one thread's.
+  scans of a thread count share one store. Every proof of up to 1 half-turn (3 in the
+  `long_` version) is checked against the game tree, and every proof against one
+  thread's.
 - `scanner_lazy_smp_store_refuses_contradictions` checks the shared store's contract.
   Eight threads put proofs at once and then contradictions: every contradiction is
   refused, and the shortest distance is kept. A plain `MemorySolvedStore` shared by
