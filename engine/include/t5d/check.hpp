@@ -128,8 +128,10 @@ std::optional<RoyalCapture> find_royal_capture(const Multiverse& multiverse,
 // ---------------------------------------------------------------------------
 
 /// The boards check status passes (R1): the timelines whose playable board is
-/// the mover's, ACTIVE, and IN THE PRESENT (its half-turn is the present's;
-/// a timeline deferred under Q6's alternative is not in the present).
+/// the mover's, ACTIVE, and IN THE PRESENT (its half-turn is the present's).
+/// (No timeline deferred under Q6's alternative is the mover's to play at a
+/// turn's start - its deferral ends as its owner's turn begins - and one
+/// found throws std::logic_error: the state is not a turn's start.)
 /// Ascending. Meaningful at the start of a turn, when these are the mover's
 /// mandatory boards under the default T6 - whatever Q5's option says.
 std::vector<int> passed_timelines(const GameState& turn_start);
