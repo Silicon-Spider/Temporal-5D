@@ -204,6 +204,24 @@ TEST(selfplay_under_q4s_other_reading_submits_by_choice) {
   }
 }
 
+TEST(selfplay_plays_only_moves_known_legal_whatever_the_budget) {
+  // The fast classification with no verification in search: many children stay
+  // unknown, and the driver classifies a chosen one exactly before playing it.
+  const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Random, 6);
+  for (const bool match : {false, true}) {
+    PlayParams p = quick(TurnSplit::BoardMove, 12);
+    p.search.legality = LegalityOptions::budgeted(0, 0);
+    p.search.verify_unknown = false;
+    p.match_play = match;
+    p.turn_cap.turns = 6;
+    for (const char* name : {"Standard - Two Timelines", "Very Small - Open"}) {
+      const GameRecord g = play_game(variant(name), *ev, p);
+      check_game(g, p.turn_cap);
+      check_record(g, name);
+    }
+  }
+}
+
 TEST(selfplay_is_reproducible_and_counts_the_cap) {
   const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Random, 2);
   PlayParams p = quick(TurnSplit::BoardMove, 44);

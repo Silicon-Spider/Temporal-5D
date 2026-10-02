@@ -8,6 +8,7 @@
 #include <string>
 #include <utility>
 
+#include "t5d/legal.hpp"
 #include "t5d/movegen.hpp"
 #include "t5d/search.hpp"
 
@@ -134,13 +135,42 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
       g.evaluations += after.evaluations - before.evaluations;
       g.nodes += after.nodes_created - before.nodes_created;
       g.search_turn_caps += after.turn_caps - before.turn_caps;
-      const std::vector<RootChild> children = search->root_children();
-      std::size_t pick = 0;
-      if (params.match_play) {
-        pick = search->choose().index;
-      } else {
+      const auto choose_now = [&]() -> std::size_t {
+        bool visited = false;
+        for (const RootChild& c : search->root_children()) visited = visited || c.visits > 0;
+        if (!visited) search->run(evaluator, Limits{params.playouts});  // children were removed
+        if (params.match_play) return search->choose().index;
         const double t = g.decisions < params.temperature_decisions ? params.temperature : 0.0;
-        pick = search->choose_by_visits(t, uniform());
+        return search->choose_by_visits(t, uniform());
+      };
+      std::size_t pick = choose_now();
+      // A move is played only once known legal: one the expansion's budget left
+      // unknown is classified exactly first - illegal, it is removed and the
+      // choice made again; still unknown (the memory ceiling), the most visited
+      // child known legal is played instead.
+      LegalityOptions exact = LegalityOptions::exact();
+      exact.max_bytes = sp.mate_bytes;
+      std::vector<RootChild> children = search->root_children();
+      while (children.at(pick).legality != MoveLegality::Legal) {
+        const MoveLegality v = search->verify(pick, exact);
+        children = search->root_children();
+        if (v == MoveLegality::Legal) break;
+        if (v == MoveLegality::Illegal) {
+          pick = choose_now();
+          children = search->root_children();
+          continue;
+        }
+        std::size_t best = children.size();
+        for (std::size_t i = 0; i < children.size(); ++i) {
+          if (children[i].legality == MoveLegality::Legal &&
+              (best == children.size() || children[i].visits > children[best].visits)) {
+            best = i;
+          }
+        }
+        if (best == children.size()) {
+          throw std::logic_error("play: no root child could be shown legal (the memory ceiling)");
+        }
+        pick = best;
       }
       ++g.decisions;
       const RootChild& c = children.at(pick);

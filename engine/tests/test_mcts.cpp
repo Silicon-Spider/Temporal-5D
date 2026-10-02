@@ -827,15 +827,195 @@ TEST(mcts_board_move_children_are_the_legal_moves) {
         submit = true;
       } else {
         edges.push_back(*e.move);
+        // (a) under the default budget: a legal move, or one flagged unknown.
+        if (std::find(legal.begin(), legal.end(), *e.move) == legal.end()) CHECK(e.unknown || e.pruned);
       }
     }
-    CHECK_EQ(edges.size(), legal.size());
+    CHECK(edges.size() >= legal.size());
     for (const Move& m : legal) CHECK(std::find(edges.begin(), edges.end(), m) != edges.end());
     CHECK(!submit);  // the default Q4 reading: a finished action is submitted at once
     // Mid-turn nodes keep the mover; terminal detection only at turn starts.
     if (!n.turn_start) CHECK(n.terminal == Terminal::None);
   }
   CHECK(checked > 5);
+}
+
+TEST(mcts_board_move_children_are_exactly_the_legal_moves_under_exact_legality) {
+  SearchParams p = fast();
+  p.widening = false;
+  p.legality = LegalityOptions::exact();
+  const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Random, 2);
+  Search search(two_timelines_after(3), p);
+  search.run(*ev, Limits{100});
+  CHECK_EQ(search.stats().unknown_edges, std::uint64_t{0});
+  std::size_t checked = 0;
+  for (NodeId id = 0; id < search.node_count(); ++id) {
+    const NodeView n = search.node(id);
+    if (!n.expanded || n.stuck) continue;
+    ++checked;
+    MoveList legal;
+    legal_moves(*n.state, legal);
+    CHECK_EQ(n.edge_count, legal.size());
+  }
+  CHECK(checked > 5);
+}
+
+// ---- E5a's tiers in the search (build-log spec issue 46; parts (a)-(f)) -----------------
+
+namespace {
+
+// A turn start from seeded random legal play at which the FAST classification
+// (t5d/legal.hpp: budgeted(0, 0)) leaves at least one move unknown that is in
+// fact illegal and one that is in fact legal (the exact classification says).
+GameState position_with_unknown_moves() {
+  t5d_test::Rng rng(31);
+  for (int game_no = 0; game_no < 40; ++game_no) {
+    GameState s = variant(game_no % 2 == 0 ? "Standard - Two Timelines" : "Standard");
+    for (int a = 0; a < 12; ++a) {
+      MoveList moves;
+      generate_moves(s, moves);
+      std::vector<MoveLegality> fast_class;
+      std::vector<MoveLegality> exact_class;
+      classify_moves(s, moves, fast_class, LegalityOptions::budgeted(0, 0));
+      classify_moves(s, moves, exact_class, LegalityOptions::exact());
+      bool unknown_illegal = false;
+      bool unknown_legal = false;
+      for (std::size_t i = 0; i < moves.size(); ++i) {
+        if (fast_class[i] != MoveLegality::Unknown) continue;
+        unknown_illegal = unknown_illegal || exact_class[i] == MoveLegality::Illegal;
+        unknown_legal = unknown_legal || exact_class[i] == MoveLegality::Legal;
+      }
+      if (unknown_illegal && unknown_legal) return s;
+      const ActionList acts = list_legal_actions(s, 64, Detector::Hypercuboid);
+      if (acts.actions.empty()) break;
+      s = acts.actions[static_cast<std::size_t>(rng.below(static_cast<int>(acts.actions.size())))].result;
+    }
+  }
+  throw std::logic_error("no position with unknown moves found");
+}
+
+}  // namespace
+
+TEST(mcts_unknown_moves_are_kept_flagged_verified_and_pruned) {
+  const GameState s = position_with_unknown_moves();
+  MoveList pseudo;
+  generate_moves(s, pseudo);
+  std::vector<MoveLegality> exact_class;
+  classify_moves(s, pseudo, exact_class, LegalityOptions::exact());
+  const auto exact_of = [&](const Move& m) {
+    for (std::size_t i = 0; i < pseudo.size(); ++i) {
+      if (pseudo[i] == m) return exact_class[i];
+    }
+    throw std::logic_error("not a pseudo-legal move");
+  };
+  for (const bool graph : {false, true}) {
+    SearchParams p = fast();
+    p.graph = graph;
+    p.widening = false;  // every child selectable at once: the unknown ones get picked
+    p.legality = LegalityOptions::budgeted(0, 0);
+    p.verify_legality = LegalityOptions::exact();
+    const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Uniform);
+    Search search(s, p);
+    search.run(*ev, Limits{400});
+    CHECK(search.stats().unknown_edges > 0);
+    CHECK(search.stats().verified_illegal > 0);
+    CHECK(search.stats().verified_legal > 0);
+    const NodeView root = search.node(search.root());
+    double sum = 0;
+    for (std::size_t i = 0; i < root.edge_count; ++i) {
+      const EdgeView e = search.edge(search.root(), i);
+      const MoveLegality truth = exact_of(*e.move);
+      CHECK(truth != MoveLegality::Unknown);
+      // (a) a proved-illegal move never became an edge: an illegal one is an
+      // unknown one, verified (or found a dead end) and pruned.
+      if (truth == MoveLegality::Illegal) {
+        CHECK(e.unknown || e.verified);
+        CHECK(!e.verified || e.pruned);
+        CHECK_EQ(e.visits, std::uint32_t{0});  // (c) nothing backed up through it
+      }
+      if (e.pruned) CHECK(truth == MoveLegality::Illegal);
+      if (e.verified && !e.unknown) CHECK(truth == MoveLegality::Legal);
+      if (!e.pruned) sum += e.prior;
+    }
+    CHECK(std::abs(sum - 1.0) < 1e-9);  // renormalised
+    CHECK_NOTHROW(search.check_invariants());
+    // RootChild says which children are known legal (f: the network's mask is
+    // legal or unknown).
+    for (const RootChild& c : search.root_children()) {
+      CHECK(exact_of(c.moves.at(0)) == MoveLegality::Legal || c.legality == MoveLegality::Unknown);
+    }
+  }
+}
+
+TEST(mcts_an_unknown_edge_proves_nothing_until_verified) {
+  // forced_draw: White's only legal move is Kxc2, which stalemates Black. The
+  // fast classification refutes the bishop's moves (the queen's capture of d2
+  // stands with the board passed) and leaves the king's moves unknown (royal
+  // moves). Unverified, the stalemate behind Kxc2 bounds the root from above
+  // but proves nothing (e); verified, it proves the draw.
+  const GameState s = forced_draw();
+  for (const bool verify : {false, true}) {
+    SearchParams p = fast();
+    p.widening = false;
+    p.legality = LegalityOptions::budgeted(0, 0);
+    p.verify_unknown = verify;
+    const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Uniform);
+    Search search(s, p);
+    search.run(*ev, Limits{300});
+    CHECK(search.stats().unknown_edges > 0);
+    const NodeView root = search.node(search.root());
+    CHECK_EQ(root.hi, 0);
+    if (verify) {
+      CHECK(search.root_solved());
+      CHECK_EQ(root.lo, 0);
+    } else {
+      CHECK(!search.root_solved());
+      CHECK_EQ(root.lo, -1);
+      // Final selection sees no proof through the unknown edge either.
+      for (const RootChild& c : search.root_children()) {
+        if (c.legality == MoveLegality::Unknown) CHECK_EQ(c.lo, -1);
+      }
+    }
+    // (e) everywhere: a node's lower bound rests on a child through a known edge.
+    for (NodeId id = 0; id < search.node_count(); ++id) {
+      const NodeView n = search.node(id);
+      if (!n.expanded || n.terminal != Terminal::None || n.lo == -1) continue;
+      bool supported = false;
+      for (std::size_t i = 0; i < n.edge_count; ++i) {
+        const EdgeView e = search.edge(id, i);
+        if (e.pruned || e.unknown || e.child == kNoNode) continue;
+        const NodeView c = search.node(e.child);
+        const int lo = c.mover == n.mover ? c.lo : -c.hi;
+        supported = supported || lo >= n.lo;
+      }
+      CHECK(supported);
+    }
+    CHECK_NOTHROW(search.check_invariants());
+  }
+}
+
+TEST(mcts_verify_settles_a_root_child_before_it_is_played) {
+  const GameState s = forced_draw();
+  SearchParams p = fast();
+  p.widening = false;
+  p.legality = LegalityOptions::budgeted(0, 0);
+  p.verify_unknown = false;
+  const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Uniform);
+  Search search(s, p);
+  search.run(*ev, Limits{20});
+  std::size_t legal = 0;
+  for (std::size_t i = 0; i < search.root_children().size();) {
+    const MoveLegality v = search.verify(i);
+    CHECK(v != MoveLegality::Unknown);
+    if (v == MoveLegality::Legal) {
+      ++legal;
+      CHECK(search.root_children()[i].legality == MoveLegality::Legal);
+      ++i;
+    }
+  }
+  CHECK_EQ(legal, std::size_t{1});  // Kxc2
+  CHECK_EQ(search.root_children().size(), std::size_t{1});
+  CHECK_NOTHROW(search.check_invariants());
 }
 
 TEST(mcts_whole_turn_children_are_the_legal_actions) {

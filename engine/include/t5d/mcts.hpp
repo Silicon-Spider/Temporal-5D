@@ -30,11 +30,24 @@
 //
 // HOW LEGALITY ENTERS. Through one call site (mcts.cpp, leaf_expansion): the
 // expansion of a leaf (t5d/expand.hpp) with ExpandOptions::legal_moves under
-// the ply split - E4's filter (keep_legal_moves), which engine stage E5a is
-// making fast; it drops in there unchanged. Under the whole-turn split the
-// expansion offers the pseudo-legal moves (the network's candidates, over
-// which every legal action's moves are found) and list_legal_actions the
-// children.
+// the ply split, classified by engine stage E5a's tiers (t5d/legal.hpp) under
+// a BUDGET (build-log spec issue 46; the orchestrator's policy, each part a
+// parameter): (a) a move proved illegal is dropped, a legal or unknown one
+// kept, the unknown ones flagged; (b) an unknown move gets its prior
+// (unknown_prior_scale); (c) the first time selection picks an unknown edge it
+// is verified under a larger budget (verify_legality) - illegal: the edge is
+// removed, its siblings' priors renormalised, selection repeated, nothing
+// backed up; legal: the flag goes; still unknown: the search proceeds with the
+// edge flagged, never on a proof line; (d) a node is terminal only on an exact
+// verdict of E4's detectors (H37), never because its known moves ran out; (e)
+// the solver takes only exact verdicts: a child reached through an unknown edge
+// never raises its parent's lower bound (it may still bound it from above - a
+// superset of the legal children is a sound upper bound); (f) for training,
+// the policy target is the root's visit counts and the network's move mask
+// the legal and unknown moves (RootChild::legality). Under the whole-turn
+// split the expansion offers the pseudo-legal moves (the network's
+// candidates, over which every legal action's moves are found) and
+// list_legal_actions the children, which are legal.
 //
 // TERMINAL VERDICTS come ONLY from E4's exhaustive detectors (detect_mate,
 // H37), at turn starts: checkmate (the mover loses, -1) and stalemate (a draw,
@@ -128,6 +141,7 @@
 #include <vector>
 
 #include "t5d/expand.hpp"
+#include "t5d/legal.hpp"
 #include "t5d/move.hpp"
 #include "t5d/search.hpp"
 #include "t5d/state.hpp"
@@ -200,6 +214,18 @@ struct SearchParams {
   /// Board-move: children are the legal moves (true, the rule). False is a
   /// test seam - pseudo-legal children, whose dead ends are pruned.
   bool legal_moves_only = true;
+  /// (a) Board-move: the expansion's legality classification (t5d/legal.hpp):
+  /// proved-illegal moves dropped, unknown ones kept and flagged. Placeholder:
+  /// E5a's measured budget (64 checks, 2,000 search nodes);
+  /// LegalityOptions::exact() leaves nothing unknown.
+  LegalityOptions legality = LegalityOptions::budgeted(64, 2000);
+  /// (b) An unknown move's prior is multiplied by this (then renormalised).
+  /// 1: it gets its prior. Placeholder.
+  double unknown_prior_scale = 1.0;
+  /// (c) Verify an unknown edge the first time selection picks it.
+  bool verify_unknown = true;
+  /// (c) ... under this budget. Placeholder.
+  LegalityOptions verify_legality = LegalityOptions::budgeted(4096, 200'000);
 
   // ---- E1: PUCT, top-k instantiation, entropy-adaptive widening, FPU, noise -----
   double cpuct = 1.5;                 ///< placeholder
@@ -419,6 +445,10 @@ struct SearchStats {
   std::uint64_t transposition_hits = 0;  ///< MCGS: an edge linked to an existing node
   std::uint64_t key_collisions = 0;    ///< equal keys, different states
   std::uint64_t dead_ends = 0;         ///< partial turns with no legal completion, pruned
+  std::uint64_t unknown_edges = 0;     ///< (a) edges whose move the expansion left unknown
+  std::uint64_t verified_legal = 0;    ///< (c) unknown edges verified legal
+  std::uint64_t verified_illegal = 0;  ///< (c) ... verified illegal and removed
+  std::uint64_t verified_unknown = 0;  ///< (c) ... still unknown after verification
   std::uint64_t mate_checks = 0;       ///< turn starts given to the detector
   std::uint64_t unknown_verdicts = 0;  ///< ... that answered Unknown (H37: not terminal)
   std::uint64_t checkmates = 0;        ///< terminal nodes found
@@ -444,6 +474,8 @@ struct EdgeView {
   std::span<const Move> action;  ///< whole-turn: the action's moves (playable order)
   bool submit = false;
   bool pruned = false;
+  bool unknown = false;   ///< the move's legality is unknown (a budget left it undecided)
+  bool verified = false;  ///< verification has run on it (c)
   double prior = 0;
   NodeId child = kNoNode;
   std::uint32_t visits = 0;
@@ -482,10 +514,13 @@ struct NodeView {
 struct RootChild {
   std::vector<Move> moves;  ///< one move (board-move), an action, or none (submit)
   bool submit = false;
+  /// Legal, or Unknown (the move's legality undecided by the expansion's
+  /// budget): never Illegal - those are removed. Actions and submit: Legal.
+  MoveLegality legality = MoveLegality::Legal;
   double prior = 0;
-  std::uint32_t visits = 0;
+  std::uint32_t visits = 0;  ///< (f) the policy target
   double q = 0;
-  int lo = -1;
+  int lo = -1;  ///< bounds; a child through an unknown edge proves nothing (lo -1)
   int hi = 1;
   NodeId child = kNoNode;
 };
@@ -550,6 +585,11 @@ class Search {
   /// (t <= 0: the most visits, ties to the lower index), with `random` a
   /// uniform number in [0, 1).
   std::size_t choose_by_visits(double temperature, double random) const;
+  /// Classifies root child `index`'s move under `options` (a move must be known
+  /// legal before it is played): Illegal removes the child (its siblings'
+  /// priors renormalised; indices of root_children() change), Legal clears its
+  /// flag. Actions and submit are Legal. Precondition: nothing waiting.
+  MoveLegality verify(std::size_t index, const LegalityOptions& options = LegalityOptions::exact());
 
   // -- persistence (C12, C13) --------------------------------------------------------
 
