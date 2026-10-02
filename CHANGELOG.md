@@ -10,6 +10,33 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-02 - Network N4: the engine binding; real positions as the network's input
+
+- `python/t5d/engine/` (new): a ctypes binding to the engine's C API - the library
+  found by an explicit path, `T5D_ENGINE_LIB` or `build/engine/`; games from a
+  5dpgn record, 5DFEN or a variant; replay, apply, submit; the engine's move list
+  (pseudo-legal - the C API has no legal-moves switch yet); each expansion copied
+  out of the engine's buffers at once; one exception per status with the engine's
+  message. `convert.py` turns an expansion into a validated `PositionState`
+  (features, tokens, move graph, the attack/defence/x-ray relations, candidate
+  moves in the engine's order - logit i scores engine move i -, the lineage parent,
+  the W/E scope as a token subset) and refuses a state whose present has shifted
+  inside an unsubmitted action (spec issue 48). `evaluator.py`: dense and cached
+  network evaluators and the serving loop of the search's protocol; the adapter for
+  engine E6a's step API is marked and waits for it. `play.py`, `bench.py`.
+- `python/tests/engine/` (new, 72 tests; they skip without the library): hand-
+  computed 5DFEN positions; over 100 real positions from 10 variants, random play
+  and three records, each board checked against an independent decoding of the
+  engine's canonical 5DFEN; the network (F1 and a small one) on real positions,
+  dense and cached (cached = one full block-causal pass). Opt-in, `T5D_RECORDS`:
+  every position of named record files (the gate corpus: 1,010 positions, all
+  converted and checked).
+- `.github/workflows/network.yml`: builds the engine's shared library first, so the
+  binding's tests run on Linux; the job also runs when `engine/` changes.
+- `docs/BUILD_LOG.md`: spec issues 48-50, proposed spec edits 41-42.
+- Spec: §2.1-§2.3 (A1-A3), §6 (B9, B11), §7.3 (C17's lineage), §8.1 (D1), §8.3 (D3),
+  §10.4.1 (W, E); spec issues 48-50, proposed edits 41-42.
+
 ### 2026-10-02 - The engine's first gate runs triaged; the first known divergences
 
 - `oracles/known-divergences.toml`: 56 entries from the triage of the engine's
