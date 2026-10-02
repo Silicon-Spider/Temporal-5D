@@ -5,6 +5,7 @@
 #ifndef T5D_SEARCH_INTERNAL_HPP
 #define T5D_SEARCH_INTERNAL_HPP
 
+#include <algorithm>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -42,6 +43,15 @@ class Budgeter {
       return stop();
     }
     ++stats_.nodes;
+    return true;
+  }
+  /// `n` steps at once (work charged in bulk, such as the hypercuboid's
+  /// abstract check). False if the budget does not allow them.
+  bool spend_many(std::uint64_t n) {
+    if (stats_.stopped_by_budget) return false;
+    if (n > budget_.max_nodes - std::min(stats_.nodes, budget_.max_nodes)) return stop();
+    stats_.nodes += n;
+    if (budget_.max_time && std::chrono::steady_clock::now() - start_ > *budget_.max_time) return stop();
     return true;
   }
   /// The search now holds `held` positions, and `extra_bytes` more (action

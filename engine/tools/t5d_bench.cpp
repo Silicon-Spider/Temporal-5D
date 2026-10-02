@@ -39,7 +39,14 @@
 // optimised away. The output names the compiler, the flags, the CPU, its
 // cores and logical processors, and the thread counts. Moves are PSEUDO-LEGAL
 // in every configuration but the "+legal" ones (--legal: the legal moves only,
-// ExpandOptions::legal_moves - provisional, R1; build-log spec issue 28).
+// ExpandOptions::legal_moves under the --legal-budget - provisional, R1;
+// build-log spec issues 28 and 46).
+//
+// LEGAL PROFILE (--legal-profile, instead of the throughput): every class
+// position and its one-move children expanded one at a time, single-threaded
+// - pseudo-legal, then legal exact, under the budget, and fast - each timed;
+// per class the median, p95 and worst per expansion, and the share of the
+// moves each tier of t5d/legal.hpp settled.
 //
 // FLATNESS (§15.6: "Scaling at fixed |E| - flat in N - <= 10% growth from 100
 // to 600 boards"). Games with their active timelines held at T, taken at every
@@ -643,7 +650,7 @@ struct Config {
   bool threaded = false;
 };
 
-std::vector<Config> configs(bool legal) {
+std::vector<Config> configs(bool legal, const t5d::LegalityOptions& legality) {
   std::vector<Config> out;
   Config movegen;
   movegen.name = "movegen";
@@ -683,14 +690,16 @@ std::vector<Config> configs(bool legal) {
     // --legal: the same with the legal moves only (ExpandOptions::legal_moves).
     Config scope_legal = scope;
     scope_legal.name = "expand-scope+legal";
-    scope_legal.what = "expand-scope with the legal moves only (a search per move: the moves after "
-                       "which the action can be finished legally)";
+    scope_legal.what = "expand-scope with the legal moves only (t5d/legal.hpp's tiers, under the "
+                       "--legal-budget: the moves proved illegal dropped, the undecided kept)";
     scope_legal.options.legal_moves = true;
+    scope_legal.options.legality = legality;
     out.push_back(scope_legal);
     Config m9_legal = m9;
     m9_legal.name = "scope+relations+legal";
     m9_legal.what = "scope+relations with the legal moves only";
     m9_legal.options.legal_moves = true;
+    m9_legal.options.legality = legality;
     out.push_back(m9_legal);
   }
   return out;
@@ -937,6 +946,9 @@ struct Options {
   bool loop = true;
   bool pin = true;
   bool legal = false;
+  bool legal_profile = false;
+  std::uint64_t legal_checks = 64;
+  std::uint64_t legal_nodes = 2000;
   std::string emit_dir;
   std::string json_path;
   t5d::RuleOptions rules{};
@@ -971,7 +983,13 @@ void print_usage(std::FILE* stream) {
       "  --no-loop             skip the loop over the class positions (the upper bound)\n"
       "  --no-pin              do not pin the worker threads\n"
       "  --legal               also time expand-scope and scope+relations with the legal\n"
-      "                        moves only (ExpandOptions::legal_moves)\n"
+      "                        moves only (ExpandOptions::legal_moves, under --legal-budget)\n"
+      "  --legal-budget C,N    the classification's budget there, per expansion: C checks,\n"
+      "                        N search nodes (LegalityOptions; default 64,2000)\n"
+      "  --legal-profile       instead of the throughput: every class position and its\n"
+      "                        one-move children expanded one by one - pseudo-legal, legal\n"
+      "                        (exact), legal (--legal-budget), fast (0,0) - each timed; the\n"
+      "                        distribution per expansion and how the moves were settled\n"
       "  --quick               a smoke test: --samples 3 --sample-ms 50 --flat-ms 10\n"
       "                        --games 4 --children 4 --flat-games 4 --flat-max 24\n"
       "  --emit DIR            write every synthetic position's 5dpgn record into DIR\n"
@@ -1072,6 +1090,17 @@ Options parse_options(int argc, char** argv) {
       o.loop = false;
     } else if (a == "--legal") {
       o.legal = true;
+    } else if (a == "--legal-profile") {
+      o.legal_profile = true;
+    } else if (a == "--legal-budget") {
+      const std::string v = value(i);
+      const std::size_t comma = v.find(',');
+      const std::optional<std::uint64_t> c = t5d::tools::parse_number(v.substr(0, comma));
+      const std::optional<std::uint64_t> n =
+          comma == std::string::npos ? std::nullopt : t5d::tools::parse_number(v.substr(comma + 1));
+      if (!c || !n) throw std::invalid_argument("--legal-budget: C,N (two counts), not " + v);
+      o.legal_checks = *c;
+      o.legal_nodes = *n;
     } else if (a == "--no-pin") {
       o.pin = false;
     } else if (a == "--quick") {
@@ -1224,6 +1253,105 @@ Measured measure_of(const std::vector<Sample>& samples) {
 
 }  // namespace
 
+// --legal-profile: each class position and its worker-0 children expanded
+// one at a time - the windowed expansion with its relations, pseudo-legal,
+// then with the legal moves (exact, budgeted, fast) - each timed on its own;
+// per class the median, p95 and worst microseconds per expansion, and how the
+// classification settled the moves (t5d/legal.hpp's tiers).
+struct ProfileSeries {
+  std::vector<double> us;
+  t5d::LegalityStats tiers;
+  std::size_t kept = 0;
+  std::size_t unknown = 0;
+};
+
+double profile_quantile(std::vector<double> v, double q) {
+  if (v.empty()) return 0;
+  std::sort(v.begin(), v.end());
+  const std::size_t i = std::min(v.size() - 1, static_cast<std::size_t>(q * static_cast<double>(v.size())));
+  return v[i];
+}
+
+int legal_profile(const Plan& plan, const Options& opt) {
+  const char* names[] = {"pseudo-legal", "legal, exact", "legal, budgeted", "legal, fast"};
+  t5d::ExpandOptions base;
+  base.square_features = t5d::SquareFeatures::Scope;
+  base.attack = base.defence = base.xray = true;
+  std::vector<t5d::ExpandOptions> options(4, base);
+  options[1].legal_moves = true;
+  options[2].legal_moves = true;
+  options[2].legality = t5d::LegalityOptions::budgeted(opt.legal_checks, opt.legal_nodes);
+  options[3].legal_moves = true;
+  options[3].legality = t5d::LegalityOptions::budgeted(0, 0);
+  std::printf("t5d-bench --legal-profile: scope+relations expansions one by one, one thread; budgeted = "
+              "%llu checks, %llu search nodes per expansion; fast = 0, 0\n",
+              static_cast<unsigned long long>(opt.legal_checks), static_cast<unsigned long long>(opt.legal_nodes));
+  t5d::Expansion x;
+  for (const PositionClass& pc : plan.classes) {
+    std::vector<t5d::GameState> states;
+    for (const Base* b : pc.bases) {
+      states.push_back(b->state);
+      for (const t5d::Move& m : b->child_moves[0]) {
+        t5d::GameState child = b->state;
+        child.apply(m);
+        states.push_back(child);
+      }
+    }
+    std::vector<ProfileSeries> series(4);
+    for (const t5d::GameState& s : states) {
+      if (!s.may_move()) continue;
+      for (std::size_t k = 0; k < 4; ++k) {
+        if (k == 0) t5d::expand(s, options[k], x);  // warm the buffers
+        const auto a = std::chrono::steady_clock::now();
+        t5d::expand(s, options[k], x);
+        const auto b = std::chrono::steady_clock::now();
+        series[k].us.push_back(std::chrono::duration<double, std::micro>(b - a).count());
+        const t5d::LegalityStats& st = x.legality_stats();
+        t5d::LegalityStats& sum = series[k].tiers;
+        sum.moves += st.moves;
+        sum.standing_at_start += st.standing_at_start;
+        sum.bulk_quiet += st.bulk_quiet;
+        sum.bulk_branches += st.bulk_branches;
+        sum.refuted_in_bulk += st.refuted_in_bulk;
+        sum.modified += st.modified;
+        sum.finished += st.finished;
+        sum.standing_after += st.standing_after;
+        sum.learned += st.learned;
+        sum.no_finish_at_all += st.no_finish_at_all;
+        sum.searched_legal += st.searched_legal;
+        sum.searched_illegal += st.searched_illegal;
+        sum.unknown += st.unknown;
+        series[k].kept += x.moves().size();
+        for (const t5d::MoveLegality l : x.move_legality()) {
+          if (l == t5d::MoveLegality::Unknown) ++series[k].unknown;
+        }
+      }
+    }
+    std::printf("%s (%zu expansions):\n", pc.name.c_str(), series[0].us.size());
+    for (std::size_t k = 0; k < 4; ++k) {
+      const ProfileSeries& p = series[k];
+      std::printf("  %-16s median %9.1f us  p95 %10.1f us  worst %11.1f us", names[k], profile_quantile(p.us, 0.5),
+                  profile_quantile(p.us, 0.95), p.us.empty() ? 0.0 : *std::max_element(p.us.begin(), p.us.end()));
+      if (k > 0) {
+        const t5d::LegalityStats& t = p.tiers;
+        const double m = static_cast<double>(std::max<std::size_t>(t.moves, 1));
+        const auto pct = [&](std::size_t v) { return 100.0 * static_cast<double>(v) / m; };
+        std::printf("  | moves kept %zu, unknown %zu | settled: standing at the start %.1f%%, stripped "
+                    "quiet %.1f%%, stripped branches %.1f%%, refuted by a passed board %.1f%%, own boards "
+                    "%.1f%%, finished %.1f%%, standing after %.1f%%, learned %.1f%%, no finish %.1f%%, "
+                    "searched %.1f%%, unknown %.1f%%",
+                    p.kept, p.unknown, pct(t.standing_at_start), pct(t.bulk_quiet), pct(t.bulk_branches),
+                    pct(t.refuted_in_bulk), pct(t.modified), pct(t.finished - t.modified), pct(t.standing_after),
+                    pct(t.learned), pct(t.no_finish_at_all), pct(t.searched_legal + t.searched_illegal),
+                    pct(t.unknown));
+      }
+      std::printf("\n");
+    }
+    std::fflush(stdout);
+  }
+  return 0;
+}
+
 int main(int argc, char** argv) {
   Options opt;
   try {
@@ -1246,7 +1374,7 @@ int main(int argc, char** argv) {
 
   try {
     Plan plan;
-    plan.configs = configs(opt.legal);
+    plan.configs = configs(opt.legal, t5d::LegalityOptions::budgeted(opt.legal_checks, opt.legal_nodes));
     plan.workers = opt.threads.back();
     std::vector<std::shared_ptr<const t5d::synthetic::Game>> games;
 
@@ -1446,6 +1574,7 @@ int main(int argc, char** argv) {
       pc.base_mean.divide(static_cast<double>(pc.bases.size()));
       pc.stream_mean.divide(static_cast<double>(pc.stream_size));
     }
+    if (opt.legal_profile) return legal_profile(plan, opt);
     // The flatness candidates' shapes, and the streams: raw, matched, no-move.
     // The matched selection: anchors at the first level whose move count and
     // |E(8)| lie in the bands every level covers, each paired at every other

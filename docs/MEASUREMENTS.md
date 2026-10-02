@@ -166,14 +166,42 @@ reads +7% median, inconclusive by rounds, none of the medians inside the 9-11%
 STOP band; expand-scope's +13% is flagged (non-monotonic). Re-measure with legal
 moves once the filter below is fast.
 
-**With legality** (`ExpandOptions::legal_moves`: only moves after which the
-action can still be finished legally; scratch harness, machine loaded): median
-11 ms (N100), 50 ms (N160), 157 ms (N240), 218 ms (N400) per expansion, with a
-tail of 0.8 s - 522 s - three to four orders of magnitude below M9's target.
-Under the rule ("search is CPU-bound: optimise movegen before Phase 2") this is a
-**FAIL to fix before search**, not a STOP: what the expansion offers (pseudo-legal
-moves, legal first moves, or whole actions - D2's ply split) is open (spec issue
-46), and the filter's algorithm has headroom (engine work queued).
+**With legality** - engine E5a's classifier in tiers (`t5d/legal.hpp`: exact;
+budgeted, which never calls a move illegal without proof and leaves the rest
+"unknown"; fast, budget 0). Profile per expansion of scope + relations with the
+classification inside, one thread, `t5d-bench --legal-profile` at E5a's 8d08b09,
+**machine shared with other agents' builds and tests** - not a verdict.
+Synthetic M9 classes, 20 expansions each, median / p95 / worst (share of moves
+left unknown):
+
+| Class | pseudo-legal | fast | budgeted (64 checks, 2,000 nodes) | exact |
+|---|---|---|---|---|
+| N100 T6 | 21 / 43 / 43 µs | 86 / 114 / 114 µs (46%) | 2.0 / 2.9 / 2.9 ms (14%) | 1.5 / 17 / 17 ms |
+| N160 T7 | 23 / 38 / 38 µs | 95 / 119 / 119 µs (64%) | 2.1 / 3.0 / 3.0 ms (44%) | 5.4 / 59 / 59 ms |
+| N240 T8 | 26 / 46 / 46 µs | 102 / 162 / 162 µs (33%) | 2.5 / 4.1 / 4.1 ms (20%) | 7.3 / 148 / 148 ms |
+| N400 T10 | 40 / 55 / 55 µs | 142 / 232 / 232 µs (47%) | 2.4 / 10 / 10 ms (25%) | 17 ms / 145 s / 145 s |
+| N600 T12 | 54 / 84 / 84 µs | 162 / 273 / 273 µs (27%) | 0.75 / 11 / 11 ms (7%) | 0.72 ms / 200 s / 200 s |
+
+Corpus records (every action start and its children, `--moves-after-shift`):
+
+| Boards | expansions | pseudo-legal | fast | budgeted | exact |
+|---|---|---|---|---|---|
+| 1-49 | 858 | 2 / 8 / 25 µs | 6 / 27 / 96 µs (39%) | 22 µs / 454 µs / 2.1 ms (2%) | 25 µs / 422 µs / 22 ms |
+| 50-99 | 319 | 4 / 21 / 60 µs | 16 / 106 / 218 µs (45%) | 0.41 / 2.0 / 3.4 ms (11%) | 0.26 / 4.0 / 33 ms |
+| 100-159 | 261 | 11 / 42 / 109 µs | 55 / 186 / 418 µs (43%) | 1.1 / 3.2 / 8.1 ms (16%) | 0.82 ms / 14 ms / 3.5 s |
+| 160-239 | 180 | 12 / 70 / 281 µs | 131 / 262 / 700 µs (47%) | 1.1 / 3.5 / 4.9 ms (24%) | 0.85 ms / 14 ms / 2.6 s |
+| 240-399 | 138 | 67 / 327 / 359 µs | 288 µs / 1.6 ms / 2.1 ms (55%) | 3.9 / 11 / 18 ms (33%) | 7.1 / 144 / 250 ms |
+
+Reading: the fast mode costs 3-5x the pseudo-legal expansion and is bounded
+(worst ≤ 2.1 ms); the budgeted mode is bounded by its budget; exact keeps the
+mate-search tail (minutes at 400-600 boards, against E4's per-move filter: 157 ms
+median at 240 boards). On check-heavy random play the fast mode proves few moves
+legal (it settles 36-73% of moves, as illegal); how search treats an unknown move
+is spec issue 46. **M9 with legality: no verdict yet.** A loaded smoke run of the
+fast mode's throughput gave 13,208/s at N240 and 8,947/s at N600 on one thread -
+the N600 figure near the ±10% STOP band (9,000-11,000/s) on one core, the unit
+"per GPU's CPU allocation" leaves undefined (spec issue 20). The quiet-machine run
+(`t5d-bench --legal --legal-budget 0,0`) decides it.
 
 ### The window: |E| phase curve (M7) - NO VERDICT: the corpus cannot decide it
 
@@ -191,6 +219,13 @@ records that play on after the shift need):
 | 160-239 | 42 | 3 | 16 | 122 (114) | 15.5 / 27 / 37 | 28 / 39 / 45 | 19 [10.5, 22] |
 | 240-399 | 23 | 2 | 24 | 185 (174) | 10 / 23 / 23 | 27 / 46 / 50 | 11.5 [5, 18] |
 | 400+ | 0 | 0 | | | | | |
+
+From LEGAL destinations (engine E5a's exact classifier, `t5d-measure --summary
+--moves-after-shift --legal`, same records), |E(8)| median / p95 / max and |E(4)|:
+1-49: 0 / 3 / 15 and 0 / 5 / 16; 50-99: 2 / 11 / 18 and 5 / 18 / 19; 100-159: 3 /
+16.4 / 22 and 8 / 27 / 32; 160-239: **4.5** / 18.95 / 24 (pseudo-legal 15.5) and 13
+/ 33.95 / 39; 240-399: 8 / 21.9 / 22 and 26 / 41 / 47. Games' medians of |E(8)|:
+0 [0, 2], 2 [0, 5], 4 [1, 6], 9.5 [0, 22], 10 [4, 16].
 
 Under the engine's default Q4 reading nothing reaches 160 boards. No verdict: the
 phases above 160 boards rest on 2-3 games, the 400-600 phases on none, and the

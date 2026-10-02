@@ -15,6 +15,7 @@
 
 #include "search_internal.hpp"
 #include "t5d/check.hpp"
+#include "t5d/legal.hpp"
 #include "t5d/movegen.hpp"
 #include "t5d/multiverse.hpp"
 
@@ -310,82 +311,16 @@ std::optional<bool> can_finish_legally(const GameState& state, Detector detector
   return std::nullopt;
 }
 
-namespace {
-
-// A legal finish of the action under way at `state`: its further moves in an
-// order the state machine plays (none: stop now); nullopt if there is none.
-// `unknown` set if the search stopped (the memory ceiling) before it knew.
-std::optional<std::vector<Move>> legal_finish(const GameState& state, Detector detector,
-                                              bool& unknown) {
-  unknown = false;
-  if (state.obligations_met()) {
-    if (royals_safe(state)) return std::vector<Move>{};
-    if (!state.may_move()) return std::nullopt;
-  }
-  detail::SearchRun r(state, SearchBudget::unlimited(), 1, detail::Unit::Successors, false);
-  run(r, detector);
-  if (r.found() == 0) {
-    unknown = !r.stats.exhaustive;
-    return std::nullopt;
-  }
-  return r.actions.front();
-}
-
-// Whether `moves`, played from `state` in this order, finish its action legally.
-bool finishes_legally(const GameState& state, const std::vector<Move>& moves) {
-  GameState s = state;
-  MoveList scratch;
-  for (const Move& m : moves) {
-    if (!s.may_move() || !is_pseudo_legal(s, m, scratch)) return false;
-    s.apply(m);
-  }
-  return s.obligations_met() && royals_safe(s);
-}
-
-}  // namespace
-
 void keep_legal_moves(const GameState& state, MoveList& moves, Detector detector) {
-  if (moves.empty()) return;
-  bool unknown = false;
-  const std::optional<std::vector<Move>> root = legal_finish(state, detector, unknown);
-  if (!root && !unknown) {
-    moves.clear();  // no legal finish at all: no move begins one
-    return;
-  }
-  // The moves known to begin a legal action: of each legal finish found, every
-  // move that can lead it - played first, the rest in the order found, through
-  // the state machine to a legal end. They need no search of their own.
-  std::vector<Move> known;
-  const auto learn = [&](const std::vector<Move>& finish) {
-    std::vector<Move> order;
-    for (std::size_t i = 0; i < finish.size(); ++i) {
-      if (std::find(known.begin(), known.end(), finish[i]) != known.end()) continue;
-      order.assign(1, finish[i]);
-      for (std::size_t j = 0; j < finish.size(); ++j) {
-        if (j != i) order.push_back(finish[j]);
-      }
-      if (i == 0 || finishes_legally(state, order)) known.push_back(finish[i]);
-    }
-  };
-  if (root) learn(*root);
+  // The tiers of t5d/legal.hpp, exact: a move is dropped only when proved
+  // illegal (one left unknown - the memory ceiling - is kept).
+  LegalityOptions options;
+  options.detector = detector;
+  std::vector<MoveLegality> status;
+  classify_moves(state, moves, status, options);
   std::size_t kept = 0;
-  std::vector<Move> finish;
   for (std::size_t i = 0; i < moves.size(); ++i) {
-    const Move m = moves[i];
-    bool legal = std::find(known.begin(), known.end(), m) != known.end();
-    if (!legal) {
-      GameState child = state;
-      child.apply(m);
-      if (const std::optional<std::vector<Move>> rest = legal_finish(child, detector, unknown)) {
-        legal = true;
-        finish.assign(1, m);
-        finish.insert(finish.end(), rest->begin(), rest->end());
-        learn(finish);
-      } else if (unknown) {
-        legal = true;  // not proven illegal (the memory ceiling): kept
-      }
-    }
-    if (legal) moves[kept++] = m;
+    if (status[i] != MoveLegality::Illegal) moves[kept++] = moves[i];
   }
   moves.resize(kept);
 }

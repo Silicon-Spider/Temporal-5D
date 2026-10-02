@@ -432,10 +432,17 @@ Engine stage E4, built in its own worktree and merged into main on 2026-10-02:
   definition, and test gaps; the fix round closed them, and its own brute-force
   reference found and fixed a naive miscount (two move sets reaching one state
   were merged). A follow-up review of the reworked hypercuboid regions is running.
-- **The expansion's legal-moves switch** (`ExpandOptions::legal_moves`, off; spec
-  issue 28): keeps the moves after which the action can still be finished legally.
-  Median 11-218 ms per expansion from 100 to 400 boards, with a tail of minutes -
-  unfit to turn on as it stands (spec issue 46).
+- **The legal moves in tiers (engine E5a, merged 2026-10-02):** `t5d/legal.hpp`
+  decides a move's legality (C4, R1) by sound tiers - a standing royal capture;
+  a "stripped multiverse" that certifies quiet moves and branches in bulk; a
+  passed board's standing capture refuting moves; per-move checks; and search
+  last - in exact, budgeted (legal / illegal / unknown, never illegal without
+  proof) or fast mode. `ExpandOptions::legality` sets the expansion's mode
+  (unknown moves kept and marked). 0 disagreements with the brute-force
+  reference and a per-move search in about 113,000 long-run classifications; an
+  independent soundness review is running. At 240 boards the median expansion is
+  26 µs pseudo-legal, 102 µs fast, 2.5 ms budgeted, 7.3 ms exact (E4's filter:
+  157 ms); exact keeps a tail of minutes at 400-600 boards.
 
 ### 5. Phase 1 measurements - tools built, measurements pending a quiet machine
 
@@ -783,6 +790,9 @@ decision), and what is parked.
     action ("moving into check during a turn is allowed"): a single move is legal
     if it is part of some legal action. The expansion will offer the moves that
     begin a legal action (E4's enumeration), to be confirmed at the merge.
+   E5a: `legal_moves` / `keep_legal_moves` are exact via `t5d/legal.hpp`; the
+   expansion offers exact or budgeted classification (`ExpandOptions::legality`,
+   still off by default).
 29. **C17's causal past** (issue 5) is built three ways. `lineage`: a board's
     timeline predecessor and, for a branch's first board, its origin - the arrival
     side only; `two_parent`: also the board a travelling piece departed from;
@@ -841,12 +851,21 @@ decision), and what is parked.
     path, hypercuboid for near-mate positions"; the gate's adapter runs them as a
     portfolio on doubling node budgets (hypercuboid first), the other
     cross-checking. Proposed spec edit 39.
-46. **The legal-moves filter's cost** (spec issue 28): finding the moves that
-    begin a legal action costs one search per move - median 11-218 ms per
-    expansion at 100-400 boards, worst 247-522 s at 400-600. Against M9's targets
-    (20,000 expansions/s at 240 boards) the expansion cannot filter this way; what
-    the expansion offers (pseudo-legal moves, legal first moves, or whole actions -
-    D2's ply split) needs deciding before search uses it.
+46. **The legal-moves filter's cost and what search does with "unknown".** E5a's
+    tiers make the filter cheap where it can be (fast: about 4x pseudo-legal and
+    bounded; budgeted: bounded by its budget) and exact on demand (the mate
+    search's tail). On check-heavy random play the fast mode proves few moves legal.
+    The open question is search's treatment of an unknown move. Proposal (E5a; edit
+    43): (a) search's expansion is budgeted - proved-illegal moves dropped, legal and
+    unknown kept and flagged; (b) an unknown move gets its prior (dropping unknown
+    moves could empty a node that has legal moves, which would then look like a
+    mate); (c) the first time selection picks an unknown edge it is verified (exact
+    classification, or `can_finish_legally` under a larger budget): illegal - remove
+    the edge, renormalise its siblings' priors, select again, nothing backed up;
+    legal - proceed; still unknown - proceed, flagged, never part of a proof; (d) a
+    node is terminal only on an exact verdict (H37's detectors); (e) proofs take only
+    exact verdicts; (f) training's policy target is visit counts, and the network's
+    move mask is legal or unknown. The cost falls on visited moves only.
 47. **Register H22's wording** still says "phantom boards for the mate-vs-stalemate
     verdict" and "per-board chess rules as 5D queries", which H36 and H40 replaced.
     Proposed spec edit 40.
@@ -997,6 +1016,11 @@ says now, what it should say, why.
 42. **§2.3 / A3**: either add the player to move as a global input feature, or
     state that leaves are evaluated only at action boundaries or before the
     present shifts - needed under Q4's other reading (issue 48).
+43. **§6, §15.6 ("expansion - legal moves") and §11.0 item 3**: "legal moves" is
+    not defined beyond R1. Proposed: "the moves not proved illegal - each marked
+    legal or unknown - by the rules engine's sound tiers under a budget (exact on
+    demand); search verifies an unknown move when it first selects it, and scores a
+    node terminal only on an exact verdict" (issue 46).
 
 ## Session log
 

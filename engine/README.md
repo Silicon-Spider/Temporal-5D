@@ -10,7 +10,7 @@ notation specification (H28).
 
 It is C++20, with a C API (a shared library) for Python and other callers.
 
-## Status: stages E3 and E4
+## Status: stages E3, E4 and E5a
 
 Stage E1 built the parts of the engine that need no movement rules; stage E2a added
 the rules mechanics and pseudo-legal move generation (§11.0 items 4-5 and the
@@ -22,7 +22,8 @@ features - its C API, and the Phase 1 measurement tools (§15.1, §15.6: movegen
 throughput, M9, and the |E| curve, M7); stage E4, after the CHECKPOINT 1 rulings,
 adds check status and submission legality (H36), the legal actions and their count,
 the naive and hypercuboid mate detectors (H37), and the gate adapter's full mode
-(§11.0 items 1-3). Rule IDs (L*, T*, J*, 4.*, S*, Q*, V*) are those of the project's
+(§11.0 items 1-3); stage E5a decides a single move's legality in sound tiers - fast,
+budgeted (legal / illegal / unknown) or exact - instead of a search per move. Rule IDs (L*, T*, J*, 4.*, S*, Q*, V*) are those of the project's
 rules reference, `docs/rules/README.md`, which the code cites throughout.
 
 | Part | Where | Spec |
@@ -50,10 +51,11 @@ rules reference, `docs/rules/README.md`, which the code cites throughout.
 | **E4:** check status and submission legality; the engine's check ruling | `include/t5d/check.hpp` | §11.0 items 1-2, H36 |
 | **E4:** legal actions, their count and listing, the legal moves; the naive and hypercuboid mate detectors | `include/t5d/search.hpp`, `src/search.cpp`, `src/hypercuboid.cpp` | §11.0 item 3, H37 |
 | **E4:** the gate adapter's full mode and its diagnostics | `include/t5d/gate.hpp`, `tools/t5d_gate.cpp` | H23, H36, H37 |
+| **E5a:** the legal moves in tiers: exact, budgeted, fast | `include/t5d/legal.hpp`, `src/legal.cpp` | C4, R1; build-log spec issues 28, 46 |
 
 Next: the gate run with the engine configured (parse mode, then full mode); the
-expansion's pin and check relations; which moves the expansion offers (build-log
-spec issue 28), then the M7/M9 re-measurement on them.
+expansion's pin and check relations; which moves the expansion offers, and how a
+search treats a move left unknown (build-log spec issues 28, 46).
 
 **Moves are pseudo-legal; turns are legal.** A move is pseudo-legal when it obeys
 every movement rule and the action's bookkeeping; legality is judged per action, at
@@ -61,8 +63,9 @@ submission (C4): `GameState::submission_status` and `submit` apply the engine's 
 ruling by default (rulebook R1, register H36; see "Stage E4") and say `Safe` or
 `Unsafe`. `CheckRuling::none()` submits pseudo-legal play, untested (`Unchecked`). A
 single move is legal when a legal action begins with it (`legal_moves`,
-`t5d/search.hpp`); the expansion offers those behind a switch
-(`ExpandOptions::legal_moves`, off by default).
+`t5d/search.hpp`; `classify_moves`, `t5d/legal.hpp`); the expansion offers those
+behind a switch (`ExpandOptions::legal_moves`, off by default), exact or under a
+budget.
 
 ## Building and testing
 
@@ -75,8 +78,9 @@ Other options: `--clean`, `--config Debug`, `--werror`, and arguments for the te
 runner after `--` (`py engine/build.py --test -- zobrist` runs the tests whose names
 contain "zobrist"; `-- --list` lists them). The default run takes a few seconds in
 Release; the long cross-checks of the two mate detectors (tests named `long_*`) run
-only with `-- --long` (or a fragment that names them, `-- long_detectors`): about an
-hour, most of it the brute-force reference's 4,000 positions and their children.
+only with `-- --long` (or a fragment that names them, `-- long_detectors`): about
+four minutes, most of it the two detectors' cross-checks and the brute-force
+reference's 4,000 positions and their children.
 `tests/test_gate_exe.cpp` runs the `t5d-gate` executable itself (the build passes
 its path), so building `t5d-tests` builds `t5d-gate` first.
 
@@ -844,7 +848,7 @@ random play: for throughput and stress only, never evidence for the |E| verdict
 ### t5d-measure
 
 ```
-t5d-measure [--moves-after-shift] [--rules ENCODING] [--name NAME] [--summary] [RECORD ...]
+t5d-measure [--moves-after-shift] [--rules ENCODING] [--name NAME] [--summary] [--legal] [RECORD ...]
 ```
 
 Replays each 5dpgn record as the gate adapter's parse mode does (no RECORD, or `-`:
@@ -852,7 +856,7 @@ standard input), under the ruleset given (`--moves-after-shift` is Q4's other
 reading; `--rules` takes any encoding, decimal or `0x` hex), and prints one JSON
 object per line, deterministically:
 
-- `{"event":"record","record":...,"game":...,"synthetic":...,"rules":...,"rules_encoding":"0x..","actions_in_record":N}`
+- `{"event":"record","record":...,"game":...,"synthetic":...,"rules":...,"rules_encoding":"0x..","moves":"pseudo-legal"|"legal","actions_in_record":N}`
 - at every action start, position 0 included: `{"event":"position","record":...,
   "synthetic":...,"index":K,"side":...,"boards":N,"timelines":...,"active":...,
   "present":h,"present_turn":T,"moves":...,"move_edges":...,
@@ -888,6 +892,11 @@ Several corpus records make moves after the present has shifted (Q4): under the
 default reading they stop with `illegal_move`, under `--moves-after-shift` they read
 to the end - the output says which ruleset was used.
 
+Moves are pseudo-legal by default, so every |E| is an upper bound. `--legal` expands
+with the legal moves only (`ExpandOptions::legal_moves`, exact - no move left
+unknown): |E(k)| then counts the destinations of moves a legal action can begin
+with, M7's tighter bound. On the 41 corpus records it takes 10 s in all.
+
 ### t5d-bench
 
 ```
@@ -896,13 +905,13 @@ t5d-bench [--classes N:T,...] [--no-synthetic] [--games G] [--children C]
           [--flat-children C] [--flat-max M] [--no-flatness]
           [--seed S] [--branch-percent P] [--threads 1,2,4,...]
           [--samples S] [--sample-ms MS] [--flat-ms MS] [--no-loop] [--no-pin]
-          [--legal] [--quick] [--emit DIR] [--json FILE]
+          [--legal] [--legal-budget C,N] [--legal-profile] [--quick] [--emit DIR] [--json FILE]
           [--moves-after-shift] [--rules ENCODING] [RECORD ...]
 ```
 
 Expansion throughput (§15.6, M9), and how it changes with the length of the history.
-Moves are pseudo-legal but in the `--legal` configurations: every figure is
-provisional.
+Moves are pseudo-legal but in the `--legal` configurations and `--legal-profile`:
+every figure is provisional.
 
 *Positions.* Synthetic classes at §15.6's assumed (N, T) - 100:6, 160:7, 240:8,
 400:10, 600:12 - `--games` games each (16 by default; a game's seed is a function of
@@ -925,7 +934,17 @@ input), and `scope+relations` - §15.6's expansion, "legal moves, attention mask
 typed edges and E", with the windowed input. The full-history ones and
 `scope+relations` also run on 1, 2, 4, 8, 12 and 24 threads. `--legal` adds
 `expand-scope+legal` and `scope+relations+legal`: the same with the legal moves only
-(`ExpandOptions::legal_moves`; see "Legal moves" in "Stage E4" for what it costs).
+(`ExpandOptions::legal_moves`) under `--legal-budget C,N` - C checks and N search
+nodes per expansion, 64,2000 by default (`LegalityOptions::budgeted`; a move left
+unknown is kept). Exact classification has a tail of minutes, which would stall the
+interleaved rounds; it is profiled by `--legal-profile` instead.
+
+*Legal profile* (`--legal-profile`, in place of the throughput): every class position
+and its worker-0 one-move children expanded one at a time on one thread with the
+`scope+relations` options - pseudo-legal, then with the legal moves exact, under
+`--legal-budget`, and fast (0,0) - each timed alone. Per class: the median, p95 and
+worst microseconds per expansion, the moves kept and left unknown, and the share of
+the moves each tier settled (see "Stage E5a").
 
 *Method.* A pool of worker threads, pinned one per physical core first, then on the
 cores' second logical processors (`--no-pin`: unpinned), each with its own
@@ -1113,34 +1132,13 @@ every combination of moves; its table is what reaches the memory ceiling first.
 R1 judges legality per action ("moving into check during a turn is allowed"), so a
 single move is legal when a legal action begins with it. `legal_moves(state)` gives
 them: the pseudo-legal moves after which the action can still be finished legally
-(`can_finish_legally`) - at a turn's start, or during an action. One search from the
-state first: if the action cannot be finished at all, no move is legal. Otherwise
-each legal finish found is replayed with each of its moves first; a move that leads a
-valid order needs no search of its own, and every other move gets one (to its first
-legal finish, by the hypercuboid detector). A move whose search reaches the memory
-ceiling is kept: it is not proven illegal. The test against the brute-force
-reference compares them with every move's own enumeration.
-
-The expansion offers them behind `ExpandOptions::legal_moves` (off by default, until
-the spec settles what the expansion offers). What it costs, on t5d-bench's synthetic
-classes (random play; each class's positions and four of their one-move children,
-20 positions per class, one thread, this machine):
-
-| Class (N boards, T active) | `expand-scope`, median | `+legal`, median | `+legal`, mean | `+legal`, worst | moves kept |
-|---|---|---|---|---|---|
-| 100, 6 | 0.012 ms | 11 ms | 19 ms | 94 ms | 56% |
-| 160, 7 | 0.019 ms | 50 ms | 53 ms | 149 ms | 67% |
-| 240, 8 | 0.028 ms | 157 ms | 175 ms | 0.8 s | 29% |
-| 400, 10 | 0.036 ms | 218 ms | 15.7 s | 247 s | 27% |
-| 600, 12 | 0.056 ms | 0.8 ms | 36.3 s | 522 s | 7% |
-
-The filter is a search per move: tens to hundreds of milliseconds where
-`expand-scope` takes hundredths of one - and a heavy tail: in the larger classes a few
-positions (random play leaves kings in check on many boards at once, with a thousand
-moves or more) need minutes, the searches of their moves proving one by one that the
-action cannot be finished. Where no legal action exists at all, the first search
-settles it for every move (the 600-board class's median). It is not fit to be on by
-default as it stands; what the expansion should offer is the spec's to say first.
+(`can_finish_legally`) - at a turn's start, or during an action. Stage E4 gave each
+move a search of its own (to its first legal finish, by the hypercuboid detector):
+tens to hundreds of milliseconds per expansion where pseudo-legal expansion takes
+hundredths of one, and minutes in the tail. Stage E5a decides them in tiers, exactly
+(see "Stage E5a: the legal moves in tiers"); `legal_moves` and `keep_legal_moves`
+use it. A move whose search reaches the memory ceiling is kept: it is not proven
+illegal.
 
 ### The hypercuboid detector: design
 
@@ -1331,28 +1329,207 @@ cases that once stalled the search (`search_the_hypercuboid_stays_small_when_eve
 
 ### The two detectors compared
 
-Measured on this machine (Release, g++ 16.2; `build/` scratch benchmark, not a test):
+Measured on this machine (Release, g++ 16.2; `build/` scratch benchmark, not a test).
+Since stage E5a a hypercuboid node also counts each step of a box's abstract check
+(so that a node budget bounds its time), which raised its figures below:
 
 | Position | naive | hypercuboid |
 |---|---|---|
-| A checkmate on timeline 0 with 2n further mandatory boards each holding a knight whose moves cannot help (`detectors_the_hypercuboid_stays_small_near_mate`), n = 1 (3 timelines) | 2,407 nodes | 86 nodes |
-| the same, n = 2 (5 timelines) | 817,875 nodes, 0.6 s | 144 nodes, <1 ms |
-| the same, n = 3 (7 timelines) | stopped by the memory ceiling after 1,007,435 nodes, 0.7 s: `unknown` | 208 nodes, <1 ms |
-| 1x1 boards, timelines -3..+3, a queen on each at T4: every move a rewinding branch (`search_the_hypercuboid_stays_small_when_every_branch_rewinds`), 51 actions | 102 nodes | 102 nodes (34 million before the regimes) |
-| cwmtt's manyChecks, position 42 (13 timelines, three of the opponent's inactive behind the present): 1,000 actions to the cap | 1 action, then the memory ceiling after 504,652 nodes, 1.9 s: `unknown` (with no ceiling, still 1 action after 30,000,000 nodes) | 8,541 nodes, 0.02 s |
+| A checkmate on timeline 0 with 2n further mandatory boards each holding a knight whose moves cannot help (`detectors_the_hypercuboid_stays_small_near_mate`), n = 1 (3 timelines) | 2,407 nodes | 126 nodes |
+| the same, n = 2 (5 timelines) | 817,875 nodes, 0.6 s | 184 nodes, <1 ms |
+| the same, n = 3 (7 timelines) | stopped by the memory ceiling after 1,007,435 nodes, 0.7 s: `unknown` | 248 nodes, <1 ms |
+| 1x1 boards, timelines -3..+3, a queen on each at T4: every move a rewinding branch (`search_the_hypercuboid_stays_small_when_every_branch_rewinds`), 51 actions | 102 nodes | 510 nodes (34 million before the regimes) |
+| cwmtt's manyChecks, position 42 (13 timelines, three of the opponent's inactive behind the present): 1,000 actions to the cap | 1 action, then the memory ceiling after 504,652 nodes, 1.9 s: `unknown` (with no ceiling, still 1 action after 30,000,000 nodes) | 12,445 nodes, 0.02 s |
 
-The long cross-check (`t5d-tests --long`): random legal play from every named
-variant (551 positions), from sparse starts that run into mates (806) and the same
-under four alternative rulesets (Q1-Q6, Q18-Q20, J3; 927) - the two detectors gave
-the same verdict wherever both proved one (2,150 positions, among them 56 checkmates
-and 52 stalemates), the same count to 40 wherever both knew it (2,132) and the same
-successor states wherever both were exhaustive (1,028); naive 20.3 s, hypercuboid
-7.1 s in all. Against the brute-force reference: 4,000 tiny multiverses (2,313 with
-legal actions, 1,931 with inactive timelines, 1,365 with an action creating two
-timelines or more) and 17,207 states after a first move - every count, listing,
-verdict and set of legal moves equal to the reference's; one naive search stopped by
-the memory ceiling and was not compared. No disagreement. The default run plays fewer
-(`detectors_agree_*`, a few seconds).
+The long cross-check (`t5d-tests --long`, at stage E5a): random legal play from every
+named variant (551 positions), from sparse starts that run into mates (815) and the
+same under four alternative rulesets (Q1-Q6, Q18-Q20, J3; 927) - the two detectors
+gave the same verdict wherever both proved one (2,153 positions, among them 55
+checkmates and 50 stalemates), the same count to 40 wherever both knew it (2,134) and
+the same successor states wherever both were exhaustive (1,019); naive 27.8 s,
+hypercuboid 8.4 s in all. Against the brute-force reference: 4,000 tiny multiverses
+(2,323 with legal actions, 1,957 with inactive timelines, 1,361 with an action
+creating two timelines or more; a third of them on 2x1 boards since E5a) and 23,321
+states after a first move - every count, listing, verdict and set of legal moves
+equal to the reference's; one naive search stopped by the memory ceiling and was not
+compared. No disagreement. The default run plays fewer (`detectors_agree_*`, a few
+seconds).
+
+## Stage E5a: the legal moves in tiers (`t5d/legal.hpp`)
+
+A move is **legal** when the action under way can still be finished legally after it
+(C4, R1: legality is judged per action; build-log spec issue 28). A search per move
+answers that exactly but slowly. `classify_moves(state, moves, out, budget, stats)`
+answers it in tiers and calls each move `Legal`, `Illegal` or `Unknown`. Every tier is
+sound. It calls a move legal only with a legal finish in hand or an argument that one
+exists, and illegal only with a proof. Whatever no tier settles goes to a search. The
+state may be a turn's start or a state during an action.
+
+0. **A standing capture.** A royal capture that already stands - from a board on
+   which the opponent is to move, onto a royal on a board of the opponent's colour -
+   lasts to the end of the action:
+   - the mover moves only on boards of its own colour, so it can neither take the
+     attacker nor move the royal;
+   - boards never change (a move makes a new one), so nothing the capture rests on
+     changes either.
+
+   No move is then legal. Under Q18's alternative (`sliders_cross_void`), a later
+   move could put a board on a void the capture crosses, so only captures that cross
+   no void count as standing.
+1. **The stripped multiverse.** Give every playable board of the mover's a successor
+   that keeps the board's opponent pieces and the mover's royals, and none of the
+   mover's other pieces. Call a move **quiet** when it creates no timeline and moves
+   no royal. A quiet action ends in a position whose royal captures are among the
+   stripped multiverse's, for three reasons:
+   - it has the same attackers or fewer, and the same royals;
+   - it has more blockers;
+   - where a board was not played, it has void where the stripped multiverse has a
+     board, and a slide does not cross void (the tier is off under Q18's
+     alternative, and when play activates timelines).
+
+   So when the stripped multiverse holds no capture, every quiet action is safe, and
+   a quiet move is legal iff the boards still to play can be played by quiet moves -
+   decided per move in O(1). A capture found there is removed first, if it can be:
+   - keep the mover's piece the capture crosses (a **kept blocker**); that piece's
+     moves leave the tier;
+   - or drop an optional board from the multiverse; its moves leave the tier.
+
+   **Branches.** A branching move adds an outermost timeline, one board, a copy of
+   its destination. One scan per destination board, on a stripped copy, decides
+   every quiet branch onto it. The branch's effect on the present (T8, T10, T11,
+   T12) - which boards still count, whether the new timeline is active - comes from
+   a model of one creation followed by moves within boards (`PresentModel`). The
+   model is used only where creations alone change activity
+   (`Reactivation::Rewinds`, play not activating, inactive history a destination).
+
+   Where a capture remains, two more arguments apply:
+   - **A passed board refutes.** Take the state with board p played as it is (a
+     successor of the opponent's colour, nothing moved). If that holds a capture, the
+     capture stands by tier 0's lemma after any move on p that changes none of the
+     squares it rests on (from, to, a castling rook's squares, an en passant victim).
+     Such a move is illegal. One scan with every board passed comes first. Without
+     Q18's alternative, adding boards takes no capture away, so only the boards
+     that some capture there rests on need a scan of their own.
+   - **Around a finish.** Take one legal finish A0, made greedily (a move within the
+     board on each board to play, replayed and tested; a few tries) or found by one
+     search. Each board that A0 plays within the board is stripped alone in A0's end
+     position, the other boards fixed as A0 leaves them. If that holds no capture,
+     every quiet move on that board, put in place of A0's move there, finishes
+     legally too. The present is taken from one replay per board.
+2. **Per move** (each a check of the budget). The move is illegal if a capture
+   stands after it (tier 0's lemma). It is legal if any of these holds:
+   - it ends a legal action;
+   - the stripped multiverse is capture-free, and stays so with the move's own
+     successor boards put in it (stripped the same way, its royals and kept pieces
+     where they are), and the boards still to play can be played quietly. This is
+     tier 1's argument for the moves tier 1 leaves out: a royal's, a kept piece's,
+     a castling;
+   - a finish is replayed through the state machine and tested (C4): A0's moves on
+     the other boards after it, or quiet moves on the boards still to play.
+3. **Search.**
+   - First, one search from the state (unless a finish is already known). If the
+     action has no legal finish at all, nothing is legal.
+   - Then a search per remaining move, within the budget.
+   - Every finish found also proves the moves that can lead it (replayed with each
+     one first).
+
+**Modes** (`LegalityOptions`):
+
+| Mode | Options | `Unknown` | What it runs |
+|---|---|---|---|
+| exact | `exact()`, the default | never (except a search stopped by the memory ceiling, kept as not proven illegal) | every tier; the tail is that of mate detection: proving that no legal finish exists can take a search of the whole action |
+| budgeted | `budgeted(checks, nodes)` | yes | `checks`: tier 2's per-move checks, the greedy tries, the branch scans; `nodes`: every search together (tier 3) |
+| fast | `budgeted(0, 0)` | yes | tier 0, tier 1's quiet moves and the passed-board refutations: a few scans per playable board |
+
+A node budget bounds a search's time because the hypercuboid charges each box's
+abstract check by its steps (see "The two detectors compared"): a few microseconds
+per node - 4.7 µs in a root search on cwmtt/manyChecks (13 timelines; 28,813 nodes
+in 136 ms, and stopped at 2,000 in 4.2 ms), 3.6 µs in a 600-board synthetic class.
+The cost of a check grows with the number of boards (a state copy, a replay, a
+scan).
+
+**The expansion.** `ExpandOptions::legal_moves` classifies under
+`ExpandOptions::legality`:
+- a move proved illegal is dropped;
+- a move left unknown is kept;
+- `Expansion::move_legality()` gives each kept move's status, and `legality_stats()`
+  says how the moves were settled.
+
+`legal_moves` and `keep_legal_moves` (`t5d/search.hpp`) use the exact classification.
+`t5d-measure --legal` measures |E| from legal moves; `t5d-bench --legal-profile`
+profiles the modes.
+
+**Tests.**
+- `detectors_agree_with_the_brute_force_reference`: every third tiny position is on
+  2x1 boards (moves within a board: quiet moves, kept blockers, passed boards). Each
+  state's moves are classified exact and under three budgets. Exact must equal the
+  reference; a budget must never contradict it.
+- `legal_moves_agree_with_a_search_per_move`: random games from the 5x5 to 8x8
+  sparse starts and their one-move children; the exact classification against a
+  search from every child.
+- `long_` versions of both add the variants and the alternative rulesets.
+
+| Test | Classifications | Disagreements |
+|---|---|---|
+| default reference run | 9,208 | 0 |
+| long reference run | 93,284 | 0 |
+| default per-move run | 3,103 | 0 |
+| long per-move run | 19,984 (10 searches stopped by their budget, not compared) | 0 |
+
+The tiers that settled the long per-move run's moves: standing at the start 2,304,
+stripped quiet 2,837, stripped branches 582, refuted by a passed board 1,138,
+finished 6,638, standing after 2,837, no finish at all 1,096, searched 2,405.
+
+**What it costs.** Measured 2026-10-02 with `t5d-bench --legal-profile`:
+- dev machine, Release, g++ 16.2 `-O2`, one thread;
+- the machine was shared with other builds and tests, so these are not quiet-machine
+  figures;
+- each cell is median / p95 / worst per expansion of `scope+relations` (moves, move
+  graph, W/E scope, relations), with the classification inside it;
+- in brackets, the share of the moves left unknown.
+
+The synthetic M9 classes: 4 games per class, each position and 4 one-move children,
+20 expansions per class.
+
+| Class | pseudo-legal | fast | budgeted 64,2000 | exact |
+|---|---|---|---|---|
+| N100 T6 | 21 µs / 43 µs / 43 µs | 86 µs / 114 µs / 114 µs (46%) | 2.0 ms / 2.9 ms / 2.9 ms (14%) | 1.5 ms / 17 ms / 17 ms |
+| N160 T7 | 23 µs / 38 µs / 38 µs | 95 µs / 119 µs / 119 µs (64%) | 2.1 ms / 3.0 ms / 3.0 ms (44%) | 5.4 ms / 59 ms / 59 ms |
+| N240 T8 | 26 µs / 46 µs / 46 µs | 102 µs / 162 µs / 162 µs (33%) | 2.5 ms / 4.1 ms / 4.1 ms (20%) | 7.3 ms / 148 ms / 148 ms |
+| N400 T10 | 40 µs / 55 µs / 55 µs | 142 µs / 232 µs / 232 µs (47%) | 2.4 ms / 10 ms / 10 ms (25%) | 17 ms / 145 s / 145 s |
+| N600 T12 | 54 µs / 84 µs / 84 µs | 162 µs / 273 µs / 273 µs (27%) | 0.75 ms / 11 ms / 11 ms (7%) | 0.72 ms / 200 s / 200 s |
+
+The corpus records: every action start and its children, by N bucket, under
+`--moves-after-shift`.
+
+| Boards | expansions | pseudo-legal | fast | budgeted 64,2000 | exact |
+|---|---|---|---|---|---|
+| 1-49 | 858 | 2 µs / 8 µs / 25 µs | 6 µs / 27 µs / 96 µs (39%) | 22 µs / 454 µs / 2.1 ms (2%) | 25 µs / 422 µs / 22 ms |
+| 50-99 | 319 | 4 µs / 21 µs / 60 µs | 16 µs / 106 µs / 218 µs (45%) | 0.41 ms / 2.0 ms / 3.4 ms (11%) | 0.26 ms / 4.0 ms / 33 ms |
+| 100-159 | 261 | 11 µs / 42 µs / 109 µs | 55 µs / 186 µs / 418 µs (43%) | 1.1 ms / 3.2 ms / 8.1 ms (16%) | 0.82 ms / 14 ms / 3.5 s |
+| 160-239 | 180 | 12 µs / 70 µs / 281 µs | 131 µs / 262 µs / 700 µs (47%) | 1.1 ms / 3.5 ms / 4.9 ms (24%) | 0.85 ms / 14 ms / 2.6 s |
+| 240-399 | 138 | 67 µs / 327 µs / 359 µs | 288 µs / 1.6 ms / 2.1 ms (55%) | 3.9 ms / 11 ms / 18 ms (33%) | 7.1 ms / 144 ms / 250 ms |
+
+The figures by mode:
+- **Fast** costs 3-5 times the pseudo-legal expansion (11 times in the records'
+  160-239 bucket), and its worst case stays within 2.1 ms.
+- **Budgeted** is bounded by its budget: a node costs a few microseconds and a check
+  more with more boards. At 64 checks and 2,000 nodes the worst case was 18 ms.
+- **Exact** has a median of 7 ms at 240 boards; the E4 filter took 157 ms. Its tail is
+  the searches': up to 145 s and 200 s in the synthetic 400- and 600-board classes
+  (the E4 filter: up to 247 s and 522 s).
+
+How the moves were settled depends on the position. Random play leaves kings
+attacked on many boards, so in the synthetic classes the stripped multiverse rarely
+holds no capture:
+- standing captures and passed boards settle 36-73% of the moves, as illegal;
+- the fast mode proves few moves legal: 14% at 100 boards, none above.
+
+In the records, the stripped multiverse alone proves 28-46% of the moves legal in the
+fast mode (35-49% in the others), and its branches another 9-17% when they may be
+scanned. `t5d-bench
+--legal-profile` prints every tier's share.
+
 ## 5DFEN
 
 `parse_fen_board` reads one board string, `[pieces:timeline:turn:colour]`, for a
@@ -1515,10 +1692,13 @@ Each is recorded where it is made (the header comments) and listed here:
   order - and the engine counts exactly that (`count_legal_actions`); the distinct
   successor states, which a search may want instead, are a count of their own
   (`count_legal_successors`). See "Legal actions and their count".
-- **A single move's legality** (stage E4; build-log spec issue 28): a move is legal
-  when a legal action begins with it (`legal_moves`); the expansion offers those only
-  behind `ExpandOptions::legal_moves`, off by default until the spec says which moves
-  it offers.
+- **A single move's legality** (stages E4, E5a; build-log spec issues 28, 46): a
+  move is legal when a legal action begins with it (`legal_moves`,
+  `classify_moves`); the expansion offers those only behind
+  `ExpandOptions::legal_moves`, off by default until the spec says which moves it
+  offers. Under a budget a move may be left unknown - kept, marked
+  (`Expansion::move_legality`), never called illegal without proof; how a search
+  treats it is the spec's to say (proposed in the build log).
 - **Every search has a memory ceiling** (stage E4): reaching it is `unknown` (H37),
   and the gate's run ends `error` - never a verdict, and never growth without bound
   on a shared machine.

@@ -15,6 +15,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <limits>
 #include <optional>
 #include <set>
 #include <string>
@@ -22,6 +23,7 @@
 
 #include "t5d/check.hpp"
 #include "t5d/fen.hpp"
+#include "t5d/legal.hpp"
 #include "t5d/movegen.hpp"
 #include "t5d/search.hpp"
 #include "t5d/state.hpp"
@@ -251,10 +253,12 @@ struct ReferenceTally {
   int mid_action = 0;      // states after a first move, compared too
   int order_regions = 0;   // positions where the hypercuboid took captures order by order
   int memory_stops = 0;    // detector runs stopped by the memory ceiling (not compared)
+  LegalityStats tiers;     // the classifications' tiers, summed
 };
 
-std::optional<GameState> tiny_position(t5d_test::Rng& rng, int max_axes, bool kings,
+std::optional<GameState> tiny_position(t5d_test::Rng& rng, int max_axes, bool kings, int width,
                                        std::vector<std::string>& boards) {
+  const BoardSize size{width, 1};
   const bool even = rng.chance(50);
   const int white_side = rng.below(5);
   const int black_side = rng.below(5);
@@ -291,7 +295,8 @@ std::optional<GameState> tiny_position(t5d_test::Rng& rng, int max_axes, bool ki
   const Parity parity = even ? Parity::Even : Parity::Odd;
   Colour mover = Colour::White;
   try {
-    mover = game_from_fen(make(std::vector<std::string>(places.size(), "1")), BoardSize{1, 1}, parity, r)
+    mover = game_from_fen(make(std::vector<std::string>(places.size(), std::to_string(width))), size,
+                          parity, r)
                 .to_move();
   } catch (const std::exception&) {
     return std::nullopt;  // not a position (no present on the colour to move, ...)
@@ -303,22 +308,39 @@ std::optional<GameState> tiny_position(t5d_test::Rng& rng, int max_axes, bool ki
     const bool white = mine == (mover == Colour::White);
     return std::string(1, white ? c : static_cast<char>(c - 'A' + 'a'));
   };
+  // One square's content ("" for empty): on the mover's playable boards
+  // mostly the mover's pieces (the first square), on the others mostly empty.
+  const auto square = [&](bool head, bool movers, bool first) {
+    const int roll = rng.below(100);
+    if (head && movers) {
+      if (first) return roll < 15 ? std::string() : roll < 85 ? piece(true) : piece(false);
+      return roll < 60 ? std::string() : roll < 80 ? piece(false) : piece(true);
+    }
+    if (movers) return roll < 60 ? std::string() : roll < 90 ? piece(false) : piece(true);
+    return roll < 50 ? std::string() : roll < 80 ? piece(false) : piece(true);
+  };
   std::vector<std::string> contents;
   for (std::size_t i = 0; i < places.size(); ++i) {
     const bool head = i + 1 == places.size() || places[i + 1].first != places[i].first;
     const bool movers = (places[i].second % 2 == 0) == (mover == Colour::White);
-    const int roll = rng.below(100);
-    if (head && movers) {
-      contents.push_back(roll < 15 ? "1" : roll < 85 ? piece(true) : piece(false));
-    } else if (movers) {
-      contents.push_back(roll < 60 ? "1" : roll < 90 ? piece(false) : piece(true));
-    } else {
-      contents.push_back(roll < 50 ? "1" : roll < 80 ? piece(false) : piece(true));
+    std::string row;
+    int empty = 0;
+    for (int f = 0; f < width; ++f) {
+      const std::string q = square(head, movers, f == 0);
+      if (q.empty()) {
+        ++empty;
+        continue;
+      }
+      if (empty > 0) row += std::to_string(empty);
+      empty = 0;
+      row += q;
     }
+    if (empty > 0) row += std::to_string(empty);
+    contents.push_back(row);
   }
   boards = make(contents);
   try {
-    GameState s = game_from_fen(boards, BoardSize{1, 1}, parity, r);
+    GameState s = game_from_fen(boards, size, parity, r);
     if (static_cast<int>(s.playable_timelines().size()) > max_axes) return std::nullopt;
     return s;
   } catch (const std::exception&) {
@@ -330,9 +352,15 @@ void against_reference(int positions, int max_axes, std::uint64_t seed, Referenc
   t5d_test::Rng rng(seed);
   std::vector<std::string> boards;
   for (int attempt = 0; t.positions < positions && attempt < positions * 20; ++attempt) {
-    const std::optional<GameState> s = tiny_position(rng, max_axes, attempt % 3 == 2, boards);
+    // Every third position king-heavy, every third on 2x1 boards (moves
+    // within a board: the legal-moves tiers' quiet moves).
+    const int width = attempt % 3 == 1 ? 2 : 1;
+    // Two squares a board multiply the sequences: fewer boards, a lower limit.
+    const std::uint64_t limit = width == 1 ? 2000000 : 100000;
+    const std::optional<GameState> s =
+        tiny_position(rng, width == 1 ? max_axes : std::min(max_axes, 4), attempt % 3 == 2, width, boards);
     if (!s) continue;
-    const t5d_test::Reference ref = t5d_test::reference_actions(*s, 2000000);
+    const t5d_test::Reference ref = t5d_test::reference_actions(*s, limit);
     if (ref.overflow) continue;
     ++t.positions;
     if (!ref.actions.empty()) ++t.with_actions;
@@ -388,7 +416,7 @@ void against_reference(int positions, int max_axes, std::uint64_t seed, Referenc
     for (const Move& m : first) {
       GameState child = *s;
       child.apply(m);
-      const t5d_test::Reference rest = t5d_test::reference_actions(child, 2000000);
+      const t5d_test::Reference rest = t5d_test::reference_actions(child, limit);
       if (rest.overflow) {
         all_known = false;
         continue;
@@ -419,8 +447,44 @@ void against_reference(int positions, int max_axes, std::uint64_t seed, Referenc
         legal_moves(*s, legal, d);
         CHECK(legal == expected_legal);
       }
+      // The classification (t5d/legal.hpp), exact and under budgets: exact,
+      // every move as the reference says; budgeted, never against it (a move
+      // left Unknown is no claim).
+      for (const LegalityOptions& o :
+           {LegalityOptions::exact(), LegalityOptions::budgeted(0, 0), LegalityOptions::budgeted(2, 50),
+            LegalityOptions::budgeted(16, 2000)}) {
+        std::vector<MoveLegality> status;
+        classify_moves(*s, first, status, o, &t.tiers);
+        for (std::size_t i = 0; i < first.size(); ++i) {
+          const bool legal =
+              std::find(expected_legal.begin(), expected_legal.end(), first[i]) != expected_legal.end();
+          const bool sound = status[i] == MoveLegality::Unknown ||
+                             (status[i] == MoveLegality::Legal) == legal;
+          if (!sound) {
+            std::fprintf(stderr, "  classify (checks %llu, nodes %llu): %s called %s at %s\n",
+                         static_cast<unsigned long long>(o.checks),
+                         static_cast<unsigned long long>(o.search_nodes),
+                         to_string(first[i], s->multiverse().even()).c_str(),
+                         status[i] == MoveLegality::Legal ? "legal" : "illegal", where().c_str());
+          }
+          CHECK(sound);
+          if (o.search_nodes == std::numeric_limits<std::uint64_t>::max()) {
+            CHECK(status[i] != MoveLegality::Unknown);
+          }
+        }
+      }
     }
   }
+}
+
+void report_tiers(const LegalityStats& s) {
+  std::printf("  [legal moves] %zu classified: standing at the start %zu, stripped quiet %zu, "
+              "stripped branches %zu, refuted by a passed board %zu, finished %zu (by its own boards "
+              "stripped %zu), standing after %zu, learned %zu, no finish at all %zu, searched %zu/%zu, "
+              "unknown %zu; greedy finishes %zu, kept blockers %zu, dropped boards %zu\n",
+              s.moves, s.standing_at_start, s.bulk_quiet, s.bulk_branches, s.refuted_in_bulk, s.finished,
+              s.modified, s.standing_after, s.learned, s.no_finish_at_all, s.searched_legal,
+              s.searched_illegal, s.unknown, s.greedy, s.kept_blockers, s.dropped_boards);
 }
 
 void report(const char* what, const ReferenceTally& t) {
@@ -434,10 +498,105 @@ void report(const char* what, const ReferenceTally& t) {
 
 }  // namespace
 
+// ---- the legal moves against a search per move -----------------------------------------
+//
+// On positions of random legal play - 5x5 to 8x8 boards, several timelines -
+// and one-move children of them (states during an action): the exact
+// classification (t5d/legal.hpp) must call each move as a search from the
+// state after it does (can_finish_legally, under a node budget: a search that
+// stops is compared with nothing).
+
+struct SearchTally {
+  int states = 0;
+  int compared = 0;
+  int unknown = 0;
+  LegalityStats tiers;
+};
+
+void legal_moves_against_search(const GameState& s, SearchTally& t) {
+  MoveList moves;
+  generate_moves(s, moves);
+  std::vector<MoveLegality> status;
+  classify_moves(s, moves, status, LegalityOptions::exact(), &t.tiers);
+  ++t.states;
+  for (std::size_t i = 0; i < moves.size(); ++i) {
+    GameState child = s;
+    child.apply(moves[i]);
+    const std::optional<bool> r = can_finish_legally(child, Detector::Hypercuboid, SearchBudget::nodes(200000));
+    if (!r) {
+      ++t.unknown;
+      continue;
+    }
+    ++t.compared;
+    const bool agree = status[i] == (*r ? MoveLegality::Legal : MoveLegality::Illegal);
+    if (!agree) {
+      std::fprintf(stderr, "  classify: %s is %s, a search says %s, at %s\n",
+                   to_string(moves[i], s.multiverse().even()).c_str(),
+                   status[i] == MoveLegality::Legal ? "legal" : status[i] == MoveLegality::Illegal ? "illegal" : "unknown",
+                   *r ? "legal" : "illegal", describe_position(s).c_str());
+    }
+    CHECK(agree);
+  }
+}
+
+void legal_games(const GameState& start, int turns, std::uint64_t seed, SearchTally& t) {
+  t5d_test::Rng rng(seed);
+  GameState s = start;
+  MoveList moves;
+  for (int turn = 0; turn < turns; ++turn) {
+    legal_moves_against_search(s, t);
+    generate_moves(s, moves);
+    for (std::size_t i = 0; i < moves.size() && i < 2; ++i) {
+      GameState child = s;
+      child.apply(moves[static_cast<std::size_t>(rng.below(static_cast<int>(moves.size())))]);
+      legal_moves_against_search(child, t);
+    }
+    const std::optional<std::vector<Move>> action = random_legal_action(s, rng);
+    if (!action) break;
+    for (const Move& m : *action) s.apply(m);
+    s.submit();
+  }
+}
+
+void report(const char* what, const SearchTally& t) {
+  std::printf("  [%s] %d states, %d moves compared, %d searches stopped by their budget\n", what, t.states,
+              t.compared, t.unknown);
+  report_tiers(t.tiers);
+}
+
+TEST(legal_moves_agree_with_a_search_per_move) {
+  SearchTally t;
+  std::uint64_t seed = 4000;
+  for (const Sparse& start : sparse_starts()) {
+    legal_games(t5d_test::game(start.boards, start.size), 6, seed++, t);
+  }
+  RuleOptions moves_after_shift;
+  moves_after_shift.moves_after_shift = true;
+  legal_games(t5d_test::game(sparse_starts()[0].boards, sparse_starts()[0].size, moves_after_shift), 6, seed++, t);
+  report("legal moves", t);
+  CHECK(t.compared > 500);
+}
+
+TEST(long_legal_moves_agree_with_a_search_per_move) {
+  SearchTally t;
+  std::uint64_t seed = 5000;
+  for (const Variant& v : variants()) {
+    legal_games(variant_start(v), 4, seed++, t);
+  }
+  for (const RuleOptions& r : alternative_rulesets()) {
+    for (const Sparse& start : sparse_starts()) {
+      legal_games(t5d_test::game(start.boards, start.size, r), 8, seed++, t);
+    }
+  }
+  report("legal moves, long", t);
+  CHECK(t.compared > 5000);
+}
+
 TEST(detectors_agree_with_the_brute_force_reference) {
   ReferenceTally t;
   against_reference(400, 5, 7001, t);
   report("reference", t);
+  report_tiers(t.tiers);
   CHECK_EQ(t.positions, 400);
   // The positions reach what the regimes model: inactivity, several
   // creations, boxes removed by the abstract check.
@@ -451,6 +610,7 @@ TEST(long_detectors_agree_with_the_brute_force_reference) {
   ReferenceTally t;
   against_reference(4000, 7, 9001, t);
   report("reference, long", t);
+  report_tiers(t.tiers);
   CHECK_EQ(t.positions, 4000);
   CHECK(t.order_regions > 0);  // the order-by-order capture regions were exercised
   CHECK(t.memory_stops < 20);  // the ceiling is for runaway searches, not these
