@@ -48,9 +48,19 @@ M5 - building it would break a rule).
   waiting entries for the ruled reading (drafts in
   `oracles/.cache/reports/triage-2026-10-02/`, regenerable: 94 R1 entries and
   cwmtt/futures action 17 under Q4's other reading), decide cwmtt/many2's
-  export-form move (read it, or an entry), and run every tier. (2) Engine E5a, a
-  fast legal-moves filter (M9 with legality), and E5b, the scanner and 6b - both
-  running. (3) N3's CPU wall times on a quiet machine.
+  export-form move (read it, or an entry), and run every tier. (2) Running
+  (2026-10-02), each in its own git worktree under `.claude/worktrees/` (a
+  branch per stage, merged into main when reviewed): engine E5a, a fast
+  legal-moves filter (M9 with legality, `t5d-measure --legal`); E5b, the scanner
+  and the 6b tool; E6a, the search core (PUCT and widening, both D2 arms behind a
+  flag, MCGS behind a flag, solved bounds, LCB and secure child, persistence, the
+  external-evaluator C API, self-play's turn cap, the synchronous mode, §15.4's
+  invariants, `t5d-play`). Network N4 is done (committed 2026-10-02): the ctypes
+  binding, real positions as validated `PositionState`s, the evaluator side of the
+  search's protocol - `CStepDriver` waits for E6a's step API. (3) N3's CPU wall times, 6b's timing run and M9 with legality,
+  each on a quiet machine. (4) Then: time management (E7, E8), the scanner in the
+  search (rung 1) and Lazy SMP, end-to-end play with the network's random weights,
+  the NNUE only if 6b passes (M8).
 - **Waiting on the user:**
   - **Rules Q4** (may a player keep moving after the present has shifted?). The
     engine follows the Guide's "no". Ten corpus records by three authors make
@@ -840,6 +850,20 @@ decision), and what is parked.
 47. **Register H22's wording** still says "phantom boards for the mate-vs-stalemate
     verdict" and "per-board chess rules as 5D queries", which H36 and H40 replaced.
     Proposed spec edit 40.
+48. **§2.3 / A3 has no player-to-move feature apart from the present.** A state
+    whose present has shifted inside an unsubmitted action reads as the
+    opponent's turn. Under the default rules such a state has no moves (Q4), so
+    search submits first; under Q4's other reading it has moves and the network
+    cannot represent it - the converter refuses it (`PresentMismatch`). Proposed
+    spec edit 42. Bears on the Q4 ruling.
+49. **§8.1's "generator-supplied legal moves"**: the C API offers pseudo-legal
+    moves (spec issues 28, 46), so the policy scores pseudo-legal moves until the
+    expansion's move set is decided. Proposed spec edit 41.
+50. **Lineage beyond the parent on engine positions**: the C API has no board
+    creation order and no travel source (issues 29, 30), so on engine positions
+    `two_parent` reads as `lineage` and `creation` is unusable; 5DFEN positions
+    lose origins too (issue 25). Timeline Battleground's outer initial timelines
+    count as "origins unknown" (their parent of -1 is right).
 
 ## Proposed spec edits
 
@@ -968,6 +992,11 @@ says now, what it should say, why.
     mate-vs-stalemate verdict) ... per-board chess rules as 5D queries" -> "check
     status per H36 (pass on the active boards in the present) ... per-board castling
     and en passant attack tests (H40)" (issue 47).
+41. **§8.1**: say whether the pointer head scores pseudo-legal moves, legal first
+    moves, or actions - with D2 and spec issues 28, 46 (issue 49).
+42. **§2.3 / A3**: either add the player to move as a global input feature, or
+    state that leaves are evaluated only at action boundaries or before the
+    present shifts - needed under Q4's other reading (issue 48).
 
 ## Session log
 
