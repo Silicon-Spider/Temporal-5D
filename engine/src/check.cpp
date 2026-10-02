@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <bit>
 #include <cstdint>
+#include <stdexcept>
 #include <string>
 #include <utility>
 
@@ -328,10 +329,14 @@ std::vector<int> passed_timelines(const GameState& s) {
     // R1: ACTIVE boards IN THE PRESENT (T4) - the mover's, as the present is
     // on the mover's colour at a turn's start.
     if (!s.active(p) || t->last_half_turn() != s.present() || !s.playable_by_mover(p)) continue;
+    // Q6's alternative defers a timeline only while its board is its owner's,
+    // and every deferral of the mover's ends as the mover's turn begins: at a
+    // turn's start no deferred timeline is the mover's to play.
     const auto& deferred = s.deferred_timelines();
     if (std::any_of(deferred.begin(), deferred.end(),
                     [p](const GameState::Deferral& d) { return d.timeline == p; })) {
-      continue;  // Q6's alternative: left out of the present
+      throw std::logic_error("passed_timelines: a deferred timeline of the mover's (Q6) - not a "
+                             "turn's start");
     }
     out.push_back(p);
   }

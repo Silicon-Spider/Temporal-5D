@@ -5,14 +5,18 @@
 // same verdict wherever both prove one, the same count (to a cap) wherever
 // both know it, and the same successor states. Each search runs under a node
 // budget, so either may answer Unknown; an Unknown is compared with nothing.
+// And on random tiny multiverses under random rulesets, both against a
+// brute-force reference (test_reference.hpp), exactly.
 //
 // The default run is kept short; the tests named long_* (t5d-tests --long, or
 // a fragment beginning "long_") play many more games under larger budgets.
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -24,6 +28,7 @@
 #include "t5d/variants.hpp"
 #include "test_framework.hpp"
 #include "test_positions.hpp"
+#include "test_reference.hpp"
 #include "test_support.hpp"
 
 using namespace t5d;
@@ -224,7 +229,217 @@ void report(const char* what, const Tally& t) {
               t.counts_compared, t.sets_compared, t.naive_seconds, t.hyper_seconds);
 }
 
+// ---- against the brute-force reference ------------------------------------------------
+//
+// Random tiny multiverses: 1x1 boards (a piece moves only through time and
+// across timelines, so nearly every move travels), up to four timelines of
+// each creator beside the central ones, starting at staggered times - so
+// that some are inactive (T10), creations reactivate some behind the present
+// (T11, T12), and branches land before, at and after it - with the mover's
+// pieces on most of its boards; under random rulesets (Q1-Q6, Q8, Q20, J3's
+// other reading). Every count, listing and verdict of both detectors must be
+// the reference's (test_reference.hpp) - and, after each first move, the
+// count of the ways to finish the action, whether it can be finished, and the
+// legal moves (t5d/search.hpp).
+
+struct ReferenceTally {
+  int positions = 0;
+  int with_actions = 0;
+  int with_inactive = 0;
+  int two_branches = 0;    // positions with an action that creates two timelines or more
+  int boxes_removed = 0;   // positions where the hypercuboid removed a box whole
+  int mid_action = 0;      // states after a first move, compared too
+  int order_regions = 0;   // positions where the hypercuboid took captures order by order
+};
+
+std::optional<GameState> tiny_position(t5d_test::Rng& rng, int max_axes, bool kings,
+                                       std::vector<std::string>& boards) {
+  const bool even = rng.chance(50);
+  const int white_side = rng.below(5);
+  const int black_side = rng.below(5);
+  const auto label = [&](int p) {
+    if (even) return p >= 0 ? "+" + std::to_string(p) : "-" + std::to_string(-p - 1);
+    return p == 0 ? std::string("0") : (p > 0 ? "+" : "") + std::to_string(p);
+  };
+  std::vector<std::pair<int, int>> places;  // (timeline, half-turns from T1 White)
+  for (int p = even ? -1 - black_side : -black_side; p <= white_side; ++p) {
+    const bool central = even ? (p == -1 || p == 0) : p == 0;
+    const int start = central ? 0 : rng.below(3);
+    const int head = start + 1 + rng.below(4);
+    for (int j = start; j <= head; ++j) places.emplace_back(p, j);
+  }
+  const auto make = [&](const std::vector<std::string>& contents) {
+    std::vector<std::string> out;
+    for (std::size_t i = 0; i < places.size(); ++i) {
+      const int j = places[i].second;
+      out.push_back("[" + contents[i] + ":" + label(places[i].first) + ":" + std::to_string(j / 2 + 1) +
+                    ":" + (j % 2 == 0 ? "w" : "b") + "]");
+    }
+    return out;
+  };
+  RuleOptions r;
+  r.activation = rng.chance(30) ? ActivationRule::Consecutive : ActivationRule::Count;
+  r.initial_credit = rng.chance(25) ? InitialTimelineCredit::MinusZeroToBlack : InitialTimelineCredit::None;
+  r.play_activates = rng.chance(20);
+  r.moves_after_shift = rng.chance(25);
+  r.mandatory = rng.chance(25) ? MandatoryBoards::AllActive : MandatoryBoards::InPresent;
+  r.reactivation = rng.chance(20) ? Reactivation::Deferred : Reactivation::Rewinds;
+  r.earlier_playable_jump_branches = rng.chance(20);
+  r.inactive_history_is_destination = !rng.chance(25);
+  r.turn_zero_reachable = !rng.chance(20);
+  const Parity parity = even ? Parity::Even : Parity::Odd;
+  Colour mover = Colour::White;
+  try {
+    mover = game_from_fen(make(std::vector<std::string>(places.size(), "1")), BoardSize{1, 1}, parity, r)
+                .to_move();
+  } catch (const std::exception&) {
+    return std::nullopt;  // not a position (no present on the colour to move, ...)
+  }
+  const auto piece = [&](bool mine) {
+    // Every third position king-heavy: royal captures across created timelines.
+    const char* kinds = kings ? "QKRKBK" : "QQRBNK";
+    const char c = kinds[rng.below(6)];
+    const bool white = mine == (mover == Colour::White);
+    return std::string(1, white ? c : static_cast<char>(c - 'A' + 'a'));
+  };
+  std::vector<std::string> contents;
+  for (std::size_t i = 0; i < places.size(); ++i) {
+    const bool head = i + 1 == places.size() || places[i + 1].first != places[i].first;
+    const bool movers = (places[i].second % 2 == 0) == (mover == Colour::White);
+    const int roll = rng.below(100);
+    if (head && movers) {
+      contents.push_back(roll < 15 ? "1" : roll < 85 ? piece(true) : piece(false));
+    } else if (movers) {
+      contents.push_back(roll < 60 ? "1" : roll < 90 ? piece(false) : piece(true));
+    } else {
+      contents.push_back(roll < 50 ? "1" : roll < 80 ? piece(false) : piece(true));
+    }
+  }
+  boards = make(contents);
+  try {
+    GameState s = game_from_fen(boards, BoardSize{1, 1}, parity, r);
+    if (static_cast<int>(s.playable_timelines().size()) > max_axes) return std::nullopt;
+    return s;
+  } catch (const std::exception&) {
+    return std::nullopt;
+  }
+}
+
+void against_reference(int positions, int max_axes, std::uint64_t seed, ReferenceTally& t) {
+  t5d_test::Rng rng(seed);
+  std::vector<std::string> boards;
+  for (int attempt = 0; t.positions < positions && attempt < positions * 20; ++attempt) {
+    const std::optional<GameState> s = tiny_position(rng, max_axes, attempt % 3 == 2, boards);
+    if (!s) continue;
+    const t5d_test::Reference ref = t5d_test::reference_actions(*s, 2000000);
+    if (ref.overflow) continue;
+    ++t.positions;
+    if (!ref.actions.empty()) ++t.with_actions;
+    if (!s->inactive_timelines().empty()) ++t.with_inactive;
+    if (std::any_of(ref.actions.begin(), ref.actions.end(), [](const std::string& k) {
+          return std::count(k.begin(), k.end(), ';') >= 2;
+        })) {
+      ++t.two_branches;
+    }
+    const auto where = [&]() {
+      std::string out = describe(s->rules());
+      for (const std::string& b : boards) out += " " + b;
+      return out;
+    };
+    bool removed = false;
+    for (const Detector d : {Detector::Naive, Detector::Hypercuboid}) {
+      const ActionCount actions = count_legal_actions(*s, 1000000, d);
+      const ActionCount successors = count_legal_successors(*s, 1000000, d);
+      const ActionList list = list_legal_actions(*s, 1000000, d);
+      const MateResult mate = detect_mate(*s, d);
+      std::set<std::string> keys;
+      for (const LegalAction& a : list.actions) {
+        keys.insert(t5d_test::Reference::key(a.moves, s->multiverse().even()));
+      }
+      const bool agree = actions.stats.exhaustive && actions.count == ref.actions.size() &&
+                         successors.count == ref.successors.size() && keys == ref.actions &&
+                         (mate.verdict == Outcome::Ongoing) == !ref.actions.empty();
+      if (!agree) {
+        std::fprintf(stderr, "  %s: actions %zu (reference %zu), successors %zu (reference %zu), "
+                             "verdict %s at %s\n",
+                     detector_name(d), actions.count, ref.actions.size(), successors.count,
+                     ref.successors.size(), name_of(mate.verdict), where().c_str());
+      }
+      CHECK(agree);
+      if (d == Detector::Hypercuboid && actions.stats.unrealisable_boxes > 0) removed = true;
+      if (d == Detector::Hypercuboid && actions.stats.order_regions > 0) ++t.order_regions;
+    }
+    if (removed) ++t.boxes_removed;
+    // During the action: after each first move, the ways to finish it
+    // (counted from there), and the legal moves - those after which it can
+    // be finished legally (t5d/search.hpp).
+    MoveList first;
+    generate_moves(*s, first);
+    std::vector<Move> expected_legal;
+    bool all_known = true;
+    for (const Move& m : first) {
+      GameState child = *s;
+      child.apply(m);
+      const t5d_test::Reference rest = t5d_test::reference_actions(child, 2000000);
+      if (rest.overflow) {
+        all_known = false;
+        continue;
+      }
+      ++t.mid_action;
+      if (!rest.actions.empty()) expected_legal.push_back(m);
+      for (const Detector d : {Detector::Naive, Detector::Hypercuboid}) {
+        const ActionCount c = count_legal_actions(child, 1000000, d);
+        const std::optional<bool> finish = can_finish_legally(child, d);
+        const bool agree = c.stats.exhaustive && c.count == rest.actions.size() &&
+                           finish == std::optional<bool>(!rest.actions.empty());
+        if (!agree) {
+          std::fprintf(stderr, "  %s after %s: %zu ways to finish (reference %zu) at %s\n",
+                       detector_name(d), to_string(m, s->multiverse().even()).c_str(), c.count,
+                       rest.actions.size(), where().c_str());
+        }
+        CHECK(agree);
+      }
+    }
+    if (all_known) {
+      for (const Detector d : {Detector::Naive, Detector::Hypercuboid}) {
+        MoveList legal;
+        legal_moves(*s, legal, d);
+        CHECK(legal == expected_legal);
+      }
+    }
+  }
+}
+
+void report(const char* what, const ReferenceTally& t) {
+  std::printf("  [%s] %d positions (%d with legal actions, %d with inactive timelines, %d with an "
+              "action creating two timelines or more; the hypercuboid removed whole boxes in %d), "
+              "and %d states after a first move; captures taken order by order in %d\n",
+              what, t.positions, t.with_actions, t.with_inactive, t.two_branches, t.boxes_removed,
+              t.mid_action, t.order_regions);
+}
+
 }  // namespace
+
+TEST(detectors_agree_with_the_brute_force_reference) {
+  ReferenceTally t;
+  against_reference(400, 5, 7001, t);
+  report("reference", t);
+  CHECK_EQ(t.positions, 400);
+  // The positions reach what the regimes model: inactivity, several
+  // creations, boxes removed by the abstract check.
+  CHECK(t.with_actions > 100);
+  CHECK(t.with_inactive > 100);
+  CHECK(t.two_branches > 50);
+  CHECK(t.boxes_removed > 10);
+}
+
+TEST(long_detectors_agree_with_the_brute_force_reference) {
+  ReferenceTally t;
+  against_reference(4000, 7, 9001, t);
+  report("reference, long", t);
+  CHECK_EQ(t.positions, 4000);
+  CHECK(t.order_regions > 0);  // the order-by-order capture regions were exercised
+}
 
 TEST(detectors_agree_on_every_variant) {
   // Random legal games from every named variant (rules reference V3).

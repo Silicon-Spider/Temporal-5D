@@ -58,11 +58,12 @@ GameState replay(const GameState& start, const std::vector<Move>& moves) {
 // a2, b1, b2 - a playable board of White's, so a jump that plays both boards
 // (J4). And once one board is played, its former head is history: the other
 // king's jump onto it BRANCHES (J6), creating +1. So:
-//   3 x 3 pairs of moves within the boards (either order: one state each),
+//   3 x 3 pairs of moves within the boards (either order: one action),
 //   3 + 3 non-branching jumps, each the whole action,
 //   2 x 3 x 3 one king's move, then the other's branching jump onto it,
-// 33 distinct successors, all safe (the black kings stand three ranks away,
-// on every board - the copies included).
+// 33 legal actions, all safe (the black kings stand three ranks away, on
+// every board - the copies included), and as many distinct successors: no
+// action creates two timelines, and no two reach the same position.
 GameState two_kings() { return game({"[k4/5/5/5/K4:-0:1:w]", "[k4/5/5/5/K4:+0:1:w]"}, k5x5); }
 
 // C8, stale-checkmate: Black must play 0 and +1 (both at T1, active). On 0 its
@@ -112,10 +113,13 @@ TEST(search_counts_the_standard_start) {
   }
 }
 
-TEST(search_counts_distinct_successor_states) {
+TEST(search_counts_the_legal_actions) {
   for (const Detector d : kDetectors) {
     const GameState s = two_kings();
     CHECK_EQ(count_of(s, d), std::size_t{33});
+    const ActionCount successors = count_legal_successors(s, 100000, d);
+    CHECK(successors.stats.exhaustive);
+    CHECK_EQ(successors.count, std::size_t{33});
     // The cap: count == cap means "at least".
     const ActionCount capped = count_legal_actions(s, 7, d);
     CHECK_EQ(capped.count, std::size_t{7});
@@ -137,8 +141,8 @@ TEST(search_counts_on_one_board_drop_moves_into_check) {
 }
 
 TEST(search_lists_the_legal_actions_canonically) {
-  // One action per distinct successor, sorted by its canonical text; each
-  // replays (in its own order) to the state listed.
+  // One entry per legal action, sorted by its canonical text; each replays
+  // (in its own order) to the state listed.
   for (const Detector d : kDetectors) {
     const GameState s = two_kings();
     const ActionList list = list_legal_actions(s, 1000, d);
@@ -160,6 +164,39 @@ TEST(search_lists_the_legal_actions_canonically) {
     CHECK(listed("(-0T1)Ka1(-0T1)a2 (+0T1)Ka1(+0T1)b2"));  // both within their boards
     CHECK(listed("(+0T1)Ka1(-0T1)b1"));                    // a jump that plays both
     CHECK(listed("(-0T1)Ka1(-0T1)a2 (+0T1)Ka1(-0T1)b1"));  // J6: then a branch onto -0
+  }
+}
+
+TEST(search_two_creation_orders_are_two_actions_j6) {
+  // The harness's definition (t5d/search.hpp): an action is the set of its
+  // moves with its timeline-creating moves in the order they create their
+  // timelines - two orders of two branching moves are two actions, even where
+  // they reach the same state. 1x1 boards: a piece moves only through time
+  // and across timelines. White has created +1, Black nothing, so White's
+  // next creations are inactive (T10) and rewind nothing (T8). On -0 and +0,
+  // at T2 (White's, the present: both mandatory, T6), a rook - each with one
+  // move: back to its own timeline's T1, empty, a branch (L5). (Across the
+  // timelines it meets its own rooks: on the other board, and on +1's T2.)
+  // Both must be made, in either order: the new timelines +2 and +3 each
+  // begin with a copy of an empty board with a rook arrived - identical - so
+  // the two orders reach one position (their origins aside): two legal
+  // actions, one successor.
+  const GameState s = game({"[1:-0:1:w]", "[1:-0:1:b]", "[R:-0:2:w]", "[1:+0:1:w]", "[1:+0:1:b]",
+                            "[R:+0:2:w]", "[1:+1:1:b]", "[R:+1:2:w]", "[1:+1:2:b]"},
+                           BoardSize{1, 1});
+  for (const Detector d : kDetectors) {
+    CHECK_EQ(count_of(s, d), std::size_t{2});
+    const ActionCount successors = count_legal_successors(s, 100, d);
+    CHECK(successors.stats.exhaustive);
+    CHECK_EQ(successors.count, std::size_t{1});
+    const ActionList list = list_legal_actions(s, 100, d);
+    REQUIRE_EQ(list.actions.size(), std::size_t{2});
+    CHECK_EQ(action_text(list.actions[0].moves, true),
+             std::string("(+0T2)Ra1(+0T1)a1 (-0T2)Ra1(-0T1)a1"));
+    CHECK_EQ(action_text(list.actions[1].moves, true),
+             std::string("(-0T2)Ra1(-0T1)a1 (+0T2)Ra1(+0T1)a1"));
+    CHECK(same_position(list.actions[0].result, list.actions[1].result));
+    CHECK(same_position(replay(s, list.actions[0].moves), replay(s, list.actions[1].moves)));
   }
 }
 
@@ -200,6 +237,74 @@ TEST(search_positions_differing_only_in_origin_are_one) {
   CHECK(!(a == b));
   CHECK(same_position(a, b));
   CHECK_EQ(a.zobrist(), b.zobrist());
+}
+
+TEST(search_positions_differing_only_in_history_dependent_activity_are_two) {
+  // Where activity is not a function of the boards (Q1's consecutive reading,
+  // Q3's activation by play, Q6's deferral), it is part of the position:
+  // same_position (and the key) tell apart two states with the same boards
+  // that differ in it. 2x1 boards (a1, b1); White to move at T2 on 0 (queen
+  // a1) and Black's -1 (rook b1), both mandatory (T6); Black's -2, its second
+  // creation, is inactive (White has created none, T10), its board at T2
+  // White's and empty. Each played state is compared with the state read
+  // fresh from the same boards (the count rule's activity, no last creator,
+  // no deferral).
+  const std::vector<std::string> boards = {"[2:0:1:w]",   "[2:0:1:b]",  "[Q1:0:2:w]",
+                                           "[2:-1:1:w]",  "[2:-1:1:b]", "[1R:-1:2:w]",
+                                           "[2:-2:1:w]",  "[2:-2:1:b]", "[2:-2:2:w]"};
+  // Action A: the queen branches back to (0T1)a1 - White's first creation,
+  // active, before the present: it rewinds it (T8), and the action ends; it
+  // reactivates -2 (T11), whose board (T2, White's) is then behind the new
+  // present (T1, Black's). Action B: the rook a1, then the queen across to
+  // -2's playable board (a jump that plays both, J4) - no creation.
+  const auto after = [&](const RuleOptions& rules, bool branch) {
+    GameState s = game(boards, BoardSize{2, 1}, rules);
+    if (branch) {
+      play(s, "(0T2)Qa1(0T1)a1");
+    } else {
+      play(s, "(-1T2)Rb1(-1T2)a1");
+      play(s, "(0T2)Qa1(-2T2)a1");
+    }
+    s.submit();
+    return s;
+  };
+  const auto fresh = [](const GameState& s) { return GameState(s.multiverse(), s.rules()); };
+  const auto same = [&](const GameState& s) {
+    const GameState f = fresh(s);
+    CHECK_EQ(same_position(s, f), s.zobrist() == f.zobrist());
+    return same_position(s, f);
+  };
+  // The default rules: activity follows from the boards.
+  CHECK(same(after({}, true)));
+  CHECK(same(after({}, false)));
+  // Q1, consecutive: who created last is part of the position.
+  RuleOptions consecutive;
+  consecutive.activation = ActivationRule::Consecutive;
+  const GameState c = after(consecutive, true);
+  CHECK(c.last_creator() == Colour::White);
+  CHECK(!same(c));
+  CHECK(same(after(consecutive, false)));  // no creation: no last creator either way
+  // Q6, deferred: the reactivated -2 (White's board) is left out of the present
+  // until White's next turn - a deferral the fresh state does not have.
+  RuleOptions deferred;
+  deferred.reactivation = Reactivation::Deferred;
+  const GameState d = after(deferred, true);
+  REQUIRE_EQ(d.deferred_timelines().size(), std::size_t{1});
+  CHECK_EQ(d.deferred_timelines()[0].timeline, -2);
+  CHECK(!same(d));
+  // At Black's turn start the deferred board is not Black's: the check status
+  // reads it as no board of the mover's (check.cpp's passed_timelines).
+  CHECK(!in_check(d));
+  // Q3, activation by play: the queen's arrival on -2 activated it; read
+  // fresh, -2 is inactive (White has still created none).
+  RuleOptions by_play;
+  by_play.play_activates = true;
+  const GameState p = after(by_play, false);
+  CHECK(p.inactive_timelines().empty());
+  const GameState read = fresh(p);
+  CHECK_EQ(read.inactive_timelines(), (std::vector<int>{-2}));
+  CHECK(!same(p));
+  CHECK(same(after(by_play, true)));
 }
 
 // ---- mate detection -------------------------------------------------------------------
@@ -310,6 +415,85 @@ TEST(search_outcome_through_the_engines_check_ruling) {
   CHECK(outcome(game({"[k4/2Q2/5/5/4K:0:1:b]"}, k5x5), r) == Outcome::Stalemate);
 }
 
+// ---- the hypercuboid's cost: regression bounds ------------------------------------------
+
+TEST(search_the_hypercuboid_stays_small_when_every_branch_rewinds) {
+  // 1x1 boards on timelines -n..+n (each side has created n: all active,
+  // T10), each with empty boards from T1 to T3 and a White queen at T4
+  // (White's turn; all mandatory, T6). A queen on 1x1 meets its own queens
+  // across the timelines at T4; its moves are the branches into the past:
+  // back along its own timeline to T3, T2 or T1, and diagonally (one
+  // timeline per turn back) up to three turns, as far as the timelines go
+  // (L5). Each is active (White's (n+1)-th creation, Black has n) and lands
+  // before the present, which it rewinds (T8): the action ends with it (Q4),
+  // the other boards unplayed. So the legal actions are the single branches:
+  // 3 per queen back along its timeline, and diagonally 3 + 3 per queen less
+  // 1 + 2 + 3 at each edge - 3(2n+1) + 2(3(2n+1) - 6) = 18n - 3 for n >= 2.
+  // A successor is fixed by the queen that moved and how far back (every
+  // destination is an empty board): 3(2n+1). The product space has
+  // (19)^(2n+1) points; the hypercuboid once spent 34 million nodes on n = 3.
+  const auto position = [](int n) {
+    std::vector<std::string> boards;
+    for (int p = -n; p <= n; ++p) {
+      const std::string label = p == 0 ? "0" : (p > 0 ? "+" : "") + std::to_string(p);
+      for (int t = 1; t <= 3; ++t) {
+        boards.push_back("[1:" + label + ":" + std::to_string(t) + ":w]");
+        boards.push_back("[1:" + label + ":" + std::to_string(t) + ":b]");
+      }
+      boards.push_back("[Q:" + label + ":4:w]");
+    }
+    return game(boards, BoardSize{1, 1});
+  };
+  for (int n = 2; n <= 6; ++n) {
+    const GameState s = position(n);
+    for (const Detector d : kDetectors) {
+      const ActionCount actions = count_legal_actions(s, 100000, d);
+      CHECK(actions.stats.exhaustive);
+      CHECK_EQ(actions.count, static_cast<std::size_t>(18 * n - 3));
+      CHECK(actions.stats.nodes <= 2 * actions.count);  // a move and a test per action
+      const ActionCount successors = count_legal_successors(s, 100000, d);
+      CHECK_EQ(successors.count, static_cast<std::size_t>(3 * (2 * n + 1)));
+    }
+  }
+}
+
+TEST(search_the_hypercuboid_finds_actions_past_reactivations) {
+  // The shape of a position that once stalled the hypercuboid: the opponent's
+  // inactive timelines with boards of the mover's behind the present, which
+  // the mover's creations reactivate (T11) and the present then rewinds to
+  // (T12) - so most points of the product space, those with branches, have
+  // no order that meets the obligations. 2x1 boards (a1, b1), White queens
+  // on a1. Timelines 0, White's +1 and Black's -1 to -3 head at T4 (White's),
+  // -4 at T3 and -5 at T2. Black has created five, White one: Black's -3, -4
+  // and -5 are inactive (T10), and White's first three creations reactivate
+  // them in that order - -4 and -5 behind the present. The legal
+  // actions are many (each mandatory queen may step to b1 or jump across):
+  // both detectors reach a cap of 1000 - the hypercuboid within a bound, by
+  // its abstract check of which skeletons can be realised.
+  std::vector<std::string> boards;
+  const auto add = [&](const std::string& label, int first, int last) {
+    for (int j = first; j <= last; ++j) {
+      boards.push_back("[" + std::string(j == last ? "Q1" : "2") + ":" + label + ":" +
+                       std::to_string(j / 2 + 1) + ":" + (j % 2 == 0 ? "w" : "b") + "]");
+    }
+  };
+  add("0", 0, 6);
+  add("+1", 1, 6);
+  add("-1", 1, 6);
+  add("-2", 1, 6);
+  add("-3", 1, 6);
+  add("-4", 1, 4);
+  add("-5", 1, 2);
+  const GameState s = game(boards, BoardSize{2, 1});
+  REQUIRE_EQ(s.inactive_timelines(), (std::vector<int>{-5, -4, -3}));
+  for (const Detector d : kDetectors) {
+    const ActionCount c = count_legal_actions(s, 1000, d);
+    CHECK(c.reached_cap);
+    CHECK_EQ(c.count, std::size_t{1000});
+    if (d == Detector::Hypercuboid) CHECK(c.stats.nodes < 8000);
+  }
+}
+
 // ---- H37: a budget can only ever yield "unknown" ----------------------------------------
 
 TEST(search_a_budget_limited_search_answers_unknown_never_mate_h37) {
@@ -348,6 +532,67 @@ TEST(search_a_budget_limited_search_answers_unknown_never_mate_h37) {
         CHECK(detect_mate(s, d, no_memory).verdict == Outcome::Unknown);
       }
     }
+  }
+}
+
+TEST(search_a_search_at_its_memory_ceiling_answers_unknown_h37) {
+  // Every search has a memory ceiling (SearchBudget::max_bytes, by default
+  // kDefaultSearchBytes, unlimited() included). Reaching it stops the search
+  // like any budget: Unknown - never checkmate or stalemate - and
+  // stopped_by_memory says why. A ceiling below one held position stops it
+  // at once.
+  CHECK_EQ(SearchBudget::unlimited().max_bytes, kDefaultSearchBytes);
+  for (const Detector d : kDetectors) {
+    for (const GameState& s : {stale_checkmate(), two_kings()}) {
+      SearchBudget tiny;
+      tiny.max_bytes = 1;
+      const MateResult r = detect_mate(s, d, tiny);
+      CHECK(r.verdict == Outcome::Unknown);
+      CHECK(r.stats.stopped_by_budget);
+      CHECK(r.stats.stopped_by_memory);
+      CHECK(!r.stats.exhaustive);
+      const ActionCount c = count_legal_actions(s, 1000, d, tiny);
+      CHECK(!c.known());
+      CHECK(c.stats.stopped_by_memory);
+    }
+    // The default ceiling is far above what these need.
+    const MateResult mate = detect_mate(stale_checkmate(), d);
+    CHECK(mate.verdict == Outcome::Checkmate);
+    CHECK(!mate.stats.stopped_by_memory);
+  }
+}
+
+TEST(search_legal_moves_are_those_that_begin_a_legal_action_r1) {
+  // R1 judges legality per action ("moving into check during a turn is
+  // allowed"), so a single move is legal if a legal action begins with it
+  // (build-log spec issue 28; t5d/search.hpp's legal_moves). In rewind_escape
+  // (C9), Black's legal actions are the king's four jumps back to (0T1), each
+  // a whole action: they are its legal moves. Its other pseudo-legal moves -
+  // the king's steps on board 0, the jumps onto +1's board - leave no way to
+  // finish: +1 (or 0) is then left to play with nothing on it, and nothing
+  // rewinds. In rewind_blocked, checkmate, nothing is legal.
+  for (const Detector d : kDetectors) {
+    MoveList all;
+    generate_moves(rewind_escape(), all);
+    CHECK(all.size() > 4);
+    MoveList legal;
+    legal_moves(rewind_escape(), legal, d);
+    REQUIRE_EQ(legal.size(), std::size_t{4});
+    for (const Move& m : legal) {
+      CHECK(m.branching());
+      CHECK_EQ(m.to_timeline, 0);
+    }
+    legal_moves(rewind_blocked(), legal, d);
+    CHECK(legal.empty());
+    // During an action: in two_kings after (-0T1)Ka1(-0T1)a2, every move the
+    // +0 king has - three on its board, three jumps branching onto -0's T1
+    // board, now history (J6) - finishes a legal action.
+    GameState mid = two_kings();
+    play(mid, "(-0T1)Ka1(-0T1)a2");
+    generate_moves(mid, all);
+    legal_moves(mid, legal, d);
+    CHECK_EQ(all.size(), std::size_t{6});
+    CHECK(legal == all);
   }
 }
 
