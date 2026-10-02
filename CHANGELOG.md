@@ -10,6 +10,19 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-03 - 6b re-run after the optimisation pass: M12's outcome is STOP
+
+- `docs/MEASUREMENTS.md`: experiment 6b re-run as M12 rules - after E5c's bounded
+  pass, at the scanner's design budget (5 threads, Lazy SMP), every definition
+  unchanged, read per board-count range, on a quiet machine. The 50 ms root scan
+  resolves 5 forcing half-turns in 76.7% of positions under 50 boards (pass), 31.4%
+  at 50-99, 24.7% at 100-199 and 2.4% at 200+ (fail); rung 1 and quiet-leaf reach
+  fail in every range. M12's pre-registered outcome: "50-199 boards fail -> STOP:
+  redesign the verification layer".
+- `docs/BUILD_LOG.md`: the STOP, what it asks of the user, and what is paused
+  (engine E7 and E6a on their branches); register rows M8, M12, M13, H17.
+- Spec: §15.6 (6b, M8, M12, M13), §11.1 (the kill condition), §11.3 (H17).
+
 ### 2026-10-03 - Engine E5c: M12's optimisation pass, Lazy SMP, 6b per board-count range
 
 - `engine/` (merged from its worktree branch; M12, M13, H17, H19): the in-check

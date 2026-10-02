@@ -15,6 +15,34 @@ M5 - building it would break a rule).
 
 ## Where things stand
 
+### STOPPED 2026-10-03 - M12's outcome: 6b fails at 50-199 boards after the optimisation pass
+
+Under the user's pre-registered rule (M12): "50-199 boards fail -> STOP: redesign
+the verification layer". The re-run on a quiet machine (docs/MEASUREMENTS.md, 6b):
+the 50 ms root scan at the scanner's design budget (5 threads, Lazy SMP) resolves
+5 forcing half-turns in 76.7% of positions under 50 boards, but 31.4% at 50-99,
+24.7% at 100-199 and 2.4% at 200+ (the first run: 25.7 / 18.6 / 2.4). Above 50
+boards it reaches that depth essentially only where it proves a result. Rung 1 and
+quiet-leaf reach fail in every range (drop rung 1; NNUE v2 deferred).
+
+**For the user:** the verification layer's redesign (§11.1's kill condition). The
+spec names df-pn as the leading candidate above the brute-force regime (§15.6,
+§14.4; its repetition gate is gone, H39); the measurement points at where the
+scanner's nodes now go (completion fallbacks 38-64% of nodes at 100+ boards,
+royal-capture scans 24%, in-check listings 23%).
+
+**Paused, untouched until the decision:**
+- engine E7 (Q4 as the default; D8's acting player and submit availability in the
+  expansion and C API), committed on branch `worktree-agent-a8f46f56bb33bef09`
+  (97d2cd1, 97bac3e, 285f28f), not merged. It must merge together with the Python
+  binding's update (the expansion struct grew from 272 to 288 bytes; the Q4
+  encoding bit now means the Guide-literal reading); one long test remains to
+  re-run.
+- engine E6a (the search core), on branch `worktree-agent-a2dfd073da81ec01e`, its
+  self-play edit reviewed and committed (1c6956d).
+- Not started: the gate with the engine configured (it waits on E7), network N5
+  (D8's submit logit and acting-player input, C23 fixed), N3's CPU wall times.
+
 ### CHECKPOINT 2 - stopped 2026-10-02 on 6b, ruled the same day; the run resumed
 
 The run stopped on experiment 6b (the root scan failed above 50 boards; inside the
@@ -582,7 +610,7 @@ for game records.
 | H10-H14 | parked | Async ladder rungs: with the scanner |
 | H15 | built, tested | The scanner's deterministic single-thread mode; search's (E6a) in progress |
 | H16, H25, H29 | not built (rule) | Refused |
-| H17 | parked | Lazy SMP: with the scanner |
+| H17 | built in part | Lazy SMP in the scanner (E5c): same-root threads, a shared TT and a concurrent solved store; in-game decay and rung helpers wait for the search |
 | H18 | built, tested | 5D Zobrist: coordinate-free content hash per board, multiply-rotate with (timeline, half-turn), addition across boards, ruleset ID, player to move, parity, creators, board size; incremental equals from-scratch; duplicated boards never cancel (engine E1, E2) |
 | H19 | built, tested | Proofs export to the solved store at once; the TT holds estimates only |
 | H22 | built, tested | All five items of §11.0 (E1, E2, E4); the register row's wording predates H36/H40 (proposed spec edit 40) |
@@ -648,7 +676,9 @@ for game records.
 | ID | Status | Notes |
 |---|---|---|
 | M7 | measured, no verdict | The corpus's curve recorded (MEASUREMENTS); 2-3 games above 160 boards, none above 400 - game records requested (spec issue 26) |
-| M8 | measured - STOP | 6b on a quiet machine: root scan 60.9% pooled (Guide's Q4) / 49.2% (other Q4, in the band); fails above 50 boards; rung 1 and quiet-leaf reach fail; stand-pat valid (MEASUREMENTS) |
+| M8 | measured - STOP | 6b re-run (M12): root scan 76.7% / 31.4% / 24.7% / 2.4% by range (< 50 / 50-99 / 100-199 / 200+); rung 1 and quiet-leaf reach fail everywhere; stand-pat valid |
+| M12 | applied - STOP | The bounded optimisation pass (E5c) and the re-run at 5 threads, Lazy SMP: 50-199 boards fail -> STOP, redesign the verification layer |
+| M13 | applied | 8 cores per GPU: M9 judged on 2 expansion cores (passes, 1.87x), the scanner measured at 5 |
 | M9 | measured | Pseudo-legal: PASS (2.2x / 2.5x the targets on one thread), history term 2%; with E5a's fast legality: 1.01x at 240 boards on one core (in the band), 1.87x on two; 1.21x at 600 |
 | M11 | built | Licence recorded in PROVENANCE.md |
 
