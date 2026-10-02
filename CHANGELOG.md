@@ -10,6 +10,19 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-03 - Design documents: the CHECKPOINT 3 ruling, from upstream
+
+- `docs/design/` replaced with the upstream revision recording CHECKPOINT 3: §11.1
+  "The redesign after 6b" (split the scanner by channel - exactness only where a
+  proof can result; the proof channel a depth-limited df-pn over the
+  semimove-decomposed turn tree with hypercuboid-pruned completion; incremental
+  royal-attack maps), §15.6's CHECKPOINT 3 block (6b′'s tests and outcome rules),
+  §13's note that exact verification may not reach depth at high board counts;
+  register rows H1, H6, H10 updated, M14 (the redesign, a prototype until 6b′) and
+  M15 (6b′, pre-registered), reversal 22; the architecture document's §13.2.7 "Pay
+  exactness only where a proof can result". Copied in unchanged.
+- Spec: the documents themselves (§11.1, §13, §15.6; H1, H6, H10, M14, M15).
+
 ### 2026-10-03 - Engine CI: the Lazy SMP timing test needs cores to test anything
 
 - `engine/tests/test_scanner.cpp`: the test that 5 Lazy SMP threads resolve at
