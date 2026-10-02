@@ -8,14 +8,14 @@
 //            [--no-widening] [--e2] [--e3] [--batch N] [--synchronous]
 //            [--match] [--final visits|lcb] [--temperature T] [--temperature-decisions N]
 //            [--noise] [--cap-turns N] [--cap-boards N] [--max-actions N]
-//            [--listing-cap N] [--seed S] [--moves-after-shift] [--rules ENCODING]
+//            [--listing-cap N] [--mate-nodes N] [--seed S] [--moves-after-shift] [--rules ENCODING]
 //
 // Defaults: Standard, the uniform evaluator, 64 playouts per decision, the
 // board-move split (D2 is undecided: --split turn is the other arm), a tree
 // (--graph: MCGS, C11), self-play (a fresh search per decision, C14; visits
 // sampled at temperature 1 for the first 16 decisions) - --match plays the
 // final rule (E5, LCB by default) with the tree carried (C12) - and a turn cap
-// of 40 turns (I11: a convention, scored as a draw; --cap-turns 0 lifts it).
+// of 20 turns (I11: a convention, scored as a draw; --cap-turns 0 lifts it).
 // Exit status: 0 for a game played, 2 for a bad command line, 1 for an error.
 
 #include <cstdio>
@@ -46,7 +46,7 @@ void usage(std::FILE* to) {
       "                [--no-widening] [--e2] [--e3] [--batch N] [--synchronous]\n"
       "                [--match] [--final visits|lcb] [--temperature T]\n"
       "                [--temperature-decisions N] [--noise] [--cap-turns N] [--cap-boards N]\n"
-      "                [--max-actions N] [--listing-cap N] [--seed S]\n"
+      "                [--max-actions N] [--listing-cap N] [--mate-nodes N] [--seed S]\n"
       "                [--moves-after-shift] [--rules ENCODING]\n",
       to);
 }
@@ -71,7 +71,7 @@ int main(int argc, char** argv) {
   BuiltinEvaluator evaluator = BuiltinEvaluator::Uniform;
   PlayParams params;
   params.search.expand.square_features = SquareFeatures::None;  // the built-ins read none
-  params.turn_cap.turns = 40;
+  params.turn_cap.turns = 20;
   RuleOptions rules;
   try {
     for (int i = 1; i < argc; ++i) {
@@ -153,6 +153,8 @@ int main(int argc, char** argv) {
         params.max_actions = static_cast<std::uint32_t>(number(a, value()));
       } else if (std::strcmp(a, "--listing-cap") == 0) {
         params.search.max_actions = static_cast<std::size_t>(number(a, value()));
+      } else if (std::strcmp(a, "--mate-nodes") == 0) {
+        params.search.mate_nodes = number(a, value());
       } else if (std::strcmp(a, "--seed") == 0) {
         params.seed = number(a, value());
         params.search.seed = params.seed;
@@ -204,6 +206,13 @@ int main(int argc, char** argv) {
                  static_cast<unsigned long long>(g.nodes), g.seconds,
                  g.cap_bound() ? "bound" : "not bound",
                  static_cast<unsigned long long>(g.search_turn_caps));
+    std::fprintf(stderr,
+                 "t5d-play: seconds in the rules engine - search's terminal checks %.2f, leaf "
+                 "expansions %.2f, action listings %.2f, verifications %.2f; the game's turn-start "
+                 "verdicts %.2f; final position %zu boards, %d timelines\n",
+                 g.seconds_search_mate, g.seconds_search_expand, g.seconds_search_listing,
+                 g.seconds_search_verify, g.seconds_verdicts, g.final_state.multiverse().board_count(),
+                 g.final_state.multiverse().timeline_count());
     return 0;
   } catch (const std::exception& e) {
     std::fprintf(stderr, "t5d-play: error: %s\n", e.what());

@@ -159,6 +159,7 @@ SearchParams params_from(const t5d_search_params* c) {
   p.turn_cap.turns = c->turn_cap_turns;
   p.turn_cap.boards = c->turn_cap_boards;
   p.eval_cache_entries = static_cast<std::size_t>(c->eval_cache_entries);
+  p.eval_cache_bytes = static_cast<std::size_t>(c->eval_cache_bytes);
   return p;
 }
 
@@ -305,6 +306,7 @@ void t5d_search_params_default(t5d_search_params* out) {
   out->turn_cap_turns = p.turn_cap.turns;
   out->turn_cap_boards = p.turn_cap.boards;
   out->eval_cache_entries = p.eval_cache_entries;
+  out->eval_cache_bytes = p.eval_cache_bytes;
 }
 
 t5d_status t5d_search_new(const t5d_game* game, int32_t turn_start, const t5d_search_params* params,
