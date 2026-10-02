@@ -620,7 +620,33 @@ class Classifier {
     passed_.assign(in_x_.size(), {});
     passed_found_.assign(in_x_.size(), 0);
     const Multiverse& base = s_.multiverse();
+    // First one scan of every board passed at once. Without Q18's void
+    // crossing, adding boards blocks no line (a line never crosses void) and
+    // changes no board a capture rests on; the boards of the attacker's colour
+    // keep their status (passed boards extend the mover's timelines only). So
+    // a capture with board p passed alone is a capture here too, resting on
+    // p's passed board: only the boards some capture here rests on need a
+    // scan of their own - none, in a position with no check to answer.
+    std::vector<char> touched(in_x_.size(), 1);
+    if (!rules_.sliders_cross_void && boards_.size() > 1) {
+      std::fill(touched.begin(), touched.end(), 0);
+      Multiverse all = base;
+      for (const int p : boards_) {
+        BoardBuilder b(*base.head(p));
+        b.set_en_passant(kNoSquare);
+        all.append_board(p, b.publish());
+      }
+      ++stats_.scans;
+      for_each_royal_capture(all, rules_, opposite(mover_), s_.inactive_timelines(), [&](const RoyalCapture& c) {
+        for (const CapturePlace& place : capture_places(c)) {
+          if (place.timeline < min_timeline_ || place.timeline > base.max_timeline()) continue;
+          if (place.half_turn == head_half_turn(place.timeline) + 1) touched[index(place.timeline)] = 1;
+        }
+        return false;  // every capture
+      });
+    }
     for (const int p : boards_) {
+      if (touched[index(p)] == 0) continue;
       Multiverse mv = base;
       BoardBuilder b(*base.head(p));
       b.set_en_passant(kNoSquare);
