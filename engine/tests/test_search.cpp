@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "t5d/check.hpp"
+#include "t5d/expand.hpp"
 #include "t5d/fen.hpp"
 #include "t5d/movegen.hpp"
 #include "t5d/search.hpp"
@@ -594,6 +595,15 @@ TEST(search_legal_moves_are_those_that_begin_a_legal_action_r1) {
     CHECK_EQ(all.size(), std::size_t{6});
     CHECK(legal == all);
   }
+  // The expansion's switch (ExpandOptions::legal_moves) offers the same.
+  ExpandOptions o;
+  Expansion x;
+  expand(rewind_escape(), o, x);
+  const std::size_t pseudo = x.move_records().size();
+  o.legal_moves = true;
+  expand(rewind_escape(), o, x);
+  CHECK_EQ(x.move_records().size(), std::size_t{4});
+  CHECK(pseudo > 4);
 }
 
 TEST(search_every_proven_verdict_is_exhaustive_h37) {
