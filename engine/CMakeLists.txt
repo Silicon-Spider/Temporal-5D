@@ -177,6 +177,8 @@ endif()
 
 # Stage E5b: the tactical scanner and its tests; experiment 6b's tool.
 target_sources(t5d_core PRIVATE src/scanner.cpp)
+# Stage E5c: the scanner's Lazy SMP runs threads (std::thread).
+target_link_libraries(t5d_core PUBLIC Threads::Threads)
 target_sources(t5d-tests PRIVATE tests/test_scanner.cpp)
 add_executable(t5d-scan6b tools/t5d_scan6b.cpp)
 target_link_libraries(t5d-scan6b PRIVATE t5d_tools Threads::Threads)
