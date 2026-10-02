@@ -10,6 +10,22 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-02 - Engine: en passant is not a quiet move for the legality tiers
+
+- `engine/src/legal.cpp`: tier 1's argument - a quiet action only adds blockers,
+  so its royal captures are among the stripped multiverse's - fails for en
+  passant, which empties the victim's square, one the capturer does not land on,
+  and can open a line onto the mover's own royal. The classifier then called such
+  an en passant legal in every mode (and `legal_moves()` listed it), though it
+  begins no legal action. En passant now goes to tier 2's per-move checks. Found
+  by an adversarial review that otherwise matched the classifier with an
+  independent brute-force reference on 1,135,952 exact classifications (and 3.4
+  million budgeted and fast ones, never contradicting) under 20 rulesets and
+  combinations; random play had never produced the geometry.
+- `engine/tests/test_detectors.cpp`: the review's two positions as a regression
+  test (it fails before the fix).
+- Spec: §11.0 item 2 (C4, R1); no spec text changes.
+
 ### 2026-10-02 - Engine E5a: the legal moves in tiers - exact, budgeted, fast
 
 - `engine/` (merged from its worktree branch): a move's legality (C4, R1) is decided

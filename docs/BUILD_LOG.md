@@ -439,8 +439,10 @@ Engine stage E4, built in its own worktree and merged into main on 2026-10-02:
   last - in exact, budgeted (legal / illegal / unknown, never illegal without
   proof) or fast mode. `ExpandOptions::legality` sets the expansion's mode
   (unknown moves kept and marked). 0 disagreements with the brute-force
-  reference and a per-move search in about 113,000 long-run classifications; an
-  independent soundness review is running. At 240 boards the median expansion is
+  reference and a per-move search in about 113,000 long-run classifications. An
+  independent review (1.1 million exact classifications, 20 rulesets) found one
+  unsound case, fixed the same day: an en passant that uncovers a capture of the
+  mover's royal was treated as a quiet move. At 240 boards the median expansion is
   26 µs pseudo-legal, 102 µs fast, 2.5 ms budgeted, 7.3 ms exact (E4's filter:
   157 ms); exact keeps a tail of minutes at 400-600 boards.
 
