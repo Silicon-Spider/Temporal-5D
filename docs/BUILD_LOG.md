@@ -516,16 +516,20 @@ for game records.
 
 | ID | Status | Notes |
 |---|---|---|
-| H1-H5 | not started | The scanner: after check detection and legality (E4) and the movegen measurement (M10) |
-| H6 | not started | Material eval v1 with the scanner; NNUE v2 waits on 6b (M8) |
+| H1 | built, tested | Engine E5b's scanner: node-capped alpha-beta over forcing actions; not yet in a search |
+| H2 | built, tested | Proofs only from E4's exhaustive verdicts and exhaustive defender enumerations; estimates otherwise |
+| H3 | built, tested | Node cap with iterative deepening in forcing half-turns; horizon per budget measured (6b) |
+| H4 | built | MVV-LVA, killers, history, continuation history |
+| H5 | built | Nothing speculative; null move and LMR not built |
+| H6 | built (v1) | Material count with placeholder 5D piece values (spec issue 56); NNUE v2 waits on 6b (M8) |
 | H7 | not built (rule) | NNUE training: no training runs; NNUE waits on 6b |
 | H8, H9, H20, H21 | not built (rule) | Held open / refused |
 | H10-H14 | parked | Async ladder rungs: with the scanner |
-| H15 | parked | Synchronous debug mode: with the scanner and search |
+| H15 | built, tested | The scanner's deterministic single-thread mode; search's (E6a) in progress |
 | H16, H25, H29 | not built (rule) | Refused |
 | H17 | parked | Lazy SMP: with the scanner |
 | H18 | built, tested | 5D Zobrist: coordinate-free content hash per board, multiply-rotate with (timeline, half-turn), addition across boards, ruleset ID, player to move, parity, creators, board size; incremental equals from-scratch; duplicated boards never cancel (engine E1, E2) |
-| H19 | parked | Proof export: with the scanner |
+| H19 | built, tested | Proofs export to the solved store at once; the TT holds estimates only |
 | H22 | built, tested | All five items of §11.0 (E1, E2, E4); the register row's wording predates H36/H40 (proposed spec edit 40) |
 | H23 | built | The gate, oracle and engine sides; the engine passes the contract on the whole corpus; configured in `gate.toml` once Q4 is ruled; the proof channel stays disabled |
 | H24, H26, H28 | built, tested | The generator and the 5dpgn/5DFEN parser are in-house (`engine/`), written from `docs/rules/README.md` and the notation spec's text; 259 engine tests; boundary clean |
@@ -885,6 +889,43 @@ decision), and what is parked.
     `two_parent` reads as `lineage` and `creation` is unusable; 5DFEN positions
     lose origins too (issue 25). Timeline Battleground's outer initial timelines
     count as "origins unknown" (their parent of -1 is right).
+51. **§11.1 defines no forcing set.** Engine E5b's, each class a parameter:
+    captures (within a board, across timelines, through time, en passant); checking
+    moves (a piece of the mover's on a board the move creates, that board advanced
+    by a pass, can capture an enemy royal - an approximation of R1: it may count a
+    board ahead of the present, C7, and misses a check given from a board the move
+    did not create); branch threats; promotions (off).
+52. **"Immediate threat"** (§11.1's branching moves "with an immediate threat") is
+    undefined: placeholder `ArrivalCapture` - the arriving piece, on the passed new
+    board, can capture an enemy piece worth at least 300.
+53. **"Depth-limited" (§11.1) against "node cap" (H3, "defining quiet")**: built as
+    a node cap with iterative deepening in forcing half-turns.
+54. **Forcing moves and 5D obligations**: a forcing action is a legal action that
+    begins with a forcing move; the rest of the turn is finished by a completion
+    rule (a parameter: quiet moves by the least valuable piece by default).
+55. **"All evasions" in 5D** are all legal actions of a turn - a product over
+    boards. The scanner lists them up to a cap (512); a capped node gives an
+    estimate and is not fully resolved. In-check listings take 52% of the scanner's
+    nodes.
+56. **5D piece values**: none in the spec. P N B R Q at the chess convention;
+    unicorn 250, dragon 200, princess 700, brawn 125, common king 300 are
+    placeholders; royals 0. The eval counts every timeline's latest board.
+57. **"Node"** is undefined: the scanner counts a move applied, a royal-capture
+    scan, or one node of an E4 search it calls.
+58. **6b's terms are undefined**: "fully resolved", "scan leaf", "quiet", the
+    evaluation rate when none is measured (no GPU here: §15.6's design rates,
+    9,600/s at 240 boards and 4,600/s at 600, are used), threads (1, and physical
+    cores - 1), pooled or per-size nodes/s; and stand-pat validity (operationalised:
+    at a quiet position, every legal action - or a sample above 32 - answered by the
+    opponent's 2-half-turn forcing search; invalid if every action loses its static
+    eval).
+59. **Draws as solved values**: H2 names wins and losses; the scanner exports
+    stalemates as Draw(0) proofs.
+60. **Proof distance** is an upper bound in half-turns.
+61. **Is 6b's root test pooled over a corpus or per phase?** The pooled figure
+    rests on the corpus's many small positions; above 50 boards - the design's
+    regime - the root scan fails (preliminary). M7's window rule is per phase.
+62. **§15.6's rung-1 "measured evaluation rate"** does not exist without a GPU.
 
 ## Proposed spec edits
 
@@ -1023,6 +1064,19 @@ says now, what it should say, why.
     legal or unknown - by the rules engine's sound tiers under a budget (exact on
     demand); search verifies an unknown move when it first selects it, and scores a
     node terminal only on an exact verdict" (issue 46).
+44. **§11.1 recommended design, item 1**: "Node-capped alpha-beta over forcing
+    actions (iterative deepening in forcing half-turns)" (issue 53).
+45. **§11.1 "defining quiet"**: state the forcing set and define "immediate threat"
+    (issues 51, 52).
+46. **§11.1 two channels**: a loss proof needs the defender's legal actions
+    enumerated exhaustively; a capped node gives an estimate; say whether stalemate
+    draws are solved values (issues 55, 59).
+47. **§11.3**: the TT holds no proofs; the solved store is read first.
+48. **§15.6 6b**: define "fully resolved", "scan leaf", the evaluation-rate fallback
+    and stand-pat validity, and say whether the verdicts are per phase (issues 58,
+    61, 62).
+49. **§15.3 "Scanner nodes/s"**: write back (M4) after the quiet run.
+50. **Register H6**: a 5D piece-value table, pending a decision (issue 56).
 
 ## Session log
 

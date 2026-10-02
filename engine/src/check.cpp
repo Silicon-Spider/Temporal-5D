@@ -320,6 +320,35 @@ std::optional<RoyalCapture> find_royal_capture(const Multiverse& multiverse,
   return found;
 }
 
+bool royal_capture_from(const Multiverse& multiverse, const RuleOptions& rules, Colour attacker,
+                        std::span<const int> inactive_timelines,
+                        std::span<const ScanSource> sources) {
+  const Multiverse& mv = multiverse;
+  if (mv.empty()) return false;
+  // C13: a royal of the other colour on a source (a branch's copy) or anywhere.
+  bool royal = false;
+  for (const ScanSource& src : sources) {
+    if (src.board != nullptr && src.board->royals(opposite(attacker)) != 0) royal = true;
+  }
+  if (!royal && !has_royal(mv, opposite(attacker))) return false;
+  const auto stop = [](const RoyalCapture&) { return true; };
+  // The bounds stay the multiverse's: a slide or leap from a source outside
+  // them reads void there (spot_at), which is what lies beyond every board.
+  Scan s{mv, rules, inactive_timelines, attacker, mv.board_size(), mv.min_timeline(),
+         mv.max_timeline(), mv.latest_half_turn(), 0, 0, nullptr};
+  for (const ScanSource& src : sources) {
+    if (src.board == nullptr) continue;
+    s.p = src.timeline;
+    s.h = src.half_turn;
+    s.board = src.board;
+    for (std::uint64_t bits = s.board->pieces(attacker); bits != 0; bits &= bits - 1) {
+      const int square = std::countr_zero(bits);
+      if (piece_captures(s, square, s.board->at(square), stop)) return true;
+    }
+  }
+  return false;
+}
+
 // ---- check status --------------------------------------------------------------------
 
 std::vector<int> passed_timelines(const GameState& s) {

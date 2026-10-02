@@ -10,6 +10,29 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-02 - Engine E5b: the tactical scanner and experiment 6b's tool
+
+- `engine/` (merged from its worktree branch; H1-H6, H15, H19): `t5d/scanner.hpp`,
+  the verification layer's brute-force auditor - node-capped alpha-beta with
+  iterative deepening over forcing actions (a legal action beginning with a forcing
+  move; the forcing set, the branch-threat test and the completion rule are
+  parameters), a material-count eval (placeholder 5D piece values), net-free
+  ordering, no speculative pruning. In check every legal action is searched (E4's
+  enumeration, to a cap). Proofs come only from E4's exhaustive verdicts and
+  exhaustively enumerated defences, and export at once to a solved store probed
+  before the TT, which holds estimates only. A deterministic single-thread mode and
+  a stand-pat validity check. `t5d/check.hpp` gains `royal_capture_from`.
+- `t5d-scan6b`: experiment 6b's five measures - horizon per node budget, the rung-1
+  leaf test, the 50 ms root scan, quiet-leaf reach, stand-pat validity - with every
+  condition and breakdowns by board count.
+- Tests: 18 by default and 4 long, against E4's detectors and a brute-force game
+  tree; no false proof under random node budgets and every alternative ruleset.
+- `docs/BUILD_LOG.md`: register rows H1-H6, H15, H19; spec issues 51-62; proposed
+  spec edits 44-50. The 6b verdict is measured next, on a quiet machine (the
+  preliminary figures, from a loaded one, put the root scan near its threshold).
+- Spec: §11.1-§11.3, §15.4, §15.6 (6b, M8), §15.3 (scanner nodes/s); H1-H6, H15,
+  H18, H19, M8, D2; spec issues 51-62, proposed edits 44-50.
+
 ### 2026-10-02 - Engine: en passant is not a quiet move for the legality tiers
 
 - `engine/src/legal.cpp`: tier 1's argument - a quiet action only adds blockers,

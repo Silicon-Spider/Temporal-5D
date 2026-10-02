@@ -52,6 +52,7 @@ rules reference, `docs/rules/README.md`, which the code cites throughout.
 | **E4:** legal actions, their count and listing, the legal moves; the naive and hypercuboid mate detectors | `include/t5d/search.hpp`, `src/search.cpp`, `src/hypercuboid.cpp` | §11.0 item 3, H37 |
 | **E4:** the gate adapter's full mode and its diagnostics | `include/t5d/gate.hpp`, `tools/t5d_gate.cpp` | H23, H36, H37 |
 | **E5a:** the legal moves in tiers: exact, budgeted, fast | `include/t5d/legal.hpp`, `src/legal.cpp` | C4, R1; build-log spec issues 28, 46 |
+| **E5b:** the tactical scanner: forcing actions, proofs and estimates, the solved store; experiment 6b's tool | `include/t5d/scanner.hpp`, `tools/t5d_scan6b.cpp` | §11.1-§11.3, §15.6, H1-H6, H15, H19, M8 |
 
 Next: the gate run with the engine configured (parse mode, then full mode); the
 expansion's pin and check relations; which moves the expansion offers, and how a
@@ -108,6 +109,7 @@ Targets (all in `build/engine`):
 | `t5d_tools` | static library of the tools: synthetic positions, record input |
 | `t5d-measure` | W(k), E(k), src_extra(k) at every position of records (see "t5d-measure") |
 | `t5d-bench` | expansion throughput (see "t5d-bench") |
+| `t5d-scan6b` | experiment 6b: the scanner's horizon per node budget (see "Stage E5b") |
 
 Release builds use -O2; every target builds with `-Wall -Wextra -Wpedantic -Wshadow
 -Wconversion -Wsign-conversion`, warning-free (`--werror` makes that binding). On
@@ -1529,6 +1531,98 @@ In the records, the stripped multiverse alone proves 28-46% of the moves legal i
 fast mode (35-49% in the others), and its branches another 9-17% when they may be
 scanned. `t5d-bench
 --legal-profile` prints every tier's share.
+
+## Stage E5b: the tactical scanner and t5d-scan6b
+
+The verification layer's brute-force auditor (spec §11.1-§11.3; register H1-H6, H15,
+H19) and the tool for experiment 6b (§15.6, M8). `include/t5d/scanner.hpp` states every
+definition in full; in brief:
+
+- **Unit.** A node is a turn start, an edge one whole legal action; depth counts
+  forcing half-turns (one side's action), board moves along a line are reported beside
+  it. Check status (R1), terminal verdicts and stand-pat live at turn starts, so
+  terminal detection runs only at turn boundaries, by E4's exhaustive detectors.
+- **Forcing set** (§11.1 defines none; each class a parameter): captures (within a
+  board, across timelines, through time); *checking moves* - a piece of the mover's on
+  a board the move creates, that board advanced by a pass, can capture an enemy royal
+  (`royal_capture_from`, a scan of given source boards added to `t5d/check.hpp`), which
+  counts royals on history boards (C2) and is held equal to the definition made
+  literal (the move made, its boards passed, `for_each_royal_capture` filtered) under
+  every ruleset; *branch threats* - a branching move whose arriving piece, on the new
+  timeline's passed board, can capture a piece worth at least 300 (a placeholder: the
+  spec leaves "immediate threat" undefined); promotions optionally. A forcing action
+  is a legal action that begins with a forcing move (its seed), finished by the
+  completion rule - on each mandatory board left, the quietest move (a move within the
+  board, capturing nothing, of the least valuable piece) - or, where that leaves a
+  royal capturable or a board unplayable, by E4's first legal finish (within 2,000
+  nodes; a seed it cannot finish in time is dropped - the estimate channel's loss).
+- **Search.** Negamax alpha-beta, iterative deepening, node-capped (H3). In check: every
+  legal action, by E4's enumeration (`list_legal_actions`), up to `evasion_cap` (512);
+  beyond it the node is *capped* - searched over the actions E4 listed, an estimate,
+  and its iteration is not fully resolved. Otherwise stand-pat, then
+  captures (MVV-LVA), then checks and branch threats (killers, history, continuation
+  history: H4); a node with no forcing action is quiet (E4's detector tells a
+  stalemate). No reductions, null move, futility, ProbCut or delta pruning (H5; the
+  scanner's pruning waits on 6b, M5/M8).
+- **Two channels** (H2). A proof - Win(d), Loss(d), Draw(0) - comes only from E4's
+  exhaustive verdicts, "some action leads to a proven loss of the opponent's" and "every
+  legal action, enumerated exhaustively, leads to a proven win of the opponent's"; so
+  a node cap inside a proof line, stand-pat and a capped node give none. Proofs are
+  exported to the solved store (`SolvedStore`, `MemorySolvedStore`: Zobrist key with the
+  ruleset ID, full comparison on a match; contradictory proofs throw) the moment they
+  are found (H19); the TT (fixed size, always replace) holds estimates only.
+- **Material eval** (H6 v1): the side to move's material on every timeline's latest
+  board minus the opponent's. P N B R Q are the chess convention; U 250, D 200, S 700,
+  W 125, C 300 are placeholders (`PieceValues`); royals 0.
+- **Determinism** (H15): single-threaded; with a node budget and no clock the same
+  position gives the same search node for node. Lazy SMP waits for Phase 2.
+- **Nodes**: a move applied, a royal-capture scan, or a node of an E4 search the
+  scanner calls - one unit for all the work.
+- **Stand-pat validity** (6b's fifth test; `stand_pat_validity`), operationalised
+  before measuring: at a quiet position (not in check, no forcing move) stand-pat is
+  invalid when every legal action of the side to move - all of them when there are at
+  most 32, else a sample of 32 (each first move completed) - loses material to the
+  opponent's best forcing reply within 2 forcing half-turns (4,000 nodes each).
+
+`tests/test_scanner.cpp`: constructed mates - in 1 half-turn on one board, across
+timelines, by stale-checkmate (C8), through time onto a royal on a history board (C2),
+in 3 (mate in two by checks) and lost in 2 - each confirmed by E4's detector and by a
+brute-force game tree (`tests/test_game_tree.hpp`: minimax over the brute-force
+reference's successors); E4's terminal positions (C6, C8, C9, C13, R1, Reversed
+Royalty); C9's rewind (no false loss); random play from sparse starts, at generous and
+at random node budgets and under every alternative ruleset, every proof checked
+against the game tree; proofs that survive a one-entry TT and are answered from the
+store; determinism; the budget curve; stand-pat validity on a zugzwang. The `long_`
+variants check every proof, of any distance, on larger samples.
+
+### t5d-scan6b
+
+```
+t5d-scan6b [--every K] [--leaves N] [--leaf-depth D] [--max-nodes N] [--budgets B,...]
+           [--threads T,...] [--eval-rates R,...] [--nps N] [--root-ms MS] [--root-wall]
+           [--synthetic-variants V,... --synthetic-games G] [--synthetic-classes N:T,...]
+           [--jobs N] [--json FILE] [--summary FILE] [--per-position]
+           [scanner options] [--moves-after-shift] [--rules ENCODING] [RECORD ...]
+```
+
+Roots are the turn starts of the records given (replayed as parse mode does) and
+SYNTHETIC positions (labelled, never in a verdict); leaves are a few half-turns of
+random legal play below each root. A position whose side to move could capture a
+royal (its last action broke C4) or that has no legal action is counted, not
+scanned. Every position is scanned once, deterministically, to `--max-nodes`; since a
+smaller budget follows the same path, that one curve gives the depth any budget
+resolves (the deepest iteration completed, and not capped, within it; a proof or an
+exhausted tree resolves every depth). From it: (i) the horizon per budget; (ii) rung
+1 at threads x nodes/s / evaluation rate (§15.6's design rates, 9,600/s and 4,600/s, for
+1 thread and the physical cores minus one); (iii) the root scan at 50 ms x nodes/s
+(`--root-wall` also runs it by the clock); (iv) quiet-leaf reach at the rung-1 budget;
+(v) stand-pat validity. Each verdict is printed with the brief's STOP rules (a share
+within 45-55%, a median depth within ±10% of its threshold), with what the passes rest
+on (iterations to depth, exhausted trees, proofs) and the shares by board count. The
+nodes/s is measured over the scans (thread CPU time, less the leaf classification's)
+unless `--nps` fixes it, so that a quiet-machine figure can be applied to the same
+curves; larger positions run fewer nodes per second, which `--root-wall` shows. The
+records are input on the command line; the tool names nothing under the oracle harness.
 
 ## 5DFEN
 
