@@ -1204,9 +1204,12 @@ legal action - one per order of the branching moves (the count's definition).
 - *General* - Q3's activation by play, Q6's deferral, castling on mandatory boards
   only: a depth-first search over every order of the point's moves, with a table of
   the states reached (each with its creations so far, in order); between two
-  creations the moves that create no timeline commute and the obligations only turn
-  from unmet to met as boards are played, so they are made in ascending order but
-  for the action's very last move. Exact for any rules, slower.
+  creations the moves that create no timeline, castling apart, commute and the
+  obligations only turn from unmet to met as boards are played, so they are made in
+  ascending order but for the action's very last move. A castling may come at any
+  point: under Q21's alternative it needs its board mandatory, and under Q3 with
+  Q4's other reading another plain move can rewind the present off it. Exact for any
+  rules, slower.
 
 **Eliminating whole boxes.** The search keeps the unexplored part of the space as
 disjoint *boxes* (a box: one subset of values per axis; the start: everything). It
