@@ -28,23 +28,27 @@
 // The scanner's nodes/s is measured over these runs (thread CPU time), or
 // fixed by --nps for a reproducible verdict.
 //
-// THE MEASURES (M8):
+// THE MEASURES (M8), read per BOARD-COUNT RANGE - < 50, 50-99, 100-199,
+// 200+ - never pooled (M12, CHECKPOINT 2), at the scanner's design thread
+// budget, --scanner-threads (5: M13's 5 of 8 cores per GPU):
 //  (i)   the horizon each budget of --budgets buys: its distribution over
-//        roots and over leaves; and the scanner's nodes/s;
-//  (ii)  rung 1: leaf budget = threads x nodes/s / evaluation rate, for each
-//        --threads (default 1 and the machine's physical cores minus one)
-//        and each --eval-rates (default §15.6's design rates, ~9,600/s per GPU
+//        roots and over leaves; and the scanner's nodes/s per thread;
+//  (ii)  rung 1: leaf budget = threads x nodes/s / evaluation rate, the
+//        threads --scanner-threads (and any --threads, as information), for
+//        each --eval-rates (default §15.6's design rates, ~9,600/s per GPU
 //        at 240 boards and ~4,600/s at 600, cached + window: no GPU here);
 //        pass: >= 3 forcing half-turns resolved in >= 50% of leaves. The
 //        size-matched rate takes 9,600/s below 420 boards and 4,600/s above;
-//  (iii) the root final scan: budget = 50 ms x nodes/s (--root-ms); pass:
-//        >= 5 forcing half-turns in >= 50% of roots. --root-wall also runs
-//        every root for 50 ms of wall clock;
+//  (iii) the root final scan: every root scanned for 50 ms of wall clock
+//        (--root-ms) by --scanner-threads threads (Lazy SMP, H17), one root at
+//        a time after the deterministic scans; pass: >= 5 forcing half-turns
+//        in >= 50% of roots. The one-thread reading at 50 ms x nodes/s from
+//        the deterministic curve is printed beside it, as information;
 //  (iv)  quiet-leaf reach at the rung-1 budget: of the leaves of the deepest
-//        iteration resolved within it (pooled over the leaf positions), the
-//        share that reached a quiet position (no forcing move) or a proven
-//        one; a scan that resolved nothing has the position itself as its one
-//        leaf. Pass: >= 50%;
+//        iteration resolved within it (pooled over the leaf positions of a
+//        range), the share that reached a quiet position (no forcing move)
+//        or a proven one; a scan that resolved nothing has the position
+//        itself as its one leaf. Pass: >= 50%;
 //  (v)   stand-pat validity at every quiet position (roots and leaves), as
 //        t5d/scanner.hpp's stand_pat_validity defines it - operationalised
 //        before measuring: invalid when every legal action examined (all of
@@ -52,9 +56,13 @@
 //        the opponent's best forcing reply within --spv-depth forcing
 //        half-turns (--spv-nodes nodes). Bands: <= 5% fine; 5-20% disable
 //        stand-pat where obligations bind; > 20% redesign.
-// Every verdict is printed with the brief's STOP rules: a failed root test
-// STOPS the build for redesign; a figure within +-10% (relative) of its
-// threshold STOPS it for the user.
+// Every verdict is printed with the brief's STOP rules: a figure within
+// +-10% (relative) of its threshold STOPS the run for the user. The summary
+// applies M12's outcome rules to (iii) mechanically: every range from 50
+// boards up passes - continue as designed; 50-199 pass and 200+ fails -
+// phase-dependent verification; 50-199 fail - STOP for redesign. Rung 1 and
+// quiet-leaf reach are judged by their own rules per range. Pooled figures
+// are printed as information, labelled "not a verdict (M12)".
 //
 // Output: a human summary on standard output (or --summary FILE) and, with
 // --json FILE, every condition and figure (--per-position: every position's
@@ -274,11 +282,12 @@ struct Options {
   std::uint64_t seed = 1;
   std::uint64_t max_nodes = 200'000;
   std::vector<std::uint64_t> budgets{100, 300, 1'000, 3'000, 10'000, 30'000, 100'000};
-  std::vector<int> threads;  // empty: 1 and physical cores - 1
+  int scanner_threads = 5;   // M13: the scanner's 5 of 8 cores per GPU
+  std::vector<int> threads;  // (ii)'s rows besides scanner_threads
   std::vector<double> eval_rates{9600, 4600};
   double nps = 0;  // 0: measured
   double root_ms = 50;
-  bool root_wall = false;
+  bool root_wall = true;
   bool spv = true;
   t5d::StandPatCheck spv_check;
   int jobs = 1;
@@ -309,11 +318,12 @@ struct Options {
       " the measurement\n"
       "  --max-nodes N              each scan's node cap: its curve (200000)\n"
       "  --budgets B,...            (i)'s budgets (100,300,1000,3000,10000,30000,100000)\n"
-      "  --threads T,...            (ii)'s scanner threads (1 and physical cores - 1)\n"
+      "  --scanner-threads T        the scanner's thread budget: (ii)'s and (iii)'s (5, M13)\n"
+      "  --threads T,...            (ii): more rows of threads, as information\n"
       "  --eval-rates R,...         (ii)'s evaluation rates per second (9600,4600)\n"
-      "  --nps N                    the scanner's nodes/s (default: measured here)\n"
+      "  --nps N                    the scanner's nodes/s per thread (default: measured here)\n"
       "  --root-ms MS               (iii)'s root scan time (50)\n"
-      "  --root-wall                (iii) also by the wall clock, one scan per root\n"
+      "  --no-root-wall             skip (iii)'s wall-clock scans (the one-thread reading only)\n"
       "  --no-spv                   skip (v)\n"
       "  --spv-actions N, --spv-depth D, --spv-nodes N   (v)'s check (32, 2, 4000)\n"
       "  --jobs N                   worker threads (1; figures per thread CPU time)\n"
@@ -407,8 +417,12 @@ Options parse(int argc, char** argv) {
       o.nps = std::atof(value());
     } else if (a == "--root-ms") {
       o.root_ms = std::atof(value());
+    } else if (a == "--scanner-threads") {
+      o.scanner_threads = static_cast<int>(std::max<std::uint64_t>(1, number(value())));
     } else if (a == "--root-wall") {
-      o.root_wall = true;
+      o.root_wall = true;  // the default
+    } else if (a == "--no-root-wall") {
+      o.root_wall = false;
     } else if (a == "--no-spv") {
       o.spv = false;
     } else if (a == "--spv-actions") {
@@ -551,10 +565,20 @@ struct Result {
   double cpu_seconds = 0;
   std::optional<t5d::StandPatVerdict> spv;
   double spv_seconds = 0;
-  std::optional<t5d::ScanResult> wall;  // --root-wall
+  std::optional<t5d::ScanResult> wall;  // (iii) by the clock, roots only
 };
 
 constexpr int kAll = 1000;  // "every depth": a proof or an exhausted tree
+
+// The board-count ranges: < 50, 50-99, 100-199, 200+ (M12).
+constexpr int kRanges = 4;
+
+// How deep a scan settled a position, and how.
+struct Settled {
+  int depth = 0;
+  bool proven = false;
+  bool exhausted = false;
+};
 
 // The deepest depth a budget resolves: kAll for a proof or an exhausted
 // tree reached within it.
@@ -631,10 +655,10 @@ int main(int argc, char** argv) {
     usage(2);
   }
   const int cores = physical_cores();
-  if (o.threads.empty()) {
-    o.threads.push_back(1);
-    if (cores > 2) o.threads.push_back(cores - 1);
-  }
+  // (ii)'s rows: the scanner's thread budget first (the verdict), then any
+  // others asked for (information).
+  o.threads.erase(std::remove(o.threads.begin(), o.threads.end(), o.scanner_threads), o.threads.end());
+  o.threads.insert(o.threads.begin(), o.scanner_threads);
   const std::string cpu = cpu_model();
   const unsigned logical = std::thread::hardware_concurrency();
 
@@ -812,14 +836,6 @@ int main(int argc, char** argv) {
           r.cpu_seconds = thread_cpu_seconds() - c0;
           scan_cpu[static_cast<std::size_t>(worker)] += r.cpu_seconds;
           r.scanned = true;
-          if (o.root_wall && positions[i].role == Role::Root) {
-            t5d::ScanBudget wb;
-            wb.max_time = std::chrono::nanoseconds(static_cast<long long>(o.root_ms * 1e6));
-            t5d::ScannerOptions plain = o.scanner;
-            plain.classify_leaves = false;  // the search alone, by the clock
-            t5d::Scanner fresh(plain);
-            r.wall = fresh.scan(s, wb);
-          }
           if (o.spv && r.quiet) {
             const double s0 = thread_cpu_seconds();
             r.spv = t5d::stand_pat_validity(s, o.scanner, o.spv_check);
@@ -842,6 +858,35 @@ int main(int argc, char** argv) {
   }
   const double wall_seconds = std::chrono::duration<double>(Clock::now() - wall0).count();
   const double busy = busy_between(load0, cpu_times());
+
+  // (iii) by the wall clock at the scanner's thread budget: one root at a
+  // time, each scanned for --root-ms by --scanner-threads threads (Lazy SMP),
+  // a fresh scanner and store each, after every other scan has finished - so
+  // that the tool's own threads are the only ones it competes with.
+  const CpuTimes wall_load0 = cpu_times();
+  const Clock::time_point root_wall0 = Clock::now();
+  std::uint64_t root_wall_nodes = 0;
+  std::uint64_t root_wall_shared = 0;  // helpers that shared the root (Lazy SMP)
+  double root_wall_seconds_scanned = 0;
+  if (o.root_wall) {
+    t5d::ScannerOptions timed = o.scanner;
+    timed.classify_leaves = false;  // the search alone, by the clock
+    timed.threads = o.scanner_threads;
+    std::size_t n = 0;
+    for (std::size_t i = 0; i < positions.size(); ++i) {
+      if (!results[i].scanned || positions[i].role != Role::Root) continue;
+      t5d::ScanBudget wb;
+      wb.max_time = std::chrono::nanoseconds(static_cast<long long>(o.root_ms * 1e6));
+      t5d::Scanner fresh(timed);
+      results[i].wall = fresh.scan(*positions[i].state, wb);
+      root_wall_nodes += results[i].wall->stats.nodes;
+      root_wall_shared += results[i].wall->stats.shared_roots;
+      root_wall_seconds_scanned += results[i].wall->stats.seconds;
+      if (++n % 100 == 0) std::fprintf(stderr, "t5d-scan6b: %zu roots by the clock\n", n);
+    }
+  }
+  const double root_wall_seconds = std::chrono::duration<double>(Clock::now() - root_wall0).count();
+  const double root_wall_busy = busy_between(wall_load0, cpu_times());
 
   // -- the figures ------------------------------------------------------------------------------
   // The scans' thread CPU time, less the leaf classification's (measurement
@@ -900,9 +945,16 @@ int main(int argc, char** argv) {
     for (const int v : o.scanner.values.value) values += " " + std::to_string(v);
     line(values);
   }
-  line("  each scan: deterministic (node budget, no clock), cap " + std::to_string(o.max_nodes) +
-       " nodes, TT and histories cleared per position; " + std::to_string(o.jobs) + " job(s); seed " +
-       std::to_string(o.seed));
+  line("  each scan: deterministic (node budget, no clock), one thread, cap " +
+       std::to_string(o.max_nodes) +
+       " nodes, TT and histories cleared per position (each job's solved store kept across its "
+       "positions, so the curves depend on --jobs: 1 for a reproducible run); " +
+       std::to_string(o.jobs) + " job(s); seed " + std::to_string(o.seed));
+  line("  scanner thread budget (M13): " + std::to_string(o.scanner_threads) +
+       " - (ii)'s rung-1 budget, and (iii)'s root scans: " +
+       (o.root_wall ? fmt(o.root_ms, 0) + " ms of wall clock each, Lazy SMP, one root at a time, "
+                      "a fresh scanner and store each"
+                    : std::string("not run (--no-root-wall)")));
   line("  positions: every " + std::to_string(o.every) + " turn start(s) of " +
        std::to_string(o.records.size()) + " record(s); leaves " + std::to_string(o.leaves) +
        " per root at " + std::to_string(o.leaf_depth) + " half-turns of random legal play; " +
@@ -945,6 +997,19 @@ int main(int argc, char** argv) {
        " s of thread CPU time - the scans' " + fmt(total_cpu, 2) + " s less " + fmt(measurement, 2) +
        " s of leaf classification, a measurement); wall " + fmt(wall_seconds, 1) + " s" +
        (o.nps > 0 ? "; budgets derived from --nps " + fmt(o.nps, 0) : ""));
+  if (o.root_wall) {
+    const double per_thread =
+        root_wall_seconds_scanned <= 0
+            ? 0.0
+            : static_cast<double>(root_wall_nodes) /
+                  (root_wall_seconds_scanned * static_cast<double>(o.scanner_threads));
+    line("  (iii)'s wall-clock scans: " + std::to_string(root_wall_nodes) + " nodes in " +
+         fmt(root_wall_seconds_scanned, 2) + " s of scans, " + fmt(per_thread, 0) +
+         " nodes/s per thread at " + std::to_string(o.scanner_threads) + " threads; wall " +
+         fmt(root_wall_seconds, 1) + " s; machine busy " + fmt(100 * root_wall_busy) +
+         "% over these scans (all processes); " + std::to_string(root_wall_shared) +
+         " helper(s) shared the root (not rebuildable from its boards)");
+  }
   {
     t5d::ScanStats sum;
     for (const Result& r : results) {
@@ -1045,14 +1110,22 @@ int main(int argc, char** argv) {
   }
   line("");
 
+  // The board-count ranges 6b is read by (M12): never pooled.
+  const char* const range_names[kRanges] = {"< 50 boards", "50-99", "100-199", "200+"};
+  const auto range_of = [](int boards) { return boards < 50 ? 0 : boards < 100 ? 1 : boards < 200 ? 2 : 3; };
+  const auto in_range = [&](std::size_t i, int range) {
+    return range < 0 || range_of(results[i].boards) == range;
+  };
+  const std::string pooled_label = "pooled (not a verdict, M12)";
+
   // (i) horizon per budget.
-  const auto horizon_table = [&](Role role, bool synthetic, const char* title) {
+  const auto horizon_table = [&](Role role, bool synthetic, int range, const std::string& title) {
     std::size_t n = 0;
     for (std::size_t i = 0; i < positions.size(); ++i) {
-      if (synthetic ? synthetic_counted(i, role) : counted(i, role)) ++n;
+      if ((synthetic ? synthetic_counted(i, role) : counted(i, role)) && in_range(i, range)) ++n;
     }
     if (n == 0) return;
-    line(std::string("(i) HORIZON PER NODE BUDGET - ") + title + " (" + std::to_string(n) +
+    line("(i) HORIZON PER NODE BUDGET - " + title + " (" + std::to_string(n) +
          "): share resolving at least d forcing half-turns");
     std::string head = "  budget     |";
     for (int d = 1; d <= 6; ++d) head += "  >=" + std::to_string(d) + "  ";
@@ -1064,7 +1137,7 @@ int main(int argc, char** argv) {
       std::size_t proven = 0;
       std::size_t uncovered = 0;
       for (std::size_t i = 0; i < positions.size(); ++i) {
-        if (!(synthetic ? synthetic_counted(i, role) : counted(i, role))) continue;
+        if (!(synthetic ? synthetic_counted(i, role) : counted(i, role)) || !in_range(i, range)) continue;
         const t5d::ScanResult& r = results[i].scan;
         if (!covered(r, b, o.max_nodes)) ++uncovered;
         const int h = horizon(r, b);
@@ -1088,30 +1161,45 @@ int main(int argc, char** argv) {
       line(row);
     }
   };
-  horizon_table(Role::Root, false, "roots from records");
-  horizon_table(Role::Leaf, false, "leaves from records");
-  horizon_table(Role::Root, true, "SYNTHETIC roots");
-  horizon_table(Role::Leaf, true, "SYNTHETIC leaves");
+  for (const Role role : {Role::Root, Role::Leaf}) {
+    const std::string what = role == Role::Root ? "roots from records" : "leaves from records";
+    for (int range = 0; range < kRanges; ++range) {
+      horizon_table(role, false, range, what + ", " + range_names[range]);
+    }
+    horizon_table(role, false, -1, what + ", " + pooled_label);
+  }
+  horizon_table(Role::Root, true, -1, "SYNTHETIC roots");
+  horizon_table(Role::Leaf, true, -1, "SYNTHETIC leaves");
   line("");
 
-  // (ii) rung 1 and (iv) quiet reach.
+  // (ii) rung 1 and (iv) quiet reach, per range.
+  struct Share {
+    std::size_t n = 0;
+    std::size_t pass = 0;
+    std::vector<double> depths;
+    double share() const { return n == 0 ? 0.0 : static_cast<double>(pass) / static_cast<double>(n); }
+  };
+  struct Reach {
+    std::uint64_t total = 0;
+    std::uint64_t quiet = 0;
+    std::vector<double> per_scan;
+    double share() const {
+      return total == 0 ? 0.0 : static_cast<double>(quiet) / static_cast<double>(total);
+    }
+  };
   struct Rung {
     int threads = 0;
     double rate = 0;  // 0: size-matched
     std::uint64_t budget = 0;
-    std::size_t leaves = 0;
-    std::size_t pass = 0;
-    std::uint64_t leaf_total = 0;
-    std::uint64_t leaf_quiet = 0;
-    std::vector<double> scan_quiet;  // per scan
-    std::vector<double> horizons;    // per leaf
+    Share leaves[kRanges + 1];  // the ranges, then pooled
+    Reach reach[kRanges + 1];
   };
   std::vector<Rung> rungs;
   const auto rate_for = [&](double rate, int boards) {
     return rate > 0 ? rate : (boards < 420 ? 9600.0 : 4600.0);
   };
-  std::vector<double> rates = o.eval_rates;
-  rates.push_back(0);
+  std::vector<double> rates{0};  // size-matched first: the verdict's
+  rates.insert(rates.end(), o.eval_rates.begin(), o.eval_rates.end());
   for (const int t : o.threads) {
     for (const double rate : rates) {
       Rung g;
@@ -1123,178 +1211,222 @@ int main(int argc, char** argv) {
         const auto budget = static_cast<std::uint64_t>(
             static_cast<double>(t) * nps / rate_for(rate, r.boards));
         g.budget = budget;  // for a fixed rate, the same for every leaf
-        ++g.leaves;
         const int h = horizon(r.scan, budget);
-        g.horizons.push_back(h);
-        if (h >= 3) ++g.pass;
         const t5d::IterationStats* it = resolved_iteration(r.scan, budget);
-        if (it != nullptr) {
-          g.leaf_total += it->leaves.total();
-          g.leaf_quiet += it->leaves.reached_quiet();
-          g.scan_quiet.push_back(it->leaves.total() == 0
+        for (const int k : {range_of(r.boards), kRanges}) {
+          Share& s = g.leaves[k];
+          ++s.n;
+          s.depths.push_back(h);
+          if (h >= 3) ++s.pass;
+          Reach& q = g.reach[k];
+          if (it != nullptr) {
+            q.total += it->leaves.total();
+            q.quiet += it->leaves.reached_quiet();
+            q.per_scan.push_back(it->leaves.total() == 0
                                      ? 1.0
                                      : static_cast<double>(it->leaves.reached_quiet()) /
                                            static_cast<double>(it->leaves.total()));
-        } else {
-          g.leaf_total += 1;
-          g.leaf_quiet += r.quiet ? 1 : 0;
-          g.scan_quiet.push_back(r.quiet ? 1.0 : 0.0);
+          } else {
+            q.total += 1;
+            q.quiet += r.quiet ? 1 : 0;
+            q.per_scan.push_back(r.quiet ? 1.0 : 0.0);
+          }
         }
       }
       rungs.push_back(g);
     }
   }
+  const auto median_text = [](const std::vector<double>& v) {
+    const double m = median(v);
+    return m >= kAll ? std::string("all") : fmt(m, 1);
+  };
   line("(ii) RUNG 1 - leaf budget = threads x " + fmt(nps, 0) +
-       " nodes/s / evaluation rate; pass: >= 3 forcing half-turns resolved in >= 50% of leaves");
-  line("     (iv) QUIET-LEAF REACH at the same budget: pooled scan leaves that reached a quiet or");
-  line("     proven position; pass >= 50% (per-scan median beside it)");
+       " nodes/s per thread / evaluation rate; pass: >= 3 forcing half-turns resolved in >= 50% "
+       "of leaves");
+  line("     (iv) QUIET-LEAF REACH at the same budget: scan leaves that reached a quiet or proven");
+  line("     position, pooled within a range; pass >= 50% (per-scan median beside it)");
+  line("     The verdict row: " + std::to_string(o.scanner_threads) +
+       " threads (M13), size-matched rate; the others are information.");
   for (const Rung& g : rungs) {
-    const std::string rate = g.rate > 0 ? fmt(g.rate, 0) + "/s" : std::string("size-matched");
-    const double share = g.leaves == 0 ? 0 : static_cast<double>(g.pass) / static_cast<double>(g.leaves);
-    const double reach = g.leaf_total == 0 ? 0
-                                           : static_cast<double>(g.leaf_quiet) /
-                                                 static_cast<double>(g.leaf_total);
+    const bool verdict = g.threads == o.scanner_threads && g.rate == 0;
+    const std::string rate = g.rate > 0 ? fmt(g.rate, 0) + "/s, " + std::to_string(g.budget) + " nodes"
+                                        : std::string("size-matched");
     line("  " + std::to_string(g.threads) + " thread(s), " + rate +
-         (g.rate > 0 ? ", " + std::to_string(g.budget) + " nodes" : std::string()) + ": (ii) " +
-         pct(g.pass, g.leaves) + " of " + std::to_string(g.leaves) + " leaves (median horizon " +
-         (median(g.horizons) >= kAll ? std::string("all") : fmt(median(g.horizons), 1)) + ")" +
-         depth_band(median(g.horizons), 3) + " -> " +
-         share_verdict(share, false, "drop rung 1 (the higher rungs keep their budgets)") +
-         "; (iv) " + pct(g.leaf_quiet, g.leaf_total) + " of " + std::to_string(g.leaf_total) +
-         " leaves (median per scan " + fmt(100 * median(g.scan_quiet)) + "%) -> " +
-         share_verdict(reach, false, "NNUE v2 and quiet-only training deferred"));
+         (verdict ? " - THE VERDICT ROW" : " - information") + ":");
+    for (int k = 0; k <= kRanges; ++k) {
+      const Share& s = g.leaves[k];
+      const Reach& q = g.reach[k];
+      if (s.n == 0) continue;
+      const bool is_pooled = k == kRanges;
+      line(std::string("    ") + (is_pooled ? pooled_label : range_names[k]) + ": (ii) " +
+           pct(s.pass, s.n) + " of " + std::to_string(s.n) + " leaves (median horizon " +
+           median_text(s.depths) + ")" + (is_pooled ? "" : depth_band(median(s.depths), 3)) +
+           (is_pooled ? std::string()
+                      : " -> " + share_verdict(s.share(), false,
+                                               "drop rung 1 (the higher rungs keep their budgets)")) +
+           "; (iv) " + pct(q.quiet, q.total) + " of " + std::to_string(q.total) +
+           " scan leaves (median per scan " + fmt(100 * median(q.per_scan)) + "%)" +
+           (is_pooled ? std::string()
+                      : " -> " + share_verdict(q.share(), false,
+                                               "NNUE v2 and quiet-only training deferred")));
+    }
   }
   line("");
 
-  // What a pass rests on, and the shares by board count.
-  const auto breakdown = [&](Role role, bool synthetic, const auto& budget_of, int depth) {
-    std::size_t n = 0, pass = 0, deep = 0, exhausted = 0, proven = 0;
-    const char* names[4] = {"< 50 boards", "50-99", "100-199", "200+"};
-    std::size_t bucket_n[4] = {0, 0, 0, 0};
-    std::size_t bucket_pass[4] = {0, 0, 0, 0};
+  // What a pass rests on, by range.
+  const auto breakdown = [&](Role role, bool synthetic, const auto& depth_of, int depth) {
+    std::size_t n[kRanges] = {0, 0, 0, 0};
+    std::size_t pass[kRanges] = {0, 0, 0, 0};
+    std::size_t deep[kRanges] = {0, 0, 0, 0};
+    std::size_t exhausted[kRanges] = {0, 0, 0, 0};
+    std::size_t proven[kRanges] = {0, 0, 0, 0};
     for (std::size_t i = 0; i < positions.size(); ++i) {
       if (!(synthetic ? synthetic_counted(i, role) : counted(i, role))) continue;
-      const Result& r = results[i];
-      const std::uint64_t budget = budget_of(r);
-      const int b = r.boards < 50 ? 0 : r.boards < 100 ? 1 : r.boards < 200 ? 2 : 3;
-      ++n;
-      ++bucket_n[b];
-      if (horizon(r.scan, budget) < depth) continue;
-      ++pass;
-      ++bucket_pass[b];
-      bool settled = false;
-      for (const t5d::IterationStats& it : r.scan.iterations) {
-        if (!it.completed || it.nodes > budget) break;
-        if (it.proof.proven()) {
-          ++proven;
-          settled = true;
-          break;
-        }
-        if (it.exhausted) {
-          ++exhausted;
-          settled = true;
-          break;
-        }
+      const int b = range_of(results[i].boards);
+      ++n[b];
+      const Settled s = depth_of(i);
+      if (s.depth < depth) continue;
+      ++pass[b];
+      if (s.proven) {
+        ++proven[b];
+      } else if (s.exhausted) {
+        ++exhausted[b];
+      } else {
+        ++deep[b];
       }
-      if (!settled) ++deep;
     }
-    std::string s = "    " + pct(pass, n) + " of " + std::to_string(n) + " pass, resting on " +
-                    std::to_string(deep) + " iterations to depth, " + std::to_string(exhausted) +
-                    " exhausted trees, " + std::to_string(proven) + " proofs; by size:";
-    for (int b = 0; b < 4; ++b) {
-      if (bucket_n[b] == 0) continue;
-      s += std::string(" ") + names[b] + " " + pct(bucket_pass[b], bucket_n[b]) + " of " +
-           std::to_string(bucket_n[b]) + ";";
+    std::string text = "    what the passes rest on (iterations to depth / exhausted trees / proofs):";
+    for (int b = 0; b < kRanges; ++b) {
+      if (n[b] == 0) continue;
+      text += std::string(" ") + range_names[b] + " " + std::to_string(pass[b]) + " of " +
+             std::to_string(n[b]) + " (" + std::to_string(deep[b]) + " / " +
+             std::to_string(exhausted[b]) + " / " + std::to_string(proven[b]) + ");";
+    }
+    return text;
+  };
+  // A deterministic curve read at a budget.
+  const auto settled_at = [&](std::size_t i, std::uint64_t budget) {
+    Settled s;
+    s.depth = horizon(results[i].scan, budget);
+    for (const t5d::IterationStats& it : results[i].scan.iterations) {
+      if (!it.completed || it.nodes > budget) break;
+      if (it.proof.proven()) {
+        s.proven = true;
+        break;
+      }
+      if (it.exhausted) {
+        s.exhausted = true;
+        break;
+      }
     }
     return s;
   };
   for (const Rung& g : rungs) {
-    if (g.threads != o.threads.back() || g.rate != 0) continue;  // the headline: size-matched
-    line("  (ii) at " + std::to_string(g.threads) + " thread(s), size-matched rate:");
-    line(breakdown(Role::Leaf, false,
-                   [&](const Result& r) {
-                     return static_cast<std::uint64_t>(static_cast<double>(g.threads) * nps /
-                                                       rate_for(0, r.boards));
-                   },
-                   3));
-    if (syn_leaves > 0) {
-      line("    SYNTHETIC leaves (no verdict):");
-      line(breakdown(Role::Leaf, true,
-                     [&](const Result& r) {
-                       return static_cast<std::uint64_t>(static_cast<double>(g.threads) * nps /
-                                                         rate_for(0, r.boards));
-                     },
-                     3));
-    }
+    if (g.threads != o.scanner_threads || g.rate != 0) continue;
+    line("  (ii) at " + std::to_string(g.threads) + " threads, size-matched rate:");
+    const auto at = [&](std::size_t i) {
+      return settled_at(i, static_cast<std::uint64_t>(static_cast<double>(g.threads) * nps /
+                                                      rate_for(0, results[i].boards)));
+    };
+    line(breakdown(Role::Leaf, false, at, 3));
+    if (syn_leaves > 0) line("  SYNTHETIC leaves (no verdict):\n" + breakdown(Role::Leaf, true, at, 3));
   }
   line("");
 
-  // (iii) the root scan.
-  {
-    const auto budget = static_cast<std::uint64_t>(o.root_ms / 1000.0 * nps);
-    std::size_t n = 0;
-    std::size_t pass = 0;
-    std::size_t uncovered = 0;
-    std::size_t wall_pass = 0;
-    std::size_t wall_n = 0;
-    std::size_t wall_bucket_n[4] = {0, 0, 0, 0};
-    std::size_t wall_bucket_pass[4] = {0, 0, 0, 0};
-    std::vector<double> hs;
-    for (std::size_t i = 0; i < positions.size(); ++i) {
-      if (!counted(i, Role::Root)) continue;
-      ++n;
-      const int h = horizon(results[i].scan, budget);
-      hs.push_back(h);
-      if (h >= 5) ++pass;
-      if (!covered(results[i].scan, budget, o.max_nodes)) ++uncovered;
-      if (results[i].wall) {
-        ++wall_n;
-        const int b = results[i].boards < 50 ? 0 : results[i].boards < 100 ? 1 : results[i].boards < 200 ? 2 : 3;
-        ++wall_bucket_n[b];
-        const t5d::ScanResult& w = *results[i].wall;
-        if (w.proof.proven() || w.exhausted || w.resolved_depth >= 5) {
-          ++wall_pass;
-          ++wall_bucket_pass[b];
-        }
+  // (iii) the root scan: by the wall clock at the scanner's thread budget
+  // (the verdict), and the one-thread deterministic reading (information).
+  Share root_wall[kRanges + 1];
+  Share root_one[kRanges + 1];
+  const auto root_budget = static_cast<std::uint64_t>(o.root_ms / 1000.0 * nps);
+  std::size_t uncovered = 0;
+  for (std::size_t i = 0; i < positions.size(); ++i) {
+    if (!counted(i, Role::Root)) continue;
+    const int b = range_of(results[i].boards);
+    const int h = horizon(results[i].scan, root_budget);
+    if (!covered(results[i].scan, root_budget, o.max_nodes)) ++uncovered;
+    for (const int k : {b, kRanges}) {
+      ++root_one[k].n;
+      root_one[k].depths.push_back(h);
+      if (h >= 5) ++root_one[k].pass;
+    }
+    if (results[i].wall) {
+      const t5d::ScanResult& w = *results[i].wall;
+      const int wh = w.proof.proven() || w.exhausted ? kAll : w.resolved_depth;
+      for (const int k : {b, kRanges}) {
+        ++root_wall[k].n;
+        root_wall[k].depths.push_back(wh);
+        if (wh >= 5) ++root_wall[k].pass;
       }
     }
-    const double share = n == 0 ? 0 : static_cast<double>(pass) / static_cast<double>(n);
-    line("(iii) ROOT FINAL SCAN - " + fmt(o.root_ms, 0) + " ms = " + std::to_string(budget) +
-         " nodes at " + fmt(nps, 0) + " nodes/s; pass: >= 5 forcing half-turns in >= 50% of roots");
-    line("  " + pct(pass, n) + " of " + std::to_string(n) + " roots (median horizon " +
-         (median(hs) >= kAll ? std::string("all") : fmt(median(hs), 1)) + ")" +
-         depth_band(median(hs), 5) +
-         (uncovered > 0 ? "; " + std::to_string(uncovered) +
-                              " scan(s) capped by --max-nodes below this budget (a lower bound)"
-                        : std::string()) +
-         " -> " + share_verdict(share, true, "the verification layer needs a different shape (11.1)"));
-    if (wall_n > 0) {
-      const char* names[4] = {"< 50 boards", "50-99", "100-199", "200+"};
-      std::string by;
-      for (int b = 0; b < 4; ++b) {
-        if (wall_bucket_n[b] == 0) continue;
-        by += std::string(" ") + names[b] + " " + pct(wall_bucket_pass[b], wall_bucket_n[b]) +
-              " of " + std::to_string(wall_bucket_n[b]) + ";";
-      }
-      line("  by the wall clock (one " + fmt(o.root_ms, 0) + " ms scan per root, machine as it was): " +
-           pct(wall_pass, wall_n) + " of " + std::to_string(wall_n) + " roots; by size:" + by);
+  }
+  const std::string stop_iii = "see M12's outcome rules in the summary";
+  line("(iii) ROOT FINAL SCAN - " + fmt(o.root_ms, 0) + " ms of wall clock at " +
+       std::to_string(o.scanner_threads) +
+       " threads (Lazy SMP), one root at a time; pass: >= 5 forcing half-turns in >= 50% of roots");
+  if (!o.root_wall) {
+    line("  not run (--no-root-wall): no verdict");
+  } else {
+    for (int k = 0; k <= kRanges; ++k) {
+      const Share& s = root_wall[k];
+      if (s.n == 0) continue;
+      const bool is_pooled = k == kRanges;
+      line(std::string("  ") + (is_pooled ? pooled_label : range_names[k]) + ": " + pct(s.pass, s.n) +
+           " of " + std::to_string(s.n) + " roots (median resolved depth " + median_text(s.depths) +
+           ")" + (is_pooled ? "" : depth_band(median(s.depths), 5)) +
+           (is_pooled ? std::string() : " -> " + share_verdict(s.share(), false, stop_iii.c_str())));
     }
-    const auto at = [&](const Result&) { return budget; };
-    line(breakdown(Role::Root, false, at, 5));
-    if (syn_roots > 0) {
-      line("  SYNTHETIC roots (no verdict):");
-      line(breakdown(Role::Root, true, at, 5));
-    }
+    const auto wall_at = [&](std::size_t i) {
+      Settled s;
+      if (!results[i].wall) return s;
+      const t5d::ScanResult& w = *results[i].wall;
+      s.proven = w.proof.proven();
+      s.exhausted = !s.proven && w.exhausted;
+      s.depth = s.proven || s.exhausted ? kAll : w.resolved_depth;
+      return s;
+    };
+    line(breakdown(Role::Root, false, wall_at, 5));
+    if (syn_roots > 0) line("  SYNTHETIC roots (no verdict):\n" + breakdown(Role::Root, true, wall_at, 5));
+  }
+  line("  one thread, deterministic, " + fmt(o.root_ms, 0) + " ms x " + fmt(nps, 0) + " nodes/s = " +
+       std::to_string(root_budget) + " nodes (information, not the design thread budget)" +
+       (uncovered > 0 ? "; " + std::to_string(uncovered) +
+                            " scan(s) capped by --max-nodes below this budget (a lower bound)"
+                      : std::string()) +
+       ":");
+  for (int k = 0; k <= kRanges; ++k) {
+    const Share& s = root_one[k];
+    if (s.n == 0) continue;
+    line(std::string("    ") + (k == kRanges ? pooled_label : range_names[k]) + ": " +
+         pct(s.pass, s.n) + " of " + std::to_string(s.n) + " roots (median horizon " +
+         median_text(s.depths) + ")");
   }
   line("");
 
   // (v) stand-pat validity.
+  struct Band {
+    std::size_t quiet = 0, valid = 0, invalid = 0, invalid_exhaustive = 0, undetermined = 0,
+                no_action = 0;
+    double share() const {
+      const std::size_t decided = valid + invalid;
+      return decided == 0 ? 0.0 : static_cast<double>(invalid) / static_cast<double>(decided);
+    }
+  };
+  std::map<std::string, Band> bands;
+  const auto band_verdict = [](const Band& b) {
+    const std::size_t decided = b.valid + b.invalid;
+    const double share = b.share();
+    std::string verdict = decided == 0     ? "no quiet position decided"
+                          : share <= 0.05  ? "fine (<= 5%)"
+                          : share <= 0.20  ? "5-20%: disable stand-pat where obligations bind"
+                                           : "> 20%: redesign (an obligation-aware bound)";
+    if (decided > 0) {
+      for (const double t : {0.05, 0.20}) {
+        if (share >= 0.9 * t && share <= 1.1 * t) verdict += " - within +-10% of a band edge: STOP for the user";
+      }
+    }
+    return verdict;
+  };
   {
-    struct Band {
-      std::size_t quiet = 0, valid = 0, invalid = 0, invalid_exhaustive = 0, undetermined = 0,
-                  no_action = 0;
-    };
-    std::map<std::string, Band> bands;
     std::size_t considered = 0;
     double spv_cpu = 0;
     for (std::size_t i = 0; i < positions.size(); ++i) {
@@ -1308,7 +1440,7 @@ int main(int argc, char** argv) {
       const std::string key = v.mandatory_boards <= 1   ? "1 mandatory board"
                               : v.mandatory_boards <= 3 ? "2-3 mandatory boards"
                                                         : "4+ mandatory boards";
-      for (Band* b : {&bands["all"], &bands[key]}) {
+      for (Band* b : {&bands[pooled_label], &bands[key], &bands[range_names[range_of(r.boards)]]}) {
         ++b->quiet;
         switch (v.kind) {
           case t5d::StandPatVerdict::Kind::Valid: ++b->valid; break;
@@ -1322,29 +1454,107 @@ int main(int argc, char** argv) {
         }
       }
     }
-    line("(v) STAND-PAT VALIDITY - at quiet positions (" + std::to_string(bands["all"].quiet) +
+    line("(v) STAND-PAT VALIDITY - at quiet positions (" + std::to_string(bands[pooled_label].quiet) +
          " of " + std::to_string(considered) + " scanned roots and leaves are quiet); " +
          std::to_string(o.spv_check.max_actions) + " actions, reply depth " +
          std::to_string(o.spv_check.reply_depth) + ", " + std::to_string(o.spv_check.reply_nodes) +
          " nodes per reply; " + fmt(spv_cpu, 1) + " s");
     line("  bands: <= 5% fine; 5-20% disable stand-pat where obligations bind; > 20% redesign");
-    for (const auto& [key, b] : bands) {
+    std::vector<std::string> order(range_names, range_names + kRanges);
+    order.push_back(pooled_label);
+    for (const char* k : {"1 mandatory board", "2-3 mandatory boards", "4+ mandatory boards"}) order.push_back(k);
+    for (const std::string& key : order) {
+      const auto it = bands.find(key);
+      if (it == bands.end()) continue;
+      const Band& b = it->second;
       const std::size_t decided = b.valid + b.invalid;
-      const double share = decided == 0 ? 0 : static_cast<double>(b.invalid) / static_cast<double>(decided);
-      std::string verdict = decided == 0             ? "no quiet position decided"
-                            : share <= 0.05          ? "fine (<= 5%)"
-                            : share <= 0.20          ? "5-20%: disable stand-pat where obligations bind"
-                                                     : "> 20%: redesign (an obligation-aware bound)";
-      if (decided > 0) {
-        for (const double t : {0.05, 0.20}) {
-          if (share >= 0.9 * t && share <= 1.1 * t) verdict += " - within +-10% of a band edge: STOP for the user";
-        }
-      }
       line("  " + key + ": " + std::to_string(b.quiet) + " quiet; invalid " + pct(b.invalid, decided) +
            " of " + std::to_string(decided) + " decided (" + std::to_string(b.invalid_exhaustive) +
            " exhaustively, the rest on a sample: an upper bound); " + std::to_string(b.undetermined) +
-           " undetermined -> " + verdict);
+           " undetermined -> " + band_verdict(b));
     }
+  }
+  line("");
+
+  // The summary: M12's outcome rules, mechanically.
+  enum class Verdict : std::uint8_t { Pass, Fail, Empty };
+  const auto verdict_of = [](const Share& s) {
+    return s.n == 0 ? Verdict::Empty : s.share() >= 0.5 ? Verdict::Pass : Verdict::Fail;
+  };
+  const auto word = [](Verdict v) {
+    return v == Verdict::Pass ? "PASS" : v == Verdict::Fail ? "FAIL" : "no positions";
+  };
+  std::string outcome;
+  std::vector<std::string> in_band;
+  line("SUMMARY - read per board-count range (M12); pooled figures are information, not a verdict");
+  if (!o.root_wall) {
+    outcome = "UNDECIDED: (iii) was not measured at the scanner's thread budget (--no-root-wall)";
+    line("  (iii) root scan: not run");
+  } else {
+    std::string row = "  (iii) root scan, " + fmt(o.root_ms, 0) + " ms at " +
+                      std::to_string(o.scanner_threads) + " threads:";
+    for (int k = 0; k < kRanges; ++k) {
+      const Share& s = root_wall[k];
+      row += std::string(" ") + range_names[k] + " " + word(verdict_of(s)) +
+             (s.n == 0 ? std::string() : " (" + pct(s.pass, s.n) + " of " + std::to_string(s.n) + ")") + ";";
+      if (s.n > 0 && s.share() >= 0.45 && s.share() <= 0.55) in_band.push_back(range_names[k]);
+    }
+    line(row);
+    const Verdict v50 = verdict_of(root_wall[1]);
+    const Verdict v100 = verdict_of(root_wall[2]);
+    const Verdict v200 = verdict_of(root_wall[3]);
+    if (v50 == Verdict::Fail || v100 == Verdict::Fail) {
+      outcome = "STOP - 50-199 boards fail: redesign the verification layer (M12)";
+    } else if (v50 == Verdict::Empty || v100 == Verdict::Empty) {
+      outcome = "UNDECIDED - no roots in 50-99 or 100-199 boards";
+    } else if (v200 == Verdict::Pass) {
+      outcome = "CONTINUE AS DESIGNED - every range from 50 boards up passes (M12)";
+    } else if (v200 == Verdict::Fail) {
+      outcome =
+          "PHASE-DEPENDENT VERIFICATION - 50-199 boards pass, 200+ fails: brute-force scanning "
+          "where it reaches depth; above it the proof channel's leading candidate is df-pn (M12)";
+    } else {
+      outcome = "UNDECIDED - 50-199 boards pass; no roots of 200+ boards to tell the two outcomes apart";
+    }
+  }
+  line("  -> M12 OUTCOME: " + outcome);
+  if (!in_band.empty()) {
+    std::string ranges;
+    for (const std::string& r : in_band) ranges += (ranges.empty() ? "" : ", ") + r;
+    line("  -> the brief's +-10% rule: (iii) within 45-55% in " + ranges + ": STOP for the user");
+  }
+  for (const Rung& g : rungs) {
+    if (g.threads != o.scanner_threads || g.rate != 0) continue;
+    std::string keep;
+    std::string drop;
+    std::string ready;
+    std::string defer;
+    for (int k = 0; k < kRanges; ++k) {
+      if (g.leaves[k].n == 0) continue;
+      std::string& rung = g.leaves[k].share() >= 0.5 ? keep : drop;
+      rung += (rung.empty() ? "" : ", ") + std::string(range_names[k]);
+      std::string& reach = g.reach[k].share() >= 0.5 ? ready : defer;
+      reach += (reach.empty() ? "" : ", ") + std::string(range_names[k]);
+    }
+    line("  (ii) rung 1, " + std::to_string(g.threads) + " threads, size-matched: passes in " +
+         (keep.empty() ? std::string("no range") : keep) + "; fails in " +
+         (drop.empty() ? std::string("no range") : drop) +
+         (drop.empty() ? std::string() : " -> drop rung 1 there (its own rule)"));
+    line("  (iv) quiet-leaf reach at that budget: passes in " +
+         (ready.empty() ? std::string("no range") : ready) + "; fails in " +
+         (defer.empty() ? std::string("no range") : defer) +
+         (defer.empty() ? std::string() : " -> NNUE v2 and quiet-only training deferred there (M8)"));
+  }
+  {
+    std::string row = "  (v) stand-pat:";
+    for (int k = 0; k < kRanges; ++k) {
+      const auto it = bands.find(range_names[k]);
+      if (it == bands.end()) continue;
+      const Band& b = it->second;
+      row += std::string(" ") + range_names[k] + " " + pct(b.invalid, b.valid + b.invalid) + " of " +
+             std::to_string(b.valid + b.invalid) + " decided, " + band_verdict(b) + ";";
+    }
+    line(row);
   }
 
   if (!o.summary.empty()) {
@@ -1393,16 +1603,36 @@ int main(int argc, char** argv) {
     for (std::size_t k = 0; k < record_notes.size(); ++k) {
       j += (k ? "," : "") + json_string(record_notes[k]);
     }
-    j += "],\"rung1\":[";
+    // Per range: the ranges in order, then pooled (information).
+    const auto share_json = [&](const Share& s) {
+      return "{\"n\":" + std::to_string(s.n) + ",\"pass\":" + std::to_string(s.pass) + "}";
+    };
+    j += "]";  // the records
+    j += ",\"scanner_threads\":" + std::to_string(o.scanner_threads);
+    j += ",\"ranges\":[\"< 50\",\"50-99\",\"100-199\",\"200+\",\"pooled\"]";
+    j += ",\"rung1\":[";
     for (std::size_t k = 0; k < rungs.size(); ++k) {
       const Rung& g = rungs[k];
       j += std::string(k ? "," : "") + "{\"threads\":" + std::to_string(g.threads) +
            ",\"eval_rate\":" + fmt(g.rate, 0) + ",\"budget\":" + std::to_string(g.budget) +
-           ",\"leaves\":" + std::to_string(g.leaves) + ",\"pass\":" + std::to_string(g.pass) +
-           ",\"scan_leaves\":" + std::to_string(g.leaf_total) + ",\"scan_leaves_quiet\":" +
-           std::to_string(g.leaf_quiet) + "}";
+           ",\"leaves\":[";
+      for (int r = 0; r <= kRanges; ++r) j += (r ? "," : "") + share_json(g.leaves[r]);
+      j += "],\"scan_leaves\":[";
+      for (int r = 0; r <= kRanges; ++r) {
+        j += std::string(r ? "," : "") + "{\"total\":" + std::to_string(g.reach[r].total) +
+             ",\"quiet\":" + std::to_string(g.reach[r].quiet) + "}";
+      }
+      j += "]}";
     }
     j += "]";
+    j += ",\"root_scan\":{\"ms\":" + fmt(o.root_ms, 1) + ",\"wall_clock\":" +
+         (o.root_wall ? "true" : "false") + ",\"by_wall_clock\":[";
+    for (int r = 0; r <= kRanges; ++r) j += (r ? "," : "") + share_json(root_wall[r]);
+    j += "],\"one_thread_budget\":" + std::to_string(root_budget) + ",\"one_thread\":[";
+    for (int r = 0; r <= kRanges; ++r) j += (r ? "," : "") + share_json(root_one[r]);
+    j += "],\"wall_nodes\":" + std::to_string(root_wall_nodes) + ",\"wall_scan_seconds\":" +
+         fmt(root_wall_seconds_scanned, 3) + ",\"wall_busy_fraction\":" + fmt(root_wall_busy, 4) + "}";
+    j += ",\"m12_outcome\":" + json_string(outcome);
     if (o.per_position) {
       j += ",\"positions\":[";
       for (std::size_t i = 0; i < positions.size(); ++i) {
@@ -1451,7 +1681,20 @@ int main(int argc, char** argv) {
         }
         if (r.wall) {
           j += ",\"wall_resolved_depth\":" + std::to_string(r.wall->resolved_depth) +
-               ",\"wall_proof\":" + json_string(t5d::to_string(r.wall->proof));
+               ",\"wall_proof\":" + json_string(t5d::to_string(r.wall->proof)) +
+               ",\"wall_exhausted\":" + (r.wall->exhausted ? "true" : "false") +
+               ",\"wall_completed_depth\":" + std::to_string(r.wall->completed_depth) +
+               ",\"wall_threads\":" + std::to_string(r.wall->threads) + ",\"wall_nodes\":" +
+               std::to_string(r.wall->stats.nodes) + ",\"wall_seconds\":" +
+               fmt(r.wall->stats.seconds, 4);
+        }
+        {
+          const t5d::ScanStats& x = r.scan.stats;
+          j += ",\"profile\":{\"evasion_nodes\":" + std::to_string(x.evasion_nodes) +
+               ",\"horizon_mate_nodes\":" + std::to_string(x.horizon_mate_nodes) +
+               ",\"probe_nodes\":" + std::to_string(x.probe_nodes) + ",\"fallback_nodes\":" +
+               std::to_string(x.fallback_nodes) + ",\"capped_nodes\":" +
+               std::to_string(x.capped_nodes) + "}";
         }
         j += "}";
       }
