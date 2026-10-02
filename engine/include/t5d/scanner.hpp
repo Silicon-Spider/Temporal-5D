@@ -50,12 +50,23 @@
 //
 // THE SEARCH, at a turn start s with d forcing half-turns left:
 //  * the solved store first (H19): a proof found before is the answer;
-//  * IN CHECK (R1): ALL legal actions (E4's enumeration, list_legal_actions),
-//    so that a mate found is a proof (H2). None, exhaustively: checkmate. More
-//    than evasion_cap: the node is CAPPED - the evasion_cap + 1 actions E4
-//    listed are searched, as an estimate, and the iteration is not fully
-//    resolved. At d = 0: E4's mate detector only (checkmate, or an in-check
-//    leaf - an estimate);
+//  * IN CHECK (R1): ALL legal actions, so that a mate found is a proof (H2),
+//    in two stages. First up to evasion_probe SEEDS - pseudo-legal moves in an
+//    evasion order (the TT's move, a capture of the checking piece, a royal's
+//    move, a block of the check's line, other captures, the rest by
+//    histories) - each made into a legal action by the completion rule
+//    (built through the state machine and tested, C4; a seed it leaves
+//    unsafe is passed over) and searched as soon as it is built: a cutoff
+//    ends the node, resolved - a legal action scoring at least beta bounds
+//    the node whatever the others do. No cutoff: E4's enumeration
+//    (list_legal_actions) and the successors not yet searched. None,
+//    exhaustively: checkmate. More than evasion_cap: the node is CAPPED - the
+//    actions searched are an estimate, and the iteration is not fully
+//    resolved. A Loss proof needs the enumeration exhaustive and every child
+//    of both stages a proven win of the opponent's. At d = 0 only "is this
+//    a mate?" is asked: one legal action from the seeds answers no (an
+//    in-check leaf, an estimate); none of them, and E4's mate detector
+//    decides (checkmate, or an in-check leaf);
 //  * otherwise: stand-pat (the static eval; estimate channel only), then the
 //    forcing actions in stages - captures (MVV-LVA), checks, branch threats -
 //    each built when it is searched. No forcing action: a QUIET node (E4's
@@ -80,10 +91,30 @@
 // The TT is keyed by GameState::zobrist() - the 5D Zobrist key with the
 // ruleset ID (H18) - with a fixed, deterministic replacement policy (always
 // replace); move ordering is net-free (H4): MVV-LVA, killers, history and
-// continuation history. The scanner is single-threaded and deterministic:
-// with a node budget (no time limit) the same position, options and store
-// give the same search, node for node - the synchronous debug mode (H15);
-// Lazy SMP (H17) waits for Phase 2.
+// continuation history.
+//
+// THREADS (H15, H17). With one thread (ScannerOptions::threads, the default)
+// the scanner is deterministic: with a node budget (no time limit) the same
+// position, options and store give the same search, node for node - the
+// synchronous debug mode. With more, LAZY SMP: every thread searches the
+// same root by iterative deepening, and they share only the TT and the
+// solved store. The TT is lockless (a slot holds its entry and the key
+// XORed with it, so a slot being written reads as a miss) and holds
+// estimates only; proofs go to the solved store the moment they are found
+// (H19), which compares positions in full on a key match (§11.3's hashing
+// trap) and refuses two kinds of proof for one position - so a thread's
+// result is an estimate unless it is a proof, built as above, and the
+// threads' proofs agree. Killers, history and continuation history are per
+// thread (§11.3), carried from scan to scan until clear() (between games).
+// Diversity: helper threads search staggered blocks of depths (ahead of the
+// main thread) and perturb their order of quiet moves by a per-thread hash.
+// Each helper searches its own copy of the root, rebuilt board by board, so
+// that the threads do not contend on shared reference counts (a state that
+// cannot be rebuilt from its boards is shared: stats.shared_roots). A
+// thread that proves the root or exhausts its tree stops the others; the
+// node budget is shared (each thread adds its nodes in batches of 256, so
+// several threads may overrun it by a few hundred nodes each), and so is
+// the clock. The result is the deepest iteration any thread completed.
 //
 // NODES. One node is one move applied by the scanner (GameState::apply), one
 // royal-capture scan it makes (check status, C4's test, a move's check test),
@@ -190,6 +221,13 @@ struct ScannerOptions {
   /// capped (searched over the first evasion_cap + 1 that E4 listed - an
   /// estimate; no Loss proof; the iteration not fully resolved).
   std::size_t evasion_cap = 512;
+  /// In check, before E4's enumeration: the most seeds (pseudo-legal moves,
+  /// in an evasion order) the scanner makes into legal actions by the
+  /// completion rule and searches one at a time, so that a cutoff ends the
+  /// node with no enumeration; at the horizon, the most it tries for one
+  /// legal action before E4's mate detector (see the header comment). 0: E4
+  /// first, always (E5b's behaviour).
+  std::size_t evasion_probe = 64;
   /// At an interior node with no forcing action: E4's detector tells a
   /// stalemate (an exact draw) from a quiet position.
   bool quiet_stalemate_test = true;
@@ -204,6 +242,10 @@ struct ScannerOptions {
   /// and not counted in the nodes (stats.measurement_nodes), so the search is
   /// the same with or without it.
   bool classify_leaves = false;
+  /// Search threads (Lazy SMP, H17; see THREADS in the header comment). 1:
+  /// the synchronous, deterministic mode (H15). The scanner's design budget
+  /// is 5 (M13: 5 of the 8 cores per GPU).
+  int threads = 1;
 };
 
 /// What a scan may spend (H3: a node cap, not a depth cap). A time limit makes
@@ -254,6 +296,10 @@ class SolvedStore {
   /// one). Two proofs of different kinds for one position are a contradiction
   /// - a false proof somewhere - and throw std::logic_error.
   virtual void put(const GameState& position, const Proof& proof) = 0;
+  /// Whether find and put may be called from several threads at once. A
+  /// scanner with more than one thread serialises its calls to a store that
+  /// says no.
+  virtual bool concurrent() const noexcept { return false; }
 };
 
 /// A minimal in-memory solved store.
@@ -273,6 +319,30 @@ class MemorySolvedStore final : public SolvedStore {
  private:
   std::unordered_map<std::uint64_t, std::vector<std::size_t>> index_;
   std::vector<Entry> entries_;
+};
+
+/// The solved store the threads of a scan share (Lazy SMP, H17, H19): the
+/// same contract as MemorySolvedStore - keyed by the Zobrist key with the
+/// ruleset ID (H18), same_position() on a key match (§11.3's hashing trap),
+/// proofs only, never lossy, a contradiction throws std::logic_error - and
+/// safe for concurrent use: the positions are spread over shards by key,
+/// each behind a reader-writer lock, so a probe never waits on a probe. A
+/// scanner's own store is one of these.
+class ConcurrentSolvedStore final : public SolvedStore {
+ public:
+  ConcurrentSolvedStore();
+  ~ConcurrentSolvedStore() override;
+  ConcurrentSolvedStore(const ConcurrentSolvedStore&) = delete;
+  ConcurrentSolvedStore& operator=(const ConcurrentSolvedStore&) = delete;
+  std::optional<Proof> find(const GameState& position) const override;
+  void put(const GameState& position, const Proof& proof) override;
+  bool concurrent() const noexcept override { return true; }
+  std::size_t size() const;
+  void clear();
+
+ private:
+  struct Shards;
+  std::unique_ptr<Shards> shards_;
 };
 
 // ---------------------------------------------------------------------------
@@ -339,6 +409,33 @@ struct ScanStats {
   std::uint64_t fallback_nodes = 0;
   std::uint64_t horizon_mate_nodes = 0;
   std::uint64_t stalemate_test_nodes = 0;
+  /// The profile of the two exhaustive paths (6b, M12) and the fallbacks:
+  /// in-check interior nodes, those that failed high (a cutoff), the E4
+  /// listings made there and the actions they listed; the horizon mate tests
+  /// and their checkmate verdicts; and the wall time of each kind of E4 call.
+  std::uint64_t evasion_visits = 0;
+  std::uint64_t evasion_fail_highs = 0;
+  std::uint64_t evasion_lists = 0;
+  std::uint64_t evasion_listed = 0;
+  std::uint64_t horizon_mate_tests = 0;
+  std::uint64_t horizon_mates = 0;
+  std::uint64_t horizon_mate_nodes_on_mates = 0;  // of horizon_mate_nodes
+  double evasion_seconds = 0;
+  double horizon_mate_seconds = 0;
+  double fallback_seconds = 0;
+  /// The in-check stage (ScannerOptions::evasion_probe): seeds tried, the
+  /// nodes and wall time spent making them into actions, the legal actions
+  /// they made and searched (interior nodes), the interior nodes it resolved
+  /// by a cutoff, and the horizon mate tests it answered (no mate).
+  std::uint64_t probe_seeds = 0;
+  std::uint64_t probe_nodes = 0;
+  double probe_seconds = 0;
+  std::uint64_t probe_actions = 0;
+  std::uint64_t probe_cutoffs = 0;
+  std::uint64_t horizon_probe_hits = 0;
+  /// Lazy SMP: helper threads that searched the caller's root itself, shared,
+  /// because it could not be rebuilt from its boards (see THREADS).
+  std::uint64_t shared_roots = 0;
   std::uint64_t tt_hits = 0;
   std::uint64_t solved_hits = 0;
   std::uint64_t proofs_exported = 0;
@@ -355,22 +452,28 @@ struct ScanStats {
 };
 
 struct ScanResult {
+  /// The main thread's iterations (the only thread's in the deterministic
+  /// mode). Each iteration's `nodes` counts every thread's.
   std::vector<IterationStats> iterations;
-  /// The deepest iteration that completed within the budget, not capped: the
-  /// forcing tree to that many half-turns was fully resolved (0: none).
+  /// The deepest iteration that completed within the budget, not capped - by
+  /// any thread: the forcing tree to that many half-turns was fully resolved
+  /// (0: none).
   int resolved_depth = 0;
-  /// The deepest that completed, capped or not.
+  /// The deepest that completed, capped or not (any thread).
   int completed_depth = 0;
   /// Some completed iteration was exhausted (resolved at every depth).
   bool exhausted = false;
+  /// The threads that searched.
+  int threads = 1;
   /// The root's proof (none if not proven).
   Proof proof;
-  /// The root's estimate after the last completed iteration (the side to
+  /// The root's estimate after the deepest completed iteration (the side to
   /// move's view, centipawns, or a mate score beyond kScanMate - 1000).
   int score = 0;
-  /// The best action of the last completed iteration, its moves in a
-  /// playable order (empty if none).
+  /// The best action of that iteration, its moves in a playable order (empty
+  /// if none).
   std::vector<Move> best_action;
+  /// Every thread's work, summed (seconds: the scan's wall time).
   ScanStats stats;
 };
 
@@ -398,12 +501,14 @@ class Scanner {
   Scanner& operator=(const Scanner&) = delete;
 
   /// Iterative deepening from `root` (a turn start) to options().max_depth
-  /// forcing half-turns, within `budget`; stops early at a root proof or an
-  /// exhausted tree. The TT and the histories carry over from earlier scans
-  /// until clear().
+  /// forcing half-turns, within `budget`, by options().threads threads;
+  /// stops early at a root proof or an exhausted tree. The TT and the
+  /// histories carry over from earlier scans until clear(). Rethrows the
+  /// first exception a thread threw (std::logic_error for a contradiction).
   ScanResult scan(const GameState& root, const ScanBudget& budget);
 
-  /// Empties the TT and the move-ordering tables (not the solved store).
+  /// Empties the TT and every thread's move-ordering tables (between games,
+  /// §11.3) - not the solved store.
   void clear();
 
   const ScannerOptions& options() const noexcept;

@@ -15,40 +15,73 @@ M5 - building it would break a rule).
 
 ## Where things stand
 
-### STOPPED 2026-10-02 for the user - experiment 6b (M8) and M9 with legality
+### STOPPED 2026-10-03 - M12's outcome: 6b fails at 50-199 boards after the optimisation pass
 
-The brief stops the run when "6b root-scan fails (M8)" or "a §15.6 result [is]
-within ±10% of its threshold". Measured on a quiet machine (docs/MEASUREMENTS.md):
-- **6b, the 50 ms root scan** (≥ 5 forcing half-turns in ≥ 50% of roots): pooled
-  over the corpus 60.9% under the engine's default Q4 reading (a pass) and 49.2%
-  under Q4's other reading (a fail inside the band); above 50 boards - the
-  design's regime - it fails under both: 25.7-34.4% at 50-99 boards, 14.8-18.6% at
-  100-199, 2.4% at 200+. Rung 1 fails (drop rung 1); quiet-leaf reach fails (NNUE
-  v2 deferred); stand-pat is valid (2-3% invalid). 85% of the scanner's nodes go
-  into E4's exhaustive searches (listing every legal action in check: 50-57%).
-- **M9 with legality** (the fast mode): 20,249 expansions/s at 240 boards on one
-  core - 1.01x the target, inside the band; 1.87x on two cores; 600 boards passes
-  (1.21x). Which applies turns on "per GPU's CPU allocation" (spec issue 20).
+Under the user's pre-registered rule (M12): "50-199 boards fail -> STOP: redesign
+the verification layer". The re-run on a quiet machine (docs/MEASUREMENTS.md, 6b):
+the 50 ms root scan at the scanner's design budget (5 threads, Lazy SMP) resolves
+5 forcing half-turns in 76.7% of positions under 50 boards, but 31.4% at 50-99,
+24.7% at 100-199 and 2.4% at 200+ (the first run: 25.7 / 18.6 / 2.4). Above 50
+boards it reaches that depth essentially only where it proves a result. Rung 1 and
+quiet-leaf reach fail in every range (drop rung 1; NNUE v2 deferred).
 
-**For the user to decide:** (a) whether 6b's root test is read pooled or per phase
-(spec issue 61), and so whether the verification layer needs a different shape
-(§11.1's kill condition) - or whether the scanner's cost profile (all-evasion
-enumeration in check, horizon mate tests) should first be optimised and 6b
-re-measured; (b) the CPU allocation per GPU for M9; (c) rules Q4 (which also
-decides which 6b row applies, and whether the gate can pass); and the earlier open
-questions below.
+**For the user:** the verification layer's redesign (§11.1's kill condition). The
+spec names df-pn as the leading candidate above the brute-force regime (§15.6,
+§14.4; its repetition gate is gone, H39); the measurement points at where the
+scanner's nodes now go (completion fallbacks 38-64% of nodes at 100+ boards,
+royal-capture scans 24%, in-check listings 23%).
 
-**Paused, to resume after the decision:** engine E6a, the search core, in worktree
-`.claude/worktrees/agent-a2dfd073da81ec01e` (branch
-`worktree-agent-a2dfd073da81ec01e`): committed - the search with E5a's legality
-tiers (budgeted, verified on selection, no proofs through unknowns), the
-external-evaluator step C API, the README, merges of main through 91cdd23;
-uncommitted - edits to `selfplay.*`, `test_selfplay.cpp`, `t5d_play.cpp` and the
-README, interrupted by a network error mid-edit (a `sed` had broken a string
-literal: check before building). Not yet measured: N3's CPU wall times (about
-2.7 h on a quiet machine). Not started: time management (E7, E8), the scanner in
-the search (rung 1 - which 6b says to drop) and Lazy SMP, end-to-end play with the
-network, the NNUE (not built: 6b's quiet-leaf reach failed, M8).
+**Paused, untouched until the decision:**
+- engine E7 (Q4 as the default; D8's acting player and submit availability in the
+  expansion and C API), committed on branch `worktree-agent-a8f46f56bb33bef09`
+  (97d2cd1, 97bac3e, 285f28f), not merged. It must merge together with the Python
+  binding's update (the expansion struct grew from 272 to 288 bytes; the Q4
+  encoding bit now means the Guide-literal reading); one long test remains to
+  re-run.
+- engine E6a (the search core), on branch `worktree-agent-a2dfd073da81ec01e`, its
+  self-play edit reviewed and committed (1c6956d).
+- Not started: the gate with the engine configured (it waits on E7), network N5
+  (D8's submit logit and acting-player input, C23 fixed), N3's CPU wall times.
+
+### CHECKPOINT 2 - stopped 2026-10-02 on 6b, ruled the same day; the run resumed
+
+The run stopped on experiment 6b (the root scan failed above 50 boards; inside the
+±10% band under one Q4 reading) and on M9 with legality (1.01x on one core). The
+user's rulings (register C23, D8, M12, M13; rulebook R8, R9; committed b2bfab9,
+39523c6):
+- **6b (M12):** read per board-count range, never pooled - a real failure above 50
+  boards. Before any redesign, one bounded optimisation pass on in-check
+  enumeration and the horizon mate tests, then 6b re-run unchanged at the scanner's
+  design thread budget (5 threads, Lazy SMP). Outcomes, fixed: every range from 50
+  boards up passes -> as designed; 50-199 pass and 200+ fail -> report, then
+  phase-dependent verification (df-pn the leading candidate above); 50-199 fail ->
+  STOP. Rung 1 and quiet-leaf reach are re-judged on the same run; both stay parked
+  until then.
+- **CPU (M13):** 8 cores per GPU - 2 expansion, 1 search and batching, 5 scanner.
+  M9 passes on the 2 expansion cores (1.87x at 240 boards with fast legality).
+- **Q4 (R8, D8): yes** - a player may keep moving after the present has shifted;
+  the turn ends at submission. Submitting is an action: under the ply split its
+  own policy logit from a global register, legal only when the submission passes
+  C4; plus a global acting-player input (issue 48).
+- **Causal past (C23):** the board's ancestry - the `lineage` reading.
+- **Q5 (R9):** settled from the rulebook's ranked sources - only the active boards
+  in the present are mandatory. **Q2: its sources are silent** - quoted to the user.
+- **Real game records:** sources to propose with provenance; the user approves any
+  download; the window verdict (M7) stays provisional until then.
+- **cwmtt/many2's export-form move:** "the engine does not read it: normalise it in
+  the cwmtt driver" - asked back (see "Waiting on the user").
+- **E6a:** its interrupted self-play edit was diffed against its last commit,
+  reviewed and completed (1c6956d in its worktree).
+
+**Running (2026-10-02):** engine E7 (Q4 as the default; D8's acting player and
+submit availability in the expansion and the C API; the corpus re-timed under the
+new default), engine E5c (the bounded optimisation pass and Lazy SMP at 5 threads;
+`t5d-scan6b` per range with M12's outcome rules), and the game-record source
+research. **Then:** the quiet-machine 6b re-run and M12's outcome; the gate with
+the engine configured (the triage re-run under Q4 = yes: the 94 R1 entries and the
+other drafts that Q4's other reading needed); network N5 (D8's submit logit and
+acting-player input; C23 fixed); E6a resumed (submit as an action, the MCGS key
+with branch origins, C23); N3's CPU wall times.
 
 - **Done:** pre-flight; step 1 (CI green on Linux, H35); step 2A (H30
   fingerprints, the notation parse-only oracle); the rules reference; CHECKPOINT 1
@@ -94,17 +127,35 @@ network, the NNUE (not built: 6b's quiet-leaf reach failed, M8).
   search (rung 1) and Lazy SMP, end-to-end play with the network's random weights,
   the NNUE only if 6b passes (M8).
 - **Waiting on the user:**
-  - **Rules Q4** (may a player keep moving after the present has shifted?). The
-    engine follows the Guide's "no". Ten corpus records by three authors make
-    such moves; all three oracles allow them; 115 of the engine gate's 116
-    remaining findings are Q4's and every one disappears under the other reading
-    (the engine is ready for either: `RuleOptions::moves_after_shift`).
-  - **Q5's alternative under R1**: with `mandatory = AllActive` (every active
-    timeline must be played, not only those in the present), R1 still passes only
-    the active boards in the present, so a stuck mandatory board ahead of the
-    present gives stalemate, not checkmate. Default rules are unaffected.
-  - Real game records for the |E| curve (M7: the corpus's real games reach about
-    240-399 boards in two games, and only under Q4's other reading).
+  - **Q2** (rulebook): "How do initial timelines count when a variant starts with
+    several (Two Timelines, Tactician, Strategos, Formations, Invasion,
+    Battleground)? Does either side start as having "created" one? No source
+    states the rule." The engine's default credits neither side (`initial_credit
+    = None`); the alternative (`MinusZeroToBlack`) rests on the 5dpgn author's
+    unverified "Internally in the game, -0 is -1".
+  - **cwmtt/many2's export-form move**: the ruling says "the engine does not read
+    it: normalise it in the cwmtt driver". The gate's difference there is the
+    engine refusing the record's text (`(0T1)Pe2(0T1)e3`) where cwmtt played it;
+    normalising the text inside cwmtt's driver changes only what cwmtt reads, not
+    what the engine is given, so it would not remove that difference - asked which
+    is meant (the harness normalising the record for every source; cwmtt's driver
+    refusing the export form as the engine does; or an entry).
+  - **Real game records - proposed (2026-10-02), awaiting approval to download:**
+    (1) **MageOfficial/t0database** (github.com/MageOfficial/t0database, MIT,
+    "Copyright (c) 2022 MageOChicken"), `Data.csv` at commit
+    `d49da4054d02fec577fd3c53368993fe453c586e` (blob `35eb1010d066…`, 608,066
+    bytes): 761 real human games, 2021-2025 (World Championships 2022 and 2024,
+    leagues, tournaments), 5dpgn move text without headers (the repository's own
+    server adds `[Board "Standard - Turn Zero"]`), 468 of them with the official
+    client recorder's clock comments; about 186 boards at most - 19 games reach 100,
+    none 200. Before use: confirm with its author that MIT covers the games and where
+    they came from (record it in PROVENANCE.md); refuse, never edit, rows that do
+    not replay. (2) chessin5d.net's game server - possibly the largest archive - no
+    longer answers; it needs its operator (and 5d-chess-js, the pinned oracle, must
+    not be used to convert it on the engine side). (3) The community Discord servers -
+    only with the admins' and players' permission. No public source reaches 200-600
+    boards; the window verdict above 200 boards needs self-play or permission-based
+    sources. M7 stays provisional.
 
 ## The brief - standing rules for every session
 
@@ -559,7 +610,7 @@ for game records.
 | H10-H14 | parked | Async ladder rungs: with the scanner |
 | H15 | built, tested | The scanner's deterministic single-thread mode; search's (E6a) in progress |
 | H16, H25, H29 | not built (rule) | Refused |
-| H17 | parked | Lazy SMP: with the scanner |
+| H17 | built in part | Lazy SMP in the scanner (E5c): same-root threads, a shared TT and a concurrent solved store; in-game decay and rung helpers wait for the search |
 | H18 | built, tested | 5D Zobrist: coordinate-free content hash per board, multiply-rotate with (timeline, half-turn), addition across boards, ruleset ID, player to move, parity, creators, board size; incremental equals from-scratch; duplicated boards never cancel (engine E1, E2) |
 | H19 | built, tested | Proofs export to the solved store at once; the TT holds estimates only |
 | H22 | built, tested | All five items of §11.0 (E1, E2, E4); the register row's wording predates H36/H40 (proposed spec edit 40) |
@@ -625,7 +676,9 @@ for game records.
 | ID | Status | Notes |
 |---|---|---|
 | M7 | measured, no verdict | The corpus's curve recorded (MEASUREMENTS); 2-3 games above 160 boards, none above 400 - game records requested (spec issue 26) |
-| M8 | measured - STOP | 6b on a quiet machine: root scan 60.9% pooled (Guide's Q4) / 49.2% (other Q4, in the band); fails above 50 boards; rung 1 and quiet-leaf reach fail; stand-pat valid (MEASUREMENTS) |
+| M8 | measured - STOP | 6b re-run (M12): root scan 76.7% / 31.4% / 24.7% / 2.4% by range (< 50 / 50-99 / 100-199 / 200+); rung 1 and quiet-leaf reach fail everywhere; stand-pat valid |
+| M12 | applied - STOP | The bounded optimisation pass (E5c) and the re-run at 5 threads, Lazy SMP: 50-199 boards fail -> STOP, redesign the verification layer |
+| M13 | applied | 8 cores per GPU: M9 judged on 2 expansion cores (passes, 1.87x), the scanner measured at 5 |
 | M9 | measured | Pseudo-legal: PASS (2.2x / 2.5x the targets on one thread), history term 2%; with E5a's fast legality: 1.01x at 240 boards on one core (in the band), 1.87x on two; 1.21x at 600 |
 | M11 | built | Licence recorded in PROVENANCE.md |
 

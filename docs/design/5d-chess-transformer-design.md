@@ -1966,6 +1966,37 @@ Stockfish's Full_Threats lineage — corrected; the process failure is registere
 after the termination and stand-pat experiments (above) pass: no point training an eval
 for a scanner shape that might change.
 
+
+#### The redesign after 6b (CHECKPOINT 3)
+
+The brute-force forcing scanner failed its pre-registered root-scan test from 50 boards
+up, even after an optimisation pass and at its design thread budget (§15.6): 31.4% at
+50–99 boards, 24.7% at 100–199, 2.4% at 200+, against a 50% bar. The profile says why.
+Above 50 boards it reached 5 forcing half-turns almost only where it proved a result
+outright, and its time went to *exactness*: completing each forcing line into a legal
+turn (38–64% of the work at 100+ boards), royal-capture scans (24%) and in-check action
+listings (23%). The design imported a chess unit, the forcing move, into a game where a
+move is only part of a turn — so every line paid turn-level exactness, whether it could
+end in a proof or only an estimate. The redesign has three parts:
+
+1. **Split the scanner by channel.** Exactness — turn completion, all evasions,
+   royal-capture checks — is paid only where a proof can result. The estimate channel
+   becomes a cheap, inexact local search: capture and threat sequences without turn
+   completion. Its findings stay soft priors (H2), so its errors cost search efficiency,
+   never correctness — and moves only reach the tree through the generator, which is exact.
+2. **The proof channel becomes depth-limited df-pn** over the semimove-decomposed turn
+   tree (§8.2's ply split; ftxi's fine tree is the prior art), with hypercuboid-pruned
+   completion — so a turn is completed incrementally, not re-solved per line, and an AND
+   node's evasions are generated per semimove rather than listed whole. Its answer to "mate
+   within 5 half-turns?" is proven, disproven or unknown — never "mate" on an exhausted
+   budget (H37). dlshogi's df-pn mate solver is the precedent; the repetition gate is gone
+   (H39), and plain df-pn needs no dominance definition.
+3. **Incremental royal-attack maps.** Recompute attacks only from changed boards and the
+   rays crossing them; frozen boards' attack sets are computed once.
+
+It is decided by 6b′ (§15.6, M15). Until then rung 1 stays dropped and the NNUE deferred,
+under their own rules.
+
 ### 11.2 Asynchronous scanning — the scheduler
 
 §11.1 defined what the scanner computes; this section defines when. The naive synchronous
@@ -2674,6 +2705,14 @@ with held-out adversarial evaluation; internal metrics will not see it. The comp
 mechanism and its six-layer mitigation stack are spelled out in §10.4.3. The §12.7
 adversarial league is its active probe.
 
+**Exact verification may not reach depth at high board counts.** 6b failed from 50
+boards up (CHECKPOINT 3): the brute-force scanner paid turn-level exactness on every
+line. The redesign (§11.1) is decided by 6b′; if it too fails above some board count,
+the verification layer covers only the smaller positions and the confident-quiet
+residual widens where games are largest — exactly where the window's blindness also
+lives. The adversarial league is then the main robustness mechanism there, not a
+supplement.
+
 **Timeline index is a noisy axis.** Branching order is partly arbitrary. Δtimeline may need
 different treatment from the other three.
 
@@ -3211,6 +3250,27 @@ Outcome rules, fixed now:
 
 Rung 1 and quiet-leaf reach are re-measured in the same run and their own rules applied
 to the new figures (drop rung 1, defer the NNUE). Until then both stay parked.
+
+**CHECKPOINT 3 — result and the next test (pre-registered).** The re-run failed every range
+from 50 boards up (31.4% / 24.7% / 2.4%, against 76.7% under 50 boards); rung 1 and
+quiet-leaf reach failed everywhere, so rung 1 is dropped and the NNUE deferred. The
+redesign (§11.1) is decided by **6b′**, on the same positions, read per range, at 5 threads:
+
+| Test | Pass |
+|---|---|
+| Proof channel (df-pn, 50 ms root) | ≥ 50% of roots *decided* — mate within 5 half-turns proven or disproven |
+| Estimate channel (leaf) | Fits the rung-1 leaf budget at the 90th percentile — if so, rung 1 returns, estimate channel only |
+
+Outcomes, fixed now:
+
+- Every range from 50 boards up passes → adopt. Below 50 boards, keep whichever of
+  brute force and df-pn decides more roots.
+- 50–199 pass, 200+ fails → phase-dependent: above 200 boards, proofs only at the root
+  final scan and PV transitions; the coverage gap is recorded in §13 and the adversarial
+  league gains scale-targeted attackers.
+- 50–199 fail → STOP: exact verification covers only small positions, and the design's
+  robustness argument above them rests on the adversarial league alone — a design review,
+  not a tuning pass.
 
 #### Movegen throughput — derived targets
 
