@@ -79,7 +79,9 @@ struct Edge {
   Move move{};                // board-move: the move
   std::uint32_t action = 0;   // whole-turn: the action's index in the node's list
   bool submit = false;        // board-move, Q4's other reading: submit the action
-  bool pruned = false;        // a dead end (no legal completion)
+  bool pruned = false;        // a dead end (no legal completion), or verified illegal
+  bool unknown = false;       // (a) the expansion's budget left the move's legality open
+  bool verified = false;      // (c) verified once
   double prior = 0;
   NodeId child = kNoNode;     // created on first selection
   std::uint32_t visits = 0;
@@ -443,7 +445,8 @@ struct Search::Impl {
         !(p.variance_bonus_cap >= 1.0) || !finite_nonneg(p.variance_bonus_scale) ||
         !finite_nonneg(p.residual_epsilon) || !(p.lcb_floor >= 0 && p.lcb_floor <= 1) ||
         !finite_nonneg(p.lcb_z) || !finite_nonneg(p.lcb_categorical_weight) ||
-        !finite_nonneg(p.secure_child_a) || !(p.virtual_loss > 0) || !std::isfinite(p.submit_logit)) {
+        !finite_nonneg(p.secure_child_a) || !(p.virtual_loss > 0) || !std::isfinite(p.submit_logit) ||
+        !finite_nonneg(p.unknown_prior_scale)) {
       throw std::invalid_argument("SearchParams: a parameter is out of range");
     }
     if (p.expand.pin || p.expand.check || p.expand.travel_threat) {
@@ -553,11 +556,11 @@ struct Search::Impl {
   // kNoNode for a dead end (the edge is pruned).
   NodeId ensure_child(NodeId pid, std::size_t ei) {
     {
-      Edge& e = nodes_[pid].edges[ei];
+      const Edge& e = nodes_[pid].edges[ei];
       if (e.pruned) return kNoNode;
       if (e.child != kNoNode) {
         if (nodes_[e.child].dead_end) {
-          e.pruned = true;
+          prune(pid, ei);
           return kNoNode;
         }
         return e.child;
@@ -567,7 +570,7 @@ struct Search::Impl {
     bool illegal = false;
     GameState s = child_state(pid, ei, turn_start, illegal);
     if (illegal) {
-      nodes_[pid].edges[ei].pruned = true;
+      prune(pid, ei);
       ++stats_.dead_ends;
       return kNoNode;
     }
@@ -592,7 +595,7 @@ struct Search::Impl {
     }
     nodes_[pid].edges[ei].child = id;
     if (nodes_[id].dead_end) {
-      nodes_[pid].edges[ei].pruned = true;
+      prune(pid, ei);
       return kNoNode;
     }
     return id;
@@ -601,14 +604,61 @@ struct Search::Impl {
   // -- the leaves' expansion: THE ONE CALL SITE OF THE LEGAL-MOVES FILTER -----------
 
   // The network's input for a leaf, and (board-move split) its children. Under
-  // the board-move split the moves are the LEGAL moves - E4's filter through
-  // ExpandOptions::legal_moves (keep_legal_moves, t5d/search.hpp), which engine
-  // stage E5a is making fast and which drops in here unchanged; under the
+  // the board-move split the moves are the LEGAL moves - E5a's tiered
+  // classification through ExpandOptions::legal_moves (t5d/legal.hpp), under
+  // the budget SearchParams::legality: proved-illegal moves dropped, legal and
+  // unknown ones kept (Expansion::move_legality says which); under the
   // whole-turn split, the pseudo-legal moves the action prior is read from.
   void leaf_expansion(const Node& n, Expansion& out) const {
     ExpandOptions o = params_.expand;
     o.legal_moves = params_.split == TurnSplit::BoardMove && params_.legal_moves_only;
+    o.legality = params_.legality;
     expand(n.state, o, out);
+  }
+
+  // (c) An edge's move classified under `options`: Legal, Illegal or Unknown.
+  MoveLegality classify_edge(NodeId pid, std::size_t ei, const LegalityOptions& options) const {
+    const Node& p = nodes_[pid];
+    const Edge& e = p.edges[ei];
+    if (e.submit || params_.split == TurnSplit::WholeTurn) return MoveLegality::Legal;
+    std::vector<MoveLegality> out;
+    classify_moves(p.state, std::span<const Move>(&e.move, 1), out, options);
+    return out.at(0);
+  }
+
+  // Removes an edge from selection, renormalising its siblings' priors.
+  void prune(NodeId pid, std::size_t ei) {
+    Node& p = nodes_[pid];
+    if (p.edges[ei].pruned) return;
+    p.edges[ei].pruned = true;
+    double sum = 0;
+    for (const Edge& e : p.edges) {
+      if (!e.pruned) sum += e.prior;
+    }
+    if (sum > 0) {
+      for (Edge& e : p.edges) {
+        if (!e.pruned) e.prior /= sum;
+      }
+    }
+  }
+
+  // (c) Verifies an unknown edge once: Illegal prunes it.
+  MoveLegality verify_edge(NodeId pid, std::size_t ei, const LegalityOptions& options) {
+    const MoveLegality v = classify_edge(pid, ei, options);
+    Edge& e = nodes_[pid].edges[ei];
+    e.verified = true;
+    switch (v) {
+      case MoveLegality::Illegal:
+        ++stats_.verified_illegal;
+        prune(pid, ei);
+        break;
+      case MoveLegality::Legal:
+        ++stats_.verified_legal;
+        e.unknown = false;
+        break;
+      case MoveLegality::Unknown: ++stats_.verified_unknown; break;
+    }
+    return v;
   }
 
   void list_actions(Node& n) {
@@ -657,9 +707,13 @@ struct Search::Impl {
     std::vector<double> logits;
     if (params_.split == TurnSplit::BoardMove) {
       n.edges.reserve(moves.size() + (n.submit_option ? std::size_t{1} : std::size_t{0}));
+      const std::span<const MoveLegality> legality = x.move_legality();
       for (std::size_t i = 0; i < moves.size(); ++i) {
         Edge e;
         e.move = moves[i];
+        // (a) Kept unknown moves are flagged (proved-illegal ones were dropped).
+        e.unknown = i < legality.size() && legality[i] == MoveLegality::Unknown;
+        if (e.unknown) ++stats_.unknown_edges;
         n.edges.push_back(e);
         logits.push_back(static_cast<double>(ev.logits[i]));
       }
@@ -713,10 +767,12 @@ struct Search::Impl {
       double sum = 0;
       for (std::size_t i = 0; i < n.edges.size(); ++i) {
         n.edges[i].prior = std::exp(logits[i] / t - top);
+        // (b) An unknown move's prior, scaled (1: its own prior).
+        if (n.edges[i].unknown) n.edges[i].prior *= params_.unknown_prior_scale;
         sum += n.edges[i].prior;
       }
       for (Edge& e : n.edges) {
-        e.prior /= sum;
+        e.prior = sum > 0 ? e.prior / sum : 1.0 / static_cast<double>(n.edges.size());
         if (e.prior > 0) entropy -= e.prior * std::log(e.prior);
       }
     }
@@ -807,6 +863,15 @@ struct Search::Impl {
   // children proven lost. Widens by one when no ordinary child is left.
   std::size_t select_child(NodeId pid) {
     for (;;) {
+      // A child found to be a dead end since: pruned first (its siblings'
+      // priors renormalised), then the scores.
+      {
+        const Node& q = nodes_[pid];
+        for (std::size_t i = 0; i < q.edges.size(); ++i) {
+          const Edge& e = q.edges[i];
+          if (!e.pruned && e.child != kNoNode && nodes_[e.child].dead_end) prune(pid, i);
+        }
+      }
       Node& p = nodes_[pid];
       widen(p);
       const double vlw_parent = static_cast<double>(p.vl) * params_.virtual_loss;
@@ -820,13 +885,9 @@ struct Search::Impl {
       std::array<std::size_t, 3> best{kNoEdge, kNoEdge, kNoEdge};
       std::array<double, 3> best_score{};
       for (std::size_t i = 0; i < p.instantiated; ++i) {
-        Edge& e = p.edges[i];
+        const Edge& e = p.edges[i];
         if (e.pruned) continue;
         const Node* child = e.child == kNoNode ? nullptr : &nodes_[e.child];
-        if (child != nullptr && child->dead_end) {
-          e.pruned = true;
-          continue;
-        }
         const double vlw = static_cast<double>(e.vl) * params_.virtual_loss;
         std::size_t cls = 0;
         double q = 0;
@@ -956,7 +1017,10 @@ struct Search::Impl {
       if (c.dead_end) continue;
       any = true;
       const auto [clo, chi] = detail::bounds_in_parent(p, c);
-      lo = std::max(lo, clo);
+      // (e) A child through an unknown edge (its move may be illegal) never
+      // proves its parent anything; as part of a superset of the legal
+      // children it still bounds the parent from above.
+      if (!e.unknown) lo = std::max(lo, clo);
       hi = std::max(hi, chi);
     }
     if (!any) return;
@@ -975,7 +1039,7 @@ struct Search::Impl {
     const NodeId id = path.back().node;
     nodes_[id].dead_end = true;
     ++stats_.dead_ends;
-    if (path.size() >= 2) nodes_[path[path.size() - 2].node].edges[path.back().edge].pruned = true;
+    if (path.size() >= 2) prune(path[path.size() - 2].node, path.back().edge);
   }
 
   // -- one simulation's selection -------------------------------------------------------
@@ -1021,6 +1085,16 @@ struct Search::Impl {
         ++stats_.stuck;
         backup(path_, node_q(n), 1.0, true);
         return Selected::Done;
+      }
+      // (c) The first time an unknown edge is picked, it is verified under the
+      // larger budget. Illegal: the edge goes (its siblings' priors
+      // renormalised) and selection is repeated here - nothing backed up.
+      if (params_.verify_unknown) {
+        const Edge& e = nodes_[cur].edges[ei];
+        if (e.unknown && !e.verified &&
+            verify_edge(cur, ei, params_.verify_legality) == MoveLegality::Illegal) {
+          continue;
+        }
       }
       const NodeId child = ensure_child(cur, ei);
       if (child == kNoNode) {
@@ -1197,7 +1271,7 @@ struct Search::Impl {
         c.eval_variance = child.has_eval ? child.eval_var : 0.0;
         if (params_.solver) {
           const auto [lo, hi] = detail::bounds_in_parent(r, child);
-          c.lo = lo;
+          c.lo = e.unknown ? -1 : lo;  // (e) no proof through an unknown edge
           c.hi = hi;
         }
       }
@@ -1460,18 +1534,32 @@ std::vector<RootChild> Search::root_children() const {
       c.moves.push_back(e.move);
     }
     c.submit = e.submit;
+    c.legality = e.unknown ? MoveLegality::Unknown : MoveLegality::Legal;
     c.prior = e.prior;
     c.visits = e.visits;
     c.q = s.edge_q(r, e);
     c.child = e.child;
     if (e.child != kNoNode && s.params_.solver) {
       const auto [lo, hi] = detail::bounds_in_parent(r, s.nodes_[e.child]);
-      c.lo = lo;
+      c.lo = e.unknown ? -1 : lo;  // (e) no proof through an unknown edge
       c.hi = hi;
     }
     out.push_back(std::move(c));
   }
   return out;
+}
+
+MoveLegality Search::verify(std::size_t index, const LegalityOptions& options) {
+  Impl& s = *impl_;
+  if (!s.pending_.empty()) throw std::logic_error("search: cannot verify while a batch is waiting");
+  const std::vector<std::size_t> edges = s.root_edges();
+  if (index >= edges.size()) {
+    throw std::out_of_range("verify: root child " + std::to_string(index) + " of " +
+                            std::to_string(edges.size()));
+  }
+  const Edge& e = s.nodes_[s.root_].edges[edges[index]];
+  if (!e.unknown) return MoveLegality::Legal;
+  return s.verify_edge(s.root_, edges[index], options);
 }
 
 Choice Search::choose() const {
@@ -1675,6 +1763,8 @@ EdgeView Search::edge(NodeId id, std::size_t index) const {
   }
   v.submit = e.submit;
   v.pruned = e.pruned;
+  v.unknown = e.unknown;
+  v.verified = e.verified;
   v.prior = e.prior;
   v.child = e.child;
   v.visits = e.visits;
