@@ -292,6 +292,121 @@ void apply_to(t5d_game& game, const t5d::Move& move) {
   game.expansion_current = false;
 }
 
+// t5d_layout's table: every public struct's size (field nullptr) and every
+// member's offset, as this library was compiled.
+struct LayoutEntry {
+  const char* type;
+  const char* field;
+  size_t value;
+};
+
+#define T5D_SIZE(T) LayoutEntry{#T, nullptr, sizeof(T)}
+#define T5D_AT(T, F) LayoutEntry{#T, #F, offsetof(T, F)}
+
+constexpr LayoutEntry kLayout[] = {
+    T5D_SIZE(t5d_fingerprint),
+    T5D_AT(t5d_fingerprint, fingerprint),
+    T5D_AT(t5d_fingerprint, placement),
+    T5D_AT(t5d_fingerprint, boards),
+    T5D_AT(t5d_fingerprint, pieces),
+
+    T5D_SIZE(t5d_info),
+    T5D_AT(t5d_info, boards),
+    T5D_AT(t5d_info, pieces),
+    T5D_AT(t5d_info, width),
+    T5D_AT(t5d_info, height),
+    T5D_AT(t5d_info, even),
+    T5D_AT(t5d_info, to_move),
+    T5D_AT(t5d_info, min_timeline),
+    T5D_AT(t5d_info, max_timeline),
+    T5D_AT(t5d_info, created_by_white),
+    T5D_AT(t5d_info, created_by_black),
+    T5D_AT(t5d_info, ruleset),
+
+    T5D_SIZE(t5d_move),
+    T5D_AT(t5d_move, from_timeline),
+    T5D_AT(t5d_move, from_half_turn),
+    T5D_AT(t5d_move, to_timeline),
+    T5D_AT(t5d_move, to_half_turn),
+    T5D_AT(t5d_move, from_board),
+    T5D_AT(t5d_move, to_board),
+    T5D_AT(t5d_move, from_square),
+    T5D_AT(t5d_move, to_square),
+    T5D_AT(t5d_move, from_cell),
+    T5D_AT(t5d_move, to_cell),
+    T5D_AT(t5d_move, piece),
+    T5D_AT(t5d_move, captured),
+    T5D_AT(t5d_move, promotion),
+    T5D_AT(t5d_move, flags),
+
+    T5D_SIZE(t5d_expand_options),
+    T5D_AT(t5d_expand_options, window_k),
+    T5D_AT(t5d_expand_options, square_features),
+    T5D_AT(t5d_expand_options, relations),
+
+    T5D_SIZE(t5d_game_summary),
+    T5D_AT(t5d_game_summary, boards),
+    T5D_AT(t5d_game_summary, width),
+    T5D_AT(t5d_game_summary, height),
+    T5D_AT(t5d_game_summary, even),
+    T5D_AT(t5d_game_summary, to_move),
+    T5D_AT(t5d_game_summary, present),
+    T5D_AT(t5d_game_summary, timelines),
+    T5D_AT(t5d_game_summary, active_timelines),
+    T5D_AT(t5d_game_summary, obligations_met),
+    T5D_AT(t5d_game_summary, may_move),
+    T5D_AT(t5d_game_summary, may_submit),
+    T5D_AT(t5d_game_summary, ruleset),
+    T5D_AT(t5d_game_summary, rules),
+
+    T5D_SIZE(t5d_expansion),
+    T5D_AT(t5d_expansion, width),
+    T5D_AT(t5d_expansion, height),
+    T5D_AT(t5d_expansion, even),
+    T5D_AT(t5d_expansion, to_move),
+    T5D_AT(t5d_expansion, present),
+    T5D_AT(t5d_expansion, timelines),
+    T5D_AT(t5d_expansion, active_timelines),
+    T5D_AT(t5d_expansion, window_k),
+    T5D_AT(t5d_expansion, may_move),
+    T5D_AT(t5d_expansion, origins_unknown),
+    T5D_AT(t5d_expansion, board_count),
+    T5D_AT(t5d_expansion, move_count),
+    T5D_AT(t5d_expansion, edge_count),
+    T5D_AT(t5d_expansion, relation_count),
+    T5D_AT(t5d_expansion, window_count),
+    T5D_AT(t5d_expansion, e_count),
+    T5D_AT(t5d_expansion, src_extra_count),
+    T5D_AT(t5d_expansion, feature_board_count),
+    T5D_AT(t5d_expansion, origin_count),
+    T5D_AT(t5d_expansion, timeline),
+    T5D_AT(t5d_expansion, half_turn),
+    T5D_AT(t5d_expansion, is_head),
+    T5D_AT(t5d_expansion, active),
+    T5D_AT(t5d_expansion, side_to_move),
+    T5D_AT(t5d_expansion, playable),
+    T5D_AT(t5d_expansion, window_depth),
+    T5D_AT(t5d_expansion, band_depth),
+    T5D_AT(t5d_expansion, is_origin),
+    T5D_AT(t5d_expansion, parent),
+    T5D_AT(t5d_expansion, feature_boards),
+    T5D_AT(t5d_expansion, piece),
+    T5D_AT(t5d_expansion, colour),
+    T5D_AT(t5d_expansion, moved),
+    T5D_AT(t5d_expansion, moves),
+    T5D_AT(t5d_expansion, edges),
+    T5D_AT(t5d_expansion, relations),
+    T5D_AT(t5d_expansion, window),
+    T5D_AT(t5d_expansion, e_boards),
+    T5D_AT(t5d_expansion, src_extra),
+    T5D_AT(t5d_expansion, acting_player),
+    T5D_AT(t5d_expansion, submit_possible),
+    T5D_AT(t5d_expansion, submit_legal),
+};
+
+#undef T5D_AT
+#undef T5D_SIZE
+
 }  // namespace
 
 extern "C" {
@@ -299,6 +414,20 @@ extern "C" {
 const char* t5d_version(void) { return T5D_VERSION_STRING; }
 
 void t5d_free(void* pointer) { std::free(pointer); }
+
+t5d_status t5d_layout(const char* type, const char* field, size_t* out) {
+  if (type == nullptr || out == nullptr) return T5D_ERR_ARGUMENT;
+  for (const LayoutEntry& e : kLayout) {
+    if (std::strcmp(e.type, type) != 0) continue;
+    const bool match = field == nullptr ? e.field == nullptr
+                                        : e.field != nullptr && std::strcmp(e.field, field) == 0;
+    if (match) {
+      *out = e.value;
+      return T5D_OK;
+    }
+  }
+  return T5D_ERR_ARGUMENT;
+}
 
 t5d_status t5d_state_new_standard(t5d_state** out) {
   return new_state(out, &t5d::standard_start);

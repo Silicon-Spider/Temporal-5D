@@ -113,6 +113,16 @@ T5D_API const char* t5d_version(void);
 /* Releases memory the library returned (strings). NULL is ignored. */
 T5D_API void t5d_free(void* pointer);
 
+/* The struct layouts this library was built with, for a binding that mirrors them
+ * (python/t5d/engine/capi.py checks every one at load, so a binding and a library of
+ * different stages refuse each other instead of writing past a buffer): with `field`
+ * NULL, sizeof(`type`); otherwise the offset of `field` in `type`. `type` is one of
+ * "t5d_fingerprint", "t5d_info", "t5d_move", "t5d_expand_options",
+ * "t5d_game_summary", "t5d_expansion"; `field` is a member's name, as declared.
+ * T5D_ERR_ARGUMENT for a NULL `type` or `out`, an unknown type or an unknown field.
+ * (Stage E7.) */
+T5D_API t5d_status t5d_layout(const char* type, const char* field, size_t* out);
+
 /* ---- creating and releasing states ----------------------------------------- */
 
 /* "Standard": the standard board on timeline 0 at T1, white to move. */

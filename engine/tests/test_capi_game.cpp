@@ -501,6 +501,37 @@ TEST(capi_expansion_says_who_acts_and_whether_submitting_is_legal_d8) {
   CHECK_EQ(t5d_game_submit(game.p, nullptr), T5D_OK);
 }
 
+TEST(capi_layout_reports_the_structs_as_compiled) {
+  // t5d_layout: what a binding checks its mirrors against at load (stage E7).
+  size_t v = 0;
+  REQUIRE_EQ(t5d_layout("t5d_expansion", nullptr, &v), T5D_OK);
+  CHECK_EQ(v, sizeof(t5d_expansion));
+  REQUIRE_EQ(t5d_layout("t5d_expansion", "acting_player", &v), T5D_OK);
+  CHECK_EQ(v, offsetof(t5d_expansion, acting_player));
+  REQUIRE_EQ(t5d_layout("t5d_expansion", "submit_possible", &v), T5D_OK);
+  CHECK_EQ(v, offsetof(t5d_expansion, submit_possible));
+  REQUIRE_EQ(t5d_layout("t5d_expansion", "submit_legal", &v), T5D_OK);
+  CHECK_EQ(v, offsetof(t5d_expansion, submit_legal));
+  REQUIRE_EQ(t5d_layout("t5d_expansion", "src_extra", &v), T5D_OK);
+  CHECK_EQ(v, offsetof(t5d_expansion, src_extra));
+  REQUIRE_EQ(t5d_layout("t5d_move", nullptr, &v), T5D_OK);
+  CHECK_EQ(v, size_t{32});
+  REQUIRE_EQ(t5d_layout("t5d_move", "flags", &v), T5D_OK);
+  CHECK_EQ(v, size_t{31});
+  REQUIRE_EQ(t5d_layout("t5d_game_summary", "rules", &v), T5D_OK);
+  CHECK_EQ(v, offsetof(t5d_game_summary, rules));
+  for (const char* type : {"t5d_fingerprint", "t5d_info", "t5d_expand_options", "t5d_game_summary"}) {
+    CHECK_EQ(t5d_layout(type, nullptr, &v), T5D_OK);
+    CHECK(v > 0);
+  }
+  v = 7;
+  CHECK_EQ(t5d_layout("t5d_state", nullptr, &v), T5D_ERR_ARGUMENT);  // opaque: no layout
+  CHECK_EQ(t5d_layout("t5d_expansion", "no_such_field", &v), T5D_ERR_ARGUMENT);
+  CHECK_EQ(t5d_layout(nullptr, nullptr, &v), T5D_ERR_ARGUMENT);
+  CHECK_EQ(t5d_layout("t5d_move", nullptr, nullptr), T5D_ERR_ARGUMENT);
+  CHECK_EQ(v, size_t{7});  // unchanged on failure
+}
+
 TEST(rule_options_decode_inverts_encode) {
   std::vector<RuleOptions> all(1);
   const auto add = [&](auto set) {

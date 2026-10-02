@@ -1896,6 +1896,13 @@ Built after the user's CHECKPOINT 2 rulings (rulebook R8 and R9; register D8).
   offset). No per-board or per-square feature changed. Under the ply split the submit
   action has its own policy logit (§8.2), read from a global register; under
   whole-turn generation submitting ends every enumerated action.
+- **The Python binding** follows in the same change: `python/t5d/engine/capi.py`'s
+  `CExpansion` mirrors the three fields, `T5D_RULES_NO_MOVES_AFTER_SHIFT` is bit 3 and
+  `T5D_RULES_MOVES_AFTER_SHIFT` 0, `Expansion` copies `acting_player`,
+  `submit_possible`, `submit_legal`, and the binding checks every mirrored struct
+  against `t5d_layout` at load (see "The C API"). The network does not read the new
+  fields yet: its acting-player input and submit logit are stage N5, and until then
+  `to_position` refuses a state past the shift (`PresentMismatch`).
 
 ## 5DFEN
 
@@ -1969,7 +1976,14 @@ function that can fail returns a status (`t5d_version`, `t5d_free`,
 `t5d_state_destroy` and `t5d_game_destroy` cannot fail and return none); no exception
 crosses the boundary. Strings the library returns are freed with `t5d_free`. Stage E3
 adds games - a state under the rules, moved, replayed, submitted and expanded (see
-"The C API for games").
+"The C API for games"). Stage E7 adds `t5d_layout(type, field, &out)`: the size of each
+public struct (`t5d_fingerprint`, `t5d_info`, `t5d_move`, `t5d_expand_options`,
+`t5d_game_summary`, `t5d_expansion`) and the offset of each of its fields, as the
+library was compiled. The Python binding (`python/t5d/engine/capi.py`) checks every
+struct it mirrors against it when it loads the library, and refuses a library whose
+layout differs (or that lacks `t5d_layout`): a binding and a library from different
+stages would otherwise let the library write past a Python buffer - as an expansion
+did when stage E7 appended three fields to `t5d_expansion`.
 
 ## Choices the spec leaves open
 
