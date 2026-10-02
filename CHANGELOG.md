@@ -10,6 +10,56 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-02 - The engine's first gate runs triaged; the first known divergences
+
+- `oracles/known-divergences.toml`: 56 entries from the triage of the engine's
+  first gate runs (engine configured locally only): 37 for ftxi's and ftxi:naive's
+  check verdicts that ruling R1 rules wrong; Chess in 5D's two false checkmates
+  (2) and ftxi's missing Black two-timeline double step (4) - the two oracle
+  defects, recorded as telltales as ruling R7 asks; 7 for record text the notation
+  specification rules out (jumps without a source square, a parenthesised
+  variation, 5DFEN boards under a named Board), which the engine refuses and an
+  oracle played; 6 for oracles' own notation errors (ftxi's missing unmoved markers
+  on Very Small - Open, ftxi's refusal of `+1` timeline labels, the notation
+  parser's refusal of `(0T1)a2a3`). Each cites the rulebook or the notation
+  specification. `verify` passes; with the engine configured the nightly gate
+  matches every reachable entry, none stale, no telltale.
+- No engine defect was found. Standard - Half Reflected is the first gated ruleset.
+  115 findings that rules Q4 explains remain, so the engine stays unconfigured in
+  the committed `gate.toml` until the project owner rules on Q4.
+- `docs/BUILD_LOG.md`: the triage (step 2), the plan, register rows H23, H34.
+- Spec: §11.0 "Running the gate" (H23, H31, H34, H36, H38; R1, R4, R7); no spec
+  text changes.
+
+### 2026-10-02 - Engine: a turn number that does not count the turns is a warning
+
+- `engine/`: by default (`PgnOptions::turn_number_mismatch_is_error`, false) a turn
+  number that does not count the turns is kept in `PgnRecord::warnings` (and
+  `PgnReplay::warnings()`, printed by `t5d-gate`) and reading goes on; a turn
+  really missing still shows, since the next action's moves are checked like any
+  other. notation/aivsai (turn 25 written twice) now replays all 54 actions. The
+  same policy as the annotations below: the gate compares more, never less.
+- Spec: §11.0 "Running the gate" (H28: what the engine reads); the notation's
+  "Turns"; no spec text changes.
+
+### 2026-10-02 - Engine: a disagreeing annotation is a warning, not a refusal
+
+- `engine/`: a `~`, `(>Lx)` or `(~Tx)` that disagrees with the state no longer
+  makes the move unreadable by default (`PgnOptions::annotation_mismatch_is_error`,
+  false): the move is played and the disagreement kept in `PgnReplay::warnings()`,
+  which `t5d-gate` prints on stderr; `--strict-annotations` restores the refusal.
+  The notation specification calls these tokens "purely for better human
+  comprehension" that "should match" the state; a wrong one is the writer's slip,
+  and refusing hid the rest of three corpus records from the gate: cwmtt/silly now
+  replays all 38 actions (CHECKPOINT 1's CHK-A1 representative, position 28, is
+  not check under R1 - 37 legal actions, as ftxi and cwmtt count) and
+  chessin5d-illegal-move-example all 66 (position 66: in check, 25 legal actions,
+  not the checkmate Chess in 5D's mate search reported); cwmtt/wide now stops at
+  rules Q4 instead. Tests: the strict reading kept for the annotation tests, a new
+  test of the default.
+- Spec: §11.0 "Running the gate" (H28, H30: what the engine reads); rules T15, Q26;
+  no spec text changes.
+
 ### 2026-10-02 - Phase 1 measurements: movegen throughput (M9) and the corpus |E| curve (M7)
 
 - `docs/MEASUREMENTS.md`: M9 measured on a quiet machine with `t5d-bench`.

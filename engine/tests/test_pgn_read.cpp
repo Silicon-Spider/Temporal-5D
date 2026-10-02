@@ -418,14 +418,35 @@ TEST(pgn_move_text_errors_stop_reading_after_the_complete_actions) {
       {"1. e4 / e\xC3\xA9" "5", 1, "byte 0xC3"},
       {"1. e4 / e5 2. Nf3 Nxx3", 2, "cannot read the move"},
   };
+  // Read strictly: a turn number that does not count the turns is an error
+  // here (by default it is a warning: pgn_turn_number_mismatches_are_warnings).
+  PgnOptions strict;
+  strict.turn_number_mismatch_is_error = true;
   for (const Case& c : cases) {
-    const PgnRecord r = read_pgn(c.text);
+    const PgnRecord r = read_pgn(c.text, strict);
     REQUIRE(r.unreadable.has_value());
     CHECK_EQ(r.actions.size(), c.actions);
     if (r.unreadable->find(c.says) == std::string::npos) {
       CHECK_EQ(*r.unreadable, std::string(c.says));
     }
   }
+}
+
+TEST(pgn_turn_number_mismatches_are_warnings) {
+  // By default a turn number that does not count the turns is bookkeeping, not
+  // a different game: reading goes on, and the mismatch is kept as a warning.
+  const PgnRecord r = read_pgn("1. e4 / e5 3. d4 / d5 3. Nf3");
+  CHECK(!r.unreadable.has_value());
+  CHECK_EQ(r.actions.size(), std::size_t{5});
+  REQUIRE_EQ(r.warnings.size(), std::size_t{2});
+  CHECK(r.warnings[0].find("turn 3 follows turn 1") != std::string::npos);
+  CHECK(r.warnings[1].find("turn 3 follows turn 3") != std::string::npos);
+  // The colours must still alternate: that is not a number.
+  CHECK(read_pgn("1. e4 2. d4").unreadable.has_value());
+  // The warnings reach the replay.
+  PgnReplay replay(read_pgn("1. e4 / e5 3. d4"));
+  replay.play_all();
+  CHECK_EQ(replay.warnings().size(), std::size_t{1});
 }
 
 TEST(pgn_turn_numbers_may_be_ignored) {

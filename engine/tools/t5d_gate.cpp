@@ -49,6 +49,8 @@ void print_usage(std::FILE* stream) {
       "  --moves-after-shift          rules Q4's other reading (moves after the present shifts)\n"
       "  --rule NAME=VALUE            any other rule option (RuleOptions, t5d/rules.hpp)\n"
       "  --lenient-annotations        do not check ~, (>Lx), (~Tx) against the state\n"
+      "  --strict-annotations         a ~, (>Lx) or (~Tx) that disagrees is unreadable\n"
+      "                               (default: played, with a warning on stderr)\n"
       "  --pgn NAME=VALUE             any other reader option (PgnOptions, t5d/pgn.hpp)\n"
       "  --actions K                  list position K's legal actions on standard error\n"
       "  --detector NAME              naive, hypercuboid or portfolio (the default): which\n"
@@ -105,6 +107,8 @@ int main(int argc, char** argv) {
       options.rules.moves_after_shift = true;
     } else if (arg == "--lenient-annotations") {
       options.pgn.verify_annotations = false;
+    } else if (arg == "--strict-annotations") {
+      options.pgn.annotation_mismatch_is_error = true;
     } else if (arg == "--rule" && has_value) {
       if (!t5d::gate::set_rule_option(options.rules, argv[++i], &error)) {
         return bad_argument("--rule: " + error);
