@@ -15,33 +15,56 @@ M5 - building it would break a rule).
 
 ## Where things stand
 
-### STOPPED 2026-10-03 - M12's outcome: 6b fails at 50-199 boards after the optimisation pass
+### CHECKPOINT 3 - stopped 2026-10-03 on 6b's re-run, ruled the same day; the run resumed
 
-Under the user's pre-registered rule (M12): "50-199 boards fail -> STOP: redesign
-the verification layer". The re-run on a quiet machine (docs/MEASUREMENTS.md, 6b):
-the 50 ms root scan at the scanner's design budget (5 threads, Lazy SMP) resolves
-5 forcing half-turns in 76.7% of positions under 50 boards, but 31.4% at 50-99,
-24.7% at 100-199 and 2.4% at 200+ (the first run: 25.7 / 18.6 / 2.4). Above 50
-boards it reaches that depth essentially only where it proves a result. Rung 1 and
-quiet-leaf reach fail in every range (drop rung 1; NNUE v2 deferred).
+The run stopped under M12's pre-registered rule: after the bounded optimisation
+pass (E5c), at the scanner's design budget (5 threads, Lazy SMP), the 50 ms root
+scan resolved 5 forcing half-turns in 76.7% of positions under 50 boards but
+31.4% at 50-99, 24.7% at 100-199 and 2.4% at 200+; rung 1 and quiet-leaf reach
+failed everywhere (MEASUREMENTS, 6b). The user's rulings (design documents
+committed 1e3a210: §11.1 "The redesign after 6b", §15.6's CHECKPOINT 3 block,
+register M14, M15, H1, H6, H10, reversal 22):
+- **The verification redesign (M14), a prototype until 6b′ decides it:** split
+  the scanner by channel - exactness (turn completion, all evasions, royal-capture
+  checks) only on lines that can end in a proof; the estimate channel a cheap,
+  inexact local search without turn completion, its outputs soft priors. The proof
+  channel: depth-limited df-pn over the semimove-decomposed turn tree with
+  hypercuboid-pruned completion, answering proven / disproven / unknown (H37).
+  Incremental royal-attack maps. Then **6b′ (M15)** - same positions, per range,
+  5 threads, 50 ms - with its outcome rules applied: every range from 50 boards up
+  passes -> adopt (below 50, keep whichever of brute force and df-pn decides more
+  roots); 50-199 pass, 200+ fail -> phase-dependent (proofs only at the root and
+  PV transitions above 200; the gap recorded in §13); **50-199 fail -> STOP** for
+  a design review. Rung 1 stays dropped and the NNUE deferred until then.
+- **Unpause, in this order:** merge E7 together with the Python binding's update;
+  rebase E6a onto it (the expansion struct changed) and merge after review; run
+  the gate with the engine configured; then N5.
+- **Q2:** quote the question, the candidate readings and what each changes
+  (below, "Waiting on the user").
+- **cwmtt/many2:** "the cwmtt driver converts the export form to the canonical
+  5dpgn form from the pinned notation spec; if it expresses something the spec
+  can't, mark the record unsupported. The engine's parser is not extended."
+  Carried out as: cwmtt's side of the harness converts that record's text, and
+  every source - the engine included - reads the converted text (converting only
+  what cwmtt reads would change nothing: cwmtt reads both forms). The goldens it
+  changes are re-recorded on a quiet machine.
+- **Game records: approved** - MageOfficial/t0database (MIT) downloaded, pinned
+  and recorded (`data/t0database/`, 901e5be); the |E| curve re-run on it. It tops
+  out around 186 boards: the window verdict above that stays provisional.
+- **The Lazy SMP timing test** runs before any merge that touches the scanner, on
+  a machine with 6+ hardware threads, each run logged ("The Lazy SMP timing test
+  log", below).
 
-**For the user:** the verification layer's redesign (§11.1's kill condition). The
-spec names df-pn as the leading candidate above the brute-force regime (§15.6,
-§14.4; its repetition gate is gone, H39); the measurement points at where the
-scanner's nodes now go (completion fallbacks 38-64% of nodes at 100+ boards,
-royal-capture scans 24%, in-check listings 23%).
-
-**Paused, untouched until the decision:**
-- engine E7 (Q4 as the default; D8's acting player and submit availability in the
-  expansion and C API), committed on branch `worktree-agent-a8f46f56bb33bef09`
-  (97d2cd1, 97bac3e, 285f28f), not merged. It must merge together with the Python
-  binding's update (the expansion struct grew from 272 to 288 bytes; the Q4
-  encoding bit now means the Guide-literal reading); one long test remains to
-  re-run.
-- engine E6a (the search core), on branch `worktree-agent-a2dfd073da81ec01e`, its
-  self-play edit reviewed and committed (1c6956d).
-- Not started: the gate with the engine configured (it waits on E7), network N5
-  (D8's submit logit and acting-player input, C23 fixed), N3's CPU wall times.
+**Running (2026-10-03),** each in its own worktree: engine **E8**, the M14
+prototype and the 6b′ tool; engine **E7** finishing (main merged in, the Python
+binding updated, its last long test, the timing test); the **t0database
+analysis** (the |E| curve on the 716 games that replay, M7's rule applied, the 45
+refused games classified - 13 of them refused because the present would not move
+on, which may be an engine defect or the records'); the **many2 conversion** in
+the harness. **Then:** merge E7; rebase E6a onto it, review, merge; on a quiet
+machine, the decisive 6b′ run (STOP if 50-199 fail) and the golden re-record for
+many2 (`golden --write --repeat 2`); the gate with the engine configured; N5;
+N3's CPU wall times.
 
 ### CHECKPOINT 2 - stopped 2026-10-02 on 6b, ruled the same day; the run resumed
 
@@ -127,35 +150,32 @@ with branch origins, C23); N3's CPU wall times.
   search (rung 1) and Lazy SMP, end-to-end play with the network's random weights,
   the NNUE only if 6b passes (M8).
 - **Waiting on the user:**
-  - **Q2** (rulebook): "How do initial timelines count when a variant starts with
-    several (Two Timelines, Tactician, Strategos, Formations, Invasion,
-    Battleground)? Does either side start as having "created" one? No source
-    states the rule." The engine's default credits neither side (`initial_credit
-    = None`); the alternative (`MinusZeroToBlack`) rests on the 5dpgn author's
-    unverified "Internally in the game, -0 is -1".
-  - **cwmtt/many2's export-form move**: the ruling says "the engine does not read
-    it: normalise it in the cwmtt driver". The gate's difference there is the
-    engine refusing the record's text (`(0T1)Pe2(0T1)e3`) where cwmtt played it;
-    normalising the text inside cwmtt's driver changes only what cwmtt reads, not
-    what the engine is given, so it would not remove that difference - asked which
-    is meant (the harness normalising the record for every source; cwmtt's driver
-    refusing the export form as the engine does; or an entry).
-  - **Real game records - proposed (2026-10-02), awaiting approval to download:**
-    (1) **MageOfficial/t0database** (github.com/MageOfficial/t0database, MIT,
-    "Copyright (c) 2022 MageOChicken"), `Data.csv` at commit
-    `d49da4054d02fec577fd3c53368993fe453c586e` (blob `35eb1010d066…`, 608,066
-    bytes): 761 real human games, 2021-2025 (World Championships 2022 and 2024,
-    leagues, tournaments), 5dpgn move text without headers (the repository's own
-    server adds `[Board "Standard - Turn Zero"]`), 468 of them with the official
-    client recorder's clock comments; about 186 boards at most - 19 games reach 100,
-    none 200. Before use: confirm with its author that MIT covers the games and where
-    they came from (record it in PROVENANCE.md); refuse, never edit, rows that do
-    not replay. (2) chessin5d.net's game server - possibly the largest archive - no
-    longer answers; it needs its operator (and 5d-chess-js, the pinned oracle, must
-    not be used to convert it on the engine side). (3) The community Discord servers -
-    only with the admins' and players' permission. No public source reaches 200-600
-    boards; the window verdict above 200 boards needs self-play or permission-based
-    sources. M7 stays provisional.
+  - **Q2** (rulebook) - *the question:* "How do initial timelines count when a
+    variant starts with several (Two Timelines, Tactician, Strategos, Formations,
+    Invasion, Battleground)? Does either side start as having "created" one? No
+    source states the rule." The only evidence is the 5dpgn author's two unverified
+    remarks about the program: "Internally in the game, `-0` is `-1`", and the
+    displayed index "gives a hint about who has or hasn't branching priority"
+    [25]. *The candidate readings:* **(A) none** (the engine's default,
+    `initial_credit = None`): initial timelines are nobody's creations; the count
+    rule (T10) counts created timelines only. **(B) "-0 is -1"**
+    (`MinusZeroToBlack`): in a game that starts with an even number of timelines,
+    Black counts as having created one already. (A mirror reading, White
+    credited, has no source at all and is not implemented.) *What each changes:*
+    only games that start with an even number of timelines - Two Timelines,
+    Tactician, Strategos, Formations, Invasion - and there only which branch is
+    active. Under (A) each side's first branch is active, and a side's second
+    only once the opponent has branched; under (B) White may create two active
+    timelines before Black branches, and Black's first branch is inactive until
+    White has branched once. Activity decides which boards are mandatory (R9),
+    where the present is, and which boards count for check (H36), so it changes
+    legal actions, check and mate in those variants. Odd starts (Battleground's
+    three timelines) are the same under both. A non-default choice changes the
+    ruleset ID and the Zobrist key. *On today's evidence nothing distinguishes
+    them:* the corpus's only even-start record (`notation/invasion`) is a
+    variant the engine does not set up, the Battleground record answers
+    identically under both, and t0database's games are all Standard - Turn Zero.
+    It matters only if self-play or the gate plays those variants.
 
 ## The brief - standing rules for every session
 
@@ -186,6 +206,11 @@ The run is one continuous build of the whole engine, untrained, per §15, until
   pseudo-legal upper bound that keeps the window decides early, one that kills it
   waits for the legal curve; the NNUE and the scanner's pruning only after 6b
   passes (M8); if movegen fails M9, fix movegen before building search on it.
+- **The Lazy SMP timing test** (`scanner_lazy_smp_reaches_the_single_threads_depth`,
+  which skips under 6 hardware threads): run it before any merge that touches
+  the scanner (`engine/src/scanner*`, `search*`, `include/t5d/scanner.hpp`,
+  `search.hpp`, or their tests), on a machine with 6+ hardware threads, and log
+  every run in "The Lazy SMP timing test log" (the user, CHECKPOINT 3).
 - **STOP and wait only when:** 6b's root-scan test fails (M8); a §15.6 result lands
   within ±10% of its threshold; the pre-flight fails or a problem blocks all
   remaining work; or everything else is done (then report for sign-off, proof
@@ -201,6 +226,17 @@ The run is one continuous build of the whole engine, untrained, per §15, until
   rewrite pushed history. No absolute user paths in tracked files. **Never edit the
   spec or the register** - propose edits below; they are applied upstream.
 - Licence: GPL-3.0 (keep LICENSE).
+
+## The Lazy SMP timing test log
+
+Each run of `scanner_lazy_smp_reaches_the_single_threads_depth` before a merge
+that touches the scanner: random Standard and Two Timelines positions (the count
+is printed) at 40 ms each, resolved depth summed over them
+at 1 and at 5 threads (a proof or an exhausted tree counts 17); it passes when 5
+threads reach at least one thread's sum (one retry on a shared machine).
+
+| Date | Merge | Commit tested | Machine | Positions | 1 thread | 5 threads | Retry | Result |
+|---|---|---|---|---|---|---|---|---|
 
 ## Environment
 
