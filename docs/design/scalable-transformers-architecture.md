@@ -993,7 +993,10 @@ code they gate, and committed-class alternatives behind flags, since the ablatio
 both arms anyway. And pre-register the decision thresholds for the cheap measurements before the
 numbers exist — derived from the cost model and the design's own priors where possible,
 labelled as judgement where not. Thresholds set after the results tend to move toward the
-results; set beforehand, the decision is a lookup.
+results; set beforehand, the decision is a lookup. State the population and the resources with
+the threshold — pooled or per range, single-threaded or at the design's thread budget —
+or the first failing result forces a reading decision after the fact. When that happens,
+take the stricter reading: it cannot be accused of moving the line toward the result.
 ---
 
 ## 13. Methodology and recurring failure modes

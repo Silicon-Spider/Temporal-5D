@@ -449,6 +449,16 @@ root refresh (§7.9) — the mechanism by which frozen boards learn current rele
 inside the search only through the refresh ladder. Per-board registers belong to their
 board's block: frozen with it, and a cheap summary key for live tokens.
 
+**The causal past is the board's ancestry** (ruled at CHECKPOINT 2): its own timeline's
+earlier boards and, recursively, the timeline it branched from up to the branch point.
+Two conditions decide it. The attention set must be *state-defined* (C20), and it must
+be *closed under future moves* — no later move may add a board to it, or a frozen K/V
+goes stale. Ancestry satisfies both. Time-coordinate order fails closure: a later travel
+can branch a new timeline into the past and add boards earlier than an already-frozen
+board. Creation order fails state-definedness: two move orders that reach the same
+multiverse create boards in different orders. What ancestry cannot see — parallel
+timelines — is what the root refresh supplies (§7.9).
+
 **Among live boards, attention is full.** The current node's head boards attend to each
 other bidirectionally and are recomputed at every node. This is necessary, not optional:
 cross-timeline threats run in both time directions — a head at a later time can give
@@ -795,6 +805,16 @@ already implements the ply split — its semimove "fine tree" builds one timelin
 the turn at a time, using the hypercuboid algorithm to keep the search tree's branching
 factor from exploding exponentially with the number of timelines. Evidence for 6g and 6k,
 not a decision.
+
+**Turns have variable length, so submitting is an action** (Q4, ruled at CHECKPOINT 2).
+A player may keep moving on their remaining playable boards after the present has
+shifted; the turn ends only when they submit. So once the present has shifted, every
+decision point offers "submit" alongside further optional moves. Under the ply split it
+is an explicit action with its own policy logit, read from a global register and legal
+only when the submission passes the legality test (§11.0 item 2); under whole-turn
+generation it is the end-of-turn token. The network also needs a global **acting-player**
+input: per-board side-to-move flags cannot say whether the player has already submitted.
+Committed-class — it changes the policy head and the inputs.
 
 ### 8.3 Value head
 
@@ -1523,7 +1543,9 @@ manufactures false proofs that persist.
 2. **Legality is per turn, not per move.** A turn — an *action* — is a set of moves across
    boards, submitted together. Being in check midway through a turn is legal; only the
    submitted turn must leave every royal safe. The obligation to move on the boards the
-   present line requires is enforced at submission too. **Submission legality is a
+   present line requires is enforced at submission too, and it is a minimum: a player
+   may keep moving on their remaining playable boards after the present has shifted, and
+   the turn ends only at submission (Q4). **Submission legality is a
    separate test from check status:** it applies to the actual turn, not a passing
    hypothetical — after it, a royal capture from any of the opponent's playable boards,
    active or inactive, makes the submission illegal. Consequence for the ply split:
@@ -3169,6 +3191,27 @@ measured nodes/s ÷ evaluation rate; the root final scan gets 50 ms.
 The depth lines are anchored on dlshogi's leaf solver and the chess analogue; the 50%
 lines and the stand-pat bands are judgement, fixed now so they cannot drift.
 
+**How these are read (ruled at CHECKPOINT 2, after the first failing result).** The
+tests are read *per board-count range*, as the window rule is — never pooled, because a
+pooled pass driven by small early-game positions would hide a failure where the engine
+actually operates. That is the stricter reading, which is why it may be fixed after the
+fact without moving the line toward the result. The scanner is measured with its design
+thread budget (§15.6's CPU allocation, Lazy SMP — §11.3), not a single thread. The first
+measurement failed above 50 boards with 85% of the scanner's work in exhaustive
+enumeration (all legal actions when in check, mate tests at the horizon), so before any
+redesign: **one bounded optimisation pass on those two paths, then re-run 6b unchanged.**
+Outcome rules, fixed now:
+
+- Every range from 50 boards up passes → the verification layer stands as designed.
+- 50–199 boards pass, 200+ fail → the verification layer becomes phase-dependent, like the
+  window: brute-force scanning where it reaches depth, and above that the proof channel's
+  leading candidate is **df-pn** (§14.4) — selective proof search, whose repetition gate is
+  gone (H39); plain df-pn needs no dominance definition.
+- 50–199 boards still fail → STOP: redesign the verification layer.
+
+Rung 1 and quiet-leaf reach are re-measured in the same run and their own rules applied
+to the new figures (drop rung 1, defer the NNUE). Until then both stay parked.
+
 #### Movegen throughput — derived targets
 
 Search expands one node per network evaluation, so expansion — legal moves, attention
@@ -3185,6 +3228,11 @@ rate (half the paper figure, §7.1), the most demanding adoptable configuration 
 
 Whatever CPU remains after expansion is the scanner's budget — which is why this
 measurement runs first.
+
+**CPU allocation (pinned at CHECKPOINT 2):** 8 cores per GPU as the reference — replace it
+with the self-play machine's real count once known — split 2 for expansion, 1 for search
+and batching, and 5 for the scanner. M9 is judged on the 2 expansion cores (it passes:
+1.87× at 240 boards).
 
 ---
 
