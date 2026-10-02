@@ -213,16 +213,15 @@ std::optional<bool> can_finish_legally(const GameState& state,
 /// begin - or, during an action, continue - a legal action, those after which
 /// can_finish_legally. R1 judges legality per action ("moving into check
 /// during a turn is allowed"), so this is a single move's legality (build-log
-/// spec issue 28). No node or time budget; a move whose search reaches the
-/// memory ceiling is kept - not proven illegal - so the answer is exact unless
-/// a search ran out of memory, and then a superset. `out` is cleared first; the
-/// moves keep generate_moves' order.
+/// spec issue 28). Decided by t5d/legal.hpp's tiers (classify_moves), with no
+/// node or time budget; a move whose search reaches the memory ceiling is
+/// kept - not proven illegal - so the answer is exact unless a search ran out
+/// of memory, and then a superset. `out` is cleared first; the moves keep
+/// generate_moves' order. `detector`: the searches' (the last tier's).
 void legal_moves(const GameState& state, MoveList& out, Detector detector = Detector::Hypercuboid);
 
 /// legal_moves' filter, for a caller that generated the moves itself: keeps
 /// of `moves` (the pseudo-legal moves at `state`) the legal ones, in order.
-/// One search from `state` first: if the action cannot be finished legally at
-/// all, no move is legal; otherwise one search per move.
 void keep_legal_moves(const GameState& state, MoveList& moves,
                       Detector detector = Detector::Hypercuboid);
 

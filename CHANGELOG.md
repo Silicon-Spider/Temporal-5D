@@ -10,6 +10,31 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-02 - Engine E5a: the legal moves in tiers - exact, budgeted, fast
+
+- `engine/` (merged from its worktree branch): a move's legality (C4, R1) is decided
+  by sound tiers (`t5d/legal.hpp`, `classify_moves`) instead of a search per move:
+  a standing royal capture (no move legal); a stripped multiverse that certifies
+  quiet moves and branches in bulk, a passed board's standing capture refuting the
+  moves that leave it, a finish certifying the quiet moves on the boards it plays;
+  per-move checks; and search last. Modes: exact (default), budgeted (legal /
+  illegal / unknown - never illegal without proof, H37's spirit) and fast.
+  `ExpandOptions::legality` sets the expansion's mode; unknown moves are kept and
+  marked. The hypercuboid's node budget now counts each step of its abstract check,
+  so a node budget bounds time.
+- `t5d-bench --legal` (`--legal-budget`, `--legal-profile`) and `t5d-measure
+  --legal`: |E| from legal destinations (M7's tighter bound).
+- Tests: the classification against the brute-force reference and a search per move,
+  0 disagreements in about 113,000 long-run classifications; the long run takes
+  minutes instead of an hour.
+- `docs/MEASUREMENTS.md`: the legality profile (shared machine; M9 with legality
+  still needs its quiet-machine run) and M7 from legal destinations (the 160-239
+  bucket's median |E(8)| falls from 15.5 to 4.5; still no verdict).
+  `docs/BUILD_LOG.md`: step 4, spec issues 28 and 46 (what search does with an
+  unknown move - a proposal), proposed spec edit 43.
+- Spec: §11.0 items 2-3 (C4, R1, H37), §15.6 (M7, M9); spec issues 28, 46; proposed
+  edit 43.
+
 ### 2026-10-02 - Network N4: the engine binding; real positions as the network's input
 
 - `python/t5d/engine/` (new): a ctypes binding to the engine's C API - the library

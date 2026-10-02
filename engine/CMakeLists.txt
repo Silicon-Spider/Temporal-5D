@@ -83,6 +83,8 @@ target_sources(t5d_core PRIVATE
   src/check.cpp
   src/hypercuboid.cpp
   src/search.cpp)
+# Stage E5a: the legal moves, in tiers.
+target_sources(t5d_core PRIVATE src/legal.cpp)
 
 # ---- the C API shared library -----------------------------------------------------
 

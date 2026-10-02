@@ -16,6 +16,7 @@
 #include "t5d/check.hpp"
 #include "t5d/expand.hpp"
 #include "t5d/fen.hpp"
+#include "t5d/legal.hpp"
 #include "t5d/movegen.hpp"
 #include "t5d/search.hpp"
 #include "t5d/state.hpp"
@@ -451,7 +452,10 @@ TEST(search_the_hypercuboid_stays_small_when_every_branch_rewinds) {
       const ActionCount actions = count_legal_actions(s, 100000, d);
       CHECK(actions.stats.exhaustive);
       CHECK_EQ(actions.count, static_cast<std::size_t>(18 * n - 3));
-      CHECK(actions.stats.nodes <= 2 * actions.count);  // a move and a test per action
+      // A move and a test per action - and, for the hypercuboid, a node per box
+      // it takes up and per step of its abstract check: 16 per action at
+      // n = 6, where the search once took 34 million nodes in all.
+      CHECK(actions.stats.nodes <= 20 * actions.count);
       const ActionCount successors = count_legal_successors(s, 100000, d);
       CHECK_EQ(successors.count, static_cast<std::size_t>(3 * (2 * n + 1)));
     }
@@ -491,7 +495,7 @@ TEST(search_the_hypercuboid_finds_actions_past_reactivations) {
     const ActionCount c = count_legal_actions(s, 1000, d);
     CHECK(c.reached_cap);
     CHECK_EQ(c.count, std::size_t{1000});
-    if (d == Detector::Hypercuboid) CHECK(c.stats.nodes < 8000);
+    if (d == Detector::Hypercuboid) CHECK(c.stats.nodes < 12000);  // 8,671: boxes and abstract steps counted
   }
 }
 
@@ -604,6 +608,29 @@ TEST(search_legal_moves_are_those_that_begin_a_legal_action_r1) {
   expand(rewind_escape(), o, x);
   CHECK_EQ(x.move_records().size(), std::size_t{4});
   CHECK(pseudo > 4);
+  REQUIRE_EQ(x.move_legality().size(), std::size_t{4});
+  for (const MoveLegality l : x.move_legality()) CHECK(l == MoveLegality::Legal);
+  // Under a budget (t5d/legal.hpp): the moves proved illegal dropped, the
+  // undecided kept and marked Unknown - never a legal move dropped, never an
+  // illegal one called legal.
+  MoveList legal;
+  legal_moves(rewind_escape(), legal);
+  for (const LegalityOptions& budget : {LegalityOptions::budgeted(0, 0), LegalityOptions::budgeted(1, 10)}) {
+    o.legality = budget;
+    expand(rewind_escape(), o, x);
+    REQUIRE_EQ(x.move_legality().size(), x.moves().size());
+    CHECK(x.moves().size() >= 4);
+    CHECK(x.moves().size() <= pseudo);
+    for (const Move& m : legal) CHECK(std::find(x.moves().begin(), x.moves().end(), m) != x.moves().end());
+    for (std::size_t i = 0; i < x.moves().size(); ++i) {
+      const bool is_legal = std::find(legal.begin(), legal.end(), x.moves()[i]) != legal.end();
+      if (x.move_legality()[i] == MoveLegality::Legal) CHECK(is_legal);
+    }
+  }
+  // Pseudo-legal: no statuses.
+  o.legal_moves = false;
+  expand(rewind_escape(), o, x);
+  CHECK(x.move_legality().empty());
 }
 
 TEST(search_every_proven_verdict_is_exhaustive_h37) {
