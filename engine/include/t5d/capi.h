@@ -295,6 +295,18 @@ typedef struct t5d_expansion {
   const int32_t* window;    /* W(k) */
   const int32_t* e_boards;  /* E(k): travel destinations outside W(k) */
   const int32_t* src_extra; /* src_extra(k): move sources outside W(k) */
+
+  /* ---- appended at stage E7 (register D8; rulebook R8): every field above
+   * keeps its offset. Turns have variable length, so submitting is an action;
+   * these are global (the per-board and per-square features are unchanged). */
+  int32_t acting_player;   /* 0 white, 1 black: the side whose action this is (= to_move).
+                              Once the present has shifted inside the action it differs
+                              from the colour to move on the present (present & 1) */
+  int32_t submit_possible; /* 1: submitting is possible now - the action's obligations are
+                              met (T5) - so under the ply split it is an action beside the
+                              moves */
+  int32_t submit_legal;    /* 1: submitting is legal now - possible, and no royal piece of
+                              the acting player's left capturable (C4, R1; exact) */
 } t5d_expansion;
 
 /* A game from a 5dpgn record (`length` bytes of UTF-8 text; the record's
