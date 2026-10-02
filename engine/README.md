@@ -1557,7 +1557,9 @@ definition in full; in brief:
   royal capturable or a board unplayable, by E4's first legal finish (within 2,000
   nodes; a seed it cannot finish in time is dropped - the estimate channel's loss).
 - **Search.** Negamax alpha-beta, iterative deepening, node-capped (H3). In check: every
-  legal action, by E4's enumeration (`list_legal_actions`), up to `evasion_cap` (512);
+  legal action - first up to 64 actions built from seeds in an evasion order, each
+  searched as it is built, so that a cutoff ends the node (stage E5c, below); then, if
+  none cut off, E4's enumeration (`list_legal_actions`), up to `evasion_cap` (512);
   beyond it the node is *capped* - searched over the actions E4 listed, an estimate,
   and its iteration is not fully resolved. Otherwise stand-pat, then
   captures (MVV-LVA), then checks and branch threats (killers, history, continuation
@@ -1623,6 +1625,79 @@ nodes/s is measured over the scans (thread CPU time, less the leaf classificatio
 unless `--nps` fixes it, so that a quiet-machine figure can be applied to the same
 curves; larger positions run fewer nodes per second, which `--root-wall` shows. The
 records are input on the command line; the tool names nothing under the oracle harness.
+
+## Stage E5c: the bounded optimisation pass
+
+CHECKPOINT 2's ruling on 6b (register M12) asked for one bounded optimisation pass on
+the two paths where the first measurement spent 85% of the scanner's nodes - listing
+every legal action in check, and the mate tests at the horizon - and then 6b re-run
+unchanged. Nothing else in the scanner changed: its search, forcing set, eval and the
+6b tests are as they were.
+
+### The in-check stage (`ScannerOptions::evasion_probe`, 64)
+
+The profile (below) said why the two paths cost so much. In-check interior nodes
+failed high 50-85% of the time, yet each listed up to 513 legal actions first; and
+84-96% of the horizon mate tests answered "no mate", each by a hypercuboid search for
+one legal action. So, in check:
+
+- **Interior nodes.** The pseudo-legal moves are ordered as evasions: the TT's move, a
+  capture of the checking piece (R1's status gives one capture of a royal it rests
+  on, `check_witness`), a royal's move, a move onto a square the check's line crosses,
+  other captures (MVV-LVA), then the rest by killers and histories. Up to 64 of them,
+  in that order, are each made into an action by the completion rule's own moves and
+  searched as soon as it is built. Only if none cuts off does E4's enumeration run, as
+  before, and its successors not yet searched are searched.
+- **Horizon nodes.** The same seeds are tried until one makes a legal action: then the
+  answer is "no mate" and the node is an in-check leaf, as before. Only if none of the
+  64 does does E4's mate detector decide.
+
+Why this is sound (H2, H37):
+- A seed's action is built through the state machine and tested by C4's test
+  (`royals_safe`, R1). A seed it leaves unsafe is passed over, with no fallback search.
+  So every action of the stage is a legal action.
+- A cutoff by a legal action is a lower bound on the node whatever the other actions
+  are, so the node is resolved without the enumeration. Only a Win proof can come of
+  it: some action leads to a proven loss of the opponent's (∃).
+- A Loss proof still needs E4's enumeration, exhaustive, and every child of both
+  stages a proven win of the opponent's (∀).
+- At the horizon, one legal action in hand is an exact "not mate" (C5). A checkmate
+  is still only E4's exhaustive verdict.
+- A capped node, a TT hit and stand-pat give no proof, as before.
+
+`evasion_probe = 0` is E5b's scanner exactly: on the corpus (805 roots and 780 leaves,
+100,000-node scans) it searched the same trees as E5b, node for node.
+
+**Tests.** `scanner_evasion_probe_keeps_the_proofs` and its `long_` version scan the
+sparse starts' random play, under the default rules and under Q4's ruled reading, and
+the constructed positions. Each is scanned with the stage off, at 64 and at 1, at a
+generous budget and at random ones. Every proof is checked against the game tree, and
+where two settings both prove, they prove the same. `scanner_evasion_probe_off_is_e5b`
+checks that 0 leaves the stage out.
+
+**The profile**, from `t5d-scan6b` on the corpus records under Q4's ruled reading
+(`--moves-after-shift`), 100,000-node deterministic scans, one job. The machine was
+shared with other builds and tests, so the times are not quiet-machine figures. Each
+cell is the share of the scans' nodes, then of their wall time.
+
+| Boards | E5b: listing in check | E5b: horizon mate tests | E5c: listing in check | E5c: horizon mate tests | E5c: the in-check stage | completion fallbacks (E5b → E5c) |
+|---|---|---|---|---|---|---|
+| < 50 | 62.7% / 59.7% | 17.7% / 8.2% | 25.6% / 22.2% | 5.9% / 3.3% | 19.4% / 15.6% | 4.7% → 12.6% of nodes |
+| 50-99 | 44.2% / 48.8% | 23.4% / 11.6% | 25.2% / 25.8% | 7.7% / 3.6% | 16.0% / 13.4% | 17.6% → 23.3% |
+| 100-199 | 32.6% / 38.5% | 31.1% / 24.5% | 20.1% / 21.3% | 9.4% / 7.3% | 15.0% / 14.7% | 26.1% → 38.1% |
+| 200+ | 16.8% / 21.9% | 32.7% / 20.1% | 10.6% / 9.3% | 1.0% / 0.5% | 4.9% / 6.0% | 40.4% → 63.5% |
+
+What changed:
+- **The two paths together.** They fell from 64-80% of the nodes below 200 boards to
+  45-51%, and at 200+ from 50% to 16%.
+- **Nodes per tree position.** They fell from 84 to 37.
+- **The probe's reach.** It resolved 87-96% of the in-check interior nodes by a cutoff.
+  It answered 87-99% of the horizon tests.
+- **Capped nodes.** In-check nodes capped fell from 8,196 to 3,475.
+
+At 100 boards and more, the work is now led by the completion fallbacks (E4's first
+legal finish when the quiet completion leaves a royal capturable): 38% of the nodes at
+100-199 boards and 64% at 200+. That path is outside the pass M12 ruled.
 
 ## 5DFEN
 

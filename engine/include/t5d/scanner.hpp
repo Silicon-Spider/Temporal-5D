@@ -50,12 +50,23 @@
 //
 // THE SEARCH, at a turn start s with d forcing half-turns left:
 //  * the solved store first (H19): a proof found before is the answer;
-//  * IN CHECK (R1): ALL legal actions (E4's enumeration, list_legal_actions),
-//    so that a mate found is a proof (H2). None, exhaustively: checkmate. More
-//    than evasion_cap: the node is CAPPED - the evasion_cap + 1 actions E4
-//    listed are searched, as an estimate, and the iteration is not fully
-//    resolved. At d = 0: E4's mate detector only (checkmate, or an in-check
-//    leaf - an estimate);
+//  * IN CHECK (R1): ALL legal actions, so that a mate found is a proof (H2),
+//    in two stages. First up to evasion_probe SEEDS - pseudo-legal moves in an
+//    evasion order (the TT's move, a capture of the checking piece, a royal's
+//    move, a block of the check's line, other captures, the rest by
+//    histories) - each made into a legal action by the completion rule
+//    (built through the state machine and tested, C4; a seed it leaves
+//    unsafe is passed over) and searched as soon as it is built: a cutoff
+//    ends the node, resolved - a legal action scoring at least beta bounds
+//    the node whatever the others do. No cutoff: E4's enumeration
+//    (list_legal_actions) and the successors not yet searched. None,
+//    exhaustively: checkmate. More than evasion_cap: the node is CAPPED - the
+//    actions searched are an estimate, and the iteration is not fully
+//    resolved. A Loss proof needs the enumeration exhaustive and every child
+//    of both stages a proven win of the opponent's. At d = 0 only "is this
+//    a mate?" is asked: one legal action from the seeds answers no (an
+//    in-check leaf, an estimate); none of them, and E4's mate detector
+//    decides (checkmate, or an in-check leaf);
 //  * otherwise: stand-pat (the static eval; estimate channel only), then the
 //    forcing actions in stages - captures (MVV-LVA), checks, branch threats -
 //    each built when it is searched. No forcing action: a QUIET node (E4's
@@ -190,6 +201,13 @@ struct ScannerOptions {
   /// capped (searched over the first evasion_cap + 1 that E4 listed - an
   /// estimate; no Loss proof; the iteration not fully resolved).
   std::size_t evasion_cap = 512;
+  /// In check, before E4's enumeration: the most seeds (pseudo-legal moves,
+  /// in an evasion order) the scanner makes into legal actions by the
+  /// completion rule and searches one at a time, so that a cutoff ends the
+  /// node with no enumeration; at the horizon, the most it tries for one
+  /// legal action before E4's mate detector (see the header comment). 0: E4
+  /// first, always (E5b's behaviour).
+  std::size_t evasion_probe = 64;
   /// At an interior node with no forcing action: E4's detector tells a
   /// stalemate (an exact draw) from a quiet position.
   bool quiet_stalemate_test = true;
@@ -339,6 +357,30 @@ struct ScanStats {
   std::uint64_t fallback_nodes = 0;
   std::uint64_t horizon_mate_nodes = 0;
   std::uint64_t stalemate_test_nodes = 0;
+  /// The profile of the two exhaustive paths (6b, M12) and the fallbacks:
+  /// in-check interior nodes, those that failed high (a cutoff), the E4
+  /// listings made there and the actions they listed; the horizon mate tests
+  /// and their checkmate verdicts; and the wall time of each kind of E4 call.
+  std::uint64_t evasion_visits = 0;
+  std::uint64_t evasion_fail_highs = 0;
+  std::uint64_t evasion_lists = 0;
+  std::uint64_t evasion_listed = 0;
+  std::uint64_t horizon_mate_tests = 0;
+  std::uint64_t horizon_mates = 0;
+  std::uint64_t horizon_mate_nodes_on_mates = 0;  // of horizon_mate_nodes
+  double evasion_seconds = 0;
+  double horizon_mate_seconds = 0;
+  double fallback_seconds = 0;
+  /// The in-check stage (ScannerOptions::evasion_probe): seeds tried, the
+  /// nodes and wall time spent making them into actions, the legal actions
+  /// they made and searched (interior nodes), the interior nodes it resolved
+  /// by a cutoff, and the horizon mate tests it answered (no mate).
+  std::uint64_t probe_seeds = 0;
+  std::uint64_t probe_nodes = 0;
+  double probe_seconds = 0;
+  std::uint64_t probe_actions = 0;
+  std::uint64_t probe_cutoffs = 0;
+  std::uint64_t horizon_probe_hits = 0;
   std::uint64_t tt_hits = 0;
   std::uint64_t solved_hits = 0;
   std::uint64_t proofs_exported = 0;
