@@ -150,6 +150,22 @@ with branch origins, C23); N3's CPU wall times.
   search (rung 1) and Lazy SMP, end-to-end play with the network's random weights,
   the NNUE only if 6b passes (M8).
 - **Waiting on the user:**
+  - **M7 - the window under 50 boards is in the STOP band** (2026-10-03,
+    MEASUREMENTS). §15.6: "per phase, the window is on at k = 8 where the measured
+    median |E| is under the k = 8 ceiling, on at k = 4 where only the k = 4 ceiling
+    is met, and off where neither is ... killed outright if the phases where it is
+    on carry under half the compute". On t0database's real games the window is on
+    at k = 8 from 50 to 186 boards (1.91x, 2.18x, 4.28x against 1.5x). Under 50
+    boards it is 1.60x at k = 4 and 1.45x at k = 8 - inside ±10% - and the kill
+    clause turns on that phase: 100% of compute on-phase if it is on, 21.8% (killed)
+    if it is off, 69.8% with 10-board phases. Three questions: (1) which reading
+    applies - (a) the 50-board bucket's median: on at k = 4; (b) finer phases (e.g.
+    10 boards): off under 20 boards, not killed; (c) the early game off and the
+    window killed under the human-game distribution; (2) is the multiplier
+    m = m_cached^0.9 · m_dense^0.1 (the only reading that reproduces §15.6's
+    table); (3) whose phase distribution weights the kill clause - human games
+    spend 88% of their moves under 50 boards, and self-play cannot be measured yet.
+    The window code stays parked until then; nothing else waits on it.
   - **Q2** (rulebook) - *the question:* "How do initial timelines count when a
     variant starts with several (Two Timelines, Tactician, Strategos, Formations,
     Invasion, Battleground)? Does either side start as having "created" one? No
@@ -711,7 +727,7 @@ for game records.
 
 | ID | Status | Notes |
 |---|---|---|
-| M7 | measured, no verdict | The corpus's curve recorded (MEASUREMENTS); 2-3 games above 160 boards, none above 400 - game records requested (spec issue 26) |
+| M7 | measured - STOP | On real games (t0database, 716 games, max 186 boards): on at k = 8 from 50 to 186 boards; under 50 boards inside the ±10% band and the kill clause turns on it - waiting on the user; above 186 provisional (MEASUREMENTS) |
 | M8 | measured - STOP | 6b re-run (M12): root scan 76.7% / 31.4% / 24.7% / 2.4% by range (< 50 / 50-99 / 100-199 / 200+); rung 1 and quiet-leaf reach fail everywhere; stand-pat valid |
 | M12 | applied - STOP | The bounded optimisation pass (E5c) and the re-run at 5 threads, Lazy SMP: 50-199 boards fail -> STOP, redesign the verification layer |
 | M13 | applied | 8 cores per GPU: M9 judged on 2 expansion cores (passes, 1.87x), the scanner measured at 5 |
@@ -727,11 +743,12 @@ Closed by them: repetition (H39 - there is none) and castling's cross-board atta
 option (H40 - the per-board test is the rule, so `CastlingAttacks::AnyBoard` goes).
 
 Still parked:
-- the window code (C5, C7): until the |E| verdict (M5, M7);
+- the window code (C5, C7): until the |E| verdict (M5, M7) - measured on real
+  games 2026-10-03; under 50 boards it waits on the user;
 - the NNUE (F4): until 6b passes (M5, M8);
-- the M7 verdict's phases above about 130 boards: the corpus's real games end
-  there (spec §10.4.2 asks for real game records) - waiting on game records from
-  the user.
+- the M7 verdict's phases above 186 boards: no public game record reaches them
+  (t0database's maximum is 186); provisional until self-play or permission-based
+  sources reach 200-600 boards.
 
 ## Spec issues (wrong, ambiguous, contradictory, silent)
 
@@ -909,7 +926,10 @@ decision), and what is parked.
     in the 100-159 / 160-239 / 240-399 / 400+ buckets, at 8 / 16 / 24 timelines
     against §15.6's assumed 7-12, and only under the Q4 reading the engine does
     not use by default. §10.4.2 asks for real game records; requested from the
-    user.
+    user. *Answered to 186 boards (2026-10-03):* t0database's 716 games that replay
+    - 14 reach 100 boards, 2 reach 160, none passes 186; active timelines by bucket
+    1 / 2 / 4 / 2 where §15.6's table assumes 6-12. M7 is decided to 186 boards
+    except under 50 (the STOP band); provisional above.
 27. **The STOP band is the brief's, not the spec's.** "A §15.6 result within
     ±10% of its threshold" stops the run; the band's reading (relative to the
     threshold) is recorded in step 5. Not a spec edit.
@@ -1047,6 +1067,23 @@ decision), and what is parked.
     rests on the corpus's many small positions; above 50 boards - the design's
     regime - the root scan fails (preliminary). M7's window rule is per phase.
 62. **§15.6's rung-1 "measured evaluation rate"** does not exist without a GPU.
+63. **§15.6 does not write the window's multiplier formula.** "A 1.5× all-in
+    multiplier, computed with 90% of compute at the cached per-node cost ... and
+    10% at the dense cost": of three readings, only the log-weighted
+    m = m_cached^0.9 · m_dense^0.1 reproduces §15.6's own ceilings and multipliers
+    (MEASUREMENTS, M7). Only the early phase's verdict depends on the choice.
+64. **"Phase" is undefined for M7.** The rule and the kill clause are "per phase";
+    whether a phase is a board-count bucket (which?), and whether its median N or
+    each position's own multiplier stands for it, decides the early game: the
+    50-board bucket is on at k = 4 (1.60x), 10-board phases put under 20 boards
+    off, the per-position median is 1.45x.
+65. **The kill clause's weights are unspecified**: whose phase distribution (human
+    games spend 88% of their moves under 50 boards; self-play cannot be measured
+    yet) and which per-move cost (cached, dense or blended). The spec's "the late
+    game dominates" is false for the only real games there are.
+66. **(Tool, not spec)** `t5d-measure`'s game grouping joins distinct games that
+    share an opening of 10-21 positions (674 groups for 692 distinct real games);
+    harmless for the corpus, misleading for a game database. To fix in the tool.
 
 ## Proposed spec edits
 
@@ -1198,6 +1235,21 @@ says now, what it should say, why.
     61, 62).
 49. **§15.3 "Scanner nodes/s"**: write back (M4) after the quiet run.
 50. **Register H6**: a 5D piece-value table, pending a decision (issue 56).
+51. **§15.6 "The window"**: write the multiplier's formula -
+    m = m_cached^0.9 · m_dense^0.1 with T = 66N + 16 tokens and the N3 cost model
+    - once the user confirms it (issue 63).
+52. **§15.6 "The window"**: define a phase for the rule and for the kill clause,
+    per the user's answer (issue 64), and whose distribution weights the kill
+    clause (issue 65).
+53. **§15.6's window table and the register (M4 write-back)**: add the measured
+    rows - N 24 / 60 / 112 / 170, active T 1 / 2 / 4 / 2, W(8) 9 / 19 / 36 / 19,
+    median |E(8)| 0 / 0 / 2 / 2, k = 8 ceilings −1.1 / 12.4 / 31.0 / 87.6, k = 4
+    ceilings 2.9 / 20.4 / 44.0 / 95.6 - and qualify "the late game dominates" and
+    "at ~100 boards it cannot pay at k = 8" against them.
+54. **§10.4.2 step 1**: the |E| phase curve is measured on real games to 186
+    boards; above that, provisional.
+55. **The register's open item "Real game records for the |E| curve"**: records
+    now measured (t0database); the verdict is provisional only above 186 boards.
 
 ## Session log
 
