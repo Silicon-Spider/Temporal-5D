@@ -1603,30 +1603,61 @@ variants check every proof, of any distance, on larger samples.
 
 ```
 t5d-scan6b [--every K] [--leaves N] [--leaf-depth D] [--max-nodes N] [--budgets B,...]
-           [--threads T,...] [--eval-rates R,...] [--nps N] [--root-ms MS] [--root-wall]
+           [--scanner-threads T] [--threads T,...] [--eval-rates R,...] [--nps N]
+           [--root-ms MS] [--no-root-wall]
            [--synthetic-variants V,... --synthetic-games G] [--synthetic-classes N:T,...]
            [--jobs N] [--json FILE] [--summary FILE] [--per-position]
            [scanner options] [--moves-after-shift] [--rules ENCODING] [RECORD ...]
 ```
 
-Roots are the turn starts of the records given (replayed as parse mode does) and
-SYNTHETIC positions (labelled, never in a verdict); leaves are a few half-turns of
-random legal play below each root. A position whose side to move could capture a
-royal (its last action broke C4) or that has no legal action is counted, not
-scanned. Every position is scanned once, deterministically, to `--max-nodes`; since a
-smaller budget follows the same path, that one curve gives the depth any budget
-resolves (the deepest iteration completed, and not capped, within it; a proof or an
-exhausted tree resolves every depth). From it: (i) the horizon per budget; (ii) rung
-1 at threads x nodes/s / evaluation rate (§15.6's design rates, 9,600/s and 4,600/s, for
-1 thread and the physical cores minus one); (iii) the root scan at 50 ms x nodes/s
-(`--root-wall` also runs it by the clock); (iv) quiet-leaf reach at the rung-1 budget;
-(v) stand-pat validity. Each verdict is printed with the brief's STOP rules (a share
-within 45-55%, a median depth within ±10% of its threshold), with what the passes rest
-on (iterations to depth, exhausted trees, proofs) and the shares by board count. The
-nodes/s is measured over the scans (thread CPU time, less the leaf classification's)
-unless `--nps` fixes it, so that a quiet-machine figure can be applied to the same
-curves; larger positions run fewer nodes per second, which `--root-wall` shows. The
-records are input on the command line; the tool names nothing under the oracle harness.
+**Positions.**
+- Roots are the turn starts of the records given, replayed as parse mode does.
+- SYNTHETIC positions are labelled and never in a verdict.
+- Leaves are a few half-turns of random legal play below each root.
+- A position whose side to move could capture a royal (its last action broke C4), or
+  that has no legal action, is counted but not scanned.
+
+**The deterministic curve.** Every position is scanned once, deterministically, by one
+thread to `--max-nodes`. A smaller budget follows the same path, so that one curve
+gives the depth any budget resolves: the deepest iteration completed, and not capped,
+within it (a proof or an exhausted tree resolves every depth). Each job keeps its
+solved store across its positions, so the curves depend on `--jobs`: use 1 for a
+reproducible run.
+
+**The measures**, all read per board-count range - under 50, 50-99, 100-199 and 200+
+boards - and never pooled (register M12). Pooled lines are printed as information,
+labelled "not a verdict (M12)". The scanner's design thread budget, `--scanner-threads`,
+is 5 (M13).
+- (i) The horizon per budget.
+- (ii) Rung 1, at `--scanner-threads` x nodes/s per thread / evaluation rate. The
+  verdict uses the size-matched rate: §15.6's design rates, 9,600/s below 420 boards
+  and 4,600/s above. Other thread counts (`--threads`) and fixed rates are printed as
+  information.
+- (iii) The root scan. After the deterministic scans, each root is scanned alone for 50
+  ms of wall clock by `--scanner-threads` threads (Lazy SMP), with a fresh scanner and
+  store. The one-thread reading at 50 ms x nodes/s from the deterministic curve is
+  printed beside it, as information.
+- (iv) Quiet-leaf reach at the rung-1 budget.
+- (v) Stand-pat validity, by board count and by mandatory boards.
+
+**The verdicts.** Each is printed with the brief's STOP rules: a share within 45-55%,
+or a median depth within ±10% of its threshold. The output also says what the passes
+rest on: iterations to depth, exhausted trees or proofs. The summary applies M12's
+outcome rules to (iii) mechanically:
+- every range from 50 boards up passes: continue as designed;
+- 50-199 pass and 200+ fails: phase-dependent verification;
+- 50-199 fail: STOP.
+
+Rung 1 and quiet-leaf reach are judged by their own rules, range by range.
+
+**Speed.** The nodes/s per thread is measured over the deterministic scans (thread CPU
+time, less the leaf classification's) unless `--nps` fixes it, so that a quiet-machine
+figure can be applied to the same curves. The wall-clock phase reports its own nodes/s
+per thread and how busy the machine was. The profile of the exhaustive paths is
+printed by board count.
+
+The records are input on the command line; the tool names nothing under the oracle
+harness.
 
 ## Stage E5c: the bounded optimisation pass
 
