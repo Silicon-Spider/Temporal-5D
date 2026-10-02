@@ -1048,7 +1048,15 @@ TEST(scanner_lazy_smp_reaches_the_single_threads_depth) {
   // The same wall time: 5 threads (M13's scanner budget) resolve at least the
   // depth one thread does, summed over a sample (a proof or an exhausted tree
   // counts as the deepest depth). Timing on a shared machine is noisy: one
-  // retry.
+  // retry. A wall-clock claim about 5 threads holds only where they have 5
+  // cores of their own beside the main thread: on fewer (CI's runners have 2-4)
+  // the threads oversubscribe the machine and the claim is not being tested,
+  // so the test says so and checks nothing.
+  if (std::thread::hardware_concurrency() < 6) {
+    std::fprintf(stderr, "  skipped: %u hardware threads, fewer than the 6 this needs\n",
+                 std::thread::hardware_concurrency());
+    return;
+  }
   std::vector<GameState> sample = variant_positions(RuleOptions{}, 6, 14, 707);
   RuleOptions after_shift;
   after_shift.moves_after_shift = true;
