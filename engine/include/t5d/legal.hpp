@@ -34,8 +34,13 @@
 //     dropping an optional board from the multiverse (its moves leave the
 //     tier). A branching move adds a new timeline - outermost, one board, a
 //     copy of its destination: one scan per destination board decides every
-//     quiet branch onto it, the move's own effect on the present (T8, T10,
-//     T11, T12) taken from the state machine.
+//     quiet branch onto it. The branch's effect on the present (T8, T10,
+//     T11, T12) - which boards still count, whether the new timeline is
+//     active - comes from a model of one creation followed by moves within
+//     boards (PresentModel, src/legal.cpp), for the rulesets where creations
+//     alone change activity (Reactivation::Rewinds, play not activating,
+//     inactive history a destination); elsewhere branches leave the tier. The
+//     reference tests check the model through the state machine.
 //     Where the stripped multiverse keeps a capture, two more arguments:
 //     REFUTATION BY A PASSED BOARD - the state plus board p played as it is
 //     (a successor of the opponent's colour, its pieces unmoved): a capture
