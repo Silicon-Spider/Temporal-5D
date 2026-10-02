@@ -20,10 +20,12 @@ what it describes.
 - Everything else was written for this project, with the exceptions listed under
   "What here did not originate here" below: one part of one test-time driver, and
   the wiring files of a developer tool. Neither is part of the engine.
-- No game record is copied here. Third-party records - the `.5dpgn` files the
-  pinned projects ship - are read in place from the submodules; the golden files
-  hold the oracles' verdicts about them (numbers and a few fixed words), not their
-  text, and not the oracles' messages, which quote it.
+- No game record of the gate's corpus is copied here. Its third-party records -
+  the `.5dpgn` files the pinned projects ship - are read in place from the
+  submodules; the golden files hold the oracles' verdicts about them (numbers and a
+  few fixed words), not their text, and not the oracles' messages, which quote it.
+  One database of real games is copied, for measurement only, never for the gate
+  or a rule: `data/t0database/` (MIT; see "What here did not originate here").
 - Build tools fetched by `build --bootstrap` are third-party too, and are never
   committed: see "Fetched at build time" below.
 - The project's own code is licensed under the **GPL-3.0** (`LICENSE`): see "The
@@ -177,6 +179,7 @@ generate its keys. No code was copied into either.
 | Where | From | Licence | What |
 |---|---|---|---|
 | `oracles/drivers/ftxi/ftxi_driver.cpp`: `apply_action()`, `mainline_action_count()`, and in `main()` the set-up that parses the record and the main-line walk | ftxi/5dchess_engine, `tools/position_tools.cpp` (`apply_action()`, `mainline_action_count()`, `read_position()`), at the pinned commit | BSD-2-Clause; the copyright notice and licence text are kept at the top of the file | About sixty lines that read a record and replay it through the oracle's own API. Adapted: each failure carries a reason, and an action is tested with the oracle's own legality test before it is submitted. |
+| `data/t0database/Data.csv` and `data/t0database/LICENSE`, copied byte for byte | [MageOfficial/t0database](https://github.com/MageOfficial/t0database) at commit `d49da4054d02fec577fd3c53368993fe453c586e` (Data.csv: blob `35eb1010d066ebe111428c45ca29bc9fd0ae47d1`, sha256 `37fb7c1c...a4e`, 608,066 bytes) | MIT, "Copyright (c) 2022 MageOChicken"; the licence text is kept beside the data | 761 real games (998 rows, 237 empty), read by the engine's measurements only (the window's \|E\| curve, M7). Not an oracle, not a rules source, not in the gate's corpus. The repository's licence is taken to cover the games it publishes; its author has not been asked where the games came from. Downloaded with the user's approval (CHECKPOINT 3, 2026-10-03). Only these two files were taken: the repository's server code (which uses the Chess in 5D library, a pinned oracle) was not. |
 | `docs/rules/README.md`: the quotations in each rule and in its Sources list | public web pages (Wikipedia, the 5D chess fandom wiki and wiki.gg, Steam guides and discussions, TV Tropes, reviews and forums), the game's in-game Guide texts (read as text from the locally installed client, Steam build 7653463) and the 5dpgn specification | each source's own terms; quoted briefly, attributed, for citation | Short verbatim quotations that support each rule statement; the statements, ratings and open questions are written for this project. No rules engine, oracle output or client logic was used. |
 | `.claude/helpers/graft-hooks.cjs`, `.claude/helpers/graft-statusline.cjs`, `.claude/skills/graft/SKILL.md`, and the graft entries in `.claude/settings.json`, `.mcp.json`, `.ignore` and `.gitignore` | written by `graft init` of [@nanonets/graft](https://github.com/NanoNets/context-graph-engine) 0.18.0 | MIT | Wiring for a code-navigation tool used by coding agents. Developer tooling: no part of the engine or of the harness, and nothing depends on it. Changed here: in both helpers, the first place they look for graft (`BAKED`), which `graft init` writes as an absolute path into the installing user's profile, is found from node's own install directory instead. |
 

@@ -10,6 +10,19 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-03 - Real game records: t0database, pinned, for the |E| curve
+
+- `data/t0database/`: MageOfficial/t0database's `Data.csv` and `LICENSE` (MIT) at
+  commit `d49da405...`, copied byte for byte (the user approved the download at
+  CHECKPOINT 3): 761 real games, 2021-2025, up to about 186 boards. A README with
+  the pin and hashes, and `to_5dpgn.py`, which writes each game as a 5dpgn record
+  with the source's own header convention (`[Board "Standard - Turn Zero"]` for a
+  game written without headers) and touches no move. `.gitattributes` keeps their
+  bytes; `PROVENANCE.md` lists them (measurement only: not an oracle, not a rules
+  source, not the gate's corpus).
+- Spec: §15.6 "The window (|E| phase curve)" and register M7 (the data the rule
+  needs; spec issue 26); the measurement follows in its own entry.
+
 ### 2026-10-03 - Design documents: the CHECKPOINT 3 ruling, from upstream
 
 - `docs/design/` replaced with the upstream revision recording CHECKPOINT 3: §11.1
