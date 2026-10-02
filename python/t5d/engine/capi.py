@@ -19,7 +19,10 @@ Universal CRT (engine README, "Building and testing"), so it loads without MSYS2
 **Layouts.** Each ``Structure`` below is the C struct field for field, in order, so ctypes
 lays it out as the C compiler does (natural alignment, no packing); ``_check_layouts``
 asserts the sizes the headers fix (``t5d_move`` is 32 bytes, no padding). ``MOVE_DTYPE`` is
-the same record as a numpy structured dtype, for copying a move array in one step.
+the same record as a numpy structured dtype, for copying a move array in one step. At load,
+``Library`` checks every mirrored struct's size and every field's offset against the
+library's own (``t5d_layout``): a binding and a library of different stages refuse each
+other (``EngineNotFoundError``) rather than let the library write past a Python buffer.
 """
 
 from __future__ import annotations
@@ -43,7 +46,13 @@ ENV_VAR = "T5D_ENGINE_LIB"
 T5D_PARITY_INFER, T5D_PARITY_ODD, T5D_PARITY_EVEN = -1, 0, 1
 T5D_TO_MOVE_INFER, T5D_TO_MOVE_WHITE, T5D_TO_MOVE_BLACK = -1, 0, 1
 T5D_RULES_STANDARD = 0
-T5D_RULES_MOVES_AFTER_SHIFT = 1 << 3
+#: Q4's Guide-literal reading - no move once the present has shifted - a diagnostic. Bit 3
+#: meant the opposite, under the name ``T5D_RULES_MOVES_AFTER_SHIFT``, until engine stage E7
+#: made moves after the shift the default (rulebook R8, register D8).
+T5D_RULES_NO_MOVES_AFTER_SHIFT = 1 << 3
+#: Moves after the shift, until submission: the default since R8, so no bit (kept so that a
+#: caller that asked for them still gets them).
+T5D_RULES_MOVES_AFTER_SHIFT = 0
 T5D_FEATURES_ALL, T5D_FEATURES_SCOPE, T5D_FEATURES_NONE = 0, 1, 2
 T5D_PSEUDO_LEGAL, T5D_LEGAL = 0, 1
 T5D_NO_WINDOW = 2**31 - 1  # INT32_MAX
@@ -208,6 +217,10 @@ class CExpansion(ctypes.Structure):
         ("window", POINTER(c_int32)),
         ("e_boards", POINTER(c_int32)),
         ("src_extra", POINTER(c_int32)),
+        # appended at engine stage E7 (register D8): the action - who acts, and the submit action
+        ("acting_player", c_int32),  # 0 white, 1 black: whose action this is (= to_move)
+        ("submit_possible", c_int32),  # 1: the action's obligations are met (T5)
+        ("submit_legal", c_int32),  # 1: ... and no royal of the acting player's capturable (C4, R1)
     ]
 
 
@@ -223,6 +236,39 @@ def _check_layouts() -> None:
 
 _check_layouts()
 
+#: Every struct this module mirrors, by its C name (``t5d_layout``'s ``type``).
+MIRRORED_STRUCTS: dict[str, type[ctypes.Structure]] = {
+    "t5d_fingerprint": Fingerprint,
+    "t5d_info": StateInfo,
+    "t5d_move": MoveRecord,
+    "t5d_expand_options": ExpandOptions,
+    "t5d_game_summary": GameSummary,
+    "t5d_expansion": CExpansion,
+}
+
+
+def layout_mismatches(lib: Library) -> list[str]:
+    """Where the mirrored structs differ from the library's own (``t5d_layout``): each
+    struct's size and each field's offset - ``"t5d_expansion: size 288 here, 272 in the
+    library"``. Empty when they agree."""
+    out: list[str] = []
+    value = c_size_t()
+    for cname, struct in MIRRORED_STRUCTS.items():
+        ctype = cname.encode("ascii")
+        if lib.fn.t5d_layout(ctype, None, ctypes.byref(value)) != T5D_OK:
+            out.append(f"{cname}: unknown to the library")
+            continue
+        if value.value != ctypes.sizeof(struct):
+            out.append(f"{cname}: size {ctypes.sizeof(struct)} here, {value.value} in the library")
+        for name, _ in struct._fields_:
+            offset = getattr(struct, name).offset
+            if lib.fn.t5d_layout(ctype, name.encode("ascii"), ctypes.byref(value)) != T5D_OK:
+                out.append(f"{cname}.{name}: not in the library")
+            elif value.value != offset:
+                out.append(f"{cname}.{name}: offset {offset} here, {value.value} in the library")
+    return out
+
+
 # ---- the library ------------------------------------------------------------------------------
 
 _STATE = c_void_p  # t5d_state*
@@ -233,6 +279,7 @@ _ERR = POINTER(c_void_p)  # char** error (a library string, freed with t5d_free)
 _SIGNATURES: dict[str, tuple[object, list[object]]] = {
     "t5d_version": (c_char_p, []),
     "t5d_free": (None, [c_void_p]),
+    "t5d_layout": (c_int32, [c_char_p, c_char_p, POINTER(c_size_t)]),
     "t5d_state_new_standard": (c_int32, [POINTER(_STATE)]),
     "t5d_state_new_standard_two_timelines": (c_int32, [POINTER(_STATE)]),
     "t5d_state_new_from_fen": (
@@ -341,6 +388,12 @@ class Library:
         if missing:
             raise EngineNotFoundError(f"{path} is not the engine's C API (or is out of date): it lacks {', '.join(missing)}")
         self.version = self.fn.t5d_version().decode("ascii", "replace")
+        mismatches = layout_mismatches(self)
+        if mismatches:
+            raise EngineNotFoundError(
+                f"{path} (engine {self.version}) lays out its structs otherwise than this binding - "
+                f"rebuild the library or update t5d/engine/capi.py: {'; '.join(mismatches)}"
+            )
 
     def __repr__(self) -> str:
         return f"Library({str(self.path)!r}, version={self.version!r})"
