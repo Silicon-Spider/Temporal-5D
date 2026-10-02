@@ -1,18 +1,24 @@
 // The tactical scanner (see t5d/scanner.hpp): node-capped alpha-beta over
 // forcing actions, a material eval, proofs and estimates kept apart. Rule IDs
 // refer to the rulebook, docs/rules/README.md. Written from the design spec
-// (§11.1-§11.3) and the rulebook; alpha-beta, MVV-LVA, killers, history and
-// continuation history are the textbook techniques (Chess Programming Wiki),
-// written afresh - no engine's code was consulted.
+// (§11.1-§11.3) and the rulebook; alpha-beta, MVV-LVA, killers, history,
+// continuation history, Lazy SMP and the lockless transposition table (the
+// key XORed with the data) are the textbook techniques (Chess Programming
+// Wiki), written afresh - no engine's code was consulted.
 
 #include "t5d/scanner.hpp"
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <bit>
 #include <cstdint>
+#include <exception>
+#include <mutex>
+#include <shared_mutex>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -67,6 +73,52 @@ void MemorySolvedStore::clear() noexcept {
   entries_.clear();
 }
 
+// The shards: a power of two, chosen by the key's top bits (the low bits
+// pick a TT slot - any bits would do, the key is mixed).
+struct ConcurrentSolvedStore::Shards {
+  static constexpr std::size_t kCount = 64;
+  struct Shard {
+    mutable std::shared_mutex mutex;
+    MemorySolvedStore store;
+  };
+  std::array<Shard, kCount> shard;
+  Shard& of(const GameState& s) { return shard[static_cast<std::size_t>(s.zobrist() >> 58)]; }
+  const Shard& of(const GameState& s) const {
+    return shard[static_cast<std::size_t>(s.zobrist() >> 58)];
+  }
+};
+
+ConcurrentSolvedStore::ConcurrentSolvedStore() : shards_(std::make_unique<Shards>()) {}
+ConcurrentSolvedStore::~ConcurrentSolvedStore() = default;
+
+std::optional<Proof> ConcurrentSolvedStore::find(const GameState& position) const {
+  const Shards::Shard& s = shards_->of(position);
+  std::shared_lock<std::shared_mutex> lock(s.mutex);
+  return s.store.find(position);
+}
+
+void ConcurrentSolvedStore::put(const GameState& position, const Proof& proof) {
+  Shards::Shard& s = shards_->of(position);
+  std::unique_lock<std::shared_mutex> lock(s.mutex);
+  s.store.put(position, proof);  // a contradiction throws, the lock released
+}
+
+std::size_t ConcurrentSolvedStore::size() const {
+  std::size_t n = 0;
+  for (const Shards::Shard& s : shards_->shard) {
+    std::shared_lock<std::shared_mutex> lock(s.mutex);
+    n += s.store.size();
+  }
+  return n;
+}
+
+void ConcurrentSolvedStore::clear() {
+  for (Shards::Shard& s : shards_->shard) {
+    std::unique_lock<std::shared_mutex> lock(s.mutex);
+    s.store.clear();
+  }
+}
+
 // ---- the scanner -------------------------------------------------------------------------
 
 namespace {
@@ -94,6 +146,10 @@ std::uint32_t move_key(const Move& m) noexcept {
   return key == 0 ? 1u : key;
 }
 
+double seconds_since(std::chrono::steady_clock::time_point t0) {
+  return std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+}
+
 int score_of(const Proof& p, int ply) noexcept {
   switch (p.kind) {
     case Proof::Kind::Win: return kScanMate - (ply + p.distance);
@@ -114,28 +170,212 @@ int from_tt(int score, int ply) noexcept {
   return score;
 }
 
-}  // namespace
+// ---- what the threads of a scan share (Lazy SMP, H17) -------------------------------------
 
-struct Scanner::Impl {
-  explicit Impl(const ScannerOptions& o, SolvedStore* s) : opt(o), store(s != nullptr ? s : &own) {
+// One TT entry: an estimate and an ordering hint, never a proof (H19).
+struct TTEntry {
+  std::int32_t score = 0;
+  std::int16_t depth = -1;
+  Bound bound = Bound::Upper;
+  bool horizon = false;  // the subtree met the depth limit
+  bool capped = false;   // the subtree held a capped node: not fully resolved
+  std::uint32_t best = 0;
+};
+
+// The transposition table, keyed by GameState::zobrist() - the 5D key with
+// the ruleset ID (H18, §11.3's non-cancelling mix). Lockless: a slot holds
+// its entry packed in one word and, beside it, the key XORed with that word,
+// so a slot another thread is writing reads as a miss - never as another
+// position's entry. The best move's key, an ordering hint, sits in a third
+// word: a torn hint only reorders moves. A fixed replacement policy (always
+// replace); with one thread, a plain deterministic table (H15).
+class SharedTT {
+ public:
+  void resize(std::size_t entries) {
     std::size_t n = 1;
-    while (n < opt.tt_entries) n <<= 1;
-    tt.assign(n, TTEntry{});
-    tt_mask = n - 1;
+    while (n < entries) n <<= 1;
+    slots_ = std::make_unique<Slot[]>(n);
+    mask_ = n - 1;
+  }
+  void clear() {
+    for (std::size_t i = 0; i <= mask_; ++i) {
+      slots_[i].check.store(0, std::memory_order_relaxed);
+      slots_[i].data.store(0, std::memory_order_relaxed);
+      slots_[i].best.store(0, std::memory_order_relaxed);
+    }
+  }
+  bool probe(std::uint64_t key, TTEntry& out) const {
+    const Slot& s = slots_[static_cast<std::size_t>(key) & mask_];
+    const std::uint64_t data = s.data.load(std::memory_order_relaxed);
+    const std::uint64_t check = s.check.load(std::memory_order_relaxed);
+    if ((data & kValid) == 0 || (check ^ data) != key) return false;
+    out.score = static_cast<std::int32_t>(static_cast<std::uint32_t>(data & 0xFFFFFFFFu));
+    out.depth = static_cast<std::int16_t>(static_cast<std::uint16_t>((data >> 32) & 0xFFFFu));
+    out.bound = static_cast<Bound>((data >> 48) & 3u);
+    out.horizon = ((data >> 50) & 1u) != 0;
+    out.capped = ((data >> 51) & 1u) != 0;
+    out.best = s.best.load(std::memory_order_relaxed);
+    return true;
+  }
+  void save(std::uint64_t key, const TTEntry& e) {
+    std::uint64_t data = static_cast<std::uint32_t>(e.score);
+    data |= static_cast<std::uint64_t>(static_cast<std::uint16_t>(e.depth)) << 32;
+    data |= static_cast<std::uint64_t>(static_cast<std::uint8_t>(e.bound)) << 48;
+    if (e.horizon) data |= std::uint64_t{1} << 50;
+    if (e.capped) data |= std::uint64_t{1} << 51;
+    data |= kValid;
+    Slot& s = slots_[static_cast<std::size_t>(key) & mask_];
+    s.data.store(data, std::memory_order_relaxed);
+    s.check.store(key ^ data, std::memory_order_relaxed);
+    s.best.store(e.best, std::memory_order_relaxed);
+  }
+
+ private:
+  static constexpr std::uint64_t kValid = std::uint64_t{1} << 52;
+  struct Slot {
+    std::atomic<std::uint64_t> check{0};
+    std::atomic<std::uint64_t> data{0};
+    std::atomic<std::uint32_t> best{0};
+  };
+  std::unique_ptr<Slot[]> slots_;
+  std::size_t mask_ = 0;
+};
+
+// The state every thread of a scanner shares: the options, the solved store,
+// the TT; during a scan, its budget, clock, node count and stop signal.
+struct Shared {
+  Shared(const ScannerOptions& o, SolvedStore* s) : opt(o), store(s != nullptr ? s : &own) {
+    opt.threads = std::max(1, opt.threads);
+    tt.resize(opt.tt_entries);
+    lock_store = opt.threads > 1 && !store->concurrent();
+  }
+
+  ScannerOptions opt;
+  ConcurrentSolvedStore own;
+  SolvedStore* store;
+  bool lock_store = false;  // a store not safe for threads, shared by several
+  std::mutex store_mutex;
+  SharedTT tt;
+
+  // The scan in progress.
+  const ScanBudget* budget = nullptr;  // the caller's
+  std::chrono::steady_clock::time_point start;
+  std::size_t threads = 1;
+  std::atomic<std::uint64_t> nodes{0};  // flushed by the threads (more than one)
+  std::atomic<bool> stop{false};        // a budget spent, or the root decided
+
+  std::optional<Proof> find(const GameState& s) {
+    if (!lock_store) return store->find(s);
+    std::lock_guard<std::mutex> lock(store_mutex);
+    return store->find(s);
+  }
+  void put(const GameState& s, const Proof& p) {
+    if (!lock_store) {
+      store->put(s, p);
+      return;
+    }
+    std::lock_guard<std::mutex> lock(store_mutex);
+    store->put(s, p);
+  }
+};
+
+// What one thread's iterative deepening found.
+struct WorkerRun {
+  std::vector<IterationStats> iterations;
+  ScanStats stats;
+  int resolved_depth = 0;
+  int completed_depth = 0;
+  bool exhausted = false;
+  int score = 0;
+  std::vector<Move> best_action;
+};
+
+// Sums `x` into `into` (Lazy SMP's threads; seconds are set by the caller).
+void accumulate(ScanStats& into, const ScanStats& x) {
+  into.nodes += x.nodes;
+  into.positions += x.positions;
+  into.applies += x.applies;
+  into.scans += x.scans;
+  into.detector_calls += x.detector_calls;
+  into.detector_nodes += x.detector_nodes;
+  into.evasion_nodes += x.evasion_nodes;
+  into.fallback_nodes += x.fallback_nodes;
+  into.horizon_mate_nodes += x.horizon_mate_nodes;
+  into.stalemate_test_nodes += x.stalemate_test_nodes;
+  into.evasion_visits += x.evasion_visits;
+  into.evasion_fail_highs += x.evasion_fail_highs;
+  into.evasion_lists += x.evasion_lists;
+  into.evasion_listed += x.evasion_listed;
+  into.horizon_mate_tests += x.horizon_mate_tests;
+  into.horizon_mates += x.horizon_mates;
+  into.horizon_mate_nodes_on_mates += x.horizon_mate_nodes_on_mates;
+  into.probe_seeds += x.probe_seeds;
+  into.probe_nodes += x.probe_nodes;
+  into.probe_seconds += x.probe_seconds;
+  into.probe_actions += x.probe_actions;
+  into.probe_cutoffs += x.probe_cutoffs;
+  into.horizon_probe_hits += x.horizon_probe_hits;
+  into.shared_roots += x.shared_roots;
+  into.evasion_seconds += x.evasion_seconds;
+  into.horizon_mate_seconds += x.horizon_mate_seconds;
+  into.fallback_seconds += x.fallback_seconds;
+  into.tt_hits += x.tt_hits;
+  into.solved_hits += x.solved_hits;
+  into.proofs_exported += x.proofs_exported;
+  into.completion_fallbacks += x.completion_fallbacks;
+  into.capped_nodes += x.capped_nodes;
+  into.measurement_nodes += x.measurement_nodes;
+  into.measurement_seconds += x.measurement_seconds;
+  into.stopped_by_nodes = into.stopped_by_nodes || x.stopped_by_nodes;
+  into.stopped_by_time = into.stopped_by_time || x.stopped_by_time;
+  into.stopped_by_memory = into.stopped_by_memory || x.stopped_by_memory;
+}
+
+// A thread's nodes reach the shared count in batches of this many (so the
+// budget of a scan with several threads holds to within threads x this).
+constexpr std::uint64_t kFlushNodes = 256;
+
+// A copy of `s` that shares no timeline and no board with it: the same
+// position, rebuilt board by board. Threads that search copies of one state
+// share its timelines and boards by reference count, and contend on those
+// counts at every copy and every move; a helper thread searches from its own
+// copy instead. Where the state cannot be rebuilt from its boards alone
+// (activity decided by play - Q1's consecutive rule, Q3, Q6 - or a state the
+// constructor refuses), the result is `s` itself, shared. The boards'
+// origins (Timeline::origin) are left out: no rule reads them (and neither
+// same_position nor the key holds them).
+GameState isolated_copy(const GameState& s) {
+  try {
+    const Multiverse& mv = s.multiverse();
+    Multiverse copy(mv.board_size(), mv.even(), mv.ruleset());
+    copy.set_to_move(mv.to_move());
+    for (const TimelineRef& t : mv.timelines()) {  // ascending: each extends the range
+      NewTimeline n;
+      n.position = t->position();
+      n.first_half_turn = t->first_half_turn();
+      n.boards.reserve(static_cast<std::size_t>(t->length()));
+      for (const BoardRef& b : t->boards()) n.boards.push_back(BoardBuilder(*b).publish());
+      n.creator = t->creator();
+      n.creation_order = t->creation_order();
+      copy.add_timeline(std::move(n));
+    }
+    GameState out(std::move(copy), s.rules());
+    if (out.zobrist() == s.zobrist() && same_position(out, s)) return out;
+  } catch (const std::exception&) {
+    // Not rebuildable: share.
+  }
+  return s;
+}
+
+// One thread of a scan: its search, and the tables Lazy SMP keeps per
+// thread (§11.3) - killers, history, continuation history - which carry over
+// from scan to scan until Scanner::clear() (between games).
+struct Worker {
+  Worker(Shared& shared, int index) : sh(shared), opt(shared.opt), id(index) {
     history.assign(std::size_t{1} << 14, 0);
     conthist.assign(std::size_t{1} << 16, 0);
     lists.resize(2);  // complete()'s and branch_threat()'s: never reallocated under them
   }
-
-  struct TTEntry {
-    std::uint64_t key = 0;
-    std::int32_t score = 0;
-    std::int16_t depth = -1;
-    Bound bound = Bound::Upper;
-    bool horizon = false;  // the subtree met the depth limit
-    bool capped = false;   // the subtree held a capped node: not fully resolved
-    std::uint32_t best = 0;
-  };
 
   // One action a node may search: how to build it, and its ordering score.
   struct Candidate {
@@ -151,21 +391,18 @@ struct Scanner::Impl {
     Proof proof;
   };
 
-  ScannerOptions opt;
-  MemorySolvedStore own;
-  SolvedStore* store;
+  Shared& sh;
+  const ScannerOptions& opt;
+  int id = 0;  // 0: the main thread
 
-  std::vector<TTEntry> tt;
-  std::size_t tt_mask = 0;
   std::vector<std::array<std::uint32_t, 2>> killers;
   std::vector<std::int32_t> history;
   std::vector<std::int32_t> conthist;
 
   // The scan in progress.
-  const ScanBudget* budget = nullptr;  // the caller's, during a scan
-  ScanStats* stats = nullptr;
-  ScanStats scratch_stats;  // for the tool functions, outside a scan
-  std::chrono::steady_clock::time_point start;
+  ScanStats* stats = nullptr;  // this thread's, during a scan
+  ScanStats scratch_stats;     // for the tool functions, outside a scan
+  std::uint64_t flushed = 0;   // of stats->nodes, added to sh.nodes
   bool stopped = false;
   bool charging = true;  // false: classify_leaves' measurement (not charged)
   // The iteration in progress.
@@ -179,6 +416,25 @@ struct Scanner::Impl {
 
   ScanStats& st() { return stats != nullptr ? *stats : scratch_stats; }
 
+  // The scan's nodes so far: this thread's alone, or (several threads) the
+  // shared count and this thread's not yet flushed to it.
+  std::uint64_t used() const {
+    if (sh.threads == 1) return stats->nodes;
+    return sh.nodes.load(std::memory_order_relaxed) + (stats->nodes - flushed);
+  }
+  void flush(bool all = false) {
+    if (sh.threads == 1 || stats == nullptr) return;
+    const std::uint64_t mine = stats->nodes - flushed;
+    if (mine == 0 || (!all && mine < kFlushNodes)) return;
+    sh.nodes.fetch_add(mine, std::memory_order_relaxed);
+    flushed = stats->nodes;
+  }
+  // Stops this thread - and, a budget being spent, every thread.
+  void halt() {
+    stopped = true;
+    if (sh.threads > 1) sh.stop.store(true, std::memory_order_relaxed);
+  }
+
   bool spend(std::uint64_t n = 1) {
     if (!charging) {
       st().measurement_nodes += n;
@@ -186,16 +442,23 @@ struct Scanner::Impl {
     }
     if (stopped) return false;
     ScanStats& s = st();
-    if (stats != nullptr && s.nodes + n > budget->max_nodes) {
-      s.stopped_by_nodes = true;
-      stopped = true;
-      return false;
+    if (stats != nullptr) {
+      if (sh.threads > 1 && sh.stop.load(std::memory_order_relaxed)) {
+        stopped = true;  // another thread spent the budget, or decided the root
+        return false;
+      }
+      if (used() + n > sh.budget->max_nodes) {
+        s.stopped_by_nodes = true;
+        halt();
+        return false;
+      }
     }
     s.nodes += n;
-    if (stats != nullptr && budget->max_time && (s.nodes & 255u) < n &&
-        std::chrono::steady_clock::now() - start > *budget->max_time) {
+    flush();
+    if (stats != nullptr && sh.budget->max_time && (s.nodes & 255u) < n &&
+        std::chrono::steady_clock::now() - sh.start > *sh.budget->max_time) {
       s.stopped_by_time = true;
-      stopped = true;
+      halt();
       return false;
     }
     return true;
@@ -203,16 +466,18 @@ struct Scanner::Impl {
 
   std::uint64_t remaining() const {
     if (stats == nullptr || !charging) return std::numeric_limits<std::uint64_t>::max();
-    return budget->max_nodes > stats->nodes ? budget->max_nodes - stats->nodes : 0;
+    const std::uint64_t u = used();
+    return sh.budget->max_nodes > u ? sh.budget->max_nodes - u : 0;
   }
 
   SearchBudget detector_budget() const {
     SearchBudget b;
     b.max_nodes = remaining();
     b.max_bytes = opt.detector_max_bytes;
-    if (stats != nullptr && charging && budget->max_time) {
-      const auto used = std::chrono::steady_clock::now() - start;
-      const auto left = *budget->max_time - std::chrono::duration_cast<std::chrono::nanoseconds>(used);
+    if (stats != nullptr && charging && sh.budget->max_time) {
+      const auto used_time = std::chrono::steady_clock::now() - sh.start;
+      const auto left =
+          *sh.budget->max_time - std::chrono::duration_cast<std::chrono::nanoseconds>(used_time);
       b.max_time = left.count() > 0 ? left : std::chrono::nanoseconds(0);
     }
     return b;
@@ -230,17 +495,18 @@ struct Scanner::Impl {
       return true;
     }
     x.nodes += s.nodes;
+    flush();
     if (s.stopped_by_memory) {
       x.stopped_by_memory = true;
       return true;
     }
     if (s.stopped_by_budget && stats != nullptr) {
-      if (budget->max_time && std::chrono::steady_clock::now() - start > *budget->max_time) {
+      if (sh.budget->max_time && std::chrono::steady_clock::now() - sh.start > *sh.budget->max_time) {
         x.stopped_by_time = true;
       } else {
         x.stopped_by_nodes = true;
       }
-      stopped = true;
+      halt();
       return false;
     }
     return true;
@@ -428,40 +694,57 @@ struct Scanner::Impl {
     return best;
   }
 
+  // The completion rule's own moves from `t` (an action under way, `moves` so
+  // far): on each mandatory board left, choose()'s move; then C4 (R1). The
+  // action, submitted, if that is legal - built through the state machine
+  // and tested, so it is a legal action; nullopt if it is not, if a board
+  // cannot be played from itself, or if the scan stopped.
+  std::optional<BuiltAction> finish_by_rule(GameState t, std::vector<Move> moves) {
+    MoveList& board_moves = scratch_list(0);
+    while (!t.obligations_met()) {
+      if (!t.may_move()) return std::nullopt;
+      const std::vector<int> mandatory = t.mandatory_timelines();
+      board_moves.clear();
+      append_board_moves(t, mandatory.front(), board_moves);
+      if (board_moves.empty()) return std::nullopt;  // not playable from itself
+      const Move m = board_moves[choose(board_moves)];
+      if (!spend()) return std::nullopt;
+      applied(t, m);
+      moves.push_back(m);
+    }
+    if (!spend()) return std::nullopt;
+    ++st().scans;
+    if (!royals_safe(t)) return std::nullopt;  // C4, R1
+    t.submit(CheckRuling::none());             // legal: tested just above
+    return BuiltAction{std::move(moves), std::move(t)};
+  }
+
+  // The legal action `seed` and the completion rule's moves make, with no
+  // fallback (the in-check stage: a seed that is no evasion costs a few
+  // applied moves and one scan).
+  std::optional<BuiltAction> quick_action(const GameState& start_state, const Move& seed) {
+    ScanStats& x = st();
+    ++x.probe_seeds;
+    const std::uint64_t n0 = x.nodes;
+    const auto t0 = std::chrono::steady_clock::now();
+    std::optional<BuiltAction> a;
+    GameState t = start_state;
+    if (spend()) {
+      applied(t, seed);
+      a = finish_by_rule(std::move(t), std::vector<Move>{seed});
+    }
+    x.probe_nodes += x.nodes - n0;
+    x.probe_seconds += seconds_since(t0);
+    return a;
+  }
+
   std::optional<BuiltAction> complete(const GameState& start_state, const Move& seed) {
     GameState after_seed = start_state;
     if (!spend()) return std::nullopt;
     applied(after_seed, seed);
     if (opt.completion != Completion::Detector) {
-      GameState t = after_seed;
-      std::vector<Move> moves{seed};
-      bool ok = true;
-      MoveList& board_moves = scratch_list(0);
-      while (!t.obligations_met()) {
-        if (!t.may_move()) {
-          ok = false;
-          break;
-        }
-        const std::vector<int> mandatory = t.mandatory_timelines();
-        board_moves.clear();
-        append_board_moves(t, mandatory.front(), board_moves);
-        if (board_moves.empty()) {
-          ok = false;  // the board cannot be played from itself: E4 below
-          break;
-        }
-        const Move m = board_moves[choose(board_moves)];
-        if (!spend()) return std::nullopt;
-        applied(t, m);
-        moves.push_back(m);
-      }
-      if (ok) {
-        if (!spend()) return std::nullopt;
-        ++st().scans;
-        if (royals_safe(t)) {  // C4, R1
-          t.submit(CheckRuling::none());  // legal: tested just above
-          return BuiltAction{std::move(moves), std::move(t)};
-        }
-      }
+      if (std::optional<BuiltAction> a = finish_by_rule(after_seed, std::vector<Move>{seed})) return a;
+      if (stopped) return std::nullopt;
       ++st().completion_fallbacks;
     }
     // E4's first legal finish from the state after the seed, within the
@@ -469,8 +752,12 @@ struct Scanner::Impl {
     SearchBudget b = detector_budget();
     const bool local_cap = b.max_nodes > opt.fallback_max_nodes;
     if (local_cap) b.max_nodes = opt.fallback_max_nodes;
+    const auto t0 = std::chrono::steady_clock::now();
     const ActionList l = list_legal_actions(after_seed, 1, Detector::Hypercuboid, b);
-    if (charging) st().fallback_nodes += l.stats.nodes;
+    if (charging) {
+      st().fallback_nodes += l.stats.nodes;
+      st().fallback_seconds += seconds_since(t0);
+    }
     if (local_cap && l.stats.stopped_by_budget && !l.stats.stopped_by_memory &&
         l.stats.nodes >= opt.fallback_max_nodes) {
       // Its own cap, not the scan's budget: charge the nodes, drop the seed.
@@ -479,6 +766,7 @@ struct Scanner::Impl {
       x.detector_nodes += l.stats.nodes;
       if (charging) {
         x.nodes += l.stats.nodes;
+        flush();
       } else {
         x.measurement_nodes += l.stats.nodes;
       }
@@ -497,8 +785,21 @@ struct Scanner::Impl {
            (m.piece.royal() ? 0 : static_cast<std::int64_t>(value(m.piece)) / 16);
   }
 
+  // Lazy SMP's diversity (H17): a helper thread (id > 0) perturbs its order
+  // of the quiet moves by a hash of the move and its id - deterministic per
+  // thread, below a killer's weight and half the histories' range.
+  std::int64_t jitter(std::uint32_t key) const {
+    if (id == 0) return 0;
+    std::uint64_t h = static_cast<std::uint64_t>(key) ^
+                      (static_cast<std::uint64_t>(static_cast<unsigned>(id)) * 0x9E3779B97F4A7C15ull);
+    h ^= h >> 31;
+    h *= 0xBF58476D1CE4E5B9ull;
+    h ^= h >> 29;
+    return static_cast<std::int64_t>(h & 0x7FFFFu);
+  }
+
   std::int64_t quiet_order(std::uint32_t key, std::uint32_t prev, int ply) const {
-    std::int64_t o = 0;
+    std::int64_t o = jitter(key);
     if (static_cast<std::size_t>(ply) < killers.size()) {
       if (killers[static_cast<std::size_t>(ply)][0] == key) o += 1'000'000;
       else if (killers[static_cast<std::size_t>(ply)][1] == key) o += 900'000;
@@ -535,26 +836,22 @@ struct Scanner::Impl {
 
   // -- TT ------------------------------------------------------------------------------------------
 
-  TTEntry* probe(std::uint64_t key) {
-    TTEntry& e = tt[static_cast<std::size_t>(key) & tt_mask];
-    return e.key == key && e.depth >= 0 ? &e : nullptr;
-  }
   void save(std::uint64_t key, int depth, int score, Bound bound, std::uint32_t best, bool horizon,
             bool was_capped, int ply) {
-    TTEntry& e = tt[static_cast<std::size_t>(key) & tt_mask];  // always replace: deterministic
-    e.key = key;
+    TTEntry e;  // always replace: deterministic with one thread
     e.depth = static_cast<std::int16_t>(depth);
     e.score = to_tt(score, ply);
     e.bound = bound;
     e.best = best;
     e.horizon = horizon;
     e.capped = was_capped;
+    sh.tt.save(key, e);
   }
 
   // -- proofs ------------------------------------------------------------------------------------
 
   void export_proof(const GameState& s, const Proof& p) {
-    store->put(s, p);  // H19: at once, never only in the TT
+    sh.put(s, p);  // H19: at once, never only in the TT
     ++st().proofs_exported;
   }
 
@@ -609,31 +906,33 @@ struct Scanner::Impl {
     ++st().positions;
     max_board_moves = std::max(max_board_moves, board_moves);
     pv_at(ply).clear();
-    if (const std::optional<Proof> p = store->find(s)) {
+    if (const std::optional<Proof> p = sh.find(s)) {
       ++st().solved_hits;
       ++leaves.solved;
       return Node{score_of(*p, ply), *p};
     }
     const std::uint64_t key = s.zobrist();
     std::uint32_t tt_best = 0;
-    if (const TTEntry* e = probe(key)) {
-      tt_best = e->best;
-      if (ply > 0 && e->depth >= depth) {
-        const int sc = from_tt(e->score, ply);
-        if (e->bound == Bound::Exact || (e->bound == Bound::Lower && sc >= beta) ||
-            (e->bound == Bound::Upper && sc <= alpha)) {
+    TTEntry e;
+    if (sh.tt.probe(key, e)) {
+      tt_best = e.best;
+      if (ply > 0 && e.depth >= depth) {
+        const int sc = from_tt(e.score, ply);
+        if (e.bound == Bound::Exact || (e.bound == Bound::Lower && sc >= beta) ||
+            (e.bound == Bound::Upper && sc <= alpha)) {
           ++st().tt_hits;
-          if (e->horizon) horizon_met = true;
-          if (e->capped) capped = true;
-          return Node{sc, Proof{}};
+          if (e.horizon) horizon_met = true;
+          if (e.capped) capped = true;
+          return Node{sc, Proof{}};  // an estimate: the TT never holds a proof
         }
       }
     }
     if (!spend()) return Node{};
     ++st().scans;
-    const bool check = in_check(s);  // R1
-    return check ? evasions(s, depth, alpha, beta, ply, prev, board_moves, key, tt_best)
-                 : forcing(s, depth, alpha, beta, ply, prev, board_moves, key, tt_best);
+    // R1's check status (in_check), with one capture of a royal it rests on.
+    const std::optional<RoyalCapture> witness = check_witness(s);
+    return witness ? evasions(s, depth, alpha, beta, ply, prev, board_moves, key, tt_best, witness)
+                   : forcing(s, depth, alpha, beta, ply, prev, board_moves, key, tt_best);
   }
 
   // A child's result, for this node.
@@ -709,15 +1008,93 @@ struct Scanner::Impl {
     return Node{t.best, proof};
   }
 
-  // In check (R1): every legal action (H2).
+  // -- in check -------------------------------------------------------------------------------------
+
+  // The order in which the in-check stage tries its seeds (net-free, H4):
+  // the TT's move; a capture of the checking piece (`witness`, one capture of
+  // a royal that R1's check status found); a move of a royal; a move onto a
+  // square the check's line crosses (a block); any other capture (MVV-LVA);
+  // the rest by killers and histories.
+  std::vector<Candidate> evasion_seeds(const GameState& s, const std::optional<RoyalCapture>& witness,
+                                       std::uint32_t tt_best, std::uint32_t prev, int ply) {
+    MoveList moves;
+    generate_moves(s, moves);
+    std::vector<CapturePlace> places;
+    if (witness) places = capture_places(*witness);
+    std::vector<Candidate> out;
+    out.reserve(moves.size());
+    for (const Move& m : moves) {
+      Candidate c;
+      c.seed = m;
+      c.key = move_key(m);
+      // The board a move lands on, advanced by the pass R1's status reads.
+      const auto lands_on = [&](const CapturePlace& p) {
+        return m.to_timeline == p.timeline && m.to_half_turn + 1 == p.half_turn &&
+               m.to_square == p.square;
+      };
+      std::int64_t cls = 0;
+      if (m.capture() && !places.empty() && lands_on(places.front())) {
+        cls = 5;  // takes the checking piece
+      } else if (m.piece.royal()) {
+        cls = 4;
+      } else if (places.size() > 2 && std::any_of(places.begin() + 1, places.end() - 1, lands_on)) {
+        cls = 3;  // blocks the line
+      } else if (m.capture()) {
+        cls = 2;
+      } else {
+        cls = 1;
+      }
+      c.order = (cls << 44) + (m.capture() ? mvv_lva(m) : quiet_order(c.key, prev, ply));
+      if (c.key == tt_best) c.order += std::int64_t{1} << 50;
+      out.push_back(c);
+    }
+    std::stable_sort(out.begin(), out.end(),
+                     [](const Candidate& a, const Candidate& b) { return a.order > b.order; });
+    return out;
+  }
+
+  // In check (R1): every legal action (H2), in two stages.
+  //  1. Up to evasion_probe seeds, in evasion_seeds' order, each made into a
+  //     legal action by the completion rule (quick_action: the state machine
+  //     and C4's test - a seed whose completion leaves a royal capturable is
+  //     passed over), each searched as soon as it is built. A cutoff there
+  //     ends the node: a legal action that scores at least beta is a lower
+  //     bound whatever the other actions are, so the node is resolved and
+  //     needs no enumeration (and an action leading to a proven loss of the
+  //     opponent's is a Win proof, ∃).
+  //  2. No cutoff: E4's enumeration, exhaustive or capped, as before; the
+  //     successors not searched in stage 1 are searched. A Loss proof needs
+  //     the enumeration exhaustive and every child - of both stages - a
+  //     proven win of the opponent's (∀).
+  // At the horizon (depth 0) the question is only "is this a mate?": one
+  // legal action from stage 1's seeds answers no (an estimate leaf); only if
+  // none of them completes legally does E4's exhaustive detector decide.
   Node evasions(const GameState& s, int depth, int alpha, int beta, int ply, std::uint32_t prev,
-                int board_moves, std::uint64_t key, std::uint32_t tt_best) {
+                int board_moves, std::uint64_t key, std::uint32_t tt_best,
+                const std::optional<RoyalCapture>& witness) {
+    std::vector<Candidate> seeds;
+    if (opt.evasion_probe > 0) seeds = evasion_seeds(s, witness, tt_best, prev, ply);
+    const std::size_t probe = std::min(seeds.size(), opt.evasion_probe);
     if (depth == 0) {
       horizon_met = true;
+      ++st().horizon_mate_tests;
+      for (std::size_t i = 0; i < probe; ++i) {
+        const std::optional<BuiltAction> a = quick_action(s, seeds[i].seed);
+        if (stopped) return Node{};
+        if (a) {
+          ++st().horizon_probe_hits;  // a legal action: no mate (C5)
+          ++leaves.horizon_in_check;
+          return Node{evaluate(s), Proof{}};
+        }
+      }
+      const auto t0 = std::chrono::steady_clock::now();
       const MateResult r = detect_mate(s, Detector::Hypercuboid, detector_budget());
       st().horizon_mate_nodes += r.stats.nodes;
+      st().horizon_mate_seconds += seconds_since(t0);
       if (!account(r.stats)) return Node{};
       if (r.verdict == Outcome::Checkmate) {
+        ++st().horizon_mates;
+        st().horizon_mate_nodes_on_mates += r.stats.nodes;
         ++leaves.terminal;
         const Proof p = Proof::loss(0);
         export_proof(s, p);
@@ -727,12 +1104,50 @@ struct Scanner::Impl {
       ++leaves.horizon_in_check;
       return Node{evaluate(s), Proof{}};
     }
+    ++st().evasion_visits;
+    const int alpha_orig = alpha;
+    Tally t;
+    // The successors searched so far, one child each (two actions may reach
+    // one state).
+    std::vector<GameState> searched;
+    const auto seen = [&](const GameState& r) {
+      const std::uint64_t k = r.zobrist();
+      for (const GameState& x : searched) {
+        if (x.zobrist() == k && same_position(x, r)) return true;
+      }
+      return false;
+    };
+    // Stage 1.
+    for (std::size_t i = 0; i < probe; ++i) {
+      const std::optional<BuiltAction> a = quick_action(s, seeds[i].seed);
+      if (stopped) return Node{};
+      if (!a || seen(a->successor)) continue;
+      ++st().probe_actions;
+      searched.push_back(a->successor);
+      const std::uint32_t k = move_key(representative(a->moves));
+      if (!child(a->successor, a->moves, k, depth, alpha, beta, ply, board_moves, t)) {
+        if (stopped) return Node{};
+        ++st().probe_cutoffs;
+        ++st().evasion_fail_highs;
+        return finish(s, depth, alpha_orig, beta, ply, prev, key, t, false, false);
+      }
+    }
+    // Stage 2.
     const std::size_t cap = opt.evasion_cap;
+    const auto t0 = std::chrono::steady_clock::now();
     const ActionList list = list_legal_actions(s, cap + 1, Detector::Hypercuboid, detector_budget());
     st().evasion_nodes += list.stats.nodes;
+    ++st().evasion_lists;
+    st().evasion_listed += list.actions.size();
+    st().evasion_seconds += seconds_since(t0);
     if (!account(list.stats)) return Node{};
     const bool exhaustive = list.stats.exhaustive && !list.reached_cap;
     if (exhaustive && list.actions.empty()) {
+      if (!searched.empty()) {
+        // Stage 1 built a legal action the exhaustive enumeration does not
+        // have: a contradiction in the rules code.
+        throw std::logic_error("scanner: E4 lists no legal action where the completion built one");
+      }
       ++leaves.terminal;  // checkmate (C5, R1): E4's exhaustive verdict
       const Proof p = Proof::loss(0);
       export_proof(s, p);
@@ -745,29 +1160,15 @@ struct Scanner::Impl {
       ++st().capped_nodes;
     }
     std::vector<Candidate> cands;
-    {
-      std::vector<std::uint64_t> keys;
-      std::vector<const GameState*> seen;
-      for (const LegalAction& a : list.actions) {
-        // One child per distinct successor (two actions may reach one state).
-        bool dup = false;
-        const std::uint64_t k = a.result.zobrist();
-        for (std::size_t i = 0; i < keys.size(); ++i) {
-          if (keys[i] == k && same_position(*seen[i], a.result)) {
-            dup = true;
-            break;
-          }
-        }
-        if (dup) continue;
-        keys.push_back(k);
-        seen.push_back(&a.result);
-        Candidate c;
-        c.action = BuiltAction{a.moves, a.result};
-        const Move& rep = representative(a.moves);
-        c.seed = rep;
-        c.key = move_key(rep);
-        cands.push_back(std::move(c));
-      }
+    for (const LegalAction& a : list.actions) {
+      if (seen(a.result)) continue;
+      searched.push_back(a.result);
+      Candidate c;
+      c.action = BuiltAction{a.moves, a.result};
+      const Move& rep = representative(a.moves);
+      c.seed = rep;
+      c.key = move_key(rep);
+      cands.push_back(std::move(c));
     }
     for (Candidate& c : cands) {
       c.order = c.seed.capture() ? (std::int64_t{1} << 40) + mvv_lva(c.seed)
@@ -776,9 +1177,7 @@ struct Scanner::Impl {
     }
     std::stable_sort(cands.begin(), cands.end(),
                      [](const Candidate& a, const Candidate& b) { return a.order > b.order; });
-    const int alpha_orig = alpha;
-    Tally t;
-    t.capped = !exhaustive;
+    t.capped = t.capped || !exhaustive;
     bool all = true;
     for (Candidate& c : cands) {
       if (!child(c.action->successor, c.action->moves, c.key, depth, alpha, beta, ply, board_moves,
@@ -794,6 +1193,7 @@ struct Scanner::Impl {
       t.best = evaluate(s);
       ++leaves.horizon_in_check;
     }
+    if (t.best >= beta) ++st().evasion_fail_highs;
     return finish(s, depth, alpha_orig, beta, ply, prev, key, t, all, exhaustive);
   }
 
@@ -909,14 +1309,35 @@ struct Scanner::Impl {
 
   // -- iterative deepening ------------------------------------------------------------------------
 
-  ScanResult scan(const GameState& root, const ScanBudget& b) {
-    ScanResult result;
-    budget = &b;
+  // Lazy SMP's staggered depths: the main thread (id 0) searches every depth;
+  // helper i searches depth d only in alternate blocks of b = 1 + (i - 1) / 2
+  // depths, shifted by i - so that while the main thread searches d, helpers
+  // are already at d + 1 or d + 2, filling the TT ahead of it.
+  bool skips(int depth) const {
+    if (id == 0) return false;
+    const int block = 1 + (id - 1) / 2;
+    return ((depth + id) / block) % 2 != 0;
+  }
+
+  // This thread's iterative deepening from `root`, into `run`. Any thread
+  // that decides the root - a proof, or a tree exhausted - stops the others.
+  void iterate(const GameState& shared_root, WorkerRun& run) {
+    // A helper searches its own copy of the root (see isolated_copy).
+    std::optional<GameState> own_root;
+    if (id != 0) own_root.emplace(isolated_copy(shared_root));
+    const GameState& root = own_root.has_value() ? *own_root : shared_root;
+    WorkerRun& result = run;
     stats = &result.stats;
-    start = std::chrono::steady_clock::now();
+    if (own_root.has_value() && !shared_root.multiverse().empty() &&
+        own_root->multiverse().timelines().front() == shared_root.multiverse().timelines().front()) {
+      ++result.stats.shared_roots;  // not rebuildable from its boards: shared
+    }
+    flushed = 0;
     stopped = false;
     charging = true;
     for (int d = 1; d <= opt.max_depth; ++d) {
+      if (sh.threads > 1 && sh.stop.load(std::memory_order_relaxed)) break;
+      if (skips(d)) continue;
       capped = false;
       horizon_met = false;
       max_board_moves = 0;
@@ -931,11 +1352,11 @@ struct Scanner::Impl {
       it.exhausted = !stopped && !horizon_met;
       it.score = r.score;
       it.proof = stopped ? Proof{} : r.proof;
-      it.nodes = result.stats.nodes;
+      it.nodes = used();
       it.positions = result.stats.positions;
       it.max_board_moves = max_board_moves;
       it.leaves = leaves;
-      it.seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+      it.seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - sh.start).count();
       if (!stopped && !pv.empty()) {
         int moves = 0;
         for (const std::vector<Move>& a : pv.front()) moves += static_cast<int>(a.size());
@@ -948,21 +1369,112 @@ struct Scanner::Impl {
       if (!capped) result.resolved_depth = d;
       result.score = r.score;
       result.best_action = root_best;
-      if (r.proof.proven()) break;
-      if (it.exhausted) {
-        result.exhausted = true;
+      if (r.proof.proven() || it.exhausted) {
+        result.exhausted = !r.proof.proven();  // a proof ends the scan first
+        if (sh.threads > 1) sh.stop.store(true, std::memory_order_relaxed);  // decided
         break;
       }
     }
+    flush(true);
+    stats = nullptr;
+    stopped = false;
+  }
+
+  // Empties this thread's move-ordering tables (between games, §11.3).
+  void clear_tables() {
+    killers.clear();
+    std::fill(history.begin(), history.end(), 0);
+    std::fill(conthist.begin(), conthist.end(), 0);
+  }
+};
+
+}  // namespace
+
+// ---- the scanner: its threads -----------------------------------------------------------------
+
+struct Scanner::Impl {
+  Impl(const ScannerOptions& o, SolvedStore* s) : shared(o, s) {
+    for (int i = 0; i < shared.opt.threads; ++i) workers.push_back(std::make_unique<Worker>(shared, i));
+  }
+
+  Shared shared;
+  std::vector<std::unique_ptr<Worker>> workers;
+
+  Worker& lead() { return *workers.front(); }
+
+  ScanResult scan(const GameState& root, const ScanBudget& b) {
+    Shared& sh = shared;
+    sh.budget = &b;
+    sh.start = std::chrono::steady_clock::now();
+    sh.threads = workers.size();
+    sh.nodes.store(0, std::memory_order_relaxed);
+    sh.stop.store(false, std::memory_order_relaxed);
+    std::vector<WorkerRun> runs(workers.size());
+    if (workers.size() == 1) {
+      workers.front()->iterate(root, runs.front());  // the deterministic mode (H15)
+    } else {
+      // Lazy SMP (H17): every thread searches the same root; they share the
+      // TT and the solved store, and nothing else.
+      std::vector<std::exception_ptr> errors(workers.size());
+      const auto run = [&](std::size_t i) {
+        try {
+          workers[i]->iterate(root, runs[i]);
+        } catch (...) {
+          errors[i] = std::current_exception();
+          sh.stop.store(true, std::memory_order_relaxed);
+        }
+      };
+      std::vector<std::thread> pool;
+      pool.reserve(workers.size() - 1);
+      for (std::size_t i = 1; i < workers.size(); ++i) pool.emplace_back(run, i);
+      run(0);
+      for (std::thread& t : pool) t.join();
+      for (const std::exception_ptr& e : errors) {
+        if (e) std::rethrow_exception(e);
+      }
+    }
+    ScanResult result;
+    result.threads = static_cast<int>(workers.size());
+    // The result: the deepest iteration any thread completed (the main thread
+    // on a tie); every thread's work summed.
+    std::size_t best = 0;
+    for (std::size_t i = 0; i < runs.size(); ++i) {
+      const WorkerRun& r = runs[i];
+      if (i == 0) {
+        result.stats = r.stats;
+      } else {
+        accumulate(result.stats, r.stats);
+      }
+      result.resolved_depth = std::max(result.resolved_depth, r.resolved_depth);
+      result.exhausted = result.exhausted || r.exhausted;
+      if (r.completed_depth > runs[best].completed_depth) best = i;
+    }
+    result.completed_depth = runs[best].completed_depth;
+    result.score = runs[best].score;
+    result.best_action = runs[best].best_action;
     // A proof found by an iteration the budget then stopped is still a proof
     // (its own subtree was complete): the store has it.
-    if (const std::optional<Proof> p = store->find(root)) result.proof = *p;
+    if (const std::optional<Proof> p = sh.find(root)) result.proof = *p;
+    // The threads' root proofs agree (the store refuses two kinds for one
+    // position, so a disagreement here is a contradiction in the code).
+    for (const WorkerRun& r : runs) {
+      for (const IterationStats& it : r.iterations) {
+        if (it.proof.proven() && (!result.proof.proven() || it.proof.kind != result.proof.kind)) {
+          throw std::logic_error("scanner: the threads' proofs of the root disagree (" +
+                                 to_string(it.proof) + ", " + to_string(result.proof) + ")");
+        }
+      }
+    }
+    result.iterations = std::move(runs.front().iterations);
     result.stats.seconds =
-        std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
-    stats = nullptr;
-    budget = nullptr;
-    stopped = false;
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - sh.start).count();
+    sh.budget = nullptr;
     return result;
+  }
+
+  void clear() {
+    shared.tt.clear();
+    for (const std::unique_ptr<Worker>& w : workers) w->clear_tables();
   }
 };
 
@@ -974,24 +1486,19 @@ ScanResult Scanner::scan(const GameState& root, const ScanBudget& budget) {
   return impl_->scan(root, budget);
 }
 
-void Scanner::clear() {
-  std::fill(impl_->tt.begin(), impl_->tt.end(), Impl::TTEntry{});
-  impl_->killers.clear();
-  std::fill(impl_->history.begin(), impl_->history.end(), 0);
-  std::fill(impl_->conthist.begin(), impl_->conthist.end(), 0);
-}
+void Scanner::clear() { impl_->clear(); }
 
-const ScannerOptions& Scanner::options() const noexcept { return impl_->opt; }
-SolvedStore& Scanner::store() noexcept { return *impl_->store; }
+const ScannerOptions& Scanner::options() const noexcept { return impl_->shared.opt; }
+SolvedStore& Scanner::store() noexcept { return *impl_->shared.store; }
 
-int Scanner::evaluate(const GameState& state) const { return impl_->evaluate(state); }
+int Scanner::evaluate(const GameState& state) const { return impl_->workers.front()->evaluate(state); }
 
 MoveList Scanner::forcing_moves(const GameState& turn_start) {
   MoveList moves;
   generate_moves(turn_start, moves);
   MoveList out;
   for (const Move& m : moves) {
-    if (impl_->forcing_class(turn_start, m) != 0) out.push_back(m);
+    if (impl_->lead().forcing_class(turn_start, m) != 0) out.push_back(m);
   }
   return out;
 }
@@ -1000,17 +1507,17 @@ bool Scanner::has_forcing_move(const GameState& turn_start) {
   MoveList moves;
   generate_moves(turn_start, moves);
   for (const Move& m : moves) {
-    if (impl_->forcing_class(turn_start, m) != 0) return true;
+    if (impl_->lead().forcing_class(turn_start, m) != 0) return true;
   }
   return false;
 }
 
 bool Scanner::checks(const GameState& turn_start, const Move& move) {
-  return impl_->checks(turn_start, move);
+  return impl_->lead().checks(turn_start, move);
 }
 
 std::optional<BuiltAction> Scanner::complete(const GameState& turn_start, const Move& seed) {
-  return impl_->complete(turn_start, seed);
+  return impl_->lead().complete(turn_start, seed);
 }
 
 // ---- stand-pat validity ------------------------------------------------------------------------
@@ -1019,7 +1526,9 @@ StandPatVerdict stand_pat_validity(const GameState& q, const ScannerOptions& opt
                                    const StandPatCheck& check) {
   StandPatVerdict v;
   v.mandatory_boards = q.mandatory_count();
-  Scanner probe(options);
+  ScannerOptions one = options;
+  one.threads = 1;  // the check is deterministic (H15)
+  Scanner probe(one);
   if (in_check(q) || probe.has_forcing_move(q)) return v;  // NotQuiet
   v.eval = probe.evaluate(q);
   const std::size_t most = static_cast<std::size_t>(std::max(check.max_actions, 1));
@@ -1055,7 +1564,7 @@ StandPatVerdict stand_pat_validity(const GameState& q, const ScannerOptions& opt
       add(a.result);
     }
   }
-  ScannerOptions reply = options;
+  ScannerOptions reply = one;
   reply.max_depth = check.reply_depth;
   reply.classify_leaves = false;
   for (const GameState& s : successors) {

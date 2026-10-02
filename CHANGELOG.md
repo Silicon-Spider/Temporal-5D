@@ -10,6 +10,29 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-03 - Engine E5c: M12's optimisation pass, Lazy SMP, 6b per board-count range
+
+- `engine/` (merged from its worktree branch; M12, M13, H17, H19): the in-check
+  stage - M12's one bounded pass on the two paths where 6b's first run spent 85% of
+  its nodes. In check, up to 64 seeds in evasion order (the TT move, a capture of
+  the checker, a royal move, a block, other captures, the rest) are made into legal
+  actions and searched as each is built: a cutoff resolves the node, otherwise E4's
+  enumeration runs as before; at the horizon one legal action answers "no mate",
+  E4's detector deciding only failing that. Proofs as before (H2, H37);
+  `evasion_probe = 0` reproduces E5b node for node. The two paths fell from 64-80%
+  of the nodes below 200 boards to 45-51%, and from 50% to 16% at 200+; the
+  completion fallbacks now lead at 100+ boards. Lazy SMP (H17) behind
+  `ScannerOptions::threads`: a lockless shared TT (estimates only), a sharded
+  concurrent solved store (proofs exported at once, contradictions refused, H19),
+  per-thread histories, staggered depths and perturbed move orders; one thread is
+  the deterministic mode (H15).
+- `t5d-scan6b`: the scanner at M13's 5 threads - the 50 ms root scan by the wall
+  clock, rung 1's budget - every measure per board-count range with M12's outcome
+  rules applied; pooled lines labelled "not a verdict (M12)".
+- Tests: 383 (5 new by default; 2 new long tests - no false proof with 2-8 threads).
+- Spec: §11.1, §11.3, §15.6; H2, H15, H17, H19, H37, M8, M12, M13. The re-run of
+  6b on a quiet machine follows.
+
 ### 2026-10-02 - Build log: public sources of real game records, proposed
 
 - `docs/BUILD_LOG.md`: the game-record sources found (CHECKPOINT 2, item 6), for the
