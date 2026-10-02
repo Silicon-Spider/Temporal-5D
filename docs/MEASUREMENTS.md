@@ -82,6 +82,31 @@ were 3.64x (live set) and 14x (cached vs dense) at 240 boards, 8 timelines. The
 quiet-machine re-run (commands in the build log) records wall and kernel time
 with load samples per job.
 
+### Engine E4 - the gate's full mode on the corpus (2026-10-02)
+
+dev, g++ 16.2 -O2, `t5d-gate --cap 1000` (default: hypercuboid-then-naive
+portfolio, naive cross-check), one process at a time, 120 s limit per record,
+default rules (Q4 per the Guide). All 41 corpus records: **8.3 s in total**, no
+time-out, no error. Slowest: cwmtt/manyChecks 4.11 s for 53 positions (slowest
+position 0.73 s; it took over 25 minutes before the fix round), notation/aivsai
+1.24 s, exiledKings 0.45 s, ctp2 0.43 s; every other record under 0.3 s. Peak
+working set at most 50 MB. With `--moves-after-shift` (Q4's other reading):
+cwmtt/100_timelines 5.7 s (132 MB), ftxi/futures 0.14 s, cwmtt/niceAndrey 19.9 s
+for 122 positions (48 MB).
+
+The expansion's legal-moves filter (`ExpandOptions::legal_moves`; synthetic
+random-play positions, 4 games x 5 positions per class, machine loaded):
+
+| Class (N, T) | expand-scope median | + legal, median | + legal, mean | + legal, worst | moves kept |
+|---|---|---|---|---|---|
+| 100, 6 | 0.012 ms | 11 ms | 19 ms | 94 ms | 56% |
+| 160, 7 | 0.019 ms | 50 ms | 53 ms | 149 ms | 67% |
+| 240, 8 | 0.028 ms | 157 ms | 175 ms | 0.8 s | 29% |
+| 400, 10 | 0.036 ms | 218 ms | 15.7 s | 247 s | 27% |
+| 600, 12 | 0.056 ms | 0.8 ms | 36.3 s | 522 s | 7% |
+
+Not an M9 figure: M9 measures the expansion without this filter (spec issue 46).
+
 ## §15.6 verdicts
 
 ### Movegen throughput (M9) - not yet measured

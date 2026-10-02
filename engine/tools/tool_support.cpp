@@ -15,19 +15,7 @@
 
 namespace t5d::tools {
 
-namespace {
-
-// PgnReplay::set_check_ruling exists from stage E4 on: call it where it does.
-template <class Replay>
-auto set_no_ruling(Replay& replay, int) -> decltype(replay.set_check_ruling(CheckRuling{}), void()) {
-  replay.set_check_ruling(CheckRuling{});
-}
-template <class Replay>
-void set_no_ruling(Replay&, long) {}
-
-}  // namespace
-
-void parse_mode(PgnReplay& replay) { set_no_ruling(replay, 0); }
+void parse_mode(PgnReplay& replay) { replay.set_check_ruling(CheckRuling::none()); }
 
 std::string read_file(const std::string& path) {
   std::FILE* f = std::fopen(path.c_str(), "rb");

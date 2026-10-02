@@ -16,6 +16,7 @@
 #include <utility>
 #include <vector>
 
+#include "t5d/check.hpp"
 #include "t5d/error.hpp"
 #include "t5d/fen.hpp"
 #include "t5d/movegen.hpp"
@@ -1345,8 +1346,9 @@ Move PgnReplay::resolve(const GameState& state, const PgnMove& w) const {
                          std::to_string(fits.size()) + " (S8): " + move_list(fits, even)
                    : "ambiguous: it fits " + std::to_string(fits.size()) +
                          " pseudo-legal moves - " + move_list(fits, even) +
-                         " - and the engine does not guess (a pin may settle it, and check is "
-                         "the pending ruling's: \"Omission\")");
+                         " - and the engine does not guess (\"Omission\" lets a writer leave out "
+                         "a piece a pin rules out, but legality is judged per action, at "
+                         "submission - C4 - not per move)");
   }
   const Move& m = fits.front();
   if (w.jump == PgnMove::Jump::Branching && !m.branching()) {
@@ -1444,7 +1446,8 @@ void PgnReplay::play_next() {
       throw RecordError(e.fault(), where + ": " + e.what());
     }
   }
-  if (s.submission_status() == SubmitStatus::ObligationsUnmet) {
+  const SubmitStatus status = s.submission_status(ruling_);
+  if (status == SubmitStatus::ObligationsUnmet) {
     std::string boards;
     for (const int p : s.mandatory_timelines()) {
       if (!boards.empty()) boards += ", ";
@@ -1454,7 +1457,14 @@ void PgnReplay::play_next() {
           name + " ends with the present still on " + colour_name(s.to_move()) +
               "'s colour (T5): it does not move on " + boards);
   }
-  s.submit();
+  if (status == SubmitStatus::Unsafe) {
+    const std::optional<RoyalCapture> c = submission_witness(s);
+    fault(RecordFault::CannotSubmit,
+          name + " leaves a royal piece of " + colour_name(s.to_move()) +
+              "'s capturable, so it cannot be submitted (C4, R1)" +
+              (c ? ": " + describe(*c, s.multiverse().even()) : std::string()));
+  }
+  s.submit(CheckRuling::none());  // tested above
   state_ = std::move(s);
   ++played_;
 }

@@ -1,9 +1,12 @@
-// The gate adapter's protocol in parse mode (t5d/gate.hpp): the exact lines
-// t5d-gate prints. The expected output is written here by hand from the rules
-// (T2: one new board per move within a board, with the opponent to move) and
-// the notation's 5DFEN ("5DFEN and custom variants", "5DFEN Strictness") -
-// never recorded from a run.
+// The gate adapter's protocol, parse mode and full mode (t5d/gate.hpp): the
+// exact lines t5d-gate prints. The expected output is written here by hand
+// from the rules (T2: one new board per move within a board, with the
+// opponent to move; C4, C5, R1 for full mode's verdicts) and the notation's
+// 5DFEN ("5DFEN and custom variants", "5DFEN Strictness") - never recorded
+// from a run.
 
+#include <algorithm>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -11,6 +14,7 @@
 #include "t5d/gate.hpp"
 #include "t5d/variants.hpp"
 #include "test_framework.hpp"
+#include "test_reference.hpp"
 
 using namespace t5d;
 
@@ -88,14 +92,248 @@ TEST(gate_parse_mode_matches_the_contracts_own_example) {
   CHECK_EQ(r.lines[4], std::string("{\"event\":\"end\",\"status\":\"ok\",\"actions_accepted\":1}"));
 }
 
-TEST(gate_full_mode_waits_on_the_check_ruling) {
-  // The same end-event fields as parse mode's "unsupported": actions_accepted
-  // (0) and the reason.
+TEST(gate_full_mode_matches_the_contracts_own_example) {
+  // The engine contract's example, line for line: the Standard start and
+  // "1. e3", both positions with 20 legal actions, no check, no end.
   const Run r = run("1. e3\n", /*parse_only=*/false);
-  CHECK_EQ(r.lines, (std::vector<std::string>{
-                        "{\"event\":\"end\",\"status\":\"unsupported\",\"actions_accepted\":0,"
-                        "\"reason\":\"full mode waits on the check ruling\"}"}));
+  REQUIRE_EQ(r.lines.size(), std::size_t{5});
+  CHECK_EQ(r.lines[0],
+           std::string("{\"event\":\"state\",\"index\":0,\"size\":\"8x8\",\"markers\":true,"
+                       "\"boards\":[\"0:1:w:" + kStandard + "\"]}"));
+  CHECK_EQ(r.lines[1], std::string("{\"event\":\"position\",\"index\":0,\"side\":\"white\","
+                                   "\"in_check\":false,\"legal_actions\":20,\"terminal\":\"none\"}"));
+  CHECK_EQ(r.lines[3], std::string("{\"event\":\"position\",\"index\":1,\"side\":\"black\","
+                                   "\"in_check\":false,\"legal_actions\":20,\"terminal\":\"none\"}"));
+  CHECK_EQ(r.lines[4], std::string("{\"event\":\"end\",\"status\":\"ok\",\"actions_accepted\":1}"));
   CHECK_EQ(r.status, 0);
+}
+
+namespace {
+
+Run run_with(std::string_view record, const gate::Options& options) {
+  Run r;
+  r.status = gate::run(
+      record, options, [&](const std::string& line) { r.lines.push_back(line); },
+      [&](const std::string& note) { r.notes.push_back(note); });
+  return r;
+}
+
+std::string full_position(int index, std::string_view side, bool check, int count,
+                          std::string_view terminal) {
+  return "{\"event\":\"position\",\"index\":" + std::to_string(index) + ",\"side\":\"" +
+         std::string(side) + "\",\"in_check\":" + (check ? "true" : "false") +
+         ",\"legal_actions\":" + std::to_string(count) + ",\"terminal\":\"" +
+         std::string(terminal) + "\"}";
+}
+
+}  // namespace
+
+TEST(gate_full_mode_reports_checkmate_and_stalemate) {
+  // One board, Black to move (rulebook C5, R1): king a5 against queen b4
+  // guarded by king b3 - checkmate; against a queen on c4 - stalemate.
+  Run r = run("[Board \"custom\"][k4/1Q3/1K3/5/5:0:1:b]\n", false);
+  REQUIRE_EQ(r.lines.size(), std::size_t{3});
+  CHECK_EQ(r.lines[1], full_position(0, "black", true, 0, "checkmate"));
+  CHECK_EQ(r.lines[2], std::string("{\"event\":\"end\",\"status\":\"ok\",\"actions_accepted\":0}"));
+  r = run("[Board \"custom\"][k4/2Q2/5/5/4K:0:1:b]\n", false);
+  REQUIRE_EQ(r.lines.size(), std::size_t{3});
+  CHECK_EQ(r.lines[1], full_position(0, "black", false, 0, "stalemate"));
+  // A cross-board stalemate (C6): Black's king a5 on (0T1); White's rooks on
+  // +1's board (T2, white) cover a4, b4, b5 of timeline 0 down the timelines.
+  r = run("[Board \"custom\"][k4/5/5/5/5:0:1:b][1R3/RR3/5/5/5:+1:2:w]\n", false);
+  REQUIRE_EQ(r.lines.size(), std::size_t{3});
+  CHECK_EQ(r.lines[1], full_position(0, "black", false, 0, "stalemate"));
+}
+
+TEST(gate_full_mode_refuses_an_action_that_leaves_a_king_capturable) {
+  // 1. e4 f6 2. Qh5+ a6: Black's last action leaves the king to the queen
+  // (C4, R1): full mode refuses it - cannot_submit, after positions 0-3; parse
+  // mode, pseudo-legal, plays it.
+  const std::string text = "1. e4 / f6 2. Qh5 / a6\n";
+  const Run full = run(text, false);
+  REQUIRE_EQ(full.lines.size(), std::size_t{9});
+  // Position 3: Black in check, with legal answers (g6, the king's f7, ...).
+  CHECK(full.lines[7].find("\"index\":3,\"side\":\"black\",\"in_check\":true") !=
+        std::string::npos);
+  CHECK(full.lines[7].find("\"terminal\":\"none\"") != std::string::npos);
+  CHECK_EQ(full.lines[8], std::string("{\"event\":\"end\",\"status\":\"rejected\","
+                                      "\"actions_accepted\":3,\"reason\":\"cannot_submit\"}"));
+  REQUIRE_EQ(full.notes.size(), std::size_t{1});
+  CHECK(full.notes[0].find("(C4, R1)") != std::string::npos);
+  const Run parse = run(text, true);
+  CHECK_EQ(parse.lines.back(),
+           std::string("{\"event\":\"end\",\"status\":\"ok\",\"actions_accepted\":4}"));
+}
+
+TEST(gate_full_mode_caps_the_count) {
+  gate::Options o;
+  o.cap = 5;
+  Run r = run_with("", o);
+  REQUIRE_EQ(r.lines.size(), std::size_t{3});
+  CHECK_EQ(r.lines[1], full_position(0, "white", false, 5, "none"));
+  // Cap 0 counts nothing - but "terminal" still says whether an action exists.
+  o.cap = 0;
+  r = run_with("", o);
+  CHECK_EQ(r.lines[1], full_position(0, "white", false, 0, "none"));
+  r = run_with("[Board \"custom\"][k4/1Q3/1K3/5/5:0:1:b]\n", o);
+  CHECK_EQ(r.lines[1], full_position(0, "black", true, 0, "checkmate"));
+}
+
+TEST(gate_full_mode_answers_with_either_detector) {
+  // Two kings a side on -0 and +0 (33 legal actions: rulebook J4, J6; see
+  // test_search.cpp), and a checkmate: the same answers from both detectors
+  // and from the portfolio (the default), each cross-checked by the other.
+  for (const std::optional<Detector> d :
+       {std::optional<Detector>(Detector::Naive), std::optional<Detector>(Detector::Hypercuboid),
+        std::optional<Detector>()}) {
+    gate::Options o;
+    o.detector = d;
+    Run r = run_with("[Board \"custom\"][k4/5/5/5/K4:-0:1:w][k4/5/5/5/K4:+0:1:w]\n", o);
+    REQUIRE_EQ(r.lines.size(), std::size_t{3});
+    CHECK_EQ(r.lines[1], full_position(0, "white", false, 33, "none"));
+    r = run_with("[Board \"custom\"][k4/5/5/5/R4:0:1:b][5/5/5/5/RR3:+1:1:b]\n", o);
+    CHECK_EQ(r.lines[1], full_position(0, "black", true, 0, "checkmate"));  // C8
+  }
+}
+
+TEST(gate_full_mode_counts_two_creation_orders_as_two_actions) {
+  // The harness's definition of an action (t5d/search.hpp): two orders of two
+  // branching moves are two actions, even where they reach one state. The
+  // position of test_search.cpp's search_two_creation_orders_are_two_actions_j6
+  // (1x1 boards; two rooks that must both branch back, White's creations
+  // inactive): 2 legal actions, and --actions lists both orders.
+  gate::Options o;
+  o.list_actions = 0;
+  const Run r = run_with("[Size \"1x1\"]\n[Board \"custom\"]\n"
+                         "[1:-0:1:w][1:-0:1:b][R:-0:2:w][1:+0:1:w][1:+0:1:b][R:+0:2:w]"
+                         "[1:+1:1:b][R:+1:2:w][1:+1:2:b]\n",
+                         o);
+  REQUIRE_EQ(r.lines.size(), std::size_t{3});
+  CHECK_EQ(r.lines[1], full_position(0, "white", false, 2, "none"));
+  const std::vector<std::string> notes = {
+      "t5d-gate: position 0, White to move: 2 legal actions",
+      "  1. (+0T2)Ra1(+0T1)a1 (-0T2)Ra1(-0T1)a1",
+      "  2. (-0T2)Ra1(-0T1)a1 (+0T2)Ra1(+0T1)a1",
+  };
+  CHECK_EQ(r.notes, notes);
+}
+
+TEST(gate_full_mode_counts_thousands_of_actions_exactly) {
+  // Misc - Timeline Battleground (V3): three timelines, each its own board of
+  // White's to play - thousands of legal actions, counted to a cap above them
+  // (many thousands of search nodes; no budget cuts the gate's count, H37)
+  // and compared with the brute-force reference's count (test_reference.hpp).
+  const std::string name = "Misc - Timeline Battleground";
+  const Variant* v = find_variant(name);
+  REQUIRE(v != nullptr);
+  const t5d_test::Reference ref = t5d_test::reference_actions(variant_start(*v), 10000000);
+  REQUIRE(!ref.overflow);
+  REQUIRE(ref.actions.size() > 1000);
+  for (const std::optional<Detector> d :
+       {std::optional<Detector>(Detector::Naive), std::optional<Detector>(Detector::Hypercuboid),
+        std::optional<Detector>()}) {
+    gate::Options o;
+    o.cap = 100000;
+    o.detector = d;
+    const Run r = run_with("[Board \"" + name + "\"]\n", o);
+    REQUIRE_EQ(r.lines.size(), std::size_t{3});
+    CHECK_EQ(r.lines[1], full_position(0, "white", false, static_cast<int>(ref.actions.size()), "none"));
+  }
+  // And the search behind it took many thousands of nodes.
+  const ActionCount c = count_legal_actions(variant_start(*v), 100000, Detector::Hypercuboid);
+  CHECK(c.stats.nodes > 5000);
+}
+
+TEST(gate_full_mode_ends_in_error_when_the_detectors_disagree) {
+  // Spec §11.0 item 3: the detectors cross-check each other. Through the
+  // counting seam, the cross-checking detector counts one more: the run ends
+  // "error" (exit status 1) at position 0, after its state event, and says why.
+  gate::Options o;
+  o.detector = Detector::Hypercuboid;
+  o.counter = [](const GameState& s, std::size_t cap, Detector d, const SearchBudget& b) {
+    ActionCount c = count_legal_actions(s, cap, d, b);
+    if (d == Detector::Naive && c.known()) ++c.count;
+    return c;
+  };
+  const Run r = run_with("1. e3\n", o);
+  CHECK_EQ(r.status, 1);
+  REQUIRE_EQ(r.lines.size(), std::size_t{2});
+  CHECK(r.lines[0].find("\"event\":\"state\",\"index\":0") != std::string::npos);
+  CHECK_EQ(r.lines[1], std::string("{\"event\":\"end\",\"status\":\"error\",\"actions_accepted\":0,"
+                                   "\"reason\":\"position 0: the detectors disagree: hypercuboid "
+                                   "counts 20, naive counts 21 (cap 1000)\"}"));
+  REQUIRE_EQ(r.notes.size(), std::size_t{1});
+  CHECK(r.notes[0].find("the detectors disagree") != std::string::npos);
+  // With the cross-check off, nothing disagrees.
+  o.cross_check_nodes = 0;
+  CHECK_EQ(run_with("1. e3\n", o).status, 0);
+  // The portfolio is cross-checked the same way (the hypercuboid answers
+  // first: it completes within the first budget).
+  o.cross_check_nodes = 50000;
+  o.detector.reset();
+  CHECK_EQ(run_with("1. e3\n", o).status, 1);
+}
+
+TEST(gate_full_mode_ends_in_error_at_the_memory_ceiling) {
+  // Every search keeps a memory ceiling (Options::max_bytes, --max-memory-mib;
+  // SearchBudget::max_bytes): a count that reaches it is no verdict (H37) -
+  // the run ends "error", saying so, with exit status 1. The portfolio stops
+  // when both detectors have reached it; a named detector at once.
+  for (const std::optional<Detector> d :
+       {std::optional<Detector>(Detector::Naive), std::optional<Detector>(Detector::Hypercuboid),
+        std::optional<Detector>()}) {
+    gate::Options o;
+    o.detector = d;
+    o.max_bytes = 1;
+    const Run r = run_with("1. e3\n", o);
+    CHECK_EQ(r.status, 1);
+    REQUIRE_EQ(r.lines.size(), std::size_t{2});
+    CHECK_EQ(r.lines[1], std::string("{\"event\":\"end\",\"status\":\"error\",\"actions_accepted\":0,"
+                                     "\"reason\":\"position 0: the search reached its memory ceiling "
+                                     "(0 MiB) before it completed: no verdict (H37)\"}"));
+  }
+  // The default ceiling is far above what a position needs.
+  CHECK_EQ(gate::Options{}.max_bytes, kDefaultSearchBytes);
+  CHECK_EQ(run("1. e3\n", false).status, 0);
+}
+
+TEST(gate_diagnostics_list_actions_and_read_options) {
+  // --actions K lists position K's legal actions on standard error (sorted
+  // canonical texts); stdout is unchanged.
+  gate::Options o;
+  o.list_actions = 0;
+  const Run r = run_with("[Board \"custom\"][k4/5/5/5/K4:-0:1:w][k4/5/5/5/K4:+0:1:w]\n", o);
+  REQUIRE_EQ(r.notes.size(), std::size_t{34});
+  CHECK(r.notes[0].find("position 0, White to move: 33 legal actions") != std::string::npos);
+  CHECK(std::find(r.notes.begin(), r.notes.end(),
+                  "  9. (+0T1)Ka1(+0T1)b2 (-0T1)Ka1(+0T1)b2") != r.notes.end());
+  CHECK_EQ(r.lines.size(), std::size_t{3});
+  // The rule and reader options, by name.
+  RuleOptions rules;
+  std::string error;
+  CHECK(gate::set_rule_option(rules, "moves_after_shift=true", &error));
+  CHECK(rules.moves_after_shift);
+  CHECK(gate::set_rule_option(rules, "activation=consecutive", &error));
+  CHECK(rules.activation == ActivationRule::Consecutive);
+  CHECK(gate::set_rule_option(rules, "promotions=QN", &error));
+  CHECK(rules.promotions.contains(PieceKind::Knight));
+  CHECK(!gate::set_rule_option(rules, "moves_after_shift=yes", &error));
+  CHECK(!gate::set_rule_option(rules, "no_such_rule=true", &error));
+  CHECK(error.find("no_such_rule") != std::string::npos);
+  CHECK(!gate::set_rule_option(rules, "activation", &error));
+  PgnOptions pgn;
+  CHECK(gate::set_pgn_option(pgn, "verify_annotations=false", &error));
+  CHECK(!pgn.verify_annotations);
+  CHECK(gate::set_pgn_option(pgn, "castling_shortcuts=any_king", &error));
+  CHECK(pgn.castling_shortcuts == CastlingShortcuts::AnyKing);
+  CHECK(!gate::set_pgn_option(pgn, "castling_shortcuts=d_file", &error));
+  // Q4's other reading through the options: an optional move after the shift.
+  gate::Options q4;
+  q4.rules.moves_after_shift = true;
+  const std::string late = "[Board \"custom\"][5/5/5/5/R4:0:1:w][5/5/5/5/R4:+1:2:w]\n"
+                            "1. (0T1)Ra2 (+1T2)Ra2\n";
+  CHECK(run(late, false).lines.back().find("\"reason\":\"illegal_move\"") != std::string::npos);
+  CHECK(run_with(late, q4).lines.back().find("\"status\":\"ok\"") != std::string::npos);
 }
 
 TEST(gate_rejections_name_their_reason) {

@@ -492,8 +492,9 @@ TEST(example_records_round_trip_every_move) {
 
 TEST(example_random_games_round_trip_through_5dpgn) {
   // Random pseudo-legal games from every variant, written as 5dpgn records
-  // (turn markers, every move in full) and read back: the replay reaches the
-  // same state, action by action.
+  // (turn markers, every move in full) and read back - pseudo-legally, as they
+  // were played (CheckRuling::none()): the replay reaches the same state,
+  // action by action.
   for (const Variant& v : variants()) {
     for (std::uint64_t seed = 1; seed <= 3; ++seed) {
       t5d_test::Rng rng(seed * 0x9E3779B97F4A7C15ull + v.name.size());
@@ -518,7 +519,7 @@ TEST(example_random_games_round_trip_through_5dpgn) {
           t.apply(m);
         }
         if (stuck) break;
-        t.submit();
+        t.submit(CheckRuling::none());  // pseudo-legal play
         text += s.to_move() == Colour::White ? "\n" + std::to_string(turn) + "." : " /";
         if (s.to_move() == Colour::Black) ++turn;
         text += moves;
@@ -526,6 +527,7 @@ TEST(example_random_games_round_trip_through_5dpgn) {
         states.push_back(s);
       }
       PgnReplay r(read_pgn(text));
+      r.set_check_ruling(CheckRuling::none());  // replayed as played: pseudo-legally
       REQUIRE_EQ(r.record().actions.size(), states.size() - 1);
       for (std::size_t k = 1; k < states.size(); ++k) {
         r.play_next();

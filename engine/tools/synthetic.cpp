@@ -24,7 +24,7 @@ namespace {
 // The play is PSEUDO-LEGAL: submission tests the present's shift (T5) and not
 // royal safety (C4) - a ruling with no hook, which stage E4 names
 // CheckRuling::none() (its submit() tests royal safety by default).
-constexpr CheckRuling kPseudoLegal{};
+constexpr CheckRuling kPseudoLegal = CheckRuling::none();
 
 int active_count(const GameState& s) {
   return s.multiverse().timeline_count() - static_cast<int>(s.inactive_timelines().size());

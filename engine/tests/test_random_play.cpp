@@ -222,7 +222,7 @@ void random_game(const GameState& start, std::uint64_t seed, int actions, Totals
     }
     if (!done) return;
     if (check_deep(s)) ++totals.lapsed_en_passant;
-    s.submit();
+    s.submit(CheckRuling::none());  // pseudo-legal play
     ++totals.actions;
     check_state(s);
   }
@@ -363,7 +363,7 @@ TEST(random_play_plain_and_general_generators_agree) {
         done = s.obligations_met();
       }
       if (!done) break;
-      s.submit();
+      s.submit(CheckRuling::none());  // pseudo-legal play
     }
   }
   CHECK(compared > 40);
@@ -377,7 +377,7 @@ TEST(random_play_is_deterministic) {
     MoveList moves;
     for (int ply = 0; ply < 40; ++ply) {
       if (s.obligations_met()) {
-        s.submit();
+        s.submit(CheckRuling::none());  // pseudo-legal play
         continue;
       }
       generate_moves(s, moves);

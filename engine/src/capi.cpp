@@ -42,10 +42,9 @@ struct t5d_game {
   t5d_game& operator=(const t5d_game&) = delete;
 
   t5d::GameState state;
-  // The ruling submissions are tested under: none - pseudo-legal play, royal
-  // safety (C4) untested, CheckRuling::none() in stage E4's terms - until E4's
-  // legality is wired in here (t5d::standard_check_ruling()).
-  t5d::CheckRuling ruling{};
+  // The ruling submissions are tested under: the engine's (C4, R1; stage
+  // E4) - a submission that leaves a royal piece capturable is refused.
+  t5d::CheckRuling ruling = t5d::standard_check_ruling();
   // A game made from a record: the record, replayed up to `state` while
   // on_record holds (t5d_game_apply and t5d_game_submit leave the record).
   std::optional<t5d::PgnReplay> replay;
@@ -226,8 +225,8 @@ t5d::ExpandOptions expand_options_from(const t5d_expand_options* o) {
   }
   if ((o->relations & kReserved) != 0) {
     throw NotImplemented(
-        "relations: pin and check need check detection, stage E4's (ruled: rules reference "
-        "R1, register H36), which is not merged yet, and travel-threat has no edge defined by "
+        "relations: pin and check are not built (they would read check detection: rules "
+        "reference R1, register H36), and travel-threat has no edge defined by "
         "the design spec (§6, B11; §11.1 uses travel threats only as a class of forcing "
         "moves) - none is built");
   }
@@ -278,16 +277,6 @@ void describe(const t5d::Expansion& x, t5d_expansion& out) {
   out.e_boards = x.e_boards().data();
   out.src_extra = x.src_extra().data();
 }
-
-// A replay submits under the game's ruling. (PgnReplay::set_check_ruling
-// exists from stage E4 on; before it, a replay tests no royal safety.)
-template <class Replay>
-auto replay_under(Replay& replay, const t5d::CheckRuling& ruling, int)
-    -> decltype(replay.set_check_ruling(ruling), void()) {
-  replay.set_check_ruling(ruling);
-}
-template <class Replay>
-void replay_under(Replay&, const t5d::CheckRuling&, long) {}
 
 bool submittable(t5d::SubmitStatus s) noexcept {
   return s == t5d::SubmitStatus::Unchecked || s == t5d::SubmitStatus::Safe;
@@ -466,7 +455,7 @@ t5d_status t5d_game_new_from_pgn(const char* text, size_t length, uint64_t rules
         length > 0 ? std::string_view(text, length) : std::string_view();
     t5d::PgnReplay replay(t5d::read_pgn(record), t5d::PgnOptions{}, rules_from(rules));
     auto game = std::make_unique<t5d_game>(replay.state());
-    replay_under(replay, game->ruling, 0);
+    replay.set_check_ruling(game->ruling);  // a replay submits under the game's ruling
     game->replay.emplace(std::move(replay));
     game->on_record = true;
     *out = game.release();
@@ -628,6 +617,19 @@ t5d_status t5d_game_submit(t5d_game* game, char** error) {
     game->state.submit(game->ruling);
     game->on_record = false;
     game->expansion_current = false;
+    return T5D_OK;
+  });
+}
+
+t5d_status t5d_game_set_legality(t5d_game* game, int32_t legality, char** error) {
+  return guarded(error, [&]() -> t5d_status {
+    if (game == nullptr) throw std::invalid_argument("game is NULL");
+    if (legality != T5D_LEGAL && legality != T5D_PSEUDO_LEGAL) {
+      throw std::invalid_argument("legality must be T5D_LEGAL or T5D_PSEUDO_LEGAL");
+    }
+    game->ruling =
+        legality == T5D_LEGAL ? t5d::standard_check_ruling() : t5d::CheckRuling::none();
+    if (game->replay) game->replay->set_check_ruling(game->ruling);
     return T5D_OK;
   });
 }

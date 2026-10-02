@@ -87,8 +87,15 @@ inline t5d::Move play(t5d::GameState& state, std::string_view text) {
 }
 
 /// Plays a whole action - the moves in order - and submits it (without a
-/// royal-safety test).
+/// royal-safety test: CheckRuling::none(), pseudo-legal play).
 inline void act(t5d::GameState& state, std::initializer_list<std::string_view> moves) {
+  for (const std::string_view text : moves) play(state, text);
+  state.submit(t5d::CheckRuling::none());
+}
+
+/// The same, submitted under the engine's check ruling (C4, R1): throws
+/// std::logic_error if the action leaves a royal piece capturable.
+inline void act_legally(t5d::GameState& state, std::initializer_list<std::string_view> moves) {
   for (const std::string_view text : moves) play(state, text);
   state.submit();
 }

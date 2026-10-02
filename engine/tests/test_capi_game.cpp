@@ -120,6 +120,8 @@ TEST(capi_game_from_a_record_replays_and_expands_as_the_engine) {
   REQUIRE_EQ(t5d_game_new_from_pgn(record.data(), record.size(), T5D_RULES_STANDARD, &game.p,
                                    &error.p),
              T5D_OK);
+  // Synthetic play is pseudo-legal: replayed as such.
+  REQUIRE_EQ(t5d_game_set_legality(game.p, T5D_PSEUDO_LEGAL, &error.p), T5D_OK);
   size_t total = 0;
   size_t played = 99;
   int32_t truncated = 9;
@@ -386,6 +388,38 @@ TEST(capi_game_applies_the_promotion_asked_for) {
   REQUIRE(rook < v.move_count);
   REQUIRE_EQ(t5d_game_apply_expanded(g.p, rook, nullptr), T5D_OK);
   CHECK_EQ(head_placement(g.p).substr(0, 5), std::string("1R2k3"));
+}
+
+TEST(capi_game_submissions_are_legal_by_default) {
+  // Stage E4 (C4, R1): 1. e4 f6 2. Qh5+ a6 leaves Black's king to the queen.
+  // A game's record replay refuses that action by default (T5D_ERR_ILLEGAL,
+  // the game unchanged); T5D_PSEUDO_LEGAL replays it as parse mode does.
+  const std::string record = "1. e4 / f6 2. Qh5 / a6\n";
+  for (const int32_t legality : {T5D_LEGAL, T5D_PSEUDO_LEGAL}) {
+    Game game;
+    Text error;
+    REQUIRE_EQ(t5d_game_new_from_pgn(record.data(), record.size(), T5D_RULES_STANDARD, &game.p,
+                                     &error.p),
+               T5D_OK);
+    if (legality == T5D_PSEUDO_LEGAL) {
+      REQUIRE_EQ(t5d_game_set_legality(game.p, legality, nullptr), T5D_OK);
+    }
+    for (int a = 0; a < 3; ++a) REQUIRE_EQ(t5d_game_replay_next(game.p, nullptr), T5D_OK);
+    const t5d_status last = t5d_game_replay_next(game.p, &error.p);
+    if (legality == T5D_LEGAL) {
+      CHECK_EQ(last, T5D_ERR_ILLEGAL);
+      CHECK(error.has("C4"));
+      size_t played = 0;
+      CHECK_EQ(t5d_game_record_actions(game.p, nullptr, &played, nullptr), T5D_OK);
+      CHECK_EQ(played, size_t{3});
+    } else {
+      CHECK_EQ(last, T5D_OK);
+    }
+  }
+  Game game;
+  REQUIRE_EQ(t5d_game_new_variant("Standard", T5D_RULES_STANDARD, &game.p, nullptr), T5D_OK);
+  CHECK_EQ(t5d_game_set_legality(game.p, 7, nullptr), T5D_ERR_ARGUMENT);
+  CHECK_EQ(t5d_game_set_legality(nullptr, T5D_LEGAL, nullptr), T5D_ERR_ARGUMENT);
 }
 
 TEST(rule_options_decode_inverts_encode) {

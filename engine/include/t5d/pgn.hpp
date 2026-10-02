@@ -18,18 +18,19 @@
 //     variant (t5d/variants.hpp) or "custom" 5DFEN boards - and plays the
 //     actions one at a time. Each written move is matched against the
 //     pseudo-legal moves of the board it names (t5d/movegen.hpp) and applied;
-//     the action is submitted once its moves are played. Submission's
-//     royal-safety test (C4) is the check ruling's, pending: it is not made
-//     (GameState::submit with no hook), so a replayed action is one whose
-//     every move is pseudo-legal and allowed by the turn rules and after which
-//     the present has shifted (T5).
+//     the action is submitted once its moves are played - legally: the
+//     present must have shifted (T5) and, under the replay's check ruling (by
+//     default the engine's, R1 and C4: t5d/check.hpp), no royal piece of the
+//     mover's may be left capturable. With CheckRuling::none() (parse mode)
+//     the royal-safety test is not made and the replay is pseudo-legal.
 //
 // What a record can fail on (RecordFault):
 //
 //  * Unreadable - text the reader cannot read; a move that fits two or more
 //    pseudo-legal moves (the reader never guesses: the notation lets a writer
-//    leave out a pinned piece when disambiguating, "Omission", and pins are the
-//    pending check ruling's); a token that disagrees with the state where the
+//    leave out a pinned piece when disambiguating, "Omission", but legality is
+//    judged per action, at submission - C4 - not per move); a token that
+//    disagrees with the state where the
 //    notation says it should agree (">"/">>", "x", "~", "(>Lx)", "(~Tx)");
 //    headers that contradict each other; an action by the player who is not
 //    to move.
@@ -44,7 +45,7 @@
 //    playable board of the mover's (L5, T3), no piece that can make the move
 //    (sections 3-5), or any move once the present has shifted (Q4).
 //  * CannotSubmit - the action ends with the present still on the mover's
-//    colour (T5).
+//    colour (T5), or leaves a royal piece of the mover's capturable (C4, R1).
 //
 // The reader's choices where the specification is ambiguous or silent are
 // PgnOptions (defaults first); the build log's "Spec issues" item 2 lists the
@@ -140,7 +141,7 @@ struct PgnOptions {
   /// lies in the column right after the present's, where the present would
   /// arrive anyway - is accepted either way. False ignores the three tokens.
   /// ("+", "#" and "*" are never checked: they are the writer's claims about
-  /// check, and check is the pending ruling's - never a check verdict.)
+  /// check, mate and softmate - never a verdict.)
   bool verify_annotations = true;
   /// "Moves": a physical move "must be preceded by their board's coordinates
   /// if there is more than one timeline". Default false: a move without its
@@ -335,13 +336,21 @@ class PgnReplay {
   /// Whether every action read has been played.
   bool finished() const noexcept { return played_ == record_.actions.size(); }
 
-  /// Plays the next action: its moves in order, then the submission. Throws
-  /// RecordError (Unreadable, IllegalMove or CannotSubmit), leaving the state
-  /// as it was before the action - Unreadable also for an action by the
-  /// player who is not to move (the first action included: a named variant
-  /// starts with White, V2; a custom position with the colour to move on its
-  /// present, T4, T5). Precondition: !finished().
+  /// Plays the next action: its moves in order, then the submission under
+  /// check_ruling() (CannotSubmit if the present has not shifted, T5, or a
+  /// royal piece of the mover's is left capturable, C4). Throws RecordError
+  /// (Unreadable, IllegalMove or CannotSubmit), leaving the state as it was
+  /// before the action - Unreadable also for an action by the player who is
+  /// not to move (the first action included: a named variant starts with
+  /// White, V2; a custom position with the colour to move on its present, T4,
+  /// T5). Precondition: !finished().
   void play_next();
+
+  /// The ruling submission is tested under: by default the engine's
+  /// (standard_check_ruling, R1); CheckRuling::none() replays pseudo-legally
+  /// (the gate adapter's parse mode).
+  const CheckRuling& check_ruling() const noexcept { return ruling_; }
+  void set_check_ruling(const CheckRuling& ruling) noexcept { ruling_ = ruling; }
 
   /// Plays every remaining action, then - if the move text stopped early -
   /// throws RecordError (Unreadable) with PgnRecord::unreadable's message.
@@ -370,6 +379,7 @@ class PgnReplay {
   bool one_king_each_ = false;
   std::size_t played_ = 0;
   GameState state_;
+  CheckRuling ruling_ = standard_check_ruling();
 };
 
 }  // namespace t5d

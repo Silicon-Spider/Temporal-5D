@@ -159,8 +159,8 @@ TEST(castling_attack_test_covers_every_piece_within_the_board) {
 TEST(castling_attacks_from_other_boards_do_not_bar_it) {
   // S2: "attacks through time or from other timelines do not bar castling".
   // A black rook on +1's playable board at f1 could reach f1 of 0's next
-  // board; the developer's ruling ignores it. (The design spec's 5D reading
-  // is the unimplemented CastlingAttacks::AnyBoard.)
+  // board; the developer's ruling ignores it (R6, register H40: the per-board
+  // test is the rule).
   const GameState s = game({"[8/8/8/8/8/8/8/R*3K*2R*:0:1:w]", "[8/8/8/8/8/8/8/5r2:+1:1:b]",
                             "[8/8/8/8/8/8/8/8:+1:1:w]"},
                            k8x8);

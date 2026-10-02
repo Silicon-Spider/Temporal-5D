@@ -21,7 +21,7 @@ verification layer beside it.
 | `docs/MEASUREMENTS.md` | Every measured figure with its conditions, and the §15.6 verdicts. |
 | `docs/rules/README.md` | The cited rules reference the engine is written from (proposed as the rulebook); open questions Q1-Q28. |
 | `docs/checkpoints/` | Checkpoint reports - CHECKPOINT 1, the check disagreements, awaits the user's ruling. |
-| `engine/` | The rules engine, C++20 (H24): immutable boards, the multiverse, 5DFEN, the H30 fingerprint, 5D Zobrist (H18), the turn rules, pseudo-legal move generation, the 5dpgn parser (H28) and the gate adapter (parse mode). Its manual is `engine/README.md`. Check detection, legality and mate detection wait on the check ruling. |
+| `engine/` | The rules engine, C++20 (H24): immutable boards, the multiverse, 5DFEN, the H30 fingerprint, 5D Zobrist (H18), the turn rules, pseudo-legal move generation, the 5dpgn parser (H28), check status and submission legality (H36), legal actions, the naive and hypercuboid mate detectors (H37), the expansion and its measurement tools, and the gate adapter (parse and full mode). Its manual is `engine/README.md`. |
 
 The build order is spec §15.1; where the build stands, and what is parked and why,
 is in `docs/BUILD_LOG.md`. Build and test the engine with `py engine/build.py
