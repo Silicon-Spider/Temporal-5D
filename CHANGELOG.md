@@ -10,6 +10,29 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-03 - M7 on real games: the |E| curve from t0database, its verdict, the refused games
+
+- `docs/MEASUREMENTS.md`: the |E| phase curve over the 716 t0database games that
+  replay to the end (901e5be, Q4 as ruled, legal and pseudo-legal destinations),
+  the games' board counts (max 186; 14 reach 100 boards), and M7's verdict from
+  §15.6 as written: on at k = 8 from 50 to 186 boards; under 50 boards inside the
+  ±10% band (1.60x at k = 4, 1.45x at k = 8, against 1.5x), and the kill clause
+  turns on it - stopped for the user; no data above 186 (provisional). The
+  multiplier formula §15.6 leaves unwritten is the one reading that reproduces its
+  own table (m_cached^0.9 · m_dense^0.1). The corpus section is kept, superseded.
+- The 45 refused games classified (no engine change): 13 unfinished final actions
+  (12 completable - 11 with a clock at 0:00 or a timeout - and one played from a
+  position already checkmate; the engine is right under T4, T5, T10 and T11 by
+  every reading the rulebook lists); 15 Standard - Defended Pawn and 2 Two
+  Timelines games under the source's Turn Zero label, and 2 unknown fairy set-ups;
+  10 pawn captures with a doubled file (`ccxd5`), one record without sub-turn
+  separators, one stray token and one dropped turn.
+- `docs/BUILD_LOG.md`: register M7, the parked window, spec issue 26 answered to
+  186 boards, new issues 63-66, proposed edits 51-55, the three questions for the
+  user.
+- Spec: §15.6 "The window (|E| phase curve)", §10.4.2 step 1, register M7 (M4
+  write-back proposed); rules T4, T5, T10, T11.
+
 ### 2026-10-03 - Build log: CHECKPOINT 3's rulings, Q2 written out, the timing-test rule
 
 - `docs/BUILD_LOG.md`: the CHECKPOINT 3 rulings (the M14 redesign as a prototype
