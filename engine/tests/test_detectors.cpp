@@ -25,6 +25,7 @@
 #include "t5d/fen.hpp"
 #include "t5d/legal.hpp"
 #include "t5d/movegen.hpp"
+#include "t5d/pgn.hpp"
 #include "t5d/search.hpp"
 #include "t5d/state.hpp"
 #include "t5d/variants.hpp"
@@ -727,5 +728,49 @@ TEST(detectors_the_general_realisation_lets_a_castling_precede_rewinds) {
     CHECK(a.known());
     CHECK(a.count == 254);
     CHECK(n.count == 258);
+  }
+}
+
+TEST(legal_an_en_passant_that_uncovers_a_capture_is_not_quiet) {
+  // Found by review (2026-10-02): tier 1 counted en passant as a quiet move,
+  // but it empties the victim's square, which the capturer does not land on -
+  // so it can open a line onto the mover's own royal. Here Black's d7-d5
+  // passes White's e5 pawn; exd6 e.p. empties d5 and e5, and the rook on a5
+  // then captures the king on h5: the en passant begins no legal action. The
+  // classifier called it Legal in every mode. Both positions are the review's:
+  // the second reaches the "around a finish" path (an even game, the stripped
+  // multiverse not capture-free).
+  const auto en_passant_status = [](const std::string& text, LegalityOptions o) {
+    PgnReplay r(read_pgn(text));
+    r.play_all();
+    MoveList moves;
+    generate_moves(r.state(), moves);
+    std::vector<Move> list(moves.begin(), moves.end());
+    std::vector<MoveLegality> status;
+    classify_moves(r.state(), list, status, o);
+    std::optional<MoveLegality> ep;
+    for (std::size_t i = 0; i < list.size(); ++i) {
+      if (list[i].en_passant()) ep = status[i];
+    }
+    MoveList legal;
+    legal_moves(r.state(), legal);
+    bool listed = false;
+    for (const Move& m : legal) listed = listed || m.en_passant();
+    return std::pair{ep, listed};
+  };
+  const std::string one =
+      "[Board \"custom\"][Size \"8x8\"][8/3p*4/8/r3P2K/8/8/8/8:0:1:b]\n1b. (0T1)d5\n";
+  const std::string two =
+      "[Board \"custom\"][Size \"8x8\"][r7/8/8/8/8/8/8/K7:-0:1:b][8/3p*4/8/r3P2K/8/8/8/8:+0:1:b]\n"
+      "1b. (-0T1)Ra7 (+0T1)d5\n";
+  for (const std::string& text : {one, two}) {
+    const auto [exact, listed] = en_passant_status(text, LegalityOptions::exact());
+    REQUIRE(exact.has_value());
+    CHECK(*exact == MoveLegality::Illegal);
+    CHECK(!listed);
+    const auto [fast, ignored] = en_passant_status(text, LegalityOptions::budgeted(0, 0));
+    (void)ignored;
+    REQUIRE(fast.has_value());
+    CHECK(*fast != MoveLegality::Legal);
   }
 }

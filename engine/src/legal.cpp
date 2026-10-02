@@ -22,9 +22,12 @@ namespace t5d {
 namespace {
 
 // A move that creates no timeline and moves no royal piece (nor makes one):
-// tier 1's moves.
+// tier 1's moves. Not an en passant capture: it empties a square the capturer
+// does not land on (the victim's), so it can OPEN a line onto the mover's own
+// royal - which the stripped multiverse, keeping every opponent piece and
+// adding only blockers, would not see (found by review, 2026-10-02).
 bool quiet(const Move& m) noexcept {
-  if (m.branching() || m.castle() || m.piece.royal()) return false;
+  if (m.branching() || m.castle() || m.en_passant() || m.piece.royal()) return false;
   return !(m.promotes() && is_royal(m.promotion));
 }
 
