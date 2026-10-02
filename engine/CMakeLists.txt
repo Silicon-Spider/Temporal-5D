@@ -136,10 +136,18 @@ target_link_libraries(t5d-tests PRIVATE t5d_core t5d_tools)
 target_sources(t5d-tests PRIVATE
   tests/test_check.cpp
   tests/test_detectors.cpp
+  tests/test_gate_exe.cpp
   tests/test_search.cpp)
 
 add_executable(t5d-gate tools/t5d_gate.cpp)
 target_link_libraries(t5d-gate PRIVATE t5d_core)
+
+# test_gate_exe.cpp runs the adapter itself: its path, and where the runs'
+# files go.
+add_dependencies(t5d-tests t5d-gate)
+target_compile_definitions(t5d-tests PRIVATE
+  "T5D_GATE_EXE=\"$<TARGET_FILE:t5d-gate>\""
+  "T5D_TEST_SCRATCH=\"${CMAKE_CURRENT_BINARY_DIR}/test-scratch\"")
 
 # The measurement tools (stage E3) and what they share: SYNTHETIC positions by
 # random play (for throughput only), record input, ruleset options.

@@ -13,13 +13,16 @@
 //    submission tested under the engine's check ruling (C4, R1: an action
 //    that leaves a royal capturable is "cannot_submit") - and every position
 //    event answers every field: in_check (R1's check status), legal_actions
-//    (the distinct legal successor states, t5d/search.hpp, min(count, cap)),
-//    terminal ("none", "checkmate" or "stalemate", C5). The count and the
-//    verdict come from an exhaustive search with no budget (H37: a mate verdict
-//    is a proof, and the gate's answer is never "unknown"; the harness's own
-//    timeout bounds the run). The naive detector cross-checks the hypercuboid
-//    one under a node budget at every position (spec §11.0 item 3): if both
-//    know the count and they differ, the run ends "error".
+//    (the legal actions as the harness's manual defines them - sets of moves,
+//    their timeline-creating moves in order - t5d/search.hpp, min(count,
+//    cap)), terminal ("none", "checkmate" or "stalemate", C5). The count and
+//    the verdict come from a search run to completion, with no overall budget
+//    (H37: a mate verdict is a proof, and the gate's answer is never
+//    "unknown"; the harness's own timeout bounds the run): by default a
+//    PORTFOLIO of the two detectors, each in turn on a node budget that
+//    doubles, until one completes. The other detector then cross-checks the
+//    count under a node budget (spec §11.0 item 3): if both know it and they
+//    differ, the run ends "error".
 //  * PARSE MODE (--parse-only): the replay is pseudo-legal (no royal-safety
 //    test at submission) and the position events carry null in_check,
 //    legal_actions and terminal.
@@ -62,16 +65,30 @@ struct Options {
   RuleOptions rules{};
   /// --pgn NAME=VALUE, --lenient-annotations: the reader's readings.
   PgnOptions pgn{};
-  /// --detector naive|hypercuboid: which detector answers (default the
-  /// hypercuboid; the other cross-checks it).
-  Detector detector = Detector::Hypercuboid;
+  /// --detector naive|hypercuboid|portfolio: which detector answers, run
+  /// without a budget; none (the default, "portfolio"): both in turn on
+  /// doubling node budgets, the first to complete answering. The other
+  /// cross-checks it.
+  std::optional<Detector> detector;
   /// --cross-check-nodes N: the cross-checking detector's node budget per
   /// position (0: no cross-check, --no-cross-check).
   std::uint64_t cross_check_nodes = 50000;
+  /// --max-memory-mib N: every search's memory ceiling (SearchBudget::max_bytes;
+  /// default kDefaultSearchBytes). A count that reaches it ends the run
+  /// "error", saying so - never a verdict (H37).
+  std::size_t max_bytes = kDefaultSearchBytes;
   /// --actions K: list position K's legal actions (sorted canonical texts) on
   /// standard error, through `diagnose`.
   std::optional<std::size_t> list_actions;
+
+  /// A test seam, no command-line option: what counts a position's legal
+  /// actions (count_legal_actions when empty). The tests use it to make the
+  /// detectors disagree.
+  std::function<ActionCount(const GameState&, std::size_t, Detector, const SearchBudget&)> counter;
 };
+
+/// The portfolio's first node budget (it doubles each round).
+inline constexpr std::uint64_t kPortfolioFirstBudget = 1u << 14;
 
 /// Called with one line of output: a JSON object, without the newline.
 using Emit = std::function<void(const std::string&)>;
@@ -108,11 +125,11 @@ struct Verdicts {
   Outcome terminal = Outcome::Ongoing;
 };
 
-/// Full mode's verdicts at a turn's start: R1's check status, and an
-/// exhaustive count of the legal successor states (to max(cap, 1), so that
-/// terminal is known even with cap 0) by options.detector, cross-checked by
-/// the other detector under options.cross_check_nodes. Throws
-/// std::runtime_error if the two detectors disagree.
+/// Full mode's verdicts at a turn's start: R1's check status, and a count of
+/// the legal actions run to completion (to max(cap, 1), so that terminal is
+/// known even with cap 0) by options.detector (or the portfolio),
+/// cross-checked by the other detector under options.cross_check_nodes.
+/// Throws std::runtime_error if the two detectors disagree.
 Verdicts verdicts(const GameState& turn_start, const Options& options);
 
 /// The full-mode position event: {"event":"position","index":K,"side":...,

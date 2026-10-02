@@ -51,9 +51,12 @@ void print_usage(std::FILE* stream) {
       "  --lenient-annotations        do not check ~, (>Lx), (~Tx) against the state\n"
       "  --pgn NAME=VALUE             any other reader option (PgnOptions, t5d/pgn.hpp)\n"
       "  --actions K                  list position K's legal actions on standard error\n"
-      "  --detector naive|hypercuboid which detector answers (the other cross-checks it)\n"
+      "  --detector NAME              naive, hypercuboid or portfolio (the default): which\n"
+      "                               detector answers (the other cross-checks it)\n"
       "  --cross-check-nodes N        the cross-check's node budget per position (default 50000)\n"
-      "  --no-cross-check             no cross-check\n",
+      "  --no-cross-check             no cross-check\n"
+      "  --max-memory-mib N           every search's memory ceiling (default 2048); a count\n"
+      "                               that reaches it ends the run \"error\" (no verdict, H37)\n",
       stream);
 }
 
@@ -119,14 +122,20 @@ int main(int argc, char** argv) {
         options.detector = t5d::Detector::Naive;
       } else if (which == "hypercuboid") {
         options.detector = t5d::Detector::Hypercuboid;
+      } else if (which == "portfolio") {
+        options.detector.reset();
       } else {
-        return bad_argument("--detector takes naive or hypercuboid");
+        return bad_argument("--detector takes naive, hypercuboid or portfolio");
       }
     } else if (arg == "--cross-check-nodes" && has_value && read_count(argv[i + 1], n)) {
       options.cross_check_nodes = n;
       ++i;
     } else if (arg == "--no-cross-check") {
       options.cross_check_nodes = 0;
+    } else if (arg == "--max-memory-mib" && has_value && read_count(argv[i + 1], n) && n > 0 &&
+               n <= (std::numeric_limits<std::size_t>::max() >> 20)) {
+      options.max_bytes = static_cast<std::size_t>(n) << 20;
+      ++i;
     } else {
       return bad_argument("unknown or incomplete argument \"" + arg + "\"");
     }

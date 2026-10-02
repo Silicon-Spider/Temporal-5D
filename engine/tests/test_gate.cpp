@@ -6,6 +6,7 @@
 // from a run.
 
 #include <algorithm>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -13,6 +14,7 @@
 #include "t5d/gate.hpp"
 #include "t5d/variants.hpp"
 #include "test_framework.hpp"
+#include "test_reference.hpp"
 
 using namespace t5d;
 
@@ -179,9 +181,11 @@ TEST(gate_full_mode_caps_the_count) {
 
 TEST(gate_full_mode_answers_with_either_detector) {
   // Two kings a side on -0 and +0 (33 legal actions: rulebook J4, J6; see
-  // test_search.cpp), and a checkmate: the same answers from both detectors,
-  // each cross-checked by the other.
-  for (const Detector d : {Detector::Naive, Detector::Hypercuboid}) {
+  // test_search.cpp), and a checkmate: the same answers from both detectors
+  // and from the portfolio (the default), each cross-checked by the other.
+  for (const std::optional<Detector> d :
+       {std::optional<Detector>(Detector::Naive), std::optional<Detector>(Detector::Hypercuboid),
+        std::optional<Detector>()}) {
     gate::Options o;
     o.detector = d;
     Run r = run_with("[Board \"custom\"][k4/5/5/5/K4:-0:1:w][k4/5/5/5/K4:+0:1:w]\n", o);
@@ -190,6 +194,107 @@ TEST(gate_full_mode_answers_with_either_detector) {
     r = run_with("[Board \"custom\"][k4/5/5/5/R4:0:1:b][5/5/5/5/RR3:+1:1:b]\n", o);
     CHECK_EQ(r.lines[1], full_position(0, "black", true, 0, "checkmate"));  // C8
   }
+}
+
+TEST(gate_full_mode_counts_two_creation_orders_as_two_actions) {
+  // The harness's definition of an action (t5d/search.hpp): two orders of two
+  // branching moves are two actions, even where they reach one state. The
+  // position of test_search.cpp's search_two_creation_orders_are_two_actions_j6
+  // (1x1 boards; two rooks that must both branch back, White's creations
+  // inactive): 2 legal actions, and --actions lists both orders.
+  gate::Options o;
+  o.list_actions = 0;
+  const Run r = run_with("[Size \"1x1\"]\n[Board \"custom\"]\n"
+                         "[1:-0:1:w][1:-0:1:b][R:-0:2:w][1:+0:1:w][1:+0:1:b][R:+0:2:w]"
+                         "[1:+1:1:b][R:+1:2:w][1:+1:2:b]\n",
+                         o);
+  REQUIRE_EQ(r.lines.size(), std::size_t{3});
+  CHECK_EQ(r.lines[1], full_position(0, "white", false, 2, "none"));
+  const std::vector<std::string> notes = {
+      "t5d-gate: position 0, White to move: 2 legal actions",
+      "  1. (+0T2)Ra1(+0T1)a1 (-0T2)Ra1(-0T1)a1",
+      "  2. (-0T2)Ra1(-0T1)a1 (+0T2)Ra1(+0T1)a1",
+  };
+  CHECK_EQ(r.notes, notes);
+}
+
+TEST(gate_full_mode_counts_thousands_of_actions_exactly) {
+  // Misc - Timeline Battleground (V3): three timelines, each its own board of
+  // White's to play - thousands of legal actions, counted to a cap above them
+  // (many thousands of search nodes; no budget cuts the gate's count, H37)
+  // and compared with the brute-force reference's count (test_reference.hpp).
+  const std::string name = "Misc - Timeline Battleground";
+  const Variant* v = find_variant(name);
+  REQUIRE(v != nullptr);
+  const t5d_test::Reference ref = t5d_test::reference_actions(variant_start(*v), 10000000);
+  REQUIRE(!ref.overflow);
+  REQUIRE(ref.actions.size() > 1000);
+  for (const std::optional<Detector> d :
+       {std::optional<Detector>(Detector::Naive), std::optional<Detector>(Detector::Hypercuboid),
+        std::optional<Detector>()}) {
+    gate::Options o;
+    o.cap = 100000;
+    o.detector = d;
+    const Run r = run_with("[Board \"" + name + "\"]\n", o);
+    REQUIRE_EQ(r.lines.size(), std::size_t{3});
+    CHECK_EQ(r.lines[1], full_position(0, "white", false, static_cast<int>(ref.actions.size()), "none"));
+  }
+  // And the search behind it took many thousands of nodes.
+  const ActionCount c = count_legal_actions(variant_start(*v), 100000, Detector::Hypercuboid);
+  CHECK(c.stats.nodes > 5000);
+}
+
+TEST(gate_full_mode_ends_in_error_when_the_detectors_disagree) {
+  // Spec §11.0 item 3: the detectors cross-check each other. Through the
+  // counting seam, the cross-checking detector counts one more: the run ends
+  // "error" (exit status 1) at position 0, after its state event, and says why.
+  gate::Options o;
+  o.detector = Detector::Hypercuboid;
+  o.counter = [](const GameState& s, std::size_t cap, Detector d, const SearchBudget& b) {
+    ActionCount c = count_legal_actions(s, cap, d, b);
+    if (d == Detector::Naive && c.known()) ++c.count;
+    return c;
+  };
+  const Run r = run_with("1. e3\n", o);
+  CHECK_EQ(r.status, 1);
+  REQUIRE_EQ(r.lines.size(), std::size_t{2});
+  CHECK(r.lines[0].find("\"event\":\"state\",\"index\":0") != std::string::npos);
+  CHECK_EQ(r.lines[1], std::string("{\"event\":\"end\",\"status\":\"error\",\"actions_accepted\":0,"
+                                   "\"reason\":\"position 0: the detectors disagree: hypercuboid "
+                                   "counts 20, naive counts 21 (cap 1000)\"}"));
+  REQUIRE_EQ(r.notes.size(), std::size_t{1});
+  CHECK(r.notes[0].find("the detectors disagree") != std::string::npos);
+  // With the cross-check off, nothing disagrees.
+  o.cross_check_nodes = 0;
+  CHECK_EQ(run_with("1. e3\n", o).status, 0);
+  // The portfolio is cross-checked the same way (the hypercuboid answers
+  // first: it completes within the first budget).
+  o.cross_check_nodes = 50000;
+  o.detector.reset();
+  CHECK_EQ(run_with("1. e3\n", o).status, 1);
+}
+
+TEST(gate_full_mode_ends_in_error_at_the_memory_ceiling) {
+  // Every search keeps a memory ceiling (Options::max_bytes, --max-memory-mib;
+  // SearchBudget::max_bytes): a count that reaches it is no verdict (H37) -
+  // the run ends "error", saying so, with exit status 1. The portfolio stops
+  // when both detectors have reached it; a named detector at once.
+  for (const std::optional<Detector> d :
+       {std::optional<Detector>(Detector::Naive), std::optional<Detector>(Detector::Hypercuboid),
+        std::optional<Detector>()}) {
+    gate::Options o;
+    o.detector = d;
+    o.max_bytes = 1;
+    const Run r = run_with("1. e3\n", o);
+    CHECK_EQ(r.status, 1);
+    REQUIRE_EQ(r.lines.size(), std::size_t{2});
+    CHECK_EQ(r.lines[1], std::string("{\"event\":\"end\",\"status\":\"error\",\"actions_accepted\":0,"
+                                     "\"reason\":\"position 0: the search reached its memory ceiling "
+                                     "(0 MiB) before it completed: no verdict (H37)\"}"));
+  }
+  // The default ceiling is far above what a position needs.
+  CHECK_EQ(gate::Options{}.max_bytes, kDefaultSearchBytes);
+  CHECK_EQ(run("1. e3\n", false).status, 0);
 }
 
 TEST(gate_diagnostics_list_actions_and_read_options) {

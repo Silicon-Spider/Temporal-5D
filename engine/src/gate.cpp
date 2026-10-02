@@ -68,6 +68,12 @@ bool split(std::string_view text, std::string_view& name, std::string_view& valu
   return true;
 }
 
+ActionCount count_with(const Options& options, const GameState& s, std::size_t cap, Detector d,
+                       const SearchBudget& budget) {
+  return options.counter ? options.counter(s, cap, d, budget)
+                         : count_legal_actions(s, cap, d, budget);
+}
+
 bool read_bool(std::string_view value, bool& out) {
   if (value == "true") {
     out = true;
@@ -159,9 +165,45 @@ Verdicts verdicts(const GameState& s, const Options& options) {
   v.in_check = in_check(s);  // R1
   // At least one action is sought, so that terminal is known whatever the cap.
   const std::size_t cap = std::max<std::size_t>(options.cap, 1);
-  // No budget: the count is exhaustive (or reaches the cap) - H37.
-  const ActionCount count =
-      count_legal_actions(s, cap, options.detector, SearchBudget::unlimited());
+  // No overall budget: the count is exhaustive (or reaches the cap) - H37.
+  Detector answered = Detector::Hypercuboid;
+  ActionCount count;
+  // Every search keeps the memory ceiling (SearchBudget::max_bytes): one that
+  // reaches it answers nothing - the run ends "error", saying so (H37).
+  const auto ceiling = [&]() {
+    return std::runtime_error("the search reached its memory ceiling (" +
+                              std::to_string(options.max_bytes >> 20) +
+                              " MiB) before it completed: no verdict (H37)");
+  };
+  if (options.detector) {
+    answered = *options.detector;
+    SearchBudget unbounded = SearchBudget::unlimited();
+    unbounded.max_bytes = options.max_bytes;
+    count = count_with(options, s, cap, answered, unbounded);
+    if (count.stats.stopped_by_memory) throw ceiling();
+  } else {
+    // The portfolio: each detector in turn on a node budget that doubles
+    // every round; the first to complete answers. Each round's search starts
+    // afresh, so the cost is a small multiple of the faster detector's. A
+    // detector that reaches the memory ceiling is not run again.
+    bool out_of_memory[2] = {false, false};
+    for (std::uint64_t nodes = kPortfolioFirstBudget; !count.known(); nodes *= 2) {
+      const bool last = nodes > (std::uint64_t{1} << 62);  // no doubling past it: no node limit
+      for (const Detector d : {Detector::Hypercuboid, Detector::Naive}) {
+        bool& full = out_of_memory[d == Detector::Naive ? 1 : 0];
+        if (full) continue;
+        SearchBudget b = last ? SearchBudget::unlimited() : SearchBudget::nodes(nodes);
+        b.max_bytes = options.max_bytes;
+        count = count_with(options, s, cap, d, b);
+        if (count.known()) {
+          answered = d;
+          break;
+        }
+        full = count.stats.stopped_by_memory;
+      }
+      if (!count.known() && out_of_memory[0] && out_of_memory[1]) throw ceiling();
+    }
+  }
   if (!count.known()) throw std::logic_error("t5d-gate: an unbudgeted count did not complete");
   v.legal_actions = std::min(count.count, options.cap);
   v.terminal = count.count > 0 ? Outcome::Ongoing
@@ -169,13 +211,13 @@ Verdicts verdicts(const GameState& s, const Options& options) {
   if (options.cross_check_nodes > 0) {
     // Spec §11.0 item 3: the two detectors cross-checked. The other one runs
     // on a node budget; where it does not finish it confirms nothing.
-    const Detector other =
-        options.detector == Detector::Naive ? Detector::Hypercuboid : Detector::Naive;
-    const ActionCount check =
-        count_legal_actions(s, cap, other, SearchBudget::nodes(options.cross_check_nodes));
+    const Detector other = answered == Detector::Naive ? Detector::Hypercuboid : Detector::Naive;
+    SearchBudget b = SearchBudget::nodes(options.cross_check_nodes);
+    b.max_bytes = options.max_bytes;
+    const ActionCount check = count_with(options, s, cap, other, b);
     if (check.known() && check.count != count.count) {
       throw std::runtime_error(std::string("the detectors disagree: ") +
-                               detector_name(options.detector) + " counts " +
+                               detector_name(answered) + " counts " +
                                std::to_string(count.count) + ", " + detector_name(other) +
                                " counts " + std::to_string(check.count) + " (cap " +
                                std::to_string(cap) + ")");
@@ -212,11 +254,12 @@ int run(std::string_view record, const Options& options, const Emit& emit, const
       if (options.list_actions && *options.list_actions == index) {
         // Diagnostic: the position's legal actions, canonical texts sorted.
         const std::size_t cap = std::max<std::size_t>(options.cap, 1);
-        const ActionList list = list_legal_actions(s, cap, options.detector);
+        const ActionList list =
+            list_legal_actions(s, cap, options.detector.value_or(Detector::Hypercuboid));
         note("t5d-gate: position " + std::to_string(index) + ", " +
              (s.to_move() == Colour::White ? "White" : "Black") + " to move: " +
              std::to_string(list.actions.size()) + (list.reached_cap ? " or more" : "") +
-             " legal actions (distinct successor states)");
+             " legal actions");
         const bool even = s.multiverse().even();
         for (std::size_t i = 0; i < list.actions.size(); ++i) {
           note("  " + std::to_string(i + 1) + ". " + action_text(list.actions[i].moves, even));
