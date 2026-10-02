@@ -39,6 +39,21 @@ def parallel_map[Item, Outcome](function: Callable[[Item], Outcome], items: Iter
     return outcomes
 
 
+def observe(source: Source, record_id: str, given: corpus.Feed, options: RunOptions) -> Observation:
+    """What ``source`` says about one record, given it as the harness feeds every source (corpus.feed).
+
+    A record no source is given - one in the official client's export form with
+    a move the notation specification cannot express (export_form.py) - is
+    unsupported for every source alike, with the reason, and the source is not
+    run: the harness, not the source, refused it.
+    """
+    if given.unsupported:
+        return Observation(source=source.name, record=record_id, status="unsupported", reason=corpus.EXPORT_FORM,
+                           detail=given.unsupported, actions_accepted=0,
+                           cap=options.cap if "legal_actions" in source.answers else None)
+    return source.observe(record_id, given.data, options)
+
+
 def run_sources(
     sources: list[Source],
     records: list[Record],
@@ -70,12 +85,12 @@ def record_sources(
     """
     if repeat < 1:
         raise ValueError("repeat must be at least 1")
-    data = {record.id: corpus.read(record, lock) for record in records}
+    given = {record.id: corpus.feed(record, lock) for record in records}
     tasks = [(source, record) for _ in range(repeat) for source in sources for record in records]
 
     def one(task: tuple[Source, Record]) -> Observation:
         source, record = task
-        observation = source.observe(record.id, data[record.id], options_for(source, record))
+        observation = observe(source, record.id, given[record.id], options_for(source, record))
         if progress:
             progress(observation)
         return observation
