@@ -53,6 +53,7 @@ rules reference, `docs/rules/README.md`, which the code cites throughout.
 | **E4:** the gate adapter's full mode and its diagnostics | `include/t5d/gate.hpp`, `tools/t5d_gate.cpp` | H23, H36, H37 |
 | **E5a:** the legal moves in tiers: exact, budgeted, fast | `include/t5d/legal.hpp`, `src/legal.cpp` | C4, R1; build-log spec issues 28, 46 |
 | **E5b:** the tactical scanner: forcing actions, proofs and estimates, the solved store; experiment 6b's tool | `include/t5d/scanner.hpp`, `tools/t5d_scan6b.cpp` | §11.1-§11.3, §15.6, H1-H6, H15, H19, M8 |
+| **E5c:** the scanner's in-check stage (M12's optimisation pass), Lazy SMP and the shared solved store; 6b per board-count range at the design thread budget | `include/t5d/scanner.hpp`, `tools/t5d_scan6b.cpp` | §11.3, §15.6, H17, H19, M12, M13 |
 
 Next: the gate run with the engine configured (parse mode, then full mode); the
 expansion's pin and check relations; which moves the expansion offers, and how a
@@ -1576,8 +1577,9 @@ definition in full; in brief:
 - **Material eval** (H6 v1): the side to move's material on every timeline's latest
   board minus the opponent's. P N B R Q are the chess convention; U 250, D 200, S 700,
   W 125, C 300 are placeholders (`PieceValues`); royals 0.
-- **Determinism** (H15): single-threaded; with a node budget and no clock the same
-  position gives the same search node for node. Lazy SMP waits for Phase 2.
+- **Determinism** (H15): with one thread (the default), a node budget and no clock,
+  the same position gives the same search node for node. Lazy SMP (H17) behind
+  `ScannerOptions::threads`: stage E5c, below.
 - **Nodes**: a move applied, a royal-capture scan, or a node of an E4 search the
   scanner calls - one unit for all the work.
 - **Stand-pat validity** (6b's fifth test; `stand_pat_validity`), operationalised
@@ -1698,6 +1700,88 @@ What changed:
 At 100 boards and more, the work is now led by the completion fallbacks (E4's first
 legal finish when the quiet completion leaves a royal capturable): 38% of the nodes at
 100-199 boards and 64% at 200+. That path is outside the pass M12 ruled.
+
+### Lazy SMP (H17, `ScannerOptions::threads`)
+
+The scanner's design budget is 5 threads (M13: 5 of the 8 cores per GPU). With
+`threads` > 1 every thread searches the same root by iterative deepening (spec §11.3).
+They share two things:
+- **The TT.** It is keyed by the 5D Zobrist key with the ruleset ID (H18) and holds
+  estimates only. It is lockless: a slot holds its entry packed in one word and, beside
+  it, the key XORed with that word, so a slot another thread is writing reads as a
+  miss, never as another position's entry. The best move's key, an ordering hint, sits
+  in a third word, where a torn write only reorders moves.
+- **The solved store.** Proofs go there the moment they are found (H19).
+  `ConcurrentSolvedStore` (a scanner's own) spreads positions over 64 shards by key,
+  each behind a reader-writer lock, and keeps `MemorySolvedStore`'s contract: it
+  compares positions in full on a key match (`same_position`, §11.3's hashing trap) and
+  refuses two kinds of proof for one position. A store that is not safe for threads
+  has its calls serialised.
+
+Everything else is per thread: killers, history and continuation history (§11.3).
+They carry over from scan to scan until `clear()`, which is meant for between games.
+
+**Diversity.** Two standard Lazy SMP means:
+- **Staggered depths.** The main thread searches every depth. Helper `i` searches depth
+  `d` only in alternate blocks of `1 + (i - 1) / 2` depths, shifted by `i`, so helpers
+  are already at `d + 1` and `d + 2` while the main thread is at `d`.
+- **Perturbed order.** A helper perturbs its order of quiet moves by a hash of the move
+  and its index, below a killer's weight.
+
+**Stopping and the result.**
+- A thread that proves the root or exhausts its tree stops the others.
+- The node budget is shared: each thread adds its nodes in batches of 256, so several
+  threads may overrun it by a few hundred nodes each. The clock is shared too.
+- The result is the deepest iteration any thread completed. `resolved_depth` is the
+  deepest that completed uncapped.
+- The root's proof is the store's. Every thread's root proof must agree with it, or
+  the scan throws `std::logic_error`. An exception in any thread is rethrown by `scan`.
+
+**Soundness.** It is unchanged: the TT never answers with a proof, a proof is built
+only as in the single thread, and the store refuses a contradiction.
+
+**Contention.** Threads that copy one state share its timelines and boards by reference
+count, and contend on those counts at every copy and every move. So each helper
+searches from its own copy of the root, rebuilt board by board (`isolated_copy`; where
+the state cannot be rebuilt from its boards alone, because play decided its activity
+under Q1's consecutive rule, Q3 or Q6, it shares the root).
+
+`threads = 1` is the deterministic mode (H15). On the corpus (805 roots and 780
+leaves, 100,000-node scans) it searched the same trees as the scanner before Lazy SMP,
+node for node.
+
+**Scaling on the dev machine.** This machine was shared with other work.
+- **Long scans.** On 1-second scans of 68-105-board positions each thread ran at 94%
+  of a lone thread's speed with 2 threads, and at 82% with 5.
+- **The corpus's 50 ms root scans.** With 5 threads each ran at 61% of one thread's
+  speed. Many of those scans are short, so starting the threads and copying the root
+  weigh more.
+- **Five processes.** Five separate processes each ran at 96%.
+
+At 50 ms, 5 threads resolved at least one thread's depth in every board-count range,
+under Q4's ruled reading. The shares of roots reaching 5 forcing half-turns were:
+
+| Boards | 1 thread | 5 threads |
+|---|---|---|
+| < 50 | 75.7% | 76.5% |
+| 50-99 | 28.6% | 30.7% |
+| 100-199 | 22.7% | 24.7% |
+| 200+ | 2.4% | 2.4% |
+
+**Tests.**
+- `scanner_lazy_smp_no_false_proofs` (and its `long_` version) scans with 2, 3, 4 and 8
+  threads, by node budget and by the clock, over the sparse starts' random play under
+  the default rules and Q4's ruled reading, and over the constructed positions. All
+  scans of a thread count share one store. Every proof is checked against the game
+  tree and against one thread's.
+- `scanner_lazy_smp_store_refuses_contradictions` checks the shared store's contract.
+  Eight threads put proofs at once and then contradictions: every contradiction is
+  refused, and the shortest distance is kept. A plain `MemorySolvedStore` shared by
+  four threads gets every proof, each checked against the game tree.
+- `scanner_lazy_smp_reaches_the_single_threads_depth` gives 5 threads and 1 thread the
+  same 40 ms on a sample of positions from Standard and Two Timelines play. Summed
+  over the sample, 5 threads must resolve at least one thread's depth (one retry, for
+  timing noise).
 
 ## 5DFEN
 

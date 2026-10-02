@@ -91,10 +91,27 @@
 // The TT is keyed by GameState::zobrist() - the 5D Zobrist key with the
 // ruleset ID (H18) - with a fixed, deterministic replacement policy (always
 // replace); move ordering is net-free (H4): MVV-LVA, killers, history and
-// continuation history. The scanner is single-threaded and deterministic:
-// with a node budget (no time limit) the same position, options and store
-// give the same search, node for node - the synchronous debug mode (H15);
-// Lazy SMP (H17) waits for Phase 2.
+// continuation history.
+//
+// THREADS (H15, H17). With one thread (ScannerOptions::threads, the default)
+// the scanner is deterministic: with a node budget (no time limit) the same
+// position, options and store give the same search, node for node - the
+// synchronous debug mode. With more, LAZY SMP: every thread searches the
+// same root by iterative deepening, and they share only the TT and the
+// solved store. The TT is lockless (a slot holds its entry and the key
+// XORed with it, so a slot being written reads as a miss) and holds
+// estimates only; proofs go to the solved store the moment they are found
+// (H19), which compares positions in full on a key match (§11.3's hashing
+// trap) and refuses two kinds of proof for one position - so a thread's
+// result is an estimate unless it is a proof, built as above, and the
+// threads' proofs agree. Killers, history and continuation history are per
+// thread (§11.3), carried from scan to scan until clear() (between games).
+// Diversity: helper threads start at depth 1 or 2 by the parity of their
+// index and perturb their order of quiet moves by a per-thread hash. A
+// thread that proves the root or exhausts its tree stops the others; the
+// node budget is shared (each thread adds its nodes in batches of 256, so
+// several threads may overrun it by a few hundred nodes each), and so is
+// the clock. The result is the deepest iteration any thread completed.
 //
 // NODES. One node is one move applied by the scanner (GameState::apply), one
 // royal-capture scan it makes (check status, C4's test, a move's check test),
@@ -222,6 +239,10 @@ struct ScannerOptions {
   /// and not counted in the nodes (stats.measurement_nodes), so the search is
   /// the same with or without it.
   bool classify_leaves = false;
+  /// Search threads (Lazy SMP, H17; see THREADS in the header comment). 1:
+  /// the synchronous, deterministic mode (H15). The scanner's design budget
+  /// is 5 (M13: 5 of the 8 cores per GPU).
+  int threads = 1;
 };
 
 /// What a scan may spend (H3: a node cap, not a depth cap). A time limit makes
@@ -272,6 +293,10 @@ class SolvedStore {
   /// one). Two proofs of different kinds for one position are a contradiction
   /// - a false proof somewhere - and throw std::logic_error.
   virtual void put(const GameState& position, const Proof& proof) = 0;
+  /// Whether find and put may be called from several threads at once. A
+  /// scanner with more than one thread serialises its calls to a store that
+  /// says no.
+  virtual bool concurrent() const noexcept { return false; }
 };
 
 /// A minimal in-memory solved store.
@@ -291,6 +316,30 @@ class MemorySolvedStore final : public SolvedStore {
  private:
   std::unordered_map<std::uint64_t, std::vector<std::size_t>> index_;
   std::vector<Entry> entries_;
+};
+
+/// The solved store the threads of a scan share (Lazy SMP, H17, H19): the
+/// same contract as MemorySolvedStore - keyed by the Zobrist key with the
+/// ruleset ID (H18), same_position() on a key match (§11.3's hashing trap),
+/// proofs only, never lossy, a contradiction throws std::logic_error - and
+/// safe for concurrent use: the positions are spread over shards by key,
+/// each behind a reader-writer lock, so a probe never waits on a probe. A
+/// scanner's own store is one of these.
+class ConcurrentSolvedStore final : public SolvedStore {
+ public:
+  ConcurrentSolvedStore();
+  ~ConcurrentSolvedStore() override;
+  ConcurrentSolvedStore(const ConcurrentSolvedStore&) = delete;
+  ConcurrentSolvedStore& operator=(const ConcurrentSolvedStore&) = delete;
+  std::optional<Proof> find(const GameState& position) const override;
+  void put(const GameState& position, const Proof& proof) override;
+  bool concurrent() const noexcept override { return true; }
+  std::size_t size() const;
+  void clear();
+
+ private:
+  struct Shards;
+  std::unique_ptr<Shards> shards_;
 };
 
 // ---------------------------------------------------------------------------
@@ -397,22 +446,28 @@ struct ScanStats {
 };
 
 struct ScanResult {
+  /// The main thread's iterations (the only thread's in the deterministic
+  /// mode). Each iteration's `nodes` counts every thread's.
   std::vector<IterationStats> iterations;
-  /// The deepest iteration that completed within the budget, not capped: the
-  /// forcing tree to that many half-turns was fully resolved (0: none).
+  /// The deepest iteration that completed within the budget, not capped - by
+  /// any thread: the forcing tree to that many half-turns was fully resolved
+  /// (0: none).
   int resolved_depth = 0;
-  /// The deepest that completed, capped or not.
+  /// The deepest that completed, capped or not (any thread).
   int completed_depth = 0;
   /// Some completed iteration was exhausted (resolved at every depth).
   bool exhausted = false;
+  /// The threads that searched.
+  int threads = 1;
   /// The root's proof (none if not proven).
   Proof proof;
-  /// The root's estimate after the last completed iteration (the side to
+  /// The root's estimate after the deepest completed iteration (the side to
   /// move's view, centipawns, or a mate score beyond kScanMate - 1000).
   int score = 0;
-  /// The best action of the last completed iteration, its moves in a
-  /// playable order (empty if none).
+  /// The best action of that iteration, its moves in a playable order (empty
+  /// if none).
   std::vector<Move> best_action;
+  /// Every thread's work, summed (seconds: the scan's wall time).
   ScanStats stats;
 };
 
@@ -440,12 +495,14 @@ class Scanner {
   Scanner& operator=(const Scanner&) = delete;
 
   /// Iterative deepening from `root` (a turn start) to options().max_depth
-  /// forcing half-turns, within `budget`; stops early at a root proof or an
-  /// exhausted tree. The TT and the histories carry over from earlier scans
-  /// until clear().
+  /// forcing half-turns, within `budget`, by options().threads threads;
+  /// stops early at a root proof or an exhausted tree. The TT and the
+  /// histories carry over from earlier scans until clear(). Rethrows the
+  /// first exception a thread threw (std::logic_error for a contradiction).
   ScanResult scan(const GameState& root, const ScanBudget& budget);
 
-  /// Empties the TT and the move-ordering tables (not the solved store).
+  /// Empties the TT and every thread's move-ordering tables (between games,
+  /// §11.3) - not the solved store.
   void clear();
 
   const ScannerOptions& options() const noexcept;
