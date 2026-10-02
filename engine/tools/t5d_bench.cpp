@@ -58,7 +58,9 @@
 // position; its growth beside what changed, and per generated move), MATCHED
 // (anchors at the first level, each paired at every level with its nearest
 // position in moves, |E(8)| and the mover's pieces - "at fixed |E|"), and
-// NO_MOVES (the action's moves played, so that no move may be made, Q4: the
+// NO_MOVES (the action's moves played, so that no move may be made - under
+// Q4's Guide-literal reading, the one under which a played action leaves no
+// move to make (R8's default allows moves until submission): the
 // history-length term itself, everything but move generation, per board).
 
 #include <algorithm>
@@ -615,8 +617,28 @@ struct PositionClass {
 struct FlatItem {
   Base* base = nullptr;
   std::vector<t5d::Move> moves;
+  // A NO_MOVES position under rules that allow moves after the shift (R8, the
+  // default): the moves are played under the same rules but for Q4's
+  // Guide-literal reading, the one under which a played action leaves no move
+  // to make - so that the series still times everything but move generation.
+  bool guide_literal = false;
   Shape shape;
 };
+
+// The state a flatness item times: its base (as `base`, rebuilt or not), then
+// its moves - under Q4's Guide-literal reading if the item says so. The
+// flatness games' actions are synthetic play, which stops at the shift (T5),
+// so they are played alike under either reading of Q4.
+t5d::GameState flat_state(const FlatItem& item, const t5d::GameState& base) {
+  t5d::GameState s = base;
+  if (item.guide_literal) {
+    t5d::RuleOptions rules = base.rules();
+    rules.moves_after_shift = false;
+    s = t5d::GameState(base.multiverse(), rules);
+  }
+  for (const t5d::Move& m : item.moves) s.apply(m);
+  return s;
+}
 
 // The series' streams: per level (an N of --flatness-boards), RAW - the
 // one-move children of every action start near N - MATCHED - those of them
@@ -858,9 +880,7 @@ class Pool {
         for (const FlatItem& item : plan_.flat[i].items) {
           auto it = rebuilt.find(item.base);
           if (it == rebuilt.end()) it = rebuilt.emplace(item.base, rebuild(*item.base)).first;
-          t5d::GameState s = it->second;
-          for (const t5d::Move& m : item.moves) s.apply(m);
-          flat[i].push_back(std::move(s));
+          flat[i].push_back(flat_state(item, it->second));
         }
       }
     }
@@ -994,7 +1014,10 @@ void print_usage(std::FILE* stream) {
       "                        --games 4 --children 4 --flat-games 4 --flat-max 24\n"
       "  --emit DIR            write every synthetic position's 5dpgn record into DIR\n"
       "  --json FILE           write the JSON summary to FILE (default: standard output)\n"
-      "  --moves-after-shift   rules Q4's other reading (everything is played under it)\n"
+      "  --no-moves-after-shift  a diagnostic: rules Q4's Guide-literal reading, no move\n"
+      "                        once the present has shifted (everything is played under it;\n"
+      "                        the default, R8: moves until submission)\n"
+      "  --moves-after-shift   accepted and ignored: R8 made it the default\n"
       "  --rules ENCODING      any ruleset (RuleOptions::encode; decimal or 0x hex)\n"
       "  RECORD ...            5dpgn records: every action start is a position\n"
       "\n"
@@ -1535,11 +1558,17 @@ int main(int argc, char** argv) {
             along.apply(next[j]);
             prefix.push_back(next[j]);
           }
-          if (!along.may_move()) {  // the action played: no move may be made (Q4)
-            FlatItem item;
-            item.base = &b;
-            item.moves = prefix;
-            flat_no_move[li].push_back(std::move(item));
+          // The action played, no move may be made: under Q4's Guide-literal
+          // reading only - R8's default lets the mover go on after the shift,
+          // so then the item is played under that reading (FlatItem). A
+          // position rebuilt from its boards loses activity that depends on
+          // the history of play (Q1, Q3, Q6): no item then.
+          FlatItem item;
+          item.base = &b;
+          item.moves = prefix;
+          item.guide_literal = along.may_move();
+          if (!item.guide_literal || !snap.state.rules().history_dependent_activity()) {
+            if (!flat_state(item, snap.state).may_move()) flat_no_move[li].push_back(std::move(item));
           }
         }
       }
@@ -1592,9 +1621,7 @@ int main(int argc, char** argv) {
     if (flat_complete) {
       const auto shape_items = [](std::vector<FlatItem>& items) {
         for (FlatItem& item : items) {
-          t5d::GameState st = item.base->state;
-          for (const t5d::Move& m : item.moves) st.apply(m);
-          item.shape = shape_of(st);
+          item.shape = shape_of(flat_state(item, item.base->state));
         }
       };
       std::vector<std::vector<double>> moves_by_level(levels);
@@ -2027,8 +2054,8 @@ int main(int argc, char** argv) {
         std::printf("   -- %s%s\n", kFlatKindName[kind],
                     kind == kFlatRaw       ? ": every candidate (moves and |E| grow with N)"
                     : kind == kFlatMatched ? ": paired with the anchors on moves, |E(8)|, mover's pieces"
-                                           : ": the action's moves played, no move left (Q4): "
-                                             "everything but move generation");
+                                           : ": the action's moves played, no move left (Q4's "
+                                             "Guide-literal reading): everything but move generation");
         std::printf("   %-26s", "level");
         for (std::size_t l = 0; l < levels; ++l) {
           std::printf(" %9s", ("N" + std::to_string(opt.flatness_boards[l])).c_str());

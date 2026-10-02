@@ -289,7 +289,7 @@ std::vector<RuleOptions> alternative_rulesets() {
   with([](RuleOptions& r) { r.activation = ActivationRule::Consecutive; });
   with([](RuleOptions& r) { r.initial_credit = InitialTimelineCredit::MinusZeroToBlack; });
   with([](RuleOptions& r) { r.play_activates = true; });
-  with([](RuleOptions& r) { r.moves_after_shift = true; });
+  with([](RuleOptions& r) { r.moves_after_shift = false; });  // Q4's Guide-literal reading
   with([](RuleOptions& r) { r.mandatory = MandatoryBoards::AllActive; });
   with([](RuleOptions& r) { r.reactivation = Reactivation::Deferred; });
   with([](RuleOptions& r) { r.turn_zero_reachable = false; });
@@ -733,7 +733,7 @@ TEST(scanner_the_solved_store_refuses_contradictions) {
   // The ruleset is part of the key (H18): the same boards under another
   // ruleset are another position.
   RuleOptions other;
-  other.moves_after_shift = true;
+  other.moves_after_shift = false;  // Q4's Guide-literal reading
   const GameState t = game({"[k4/4Q/1K3/5/5:0:1:w]"}, k5x5, other);
   CHECK(!store.find(t).has_value());
 }

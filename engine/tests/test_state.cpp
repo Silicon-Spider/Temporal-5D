@@ -58,8 +58,8 @@ TEST(state_the_present_advances_one_half_step_per_turn) {
   play(s, "(0T1)Pe2(0T1)e4");
   CHECK(s.present_shifted());
   CHECK(s.obligations_met());
-  CHECK(!s.may_move());  // Q4's default: no move once the present has shifted
-  CHECK(t5d_test::moves_of(s).empty());
+  CHECK(s.may_move());  // Q4, ruled R8: moves may follow the shift, until submission -
+  CHECK(t5d_test::moves_of(s).empty());  // but the only board has been played (T3)
   CHECK(s.submission_status() == SubmitStatus::Safe);  // C4 (R1): no royal is left capturable
   s.submit();
   CHECK(s.to_move() == Colour::Black);
@@ -110,7 +110,8 @@ TEST(state_only_active_boards_in_the_present_are_mandatory) {
   const std::vector<std::string> all = texts(s);
   CHECK(contains(all, "(+1T3)Ra1(+1T3)a2"));
   CHECK(contains(all, "(+2T1)Ra1(+2T1)a2"));
-  // Optional moves first, then the mandatory one (Q4's default orders them).
+  // Optional moves first, then the mandatory one (the order Q4's Guide-literal
+  // reading would need; the default, R8, also allows the other).
   play(s, "(+1T3)Ra1(+1T3)a2");
   play(s, "(+2T1)Ra1(+2T1)a2");
   CHECK(!s.obligations_met());
@@ -120,14 +121,23 @@ TEST(state_only_active_boards_in_the_present_are_mandatory) {
 }
 
 TEST(state_optional_boards_after_the_shift_q4) {
-  // Q4: by default nothing may be played after the present has shifted; the
-  // alternative lets the mover go on to optional boards before submitting.
-  GameState strict = optional_boards();
+  // Q4, ruled R8: by default the mover may go on to optional boards after the
+  // present has shifted, before submitting; under the Guide-literal reading
+  // nothing may be played after the shift.
+  RuleOptions guide;
+  guide.moves_after_shift = false;
+  GameState strict = optional_boards(guide);
   play(strict, "(0T2)Ra1(0T2)a2");
+  CHECK(strict.obligations_met());
+  CHECK(!strict.may_move());
   CHECK(t5d_test::moves_of(strict).empty());
-  RuleOptions r;
-  r.moves_after_shift = true;
-  GameState loose = optional_boards(r);
+  // The move generated before the shift is refused after it, nothing changed.
+  const std::optional<Move> late = t5d_test::find_move(optional_boards(guide), "(+2T1)Ra1(+2T1)a2");
+  REQUIRE(late.has_value());
+  const GameState before = strict;
+  CHECK_THROWS_AS(strict.apply(*late), std::logic_error);
+  CHECK(strict == before);
+  GameState loose = optional_boards();
   play(loose, "(0T2)Ra1(0T2)a2");
   CHECK(loose.obligations_met());
   CHECK(loose.may_move());
@@ -192,11 +202,10 @@ TEST(state_rewinding_by_branching) {
 
 TEST(state_a_new_timeline_is_never_a_destination_for_its_creator) {
   // T7: in the action that created it, nothing of the creator's lands on the
-  // new timeline (its first board is the opponent's colour). With Q4's
-  // alternative the action can go on after the rewind; no move targets +1.
-  RuleOptions r;
-  r.moves_after_shift = true;
-  GameState s(standard_two_timelines_start(), r);
+  // new timeline (its first board is the opponent's colour). Under Q4's
+  // ruling (R8, the default) the action can go on after the rewind; no move
+  // targets +1.
+  GameState s(standard_two_timelines_start());
   act(s, {"(-0T1)Pe2(-0T1)e3", "(+0T1)Pe2(+0T1)e3"});
   act(s, {"(-0T1)Pe7(-0T1)e6", "(+0T1)Pe7(+0T1)e6"});
   play(s, "(+0T2)Ng1(+0T1)g3");

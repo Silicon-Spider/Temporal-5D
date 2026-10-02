@@ -180,14 +180,23 @@ T5D_API t5d_status t5d_state_board(const t5d_state* state, size_t index, int32_t
  * different handles may be used from different threads at once.
  *
  * Rulesets are passed as RuleOptions' canonical 64-bit encoding
- * (t5d/rules.hpp, RuleOptions::encode): 0 = the standard rules; bit 3 =
- * moves_after_shift (Q4); the engine README lists every option.
+ * (t5d/rules.hpp, RuleOptions::encode): 0 = the standard rules - with moves
+ * after the present has shifted, until submission (Q4, ruled R8); bit 3 =
+ * Q4's Guide-literal reading, no move once the present has shifted (a
+ * diagnostic); the engine README lists every option. Each bit marks a choice
+ * that differs from the default.
  * ============================================================================= */
 
 typedef struct t5d_game t5d_game;
 
 #define T5D_RULES_STANDARD UINT64_C(0)
-#define T5D_RULES_MOVES_AFTER_SHIFT (UINT64_C(1) << 3)
+/* Q4's Guide-literal reading: no move once the present has shifted. Bit 3 was
+ * named T5D_RULES_MOVES_AFTER_SHIFT, and meant the opposite, until R8 made
+ * moves after the shift the default (stage E7). */
+#define T5D_RULES_NO_MOVES_AFTER_SHIFT (UINT64_C(1) << 3)
+/* Moves after the shift: the default since R8, so no bit - kept so that a
+ * caller that asked for moves after the shift still gets them. */
+#define T5D_RULES_MOVES_AFTER_SHIFT UINT64_C(0)
 
 /* Which boards get per-square features (t5d_expand_options.square_features). */
 #define T5D_FEATURES_ALL 0   /* every board: the full-history input */
@@ -222,7 +231,8 @@ typedef struct t5d_game_summary {
   int32_t timelines;
   int32_t active_timelines; /* T10 */
   int32_t obligations_met;  /* 1: the present has shifted to the opponent (T5) */
-  int32_t may_move;         /* 1: a move may be made now (Q4) */
+  int32_t may_move;         /* 1: a move may be made now (by default always, R8; under Q4's
+                               Guide-literal reading only before the shift) */
   int32_t may_submit;       /* 1: the action may be submitted: the present shifted (T5), every royal safe (C4) */
   uint32_t ruleset;         /* the ruleset ID (0: standard) */
   uint64_t rules;           /* the ruleset's canonical encoding */
@@ -332,7 +342,8 @@ T5D_API t5d_status t5d_game_replay_next(t5d_game* game, char** error);
 /* Applies one move of the player to move: the generated move with the same
  * source and destination (timeline, half-turn, square) and promotion (0 for
  * none) - the other fields of `move` are not read. T5D_ERR_ILLEGAL if there is
- * none, or no move may be made now (Q4). */
+ * none, or no move may be made now (under Q4's Guide-literal reading, once the
+ * present has shifted). */
 T5D_API t5d_status t5d_game_apply(t5d_game* game, const t5d_move* move, char** error);
 
 /* Applies the move at `index` of the handle's last expansion, which must be

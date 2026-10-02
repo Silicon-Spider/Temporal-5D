@@ -240,17 +240,28 @@ TEST(capi_game_from_fen_and_variant) {
   CHECK_EQ(total, size_t{0});
   CHECK_EQ(t5d_game_replay_next(standard.p, nullptr), T5D_ERR_ARGUMENT);  // no record
 
-  // A ruleset by its encoding: Q4's other reading.
+  // A ruleset by its encoding: Q4's Guide-literal reading (bit 3 since R8
+  // made moves after the shift the default; T5D_RULES_MOVES_AFTER_SHIFT is
+  // now the default's 0).
   Game q4;
-  REQUIRE_EQ(t5d_game_new_variant("standard - two timelines", T5D_RULES_MOVES_AFTER_SHIFT, &q4.p,
-                                  nullptr),
+  REQUIRE_EQ(t5d_game_new_variant("standard - two timelines", T5D_RULES_NO_MOVES_AFTER_SHIFT,
+                                  &q4.p, nullptr),
              T5D_OK);
   t5d_game_summary info{};
   CHECK_EQ(t5d_game_info(q4.p, &info), T5D_OK);
-  CHECK_EQ(info.rules, T5D_RULES_MOVES_AFTER_SHIFT);
+  CHECK_EQ(info.rules, T5D_RULES_NO_MOVES_AFTER_SHIFT);
+  CHECK_EQ(info.rules, std::uint64_t{1} << 3);
   CHECK(info.ruleset != 0u);
   CHECK_EQ(info.even, 1);
   CHECK_EQ(info.timelines, 2);
+  CHECK_EQ(T5D_RULES_MOVES_AFTER_SHIFT, T5D_RULES_STANDARD);
+  Game ruled;
+  REQUIRE_EQ(t5d_game_new_variant("standard - two timelines", T5D_RULES_MOVES_AFTER_SHIFT,
+                                  &ruled.p, nullptr),
+             T5D_OK);
+  CHECK_EQ(t5d_game_info(ruled.p, &info), T5D_OK);
+  CHECK_EQ(info.rules, std::uint64_t{0});
+  CHECK_EQ(info.ruleset, 0u);
 
   // A copy is independent.
   Game copy;
@@ -432,7 +443,7 @@ TEST(rule_options_decode_inverts_encode) {
   add([](RuleOptions& r) { r.activation = ActivationRule::Consecutive; });
   add([](RuleOptions& r) { r.initial_credit = InitialTimelineCredit::MinusZeroToBlack; });
   add([](RuleOptions& r) { r.play_activates = true; });
-  add([](RuleOptions& r) { r.moves_after_shift = true; });
+  add([](RuleOptions& r) { r.moves_after_shift = false; });  // Q4's Guide-literal reading
   add([](RuleOptions& r) { r.mandatory = MandatoryBoards::AllActive; });
   add([](RuleOptions& r) { r.reactivation = Reactivation::Deferred; });
   add([](RuleOptions& r) { r.turn_zero_reachable = false; });
@@ -460,7 +471,7 @@ TEST(rule_options_decode_inverts_encode) {
     r.promotions = PromotionSet::of({PieceKind::Queen, PieceKind::Knight, PieceKind::Princess});
   });
   add([](RuleOptions& r) {
-    r.moves_after_shift = true;
+    r.moves_after_shift = false;
     r.past_self_blocks = false;
     r.family = RuleFamily::ReversedRoyalty;
     r.promotions = PromotionSet::of({PieceKind::RoyalQueen});

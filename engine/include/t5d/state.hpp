@@ -31,8 +31,12 @@
 //    boards themselves. The MANDATORY boards are the active boards in the
 //    present on the mover's colour (T6; Q5 AllActive: every active board of
 //    the mover's). The action's OBLIGATIONS are met when none is left - then
-//    the present lies on the opponent's colour (T5). By default no move may
-//    be made after that (Q4); the action is then submitted.
+//    the present lies on the opponent's colour (T5). The mover may still
+//    move on their remaining playable boards after that, until they submit
+//    (Q4, ruled R8; register D8): a state whose obligations are met offers
+//    submission alongside any further move. Under Q4's Guide-literal
+//    alternative (RuleOptions::moves_after_shift = false) no move may be made
+//    once the obligations are met; the action is then submitted.
 //  * SUBMISSION (T5, C4): allowed once the obligations are met, and - C4 - only
 //    if no royal piece of the mover's is left capturable. That test is the
 //    check ruling's (R1, H36; t5d/check.hpp), reached through a hook
@@ -187,8 +191,10 @@ class GameState {
   /// T5: the action's obligations are met - no mandatory board is left (so
   /// the present lies on the opponent's colour).
   bool obligations_met() const noexcept { return mandatory_count_ == 0; }
-  /// Q4: whether the mover may make another move now (default: only while
-  /// the obligations are unmet).
+  /// Q4: whether the mover may make another move now - always, by default
+  /// (R8: until submission; a move still needs a playable board of the
+  /// mover's); under the Guide-literal alternative (moves_after_shift =
+  /// false) only while the obligations are unmet.
   bool may_move() const noexcept { return rules_.moves_after_shift || !obligations_met(); }
 
   // -- moves -----------------------------------------------------------------
@@ -203,7 +209,8 @@ class GameState {
   /// (S1), en passant's square and victim (S7), and a double step's right,
   /// direction and empty squares (4.6, Q15) - so a malformed move cannot
   /// corrupt the state, and throws std::invalid_argument (std::logic_error if
-  /// no move may be made now, Q4) leaving the state unchanged. It does not
+  /// no move may be made now - Q4's Guide-literal alternative, after the
+  /// shift) leaving the state unchanged. It does not
   /// re-derive the geometry of ordinary moves: for an arbitrary move use
   /// is_pseudo_legal (t5d/movegen.hpp) first.
   ///
