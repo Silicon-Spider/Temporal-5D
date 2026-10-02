@@ -543,3 +543,29 @@ TEST(long_detectors_agree_on_many_games) {
   report("alternative rules, long", rules_tally);
   CHECK(sparse_tally.mates + sparse_tally.stalemates > 20);
 }
+
+TEST(detectors_the_general_realisation_lets_a_castling_precede_rewinds) {
+  // Found by review (2026-10-02): under Q3 (play activates), Q4's other reading
+  // (moves after the shift) and Q21's alternative (castling on mandatory boards
+  // only), a move on an inactive opponent timeline behind the present activates
+  // it and rewinds the present, after which the castling board is no longer in
+  // the present - so the castling must come first, whatever its index. The
+  // general realisation made the moves that create no timeline in ascending
+  // order and missed those orders: the hypercuboid counted 238 actions here,
+  // the naive search and a brute-force reference 254 (successors 242 / 258).
+  RuleOptions r;
+  r.play_activates = true;                   // Q3
+  r.moves_after_shift = true;                // Q4
+  r.castling_on_optional_boards = false;     // Q21
+  const GameState s = t5d_test::game(
+      {"[5:0:1:w]", "[5:0:1:b]", "[5:0:2:w]", "[5:0:2:b]", "[5:0:3:w]", "[5:0:3:b]", "[K*2R*1:0:4:w]",
+       "[5:-1:4:b]", "[5:-2:1:b]", "[R4:-2:2:w]", "[5:-3:1:b]", "[R4:-3:2:w]"},
+      BoardSize{5, 1}, r, Colour::White);
+  for (const Detector d : {Detector::Naive, Detector::Hypercuboid}) {
+    const ActionCount a = count_legal_actions(s, 100000, d);
+    const ActionCount n = count_legal_successors(s, 100000, d);
+    CHECK(a.known());
+    CHECK(a.count == 254);
+    CHECK(n.count == 258);
+  }
+}

@@ -1517,11 +1517,15 @@ class Hyper {
 
   // General (exact under any rules): every order of the point's moves,
   // depth-first, with a table of the states reached (each with the creations
-  // made, in order). Between two creations the plain moves commute and the
-  // obligations only turn from unmet to met as boards are played, so they are
-  // made in ascending order - but for the action's very last move, which may
-  // be any. Each distinct final (state, creation order) with the obligations
-  // met is visited once.
+  // made, in order). Between two creations the plain moves other than castling
+  // commute and the obligations only turn from unmet to met as boards are
+  // played, so they are made in ascending order - but for the action's very
+  // last move, which may be any. A castling is exempt: under Q21's alternative
+  // it is legal only while its board is mandatory, and under Q3 with Q4's
+  // other reading a plain move can rewind the present off that board, so a
+  // castling may have to precede moves of lower index (found by review,
+  // 2026-10-02). Each distinct final (state, creation order) with the
+  // obligations met is visited once.
   void realise_general(const std::vector<int>& x, const Visit& visit, bool& stopped) {
     std::vector<Move> moves;
     std::vector<char> plain;
@@ -1549,7 +1553,8 @@ class Hyper {
       for (std::size_t m = 0; m < moves.size() && go_on && !stopped; ++m) {
         if (used[m] != 0) continue;
         const bool final_move = made + 1 == moves.size();
-        if (plain[m] != 0 && static_cast<int>(m) < last_plain && !final_move) continue;
+        const bool castle = moves[m].castle();
+        if (plain[m] != 0 && !castle && static_cast<int>(m) < last_plain && !final_move) continue;
         if (!is_pseudo_legal(s, moves[m], scratch_)) continue;
         if (!budget_.spend()) {
           stopped = true;
@@ -1569,7 +1574,8 @@ class Hyper {
           }
           used[m] = 1;
           path.push_back(moves[m]);
-          dfs(child, made + 1, plain[m] != 0 ? static_cast<int>(m) : -1);
+          // A castling leaves the ascending order where it was.
+          dfs(child, made + 1, plain[m] == 0 ? -1 : (castle ? last_plain : static_cast<int>(m)));
           path.pop_back();
           used[m] = 0;
         }

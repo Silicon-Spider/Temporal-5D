@@ -10,6 +10,25 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-02 - Engine: the hypercuboid lets a castling precede moves that rewind the present
+
+- `engine/src/hypercuboid.cpp`: the general realisation (alternative rulesets only)
+  made the moves that create no timeline in ascending order between creations,
+  assuming they commute. Under Q3 (activation by play), Q4's other reading and
+  Q21's alternative (castling on mandatory boards only) they do not: a move on an
+  inactive opponent timeline behind the present rewinds the present off the
+  castling board, so the castling must come first. The hypercuboid then
+  under-counted (238 of 254 actions in the reviewer's example; 165 of 400 positions
+  of a random family), which the gate's cross-check would have reported as a
+  detector disagreement; no wrong verdict was found. A castling is now exempt from
+  the order. Found by a follow-up adversarial review that otherwise matched both
+  detectors with an independent brute-force reference on 21,717 positions and
+  73,013 mid-action states under 22 ruleset configurations, H37 holding under
+  17,860 budgeted searches and at the memory ceiling.
+- `engine/tests/test_detectors.cpp`: the reviewer's position as a regression test
+  (it failed before the fix). `engine/README.md`: the realisation's description.
+- Spec: §11.0 item 3 (H37); no spec text changes.
+
 ### 2026-10-02 - Engine stage E4: check, legality, legal actions, mate detection, the gate's full mode
 
 - `engine/` (merged from its worktree branch): check status and submission
