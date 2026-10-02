@@ -47,8 +47,8 @@ bool is_synthetic(const PgnRecord& record);
 /// Makes `replay` replay as the gate adapter's parse mode does: every move
 /// pseudo-legal and allowed by the turn rules, the present shifted at each
 /// submission (T5), royal safety (C4) not tested - which is how synthetic
-/// records were played. Stage E4's PgnReplay tests royal safety unless told
-/// otherwise (set_check_ruling); before E4 there is no test to turn off.
+/// records were played. PgnReplay tests royal safety unless told otherwise
+/// (set_check_ruling(CheckRuling::none())).
 void parse_mode(PgnReplay& replay);
 
 }  // namespace t5d::tools

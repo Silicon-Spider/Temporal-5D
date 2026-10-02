@@ -10,6 +10,43 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-02 - Engine stage E4: check, legality, legal actions, mate detection, the gate's full mode
+
+- `engine/` (merged from its worktree branch): check status and submission
+  legality exactly as rulebook R1 and H36 state them - one royal-capture scan with
+  the move generator's semantics, held equal to it on random multiverses; the
+  default check ruling of `GameState::submit` and of the replay (an action that
+  leaves a royal capturable is `cannot_submit`; `CheckRuling::none()` keeps
+  pseudo-legal play). `CastlingAttacks::AnyBoard` removed (H40).
+- Legal actions: `count_legal_actions` counts the harness's actions (a move set,
+  its timeline-creating moves in creation order); `count_legal_successors` counts
+  distinct successor states; `list_legal_actions` lists them.
+- Mate detection (C5, C8, C9, C13; H37): a naive depth-first detector and a
+  hypercuboid detector designed in-house from spec §11.0 item 3 (design note in
+  `engine/README.md`; no oracle source read), realising points by regime and
+  eliminating whole boxes by an abstract check. Checkmate and stalemate only from
+  an exhaustive search; any node, time or memory budget answers "unknown", tested
+  for every node budget below the exhaustive need. Every search has a memory
+  ceiling (unbudgeted naive diagnostics had reached 48 GB).
+- `t5d-gate` full mode: in_check, legal_actions, terminal - unbudgeted, via a
+  hypercuboid-then-naive portfolio on doubling budgets with a cross-check (a
+  disagreement ends the run in `error`); diagnostics for hand investigation. The
+  whole corpus runs in 8.3 s.
+- `ExpandOptions::legal_moves` (off by default): the expansion's moves restricted to
+  those that begin a legal action; too slow to turn on (spec issue 46).
+- 355 tests, plus long cross-checks (`t5d-tests --long`) against a brute-force
+  reference at turn starts and mid-action - 4,000 positions and 17,207 mid-action
+  states, no disagreement. Reviewed adversarially three times: no soundness bug
+  (an independent brute-force reference matched both detectors on about 6,660
+  positions under 15 rulesets); the search-time defect, the count definition and
+  the test gaps they found are fixed, and the fix round's reference caught and
+  fixed a naive miscount.
+- `docs/BUILD_LOG.md`: step 4, register rows H22, H36, H37, H40, spec issues 44-47,
+  proposed spec edits 38-40. `docs/MEASUREMENTS.md`: the full-mode corpus timings
+  and the legal-moves filter's cost.
+- Spec: §11.0 items 1-5 (H22, H36, H37, H40), §15.6 (M9: the filter), spec issues
+  28 and 44-47, proposed edits 38-40.
+
 ### 2026-10-02 - Network CI: the FP32-resolution FP8 test absorbs one rounding flip
 
 - `python/tests/net/test_cache.py`: the test that the FP8 cache equals the FP8

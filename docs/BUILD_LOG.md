@@ -27,7 +27,10 @@ M5 - building it would break a rule).
   upstream drafts of the two oracle defects (3277bb2); engine E3 - expansion and
   the Phase 1 measurement tools (committed 2026-10-02; 299 tests); network N3 - the
   block-causal scope, the cached path and the §15.2 network rows (committed
-  2026-10-02; 558 tests).
+  2026-10-02; 558 tests); engine E4 - check status and submission legality
+  (H36), legal actions as the harness counts them, the naive and hypercuboid
+  detectors under H37, `t5d-gate`'s full mode (merged 2026-10-02; 355 tests; the
+  full corpus in 8.3 s).
 - **In the tree, uncommitted (2026-10-02):**
   - *Step 2B* (H32 stable answers - required sets at 100%, `golden --write
     --repeat 2`, per-position cost files, calibration probe; H33 - golden
@@ -44,14 +47,6 @@ M5 - building it would break a rule).
     `proof_share`, re-recording on a loaded machine, hand-editing cost files,
     `calibration.json` or `MANIFEST`, moving the rulebook pin unreviewed) and
     CLAUDE.md's commands (`--repeat 2`, `rulebook`).
-  - *Engine E4* (check status and submission legality per H36/R1, legal actions
-    counted as distinct successor states, the naive and hypercuboid detectors
-    under H37, `t5d-gate` full mode): committed on branch
-    `worktree-agent-a6b6e1b848a0af712` (a371893..1113269, 299 tests), not yet
-    merged; under adversarial review (rules fidelity, detectors and counting, gate
-    contract and tests). Merging it after E3: E4 makes `submit()` test royal
-    safety by default, so E3's random pseudo-legal play must pass
-    `CheckRuling::none()`.
   - *Network N3's CPU wall timings* (the code is committed): need a quiet machine.
     From `python/`: `py -m t5d.net.cache_bench --boards 240 --idle-processes
     t5d-gate.exe t5d-measure.exe t5d-bench.exe t5d-tests-long.exe --skip-existing
@@ -353,14 +348,42 @@ the network is PyTorch on CPU under `python/`.
   (indicative, not a §15.3 figure). Every committed-class ambiguity is a named
   parameter with a placeholder default (spec issues 9 and 16).
 
-### 4. After the ruling - in progress (unparked 2026-10-01)
+### 4. After the ruling - E4 built and merged (2026-10-02); the gate run next
 
-Engine stage E4, in its own worktree while E3 finishes in the main tree: check
-status and submission legality exactly as H36 and rules R1 state them, the
-legal-action enumeration the gate's counts need, naive mate detection and the
-hypercuboid detector under H37 (a budget-limited search can only return
-"unknown" - a test pins it), the two detectors cross-checked, and
-`t5d-gate`'s full mode. Then each against the gate.
+Engine stage E4, built in its own worktree and merged into main on 2026-10-02:
+- **Check status** exactly as R1/H36: pass every active board in the present, then
+  any royal capture (kings and royal queens, never a common king) from any of the
+  opponent's playable boards, onto any board, branching captures counting even
+  into a would-be-inactive timeline. **Submission legality**: the same question on
+  the actual position after the turn, no pass. One royal-capture scan with the
+  move generator's semantics, held equal to it on random multiverses. The default
+  check ruling of `GameState::submit` and of the replay; `CastlingAttacks::AnyBoard`
+  removed (H40).
+- **Legal actions**: `count_legal_actions` counts what the harness defines - a
+  move set, its timeline-creating moves in creation order;
+  `count_legal_successors` counts distinct successor states (for search).
+- **Mate detection** (C5, C8, C9, C13; H37): a naive depth-first detector and a
+  hypercuboid detector designed in-house from spec §11.0 item 3 (design note in
+  `engine/README.md`; no oracle source read - the rules-fidelity reviewer compared
+  and found nothing ported). Checkmate or stalemate only from an exhaustive search;
+  a node, time or memory budget answers "unknown" - tested for every node budget
+  below the exhaustive need. Every search has a memory ceiling (2 GiB estimate by
+  default).
+- **`t5d-gate` full mode**: in_check, legal_actions (capped), terminal - never
+  unknown: a hypercuboid-then-naive portfolio on doubling budgets, the first to
+  finish answering, a disagreement ending the run in `error`. The whole corpus
+  runs in 8.3 s (cwmtt/manyChecks 4.1 s; no process above 50 MB).
+- **Reviews**: three adversarial reviews (rules fidelity, detectors and count, gate
+  contract and tests) found no soundness bug - an independent brute-force reference
+  matched both detectors on about 6,660 positions under 15 rulesets - but found a
+  search-time defect (manyChecks unfinished after 25 minutes), the count
+  definition, and test gaps; the fix round closed them, and its own brute-force
+  reference found and fixed a naive miscount (two move sets reaching one state
+  were merged). A follow-up review of the reworked hypercuboid regions is running.
+- **The expansion's legal-moves switch** (`ExpandOptions::legal_moves`, off; spec
+  issue 28): keeps the moves after which the action can still be finished legally.
+  Median 11-218 ms per expansion from 100 to 400 boards, with a tail of minutes -
+  unfit to turn on as it stands (spec issue 46).
 
 ### 5. Phase 1 measurements - tools built, measurements pending a quiet machine
 
@@ -414,7 +437,7 @@ for game records.
 | H17 | parked | Lazy SMP: with the scanner |
 | H18 | built, tested | 5D Zobrist: coordinate-free content hash per board, multiply-rotate with (timeline, half-turn), addition across boards, ruleset ID, player to move, parity, creators, board size; incremental equals from-scratch; duplicated boards never cancel (engine E1, E2) |
 | H19 | parked | Proof export: with the scanner |
-| H22 | built in part | Items 2 (the present-shift half), 4 (castling with the on-board attack test, en passant, promotion) and 5 (the present, activation, submission) built and tested; item 1 (check), the royal-safety half of 2 (C4) and item 3 (mate) in engine E4 (H36, H37) |
+| H22 | built, tested | All five items of §11.0 (E1, E2, E4); the register row's wording predates H36/H40 (proposed spec edit 40) |
 | H23 | built | The gate (oracle side); engine side waits for the engine |
 | H24, H26, H28 | built, tested | The generator and the 5dpgn/5DFEN parser are in-house (`engine/`), written from `docs/rules/README.md` and the notation spec's text; 259 engine tests; boundary clean |
 | H27 | built, tested | The oracle harness, committed 2026-10-01 |
@@ -422,11 +445,11 @@ for game records.
 | H31 | done | CHECKPOINT 1: seven clusters triaged (903f4ae), settled by the user's rulings (H36-H40) |
 | H32-H34 | not started | Step 2 |
 | H35 | done | Commit and nightly tiers green on Linux, 2026-10-01 (runs 36827435595, 36827459456) |
-| H36 | building | Check status and submission legality: engine E4 |
-| H37 | building | Mate verdicts are proofs; budget exhausted = "unknown": engine E4, with the test H37 asks for |
+| H36 | built, tested | Engine E4: check status and submission legality per R1; the gate's comparison with the oracles is next |
+| H37 | built, tested | Engine E4: verdicts only from exhaustive searches; node, time and memory budgets answer "unknown" (tested for every budget below the need) |
 | H38 | done (gate pin pending) | `docs/rules/README.md` is the rulebook: source ranking, rulings R1-R7; the gate's pin of it is step 2's follow-up |
 | H39 | done | No repetition rule; the engine has none to build |
-| H40 | built | Castling's attack test per-board (S2) and en passant per-board (S7): already the engine's defaults; `CastlingAttacks::AnyBoard` to be removed |
+| H40 | built | Castling's attack test per-board (S2) and en passant per-board (S7); `CastlingAttacks::AnyBoard` removed (E4) |
 
 ### A-G, I - representation, network, search, training
 
@@ -729,6 +752,22 @@ decision), and what is parked.
 43. **The block-causal full pass** (training under the scope, and history builds)
     costs 2.3-2.8x a dense pass on this CPU: per-row scope masks defeat the fast
     path. A block-sparse scope selection would fix it; not built.
+44. **H37's "exhausted budget"**: the engine also has a memory ceiling, treated
+    the same way (unknown; in the gate, an `error` end naming it). Proposed spec
+    edit 38.
+45. **§11.0 item 3's two detectors in the gate**: the spec says "naive as the fast
+    path, hypercuboid for near-mate positions"; the gate's adapter runs them as a
+    portfolio on doubling node budgets (hypercuboid first), the other
+    cross-checking. Proposed spec edit 39.
+46. **The legal-moves filter's cost** (spec issue 28): finding the moves that
+    begin a legal action costs one search per move - median 11-218 ms per
+    expansion at 100-400 boards, worst 247-522 s at 400-600. Against M9's targets
+    (20,000 expansions/s at 240 boards) the expansion cannot filter this way; what
+    the expansion offers (pseudo-legal moves, legal first moves, or whole actions -
+    D2's ply split) needs deciding before search uses it.
+47. **Register H22's wording** still says "phantom boards for the mate-vs-stalemate
+    verdict" and "per-board chess rules as 5D queries", which H36 and H40 replaced.
+    Proposed spec edit 40.
 
 ## Proposed spec edits
 
@@ -836,6 +875,15 @@ says now, what it should say, why.
     40).
 37. **§15.3 rows**: write back the measured figures (M4) once the quiet-machine
     wall timings exist, CPU-labelled; `docs/MEASUREMENTS.md` holds the counts now.
+38. **§11.0 item 3 and H37**: "An exhausted budget yields 'unknown'" -> "An
+    exhausted budget - nodes, time or memory - yields 'unknown'" (spec issue 44).
+39. **§11.0 item 3**: after "Run both: naive as the fast path, hypercuboid for
+    near-mate positions", add "the gate's adapter runs them as a portfolio on
+    doubling node budgets, the other cross-checking" (issue 45).
+40. **Register H22**: "royal-capture check detection (phantom boards for the
+    mate-vs-stalemate verdict) ... per-board chess rules as 5D queries" -> "check
+    status per H36 (pass on the active boards in the present) ... per-board castling
+    and en passant attack tests (H40)" (issue 47).
 
 ## Session log
 

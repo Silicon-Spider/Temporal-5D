@@ -8,7 +8,7 @@
 // that has not been played yet this action (L5, T3), and no move is offered
 // once the action's obligations are met (Q4, unless the ruleset allows it).
 // Whether the action it belongs to leaves a royal piece capturable (C4) is NOT
-// tested: that is the check ruling's, pending (t5d/state.hpp, CheckRuling).
+// tested here: that is the check ruling's, at submission (R1; t5d/check.hpp).
 //
 // Movement in brief (Vec4 conventions in t5d/geometry.hpp):
 //
@@ -44,9 +44,7 @@
 //    unmoved rook on its rank at least two squares away (S5), the squares
 //    between empty; barred if the king's square or the square it crosses is
 //    attacked by an enemy piece ON THE CASTLING BOARD (S2, the developer's
-//    ruling: attacked_on_board below). The design spec's reading - a 5D attack
-//    query - is the ruleset option CastlingAttacks::AnyBoard, not implemented
-//    (it waits on the check ruling).
+//    ruling; R6, register H40: attacked_on_board below).
 //
 // Order: playable boards by ascending timeline, pieces by ascending square,
 // directions in table order, distances ascending, promotions in
@@ -136,9 +134,9 @@ void append_piece_moves(const GameState& state, int timeline, int square, MoveLi
 /// pieces on timeline p's latest board, appended to `out` - provided that
 /// board has `colour` to move - whatever the turn, the present or the state
 /// of an action: a plain Multiverse, so the check ruling may also pass a
-/// hypothetical one (C6's "phantom" boards, advanced without a move). The
-/// optional-board castling option (castling_on_optional_boards) is not
-/// applied, there being no action; castling never captures. Activity is not
+/// hypothetical one (check status's passed boards, R1: advanced without a
+/// move). The optional-board castling option (castling_on_optional_boards) is
+/// not applied, there being no action; castling never captures. Activity is not
 /// part of a Multiverse: `inactive_timelines` (ascending; a GameState's
 /// inactive_timelines()) is what inactive_history_is_destination = false
 /// (Q20) reads. Setup is O(1), so calling it once per timeline is O(T) in all.

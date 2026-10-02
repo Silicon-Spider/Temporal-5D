@@ -117,7 +117,11 @@ TEST(pgn_setup_custom_positions) {
   CHECK_EQ(no_board_header.game(), std::string("custom"));
   // The player to move is the colour to move on the present (T4, T5; Q9).
   CHECK(replay("[Board \"custom\"][2k/3/K2:0:7:b]").state().to_move() == Colour::Black);
-  CHECK(plays("[Board \"custom\"][2k/3/K2:0:7:b]\n1b. (0T7)Kc2 2. (0T8)Kb2"));
+  CHECK(plays("[Board \"custom\"][2k/3/K2:0:7:b]\n1b. (0T7)Kc2 2. (0T8)Ka2"));
+  // (2. Kb2 beside the black king is no legal turn: Black could take the king
+  // - C4, R1.)
+  CHECK(fails_with("[Board \"custom\"][2k/3/K2:0:7:b]\n1b. (0T7)Kc2 2. (0T8)Kb2",
+                   RecordFault::CannotSubmit, "(C4, R1): the king on (0T8)c2 can capture"));
   // A first action by the other player does not stop the set-up - position 0
   // exists - and is refused as action 1 (Unreadable), the state unchanged.
   for (const std::string_view text :
@@ -288,8 +292,8 @@ TEST(pgn_setup_named_variants_start_with_white) {
 
 TEST(pgn_resolve_disambiguation_and_ambiguity) {
   // Two white knights can reach c3: "Nc3" is ambiguous, and the reader never
-  // guesses ("Omission": a pinned piece may be left out, and pins are the
-  // pending check ruling's).
+  // guesses ("Omission": a pinned piece may be left out, but legality is
+  // judged per action, at submission - C4).
   const std::string set_up = "[Board \"custom\"][k4/5/5/5/KN1N1:0:1:w]\n";
   CHECK(fails_with(set_up + "1. Nc3", RecordFault::Unreadable, "ambiguous"));
   CHECK(fails_with(set_up + "1. N1c3", RecordFault::Unreadable, "ambiguous"));

@@ -108,7 +108,6 @@ TEST(rules_every_option_changes_the_ruleset_id) {
   with([](RuleOptions& r) { r.en_passant_brawns = false; });
   with([](RuleOptions& r) { r.brawns_promote = false; });
   with([](RuleOptions& r) { r.promotions.insert(PieceKind::Knight); });
-  with([](RuleOptions& r) { r.castling_attacks = CastlingAttacks::AnyBoard; });
   with([](RuleOptions& r) { r.castling_empty_between = false; });
   with([](RuleOptions& r) { r.castling_destination_test = true; });
   with([](RuleOptions& r) { r.castling_rook_path_test = true; });
@@ -132,13 +131,12 @@ TEST(rules_every_option_changes_the_ruleset_id) {
   CHECK_EQ(ids.size(), variants.size());
 }
 
-TEST(rules_validation_refuses_what_is_not_implemented) {
-  RuleOptions any_board;
-  any_board.castling_attacks = CastlingAttacks::AnyBoard;
-  // §11.0 item 4's reading waits on the check ruling.
-  CHECK_THROWS_WITH(any_board.validate(), std::invalid_argument, "check ruling");
-  CHECK_THROWS_AS(GameState(standard_start(), any_board), std::invalid_argument);
+TEST(rules_validation_refuses_malformed_promotion_sets) {
+  // (Castling's cross-board attack option, which validate() used to refuse,
+  // is gone: the per-board test is the rule - R6, register H40.)
   RuleOptions none;
+  none.promotions = PromotionSet::from_mask(0);
+  CHECK_THROWS_AS(GameState(standard_start(), none), std::invalid_argument);
   none.promotions = PromotionSet::from_mask(0);
   CHECK_THROWS_AS(none.validate(), std::invalid_argument);
   RuleOptions pawn;
