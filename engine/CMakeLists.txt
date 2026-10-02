@@ -85,10 +85,11 @@ target_sources(t5d_core PRIVATE
   src/search.cpp)
 # Stage E5a: the legal moves, in tiers.
 target_sources(t5d_core PRIVATE src/legal.cpp)
-# Stage E6a: the main search (MCTS / MCGS) and its built-in evaluators.
+# Stage E6a: the main search (MCTS / MCGS), its built-in evaluators, self-play.
 target_sources(t5d_core PRIVATE
   src/mcts.cpp
-  src/mcts_evaluators.cpp)
+  src/mcts_evaluators.cpp
+  src/selfplay.cpp)
 
 # ---- the C API shared library -----------------------------------------------------
 
@@ -145,9 +146,12 @@ target_sources(t5d-tests PRIVATE
   tests/test_gate_exe.cpp
   tests/test_search.cpp)
 
-# Stage E6a's tests: the search's invariants (§15.4), self-play end to end.
+# Stage E6a's tests: the search's invariants (§15.4), self-play end to end,
+# t5d-play's records through t5d-gate.
 target_sources(t5d-tests PRIVATE
-  tests/test_mcts.cpp)
+  tests/test_mcts.cpp
+  tests/test_play_exe.cpp
+  tests/test_selfplay.cpp)
 
 add_executable(t5d-gate tools/t5d_gate.cpp)
 target_link_libraries(t5d-gate PRIVATE t5d_core)
@@ -198,6 +202,17 @@ if(WIN32)
 endif()
 if(MINGW)
   target_link_options(t5d-scan6b PRIVATE -static)
+endif()
+
+# Stage E6a: t5d-play, the engine against itself, printing the game's 5dpgn
+# record; test_play_exe.cpp runs it and replays the record with t5d-gate.
+target_sources(t5d_tools PRIVATE tools/play_record.cpp)
+add_executable(t5d-play tools/t5d_play.cpp)
+target_link_libraries(t5d-play PRIVATE t5d_tools)
+add_dependencies(t5d-tests t5d-play)
+target_compile_definitions(t5d-tests PRIVATE "T5D_PLAY_EXE=\"$<TARGET_FILE:t5d-play>\"")
+if(MINGW)
+  target_link_options(t5d-play PRIVATE -static)
 endif()
 
 # ---- MinGW: no dependence on the toolchain's runtime DLLs --------------------------
