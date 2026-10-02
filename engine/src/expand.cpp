@@ -145,21 +145,34 @@ constexpr std::uint8_t type_id(Piece p) noexcept {
 constexpr int window_k_of(int k) noexcept { return k < kNoWindow ? k : kNoWindow - 1; }
 
 // THE MOVES AN EXPANSION HOLDS - the one place they are chosen: pseudo-legal
-// (t5d/movegen.hpp), or with options.legal_moves the legal ones - those after
-// which the action can still be finished legally (t5d/search.hpp; C4, R1;
-// build-log spec issue 28). Everything below - the move graph, attacks, E(k),
-// src_extra(k) and the playable boards' roles - is derived from this list.
-// The geometric relations (defence, x-ray) come from the same pass; they
-// depend on no rule about royal safety, so the filter leaves them whole.
+// (t5d/movegen.hpp), or with options.legal_moves those not proved illegal -
+// the legal ones, and under a budget the undecided ones too (t5d/legal.hpp;
+// C4, R1; build-log spec issue 28), with their status. Everything below - the
+// move graph, attacks, E(k), src_extra(k) and the playable boards' roles - is
+// derived from this list. The geometric relations (defence, x-ray) come from
+// the same pass; they depend on no rule about royal safety, so the filter
+// leaves them whole.
 void expansion_moves(const GameState& state, const ExpandOptions& options, MoveList& moves,
-                     RelationList& geometric) {
+                     RelationList& geometric, std::vector<MoveLegality>& legality,
+                     LegalityStats& stats) {
   if (options.defence || options.xray) {
     generate_moves(state, moves, geometric, RelationKinds{options.defence, options.xray});
   } else {
     generate_moves(state, moves);
     geometric.clear();
   }
-  if (options.legal_moves) keep_legal_moves(state, moves);
+  legality.clear();
+  stats = LegalityStats{};
+  if (!options.legal_moves) return;
+  std::vector<MoveLegality> status;
+  classify_moves(state, moves, status, options.legality, &stats);
+  std::size_t kept = 0;
+  for (std::size_t i = 0; i < moves.size(); ++i) {
+    if (status[i] == MoveLegality::Illegal) continue;
+    moves[kept++] = moves[i];
+    legality.push_back(status[i]);
+  }
+  moves.resize(kept);
 }
 
 }  // namespace
@@ -431,7 +444,7 @@ void expand(const GameState& state, const ExpandOptions& options, Expansion& out
   out.origins_unknown_ = origins_unknown;
 
   // -- the moves (a), and the geometric relations (e) in the same pass
-  expansion_moves(state, options, out.moves_, out.geometric_);
+  expansion_moves(state, options, out.moves_, out.geometric_, out.legality_, out.legality_stats_);
 
   // -- records (a), the move graph (b), attacks (e), the boards' roles (d),
   //    written in place into buffers that only ever grow
