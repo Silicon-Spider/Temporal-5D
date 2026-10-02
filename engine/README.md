@@ -48,17 +48,21 @@ rules reference, `docs/rules/README.md`, which the code cites throughout.
 | The C API: states (E1); games and their expansion (E3) | `include/t5d/capi.h` | - |
 | **E3:** the measurement tools, and SYNTHETIC positions by random play | `tools/t5d_measure.cpp`, `tools/t5d_bench.cpp`, `tools/synthetic.hpp` | §15.6, M7, M9 |
 | **E4:** check status and submission legality; the engine's check ruling | `include/t5d/check.hpp` | §11.0 items 1-2, H36 |
-| **E4:** legal actions, their count and listing; the naive and hypercuboid mate detectors | `include/t5d/search.hpp`, `src/search.cpp`, `src/hypercuboid.cpp` | §11.0 item 3, H37 |
+| **E4:** legal actions, their count and listing, the legal moves; the naive and hypercuboid mate detectors | `include/t5d/search.hpp`, `src/search.cpp`, `src/hypercuboid.cpp` | §11.0 item 3, H37 |
 | **E4:** the gate adapter's full mode and its diagnostics | `include/t5d/gate.hpp`, `tools/t5d_gate.cpp` | H23, H36, H37 |
 
 Next: the gate run with the engine configured (parse mode, then full mode); the
-expansion's pin and check relations, and the M7/M9 re-measurement on legal moves.
+expansion's pin and check relations; which moves the expansion offers (build-log
+spec issue 28), then the M7/M9 re-measurement on them.
 
 **Moves are pseudo-legal; turns are legal.** A move is pseudo-legal when it obeys
 every movement rule and the action's bookkeeping; legality is judged per action, at
 submission (C4): `GameState::submission_status` and `submit` apply the engine's check
 ruling by default (rulebook R1, register H36; see "Stage E4") and say `Safe` or
-`Unsafe`. `CheckRuling::none()` submits pseudo-legal play, untested (`Unchecked`).
+`Unsafe`. `CheckRuling::none()` submits pseudo-legal play, untested (`Unchecked`). A
+single move is legal when a legal action begins with it (`legal_moves`,
+`t5d/search.hpp`); the expansion offers those behind a switch
+(`ExpandOptions::legal_moves`, off by default).
 
 ## Building and testing
 
@@ -71,8 +75,10 @@ Other options: `--clean`, `--config Debug`, `--werror`, and arguments for the te
 runner after `--` (`py engine/build.py --test -- zobrist` runs the tests whose names
 contain "zobrist"; `-- --list` lists them). The default run takes a few seconds in
 Release; the long cross-checks of the two mate detectors (tests named `long_*`) run
-only with `-- --long` (or a fragment that names them, `-- long_detectors`): about a
-minute.
+only with `-- --long` (or a fragment that names them, `-- long_detectors`): about an
+hour, most of it the brute-force reference's 4,000 positions and their children.
+`tests/test_gate_exe.cpp` runs the `t5d-gate` executable itself (the build passes
+its path), so building `t5d-tests` builds `t5d-gate` first.
 
 Needs a C++20 compiler (g++ 13 or newer; on Windows the MSYS2 ucrt64 g++ on PATH),
 CMake 3.20 or newer and, preferably, Ninja. `build.py` takes CMake and Ninja from
@@ -377,7 +383,7 @@ What is read:
 | Jumps | `(<a>T<b>)<piece><square>` `>` or `>>`, `x`, `(<a>T<b>)<square>` | The piece's square in full ("Omission"); the pawn letter may be left out (`(-1T19)c6>(0T19)c6`) |
 | Promotions | `=X` before the marks | Required when the ruleset offers more than one piece |
 | Castling | `O-O`, `O-O-O`; or the king's move, `Ke1g1`, `Kg1` | See `castling_shortcuts` |
-| Marks | `+`, `#`, `*` (softmate), then `~`, then `!`/`?` (the examples' assessments, up to two) | `+`, `#`, `*` are read and never checked: check is the pending ruling's, and a writer's mark is never a check verdict |
+| Marks | `+`, `#`, `*` (softmate), then `~`, then `!`/`?` (the examples' assessments, up to two) | `+`, `#`, `*` are read and never checked: a writer's mark is never a check verdict (the engine's is R1's, `t5d/check.hpp`) |
 | Annotations | `(>Lx)`, `(~Tx)`, attached or after whitespace or a comment | Checked against the state (`verify_annotations`) |
 | Comments | `{...}`, not nested | Anywhere between tokens |
 | Results | `1-0`, `0-1`, `1/2-1/2`, `*` | Only comments may follow |
@@ -423,7 +429,8 @@ after the move (T4, T12).
   be read or contradict each other (a named variant's `Size` other than its own -
   whatever the numbers - included); a move that fits **two or more** pseudo-legal
   moves (the reader never guesses: "Omission" lets a writer leave out a pinned
-  piece, and pins are the pending check ruling's); a promotion left unwritten when
+  piece, but legality is judged per action, so a pin is no per-move notion - see
+  "Choices the spec leaves open"); a promotion left unwritten when
   several are offered; a `>`/`>>` or `x` that disagrees with the move (J3: `>>`
   must branch, `>` must not); an annotation that disagrees; an action by the
   player who is not to move - the first one included, refused by the replay
@@ -511,30 +518,50 @@ actions),
 ```
 
 - The state event as in parse mode (below), printed before the position is searched.
-- `in_check`: rules R1's check status (`t5d/check.hpp`). The harness's manual still
-  describes `in_check` as the "phantom" check of an earlier spec revision ("once every
-  eligible timeline has been advanced to its phantom board"); R1 replaced that
-  definition (spec §11.0 item 1 as revised) - the manual's wording needs bringing in
-  line.
-- `legal_actions`: `min(count, N)`, the count being the distinct legal successor
-  states ("Legal actions and their count" in "Stage E4": the contract leaves
-  "distinct" undefined).
+- `in_check`: rules R1's check status (`t5d/check.hpp`; H36), as the harness's
+  manual defines it.
+- `legal_actions`: `min(count, N)`, the count being the legal actions as the manual
+  defines them: an action is the set of its moves, with its timeline-creating moves
+  in the order they create their timelines - two orders of two branching moves are
+  two actions, even where they reach the same state (J6). See "Legal actions and
+  their count" in "Stage E4".
 - `terminal`: `none` if a legal action exists, else `checkmate` if in check, else
-  `stalemate` (C5, C13) - never `unknown`: the count is an exhaustive search with no
-  budget (H37), so a mate verdict is always a proof; the harness's own timeout bounds
-  the run. At least one action is sought even with `--cap 0`, so `terminal` is known.
-- The hypercuboid detector counts; the naive detector cross-checks it at every
-  position (spec §11.0 item 3) under a node budget (50,000 nodes): where it finishes
-  and its count differs, the run ends `error` ("the detectors disagree", with both
-  counts). Where it does not finish it confirms nothing (H37).
+  `stalemate` (C5, C13) - never `unknown`: the count is a search run to completion,
+  with no node or time budget (H37), so a mate verdict is always a proof; the
+  harness's own timeout bounds the run. At least one action is sought even with
+  `--cap 0`, so `terminal` is known.
+- By default a **portfolio** counts: the hypercuboid detector, then the naive one,
+  each on a node budget that doubles every round from 16,384; the first to complete
+  answers. Each round starts afresh, so the cost is a small multiple of the faster
+  detector's - on the corpus the hypercuboid answers every position in its first
+  rounds. The other detector then cross-checks the count at every position (spec
+  §11.0 item 3) under a node budget (50,000 nodes): where it finishes and its count
+  differs, the run ends `error` ("the detectors disagree", with both counts). Where
+  it does not finish it confirms nothing (H37).
+- Every search has a **memory ceiling** (`SearchBudget::max_bytes`, 2 GiB by
+  default; `--max-memory-mib N`). It is an estimate of what the search's stores
+  hold, on the high side: the naive detector alone, stopped by it on the Half
+  Reflected game below, held 0.7 GB at its peak. A search that reaches it stops; a
+  count that stopped there - the portfolio's only once both detectors have - ends
+  the run `error` ("the search reached its memory ceiling (2048 MiB) before it
+  completed: no verdict (H37)"), never a guess.
 - The replay is legal: an action is accepted when every move is pseudo-legal, the
   turn rules allow it, the present has shifted (T5) **and** no royal of the mover's is
   left capturable (C4, R1) - otherwise `rejected`, `cannot_submit`.
 
 On this machine full mode replays the notation specification's own real game
-(Shad vs PseudoAbstractMeta, Half Reflected, 45 actions, eight timelines) in 0.7 s:
-every action legal, 46 positions answered; the naive detector alone, cross-checked by
-the hypercuboid, gives the same 46 answers in 25 s.
+(Shad vs PseudoAbstractMeta, Half Reflected, 45 actions, eight timelines) in 0.6 s:
+every action legal, 46 positions answered. The naive detector alone
+(`--detector naive`) reaches its memory ceiling at position 27 and ends `error`
+there (with the ceiling lifted it once gave the same 46 answers in 25 s).
+
+On the pinned corpus - every record of the gate's manifest, run as the gate runs
+them, one process at a time - full mode takes 8.3 s in all on this machine, no
+process above 50 MB at its peak; the slowest record, cwmtt's manyChecks (53
+positions, up to 17 timelines, many of them in check), takes 4.1 s, its slowest
+position 0.7 s. Three records need Q4's other reading (`--moves-after-shift`) to
+read to the end: cwmtt's 100_timelines 5.7 s (132 MB), ftxi's futures 0.1 s, cwmtt's
+niceAndrey 19.9 s for 122 positions (48 MB).
 
 **Diagnostics** - for investigating a record by hand, never for the gate's
 configuration (`gate.toml`): `--moves-after-shift` (rules Q4's other reading),
@@ -542,9 +569,11 @@ configuration (`gate.toml`): `--moves-after-shift` (rules Q4's other reading),
 `activation=consecutive`, `mandatory=all_active`, `promotions=QRBN`),
 `--lenient-annotations` (`~`, `(>Lx)`, `(~Tx)` not checked), `--pgn NAME=VALUE` (any
 `PgnOptions` field, `castling_shortcuts=any_king` ...), `--actions K` (position K's
-legal actions on standard error: their count, then one line per distinct successor
-state, the canonical action texts sorted), `--detector naive|hypercuboid` (which one
-counts; the other cross-checks), `--cross-check-nodes N`, `--no-cross-check`.
+legal actions on standard error: their count, then one line per action, the
+canonical action texts sorted - a second order of two branching moves is a line of
+its own), `--detector naive|hypercuboid|portfolio` (which counts, the portfolio by
+default; the other cross-checks), `--cross-check-nodes N`, `--no-cross-check`,
+`--max-memory-mib N`.
 
 **Parse mode** (`--parse-only`): for every position K,
 
@@ -571,7 +600,7 @@ Then exactly one end event; every end event carries `actions_accepted`:
 | `ok` | every action read was replayed | `"actions_accepted":N` |
 | `rejected` | `"reason":"illegal_move"`, `"cannot_submit"` or `"unreadable"` (text, an ambiguous move, a disagreeing annotation, an action by the player not to move; also a set-up that cannot be built - see below) | `"actions_accepted":N,"reason":...` |
 | `unsupported` | before position 0: a game the engine does not play - mode, variant, custom boards over 8x8, a promotion set it does not implement - whatever else is wrong with the record | `"actions_accepted":0,"reason":"<what>"` |
-| `error` | an internal failure (none is known), or - full mode - the two detectors disagreeing | `"actions_accepted":N,"reason":"<what>"` |
+| `error` | an internal failure (none is known), or - full mode - the two detectors disagreeing, or a count stopped by the memory ceiling (no verdict, H37) | `"actions_accepted":N,"reason":"<what>"` |
 
 Position 0 is reported whenever the record's set-up can be built - the set-up never
 reads the move text, so a first action by the wrong player is refused at action 1,
@@ -582,15 +611,16 @@ after position 0 - and then a run that reports n positions ends with
 that cannot be read or contradict each other (a named variant's `Size` other than its
 own; a `Size` with no `Board` header and no board strings, as the specification's own
 Rook Tactics I and Knight tactics III are written), a custom position without board
-strings or with malformed ones. **The engine contract as written has no such case**
-(its `rejected` is "the next action is not legal", after the positions reported, and
-its reasons are `illegal_move` and `cannot_submit` only): it needs amending to accept
-`unreadable` - after positions and, with `actions_accepted` 0, before any - along with
-parse mode's null verdicts.
+strings or with malformed ones. The engine contract allows it: a set-up the engine
+cannot read is refused as `unreadable`, with `actions_accepted` 0, before any
+position (the manual's "action 0").
 
 Exit status: 0 for `ok`, `rejected` and `unsupported`, 1 for `error`, 2 for a bad
-command line. The adapter answers from
-the engine alone; it never runs, loads or reads the harness or an oracle.
+command line (with the usage on standard error and nothing on standard output).
+`tests/test_gate_exe.cpp` runs the executable itself: `--cap` and the other options,
+a bad command line, input with CR-LF line ends and a byte-order mark, and the exit
+status of each end. The adapter answers from the engine alone; it never runs, loads
+or reads the harness or an oracle.
 
 ### The specification's examples
 
@@ -618,19 +648,19 @@ hand in its comments:
 
 ## Stage E3: expansion, and the measurement tools
 
-**Provisional throughout.** Moves are pseudo-legal: check status and submission
-legality are stage E4's (ruled at CHECKPOINT 1: rules reference R1, register H36),
-and when E4 is merged the expansion switches to its legal moves in one place
-(`src/expand.cpp`, `expansion_moves`). Until then every |E| measured here is an
-upper bound, every throughput figure is re-measured once legality exists, and nothing
-below depends on what attacks a royal piece (check, pins). The other places that
-meet E4: a C API game submits under its `ruling` (`src/capi.cpp`, `t5d_game::ruling`:
-none - royal safety untested - until E4's is wired in there); the synthetic player
-submits with no ruling (its games are pseudo-legal by design: a default-constructed
-`CheckRuling`, E4's `CheckRuling::none()`); and the tools replay records as the gate
-adapter's parse mode does (`tools::parse_mode`, which turns E4's royal-safety test
-off where `PgnReplay` has one), so a record's positions do not depend on whether its
-actions were legal.
+**Provisional throughout.** Moves are pseudo-legal by default; stage E4's switch
+`ExpandOptions::legal_moves` (off by default until build-log spec issue 28 is
+settled) restricts them to the legal moves - those a legal action begins with - in
+the one place the expansion's moves are chosen (`src/expand.cpp`,
+`expansion_moves`). With pseudo-legal moves every |E| measured here is an upper bound;
+every throughput figure is re-measured once the spec settles which moves the
+expansion offers. Nothing below but that switch depends on what attacks a royal
+piece (check, pins). Where E3 meets E4: a C API game submits under the engine's check
+ruling (`t5d_game_set_legality` switches a game to pseudo-legal submission, as a
+synthetic record's replay needs); the synthetic player submits with no ruling
+(`CheckRuling::none()`: its games are pseudo-legal by design); and the tools replay
+records as the gate adapter's parse mode does (`tools::parse_mode`), so a record's
+positions do not depend on whether its actions were legal.
 
 ### Expansion (`t5d/expand.hpp`)
 
@@ -703,8 +733,9 @@ record carries both.
     if empty; the ray goes on under the same rules and stops at the next piece, of
     either colour, which is the target (recorded where a capture or defence of it
     would be, its board a destination under the ruleset);
-  - **not built, reserved**: *pin* and *check* need check detection - stage E4's
-    (ruled: R1, H36); *travel-threat* is named by §6 and register B11 and used by
+  - **not built, reserved**: *pin* and *check*, which would read check detection
+    (`t5d/check.hpp`, stage E4; R1, H36) - E4 built that, not these relations;
+    *travel-threat* is named by §6 and register B11 and used by
     §11.1 as a class of forcing moves ("branching moves that create a timeline with
     an immediate threat"), but no edge - source and target squares - is defined
     anywhere. Asking for any of the three throws (the C API:
@@ -782,7 +813,10 @@ and the boards), `t5d_game_copy`, `t5d_game_destroy`. Rulesets are passed as
 `RuleOptions::encode()`'s 64-bit encoding (`RuleOptions::decode` reads it back; 0 is
 standard, `T5D_RULES_MOVES_AFTER_SHIFT` is bit 3). New statuses:
 `T5D_ERR_UNSUPPORTED` (a variant or a relation not built) and `T5D_ERR_ILLEGAL` (a
-move or a submission the rules refuse - pseudo-legally until E4). The arrays are the
+move or a submission the rules refuse - a submission that leaves a royal of the
+mover's capturable included, C4, R1, unless `t5d_game_set_legality` set the game to
+`T5D_PSEUDO_LEGAL`). The legal-moves switch is not in the C API yet
+(`t5d_expand_options` is the Python binding's layout). The arrays are the
 network contract's (`python/t5d/net/state.py`), so a Python binding copies them; a
 square's token is board × (cells + registers) + cell.
 
@@ -860,12 +894,13 @@ t5d-bench [--classes N:T,...] [--no-synthetic] [--games G] [--children C]
           [--flat-children C] [--flat-max M] [--no-flatness]
           [--seed S] [--branch-percent P] [--threads 1,2,4,...]
           [--samples S] [--sample-ms MS] [--flat-ms MS] [--no-loop] [--no-pin]
-          [--quick] [--emit DIR] [--json FILE]
+          [--legal] [--quick] [--emit DIR] [--json FILE]
           [--moves-after-shift] [--rules ENCODING] [RECORD ...]
 ```
 
 Expansion throughput (§15.6, M9), and how it changes with the length of the history.
-Moves are pseudo-legal: every figure is provisional.
+Moves are pseudo-legal but in the `--legal` configurations: every figure is
+provisional.
 
 *Positions.* Synthetic classes at §15.6's assumed (N, T) - 100:6, 160:7, 240:8,
 400:10, 600:12 - `--games` games each (16 by default; a game's seed is a function of
@@ -886,7 +921,9 @@ move edges + W(8) + E(8) + every board's features - the full-history input),
 same as `expand` but the features of W(8) + E(8) + src_extra(8) only: the windowed
 input), and `scope+relations` - §15.6's expansion, "legal moves, attention masks,
 typed edges and E", with the windowed input. The full-history ones and
-`scope+relations` also run on 1, 2, 4, 8, 12 and 24 threads.
+`scope+relations` also run on 1, 2, 4, 8, 12 and 24 threads. `--legal` adds
+`expand-scope+legal` and `scope+relations+legal`: the same with the legal moves only
+(`ExpandOptions::legal_moves`; see "Legal moves" in "Stage E4" for what it costs).
 
 *Method.* A pool of worker threads, pinned one per physical core first, then on the
 cores' second logical processors (`--no-pin`: unpinned), each with its own
@@ -1003,29 +1040,38 @@ board it starts on (T3), as the state machine allows them (the present and its s
 Q4's default that no move is made once the present has shifted) - that ends in a
 submittable state (T5) leaving every royal of the mover's safe (C4, R1).
 
-**Counting.** The harness's manual asks for "distinct legal actions (whole turns)"
-and leaves "distinct" undefined. The engine counts **distinct legal successor
-states**: the positions after submission, compared in full - the same boards in the
-same places, the timelines and their creators, the player to move, activity -
-through the Zobrist key, with an exact comparison whenever two keys match
-(`same_position`). Two orders of the same moves therefore count once; two orders of
-the same branching moves count twice when the timelines they create differ (J9).
-The board a timeline branched from (`Timeline::origin`) is not compared: no rule reads
-it, and neither the key nor the fingerprint holds it (`GameState`'s `==` does). A
-count stops at a cap: `count_legal_actions(state, cap, detector)` answers
-`min(count, cap)` (count == cap: "at least cap"). For example, two kings a side on
--0 and +0 (White's on a1, Black's on a5, 5x5) have 33 legal actions: 9 pairs of moves
-within the two boards, 6 jumps from one board onto the other (each plays both, J4), and
-18 in which one king moves and the other then jumps onto that board's former head -
-history by then, so the jump branches (J6).
+**Counting.** As the harness's manual defines the gate's `legal_actions`: an action
+is the **set of its moves, with its timeline-creating (branching) moves in the order
+they create their timelines**. Two orders of the same moves that create no timeline
+are one action; two orders of two branching moves are two actions, even where they
+reach the same state (J6, J9) - say two rooks that each branch back onto a copy of an
+empty board, while the creations are inactive (`search_two_creation_orders_are_two_actions_j6`:
+two actions, one successor). `count_legal_actions(state, cap, detector)` counts them
+and answers `min(count, cap)` (count == cap: "at least cap"). For example, two kings
+a side on -0 and +0 (White's on a1, Black's on a5, 5x5) have 33 legal actions: 9
+pairs of moves within the two boards, 6 jumps from one board onto the other (each
+plays both, J4), and 18 in which one king moves and the other then jumps onto that
+board's former head - history by then, so the jump branches (J6).
 
-`list_legal_actions` lists them, one per successor, sorted by `action_text`: the
-moves in the 5dpgn export form, first those that create no timeline (by ascending
-source timeline), then the branching ones in the order they were made (which numbers
-their timelines). That text names the action; it is not always an order in which
-the moves can be played (Q4 puts the move that shifts the present last), so each
-listed action also carries its moves in a playable order. Where two actions reach one
-successor, the one with the least text is listed.
+`count_legal_successors` counts something else, for search: the **distinct legal
+successor states** - the positions after submission, compared in full (the same
+boards in the same places, the timelines and their creators, the player to move,
+activity - and, where activity is not a function of the boards, the last creator under
+Q1's consecutive reading, a deferral under Q6's) through the Zobrist key, with an
+exact comparison whenever two keys match (`same_position`). The board a timeline
+branched from (`Timeline::origin`) is not compared: no rule reads it, and neither the
+key nor the fingerprint holds it (`GameState`'s `==` does).
+
+`list_legal_actions` lists the actions, one per action as counted, sorted by
+`action_text`: the moves in the 5dpgn export form, first those that create no
+timeline (by ascending source timeline), then the branching ones in the order they
+were made (which numbers their timelines). That text names the action; it is not
+always an order in which the moves can be played (Q4 puts the move that shifts the
+present last), so each listed action also carries its moves in a playable order and
+its successor.
+
+Both counts, and the searches below, also run from a state **during** an action (its
+moves so far made): they then count, or look for, the ways to finish it.
 
 ### Mate detection and H37
 
@@ -1034,22 +1080,65 @@ successor, the one with the least text is listed.
 exists and the side to move is in check, R1), **stalemate** (none exists and it is
 not in check - C13: a side with no royal is never in check), or **unknown**.
 `SearchBudget` limits nodes (one per move applied and one per finished action tested
-for royal safety), wall-clock time and memory (positions held). **H37: a checkmate or
-stalemate verdict is a proof** - it is given only by a search that examined every
+for royal safety), wall-clock time and memory: the positions held, and a **memory
+ceiling** every search has - `max_bytes`, 2 GiB by default even under
+`SearchBudget::unlimited()`, by an estimate of a held position's cost (boards and
+history are shared between positions, so the estimate does not grow with the
+history; measured, it is about three times what is really held). **H37: a checkmate
+or stalemate verdict is a proof** - it is given only by a search that examined every
 action and terminated (`stats.exhaustive`); a search a budget stopped answers
-`Unknown`, never checkmate or stalemate (`stats.stopped_by_budget`). The searches are
+`Unknown`, never checkmate or stalemate (`stats.stopped_by_budget`;
+`stats.stopped_by_memory` when the ceiling stopped it). The searches are
 deterministic, so a search that needs K nodes completes with a budget of K and answers
 `Unknown` with any budget below K - the tests run every budget from 0 to K on mates,
 stalemates and positions with legal actions, and check the property on random play.
-`standard_check_ruling()`'s `has_legal_action` is an exhaustive search (no budget).
+`standard_check_ruling()`'s `has_legal_action` is a search with no node or time
+budget; at the memory ceiling it answers `Unknown`, and so does `outcome()`.
 
 **The naive detector** searches move sequences depth-first, as the state machine
 generates them: every pseudo-legal move of the mover, applied to a copy, recursively;
 a state whose obligations are met is a finished action, legal if its royals are safe.
 Its pruning is a transposition table of every state reached (two orders of the same
-moves reach one state, which is searched once). It is fast where legal actions abound
+moves reach one state, which is searched once). Counting actions, an entry is the
+state together with the action so far - its moves as a set, its branching moves in
+order - since two different sets of moves can reach one state (two identical pieces
+exchanging destinations) and are two actions. It is fast where legal actions abound
 and exponential in the number of boards where they are scarce: near mate it examines
-every combination of moves.
+every combination of moves; its table is what reaches the memory ceiling first.
+
+### Legal moves (build-log spec issue 28)
+
+R1 judges legality per action ("moving into check during a turn is allowed"), so a
+single move is legal when a legal action begins with it. `legal_moves(state)` gives
+them: the pseudo-legal moves after which the action can still be finished legally
+(`can_finish_legally`) - at a turn's start, or during an action. One search from the
+state first: if the action cannot be finished at all, no move is legal. Otherwise
+each legal finish found is replayed with each of its moves first; a move that leads a
+valid order needs no search of its own, and every other move gets one (to its first
+legal finish, by the hypercuboid detector). A move whose search reaches the memory
+ceiling is kept: it is not proven illegal. The test against the brute-force
+reference compares them with every move's own enumeration.
+
+The expansion offers them behind `ExpandOptions::legal_moves` (off by default, until
+the spec settles what the expansion offers). What it costs, on t5d-bench's synthetic
+classes (random play; each class's positions and four of their one-move children,
+20 positions per class, one thread, this machine):
+
+| Class (N boards, T active) | `expand-scope`, median | `+legal`, median | `+legal`, mean | `+legal`, worst | moves kept |
+|---|---|---|---|---|---|
+| 100, 6 | 0.012 ms | 11 ms | 19 ms | 94 ms | 56% |
+| 160, 7 | 0.019 ms | 50 ms | 53 ms | 149 ms | 67% |
+| 240, 8 | 0.028 ms | 157 ms | 175 ms | 0.8 s | 29% |
+| 400, 10 | 0.036 ms | 218 ms | 15.7 s | 247 s | 27% |
+| 600, 12 | 0.056 ms | 0.8 ms | 36.3 s | 522 s | 7% |
+
+The filter is a search per move: tens to hundreds of milliseconds where
+`expand-scope` takes hundredths of one - and a heavy tail: in the larger classes a few
+positions (random play leaves kings in check on many boards at once, with a thousand
+moves or more) need minutes, the searches of their moves proving one by one that the
+action cannot be finished. Where no legal action exists at all, the first search
+settles it for every move (the 600-board class's median). It is not fit to be on by
+default as it stands; what the expansion should offer is the spec's to say first.
 
 ### The hypercuboid detector: design
 
@@ -1083,26 +1172,41 @@ Q21; no landing on an inactive timeline's history, Q20), plus J6's branching twi
 the jumps between axes: mid-action no other move can appear - the mover's moves visit
 only boards of the mover's colour, and an action changes those only by playing them
 (their contents unchanged). Whether a point's moves really are pseudo-legal, in an
-order, is then decided by the state machine itself (below).
+order, is then decided by the state machine itself (below). S0 may also be a state
+during an action (a search for the ways to finish it): the axes are then the boards
+still to play.
 
 **A point's verdict.** For a point x: (1) consistency; (2) J6's order; (3) its
 *realisation*: the orders in which its moves can be played, each ending with the
 obligations met (T5) - one final state per order of its branching moves, found by
 replaying through `GameState` (each move checked by `is_pseudo_legal` in the state it
 is played in); (4) royal safety (C4) of each final state. A safe final state is a
-legal action.
+legal action - one per order of the branching moves (the count's definition).
 
-Realisation under the rules where only the order of the branching moves and the move
-that shifts the present matter - the default activity rules (count rule, no play
-activation, `Rewinds`), Q4's default, and an opponent with no inactive timeline (so
-no creation reactivates anything, T11): for each order of the branching moves, the
-moves that create no timeline (ascending source timeline), then the branching ones,
-then one last move L, tried for each candidate L. Those rules make a state depend only
-on which moves were made and on the order of the creations, and make the obligations
-monotone in the moves made, so if any order works, one of these does. Under every
-other ruleset (or when a reactivation is possible) the realisation is a depth-first
-search over all orders of the point's moves, with a table of the states reached:
-exact for any rules, slower.
+**Realisation**, by the rules in force - three regimes:
+
+- *Ordered*: Q4's default (no move once the present has shifted), activity changed
+  by creations alone and deterministically in their number - the count rule or Q1's
+  consecutive reading, `Rewinds`, no activation by play - including T11's
+  reactivation (the j-th creation reactivates the opponent's j-th earliest-created
+  inactive timeline) and T12's rewind by it; castling allowed on optional boards.
+  With the creations' order fixed, whether the obligations are met depends only on
+  which boards were played and how many creations were made, and with that number
+  fixed it can only turn from unmet to met as boards are played. So a move that
+  creates no timeline is best made as late as J6 allows: just before the first
+  branch that needs its board, else after the last creation (one of them last), or
+  all of them just before the last creation, which is then the last move. A
+  depth-first search over the creation orders, stopping wherever a move ends the
+  action with moves still to make, visits each realisable order once.
+- *FreeOrder*: Q4's other reading (moves after the shift), otherwise as above: the
+  moves that create no timeline first, then the branches in each creation order J6
+  allows.
+- *General* - Q3's activation by play, Q6's deferral, castling on mandatory boards
+  only: a depth-first search over every order of the point's moves, with a table of
+  the states reached (each with its creations so far, in order); between two
+  creations the moves that create no timeline commute and the obligations only turn
+  from unmet to met as boards are played, so they are made in ascending order but
+  for the action's very last move. Exact for any rules, slower.
 
 **Eliminating whole boxes.** The search keeps the unexplored part of the space as
 disjoint *boxes* (a box: one subset of values per axis; the start: everything). It
@@ -1118,10 +1222,6 @@ j, B's subset minus R's on j, B's subsets elsewhere). Regions:
 - *a J6 cycle*: J6 branches around a cycle of axes, each needing the next one's board
   played first - no order plays them; every combination of such branches around the
   same cycle fails alike;
-- *the present never shifts* (T5; under the realisation's fast rules): a mandatory
-  axis on `Pass` and, on every axis, no branching move whose new board would lie
-  before the present (only such a creation can rewind it, T8) - under Q5's
-  alternative, any active axis on `Pass`;
 - *a royal capture* (C4): the final state's capture C of a royal rests on a fixed set
   of places (`capture_places`: the attacker's square, every square it crosses, the
   royal's square). Places on boards that existed at S0 never change. A place on the
@@ -1138,16 +1238,63 @@ j, B's subset minus R's on j, B's subsets elsewhere). Regions:
   move and allows no other. Under Q20's alternative a capture landing on a history
   board depends on activity and is not used. Of the captures found, the one that
   removes the largest share of the box is used;
+- *royal captures, order by order* (outside the general regime, and not under Q20's
+  alternative): where no capture's region holds for every creation order - a point
+  that creates two timelines or more, its captures touching them - and every order
+  in which the point is played leaves a royal capturable, each order's capture
+  constrains the axes the point plays with moves that create no timeline (as above),
+  and the region keeps the point's branches and passes exactly and every other axis
+  on such moves (J6's targets on their kind of move): every point in it is played in
+  exactly the same creation orders, with the same new boards under the same numbers,
+  and has each order's capture;
+- *no order realises the point* - the largest of: (i) its *skeleton class* (Ordered
+  and FreeOrder; see below): the same axes on `Pass`, every other axis that plays no
+  J6 target on any move that creates no timeline, every branch on the branches with
+  the same J6 target and threshold class (and, under Q20's alternative, destination
+  timeline); (ii) the other moves within a board (castling apart) on the axes where
+  the point makes one; (iii) - the present never shifts (T5; outside the general
+  regime) - a mandatory axis on `Pass` and, on every axis, no branching move that
+  could rewind the present (T8, T12); under Q5's alternative, any active axis on
+  `Pass`;
 - otherwise the single point.
 
-Before a point is picked, the box is *narrowed* by the same reasoning, value by value
-and without judging anything: a jump's half whose other half has left the box, a J6
-branch whose board can no longer be played, and - under the fast scheme's rules -
-`Pass` on a mandatory board when no value left in the box could rewind the present
-(under Q5's alternative, `Pass` on any active board) are removed, until nothing
-changes; a box left with an empty axis is dropped. The point is then picked
-consistent where the box allows (a jump's halves together, a J6 branch's board
-played; mandatory boards played, optional ones left).
+**The abstract check: whole boxes without a realisable point.** Outside the general
+regime whether a point is realisable depends only on its *skeleton*: which axes it
+passes; which it plays with a move that creates no timeline (and which of those J6
+needs early); and of each branch, its J6 target and its *threshold class* - where its
+new board lies among the axes' heads (the boards of the mover's that can count for
+the present: the present's, and any a reactivation brings back). That is all of a
+creation the state machine reads: the present is the earliest counting head (T4), on
+the mover's colour while a counting head of the mover's precedes every counting one
+of the opponent's (T5, T8); the creation's activity is its place in the order (T10),
+and so is what it reactivates (T11, T12). So before a point is picked, `feasible()`
+searches the skeletons the box allows, creation by creation, over the counting heads
+alone - the same normal form as the realisation: the creations in each order (a
+memo of the states already searched: the boards played, the number of creations, the
+earliest active new board), and at each step the two ways to end - the plain moves
+after the creations, one of them last (feasible iff, with every plain-capable board
+played, the obligations are met, and they are still unmet without the forced ones,
+or without one of them), or all before a last creation (feasible iff, of the largest
+sets that keep the obligations unmet - one per unplayed counting board that keeps
+them so - one leaves them met after the creation). It over-approximates: it ignores
+Q20's activity test, and takes a jump's two boards as two moves within boards - which
+is exact: at the end of an action, a jump that plays boards i and j can come last
+exactly when one of the two separate moves can (were both of "all but i" and "all but
+j" to meet the obligations while "all but i and j" does not, i's head would lie
+before j's and j's before i's). So "no skeleton" proves the box holds no action, and
+the box is removed whole (`stats.unrealisable_boxes`); a skeleton found picks the
+point, which is then realisable unless the over-approximation spoke. The check takes
+at most 16,384 steps per box; beyond that it answers "unknown" and the point is
+picked as before.
+
+Before a point is picked, the box is also *narrowed* value by value, without judging
+anything: a jump's half whose other half has left the box, a J6 branch whose board can
+no longer be played, and - outside the general regime - `Pass` on a mandatory board
+when no value left in the box could rewind the present (under Q5's alternative,
+`Pass` on any active board) are removed, until nothing changes; a box left with an
+empty axis is dropped. Without a skeleton to follow, the point is picked consistent
+where the box allows (a jump's halves together, a J6 branch's board played;
+mandatory boards played, optional ones left).
 
 As built, every region is checked to hold its own point (else the search throws: a
 region that missed it would loop), and a final state's boards are checked against
@@ -1160,8 +1307,22 @@ removes at least its point, so it terminates.
 
 **Why it is faster near mate.** Where legal actions are scarce, most points fail on a
 royal capture that rests on a few boards; one region then removes every combination of
-the other boards' moves at once, where the naive search tries each. Where legal actions
-abound, both find one at once.
+the other boards' moves at once, where the naive search tries each. Where most points
+cannot be played in any order - an opponent's inactive timelines behind the present,
+brought back by the mover's creations (cwmtt's manyChecks) - the abstract check
+removes them a box at a time and leads the search to the points that can. Where legal
+actions abound, both find one at once.
+
+**Checked against a brute-force reference.** `tests/test_reference.hpp` enumerates
+every move sequence the state machine allows, one move at a time, with no table and
+no pruning. On random tiny multiverses - 1x1 boards (every move travels), timelines
+of both sides at staggered times, inactive ones among them, under random rulesets
+(Q1-Q6, Q8, Q20, J3's other reading) - both detectors must give its count of actions,
+its successors, its listing and its verdict, and after each first move the ways to
+finish the action and the legal moves (`detectors_agree_with_the_brute_force_reference`:
+400 positions and their children; `long_`: 4,000). Hand-built node bounds guard the
+cases that once stalled the search (`search_the_hypercuboid_stays_small_when_every_branch_rewinds`,
+`search_the_hypercuboid_finds_actions_past_reactivations`).
 
 ### The two detectors compared
 
@@ -1171,17 +1332,22 @@ Measured on this machine (Release, g++ 16.2; `build/` scratch benchmark, not a t
 |---|---|---|
 | A checkmate on timeline 0 with 2n further mandatory boards each holding a knight whose moves cannot help (`detectors_the_hypercuboid_stays_small_near_mate`), n = 1 (3 timelines) | 2,407 nodes | 86 nodes |
 | the same, n = 2 (5 timelines) | 817,875 nodes, 0.6 s | 144 nodes, <1 ms |
-| the same, n = 3 (7 timelines) | stopped at 60,000,000 nodes after 90 s: `unknown` | 208 nodes, <1 ms |
-| Random legal play from every named variant, 551 positions (verdict + count to 40 + successor set, each) | 2.3 s in all | 0.2 s |
-| Random play from sparse starts that run into mates, 798 positions | 13.8 s | 5.2 s |
-| The same under four alternative rulesets (Q1-Q6, Q18-Q20, J3), 920 positions | 15.9 s | 7.8 s |
+| the same, n = 3 (7 timelines) | stopped by the memory ceiling after 1,007,435 nodes, 0.7 s: `unknown` | 208 nodes, <1 ms |
+| 1x1 boards, timelines -3..+3, a queen on each at T4: every move a rewinding branch (`search_the_hypercuboid_stays_small_when_every_branch_rewinds`), 51 actions | 102 nodes | 102 nodes (34 million before the regimes) |
+| cwmtt's manyChecks, position 42 (13 timelines, three of the opponent's inactive behind the present): 1,000 actions to the cap | 1 action, then the memory ceiling after 504,652 nodes, 1.9 s: `unknown` (with no ceiling, still 1 action after 30,000,000 nodes) | 8,541 nodes, 0.02 s |
 
-The last three rows are the long cross-check (`t5d-tests --long`): on 2,269 positions
-the two detectors gave the same verdict wherever both proved one (2,123 positions,
-among them 57 checkmates and 48 stalemates), the same count to 40 wherever both knew
-it (2,107) and the same successor states wherever both were exhaustive (1,021) - no
-disagreement. The default run plays fewer games (`detectors_agree_*`, about 2 s).
-
+The long cross-check (`t5d-tests --long`): random legal play from every named
+variant (551 positions), from sparse starts that run into mates (806) and the same
+under four alternative rulesets (Q1-Q6, Q18-Q20, J3; 927) - the two detectors gave
+the same verdict wherever both proved one (2,150 positions, among them 56 checkmates
+and 52 stalemates), the same count to 40 wherever both knew it (2,132) and the same
+successor states wherever both were exhaustive (1,028); naive 20.3 s, hypercuboid
+7.1 s in all. Against the brute-force reference: 4,000 tiny multiverses (2,313 with
+legal actions, 1,931 with inactive timelines, 1,365 with an action creating two
+timelines or more) and 17,207 states after a first move - every count, listing,
+verdict and set of legal moves equal to the reference's; one naive search stopped by
+the memory ceiling and was not compared. No disagreement. The default run plays fewer
+(`detectors_agree_*`, a few seconds).
 ## 5DFEN
 
 `parse_fen_board` reads one board string, `[pieces:timeline:turn:colour]`, for a
@@ -1339,10 +1505,18 @@ Each is recorded where it is made (the header comments) and listed here:
   variants with fairy pieces (unicorns, brawns) share the standard ID: their positions
   name their pieces, whose rules are the same under every ruleset.
 
-- **What "distinct legal actions" counts** (stage E4; the gate contract's
-  `legal_actions`): distinct legal successor states, compared in full but for
-  `Timeline::origin` - see "Legal actions and their count". Counting move sequences
-  or move sets would count the same position several times.
+- **What the gate's `legal_actions` counts** (stage E4): the harness's manual
+  defines it - an action is the set of its moves, with its branching moves in their
+  order - and the engine counts exactly that (`count_legal_actions`); the distinct
+  successor states, which a search may want instead, are a count of their own
+  (`count_legal_successors`). See "Legal actions and their count".
+- **A single move's legality** (stage E4; build-log spec issue 28): a move is legal
+  when a legal action begins with it (`legal_moves`); the expansion offers those only
+  behind `ExpandOptions::legal_moves`, off by default until the spec says which moves
+  it offers.
+- **Every search has a memory ceiling** (stage E4): reaching it is `unknown` (H37),
+  and the gate's run ends `error` - never a verdict, and never growth without bound
+  on a shared machine.
 - **Check status passes the active boards in the present whatever Q5 says** (R1's
   words: "all active boards in the present"): under Q5's alternative, which makes
   boards ahead of the present mandatory too, they are still not passed.

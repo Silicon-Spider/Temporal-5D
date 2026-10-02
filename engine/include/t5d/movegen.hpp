@@ -134,9 +134,9 @@ void append_piece_moves(const GameState& state, int timeline, int square, MoveLi
 /// pieces on timeline p's latest board, appended to `out` - provided that
 /// board has `colour` to move - whatever the turn, the present or the state
 /// of an action: a plain Multiverse, so the check ruling may also pass a
-/// hypothetical one (C6's "phantom" boards, advanced without a move). The
-/// optional-board castling option (castling_on_optional_boards) is not
-/// applied, there being no action; castling never captures. Activity is not
+/// hypothetical one (check status's passed boards, R1: advanced without a
+/// move). The optional-board castling option (castling_on_optional_boards) is
+/// not applied, there being no action; castling never captures. Activity is not
 /// part of a Multiverse: `inactive_timelines` (ascending; a GameState's
 /// inactive_timelines()) is what inactive_history_is_destination = false
 /// (Q20) reads. Setup is O(1), so calling it once per timeline is O(T) in all.
