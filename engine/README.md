@@ -405,6 +405,7 @@ open, ambiguous or contradicts itself:
 | `annotation_mismatch_is_error` | false: a token that disagrees is a warning (`PgnReplay::warnings()`; `t5d-gate` prints it on stderr) and the move is played - the notation calls these tokens "purely for better human comprehension", so a wrong one is the writer's slip, and refusing would hide the record's later positions from the gate | true: the move is unreadable (`t5d-gate --strict-annotations`) | T15, Q26 |
 | `infer_omitted_boards` | false: a move without its board while there are several timelines is unreadable | true: matched on every playable board of the mover's, unreadable if ambiguous | "Moves" ("must be preceded") |
 | `check_turn_numbers` | true | false: numbers ignored, colours still alternate | "Turns" |
+| `turn_number_mismatch_is_error` | false: a number that does not count the turns is a warning (`PgnRecord::warnings`, passed on to `PgnReplay::warnings()`; `t5d-gate` prints it) and reading goes on - a missing turn still shows, as the next action's moves are checked like any other | true: unreadable from there | "Turns" |
 
 `~` is checked one way: written, the move must branch, the new timeline must be
 active (T10) and its first board no later than the column after the present - T8's

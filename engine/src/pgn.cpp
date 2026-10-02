@@ -518,6 +518,12 @@ class RecordReader {
   [[noreturn]] void fail_at(std::size_t offset, const std::string& what) const {
     unreadable(where(offset) + ": " + what);
   }
+  // A turn number that does not count the turns: unreadable, or a warning
+  // (PgnOptions::turn_number_mismatch_is_error).
+  void mismatch(PgnRecord& r, std::size_t offset, const std::string& what) const {
+    if (options_.turn_number_mismatch_is_error) fail_at(offset, what);
+    r.warnings.push_back(where(offset) + ": " + what + " - read on (a turn number only)");
+  }
 
   bool at_end() const noexcept { return i_ >= t_.size(); }
   char peek(std::size_t k = 0) const noexcept {
@@ -716,8 +722,8 @@ class RecordReader {
                   " is missing (\"Turns\": White's moves, then '/' or <x>b. and Black's)");
     }
     if (before && options_.check_turn_numbers && n != before->turn_number + 1) {
-      fail_at(at, "turn " + std::to_string(n) + " follows turn " +
-                      std::to_string(before->turn_number) + ": turn numbers count the turns");
+      mismatch(r, at, "turn " + std::to_string(n) + " follows turn " +
+                          std::to_string(before->turn_number) + ": turn numbers count the turns");
     }
     begin(Colour::White, n, at);
   }
@@ -730,9 +736,9 @@ class RecordReader {
                       std::to_string(before->turn_number) + ": White's action is missing");
     }
     if (before && options_.check_turn_numbers && n != before->turn_number) {
-      fail_at(at, "Black's moves of turn " + std::to_string(n) + " follow White's of turn " +
-                      std::to_string(before->turn_number) +
-                      ": a turn is White's action, then Black's (\"Turns\")");
+      mismatch(r, at, "Black's moves of turn " + std::to_string(n) + " follow White's of turn " +
+                          std::to_string(before->turn_number) +
+                          ": a turn is White's action, then Black's (\"Turns\")");
     }
     begin(Colour::Black, n, at);
   }
@@ -1049,7 +1055,8 @@ PgnMove read_pgn_move(std::string_view text) { return MoveReader(text).read(); }
 // ---- public: the replay -------------------------------------------------------------------------
 
 PgnReplay::PgnReplay(PgnRecord record, const PgnOptions& options, const RuleOptions& rules)
-    : record_(std::move(record)), options_(options), state_(set_up(rules)) {}
+    : record_(std::move(record)), options_(options), state_(set_up(rules)),
+      warnings_(record_.warnings) {}
 
 GameState PgnReplay::set_up(const RuleOptions& base) {
   const PgnRecord& r = record_;

@@ -274,6 +274,7 @@ int run(std::string_view record, const Options& options, const Emit& emit, const
         note("t5d-gate: warning: " + replay.warnings()[warned]);
       }
     };
+    warn();  // the reader's
     while (!replay.finished()) {
       replay.play_next();
       warn();
@@ -421,6 +422,7 @@ bool set_pgn_option(PgnOptions& o, std::string_view assignment, std::string* err
   bool* flag = nullptr;
   if (name == "verify_annotations") flag = &o.verify_annotations;
   if (name == "annotation_mismatch_is_error") flag = &o.annotation_mismatch_is_error;
+  if (name == "turn_number_mismatch_is_error") flag = &o.turn_number_mismatch_is_error;
   if (name == "require_capture_marks") flag = &o.require_capture_marks;
   if (name == "infer_omitted_boards") flag = &o.infer_omitted_boards;
   if (name == "check_turn_numbers") flag = &o.check_turn_numbers;
