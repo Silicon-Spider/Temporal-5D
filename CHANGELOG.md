@@ -10,6 +10,16 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-03 - Engine CI: the Lazy SMP timing test needs cores to test anything
+
+- `engine/tests/test_scanner.cpp`: the test that 5 Lazy SMP threads resolve at
+  least one thread's depth in the same 40 ms of wall clock failed on CI's runners,
+  which have 2-4 cores: there the 5 threads oversubscribe the machine and the claim
+  is not being tested. It now runs only where the machine has at least 6 hardware
+  threads, and says so when it skips. On the development machine it runs and passes
+  as before.
+- Spec: §11.3 (H17), M13; no spec change.
+
 ### 2026-10-03 - 6b re-run after the optimisation pass: M12's outcome is STOP
 
 - `docs/MEASUREMENTS.md`: experiment 6b re-run as M12 rules - after E5c's bounded
