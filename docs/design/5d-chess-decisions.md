@@ -78,6 +78,7 @@ must be decided before it); **R** = retrofittable; — = process or principle.
 | C20 | Supersession inside the search: recompute the board once under the state-defined mask (causal past + the history of its refresh epoch — the root's unless a node refresh above it forked one), shared down the subtree; +8–24% per node | Committed | C | — | 7.3 |
 | C21 | Snapshot-at-supersession and edge-gated head-skip shortcuts | Refused — path-dependent evaluations break MCGS transposition evals and the training mask | — | — | 7.3, 14.4 |
 | C22 | Conditioning audit on value-surprise promotions — refresh a node whose Q exceeds the incumbent by n before it takes the PV; catches over-valuation from stale conditioning only | Held open (gated on 6c) | R | 6c | 7.9, 11.2 |
+| C23 | The causal past is the board's ancestry — its own timeline's earlier boards and, recursively, its branch parent up to the branch point; the only reading that is both state-defined and closed under future moves (time-coordinate order fails closure, creation order fails state-definedness) | Committed | C | — | 7.3 |
 
 ## D. Output heads and targets (§8.1–8.3, §12.4)
 
@@ -90,6 +91,7 @@ must be decided before it); **R** = retrofittable; — = process or principle.
 | D5 | Source rule: own-search targets are the norm; **learned-verifier estimates never enter a loss** | Committed (principle) | — | — | 12.4 |
 | D6 | Sum-vs-mean loss reduction over boards | Open knob | — | 6j | 12.4 |
 | D7 | Registers may be *initialised* from aggregates (6p) but never assigned aux targets | Committed | — | 6p | 12.4 |
+| D8 | Turns have variable length (Q4): a player may keep moving after the present has shifted, until submitting — so submit is an action (an explicit policy logit from a global register under the ply split; the end-of-turn token under whole-turn generation), legal only when the submission passes the legality test; plus a global acting-player input (BUILD_LOG issue 48) | Committed | C | — | 8.2, 11.0 |
 
 ## E. Search and time management (§8.4–8.6, §11.1)
 
@@ -229,6 +231,7 @@ moment they were made.
 | Sum-vs-mean reductions (loss over boards; NNUE over heads) | — | 12.4, 11.1 |
 | Filler budget B's numeric value | Sized against batch memory at implementation | 10.4.3 |
 | ±0 timeline index convention | Turn Zero support | 12.6 |
+| Real game records for the \|E\| curve — until they exist, the M7 window verdict from the oracle corpus is provisional | Window adoption (M7) | 15.6 |
 | Licence of trained weights (GPL-3.0 covers the code; weights are data) | Distributing any weights | 11.0, M11 |
 | Window on/off, piece-centric on/off | Committed-class — decided before serious self-play | 10.4, ablation 1 |
 
@@ -261,6 +264,8 @@ moment they were made.
 | M9 | Movegen thresholds: expansion ≥ 20,000/s per GPU at 240 boards and ≥ 10,000/s at 600; flat in N at fixed \|E\|; re-checked at Phase 3 as ≥ 2× the measured evaluation rate | Committed (pre-registered, derived) | — | Phase 1 | 15.6 |
 | M10 | Phase 1 order: movegen throughput first — it sets 6b's node budgets | Committed (process) | — | — | 15.6 |
 | M11 | Project licence: GPL-3.0 — LICENSE from the repository's initial commit, recorded in PROVENANCE.md; obligations attach on distribution of source or binaries, not private use or running as a service; BSD-2 code adapted into the ftxi driver is compatible with its notice retained; whether the licence reaches trained weights is open, to decide before any weights are distributed | Committed | — | — | 11.0 |
+| M12 | 6b read per board-count range, never pooled (the stricter reading); scanner measured at its design thread budget; one bounded optimisation pass on in-check enumeration and horizon mate tests, then 6b re-run unchanged. Outcomes: all ranges ≥ 50 boards pass → as designed; 50–199 pass and 200+ fail → phase-dependent verification, df-pn the leading candidate above; 50–199 fail → STOP for redesign. Rung 1 and quiet-leaf reach re-judged on the re-run | Committed (pre-registered) | — | 6b | 15.6 |
+| M13 | CPU allocation: 8 cores per GPU as reference (replace with the self-play machine's real count) — 2 expansion, 1 search and batching, 5 scanner; M9 judged on the 2 expansion cores | Committed | — | Phase 1 | 15.6 |
 
 ---
 

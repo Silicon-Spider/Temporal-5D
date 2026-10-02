@@ -10,6 +10,20 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-02 - Design documents: the CHECKPOINT 2 rulings, from upstream
+
+- `docs/design/` replaced with the upstream revision recording the user's rulings at
+  CHECKPOINT 2: register rows C23 (the causal past is the board's ancestry), D8
+  (turns have variable length - a player may keep moving after the present has
+  shifted, until submitting - so submit is an action, with a global acting-player
+  input), M12 (6b read per board-count range, never pooled; the scanner at its design
+  thread budget; one bounded optimisation pass, then 6b re-run unchanged, with
+  outcome rules), M13 (8 cores per GPU: 2 expansion, 1 search and batching, 5
+  scanner); real game records listed as open for the window verdict; spec §7.3,
+  §8.2, §11.0 item 2 and §15.6 accordingly; the architecture document's note on
+  stating a threshold's population and resources. Copied in unchanged.
+- Spec: the documents themselves (§7.3, §8.2, §11.0, §15.6; C23, D8, M12, M13).
+
 ### 2026-10-02 - Experiment 6b and M9 with legality measured: the run stops for the user
 
 - `docs/MEASUREMENTS.md`: experiment 6b (M8) on a quiet machine with `t5d-scan6b`
