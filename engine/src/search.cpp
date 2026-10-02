@@ -101,11 +101,15 @@ bool SearchRun::record(const GameState& after, const std::vector<Move>& moves) {
   if (unit == Unit::Actions) {
     // An action is its set of moves with its creations in order: counted once,
     // whatever order its other moves were found in.
-    if (!action_keys.insert(action_key(moves)).second) return true;
+    std::string key = action_key(moves);
+    const std::size_t key_bytes = key.size() + 64;  // with the set's node
+    if (!action_keys.insert(std::move(key)).second) return true;
+    kept_bytes += key_bytes;
     if (keep_actions || actions.empty()) {
       actions.push_back(moves);
       texts.push_back(keep_actions ? action_text(moves, even) : std::string());
       results.push_back(index);
+      kept_bytes += moves.size() * sizeof(Move) + texts.back().size() + 96;
     }
     if (action_keys.size() >= cap) {
       reached_cap = true;
@@ -118,6 +122,7 @@ bool SearchRun::record(const GameState& after, const std::vector<Move>& moves) {
       actions.push_back(moves);
       texts.push_back(keep_actions ? action_text(moves, even) : std::string());
       results.push_back(index);
+      kept_bytes += moves.size() * sizeof(Move) + texts.back().size() + 96;
     }
     if (successors.size() >= cap) {
       reached_cap = true;
@@ -142,9 +147,11 @@ bool SearchRun::record(const GameState& after, const std::vector<Move>& moves) {
 // action: legal if royals_safe (C4, R1). The pruning is a transposition table
 // of every state reached: the same moves in another order reach the same state,
 // which is searched once - a state determines everything that follows it.
-// Counting actions, the table holds each state with the branching moves made
-// to reach it, in order: two creation orders are two actions even where they
-// reach one state.
+// Counting actions, the table holds each state with the action so far - its
+// moves as a set, its branching moves in order (action_key): two orders of the
+// same moves are one entry, but two different sets of moves that reach one
+// state (two identical pieces exchanging destinations), or two creation
+// orders, are two - they are different actions.
 
 class Naive {
  public:
@@ -165,7 +172,7 @@ class Naive {
       if (!budget_.spend()) return false;
       ++run_.stats.actions_tested;
       if (royals_safe(s) && !run_.record(s, path_)) return false;
-      if (!budget_.hold(seen_.size() + run_.held())) return false;
+      if (!budget_.hold(seen_.size() + run_.held(), run_.held_bytes())) return false;
       if (!s.may_move()) return true;  // Q4's default: the action ends here
     }
     const std::size_t depth = path_.size();
@@ -176,20 +183,16 @@ class Naive {
       if (!budget_.spend()) return false;
       GameState child = s;
       child.apply(m);
-      const std::size_t tag_size = tag_.size();
-      if (run_.unit == Unit::Actions && m.branching()) {
-        tag_ += to_string(m, false);
-        tag_ += '|';
-      }
-      if (!seen_.insert(child, tag_).second) {  // reached before, by other orders
-        tag_.resize(tag_size);
+      path_.push_back(m);
+      // Counting actions, the action so far is part of the entry (see above).
+      const std::string tag = run_.unit == Unit::Actions ? action_key(path_) : std::string();
+      if (!seen_.insert(child, tag).second) {  // reached before, by other orders
+        path_.pop_back();
         continue;
       }
-      if (!budget_.hold(seen_.size() + run_.held())) return false;
-      path_.push_back(m);
+      if (!budget_.hold(seen_.size() + run_.held(), run_.held_bytes())) return false;
       const bool go_on = visit(child);
       path_.pop_back();
-      tag_.resize(tag_size);
       if (!go_on) return false;
     }
     return true;
@@ -198,7 +201,6 @@ class Naive {
   SearchRun& run_;
   Budgeter budget_;
   TaggedPositionSet seen_;
-  std::string tag_;  // the branching moves on the path (counting actions)
   std::vector<Move> path_;
   std::deque<MoveList> lists_;
 };
@@ -312,14 +314,20 @@ namespace {
 
 // A legal finish of the action under way at `state`: its further moves in an
 // order the state machine plays (none: stop now); nullopt if there is none.
-std::optional<std::vector<Move>> legal_finish(const GameState& state, Detector detector) {
+// `unknown` set if the search stopped (the memory ceiling) before it knew.
+std::optional<std::vector<Move>> legal_finish(const GameState& state, Detector detector,
+                                              bool& unknown) {
+  unknown = false;
   if (state.obligations_met()) {
     if (royals_safe(state)) return std::vector<Move>{};
     if (!state.may_move()) return std::nullopt;
   }
   detail::SearchRun r(state, SearchBudget::unlimited(), 1, detail::Unit::Successors, false);
   run(r, detector);
-  if (r.found() == 0) return std::nullopt;
+  if (r.found() == 0) {
+    unknown = !r.stats.exhaustive;
+    return std::nullopt;
+  }
   return r.actions.front();
 }
 
@@ -338,8 +346,9 @@ bool finishes_legally(const GameState& state, const std::vector<Move>& moves) {
 
 void keep_legal_moves(const GameState& state, MoveList& moves, Detector detector) {
   if (moves.empty()) return;
-  const std::optional<std::vector<Move>> root = legal_finish(state, detector);
-  if (!root) {
+  bool unknown = false;
+  const std::optional<std::vector<Move>> root = legal_finish(state, detector, unknown);
+  if (!root && !unknown) {
     moves.clear();  // no legal finish at all: no move begins one
     return;
   }
@@ -358,7 +367,7 @@ void keep_legal_moves(const GameState& state, MoveList& moves, Detector detector
       if (i == 0 || finishes_legally(state, order)) known.push_back(finish[i]);
     }
   };
-  learn(*root);
+  if (root) learn(*root);
   std::size_t kept = 0;
   std::vector<Move> finish;
   for (std::size_t i = 0; i < moves.size(); ++i) {
@@ -367,11 +376,13 @@ void keep_legal_moves(const GameState& state, MoveList& moves, Detector detector
     if (!legal) {
       GameState child = state;
       child.apply(m);
-      if (const std::optional<std::vector<Move>> rest = legal_finish(child, detector)) {
+      if (const std::optional<std::vector<Move>> rest = legal_finish(child, detector, unknown)) {
         legal = true;
         finish.assign(1, m);
         finish.insert(finish.end(), rest->begin(), rest->end());
         learn(finish);
+      } else if (unknown) {
+        legal = true;  // not proven illegal (the memory ceiling): kept
       }
     }
     if (legal) moves[kept++] = m;

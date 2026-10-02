@@ -30,7 +30,8 @@ class Budgeter {
       : budget_(budget),
         stats_(stats),
         start_(std::chrono::steady_clock::now()),
-        most_held_(budget.max_bytes / (position_bytes == 0 ? 1 : position_bytes)) {}
+        position_bytes_(position_bytes == 0 ? 1 : position_bytes),
+        most_held_(budget.max_bytes / position_bytes_) {}
 
   /// One step. False if the budget does not allow it (nothing is spent).
   bool spend() {
@@ -43,12 +44,13 @@ class Budgeter {
     ++stats_.nodes;
     return true;
   }
-  /// The search now holds `held` positions. False if that is over a limit:
-  /// max_stored, or the memory ceiling (max_bytes).
-  bool hold(std::size_t held) {
+  /// The search now holds `held` positions, and `extra_bytes` more (action
+  /// keys, kept listings). False if that is over a limit: max_stored, or the
+  /// memory ceiling (max_bytes).
+  bool hold(std::size_t held, std::size_t extra_bytes = 0) {
     if (held > stats_.stored) stats_.stored = held;
     if (held > budget_.max_stored) return stop();
-    if (held > most_held_) {
+    if (held > most_held_ || extra_bytes / position_bytes_ > most_held_ - held) {
       stats_.stopped_by_memory = true;
       return stop();
     }
@@ -67,6 +69,7 @@ class Budgeter {
   const SearchBudget& budget_;
   SearchStats& stats_;
   std::chrono::steady_clock::time_point start_;
+  std::size_t position_bytes_;
   std::size_t most_held_;  // the positions the memory ceiling allows
 };
 
@@ -150,8 +153,11 @@ struct SearchRun {
   std::size_t found() const noexcept {
     return unit == Unit::Actions ? action_keys.size() : successors.size();
   }
-  /// Positions and keys held (for the memory budget).
-  std::size_t held() const noexcept { return successors.size() + action_keys.size(); }
+  /// Positions held, and the bytes of the rest - action keys, kept actions
+  /// (for the memory budget).
+  std::size_t held() const noexcept { return successors.size(); }
+  std::size_t held_bytes() const noexcept { return kept_bytes; }
+  std::size_t kept_bytes = 0;
 
   /// Records the legal action `moves`, which reached `after` (before
   /// submission). Returns false once the cap is reached (the search stops).

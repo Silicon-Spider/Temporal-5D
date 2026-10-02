@@ -227,7 +227,7 @@ class Hyper {
     if (!stopped) stack.push_back(full_box());
     Region region;
     while (!stopped && !stack.empty()) {
-      if (!budget_.hold(run_.held() + stack.size())) {
+      if (!budget_.hold(run_.held() + stack.size(), run_.held_bytes())) {
         stopped = true;
         break;
       }
@@ -1563,7 +1563,7 @@ class Hyper {
           tag += '|';
         }
         if (seen.insert(child, tag).second) {
-          if (!budget_.hold(run_.held() + seen.size() + finals.size())) {
+          if (!budget_.hold(run_.held() + seen.size() + finals.size(), run_.held_bytes())) {
             stopped = true;
             return;
           }
