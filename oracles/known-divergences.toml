@@ -47,9 +47,15 @@
 # and the entry is never reported stale for it. Never remove an entry to make
 # that finding go away.
 #
-# Empty for now: there is no engine yet, so nothing has been adjudicated. The
-# points where the oracles contradict each other are listed, unadjudicated, in
-# DISAGREEMENTS.md - those are where the first entries will come from.
+# The first entries (2026-10-02) come from the engine's first gate runs, triaged
+# against the rulebook and the CHECKPOINT 1 rulings (docs/rules/README.md R1-R7):
+# ftxi's check verdicts that R1 rules wrong; Chess in 5D's two false checkmates
+# and ftxi's missing Black two-timeline double step (the two defects drafted for
+# upstream in docs/checkpoints/upstream/, recorded here as telltales, R7); record
+# text the notation specification rules out, which the engine refuses and an
+# oracle played; and oracles' own notation errors. Differences that rules Q4
+# (moves after the present has shifted) explains await the project owner's
+# ruling and have no entry. The engine is not yet configured in gate.toml.
 #
 # [[divergence]]
 # id = "KD-0001"
@@ -68,3 +74,843 @@
 # added = "2026-10-01"
 # notes = ""
 schema = 1
+
+[[divergence]]
+id = "KD-0001"
+oracle = "ftxi"
+pin = "2ea9f1b82880f08faa9400d1ac20b20102604187"
+record = "cwmtt/exiledKings"
+record_sha256 = "7a8b1b55e0c05a41ecfa40d59e94128a37902f25b4d1d14906a1c4d21c3ef032"
+kind = "in_check"
+index = 12
+engine_value = "False"
+oracle_value = "True"
+rulebook = "docs/rules/README.md R1 (register H36), with C6 and C7 as ruled by it: a royal is in check if, passing on all active boards in the present, the opponent could capture it from any of their playable boards; optional boards ahead of the present and boards on inactive timelines are not passed. R1 also says a capture that would branch into an inactive timeline counts - but the attacker here stands on a board of the side to move's that the pass leaves unplayed, so it is not on one of the opponent's playable boards and captures nothing. CHECKPOINT 1 cluster CHK-I2, rule question RQ4, answered 'no' by R1: ftxi passes every timeline the side to move may play (its phantom of every head on the mover's colour), so its 'check' here is wrong and Chess in 5D's 'no check' right."
+upstream = "unreported: ftxi follows a different reading of the check test; settled by ruling R1"
+added = "2026-10-02"
+notes = "Triage 2026-10-02, class (a), ftxi's hypercuboid search. CHK-I2: the attacker stands on the playable board of an inactive timeline behind the present (an optional board of the side to move) and captures a royal on a history board of a mandatory timeline (the branch would be inactive). White to move, present T3w, mandatory -1; deciding capture n(-2T2b)f4 -> K(-1T2b)f2 (docs/checkpoints/checkpoint-1-check-clusters.md, 'All 78 positions'). Chess in 5D answers False here, as the engine does."
+
+[[divergence]]
+id = "KD-0002"
+oracle = "ftxi"
+pin = "2ea9f1b82880f08faa9400d1ac20b20102604187"
+record = "cwmtt/exiledKings"
+record_sha256 = "7a8b1b55e0c05a41ecfa40d59e94128a37902f25b4d1d14906a1c4d21c3ef032"
+kind = "in_check"
+index = 14
+engine_value = "False"
+oracle_value = "True"
+rulebook = "docs/rules/README.md R1 (register H36), with C6 and C7 as ruled by it: a royal is in check if, passing on all active boards in the present, the opponent could capture it from any of their playable boards; optional boards ahead of the present and boards on inactive timelines are not passed. R1 also says a capture that would branch into an inactive timeline counts - but the attacker here stands on a board of the side to move's that the pass leaves unplayed, so it is not on one of the opponent's playable boards and captures nothing. CHECKPOINT 1 cluster CHK-I2, rule question RQ4, answered 'no' by R1: ftxi passes every timeline the side to move may play (its phantom of every head on the mover's colour), so its 'check' here is wrong and Chess in 5D's 'no check' right."
+upstream = "unreported: ftxi follows a different reading of the check test; settled by ruling R1"
+added = "2026-10-02"
+notes = "Triage 2026-10-02, class (a), ftxi's hypercuboid search. CHK-I2: the attacker stands on the playable board of an inactive timeline behind the present (an optional board of the side to move) and captures a royal on a history board of a mandatory timeline (the branch would be inactive). White to move, present T4w, mandatory -1; deciding capture n(-2T2b)f4 -> K(-1T2b)f2 (docs/checkpoints/checkpoint-1-check-clusters.md, 'All 78 positions'). Chess in 5D answers False here, as the engine does."
+
+[[divergence]]
+id = "KD-0003"
+oracle = "ftxi"
+pin = "2ea9f1b82880f08faa9400d1ac20b20102604187"
+record = "cwmtt/exiledKings"
+record_sha256 = "7a8b1b55e0c05a41ecfa40d59e94128a37902f25b4d1d14906a1c4d21c3ef032"
+kind = "in_check"
+index = 16
+engine_value = "False"
+oracle_value = "True"
+rulebook = "docs/rules/README.md R1 (register H36), with C6 and C7 as ruled by it: a royal is in check if, passing on all active boards in the present, the opponent could capture it from any of their playable boards; optional boards ahead of the present and boards on inactive timelines are not passed. R1 also says a capture that would branch into an inactive timeline counts - but the attacker here stands on a board of the side to move's that the pass leaves unplayed, so it is not on one of the opponent's playable boards and captures nothing. CHECKPOINT 1 cluster CHK-I2, rule question RQ4, answered 'no' by R1: ftxi passes every timeline the side to move may play (its phantom of every head on the mover's colour), so its 'check' here is wrong and Chess in 5D's 'no check' right."
+upstream = "unreported: ftxi follows a different reading of the check test; settled by ruling R1"
+added = "2026-10-02"
+notes = "Triage 2026-10-02, class (a), ftxi's hypercuboid search. CHK-I2: the attacker stands on the playable board of an inactive timeline behind the present (an optional board of the side to move) and captures a royal on a history board of a mandatory timeline (the branch would be inactive). White to move, present T5w, mandatory -1, 0; deciding capture n(-2T2b)f4 -> K(-1T2b)f2 (docs/checkpoints/checkpoint-1-check-clusters.md, 'All 78 positions'). Chess in 5D answers False here, as the engine does."
+
+[[divergence]]
+id = "KD-0004"
+oracle = "ftxi"
+pin = "2ea9f1b82880f08faa9400d1ac20b20102604187"
+record = "cwmtt/exiledKings"
+record_sha256 = "7a8b1b55e0c05a41ecfa40d59e94128a37902f25b4d1d14906a1c4d21c3ef032"
+kind = "in_check"
+index = 18
+engine_value = "False"
+oracle_value = "True"
+rulebook = "docs/rules/README.md R1 (register H36), with C6 and C7 as ruled by it: a royal is in check if, passing on all active boards in the present, the opponent could capture it from any of their playable boards; optional boards ahead of the present and boards on inactive timelines are not passed. R1 also says a capture that would branch into an inactive timeline counts - but the attacker here stands on a board of the side to move's that the pass leaves unplayed, so it is not on one of the opponent's playable boards and captures nothing. CHECKPOINT 1 cluster CHK-I2, rule question RQ4, answered 'no' by R1: ftxi passes every timeline the side to move may play (its phantom of every head on the mover's colour), so its 'check' here is wrong and Chess in 5D's 'no check' right."
+upstream = "unreported: ftxi follows a different reading of the check test; settled by ruling R1"
+added = "2026-10-02"
+notes = "Triage 2026-10-02, class (a), ftxi's hypercuboid search. CHK-I2: the attacker stands on the playable board of an inactive timeline behind the present (an optional board of the side to move) and captures a royal on a history board of a mandatory timeline (the branch would be inactive). White to move, present T6w, mandatory -1, 0; deciding capture n(-2T2b)f4 -> K(-1T2b)f2 (docs/checkpoints/checkpoint-1-check-clusters.md, 'All 78 positions'). Chess in 5D answers False here, as the engine does."
+
+[[divergence]]
+id = "KD-0005"
+oracle = "ftxi:naive"
+pin = "2ea9f1b82880f08faa9400d1ac20b20102604187"
+record = "cwmtt/exiledKings"
+record_sha256 = "7a8b1b55e0c05a41ecfa40d59e94128a37902f25b4d1d14906a1c4d21c3ef032"
+kind = "in_check"
+index = 12
+engine_value = "False"
+oracle_value = "True"
+rulebook = "docs/rules/README.md R1 (register H36), with C6 and C7 as ruled by it: a royal is in check if, passing on all active boards in the present, the opponent could capture it from any of their playable boards; optional boards ahead of the present and boards on inactive timelines are not passed. R1 also says a capture that would branch into an inactive timeline counts - but the attacker here stands on a board of the side to move's that the pass leaves unplayed, so it is not on one of the opponent's playable boards and captures nothing. CHECKPOINT 1 cluster CHK-I2, rule question RQ4, answered 'no' by R1: ftxi passes every timeline the side to move may play (its phantom of every head on the mover's colour), so its 'check' here is wrong and Chess in 5D's 'no check' right."
+upstream = "unreported: ftxi follows a different reading of the check test; settled by ruling R1"
+added = "2026-10-02"
+notes = "Triage 2026-10-02, class (a), ftxi's exhaustive search (ftxi:naive; the same check test). CHK-I2: the attacker stands on the playable board of an inactive timeline behind the present (an optional board of the side to move) and captures a royal on a history board of a mandatory timeline (the branch would be inactive). White to move, present T3w, mandatory -1; deciding capture n(-2T2b)f4 -> K(-1T2b)f2 (docs/checkpoints/checkpoint-1-check-clusters.md, 'All 78 positions'). Chess in 5D answers False here, as the engine does."
+
+[[divergence]]
+id = "KD-0006"
+oracle = "ftxi:naive"
+pin = "2ea9f1b82880f08faa9400d1ac20b20102604187"
+record = "cwmtt/exiledKings"
+record_sha256 = "7a8b1b55e0c05a41ecfa40d59e94128a37902f25b4d1d14906a1c4d21c3ef032"
+kind = "in_check"
+index = 14
+engine_value = "False"
+oracle_value = "True"
+rulebook = "docs/rules/README.md R1 (register H36), with C6 and C7 as ruled by it: a royal is in check if, passing on all active boards in the present, the opponent could capture it from any of their playable boards; optional boards ahead of the present and boards on inactive timelines are not passed. R1 also says a capture that would branch into an inactive timeline counts - but the attacker here stands on a board of the side to move's that the pass leaves unplayed, so it is not on one of the opponent's playable boards and captures nothing. CHECKPOINT 1 cluster CHK-I2, rule question RQ4, answered 'no' by R1: ftxi passes every timeline the side to move may play (its phantom of every head on the mover's colour), so its 'check' here is wrong and Chess in 5D's 'no check' right."
+upstream = "unreported: ftxi follows a different reading of the check test; settled by ruling R1"
+added = "2026-10-02"
+notes = "Triage 2026-10-02, class (a), ftxi's exhaustive search (ftxi:naive; the same check test). CHK-I2: the attacker stands on the playable board of an inactive timeline behind the present (an optional board of the side to move) and captures a royal on a history board of a mandatory timeline (the branch would be inactive). White to move, present T4w, mandatory -1; deciding capture n(-2T2b)f4 -> K(-1T2b)f2 (docs/checkpoints/checkpoint-1-check-clusters.md, 'All 78 positions'). Chess in 5D answers False here, as the engine does."
+
+[[divergence]]
+id = "KD-0007"
+oracle = "ftxi:naive"
+pin = "2ea9f1b82880f08faa9400d1ac20b20102604187"
+record = "cwmtt/exiledKings"
+record_sha256 = "7a8b1b55e0c05a41ecfa40d59e94128a37902f25b4d1d14906a1c4d21c3ef032"
+kind = "in_check"
+index = 16
+engine_value = "False"
+oracle_value = "True"
+rulebook = "docs/rules/README.md R1 (register H36), with C6 and C7 as ruled by it: a royal is in check if, passing on all active boards in the present, the opponent could capture it from any of their playable boards; optional boards ahead of the present and boards on inactive timelines are not passed. R1 also says a capture that would branch into an inactive timeline counts - but the attacker here stands on a board of the side to move's that the pass leaves unplayed, so it is not on one of the opponent's playable boards and captures nothing. CHECKPOINT 1 cluster CHK-I2, rule question RQ4, answered 'no' by R1: ftxi passes every timeline the side to move may play (its phantom of every head on the mover's colour), so its 'check' here is wrong and Chess in 5D's 'no check' right."
+upstream = "unreported: ftxi follows a different reading of the check test; settled by ruling R1"
+added = "2026-10-02"
+notes = "Triage 2026-10-02, class (a), ftxi's exhaustive search (ftxi:naive; the same check test). CHK-I2: the attacker stands on the playable board of an inactive timeline behind the present (an optional board of the side to move) and captures a royal on a history board of a mandatory timeline (the branch would be inactive). White to move, present T5w, mandatory -1, 0; deciding capture n(-2T2b)f4 -> K(-1T2b)f2 (docs/checkpoints/checkpoint-1-check-clusters.md, 'All 78 positions'). Chess in 5D answers False here, as the engine does."
+
+[[divergence]]
+id = "KD-0008"
+oracle = "ftxi"
+pin = "2ea9f1b82880f08faa9400d1ac20b20102604187"
+record = "cwmtt/manyChecks"
+record_sha256 = "8fc05bbce2e8c40ae61de785a2b0675680ae57ced92946cfbcfe06b53d7f2506"
+kind = "in_check"
+index = 20
+engine_value = "False"
+oracle_value = "True"
+rulebook = "docs/rules/README.md R1 (register H36), with C6 and C7 as ruled by it: a royal is in check if, passing on all active boards in the present, the opponent could capture it from any of their playable boards; optional boards ahead of the present and boards on inactive timelines are not passed. CHECKPOINT 1 cluster CHK-I1, rule question RQ3, answered 'no' by R1: ftxi passes every timeline the side to move may play (its phantom of every head on the mover's colour), so its 'check' here is wrong and Chess in 5D's 'no check' right."
+upstream = "unreported: ftxi follows a different reading of the check test; settled by ruling R1"
+added = "2026-10-02"
+notes = "Triage 2026-10-02, class (a), ftxi's hypercuboid search. CHK-I1: the attacker stands on the playable board of an inactive timeline behind the present (an optional board of the side to move) and captures on that board. White to move, present T9w, mandatory -2, -1, 0, +1; deciding capture b(-3T8b)g3 -> K(-3T8b)e1 (docs/checkpoints/checkpoint-1-check-clusters.md, 'All 78 positions'). Chess in 5D answers False here, as the engine does."
+
+[[divergence]]
+id = "KD-0009"
+oracle = "ftxi"
+pin = "2ea9f1b82880f08faa9400d1ac20b20102604187"
+record = "cwmtt/manyChecks"
+record_sha256 = "8fc05bbce2e8c40ae61de785a2b0675680ae57ced92946cfbcfe06b53d7f2506"
+kind = "in_check"
+index = 28
+engine_value = "False"
+oracle_value = "True"
+rulebook = "docs/rules/README.md R1 (register H36), with C6 and C7 as ruled by it: a royal is in check if, passing on all active boards in the present, the opponent could capture it from any of their playable boards; optional boards ahead of the present and boards on inactive timelines are not passed. CHECKPOINT 1 cluster CHK-A1, rule question RQ1, answered 'no' by R1: ftxi passes every timeline the side to move may play (its phantom of every head on the mover's colour), so its 'check' here is wrong and Chess in 5D's 'no check' right."
+upstream = "unreported: ftxi follows a different reading of the check test; settled by ruling R1"
+added = "2026-10-02"
+notes = "Triage 2026-10-02, class (a), ftxi's hypercuboid search. CHK-A1: the attacker stands on the playable board of an active timeline ahead of the present (an optional board of the side to move) and captures on that board. White to move, present T9w, mandatory -3, +2; deciding capture q(-1T12b)b4 -> K(-1T12b)e1 (docs/checkpoints/checkpoint-1-check-clusters.md, 'All 78 positions'). Chess in 5D answers False here, as the engine does."
+
+[[divergence]]
+id = "KD-0010"
+oracle = "ftxi"
+pin = "2ea9f1b82880f08faa9400d1ac20b20102604187"
+record = "cwmtt/manyChecks"
+record_sha256 = "8fc05bbce2e8c40ae61de785a2b0675680ae57ced92946cfbcfe06b53d7f2506"
+kind = "in_check"
+index = 30
+engine_value = "False"
+oracle_value = "True"
+rulebook = "docs/rules/README.md R1 (register H36), with C6 and C7 as ruled by it: a royal is in check if, passing on all active boards in the present, the opponent could capture it from any of their playable boards; optional boards ahead of the present and boards on inactive timelines are not passed. CHECKPOINT 1 cluster CHK-A1, rule question RQ1, answered 'no' by R1: ftxi passes every timeline the side to move may play (its phantom of every head on the mover's colour), so its 'check' here is wrong and Chess in 5D's 'no check' right."
+upstream = "unreported: ftxi follows a different reading of the check test; settled by ruling R1"
+added = "2026-10-02"
+notes = "Triage 2026-10-02, class (a), ftxi's hypercuboid search. CHK-A1: the attacker stands on the playable board of an active timeline ahead of the present (an optional board of the side to move) and captures on that board. White to move, present T10w, mandatory -3, +2; deciding capture q(-1T12b)b4 -> K(-1T12b)e1 (docs/checkpoints/checkpoint-1-check-clusters.md, 'All 78 positions'). Chess in 5D answers False here, as the engine does."
+
+[[divergence]]
+id = "KD-0011"
+oracle = "ftxi"
+pin = "2ea9f1b82880f08faa9400d1ac20b20102604187"
+record = "cwmtt/manyChecks"
+record_sha256 = "8fc05bbce2e8c40ae61de785a2b0675680ae57ced92946cfbcfe06b53d7f2506"
+kind = "in_check"
+index = 32
+engine_value = "False"
+oracle_value = "True"
+rulebook = "docs/rules/README.md R1 (register H36), with C6 and C7 as ruled by it: a royal is in check if, passing on all active boards in the present, the opponent could capture it from any of their playable boards; optional boards ahead of the present and boards on inactive timelines are not passed. CHECKPOINT 1 cluster CHK-A1, rule question RQ1, answered 'no' by R1: ftxi passes every timeline the side to move may play (its phantom of every head on the mover's colour), so its 'check' here is wrong and Chess in 5D's 'no check' right."
+upstream = "unreported: ftxi follows a different reading of the check test; settled by ruling R1"
+added = "2026-10-02"
+notes = "Triage 2026-10-02, class (a), ftxi's hypercuboid search. CHK-A1: the attacker stands on the playable board of an active timeline ahead of the present (an optional board of the side to move) and captures on that board. White to move, present T11w, mandatory -3, +2; deciding capture q(-1T12b)b4 -> K(-1T12b)e1 (docs/checkpoints/checkpoint-1-check-clusters.md, 'All 78 positions'). Chess in 5D answers False here, as the engine does."
+
+[[divergence]]
+id = "KD-0012"
+oracle = "ftxi"
+pin = "2ea9f1b82880f08faa9400d1ac20b20102604187"
+record = "cwmtt/manyChecks"
+record_sha256 = "8fc05bbce2e8c40ae61de785a2b0675680ae57ced92946cfbcfe06b53d7f2506"
+kind = "in_check"
+index = 40
+engine_value = "False"
+oracle_value = "True"
+rulebook = "docs/rules/README.md R1 (register H36), with C6 and C7 as ruled by it: a royal is in check if, passing on all active boards in the present, the opponent could capture it from any of their playable boards; optional boards ahead of the present and boards on inactive timelines are not passed. CHECKPOINT 1 cluster CHK-A1, rule question RQ1, answered 'no' by R1: ftxi passes every timeline the side to move may play (its phantom of every head on the mover's colour), so its 'check' here is wrong and Chess in 5D's 'no check' right."
+upstream = "unreported: ftxi follows a different reading of the check test; settled by ruling R1"
+added = "2026-10-02"
+notes = "Triage 2026-10-02, class (a), ftxi's hypercuboid search. CHK-A1: the attacker stands on the playable board of an active timeline ahead of the present (an optional board of the side to move) and captures on that board. White to move, present T11w, mandatory -5; deciding capture q(-1T12b)b4 -> K(-1T12b)e1 (docs/checkpoints/checkpoint-1-check-clusters.md, 'All 78 positions'). Chess in 5D answers False here, as the engine does."
+
+[[divergence]]
+id = "KD-0013"
+oracle = "ftxi:naive"
+pin = "2ea9f1b82880f08faa9400d1ac20b20102604187"
+record = "cwmtt/manyChecks"
+record_sha256 = "8fc05bbce2e8c40ae61de785a2b0675680ae57ced92946cfbcfe06b53d7f2506"
+kind = "in_check"
+index = 20
+engine_value = "False"
+oracle_value = "True"
+rulebook = "docs/rules/README.md R1 (register H36), with C6 and C7 as ruled by it: a royal is in check if, passing on all active boards in the present, the opponent could capture it from any of their playable boards; optional boards ahead of the present and boards on inactive timelines are not passed. CHECKPOINT 1 cluster CHK-I1, rule question RQ3, answered 'no' by R1: ftxi passes every timeline the side to move may play (its phantom of every head on the mover's colour), so its 'check' here is wrong and Chess in 5D's 'no check' right."
+upstream = "unreported: ftxi follows a different reading of the check test; settled by ruling R1"
+added = "2026-10-02"
+notes = "Triage 2026-10-02, class (a), ftxi's exhaustive search (ftxi:naive; the same check test). CHK-I1: the attacker stands on the playable board of an inactive timeline behind the present (an optional board of the side to move) and captures on that board. White to move, present T9w, mandatory -2, -1, 0, +1; deciding capture b(-3T8b)g3 -> K(-3T8b)e1 (docs/checkpoints/checkpoint-1-check-clusters.md, 'All 78 positions'). Chess in 5D answers False here, as the engine does."
+
+[[divergence]]
+id = "KD-0014"
+oracle = "ftxi:naive"
+pin = "2ea9f1b82880f08faa9400d1ac20b20102604187"
+record = "cwmtt/manyChecks"
+record_sha256 = "8fc05bbce2e8c40ae61de785a2b0675680ae57ced92946cfbcfe06b53d7f2506"
+kind = "in_check"
+index = 28
+engine_value = "False"
+oracle_value = "True"
+rulebook = "docs/rules/README.md R1 (register H36), with C6 and C7 as ruled by it: a royal is in check if, passing on all active boards in the present, the opponent could capture it from any of their playable boards; optional boards ahead of the present and boards on inactive timelines are not passed. CHECKPOINT 1 cluster CHK-A1, rule question RQ1, answered 'no' by R1: ftxi passes every timeline the side to move may play (its phantom of every head on the mover's colour), so its 'check' here is wrong and Chess in 5D's 'no check' right."
+upstream = "unreported: ftxi follows a different reading of the check test; settled by ruling R1"
+added = "2026-10-02"
+notes = "Triage 2026-10-02, class (a), ftxi's exhaustive search (ftxi:naive; the same check test). CHK-A1: the attacker stands on the playable board of an active timeline ahead of the present (an optional board of the side to move) and captures on that board. White to move, present T9w, mandatory -3, +2; deciding capture q(-1T12b)b4 -> K(-1T12b)e1 (docs/checkpoints/checkpoint-1-check-clusters.md, 'All 78 positions'). Chess in 5D answers False here, as the engine does."
+
+[[divergence]]
+id = "KD-0015"
+oracle = "ftxi:naive"
+pin = "2ea9f1b82880f08faa9400d1ac20b20102604187"
+record = "cwmtt/manyChecks"
+record_sha256 = "8fc05bbce2e8c40ae61de785a2b0675680ae57ced92946cfbcfe06b53d7f2506"
+kind = "in_check"
+index = 30
+engine_value = "False"
+oracle_value = "True"
+rulebook = "docs/rules/README.md R1 (register H36), with C6 and C7 as ruled by it: a royal is in check if, passing on all active boards in the present, the opponent could capture it from any of their playable boards; optional boards ahead of the present and boards on inactive timelines are not passed. CHECKPOINT 1 cluster CHK-A1, rule question RQ1, answered 'no' by R1: ftxi passes every timeline the side to move may play (its phantom of every head on the mover's colour), so its 'check' here is wrong and Chess in 5D's 'no check' right."
+upstream = "unreported: ftxi follows a different reading of the check test; settled by ruling R1"
+added = "2026-10-02"
+notes = "Triage 2026-10-02, class (a), ftxi's exhaustive search (ftxi:naive; the same check test). CHK-A1: the attacker stands on the playable board of an active timeline ahead of the present (an optional board of the side to move) and captures on that board. White to move, present T10w, mandatory -3, +2; deciding capture q(-1T12b)b4 -> K(-1T12b)e1 (docs/checkpoints/checkpoint-1-check-clusters.md, 'All 78 positions'). Chess in 5D answers False here, as the engine does."
+
+[[divergence]]
+id = "KD-0016"
+oracle = "ftxi:naive"
+pin = "2ea9f1b82880f08faa9400d1ac20b20102604187"
+record = "cwmtt/manyChecks"
+record_sha256 = "8fc05bbce2e8c40ae61de785a2b0675680ae57ced92946cfbcfe06b53d7f2506"
+kind = "in_check"
+index = 32
+engine_value = "False"
+oracle_value = "True"
+rulebook = "docs/rules/README.md R1 (register H36), with C6 and C7 as ruled by it: a royal is in check if, passing on all active boards in the present, the opponent could capture it from any of their playable boards; optional boards ahead of the present and boards on inactive timelines are not passed. CHECKPOINT 1 cluster CHK-A1, rule question RQ1, answered 'no' by R1: ftxi passes every timeline the side to move may play (its phantom of every head on the mover's colour), so its 'check' here is wrong and Chess in 5D's 'no check' right."
+upstream = "unreported: ftxi follows a different reading of the check test; settled by ruling R1"
+added = "2026-10-02"
+notes = "Triage 2026-10-02, class (a), ftxi's exhaustive search (ftxi:naive; the same check test). CHK-A1: the attacker stands on the playable board of an active timeline ahead of the present (an optional board of the side to move) and captures on that board. White to move, present T11w, mandatory -3, +2; deciding capture q(-1T12b)b4 -> K(-1T12b)e1 (docs/checkpoints/checkpoint-1-check-clusters.md, 'All 78 positions'). Chess in 5D answers False here, as the engine does."
+
+[[divergence]]
+id = "KD-0017"
+oracle = "ftxi:naive"
+pin = "2ea9f1b82880f08faa9400d1ac20b20102604187"
+record = "cwmtt/manyChecks"
+record_sha256 = "8fc05bbce2e8c40ae61de785a2b0675680ae57ced92946cfbcfe06b53d7f2506"
+kind = "in_check"
+index = 40
+engine_value = "False"
+oracle_value = "True"
+rulebook = "docs/rules/README.md R1 (register H36), with C6 and C7 as ruled by it: a royal is in check if, passing on all active boards in the present, the opponent could capture it from any of their playable boards; optional boards ahead of the present and boards on inactive timelines are not passed. CHECKPOINT 1 cluster CHK-A1, rule question RQ1, answered 'no' by R1: ftxi passes every timeline the side to move may play (its phantom of every head on the mover's colour), so its 'check' here is wrong and Chess in 5D's 'no check' right."
+upstream = "unreported: ftxi follows a different reading of the check test; settled by ruling R1"
+added = "2026-10-02"
+notes = "Triage 2026-10-02, class (a), ftxi's exhaustive search (ftxi:naive; the same check test). CHK-A1: the attacker stands on the playable board of an active timeline ahead of the present (an optional board of the side to move) and captures on that board. White to move, present T11w, mandatory -5; deciding capture q(-1T12b)b4 -> K(-1T12b)e1 (docs/checkpoints/checkpoint-1-check-clusters.md, 'All 78 positions'). Chess in 5D answers False here, as the engine does."
+
+[[divergence]]
+id = "KD-0018"
+oracle = "ftxi"
+pin = "2ea9f1b82880f08faa9400d1ac20b20102604187"
+record = "cwmtt/silly"
+record_sha256 = "369a53e5f25e75898f811ff429529e5082f2036e216f66340537c4eeffaf7a70"
+kind = "in_check"
+index = 16
+engine_value = "False"
+oracle_value = "True"
+rulebook = "docs/rules/README.md R1 (register H36), with C6 and C7 as ruled by it: a royal is in check if, passing on all active boards in the present, the opponent could capture it from any of their playable boards; optional boards ahead of the present and boards on inactive timelines are not passed. CHECKPOINT 1 cluster CHK-A4, rule question RQ1, answered 'no' by R1: ftxi passes every timeline the side to move may play (its phantom of every head on the mover's colour), so its 'check' here is wrong and Chess in 5D's 'no check' right."
+upstream = "unreported: ftxi follows a different reading of the check test; settled by ruling R1"
+added = "2026-10-02"
+notes = "Triage 2026-10-02, class (a), ftxi's hypercuboid search. CHK-A4: the attacker stands on the playable board of an active timeline ahead of the present (an optional board of the side to move) and jumps, without branching, onto a playable board on which it is to move. White to move, present T5w, mandatory +2; deciding capture n(0T6b)e3 -> K(-1T6b)e1 (docs/checkpoints/checkpoint-1-check-clusters.md, 'All 78 positions'). Chess in 5D answers False here, as the engine does."
+
+[[divergence]]
+id = "KD-0019"
+oracle = "ftxi"
+pin = "2ea9f1b82880f08faa9400d1ac20b20102604187"
+record = "cwmtt/silly"
+record_sha256 = "369a53e5f25e75898f811ff429529e5082f2036e216f66340537c4eeffaf7a70"
+kind = "in_check"
+index = 28
+engine_value = "False"
+oracle_value = "True"
+rulebook = "docs/rules/README.md R1 (register H36), with C6 and C7 as ruled by it: a royal is in check if, passing on all active boards in the present, the opponent could capture it from any of their playable boards; optional boards ahead of the present and boards on inactive timelines are not passed. CHECKPOINT 1 cluster CHK-A1, rule question RQ1, answered 'no' by R1: ftxi passes every timeline the side to move may play (its phantom of every head on the mover's colour), so its 'check' here is wrong and Chess in 5D's 'no check' right."
+upstream = "unreported: ftxi follows a different reading of the check test; settled by ruling R1"
+added = "2026-10-02"
+notes = "Triage 2026-10-02, class (a), ftxi's hypercuboid search. CHK-A1: the attacker stands on the playable board of an active timeline ahead of the present (an optional board of the side to move) and captures on that board. White to move, present T2w, mandatory +3; deciding capture q(-2T7b)h4 -> K(-2T7b)e1 (docs/checkpoints/checkpoint-1-check-clusters.md, 'All 78 positions'). Chess in 5D answers False here, as the engine does."
+
+[[divergence]]
+id = "KD-0020"
+oracle = "ftxi"
+pin = "2ea9f1b82880f08faa9400d1ac20b20102604187"
+record = "cwmtt/silly"
+record_sha256 = "369a53e5f25e75898f811ff429529e5082f2036e216f66340537c4eeffaf7a70"
+kind = "in_check"
+index = 30
+engine_value = "False"
+oracle_value = "True"
+rulebook = "docs/rules/README.md R1 (register H36), with C6 and C7 as ruled by it: a royal is in check if, passing on all active boards in the present, the opponent could capture it from any of their playable boards; optional boards ahead of the present and boards on inactive timelines are not passed. CHECKPOINT 1 cluster CHK-A1, rule question RQ1, answered 'no' by R1: ftxi passes every timeline the side to move may play (its phantom of every head on the mover's colour), so its 'check' here is wrong and Chess in 5D's 'no check' right."
+upstream = "unreported: ftxi follows a different reading of the check test; settled by ruling R1"
+added = "2026-10-02"
+notes = "Triage 2026-10-02, class (a), ftxi's hypercuboid search. CHK-A1: the attacker stands on the playable board of an active timeline ahead of the present (an optional board of the side to move) and captures on that board. White to move, present T3w, mandatory +3; deciding capture q(-2T7b)h4 -> K(-2T7b)e1 (docs/checkpoints/checkpoint-1-check-clusters.md, 'All 78 positions'). Chess in 5D answers False here, as the engine does."
+
+[[divergence]]
+id = "KD-0021"
+oracle = "ftxi"
+pin = "2ea9f1b82880f08faa9400d1ac20b20102604187"
+record = "cwmtt/silly"
+record_sha256 = "369a53e5f25e75898f811ff429529e5082f2036e216f66340537c4eeffaf7a70"
+kind = "in_check"
+index = 32
+engine_value = "False"
+oracle_value = "True"
+rulebook = "docs/rules/README.md R1 (register H36), with C6 and C7 as ruled by it: a royal is in check if, passing on all active boards in the present, the opponent could capture it from any of their playable boards; optional boards ahead of the present and boards on inactive timelines are not passed. CHECKPOINT 1 cluster CHK-A1, rule question RQ1, answered 'no' by R1: ftxi passes every timeline the side to move may play (its phantom of every head on the mover's colour), so its 'check' here is wrong and Chess in 5D's 'no check' right."
+upstream = "unreported: ftxi follows a different reading of the check test; settled by ruling R1"
+added = "2026-10-02"
+notes = "Triage 2026-10-02, class (a), ftxi's hypercuboid search. CHK-A1: the attacker stands on the playable board of an active timeline ahead of the present (an optional board of the side to move) and captures on that board. White to move, present T4w, mandatory +3; deciding capture q(-2T7b)h4 -> K(-2T7b)e1 (docs/checkpoints/checkpoint-1-check-clusters.md, 'All 78 positions'). Chess in 5D answers False here, as the engine does."
+
+[[divergence]]
+id = "KD-0022"
+oracle = "ftxi"
+pin = "2ea9f1b82880f08faa9400d1ac20b20102604187"
+record = "cwmtt/silly"
+record_sha256 = "369a53e5f25e75898f811ff429529e5082f2036e216f66340537c4eeffaf7a70"
+kind = "in_check"
+index = 34
+engine_value = "False"
+oracle_value = "True"
+rulebook = "docs/rules/README.md R1 (register H36), with C6 and C7 as ruled by it: a royal is in check if, passing on all active boards in the present, the opponent could capture it from any of their playable boards; optional boards ahead of the present and boards on inactive timelines are not passed. CHECKPOINT 1 cluster CHK-A1, rule question RQ1, answered 'no' by R1: ftxi passes every timeline the side to move may play (its phantom of every head on the mover's colour), so its 'check' here is wrong and Chess in 5D's 'no check' right."
+upstream = "unreported: ftxi follows a different reading of the check test; settled by ruling R1"
+added = "2026-10-02"
+notes = "Triage 2026-10-02, class (a), ftxi's hypercuboid search. CHK-A1: the attacker stands on the playable board of an active timeline ahead of the present (an optional board of the side to move) and captures on that board. White to move, present T5w, mandatory +3; deciding capture q(-2T7b)h4 -> K(-2T7b)e1 (docs/checkpoints/checkpoint-1-check-clusters.md, 'All 78 positions'). Chess in 5D answers False here, as the engine does."
+
+[[divergence]]
+id = "KD-0023"
+oracle = "ftxi:naive"
+pin = "2ea9f1b82880f08faa9400d1ac20b20102604187"
+record = "cwmtt/silly"
+record_sha256 = "369a53e5f25e75898f811ff429529e5082f2036e216f66340537c4eeffaf7a70"
+kind = "in_check"
+index = 16
+engine_value = "False"
+oracle_value = "True"
+rulebook = "docs/rules/README.md R1 (register H36), with C6 and C7 as ruled by it: a royal is in check if, passing on all active boards in the present, the opponent could capture it from any of their playable boards; optional boards ahead of the present and boards on inactive timelines are not passed. CHECKPOINT 1 cluster CHK-A4, rule question RQ1, answered 'no' by R1: ftxi passes every timeline the side to move may play (its phantom of every head on the mover's colour), so its 'check' here is wrong and Chess in 5D's 'no check' right."
+upstream = "unreported: ftxi follows a different reading of the check test; settled by ruling R1"
+added = "2026-10-02"
+notes = "Triage 2026-10-02, class (a), ftxi's exhaustive search (ftxi:naive; the same check test). CHK-A4: the attacker stands on the playable board of an active timeline ahead of the present (an optional board of the side to move) and jumps, without branching, onto a playable board on which it is to move. White to move, present T5w, mandatory +2; deciding capture n(0T6b)e3 -> K(-1T6b)e1 (docs/checkpoints/checkpoint-1-check-clusters.md, 'All 78 positions'). Chess in 5D answers False here, as the engine does."
+
+[[divergence]]
+id = "KD-0024"
+oracle = "ftxi:naive"
+pin = "2ea9f1b82880f08faa9400d1ac20b20102604187"
+record = "cwmtt/silly"
+record_sha256 = "369a53e5f25e75898f811ff429529e5082f2036e216f66340537c4eeffaf7a70"
+kind = "in_check"
+index = 28
+engine_value = "False"
+oracle_value = "True"
+rulebook = "docs/rules/README.md R1 (register H36), with C6 and C7 as ruled by it: a royal is in check if, passing on all active boards in the present, the opponent could capture it from any of their playable boards; optional boards ahead of the present and boards on inactive timelines are not passed. CHECKPOINT 1 cluster CHK-A1, rule question RQ1, answered 'no' by R1: ftxi passes every timeline the side to move may play (its phantom of every head on the mover's colour), so its 'check' here is wrong and Chess in 5D's 'no check' right."
+upstream = "unreported: ftxi follows a different reading of the check test; settled by ruling R1"
+added = "2026-10-02"
+notes = "Triage 2026-10-02, class (a), ftxi's exhaustive search (ftxi:naive; the same check test). CHK-A1: the attacker stands on the playable board of an active timeline ahead of the present (an optional board of the side to move) and captures on that board. White to move, present T2w, mandatory +3; deciding capture q(-2T7b)h4 -> K(-2T7b)e1 (docs/checkpoints/checkpoint-1-check-clusters.md, 'All 78 positions'). Chess in 5D answers False here, as the engine does."
+
+[[divergence]]
+id = "KD-0025"
+oracle = "ftxi:naive"
+pin = "2ea9f1b82880f08faa9400d1ac20b20102604187"
+record = "cwmtt/silly"
+record_sha256 = "369a53e5f25e75898f811ff429529e5082f2036e216f66340537c4eeffaf7a70"
+kind = "in_check"
+index = 30
+engine_value = "False"
+oracle_value = "True"
+rulebook = "docs/rules/README.md R1 (register H36), with C6 and C7 as ruled by it: a royal is in check if, passing on all active boards in the present, the opponent could capture it from any of their playable boards; optional boards ahead of the present and boards on inactive timelines are not passed. CHECKPOINT 1 cluster CHK-A1, rule question RQ1, answered 'no' by R1: ftxi passes every timeline the side to move may play (its phantom of every head on the mover's colour), so its 'check' here is wrong and Chess in 5D's 'no check' right."
+upstream = "unreported: ftxi follows a different reading of the check test; settled by ruling R1"
+added = "2026-10-02"
+notes = "Triage 2026-10-02, class (a), ftxi's exhaustive search (ftxi:naive; the same check test). CHK-A1: the attacker stands on the playable board of an active timeline ahead of the present (an optional board of the side to move) and captures on that board. White to move, present T3w, mandatory +3; deciding capture q(-2T7b)h4 -> K(-2T7b)e1 (docs/checkpoints/checkpoint-1-check-clusters.md, 'All 78 positions'). Chess in 5D answers False here, as the engine does."
+
+[[divergence]]
+id = "KD-0026"
+oracle = "ftxi:naive"
+pin = "2ea9f1b82880f08faa9400d1ac20b20102604187"
+record = "cwmtt/silly"
+record_sha256 = "369a53e5f25e75898f811ff429529e5082f2036e216f66340537c4eeffaf7a70"
+kind = "in_check"
+index = 32
+engine_value = "False"
+oracle_value = "True"
+rulebook = "docs/rules/README.md R1 (register H36), with C6 and C7 as ruled by it: a royal is in check if, passing on all active boards in the present, the opponent could capture it from any of their playable boards; optional boards ahead of the present and boards on inactive timelines are not passed. CHECKPOINT 1 cluster CHK-A1, rule question RQ1, answered 'no' by R1: ftxi passes every timeline the side to move may play (its phantom of every head on the mover's colour), so its 'check' here is wrong and Chess in 5D's 'no check' right."
+upstream = "unreported: ftxi follows a different reading of the check test; settled by ruling R1"
+added = "2026-10-02"
+notes = "Triage 2026-10-02, class (a), ftxi's exhaustive search (ftxi:naive; the same check test). CHK-A1: the attacker stands on the playable board of an active timeline ahead of the present (an optional board of the side to move) and captures on that board. White to move, present T4w, mandatory +3; deciding capture q(-2T7b)h4 -> K(-2T7b)e1 (docs/checkpoints/checkpoint-1-check-clusters.md, 'All 78 positions'). Chess in 5D answers False here, as the engine does."
+
+[[divergence]]
+id = "KD-0027"
+oracle = "ftxi:naive"
+pin = "2ea9f1b82880f08faa9400d1ac20b20102604187"
+record = "cwmtt/silly"
+record_sha256 = "369a53e5f25e75898f811ff429529e5082f2036e216f66340537c4eeffaf7a70"
+kind = "in_check"
+index = 34
+engine_value = "False"
+oracle_value = "True"
+rulebook = "docs/rules/README.md R1 (register H36), with C6 and C7 as ruled by it: a royal is in check if, passing on all active boards in the present, the opponent could capture it from any of their playable boards; optional boards ahead of the present and boards on inactive timelines are not passed. CHECKPOINT 1 cluster CHK-A1, rule question RQ1, answered 'no' by R1: ftxi passes every timeline the side to move may play (its phantom of every head on the mover's colour), so its 'check' here is wrong and Chess in 5D's 'no check' right."
+upstream = "unreported: ftxi follows a different reading of the check test; settled by ruling R1"
+added = "2026-10-02"
+notes = "Triage 2026-10-02, class (a), ftxi's exhaustive search (ftxi:naive; the same check test). CHK-A1: the attacker stands on the playable board of an active timeline ahead of the present (an optional board of the side to move) and captures on that board. White to move, present T5w, mandatory +3; deciding capture q(-2T7b)h4 -> K(-2T7b)e1 (docs/checkpoints/checkpoint-1-check-clusters.md, 'All 78 positions'). Chess in 5D answers False here, as the engine does."
+
+[[divergence]]
+id = "KD-0028"
+oracle = "ftxi"
+pin = "2ea9f1b82880f08faa9400d1ac20b20102604187"
+record = "cwmtt/standard"
+record_sha256 = "2c6b6f9cbfde9d7471716eb64aa8b977a9ae9fb076b9f58c5347fb142f58ccae"
+kind = "in_check"
+index = 13
+engine_value = "False"
+oracle_value = "True"
+rulebook = "docs/rules/README.md R1 (register H36), with C6 and C7 as ruled by it: a royal is in check if, passing on all active boards in the present, the opponent could capture it from any of their playable boards; optional boards ahead of the present and boards on inactive timelines are not passed. R1 also says a capture that would branch into an inactive timeline counts - but the attacker here stands on a board of the side to move's that the pass leaves unplayed, so it is not on one of the opponent's playable boards and captures nothing. CHECKPOINT 1 cluster CHK-I2, rule question RQ4, answered 'no' by R1: ftxi passes every timeline the side to move may play (its phantom of every head on the mover's colour), so its 'check' here is wrong and Chess in 5D's 'no check' right."
+upstream = "unreported: ftxi follows a different reading of the check test; settled by ruling R1"
+added = "2026-10-02"
+notes = "Triage 2026-10-02, class (a), ftxi's hypercuboid search. CHK-I2: the attacker stands on the playable board of an inactive timeline behind the present (an optional board of the side to move) and captures a royal on a history board of a mandatory timeline (the branch would be inactive). Black to move, present T3b, mandatory +1; deciding capture N(+2T3w)f5 -> k(+1T3w)f7 (docs/checkpoints/checkpoint-1-check-clusters.md, 'All 78 positions'). Chess in 5D answers False here, as the engine does."
+
+[[divergence]]
+id = "KD-0029"
+oracle = "ftxi"
+pin = "2ea9f1b82880f08faa9400d1ac20b20102604187"
+record = "cwmtt/standard"
+record_sha256 = "2c6b6f9cbfde9d7471716eb64aa8b977a9ae9fb076b9f58c5347fb142f58ccae"
+kind = "in_check"
+index = 15
+engine_value = "False"
+oracle_value = "True"
+rulebook = "docs/rules/README.md R1 (register H36), with C6 and C7 as ruled by it: a royal is in check if, passing on all active boards in the present, the opponent could capture it from any of their playable boards; optional boards ahead of the present and boards on inactive timelines are not passed. R1 also says a capture that would branch into an inactive timeline counts - but the attacker here stands on a board of the side to move's that the pass leaves unplayed, so it is not on one of the opponent's playable boards and captures nothing. CHECKPOINT 1 cluster CHK-I2, rule question RQ4, answered 'no' by R1: ftxi passes every timeline the side to move may play (its phantom of every head on the mover's colour), so its 'check' here is wrong and Chess in 5D's 'no check' right."
+upstream = "unreported: ftxi follows a different reading of the check test; settled by ruling R1"
+added = "2026-10-02"
+notes = "Triage 2026-10-02, class (a), ftxi's hypercuboid search. CHK-I2: the attacker stands on the playable board of an inactive timeline behind the present (an optional board of the side to move) and captures a royal on a history board of a mandatory timeline (the branch would be inactive). Black to move, present T4b, mandatory +1; deciding capture N(+2T3w)f5 -> k(+1T3w)f7 (docs/checkpoints/checkpoint-1-check-clusters.md, 'All 78 positions'). Chess in 5D answers False here, as the engine does."
+
+[[divergence]]
+id = "KD-0030"
+oracle = "ftxi:naive"
+pin = "2ea9f1b82880f08faa9400d1ac20b20102604187"
+record = "cwmtt/standard"
+record_sha256 = "2c6b6f9cbfde9d7471716eb64aa8b977a9ae9fb076b9f58c5347fb142f58ccae"
+kind = "in_check"
+index = 13
+engine_value = "False"
+oracle_value = "True"
+rulebook = "docs/rules/README.md R1 (register H36), with C6 and C7 as ruled by it: a royal is in check if, passing on all active boards in the present, the opponent could capture it from any of their playable boards; optional boards ahead of the present and boards on inactive timelines are not passed. R1 also says a capture that would branch into an inactive timeline counts - but the attacker here stands on a board of the side to move's that the pass leaves unplayed, so it is not on one of the opponent's playable boards and captures nothing. CHECKPOINT 1 cluster CHK-I2, rule question RQ4, answered 'no' by R1: ftxi passes every timeline the side to move may play (its phantom of every head on the mover's colour), so its 'check' here is wrong and Chess in 5D's 'no check' right."
+upstream = "unreported: ftxi follows a different reading of the check test; settled by ruling R1"
+added = "2026-10-02"
+notes = "Triage 2026-10-02, class (a), ftxi's exhaustive search (ftxi:naive; the same check test). CHK-I2: the attacker stands on the playable board of an inactive timeline behind the present (an optional board of the side to move) and captures a royal on a history board of a mandatory timeline (the branch would be inactive). Black to move, present T3b, mandatory +1; deciding capture N(+2T3w)f5 -> k(+1T3w)f7 (docs/checkpoints/checkpoint-1-check-clusters.md, 'All 78 positions'). Chess in 5D answers False here, as the engine does."
+
+[[divergence]]
+id = "KD-0031"
+oracle = "ftxi:naive"
+pin = "2ea9f1b82880f08faa9400d1ac20b20102604187"
+record = "cwmtt/standard"
+record_sha256 = "2c6b6f9cbfde9d7471716eb64aa8b977a9ae9fb076b9f58c5347fb142f58ccae"
+kind = "in_check"
+index = 15
+engine_value = "False"
+oracle_value = "True"
+rulebook = "docs/rules/README.md R1 (register H36), with C6 and C7 as ruled by it: a royal is in check if, passing on all active boards in the present, the opponent could capture it from any of their playable boards; optional boards ahead of the present and boards on inactive timelines are not passed. R1 also says a capture that would branch into an inactive timeline counts - but the attacker here stands on a board of the side to move's that the pass leaves unplayed, so it is not on one of the opponent's playable boards and captures nothing. CHECKPOINT 1 cluster CHK-I2, rule question RQ4, answered 'no' by R1: ftxi passes every timeline the side to move may play (its phantom of every head on the mover's colour), so its 'check' here is wrong and Chess in 5D's 'no check' right."
+upstream = "unreported: ftxi follows a different reading of the check test; settled by ruling R1"
+added = "2026-10-02"
+notes = "Triage 2026-10-02, class (a), ftxi's exhaustive search (ftxi:naive; the same check test). CHK-I2: the attacker stands on the playable board of an inactive timeline behind the present (an optional board of the side to move) and captures a royal on a history board of a mandatory timeline (the branch would be inactive). Black to move, present T4b, mandatory +1; deciding capture N(+2T3w)f5 -> k(+1T3w)f7 (docs/checkpoints/checkpoint-1-check-clusters.md, 'All 78 positions'). Chess in 5D answers False here, as the engine does."
+
+[[divergence]]
+id = "KD-0032"
+oracle = "ftxi"
+pin = "2ea9f1b82880f08faa9400d1ac20b20102604187"
+record = "cwmtt/wide"
+record_sha256 = "acc12925f03d8c03c6b6dbcab9187d1e16c6e35f6deeebb0d6583bb28f4ea53c"
+kind = "in_check"
+index = 12
+engine_value = "False"
+oracle_value = "True"
+rulebook = "docs/rules/README.md R1 (register H36), with C6 and C7 as ruled by it: a royal is in check if, passing on all active boards in the present, the opponent could capture it from any of their playable boards; optional boards ahead of the present and boards on inactive timelines are not passed. CHECKPOINT 1 cluster CHK-I1, rule question RQ3, answered 'no' by R1: ftxi passes every timeline the side to move may play (its phantom of every head on the mover's colour), so its 'check' here is wrong and Chess in 5D's 'no check' right."
+upstream = "unreported: ftxi follows a different reading of the check test; settled by ruling R1"
+added = "2026-10-02"
+notes = "Triage 2026-10-02, class (a), ftxi's hypercuboid search. CHK-I1: the attacker stands on the playable board of an inactive timeline behind the present (an optional board of the side to move) and captures on that board. White to move, present T5w, mandatory -3, -2, -1, 0, +1, +2; deciding capture q(-4T3b)f2 -> K(-4T3b)e1 (docs/checkpoints/checkpoint-1-check-clusters.md, 'All 78 positions'). Chess in 5D answers False here, as the engine does."
+
+[[divergence]]
+id = "KD-0033"
+oracle = "ftxi"
+pin = "2ea9f1b82880f08faa9400d1ac20b20102604187"
+record = "cwmtt/wide"
+record_sha256 = "acc12925f03d8c03c6b6dbcab9187d1e16c6e35f6deeebb0d6583bb28f4ea53c"
+kind = "in_check"
+index = 15
+engine_value = "False"
+oracle_value = "True"
+rulebook = "docs/rules/README.md R1 (register H36), with C6 and C7 as ruled by it: a royal is in check if, passing on all active boards in the present, the opponent could capture it from any of their playable boards; optional boards ahead of the present and boards on inactive timelines are not passed. CHECKPOINT 1 cluster CHK-A2, rule question RQ1, answered 'no' by R1: ftxi passes every timeline the side to move may play (its phantom of every head on the mover's colour), so its 'check' here is wrong and Chess in 5D's 'no check' right."
+upstream = "unreported: ftxi follows a different reading of the check test; settled by ruling R1"
+added = "2026-10-02"
+notes = "Triage 2026-10-02, class (a), ftxi's hypercuboid search. CHK-A2: the attacker stands on the playable board of an active timeline ahead of the present (an optional board of the side to move) and captures a royal on a history board (the branch would be active). Black to move, present T3b, mandatory -4; deciding capture N(-3T7w)e6 -> k(-3T6w)e8 (docs/checkpoints/checkpoint-1-check-clusters.md, 'All 78 positions'). Chess in 5D answers False here, as the engine does."
+
+[[divergence]]
+id = "KD-0034"
+oracle = "ftxi"
+pin = "2ea9f1b82880f08faa9400d1ac20b20102604187"
+record = "notation/Bg2"
+record_sha256 = "689c9ab81c12daf25f0a9279cf0b22e962aaf6830a979862c546ca70b7819516"
+kind = "in_check"
+index = 19
+engine_value = "False"
+oracle_value = "True"
+rulebook = "docs/rules/README.md R1 (register H36), with C6 and C7 as ruled by it: a royal is in check if, passing on all active boards in the present, the opponent could capture it from any of their playable boards; optional boards ahead of the present and boards on inactive timelines are not passed. CHECKPOINT 1 cluster CHK-A2, rule question RQ1, answered 'no' by R1: ftxi passes every timeline the side to move may play (its phantom of every head on the mover's colour), so its 'check' here is wrong and Chess in 5D's 'no check' right."
+upstream = "unreported: ftxi follows a different reading of the check test; settled by ruling R1"
+added = "2026-10-02"
+notes = "Triage 2026-10-02, class (a), ftxi's hypercuboid search. CHK-A2: the attacker stands on the playable board of an active timeline ahead of the present (an optional board of the side to move) and captures a royal on a history board (the branch would be active). Black to move, present T3b, mandatory -1; deciding capture Q(+1T6w)f3 -> k(+1T2w)f7 (docs/checkpoints/checkpoint-1-check-clusters.md, 'All 78 positions'). Chess in 5D answers False here, as the engine does."
+
+[[divergence]]
+id = "KD-0035"
+oracle = "ftxi"
+pin = "2ea9f1b82880f08faa9400d1ac20b20102604187"
+record = "notation/Bg2"
+record_sha256 = "689c9ab81c12daf25f0a9279cf0b22e962aaf6830a979862c546ca70b7819516"
+kind = "in_check"
+index = 21
+engine_value = "False"
+oracle_value = "True"
+rulebook = "docs/rules/README.md R1 (register H36), with C6 and C7 as ruled by it: a royal is in check if, passing on all active boards in the present, the opponent could capture it from any of their playable boards; optional boards ahead of the present and boards on inactive timelines are not passed. CHECKPOINT 1 cluster CHK-A2, rule question RQ1, answered 'no' by R1: ftxi passes every timeline the side to move may play (its phantom of every head on the mover's colour), so its 'check' here is wrong and Chess in 5D's 'no check' right."
+upstream = "unreported: ftxi follows a different reading of the check test; settled by ruling R1"
+added = "2026-10-02"
+notes = "Triage 2026-10-02, class (a), ftxi's hypercuboid search. CHK-A2: the attacker stands on the playable board of an active timeline ahead of the present (an optional board of the side to move) and captures a royal on a history board (the branch would be active). Black to move, present T4b, mandatory -1; deciding capture Q(+1T6w)f3 -> k(+1T2w)f7 (docs/checkpoints/checkpoint-1-check-clusters.md, 'All 78 positions'). Chess in 5D answers False here, as the engine does."
+
+[[divergence]]
+id = "KD-0036"
+oracle = "ftxi:naive"
+pin = "2ea9f1b82880f08faa9400d1ac20b20102604187"
+record = "notation/Bg2"
+record_sha256 = "689c9ab81c12daf25f0a9279cf0b22e962aaf6830a979862c546ca70b7819516"
+kind = "in_check"
+index = 19
+engine_value = "False"
+oracle_value = "True"
+rulebook = "docs/rules/README.md R1 (register H36), with C6 and C7 as ruled by it: a royal is in check if, passing on all active boards in the present, the opponent could capture it from any of their playable boards; optional boards ahead of the present and boards on inactive timelines are not passed. CHECKPOINT 1 cluster CHK-A2, rule question RQ1, answered 'no' by R1: ftxi passes every timeline the side to move may play (its phantom of every head on the mover's colour), so its 'check' here is wrong and Chess in 5D's 'no check' right."
+upstream = "unreported: ftxi follows a different reading of the check test; settled by ruling R1"
+added = "2026-10-02"
+notes = "Triage 2026-10-02, class (a), ftxi's exhaustive search (ftxi:naive; the same check test). CHK-A2: the attacker stands on the playable board of an active timeline ahead of the present (an optional board of the side to move) and captures a royal on a history board (the branch would be active). Black to move, present T3b, mandatory -1; deciding capture Q(+1T6w)f3 -> k(+1T2w)f7 (docs/checkpoints/checkpoint-1-check-clusters.md, 'All 78 positions'). Chess in 5D answers False here, as the engine does."
+
+[[divergence]]
+id = "KD-0037"
+oracle = "ftxi:naive"
+pin = "2ea9f1b82880f08faa9400d1ac20b20102604187"
+record = "notation/Bg2"
+record_sha256 = "689c9ab81c12daf25f0a9279cf0b22e962aaf6830a979862c546ca70b7819516"
+kind = "in_check"
+index = 21
+engine_value = "False"
+oracle_value = "True"
+rulebook = "docs/rules/README.md R1 (register H36), with C6 and C7 as ruled by it: a royal is in check if, passing on all active boards in the present, the opponent could capture it from any of their playable boards; optional boards ahead of the present and boards on inactive timelines are not passed. CHECKPOINT 1 cluster CHK-A2, rule question RQ1, answered 'no' by R1: ftxi passes every timeline the side to move may play (its phantom of every head on the mover's colour), so its 'check' here is wrong and Chess in 5D's 'no check' right."
+upstream = "unreported: ftxi follows a different reading of the check test; settled by ruling R1"
+added = "2026-10-02"
+notes = "Triage 2026-10-02, class (a), ftxi's exhaustive search (ftxi:naive; the same check test). CHK-A2: the attacker stands on the playable board of an active timeline ahead of the present (an optional board of the side to move) and captures a royal on a history board (the branch would be active). Black to move, present T4b, mandatory -1; deciding capture Q(+1T6w)f3 -> k(+1T2w)f7 (docs/checkpoints/checkpoint-1-check-clusters.md, 'All 78 positions'). Chess in 5D answers False here, as the engine does."
+
+[[divergence]]
+id = "KD-0038"
+oracle = "chessin5d"
+pin = "ee403c80e8c132fc4d168f5b99ddd9b8fe5cc17b"
+record = "cwmtt/chessin5d-illegal-move-example"
+record_sha256 = "cc81474db893323f41df29d7754efb8cf3773633b3aacf0671ff149df0981102"
+kind = "terminal"
+index = 66
+engine_value = "none"
+oracle_value = "checkmate"
+rulebook = "docs/rules/README.md C5 (high) and ruling R7: the game ends only when the player to move has no legal turn - 'a sequence of moves ... that shifts the present to the opponent and leaves all the player's royal pieces safe'; here 25 legal actions exist (listed alike by ftxi, ftxi:naive, cwmtt, cwmtt:naive and 5d-chess-js's own enumerator); the engine counts 25, so the position is not checkmate. Chess in 5D's checkmate search (mateFuncs.checkmate) hands its BFS a tree node where a board is expected and never expands it (docs/checkpoints/checkpoint-1-check-clusters.md, 'Mate traces')."
+upstream = "unreported: drafted in docs/checkpoints/upstream/5d-chess-js-mate-search.md, to be filed by the project owner (R7)"
+added = "2026-10-02"
+notes = "Triage 2026-10-02, class (b): one of the two false checkmates of 5d-chess-js's mate search (R7). In check, as every source agrees."
+
+[[divergence]]
+id = "KD-0039"
+oracle = "chessin5d"
+pin = "ee403c80e8c132fc4d168f5b99ddd9b8fe5cc17b"
+record = "ftxi/number1"
+record_sha256 = "75092e175928b2116cb4842d42bba7f03cab99e6775b8552e4cdd600e6c040e4"
+kind = "terminal"
+index = 4
+engine_value = "none"
+oracle_value = "checkmate"
+rulebook = "docs/rules/README.md C5 (high) and ruling R7: the game ends only when the player to move has no legal turn - 'a sequence of moves ... that shifts the present to the opponent and leaves all the player's royal pieces safe'; here 21 legal actions exist (listed alike by ftxi, ftxi:naive and 5d-chess-js's own enumerator; cwmtt cannot read the record); the engine counts 21, so the position is not checkmate. Chess in 5D's checkmate search (mateFuncs.checkmate) hands its BFS a tree node where a board is expected and never expands it (docs/checkpoints/checkpoint-1-check-clusters.md, 'Mate traces')."
+upstream = "unreported: drafted in docs/checkpoints/upstream/5d-chess-js-mate-search.md, to be filed by the project owner (R7)"
+added = "2026-10-02"
+notes = "Triage 2026-10-02, class (b): one of the two false checkmates of 5d-chess-js's mate search (R7). In check, as every source agrees."
+
+[[divergence]]
+id = "KD-0040"
+oracle = "ftxi"
+pin = "2ea9f1b82880f08faa9400d1ac20b20102604187"
+record = "notation/1.2"
+record_sha256 = "78a249d00200ea284f19845a7d340f0030c3a9e7bbd8d8079ea138ea63684bac"
+kind = "legal_actions"
+index = 15
+engine_value = "54"
+oracle_value = "52"
+rulebook = "docs/rules/README.md R4 (Q15, in part) and 4.6 (high; ruled, R4): a pawn's first-move double step exists along either forward axis - two ranks, or two timelines - for both colours; Black's forward across timelines is towards increasing L. Here ftxi's action list lacks exactly the two Black pawn timeline double steps (-1T3)e7>>(+1T3)e7 and (-1T3)g7>>(+1T3)g7, which the engine lists; every other action is listed alike (docs/checkpoints/checkpoint-1-check-clusters.md, 'Count trace'). Ruling R7 records this ftxi defect as a telltale."
+upstream = "unreported: drafted in docs/checkpoints/upstream/ftxi-black-pawn-timeline-double-step.md, to be filed by the project owner (R7)"
+added = "2026-10-02"
+notes = "Triage 2026-10-02, class (c), ftxi's hypercuboid search. Verified 2026-10-02 by action listings: observe --source ftxi --record notation/1.2 --actions 15 against t5d-gate --moves-after-shift --actions 15. Surfaces only under rules Q4's other reading (moves after the present has shifted): under the engine's default reading it stops at action 10 of this record, so the entry is inert until Q4 is ruled."
+
+[[divergence]]
+id = "KD-0041"
+oracle = "ftxi"
+pin = "2ea9f1b82880f08faa9400d1ac20b20102604187"
+record = "notation/1.2"
+record_sha256 = "78a249d00200ea284f19845a7d340f0030c3a9e7bbd8d8079ea138ea63684bac"
+kind = "legal_actions"
+index = 17
+engine_value = "55"
+oracle_value = "53"
+rulebook = "docs/rules/README.md R4 (Q15, in part) and 4.6 (high; ruled, R4): a pawn's first-move double step exists along either forward axis - two ranks, or two timelines - for both colours; Black's forward across timelines is towards increasing L. Here ftxi's action list lacks exactly the two Black pawn timeline double steps (-1T4)e7>>(+1T4)e7 and (-1T4)g7>>(+1T4)g7, which the engine lists; every other action is listed alike (docs/checkpoints/checkpoint-1-check-clusters.md, 'Count trace'). Ruling R7 records this ftxi defect as a telltale."
+upstream = "unreported: drafted in docs/checkpoints/upstream/ftxi-black-pawn-timeline-double-step.md, to be filed by the project owner (R7)"
+added = "2026-10-02"
+notes = "Triage 2026-10-02, class (c), ftxi's hypercuboid search. Verified 2026-10-02 by action listings: observe --source ftxi --record notation/1.2 --actions 17 against t5d-gate --moves-after-shift --actions 17. Surfaces only under rules Q4's other reading (moves after the present has shifted): under the engine's default reading it stops at action 10 of this record, so the entry is inert until Q4 is ruled."
+
+[[divergence]]
+id = "KD-0042"
+oracle = "ftxi:naive"
+pin = "2ea9f1b82880f08faa9400d1ac20b20102604187"
+record = "notation/1.2"
+record_sha256 = "78a249d00200ea284f19845a7d340f0030c3a9e7bbd8d8079ea138ea63684bac"
+kind = "legal_actions"
+index = 15
+engine_value = "54"
+oracle_value = "52"
+rulebook = "docs/rules/README.md R4 (Q15, in part) and 4.6 (high; ruled, R4): a pawn's first-move double step exists along either forward axis - two ranks, or two timelines - for both colours; Black's forward across timelines is towards increasing L. Here ftxi's action list lacks exactly the two Black pawn timeline double steps (-1T3)e7>>(+1T3)e7 and (-1T3)g7>>(+1T3)g7, which the engine lists; every other action is listed alike (docs/checkpoints/checkpoint-1-check-clusters.md, 'Count trace'). Ruling R7 records this ftxi defect as a telltale."
+upstream = "unreported: drafted in docs/checkpoints/upstream/ftxi-black-pawn-timeline-double-step.md, to be filed by the project owner (R7)"
+added = "2026-10-02"
+notes = "Triage 2026-10-02, class (c), ftxi's exhaustive search (ftxi:naive; the same move generator). Verified 2026-10-02 by action listings: observe --source ftxi:naive --record notation/1.2 --actions 15 against t5d-gate --moves-after-shift --actions 15. Surfaces only under rules Q4's other reading (moves after the present has shifted): under the engine's default reading it stops at action 10 of this record, so the entry is inert until Q4 is ruled."
+
+[[divergence]]
+id = "KD-0043"
+oracle = "ftxi:naive"
+pin = "2ea9f1b82880f08faa9400d1ac20b20102604187"
+record = "notation/1.2"
+record_sha256 = "78a249d00200ea284f19845a7d340f0030c3a9e7bbd8d8079ea138ea63684bac"
+kind = "legal_actions"
+index = 17
+engine_value = "55"
+oracle_value = "53"
+rulebook = "docs/rules/README.md R4 (Q15, in part) and 4.6 (high; ruled, R4): a pawn's first-move double step exists along either forward axis - two ranks, or two timelines - for both colours; Black's forward across timelines is towards increasing L. Here ftxi's action list lacks exactly the two Black pawn timeline double steps (-1T4)e7>>(+1T4)e7 and (-1T4)g7>>(+1T4)g7, which the engine lists; every other action is listed alike (docs/checkpoints/checkpoint-1-check-clusters.md, 'Count trace'). Ruling R7 records this ftxi defect as a telltale."
+upstream = "unreported: drafted in docs/checkpoints/upstream/ftxi-black-pawn-timeline-double-step.md, to be filed by the project owner (R7)"
+added = "2026-10-02"
+notes = "Triage 2026-10-02, class (c), ftxi's exhaustive search (ftxi:naive; the same move generator). Verified 2026-10-02 by action listings: observe --source ftxi:naive --record notation/1.2 --actions 17 against t5d-gate --moves-after-shift --actions 17. Surfaces only under rules Q4's other reading (moves after the present has shifted): under the engine's default reading it stops at action 10 of this record, so the entry is inert until Q4 is ruled."
+
+[[divergence]]
+id = "KD-0044"
+oracle = "ftxi"
+pin = "2ea9f1b82880f08faa9400d1ac20b20102604187"
+record = "cwmtt/ctp1"
+record_sha256 = "0d7d578842945521487c0b0cb9b5fe8129f2307e720eaa905ea16704016078c6"
+kind = "legality"
+index = 10
+engine_value = "rejected:unreadable"
+oracle_value = "accepted"
+notation = "README of adri326/5dchess-notation (oracles/third_party/notation/README.md). 'Jumps': 'Jumps use the following syntax: The super-physical coordinate of the origin board - The piece's letter - The piece's physical coordinate - >> if the jump is branching, > if the jump isn't branching - ...'. 'Notes, Omission': 'As in SAN, parts of the source square's coordinates may be omitted. While the parser bundled here could handle omission in super-physical moves, this format requires you to specify these coordinates nonetheless.' The record's '(-1T3)K>>(0T2)c3' (line 8) leaves out the king's square, so it is not valid 5dpgn."
+upstream = "unreported: the record's text is not valid 5dpgn and the oracle's reader accepts it; a lenient reader is no defect to report upstream"
+added = "2026-10-02"
+notes = "Triage 2026-10-02, class (d): a jump written without the moving piece's square ('K>>'). The engine's reader requires it (engine README, 'Jumps': the piece's square in full, 'Omission')."
+
+[[divergence]]
+id = "KD-0045"
+oracle = "cwmtt"
+pin = "9632e9969dd455c6e3d6c27c57c1936c251d7e97"
+record = "cwmtt/ctp1"
+record_sha256 = "0d7d578842945521487c0b0cb9b5fe8129f2307e720eaa905ea16704016078c6"
+kind = "legality"
+index = 10
+engine_value = "rejected:unreadable"
+oracle_value = "accepted"
+notation = "README of adri326/5dchess-notation (oracles/third_party/notation/README.md). 'Jumps': 'Jumps use the following syntax: The super-physical coordinate of the origin board - The piece's letter - The piece's physical coordinate - >> if the jump is branching, > if the jump isn't branching - ...'. 'Notes, Omission': 'As in SAN, parts of the source square's coordinates may be omitted. While the parser bundled here could handle omission in super-physical moves, this format requires you to specify these coordinates nonetheless.' The record's '(-1T3)K>>(0T2)c3' (line 8) leaves out the king's square, so it is not valid 5dpgn."
+upstream = "unreported: the record's text is not valid 5dpgn and the oracle's reader accepts it; a lenient reader is no defect to report upstream"
+added = "2026-10-02"
+notes = "Triage 2026-10-02, class (d): a jump written without the moving piece's square ('K>>'). The engine's reader requires it (engine README, 'Jumps': the piece's square in full, 'Omission')."
+
+[[divergence]]
+id = "KD-0046"
+oracle = "ftxi"
+pin = "2ea9f1b82880f08faa9400d1ac20b20102604187"
+record = "ftxi/niceAndrey"
+record_sha256 = "ce6412f78444ce25aed510a51c85650c787d2253c08f2d98ea551329056bbba8"
+kind = "legality"
+index = 0
+engine_value = "rejected:unreadable"
+oracle_value = "accepted"
+notation = "README of adri326/5dchess-notation (oracles/third_party/notation/README.md). '5DFEN and custom variants': 'To use this extension, you need to set the board tag to \"custom\" and encode the initial boards as 5DFEN board strings.'; 'Additional Metadata': 'The following metadata fields are required to have within the headers of a game using this extension: - Board = \"custom\", as to indicate that 5DFEN needs to be used'. The record gives a 5DFEN board string under [Board \"Standard - Reversed Royalty\"], so its set-up is not valid 5dpgn."
+upstream = "unreported: the record's text is not valid 5dpgn and the oracle's reader accepts it; a lenient reader is no defect to report upstream"
+added = "2026-10-02"
+notes = "Triage 2026-10-02, class (d), action 0 (the set-up): 5DFEN board strings under a named variant's Board header. The engine refuses the set-up as unreadable before any position."
+
+[[divergence]]
+id = "KD-0047"
+oracle = "ftxi"
+pin = "2ea9f1b82880f08faa9400d1ac20b20102604187"
+record = "ftxi/softmate"
+record_sha256 = "93dc91f17dcbe5bbdee29566d5227fdab2c6875a9cf3e6638f91da4635560bb6"
+kind = "legality"
+index = 3
+engine_value = "rejected:unreadable"
+oracle_value = "accepted"
+notation = "README of adri326/5dchess-notation (oracles/third_party/notation/README.md). 'Notes, Branching': 'Branching notation (as in SAN+RAV) is not yet supported, and it is unknown how it should behave with the super-physical coordinates.' Line 5 of the record, '(2b. d5 {The right response})', is a parenthesised variation (RAV) after action 3's move text, so the record is not valid 5dpgn as the specification stands."
+upstream = "unreported: the record's text is not valid 5dpgn and the oracle's reader accepts it; a lenient reader is no defect to report upstream"
+added = "2026-10-02"
+notes = "Triage 2026-10-02, class (d): a parenthesised variation; the engine reports the action whose move list the '(' interrupts (action 3). The specification says 'not yet supported', not 'forbidden': if it ever defines variations, this entry is revisited."
+
+[[divergence]]
+id = "KD-0048"
+oracle = "cwmtt"
+pin = "9632e9969dd455c6e3d6c27c57c1936c251d7e97"
+record = "ftxi/softmate"
+record_sha256 = "93dc91f17dcbe5bbdee29566d5227fdab2c6875a9cf3e6638f91da4635560bb6"
+kind = "legality"
+index = 3
+engine_value = "rejected:unreadable"
+oracle_value = "accepted"
+notation = "README of adri326/5dchess-notation (oracles/third_party/notation/README.md). 'Notes, Branching': 'Branching notation (as in SAN+RAV) is not yet supported, and it is unknown how it should behave with the super-physical coordinates.' Line 5 of the record, '(2b. d5 {The right response})', is a parenthesised variation (RAV) after action 3's move text, so the record is not valid 5dpgn as the specification stands."
+upstream = "unreported: the record's text is not valid 5dpgn and the oracle's reader accepts it; a lenient reader is no defect to report upstream"
+added = "2026-10-02"
+notes = "Triage 2026-10-02, class (d): a parenthesised variation; the engine reports the action whose move list the '(' interrupts (action 3). The specification says 'not yet supported', not 'forbidden': if it ever defines variations, this entry is revisited."
+
+[[divergence]]
+id = "KD-0049"
+oracle = "ftxi"
+pin = "2ea9f1b82880f08faa9400d1ac20b20102604187"
+record = "ftxi/verysmall"
+record_sha256 = "287bd6133b2ed0f7c345c4b24e53c0043b8ee3b0100c5b80a72369a3c9a16de1"
+kind = "legality"
+index = 3
+engine_value = "rejected:unreadable"
+oracle_value = "accepted"
+notation = "README of adri326/5dchess-notation (oracles/third_party/notation/README.md). 'Jumps': 'Jumps use the following syntax: The super-physical coordinate of the origin board - The piece's letter - The piece's physical coordinate - >> if the jump is branching, > if the jump isn't branching - ...'. 'Notes, Omission': 'As in SAN, parts of the source square's coordinates may be omitted. While the parser bundled here could handle omission in super-physical moves, this format requires you to specify these coordinates nonetheless.' The record's 'N>>d3' (line 5) leaves out the knight's square (and names no target board), so it is not valid 5dpgn."
+upstream = "unreported: the record's text is not valid 5dpgn and the oracle's reader accepts it; a lenient reader is no defect to report upstream"
+added = "2026-10-02"
+notes = "Triage 2026-10-02, class (d): a jump written without the moving piece's square ('N>>d3'). The engine's reader requires it (engine README, 'Jumps')."
+
+[[divergence]]
+id = "KD-0050"
+oracle = "cwmtt"
+pin = "9632e9969dd455c6e3d6c27c57c1936c251d7e97"
+record = "ftxi/verysmall"
+record_sha256 = "287bd6133b2ed0f7c345c4b24e53c0043b8ee3b0100c5b80a72369a3c9a16de1"
+kind = "legality"
+index = 3
+engine_value = "rejected:unreadable"
+oracle_value = "accepted"
+notation = "README of adri326/5dchess-notation (oracles/third_party/notation/README.md). 'Jumps': 'Jumps use the following syntax: The super-physical coordinate of the origin board - The piece's letter - The piece's physical coordinate - >> if the jump is branching, > if the jump isn't branching - ...'. 'Notes, Omission': 'As in SAN, parts of the source square's coordinates may be omitted. While the parser bundled here could handle omission in super-physical moves, this format requires you to specify these coordinates nonetheless.' The record's 'N>>d3' (line 5) leaves out the knight's square (and names no target board), so it is not valid 5dpgn."
+upstream = "unreported: the record's text is not valid 5dpgn and the oracle's reader accepts it; a lenient reader is no defect to report upstream"
+added = "2026-10-02"
+notes = "Triage 2026-10-02, class (d): a jump written without the moving piece's square ('N>>d3'). The engine's reader requires it (engine README, 'Jumps')."
+
+[[divergence]]
+id = "KD-0051"
+oracle = "notation"
+pin = "99f6163a9c95a6a9740b20fb5f3c7f6503a166a0"
+record = "cwmtt/100_timelines"
+record_sha256 = "caee1585fdb2ff207c4fb592633d8f9e63b71402a346e087ebbd682b939714ec"
+kind = "legality"
+index = 1
+engine_value = "accepted"
+oracle_value = "rejected:no_matching_move"
+notation = "README of adri326/5dchess-notation (oracles/third_party/notation/README.md). 'Moves, Physical moves': 'Physical moves are written the same as traditional chess standard algebraic notation.'; 'Notes, Omission': 'As in SAN, parts of the source square's coordinates may be omitted.' - they may be omitted, so they may also be written in full; the specification's own game (Full examples, Shad vs PseudoAbstractMeta, turn 22) writes '(3T11)Qg7g6*!' with the full source square where SAN would write Q7g6 (two white queens, on g7 and g4, reach g6). '(0T1)a2a3' is a pawn move with its source square written in full and the pawn's letter left out, as SAN leaves it out."
+upstream = "unreported: the notation repository's parser does not read a pawn move with its source square in full; not yet drafted for upstream"
+added = "2026-10-02"
+notes = "Triage 2026-10-02, class (f): the notation parser (parse-only) cannot read '(0T1)a2a3'; the engine, ftxi, cwmtt and Chess in 5D all play it. The weakest citation of the file: SAN itself never writes a pawn's source square, and the specification never shows one outside its export proposal ('(0T1)d2(0T1)d4'); it rests on 'Omission' and the specification's own Qg7g6."
+
+[[divergence]]
+id = "KD-0052"
+oracle = "ftxi"
+pin = "2ea9f1b82880f08faa9400d1ac20b20102604187"
+record = "cwmtt/ctp1"
+record_sha256 = "0d7d578842945521487c0b0cb9b5fe8129f2307e720eaa905ea16704016078c6"
+kind = "unmoved"
+index = 0
+engine_value = "766312fd4b977c55487b7f5465932937 (1 board, 10 pieces)"
+oracle_value = "d2c9497bf0c2e7644ce38ffb5d5b61da (1 board, 10 pieces)"
+notation = "README of adri326/5dchess-notation (oracles/third_party/notation/README.md). '5DFEN and custom variants': 'If a piece is sensitive to having been moved already or not and hasn't moved yet, then it must be followed by an asterisk (*)'; '5DFEN Strictness': 'The following pieces should be marked as unmoved if needed (the rest of the pieces should not include the unmoved marking): Pawn, Rook, King, Brawn'. At the set-up of Very Small - Open (position 0) nothing has moved, so its kings and rooks carry the marker, as the engine has them: [nbr*k*/3p*/P*3/K*R*BN:0:1:w]. ftxi's layout marks the pawns only: its hash is that of [nbrk/3p*/P*3/KRBN:0:1:w]."
+upstream = "unreported: ftxi's Very Small - Open layout leaves the unmoved marker off the kings and rooks; not yet drafted for upstream"
+added = "2026-10-02"
+notes = "Triage 2026-10-02, class (f), ftxi's hypercuboid search: a marker-only parse divergence from position 0. The rulebook agrees: nothing has moved at the set-up (docs/rules/README.md, Conventions: 5DFEN marks an unmoved pawn, rook, king or brawn with *; S2: castling needs a king and rook that have not moved). Castling is impossible in this layout, so the two positions play alike; the difference is in the state only. Verified by hashing both board strings."
+
+[[divergence]]
+id = "KD-0053"
+oracle = "ftxi:naive"
+pin = "2ea9f1b82880f08faa9400d1ac20b20102604187"
+record = "cwmtt/ctp1"
+record_sha256 = "0d7d578842945521487c0b0cb9b5fe8129f2307e720eaa905ea16704016078c6"
+kind = "unmoved"
+index = 0
+engine_value = "766312fd4b977c55487b7f5465932937 (1 board, 10 pieces)"
+oracle_value = "d2c9497bf0c2e7644ce38ffb5d5b61da (1 board, 10 pieces)"
+notation = "README of adri326/5dchess-notation (oracles/third_party/notation/README.md). '5DFEN and custom variants': 'If a piece is sensitive to having been moved already or not and hasn't moved yet, then it must be followed by an asterisk (*)'; '5DFEN Strictness': 'The following pieces should be marked as unmoved if needed (the rest of the pieces should not include the unmoved marking): Pawn, Rook, King, Brawn'. At the set-up of Very Small - Open (position 0) nothing has moved, so its kings and rooks carry the marker, as the engine has them: [nbr*k*/3p*/P*3/K*R*BN:0:1:w]. ftxi's layout marks the pawns only: its hash is that of [nbrk/3p*/P*3/KRBN:0:1:w]."
+upstream = "unreported: ftxi's Very Small - Open layout leaves the unmoved marker off the kings and rooks; not yet drafted for upstream"
+added = "2026-10-02"
+notes = "Triage 2026-10-02, class (f), ftxi's exhaustive search (ftxi:naive; the same set-up): a marker-only parse divergence from position 0. The rulebook agrees: nothing has moved at the set-up (docs/rules/README.md, Conventions: 5DFEN marks an unmoved pawn, rook, king or brawn with *; S2: castling needs a king and rook that have not moved). Castling is impossible in this layout, so the two positions play alike; the difference is in the state only. Verified by hashing both board strings."
+
+[[divergence]]
+id = "KD-0054"
+oracle = "ftxi"
+pin = "2ea9f1b82880f08faa9400d1ac20b20102604187"
+record = "cwmtt/tesseractMageOChicken"
+record_sha256 = "715f98bc8c031f83351ecf1dbe1ce8e8d76125f821453fadc88d67b61bd82534"
+kind = "legality"
+index = 28
+engine_value = "accepted"
+oracle_value = "rejected:no_matching_move"
+notation = "README of adri326/5dchess-notation (oracles/third_party/notation/README.md). 'Notes, Even-numbered starting boards': 'If -0 and +0 are used, the + sign is mandatory (just like how it's always displayed in such cases in the game). The + sign can be omitted for other integers.' - it may be omitted, so it may be written; '5DFEN and custom variants' gives the timeline field as 'may be -1, -0, 0, +0, +1, etc.'. The record's '(-1T10)Nf6>x(+1T10)g6' (action 28) writes timeline +1 with its sign, and ftxi matches no move to it."
+upstream = "unreported: ftxi's move reader matches a timeline's sign exactly; not yet drafted for upstream"
+added = "2026-10-02"
+notes = "Triage 2026-10-02, class (f): a notation ftxi does not read, not a rule. Verified with ftxi's stock 5dtools: on the record it stops with 'Invalid move: ... tb:ab{s:+,l:1,t:10}'; with every '+' dropped from the timeline labels it replays the record to its end. A legality entry names the implementation: ftxi:naive replays with the same reader and has no entry of its own."
+
+[[divergence]]
+id = "KD-0055"
+oracle = "ftxi"
+pin = "2ea9f1b82880f08faa9400d1ac20b20102604187"
+record = "ftxi/verysmall"
+record_sha256 = "287bd6133b2ed0f7c345c4b24e53c0043b8ee3b0100c5b80a72369a3c9a16de1"
+kind = "unmoved"
+index = 0
+engine_value = "766312fd4b977c55487b7f5465932937 (1 board, 10 pieces)"
+oracle_value = "d2c9497bf0c2e7644ce38ffb5d5b61da (1 board, 10 pieces)"
+notation = "README of adri326/5dchess-notation (oracles/third_party/notation/README.md). '5DFEN and custom variants': 'If a piece is sensitive to having been moved already or not and hasn't moved yet, then it must be followed by an asterisk (*)'; '5DFEN Strictness': 'The following pieces should be marked as unmoved if needed (the rest of the pieces should not include the unmoved marking): Pawn, Rook, King, Brawn'. At the set-up of Very Small - Open (position 0) nothing has moved, so its kings and rooks carry the marker, as the engine has them: [nbr*k*/3p*/P*3/K*R*BN:0:1:w]. ftxi's layout marks the pawns only: its hash is that of [nbrk/3p*/P*3/KRBN:0:1:w]."
+upstream = "unreported: ftxi's Very Small - Open layout leaves the unmoved marker off the kings and rooks; not yet drafted for upstream"
+added = "2026-10-02"
+notes = "Triage 2026-10-02, class (f), ftxi's hypercuboid search: a marker-only parse divergence from position 0. The rulebook agrees: nothing has moved at the set-up (docs/rules/README.md, Conventions: 5DFEN marks an unmoved pawn, rook, king or brawn with *; S2: castling needs a king and rook that have not moved). Castling is impossible in this layout, so the two positions play alike; the difference is in the state only. Verified by hashing both board strings."
+
+[[divergence]]
+id = "KD-0056"
+oracle = "ftxi:naive"
+pin = "2ea9f1b82880f08faa9400d1ac20b20102604187"
+record = "ftxi/verysmall"
+record_sha256 = "287bd6133b2ed0f7c345c4b24e53c0043b8ee3b0100c5b80a72369a3c9a16de1"
+kind = "unmoved"
+index = 0
+engine_value = "766312fd4b977c55487b7f5465932937 (1 board, 10 pieces)"
+oracle_value = "d2c9497bf0c2e7644ce38ffb5d5b61da (1 board, 10 pieces)"
+notation = "README of adri326/5dchess-notation (oracles/third_party/notation/README.md). '5DFEN and custom variants': 'If a piece is sensitive to having been moved already or not and hasn't moved yet, then it must be followed by an asterisk (*)'; '5DFEN Strictness': 'The following pieces should be marked as unmoved if needed (the rest of the pieces should not include the unmoved marking): Pawn, Rook, King, Brawn'. At the set-up of Very Small - Open (position 0) nothing has moved, so its kings and rooks carry the marker, as the engine has them: [nbr*k*/3p*/P*3/K*R*BN:0:1:w]. ftxi's layout marks the pawns only: its hash is that of [nbrk/3p*/P*3/KRBN:0:1:w]."
+upstream = "unreported: ftxi's Very Small - Open layout leaves the unmoved marker off the kings and rooks; not yet drafted for upstream"
+added = "2026-10-02"
+notes = "Triage 2026-10-02, class (f), ftxi's exhaustive search (ftxi:naive; the same set-up): a marker-only parse divergence from position 0. The rulebook agrees: nothing has moved at the set-up (docs/rules/README.md, Conventions: 5DFEN marks an unmoved pawn, rook, king or brawn with *; S2: castling needs a king and rook that have not moved). Castling is impossible in this layout, so the two positions play alike; the difference is in the state only. Verified by hashing both board strings."

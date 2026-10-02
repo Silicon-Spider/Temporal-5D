@@ -10,6 +10,27 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-02 - The engine's first gate runs triaged; the first known divergences
+
+- `oracles/known-divergences.toml`: 56 entries from the triage of the engine's
+  first gate runs (engine configured locally only): 37 for ftxi's and ftxi:naive's
+  check verdicts that ruling R1 rules wrong; Chess in 5D's two false checkmates
+  (2) and ftxi's missing Black two-timeline double step (4) - the two oracle
+  defects, recorded as telltales as ruling R7 asks; 7 for record text the notation
+  specification rules out (jumps without a source square, a parenthesised
+  variation, 5DFEN boards under a named Board), which the engine refuses and an
+  oracle played; 6 for oracles' own notation errors (ftxi's missing unmoved markers
+  on Very Small - Open, ftxi's refusal of `+1` timeline labels, the notation
+  parser's refusal of `(0T1)a2a3`). Each cites the rulebook or the notation
+  specification. `verify` passes; with the engine configured the nightly gate
+  matches every reachable entry, none stale, no telltale.
+- No engine defect was found. Standard - Half Reflected is the first gated ruleset.
+  115 findings that rules Q4 explains remain, so the engine stays unconfigured in
+  the committed `gate.toml` until the project owner rules on Q4.
+- `docs/BUILD_LOG.md`: the triage (step 2), the plan, register rows H23, H34.
+- Spec: §11.0 "Running the gate" (H23, H31, H34, H36, H38; R1, R4, R7); no spec
+  text changes.
+
 ### 2026-10-02 - Engine: a turn number that does not count the turns is a warning
 
 - `engine/`: by default (`PgnOptions::turn_number_mismatch_is_error`, false) a turn
