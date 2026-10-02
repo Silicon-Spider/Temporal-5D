@@ -10,6 +10,21 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-02 - Experiment 6b and M9 with legality measured: the run stops for the user
+
+- `docs/MEASUREMENTS.md`: experiment 6b (M8) on a quiet machine with `t5d-scan6b`
+  over the corpus. The 50 ms root scan resolves 5 forcing half-turns in 60.9% of
+  roots under the engine's default Q4 reading and 49.2% under the other - a fail
+  inside the ±10% band - and in the design's regime, above 50 boards, fails under
+  both (2.4-34.4% by size). Rung 1 and quiet-leaf reach fail; stand-pat is valid.
+  Scanner speed about 1.03 million nodes/s on one core (a §15.3 figure). M9 with
+  E5a's fast legality: 20,249 expansions/s at 240 boards on one core, 1.01x the
+  target (inside the band), 1.87x on two; 1.21x at 600 boards.
+- `docs/BUILD_LOG.md`: the STOP, the decisions it needs, and what is paused (engine
+  E6a's search core, in its worktree) - register rows M8, M9.
+- Spec: §15.6 (M8, M9), §11.1 (the kill condition), §15.3 (scanner nodes/s,
+  movegen throughput); spec issues 20, 61, 62.
+
 ### 2026-10-02 - Engine E5b: the tactical scanner and experiment 6b's tool
 
 - `engine/` (merged from its worktree branch; H1-H6, H15, H19): `t5d/scanner.hpp`,

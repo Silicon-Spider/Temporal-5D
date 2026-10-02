@@ -40,7 +40,7 @@ the run for the user.
 | Leaf-batching gain | 1.2-1.5× | - | | | |
 | NNUE eval | ~10k MACs, sub-µs | - | | | |
 | Movegen throughput | ≥ 20,000/s at 240; ≥ 10,000/s at 600 (§15.6) | pseudo-legal expansion, 1 thread: 44,047/s at 240 boards, 24,951/s at 600 (scope + relations); with the legal-moves filter: milliseconds to minutes per expansion | M9 section below | 2.2x / 2.5x the target (pseudo-legal); far below it with the filter | 2026-10-02, 2740e66 |
-| Scanner nodes/s | no figure | - | | | |
+| Scanner nodes/s | no figure | 1,036,000/s (Q4 per the Guide) and 1,033,000/s (Q4's other reading), one thread, pooled over the corpus; lower on large positions (85% of the nodes are E4 searches) | 6b section below | - | 2026-10-02, bde62c5 |
 
 ### Network N3 - the cached path, counted (2026-10-02)
 
@@ -109,7 +109,7 @@ Not an M9 figure: M9 measures the expansion without this filter (spec issue 46).
 
 ## §15.6 verdicts
 
-### Movegen throughput (M9) - pseudo-legal: PASS (provisional); with legality: FAIL (fix before search)
+### Movegen throughput (M9) - pseudo-legal: PASS; with fast legality: inside the STOP band at 240 boards on one core
 
 **Conditions.** dev, quiet machine (the bench measured the machine busy 4-5%
 during 1-thread samples - itself), Windows 11, g++ 16.2 `-O2 -DNDEBUG`, static
@@ -197,11 +197,24 @@ Reading: the fast mode costs 3-5x the pseudo-legal expansion and is bounded
 mate-search tail (minutes at 400-600 boards, against E4's per-move filter: 157 ms
 median at 240 boards). On check-heavy random play the fast mode proves few moves
 legal (it settles 36-73% of moves, as illegal); how search treats an unknown move
-is spec issue 46. **M9 with legality: no verdict yet.** A loaded smoke run of the
-fast mode's throughput gave 13,208/s at N240 and 8,947/s at N600 on one thread -
-the N600 figure near the ±10% STOP band (9,000-11,000/s) on one core, the unit
-"per GPU's CPU allocation" leaves undefined (spec issue 20). The quiet-machine run
-(`t5d-bench --legal --legal-budget 0,0`) decides it.
+is spec issue 46. **M9 with legality, quiet machine** (`t5d-bench --samples 15 --legal
+--legal-budget 0,0 --no-flatness` at bde62c5; 1-thread samples at 5% load, the
+bench itself; the FAST mode - budget 0: unknown moves kept, 27-47% of moves unknown
+by class). Scope + relations + legality, wall /s median [min, max] over 15 rounds:
+
+| Class | 1 thread | 2 threads | 12 threads | M9 target | ratio, 1 thread |
+|---|---|---|---|---|---|
+| N100 T6 | 25,712 [20,199, 26,288] | 48,380 | 249,135 | - | - |
+| N160 T7 | 18,555 [13,836, 19,421] | 37,062 | 205,314 | - | - |
+| N240 T8 | **20,249 [14,391, 20,818]** | 37,316 | 190,897 | 20,000 | **1.01x** (0.72-1.04 over rounds) - **inside the ±10% band** |
+| N400 T10 | 16,721 [13,385, 16,928] | 32,367 | 159,107 | - | - |
+| N600 T12 | 12,133 [10,497, 12,288] | 23,674 | 128,736 | 10,000 | 1.21x - PASS |
+
+Verdict: on ONE core per GPU the 240-board figure sits inside the STOP band; on two
+cores it is 1.87x the target. Which applies turns on "per GPU's CPU allocation",
+which the spec leaves undefined (spec issue 20) - a question for the user, with 6b
+below. Exact legality would not meet the target at any core count (its tail is
+minutes).
 
 ### The window: |E| phase curve (M7) - NO VERDICT: the corpus cannot decide it
 
@@ -234,4 +247,49 @@ itself, not |E|, dominates the scope (at 160-239 boards W(8) = 122 against the
 table's 69). The rule needs real game records (spec issue 26; requested from the
 user); the window code stays parked (M5, M7).
 
-### The scanner: 6b (M8) - not yet measured
+### The scanner: 6b (M8) - ROOT SCAN FAILS ABOVE 50 BOARDS; IN THE STOP BAND UNDER Q4'S OTHER READING - STOP
+
+**Conditions.** dev, quiet machine (busy 5.4% over the run, all processes - the
+tool itself), g++ 16.2 `-O2 -DNDEBUG`, engine at bde62c5 (E5b's scanner merged with
+E5a's legality tiers). `t5d-scan6b --max-nodes 100000 --jobs 1 --root-wall
+--per-position` over the 41 corpus records (every turn start; 1 leaf per root at 2
+half-turns of random legal play; duplicate roots dropped; TT and histories cleared
+per position; deterministic by node budget, plus one 50 ms wall-clock scan per
+root). Scanner: forcing = captures, checks (the pass test), branch threats (the
+arriving piece can capture at least 300), promotions not forcing; quiet completion;
+stand-pat on; evasion cap 512; completion fallback 2,000 nodes; material eval with
+placeholder 5D values (spec issue 56). Rung 1's evaluation rate is §15.6's design
+rate (no GPU here; spec issue 62), "size-matched" = 9,600/s below 420 boards and
+4,600/s above; threads 1 and 11 (physical cores - 1; the per-GPU allocation is
+undefined, spec issue 20). Raw output: `build/6b/` (git-ignored; reproducible from
+the command). Each run takes 1.5-2.5 minutes.
+
+| Test (§15.6) | Pass | Q4 per the Guide (601 roots, 595 leaves; median 19 boards, max 140) | Q4's other reading (805 roots, 780 leaves; median 27, max 378) |
+|---|---|---|---|
+| (iii) root scan at 50 ms (51,800 nodes) | ≥ 5 forcing half-turns in ≥ 50% of roots | **60.9%** (wall clock 61.6%) - PASS pooled | **49.2%** (wall clock 49.4%), median horizon 4 - **FAIL, inside the ±10% band** |
+| (iii) by board count | | < 50: 68.4% (484); 50-99: **34.4%** (90); 100-199: **14.8%** (27) | < 50: 64.7% (527); 50-99: **25.7%** (140); 100-199: **18.6%** (97); 200+: **2.4%** (41) |
+| (ii) rung-1 leaf scan, 11 threads, size-matched rate (1,187 nodes) | ≥ 3 in ≥ 50% of leaves | 42.2% - FAIL (drop rung 1) | 33.3% - FAIL |
+| (ii) 11 threads at 4,600/s (2,477 nodes) | | 50.4%, median 3 - inside the band | 41.8% - FAIL |
+| (ii) 1 thread | | 12.1% (9,600/s), 21.8% (4,600/s) - FAIL | 9.6%, 17.4% - FAIL |
+| (iv) quiet-leaf reach at the rung-1 budget | ≥ 50% | 4.9% (11 threads, size-matched) - FAIL (NNUE v2 deferred) | 4.6% - FAIL |
+| (v) stand-pat invalid | ≤ 5% fine | 2.0% of 149 decided quiet positions - fine | 3.0% of 164 - fine (2-3 mandatory boards: 11.1% of 9) |
+
+**Horizon per node budget** (roots resolving at least 5 forcing half-turns):
+Guide reading 19.6% at 100 nodes, 41.6% at 1k, 53.4% at 10k, 62.6% at 100k; other
+reading 15.0%, 32.4%, 43.2%, 50.8%. The passes rest largely on exhausted trees and
+proofs (237 and 84 of the Guide reading's 366 passing roots) - small positions.
+
+**Where the nodes go:** 85-86% inside E4's exhaustive searches - listing every legal
+action in check (50-57%: in 5D "all evasions" is every legal action of a turn,
+a product over boards, spec issue 55), mate tests at the horizon (23%) and
+completion fallbacks (6-14%); about 80 nodes per tree position.
+
+**Verdict.** The pooled root scan passes under the engine's default Q4 reading and
+fails inside the ±10% band under the other; in the design's regime - 100 boards and
+up - it fails under both (15-19% at 100-199 boards, 2.4% at 200+). Under the
+brief's rules this STOPS the run for the user: "6b root-scan fails" and "a §15.6
+result within ±10% of its threshold" (§11.1's kill condition: "the verification
+layer needs a different shape"). Whether the test is pooled over a corpus or per
+phase is undefined (spec issue 61). Rung 1 fails (drop rung 1, its own rule); the
+quiet-leaf reach fails (NNUE v2 and quiet-only training deferred, M8); stand-pat is
+valid.

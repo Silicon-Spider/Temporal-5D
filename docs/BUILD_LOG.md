@@ -15,8 +15,40 @@ M5 - building it would break a rule).
 
 ## Where things stand
 
-*Updated 2026-10-02.* Work in the tree that is not yet committed is listed under
-**In the tree, uncommitted** - a session that resumes starts there.
+### STOPPED 2026-10-02 for the user - experiment 6b (M8) and M9 with legality
+
+The brief stops the run when "6b root-scan fails (M8)" or "a §15.6 result [is]
+within ±10% of its threshold". Measured on a quiet machine (docs/MEASUREMENTS.md):
+- **6b, the 50 ms root scan** (≥ 5 forcing half-turns in ≥ 50% of roots): pooled
+  over the corpus 60.9% under the engine's default Q4 reading (a pass) and 49.2%
+  under Q4's other reading (a fail inside the band); above 50 boards - the
+  design's regime - it fails under both: 25.7-34.4% at 50-99 boards, 14.8-18.6% at
+  100-199, 2.4% at 200+. Rung 1 fails (drop rung 1); quiet-leaf reach fails (NNUE
+  v2 deferred); stand-pat is valid (2-3% invalid). 85% of the scanner's nodes go
+  into E4's exhaustive searches (listing every legal action in check: 50-57%).
+- **M9 with legality** (the fast mode): 20,249 expansions/s at 240 boards on one
+  core - 1.01x the target, inside the band; 1.87x on two cores; 600 boards passes
+  (1.21x). Which applies turns on "per GPU's CPU allocation" (spec issue 20).
+
+**For the user to decide:** (a) whether 6b's root test is read pooled or per phase
+(spec issue 61), and so whether the verification layer needs a different shape
+(§11.1's kill condition) - or whether the scanner's cost profile (all-evasion
+enumeration in check, horizon mate tests) should first be optimised and 6b
+re-measured; (b) the CPU allocation per GPU for M9; (c) rules Q4 (which also
+decides which 6b row applies, and whether the gate can pass); and the earlier open
+questions below.
+
+**Paused, to resume after the decision:** engine E6a, the search core, in worktree
+`.claude/worktrees/agent-a2dfd073da81ec01e` (branch
+`worktree-agent-a2dfd073da81ec01e`): committed - the search with E5a's legality
+tiers (budgeted, verified on selection, no proofs through unknowns), the
+external-evaluator step C API, the README, merges of main through 91cdd23;
+uncommitted - edits to `selfplay.*`, `test_selfplay.cpp`, `t5d_play.cpp` and the
+README, interrupted by a network error mid-edit (a `sed` had broken a string
+literal: check before building). Not yet measured: N3's CPU wall times (about
+2.7 h on a quiet machine). Not started: time management (E7, E8), the scanner in
+the search (rung 1 - which 6b says to drop) and Lazy SMP, end-to-end play with the
+network, the NNUE (not built: 6b's quiet-leaf reach failed, M8).
 
 - **Done:** pre-flight; step 1 (CI green on Linux, H35); step 2A (H30
   fingerprints, the notation parse-only oracle); the rules reference; CHECKPOINT 1
@@ -593,8 +625,8 @@ for game records.
 | ID | Status | Notes |
 |---|---|---|
 | M7 | measured, no verdict | The corpus's curve recorded (MEASUREMENTS); 2-3 games above 160 boards, none above 400 - game records requested (spec issue 26) |
-| M8 | not started | Scanner verdict (6b), after M9 (M10's order) |
-| M9 | measured | Pseudo-legal: throughput PASS (2.2x / 2.5x the targets on one thread), flatness of the history term 2%; with the legal-moves filter: FAIL by orders of magnitude - fix before search (MEASUREMENTS) |
+| M8 | measured - STOP | 6b on a quiet machine: root scan 60.9% pooled (Guide's Q4) / 49.2% (other Q4, in the band); fails above 50 boards; rung 1 and quiet-leaf reach fail; stand-pat valid (MEASUREMENTS) |
+| M9 | measured | Pseudo-legal: PASS (2.2x / 2.5x the targets on one thread), history term 2%; with E5a's fast legality: 1.01x at 240 boards on one core (in the band), 1.87x on two; 1.21x at 600 |
 | M11 | built | Licence recorded in PROVENANCE.md |
 
 ## Parked, and why
