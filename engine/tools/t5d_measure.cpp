@@ -88,10 +88,12 @@ void print_usage(std::FILE* stream) {
       "  --name NAME           the name of a record read from standard input\n"
       "  --summary             after the records, the |E| curve per N bucket (distinct\n"
       "                        positions and games; synthetic records left out)\n"
+      "  --legal               the legal moves only (ExpandOptions::legal_moves, exact): E\n"
+      "                        from the legal moves' destinations - M7's tighter bound\n"
       "  --help, --version\n"
       "\n"
       "One JSON object per line (see the engine README, \"t5d-measure\"). Moves are\n"
-      "pseudo-legal (the expansion's default): every |E| is an upper bound.\n",
+      "pseudo-legal unless --legal (then the record line says \"moves\":\"legal\").\n",
       stream);
 }
 
@@ -159,6 +161,7 @@ struct RecordKept {
 
 std::vector<RecordKept> g_kept;
 bool g_summary = false;
+bool g_legal = false;  // --legal: the legal moves only
 
 std::string end_line(const std::string& name, const char* status, std::size_t positions,
                      std::size_t accepted, std::size_t in_record, bool truncated,
@@ -194,12 +197,14 @@ bool measure(const std::string& name, const std::string& text, const t5d::RuleOp
     std::snprintf(encoding, sizeof encoding, "0x%llx",
                   static_cast<unsigned long long>(replay.state().rules().encode()));
     head += std::string(",\"rules_encoding\":\"") + encoding + "\"";
+    head += std::string(",\"moves\":\"") + (g_legal ? "legal" : "pseudo-legal") + "\"";
     head += field("actions_in_record", static_cast<long long>(in_record));
     head += "}";
     emit(head);
     t5d::Expansion x;
     t5d::ExpandOptions options;
     options.square_features = t5d::SquareFeatures::None;  // counts only
+    options.legal_moves = g_legal;                        // exact: none left unknown
     RecordKept* kept = nullptr;
     if (g_summary) {
       g_kept.push_back(RecordKept{name, synthetic, {}});
@@ -414,6 +419,10 @@ int main(int argc, char** argv) {
       }
       if (std::strcmp(arg, "--summary") == 0) {
         g_summary = true;
+        continue;
+      }
+      if (std::strcmp(arg, "--legal") == 0) {
+        g_legal = true;
         continue;
       }
       if (arg[0] == '-' && arg[1] != '\0') {
