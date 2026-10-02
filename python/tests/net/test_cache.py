@@ -425,7 +425,12 @@ def test_fp8_cache_equals_the_fp8_network_at_fp32_resolution():
     """(e), C15, at FP32 resolution: under the FP32 trunk the FP8 cache equals the FP8
     network's ordinary forward up to the rare FP8 rounding flip an FP32 rounding difference
     tips over (measured: trunk RMS 1.2e-5, value 1.7e-6, policy 4.5e-6) - FP8 is the format's
-    rounding, applied identically on both paths, and nothing else."""
+    rounding, applied identically on both paths, and nothing else.
+
+    The policy bound is a max over logits, so it must absorb one such flip: on Linux CI one
+    flip moved a logit by 1.3e-3 (FP32 summation order differs by platform). The trunk's RMS
+    is what discriminates - a frozen board reading its own K/V unquantised (mutant M14)
+    gives trunk RMS 7.4e-3, value 2.5e-3, policy 2.1e-2."""
     for seed in (0, 1, 2):
         model = _model(seed, frozen_kv_format="fp8")
         root, moves = _bf16_trees(seed)
@@ -435,7 +440,7 @@ def test_fp8_cache_equals_the_fp8_network_at_fp32_resolution():
             if move is not None:
                 node = tree.child(node, move)
             g = _gaps(tree.evaluate(node), model(collate([node.state]), return_trunk=True))
-            assert g["trunk_rms"] < 2e-4 and g["value"] < 5e-5 and g["policy"] < 5e-4, g
+            assert g["trunk_rms"] < 2e-4 and g["value"] < 5e-5 and g["policy"] < 5e-3, g
 
 
 def test_the_fp8_network_is_a_bounded_approximation_of_match():

@@ -10,6 +10,17 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-02 - Network CI: the FP32-resolution FP8 test absorbs one rounding flip
+
+- `python/tests/net/test_cache.py`: the test that the FP8 cache equals the FP8
+  network's forward at FP32 resolution bounded the policy's largest logit gap at
+  5e-4, tighter than one FP8 rounding flip, which a platform's FP32 summation order
+  can tip: on Linux one flip moved a logit by 1.3e-3 and the network job failed
+  (557 of 558 passed). The bound is now 5e-3; the trunk-RMS and value bounds,
+  which separate a real fault from a flip by about 400x (mutant M14 gives trunk
+  RMS 7.4e-3 against 1.2-1.8e-5), are unchanged.
+- Spec: §15.2 row (e) - tolerance matched to the arithmetic, as its protocol says.
+
 ### 2026-10-02 - The network stack, stage N3: the block-causal scope and the cached path (random weights)
 
 - `python/t5d/net/`: the block-causal scope (C17, C19) as `NetConfig.attn_scope`
