@@ -96,6 +96,7 @@
 #include <span>
 #include <vector>
 
+#include "t5d/legal.hpp"
 #include "t5d/move.hpp"
 #include "t5d/movegen.hpp"
 #include "t5d/records.h"
@@ -146,12 +147,16 @@ struct ExpandOptions {
   /// band (INT32_MAX included). The tools report k in {0, 4, 8, 16}.
   int window_k = 8;
   SquareFeatures square_features = SquareFeatures::All;
-  /// The legal moves only (t5d/search.hpp, legal_moves): the pseudo-legal
-  /// moves after which the action can still be finished legally (C4, R1;
-  /// build-log spec issue 28). PROVISIONAL, off by default: each move costs a
-  /// search (to its first legal finish, by the hypercuboid detector), and the
+  /// The legal moves only: the pseudo-legal moves after which the action can
+  /// still be finished legally (C4, R1; build-log spec issue 28), classified
+  /// by t5d/legal.hpp's tiers under `legality`. A move proved illegal is
+  /// dropped; one left Unknown (a budget spent) is kept, and move_legality()
+  /// says which moves are known legal. PROVISIONAL, off by default; the
   /// expansion then allocates.
   bool legal_moves = false;
+  /// The classification's budget: exact by default; LegalityOptions::
+  /// budgeted(checks, nodes) bounds its cost (the moves it leaves Unknown).
+  LegalityOptions legality{};
 
   // The typed relations (§6, B11) - PROVISIONAL, each off by default. Only the
   // subset that check detection cannot change, for the player to move's
@@ -315,6 +320,12 @@ class Expansion {
 
   /// The moves as t5d::Move, in generation order (for GameState::apply).
   const MoveList& moves() const noexcept { return moves_; }
+  /// With ExpandOptions::legal_moves: each move's legality, in the same order
+  /// - Legal, or Unknown (a budget left it undecided; never Illegal: those
+  /// moves are dropped). Empty without legal_moves.
+  std::span<const MoveLegality> move_legality() const noexcept { return legality_; }
+  /// With ExpandOptions::legal_moves: how the moves were classified.
+  const LegalityStats& legality_stats() const noexcept { return legality_stats_; }
   /// The same moves as records (t5d/records.h), in the same order.
   std::span<const MoveRecord> move_records() const noexcept {
     return {records_.data(), moves_.size()};
@@ -425,6 +436,8 @@ class Expansion {
   // Moves, the graph, relations. The last three grow and never shrink: their
   // used length is moves_.size(), edge_ints_ and relation_ints_.
   MoveList moves_;
+  std::vector<MoveLegality> legality_;
+  LegalityStats legality_stats_;
   RelationList geometric_;
   std::vector<MoveRecord> records_;
   std::vector<std::int32_t> edges_;
