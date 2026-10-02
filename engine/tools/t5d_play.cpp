@@ -8,7 +8,8 @@
 //            [--no-widening] [--e2] [--e3] [--batch N] [--synchronous]
 //            [--match] [--final visits|lcb] [--temperature T] [--temperature-decisions N]
 //            [--noise] [--cap-turns N] [--cap-boards N] [--max-actions N]
-//            [--listing-cap N] [--mate-nodes N] [--seed S] [--moves-after-shift] [--rules ENCODING]
+//            [--listing-cap N] [--mate-nodes N] [--max-seconds S] [--seed S]
+//            [--moves-after-shift] [--rules ENCODING]
 //
 // Defaults: Standard, the uniform evaluator, 64 playouts per decision, the
 // board-move split (D2 is undecided: --split turn is the other arm), a tree
@@ -16,6 +17,8 @@
 // sampled at temperature 1 for the first 16 decisions) - --match plays the
 // final rule (E5, LCB by default) with the tree carried (C12) - and a turn cap
 // of 20 turns (I11: a convention, scored as a draw; --cap-turns 0 lifts it).
+// --max-seconds stops a long game at a turn start (a safety stop, "*"), its
+// record and summary still printed.
 // Exit status: 0 for a game played, 2 for a bad command line, 1 for an error.
 
 #include <cstdio>
@@ -46,7 +49,8 @@ void usage(std::FILE* to) {
       "                [--no-widening] [--e2] [--e3] [--batch N] [--synchronous]\n"
       "                [--match] [--final visits|lcb] [--temperature T]\n"
       "                [--temperature-decisions N] [--noise] [--cap-turns N] [--cap-boards N]\n"
-      "                [--max-actions N] [--listing-cap N] [--mate-nodes N] [--seed S]\n"
+      "                [--max-actions N] [--listing-cap N] [--mate-nodes N]\n"
+      "                [--max-seconds S] [--seed S]\n"
       "                [--moves-after-shift] [--rules ENCODING]\n",
       to);
 }
@@ -155,6 +159,8 @@ int main(int argc, char** argv) {
         params.search.max_actions = static_cast<std::size_t>(number(a, value()));
       } else if (std::strcmp(a, "--mate-nodes") == 0) {
         params.search.mate_nodes = number(a, value());
+      } else if (std::strcmp(a, "--max-seconds") == 0) {
+        params.max_seconds = real(a, value());
       } else if (std::strcmp(a, "--seed") == 0) {
         params.seed = number(a, value());
         params.search.seed = params.seed;

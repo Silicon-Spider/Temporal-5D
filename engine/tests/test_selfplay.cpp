@@ -86,7 +86,8 @@ GameState check_game(const GameRecord& g, const TurnCap& cap) {
       break;
     case GameEnd::Unknown:
     case GameEnd::ActionLimit:
-      CHECK(false);  // neither may end these games
+    case GameEnd::TimeLimit:
+      CHECK(false);  // none may end these games
       break;
   }
   return s;
@@ -235,4 +236,22 @@ TEST(selfplay_is_reproducible_and_counts_the_cap) {
   CHECK_EQ(a.result(), std::string("*"));  // the rules did not end it
   CHECK(a.search_turn_caps > 0);           // the searches scored capped positions as draws
   check_game(a, p.turn_cap);
+}
+
+TEST(selfplay_safety_stops_end_a_game_unscored) {
+  const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Uniform);
+  PlayParams p = quick(TurnSplit::BoardMove, 1);
+  p.max_actions = 3;
+  const GameRecord a = play_game(variant("Standard"), *ev, p);
+  CHECK(a.end == GameEnd::ActionLimit);
+  CHECK_EQ(a.actions.size(), std::size_t{3});
+  CHECK_EQ(a.result(), std::string("*"));
+  CHECK_EQ(a.white_score(), -1.0);
+  check_record(a, "Standard");
+  p.max_actions = 400;
+  p.max_seconds = 1e-9;  // spent before the first turn start is judged
+  const GameRecord b = play_game(variant("Standard"), *ev, p);
+  CHECK(b.end == GameEnd::TimeLimit);
+  CHECK(b.actions.empty());
+  CHECK_EQ(b.result(), std::string("*"));
 }

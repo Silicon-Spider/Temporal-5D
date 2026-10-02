@@ -43,6 +43,7 @@ enum class GameEnd : std::uint8_t {
   TurnCap,        ///< I11's convention: scored as a draw
   Unknown,        ///< the detector could not decide (H37): the game stops unjudged
   ActionLimit,    ///< PlayParams::max_actions: a safety stop, not a rule
+  TimeLimit,      ///< PlayParams::max_seconds: a safety stop, not a rule
 };
 const char* game_end_name(GameEnd end) noexcept;
 
@@ -62,6 +63,9 @@ struct PlayParams {
   std::uint64_t seed = 1;
   /// A safety stop: the most actions played (ActionLimit).
   std::uint32_t max_actions = 400;
+  /// A safety stop: wall-clock seconds, checked at each turn start (TimeLimit);
+  /// 0: none. Not deterministic - for tools, never for training games.
+  double max_seconds = 0;
 };
 
 struct GameRecord {

@@ -48,6 +48,7 @@ const char* game_end_name(GameEnd end) noexcept {
     case GameEnd::TurnCap: return "turn_cap";
     case GameEnd::Unknown: return "unknown";
     case GameEnd::ActionLimit: return "action_limit";
+    case GameEnd::TimeLimit: return "time_limit";
   }
   return "?";
 }
@@ -64,7 +65,8 @@ double GameRecord::white_score() const noexcept {
     case GameEnd::Stalemate:
     case GameEnd::TurnCap: return 0.5;
     case GameEnd::Unknown:
-    case GameEnd::ActionLimit: return -1.0;
+    case GameEnd::ActionLimit:
+    case GameEnd::TimeLimit: return -1.0;
   }
   return -1.0;
 }
@@ -111,6 +113,11 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
     }
     if (g.actions.size() >= params.max_actions) {
       g.end = GameEnd::ActionLimit;
+      break;
+    }
+    if (params.max_seconds > 0 &&
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count() >= params.max_seconds) {
+      g.end = GameEnd::TimeLimit;
       break;
     }
     std::vector<Move> action;
