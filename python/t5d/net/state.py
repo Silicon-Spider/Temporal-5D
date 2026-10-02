@@ -34,6 +34,35 @@ Representation (design spec section 2; register A1-A4):
   ``(src_square_token, dst_square_token, promotion)`` feed the policy pointer head (D1,
   section 8.1). Registers are never edge or move endpoints (section 5.3); validation
   rejects any that are.
+* **Lineage (stage N3; spec section 7.3, register C17).** The block-causal scope needs a
+  board's causal past, which the spec leaves undefined (build log, spec issue 5), and
+  every reading of it rests on two per-board facts, carried here:
+
+  - ``parent``: the board this board was made from - its timeline's previous board, or,
+    for the first board of a timeline created by travel, the board the travelling piece
+    arrived on (its *branch origin*, one half-turn earlier on another timeline; the rules
+    engine's ``Timeline::origin``). -1 for the first board of an initial timeline and
+    for an origin nobody recorded (a position read from 5DFEN, which holds none).
+    Default: the timeline's previous board where the state holds it, -1 otherwise - the
+    branch origins unknown.
+  - ``creation``: the order in which the boards were created in the game, as distinct
+    integers (larger = later), or None when unknown. A board is created after its
+    parent. Two move orders that reach one multiverse can create its boards in
+    different orders, so ``creation`` is a property of the path, not of the multiverse
+    (spec issue 5, reading (iii)).
+
+  - ``source``: for a board a travelling piece arrived on (the first board of a branch,
+    or the next board of a non-branching jump's destination timeline), the board the piece
+    departed from; -1 otherwise or when unknown (default: all -1). ``parent`` is the
+    *arrival-side* lineage - a branch's first board descends by content from the board it
+    branched from, not from the board the piece left; ``source`` carries the departure
+    side, for the two-parent reading of spec issue 5 (``NetConfig.causal_past``).
+
+  Validation checks them against the timeline structure: a timeline's later board's
+  parent is its previous board; a branch origin sits one half-turn before the
+  timeline's first board, on another timeline, and is superseded (a travel onto a head
+  continues that timeline rather than branching); a departure board is superseded (the
+  jump makes its timeline's next board) and created before the arrival.
 
 Board storage order is free: the network has no absolute positions (section 4), so a
 reordering of boards permutes the per-board outputs and changes nothing else. Synthetic
@@ -233,6 +262,12 @@ class PositionState:
     opp_moves: np.ndarray = field(default_factory=lambda: np.zeros((0, 3), dtype=np.int64))
     regs_per_board: int = 2
     global_regs: int = 16
+    #: Lineage (see the module docstring): each board's parent board index (-1: none or
+    #: unknown; None: derived - the timeline's previous board, origins unknown), its
+    #: creation order (None: unknown) and a travel arrival's departure board (None: none).
+    parent: np.ndarray | None = None
+    creation: np.ndarray | None = None
+    source: np.ndarray | None = None
 
     def __post_init__(self) -> None:
         self.timeline = _as_int(self.timeline, "timeline").reshape(-1)
@@ -248,7 +283,23 @@ class PositionState:
         self.edges = _triples(self.edges, "edges")
         self.moves = _triples(self.moves, "moves")
         self.opp_moves = _triples(self.opp_moves, "opp_moves")
+        if self.parent is None:
+            self.parent = self.previous_boards()
+        else:
+            self.parent = _as_int(self.parent, "parent").reshape(-1)
+        if self.creation is not None:
+            self.creation = _as_int(self.creation, "creation").reshape(-1)
+        if self.source is None:
+            self.source = np.full(n, -1, dtype=np.int64)
+        else:
+            self.source = _as_int(self.source, "source").reshape(-1)
         self.validate()
+
+    def previous_boards(self) -> np.ndarray:
+        """``(N,)``: each board's timeline predecessor (the board at ``(p, h - 1)``), -1 where
+        the state holds none - the default ``parent``, with every branch origin unknown."""
+        index = {(int(p), int(h)): i for i, (p, h) in enumerate(zip(self.timeline.tolist(), self.half_turn.tolist(), strict=True))}
+        return np.array([index.get((int(p), int(h) - 1), -1) for p, h in zip(self.timeline, self.half_turn, strict=True)], dtype=np.int64)
 
     # -- derived quantities --
 
@@ -331,6 +382,7 @@ class PositionState:
                 raise ValueError(f"timeline {p}: boards disagree about whether it is active")
         if not np.any(self.is_head & self.active):
             raise ValueError("no active timeline: the present is undefined")
+        self._validate_lineage()
         layout = self.layout
         for name in ("edges", "moves", "opp_moves"):
             arr = getattr(self, name)
@@ -345,6 +397,52 @@ class PositionState:
             arr = getattr(self, name)
             if arr.size and np.any((arr[:, 2] < 0) | (arr[:, 2] >= N_PIECE_TYPES)):
                 raise ValueError(f"{name}: promotion ids must be 0 (none) or a piece type id")
+
+    def _validate_lineage(self) -> None:
+        """``parent`` and ``creation`` against the timeline structure (module docstring)."""
+        n = self.n_boards
+        parent = self.parent
+        if parent.shape != (n,):
+            raise ValueError(f"parent: expected shape ({n},)")
+        if np.any((parent < -1) | (parent >= n)) or np.any(parent == np.arange(n)):
+            raise ValueError("parent: each entry is -1 or the index of another board")
+        previous = self.previous_boards()
+        first_h = {int(p): int(self.half_turn[self.timeline == p].min()) for p in np.unique(self.timeline)}
+        for b in range(n):
+            p, h, a = int(self.timeline[b]), int(self.half_turn[b]), int(parent[b])
+            if h > first_h[p]:
+                if a != previous[b]:
+                    raise ValueError(f"parent: board (p={p}, h={h}) must have its timeline's previous board as parent")
+            elif a >= 0:
+                if int(self.timeline[a]) == p or int(self.half_turn[a]) != h - 1:
+                    raise ValueError(f"parent: the branch origin of timeline {p} must sit one half-turn before it, on another timeline")
+                if self.is_head[a]:
+                    raise ValueError(f"parent: the branch origin of timeline {p} is a head (travel onto a head does not branch)")
+        source = self.source
+        if source.shape != (n,):
+            raise ValueError(f"source: expected shape ({n},)")
+        if np.any((source < -1) | (source >= n)) or np.any(source == np.arange(n)):
+            raise ValueError("source: each entry is -1 or the index of another board")
+        if np.any(self.is_head[source[source >= 0]]):
+            raise ValueError("source: a travel's departure board is superseded by the jump")
+        if self.creation is None:
+            return
+        creation = self.creation
+        has_source = source >= 0
+        if np.any(creation[source[has_source]] >= creation[has_source]):
+            raise ValueError("creation: a travelling piece departs before it arrives")
+        if creation.shape != (n,):
+            raise ValueError(f"creation: expected shape ({n},)")
+        if len(np.unique(creation)) != n:
+            raise ValueError("creation: every board needs its own creation order")
+        has = parent >= 0
+        if np.any(creation[parent[has]] >= creation[has]):
+            raise ValueError("creation: a board is created after its parent")
+        for p in np.unique(self.timeline):
+            on = np.flatnonzero(self.timeline == p)
+            by_time = on[np.argsort(self.half_turn[on])]
+            if np.any(np.diff(creation[by_time]) <= 0):
+                raise ValueError(f"creation: timeline {p}'s boards are created in time order")
 
     # -- token-level arrays --
 
@@ -409,6 +507,10 @@ def permute_boards(state: PositionState, order: Sequence[int]) -> PositionState:
     new_index = np.empty(n, dtype=np.int64)
     new_index[order] = np.arange(n)
     lay = state.layout
+    old_parent = state.parent[order]
+    parent = np.where(old_parent >= 0, new_index[np.maximum(old_parent, 0)], -1)
+    old_source = state.source[order]
+    source = np.where(old_source >= 0, new_index[np.maximum(old_source, 0)], -1)
     return PositionState(
         width=state.width,
         height=state.height,
@@ -425,6 +527,9 @@ def permute_boards(state: PositionState, order: Sequence[int]) -> PositionState:
         opp_moves=_remap_tokens(state.opp_moves, lay, lay, new_index),
         regs_per_board=state.regs_per_board,
         global_regs=state.global_regs,
+        parent=parent,
+        creation=None if state.creation is None else state.creation[order],
+        source=source,
     )
 
 
@@ -499,6 +604,12 @@ class Batch:
     regs_per_board: int
     global_regs: int
     layouts: tuple[TokenLayout, ...]
+    # Per board (stage N3, the block-causal scope): (B, Nmax), padding -1 / False.
+    board_parent: torch.Tensor | None = None  # long: parent board index (PositionState.parent)
+    board_creation: torch.Tensor | None = None  # long: creation order, -1 where unknown
+    board_source: torch.Tensor | None = None  # long: a travel arrival's departure board, -1 none
+    board_head: torch.Tensor | None = None  # bool: head (live) board
+    has_creation: torch.Tensor | None = None  # (B,) bool: the position carries a creation order
 
     @property
     def batch_size(self) -> int:
@@ -561,8 +672,19 @@ def collate(states: Sequence[PositionState]) -> Batch:
     coord_ref = np.zeros((bsz, 2), dtype=np.float32)
     valid = np.zeros((bsz, big_l), dtype=bool)
     board_valid = np.zeros((bsz, n_max), dtype=bool)
+    board_parent = np.full((bsz, n_max), -1, dtype=np.int64)
+    board_creation = np.full((bsz, n_max), -1, dtype=np.int64)
+    board_source = np.full((bsz, n_max), -1, dtype=np.int64)
+    board_head = np.zeros((bsz, n_max), dtype=bool)
+    has_creation = np.zeros(bsz, dtype=bool)
 
     for i, (state, lay) in enumerate(zip(states, layouts, strict=True)):
+        board_parent[i, : lay.n_boards] = state.parent
+        board_source[i, : lay.n_boards] = state.source
+        board_head[i, : lay.n_boards] = state.is_head
+        if state.creation is not None:
+            board_creation[i, : lay.n_boards] = state.creation
+            has_creation[i] = True
         tok = state.token_arrays()
         nb = lay.n_body
         dest = np.concatenate([np.arange(nb), body_len + np.arange(g)])
@@ -608,4 +730,9 @@ def collate(states: Sequence[PositionState]) -> Batch:
         regs_per_board=int(r),
         global_regs=int(g),
         layouts=layouts,
+        board_parent=torch.from_numpy(board_parent),
+        board_creation=torch.from_numpy(board_creation),
+        board_source=torch.from_numpy(board_source),
+        board_head=torch.from_numpy(board_head),
+        has_creation=torch.from_numpy(has_creation),
     )

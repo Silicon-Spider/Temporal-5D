@@ -318,20 +318,23 @@ def test_moves_left_from_log_inverts_the_target_transform():
 
 
 def test_later_stage_flags_raise():
-    # B9-B12 are built from stage N2 on (tests/net/test_structure.py); these are not.
+    # B9-B12 are built from stage N2 on (tests/net/test_structure.py) and the block-causal
+    # scope from stage N3 (attn_scope, tests/net/test_scope.py); these are not.
     flags = (
         dict(piece_centric=True),
-        dict(cached_attention=True),
         dict(history_window=True),
         dict(fp8_attention=True),
     )
     for flag in flags:
         with pytest.raises(NotImplementedError):
             build_model(NetConfig(**flag))
+    build_model(NetConfig(attn_scope="block_causal", n_layers=1))
 
 
 def test_open_choices_reject_unknown_values():
-    for field in ("board_register_spatial", "global_register_pairs", "aux_global_pool", "policy_promotion"):
+    fields = ("board_register_spatial", "global_register_pairs", "aux_global_pool", "policy_promotion")
+    fields += ("attn_scope", "causal_past", "frozen_features", "supersession_scope")
+    for field in fields:
         with pytest.raises(ValueError, match=field):
             NetConfig(**{field: "nonsense"}).validate()
 

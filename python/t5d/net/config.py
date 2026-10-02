@@ -22,10 +22,20 @@ The build rules (spec section 15.1) decide what else appears here:
   L24-ff12 (F2, provisional) as the named preset ``"L24-ff12"``.
 * **Items of later stages** have their flag here so the config names every switch, but
   enabling one raises ``NotImplementedError`` until its stage lands: piece-centric
-  tokenisation (A5), the causal-and-cached attention scope (C2, deferred but needed by
-  section 15.2's equivalence suite - stage N3), the history window (C5/C7, provisional;
-  its code waits on the |E| verdict, M7) and FP8 attention (G2, provisional; no FP8
-  kernels on CPU).
+  tokenisation (A5), the history window (C5/C7, provisional; its code waits on the |E|
+  verdict, M7) and FP8 attention (G2, provisional; no FP8 kernels on CPU).
+* **Stage N3** adds the attention scope (``attn_scope``): ``"dense"`` (C1, the default -
+  build dense first) or ``"block_causal"`` (C17 and C19, committed rows of a deferred
+  configuration, C2 - built because section 15.2's equivalence suite and section 15.3's
+  cost figures need it): causal between boards, bidirectional within a board, the live
+  set (the heads) bidirectional among itself and reading all history, global registers
+  reading everything and read only by live tokens (``scope.py``). The cached evaluation
+  path that the scope makes possible (C2, C3, C3a rung 1, C15, C20) is ``cache.py``; its
+  switches - the root refresh, the rung-1 node refresh and its visit gate, the KV storage
+  format - are the evaluator's (``CacheConfig``), not the network's. Four points the
+  spec leaves open on this committed-class path are parameters with placeholder defaults
+  (``causal_past``, ``frozen_features``, ``supersession_scope``, and the rule that the
+  section 6 structure opens live rows only, documented in ``scope.py``).
 * **Where the spec is silent, ambiguous or contradictory on a committed-class point**
   the choice is a parameter and the default is marked as a placeholder, not a decision:
   ``board_register_spatial`` (section 5.3 under RoPE), ``global_register_pairs`` (what
@@ -91,6 +101,20 @@ ATTN_IMPLS: tuple[str, ...] = ("block_sparse", "chunked", "sdpa", "explicit", "d
 
 #: B12's generator forms (``smolgen.py``).
 SMOLGEN_FORMS: tuple[str, ...] = ("relative_cells", "board_bilinear")
+
+#: Attention scopes (stage N3, ``scope.py``): C1's dense bidirectional scope, or C17/C19's
+#: block-causal one.
+ATTN_SCOPES: tuple[str, ...] = ("dense", "block_causal")
+#: Readings of a board's causal past (spec issue 5, ``scope.py``).
+CAUSAL_PASTS: tuple[str, ...] = ("lineage", "two_parent", "creation")
+#: How frozen boards' K/V exist under the block-causal scope (``kvformat.py``).
+FROZEN_KV_FORMATS: tuple[str, ...] = ("match", "fp8")
+#: What a frozen board's state-dependent per-board features are under the block-causal
+#: scope (``scope.py``).
+FROZEN_FEATURES: tuple[str, ...] = ("intrinsic", "current")
+#: Readings of C20's "causal past plus the conditioned history of its refresh epoch"
+#: (``scope.py``).
+SUPERSESSION_SCOPES: tuple[str, ...] = ("causal_past", "past_and_epoch_history")
 
 
 @dataclass(frozen=True)
@@ -391,9 +415,85 @@ class NetConfig:
     #:                      equates with extra Q/K dims (stage N2's first build).
     smolgen_form: str = "relative_cells"
 
+    # --- stage N3: the attention scope (C1, C17, C19; scope.py) ---
+    #: "dense" (C1: build dense first - every token reads every token, section 6's masks
+    #: aside) or "block_causal" (C17, C19): causal between boards, bidirectional within a
+    #: board; a superseded (frozen) board's tokens - its per-board registers included -
+    #: read their own board and the frozen boards of its causal past, never a live head
+    #: and never a global register ("being read by frozen tokens = present-to-frozen flow,
+    #: allowed only at refreshes"); a head board's tokens (the live set) read every board
+    #: and the global registers; the global registers read everything. The cached path
+    #: (C2, ``cache.py``) evaluates exactly this function incrementally. Committed-class
+    #: (section 7.7: a net trained dense cannot be masked causally at inference).
+    attn_scope: str = "dense"
+    #: Which boards are a board's causal past (spec issue 5: C17 / section 7.3's "their own
+    #: past" is undefined in a multiverse). COMMITTED-CLASS SILENCE - placeholder default,
+    #: not a decision:
+    #:   "lineage"    - arrival-side lineage: the boards it was made from by content - its
+    #:                  timeline's earlier boards and, through its branch origin (the board a
+    #:                  travelling piece arrived on), the origin's own lineage, recursively
+    #:                  (``PositionState.parent``). A travel arrival's departure board is not
+    #:                  in it. Fixed when the board is created and made of superseded boards
+    #:                  only, so a frozen board's K/V never need recomputing; state-defined
+    #:                  given the branch origins - which 5DFEN does not record and the 5D
+    #:                  Zobrist key (H18) omits, so an MCGS node key would have to add them;
+    #:   "two_parent" - the same with the departure board as a second parent: a board a
+    #:                  travelling piece arrived on also descends from the board the piece
+    #:                  left (``PositionState.source``) and that board's lineage. Also fixed
+    #:                  at creation and made of superseded boards (the jump supersedes its
+    #:                  departure board), and also state-defined given origins and sources;
+    #:   "creation"   - every board created before it (``PositionState.creation``). Not a
+    #:                  function of the multiverse: two move orders create its boards in
+    #:                  different orders (section 8.5's transpositions then evaluate
+    #:                  differently), so no MCGS node key can serve it; and an earlier board
+    #:                  that is still a head is not readable until it is superseded, which
+    #:                  then changes the past of every frozen board created after it - the
+    #:                  cache recomputes them all (measured: a cascade of hundreds of boards).
+    #: (The time axis is not built: a later branch into the past adds boards at earlier
+    #: times, so no frozen K/V could stay frozen.)
+    causal_past: str = "lineage"
+    #: What a frozen board's state-dependent per-board features are under the block-causal
+    #: scope: Delta-t-to-present (A3) changes whenever the present moves and the timeline's
+    #: active flag when the timeline is activated, after the board is frozen. The spec
+    #: (A3, A4, C2, C17) is silent. COMMITTED-CLASS SILENCE - placeholder default, not a
+    #: decision:
+    #:   "intrinsic" - a frozen board's tokens get neither (only its contents, side to move
+    #:                 and the superseded flag): knowing where the present is would be
+    #:                present-to-frozen flow, which C17 allows only at refreshes (the root
+    #:                refresh, a dense pass, gives every board its features as of the
+    #:                root). The only reading under which a frozen board's K/V stay valid
+    #:                between refreshes;
+    #:   "current"   - a frozen board carries the evaluated state's values (A3 literally):
+    #:                 every shift of the present changes every frozen board's input, so
+    #:                 the cache recomputes them all - the cost section 7.1 does not price.
+    #: Live boards always carry both features.
+    frozen_features: str = "intrinsic"
+    #: C20 (committed): a board superseded inside the search is recomputed "under the
+    #: state-defined mask - its causal past plus the conditioned history of its refresh
+    #: epoch". COMMITTED-CLASS AMBIGUITY - placeholder default, not a decision:
+    #:   "causal_past"            - it reads its causal past only, the past's history
+    #:                              boards carrying their epoch's (refreshed) K/V - so
+    #:                              with no refresh the mask is the state's block-causal
+    #:                              mask, independent of the search root;
+    #:   "past_and_epoch_history" - it reads its causal past and every board of its
+    #:                              epoch's history (the boards frozen at the epoch's
+    #:                              anchor - the root, or the node that forked it), which
+    #:                              makes the mask depend on the root even without a
+    #:                              refresh ("a function of the state and the root",
+    #:                              section 7.3).
+    supersession_scope: str = "causal_past"
+    #: How a frozen board's keys and values exist under the block-causal scope (C15 against
+    #: G1; ``kvformat.py``): "match" (default) - the trunk's own precision, so a cache that
+    #: stores them changes nothing (G1); "fp8" - every read of a frozen board's K/V goes
+    #: through FP8 e4m3 with per-board, per-layer, per-head scales, in the ordinary forward
+    #: as in the cache: the function a network must be trained on to be served from an FP8
+    #: cache. PROTOTYPE FLAG of a committed-class point (it changes the function trained):
+    #: C15 adopts FP8 K/V as "obeying section 10.2", which holds for an FP8 trunk (G2, not
+    #: built), not for a BF16 trunk read through an FP8 cache it was not trained on.
+    frozen_kv_format: str = "match"
+
     # --- later stages: named here, built there (enabling raises NotImplementedError) ---
-    piece_centric: bool = False  # A5 (prototype, committed-class): not built in N1 or N2
-    cached_attention: bool = False  # C2 (deferred), C17 block-causal mask: stage N3
+    piece_centric: bool = False  # A5 (prototype, committed-class): not built in N1-N3
     history_window: bool = False  # C5/C7 (provisional): parked until the |E| verdict (M7)
     fp8_attention: bool = False  # G2 (provisional): no FP8 kernels on CPU
 
@@ -510,14 +610,22 @@ class NetConfig:
             raise ValueError("smolgen_latent must be positive")
         if self.smolgen_form not in SMOLGEN_FORMS:
             raise ValueError(f"smolgen_form must be one of {SMOLGEN_FORMS}")
+        for name, options in (
+            ("attn_scope", ATTN_SCOPES),
+            ("causal_past", CAUSAL_PASTS),
+            ("frozen_features", FROZEN_FEATURES),
+            ("supersession_scope", SUPERSESSION_SCOPES),
+            ("frozen_kv_format", FROZEN_KV_FORMATS),
+        ):
+            if getattr(self, name) not in options:
+                raise ValueError(f"{name} must be one of {options}")
         for name, stage in (
             ("piece_centric", "a later stage (A5)"),
-            ("cached_attention", "N3 (C2, C17)"),
             ("history_window", "a later stage, after the |E| verdict (C5, C7, M7)"),
             ("fp8_attention", "a later stage (G2)"),
         ):
             if getattr(self, name):
-                raise NotImplementedError(f"{name} is built in stage {stage}, not in N1 or N2")
+                raise NotImplementedError(f"{name} is built in stage {stage}, not in N1-N3")
 
 
 F1 = NetConfig()

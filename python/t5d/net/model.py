@@ -29,6 +29,14 @@ masks (B9's move graph on ``move_graph_heads`` heads, or B10's routing table) an
 (B6, B11, B12) once per forward, as sparse lists and board-pair tables; every layer's
 attention builds dense rows from them one query block at a time (B14).
 
+Attention scope (stage N3, ``scope.py``): ``NetConfig.attn_scope`` - dense (C1) or
+block-causal (C17, C19) - and any forward may override it (``scope=``): the cached path's
+refreshes are dense passes of a block-causal network (C3, ``cache.py``). Under the
+block-causal scope ``make_context`` adds the scope's rows, keeps the edge-derived
+structure to live rows, and the embedding drops a frozen board's state-dependent flags
+(``frozen_features``). ``history`` gives each position's epoch history (C20's second
+reading, ``supersession_scope``) and ``kv_hook`` sees every layer's keys and values.
+
 Heads (``T5DNet.heads``) read the final-normed trunk: the policy pointer at each move's
 source and destination tokens (D1), the value head the mean of the global registers
 (D3, sections 7.3 and 8.3), the global auxiliary heads the pool ``aux_global_pool``
@@ -58,7 +66,9 @@ from .heads import (
     global_register_pool,
     square_pool,
 )
+from .kvformat import fake_quantise
 from .rope import BinnedBias, rope_angles, rope_cos_sin, rope_tables, spatial_dims
+from .scope import BlockCausalScope
 from .smolgen import BoardPairSmolgen
 from .state import TOKEN_BOARD_REGISTER, TOKEN_GLOBAL_REGISTER, Batch
 from .structure import TypedEdgeBias, build_structure
@@ -178,17 +188,47 @@ class T5DNet(nn.Module):
             coords[..., :2] = torch.where(breg[..., None], xy, coords[..., :2])
         return coords
 
-    def make_context(self, batch: Batch, attn_mask: torch.Tensor | None = None, attn_bias: torch.Tensor | None = None) -> AttnContext:
+    def scope_of(self, scope: str | None) -> str:
+        """The attention scope of a forward: ``scope``, or the config's when None."""
+        scope = self.cfg.attn_scope if scope is None else scope
+        if scope not in ("dense", "block_causal"):
+            raise ValueError(f"unknown attention scope {scope!r}")
+        return scope
+
+    def embed_tokens(self, batch: Batch, scope: str | None = None) -> torch.Tensor:
+        """Token embeddings under a scope: under the block-causal scope with
+        ``frozen_features="intrinsic"`` frozen boards get no state-dependent flags."""
+        intrinsic = self.scope_of(scope) == "block_causal" and self.cfg.frozen_features == "intrinsic"
+        return self.embed(batch, frozen_intrinsic=intrinsic)
+
+    def make_context(
+        self,
+        batch: Batch,
+        attn_mask: torch.Tensor | None = None,
+        attn_bias: torch.Tensor | None = None,
+        *,
+        scope: str | None = None,
+        history: torch.Tensor | None = None,
+    ) -> AttnContext:
         """The attention context of a batch: RoPE tables, padding, the structure of stage N2
         (``structure.py``: B9/B10 masks, B6/B11/B12 biases - built sparsely, rows on demand),
-        and optionally a caller's dense ``attn_mask`` / ``attn_bias`` on top."""
+        under the block-causal scope its rows (stage N3, ``scope.py``; ``history``: each
+        position's epoch history, ``(B, Nmax)`` bool), and optionally a caller's dense
+        ``attn_mask`` / ``attn_bias`` on top."""
         cfg = self.cfg
         coords = self.coordinates(batch)
         cos, sin = rope_cos_sin(rope_angles(coords, self.rope_axis, self.rope_freq))
         spatial_free = None
         if cfg.board_register_spatial == "position_free":
             spatial_free = batch.valid & (batch.kind == TOKEN_BOARD_REGISTER)
-        structure = build_structure(batch, cfg, coords, self.typed_edges, self.binned_bias, self.smolgen)
+        block_scope = None
+        if self.scope_of(scope) == "block_causal":
+            block_scope = BlockCausalScope.build(batch, cfg, history)
+        live = None if block_scope is None else block_scope.live_tokens
+        live_boards = None if block_scope is None else block_scope.live_boards
+        structure = build_structure(
+            batch, cfg, coords, self.typed_edges, self.binned_bias, self.smolgen, live=live, live_boards=live_boards
+        )
         tokens_per_board = max(lay.tokens_per_board for lay in batch.layouts)
         return AttnContext(
             cos=cos,
@@ -207,6 +247,7 @@ class T5DNet(nn.Module):
             block_rows=cfg.attn_block_boards * max(1, tokens_per_board),
             recompute=cfg.attn_recompute,
             sparse_max_fraction=cfg.attn_sparse_max_fraction,
+            scope=block_scope,
         )
 
     # -- forward --
@@ -214,16 +255,24 @@ class T5DNet(nn.Module):
     def _autocast(self, device: torch.device):
         return torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=self.cfg.trunk_dtype == "bf16")
 
-    def trunk_output(self, batch: Batch, attn_mask=None, attn_bias=None) -> torch.Tensor:
-        """Final-normed trunk output ``(B, L, d)`` in FP32."""
-        x = self.embed(batch)
-        ctx = self.make_context(batch, attn_mask, attn_bias)
+    def trunk_output(self, batch: Batch, attn_mask=None, attn_bias=None, *, scope=None, history=None, kv_hook=None) -> torch.Tensor:
+        """Final-normed trunk output ``(B, L, d)`` in FP32 (``scope``, ``history``,
+        ``kv_hook``: see the module docstring). Under the block-causal scope with
+        ``frozen_kv_format="fp8"`` every frozen board's K/V go through FP8 before attention
+        (after ``kv_hook``, which sees them as computed)."""
+        x = self.embed_tokens(batch, scope)
+        ctx = self.make_context(batch, attn_mask, attn_bias, scope=scope, history=history)
+        if self.scope_of(scope) == "block_causal" and self.cfg.frozen_kv_format != "match":
+            kv_hook = _then(kv_hook, _frozen_kv_rounding(batch, self.cfg.frozen_kv_format))
         with self._autocast(x.device):
-            h = self.trunk(x, ctx)
+            h = self.trunk(x, ctx, kv_hook)
         return h.float()
 
-    def forward(self, batch: Batch, attn_mask=None, attn_bias=None, return_trunk: bool = False) -> NetOutput:
-        return self.heads(self.trunk_output(batch, attn_mask, attn_bias), batch, return_trunk=return_trunk)
+    def forward(
+        self, batch: Batch, attn_mask=None, attn_bias=None, return_trunk: bool = False, *, scope=None, history=None, kv_hook=None
+    ) -> NetOutput:
+        h = self.trunk_output(batch, attn_mask, attn_bias, scope=scope, history=history, kv_hook=kv_hook)
+        return self.heads(h, batch, return_trunk=return_trunk)
 
     def heads(self, h: torch.Tensor, batch: Batch, return_trunk: bool = False) -> NetOutput:
         """Every head over a final-normed trunk output ``h`` ``(B, L, d)``, in FP32 (G1)."""
@@ -252,12 +301,52 @@ class T5DNet(nn.Module):
             )
 
     @torch.no_grad()
-    def attention_probabilities(self, batch: Batch, layer: int = 0, attn_mask=None, attn_bias=None) -> torch.Tensor:
+    def attention_probabilities(self, batch: Batch, layer: int = 0, attn_mask=None, attn_bias=None, *, scope=None) -> torch.Tensor:
         """Layer ``layer``'s attention probabilities ``(B, H, L, L)`` (explicit path)."""
-        x = self.embed(batch)
-        ctx = self.make_context(batch, attn_mask, attn_bias)
+        x = self.embed_tokens(batch, scope)
+        ctx = self.make_context(batch, attn_mask, attn_bias, scope=scope)
         with self._autocast(x.device):
             return self.trunk.attention_probabilities(x, ctx, layer).float()
+
+
+def _then(first, second):
+    """A K/V hook that applies ``first`` (if any), then ``second``."""
+
+    def hook(layer, k, v):
+        if first is not None:
+            k, v = first(layer, k, v)
+        return second(layer, k, v)
+
+    return hook
+
+
+def _frozen_kv_rounding(batch: Batch, kv_format: str):
+    """A K/V hook that passes every frozen board's K and V through ``kv_format`` - one scale
+    per position, board and head, as the cache stores them (``kvformat.py``)."""
+    layouts = batch.layouts
+    frozen = batch.board_valid & ~batch.board_head  # (B, Nmax)
+    tpbs = {lay.tokens_per_board for lay in layouts}
+
+    def rounded(t: torch.Tensor) -> torch.Tensor:
+        if len(tpbs) == 1:  # one board size: every board at once
+            tpb = next(iter(tpbs))
+            bsz, n_heads, _, dh = t.shape
+            n_max = frozen.shape[1]
+            body = t[:, :, : n_max * tpb].reshape(bsz, n_heads, n_max, tpb, dh)
+            keep = frozen[:, None, :, None, None].to(t.device)
+            body = torch.where(keep, fake_quantise(body, kv_format), body).reshape(bsz, n_heads, n_max * tpb, dh)
+            return torch.cat([body, t[:, :, n_max * tpb :]], dim=2)
+        out = t.clone()  # positions of different board sizes: board by board
+        for i, lay in enumerate(layouts):
+            for b in torch.nonzero(frozen[i]).flatten().tolist():
+                sl = slice(b * lay.tokens_per_board, (b + 1) * lay.tokens_per_board)
+                out[i : i + 1, :, sl] = fake_quantise(t[i : i + 1, :, sl], kv_format)
+        return out
+
+    def hook(layer, k, v):
+        return rounded(k), rounded(v)
+
+    return hook
 
 
 def build_model(cfg: NetConfig | None = None, seed: int = 0) -> T5DNet:

@@ -22,10 +22,13 @@ can lack axes, each by an open committed-class switch (``NetConfig``):
 
 **Masks and biases.** ``key_valid`` (padding) always; ``mask`` (bool, broadcastable to
 ``(B, H, L, L)``, True = may attend) and ``bias`` (float, same shape) optionally, from the
-caller; and ``structure`` (``AttnStructure``), which builds the rows of its masks and
-biases for any query block ``[start, stop)`` from sparse edge lists and small board-pair
-tables (``_block_rows`` combines all three). A query row with no allowed key outputs
-zeros, and its gradient stays finite; the structure itself never empties a row.
+caller; ``structure`` (``AttnStructure``), which builds the rows of its masks and biases
+for any query block ``[start, stop)`` from sparse edge lists and small board-pair tables;
+and ``scope`` (stage N3, ``scope.BlockCausalScope``: the block-causal scope, C17/C19),
+whose rows come from a board-slot table the same way (``_block_rows`` combines all four;
+the scope enters wherever the caller's mask does). A query row with no allowed key
+outputs zeros, and its gradient stays finite; neither the structure nor the scope ever
+empties a row.
 
 Five implementations compute the same function on every valid query
 (``NetConfig.attn_impl``; a padding query's output is discarded, and the block-sparse
@@ -125,6 +128,7 @@ from .config import NetConfig
 from .rope import apply_rope
 
 if TYPE_CHECKING:
+    from .scope import BlockCausalScope
     from .structure import AttnStructure
 
 NEG_INF = float("-inf")
@@ -161,6 +165,9 @@ class AttnContext:
     #: Block-sparse path: a block whose key selection exceeds this fraction of the kernel
     #: keys is computed against every key (``NetConfig.attn_sparse_max_fraction``).
     sparse_max_fraction: float = 0.5
+    #: The block-causal scope (stage N3; None: the dense scope): rows built per block, and
+    #: ANDed in wherever the caller's mask is.
+    scope: BlockCausalScope | None = None
 
     def for_layer(self, h: torch.Tensor) -> AttnContext:
         """The context of one layer whose (normed) input is ``h`` ``(B, L, d)``: the
@@ -170,10 +177,11 @@ class AttnContext:
         return replace(self, structure=self.structure.for_layer(h))
 
     def densified(self) -> AttnContext:
-        """The same attention with every mask and bias - padding, the caller's, and the
-        structure's - materialised at ``(B, H, L, L)``: the reference, for small inputs."""
+        """The same attention with every mask and bias - padding, the caller's, the
+        structure's and the scope's - materialised at ``(B, H, L, L)``: the reference, for
+        small inputs."""
         allowed, bias = _block_rows(self, 0, self.key_valid.shape[1])
-        return replace(self, mask=allowed, bias=bias, structure=None)
+        return replace(self, mask=allowed, bias=bias, structure=None, scope=None)
 
 
 def _as4d(t: torch.Tensor | None) -> torch.Tensor | None:
@@ -186,10 +194,13 @@ def _as4d(t: torch.Tensor | None) -> torch.Tensor | None:
 def _block_rows(ctx: AttnContext, start: int, stop: int) -> tuple[torch.Tensor, torch.Tensor | None]:
     """Allowed keys (bool) and additive bias (float or None) of query rows ``[start,
     stop)``, each broadcastable to ``(B, H, stop - start, L)``: padding, the caller's
-    dense mask and bias, and the structure's masks and biases built for these rows."""
+    dense mask and bias, the scope's rows and the structure's masks and biases built for
+    these rows."""
     allowed = ctx.key_valid[:, None, None, :]
     if ctx.mask is not None:
         allowed = allowed & _rows(_as4d(ctx.mask), start, stop)
+    if ctx.scope is not None:
+        allowed = allowed & ctx.scope.rows(start, stop)
     bias = None if ctx.bias is None else _rows(_as4d(ctx.bias), start, stop)
     if ctx.structure is not None:
         s_allowed, s_bias = ctx.structure.rows(start, stop)
@@ -643,12 +654,15 @@ class _FastPath:
         return _heads(qq, heads), _heads(q_c, heads), _heads(qt, heads), sf_rows
 
     def caller_rows(self, rows, heads: torch.Tensor | None):
-        """Allowed keys (padding and the caller's mask) and the caller's bias of the rows."""
+        """Allowed keys (padding, the caller's mask and the scope) and the caller's bias of
+        the rows."""
         ctx = self.ctx
         allowed = ctx.key_valid[:, None, None, :]
         pick = (lambda t: _rows(t, *rows)) if isinstance(rows, tuple) else (lambda t: _rows_at(t, rows))
         if ctx.mask is not None:
             allowed = allowed & _heads(pick(_as4d(ctx.mask)), heads)
+        if ctx.scope is not None:
+            allowed = allowed & (ctx.scope.rows(*rows) if isinstance(rows, tuple) else ctx.scope.rows_at(rows))
         bias = None if ctx.bias is None else _heads(pick(_as4d(ctx.bias)), heads)
         return allowed, bias
 
@@ -691,7 +705,7 @@ class _FastPath:
             # Only free and padding queries: computed apart, or discarded.
             return self.q.new_zeros(self.q.shape[0], int(heads.shape[0]), stop - start, group_keys.kernel.dv, dtype=self.cd)
         a_k = plan.allowed[:, None]
-        if self.ctx.mask is not None:
+        if self.ctx.mask is not None or self.ctx.scope is not None:
             a_k = a_k & _take_cols(_cols(allowed, self.kern), idx)
         b_k = _take_cols(_cols(bias, self.kern), idx)
         s_bias = structure.bias_rows(start, stop, heads=heads, cols=idx, cols_valid=plan.valid)
@@ -711,7 +725,7 @@ class _FastPath:
             return out
         take, put, real = index
         group_keys = self.keys.heads(heads)
-        row_free = self.ctx.mask is None and self.ctx.bias is None and not self.ctx.structure.has_bias
+        row_free = self.ctx.mask is None and self.ctx.bias is None and self.ctx.scope is None and not self.ctx.structure.has_bias
         size = take.shape[1] if row_free else max(1, step)
         outs = []
         for a in range(0, take.shape[1], size):
@@ -742,11 +756,13 @@ def attention_sdpa(
     fast = _FastPath(q, k, v, ctx)
     kl, length, cd, scale = fast.kl, fast.length, fast.cd, fast.scale
     structure = ctx.structure
-    per_row = structure is not None or _per_row(ctx.mask) or _per_row(ctx.bias)
+    per_row = structure is not None or _per_row(ctx.mask) or _per_row(ctx.bias) or ctx.scope is not None
     step = kl if block_rows is None or not per_row else max(1, block_rows)
     blocks = [(start, min(kl, start + step)) for start in range(0, kl, step)]
     recompute = ctx.recompute and per_row
-    no_bias = ctx.mask is None and ctx.bias is None and (structure is None or not structure.has_bias)
+    # "No bias" also means no per-row mask from the caller or the scope: the dense heads
+    # then run in one call over all rows.
+    no_bias = ctx.mask is None and ctx.bias is None and ctx.scope is None and (structure is None or not structure.has_bias)
     if structure is not None and (sparse or no_bias):
         # By role: heads that share a mask role share one kernel call per block and one
         # (B, 1, block, L) mask (or, sparse, one key selection); without any bias the
@@ -823,11 +839,19 @@ class SelfAttention(nn.Module):
     def qkv(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         return self._split(self.q_proj(x)), self._split(self.k_proj(x)), self._split(self.v_proj(x))
 
-    def forward(self, x: torch.Tensor, ctx: AttnContext) -> torch.Tensor:
-        q, k, v = self.qkv(x)
-        o = ATTENTION[ctx.impl](q, k, v, ctx)
+    def output(self, o: torch.Tensor) -> torch.Tensor:
+        """The output projection of attention outputs ``(B, H, L, dv)``."""
         bsz, _, length, _ = o.shape
         return self.out_proj(o.transpose(1, 2).reshape(bsz, length, -1))
+
+    def forward(self, x: torch.Tensor, ctx: AttnContext, kv_hook: Callable | None = None) -> torch.Tensor:
+        """``kv_hook(k, v) -> (k, v)``: sees (and may replace) this layer's unrotated keys
+        and values ``(B, H, L, d_head)`` before attention - stage N3 captures K/V with it
+        and injects cached ones (``cache.py``)."""
+        q, k, v = self.qkv(x)
+        if kv_hook is not None:
+            k, v = kv_hook(k, v)
+        return self.output(ATTENTION[ctx.impl](q, k, v, ctx))
 
     def probabilities(self, x: torch.Tensor, ctx: AttnContext) -> torch.Tensor:
         """Attention probabilities ``(B, H, L, L)`` (explicit path; for inspection)."""

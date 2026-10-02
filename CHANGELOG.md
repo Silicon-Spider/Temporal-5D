@@ -10,6 +10,41 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-02 - The network stack, stage N3: the block-causal scope and the cached path (random weights)
+
+- `python/t5d/net/`: the block-causal scope (C17, C19) as `NetConfig.attn_scope`
+  (`dense`, the default per C1; `block_causal`), through every attention path with
+  rows built per block (`scope.py`); lineage on the input contract
+  (`PositionState.parent` - the arrival side - `creation`, and `source`, a
+  travel's departure board; validated, remapped, carried on `Batch`, recorded by
+  the synthetic generator and the tree fixture). Committed-class points are
+  parameters with placeholder defaults: `causal_past` (lineage | two_parent |
+  creation), `frozen_features` (intrinsic | current), `supersession_scope` (C20's
+  two readings), `frozen_kv_format` (match | fp8, applied by the forward itself).
+  Under the scope the §6 structure opens live rows only.
+- The cached path (C2 as built for §15.2 and §15.3, `cache.py`): per-board K/V
+  content-addressed by (epoch, dependency digest) - §7.2's radix structure; every
+  frozen board computed one at a time in its own frame, so evaluations are bitwise
+  path-independent; supersession recomputed once under the state-defined mask
+  (C20), never snapshotted (C21); the live pass per node; root refresh (C3) and
+  the rung-1 node refresh (C3a, V = 50) forking epochs copy-on-write, history
+  membership by intrinsic identity; storage in the network's own frozen-K/V format
+  (G1). A search-tree fixture (`tree.py`), references with the two-level mask, the
+  spec's cost model with counted FLOPs (`cost.py`), and a benchmark that measures
+  its own machine's load and refuses a busy one (`cache_bench.py`).
+- 111 tests for §15.2's network rows (a)-(e) over adversarial geometries; 558
+  pass. Reviewed adversarially twice (equivalence and fidelity; cost method): 12
+  findings, all addressed. 27 injected mutants, every behaviour-changing one
+  caught.
+- `docs/MEASUREMENTS.md`: the counted §15.3 figures at the spec's timeline counts
+  and at the corpus's 24 (CPU wall times wait for a quiet machine).
+  `docs/BUILD_LOG.md`: register rows C1-C4, C12, C15, C17, C19-C21, G1; spec
+  issues 29-43; proposed spec edits 27-37.
+- Spec: §2.3, §6, §7.1-§7.3, §7.6, §7.9, §8.5, §8.7, §10.2, §10.3, §11.3, §15.2,
+  §15.3; A3, A4, B9-B12, C1-C3, C3a, C11, C15, C17, C19-C21, G1, H18. Spec issue 5
+  is built as parameters (the choice is the user's); spec issues 29-43; proposed
+  edits 27-37.
+
 ### 2026-10-02 - Engine CI: t5d-bench builds on Linux
 
 - `engine/tools/t5d_bench.cpp`: the synthetic seeds are computed with
