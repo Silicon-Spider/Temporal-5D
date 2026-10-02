@@ -39,29 +39,24 @@ M5 - building it would break a rule).
     t5d-gate.exe t5d-measure.exe t5d-bench.exe t5d-tests-long.exe --skip-existing
     --out <dir>`, then `--boards 600 --dtype fp32` and `--boards 600 --dtype bf16`
     (about 45, 70 and 45 minutes); the benchmark itself refuses a loaded machine.
-- **Next, in order:** (1) the
-  engine reads mismatched `(~T)`/`(>L)` annotations with a warning instead of a
-  refusal (the notation spec calls them "purely for better human comprehension";
-  refusing hides cwmtt silly, wide and chessin5d-illegal-move-example from the
-  gate); (2) `[engine] command = ["build/engine/t5d-gate"]` and a local gate run,
-  every engine-vs-oracle difference triaged: ftxi's check verdicts (rulebook R1)
-  and the two oracle defects become known-divergence entries (telltales, H34);
-  records the engine cannot read get entries only where the notation spec rules
-  their text out; the count and legality differences that Q4 explains wait for the
-  user's Q4 ruling - until then the engine is not configured in the committed
-  `gate.toml`; (3) M9 and M7 are measured (2026-10-02): the legal-moves filter
-  must get fast before search (engine E5a, with `t5d-measure --legal` for a tighter
-  |E|), and N3's CPU wall times still need a quiet machine; (4) the scanner and
-  6b (plan in step 5, "The scanner and 6b").
+- **Next, in order:** (1) the engine in the gate. The triage is done
+  (2026-10-02; step 2): 56 known-divergence entries are committed and the
+  engine's adapter passes the contract on the whole corpus, but 115 findings
+  remain that rules Q4 explains - so the committed `gate.toml` leaves the engine
+  unconfigured until the user rules on Q4. Then: set `[engine] command =
+  ["./build/engine/t5d-gate"]` (the leading `./` is needed on Windows), add the
+  waiting entries for the ruled reading (drafts in
+  `oracles/.cache/reports/triage-2026-10-02/`, regenerable: 94 R1 entries and
+  cwmtt/futures action 17 under Q4's other reading), decide cwmtt/many2's
+  export-form move (read it, or an entry), and run every tier. (2) Engine E5a, a
+  fast legal-moves filter (M9 with legality), and E5b, the scanner and 6b - both
+  running. (3) N3's CPU wall times on a quiet machine.
 - **Waiting on the user:**
   - **Rules Q4** (may a player keep moving after the present has shifted?). The
-    engine follows the Guide's "no". Evidence gathered since: nine corpus records
-    by three authors make such moves; all three oracles allow them; and E4's
-    review found that every legal-action count where an oracle counts more than
-    the engine is explained by Q4 - under the other reading the engine matches
-    ftxi and cwmtt. So Q4 decides whether the gate can pass on most of the
-    corpus. Under the other reading the engine is ready except for search time
-    (E4 fix round).
+    engine follows the Guide's "no". Ten corpus records by three authors make
+    such moves; all three oracles allow them; 115 of the engine gate's 116
+    remaining findings are Q4's and every one disappears under the other reading
+    (the engine is ready for either: `RuleOptions::moves_after_shift`).
   - **Q5's alternative under R1**: with `mandatory = AllActive` (every active
     timeline must be played, not only those in the present), R1 still passes only
     the active boards in the present, so a stuck mandatory board ahead of the
@@ -159,7 +154,32 @@ and `git push --dry-run origin HEAD` succeeded. The remote is private.
 - Not yet: the workflows as required status checks on `main` (branch protection
   is a repository setting - for the user).
 
-### 2. Finish the gate - 2A and 2B done; the engine's entry into the gate next
+### 2. Finish the gate - 2A and 2B done; the engine triaged, waiting on Q4
+
+**The engine's first gate runs (2026-10-02,** engine at 0a44cbf / 4ed2e92;
+reports in `oracles/.cache/reports/triage-2026-10-02/`, regenerable). With
+`[engine] command = ["./build/engine/t5d-gate"]` set locally, every tier ran with
+every required oracle answer reproduced. The nightly differential's 170 findings,
+triaged: 37 are ftxi's and ftxi:naive's check verdicts that ruling R1 rules wrong
+(20 positions, all among CHECKPOINT 1's 78); 2 are Chess in 5D's false checkmates
+(the engine lists the same 25 and 21 legal actions as ftxi); 10 are records the
+engine refuses as unreadable (7 settled by the notation spec - `K>>` and `N>>d3`
+jumps without a source square, a parenthesised variation, 5DFEN boards under a
+named Board - and 3 borderline: notation/aivsai's repeated turn number, now read
+with a warning (4ed2e92), and cwmtt/many2's export-form move); 115 are rules Q4 -
+every one disappears under `--moves-after-shift`; 6 are oracle notation errors
+(ftxi drops Very Small - Open's unmoved markers; ftxi cannot read `+1` timeline
+labels; the notation repository's parser cannot read `(0T1)a2a3`). **No engine
+defect was found.** 56 entries are committed (37 R1, 2 + 4 telltales of the two
+oracle defects - the double-step ones inert until Q4's other reading reaches
+notation/1.2 position 15 - 7 notation, 6 oracle notation errors). With them the
+nightly gate matches all reachable entries, none stale, no telltale; what remains
+is the 115 Q4 findings and many2. **Gated: Standard - Half Reflected** (21
+positions, check, counts and mate, at least two oracles each). Never gateable as
+the corpus stands: custom positions (ftxi/niceAndrey's set-up is unreadable),
+Focused - Just Brawns (no oracle gives check there), Misc - Small (no oracle
+follows notation/game), Timeline Invasion and Marauders (no independent set-up).
+
 
 **Step 2B (committed 2026-10-02).** H32: every source recorded twice
 (`golden --write --repeat 2`); a value that differs between recordings is
@@ -488,14 +508,14 @@ for game records.
 | H18 | built, tested | 5D Zobrist: coordinate-free content hash per board, multiply-rotate with (timeline, half-turn), addition across boards, ruleset ID, player to move, parity, creators, board size; incremental equals from-scratch; duplicated boards never cancel (engine E1, E2) |
 | H19 | parked | Proof export: with the scanner |
 | H22 | built, tested | All five items of §11.0 (E1, E2, E4); the register row's wording predates H36/H40 (proposed spec edit 40) |
-| H23 | built | The gate (oracle side); engine side waits for the engine |
+| H23 | built | The gate, oracle and engine sides; the engine passes the contract on the whole corpus; configured in `gate.toml` once Q4 is ruled; the proof channel stays disabled |
 | H24, H26, H28 | built, tested | The generator and the 5dpgn/5DFEN parser are in-house (`engine/`), written from `docs/rules/README.md` and the notation spec's text; 259 engine tests; boundary clean |
 | H27 | built, tested | The oracle harness, committed 2026-10-01 |
 | H30 | built, tested | Step 2A (a04678c): every oracle reports its boards per ply; no placement divergence across the corpus |
 | H31 | done | CHECKPOINT 1: seven clusters triaged (903f4ae), settled by the user's rulings (H36-H40) |
 | H32 | built, tested | Required sets at 100%, two recordings, cost files, calibration (2B) |
 | H33 | built, tested | MANIFEST, verified snapshot, harness-modified check, CODEOWNERS (2B) |
-| H34 | built, tested | Telltales by the comparison's rule (2B); the entries arrive with the engine's first full-mode gate run |
+| H34 | built, tested | Telltales by the comparison's rule (2B); 56 entries committed 2026-10-02, the two oracle defects among them (R7) |
 | H35 | done | Commit and nightly tiers green on Linux, 2026-10-01 (runs 36827435595, 36827459456) |
 | H36 | built, tested | Engine E4: check status and submission legality per R1; the gate's comparison with the oracles is next |
 | H37 | built, tested | Engine E4: verdicts only from exhaustive searches; node, time and memory budgets answer "unknown" (tested for every budget below the need) |
