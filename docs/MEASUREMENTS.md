@@ -361,6 +361,31 @@ itself, not |E|, dominates the scope (at 160-239 boards W(8) = 122 against the
 table's 69). The rule needs real game records (spec issue 26; requested from the
 user); the window code stays parked (M5, M7).
 
+### Engine E6a - the search's memory accounting and smoke games (2026-10-03)
+
+Dev machine, g++ 16.2 Release, shared. Accounting against a counting `operator new`
+(Two Timelines starts after 2-12 actions, random evaluator, 300-2,000 playouts):
+the evaluation cache's byte count 1.01-1.17x the heap it holds (the first estimate
+was 1.4-2.2x low); `Search::memory_bytes()` 0.99-1.05x. Before the fixes, a
+whole-turn node at 103 boards with `max_actions` 4096 held about 1.5 MB (now 256).
+Smoke games (`t5d-play`, R8, the uniform evaluator unless named; every record
+replays `ok` through t5d-gate):
+
+| Game | Actions | End | Time |
+|---|---|---|---|
+| Standard, board-move split, tree | 32 | board cap (332 boards) | 56 s |
+| Standard, board-move split, graph | 32 | board cap | 56 s |
+| Standard, whole turn, tree | 28 | turn cap | 3.8 s |
+| Standard, whole turn, graph | 28 | turn cap | 3.5 s |
+| Two Timelines, board-move split, graph, match play | 18 | turn cap | 0.25 s |
+| Two Timelines, whole turn, tree | 16 | turn cap | 0.9 s |
+| Very Small - Open, material evaluator | 7 | checkmate 1-0 | 0.03 s |
+| Standard, `--no-moves-after-shift` | 34 | board cap | 54 s |
+
+At large N the time is legality classification (spec issue 95): in a tree-mode
+Standard game to 336 boards, 41 of 43 s were leaf expansions with the legality
+tiers, the search itself about 2 s.
+
 ### Engine E7 - the gate's full mode on the corpus under R8 (2026-10-02/03)
 
 Machine: dev, g++ 16.2 -O2. `t5d-gate --cap 1000` with the default detector

@@ -10,6 +10,50 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-03 - Engine E6a: the search core - PUCT/MCGS, both D2 arms, the solver behind H41, self-play, the C step API
+
+- `engine/` (merged from its worktree branch after three adversarial reviews and a
+  fix round):
+  - `t5d/mcts.hpp`: PUCT with entropy-adaptive top-k widening, FPU and root
+    Dirichlet noise (E1; noise on in self-play, off in match play); E2 and E3
+    behind flags; both D2 arms (the board-move split, default, and whole turns);
+    MCGS behind a flag (C11), its identity the state key and whether an action is
+    in progress, compared exactly; the solver's bounds from E4's exhaustive
+    verdicts only, their propagation and export behind `proof_channel`, off by rule
+    (H41) - game ends are still scored as results; final selection by LCB with a
+    visit floor (E5) and the secure child (E9); re-rooting with garbage
+    collection, persistence and pondering (C12, C13); virtual loss; the
+    synchronous mode and digest (H15); E5a's legality tiers under the (a)-(f)
+    policy; node, memory and time budgets with a stop reason.
+  - D8 and R8: submitting is an explicit edge, offered where the obligations are
+    met, legal only when C4 holds, never automatic; the acting player's value
+    perspective; game ends only at turn starts (C5, E4's exhaustive detector);
+    dead ends during an action pruned, never scored; the node key with the acting
+    player (H18) and branch origins (C23).
+  - `t5d/selfplay.hpp`: fresh searches per decision with a shared, board-count
+    purged evaluation cache (C14), match play, the turn cap (I11), safety stops.
+  - `t5d/capi_search.h`: the step API for an external evaluator (logits, submit
+    logits, values as probabilities or logits), cache sharing, run limits, the
+    digest, `t5d_search_layout`; embedded provisional structs last; caller errors
+    and internal errors told apart.
+  - `t5d-play`: self-play and match play to 5dpgn records (rules through the
+    shared option reader, a 300-board default cap, `--proof-channel`,
+    `--no-noise`).
+- The reviews' findings (16) all fixed or logged: MCGS merging a turn start with a
+  mid-action state (two reviewers; a legal mating submission pruned), the solver
+  on before the gate, an `advance_action` that changed the tree on failure, epoch
+  changes under a waiting batch, a leaking submit logit, an evaluation cache that
+  never evicted and undercounted its bytes, no memory ceiling, non-append-stable C
+  structs, exception safety, validation gaps, a deadline checked only at turn
+  starts; 16 surviving mutations now killed (53 of 53 that build).
+- Tests: 474 (`--werror`; the search's share 84); the Lazy SMP timing test three
+  times before the merge (logged); verify, boundary and the commit-tier gate green.
+- `docs/BUILD_LOG.md`, `docs/MEASUREMENTS.md`: register D2, D8, E1-E3, E5, E7-E9,
+  C11-C14, C23, H2, H15, H41, I11; spec issues 80-95 and proposed spec edits 64-70;
+  the timing log; the search's memory accounting and smoke games.
+- Spec: §8.1-8.7, §11.1 item 2, §15.4; register D2, D8, E1-E9, C11-C14, C23, H2,
+  H15, H18, H19, H23, H41, I11.
+
 ### 2026-10-03 - Network: the refresh ladder's complexity trigger (C24), behind a flag
 
 - `python/t5d/net/complexity.py` (new; merged from its worktree branch): C24 as
