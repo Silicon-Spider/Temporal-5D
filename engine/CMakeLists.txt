@@ -214,6 +214,25 @@ endif()
 target_sources(t5d_core PRIVATE src/certificate.cpp src/guard.cpp src/hunt.cpp src/assets.cpp)
 target_sources(t5d-tests PRIVATE tests/test_certificate.cpp tests/test_guard.cpp tests/test_hunt.cpp
   tests/test_assets.cpp)
+# Hunt's ground truth and 6b'': 6b's roots with their next actions, the truth
+# file and its SHA-256 pin (shared by the tools and the truth file's test).
+target_sources(t5d_tools PRIVATE tools/sha256.cpp tools/sixb_roots.cpp tools/hunt_truth.cpp)
+add_executable(t5d-hunt-truth tools/t5d_hunt_truth.cpp)
+target_link_libraries(t5d-hunt-truth PRIVATE t5d_tools Threads::Threads)
+if(MINGW)
+  target_link_options(t5d-hunt-truth PRIVATE -static)
+endif()
+add_executable(t5d-scan6bpp tools/t5d_scan6bpp.cpp)
+target_link_libraries(t5d-scan6bpp PRIVATE t5d_tools Threads::Threads)
+target_compile_definitions(t5d-scan6bpp PRIVATE
+  "T5D_BUILD_TYPE=\"${CMAKE_BUILD_TYPE}\""
+  "T5D_CXX_FLAGS=\"${T5D_FLAGS_TEXT}\"")
+if(WIN32)
+  target_link_libraries(t5d-scan6bpp PRIVATE advapi32)  # RegGetValueA: the CPU's name
+endif()
+if(MINGW)
+  target_link_options(t5d-scan6bpp PRIVATE -static)
+endif()
 
 # ---- MinGW: no dependence on the toolchain's runtime DLLs --------------------------
 #

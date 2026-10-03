@@ -40,6 +40,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 #include "t5d/move.hpp"
@@ -81,6 +82,9 @@ struct HuntResult {
   /// suggest, no mate: the suggestions, most promising first.
   std::vector<HuntSuggestion> suggestions;
   ProverStats stats;
+  /// prover.record_certificate, mate: the proof's certificate, for
+  /// check_certificate (t5d/certificate.hpp).
+  std::shared_ptr<const ProofCertificate> certificate;
 };
 
 class Hunt {
