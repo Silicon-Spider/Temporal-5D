@@ -48,9 +48,10 @@ Register D8 (stage N5): the acting player is an input (``embed.py``,
 register (``heads.SubmitHead``), offered where submitting is possible and masked unless it is
 legal; ``NetOutput.action_log_probs`` normalises the moves and submit together. Their
 parameters (the acting-player embedding, the submit readout) draw nothing while they are
-made and are drawn after every other trunk and head parameter and the learned register
-coordinates, before the flag-gated modules: for a seed, every parameter that existed before
-N5 is drawn as it was (the flag-gated modules' aside), and no flag changes D8's weights.
+made and are drawn from a generator of their own, seeded from the model's seed
+(``d8_seed``), never from the global stream: for a seed, every parameter that existed before
+N5 is drawn exactly as it was - with any flags on and under either of D8's arms - and no flag
+changes D8's weights.
 """
 
 from __future__ import annotations
@@ -204,13 +205,17 @@ class T5DNet(nn.Module):
             if self.register_xy is not None:
                 self.register_xy.normal_(0.0, cfg.init_table_std)
                 self.register_xy.add_(3.5)  # board centre: off-lattice, at no square
-            # D8 (stage N5): after every parameter above, so that a seed draws them as before
-            # N5 (D8's modules draw nothing while they are made); before the flag-gated
-            # modules, so that no flag changes D8's weights.
-            nn.init.normal_(self.embed.acting.weight, 0.0, cfg.init_embed_std)
+            # D8 (stage N5): from a generator of its own, seeded from the global one's seed
+            # (``build_model``'s), never from the global stream - and D8's modules draw nothing
+            # while they are made - so that every parameter that existed before N5 is drawn as
+            # it was, whatever the flags and D8's own arms, and no flag changes D8's weights.
+            d8 = torch.Generator(device="cpu").manual_seed(d8_seed(torch.initial_seed()))
+            acting = torch.empty(self.embed.acting.weight.shape).normal_(0.0, cfg.init_embed_std, generator=d8)
+            self.embed.acting.weight.copy_(acting)
             if self.submit.out is not None:
-                nn.init.normal_(self.submit.out.weight, 0.0, self.submit.out.in_features**-0.5)
-                nn.init.normal_(self.submit.out.bias, 0.0, cfg.init_bias_std)
+                out = self.submit.out
+                out.weight.copy_(torch.empty(out.weight.shape).normal_(0.0, out.in_features**-0.5, generator=d8))
+                out.bias.copy_(torch.empty(out.bias.shape).normal_(0.0, cfg.init_bias_std, generator=d8))
             if self.binned_bias is not None:
                 nn.init.normal_(self.binned_bias.time_table, 0.0, cfg.init_table_std)
                 nn.init.normal_(self.binned_bias.timeline_table, 0.0, cfg.init_table_std)
@@ -408,6 +413,11 @@ def _frozen_kv_rounding(batch: Batch, kv_format: str):
         return rounded(k), rounded(v)
 
     return hook
+
+
+def d8_seed(seed: int) -> int:
+    """The seed of register D8's own generator (``T5DNet._init_weights``), from the model's."""
+    return (int(seed) * 0x9E3779B97F4A7C15 + 0xD8) & 0xFFFFFFFFFFFFFFFF
 
 
 def build_model(cfg: NetConfig | None = None, seed: int = 0) -> T5DNet:

@@ -234,8 +234,8 @@ class SubmitHead(nn.Module):
         super().__init__()
         self.form = cfg.submit_head
         self.register = cfg.submit_register
-        # Made without drawing from the RNG; drawn after the trunk and the other heads
-        # (``model._init_weights``), so that a seed draws them as before stage N5.
+        # Made without drawing from the RNG; drawn from D8's own generator
+        # (``model._init_weights``), so that a seed draws every older parameter as before N5.
         self.out = nn.utils.skip_init(nn.Linear, cfg.d_model, 1) if self.form == "linear" else None
 
     def forward(self, h: torch.Tensor, batch: Batch, policy: PointerHead) -> torch.Tensor:
