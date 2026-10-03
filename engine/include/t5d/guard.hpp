@@ -5,7 +5,7 @@
 // THE QUESTION. At a turn start, our chosen ACTION - complete and legal,
 // about to be submitted - is submitted (under the ply split Guard checks the
 // action at its submission: the opponent moves only after it; a reading,
-// build-log spec issue), and at the opponent's turn start that follows Guard
+// build-log spec issue 97), and at the opponent's turn start that follows Guard
 // asks, depth by depth from 1 (iterative deepening): can the opponent force
 // checkmate within d of THEIR actions - 2d - 1 half-turns, theirs, ours, ...,
 // theirs - whatever we answer? Depth 1 is "for every opponent action that
@@ -16,9 +16,9 @@
 // THE SEARCH. The prover (t5d/prover.hpp) with the opponent as its attacker
 // and the literal class - every opponent action (seeds All, completion
 // Every), enumerated once each in its semimove tree; our turns are AND nodes,
-// decided by one refuting reply. At the opponent's last action the check
-// filter cuts every partial action that can no longer leave us in check, and
-// at the horizon a turn of ours not in check is decided without E4. Where
+// decided by one refuting reply. At the horizon a turn of ours not in check
+// is decided without E4. The prover's last-turn check filter is OFF, as in
+// every prover (GuardOptions::prover.check_filter; measured not to pay). Where
 // turns do not decompose, E4's capped listing: a capped listing never lets a
 // depth complete (it cannot be disproven) - never a false "safe".
 //
@@ -49,9 +49,12 @@
 
 namespace t5d {
 
+/// Guard's deepest depth: 2 x 50 - 1 half-turns, within the prover's limit.
+inline constexpr int kGuardMaxDepth = 50;
+
 struct GuardOptions {
   /// The deepest depth asked, in the opponent's actions (PLACEHOLDER: the
-  /// budget, not this, is what normally stops it).
+  /// budget, not this, is what normally stops it). Clamped to 1..50.
   int max_depth = 4;
   /// Search threads (6b'': M13's 5). 1: deterministic with a node budget
   /// (H15).
@@ -100,6 +103,11 @@ struct GuardResult {
   /// check_certificate (t5d/certificate.hpp).
   std::shared_ptr<const ProofCertificate> certificate;
 };
+
+/// The prover's options Guard runs with: `options.prover` with Guard's
+/// class (seeds All, completion Every), never prove-only, the threads, and
+/// the depth of its deepest depth (2 x max_depth - 1, max_depth clamped).
+ProverOptions guard_prover_options(const GuardOptions& options);
 
 /// Guard's question for `action` (complete, legal - throws
 /// std::invalid_argument otherwise) at the turn start `turn_start`.

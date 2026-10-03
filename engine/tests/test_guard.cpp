@@ -195,3 +195,76 @@ TEST(guard_refuses_an_illegal_action_and_calls_its_hook) {
   }
   CHECK_EQ(calls, refuted);
 }
+
+// ---- the review's findings (stage E9's adversarial review) -------------------------------------
+
+namespace {
+
+// Black (us) to move; Black's action - a pawn push on +0 and the knight's
+// jump from -0 onto +1's head - lets White mate in one, but only by a J6 twin
+// (the soundness review's position; test_certificate.cpp's twin_position).
+GameState twin_guard_position() {
+  return game({"[4/4/2P1/3n:-0:1:w]", "[4/4/2P1/3n:-0:1:b]", "[1p2/4/1P2/4:+0:1:w]", "[1p2/4/1P2/4:+0:1:b]",
+               "[4/4/1k2/4:+1:1:b]", "[4/4/1k2/4:+1:2:w]", "[4/4/1k2/4:+1:2:b]", "[4/4/2P1/4:-1:2:w]",
+               "[4/4/4/4:-1:2:b]"},
+              BoardSize{4, 4}, RuleOptions{}, Colour::Black);
+}
+
+std::vector<Move> twin_guard_action(const GameState& s) {
+  MoveList moves;
+  generate_moves(s, moves);
+  std::vector<Move> action;
+  for (const char* text : {"(+0T1)Pb4(+0T1)b3", "(-0T1)Nd1(+1T2)d1"}) {
+    for (const Move& m : moves) {
+      if (to_string(m, s.multiverse().even()) == text) action.push_back(m);
+    }
+  }
+  return action;
+}
+
+}  // namespace
+
+TEST(guard_the_check_filter_does_not_hide_a_twins_mate) {
+  const GameState s = twin_guard_position();
+  const std::vector<Move> action = twin_guard_action(s);
+  REQUIRE_EQ(action.size(), std::size_t{2});
+  for (const bool filter : {false, true}) {
+    for (const int threads : {1, 5}) {
+      for (const int depth : {1, 2}) {
+        GuardOptions g;
+        g.max_depth = depth;
+        g.threads = threads;
+        g.prover.check_filter = filter;
+        const GuardResult r = guard(s, action, ProveBudget::nodes(1'000'000), g);
+        CHECK(r.refuted);
+        CHECK_EQ(r.refutation_depth, 1);
+        CHECK_EQ(r.completed_depth, 0);
+      }
+    }
+  }
+  // A disproof store shared by the filter's two settings: no class mixes.
+  const GameState after = after_action(s, action);
+  DisproofStore shared;
+  for (const bool filter : {true, false}) {
+    ProverOptions o = literal();
+    o.depth = 1;
+    o.check_filter = filter;
+    Prover p(o, nullptr, &shared);
+    CHECK(p.prove(after, ProveBudget::nodes(1'000'000)).status == ProofStatus::Proven);
+  }
+}
+
+TEST(guard_asks_at_most_its_maximum_depth) {
+  // White mates in one: after its mating action Black has no legal action,
+  // so every depth is safe at once - up to Guard's limit, 50, never beyond.
+  const GameState s = mate_in_one();
+  Prover p;
+  const ProveResult r = p.prove(s, ProveBudget::nodes(200'000));
+  REQUIRE(r.status == ProofStatus::Proven);
+  GuardOptions g;
+  g.max_depth = 60;
+  const GuardResult gr = guard(s, r.first_action, ProveBudget::nodes(2'000'000), g);
+  CHECK_EQ(gr.completed_depth, kGuardMaxDepth);
+  CHECK_EQ(static_cast<int>(gr.depths.size()), kGuardMaxDepth);
+  CHECK(!gr.refuted);
+}

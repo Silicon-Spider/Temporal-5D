@@ -71,18 +71,24 @@
 //    measured against proof-number thresholds alone (a child's disproof
 //    threshold infinite, prove_only_pn_thresholds), the usual ones found
 //    every mate the full search found, at the same cost, where proof numbers
-//    alone took more nodes and missed one of 26 (tests/test_verification.cpp).
+//    alone took more nodes and missed one of 26 (tests/test_certificate.cpp,
+//    prover_prove_only_finds_the_full_searchs_mates).
 //  * THE LITERAL CLASS (seeds All, completion Every) enters the attacker's
 //    semimove tree once, as the defender's: every legal action exactly once
 //    (where turns decompose), not once per its first move.
 //  * THE LAST-TURN CHECK FILTER (check_filter; completion Every): checkmate
 //    needs check (R1), so at the attacker's last half-turn a partial action
-//    that can no longer leave the defender in check is cut. Sound: from
-//    incremental attack maps at the turn start, a move is CHECK-CAPABLE when,
-//    played alone, it gives check or makes a line stop at void where another
-//    of the attacker's moves could make a board (a line through several new
-//    boards is opened by the first of them); a partial action is cut when no
-//    check-capable move is in it and none is left to make. The check-capable
+//    that can no longer leave the defender in check is cut. From incremental
+//    attack maps at the turn start, a move is CHECK-CAPABLE when, played
+//    alone, it gives check or makes a line stop at void where another of the
+//    attacker's moves could make a board (a line through several new boards
+//    is opened by the first of them); a move the turn start does not offer
+//    (a jump turned into a branching J6 twin mid-action) is check-capable;
+//    and while any non-branching jump exists, a check-capable branch is
+//    assumed left to make - its twin lands on a new timeline the maps never
+//    saw. A partial action is cut when no check-capable move is in it and
+//    none is left to make. (Before the review's fix the twins were not
+//    counted: a twin's mate was cut - a false disproof.) The check-capable
 //    boards come first in the turn's order. Off where attack maps recompute
 //    (Q8, Q18, Q20's alternatives) and where a capture stands already - and
 //    OFF BY DEFAULT: on real positions it cut little and cost more than it
@@ -90,9 +96,17 @@
 //    defender's turn at the horizon is decided not in check without E4.
 //  * THE PROOF'S LINE (Proven): the attacker's proving actions and the
 //    defender's longest defences, to the mate; and on request its
-//    CERTIFICATE - every proven position of the attacker's in the deciding
-//    thread's tree with its proving action - which check_certificate
-//    (t5d/certificate.hpp) verifies against E4 alone.
+//    CERTIFICATE - every attacker position this prover proved by expanding
+//    it, in any thread and any of its searches, with its proving action
+//    (recorded as each proof is exported), so that a proof read back from the
+//    solved store is certified too - which check_certificate
+//    (t5d/certificate.hpp) verifies against E4 alone. A proof the prover
+//    only read from a store it was given (another prover's) cannot be
+//    certified: the check says which position is missing.
+//  * AN ATTACKER WITH NO LEGAL ACTION: an attacker's turn is first asked
+//    E4's question - a quick search for one legal action, then E4's
+//    exhaustive detector where it finds none - so a mated or stalemated
+//    attacker is decided at once, not by exhausting its semimove tree.
 
 #ifndef T5D_PROVER_HPP
 #define T5D_PROVER_HPP
@@ -179,17 +193,25 @@ struct ProverOptions {
   /// more mates for fewer nodes) or proof numbers only (true; the search still
   /// claims no disproof either way).
   bool prove_only_pn_thresholds = false;
-  /// The last-turn check filter (see the header comment): sound, but OFF by
-  /// default - measured on 6b's first 120 roots (Guard, 50 ms, 5 threads) it
+  /// The last-turn check filter (see the header comment). OFF by default.
+  /// Stage E9's first filter missed J6 twins (a false disproof, found by the
+  /// review; fixed, with its position as a test) - and was measured off
+  /// before that: on 6b's first 120 roots (Guard, 50 ms, 5 threads) it
   /// cut little (no partial action under 50 boards, 125 at 50-99) and cost
   /// more than it saved (depth 1 completed at 82.4% with it, 83.5% without,
   /// under 50 boards): building it advances a map per move, and in positions
   /// of several timelines nearly every move is check-capable, a new board's
   /// passed copy sending lines across the timelines beside it.
   bool check_filter = false;
-  /// Collect the proof's certificate (tools and tests: it walks the deciding
-  /// thread's whole tree).
+  /// Collect the proof's certificate (tools and tests): every attacker
+  /// position proven by expansion, kept for the prover's lifetime.
   bool record_certificate = false;
+  /// Ask E4's question at the attacker's turns too (one legal action, by a
+  /// quick search, else E4's exhaustive detector): an attacker with no legal
+  /// action is decided at once. Efficiency only - the answers are the same
+  /// either way (a test checks it); off reproduces stage E9's first prover,
+  /// for measurement.
+  bool attacker_probe = true;
 };
 
 // ---------------------------------------------------------------------------
@@ -242,14 +264,23 @@ struct ProveBudget {
 // Disproofs ("no mate within d", with the class)
 // ---------------------------------------------------------------------------
 
+/// Every option that shapes the attacker's class, hashed: which seeds and
+/// completions, and what chooses them - the canonical completion's step cap
+/// and quietness values, the branch-threat definition, promotions as forcing,
+/// E5a's tiers, the check filter. Two provers whose options differ in any of
+/// them never share a disproof (the review's finding: a disproof is a fact
+/// about its class, and only about it).
+std::uint64_t disproof_shape(const ProverOptions& options) noexcept;
+
 /// A disproof's class: whose turn it is and A's forcing class. `attacker`
 /// true: "the side to move cannot force mate within the depth by the class";
 /// false: "the side to move is not mated within the depth by the opponent's
-/// class".
+/// class". `shape`: disproof_shape() of the options that found it.
 struct DisproofClass {
   bool attacker = true;
   SeedClass seeds = SeedClass::Checks;
   CompletionClass completion = CompletionClass::Canonical;
+  std::uint64_t shape = 0;
   friend bool operator==(const DisproofClass&, const DisproofClass&) noexcept = default;
 };
 
@@ -306,6 +337,7 @@ struct ProverStats {
   std::uint64_t disproofs_recorded = 0;
   std::uint64_t check_cut = 0;        // partial actions cut by the last-turn check filter
   std::uint64_t not_in_check = 0;     // horizon turns decided not in check
+  std::uint64_t attacker_tests = 0;   // attacker turns asked for one legal action first
   bool stopped_by_nodes = false;
   bool stopped_by_time = false;
   bool stopped_by_memory = false;     // E4's ceiling or the tree's
@@ -335,7 +367,8 @@ struct ProveResult {
   /// from a store and the tree holds no continuation.
   std::vector<std::vector<Move>> line;
   bool line_complete = false;
-  /// record_certificate, Proven: the deciding thread's certificate.
+  /// record_certificate, Proven: the prover's certificate so far (every
+  /// thread's, every search's).
   std::shared_ptr<const ProofCertificate> certificate;
   /// The main thread's root children (an action, or a first move for
   /// completion Every), with their proof and disproof numbers - Hunt's soft

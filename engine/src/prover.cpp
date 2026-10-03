@@ -56,6 +56,25 @@ const char* proof_status_name(ProofStatus s) noexcept {
   return "?";
 }
 
+std::uint64_t disproof_shape(const ProverOptions& o) noexcept {
+  std::uint64_t h = 0x9E3779B97F4A7C15ull;
+  const auto mix = [&h](std::uint64_t v) {
+    h ^= v + 0x9E3779B97F4A7C15ull + (h << 6) + (h >> 2);
+    h *= 0xBF58476D1CE4E5B9ull;
+    h ^= h >> 31;
+  };
+  mix(static_cast<std::uint64_t>(o.seeds));
+  mix(static_cast<std::uint64_t>(o.completion));
+  mix(o.completion_max_nodes);
+  for (const int v : o.values.value) mix(static_cast<std::uint64_t>(static_cast<std::int64_t>(v)));
+  mix(static_cast<std::uint64_t>(o.branch_threat));
+  mix(static_cast<std::uint64_t>(static_cast<std::int64_t>(o.branch_threat_value)));
+  mix(o.promotions_forcing ? 1u : 0u);
+  mix(o.legality_tiers ? 1u : 0u);
+  mix(o.check_filter ? 1u : 0u);
+  return h;
+}
+
 bool decomposes(const RuleOptions& r) noexcept {
   return r.moves_after_shift && r.activation == ActivationRule::Count &&
          r.reactivation == Reactivation::Rewinds && !r.play_activates &&
@@ -376,9 +395,11 @@ struct Shared {
     opt.threads = std::max(1, opt.threads);
     opt.depth = std::max(1, std::min(opt.depth, 100));
     tt.resize(opt.tt_entries);
+    shape = disproof_shape(opt);
     lock_proofs = opt.threads > 1 && !proofs->concurrent();
   }
   ProverOptions opt;
+  std::uint64_t shape = 0;  // disproof_shape(opt)
   ConcurrentSolvedStore own_proofs;
   DisproofStore own_disproofs;
   SolvedStore* proofs;
@@ -410,8 +431,14 @@ struct Shared {
     proofs->put(s, p);
   }
   DisproofClass cls(bool or_node) const {
-    return DisproofClass{or_node, opt.seeds, opt.completion};
+    return DisproofClass{or_node, opt.seeds, opt.completion, shape};
   }
+  // record_certificate: every attacker position proven by expansion, in
+  // any thread and any search of this prover, with its proving action - so
+  // a proof read back from the solved store (another thread's, an earlier
+  // search's) is certified too.
+  std::mutex cert_mutex;
+  ProofCertificate cert;
   // Prove-only keeps its disproofs to itself - its search's working memory,
   // emptied at each search, never the caller's store (it claims none).
   DisproofStore private_disproofs;
@@ -1094,6 +1121,13 @@ struct Worker {
     }
     for (std::size_t i = 0; i < all.size(); ++i) {
       if (f->capable_move[i] != 0 && all[i].branching()) f->branch = true;
+      // J6: a non-branching jump onto another of the attacker's playable
+      // boards becomes a BRANCHING twin once that board has been played - a
+      // move the turn start does not offer, landing on a new outermost
+      // timeline whose lines were never measured. Its capability is unknown,
+      // so a branch is always left to make while any such jump exists (the
+      // review's twin position: cutting it was a false disproof).
+      if (all[i].jump() && !all[i].branching()) f->branch = true;
     }
     return f;
   }
@@ -1200,12 +1234,21 @@ struct Worker {
     return c;
   }
 
-  void export_solved(const Node& n, const GameState& s) {
+  void export_solved(std::uint32_t index, const GameState& s) {
+    const Node& n = tree[index];
     if (n.kind != Kind::Turn) return;
     if (n.proven()) {
       if (n.dist < 0) throw std::logic_error("prover: a turn proven with no legal action under it");
       sh.put_proof(s, n.or_node ? Proof::win(n.dist) : Proof::loss(n.dist));
       ++st.proofs_exported;
+      if (opt.record_certificate && n.or_node && n.expanded) {
+        GameState t = s;
+        std::vector<Move> action;
+        if (next_turn(index, t, action) >= 0) {
+          std::lock_guard<std::mutex> lock(sh.cert_mutex);
+          sh.cert.add(s, std::move(action), n.dist);
+        }
+      }
     } else if (n.disproven() && n.remaining > 0 && (opt.record_all_disproofs || n.edge == Edge::Root)) {
       sh.disproof_store().put(s, sh.cls(n.or_node), n.remaining);
       if (!opt.prove_only) ++st.disproofs_recorded;
@@ -1272,6 +1315,38 @@ struct Worker {
   void expand_attacker(std::uint32_t n, const GameState& s, TurnCtx& ctx, const MoveList& all,
                        int remaining) {
     const bool split = decomposes(s.rules());
+    // E4's question first: a quick search for one legal action, then E4's
+    // exhaustive detector where it finds none - an attacker that is mated or
+    // stalemated has no move to mate with, decided at once instead of by
+    // exhausting its semimove tree (the review's finding: on a 32-board
+    // position E4 decided in 221 nodes what the tree had not in 2M).
+    if (opt.attacker_probe) {
+      ++st.attacker_tests;
+      const TurnShape probe = shape_of(s, attacker_axes(s), 0, all);
+      std::vector<Move> path;
+      std::uint64_t steps = 0;
+      bool capped = false;
+      Found found;
+      const bool any = first_action(s, ctx.opp_map, probe, 0, Phase::Plain, Prefer::Quiet, path, steps,
+                                    opt.escape_probe_nodes, capped, found);
+      if (stopped) return;
+      if (!any) {
+        const MateResult r = detect_mate(s, Detector::Hypercuboid, detector_budget());
+        if (!account(r.stats)) return;
+        if (r.verdict == Outcome::Checkmate || r.verdict == Outcome::Stalemate) {
+          // Exhaustive (H37): the attacker, to move, has no legal action.
+          r.verdict == Outcome::Checkmate ? ++st.checkmates : ++st.stalemates;
+          sh.put_proof(s, r.verdict == Outcome::Checkmate ? Proof::loss(0) : Proof::draw());
+          ++st.proofs_exported;
+          set_disproven(tree[n]);
+          return;
+        }
+        if (r.verdict == Outcome::Ongoing && split && !capped) {
+          throw std::logic_error("prover: the attacker's semimove tree holds no legal action where E4 found one");
+        }
+        // A legal action exists, or E4 ran out of memory: expand as usual.
+      }
+    }
     std::vector<std::int32_t> axes = attacker_axes(s);
     std::shared_ptr<const CheckFilter> filter;
     if (remaining == 1 && opt.completion == CompletionClass::Every && split) {
@@ -1601,7 +1676,7 @@ struct Worker {
       }
       if (stopped) return;
       if (tree[n].solved()) {
-        export_solved(tree[n], s);
+        export_solved(n, s);
         return;
       }
     }
@@ -1654,7 +1729,7 @@ struct Worker {
     Node& node = tree[n];
     if (node.kind == Kind::Turn) {
       if (node.solved()) {
-        export_solved(node, s);
+        export_solved(n, s);
       } else {
         sh.tt.save(node.key, node.pn, node.dn);
       }
@@ -1834,26 +1909,6 @@ struct Worker {
     }
   }
 
-  // Every proven attacker position in this tree with its proving action
-  // (a walk of the whole tree: positions solved from the store are proven
-  // somewhere else in it).
-  void collect_certificate(std::uint32_t n, const GameState& s, ProofCertificate& cert) const {
-    const Node& node = tree[n];
-    if (!node.expanded) return;
-    if (node.kind == Kind::Turn && node.or_node && node.proven()) {
-      GameState t = s;
-      std::vector<Move> action;
-      if (next_turn(n, t, action) >= 0) cert.add(s, action, node.dist);
-    }
-    for (const std::uint32_t ci : node.children) {
-      const Node& c = tree[ci];
-      if (!c.expanded) continue;
-      GameState t = s;
-      cross(t, c);
-      collect_certificate(ci, t, cert);
-    }
-  }
-
   // This thread's search of `shared_root`.
   void run(const GameState& shared_root, std::uint32_t& root_out, bool& decided) {
     std::optional<GameState> own;
@@ -1908,6 +1963,7 @@ void accumulate(ProverStats& into, const ProverStats& x) {
   into.disproofs_recorded += x.disproofs_recorded;
   into.check_cut += x.check_cut;
   into.not_in_check += x.not_in_check;
+  into.attacker_tests += x.attacker_tests;
   into.stopped_by_nodes = into.stopped_by_nodes || x.stopped_by_nodes;
   into.stopped_by_time = into.stopped_by_time || x.stopped_by_time;
   into.stopped_by_memory = into.stopped_by_memory || x.stopped_by_memory;
@@ -2001,8 +2057,8 @@ struct Prover::Impl {
       const Worker& w = *workers[decider];
       std::shared_ptr<ProofCertificate> cert;
       if (sh.opt.record_certificate) {
-        cert = std::make_shared<ProofCertificate>();
-        w.collect_certificate(roots[decider], root, *cert);
+        std::lock_guard<std::mutex> lock(sh.cert_mutex);
+        cert = std::make_shared<ProofCertificate>(sh.cert);
         result.certificate = cert;
       }
       w.proof_line(roots[decider], root, cert.get(), result.line, result.line_complete);
