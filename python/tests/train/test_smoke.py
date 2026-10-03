@@ -11,7 +11,7 @@ import torch.nn.functional as F
 from t5d.net import NetConfig, build_model, collate, synthetic_state, synthetic_states
 from t5d.net.structure import TYPED_INDEX
 from t5d.train.losses import LossConfig, compute_losses
-from t5d.train.smoke import MAX_STEPS, smoke_train, synthetic_targets
+from t5d.train.smoke import MAX_STEPS, smoke_train, synthetic_targets, with_actions
 
 pytestmark = pytest.mark.grad
 
@@ -145,3 +145,30 @@ def test_smoke_covers_stage_n2_parameters(form, n_new):
     moved = (model.typed_edges.table.detach() - table).abs() > 0
     seeing = [h for h, role in enumerate(model.cfg.head_roles) if role in ("dense", "relations")]
     assert moved[seeing][:, types].all(), "every present type's scalars on every head that sees them, both orientations"
+
+
+@pytest.mark.parametrize("form", ["linear", "pointer"])
+def test_the_policy_loss_covers_the_submit_action(form):
+    """Register D8 (stage N5): the policy's target is one distribution over the moves and the
+    submit action; its loss is the cross-entropy against the joint log-softmax - an illegal or
+    absent submit carries neither probability nor target - and it reaches the submit readout
+    and the acting-player embedding."""
+    cfg = NetConfig(trunk_dtype="fp32", n_layers=2, submit_head=form)
+    model = build_model(cfg, seed=4)
+    batch = collate(with_actions(synthetic_states(4, [2, 4, 3, 5])))
+    assert batch.submit_possible.tolist() == [False, True, False, True] and batch.submit_legal.tolist() == [False, True, False, False]
+    targets = synthetic_targets(batch, cfg, torch.Generator().manual_seed(4))
+    total = targets.policy.sum(dim=-1) + targets.submit
+    assert torch.allclose(total, torch.ones(4), atol=1e-6)
+    assert targets.submit[[0, 2, 3]].tolist() == [0.0, 0.0, 0.0] and float(targets.submit[1]) > 0
+    out = model(batch)
+    target = torch.cat([targets.policy, targets.submit[:, None]], dim=-1)
+    logp = out.action_log_probs()
+    per = [-(target[i] * logp[i]).masked_fill(~out.action_valid()[i], 0.0).sum() for i in range(4)]
+    losses = compute_losses(out, targets)
+    assert torch.allclose(losses["policy"], torch.stack(per).mean(), rtol=1e-5)
+    losses["policy"].backward()
+    if form == "linear":
+        assert model.submit.out.weight.grad.abs().sum() > 0
+    assert model.embed.acting.weight.grad.abs().sum() > 0
+    assert model.policy.src.weight.grad.abs().sum() > 0

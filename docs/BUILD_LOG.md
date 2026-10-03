@@ -72,7 +72,9 @@ channel (rung 1), rungs 3 and 5; the NNUE held open (H6). The user's rulings:
 M16 also fixed M7's readings; applied, the window is killed under human-game
 weighting, which contradicts M16's own premise - put to the user (MEASUREMENTS, M7).
 
-**Done since (2026-10-03):** network C24 merged (65acf68); **the many2 conversion
+**Done since (2026-10-03/04):** network **N5 merged** (D8 in the network, the
+search's C step API from Python, end-to-end games with random weights; reviewed);
+network C24 merged (65acf68); **the many2 conversion
 merged** with the golden files re-recorded on a quiet machine (only many2's
 answers changed); **engine E6a merged** -
 the search core after its three adversarial reviews and their fixes, with H41's
@@ -789,20 +791,20 @@ for game records.
 | C5, C7 | parked | Window code only after the \|E\| verdict (M7) |
 | C11 | built behind a flag, tested | MCGS (E6a): identity is the state key and whether an action is in progress, compared exactly (§8.5's state, issue 87); awaiting 6k |
 | C12, C13 | built, tested | Re-rooting with garbage collection, the persistence hook and pondering (E6a) |
-| C14 | built, tested | Fresh searches per decision in self-play; the evaluation cache shared across them, purged by board count (issue 89); the C API's `t5d_search_new_sharing` |
-| C23 | built, tested | The node key's default carries branch origins (lineage, `NodeKey::StateAndOrigins`) |
+| C14 | built, tested | Fresh searches per decision in self-play; the evaluation cache shared across them, purged by board count (issue 89); the C API's `t5d_search_new_sharing`; from Python (N5) only between searches with the same network input, with the cached path's refresh epochs set on the search |
+| C23 | built, tested | The node key's default carries branch origins (lineage, `NodeKey::StateAndOrigins`); the network's causal past is the ruled ancestry (`causal_past="lineage"`, tested against ancestry computed from the branching record, N5) |
 | C15 | built in part | FP8 e4m3 frozen K/V (`frozen_kv_format = "fp8"`, applied by the forward itself); varlen/ragged kernels not built (none on CPU); C15 vs G1 is spec issue 34 |
 | C16 | not built (rule) | Deferred; last, only if node-starved |
 | C21 | not built (rule) | Refused; a mutant that snapshots is caught by the tests |
 | D1, D3, D4 | built, tested | Network N1: pointer policy, 51-bin value head, auxiliary heads (D4's reply space, label set and moves-left unit are placeholders, spec issue 9) |
-| D2 | built, tested | Both arms (`SearchParams::split`: the board-move split, default, and whole turns); awaiting trained ablations 6g/6k |
-| D8 | built (engine, search) | Submit is an explicit edge, legal only when C4 holds, never automatic; the acting player and submit flags through the C step API; the network side (the submit logit, the acting-player input) is N5 |
+| D2 | built, tested | Both arms (`SearchParams::split`: the board-move split, default, and whole turns), driven from Python through the C step API with the network (N5); awaiting trained ablations 6g/6k |
+| D8 | built, tested | Engine and search (E7, E6a): submit an explicit edge, legal only when C4 holds, never automatic. Network (N5): a global acting-player input, the submit logit from global register 0 (placeholders, issues 108-109), one distribution over moves + submit, values from the acting player's perspective |
 | E1, E5, E9 | built, tested | PUCT with entropy-adaptive top-k widening, FPU, root noise in self-play (E1); LCB with a visit floor (E5); the solver behind H41's switch, the secure child, a visit cap on solved children (E9) - every constant a placeholder (issues 80-86) |
 | E7 | not started | Time management (with E10's Guard re-search reserve) |
 | E2, E3 | built behind flags, tested | Off; awaiting 6m and 6t |
 | E8 | not started | Behind a flag |
 | E6 | not built (rule) | Refused |
-| F1, F2 | built, tested | 21,358,601 parameters (F1); the L24-ff12 preset, 44.5M (F2) |
+| F1, F2 | built, tested | 21,359,370 parameters (F1, with N5's D8 embedding and readout); the L24-ff12 preset, 44.5M (F2) |
 | F3 | not built (rule) | Refused |
 | F4 | not built (rule) | The NNUE is held open (H6, CHECKPOINT 4) |
 | G1 | built, tested | BF16 trunk under autocast; FP32 heads and RoPE; the cache stores K/V in the live format (§15.2 row (e)) |
@@ -1121,7 +1123,7 @@ decision), and what is parked.
     acting-player input and a submit action. The engine side is built (E7:
     `acting_player`, `submit_possible`, `submit_legal` in the expansion); the
     network side (the input, the submit logit, and dropping `PresentMismatch`) is
-    N5.
+    N5. *Closed (N5, 2026-10-04): built.*
 49. **§8.1's "generator-supplied legal moves"**: the C API offers pseudo-legal
     moves (spec issues 28, 46), so the policy scores pseudo-legal moves until the
     expansion's move set is decided. Proposed spec edit 41.
@@ -1281,6 +1283,37 @@ decision), and what is parked.
     converted text (converting for cwmtt alone would change nothing); a record the
     specification cannot express is given to no source. H28's "every source reads
     the record as stored" now has this one exception.
+
+(Spec issues 97-107 and proposed spec edits 72-78 are reserved for engine E9,
+whose code cites them; they are written in at its merge.)
+108. **Where D8's acting-player input enters is unspecified** (§2.3/A3). Built as
+    `acting_player_input`: a learned embedding added to the global registers
+    (placeholder; frozen boards' K/V never see it) or to every token
+    (`all_tokens`, frozen boards excluded under intrinsic features).
+109. **Which register the submit logit is read from, and how** (§8.2, D8): built
+    as global register 0 (`submit_register`) with a linear readout (`submit_head`;
+    `pointer` the other arm). Tension with B8/D7 ("registers stay free scratch",
+    "never assigned aux targets"): §8.2 assigns the logit to a register
+    explicitly; it is a policy output, not an aux target.
+110. **The value/WDL perspective**: §8.3, §12.4 and N1's heads say "the player to
+    move"; under D8 the search's API defines it as the acting player's - built so.
+111. **Policy targets cover the submit child's visits**: §12.2's exclusion and
+    provenance must cover them too; the whole-turn arm still has no end-of-turn
+    token (issue 92).
+112. **An illegal submit**: masked by the network (no probability) and delivered to
+    the search as NaN, which prunes the edge (the C API refuses infinities) - a
+    convention to record.
+113. **F1's parameter count** is now 21,359,370 (+769: the acting-player embedding
+    and the submit readout).
+114. **Match play between two evaluators**: §8.7's "match play carries everything"
+    assumes one engine. Built as one search and cache per evaluator, re-rooted
+    with `advance_action`, never shared; match games are deterministic given the
+    networks.
+115. **The engine's `t5d_search_new_sharing` does not check** that donor and new
+    search have the same expand, split and legality parameters (Python refuses a
+    mismatch; the engine may want the same check).
+116. **Refresh epochs in a shared cache** need the search's epoch set per root
+    (`engine_epoch`, the epoch key hashed to 64 bits).
 
 ## Proposed spec edits
 
@@ -1501,6 +1534,22 @@ says now, what it should say, why.
     record in the official client's export form is converted to it before any
     source reads it - CHECKPOINT 3)". Optionally H27/H33: the pinned corpus pins
     the converted text too. Why: the CHECKPOINT 3 ruling (issue 96).
+
+79. **§2.3 / A3**: add the global acting-player input (issue 108).
+80. **§8.2 / D8**: name register 0 and the linear readout as placeholders; one
+    distribution over moves + submit; an illegal submit gets no probability and
+    no logit is sent (issues 109, 112).
+81. **§8.3 / §12.4 / D3 / D4**: value and WDL "from the acting player's
+    perspective (D8)" (issue 110).
+82. **§12.2 / §12.4**: the policy target is the visits over moves + submit; the
+    exclusion and provenance apply to the submit child too (issue 111).
+83. **§9.2 / F1**: 21,359,370 parameters (issue 113).
+84. **§8.7 / C14 / C12**: one search and cache per evaluator in match play; a cache
+    is shared only between searches with one evaluator and one network input, and
+    evaluations are keyed by refresh epoch (issues 114-116).
+85. **The register's D8 row**: built (engine, search, network).
+86. **The register's open items**: issue 48 closed by D8; issues 5 and 29 closed
+    by C23.
 
 ## Session log
 

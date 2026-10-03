@@ -183,21 +183,150 @@ def test_bands_only_drops_the_origins():
 # --- the present, and what cannot be converted -----------------------------------------------------
 
 
-def test_a_shifted_unsubmitted_action_is_refused():
+def test_a_shifted_unsubmitted_action_converts():
     """After 1. e4 the present is Black's but the action is White's until submitted - under both
-    readings of Q4 (by default, R8, White may still move, but the one board has been played)."""
+    readings of Q4 (by default, R8, White may still move, but the one board has been played).
+    Stage N4 refused the state (no feature said whose action it was); register D8 gives the
+    network the acting player, and the submit action, offered and legal here. Submitted, the
+    same boards are Black's turn start: the two states differ in the acting player alone."""
     for rules in (0, T5D_RULES_NO_MOVES_AFTER_SHIFT):
         with Game.variant("Standard", rules=rules) as g:
             e4 = next(m for m in g.moves() if m.text() == "(0T1)Pe2(0T1)e4")
             g.apply(e4)
             x = g.expand()
-            with pytest.raises(PresentMismatch, match="submit the action first"):
-                to_position(x)
-            pos = to_position(x, strict=False)
-            assert not pos.present_matches and pos.move_count == 0 and pos.may_move == (rules == 0)
             assert (x.acting_player, x.present & 1, x.submit_possible, x.submit_legal) == (0, 1, True, True)
+            pos = to_position(x)
+            s = pos.state
+            assert pos.present_matches and pos.move_count == 0 and pos.may_move == (rules == 0)
+            assert (s.acting_player, s.player_to_move, s.shifted, s.submit_possible, s.submit_legal) == (0, 1, True, True, True)
+            assert pos.to_move == pos.acting_player == 0
             g.submit()
-            assert g.position().present_matches
+            after = g.position()
+            t = after.state
+            assert after.present_matches and not t.shifted and not t.submit_possible and t.acting_player == 1
+            assert np.array_equal(t.piece, s.piece) and np.array_equal(t.half_turn, s.half_turn) and t.h_present == s.h_present
+
+
+def test_an_illegal_submission_is_offered_and_masked():
+    """White in check plays a king move that stays in check (pseudo-legal): the present shifts,
+    submitting is possible but not legal (C4) - the state converts with the submit action
+    offered and masked."""
+    with Game.from_fen(["[4k3/8/8/8/8/8/3q4/4K3:0:1:w]"]) as g:
+        kd1 = next(m for m in g.moves() if m.text() == "(0T1)Ke1(0T1)d1")
+        g.apply(kd1)
+        pos = g.position()
+    s = pos.state
+    assert s.shifted and s.submit_possible and not s.submit_legal and s.acting_player == 0
+
+
+def test_an_inconsistent_expansion_is_refused():
+    """What the converter still refuses (``PresentMismatch``): an engine present that is not the
+    boards', an acting player that is not the player to move, submitting possible without the
+    shift or the shift without it - each made here by editing a real expansion."""
+    from dataclasses import replace
+
+    with Game.variant("Standard - Two Timelines") as g:
+        start = g.expand()
+        g.apply(next(m for m in g.moves() if m.text(even=True) == "(-0T1)Pe2(-0T1)e4"))
+        g.apply(next(m for m in g.moves() if m.text(even=True) == "(+0T1)Pe2(+0T1)e4"))
+        past = g.expand()
+    assert past.submit_possible and past.acting_player == 0 and past.present & 1 == 1
+    bad = {
+        "present": replace(start, present=start.present + 2),
+        "acting": replace(start, acting_player=1),
+        "to_move": replace(past, to_move=1),
+        "submit without the shift": replace(start, submit_possible=True, submit_legal=True),
+        "the shift without submit": replace(past, submit_possible=False, submit_legal=False),
+    }
+    for name, x in bad.items():
+        with pytest.raises(PresentMismatch):
+            to_position(x)
+        if name in ("present", "to_move", "the shift without submit"):
+            assert not to_position(x, strict=False).present_matches, name
+    to_position(start), to_position(past)  # the real ones convert
+
+
+def _past_the_shift_with_moves(seed: int = 0):
+    """Seeded random play from Two Timelines to a state past the shift that still has moves:
+    its expansion (the game closed)."""
+    from t5d.engine.play import ROYAL_IDS
+
+    rng = np.random.default_rng(seed)
+    with Game.variant("Standard - Two Timelines") as g:
+        g.set_legality(False)
+        for _ in range(400):
+            x = g.expand(square_features="none")
+            if g.info().obligations_met:
+                if x.move_count:
+                    return g.expand()
+                g.submit()
+                continue
+            g.apply(int(rng.choice(np.flatnonzero(~np.isin(x.moves["captured"], ROYAL_IDS)))))
+    raise AssertionError("no move after a shift met")
+
+
+def test_moves_that_are_not_the_acting_players_are_refused():
+    """The review's cases. A state past the shift relabelled as the opponent's turn start - the
+    acting player its opponent, no submit - agrees with its present but not with its moves, which
+    all start on the other colour's boards; moves offered where none may be made; an acting
+    player or player to move that is no colour (PresentMismatch, not an IndexError)."""
+    from dataclasses import replace
+
+    past = _past_the_shift_with_moves(seed=3)
+    assert past.move_count > 0 and past.submit_possible
+    to_position(past)  # the real one converts
+    relabelled = replace(past, acting_player=1 - past.acting_player, to_move=1 - past.to_move, submit_possible=False, submit_legal=False)
+    with pytest.raises(PresentMismatch, match=f"{past.move_count} of {past.move_count} moves start on boards"):
+        to_position(relabelled)
+    assert not to_position(relabelled, strict=False).present_matches
+    with Game.variant("Standard") as g:
+        start = g.expand()
+    with pytest.raises(PresentMismatch, match="may_move is false"):
+        to_position(replace(start, may_move=False))
+    bad_pieces = replace(start, colour=np.where(start.colour == 1, 2, np.where(start.colour == 2, 1, 0)).astype(np.uint8))
+    with pytest.raises(PresentMismatch, match="without a piece of the acting player's"):
+        to_position(bad_pieces)
+    for field, value in (("acting_player", 2), ("to_move", -1)):
+        with pytest.raises(PresentMismatch, match=field):
+            to_position(replace(start, **{field: value}))
+        with pytest.raises(PresentMismatch, match=field):
+            to_position(replace(start, **{field: value}), strict=False)
+
+
+def test_the_causal_past_is_ancestry():
+    """Register C23: a board's causal past is its ancestry - its own timeline's earlier boards
+    and, recursively, its branch parent up to the branch point. On a real branched game (the
+    record's 2. (0T2)Nf3>>(0T1)f5: timeline +1 branches from the board at (0, T1 white)), the
+    converter's lineage under the network's default reading is computed here from the record
+    alone and compared: not time order (a board earlier in time on another timeline is not in
+    the past), not creation order (unknown to the converter, never needed)."""
+    from t5d.net.scope import causal_past
+
+    cfg = NetConfig()
+    assert cfg.causal_past == "lineage"
+    with Game.from_pgn(RECORDS["branching"]) as g:
+        g.replay_all()
+        pos = g.position()
+    s = pos.state
+    assert s.creation is None and (s.source == -1).all()
+    past = causal_past(s.parent, s.creation, cfg.causal_past, s.source)
+    key = {(int(p), int(h)): b for b, (p, h) in enumerate(zip(s.timeline, s.half_turn, strict=True))}
+    branch = {1: (0, 2)}  # timeline +1's branch origin: (0T1) White's board, h = 2
+
+    def ancestry(p: int, h: int) -> set[tuple[int, int]]:
+        """Timeline p's boards before h and, through its branch origin, the origin and the
+        origin's own ancestry."""
+        out = {(q, k) for (q, k) in key if q == p and k < h}
+        if p in branch:
+            out |= {branch[p]} | ancestry(*branch[p])
+        return out
+
+    for (p, h), b in key.items():
+        expected = {key[a] for a in ancestry(p, h)}
+        assert set(np.flatnonzero(past[b]).tolist()) == expected, (p, h)
+    on_one = key[(1, 3)]  # timeline +1's first board: its past is the origin alone
+    assert set(np.flatnonzero(past[on_one]).tolist()) == {key[(0, 2)]}
+    assert key[(0, 3)] not in np.flatnonzero(past[key[(1, 4)]]).tolist()  # earlier in time, not an ancestor
 
 
 def test_mid_action_before_the_shift_converts():
@@ -242,10 +371,10 @@ def test_scope_tokens_on_a_small_layout():
     assert sc.tokens(lay, registers=False, global_registers=False).tolist() == [0, 1, 2, 3, 5, 6, 7, 8]
 
 
-def test_moves_after_the_shift_cannot_be_represented():
+def test_moves_after_the_shift_are_represented():
     """Under the default rules (Q4, ruled R8) a move may follow the shift: the engine's acting
-    player is not the one the boards' present names, and the network's contract has no feature
-    to say so until register D8's acting-player input (stage N5) - refused. Under Q4's
+    player is not the one the boards' present names - register D8's acting-player input says
+    so (stage N5), and the state converts with its moves and the submit action. Under Q4's
     Guide-literal reading (T5D_RULES_NO_MOVES_AFTER_SHIFT) the same random play never meets a
     move after the shift."""
     from t5d.engine.play import ROYAL_IDS
@@ -277,9 +406,13 @@ def test_moves_after_the_shift_cannot_be_represented():
         x = g.expand()
         assert x.may_move and x.move_count > 0
         assert x.acting_player == x.to_move and x.acting_player != x.present & 1 and x.submit_possible
-        with pytest.raises(PresentMismatch):
-            to_position(x)
-        assert not to_position(x, strict=False).present_matches
+        pos = to_position(x)
+        s = pos.state
+        assert pos.present_matches and s.shifted and s.acting_player == x.acting_player and pos.move_count == x.move_count
+        assert s.submit_possible and s.submit_legal == x.submit_legal
+        # The moves are the acting player's, on boards whose colour to move is the acting player's.
+        boards = s.layout.split_square_tokens(s.moves[:, 0])[0]
+        assert (s.side_to_move[boards] == s.acting_player).all()
     g, found, shifted = first_move_after_the_shift(T5D_RULES_NO_MOVES_AFTER_SHIFT)
     with g:
         assert found is None and shifted > 20  # many shifts (48), never a move after one

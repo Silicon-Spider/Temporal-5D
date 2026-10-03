@@ -6,11 +6,20 @@ evaluated only over the supplied candidate moves; padding entries score ``-inf``
 Endpoints are square tokens only - registers are never move endpoints (section 5.3).
 Promotions: see ``NetConfig.policy_promotion`` (an open committed-class point).
 
+**Submit (D8, section 8.2; stage N5).** Under the board-move split submitting is an action
+with "its own policy logit, read from a global register" (``SubmitHead``): offered where
+submitting is possible (T5), masked to -inf unless it is legal (C4), and normalised together
+with the move logits - one distribution over the moves and submit (``NetOutput``).
+
 **Value (D3, section 8.3).** 51-bin categorical over outcomes in [-1, 1], bin centres
 ``-1 + 2k/50``; pooled from the global registers. Helpers give the distribution, its
 mean and its variance (what variance-scaled cPUCT and the time manager consume). The
-value is from the perspective of the player to move (``h_present & 1``) - a target
-convention for training, stated here so that every consumer reads it the same way.
+value is from the perspective of the **acting player** (``PositionState.acting_player``,
+register D8: the player whose action is in progress until it submits - the present's colour,
+``h_present & 1``, except once the present has shifted inside the action) - a target
+convention for training, stated here so that every consumer reads it the same way; it is the
+search's (``t5d/capi_search.h``: values "from the perspective of the leaf's acting
+player").
 
 **Auxiliary heads (D4, section 12.4).** Linear heads ("head compute is negligible -
 linear heads over d = 256"). Per-board heads read the mean of the board's *square*
@@ -23,7 +32,7 @@ scratch") and D7 ("never assigned aux targets") keep them off the registers. The
 placeholder default is the mean of every square token (``square_pool``); the other arm
 is the value head's input (``global_register_pool``).
 
-* WDL: 3 logits (win, draw, loss for the player to move).
+* WDL: 3 logits (win, draw, loss for the acting player).
 * Moves-left: one scalar, the predicted ``log1p`` of the number of board-moves left
   in the game (each board-move adds one board, so it predicts final N minus N - the
   quantity section 8.6's integral allocator needs). Log scale because the target spans
@@ -204,6 +213,36 @@ class PointerHead(nn.Module):
             offsets = self.promo(h_dst).gather(-1, moves[..., 2:3].clamp(min=0)).squeeze(-1)
             score = score + torch.where(moves[..., 2] != NO_PROMOTION, offsets, torch.zeros_like(offsets))
         return score.masked_fill(~valid, float("-inf"))
+
+
+def submit_register_state(h: torch.Tensor, batch: Batch, register: int) -> torch.Tensor:
+    """The final trunk state ``(B, d)`` the submit logit is read from (D8): global register
+    ``register``; with no global registers (an ablation-3 arm) the mean of the square tokens,
+    as ``global_register_pool`` falls back."""
+    if batch.global_regs > 0:
+        return h[:, batch.body_len + register]
+    return square_pool(h, batch)
+
+
+class SubmitHead(nn.Module):
+    """Register D8 (section 8.2): the submit action's own policy logit, read from a global
+    register (``NetConfig.submit_register``) - by a learned linear readout (``"linear"``) or
+    by the policy's bilinear form with the register at both ends (``"pointer"``,
+    ``NetConfig.submit_head``). Returns the unmasked logit ``(B,)``; the model masks it."""
+
+    def __init__(self, cfg: NetConfig) -> None:
+        super().__init__()
+        self.form = cfg.submit_head
+        self.register = cfg.submit_register
+        # Made without drawing from the RNG; drawn from D8's own generator
+        # (``model._init_weights``), so that a seed draws every older parameter as before N5.
+        self.out = nn.utils.skip_init(nn.Linear, cfg.d_model, 1) if self.form == "linear" else None
+
+    def forward(self, h: torch.Tensor, batch: Batch, policy: PointerHead) -> torch.Tensor:
+        r = submit_register_state(h, batch, self.register)
+        if self.out is not None:
+            return self.out(r).squeeze(-1)
+        return (policy.src(r) * policy.dst(r)).sum(dim=-1) / math.sqrt(policy.dim)
 
 
 class ValueHead(nn.Module):
