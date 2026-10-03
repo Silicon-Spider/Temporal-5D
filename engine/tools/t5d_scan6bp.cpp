@@ -866,9 +866,12 @@ int main(int argc, char** argv) {
       std::string& to = quantile(fit[k].ratio, 0.9) <= 1.0 ? fits : misses;
       to += (to.empty() ? "" : ", ") + std::string(kRangeNames[k]);
     }
+    const std::string verdict = fits.empty()     ? std::string("rung 1 stays dropped")
+                                : misses.empty() ? std::string("rung 1 returns, estimate channel only")
+                                                 : "rung 1 returns, estimate channel only, in " + fits +
+                                                       "; stays dropped in " + misses;
     line("  (B) estimate channel fits the rung-1 leaf budget at p90 in " + (fits.empty() ? std::string("no range") : fits) +
-         "; not in " + (misses.empty() ? std::string("any range") : misses) +
-         " -> rung 1 returns, estimate channel only, where it fits; stays dropped elsewhere (H10, M15)");
+         "; not in " + (misses.empty() ? std::string("any range") : misses) + " -> " + verdict + " (H10, M15)");
   }
   if (o.brute && brute[0].n > 0) {
     const bool df = dfpn_side[0].decided >= brute[0].decided;

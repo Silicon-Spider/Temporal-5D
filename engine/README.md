@@ -2309,6 +2309,13 @@ for a design review.** Rung 1: the estimate channel fits in no range - it stays
 dropped. Below 50 boards df-pn decides more roots (401 of 527) than brute force
 (392): keep df-pn there.
 
+A second run after E7's merge, the default ruleset with no option (the same rules),
+the machine busy 24% / 28% / 23%: (A) 76.7% PASS (51 / 353, 256), 40.7% FAIL
+(23 / 34, 22), 23.7% FAIL (7 / 16, 12), 0.0% FAIL; (C) 74.8%, 30.7%, 24.7%, 2.4% -
+df-pn 404 against brute force 394 below 50 boards; (B) at 228,153 nodes/s (a budget
+of 119 nodes) p90 cost/budget 2.46, 6.64, 15.9, 53.1 and p90 wall 0.91, 3.6, 9.4,
+31.6 ms - the same outcome on every count.
+
 What the decisions rest on, and how they move (information, the same machine):
 - **Most disproofs are a root with no checking action at all** (256 of 352 below 50
   boards; 22 of 33, 12 of 16 above): under `Checks` seeds "no mate by checks" is then
@@ -2340,7 +2347,8 @@ build/engine/t5d-scan6bp --per-position --record-list build/corpus.txt \
 
 (`build/corpus.txt` lists the 41 records, one path per line, relative to the
 repository root. The default ruleset is Q4 as ruled, R8; `--moves-after-shift` is
-accepted and changes nothing.) It takes about two minutes.
+accepted and changes nothing.) It took 45 s on the shared machine: (A) at most
+50 ms a root, (C) the same, (B) a few seconds.
 
 ## 5DFEN
 
