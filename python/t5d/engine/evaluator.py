@@ -1,10 +1,12 @@
-"""The evaluator side of the search's external-evaluator protocol (stage N4).
+"""The evaluator side of the search's external-evaluator protocol (stages N4, N5).
 
 The search (engine stage E6a, PUCT over the engine's own tree) evaluates leaves outside
 itself: it collects a batch of leaf positions, hands them to an evaluator, and takes back,
 for each leaf, **policy logits over that leaf's candidate moves** (spec §8.1: the pointer
-head scores generator-supplied moves only) and **a 51-bin value distribution** (§8.3, D3).
-This module is that evaluator, written against an abstract interface:
+head scores generator-supplied moves only), **the submit action's logit** where the leaf
+offers a legal submission (register D8, §8.2: read from a global register) and **a 51-bin
+value distribution** (§8.3, D3). This module is that evaluator, written against an abstract
+interface:
 
 * ``Evaluator`` - a callable from a list of positions (``convert.Position`` or
   ``PositionState``) to a list of ``Evaluation``, in the same order.
@@ -16,25 +18,32 @@ This module is that evaluator, written against an abstract interface:
 * ``SearchDriver`` - what the search side provides: ``collect`` a batch of leaves,
   ``deliver`` their evaluations, ``finished``. ``serve`` runs the loop and checks every
   evaluation against its leaf.
-* ``CStepDriver`` - **the adapter point** for E6a's C step API, whose signatures are not
-  settled: every method raises ``NotImplementedError`` and says what it must do.
+* ``CStepDriver`` - the ``SearchDriver`` over the engine's C step API (``t5d/capi_search.h``,
+  ``search.py``; stage N5): gathers a batch of leaves, converts each leaf's expansion into
+  the network's input, delivers move logits, submit logits and values; ``run_search`` runs
+  one search with it.
 
 **The contract an evaluation keeps** (``check_evaluation``): ``policy_logits`` has exactly
 one finite entry per candidate move of the leaf, in the leaf's move order - for a position
 converted by ``convert.to_position`` that is the engine's move order, so logit ``i`` scores
-the move ``t5d_game_apply_expanded(i)`` would play; ``value_logits`` has the network's
-``value_bins`` (51) finite entries, bins centred on ``-1 + 2k/50`` (``net/heads.py``), and
-``value_probs`` is their softmax. **The value is from the perspective of the player to
-move** (``h_present & 1``, the network's target convention, ``net/heads.py``) - the side
-whose candidate moves the policy scores. Promotions to different pieces tie under
-``policy_promotion="none"`` (literal §8.1; build-log spec issue 9(d)).
+the move ``t5d_game_apply_expanded(i)`` would play (and, for a search leaf, the move
+``leaf.expansion.moves[i]``); ``submit_logit`` is finite where the leaf offers a legal
+submission and NaN otherwise - not offered, or masked as illegal (C4); ``value_logits`` has
+the network's ``value_bins`` (51) finite entries, bins centred on ``-1 + 2k/50``
+(``net/heads.py``), and ``value_probs`` is their softmax. **The value is from the
+perspective of the acting player** (register D8: the player whose action is in progress
+until it submits - the present's colour except past the shift; the network's target
+convention, ``net/heads.py``, and the search's) - the side whose candidate moves the policy
+scores. Promotions to different pieces tie under ``policy_promotion="none"`` (literal §8.1;
+build-log spec issue 9(d)).
 """
 
 from __future__ import annotations
 
+import math
 import time
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Protocol, runtime_checkable
 
 import numpy as np
@@ -43,7 +52,10 @@ import torch
 from ..net.cache import CachedEvaluator, Epoch
 from ..net.model import NetOutput, T5DNet
 from ..net.state import PositionState, collate, relayout
-from .convert import Position
+from .capi import T5D_VALUE_LOGITS
+from .convert import Position, to_position
+from .errors import EngineInternalError
+from .search import LeafView, Search
 
 PositionLike = Position | PositionState
 
@@ -62,7 +74,11 @@ class Evaluation:
     """One leaf's evaluation (see the module docstring for the contract)."""
 
     policy_logits: np.ndarray  # (M,) float32: one per candidate move, in the leaf's move order
-    value_logits: np.ndarray  # (V,) float32: V = value_bins, the player to move's perspective
+    value_logits: np.ndarray  # (V,) float32: V = value_bins, the acting player's perspective
+    #: D8: the submit action's logit, read from a global register - finite where the leaf
+    #: offers a legal submit, NaN otherwise (not offered, or masked as illegal; NaN where it is
+    #: legal stands for "none given": the search's placeholder share).
+    submit_logit: float = math.nan
 
     @property
     def value_probs(self) -> np.ndarray:
@@ -78,13 +94,26 @@ class Evaluation:
         centres = (2.0 * np.arange(v) - (v - 1)) / (v - 1)
         return float((self.value_probs.astype(np.float64) * centres).sum())
 
+    def action_probs(self) -> np.ndarray:
+        """``(M + 1,)``: the decision's distribution - the candidate moves, then submit (D8) -
+        a softmax over the moves and, where its logit is finite, submit (0 otherwise)."""
+        z = np.append(self.policy_logits.astype(np.float64), self.submit_logit)
+        live = np.isfinite(z)
+        out = np.zeros(z.shape[0], dtype=np.float64)
+        if live.any():
+            e = np.exp(z[live] - z[live].max())
+            out[live] = e / e.sum()
+        return out.astype(np.float32)
+
     def policy_probs(self) -> np.ndarray:
-        """Softmax over the candidate moves (empty when there are none)."""
-        if self.policy_logits.size == 0:
-            return self.policy_logits.astype(np.float32)
-        z = self.policy_logits.astype(np.float64)
-        e = np.exp(z - z.max())
-        return (e / e.sum()).astype(np.float32)
+        """The candidate moves' probabilities (empty when there are none), normalised together
+        with submit where its logit is finite - so they and ``submit_prob`` sum to one."""
+        return self.action_probs()[:-1]
+
+    @property
+    def submit_prob(self) -> float:
+        """Submit's probability in the decision's distribution (0 where it has no logit)."""
+        return float(self.action_probs()[-1])
 
 
 @runtime_checkable
@@ -99,12 +128,20 @@ def _split(out: NetOutput, states: Sequence[PositionState]) -> list[Evaluation]:
     logits = out.policy_logits.detach().float().cpu()
     valid = out.move_valid.detach().cpu()
     values = out.value_logits.detach().float().cpu()
+    submit = out.submit_logits.detach().float().cpu()
     results = []
     for i, state in enumerate(states):
         m = int(state.moves.shape[0])
         if int(valid[i].sum()) != m or (m and not bool(valid[i, :m].all())):
             raise RuntimeError(f"position {i}: the batch's valid moves are not its {m} candidate moves")
-        results.append(Evaluation(policy_logits=logits[i, :m].numpy().copy(), value_logits=values[i].numpy().copy()))
+        s = float(submit[i])
+        results.append(
+            Evaluation(
+                policy_logits=logits[i, :m].numpy().copy(),
+                value_logits=values[i].numpy().copy(),
+                submit_logit=s if math.isfinite(s) else math.nan,  # masked (-inf) or absent: no logit
+            )
+        )
     return results
 
 
@@ -207,7 +244,9 @@ class SearchDriver(Protocol):
 
 
 def check_evaluation(leaf: Leaf, evaluation: Evaluation, value_bins: int | None = None) -> None:
-    """Raise ``ValueError`` unless ``evaluation`` keeps the contract for ``leaf``."""
+    """Raise ``ValueError`` unless ``evaluation`` keeps the contract for ``leaf``: the move
+    logits as before; the submit logit (D8) never infinite, and NaN unless the leaf offers a
+    legal submit (where NaN means "none given")."""
     m = move_count(leaf.position)
     pl, vl = evaluation.policy_logits, evaluation.value_logits
     if pl.shape != (m,):
@@ -218,6 +257,12 @@ def check_evaluation(leaf: Leaf, evaluation: Evaluation, value_bins: int | None 
         raise ValueError(f"leaf {leaf.id}: value logits of shape {vl.shape}, expected ({value_bins},)")
     if not np.all(np.isfinite(vl)):
         raise ValueError(f"leaf {leaf.id}: a value logit is not finite")
+    s = float(evaluation.submit_logit)
+    if math.isinf(s):
+        raise ValueError(f"leaf {leaf.id}: the submit logit is infinite (masked or absent is NaN)")
+    state = state_of(leaf.position)
+    if not math.isnan(s) and not (state.submit_possible and state.submit_legal):
+        raise ValueError(f"leaf {leaf.id}: a submit logit for a leaf that offers no legal submit")
 
 
 @dataclass
@@ -239,7 +284,9 @@ def serve(
 ) -> ServeStats:
     """Run one search's evaluation loop: collect up to ``batch_size`` leaves, evaluate them
     in one call, check each evaluation against its leaf (``check_evaluation``), deliver;
-    until the driver is finished (or ``max_rounds``)."""
+    until the driver is finished (or ``max_rounds``). If evaluating or checking a batch fails,
+    a driver with an ``abandon`` method is told before the exception leaves (the step API's
+    virtual loss is released)."""
     if batch_size < 1:
         raise ValueError("batch_size must be positive")
     stats = ServeStats()
@@ -253,14 +300,20 @@ def serve(
             if driver.finished():
                 break
             raise RuntimeError("the driver returned no leaves but is not finished (a synchronous search always has one)")
-        if len(leaves) > batch_size:
-            raise RuntimeError(f"the driver returned {len(leaves)} leaves for a batch of {batch_size}")
-        evaluations = evaluator([leaf.position for leaf in leaves])
+        try:
+            if len(leaves) > batch_size:
+                raise RuntimeError(f"the driver returned {len(leaves)} leaves for a batch of {batch_size}")
+            evaluations = evaluator([leaf.position for leaf in leaves])
+            if len(evaluations) != len(leaves):
+                raise RuntimeError(f"the evaluator returned {len(evaluations)} evaluations for {len(leaves)} leaves")
+            for leaf, ev in zip(leaves, evaluations, strict=True):
+                check_evaluation(leaf, ev, value_bins)
+        except BaseException:
+            abandon = getattr(driver, "abandon", None)
+            if abandon is not None:
+                abandon()
+            raise
         t2 = time.perf_counter()
-        if len(evaluations) != len(leaves):
-            raise RuntimeError(f"the evaluator returned {len(evaluations)} evaluations for {len(leaves)} leaves")
-        for leaf, ev in zip(leaves, evaluations, strict=True):
-            check_evaluation(leaf, ev, value_bins)
         driver.deliver([(leaf.id, ev) for leaf, ev in zip(leaves, evaluations, strict=True)])
         t3 = time.perf_counter()
         stats.rounds += 1
@@ -273,55 +326,147 @@ def serve(
     return stats
 
 
-# =============================================================================================
-# ADAPTER POINT: the search's C step API (engine stage E6a).
-#
-# E6a is adding to the engine's C API a step interface for an external evaluator: collect
-# a batch of leaf positions; accept policy logits over each leaf's candidate moves and a
-# 51-bin value distribution. Its signatures are not settled, so nothing below guesses them.
-# When they land, implement CStepDriver against them (in this file, declaring the new
-# functions in capi.py's _SIGNATURES):
-#
-#  * __init__: hold the search handle (and the network's register counts, for to_position).
-#  * collect(n): ask the step API for up to n leaves. For each leaf obtain its expansion -
-#    if the API hands out a t5d_expansion per leaf, copy it at once with
-#    Expansion.from_c(...) before the next call (the pointer lifetime rule of t5d/capi.h),
-#    then convert.to_position(...). The leaf's candidate moves MUST be the moves the API
-#    will match the logits against, in the same order: to_position keeps the expansion's
-#    order (logit i = expansion move i). If the API scores a different move list (legal
-#    moves only, or whole actions under D2's other arm), map the logits here, explicitly.
-#  * deliver(results): pass, per leaf id, policy_logits (float32, M) and the value as the API
-#    wants it - Evaluation.value_probs (51 float32 probabilities summing to 1) or
-#    value_logits. The value is the player to move's (module docstring).
-#  * finished(): whether the search is done (budget spent, or terminal root).
-#
-# A state whose present has shifted inside an unsubmitted action cannot be converted
-# (convert.PresentMismatch); the step API should hand out leaves at action boundaries, or
-# mid-action before the shift (the ply split, D2). Under the default rules (Q4, ruled R8)
-# search meets such states - the mover may go on moving until they submit - and register D8
-# gives them to the network through a global acting-player input and a submit logit
-# (the expansion's acting_player / submit_possible / submit_legal): stage N5.
-# =============================================================================================
+# --- the C step API (engine stage E6a; stage N5) ------------------------------------------------
 
 
 class CStepDriver:
-    """**Adapter point** for E6a's C step API (see the comment above): not implemented until
-    the API's signatures are settled."""
+    """The ``SearchDriver`` over the engine's C step API (``t5d/capi_search.h``; ``search.py``):
+    one search, run for ``playouts`` simulations from now - the loop of the engine's own
+    ``Search::run`` (``src/mcts.cpp``), with Python as the evaluator.
 
-    def __init__(self, *args, **kwargs) -> None:
-        raise NotImplementedError(
-            "CStepDriver waits on the search's C step API (engine stage E6a): implement collect/deliver/finished against "
-            "its signatures - see the ADAPTER POINT comment in t5d/engine/evaluator.py"
-        )
+    ``collect(n)``: stop when the playouts are spent or the root needs no evaluation
+    (terminal or solved); otherwise ``t5d_search_gather`` up to ``n`` leaves within the
+    remaining playouts - a gather that completed visits without the evaluator (terminals,
+    cache hits) and wants no evaluation is followed by another; one that made no progress
+    ends the run (exhausted). Each leaf's expansion is copied out at once
+    (``Expansion.from_c``) and converted (``convert.to_position``) with the network's register
+    counts: its candidate moves are the leaf's, in the leaf's order, so logit ``i`` scores
+    ``leaf.expansion.moves[i]``; its acting player and submit flags are the leaf's (D8 - under
+    the whole-turn split no leaf offers submit: no end-of-turn token, spec issue 92).
 
-    def collect(self, max_leaves: int) -> Sequence[Leaf]:  # pragma: no cover - adapter point
-        raise NotImplementedError
+    ``deliver(results)``: every leaf of the batch, by leaf id: the move logits concatenated
+    in leaf order, one submit logit per leaf - the evaluation's where the leaf offers a legal
+    submit, NaN elsewhere (not offered; or illegal, which the search prunes) - and the 51
+    value logits (``T5D_VALUE_LOGITS``), from the leaf's acting player. A refused delivery
+    raises the engine's error; the engine has abandoned the batch.
 
-    def deliver(self, results: Sequence[tuple[int, Evaluation]]) -> None:  # pragma: no cover - adapter point
-        raise NotImplementedError
+    The search's ``expand`` options must give every board's features (``"all"``): the
+    network's input is the full history. Errors from the engine raise as exceptions
+    (``errors.py``); ``abandon`` releases a waiting batch (``run_search`` and ``serve`` call it
+    when evaluation fails)."""
 
-    def finished(self) -> bool:  # pragma: no cover - adapter point
-        raise NotImplementedError
+    def __init__(self, search: Search, *, playouts: int, regs_per_board: int = 2, global_regs: int = 16) -> None:
+        if playouts < 0:
+            raise ValueError("playouts must not be negative")
+        if search.square_features != "all":
+            raise ValueError(f"the network needs every board's features: the search expands with {search.square_features!r} features")
+        self.search = search
+        self.playouts = int(playouts)
+        self.regs_per_board = int(regs_per_board)
+        self.global_regs = int(global_regs)
+        self._p0 = search.info().playouts
+        self._waiting: list[LeafView] | None = None
+        self._done = False
+        #: Why the run stopped: "playouts", "finished" (the root needs no evaluation) or
+        #: "exhausted" (no simulation could be made); None while it runs.
+        self.stop: str | None = None
+        self.gathers = 0
+        self.convert_seconds = 0.0
+
+    def _finish(self, why: str) -> list[Leaf]:
+        self._done, self.stop = True, why
+        return []
+
+    def collect(self, max_leaves: int) -> list[Leaf]:
+        if self._waiting is not None:
+            raise RuntimeError("a batch is waiting for its evaluations: deliver or abandon it first")
+        while True:
+            info = self.search.info()
+            played = info.playouts - self._p0
+            if played >= self.playouts:
+                return self._finish("playouts")
+            if info.root_finished:
+                return self._finish("finished")
+            n = self.search.gather(max_leaves, self.playouts - played)
+            self.gathers += 1
+            if n == 0:
+                if self.search.info().playouts == info.playouts:
+                    return self._finish("exhausted")
+                continue
+            t0 = time.perf_counter()
+            try:
+                views = [self.search.leaf_view(i) for i in range(n)]
+                leaves = [Leaf(v.index, self._position(v)) for v in views]
+            except BaseException:
+                self.search.abandon()
+                raise
+            self.convert_seconds += time.perf_counter() - t0
+            self._waiting = views
+            return leaves
+
+    def _position(self, v: LeafView) -> Position:
+        x = v.expansion
+        if v.acting_player != x.acting_player:
+            raise EngineInternalError(f"leaf {v.index}: its acting player {v.acting_player} is not its expansion's {x.acting_player}")
+        if (v.submit_possible, v.submit_legal) != (x.submit_possible, x.submit_legal):
+            # The whole-turn split offers no submit action (the leaf says so; spec issue 92).
+            x = replace(x, submit_possible=v.submit_possible, submit_legal=v.submit_legal)
+        return to_position(x, regs_per_board=self.regs_per_board, global_regs=self.global_regs, scope=False)
+
+    def deliver(self, results: Sequence[tuple[int, Evaluation]]) -> None:
+        views = self._waiting
+        if views is None:
+            raise RuntimeError("no batch is waiting")
+        by_id = dict(results)
+        if sorted(by_id) != list(range(len(views))) or len(results) != len(views):
+            self.abandon()
+            raise RuntimeError(f"deliver: evaluations for leaves {sorted(by_id)}, the batch is leaves 0..{len(views) - 1}")
+        evs = [by_id[i] for i in range(len(views))]
+        logits = np.concatenate([np.asarray(ev.policy_logits, dtype=np.float32).reshape(-1) for ev in evs] + [np.zeros(0, np.float32)])
+        values = np.stack([np.asarray(ev.value_logits, dtype=np.float32) for ev in evs])
+        offered = [v.submit_possible and v.submit_legal for v in views]
+        submit = np.array([ev.submit_logit if ok else math.nan for ev, ok in zip(evs, offered, strict=True)], dtype=np.float32)
+        self._waiting = None  # delivered or refused, the engine no longer holds the batch
+        self.search.deliver(logits, values, submit_logits=submit, value_kind=T5D_VALUE_LOGITS)
+
+    def abandon(self) -> None:
+        """Release a waiting batch (nothing backed up)."""
+        if self._waiting is not None:
+            self._waiting = None
+            self.search.abandon()
+
+    def finished(self) -> bool:
+        return self._done
+
+
+def run_search(
+    search: Search,
+    evaluator: Evaluator,
+    *,
+    playouts: int,
+    batch_size: int = 8,
+    regs_per_board: int = 2,
+    global_regs: int = 16,
+) -> tuple[ServeStats, CStepDriver]:
+    """Run ``playouts`` simulations of ``search`` with ``evaluator`` through the step API
+    (``CStepDriver`` and ``serve``, at most ``batch_size`` leaves per evaluation): the loop's
+    statistics and the driver (its ``stop`` says why it ended)."""
+    driver = CStepDriver(search, playouts=playouts, regs_per_board=regs_per_board, global_regs=global_regs)
+    stats = serve(driver, evaluator, batch_size=batch_size)
+    return stats, driver
+
+
+class UniformEvaluator:
+    """Logits 0 for every move, no submit logit (the search's placeholder share), the value 0
+    (every bin's mass on the centre bin) - the engine's built-in ``uniform`` evaluator, in
+    Python: a search driven by it through the step API is the engine's own run, bit for bit."""
+
+    def __init__(self, value_bins: int = 51) -> None:
+        self.value_logits = np.full(value_bins, -1.0e4, dtype=np.float32)
+        self.value_logits[value_bins // 2] = 0.0
+
+    def __call__(self, positions: Sequence[PositionLike]) -> list[Evaluation]:
+        return [Evaluation(np.zeros(move_count(p), dtype=np.float32), self.value_logits.copy()) for p in positions]
 
 
 __all__ = [
@@ -333,7 +478,9 @@ __all__ = [
     "NetworkEvaluator",
     "SearchDriver",
     "ServeStats",
+    "UniformEvaluator",
     "check_evaluation",
+    "run_search",
     "serve",
     "state_of",
 ]

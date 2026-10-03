@@ -1,8 +1,10 @@
-"""The ctypes layer over the engine's C API (``engine/include/t5d/capi.h`` and ``records.h``).
+"""The ctypes layer over the engine's C API (``engine/include/t5d/capi.h``, ``records.h`` and
+``capi_search.h`` - the main search's step API, engine stage E6a).
 
 This module mirrors the C declarations exactly - structures, constants, signatures - and
-finds and loads the shared library. Nothing here owns engine memory; ``game.py`` wraps
-the handles, and ``expansion.py`` copies an expansion's arrays out before the next call.
+finds and loads the shared library. Nothing here owns engine memory; ``game.py`` and
+``search.py`` wrap the handles, and ``expansion.py`` copies an expansion's arrays out before
+the next call.
 
 **Finding the library** (``find_library``), first match wins:
 
@@ -21,8 +23,10 @@ lays it out as the C compiler does (natural alignment, no packing); ``_check_lay
 asserts the sizes the headers fix (``t5d_move`` is 32 bytes, no padding). ``MOVE_DTYPE`` is
 the same record as a numpy structured dtype, for copying a move array in one step. At load,
 ``Library`` checks every mirrored struct's size and every field's offset against the
-library's own (``t5d_layout``): a binding and a library of different stages refuse each
-other (``EngineNotFoundError``) rather than let the library write past a Python buffer.
+library's own - ``t5d/capi.h``'s against ``t5d_layout``, ``t5d/capi_search.h``'s against
+``t5d_search_layout``: a binding and a library of different stages refuse each other
+(``EngineNotFoundError``) rather than let the library write past a Python buffer. A library
+without the search's step API is refused the same way (it lacks functions).
 """
 
 from __future__ import annotations
@@ -31,7 +35,7 @@ import ctypes
 import os
 import sys
 import threading
-from ctypes import POINTER, c_char, c_char_p, c_int8, c_int32, c_size_t, c_uint8, c_uint32, c_uint64, c_void_p
+from ctypes import POINTER, c_char, c_char_p, c_double, c_float, c_int8, c_int32, c_size_t, c_uint8, c_uint32, c_uint64, c_void_p
 from pathlib import Path
 
 import numpy as np
@@ -224,6 +228,153 @@ class CExpansion(ctypes.Structure):
     ]
 
 
+# ---- the search's step API (t5d/capi_search.h; engine stage E6a) ------------------------------
+
+T5D_VALUE_BINS = 51
+T5D_SPLIT_BOARD_MOVE, T5D_SPLIT_WHOLE_TURN = 0, 1
+T5D_ACTION_PRIOR_SUM, T5D_ACTION_PRIOR_MEAN = 0, 1
+T5D_NODE_KEY_STATE, T5D_NODE_KEY_STATE_AND_ORIGINS = 0, 1
+T5D_FINAL_VISITS, T5D_FINAL_LCB = 0, 1
+T5D_VALUE_PROBABILITIES, T5D_VALUE_LOGITS = 0, 1
+T5D_EVALUATOR_UNIFORM, T5D_EVALUATOR_RANDOM, T5D_EVALUATOR_MATERIAL = 0, 1, 2
+T5D_LEGALITY_LEGAL, T5D_LEGALITY_ILLEGAL, T5D_LEGALITY_UNKNOWN = 0, 1, 2
+T5D_CHOICE_PROVEN_WIN, T5D_CHOICE_SECURE_CHILD, T5D_CHOICE_LCB, T5D_CHOICE_VISITS, T5D_CHOICE_ALL_LOST = 0, 1, 2, 3, 4
+T5D_STOP_PLAYOUTS, T5D_STOP_EVALUATIONS, T5D_STOP_FINISHED, T5D_STOP_EXHAUSTED = 0, 1, 2, 3
+T5D_STOP_NODES, T5D_STOP_MEMORY, T5D_STOP_DEADLINE = 4, 5, 6
+#: No limit, for the search's budgets (UINT64_MAX).
+T5D_NO_LIMIT = 2**64 - 1
+
+
+class CSearchParams(ctypes.Structure):
+    """``t5d_search_params`` (``SearchParams``, field for field): fill with
+    ``t5d_search_params_default``. ``expand`` - a struct of ``t5d/capi.h`` - is last."""
+
+    _fields_ = [
+        ("split", c_int32),
+        ("action_prior", c_int32),
+        ("max_actions", c_uint64),
+        ("listing_nodes", c_uint64),
+        ("submit_share", c_double),
+        ("legal_moves_only", c_int32),
+        ("legality_checks", c_uint64),
+        ("legality_nodes", c_uint64),
+        ("unknown_prior_scale", c_double),
+        ("verify_unknown", c_int32),
+        ("verify_checks", c_uint64),
+        ("verify_nodes", c_uint64),
+        ("cpuct", c_double),
+        ("widening", c_int32),
+        ("widening_alpha", c_double),
+        ("widening_scale", c_double),
+        ("widening_min", c_double),
+        ("fpu_reduction", c_double),
+        ("root_noise", c_int32),
+        ("dirichlet_alpha", c_double),
+        ("dirichlet_epsilon", c_double),
+        ("policy_temperature", c_double),
+        ("variance_scaled_cpuct", c_int32),
+        ("cpuct_variance_scale", c_double),
+        ("variance_reference", c_double),
+        ("variance_prior_weight", c_double),
+        ("cpuct_scale_min", c_double),
+        ("cpuct_scale_max", c_double),
+        ("uncertainty_weighted_backup", c_int32),
+        ("variance_bonus", c_int32),
+        ("variance_bonus_scale", c_double),
+        ("variance_bonus_cap", c_double),
+        ("graph", c_int32),
+        ("node_key", c_int32),
+        ("residual_epsilon", c_double),
+        ("proof_channel", c_int32),  # H41: off by rule until the gate passes and the channel is signed off
+        ("solved_visit_cap", c_uint32),
+        ("final_rule", c_int32),
+        ("lcb_floor", c_double),
+        ("lcb_z", c_double),
+        ("lcb_categorical_weight", c_double),
+        ("secure_child_a", c_double),
+        ("batch_size", c_uint32),
+        ("virtual_loss", c_double),
+        ("synchronous", c_int32),
+        ("seed", c_uint64),
+        ("mate_nodes", c_uint64),
+        ("mate_bytes", c_uint64),
+        ("turn_cap_turns", c_int32),
+        ("turn_cap_boards", c_int32),
+        ("eval_cache_entries", c_uint64),
+        ("eval_cache_bytes", c_uint64),
+        ("expand", ExpandOptions),
+    ]
+
+
+class CLeaf(ctypes.Structure):
+    """``t5d_leaf``: one leaf of a gathered batch - its pointers (``legality``, the expansion's
+    arrays) valid until the next gather, deliver, abandon or destroy on the search."""
+
+    _fields_ = [
+        ("key", c_uint64),
+        ("epoch", c_uint64),
+        ("acting_player", c_int32),  # D8: whose action, until it submits - the value's perspective
+        ("submit_possible", c_int32),  # D8: submitting is an action here (board-move split)
+        ("submit_legal", c_int32),  # ... and legal (C4, exact)
+        ("legality", POINTER(c_uint8)),  # per move: T5D_LEGALITY_LEGAL or _UNKNOWN; NULL: none made
+        ("expansion", CExpansion),  # logit i scores expansion.moves[i]; last
+    ]
+
+
+class CSearchSummary(ctypes.Structure):
+    """``t5d_search_summary``."""
+
+    _fields_ = [
+        ("playouts", c_uint64),
+        ("evaluations", c_uint64),
+        ("cache_hits", c_uint64),
+        ("nodes", c_uint64),
+        ("nodes_created", c_uint64),
+        ("transposition_hits", c_uint64),
+        ("checkmates", c_uint64),
+        ("stalemates", c_uint64),
+        ("turn_caps", c_uint64),
+        ("unknown_verdicts", c_uint64),
+        ("unknown_edges", c_uint64),
+        ("verified_illegal", c_uint64),
+        ("root_turn_start", c_int32),
+        ("root_terminal", c_int32),
+        ("root_solved", c_int32),
+        ("root_lo", c_int32),
+        ("root_hi", c_int32),
+        ("root_visits", c_uint32),
+        ("root_q", c_double),
+        ("root_children", c_uint64),
+        ("epoch", c_uint64),
+        ("memory_bytes", c_uint64),
+        ("cache_entries", c_uint64),
+        ("cache_bytes", c_uint64),
+        ("cache_purged", c_uint64),
+        ("last_stop", c_int32),
+    ]
+
+
+class CSearchLimits(ctypes.Structure):
+    """``t5d_search_limits``."""
+
+    _fields_ = [("playouts", c_uint64), ("evaluations", c_uint64), ("nodes", c_uint64), ("bytes", c_uint64), ("seconds", c_double)]
+
+
+class CRootChild(ctypes.Structure):
+    """``t5d_root_child``: a root child's statistics, from the root player's view."""
+
+    _fields_ = [
+        ("visits", c_uint32),
+        ("submit", c_int32),
+        ("legality", c_int32),
+        ("lo", c_int32),
+        ("hi", c_int32),
+        ("prior", c_double),
+        ("q", c_double),
+        ("move_count", c_size_t),
+    ]
+
+
 def _check_layouts() -> None:
     if ctypes.sizeof(MoveRecord) != 32 or MOVE_DTYPE.itemsize != 32:
         raise ImportError("t5d_move must be 32 bytes (t5d/records.h)")
@@ -232,11 +383,14 @@ def _check_layouts() -> None:
             raise ImportError(f"t5d_move.{name}: the ctypes and numpy layouts disagree")
     if ctypes.sizeof(ExpandOptions) != 12:
         raise ImportError("t5d_expand_options must be 12 bytes (three 32-bit fields)")
+    for struct, last in ((CSearchParams, "expand"), (CLeaf, "expansion")):
+        if struct._fields_[-1][0] != last:
+            raise ImportError(f"{struct.__name__}: the embedded struct of t5d/capi.h must be the last member (t5d/capi_search.h)")
 
 
 _check_layouts()
 
-#: Every struct this module mirrors, by its C name (``t5d_layout``'s ``type``).
+#: Every struct of ``t5d/capi.h`` this module mirrors, by its C name (``t5d_layout``'s ``type``).
 MIRRORED_STRUCTS: dict[str, type[ctypes.Structure]] = {
     "t5d_fingerprint": Fingerprint,
     "t5d_info": StateInfo,
@@ -246,33 +400,48 @@ MIRRORED_STRUCTS: dict[str, type[ctypes.Structure]] = {
     "t5d_expansion": CExpansion,
 }
 
+#: Every struct of ``t5d/capi_search.h`` this module mirrors (``t5d_search_layout``'s ``type``).
+MIRRORED_SEARCH_STRUCTS: dict[str, type[ctypes.Structure]] = {
+    "t5d_search_params": CSearchParams,
+    "t5d_leaf": CLeaf,
+    "t5d_search_summary": CSearchSummary,
+    "t5d_search_limits": CSearchLimits,
+    "t5d_root_child": CRootChild,
+}
 
-def layout_mismatches(lib: Library) -> list[str]:
-    """Where the mirrored structs differ from the library's own (``t5d_layout``): each
-    struct's size and each field's offset - ``"t5d_expansion: size 288 here, 272 in the
-    library"``. Empty when they agree."""
+
+def _mismatches(layout, structs: dict[str, type[ctypes.Structure]]) -> list[str]:
     out: list[str] = []
     value = c_size_t()
-    for cname, struct in MIRRORED_STRUCTS.items():
+    for cname, struct in structs.items():
         ctype = cname.encode("ascii")
-        if lib.fn.t5d_layout(ctype, None, ctypes.byref(value)) != T5D_OK:
+        if layout(ctype, None, ctypes.byref(value)) != T5D_OK:
             out.append(f"{cname}: unknown to the library")
             continue
         if value.value != ctypes.sizeof(struct):
             out.append(f"{cname}: size {ctypes.sizeof(struct)} here, {value.value} in the library")
         for name, _ in struct._fields_:
             offset = getattr(struct, name).offset
-            if lib.fn.t5d_layout(ctype, name.encode("ascii"), ctypes.byref(value)) != T5D_OK:
+            if layout(ctype, name.encode("ascii"), ctypes.byref(value)) != T5D_OK:
                 out.append(f"{cname}.{name}: not in the library")
             elif value.value != offset:
                 out.append(f"{cname}.{name}: offset {offset} here, {value.value} in the library")
     return out
 
 
+def layout_mismatches(lib: Library) -> list[str]:
+    """Where the mirrored structs differ from the library's own - ``t5d/capi.h``'s against
+    ``t5d_layout``, ``t5d/capi_search.h``'s against ``t5d_search_layout``: each struct's size
+    and each field's offset - ``"t5d_expansion: size 288 here, 272 in the library"``. Empty
+    when they agree."""
+    return _mismatches(lib.fn.t5d_layout, MIRRORED_STRUCTS) + _mismatches(lib.fn.t5d_search_layout, MIRRORED_SEARCH_STRUCTS)
+
+
 # ---- the library ------------------------------------------------------------------------------
 
 _STATE = c_void_p  # t5d_state*
 _GAME = c_void_p  # t5d_game*
+_SEARCH = c_void_p  # t5d_search*
 _ERR = POINTER(c_void_p)  # char** error (a library string, freed with t5d_free)
 
 #: name -> (restype, argtypes). Every function of capi.h.
@@ -311,6 +480,32 @@ _SIGNATURES: dict[str, tuple[object, list[object]]] = {
     "t5d_game_set_legality": (c_int32, [_GAME, c_int32, _ERR]),
     "t5d_game_expand": (c_int32, [_GAME, POINTER(ExpandOptions), POINTER(CExpansion), _ERR]),
     "t5d_game_state": (c_int32, [_GAME, POINTER(_STATE)]),
+    # t5d/capi_search.h (engine stage E6a): every function
+    "t5d_search_params_default": (None, [POINTER(CSearchParams)]),
+    "t5d_search_new": (c_int32, [_GAME, c_int32, POINTER(CSearchParams), POINTER(_SEARCH), _ERR]),
+    "t5d_search_new_sharing": (c_int32, [_SEARCH, _GAME, c_int32, POINTER(CSearchParams), POINTER(_SEARCH), _ERR]),
+    "t5d_search_destroy": (None, [_SEARCH]),
+    "t5d_search_gather": (c_int32, [_SEARCH, c_size_t, c_uint64, POINTER(c_size_t), _ERR]),
+    "t5d_search_leaf": (c_int32, [_SEARCH, c_size_t, POINTER(CLeaf), _ERR]),
+    "t5d_search_leaf_state": (c_int32, [_SEARCH, c_size_t, POINTER(_STATE), _ERR]),
+    "t5d_search_deliver": (
+        c_int32,
+        [_SEARCH, POINTER(c_float), c_size_t, POINTER(c_float), c_size_t, POINTER(c_float), c_size_t, c_int32, _ERR],
+    ),
+    "t5d_search_abandon": (c_int32, [_SEARCH]),
+    "t5d_search_run": (c_int32, [_SEARCH, c_int32, c_uint64, c_uint64, _ERR]),
+    "t5d_search_run_limits": (c_int32, [_SEARCH, c_int32, c_uint64, POINTER(CSearchLimits), POINTER(c_int32), _ERR]),
+    "t5d_search_info": (c_int32, [_SEARCH, POINTER(CSearchSummary)]),
+    "t5d_search_child": (c_int32, [_SEARCH, c_size_t, POINTER(CRootChild), POINTER(MoveRecord), c_size_t, _ERR]),
+    "t5d_search_choose": (c_int32, [_SEARCH, POINTER(c_size_t), POINTER(c_int32), _ERR]),
+    "t5d_search_choose_by_visits": (c_int32, [_SEARCH, c_double, c_double, POINTER(c_size_t), _ERR]),
+    "t5d_search_verify": (c_int32, [_SEARCH, c_size_t, POINTER(c_int32), _ERR]),
+    "t5d_search_advance": (c_int32, [_SEARCH, c_size_t, _ERR]),
+    "t5d_search_advance_action": (c_int32, [_SEARCH, POINTER(MoveRecord), c_size_t, _ERR]),
+    "t5d_search_root_game": (c_int32, [_SEARCH, POINTER(_GAME), _ERR]),
+    "t5d_search_set_epoch": (c_int32, [_SEARCH, c_uint64, _ERR]),
+    "t5d_search_digest": (c_int32, [_SEARCH, POINTER(c_uint64)]),
+    "t5d_search_layout": (c_int32, [c_char_p, c_char_p, POINTER(c_size_t)]),
 }
 
 
@@ -460,7 +655,14 @@ def char_array(strings: list[str]) -> ctypes.Array:
 __all__ = [
     "BUILT_RELATIONS",
     "CExpansion",
+    "CLeaf",
+    "CRootChild",
+    "CSearchLimits",
+    "CSearchParams",
+    "CSearchSummary",
     "ENV_VAR",
+    "MIRRORED_SEARCH_STRUCTS",
+    "MIRRORED_STRUCTS",
     "ExpandOptions",
     "Fingerprint",
     "GameSummary",
@@ -472,6 +674,7 @@ __all__ = [
     "char_array",
     "default_build_dir",
     "find_library",
+    "layout_mismatches",
     "library_available",
     "load_library",
     "repository_root",
