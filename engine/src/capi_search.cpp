@@ -3,7 +3,10 @@
 
 #include "t5d/capi_search.h"
 
+#include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstddef>
 #include <cstdlib>
 #include <cstring>
 #include <exception>
@@ -102,7 +105,7 @@ SearchParams params_from(const t5d_search_params* c) {
   }
   p.max_actions = static_cast<std::size_t>(c->max_actions);
   p.listing_nodes = c->listing_nodes;
-  p.submit_logit = c->submit_logit;
+  p.submit_share = c->submit_share;
   p.legal_moves_only = boolean(c->legal_moves_only, "legal_moves_only");
   p.legality = legality_of(c->legality_checks, c->legality_nodes);
   p.unknown_prior_scale = c->unknown_prior_scale;
@@ -243,9 +246,137 @@ std::array<float, t5d::mcts::kValueBins> value_from(const float* v, int32_t kind
   return out;
 }
 
+// t5d_search_layout's table: each struct's size (field nullptr) and every
+// member's offset, as this library was compiled (t5d_layout's contract).
+struct LayoutEntry {
+  const char* type;
+  const char* field;
+  size_t value;
+};
+
+#define T5D_SEARCH_SIZE(T) LayoutEntry{#T, nullptr, sizeof(T)}
+#define T5D_SEARCH_AT(T, F) LayoutEntry{#T, #F, offsetof(T, F)}
+
+constexpr LayoutEntry kLayout[] = {
+    T5D_SEARCH_SIZE(t5d_search_params),
+    T5D_SEARCH_AT(t5d_search_params, split),
+    T5D_SEARCH_AT(t5d_search_params, action_prior),
+    T5D_SEARCH_AT(t5d_search_params, max_actions),
+    T5D_SEARCH_AT(t5d_search_params, listing_nodes),
+    T5D_SEARCH_AT(t5d_search_params, submit_share),
+    T5D_SEARCH_AT(t5d_search_params, legal_moves_only),
+    T5D_SEARCH_AT(t5d_search_params, legality_checks),
+    T5D_SEARCH_AT(t5d_search_params, legality_nodes),
+    T5D_SEARCH_AT(t5d_search_params, unknown_prior_scale),
+    T5D_SEARCH_AT(t5d_search_params, verify_unknown),
+    T5D_SEARCH_AT(t5d_search_params, verify_checks),
+    T5D_SEARCH_AT(t5d_search_params, verify_nodes),
+    T5D_SEARCH_AT(t5d_search_params, cpuct),
+    T5D_SEARCH_AT(t5d_search_params, widening),
+    T5D_SEARCH_AT(t5d_search_params, widening_alpha),
+    T5D_SEARCH_AT(t5d_search_params, widening_scale),
+    T5D_SEARCH_AT(t5d_search_params, widening_min),
+    T5D_SEARCH_AT(t5d_search_params, fpu_reduction),
+    T5D_SEARCH_AT(t5d_search_params, root_noise),
+    T5D_SEARCH_AT(t5d_search_params, dirichlet_alpha),
+    T5D_SEARCH_AT(t5d_search_params, dirichlet_epsilon),
+    T5D_SEARCH_AT(t5d_search_params, policy_temperature),
+    T5D_SEARCH_AT(t5d_search_params, variance_scaled_cpuct),
+    T5D_SEARCH_AT(t5d_search_params, cpuct_variance_scale),
+    T5D_SEARCH_AT(t5d_search_params, variance_reference),
+    T5D_SEARCH_AT(t5d_search_params, variance_prior_weight),
+    T5D_SEARCH_AT(t5d_search_params, cpuct_scale_min),
+    T5D_SEARCH_AT(t5d_search_params, cpuct_scale_max),
+    T5D_SEARCH_AT(t5d_search_params, uncertainty_weighted_backup),
+    T5D_SEARCH_AT(t5d_search_params, variance_bonus),
+    T5D_SEARCH_AT(t5d_search_params, variance_bonus_scale),
+    T5D_SEARCH_AT(t5d_search_params, variance_bonus_cap),
+    T5D_SEARCH_AT(t5d_search_params, graph),
+    T5D_SEARCH_AT(t5d_search_params, node_key),
+    T5D_SEARCH_AT(t5d_search_params, residual_epsilon),
+    T5D_SEARCH_AT(t5d_search_params, solver),
+    T5D_SEARCH_AT(t5d_search_params, solved_visit_cap),
+    T5D_SEARCH_AT(t5d_search_params, final_rule),
+    T5D_SEARCH_AT(t5d_search_params, lcb_floor),
+    T5D_SEARCH_AT(t5d_search_params, lcb_z),
+    T5D_SEARCH_AT(t5d_search_params, lcb_categorical_weight),
+    T5D_SEARCH_AT(t5d_search_params, secure_child_a),
+    T5D_SEARCH_AT(t5d_search_params, batch_size),
+    T5D_SEARCH_AT(t5d_search_params, virtual_loss),
+    T5D_SEARCH_AT(t5d_search_params, synchronous),
+    T5D_SEARCH_AT(t5d_search_params, seed),
+    T5D_SEARCH_AT(t5d_search_params, expand),
+    T5D_SEARCH_AT(t5d_search_params, mate_nodes),
+    T5D_SEARCH_AT(t5d_search_params, mate_bytes),
+    T5D_SEARCH_AT(t5d_search_params, turn_cap_turns),
+    T5D_SEARCH_AT(t5d_search_params, turn_cap_boards),
+    T5D_SEARCH_AT(t5d_search_params, eval_cache_entries),
+    T5D_SEARCH_AT(t5d_search_params, eval_cache_bytes),
+
+    T5D_SEARCH_SIZE(t5d_leaf),
+    T5D_SEARCH_AT(t5d_leaf, key),
+    T5D_SEARCH_AT(t5d_leaf, epoch),
+    T5D_SEARCH_AT(t5d_leaf, acting_player),
+    T5D_SEARCH_AT(t5d_leaf, turn_start),
+    T5D_SEARCH_AT(t5d_leaf, submit_possible),
+    T5D_SEARCH_AT(t5d_leaf, submit_legal),
+    T5D_SEARCH_AT(t5d_leaf, expansion),
+    T5D_SEARCH_AT(t5d_leaf, legality),
+
+    T5D_SEARCH_SIZE(t5d_search_summary),
+    T5D_SEARCH_AT(t5d_search_summary, playouts),
+    T5D_SEARCH_AT(t5d_search_summary, evaluations),
+    T5D_SEARCH_AT(t5d_search_summary, cache_hits),
+    T5D_SEARCH_AT(t5d_search_summary, nodes),
+    T5D_SEARCH_AT(t5d_search_summary, nodes_created),
+    T5D_SEARCH_AT(t5d_search_summary, transposition_hits),
+    T5D_SEARCH_AT(t5d_search_summary, checkmates),
+    T5D_SEARCH_AT(t5d_search_summary, stalemates),
+    T5D_SEARCH_AT(t5d_search_summary, turn_caps),
+    T5D_SEARCH_AT(t5d_search_summary, unknown_verdicts),
+    T5D_SEARCH_AT(t5d_search_summary, unknown_edges),
+    T5D_SEARCH_AT(t5d_search_summary, verified_illegal),
+    T5D_SEARCH_AT(t5d_search_summary, root_turn_start),
+    T5D_SEARCH_AT(t5d_search_summary, root_terminal),
+    T5D_SEARCH_AT(t5d_search_summary, root_solved),
+    T5D_SEARCH_AT(t5d_search_summary, root_lo),
+    T5D_SEARCH_AT(t5d_search_summary, root_hi),
+    T5D_SEARCH_AT(t5d_search_summary, root_visits),
+    T5D_SEARCH_AT(t5d_search_summary, root_q),
+    T5D_SEARCH_AT(t5d_search_summary, root_children),
+    T5D_SEARCH_AT(t5d_search_summary, epoch),
+
+    T5D_SEARCH_SIZE(t5d_root_child),
+    T5D_SEARCH_AT(t5d_root_child, visits),
+    T5D_SEARCH_AT(t5d_root_child, submit),
+    T5D_SEARCH_AT(t5d_root_child, legality),
+    T5D_SEARCH_AT(t5d_root_child, lo),
+    T5D_SEARCH_AT(t5d_root_child, hi),
+    T5D_SEARCH_AT(t5d_root_child, prior),
+    T5D_SEARCH_AT(t5d_root_child, q),
+    T5D_SEARCH_AT(t5d_root_child, move_count),
+};
+
+#undef T5D_SEARCH_SIZE
+#undef T5D_SEARCH_AT
+
 }  // namespace
 
 extern "C" {
+
+t5d_status t5d_search_layout(const char* type, const char* field, size_t* out) {
+  if (type == nullptr || out == nullptr) return T5D_ERR_ARGUMENT;
+  for (const LayoutEntry& e : kLayout) {
+    if (std::strcmp(e.type, type) != 0) continue;
+    const bool match = field == nullptr ? e.field == nullptr
+                                        : e.field != nullptr && std::strcmp(e.field, field) == 0;
+    if (match) {
+      *out = e.value;
+      return T5D_OK;
+    }
+  }
+  return T5D_ERR_ARGUMENT;
+}
 
 void t5d_search_params_default(t5d_search_params* out) {
   if (out == nullptr) return;
@@ -256,7 +387,7 @@ void t5d_search_params_default(t5d_search_params* out) {
                                                                            : T5D_ACTION_PRIOR_MEAN;
   out->max_actions = p.max_actions;
   out->listing_nodes = p.listing_nodes;
-  out->submit_logit = p.submit_logit;
+  out->submit_share = p.submit_share;
   out->legal_moves_only = flag(p.legal_moves_only);
   out->legality_checks = p.legality.checks;
   out->legality_nodes = p.legality.search_nodes;
@@ -345,8 +476,11 @@ t5d_status t5d_search_leaf(t5d_search* search, size_t index, t5d_leaf* out, char
     *out = t5d_leaf{};
     out->key = r.key;
     out->epoch = r.epoch;
-    out->to_move = t5d::index_of(r.state->to_move());
+    out->acting_player = t5d::index_of(r.expansion->acting_player());
     out->turn_start = flag(r.turn_start);
+    const bool ply = search->search.params().split == t5d::mcts::TurnSplit::BoardMove;
+    out->submit_possible = flag(ply && r.expansion->submit_possible());
+    out->submit_legal = flag(ply && r.expansion->submit_legal());
     t5d::capi_internal::describe_expansion(*r.expansion, out->expansion);
     const std::span<const t5d::MoveLegality> legality = r.expansion->move_legality();
     out->legality = legality.empty() ? nullptr : reinterpret_cast<const uint8_t*>(legality.data());
@@ -370,6 +504,7 @@ t5d_status t5d_search_leaf_state(const t5d_search* search, size_t index, t5d_sta
 }
 
 t5d_status t5d_search_deliver(t5d_search* search, const float* logits, size_t logit_count,
+                              const float* submit_logits, size_t submit_count,
                               const float* values, size_t value_count, int32_t value_kind,
                               char** error) {
   return guarded(error, [&]() -> t5d_status {
@@ -387,8 +522,14 @@ t5d_status t5d_search_deliver(t5d_search* search, const float* logits, size_t lo
         throw std::invalid_argument("deliver: " + std::to_string(value_count) + " values for " +
                                     std::to_string(requests.size()) + " leaves of 51 bins");
       }
-      if ((logits == nullptr && logit_count > 0) || (values == nullptr && value_count > 0)) {
-        throw std::invalid_argument("deliver: logits or values is NULL");
+      if (submit_count != 0 && submit_count != requests.size()) {
+        throw std::invalid_argument("deliver: " + std::to_string(submit_count) +
+                                    " submit logits for " + std::to_string(requests.size()) +
+                                    " leaves (give one per leaf, or none)");
+      }
+      if ((logits == nullptr && logit_count > 0) || (values == nullptr && value_count > 0) ||
+          (submit_logits == nullptr && submit_count > 0)) {
+        throw std::invalid_argument("deliver: logits, submit_logits or values is NULL");
       }
       std::vector<t5d::mcts::Evaluation> evs(requests.size());
       std::size_t at = 0;
@@ -396,6 +537,7 @@ t5d_status t5d_search_deliver(t5d_search* search, const float* logits, size_t lo
         const std::size_t m = requests[i].expansion->moves().size();
         evs[i].logits.assign(logits + at, logits + at + m);
         at += m;
+        if (submit_count > 0) evs[i].submit_logit = submit_logits[i];  // NaN: none
         evs[i].value = value_from(values + i * T5D_VALUE_BINS, value_kind);
       }
       s.deliver(evs);

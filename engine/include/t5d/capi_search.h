@@ -23,13 +23,24 @@
  *    leaf.expansion.moves[i] (the expansion's own order). Under the whole-turn
  *    split (D2's other arm) the candidates are the turn start's pseudo-legal
  *    moves, and the search derives each legal action's prior from them itself.
+ *  - SUBMIT (register D8; rulebook R8): turns have variable length, so under
+ *    the board-move split submitting is an action of its own wherever it is
+ *    possible (leaf.submit_possible: the obligations met, T5), legal only where
+ *    the submission passes C4 (leaf.submit_legal, exact). Its logit - one
+ *    float32 per leaf, read from a global register (D8) - is optional: NULL,
+ *    or NaN for a leaf, gives the search's placeholder
+ *    (t5d_search_params.submit_share). A leaf may be a state whose present has
+ *    shifted inside the action (R8: moves may follow the shift).
  *  - VALUE: 51 float32 numbers (T5D_VALUE_BINS; bins centred on -1 + 2k/50,
  *    register D3), as PROBABILITIES (T5D_VALUE_PROBABILITIES: non-negative, the
  *    search normalises them) or as LOGITS (T5D_VALUE_LOGITS: the search takes
- *    their softmax), from the perspective of the leaf's player to move - the
- *    player whose action is in progress (leaf.to_move; under the board-move
- *    split a leaf is never a state whose present has shifted under Q4's
- *    default reading).
+ *    their softmax), from the perspective of the leaf's ACTING PLAYER - the
+ *    player whose action is in progress, until it submits (leaf.acting_player,
+ *    = leaf.expansion.acting_player; after the shift it is not the colour to
+ *    move on the present).
+ *
+ * t5d_search_layout reports this header's struct layouts, as t5d_layout does
+ * t5d/capi.h's, for a binding that mirrors them.
  *
  * The pointers a leaf hands out are valid until the next t5d_search_gather,
  * t5d_search_deliver, t5d_search_abandon or t5d_search_destroy on the handle:
@@ -95,7 +106,8 @@ typedef struct t5d_search_params {
   int32_t action_prior;        /* T5D_ACTION_PRIOR_* (whole-turn) */
   uint64_t max_actions;        /* whole-turn: actions listed per node */
   uint64_t listing_nodes;      /* whole-turn: the listing's node budget */
-  float submit_logit;          /* board-move, Q4's other reading: "submit"'s logit */
+  double submit_share;         /* board-move: submit's prior share when the evaluator gives no
+                                  submit logit (D8; placeholder 0.5) */
   int32_t legal_moves_only;    /* board-move: 1 (0 is a test seam: pseudo-legal children) */
   /* the legality of the board-move split's children (t5d/legal.hpp; spec issue 46) */
   uint64_t legality_checks;    /* (a) the expansion's budget: checks ... */
@@ -157,10 +169,14 @@ typedef struct t5d_search_params {
 
 /* One leaf of a gathered batch. */
 typedef struct t5d_leaf {
-  uint64_t key;          /* the node key (H18; t5d_search_params.node_key) */
-  uint64_t epoch;        /* the refresh epoch (t5d_search_set_epoch) */
-  int32_t to_move;       /* the player whose action is in progress: 0 white, 1 black */
-  int32_t turn_start;    /* 1: no move made yet in the action */
+  uint64_t key;            /* the node key (H18; t5d_search_params.node_key) */
+  uint64_t epoch;          /* the refresh epoch (t5d_search_set_epoch) */
+  int32_t acting_player;   /* D8: whose action is in progress, until it submits: 0 white,
+                              1 black - the value's perspective */
+  int32_t turn_start;      /* 1: no move made yet in the action */
+  int32_t submit_possible; /* D8: submitting is an action here (the obligations met, T5) -
+                              board-move split; 0 under whole turns */
+  int32_t submit_legal;    /* ... and legal (C4, exact) */
   t5d_expansion expansion; /* the network's input; logit i scores expansion.moves[i] */
   const uint8_t* legality; /* per move, T5D_LEGALITY_LEGAL or _UNKNOWN (the board-move
                               split's classification); NULL when none was made */
@@ -236,14 +252,18 @@ T5D_API t5d_status t5d_search_leaf_state(const t5d_search* search, size_t index,
                                          t5d_state** out, char** error);
 
 /* The batch's evaluations, leaf by leaf in order: `logits` concatenates each
- * leaf's move_count logits (logit_count = their sum); `values` holds
- * T5D_VALUE_BINS numbers per leaf (value_count = count x 51), probabilities or
- * logits by value_kind. Backs up and releases the virtual loss. On
- * T5D_ERR_ARGUMENT (counts that do not match, a non-finite number, a value
- * that is no distribution) the batch is abandoned: virtual loss released,
- * nothing backed up. */
+ * leaf's move_count logits (logit_count = their sum); `submit_logits` holds one
+ * submit logit per leaf (submit_count = count; read where the leaf's submit is
+ * possible; NaN: none given) or is NULL with submit_count 0 (the search's
+ * placeholder everywhere); `values` holds T5D_VALUE_BINS numbers per leaf
+ * (value_count = count x 51), probabilities or logits by value_kind. Backs up
+ * and releases the virtual loss. On T5D_ERR_ARGUMENT (counts that do not match,
+ * a non-finite logit, an infinite submit logit, a value that is no
+ * distribution) the batch is abandoned: virtual loss released, nothing backed
+ * up. */
 T5D_API t5d_status t5d_search_deliver(t5d_search* search, const float* logits,
-                                      size_t logit_count, const float* values,
+                                      size_t logit_count, const float* submit_logits,
+                                      size_t submit_count, const float* values,
                                       size_t value_count, int32_t value_kind, char** error);
 
 /* Releases the waiting batch's virtual loss without backing anything up. */
@@ -294,6 +314,13 @@ T5D_API t5d_status t5d_search_root_game(const t5d_search* search, t5d_game** out
 
 /* The refresh epoch (§7.9): evaluations are cached per (state, epoch). */
 T5D_API t5d_status t5d_search_set_epoch(t5d_search* search, uint64_t epoch, char** error);
+
+/* The layouts of this header's structs, as this library was built (t5d_layout's
+ * contract, for "t5d_search_params", "t5d_leaf", "t5d_search_summary" and
+ * "t5d_root_child"): with `field` NULL, sizeof(`type`); otherwise the offset of
+ * `field`. T5D_ERR_ARGUMENT for a NULL `type` or `out`, an unknown type or
+ * field. */
+T5D_API t5d_status t5d_search_layout(const char* type, const char* field, size_t* out);
 
 #ifdef __cplusplus
 } /* extern "C" */

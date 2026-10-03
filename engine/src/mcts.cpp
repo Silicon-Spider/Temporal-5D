@@ -105,7 +105,8 @@ struct Node {
   bool stuck = false;         // a turn start with no child and no verdict
   bool dead_end = false;      // a partial turn with no legal completion
   bool children_complete = true;
-  bool submit_option = false; // board-move: "submit" is a child
+  bool submit_possible = false; // board-move, D8: a submit edge (obligations met, T5)
+  bool submit_legal = false;    // ... legal (C4), else kept pruned
   bool has_eval = false;
   std::int8_t lo = -1;        // solver bounds, the mover's view
   std::int8_t hi = 1;
@@ -246,10 +247,6 @@ std::uint64_t node_key(const GameState& state, NodeKey keying) noexcept {
     }
   }
   return key;
-}
-
-bool must_submit(const GameState& state) noexcept {
-  return state.obligations_met() && !state.may_move();
 }
 
 const char* choice_reason_name(ChoiceReason reason) noexcept {
@@ -455,7 +452,7 @@ struct Search::Impl {
         !(p.variance_bonus_cap >= 1.0) || !finite_nonneg(p.variance_bonus_scale) ||
         !finite_nonneg(p.residual_epsilon) || !(p.lcb_floor >= 0 && p.lcb_floor <= 1) ||
         !finite_nonneg(p.lcb_z) || !finite_nonneg(p.lcb_categorical_weight) ||
-        !finite_nonneg(p.secure_child_a) || !(p.virtual_loss > 0) || !std::isfinite(p.submit_logit) ||
+        !finite_nonneg(p.secure_child_a) || !(p.virtual_loss > 0) || !(p.submit_share >= 0 && p.submit_share <= 1) ||
         !finite_nonneg(p.unknown_prior_scale)) {
       throw std::invalid_argument("SearchParams: a parameter is out of range");
     }
@@ -527,9 +524,11 @@ struct Search::Impl {
     return r.terminal != Terminal::None || solved(r) || r.stuck || r.dead_end;
   }
 
-  // The state an edge leads to. `turn_start` is set for the opponent's turn
-  // start; `illegal` when the child cannot be a legal partial turn (only with
-  // the pseudo-legal seam).
+  // The state an edge leads to; `turn_start` is set for the opponent's turn
+  // start - after a submit edge or a whole action, never after a move (D8:
+  // nothing is submitted automatically). `illegal` is set for an edge whose
+  // action can no longer be legal (kept for a caller's checks; no edge made by
+  // the search is such).
   GameState child_state(NodeId pid, std::size_t ei, bool& turn_start, bool& illegal) const {
     const Node& p = nodes_[pid];
     const Edge& e = p.edges[ei];
@@ -545,14 +544,8 @@ struct Search::Impl {
       return s;
     }
     if (e.submit) {
-      s.submit();  // submit_option was set only for a Safe submission
-      turn_start = true;
-      return s;
-    }
-    s.apply(e.move);
-    if (must_submit(s)) {
       if (s.submission_status() != SubmitStatus::Safe) {
-        illegal = true;  // a royal left capturable with nothing more to play
+        illegal = true;  // C4 fails: never followed (the edge is pruned)
         turn_start = false;
         return s;
       }
@@ -560,6 +553,7 @@ struct Search::Impl {
       turn_start = true;
       return s;
     }
+    s.apply(e.move);
     turn_start = false;
     return s;
   }
@@ -710,6 +704,9 @@ struct Search::Impl {
     for (const float l : ev.logits) {
       if (!std::isfinite(l)) throw std::invalid_argument("an evaluation holds a non-finite logit");
     }
+    if (std::isinf(ev.submit_logit)) {
+      throw std::invalid_argument("an evaluation holds an infinite submit logit");
+    }
     (void)value_moments(ev.value);
   }
 
@@ -724,7 +721,7 @@ struct Search::Impl {
     n.edges.clear();
     std::vector<double> logits;
     if (params_.split == TurnSplit::BoardMove) {
-      n.edges.reserve(moves.size() + (n.submit_option ? std::size_t{1} : std::size_t{0}));
+      n.edges.reserve(moves.size() + (n.submit_possible ? std::size_t{1} : std::size_t{0}));
       const std::span<const MoveLegality> legality = x.move_legality();
       for (std::size_t i = 0; i < moves.size(); ++i) {
         Edge e;
@@ -735,11 +732,17 @@ struct Search::Impl {
         n.edges.push_back(e);
         logits.push_back(static_cast<double>(ev.logits[i]));
       }
-      if (n.submit_option) {
+      // D8: submitting is an action wherever it is possible (T5), legal only
+      // where C4 holds - an illegal submit is kept, pruned, with no prior.
+      if (n.submit_possible) {
         Edge e;
         e.submit = true;
+        e.pruned = !n.submit_legal;
         n.edges.push_back(e);
-        logits.push_back(static_cast<double>(params_.submit_logit));
+        ++stats_.submit_edges;
+        if (e.pruned) ++stats_.illegal_submits;
+        // The evaluator's submit logit; none given (NaN): submit_share, below.
+        logits.push_back(std::isnan(ev.submit_logit) ? 0.0 : static_cast<double>(ev.submit_logit));
       }
     } else {
       // The action prior from the moves' logits (ActionPrior). A move of an
@@ -776,23 +779,54 @@ struct Search::Impl {
         logits.push_back(logit);
       }
     }
-    // The prior: a softmax at the policy temperature; its entropy sets k0.
+    // The prior: a softmax at the policy temperature over the edges that may
+    // be taken (an illegal submit gets none); its entropy sets k0. A legal
+    // submit without the evaluator's logit takes submit_share and leaves the
+    // rest to the moves (D8's logit is the network's; this is the placeholder).
+    const bool shared_submit = params_.split == TurnSplit::BoardMove && n.submit_legal &&
+                               std::isnan(ev.submit_logit) && !n.edges.empty() &&
+                               n.edges.back().submit;
+    const auto in_softmax = [&](std::size_t i) {
+      return !n.edges[i].pruned && !(shared_submit && n.edges[i].submit);
+    };
     double entropy = 0;
-    if (!n.edges.empty()) {
+    std::size_t open = 0;
+    for (std::size_t i = 0; i < n.edges.size(); ++i) open += in_softmax(i) ? 1u : 0u;
+    if (open > 0) {
       const double t = params_.policy_temperature;
-      double top = logits[0] / t;
-      for (const double l : logits) top = std::max(top, l / t);
+      double top = -std::numeric_limits<double>::infinity();
+      for (std::size_t i = 0; i < n.edges.size(); ++i) {
+        if (in_softmax(i)) top = std::max(top, logits[i] / t);
+      }
       double sum = 0;
       for (std::size_t i = 0; i < n.edges.size(); ++i) {
+        if (!in_softmax(i)) {
+          n.edges[i].prior = 0;
+          continue;
+        }
         n.edges[i].prior = std::exp(logits[i] / t - top);
         // (b) An unknown move's prior, scaled (1: its own prior).
         if (n.edges[i].unknown) n.edges[i].prior *= params_.unknown_prior_scale;
         sum += n.edges[i].prior;
       }
-      for (Edge& e : n.edges) {
-        e.prior = sum > 0 ? e.prior / sum : 1.0 / static_cast<double>(n.edges.size());
-        if (e.prior > 0) entropy -= e.prior * std::log(e.prior);
+      for (std::size_t i = 0; i < n.edges.size(); ++i) {
+        if (!in_softmax(i)) continue;
+        Edge& e = n.edges[i];
+        e.prior = sum > 0 ? e.prior / sum : 1.0 / static_cast<double>(open);
       }
+    }
+    if (shared_submit) {
+      const double share = open > 0 ? params_.submit_share : 1.0;
+      for (Edge& e : n.edges) {
+        if (e.submit) {
+          e.prior = share;
+        } else if (!e.pruned) {
+          e.prior *= 1.0 - share;
+        }
+      }
+    }
+    for (const Edge& e : n.edges) {
+      if (e.prior > 0) entropy -= e.prior * std::log(e.prior);
     }
     n.k0 = std::max(params_.widening_min, params_.widening_scale * std::exp(entropy));
     if (id == root_ && params_.root_noise && !noise_applied_ && n.edges.size() > 1) {
@@ -821,9 +855,13 @@ struct Search::Impl {
       sum += x;
     }
     if (!(sum > 0)) return;
+    double open = 0;  // the noise goes to the edges that may be taken
+    for (std::size_t i = 0; i < n.edges.size(); ++i) open += n.edges[i].pruned ? 0.0 : eta[i];
+    if (!(open > 0)) return;
     const double eps = params_.dirichlet_epsilon;
     for (std::size_t i = 0; i < n.edges.size(); ++i) {
-      n.edges[i].prior = (1 - eps) * n.edges[i].prior + eps * eta[i] / sum;
+      if (n.edges[i].pruned) continue;
+      n.edges[i].prior = (1 - eps) * n.edges[i].prior + eps * eta[i] / open;
     }
   }
 
@@ -1140,16 +1178,22 @@ struct Search::Impl {
       if (params_.split == TurnSplit::WholeTurn) {
         if (n.action_offsets.empty()) list_actions(n);
       } else {
-        n.submit_option = !n.turn_start && n.state.obligations_met() &&
-                          n.state.submission_status() == SubmitStatus::Safe;
+        // D8: submitting is possible once the obligations are met (T5) and
+        // legal when C4 holds - the expansion's own answers (exact).
+        n.submit_possible = x.submit_possible();
+        n.submit_legal = x.submit_legal();
       }
     }
     Node& n = nodes_[id];
+    // The children that may be taken: the kept moves, and a legal submit.
     const std::size_t children = params_.split == TurnSplit::WholeTurn
                                      ? n.action_count()
-                                     : x.moves().size() + (n.submit_option ? std::size_t{1} : std::size_t{0});
+                                     : x.moves().size() + (n.submit_legal ? std::size_t{1} : std::size_t{0});
     if (children == 0 && !n.turn_start && id != root_) {
-      mark_dead_end(path_);  // a partial turn with no legal completion (§8.2)
+      // A partial action whose remaining moves and submission are all illegal:
+      // no legal completion, so no game end either (C5 judges turn starts) - a
+      // dead end, pruned (§8.2).
+      mark_dead_end(path_);
       release(path_);
       return Selected::DeadEnd;
     }
@@ -1704,11 +1748,7 @@ void Search::advance_moves(std::span<const Move> moves) {
     submit();
     turn_start = true;
   } else if (moves.size() == 1) {
-    play(moves[0]);
-    if (must_submit(target)) {
-      submit();
-      turn_start = true;
-    }
+    play(moves[0]);  // never submitted with it (D8): submitting is its own decision
   } else {
     throw std::invalid_argument("advance_moves: the board-move split takes one move per decision");
   }
@@ -1750,6 +1790,8 @@ NodeView Search::node(NodeId id) const {
   v.stuck = n.stuck;
   v.dead_end = n.dead_end;
   v.children_complete = n.children_complete;
+  v.submit_possible = n.submit_possible;
+  v.submit_legal = n.submit_legal;
   v.lo = n.lo;
   v.hi = n.hi;
   v.visits = n.visits;

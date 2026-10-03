@@ -198,13 +198,11 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
         submit_checked(s);
         submitted = true;
       } else {
+        // A move; the action goes on until a submit is chosen (D8: submitting
+        // is its own decision, never automatic).
         const Move& m = c.moves.at(0);
         play_checked(s, m, scratch);
         action.push_back(m);
-        if (must_submit(s)) {
-          submit_checked(s);
-          submitted = true;
-        }
       }
       if (params.match_play) search->advance(pick);
       turn_start = false;

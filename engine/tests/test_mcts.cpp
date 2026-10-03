@@ -31,6 +31,7 @@
 #include "t5d/state.hpp"
 #include "t5d/variants.hpp"
 #include "test_framework.hpp"
+#include "test_game_tree.hpp"
 #include "test_positions.hpp"
 #include "test_support.hpp"
 
@@ -291,31 +292,51 @@ TEST(mcts_solver_proves_a_mate_in_one_and_plays_it) {
     premise = premise || verdict_of(a.result) == Outcome::Checkmate;
   }
   REQUIRE(premise);
-  for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::WholeTurn}) {
-    for (const bool graph : {false, true}) {
-      const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Uniform);
-      SearchParams p = fast();
-      p.split = split;
-      p.graph = graph;
-      Search search(s, p);
-      search.run(*ev, Limits{2000});
-      CHECK(search.root_solved());
-      const NodeView root = search.node(search.root());
-      CHECK_EQ(root.lo, 1);
-      CHECK_EQ(root.hi, 1);
-      CHECK(search.stats().playouts < 2000);  // the search stopped once the root was solved
-      const Choice c = search.choose();
-      CHECK(c.reason == ChoiceReason::ProvenWin);
-      const std::vector<RootChild> children = search.root_children();
-      const RootChild& chosen = children.at(c.index);
-      REQUIRE(chosen.child != kNoNode);
-      CHECK(search.node(chosen.child).terminal == Terminal::Checkmate);
-      CHECK(verdict_of(*search.node(chosen.child).state) == Outcome::Checkmate);
-      CHECK_NOTHROW(search.check_invariants());
-      // Solved: more running consumes no evaluation.
-      const std::uint64_t evaluations = search.stats().evaluations;
-      search.run(*ev, Limits{50});
-      CHECK_EQ(search.stats().evaluations, evaluations);
+  for (const bool after_shift : {true, false}) {  // Q4: R8's reading, and the Guide-literal one
+    RuleOptions rules;
+    rules.moves_after_shift = after_shift;
+    const GameState start = game({"[k4/4Q/1K3/5/5:0:1:w]"}, BoardSize{5, 5}, rules);
+    for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::WholeTurn}) {
+      for (const bool graph : {false, true}) {
+        const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Uniform);
+        SearchParams p = fast();
+        p.split = split;
+        p.graph = graph;
+        Search search(start, p);
+        search.run(*ev, Limits{2000});
+        CHECK(search.root_solved());
+        const NodeView root = search.node(search.root());
+        CHECK_EQ(root.lo, 1);
+        CHECK_EQ(root.hi, 1);
+        CHECK(search.stats().playouts < 2000);  // the search stopped once the root was solved
+        const Choice c = search.choose();
+        CHECK(c.reason == ChoiceReason::ProvenWin);
+        const std::vector<RootChild> children = search.root_children();
+        const RootChild& chosen = children.at(c.index);
+        REQUIRE(chosen.child != kNoNode);
+        // Under the ply split the mating move leaves White's action open (D8):
+        // its node is White's, proven won, and its submit edge reaches the mate.
+        NodeId mate = chosen.child;
+        if (split == TurnSplit::BoardMove) {
+          const NodeView mid = search.node(mate);
+          CHECK(!mid.turn_start);
+          CHECK(mid.mover == Colour::White);
+          CHECK_EQ(mid.lo, 1);
+          mate = kNoNode;
+          for (std::size_t i = 0; i < mid.edge_count; ++i) {
+            const EdgeView e = search.edge(chosen.child, i);
+            if (e.submit) mate = e.child;
+          }
+          REQUIRE(mate != kNoNode);
+        }
+        CHECK(search.node(mate).terminal == Terminal::Checkmate);
+        CHECK(verdict_of(*search.node(mate).state) == Outcome::Checkmate);
+        CHECK_NOTHROW(search.check_invariants());
+        // Solved: more running consumes no evaluation.
+        const std::uint64_t evaluations = search.stats().evaluations;
+        search.run(*ev, Limits{50});
+        CHECK_EQ(search.stats().evaluations, evaluations);
+      }
     }
   }
 }
@@ -362,6 +383,113 @@ TEST(mcts_solver_proves_a_loss_when_every_child_is_lost) {
       CHECK_NOTHROW(search.check_invariants());
     }
   }
+}
+
+namespace {
+
+// Small positions where Q4's two readings differ: a 4x4 board on timeline 0
+// that White must play at T1, and White's own timeline +1 with a board at T2 -
+// ahead of the present, so optional: after the shift R8 lets White play it
+// before submitting, the Guide-literal reading does not. Kings and a few
+// pieces at random (seeded); positions the state rules refuse are skipped.
+std::vector<GameState> two_board_positions(const RuleOptions& rules, int count, std::uint64_t seed) {
+  t5d_test::Rng rng(seed);
+  const char pieces[] = {'Q', 'R', 'N', 'B', 'q', 'r', 'n', 'b'};
+  std::vector<GameState> out;
+  for (int attempt = 0; attempt < 4000 && static_cast<int>(out.size()) < count; ++attempt) {
+    std::vector<std::string> boards;
+    for (const char* place : {":0:1:w]", ":+1:2:w]"}) {
+      std::string cells(16, '.');
+      const auto put = [&](char c) {
+        for (;;) {
+          const int sq = rng.below(16);
+          if (cells[static_cast<std::size_t>(sq)] == '.') {
+            cells[static_cast<std::size_t>(sq)] = c;
+            return;
+          }
+        }
+      };
+      put('K');
+      put('k');
+      const int extra = rng.below(3);
+      for (int i = 0; i < extra; ++i) put(pieces[rng.below(8)]);
+      std::string fen = "[";
+      for (int rank = 3; rank >= 0; --rank) {
+        int blank = 0;
+        for (int file = 0; file < 4; ++file) {
+          const char c = cells[static_cast<std::size_t>(rank * 4 + file)];
+          if (c == '.') {
+            ++blank;
+            continue;
+          }
+          if (blank > 0) fen += std::to_string(blank);
+          blank = 0;
+          fen += c;
+        }
+        if (blank > 0) fen += std::to_string(blank);
+        if (rank > 0) fen += '/';
+      }
+      boards.push_back(fen + place);
+    }
+    try {
+      GameState s = game(boards, BoardSize{4, 4}, rules, Colour::White);
+      if (verdict_of(s) != Outcome::Ongoing) continue;
+      out.push_back(std::move(s));
+    } catch (const std::exception&) {
+    }
+  }
+  return out;
+}
+
+}  // namespace
+
+TEST(mcts_solver_agrees_with_the_brute_force_game_tree_under_both_q4_readings) {
+  // The search's proofs against E7's brute-force game tree (test_game_tree.hpp:
+  // the reference's enumeration of every move sequence, plain minimax), which
+  // shares none of the search's machinery: never opposite verdicts, and every
+  // mate in one (Win at distance 1) proved. Under the board-move split the
+  // proofs run through mid-action nodes and explicit submit edges (D8).
+  std::size_t compared = 0;
+  std::size_t search_proofs = 0;
+  std::size_t mates_in_one = 0;
+  for (const bool after_shift : {true, false}) {
+    RuleOptions rules;
+    rules.moves_after_shift = after_shift;
+    std::vector<GameState> positions = two_board_positions(rules, 10, after_shift ? 41 : 43);
+    positions.push_back(game({"[k4/4Q/1K3/5/5:0:1:w]"}, BoardSize{5, 5}, rules));
+    positions.push_back(game({"[3k/4/B1qK/4:0:1:w]"}, BoardSize{4, 4}, rules));
+    positions.push_back(game({"[4/K2b/3n/1k2:0:1:w]"}, BoardSize{4, 4}, rules));
+    for (const GameState& s : positions) {
+      t5d_test::GameTree tree;
+      const t5d_test::GameValue truth = tree.solve(s, 2);
+      if (truth.kind == t5d_test::GameValue::Kind::Unknown) continue;
+      for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::WholeTurn}) {
+        SearchParams p = fast();
+        p.split = split;
+        p.legality = LegalityOptions::exact();
+        const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Uniform);
+        Search search(s, p);
+        search.run(*ev, Limits{3000});
+        CHECK_NOTHROW(search.check_invariants());
+        ++compared;
+        const NodeView root = search.node(search.root());
+        using Kind = t5d_test::GameValue::Kind;
+        if (root.lo == root.hi) ++search_proofs;
+        if (root.lo == 1) CHECK(truth.kind == Kind::Win || truth.kind == Kind::Other);
+        if (root.hi == -1) CHECK(truth.kind == Kind::Loss || truth.kind == Kind::Other);
+        if (root.lo == 0 && root.hi == 0) CHECK(truth.kind != Kind::Win && truth.kind != Kind::Loss);
+        if (truth.kind == Kind::Win) CHECK_EQ(root.hi, 1);
+        if (truth.kind == Kind::Loss) CHECK_EQ(root.lo, -1);
+        if (truth.kind == Kind::Win && truth.distance == 1) {
+          ++mates_in_one;
+          CHECK_EQ(root.lo, 1);  // complete for a mate in one
+        }
+      }
+    }
+  }
+  CHECK(compared >= 20);
+  CHECK(search_proofs > 0);
+  CHECK(mates_in_one >= 4);
 }
 
 TEST(mcts_solver_bounds_never_contradict_in_play) {
@@ -820,11 +948,11 @@ TEST(mcts_board_move_children_are_the_legal_moves) {
     MoveList legal;
     legal_moves(*n.state, legal);
     std::vector<Move> edges;
-    bool submit = false;
+    std::size_t submits = 0;
     for (std::size_t i = 0; i < n.edge_count; ++i) {
       const EdgeView e = search.edge(id, i);
       if (e.submit) {
-        submit = true;
+        ++submits;
       } else {
         edges.push_back(*e.move);
         // (a) under the default budget: a legal move, or one flagged unknown.
@@ -833,7 +961,8 @@ TEST(mcts_board_move_children_are_the_legal_moves) {
     }
     CHECK(edges.size() >= legal.size());
     for (const Move& m : legal) CHECK(std::find(edges.begin(), edges.end(), m) != edges.end());
-    CHECK(!submit);  // the default Q4 reading: a finished action is submitted at once
+    // D8: a submit edge exactly where submitting is possible (T5).
+    CHECK_EQ(submits, n.state->obligations_met() ? std::size_t{1} : std::size_t{0});
     // Mid-turn nodes keep the mover; terminal detection only at turn starts.
     if (!n.turn_start) CHECK(n.terminal == Terminal::None);
   }
@@ -855,7 +984,9 @@ TEST(mcts_board_move_children_are_exactly_the_legal_moves_under_exact_legality) 
     ++checked;
     MoveList legal;
     legal_moves(*n.state, legal);
-    CHECK_EQ(n.edge_count, legal.size());
+    // The legal moves, and (D8) the submit edge where submitting is possible.
+    const std::size_t submit = n.state->obligations_met() ? 1 : 0;
+    CHECK_EQ(n.edge_count, legal.size() + submit);
   }
   CHECK(checked > 5);
 }
@@ -1082,25 +1213,139 @@ TEST(mcts_board_move_dead_ends_are_pruned_not_scored) {
   CHECK_NOTHROW(search.check_invariants());
 }
 
-TEST(mcts_q4_other_reading_offers_submission_as_a_child) {
-  // Under moves_after_shift the mover may go on after the present has shifted:
-  // "submit" is then a child of its own (the board-move split).
-  RuleOptions rules;
-  rules.moves_after_shift = true;
-  SearchParams p = fast();
-  p.widening = false;
-  const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Random, 3);
-  Search search(variant("Standard", rules), p);
-  search.run(*ev, Limits{120});
-  std::size_t submit_nodes = 0;
-  for (NodeId id = 0; id < search.node_count(); ++id) {
-    const NodeView n = search.node(id);
-    if (!n.expanded || n.turn_start) continue;
-    for (std::size_t i = 0; i < n.edge_count; ++i) {
-      if (search.edge(id, i).submit) ++submit_nodes;
+// ---- D8: submitting is an action (rulebook R8) --------------------------------------------
+
+namespace {
+
+// A position `actions` legal actions into a variant, under `rules`.
+GameState played(const char* name, const RuleOptions& rules, int actions, std::uint64_t seed) {
+  GameState s = variant(name, rules);
+  t5d_test::Rng rng(seed);
+  for (int a = 0; a < actions; ++a) {
+    const ActionList list = list_legal_actions(s, 32, Detector::Hypercuboid);
+    if (list.actions.empty()) break;
+    s = list.actions[static_cast<std::size_t>(rng.below(static_cast<int>(list.actions.size())))].result;
+  }
+  return s;
+}
+
+}  // namespace
+
+TEST(mcts_submit_is_an_edge_where_possible_legal_only_when_safe_never_automatic) {
+  // Under the board-move split: a submit edge exactly where submitting is
+  // possible (the obligations met, T5), pruned exactly where the submission
+  // fails C4; only a submit edge changes the acting player, and it reaches a
+  // turn start; a move never submits. Under both Q4 readings - R8's (moves may
+  // follow the shift) and the Guide-literal one (none may: submit alone) - and
+  // with the pseudo-legal test seam, whose children include moves that leave a
+  // royal capturable (so submissions that are illegal).
+  std::size_t submit_edges = 0;
+  std::size_t illegal_submits = 0;
+  std::size_t after_shift_moves = 0;
+  for (const bool after_shift : {true, false}) {
+    RuleOptions rules;
+    rules.moves_after_shift = after_shift;
+    for (const bool seam : {false, true}) {
+      for (const char* name : {"Standard", "Standard - Two Timelines", "Very Small - Open"}) {
+        SearchParams p = fast();
+        p.widening = false;
+        p.legal_moves_only = !seam;
+        const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Random, 3);
+        Search search(played(name, rules, 3, 7), p);
+        search.run(*ev, Limits{150});
+        CHECK_NOTHROW(search.check_invariants());
+        for (NodeId id = 0; id < search.node_count(); ++id) {
+          const NodeView n = search.node(id);
+          if (!n.expanded || n.terminal != Terminal::None) continue;
+          const GameState& s = *n.state;
+          const bool possible = s.obligations_met();
+          const bool legal = possible && s.submission_status() == SubmitStatus::Safe;
+          CHECK_EQ(n.submit_possible, possible);
+          CHECK_EQ(n.submit_legal, legal);
+          std::size_t submits = 0;
+          std::size_t moves = 0;
+          for (std::size_t i = 0; i < n.edge_count; ++i) {
+            const EdgeView e = search.edge(id, i);
+            if (e.submit) {
+              ++submits;
+              ++submit_edges;
+              CHECK_EQ(e.pruned, !legal);
+              if (e.pruned) {
+                ++illegal_submits;
+                CHECK_EQ(e.visits, std::uint32_t{0});
+                CHECK(e.child == kNoNode);
+                CHECK_EQ(e.prior, 0.0);
+              }
+              if (e.child != kNoNode) {
+                const NodeView c = search.node(e.child);
+                CHECK(c.turn_start);
+                CHECK(c.mover != n.mover);
+              }
+            } else {
+              ++moves;
+              if (e.child != kNoNode && !search.node(e.child).dead_end) {
+                const NodeView c = search.node(e.child);
+                CHECK(!c.turn_start);  // never submitted automatically
+                CHECK(c.mover == n.mover);
+              }
+            }
+          }
+          CHECK_EQ(submits, possible ? std::size_t{1} : std::size_t{0});
+          if (possible && !after_shift) CHECK_EQ(moves, std::size_t{0});  // Guide-literal: submit alone
+          if (possible && after_shift) after_shift_moves += moves;
+        }
+      }
     }
   }
-  CHECK(submit_nodes > 0);
+  CHECK(submit_edges > 0);
+  CHECK(illegal_submits > 0);
+  CHECK(after_shift_moves > 0);  // R8: moves offered beside the submit
+}
+
+TEST(mcts_node_keys_tell_apart_the_acting_player_and_what_was_played) {
+  CHECK(SearchParams{}.node_key == NodeKey::StateAndOrigins);  // C23: lineage
+  // After White's first move on the Standard board the obligations are met but
+  // White still acts (D8); submitted, the same boards are Black's turn start.
+  GameState mid = variant("Standard");
+  t5d_test::play(mid, "(0T1)Pe2(0T1)e4");
+  REQUIRE(mid.obligations_met());
+  GameState submitted = mid;
+  submitted.submit();
+  for (const NodeKey k : {NodeKey::State, NodeKey::StateAndOrigins}) {
+    CHECK(node_key(mid, k) != node_key(submitted, k));
+  }
+  // Two Timelines: White plays both boards; the two orders reach one state,
+  // and one board played differs from the other one played.
+  GameState a = variant("Standard - Two Timelines");
+  GameState b = a;
+  GameState c = a;
+  t5d_test::play(a, "(-0T1)Pe2(-0T1)e4");
+  t5d_test::play(c, "(+0T1)Pe2(+0T1)e4");
+  CHECK(node_key(a, NodeKey::StateAndOrigins) != node_key(c, NodeKey::StateAndOrigins));
+  t5d_test::play(a, "(+0T1)Pe2(+0T1)e4");
+  t5d_test::play(b, "(+0T1)Pe2(+0T1)e4");
+  t5d_test::play(b, "(-0T1)Pe2(-0T1)e4");
+  CHECK(a == b);
+  CHECK_EQ(node_key(a, NodeKey::StateAndOrigins), node_key(b, NodeKey::StateAndOrigins));
+  // In a graph search the submit edge leads to a node of its own.
+  SearchParams p = fast();
+  p.graph = true;
+  p.widening = false;
+  const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Uniform);
+  Search search(variant("Standard"), p);
+  search.run(*ev, Limits{80});
+  std::size_t checked = 0;
+  for (NodeId id = 0; id < search.node_count(); ++id) {
+    const NodeView n = search.node(id);
+    for (std::size_t i = 0; i < n.edge_count; ++i) {
+      const EdgeView e = search.edge(id, i);
+      if (!e.submit || e.child == kNoNode) continue;
+      ++checked;
+      CHECK(e.child != id);
+      CHECK(search.node(e.child).key != n.key);
+    }
+  }
+  CHECK(checked > 0);
   CHECK_NOTHROW(search.check_invariants());
 }
 

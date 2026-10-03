@@ -1920,23 +1920,43 @@ backups (Czech, Korus and Kersting 2021), KataGo's variance-scaled cPUCT, uncert
 weighting and LCB selection - and the Chess Programming Wiki; no engine's code (H29).
 Single-threaded; no time management (E7, E8), scanner (rung 1) or Lazy SMP yet.
 
-**Nodes and values.** A node holds a `GameState` and its player to move - the player
-whose action is in progress. Values are in [-1, 1] from that player's view; backing
-up across an edge flips the sign only when the two nodes' players differ (consecutive
-nodes of one action share a player). The evaluator's value is a 51-bin categorical
+**Nodes and values.** A node holds a `GameState` and its acting player (register D8)
+- the player whose action is in progress, until it submits; after the present has
+shifted inside the action it is no longer the colour to move on the present. Values
+are in [-1, 1] from that player's view; backing up across an edge flips the sign only
+when the two nodes' acting players differ - under the ply split, only across a submit
+edge. The evaluator's value is a 51-bin categorical
 distribution (D3), bins centred on `(2k - 50) / 50`; its mean is the leaf's value and
 its variance feeds E2, E3 and LCB.
 
 **D2's two arms** (`SearchParams::split`; D2 is undecided, ablations 6g/6k):
 
 - *Board-move as ply* (`BoardMove`, the placeholder default): a node is a turn's start
-  or a state during an action; its children are the legal moves - and, under Q4's
-  other reading (`moves_after_shift`), "submit" once the obligations are met and every
-  royal is safe (its prior from `submit_logit`: the policy head has no output for it).
-  A move after which nothing more may be played (Q4's default) is submitted at once,
-  so its child is the opponent's turn start. Mid-turn check is legal; terminal
-  detection runs only at turn starts (§8.2). A partial turn with no legal completion
-  is a dead end, pruned and never scored.
+  or a state during an action; its children are the legal moves and - turns have
+  variable length (rulebook R8, register D8, spec §8.2), so submitting is an action -
+  a **submit edge** exactly where submitting is possible (the obligations met, T5:
+  `Expansion::submit_possible`), legal exactly where the submission passes C4
+  (`Expansion::submit_legal`, exact); an illegal one is kept, pruned, with no prior.
+  Nothing is submitted automatically: after the move that shifts the present the node
+  still belongs to the same acting player and offers submit beside any further move
+  on that player's remaining playable boards (R8, the default rules; under Q4's
+  Guide-literal reading, `moves_after_shift = false`, submit alone). Only a submit
+  edge changes the acting player. Submit's prior is the evaluator's submit logit
+  (D8: from a global register - the network's stage N5) when it gives one, else the
+  placeholder `submit_share` (0.5) of the prior where moves are open too: with a flat
+  move policy a submit logit of 0 among N moves would make every action play nearly
+  every optional board (measured: 101 moves in 14 actions, 54 timelines). Mid-turn
+  check is legal; terminal detection runs only at turn starts (§8.2).
+- *The ends, from the rulebook.* At a turn's start, no legal action ends the game
+  (C5): checkmate if the side to move is in check (R1's status), otherwise stalemate
+  (C10, a draw; C13) - decided only by E4's exhaustive detector (H37). During an
+  action there is no game end (C5 speaks of the start of a turn): a partial action
+  whose remaining moves and submission are all illegal has no legal completion, so the
+  move that reached it was not legal (R1: a move is legal when a legal action
+  continues with it). It is a **dead end**, pruned and never scored (§8.2). The exact
+  classification never reaches one; a budget (an unknown move) or the pseudo-legal
+  test seam may, and it is found when the node is expanded. After the shift with a
+  legal submission the action can always be finished.
 - *Whole turn* (`WholeTurn`): a node is always a turn's start; its children are the
   legal actions (`list_legal_actions`, E4), at most `max_actions` of them (a listing
   stopped there, or by `listing_nodes`, is incomplete and never proves a loss). The
@@ -1991,9 +2011,14 @@ in the batch. The virtual loss is always released: by `deliver`, by `abandon`, w
 evaluator throws, when an evaluation is malformed.
 
 **MCGS** (C11, prototype, `graph`). Nodes keyed by `node_key(state, keying)`: the 5D
-Zobrist key (it carries the ruleset ID) - or, under the lineage reading of spec issue
-30, mixed with every timeline's branch origin (`NodeKey::StateAndOrigins`) - with an
-exact comparison on every key match (a collision gets an unshared node). Statistics
+Zobrist key - the ruleset ID, every board in its place (so what has been played
+inside the action: a played board has its successor) and the acting player (a state
+after the shift and the same boards submitted differ in it) - mixed, by default, with
+every timeline's branch origin (`NodeKey::StateAndOrigins`: C23 ruled a board's causal
+past to be its ancestry, the lineage reading of spec issue 30, so states that differ
+only in an origin are different positions for the network); `NodeKey::State` leaves
+origins out. An exact comparison follows every key match (a collision gets an
+unshared node). Statistics
 live on the edges (path statistics; in a tree they equal the child's). Reaching an
 expanded node through an edge whose Q lags the node's by more than `residual_epsilon`
 (or an edge never crossed) backs up the residual correction instead of descending.
@@ -2041,15 +2066,19 @@ timeline's head board; captures' logits 0.5 x the captured value).
 **The C API** (`t5d/capi_search.h`, in `t5d.dll` / `libt5d.so`): the step API for an
 external evaluator - `t5d_search_new(game, turn_start, params, &search)`,
 `t5d_search_gather(search, max_leaves, max_playouts, &count)`, `t5d_search_leaf(search,
-i, &leaf)` (a `t5d_leaf`: key, epoch, player to move, turn start, the `t5d_expansion`,
-each move's legality), `t5d_search_deliver(search, logits, logit_count, values,
-value_count, value_kind)` - one float32 logit per candidate move, logit i scoring
-`leaf.expansion.moves[i]`, and 51 float32 values per leaf as probabilities
-(`T5D_VALUE_PROBABILITIES`) or logits (`T5D_VALUE_LOGITS`) - and `t5d_search_abandon`;
-then `t5d_search_info`, `_child`, `_choose`, `_choose_by_visits`, `_verify`,
-`_advance`, `_advance_action`, `_root_game`, `_set_epoch`, `_run` (built-in
-evaluators). `t5d_search_params` mirrors `SearchParams` (fill it with
-`t5d_search_params_default`). A malformed batch is refused and abandoned.
+i, &leaf)` (a `t5d_leaf`: key, epoch, the acting player, turn start, D8's
+`submit_possible` and `submit_legal`, the `t5d_expansion` - which carries them too -
+and each move's legality), `t5d_search_deliver(search, logits, logit_count,
+submit_logits, submit_count, values, value_count, value_kind)` - one float32 logit per
+candidate move, logit i scoring `leaf.expansion.moves[i]`; one submit logit per leaf
+(NaN: none) or none at all (NULL, 0: the placeholder share); 51 float32 values per leaf
+as probabilities (`T5D_VALUE_PROBABILITIES`) or logits (`T5D_VALUE_LOGITS`), from the
+leaf's acting player - and `t5d_search_abandon`; then `t5d_search_info`, `_child`,
+`_choose`, `_choose_by_visits`, `_verify`, `_advance`, `_advance_action`,
+`_root_game`, `_set_epoch`, `_run` (built-in evaluators), and `t5d_search_layout`
+(this header's struct layouts, as `t5d_layout` gives `t5d/capi.h`'s).
+`t5d_search_params` mirrors `SearchParams` (fill it with `t5d_search_params_default`).
+A malformed batch is refused and abandoned.
 
 **Self-play** (`t5d/selfplay.hpp`, `play_game`). Self-play: a fresh search per decision
 (C14), sharing only the evaluation cache, the move sampled from the visits at
@@ -2058,7 +2087,9 @@ play (`match_play`): one search carried across decisions, the final rule, noise 
 Every turn start is judged first by E4's detector (checkmate, stalemate; unknown ends
 the game unjudged), then by the turn cap (scored a draw, counted:
 `GameRecord::cap_bound`, `search_turn_caps`). Every move is checked pseudo-legal and
-every submission legal before it is made.
+every submission legal before it is made. Under the board-move split an action is its
+moves and then a submit decision (never automatic); actions are counted at
+submissions, decisions as moves plus submissions.
 
 **t5d-play** prints the game's 5dpgn record (the reader's long form; `*` and a
 `Termination` header for a game the rules did not end, the turn cap's included), which
@@ -2070,17 +2101,21 @@ t5d-play [--variant NAME] [--evaluator uniform|random|material] [--playouts N]
          [--e2] [--e3] [--batch N] [--synchronous] [--match] [--final visits|lcb]
          [--temperature T] [--temperature-decisions N] [--noise] [--cap-turns N]
          [--cap-boards N] [--max-actions N] [--listing-cap N] [--mate-nodes N]
-         [--max-seconds S] [--seed S] [--moves-after-shift] [--rules ENCODING]
+         [--max-seconds S] [--seed S] [--no-moves-after-shift] [--rules ENCODING]
 ```
 
 Defaults: Standard, uniform, 64 playouts per decision, the board-move split, a tree,
 self-play, a cap of 20 turns (uniform play branches freely: by turn 12 a game can
 hold 300 boards on 50 timelines). `--mate-nodes N` sets the search's terminal-check
 budget; `--max-actions` and `--max-seconds` are safety stops (checked at turn starts;
-the record ends `*`, its Termination header naming the stop). The summary on standard
-error says where the time went: the search's
-terminal checks, leaf expansions (the legality classification included), action
-listings and verifications, and the game's own turn-start verdicts.
+the record ends `*`, its Termination header naming the stop). The rules come through
+the tools' shared option reader (`tools::ruleset_option`), so the default is the
+engine's - Q4 as ruled, R8 - and `--no-moves-after-shift` (Q4's Guide-literal reading)
+or `--rules ENCODING` names another ruleset, written into the record's `Rules` header
+(the reader takes no rules from a record: replay it under the same option, as
+`t5d-gate --no-moves-after-shift` does). The summary on standard error says where the
+time went: the search's terminal checks, leaf expansions (the legality classification
+included), action listings and verifications, and the game's own turn-start verdicts.
 
 **Tests** (`tests/test_mcts.cpp`, `test_selfplay.cpp`, `test_capi_search.cpp`,
 `test_play_exe.cpp`): §15.4's invariants under uniform and random evaluators, across
@@ -2097,6 +2132,13 @@ duplicates bit-identical; the legality policy; self-play games under both splits
 five variants and two constructed endings, every action replayed legal, every ending
 re-judged, every record replayed by the reader; `t5d-play`'s records replayed by
 `t5d-gate`'s full mode; the C step loop building the same tree as the C++ search.
+After D8: the submit edge offered exactly where submitting is possible, pruned exactly
+where C4 fails, never taken automatically, and the only edge that changes the acting
+player (both Q4 readings, with and without the pseudo-legal seam); the node key
+telling apart the acting player and what was played; the solver against E7's
+brute-force game tree (`test_game_tree.hpp`) under both Q4 readings - never opposite
+verdicts, every mate in one proved; decisions counted as moves plus submissions;
+`t5d-play`'s rules option.
 
 ## 5DFEN
 

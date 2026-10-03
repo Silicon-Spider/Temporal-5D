@@ -11,15 +11,32 @@
 //    a state at a turn's start or during an action; its children are the
 //    LEGAL MOVES - those after which the action can still be finished legally
 //    (t5d/search.hpp: legal_moves; rulebook R1 judges legality per action, so
-//    a move into check mid-turn is legal) - and, under Q4's other reading
-//    (moves_after_shift), "submit" once the obligations are met and every royal
-//    is safe. The side to move keeps moving until it submits; a move after
-//    which nothing more may be played (Q4's default: the present has shifted)
-//    is submitted at once, so its child is the opponent's turn start. Mid-turn
-//    check is legal, and terminal detection runs only at turn boundaries
-//    (§8.2). A partial turn with no legal completion is a dead end, pruned
-//    (§8.2: "a dead end to prune, not a loss") - with the legal filter it does
-//    not arise; SearchParams::legal_moves_only = false (a test seam) makes it.
+//    a move into check mid-turn is legal) - and SUBMIT: turns have variable
+//    length (rulebook R8, register D8), so submitting is an action of its own.
+//    A submit edge exists exactly where submitting is POSSIBLE (the action's
+//    obligations are met, T5: Expansion::submit_possible), and is legal
+//    exactly where the submission passes C4's test (Expansion::submit_legal,
+//    exact); an illegal one is kept but pruned - never selected. Nothing is
+//    submitted automatically: after the move that shifts the present the node
+//    still belongs to the same acting player, and offers submit beside any
+//    further move on that player's remaining playable boards (by default,
+//    R8; under Q4's Guide-literal reading no further move, so submit alone).
+//    Only a submit edge changes the acting player. Mid-turn check is legal,
+//    and terminal detection runs only at turn boundaries (§8.2).
+//
+//    THE ENDS, from the rulebook. At a turn's start, no legal action is the
+//    game's end (C5): checkmate if the side to move is in check (R1's status),
+//    otherwise stalemate (C10, a draw; C13: no royal, never in check) - decided
+//    only by E4's exhaustive detector (H37). DURING an action there is no game
+//    end: C5 speaks of the start of a turn. A partial action whose remaining
+//    moves and submission are all illegal has no legal completion, so the
+//    move that reached it was not a legal move (R1: a move is legal when a
+//    legal action continues with it); it is a DEAD END, pruned and never
+//    scored (§8.2: "a dead end to prune, not a loss"). With the exact legality
+//    classification it is never reached; with a budget (an unknown move) or
+//    the pseudo-legal test seam (SearchParams::legal_moves_only = false) it is
+//    found when the node is expanded, and pruned. After the shift with a legal
+//    submission the action can always be finished, whatever the further moves.
 //  * TurnSplit::WholeTurn: a node is always a turn's start, and its children
 //    are the legal ACTIONS (t5d/search.hpp: list_legal_actions, E4's
 //    enumeration). The network's policy is over single moves (D1), so an
@@ -55,12 +72,13 @@
 // a terminal. Self-play's turn cap (I11, SearchParams::turn_cap) is a
 // convention defined from the state, scored as a draw and never a proof.
 //
-// VALUES are from the perspective of the node's player to move, in [-1, 1].
-// The evaluator's value is a 51-bin categorical distribution (D3) over the
-// bin centres (2k - 50) / 50, from the leaf's player to move (the player whose
-// action is in progress - python/t5d/net/heads.py's "player to move").
-// Backing up across an edge flips the sign iff the two nodes' players differ
-// (under the ply split, consecutive nodes of one action share a player).
+// VALUES are from the perspective of the node's ACTING PLAYER (register D8:
+// the side whose action is in progress, until it submits - after the present
+// has shifted inside the action it is no longer the colour to move on the
+// present), in [-1, 1]. The evaluator's value is a 51-bin categorical
+// distribution (D3) over the bin centres (2k - 50) / 50, from the leaf's
+// acting player. Backing up across an edge flips the sign iff the two nodes'
+// acting players differ - under the ply split, only across a submit edge.
 //
 // SELECTION (E1, committed): PUCT, U = c * P * sqrt(N) / (1 + n), over the
 // INSTANTIATED children only: the children sorted by prior, the first
@@ -79,9 +97,13 @@
 // evaluator throws.
 //
 // MCGS (C11, prototype; SearchParams::graph): nodes keyed by the state - the
-// 5D Zobrist key (H18), which carries the ruleset ID, and, if the lineage
-// reading of spec issue 30 is chosen, each timeline's branch origin
-// (SearchParams::node_key) - with an exact comparison on every key match.
+// 5D Zobrist key (H18), which carries the ruleset ID, every board in its place
+// (so what has been played inside the action: a played board has its
+// successor) and the acting player (a state after the shift and the same
+// boards after submission differ in it) - and, since C23 ruled a board's
+// causal past to be its ancestry (lineage; spec issue 30), each timeline's
+// branch origin (NodeKey::StateAndOrigins, the default) - with an exact
+// comparison on every key match.
 // Statistics live on the edges (path statistics); a transposition reached
 // through an edge whose Q lags the node's by more than epsilon backs up the
 // residual correction instead of descending (Czech, Korus and Kersting 2021).
@@ -208,9 +230,14 @@ struct SearchParams {
   std::size_t max_actions = 4096;
   /// Whole-turn: the listing's node budget; a stopped listing is incomplete.
   std::uint64_t listing_nodes = 2'000'000;
-  /// Board-move, under Q4's other reading only: the logit of "submit" (the
-  /// policy head has no output for it; spec issue). Placeholder.
-  float submit_logit = 0.0f;
+  /// Board-move: when the evaluator gives no submit logit (Evaluation::
+  /// submit_logit NaN), submit's share of the prior where further moves are
+  /// open too (the moves share the rest, in their own proportions). D8 gives
+  /// the network a submit logit of its own (stage N5); until then this
+  /// placeholder stands in - and decides how long untrained actions are: a
+  /// submit logit of 0 beside N flat move logits would give submit 1/(N+1),
+  /// and actions that play nearly every optional board (R8). Placeholder 0.5.
+  double submit_share = 0.5;
   /// Board-move: children are the legal moves (true, the rule). False is a
   /// test seam - pseudo-legal children, whose dead ends are pruned.
   bool legal_moves_only = true;
@@ -255,7 +282,9 @@ struct SearchParams {
 
   // ---- C11 (prototype): MCGS --------------------------------------------------------
   bool graph = false;
-  NodeKey node_key = NodeKey::State;  ///< placeholder (spec issue 30)
+  /// The lineage reading (C23, ruled): states that differ in a branch origin
+  /// are different positions for the network, so different nodes.
+  NodeKey node_key = NodeKey::StateAndOrigins;
   double residual_epsilon = 0.05;     ///< placeholder
 
   // ---- H2, E9: the in-tree solver ------------------------------------------------
@@ -312,6 +341,9 @@ struct Limits {
 /// relations, W(k)/E(k). Pointers are valid until the batch is delivered.
 struct EvalRequest {
   const GameState* state = nullptr;
+  /// Its global inputs include D8's: the acting player
+  /// (expansion->acting_player()) and the submit action
+  /// (expansion->submit_possible(), submit_legal()).
   const Expansion* expansion = nullptr;
   std::uint64_t key = 0;    ///< the node key
   std::uint64_t epoch = 0;  ///< the refresh epoch (§7.9)
@@ -322,8 +354,12 @@ struct EvalRequest {
 struct Evaluation {
   /// One logit per candidate move (expansion->moves().size()).
   std::vector<float> logits;
+  /// D8: the submit action's logit (under the ply split, read from a global
+  /// register), used when the leaf's submit is possible; NaN - none given -
+  /// stands for SearchParams::submit_share. Must not be infinite.
+  float submit_logit = std::numeric_limits<float>::quiet_NaN();
   /// Probabilities over kValueBins bins (normalised by the search), from the
-  /// leaf's player to move.
+  /// leaf's acting player.
   std::array<float, kValueBins> value{};
 };
 
@@ -456,6 +492,8 @@ struct SearchStats {
   std::uint64_t transposition_hits = 0;  ///< MCGS: an edge linked to an existing node
   std::uint64_t key_collisions = 0;    ///< equal keys, different states
   std::uint64_t dead_ends = 0;         ///< partial turns with no legal completion, pruned
+  std::uint64_t submit_edges = 0;      ///< D8: submit edges made (submitting possible)
+  std::uint64_t illegal_submits = 0;   ///< ... of which illegal (C4), kept pruned
   std::uint64_t unknown_edges = 0;     ///< (a) edges whose move the expansion left unknown
   std::uint64_t verified_legal = 0;    ///< (c) unknown edges verified legal
   std::uint64_t verified_illegal = 0;  ///< (c) ... verified illegal and removed
@@ -511,6 +549,8 @@ struct NodeView {
   bool stuck = false;
   bool dead_end = false;
   bool children_complete = true;
+  bool submit_possible = false;  ///< D8, once expanded: a submit edge exists
+  bool submit_legal = false;     ///< ... and is legal (C4)
   int lo = -1;
   int hi = 1;
   std::uint32_t visits = 0;
@@ -614,13 +654,14 @@ class Search {
   /// cache survives; the evaluator hook is told. Precondition: nothing waiting.
   void advance(std::size_t index);
   /// Re-roots on the state reached by `moves` - one decision: under the
-  /// board-move split one move (or none: submit), under the whole-turn split
-  /// one action - whether or not the tree holds it.
+  /// board-move split one move (never submitted with it, D8) or none (submit),
+  /// under the whole-turn split one action, submitted - whether or not the
+  /// tree holds it.
   void advance_moves(std::span<const Move> moves);
   /// Re-roots on the turn start a whole action reaches - its moves in a
   /// playable order (the opponent's reply, at match play): under the
-  /// board-move split one decision per move, then the submission if it was
-  /// not automatic; under the whole-turn split advance_moves(moves).
+  /// board-move split one decision per move, then the submit decision; under
+  /// the whole-turn split advance_moves(moves).
   void advance_action(std::span<const Move> moves);
   /// Re-roots on `target`, a state one decision from the root (a fresh root if
   /// the tree does not hold it). `turn_start` as for the constructor.
@@ -655,10 +696,6 @@ class Search {
 /// The node key of a state under the given keying (the 5D Zobrist key, with
 /// each timeline's branch origin mixed in for NodeKey::StateAndOrigins).
 std::uint64_t node_key(const GameState& state, NodeKey keying) noexcept;
-
-/// Whether the board-move split must submit `state` now: the obligations are
-/// met and no further move may be made (Q4's default).
-bool must_submit(const GameState& state) noexcept;
 
 }  // namespace t5d::mcts
 

@@ -9,7 +9,7 @@
 //            [--match] [--final visits|lcb] [--temperature T] [--temperature-decisions N]
 //            [--noise] [--cap-turns N] [--cap-boards N] [--max-actions N]
 //            [--listing-cap N] [--mate-nodes N] [--max-seconds S] [--seed S]
-//            [--moves-after-shift] [--rules ENCODING]
+//            [--no-moves-after-shift] [--rules ENCODING]
 //
 // Defaults: Standard, the uniform evaluator, 64 playouts per decision, the
 // board-move split (D2 is undecided: --split turn is the other arm), a tree
@@ -51,7 +51,7 @@ void usage(std::FILE* to) {
       "                [--temperature-decisions N] [--noise] [--cap-turns N] [--cap-boards N]\n"
       "                [--max-actions N] [--listing-cap N] [--mate-nodes N]\n"
       "                [--max-seconds S] [--seed S]\n"
-      "                [--moves-after-shift] [--rules ENCODING]\n",
+      "                [--no-moves-after-shift] [--rules ENCODING]\n",
       to);
 }
 
