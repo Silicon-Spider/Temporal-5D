@@ -2035,8 +2035,14 @@ expanded node through an edge whose Q lags the node's by more than `residual_eps
 (or an edge never crossed) backs up the residual correction instead of descending.
 5D has no repetition rule and every move adds a board, so the graph is acyclic.
 
-**The solver** (H2, E9). Bounds `[lo, hi]` per node from the mover's view: a
-terminal's exact value; `lo` the best child's lower bound (children through known
+**The solver** (H2, E9; `solver`, **off by default**). Spec §11.1 item 2 counts
+"inject solved bounds into the tree" as part of the proof channel, and H23 keeps the
+proof channel disabled until the generator has passed the gate - so propagating proven
+bounds, and every decision taken from them, waits on the user's ruling (turning it on
+is one line, `SearchParams::solver`; `t5d-play --solver`). With it off a terminal - C5
+at a turn start, by E4's exhaustive detector, or I11's cap - is still valued as its
+game result, which is ordinary MCTS; nothing else is proven. With it on: bounds
+`[lo, hi]` per node from the mover's view: a terminal's exact value; `lo` the best child's lower bound (children through known
 edges), `hi` the best child's upper bound once every child exists and the list is
 complete. Bounds only tighten; a contradiction throws. A solved node leaves selection
 and consumes no evaluation (a visit backs up its exact value); a solved child is
@@ -2044,8 +2050,8 @@ selected only while it has fewer than `solved_visit_cap` visits (the "visit thre
 for solved-node selection", read so). **No persistent solved store**: H19's export
 waits on the gate (H23); `proof_store = true` is refused.
 
-**Final selection** (E5, E9; `choose`). A proven win is played; children proven lost
-are ineligible unless all are; if an eligible child is solved, the secure child - the
+**Final selection** (E5, E9; `choose`). With the solver on, a proven win is played;
+children proven lost are ineligible unless all are; if an eligible child is solved, the secure child - the
 largest lower bound, exact for a solved child and `Q - A / sqrt(n)` otherwise; else
 `final_rule`: `Visits` (the baseline) or `Lcb` (default) - among children with at least
 `lcb_floor` (15%) of the most visits, the largest `Q - z sqrt(var / n)`, var plus
@@ -2109,7 +2115,7 @@ the reader and `t5d-gate` replay; a summary goes to standard error:
 ```
 t5d-play [--variant NAME] [--evaluator uniform|random|material] [--playouts N]
          [--split ply|turn] [--graph] [--node-key state|origins] [--no-widening]
-         [--e2] [--e3] [--batch N] [--synchronous] [--match] [--final visits|lcb]
+         [--e2] [--e3] [--solver] [--batch N] [--synchronous] [--match] [--final visits|lcb]
          [--temperature T] [--temperature-decisions N] [--noise] [--cap-turns N]
          [--cap-boards N] [--max-actions N] [--listing-cap N] [--mate-nodes N]
          [--max-seconds S] [--seed S] [--no-moves-after-shift] [--rules ENCODING]

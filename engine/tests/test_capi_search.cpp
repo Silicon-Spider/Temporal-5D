@@ -344,19 +344,35 @@ TEST(capi_search_proves_a_mate_in_one) {
                                    T5D_RULES_STANDARD, &g, nullptr),
              T5D_OK);
   const Game game(g);
-  const SearchHandle s = new_search(g, quick_params());
-  REQUIRE_EQ(t5d_search_run(s.get(), T5D_EVALUATOR_UNIFORM, 0, 2000, nullptr), T5D_OK);
-  t5d_search_summary info;
-  REQUIRE_EQ(t5d_search_info(s.get(), &info), T5D_OK);
-  CHECK_EQ(info.root_solved, 1);
-  CHECK_EQ(info.root_lo, 1);
-  CHECK(info.checkmates > 0);
-  size_t index = 0;
-  int32_t reason = -1;
-  REQUIRE_EQ(t5d_search_choose(s.get(), &index, &reason, nullptr), T5D_OK);
-  CHECK_EQ(reason, T5D_CHOICE_PROVEN_WIN);
-  t5d_root_child c;
-  REQUIRE_EQ(t5d_search_child(s.get(), index, &c, nullptr, 0, nullptr), T5D_OK);
-  CHECK_EQ(c.lo, 1);
-  CHECK_EQ(c.move_count, std::size_t{1});
+  t5d_search_params defaults;
+  t5d_search_params_default(&defaults);
+  CHECK_EQ(defaults.solver, 0);  // off until the user rules (H23, spec §11.1 item 2)
+  for (const int32_t solver : {1, 0}) {
+    t5d_search_params p = quick_params();
+    p.solver = solver;
+    const SearchHandle s = new_search(g, p);
+    REQUIRE_EQ(t5d_search_run(s.get(), T5D_EVALUATOR_UNIFORM, 0, 2000, nullptr), T5D_OK);
+    t5d_search_summary info;
+    REQUIRE_EQ(t5d_search_info(s.get(), &info), T5D_OK);
+    CHECK(info.checkmates > 0);  // the terminal is valued as its result either way
+    size_t index = 0;
+    int32_t reason = -1;
+    REQUIRE_EQ(t5d_search_choose(s.get(), &index, &reason, nullptr), T5D_OK);
+    t5d_root_child c;
+    REQUIRE_EQ(t5d_search_child(s.get(), index, &c, nullptr, 0, nullptr), T5D_OK);
+    CHECK_EQ(c.move_count, std::size_t{1});
+    if (solver == 1) {
+      CHECK_EQ(info.root_solved, 1);
+      CHECK_EQ(info.root_lo, 1);
+      CHECK_EQ(reason, T5D_CHOICE_PROVEN_WIN);
+      CHECK_EQ(c.lo, 1);
+    } else {
+      // Nothing proven: the mate is found by its value alone.
+      CHECK_EQ(info.root_solved, 0);
+      CHECK_EQ(info.root_lo, -1);
+      CHECK(reason != T5D_CHOICE_PROVEN_WIN);
+      CHECK_EQ(c.lo, -1);
+      CHECK(c.q > 0.5);
+    }
+  }
 }

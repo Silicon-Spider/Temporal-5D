@@ -117,6 +117,17 @@ TEST(play_exe_records_replay_through_the_gate_adapter) {
   play_and_gate({"--variant", "Very Small - Open", "--evaluator", "material", "--playouts", "16",
                  "--cap-turns", "12", "--seed", "2"},
                 {});
+  // The in-tree solver is off unless asked for (H23); the Engine header says so.
+  const t5d::PgnRecord plain = play_and_gate({"--variant", "Very Small - Open", "--playouts", "16",
+                                              "--cap-turns", "6", "--seed", "2"},
+                                             {});
+  REQUIRE(plain.header("Engine") != nullptr);
+  CHECK(plain.header("Engine")->find("solver") == std::string::npos);
+  const t5d::PgnRecord solved = play_and_gate({"--variant", "Very Small - Open", "--solver", "--playouts", "16",
+                                               "--cap-turns", "6", "--seed", "2"},
+                                              {});
+  REQUIRE(solved.header("Engine") != nullptr);
+  CHECK(solved.header("Engine")->find(", solver") != std::string::npos);
 }
 
 TEST(play_exe_takes_its_rules_through_the_shared_option_reader) {
