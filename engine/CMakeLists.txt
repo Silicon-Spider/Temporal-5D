@@ -217,6 +217,8 @@ target_sources(t5d-tests PRIVATE tests/test_certificate.cpp tests/test_guard.cpp
 # Hunt's ground truth and 6b'': 6b's roots with their next actions, the truth
 # file and its SHA-256 pin (shared by the tools and the truth file's test).
 target_sources(t5d_tools PRIVATE tools/sha256.cpp tools/sixb_roots.cpp tools/hunt_truth.cpp)
+target_sources(t5d-tests PRIVATE tests/test_hunt_truth.cpp)
+target_compile_definitions(t5d-tests PRIVATE "T5D_ENGINE_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}\"")
 add_executable(t5d-hunt-truth tools/t5d_hunt_truth.cpp)
 target_link_libraries(t5d-hunt-truth PRIVATE t5d_tools Threads::Threads)
 if(MINGW)
