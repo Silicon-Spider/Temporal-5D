@@ -22,6 +22,9 @@ the network as the evaluator - end to end, with random weights.
   policy logits, the submit logit (D8) and 51-bin value distributions out, batched through
   ``collate`` and the model (dense or cached); ``CStepDriver``, the protocol over the C step
   API (stage N5).
+* ``netplay.py`` - games through the C step API with the network as the evaluator:
+  self-play and match play, both arms of D2, records written and replayed through the
+  engine's gate adapter (stage N5); ``python -m t5d.engine.netplay``.
 * ``bench.py`` - conversion and forward-pass timings on real positions.
 
 The engine's rules are its own: nothing here computes a rule, and nothing here reads the
