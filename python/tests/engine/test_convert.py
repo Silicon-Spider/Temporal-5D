@@ -246,6 +246,53 @@ def test_an_inconsistent_expansion_is_refused():
     to_position(start), to_position(past)  # the real ones convert
 
 
+def _past_the_shift_with_moves(seed: int = 0):
+    """Seeded random play from Two Timelines to a state past the shift that still has moves:
+    its expansion (the game closed)."""
+    from t5d.engine.play import ROYAL_IDS
+
+    rng = np.random.default_rng(seed)
+    with Game.variant("Standard - Two Timelines") as g:
+        g.set_legality(False)
+        for _ in range(400):
+            x = g.expand(square_features="none")
+            if g.info().obligations_met:
+                if x.move_count:
+                    return g.expand()
+                g.submit()
+                continue
+            g.apply(int(rng.choice(np.flatnonzero(~np.isin(x.moves["captured"], ROYAL_IDS)))))
+    raise AssertionError("no move after a shift met")
+
+
+def test_moves_that_are_not_the_acting_players_are_refused():
+    """The review's cases. A state past the shift relabelled as the opponent's turn start - the
+    acting player its opponent, no submit - agrees with its present but not with its moves, which
+    all start on the other colour's boards; moves offered where none may be made; an acting
+    player or player to move that is no colour (PresentMismatch, not an IndexError)."""
+    from dataclasses import replace
+
+    past = _past_the_shift_with_moves(seed=3)
+    assert past.move_count > 0 and past.submit_possible
+    to_position(past)  # the real one converts
+    relabelled = replace(past, acting_player=1 - past.acting_player, to_move=1 - past.to_move, submit_possible=False, submit_legal=False)
+    with pytest.raises(PresentMismatch, match=f"{past.move_count} of {past.move_count} moves start on boards"):
+        to_position(relabelled)
+    assert not to_position(relabelled, strict=False).present_matches
+    with Game.variant("Standard") as g:
+        start = g.expand()
+    with pytest.raises(PresentMismatch, match="may_move is false"):
+        to_position(replace(start, may_move=False))
+    bad_pieces = replace(start, colour=np.where(start.colour == 1, 2, np.where(start.colour == 2, 1, 0)).astype(np.uint8))
+    with pytest.raises(PresentMismatch, match="without a piece of the acting player's"):
+        to_position(bad_pieces)
+    for field, value in (("acting_player", 2), ("to_move", -1)):
+        with pytest.raises(PresentMismatch, match=field):
+            to_position(replace(start, **{field: value}))
+        with pytest.raises(PresentMismatch, match=field):
+            to_position(replace(start, **{field: value}), strict=False)
+
+
 def test_the_causal_past_is_ancestry():
     """Register C23: a board's causal past is its ancestry - its own timeline's earlier boards
     and, recursively, its branch parent up to the branch point. On a real branched game (the
