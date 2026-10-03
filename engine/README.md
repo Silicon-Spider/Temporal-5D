@@ -2003,7 +2003,10 @@ weighted `sigma_ref^2 / (sigma_ref^2 + var)`; E3 - U multiplied by `clamp(1 + be
 (sigma_child / sigma_ref - 1), 1, cap)`, never below 1, nothing for an unevaluated
 child.
 
-**Batches and virtual loss.** `gather` selects up to `batch_size` leaves; each path
+**Batches and virtual loss.** `gather` makes up to `batch_size` visits - the leaves it
+sends for evaluation and the visits it completes without the evaluator (terminals,
+solved nodes, cache hits, MCGS residuals) together, so that terminal visits cannot pile
+up behind a waiting leaf's virtual loss; each waiting path
 carries one virtual visit, counted as a loss, on every node and edge it crosses. A
 second path reaching a waiting leaf is a collision (its virtual loss held until the
 batch ends, so later selections diverge). One evaluation is asked per distinct state
@@ -2017,8 +2020,16 @@ after the shift and the same boards submitted differ in it) - mixed, by default,
 every timeline's branch origin (`NodeKey::StateAndOrigins`: C23 ruled a board's causal
 past to be its ancestry, the lineage reading of spec issue 30, so states that differ
 only in an origin are different positions for the network); `NodeKey::State` leaves
-origins out. An exact comparison follows every key match (a collision gets an
-unshared node). Statistics
+origins out. A node's identity in the graph is its key **and whether an action is in
+progress**: a turn start and a state during an action can be one `GameState` (an
+optional board played at the end of one action, or at the start of the next - same
+boards, same player, same present), yet only a turn start can end the game (C5) or be
+capped (I11), and only a partial action can be a dead end, so they are never one node
+(a submit edge always leads to a turn start, a move to a state during an action;
+`check_invariants` holds it). Whether a leaf is a turn start is a property of the path,
+not of the state, so the evaluator is never told it: an evaluation is a function of
+the state and the epoch, and the cache is shared between the two. An exact comparison
+follows every key match (a collision gets an unshared node). Statistics
 live on the edges (path statistics; in a tree they equal the child's). Reaching an
 expanded node through an edge whose Q lags the node's by more than `residual_epsilon`
 (or an edge never crossed) backs up the residual correction instead of descending.
@@ -2066,7 +2077,7 @@ timeline's head board; captures' logits 0.5 x the captured value).
 **The C API** (`t5d/capi_search.h`, in `t5d.dll` / `libt5d.so`): the step API for an
 external evaluator - `t5d_search_new(game, turn_start, params, &search)`,
 `t5d_search_gather(search, max_leaves, max_playouts, &count)`, `t5d_search_leaf(search,
-i, &leaf)` (a `t5d_leaf`: key, epoch, the acting player, turn start, D8's
+i, &leaf)` (a `t5d_leaf`: key, epoch, the acting player, D8's
 `submit_possible` and `submit_legal`, the `t5d_expansion` - which carries them too -
 and each move's legality), `t5d_search_deliver(search, logits, logit_count,
 submit_logits, submit_count, values, value_count, value_kind)` - one float32 logit per

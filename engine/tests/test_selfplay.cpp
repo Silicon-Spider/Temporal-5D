@@ -226,7 +226,7 @@ TEST(selfplay_under_r8_moves_after_the_shift_are_played) {
   // action does (an optional board played after the mandatory ones).
   const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
   std::size_t after_shift = 0;
-  for (std::uint64_t seed = 1; seed <= 4 && after_shift == 0; ++seed) {
+  for (std::uint64_t seed = 1; seed <= 16 && after_shift == 0; ++seed) {
     PlayParams p = quick(TurnSplit::BoardMove, seed);
     p.turn_cap.turns = 6;
     const GameRecord g = play_game(variant("Standard - Two Timelines"), *uniform, p);
