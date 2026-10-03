@@ -15,7 +15,52 @@ M5 - building it would break a rule).
 
 ## Where things stand
 
-### CHECKPOINT 4 - STOPPED 2026-10-03: 6b′ fails at 50-199 boards (M15) - a design review
+### CHECKPOINT 4 - ruled 2026-10-03: the verification layer is v3 (§11.4); the run resumed
+
+The design review concluded (design documents committed e668555; register H1, H2,
+H6, H10-H12, H18, M5, M14 changed; C24, C25, H41-H45, M16, M17 and reversal 23
+added): exact rules always; the search's own solver for proofs, gated as part of
+the proof channel (H41: game-end scoring stays on, solved-status propagation and
+export off until the gate passes, the search's soundness fixes land with tests and
+the proof channel is signed off); **Guard** (H42) and **Hunt** (H43) at every size;
+full settling scans only under 50 boards; an offline audit lane (H44); the
+adversarial league primary above 50 boards (H45). Retired: the per-leaf estimate
+channel (rung 1), rungs 3 and 5; the NNUE held open (H6). The user's rulings:
+1. E8: carry its df-pn and incremental attack maps into Hunt and Guard; drop the
+   per-leaf estimate channel; review, then merge.
+2. Guard (H42): before the chosen move is played, iterative deepening from depth 1
+   under a fixed budget - can the opponent force mate against it? Depth 1 checks
+   only that one legal escape exists per opponent check. A refutation rejects the
+   move and triggers a re-search from §8.6's reserve.
+3. Hunt (H43): df-pn in prove-only mode at the root - stops at budget and claims
+   nothing; a found mate is a proof under H37 and H41's gating; its partial lines
+   as soft priors behind a flag, with §12.2's exclusions.
+4. The offline audit lane's tooling (H44): the decision sampler, the offline
+   proof runner, the per-range report of how often the chosen move allows a
+   shallow forced mate; curriculum hooks as interfaces only - no training.
+5. Hunt's ground truth: one long offline search per 6b position, recorded once,
+   pinned and hashed like the recorded answers.
+6. 6b″ (M17): same positions, per range, 5 threads, 50 ms; adopt Guard and Hunt
+   where each passes; record the verdicts. **No outcome stops the run.**
+7. The complexity trigger (C24) behind a flag alongside the refresh ladder's rung
+   1. Not built: C25, the NNUE (held open), the retired rungs (M5).
+8. Continue in CHECKPOINT 3's order: E6a's fixes and merge (with the H18
+   acting-player test), the many2 re-record, the gate with the engine configured,
+   then N5. Step 6 of the brief's "scanner ladder" reads as the reduced ladder:
+   Guard, Hunt and the asset map.
+M16 also fixed M7's readings; applied, the window is killed under human-game
+weighting, which contradicts M16's own premise - put to the user (MEASUREMENTS, M7).
+
+**Running (2026-10-03):** engine **E9** on E8's branch (Guard, Hunt, the asset map
+as components; the estimate channel dropped; Hunt's ground truth; the 6b″ tool);
+engine **E6a**'s fix round (its three reviews; H41's switch; H18's acting-player
+test); network **C24** (the complexity trigger, behind a flag). **Then:** E9's review
+and merge; E6a's merge; E10 - Guard, Hunt, the asset map and the under-50 settling
+scans wired into the search, and the offline audit lane's tooling (H44); 6b″ on a
+quiet machine; the many2 re-record; the gate with the engine configured; N5.
+
+### The CHECKPOINT 4 stop (2026-10-03) - the record
+
 
 The verification redesign (M14) was built as a prototype (engine E8, branch
 `worktree-agent-a4f2f93a8a448467b`, bd08c48 - not merged: it waits on the design
@@ -194,22 +239,16 @@ with branch origins, C23); N3's CPU wall times.
   search (rung 1) and Lazy SMP, end-to-end play with the network's random weights,
   the NNUE only if 6b passes (M8).
 - **Waiting on the user:**
-  - **M7 - the window under 50 boards is in the STOP band** (2026-10-03,
-    MEASUREMENTS). §15.6: "per phase, the window is on at k = 8 where the measured
-    median |E| is under the k = 8 ceiling, on at k = 4 where only the k = 4 ceiling
-    is met, and off where neither is ... killed outright if the phases where it is
-    on carry under half the compute". On t0database's real games the window is on
-    at k = 8 from 50 to 186 boards (1.91x, 2.18x, 4.28x against 1.5x). Under 50
-    boards it is 1.60x at k = 4 and 1.45x at k = 8 - inside ±10% - and the kill
-    clause turns on that phase: 100% of compute on-phase if it is on, 21.8% (killed)
-    if it is off, 69.8% with 10-board phases. Three questions: (1) which reading
-    applies - (a) the 50-board bucket's median: on at k = 4; (b) finer phases (e.g.
-    10 boards): off under 20 boards, not killed; (c) the early game off and the
-    window killed under the human-game distribution; (2) is the multiplier
-    m = m_cached^0.9 · m_dense^0.1 (the only reading that reproduces §15.6's
-    table); (3) whose phase distribution weights the kill clause - human games
-    spend 88% of their moves under 50 boards, and self-play cannot be measured yet.
-    The window code stays parked until then; nothing else waits on it.
+  - **M7 under M16: the window is killed, against M16's own premise** (2026-10-03,
+    MEASUREMENTS). M16 answered the three questions (time-share multiplier; kill
+    clause weighted by t0database; off under 50 boards, "that phase carries a small
+    share of compute"). Applied: on at k = 8 from 50 to 186 boards (1.83x, 2.10x,
+    3.81x), off under 50 - and then the phases where it is on carry 18-38% of the
+    compute (20.4% blended) under the human-game weighting M16 prescribes, so the
+    kill clause kills it. The premise does not hold for those games: under 50
+    boards is about 80% of their compute (88% of their moves). Not a stop; the
+    window code stays unbuilt (M5). Question: confirm the kill until M16's re-check
+    against early self-play, or a different weighting?
   - **Q2** (rulebook) - *the question:* "How do initial timelines count when a
     variant starts with several (Two Timelines, Tactician, Strategos, Formations,
     Invasion, Battleground)? Does either side start as having "created" one? No
@@ -697,7 +736,7 @@ for game records.
 
 | ID | Status | Notes |
 |---|---|---|
-| H1 | built, tested | Engine E5b's scanner: node-capped alpha-beta over forcing actions; not yet in a search |
+| H1 | v3 (CHECKPOINT 4), in progress | Verification v3 (§11.4): exact rules (E1-E4); the search's solver (E6a, gated by H41); Guard and Hunt (E9, building); full settling (df-pn, E8) under 50 boards; the audit lane (H44). E5b/E5c's brute-force scanner stays as 6b′'s comparison |
 | H2 | built, tested | Proofs only from E4's exhaustive verdicts and exhaustive defender enumerations; estimates otherwise |
 | H3 | built, tested | Node cap with iterative deepening in forcing half-turns; horizon per budget measured (6b) |
 | H4 | built | MVV-LVA, killers, history, continuation history |
@@ -705,7 +744,14 @@ for game records.
 | H6 | built (v1) | Material count with placeholder 5D piece values (spec issue 56); NNUE v2 waits on 6b (M8) |
 | H7 | not built (rule) | NNUE training: no training runs; NNUE waits on 6b |
 | H8, H9, H20, H21 | not built (rule) | Held open / refused |
-| H10-H14 | parked | Async ladder rungs: with the scanner |
+| H10 | reduced (CHECKPOINT 4) | Rung 1 dropped (6b); rungs 3 and 5 retired; rung 2's promotion side is Guard, its demotion audit the audit lane; rung 4, the asset map, building (E9) |
+| H11 | superseded | By Guard (promotion) and the audit lane (demotion audit) |
+| H12 | retired | With the NNUE and the per-node scans |
+| H13, H14 | parked | Ladder scheduling: with the search wiring (E10) |
+| H41 | building | The search's solver as part of the proof channel: game-end scoring on; propagation and export off until the gate passes (E6a's fix round) |
+| H42, H43 | building | Guard and Hunt (E9); adoption per range by 6b″ |
+| H44 | not started | The offline audit lane's tooling (E10) |
+| H45 | not built (rule) | The adversarial league (M5) |
 | H15 | built, tested | The scanner's deterministic single-thread mode; search's (E6a) in progress |
 | H16, H25, H29 | not built (rule) | Refused |
 | H17 | built in part | Lazy SMP in the scanner (E5c): same-root threads, a shared TT and a concurrent solved store; in-game decay and rung helpers wait for the search |
@@ -762,7 +808,7 @@ for game records.
 | E6 | not built (rule) | Refused |
 | F1, F2 | built, tested | 21,358,601 parameters (F1); the L24-ff12 preset, 44.5M (F2) |
 | F3 | not built (rule) | Refused |
-| F4 | parked | NNUE only after 6b passes (M8) |
+| F4 | not built (rule) | The NNUE is held open (H6, CHECKPOINT 4) |
 | G1 | built, tested | BF16 trunk under autocast; FP32 heads and RoPE; the cache stores K/V in the live format (§15.2 row (e)) |
 | G2 | not started | FP8 attention - no FP8 kernels on this machine |
 | G3, G4, G5, G6 | not built (rule) | Deferred / held open / refused |
@@ -775,7 +821,11 @@ for game records.
 |---|---|---|
 | M14 | built (prototype), measured - STOP | Engine E8 on its branch (bd08c48): the channel split, df-pn over the semimove turn tree, incremental attack maps; 6b′ fails at 50-199 boards (M15) |
 | M15 | measured - STOP | 6b′ on a quiet machine: (A) 77.4% / 40.7% / 23.7% / 0.0%; (B) fits in no range; (C) df-pn 408 against brute force 400 under 50 boards - STOP, a design review |
-| M7 | measured - STOP | On real games (t0database, 716 games, max 186 boards): on at k = 8 from 50 to 186 boards; under 50 boards inside the ±10% band and the kill clause turns on it - waiting on the user; above 186 provisional (MEASUREMENTS) |
+| M16 | applied | M7's readings: time-share multiplier, human-game weighting, off under 50 boards - the kill clause then kills the window (put to the user) |
+| M17 | not started | 6b″: Guard and Hunt per range (E9's tool; quiet run to follow); no outcome stops the run |
+| C24 | building | The complexity trigger, behind a flag beside rung 1 (network) |
+| C25 | not built (rule) | Held open |
+| M7 | measured; M16 applied - killed | On real games (t0database, 716 games, max 186 boards): on at k = 8 from 50 to 186 boards; under 50 boards inside the ±10% band and the kill clause turns on it - waiting on the user; above 186 provisional (MEASUREMENTS) |
 | M8 | measured - STOP | 6b re-run (M12): root scan 76.7% / 31.4% / 24.7% / 2.4% by range (< 50 / 50-99 / 100-199 / 200+); rung 1 and quiet-leaf reach fail everywhere; stand-pat valid |
 | M12 | applied - STOP | The bounded optimisation pass (E5c) and the re-run at 5 threads, Lazy SMP: 50-199 boards fail -> STOP, redesign the verification layer |
 | M13 | applied | 8 cores per GPU: M9 judged on 2 expansion cores (passes, 1.87x), the scanner measured at 5 |

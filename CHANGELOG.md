@@ -10,6 +10,21 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-03 - Build log: CHECKPOINT 4's ruling; M7 re-read under M16
+
+- `docs/BUILD_LOG.md`: CHECKPOINT 4 concluded - verification v3 (§11.4) and the
+  user's eight rulings (E8 into Guard and Hunt, Guard, Hunt, the audit lane's
+  tooling, Hunt's ground truth, 6b″, the complexity trigger, and CHECKPOINT 3's
+  order), what is running and what follows; register rows H1, H10-H14, H41-H45,
+  F4, M16, M17, C24, C25 and M7.
+- `docs/MEASUREMENTS.md`: M7 re-read under M16's readings: on at k = 8 from 50 to
+  186 boards (1.83x, 2.10x, 3.81x by the time-share multiplier), off under 50
+  boards - and then killed by the kill clause, the on-phases carrying 18-38% of the
+  compute under the human-game weighting M16 prescribes. That contradicts M16's
+  premise that the under-50 phase is a small share; put to the user. Not a stop.
+- Spec: §11.4, §15.6 (M16, M17, the window's rule); register H1, H10-H14,
+  H41-H45, M7, M16, M17, C24, C25.
+
 ### 2026-10-03 - Design documents: the CHECKPOINT 4 ruling (verification v3), from upstream
 
 - `docs/design/` replaced with the upstream revision recording CHECKPOINT 4: §11.4

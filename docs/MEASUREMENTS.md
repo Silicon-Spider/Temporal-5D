@@ -216,7 +216,39 @@ which the spec leaves undefined (spec issue 20) - a question for the user, with 
 below. Exact legality would not meet the target at any core count (its tail is
 minutes).
 
-### The window: |E| phase curve (M7) on real games - ON AT k = 8 FROM 50 TO 186 BOARDS; UNDER 50 BOARDS IN THE STOP BAND - STOP; NO DATA ABOVE 186
+### The window: |E| phase curve (M7) on real games - M16 APPLIED: ON AT k = 8 FROM 50 TO 186 BOARDS, OFF UNDER 50 - AND THEN KILLED BY THE KILL CLAUSE UNDER HUMAN-GAME WEIGHTING
+
+**M16 applied (CHECKPOINT 4, 2026-10-03).** The user fixed three readings: the
+all-in multiplier is the time-share (harmonic) M = 1 / (0.9 / m_cached + 0.1 /
+m_dense); the kill clause is weighted by real human games (t0database) until
+self-play exists, and re-checked against early self-play before serious self-play
+compute; under 50 boards the window is off ("that phase carries a small share of
+compute and dense attention there is cheap, so the choice is immaterial"). On the
+same measurements as below (legal |E|, each phase at its median N, W and |E|):
+
+| Phase | M at k = 8 (time-share) | the geometric reading, for comparison | Verdict under M16 |
+|---|---|---|---|
+| 1-49 | - | 1.445 | **off** (M16) |
+| 50-99 | **1.831** | 1.913 | on at k = 8 |
+| 100-159 | **2.099** | 2.184 | on at k = 8 |
+| 160-186 (2 games) | **3.807** | 4.276 | on at k = 8 |
+| 187+ | - | - | no data: provisional |
+
+**The kill clause** (each phase weighted by its unwindowed per-node cost × the
+moves human games spend in it): the phases where the window is on (50 boards and
+up) carry **18.4% of the cached compute, 38.0% of the dense, 20.4% blended 90/10**
+(per bucket median; 19.6% / 41.4% / 21.8% taking each position's own N). That is
+under half, so **the window is killed** under M16 as written.
+
+**This contradicts M16's premise.** The ruling turns the window off under 50 boards
+because "that phase carries a small share of compute"; under the weighting M16
+itself prescribes, that phase carries about 80% of it (human games spend 87.8% of
+their moves under 50 boards and end at a median of 44 boards). Not a STOP (M16: a
+result in the ±10% band under 50 boards needs no stop; the kill clause's 20% is far
+from its 50% line), so recorded, and the question put to the user. The window code
+stays unbuilt either way (M5: the window only if the |E| curve survives); M16's
+re-check against early self-play remains.
+
 
 2026-10-03, engine at 901e5be (Release, g++ 16.2, 383 tests passing). The data:
 t0database (`data/t0database/`, pinned, MIT): `py data/t0database/to_5dpgn.py
