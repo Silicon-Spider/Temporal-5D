@@ -178,7 +178,9 @@ const Variant* find_variant(std::string_view name) noexcept {
 GameState variant_start(const Variant& variant, const RuleOptions& rules) {
   RuleOptions r = rules;
   r.family = variant.family;
-  return game_from_fen(variant.boards, variant.size, variant.parity, r, Colour::White);
+  // Every timeline of a set-up is initial: created by neither player (R10, H46).
+  return game_from_fen(variant.boards, variant.size, variant.parity, r, Colour::White,
+                       /*all_initial=*/true);
 }
 
 }  // namespace t5d

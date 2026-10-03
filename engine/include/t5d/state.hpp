@@ -302,13 +302,14 @@ int initial_present(const Multiverse& multiverse, const RuleOptions& rules = {})
 /// active playable board - the colour to move on the present (T4, Q9: no
 /// source says who moves first in a custom position; this is the inferred
 /// answer). Throws NotationError for malformed strings and
-/// std::invalid_argument as GameState's constructor does.
+/// std::invalid_argument as GameState's constructor does. `all_initial` as in
+/// multiverse_from_fen: every timeline is initial (a named variant's set-up).
 GameState game_from_fen(std::span<const std::string_view> boards, BoardSize size, Parity parity,
                         const RuleOptions& rules = {},
-                        std::optional<Colour> to_move = std::nullopt);
+                        std::optional<Colour> to_move = std::nullopt, bool all_initial = false);
 GameState game_from_fen(const std::vector<std::string>& boards, BoardSize size, Parity parity,
                         const RuleOptions& rules = {},
-                        std::optional<Colour> to_move = std::nullopt);
+                        std::optional<Colour> to_move = std::nullopt, bool all_initial = false);
 
 /// C5 from the hooks: has_legal_action Yes -> Ongoing; No -> in_check Yes ->
 /// Checkmate, No -> Stalemate; Unknown wherever a hook is missing or answers

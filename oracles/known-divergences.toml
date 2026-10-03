@@ -63,7 +63,7 @@
 #                                 # (for kind legality or length: the implementation - ftxi | cwmtt | chessin5d | notation)
 # pin = "ee403c80e8c132fc4d168f5b99ddd9b8fe5cc17b"   # that oracle's locked commit when this was verified
 # record = "cwmtt/standard"       # corpus record id
-# record_sha256 = "..."           # its sha256 in corpus/manifest.toml
+# record_sha256 = "..."           # its sha256 in corpus/manifest.toml (its `converted`, where it has one)
 # kind = "in_check"               # side | in_check | legal_actions | terminal | legality | length | placement | unmoved
 # index = 13                      # position index (action number for legality and length; 0 is the set-up)
 # engine_value = "True"           # both values exactly as the gate prints them (for placement and

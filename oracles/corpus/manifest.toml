@@ -5,7 +5,11 @@
 # bytes from that submodule's object store at its locked commit. A record cannot
 # change without this file changing, and no record is redistributed from here.
 #
-# Records are fed to every source as stored, with CRLF folded to LF.
+# Records are fed to every source as stored, with CRLF folded to LF - but for
+# cwmtt's records in the official client's export form, whose moves name their
+# board twice (`(0T1)Pe2(0T1)e3`): every source reads those converted to the
+# notation specification's 5dpgn (oracle_harness/export_form.py; the CHECKPOINT 3
+# ruling), and their entries pin the converted text too.
 #
 #   board    the variant the record declares, exactly: its Board header, or its
 #            Variant header when it has no Board header (ftxi reads one in place
@@ -16,6 +20,11 @@
 #            whose board is a custom set-up ("Custom...", "Even", "Odd")
 #   tier     the cheapest gate tier that runs the record (commit | nightly)
 #   also_at  other pinned locations holding the identical blob
+#   converted  only for a record of cwmtt's in the export form: the SHA-256 of the
+#            converted text every source reads (`verify` prints it), or
+#            "unsupported" where a move of it has no form in the notation
+#            specification - then no source is given the record, and every one
+#            reports it unsupported (reason export_form)
 #
 # This is a seed corpus: the .5dpgn test records the pinned projects ship (not
 # cwmtt's tests in its own .tn format, nor the games embedded in 5d-chess-js's
@@ -146,6 +155,9 @@ size = 4088
 board = "Standard"
 licence = "GPL-3.0, as part of penteract/cwmtt"
 tier = "commit"
+# Written by the official client's exporter: 153 of its 204 moves name their board
+# twice. Every source reads it converted (CHECKPOINT 3).
+converted = "e4de14415dbd4721cae38889d42cd3e355c88a2abe3b99d3080b6a7410b77981"
 
 [[record]]
 id = "cwmtt/manyChecks"

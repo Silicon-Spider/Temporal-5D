@@ -20,12 +20,11 @@
 // Every variant starts at T1 with White to move (V2), Standard - Turn Zero on
 // two boards (its T0 board a history board from the start). The
 // multi-timeline variants' boards are listed top first as seen from White's
-// side and taken to be -0 (or -1) first - V3's inferred mapping. Their
-// non-central initial timelines (Timeline Battleground's -1 and +1) are read as
-// 5DFEN reads any non-central timeline: created by the colour of their sign,
-// creation order 1 each. The count rule (T10) treats the two sides alike there,
-// so that matches "initial timelines count for neither side" (Q2's default);
-// Q2's alternative is the ruleset option initial_credit.
+// side and taken to be -0 (or -1) first - V3's inferred mapping. Every timeline
+// of a set-up is initial - Timeline Battleground's -1 and +1 included - with no
+// creator and creation order 0: initial timelines count as created by neither
+// player (ruling R10, register H46, provisional; Q2). Q2's alternative is the
+// ruleset option initial_credit.
 //
 // Reversed Royalty is a rule variant (design spec §12.6): its set-up carries
 // RuleFamily::ReversedRoyalty, which gives it a ruleset ID of its own (§11.3,

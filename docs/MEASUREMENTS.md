@@ -216,7 +216,44 @@ which the spec leaves undefined (spec issue 20) - a question for the user, with 
 below. Exact legality would not meet the target at any core count (its tail is
 minutes).
 
-### The window: |E| phase curve (M7) on real games - ON AT k = 8 FROM 50 TO 186 BOARDS; UNDER 50 BOARDS IN THE STOP BAND - STOP; NO DATA ABOVE 186
+### The window: |E| phase curve (M7) on real games - M16 APPLIED: ON AT k = 8 FROM 50 TO 186 BOARDS, OFF UNDER 50 - AND THEN KILLED BY THE KILL CLAUSE UNDER HUMAN-GAME WEIGHTING
+
+**M16 applied (CHECKPOINT 4, 2026-10-03).** The user fixed three readings: the
+all-in multiplier is the time-share (harmonic) M = 1 / (0.9 / m_cached + 0.1 /
+m_dense); the kill clause is weighted by real human games (t0database) until
+self-play exists, and re-checked against early self-play before serious self-play
+compute; under 50 boards the window is off ("that phase carries a small share of
+compute and dense attention there is cheap, so the choice is immaterial"). On the
+same measurements as below (legal |E|, each phase at its median N, W and |E|):
+
+| Phase | M at k = 8 (time-share) | the geometric reading, for comparison | Verdict under M16 |
+|---|---|---|---|
+| 1-49 | - | 1.445 | **off** (M16) |
+| 50-99 | **1.831** | 1.913 | on at k = 8 |
+| 100-159 | **2.099** | 2.184 | on at k = 8 |
+| 160-186 (2 games) | **3.807** | 4.276 | on at k = 8 |
+| 187+ | - | - | no data: provisional |
+
+**The kill clause** (each phase weighted by its unwindowed per-node cost × the
+moves human games spend in it): the phases where the window is on (50 boards and
+up) carry **18.4% of the cached compute, 38.0% of the dense, 20.4% blended 90/10**
+(per bucket median; 19.6% / 41.4% / 21.8% taking each position's own N). That is
+under half, so **the window is killed** under M16 as written.
+
+**This contradicts M16's premise.** The ruling turns the window off under 50 boards
+because "that phase carries a small share of compute"; under the weighting M16
+itself prescribes, that phase carries about 80% of it (human games spend 87.8% of
+their moves under 50 boards and end at a median of 44 boards). Not a STOP (M16: a
+result in the ±10% band under 50 boards needs no stop; the kill clause's 20% is far
+from its 50% line), so recorded, and the question put to the user. The window code
+stays unbuilt either way (M5: the window only if the |E| curve survives); M16's
+re-check against early self-play remains.
+
+**Confirmed at CHECKPOINT 5:** the window is killed, provisionally; the weighting
+is not changed (M16 corrected: under 50 boards the per-phase rule decides, a result
+in the ±10% band resolving to off). A pilot self-play run before serious self-play
+re-checks it (M18) - after §15.5, outside the untrained build.
+
 
 2026-10-03, engine at 901e5be (Release, g++ 16.2, 383 tests passing). The data:
 t0database (`data/t0database/`, pinned, MIT): `py data/t0database/to_5dpgn.py
@@ -323,6 +360,31 @@ real games run 16-24 active timelines where §15.6's table assumes 7-12 - so W
 itself, not |E|, dominates the scope (at 160-239 boards W(8) = 122 against the
 table's 69). The rule needs real game records (spec issue 26; requested from the
 user); the window code stays parked (M5, M7).
+
+### Engine E6a - the search's memory accounting and smoke games (2026-10-03)
+
+Dev machine, g++ 16.2 Release, shared. Accounting against a counting `operator new`
+(Two Timelines starts after 2-12 actions, random evaluator, 300-2,000 playouts):
+the evaluation cache's byte count 1.01-1.17x the heap it holds (the first estimate
+was 1.4-2.2x low); `Search::memory_bytes()` 0.99-1.05x. Before the fixes, a
+whole-turn node at 103 boards with `max_actions` 4096 held about 1.5 MB (now 256).
+Smoke games (`t5d-play`, R8, the uniform evaluator unless named; every record
+replays `ok` through t5d-gate):
+
+| Game | Actions | End | Time |
+|---|---|---|---|
+| Standard, board-move split, tree | 32 | board cap (332 boards) | 56 s |
+| Standard, board-move split, graph | 32 | board cap | 56 s |
+| Standard, whole turn, tree | 28 | turn cap | 3.8 s |
+| Standard, whole turn, graph | 28 | turn cap | 3.5 s |
+| Two Timelines, board-move split, graph, match play | 18 | turn cap | 0.25 s |
+| Two Timelines, whole turn, tree | 16 | turn cap | 0.9 s |
+| Very Small - Open, material evaluator | 7 | checkmate 1-0 | 0.03 s |
+| Standard, `--no-moves-after-shift` | 34 | board cap | 54 s |
+
+At large N the time is legality classification (spec issue 95): in a tree-mode
+Standard game to 336 boards, 41 of 43 s were leaf expansions with the legality
+tiers, the search itself about 2 s.
 
 ### Engine E7 - the gate's full mode on the corpus under R8 (2026-10-02/03)
 

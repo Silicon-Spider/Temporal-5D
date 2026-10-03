@@ -103,12 +103,14 @@ TEST(variants_set_ups_follow_the_rules_reference_v3) {
     // V2: every variant starts with White to move.
     CHECK(s.to_move() == Colour::White);
     CHECK(!s.obligations_met());
-    // The canonical state string reads back to the same multiverse.
+    // The canonical state string reads back to the same multiverse - read as
+    // a set-up, every timeline initial (R10, H46).
     std::vector<std::string> strings;
     s.multiverse().for_each_board([&](int p, int h, const Board& b) {
       strings.push_back(fen_board_string(b, p, h, s.multiverse().even()));
     });
-    const GameState again = game_from_fen(strings, e.size, Parity::Infer, s.rules());
+    const GameState again =
+        game_from_fen(strings, e.size, Parity::Infer, s.rules(), std::nullopt, /*all_initial=*/true);
     CHECK(again == s);
   }
 }
@@ -222,17 +224,30 @@ TEST(variants_tactician_white_must_jump_onto_the_board_without_white_pieces_t13)
   CHECK(onto_minus0 > 0);
 }
 
-TEST(variants_battleground_reads_its_outer_timelines_as_5dfen_does) {
-  // Q2: the non-central initial timelines count as one creation each side;
-  // the count rule treats the sides alike, so both stay active and White's
-  // next timeline is +2 (L7).
+TEST(variants_battleground_outer_timelines_are_initial_h46) {
+  // R10 (register H46, provisional): the non-central initial timelines are
+  // initial - created by neither player, always active, never counted. White's
+  // next timeline is still +2 (L7: outermost on the mover's side), as its
+  // first creation.
   const GameState s = variant_start(*find_variant("Misc - Timeline Battleground"));
   CHECK_EQ(s.multiverse().timeline_count(), 3);
   CHECK(!s.multiverse().even());
   CHECK(s.active(-1) && s.active(0) && s.active(1));
   CHECK_EQ(s.mandatory_count(), 3);
-  CHECK_EQ(s.multiverse().created_by(Colour::White), 1);
-  CHECK_EQ(s.multiverse().created_by(Colour::Black), 1);
+  CHECK_EQ(s.multiverse().created_by(Colour::White), 0);
+  CHECK_EQ(s.multiverse().created_by(Colour::Black), 0);
+  // The same boards read as plain 5DFEN (no set-up): 5DFEN records no creator,
+  // so its numbering implies one for every non-central timeline - one creation
+  // each side. The count rule treats the sides alike, so activity agrees.
+  std::vector<std::string> strings;
+  s.multiverse().for_each_board([&](int p, int h, const Board& b) {
+    strings.push_back(fen_board_string(b, p, h, s.multiverse().even()));
+  });
+  const GameState plain = game_from_fen(strings, s.multiverse().board_size(), Parity::Odd,
+                                        s.rules(), Colour::White);
+  CHECK_EQ(plain.multiverse().created_by(Colour::White), 1);
+  CHECK_EQ(plain.multiverse().created_by(Colour::Black), 1);
+  CHECK(plain.active(-1) && plain.active(0) && plain.active(1));
 }
 
 TEST(variants_just_pawns_back_rank_double_step_follows_the_ruleset_q15) {

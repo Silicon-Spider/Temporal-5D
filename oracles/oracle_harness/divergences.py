@@ -180,7 +180,8 @@ def verify(entries: list[Divergence], lock: Lock, records: list[Record], recorde
         record = by_id.get(entry.record)
         if record is None:
             findings.append(Finding("divergence-record", f"{tag}: record '{entry.record}' is not in the corpus"))
-        elif record.sha256 != entry.record_sha256:
+        elif record.fed_sha256 != entry.record_sha256:
+            # What the sources read: the stored record, or the text it is converted to (export_form.py).
             findings.append(Finding("divergence-record", f"{tag}: record '{entry.record}' has changed since this was recorded"))
         known_kind = entry.kind in KINDS
         if not known_kind:

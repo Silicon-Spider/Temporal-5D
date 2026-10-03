@@ -665,8 +665,8 @@ struct Worker {
 
   // Whether a creation could relieve a mandatory board left unplayed: the
   // mover's next creation active (the count rule, T10) and some jump landing
-  // before the present (T8), or an inactive timeline of the opponent's that
-  // a creation would reactivate (T11, T12). Over-approximate: sound for
+  // before the present (T8), or any inactive timeline (the opponent's, or an
+  // initial one, H46) a creation might reactivate (T11, T12). Over-approximate: sound for
   // offering a pass, never for refusing one wrongly.
   bool relief_possible(const GameState& s, const MoveList& moves) const {
     if (s.rules().mandatory != MandatoryBoards::InPresent) return false;
@@ -692,10 +692,10 @@ struct Worker {
     const bool next_active =
         mv.created_by(them) + credit(them) >= mv.created_by(me) + 1 + credit(me) - 1;
     if (next_active && early_jump) return true;
-    for (const int p : s.inactive_timelines()) {
-      const Timeline* t = mv.timeline(p);
-      if (t != nullptr && t->creator() == them) return true;
-    }
+    // Any inactive timeline, whoever made it - the opponent's, or an initial
+    // one (H46: a variant's set-up reads every timeline as initial) - might be
+    // reactivated by a creation (T11): over-approximate.
+    if (!s.inactive_timelines().empty()) return true;
     return false;
   }
 

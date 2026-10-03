@@ -125,12 +125,20 @@ enum class Parity : std::uint8_t { Odd, Even, Infer };
 /// the present and of the other colour needs the caller's answer until E2.
 /// (The board strings themselves are fine; the fingerprint never depends on
 /// the player to move - only the Zobrist key does.)
+///
+/// `all_initial`: every timeline the strings hold is an initial timeline - a
+/// named variant's set-up, such as Timeline Battleground's -1, 0 and +1 - with
+/// no creator and creation order 0 (ruling R10, register H46: initial
+/// timelines count as created by neither player). Otherwise only the central
+/// timeline(s) are initial and the rest are read as created, as above.
 Multiverse multiverse_from_fen(std::span<const std::string_view> boards, BoardSize size,
                                Parity parity, std::uint32_t ruleset = 0,
-                               std::optional<Colour> to_move = std::nullopt);
+                               std::optional<Colour> to_move = std::nullopt,
+                               bool all_initial = false);
 Multiverse multiverse_from_fen(const std::vector<std::string>& boards, BoardSize size,
                                Parity parity, std::uint32_t ruleset = 0,
-                               std::optional<Colour> to_move = std::nullopt);
+                               std::optional<Colour> to_move = std::nullopt,
+                               bool all_initial = false);
 
 /// The Standard board: the chess array, with the unmoved marker on every pawn,
 /// rook and king. One shared immutable instance.

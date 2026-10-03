@@ -32,7 +32,15 @@ not legal: no rules engine stands behind the moves.
   rung 1 when ``CacheConfig.node_refresh`` is on: a node reached by a travel move that
   created a timeline is refreshed once its visits reach ``refresh_visit_threshold``
   (V = 50 by default) - the refresh forks a new epoch for the node and every descendant
-  that still has the node's old epoch; siblings and their subtrees keep it.
+  that still has the node's old epoch; siblings and their subtrees keep it. When
+  ``CacheConfig.complexity_refresh`` is on (C24, prototype; ``complexity.py``), a visit
+  that rung 1 does not refresh may refresh by complexity: a non-root node, not yet
+  refreshed, with ``complexity_visit_threshold`` visits, whose score reaches the threshold,
+  while the search's budget lasts. Its signals exist before the node's evaluation: the
+  node's position (board count, active timelines), its path (travel since its last
+  refresh, ``travel_since_refresh``) and its parent's outputs (``Node.effort_logits``,
+  which ``evaluate`` records when the flag is on; a search that evaluates elsewhere sets
+  it itself). The node's own outputs are never read.
 """
 
 from __future__ import annotations
@@ -42,8 +50,10 @@ from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
 
 import numpy as np
+import torch
 
 from .cache import CachedEvaluator, Epoch
+from .complexity import ComplexitySignals, complexity_fires, effort_difficulty, structural_signals
 from .model import NetOutput
 from .state import COLOUR_BLACK, COLOUR_NONE, COLOUR_WHITE, PositionState
 from .synthetic import _candidate_moves, reach_graph
@@ -304,6 +314,10 @@ class Node:
     visits: int = 0
     branched: bool = False  # reached by a move that created a timeline
     refreshed: bool = False
+    #: Which trigger refreshed the node in ``visit`` ("rung1" or "complexity"); None otherwise.
+    refreshed_by: str | None = None
+    #: C24: this node's last evaluation's effort logits ``(bins,)`` - its children's signal.
+    effort_logits: torch.Tensor | None = None
 
     @property
     def state(self) -> PositionState:
@@ -315,14 +329,27 @@ class Node:
             yield from child.descendants()
 
 
+def travel_since_refresh(node: Node) -> int:
+    """C24's travel signal: the travel moves on the path from ``node``'s last refresh down
+    to ``node`` itself - the moves into every node below the anchor of the node's epoch (its
+    nearest refreshed ancestor, the node included; else the search root, whose position the
+    root epoch was made from, refreshed or not). Branching or not, a travel move counts once."""
+    count, n = 0, node
+    while n.parent is not None and not n.refreshed:
+        count += n.move[0] == "jump"
+        n = n.parent
+    return count
+
+
 class SearchTree:
-    """Nodes over multiverses, with epochs and C3a rung 1 (see the module docstring)."""
+    """Nodes over multiverses, with epochs, C3a rung 1 and C24 (see the module docstring)."""
 
     def __init__(self, evaluator: CachedEvaluator, root: Multiverse) -> None:
         self.evaluator = evaluator
         self.root = Node(root)
         self.root.epoch = evaluator.root_epoch(root.state())
         self.refreshes = 0
+        self.complexity_refreshes = 0  # C24's, counted against its budget
 
     def child(self, node: Node, move: Move) -> Node:
         """The child of ``node`` by ``move`` (created once), in its parent's epoch."""
@@ -338,17 +365,47 @@ class SearchTree:
         return node
 
     def evaluate(self, node: Node) -> NetOutput:
-        return self.evaluator.evaluate(node.state, node.epoch)
+        out = self.evaluator.evaluate(node.state, node.epoch)
+        if self.evaluator.config.complexity_refresh:
+            node.effort_logits = out.effort_logits[0].detach().clone()  # C24: the children's parent output
+        return out
 
     def visit(self, node: Node) -> bool:
         """Count a visit; C3a rung 1: refresh a node reached by a branching travel move once
-        its visits reach V. Returns whether it refreshed."""
+        its visits reach V; C24, where rung 1 did not: refresh a complex node (add-only - rung
+        1's rule is decided first and reads nothing C24 changes). Returns whether it refreshed."""
         node.visits += 1
         cfg = self.evaluator.config
         if cfg.node_refresh and node.branched and not node.refreshed and node.visits >= cfg.refresh_visit_threshold:
             self.refresh(node)
+            node.refreshed_by = "rung1"
+            return True
+        if cfg.complexity_refresh and self.complexity_due(node):
+            self.refresh(node)
+            node.refreshed_by = "complexity"
+            self.complexity_refreshes += 1
             return True
         return False
+
+    def complexity_signals(self, node: Node) -> ComplexitySignals:
+        """C24's signals for ``node``: its position's structure, its path's travel since its
+        last refresh, and its parent's predicted difficulty (None until the parent has been
+        evaluated). Nothing of the node's own evaluation."""
+        parent = node.parent
+        effort = None
+        if parent is not None and parent.effort_logits is not None:
+            effort = effort_difficulty(parent.effort_logits, self.evaluator.config.complexity_effort_quantile)
+        return structural_signals(node.state, travel_since_refresh(node), effort)
+
+    def complexity_due(self, node: Node) -> bool:
+        """Whether C24 refreshes ``node`` now: a non-root node, not yet refreshed, at its visit
+        gate, within the search's budget, whose score reaches the threshold."""
+        cfg = self.evaluator.config
+        if node.parent is None or node.refreshed or node.visits < cfg.complexity_visit_threshold:
+            return False
+        if self.complexity_refreshes >= cfg.complexity_refresh_budget:
+            return False
+        return complexity_fires(self.complexity_signals(node), cfg)
 
     def refresh(self, node: Node) -> Epoch:
         """Fork a new epoch at ``node`` (copy-on-write): the node and every descendant still

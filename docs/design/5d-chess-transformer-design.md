@@ -1582,7 +1582,10 @@ manufactures false proofs that persist.
    revision called these 5D queries without a source; the documented rule is per-board.)
 5. **Game-state bookkeeping** — the present line, active and inactive timelines, whose
    turn it is on which board, submission — is an exact state machine. Activation follows
-   the documented rule (docs/rules/README.md). **There is no repetition rule** (project
+   the documented rule (docs/rules/README.md). In multi-timeline variants, initial
+   timelines count as created by neither player — always active, and not counted toward
+   either player's created timelines (Q2: a provisional project decision read from the
+   documented rule's wording, which counts *created* timelines). **There is no repetition rule** (project
    decision): passing is impossible and every move creates at least one board, so the
    full state can never recur within a game. Values therefore depend only on the state,
    and graph-history interaction does not arise (§8.5, §8.7).
@@ -2790,7 +2793,20 @@ adversarial league is its active probe.
 budget. Exact settling covers only small positions; above them the layer is Guard, Hunt,
 the search's solver and the offline audit lane (§11.4). The confident-quiet residual
 widens where games are largest — exactly where the window's blindness also lives — and
-the adversarial league is the main robustness mechanism there, not a supplement.
+the adversarial league is the main robustness mechanism there, not a supplement. How
+much this matters depends on how often games get large — see the next entry.
+
+**The design's size premise came from reasoning, not data.** Its reference positions —
+240 boards, with 100–600 treated as a normal midgame — were never measured. The first real
+data, 761 human games, ends at a median of 44 boards and spends 88% of its moves under 50
+(CHECKPOINT 5). If the engine's own games look similar, most compute is in small
+positions: the window and the cache matter less, and exact verification, which works under
+50 boards, covers most of the game. Every decision weighted by where compute goes — M7,
+the cached decision (C2), piece-centric tokenisation — uses measured game-length
+distributions: the human games now, the pilot self-play run before serious self-play.
+Human games are a proxy, not a forecast: stronger defence could make engine games longer,
+and sharper attack could make them shorter. Large positions still matter for robustness,
+because games can grow, but they are the stress case, not the typical one.
 
 **Timeline index is a noisy axis.** Branching order is partly arbitrary. Δtimeline may need
 different treatment from the other three.
@@ -3305,9 +3321,20 @@ geometric mean, which overstates whenever the two components differ. The kill cl
 weighted by real human games (MageOfficial/t0database) until self-play exists — a
 conservative proxy for the window, since those games top out around 186 boards and the
 window pays most above that — and re-checked against early self-play before serious
-self-play compute. Under 50 boards the window is off: that phase carries a small share
-of compute and dense attention there is cheap, so the choice is immaterial and the
-simpler one wins; a result inside the ±10% band there needs no stop. Expectation on record: off in the early game (at ~100
+self-play compute. Under 50 boards the per-phase rule decides as in any phase, with one
+tie-break: a result inside the ±10% band resolves to *off*, the simpler configuration,
+without a stop. (An earlier version of this reading claimed that phase carries a small
+share of compute. In the human games it carries about 80% — CHECKPOINT 5.)
+
+**Result (CHECKPOINT 5): the window is killed, provisionally.** With the time-share
+formula it pays at k = 8 from 50 to 186 boards (1.83×, 2.10× and 3.81× across the
+measured phases), but in the human games those phases carry only 18–38% of compute (20%
+blended): the games spend 88% of their moves under 50 boards and end at a median of 44.
+The kill clause is working as intended — the window pays where little compute goes. It
+stays unbuilt. Before serious self-play, a **pilot self-play run** measures the engine's
+own game-length distribution; if the phases where the window pays carry at least half of
+that compute, the window returns to the cascade (§10.4.2). Changing the weighting now,
+because it killed the window, would be moving the line toward the result. Expectation on record: off in the early game (at ~100
 boards it cannot pay at k = 8 even with |E| = 0), kept on its late-game value — at
 |E| ≈ 25 the all-in multiplier is ~1.6× at 160 boards, ~2.1× at 240, ~3.0× at 400 and
 ~4.0× at 600.

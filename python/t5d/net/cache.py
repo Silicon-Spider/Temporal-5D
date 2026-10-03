@@ -1,5 +1,5 @@
 """The cached evaluation path (stage N3; spec sections 7.1-7.3, 7.9, 8.5, 8.7, 10.2, 10.3;
-register C2, C3, C3a rung 1, C15, C17, C19, C20, C21, G1).
+register C2, C3, C3a rung 1, C15, C17, C19, C20, C21, C24, G1).
 
 A network trained under the block-causal scope (``NetConfig.attn_scope="block_causal"``,
 ``scope.py``) computes the same function whether it runs one full pass over a position
@@ -50,7 +50,9 @@ scope (the structure can share; nothing here frees an entry but ``drop_epoch``).
   at an internal node (``refresh``) - travel-triggered and visit-gated, decided by the
   search (``tree.py``) - forks a new epoch for that node's subtree, copy-on-write: new
   entries under the new epoch's key, the parent epoch's entries untouched, so siblings
-  keep the parent epoch ("fork, never overwrite - except at the root").
+  keep the parent epoch ("fork, never overwrite - except at the root"). C24's complexity
+  trigger (``CacheConfig.complexity_refresh``, prototype; ``complexity.py``) forks the same
+  way, at more nodes: it changes when a node refreshes, never how.
 
 Within a refreshed epoch, the history boards keep the refreshed K/V; every board frozen
 after the anchor is recomputed under the state-defined mask, reading its past's K/V from
@@ -89,6 +91,7 @@ from __future__ import annotations
 
 import hashlib
 import itertools
+import math
 import struct
 from dataclasses import dataclass, field, replace
 
@@ -122,9 +125,53 @@ class CacheConfig:
     #: Rung 1's visit gate V (section 7.9's table: "V ~ 50").
     refresh_visit_threshold: int = 50
 
+    # --- C24: the complexity trigger (prototype; default off; ``complexity.py``) ---
+    #: C24 (prototype, gated like rung 1 on 6c's existence test): node refreshes also where
+    #: the position is complex - add-only: never removes or delays a refresh the same
+    #: configuration makes with this off (the search decides - ``tree.py``). Every number
+    #: below is a PLACEHOLDER, not a decision: section 7.9 names the signals and no
+    #: threshold, weight or combination rule (spec issue).
+    complexity_refresh: bool = False
+    #: The score at which a node fires: ``sum(weight * signal) >= complexity_threshold``.
+    complexity_threshold: float = 1.0
+    #: Per board of the node's position: 1/128 - 128 boards alone reach the threshold.
+    complexity_board_weight: float = 1.0 / 128
+    #: Per active timeline of the node's position: 1/8 - 8 alone reach it.
+    complexity_timeline_weight: float = 1.0 / 8
+    #: Per travel move since the node's last refresh: 1/2 - 2 alone reach it.
+    complexity_travel_weight: float = 1.0 / 2
+    #: Per effort bin of the parent's predicted difficulty (log2 visits): 1/12 - a predicted
+    #: 4,096 visits alone reach it; the censored "did not converge" bin (15 of 16) is over.
+    complexity_effort_weight: float = 1.0 / 12
+    #: Which quantile of the parent's effort distribution is its predicted difficulty (the
+    #: median; section 8.6's allocator plans to "an upper quantile (tunable, 6v)").
+    complexity_effort_quantile: float = 0.5
+    #: C24's visit gate: rung 1's V by default (one whole-scope refresh ~ ten node
+    #: evaluations, so a subtree must consume well over ten visits to repay one).
+    complexity_visit_threshold: int = 50
+    #: C24's refreshes per search at most (section 7.9: "epochs must be bounded per
+    #: search"); rung 1's are not counted against it and never blocked by it.
+    complexity_refresh_budget: int = 8
+
     def validate(self) -> None:
         if self.refresh_visit_threshold < 1:
             raise ValueError("refresh_visit_threshold must be positive")
+        if self.complexity_visit_threshold < 1:
+            raise ValueError("complexity_visit_threshold must be positive")
+        if self.complexity_refresh_budget < 0:
+            raise ValueError("complexity_refresh_budget must not be negative")
+        weights = (
+            self.complexity_board_weight,
+            self.complexity_timeline_weight,
+            self.complexity_travel_weight,
+            self.complexity_effort_weight,
+        )
+        if not all(math.isfinite(w) and w >= 0 for w in weights):
+            raise ValueError("the complexity weights must be finite and non-negative (more complexity never means fewer refreshes)")
+        if not (math.isfinite(self.complexity_threshold) and self.complexity_threshold > 0):
+            raise ValueError("complexity_threshold must be finite and positive")
+        if not 0 < self.complexity_effort_quantile <= 1:
+            raise ValueError("complexity_effort_quantile must be in (0, 1]")
 
 
 @dataclass(frozen=True, eq=False)
