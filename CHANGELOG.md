@@ -10,6 +10,21 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-04 - Build log: the current state, the work remaining to §15.5, and the register brought up to date
+
+- `docs/BUILD_LOG.md`: a "Current state" section at the top (what is on main, the
+  measured verdicts, what is held and running, the work remaining to §15.5 in
+  order, and what waits on the user - the gate's Q-A and Q-B, GPU-only cost
+  figures, the committed-class placeholders, A5, D8's whole-turn token, the
+  training rows); 2026-10-02's stale lists superseded; "Parked" brought up to date
+  (the window killed provisionally; the NNUE held open, the retired rungs);
+  register rows H6, H7, H13/H14, C5/C7, C10, M7, I1-I10 corrected and C6, C8, C9,
+  D5-D7, E4, G7, I9, M1-M6/M10 added (from a read-only audit of the repository
+  against §15.5); spec issues 120-121 and proposed spec edits 91-97 (§15.2 and
+  §15.3 rows that cannot exist in the untrained build; the movegen and scanner
+  write-backs; register fixes).
+- Spec: §15.2, §15.3, §15.5, §15.6; register as listed; no spec text edited here.
+
 ### 2026-10-04 - Engine CI: the prover's hash constants typed for g++ 13/14
 
 - `engine/src/prover.cpp`: the prover's 64-bit hash constants are written as

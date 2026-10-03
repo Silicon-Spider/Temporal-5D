@@ -15,6 +15,72 @@ M5 - building it would break a rule).
 
 ## Where things stand
 
+### Current state (2026-10-04) - read this first
+
+**On main (CI green):** the rules engine (E1-E5c, E7: Q4 as ruled, D8's submit
+action, H46), the search core (E6a, reviewed: PUCT/MCGS, both D2 arms, the solver
+behind H41's `proof_channel` switch, off), verification v3's components (E8+E9,
+reviewed: df-pn, Guard, Hunt, the asset map, certificates, Hunt's pinned ground
+truth), the network (N1-N5: dense and cached paths, D8's acting-player input and
+submit logit, the C step API from Python, end-to-end games with random weights),
+the complexity trigger (C24, flagged off), the oracle harness with cwmtt/many2
+read converted, and t0database (real games, measurement only).
+
+**Measured verdicts:** M9 movegen passes on M13's 2 cores; 6b, 6b′ failed above
+50 boards (verification v3 adopted, CHECKPOINT 4); 6b″: **Hunt adopted under 100
+boards, Guard in no range** (M17); the window (M7) **killed, provisionally**
+(M16), re-checked by the pilot self-play run (M18) after §15.5.
+
+**Held on a branch:** the gate with the engine configured (branch
+`worktree-agent-a1a2868a52f6c83b9`, 61e9aa8): 113 new known divergences (110 R1,
+3 notation), no engine defect, nightly PASSED; the commit tier fails on
+`engine-nothing-gated` and the release tier's oracle layer on 17
+proof-channel-vacuous budgets - both put to the user (Q-A, Q-B below). Merging it
+as it is would turn the commit workflow red.
+
+**Running:** engine **E10** - Hunt (< 100 boards), the df-pn settling scans (< 50)
+and the asset map wired into the search per the adoption table; Guard's re-search
+hook (off: not adopted); the offline audit lane's tooling (H44).
+
+**Remaining to §15.5, in order** (the audit of 2026-10-04):
+1. E10's review and merge.
+2. **E11 - time management** (E7, committed; with Guard's reserve) and **E8 behind
+   a flag** (prototype).
+3. Missing tests: the search solver's proofs against df-pn (and, through the gate
+   or the audit lane, the oracles' mate verdicts - H41); TT churn for the prover
+   (6f); cached = dense on more real variants.
+4. Prototype flags not yet built: G2 (FP8 attention, emulated on CPU); A5
+   (piece-centric tokenisation) unless ruled deferred with the window.
+5. Quiet-machine measurements: N3's CPU wall timings (about 3 h; commands in
+   step 2 below), §15.6's Phase-3 movegen re-check, Guard's and Hunt's nodes/s.
+6. The gate merge, once Q-A/Q-B are answered.
+7. Write-backs (M4) and register fixes proposed (edits 91-97 below); the
+   committed-class placeholders consolidated for the user (spec issue 121).
+8. Report for sign-off, the proof channel disabled.
+
+**Waiting on the user** (asked 2026-10-04):
+- **Q-A** - the commit tier gates no ruleset with ftxi alone, so
+  `engine-nothing-gated` fails it: (a) apply that rule only in tiers that run every
+  oracle (recommended); (b) Chess in 5D and cwmtt in the commit tier; (c) add
+  records ftxi alone can gate.
+- **Q-B** - raise the naive searches' release budgets and re-record (17
+  proof-channel-vacuous findings; not blocking while H41's sign-off is pending).
+- **GPU-only cost figures** (spec issue 120): accept counted FLOPs and
+  CPU-labelled wall times as the untrained build's write-back, the GPU figures
+  named as deferred - or provide GPU access.
+- **The committed-class placeholders and B7** (spec issue 121): rule them, or name
+  the trained ablation each awaits.
+- **A5 (piece-centric tokenisation)**: build behind its flag, or defer it with the
+  window (they are "tested jointly").
+- **D8's whole-turn arm** has no end-of-turn token (issue 92): build one, or
+  record the whole-turn arm as move-only until 6g/6k.
+- **The training rows (I1-I10)**: out of scope for the untrained build (the
+  brief's reading), or smoke-test code for some (e.g. I5, playout-cap
+  randomisation)?
+- Standing: branch protection with the workflows as required checks; filing the
+  two oracle bug drafts (`docs/checkpoints/upstream/`); applying the proposed spec
+  edits upstream.
+
 ### CHECKPOINT 5 - ruled 2026-10-03 (no stop): the window killed provisionally; Q2
 
 The user's rulings (design documents updated: M16 corrected, M18, H46, reversal 24,
@@ -238,36 +304,12 @@ with branch origins, C23); N3's CPU wall times.
   full corpus in 8.3 s); step 2B - the gate's stable answers, integrity,
   telltales, parse mode and rulebook pin (committed 2026-10-02 with the golden
   files re-recorded twice, schema 3).
-- **In the tree, uncommitted (2026-10-02):**
-  - *Network N3's CPU wall timings* (the code is committed): need a quiet machine.
-    From `python/`: `py -m t5d.net.cache_bench --boards 240 --idle-processes
-    t5d-gate.exe t5d-measure.exe t5d-bench.exe t5d-tests-long.exe --skip-existing
-    --out <dir>`, then `--boards 600 --dtype fp32` and `--boards 600 --dtype bf16`
-    (about 45, 70 and 45 minutes); the benchmark itself refuses a loaded machine.
-- **Next, in order:** (1) the engine in the gate. The triage is done
-  (2026-10-02; step 2): 56 known-divergence entries are committed and the
-  engine's adapter passes the contract on the whole corpus, but 115 findings
-  remain that rules Q4 explains - so the committed `gate.toml` leaves the engine
-  unconfigured until the user rules on Q4. Then: set `[engine] command =
-  ["./build/engine/t5d-gate"]` (the leading `./` is needed on Windows), add the
-  waiting entries for the ruled reading (drafts in
-  `oracles/.cache/reports/triage-2026-10-02/`, regenerable: 94 R1 entries and
-  cwmtt/futures action 17 under Q4's other reading), decide cwmtt/many2's
-  export-form move (read it, or an entry), and run every tier. (2) Running
-  (2026-10-02), each in its own git worktree under `.claude/worktrees/` (a
-  branch per stage, merged into main when reviewed): engine E5a, a fast
-  legal-moves filter (M9 with legality, `t5d-measure --legal`); E5b, the scanner
-  and the 6b tool; E6a, the search core (PUCT and widening, both D2 arms behind a
-  flag, MCGS behind a flag, solved bounds, LCB and secure child, persistence, the
-  external-evaluator C API, self-play's turn cap, the synchronous mode, §15.4's
-  invariants, `t5d-play`). Network N4 is done (committed 2026-10-02): the ctypes
-  binding, real positions as validated `PositionState`s, the evaluator side of the
-  search's protocol - `CStepDriver` waits for E6a's step API. (3) N3's CPU wall times, 6b's timing run and M9 with legality,
-  each on a quiet machine. (4) Then: time management (E7, E8), the scanner in the
-  search (rung 1) and Lazy SMP, end-to-end play with the network's random weights,
-  the NNUE only if 6b passes (M8).
-- **Waiting on the user:**
-  - Nothing at present (2026-10-03, CHECKPOINT 5 answered M7 and Q2).
+- **(2026-10-02's "uncommitted", "next" and "waiting" lists are superseded by
+  "Current state" above.)** N3's CPU wall timings still wait for a quiet machine:
+  from `python/`, `py -m t5d.net.cache_bench --boards 240 --idle-processes
+  t5d-gate.exe t5d-measure.exe t5d-bench.exe t5d-tests-long.exe --skip-existing
+  --out <dir>`, then `--boards 600 --dtype fp32` and `--boards 600 --dtype bf16`
+  (about 45, 70 and 45 minutes); the benchmark refuses a loaded machine.
 
 ## The brief - standing rules for every session
 
@@ -727,7 +769,7 @@ for game records.
   check). M8's thresholds, with the brief's ±10% STOP band; a failed root scan
   STOPS the run.
 
-### 6. Phases 2-3 - not started
+### 6. Phases 2-3 - in progress (see "Current state")
 
 ## Register status
 
@@ -740,13 +782,13 @@ for game records.
 | H3 | built, tested | Node cap with iterative deepening in forcing half-turns; horizon per budget measured (6b) |
 | H4 | built | MVV-LVA, killers, history, continuation history |
 | H5 | built | Nothing speculative; null move and LMR not built |
-| H6 | built (v1) | Material count with placeholder 5D piece values (spec issue 56); NNUE v2 waits on 6b (M8) |
-| H7 | not built (rule) | NNUE training: no training runs; NNUE waits on 6b |
+| H6 | built (v1 material); NNUE held open | Material count with placeholder 5D piece values (spec issue 56), used by the asset map and the material evaluator; the scanner NNUE is held open (CHECKPOINT 4) |
+| H7 | not built (rule) | NNUE training: held open with the NNUE (H6); no training runs |
 | H8, H9, H20, H21 | not built (rule) | Held open / refused |
 | H10 | reduced, built | Rung 1 dropped (6b); rungs 3 and 5 retired, not built (M5); rung 2's promotion side is Guard, its demotion audit the audit lane; rung 4, the asset map, built (E9) - the reduced ladder: Guard, Hunt, the asset map |
 | H11 | superseded | By Guard (promotion) and the audit lane (demotion audit) |
 | H12 | retired | With the NNUE and the per-node scans |
-| H13, H14 | parked | Ladder scheduling: with the search wiring (E10) |
+| H13, H14 | building (E10), reduced | Ladder scheduling for the reduced ladder (Guard, Hunt, the asset map) against shared movegen: E10. H14's rung-1 wording is obsolete (proposed edit 95) |
 | H41 | built, tested | `SearchParams::proof_channel` (C `proof_channel`, `t5d-play --proof-channel`): propagation of solved status (marking nodes solved, pruning siblings, secure-child selection) and export, off by rule; game ends are scored as results. Was: building | The search's solver as part of the proof channel: game-end scoring on; propagation and export off until the gate passes (E6a's fix round) |
 | H42 | built, tested; not adopted | Guard (E9): depth 1 completes in 65.1 / 15.8 / 5.2 / 0.0% of roots against 95% (6b″) - adopted in no range; §13: the chosen move goes unguarded. Built and kept (the audit lane's shallow-mate report uses its question offline; the search's re-search hook stays unwired-by-adoption) |
 | H43 | built, tested; adopted under 100 boards | Hunt (E9): 69.0% / 63.6% of the truth's mates under 50 / 50-99 boards (6b″) - adopted there; 35.0% at 100-199 and 0 of 1 at 200+ - not adopted; §13: proofs there come only from the search's solver. Export refused until H41/H23 |
@@ -792,10 +834,13 @@ for game records.
 | C4 | built, tested | Full MHA (N1) |
 | C17, C19, C20 | built, tested | Network N3: the block-causal scope (`attn_scope = "block_causal"`), the live set fully bidirectional, supersession recomputed once under the state-defined mask; the causal past is a parameter (spec issues 5, 29) |
 | C2 | built (for §15.2/§15.3) | Network N3's cached path; the decision itself stays deferred (6c, §7.7) |
-| C10 | parked | Lazy K/V for boards entering E: with the window, after M7 |
+| C10 | not built (rule) | Lazy K/V for boards entering E: with the window, killed provisionally (M16) |
 | C3, C3a (rung 1) | built, tested | Root refresh and the travel-triggered, visit-gated rung-1 fork (copy-on-write epochs), behind flags |
 | C3a (rungs 2-3), C18, C22 | not built (rule) | Held open (M5 for rungs 2-3) |
-| C5, C7 | parked | Window code only after the \|E\| verdict (M7) |
+| C5, C7 | not built (rule) | The window: killed, provisionally (M16, CHECKPOINT 5); re-checked by the pilot self-play run (M18) |
+| C6 | step 1 done | The |E| curve measured (M7); the head-to-head is Ablation 1, halted with the window until the pilot run (M18) |
+| C8 | honoured | C24's add-only rule (and rung 1's) - refreshes are only ever added |
+| C9 | to check | Reported built in `expand.cpp` by the 2026-10-04 audit; to verify against its row |
 | C11 | built behind a flag, tested | MCGS (E6a): identity is the state key and whether an action is in progress, compared exactly (§8.5's state, issue 87); awaiting 6k |
 | C12, C13 | built, tested | Re-rooting with garbage collection, the persistence hook and pondering (E6a) |
 | C14 | built, tested | Fresh searches per decision in self-play; the evaluation cache shared across them, purged by board count (issue 89); the C API's `t5d_search_new_sharing`; from Python (N5) only between searches with the same network input, with the cached path's refresh epochs set on the search |
@@ -804,8 +849,12 @@ for game records.
 | C16 | not built (rule) | Deferred; last, only if node-starved |
 | C21 | not built (rule) | Refused; a mutant that snapshots is caught by the tests |
 | D1, D3, D4 | built, tested | Network N1: pointer policy, 51-bin value head, auxiliary heads (D4's reply space, label set and moves-left unit are placeholders, spec issue 9) |
+| D5 | not started (rule) | A training principle |
+| D6 | built (flag) | `board_reduction`, awaiting 6j |
+| D7 | not built | 6p's aggregate initialisation (training-side); D8's submit logit reads a global register, in tension with D7's "registers stay free scratch" (spec issue 109) |
 | D2 | built, tested | Both arms (`SearchParams::split`: the board-move split, default, and whole turns), driven from Python through the C step API with the network (N5); awaiting trained ablations 6g/6k |
 | D8 | built, tested | Engine and search (E7, E6a): submit an explicit edge, legal only when C4 holds, never automatic. Network (N5): a global acting-player input, the submit logit from global register 0 (placeholders, issues 108-109), one distribution over moves + submit, values from the acting player's perspective |
+| E4 | principle | "Narrow hard, because the auditor is watching": the auditor above 50 boards is now Hunt (< 100) and the solver, Guard adopted nowhere (6b″) - the premise is weaker there |
 | E1, E5, E9 | built, tested | PUCT with entropy-adaptive top-k widening, FPU, root noise in self-play (E1); LCB with a visit floor (E5); the solver behind H41's switch, the secure child, a visit cap on solved children (E9) - every constant a placeholder (issues 80-86) |
 | E7 | not started | Time management (with E10's Guard re-search reserve) |
 | E2, E3 | built behind flags, tested | Off; awaiting 6m and 6t |
@@ -813,11 +862,13 @@ for game records.
 | E6 | not built (rule) | Refused |
 | F1, F2 | built, tested | 21,359,370 parameters (F1, with N5's D8 embedding and readout); the L24-ff12 preset, 44.5M (F2) |
 | F3 | not built (rule) | Refused |
+| G7 | not started | SPSA/SPRT tooling (training-time) |
 | F4 | not built (rule) | The NNUE is held open (H6, CHECKPOINT 4) |
 | G1 | built, tested | BF16 trunk under autocast; FP32 heads and RoPE; the cache stores K/V in the live format (§15.2 row (e)) |
 | G2 | not started | FP8 attention - no FP8 kernels on this machine |
 | G3, G4, G5, G6 | not built (rule) | Deferred / held open / refused |
-| I1-I10 | not started | Training code may be written and smoke-tested only; I7 and I8 not built (M5) |
+| I1-I8, I10 | not started (rule) | Training: no training runs (the brief); I7 and I8 not built (M5); whether any is smoke-tested in the untrained build is put to the user |
+| I9 | built, tested | The ruleset ID in every state and store key (H18): the Zobrist key, the solved and disproof stores, the evaluation cache |
 | I11 | built, tested | Self-play's turn cap from the state (and t5d-play's 300-board cap), scored as a draw, its frequency logged (issue 88) |
 
 ### M - the plan itself
@@ -829,10 +880,11 @@ for game records.
 | M16 | applied, confirmed | M7's readings (corrected at CHECKPOINT 5): time-share multiplier, human-game weighting, the per-phase rule under 50 boards with the band resolving to off - the window is killed, provisionally |
 | M18 | not started (rule) | A pilot self-play run before serious self-play re-checks the window and the other compute-weighted decisions - after §15.5, not in the untrained build |
 | H46 | built, tested | Q2 (provisional): initial timelines count as created by neither player - a variant's set-up reads every timeline as initial (rulebook R10) |
+| M1-M6, M10 | applied | The plan's process rows: the build follows them (this log) |
 | M17 | measured | 6b″ on a quiet machine (d96d6d9): Guard 65.1 / 15.8 / 5.2 / 0.0% - adopted in no range; Hunt 69.0 / 63.6 / 35.0 / 0.0% (200+: one truth mate, too few to read) - adopted under 100 boards; every refutation and mate confirmed by E4 |
 | C24 | built, tested | The refresh ladder's complexity trigger behind a flag (`CacheConfig.complexity_refresh`, off; prototype, gated like rung 1 on 6c's existence test); add-only over rung 1 for every signal; every number a placeholder (spec issues 75-79) |
 | C25 | not built (rule) | Held open |
-| M7 | measured; killed, provisionally (M16, CHECKPOINT 5) | On real games (t0database, 716 games, max 186 boards): on at k = 8 from 50 to 186 boards; under 50 boards inside the ±10% band and the kill clause turns on it - waiting on the user; above 186 provisional (MEASUREMENTS) |
+| M7 | measured; killed, provisionally (M16, CHECKPOINT 5) | On real games (t0database, 716 games, max 186 boards): on at k = 8 from 50 to 186 boards, off under 50, and the kill clause kills it under the human-game weighting (on-phases 18-38% of compute); confirmed by the user; above 186 provisional (MEASUREMENTS) |
 | M8 | measured - STOP | 6b re-run (M12): root scan 76.7% / 31.4% / 24.7% / 2.4% by range (< 50 / 50-99 / 100-199 / 200+); rung 1 and quiet-leaf reach fail everywhere; stand-pat valid |
 | M12 | applied - STOP | The bounded optimisation pass (E5c) and the re-run at 5 threads, Lazy SMP: 50-199 boards fail -> STOP, redesign the verification layer |
 | M13 | applied | 8 cores per GPU: M9 judged on 2 expansion cores (passes, 1.87x), the scanner measured at 5 |
@@ -848,12 +900,12 @@ Closed by them: repetition (H39 - there is none) and castling's cross-board atta
 option (H40 - the per-board test is the rule, so `CastlingAttacks::AnyBoard` goes).
 
 Still parked:
-- the window code (C5, C7): until the |E| verdict (M5, M7) - measured on real
-  games 2026-10-03; under 50 boards it waits on the user;
-- the NNUE (F4): until 6b passes (M5, M8);
-- the M7 verdict's phases above 186 boards: no public game record reaches them
-  (t0database's maximum is 186); provisional until self-play or permission-based
-  sources reach 200-600 boards.
+- the window code (C5, C7, C10): **killed, provisionally** (M16, CHECKPOINT 5) -
+  not built; the pilot self-play run (M18) after §15.5 re-checks it;
+- the M7 verdict's phases above 186 boards: no public game record reaches them;
+  the pilot self-play run measures the engine's own distribution.
+Not parked any more, but not built by rule: the NNUE (F4, H6, H7) is held open
+(CHECKPOINT 4); rung 1, rung 3 and rung 5 are retired (M5).
 
 ## Spec issues (wrong, ambiguous, contradictory, silent)
 
@@ -1353,6 +1405,20 @@ decision), and what is parked.
 119. **Ruling 5's "pinned and hashed"** read as extending to the record list
     (content IDs in order), the rules by value and a code signature.
 
+120. **No GPU on this machine** (an RX 9070 XT without CUDA): the §15.3 figures
+    that need one - FA4-class evaluations/s, the leaf-batching gain, G2's FP8
+    attention, B14's FlexAttention kernel, C15's varlen kernels, §15.6's Phase-3
+    movegen re-check against a GPU evaluation rate - cannot be measured here.
+    §15.3 asks only that each figure carry its conditions. Put to the user: accept
+    counted FLOPs plus CPU-labelled wall times as the untrained build's write-back
+    with the GPU figures named as deferred, or provide GPU access.
+121. **Committed-class placeholders awaiting neither a ruling nor a named
+    ablation** (§15.5's last clause): spec issues 9(a-j), 16(a-g), 31
+    (`frozen_features`), 32 (`supersession_scope`), 108 (`acting_player_input`),
+    109 (`submit_register` and its readout), and register B7 (deferred with no
+    named ablation). Put to the user to rule, or to name the trained ablation each
+    awaits.
+
 ## Proposed spec edits
 
 Edits the spec or the register needs, for applying upstream. Each: where, what it
@@ -1610,6 +1676,34 @@ says now, what it should say, why.
     store.
 90. **§11.1 / H19, wherever disproof classes are described**: a disproof's class is
     every option that shapes the attacker's class.
+91. **§15.2's rows that cannot exist in the untrained build**: "windowed = full
+    restricted" (C5) and "lazy K/V = eager" (C10) - the window is killed,
+    provisionally (M16): mark them deferred to the pilot self-play run (M18);
+    "NNUE accumulator = recompute" (F4) - the NNUE is held open (H6): mark it
+    held open.
+92. **§15.3's rows that cannot be measured as written**: windowed throughput, the
+    windowed "one refresh ≈ 10 evaluations", windowed KV memory (the window is
+    killed provisionally); the local/global interleave (C18 held open); NNUE
+    evaluation (held open); "rung 1 hidden under batch latency" (rung 1 retired) -
+    mark each deferred or void, with the reason.
+93. **§15.3's movegen row and §11's projection (M4 write-back)**: pseudo-legal
+    44,047 actions/s at 240 boards and 24,951 at 600 (one thread); with fast
+    legality 20,249/s at 240 on one thread (1.01x the target) and 37,316/s on M13's
+    two expansion cores (1.87x), 12,133/s at 600 (MEASUREMENTS, M9).
+94. **§15.3's scanner row (M4 write-back), restated for v3**: the brute-force
+    scanner 787k nodes/s per thread alone and 566k at 5 threads (E5c), df-pn 239k
+    (6b′); the shipped consumers are Guard and Hunt - their figures are nodes per
+    root at 50 ms (6b″: Guard about 18-24k, Hunt 0.7-61k by range); supersedes
+    proposed edit 49.
+95. **Register F4, H7, H14, C5, C7**: F4 and H7 "Committed" -> held open with the
+    NNUE (H6, CHECKPOINT 4); H14 restated for the reduced ladder (Guard, Hunt, the
+    asset map); C5 and C7 "Provisional" -> killed, provisionally (M16), re-checked
+    by M18.
+96. **Register C9, D6, I9 and the process rows**: record their status as built
+    (I9: the ruleset ID in every key) or to be verified (C9).
+97. **§15.6's Phase-3 re-check**: "movegen ≥ 2x the measured evaluation rate"
+    needs a GPU evaluation rate (issue 120); until then the CPU figure (N5's 6.9 F1
+    evaluations/s on CPU) is the only one, and the re-check is deferred.
 
 ## Session log
 
