@@ -366,7 +366,7 @@ std::string fen_board_string(const Board& board, int p, int h, bool even) {
 
 Multiverse multiverse_from_fen(std::span<const std::string_view> boards, BoardSize size,
                                Parity parity, std::uint32_t ruleset,
-                               std::optional<Colour> to_move) {
+                               std::optional<Colour> to_move, bool all_initial) {
   if (!size.valid()) {
     throw std::invalid_argument("board size " + to_string(size) + " is outside 1x1..8x8");
   }
@@ -475,9 +475,10 @@ Multiverse multiverse_from_fen(std::span<const std::string_view> boards, BoardSi
       nt.boards.push_back(items[end].fen.board);
       ++end;
     }
-    if (!is_central_timeline(nt.position, even)) {
+    if (!all_initial && !is_central_timeline(nt.position, even)) {
       // 5DFEN records no creator: the notation's numbering implies it (white's
-      // timelines take positive labels, black's negative ones, in order).
+      // timelines take positive labels, black's negative ones, in order). A
+      // variant's set-up is all initial timelines instead (R10, H46).
       nt.creator = nt.position > 0 ? Colour::White : Colour::Black;
       nt.creation_order = timeline_label(nt.position, even).magnitude;
     }
@@ -529,10 +530,10 @@ Multiverse multiverse_from_fen(std::span<const std::string_view> boards, BoardSi
 
 Multiverse multiverse_from_fen(const std::vector<std::string>& boards, BoardSize size,
                                Parity parity, std::uint32_t ruleset,
-                               std::optional<Colour> to_move) {
+                               std::optional<Colour> to_move, bool all_initial) {
   std::vector<std::string_view> views(boards.begin(), boards.end());
   return multiverse_from_fen(std::span<const std::string_view>(views), size, parity, ruleset,
-                             to_move);
+                             to_move, all_initial);
 }
 
 // ---- public: the standard positions ---------------------------------------------------

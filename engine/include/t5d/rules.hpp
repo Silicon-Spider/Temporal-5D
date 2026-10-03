@@ -54,14 +54,18 @@ enum class ActivationRule : std::uint8_t {
 
 /// Q2: how initial timelines count in the activation rule.
 enum class InitialTimelineCredit : std::uint8_t {
-  /// Default: initial timelines count for neither side - the count rule
-  /// counts created timelines. (Any credit given to both sides alike changes
-  /// nothing, so only an asymmetric reading is an alternative.)
+  /// Default - ruling R10, register H46 (a provisional project decision,
+  /// CHECKPOINT 5): initial timelines count as created by neither player.
+  /// They are always active and never counted toward either player's created
+  /// timelines; the count rule (T10) counts created timelines only. (Any
+  /// credit given to both sides alike changes nothing, so only an asymmetric
+  /// reading is an alternative.)
   None = 0,
-  /// Q2's alternative, from the 5dpgn author's unverified remark "Internally
-  /// in the game, -0 is -1": in a game that starts with an even number of
-  /// timelines, Black is counted as having created one timeline already (the
-  /// "-0"), which gives White the branching priority.
+  /// Q2's alternative, kept for diagnosis (R10 does not follow it), from the
+  /// 5dpgn author's unverified remark "Internally in the game, -0 is -1": in a
+  /// game that starts with an even number of timelines, Black is counted as
+  /// having created one timeline already (the "-0"), which gives White the
+  /// branching priority.
   MinusZeroToBlack = 1,
 };
 

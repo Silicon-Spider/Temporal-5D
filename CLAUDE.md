@@ -19,7 +19,7 @@ verification layer beside it.
 | `CHANGELOG.md` | Every change, newest first, with what it changed in the spec. |
 | `docs/BUILD_LOG.md` | **Start here when resuming the build.** What is done, parked and next, keyed by register ID; the standing rules of the build; proposed spec edits. |
 | `docs/MEASUREMENTS.md` | Every measured figure with its conditions, and the §15.6 verdicts. |
-| `docs/rules/README.md` | The rulebook (H38): the cited rules the engine is written from, the user's rulings R1-R7, the open questions; pinned by the gate. |
+| `docs/rules/README.md` | The rulebook (H38): the cited rules the engine is written from, the user's rulings R1-R10, the open questions; pinned by the gate. |
 | `docs/checkpoints/` | Checkpoint reports - CHECKPOINT 1, the check disagreements (ruled 2026-10-01) - and `upstream/`, drafts of oracle bug reports for the user to file. |
 | `engine/` | The rules engine, C++20 (H24): immutable boards, the multiverse, 5DFEN, the H30 fingerprint, 5D Zobrist (H18), the turn rules, pseudo-legal move generation, the 5dpgn parser (H28), check status and submission legality (H36), legal actions, the naive and hypercuboid mate detectors (H37), the expansion and its measurement tools, and the gate adapter (parse and full mode). Its manual is `engine/README.md`. |
 

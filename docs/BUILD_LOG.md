@@ -15,6 +15,27 @@ M5 - building it would break a rule).
 
 ## Where things stand
 
+### CHECKPOINT 5 - ruled 2026-10-03 (no stop): the window killed provisionally; Q2
+
+The user's rulings (design documents updated: M16 corrected, M18, H46, reversal 24,
+§13's size-premise entry):
+- **The window is killed, provisionally (M16); the weighting is not changed.**
+  Under 50 boards the per-phase rule decides, and a result inside the ±10% band
+  resolves to off with no stop. The window code stays unbuilt; a **pilot
+  self-play run** before serious self-play (M18) re-checks it - the first step
+  after §15.5, not part of the untrained build.
+- **The size premise was reasoning, not data** (reversal 24, §13): decisions
+  weighted by where compute goes (M7, C2, piece-centric tokenisation) use measured
+  game-length distributions - the human games now, the pilot run later.
+- **Q2 (H46, provisional): initial timelines count as created by neither player** -
+  always active, never counted. Built: a named variant's set-up reads every one of
+  its timelines as initial (Timeline Battleground's -1 and +1 had been read as
+  one creation each side - the same activity, since the count rule treats the
+  sides alike, but not "counted toward neither"); recorded as rulebook R10, the
+  rulebook re-pinned.
+- Continue as planned: E9 and E6a reviews and merges, E10, then 6b″ on a quiet
+  machine.
+
 ### CHECKPOINT 4 - ruled 2026-10-03: the verification layer is v3 (§11.4); the run resumed
 
 The design review concluded (design documents committed e668555; register H1, H2,
@@ -239,42 +260,7 @@ with branch origins, C23); N3's CPU wall times.
   search (rung 1) and Lazy SMP, end-to-end play with the network's random weights,
   the NNUE only if 6b passes (M8).
 - **Waiting on the user:**
-  - **M7 under M16: the window is killed, against M16's own premise** (2026-10-03,
-    MEASUREMENTS). M16 answered the three questions (time-share multiplier; kill
-    clause weighted by t0database; off under 50 boards, "that phase carries a small
-    share of compute"). Applied: on at k = 8 from 50 to 186 boards (1.83x, 2.10x,
-    3.81x), off under 50 - and then the phases where it is on carry 18-38% of the
-    compute (20.4% blended) under the human-game weighting M16 prescribes, so the
-    kill clause kills it. The premise does not hold for those games: under 50
-    boards is about 80% of their compute (88% of their moves). Not a stop; the
-    window code stays unbuilt (M5). Question: confirm the kill until M16's re-check
-    against early self-play, or a different weighting?
-  - **Q2** (rulebook) - *the question:* "How do initial timelines count when a
-    variant starts with several (Two Timelines, Tactician, Strategos, Formations,
-    Invasion, Battleground)? Does either side start as having "created" one? No
-    source states the rule." The only evidence is the 5dpgn author's two unverified
-    remarks about the program: "Internally in the game, `-0` is `-1`", and the
-    displayed index "gives a hint about who has or hasn't branching priority"
-    [25]. *The candidate readings:* **(A) none** (the engine's default,
-    `initial_credit = None`): initial timelines are nobody's creations; the count
-    rule (T10) counts created timelines only. **(B) "-0 is -1"**
-    (`MinusZeroToBlack`): in a game that starts with an even number of timelines,
-    Black counts as having created one already. (A mirror reading, White
-    credited, has no source at all and is not implemented.) *What each changes:*
-    only games that start with an even number of timelines - Two Timelines,
-    Tactician, Strategos, Formations, Invasion - and there only which branch is
-    active. Under (A) each side's first branch is active, and a side's second
-    only once the opponent has branched; under (B) White may create two active
-    timelines before Black branches, and Black's first branch is inactive until
-    White has branched once. Activity decides which boards are mandatory (R9),
-    where the present is, and which boards count for check (H36), so it changes
-    legal actions, check and mate in those variants. Odd starts (Battleground's
-    three timelines) are the same under both. A non-default choice changes the
-    ruleset ID and the Zobrist key. *On today's evidence nothing distinguishes
-    them:* the corpus's only even-start record (`notation/invasion`) is a
-    variant the engine does not set up, the Battleground record answers
-    identically under both, and t0database's games are all Standard - Turn Zero.
-    It matters only if self-play or the gate plays those variants.
+  - Nothing at present (2026-10-03, CHECKPOINT 5 answered M7 and Q2).
 
 ## The brief - standing rules for every session
 
@@ -821,11 +807,13 @@ for game records.
 |---|---|---|
 | M14 | built (prototype), measured - STOP | Engine E8 on its branch (bd08c48): the channel split, df-pn over the semimove turn tree, incremental attack maps; 6b′ fails at 50-199 boards (M15) |
 | M15 | measured - STOP | 6b′ on a quiet machine: (A) 77.4% / 40.7% / 23.7% / 0.0%; (B) fits in no range; (C) df-pn 408 against brute force 400 under 50 boards - STOP, a design review |
-| M16 | applied | M7's readings: time-share multiplier, human-game weighting, off under 50 boards - the kill clause then kills the window (put to the user) |
+| M16 | applied, confirmed | M7's readings (corrected at CHECKPOINT 5): time-share multiplier, human-game weighting, the per-phase rule under 50 boards with the band resolving to off - the window is killed, provisionally |
+| M18 | not started (rule) | A pilot self-play run before serious self-play re-checks the window and the other compute-weighted decisions - after §15.5, not in the untrained build |
+| H46 | built, tested | Q2 (provisional): initial timelines count as created by neither player - a variant's set-up reads every timeline as initial (rulebook R10) |
 | M17 | not started | 6b″: Guard and Hunt per range (E9's tool; quiet run to follow); no outcome stops the run |
 | C24 | building | The complexity trigger, behind a flag beside rung 1 (network) |
 | C25 | not built (rule) | Held open |
-| M7 | measured; M16 applied - killed | On real games (t0database, 716 games, max 186 boards): on at k = 8 from 50 to 186 boards; under 50 boards inside the ±10% band and the kill clause turns on it - waiting on the user; above 186 provisional (MEASUREMENTS) |
+| M7 | measured; killed, provisionally (M16, CHECKPOINT 5) | On real games (t0database, 716 games, max 186 boards): on at k = 8 from 50 to 186 boards; under 50 boards inside the ±10% band and the kill clause turns on it - waiting on the user; above 186 provisional (MEASUREMENTS) |
 | M8 | measured - STOP | 6b re-run (M12): root scan 76.7% / 31.4% / 24.7% / 2.4% by range (< 50 / 50-99 / 100-199 / 200+); rung 1 and quiet-leaf reach fail everywhere; stand-pat valid |
 | M12 | applied - STOP | The bounded optimisation pass (E5c) and the re-run at 5 threads, Lazy SMP: 50-199 boards fail -> STOP, redesign the verification layer |
 | M13 | applied | 8 cores per GPU: M9 judged on 2 expansion cores (passes, 1.87x), the scanner measured at 5 |

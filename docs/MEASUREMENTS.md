@@ -249,6 +249,11 @@ from its 50% line), so recorded, and the question put to the user. The window co
 stays unbuilt either way (M5: the window only if the |E| curve survives); M16's
 re-check against early self-play remains.
 
+**Confirmed at CHECKPOINT 5:** the window is killed, provisionally; the weighting
+is not changed (M16 corrected: under 50 boards the per-phase rule decides, a result
+in the ±10% band resolving to off). A pilot self-play run before serious self-play
+re-checks it (M18) - after §15.5, outside the untrained build.
+
 
 2026-10-03, engine at 901e5be (Release, g++ 16.2, 383 tests passing). The data:
 t0database (`data/t0database/`, pinned, MIT): `py data/t0database/to_5dpgn.py

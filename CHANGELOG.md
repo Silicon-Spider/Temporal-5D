@@ -10,6 +10,36 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-03 - CHECKPOINT 5: the window killed provisionally; Q2 ruled - initial timelines created by neither player (H46)
+
+- `docs/design/`: the upstream revision recording CHECKPOINT 5 - M16 corrected (under
+  50 boards the per-phase rule decides; a result in the ±10% band resolves to off;
+  the window killed, provisionally), M18 (decisions weighted by where compute goes
+  use measured game-length distributions; a pilot self-play run before serious
+  self-play), H46 (Q2), reversal 24 and §13's size-premise entry. Copied in
+  unchanged.
+- `docs/rules/README.md`: ruling R10 (Q2; H46, a provisional project decision):
+  initial timelines count as created by neither player - always active, never
+  counted toward either player's created timelines; Q2 closed provisionally; T10
+  and L8 point to it. Rulebook re-pinned in `oracles/gate.toml` after review (no
+  known divergence cites the changed passages); the gate re-run.
+- `engine/`: a named variant's set-up now reads every one of its timelines as
+  initial (`multiverse_from_fen` / `game_from_fen`'s `all_initial`, used by
+  `variant_start`): Timeline Battleground's -1 and +1 have no creator and do not
+  count toward either player's created timelines (they had been read as one
+  creation each side - the same activity, since the count rule treats the sides
+  alike, but a different Zobrist key and creator feature). Plain 5DFEN keeps its
+  convention (its numbering implies a creator). `initial_credit`'s default cites
+  R10/H46; its alternative stays for diagnosis. Tests: a new H46 test over every
+  multi-timeline set-up; the Battleground and round-trip tests follow H46; the
+  expansion reference test now draws unknown origins from positions read back
+  from 5DFEN. 390 tests; the gate's output on cwmtt/ctp2 (Battleground) is
+  byte-identical.
+- `docs/BUILD_LOG.md`, `docs/MEASUREMENTS.md`: CHECKPOINT 5's rulings; register
+  M7, M16, M18, H46; nothing waits on the user. `CLAUDE.md`: rulings R1-R10.
+- Spec: §11.0 item 2, register H46 (built as ruled); M16, M18, reversal 24, §13
+  (recorded); rules T10, T13, L8, Q2, R10.
+
 ### 2026-10-03 - Build log: CHECKPOINT 4's ruling; M7 re-read under M16
 
 - `docs/BUILD_LOG.md`: CHECKPOINT 4 concluded - verification v3 (§11.4) and the
