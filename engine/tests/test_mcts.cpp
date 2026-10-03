@@ -30,6 +30,7 @@
 
 #include "t5d/expand.hpp"
 #include "t5d/fen.hpp"
+#include "t5d/fingerprint.hpp"
 #include "t5d/mcts.hpp"
 #include "t5d/movegen.hpp"
 #include "t5d/search.hpp"
@@ -124,7 +125,7 @@ struct Config {
   bool e2;
   bool e3;
   NodeKey key;
-  bool solver;  // off by default (H23); the invariants hold either way
+  bool proof_channel;  // off by rule (H41); the invariants hold either way
 };
 const std::vector<Config> kConfigs = {
     {"ply tree, solver", TurnSplit::BoardMove, false, true, false, false, NodeKey::State, true},
@@ -144,7 +145,7 @@ SearchParams params_of(const Config& c) {
   p.uncertainty_weighted_backup = c.e2;
   p.variance_bonus = c.e3;
   p.node_key = c.key;
-  p.solver = c.solver;
+  p.proof_channel = c.proof_channel;
   // The whole-turn listings of a two-board turn run to hundreds of actions;
   // the invariants hold for a truncated list too (it is never proven lost).
   p.max_actions = 96;
@@ -222,7 +223,7 @@ TEST(mcts_a_batch_is_bounded_in_visits_of_every_kind) {
   const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Uniform);
   SearchParams p = fast();
   p.batch_size = 8;
-  p.solver = false;
+  p.proof_channel = false;
   p.turn_cap.turns = 1;  // every turn start after Black's first action is capped
   Search search(game({"[k4/4Q/1K3/5/5:0:1:w]"}, BoardSize{5, 5}), p);
   std::size_t gathers = 0;
@@ -340,7 +341,7 @@ TEST(mcts_solver_proves_a_mate_in_one_and_plays_it) {
       for (const bool graph : {false, true}) {
         const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Uniform);
         SearchParams p = fast();
-        p.solver = true;  // the in-tree solver under test (off by default, H23)
+        p.proof_channel = true;  // the in-tree solver under test (off by rule, H41)
         p.split = split;
         p.graph = graph;
         Search search(start, p);
@@ -391,7 +392,7 @@ TEST(mcts_solver_proves_a_draw_when_every_child_is_drawn) {
   for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::WholeTurn}) {
     const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Random, 5);
     SearchParams p = fast();
-    p.solver = true;  // the in-tree solver under test (off by default, H23)
+    p.proof_channel = true;  // the in-tree solver under test (off by rule, H41)
     p.split = split;
     Search search(s, p);
     search.run(*ev, Limits{200});
@@ -411,7 +412,7 @@ TEST(mcts_solver_proves_a_loss_when_every_child_is_lost) {
     for (const bool graph : {false, true}) {
       const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Uniform);
       SearchParams p = fast();
-      p.solver = true;  // the in-tree solver under test (off by default, H23)
+      p.proof_channel = true;  // the in-tree solver under test (off by rule, H41)
       p.split = split;
       p.graph = graph;
       Search search(s, p);
@@ -492,7 +493,7 @@ TEST(mcts_with_the_solver_off_terminals_are_valued_and_nothing_else_is_proven) {
   // is solved, the search runs every playout, and final selection takes no
   // proof (no ProvenWin, SecureChild or AllLost). The mate in one is still
   // found, by its value.
-  CHECK(!SearchParams{}.solver);
+  CHECK(!SearchParams{}.proof_channel);
   for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::WholeTurn}) {
     for (const bool graph : {false, true}) {
       for (int which = 0; which < 3; ++which) {
@@ -557,7 +558,7 @@ TEST(mcts_solver_agrees_with_the_brute_force_game_tree_under_both_q4_readings) {
       if (truth.kind == t5d_test::GameValue::Kind::Unknown) continue;
       for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::WholeTurn}) {
         SearchParams p = fast();
-        p.solver = true;  // the in-tree solver under test (off by default, H23)
+        p.proof_channel = true;  // the in-tree solver under test (off by rule, H41)
         p.split = split;
         p.legality = LegalityOptions::exact();
         const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Uniform);
@@ -599,7 +600,7 @@ TEST(mcts_solver_bounds_never_contradict_in_play) {
         const Config& c = kConfigs[static_cast<std::size_t>(rng.below(static_cast<int>(kConfigs.size())))];
         const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Material);
         SearchParams sp = params_of(c);
-        sp.solver = true;
+        sp.proof_channel = true;
         Search search(s, sp);
         search.run(*ev, Limits{60});
         CHECK_NOTHROW(search.check_invariants());
@@ -1184,7 +1185,7 @@ TEST(mcts_an_unknown_edge_proves_nothing_until_verified) {
   for (const int mode : {0, 1, 2}) {  // unverified; verified exactly; verified with no budget
     const bool verify = mode != 0;
     SearchParams p = fast();
-    p.solver = true;  // the in-tree solver under test (off by default, H23)
+    p.proof_channel = true;  // the in-tree solver under test (off by rule, H41)
     p.widening = false;
     p.legality = LegalityOptions::budgeted(0, 0);
     p.verify_unknown = verify;
@@ -1308,7 +1309,7 @@ TEST(mcts_board_move_dead_ends_are_pruned_not_scored) {
   // action, so a move that leaves the king capturable has no legal completion -
   // a dead end, pruned (§8.2), never backed up as a loss.
   SearchParams p = fast();
-  p.solver = true;  // the in-tree solver under test (off by default, H23)
+  p.proof_channel = true;  // the in-tree solver under test (off by rule, H41)
   p.legal_moves_only = false;
   p.widening = false;
   const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Uniform);
@@ -1799,7 +1800,7 @@ TEST(mcts_graph_never_prunes_a_mating_submission_for_a_dead_end_elsewhere) {
       for (const int order : {1, 2}) {
         SearchParams p = fast();
         p.graph = graph;
-        p.solver = true;
+        p.proof_channel = true;
         p.legal_moves_only = false;  // the pseudo-legal seam: B's move is offered, its child a dead end
         Search search(m.root, p);
         Steer steer(kMeetingLines, kLate, order);
@@ -1844,7 +1845,7 @@ TEST(mcts_graph_dead_ends_have_no_legal_completion) {
     for (const BuiltinEvaluator kind : {BuiltinEvaluator::Uniform, BuiltinEvaluator::Random}) {
       SearchParams p = fast();
       p.graph = graph;
-      p.solver = true;
+      p.proof_channel = true;
       p.legality = LegalityOptions::budgeted(0, 0);
       p.verify_legality = LegalityOptions::budgeted(0, 0);
       const std::unique_ptr<Evaluator> ev = make_evaluator(kind, 3);
@@ -1891,7 +1892,7 @@ TEST(mcts_graph_invariants_hold_in_random_searches) {
       for (const bool seam : {false, true}) {
         SearchParams p = fast();
         p.graph = true;
-        p.solver = true;
+        p.proof_channel = true;
         p.legal_moves_only = !seam;
         p.legality = i % 2 == 0 ? LegalityOptions::budgeted(0, 0) : LegalityOptions::exact();
         p.turn_cap.boards = static_cast<int>(positions[i].multiverse().board_count()) + 3;
@@ -2185,7 +2186,7 @@ TEST(mcts_a_solved_child_is_visited_only_up_to_the_threshold) {
   t.submit();
   REQUIRE(verdict_of(t) == Outcome::Stalemate);
   SearchParams p = fast();
-  p.solver = true;
+  p.proof_channel = true;
   p.synchronous = true;
   p.widening = false;
   p.turn_cap.turns = 1;  // nothing past Black's reply proven: the root stays open
@@ -2390,4 +2391,76 @@ TEST(mcts_a_deadline_stops_a_run) {
   CHECK_THROWS_AS(search.run(*ev, l), std::invalid_argument);
   l.seconds = std::numeric_limits<double>::quiet_NaN();
   CHECK_THROWS_AS(search.run(*ev, l), std::invalid_argument);
+}
+
+// ---- H18 as amended at CHECKPOINT 4: the acting player in every state key ------------------
+
+TEST(mcts_h18_the_acting_player_is_in_every_key) {
+  // Register H18 (amended): the ruleset ID and the acting player in every
+  // state key - under Q4 a state whose present has shifted but whose action is
+  // not yet submitted holds exactly the boards of the opponent's turn start
+  // after the submission. The 5D Zobrist key itself, both node keys, the
+  // evaluation cache's exact comparison and the MCGS graph keep them apart.
+  for (const bool after_shift : {true, false}) {
+    RuleOptions rules;
+    rules.moves_after_shift = after_shift;
+    for (const char* name : {"Standard", "Standard - Two Timelines", "Very Small - Open"}) {
+      const GameState start = variant(name, rules);
+      // The acting player's first legal action, played and not submitted.
+      GameState shifted = start;
+      const ActionList acts = list_legal_actions(start, 1, Detector::Hypercuboid);
+      REQUIRE(!acts.actions.empty());
+      for (const Move& m : acts.actions.front().moves) shifted.apply(m);
+      REQUIRE(shifted.obligations_met());
+      REQUIRE(shifted.present() != start.present());  // the present has shifted
+      GameState opponent = shifted;
+      opponent.submit();
+      // The same boards ...
+      CHECK_EQ(fingerprint(shifted.multiverse()).fingerprint, fingerprint(opponent.multiverse()).fingerprint);
+      CHECK(shifted.to_move() != opponent.to_move());
+      // ... never the same key, nor the same state.
+      CHECK(shifted.multiverse().zobrist() != opponent.multiverse().zobrist());  // t5d/zobrist: H18
+      CHECK(shifted.zobrist() != opponent.zobrist());
+      for (const NodeKey k : {NodeKey::State, NodeKey::StateAndOrigins}) {
+        CHECK(node_key(shifted, k) != node_key(opponent, k));
+      }
+      CHECK(!(shifted == opponent));
+      CHECK(!same_position(shifted, opponent));
+      // The evaluation cache tells them apart even filed under one key.
+      Evaluation ev;
+      ev.logits.assign(4, 0.0f);
+      ev.value = two_hot(0.5);
+      EvalCache cache;
+      cache.insert(42, 0, shifted, ev);
+      CHECK(cache.find(42, 0, shifted, true) != nullptr);
+      CHECK(cache.find(42, 0, opponent, true) == nullptr);
+      CHECK(cache.find(42, 0, opponent, false) == nullptr);
+      // MCGS with keys cut to one bit (every key collides): the shifted root's
+      // submit edge leads to a node of its own holding the opponent's turn
+      // start, never back to the root, and every node's player is its state's.
+      SearchParams p = fast();
+      p.graph = true;
+      p.key_bits = 1;
+      p.widening = false;
+      const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
+      Search search(shifted, p, false);
+      search.run(*uniform, Limits{120});
+      CHECK_NOTHROW(search.check_invariants());
+      std::size_t submits = 0;
+      for (NodeId id = 0; id < search.node_count(); ++id) {
+        const NodeView n = search.node(id);
+        CHECK(n.mover == n.state->to_move());
+        for (std::size_t i = 0; i < n.edge_count; ++i) {
+          const EdgeView e = search.edge(id, i);
+          if (!e.submit || e.child == kNoNode) continue;
+          ++submits;
+          const NodeView c = search.node(e.child);
+          CHECK(e.child != id);
+          CHECK(c.mover != n.mover);
+          if (id == search.root()) CHECK(*c.state == opponent);
+        }
+      }
+      CHECK(submits > 0);
+    }
+  }
 }

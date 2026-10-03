@@ -145,7 +145,7 @@ SearchParams params_from(const t5d_search_params* c) {
     default: throw std::invalid_argument("node_key must be T5D_NODE_KEY_STATE or _STATE_AND_ORIGINS");
   }
   p.residual_epsilon = c->residual_epsilon;
-  p.solver = boolean(c->solver, "solver");
+  p.proof_channel = boolean(c->proof_channel, "proof_channel");
   p.solved_visit_cap = c->solved_visit_cap;
   switch (c->final_rule) {
     case T5D_FINAL_VISITS: p.final_rule = t5d::mcts::FinalRule::Visits; break;
@@ -310,7 +310,7 @@ constexpr LayoutEntry kLayout[] = {
     T5D_SEARCH_AT(t5d_search_params, graph),
     T5D_SEARCH_AT(t5d_search_params, node_key),
     T5D_SEARCH_AT(t5d_search_params, residual_epsilon),
-    T5D_SEARCH_AT(t5d_search_params, solver),
+    T5D_SEARCH_AT(t5d_search_params, proof_channel),
     T5D_SEARCH_AT(t5d_search_params, solved_visit_cap),
     T5D_SEARCH_AT(t5d_search_params, final_rule),
     T5D_SEARCH_AT(t5d_search_params, lcb_floor),
@@ -445,7 +445,7 @@ void t5d_search_params_default(t5d_search_params* out) {
   out->graph = flag(p.graph);
   out->node_key = p.node_key == t5d::mcts::NodeKey::State ? T5D_NODE_KEY_STATE : T5D_NODE_KEY_STATE_AND_ORIGINS;
   out->residual_epsilon = p.residual_epsilon;
-  out->solver = flag(p.solver);
+  out->proof_channel = flag(p.proof_channel);
   out->solved_visit_cap = p.solved_visit_cap;
   out->final_rule = p.final_rule == t5d::mcts::FinalRule::Visits ? T5D_FINAL_VISITS : T5D_FINAL_LCB;
   out->lcb_floor = p.lcb_floor;

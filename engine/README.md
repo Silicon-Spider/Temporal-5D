@@ -28,8 +28,8 @@ E7, after the CHECKPOINT 2 rulings, makes moves after the present has shifted - 
 submission - the default rules (Q4, ruled R8; register D8), the Guide-literal reading
 a diagnostic, and gives the expansion and its C API the acting player and the submit
 action, possible and legal (D8); stage E6a adds the main search - PUCT over a tree or,
-behind a flag, a graph, both D2 arms, the in-tree solver behind a flag that is off
-until the user rules on it (H23, §11.1 item 2), final selection, persistence, self-play
+behind a flag, a graph, both D2 arms, the in-tree solver behind the proof channel's
+switch - off by rule (H41) - final selection, persistence, self-play
 and match play, the step C API an external evaluator drives, and t5d-play - revised
 after three adversarial reviews (MCGS identity, the solver's default, test strength,
 call sequences, memory, the C ABI, validation). Rule IDs (L*, T*, J*, 4.*, S*, Q*, V*) are those of the project's
@@ -71,7 +71,9 @@ rules reference, `docs/rules/README.md`, which the code cites throughout.
 
 Next: the gate run with the engine configured in full mode - Q4's ruling (R8) is
 the default, and with it every one of the triage's 115 Q4 findings agrees with the
-oracles; the user's ruling on the in-tree solver (on or off before the gate passes);
+oracles; the proof channel's sign-off (H41: the in-tree solver's propagation stays off
+until the gate passes, the search's soundness fixes land with tests, and the channel
+is signed off, its proofs cross-checked against df-pn and oracle mate verdicts);
 the network's stage N5 (the acting-player input and the submit logit the search already
 takes); the expansion's pin and check relations; the spec issues the search's
 placeholders raise (build-log spec issues 28, 46, and the E6a issues listed under
@@ -2040,8 +2042,12 @@ after the shift and the same boards submitted differ in it) - mixed, by default,
 every timeline's branch origin (`NodeKey::StateAndOrigins`: C23 ruled a board's causal
 past to be its ancestry, the lineage reading of spec issue 30, so states that differ
 only in an origin are different positions for the network); `NodeKey::State` leaves
-origins out. A node's identity in the graph is its key **and whether an action is in
-progress**: a turn start and a state during an action can be one `GameState` (an
+origins out. The key carries the acting player (H18 as amended: the 5D Zobrist key
+itself does - `Multiverse::zobrist` mixes in the player to move, which is the acting
+player until the submission - so a state whose present has shifted inside an unsubmitted
+action and the opponent's turn start with the same boards have different keys, and the
+exact comparison behind a key match tells them apart too). A node's identity in the
+graph is its key **and whether an action is in progress**: a turn start and a state during an action can be one `GameState` (an
 optional board played at the end of one action, or at the start of the next - same
 boards, same player, same present), yet only a turn start can end the game (C5) or be
 capped (I11), and only a partial action can be a dead end, so they are never one node
@@ -2056,13 +2062,17 @@ expanded node through an edge whose Q lags the node's by more than `residual_eps
 (or an edge never crossed) backs up the residual correction instead of descending.
 5D has no repetition rule and every move adds a board, so the graph is acyclic.
 
-**The solver** (H2, E9; `solver`, **off by default**). Spec §11.1 item 2 counts
-"inject solved bounds into the tree" as part of the proof channel, and H23 keeps the
-proof channel disabled until the generator has passed the gate - so propagating proven
-bounds, and every decision taken from them, waits on the user's ruling (turning it on
-is one line, `SearchParams::solver`; `t5d-play --solver`). With it off a terminal - C5
-at a turn start, by E4's exhaustive detector, or I11's cap - is still valued as its
-game result, which is ordinary MCTS; nothing else is proven. With it on: bounds
+**The solver** (H2, E9; behind `proof_channel`, **off by rule**). Register H41
+(ruled at CHECKPOINT 4): "the search's own solver is part of the proof channel:
+game-end scoring stays on; solved-status propagation and export are off until the gate
+passes, the search's soundness fixes land with tests, and the proof channel is signed
+off; its proofs are cross-checked against df-pn and oracle mate verdicts" (spec §11.1
+item 2; H23). So `SearchParams::proof_channel` - named as the proof channel's switch,
+`t5d-play --proof-channel` for experiments - is false: no node is marked solved, no
+sibling pruned and no secure child chosen from proven bounds. A game-end position - C5
+at a turn start, by E4's exhaustive detector, or I11's cap - is still scored as its
+result, which is ordinary MCTS; nothing else is proven. Export is `proof_store`
+(refused). With the switch on: bounds
 `[lo, hi]` per node from the mover's view: a terminal's exact value; `lo` the best child's lower bound (children through known
 edges), `hi` the best child's upper bound once every child exists and the list is
 complete. Bounds only tighten; a contradiction throws. A solved node leaves selection
@@ -2180,14 +2190,16 @@ the reader and `t5d-gate` replay; a summary goes to standard error:
 ```
 t5d-play [--variant NAME] [--evaluator uniform|random|material] [--playouts N]
          [--split ply|turn] [--graph] [--node-key state|origins] [--no-widening]
-         [--e2] [--e3] [--solver] [--batch N] [--synchronous] [--match] [--final visits|lcb]
+         [--e2] [--e3] [--proof-channel] [--batch N] [--synchronous] [--match]
+         [--final visits|lcb]
          [--temperature T] [--temperature-decisions N] [--noise | --no-noise] [--cap-turns N]
          [--cap-boards N] [--max-actions N] [--listing-cap N] [--mate-nodes N]
          [--max-seconds S] [--seed S] [--no-moves-after-shift] [--rules ENCODING]
 ```
 
 Defaults: Standard, uniform, 64 playouts per decision, the board-move split, a tree,
-self-play with root noise (`--no-noise`: none), the solver off (`--solver`), a cap of
+self-play with root noise (`--no-noise`: none), the proof channel off (H41;
+`--proof-channel` for experiments, said in the Engine header), a cap of
 20 turns (uniform play branches freely: by turn 12 a game can
 hold 300 boards on 50 timelines). `--mate-nodes N` sets the search's terminal-check
 budget; `--max-actions` (checked at turn starts) and `--max-seconds` (checked before
@@ -2206,7 +2218,7 @@ included), action listings and verifications, and the game's own turn-start verd
 **Tests** (`tests/test_mcts.cpp`, `test_mcts_memory.cpp`, `test_selfplay.cpp`,
 `test_capi_search.cpp`, `test_play_exe.cpp`): §15.4's invariants under uniform and
 random evaluators, across six configurations (both splits, tree and graph, both node
-keys, widening on and off, E2 and E3, the solver on in three and off in three) -
+keys, widening on and off, E2 and E3, the proof channel on in three and off in three) -
 `check_invariants()` holds visit counts and backed-up values consistent
 through backup (a node's visits = the visits that ended there + its edges'), no
 virtual loss left, every node reachable, bounds never contradicting their children,
@@ -2228,7 +2240,10 @@ verdicts, every mate in one proved; decisions counted as moves plus submissions;
 `t5d-play`'s rules option. After the reviews: MCGS never merging a turn start with
 the same state during an action (the reviewers' three repros, each line reached first
 in turn; random graph searches with every dead end checked against the reference
-enumeration); the solver off by default, terminals still valued; one test for each
+enumeration); the proof channel off by rule (H41), game ends still scored; H18's acting
+player in every key (a shifted, unsubmitted state and the opponent's turn start with
+the same boards: different Zobrist and node keys, told apart by the cache under one
+key, never one MCGS node with every key colliding); one test for each
 mutation review C found surviving (the backed-up value's side across submit edges,
 the residual's side, the step API against the C++ search by digest with finite submit
 logits, value logits in their order, proofs through unknown edges, the visit
@@ -2448,8 +2463,8 @@ Each is recorded where it is made (the header comments) and listed here:
   84. the material evaluator's piece values, now the scanner's placeholders (issue 56);
   85. the whole-turn arm's missing end-of-turn token (D8; not built);
   86. the whole-turn listing's cap, now 256 for memory (`max_actions`);
-  87. whether the in-tree solver is part of the gated proof channel (§11.1 item 2, H23;
-      off by default until the user rules);
+  87. (settled: H41 rules the in-tree solver part of the proof channel - its
+      propagation off by rule; no spec issue);
   88. MCGS identity: the state AND whether an action is in progress (§8.5's "values
       depend only on the state": proposed spec edit 61).
 - **An ambiguous move is still unreadable** (stage E4): the notation's "Omission" lets

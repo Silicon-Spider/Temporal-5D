@@ -117,17 +117,17 @@ TEST(play_exe_records_replay_through_the_gate_adapter) {
   play_and_gate({"--variant", "Very Small - Open", "--evaluator", "material", "--playouts", "16",
                  "--cap-turns", "12", "--seed", "2"},
                 {});
-  // The in-tree solver is off unless asked for (H23); the Engine header says so.
+  // The proof channel's switch is off unless asked for (H41); the Engine header says so.
   const t5d::PgnRecord plain = play_and_gate({"--variant", "Very Small - Open", "--playouts", "16",
                                               "--cap-turns", "6", "--seed", "2"},
                                              {});
   REQUIRE(plain.header("Engine") != nullptr);
-  CHECK(plain.header("Engine")->find("solver") == std::string::npos);
-  const t5d::PgnRecord solved = play_and_gate({"--variant", "Very Small - Open", "--solver", "--playouts", "16",
+  CHECK(plain.header("Engine")->find("proof channel") == std::string::npos);
+  const t5d::PgnRecord solved = play_and_gate({"--variant", "Very Small - Open", "--proof-channel", "--playouts", "16",
                                                "--cap-turns", "6", "--seed", "2"},
                                               {});
   REQUIRE(solved.header("Engine") != nullptr);
-  CHECK(solved.header("Engine")->find(", solver") != std::string::npos);
+  CHECK(solved.header("Engine")->find(", proof channel ON") != std::string::npos);
   // Root noise: on in self-play by default (E1, §8.4), --no-noise turns it off,
   // match play has none.
   CHECK(plain.header("Engine")->find("root noise") != std::string::npos);

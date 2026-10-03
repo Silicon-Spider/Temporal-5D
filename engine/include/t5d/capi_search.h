@@ -52,8 +52,8 @@
  * SOLVER BOUNDS (lo, hi) are search state: they may guide play, but they are
  * never to be stored as proofs - no proof enters a persistent solved store
  * until the generator has passed the gate (register H19, H23). The in-tree
- * solver itself is off by default (t5d_search_params.solver) until the user
- * rules on it (spec §11.1 item 2).
+ * solver itself is part of the proof channel (H41) and off by rule
+ * (t5d_search_params.proof_channel).
  *
  * The pointers a leaf hands out are valid until the next t5d_search_gather,
  * t5d_search_deliver, t5d_search_abandon or t5d_search_destroy on the handle:
@@ -172,8 +172,9 @@ typedef struct t5d_search_params {
   int32_t graph;
   int32_t node_key;            /* T5D_NODE_KEY_* */
   double residual_epsilon;
-  /* H2, E9 */
-  int32_t solver;
+  /* H2, E9, H41: the proof channel's switch - solved-status propagation in the
+     tree; 0 by rule until the gate passes and the channel is signed off */
+  int32_t proof_channel;
   uint32_t solved_visit_cap;
   /* E5, E9 */
   int32_t final_rule;          /* T5D_FINAL_* */
