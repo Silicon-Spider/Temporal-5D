@@ -518,7 +518,7 @@ TEST(capi_search_shares_its_cache_and_runs_within_budgets) {
   CHECK_EQ(t5d_search_new_sharing(nullptr, g.get(), 1, &p, &raw, nullptr), T5D_ERR_ARGUMENT);
   // A run within a node budget stops there, and says so.
   const SearchHandle s = new_search(g.get(), p);
-  t5d_search_limits limits{T5D_NO_LIMIT, T5D_NO_LIMIT, 300, T5D_NO_LIMIT, 0.0};
+  t5d_search_limits limits{20000, T5D_NO_LIMIT, 300, T5D_NO_LIMIT, 0.0};
   int32_t stop = -1;
   REQUIRE_EQ(t5d_search_run_limits(s.get(), T5D_EVALUATOR_RANDOM, 3, &limits, &stop, nullptr), T5D_OK);
   CHECK_EQ(stop, T5D_STOP_NODES);
@@ -526,7 +526,7 @@ TEST(capi_search_shares_its_cache_and_runs_within_budgets) {
   REQUIRE_EQ(t5d_search_info(s.get(), &c), T5D_OK);
   CHECK(c.nodes >= 300);
   CHECK_EQ(c.last_stop, T5D_STOP_NODES);
-  limits = t5d_search_limits{T5D_NO_LIMIT, T5D_NO_LIMIT, T5D_NO_LIMIT, c.memory_bytes, 0.0};
+  limits = t5d_search_limits{20000, T5D_NO_LIMIT, T5D_NO_LIMIT, c.memory_bytes, 0.0};
   REQUIRE_EQ(t5d_search_run_limits(s.get(), T5D_EVALUATOR_RANDOM, 3, &limits, &stop, nullptr), T5D_OK);
   CHECK_EQ(stop, T5D_STOP_MEMORY);
   CHECK_EQ(t5d_search_run_limits(s.get(), T5D_EVALUATOR_RANDOM, 3, nullptr, &stop, nullptr), T5D_ERR_ARGUMENT);

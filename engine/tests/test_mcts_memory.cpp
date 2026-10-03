@@ -201,7 +201,7 @@ TEST(mcts_the_node_and_memory_budgets_stop_a_run) {
     {
       Search s(start("Standard - Two Timelines"), p);
       Limits l;
-      l.playouts = 1u << 30;
+      l.playouts = 20000;  // finite: a budget not honoured fails (stops on playouts), never hangs
       l.nodes = 400;
       CHECK(s.run(*uniform, l) == StopReason::Nodes);
       CHECK(s.stats().last_stop == StopReason::Nodes);
@@ -212,7 +212,7 @@ TEST(mcts_the_node_and_memory_budgets_stop_a_run) {
     {
       Search s(start("Standard - Two Timelines"), p);
       Limits l;
-      l.playouts = 1u << 30;
+      l.playouts = 20000;  // finite: a budget not honoured fails (stops on playouts), never hangs
       l.bytes = 2u << 20;
       CHECK(s.run(*uniform, l) == StopReason::Memory);
       CHECK(s.memory_bytes() >= l.bytes);
