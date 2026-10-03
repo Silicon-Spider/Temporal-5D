@@ -43,7 +43,9 @@
 //    position.
 //  * IllegalMove - a move no pseudo-legal move fits: a board that is not a
 //    playable board of the mover's (L5, T3), no piece that can make the move
-//    (sections 3-5), or any move once the present has shifted (Q4).
+//    (sections 3-5), or - under Q4's Guide-literal reading only - any move
+//    once the present has shifted (by default, R8, moves are allowed until
+//    submission).
 //  * CannotSubmit - the action ends with the present still on the mover's
 //    colour (T5), or leaves a royal piece of the mover's capturable (C4, R1).
 //

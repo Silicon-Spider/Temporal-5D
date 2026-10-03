@@ -291,7 +291,7 @@ TEST(random_play_alternative_rulesets_keep_states_well_formed) {
   }
   {
     RuleOptions r;
-    r.moves_after_shift = true;
+    r.moves_after_shift = false;  // Q4's Guide-literal reading (R8 is the default)
     r.mandatory = MandatoryBoards::AllActive;
     r.initial_credit = InitialTimelineCredit::MinusZeroToBlack;
     r.earlier_playable_jump_branches = true;

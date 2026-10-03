@@ -292,7 +292,7 @@ std::vector<RuleOptions> alternative_rulesets() {
   with([](RuleOptions& r) { r.activation = ActivationRule::Consecutive; });
   with([](RuleOptions& r) { r.initial_credit = InitialTimelineCredit::MinusZeroToBlack; });
   with([](RuleOptions& r) { r.play_activates = true; });
-  with([](RuleOptions& r) { r.moves_after_shift = true; });
+  with([](RuleOptions& r) { r.moves_after_shift = false; });  // Q4's Guide-literal reading
   with([](RuleOptions& r) { r.mandatory = MandatoryBoards::AllActive; });
   with([](RuleOptions& r) { r.reactivation = Reactivation::Deferred; });
   with([](RuleOptions& r) { r.turn_zero_reachable = false; });
@@ -674,17 +674,18 @@ void proofs_under_every_alternative_ruleset(int games, int turns, std::uint64_t 
 namespace {
 
 // The in-check stage (ScannerOptions::evasion_probe) against E4 first (0):
-// random play from the sparse starts under the default rules and under Q4's
-// ruled reading (moves after the shift, rulebook R8), and the constructed
+// random play from the sparse starts under Q4's Guide-literal reading (no move
+// after the shift) and under the default rules - Q4's ruled reading (moves
+// after the shift, rulebook R8) - and the constructed
 // positions, at a generous budget and at random ones. Every proof of either
 // is the game tree's; where both prove, they prove the same; and with ample
 // nodes the stage loses no proof E4-first finds in a tree it exhausts.
 void evasion_probe_keeps_the_proofs(int games, int turns, int runs_per_position, int most_nodes,
                                     int max_distance) {
-  RuleOptions after_shift;
-  after_shift.moves_after_shift = true;
-  std::vector<GameState> positions = sparse_positions(RuleOptions{}, games, turns, 303);
-  for (const GameState& s : sparse_positions(after_shift, games, turns, 304)) positions.push_back(s);
+  RuleOptions guide;
+  guide.moves_after_shift = false;  // Q4's Guide-literal reading
+  std::vector<GameState> positions = sparse_positions(guide, games, turns, 303);
+  for (const GameState& s : sparse_positions(RuleOptions{}, games, turns, 304)) positions.push_back(s);
   for (const GameState& s : {mate_in_one(), cross_board_mate(), stale_checkmate_in_one(),
                              mate_in_two(), history_royal_mate(), rewind_escape(), rewind_blocked()}) {
     positions.push_back(s);
@@ -833,7 +834,7 @@ TEST(scanner_the_solved_store_refuses_contradictions) {
   // The ruleset is part of the key (H18): the same boards under another
   // ruleset are another position.
   RuleOptions other;
-  other.moves_after_shift = true;
+  other.moves_after_shift = false;  // Q4's Guide-literal reading
   const GameState t = game({"[k4/4Q/1K3/5/5:0:1:w]"}, k5x5, other);
   CHECK(!store.find(t).has_value());
 }
@@ -912,10 +913,10 @@ std::vector<GameState> variant_positions(const RuleOptions& rules, int actions_f
 // is shared by all its scans, so a contradiction between any two would
 // throw. Node budgets and a clock.
 void lazy_smp_no_false_proofs(int games, int turns, int max_distance) {
-  RuleOptions after_shift;
-  after_shift.moves_after_shift = true;
-  std::vector<GameState> positions = sparse_positions(RuleOptions{}, games, turns, 505);
-  for (const GameState& s : sparse_positions(after_shift, games, turns, 506)) positions.push_back(s);
+  RuleOptions guide;
+  guide.moves_after_shift = false;  // Q4's Guide-literal reading; the default is R8's
+  std::vector<GameState> positions = sparse_positions(guide, games, turns, 505);
+  for (const GameState& s : sparse_positions(RuleOptions{}, games, turns, 506)) positions.push_back(s);
   for (const GameState& s : {mate_in_one(), cross_board_mate(), stale_checkmate_in_one(),
                              mate_in_two(), history_royal_mate(), rewind_escape(), rewind_blocked()}) {
     positions.push_back(s);
@@ -983,7 +984,7 @@ TEST(scanner_lazy_smp_store_refuses_contradictions) {
   CHECK_THROWS_AS(store.put(s, Proof::loss(2)), std::logic_error);
   CHECK_THROWS_AS(store.put(s, Proof::draw()), std::logic_error);
   RuleOptions other;
-  other.moves_after_shift = true;
+  other.moves_after_shift = false;  // Q4's Guide-literal reading
   CHECK(!store.find(game({"[k4/4Q/1K3/5/5:0:1:w]"}, k5x5, other)).has_value());  // H18
   // Eight threads at once: each puts a proof of one kind for every position,
   // then each tries the other kind for every position - every such put
@@ -1057,10 +1058,12 @@ TEST(scanner_lazy_smp_reaches_the_single_threads_depth) {
                  std::thread::hardware_concurrency());
     return;
   }
-  std::vector<GameState> sample = variant_positions(RuleOptions{}, 6, 14, 707);
-  RuleOptions after_shift;
-  after_shift.moves_after_shift = true;
-  for (const GameState& s : variant_positions(after_shift, 6, 14, 708)) sample.push_back(s);
+  // Both readings of Q4, as before stage E7 made R8's the default: the same
+  // positions (seed 707 under the Guide-literal reading, 708 under R8's).
+  RuleOptions guide;
+  guide.moves_after_shift = false;
+  std::vector<GameState> sample = variant_positions(guide, 6, 14, 707);
+  for (const GameState& s : variant_positions(RuleOptions{}, 6, 14, 708)) sample.push_back(s);
   const auto depth_of = [](const ScanResult& r) {
     return r.proof.proven() || r.exhausted ? 17 : r.resolved_depth;
   };

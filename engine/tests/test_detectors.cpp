@@ -197,7 +197,7 @@ std::vector<RuleOptions> alternative_rulesets() {
   std::vector<RuleOptions> out;
   {
     RuleOptions r;
-    r.moves_after_shift = true;  // Q4
+    r.moves_after_shift = false;  // Q4's Guide-literal reading (R8 is the default)
     out.push_back(r);
   }
   {
@@ -287,7 +287,7 @@ std::optional<GameState> tiny_position(t5d_test::Rng& rng, int max_axes, bool ki
   r.activation = rng.chance(30) ? ActivationRule::Consecutive : ActivationRule::Count;
   r.initial_credit = rng.chance(25) ? InitialTimelineCredit::MinusZeroToBlack : InitialTimelineCredit::None;
   r.play_activates = rng.chance(20);
-  r.moves_after_shift = rng.chance(25);
+  r.moves_after_shift = !rng.chance(25);  // Q4: R8 (the default), or the Guide-literal reading
   r.mandatory = rng.chance(25) ? MandatoryBoards::AllActive : MandatoryBoards::InPresent;
   r.reactivation = rng.chance(20) ? Reactivation::Deferred : Reactivation::Rewinds;
   r.earlier_playable_jump_branches = rng.chance(20);
@@ -571,9 +571,9 @@ TEST(legal_moves_agree_with_a_search_per_move) {
   for (const Sparse& start : sparse_starts()) {
     legal_games(t5d_test::game(start.boards, start.size), 6, seed++, t);
   }
-  RuleOptions moves_after_shift;
-  moves_after_shift.moves_after_shift = true;
-  legal_games(t5d_test::game(sparse_starts()[0].boards, sparse_starts()[0].size, moves_after_shift), 6, seed++, t);
+  RuleOptions guide;
+  guide.moves_after_shift = false;  // Q4's Guide-literal reading
+  legal_games(t5d_test::game(sparse_starts()[0].boards, sparse_starts()[0].size, guide), 6, seed++, t);
   report("legal moves", t);
   CHECK(t.compared > 500);
 }
@@ -706,8 +706,8 @@ TEST(long_detectors_agree_on_many_games) {
 }
 
 TEST(detectors_the_general_realisation_lets_a_castling_precede_rewinds) {
-  // Found by review (2026-10-02): under Q3 (play activates), Q4's other reading
-  // (moves after the shift) and Q21's alternative (castling on mandatory boards
+  // Found by review (2026-10-02): under Q3 (play activates), Q4's ruled reading
+  // (moves after the shift, R8 - the default since stage E7) and Q21's alternative (castling on mandatory boards
   // only), a move on an inactive opponent timeline behind the present activates
   // it and rewinds the present, after which the castling board is no longer in
   // the present - so the castling must come first, whatever its index. The
@@ -716,7 +716,7 @@ TEST(detectors_the_general_realisation_lets_a_castling_precede_rewinds) {
   // the naive search and a brute-force reference 254 (successors 242 / 258).
   RuleOptions r;
   r.play_activates = true;                   // Q3
-  r.moves_after_shift = true;                // Q4
+  r.moves_after_shift = true;                // Q4 (R8; the default)
   r.castling_on_optional_boards = false;     // Q21
   const GameState s = t5d_test::game(
       {"[5:0:1:w]", "[5:0:1:b]", "[5:0:2:w]", "[5:0:2:b]", "[5:0:3:w]", "[5:0:3:b]", "[K*2R*1:0:4:w]",

@@ -139,7 +139,7 @@ std::string describe(const RuleOptions& r) {
   add(r.initial_credit == InitialTimelineCredit::MinusZeroToBlack,
       "initial_credit=MinusZeroToBlack (Q2)");
   add(r.play_activates, "play_activates (Q3)");
-  add(r.moves_after_shift, "moves_after_shift (Q4)");
+  add(!r.moves_after_shift, "moves_after_shift=false (Q4)");
   add(r.mandatory == MandatoryBoards::AllActive, "mandatory=AllActive (Q5)");
   add(r.reactivation == Reactivation::Deferred, "reactivation=Deferred (Q6)");
   add(!r.turn_zero_reachable, "turn_zero_reachable=false (Q8)");

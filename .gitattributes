@@ -7,3 +7,7 @@
 # oracles/corpus/), and some oracles are sensitive to line endings: git must hand
 # them back exactly as they were committed.
 oracles/corpus/records/** -text
+
+# The copied game database is pinned by the hash of its bytes (data/t0database/).
+data/t0database/Data.csv -text
+data/t0database/LICENSE -text
