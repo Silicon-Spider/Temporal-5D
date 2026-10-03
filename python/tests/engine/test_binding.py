@@ -67,6 +67,48 @@ def test_a_file_that_is_not_a_library_fails_to_load(tmp_path):
         load_library(bogus)
 
 
+def test_a_refused_library_fails_the_engine_tests_and_a_missing_one_skips_them(tmp_path, monkeypatch):
+    """A library that is found but refused - not a library, or a path or T5D_ENGINE_LIB that
+    names nothing - fails every test that needs the engine; one that is not built skips them,
+    unless T5D_REQUIRE_ENGINE=1 (CI) makes that a failure too."""
+    from t5d.engine import capi, library_status
+    from tests.engine.helpers import engine_verdict
+
+    bogus = tmp_path / "bogus"
+    bogus.mkdir()
+    (bogus / capi._library_names()[0]).write_bytes(b"not a library")
+    assert library_status(bogus, fresh=True)[0] == "refused"
+    assert library_status(tmp_path / "nowhere", fresh=True)[0] == "refused"
+    monkeypatch.setenv(ENV_VAR, str(tmp_path / "nowhere"))
+    assert library_status(fresh=True)[0] == "refused"
+    monkeypatch.delenv(ENV_VAR)
+    monkeypatch.setattr(capi, "default_build_dir", lambda: tmp_path / "empty")
+    status, why = library_status(fresh=True)
+    assert status == "missing" and "not built" in why
+    assert engine_verdict("available", "", True) == ("run", "")
+    assert engine_verdict("refused", "layouts differ", False)[0] == "fail"
+    assert engine_verdict("missing", "not built", True)[0] == "fail"
+    assert engine_verdict("missing", "not built", False)[0] == "skip"
+
+
+@requires_engine
+def test_a_binding_laid_out_otherwise_is_a_refused_library(monkeypatch):
+    """The review's M3b: t5d_leaf's submit_possible and submit_legal swapped in the mirror - the
+    library is refused, which fails the engine tests (it used to skip them)."""
+    from t5d.engine import capi, library_status
+
+    fields = list(capi.CLeaf._fields_)
+    i, j = (next(k for k, f in enumerate(fields) if f[0] == name) for name in ("submit_possible", "submit_legal"))
+    fields[i], fields[j] = fields[j], fields[i]
+
+    class SwappedLeaf(ctypes.Structure):
+        _fields_ = fields
+
+    monkeypatch.setitem(capi.MIRRORED_SEARCH_STRUCTS, "t5d_leaf", SwappedLeaf)
+    status, why = library_status(fresh=True)
+    assert status == "refused" and "t5d_leaf.submit_possible: offset" in why
+
+
 def test_statuses_map_to_exceptions_that_are_also_builtins():
     assert isinstance(error_for(6, "no"), IllegalError) and isinstance(error_for(6, "no"), ValueError)
     assert isinstance(error_for(5), UnsupportedError) and isinstance(error_for(5), NotImplementedError)

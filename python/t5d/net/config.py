@@ -35,8 +35,13 @@ The build rules (spec section 15.1) decide what else appears here:
   complexity trigger (prototype, ``complexity.py``), the KV storage format - are the
   evaluator's (``CacheConfig``), not the network's. Four points the
   spec leaves open on this committed-class path are parameters with placeholder defaults
-  (``causal_past``, ``frozen_features``, ``supersession_scope``, and the rule that the
+  (``causal_past`` - since ruled by C23: ancestry, the ``"lineage"`` default -,
+  ``frozen_features``, ``supersession_scope``, and the rule that the
   section 6 structure opens live rows only, documented in ``scope.py``).
+* **Stage N5** adds register D8 (committed): the global acting-player input and the submit
+  action's policy logit read from a global register. Where the input enters
+  (``acting_player_input``), which register the logit is read from (``submit_register``) and
+  how (``submit_head``) are not specified - parameters with placeholder defaults.
 * **Where the spec is silent, ambiguous or contradictory on a committed-class point**
   the choice is a parameter and the default is marked as a placeholder, not a decision:
   ``board_register_spatial`` (section 5.3 under RoPE), ``global_register_pairs`` (what
@@ -116,6 +121,10 @@ FROZEN_FEATURES: tuple[str, ...] = ("intrinsic", "current")
 #: Readings of C20's "causal past plus the conditioned history of its refresh epoch"
 #: (``scope.py``).
 SUPERSESSION_SCOPES: tuple[str, ...] = ("causal_past", "past_and_epoch_history")
+#: Where register D8's acting-player input enters (stage N5; ``embed.py``).
+ACTING_PLAYER_INPUTS: tuple[str, ...] = ("global_registers", "all_tokens")
+#: How D8's submit logit is read from its global register (stage N5; ``heads.SubmitHead``).
+SUBMIT_HEADS: tuple[str, ...] = ("linear", "pointer")
 
 
 @dataclass(frozen=True)
@@ -261,6 +270,41 @@ class NetConfig:
     n_square_labels: int = 8
     #: Search-effort bins (section 8.6): log2-visit bins plus a censored top bin.
     effort_bins: int = 16
+
+    # --- D8: the acting player and the submit action (stage N5; sections 2.3, 8.2) ---
+    #: Turns have variable length (Q4, rulebook R8): once the present has shifted inside an
+    #: action the colour to move on the present is the opponent's while the action is still
+    #: the mover's, so per-board side-to-move flags cannot say whose action it is. Register
+    #: D8: "a global acting-player input". Where it enters is not specified.
+    #: COMMITTED-CLASS SILENCE (D8, A3) - placeholder default, not a decision:
+    #:   "global_registers" - a learned acting-player embedding (white / black) added to every
+    #:                        global register token: a global input on the global tokens
+    #:                        (section 5.2), read by every live token. Global registers are
+    #:                        live, so the cached path stays exact with no change to a frozen
+    #:                        board's K/V; under the block-causal scope frozen boards never
+    #:                        see it (C17: present-to-frozen flow only at refreshes);
+    #:   "all_tokens"       - the same embedding also on every token of every board, like a
+    #:                        section 2.3 per-board flag. Under the block-causal scope with
+    #:                        ``frozen_features="intrinsic"`` a frozen board does not get it
+    #:                        (it changes after the board is frozen); under ``"current"`` it
+    #:                        does, and a frozen board's cache identity carries it.
+    acting_player_input: str = "global_registers"
+    #: Register D8: under the board-move split submitting is "an explicit action with its own
+    #: policy logit, read from a global register" (section 8.2). Which register, and how the
+    #: logit is read, are not specified. COMMITTED-CLASS SILENCE (D8) - placeholder defaults,
+    #: not decisions. ``submit_register``: the index of the global register the logit is read
+    #: from (0; with no global registers - an ablation-3 arm - the mean of the square tokens,
+    #: as the value head falls back). ``submit_head``:
+    #:   "linear"  - its own learned linear readout of that register (``heads.SubmitHead``):
+    #:               d + 1 parameters, on the move logits' scale at initialisation;
+    #:   "pointer" - the policy's own bilinear form with the register at both ends,
+    #:               ``f(h_r)^T g(h_r) / sqrt(d_policy)``: no parameter of its own, one
+    #:               scoring function for moves and submit.
+    #: The logit is offered where submitting is possible (the obligations met, T5:
+    #: ``PositionState.submit_possible``) and masked to -inf unless it is legal (C4:
+    #: ``submit_legal``); the policy distribution is then over the moves and submit together.
+    submit_register: int = 0
+    submit_head: str = "linear"
 
     # --- initialisation (section 15.2: realistic scale, never zeros) ---
     #: Linear weights: normal with std 1/sqrt(fan_in) (LeCun); the attention output and
@@ -428,8 +472,11 @@ class NetConfig:
     #: (section 7.7: a net trained dense cannot be masked causally at inference).
     attn_scope: str = "dense"
     #: Which boards are a board's causal past (spec issue 5: C17 / section 7.3's "their own
-    #: past" is undefined in a multiverse). COMMITTED-CLASS SILENCE - placeholder default,
-    #: not a decision:
+    #: past" is undefined in a multiverse). RULED: register C23 (committed) makes it the
+    #: board's ancestry - "its own timeline's earlier boards and, recursively, its branch
+    #: parent up to the branch point" - which is ``"lineage"``, the default; the other two
+    #: readings stay as arms of the equivalence tests, not alternatives to the decision
+    #: (stage N5 checks the engine converter's lineage against C23 on real games):
     #:   "lineage"    - arrival-side lineage: the boards it was made from by content - its
     #:                  timeline's earlier boards and, through its branch origin (the board a
     #:                  travelling piece arrived on), the origin's own lineage, recursively
@@ -573,6 +620,12 @@ class NetConfig:
             raise ValueError("policy_promotion must be 'none' or 'offset'")
         if self.value_bins < 2 or self.effort_bins < 2:
             raise ValueError("categorical heads need at least two bins")
+        if self.acting_player_input not in ACTING_PLAYER_INPUTS:
+            raise ValueError(f"acting_player_input must be one of {ACTING_PLAYER_INPUTS}")
+        if self.submit_head not in SUBMIT_HEADS:
+            raise ValueError(f"submit_head must be one of {SUBMIT_HEADS}")
+        if self.submit_register < 0 or (self.global_regs > 0 and self.submit_register >= self.global_regs):
+            raise ValueError(f"submit_register must name a global register (0..{max(self.global_regs - 1, 0)})")
         if self.regs_per_board < 0 or self.global_regs < 0:
             raise ValueError("register counts must be non-negative")
         if self.rope_per_head or self.routing_table:
