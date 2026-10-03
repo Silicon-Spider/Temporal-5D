@@ -20,10 +20,12 @@
 // nodes (ProverOptions::prove_only_pn_thresholds, the named alternative).
 //
 // A FOUND MATE is a proof (H37: exact sub-results only, E4's exhaustive
-// verdicts at the leaves) - and exported to the permanent solved store only
-// through H41's gate: HuntOptions::export_proofs, OFF until the generator has
+// verdicts at the leaves), returned to the caller - and NEVER exported to a
+// permanent solved store: no proof may enter one until the generator has
 // passed the gate (H23), the search's soundness fixes have landed and the
-// proof channel is signed off (H41). The export path is kept, switched off.
+// proof channel is signed off (H41). HuntOptions::export_proofs is that
+// switch, enforced as the search's proof_store is (t5d/mcts.hpp): Hunt
+// refuses to be built with it set. The export is not built.
 //
 // SOFT PRIORS, behind a flag (HuntOptions::suggest, OFF). Without a proof,
 // Hunt can suggest its most promising attacking actions - the root's
@@ -56,8 +58,10 @@ struct HuntOptions {
   ProverOptions prover;
   /// Search threads (6b'': M13's 5). 1: deterministic with a node budget.
   int threads = 1;
-  /// H41's gate: export a found mate to the permanent solved store. OFF until
-  /// the gate passes and the proof channel is signed off.
+  /// H41's gate: export a found mate to a permanent solved store. MUST stay
+  /// false: no proof may enter a solved store until the generator has passed
+  /// the gate (H23) and the proof channel is signed off (H41). Hunt's
+  /// constructor throws std::invalid_argument if it is set.
   bool export_proofs = false;
   /// Soft priors (H43, spec 12.2's exclusions): OFF.
   bool suggest = false;
@@ -77,8 +81,6 @@ struct HuntResult {
   /// The proof's line (t5d/prover.hpp ProveResult::line).
   std::vector<std::vector<Move>> line;
   bool line_complete = false;
-  /// Exported to the permanent solved store (export_proofs).
-  bool exported = false;
   /// suggest, no mate: the suggestions, most promising first.
   std::vector<HuntSuggestion> suggestions;
   ProverStats stats;
@@ -87,18 +89,20 @@ struct HuntResult {
   std::shared_ptr<const ProofCertificate> certificate;
 };
 
+/// The prover's options Hunt runs with: `options.prover`, prove-only, the
+/// threads.
+ProverOptions hunt_prover_options(const HuntOptions& options);
+
 class Hunt {
  public:
-  /// `solved`: the permanent solved store mates go to, through the gate
-  /// (export_proofs); none: nowhere.
-  explicit Hunt(const HuntOptions& options = {}, SolvedStore* solved = nullptr);
+  /// Throws std::invalid_argument if options.export_proofs is set (H23, H41).
+  explicit Hunt(const HuntOptions& options = {});
   /// The question at `root` (a turn start). A fresh prover each time.
   HuntResult hunt(const GameState& root, const ProveBudget& budget);
   const HuntOptions& options() const noexcept { return options_; }
 
  private:
   HuntOptions options_;
-  SolvedStore* solved_ = nullptr;
 };
 
 }  // namespace t5d

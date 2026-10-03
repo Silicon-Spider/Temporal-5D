@@ -22,8 +22,38 @@ std::string trimmed(std::string s) {
   return s.substr(i);
 }
 
-// "sha256:" and the SHA-256 of `text` with every CR before a LF dropped.
-std::string content_id(const std::string& text) {
+struct Next {
+  std::optional<std::vector<Move>> action;
+  std::string why;  // when there is none
+};
+
+// The action the record plays next from `replay`'s state: its moves resolved
+// one by one on a copy (as play_next does); none, and why, if there is none.
+Next next_action_of(const PgnReplay& replay) {
+  if (replay.finished()) {
+    if (replay.record().unreadable) {
+      return {std::nullopt, "its record goes on with an action the engine cannot read (" +
+                                *replay.record().unreadable + ")"};
+    }
+    return {std::nullopt, "its record ends here"};
+  }
+  try {
+    GameState s = replay.state();
+    std::vector<Move> moves;
+    for (const PgnMove& pm : replay.record().actions[replay.actions_played()].moves) {
+      const Move m = replay.resolve(s, pm);
+      s.apply(m);
+      moves.push_back(m);
+    }
+    return {moves, ""};
+  } catch (const std::exception& e) {
+    return {std::nullopt, std::string("its record's next action cannot be resolved (") + e.what() + ")"};
+  }
+}
+
+}  // namespace
+
+std::string record_content_id(const std::string& text) {
   std::string lf;
   lf.reserve(text.size());
   for (std::size_t i = 0; i < text.size(); ++i) {
@@ -33,25 +63,18 @@ std::string content_id(const std::string& text) {
   return "sha256:" + sha256_hex(lf);
 }
 
-// The action the record plays next from `replay`'s state: its moves resolved
-// one by one on a copy (as play_next does); nullopt if one cannot be.
-std::optional<std::vector<Move>> next_action_of(const PgnReplay& replay) {
-  if (replay.finished()) return std::nullopt;
-  try {
-    GameState s = replay.state();
-    std::vector<Move> moves;
-    for (const PgnMove& pm : replay.record().actions[replay.actions_played()].moves) {
-      const Move m = replay.resolve(s, pm);
-      s.apply(m);
-      moves.push_back(m);
+std::vector<std::string> record_contents(const std::vector<RecordRef>& records) {
+  std::vector<std::string> out;
+  out.reserve(records.size());
+  for (const RecordRef& ref : records) {
+    try {
+      out.push_back(record_content_id(read_file(ref.path)));
+    } catch (const std::exception& e) {
+      out.push_back(std::string("unreadable: ") + e.what());
     }
-    return moves;
-  } catch (const std::exception&) {
-    return std::nullopt;
   }
+  return out;
 }
-
-}  // namespace
 
 std::vector<RecordRef> record_refs(const std::vector<std::string>& direct, const std::vector<std::string>& lists,
                                    const std::string& root) {
@@ -81,7 +104,7 @@ SixbRoots sixb_roots(const std::vector<RecordRef>& records, const RuleOptions& r
   for (const RecordRef& ref : records) {
     try {
       const std::string text = read_file(ref.path);
-      const std::string content = content_id(text);
+      const std::string content = record_content_id(text);
       PgnRecord record = read_pgn(text);
       const bool synthetic = is_synthetic(record);
       PgnReplay replay(std::move(record), PgnOptions{}, rules);
@@ -93,10 +116,18 @@ SixbRoots sixb_roots(const std::vector<RecordRef>& records, const RuleOptions& r
           if (!seen.insert(replay.state().zobrist()).second) {
             ++out.duplicates;
           } else if (max_roots == 0 || out.roots.size() < max_roots) {
-            out.roots.push_back(SixbRoot{ref.id, content, k, synthetic, replay.state(), next_action_of(replay)});
+            Next next = next_action_of(replay);
+            out.roots.push_back(
+                SixbRoot{ref.id, content, k, synthetic, replay.state(), std::move(next.action), std::move(next.why)});
           }
         }
-        if (replay.finished()) break;
+        if (replay.finished()) {
+          // Read to its end - or to an action the engine cannot read.
+          if (replay.record().unreadable) {
+            end = "then an action the engine cannot read (" + *replay.record().unreadable + ")";
+          }
+          break;
+        }
         try {
           replay.play_next();
         } catch (const RecordError& e) {
@@ -105,6 +136,8 @@ SixbRoots sixb_roots(const std::vector<RecordRef>& records, const RuleOptions& r
           if (!out.roots.empty() && out.roots.back().record == ref.id &&
               out.roots.back().index == static_cast<int>(replay.actions_played())) {
             out.roots.back().next_action.reset();
+            out.roots.back().no_next = std::string("its record's next action cannot be played (") +
+                                       fault_name(e.fault()) + ": " + e.what() + ")";
           }
           break;
         }

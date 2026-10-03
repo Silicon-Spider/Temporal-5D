@@ -4,6 +4,7 @@
 // thread deterministic; soft priors only behind their flag.
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <optional>
@@ -11,6 +12,7 @@
 #include <string>
 #include <vector>
 
+#include "t5d/certificate.hpp"
 #include "t5d/check.hpp"
 #include "t5d/hunt.hpp"
 #include "t5d/movegen.hpp"
@@ -53,31 +55,22 @@ TEST(hunt_proves_the_constructed_mates_and_exports_only_through_the_gate) {
     GameState t = w.s;
     CHECK(replay(t, r.line));
     CHECK(mated(t));
-    // The gate: off by default - nothing reaches the permanent store.
-    MemorySolvedStore store;
-    Hunt closed(HuntOptions{}, &store);
-    const HuntResult rc = closed.hunt(w.s, ProveBudget::nodes(2'000'000));
-    CHECK(rc.mate);
-    CHECK(!rc.exported);
-    CHECK(!store.find(w.s).has_value());
-    HuntOptions open;
-    open.export_proofs = true;
-    Hunt through(open, &store);
-    const HuntResult ro = through.hunt(w.s, ProveBudget::nodes(2'000'000));
-    CHECK(ro.exported);
-    const std::optional<Proof> p = store.find(w.s);
-    CHECK(p.has_value() && p->kind == Proof::Kind::Win && p->distance == w.distance);
   }
+  // The gate: closed (H23, H41) - Hunt refuses the export switch, as the
+  // search refuses its proof store.
+  HuntOptions open;
+  open.export_proofs = true;
+  CHECK_THROWS_WITH(Hunt{open}, std::invalid_argument, "H23");
 }
 
-TEST(hunt_claims_nothing_but_proofs_h37) {
-  // Budgets stepped below the need: a mate only where the full hunt finds it
-  // (the same distance), and every mate confirmed by the restricted game of
-  // its class or the game tree; never a mate where the full hunt has none.
-  int budgets = 0;
-  int mates = 0;
+namespace {
+
+// Budgets stepped below the need: a mate only where the full hunt finds it
+// (the same distance), and every mate confirmed by the restricted game of
+// its class or the game tree; never a mate where the full hunt has none.
+void budget_property(int turns, std::uint64_t steps, int& budgets, int& mates) {
   std::uint64_t seed = 2900;
-  for (const GameState& s : playable(t5d_test::sparse_positions(RuleOptions{}, 1, 4, seed))) {
+  for (const GameState& s : playable(t5d_test::sparse_positions(RuleOptions{}, 1, turns, seed))) {
     HuntOptions o;
     o.prover.depth = 3;
     Hunt h(o);
@@ -89,7 +82,7 @@ TEST(hunt_claims_nothing_but_proofs_h37) {
       as.proof = full.proof;
       CHECK(t5d_test::verify(as, s, o.prover, 200'000) >= 0);
     }
-    const std::uint64_t step = std::max<std::uint64_t>(1, full.stats.nodes / 12);
+    const std::uint64_t step = std::max<std::uint64_t>(1, full.stats.nodes / steps);
     for (std::uint64_t b = 0; b < full.stats.nodes; b += step) {
       const HuntResult r = h.hunt(s, ProveBudget::nodes(b));
       ++budgets;
@@ -99,6 +92,23 @@ TEST(hunt_claims_nothing_but_proofs_h37) {
       }
     }
   }
+}
+
+}  // namespace
+
+TEST(hunt_claims_nothing_but_proofs_h37) {
+  int budgets = 0;
+  int mates = 0;
+  budget_property(3, 8, budgets, mates);
+  std::fprintf(stderr, "  %d budgets, %d mates\n", budgets, mates);
+  CHECK(budgets > 100);
+  CHECK(mates > 3);
+}
+
+TEST(long_hunt_claims_nothing_but_proofs_h37) {
+  int budgets = 0;
+  int mates = 0;
+  budget_property(4, 12, budgets, mates);
   std::fprintf(stderr, "  %d budgets, %d mates\n", budgets, mates);
   CHECK(budgets > 200);
   CHECK(mates > 5);
@@ -127,4 +137,38 @@ TEST(hunt_one_thread_is_deterministic_and_suggests_only_behind_its_flag) {
     CHECK(total > 0.999 && total < 1.001);
   }
   CHECK(suggested > 5);
+}
+
+TEST(hunt_at_five_threads_claims_only_confirmed_mates) {
+  // M13's 5 threads, by nodes and by the clock: a mate only where one
+  // thread's full hunt finds it, at its distance, and every mate's
+  // certificate confirmed by E4 alone; nothing else claimed.
+  int mates = 0;
+  int searches = 0;
+  for (const GameState& s : playable(t5d_test::sparse_positions(RuleOptions{}, 1, 4, 3100))) {
+    HuntOptions one;
+    one.prover.depth = 3;
+    Hunt h1(one);
+    const HuntResult full = h1.hunt(s, ProveBudget::nodes(300'000));
+    HuntOptions five = one;
+    five.threads = 5;
+    five.prover.record_certificate = true;
+    Hunt h5(five);
+    for (const bool by_clock : {false, true}) {
+      const HuntResult r = by_clock ? h5.hunt(s, ProveBudget::time(std::chrono::milliseconds(20)))
+                                    : h5.hunt(s, ProveBudget::nodes(60'000));
+      ++searches;
+      if (!r.mate) continue;
+      ++mates;
+      CHECK(full.mate);
+      if (full.mate) CHECK_EQ(r.proof.distance, full.proof.distance);
+      REQUIRE(r.certificate != nullptr);
+      CertificateCheckOptions co;
+      co.max_positions = 20000;
+      const CertificateCheck c = check_certificate(*r.certificate, s, r.proof.distance, co);
+      CHECK(c.verdict == CertificateVerdict::Confirmed || c.verdict == CertificateVerdict::Undecided);
+    }
+  }
+  std::fprintf(stderr, "  %d searches at 5 threads, %d mates\n", searches, mates);
+  CHECK(mates > 5);
 }

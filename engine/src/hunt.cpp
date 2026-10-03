@@ -3,17 +3,29 @@
 #include "t5d/hunt.hpp"
 
 #include <algorithm>
+#include <stdexcept>
 
 namespace t5d {
 
-Hunt::Hunt(const HuntOptions& options, SolvedStore* solved) : options_(options), solved_(solved) {}
+ProverOptions hunt_prover_options(const HuntOptions& options) {
+  ProverOptions po = options.prover;
+  po.prove_only = true;
+  po.threads = std::max(1, options.threads);
+  return po;
+}
+
+Hunt::Hunt(const HuntOptions& options) : options_(options) {
+  if (options_.export_proofs) {
+    throw std::invalid_argument(
+        "HuntOptions::export_proofs: the proof channel is disabled - no proof may enter a solved store until "
+        "the generator has passed the gate (H23) and the proof channel is signed off (H41)");
+  }
+}
 
 HuntResult Hunt::hunt(const GameState& root, const ProveBudget& budget) {
-  ProverOptions po = options_.prover;
-  po.prove_only = true;
-  po.threads = std::max(1, options_.threads);
+  const ProverOptions po = hunt_prover_options(options_);
   // The prover's own stores: its working memory (H19: no proof only in the
-  // TT). The permanent store is reached through the gate alone.
+  // TT). Nothing reaches a permanent store (H23, H41).
   Prover prover(po);
   const ProveResult r = prover.prove(root, budget);
   HuntResult out;
@@ -24,10 +36,6 @@ HuntResult Hunt::hunt(const GameState& root, const ProveBudget& budget) {
     out.line = r.line;
     out.line_complete = r.line_complete;
     out.certificate = r.certificate;
-    if (options_.export_proofs && solved_ != nullptr) {
-      solved_->put(root, r.proof);
-      out.exported = true;
-    }
     return out;
   }
   if (!options_.suggest) return out;

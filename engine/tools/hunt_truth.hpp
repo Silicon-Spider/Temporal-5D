@@ -26,10 +26,27 @@
 // alone (t5d/certificate.hpp) - "confirmed", "undecided", or "-"; line: the
 // mate's line, actions separated by " / ".
 //
-// THE PIN, engine/testdata/hunt-truth/MANIFEST: "<sha256>  hunt-truth.tsv" -
-// the SHA-256 of the file's bytes. Readers (the 6b'' tool, the engine's
-// test) refuse a file whose bytes do not match it. Never edited by hand;
-// re-recording is a reviewed change (t5d-hunt-truth).
+// THE PROVENANCE, engine/testdata/hunt-truth/provenance.tsv - what the truth
+// was recorded from, beyond its header (the review of stage E9):
+//   t5d-hunt-truth-provenance  1
+//   truth    sha256:<the truth file's SHA-256>
+//   rules    <every rule option by name and value: absolute, never relative
+//            to the defaults of the day (tool_support.hpp absolute_rules_text)>
+//   code     <the code signature of the build that recorded it
+//            (cmake/code_signature.cmake), or "unrecorded: <why>">
+//   records  <n>
+//   record   <i>  <the record's content id>   the records, in the order
+//            given - the order decides the roots' ids
+// The records are named by content only (engine data names no path under the
+// oracle harness): the list given to a tool is checked against it, record by
+// record, in order.
+//
+// THE PIN, engine/testdata/hunt-truth/MANIFEST: "<sha256>  hunt-truth.tsv" and
+// "<sha256>  provenance.tsv" - the SHA-256 of each file's bytes. Readers (the
+// 6b'' tool, the engine's test) refuse files whose bytes do not match it, and
+// a provenance whose truth is not the file's. Never edited by hand;
+// re-recording is a reviewed change (t5d-hunt-truth; --provenance-only writes
+// the provenance of a truth already recorded, after checking it).
 
 #ifndef T5D_TOOLS_HUNT_TRUTH_HPP
 #define T5D_TOOLS_HUNT_TRUTH_HPP
@@ -61,27 +78,50 @@ struct HuntTruthRoot {
   bool skipped() const { return verdict.rfind("skipped", 0) == 0; }
 };
 
+struct HuntTruthProvenance {
+  std::string truth;  // "sha256:<the truth file's SHA-256>"
+  std::string rules;  // absolute_rules_text
+  std::string code;   // the code signature, or "unrecorded: <why>"
+  std::vector<std::string> records;  // content ids, in order
+};
+
 struct HuntTruth {
   std::vector<std::pair<std::string, std::string>> header;  // key, value (tabs kept)
   std::vector<HuntTruthRoot> roots;
   std::string sha256;  // the file's, as loaded
+  HuntTruthProvenance provenance;  // as loaded (load_hunt_truth)
   /// A header value ("" if absent).
   std::string value(std::string_view key) const;
 };
 
 inline constexpr const char* kHuntTruthFile = "hunt-truth.tsv";
+inline constexpr const char* kHuntTruthProvenance = "provenance.tsv";
 inline constexpr const char* kHuntTruthManifest = "MANIFEST";
 
 /// The file's text.
 std::string format_hunt_truth(const HuntTruth& truth);
 /// Parses the file's text; throws std::runtime_error on any malformed line.
 HuntTruth parse_hunt_truth(std::string_view text);
-/// The MANIFEST's text for a file of these bytes.
-std::string hunt_truth_manifest(std::string_view file_bytes);
-/// Loads `dir`'s file after checking its bytes against `dir`'s MANIFEST;
-/// throws std::runtime_error (refuses) on a mismatch, a missing file or a
-/// malformed one.
+/// The provenance file's text.
+std::string format_provenance(const HuntTruthProvenance& provenance);
+/// Parses it; throws std::runtime_error on any malformed line.
+HuntTruthProvenance parse_provenance(std::string_view text);
+/// Checks the truth against its provenance: the provenance names the truth's
+/// bytes, and the truth's roots name its records in its order (every root's
+/// record listed; the roots' records in the list's order). Throws
+/// std::runtime_error (refuses) otherwise.
+void check_provenance(const HuntTruth& truth, const HuntTruthProvenance& provenance);
+/// The MANIFEST's text for files of these bytes.
+std::string hunt_truth_manifest(std::string_view truth_bytes, std::string_view provenance_bytes);
+/// Loads `dir`'s truth and provenance after checking their bytes against
+/// `dir`'s MANIFEST and the truth against its provenance; throws
+/// std::runtime_error (refuses) on a mismatch, a missing file or a malformed
+/// one.
 HuntTruth load_hunt_truth(const std::string& dir);
+/// Checks the records given to a tool - their content ids, in order -
+/// against the provenance's; throws std::runtime_error (refuses), naming the
+/// first record that differs.
+void check_records(const HuntTruthProvenance& provenance, const std::vector<std::string>& contents);
 
 }  // namespace t5d::tools
 

@@ -42,25 +42,26 @@ using t5d_test::RestrictedGame;
 
 // ---- Guard (H42) ----------------------------------------------------------------------------
 
-TEST(guard_depth_one_is_the_opponents_mate_in_one) {
-  // Depth 1 against brute force: every opponent action and E4's verdict
-  // after it. "Safe to depth 1" only where no opponent action mates, a
-  // refutation only where one does - its line that mate; and where the
-  // opponent has at most a few thousand actions (Guard enumerates every one
-  // of them: its cost is their number, a product over their boards) depth 1
-  // completes or a mate is proven, within the budget.
-  int safe = 0;
-  int refuted = 0;
-  int open = 0;
+namespace {
+
+// Depth 1 against brute force: every opponent action and E4's verdict
+// after it. "Safe to depth 1" only where no opponent action mates, a
+// refutation only where one does - its line that mate; and where the
+// opponent has at most a few thousand actions (Guard enumerates every one
+// of them: its cost is their number, a product over their boards) depth 1
+// completes or a mate is proven, within the budget.
+void depth_one_property(const std::vector<RuleOptions>& rulesets, int games, int turns, int threads, int& safe,
+                        int& refuted, int& open) {
   std::uint64_t seed = 2400;
-  for (const RuleOptions& rules : {RuleOptions{}, guide_literal_q4()}) {
-    for (const Case& c : cases(rules, 2, 5, seed++)) {
+  for (const RuleOptions& rules : rulesets) {
+    for (const Case& c : cases(rules, games, turns, seed++)) {
       const GameState after = after_action(c.s, c.action);
       std::size_t actions = 0;
       const int want = mates_in_one(after, actions);
       if (want < 0) continue;
       GuardOptions g;
       g.max_depth = 1;
+      g.threads = threads;
       const GuardResult r = guard(c.s, c.action, ProveBudget::nodes(3'000'000), g);
       if (r.refuted) CHECK_EQ(want, 1);
       if (r.completed_depth == 1) CHECK_EQ(want, 0);
@@ -87,27 +88,59 @@ TEST(guard_depth_one_is_the_opponents_mate_in_one) {
       }
     }
   }
+}
+
+}  // namespace
+
+TEST(guard_depth_one_is_the_opponents_mate_in_one) {
+  int safe = 0;
+  int refuted = 0;
+  int open = 0;
+  depth_one_property({RuleOptions{}}, 1, 3, 1, safe, refuted, open);
+  std::fprintf(stderr, "  depth 1: %d safe, %d refuted, %d undecided (too many opponent actions)\n", safe,
+               refuted, open);
+  CHECK(safe > 15);
+  CHECK(refuted > 1);
+}
+
+TEST(guard_at_five_threads_depth_one_is_the_opponents_mate_in_one) {
+  // M13's 5 threads: the same answers.
+  int safe = 0;
+  int refuted = 0;
+  int open = 0;
+  depth_one_property({RuleOptions{}}, 1, 3, 5, safe, refuted, open);
+  std::fprintf(stderr, "  depth 1 at 5 threads: %d safe, %d refuted, %d undecided\n", safe, refuted, open);
+  CHECK(safe > 15);
+  CHECK(refuted > 1);
+}
+
+TEST(long_guard_depth_one_is_the_opponents_mate_in_one) {
+  int safe = 0;
+  int refuted = 0;
+  int open = 0;
+  depth_one_property({RuleOptions{}, guide_literal_q4()}, 2, 5, 1, safe, refuted, open);
   std::fprintf(stderr, "  depth 1: %d safe, %d refuted, %d undecided (too many opponent actions)\n", safe,
                refuted, open);
   CHECK(safe > 50);
   CHECK(refuted > 3);
 }
 
-TEST(guard_depths_and_refutations_agree_with_the_references) {
-  // Up to depth 2: every completed depth is the restricted game's "no mate
-  // within 2d - 1" for the opponent (its every action, ours every legal one),
-  // every refutation its mate - and the game tree's.
-  int depths = 0;
-  int refutations = 0;
-  int beyond = 0;
+namespace {
+
+// Up to depth 2: every completed depth is the restricted game's "no mate
+// within 2d - 1" for the opponent (its every action, ours every legal one),
+// every refutation its mate - and the game tree's.
+void depths_property(int turns, int threads, std::uint64_t guard_nodes, std::uint64_t reference_work, int& depths,
+                     int& refutations, int& beyond) {
   std::uint64_t seed = 2500;
-  for (const Case& c : cases(RuleOptions{}, 1, 5, seed)) {
+  for (const Case& c : cases(RuleOptions{}, 1, turns, seed)) {
     const GameState after = after_action(c.s, c.action);
     GuardOptions g;
     g.max_depth = 2;
-    const GuardResult r = guard(c.s, c.action, ProveBudget::nodes(1'000'000), g);
+    g.threads = threads;
+    const GuardResult r = guard(c.s, c.action, ProveBudget::nodes(guard_nodes), g);
     for (int d = 1; d <= r.completed_depth; ++d) {
-      RestrictedGame ref(after.to_move(), true, 200'000);
+      RestrictedGame ref(after.to_move(), true, reference_work);
       const int m = ref.mates(after, 2 * d - 1);
       if (m < 0) {
         ++beyond;
@@ -134,26 +167,80 @@ TEST(guard_depths_and_refutations_agree_with_the_references) {
       ++refutations;
     }
   }
+}
+
+}  // namespace
+
+TEST(guard_depths_and_refutations_agree_with_the_references) {
+  int depths = 0;
+  int refutations = 0;
+  int beyond = 0;
+  depths_property(2, 1, 300'000, 30'000, depths, refutations, beyond);
+  std::fprintf(stderr, "  %d depths and %d refutations confirmed, %d beyond the references\n", depths, refutations,
+               beyond);
+  CHECK(depths > 15);
+  CHECK(refutations > 0);
+}
+
+TEST(guard_at_five_threads_depths_and_refutations_agree_with_the_references) {
+  int depths = 0;
+  int refutations = 0;
+  int beyond = 0;
+  depths_property(2, 5, 300'000, 30'000, depths, refutations, beyond);
+  std::fprintf(stderr, "  at 5 threads: %d depths and %d refutations confirmed, %d beyond the references\n", depths,
+               refutations, beyond);
+  CHECK(depths > 15);
+  CHECK(refutations > 0);
+}
+
+TEST(long_guard_depths_and_refutations_agree_with_the_references) {
+  int depths = 0;
+  int refutations = 0;
+  int beyond = 0;
+  depths_property(5, 1, 1'000'000, 200'000, depths, refutations, beyond);
   std::fprintf(stderr, "  %d depths and %d refutations confirmed, %d beyond the references\n", depths, refutations,
                beyond);
   CHECK(depths > 30);
   CHECK(refutations > 2);
 }
 
-TEST(guard_no_budget_stop_claims_more_than_the_full_search_h37) {
-  // One thread, node budgets stepped from 0 to the full search's need: never a
-  // refutation the full search does not make, never a depth it does not
-  // complete.
+namespace {
+
+// Every result reports only what it searched: each depth up to the
+// completed one disproven, a stop leaving the next depth Unknown, a
+// refutation the last depth's proof (the review's M8: a depth its budget
+// stopped never claimed).
+void consistent(const GuardResult& r) {
+  CHECK(static_cast<int>(r.depths.size()) >= r.completed_depth);
+  for (int d = 0; d < r.completed_depth; ++d) {
+    CHECK(r.depths[static_cast<std::size_t>(d)].status == ProofStatus::Disproven);
+  }
+  if (r.stopped && static_cast<int>(r.depths.size()) > r.completed_depth) {
+    CHECK(r.depths.back().status == ProofStatus::Unknown);
+  }
+  if (r.refuted) {
+    CHECK(!r.depths.empty() && r.depths.back().status == ProofStatus::Proven);
+    CHECK(r.refutation_depth > r.completed_depth);
+  }
+  CHECK(static_cast<int>(r.depths.size()) <= r.completed_depth + 1);
+}
+
+// One thread, node budgets stepped from 0 to the full search's need: never a
+// refutation the full search does not make, never a depth it does not
+// complete; every result consistent.
+int budget_property(int turns, std::uint64_t steps, std::uint64_t full_nodes) {
   int checked = 0;
   std::uint64_t seed = 2600;
-  for (const Case& c : cases(RuleOptions{}, 1, 4, seed)) {
+  for (const Case& c : cases(RuleOptions{}, 1, turns, seed)) {
     GuardOptions g;
     g.max_depth = 2;
-    const GuardResult full = guard(c.s, c.action, ProveBudget::nodes(1'000'000), g);
-    const std::uint64_t step = std::max<std::uint64_t>(1, full.nodes / 25);
+    const GuardResult full = guard(c.s, c.action, ProveBudget::nodes(full_nodes), g);
+    consistent(full);
+    const std::uint64_t step = std::max<std::uint64_t>(1, full.nodes / steps);
     for (std::uint64_t b = 0; b < full.nodes; b += step) {
       const GuardResult r = guard(c.s, c.action, ProveBudget::nodes(b), g);
       ++checked;
+      consistent(r);
       CHECK(r.completed_depth <= full.completed_depth);
       if (r.refuted) {
         CHECK(full.refuted);
@@ -161,8 +248,40 @@ TEST(guard_no_budget_stop_claims_more_than_the_full_search_h37) {
       }
     }
   }
+  return checked;
+}
+
+}  // namespace
+
+TEST(guard_no_budget_stop_claims_more_than_the_full_search_h37) {
+  const int checked = budget_property(2, 5, 100'000);
+  std::fprintf(stderr, "  %d budgets\n", checked);
+  CHECK(checked > 40);
+}
+
+TEST(long_guard_no_budget_stop_claims_more_than_the_full_search_h37) {
+  const int checked = budget_property(4, 25, 1'000'000);
   std::fprintf(stderr, "  %d budgets\n", checked);
   CHECK(checked > 100);
+}
+
+TEST(guard_reports_only_the_depths_it_searched) {
+  // Small budgets at depth 4 across random play: every result consistent -
+  // a depth the budget stopped is never claimed (the review's M8).
+  int stopped = 0;
+  int results = 0;
+  for (const Case& c : cases(RuleOptions{}, 1, 3, 2650)) {
+    for (const std::uint64_t b : {std::uint64_t{50}, std::uint64_t{400}, std::uint64_t{3000}}) {
+      GuardOptions g;
+      g.max_depth = 4;
+      const GuardResult r = guard(c.s, c.action, ProveBudget::nodes(b), g);
+      consistent(r);
+      ++results;
+      if (r.stopped) ++stopped;
+    }
+  }
+  std::fprintf(stderr, "  %d results, %d stopped by their budgets\n", results, stopped);
+  CHECK(stopped > 10);
 }
 
 TEST(guard_one_thread_is_deterministic) {

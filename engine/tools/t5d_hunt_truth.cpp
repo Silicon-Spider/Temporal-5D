@@ -4,6 +4,7 @@
 //
 //   t5d-hunt-truth --out DIR --engine COMMIT [options] [RECORD ...]
 //   t5d-hunt-truth --curve K [options] [RECORD ...]
+//   t5d-hunt-truth --provenance-only --out DIR [options] [RECORD ...]
 //
 // THE POSITIONS: 6b's roots (sixb_roots.hpp: the records' turn starts, every
 // one, distinct by position), the records given on the command line or in
@@ -25,6 +26,15 @@
 // (t5d/certificate.hpp: the attacker's moves replayed, the defender's every
 // action from E4's listing, every mate by both detectors) - confirmed or
 // undecided (its budget); a refuted certificate is an error.
+//
+// THE PROVENANCE (hunt_truth.hpp): beside the truth, what it was recorded
+// from - the records' content ids in their order, the rules by every
+// option's value, the code signature of this build (cmake/code_signature.cmake)
+// - and the MANIFEST pinning both files. --provenance-only writes the
+// provenance of a truth already recorded (whose MANIFEST pins the truth
+// alone, as the first recorder wrote it), after checking that the records
+// given rebuild its roots exactly (record, index, fingerprint) and that its
+// rules are these; its code signature is "unrecorded". Nothing is searched.
 //
 // THE CURVE (--curve K): every K-th measured root at the budgets given, the
 // mates found against the node budget (a df-pn with a node budget is
@@ -55,7 +65,9 @@
 #include "t5d/check.hpp"
 #include "t5d/fingerprint.hpp"
 #include "t5d/prover.hpp"
+#include "sha256.hpp"
 #include "t5d/search.hpp"
+#include "t5d_code_signature.hpp"
 #include "tool_support.hpp"
 
 #ifndef T5D_VERSION_STRING
@@ -81,6 +93,7 @@ struct Options {
   int curve = 0;
   std::size_t max_tree_nodes = std::size_t{2} << 20;
   std::size_t check_positions = 200000;
+  bool provenance_only = false;
 };
 
 [[noreturn]] void usage(int status) {
@@ -90,6 +103,7 @@ struct Options {
       "\n"
       "usage: t5d-hunt-truth --out DIR --engine COMMIT [options] [RECORD ...]\n"
       "       t5d-hunt-truth --curve K [options] [RECORD ...]\n"
+      "       t5d-hunt-truth --provenance-only --out DIR [options] [RECORD ...]\n"
       "  --record-list FILE   records listed one per line ('#' lines skipped); ids as listed\n"
       "  --record-root DIR    ... their relative paths taken from DIR\n"
       "  --rules ENCODING  --no-moves-after-shift   the ruleset (default 0, the engine's)\n"
@@ -100,9 +114,12 @@ struct Options {
       "  --max-tree-nodes N   each search's tree (2097152)\n"
       "  --check-positions N  the cross-check's defender positions per mate (200000)\n"
       "  --max-roots N        the first N roots only (information)\n"
-      "  --out DIR            write DIR/hunt-truth.tsv and DIR/MANIFEST\n"
+      "  --out DIR            write DIR/hunt-truth.tsv, DIR/provenance.tsv and DIR/MANIFEST\n"
       "  --engine COMMIT      the engine commit the header names\n"
-      "  --curve K            every K-th measured root: mates found against the budget; nothing written\n",
+      "  --curve K            every K-th measured root: mates found against the budget; nothing written\n"
+      "  --provenance-only    DIR's truth recorded already: check it against the records and rules given,\n"
+      "                       write its provenance and the MANIFEST pinning both; nothing searched\n"
+      "  --version            the version and this build's code signature\n",
       f);
   std::exit(status);
 }
@@ -125,6 +142,11 @@ Options parse(int argc, char** argv) {
       i += used - 1;
     } else if (a == "--help" || a == "-h") {
       usage(0);
+    } else if (a == "--version") {
+      std::puts("t5d-hunt-truth " T5D_VERSION_STRING ", code " T5D_CODE_SIGNATURE);
+      std::exit(0);
+    } else if (a == "--provenance-only") {
+      o.provenance_only = true;
     } else if (a == "--record-list") {
       o.lists.push_back(value());
     } else if (a == "--record-root") {
@@ -155,10 +177,82 @@ Options parse(int argc, char** argv) {
       o.direct.push_back(a);
     }
   }
-  if (o.curve == 0 && (o.out.empty() || o.engine.empty())) {
+  if (o.provenance_only) {
+    if (o.out.empty()) throw std::invalid_argument("--provenance-only needs --out DIR");
+  } else if (o.curve == 0 && (o.out.empty() || o.engine.empty())) {
     throw std::invalid_argument("--out DIR and --engine COMMIT are needed (or --curve K)");
   }
   return o;
+}
+
+void write_file(const std::string& path, const std::string& bytes) {
+  std::FILE* f = std::fopen(path.c_str(), "wb");
+  if (f == nullptr) throw std::runtime_error("cannot write " + path);
+  const std::size_t n = std::fwrite(bytes.data(), 1, bytes.size(), f);
+  if (std::fclose(f) != 0 || n != bytes.size()) throw std::runtime_error("cannot write " + path);
+}
+
+std::string encoding_text(const t5d::RuleOptions& rules) {
+  char buf[32];
+  std::snprintf(buf, sizeof buf, "0x%llx", static_cast<unsigned long long>(rules.encode()));
+  return buf;
+}
+
+// --provenance-only: the provenance of DIR's truth, recorded already (its
+// MANIFEST pinning the truth alone), after checking it against the records
+// and the rules given.
+int provenance_only(const Options& o, const std::vector<t5d::tools::RecordRef>& refs) {
+  const std::string bytes = t5d::tools::read_file(o.out + "/" + t5d::tools::kHuntTruthFile);
+  const std::string manifest = t5d::tools::read_file(o.out + "/" + t5d::tools::kHuntTruthManifest);
+  const std::string hash = t5d::tools::sha256_hex(bytes);
+  if (manifest != hash + "  " + t5d::tools::kHuntTruthFile + "\n") {
+    throw std::runtime_error("the truth does not match its MANIFEST (a MANIFEST pinning the truth alone, as the "
+                             "first recorder wrote it, is expected)");
+  }
+  t5d::tools::HuntTruth truth = t5d::tools::parse_hunt_truth(bytes);
+  truth.sha256 = hash;
+  // Its rules are these: the header's encoding read back is the ruleset given.
+  const std::string rules = truth.value("rules");
+  const std::size_t tab = rules.rfind('\t');
+  if (tab == std::string::npos || rules.substr(tab + 1) != encoding_text(o.rules) ||
+      rules.substr(0, tab) != t5d::tools::ruleset_text(o.rules)) {
+    throw std::runtime_error("the truth's rules (" + rules + ") are not the ones given (" +
+                             t5d::tools::ruleset_text(o.rules) + "\t" + encoding_text(o.rules) + ")");
+  }
+  if (std::stoi(truth.value("depth")) != o.depth) throw std::runtime_error("the truth's depth is not --depth");
+  // The records rebuild its roots exactly.
+  const t5d::tools::SixbRoots roots = t5d::tools::sixb_roots(refs, o.rules, 1, 0);
+  if (roots.roots.size() != truth.roots.size()) {
+    throw std::runtime_error("the records give " + std::to_string(roots.roots.size()) + " roots, the truth holds " +
+                             std::to_string(truth.roots.size()));
+  }
+  for (std::size_t i = 0; i < roots.roots.size(); ++i) {
+    const t5d::tools::SixbRoot& r = roots.roots[i];
+    const t5d::tools::HuntTruthRoot& row = truth.roots[i];
+    if (row.record != r.content || row.index != r.index ||
+        row.fingerprint != t5d::fingerprint(r.state.multiverse()).fingerprint) {
+      throw std::runtime_error("root " + std::to_string(i) + " (" + r.record + " #" + std::to_string(r.index) +
+                               ") is not the truth's");
+    }
+  }
+  t5d::tools::HuntTruthProvenance p;
+  p.truth = "sha256:" + hash;
+  p.rules = t5d::tools::absolute_rules_text(o.rules);
+  p.code = "unrecorded: recorded at engine " + truth.value("engine") +
+           " by the first recorder, before code signatures; provenance written by code " T5D_CODE_SIGNATURE;
+  p.records = t5d::tools::record_contents(refs);
+  for (const std::string& c : p.records) {
+    if (c.rfind("sha256:", 0) != 0) throw std::runtime_error("a record cannot be read: " + c);
+  }
+  t5d::tools::check_provenance(truth, p);
+  const std::string text = t5d::tools::format_provenance(p);
+  (void)t5d::tools::parse_provenance(text);
+  write_file(o.out + "/" + t5d::tools::kHuntTruthProvenance, text);
+  write_file(o.out + "/" + t5d::tools::kHuntTruthManifest, t5d::tools::hunt_truth_manifest(bytes, text));
+  (void)t5d::tools::load_hunt_truth(o.out);  // the round trip: it loads as a reader loads it
+  std::fprintf(stderr, "t5d-hunt-truth: the provenance of %s (sha256 %s): %zu records, %zu roots - written\n",
+               o.out.c_str(), hash.c_str(), p.records.size(), truth.roots.size());
+  return 0;
 }
 
 std::string status_word(const t5d::ProveResult& r) {
@@ -223,7 +317,14 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "t5d-hunt-truth: %s\n", e.what());
     usage(2);
   }
-  const std::vector<t5d::tools::RecordRef> refs = t5d::tools::record_refs(o.direct, o.lists, o.record_root);
+  std::vector<t5d::tools::RecordRef> refs;
+  try {
+    refs = t5d::tools::record_refs(o.direct, o.lists, o.record_root);
+    if (o.provenance_only) return provenance_only(o, refs);
+  } catch (const std::exception& e) {
+    std::fprintf(stderr, "t5d-hunt-truth: %s\n", e.what());
+    return 1;
+  }
   const t5d::tools::SixbRoots roots = t5d::tools::sixb_roots(refs, o.rules, 1, o.max_roots);
   for (const std::string& n : roots.notes) std::fprintf(stderr, "  %s\n", n.c_str());
   const std::size_t n = roots.roots.size();
@@ -354,11 +455,7 @@ int main(int argc, char** argv) {
   truth.header = {
       {"t5d-hunt-truth", "1"},
       {"engine", o.engine},
-      {"rules", t5d::tools::ruleset_text(o.rules) + "\t0x" + [&] {
-         char buf[32];
-         std::snprintf(buf, sizeof buf, "%llx", static_cast<unsigned long long>(o.rules.encode()));
-         return std::string(buf);
-       }()},
+      {"rules", t5d::tools::ruleset_text(o.rules) + "\t" + encoding_text(o.rules)},
       {"search", "df-pn (t5d/prover.hpp), one thread per root, fresh stores, node budgets (deterministic); "
                  "the union of two classes' proofs: literal (seeds all, completion every) " +
                      std::to_string(o.literal_nodes) + " nodes, default (seeds checks, completion canonical) " +
@@ -428,15 +525,17 @@ int main(int argc, char** argv) {
   const std::string text = t5d::tools::format_hunt_truth(truth);
   // A round trip before writing.
   (void)t5d::tools::parse_hunt_truth(text);
-  const auto write = [](const std::string& path, const std::string& bytes) {
-    std::FILE* f = std::fopen(path.c_str(), "wb");
-    if (f == nullptr) throw std::runtime_error("cannot write " + path);
-    std::fwrite(bytes.data(), 1, bytes.size(), f);
-    std::fclose(f);
-  };
   try {
-    write(o.out + "/" + t5d::tools::kHuntTruthFile, text);
-    write(o.out + "/" + t5d::tools::kHuntTruthManifest, t5d::tools::hunt_truth_manifest(text));
+    t5d::tools::HuntTruthProvenance p;
+    p.truth = "sha256:" + t5d::tools::sha256_hex(text);
+    p.rules = t5d::tools::absolute_rules_text(o.rules);
+    p.code = T5D_CODE_SIGNATURE;
+    p.records = t5d::tools::record_contents(refs);
+    const std::string provenance = t5d::tools::format_provenance(p);
+    write_file(o.out + "/" + t5d::tools::kHuntTruthFile, text);
+    write_file(o.out + "/" + t5d::tools::kHuntTruthProvenance, provenance);
+    write_file(o.out + "/" + t5d::tools::kHuntTruthManifest, t5d::tools::hunt_truth_manifest(text, provenance));
+    (void)t5d::tools::load_hunt_truth(o.out);  // the round trip: it loads as a reader loads it
   } catch (const std::exception& e) {
     std::fprintf(stderr, "t5d-hunt-truth: %s\n", e.what());
     return 1;

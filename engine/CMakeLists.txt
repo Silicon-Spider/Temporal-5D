@@ -233,15 +233,46 @@ target_sources(t5d-tests PRIVATE tests/test_certificate.cpp tests/test_guard.cpp
   tests/test_assets.cpp)
 # Hunt's ground truth and 6b'': 6b's roots with their next actions, the truth
 # file and its SHA-256 pin (shared by the tools and the truth file's test).
-target_sources(t5d_tools PRIVATE tools/sha256.cpp tools/sixb_roots.cpp tools/hunt_truth.cpp)
-target_sources(t5d-tests PRIVATE tests/test_hunt_truth.cpp)
+target_sources(t5d_tools PRIVATE tools/sha256.cpp tools/sixb_roots.cpp tools/hunt_truth.cpp tools/sixbpp.cpp)
+target_sources(t5d-tests PRIVATE tests/test_hunt_truth.cpp tests/test_sixbpp.cpp)
 target_compile_definitions(t5d-tests PRIVATE "T5D_ENGINE_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}\"")
-add_executable(t5d-hunt-truth tools/t5d_hunt_truth.cpp)
+# The truth's code signature (cmake/code_signature.cmake): the sources that
+# decide its verdicts - the rules engine, E4, the prover, the certificates, the
+# record reader and the recorder.
+set(T5D_TRUTH_SOURCES
+  include/t5d/attacks.hpp include/t5d/board.hpp include/t5d/certificate.hpp include/t5d/check.hpp
+  include/t5d/error.hpp include/t5d/fen.hpp include/t5d/fingerprint.hpp include/t5d/geometry.hpp
+  include/t5d/legal.hpp include/t5d/md5.hpp include/t5d/move.hpp include/t5d/movegen.hpp
+  include/t5d/multiverse.hpp include/t5d/pgn.hpp include/t5d/prover.hpp include/t5d/rules.hpp
+  include/t5d/scanner.hpp include/t5d/search.hpp include/t5d/state.hpp include/t5d/timeline.hpp
+  include/t5d/types.hpp include/t5d/variants.hpp include/t5d/zobrist.hpp
+  src/attacks.cpp src/board.cpp src/certificate.cpp src/check.cpp src/fen.cpp src/fingerprint.cpp
+  src/hypercuboid.cpp src/legal.cpp src/md5.cpp src/move.cpp src/movegen.cpp src/multiverse.cpp
+  src/pgn.cpp src/prover.cpp src/rules.cpp src/scanner.cpp src/search.cpp src/search_internal.hpp
+  src/state.cpp src/timeline.cpp src/types.cpp src/variants.cpp src/zobrist.cpp
+  tools/hunt_truth.hpp tools/hunt_truth.cpp tools/sha256.hpp tools/sha256.cpp tools/sixb_roots.hpp
+  tools/sixb_roots.cpp tools/tool_support.hpp tools/tool_support.cpp tools/t5d_hunt_truth.cpp)
+set(T5D_SIGNATURE_DEPENDS "")
+foreach(f IN LISTS T5D_TRUTH_SOURCES)
+  list(APPEND T5D_SIGNATURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/${f}")
+endforeach()
+string(REPLACE ";" "," T5D_TRUTH_SOURCES_TEXT "${T5D_TRUTH_SOURCES}")
+set(T5D_SIGNATURE_HEADER "${CMAKE_CURRENT_BINARY_DIR}/generated/t5d_code_signature.hpp")
+add_custom_command(
+  OUTPUT "${T5D_SIGNATURE_HEADER}"
+  COMMAND "${CMAKE_COMMAND}" "-DROOT=${CMAKE_CURRENT_SOURCE_DIR}" "-DFILES=${T5D_TRUTH_SOURCES_TEXT}"
+          "-DOUT=${T5D_SIGNATURE_HEADER}" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/code_signature.cmake"
+  DEPENDS ${T5D_SIGNATURE_DEPENDS} "${CMAKE_CURRENT_SOURCE_DIR}/cmake/code_signature.cmake"
+  COMMENT "The truth's code signature"
+  VERBATIM)
+add_executable(t5d-hunt-truth tools/t5d_hunt_truth.cpp "${T5D_SIGNATURE_HEADER}")
+target_include_directories(t5d-hunt-truth PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_link_libraries(t5d-hunt-truth PRIVATE t5d_tools Threads::Threads)
 if(MINGW)
   target_link_options(t5d-hunt-truth PRIVATE -static)
 endif()
-add_executable(t5d-scan6bpp tools/t5d_scan6bpp.cpp)
+add_executable(t5d-scan6bpp tools/t5d_scan6bpp.cpp "${T5D_SIGNATURE_HEADER}")
+target_include_directories(t5d-scan6bpp PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_link_libraries(t5d-scan6bpp PRIVATE t5d_tools Threads::Threads)
 target_compile_definitions(t5d-scan6bpp PRIVATE
   "T5D_BUILD_TYPE=\"${CMAKE_BUILD_TYPE}\""
