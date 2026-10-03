@@ -130,17 +130,23 @@ def _split(out: NetOutput, states: Sequence[PositionState]) -> list[Evaluation]:
     valid = out.move_valid.detach().cpu()
     values = out.value_logits.detach().float().cpu()
     submit = out.submit_logits.detach().float().cpu()
+    submit_valid = out.submit_valid.detach().cpu()
     results = []
     for i, state in enumerate(states):
         m = int(state.moves.shape[0])
         if int(valid[i].sum()) != m or (m and not bool(valid[i, :m].all())):
             raise RuntimeError(f"position {i}: the batch's valid moves are not its {m} candidate moves")
         s = float(submit[i])
+        legal = bool(submit_valid[i])
+        if legal and not math.isfinite(s):
+            # NaN would read as "no logit given" (the search's placeholder share): refuse it as a
+            # non-finite move logit is refused.
+            raise ValueError(f"position {i}: the network's submit logit is {s} where submitting is legal")
         results.append(
             Evaluation(
                 policy_logits=logits[i, :m].numpy().copy(),
                 value_logits=values[i].numpy().copy(),
-                submit_logit=s if math.isfinite(s) else math.nan,  # masked (-inf) or absent: no logit
+                submit_logit=s if legal else math.nan,  # masked (-inf) or absent: no logit
             )
         )
     return results

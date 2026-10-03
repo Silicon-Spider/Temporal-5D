@@ -168,6 +168,21 @@ def test_the_submit_logit_crosses_the_protocol(small_model):
     assert evs[3].submit_prob > 0 and evs[2].submit_prob == 0.0
 
 
+@pytest.mark.parametrize("bad", [float("nan"), float("inf")])
+def test_a_non_finite_network_submit_logit_is_refused(bad):
+    """Where submitting is legal a non-finite submit logit from the network is an error - NaN
+    would otherwise read as "no logit given" (the search's placeholder share) - as a non-finite
+    move logit is; where submit is masked or absent the readout is not used."""
+    model = build_model(NetConfig(trunk_dtype="fp32", n_layers=1), seed=2).eval()
+    with torch.no_grad():
+        model.submit.out.bias.fill_(bad)
+    s = synthetic_state(42, 5)
+    with pytest.raises(ValueError, match="submit logit"):
+        NetworkEvaluator(model)([_shift(s, True)])
+    for ok in (s, _shift(s, False), _shift(s, None)):
+        assert np.isnan(NetworkEvaluator(model)([ok])[0].submit_logit)
+
+
 def test_check_evaluation_refuses_a_wrong_submit_logit():
     s = synthetic_state(41, 3)
     m = int(s.moves.shape[0])
