@@ -194,8 +194,8 @@ endif()
 
 # Stage E8: the verification layer's redesign (M14) - incremental royal-attack
 # maps, the proof channel (df-pn over semimoves), the estimate channel; 6b'.
-target_sources(t5d_core PRIVATE src/attacks.cpp src/prover.cpp)
-target_sources(t5d-tests PRIVATE tests/test_attacks.cpp tests/test_prover.cpp)
+target_sources(t5d_core PRIVATE src/attacks.cpp src/prover.cpp src/estimate.cpp)
+target_sources(t5d-tests PRIVATE tests/test_attacks.cpp tests/test_prover.cpp tests/test_estimate.cpp)
 
 # ---- MinGW: no dependence on the toolchain's runtime DLLs --------------------------
 #
