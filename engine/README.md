@@ -2885,9 +2885,16 @@ build/engine/t5d-hunt-truth --record-list build/corpus.txt --literal-nodes 40000
     --default-nodes 4000000 --workers 6 --out engine/testdata/hunt-truth --engine <commit>
 ```
 
-THE TRUTH as recorded (2026-10-03, a shared machine; 4,521 s on 6 workers): 825 roots,
-805 measured (20 skipped as 6b skips them), **125 mates** - every one confirmed by its
-certificate against E4 alone:
+THE TRUTH as committed (`testdata/hunt-truth/`, sha256
+`ce62e5f8c52e0d53b1519ef145aae00760d84a4b271b9e9643e5fcab02cf1a73`; recorded at
+`1d2d0d7` on 2026-10-03, a shared machine, 5,097 s on 6 workers): 825 roots, 805
+measured (20 skipped as 6b skips them), **125 mates** - every one confirmed by its
+certificate against E4 alone. The roots are 6b's exactly, the records read raw as 6b
+and 6b′ read them: cwmtt/many2's export-form text gives an engine tool no action (the
+gate converts it for every source; that conversion is the harness's), so many2 adds
+only its starting position. A first recording (at `832aa30`, the records named by
+path - which the boundary check refuses) gave every verdict, distance, finder, class
+status and cross-check the same; 25 roots' node counts moved with H46's relief fix.
 
 | Boards | measured roots | mates | of them: mate in 1 / 3 / 5 half-turns |
 |---|---|---|---|
@@ -2930,23 +2937,25 @@ threads, 50 ms each - pre-registered, unchanged:
 
 ### 6b″: preliminary figures (a shared machine - not the verdict)
 
-2026-10-03, AMD Ryzen 9 9900X, 24 logical processors, busy 22% during Guard and 22%
-during Hunt (other agents' work and this tool's own threads); Release, g++ 16.2 `-O2`;
-the default ruleset (R8); the truth above. 805 measured roots (17 checkmated, 2
-stalemated and 1 breaking C4 not measured); Guard counted 788 (16 roots whose record
-plays nothing after them, 1 whose next action breaks C4). Wall: Guard 38 s, Hunt 19 s.
+2026-10-03, the merged branch (main at `621cb90`: E6a's search core in), AMD Ryzen 9
+9900X, 24 logical processors, busy 26% during Guard and 27% during Hunt (other agents'
+work and this tool's own threads); Release, g++ 16.2 `-O2`; the default ruleset (R8);
+the committed truth. 805 measured roots (17 checkmated, 2 stalemated and 1 breaking C4
+not measured); Guard counted 788 (16 roots whose record plays nothing after them, 1
+whose next action breaks C4). Wall: Guard 38 s, Hunt 19 s.
 
-| Boards | Guard: depth 1 completed (of roots) | completed depth 0 / 1 / 2 / 3 / 8 | refuted (at depth 1) | Hunt: truth mates found | Verdict |
+| Boards | Guard: depth 1 completed (of roots) | completed depth 0 / 1 / 2 / 3 / 4 / 8 | refuted (at depth 1) | Hunt: truth mates found | Verdict |
 |---|---|---|---|---|---|
-| < 50 | **64.7%** of 513 - FAIL | 219 / 270 / 13 / 4 / 7 | 41 (38) | **69.0%** (49 of 71) - PASS | adopt Hunt; Guard not adopted |
-| 50-99 | **15.1%** of 139 - FAIL | 122 / 15 / 0 / 0 / 2 | 4 (4) | **63.6%** (21 of 33) - PASS | adopt Hunt; Guard not adopted |
-| 100-199 | **5.2%** of 96 - FAIL | 94 / 1 / 0 / 0 / 1 | 3 (3) | **30.0%** (6 of 20) - FAIL | neither |
-| 200+ | **0.0%** of 40 - FAIL | 40 / 0 / 0 / 0 / 0 | 0 | **0.0%** (0 of 1) - FAIL | neither |
+| < 50 | **64.9%** of 513 - FAIL | 219 / 269 / 14 / 3 / 1 / 7 | 42 (39) | **70.4%** (50 of 71) - PASS | adopt Hunt; Guard not adopted |
+| 50-99 | **15.1%** of 139 - FAIL | 122 / 15 / 0 / 0 / 0 / 2 | 4 (4) | **63.6%** (21 of 33) - PASS | adopt Hunt; Guard not adopted |
+| 100-199 | **5.2%** of 96 - FAIL | 94 / 1 / 0 / 0 / 0 / 1 | 3 (3) | **35.0%** (7 of 20) - FAIL | neither |
+| 200+ | **0.0%** of 40 - FAIL | 40 / 0 / 0 / 0 / 0 / 0 | 0 | **0.0%** (0 of 1) - FAIL | neither |
 
 (Completed depth 8: the record's move left the opponent no legal action.) Hunt found no
 mate the truth lacks. Every refutation and mate was cross-checked against E4 alone:
-Guard's 47 confirmed, 1 incomplete; Hunt's 75 confirmed, 1 incomplete (incomplete: a
-node solved from another thread's tree) - none refuted.
+Guard's 48 confirmed, 1 incomplete (a node solved from another thread's tree); Hunt's 78
+confirmed - none refuted. (A run before the merge, with the first recording: Guard
+64.7 / 15.1 / 5.2 / 0.0%, Hunt 69.0 / 63.6 / 30.0 / 0.0% - the same verdicts.)
 
 **M17's verdicts, applied mechanically: adopt Hunt below 100 boards; adopt Guard
 nowhere.** §13's notes: the chosen move goes unguarded in every range; from 100 boards
@@ -2956,17 +2965,17 @@ What the verdicts rest on (information, the same run):
 - **Guard's cost is the opponent's action product.** Depth 1 must refute every
   opponent action, and their actions multiply across their boards: the median root
   spent its 50 ms on 24,000 nodes under 50 boards; our turns were decided "not in
-  check" 298,000 times and by an escape search 60,000 times there - and depth 1 still
+  check" 301,000 times and by an escape search 60,000 times there - and depth 1 still
   completed in only 65% of roots. Where the opponent plays one or two boards it
   completes at once; with more, not in 50 ms. The check filter does not change this
   (on: no better, its construction costs a map advance per move); Lazy SMP's helpers
   re-search the same product (an exhaustive refutation shares little through the
   stores).
-- **The refutations are real:** 48 of the records' next moves (6%) allow a forced
+- **The refutations are real:** 49 of the records' next moves (6%) allow a forced
   mate - these are test records, many played into checkmate - each confirmed by E4.
 - **Hunt** finds the shallow mates below 100 boards. At 100-199 boards every one of the
   truth's 20 mates is a mate in one, and Hunt's own class found all 20 in the long
-  search - but in 50 ms (a median 23,000 nodes at 5 threads) Hunt reaches 6: its root
+  search - but in 50 ms (a median 23,000 nodes at 5 threads) Hunt reaches 7: its root
   expansion completes every checking seed (a canonical completion each) and tests each
   defence before it descends, and at that size that does not finish. A root expanded
   lazily - a child tested as it is made - is the obvious remedy (not built: the
@@ -2981,8 +2990,10 @@ build/engine/t5d-scan6bpp --truth engine/testdata/hunt-truth --record-list build
 ```
 
 (`build/corpus.txt`: the 41 records, one path per line, relative to the root - the
-same list, in the same order, the truth was recorded from; the tool refuses a truth
-whose roots are not the records'. About two minutes.)
+same list, in the same order, the truth was recorded from; the records are named by
+content, CRLF read as LF, so the checkout's line endings do not matter; the tool
+refuses a truth whose bytes or roots do not match. About a minute: Guard 38 s, Hunt 19
+s, then the cross-checks.)
 
 ### As built: the parameters (placeholders, named, with their alternatives)
 
@@ -3037,8 +3048,12 @@ Default run (2026-10-03, every count from it):
   worth `royal_value`.
 - **The ground truth** (`tests/test_hunt_truth.cpp`): SHA-256 against FIPS 180-4's
   vectors; the file round-trips; a changed byte, a cut-off file and a wrong root count
-  are refused; the committed file matches its MANIFEST and is well formed (every mate
-  within 5 half-turns, cross-checked).
+  are refused; the committed file matches its MANIFEST and is well formed (825 roots,
+  125 mates, each within 5 half-turns and cross-checked).
+- On the merged branch, with `--werror`: the whole suite 506 of 507 before the truth was
+  recorded (22 min, a shared machine), the one failure the committed-truth test, which
+  passes once it is; the Lazy SMP timing test, three times: 1 thread 293, 5 threads 313,
+  314, 311 (resolved depth summed over 32 positions at 40 ms).
 
 ## 5DFEN
 
