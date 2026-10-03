@@ -5,7 +5,7 @@
 //
 //   t5d-play [--variant NAME] [--evaluator uniform|random|material]
 //            [--playouts N] [--split ply|turn] [--graph] [--node-key state|origins]
-//            [--no-widening] [--e2] [--e3] [--batch N] [--synchronous]
+//            [--no-widening] [--e2] [--e3] [--solver] [--batch N] [--synchronous]
 //            [--match] [--final visits|lcb] [--temperature T] [--temperature-decisions N]
 //            [--noise] [--cap-turns N] [--cap-boards N] [--max-actions N]
 //            [--listing-cap N] [--mate-nodes N] [--max-seconds S] [--seed S]
@@ -17,6 +17,8 @@
 // sampled at temperature 1 for the first 16 decisions) - --match plays the
 // final rule (E5, LCB by default) with the tree carried (C12) - and a turn cap
 // of 20 turns (I11: a convention, scored as a draw; --cap-turns 0 lifts it).
+// --solver turns on the in-tree solver (H2, E9), off by default until the
+// user rules (spec §11.1 item 2, H23).
 // --max-seconds stops a long game at a turn start (a safety stop, "*"), its
 // record and summary still printed.
 // Exit status: 0 for a game played, 2 for a bad command line, 1 for an error.
@@ -46,7 +48,7 @@ void usage(std::FILE* to) {
   std::fputs(
       "usage: t5d-play [--variant NAME] [--evaluator uniform|random|material]\n"
       "                [--playouts N] [--split ply|turn] [--graph] [--node-key state|origins]\n"
-      "                [--no-widening] [--e2] [--e3] [--batch N] [--synchronous]\n"
+      "                [--no-widening] [--e2] [--e3] [--solver] [--batch N] [--synchronous]\n"
       "                [--match] [--final visits|lcb] [--temperature T]\n"
       "                [--temperature-decisions N] [--noise] [--cap-turns N] [--cap-boards N]\n"
       "                [--max-actions N] [--listing-cap N] [--mate-nodes N]\n"
@@ -128,6 +130,8 @@ int main(int argc, char** argv) {
         params.search.uncertainty_weighted_backup = true;
       } else if (std::strcmp(a, "--e3") == 0) {
         params.search.variance_bonus = true;
+      } else if (std::strcmp(a, "--solver") == 0) {
+        params.search.solver = true;
       } else if (std::strcmp(a, "--batch") == 0) {
         params.search.batch_size = static_cast<std::size_t>(number(a, value()));
       } else if (std::strcmp(a, "--synchronous") == 0) {
@@ -192,6 +196,7 @@ int main(int argc, char** argv) {
                          std::to_string(params.playouts) + " playouts per decision, " +
                          (params.search.split == TurnSplit::BoardMove ? "board-move split" : "whole-turn split") +
                          (params.search.graph ? ", graph" : ", tree") +
+                         (params.search.solver ? ", solver" : "") +
                          (params.match_play ? ", match play" : ", self-play") + ", seed " +
                          std::to_string(params.seed);
     extra.emplace_back("Engine", engine);

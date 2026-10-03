@@ -119,14 +119,15 @@ struct Config {
   bool e2;
   bool e3;
   NodeKey key;
+  bool solver;  // off by default (H23); the invariants hold either way
 };
 const std::vector<Config> kConfigs = {
-    {"ply tree", TurnSplit::BoardMove, false, true, false, false, NodeKey::State},
-    {"ply graph", TurnSplit::BoardMove, true, true, false, false, NodeKey::State},
-    {"ply graph origins", TurnSplit::BoardMove, true, true, true, true, NodeKey::StateAndOrigins},
-    {"ply tree, no widening, E2+E3", TurnSplit::BoardMove, false, false, true, true, NodeKey::State},
-    {"turn tree", TurnSplit::WholeTurn, false, true, false, false, NodeKey::State},
-    {"turn graph, E2+E3", TurnSplit::WholeTurn, true, true, true, true, NodeKey::State},
+    {"ply tree, solver", TurnSplit::BoardMove, false, true, false, false, NodeKey::State, true},
+    {"ply graph", TurnSplit::BoardMove, true, true, false, false, NodeKey::State, false},
+    {"ply graph origins, solver", TurnSplit::BoardMove, true, true, true, true, NodeKey::StateAndOrigins, true},
+    {"ply tree, no widening, E2+E3", TurnSplit::BoardMove, false, false, true, true, NodeKey::State, false},
+    {"turn tree, solver", TurnSplit::WholeTurn, false, true, false, false, NodeKey::State, true},
+    {"turn graph, E2+E3", TurnSplit::WholeTurn, true, true, true, true, NodeKey::State, false},
 };
 
 SearchParams params_of(const Config& c) {
@@ -138,6 +139,7 @@ SearchParams params_of(const Config& c) {
   p.uncertainty_weighted_backup = c.e2;
   p.variance_bonus = c.e3;
   p.node_key = c.key;
+  p.solver = c.solver;
   // The whole-turn listings of a two-board turn run to hundreds of actions;
   // the invariants hold for a truncated list too (it is never proven lost).
   p.max_actions = 96;
@@ -333,6 +335,7 @@ TEST(mcts_solver_proves_a_mate_in_one_and_plays_it) {
       for (const bool graph : {false, true}) {
         const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Uniform);
         SearchParams p = fast();
+        p.solver = true;  // the in-tree solver under test (off by default, H23)
         p.split = split;
         p.graph = graph;
         Search search(start, p);
@@ -383,6 +386,7 @@ TEST(mcts_solver_proves_a_draw_when_every_child_is_drawn) {
   for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::WholeTurn}) {
     const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Random, 5);
     SearchParams p = fast();
+    p.solver = true;  // the in-tree solver under test (off by default, H23)
     p.split = split;
     Search search(s, p);
     search.run(*ev, Limits{200});
@@ -402,6 +406,7 @@ TEST(mcts_solver_proves_a_loss_when_every_child_is_lost) {
     for (const bool graph : {false, true}) {
       const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Uniform);
       SearchParams p = fast();
+      p.solver = true;  // the in-tree solver under test (off by default, H23)
       p.split = split;
       p.graph = graph;
       Search search(s, p);
@@ -476,6 +481,55 @@ std::vector<GameState> two_board_positions(const RuleOptions& rules, int count, 
 
 }  // namespace
 
+TEST(mcts_with_the_solver_off_terminals_are_valued_and_nothing_else_is_proven) {
+  // The default until the user rules (H23; spec §11.1 item 2): a terminal is
+  // valued as its game result, but no bound propagates - no non-terminal node
+  // is solved, the search runs every playout, and final selection takes no
+  // proof (no ProvenWin, SecureChild or AllLost). The mate in one is still
+  // found, by its value.
+  CHECK(!SearchParams{}.solver);
+  for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::WholeTurn}) {
+    for (const bool graph : {false, true}) {
+      for (int which = 0; which < 3; ++which) {
+        const GameState s = which == 0 ? mate_in_one() : which == 1 ? forced_draw() : forced_loss();
+        SearchParams p = fast();
+        p.split = split;
+        p.graph = graph;
+        const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Uniform);
+        Search search(s, p);
+        search.run(*ev, Limits{1500});
+        CHECK_NOTHROW(search.check_invariants());
+        CHECK_EQ(search.stats().playouts, std::uint64_t{1500});
+        CHECK(!search.root_solved());
+        CHECK(search.stats().checkmates + search.stats().stalemates > 0);
+        for (NodeId id = 0; id < search.node_count(); ++id) {
+          const NodeView n = search.node(id);
+          if (n.terminal != Terminal::None) continue;
+          CHECK_EQ(n.lo, -1);
+          CHECK_EQ(n.hi, 1);
+        }
+        for (const RootChild& c : search.root_children()) {
+          CHECK_EQ(c.lo, -1);
+          CHECK_EQ(c.hi, 1);
+        }
+        const auto [index, reason] = search.choose();
+        CHECK(reason == ChoiceReason::Lcb || reason == ChoiceReason::Visits);
+        if (which == 0) {
+          // The chosen line mates: its moves, then the submission.
+          GameState t = s;
+          for (const Move& m : search.root_children().at(index).moves) t.apply(m);
+          if (split == TurnSplit::WholeTurn || t.obligations_met()) {
+            REQUIRE(t.submission_status() == SubmitStatus::Safe);
+            t.submit();
+            CHECK(verdict_of(t) == Outcome::Checkmate);
+          }
+          CHECK(search.root_children().at(index).q > 0.5);
+        }
+      }
+    }
+  }
+}
+
 TEST(mcts_solver_agrees_with_the_brute_force_game_tree_under_both_q4_readings) {
   // The search's proofs against E7's brute-force game tree (test_game_tree.hpp:
   // the reference's enumeration of every move sequence, plain minimax), which
@@ -498,6 +552,7 @@ TEST(mcts_solver_agrees_with_the_brute_force_game_tree_under_both_q4_readings) {
       if (truth.kind == t5d_test::GameValue::Kind::Unknown) continue;
       for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::WholeTurn}) {
         SearchParams p = fast();
+        p.solver = true;  // the in-tree solver under test (off by default, H23)
         p.split = split;
         p.legality = LegalityOptions::exact();
         const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Uniform);
@@ -538,7 +593,9 @@ TEST(mcts_solver_bounds_never_contradict_in_play) {
         if (verdict_of(s) != Outcome::Ongoing) break;
         const Config& c = kConfigs[static_cast<std::size_t>(rng.below(static_cast<int>(kConfigs.size())))];
         const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Material);
-        Search search(s, params_of(c));
+        SearchParams sp = params_of(c);
+        sp.solver = true;
+        Search search(s, sp);
         search.run(*ev, Limits{60});
         CHECK_NOTHROW(search.check_invariants());
         for (NodeId id = 0; id < search.node_count(); ++id) {
@@ -1120,6 +1177,7 @@ TEST(mcts_an_unknown_edge_proves_nothing_until_verified) {
   const GameState s = forced_draw();
   for (const bool verify : {false, true}) {
     SearchParams p = fast();
+    p.solver = true;  // the in-tree solver under test (off by default, H23)
     p.widening = false;
     p.legality = LegalityOptions::budgeted(0, 0);
     p.verify_unknown = verify;
@@ -1226,6 +1284,7 @@ TEST(mcts_board_move_dead_ends_are_pruned_not_scored) {
   // action, so a move that leaves the king capturable has no legal completion -
   // a dead end, pruned (§8.2), never backed up as a loss.
   SearchParams p = fast();
+  p.solver = true;  // the in-tree solver under test (off by default, H23)
   p.legal_moves_only = false;
   p.widening = false;
   const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Uniform);
