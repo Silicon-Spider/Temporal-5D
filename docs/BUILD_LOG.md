@@ -82,7 +82,8 @@ answers changed); **engine E6a merged** -
 the search core after its three adversarial reviews and their fixes, with H41's
 switch and H18's acting-player test (474 tests). **Running:** engine **E9** on
 E8's branch (Guard, Hunt, the asset map as components; the estimate channel
-dropped; Hunt's ground truth; the 6b″ tool). **Then:** E9's review and merge; E10 - Guard, Hunt, the asset map and the under-50 settling
+dropped; Hunt's ground truth; the 6b″ tool). **6b″ decided (2026-10-04, quiet machine, MEASUREMENTS):** Hunt adopted under 100
+boards, Guard in no range; no stop (M17). **Then:** E10 - Guard, Hunt, the asset map and the under-50 settling
 scans wired into the search, and the offline audit lane's tooling (H44); 6b″ on a
 quiet machine; the many2 re-record; the gate with the engine configured; N5.
 
@@ -747,8 +748,8 @@ for game records.
 | H12 | retired | With the NNUE and the per-node scans |
 | H13, H14 | parked | Ladder scheduling: with the search wiring (E10) |
 | H41 | built, tested | `SearchParams::proof_channel` (C `proof_channel`, `t5d-play --proof-channel`): propagation of solved status (marking nodes solved, pruning siblings, secure-child selection) and export, off by rule; game ends are scored as results. Was: building | The search's solver as part of the proof channel: game-end scoring on; propagation and export off until the gate passes (E6a's fix round) |
-| H42 | built, tested | Guard (E9): iterative deepening from depth 1, at most 50 depths, never a depth it did not search; exact at every completed depth; refutations certified by E4 alone; the re-search hook for §8.6's reserve (wired in E10). Adoption per range by 6b″ |
-| H43 | built, tested | Hunt (E9): prove-only df-pn at the root, claims nothing at budget; export refused until H41/H23; partial-line priors behind a flag, off. Adoption per range by 6b″ |
+| H42 | built, tested; not adopted | Guard (E9): depth 1 completes in 65.1 / 15.8 / 5.2 / 0.0% of roots against 95% (6b″) - adopted in no range; §13: the chosen move goes unguarded. Built and kept (the audit lane's shallow-mate report uses its question offline; the search's re-search hook stays unwired-by-adoption) |
+| H43 | built, tested; adopted under 100 boards | Hunt (E9): 69.0% / 63.6% of the truth's mates under 50 / 50-99 boards (6b″) - adopted there; 35.0% at 100-199 and 0 of 1 at 200+ - not adopted; §13: proofs there come only from the search's solver. Export refused until H41/H23 |
 | H44 | built in part | The audit lane's tools: the certificate checker (E4 alone) and `t5d-hunt-truth` (E9); the decision sampler, the offline proof runner and the per-range report are E10's |
 | H45 | not built (rule) | The adversarial league (M5) |
 | H15 | built, tested | The scanner's deterministic single-thread mode; the search's synchronous mode and digest (E6a; the digest in the C API) |
@@ -828,7 +829,7 @@ for game records.
 | M16 | applied, confirmed | M7's readings (corrected at CHECKPOINT 5): time-share multiplier, human-game weighting, the per-phase rule under 50 boards with the band resolving to off - the window is killed, provisionally |
 | M18 | not started (rule) | A pilot self-play run before serious self-play re-checks the window and the other compute-weighted decisions - after §15.5, not in the untrained build |
 | H46 | built, tested | Q2 (provisional): initial timelines count as created by neither player - a variant's set-up reads every timeline as initial (rulebook R10) |
-| M17 | tool built, truth recorded | `t5d-scan6bpp` (E9, reviewed): the shipped configuration, only E4-confirmed proofs counted; Hunt's ground truth pinned with its provenance (125 mates). The quiet run decides |
+| M17 | measured | 6b″ on a quiet machine (d96d6d9): Guard 65.1 / 15.8 / 5.2 / 0.0% - adopted in no range; Hunt 69.0 / 63.6 / 35.0 / 0.0% (200+: one truth mate, too few to read) - adopted under 100 boards; every refutation and mate confirmed by E4 |
 | C24 | built, tested | The refresh ladder's complexity trigger behind a flag (`CacheConfig.complexity_refresh`, off; prototype, gated like rung 1 on 6c's existence test); add-only over rung 1 for every signal; every number a placeholder (spec issues 75-79) |
 | C25 | not built (rule) | Held open |
 | M7 | measured; killed, provisionally (M16, CHECKPOINT 5) | On real games (t0database, 716 games, max 186 boards): on at k = 8 from 50 to 186 boards; under 50 boards inside the ±10% band and the kill clause turns on it - waiting on the user; above 186 provisional (MEASUREMENTS) |
