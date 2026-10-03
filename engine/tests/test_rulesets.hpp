@@ -23,7 +23,7 @@ inline std::vector<t5d::RuleOptions> alternative_rulesets() {
   with([](RuleOptions& r) { r.activation = ActivationRule::Consecutive; });
   with([](RuleOptions& r) { r.initial_credit = InitialTimelineCredit::MinusZeroToBlack; });
   with([](RuleOptions& r) { r.play_activates = true; });
-  with([](RuleOptions& r) { r.moves_after_shift = true; });
+  with([](RuleOptions& r) { r.moves_after_shift = !r.moves_after_shift; });  // Q4's other reading
   with([](RuleOptions& r) { r.mandatory = MandatoryBoards::AllActive; });
   with([](RuleOptions& r) { r.reactivation = Reactivation::Deferred; });
   with([](RuleOptions& r) { r.turn_zero_reachable = false; });
