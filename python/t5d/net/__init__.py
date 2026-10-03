@@ -9,12 +9,14 @@ biases one query block at a time - ``structure.py``, ``smolgen.py``, ``attention
 block-causal scope (C17, C19 - ``scope.py``, ``NetConfig.attn_scope``), the lineage it rests
 on (``PositionState.parent`` / ``creation``), the cached evaluation path with supersession
 recompute, prefix sharing, refresh epochs and FP8 storage (C2, C3, C3a rung 1, C15, C20 -
-``cache.py``), a search-tree fixture (``tree.py``), and section 15.3's cost model and
+``cache.py``), the refresh ladder's complexity trigger (C24, prototype - ``complexity.py``),
+a search-tree fixture (``tree.py``), and section 15.3's cost model and
 benchmark (``cost.py``, ``cache_bench.py``). See ``config.py`` for which register rows are
 built here and which are flags for later stages.
 """
 
 from .cache import CacheConfig, CachedEvaluator, Epoch, KVStore, reference_output
+from .complexity import ComplexitySignals, complexity_score
 from .config import F1, F2_LARGER_ARM, PRESETS, NetConfig
 from .model import NetOutput, T5DNet, build_model, parameter_breakdown
 from .scope import BlockCausalScope, board_scope
@@ -39,6 +41,8 @@ __all__ = [
     "BlockCausalScope",
     "CacheConfig",
     "CachedEvaluator",
+    "ComplexitySignals",
+    "complexity_score",
     "Epoch",
     "KVStore",
     "Multiverse",

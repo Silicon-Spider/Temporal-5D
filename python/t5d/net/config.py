@@ -31,8 +31,9 @@ The build rules (spec section 15.1) decide what else appears here:
   set (the heads) bidirectional among itself and reading all history, global registers
   reading everything and read only by live tokens (``scope.py``). The cached evaluation
   path that the scope makes possible (C2, C3, C3a rung 1, C15, C20) is ``cache.py``; its
-  switches - the root refresh, the rung-1 node refresh and its visit gate, the KV storage
-  format - are the evaluator's (``CacheConfig``), not the network's. Four points the
+  switches - the root refresh, the rung-1 node refresh and its visit gate, C24's
+  complexity trigger (prototype, ``complexity.py``), the KV storage format - are the
+  evaluator's (``CacheConfig``), not the network's. Four points the
   spec leaves open on this committed-class path are parameters with placeholder defaults
   (``causal_past``, ``frozen_features``, ``supersession_scope``, and the rule that the
   section 6 structure opens live rows only, documented in ``scope.py``).
