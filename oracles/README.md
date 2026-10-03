@@ -263,16 +263,58 @@ Three principles keep the comparison honest:
   as `unsupported` from there, and does not pass the fragment's fate off as a
   verdict.
 
-The harness never parses the moves of a record. Each oracle reads a record with its
-own parser, the engine will read it with its own (H28), positions are aligned by
-counting submitted actions, and the alignment is checked by what each source says
-it set up: boards, which the harness reads, never moves. What the harness reads
+The harness never parses the moves of a record (it rewrites one textual pattern of
+the export form, without reading a move: "How a record reaches the sources",
+below). Each oracle reads a record with its own parser, the engine will read it
+with its own (H28), positions are aligned by counting submitted actions, and the
+alignment is checked by what each source says it set up: boards, which the
+harness reads, never moves. What the harness reads
 out of a record is what game it declares itself to be - its `Board` header (or its
 `Variant` header when it has none), whether it carries 5DFEN boards, whether it has
 a `Timeline` or `Promotions` header - and whether its move text holds a variation
 or a turn number written `12w.`. One driver also drops a PGN result token (`1-0`,
 `1/2-1/2`) from the end of the move text, because 5d-chess-js reads it as moves and
 fails on it.
+
+### How a record reaches the sources
+
+Every source - each oracle search and the engine - is given the same bytes for a
+record, on standard input: the stored record (read from its pinned source's object
+store, `corpus/manifest.toml`), with CRLF folded to LF (`corpus.feed`; every run
+goes through `runner.observe`). There is one exception, ruled at CHECKPOINT 3:
+"the cwmtt driver converts the export form to the canonical 5dpgn form from the
+pinned notation spec; if it expresses something the spec can't, mark the record
+unsupported. The engine's parser is not extended." A record of cwmtt's written in
+the official client's export form, whose moves name their board twice
+(`(0T1)Pe2(0T1)e3` - the notation specification's "Export moves"), is converted
+by `oracle_harness/export_form.py` before any source reads it, and the converted
+text is what every source reads - the engine included. Converting it for cwmtt
+alone would change nothing (cwmtt reads either form). Today that is one record,
+`cwmtt/many2`.
+
+The conversion is notation, never the position. A move whose two boards are the
+same board loses its second board, `(0T1)Pe2(0T1)e3` becomes `(0T1)Pe2e3` (the
+specification's physical move with its board and the piece's square in full; the
+export form's castling, `(0T6)Ke1(0T6)g1`, becomes `(0T6)Ke1g1`, the form
+"Castling" gives), and nothing is added - the export form marks no capture,
+check or promotion, and none is guessed. Every other byte is copied: headers,
+comments, turn numbers, separators, and the jumps, which the export already
+writes as the specification does (`(0T2)Ng1>>(0T1)g3`). A record with a move the
+specification cannot express - a move to another board without `>` or `>>`
+(which one it takes is a question about the position), or other text that names
+a board straight after a square - is not partly converted: no source is given it,
+and every one reports it `unsupported`, reason `export_form`, with the move it
+could not express. That keeps its ruleset ungated, as any record the engine did
+not replay does.
+
+What the sources read is pinned like the stored bytes: the record's manifest entry
+says `converted`, the SHA-256 of the converted text (or `"unsupported"`); `verify`
+checks it and prints the value to write, and a run refuses a record whose
+conversion no longer gives it. The golden files and `known-divergences.toml` name
+a converted record by that hash, so answers recorded about one text are never
+taken for answers about another (`golden-stale`), and the gate's report
+(`converted`), its log and `DISAGREEMENTS.md` ("Records not read as stored") say
+which records were read converted.
 
 A rejection is **soft** when the source could not match the move text to any move
 it can generate (`no_matching_move`, `ambiguous_move`, `notation_mismatch`, or a
@@ -469,9 +511,15 @@ Read this with `DISAGREEMENTS.md` open; revisit it when a pin or the corpus move
   both stopped at the cap of 1000.
 - **No hard legality disagreement.** No oracle refuses, as illegal, an action
   another plays.
-- **Soft legality entries.** ftxi, Chess in 5D and the notation parser do not read
-  the long-algebraic move text of one record (`cwmtt/many2`), and the notation
-  parser does not read that of another (`cwmtt/100_timelines`, `a2a3`). ftxi finds
+- **Soft legality entries.** The notation parser does not read the long-algebraic
+  move text of one record (`cwmtt/100_timelines`, `a2a3`). (`cwmtt/many2`, written in
+  the official client's export form, had three more: ftxi, Chess in 5D and the
+  notation parser refused its first move, `(0T1)Pe2(0T1)e3`, which only cwmtt read.
+  Since CHECKPOINT 3 every source reads it converted to 5dpgn - "How a record
+  reaches the sources", above. Read so, ftxi and the notation parser replay all 62
+  of its actions and hold, at all 63 positions, the boards cwmtt held reading the
+  export form - ftxi with the same unmoved markers and the same 63 counts; `observe`,
+  2026-10-03.) ftxi finds
   no move matching two capture-marked jumps that cwmtt and the notation parser play
   (Chess in 5D plays one of them too); for that one ftxi ships its own copy of the
   record with the capture marker removed, which it then replays. The other is

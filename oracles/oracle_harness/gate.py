@@ -179,6 +179,9 @@ class GateResult:
     full_strength: bool = False
     margin: float = 1.0
     calibration: Probe | None = None
+    # record id -> how every source read it, for the records not read as stored:
+    # converted from the official client's export form, or given to no source (export_form.py).
+    converted: dict[str, str] = field(default_factory=dict)
 
     def findings(self) -> list[Finding]:
         return [finding for _, items in (*self.sections, *self.engine_sections) for finding in items]
@@ -712,7 +715,7 @@ def calibrate(lock: Lock, cfg: config.GateConfig, records: list[Record], referen
         return dataclasses.replace(probe, note=reason)
     options = RunOptions(cap=cfg.cap, timeout_s=PROBE_TIMEOUT_S, mate_budget_ms=cfg.recording.mate_budget_ms,
                          stop_after=(spec.positions - 1, "position"))
-    observation = source.observe(record.id, corpus.read(record, lock), options)
+    observation = runner.observe(source, record.id, corpus.feed(record, lock), options)
     index = spec.positions - 1
     arrived = observation.arrival_s[index] if index < len(observation.arrival_s) else None
     if arrived is None or index >= len(observation.positions) or not observation.positions[index].known():
@@ -755,6 +758,9 @@ def run_tier(
     result.partial = len(names) < len(tier.sources) or bool(only_records)
     if not records:
         result.sections.append(("records", [Finding("no-records", f"tier '{tier_name}' selects no corpus records: nothing was checked")]))
+    result.converted = {record.id: record.reading for record in records if record.reading}
+    for record_id, reading in result.converted.items():
+        log(f"{record_id}: {reading}")
 
     sources: list[Source] = []
     unavailable: list[Finding] = []
@@ -879,6 +885,8 @@ def _write_report(result: GateResult, results: runner.Results, cfg: config.GateC
         "ungated": result.ungated,
         "parse_agreement": asdict(result.parse) if result.parse is not None else None,
         "proof_channel": result.proof_channel,
+        # The records every source read other than as stored (export_form.py).
+        "converted": result.converted,
         # What a reader needs to tell a slow runner from a regression (H32).
         "budgets": budgets,
         "margin": result.margin,

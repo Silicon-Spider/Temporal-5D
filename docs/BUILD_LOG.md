@@ -15,7 +15,75 @@ M5 - building it would break a rule).
 
 ## Where things stand
 
-### CHECKPOINT 4 - STOPPED 2026-10-03: 6b′ fails at 50-199 boards (M15) - a design review
+### CHECKPOINT 5 - ruled 2026-10-03 (no stop): the window killed provisionally; Q2
+
+The user's rulings (design documents updated: M16 corrected, M18, H46, reversal 24,
+§13's size-premise entry):
+- **The window is killed, provisionally (M16); the weighting is not changed.**
+  Under 50 boards the per-phase rule decides, and a result inside the ±10% band
+  resolves to off with no stop. The window code stays unbuilt; a **pilot
+  self-play run** before serious self-play (M18) re-checks it - the first step
+  after §15.5, not part of the untrained build.
+- **The size premise was reasoning, not data** (reversal 24, §13): decisions
+  weighted by where compute goes (M7, C2, piece-centric tokenisation) use measured
+  game-length distributions - the human games now, the pilot run later.
+- **Q2 (H46, provisional): initial timelines count as created by neither player** -
+  always active, never counted. Built: a named variant's set-up reads every one of
+  its timelines as initial (Timeline Battleground's -1 and +1 had been read as
+  one creation each side - the same activity, since the count rule treats the
+  sides alike, but not "counted toward neither"); recorded as rulebook R10, the
+  rulebook re-pinned.
+- Continue as planned: E9 and E6a reviews and merges, E10, then 6b″ on a quiet
+  machine.
+
+### CHECKPOINT 4 - ruled 2026-10-03: the verification layer is v3 (§11.4); the run resumed
+
+The design review concluded (design documents committed e668555; register H1, H2,
+H6, H10-H12, H18, M5, M14 changed; C24, C25, H41-H45, M16, M17 and reversal 23
+added): exact rules always; the search's own solver for proofs, gated as part of
+the proof channel (H41: game-end scoring stays on, solved-status propagation and
+export off until the gate passes, the search's soundness fixes land with tests and
+the proof channel is signed off); **Guard** (H42) and **Hunt** (H43) at every size;
+full settling scans only under 50 boards; an offline audit lane (H44); the
+adversarial league primary above 50 boards (H45). Retired: the per-leaf estimate
+channel (rung 1), rungs 3 and 5; the NNUE held open (H6). The user's rulings:
+1. E8: carry its df-pn and incremental attack maps into Hunt and Guard; drop the
+   per-leaf estimate channel; review, then merge.
+2. Guard (H42): before the chosen move is played, iterative deepening from depth 1
+   under a fixed budget - can the opponent force mate against it? Depth 1 checks
+   only that one legal escape exists per opponent check. A refutation rejects the
+   move and triggers a re-search from §8.6's reserve.
+3. Hunt (H43): df-pn in prove-only mode at the root - stops at budget and claims
+   nothing; a found mate is a proof under H37 and H41's gating; its partial lines
+   as soft priors behind a flag, with §12.2's exclusions.
+4. The offline audit lane's tooling (H44): the decision sampler, the offline
+   proof runner, the per-range report of how often the chosen move allows a
+   shallow forced mate; curriculum hooks as interfaces only - no training.
+5. Hunt's ground truth: one long offline search per 6b position, recorded once,
+   pinned and hashed like the recorded answers.
+6. 6b″ (M17): same positions, per range, 5 threads, 50 ms; adopt Guard and Hunt
+   where each passes; record the verdicts. **No outcome stops the run.**
+7. The complexity trigger (C24) behind a flag alongside the refresh ladder's rung
+   1. Not built: C25, the NNUE (held open), the retired rungs (M5).
+8. Continue in CHECKPOINT 3's order: E6a's fixes and merge (with the H18
+   acting-player test), the many2 re-record, the gate with the engine configured,
+   then N5. Step 6 of the brief's "scanner ladder" reads as the reduced ladder:
+   Guard, Hunt and the asset map.
+M16 also fixed M7's readings; applied, the window is killed under human-game
+weighting, which contradicts M16's own premise - put to the user (MEASUREMENTS, M7).
+
+**Done since (2026-10-03):** network C24 merged (65acf68); **the many2 conversion
+merged** with the golden files re-recorded on a quiet machine (only many2's
+answers changed); **engine E6a merged** -
+the search core after its three adversarial reviews and their fixes, with H41's
+switch and H18's acting-player test (474 tests). **Running:** engine **E9** on
+E8's branch (Guard, Hunt, the asset map as components; the estimate channel
+dropped; Hunt's ground truth; the 6b″ tool). **Then:** E9's review and merge; E10 - Guard, Hunt, the asset map and the under-50 settling
+scans wired into the search, and the offline audit lane's tooling (H44); 6b″ on a
+quiet machine; the many2 re-record; the gate with the engine configured; N5.
+
+### The CHECKPOINT 4 stop (2026-10-03) - the record
+
 
 The verification redesign (M14) was built as a prototype (engine E8, branch
 `worktree-agent-a4f2f93a8a448467b`, bd08c48 - not merged: it waits on the design
@@ -194,48 +262,7 @@ with branch origins, C23); N3's CPU wall times.
   search (rung 1) and Lazy SMP, end-to-end play with the network's random weights,
   the NNUE only if 6b passes (M8).
 - **Waiting on the user:**
-  - **M7 - the window under 50 boards is in the STOP band** (2026-10-03,
-    MEASUREMENTS). §15.6: "per phase, the window is on at k = 8 where the measured
-    median |E| is under the k = 8 ceiling, on at k = 4 where only the k = 4 ceiling
-    is met, and off where neither is ... killed outright if the phases where it is
-    on carry under half the compute". On t0database's real games the window is on
-    at k = 8 from 50 to 186 boards (1.91x, 2.18x, 4.28x against 1.5x). Under 50
-    boards it is 1.60x at k = 4 and 1.45x at k = 8 - inside ±10% - and the kill
-    clause turns on that phase: 100% of compute on-phase if it is on, 21.8% (killed)
-    if it is off, 69.8% with 10-board phases. Three questions: (1) which reading
-    applies - (a) the 50-board bucket's median: on at k = 4; (b) finer phases (e.g.
-    10 boards): off under 20 boards, not killed; (c) the early game off and the
-    window killed under the human-game distribution; (2) is the multiplier
-    m = m_cached^0.9 · m_dense^0.1 (the only reading that reproduces §15.6's
-    table); (3) whose phase distribution weights the kill clause - human games
-    spend 88% of their moves under 50 boards, and self-play cannot be measured yet.
-    The window code stays parked until then; nothing else waits on it.
-  - **Q2** (rulebook) - *the question:* "How do initial timelines count when a
-    variant starts with several (Two Timelines, Tactician, Strategos, Formations,
-    Invasion, Battleground)? Does either side start as having "created" one? No
-    source states the rule." The only evidence is the 5dpgn author's two unverified
-    remarks about the program: "Internally in the game, `-0` is `-1`", and the
-    displayed index "gives a hint about who has or hasn't branching priority"
-    [25]. *The candidate readings:* **(A) none** (the engine's default,
-    `initial_credit = None`): initial timelines are nobody's creations; the count
-    rule (T10) counts created timelines only. **(B) "-0 is -1"**
-    (`MinusZeroToBlack`): in a game that starts with an even number of timelines,
-    Black counts as having created one already. (A mirror reading, White
-    credited, has no source at all and is not implemented.) *What each changes:*
-    only games that start with an even number of timelines - Two Timelines,
-    Tactician, Strategos, Formations, Invasion - and there only which branch is
-    active. Under (A) each side's first branch is active, and a side's second
-    only once the opponent has branched; under (B) White may create two active
-    timelines before Black branches, and Black's first branch is inactive until
-    White has branched once. Activity decides which boards are mandatory (R9),
-    where the present is, and which boards count for check (H36), so it changes
-    legal actions, check and mate in those variants. Odd starts (Battleground's
-    three timelines) are the same under both. A non-default choice changes the
-    ruleset ID and the Zobrist key. *On today's evidence nothing distinguishes
-    them:* the corpus's only even-start record (`notation/invasion`) is a
-    variant the engine does not set up, the Battleground record answers
-    identically under both, and t0database's games are all Standard - Turn Zero.
-    It matters only if self-play or the gate plays those variants.
+  - Nothing at present (2026-10-03, CHECKPOINT 5 answered M7 and Q2).
 
 ## The brief - standing rules for every session
 
@@ -299,6 +326,9 @@ threads reach at least one thread's sum (one retry on a shared machine).
 |---|---|---|---|---|---|---|---|---|
 | 2026-10-03 | E7 | 2e7ee18 (E7's branch, main merged in) | dev, 24 logical; E8 running; load 5-12% before, 12-26% during | 32 | 293 | 311 / 313 / 309 (three runs) | none | pass x3 |
 | 2026-10-03 | E7 | main + E7, merged tree before the commit | dev, 24 logical; E8 running; load 23% | 32 | 293 | 311 / 311 / 313 (three runs) | none | pass x3 |
+| 2026-10-03 | E6a | ef3830f (E6a's rebased branch, before review) | dev, 24 logical; shared | 32 | 293 | 311 / 313 / 313 | none | pass x3 |
+| 2026-10-03 | E6a | 9c49a47 (E6a after its review fixes) | dev, 24 logical; load 79-88% | 32 | 292 | 304 / 307 / 308 | none | pass x3 |
+| 2026-10-03 | E6a | main + E6a, merged tree before the commit | dev, 24 logical; E9 running; load 8% | 32 | 293 | 313 / 313 / 313 | none | pass x3 |
 
 ## Environment
 
@@ -697,16 +727,23 @@ for game records.
 
 | ID | Status | Notes |
 |---|---|---|
-| H1 | built, tested | Engine E5b's scanner: node-capped alpha-beta over forcing actions; not yet in a search |
-| H2 | built, tested | Proofs only from E4's exhaustive verdicts and exhaustive defender enumerations; estimates otherwise |
+| H1 | v3 (CHECKPOINT 4), in progress | Verification v3 (§11.4): exact rules (E1-E4); the search's solver (E6a, gated by H41); Guard and Hunt (E9, building); full settling (df-pn, E8) under 50 boards; the audit lane (H44). E5b/E5c's brute-force scanner stays as 6b′'s comparison |
+| H2 | built, tested | Proofs only from E4's exhaustive verdicts and exhaustive defender enumerations; estimates otherwise. The search (E6a) consumes in-tree bounds only behind H41's switch |
 | H3 | built, tested | Node cap with iterative deepening in forcing half-turns; horizon per budget measured (6b) |
 | H4 | built | MVV-LVA, killers, history, continuation history |
 | H5 | built | Nothing speculative; null move and LMR not built |
 | H6 | built (v1) | Material count with placeholder 5D piece values (spec issue 56); NNUE v2 waits on 6b (M8) |
 | H7 | not built (rule) | NNUE training: no training runs; NNUE waits on 6b |
 | H8, H9, H20, H21 | not built (rule) | Held open / refused |
-| H10-H14 | parked | Async ladder rungs: with the scanner |
-| H15 | built, tested | The scanner's deterministic single-thread mode; search's (E6a) in progress |
+| H10 | reduced (CHECKPOINT 4) | Rung 1 dropped (6b); rungs 3 and 5 retired; rung 2's promotion side is Guard, its demotion audit the audit lane; rung 4, the asset map, building (E9) |
+| H11 | superseded | By Guard (promotion) and the audit lane (demotion audit) |
+| H12 | retired | With the NNUE and the per-node scans |
+| H13, H14 | parked | Ladder scheduling: with the search wiring (E10) |
+| H41 | built, tested | `SearchParams::proof_channel` (C `proof_channel`, `t5d-play --proof-channel`): propagation of solved status (marking nodes solved, pruning siblings, secure-child selection) and export, off by rule; game ends are scored as results. Was: building | The search's solver as part of the proof channel: game-end scoring on; propagation and export off until the gate passes (E6a's fix round) |
+| H42, H43 | building | Guard and Hunt (E9); adoption per range by 6b″ |
+| H44 | not started | The offline audit lane's tooling (E10) |
+| H45 | not built (rule) | The adversarial league (M5) |
+| H15 | built, tested | The scanner's deterministic single-thread mode; the search's synchronous mode and digest (E6a; the digest in the C API) |
 | H16, H25, H29 | not built (rule) | Refused |
 | H17 | built in part | Lazy SMP in the scanner (E5c): same-root threads, a shared TT and a concurrent solved store; in-game decay and rung helpers wait for the search |
 | H18 | built, tested | 5D Zobrist: coordinate-free content hash per board, multiply-rotate with (timeline, half-turn), addition across boards, ruleset ID, player to move, parity, creators, board size; incremental equals from-scratch; duplicated boards never cancel (engine E1, E2) |
@@ -750,24 +787,29 @@ for game records.
 | C3, C3a (rung 1) | built, tested | Root refresh and the travel-triggered, visit-gated rung-1 fork (copy-on-write epochs), behind flags |
 | C3a (rungs 2-3), C18, C22 | not built (rule) | Held open (M5 for rungs 2-3) |
 | C5, C7 | parked | Window code only after the \|E\| verdict (M7) |
-| C11 | not started | MCGS behind a flag; search on real positions waits on legality |
-| C12, C13 | not started | Persistence (search); frozen K/V already persist across roots under C20's first reading |
+| C11 | built behind a flag, tested | MCGS (E6a): identity is the state key and whether an action is in progress, compared exactly (§8.5's state, issue 87); awaiting 6k |
+| C12, C13 | built, tested | Re-rooting with garbage collection, the persistence hook and pondering (E6a) |
+| C14 | built, tested | Fresh searches per decision in self-play; the evaluation cache shared across them, purged by board count (issue 89); the C API's `t5d_search_new_sharing` |
+| C23 | built, tested | The node key's default carries branch origins (lineage, `NodeKey::StateAndOrigins`) |
 | C15 | built in part | FP8 e4m3 frozen K/V (`frozen_kv_format = "fp8"`, applied by the forward itself); varlen/ragged kernels not built (none on CPU); C15 vs G1 is spec issue 34 |
 | C16 | not built (rule) | Deferred; last, only if node-starved |
 | C21 | not built (rule) | Refused; a mutant that snapshots is caught by the tests |
 | D1, D3, D4 | built, tested | Network N1: pointer policy, 51-bin value head, auxiliary heads (D4's reply space, label set and moves-left unit are placeholders, spec issue 9) |
-| D2 | not started | Undecided: both arms awaited by trained ablations 6g/6k |
-| E1, E5, E7, E9 | not started | Search |
-| E2, E3, E8 | not started | Behind flags |
+| D2 | built, tested | Both arms (`SearchParams::split`: the board-move split, default, and whole turns); awaiting trained ablations 6g/6k |
+| D8 | built (engine, search) | Submit is an explicit edge, legal only when C4 holds, never automatic; the acting player and submit flags through the C step API; the network side (the submit logit, the acting-player input) is N5 |
+| E1, E5, E9 | built, tested | PUCT with entropy-adaptive top-k widening, FPU, root noise in self-play (E1); LCB with a visit floor (E5); the solver behind H41's switch, the secure child, a visit cap on solved children (E9) - every constant a placeholder (issues 80-86) |
+| E7 | not started | Time management (with E10's Guard re-search reserve) |
+| E2, E3 | built behind flags, tested | Off; awaiting 6m and 6t |
+| E8 | not started | Behind a flag |
 | E6 | not built (rule) | Refused |
 | F1, F2 | built, tested | 21,358,601 parameters (F1); the L24-ff12 preset, 44.5M (F2) |
 | F3 | not built (rule) | Refused |
-| F4 | parked | NNUE only after 6b passes (M8) |
+| F4 | not built (rule) | The NNUE is held open (H6, CHECKPOINT 4) |
 | G1 | built, tested | BF16 trunk under autocast; FP32 heads and RoPE; the cache stores K/V in the live format (§15.2 row (e)) |
 | G2 | not started | FP8 attention - no FP8 kernels on this machine |
 | G3, G4, G5, G6 | not built (rule) | Deferred / held open / refused |
 | I1-I10 | not started | Training code may be written and smoke-tested only; I7 and I8 not built (M5) |
-| I11 | not started | Self-play's turn cap from the state, scored as a draw, its frequency logged: with self-play |
+| I11 | built, tested | Self-play's turn cap from the state (and t5d-play's 300-board cap), scored as a draw, its frequency logged (issue 88) |
 
 ### M - the plan itself
 
@@ -775,7 +817,13 @@ for game records.
 |---|---|---|
 | M14 | built (prototype), measured - STOP | Engine E8 on its branch (bd08c48): the channel split, df-pn over the semimove turn tree, incremental attack maps; 6b′ fails at 50-199 boards (M15) |
 | M15 | measured - STOP | 6b′ on a quiet machine: (A) 77.4% / 40.7% / 23.7% / 0.0%; (B) fits in no range; (C) df-pn 408 against brute force 400 under 50 boards - STOP, a design review |
-| M7 | measured - STOP | On real games (t0database, 716 games, max 186 boards): on at k = 8 from 50 to 186 boards; under 50 boards inside the ±10% band and the kill clause turns on it - waiting on the user; above 186 provisional (MEASUREMENTS) |
+| M16 | applied, confirmed | M7's readings (corrected at CHECKPOINT 5): time-share multiplier, human-game weighting, the per-phase rule under 50 boards with the band resolving to off - the window is killed, provisionally |
+| M18 | not started (rule) | A pilot self-play run before serious self-play re-checks the window and the other compute-weighted decisions - after §15.5, not in the untrained build |
+| H46 | built, tested | Q2 (provisional): initial timelines count as created by neither player - a variant's set-up reads every timeline as initial (rulebook R10) |
+| M17 | not started | 6b″: Guard and Hunt per range (E9's tool; quiet run to follow); no outcome stops the run |
+| C24 | built, tested | The refresh ladder's complexity trigger behind a flag (`CacheConfig.complexity_refresh`, off; prototype, gated like rung 1 on 6c's existence test); add-only over rung 1 for every signal; every number a placeholder (spec issues 75-79) |
+| C25 | not built (rule) | Held open |
+| M7 | measured; killed, provisionally (M16, CHECKPOINT 5) | On real games (t0database, 716 games, max 186 boards): on at k = 8 from 50 to 186 boards; under 50 boards inside the ±10% band and the kill clause turns on it - waiting on the user; above 186 provisional (MEASUREMENTS) |
 | M8 | measured - STOP | 6b re-run (M12): root scan 76.7% / 31.4% / 24.7% / 2.4% by range (< 50 / 50-99 / 100-199 / 200+); rung 1 and quiet-leaf reach fail everywhere; stand-pat valid |
 | M12 | applied - STOP | The bounded optimisation pass (E5c) and the re-run at 5 threads, Lazy SMP: 50-199 boards fail -> STOP, redesign the verification layer |
 | M13 | applied | 8 cores per GPU: M9 judged on 2 expansion cores (passes, 1.87x), the scanner measured at 5 |
@@ -1162,6 +1210,77 @@ decision), and what is parked.
     listings elsewhere.
 74. **Disproofs need a home**: H19 and §11.3 cover proofs only; E8 keeps
     class-relative disproofs in a separate store, never the solved store.
+75. **C24's rule is unspecified** (§7.9, register C24): four candidate signals
+    joined by "or", with no combination rule, threshold or weights. Built as a
+    weighted sum against a threshold, every number a named placeholder (threshold
+    1.0; 1/128 per board, 1/8 per active timeline, 1/2 per travel move, 1/12 per
+    effort bin). Tuning belongs to 6c, if rung 1 shows a signal.
+76. **C24's visit gate and per-search bound**: the spec gives none. §7.9's
+    breakeven argument (one whole-scope refresh is about ten node evaluations)
+    applies, so the build uses rung 1's V = 50; "epochs must be bounded per search"
+    has no number - C24 is capped at 8 refreshes per search (rung 1's are neither
+    counted nor blocked). C24 never refreshes the root (C3's job).
+77. **"Travel since the last refresh" is undefined**: built as every travel move,
+    branching or not, on the path from the node's epoch anchor (its nearest
+    refreshed ancestor, else the search root) down to the node, its own move
+    included.
+78. **The effort head as a node-level signal**: §8.6's labels are root-search
+    efforts; C24 reads the parent's evaluation off-label at internal nodes - the
+    bin at quantile 0.5 (placeholder). An unevaluated parent contributes nothing.
+79. **Does C24 sit on top of rung 1 or replace it?** The spec says "a ladder
+    variant", the register "add-only if self-rated". Built as an OR with rung 1
+    decided first and unchanged, add-only for every signal against the flag-off
+    configuration; whether a structural signal may ever subtract from rung 1's
+    trigger is not ruled.
+
+80. **The submit prior** (D8, §8.2) until the network's submit logit exists: a
+    placeholder `submit_share` 0.5 of a decision's prior. With logit 0 beside N
+    flat move logits, untrained actions played nearly every optional board (one
+    game: 101 moves in 14 actions, 54 timelines by action 16).
+81. **§8.2's whole-turn action prior** from single-move logits: the sum is built,
+    the mean a flag.
+82. **E1's forms**: entropy-adaptive top-k widening, FPU (applied to unvisited
+    *instantiated* children - §8.4 says uninstantiated), root Dirichlet α at 5D
+    branching - every constant a placeholder.
+83. **E2's and E3's formulas and constants** (behind flags).
+84. **E9**: "a visit threshold for solved nodes" read as a per-child visit cap of
+    8; the secure child as Q − A/√n with A = 1.
+85. **E5's LCB**: z = 3, a 15% visit floor, categorical weight 0.
+86. **MCGS residuals** (C11): how a shared node's value is backed up through
+    several parents.
+87. **§8.5's "values depend only on the state"**: the state must include whether
+    an action is in progress - a turn start and a mid-action state can share
+    every board and the acting player (two reviews found graph search merging
+    them, pruning a legal mating submission). Built: MCGS identity is (key, turn
+    start); the network is never told whether a leaf is a turn start.
+88. **The turn cap's definition** (I11) and its record: "*" with a Termination
+    header for capped records; t5d-play's default 300-board cap (a uniform
+    Standard game reached 509 boards before turn 20).
+89. **C14**: the evaluation cache shared across self-play's fresh searches,
+    keyed by state, purged by board count at creation and re-root.
+90. **The legality policy (a)-(f) as built** (issue 46, proposal 43): unknown
+    moves kept but never feeding proofs, verified when first selected.
+91. **The material evaluator's piece values** follow issue 56's placeholders.
+92. **D8's whole-turn half is unbuilt**: the whole-turn arm has no end-of-turn
+    token (the submit logit is ignored there; the C API reports submit_possible
+    = 0).
+93. **Memory**: about 80 bytes per eagerly stored edge; the whole-turn listing
+    cap lowered from 4096 to 256 actions per node (1.5 MB per node at 103 boards
+    before); actions are not stored lazily.
+94. **The search's mate-check budget** against the near-mate tail.
+95. **At large N, legality classification dominates self-play time** (41 of 43 s
+    at 336 boards; 56 s of the board-capped Standard smoke games).
+(The in-tree solver before the gate, an E6a draft issue, is settled by H41.)
+
+96. **The corpus's export-form record** (§11.0 "the game corpus is in its format";
+    H28): cwmtt/many2 is written in the official client's export form - every move
+    names its board twice, the notation specification's "Export moves", which the
+    specification itself calls "still a proposal". Only cwmtt read it. Ruled at
+    CHECKPOINT 3 and carried out in the harness: cwmtt's side of the harness
+    converts the text, and every source - the engine included - reads the
+    converted text (converting for cwmtt alone would change nothing); a record the
+    specification cannot express is given to no source. H28's "every source reads
+    the record as stored" now has this one exception.
 
 ## Proposed spec edits
 
@@ -1343,6 +1462,45 @@ says now, what it should say, why.
     per-range figures (MEASUREMENTS, 6b′) (issues 71, 72).
 60. **The register, M14 and M15**: 6b′ measured - STOP; the design review's
     outcome to follow.
+61. **§7.9 "Complexity as a trigger"**: state the rule as built (a weighted score
+    against a threshold; rung 1's visit gate; a per-search budget; never the root;
+    travel from the epoch anchor; effort from the parent's evaluation at a
+    quantile; add-only for every signal, rung 1 decided first and unchanged), name
+    the placeholders, and give their tuning to 6c (issues 75-79).
+62. **Register C24**: "add-only if self-rated" -> "add-only (as built, for every
+    signal; rung 1 decided first)", noting "built behind a flag, off" (issue 79).
+63. **§8.6, the effort head**: a second consumer - C24 reads the parent's predicted
+    difficulty at internal nodes (off-label, confidence-family, add-only) (issue
+    78).
+64. **§8.5**: "values depend only on the state" -> the state includes whether an
+    action is in progress; a turn start and a mid-action state with equal
+    boards are different nodes; the network input is unchanged (issue 87).
+65. **§15.4's invariants**: add - a submit edge leads to a turn start, a move
+    edge to a mid-action state; no game end during an action; no dead end with a
+    legal completion.
+66. **§8.7 / C14**: the shared, state-keyed evaluation cache and its board-count
+    purge (issue 89).
+67. **§8.2's whole-turn arm**: the listing cap's memory role, and the missing
+    end-of-turn token (issues 92, 93).
+68. **§8's solver text** points at H41's switch (`proof_channel`).
+69. **§8.4**: name E1's, E2/E3's, E5's and E9's constants, the submit prior and
+    the whole-turn prior as parameters with placeholder defaults (issues 80-85).
+70. **I11 / §8.6**: the turn cap's definition and the capped record's
+    Termination header (issue 88).
+71. **Register H28 and §11.0 ("Third-party code", the notation specification's
+    row)**: H28 now says "Own 5dpgn/5dfen parser, written from the pinned notation
+    specification - a shared parser corrupts both sides of a comparison
+    identically"; the row says "the game corpus is in its format". Append to H28:
+    "The engine's parser reads the specification's 5dpgn and is not extended to
+    other notations. Every source is given the same text of a record; the one
+    exception (CHECKPOINT 3): a corpus record in the official client's export
+    form is converted by the harness to the specification's 5dpgn, as notation
+    only, never reading the position, and every source, the engine included,
+    reads the converted text; a record with a move the specification cannot
+    express is given to no source." The row: "the game corpus is in its format (a
+    record in the official client's export form is converted to it before any
+    source reads it - CHECKPOINT 3)". Optionally H27/H33: the pinned corpus pins
+    the converted text too. Why: the CHECKPOINT 3 ruling (issue 96).
 
 ## Session log
 

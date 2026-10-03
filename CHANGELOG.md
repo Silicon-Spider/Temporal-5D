@@ -10,6 +10,162 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-03 - Oracle harness: cwmtt/many2 read converted to 5dpgn by every source (CHECKPOINT 3); golden files re-recorded
+
+- `oracles/oracle_harness/export_form.py` (new; merged from its worktree branch)
+  carries out the user's ruling: "the cwmtt driver converts the export form to the
+  canonical 5dpgn form from the pinned notation spec; if it expresses something
+  the spec can't, mark the record unsupported. The engine's parser is not
+  extended." A move that names its board twice on one board (the specification's
+  "Export moves", `(0T1)Pe2(0T1)e3`) becomes the specification's physical move
+  (`(0T1)Pe2e3`; castling `(0T6)Ke1g1`). Nothing is added - no capture, check or
+  promotion mark, which would mean reading the position - and every other byte is
+  copied. A move to another board without `>`/`>>`, other text with a board
+  straight after a square, or the export form's `w.`/`b.` turns make the whole
+  record unsupported. Written from the specification's text, not from any
+  oracle's parser.
+- `corpus.feed` (cwmtt's side of the harness, which supplies its records) converts
+  a cwmtt record in the export form, and every source reads the converted text -
+  the engine included, still on standard input; converting only what cwmtt reads
+  would change nothing. A record no source is given is reported unsupported
+  (`export_form`) for every source. Every other record is fed byte for byte as
+  before. The manifest pins what the sources read (`converted`), checked by
+  `verify` and every read; golden files and known divergences name a converted
+  record by that hash. The gate's log and report and DISAGREEMENTS.md ("Records not
+  read as stored") name converted records. many2: 153 of 204 moves rewritten.
+- `oracles/golden/*`, `oracles/DISAGREEMENTS.md`: re-recorded with `golden --write
+  --repeat 2` on a quiet machine (2026-10-03, 30 min). Only cwmtt/many2's answers
+  changed, in every file: ftxi, Chess in 5D and the notation parser now read the
+  game they refused at its first move (ftxi and the notation parser all 63
+  positions at the commit tier); cwmtt's two answers are unchanged but for the
+  record's hash. What each tier requires: more values everywhere (ftxi 7,760 ->
+  8,256; notation 2,765 -> 3,012); ftxi:naive's many2 outcome, "rejected after 0
+  actions" when it could not read the record, is now a run cut at its 300 s budget
+  at position 16, so its nightly and release tiers require one outcome fewer (33
+  -> 32), as does Chess in 5D's nightly tier (41 -> 40) - more checking of many2,
+  not less. `verify`'s informational proof-channel notes: 17 (16 before).
+- Tests: `oracles/tests/test_export_form.py` (21) and a gate-run test; selftest 623
+  OK; verify, the commit-tier gate green. `oracles/README.md` ("How a record
+  reaches the sources"; the soft legality entries).
+- Spec: §11.0 ("Third-party code"), register H28 (and H27/H33): the one exception
+  to "every source reads the record as stored" - spec issue 96, proposed spec edit
+  71 in `docs/BUILD_LOG.md`.
+
+### 2026-10-03 - Engine E6a: the search core - PUCT/MCGS, both D2 arms, the solver behind H41, self-play, the C step API
+
+- `engine/` (merged from its worktree branch after three adversarial reviews and a
+  fix round):
+  - `t5d/mcts.hpp`: PUCT with entropy-adaptive top-k widening, FPU and root
+    Dirichlet noise (E1; noise on in self-play, off in match play); E2 and E3
+    behind flags; both D2 arms (the board-move split, default, and whole turns);
+    MCGS behind a flag (C11), its identity the state key and whether an action is
+    in progress, compared exactly; the solver's bounds from E4's exhaustive
+    verdicts only, their propagation and export behind `proof_channel`, off by rule
+    (H41) - game ends are still scored as results; final selection by LCB with a
+    visit floor (E5) and the secure child (E9); re-rooting with garbage
+    collection, persistence and pondering (C12, C13); virtual loss; the
+    synchronous mode and digest (H15); E5a's legality tiers under the (a)-(f)
+    policy; node, memory and time budgets with a stop reason.
+  - D8 and R8: submitting is an explicit edge, offered where the obligations are
+    met, legal only when C4 holds, never automatic; the acting player's value
+    perspective; game ends only at turn starts (C5, E4's exhaustive detector);
+    dead ends during an action pruned, never scored; the node key with the acting
+    player (H18) and branch origins (C23).
+  - `t5d/selfplay.hpp`: fresh searches per decision with a shared, board-count
+    purged evaluation cache (C14), match play, the turn cap (I11), safety stops.
+  - `t5d/capi_search.h`: the step API for an external evaluator (logits, submit
+    logits, values as probabilities or logits), cache sharing, run limits, the
+    digest, `t5d_search_layout`; embedded provisional structs last; caller errors
+    and internal errors told apart.
+  - `t5d-play`: self-play and match play to 5dpgn records (rules through the
+    shared option reader, a 300-board default cap, `--proof-channel`,
+    `--no-noise`).
+- The reviews' findings (16) all fixed or logged: MCGS merging a turn start with a
+  mid-action state (two reviewers; a legal mating submission pruned), the solver
+  on before the gate, an `advance_action` that changed the tree on failure, epoch
+  changes under a waiting batch, a leaking submit logit, an evaluation cache that
+  never evicted and undercounted its bytes, no memory ceiling, non-append-stable C
+  structs, exception safety, validation gaps, a deadline checked only at turn
+  starts; 16 surviving mutations now killed (53 of 53 that build).
+- Tests: 474 (`--werror`; the search's share 84); the Lazy SMP timing test three
+  times before the merge (logged); verify, boundary and the commit-tier gate green.
+- `docs/BUILD_LOG.md`, `docs/MEASUREMENTS.md`: register D2, D8, E1-E3, E5, E7-E9,
+  C11-C14, C23, H2, H15, H41, I11; spec issues 80-95 and proposed spec edits 64-70;
+  the timing log; the search's memory accounting and smoke games.
+- Spec: §8.1-8.7, §11.1 item 2, §15.4; register D2, D8, E1-E9, C11-C14, C23, H2,
+  H15, H18, H19, H23, H41, I11.
+
+### 2026-10-03 - Network: the refresh ladder's complexity trigger (C24), behind a flag
+
+- `python/t5d/net/complexity.py` (new; merged from its worktree branch): C24 as
+  ruled at CHECKPOINT 4 ("goes behind a flag alongside the refresh ladder's rung
+  1"): the signals - the node's board count and active timelines (structure), its
+  travel since its last refresh (the tree's path), the parent's predicted
+  difficulty from the effort head (§8.6, the bin at a quantile) - and the rule, a
+  weighted sum against a threshold.
+- `python/t5d/net/cache.py`: `CacheConfig.complexity_refresh` (prototype, off by
+  default) and its named parameters, every number a placeholder: threshold 1.0;
+  weights 1/128 per board, 1/8 per active timeline, 1/2 per travel move, 1/12 per
+  effort bin; effort quantile 0.5; visit gate 50 (rung 1's V); at most 8
+  complexity refreshes per search.
+- `python/t5d/net/tree.py`: `SearchTree.visit` decides rung 1 first, unchanged,
+  then C24 where rung 1 did not fire - add-only for every signal;
+  `travel_since_refresh`; `Node.effort_logits` (the parent's output, recorded
+  when the flag is on) and `Node.refreshed_by`. The node's own outputs are never
+  read. A complexity refresh is rung 1's copy-on-write fork, at another node.
+- Tests: `python/tests/net/test_complexity.py` (18): off changes nothing (bitwise
+  rung 1 alone); on is add-only and fires by its rule; the effort signal is the
+  parent's; the decision evaluates nothing; determinism; the fork; 13 mutants of
+  the trigger killed. Python 649 passed, 2 skipped; ruff clean.
+- Not built: C25 and the scanner NNUE (held open). No training commitment.
+- Spec: §7.9 "Complexity as a trigger", §8.6 (the effort head); register C24,
+  C3a; spec issues 75-79 and proposed spec edits 61-63 in `docs/BUILD_LOG.md`.
+
+### 2026-10-03 - CHECKPOINT 5: the window killed provisionally; Q2 ruled - initial timelines created by neither player (H46)
+
+- `docs/design/`: the upstream revision recording CHECKPOINT 5 - M16 corrected (under
+  50 boards the per-phase rule decides; a result in the ±10% band resolves to off;
+  the window killed, provisionally), M18 (decisions weighted by where compute goes
+  use measured game-length distributions; a pilot self-play run before serious
+  self-play), H46 (Q2), reversal 24 and §13's size-premise entry. Copied in
+  unchanged.
+- `docs/rules/README.md`: ruling R10 (Q2; H46, a provisional project decision):
+  initial timelines count as created by neither player - always active, never
+  counted toward either player's created timelines; Q2 closed provisionally; T10
+  and L8 point to it. Rulebook re-pinned in `oracles/gate.toml` after review (no
+  known divergence cites the changed passages); the gate re-run.
+- `engine/`: a named variant's set-up now reads every one of its timelines as
+  initial (`multiverse_from_fen` / `game_from_fen`'s `all_initial`, used by
+  `variant_start`): Timeline Battleground's -1 and +1 have no creator and do not
+  count toward either player's created timelines (they had been read as one
+  creation each side - the same activity, since the count rule treats the sides
+  alike, but a different Zobrist key and creator feature). Plain 5DFEN keeps its
+  convention (its numbering implies a creator). `initial_credit`'s default cites
+  R10/H46; its alternative stays for diagnosis. Tests: a new H46 test over every
+  multi-timeline set-up; the Battleground and round-trip tests follow H46; the
+  expansion reference test now draws unknown origins from positions read back
+  from 5DFEN. 390 tests; the gate's output on cwmtt/ctp2 (Battleground) is
+  byte-identical.
+- `docs/BUILD_LOG.md`, `docs/MEASUREMENTS.md`: CHECKPOINT 5's rulings; register
+  M7, M16, M18, H46; nothing waits on the user. `CLAUDE.md`: rulings R1-R10.
+- Spec: §11.0 item 2, register H46 (built as ruled); M16, M18, reversal 24, §13
+  (recorded); rules T10, T13, L8, Q2, R10.
+
+### 2026-10-03 - Build log: CHECKPOINT 4's ruling; M7 re-read under M16
+
+- `docs/BUILD_LOG.md`: CHECKPOINT 4 concluded - verification v3 (§11.4) and the
+  user's eight rulings (E8 into Guard and Hunt, Guard, Hunt, the audit lane's
+  tooling, Hunt's ground truth, 6b″, the complexity trigger, and CHECKPOINT 3's
+  order), what is running and what follows; register rows H1, H10-H14, H41-H45,
+  F4, M16, M17, C24, C25 and M7.
+- `docs/MEASUREMENTS.md`: M7 re-read under M16's readings: on at k = 8 from 50 to
+  186 boards (1.83x, 2.10x, 3.81x by the time-share multiplier), off under 50
+  boards - and then killed by the kill clause, the on-phases carrying 18-38% of the
+  compute under the human-game weighting M16 prescribes. That contradicts M16's
+  premise that the under-50 phase is a small share; put to the user. Not a stop.
+- Spec: §11.4, §15.6 (M16, M17, the window's rule); register H1, H10-H14,
+  H41-H45, M7, M16, M17, C24, C25.
+
 ### 2026-10-03 - Design documents: the CHECKPOINT 4 ruling (verification v3), from upstream
 
 - `docs/design/` replaced with the upstream revision recording CHECKPOINT 4: §11.4

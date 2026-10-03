@@ -13,7 +13,11 @@ A golden value is a statement by that oracle, not a statement of truth.
 
 The files hold verdicts, and hashes of what each oracle set up - never an
 oracle's free-text messages, which quote the record they are about, and no
-record is redistributed from here. A row is one position: the columns of
+record is redistributed from here. Each record's entry names the text its
+answers are about by its SHA-256: the stored record's, or - for a record read as
+converted from the official client's export form (export_form.py) - the
+converted text's, so that answers about one text are not taken for answers
+about another. A row is one position: the columns of
 observations.ROW_FIELDS, the answers and then the fingerprint, placement hash,
 and board and piece counts of the oracle's state event.
 
@@ -86,7 +90,7 @@ class Horizon:
 class Golden:
     source: str
     signature: dict
-    sha256: dict[str, str]  # record id -> hash of the record these answers are about
+    sha256: dict[str, str]  # record id -> hash of the text these answers are about (Record.fed_sha256)
     observations: dict[str, Observation]
     recordings: int = 1
     horizon: dict[str, Horizon] = field(default_factory=dict)  # record id -> where its run was cut
@@ -204,7 +208,7 @@ def dump(source: str, signature: dict, records: list[Record], recorded: dict[str
         item = recorded[record.id]
         data = observations.to_json(item.observation)
         lines.append(f"    {json.dumps(record.id)}: {{")
-        lines.append(f'      "sha256": {json.dumps(record.sha256)},')
+        lines.append(f'      "sha256": {json.dumps(record.fed_sha256)},')
         for key in _RECORDED:
             lines.append(f'      "{key}": {json.dumps(data[key])},')
         if item.horizon is not None:
@@ -433,7 +437,8 @@ def verify_static(sources: list[Source], options_for, records: list[Record], sna
     ``snapshot`` holds the files as they were read and verified (snapshot.py).
     """
     findings: list[Finding] = list(snapshot.manifest_problems)
-    expected = {record.id: record.sha256 for record in records}
+    expected = {record.id: record.fed_sha256 for record in records}
+    readings = {record.id: record.reading for record in records}
     for source in sources:
         problem = snapshot.problems.get(source.name)
         if problem:
@@ -464,7 +469,9 @@ def verify_static(sources: list[Source], options_for, records: list[Record], sna
             findings.append(Finding("golden-orphan", f"{name}: entry for {record_id}, which is not in the corpus"))
         for record_id in sorted(expected.keys() & golden.sha256.keys()):
             if golden.sha256[record_id] != expected[record_id]:
-                findings.append(Finding("golden-stale", f"{name}: {record_id} was recorded for different record content"))
+                now = f" (the record is now {readings[record_id]})" if readings[record_id] else ""
+                findings.append(Finding("golden-stale", f"{name}: {record_id} was recorded for different record "
+                                                        f"content{now} - re-record ({RERECORD}) and review the diff"))
             observation = golden.observations[record_id]
             for problem_text in [*observations.validate(observation), *_problems(golden, record_id)]:
                 findings.append(Finding("golden-invalid", f"{name}: {record_id}: {problem_text}"))
@@ -695,6 +702,19 @@ def render_disagreements(records: list[Record], loaded: dict[str, Golden], requi
         )
     if required is not None:
         lines += ["", *required]
+    converted = [record for record in sorted(records, key=lambda item: item.id) if record.reading]
+    if converted:
+        lines += [
+            "",
+            "## Records not read as stored",
+            "",
+            "Decision H28 has one exception, ruled at CHECKPOINT 3: a record of cwmtt's in the official",
+            "client's export form, whose moves name their board twice (`(0T1)Pe2(0T1)e3`), is converted to",
+            "the notation specification's 5dpgn (`oracles/oracle_harness/export_form.py`) before any source",
+            "reads it, and everything here about it is about the converted text.",
+            "",
+            *[f"- `{record.id}`: {record.reading}" for record in converted],
+        ]
 
     lines += [
         "",

@@ -28,6 +28,7 @@
 
 #include "synthetic.hpp"
 #include "t5d/expand.hpp"
+#include "t5d/fen.hpp"
 #include "t5d/movegen.hpp"
 #include "t5d/multiverse.hpp"
 #include "t5d/records.h"
@@ -545,6 +546,16 @@ void check_moves_by_piece(const GameState& s) {
   CHECK(all == by_piece);
 }
 
+// A position read back from its 5DFEN board strings, the player to move given.
+GameState read_back(const GameState& s) {
+  std::vector<std::string> strings;
+  s.multiverse().for_each_board([&](int p, int h, const Board& b) {
+    strings.push_back(fen_board_string(b, p, h, s.multiverse().even()));
+  });
+  return game_from_fen(strings, s.multiverse().board_size(),
+                       s.multiverse().even() ? Parity::Even : Parity::Odd, s.rules(), s.to_move());
+}
+
 void run(const char* variant, std::uint64_t seed, int target_boards, int target_active,
          const RuleOptions& rules = {}, bool active_branches_only = true) {
   synthetic::Spec spec;
@@ -562,6 +573,13 @@ void run(const char* variant, std::uint64_t seed, int target_boards, int target_
     if (a % 3 == 0) {
       compare(s, a % 2 == 0);
       check_moves_by_piece(s);
+      // The same position read back from its 5DFEN board strings: 5DFEN
+      // records no origin, so its created timelines' origins are unknown.
+      if (a % 2 == 1 && s.multiverse().created_by(Colour::White) +
+                                s.multiverse().created_by(Colour::Black) >
+                            0) {
+        compare(read_back(s), true);
+      }
     }
     // Into the action: the position after its first move, mid-action.
     GameState mid = s;
@@ -584,7 +602,7 @@ TEST(expand_agrees_with_the_reference_on_random_positions) {
   run("Standard", 11, 70, 4);
   run("Standard - Two Timelines", 12, 60, 4);  // an even game: labels -0, +0
   run("Standard - Turn Zero", 13, 50, 3);      // a T0 history board
-  run("Misc - Timeline Battleground", 14, 60, 5);  // 5x5, three timelines, no origins
+  run("Misc - Timeline Battleground", 14, 60, 5);  // 5x5, three initial timelines (H46)
   run("Very Small - Open", 15, 50, 4);             // 4x4
   run("Focused - Just Brawns", 16, 50, 3);         // brawns
   run("Standard - Reversed Royalty", 17, 50, 3);   // royal queens, common kings
