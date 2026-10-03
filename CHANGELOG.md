@@ -10,6 +10,15 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-04 - Engine CI: the prover's hash constants typed for g++ 13/14
+
+- `engine/src/prover.cpp`: the prover's 64-bit hash constants are written as
+  `std::uint64_t{...}` instead of `ull` literals. On Linux `std::uint64_t` is
+  `unsigned long`, and g++ 13 and 14 rejected one expression mixing the two under
+  `-Werror=sign-conversion` (CI's engine job failed on the E9 merge, d96d6d9); g++
+  16 here did not. All seven literals converted; 526 tests pass.
+- Spec: none - a portability fix.
+
 ### 2026-10-04 - 6b″ on a quiet machine: Hunt adopted under 100 boards, Guard in no range (M17)
 
 - `docs/MEASUREMENTS.md`: experiment 6b″ (M17) with engine E9 merged (d96d6d9),
