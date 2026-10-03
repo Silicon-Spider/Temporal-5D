@@ -1266,6 +1266,7 @@ TEST(mcts_whole_turn_children_are_the_legal_actions) {
   SearchParams p = fast();
   p.split = TurnSplit::WholeTurn;
   p.widening = false;
+  p.max_actions = 4096;  // every action listed (the placeholder default is 256)
   const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Random, 2);
   const GameState s = two_timelines_after(2);
   Search search(s, p);

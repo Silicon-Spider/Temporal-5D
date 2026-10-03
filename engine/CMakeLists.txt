@@ -153,7 +153,7 @@ target_sources(t5d-tests PRIVATE
 target_sources(t5d-tests PRIVATE
   tests/test_capi_search.cpp
   tests/test_mcts.cpp
-  tests/test_mcts_faults.cpp
+  tests/test_mcts_memory.cpp
   tests/test_play_exe.cpp
   tests/test_selfplay.cpp
   src/capi_search.cpp)

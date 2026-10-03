@@ -92,6 +92,14 @@ typedef struct t5d_search t5d_search;
 #define T5D_CHOICE_LCB 2
 #define T5D_CHOICE_VISITS 3
 #define T5D_CHOICE_ALL_LOST 4
+
+/* Why a run stopped (t5d/mcts.hpp, StopReason). */
+#define T5D_STOP_PLAYOUTS 0
+#define T5D_STOP_EVALUATIONS 1
+#define T5D_STOP_FINISHED 2   /* the root is terminal or solved */
+#define T5D_STOP_EXHAUSTED 3  /* no simulation could be made */
+#define T5D_STOP_NODES 4      /* the node budget */
+#define T5D_STOP_MEMORY 5     /* the memory budget */
 /* No limit, for the budgets below. */
 #define T5D_NO_LIMIT UINT64_MAX
 
@@ -204,7 +212,22 @@ typedef struct t5d_search_summary {
   double root_q;
   uint64_t root_children;
   uint64_t epoch;
+  uint64_t memory_bytes;  /* the graph's memory, estimated (the evaluation cache apart) */
+  uint64_t cache_entries; /* the evaluation cache's entries (shared ones included) */
+  uint64_t cache_bytes;   /* ... and their bytes, as it counts them */
+  uint64_t cache_purged;  /* entries behind the root this search purged */
+  int32_t last_stop;      /* T5D_STOP_*: why the last run stopped */
 } t5d_search_summary;
+
+/* A run's budgets (t5d/mcts.hpp, Limits): T5D_NO_LIMIT for none. playouts and
+ * evaluations count from the call; nodes and bytes are the graph's. A run
+ * stops between batches once one is reached. */
+typedef struct t5d_search_limits {
+  uint64_t playouts;
+  uint64_t evaluations;
+  uint64_t nodes;
+  uint64_t bytes;   /* t5d_search_summary.memory_bytes */
+} t5d_search_limits;
 
 /* One child of the root (t5d_search_child), from the root player's view. */
 typedef struct t5d_root_child {
@@ -227,6 +250,14 @@ T5D_API void t5d_search_params_default(t5d_search_params* out);
 T5D_API t5d_status t5d_search_new(const t5d_game* game, int32_t turn_start,
                                   const t5d_search_params* params, t5d_search** out,
                                   char** error);
+
+/* A search like t5d_search_new's that shares `donor`'s evaluation cache (C14:
+ * a fresh search per move, the cache carried - the step API's self-play), its
+ * own parameters' cache sizes ignored. The donor may be destroyed afterwards;
+ * the cache lives while a search holds it. */
+T5D_API t5d_status t5d_search_new_sharing(const t5d_search* donor, const t5d_game* game,
+                                          int32_t turn_start, const t5d_search_params* params,
+                                          t5d_search** out, char** error);
 
 /* Releases a search. NULL is ignored. */
 T5D_API void t5d_search_destroy(t5d_search* search);
@@ -272,6 +303,11 @@ T5D_API t5d_status t5d_search_abandon(t5d_search* search);
  * evaluator_seed for the random one), for tests and tools. */
 T5D_API t5d_status t5d_search_run(t5d_search* search, int32_t evaluator, uint64_t evaluator_seed,
                                   uint64_t playouts, char** error);
+
+/* The same within `limits` (NULL: an error); *stop (may be NULL): T5D_STOP_*. */
+T5D_API t5d_status t5d_search_run_limits(t5d_search* search, int32_t evaluator,
+                                         uint64_t evaluator_seed, const t5d_search_limits* limits,
+                                         int32_t* stop, char** error);
 
 /* ---- results, choice, persistence --------------------------------------- */
 

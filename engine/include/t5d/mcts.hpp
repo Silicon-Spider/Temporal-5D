@@ -231,7 +231,10 @@ struct SearchParams {
   TurnSplit split = TurnSplit::BoardMove;  ///< placeholder: D2 is undecided
   ActionPrior action_prior = ActionPrior::SumLogits;  ///< whole-turn: placeholder
   /// Whole-turn: the most actions listed per node (list_legal_actions' cap).
-  std::size_t max_actions = 4096;
+  /// Every listed action is stored with its node (its moves and an edge), so
+  /// this bounds a node's memory: at 4,096 a node of a 100-board position held
+  /// about 1.5 MB (review B). Placeholder 256 (build-log spec issue).
+  std::size_t max_actions = 256;
   /// Whole-turn: the listing's node budget; a stopped listing is incomplete.
   std::uint64_t listing_nodes = 2'000'000;
   /// Board-move: when the evaluator gives no submit logit (Evaluation::
@@ -347,7 +350,24 @@ struct SearchParams {
 struct Limits {
   std::uint64_t playouts = 800;  ///< completed simulations (visits to the root)
   std::uint64_t evaluations = std::numeric_limits<std::uint64_t>::max();
+  /// The node budget: run() stops, between batches, once the graph holds
+  /// this many nodes (not counted from the call: the graph's size).
+  std::uint64_t nodes = std::numeric_limits<std::uint64_t>::max();
+  /// The memory budget: run() stops, between batches, once memory_bytes()
+  /// reaches it (one batch may pass it: at most batch_size leaves expanded).
+  std::uint64_t bytes = std::numeric_limits<std::uint64_t>::max();
 };
+
+/// Why run() stopped.
+enum class StopReason : std::uint8_t {
+  Playouts = 0,  ///< Limits::playouts reached
+  Evaluations,   ///< Limits::evaluations reached
+  Finished,      ///< the root is terminal or solved (or stuck): nothing to search
+  Exhausted,     ///< no simulation could be made
+  Nodes,         ///< Limits::nodes reached
+  Memory,        ///< Limits::bytes reached
+};
+const char* stop_reason_name(StopReason reason) noexcept;
 
 // ---------------------------------------------------------------------------
 // The evaluator
@@ -462,8 +482,11 @@ bool final_eligible(std::span<const FinalCandidate> children, std::size_t i,
 
 class EvalCache {
  public:
-  /// At most `capacity` entries and about `max_bytes` bytes (an entry's
-  /// logits and its state's timeline list, estimated).
+  /// At most `capacity` entries and about `max_bytes` bytes - each entry
+  /// counted for what it alone keeps alive once its search is gone: the
+  /// map's node, its logits, its state's list of timelines and the boards
+  /// (with their timeline objects) the step into the state made (entry_bytes;
+  /// checked against the heap in the tests).
   explicit EvalCache(std::size_t capacity = std::size_t{1} << 16,
                      std::size_t max_bytes = std::size_t{256} << 20)
       : capacity_(capacity), max_bytes_(max_bytes) {}
@@ -471,9 +494,21 @@ class EvalCache {
   /// collide), or nullptr.
   const Evaluation* find(std::uint64_t key, std::uint64_t epoch, const GameState& state,
                          bool compare_origins) const;
-  /// Stores it (unless full: entries are never evicted - a deterministic cache).
+  /// Stores it (unless full); `new_boards`: the boards the step into the
+  /// state made - its own, the rest shared with its predecessors.
   void insert(std::uint64_t key, std::uint64_t epoch, const GameState& state,
-              const Evaluation& evaluation);
+              const Evaluation& evaluation, std::size_t new_boards = 1);
+  /// Removes every entry whose state has fewer than `boards` boards, and
+  /// returns how many. Every move adds a board and none is ever removed, so
+  /// such a state is behind a root of `boards` boards for good: no search
+  /// from that root, or after it in the same game, can reach it again. (A
+  /// cache shared by searches of different games would lose live entries.)
+  /// The search calls it with its root's board count on creation and on
+  /// every re-root: the cache's eviction, deterministic.
+  std::size_t purge_fewer_boards(std::size_t boards);
+  /// What an entry is counted for (see the constructor).
+  static std::size_t entry_bytes(const GameState& state, const Evaluation& evaluation,
+                                 std::size_t new_boards = 1) noexcept;
   std::size_t size() const noexcept { return entries_.size(); }
   std::size_t capacity() const noexcept { return capacity_; }
   std::size_t bytes() const noexcept { return bytes_; }
@@ -487,6 +522,7 @@ class EvalCache {
     GameState state;
     std::uint64_t epoch;
     Evaluation evaluation;
+    std::size_t bytes;  // entry_bytes, as counted on insertion
   };
   std::size_t capacity_;
   std::size_t max_bytes_;
@@ -527,6 +563,8 @@ struct SearchStats {
   std::uint64_t nodes_created = 0;
   std::uint64_t nodes_collected = 0;   ///< deleted by re-rooting
   std::uint64_t reroots = 0;
+  std::uint64_t cache_purged = 0;      ///< cache entries behind the root, purged (EvalCache)
+  StopReason last_stop = StopReason::Playouts;  ///< why the last run() stopped
   // Wall-clock seconds in the rules engine's calls (not part of digest()):
   double seconds_mate = 0;     ///< turn starts' terminal checks (detect_mate)
   double seconds_expand = 0;   ///< leaves' expansions (legality classification included)
@@ -619,9 +657,19 @@ class Search {
 
   // -- running -----------------------------------------------------------------
 
-  /// Runs simulations until `limits` (counted from this call) or until the
-  /// root is solved or terminal: gather, evaluate, deliver.
-  void run(Evaluator& evaluator, const Limits& limits);
+  /// Runs simulations until `limits` (playouts and evaluations counted from
+  /// this call; nodes and bytes the graph's) or until the root is solved or
+  /// terminal: gather, evaluate, deliver. Returns why it stopped (also
+  /// stats().last_stop).
+  StopReason run(Evaluator& evaluator, const Limits& limits);
+  /// The graph's memory, estimated: every node with its edges, its actions'
+  /// moves and its state's own heap (counted as EvalCache::entry_bytes counts
+  /// a state), and the MCGS table - checked against the heap in the tests.
+  /// The evaluation cache is not included (it has its own ceiling).
+  std::size_t memory_bytes() const noexcept;
+  /// The evaluation cache, for another search to share (C14's self-play: a
+  /// fresh search per move, the cache carried); null if none.
+  std::shared_ptr<EvalCache> shared_cache() const noexcept;
 
   // -- the step API (the C API's external evaluator) ----------------------------
 

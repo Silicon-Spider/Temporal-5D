@@ -1959,7 +1959,10 @@ its variance feeds E2, E3 and LCB.
   legal submission the action can always be finished.
 - *Whole turn* (`WholeTurn`): a node is always a turn's start; its children are the
   legal actions (`list_legal_actions`, E4), at most `max_actions` of them (a listing
-  stopped there, or by `listing_nodes`, is incomplete and never proves a loss). The
+  stopped there, or by `listing_nodes`, is incomplete and never proves a loss). Every
+  listed action is stored with its node (its moves and an edge), so `max_actions`
+  bounds a node's memory: at the old default of 4,096 a node of a 100-board position
+  held about 1.5 MB (review B); the placeholder default is now 256. The
   network's policy is over single moves (D1), so an action's prior comes from its
   moves' logits - their sum (a product of per-move factors; default) or their mean
   (`action_prior`) - each move matched to the turn start's pseudo-legal candidate with
@@ -2077,6 +2080,21 @@ the first re-root, and a failure changes nothing; from a turn start an action ha
 least one move. Evaluations are
 cached per (state, refresh epoch) (`set_epoch`; 0 in the dense configuration).
 
+**Memory.** The evaluation cache counts each entry for what it alone keeps alive once
+its search is gone - the map's node, its logits, its state's list of timelines, and the
+boards (with their timeline objects) the step into the state made
+(`EvalCache::entry_bytes`; within 0.75-1.33 of the heap actually freed in the tests,
+where the old estimate was 1.4-2.2 times low) - and is purged, deterministically, of
+every state with fewer boards than the root, on a search's creation and on every
+re-root: every move adds a board and none is ever removed, so those states cannot come
+back (`purge_fewer_boards`; a cache shared across games would lose live entries). Along
+a game a small shared cache so stays useful (review B: without it, no hit after about 60
+decisions). The graph's memory is estimated the same way (`memory_bytes`: nodes, edges,
+actions, states' own heap, the MCGS table; within 0.75-1.33 of the heap in the tests),
+and `Limits` carries a node budget and a memory budget besides playouts and evaluations:
+`run` stops between batches when one is reached and returns why (`StopReason`, also
+`stats().last_stop`).
+
 **Determinism** (H15). One thread; with a deterministic evaluator a search is
 bit-reproducible (`digest()` hashes every node's and edge's statistics in a canonical
 order); `synchronous` is the debug mode - batches of one leaf.
@@ -2101,7 +2119,10 @@ candidate move, logit i scoring `leaf.expansion.moves[i]`; one submit logit per 
 as probabilities (`T5D_VALUE_PROBABILITIES`) or logits (`T5D_VALUE_LOGITS`), from the
 leaf's acting player - and `t5d_search_abandon`; then `t5d_search_info`, `_child`,
 `_choose`, `_choose_by_visits`, `_verify`, `_advance`, `_advance_action`,
-`_root_game`, `_set_epoch`, `_run` (built-in evaluators), `_digest` (H15's digest - the
+`_root_game`, `_set_epoch`, `_run` (built-in evaluators) and `_run_limits` (within a
+`t5d_search_limits`: playouts, evaluations, nodes, bytes; it reports the
+`T5D_STOP_*` reason), `_new_sharing` (a new search sharing another's evaluation cache:
+C14 through the binding), `_digest` (H15's digest - the
 tests compare the step loop's graph with the C++ search's by it), and `t5d_search_layout`
 (this header's struct layouts, as `t5d_layout` gives `t5d/capi.h`'s).
 `t5d_search_params` mirrors `SearchParams` (fill it with `t5d_search_params_default`).
