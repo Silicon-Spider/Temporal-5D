@@ -23,6 +23,7 @@ HuntResult Hunt::hunt(const GameState& root, const ProveBudget& budget) {
     out.proof = r.proof;
     out.line = r.line;
     out.line_complete = r.line_complete;
+    out.certificate = r.certificate;
     if (options_.export_proofs && solved_ != nullptr) {
       solved_->put(root, r.proof);
       out.exported = true;

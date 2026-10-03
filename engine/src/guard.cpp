@@ -91,6 +91,7 @@ GuardResult guard(const GameState& turn_start, const std::vector<Move>& action, 
       out.refutation_depth = (r.proof.distance + 1) / 2;
       out.line = r.line;
       out.line_complete = r.line_complete;
+      out.certificate = r.certificate;
       break;
     }
     if (r.status == ProofStatus::Unknown) {

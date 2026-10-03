@@ -84,7 +84,9 @@
 //    boards is opened by the first of them); a partial action is cut when no
 //    check-capable move is in it and none is left to make. The check-capable
 //    boards come first in the turn's order. Off where attack maps recompute
-//    (Q8, Q18, Q20's alternatives) and where a capture stands already. The
+//    (Q8, Q18, Q20's alternatives) and where a capture stands already - and
+//    OFF BY DEFAULT: on real positions it cut little and cost more than it
+//    saved (ProverOptions::check_filter). Whatever the filter, the
 //    defender's turn at the horizon is decided not in check without E4.
 //  * THE PROOF'S LINE (Proven): the attacker's proving actions and the
 //    defender's longest defences, to the mate; and on request its
@@ -177,9 +179,14 @@ struct ProverOptions {
   /// more mates for fewer nodes) or proof numbers only (true; the search still
   /// claims no disproof either way).
   bool prove_only_pn_thresholds = false;
-  /// The last-turn check filter (see the header comment): sound, so on by
-  /// default; off only to measure what it saves.
-  bool check_filter = true;
+  /// The last-turn check filter (see the header comment): sound, but OFF by
+  /// default - measured on 6b's first 120 roots (Guard, 50 ms, 5 threads) it
+  /// cut little (no partial action under 50 boards, 125 at 50-99) and cost
+  /// more than it saved (depth 1 completed at 82.4% with it, 83.5% without,
+  /// under 50 boards): building it advances a map per move, and in positions
+  /// of several timelines nearly every move is check-capable, a new board's
+  /// passed copy sending lines across the timelines beside it.
+  bool check_filter = false;
   /// Collect the proof's certificate (tools and tests: it walks the deciding
   /// thread's whole tree).
   bool record_certificate = false;

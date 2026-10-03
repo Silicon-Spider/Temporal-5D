@@ -54,6 +54,7 @@ TEST(prover_check_filter_changes_no_answer) {
       for (const GameState& s : playable(t5d_test::sparse_positions(rules, 1, 4, seed++))) {
         ProverOptions on = literal();
         on.depth = depth;
+        on.check_filter = true;  // off by default: the test switches it on
         ProverOptions off = on;
         off.check_filter = false;
         Prover a(on);

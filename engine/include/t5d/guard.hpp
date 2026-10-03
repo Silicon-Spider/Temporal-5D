@@ -40,6 +40,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <vector>
 
 #include "t5d/move.hpp"
@@ -94,6 +95,10 @@ struct GuardResult {
   double seconds = 0;
   /// The prover's statistics, summed over the depths (counts only).
   ProverStats stats;
+  /// prover.record_certificate, refuted: the refutation's certificate (the
+  /// opponent's mate from the position after the action), for
+  /// check_certificate (t5d/certificate.hpp).
+  std::shared_ptr<const ProofCertificate> certificate;
 };
 
 /// Guard's question for `action` (complete, legal - throws
