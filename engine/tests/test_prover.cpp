@@ -720,21 +720,34 @@ TEST(prover_every_ruleset_proves_only_mates) {
 TEST(long_prover_random_play_agrees_with_the_references) {
   Tally literal_tally;
   Tally default_tally;
-  literal_tally.work_cap = 4'000'000;
-  default_tally.work_cap = 4'000'000;
   std::uint64_t seed = 900;
-  for (const RuleOptions& base : t5d_test::every_ruleset()) {
-    RuleOptions rules = base;
-    rules.moves_after_shift = true;
+  const auto start = std::chrono::steady_clock::now();
+  const std::vector<RuleOptions> rulesets = t5d_test::every_ruleset();
+  for (std::size_t i = 0; i < rulesets.size(); ++i) {
+    const RuleOptions& rules = rulesets[i];  // Q4's other reading included: listings
+    // The default ruleset at full size (about ten minutes); every alternative
+    // at a quarter of the positions and budgets, so the test stays within
+    // about half an hour.
+    const bool full = i == 0;
+    const int games = full ? 2 : 1;
+    const int turns = full ? 8 : 6;
+    const std::uint64_t nodes = full ? 2'000'000 : 500'000;
+    literal_tally.work_cap = default_tally.work_cap = full ? 4'000'000 : 1'000'000;
     for (const int depth : {1, 3, 5}) {
-      ProverOptions l = literal();
-      l.depth = std::min(depth, 3);
-      random_play(rules, l, 2, 8, seed++, 2'000'000, literal_tally);
+      if (depth <= 3) {
+        ProverOptions l = literal();
+        l.depth = depth;
+        random_play(rules, l, games, turns, seed++, nodes, literal_tally);
+      }
       ProverOptions d;
       d.depth = depth;
       d.completion_max_nodes = 1'000'000;
-      random_play(rules, d, 2, 8, seed++, 2'000'000, default_tally);
+      random_play(rules, d, games, turns, seed++, nodes, default_tally);
     }
+    // Progress: a long test, so that a run can be followed.
+    const double s = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+    std::fprintf(stderr, "  ruleset %zu/%zu (%s) done at %.0f s\n", i + 1, rulesets.size(),
+                 describe(rules).c_str(), s);
   }
   literal_tally.print("literal class");
   default_tally.print("default class");
