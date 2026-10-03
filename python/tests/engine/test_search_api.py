@@ -26,9 +26,11 @@ import pytest
 from t5d.engine import Game, NetworkEvaluator, UniformEvaluator, run_search
 from t5d.engine.capi import (
     MIRRORED_SEARCH_STRUCTS,
+    T5D_EVALUATOR_RANDOM,
     T5D_EVALUATOR_UNIFORM,
     T5D_SPLIT_BOARD_MOVE,
     T5D_SPLIT_WHOLE_TURN,
+    T5D_VALUE_PROBABILITIES,
     CLeaf,
     Library,
     layout_mismatches,
@@ -127,6 +129,171 @@ def test_the_step_loop_is_the_engines_run(variant, flags):
     assert a.digest() == b.digest()
     assert a.info().playouts == b.info().playouts == 64 and driver.stop == "playouts"
     assert sum(stats.batch_sizes) == a.info().evaluations
+
+
+_M64 = (1 << 64) - 1
+
+
+def _mix(z: int) -> int:
+    """The engine's 64-bit mixer (``src/mcts_evaluators.cpp``)."""
+    z &= _M64
+    z = ((z ^ (z >> 30)) * 0xBF58476D1CE4E5B9) & _M64
+    z = ((z ^ (z >> 27)) * 0x94D049BB133111EB) & _M64
+    return z ^ (z >> 31)
+
+
+def _unit(x: int) -> float:
+    return float(x >> 11) * 2.0**-53
+
+
+class PyRandom:
+    """The engine's built-in ``random`` evaluator (``src/mcts_evaluators.cpp``) rewritten in
+    Python - a function of the seed, each leaf's key and its epoch (``CStepDriver.batch``) - with
+    its value as exact probabilities (``T5D_VALUE_PROBABILITIES``)."""
+
+    def __init__(self, seed: int) -> None:
+        self.seed = seed
+        self.driver: CStepDriver | None = None
+        self.shifted = 0
+
+    def __call__(self, positions):
+        views = self.driver.batch
+        assert len(views) == len(positions)
+        out = []
+        for v, p in zip(views, positions, strict=True):
+            n = v.expansion.move_count
+            assert p.move_count == n
+            self.shifted += p.state.shifted
+            base = _mix(self.seed ^ _mix(v.key ^ _mix(v.epoch + 0x51)))
+            logits = np.zeros(n, np.float32)
+            for m in range(n):
+                r = _mix(base + 0x9E3779B97F4A7C15 * (m + 1))
+                logits[m] = np.float32(2.0 * (_unit(r) + _unit(_mix(r)) + _unit(_mix(r + 1)) - 1.5))
+            mean = 1.6 * _unit(_mix(base ^ 0xA5A5)) - 0.8
+            sd = 0.05 + 0.35 * _unit(_mix(base ^ 0x5A5A))
+            bump = [math.exp(-0.5 * (((2.0 * k - 50) / 50.0 - mean) / sd) ** 2) for k in range(51)]
+            total = 0.0
+            for b in bump:
+                total += b
+            out.append(Evaluation(logits, np.array([np.float32(b / total) for b in bump], np.float32)))
+        return out
+
+
+def _random_digests(game: Game, turn_start: bool, flags: dict, evaluator_seed: int, playouts: int = 96) -> tuple[int, int, int]:
+    """(the step loop's digest with ``PyRandom``, the engine's own run's digest, shifted leaves met)."""
+    a = Search(game, turn_start=turn_start, params=search_params(**flags))
+    ev = PyRandom(evaluator_seed)
+    ev.driver = CStepDriver(a, playouts=playouts, value_kind=T5D_VALUE_PROBABILITIES)
+    serve(ev.driver, ev, batch_size=int(a.params.batch_size))
+    b = Search(game, turn_start=turn_start, params=search_params(**flags))
+    b.run(T5D_EVALUATOR_RANDOM, playouts, seed=evaluator_seed)
+    out = (a.digest(), b.digest(), ev.shifted)
+    a.close()
+    b.close()
+    return out
+
+
+@pytest.mark.parametrize(
+    "flags",
+    [{}, {"graph": 1}, {"split": T5D_SPLIT_WHOLE_TURN}, {"root_noise": 1}, {"batch_size": 1, "synchronous": 1}],
+    ids=["ply-tree", "ply-graph", "whole-turn", "noise", "synchronous"],
+)
+@pytest.mark.parametrize("variant", ["Standard", "Standard - Two Timelines"])
+def test_the_engines_random_evaluator_through_the_step_api(variant, flags):
+    """The engine's ``random`` evaluator rewritten in Python and delivered by the unmodified
+    ``CStepDriver.deliver`` - distinct logits per move and values that vary leaf by leaf - builds
+    the engine's own search, bit for bit: any change to the order of the logits or of the value
+    bins, at any leaf, changes the digest."""
+    for seed in (1, 7):
+        with Game.variant(variant) as g:
+            mine, engine, shifted = _random_digests(g, True, dict(flags, seed=seed), seed * 31 + 5)
+        assert mine == engine, seed
+        if flags.get("split") != T5D_SPLIT_WHOLE_TURN:
+            assert shifted > 0  # leaves past the shift were evaluated
+
+
+@pytest.mark.parametrize("graph", [0, 1], ids=["tree", "graph"])
+@pytest.mark.parametrize("game_seed", [2, 4, 6])
+def test_the_random_evaluator_from_a_root_past_the_shift(game_seed, graph):
+    g = _shifted_game_with_moves(seed=game_seed)
+    with g:
+        mine, engine, shifted = _random_digests(g, False, {"seed": 3, "graph": graph}, 99)
+    assert mine == engine and shifted > 0
+
+
+class WhiteWins:
+    """Value +1 for White, expressed from each leaf's acting player - the network's convention
+    and the search's: the top bin where White acts, the bottom bin where Black acts.
+    ``perspective="present"`` expresses it from the present's colour instead - the negative
+    control, wrong exactly at leaves past the shift."""
+
+    def __init__(self, perspective: str = "acting") -> None:
+        self.perspective = perspective
+        self.leaves = 0
+        self.shifted = 0
+
+    def __call__(self, positions):
+        out = []
+        for p in positions:
+            s = p.state
+            who = s.acting_player if self.perspective == "acting" else s.player_to_move
+            self.leaves += 1
+            self.shifted += s.shifted
+            v = np.full(51, -1.0e4, np.float32)
+            v[50 if who == 0 else 0] = 0.0
+            out.append(Evaluation(np.zeros(p.move_count, np.float32), v))
+        return out
+
+
+def _off_sign(search: Search, root_player: int) -> list[float]:
+    """The visited root children's q (the root player's view) that are not White's win."""
+    want = 1.0 if root_player == 0 else -1.0
+    return [c.q for c in search.children() if c.visits > 0 and abs(c.q - want) > 1e-9]
+
+
+@pytest.mark.parametrize("graph", [0, 1], ids=["tree", "graph"])
+@pytest.mark.parametrize("split", [T5D_SPLIT_BOARD_MOVE, T5D_SPLIT_WHOLE_TURN], ids=["ply", "whole-turn"])
+@pytest.mark.parametrize("variant", ["Standard", "Standard - Two Timelines"])
+def test_the_value_is_the_acting_players(variant, split, graph):
+    """A value that says White wins, given from each leaf's acting player, backs up through the
+    engine as White's win: every visited root child's q is +1 for White at the root - leaves past
+    the shift included (the board-move split meets them after the move that shifts the present)."""
+    with Game.variant(variant) as g:
+        s = Search(g, params=search_params(seed=1, split=split, graph=graph))
+        ev = WhiteWins()
+        run_search(s, ev, playouts=200)
+    info = s.info()
+    assert info.checkmates == info.stalemates == info.turn_caps == 0  # the premise: no game end in the tree
+    assert sum(c.visits > 0 for c in s.children()) > 1 and _off_sign(s, 0) == []
+    if split == T5D_SPLIT_BOARD_MOVE:
+        assert ev.shifted > 0
+
+
+@pytest.mark.parametrize("graph", [0, 1], ids=["tree", "graph"])
+@pytest.mark.parametrize("game_seed", [2, 4, 6])
+def test_the_value_is_the_acting_players_from_a_root_past_the_shift(game_seed, graph):
+    g = _shifted_game_with_moves(seed=game_seed)
+    with g:
+        root_player = g.info().to_move
+        s = Search(g, turn_start=False, params=search_params(seed=1, graph=graph))
+        ev = WhiteWins()
+        run_search(s, ev, playouts=200)
+    info = s.info()
+    assert info.checkmates == info.stalemates == 0
+    assert ev.shifted > 0 and sum(c.visits > 0 for c in s.children()) >= 1
+    assert _off_sign(s, root_player) == []
+
+
+def test_the_present_colour_is_not_the_acting_player():
+    """The negative control: from the present's colour the same values are wrong past the shift,
+    and some root child's q comes out off-sign - the test above can fail."""
+    g = _shifted_game_with_moves(seed=2)
+    with g:
+        root_player = g.info().to_move
+        s = Search(g, turn_start=False, params=search_params(seed=1))
+        ev = WhiteWins(perspective="present")
+        run_search(s, ev, playouts=200)
+    assert ev.shifted > 0 and _off_sign(s, root_player) != []
 
 
 # --- what the evaluations mean --------------------------------------------------------------------
