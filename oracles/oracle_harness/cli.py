@@ -21,6 +21,7 @@ from . import (
     paths,
     provenance,
     rulebook,
+    runner,
     snapshot,
     stability,
     toolchain,
@@ -121,7 +122,11 @@ def cmd_observe(args: argparse.Namespace) -> int:
             print(f"note: {source.name} prints no {name} events", file=sys.stderr)
     options = RunOptions(cap=cfg.cap, timeout_s=args.timeout, mate_budget_ms=args.mate_budget_ms,
                          explain=args.explain, actions_at=args.actions)
-    observation = source.observe(record.id, corpus.read(record, lock), options)
+    given = corpus.feed(record, lock)
+    if given.converted:
+        print(f"note: {record.id} is {record.reading} ({given.converted} moves rewritten); the source reads that",
+              file=sys.stderr)
+    observation = runner.observe(source, record.id, given, options)
     print(json.dumps({"source": observation.source, "record": observation.record, "cap": observation.cap,
                       "elapsed_s": round(observation.elapsed_s, 3), **observations.to_json(observation)}, indent=1))
     problems = observations.validate(observation)

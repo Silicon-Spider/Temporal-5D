@@ -420,13 +420,30 @@
       ]
     },
     "cwmtt/many2": {
-      "sha256": "e14438e9dbf71f845f8f3f99bb616e4cbf05dd3a47f1c4fa9041458c3d6d3ccd",
-      "status": "rejected",
-      "reason": "no_matching_move",
-      "actions_accepted": 0,
-      "last_action": false,
+      "sha256": "e4de14415dbd4721cae38889d42cd3e355c88a2abe3b99d3080b6a7410b77981",
+      "status": "timeout",
+      "reason": "timeout",
+      "actions_accepted": 16,
+      "last_action": null,
+      "horizon": {"position": 16, "budget": "timeout_s=300"},
       "positions": [
-        ["w", false, 20, "none", "d574889fd9da3f2bc65249ff27249b00", "2b8fa7fec7e4d7f2ecade5e01de08d0a", 1, 32]
+        ["w", false, 20, "none", "d574889fd9da3f2bc65249ff27249b00", "2b8fa7fec7e4d7f2ecade5e01de08d0a", 1, 32],
+        ["b", false, 20, "none", "cfa62590aca17479283b376c71f35527", "843b6b571ba89be4f6fff5e96dccda18", 2, 64],
+        ["w", false, 32, "none", "3ae5b9d02f9e265178bfd58a583f1c07", "7a809a66cfc3a8f962e357e1dda38f92", 3, 96],
+        ["b", false, 796, "none", "619701f1bd66afd43362ca291018e54a", "c93f0ca2e17bdadb805310bac1c9d8bb", 5, 160],
+        ["w", false, 27, "none", "8eafa01d0513084ae99a8f4111d07c78", "1e9e15b30c7f93f007a148e004f0497c", 6, 193],
+        ["b", false, 1000, "none", "01ad2a895fbddd1ccb3889b8faeb7f4b", "561133ffa845a68cc147e23f842eb707", 8, 258],
+        ["w", false, 1000, "none", "14051f1e1c75f0d305faa96af43fe80e", "9319dd3ad1f9d80a4c69777cb0ab7d1e", 14, 449],
+        ["b", false, 1000, "none", "82b64ff5763fc4adb36bc5f1a0dc6526", "7464851633b9ac99ad9edc8d60abef5f", 22, 699],
+        ["w", false, 1000, "none", "4fb4b9456082b741514c433c51701320", "41e29083d62f12599db1d11dc4dbc0bb", 31, 983],
+        ["b", false, 1000, "none", "8e371b60dc45b44c4c0fa36be467aa4f", "abfc285c6a7649f0139d7da3482f124f", 40, 1274],
+        ["w", false, 1000, "none", "12f15bc9eeb9342cecef18a7ec617b54", "910e478e10ae2a3fef506f77b3d077c8", 50, 1598],
+        ["b", false, 1000, "none", "1671caa97bc2b062c3a08e4b576323e4", "2357e46528d8a16134e98142830b77d2", 62, 1993],
+        ["w", true, 1000, "none", "d3fa03a46a9a9e704b881e1735ccd1ea", "84420dff8ea534fc8e30e75b47c66710", 81, 2611],
+        ["b", false, 1000, "none", "7ff2329cd2a56b02cafc44dff7d36fab", "41d9692c73e6d874c94e53243b38bfe2", 90, 2912],
+        ["w", true, 1000, "none", "88ca7341847f0f0d5550dd7ebbffada7", "ac3a4df8115578372c517e06f4b565ce", 98, 3176],
+        ["b", false, 1000, "none", "19af5a5d970ded28da286621a3683414", "db574885ac6d8d1fcab240f770e7f357", 108, 3499],
+        [null, null, null, null, "47411e908ef7214a237bb5464be30a4a", "08f35ee4c0a74c8c8ab6b547b026175f", 112, 3625]
       ]
     },
     "cwmtt/manyChecks": {
