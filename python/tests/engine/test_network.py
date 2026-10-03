@@ -151,15 +151,56 @@ def test_f1_cached_on_a_real_position():
 
 
 def test_a_position_with_no_moves_evaluates():
-    """After the present shifts no move may be made (Q4); with strict=False such a state still
-    runs, with an empty policy."""
-    from t5d.engine import to_position
-
+    """After Standard's one present board is played no further move exists, and the present
+    has shifted: the action's only candidate is the submit action (D8), probability one."""
     model = build_model(NetConfig(trunk_dtype="fp32", n_layers=1), seed=0).eval()
     with Game.variant("Standard") as g:
         g.apply(g.moves()[0])
-        pos = to_position(g.expand(), strict=False)
-    assert pos.move_count == 0
+        pos = g.position()
+    assert pos.move_count == 0 and pos.shifted and pos.submit_possible and pos.submit_legal
     out = model(collate([pos.state]))
     assert out.policy_logits.shape == (1, 0) and torch.isfinite(out.value_logits).all()
     np.testing.assert_allclose(out.value_probs().sum().item(), 1.0, atol=1e-5)
+    assert out.submit_log_prob().item() == pytest.approx(0.0, abs=1e-6)
+
+
+def _shift_pair(variant: str, seed: int):
+    """Seeded random play from ``variant`` to the first state whose present has shifted inside
+    the action, and the same game submitted: (the shifted state's position, the submitted one's)."""
+    from t5d.engine.play import ROYAL_IDS
+
+    rng = np.random.default_rng(seed)
+    g = Game.variant(variant)
+    g.set_legality(False)
+    try:
+        for _ in range(200):
+            if g.info().obligations_met:
+                before = g.position()
+                g.submit()
+                return before, g.position()
+            x = g.expand(square_features="none")
+            g.apply(int(rng.choice(np.flatnonzero(~np.isin(x.moves["captured"], ROYAL_IDS)))))
+        raise AssertionError("no shift met")
+    finally:
+        g.close()
+
+
+@pytest.mark.parametrize("variant", ["Standard", "Standard - Two Timelines"])
+def test_the_acting_player_alone_tells_a_shifted_action_from_the_opponents_turn(variant):
+    """Register D8 on real positions: an action whose present has shifted and the opponent's
+    turn start after its submission hold the same boards; the network's input differs in the
+    acting player alone - on the global registers under the default arm - and the network's
+    outputs differ."""
+    shifted_pos, submitted = _shift_pair(variant, seed=11)
+    a, b = shifted_pos.state, submitted.state
+    assert a.shifted and not b.shifted and a.acting_player != b.acting_player
+    assert np.array_equal(a.piece, b.piece) and np.array_equal(a.half_turn, b.half_turn) and np.array_equal(a.is_head, b.is_head)
+    model = build_model(NetConfig(trunk_dtype="fp32", n_layers=2), seed=1).eval()
+    ba, bb = collate([a]), collate([b])
+    differs = (model.embed_tokens(ba) - model.embed_tokens(bb)).abs().amax(dim=-1)[0] > 0
+    from t5d.net.state import TOKEN_GLOBAL_REGISTER
+
+    assert torch.equal(differs, ba.kind[0] == TOKEN_GLOBAL_REGISTER)
+    oa, ob = model(ba), model(bb)
+    assert not torch.allclose(oa.value_logits, ob.value_logits)
+    assert bool(oa.submit_possible[0]) and not bool(ob.submit_possible[0])
