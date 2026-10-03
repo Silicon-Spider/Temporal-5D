@@ -2011,7 +2011,12 @@ carries one virtual visit, counted as a loss, on every node and edge it crosses.
 second path reaching a waiting leaf is a collision (its virtual loss held until the
 batch ends, so later selections diverge). One evaluation is asked per distinct state
 in the batch. The virtual loss is always released: by `deliver`, by `abandon`, when the
-evaluator throws, when an evaluation is malformed.
+evaluator throws, when an evaluation is malformed - and when anything fails inside
+`gather` or `deliver`, an allocation included: `gather` abandons its batch before the
+exception leaves, `deliver` keeps what it delivered and abandons the rest (the tests
+inject a `bad_alloc` at every allocation of both). `run` resets every field of the
+evaluation buffers it reuses, the submit logit included. The epoch cannot change while a
+batch waits (its evaluations belong to the epoch they were asked under).
 
 **MCGS** (C11, prototype, `graph`). Nodes keyed by `node_key(state, keying)`: the 5D
 Zobrist key - the ruleset ID, every board in its place (so what has been played
@@ -2066,7 +2071,10 @@ opponent's reply) and `advance_to(state)` re-root: the new root's subtree is car
 every node it cannot reach deleted (renumbered breadth-first); the evaluation cache -
 state-keyed - survives; the root hook (`set_root_hook`) and the evaluator's
 `on_new_root` are told, for an evaluator holding K/V of the old conditioning. Pondering
-is `run` on the post-move root, then `advance_action` on the reply. Evaluations are
+is `run` on the post-move root, then `advance_action` on the reply - atomic: the whole
+action is checked (each move pseudo-legal where it is made, the submission legal) before
+the first re-root, and a failure changes nothing; from a turn start an action has at
+least one move. Evaluations are
 cached per (state, refresh epoch) (`set_epoch`; 0 in the dense configuration).
 
 **Determinism** (H15). One thread; with a deterministic evaluator a search is
