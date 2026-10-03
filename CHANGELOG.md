@@ -10,6 +10,32 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-03 - Network: the refresh ladder's complexity trigger (C24), behind a flag
+
+- `python/t5d/net/complexity.py` (new; merged from its worktree branch): C24 as
+  ruled at CHECKPOINT 4 ("goes behind a flag alongside the refresh ladder's rung
+  1"): the signals - the node's board count and active timelines (structure), its
+  travel since its last refresh (the tree's path), the parent's predicted
+  difficulty from the effort head (§8.6, the bin at a quantile) - and the rule, a
+  weighted sum against a threshold.
+- `python/t5d/net/cache.py`: `CacheConfig.complexity_refresh` (prototype, off by
+  default) and its named parameters, every number a placeholder: threshold 1.0;
+  weights 1/128 per board, 1/8 per active timeline, 1/2 per travel move, 1/12 per
+  effort bin; effort quantile 0.5; visit gate 50 (rung 1's V); at most 8
+  complexity refreshes per search.
+- `python/t5d/net/tree.py`: `SearchTree.visit` decides rung 1 first, unchanged,
+  then C24 where rung 1 did not fire - add-only for every signal;
+  `travel_since_refresh`; `Node.effort_logits` (the parent's output, recorded
+  when the flag is on) and `Node.refreshed_by`. The node's own outputs are never
+  read. A complexity refresh is rung 1's copy-on-write fork, at another node.
+- Tests: `python/tests/net/test_complexity.py` (18): off changes nothing (bitwise
+  rung 1 alone); on is add-only and fires by its rule; the effort signal is the
+  parent's; the decision evaluates nothing; determinism; the fork; 13 mutants of
+  the trigger killed. Python 649 passed, 2 skipped; ruff clean.
+- Not built: C25 and the scanner NNUE (held open). No training commitment.
+- Spec: §7.9 "Complexity as a trigger", §8.6 (the effort head); register C24,
+  C3a; spec issues 75-79 and proposed spec edits 61-63 in `docs/BUILD_LOG.md`.
+
 ### 2026-10-03 - CHECKPOINT 5: the window killed provisionally; Q2 ruled - initial timelines created by neither player (H46)
 
 - `docs/design/`: the upstream revision recording CHECKPOINT 5 - M16 corrected (under

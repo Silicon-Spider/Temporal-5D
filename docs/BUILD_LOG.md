@@ -811,7 +811,7 @@ for game records.
 | M18 | not started (rule) | A pilot self-play run before serious self-play re-checks the window and the other compute-weighted decisions - after §15.5, not in the untrained build |
 | H46 | built, tested | Q2 (provisional): initial timelines count as created by neither player - a variant's set-up reads every timeline as initial (rulebook R10) |
 | M17 | not started | 6b″: Guard and Hunt per range (E9's tool; quiet run to follow); no outcome stops the run |
-| C24 | building | The complexity trigger, behind a flag beside rung 1 (network) |
+| C24 | built, tested | The refresh ladder's complexity trigger behind a flag (`CacheConfig.complexity_refresh`, off; prototype, gated like rung 1 on 6c's existence test); add-only over rung 1 for every signal; every number a placeholder (spec issues 75-79) |
 | C25 | not built (rule) | Held open |
 | M7 | measured; killed, provisionally (M16, CHECKPOINT 5) | On real games (t0database, 716 games, max 186 boards): on at k = 8 from 50 to 186 boards; under 50 boards inside the ±10% band and the kill clause turns on it - waiting on the user; above 186 provisional (MEASUREMENTS) |
 | M8 | measured - STOP | 6b re-run (M12): root scan 76.7% / 31.4% / 24.7% / 2.4% by range (< 50 / 50-99 / 100-199 / 200+); rung 1 and quiet-leaf reach fail everywhere; stand-pat valid |
@@ -1200,6 +1200,28 @@ decision), and what is parked.
     listings elsewhere.
 74. **Disproofs need a home**: H19 and §11.3 cover proofs only; E8 keeps
     class-relative disproofs in a separate store, never the solved store.
+75. **C24's rule is unspecified** (§7.9, register C24): four candidate signals
+    joined by "or", with no combination rule, threshold or weights. Built as a
+    weighted sum against a threshold, every number a named placeholder (threshold
+    1.0; 1/128 per board, 1/8 per active timeline, 1/2 per travel move, 1/12 per
+    effort bin). Tuning belongs to 6c, if rung 1 shows a signal.
+76. **C24's visit gate and per-search bound**: the spec gives none. §7.9's
+    breakeven argument (one whole-scope refresh is about ten node evaluations)
+    applies, so the build uses rung 1's V = 50; "epochs must be bounded per search"
+    has no number - C24 is capped at 8 refreshes per search (rung 1's are neither
+    counted nor blocked). C24 never refreshes the root (C3's job).
+77. **"Travel since the last refresh" is undefined**: built as every travel move,
+    branching or not, on the path from the node's epoch anchor (its nearest
+    refreshed ancestor, else the search root) down to the node, its own move
+    included.
+78. **The effort head as a node-level signal**: §8.6's labels are root-search
+    efforts; C24 reads the parent's evaluation off-label at internal nodes - the
+    bin at quantile 0.5 (placeholder). An unevaluated parent contributes nothing.
+79. **Does C24 sit on top of rung 1 or replace it?** The spec says "a ladder
+    variant", the register "add-only if self-rated". Built as an OR with rung 1
+    decided first and unchanged, add-only for every signal against the flag-off
+    configuration; whether a structural signal may ever subtract from rung 1's
+    trigger is not ruled.
 
 ## Proposed spec edits
 
@@ -1381,6 +1403,16 @@ says now, what it should say, why.
     per-range figures (MEASUREMENTS, 6b′) (issues 71, 72).
 60. **The register, M14 and M15**: 6b′ measured - STOP; the design review's
     outcome to follow.
+61. **§7.9 "Complexity as a trigger"**: state the rule as built (a weighted score
+    against a threshold; rung 1's visit gate; a per-search budget; never the root;
+    travel from the epoch anchor; effort from the parent's evaluation at a
+    quantile; add-only for every signal, rung 1 decided first and unchanged), name
+    the placeholders, and give their tuning to 6c (issues 75-79).
+62. **Register C24**: "add-only if self-rated" -> "add-only (as built, for every
+    signal; rung 1 decided first)", noting "built behind a flag, off" (issue 79).
+63. **§8.6, the effort head**: a second consumer - C24 reads the parent's predicted
+    difficulty at internal nodes (off-label, confidence-family, add-only) (issue
+    78).
 
 ## Session log
 
