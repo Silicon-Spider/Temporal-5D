@@ -745,6 +745,16 @@ conditioning on the promoted one. Trigger on the node's Q, never a single leaf e
 staleness and never under-valuation, because a good line hidden by stale conditioning
 produces no jump to fire on. Gated on 6c like every rung.
 
+**Complexity as a trigger** (a ladder variant, CHECKPOINT 4): refresh more in complex
+positions — board count, active timelines, travel since the last refresh, or the effort
+head's predicted difficulty. The signal must exist *before* the evaluation it decides:
+the position's structure, or the parent's outputs. A trigger driven by the network's own
+uncertainty belongs to the confidence family and is add-only. It needs no new training
+commitment — conditioning-offset training already covers any refresh frequency — and it
+waits on rung 1's existence test like the rest of the ladder. What it targets is
+visibility, not checking: more dense attention is the same network looking harder, so
+its confidently wrong spots stay confidently wrong.
+
 #### A cost not in the table: subtree reuse across moves
 
 Lc0-style engines reuse the subtree under the played move as the next search's starting
@@ -993,7 +1003,7 @@ extension hits its cap.
 | Root visit distribution stops changing | Stop | KLDGain pattern |
 | Root solved | **Play immediately** | A proven result outranks visits |
 | Top-two **distributional overlap** (categorical head, §8.3) high *and* KLD still moving | Extend | Genuine contest. Overlap alone can mean equivalent lines (transpositions), so churn is required too |
-| Volatility from **either source** — net variance / §12.4 volatility prediction, or the scanner's live estimate-channel flags | Extend | Dual differently-wrong sources; **disagreement extends hardest** — net-calm-but-scanner-alarmed is §12.3's confident-wrong signature at the worst possible moment |
+| Volatility from **either source** — net variance / §12.4 volatility prediction, or the scanner's live estimate-channel flags (under 50 boards only since CHECKPOINT 4, §11.4) | Extend | Dual differently-wrong sources; **disagreement extends hardest** — net-calm-but-scanner-alarmed is §12.3's confident-wrong signature at the worst possible moment |
 | Falling eval trajectory | Extend (asymmetric) | A rising eval does not extend |
 | Best-move instability | Extend | Stockfish pattern |
 
@@ -1707,6 +1717,11 @@ first commit:
 
 ### 11.1 Tactical verification layer
 
+> **Status (CHECKPOINT 4 design review):** the brute-force and df-pn verifiers below failed
+> their pre-registered tests from 50 boards up (§15.6). The verification layer in force is
+> **§11.4**. This section and §11.2–§11.3 remain as the design history; their mechanisms
+> apply only where §11.4 keeps them.
+
 Lc0 deliberately omits quiescence search, on the theory that MCTS extends along forcing
 lines by itself. **That theory is weakest exactly where 5D chess sits**: enormous branching
 means shallow trees, and tactics arrive from any of N boards across two extra axes. A
@@ -1769,6 +1784,16 @@ transfer across transpositions, with the usual DAG care.) Two selection details 
 MCTS-Solver literature and Lc0's certainty propagation: once children are solved, final
 move selection uses the **secure-child** rule rather than max-visits, and solved-node
 selection during search needs a **visit threshold** to avoid narrow-path bias.
+
+**The search's own solver is part of the proof channel** (ruled at CHECKPOINT 4).
+Scoring actual game-end positions as results is unavoidable and stays on. Propagating
+solved status through the tree — marking nodes solved, pruning siblings, secure-child
+selection — and exporting to the permanent store is the proof channel, gated like any
+other: off until the gate passes, the search's soundness fixes have landed with tests,
+and the proof channel is signed off. With exact depth verification failing above 50
+boards (§15.6), the solver becomes the main source of proofs in large positions, so its
+soundness bar rises: its proofs are cross-checked against df-pn offline where df-pn
+decides, and against the oracles' mate verdicts where they exist.
 
 **Estimates must never be promoted to proofs.** Stand-pat is what keeps quiescence sound
 for non-forcing findings — but stand-pat assumes declining quietly costs nothing, which
@@ -1999,6 +2024,11 @@ under their own rules.
 
 ### 11.2 Asynchronous scanning — the scheduler
 
+> **Status (CHECKPOINT 4):** rung 1 is dropped (6b); rung 3's two-stage screen and rung 5's
+> scouting are retired; rung 2's promotion side becomes Guard and its demotion audit moves
+> to the offline audit lane (§11.4); rung 4, the asset map, stays. The scheduling
+> principles — budget against shared movegen, determinism debt — still hold.
+
 §11.1 defined what the scanner computes; this section defines when. The naive synchronous
 version — scanner on the critical path, per leaf — leaves most of its value unclaimed. The
 naive opposite — "run it constantly in parallel" — starves the search.
@@ -2024,7 +2054,7 @@ priority ladder, not free rein.
 
 **Rung 1 should be built regardless of the rest**: it makes the §11.1 scanner nearly
 latency-free using machinery (virtual loss, late merge of monotone bounds) that async MCTS
-needs anyway.
+needs anyway. *(Superseded: rung 1 failed 6b in every range and is dropped — §11.4.)*
 
 #### PV transitions are audited on both sides (rung 2)
 
@@ -2190,7 +2220,11 @@ under standard rules is simply false under Reversed Royalty — same position, d
 checks, different evasions, different mates. Cross-variant contamination of the solved
 store would be the worst version of §12.6's false-proof warning: permanent, silent, and
 imported rather than computed. Fold the ruleset ID into the position hash as one more
-multiply-rotate ingredient. The scanner itself needs per-variant care beyond eval values
+multiply-rotate ingredient. **And the turn phase** (CHECKPOINT 4): under Q4, a state where
+the present has shifted but the player has not submitted has the same boards as the
+opponent's turn start — only the acting player differs. So the acting player is part of
+every state key; without it, graph search merges the two states and can prune a legal
+mating submission, which the search's review found. The scanner itself needs per-variant care beyond eval values
 — Reversed Royalty changes check detection and evasion generation, the exact machinery
 that makes proofs proofs — and NNUEs, at 0.22M, are simply per-ruleset.
 
@@ -2209,6 +2243,51 @@ synchronous debug mode extends accordingly: **single thread, deterministic TT** 
 replacement policy, no races). Lazy SMP's character is benign nondeterminism — acceptable
 in production, banned while debugging.
 
+
+### 11.4 The verification layer, v3 — after the design review (CHECKPOINT 4)
+
+Brute-force and df-pn verification both failed their pre-registered tests from 50 boards
+up, and ten times the budget barely moved them (§15.6): the trees of forcing lines are too
+large, because in 5D every "move" is a turn spread across many boards. Exact *settling* —
+proving a forced result or proving there is none — works only in small positions. The bet
+on a permanently-on exact verifier therefore holds only there. Above 50 boards the engine
+stands where Lc0 and KataGo do: a network plus search, made robust by training. The
+layer in force:
+
+| Part | What it does | Where |
+|---|---|---|
+| Exact rules | Generator, legality and terminal detection, behind the gate (§11.0) | Always |
+| Search-native proofs | The search's own solver (H41): proves what the search reaches, so it scales with the search rather than with the width of the forcing tree | Every size, gated |
+| **Guard** | Before the chosen move is played: can the opponent force mate against it? Iterative deepening from depth 1. Depth 1 needs only one legal escape per opponent check — existence, not the full listing of legal turns. Exact at the depth that completes; a refutation rejects the move and triggers a re-search (§8.6's reserve) | Every size |
+| **Hunt** | At the root: do *we* have a forced mate? df-pn in prove-only mode — when the budget runs out it stops and claims nothing, so it never spends time disproving. A mate it finds is a proof, gated like any other. Partial attacking lines may be suggested to the search as soft priors, with §12.2's exclusions | Every size |
+| Full settling scans | df-pn at the root and on PV changes | Under 50 boards, where it passed |
+| Offline audit lane | Samples self-play decisions — PV changes, demotions, final moves — and runs exact proof search on them with large budgets, off the critical path. Contradictions with the network feed the curriculum through position selection (§12.2's safe channel) and the adversarial suite | Every size; weak at 200+ |
+| Adversarial league | The main robustness mechanism above 50 boards, with attackers aimed at large positions and attack cost measured per board range (§12.7) | Primary above 50 boards |
+
+**Depth adapts by itself.** Guard and Hunt run under a fixed time budget with iterative
+deepening, so they go deeper in simple positions and shallower in complex ones. No
+complexity model sets their depth — it would only predict what the search finds anyway.
+What changed is the *question*: settling needs disproof, the expensive half, and Guard
+and Hunt each need only the cheap half for their purpose.
+
+**Retired:** the per-leaf estimate channel (rung 1 — it fits its budget nowhere), rung 3's
+refutation sweep and rung 5's scouting (both relied on cheap per-node scans), and the
+NNUE's place in the build plan — its main job was evaluating the scanner's leaves, so it
+returns to held open (§14.4). The asset map stays: it runs once per superseded board and
+costs little, on a material-based estimate.
+
+**Knock-ons.** Time management loses the scanner as a second volatility source above 50
+boards; the network's own variance stands alone there (§8.6). "The exact layer stays on
+at match play" (§12.3) now means Guard, Hunt and the solver at every size, with full
+settling only under 50 boards. The window's blindness and the verification gap now sit in
+the same place — large positions (§13). The window's mitigations never relied on the
+scanner, so its case stands, but large-position robustness rests on training.
+
+**Whether shallow exact checks earn their time is measured, not assumed.** Trained
+networks rarely blunder shallow tactics — their confident mistakes tend to be deep — but
+5D's tactics across time may stay error-prone for longer. The offline audit lane reports
+how often the network's chosen move allows a shallow forced mate, per board range. Guard
+and Hunt are decided by 6b″ (§15.6).
 ---
 
 ## 12. Training
@@ -2285,7 +2364,8 @@ is removing safety layers because the net is strong. Backwards: the scanner is t
 component whose coverage is distribution-free — rules, not learning — so it cannot be
 converged-toward. As the policy's residual errors become exclusively confident-systematic,
 the differently-wrong auditor covers precisely the class nothing else does. It stays on at
-match play, permanently.
+match play, permanently. (Since CHECKPOINT 4 that means Guard, Hunt and the search's solver
+at every size, with full settling scans only under 50 boards — §11.4.)
 
 **Late self-play goes stale; the verification layer is the curriculum.** A converged
 policy generates games the net already masters — near-zero gradient signal. The
@@ -2705,13 +2785,12 @@ with held-out adversarial evaluation; internal metrics will not see it. The comp
 mechanism and its six-layer mitigation stack are spelled out in §10.4.3. The §12.7
 adversarial league is its active probe.
 
-**Exact verification may not reach depth at high board counts.** 6b failed from 50
-boards up (CHECKPOINT 3): the brute-force scanner paid turn-level exactness on every
-line. The redesign (§11.1) is decided by 6b′; if it too fails above some board count,
-the verification layer covers only the smaller positions and the confident-quiet
-residual widens where games are largest — exactly where the window's blindness also
-lives. The adversarial league is then the main robustness mechanism there, not a
-supplement.
+**Exact verification does not reach depth above 50 boards — confirmed.** 6b failed
+(CHECKPOINT 3) and so did the df-pn redesign (6b′, CHECKPOINT 4), even at ten times the
+budget. Exact settling covers only small positions; above them the layer is Guard, Hunt,
+the search's solver and the offline audit lane (§11.4). The confident-quiet residual
+widens where games are largest — exactly where the window's blindness also lives — and
+the adversarial league is the main robustness mechanism there, not a supplement.
 
 **Timeline index is a noisy axis.** Branching order is partly arbitrary. Δtimeline may need
 different treatment from the other three.
@@ -2950,6 +3029,14 @@ learned-verifier estimates entering any loss.
   cross-board layer every third; cache-compatible, ~2.4× cheaper per node, K/V stored only
   at global layers (649 → ~203 MB at 600 boards). Layer-level fallback to head-level
   routing; committed-class; a 6a arm.
+- **Complexity-adaptive number of dense top layers** (§7.6) — extra bidirectional layers on
+  top of the cached stack for complex positions. On top only (C16's placement rule); each
+  costs ~1.8× a whole cached node evaluation at 240 boards; committed-class, since training
+  would have to randomise the number of dense top layers; and it builds on the deferred
+  hybrid. Held unless 6c shows fresh conditioning is worth a lot.
+- **The scanner NNUE** (§11.1) — moved from the build plan to held open at CHECKPOINT 4. Its
+  main job, evaluating the scanner's leaves, went with the leaf scans, and quiet-leaf reach
+  failed every range. Revisit only if a leaf-level role returns.
 - **Dedicated df-pn long-mate thread** (dlshogi's root solver) — v2. Its repetition gate
   is gone (§11.0 item 5); it still needs a 5D dominance definition for the df-pn+
   accelerations.
@@ -3049,6 +3136,9 @@ learned-verifier estimates entering any loss.
 - **The official game client as a rules oracle** (§11.0) — believed to incorrectly claim
   some positions are checkmate; agreement with it proves nothing. The oracles are
   independent open implementations, cross-checked against each other.
+- **Exact settling scans above 50 boards** (brute force or df-pn) — failed 6b and 6b′ even
+  at ten times the budget; the forcing trees are too large (§15.6). Guard and Hunt ask
+  narrower, one-sided questions instead (§11.4).
 
 **Registry note on process.** One refusal in this design's history was made against
 evidence already in this section: NNUE threat features were refused outright while the
@@ -3105,8 +3195,8 @@ writing.
 
 Not built in the untrained phase: the adversarial league (training infrastructure,
 trigger-gated, §12.7), the variant specialists (§12.6), refresh-ladder rungs 2–3 (gated on
-rung 1 showing a trained signal, §7.9). The window only if the \|E\| curve survives; the
-NNUE only after 6b.
+rung 1 showing a trained signal, §7.9), the retired scanner rungs and the NNUE, now held
+open (§11.4). The window only if the \|E\| curve survives.
 
 ### 15.2 The equivalence suite — correctness without training
 
@@ -3208,7 +3298,16 @@ The scope rule stays exact and state-defined either way (§10.4.2), so a phase-d
 window keeps training and deployment consistent. **The window is killed outright if the
 phases where it is on carry under half the compute** — weight each phase by per-move cost
 × moves spent in it; the late game dominates. The 95th-percentile |E| sets memory
-provisioning, not the decision. Expectation on record: off in the early game (at ~100
+provisioning, not the decision. **Three readings, fixed at CHECKPOINT 4.** The all-in
+multiplier is the time-share (harmonic) combination M = 1 / (0.9 / m_cached + 0.1 /
+m_dense), with 0.9 and 0.1 the shares of compute before windowing — not a weighted
+geometric mean, which overstates whenever the two components differ. The kill clause is
+weighted by real human games (MageOfficial/t0database) until self-play exists — a
+conservative proxy for the window, since those games top out around 186 boards and the
+window pays most above that — and re-checked against early self-play before serious
+self-play compute. Under 50 boards the window is off: that phase carries a small share
+of compute and dense attention there is cheap, so the choice is immaterial and the
+simpler one wins; a result inside the ±10% band there needs no stop. Expectation on record: off in the early game (at ~100
 boards it cannot pay at k = 8 even with |E| = 0), kept on its late-game value — at
 |E| ≈ 25 the all-in multiplier is ~1.6× at 160 boards, ~2.1× at 240, ~3.0× at 400 and
 ~4.0× at 600.
@@ -3272,6 +3371,29 @@ Outcomes, fixed now:
   robustness argument above them rests on the adversarial league alone — a design review,
   not a tuning pass.
 
+**CHECKPOINT 4 — 6b′ failed from 50 boards up.** df-pn decided 77.4% under 50 boards but
+40.7%, 23.7% and 0.0% at 50–99, 100–199 and 200+ (brute force: 75.9 / 30.7 / 24.7 /
+2.4%); ten times the budget reached only 45%, 34% and 2% above 50. Even the passes are
+thin: 256 of the 356 disproofs under 50 boards are positions with no checking move, and
+the literal question — every first move with every completion — is decided in 9 / 3 / 1 /
+0% of roots. The estimate channel fits the rung-1 budget nowhere (2.3× to 51× over), so
+rung 1 stays dropped; df-pn is kept under 50 boards (408 roots decided against 400). Per
+M15: STOP for a design review — concluded: the verification layer is v3 (§11.4).
+
+**6b″ — Guard and Hunt (pre-registered at CHECKPOINT 4).** Same positions, read per
+board-count range, 5 threads, 50 ms; both thresholds are judgement, fixed now:
+
+| Test | Pass |
+|---|---|
+| Guard | Depth 1 completes in ≥ 95% of roots in every range — it is insurance, so it must run almost always; depth reached is reported |
+| Hunt | Finds ≥ 50% of the forced mates within 5 half-turns that a long offline search establishes, per range |
+
+Hunt's ground truth comes from one long offline search per position, recorded once.
+Each part is adopted independently, in the ranges where it passes. Where Guard fails, the
+chosen move goes unguarded in that range; where Hunt fails, proofs there come only from
+the search's solver — both recorded in §13. No outcome stops the build: the layer's
+floor (exact rules, the solver, the audit lane, the league) stands either way.
+
 #### Movegen throughput — derived targets
 
 Search expands one node per network evaluation, so expansion — legal moves, attention
@@ -3319,3 +3441,8 @@ the sequencing, not the endpoint — a distinction this summary previously left 
 
 **Build all of it untrained first (§15).** Correctness by equivalence, cost by measurement —
 only quality needs training.
+
+**Verification is exact where it can be, and narrow where it can't (§11.4).** Exact rules
+everywhere; exact settling only in small positions; above 50 boards, Guard checks the
+chosen move against forced mate, Hunt looks for our own, the search's solver proves what
+it reaches, and the adversarial league carries robustness.
