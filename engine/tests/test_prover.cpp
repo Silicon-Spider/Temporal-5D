@@ -338,9 +338,26 @@ TEST(prover_proofs_and_disproofs_go_to_the_stores_h19) {
   // (The stores hold Win(3): not within 2, so the search runs.)
   const ProveResult r3 = shallow.prove(s, ProveBudget::nodes(2'000'000));
   CHECK(r3.status == ProofStatus::Disproven);
-  CHECK_EQ(disproofs.find(s, DisproofClass{true, o.seeds, o.completion}), 2);
-  CHECK_EQ(disproofs.find(s, DisproofClass{true, SeedClass::All, CompletionClass::Every}), -1);
+  CHECK_EQ(disproofs.find(s, DisproofClass{true, o.seeds, o.completion, disproof_shape(o)}), 2);
+  ProverOptions literal_o = o;
+  literal_o.seeds = SeedClass::All;
+  literal_o.completion = CompletionClass::Every;
+  CHECK_EQ(disproofs.find(s, DisproofClass{true, SeedClass::All, CompletionClass::Every, disproof_shape(literal_o)}),
+           -1);
+  // Every class-shaping option is in the key: another completion cap, other
+  // values, the check filter - another class, no disproof shared.
+  for (int k = 0; k < 4; ++k) {
+    ProverOptions other = o;
+    if (k == 0) other.completion_max_nodes = 17;
+    if (k == 1) other.values.value[1] += 1;
+    if (k == 2) other.check_filter = !other.check_filter;
+    if (k == 3) other.promotions_forcing = !other.promotions_forcing;
+    CHECK(disproof_shape(other) != disproof_shape(o));
+    CHECK_EQ(disproofs.find(s, DisproofClass{true, o.seeds, o.completion, disproof_shape(other)}), -1);
+  }
 }
+
+
 
 // ---- random play: every proof and disproof checked ---------------------------------------------
 

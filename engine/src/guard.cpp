@@ -31,6 +31,7 @@ void add(ProverStats& into, const ProverStats& x) {
   into.store_hits += x.store_hits;
   into.check_cut += x.check_cut;
   into.not_in_check += x.not_in_check;
+  into.attacker_tests += x.attacker_tests;
   into.stopped_by_nodes = into.stopped_by_nodes || x.stopped_by_nodes;
   into.stopped_by_time = into.stopped_by_time || x.stopped_by_time;
   into.stopped_by_memory = into.stopped_by_memory || x.stopped_by_memory;
@@ -38,6 +39,16 @@ void add(ProverStats& into, const ProverStats& x) {
 }
 
 }  // namespace
+
+ProverOptions guard_prover_options(const GuardOptions& options) {
+  ProverOptions po = options.prover;
+  po.seeds = SeedClass::All;  // every opponent action
+  po.completion = CompletionClass::Every;
+  po.prove_only = false;
+  po.threads = std::max(1, options.threads);
+  po.depth = 2 * std::clamp(options.max_depth, 1, kGuardMaxDepth) - 1;
+  return po;
+}
 
 GuardResult guard(const GameState& turn_start, const std::vector<Move>& action, const ProveBudget& budget,
                   const GuardOptions& options) {
@@ -56,13 +67,11 @@ GuardResult guard(const GameState& turn_start, const std::vector<Move>& action, 
   after.submit(CheckRuling::none());
 
   GuardResult out;
-  const int max_depth = std::max(1, options.max_depth);
-  ProverOptions po = options.prover;
-  po.seeds = SeedClass::All;            // every opponent action
-  po.completion = CompletionClass::Every;
-  po.prove_only = false;
-  po.threads = std::max(1, options.threads);
-  po.depth = 2 * max_depth - 1;
+  // At most kGuardMaxDepth of the opponent's actions: 2d - 1 half-turns stay
+  // within the prover's 100 (it clamps above), so every depth asked is the
+  // depth searched.
+  const int max_depth = std::clamp(options.max_depth, 1, kGuardMaxDepth);
+  const ProverOptions po = guard_prover_options(options);
   ConcurrentSolvedStore proofs;
   DisproofStore disproofs;
   Prover prover(po, &proofs, &disproofs);
@@ -83,12 +92,18 @@ GuardResult guard(const GameState& turn_start, const std::vector<Move>& action, 
       b.max_time = *budget.max_time - spent;
     }
     const ProveResult r = prover.prove(after, b, 2 * d - 1);
+    if (r.depth != 2 * d - 1) throw std::logic_error("guard: the prover searched another depth than asked");
     used += r.stats.nodes;
     add(out.stats, r.stats);
     out.depths.push_back(GuardDepth{d, r.status, r.stats.nodes, r.stats.seconds});
     if (r.status == ProofStatus::Proven) {
       out.refuted = true;
       out.refutation_depth = (r.proof.distance + 1) / 2;
+      // A mate within a depth already completed would contradict it: the
+      // search is unsound somewhere (never silently both).
+      if (out.refutation_depth <= out.completed_depth) {
+        throw std::logic_error("guard: a refutation within a depth already searched safe");
+      }
       out.line = r.line;
       out.line_complete = r.line_complete;
       out.certificate = r.certificate;

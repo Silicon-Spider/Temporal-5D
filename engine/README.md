@@ -2756,19 +2756,39 @@ kept - the asset map runs its own one-board quiescence.
   completion Every): every legal action once, not once per its first move.
 - **The last-turn check filter** (`check_filter`, OFF by default): mate needs check,
   so at the attacker's last half-turn a partial action that can no longer give check
-  could be cut. Sound: a move is check-capable when, played alone from the turn start,
-  it gives check in a passed multiverse that passes every opponent head (a superset of
+  could be cut. A move is check-capable when, played alone from the turn start, it
+  gives check in a passed multiverse that passes every opponent head (a superset of
   R1's sources) or makes a line stop at void where another of the attacker's moves
   could make a board (attack maps' new `VoidStop`s; a line through several new boards
   is opened by the first). Off where maps recompute (Q8, Q18, Q20) or a capture stands.
+  **J6's twins:** a non-branching jump onto another of the attacker's boards becomes
+  a branching move once that board has been played, landing on a new timeline the
+  turn start's maps never saw - so while any such jump exists, a check-capable branch
+  is assumed left to make (and a move the turn start does not offer is
+  check-capable). E9's first filter missed this: the review found a mate in one by a
+  twin that the filter cut - a false disproof, and in Guard a false "safe" (both
+  positions are now tests). It was off by default already.
   On 6b's first 120 roots it cut almost nothing (none under 50 boards) and cost more
   than it saved - in positions of several timelines a new board's passed copy sends
   lines across the timelines beside it, so nearly every move is check-capable - hence
   off; its test switches it on. Whatever the filter, a defender's turn at the horizon
   is decided "not mated" from R1's status alone when it is not in check.
 - **The proof's line** (the attacker's actions, the defender's longest defences, to
-  the mate) and, on request (`record_certificate`), its **certificate** - every proven
-  attacker position in the deciding thread's tree with its proving action.
+  the mate) and, on request (`record_certificate`), its **certificate** - every
+  attacker position the prover proved by expanding it, in any thread and any of its
+  searches, with its proving action (recorded as each proof is exported), so that a
+  proof read back from the solved store is certified too. A proof read from a store
+  another prover filled cannot be certified; the check names the missing position.
+- **An attacker with no legal action** (`attacker_probe`, on): an attacker's turn is
+  first asked E4's question - a quick search for one legal action, then E4's
+  exhaustive detector where it finds none - so a mated or stalemated attacker is
+  decided at once instead of by exhausting its semimove product (the review's 32-board
+  position: E4 decides it in a few hundred nodes; the tree had not in 2M). Efficiency
+  only: a test checks that it changes no answer.
+- **A disproof's class** carries every option that shapes the attacker's class
+  (`disproof_shape`: seeds, completion, the canonical completion's cap and values, the
+  branch threat, promotions, E5a's tiers, the check filter): provers with different
+  options never share a disproof.
 - `prove(root, budget, depth)`: one prover, its TT and stores, at several depths.
 
 ### Certificates checked against E4 alone (`t5d/certificate.hpp`)
@@ -2786,7 +2806,7 @@ incomplete; a budget leaves it undecided - never confirmed on a budget stop (H37
 `guard(state, action, budget, options[, hook]) -> {completed_depth, refuted, line}`.
 The chosen action - complete, legal, about to be submitted; under the ply split it is
 checked at its submission, since the opponent moves only after it (a reading: spec
-issue) - is submitted, and at the opponent's turn start Guard asks, depth by depth from
+issue 97) - is submitted, and at the opponent's turn start Guard asks, depth by depth from
 1 under one budget (nodes and/or wall clock): can the opponent force checkmate within
 d of *their* actions (2d − 1 half-turns), whatever we answer? The prover runs with the
 opponent as attacker and the literal class - every opponent action, once each - and
@@ -2796,7 +2816,9 @@ us in check, one legal escape exists": existence, never our full listing. Exact 
 every depth that completes ("safe to depth d"); a refutation is a proof (H37) with the
 opponent's forcing line, and rejects the move - the search re-searches from §8.6's
 reserve (`GuardHook`, wired with the search). Where turns do not decompose, the
-opponent's actions are E4's listing, up to 65,536.
+opponent's actions are E4's listing, up to 65,536. At most 50 depths (99 half-turns,
+inside the prover's limit): every depth Guard reports is the depth searched, and a
+refutation inside a depth already reported safe throws - never both in one result.
 
 **What Guard's depth 1 costs.** "Existence, not the full listing" removes *our*
 listing, not theirs: to say "safe" Guard must refute every opponent action, and the
@@ -2805,7 +2827,8 @@ pass included where optional). The semimove tree enumerates that product once ea
 cutting the opponent's illegal partial actions at once and deciding each of our turns
 by R1's status (not in check: done) or one escape - but the product itself remains.
 Guard completes depth 1 wherever the opponent has few boards to play; with several, no
-exact method short of enumerating their actions is known to this design (spec issue).
+exact method short of enumerating their actions is known to this design (spec issue
+99).
 
 ### Hunt (H43; `t5d/hunt.hpp`)
 
