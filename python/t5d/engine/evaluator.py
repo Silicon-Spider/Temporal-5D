@@ -52,7 +52,7 @@ import torch
 from ..net.cache import CachedEvaluator, Epoch
 from ..net.model import NetOutput, T5DNet
 from ..net.state import PositionState, collate, relayout
-from .capi import T5D_VALUE_LOGITS
+from .capi import T5D_VALUE_LOGITS, T5D_VALUE_PROBABILITIES
 from .convert import Position, to_position
 from .errors import EngineInternalError
 from .search import LeafView, Search
@@ -353,17 +353,28 @@ class CStepDriver:
     The search's ``expand`` options must give every board's features (``"all"``): the
     network's input is the full history. Errors from the engine raise as exceptions
     (``errors.py``); ``abandon`` releases a waiting batch (``run_search`` and ``serve`` call it
-    when evaluation fails)."""
+    when evaluation fails). ``batch`` is the waiting batch's leaves (``LeafView``: key, epoch,
+    D8's flags, the expansion), in the order the evaluator receives their positions.
 
-    def __init__(self, search: Search, *, playouts: int, regs_per_board: int = 2, global_regs: int = 16) -> None:
+    ``value_kind``: what an evaluation's ``value_logits`` hold - ``T5D_VALUE_LOGITS`` (the
+    network's, the default) or ``T5D_VALUE_PROBABILITIES`` (an evaluator with exact
+    probabilities - the engine's built-in evaluators rewritten in Python, for bit-identical
+    comparisons with the engine's own runs)."""
+
+    def __init__(
+        self, search: Search, *, playouts: int, regs_per_board: int = 2, global_regs: int = 16, value_kind: int = T5D_VALUE_LOGITS
+    ) -> None:
         if playouts < 0:
             raise ValueError("playouts must not be negative")
         if search.square_features != "all":
             raise ValueError(f"the network needs every board's features: the search expands with {search.square_features!r} features")
+        if value_kind not in (T5D_VALUE_LOGITS, T5D_VALUE_PROBABILITIES):
+            raise ValueError("value_kind must be T5D_VALUE_LOGITS or T5D_VALUE_PROBABILITIES")
         self.search = search
         self.playouts = int(playouts)
         self.regs_per_board = int(regs_per_board)
         self.global_regs = int(global_regs)
+        self.value_kind = int(value_kind)
         self._p0 = search.info().playouts
         self._waiting: list[LeafView] | None = None
         self._done = False
@@ -376,6 +387,11 @@ class CStepDriver:
     def _finish(self, why: str) -> list[Leaf]:
         self._done, self.stop = True, why
         return []
+
+    @property
+    def batch(self) -> tuple[LeafView, ...]:
+        """The waiting batch's leaves, in order (empty when none waits)."""
+        return tuple(self._waiting or ())
 
     def collect(self, max_leaves: int) -> list[Leaf]:
         if self._waiting is not None:
@@ -427,7 +443,7 @@ class CStepDriver:
         offered = [v.submit_possible and v.submit_legal for v in views]
         submit = np.array([ev.submit_logit if ok else math.nan for ev, ok in zip(evs, offered, strict=True)], dtype=np.float32)
         self._waiting = None  # delivered or refused, the engine no longer holds the batch
-        self.search.deliver(logits, values, submit_logits=submit, value_kind=T5D_VALUE_LOGITS)
+        self.search.deliver(logits, values, submit_logits=submit, value_kind=self.value_kind)
 
     def abandon(self) -> None:
         """Release a waiting batch (nothing backed up)."""
@@ -447,11 +463,12 @@ def run_search(
     batch_size: int = 8,
     regs_per_board: int = 2,
     global_regs: int = 16,
+    value_kind: int = T5D_VALUE_LOGITS,
 ) -> tuple[ServeStats, CStepDriver]:
     """Run ``playouts`` simulations of ``search`` with ``evaluator`` through the step API
     (``CStepDriver`` and ``serve``, at most ``batch_size`` leaves per evaluation): the loop's
     statistics and the driver (its ``stop`` says why it ended)."""
-    driver = CStepDriver(search, playouts=playouts, regs_per_board=regs_per_board, global_regs=global_regs)
+    driver = CStepDriver(search, playouts=playouts, regs_per_board=regs_per_board, global_regs=global_regs, value_kind=value_kind)
     stats = serve(driver, evaluator, batch_size=batch_size)
     return stats, driver
 
