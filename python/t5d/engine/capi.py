@@ -643,6 +643,28 @@ def library_available(path: str | os.PathLike | None = None) -> bool:
     return True
 
 
+def library_status(path: str | os.PathLike | None = None, *, fresh: bool = False) -> tuple[str, str]:
+    """``("available", "")``; ``("missing", why)`` - no library file where ``find_library``
+    looks (none built, no path or ``T5D_ENGINE_LIB`` given); or ``("refused", why)`` - a
+    library that was named or found but does not load: not a library, without the C API's
+    functions, or laid out otherwise than this binding (``layout_mismatches``), or an explicit
+    path or ``T5D_ENGINE_LIB`` that names nothing. A refused library is a fault to report, never
+    a reason to skip. ``fresh``: check with a new ``Library`` instead of the loaded one."""
+    named = path is not None or bool(os.environ.get(ENV_VAR, "").strip())
+    try:
+        found = find_library(path).resolve()
+    except EngineNotFoundError as exc:
+        return ("refused" if named else "missing"), str(exc)
+    try:
+        if fresh:
+            Library(found)
+        else:
+            load_library(found)
+    except EngineNotFoundError as exc:
+        return "refused", str(exc)
+    return "available", ""
+
+
 def char_array(strings: list[str]) -> ctypes.Array:
     """A ``const char* const*`` of UTF-8 strings (the array keeps the bytes alive)."""
     encoded = [s.encode("utf-8") for s in strings]
@@ -676,6 +698,7 @@ __all__ = [
     "find_library",
     "layout_mismatches",
     "library_available",
+    "library_status",
     "load_library",
     "repository_root",
 ]
