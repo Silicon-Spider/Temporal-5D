@@ -2200,8 +2200,10 @@ t5d-play [--variant NAME] [--evaluator uniform|random|material] [--playouts N]
 Defaults: Standard, uniform, 64 playouts per decision, the board-move split, a tree,
 self-play with root noise (`--no-noise`: none), the proof channel off (H41;
 `--proof-channel` for experiments, said in the Engine header), a cap of
-20 turns (uniform play branches freely: by turn 12 a game can
-hold 300 boards on 50 timelines). `--mate-nodes N` sets the search's terminal-check
+20 turns or 300 boards (uniform play branches freely: by turn 12 a game can
+hold 300 boards on 50 timelines, and with root noise time travel can hold the present
+back for good - a Standard game reached 509 boards on 110 timelines in 39 actions
+without passing turn 20). `--mate-nodes N` sets the search's terminal-check
 budget; `--max-actions` (checked at turn starts) and `--max-seconds` (checked before
 every decision, and each search's deadline: an action under way when it passes is not
 recorded) are safety stops - the record ends `*`, its Termination header naming the

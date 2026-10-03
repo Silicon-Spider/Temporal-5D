@@ -17,7 +17,9 @@
 // sampled at temperature 1 for the first 16 decisions, Dirichlet noise at the
 // root: --no-noise for none) - --match plays the
 // final rule (E5, LCB by default) with the tree carried (C12) - and a turn cap
-// of 20 turns (I11: a convention, scored as a draw; --cap-turns 0 lifts it).
+// of 20 turns or 300 boards (I11: a convention, scored as a draw; --cap-turns 0
+// --cap-boards 0 lift it: with root noise, time travel can hold the present
+// back for good).
 // --proof-channel turns on the in-tree solver's propagation of proven bounds
 // (H2, E9) - the proof channel's switch, off by rule (H41) until the gate
 // passes and the channel is signed off: for experiments only.
@@ -105,6 +107,7 @@ int main(int argc, char** argv) {
   PlayParams params;
   params.search.expand.square_features = SquareFeatures::None;  // the built-ins read none
   params.turn_cap.turns = 20;
+  params.turn_cap.boards = 300;
   RuleOptions rules;
   try {
     for (int i = 1; i < argc; ++i) {
