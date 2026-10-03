@@ -278,7 +278,7 @@ values, appended at the end of the stream: no existing key changed).
 | Parameter | Default | Alternative | Rules |
 |---|---|---|---|
 | `activation` | `Count`: the count rule - **the rule** since R2 closed Q1 (2026-10-01) | `Consecutive`: a player's creation right after their own previous one is inactive (a reading R2 rejected; kept for comparison) | T10, Q1, R2 |
-| `initial_credit` | `None`: initial timelines count for neither side | `MinusZeroToBlack`: in an even start, Black counts as having created "-0" | T10, T13, Q2 |
+| `initial_credit` | `None`: initial timelines count as created by neither player - always active, never counted (ruled R10, register H46, provisional) | `MinusZeroToBlack`: in an even start, Black counts as having created "-0" (diagnosis only) | T10, T13, Q2, R10 |
 | `play_activates` | false | a move by the non-creator on or onto an inactive timeline activates it | T11, Q3 |
 | `moves_after_shift` | true: moves until submission - **the rule** since R8 ruled Q4 (2026-10-02; register D8) | false: Q4's Guide-literal reading, no move once the present has shifted - a diagnostic (`--no-moves-after-shift`). Encoding bit 3 marks it: the bit meant the opposite before stage E7 | T5, Q4, R8 |
 | `mandatory` | `InPresent`: active boards in the present (G) - settled by R9 (Q5) | `AllActive`: every active board of the mover's (the reading R9 ranks below the Guide; kept for comparison) | T6, Q5, R9 |

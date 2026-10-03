@@ -12,6 +12,7 @@
 #include "t5d/fen.hpp"
 #include "t5d/movegen.hpp"
 #include "t5d/state.hpp"
+#include "t5d/variants.hpp"
 #include "test_framework.hpp"
 #include "test_positions.hpp"
 
@@ -383,6 +384,27 @@ TEST(state_the_last_creator_counts_only_under_q1_consecutive) {
     CHECK(!fresh.last_creator().has_value());
     CHECK_EQ(fresh == s, !consecutive);
     CHECK_EQ(fresh.zobrist() == s.zobrist(), !consecutive);
+  }
+}
+
+TEST(state_h46_initial_timelines_are_created_by_neither_player) {
+  // Ruling R10 (register H46, provisional, CHECKPOINT 5): in a variant that
+  // starts with several timelines, odd or even, every initial timeline is
+  // active and counts toward neither player's created timelines.
+  for (const char* name : {"Standard - Two Timelines", "Misc - Timeline Tactician",
+                           "Misc - Timeline Strategos", "Misc - Timeline Formations",
+                           "Misc - Timeline Battleground"}) {
+    const Variant* v = find_variant(name);
+    REQUIRE(v != nullptr);
+    const GameState s = variant_start(*v, RuleOptions{});
+    const Multiverse& mv = s.multiverse();
+    CHECK(mv.timelines().size() >= std::size_t{2});
+    CHECK_EQ(mv.created_by(Colour::White), 0);
+    CHECK_EQ(mv.created_by(Colour::Black), 0);
+    for (const TimelineRef& t : mv.timelines()) {
+      CHECK(!t->creator().has_value());
+      CHECK(s.active(t->position()));
+    }
   }
 }
 

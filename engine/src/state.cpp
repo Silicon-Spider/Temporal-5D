@@ -642,10 +642,11 @@ int initial_present(const Multiverse& mv, const RuleOptions& rules) {
 }
 
 GameState game_from_fen(std::span<const std::string_view> boards, BoardSize size, Parity parity,
-                        const RuleOptions& rules, std::optional<Colour> to_move) {
+                        const RuleOptions& rules, std::optional<Colour> to_move,
+                        bool all_initial) {
   rules.validate();
   Multiverse mv = multiverse_from_fen(boards, size, parity, rules.ruleset_id(),
-                                      to_move.value_or(Colour::White));
+                                      to_move.value_or(Colour::White), all_initial);
   if (!to_move) {
     if (!central_timelines_initial(mv)) {
       // Let the constructor say what is wrong.
@@ -657,9 +658,11 @@ GameState game_from_fen(std::span<const std::string_view> boards, BoardSize size
 }
 
 GameState game_from_fen(const std::vector<std::string>& boards, BoardSize size, Parity parity,
-                        const RuleOptions& rules, std::optional<Colour> to_move) {
+                        const RuleOptions& rules, std::optional<Colour> to_move,
+                        bool all_initial) {
   std::vector<std::string_view> views(boards.begin(), boards.end());
-  return game_from_fen(std::span<const std::string_view>(views), size, parity, rules, to_move);
+  return game_from_fen(std::span<const std::string_view>(views), size, parity, rules, to_move,
+                       all_initial);
 }
 
 Outcome outcome(const GameState& turn_start, const CheckRuling& ruling) {
