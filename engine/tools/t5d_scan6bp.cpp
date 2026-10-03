@@ -3,14 +3,13 @@
 //
 //   t5d-scan6bp [options] [RECORD ...]
 //
-// POSITIONS - the same as 6b's (t5d-scan6b): ROOTS, the turn starts of the
+// POSITIONS - the same roots as 6b's (t5d-scan6b): the turn starts of the
 // 5dpgn records given (replayed as the gate adapter's parse mode does, under
-// the ruleset given), every K-th (--every), distinct by position; LEAVES,
-// --leaves per root --leaf-depth half-turns below it by random legal play,
-// made exactly as t5d-scan6b makes them (a random pseudo-legal seed completed
-// by the scanner's rule, E4's witness when none completes; the same seeds). A
-// position whose side to move could capture a royal (the record's last action
-// broke C4), or that has no legal action, is counted and not measured.
+// the ruleset given), every K-th (--every), distinct by position. A position
+// whose side to move could capture a royal (the record's last action broke
+// C4), or that has no legal action, is counted and not measured. (6b-prime's
+// leaves and its test (B) of the per-leaf estimate channel are gone: the
+// channel was retired at CHECKPOINT 4, verification v3, spec 11.4.)
 //
 // THE TESTS (M15), read per BOARD-COUNT RANGE - < 50, 50-99, 100-199, 200+ -
 // never pooled (M12), at M13's 5 scanner threads:
@@ -19,16 +18,6 @@
 //      prover and stores each, one root at a time. DECIDED: mate within 5
 //      half-turns (--depth) proven, or disproven (no such mate within the
 //      class). Pass: >= 50% of roots decided.
-//  (B) THE ESTIMATE CHANNEL (t5d/estimate.hpp) at every leaf, one thread.
-//      FITS, operationalised before measuring: the rung-1 leaf budget is what
-//      the 5 scanner threads (--threads) can spend while one leaf waits for
-//      its batched evaluation - 5 x the channel's measured nodes per second of
-//      thread CPU time (over all the leaves; --nps fixes it) / §15.6's design
-//      evaluation rate, size-matched (9,600/s below 420 boards, 4,600/s from
-//      420; no GPU here) - and the channel fits a range when the 90th
-//      percentile, over its leaves, of a leaf's cost in nodes divided by its
-//      budget is at most 1. The per-leaf wall time against 5 / rate is
-//      printed beside it, as information.
 //  (C) BRUTE FORCE AGAINST DF-PN BELOW 50 BOARDS (M15: keep whichever decides
 //      more roots there): the E5c scanner's 6b root scan at every root - 50
 //      ms, 5 threads, Lazy SMP, a fresh scanner and store each; DECIDED: 5
@@ -38,8 +27,7 @@
 // from 50 boards up passes - adopt (below 50, keep whichever of brute force
 // and df-pn decides more); 50-199 pass and 200+ fails - phase-dependent
 // (above 200 boards proofs only at the root final scan and PV transitions);
-// 50-199 fail - STOP for a design review. (B) is judged range by range: rung
-// 1 returns, estimate channel only, where it fits. A share within 45-55% of a
+// 50-199 fail - STOP for a design review. A share within 45-55% of a
 // threshold is flagged, as 6b's tool does.
 //
 // Output: a summary on standard output (or --summary FILE) and, with --json
@@ -67,7 +55,6 @@
 
 #include "synthetic.hpp"
 #include "t5d/check.hpp"
-#include "t5d/estimate.hpp"
 #include "t5d/fingerprint.hpp"
 #include "t5d/gate.hpp"
 #include "t5d/movegen.hpp"
@@ -149,21 +136,6 @@ std::string cpu_model() {
 #endif
 }
 
-double thread_cpu_seconds() {
-#if defined(_WIN32)
-  FILETIME created, exited, kernel, user;
-  GetThreadTimes(GetCurrentThread(), &created, &exited, &kernel, &user);
-  const auto u64 = [](FILETIME f) {
-    return (static_cast<std::uint64_t>(f.dwHighDateTime) << 32) | f.dwLowDateTime;
-  };
-  return static_cast<double>(u64(kernel) + u64(user)) * 1e-7;
-#else
-  timespec ts{};
-  clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts);
-  return static_cast<double>(ts.tv_sec) + static_cast<double>(ts.tv_nsec) * 1e-9;
-#endif
-}
-
 struct CpuTimes {
   std::uint64_t idle = 0;
   std::uint64_t total = 0;
@@ -203,19 +175,14 @@ double busy_between(const CpuTimes& a, const CpuTimes& b) {
 struct Options {
   t5d::RuleOptions rules;
   t5d::ProverOptions prover;
-  t5d::EstimateOptions estimate;
-  t5d::ScannerOptions scanner;  // brute force, and the leaves' random play
+  t5d::ScannerOptions scanner;  // brute force
   std::vector<std::string> records;
   int every = 1;
   std::size_t max_roots = 0;
-  int leaves = 1;
-  int leaf_depth = 2;
-  std::uint64_t seed = 1;
   int threads = 5;  // M13
   double root_ms = 50;
   double brute_ms = 50;
   bool brute = true;
-  double nps = 0;  // the estimate channel's; 0: measured
   int min_boards = 0;            // information runs: measure only positions in
   int max_boards = 1 << 30;      // this board-count window
   std::string json;
@@ -227,31 +194,26 @@ struct Options {
   std::FILE* out = status == 0 ? stdout : stderr;
   std::fputs(
       "t5d-scan6bp " T5D_VERSION_STRING
-      " - experiment 6b-prime: the proof channel's roots decided at 50 ms, the estimate\n"
-      "channel's leaf cost against the rung-1 budget, brute force against df-pn (design spec 15.6,\n"
-      "register M15).\n"
+      " - experiment 6b-prime: the proof channel's roots decided at 50 ms, brute force against\n"
+      "df-pn (design spec 15.6, register M15; the estimate channel's test retired at CHECKPOINT 4).\n"
       "\n"
       "usage: t5d-scan6bp [options] [RECORD ...]\n"
       " positions (as t5d-scan6b)\n"
-      "  --every K  --max-roots N  --leaves N (1)  --leaf-depth D (2)  --seed S (1)\n"
+      "  --every K  --max-roots N\n"
       "  --record-list FILE         records listed one per line ('#' lines skipped)\n"
       "  --record-root DIR          ... their relative paths taken from DIR\n"
       "  --rules ENCODING           the ruleset (RuleOptions::encode; default 0, the engine's)\n"
       "  --no-moves-after-shift     a diagnostic: Q4's Guide-literal reading (default, R8: moves\n"
       "                             until submission)    --moves-after-shift   accepted, ignored\n"
       " the measurement\n"
-      "  --threads T                the scanner thread budget (5, M13): (A), (B)'s budget, (C)\n"
+      "  --threads T                the scanner thread budget (5, M13): (A), (C)\n"
       "  --root-ms MS               (A)'s time per root (50)\n"
       "  --brute-ms MS              (C)'s time per root (50)    --no-brute-force   skip (C)\n"
-      "  --nps N                    (B): the estimate channel's nodes/s per thread (measured)\n"
       "  --min-boards N  --max-boards N   information runs: only positions in this window\n"
       " the proof channel (t5d/prover.hpp)\n"
       "  --depth D (5)  --seeds checks|forcing|all  --completion canonical|every\n"
       "  --completion-max-nodes N (2000)  --escape-probe-nodes N (256)  --legality-tiers\n"
       "  --tt-entries N  --listing-cap N  --root-disproofs-only\n"
-      " the estimate channel (t5d/estimate.hpp)\n"
-      "  --est-plies P (6)  --est-threat-plies P (1)  --est-delta D (200)  --est-max-nodes N\n"
-      "  --est-live M (100)\n"
       " output\n"
       "  --json FILE  --summary FILE  --per-position  --help  --version\n",
       out);
@@ -285,12 +247,6 @@ Options parse(int argc, char** argv) {
       o.every = static_cast<int>(std::max<std::uint64_t>(1, number(value())));
     } else if (a == "--max-roots") {
       o.max_roots = static_cast<std::size_t>(number(value()));
-    } else if (a == "--leaves") {
-      o.leaves = static_cast<int>(number(value()));
-    } else if (a == "--leaf-depth") {
-      o.leaf_depth = static_cast<int>(number(value()));
-    } else if (a == "--seed") {
-      o.seed = number(value());
     } else if (a == "--threads") {
       o.threads = static_cast<int>(std::max<std::uint64_t>(1, number(value())));
     } else if (a == "--root-ms") {
@@ -299,8 +255,6 @@ Options parse(int argc, char** argv) {
       o.brute_ms = std::atof(value());
     } else if (a == "--no-brute-force") {
       o.brute = false;
-    } else if (a == "--nps") {
-      o.nps = std::atof(value());
     } else if (a == "--depth") {
       o.prover.depth = static_cast<int>(number(value()));
     } else if (a == "--seeds") {
@@ -335,16 +289,6 @@ Options parse(int argc, char** argv) {
       o.prover.listing_cap = static_cast<std::size_t>(number(value()));
     } else if (a == "--root-disproofs-only") {
       o.prover.record_all_disproofs = false;
-    } else if (a == "--est-plies") {
-      o.estimate.max_plies = static_cast<int>(number(value()));
-    } else if (a == "--est-threat-plies") {
-      o.estimate.threat_plies = static_cast<int>(number(value()));
-    } else if (a == "--est-delta") {
-      o.estimate.delta_margin = static_cast<int>(number(value()));
-    } else if (a == "--est-max-nodes") {
-      o.estimate.max_nodes = number(value());
-    } else if (a == "--est-live") {
-      o.estimate.live_margin = static_cast<int>(number(value()));
     } else if (a == "--min-boards") {
       o.min_boards = static_cast<int>(number(value()));
     } else if (a == "--max-boards") {
@@ -386,36 +330,12 @@ Options parse(int argc, char** argv) {
 
 // ---- positions (t5d-scan6b's construction, unchanged) -----------------------------------------
 
-enum class Role : std::uint8_t { Root = 0, Leaf };
-
 struct Position {
   std::string source;
   bool synthetic = false;
   int index = 0;
-  Role role = Role::Root;
-  int parent = -1;
   std::optional<t5d::GameState> state;
 };
-
-std::optional<std::vector<t5d::Move>> random_legal_action(const t5d::GameState& s,
-                                                          t5d::synthetic::Rng& rng,
-                                                          t5d::Scanner& scanner) {
-  t5d::MoveList moves;
-  t5d::generate_moves(s, moves);
-  moves.erase(std::remove_if(moves.begin(), moves.end(),
-                             [](const t5d::Move& m) { return m.captured.royal(); }),
-              moves.end());
-  for (int attempt = 0; attempt < 24 && !moves.empty(); ++attempt) {
-    const std::size_t i = rng.below(moves.size());
-    if (const std::optional<t5d::BuiltAction> a = scanner.complete(s, moves[i])) return a->moves;
-    moves.erase(moves.begin() + static_cast<std::ptrdiff_t>(i));
-  }
-  t5d::SearchBudget b = t5d::SearchBudget::nodes(200'000);
-  b.max_bytes = std::size_t{256} << 20;
-  const t5d::MateResult r = t5d::detect_mate(s, t5d::Detector::Hypercuboid, b);
-  if (r.verdict == t5d::Outcome::Ongoing) return r.witness;
-  return std::nullopt;
-}
 
 bool broken(const t5d::GameState& s) {
   return t5d::royal_capture_exists(s.multiverse(), s.rules(), s.to_move(), s.inactive_timelines());
@@ -434,9 +354,6 @@ struct Result {
   std::optional<t5d::ProveResult> prove;
   // (C)
   std::optional<t5d::ScanResult> brute;
-  // (B)
-  std::optional<t5d::EstimateResult> estimate;
-  double estimate_seconds = 0;  // wall
 };
 
 constexpr int kRanges = 4;
@@ -522,37 +439,6 @@ int main(int argc, char** argv) {
       record_notes.push_back(path + ": not read (" + e.what() + ")");
     }
   }
-  const std::size_t roots = positions.size();
-  {
-    t5d::Scanner helper(o.scanner);
-    for (std::size_t r = 0; r < roots; ++r) {
-      for (int l = 0; l < o.leaves; ++l) {
-        t5d::synthetic::Rng rng(o.seed * std::uint64_t{104729} + static_cast<std::uint64_t>(r) * std::uint64_t{1009} +
-                                static_cast<std::uint64_t>(l) + 3);
-        t5d::GameState s = *positions[r].state;
-        bool ok = true;
-        for (int d = 0; d < o.leaf_depth && ok; ++d) {
-          const std::optional<std::vector<t5d::Move>> act = random_legal_action(s, rng, helper);
-          if (!act) {
-            ok = false;
-            break;
-          }
-          for (const t5d::Move& m : *act) s.apply(m);
-          s.submit();
-        }
-        if (!ok) continue;
-        Position p;
-        p.source = positions[r].source;
-        p.synthetic = positions[r].synthetic;
-        p.index = positions[r].index;
-        p.role = Role::Leaf;
-        p.parent = static_cast<int>(r);
-        p.state = s;
-        positions.push_back(std::move(p));
-      }
-    }
-  }
-
   // -- which positions are measured ------------------------------------------------------------
   std::vector<Result> results(positions.size());
   for (std::size_t i = 0; i < positions.size(); ++i) {
@@ -579,16 +465,14 @@ int main(int argc, char** argv) {
     r.in_check = m.in_check;
     r.measured = true;
   }
-  const auto counted = [&](std::size_t i, Role role) {
-    return results[i].measured && positions[i].role == role && !positions[i].synthetic;
-  };
+  const auto counted = [&](std::size_t i) { return results[i].measured && !positions[i].synthetic; };
 
   // -- (A) the proof channel, one root at a time ---------------------------------------------------
   const CpuTimes a0 = cpu_times();
   const Clock::time_point a_wall0 = Clock::now();
   std::size_t done = 0;
   for (std::size_t i = 0; i < positions.size(); ++i) {
-    if (!results[i].measured || positions[i].role != Role::Root) continue;
+    if (!results[i].measured) continue;
     t5d::Prover prover(o.prover);
     results[i].prove = prover.prove(*positions[i].state,
                                     t5d::ProveBudget::time(std::chrono::nanoseconds(static_cast<long long>(o.root_ms * 1e6))));
@@ -606,7 +490,7 @@ int main(int argc, char** argv) {
     timed.threads = o.threads;
     done = 0;
     for (std::size_t i = 0; i < positions.size(); ++i) {
-      if (!results[i].measured || positions[i].role != Role::Root) continue;
+      if (!results[i].measured) continue;
       t5d::ScanBudget wb;
       wb.max_time = std::chrono::nanoseconds(static_cast<long long>(o.brute_ms * 1e6));
       t5d::Scanner fresh(timed);
@@ -617,24 +501,6 @@ int main(int argc, char** argv) {
   const double c_wall = std::chrono::duration<double>(Clock::now() - c_wall0).count();
   const double c_busy = busy_between(c0, cpu_times());
 
-  // -- (B) the estimate channel, one leaf at a time, one thread ----------------------------------
-  const CpuTimes b0 = cpu_times();
-  const double cpu0 = thread_cpu_seconds();
-  std::uint64_t est_nodes = 0;
-  std::size_t est_capped = 0;
-  for (std::size_t i = 0; i < positions.size(); ++i) {
-    if (!results[i].measured || positions[i].role != Role::Leaf) continue;
-    const Clock::time_point t0 = Clock::now();
-    results[i].estimate = t5d::estimate(*positions[i].state, o.estimate);
-    results[i].estimate_seconds = std::chrono::duration<double>(Clock::now() - t0).count();
-    est_nodes += results[i].estimate->nodes;
-    if (results[i].estimate->capped) ++est_capped;
-  }
-  const double est_cpu = std::max(1e-9, thread_cpu_seconds() - cpu0);
-  const double b_busy = busy_between(b0, cpu_times());
-  const double measured_nps = static_cast<double>(est_nodes) / est_cpu;
-  const double nps = o.nps > 0 ? o.nps : measured_nps;
-
   // -- the figures ----------------------------------------------------------------------------------
   std::string out;
   const auto line = [&](const std::string& s) { out += s + "\n"; };
@@ -643,8 +509,7 @@ int main(int argc, char** argv) {
   line("");
   line("CONDITIONS");
   line("  machine: " + cpu + ", " + std::to_string(logical) + " logical processors; busy " + fmt(100 * a_busy) +
-       "% during (A), " + fmt(100 * c_busy) + "% during (C), " + fmt(100 * b_busy) +
-       "% during (B) (all processes; the tool's own threads included)");
+       "% during (A), " + fmt(100 * c_busy) + "% during (C) (all processes; the tool's own threads included)");
   line("  build: " + compiler_text() + ", " + T5D_BUILD_TYPE + ", flags \"" + T5D_CXX_FLAGS + "\"");
   line("  rules: " + t5d::describe(o.rules) + (t5d::decomposes(o.rules) ? " - turns decompose into semimoves"
                                                                           : " - turns do NOT decompose: E4's listings"));
@@ -655,33 +520,23 @@ int main(int argc, char** argv) {
        (o.prover.legality_tiers ? "on" : "off") + ", TT " + std::to_string(o.prover.tt_entries) + ", " +
        std::to_string(o.threads) + " threads, " + fmt(o.root_ms, 0) +
        " ms of wall clock per root, a fresh prover and stores each, one root at a time; wall " + fmt(a_wall, 1) + " s");
-  line("  (B) estimate channel: " + std::to_string(o.estimate.max_plies) + " plies, threats in " +
-       std::to_string(o.estimate.threat_plies) + ", delta margin " + std::to_string(o.estimate.delta_margin) +
-       ", node cap " + std::to_string(o.estimate.max_nodes) + ", one thread; " + std::to_string(est_nodes) +
-       " nodes in " + fmt(est_cpu, 3) + " s of thread CPU time = " + fmt(measured_nps, 0) + " nodes/s" +
-       (o.nps > 0 ? " (budgets from --nps " + fmt(o.nps, 0) + ")" : "") + "; " + std::to_string(est_capped) +
-       " leaves hit the node cap");
   line("  (C) brute force: the E5c scanner (t5d/scanner.hpp defaults), " + std::to_string(o.threads) +
        " threads, Lazy SMP, " + fmt(o.brute_ms, 0) + " ms per root, a fresh scanner and store each" +
        (o.brute ? "; wall " + fmt(c_wall, 1) + " s" : std::string(": not run (--no-brute-force)")));
   line("  positions: every " + std::to_string(o.every) + " turn start(s) of " + std::to_string(o.records.size()) +
-       " record(s); leaves " + std::to_string(o.leaves) + " per root at " + std::to_string(o.leaf_depth) +
-       " half-turns of random legal play (t5d-scan6b's, seed " + std::to_string(o.seed) + "); " +
-       std::to_string(duplicates) + " duplicate root(s) dropped");
+       " record(s); " + std::to_string(duplicates) + " duplicate root(s) dropped");
   for (const std::string& n : record_notes) line("    " + n);
   {
     std::map<std::string, std::size_t> skipped;
     std::size_t nr = 0;
-    std::size_t nl = 0;
     for (std::size_t i = 0; i < positions.size(); ++i) {
       if (!results[i].measured) {
-        skipped[(positions[i].role == Role::Root ? "root " : "leaf ") + results[i].skipped]++;
+        skipped["root " + results[i].skipped]++;
         continue;
       }
-      if (counted(i, Role::Root)) ++nr;
-      if (counted(i, Role::Leaf)) ++nl;
+      if (counted(i)) ++nr;
     }
-    line("  measured: " + std::to_string(nr) + " roots and " + std::to_string(nl) + " leaves");
+    line("  measured: " + std::to_string(nr) + " roots");
     for (const auto& [why, n] : skipped) line("    not measured: " + std::to_string(n) + " " + why);
   }
   line("");
@@ -696,7 +551,7 @@ int main(int argc, char** argv) {
   };
   Share proof[kRanges + 1];
   for (std::size_t i = 0; i < positions.size(); ++i) {
-    if (!counted(i, Role::Root) || !results[i].prove) continue;
+    if (!counted(i) || !results[i].prove) continue;
     const t5d::ProveResult& r = *results[i].prove;
     for (const int k : {range_of(results[i].boards), kRanges}) {
       Share& s = proof[k];
@@ -749,55 +604,12 @@ int main(int argc, char** argv) {
   }
   line("");
 
-  // (B)
-  struct Fit {
-    std::vector<double> ratio;
-    std::vector<double> nodes;
-    std::vector<double> budget;
-    std::vector<double> wall_us;
-    std::vector<double> wall_budget_us;
-    std::size_t live = 0;
-  };
-  Fit fit[kRanges + 1];
-  const auto rate_for = [](int boards) { return boards < 420 ? 9600.0 : 4600.0; };
-  for (std::size_t i = 0; i < positions.size(); ++i) {
-    if (!counted(i, Role::Leaf) || !results[i].estimate) continue;
-    const t5d::EstimateResult& e = *results[i].estimate;
-    const double rate = rate_for(results[i].boards);
-    const double budget = static_cast<double>(o.threads) * nps / rate;
-    for (const int k : {range_of(results[i].boards), kRanges}) {
-      Fit& f = fit[k];
-      f.ratio.push_back(static_cast<double>(e.nodes) / std::max(budget, 1e-9));
-      f.nodes.push_back(static_cast<double>(e.nodes));
-      f.budget.push_back(budget);
-      f.wall_us.push_back(results[i].estimate_seconds * 1e6);
-      f.wall_budget_us.push_back(static_cast<double>(o.threads) / rate * 1e6);
-      if (e.live) ++f.live;
-    }
-  }
-  line("(B) ESTIMATE CHANNEL - per leaf, one thread; leaf budget = " + std::to_string(o.threads) + " x " +
-       fmt(nps, 0) + " nodes/s / evaluation rate (9,600/s below 420 boards, 4,600/s from 420); fits: p90 of "
-       "cost / budget <= 1");
-  for (int k = 0; k <= kRanges; ++k) {
-    const Fit& f = fit[k];
-    if (f.ratio.empty()) continue;
-    const bool is_pooled = k == kRanges;
-    const double p90 = quantile(f.ratio, 0.9);
-    line(std::string("  ") + (is_pooled ? pooled : kRangeNames[k]) + ": " + std::to_string(f.ratio.size()) +
-         " leaves; p90 cost " + fmt(quantile(f.nodes, 0.9), 0) + " nodes (median " + fmt(quantile(f.nodes, 0.5), 0) +
-         ") against a budget of " + fmt(quantile(f.budget, 0.5), 0) + " nodes; p90 cost/budget " + fmt(p90, 2) +
-         "; wall p90 " + fmt(quantile(f.wall_us, 0.9), 0) + " us against " + fmt(quantile(f.wall_budget_us, 0.5), 0) +
-         " us (information); " + pct(f.live, f.ratio.size()) + " tactically live" +
-         (is_pooled ? std::string() : std::string(" -> ") + (p90 <= 1.0 ? "FITS" : "DOES NOT FIT")));
-  }
-  line("");
-
   // (C)
   Share brute[kRanges + 1];
   Share dfpn_side[kRanges + 1];
   if (o.brute) {
     for (std::size_t i = 0; i < positions.size(); ++i) {
-      if (!counted(i, Role::Root) || !results[i].brute || !results[i].prove) continue;
+      if (!counted(i) || !results[i].brute || !results[i].prove) continue;
       for (const int k : {range_of(results[i].boards), kRanges}) {
         ++brute[k].n;
         if (brute_decided(*results[i].brute)) ++brute[k].decided;
@@ -858,21 +670,6 @@ int main(int argc, char** argv) {
       line("  -> (A) within 45-55% in " + ranges + ": STOP for the user (the brief's band)");
     }
   }
-  {
-    std::string fits;
-    std::string misses;
-    for (int k = 0; k < kRanges; ++k) {
-      if (fit[k].ratio.empty()) continue;
-      std::string& to = quantile(fit[k].ratio, 0.9) <= 1.0 ? fits : misses;
-      to += (to.empty() ? "" : ", ") + std::string(kRangeNames[k]);
-    }
-    const std::string verdict = fits.empty()     ? std::string("rung 1 stays dropped")
-                                : misses.empty() ? std::string("rung 1 returns, estimate channel only")
-                                                 : "rung 1 returns, estimate channel only, in " + fits +
-                                                       "; stays dropped in " + misses;
-    line("  (B) estimate channel fits the rung-1 leaf budget at p90 in " + (fits.empty() ? std::string("no range") : fits) +
-         "; not in " + (misses.empty() ? std::string("any range") : misses) + " -> " + verdict + " (H10, M15)");
-  }
   if (o.brute && brute[0].n > 0) {
     const bool df = dfpn_side[0].decided >= brute[0].decided;
     line("  (C) below 50 boards: brute force decides " + std::to_string(brute[0].decided) + ", df-pn " +
@@ -896,7 +693,7 @@ int main(int argc, char** argv) {
   if (!o.json.empty()) {
     std::string j = "{\"tool\":\"t5d-scan6bp\",\"version\":\"" T5D_VERSION_STRING "\"";
     j += ",\"machine\":{\"cpu\":" + json_string(cpu) + ",\"logical_processors\":" + std::to_string(logical) +
-         ",\"busy_a\":" + fmt(a_busy, 4) + ",\"busy_b\":" + fmt(b_busy, 4) + ",\"busy_c\":" + fmt(c_busy, 4) + "}";
+         ",\"busy_a\":" + fmt(a_busy, 4) + ",\"busy_c\":" + fmt(c_busy, 4) + "}";
     j += ",\"build\":{\"compiler\":" + json_string(compiler_text()) + ",\"build_type\":" + json_string(T5D_BUILD_TYPE) +
          ",\"flags\":" + json_string(T5D_CXX_FLAGS) + "}";
     j += ",\"rules\":" + json_string(t5d::describe(o.rules));
@@ -908,19 +705,11 @@ int main(int argc, char** argv) {
          std::to_string(o.prover.completion_max_nodes) + ",\"escape_probe_nodes\":" +
          std::to_string(o.prover.escape_probe_nodes) + ",\"legality_tiers\":" +
          (o.prover.legality_tiers ? "true" : "false") + "}";
-    j += ",\"estimate\":{\"max_plies\":" + std::to_string(o.estimate.max_plies) + ",\"threat_plies\":" +
-         std::to_string(o.estimate.threat_plies) + ",\"delta_margin\":" + std::to_string(o.estimate.delta_margin) +
-         ",\"max_nodes\":" + std::to_string(o.estimate.max_nodes) + ",\"nps_measured\":" + fmt(measured_nps, 1) +
-         ",\"nps_used\":" + fmt(nps, 1) + "}";
     j += ",\"ranges\":[\"< 50\",\"50-99\",\"100-199\",\"200+\",\"pooled\"],\"proof\":[";
     for (int k = 0; k <= kRanges; ++k) {
       j += std::string(k ? "," : "") + "{\"n\":" + std::to_string(proof[k].n) + ",\"decided\":" +
            std::to_string(proof[k].decided) + ",\"proven\":" + std::to_string(proof[k].proven) + ",\"disproven\":" +
            std::to_string(proof[k].disproven) + "}";
-    }
-    j += "],\"estimate_p90_ratio\":[";
-    for (int k = 0; k <= kRanges; ++k) {
-      j += std::string(k ? "," : "") + (fit[k].ratio.empty() ? std::string("null") : fmt(quantile(fit[k].ratio, 0.9), 4));
     }
     j += "],\"brute\":[";
     for (int k = 0; k <= kRanges; ++k) {
@@ -934,8 +723,7 @@ int main(int argc, char** argv) {
         const Position& p = positions[i];
         const Result& r = results[i];
         j += std::string(i ? "," : "") + "{\"source\":" + json_string(p.source) + ",\"index\":" +
-             std::to_string(p.index) + ",\"role\":\"" + (p.role == Role::Root ? "root" : "leaf") +
-             "\",\"fingerprint\":\"" + t5d::fingerprint(p.state->multiverse()).fingerprint + "\",\"boards\":" +
+             std::to_string(p.index) + ",\"fingerprint\":\"" + t5d::fingerprint(p.state->multiverse()).fingerprint + "\",\"boards\":" +
              std::to_string(r.boards) + ",\"timelines\":" + std::to_string(r.timelines) + ",\"mandatory\":" +
              std::to_string(r.mandatory) + ",\"measured\":" + (r.measured ? "true" : "false");
         if (!r.measured) {
@@ -954,12 +742,6 @@ int main(int argc, char** argv) {
                ",\"resolved_depth\":" + std::to_string(r.brute->resolved_depth) + ",\"proof\":" +
                json_string(t5d::to_string(r.brute->proof)) + ",\"exhausted\":" + (r.brute->exhausted ? "true" : "false") +
                "}";
-        }
-        if (r.estimate) {
-          j += ",\"estimate\":{\"nodes\":" + std::to_string(r.estimate->nodes) + ",\"wall_us\":" +
-               fmt(r.estimate_seconds * 1e6, 1) + ",\"score\":" + std::to_string(r.estimate->score) +
-               ",\"swing\":" + std::to_string(r.estimate->swing()) + ",\"live\":" + (r.estimate->live ? "true" : "false") +
-               ",\"capped\":" + (r.estimate->capped ? "true" : "false") + "}";
         }
         j += "}";
       }

@@ -59,9 +59,8 @@ rules reference, `docs/rules/README.md`, which the code cites throughout.
 | **E5b:** the tactical scanner: forcing actions, proofs and estimates, the solved store; experiment 6b's tool | `include/t5d/scanner.hpp`, `tools/t5d_scan6b.cpp` | §11.1-§11.3, §15.6, H1-H6, H15, H19, M8 |
 | **E5c:** the scanner's in-check stage (M12's optimisation pass), Lazy SMP and the shared solved store; 6b per board-count range at the design thread budget | `include/t5d/scanner.hpp`, `tools/t5d_scan6b.cpp` | §11.3, §15.6, H17, H19, M12, M13 |
 | **E7:** Q4 as ruled (R8) by default; the acting player and the submit action in the expansion and the C API | `include/t5d/rules.hpp`, `include/t5d/expand.hpp`, `include/t5d/capi.h` | §8.2, §11.0 item 2, D8 |
-| **E8:** incremental royal-attack maps (and all-capture maps) | `include/t5d/attacks.hpp`, `src/attacks.cpp` | §11.1 (CHECKPOINT 3), A4, M14 |
+| **E8:** incremental royal-attack maps | `include/t5d/attacks.hpp`, `src/attacks.cpp` | §11.1 (CHECKPOINT 3), A4, M14 |
 | **E8:** the proof channel: depth-limited df-pn over the semimove-decomposed turn tree; the disproof store | `include/t5d/prover.hpp`, `src/prover.cpp` | §11.1, §8.2, §11.0 item 3, H2, H15, H17-H19, H37, H39, M14 |
-| **E8:** the estimate channel: a capture and threat search without turn completion | `include/t5d/estimate.hpp`, `src/estimate.cpp` | §11.1, §11.2 (rung 1), H2, H6, H10, M14 |
 | **E8:** experiment 6b′'s tool | `tools/t5d_scan6bp.cpp` | §15.6 (CHECKPOINT 3), M15, M13 |
 
 Next: the gate run with the engine configured in full mode - Q4's ruling (R8) is
@@ -2150,16 +2149,19 @@ Under rules where a board's landability depends on activity or on its being hist
 scratch: always equal to a from-scratch scan, and the tests hold it so on random
 positions and move sequences under every ruleset.
 
-The same machinery with `CaptureTargets::All` keeps every capture of an enemy piece
-(en passant apart): the estimate channel's move source, advanced move by move.
-
 The proof channel derives each turn's maps from the previous turn's along the path:
 C4 for the mover's partial actions asks the opponent's map, advanced by the boards the
 action has made so far (each one an opponent source, plus the lines that stopped where
 it now stands); R1's check status after an action asks the mover's map advanced by
 the passed copies.
 
-### The estimate channel (§11.1 part 1)
+### The estimate channel (§11.1 part 1) - retired
+
+**Retired at CHECKPOINT 4** (verification v3, §11.4: rung 1 fits its budget nowhere)
+**and removed in stage E9** - `t5d/estimate.hpp`, its tests, the attack maps'
+all-capture mode it used, and 6b′'s test (B). The asset map (stage E9) does not use
+its code: it runs its own one-board quiescence on the move generator. What it was, as
+the history 6b′'s figures below refer to:
 
 A negamax alpha-beta over *single moves*: the side to move makes one capture (or, in
 its first `threat_plies` plies, one local check: a move within a board after which a
@@ -2171,20 +2173,21 @@ leaves are passed (advanced unchanged), so a threat there carries, and a royal
 attacked on such a board is in local check (no stand-pat; every move of that board is
 searched). Stand-pat (the static material eval) elsewhere, delta pruning (§11.1:
 speculative pruning is estimate-channel only), MVV-LVA ordering, a ply limit and a
-node cap. The captures come from all-capture maps advanced move by move (above). Its result is the score after the sequence, the swing against
+node cap. The captures came from all-capture maps advanced move by move. Its result
+was the score after the sequence, the swing against
 the static eval, and whether the position is tactically live (a swing of at least
 `live_margin`). It is meant for rung 1 (§11.2): a per-leaf scan while the leaf waits
 for its batched evaluation - which 6b′ tests.
 
 ### Experiment 6b′ (M15): `t5d-scan6bp`
 
-The same positions as 6b (the records' turn starts and one leaf per root two
-half-turns of random legal play below it, made as `t5d-scan6b` makes them), read per
-board-count range, never pooled:
+The same positions as 6b (the records' turn starts and, until E9 removed test (B),
+one leaf per root two half-turns of random legal play below it, made as `t5d-scan6b`
+makes them), read per board-count range, never pooled:
 - **the proof channel** at each root: 50 ms of wall clock, 5 threads; *decided* = proven
   or disproven. Pass: >= 50% of roots decided;
-- **the estimate channel** at each leaf: its cost in nodes, against the rung-1 leaf
-  budget. *Fits*, operationalised before measuring: the leaf budget is what M13's 5
+- (removed in E9 with the channel) **the estimate channel** at each leaf: its cost in
+  nodes, against the rung-1 leaf budget. *Fits*, operationalised before measuring: the leaf budget is what M13's 5
   scanner threads can spend while one leaf waits for its batched evaluation -
   5 x (the channel's measured nodes per second of thread CPU time) / (§15.6's design
   evaluation rate, size-matched: 9,600/s below 420 boards, 4,600/s from 420) - and the
@@ -2197,11 +2200,10 @@ The summary applies M15's outcome rules mechanically.
 
 ```
 t5d-scan6bp [--record-list FILE --record-root DIR] [--every K] [--max-roots N]
-            [--leaves N] [--leaf-depth D] [--seed S] [--threads T] [--root-ms MS]
-            [--brute-ms MS] [--no-brute-force] [--nps N]
+            [--threads T] [--root-ms MS] [--brute-ms MS] [--no-brute-force]
             [--depth D] [--seeds checks|forcing|all] [--completion canonical|every]
             [--completion-max-nodes N] [--escape-probe-nodes N] [--legality-tiers]
-            [--est-plies P] [--est-threat-plies P] [--est-delta D] [--est-max-nodes N]
+            [--min-boards N] [--max-boards N]
             [--json FILE] [--summary FILE] [--per-position]
             [--no-moves-after-shift] [--rules ENCODING] [RECORD ...]
 ```
@@ -2222,12 +2224,6 @@ with its alternatives:
 | `ProverOptions::listing_cap` | 4,096 actions | turns that do not decompose (E4's listing) |
 | `ProverOptions::threads` | 1 (6b′: 5, M13) | 1 is the deterministic mode (H15) |
 | `ProverOptions::tt_entries`, `max_tree_nodes` | 2^18, 2M per thread | memory bounds |
-| `EstimateOptions::max_plies` | 3 | anchored on §15.6's rung-1 depth, 3 forcing half-turns |
-| `EstimateOptions::threat_plies` | 1 | local checks searched at the first ply only |
-| `EstimateOptions::delta_margin` | 200 cp | the usual quiescence margin |
-| `EstimateOptions::live_margin` | 100 cp | a swing of a pawn marks the position tactically live |
-| `EstimateOptions::max_nodes` | 100,000 | a safety bound, far above the natural cost |
-| `EstimateOptions::values` | the scanner's `PieceValues` | H6 v1; U, D, S, W, C placeholders (build-log spec issue 56) |
 
 ### As built: what the tests hold
 
@@ -2237,8 +2233,7 @@ with its alternatives:
   random extensions (boards appended, heads changed, timelines added; 11,520
   incremental advances in the default run, 31,236 lines resumed), along random
   legal play move by move with each turn's passed multiverse (R1's status equal to
-  `in_check`; C4 of every partial action equal to `royals_safe`), and with
-  `CaptureTargets::All` equal to the generator's captures. A non-extension is
+  `in_check`; C4 of every partial action equal to `royals_safe`). A non-extension is
   recomputed and still equal. `long_` plays ten times as many moves.
 - **The semimove tree** (`prover_semimove_tree_lists_exactly_the_legal_actions`):
   under every ruleset that decomposes, the tree's actions are exactly the brute-force
@@ -2283,10 +2278,6 @@ with its alternatives:
 - **Stores** (H19): a proof's root `Win(k)` and the defender's `Loss` entries are in
   the solved store; a second prover answers from it without expanding a node; a
   disproof is recorded with its depth and class, and only for its class.
-- **The estimate channel**: the material eval equals the scanner's; it takes a free
-  piece, declines a defended one, captures a royal left capturable, finds a fork by a
-  threat that carries through a pass; bounded and deterministic under every
-  ruleset.
 
 ### 6b′: preliminary figures (a shared machine - not the verdict)
 
