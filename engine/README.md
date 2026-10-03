@@ -54,6 +54,10 @@ rules reference, `docs/rules/README.md`, which the code cites throughout.
 | **E5a:** the legal moves in tiers: exact, budgeted, fast | `include/t5d/legal.hpp`, `src/legal.cpp` | C4, R1; build-log spec issues 28, 46 |
 | **E5b:** the tactical scanner: forcing actions, proofs and estimates, the solved store; experiment 6b's tool | `include/t5d/scanner.hpp`, `tools/t5d_scan6b.cpp` | §11.1-§11.3, §15.6, H1-H6, H15, H19, M8 |
 | **E5c:** the scanner's in-check stage (M12's optimisation pass), Lazy SMP and the shared solved store; 6b per board-count range at the design thread budget | `include/t5d/scanner.hpp`, `tools/t5d_scan6b.cpp` | §11.3, §15.6, H17, H19, M12, M13 |
+| **E8:** incremental royal-attack maps (and all-capture maps) | `include/t5d/attacks.hpp`, `src/attacks.cpp` | §11.1 (CHECKPOINT 3), A4, M14 |
+| **E8:** the proof channel: depth-limited df-pn over the semimove-decomposed turn tree; the disproof store | `include/t5d/prover.hpp`, `src/prover.cpp` | §11.1, §8.2, §11.0 item 3, H2, H15, H17-H19, H37, H39, M14 |
+| **E8:** the estimate channel: a capture and threat search without turn completion | `include/t5d/estimate.hpp`, `src/estimate.cpp` | §11.1, §11.2 (rung 1), H2, H6, H10, M14 |
+| **E8:** experiment 6b′'s tool | `tools/t5d_scan6bp.cpp` | §15.6 (CHECKPOINT 3), M15, M13 |
 
 Next: the gate run with the engine configured (parse mode, then full mode); the
 expansion's pin and check relations; which moves the expansion offers, and how a
@@ -1915,7 +1919,7 @@ changes activity and the present, which no non-branching move reads under those
 rules. So any legal action can be replayed with its non-branching moves first, in
 axis order, and its branches after them in their creation order - every move still
 pseudo-legal and the final state the same - and each such sequence is one path of the
-tree. Under any other ruleset (Q4's default among them, which puts the move that
+tree. Under any other ruleset (Q4's Guide-literal reading among them, which puts the move that
 shifts the present last; Q1's consecutive rule, Q3, Q6, Q21's alternative) the turn
 is not decomposed: the node's children are E4's listing of the legal actions
 (`list_legal_actions`, exhaustive, capped), and a capped listing makes the node
@@ -1934,14 +1938,21 @@ three sound tests:
   void, which no existing capture crosses), so no completion is legal: the node is
   dead at once. This is C4 asked of a partial action, answered by the incremental
   royal-attack map (below) - so an AND node in check keeps only the moves that
-  answer the check, the moment they are made. (Off under Q18's alternative, where a
-  new board could block a capture across void.)
+  answer the check, the moment they are made. (Under Q18's alternative a new board
+  could block a capture across void, so only a capture that crosses no void
+  stands - E5a's rule.)
 - **A pass that cannot be made good.** `Pass` on a mandatory board leaves it to be
-  played by a branch from it later, or relieved by a creation that moves the present
-  (T8, T12). It is offered only where the axis has a branching move (or a jump onto
-  another axis, a possible J6 twin) or a relief is possible - the mover's next
-  creation would be active and could land behind the present, or the opponent has an
-  inactive timeline whose reactivation could move the present back (T11, T12).
+  played later - by a jump onto it from an axis not yet decided (J4), or by a
+  branch from it - or relieved by a creation that moves the present (T8, T12). It is
+  offered only where one of those is possible: an axis later in the order has a
+  jump onto it, it has a branching move or a jump (a possible J6 twin), or a relief
+  is possible (the mover's next creation would be active and some jump lands
+  before the present, or the opponent has an inactive timeline a creation would
+  reactivate, T11). And a partial action dies the moment a board passed earlier is
+  still unplayed, mandatory and beyond all three - no axis left to jump onto it.
+  Each test over-approximates, from the moves at the turn's start: the candidate
+  moves of an action are fixed there, since the mover's moves visit only boards of
+  its own colour, which the action changes only by playing them.
 - **E5a's tiers** (optional, `ProverOptions::legality_tiers`): the fast tiers classify
   a semimove node's moves; a move proved illegal (no legal finish at all) is not
   made.
@@ -2050,6 +2061,9 @@ Under rules where a board's landability depends on activity or on its being hist
 scratch: always equal to a from-scratch scan, and the tests hold it so on random
 positions and move sequences under every ruleset.
 
+The same machinery with `CaptureTargets::All` keeps every capture of an enemy piece
+(en passant apart): the estimate channel's move source, advanced move by move.
+
 The proof channel derives each turn's maps from the previous turn's along the path:
 C4 for the mover's partial actions asks the opponent's map, advanced by the boards the
 action has made so far (each one an opponent source, plus the lines that stopped where
@@ -2059,12 +2073,16 @@ the passed copies.
 ### The estimate channel (§11.1 part 1)
 
 A negamax alpha-beta over *single moves*: the side to move makes one capture (or, in
-its first `threat_plies` plies, one checking move or branch threat), and the opponent
-replies at once from the boards that move made and its other playable boards - no
-completion of the turn, no obligations, no C4 test (a royal left capturable is simply
-captured, for a large score). Stand-pat (the static material eval) everywhere, delta
-pruning (§11.1: speculative pruning is estimate-channel only), MVV-LVA ordering, a ply
-limit and a node cap. Its result is the score after the sequence, the swing against
+its first `threat_plies` plies, one local check: a move within a board after which a
+piece on the board it creates attacks an enemy royal there), and the opponent replies
+at once from the boards that move made and its other playable boards - no completion
+of the turn, no obligations, no C4 test (a royal left capturable is simply captured,
+for a large score). The boards a move creates must be answered on: those the reply
+leaves are passed (advanced unchanged), so a threat there carries, and a royal
+attacked on such a board is in local check (no stand-pat; every move of that board is
+searched). Stand-pat (the static material eval) elsewhere, delta pruning (§11.1:
+speculative pruning is estimate-channel only), MVV-LVA ordering, a ply limit and a
+node cap. The captures come from all-capture maps advanced move by move (above). Its result is the score after the sequence, the swing against
 the static eval, and whether the position is tactically live (a swing of at least
 `live_margin`). It is meant for rung 1 (§11.2): a per-leaf scan while the leaf waits
 for its batched evaluation - which 6b′ tests.
@@ -2087,6 +2105,152 @@ board-count range, never pooled:
   5 threads; decided = 5 forcing half-turns resolved, or a proof, or an exhausted
   tree) beside df-pn's, roots decided by each.
 The summary applies M15's outcome rules mechanically.
+
+```
+t5d-scan6bp [--record-list FILE --record-root DIR] [--every K] [--max-roots N]
+            [--leaves N] [--leaf-depth D] [--seed S] [--threads T] [--root-ms MS]
+            [--brute-ms MS] [--no-brute-force] [--nps N]
+            [--depth D] [--seeds checks|forcing|all] [--completion canonical|every]
+            [--completion-max-nodes N] [--escape-probe-nodes N] [--legality-tiers]
+            [--est-plies P] [--est-threat-plies P] [--est-delta D] [--est-max-nodes N]
+            [--json FILE] [--summary FILE] [--per-position]
+            [--moves-after-shift] [--rules ENCODING] [RECORD ...]
+```
+
+### As built: the parameters
+
+Every one a placeholder (the spec gives the shapes, not these values), named and
+with its alternatives:
+
+| Parameter | Default | Alternatives, and why the default |
+|---|---|---|
+| `ProverOptions::depth` | 5 half-turns | M15's question (mate-in-3, §15.6) |
+| `ProverOptions::seeds` | `Checks` - the scanner's checking moves (b) | `Forcing` (6b's whole forcing set), `All` (the literal question). dlshogi's precedent: a mate search by checks |
+| `ProverOptions::completion` | `Canonical` - one action per seed | `Every` (every legal completion). 6b's unit: a forcing seed and one completion |
+| `ProverOptions::completion_max_nodes` | 2,000 steps | the scanner's completion-fallback cap; beyond it a seed has no action in the class |
+| `ProverOptions::escape_probe_nodes` | 256 steps | before E4's detector at an AND turn node (E5c's probe, 64 seeds, is the precedent) |
+| `ProverOptions::legality_tiers` | off | E5a's fast tiers at semimove nodes; the standing-capture test already cuts what tier 0 would |
+| `ProverOptions::listing_cap` | 4,096 actions | turns that do not decompose (E4's listing) |
+| `ProverOptions::threads` | 1 (6b′: 5, M13) | 1 is the deterministic mode (H15) |
+| `ProverOptions::tt_entries`, `max_tree_nodes` | 2^18, 2M per thread | memory bounds |
+| `EstimateOptions::max_plies` | 3 | anchored on §15.6's rung-1 depth, 3 forcing half-turns |
+| `EstimateOptions::threat_plies` | 1 | local checks searched at the first ply only |
+| `EstimateOptions::delta_margin` | 200 cp | the usual quiescence margin |
+| `EstimateOptions::live_margin` | 100 cp | a swing of a pawn marks the position tactically live |
+| `EstimateOptions::max_nodes` | 100,000 | a safety bound, far above the natural cost |
+| `EstimateOptions::values` | the scanner's `PieceValues` | H6 v1; U, D, S, W, C placeholders (build-log spec issue 56) |
+
+### As built: what the tests hold
+
+- **Attack maps** (`tests/test_attacks.cpp`): every map - built, advanced, or asked
+  without being built - gives check.hpp's from-scratch captures, the same list in
+  the same order: on random multiverses (both colours, every ruleset), on chains of
+  random extensions (boards appended, heads changed, timelines added; 11,520
+  incremental advances in the default run, 31,236 lines resumed), along random
+  legal play move by move with each turn's passed multiverse (R1's status equal to
+  `in_check`; C4 of every partial action equal to `royals_safe`), and with
+  `CaptureTargets::All` equal to the generator's captures. A non-extension is
+  recomputed and still equal. `long_` plays ten times as many moves.
+- **The semimove tree** (`prover_semimove_tree_lists_exactly_the_legal_actions`):
+  under every ruleset that decomposes, the tree's actions are exactly the brute-force
+  reference's distinct successors, each replayed through the state machine and
+  C4-tested, and E4's count of them (699 positions, 89,015 actions in the default
+  run; `long_`: more and larger positions).
+- **The canonical completion** against its definition walked independently (no
+  attack maps, no pruning but the rulebook's standing-capture lemma tested from
+  scratch), for every move at every position, under every ruleset, under one Q4
+  reading or the other (24,549 seeds, 18,063 completed, none beyond the
+  reference's cap).
+- **Proofs and disproofs** on random play from the sparse starts, against exact mate
+  references: the attacker's actions of the class - for the literal class (seeds
+  `All`, completion `Every`) every legal action, for the default class the class's
+  own actions computed independently (the scanner's check test made literal, the
+  completion's definition walked) - against every legal defence, a mate at the
+  horizon by E4's detector. A mate by the class's actions is a mate, so a proof is
+  confirmed by its class's reference, else by the brute-force game tree within its
+  distance, else by the literal reference; a disproof is the class reference's
+  "no mate within d". The references list successors by the brute-force
+  enumeration where it fits and by E4's exhaustive listing (another algorithm than
+  the semimove tree) beyond it, within a work cap. Default run: literal class 112
+  decided, 111 confirmed, 1 beyond the references; default class 74 decided, 74
+  confirmed; every ruleset under both Q4 readings (listings where turns do not
+  decompose; smaller caps) 2,797 decided, 2,790 confirmed, 7 beyond; no
+  contradiction anywhere.
+- **H37**: for every root of a sample, budgets stepped from 0 to the full search's
+  need: a decided answer only where the full search gives the same one (1,900
+  budgets in the default run, every one stopped unknown).
+- **H15**: one thread with a node budget gives the same search twice, node for node.
+- **Threads** 2, 5 and 8, by node budget and by the clock (20 ms), with stores shared
+  across the searches: every decided answer confirmed by the references (325
+  decided, 309 confirmed, 16 beyond them) and equal to one thread's where both
+  decide.
+- **Stores** (H19): a proof's root `Win(k)` and the defender's `Loss` entries are in
+  the solved store; a second prover answers from it without expanding a node; a
+  disproof is recorded with its depth and class, and only for its class.
+- **The estimate channel**: the material eval equals the scanner's; it takes a free
+  piece, declines a defended one, captures a royal left capturable, finds a fork by a
+  threat that carries through a pass; bounded and deterministic under every
+  ruleset.
+
+### 6b′: preliminary figures (a shared machine - not the verdict)
+
+Measured 2026-10-03 on the dev machine (AMD Ryzen 9 9900X, 24 logical processors)
+while other agents built and tested in other worktrees - busy 37% during the proof
+channel's phase, 36% during brute force's, 26% during the estimate channel's - so
+these are not quiet-machine figures; the decisive run is a quiet machine's. Release,
+g++ 16.2 `-O2`. `--moves-after-shift` (Q4 as ruled; turns decompose). The 41 corpus
+records: 805 roots, 780 leaves (17 roots and 12 leaves checkmated, 2 and 2
+stalemated, 1 root breaking C4: not measured). Defaults throughout (the parameters
+above).
+
+| Boards | roots | (A) df-pn decided at 50 ms, 5 threads | of them: proven / disproven (with no action of the class at the root) | (C) brute force decided | leaves | (B) estimate p90 cost / budget |
+|---|---|---|---|---|---|---|
+| < 50 | 527 | **76.1% PASS** | 49 / 352 (256) | 74.4% | 495 | 3.63 - does not fit |
+| 50-99 | 140 | **39.3% FAIL** | 22 / 33 (22) | 28.6% | 140 | 9.81 - does not fit |
+| 100-199 | 97 | **23.7% FAIL** | 7 / 16 (12) | 23.7% | 100 | 23.5 - does not fit |
+| 200+ | 41 | **0.0% FAIL** | 0 / 0 | 2.4% | 45 | 78.3 - does not fit |
+
+The estimate channel ran at 154,498 nodes per second of thread CPU time, so a leaf's
+budget was 5 x 154,498 / 9,600 = 80 nodes (521 us); its p90 wall time per leaf was
+1.4 ms, 4.6 ms, 15 ms and 46 ms by range.
+
+**M15's outcome, applied mechanically to these figures: 50-199 boards fail -> STOP
+for a design review.** Rung 1: the estimate channel fits in no range - it stays
+dropped. Below 50 boards df-pn decides more roots (401 of 527) than brute force
+(392): keep df-pn there.
+
+What the decisions rest on, and how they move (information, the same machine):
+- **Most disproofs are a root with no checking action at all** (256 of 352 below 50
+  boards; 22 of 33, 12 of 16 above): under `Checks` seeds "no mate by checks" is then
+  immediate. Where the attacker has checks, df-pn rarely settles 5 half-turns above
+  50 boards.
+- **The class.** `Forcing` seeds: 36.6% / 22.9% / 7.2% / 0.0%. The literal question
+  (`All`, `Every`): 9.3% / 2.9% / 1.0% / 0.0% - almost only proofs. `Checks` with
+  `Every` completion: 72.3% / 26.4% / 16.5% / 0.0%.
+- **Time.** At 500 ms (ten times the budget) and 5 threads: 50-99 45.0%, 100-199
+  34.0%, 200+ 2.4%; at 1 s on one thread: 50-99 42.1%, 100-199 34.0%. The shortfall
+  is the scale of the trees, not a constant factor.
+- **The estimate channel's depth.** One ply (a capture or threat, no reply): p90
+  cost/budget 0.20 / 0.53 / 0.99 / 2.99 - fits below 200 boards, but a capture with no
+  reply is no exchange (76-100% of leaves "live"). Two plies: 1.23 / 2.97 / 7.0 /
+  19.6 - fits nowhere. At every depth the root's own work (both sides' capture maps,
+  the threats' move generation) grows with the boards: at 200+ boards even one ply
+  costs 1.7 ms at p90 against 0.52 ms.
+- **Where the work went** (nodes, every thread): attack-map queries 84-86% of the
+  units - the standing-capture tests of partial actions (1.2 million partial actions
+  cut below 50 boards, 1.0 million at 50-99) - E4's searches 0.0-0.3%; canonical
+  completions outnumber node expansions two or three to one (six to one at 1 s).
+
+The quiet-machine run (from the repository root, after building):
+
+```
+build/engine/t5d-scan6bp --moves-after-shift --per-position --record-list build/corpus.txt \
+    --json build/6b/6bp-quiet.json --summary build/6b/6bp-quiet.txt
+```
+
+(`build/corpus.txt` lists the 41 records, one path per line; once Q4's default is
+"moves after the shift", `--moves-after-shift` changes nothing.) It takes about two
+minutes.
 
 ## 5DFEN
 
