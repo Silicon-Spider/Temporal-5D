@@ -5,7 +5,7 @@
 //
 //   t5d-play [--variant NAME] [--evaluator uniform|random|material]
 //            [--playouts N] [--split ply|turn] [--graph] [--node-key state|origins]
-//            [--no-widening] [--e2] [--e3] [--solver] [--batch N] [--synchronous]
+//            [--no-widening] [--e2] [--e3] [--proof-channel] [--batch N] [--synchronous]
 //            [--match] [--final visits|lcb] [--temperature T] [--temperature-decisions N]
 //            [--noise | --no-noise] [--cap-turns N] [--cap-boards N] [--max-actions N]
 //            [--listing-cap N] [--mate-nodes N] [--max-seconds S] [--seed S]
@@ -18,8 +18,9 @@
 // root: --no-noise for none) - --match plays the
 // final rule (E5, LCB by default) with the tree carried (C12) - and a turn cap
 // of 20 turns (I11: a convention, scored as a draw; --cap-turns 0 lifts it).
-// --solver turns on the in-tree solver (H2, E9), off by default until the
-// user rules (spec §11.1 item 2, H23).
+// --proof-channel turns on the in-tree solver's propagation of proven bounds
+// (H2, E9) - the proof channel's switch, off by rule (H41) until the gate
+// passes and the channel is signed off: for experiments only.
 // --max-seconds stops a long game (a safety stop, "*": checked before every
 // decision, and each search's deadline; the record ends at the last turn
 // start), its record and summary still printed.
@@ -54,7 +55,8 @@ void usage(std::FILE* to) {
   std::fputs(
       "usage: t5d-play [--variant NAME] [--evaluator uniform|random|material]\n"
       "                [--playouts N] [--split ply|turn] [--graph] [--node-key state|origins]\n"
-      "                [--no-widening] [--e2] [--e3] [--solver] [--batch N] [--synchronous]\n"
+      "                [--no-widening] [--e2] [--e3] [--proof-channel] [--batch N]\n"
+      "                [--synchronous]\n"
       "                [--match] [--final visits|lcb] [--temperature T]\n"
       "                [--temperature-decisions N] [--noise | --no-noise] [--cap-turns N]\n"
       "                [--cap-boards N]\n"
@@ -155,8 +157,8 @@ int main(int argc, char** argv) {
         params.search.uncertainty_weighted_backup = true;
       } else if (std::strcmp(a, "--e3") == 0) {
         params.search.variance_bonus = true;
-      } else if (std::strcmp(a, "--solver") == 0) {
-        params.search.solver = true;
+      } else if (std::strcmp(a, "--proof-channel") == 0) {
+        params.search.proof_channel = true;  // H41: off by rule; experiments only
       } else if (std::strcmp(a, "--batch") == 0) {
         params.search.batch_size = static_cast<std::size_t>(number_in(a, value(), 1, kU32));
       } else if (std::strcmp(a, "--synchronous") == 0) {
@@ -223,7 +225,7 @@ int main(int argc, char** argv) {
                          std::to_string(params.playouts) + " playouts per decision, " +
                          (params.search.split == TurnSplit::BoardMove ? "board-move split" : "whole-turn split") +
                          (params.search.graph ? ", graph" : ", tree") +
-                         (params.search.solver ? ", solver" : "") +
+                         (params.search.proof_channel ? ", proof channel ON (H41: experiments only)" : "") +
                          (params.search.root_noise && !params.match_play ? ", root noise" : "") +
                          (params.match_play ? ", match play" : ", self-play") + ", seed " +
                          std::to_string(params.seed);

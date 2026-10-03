@@ -118,10 +118,11 @@
 // Evaluations are a function of the state and the refresh epoch only
 // (EvalCache), so a transposition is a zero-cost evaluation.
 //
-// THE PROOF CHANNEL'S CONSUMER (H2, E9), behind SearchParams::solver - OFF by
-// default until the user rules (spec §11.1 item 2 counts injecting solved
-// bounds into the tree as the proof channel; H23 keeps that disabled until
-// the generator passes the gate). With it on, score bounds [lo, hi] per node
+// THE PROOF CHANNEL'S CONSUMER (H2, E9), behind SearchParams::proof_channel -
+// OFF by rule (H41: the search's own solver is part of the proof channel;
+// solved-status propagation and export stay off until the gate passes, the
+// search's soundness fixes land with tests, and the proof channel is signed
+// off; game-end scoring stays on). With it on, score bounds [lo, hi] per node
 // propagate MCTS-Solver style (Winands et al. 2008; with draws, Cazenave and
 // Saffidine's score-bounded MCTS): a child proven won for the parent makes the
 // parent proven won; all children proven lost (every legal child created, the
@@ -136,7 +137,7 @@
 // proof channel"), so SearchParams::proof_store must stay false - the search
 // refuses to start otherwise.
 //
-// FINAL SELECTION (E5, E9): with the solver on, a proven win is played at
+// FINAL SELECTION (E5, E9): with the proof channel on, a proven win is played at
 // once; children proven lost are ineligible unless all are; when an eligible
 // child is solved, the
 // secure child (the largest lower bound: exact for solved children,
@@ -309,17 +310,20 @@ struct SearchParams {
   /// exercised. 64 in play.
   int key_bits = 64;
 
-  // ---- H2, E9: the in-tree solver ------------------------------------------------
-  /// Propagating proven bounds up the tree, and the decisions taken from them
-  /// (a proven child's exact Q, the visit threshold, proven-lost children
-  /// ineligible, a proven win played, the secure child, a solved root ending
-  /// the search). OFF until the user rules: spec §11.1 item 2 names "inject
-  /// solved bounds into the tree" as part of the proof channel, and H23 keeps
-  /// the proof channel disabled until the generator has passed the gate. With
-  /// it off, a terminal (C5 at a turn start, by E4's exhaustive detector; I11's
-  /// cap) is still valued as its game result - ordinary MCTS - and nothing
-  /// else is proven. Turning it on is this one line.
-  bool solver = false;
+  // ---- H2, E9, H41: the in-tree solver - the proof channel's switch ---------------
+  /// THE PROOF CHANNEL'S SWITCH in the search (register H41, ruled: "the
+  /// search's own solver is part of the proof channel: game-end scoring stays
+  /// on; solved-status propagation and export are off until the gate passes,
+  /// the search's soundness fixes land with tests, and the proof channel is
+  /// signed off"; spec §11.1 item 2; H23). On, it propagates proven bounds up
+  /// the tree - nodes marked solved, siblings pruned, secure-child selection
+  /// and the other decisions taken from proven bounds (a proven child's exact
+  /// Q, the visit threshold, proven-lost children ineligible, a proven win
+  /// played, a solved root ending the search). OFF by rule until those three
+  /// conditions hold. Off, a game-end position (C5 at a turn start, by E4's
+  /// exhaustive detector; I11's cap) is still scored as its result - ordinary
+  /// MCTS - and nothing else is proven. Export is proof_store, below.
+  bool proof_channel = false;
   /// The visit threshold for solved-node selection: a solved child is selected
   /// only while it has fewer visits (unless nothing else can be). Placeholder.
   std::uint32_t solved_visit_cap = 8;

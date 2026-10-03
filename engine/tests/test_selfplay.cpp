@@ -232,6 +232,7 @@ TEST(selfplay_under_r8_moves_after_the_shift_are_played) {
   for (std::uint64_t seed = 1; seed <= 16 && after_shift == 0; ++seed) {
     PlayParams p = quick(TurnSplit::BoardMove, seed);
     p.turn_cap.turns = 6;
+    p.search.root_noise = false;  // noise branches these games into slow, many-board ones
     const GameRecord g = play_game(variant("Standard - Two Timelines"), *uniform, p);
     check_game(g, p.turn_cap);
     check_record(g, "Standard - Two Timelines");

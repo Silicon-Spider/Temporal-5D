@@ -463,10 +463,10 @@ TEST(capi_search_proves_a_mate_in_one) {
   const Game game(g);
   t5d_search_params defaults;
   t5d_search_params_default(&defaults);
-  CHECK_EQ(defaults.solver, 0);  // off until the user rules (H23, spec §11.1 item 2)
+  CHECK_EQ(defaults.proof_channel, 0);  // off by rule (H41)
   for (const int32_t solver : {1, 0}) {
     t5d_search_params p = quick_params();
-    p.solver = solver;
+    p.proof_channel = solver;
     const SearchHandle s = new_search(g, p);
     REQUIRE_EQ(t5d_search_run(s.get(), T5D_EVALUATOR_UNIFORM, 0, 2000, nullptr), T5D_OK);
     t5d_search_summary info;

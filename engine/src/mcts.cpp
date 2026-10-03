@@ -635,7 +635,7 @@ struct Search::Impl {
     }
   }
 
-  bool solved(const Node& n) const noexcept { return params_.solver && n.lo == n.hi; }
+  bool solved(const Node& n) const noexcept { return params_.proof_channel && n.lo == n.hi; }
 
   double node_q(const Node& n) const noexcept {
     if (n.terminal != Terminal::None) return detail::terminal_value(n.terminal);
@@ -1084,7 +1084,7 @@ struct Search::Impl {
           }
         } else {
           q = e.w + vlw > 0 ? (e.wq - vlw) / (e.w + vlw) : fpu;
-          if (child != nullptr && params_.solver) {
+          if (child != nullptr && params_.proof_channel) {
             const auto [lo, hi] = detail::bounds_in_parent(p, *child);
             q = std::clamp(q, static_cast<double>(lo), static_cast<double>(hi));
           }
@@ -1162,7 +1162,7 @@ struct Search::Impl {
         if (e.vl > 0) --e.vl;
       }
     }
-    if (params_.solver) {
+    if (params_.proof_channel) {
       for (std::size_t i = path.size(); i-- > 0;) update_bounds(path[i].node);
     }
     ++stats_.playouts;
@@ -1495,7 +1495,7 @@ struct Search::Impl {
       if (e.child != kNoNode) {
         const Node& child = nodes_[e.child];
         c.eval_variance = child.has_eval ? child.eval_var : 0.0;
-        if (params_.solver) {
+        if (params_.proof_channel) {
           const auto [lo, hi] = detail::bounds_in_parent(r, child);
           c.lo = e.unknown ? -1 : lo;  // (e) no proof through an unknown edge
           c.hi = hi;
@@ -1629,7 +1629,7 @@ struct Search::Impl {
       if (n.terminal == Terminal::Checkmate && (n.lo != -1 || n.hi != -1)) fail("a checkmate not proven lost", id);
       if (n.terminal == Terminal::Stalemate && (n.lo != 0 || n.hi != 0)) fail("a stalemate not proven drawn", id);
       if (n.terminal == Terminal::TurnCap && n.lo == n.hi) fail("the turn cap's convention taken as a proof", id);
-      if (!params_.solver || !n.expanded || n.terminal != Terminal::None) continue;
+      if (!params_.proof_channel || !n.expanded || n.terminal != Terminal::None) continue;
       // Never contradict the children: the node cannot be proven better than its
       // best child can be, nor worse than its best child is proven to be.
       int best_lo = -1;
@@ -1794,7 +1794,7 @@ std::vector<RootChild> Search::root_children() const {
     c.visits = e.visits;
     c.q = s.edge_q(r, e);
     c.child = e.child;
-    if (e.child != kNoNode && s.params_.solver) {
+    if (e.child != kNoNode && s.params_.proof_channel) {
       const auto [lo, hi] = detail::bounds_in_parent(r, s.nodes_[e.child]);
       c.lo = e.unknown ? -1 : lo;  // (e) no proof through an unknown edge
       c.hi = hi;
