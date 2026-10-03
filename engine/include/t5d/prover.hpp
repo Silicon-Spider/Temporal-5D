@@ -58,6 +58,39 @@
 //
 // NODES. One unit for all the work: a node expanded, a move applied, an
 // attack-map query, a node of an E4 search.
+//
+// STAGE E9 (verification v3, spec 11.4: Hunt, H43, and Guard, H42, are built
+// on this prover):
+//  * PROVE-ONLY (ProverOptions::prove_only, Hunt): the search stops at its
+//    budget and claims nothing - a root it exhausts is reported Unknown
+//    (`exhausted`), never Disproven; it neither reads nor writes the caller's
+//    disproof store (no disproof is recorded or shared, none from outside
+//    drives its pruning) - the disproofs its own search finds are kept in a
+//    private memo, emptied at each search, so that a transposition it has
+//    exhausted is not searched again. Its thresholds are df-pn's usual two:
+//    measured against proof-number thresholds alone (a child's disproof
+//    threshold infinite, prove_only_pn_thresholds), the usual ones found
+//    every mate the full search found, at the same cost, where proof numbers
+//    alone took more nodes and missed one of 26 (tests/test_verification.cpp).
+//  * THE LITERAL CLASS (seeds All, completion Every) enters the attacker's
+//    semimove tree once, as the defender's: every legal action exactly once
+//    (where turns decompose), not once per its first move.
+//  * THE LAST-TURN CHECK FILTER (check_filter; completion Every): checkmate
+//    needs check (R1), so at the attacker's last half-turn a partial action
+//    that can no longer leave the defender in check is cut. Sound: from
+//    incremental attack maps at the turn start, a move is CHECK-CAPABLE when,
+//    played alone, it gives check or makes a line stop at void where another
+//    of the attacker's moves could make a board (a line through several new
+//    boards is opened by the first of them); a partial action is cut when no
+//    check-capable move is in it and none is left to make. The check-capable
+//    boards come first in the turn's order. Off where attack maps recompute
+//    (Q8, Q18, Q20's alternatives) and where a capture stands already. The
+//    defender's turn at the horizon is decided not in check without E4.
+//  * THE PROOF'S LINE (Proven): the attacker's proving actions and the
+//    defender's longest defences, to the mate; and on request its
+//    CERTIFICATE - every proven position of the attacker's in the deciding
+//    thread's tree with its proving action - which check_certificate
+//    (t5d/certificate.hpp) verifies against E4 alone.
 
 #ifndef T5D_PROVER_HPP
 #define T5D_PROVER_HPP
@@ -69,6 +102,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "t5d/move.hpp"
@@ -137,6 +171,45 @@ struct ProverOptions {
   /// Record every turn node's disproof in the disproof store (else the
   /// root's only).
   bool record_all_disproofs = true;
+  /// Prove-only (Hunt, H43; see the header comment).
+  bool prove_only = false;
+  /// Prove-only's thresholds: df-pn's usual two (false, the default: they found
+  /// more mates for fewer nodes) or proof numbers only (true; the search still
+  /// claims no disproof either way).
+  bool prove_only_pn_thresholds = false;
+  /// The last-turn check filter (see the header comment): sound, so on by
+  /// default; off only to measure what it saves.
+  bool check_filter = true;
+  /// Collect the proof's certificate (tools and tests: it walks the deciding
+  /// thread's whole tree).
+  bool record_certificate = false;
+};
+
+// ---------------------------------------------------------------------------
+// Proof certificates
+// ---------------------------------------------------------------------------
+
+/// One proven position of the attacker's (its turn start) and the action that
+/// proves it: mate within `distance` half-turns.
+struct CertificateStep {
+  GameState position;
+  std::vector<Move> action;  // in a playable order
+  int distance = 0;
+};
+
+/// A proof's certificate: for each proven position of the attacker's met in
+/// the proof, the proving action (the least distance kept). Positions are
+/// matched by Zobrist key and a full comparison.
+class ProofCertificate {
+ public:
+  void add(const GameState& position, std::vector<Move> action, int distance);
+  const CertificateStep* find(const GameState& position) const;
+  std::size_t size() const noexcept { return steps_.size(); }
+  const std::vector<CertificateStep>& steps() const noexcept { return steps_; }
+
+ private:
+  std::vector<CertificateStep> steps_;
+  std::unordered_multimap<std::uint64_t, std::size_t> index_;
 };
 
 /// Whether the turn decomposes into semimoves exactly under `rules` (see the
@@ -224,6 +297,8 @@ struct ProverStats {
   std::uint64_t store_hits = 0;
   std::uint64_t proofs_exported = 0;
   std::uint64_t disproofs_recorded = 0;
+  std::uint64_t check_cut = 0;        // partial actions cut by the last-turn check filter
+  std::uint64_t not_in_check = 0;     // horizon turns decided not in check
   bool stopped_by_nodes = false;
   bool stopped_by_time = false;
   bool stopped_by_memory = false;     // E4's ceiling or the tree's
@@ -239,10 +314,31 @@ struct ProveResult {
   /// Proven: the attacker's first action of the proof, in a playable order.
   std::vector<Move> first_action;
   /// The root's children in the main thread's tree - A's actions in the
-  /// class (Canonical), or its seeds (Every); -1 if the root was not
-  /// expanded (solved from a store, or no budget).
+  /// class (Canonical), or its seeds (Every; one child, the semimove tree,
+  /// for the literal class); -1 if the root was not expanded (solved from a
+  /// store, or no budget).
   int root_actions = -1;
   int threads = 1;
+  /// Prove-only: the root was exhausted - no mate within the class - which
+  /// prove-only does not claim (status stays Unknown).
+  bool exhausted = false;
+  /// Proven: the proof's line - the attacker's action, the defender's
+  /// longest defence, ..., the attacker's mating action - from the deciding
+  /// thread's tree. `line_complete` false: it stops where a node was solved
+  /// from a store and the tree holds no continuation.
+  std::vector<std::vector<Move>> line;
+  bool line_complete = false;
+  /// record_certificate, Proven: the deciding thread's certificate.
+  std::shared_ptr<const ProofCertificate> certificate;
+  /// The main thread's root children (an action, or a first move for
+  /// completion Every), with their proof and disproof numbers - Hunt's soft
+  /// priors are read from them.
+  struct RootChild {
+    std::vector<Move> moves;
+    std::uint64_t pn = 1;
+    std::uint64_t dn = 1;
+  };
+  std::vector<RootChild> root_children;
   ProverStats stats;
 };
 
@@ -263,6 +359,9 @@ class Prover {
   /// The question at `root` (a turn start). Rethrows the first exception a
   /// thread threw (std::logic_error for a contradiction in the rules code).
   ProveResult prove(const GameState& root, const ProveBudget& budget);
+  /// The same within `depth` half-turns instead of options().depth (Guard's
+  /// iterative deepening: one prover, its TT and stores, every depth).
+  ProveResult prove(const GameState& root, const ProveBudget& budget, int depth);
 
   /// Empties the transposition table (not the stores).
   void clear();
