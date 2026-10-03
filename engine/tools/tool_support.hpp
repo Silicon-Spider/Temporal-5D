@@ -44,6 +44,12 @@ int ruleset_option(int argc, char** argv, int i, RuleOptions& rules);
 /// "standard", or the non-default choices (t5d::describe).
 std::string ruleset_text(const RuleOptions& rules);
 
+/// Every rule option by name and value, defaults included - an ABSOLUTE
+/// record of the ruleset, which no later change of the defaults rereads
+/// (describe() and encode() are relative to the defaults of their day):
+/// "activation=Count initial_credit=None ... family=Standard".
+std::string absolute_rules_text(const RuleOptions& rules);
+
 /// Whether a record was made by the synthetic generator (its "Synthetic"
 /// header): such positions are for throughput only, never the |E| verdict.
 bool is_synthetic(const PgnRecord& record);
