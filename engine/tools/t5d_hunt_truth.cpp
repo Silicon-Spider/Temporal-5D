@@ -376,7 +376,7 @@ int main(int argc, char** argv) {
     const Run& r = runs[i];
     t5d::tools::HuntTruthRoot row;
     row.id = static_cast<int>(i);
-    row.record = root.record;
+    row.record = root.content;  // the record by its content: no path under the oracle harness
     row.index = root.index;
     row.fingerprint = t5d::fingerprint(root.state.multiverse()).fingerprint;
     row.boards = static_cast<int>(root.state.multiverse().board_count());
