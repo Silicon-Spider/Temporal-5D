@@ -72,7 +72,9 @@ channel (rung 1), rungs 3 and 5; the NNUE held open (H6). The user's rulings:
 M16 also fixed M7's readings; applied, the window is killed under human-game
 weighting, which contradicts M16's own premise - put to the user (MEASUREMENTS, M7).
 
-**Done since (2026-10-03/04):** network **N5 merged** (D8 in the network, the
+**Done since (2026-10-03/04):** engine **E9 merged** (Guard, Hunt, the asset map,
+Hunt's ground truth and 6b″'s tool; two adversarial reviews and their fixes - the
+check filter's unsoundness among them); network **N5 merged** (D8 in the network, the
 search's C step API from Python, end-to-end games with random weights; reviewed);
 network C24 merged (65acf68); **the many2 conversion
 merged** with the golden files re-recorded on a quiet machine (only many2's
@@ -331,6 +333,9 @@ threads reach at least one thread's sum (one retry on a shared machine).
 | 2026-10-03 | E6a | ef3830f (E6a's rebased branch, before review) | dev, 24 logical; shared | 32 | 293 | 311 / 313 / 313 | none | pass x3 |
 | 2026-10-03 | E6a | 9c49a47 (E6a after its review fixes) | dev, 24 logical; load 79-88% | 32 | 292 | 304 / 307 / 308 | none | pass x3 |
 | 2026-10-03 | E6a | main + E6a, merged tree before the commit | dev, 24 logical; E9 running; load 8% | 32 | 293 | 313 / 313 / 313 | none | pass x3 |
+| 2026-10-03 | E9 | 4ab7f81 (E8+E9's branch, before review) | dev, 24 logical; shared | 32 | 293 | 313 / 314 / 311 | none | pass x3 |
+| 2026-10-04 | E9 | 9328e31 (after its review fixes) | dev, 24 logical; shared | 32 | 293 | 311 / 312 / 313 | none | pass x3 |
+| 2026-10-04 | E9 | main + E9, merged tree before the commit | dev, 24 logical; nothing else running | 32 | 293 | 311 / 311 / 313 | none | pass x3 |
 
 ## Environment
 
@@ -729,21 +734,22 @@ for game records.
 
 | ID | Status | Notes |
 |---|---|---|
-| H1 | v3 (CHECKPOINT 4), in progress | Verification v3 (§11.4): exact rules (E1-E4); the search's solver (E6a, gated by H41); Guard and Hunt (E9, building); full settling (df-pn, E8) under 50 boards; the audit lane (H44). E5b/E5c's brute-force scanner stays as 6b′'s comparison |
-| H2 | built, tested | Proofs only from E4's exhaustive verdicts and exhaustive defender enumerations; estimates otherwise. The search (E6a) consumes in-tree bounds only behind H41's switch |
+| H1 | built (v3), tested | Verification v3 (§11.4): exact rules (E1-E4); the search's solver behind H41's switch (E6a); Guard, Hunt and the asset map (E9, reviewed); df-pn settling under 50 boards (E8's prover, carried into E9); the audit lane's tools (certificates, the truth recorder; E10 wires them). E5b/E5c's brute-force scanner kept as 6b′'s comparison. 6b″ decides adoption per range |
+| H2 | built, tested | Proofs only from exhaustive verdicts and exhaustive defender enumerations; the per-leaf estimate channel removed (E9); estimates survive only as Hunt's flagged priors and the asset map's boosts; the search consumes in-tree bounds only behind H41's switch |
 | H3 | built, tested | Node cap with iterative deepening in forcing half-turns; horizon per budget measured (6b) |
 | H4 | built | MVV-LVA, killers, history, continuation history |
 | H5 | built | Nothing speculative; null move and LMR not built |
 | H6 | built (v1) | Material count with placeholder 5D piece values (spec issue 56); NNUE v2 waits on 6b (M8) |
 | H7 | not built (rule) | NNUE training: no training runs; NNUE waits on 6b |
 | H8, H9, H20, H21 | not built (rule) | Held open / refused |
-| H10 | reduced (CHECKPOINT 4) | Rung 1 dropped (6b); rungs 3 and 5 retired; rung 2's promotion side is Guard, its demotion audit the audit lane; rung 4, the asset map, building (E9) |
+| H10 | reduced, built | Rung 1 dropped (6b); rungs 3 and 5 retired, not built (M5); rung 2's promotion side is Guard, its demotion audit the audit lane; rung 4, the asset map, built (E9) - the reduced ladder: Guard, Hunt, the asset map |
 | H11 | superseded | By Guard (promotion) and the audit lane (demotion audit) |
 | H12 | retired | With the NNUE and the per-node scans |
 | H13, H14 | parked | Ladder scheduling: with the search wiring (E10) |
 | H41 | built, tested | `SearchParams::proof_channel` (C `proof_channel`, `t5d-play --proof-channel`): propagation of solved status (marking nodes solved, pruning siblings, secure-child selection) and export, off by rule; game ends are scored as results. Was: building | The search's solver as part of the proof channel: game-end scoring on; propagation and export off until the gate passes (E6a's fix round) |
-| H42, H43 | building | Guard and Hunt (E9); adoption per range by 6b″ |
-| H44 | not started | The offline audit lane's tooling (E10) |
+| H42 | built, tested | Guard (E9): iterative deepening from depth 1, at most 50 depths, never a depth it did not search; exact at every completed depth; refutations certified by E4 alone; the re-search hook for §8.6's reserve (wired in E10). Adoption per range by 6b″ |
+| H43 | built, tested | Hunt (E9): prove-only df-pn at the root, claims nothing at budget; export refused until H41/H23; partial-line priors behind a flag, off. Adoption per range by 6b″ |
+| H44 | built in part | The audit lane's tools: the certificate checker (E4 alone) and `t5d-hunt-truth` (E9); the decision sampler, the offline proof runner and the per-range report are E10's |
 | H45 | not built (rule) | The adversarial league (M5) |
 | H15 | built, tested | The scanner's deterministic single-thread mode; the search's synchronous mode and digest (E6a; the digest in the C API) |
 | H16, H25, H29 | not built (rule) | Refused |
@@ -817,12 +823,12 @@ for game records.
 
 | ID | Status | Notes |
 |---|---|---|
-| M14 | built (prototype), measured - STOP | Engine E8 on its branch (bd08c48): the channel split, df-pn over the semimove turn tree, incremental attack maps; 6b′ fails at 50-199 boards (M15) |
+| M14 | superseded | By v3 (H1): its df-pn and incremental attack maps carried into Guard and Hunt (E9); the per-leaf estimate channel removed |
 | M15 | measured - STOP | 6b′ on a quiet machine: (A) 77.4% / 40.7% / 23.7% / 0.0%; (B) fits in no range; (C) df-pn 408 against brute force 400 under 50 boards - STOP, a design review |
 | M16 | applied, confirmed | M7's readings (corrected at CHECKPOINT 5): time-share multiplier, human-game weighting, the per-phase rule under 50 boards with the band resolving to off - the window is killed, provisionally |
 | M18 | not started (rule) | A pilot self-play run before serious self-play re-checks the window and the other compute-weighted decisions - after §15.5, not in the untrained build |
 | H46 | built, tested | Q2 (provisional): initial timelines count as created by neither player - a variant's set-up reads every timeline as initial (rulebook R10) |
-| M17 | not started | 6b″: Guard and Hunt per range (E9's tool; quiet run to follow); no outcome stops the run |
+| M17 | tool built, truth recorded | `t5d-scan6bpp` (E9, reviewed): the shipped configuration, only E4-confirmed proofs counted; Hunt's ground truth pinned with its provenance (125 mates). The quiet run decides |
 | C24 | built, tested | The refresh ladder's complexity trigger behind a flag (`CacheConfig.complexity_refresh`, off; prototype, gated like rung 1 on 6c's existence test); add-only over rung 1 for every signal; every number a placeholder (spec issues 75-79) |
 | C25 | not built (rule) | Held open |
 | M7 | measured; killed, provisionally (M16, CHECKPOINT 5) | On real games (t0database, 716 games, max 186 boards): on at k = 8 from 50 to 186 boards; under 50 boards inside the ±10% band and the kill clause turns on it - waiting on the user; above 186 provisional (MEASUREMENTS) |
@@ -1284,8 +1290,32 @@ decision), and what is parked.
     specification cannot express is given to no source. H28's "every source reads
     the record as stored" now has this one exception.
 
-(Spec issues 97-107 and proposed spec edits 72-78 are reserved for engine E9,
-whose code cites them; they are written in at its merge.)
+97. **Guard under the ply split is checked at submission** (a reading: the
+    opponent moves only after it).
+98. **Guard's depth**: d = the opponent's actions, 2d − 1 half-turns; depth 1 =
+    their mate in one.
+99. **"Existence, not the full listing" removes only our listing**: exactness
+    still needs every opponent action, a product over their boards; depth 1 fails
+    at 50 ms (measured). The cheap reading - one escape per checking move with the
+    rest of their action held quiet - is inexact and not built.
+100. **Lazy SMP (M13's 5 threads) gives Guard's exhaustive refutation little**:
+    helpers re-search the same product.
+101. **"Prove-only ... never spends time disproving"**: read as stop at budget,
+    claim nothing, share no disproofs; df-pn's usual thresholds kept (measured
+    better than proof-number thresholds alone).
+102. **Hunt's and the truth's forcing class remain placeholders** (checks,
+    canonical completion) - carries issue 67.
+103. **Hunt's ground truth is the union** of the literal class's and the default
+    class's proofs at 4M nodes each (2M tree cap), chosen from a 101-root curve
+    that found no new mate past 500k nodes; "none" means no mate found, not no
+    mate. Ruling 5 says "one long offline search".
+104. **6b″'s chosen action for Guard is the record's next action** (no search yet).
+105. **A Hunt range with no truth mate has no verdict**; the rule is silent.
+106. **The asset map's estimate and boost** (4 plies, 128 nodes, flag at 300,
+    boost 0.25 × min(1, value/900)) are placeholders.
+107. **Hunt's non-lazy root expansion caps it at 100+ boards** (measured: the
+    100-199 range's 20 truth mates are mates in one); a lazily expanded root is the
+    remedy, not built - the measured Hunt is the pre-registered one.
 108. **Where D8's acting-player input enters is unspecified** (§2.3/A3). Built as
     `acting_player_input`: a learned embedding added to the global registers
     (placeholder; frozen boards' K/V never see it) or to every token
@@ -1314,6 +1344,13 @@ whose code cites them; they are written in at its merge.)
     mismatch; the engine may want the same check).
 116. **Refresh epochs in a shared cache** need the search's epoch set per root
     (`engine_epoch`, the epoch key hashed to 64 bits).
+117. **6b″ counts only proofs E4 confirmed**; a refuted proof withholds every
+    verdict; no cross-check, no verdict - a reading: the pre-registration does not
+    say.
+118. **"Too few to read"**: a Hunt verdict resting on fewer than 10 truth mates is
+    flagged (placeholder; the pre-registration names no minimum).
+119. **Ruling 5's "pinned and hashed"** read as extending to the record list
+    (content IDs in order), the rules by value and a code signature.
 
 ## Proposed spec edits
 
@@ -1535,6 +1572,19 @@ says now, what it should say, why.
     source reads it - CHECKPOINT 3)". Optionally H27/H33: the pinned corpus pins
     the converted text too. Why: the CHECKPOINT 3 ruling (issue 96).
 
+72. **§11.4's Guard row**: the depth semantics, the submission reading, that
+    exactness enumerates every opponent action ("existence" means ours), at most
+    50 depths (issues 97-100).
+73. **§11.4's Hunt row and §11.1**: prove-only as defined; export refused until
+    H41/H23 (issue 101).
+74. **§15.6's 6b″ block**: the readings (the chosen action, the truth's class
+    union, budget and curve, no-verdict ranges); after the quiet run, the verdicts
+    and the M4 write-back to MEASUREMENTS (issues 102-105).
+75. **§13**: per 6b″'s verdicts ("the chosen move goes unguarded" where Guard
+    fails; "proofs only from the search's solver" where Hunt fails).
+76. **§11.2 rung 4**: the asset map as built (issue 106).
+77. **§11.3 / M13**: Lazy SMP is no help for exhaustive refutations (issue 100).
+78. **Register H1, H10, H42, H43, M14, M17**: as built.
 79. **§2.3 / A3**: add the global acting-player input (issue 108).
 80. **§8.2 / D8**: name register 0 and the linear readout as placeholders; one
     distribution over moves + submit; an illegal submit gets no probability and
@@ -1550,6 +1600,15 @@ says now, what it should say, why.
 85. **The register's D8 row**: built (engine, search, network).
 86. **The register's open items**: issue 48 closed by D8; issues 5 and 29 closed
     by C23.
+87. **§15.6's 6b″ block**: only confirmed proofs count; a refuted proof withholds
+    the verdict; the shipped configuration is the measured one; the "too few to
+    read" flag (issues 117, 118).
+88. **§15.6 / ruling 5**: the truth is pinned with its provenance, and the tools
+    refuse other records or rules (issue 119).
+89. **H41/H23 and H43**: Hunt's export switch is refused like the search's proof
+    store.
+90. **§11.1 / H19, wherever disproof classes are described**: a disproof's class is
+    every option that shapes the attacker's class.
 
 ## Session log
 

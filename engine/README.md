@@ -68,6 +68,15 @@ rules reference, `docs/rules/README.md`, which the code cites throughout.
 | **E6a:** self-play and match play; the turn cap | `include/t5d/selfplay.hpp`, `src/selfplay.cpp` | §8.7, §12.3; C12-C14, I11 |
 | **E6a:** the search's C API: the step API for an external evaluator | `include/t5d/capi_search.h`, `src/capi_search.cpp` | §8.1, §8.3; D1, D3 |
 | **E6a:** t5d-play, the engine against itself, and its 5dpgn record | `tools/t5d_play.cpp`, `tools/play_record.hpp` | §15.5 |
+| **E8:** incremental royal-attack maps | `include/t5d/attacks.hpp`, `src/attacks.cpp` | §11.1 (CHECKPOINT 3), A4, M14 |
+| **E8:** the proof channel: depth-limited df-pn over the semimove-decomposed turn tree; the disproof store | `include/t5d/prover.hpp`, `src/prover.cpp` | §11.1, §8.2, §11.0 item 3, H2, H15, H17-H19, H37, H39, M14 |
+| **E8:** experiment 6b′'s tool | `tools/t5d_scan6bp.cpp` | §15.6 (CHECKPOINT 3), M15, M13 |
+| **E9:** the prover for Guard and Hunt - prove-only, the literal class's single entry, the last-turn check filter, lines and certificates | `include/t5d/prover.hpp` | §11.4, H42, H43, H37 |
+| **E9:** certificates checked against E4 alone | `include/t5d/certificate.hpp` | §11.1 (the solver paragraph), H37, H41 |
+| **E9:** Guard - can the opponent force mate against the chosen action? | `include/t5d/guard.hpp` | §11.4, §8.6, H42 |
+| **E9:** Hunt - do we have a forced mate? df-pn, prove-only | `include/t5d/hunt.hpp` | §11.4, §12.2, H43, H41 |
+| **E9:** the superseded-board asset map | `include/t5d/assets.hpp` | §11.2 rung 4, §11.4, H10 |
+| **E9:** Hunt's ground truth; experiment 6b″'s tool | `tools/t5d_hunt_truth.cpp`, `testdata/hunt-truth/`, `tools/t5d_scan6bpp.cpp` | §15.6 (CHECKPOINT 4), M17 |
 
 Next: the gate run with the engine configured in full mode - Q4's ruling (R8) is
 the default, and with it every one of the triage's 115 Q4 findings agrees with the
@@ -77,7 +86,9 @@ is signed off, its proofs cross-checked against df-pn and oracle mate verdicts);
 the network's stage N5 (the acting-player input and the submit logit the search already
 takes); the expansion's pin and check relations; the spec issues the search's
 placeholders raise (build-log spec issues 28, 46, and the E6a issues listed under
-"Choices the spec leaves open").
+"Choices the spec leaves open"); and wiring verification v3 (E9) into the search - Guard's re-search from §8.6's
+reserve, Hunt's gated proofs and (behind their flag) priors with §12.2's exclusions,
+the asset map's boosts.
 
 **Moves are pseudo-legal; turns are legal.** A move is pseudo-legal when it obeys
 every movement rule and the action's bookkeeping; legality is judged per action, at
@@ -2257,6 +2268,919 @@ allocation of `gather` and `deliver`; the cache's and the graph's byte counts ag
 the heap; the purge; the budgets and the deadline; validation; the C ABI's embedded
 structs last; self-play's noise and time limit.
 
+## Stage E8: the verification layer's redesign (M14, a prototype until 6b′)
+
+6b failed from 50 boards up even after E5c (CHECKPOINT 3, spec §11.1 "The redesign
+after 6b"): the brute-force scanner paid turn-level exactness - completing every
+forcing line into a legal turn, listing every legal action in check, scanning for
+royal captures - on every line, whether the line could end in a proof or only in an
+estimate. Stage E8 builds the redesign the ruling (register M14) describes, as a
+prototype for experiment 6b′ (M15) to decide. The E5b/E5c scanner is kept unchanged
+beside it: below 50 boards M15 keeps whichever of brute force and df-pn decides more
+roots, so both stay measurable.
+
+This section is the design, written before the code (the brief asked for it in that
+order); the parts' headers restate it next to the code.
+
+### The channel split (H2, §11.1 part 1; architecture §13.2.7)
+
+- **The proof channel** (`t5d/prover.hpp`) pays every exactness cost: legal actions
+  only, every defence of the defender, terminal verdicts by E4's exhaustive
+  detectors (H37). It answers one question at a root and nothing else (below).
+- **The estimate channel** (`t5d/estimate.hpp`) pays none of them: a cheap, inexact
+  local search over capture and threat sequences, *without turn completion* - a move
+  is followed at once by the opponent's reply, as if the move were the whole turn -
+  with the v1 material eval (H6). Its output is a score and a "tactically live"
+  flag: soft priors and force-expansion hints only (H2). Its errors cost search
+  efficiency, never correctness: it proves nothing, exports nothing to the solved
+  store, and no move it makes reaches the tree - moves reach the tree only through
+  the generator, which is exact.
+
+### The proof channel: depth-limited df-pn over semimoves
+
+**The question.** At a root - a turn start, its side to move the *attacker* A, the
+other side the *defender* D - the channel asks: *does A force checkmate within d
+forcing half-turns?* (d = 5 by default: A, D, A, D, A - mate-in-3, §15.6's
+"dlshogi's leaf-solver level", M15). The answer is one of
+- **proven** - A mates within d whatever D does: an exact game fact, exported at once
+  to the solved store as `Win(k)`, k <= d the proof's own distance (H19);
+- **disproven** - no such mate exists *within the attacker's forcing class* (below):
+  recorded as such ("no mate within d", with the class) in the disproof store;
+- **unknown** - the budget ran out first. Never "mate" on an exhausted budget (H37):
+  a node is proven only from exact sub-results.
+
+**The attacker's forcing class** (the spec defines none; each part a parameter,
+`ProverOptions`, with a placeholder default and a spec issue):
+- *seeds* - which first moves A's forcing actions may begin with: `Checks` (default,
+  dlshogi's tsume rule: checking moves by the scanner's definition (b) - a piece of
+  A's on a board the move creates, that board passed, can capture a royal);
+  `Forcing` (the scanner's whole forcing set: captures, checks, branch threats);
+  `All` (every pseudo-legal move - the literal "mate within d", used by the tests);
+- *completion* - how a seed becomes a whole action: `Canonical` (default, 6b's unit
+  - one action per seed, the first legal completion in a fixed preference order,
+  below) or `Every` (every legal completion: the action space beginning with the
+  seed, exactly).
+Proofs are real-game facts whatever the class (A's options are a subset of its legal
+actions; D's are all of them). Disproofs are facts about the class. With seeds `All`
+and completion `Every` the question is exactly "mate within d" and the tests hold the
+channel to the brute-force game tree both ways.
+
+**The defender's turn: every legal action.** D gets no stand-pat and no forcing
+restriction: an AND node is proven only when every legal action of D's leads to a
+proven mate (or D has none and is in check: checkmate).
+
+**OR and AND nodes when a turn is a sequence of semimoves.** A *semimove* is one
+timeline's share of a turn (§8.2, §11.0 item 3): on one of the mover's playable
+boards, "play nothing here" or one move from that board. Every node of the tree is
+either a *turn node* - a turn start - or a *semimove node* - a partial action, some
+of the mover's semimoves decided. A node is an **OR** node when A chooses there (A's
+turn nodes and A's partial actions) and an **AND** node when D does. So one
+half-turn is a chain of nodes of one kind: an AND turn node, its AND semimove nodes,
+and at the end of each complete legal action a *submit* edge to an OR turn node -
+the half-turn boundary, where the depth counter drops by one.
+
+**How a turn decomposes - the canonical order, exactly.** At the turn start the
+mover's playable boards are the *axes*, in an order fixed by the turn start (A's
+turns: ascending timeline; D's turns: the boards a check rests on first, then the
+mandatory ones, then the optional ones, ascending within each group - see "Evasions
+per semimove"). A partial action is built in two phases:
+1. **Plain phase.** Axis by axis in that order: if the axis's board has been played
+   already (by a jump that landed on it), it is skipped; otherwise the mover chooses
+   `Pass` or one of the board's *non-branching* moves (within the board, or a jump
+   onto another axis's still-unplayed board, J4) - generated by the state machine at
+   the partial state, so every move is pseudo-legal where it is made.
+2. **Branch phase.** Then any sequence of *branching* moves (J3, J5; J6's twins
+   included) from axes still unplayed, each generated at the partial state; and,
+   whenever the obligations are met (T5), the choice to submit - legal iff every
+   royal of the mover's is safe (C4).
+This tree holds every legal action exactly once (as a set of moves with its creations
+in order) **when the order of a turn's moves does not matter beyond the creations'
+order**: under Q4 "moves after the shift allowed" (`moves_after_shift`, ruled R8,
+the default since E7), activity changed by creations
+alone (the count rule, `Rewinds`, no play activation) and castling allowed on
+optional boards. The argument: the mover's moves visit only boards of its own colour,
+and an action creates only boards of the opponent's colour, so a move's path and
+landing squares never change during the action - only whether a jump onto another
+axis's board lands on a playable board (J4) or, once that board is played, on
+history (J6's branching twin); non-branching moves on different boards append boards
+to different timelines and commute; a branch only adds an opponent-coloured board and
+changes activity and the present, which no non-branching move reads under those
+rules. So any legal action can be replayed with its non-branching moves first, in
+axis order, and its branches after them in their creation order - every move still
+pseudo-legal and the final state the same - and each such sequence is one path of the
+tree. Under any other ruleset (Q4's Guide-literal reading among them, which puts the move that
+shifts the present last; Q1's consecutive rule, Q3, Q6, Q21's alternative) the turn
+is not decomposed: the node's children are E4's listing of the legal actions
+(`list_legal_actions`, exhaustive, capped), and a capped listing makes the node
+unprovable (AND) or undisprovable (OR) - never a false verdict.
+
+**How a turn is completed incrementally, not re-solved per line.** A partial action
+is a node of the tree, so its completions are searched once and shared by every line
+through it - the scanner instead completed each forcing seed into a legal turn per
+line ("the quietest move on each mandatory board; else E4's first legal finish"),
+38-64% of its work at 100+ boards. Dead completions are cut where they arise, by
+three sound tests:
+- **A standing capture.** If, after some of the mover's moves, a piece of the
+  opponent's on one of its playable boards can capture a royal of the mover's, that
+  capture stands to the end of the action (E5a's tier 0: the mover moves only on its
+  own colour's boards, boards never change, a new board appears only where there was
+  void, which no existing capture crosses), so no completion is legal: the node is
+  dead at once. This is C4 asked of a partial action, answered by the incremental
+  royal-attack map (below) - so an AND node in check keeps only the moves that
+  answer the check, the moment they are made. (Under Q18's alternative a new board
+  could block a capture across void, so only a capture that crosses no void
+  stands - E5a's rule.)
+- **A pass that cannot be made good.** `Pass` on a mandatory board leaves it to be
+  played later - by a jump onto it from an axis not yet decided (J4), or by a
+  branch from it - or relieved by a creation that moves the present (T8, T12). It is
+  offered only where one of those is possible: an axis later in the order has a
+  jump onto it, it has a branching move or a jump (a possible J6 twin), or a relief
+  is possible (the mover's next creation would be active and some jump lands
+  before the present, or an inactive timeline exists - the opponent's, or since H46
+  an initial one - that a creation might reactivate, T11). And a partial action dies the moment a board passed earlier is
+  still unplayed, mandatory and beyond all three - no axis left to jump onto it.
+  Each test over-approximates, from the moves at the turn's start: the candidate
+  moves of an action are fixed there, since the mover's moves visit only boards of
+  its own colour, which the action changes only by playing them.
+- **E5a's tiers** (optional, `ProverOptions::legality_tiers`): the fast tiers classify
+  a semimove node's moves; a move proved illegal (no legal finish at all) is not
+  made.
+A **canonical completion** (A's default) is the first legal leaf of the seed's
+completion subtree in a fixed preference order - on an optional board `Pass` first,
+then its non-branching moves from the quietest (a move within the board, capturing
+nothing, by the least valuable piece; the scanner's order); on a mandatory board the
+quietest move first and `Pass` last; then the branch phase, submitting as soon as the
+obligations are met and C4 holds, else branches in generator order. A depth-first
+search with the three tests, at most `completion_max_nodes` steps (2,000, the
+scanner's fallback cap: a placeholder); a seed it cannot complete within them has no
+action in the class - deterministic, so the class is well defined. It is computed
+once per (turn start, seed) - when the turn node is expanded - and held by the tree.
+
+**Evasions per semimove instead of listed whole.** An AND node never lists D's
+actions: its children are one axis's semimoves. D's axes are ordered so that the
+boards a check rests on come first (R1's captures in the passed multiverse: the
+boards whose passed copies hold a place of one), then the mandatory boards, then the
+optional ones. So the moves that do not answer a check die at the first axis - each
+leaves a standing capture - and the free boards behind it are explored only below a
+real evasion, lazily, in the order df-pn asks for them. E4 still decides the turn
+node itself: before expanding an AND turn node, one quick escape search (the same
+depth-first search as a completion, escape moves first, `escape_probe_nodes` steps)
+looks for a legal action; if it finds none, E4's hypercuboid detector gives the
+exhaustive verdict (`detect_mate`): checkmate - proven, distance 0, exported as
+`Loss(0)` (H37: an exhaustive search that terminated); stalemate - disproven
+(exported as `Draw`); a legal action - the node is expanded, that action's successor
+first among its children (a duplicate of one of the semimove tree's leaves: harmless
+for an AND node, and the first escape df-pn tries). At the last half-turn (no depth
+left) an AND node is decided by that test alone.
+
+**Proof and disproof numbers, thresholds.** Plain df-pn (Nagai's depth-first
+proof-number search; the precedent is dlshogi's df-pn mate solver, cited, not
+copied). Each node holds (pn, dn): proven (0, ∞), disproven (∞, 0), a fresh leaf
+(1, 1). An OR node's pn is its children's least pn and its dn their sum; an AND
+node's pn is the sum and its dn the least. `mid(n, thpn, thdn)` searches below n until
+pn >= thpn or dn >= thdn: it picks the child with the least pn (OR) or dn (AND) and
+gives it the thresholds `min(thpn, pn2 + 1)` and `thdn - dn(n) + dn(c)` (OR; AND
+symmetrically, pn2/dn2 the second-best). The root is searched with infinite
+thresholds until it is decided or the budget is spent. Sums saturate below ∞. A node
+that can never be proven (an AND node whose legal actions E4 could not list within
+its cap or memory ceiling) keeps pn just below ∞ and its dn: never proven, still
+disprovable. A dead semimove node (no legal completion) is not an option of the
+mover's: an AND-side one is proven, an OR-side one disproven. Distances: a proven
+node keeps k, the half-turns its proof needs (an AND turn node checkmated now 0; a
+submit edge adds 1; an OR node takes its proving child's, an AND node its longest
+child's), so the root's proof is `Win(k)`, k <= d.
+
+**The tree and the transposition table.** Each search thread keeps an explicit tree
+(children made on expansion, the move or action leading to each; states recomputed
+along the path as the search descends), because a node's children - one board's moves,
+each applied and C4-tested, or a seed's completion - cost too much to regenerate at
+every visit. Turn nodes also meet across paths and threads through a shared,
+lockless **transposition table** of (pn, dn) *estimates*, keyed by the 5D Zobrist key
+with the ruleset ID (H18), the node's role (A or D to move) and its remaining depth.
+Solved facts never live only there (§11.3): a proof goes to the solved store and a
+disproof to the disproof store the moment it is found, both keyed by position with a
+full comparison on a key match, and a turn node consults both when it is created.
+Read back: `Win(k)` for A with k within the depth left proves an OR node, `Loss(k)` for
+D proves an AND node (proofs are real-game facts, so a proof from the scanner may
+prove a df-pn node); `Win` or `Draw` for D, `Loss` for A, or a recorded disproof of the
+same class at least as deep, disproves. GHI does not arise: there is no repetition rule
+and every move creates a board, so the full state never recurs (H39) and the tree is
+acyclic; proofs and disproofs depend only on the position and the depth left.
+
+**Depth limiting.** A turn node carries the half-turns left. An OR turn node with r
+left expands A's actions, each submit edge to an AND turn node with r - 1; an AND
+turn node with 0 left is decided by the mate test alone (checkmate proven, otherwise
+disproven). Proven at r is proven at any r' >= r; disproven at r is disproven at any
+r' <= r; the stores and the TT key keep the depth.
+
+**Parallelism (M13: 5 threads).** Lazy-SMP-style: every thread runs `mid` from the
+root over a tree of its own; they share the TT (estimates), the solved store and the
+disproof store, and a thread that decides the root stops the others. Diversity: a
+helper thread breaks ties between equally good children by a per-thread hash, and
+searches with thresholds raised by a per-thread factor (the "1 + ε" trick), so the
+threads leave the main thread's path at different points. Soundness is unaffected: a
+node is solved only from its own exact children or a store's exact fact, the TT is
+never read as a fact, and the stores refuse contradictions (`std::logic_error`). One
+thread is the deterministic mode (H15): with a node budget and no clock, the same
+root, options and stores give the same search, node for node.
+
+**Budget.** Work is counted in nodes, one unit for all of it: a node expanded, a move
+applied, an attack-map query, a node of an E4 search the channel calls. A node
+budget and a wall-clock limit (6b′: 50 ms) stop the search; what was decided before
+the stop stands (it was exact), the rest is unknown.
+
+### Incremental royal-attack maps (§11.1 part 3)
+
+`RoyalAttackMap` (`t5d/attacks.hpp`) holds, for one colour and one multiverse, what
+`royal_capture_exists` asks - can a piece of that colour, on one of its playable
+boards, capture an enemy royal? - but kept as a record per *source* (a playable
+board): the captures found from it, and every line from it that stopped at *void* (a
+place with no board, J8), with where it stopped. A new board can only appear where
+there was void, so moving to a multiverse that extends this one (`advanced`) needs:
+- sources no longer playable (their board superseded) dropped;
+- new playable boards scanned as new sources;
+- for each new board's place, only the lines that stopped at void exactly there
+  resumed from it - every other line is unchanged, because boards never change (A4)
+  and a line that stopped at a piece or a board's edge cannot be reopened.
+A source's record is computed once and shared, unchanged, by every map derived from
+the one that made it: a board that is not played keeps its record from turn start to
+turn start, and a superseded board is never scanned again - it is only crossed.
+Under rules where a board's landability depends on activity or on its being history
+(Q8's, Q20's alternatives) or a slide crosses void (Q18's), `advanced` recomputes from
+scratch: always equal to a from-scratch scan, and the tests hold it so on random
+positions and move sequences under every ruleset.
+
+The proof channel derives each turn's maps from the previous turn's along the path:
+C4 for the mover's partial actions asks the opponent's map, advanced by the boards the
+action has made so far (each one an opponent source, plus the lines that stopped where
+it now stands); R1's check status after an action asks the mover's map advanced by
+the passed copies.
+
+### The estimate channel (§11.1 part 1) - retired
+
+**Retired at CHECKPOINT 4** (verification v3, §11.4: rung 1 fits its budget nowhere)
+**and removed in stage E9** - `t5d/estimate.hpp`, its tests, the attack maps'
+all-capture mode it used, and 6b′'s test (B). The asset map (stage E9) does not use
+its code: it runs its own one-board quiescence on the move generator. What it was, as
+the history 6b′'s figures below refer to:
+
+A negamax alpha-beta over *single moves*: the side to move makes one capture (or, in
+its first `threat_plies` plies, one local check: a move within a board after which a
+piece on the board it creates attacks an enemy royal there), and the opponent replies
+at once from the boards that move made and its other playable boards - no completion
+of the turn, no obligations, no C4 test (a royal left capturable is simply captured,
+for a large score). The boards a move creates must be answered on: those the reply
+leaves are passed (advanced unchanged), so a threat there carries, and a royal
+attacked on such a board is in local check (no stand-pat; every move of that board is
+searched). Stand-pat (the static material eval) elsewhere, delta pruning (§11.1:
+speculative pruning is estimate-channel only), MVV-LVA ordering, a ply limit and a
+node cap. The captures came from all-capture maps advanced move by move. Its result
+was the score after the sequence, the swing against
+the static eval, and whether the position is tactically live (a swing of at least
+`live_margin`). It is meant for rung 1 (§11.2): a per-leaf scan while the leaf waits
+for its batched evaluation - which 6b′ tests.
+
+### Experiment 6b′ (M15): `t5d-scan6bp`
+
+The same positions as 6b (the records' turn starts and, until E9 removed test (B),
+one leaf per root two half-turns of random legal play below it, made as `t5d-scan6b`
+makes them), read per board-count range, never pooled:
+- **the proof channel** at each root: 50 ms of wall clock, 5 threads; *decided* = proven
+  or disproven. Pass: >= 50% of roots decided;
+- (removed in E9 with the channel) **the estimate channel** at each leaf: its cost in
+  nodes, against the rung-1 leaf budget. *Fits*, operationalised before measuring: the leaf budget is what M13's 5
+  scanner threads can spend while one leaf waits for its batched evaluation -
+  5 x (the channel's measured nodes per second of thread CPU time) / (§15.6's design
+  evaluation rate, size-matched: 9,600/s below 420 boards, 4,600/s from 420) - and the
+  channel fits a range when the 90th percentile of its per-leaf cost there is within
+  that budget. The per-leaf wall time against 5 / rate is printed beside it;
+- **brute force against df-pn below 50 boards**: the E5c scanner's 6b root scan (50 ms,
+  5 threads; decided = 5 forcing half-turns resolved, or a proof, or an exhausted
+  tree) beside df-pn's, roots decided by each.
+The summary applies M15's outcome rules mechanically.
+
+```
+t5d-scan6bp [--record-list FILE --record-root DIR] [--every K] [--max-roots N]
+            [--threads T] [--root-ms MS] [--brute-ms MS] [--no-brute-force]
+            [--depth D] [--seeds checks|forcing|all] [--completion canonical|every]
+            [--completion-max-nodes N] [--escape-probe-nodes N] [--legality-tiers]
+            [--min-boards N] [--max-boards N]
+            [--json FILE] [--summary FILE] [--per-position]
+            [--no-moves-after-shift] [--rules ENCODING] [RECORD ...]
+```
+
+### As built: the parameters
+
+Every one a placeholder (the spec gives the shapes, not these values), named and
+with its alternatives:
+
+| Parameter | Default | Alternatives, and why the default |
+|---|---|---|
+| `ProverOptions::depth` | 5 half-turns | M15's question (mate-in-3, §15.6) |
+| `ProverOptions::seeds` | `Checks` - the scanner's checking moves (b) | `Forcing` (6b's whole forcing set), `All` (the literal question). dlshogi's precedent: a mate search by checks |
+| `ProverOptions::completion` | `Canonical` - one action per seed | `Every` (every legal completion). 6b's unit: a forcing seed and one completion |
+| `ProverOptions::completion_max_nodes` | 2,000 steps | the scanner's completion-fallback cap; beyond it a seed has no action in the class |
+| `ProverOptions::escape_probe_nodes` | 256 steps | before E4's detector at an AND turn node (E5c's probe, 64 seeds, is the precedent) |
+| `ProverOptions::legality_tiers` | off | E5a's fast tiers at semimove nodes; the standing-capture test already cuts what tier 0 would |
+| `ProverOptions::listing_cap` | 4,096 actions | turns that do not decompose (E4's listing) |
+| `ProverOptions::threads` | 1 (6b′: 5, M13) | 1 is the deterministic mode (H15) |
+| `ProverOptions::tt_entries`, `max_tree_nodes` | 2^18, 2M per thread | memory bounds |
+
+### As built: what the tests hold
+
+- **Attack maps** (`tests/test_attacks.cpp`): every map - built, advanced, or asked
+  without being built - gives check.hpp's from-scratch captures, the same list in
+  the same order: on random multiverses (both colours, every ruleset), on chains of
+  random extensions (boards appended, heads changed, timelines added; 11,520
+  incremental advances in the default run, 31,236 lines resumed), along random
+  legal play move by move with each turn's passed multiverse (R1's status equal to
+  `in_check`; C4 of every partial action equal to `royals_safe`). A non-extension is
+  recomputed and still equal. `long_` plays ten times as many moves.
+- **The semimove tree** (`prover_semimove_tree_lists_exactly_the_legal_actions`):
+  under every ruleset that decomposes, the prover's own trees - the defender's and the
+  attacker's in the literal class, built by the production expansion
+  (`Prover::tree_actions`: `expand_turn`, `expand_semi`, every node expanded; before
+  stage E9's review the test walked a test-only copy of it) - hold exactly the
+  brute-force reference's distinct successors, each replayed through the state machine
+  and C4-tested, and E4's count of them; and every legal action (a move sequence,
+  branches in the order made) is a path of the tree exactly once - the defender's
+  witness besides (685 positions, 81,887 actions in the default run; `long_`: more and
+  larger positions).
+- **The canonical completion** against its definition walked independently (no
+  attack maps, no pruning but the rulebook's standing-capture lemma tested from
+  scratch), for every move at every position, under every ruleset, under one Q4
+  reading or the other (24,549 seeds, 18,063 completed, none beyond the
+  reference's cap).
+- **Proofs and disproofs** on random play from the sparse starts, against exact mate
+  references: the attacker's actions of the class - for the literal class (seeds
+  `All`, completion `Every`) every legal action, for the default class the class's
+  own actions computed independently (the scanner's check test made literal, the
+  completion's definition walked) - against every legal defence, a mate at the
+  horizon by E4's detector. A mate by the class's actions is a mate, so a proof is
+  confirmed by its class's reference, else by the brute-force game tree within its
+  distance, else by the literal reference; a disproof is the class reference's
+  "no mate within d". The references list successors by the brute-force
+  enumeration where it fits and by E4's exhaustive listing (another algorithm than
+  the semimove tree) beyond it, within a work cap. Default run: literal class 112
+  decided, 111 confirmed, 1 beyond the references; default class 74 decided, 74
+  confirmed; every ruleset under both Q4 readings (listings where turns do not
+  decompose; smaller caps) 2,797 decided, 2,790 confirmed, 7 beyond; no
+  contradiction anywhere.
+- **The `long_` runs** (`--long`, 2026-10-03, the merged tree): the semimove tree
+  6,064 positions, 1,365,247 actions, all exact (18 min); the chained attack maps
+  30,393 moves, 2,238 turn starts in check; random play to depth 5 under every
+  ruleset (the default at full size, every alternative at a quarter; 40 min, a
+  progress line per ruleset) - literal class 2,501 decided, 2,389 confirmed, 112
+  beyond the references; default class 4,495 decided, 4,463 confirmed, 32 beyond;
+  no contradiction.
+- **H37**: for every root of a sample, budgets stepped from 0 to the full search's
+  need: a decided answer only where the full search gives the same one (213 budgets in
+  the default run, every one stopped unknown; `long_`: about 1,900).
+- **H15**: one thread with a node budget gives the same search twice, node for node.
+- **Threads**: 5 by node budget in the default run (21 decided, 20 confirmed, 1
+  beyond the references); 2, 5 and 8, by node budget and by the clock (20 ms), in the
+  `long_` run - with stores shared across the searches, every decided answer confirmed
+  by the references and equal to one thread's where both decide.
+- **Stores** (H19): a proof's root `Win(k)` and the defender's `Loss` entries are in
+  the solved store; a second prover answers from it without expanding a node; a
+  disproof is recorded with its depth and class, and only for its class.
+
+### 6b′: preliminary figures (a shared machine - not the verdict)
+
+Measured 2026-10-03 on the dev machine (AMD Ryzen 9 9900X, 24 logical processors)
+while other agents built and tested in other worktrees - busy 37% during the proof
+channel's phase, 36% during brute force's, 26% during the estimate channel's - so
+these are not quiet-machine figures; the decisive run is a quiet machine's. Release,
+g++ 16.2 `-O2`. Q4 as ruled (R8; measured before E7 reached this branch, with
+`--moves-after-shift` - the default ruleset since E7); turns decompose. The 41 corpus
+records: 805 roots, 780 leaves (17 roots and 12 leaves checkmated, 2 and 2
+stalemated, 1 root breaking C4: not measured). Defaults throughout (the parameters
+above).
+
+| Boards | roots | (A) df-pn decided at 50 ms, 5 threads | of them: proven / disproven (with no action of the class at the root) | (C) brute force decided | leaves | (B) estimate p90 cost / budget |
+|---|---|---|---|---|---|---|
+| < 50 | 527 | **76.1% PASS** | 49 / 352 (256) | 74.4% | 495 | 3.63 - does not fit |
+| 50-99 | 140 | **39.3% FAIL** | 22 / 33 (22) | 28.6% | 140 | 9.81 - does not fit |
+| 100-199 | 97 | **23.7% FAIL** | 7 / 16 (12) | 23.7% | 100 | 23.5 - does not fit |
+| 200+ | 41 | **0.0% FAIL** | 0 / 0 | 2.4% | 45 | 78.3 - does not fit |
+
+The estimate channel ran at 154,498 nodes per second of thread CPU time, so a leaf's
+budget was 5 x 154,498 / 9,600 = 80 nodes (521 us); its p90 wall time per leaf was
+1.4 ms, 4.6 ms, 15 ms and 46 ms by range.
+
+**M15's outcome, applied mechanically to these figures: 50-199 boards fail -> STOP
+for a design review.** Rung 1: the estimate channel fits in no range - it stays
+dropped. Below 50 boards df-pn decides more roots (401 of 527) than brute force
+(392): keep df-pn there.
+
+A second run after E7's merge, the default ruleset with no option (the same rules),
+the machine busy 24% / 28% / 23%: (A) 76.7% PASS (51 / 353, 256), 40.7% FAIL
+(23 / 34, 22), 23.7% FAIL (7 / 16, 12), 0.0% FAIL; (C) 74.8%, 30.7%, 24.7%, 2.4% -
+df-pn 404 against brute force 394 below 50 boards; (B) at 228,153 nodes/s (a budget
+of 119 nodes) p90 cost/budget 2.46, 6.64, 15.9, 53.1 and p90 wall 0.91, 3.6, 9.4,
+31.6 ms - the same outcome on every count.
+
+What the decisions rest on, and how they move (information, the same machine):
+- **Most disproofs are a root with no checking action at all** (256 of 352 below 50
+  boards; 22 of 33, 12 of 16 above): under `Checks` seeds "no mate by checks" is then
+  immediate. Where the attacker has checks, df-pn rarely settles 5 half-turns above
+  50 boards.
+- **The class.** `Forcing` seeds: 36.6% / 22.9% / 7.2% / 0.0%. The literal question
+  (`All`, `Every`): 9.3% / 2.9% / 1.0% / 0.0% - almost only proofs. `Checks` with
+  `Every` completion: 72.3% / 26.4% / 16.5% / 0.0%.
+- **Time.** At 500 ms (ten times the budget) and 5 threads: 50-99 45.0%, 100-199
+  34.0%, 200+ 2.4%; at 1 s on one thread: 50-99 42.1%, 100-199 34.0%. The shortfall
+  is the scale of the trees, not a constant factor.
+- **The estimate channel's depth.** One ply (a capture or threat, no reply): p90
+  cost/budget 0.20 / 0.53 / 0.99 / 2.99 - fits below 200 boards, but a capture with no
+  reply is no exchange (76-100% of leaves "live"). Two plies: 1.23 / 2.97 / 7.0 /
+  19.6 - fits nowhere. At every depth the root's own work (both sides' capture maps,
+  the threats' move generation) grows with the boards: at 200+ boards even one ply
+  costs 1.7 ms at p90 against 0.52 ms.
+- **Where the work went** (nodes, every thread): attack-map queries 84-86% of the
+  units - the standing-capture tests of partial actions (1.2 million partial actions
+  cut below 50 boards, 1.0 million at 50-99) - E4's searches 0.0-0.3%; canonical
+  completions outnumber node expansions two or three to one (six to one at 1 s).
+
+The quiet-machine run (from the repository root, after building):
+
+```
+build/engine/t5d-scan6bp --per-position --record-list build/corpus.txt \
+    --json build/6b/6bp-quiet.json --summary build/6b/6bp-quiet.txt
+```
+
+(`build/corpus.txt` lists the 41 records, one path per line, relative to the
+repository root. The default ruleset is Q4 as ruled, R8; `--moves-after-shift` is
+accepted and changes nothing.) It took 45 s on the shared machine: (A) at most
+50 ms a root, (C) the same, (B) a few seconds.
+
+## Stage E9: verification v3 - Guard, Hunt and the asset map (CHECKPOINT 4)
+
+6b′ failed from 50 boards up (CHECKPOINT 4): exact settling - proving a forced result
+or proving there is none - works only in small positions. The verification layer is
+v3 (spec §11.4): exact rules always; the search's own solver for proofs (H41, gated);
+**Guard** and **Hunt** at every size, each needing only the cheap half of settling for
+its purpose; full settling scans only under 50 boards; the offline audit lane and the
+league above. The user's rulings for this stage: carry E8's df-pn and incremental
+attack maps into Hunt and Guard; drop the per-leaf estimate channel; build Guard (H42)
+and Hunt (H43); keep the asset map (§11.2 rung 4) - "the scanner ladder" is the
+reduced ladder of Guard, Hunt and the asset map; record Hunt's ground truth once; run
+6b″ (M17). Not built: C25, the NNUE (held open, H6), the retired rungs 1, 3 and 5 (M5).
+The components have clean interfaces; wiring them into the search is the next stage,
+after the search core (E6a) merges.
+
+| Part | Where |
+|---|---|
+| The prover's additions: prove-only, the literal class's single entry, the last-turn check filter, the proof's line and certificate, a depth override | `include/t5d/prover.hpp` |
+| Certificates checked against E4 alone | `include/t5d/certificate.hpp` |
+| Guard (H42) | `include/t5d/guard.hpp` |
+| Hunt (H43) | `include/t5d/hunt.hpp` |
+| The superseded-board asset map (§11.2 rung 4) | `include/t5d/assets.hpp` |
+| Hunt's ground truth: the recorder, the file and its pin | `tools/t5d_hunt_truth.cpp`, `tools/hunt_truth.hpp`, `testdata/hunt-truth/` |
+| Experiment 6b″ (M17) | `tools/t5d_scan6bpp.cpp` |
+
+The per-leaf estimate channel is gone (rung 1 fits its budget nowhere): its code, its
+tests, the attack maps' all-capture mode it used and 6b′'s test (B). No piece of it is
+kept - the asset map runs its own one-board quiescence.
+
+### The prover's additions
+
+- **Prove-only** (`ProverOptions::prove_only`, Hunt): the search stops at its budget
+  and claims nothing - a root it exhausts is reported Unknown (`exhausted`), never
+  Disproven; it neither reads nor writes the caller's disproof store (no disproof is
+  recorded or shared, none from outside prunes it); its own search's disproofs stay in
+  a private memo, emptied at each search, so that a transposition it has exhausted is
+  not searched again. Its thresholds stay df-pn's usual two. Measured against
+  proof-number thresholds alone (a child's disproof threshold infinite - the reading
+  "it never spends time disproving" suggests; kept as
+  `prove_only_pn_thresholds`): on the tests' positions the usual thresholds found
+  every mate the full search found at the same cost (26 of 26), proof numbers alone
+  25 for 12% more nodes. Prove-only never spends time disproving in the sense that
+  matters: it is never run on to settle a root.
+- **The literal class enters the attacker's semimove tree once** (seeds All,
+  completion Every): every legal action once, not once per its first move.
+- **The last-turn check filter** (`check_filter`, OFF by default): mate needs check,
+  so at the attacker's last half-turn a partial action that can no longer give check
+  could be cut. A move is check-capable when, played alone from the turn start, it
+  gives check in a passed multiverse that passes every opponent head (a superset of
+  R1's sources) or makes a line stop at void where another of the attacker's moves
+  could make a board (attack maps' new `VoidStop`s; a line through several new boards
+  is opened by the first). Off where maps recompute (Q8, Q18, Q20) or a capture stands.
+  **J6's twins:** a non-branching jump onto another of the attacker's boards becomes
+  a branching move once that board has been played, landing on a new timeline the
+  turn start's maps never saw - so while any such jump exists, a check-capable branch
+  is assumed left to make (and a move the turn start does not offer is
+  check-capable). E9's first filter missed this: the review found a mate in one by a
+  twin that the filter cut - a false disproof, and in Guard a false "safe" (both
+  positions are now tests). It was off by default already.
+  On 6b's first 120 roots it cut almost nothing (none under 50 boards) and cost more
+  than it saved - in positions of several timelines a new board's passed copy sends
+  lines across the timelines beside it, so nearly every move is check-capable - hence
+  off; its test switches it on. Whatever the filter, a defender's turn at the horizon
+  is decided "not mated" from R1's status alone when it is not in check.
+- **The proof's line** (the attacker's actions, the defender's longest defences, to
+  the mate) and, on request (`record_certificate`), its **certificate** - every
+  attacker position the prover proved by expanding it, in any thread and any of its
+  searches, with its proving action (recorded as each proof is exported), so that a
+  proof read back from the solved store is certified too. A proof read from a store
+  another prover filled cannot be certified; the check names the missing position.
+- **An attacker with no legal action** (`attacker_probe`, on): an attacker's turn is
+  first asked E4's question - a quick search for one legal action, then E4's
+  exhaustive detector where it finds none - so a mated or stalemated attacker is
+  decided at once instead of by exhausting its semimove product (the review's 32-board
+  position: E4 decides it in a few hundred nodes; the tree had not in 2M). Efficiency
+  only: a test checks that it changes no answer. Measured on 6b's roots (2026-10-04,
+  `t5d-scan6bpp --threads 1 --guard-nodes 20000 --hunt-nodes 20000`, with and without
+  `--no-attacker-probe`; information runs, deterministic): Hunt found the same 95 of the
+  truth's 125 mates for 0.4% more nodes; Guard completed deeper at 14 roots and
+  shallower at 4, its depth 1 at 76.4 / 18.7 / 9.4 / 5.0% of each range's roots against
+  75.8 / 18.0 / 6.2 / 2.5% without (an opponent left with no legal action is now
+  decided at every depth at once: 23 roots against 10), for 1.1% fewer nodes. Kept on.
+- **A disproof's class** carries every option that shapes the attacker's class
+  (`disproof_shape`: seeds, completion, the canonical completion's cap and values, the
+  branch threat, promotions, E5a's tiers, the check filter): provers with different
+  options never share a disproof.
+- `prove(root, budget, depth)`: one prover, its TT and stores, at several depths.
+
+### Certificates checked against E4 alone (`t5d/certificate.hpp`)
+
+A mate is checked with none of the prover's machinery: the attacker's moves come from
+the certificate, replayed through the state machine (pseudo-legal where made, T5, C4);
+the defender's every legal action from E4's exhaustive listing (hypercuboid); every
+checkmate by E4's hypercuboid detector and, where it finishes within its budget, the
+naive one, which must agree. A stalemate, a defender not mated at the horizon, an
+illegal move or a detector disagreement refutes; a missing position makes it
+incomplete; a budget leaves it undecided - never confirmed on a budget stop (H37).
+
+### Guard (H42; `t5d/guard.hpp`)
+
+`guard(state, action, budget, options[, hook]) -> {completed_depth, refuted, line}`.
+The chosen action - complete, legal, about to be submitted; under the ply split it is
+checked at its submission, since the opponent moves only after it (a reading: spec
+issue 97) - is submitted, and at the opponent's turn start Guard asks, depth by depth from
+1 under one budget (nodes and/or wall clock): can the opponent force checkmate within
+d of *their* actions (2d − 1 half-turns), whatever we answer? The prover runs with the
+opponent as attacker and the literal class - every opponent action, once each - and
+our turns as AND nodes decided by one refuting reply: a quick escape search, E4's
+detector only where it finds none. Depth 1 is "for every opponent action that leaves
+us in check, one legal escape exists": existence, never our full listing. Exact at
+every depth that completes ("safe to depth d"); a refutation is a proof (H37) with the
+opponent's forcing line, and rejects the move - the search re-searches from §8.6's
+reserve (`GuardHook`, wired with the search). Where turns do not decompose, the
+opponent's actions are E4's listing, up to 65,536. At most 50 depths (99 half-turns,
+inside the prover's limit): every depth Guard reports is the depth searched, and a
+refutation inside a depth already reported safe throws - never both in one result.
+
+**What Guard's depth 1 costs.** "Existence, not the full listing" removes *our*
+listing, not theirs: to say "safe" Guard must refute every opponent action, and the
+opponent's actions are a product over their playable boards (one choice per board,
+pass included where optional). The semimove tree enumerates that product once each,
+cutting the opponent's illegal partial actions at once and deciding each of our turns
+by R1's status (not in check: done) or one escape - but the product itself remains.
+Guard completes depth 1 wherever the opponent has few boards to play; with several, no
+exact method short of enumerating their actions is known to this design (spec issue
+99).
+
+### Hunt (H43; `t5d/hunt.hpp`)
+
+df-pn in prove-only mode at the root: our forced mate within 5 half-turns (6b″) by our
+forcing class (the prover's placeholder default: checking seeds, canonical
+completions), against every legal defence. It stops at its budget and claims nothing.
+A found mate is a proof, returned to the caller and never exported: no proof may enter
+a permanent solved store until the generator passes the gate (H23), the search's
+soundness fixes land and the proof channel is signed off (H41). `HuntOptions::export_proofs`
+is that switch, enforced as the search's `proof_store` is - Hunt refuses to be built with
+it on (`std::invalid_argument`); the export itself is not built.
+Soft priors behind a flag (`suggest`, OFF): without a proof, the root's open actions,
+least proof number first, weighted by 1/pn - §12.2 binds their use: a position where a
+suggestion steered the search is excluded from the policy targets (or its steered
+visits recorded and down-weighted - §12.2's open choice); that bookkeeping lands with
+the search wiring.
+
+### The superseded-board asset map (§11.2 rung 4; `t5d/assets.hpp`)
+
+A superseded board is a travel destination, never a source, so its value as a branch
+target is judged once, for the traveller - the colour to move on it: its material
+balance (H6's v1 values) and a small fixed quiescence on the board alone (the traveller
+to move; stand-pat, captures most-valuable-victim first, every move of a side in check
+there, a royal capture worth `royal_value`; 4 plies, 128 nodes), on the engine's own
+move generator. Flagged at `flag_margin` (300); boost `max_boost` (0.25) ×
+min(1, value / `boost_scale` (900)). Once per board, ever: cached by the board's
+content (content hash and a full comparison) and its colour to move, for the map's
+ruleset; deterministic. Output for the search: a standing prior boost on travel moves
+into flagged boards (`boost()`) - an estimate, never a bound (H2), under §12.2's
+exclusions like any steering.
+
+### Hunt's ground truth (ruling 5; `t5d-hunt-truth`, `testdata/hunt-truth/`)
+
+One long offline search per 6b root - the same roots, `tools/sixb_roots.hpp`: the
+records' turn starts, every one, distinct by position - recorded once. Per root, the
+prover with node budgets, one thread and fresh stores (deterministic; roots run in
+parallel), twice within 5 half-turns: the **literal question** (every first move,
+every completion) and the **default class** (Hunt's own). The truth is the **union of
+their proofs**: the literal question is the broadest there is, and the default class's
+long search makes sure Hunt's own mates are in it - Hunt's 50 ms run is judged against
+mates it did not have to find in its own class. Each class's status is kept: proven,
+exhausted (no mate in the class) or unknown (budget). Every mate's certificate is
+checked against E4 alone before the file is written (a refuted one stops the
+recorder).
+
+THE BUDGET, from the curve (`--curve 8`: every 8th measured root, 101 roots; mates
+found against the node budget - a df-pn with a node budget is deterministic, so a mate
+found at n nodes is found by any budget ≥ n):
+
+| Nodes | 1,953 | 3,906 | 7,812 | 15,625 | 31,250 | 62,500 | 125,000 | 250,000 | 500,000 | 1M | 2M | 4M |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Literal class | 5 | 5 | 6 | 6 | 6 | 6 | 6 | 7 | 8 | 8 | 8 | 8 |
+| Default class | 5 | 6 | 7 | 7 | 9 | 11 | 11 | 11 | 11 | 11 | 11 | 11 |
+| Union | 5 | 6 | 8 | 8 | 9 | 11 | 11 | 11 | 12 | 12 | 12 | 12 |
+
+(Mates found among the 101 roots; at 4M nodes the literal class had exhausted 6 roots
+and the default class 57, and 87 and 33 were unknown; 608 s on 6 workers, a shared
+machine.)
+
+No class found a new mate past 500,000 nodes; the truth gives each class 4,000,000 -
+eight times the last new mate's need. The literal class often stops earlier at its
+tree cap (2,097,152 nodes: 42 of the curve's 202 searches) - also past the curve's last
+new mate.
+
+THE FILE, `testdata/hunt-truth/hunt-truth.tsv` (format: `tools/hunt_truth.hpp`): a
+header naming the engine commit, the rules, the search with its classes and budgets,
+the depth and the cross-check; per root its record - by content: "sha256:" and the
+SHA-256 of its bytes with CRLF read as LF, since engine data may name no path under the
+oracle harness (its boundary check refuses one) - position index, H30 fingerprint,
+board count, verdict (mate with its distance, line and finder / none /
+skipped), each class's status and nodes, and the cross-check. THE PIN,
+`testdata/hunt-truth/MANIFEST`: the file's SHA-256. The 6b″ tool refuses a truth whose
+bytes do not match it or whose roots are not the records' (record, index,
+fingerprint); the engine's test refuses a changed byte and checks the committed file.
+
+THE PROVENANCE, `testdata/hunt-truth/provenance.tsv` (stage E9's review): what the truth
+was recorded from, beyond its header - the truth's SHA-256; the rules by **every option's
+value** (`absolute_rules_text`: the header's `describe()` and encoding are relative to the
+defaults of their day, which a later change of a default would silently reread); the
+**code signature** of the build that recorded it (`cmake/code_signature.cmake`: the
+SHA-256 over the rules engine, E4, the prover, the certificates, the record reader and
+the recorder - `T5D_TRUTH_SOURCES` - each read with CRLF as LF); and the **records' content
+ids in their order** (the order decides the roots' ids). The MANIFEST pins both files;
+a reader refuses either changed, a provenance naming another truth, or roots out of its
+records' order; the 6b″ tool also refuses a record list whose content ids, in order, are
+not the provenance's, and rules that are not its rules. The engine's test pins the
+committed truth's SHA-256 and the default rules' full text.
+
+THE RECORD LIST, `build/corpus.txt` (untracked; one path per line, relative to the
+repository root): every `[[record]]` of `oracles/corpus/manifest.toml`, in the file's
+order, at `oracles/third_party/<source>/<path>` (a `local` record: at `<path>`) - 41
+records. The provenance pins it: a list that differs in any record or in the order is
+refused. (The engine names no path under the oracle harness; this rule is how a reader
+rebuilds the list, and the content ids are how a tool checks it.)
+
+Never edited by hand; re-recording is a reviewed change:
+
+```
+build/engine/t5d-hunt-truth --record-list build/corpus.txt --literal-nodes 4000000 \
+    --default-nodes 4000000 --workers 6 --out engine/testdata/hunt-truth --engine <commit>
+```
+
+(`--provenance-only --record-list build/corpus.txt --out engine/testdata/hunt-truth`
+writes the provenance of a truth already recorded: it rebuilds the roots from the records
+given and refuses unless they are the truth's - record, index, fingerprint - and its
+rules are the ones given; its code signature is then "unrecorded".)
+
+THE TRUTH as committed (`testdata/hunt-truth/`, sha256
+`ce62e5f8c52e0d53b1519ef145aae00760d84a4b271b9e9643e5fcab02cf1a73`; recorded at
+`1d2d0d7` on 2026-10-03, a shared machine, 5,097 s on 6 workers): 825 roots, 805
+measured (20 skipped as 6b skips them), **125 mates** - every one confirmed by its
+certificate against E4 alone. The roots are 6b's exactly, the records read raw as 6b
+and 6b′ read them: cwmtt/many2's export-form text gives an engine tool no action (the
+gate converts it for every source; that conversion is the harness's), so many2 adds
+only its starting position. A first recording (at `832aa30`, the records named by
+path - which the boundary check refuses) gave every verdict, distance, finder, class
+status and cross-check the same; 25 roots' node counts moved with H46's relief fix.
+
+**After stage E9's review** the truth was not re-recorded: no fix changes a verdict of
+it. Its classes ran with the check filter off (the default since `832aa30`; the truth
+was recorded at `1d2d0d7`) and with fresh stores per class and root, so neither the
+filter's J6-twin flaw nor the disproof class's missing options reached it; the attacker
+probe is efficiency only. Checked by recording it again with the fixed prover
+(2026-10-04, 4,962 s on 6 workers, a shared machine): all 825 verdicts, distances,
+finders, lines and cross-checks equal; 13 class statuses moved (12 literal - 11 roots
+from "unknown" to "exhausted", one the other way - and 1 default, from "unknown" to
+"exhausted"), and the literal class's nodes rose 5.1% (the default's fell 0.1%). Its
+provenance was written by `--provenance-only` (its code signature "unrecorded").
+
+| Boards | measured roots | mates | of them: mate in 1 / 3 / 5 half-turns |
+|---|---|---|---|
+| < 50 | 527 | 71 | 52 / 10 / 9 |
+| 50-99 | 140 | 33 | 26 / 6 / 1 |
+| 100-199 | 97 | 20 | 20 / 0 / 0 |
+| 200+ | 41 | 1 | 1 / 0 / 0 |
+| all | 805 | 125 | 99 / 16 / 10 |
+
+Found by both classes 88, by the default class alone 32, by the literal question alone
+5. The literal question proved 93 roots, exhausted 35 and ran out of its budget (or tree)
+at 677; the default class proved 120, exhausted 450, ran out at 235. A "none" is "no mate
+found within the budget", never "no mate exists".
+
+### Experiment 6b″ (M17): `t5d-scan6bpp`
+
+```
+t5d-scan6bpp --truth DIR [--record-list FILE --record-root DIR] [--threads T]
+             [--guard-ms MS] [--hunt-ms MS] [--guard-depth D] [--hunt-depth D]
+             [--no-crosscheck] [--check-positions N] [--no-truth]
+             [--max-roots N] [--min-boards N] [--max-boards N]
+             [--guard-nodes N] [--hunt-nodes N] [--check-filter] [--no-attacker-probe]
+             [--json FILE] [--summary FILE] [--per-position] [--rules ENCODING] [RECORD ...]
+```
+
+6b's roots, per board-count range (< 50, 50-99, 100-199, 200+), never pooled, 5
+threads, 50 ms each - pre-registered, unchanged:
+- **Guard** at each root for the **chosen action = the action the record plays next**
+  (a reading: the record's move is the move a search would be about to play; a root
+  whose record plays nothing after it, or whose next action is illegal - C4 - is
+  reported and not counted). Passes in a range where **depth 1 completes** - "safe to
+  depth 1", or a refutation at depth 1 - in ≥ 95% of its roots; the depth reached per
+  root and its distribution are reported.
+- **Hunt** at each root. Passes in a range where it finds ≥ 50% of the ground truth's
+  mates there; a range with no truth mate has no verdict; Hunt's mates the truth lacks
+  are flagged.
+- Per range: adopt Guard / adopt Hunt / not, with §13's note where each fails ("the
+  chosen move goes unguarded in that range"; "proofs there come only from the search's
+  solver"). No outcome stops anything.
+- Every refutation and mate is cross-checked against E4 alone, outside the timed runs,
+  and **only confirmed proofs count** (`tools/sixbpp.hpp`, where tests hold the counting
+  and the thresholds - exactly 95% and exactly 50% pass): a refutation at depth 1 or a
+  Hunt mate whose certificate is incomplete or undecided is reported apart and not
+  counted; a proof E4 **refutes withholds every verdict** (a prover that claims one false
+  mate is trusted nowhere until fixed); without the cross-check there is no verdict.
+  A Hunt verdict resting on fewer than 10 truth mates is flagged **too few to read** (the
+  pre-registered rule still gives it; 200+ has one).
+- **The configuration is Guard's and Hunt's as they ship** - the prover's check filter
+  off, the attacker probe on - and CONDITIONS and the JSON list every option of both
+  (and the prover's under each). `--check-filter`, `--no-attacker-probe`, node budgets
+  (`--guard-nodes`, `--hunt-nodes`: deterministic at `--threads 1`), other threads or
+  budgets and subsets are **information runs**: the summary says no verdict is read from
+  them. (Before the review the tool ran with the filter on - its default then - so the
+  first preliminary figures below measured a configuration Guard does not ship.)
+- A root Guard does not count says why, truthfully: its record ends there, or goes on
+  with an action the engine cannot read (`PgnRecord::unreadable`) or play; the records'
+  notes say "ok" only for a record read and played to its end. The roots stay 6b's.
+
+### 6b″: preliminary figures (a shared machine - not the verdict)
+
+2026-10-04, after stage E9's review (`c99abb4`), **Guard and Hunt as they ship** - the
+check filter off, the attacker probe on - and only proofs E4 confirmed counted; AMD
+Ryzen 9 9900X, 24 logical processors, busy 15% during Guard and 19% during Hunt (other
+agents' work and this tool's own threads); Release, g++ 16.2 `-O2`; the default ruleset
+(R8); the committed truth. 805 measured roots (17 checkmated, 2 stalemated and 1
+breaking C4 not measured); Guard counted 788: of the 17 it did not, 13 records end
+there, 3 go on with an action the engine cannot read or play (ctp1 #9, verysmall #2,
+cwmtt/futures #16 - labelled "plays nothing after it" before the review), 1 next action
+breaks C4. Wall: Guard 38 s, Hunt 19 s.
+
+| Boards | Guard: depth 1 completed (of roots) | completed depth 0 / 1 / 2 / 3 / 4 / 8 | refuted (at depth 1) | Hunt: truth mates found | Verdict |
+|---|---|---|---|---|---|
+| < 50 | **65.1%** of 513 - FAIL | 218 / 265 / 16 / 3 / 1 / 10 | 42 (39) | **69.0%** (49 of 71) - PASS | adopt Hunt; Guard not adopted |
+| 50-99 | **16.5%** of 139 - FAIL | 121 / 15 / 0 / 0 / 0 / 3 | 5 (5) | **63.6%** (21 of 33) - PASS | adopt Hunt; Guard not adopted |
+| 100-199 | **5.2%** of 96 - FAIL | 94 / 1 / 0 / 0 / 0 / 1 | 3 (3) | **35.0%** (7 of 20) - FAIL | neither |
+| 200+ | **0.0%** of 40 - FAIL | 40 / 0 / 0 / 0 / 0 / 0 | 0 | **0.0%** (0 of 1) - FAIL, too few to read | neither |
+
+(Completed depth 8: the record's move left the opponent no legal action.) Hunt found no
+mate the truth lacks. Every refutation and mate was cross-checked against E4 alone and
+confirmed: Guard's 50, Hunt's 77 - none incomplete, none refuted.
+
+**M17's verdicts, applied mechanically: adopt Hunt below 100 boards; adopt Guard
+nowhere** - the same as before the review. §13's notes: the chosen move goes unguarded
+in every range; from 100 boards up, proofs come only from the search's solver. No
+outcome stops anything.
+
+The figures before the review (2026-10-03: Guard 64.9 / 15.1 / 5.2 / 0.0%, Hunt 70.4 /
+63.6 / 35.0 / 0.0%) were measured with the prover's check filter **on** - the tool's
+default then, not Guard's - while the filter was unsound (J6's twins), and counted
+proofs whether E4 confirmed them or not (Guard's 48 refutations were, 1 was
+incomplete). They gave the same verdicts.
+
+What the verdicts rest on (information, the same run):
+- **Guard's cost is the opponent's action product.** Depth 1 must refute every
+  opponent action, and their actions multiply across their boards: the median root
+  spent its 50 ms on 24,000 nodes under 50 boards; our turns were decided "not in
+  check" 301,000 times and by an escape search 60,000 times there - and depth 1 still
+  completed in only 65% of roots. Where the opponent plays one or two boards it
+  completes at once; with more, not in 50 ms. The check filter does not change this
+  (it cuts almost nothing, and its construction costs a map advance per move); Lazy
+  SMP's helpers re-search the same product (an exhaustive refutation shares little
+  through the stores).
+- **The refutations are real:** 50 of the records' next moves (6%) allow a forced
+  mate - these are test records, many played into checkmate - each confirmed by E4.
+- **Hunt** finds the shallow mates below 100 boards. At 100-199 boards every one of the
+  truth's 20 mates is a mate in one, and Hunt's own class found all 20 in the long
+  search - but in 50 ms (a median 25,000 nodes at 5 threads) Hunt reaches 7: its root
+  expansion completes every checking seed (a canonical completion each) and tests each
+  defence before it descends, and at that size that does not finish. A root expanded
+  lazily - a child tested as it is made - is the obvious remedy (not built: the
+  pre-registered Hunt is what was measured).
+
+The quiet-machine run (from the repository root, after building; the truth is
+committed):
+
+```
+build/engine/t5d-scan6bpp --truth engine/testdata/hunt-truth --record-list build/corpus.txt \
+    --per-position --json build/6b/6bpp-quiet.json --summary build/6b/6bpp-quiet.txt
+```
+
+(`build/corpus.txt`: the 41 records, one path per line, relative to the root - every
+`[[record]]` of `oracles/corpus/manifest.toml` in order, as "Hunt's ground truth" says;
+the tool refuses a list whose content ids, in order, are not the truth's provenance's.
+About a minute: Guard 38 s, Hunt 19 s, then the cross-checks.)
+
+### As built: the parameters (placeholders, named, with their alternatives)
+
+| Parameter | Default | Alternatives, and why the default |
+|---|---|---|
+| `ProverOptions::prove_only_pn_thresholds` | false: df-pn's usual thresholds | true: proof numbers alone - found fewer mates for more nodes |
+| `ProverOptions::check_filter` | false (Guard, Hunt and the 6b″ tool alike) | true - cost more than it saved on 6b's roots; sound only since the review's J6-twin fix, after which it cuts almost nothing |
+| `ProverOptions::attacker_probe` | true | false - stage E9's first prover (measurement only; the same answers) |
+| `GuardOptions::max_depth` | 4 (the opponent's actions), clamped to 1..50 | any; the budget normally stops it first |
+| `GuardOptions::threads` | 1 (6b″: 5, M13) | 1 is deterministic (H15) |
+| Guard's listing cap (turns that do not decompose) | 65,536 | the prover's 4,096 (a capped listing never completes a depth) |
+| `HuntOptions::prover` | depth 5, checking seeds, canonical completions | the literal class (9/3/1/0% decided at 50 ms in 6b′); `Forcing` seeds |
+| `HuntOptions::export_proofs` | off - Hunt refuses it on | on only once the gate passes and the proof channel is signed off (H41, H23); the export is not built |
+| `HuntOptions::suggest`, `max_suggestions` | off, 8 | on with §12.2's exclusions in place |
+| `AssetOptions::qsearch_plies`, `qsearch_nodes` | 4, 128 | a small fixed budget (§11.2's table) |
+| `AssetOptions::flag_margin`, `boost_scale`, `max_boost` | 300, 900, 0.25 | a minor piece; a queen; a prior weight |
+| `AssetOptions::values`, `royal_value` | the scanner's `PieceValues`, 20,000 | H6's v1 (build-log issue 56) |
+| The truth's classes | literal ∪ default | literal alone (cheaper to state, misses Hunt's own deep mates); add `Forcing` seeds |
+| The truth's budgets | 4,000,000 nodes per class, tree cap 2,097,152 | from the curve: no new mate past 500,000 |
+| 6b″'s chosen action | the record's next action | the search's move (needs the search: next stage) |
+
+### As built: what the tests hold
+
+Default run (2026-10-04, after stage E9's review; every count from it). E9's 47 default
+tests take 84 s on a shared machine (one at a time; the review measured 1,038 s before
+the heavy cases moved to `long_` tests - each default test has a `long_` twin at the
+old size where it was cut):
+- **The prover's additions** (`tests/test_certificate.cpp`): the check filter changes no
+  verdict (34 positions decided both ways; `long_`: both Q4 readings, 130); it **keeps
+  every legal action that leaves the defender in check** - its tree against the
+  reference's actions and R1's status after each, on 100 positions: 2,296 checking
+  actions kept, 2 of them only through a line stopped at a void another move fills (a
+  position built for it), 1 action cut; J6's twins counted (the review's two positions,
+  filter on and off, 1 and 5 threads, the certificate confirmed, the game tree
+  agreeing). Prove-only never claims a disproof or records one and proves every mate the
+  full search proves at its budget (13 of 13; proof numbers alone: 12). Every proof's
+  line replays to E4's checkmate and every certificate is confirmed by E4 alone (30 of
+  30); certificates at 5 threads, from a first and a second search of one prover (the
+  root read from the store), all confirmed (58); a certificate without the attacker's
+  answer to any one defence is refused (67 doctored, from 9 certificates), as is one
+  asked of too short a distance, or an empty one. An attacker with no legal action is
+  decided at once (the review's 32-board position, under 20,000 nodes); the attacker
+  probe changes no answer (69 positions, 10,053 attacker turns probed).
+- **Guard** (`tests/test_guard.cpp`): depth 1 against brute force - every opponent
+  action (the brute-force reference, else E4's listing) and E4's verdict after it - 22
+  safe and 6 refuted exactly where the reference says so, every refutation's line
+  ending in our checkmate, at 1 thread and at 5 (`long_`, both Q4 readings: 134 and
+  39). Depth 2 and every refutation against the restricted game and the game tree: 20
+  depths and 6 refutations confirmed, at 1 and 5 threads. 112 budgets below the full
+  search's need never claim more (H37); 78 results under small budgets, 65 of them
+  stopped, every one reporting only depths it searched. The review's twin position: a
+  refutation at depth 1 whatever the filter, at 1 and 5 threads. At most 50 depths.
+  One thread deterministic; an illegal action refused; the hook called exactly on each
+  refutation.
+- **Hunt** (`tests/test_hunt.cpp`): the constructed mates proven at their distances,
+  lines ending in E4's checkmate; the export switch refused (H23); 287 budgets below the
+  need with a mate only where the full hunt has it (11 mates, each confirmed); at 5
+  threads, by nodes and by the clock, 26 mates in 80 searches, each where one thread's
+  full hunt has it, at its distance, its certificate confirmed by E4 alone; one thread
+  deterministic; suggestions only behind the flag, ordered by proof number, weights
+  summing to 1.
+- **The asset map** (`tests/test_assets.cpp`): along random play from every sparse
+  start, each superseded board assessed once (assessments equal the cache's size; a
+  second refresh assesses nothing), heads never; two maps identical; a queen-up board
+  flagged and its travel move boosted, an even one not; a royal the traveller can take
+  worth `royal_value`.
+- **The ground truth** (`tests/test_hunt_truth.cpp`): SHA-256 against FIPS 180-4's
+  vectors; the file and its provenance round-trip; a valid file under a wrong MANIFEST,
+  a changed byte that still parses, a provenance naming another truth or other records
+  or the roots out of its order, and records given in another order are refused; the
+  rules are recorded by every option's value (each option changed alone changes the
+  text); the committed truth is the one pinned by its SHA-256, matches its MANIFEST and
+  is well formed (825 roots, 125 mates, each within 5 half-turns and cross-checked; 41
+  records).
+- **6b″'s counting** (`tests/test_sixbpp.cpp`): the board-count ranges and the
+  thresholds at their edges (exactly 95%, exactly 50% pass; one root fewer fails); only
+  proofs E4 confirmed count; a refuted proof withholds every verdict; no cross-check,
+  no verdict; "too few to read" below 10 truth mates; the option lists name every
+  option, Guard's and Hunt's prover options as they run. 6b's roots from records
+  written there: a record that ends, one that goes on with an action the engine cannot
+  read, one with an illegal move - each last root labelled truthfully; content ids
+  read CRLF as LF; duplicates dropped; a missing record list refused.
+- **Mutations** (2026-10-04, each applied alone, E9's 47 default tests run): the
+  review's ten that built (M1a, M1b, M2, M3, M5, M6a, M6c, M8, M9, M11 - of which M1b,
+  M3, M5 and M11 survived before) and sixteen undoing this round's fixes (the J6 twins,
+  the disproof class, Guard's depth limit, shared certificates, the attacker probe,
+  6b″'s counting of unconfirmed proofs and its withholding, the three thresholds and
+  range edges off by one, the unreadable label, the provenance's order and record
+  checks, Hunt's export refusal) - all 26 caught.
 ## 5DFEN
 
 `parse_fen_board` reads one board string, `[pieces:timeline:turn:colour]`, for a

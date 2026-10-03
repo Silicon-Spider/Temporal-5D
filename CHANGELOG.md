@@ -10,6 +10,51 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-04 - Engine E9: verification v3 - Guard, Hunt, the asset map; Hunt's ground truth and 6b″'s tool (reviewed)
+
+- `engine/` (E8's prover and E9, merged from their worktree branch after two
+  adversarial reviews and a fix round; main merged into it first):
+  - The per-leaf estimate channel removed (rung 1, retired at CHECKPOINT 4).
+  - E8's df-pn over the semimove-decomposed turn tree and its incremental
+    royal-attack maps carried into Guard and Hunt (ruling 1): prove-only; the
+    literal class entered once; a depth override; proof lines and certificates
+    covering every proof the prover exports, from any thread or search; an
+    attacker's turn asks E4 first; disproof classes carry every option that
+    shapes them; the prover's relief test counts any inactive timeline (H46).
+    The last-turn check filter was found unsound by the review (a jump that turns
+    branching once its target board is played - J6's twin - was never counted):
+    fixed conservatively, off by default, it now cuts almost nothing.
+  - `t5d/certificate.hpp` checks a proof against E4 alone and names any position
+    it cannot certify.
+  - Guard (H42, ruling 2): before the chosen action is submitted, iterative
+    deepening from depth 1 - can the opponent force mate against it? - exact at
+    every completed depth, at most 50 depths, never a depth it did not search; a
+    refutation is a certified forcing line; the re-search hook for §8.6's reserve.
+  - Hunt (H43, ruling 3): prove-only df-pn at the root, claiming nothing at its
+    budget; a found mate is a proof, its export refused until H41/H23; partial
+    lines as soft priors behind a flag, off.
+  - The superseded-board asset map (§11.2 rung 4): once per superseded board, a
+    material estimate and a small qsearch, cached by content; a standing prior
+    boost on travel into flagged boards.
+  - Hunt's ground truth (ruling 5): `t5d-hunt-truth`;
+    `engine/testdata/hunt-truth/` - one long offline search per 6b root (the
+    union of the literal and the default class's proofs, 4M nodes each), 125 mates
+    on 805 measured roots, every one confirmed by E4 alone; pinned by a MANIFEST
+    with its provenance (the records' content IDs in order, the rules by value, a
+    code signature); re-recorded with the reviewed prover as a check, every
+    verdict unchanged.
+  - 6b″'s tool (M17): `t5d-scan6bpp` - the same 805 roots, per range, 5 threads,
+    50 ms, Guard and Hunt as they ship, only E4-confirmed proofs counted, every
+    verdict withheld if one is refuted. The quiet-machine run follows.
+- Tests: 526 (`--werror`; E9's default tests 84 s, each heavy case with a `long_`
+  twin); the reviews' surviving mutations and every review fix undone: 26 of 26
+  caught. The Lazy SMP timing test three times before the merge (logged); verify,
+  boundary and the commit-tier gate green.
+- `docs/BUILD_LOG.md`: register H1, H2, H10, H42-H44, M14, M17; the timing log;
+  spec issues 97-107 and 117-119, proposed spec edits 72-78 and 87-90.
+- Spec: §8.6, §11.1, §11.2 rung 4, §11.3, §11.4, §12.2, §13, §15.6 (6b″);
+  register H1, H2, H10, H18, H19, H23, H41-H44, H46, M5, M13, M14, M17.
+
 ### 2026-10-04 - Network N5: D8 in the network; the search's C step API from Python; end-to-end games with random weights
 
 - `python/t5d/net/` (merged from its worktree branch after an adversarial review
