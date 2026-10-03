@@ -103,6 +103,13 @@ typedef struct t5d_search t5d_search;
 /* No limit, for the budgets below. */
 #define T5D_NO_LIMIT UINT64_MAX
 
+/* Layouts: each struct below is appended to, never reordered (t5d_layout's
+ * contract; t5d_search_layout reports every offset). A struct of t5d/capi.h's
+ * embedded in one of them - provisional, and growing as t5d/capi.h does - is
+ * its LAST member, so that its growth moves none of the others: this file's
+ * own new fields go in front of it (moving it; a binding reads its offset from
+ * t5d_search_layout). */
+
 /* The search's parameters (t5d/mcts.hpp, SearchParams, field for field; the
  * engine README gives each default and its standing - most are placeholders).
  * Fill with t5d_search_params_default, then change what you need. The
@@ -165,7 +172,6 @@ typedef struct t5d_search_params {
   double virtual_loss;
   int32_t synchronous;         /* H15 */
   uint64_t seed;
-  t5d_expand_options expand;   /* the leaves' network input (k, features, relations) */
   /* terminal detection (H37) and the turn cap (I11) */
   uint64_t mate_nodes;
   uint64_t mate_bytes;
@@ -173,6 +179,7 @@ typedef struct t5d_search_params {
   int32_t turn_cap_boards;     /* 0: none */
   uint64_t eval_cache_entries; /* 0: no cache */
   uint64_t eval_cache_bytes;   /* its memory ceiling (estimated) */
+  t5d_expand_options expand;   /* the leaves' network input (k, features, relations); last */
 } t5d_search_params;
 
 /* One leaf of a gathered batch. */
@@ -184,9 +191,9 @@ typedef struct t5d_leaf {
   int32_t submit_possible; /* D8: submitting is an action here (the obligations met, T5) -
                               board-move split; 0 under whole turns */
   int32_t submit_legal;    /* ... and legal (C4, exact) */
-  t5d_expansion expansion; /* the network's input; logit i scores expansion.moves[i] */
   const uint8_t* legality; /* per move, T5D_LEGALITY_LEGAL or _UNKNOWN (the board-move
                               split's classification); NULL when none was made */
+  t5d_expansion expansion; /* the network's input; logit i scores expansion.moves[i]; last */
 } t5d_leaf;
 
 /* What the search has done, and its root. */
