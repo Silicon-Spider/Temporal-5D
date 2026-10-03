@@ -193,9 +193,10 @@ if(MINGW)
 endif()
 
 # Stage E8: the verification layer's redesign (M14) - incremental royal-attack
-# maps, the proof channel (df-pn over semimoves), the estimate channel; 6b'.
-target_sources(t5d_core PRIVATE src/attacks.cpp src/prover.cpp src/estimate.cpp)
-target_sources(t5d-tests PRIVATE tests/test_attacks.cpp tests/test_prover.cpp tests/test_estimate.cpp)
+# maps and the proof channel (df-pn over semimoves); 6b'. (Its estimate channel was
+# retired at CHECKPOINT 4, verification v3.)
+target_sources(t5d_core PRIVATE src/attacks.cpp src/prover.cpp)
+target_sources(t5d-tests PRIVATE tests/test_attacks.cpp tests/test_prover.cpp)
 add_executable(t5d-scan6bp tools/t5d_scan6bp.cpp)
 target_link_libraries(t5d-scan6bp PRIVATE t5d_tools Threads::Threads)
 target_compile_definitions(t5d-scan6bp PRIVATE

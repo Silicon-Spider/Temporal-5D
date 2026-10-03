@@ -67,10 +67,6 @@ struct AttackMapStats {
   bool recomputed = false;
 };
 
-/// What a map's captures take: royal pieces (check.hpp's question), or every
-/// enemy piece (the estimate channel's captures, t5d/estimate.hpp).
-enum class CaptureTargets : std::uint8_t { Royals = 0, All };
-
 class RoyalAttackMap {
  public:
   /// No multiverse: no source, no capture.
@@ -78,14 +74,8 @@ class RoyalAttackMap {
   /// The map of `multiverse` for `attacker`'s pieces. `inactive_timelines`
   /// (ascending; a GameState's inactive_timelines()) is read only under
   /// inactive_history_is_destination = false (Q20), as check.hpp reads it.
-  /// `targets` All: every capture of an enemy piece, the RoyalCapture's
-  /// `royal` field holding the piece taken - by the same lines and landing
-  /// rules (a pawn's or brawn's captures, J2, J7, J8, L4, Q8, Q14, Q18-Q20;
-  /// en passant, which takes a piece not on the square landed on, is not
-  /// among them).
   RoyalAttackMap(const Multiverse& multiverse, const RuleOptions& rules, Colour attacker,
-                 std::span<const int> inactive_timelines = {},
-                 CaptureTargets targets = CaptureTargets::Royals);
+                 std::span<const int> inactive_timelines = {});
 
   /// The map of `next` (same attacker and rules): incremental when `next`
   /// extends this map's multiverse (see the header comment), else from
@@ -107,20 +97,17 @@ class RoyalAttackMap {
   std::vector<RoyalCapture> captures() const;
 
   Colour attacker() const noexcept { return attacker_; }
-  CaptureTargets targets() const noexcept { return targets_; }
   /// The number of sources (the attacker's playable boards).
   std::size_t source_count() const noexcept { return sources_.size(); }
   /// The lines that stopped at void, over every source.
   std::size_t stop_count() const noexcept;
   bool empty() const noexcept { return !mv_; }
-  /// The map's multiverse (nullptr for an empty map).
-  const Multiverse* multiverse() const noexcept { return mv_.get(); }
 
   struct Source;  // one playable board's record (src/attacks.cpp)
 
  private:
   RoyalAttackMap(std::shared_ptr<const Multiverse> mv, const RuleOptions& rules, Colour attacker,
-                 std::vector<int> inactive, CaptureTargets targets);
+                 std::vector<int> inactive);
   void scan_all();
   // The work advanced() and any_capture_in() share; `out` null: stop at the
   // first capture, building nothing (returns whether one was found).
@@ -130,7 +117,6 @@ class RoyalAttackMap {
   std::shared_ptr<const Multiverse> mv_;
   RuleOptions rules_{};
   Colour attacker_ = Colour::White;
-  CaptureTargets targets_ = CaptureTargets::Royals;
   std::vector<int> inactive_;
   std::vector<std::shared_ptr<const Source>> sources_;  // ascending timeline
   std::size_t capture_count_ = 0;
