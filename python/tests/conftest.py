@@ -25,6 +25,16 @@ def model_default():
     return build_model(NetConfig(), seed=0).eval()
 
 
+@pytest.fixture
+def engine_required():
+    """A test that needs the engine library (``tests.engine.helpers.requires_engine``): runs
+    when it loads, fails when a library is found but refused (or none is built under
+    ``T5D_REQUIRE_ENGINE=1``), skips only when none is built and none is required."""
+    from tests.engine.helpers import engine_required as decide
+
+    decide()
+
+
 @pytest.fixture(autouse=True)
 def _seeded_global_rng():
     """Each test sees torch's global RNG seeded to the same state, and leaves it as it

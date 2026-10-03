@@ -1926,9 +1926,9 @@ Built after the user's CHECKPOINT 2 rulings (rulebook R8 and R9; register D8).
   `CExpansion` mirrors the three fields, `T5D_RULES_NO_MOVES_AFTER_SHIFT` is bit 3 and
   `T5D_RULES_MOVES_AFTER_SHIFT` 0, `Expansion` copies `acting_player`,
   `submit_possible`, `submit_legal`, and the binding checks every mirrored struct
-  against `t5d_layout` at load (see "The C API"). The network does not read the new
-  fields yet: its acting-player input and submit logit are stage N5, and until then
-  `to_position` refuses a state past the shift (`PresentMismatch`).
+  against `t5d_layout` at load (see "The C API"). The network reads them since stage
+  N5 (the acting-player input and the submit logit); `to_position` converts states
+  past the shift.
 
 ## Stage E6a: the main search (`t5d/mcts.hpp`)
 

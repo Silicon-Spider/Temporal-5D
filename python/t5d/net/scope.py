@@ -29,7 +29,8 @@ earlier-created board that is still a head joins a frozen board's past only once
 superseded (live heads are never read by frozen tokens): that changes the frozen board's
 past, and the cache recomputes it (``cache.py``).
 
-**The causal past** (spec issue 5 - the spec does not define it; ``NetConfig.causal_past``):
+**The causal past** (spec issue 5 - the spec did not define it; ``NetConfig.causal_past``;
+since ruled by register C23: the board's ancestry, which is ``"lineage"``):
 
 * ``"lineage"`` - arrival-side lineage: the boards a board was made from by content - the
   transitive closure of ``PositionState.parent``: its timeline's earlier boards and,
@@ -39,7 +40,7 @@ past, and the cache recomputes it (``cache.py``).
 * ``"two_parent"`` - the same closure over two parents: a travel arrival also descends
   from the board its piece departed from (``PositionState.source``) and that board's
   lineage. Also fixed at creation and all superseded (the jump supersedes its departure
-  board). A candidate reading for the user's ruling on spec issue 5.
+  board). A candidate reading for the user's ruling on spec issue 5 - not the one C23 made.
 * ``"creation"``: every board created before it (``PositionState.creation``).
 
 **The section 6 structure under this scope - a forced reading, documented here.** The

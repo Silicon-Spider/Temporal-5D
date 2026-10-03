@@ -139,9 +139,58 @@ def test_the_cached_evaluator_needs_a_search():
         ev([synthetic_state(0, 3)])
 
 
-def test_the_c_step_api_adapter_is_marked():
-    with pytest.raises(NotImplementedError, match="E6a"):
+def test_the_c_step_driver_is_built():
+    """Stage N5 implemented the adapter point: the driver needs a search (tests/engine/test_search_api.py)."""
+    assert isinstance(CStepDriver, type) and hasattr(CStepDriver, "abandon")
+    with pytest.raises(TypeError):
         CStepDriver()
+
+
+def _shift(state, legal):
+    from dataclasses import replace
+
+    return replace(state, acting_player=1 - state.player_to_move, submit_possible=legal is not None, submit_legal=bool(legal))
+
+
+def test_the_submit_logit_crosses_the_protocol(small_model):
+    """D8: the dense evaluator returns the submit logit where the leaf offers a legal submit and
+    NaN elsewhere - not offered, or masked as illegal; the evaluation's probabilities are one
+    distribution over the moves and submit."""
+    s = synthetic_state(40, 6)
+    states = [s, _shift(s, None), _shift(s, False), _shift(s, True)]
+    evs = NetworkEvaluator(small_model)(states)
+    assert [np.isnan(ev.submit_logit) for ev in evs] == [True, True, True, False]
+    out = small_model(collate([states[3]]))
+    assert evs[3].submit_logit == pytest.approx(float(out.submit_logits[0]), abs=1e-5)
+    for ev, state in zip(evs, states, strict=True):
+        check_evaluation(Leaf(0, state), ev, 51)
+        assert abs(float(ev.policy_probs().sum()) + ev.submit_prob - 1.0) < 1e-5
+    assert evs[3].submit_prob > 0 and evs[2].submit_prob == 0.0
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf")])
+def test_a_non_finite_network_submit_logit_is_refused(bad):
+    """Where submitting is legal a non-finite submit logit from the network is an error - NaN
+    would otherwise read as "no logit given" (the search's placeholder share) - as a non-finite
+    move logit is; where submit is masked or absent the readout is not used."""
+    model = build_model(NetConfig(trunk_dtype="fp32", n_layers=1), seed=2).eval()
+    with torch.no_grad():
+        model.submit.out.bias.fill_(bad)
+    s = synthetic_state(42, 5)
+    with pytest.raises(ValueError, match="submit logit"):
+        NetworkEvaluator(model)([_shift(s, True)])
+    for ok in (s, _shift(s, False), _shift(s, None)):
+        assert np.isnan(NetworkEvaluator(model)([ok])[0].submit_logit)
+
+
+def test_check_evaluation_refuses_a_wrong_submit_logit():
+    s = synthetic_state(41, 3)
+    m = int(s.moves.shape[0])
+    with pytest.raises(ValueError, match="offers no legal submit"):
+        check_evaluation(Leaf(1, s), Evaluation(np.zeros(m, np.float32), np.zeros(51, np.float32), submit_logit=0.5), 51)
+    with pytest.raises(ValueError, match="infinite"):
+        check_evaluation(Leaf(2, _shift(s, True)), Evaluation(np.zeros(m, np.float32), np.zeros(51, np.float32), submit_logit=np.inf), 51)
+    check_evaluation(Leaf(3, _shift(s, True)), Evaluation(np.zeros(m, np.float32), np.zeros(51, np.float32)), 51)  # NaN: none given
 
 
 # --- with the engine (real positions) ---------------------------------------------------------------
