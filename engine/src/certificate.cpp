@@ -2,11 +2,13 @@
 
 #include "t5d/certificate.hpp"
 
+#include <string>
 #include <unordered_map>
 #include <utility>
 #include <vector>
 
 #include "t5d/check.hpp"
+#include "t5d/fingerprint.hpp"
 #include "t5d/movegen.hpp"
 #include "t5d/search.hpp"
 
@@ -59,7 +61,13 @@ struct Checker {
     if (d < 1) return fail(CertificateVerdict::Refuted, "no half-turn left at an attacker's position");
     const CertificateStep* step = cert.find(s);
     if (step == nullptr) {
-      return fail(CertificateVerdict::Incomplete, "an attacker's position the certificate does not hold");
+      // Named, so that a proof that cannot be certified is known: a proof the
+      // prover only read from a store another prover filled is not in its
+      // certificate (t5d/prover.hpp).
+      return fail(CertificateVerdict::Incomplete,
+                  "an attacker's position the certificate does not hold (H30 fingerprint " +
+                      fingerprint(s.multiverse()).fingerprint + ", " + std::to_string(d) +
+                      " half-turns left) - a proof read from a store another prover filled cannot be certified");
     }
     GameState t = s;
     MoveList scratch;

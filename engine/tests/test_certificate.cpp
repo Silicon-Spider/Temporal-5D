@@ -530,3 +530,28 @@ TEST(prover_a_certificate_missing_any_defence_is_not_confirmed) {
   CHECK(certificates > 2);
   CHECK(doctored > 10);
 }
+
+TEST(prover_a_proof_from_another_provers_store_is_named_uncertifiable) {
+  // A prover answering from a store another prover filled holds no
+  // certificate for it: the check says so and names the position - never
+  // confirmed (the review's finding 4).
+  ConcurrentSolvedStore shared;
+  ProverOptions o;
+  o.depth = 3;
+  o.record_certificate = true;
+  Prover first(o, &shared);
+  const GameState s = mate_in_two();
+  REQUIRE(first.prove(s, ProveBudget::nodes(200'000)).status == ProofStatus::Proven);
+  Prover second(o, &shared);
+  const ProveResult r = second.prove(s, ProveBudget::nodes(200'000));
+  REQUIRE(r.status == ProofStatus::Proven);
+  REQUIRE(r.certificate != nullptr);
+  const CertificateCheck c = check_certificate(*r.certificate, s, r.proof.distance);
+  CHECK(c.verdict == CertificateVerdict::Incomplete);
+  CHECK(c.why.find("H30 fingerprint") != std::string::npos);
+  CHECK(c.why.find("cannot be certified") != std::string::npos);
+  // The first prover's certificate is complete.
+  const ProveResult again = first.prove(s, ProveBudget::nodes(200'000));
+  REQUIRE(again.certificate != nullptr);
+  CHECK(check_certificate(*again.certificate, s, again.proof.distance).verdict == CertificateVerdict::Confirmed);
+}
