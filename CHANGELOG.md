@@ -10,6 +10,21 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-04 - 6b″ on a quiet machine: Hunt adopted under 100 boards, Guard in no range (M17)
+
+- `docs/MEASUREMENTS.md`: experiment 6b″ (M17) with engine E9 merged (d96d6d9),
+  on a quiet machine, every test as pre-registered and read per board-count
+  range - the same 805 roots as 6b, 5 threads, 50 ms, Guard and Hunt as they ship,
+  only E4-confirmed proofs counted. Guard's depth 1 completes in 65.1% / 15.8% /
+  5.2% / 0.0% of roots (pass: 95%) - adopted in no range. Hunt finds 69.0% / 63.6%
+  / 35.0% / 0 of 1 of the ground truth's mates (pass: 50%) - adopted under 100
+  boards. Every one of Guard's 49 refutations and Hunt's 77 mates confirmed by E4
+  alone. No outcome stops the build (M17). Hunt's ground truth recorded there too.
+- `docs/BUILD_LOG.md`: register H42, H43, M17; the §13 consequences (the chosen move
+  goes unguarded in every range; from 100 boards up, proofs only from the search's
+  solver) are proposed spec edit 75.
+- Spec: §11.4, §13, §15.6 (6b″, M17); register H42, H43, M17.
+
 ### 2026-10-04 - Engine E9: verification v3 - Guard, Hunt, the asset map; Hunt's ground truth and 6b″'s tool (reviewed)
 
 - `engine/` (E8's prover and E9, merged from their worktree branch after two

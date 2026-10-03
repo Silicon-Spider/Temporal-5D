@@ -399,6 +399,59 @@ MiB working set; cwmtt/wide 4.6 s; cwmtt/manyChecks 4.4 s (slowest position 1.2 
 `--no-moves-after-shift` (the Guide-literal reading): 10.4 s, output identical to
 E4's default.
 
+### Verification v3: 6b″ (M17) - ADOPT HUNT UNDER 100 BOARDS; GUARD IN NO RANGE
+
+2026-10-04. Engine at d96d6d9 (E9 merged: Guard, Hunt, the asset map, Hunt's
+ground truth, `t5d-scan6bpp`), Release, g++ 16.2. Quiet machine: under 1% busy
+before the run (all processes, 10 s), during it 15.9% (Guard) and 19.2% (Hunt) -
+the tool's own threads. `t5d-scan6bpp --truth engine/testdata/hunt-truth
+--record-list build/corpus.txt --per-position` over the 41 corpus records in the
+manifest's order (the tool refuses any other list), rules R8/R10 (the default):
+the same 805 roots as 6b, read per board-count range, 5 threads, 50 ms of wall
+clock per root, Guard and Hunt as they ship (Guard's check filter off, the
+attacker probe on). Wall 58.4 s. Raw output `build/6b/6bpp-quiet.*`
+(git-ignored; reproducible). M17's tests, unchanged:
+
+- **Guard** - depth 1 completes (safe to depth 1, or refuted at depth 1 with E4's
+  confirmation) in ≥ 95% of a range's roots; the chosen action is the record's
+  next action (788 roots: 13 records end there, 3 go on with an action the engine
+  cannot read or play, 1 next action breaks C4).
+- **Hunt** - finds ≥ 50% of the forced mates within 5 half-turns that the long
+  offline search established (the pinned ground truth: 125 mates, every one
+  confirmed by E4; sha256 `ce62e5f8...`), counted only when E4 confirms Hunt's.
+
+| Boards | Guard: depth 1 completes | completed depth (roots) | refuted | Hunt: truth mates found | Verdict |
+|---|---|---|---|---|---|
+| < 50 | 65.1% of 513 - FAIL | 0: 218, 1: 266, 2: 16, 3: 2, 4: 1, 8: 10 | 42 (39 at depth 1) | **69.0% (49 of 71) - PASS** | **adopt Hunt** |
+| 50-99 | 15.8% of 139 - FAIL | 0: 121, 1: 15, 8: 3 | 4 | **63.6% (21 of 33) - PASS** | **adopt Hunt** |
+| 100-199 | 5.2% of 96 - FAIL | 0: 94, 1: 1, 8: 1 | 3 | 35.0% (7 of 20) - FAIL | neither |
+| 200+ | 0.0% of 40 - FAIL | 0: 40 | 0 | 0 of 1 - FAIL, too few to read | neither |
+| pooled (not a verdict) | 45.8% of 788 | | 49 | 61.6% (77 of 125) | |
+
+Cross-checks against E4 alone (certificates): Guard's 49 refutations and Hunt's
+77 mates all confirmed; none refuted, none incomplete. Median nodes per root:
+Guard 23,918 / 17,805 / 22,513 / 20,796; Hunt 676 / 24,522 / 24,144 / 60,924.
+
+**The verdicts (M17, applied as pre-registered; no outcome stops the build):**
+**Hunt is adopted under 100 boards; Guard is adopted in no range.** §13 records:
+the chosen move goes unguarded in every range; from 100 boards up, proofs come only
+from the search's solver. Why Guard fails: to say "safe" at depth 1 it must answer
+every opponent action, a product over their boards (spec issue 99). Why Hunt fails
+at 100-199: all 20 truth mates there are mates in one that Hunt's own class finds
+in the long search; its root expansion does not finish in 50 ms (issue 107; a
+lazily expanded root is the remedy, not built).
+
+**Hunt's ground truth** (ruling 5; `engine/testdata/hunt-truth/`, recorded at
+1d2d0d7, 5,097 s on 6 workers): one long offline search per root - the union of
+the literal class's (every first move, every completion) and the default class's
+proofs, 4M nodes each, a 2M-node tree cap, one thread and fresh stores per root,
+deterministic. The budget from a 101-root curve (mates found against nodes: 5, 6,
+8, 8, 9, 11, 11, 11, 12, 12, 12, 12 at 2k ... 4M) that found no new mate past
+500k. 825 roots, 805 measured, 125 mates (71 / 33 / 20 / 1 by range; 99 mates in
+one, 16 in three, 10 in five; both classes 88, the default alone 32, the literal
+alone 5), every one confirmed by E4. Re-recorded with the reviewed prover (4,962
+s): every verdict equal.
+
 ### The verification redesign: 6b′ (M14, M15) - 50-199 BOARDS FAIL - M15 OUTCOME: STOP
 
 2026-10-03. Engine E8 (the M14 prototype) at bd08c48 on its branch
