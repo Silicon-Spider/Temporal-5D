@@ -91,6 +91,13 @@ struct GameRecord {
   std::uint64_t evaluations = 0;
   std::uint64_t nodes = 0;            ///< nodes created by the searches
   std::uint64_t search_turn_caps = 0; ///< capped positions the searches met (I11)
+  /// Visits the decisions' roots already held when their searches began: the
+  /// tree carried across decisions (C12) under match play; 0 in self-play,
+  /// where every decision's search is fresh (C14).
+  std::uint64_t reused_visits = 0;
+  /// Chosen children the legality budget had left unknown, classified exactly
+  /// before they were played (a move is never played unverified).
+  std::uint64_t verified_choices = 0;
   double seconds = 0;
   // Where the time went (the searches' SearchStats, summed; and the game's own
   // turn-start verdicts and exact verifications of chosen moves).

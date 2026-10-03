@@ -701,4 +701,12 @@ t5d_status t5d_search_set_epoch(t5d_search* search, uint64_t epoch, char** error
   });
 }
 
+t5d_status t5d_search_digest(const t5d_search* search, uint64_t* out) {
+  if (search == nullptr || out == nullptr) return T5D_ERR_ARGUMENT;
+  return guarded(nullptr, [&]() -> t5d_status {
+    *out = search->search.digest();
+    return T5D_OK;
+  });
+}
+
 }  // extern "C"

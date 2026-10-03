@@ -2029,7 +2029,8 @@ capped (I11), and only a partial action can be a dead end, so they are never one
 `check_invariants` holds it). Whether a leaf is a turn start is a property of the path,
 not of the state, so the evaluator is never told it: an evaluation is a function of
 the state and the epoch, and the cache is shared between the two. An exact comparison
-follows every key match (a collision gets an unshared node). Statistics
+follows every key match (a collision gets an unshared node; `key_bits`, a test seam not
+in the C API, cuts the keys short so that the tests meet collisions). Statistics
 live on the edges (path statistics; in a tree they equal the child's). Reaching an
 expanded node through an edge whose Q lags the node's by more than `residual_epsilon`
 (or an edge never crossed) backs up the residual correction instead of descending.
@@ -2092,7 +2093,8 @@ candidate move, logit i scoring `leaf.expansion.moves[i]`; one submit logit per 
 as probabilities (`T5D_VALUE_PROBABILITIES`) or logits (`T5D_VALUE_LOGITS`), from the
 leaf's acting player - and `t5d_search_abandon`; then `t5d_search_info`, `_child`,
 `_choose`, `_choose_by_visits`, `_verify`, `_advance`, `_advance_action`,
-`_root_game`, `_set_epoch`, `_run` (built-in evaluators), and `t5d_search_layout`
+`_root_game`, `_set_epoch`, `_run` (built-in evaluators), `_digest` (H15's digest - the
+tests compare the step loop's graph with the C++ search's by it), and `t5d_search_layout`
 (this header's struct layouts, as `t5d_layout` gives `t5d/capi.h`'s).
 `t5d_search_params` mirrors `SearchParams` (fill it with `t5d_search_params_default`).
 A malformed batch is refused and abandoned.
@@ -2104,7 +2106,10 @@ play (`match_play`): one search carried across decisions, the final rule, noise 
 Every turn start is judged first by E4's detector (checkmate, stalemate; unknown ends
 the game unjudged), then by the turn cap (scored a draw, counted:
 `GameRecord::cap_bound`, `search_turn_caps`). Every move is checked pseudo-legal and
-every submission legal before it is made. Under the board-move split an action is its
+every submission legal before it is made; a chosen child the legality budget left unknown
+is classified exactly first (`GameRecord::verified_choices`), and the visits a decision's
+root already held (`reused_visits`: C12's reuse in match play, 0 in self-play) are
+counted. Under the board-move split an action is its
 moves and then a submit decision (never automatic); actions are counted at
 submissions, decisions as moves plus submissions.
 
