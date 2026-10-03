@@ -207,6 +207,39 @@ TEST(mcts_virtual_loss_is_released_by_delivery_and_abandon) {
   CHECK(search.stats().playouts >= before + m);
 }
 
+TEST(mcts_a_batch_is_bounded_in_visits_of_every_kind) {
+  // A batch of 8 is 8 visits: the leaves sent for evaluation plus the visits
+  // completed without the evaluator (here the mate and the turn cap's
+  // terminals). Never a run's worth of terminal visits behind one pending
+  // leaf's virtual loss.
+  const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Uniform);
+  SearchParams p = fast();
+  p.batch_size = 8;
+  p.solver = false;
+  p.turn_cap.turns = 1;  // every turn start after Black's first action is capped
+  Search search(game({"[k4/4Q/1K3/5/5:0:1:w]"}, BoardSize{5, 5}), p);
+  std::size_t gathers = 0;
+  std::size_t completed_without = 0;
+  for (int i = 0; i < 100; ++i) {
+    const std::uint64_t before = search.stats().playouts;
+    const std::size_t n = search.gather(8, 1u << 30);
+    const std::uint64_t done = search.stats().playouts - before;
+    CHECK(done + n <= 8);
+    completed_without += static_cast<std::size_t>(done);
+    ++gathers;
+    if (n == 0) {
+      if (done == 0) break;
+      continue;
+    }
+    std::vector<Evaluation> out(n);
+    ev->evaluate(search.requests(), out);
+    search.deliver(out);
+  }
+  CHECK(gathers > 10);
+  CHECK(completed_without > 0);
+  CHECK_NOTHROW(search.check_invariants());
+}
+
 TEST(mcts_virtual_loss_is_released_when_the_evaluator_fails) {
   for (const Config& c : kConfigs) {
     Failing failing(3);
@@ -1485,4 +1518,318 @@ TEST(mcts_parameters_are_validated) {
   p = fast();
   p.expand.pin = true;
   CHECK_THROWS_AS(Search(variant("Standard"), p), std::invalid_argument);
+}
+
+// ---- MCGS identity: a turn start is never a state during an action ------------------------
+
+namespace {
+
+// Steers a search down chosen lines: the `preferred` moves logit 8, every
+// other move -8, submitting 8 where it is possible; values 0. `late` is one
+// of the preferred moves. Mode 1 plays it EARLY: wherever it is on offer, the
+// other choices (preferred moves and submitting) get 6.5, not 8. Mode 2 plays it
+// LATE: before turn 2 it gets 6.5. A ratio of e^1.5: both lines are searched,
+// the favoured one reached first.
+class Steer final : public Evaluator {
+ public:
+  Steer(std::vector<std::string> preferred, std::string late, int mode)
+      : preferred_(std::move(preferred)), late_(std::move(late)), mode_(mode) {}
+  void evaluate(std::span<const EvalRequest> batch, std::span<Evaluation> out) override {
+    for (std::size_t i = 0; i < batch.size(); ++i) {
+      const GameState& s = *batch[i].state;
+      const MoveList& moves = batch[i].expansion->moves();
+      std::vector<std::string> text;
+      bool late_on_offer = false;
+      for (const Move& m : moves) {
+        text.push_back(to_string(m, s.multiverse().even()));
+        late_on_offer = late_on_offer || text.back() == late_;
+      }
+      const float other = mode_ == 1 && late_on_offer ? 6.5f : 8.0f;
+      out[i].logits.resize(moves.size());
+      for (std::size_t m = 0; m < moves.size(); ++m) {
+        float logit = -8.0f;
+        if (text[m] == late_) {
+          logit = mode_ == 2 && turn_of(s.present()) < 2 ? 6.5f : 8.0f;
+        } else if (std::find(preferred_.begin(), preferred_.end(), text[m]) != preferred_.end()) {
+          logit = other;
+        }
+        out[i].logits[m] = logit;
+      }
+      out[i].submit_logit = batch[i].expansion->submit_possible() ? other : std::nanf("");
+      out[i].value = two_hot(0.0);
+    }
+  }
+
+ private:
+  std::vector<std::string> preferred_;
+  std::string late_;
+  int mode_;
+};
+
+struct Meeting {
+  GameState root;
+  GameState at_turn_start;   // line A: White's turn start
+  GameState during_action;   // line B: the same GameState, White's action in progress
+  std::vector<Move> line_b;  // B's moves from the root (each followed by a submit but the last)
+};
+
+// Timeline 0 at T1 (White's: mandatory) and White's timeline +1 at T2 (ahead of
+// the present: optional). Line A plays both of White's boards in one action
+// (+1 first, so that it is a line under either Q4 reading) and submits, then
+// Black plays 0 and submits: White's turn start. Line B plays 0 and submits,
+// Black plays 0 and submits, then White plays +1 - the first move of an action
+// whose 0 board is still to play. The lines meet in one GameState (the same
+// boards, player and present); only whether an action is in progress tells
+// them apart.
+Meeting meeting(const char* zero, const char* plus_one, const RuleOptions& rules) {
+  const GameState root = game({zero, plus_one}, BoardSize{4, 4}, rules, Colour::White);
+  GameState a = root;
+  t5d_test::play(a, "(+1T2)Ka1(+1T2)b1");
+  t5d_test::play(a, "(0T1)Ka1(0T1)a2");
+  a.submit();
+  t5d_test::play(a, "(0T1)Kd4(0T1)d3");
+  a.submit();
+  GameState b = root;
+  std::vector<Move> line_b;
+  line_b.push_back(t5d_test::play(b, "(0T1)Ka1(0T1)a2"));
+  b.submit();
+  line_b.push_back(t5d_test::play(b, "(0T1)Kd4(0T1)d3"));
+  b.submit();
+  line_b.push_back(t5d_test::play(b, "(+1T2)Ka1(+1T2)b1"));
+  return Meeting{root, std::move(a), std::move(b), std::move(line_b)};
+}
+
+const std::vector<std::string> kMeetingLines = {"(0T1)Ka1(0T1)a2", "(0T1)Kd4(0T1)d3", "(+1T2)Ka1(+1T2)b1"};
+const char* const kLate = "(+1T2)Ka1(+1T2)b1";
+
+// The nodes holding `s`: the lowest id as a turn start and during an action
+// (kNoNode: none), and how many of each.
+struct Holders {
+  NodeId start = kNoNode;
+  NodeId mid = kNoNode;
+  std::size_t starts = 0;
+  std::size_t mids = 0;
+};
+
+Holders holders(const Search& search, const GameState& s) {
+  Holders h;
+  for (NodeId id = 0; id < search.node_count(); ++id) {
+    const NodeView n = search.node(id);
+    if (!(*n.state == s)) continue;
+    if (n.turn_start) {
+      if (h.starts++ == 0) h.start = id;
+    } else {
+      if (h.mids++ == 0) h.mid = id;
+    }
+  }
+  return h;
+}
+
+}  // namespace
+
+TEST(mcts_graph_keeps_a_turn_start_apart_from_the_same_state_during_an_action) {
+  // The review's repro: with I11's cap by boards set at the meeting state's
+  // board count, line A's turn start is capped (a terminal) while line B's
+  // state - the same GameState, an action in progress - is no turn start and
+  // can be neither capped nor ended (C5). Merged into one node, MCGS made the
+  // mid-action state terminal, and match play's choose() threw there. Each
+  // line reached first in turn (the merged node took the first one's kind).
+  for (const bool after_shift : {true, false}) {
+    RuleOptions rules;
+    rules.moves_after_shift = after_shift;
+    const Meeting m = meeting("[3k/4/4/K3:0:1:w]", "[3k/4/4/K3:+1:2:w]", rules);
+    REQUIRE(m.at_turn_start == m.during_action);
+    REQUIRE(!m.during_action.obligations_met());
+    REQUIRE_EQ(node_key(m.at_turn_start, NodeKey::StateAndOrigins),
+               node_key(m.during_action, NodeKey::StateAndOrigins));
+    const int cap = static_cast<int>(m.at_turn_start.multiverse().board_count());
+    for (const bool graph : {false, true}) {
+      for (const int order : {1, 2}) {
+        SearchParams p = fast();
+        p.graph = graph;
+        p.legality = LegalityOptions::exact();
+        p.turn_cap.boards = cap;
+        Search search(m.root, p);
+        Steer steer(kMeetingLines, kLate, order);
+        search.run(steer, Limits{1500});
+        CHECK_NOTHROW(search.check_invariants());  // submit edges into turn starts only, moves into actions
+        const Holders h = holders(search, m.at_turn_start);
+        REQUIRE(h.start != kNoNode);
+        REQUIRE(h.mid != kNoNode);
+        CHECK_EQ(order == 1, h.start < h.mid);  // the line reached first
+        if (graph) {
+          CHECK_EQ(h.starts, std::size_t{1});
+          CHECK_EQ(h.mids, std::size_t{1});
+        }
+        for (NodeId id = 0; id < search.node_count(); ++id) {
+          const NodeView n = search.node(id);
+          if (!(*n.state == m.at_turn_start)) continue;
+          CHECK(n.terminal == (n.turn_start ? Terminal::TurnCap : Terminal::None));
+          CHECK(!n.dead_end);  // during the action White can still play 0 and submit
+        }
+        if (graph) {
+          // Match play down line B, line A's turn start in the graph.
+          const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Uniform);
+          search.advance_moves(std::span<const Move>(&m.line_b[0], 1));
+          search.run(*ev, Limits{50});
+          search.advance_moves({});
+          search.run(*ev, Limits{50});
+          search.advance_moves(std::span<const Move>(&m.line_b[1], 1));
+          search.run(*ev, Limits{50});
+          search.advance_moves({});
+          search.run(*ev, Limits{50});
+          search.advance_moves(std::span<const Move>(&m.line_b[2], 1));
+          CHECK(search.root_state() == m.during_action);
+          CHECK(!search.root_turn_start());
+          CHECK(!search.root_terminal());
+          search.run(*ev, Limits{100});
+          CHECK_NOTHROW((void)search.choose());
+          CHECK_NOTHROW(search.check_invariants());
+        }
+      }
+    }
+  }
+}
+
+TEST(mcts_graph_never_prunes_a_mating_submission_for_a_dead_end_elsewhere) {
+  // The review's second repro: a black knight on timeline 0 (d1) attacks +1's
+  // b1. Line A's meeting state is White's turn start with every White action
+  // leaving the king on +1 capturable: checkmate. Line B's - the same GameState
+  // - is a state during White's action from which no legal completion exists:
+  // a dead end, pruned. Merged, MCGS pruned Black's mating submission as a dead
+  // end, or scored the dead end as checkmate.
+  for (const bool after_shift : {true, false}) {
+    RuleOptions rules;
+    rules.moves_after_shift = after_shift;
+    const Meeting m = meeting("[3k/4/4/K2n:0:1:w]", "[3k/4/4/K3:+1:2:w]", rules);
+    REQUIRE(m.at_turn_start == m.during_action);
+    REQUIRE(verdict_of(m.at_turn_start) == Outcome::Checkmate);
+    REQUIRE(can_finish_legally(m.during_action) == std::optional<bool>(false));
+    // Black's state with the mating submission to make (line A).
+    GameState black_mid = m.root;
+    t5d_test::play(black_mid, "(+1T2)Ka1(+1T2)b1");
+    t5d_test::play(black_mid, "(0T1)Ka1(0T1)a2");
+    black_mid.submit();
+    t5d_test::play(black_mid, "(0T1)Kd4(0T1)d3");
+    REQUIRE(black_mid.submission_status() == SubmitStatus::Safe);
+    for (const bool graph : {false, true}) {
+      for (const int order : {1, 2}) {
+        SearchParams p = fast();
+        p.graph = graph;
+        p.solver = true;
+        p.legal_moves_only = false;  // the pseudo-legal seam: B's move is offered, its child a dead end
+        Search search(m.root, p);
+        Steer steer(kMeetingLines, kLate, order);
+        search.run(steer, Limits{1500});
+        CHECK_NOTHROW(search.check_invariants());
+        const Holders h = holders(search, m.at_turn_start);
+        REQUIRE(h.start != kNoNode);
+        REQUIRE(h.mid != kNoNode);
+        CHECK_EQ(order == 1, h.start < h.mid);
+        std::size_t mating_submits = 0;
+        for (NodeId id = 0; id < search.node_count(); ++id) {
+          const NodeView n = search.node(id);
+          if (*n.state == m.at_turn_start) {
+            CHECK(n.terminal == (n.turn_start ? Terminal::Checkmate : Terminal::None));
+            CHECK_EQ(n.dead_end, !n.turn_start);
+          }
+          if (*n.state == black_mid && !n.turn_start && n.expanded) {
+            for (std::size_t i = 0; i < n.edge_count; ++i) {
+              const EdgeView e = search.edge(id, i);
+              if (!e.submit) continue;
+              ++mating_submits;
+              CHECK(!e.pruned);
+              if (e.child != kNoNode) {
+                CHECK(search.node(e.child).terminal == Terminal::Checkmate);
+                CHECK_EQ(n.lo, 1);  // Black's view: a proven win
+              }
+            }
+          }
+        }
+        CHECK(mating_submits >= 1);
+      }
+    }
+  }
+}
+
+TEST(mcts_graph_dead_ends_have_no_legal_completion) {
+  // The review's third repro (a fast legality budget, so moves stay unknown
+  // until verified): every node marked a dead end truly has no legal
+  // completion, and no move pruned for a dead-end child is legal.
+  const GameState s = game({"[n3/n3/K3/3k:0:1:w]", "[B3/3k/K3/4:+1:2:w]"}, BoardSize{4, 4});
+  for (const bool graph : {false, true}) {
+    for (const BuiltinEvaluator kind : {BuiltinEvaluator::Uniform, BuiltinEvaluator::Random}) {
+      SearchParams p = fast();
+      p.graph = graph;
+      p.solver = true;
+      p.legality = LegalityOptions::budgeted(0, 0);
+      p.verify_legality = LegalityOptions::budgeted(0, 0);
+      const std::unique_ptr<Evaluator> ev = make_evaluator(kind, 3);
+      Search search(s, p);
+      search.run(*ev, Limits{3000});
+      CHECK_NOTHROW(search.check_invariants());
+      std::size_t checked = 0;
+      for (NodeId id = 0; id < search.node_count(); ++id) {
+        const NodeView n = search.node(id);
+        if (n.dead_end) {
+          const t5d_test::Reference ref = t5d_test::reference_actions(*n.state, 200000);
+          if (!ref.overflow) {
+            ++checked;
+            CHECK(ref.successors.empty());
+          }
+        }
+        for (std::size_t i = 0; i < n.edge_count; ++i) {
+          const EdgeView e = search.edge(id, i);
+          if (e.submit || !e.pruned || e.child == kNoNode || !search.node(e.child).dead_end) continue;
+          std::vector<MoveLegality> leg;
+          classify_moves(*n.state, std::span<const Move>(e.move, 1), leg, LegalityOptions::exact());
+          CHECK(leg[0] == MoveLegality::Illegal);
+        }
+      }
+      CHECK(checked > 0);
+    }
+  }
+}
+
+TEST(mcts_graph_invariants_hold_in_random_searches) {
+  // Random two-board positions (intra-turn transpositions everywhere), random
+  // evaluators, both Q4 readings, MCGS on: check_invariants holds every edge
+  // into the right kind of node (a submit edge into a turn start, a move into a
+  // state during an action) and no game end during an action; and no node
+  // marked a dead end has a legal completion.
+  std::size_t searches = 0;
+  std::size_t checked = 0;
+  std::size_t transpositions = 0;
+  for (const bool after_shift : {true, false}) {
+    RuleOptions rules;
+    rules.moves_after_shift = after_shift;
+    const std::vector<GameState> positions = two_board_positions(rules, 6, after_shift ? 71 : 73);
+    for (std::size_t i = 0; i < positions.size(); ++i) {
+      for (const bool seam : {false, true}) {
+        SearchParams p = fast();
+        p.graph = true;
+        p.solver = true;
+        p.legal_moves_only = !seam;
+        p.legality = i % 2 == 0 ? LegalityOptions::budgeted(0, 0) : LegalityOptions::exact();
+        p.turn_cap.boards = static_cast<int>(positions[i].multiverse().board_count()) + 3;
+        const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Random, 100 + i);
+        Search search(positions[i], p);
+        search.run(*ev, Limits{400});
+        CHECK_NOTHROW(search.check_invariants());
+        ++searches;
+        transpositions += search.stats().transposition_hits;
+        for (NodeId id = 0; id < search.node_count(); ++id) {
+          const NodeView n = search.node(id);
+          if (!n.dead_end) continue;
+          const t5d_test::Reference ref = t5d_test::reference_actions(*n.state, 200000);
+          if (ref.overflow) continue;
+          ++checked;
+          CHECK(ref.successors.empty());
+        }
+      }
+    }
+  }
+  CHECK(searches >= 20);
+  CHECK(checked > 0);
+  CHECK(transpositions > 0);
 }

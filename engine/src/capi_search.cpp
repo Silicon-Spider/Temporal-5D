@@ -317,7 +317,6 @@ constexpr LayoutEntry kLayout[] = {
     T5D_SEARCH_AT(t5d_leaf, key),
     T5D_SEARCH_AT(t5d_leaf, epoch),
     T5D_SEARCH_AT(t5d_leaf, acting_player),
-    T5D_SEARCH_AT(t5d_leaf, turn_start),
     T5D_SEARCH_AT(t5d_leaf, submit_possible),
     T5D_SEARCH_AT(t5d_leaf, submit_legal),
     T5D_SEARCH_AT(t5d_leaf, expansion),
@@ -477,7 +476,6 @@ t5d_status t5d_search_leaf(t5d_search* search, size_t index, t5d_leaf* out, char
     out->key = r.key;
     out->epoch = r.epoch;
     out->acting_player = t5d::index_of(r.expansion->acting_player());
-    out->turn_start = flag(r.turn_start);
     const bool ply = search->search.params().split == t5d::mcts::TurnSplit::BoardMove;
     out->submit_possible = flag(ply && r.expansion->submit_possible());
     out->submit_legal = flag(ply && r.expansion->submit_legal());

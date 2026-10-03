@@ -347,7 +347,8 @@ struct EvalRequest {
   const Expansion* expansion = nullptr;
   std::uint64_t key = 0;    ///< the node key
   std::uint64_t epoch = 0;  ///< the refresh epoch (§7.9)
-  bool turn_start = true;   ///< no move made yet in the action
+  // Not here: whether the leaf is a turn start - a path property the network
+  // must not see (an evaluation is a function of the state and the epoch).
 };
 
 /// The network's answer for one leaf.

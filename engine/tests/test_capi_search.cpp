@@ -167,7 +167,6 @@ TEST(capi_search_leaves_carry_the_network_input) {
   CHECK_EQ(leaf.submit_possible, 0);  // a turn start: the obligations are not met
   CHECK_EQ(leaf.submit_legal, 0);
   CHECK_EQ(leaf.expansion.acting_player, 0);
-  CHECK_EQ(leaf.turn_start, 1);
   CHECK_EQ(leaf.expansion.move_count, std::size_t{20});
   CHECK_EQ(leaf.expansion.board_count, std::size_t{1});
   CHECK_EQ(leaf.expansion.feature_board_count, std::size_t{1});

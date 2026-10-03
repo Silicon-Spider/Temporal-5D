@@ -476,8 +476,26 @@ struct Search::Impl {
     return static_cast<NodeId>(nodes_.size() - 1);
   }
 
+  // MCGS identity: the state key AND whether an action is in progress. A turn
+  // start and a state during an action can hold the same GameState (an
+  // optional board played at the end of one action, or at the start of the
+  // next), yet only a turn start can end the game (C5) or be capped (I11),
+  // and only a partial action can be a dead end - so they are never one node.
+  static std::uint64_t identity(std::uint64_t key, bool turn_start) noexcept {
+    return turn_start ? detail::combine(key, 0x7475726E5F737461ull) : key;
+  }
+
   void register_node(NodeId id) {
-    if (params_.graph) table_.emplace(nodes_[id].key, id);
+    if (params_.graph) table_.emplace(identity(nodes_[id].key, nodes_[id].turn_start), id);
+  }
+
+  // The node of the graph holding (state, turn_start), compared exactly; kNoNode.
+  NodeId find_node(std::uint64_t key, const GameState& s, bool turn_start) const {
+    const auto it = table_.find(identity(key, turn_start));
+    if (it == table_.end()) return kNoNode;
+    const Node& n = nodes_[it->second];
+    return n.turn_start == turn_start && detail::same_state(n.state, s, compare_origins()) ? it->second
+                                                                                          : kNoNode;
   }
 
   // A turn start: the game's end, by E4's exhaustive detector only (H37), or
@@ -583,15 +601,13 @@ struct Search::Impl {
     NodeId id = kNoNode;
     if (params_.graph) {
       const std::uint64_t key = node_key(s, params_.node_key);
-      const auto it = table_.find(key);
-      if (it != table_.end()) {
-        if (detail::same_state(nodes_[it->second].state, s, compare_origins())) {
-          id = it->second;
-          ++stats_.transposition_hits;
-        } else {
-          ++stats_.key_collisions;  // kept apart: an unshared node
-          id = make_node(std::move(s), turn_start);
-        }
+      const NodeId found = find_node(key, s, turn_start);
+      if (found != kNoNode) {
+        id = found;
+        ++stats_.transposition_hits;
+      } else if (table_.count(identity(key, turn_start)) != 0) {
+        ++stats_.key_collisions;  // kept apart: an unshared node
+        id = make_node(std::move(s), turn_start);
       } else {
         id = make_node(std::move(s), turn_start);
         register_node(id);
@@ -1235,7 +1251,12 @@ struct Search::Impl {
     std::size_t collisions = 0;
     std::size_t iterations = 0;
     const std::size_t iteration_limit = 64 * max_leaves + 1024;
-    while (pending_.size() < max_leaves && pending_.size() + done < max_playouts &&
+    // A batch is `max_leaves` visits: the leaves sent for evaluation AND the
+    // visits completed without the evaluator (terminals, solved nodes, cache
+    // hits, MCGS residuals). Counted apart, the latter piled up without bound
+    // behind a pending leaf's virtual loss - a whole run's playouts down a line
+    // of terminals while the one pending line starved.
+    while (pending_.size() + done < max_leaves && pending_.size() + done < max_playouts &&
            iterations++ < iteration_limit) {
       if (root_finished()) break;
       const Selected s = select_once();
@@ -1248,7 +1269,7 @@ struct Search::Impl {
     for (const Pending& pd : pending_) {
       if (pd.request != requests_.size()) continue;  // a duplicate: its first leaf asks
       const Node& n = nodes_[pd.leaf];
-      requests_.push_back(EvalRequest{&n.state, slots_[pd.slot].get(), n.key, epoch_, n.turn_start});
+      requests_.push_back(EvalRequest{&n.state, slots_[pd.slot].get(), n.key, epoch_});
     }
     return requests_.size();
   }
@@ -1435,7 +1456,19 @@ struct Search::Impl {
         if (!params_.graph && e.child != kNoNode && nodes_[e.child].visits != e.visits) {
           fail("a tree edge's visits differ from its child's", id);
         }
+        // An action ends only by a submit edge (D8), and a submit edge always ends
+        // one: whether a node is a turn start follows from the edge into it alone,
+        // in a graph as in a tree.
+        if (e.child != kNoNode && params_.split == TurnSplit::BoardMove &&
+            nodes_[e.child].turn_start != e.submit) {
+          fail(e.submit ? "a submit edge into a node during an action" : "a move edge into a turn start", id);
+        }
+        if (e.child != kNoNode && params_.split == TurnSplit::WholeTurn && !nodes_[e.child].turn_start) {
+          fail("a whole-turn action into a node during an action", id);
+        }
       }
+      if (!n.turn_start && n.terminal != Terminal::None) fail("a game end during an action (C5)", id);
+      if (n.turn_start && n.dead_end) fail("a turn start marked a dead end", id);
       if (static_cast<std::uint64_t>(n.visits) != n.ends + through) {
         fail("visits " + std::to_string(n.visits) + " != ends " + std::to_string(n.ends) +
                  " + child visits " + std::to_string(through),
@@ -1694,7 +1727,8 @@ void Search::advance_to(const GameState& target, bool turn_start) {
     const Edge& e = s.nodes_[s.root_].edges[i];
     if (e.pruned) continue;
     if (e.child != kNoNode) {
-      if (s.nodes_[e.child].state == target) {
+      const Node& c = s.nodes_[e.child];
+      if (c.turn_start == turn_start && c.state == target) {
         s.reroot(e.child);
         return;
       }
@@ -1703,7 +1737,7 @@ void Search::advance_to(const GameState& target, bool turn_start) {
     bool ts = false;
     bool illegal = false;
     const GameState child = s.child_state(s.root_, i, ts, illegal);
-    if (!illegal && child == target) {
+    if (!illegal && ts == turn_start && child == target) {
       const NodeId c = s.ensure_child(s.root_, i);
       if (c != kNoNode) {
         s.reroot(c);
@@ -1712,9 +1746,11 @@ void Search::advance_to(const GameState& target, bool turn_start) {
     }
   }
   if (s.params_.graph) {
-    const auto it = s.table_.find(node_key(target, s.params_.node_key));
-    if (it != s.table_.end() && s.nodes_[it->second].state == target) {
-      s.reroot(it->second);
+    // The same (state, action in progress) elsewhere in the graph - never a
+    // turn start for a partial action, nor the reverse.
+    const NodeId found = s.find_node(node_key(target, s.params_.node_key), target, turn_start);
+    if (found != kNoNode && s.nodes_[found].state == target) {
+      s.reroot(found);
       return;
     }
   }

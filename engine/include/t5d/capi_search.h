@@ -173,7 +173,6 @@ typedef struct t5d_leaf {
   uint64_t epoch;          /* the refresh epoch (t5d_search_set_epoch) */
   int32_t acting_player;   /* D8: whose action is in progress, until it submits: 0 white,
                               1 black - the value's perspective */
-  int32_t turn_start;      /* 1: no move made yet in the action */
   int32_t submit_possible; /* D8: submitting is an action here (the obligations met, T5) -
                               board-move split; 0 under whole turns */
   int32_t submit_legal;    /* ... and legal (C4, exact) */
