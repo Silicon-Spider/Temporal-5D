@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "t5d/pgn.hpp"
+#include "sha256.hpp"
 #include "tool_support.hpp"
 
 namespace t5d::tools {
@@ -19,6 +20,17 @@ std::string trimmed(std::string s) {
   std::size_t i = 0;
   while (i < s.size() && space(s[i])) ++i;
   return s.substr(i);
+}
+
+// "sha256:" and the SHA-256 of `text` with every CR before a LF dropped.
+std::string content_id(const std::string& text) {
+  std::string lf;
+  lf.reserve(text.size());
+  for (std::size_t i = 0; i < text.size(); ++i) {
+    if (text[i] == '\r' && i + 1 < text.size() && text[i + 1] == '\n') continue;
+    lf += text[i];
+  }
+  return "sha256:" + sha256_hex(lf);
 }
 
 // The action the record plays next from `replay`'s state: its moves resolved
@@ -69,6 +81,7 @@ SixbRoots sixb_roots(const std::vector<RecordRef>& records, const RuleOptions& r
   for (const RecordRef& ref : records) {
     try {
       const std::string text = read_file(ref.path);
+      const std::string content = content_id(text);
       PgnRecord record = read_pgn(text);
       const bool synthetic = is_synthetic(record);
       PgnReplay replay(std::move(record), PgnOptions{}, rules);
@@ -80,7 +93,7 @@ SixbRoots sixb_roots(const std::vector<RecordRef>& records, const RuleOptions& r
           if (!seen.insert(replay.state().zobrist()).second) {
             ++out.duplicates;
           } else if (max_roots == 0 || out.roots.size() < max_roots) {
-            out.roots.push_back(SixbRoot{ref.id, k, synthetic, replay.state(), next_action_of(replay)});
+            out.roots.push_back(SixbRoot{ref.id, content, k, synthetic, replay.state(), next_action_of(replay)});
           }
         }
         if (replay.finished()) break;

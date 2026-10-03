@@ -32,7 +32,11 @@ std::vector<RecordRef> record_refs(const std::vector<std::string>& direct, const
                                    const std::string& root);
 
 struct SixbRoot {
-  std::string record;  // the record's id
+  std::string record;  // the record's id (as listed: for messages)
+  /// The record's content id, "sha256:" and the SHA-256 of its bytes with
+  /// CRLF read as LF (a checkout's line endings do not change it): how
+  /// recorded data names a record without naming a path (Hunt's truth).
+  std::string content;
   int index = 0;       // the actions played before it
   bool synthetic = false;
   GameState state;

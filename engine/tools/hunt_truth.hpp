@@ -15,6 +15,9 @@
 //                   found_by literal literal_nodes default default_nodes
 //                   crosscheck line
 //   root            <one root's fields, in the columns' order>
+// record: "sha256:" and the SHA-256 of the record's bytes, CRLF read as LF
+// (engine data names no path under the oracle harness; its boundary check
+// refuses one);
 // verdict: "mate" (proven), "none" (no mate found within the budget), or
 // "skipped: <why>" (a root 6b measures nothing at); distance: half-turns, or
 // "-"; found_by: "literal", "default", "both" or "-"; literal, default: each

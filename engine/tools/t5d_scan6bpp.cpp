@@ -380,7 +380,7 @@ int main(int argc, char** argv) {
       for (std::size_t i = 0; i < n; ++i) {
         const t5d::tools::SixbRoot& r = roots.roots[i];
         const t5d::tools::HuntTruthRoot* row = i < truth->roots.size() ? &truth->roots[i] : nullptr;
-        if (row == nullptr || row->record != r.record || row->index != r.index ||
+        if (row == nullptr || row->record != r.content || row->index != r.index ||
             row->fingerprint != results[i].fingerprint) {
           throw std::runtime_error("root " + std::to_string(i) + " (" + r.record + " #" + std::to_string(r.index) +
                                    ") is not the truth's");
