@@ -10,6 +10,47 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-03 - Oracle harness: cwmtt/many2 read converted to 5dpgn by every source (CHECKPOINT 3); golden files re-recorded
+
+- `oracles/oracle_harness/export_form.py` (new; merged from its worktree branch)
+  carries out the user's ruling: "the cwmtt driver converts the export form to the
+  canonical 5dpgn form from the pinned notation spec; if it expresses something
+  the spec can't, mark the record unsupported. The engine's parser is not
+  extended." A move that names its board twice on one board (the specification's
+  "Export moves", `(0T1)Pe2(0T1)e3`) becomes the specification's physical move
+  (`(0T1)Pe2e3`; castling `(0T6)Ke1g1`). Nothing is added - no capture, check or
+  promotion mark, which would mean reading the position - and every other byte is
+  copied. A move to another board without `>`/`>>`, other text with a board
+  straight after a square, or the export form's `w.`/`b.` turns make the whole
+  record unsupported. Written from the specification's text, not from any
+  oracle's parser.
+- `corpus.feed` (cwmtt's side of the harness, which supplies its records) converts
+  a cwmtt record in the export form, and every source reads the converted text -
+  the engine included, still on standard input; converting only what cwmtt reads
+  would change nothing. A record no source is given is reported unsupported
+  (`export_form`) for every source. Every other record is fed byte for byte as
+  before. The manifest pins what the sources read (`converted`), checked by
+  `verify` and every read; golden files and known divergences name a converted
+  record by that hash. The gate's log and report and DISAGREEMENTS.md ("Records not
+  read as stored") name converted records. many2: 153 of 204 moves rewritten.
+- `oracles/golden/*`, `oracles/DISAGREEMENTS.md`: re-recorded with `golden --write
+  --repeat 2` on a quiet machine (2026-10-03, 30 min). Only cwmtt/many2's answers
+  changed, in every file: ftxi, Chess in 5D and the notation parser now read the
+  game they refused at its first move (ftxi and the notation parser all 63
+  positions at the commit tier); cwmtt's two answers are unchanged but for the
+  record's hash. What each tier requires: more values everywhere (ftxi 7,760 ->
+  8,256; notation 2,765 -> 3,012); ftxi:naive's many2 outcome, "rejected after 0
+  actions" when it could not read the record, is now a run cut at its 300 s budget
+  at position 16, so its nightly and release tiers require one outcome fewer (33
+  -> 32), as does Chess in 5D's nightly tier (41 -> 40) - more checking of many2,
+  not less. `verify`'s informational proof-channel notes: 17 (16 before).
+- Tests: `oracles/tests/test_export_form.py` (21) and a gate-run test; selftest 623
+  OK; verify, the commit-tier gate green. `oracles/README.md` ("How a record
+  reaches the sources"; the soft legality entries).
+- Spec: §11.0 ("Third-party code"), register H28 (and H27/H33): the one exception
+  to "every source reads the record as stored" - spec issue 96, proposed spec edit
+  71 in `docs/BUILD_LOG.md`.
+
 ### 2026-10-03 - Engine E6a: the search core - PUCT/MCGS, both D2 arms, the solver behind H41, self-play, the C step API
 
 - `engine/` (merged from its worktree branch after three adversarial reviews and a

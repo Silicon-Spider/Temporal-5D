@@ -1025,7 +1025,9 @@ class GateRunTests(unittest.TestCase):
                                     (gate.boundary, "check", []), (gate.provenance, "check", []),
                                     (gate.rulebook, "verify", [])):
             self.enterContext(mock.patch.object(target, name, return_value=value))
-        self.enterContext(mock.patch.object(gate.corpus, "read", side_effect=lambda item, lock: self.text(item.id).encode()))
+        # What every source is given for a record (corpus.feed; runner.observe hands it over).
+        self.enterContext(mock.patch.object(gate.corpus, "feed",
+                                            side_effect=lambda item, lock: gate.corpus.Feed(data=self.text(item.id).encode())))
         self.enterContext(mock.patch.object(gate, "make_source",
                                             side_effect=lambda name, lock: Canned(name, self.table, self.asked)))
         self.report = self.enterContext(mock.patch.object(gate, "_write_report"))
@@ -1134,6 +1136,21 @@ class GateRunTests(unittest.TestCase):
         self.assertEqual(result.calibration.seconds, 0.01)  # position 0's answers arrived at 0.01 s
         self.assertEqual(result.calibration.factor, 0.02)
         self.report.assert_called_once()
+        self.assertEqual(result.converted, {})
+
+    def test_a_record_read_converted_from_the_export_form_is_named_in_the_log_and_the_report(self):
+        # export_form.py (CHECKPOINT 3): every source reads such a record converted, and a run says which were.
+        converted = dataclasses.replace(self.RECORDS[0], converted="c" * 64)
+        self.RECORDS = [converted, self.RECORDS[1]]
+        self.enterContext(mock.patch.object(gate.corpus, "load", return_value=self.RECORDS))
+        self.record_golden()  # recorded about the converted text, as golden --write records it
+        self.engine()
+        logged = []
+        result = gate.run_tier("commit", include_untracked=False, log=logged.append)
+        self.assertEqual(result.findings(), [])
+        self.assertEqual(result.converted, {"r/std": converted.reading})
+        self.assertIn(f"r/std: {converted.reading}", logged)
+        self.assertIs(self.report.call_args.args[0], result)  # the report's "converted" is result.converted
 
     def test_a_rulebook_that_changed_since_its_pin_fails_every_tier(self):
         # H38: the rulebook is pinned, and the gate is re-run on a change - after the change is reviewed and pinned.

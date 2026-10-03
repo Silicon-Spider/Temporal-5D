@@ -72,7 +72,9 @@ channel (rung 1), rungs 3 and 5; the NNUE held open (H6). The user's rulings:
 M16 also fixed M7's readings; applied, the window is killed under human-game
 weighting, which contradicts M16's own premise - put to the user (MEASUREMENTS, M7).
 
-**Done since (2026-10-03):** network C24 merged (65acf68); **engine E6a merged** -
+**Done since (2026-10-03):** network C24 merged (65acf68); **the many2 conversion
+merged** with the golden files re-recorded on a quiet machine (only many2's
+answers changed); **engine E6a merged** -
 the search core after its three adversarial reviews and their fixes, with H41's
 switch and H18's acting-player test (474 tests). **Running:** engine **E9** on
 E8's branch (Guard, Hunt, the asset map as components; the estimate channel
@@ -1270,6 +1272,16 @@ decision), and what is parked.
     at 336 boards; 56 s of the board-capped Standard smoke games).
 (The in-tree solver before the gate, an E6a draft issue, is settled by H41.)
 
+96. **The corpus's export-form record** (§11.0 "the game corpus is in its format";
+    H28): cwmtt/many2 is written in the official client's export form - every move
+    names its board twice, the notation specification's "Export moves", which the
+    specification itself calls "still a proposal". Only cwmtt read it. Ruled at
+    CHECKPOINT 3 and carried out in the harness: cwmtt's side of the harness
+    converts the text, and every source - the engine included - reads the
+    converted text (converting for cwmtt alone would change nothing); a record the
+    specification cannot express is given to no source. H28's "every source reads
+    the record as stored" now has this one exception.
+
 ## Proposed spec edits
 
 Edits the spec or the register needs, for applying upstream. Each: where, what it
@@ -1475,6 +1487,20 @@ says now, what it should say, why.
     the whole-turn prior as parameters with placeholder defaults (issues 80-85).
 70. **I11 / §8.6**: the turn cap's definition and the capped record's
     Termination header (issue 88).
+71. **Register H28 and §11.0 ("Third-party code", the notation specification's
+    row)**: H28 now says "Own 5dpgn/5dfen parser, written from the pinned notation
+    specification - a shared parser corrupts both sides of a comparison
+    identically"; the row says "the game corpus is in its format". Append to H28:
+    "The engine's parser reads the specification's 5dpgn and is not extended to
+    other notations. Every source is given the same text of a record; the one
+    exception (CHECKPOINT 3): a corpus record in the official client's export
+    form is converted by the harness to the specification's 5dpgn, as notation
+    only, never reading the position, and every source, the engine included,
+    reads the converted text; a record with a move the specification cannot
+    express is given to no source." The row: "the game corpus is in its format (a
+    record in the official client's export form is converted to it before any
+    source reads it - CHECKPOINT 3)". Optionally H27/H33: the pinned corpus pins
+    the converted text too. Why: the CHECKPOINT 3 ruling (issue 96).
 
 ## Session log
 
