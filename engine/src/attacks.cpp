@@ -333,6 +333,22 @@ std::size_t RoyalAttackMap::stop_count() const noexcept {
   return n;
 }
 
+void RoyalAttackMap::void_stops(std::vector<VoidStop>& out) const {
+  for (const auto& s : sources_) {
+    for (const Source::Stop& st : s->stops) {
+      VoidStop v;
+      v.source_timeline = s->timeline;
+      v.source_half_turn = s->half_turn;
+      v.timeline = st.timeline;
+      v.half_turn = st.half_turn;
+      v.steps = st.steps;
+      v.from_square = st.line.from_square;
+      v.ordinal = st.line.ordinal;
+      out.push_back(v);
+    }
+  }
+}
+
 std::vector<RoyalCapture> RoyalAttackMap::captures() const {
   std::vector<RoyalCapture> out;
   if (!mv_) return out;

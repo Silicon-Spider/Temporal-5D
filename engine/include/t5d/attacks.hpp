@@ -42,6 +42,7 @@
 #ifndef T5D_ATTACKS_HPP
 #define T5D_ATTACKS_HPP
 
+#include <compare>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -102,6 +103,24 @@ class RoyalAttackMap {
   /// The lines that stopped at void, over every source.
   std::size_t stop_count() const noexcept;
   bool empty() const noexcept { return !mv_; }
+
+  /// A line that stopped at void: its source's place, the line within it
+  /// (its piece's square and the line's place in the piece's table), the step
+  /// it reached and where it stopped. Equal stops are the same line stopped
+  /// at the same place.
+  struct VoidStop {
+    std::int32_t source_timeline = 0;
+    std::int32_t source_half_turn = 0;
+    std::int32_t timeline = 0;
+    std::int32_t half_turn = 0;
+    std::int16_t steps = 0;
+    std::int8_t from_square = 0;
+    std::uint8_t ordinal = 0;
+    friend bool operator==(const VoidStop&, const VoidStop&) noexcept = default;
+    friend auto operator<=>(const VoidStop&, const VoidStop&) noexcept = default;
+  };
+  /// Every line that stopped at void, source by source (appended to `out`).
+  void void_stops(std::vector<VoidStop>& out) const;
 
   struct Source;  // one playable board's record (src/attacks.cpp)
 

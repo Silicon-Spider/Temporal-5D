@@ -130,6 +130,32 @@ std::size_t DisproofStore::size() const {
   return n;
 }
 
+// ---- proof certificates ----------------------------------------------------------------------
+
+void ProofCertificate::add(const GameState& position, std::vector<Move> action, int distance) {
+  const std::uint64_t key = position.zobrist();
+  const auto range = index_.equal_range(key);
+  for (auto it = range.first; it != range.second; ++it) {
+    CertificateStep& s = steps_[it->second];
+    if (!same_position(s.position, position)) continue;
+    if (distance < s.distance) {
+      s.action = std::move(action);
+      s.distance = distance;
+    }
+    return;
+  }
+  steps_.push_back(CertificateStep{position, std::move(action), distance});
+  index_.emplace(key, steps_.size() - 1);
+}
+
+const CertificateStep* ProofCertificate::find(const GameState& position) const {
+  const auto range = index_.equal_range(position.zobrist());
+  for (auto it = range.first; it != range.second; ++it) {
+    if (same_position(steps_[it->second].position, position)) return &steps_[it->second];
+  }
+  return nullptr;
+}
+
 void DisproofStore::clear() {
   for (Shards::Shard& s : shards_->shard) {
     std::unique_lock<std::shared_mutex> lock(s.mutex);
@@ -174,12 +200,46 @@ enum class Phase : std::uint8_t { Plain, Branch };
 // twin included) - what can make good a pass on it; how many leading axes a
 // check rests on (D's turns); and whether a creation could relieve a
 // mandatory board left unplayed (T8, T12).
+// The last-turn check filter (t5d/prover.hpp): the attacker's moves at its
+// last turn start, each check-capable or not; per axis index j, whether a
+// check-capable non-branching move is left on axes j onward; whether a
+// check-capable branching move exists.
+struct CheckFilter {
+  std::vector<Move> moves;
+  std::vector<std::uint8_t> capable_move;
+  std::unordered_multimap<std::uint64_t, std::size_t> index;
+  std::vector<std::uint8_t> plain_from;  // axes.size() + 1 entries
+  bool branch = false;
+
+  static std::uint64_t key(const Move& m) noexcept {
+    std::uint64_t k = static_cast<std::uint64_t>(static_cast<std::uint32_t>(m.from_timeline));
+    k = k * 1000003u + static_cast<std::uint64_t>(static_cast<std::uint32_t>(m.from_half_turn));
+    k = k * 1000003u + static_cast<std::uint64_t>(static_cast<std::uint32_t>(m.to_timeline));
+    k = k * 1000003u + static_cast<std::uint64_t>(static_cast<std::uint32_t>(m.to_half_turn));
+    k = k * 131u + static_cast<std::uint64_t>(static_cast<std::uint8_t>(m.from_square));
+    k = k * 131u + static_cast<std::uint64_t>(static_cast<std::uint8_t>(m.to_square));
+    k = k * 131u + static_cast<std::uint64_t>(m.flags);
+    return k;
+  }
+  // A move the turn start did not offer in this form (a jump that became a
+  // branch mid-action) is check-capable: the filter only ever cuts what it
+  // knows.
+  bool capable(const Move& m) const {
+    const auto range = index.equal_range(key(m));
+    for (auto it = range.first; it != range.second; ++it) {
+      if (moves[it->second] == m) return capable_move[it->second] != 0;
+    }
+    return true;
+  }
+};
+
 struct TurnShape {
   std::vector<std::int32_t> axes;
   std::vector<int> arrival_last;
   std::vector<std::uint8_t> branchy;
   int hot = 0;
   bool relief = false;
+  std::shared_ptr<const CheckFilter> filter;  // the attacker's last turn
 };
 
 struct Node {
@@ -198,6 +258,7 @@ struct Node {
   bool or_node = true;
   bool expanded = false;
   bool incomplete = false;              // a listing was capped: AND never proven, OR never disproven
+  bool check_made = false;              // semi, the attacker's last turn: a check-capable move is in it
   bool proven() const noexcept { return pn == 0; }
   bool disproven() const noexcept { return dn == 0; }
   bool solved() const noexcept { return pn == 0 || dn == 0; }
@@ -328,6 +389,7 @@ struct Shared {
 
   // The search in progress.
   const ProveBudget* budget = nullptr;
+  int depth = 5;
   std::chrono::steady_clock::time_point start;
   std::size_t threads = 1;
   Colour attacker = Colour::White;
@@ -350,6 +412,10 @@ struct Shared {
   DisproofClass cls(bool or_node) const {
     return DisproofClass{or_node, opt.seeds, opt.completion};
   }
+  // Prove-only keeps its disproofs to itself - its search's working memory,
+  // emptied at each search, never the caller's store (it claims none).
+  DisproofStore private_disproofs;
+  DisproofStore& disproof_store() { return opt.prove_only ? private_disproofs : *disproofs; }
 };
 
 constexpr std::uint64_t kFlushNodes = 256;
@@ -873,14 +939,18 @@ struct Worker {
     for (const int p : s.playable_timelines()) out.push_back(p);
     return out;
   }
-  std::vector<std::int32_t> defender_axes(const GameState& s, const RoyalAttackMap& opp_map, int& hot) {
+  // `in_check`: R1's status at `s` (some capture in the passed multiverse).
+  std::vector<std::int32_t> defender_axes(const GameState& s, const RoyalAttackMap& opp_map, int& hot,
+                                          bool& in_check) {
     std::vector<std::int32_t> hot_axes;
+    in_check = false;
     const std::vector<int> passed = passed_timelines(s);
     if (!passed.empty()) {
       const Multiverse pm = passed_multiverse(s);
       ++st.attack_queries;
       spend();
       const RoyalAttackMap m = opp_map.advanced(pm, s.inactive_timelines());
+      in_check = m.any();
       for (const RoyalCapture& c : m.captures()) {
         for (const CapturePlace& place : capture_places(c)) {
           if (std::find(passed.begin(), passed.end(), place.timeline) == passed.end()) continue;
@@ -935,6 +1005,97 @@ struct Worker {
       }
     }
     return shape;
+  }
+
+  // -- the last-turn check filter (t5d/prover.hpp) ---------------------------------------------
+
+  // `mv` with every head of `colour`'s to move advanced by a pass (C6): every
+  // board R1 could pass at the next turn start, and more (a superset of R1's
+  // sources: more boards only extend lines, Q18's default).
+  static Multiverse with_heads_passed(const Multiverse& mv, Colour colour) {
+    Multiverse out = mv;
+    for (const TimelineRef& t : mv.timelines()) {
+      if (to_move_at(t->last_half_turn()) != colour) continue;
+      BoardBuilder b(*t->head());
+      b.set_en_passant(kNoSquare);
+      out.append_board(t->position(), b.publish());
+    }
+    return out;
+  }
+
+  // The filter of the attacker's last turn at `s` (`all`: its moves there),
+  // reordering `axes` so that the boards with a check-capable move come
+  // first; null where it does not apply (attack maps recompute under the
+  // rules, or a capture stands already: every action may give check).
+  std::shared_ptr<const CheckFilter> make_check_filter(const GameState& s, const MoveList& all,
+                                                       std::vector<std::int32_t>& axes) {
+    if (!opt.check_filter || !attack_maps_incremental(s.rules())) return nullptr;
+    const Colour me = s.to_move();
+    const Colour them = opposite(me);
+    if (!spend()) return nullptr;
+    ++st.attack_queries;
+    const Multiverse base = with_heads_passed(s.multiverse(), them);
+    const RoyalAttackMap m0(base, s.rules(), me, s.inactive_timelines());
+    if (m0.any()) return nullptr;
+    // The places the attacker's action may fill: beyond the head of a
+    // timeline it may play, or on a timeline it may create.
+    const Multiverse& mv = s.multiverse();
+    const auto may_fill = [&](int p, int h) {
+      const Timeline* t = mv.timeline(p);
+      if (t == nullptr) return true;
+      return s.playable_by_mover(p) && h > t->last_half_turn();
+    };
+    std::vector<RoyalAttackMap::VoidStop> stops0;
+    {
+      std::vector<RoyalAttackMap::VoidStop> all_stops;
+      m0.void_stops(all_stops);
+      for (const auto& v : all_stops) {
+        if (may_fill(v.timeline, v.half_turn)) stops0.push_back(v);
+      }
+      std::sort(stops0.begin(), stops0.end());
+    }
+    auto f = std::make_shared<CheckFilter>();
+    f->moves.assign(all.begin(), all.end());
+    f->capable_move.assign(all.size(), 0);
+    std::vector<RoyalAttackMap::VoidStop> stops;
+    for (std::size_t i = 0; i < all.size(); ++i) {
+      if (stopped) return nullptr;
+      const Move& m = all[i];
+      f->index.emplace(CheckFilter::key(m), i);
+      GameState t = s;
+      apply(t, m);
+      if (!spend()) return nullptr;
+      ++st.attack_queries;
+      const RoyalAttackMap mm = m0.advanced(with_heads_passed(t.multiverse(), them), t.inactive_timelines());
+      bool capable = mm.any();
+      if (!capable) {
+        stops.clear();
+        mm.void_stops(stops);
+        for (const auto& v : stops) {
+          if (!may_fill(v.timeline, v.half_turn)) continue;
+          if (std::binary_search(stops0.begin(), stops0.end(), v)) continue;
+          capable = true;  // a new line (or a resumed one) stopped where a board may come
+          break;
+        }
+      }
+      f->capable_move[i] = capable ? 1 : 0;
+    }
+    // The boards with a check-capable non-branching move first.
+    const auto axis_capable = [&](int p) {
+      for (std::size_t i = 0; i < all.size(); ++i) {
+        if (f->capable_move[i] != 0 && !all[i].branching() && all[i].from_timeline == p) return true;
+      }
+      return false;
+    };
+    std::stable_partition(axes.begin(), axes.end(), axis_capable);
+    f->plain_from.assign(axes.size() + 1, 0);
+    for (std::size_t j = axes.size(); j-- > 0;) {
+      f->plain_from[j] = static_cast<std::uint8_t>(f->plain_from[j + 1] != 0 || axis_capable(axes[j]));
+    }
+    for (std::size_t i = 0; i < all.size(); ++i) {
+      if (f->capable_move[i] != 0 && all[i].branching()) f->branch = true;
+    }
+    return f;
   }
 
   // The canonical completion of `seed` at the turn start `s`: the first legal
@@ -1004,7 +1165,9 @@ struct Worker {
         return c;
       }
     }
-    if (sh.disproofs->find(s, sh.cls(n.or_node)) >= remaining) {
+    // Prove-only reads only its own search's (its working memory, never a
+    // shared fact).
+    if (sh.disproof_store().find(s, sh.cls(n.or_node)) >= remaining) {
       set_disproven(n);
       ++st.store_hits;
       return c;
@@ -1043,10 +1206,9 @@ struct Worker {
       if (n.dist < 0) throw std::logic_error("prover: a turn proven with no legal action under it");
       sh.put_proof(s, n.or_node ? Proof::win(n.dist) : Proof::loss(n.dist));
       ++st.proofs_exported;
-    } else if (n.disproven() && n.remaining > 0 &&
-               (opt.record_all_disproofs || n.edge == Edge::Root)) {
-      sh.disproofs->put(s, sh.cls(n.or_node), n.remaining);
-      ++st.disproofs_recorded;
+    } else if (n.disproven() && n.remaining > 0 && (opt.record_all_disproofs || n.edge == Edge::Root)) {
+      sh.disproof_store().put(s, sh.cls(n.or_node), n.remaining);
+      if (!opt.prove_only) ++st.disproofs_recorded;
     }
   }
 
@@ -1110,9 +1272,23 @@ struct Worker {
   void expand_attacker(std::uint32_t n, const GameState& s, TurnCtx& ctx, const MoveList& all,
                        int remaining) {
     const bool split = decomposes(s.rules());
-    tree[n].shape = shape_of(s, attacker_axes(s), 0, all);
+    std::vector<std::int32_t> axes = attacker_axes(s);
+    std::shared_ptr<const CheckFilter> filter;
+    if (remaining == 1 && opt.completion == CompletionClass::Every && split) {
+      filter = make_check_filter(s, all, axes);
+      if (stopped) return;
+    }
+    tree[n].shape = shape_of(s, std::move(axes), 0, all);
+    tree[n].shape.filter = filter;
     if (opt.completion == CompletionClass::Every && !split) {
       list_children(n, s, true);
+      return;
+    }
+    if (opt.completion == CompletionClass::Every && opt.seeds == SeedClass::All) {
+      // The literal class: the semimove tree, entered once (every legal
+      // action once, as the defender's).
+      const std::uint32_t c = make_semi(true, remaining, Edge::Enter, Phase::Plain, 0, std::nullopt);
+      tree[n].children.push_back(c);
       return;
     }
     Seen seen;
@@ -1137,6 +1313,7 @@ struct Worker {
         continue;
       }
       const std::uint32_t c = make_semi(true, remaining, Edge::Move, Phase::Plain, 0, m);
+      tree[c].check_made = filter != nullptr && filter->capable(m);
       tree[n].children.push_back(c);
     }
   }
@@ -1145,8 +1322,16 @@ struct Worker {
                        int remaining) {
     const bool split = decomposes(s.rules());
     int hot = 0;
-    std::vector<std::int32_t> axes = defender_axes(s, ctx.opp_map, hot);
+    bool in_check = false;
+    std::vector<std::int32_t> axes = defender_axes(s, ctx.opp_map, hot, in_check);
     tree[n].shape = shape_of(s, std::move(axes), hot, all);
+    if (remaining == 0 && !in_check) {
+      // At the horizon only checkmate counts, and checkmate needs check
+      // (R1): not mated, whatever the defender's actions.
+      ++st.not_in_check;
+      set_disproven(tree[n]);
+      return;
+    }
     // E4's question first: a quick escape search, then the hypercuboid
     // detector's exhaustive verdict.
     ++st.mate_tests;
@@ -1226,6 +1411,18 @@ struct Worker {
       ++st.dead;  // no child: dead (an AND-side node proven, an OR-side one disproven)
       return;
     }
+    // The attacker's last turn: no check made and none left to make - no
+    // completion can mate (no child: an OR-side node disproven).
+    const CheckFilter* filter = or_node ? shape.filter.get() : nullptr;
+    const bool check_made = tree[n].check_made;
+    if (filter != nullptr && !check_made) {
+      const bool left = phase == Phase::Plain ? (filter->plain_from[j] != 0 || filter->branch) : filter->branch;
+      if (!left) {
+        ++st.check_cut;
+        return;
+      }
+    }
+    const auto made = [&](const Move& m) { return check_made || (filter != nullptr && filter->capable(m)); };
     if (phase == Phase::Plain) {
       const int a = axes[j];
       MoveList plain;
@@ -1241,6 +1438,7 @@ struct Worker {
         if (i < 0) {
           const std::uint32_t c =
               make_semi(or_node, remaining, Edge::Pass, Phase::Plain, static_cast<int>(j) + 1, std::nullopt);
+          tree[c].check_made = check_made;
           tree[n].children.push_back(c);
           continue;
         }
@@ -1253,6 +1451,7 @@ struct Worker {
         }
         const std::uint32_t c =
             make_semi(or_node, remaining, Edge::Move, Phase::Plain, static_cast<int>(j) + 1, m);
+        tree[c].check_made = made(m);
         tree[n].children.push_back(c);
       }
       return;
@@ -1260,10 +1459,14 @@ struct Worker {
     // The branch phase.
     tree[n].phase = Phase::Branch;
     if (t.obligations_met() && !c4.any()) {
-      GameState next = t;
-      next.submit(CheckRuling::none());  // legal: C4 holds, the obligations met
-      const std::uint32_t c = make_turn(next, remaining - 1, Edge::Submit, {});
-      tree[n].children.push_back(c);
+      if (filter != nullptr && !check_made) {
+        ++st.check_cut;  // submitting now leaves the defender out of check
+      } else {
+        GameState next = t;
+        next.submit(CheckRuling::none());  // legal: C4 holds, the obligations met
+        const std::uint32_t c = make_turn(next, remaining - 1, Edge::Submit, {});
+        tree[n].children.push_back(c);
+      }
     }
     if (!t.may_move()) return;
     MoveList all;
@@ -1279,6 +1482,7 @@ struct Worker {
       }
       const std::uint32_t c = make_semi(or_node, remaining, Edge::Move, Phase::Branch,
                                         static_cast<int>(axes.size()), b);
+      tree[c].check_made = made(b);
       tree[n].children.push_back(c);
     }
   }
@@ -1441,6 +1645,9 @@ struct Worker {
         const std::uint64_t others = node.pn >= c.pn ? node.pn - c.pn : 0;
         cthpn = thpn >= kInf ? kInf : (thpn > others ? thpn - others : 1);
       }
+      // Prove-only: thresholds on proof numbers only - a subtree is left when
+      // its proof number outgrows its share, never kept to finish a disproof.
+      if (opt.prove_only && opt.prove_only_pn_thresholds) cthdn = kInf;
       descend(n, pick, s, turn, c4, cthpn, cthdn);
       if (stopped) return;
     }
@@ -1531,6 +1738,122 @@ struct Worker {
     return out;
   }
 
+  // -- the proof, read back from the tree --------------------------------------------------------
+
+  // The state below an edge from `s` (the edge into `c`).
+  static void cross(GameState& s, const Node& c) {
+    switch (c.edge) {
+      case Edge::Move:
+        s.apply(c.moves.front());
+        return;
+      case Edge::Action:
+        for (const Move& m : c.moves) s.apply(m);
+        s.submit(CheckRuling::none());
+        return;
+      case Edge::Submit:
+        s.submit(CheckRuling::none());
+        return;
+      case Edge::Pass:
+      case Edge::Enter:
+      case Edge::Root:
+        return;
+    }
+  }
+
+  // From the proven turn node `n` (state `s`) to the next turn node along the
+  // proof: the attacker's (OR) proving child, or the defender's (AND) longest
+  // defence. The action's moves into `action`, the state into `s`; the next
+  // turn node, or -1 where the tree holds no continuation.
+  long next_turn(std::uint32_t n, GameState& s, std::vector<Move>& action) const {
+    action.clear();
+    std::uint32_t m = n;
+    for (int guard = 0; guard < 100000; ++guard) {
+      const Node& node = tree[m];
+      if (!node.expanded) return -1;
+      std::uint32_t pick = 0;
+      bool found = false;
+      int best = 0;
+      for (const std::uint32_t ci : node.children) {
+        const Node& c = tree[ci];
+        if (!c.proven() || c.dist < 0) continue;
+        const int d = contribution(c);
+        if (!found || (node.or_node ? d < best : d > best)) {
+          best = d;
+          pick = ci;
+          found = true;
+        }
+      }
+      if (!found) return -1;
+      const Node& c = tree[pick];
+      if (c.edge == Edge::Move) action.push_back(c.moves.front());
+      if (c.edge == Edge::Action) action = c.moves;
+      cross(s, c);
+      if (c.kind == Kind::Turn) return static_cast<long>(pick);
+      m = pick;
+    }
+    return -1;
+  }
+
+  // The proof's line from the proven root (`root`, state `s`): actions to the
+  // mate. Where a node was solved from a store, an attacker's position is
+  // looked up in `cert` (if any) and the line stops at a defender's.
+  void proof_line(std::uint32_t root, GameState s, const ProofCertificate* cert,
+                  std::vector<std::vector<Move>>& out, bool& complete) const {
+    out.clear();
+    complete = false;
+    long n = static_cast<long>(root);
+    bool attacker_turn = true;
+    for (int guard = 0; guard < 256; ++guard) {
+      const Node* node = n >= 0 ? &tree[static_cast<std::size_t>(n)] : nullptr;
+      if (node != nullptr && !node->or_node && node->proven() && node->dist == 0) {
+        complete = true;  // the defender is mated
+        return;
+      }
+      std::vector<Move> action;
+      if (node != nullptr && node->expanded) {
+        n = next_turn(static_cast<std::uint32_t>(n), s, action);
+        if (n < 0) return;  // the tree holds no continuation
+        out.push_back(std::move(action));
+        attacker_turn = !attacker_turn;
+        continue;
+      }
+      // Solved from a store: an attacker's position may be in the certificate.
+      if (!attacker_turn || cert == nullptr) return;
+      const CertificateStep* step = cert->find(s);
+      if (step == nullptr) return;
+      for (const Move& m : step->action) s.apply(m);
+      s.submit(CheckRuling::none());
+      out.push_back(step->action);
+      attacker_turn = false;
+      n = -1;
+      // The defender's turn after it is not in this tree: the line stops
+      // unless that turn is a checkmate.
+      const MateResult r = detect_mate(s, Detector::Hypercuboid, SearchBudget::nodes(200000));
+      if (r.verdict == Outcome::Checkmate) complete = true;
+      return;
+    }
+  }
+
+  // Every proven attacker position in this tree with its proving action
+  // (a walk of the whole tree: positions solved from the store are proven
+  // somewhere else in it).
+  void collect_certificate(std::uint32_t n, const GameState& s, ProofCertificate& cert) const {
+    const Node& node = tree[n];
+    if (!node.expanded) return;
+    if (node.kind == Kind::Turn && node.or_node && node.proven()) {
+      GameState t = s;
+      std::vector<Move> action;
+      if (next_turn(n, t, action) >= 0) cert.add(s, action, node.dist);
+    }
+    for (const std::uint32_t ci : node.children) {
+      const Node& c = tree[ci];
+      if (!c.expanded) continue;
+      GameState t = s;
+      cross(t, c);
+      collect_certificate(ci, t, cert);
+    }
+  }
+
   // This thread's search of `shared_root`.
   void run(const GameState& shared_root, std::uint32_t& root_out, bool& decided) {
     std::optional<GameState> own;
@@ -1541,7 +1864,7 @@ struct Worker {
     flushed = 0;
     stopped = false;
     epsilon = id == 0 ? 0.0 : 0.25 * static_cast<double>(id);
-    const std::uint32_t r = make_turn(root, opt.depth, Edge::Root, {});
+    const std::uint32_t r = make_turn(root, sh.depth, Edge::Root, {});
     root_out = r;
     TurnCtx ctx;
     ctx.start = &root;
@@ -1583,6 +1906,8 @@ void accumulate(ProverStats& into, const ProverStats& x) {
   into.store_hits += x.store_hits;
   into.proofs_exported += x.proofs_exported;
   into.disproofs_recorded += x.disproofs_recorded;
+  into.check_cut += x.check_cut;
+  into.not_in_check += x.not_in_check;
   into.stopped_by_nodes = into.stopped_by_nodes || x.stopped_by_nodes;
   into.stopped_by_time = into.stopped_by_time || x.stopped_by_time;
   into.stopped_by_memory = into.stopped_by_memory || x.stopped_by_memory;
@@ -1599,9 +1924,11 @@ struct Prover::Impl {
   Shared shared;
   std::vector<std::unique_ptr<Worker>> workers;
 
-  ProveResult prove(const GameState& root, const ProveBudget& budget) {
+  ProveResult prove(const GameState& root, const ProveBudget& budget, int depth) {
     Shared& sh = shared;
     sh.budget = &budget;
+    sh.depth = std::max(1, std::min(depth, 100));
+    sh.private_disproofs.clear();
     sh.start = std::chrono::steady_clock::now();
     sh.threads = workers.size();
     sh.attacker = root.to_move();
@@ -1635,12 +1962,17 @@ struct Prover::Impl {
       }
     }
     ProveResult result;
-    result.depth = sh.opt.depth;
+    result.depth = sh.depth;
     result.threads = static_cast<int>(workers.size());
     {
       const Worker& main = *workers.front();
       if (roots.front() < main.tree.size() && main.tree[roots.front()].expanded) {
-        result.root_actions = static_cast<int>(main.tree[roots.front()].children.size());
+        const Node& r = main.tree[roots.front()];
+        result.root_actions = static_cast<int>(r.children.size());
+        for (const std::uint32_t ci : r.children) {
+          const Node& c = main.tree[ci];
+          result.root_children.push_back(ProveResult::RootChild{c.moves, c.pn, c.dn});
+        }
       }
     }
     for (std::size_t i = 0; i < workers.size(); ++i) accumulate(result.stats, workers[i]->st);
@@ -1648,16 +1980,15 @@ struct Prover::Impl {
     // refused a contradiction).
     bool proven = false;
     bool disproven = false;
+    std::size_t decider = 0;
     for (std::size_t i = 0; i < workers.size(); ++i) {
       if (!decided[i]) continue;
       const Node& r = workers[i]->tree[roots[i]];
       if (r.proven()) {
-        if (!proven) {
+        if (!proven || r.dist < result.proof.distance) {
           result.proof = Proof::win(r.dist);
           result.first_action = workers[i]->first_action_of_proof(roots[i]);
-        } else if (r.dist < result.proof.distance) {
-          result.proof = Proof::win(r.dist);
-          result.first_action = workers[i]->first_action_of_proof(roots[i]);
+          decider = i;
         }
         proven = true;
       }
@@ -1666,7 +1997,22 @@ struct Prover::Impl {
     if (proven && disproven) {
       throw std::logic_error("prover: the threads proved and disproved the root");
     }
+    if (proven) {
+      const Worker& w = *workers[decider];
+      std::shared_ptr<ProofCertificate> cert;
+      if (sh.opt.record_certificate) {
+        cert = std::make_shared<ProofCertificate>();
+        w.collect_certificate(roots[decider], root, *cert);
+        result.certificate = cert;
+      }
+      w.proof_line(roots[decider], root, cert.get(), result.line, result.line_complete);
+    }
     result.status = proven ? ProofStatus::Proven : disproven ? ProofStatus::Disproven : ProofStatus::Unknown;
+    if (sh.opt.prove_only && result.status == ProofStatus::Disproven) {
+      // Prove-only claims nothing but a proof.
+      result.status = ProofStatus::Unknown;
+      result.exhausted = true;
+    }
     result.stats.seconds = seconds_since(sh.start);
     sh.budget = nullptr;
     return result;
@@ -1678,7 +2024,11 @@ Prover::Prover(const ProverOptions& options, SolvedStore* proofs, DisproofStore*
 Prover::~Prover() = default;
 
 ProveResult Prover::prove(const GameState& root, const ProveBudget& budget) {
-  return impl_->prove(root, budget);
+  return impl_->prove(root, budget, impl_->shared.opt.depth);
+}
+
+ProveResult Prover::prove(const GameState& root, const ProveBudget& budget, int depth) {
+  return impl_->prove(root, budget, depth);
 }
 
 void Prover::clear() { impl_->shared.tt.clear(); }
@@ -1750,7 +2100,8 @@ std::vector<BuiltAction> Prover::semimove_actions(const GameState& turn_start) {
   const RoyalAttackMap opp(turn_start.multiverse(), turn_start.rules(), opposite(turn_start.to_move()),
                            turn_start.inactive_timelines());
   int hot = 0;
-  std::vector<std::int32_t> axes = w.defender_axes(turn_start, opp, hot);
+  bool in_check = false;
+  std::vector<std::int32_t> axes = w.defender_axes(turn_start, opp, hot, in_check);
   const TurnShape shape = w.shape_of(turn_start, std::move(axes), hot, moves);
   std::vector<Move> path;
   std::vector<Found> found;
