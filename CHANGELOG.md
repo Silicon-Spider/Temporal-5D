@@ -10,6 +10,35 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-03 - Design documents: the CHECKPOINT 4 ruling (verification v3), from upstream
+
+- `docs/design/` replaced with the upstream revision recording CHECKPOINT 4: §11.4
+  "The verification layer, v3" (exact rules always; the search's solver for
+  proofs; Guard and Hunt at every size; full settling scans only under 50 boards;
+  the offline audit lane; the adversarial league primary above 50 boards); §15.6's
+  CHECKPOINT 4 result and 6b″'s pre-registered tests; M16's three readings of the
+  window's rule; §11.1's ruling that the search's solver is part of the proof
+  channel; §11.3's acting player in every state key; the complexity trigger (C24)
+  and the dense top layers (C25, held open); register rows H1, H2, H6, H10-H12,
+  H18, M5, M14 updated and C24, C25, H41-H45, M16, M17 and reversal 23 added; the
+  architecture document's guard and hunt. Copied in unchanged.
+- Spec: the documents themselves.
+
+### 2026-10-03 - 6b′ on a quiet machine: the verification redesign fails at 50-199 boards - M15's STOP
+
+- `docs/MEASUREMENTS.md`: experiment 6b′ (M15) with engine E8's prototype of the
+  redesign (M14; branch bd08c48, not merged - it waits on the design review), on
+  a quiet machine, every test as pre-registered and read per board-count range.
+  The df-pn proof channel decides 77.4% of roots under 50 boards (pass), 40.7% at
+  50-99, 23.7% at 100-199 and 0.0% at 200+ (fail); the estimate channel fits the
+  rung-1 leaf budget in no range; below 50 boards df-pn decides more than brute
+  force (408 against 400). M15's outcome: STOP - a design review.
+- `docs/BUILD_LOG.md`: CHECKPOINT 4 - the STOP and what the review has to work
+  from; register M14, M15; spec issues 67-74 and proposed spec edits 56-60 (E8's);
+  the owed long tests' results (E5c's two pass on main).
+- Spec: §11.1 "The redesign after 6b", §11.2 (rung 1, H10), §11.3 (H19), §15.6's
+  CHECKPOINT 3 block (6b′); register H1, H2, H10, M14, M15.
+
 ### 2026-10-03 - Engine E7: Q4 as ruled (R8) by default; the acting player and the submit action (D8), with the binding
 
 - `engine/` (merged from its worktree branch, main merged into it first):

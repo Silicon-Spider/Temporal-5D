@@ -15,6 +15,44 @@ M5 - building it would break a rule).
 
 ## Where things stand
 
+### CHECKPOINT 4 - STOPPED 2026-10-03: 6b′ fails at 50-199 boards (M15) - a design review
+
+The verification redesign (M14) was built as a prototype (engine E8, branch
+`worktree-agent-a4f2f93a8a448467b`, bd08c48 - not merged: it waits on the design
+review) and 6b′ run on a quiet machine with M15's tests unchanged
+(MEASUREMENTS, 6b′): the df-pn proof channel decides 77.4% of roots under 50
+boards, **40.7% at 50-99, 23.7% at 100-199 and 0.0% at 200+**, against a 50% bar;
+the estimate channel fits the rung-1 leaf budget in no range. M15's pre-registered
+outcome: **STOP - "exact verification covers only small positions, and the
+design's robustness argument above them rests on the adversarial league alone -
+a design review, not a tuning pass."** Rung 1 stays dropped; below 50 boards
+df-pn is kept (408 roots decided against brute force's 400).
+
+What the review has to work from (E8's report, MEASUREMENTS):
+- df-pn beats brute force at 50-99 boards (40.7% against 30.7%) but not above;
+  ten times the time (500 ms) reaches only 45% / 34% / 2% - the trees' size, not
+  a constant factor, is the shortfall.
+- What "decided" means turns on the attacker's class, which no document defines
+  (spec issue 67): checking first moves with one canonical completion each
+  decides 77/41/24/0%; the literal question (every first move, every completion)
+  9/3/1/0%. Most "decided" roots under 50 boards are roots with no checking action
+  at all (issue 68).
+- df-pn's work is 82-86% attack-map queries; the estimate channel's p90 cost is
+  2.3x / 6.3x / 15x / 51x its budget by range.
+
+**Also waiting on the user:** M7's early phase (STOP band, three questions, below);
+whether the search's in-tree solver is the "proof channel" H23 keeps disabled
+until the gate passes (§11.1 item 2: "Inject solved bounds into the tree") - E6a's
+fix round puts it behind a flag, off by default, until the user rules.
+
+**Continuing meanwhile** (the user's CHECKPOINT 2 ruling: work that does not
+depend on the verification layer continues; CHECKPOINT 3's unpause order): E6a's
+fixes from its three reviews, then its merge; the many2 golden re-record and the
+gate with the engine configured; then N5. E5c's two owed long tests passed on
+main (ccdbdbd): the evasion probe 1,807 proofs (989 confirmed by the game tree),
+Lazy SMP 2,006 proofs over 2-8 threads (1,072 confirmed), no false proof;
+`long_scanner_proofs_under_every_alternative_ruleset` still running (over 2.5 h).
+
 ### CHECKPOINT 3 - stopped 2026-10-03 on 6b's re-run, ruled the same day; the run resumed
 
 The run stopped under M12's pre-registered rule: after the bounded optimisation
@@ -735,6 +773,8 @@ for game records.
 
 | ID | Status | Notes |
 |---|---|---|
+| M14 | built (prototype), measured - STOP | Engine E8 on its branch (bd08c48): the channel split, df-pn over the semimove turn tree, incremental attack maps; 6b′ fails at 50-199 boards (M15) |
+| M15 | measured - STOP | 6b′ on a quiet machine: (A) 77.4% / 40.7% / 23.7% / 0.0%; (B) fits in no range; (C) df-pn 408 against brute force 400 under 50 boards - STOP, a design review |
 | M7 | measured - STOP | On real games (t0database, 716 games, max 186 boards): on at k = 8 from 50 to 186 boards; under 50 boards inside the ±10% band and the kill clause turns on it - waiting on the user; above 186 provisional (MEASUREMENTS) |
 | M8 | measured - STOP | 6b re-run (M12): root scan 76.7% / 31.4% / 24.7% / 2.4% by range (< 50 / 50-99 / 100-199 / 200+); rung 1 and quiet-leaf reach fail everywhere; stand-pat valid |
 | M12 | applied - STOP | The bounded optimisation pass (E5c) and the re-run at 5 threads, Lazy SMP: 50-199 boards fail -> STOP, redesign the verification layer |
@@ -1096,6 +1136,32 @@ decision), and what is parked.
 66. **(Tool, not spec)** `t5d-measure`'s game grouping joins distinct games that
     share an opening of 10-21 positions (674 groups for 692 distinct real games);
     harmless for the corpus, misleading for a game database. To fix in the tool.
+67. **The proof channel's forcing class is undefined** (§11.1 "The redesign after
+    6b", M14, M15): which first moves and which completions the attacker may use.
+    6b′ turns on it - checks with a canonical completion decide 77/41/24/0% by
+    range, the literal question 9/3/1/0%. E8: named parameters, placeholder
+    Checks + Canonical.
+68. **"Disproven" in M15 is class-relative** ("no mate within d by the class"), and
+    256 of the 356 disproofs under 50 boards are roots with no checking action at
+    all. Do those count toward the 50%?
+69. **"Hypercuboid-pruned completion" is undefined.** E8 reads it as sound pruning
+    (standing captures, dead passes) plus E4's detector at the defender's turn
+    nodes and E4's listings where turns do not decompose; enumerating completions
+    with the hypercuboid search itself was not built.
+70. **The estimate channel's depth, move set, local model and margins** are
+    unspecified (E8: 3 plies, threats at the first, created boards passed, local
+    check, delta pruning).
+71. **"Fits the rung-1 leaf budget"** needs operationalising (E8, fixed before
+    measuring: p90 of node cost over 5 × measured nodes/s / the size-matched
+    evaluation rate).
+72. **M15's "keep whichever decides more"** has no tie rule, and brute force's and
+    df-pn's "decided" are defined differently.
+73. **The semimove decomposition is exact only under free-order rulesets** (R8,
+    the count rule, Rewinds, no play activation, castling on optional boards);
+    §8.2 and §11.0 item 3 assume order independence. E8 falls back to E4's
+    listings elsewhere.
+74. **Disproofs need a home**: H19 and §11.3 cover proofs only; E8 keeps
+    class-relative disproofs in a separate store, never the solved store.
 
 ## Proposed spec edits
 
@@ -1263,6 +1329,20 @@ says now, what it should say, why.
     boards; above that, provisional.
 55. **The register's open item "Real game records for the |E| curve"**: records
     now measured (t0database); the verdict is provisional only above 186 boards.
+56. **§11.1 "The redesign after 6b", part 2**: state the proof channel's question
+    exactly - mate within d by the attacker's forcing class against every legal
+    defence - with the class's parameters, that disproofs are class-relative and
+    go to a disproof store, never the solved store, and the decomposition's
+    exactness condition with its E4 fallback (issues 67-69, 73, 74) - subject to
+    the design review.
+57. **§11.1 part 1**: the estimate channel's local model (issue 70).
+58. **§11.3 and register H19**: the disproof store, keyed by position, class and
+    depth (issue 74).
+59. **§15.6's CHECKPOINT 3 / 6b′ block and the register (M4 write-back)**: the
+    "fits" operationalisation, both definitions of "decided", the tie rule, and the
+    per-range figures (MEASUREMENTS, 6b′) (issues 71, 72).
+60. **The register, M14 and M15**: 6b′ measured - STOP; the design review's
+    outcome to follow.
 
 ## Session log
 

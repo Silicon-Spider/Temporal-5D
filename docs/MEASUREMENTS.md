@@ -337,6 +337,52 @@ MiB working set; cwmtt/wide 4.6 s; cwmtt/manyChecks 4.4 s (slowest position 1.2 
 `--no-moves-after-shift` (the Guide-literal reading): 10.4 s, output identical to
 E4's default.
 
+### The verification redesign: 6b′ (M14, M15) - 50-199 BOARDS FAIL - M15 OUTCOME: STOP
+
+2026-10-03. Engine E8 (the M14 prototype) at bd08c48 on its branch
+`worktree-agent-a4f2f93a8a448467b` (main ccdbdbd merged in; not yet merged into
+main), Release, g++ 16.2. Quiet machine: under 1% busy before the run (all
+processes, measured over 10 s); during it 19.7% (A), 18.5% (C), 6.5% (B) - the
+tool's own threads. `t5d-scan6bp --per-position --record-list build/corpus.txt`
+over the 41 corpus records, rules R8 (the default): 805 roots and 780 leaves, the
+same positions as 6b. Wall 43.9 s. Raw output `build/6b/6bp-quiet.*` (git-ignored;
+reproducible). M15's tests, unchanged, read per board-count range:
+
+- **(A) the proof channel** - depth-limited df-pn over the semimove-decomposed turn
+  tree, 50 ms of wall clock at 5 threads per root; decided = mate within 5
+  half-turns proven, or disproven within the attacker's class (placeholder class:
+  checking first moves, canonical completion - spec issue 67); pass ≥ 50%.
+- **(B) the estimate channel** - fits the rung-1 leaf budget at p90 (budget = 5 ×
+  239,283 nodes/s / §15.6's size-matched evaluation rate = 125 nodes).
+- **(C) brute force (the E5c scanner) against df-pn**, 50 ms at 5 threads.
+
+| Boards | Roots | (A) df-pn decided | proven / disproven (no class action at the root) / unknown | (C) brute force decided | Leaves | (B) p90 cost / budget |
+|---|---|---|---|---|---|---|
+| < 50 | 527 | **77.4% PASS** | 52 / 356 (256) / 119 | 75.9% (400) | 495 | 2.34 - does not fit |
+| 50-99 | 140 | **40.7% FAIL** | 23 / 34 (22) / 83 | 30.7% | 140 | 6.33 - does not fit |
+| 100-199 | 97 | **23.7% FAIL** | 7 / 16 (12) / 74 | 24.7% | 100 | 15.15 - does not fit |
+| 200+ | 41 | **0.0% FAIL** | 0 / 0 / 41 | 2.4% | 45 | 50.58 - does not fit |
+| pooled (not a verdict) | 805 | 60.6% | 82 / 406 (290) / 317 | 58.1% | 780 | 6.70 |
+
+Where df-pn's work went: attack-map queries 82-86% of node units in every range,
+E4's searches 0.0-0.3%; standing-capture tests cut 1.2-1.5M partial actions per
+range below 200 boards; median nodes per root 651 / 31,958 / 30,125 / 85,921. Below
+50 boards, 256 of the 356 disproofs are roots with no action of the class at all
+(spec issue 68). The estimate channel is 61-87% "tactically live" by range.
+
+Information (E8's runs on a shared machine, not verdicts): 500 ms at 5 threads
+lifts (A) to 45.0% / 34.0% / 2.4% above 50 boards - the shortfall is the trees'
+size, not a constant factor; the literal question (every first move, every
+completion) decides 9.3% / 2.9% / 1.0% / 0.0%; a one-ply estimate channel fits
+below 200 boards (p90 0.20 / 0.53 / 0.99) but is no exchange search.
+
+**M15's outcome, applied as pre-registered: 50-199 boards fail -> STOP: "exact
+verification covers only small positions, and the design's robustness argument
+above them rests on the adversarial league alone - a design review, not a tuning
+pass."** Rung 1 stays dropped (the estimate channel fits in no range). Below 50
+boards df-pn decides more roots than brute force (408 against 400): df-pn is kept
+there.
+
 ### The scanner: 6b (M8, M12) - RE-RUN AFTER THE OPTIMISATION PASS: 50-199 BOARDS FAIL - M12 OUTCOME: STOP
 
 **The re-run (M12), 2026-10-03.** Engine at 8841f4b (E5c merged: the bounded
