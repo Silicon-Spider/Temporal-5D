@@ -2789,7 +2789,13 @@ kept - the asset map runs its own one-board quiescence.
   exhaustive detector where it finds none - so a mated or stalemated attacker is
   decided at once instead of by exhausting its semimove product (the review's 32-board
   position: E4 decides it in a few hundred nodes; the tree had not in 2M). Efficiency
-  only: a test checks that it changes no answer.
+  only: a test checks that it changes no answer. Measured on 6b's roots (2026-10-04,
+  `t5d-scan6bpp --threads 1 --guard-nodes 20000 --hunt-nodes 20000`, with and without
+  `--no-attacker-probe`; information runs, deterministic): Hunt found the same 95 of the
+  truth's 125 mates for 0.4% more nodes; Guard completed deeper at 14 roots and
+  shallower at 4, its depth 1 at 76.4 / 18.7 / 9.4 / 5.0% of each range's roots against
+  75.8 / 18.0 / 6.2 / 2.5% without (an opponent left with no legal action is now
+  decided at every depth at once: 23 roots against 10), for 1.1% fewer nodes. Kept on.
 - **A disproof's class** carries every option that shapes the attacker's class
   (`disproof_shape`: seeds, completion, the canonical completion's cap and values, the
   branch threat, promotions, E5a's tiers, the check filter): provers with different
@@ -2952,6 +2958,17 @@ only its starting position. A first recording (at `832aa30`, the records named b
 path - which the boundary check refuses) gave every verdict, distance, finder, class
 status and cross-check the same; 25 roots' node counts moved with H46's relief fix.
 
+**After stage E9's review** the truth was not re-recorded: no fix changes a verdict of
+it. Its classes ran with the check filter off (the default since `832aa30`; the truth
+was recorded at `1d2d0d7`) and with fresh stores per class and root, so neither the
+filter's J6-twin flaw nor the disproof class's missing options reached it; the attacker
+probe is efficiency only. Checked by recording it again with the fixed prover
+(2026-10-04, 4,962 s on 6 workers, a shared machine): all 825 verdicts, distances,
+finders, lines and cross-checks equal; 13 class statuses moved (12 literal - 11 roots
+from "unknown" to "exhausted", one the other way - and 1 default, from "unknown" to
+"exhausted"), and the literal class's nodes rose 5.1% (the default's fell 0.1%). Its
+provenance was written by `--provenance-only` (its code signature "unrecorded").
+
 | Boards | measured roots | mates | of them: mate in 1 / 3 / 5 half-turns |
 |---|---|---|---|
 | < 50 | 527 | 71 | 52 / 10 / 9 |
@@ -3011,29 +3028,37 @@ threads, 50 ms each - pre-registered, unchanged:
 
 ### 6b″: preliminary figures (a shared machine - not the verdict)
 
-2026-10-03, the merged branch (main at `621cb90`: E6a's search core in), AMD Ryzen 9
-9900X, 24 logical processors, busy 26% during Guard and 27% during Hunt (other agents'
-work and this tool's own threads); Release, g++ 16.2 `-O2`; the default ruleset (R8);
-the committed truth. 805 measured roots (17 checkmated, 2 stalemated and 1 breaking C4
-not measured); Guard counted 788 (16 roots whose record plays nothing after them, 1
-whose next action breaks C4). Wall: Guard 38 s, Hunt 19 s.
+2026-10-04, after stage E9's review (`c99abb4`), **Guard and Hunt as they ship** - the
+check filter off, the attacker probe on - and only proofs E4 confirmed counted; AMD
+Ryzen 9 9900X, 24 logical processors, busy 15% during Guard and 19% during Hunt (other
+agents' work and this tool's own threads); Release, g++ 16.2 `-O2`; the default ruleset
+(R8); the committed truth. 805 measured roots (17 checkmated, 2 stalemated and 1
+breaking C4 not measured); Guard counted 788: of the 17 it did not, 13 records end
+there, 3 go on with an action the engine cannot read or play (ctp1 #9, verysmall #2,
+cwmtt/futures #16 - labelled "plays nothing after it" before the review), 1 next action
+breaks C4. Wall: Guard 38 s, Hunt 19 s.
 
 | Boards | Guard: depth 1 completed (of roots) | completed depth 0 / 1 / 2 / 3 / 4 / 8 | refuted (at depth 1) | Hunt: truth mates found | Verdict |
 |---|---|---|---|---|---|
-| < 50 | **64.9%** of 513 - FAIL | 219 / 269 / 14 / 3 / 1 / 7 | 42 (39) | **70.4%** (50 of 71) - PASS | adopt Hunt; Guard not adopted |
-| 50-99 | **15.1%** of 139 - FAIL | 122 / 15 / 0 / 0 / 0 / 2 | 4 (4) | **63.6%** (21 of 33) - PASS | adopt Hunt; Guard not adopted |
+| < 50 | **65.1%** of 513 - FAIL | 218 / 265 / 16 / 3 / 1 / 10 | 42 (39) | **69.0%** (49 of 71) - PASS | adopt Hunt; Guard not adopted |
+| 50-99 | **16.5%** of 139 - FAIL | 121 / 15 / 0 / 0 / 0 / 3 | 5 (5) | **63.6%** (21 of 33) - PASS | adopt Hunt; Guard not adopted |
 | 100-199 | **5.2%** of 96 - FAIL | 94 / 1 / 0 / 0 / 0 / 1 | 3 (3) | **35.0%** (7 of 20) - FAIL | neither |
-| 200+ | **0.0%** of 40 - FAIL | 40 / 0 / 0 / 0 / 0 / 0 | 0 | **0.0%** (0 of 1) - FAIL | neither |
+| 200+ | **0.0%** of 40 - FAIL | 40 / 0 / 0 / 0 / 0 / 0 | 0 | **0.0%** (0 of 1) - FAIL, too few to read | neither |
 
 (Completed depth 8: the record's move left the opponent no legal action.) Hunt found no
-mate the truth lacks. Every refutation and mate was cross-checked against E4 alone:
-Guard's 48 confirmed, 1 incomplete (a node solved from another thread's tree); Hunt's 78
-confirmed - none refuted. (A run before the merge, with the first recording: Guard
-64.7 / 15.1 / 5.2 / 0.0%, Hunt 69.0 / 63.6 / 30.0 / 0.0% - the same verdicts.)
+mate the truth lacks. Every refutation and mate was cross-checked against E4 alone and
+confirmed: Guard's 50, Hunt's 77 - none incomplete, none refuted.
 
 **M17's verdicts, applied mechanically: adopt Hunt below 100 boards; adopt Guard
-nowhere.** §13's notes: the chosen move goes unguarded in every range; from 100 boards
-up, proofs come only from the search's solver. No outcome stops anything.
+nowhere** - the same as before the review. §13's notes: the chosen move goes unguarded
+in every range; from 100 boards up, proofs come only from the search's solver. No
+outcome stops anything.
+
+The figures before the review (2026-10-03: Guard 64.9 / 15.1 / 5.2 / 0.0%, Hunt 70.4 /
+63.6 / 35.0 / 0.0%) were measured with the prover's check filter **on** - the tool's
+default then, not Guard's - while the filter was unsound (J6's twins), and counted
+proofs whether E4 confirmed them or not (Guard's 48 refutations were, 1 was
+incomplete). They gave the same verdicts.
 
 What the verdicts rest on (information, the same run):
 - **Guard's cost is the opponent's action product.** Depth 1 must refute every
@@ -3042,14 +3067,14 @@ What the verdicts rest on (information, the same run):
   check" 301,000 times and by an escape search 60,000 times there - and depth 1 still
   completed in only 65% of roots. Where the opponent plays one or two boards it
   completes at once; with more, not in 50 ms. The check filter does not change this
-  (on: no better, its construction costs a map advance per move); Lazy SMP's helpers
-  re-search the same product (an exhaustive refutation shares little through the
-  stores).
-- **The refutations are real:** 49 of the records' next moves (6%) allow a forced
+  (it cuts almost nothing, and its construction costs a map advance per move); Lazy
+  SMP's helpers re-search the same product (an exhaustive refutation shares little
+  through the stores).
+- **The refutations are real:** 50 of the records' next moves (6%) allow a forced
   mate - these are test records, many played into checkmate - each confirmed by E4.
 - **Hunt** finds the shallow mates below 100 boards. At 100-199 boards every one of the
   truth's 20 mates is a mate in one, and Hunt's own class found all 20 in the long
-  search - but in 50 ms (a median 23,000 nodes at 5 threads) Hunt reaches 7: its root
+  search - but in 50 ms (a median 25,000 nodes at 5 threads) Hunt reaches 7: its root
   expansion completes every checking seed (a canonical completion each) and tests each
   defence before it descends, and at that size that does not finish. A root expanded
   lazily - a child tested as it is made - is the obvious remedy (not built: the
@@ -3063,11 +3088,10 @@ build/engine/t5d-scan6bpp --truth engine/testdata/hunt-truth --record-list build
     --per-position --json build/6b/6bpp-quiet.json --summary build/6b/6bpp-quiet.txt
 ```
 
-(`build/corpus.txt`: the 41 records, one path per line, relative to the root - the
-same list, in the same order, the truth was recorded from; the records are named by
-content, CRLF read as LF, so the checkout's line endings do not matter; the tool
-refuses a truth whose bytes or roots do not match. About a minute: Guard 38 s, Hunt 19
-s, then the cross-checks.)
+(`build/corpus.txt`: the 41 records, one path per line, relative to the root - every
+`[[record]]` of `oracles/corpus/manifest.toml` in order, as "Hunt's ground truth" says;
+the tool refuses a list whose content ids, in order, are not the truth's provenance's.
+About a minute: Guard 38 s, Hunt 19 s, then the cross-checks.)
 
 ### As built: the parameters (placeholders, named, with their alternatives)
 
@@ -3150,6 +3174,13 @@ old size where it was cut):
   written there: a record that ends, one that goes on with an action the engine cannot
   read, one with an illegal move - each last root labelled truthfully; content ids
   read CRLF as LF; duplicates dropped; a missing record list refused.
+- **Mutations** (2026-10-04, each applied alone, E9's 47 default tests run): the
+  review's ten that built (M1a, M1b, M2, M3, M5, M6a, M6c, M8, M9, M11 - of which M1b,
+  M3, M5 and M11 survived before) and sixteen undoing this round's fixes (the J6 twins,
+  the disproof class, Guard's depth limit, shared certificates, the attacker probe,
+  6b″'s counting of unconfirmed proofs and its withholding, the three thresholds and
+  range edges off by one, the unreadable label, the provenance's order and record
+  checks, Hunt's export refusal) - all 26 caught.
 ## 5DFEN
 
 `parse_fen_board` reads one board string, `[pieces:timeline:turn:colour]`, for a
