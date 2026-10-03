@@ -6,7 +6,8 @@ or files; ``os.pathsep`` between entries) - e.g. the gate's corpus, read as inpu
 Each record is replayed as the gate's parse mode does (pseudo-legal submissions), every
 position is converted and checked against the engine (``helpers.check_position``), and the
 replay stops at the first action the engine refuses (a record the engine reads differently,
-or one under rules Q4's other reading) - that is the gate's business, not this test's.
+or - under Q4's Guide-literal reading, no longer the default since engine stage E7 - one
+that moves after the present has shifted) - that is the gate's business, not this test's.
 """
 
 from __future__ import annotations

@@ -81,6 +81,24 @@ TEST(rules_defaults_are_the_standard_ruleset) {
   CHECK(!r.history_dependent_activity());
   CHECK(r.promotions.contains(PieceKind::Queen));
   CHECK(!r.promotions.contains(PieceKind::Rook));
+  CHECK(r.moves_after_shift);  // Q4, ruled R8 (register D8)
+  CHECK(r.mandatory == MandatoryBoards::InPresent);  // Q5, settled R9
+}
+
+TEST(rules_q4_encoding_bit_marks_the_guide_literal_reading_r8) {
+  // R8 made moves after the shift the default (stage E7); the default
+  // encoding stays 0, so bit 3 now marks the Guide-literal reading - no move
+  // once the present has shifted - and means the opposite of what it meant
+  // before. Its ruleset ID is the one that bit always had.
+  RuleOptions guide;
+  guide.moves_after_shift = false;
+  CHECK_EQ(guide.encode(), std::uint64_t{1} << 3);
+  CHECK_NE(guide.ruleset_id(), 0u);
+  CHECK_EQ(describe(guide), std::string("moves_after_shift=false (Q4)"));
+  CHECK(!RuleOptions::decode(std::uint64_t{1} << 3).moves_after_shift);
+  CHECK(RuleOptions::decode(0).moves_after_shift);
+  CHECK(RuleOptions::decode(guide.encode()) == guide);
+  CHECK(!guide.history_dependent_activity());
 }
 
 TEST(rules_every_option_changes_the_ruleset_id) {
@@ -93,7 +111,7 @@ TEST(rules_every_option_changes_the_ruleset_id) {
   with([](RuleOptions& r) { r.activation = ActivationRule::Consecutive; });
   with([](RuleOptions& r) { r.initial_credit = InitialTimelineCredit::MinusZeroToBlack; });
   with([](RuleOptions& r) { r.play_activates = true; });
-  with([](RuleOptions& r) { r.moves_after_shift = true; });
+  with([](RuleOptions& r) { r.moves_after_shift = false; });  // Q4's Guide-literal reading
   with([](RuleOptions& r) { r.mandatory = MandatoryBoards::AllActive; });
   with([](RuleOptions& r) { r.reactivation = Reactivation::Deferred; });
   with([](RuleOptions& r) { r.turn_zero_reachable = false; });

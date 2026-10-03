@@ -1202,7 +1202,8 @@ Move PgnReplay::resolve(const GameState& state, const PgnMove& w) const {
     fault(RecordFault::IllegalMove,
           colour_name(mover) + "'s action has met its obligations - the present has shifted to " +
               colour_name(opposite(mover)) +
-              "'s colour (T5) - and no move may be made after that (Q4)");
+              "'s colour (T5) - and under Q4's Guide-literal reading (moves_after_shift = "
+              "false) no move may be made after that");
   }
 
   // The source board(s).

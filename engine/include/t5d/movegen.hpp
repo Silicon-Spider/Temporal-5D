@@ -5,8 +5,9 @@
 // geometry (4.1-4.13), paths through boards (J7, J8), destinations (J2, L4,
 // L6), castling's own conditions (S1-S5), en passant (S7), promotion (S8) -
 // and the action's bookkeeping: it starts on a playable board of the mover's
-// that has not been played yet this action (L5, T3), and no move is offered
-// once the action's obligations are met (Q4, unless the ruleset allows it).
+// that has not been played yet this action (L5, T3) - after the action's
+// obligations are met too, until submission (Q4, ruled R8), unless the ruleset
+// is Q4's Guide-literal reading, which offers no move once they are met.
 // Whether the action it belongs to leaves a royal piece capturable (C4) is NOT
 // tested here: that is the check ruling's, at submission (R1; t5d/check.hpp).
 //
@@ -69,7 +70,8 @@ namespace t5d {
 
 /// Every pseudo-legal move of the player to move, from every playable board
 /// of the mover's colour. Clears `out` first; reusing one list across calls
-/// avoids reallocating. Empty when no move may be made now (Q4).
+/// avoids reallocating. Empty when no move may be made now (Q4's Guide-literal
+/// reading, after the shift) or no playable board of the mover's is left.
 void generate_moves(const GameState& state, MoveList& out);
 
 /// A geometric relation of one of the mover's pieces (design spec §6, "Typed
@@ -115,7 +117,7 @@ struct RelationKinds {
 /// generate_moves - the same moves, in the same order - and, in the same pass,
 /// the geometric relations `kinds` asks for, of the same pieces (the mover's
 /// pieces on the boards the moves start from; none when no move may be made
-/// now, Q4). Clears both lists first. Order: the moves' (playable boards by
+/// now). Clears both lists first. Order: the moves' (playable boards by
 /// ascending timeline, pieces by ascending square, directions in table order).
 void generate_moves(const GameState& state, MoveList& out, RelationList& relations,
                     RelationKinds kinds);

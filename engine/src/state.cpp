@@ -296,7 +296,8 @@ void GameState::apply(const Move& m) {
     throw std::logic_error(
         "move " + to_string(m, mv_.even()) +
         ": no move may be made now - the action's obligations are met (the present has shifted "
-        "to the opponent), so it must be submitted (T5; Q4)");
+        "to the opponent), so it must be submitted (T5) - under Q4's Guide-literal reading "
+        "(moves_after_shift = false; the default, R8, allows moves until submission)");
   }
   const Colour mover = to_move();
   const BoardSize size = mv_.board_size();

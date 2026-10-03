@@ -8,6 +8,7 @@ handle's next call.
 
 from __future__ import annotations
 
+import ctypes
 import gc
 
 import numpy as np
@@ -26,7 +27,15 @@ from t5d.engine import (
     find_library,
     load_library,
 )
-from t5d.engine.capi import MOVE_DTYPE, MoveRecord
+from t5d.engine.capi import (
+    MIRRORED_STRUCTS,
+    MOVE_DTYPE,
+    T5D_RULES_MOVES_AFTER_SHIFT,
+    T5D_RULES_NO_MOVES_AFTER_SHIFT,
+    CExpansion,
+    MoveRecord,
+    layout_mismatches,
+)
 from t5d.engine.errors import error_for
 from t5d.engine.expansion import Move, timeline_label
 from t5d.engine.game import relation_bits
@@ -167,8 +176,13 @@ def test_apply_by_record_and_by_index_and_submit():
         x = g.expand(square_features="none")
         e4 = next(m for m in x.move_list() if m.text() == "(0T1)Pe2(0T1)e4")
         g.apply(e4)
-        assert g.info().obligations_met and not g.info().may_move  # Q4: no move after the shift
+        # Q4, ruled R8 (the default): moves may follow the shift until submission - but the one
+        # board has been played (T3), so there is none, and submitting is possible and legal (D8)
+        info = g.info()
+        assert info.obligations_met and info.may_move and info.may_submit
         assert g.moves() == []
+        after = g.expand(square_features="none")
+        assert (after.acting_player, after.present & 1, after.submit_possible, after.submit_legal) == (0, 1, True, True)
         g.submit()
         assert g.info().to_move == 1
         x = g.expand(square_features="none")
@@ -177,6 +191,52 @@ def test_apply_by_record_and_by_index_and_submit():
         g.submit()
         assert g.info().present == 4
         assert g.snapshot().boards[-1][2] == "[r*nbqk*bnr*/p*p*p*p*1p*p*p*/8/4p3/4P3/8/P*P*P*P*1P*P*P*/R*NBQK*BNR*:0:2:w]"
+
+
+@requires_engine
+def test_q4_guide_literal_reading_is_bit_3_and_refuses_moves_after_the_shift():
+    """Engine stage E7: bit 3 of the ruleset encoding marks Q4's Guide-literal reading (no move
+    once the present has shifted); the old name for moves after the shift is now 0, the default."""
+    assert (T5D_RULES_NO_MOVES_AFTER_SHIFT, T5D_RULES_MOVES_AFTER_SHIFT) == (1 << 3, 0)
+    with Game.variant("Standard", rules=T5D_RULES_MOVES_AFTER_SHIFT) as g:
+        assert (g.info().rules, g.info().ruleset) == (0, 0)
+    late = '[Board "custom"]\n[5/5/5/5/R4:0:1:w]\n[5/5/5/5/R4:+1:2:w]\n'
+    for rules, moves_after in ((0, 8), (T5D_RULES_NO_MOVES_AFTER_SHIFT, 0)):
+        with Game.from_pgn(late, rules) as g:
+            assert g.info().rules == rules
+            g.apply(next(m for m in g.moves() if m.text() == "(0T1)Ra1(0T1)a2"))
+            info = g.info()
+            assert info.obligations_met and info.may_submit
+            assert info.may_move == (rules == 0)
+            x = g.expand(square_features="none")
+            assert x.move_count == moves_after  # the rook on +1: a2-a5, b1-e1, under R8 only
+            assert (x.acting_player, x.present & 1, x.submit_possible, x.submit_legal) == (0, 1, True, True)
+            g.submit()
+            assert g.info().to_move == 1
+
+
+@requires_engine
+def test_the_binding_mirrors_the_librarys_struct_layouts():
+    """Every mirrored struct's size and field offsets equal the library's own (t5d_layout); a
+    struct that differs - a binding older than its library - is named."""
+    lib = load_library()
+    assert layout_mismatches(lib) == []
+    # D8's three int32 come last, after every older field (engine stage E7)
+    tail = (CExpansion.acting_player.offset, CExpansion.submit_possible.offset, CExpansion.submit_legal.offset)
+    assert tail[0] >= CExpansion.src_extra.offset + ctypes.sizeof(ctypes.c_void_p)
+    assert tail == (tail[0], tail[0] + 4, tail[0] + 8)
+    if ctypes.sizeof(ctypes.c_void_p) == 8:
+        assert tail == (272, 276, 280) and ctypes.sizeof(CExpansion) == 288
+
+    class OldExpansion(ctypes.Structure):  # before stage E7: no acting player, no submit action
+        _fields_ = CExpansion._fields_[:-3]
+
+    try:
+        MIRRORED_STRUCTS["t5d_expansion"] = OldExpansion
+        found = layout_mismatches(lib)
+    finally:
+        MIRRORED_STRUCTS["t5d_expansion"] = CExpansion
+    assert any(m.startswith("t5d_expansion: size") for m in found)
 
 
 @requires_engine

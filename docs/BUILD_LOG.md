@@ -55,16 +55,22 @@ register M14, M15, H1, H6, H10, reversal 22):
   a machine with 6+ hardware threads, each run logged ("The Lazy SMP timing test
   log", below).
 
-**Running (2026-10-03),** each in its own worktree: engine **E8**, the M14
-prototype and the 6b′ tool; engine **E7** finishing (main merged in, the Python
-binding updated, its last long test, the timing test); the **t0database
-analysis** (the |E| curve on the 716 games that replay, M7's rule applied, the 45
-refused games classified - 13 of them refused because the present would not move
-on, which may be an engine defect or the records'); the **many2 conversion** in
-the harness. **Then:** merge E7; rebase E6a onto it, review, merge; on a quiet
-machine, the decisive 6b′ run (STOP if 50-199 fail) and the golden re-record for
-many2 (`golden --write --repeat 2`); the gate with the engine configured; N5;
-N3's CPU wall times.
+**Done since the ruling (2026-10-03):** engine **E7 merged** with the Python
+binding (Q4 as ruled is the default; D8's acting player and submit availability
+in the expansion; `t5d_layout`, checked by the binding at load); the
+**t0database analysis** (M7 measured on real games - under 50 boards in the STOP
+band, waiting on the user; the 45 refused games classified, the 13 present-shift
+ones unfinished final turns, no engine defect); the **many2 conversion** built and
+reviewed on branch `worktree-agent-aa6c512c8bab6f3a8` (2a0b207), not merged - it
+merges with the re-recorded golden files. **Running:** engine **E8**, the M14
+prototype and the 6b′ tool. **Then:** rebase E6a onto main, review, merge; on a
+quiet machine, the decisive 6b′ run (STOP if 50-199 fail) and the many2 merge with
+`golden --write --repeat 2`; the gate with the engine configured; N5; N3's CPU
+wall times. **Long tests owed on main:** E5c's
+`long_scanner_evasion_probe_keeps_the_proofs` and
+`long_scanner_lazy_smp_no_false_proofs` (not yet run on the merged code) and
+`long_scanner_proofs_under_every_alternative_ruleset` (over 1.5 h under either
+reading; never run to completion).
 
 ### CHECKPOINT 2 - stopped 2026-10-02 on 6b, ruled the same day; the run resumed
 
@@ -253,6 +259,8 @@ threads reach at least one thread's sum (one retry on a shared machine).
 
 | Date | Merge | Commit tested | Machine | Positions | 1 thread | 5 threads | Retry | Result |
 |---|---|---|---|---|---|---|---|---|
+| 2026-10-03 | E7 | 2e7ee18 (E7's branch, main merged in) | dev, 24 logical; E8 running; load 5-12% before, 12-26% during | 32 | 293 | 311 / 313 / 309 (three runs) | none | pass x3 |
+| 2026-10-03 | E7 | main + E7, merged tree before the commit | dev, 24 logical; E8 running; load 23% | 32 | 293 | 311 / 311 / 313 (three runs) | none | pass x3 |
 
 ## Environment
 
@@ -1021,7 +1029,11 @@ decision), and what is parked.
     opponent's turn. Under the default rules such a state has no moves (Q4), so
     search submits first; under Q4's other reading it has moves and the network
     cannot represent it - the converter refuses it (`PresentMismatch`). Proposed
-    spec edit 42. Bears on the Q4 ruling.
+    spec edit 42. Bears on the Q4 ruling. *Ruled (D8, CHECKPOINT 2):* a global
+    acting-player input and a submit action. The engine side is built (E7:
+    `acting_player`, `submit_possible`, `submit_legal` in the expansion); the
+    network side (the input, the submit logit, and dropping `PresentMismatch`) is
+    N5.
 49. **§8.1's "generator-supplied legal moves"**: the C API offers pseudo-legal
     moves (spec issues 28, 46), so the policy scores pseudo-legal moves until the
     expansion's move set is decided. Proposed spec edit 41.
@@ -1214,9 +1226,10 @@ says now, what it should say, why.
     and en passant attack tests (H40)" (issue 47).
 41. **§8.1**: say whether the pointer head scores pseudo-legal moves, legal first
     moves, or actions - with D2 and spec issues 28, 46 (issue 49).
-42. **§2.3 / A3**: either add the player to move as a global input feature, or
-    state that leaves are evaluated only at action boundaries or before the
-    present shifts - needed under Q4's other reading (issue 48).
+42. *Withdrawn - superseded by D8 (CHECKPOINT 2), which the upstream documents
+    now carry.* ~~§2.3 / A3: either add the player to move as a global input
+    feature, or state that leaves are evaluated only at action boundaries or
+    before the present shifts - needed under Q4's other reading (issue 48).~~
 43. **§6, §15.6 ("expansion - legal moves") and §11.0 item 3**: "legal moves" is
     not defined beyond R1. Proposed: "the moves not proved illegal - each marked
     legal or unknown - by the rules engine's sound tiers under a budget (exact on

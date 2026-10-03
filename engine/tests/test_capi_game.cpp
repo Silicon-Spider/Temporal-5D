@@ -2,6 +2,7 @@
 // from a variant; replayed, moved, submitted; expanded - every array the C API
 // hands out equal to the C++ expansion of the same state; errors; ownership.
 
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <string>
@@ -98,6 +99,9 @@ void check_view(const t5d_expansion& v, const Expansion& x) {
   CHECK(same(v.window, x.window(), v.window_count));
   CHECK(same(v.e_boards, x.e_boards(), v.e_count));
   CHECK(same(v.src_extra, x.src_extra(), v.src_extra_count));
+  CHECK_EQ(v.acting_player, index_of(x.acting_player()));
+  CHECK_EQ(v.submit_possible, x.submit_possible() ? 1 : 0);
+  CHECK_EQ(v.submit_legal, x.submit_legal() ? 1 : 0);
 }
 
 synthetic::Game sample_game() {
@@ -240,17 +244,28 @@ TEST(capi_game_from_fen_and_variant) {
   CHECK_EQ(total, size_t{0});
   CHECK_EQ(t5d_game_replay_next(standard.p, nullptr), T5D_ERR_ARGUMENT);  // no record
 
-  // A ruleset by its encoding: Q4's other reading.
+  // A ruleset by its encoding: Q4's Guide-literal reading (bit 3 since R8
+  // made moves after the shift the default; T5D_RULES_MOVES_AFTER_SHIFT is
+  // now the default's 0).
   Game q4;
-  REQUIRE_EQ(t5d_game_new_variant("standard - two timelines", T5D_RULES_MOVES_AFTER_SHIFT, &q4.p,
-                                  nullptr),
+  REQUIRE_EQ(t5d_game_new_variant("standard - two timelines", T5D_RULES_NO_MOVES_AFTER_SHIFT,
+                                  &q4.p, nullptr),
              T5D_OK);
   t5d_game_summary info{};
   CHECK_EQ(t5d_game_info(q4.p, &info), T5D_OK);
-  CHECK_EQ(info.rules, T5D_RULES_MOVES_AFTER_SHIFT);
+  CHECK_EQ(info.rules, T5D_RULES_NO_MOVES_AFTER_SHIFT);
+  CHECK_EQ(info.rules, std::uint64_t{1} << 3);
   CHECK(info.ruleset != 0u);
   CHECK_EQ(info.even, 1);
   CHECK_EQ(info.timelines, 2);
+  CHECK_EQ(T5D_RULES_MOVES_AFTER_SHIFT, T5D_RULES_STANDARD);
+  Game ruled;
+  REQUIRE_EQ(t5d_game_new_variant("standard - two timelines", T5D_RULES_MOVES_AFTER_SHIFT,
+                                  &ruled.p, nullptr),
+             T5D_OK);
+  CHECK_EQ(t5d_game_info(ruled.p, &info), T5D_OK);
+  CHECK_EQ(info.rules, std::uint64_t{0});
+  CHECK_EQ(info.ruleset, 0u);
 
   // A copy is independent.
   Game copy;
@@ -422,6 +437,101 @@ TEST(capi_game_submissions_are_legal_by_default) {
   CHECK_EQ(t5d_game_set_legality(nullptr, T5D_LEGAL, nullptr), T5D_ERR_ARGUMENT);
 }
 
+TEST(capi_expansion_says_who_acts_and_whether_submitting_is_legal_d8) {
+  // Register D8 (rulebook R8): turns have variable length, so submitting is
+  // an action. Appended to t5d_expansion at stage E7, after every older field
+  // (python/t5d/engine/capi.py mirrors the layout): acting_player,
+  // submit_possible, submit_legal - three int32, in that order.
+  static_assert(offsetof(t5d_expansion, acting_player) >=
+                offsetof(t5d_expansion, src_extra) + sizeof(const int32_t*));
+  static_assert(offsetof(t5d_expansion, submit_possible) ==
+                offsetof(t5d_expansion, acting_player) + sizeof(int32_t));
+  static_assert(offsetof(t5d_expansion, submit_legal) ==
+                offsetof(t5d_expansion, submit_possible) + sizeof(int32_t));
+  static_assert(sizeof(t5d_expansion) >= offsetof(t5d_expansion, submit_legal) + sizeof(int32_t));
+
+  // 1. e4 / f6 2. Qh5: Black to move, the queen on h5 eyes the king on e8.
+  const std::string record = "1. e4 / f6 2. Qh5\n";
+  for (const uint64_t rules : {T5D_RULES_STANDARD, T5D_RULES_NO_MOVES_AFTER_SHIFT}) {
+    Game game;
+    REQUIRE_EQ(t5d_game_new_from_pgn(record.data(), record.size(), rules, &game.p, nullptr), T5D_OK);
+    for (int a = 0; a < 3; ++a) REQUIRE_EQ(t5d_game_replay_next(game.p, nullptr), T5D_OK);
+    t5d_expansion v{};
+    REQUIRE_EQ(t5d_game_expand(game.p, nullptr, &v, nullptr), T5D_OK);
+    CHECK_EQ(v.acting_player, 1);
+    CHECK_EQ(v.acting_player, v.to_move);
+    CHECK_EQ(v.present & 1, 1);  // the turn's start: the present is Black's
+    CHECK_EQ(v.submit_possible, 0);
+    CHECK_EQ(v.submit_legal, 0);
+    // ... a6 ignores the queen: the present shifts to White, so submitting is
+    // possible - but not legal (C4, R1): the queen can take the king.
+    t5d_move a6{};
+    a6.from_timeline = a6.to_timeline = 0;
+    a6.from_half_turn = a6.to_half_turn = 2 * 2 + 1;  // (0T2), Black to move
+    a6.from_square = 6 * 8 + 0;                        // a7
+    a6.to_square = 5 * 8 + 0;                          // a6
+    REQUIRE_EQ(t5d_game_apply(game.p, &a6, nullptr), T5D_OK);
+    REQUIRE_EQ(t5d_game_expand(game.p, nullptr, &v, nullptr), T5D_OK);
+    CHECK_EQ(v.acting_player, 1);  // still Black's action
+    CHECK_EQ(v.present & 1, 0);    // though the present is White's
+    CHECK_EQ(v.submit_possible, 1);
+    CHECK_EQ(v.submit_legal, 0);
+    CHECK_EQ(v.may_move, rules == T5D_RULES_STANDARD ? 1 : 0);  // R8, or Q4's Guide-literal reading
+    CHECK_EQ(v.move_count, size_t{0});  // either way: the one board has been played
+    CHECK_EQ(t5d_game_submit(game.p, nullptr), T5D_ERR_ILLEGAL);
+    t5d_game_summary info{};
+    CHECK_EQ(t5d_game_info(game.p, &info), T5D_OK);
+    CHECK_EQ(info.obligations_met, 1);
+    CHECK_EQ(info.may_submit, 0);
+  }
+  // A legal submission: 1. e3 - possible and legal.
+  Game game;
+  REQUIRE_EQ(t5d_game_new_variant("Standard", T5D_RULES_STANDARD, &game.p, nullptr), T5D_OK);
+  t5d_move e3{};
+  e3.from_half_turn = e3.to_half_turn = 2;  // (0T1), White to move
+  e3.from_square = 1 * 8 + 4;               // e2
+  e3.to_square = 2 * 8 + 4;                 // e3
+  REQUIRE_EQ(t5d_game_apply(game.p, &e3, nullptr), T5D_OK);
+  t5d_expansion v{};
+  REQUIRE_EQ(t5d_game_expand(game.p, nullptr, &v, nullptr), T5D_OK);
+  CHECK_EQ(v.acting_player, 0);
+  CHECK_EQ(v.present & 1, 1);
+  CHECK_EQ(v.submit_possible, 1);
+  CHECK_EQ(v.submit_legal, 1);
+  CHECK_EQ(t5d_game_submit(game.p, nullptr), T5D_OK);
+}
+
+TEST(capi_layout_reports_the_structs_as_compiled) {
+  // t5d_layout: what a binding checks its mirrors against at load (stage E7).
+  size_t v = 0;
+  REQUIRE_EQ(t5d_layout("t5d_expansion", nullptr, &v), T5D_OK);
+  CHECK_EQ(v, sizeof(t5d_expansion));
+  REQUIRE_EQ(t5d_layout("t5d_expansion", "acting_player", &v), T5D_OK);
+  CHECK_EQ(v, offsetof(t5d_expansion, acting_player));
+  REQUIRE_EQ(t5d_layout("t5d_expansion", "submit_possible", &v), T5D_OK);
+  CHECK_EQ(v, offsetof(t5d_expansion, submit_possible));
+  REQUIRE_EQ(t5d_layout("t5d_expansion", "submit_legal", &v), T5D_OK);
+  CHECK_EQ(v, offsetof(t5d_expansion, submit_legal));
+  REQUIRE_EQ(t5d_layout("t5d_expansion", "src_extra", &v), T5D_OK);
+  CHECK_EQ(v, offsetof(t5d_expansion, src_extra));
+  REQUIRE_EQ(t5d_layout("t5d_move", nullptr, &v), T5D_OK);
+  CHECK_EQ(v, size_t{32});
+  REQUIRE_EQ(t5d_layout("t5d_move", "flags", &v), T5D_OK);
+  CHECK_EQ(v, size_t{31});
+  REQUIRE_EQ(t5d_layout("t5d_game_summary", "rules", &v), T5D_OK);
+  CHECK_EQ(v, offsetof(t5d_game_summary, rules));
+  for (const char* type : {"t5d_fingerprint", "t5d_info", "t5d_expand_options", "t5d_game_summary"}) {
+    CHECK_EQ(t5d_layout(type, nullptr, &v), T5D_OK);
+    CHECK(v > 0);
+  }
+  v = 7;
+  CHECK_EQ(t5d_layout("t5d_state", nullptr, &v), T5D_ERR_ARGUMENT);  // opaque: no layout
+  CHECK_EQ(t5d_layout("t5d_expansion", "no_such_field", &v), T5D_ERR_ARGUMENT);
+  CHECK_EQ(t5d_layout(nullptr, nullptr, &v), T5D_ERR_ARGUMENT);
+  CHECK_EQ(t5d_layout("t5d_move", nullptr, nullptr), T5D_ERR_ARGUMENT);
+  CHECK_EQ(v, size_t{7});  // unchanged on failure
+}
+
 TEST(rule_options_decode_inverts_encode) {
   std::vector<RuleOptions> all(1);
   const auto add = [&](auto set) {
@@ -432,7 +542,7 @@ TEST(rule_options_decode_inverts_encode) {
   add([](RuleOptions& r) { r.activation = ActivationRule::Consecutive; });
   add([](RuleOptions& r) { r.initial_credit = InitialTimelineCredit::MinusZeroToBlack; });
   add([](RuleOptions& r) { r.play_activates = true; });
-  add([](RuleOptions& r) { r.moves_after_shift = true; });
+  add([](RuleOptions& r) { r.moves_after_shift = false; });  // Q4's Guide-literal reading
   add([](RuleOptions& r) { r.mandatory = MandatoryBoards::AllActive; });
   add([](RuleOptions& r) { r.reactivation = Reactivation::Deferred; });
   add([](RuleOptions& r) { r.turn_zero_reachable = false; });
@@ -460,7 +570,7 @@ TEST(rule_options_decode_inverts_encode) {
     r.promotions = PromotionSet::of({PieceKind::Queen, PieceKind::Knight, PieceKind::Princess});
   });
   add([](RuleOptions& r) {
-    r.moves_after_shift = true;
+    r.moves_after_shift = false;
     r.past_self_blocks = false;
     r.family = RuleFamily::ReversedRoyalty;
     r.promotions = PromotionSet::of({PieceKind::RoyalQueen});

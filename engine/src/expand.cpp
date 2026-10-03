@@ -14,6 +14,7 @@
 #include <string>
 
 #include "t5d/board.hpp"
+#include "t5d/check.hpp"
 #include "t5d/multiverse.hpp"
 #include "t5d/search.hpp"
 
@@ -386,6 +387,10 @@ void expand(const GameState& state, const ExpandOptions& options, Expansion& out
   out.to_move_ = state.to_move();
   out.present_ = state.present();
   out.may_move_ = state.may_move();
+  // D8: the submit action - possible once the obligations are met (T5), legal
+  // when C4 holds too (the submission test itself; it allocates nothing).
+  out.submit_possible_ = state.obligations_met();
+  out.submit_legal_ = out.submit_possible_ && royals_safe(state);
   out.window_k_ = options.window_k;
   out.timeline_count_ = mv.timeline_count();
   out.board_count_ = n;

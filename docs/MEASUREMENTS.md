@@ -324,6 +324,19 @@ itself, not |E|, dominates the scope (at 160-239 boards W(8) = 122 against the
 table's 69). The rule needs real game records (spec issue 26; requested from the
 user); the window code stays parked (M5, M7).
 
+### Engine E7 - the gate's full mode on the corpus under R8 (2026-10-02/03)
+
+Machine: dev, g++ 16.2 -O2. `t5d-gate --cap 1000` with the default detector
+portfolio, one process at a time, 600 s limit per record, the default rules (now
+R8). Shared machine: other agents' t5d-scan6b runs during the first run, a long
+test beside the second. 41 records: 36.1 s in all (first run), 43.7 s (second).
+Slowest records: cwmtt/niceAndrey 14.3 s (19.9 s) for 122 positions, slowest
+position 0.38 s; cwmtt/100_timelines 4.9 s (5.5 s), slowest position 1.9 s, 128
+MiB working set; cwmtt/wide 4.6 s; cwmtt/manyChecks 4.4 s (slowest position 1.2 s,
+101 MiB). Every other record under 2 s; peak private memory 131 MiB. Under
+`--no-moves-after-shift` (the Guide-literal reading): 10.4 s, output identical to
+E4's default.
+
 ### The scanner: 6b (M8, M12) - RE-RUN AFTER THE OPTIMISATION PASS: 50-199 BOARDS FAIL - M12 OUTCOME: STOP
 
 **The re-run (M12), 2026-10-03.** Engine at 8841f4b (E5c merged: the bounded

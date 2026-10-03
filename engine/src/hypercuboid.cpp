@@ -186,11 +186,15 @@ constexpr std::size_t kAbstractSteps = 1u << 12;
 
 // How a point's moves may be ordered - which realisation is exact.
 enum class Regime : std::uint8_t {
-  // Q4's default, and activity changed by creations alone, deterministically
-  // in their number (count or consecutive activation, Rewinds; T11/T12
-  // reactivation included); castling allowed on optional boards.
+  // Q4's Guide-literal reading (no move once the present has shifted), and
+  // activity changed by creations alone, deterministically in their number
+  // (count or consecutive activation, Rewinds; T11/T12 reactivation
+  // included); castling allowed on optional boards.
   Ordered,
-  // Q4's other reading (moves after the shift), otherwise as Ordered.
+  // Q4's ruled reading (R8, the default: moves after the shift, until
+  // submission), otherwise as Ordered - the default rules' regime. Any order
+  // J6 allows is valid, so the realisation is one order per creation order
+  // and the abstract check's end is the plain moves after the creations.
   FreeOrder,
   // Anything else (Q3's play activation, Q6's deferral, castling on
   // mandatory boards only): every order is searched.
@@ -209,9 +213,9 @@ class Hyper {
         mover_(run.start.to_move()) {}
 
   void search() {
-    // A state whose action is over (its obligations met and, Q4's default, no
-    // move allowed - a search started after the moves of one): its only
-    // completion is to stop there.
+    // A state whose action is over (its obligations met and, under Q4's
+    // Guide-literal reading, no move allowed - a search started after the
+    // moves of one): its only completion is to stop there.
     if (s0_.obligations_met() && !s0_.may_move()) {
       bool done = budget_.spend();
       if (done) {
@@ -1350,7 +1354,7 @@ class Hyper {
   // (shape B: one of them last), or, when the last branch must be the last
   // move, just before it (shape A). A depth-first search over the creation
   // orders, stopping wherever a move ends the action with moves still to make
-  // (Q4), visits each realisable order once.
+  // (Q4's Guide-literal reading), visits each realisable order once.
   void realise_ordered(const std::vector<int>& x, const Visit& visit, bool& stopped) {
     const Plan p = plan_of(x);
     std::vector<char> plain_done(p.plain.size(), 0);
@@ -1486,9 +1490,9 @@ class Hyper {
     }
   }
 
-  // FreeOrder (exact under Regime::FreeOrder): moves may follow the shift, so
-  // any order the J6 needs allow is valid; the plain moves first, then the
-  // branches in each creation order.
+  // FreeOrder (exact under Regime::FreeOrder, the default rules'): moves may
+  // follow the shift (R8), so any order the J6 needs allow is valid; the plain
+  // moves first, then the branches in each creation order.
   void realise_free(const std::vector<int>& x, const Visit& visit, bool& stopped) {
     const Plan p = plan_of(x);
     GameState s = s0_;
@@ -1529,7 +1533,7 @@ class Hyper {
   // played, so they are made in ascending order - but for the action's very
   // last move, which may be any. A castling is exempt: under Q21's alternative
   // it is legal only while its board is mandatory, and under Q3 with Q4's
-  // other reading a plain move can rewind the present off that board, so a
+  // ruled reading (R8) a plain move can rewind the present off that board, so a
   // castling may have to precede moves of lower index (found by review,
   // 2026-10-02). Each distinct final (state, creation order) with the
   // obligations met is visited once.

@@ -10,6 +10,46 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-03 - Engine E7: Q4 as ruled (R8) by default; the acting player and the submit action (D8), with the binding
+
+- `engine/` (merged from its worktree branch, main merged into it first):
+  `RuleOptions::moves_after_shift` defaults to true - a player may keep moving
+  after the present has shifted, until submitting (rulebook R8, register D8). The
+  Guide-literal reading is a named alternative, for diagnosis. The default
+  encoding and ruleset ID stay 0 (no default Zobrist key changed); encoding bit 3
+  now marks the Guide-literal reading - the opposite of its old meaning - as
+  `T5D_RULES_NO_MOVES_AFTER_SHIFT`, and `T5D_RULES_MOVES_AFTER_SHIFT` is 0.
+  t5d-gate, t5d-measure, t5d-bench, t5d-scan6b and the C API's ruleset 0 follow
+  the default; `--no-moves-after-shift` (t5d-gate also `--rule
+  moves_after_shift=false`) is the diagnostic, `--moves-after-shift` is accepted
+  and ignored. The hypercuboid's default regime is FreeOrder. Tests that assumed
+  the old default ask for it explicitly; E5c's scanner tests pair the
+  Guide-literal reading with the default over the same positions.
+- D8: `Expansion::acting_player()`, `submit_possible()` (the action's obligations
+  met, T5) and `submit_legal()` (and C4, exact), appended to `t5d_expansion` as
+  three `int32_t` after `src_extra` (size 272 -> 288; every earlier offset kept;
+  no board or square feature changed). `t5d_layout` reports every public struct's
+  size and field offsets.
+- `python/t5d/engine/` (the CHECKPOINT 3 ruling: merged together): `capi.py`
+  mirrors the new fields and constants and checks every mirrored struct against
+  `t5d_layout` at load, refusing a library of another stage instead of writing
+  past a buffer; `Expansion` copies the fields; the converter still refuses states
+  past the shift until N5 (the acting-player input and the submit logit).
+- The corpus through t5d-gate's full mode under R8: 41 records in 36-44 s on a
+  shared machine, none over 20 s, peak 131 MiB; the ten records that stopped on Q4
+  read on (cwmtt/futures stops at action 17 on notation, as known); the output is
+  byte-identical to the triage's earlier runs under this reading, so its 115 Q4
+  findings agree with the oracles.
+- Tests: C++ 389 (`--werror`); Python 631 passed, 2 skipped; ruff clean; verify,
+  boundary and the commit-tier gate green (the engine is not yet configured in
+  the gate). The Lazy SMP timing test, run before the merge as the user requires:
+  three runs on E7's branch and three on the merged tree, 5 threads 309-313
+  against 1 thread 293, no retry (`docs/BUILD_LOG.md`, the timing log).
+- `docs/BUILD_LOG.md`: E7 done; issue 48's engine side built; proposed spec edit
+  42 withdrawn (superseded by D8); the long tests still owed.
+- Spec: §8.2, §11.0 item 2 (D8, R8), §2.3 / A3 (issue 48); §15.6 (6b's and M9's
+  default streams are now R8's). No spec text edit needed.
+
 ### 2026-10-03 - M7 on real games: the |E| curve from t0database, its verdict, the refused games
 
 - `docs/MEASUREMENTS.md`: the |E| phase curve over the 716 t0database games that
