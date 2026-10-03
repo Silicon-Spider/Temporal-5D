@@ -277,6 +277,21 @@ TEST(selfplay_plays_only_moves_known_legal_whatever_the_budget) {
   }
 }
 
+TEST(selfplay_has_root_noise_by_default) {
+  // E1, §8.4: Dirichlet noise at the root in self-play - the default; match
+  // play turns it off (§12.3). Seeded: still reproducible.
+  CHECK(PlayParams{}.search.root_noise);
+  CHECK(!SearchParams{}.root_noise);  // a bare search (match play, tools) has none
+  const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Uniform);
+  PlayParams p = quick(TurnSplit::BoardMove, 8);
+  p.search.root_noise = true;
+  p.turn_cap.turns = 3;
+  const GameRecord a = play_game(variant("Standard"), *ev, p);
+  const GameRecord b = play_game(variant("Standard"), *ev, p);
+  CHECK(a.actions == b.actions);
+  check_game(a, p.turn_cap);
+}
+
 TEST(selfplay_is_reproducible_and_counts_the_cap) {
   const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Random, 2);
   PlayParams p = quick(TurnSplit::BoardMove, 44);

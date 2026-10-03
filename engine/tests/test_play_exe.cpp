@@ -128,6 +128,16 @@ TEST(play_exe_records_replay_through_the_gate_adapter) {
                                               {});
   REQUIRE(solved.header("Engine") != nullptr);
   CHECK(solved.header("Engine")->find(", solver") != std::string::npos);
+  // Root noise: on in self-play by default (E1, §8.4), --no-noise turns it off,
+  // match play has none.
+  CHECK(plain.header("Engine")->find("root noise") != std::string::npos);
+  for (const char* off : {"--no-noise", "--match"}) {
+    const t5d::PgnRecord quiet = play_and_gate({"--variant", "Very Small - Open", off, "--playouts", "16",
+                                                "--cap-turns", "4", "--seed", "2"},
+                                               {});
+    REQUIRE(quiet.header("Engine") != nullptr);
+    CHECK(quiet.header("Engine")->find("root noise") == std::string::npos);
+  }
 }
 
 TEST(play_exe_takes_its_rules_through_the_shared_option_reader) {

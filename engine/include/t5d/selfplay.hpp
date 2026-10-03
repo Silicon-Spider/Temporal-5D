@@ -54,7 +54,13 @@ enum class GameEnd : std::uint8_t {
 const char* game_end_name(GameEnd end) noexcept;
 
 struct PlayParams {
-  SearchParams search{};
+  /// The searches' parameters - root Dirichlet noise ON by default (E1,
+  /// §8.4: noise at the root in self-play); match play turns it off (§12.3).
+  SearchParams search = [] {
+    SearchParams p;
+    p.root_noise = true;
+    return p;
+  }();
   /// Playouts per decision (the node budget).
   std::uint64_t playouts = 64;
   /// I11 - handed to the search too, so that it scores capped positions as the
