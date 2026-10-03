@@ -52,8 +52,11 @@ promotion)                                     promotion)`` - row i is engine mo
   ``strict=False``): the acting player is ``to_move``, and submitting is possible exactly
   when the present has shifted (T5: the obligations are met when the present lies on the
   opponent's colour) - so the acting player is the present's colour or, past the shift, its
-  opponent. Under Q4's Guide-literal reading (``T5D_RULES_NO_MOVES_AFTER_SHIFT``) a state
-  past the shift has no move and offers submit alone.
+  opponent; and the moves are the acting player's - each starts on a board whose colour to
+  move is the acting player's, from a square holding one of its pieces, and there is none
+  where no move may be made. An acting player that is no colour is refused even then. Under
+  Q4's Guide-literal reading (``T5D_RULES_NO_MOVES_AFTER_SHIFT``) a state past the shift has
+  no move and offers submit alone.
 * **Moves.** The engine's pseudo-legal moves of the player to move (the legal-moves
   filter is not in the C API), one row per move in the engine's order, so policy logit
   ``i`` scores engine move ``i`` (``t5d_game_apply_expanded(i)``). A branching move's
@@ -322,8 +325,16 @@ def to_position(
     - given, ``origins_unknown_all`` counts the branched timelines whose first board has no
     parent. A state whose present has shifted within an unsubmitted action converts, with its
     acting player and the submit action's flags (register D8). ``strict``: refuse an expansion
-    whose present, acting player or submit flags disagree with its boards
-    (``PresentMismatch``); with ``strict=False`` the remaining checks are ``PositionState``'s."""
+    whose present, acting player, submit flags or moves disagree with its boards
+    (``PresentMismatch``): the present must be the boards', the acting player the player to
+    move, submitting possible exactly when the present has shifted (T5), every move's source
+    board one whose colour to move is the acting player's and its piece the acting player's,
+    and no move where none may be made. With ``strict=False`` only ``PositionState``'s checks
+    remain (``present_matches`` says whether these held). An acting player or player to move
+    that is no colour is refused either way."""
+    for name in ("acting_player", "to_move"):
+        if getattr(x, name) not in (0, 1):
+            raise PresentMismatch(f"the expansion's {name} is {getattr(x, name)!r}, not 0 (white) or 1 (black)")
     live = x.is_head & x.active
     if not live.any():
         raise ValueError("the expansion has no active head: the present is undefined")
@@ -338,6 +349,10 @@ def to_position(
             "to move, and submitting possible exactly when the present has shifted to the acting player's opponent (T5)"
         )
     state = to_position_state(x, regs_per_board=regs_per_board, global_regs=global_regs)
+    problem = _move_problem(x, state)
+    matches = matches and problem is None
+    if strict and problem is not None:
+        raise PresentMismatch(problem)
     unknown_all = None
     if created_timelines is not None:
         first = state.parent[_first_boards(state)]
@@ -354,6 +369,30 @@ def to_position(
         scope=EngineScope.from_expansion(x) if scope else None,
         present_matches=matches,
     )
+
+
+def _move_problem(x: Expansion, state: PositionState) -> str | None:
+    """Why the expansion's moves cannot be the acting player's (None when they can): a move where
+    none may be made, a source board whose colour to move is the other player's, a source square
+    not holding one of the acting player's pieces."""
+    m = x.moves
+    if not m.size:
+        return None
+    if not x.may_move:
+        return f"the expansion offers {m.size} moves where no move may be made (may_move is false)"
+    acting = int(x.acting_player)
+    boards = m["from_board"].astype(np.int64)
+    cells = m["from_cell"].astype(np.int64)
+    side = state.side_to_move[boards] != acting
+    if side.any():
+        return (
+            f"{int(side.sum())} of {m.size} moves start on boards whose colour to move is not the acting player's "
+            f"({'wb'[acting]}): the moves are not the acting player's"
+        )
+    piece = state.colour[boards, cells] != 1 + acting
+    if piece.any():
+        return f"{int(piece.sum())} of {m.size} moves start on a square without a piece of the acting player's ({'wb'[acting]})"
+    return None
 
 
 def _first_boards(state: PositionState) -> np.ndarray:
