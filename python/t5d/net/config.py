@@ -35,7 +35,8 @@ The build rules (spec section 15.1) decide what else appears here:
   complexity trigger (prototype, ``complexity.py``), the KV storage format - are the
   evaluator's (``CacheConfig``), not the network's. Four points the
   spec leaves open on this committed-class path are parameters with placeholder defaults
-  (``causal_past``, ``frozen_features``, ``supersession_scope``, and the rule that the
+  (``causal_past`` - since ruled by C23: ancestry, the ``"lineage"`` default -,
+  ``frozen_features``, ``supersession_scope``, and the rule that the
   section 6 structure opens live rows only, documented in ``scope.py``).
 * **Stage N5** adds register D8 (committed): the global acting-player input and the submit
   action's policy logit read from a global register. Where the input enters
@@ -471,8 +472,11 @@ class NetConfig:
     #: (section 7.7: a net trained dense cannot be masked causally at inference).
     attn_scope: str = "dense"
     #: Which boards are a board's causal past (spec issue 5: C17 / section 7.3's "their own
-    #: past" is undefined in a multiverse). COMMITTED-CLASS SILENCE - placeholder default,
-    #: not a decision:
+    #: past" is undefined in a multiverse). RULED: register C23 (committed) makes it the
+    #: board's ancestry - "its own timeline's earlier boards and, recursively, its branch
+    #: parent up to the branch point" - which is ``"lineage"``, the default; the other two
+    #: readings stay as arms of the equivalence tests, not alternatives to the decision
+    #: (stage N5 checks the engine converter's lineage against C23 on real games):
     #:   "lineage"    - arrival-side lineage: the boards it was made from by content - its
     #:                  timeline's earlier boards and, through its branch origin (the board a
     #:                  travelling piece arrived on), the origin's own lineage, recursively
