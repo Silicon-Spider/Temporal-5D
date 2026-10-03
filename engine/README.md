@@ -2265,6 +2265,13 @@ with its alternatives:
   confirmed; every ruleset under both Q4 readings (listings where turns do not
   decompose; smaller caps) 2,797 decided, 2,790 confirmed, 7 beyond; no
   contradiction anywhere.
+- **The `long_` runs** (`--long`, 2026-10-03, the merged tree): the semimove tree
+  6,064 positions, 1,365,247 actions, all exact (18 min); the chained attack maps
+  30,393 moves, 2,238 turn starts in check; random play to depth 5 under every
+  ruleset (the default at full size, every alternative at a quarter; 40 min, a
+  progress line per ruleset) - literal class 2,501 decided, 2,389 confirmed, 112
+  beyond the references; default class 4,495 decided, 4,463 confirmed, 32 beyond;
+  no contradiction.
 - **H37**: for every root of a sample, budgets stepped from 0 to the full search's
   need: a decided answer only where the full search gives the same one (1,900
   budgets in the default run, every one stopped unknown).
