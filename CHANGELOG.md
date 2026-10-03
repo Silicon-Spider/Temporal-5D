@@ -10,6 +10,44 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-04 - Network N5: D8 in the network; the search's C step API from Python; end-to-end games with random weights
+
+- `python/t5d/net/` (merged from its worktree branch after an adversarial review
+  and its fixes): `PositionState` carries the acting player and the submit
+  action's possible/legal flags (validated against T5); a learned acting-player
+  embedding added to the global registers (`acting_player_input`, placeholder;
+  `all_tokens` the other arm); the submit action's own logit read from global
+  register 0 (`submit_register`, placeholder) by a linear readout (`submit_head`,
+  placeholder; `pointer` the other arm), offered where possible and masked unless
+  legal; one policy distribution over moves + submit; value and WDL from the
+  acting player's perspective; the policy loss includes the submit target. D8's
+  parameters are drawn from their own seed-derived generator, so every pre-N5
+  tensor draws as before under any flags. F1 = 21,359,370 parameters (+769).
+  Dense = cached (§15.2) with the new input.
+- `python/t5d/engine/`: the converter accepts states past the shift and checks
+  every move against the acting player; C23's ancestry is confirmed as its
+  lineage. `capi.py` mirrors `capi_search.h`, checked against
+  `t5d_search_layout` at load; `Search` wraps the step API (the proof channel
+  refused, H41); `CStepDriver` drives the engine's search with the network,
+  bit-identical to `t5d_search_run` under the engine's own evaluators; C14's cache
+  sharing only between searches with the same network input, refresh epochs set on
+  the search; `netplay.py` plays self-play and match games (both D2 arms), writes
+  5dpgn records, checks each result against the final position and replays every
+  record through t5d-gate.
+- Review fixes: the value's perspective and the logit order through the step API
+  tested; a refused engine library fails the engine tests, and
+  `T5D_REQUIRE_ENGINE=1` (set in CI) makes a missing one fail; CI builds t5d-gate;
+  re-root fallbacks counted; a non-finite legal submit logit refused. 19 of 19
+  mutations killed.
+- End to end with random weights (CPU, information): 20 games, every record
+  replayed legal; small network 1.37 decisions/s and 35 evaluations/s, F1 (BF16)
+  0.60 and 6.9.
+- Tests: Python 775 passed, 2 skipped (`T5D_REQUIRE_ENGINE=1`); ruff clean.
+  `engine/README.md`: the E7 note on the network brought up to date.
+- Spec: §2.3/A3, §8.2/D8, §8.3/D3, §12.2/§12.4, §9.2/F1, §7.3/C17/C23,
+  §8.7/C14/C12, §15.2, §15.5; register D8, D2, C14, C23, H41; spec issues 108-116,
+  proposed spec edits 79-86 in `docs/BUILD_LOG.md`.
+
 ### 2026-10-03 - Oracle harness: cwmtt/many2 read converted to 5dpgn by every source (CHECKPOINT 3); golden files re-recorded
 
 - `oracles/oracle_harness/export_form.py` (new; merged from its worktree branch)

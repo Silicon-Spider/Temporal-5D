@@ -11,14 +11,14 @@ from __future__ import annotations
 
 import argparse
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import torch
 
 from ..net.config import NetConfig
 from ..net.heads import effort_bin, value_to_twohot
 from ..net.model import T5DNet, build_model
-from ..net.state import Batch, collate
+from ..net.state import Batch, PositionState, collate
 from ..net.synthetic import synthetic_states
 from .losses import LossConfig, Targets, compute_losses
 
@@ -44,7 +44,10 @@ def synthetic_targets(batch: Batch, cfg: NetConfig, generator: torch.Generator) 
 
     outcome = torch.randint(-1, 2, (bsz,), generator=g).float()
     visits = rand(bsz, batch.moves.shape[1]) * batch.move_valid
-    policy = visits / visits.sum(dim=-1, keepdim=True).clamp(min=1e-9)
+    _, submit_legal = batch.submit_mask()
+    submit_visits = rand(bsz) * submit_legal  # D8: the submit child's visits, where it is a legal candidate
+    total = (visits.sum(dim=-1) + submit_visits).clamp(min=1e-9)
+    policy = visits / total[:, None]
     n_opp = batch.opp_move_valid.sum(dim=-1)
     opp = torch.where(n_opp > 0, (rand(bsz) * n_opp.clamp(min=1)).long(), torch.full((bsz,), -1))
     effort_visits = torch.randint(1, 4096, (bsz,), generator=g)
@@ -59,7 +62,19 @@ def synthetic_targets(batch: Batch, cfg: NetConfig, generator: torch.Generator) 
         board=(rand(bsz, batch.board_valid.shape[1], 3) < 0.3).float(),
         square=(rand(bsz, length, cfg.n_square_labels) < 0.2).float(),
         effort=effort_bin(effort_visits, converged, cfg.effort_bins),
+        submit=submit_visits / total,
     )
+
+
+def with_actions(states: list[PositionState]) -> list[PositionState]:
+    """The states with register D8's action varied (synthetic, for smoke testing): every other
+    one is read as an action whose present has shifted - the acting player the present's
+    opponent, submitting possible, and legal in every second such state - so that the
+    acting-player input takes both values and the submit logit is offered, masked and live."""
+    return [
+        replace(s, acting_player=1 - s.player_to_move, submit_possible=True, submit_legal=(i // 2) % 2 == 0) if i % 2 else s
+        for i, s in enumerate(states)
+    ]
 
 
 def smoke_train(
@@ -76,7 +91,7 @@ def smoke_train(
     cfg = NetConfig() if cfg is None else cfg
     model = build_model(cfg, seed=seed) if model is None else model
     model.train()
-    batch = collate(synthetic_states(seed, list(board_counts)))
+    batch = collate(with_actions(synthetic_states(seed, list(board_counts))))
     gen = torch.Generator().manual_seed(seed)
     targets = synthetic_targets(batch, cfg, gen)
     names = [name for name, _ in model.named_parameters()]
