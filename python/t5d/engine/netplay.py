@@ -42,6 +42,7 @@ import argparse
 import json
 import math
 import os
+import re
 import subprocess
 import sys
 import time
@@ -106,6 +107,9 @@ class PlayConfig:
     seed: int = 1
     max_actions: int = 200  # a safety stop, not a rule
     max_listing: int = 256  # whole turns: actions listed per node (the engine's default)
+    #: A custom start instead of ``variant``'s: 5DFEN board strings (the player to move inferred
+    #: from the present, Q9); the record then names the board "custom" and writes them.
+    start_fen: tuple[str, ...] | None = None
 
     def validate(self) -> None:
         if self.split not in SPLITS:
@@ -136,6 +140,9 @@ class GameResult:
     collect_seconds: float = 0.0  # gather + leaf conversion
     deliver_seconds: float = 0.0  # back-ups in the engine
     verdict_seconds: float = 0.0  # turn-start verdicts (probe searches)
+    #: Match play: carried searches that could not be re-rooted on the opponent's reply and were
+    #: replaced by a fresh search (0 in a sound run - the tests require it).
+    reroot_fallbacks: int = 0
     final_boards: int = 0
     final_fingerprint: str = ""
 
@@ -153,7 +160,7 @@ class GameResult:
         s = self.seconds or math.nan
         batches = self.batch_sizes or [0]
         return {
-            "variant": self.config.variant,
+            "variant": self.config.variant if self.config.start_fen is None else "custom",
             "split": self.config.split,
             "mode": self.config.mode,
             "seed": self.config.seed,
@@ -173,6 +180,7 @@ class GameResult:
             "collect_seconds": round(self.collect_seconds, 3),
             "deliver_seconds": round(self.deliver_seconds, 3),
             "verdict_seconds": round(self.verdict_seconds, 3),
+            "reroot_fallbacks": self.reroot_fallbacks,
             "batches": len(self.batch_sizes),
             "mean_batch": round(float(np.mean(batches)), 2),
             "max_batch": int(max(batches)),
@@ -204,22 +212,43 @@ def _header(name: str, value: str) -> str:
 
 
 def write_record(
-    variant: str, actions: Sequence[Sequence[Move]], *, even: bool, first_turn: int, result: str, termination: str, extra=()
+    board: str,
+    actions: Sequence[Sequence[Move]],
+    *,
+    even: bool,
+    first_turn: int,
+    result: str,
+    termination: str,
+    extra=(),
+    first_player: int = 0,
+    size: tuple[int, int] | None = None,
+    boards: Sequence[str] = (),
 ) -> str:
-    """The 5dpgn record of a game from a named variant's start (White to move first)."""
-    out = _header("Mode", "5D") + _header("Board", variant) + _header("Result", result) + _header("Termination", termination)
+    """The 5dpgn record of a game (the engine's ``tools/play_record.cpp`` layout): headers, for a
+    ``"custom"`` board its ``Size`` and the start's 5DFEN board strings, then the actions
+    numbered by turn - ``N.`` before White's, `` /`` before Black's, ``Nb.`` when Black moves
+    first - then the result."""
+    out = _header("Mode", "5D") + _header("Board", board)
+    if board == "custom":
+        if size is None:
+            raise ValueError("a custom board's record needs its size")
+        out += _header("Size", f"{size[0]}x{size[1]}")
+    out += _header("Result", result) + _header("Termination", termination)
     for name, value in extra:
         out += _header(name, value)
+    if board == "custom":
+        out += "".join(b + "\n" for b in boards)
     out += "\n"
-    turn = max(1, first_turn)
+    colour, turn = int(first_player), max(1, first_turn)
     for a, action in enumerate(actions):
-        if a % 2 == 0:
+        if colour == 0:
             out += ("\n" if a else "") + f"{turn}."
         else:
-            out += " /"
+            out += f"{turn}b." if a == 0 else " /"
         out += "".join(" " + pgn_move(m, even) for m in action)
-        if a % 2:
+        if colour == 1:
             turn += 1
+        colour = 1 - colour
     return out + (" " if actions else "") + result + "\n"
 
 
@@ -279,8 +308,9 @@ def play_game(evaluators: Evaluator | Sequence[Evaluator], cfg: PlayConfig, *, n
     regs = dict(regs_per_board=net_cfg.regs_per_board, global_regs=net_cfg.global_regs)
     t0 = time.perf_counter()
     rng = np.random.default_rng(cfg.seed)
-    game = Game.variant(cfg.variant)
+    game = Game.variant(cfg.variant) if cfg.start_fen is None else Game.from_fen(list(cfg.start_fen))
     start = game.info()
+    start_boards = [fen for _, _, fen in game.snapshot().boards] if cfg.start_fen is not None else []
     res = GameResult(config=cfg, record="", actions=[], end="", winner=None)
     shared: Search | None = None  # self-play: the previous decision's search, the cache's donor (C14)
     carried: list[Search | None] = [None, None]  # match play: each side's search
@@ -300,8 +330,8 @@ def play_game(evaluators: Evaluator | Sequence[Evaluator], cfg: PlayConfig, *, n
             mover = game.info().to_move
             action: list[Move] = []
             turn_start = True
-            if cfg.mode == "match" and carried[mover] is not None and res.actions:
-                _reroot(carried, mover, res.actions[-1], game)
+            if cfg.mode == "match" and carried[mover] is not None and res.actions and not _reroot(carried, mover, res.actions[-1], game):
+                res.reroot_fallbacks += 1
             while True:
                 if cfg.mode == "self":
                     seed = _mix(cfg.seed + 0x9E3779B97F4A7C15 * (res.decisions + 1))
@@ -364,13 +394,16 @@ def play_game(evaluators: Evaluator | Sequence[Evaluator], cfg: PlayConfig, *, n
             ("TurnCap", f"turns {cfg.cap_turns}, boards {cfg.cap_boards}"),
         ]
         res.record = write_record(
-            cfg.variant,
+            cfg.variant if cfg.start_fen is None else "custom",
             res.actions,
             even=start.even,
             first_turn=start.present // 2,
             result=res.result,
             termination=termination,
             extra=extra,
+            first_player=start.to_move,
+            size=(start.width, start.height),
+            boards=start_boards,
         )
     finally:
         for s in [shared, *carried]:
@@ -414,20 +447,22 @@ def _choose(search: Search, cfg: PlayConfig, res: GameResult, stats, evaluator, 
     return pick
 
 
-def _reroot(carried: list[Search | None], mover: int, reply: Sequence[Move], game: Game) -> None:
+def _reroot(carried: list[Search | None], mover: int, reply: Sequence[Move], game: Game) -> bool:
     """Match play: the mover's carried search, rooted at the opponent's turn start since its own
-    last submission, re-roots on the opponent's reply; a search that cannot is dropped (the next
-    decision makes a fresh one)."""
+    last submission, re-roots on the opponent's reply. Whether it did: a search that cannot (the
+    engine refuses the action, or the new root is not the game's position) is dropped - the next
+    decision makes a fresh one, and the game counts the fallback (``reroot_fallbacks``)."""
     s = carried[mover]
     try:
         s.advance_action(list(reply))
         with s.root_game() as root:
-            same = root.snapshot().fingerprint == game.snapshot().fingerprint
-    except Exception:  # noqa: BLE001 - any refusal: start afresh
+            same = root.snapshot().fingerprint == game.snapshot().fingerprint and root.info().to_move == game.info().to_move
+    except Exception:  # noqa: BLE001 - any refusal: start afresh (and count it)
         same = False
     if not same:
         s.close()
         carried[mover] = None
+    return same
 
 
 # --- replaying through the engine's gate adapter ------------------------------------------------------
@@ -451,8 +486,21 @@ class Replay:
     actions_accepted: int
     positions: int
     last_terminal: str | None  # the last position's "terminal"
+    last_side: str | None  # the last position's "side": the player to move there, "white" or "black"
     final_boards: tuple[str, ...]  # the last state event's boards, "<L>:<T>:<c>:<placement>"
     lines: tuple[str, ...]
+
+    @property
+    def result(self) -> str | None:
+        """The 5dpgn result the last position calls for: the side to move checkmated - the other
+        side wins; stalemate - ``1/2-1/2``; no game end - ``*`` (None without a position)."""
+        if self.last_terminal is None:
+            return None
+        if self.last_terminal == "checkmate":
+            return "0-1" if self.last_side == "white" else "1-0"
+        if self.last_terminal == "stalemate":
+            return "1/2-1/2"
+        return "*"
 
 
 def replay_with_gate(record: str, *, gate: Path | None = None, timeout: float = 600.0) -> Replay:
@@ -473,6 +521,7 @@ def replay_with_gate(record: str, *, gate: Path | None = None, timeout: float = 
         actions_accepted=int(end.get("actions_accepted", -1)),
         positions=len(positions),
         last_terminal=positions[-1].get("terminal") if positions else None,
+        last_side=positions[-1].get("side") if positions else None,
         final_boards=tuple(states[-1]["boards"]) if states else (),
         lines=lines,
     )
@@ -487,9 +536,16 @@ def gate_boards(game_snapshot) -> tuple[str, ...]:
     return tuple(out)
 
 
+_RESULT = re.compile(r'^\[Result "([^"]*)"\]', re.MULTILINE)
+
+
 def check_replay(res: GameResult, replay: Replay) -> list[str]:
     """Where the gate's replay disagrees with the game: every action accepted, one position more
-    than actions, the last position's verdict the game's end, the final boards the game's."""
+    than actions, the last position's verdict the game's end; the game's result - the record's
+    Result header, its closing token and ``GameResult.result``/``winner`` - the one the final
+    position calls for (the side to move there checkmated: the other side wins; stalemate a
+    draw; otherwise ``*``), judged by the gate and, for the side to move, by the engine's reader
+    replaying the record; the final boards the reader's."""
     problems = []
     if replay.status != "ok":
         problems.append(f"status {replay.status}")
@@ -503,8 +559,22 @@ def check_replay(res: GameResult, replay: Replay) -> list[str]:
     with Game.from_pgn(res.record) as g:
         g.replay_all()
         boards = gate_boards(g.snapshot())
+        side = ("white", "black")[g.info().to_move]
     if replay.final_boards != boards:
         problems.append("the final boards differ from the record's replay by the engine's reader")
+    if replay.last_side is not None and replay.last_side != side:
+        problems.append(f"the gate has {replay.last_side} to move at the end, the engine's reader {side}")
+    header = _RESULT.search(res.record)
+    stated = header.group(1) if header else None
+    closing = res.record.split()[-1] if res.record.split() else None
+    if stated != res.result or closing != res.result:
+        problems.append(f"the record's result (header {stated}, closing {closing}) is not {res.result}")
+    if res.end != "unknown" and replay.result is not None and res.result != replay.result:
+        problems.append(
+            f"the result is {res.result}, the final position ({side} to move, {replay.last_terminal}) calls for {replay.result}"
+        )
+    if res.end == "checkmate" and res.winner != 1 - ("white", "black").index(side):
+        problems.append(f"the winner is {res.winner}, but {side} - to move - is the side checkmated")
     return problems
 
 
