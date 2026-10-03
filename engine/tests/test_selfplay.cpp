@@ -118,7 +118,11 @@ TEST(selfplay_games_are_legal_end_to_end_under_both_splits) {
       ++games;
       check_game(g, p.turn_cap);
       check_record(g, name);
-      CHECK(g.decisions >= g.actions.size());
+      // Decisions: under the board-move split one per move and one per
+      // submission (D8: never automatic); under whole turns one per action.
+      std::size_t moves = 0;
+      for (const std::vector<Move>& a : g.actions) moves += a.size();
+      CHECK_EQ(g.decisions, split == TurnSplit::BoardMove ? moves + g.actions.size() : g.actions.size());
       CHECK(g.playouts > 0);
     }
   }
@@ -183,6 +187,7 @@ TEST(selfplay_match_play_carries_the_tree) {
       p.match_play = true;
       p.search.graph = graph;
       p.turn_cap.turns = 5;
+      p.turn_cap.boards = 80;  // R8: optional moves after the shift grow the game quickly
       const GameRecord g = play_game(variant("Standard - Two Timelines"), *uniform, p);
       check_game(g, p.turn_cap);
       check_record(g, "Standard - Two Timelines");
@@ -190,11 +195,12 @@ TEST(selfplay_match_play_carries_the_tree) {
   }
 }
 
-TEST(selfplay_under_q4s_other_reading_submits_by_choice) {
-  // moves_after_shift (Q4's other reading): the board-move split offers
-  // "submit" as a child; the record replays under the same rules.
+TEST(selfplay_under_q4s_guide_literal_reading) {
+  // Q4's Guide-literal reading (no move once the present has shifted - a
+  // diagnostic since R8): the games are legal under it, and their records
+  // replay under the same rules. Submitting is still a decision of its own.
   RuleOptions rules;
-  rules.moves_after_shift = true;
+  rules.moves_after_shift = false;
   const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
   for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::WholeTurn}) {
     PlayParams p = quick(split, 3);
@@ -202,7 +208,40 @@ TEST(selfplay_under_q4s_other_reading_submits_by_choice) {
     const GameRecord g = play_game(variant("Standard - Two Timelines", rules), *uniform, p);
     check_game(g, p.turn_cap);
     check_record(g, "Standard - Two Timelines", rules);
+    // No action makes a move after the present has shifted.
+    GameState s = g.start;
+    for (const std::vector<Move>& action : g.actions) {
+      for (const Move& m : action) {
+        CHECK(!s.obligations_met());
+        s.apply(m);
+      }
+      s.submit();
+    }
   }
+}
+
+TEST(selfplay_under_r8_moves_after_the_shift_are_played) {
+  // R8 (the default): a player may move on after the present has shifted,
+  // until submitting - over a few games from the two-timeline start some
+  // action does (an optional board played after the mandatory ones).
+  const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
+  std::size_t after_shift = 0;
+  for (std::uint64_t seed = 1; seed <= 4 && after_shift == 0; ++seed) {
+    PlayParams p = quick(TurnSplit::BoardMove, seed);
+    p.turn_cap.turns = 6;
+    const GameRecord g = play_game(variant("Standard - Two Timelines"), *uniform, p);
+    check_game(g, p.turn_cap);
+    check_record(g, "Standard - Two Timelines");
+    GameState s = g.start;
+    for (const std::vector<Move>& action : g.actions) {
+      for (const Move& m : action) {
+        if (s.obligations_met()) ++after_shift;
+        s.apply(m);
+      }
+      s.submit();
+    }
+  }
+  CHECK(after_shift > 0);
 }
 
 TEST(selfplay_plays_only_moves_known_legal_whatever_the_budget) {

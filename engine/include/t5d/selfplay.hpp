@@ -23,6 +23,12 @@
 // never a game rule. Every move the search chooses is checked pseudo-legal
 // before it is played and every submission checked legal (T5, C4/R1): a
 // failure is the engine's bug and throws std::logic_error.
+//
+// Under the board-move split an action is a sequence of DECISIONS - its moves,
+// then submit, a decision of its own (register D8, rulebook R8): nothing is
+// submitted automatically, and the action ends only when submit is chosen. A
+// game's actions are counted at submissions (GameRecord::actions); the turn
+// cap reads the state at each turn start, after the submission.
 
 #ifndef T5D_SELFPLAY_HPP
 #define T5D_SELFPLAY_HPP
@@ -78,6 +84,8 @@ struct GameRecord {
   GameEnd end = GameEnd::Unknown;
   /// 0 white, 1 black, -1 none (no optional: g++ 13/14 warn on copying one).
   int winner = -1;
+  /// Searches run: under the board-move split one per move and one per
+  /// submission; under whole turns one per action.
   std::uint64_t decisions = 0;
   std::uint64_t playouts = 0;
   std::uint64_t evaluations = 0;

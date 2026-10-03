@@ -5,8 +5,10 @@
 // nothing backed up), and the results, choice and persistence calls.
 
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <string>
 #include <vector>
@@ -65,17 +67,22 @@ std::uint64_t drive(t5d_search* s, std::uint64_t playouts, int32_t value_kind, s
     REQUIRE_EQ(t5d_search_gather(s, batch, playouts - info.playouts, &n, nullptr), T5D_OK);
     if (n == 0) continue;
     std::vector<float> logits;
+    std::vector<float> submits;
     std::vector<float> values;
     for (std::size_t i = 0; i < n; ++i) {
       t5d_leaf leaf;
       REQUIRE_EQ(t5d_search_leaf(s, i, &leaf, nullptr), T5D_OK);
+      CHECK_EQ(leaf.acting_player, leaf.expansion.acting_player);
+      CHECK_EQ(leaf.submit_legal != 0, leaf.expansion.submit_legal != 0);
       logits.insert(logits.end(), leaf.expansion.move_count, 0.0f);
+      // The submit logit where submitting is possible (D8); NaN elsewhere.
+      submits.push_back(leaf.submit_possible ? 0.0f : std::nanf(""));
       std::vector<float> v(T5D_VALUE_BINS, value_kind == T5D_VALUE_LOGITS ? -30.0f : 0.0f);
       v[25] = value_kind == T5D_VALUE_LOGITS ? 30.0f : 1.0f;  // all the mass at 0
       values.insert(values.end(), v.begin(), v.end());
     }
-    REQUIRE_EQ(t5d_search_deliver(s, logits.data(), logits.size(), values.data(), values.size(),
-                                  value_kind, nullptr),
+    REQUIRE_EQ(t5d_search_deliver(s, logits.data(), logits.size(), submits.data(), submits.size(),
+                                  values.data(), values.size(), value_kind, nullptr),
                T5D_OK);
     leaves += n;
   }
@@ -156,7 +163,10 @@ TEST(capi_search_leaves_carry_the_network_input) {
   REQUIRE_EQ(n, std::size_t{1});  // the root
   t5d_leaf leaf;
   REQUIRE_EQ(t5d_search_leaf(s.get(), 0, &leaf, nullptr), T5D_OK);
-  CHECK_EQ(leaf.to_move, 0);
+  CHECK_EQ(leaf.acting_player, 0);
+  CHECK_EQ(leaf.submit_possible, 0);  // a turn start: the obligations are not met
+  CHECK_EQ(leaf.submit_legal, 0);
+  CHECK_EQ(leaf.expansion.acting_player, 0);
   CHECK_EQ(leaf.turn_start, 1);
   CHECK_EQ(leaf.expansion.move_count, std::size_t{20});
   CHECK_EQ(leaf.expansion.board_count, std::size_t{1});
@@ -187,26 +197,42 @@ TEST(capi_search_errors_release_the_batch) {
   CHECK_EQ(t5d_search_gather(s.get(), 4, T5D_NO_LIMIT, &m, &error), T5D_ERR_ARGUMENT);
   CHECK(error != nullptr);
   t5d_free(error);
+  // Submit logits: one per leaf or none; never infinite.
+  {
+    std::vector<float> l(20, 0.0f);
+    std::vector<float> v(T5D_VALUE_BINS, 0.0f);
+    v[25] = 1.0f;
+    const float two[] = {0.0f, 0.0f};
+    CHECK_EQ(t5d_search_deliver(s.get(), l.data(), l.size(), two, 2, v.data(), v.size(),
+                                T5D_VALUE_PROBABILITIES, nullptr),
+             T5D_ERR_ARGUMENT);
+    REQUIRE_EQ(t5d_search_gather(s.get(), 4, T5D_NO_LIMIT, &n, nullptr), T5D_OK);
+    const float inf[] = {std::numeric_limits<float>::infinity()};
+    CHECK_EQ(t5d_search_deliver(s.get(), l.data(), l.size(), inf, 1, v.data(), v.size(),
+                                T5D_VALUE_PROBABILITIES, nullptr),
+             T5D_ERR_ARGUMENT);
+    REQUIRE_EQ(t5d_search_gather(s.get(), 4, T5D_NO_LIMIT, &n, nullptr), T5D_OK);
+  }
   // Too few logits: refused, the batch abandoned.
   std::vector<float> logits(3, 0.0f);
   std::vector<float> values(T5D_VALUE_BINS, 0.0f);
   values[25] = 1.0f;
-  CHECK_EQ(t5d_search_deliver(s.get(), logits.data(), logits.size(), values.data(), values.size(),
+  CHECK_EQ(t5d_search_deliver(s.get(), logits.data(), logits.size(), nullptr, 0, values.data(), values.size(),
                               T5D_VALUE_PROBABILITIES, nullptr),
            T5D_ERR_ARGUMENT);
   REQUIRE_EQ(t5d_search_gather(s.get(), 4, T5D_NO_LIMIT, &n, nullptr), T5D_OK);  // released
   REQUIRE_EQ(n, std::size_t{1});
   // A value kind that does not exist; a value that is no distribution.
   logits.assign(20, 0.0f);
-  CHECK_EQ(t5d_search_deliver(s.get(), logits.data(), logits.size(), values.data(), values.size(), 7, nullptr),
+  CHECK_EQ(t5d_search_deliver(s.get(), logits.data(), logits.size(), nullptr, 0, values.data(), values.size(), 7, nullptr),
            T5D_ERR_ARGUMENT);
   REQUIRE_EQ(t5d_search_gather(s.get(), 4, T5D_NO_LIMIT, &n, nullptr), T5D_OK);
   std::vector<float> zero(T5D_VALUE_BINS, 0.0f);
-  CHECK_EQ(t5d_search_deliver(s.get(), logits.data(), logits.size(), zero.data(), zero.size(),
+  CHECK_EQ(t5d_search_deliver(s.get(), logits.data(), logits.size(), nullptr, 0, zero.data(), zero.size(),
                               T5D_VALUE_PROBABILITIES, nullptr),
            T5D_ERR_ARGUMENT);
   REQUIRE_EQ(t5d_search_gather(s.get(), 4, T5D_NO_LIMIT, &n, nullptr), T5D_OK);
-  CHECK_EQ(t5d_search_deliver(s.get(), logits.data(), logits.size(), values.data(), values.size(),
+  CHECK_EQ(t5d_search_deliver(s.get(), logits.data(), logits.size(), nullptr, 0, values.data(), values.size(),
                               T5D_VALUE_PROBABILITIES, nullptr),
            T5D_OK);
   t5d_search_summary info;
@@ -253,7 +279,20 @@ TEST(capi_search_choose_advance_and_reply) {
   REQUIRE_EQ(t5d_search_advance(s.get(), index, nullptr), T5D_OK);
   t5d_search_summary info;
   REQUIRE_EQ(t5d_search_info(s.get(), &info), T5D_OK);
-  CHECK_EQ(info.root_turn_start, 1);  // one board: our move was the whole action
+  // One board: our move met the obligations, but White still acts (D8) - the
+  // root's one child is submit.
+  CHECK_EQ(info.root_turn_start, 0);
+  REQUIRE_EQ(t5d_search_run(s.get(), T5D_EVALUATOR_RANDOM, 3, 10, nullptr), T5D_OK);
+  REQUIRE_EQ(t5d_search_info(s.get(), &info), T5D_OK);
+  REQUIRE_EQ(info.root_children, std::uint64_t{1});
+  t5d_root_child submit;
+  REQUIRE_EQ(t5d_search_child(s.get(), 0, &submit, nullptr, 0, nullptr), T5D_OK);
+  CHECK_EQ(submit.submit, 1);
+  CHECK_EQ(submit.move_count, std::size_t{0});
+  CHECK_EQ(submit.legality, T5D_LEGALITY_LEGAL);
+  REQUIRE_EQ(t5d_search_advance(s.get(), 0, nullptr), T5D_OK);
+  REQUIRE_EQ(t5d_search_info(s.get(), &info), T5D_OK);
+  CHECK_EQ(info.root_turn_start, 1);
   // The reply: the first move of Black's first expansion, as a record.
   t5d_game* root = nullptr;
   REQUIRE_EQ(t5d_search_root_game(s.get(), &root, nullptr), T5D_OK);
@@ -276,6 +315,27 @@ TEST(capi_search_choose_advance_and_reply) {
   bogus.to_timeline = 5;
   CHECK_EQ(t5d_search_advance_action(s.get(), &bogus, 1, nullptr), T5D_ERR_ARGUMENT);
   CHECK_EQ(t5d_search_advance(s.get(), 9999, nullptr), T5D_ERR_ARGUMENT);
+}
+
+TEST(capi_search_reports_its_layouts) {
+  size_t v = 0;
+  REQUIRE_EQ(t5d_search_layout("t5d_leaf", nullptr, &v), T5D_OK);
+  CHECK_EQ(v, sizeof(t5d_leaf));
+  REQUIRE_EQ(t5d_search_layout("t5d_leaf", "submit_legal", &v), T5D_OK);
+  CHECK_EQ(v, offsetof(t5d_leaf, submit_legal));
+  REQUIRE_EQ(t5d_search_layout("t5d_leaf", "expansion", &v), T5D_OK);
+  CHECK_EQ(v, offsetof(t5d_leaf, expansion));
+  REQUIRE_EQ(t5d_search_layout("t5d_search_params", nullptr, &v), T5D_OK);
+  CHECK_EQ(v, sizeof(t5d_search_params));
+  REQUIRE_EQ(t5d_search_layout("t5d_search_params", "eval_cache_bytes", &v), T5D_OK);
+  CHECK_EQ(v, offsetof(t5d_search_params, eval_cache_bytes));
+  REQUIRE_EQ(t5d_search_layout("t5d_search_summary", "epoch", &v), T5D_OK);
+  CHECK_EQ(v, offsetof(t5d_search_summary, epoch));
+  REQUIRE_EQ(t5d_search_layout("t5d_root_child", nullptr, &v), T5D_OK);
+  CHECK_EQ(v, sizeof(t5d_root_child));
+  CHECK_EQ(t5d_search_layout("t5d_leaf", "to_move", &v), T5D_ERR_ARGUMENT);
+  CHECK_EQ(t5d_search_layout("t5d_no_such", nullptr, &v), T5D_ERR_ARGUMENT);
+  CHECK_EQ(t5d_search_layout(nullptr, nullptr, &v), T5D_ERR_ARGUMENT);
 }
 
 TEST(capi_search_proves_a_mate_in_one) {
