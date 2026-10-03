@@ -1,0 +1,398 @@
+/* t5d/capi_search.h - the main search's C API (engine stage E6a; t5d/mcts.hpp),
+ * in the t5d shared library beside t5d/capi.h, whose conventions it keeps:
+ * opaque handles, a t5d_status from every function that can fail, no C++
+ * exception across the boundary, `char** error` messages freed with t5d_free.
+ *
+ * THE STEP API lets a caller outside C++ - Python serving the network - be the
+ * search's evaluator:
+ *
+ *   t5d_search_new(game, ...)                      a search from a game's state
+ *   loop:
+ *     t5d_search_gather(s, max_leaves, ...)        leaves to evaluate: n
+ *     for i < n: t5d_search_leaf(s, i, &leaf)       each leaf's network input:
+ *                                                    leaf.expansion (t5d/capi.h)
+ *     t5d_search_deliver(s, logits, values, ...)   their evaluations, in order
+ *   t5d_search_choose / _child / _advance ...
+ *
+ * What a leaf carries is everything the network takes from it - the leaf's
+ * expansion (t5d_expansion: per-board and per-square features, the candidate
+ * moves, the move graph, typed relations, W(k)/E(k)), its node key and the
+ * refresh epoch. Its evaluation is:
+ *
+ *  - POLICY: one float32 logit per candidate move, logit i scoring
+ *    leaf.expansion.moves[i] (the expansion's own order). Under the whole-turn
+ *    split (D2's other arm) the candidates are the turn start's pseudo-legal
+ *    moves, and the search derives each legal action's prior from them itself.
+ *  - SUBMIT (register D8; rulebook R8): turns have variable length, so under
+ *    the board-move split submitting is an action of its own wherever it is
+ *    possible (leaf.submit_possible: the obligations met, T5), legal only where
+ *    the submission passes C4 (leaf.submit_legal, exact). Its logit - one
+ *    float32 per leaf, read from a global register (D8) - is optional: NULL,
+ *    or NaN for a leaf, gives the search's placeholder
+ *    (t5d_search_params.submit_share). A leaf may be a state whose present has
+ *    shifted inside the action (R8: moves may follow the shift).
+ *  - VALUE: 51 float32 numbers (T5D_VALUE_BINS; bins centred on -1 + 2k/50,
+ *    register D3), as PROBABILITIES (T5D_VALUE_PROBABILITIES: non-negative, the
+ *    search normalises them) or as LOGITS (T5D_VALUE_LOGITS: the search takes
+ *    their softmax), from the perspective of the leaf's ACTING PLAYER - the
+ *    player whose action is in progress, until it submits (leaf.acting_player,
+ *    = leaf.expansion.acting_player; after the shift it is not the colour to
+ *    move on the present).
+ *
+ * t5d_search_layout reports this header's struct layouts, as t5d_layout does
+ * t5d/capi.h's, for a binding that mirrors them.
+ *
+ * ERRORS: T5D_ERR_ARGUMENT for the caller's error - an argument, or a call the
+ * search's state does not allow (gather while a batch waits, deliver with none
+ * waiting, max_leaves 0, set_epoch under a waiting batch); T5D_ERR_MEMORY when
+ * an allocation fails (the search stays consistent: no batch left half-made);
+ * T5D_ERR_UNSUPPORTED for a feature not built; T5D_ERR_INTERNAL for the
+ * search's own failure (a broken invariant, a contradiction) - a bug to report.
+ *
+ * SOLVER BOUNDS (lo, hi) are search state: they may guide play, but they are
+ * never to be stored as proofs - no proof enters a persistent solved store
+ * until the generator has passed the gate (register H19, H23). The in-tree
+ * solver itself is part of the proof channel (H41) and off by rule
+ * (t5d_search_params.proof_channel).
+ *
+ * The pointers a leaf hands out are valid until the next t5d_search_gather,
+ * t5d_search_deliver, t5d_search_abandon or t5d_search_destroy on the handle:
+ * copy what must outlive that. A search handle is used from one thread at a
+ * time. Every probability-like output is a double; counts are unsigned.
+ */
+#ifndef T5D_CAPI_SEARCH_H
+#define T5D_CAPI_SEARCH_H
+
+#include <stddef.h>
+#include <stdint.h>
+
+#include "t5d/capi.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+typedef struct t5d_search t5d_search;
+
+#define T5D_VALUE_BINS 51
+
+/* D2 (undecided): the board-move split, or whole turns. */
+#define T5D_SPLIT_BOARD_MOVE 0
+#define T5D_SPLIT_WHOLE_TURN 1
+/* The whole-turn split's action prior from its moves' logits: their sum or mean. */
+#define T5D_ACTION_PRIOR_SUM 0
+#define T5D_ACTION_PRIOR_MEAN 1
+/* The MCGS node key (spec issue 30): the 5D Zobrist key, or with branch origins. */
+#define T5D_NODE_KEY_STATE 0
+#define T5D_NODE_KEY_STATE_AND_ORIGINS 1
+/* The final-selection rule (E5). */
+#define T5D_FINAL_VISITS 0
+#define T5D_FINAL_LCB 1
+/* t5d_search_deliver: what `values` holds. */
+#define T5D_VALUE_PROBABILITIES 0
+#define T5D_VALUE_LOGITS 1
+/* The built-in evaluators (t5d_search_run). */
+#define T5D_EVALUATOR_UNIFORM 0
+#define T5D_EVALUATOR_RANDOM 1
+#define T5D_EVALUATOR_MATERIAL 2
+/* A move's legality (t5d/legal.hpp): illegal moves are never children. */
+#define T5D_LEGALITY_LEGAL 0
+#define T5D_LEGALITY_ILLEGAL 1
+#define T5D_LEGALITY_UNKNOWN 2
+/* Why final selection chose a child (t5d_search_choose). */
+#define T5D_CHOICE_PROVEN_WIN 0
+#define T5D_CHOICE_SECURE_CHILD 1
+#define T5D_CHOICE_LCB 2
+#define T5D_CHOICE_VISITS 3
+#define T5D_CHOICE_ALL_LOST 4
+
+/* Why a run stopped (t5d/mcts.hpp, StopReason). */
+#define T5D_STOP_PLAYOUTS 0
+#define T5D_STOP_EVALUATIONS 1
+#define T5D_STOP_FINISHED 2   /* the root is terminal or solved */
+#define T5D_STOP_EXHAUSTED 3  /* no simulation could be made */
+#define T5D_STOP_NODES 4      /* the node budget */
+#define T5D_STOP_MEMORY 5     /* the memory budget */
+#define T5D_STOP_DEADLINE 6   /* the deadline */
+/* No limit, for the budgets below. */
+#define T5D_NO_LIMIT UINT64_MAX
+
+/* Layouts: each struct below is appended to, never reordered (t5d_layout's
+ * contract; t5d_search_layout reports every offset). A struct of t5d/capi.h's
+ * embedded in one of them - provisional, and growing as t5d/capi.h does - is
+ * its LAST member, so that its growth moves none of the others: this file's
+ * own new fields go in front of it (moving it; a binding reads its offset from
+ * t5d_search_layout). */
+
+/* The search's parameters (t5d/mcts.hpp, SearchParams, field for field; the
+ * engine README gives each default and its standing - most are placeholders).
+ * Fill with t5d_search_params_default, then change what you need. The
+ * persistent solved store is not here: it stays disabled until the generator
+ * has passed the gate (register H23). */
+typedef struct t5d_search_params {
+  /* D2 */
+  int32_t split;               /* T5D_SPLIT_* */
+  int32_t action_prior;        /* T5D_ACTION_PRIOR_* (whole-turn) */
+  uint64_t max_actions;        /* whole-turn: actions listed per node */
+  uint64_t listing_nodes;      /* whole-turn: the listing's node budget */
+  double submit_share;         /* board-move: submit's prior share when the evaluator gives no
+                                  submit logit (D8; placeholder 0.5) */
+  int32_t legal_moves_only;    /* board-move: 1 (0 is a test seam: pseudo-legal children) */
+  /* the legality of the board-move split's children (t5d/legal.hpp; spec issue 46) */
+  uint64_t legality_checks;    /* (a) the expansion's budget: checks ... */
+  uint64_t legality_nodes;     /*     ... and search nodes (T5D_NO_LIMIT both: exact) */
+  double unknown_prior_scale;  /* (b) */
+  int32_t verify_unknown;      /* (c) */
+  uint64_t verify_checks;      /* (c) the verification's budget */
+  uint64_t verify_nodes;
+  /* E1 */
+  double cpuct;
+  int32_t widening;
+  double widening_alpha;
+  double widening_scale;
+  double widening_min;
+  double fpu_reduction;
+  int32_t root_noise;
+  double dirichlet_alpha;
+  double dirichlet_epsilon;
+  double policy_temperature;
+  /* E2 */
+  int32_t variance_scaled_cpuct;
+  double cpuct_variance_scale;
+  double variance_reference;
+  double variance_prior_weight;
+  double cpuct_scale_min;
+  double cpuct_scale_max;
+  int32_t uncertainty_weighted_backup;
+  /* E3 */
+  int32_t variance_bonus;
+  double variance_bonus_scale;
+  double variance_bonus_cap;
+  /* C11 */
+  int32_t graph;
+  int32_t node_key;            /* T5D_NODE_KEY_* */
+  double residual_epsilon;
+  /* H2, E9, H41: the proof channel's switch - solved-status propagation in the
+     tree; 0 by rule until the gate passes and the channel is signed off */
+  int32_t proof_channel;
+  uint32_t solved_visit_cap;
+  /* E5, E9 */
+  int32_t final_rule;          /* T5D_FINAL_* */
+  double lcb_floor;
+  double lcb_z;
+  double lcb_categorical_weight;
+  double secure_child_a;
+  /* leaves */
+  uint32_t batch_size;
+  double virtual_loss;
+  int32_t synchronous;         /* H15 */
+  uint64_t seed;
+  /* terminal detection (H37) and the turn cap (I11) */
+  uint64_t mate_nodes;
+  uint64_t mate_bytes;
+  int32_t turn_cap_turns;      /* 0: none */
+  int32_t turn_cap_boards;     /* 0: none */
+  uint64_t eval_cache_entries; /* 0: no cache */
+  uint64_t eval_cache_bytes;   /* its memory ceiling (estimated) */
+  t5d_expand_options expand;   /* the leaves' network input (k, features, relations); last */
+} t5d_search_params;
+
+/* One leaf of a gathered batch. */
+typedef struct t5d_leaf {
+  uint64_t key;            /* the node key (H18; t5d_search_params.node_key) */
+  uint64_t epoch;          /* the refresh epoch (t5d_search_set_epoch) */
+  int32_t acting_player;   /* D8: whose action is in progress, until it submits: 0 white,
+                              1 black - the value's perspective */
+  int32_t submit_possible; /* D8: submitting is an action here (the obligations met, T5) -
+                              board-move split; 0 under whole turns */
+  int32_t submit_legal;    /* ... and legal (C4, exact) */
+  const uint8_t* legality; /* per move, T5D_LEGALITY_LEGAL or _UNKNOWN (the board-move
+                              split's classification); NULL when none was made */
+  t5d_expansion expansion; /* the network's input; logit i scores expansion.moves[i]; last */
+} t5d_leaf;
+
+/* What the search has done, and its root. */
+typedef struct t5d_search_summary {
+  uint64_t playouts;
+  uint64_t evaluations;   /* leaves evaluated (the cache's hits not counted) */
+  uint64_t cache_hits;
+  uint64_t nodes;         /* nodes held now */
+  uint64_t nodes_created;
+  uint64_t transposition_hits;
+  uint64_t checkmates;
+  uint64_t stalemates;
+  uint64_t turn_caps;
+  uint64_t unknown_verdicts;
+  uint64_t unknown_edges;
+  uint64_t verified_illegal;
+  int32_t root_turn_start;
+  int32_t root_terminal;  /* the root's game is over (checkmate, stalemate, the cap) */
+  int32_t root_solved;
+  int32_t root_lo;        /* the root's solver bounds, its player's view: -1, 0, 1 - search
+                             state, never to be persisted as a proof (H19, H23) */
+  int32_t root_hi;
+  uint32_t root_visits;
+  double root_q;
+  uint64_t root_children;
+  uint64_t epoch;
+  uint64_t memory_bytes;  /* the graph's memory, estimated (the evaluation cache apart) */
+  uint64_t cache_entries; /* the evaluation cache's entries (shared ones included) */
+  uint64_t cache_bytes;   /* ... and their bytes, as it counts them */
+  uint64_t cache_purged;  /* entries behind the root this search purged */
+  int32_t last_stop;      /* T5D_STOP_*: why the last run stopped */
+} t5d_search_summary;
+
+/* A run's budgets (t5d/mcts.hpp, Limits): T5D_NO_LIMIT for none (seconds: 0). playouts and
+ * evaluations count from the call; nodes and bytes are the graph's. A run
+ * stops between batches once one is reached. */
+typedef struct t5d_search_limits {
+  uint64_t playouts;
+  uint64_t evaluations;
+  uint64_t nodes;
+  uint64_t bytes;   /* t5d_search_summary.memory_bytes */
+  double seconds;   /* a wall-clock deadline from the call; 0: none (not deterministic) */
+} t5d_search_limits;
+
+/* One child of the root (t5d_search_child), from the root player's view. */
+typedef struct t5d_root_child {
+  uint32_t visits;     /* the policy target (f) */
+  int32_t submit;      /* 1: "submit" (board-move split, Q4's other reading) */
+  int32_t legality;    /* T5D_LEGALITY_LEGAL or _UNKNOWN */
+  int32_t lo;          /* solver bounds (-1 when unproven, and through an unknown move): search
+                          state, never to be persisted as a proof (H19, H23) */
+  int32_t hi;
+  double prior;
+  double q;
+  size_t move_count;   /* its moves: 1 (board-move), an action's (whole-turn), 0 (submit) */
+} t5d_root_child;
+
+/* The defaults (t5d/mcts.hpp). Cannot fail; NULL is ignored. */
+T5D_API void t5d_search_params_default(t5d_search_params* out);
+
+/* A search from the game's current state. turn_start: 1 if no move has been
+ * made yet in the action under way (the whole-turn split requires it). `params`
+ * NULL: the defaults. The game handle is not kept. On failure *out is NULL. */
+T5D_API t5d_status t5d_search_new(const t5d_game* game, int32_t turn_start,
+                                  const t5d_search_params* params, t5d_search** out,
+                                  char** error);
+
+/* A search like t5d_search_new's that shares `donor`'s evaluation cache (C14:
+ * a fresh search per move, the cache carried - the step API's self-play), its
+ * own parameters' cache sizes ignored. The donor may be destroyed afterwards;
+ * the cache lives while a search holds it. */
+T5D_API t5d_status t5d_search_new_sharing(const t5d_search* donor, const t5d_game* game,
+                                          int32_t turn_start, const t5d_search_params* params,
+                                          t5d_search** out, char** error);
+
+/* Releases a search. NULL is ignored. */
+T5D_API void t5d_search_destroy(t5d_search* search);
+
+/* ---- the step API --------------------------------------------------------- */
+
+/* Selects up to max_leaves leaves (virtual loss on their paths), completing on
+ * the way the simulations that need no evaluation, while fewer than
+ * max_playouts simulations are completed or waiting (T5D_NO_LIMIT: none).
+ * *count: the evaluations wanted (one per distinct state among the leaves); 0
+ * when the search needs none (its root is terminal or solved, or the
+ * playouts are spent). T5D_ERR_ARGUMENT if a batch is already waiting. */
+T5D_API t5d_status t5d_search_gather(t5d_search* search, size_t max_leaves,
+                                     uint64_t max_playouts, size_t* count, char** error);
+
+/* Leaf `index` (< count) of the batch waiting. */
+T5D_API t5d_status t5d_search_leaf(t5d_search* search, size_t index, t5d_leaf* out,
+                                   char** error);
+
+/* Leaf `index`'s state, as a t5d_state (fingerprint, boards). */
+T5D_API t5d_status t5d_search_leaf_state(const t5d_search* search, size_t index,
+                                         t5d_state** out, char** error);
+
+/* The batch's evaluations, leaf by leaf in order: `logits` concatenates each
+ * leaf's move_count logits (logit_count = their sum); `submit_logits` holds one
+ * submit logit per leaf (submit_count = count; read where the leaf's submit is
+ * possible; NaN: none given) or is NULL with submit_count 0 (the search's
+ * placeholder everywhere); `values` holds T5D_VALUE_BINS numbers per leaf
+ * (value_count = count x 51), probabilities or logits by value_kind. Backs up
+ * and releases the virtual loss. On T5D_ERR_ARGUMENT (counts that do not match,
+ * a non-finite logit, an infinite submit logit, a value that is no
+ * distribution) the batch is abandoned: virtual loss released, nothing backed
+ * up. */
+T5D_API t5d_status t5d_search_deliver(t5d_search* search, const float* logits,
+                                      size_t logit_count, const float* submit_logits,
+                                      size_t submit_count, const float* values,
+                                      size_t value_count, int32_t value_kind, char** error);
+
+/* Releases the waiting batch's virtual loss without backing anything up. */
+T5D_API t5d_status t5d_search_abandon(t5d_search* search);
+
+/* Runs `playouts` simulations with a built-in evaluator (T5D_EVALUATOR_*;
+ * evaluator_seed for the random one), for tests and tools. */
+T5D_API t5d_status t5d_search_run(t5d_search* search, int32_t evaluator, uint64_t evaluator_seed,
+                                  uint64_t playouts, char** error);
+
+/* The same within `limits` (NULL: an error); *stop (may be NULL): T5D_STOP_*. */
+T5D_API t5d_status t5d_search_run_limits(t5d_search* search, int32_t evaluator,
+                                         uint64_t evaluator_seed, const t5d_search_limits* limits,
+                                         int32_t* stop, char** error);
+
+/* ---- results, choice, persistence --------------------------------------- */
+
+T5D_API t5d_status t5d_search_info(const t5d_search* search, t5d_search_summary* out);
+
+/* Root child `index` (< info.root_children): its statistics, and up to
+ * `capacity` of its moves into `moves` (may be NULL with capacity 0). A move's
+ * boards and cells are those of the root state's canonical order. */
+T5D_API t5d_status t5d_search_child(const t5d_search* search, size_t index,
+                                    t5d_root_child* out, t5d_move* moves, size_t capacity,
+                                    char** error);
+
+/* Final selection (E5, E9): the child to play and why (T5D_CHOICE_*). */
+T5D_API t5d_status t5d_search_choose(const t5d_search* search, size_t* index, int32_t* reason,
+                                     char** error);
+
+/* Self-play's choice: sampled from the root's visits at `temperature` (<= 0:
+ * the most visits), `random` a uniform number in [0, 1). */
+T5D_API t5d_status t5d_search_choose_by_visits(const t5d_search* search, double temperature,
+                                               double random, size_t* index, char** error);
+
+/* Classifies root child `index`'s move exactly (a move must be known legal
+ * before it is played): *legality T5D_LEGALITY_*; an illegal child is removed
+ * (the children's indices then change). */
+T5D_API t5d_status t5d_search_verify(t5d_search* search, size_t index, int32_t* legality,
+                                     char** error);
+
+/* Re-roots on root child `index` (C12): its statistics carried, every node the
+ * new root cannot reach deleted, cached evaluations kept. */
+T5D_API t5d_status t5d_search_advance(t5d_search* search, size_t index, char** error);
+
+/* Re-roots on the turn start an action reaches - its moves, in a playable
+ * order (each matched as t5d_game_apply matches one): the opponent's reply.
+ * Atomic: the whole action is checked first, and on any error nothing has
+ * changed. From a turn start the action has at least one move (count 0 is an
+ * error there); from a state during an action, count 0 submits it. */
+T5D_API t5d_status t5d_search_advance_action(t5d_search* search, const t5d_move* moves,
+                                             size_t count, char** error);
+
+/* The root's state, as a new game handle (legal submissions). */
+T5D_API t5d_status t5d_search_root_game(const t5d_search* search, t5d_game** out, char** error);
+
+/* The refresh epoch (§7.9): evaluations are cached per (state, epoch). An
+ * error while a batch is waiting (deliver or abandon it first). */
+T5D_API t5d_status t5d_search_set_epoch(t5d_search* search, uint64_t epoch, char** error);
+
+/* H15: a digest of the whole search graph - every node's and edge's statistics
+ * in a canonical order - equal for bit-identical searches (the synchronous
+ * debug mode's check, and the step API's against the C++ search). */
+T5D_API t5d_status t5d_search_digest(const t5d_search* search, uint64_t* out);
+
+/* The layouts of this header's structs, as this library was built (t5d_layout's
+ * contract, for "t5d_search_params", "t5d_leaf", "t5d_search_summary" and
+ * "t5d_root_child"): with `field` NULL, sizeof(`type`); otherwise the offset of
+ * `field`. T5D_ERR_ARGUMENT for a NULL `type` or `out`, an unknown type or
+ * field. */
+T5D_API t5d_status t5d_search_layout(const char* type, const char* field, size_t* out);
+
+#ifdef __cplusplus
+} /* extern "C" */
+#endif
+
+#endif /* T5D_CAPI_SEARCH_H */

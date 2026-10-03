@@ -72,11 +72,11 @@ channel (rung 1), rungs 3 and 5; the NNUE held open (H6). The user's rulings:
 M16 also fixed M7's readings; applied, the window is killed under human-game
 weighting, which contradicts M16's own premise - put to the user (MEASUREMENTS, M7).
 
-**Running (2026-10-03):** engine **E9** on E8's branch (Guard, Hunt, the asset map
-as components; the estimate channel dropped; Hunt's ground truth; the 6b″ tool);
-engine **E6a**'s fix round (its three reviews; H41's switch; H18's acting-player
-test); network **C24** (the complexity trigger, behind a flag). **Then:** E9's review
-and merge; E6a's merge; E10 - Guard, Hunt, the asset map and the under-50 settling
+**Done since (2026-10-03):** network C24 merged (65acf68); **engine E6a merged** -
+the search core after its three adversarial reviews and their fixes, with H41's
+switch and H18's acting-player test (474 tests). **Running:** engine **E9** on
+E8's branch (Guard, Hunt, the asset map as components; the estimate channel
+dropped; Hunt's ground truth; the 6b″ tool). **Then:** E9's review and merge; E10 - Guard, Hunt, the asset map and the under-50 settling
 scans wired into the search, and the offline audit lane's tooling (H44); 6b″ on a
 quiet machine; the many2 re-record; the gate with the engine configured; N5.
 
@@ -324,6 +324,9 @@ threads reach at least one thread's sum (one retry on a shared machine).
 |---|---|---|---|---|---|---|---|---|
 | 2026-10-03 | E7 | 2e7ee18 (E7's branch, main merged in) | dev, 24 logical; E8 running; load 5-12% before, 12-26% during | 32 | 293 | 311 / 313 / 309 (three runs) | none | pass x3 |
 | 2026-10-03 | E7 | main + E7, merged tree before the commit | dev, 24 logical; E8 running; load 23% | 32 | 293 | 311 / 311 / 313 (three runs) | none | pass x3 |
+| 2026-10-03 | E6a | ef3830f (E6a's rebased branch, before review) | dev, 24 logical; shared | 32 | 293 | 311 / 313 / 313 | none | pass x3 |
+| 2026-10-03 | E6a | 9c49a47 (E6a after its review fixes) | dev, 24 logical; load 79-88% | 32 | 292 | 304 / 307 / 308 | none | pass x3 |
+| 2026-10-03 | E6a | main + E6a, merged tree before the commit | dev, 24 logical; E9 running; load 8% | 32 | 293 | 313 / 313 / 313 | none | pass x3 |
 
 ## Environment
 
@@ -723,7 +726,7 @@ for game records.
 | ID | Status | Notes |
 |---|---|---|
 | H1 | v3 (CHECKPOINT 4), in progress | Verification v3 (§11.4): exact rules (E1-E4); the search's solver (E6a, gated by H41); Guard and Hunt (E9, building); full settling (df-pn, E8) under 50 boards; the audit lane (H44). E5b/E5c's brute-force scanner stays as 6b′'s comparison |
-| H2 | built, tested | Proofs only from E4's exhaustive verdicts and exhaustive defender enumerations; estimates otherwise |
+| H2 | built, tested | Proofs only from E4's exhaustive verdicts and exhaustive defender enumerations; estimates otherwise. The search (E6a) consumes in-tree bounds only behind H41's switch |
 | H3 | built, tested | Node cap with iterative deepening in forcing half-turns; horizon per budget measured (6b) |
 | H4 | built | MVV-LVA, killers, history, continuation history |
 | H5 | built | Nothing speculative; null move and LMR not built |
@@ -734,11 +737,11 @@ for game records.
 | H11 | superseded | By Guard (promotion) and the audit lane (demotion audit) |
 | H12 | retired | With the NNUE and the per-node scans |
 | H13, H14 | parked | Ladder scheduling: with the search wiring (E10) |
-| H41 | building | The search's solver as part of the proof channel: game-end scoring on; propagation and export off until the gate passes (E6a's fix round) |
+| H41 | built, tested | `SearchParams::proof_channel` (C `proof_channel`, `t5d-play --proof-channel`): propagation of solved status (marking nodes solved, pruning siblings, secure-child selection) and export, off by rule; game ends are scored as results. Was: building | The search's solver as part of the proof channel: game-end scoring on; propagation and export off until the gate passes (E6a's fix round) |
 | H42, H43 | building | Guard and Hunt (E9); adoption per range by 6b″ |
 | H44 | not started | The offline audit lane's tooling (E10) |
 | H45 | not built (rule) | The adversarial league (M5) |
-| H15 | built, tested | The scanner's deterministic single-thread mode; search's (E6a) in progress |
+| H15 | built, tested | The scanner's deterministic single-thread mode; the search's synchronous mode and digest (E6a; the digest in the C API) |
 | H16, H25, H29 | not built (rule) | Refused |
 | H17 | built in part | Lazy SMP in the scanner (E5c): same-root threads, a shared TT and a concurrent solved store; in-game decay and rung helpers wait for the search |
 | H18 | built, tested | 5D Zobrist: coordinate-free content hash per board, multiply-rotate with (timeline, half-turn), addition across boards, ruleset ID, player to move, parity, creators, board size; incremental equals from-scratch; duplicated boards never cancel (engine E1, E2) |
@@ -782,15 +785,20 @@ for game records.
 | C3, C3a (rung 1) | built, tested | Root refresh and the travel-triggered, visit-gated rung-1 fork (copy-on-write epochs), behind flags |
 | C3a (rungs 2-3), C18, C22 | not built (rule) | Held open (M5 for rungs 2-3) |
 | C5, C7 | parked | Window code only after the \|E\| verdict (M7) |
-| C11 | not started | MCGS behind a flag; search on real positions waits on legality |
-| C12, C13 | not started | Persistence (search); frozen K/V already persist across roots under C20's first reading |
+| C11 | built behind a flag, tested | MCGS (E6a): identity is the state key and whether an action is in progress, compared exactly (§8.5's state, issue 87); awaiting 6k |
+| C12, C13 | built, tested | Re-rooting with garbage collection, the persistence hook and pondering (E6a) |
+| C14 | built, tested | Fresh searches per decision in self-play; the evaluation cache shared across them, purged by board count (issue 89); the C API's `t5d_search_new_sharing` |
+| C23 | built, tested | The node key's default carries branch origins (lineage, `NodeKey::StateAndOrigins`) |
 | C15 | built in part | FP8 e4m3 frozen K/V (`frozen_kv_format = "fp8"`, applied by the forward itself); varlen/ragged kernels not built (none on CPU); C15 vs G1 is spec issue 34 |
 | C16 | not built (rule) | Deferred; last, only if node-starved |
 | C21 | not built (rule) | Refused; a mutant that snapshots is caught by the tests |
 | D1, D3, D4 | built, tested | Network N1: pointer policy, 51-bin value head, auxiliary heads (D4's reply space, label set and moves-left unit are placeholders, spec issue 9) |
-| D2 | not started | Undecided: both arms awaited by trained ablations 6g/6k |
-| E1, E5, E7, E9 | not started | Search |
-| E2, E3, E8 | not started | Behind flags |
+| D2 | built, tested | Both arms (`SearchParams::split`: the board-move split, default, and whole turns); awaiting trained ablations 6g/6k |
+| D8 | built (engine, search) | Submit is an explicit edge, legal only when C4 holds, never automatic; the acting player and submit flags through the C step API; the network side (the submit logit, the acting-player input) is N5 |
+| E1, E5, E9 | built, tested | PUCT with entropy-adaptive top-k widening, FPU, root noise in self-play (E1); LCB with a visit floor (E5); the solver behind H41's switch, the secure child, a visit cap on solved children (E9) - every constant a placeholder (issues 80-86) |
+| E7 | not started | Time management (with E10's Guard re-search reserve) |
+| E2, E3 | built behind flags, tested | Off; awaiting 6m and 6t |
+| E8 | not started | Behind a flag |
 | E6 | not built (rule) | Refused |
 | F1, F2 | built, tested | 21,358,601 parameters (F1); the L24-ff12 preset, 44.5M (F2) |
 | F3 | not built (rule) | Refused |
@@ -799,7 +807,7 @@ for game records.
 | G2 | not started | FP8 attention - no FP8 kernels on this machine |
 | G3, G4, G5, G6 | not built (rule) | Deferred / held open / refused |
 | I1-I10 | not started | Training code may be written and smoke-tested only; I7 and I8 not built (M5) |
-| I11 | not started | Self-play's turn cap from the state, scored as a draw, its frequency logged: with self-play |
+| I11 | built, tested | Self-play's turn cap from the state (and t5d-play's 300-board cap), scored as a draw, its frequency logged (issue 88) |
 
 ### M - the plan itself
 
@@ -1223,6 +1231,45 @@ decision), and what is parked.
     configuration; whether a structural signal may ever subtract from rung 1's
     trigger is not ruled.
 
+80. **The submit prior** (D8, §8.2) until the network's submit logit exists: a
+    placeholder `submit_share` 0.5 of a decision's prior. With logit 0 beside N
+    flat move logits, untrained actions played nearly every optional board (one
+    game: 101 moves in 14 actions, 54 timelines by action 16).
+81. **§8.2's whole-turn action prior** from single-move logits: the sum is built,
+    the mean a flag.
+82. **E1's forms**: entropy-adaptive top-k widening, FPU (applied to unvisited
+    *instantiated* children - §8.4 says uninstantiated), root Dirichlet α at 5D
+    branching - every constant a placeholder.
+83. **E2's and E3's formulas and constants** (behind flags).
+84. **E9**: "a visit threshold for solved nodes" read as a per-child visit cap of
+    8; the secure child as Q − A/√n with A = 1.
+85. **E5's LCB**: z = 3, a 15% visit floor, categorical weight 0.
+86. **MCGS residuals** (C11): how a shared node's value is backed up through
+    several parents.
+87. **§8.5's "values depend only on the state"**: the state must include whether
+    an action is in progress - a turn start and a mid-action state can share
+    every board and the acting player (two reviews found graph search merging
+    them, pruning a legal mating submission). Built: MCGS identity is (key, turn
+    start); the network is never told whether a leaf is a turn start.
+88. **The turn cap's definition** (I11) and its record: "*" with a Termination
+    header for capped records; t5d-play's default 300-board cap (a uniform
+    Standard game reached 509 boards before turn 20).
+89. **C14**: the evaluation cache shared across self-play's fresh searches,
+    keyed by state, purged by board count at creation and re-root.
+90. **The legality policy (a)-(f) as built** (issue 46, proposal 43): unknown
+    moves kept but never feeding proofs, verified when first selected.
+91. **The material evaluator's piece values** follow issue 56's placeholders.
+92. **D8's whole-turn half is unbuilt**: the whole-turn arm has no end-of-turn
+    token (the submit logit is ignored there; the C API reports submit_possible
+    = 0).
+93. **Memory**: about 80 bytes per eagerly stored edge; the whole-turn listing
+    cap lowered from 4096 to 256 actions per node (1.5 MB per node at 103 boards
+    before); actions are not stored lazily.
+94. **The search's mate-check budget** against the near-mate tail.
+95. **At large N, legality classification dominates self-play time** (41 of 43 s
+    at 336 boards; 56 s of the board-capped Standard smoke games).
+(The in-tree solver before the gate, an E6a draft issue, is settled by H41.)
+
 ## Proposed spec edits
 
 Edits the spec or the register needs, for applying upstream. Each: where, what it
@@ -1413,6 +1460,21 @@ says now, what it should say, why.
 63. **§8.6, the effort head**: a second consumer - C24 reads the parent's predicted
     difficulty at internal nodes (off-label, confidence-family, add-only) (issue
     78).
+64. **§8.5**: "values depend only on the state" -> the state includes whether an
+    action is in progress; a turn start and a mid-action state with equal
+    boards are different nodes; the network input is unchanged (issue 87).
+65. **§15.4's invariants**: add - a submit edge leads to a turn start, a move
+    edge to a mid-action state; no game end during an action; no dead end with a
+    legal completion.
+66. **§8.7 / C14**: the shared, state-keyed evaluation cache and its board-count
+    purge (issue 89).
+67. **§8.2's whole-turn arm**: the listing cap's memory role, and the missing
+    end-of-turn token (issues 92, 93).
+68. **§8's solver text** points at H41's switch (`proof_channel`).
+69. **§8.4**: name E1's, E2/E3's, E5's and E9's constants, the submit prior and
+    the whole-turn prior as parameters with placeholder defaults (issues 80-85).
+70. **I11 / §8.6**: the turn cap's definition and the capped record's
+    Termination header (issue 88).
 
 ## Session log
 

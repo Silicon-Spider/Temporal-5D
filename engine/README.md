@@ -10,7 +10,7 @@ notation specification (H28).
 
 It is C++20, with a C API (a shared library) for Python and other callers.
 
-## Status: stages E3 to E5c, and E7
+## Status: stages E3 to E5c, E6a and E7
 
 Stage E1 built the parts of the engine that need no movement rules; stage E2a added
 the rules mechanics and pseudo-legal move generation (§11.0 items 4-5 and the
@@ -27,7 +27,12 @@ budgeted (legal / illegal / unknown) or exact - instead of a search per move; st
 E7, after the CHECKPOINT 2 rulings, makes moves after the present has shifted - until
 submission - the default rules (Q4, ruled R8; register D8), the Guide-literal reading
 a diagnostic, and gives the expansion and its C API the acting player and the submit
-action, possible and legal (D8). Rule IDs (L*, T*, J*, 4.*, S*, Q*, V*) are those of the project's
+action, possible and legal (D8); stage E6a adds the main search - PUCT over a tree or,
+behind a flag, a graph, both D2 arms, the in-tree solver behind the proof channel's
+switch - off by rule (H41) - final selection, persistence, self-play
+and match play, the step C API an external evaluator drives, and t5d-play - revised
+after three adversarial reviews (MCGS identity, the solver's default, test strength,
+call sequences, memory, the C ABI, validation). Rule IDs (L*, T*, J*, 4.*, S*, Q*, V*) are those of the project's
 rules reference, `docs/rules/README.md`, which the code cites throughout.
 
 | Part | Where | Spec |
@@ -59,11 +64,20 @@ rules reference, `docs/rules/README.md`, which the code cites throughout.
 | **E5b:** the tactical scanner: forcing actions, proofs and estimates, the solved store; experiment 6b's tool | `include/t5d/scanner.hpp`, `tools/t5d_scan6b.cpp` | §11.1-§11.3, §15.6, H1-H6, H15, H19, M8 |
 | **E5c:** the scanner's in-check stage (M12's optimisation pass), Lazy SMP and the shared solved store; 6b per board-count range at the design thread budget | `include/t5d/scanner.hpp`, `tools/t5d_scan6b.cpp` | §11.3, §15.6, H17, H19, M12, M13 |
 | **E7:** Q4 as ruled (R8) by default; the acting player and the submit action in the expansion and the C API | `include/t5d/rules.hpp`, `include/t5d/expand.hpp`, `include/t5d/capi.h` | §8.2, §11.0 item 2, D8 |
+| **E6a:** the main search: PUCT, widening, both D2 arms, MCGS, the solver, final selection, persistence; built-in evaluators | `include/t5d/mcts.hpp`, `src/mcts.cpp`, `src/mcts_evaluators.cpp` | §8.1-8.7, §11.1, §15.4; D2, E1-E9, C11-C14, H2, H15 |
+| **E6a:** self-play and match play; the turn cap | `include/t5d/selfplay.hpp`, `src/selfplay.cpp` | §8.7, §12.3; C12-C14, I11 |
+| **E6a:** the search's C API: the step API for an external evaluator | `include/t5d/capi_search.h`, `src/capi_search.cpp` | §8.1, §8.3; D1, D3 |
+| **E6a:** t5d-play, the engine against itself, and its 5dpgn record | `tools/t5d_play.cpp`, `tools/play_record.hpp` | §15.5 |
 
 Next: the gate run with the engine configured in full mode - Q4's ruling (R8) is
 the default, and with it every one of the triage's 115 Q4 findings agrees with the
-oracles; the expansion's pin and check relations; which moves the expansion offers, and how a
-search treats a move left unknown (build-log spec issues 28, 46).
+oracles; the proof channel's sign-off (H41: the in-tree solver's propagation stays off
+until the gate passes, the search's soundness fixes land with tests, and the channel
+is signed off, its proofs cross-checked against df-pn and oracle mate verdicts);
+the network's stage N5 (the acting-player input and the submit logit the search already
+takes); the expansion's pin and check relations; the spec issues the search's
+placeholders raise (build-log spec issues 28, 46, and the E6a issues listed under
+"Choices the spec leaves open").
 
 **Moves are pseudo-legal; turns are legal.** A move is pseudo-legal when it obeys
 every movement rule and the action's bookkeeping; legality is judged per action, at
@@ -117,6 +131,7 @@ Targets (all in `build/engine`):
 | `t5d-measure` | W(k), E(k), src_extra(k) at every position of records (see "t5d-measure") |
 | `t5d-bench` | expansion throughput (see "t5d-bench") |
 | `t5d-scan6b` | experiment 6b: the scanner's horizon per node budget (see "Stage E5b") |
+| `t5d-play` | the engine plays itself and prints the 5dpgn record (see "Stage E6a") |
 
 Release builds use -O2; every target builds with `-Wall -Wextra -Wpedantic -Wshadow
 -Wconversion -Wsign-conversion`, warning-free (`--werror` makes that binding). On
@@ -1904,6 +1919,344 @@ Built after the user's CHECKPOINT 2 rulings (rulebook R8 and R9; register D8).
   fields yet: its acting-player input and submit logit are stage N5, and until then
   `to_position` refuses a state past the shift (`PresentMismatch`).
 
+## Stage E6a: the main search (`t5d/mcts.hpp`)
+
+PUCT over a tree - or, behind a flag, a graph - of game states, fed by a batched
+evaluator (design spec §8.1-8.7; the consumer side of §11.1's proof channel; §11.2's
+synchronous debug mode; §15.4's invariants). Written from the spec and the papers it
+cites - AlphaZero's PUCT, progressive widening, MCTS-Solver (Winands et al. 2008) with
+Cazenave and Saffidine's score bounds for draws, Monte-Carlo graph search with residual
+backups (Czech, Korus and Kersting 2021), KataGo's variance-scaled cPUCT, uncertainty
+weighting and LCB selection - and the Chess Programming Wiki; no engine's code (H29).
+Single-threaded; no time management (E7, E8), scanner (rung 1) or Lazy SMP yet.
+
+**Nodes and values.** A node holds a `GameState` and its acting player (register D8)
+- the player whose action is in progress, until it submits; after the present has
+shifted inside the action it is no longer the colour to move on the present. Values
+are in [-1, 1] from that player's view; backing up across an edge flips the sign only
+when the two nodes' acting players differ - under the ply split, only across a submit
+edge. The evaluator's value is a 51-bin categorical
+distribution (D3), bins centred on `(2k - 50) / 50`; its mean is the leaf's value and
+its variance feeds E2, E3 and LCB.
+
+**D2's two arms** (`SearchParams::split`; D2 is undecided, ablations 6g/6k):
+
+- *Board-move as ply* (`BoardMove`, the placeholder default): a node is a turn's start
+  or a state during an action; its children are the legal moves and - turns have
+  variable length (rulebook R8, register D8, spec §8.2), so submitting is an action -
+  a **submit edge** exactly where submitting is possible (the obligations met, T5:
+  `Expansion::submit_possible`), legal exactly where the submission passes C4
+  (`Expansion::submit_legal`, exact); an illegal one is kept, pruned, with no prior.
+  Nothing is submitted automatically: after the move that shifts the present the node
+  still belongs to the same acting player and offers submit beside any further move
+  on that player's remaining playable boards (R8, the default rules; under Q4's
+  Guide-literal reading, `moves_after_shift = false`, submit alone). Only a submit
+  edge changes the acting player. Submit's prior is the evaluator's submit logit
+  (D8: from a global register - the network's stage N5) when it gives one, else the
+  placeholder `submit_share` (0.5) of the prior where moves are open too: with a flat
+  move policy a submit logit of 0 among N moves would make every action play nearly
+  every optional board (measured: 101 moves in 14 actions, 54 timelines). Mid-turn
+  check is legal; terminal detection runs only at turn starts (§8.2).
+- *The ends, from the rulebook.* At a turn's start, no legal action ends the game
+  (C5): checkmate if the side to move is in check (R1's status), otherwise stalemate
+  (C10, a draw; C13) - decided only by E4's exhaustive detector (H37). During an
+  action there is no game end (C5 speaks of the start of a turn): a partial action
+  whose remaining moves and submission are all illegal has no legal completion, so the
+  move that reached it was not legal (R1: a move is legal when a legal action
+  continues with it). It is a **dead end**, pruned and never scored (§8.2). The exact
+  classification never reaches one; a budget (an unknown move) or the pseudo-legal
+  test seam may, and it is found when the node is expanded. After the shift a legal
+  submission finishes the action at once - but a further optional move (R8) can still
+  expose a royal, and such a move may lead to a dead end like any other.
+- *Whole turn* (`WholeTurn`): a node is always a turn's start; its children are the
+  legal actions (`list_legal_actions`, E4), at most `max_actions` of them (a listing
+  stopped there, or by `listing_nodes`, is incomplete and never proves a loss). Every
+  listed action is stored with its node (its moves and an edge), so `max_actions`
+  bounds a node's memory: at the old default of 4,096 a node of a 100-board position
+  held about 1.5 MB (review B); the placeholder default is now 256. D8's submit is no
+  decision of its own here (an action is listed submitted), so the evaluator's submit
+  logit is not read and the C API reports `submit_possible` 0: this arm has no
+  end-of-turn token (a spec issue; not built). The
+  network's policy is over single moves (D1), so an action's prior comes from its
+  moves' logits - their sum (a product of per-move factors; default) or their mean
+  (`action_prior`) - each move matched to the turn start's pseudo-legal candidate with
+  its squares and promotion (a J6 branch has the non-branching jump's coordinates).
+
+**How legality enters** - one call site (`leaf_expansion` in `src/mcts.cpp`): a leaf's
+expansion with `ExpandOptions::legal_moves`, classified by E5a's tiers under
+`SearchParams::legality`. The policy for moves the budget leaves unknown (build-log
+spec issue 46; each part a parameter):
+
+| | What | Parameter (placeholder default) |
+|---|---|---|
+| (a) | proved-illegal moves dropped; legal and unknown kept, unknown flagged | `legality` (`budgeted(64, 2000)`; `exact()` leaves nothing unknown) |
+| (b) | an unknown move gets its prior | `unknown_prior_scale` (1) |
+| (c) | the first time selection picks an unknown edge it is verified: illegal - removed, siblings' priors renormalised, selection repeated, nothing backed up; legal - flag cleared; still unknown - kept, flagged | `verify_unknown` (on), `verify_legality` (`budgeted(4096, 200000)`) |
+| (d) | a node is terminal only on an exact verdict of E4's detectors | - (H37) |
+| (e) | a child through an unknown edge never raises its parent's lower bound (it still bounds it from above: a superset of the legal children is a sound upper bound), and is never a proven win for final selection | - |
+| (f) | training's policy target is the root's visits (`root_children` lists the instantiated children; the rest have none); the network's move mask is a leaf's legal and unknown moves - every candidate its expansion kept - not the root's children | `RootChild::visits`; `Expansion::move_legality` (`t5d_leaf.legality`) |
+
+Every pruning renormalises the siblings' priors. Before a move is played, an unknown
+one is classified exactly (`Search::verify`; self-play does this, and plays only moves
+known legal). `legal_moves_only = false` is a test seam: pseudo-legal children, whose
+dead ends are pruned.
+
+**Terminals.** At a turn start, E4's `detect_mate` under `mate_nodes` and
+`mate_bytes`: checkmate (-1, proven), stalemate (0, proven, C10), or - the detector
+stopped - unknown, **never terminal** (H37). Self-play's turn cap (I11, `turn_cap`: a
+present past `turns` turns, or `boards` boards, at a turn start) scores 0 and proves
+nothing; the rules' verdict comes first.
+
+**Selection** (E1). PUCT, `U = cpuct * P * sqrt(N) / (1 + n)`, over the instantiated
+children: the children sorted by prior, the first `ceil(k0 (N + 1)^alpha)` instantiated
+(progressive widening), with `k0 = max(widening_min, widening_scale * exp(H))` from the
+policy's entropy H - sharp policies narrow, flat ones widen. FPU: an unvisited child
+scores `Q(parent) - fpu_reduction * sqrt(visited prior mass)`. Root Dirichlet noise for
+self-play (`root_noise`, `dirichlet_alpha` per child, `dirichlet_epsilon`; seeded,
+deterministic). Behind flags: E2 - cPUCT scaled by `clamp(1 + lambda (sigma / sigma_ref
+- 1))`, sigma the node's value deviation (the categorical variance as a prior of
+weight `variance_prior_weight`, blended with the backed-up values'), and backups
+weighted `sigma_ref^2 / (sigma_ref^2 + var)`; E3 - U multiplied by `clamp(1 + beta
+(sigma_child / sigma_ref - 1), 1, cap)`, never below 1, nothing for an unevaluated
+child.
+
+**Batches and virtual loss.** `gather` makes up to `batch_size` visits - the leaves it
+sends for evaluation and the visits it completes without the evaluator (terminals,
+solved nodes, cache hits, MCGS residuals) together, so that terminal visits cannot pile
+up behind a waiting leaf's virtual loss; each waiting path
+carries one virtual visit, counted as a loss, on every node and edge it crosses. A
+second path reaching a waiting leaf is a collision (its virtual loss held until the
+batch ends, so later selections diverge). One evaluation is asked per distinct state
+in the batch. The virtual loss is always released: by `deliver`, by `abandon`, when the
+evaluator throws, when an evaluation is malformed - and when anything fails inside
+`gather` or `deliver`, an allocation included: `gather` abandons its batch before the
+exception leaves, `deliver` keeps what it delivered and abandons the rest (the tests
+inject a `bad_alloc` at every allocation of both). `run` resets every field of the
+evaluation buffers it reuses, the submit logit included. The epoch cannot change while a
+batch waits (its evaluations belong to the epoch they were asked under).
+
+**MCGS** (C11, prototype, `graph`). Nodes keyed by `node_key(state, keying)`: the 5D
+Zobrist key - the ruleset ID, every board in its place (so what has been played
+inside the action: a played board has its successor) and the acting player (a state
+after the shift and the same boards submitted differ in it) - mixed, by default, with
+every timeline's branch origin (`NodeKey::StateAndOrigins`: C23 ruled a board's causal
+past to be its ancestry, the lineage reading of spec issue 30, so states that differ
+only in an origin are different positions for the network); `NodeKey::State` leaves
+origins out. The key carries the acting player (H18 as amended: the 5D Zobrist key
+itself does - `Multiverse::zobrist` mixes in the player to move, which is the acting
+player until the submission - so a state whose present has shifted inside an unsubmitted
+action and the opponent's turn start with the same boards have different keys, and the
+exact comparison behind a key match tells them apart too). A node's identity in the
+graph is its key **and whether an action is in progress**: a turn start and a state during an action can be one `GameState` (an
+optional board played at the end of one action, or at the start of the next - same
+boards, same player, same present), yet only a turn start can end the game (C5) or be
+capped (I11), and only a partial action can be a dead end, so they are never one node
+(a submit edge always leads to a turn start, a move to a state during an action;
+`check_invariants` holds it). Whether a leaf is a turn start is a property of the path,
+not of the state, so the evaluator is never told it: an evaluation is a function of
+the state and the epoch, and the cache is shared between the two. An exact comparison
+follows every key match (a collision gets an unshared node; `key_bits`, a test seam not
+in the C API, cuts the keys short so that the tests meet collisions). Statistics
+live on the edges (path statistics; in a tree they equal the child's). Reaching an
+expanded node through an edge whose Q lags the node's by more than `residual_epsilon`
+(or an edge never crossed) backs up the residual correction instead of descending.
+5D has no repetition rule and every move adds a board, so the graph is acyclic.
+
+**The solver** (H2, E9; behind `proof_channel`, **off by rule**). Register H41
+(ruled at CHECKPOINT 4): "the search's own solver is part of the proof channel:
+game-end scoring stays on; solved-status propagation and export are off until the gate
+passes, the search's soundness fixes land with tests, and the proof channel is signed
+off; its proofs are cross-checked against df-pn and oracle mate verdicts" (spec §11.1
+item 2; H23). So `SearchParams::proof_channel` - named as the proof channel's switch,
+`t5d-play --proof-channel` for experiments - is false: no node is marked solved, no
+sibling pruned and no secure child chosen from proven bounds. A game-end position - C5
+at a turn start, by E4's exhaustive detector, or I11's cap - is still scored as its
+result, which is ordinary MCTS; nothing else is proven. Export is `proof_store`
+(refused). With the switch on: bounds
+`[lo, hi]` per node from the mover's view: a terminal's exact value; `lo` the best child's lower bound (children through known
+edges), `hi` the best child's upper bound once every child exists and the list is
+complete. Bounds only tighten; a contradiction throws. A solved node leaves selection
+and consumes no evaluation (a visit backs up its exact value); a solved child is
+selected only while it has fewer than `solved_visit_cap` visits (the "visit threshold
+for solved-node selection", read so). **No persistent solved store**: H19's export
+waits on the gate (H23); `proof_store = true` is refused.
+
+**Final selection** (E5, E9; `choose`). With the solver on, a proven win is played;
+children proven lost are ineligible unless all are; if an eligible child is solved, the secure child - the
+largest lower bound, exact for a solved child and `Q - A / sqrt(n)` otherwise; else
+`final_rule`: `Visits` (the baseline) or `Lcb` (default) - among children with at least
+`lcb_floor` (15%) of the most visits, the largest `Q - z sqrt(var / n)`, var plus
+`lcb_categorical_weight` times the child's categorical variance (the optional second
+term). Under MCGS the visits are the edges'. No depth factor (E6, refused).
+`select_final` is a pure function (`final_eligible` says who may be chosen).
+Self-play samples the root's visits at a temperature instead (`choose_by_visits`).
+
+**Persistence** (C12, C13). `advance(child)`, `advance_moves`, `advance_action` (the
+opponent's reply) and `advance_to(state)` re-root: the new root's subtree is carried,
+every node it cannot reach deleted (renumbered breadth-first); the evaluation cache -
+state-keyed - survives; the root hook (`set_root_hook`) and the evaluator's
+`on_new_root` are told, for an evaluator holding K/V of the old conditioning. Pondering
+is `run` on the post-move root, then `advance_action` on the reply - atomic: the whole
+action is checked (each move pseudo-legal where it is made, the submission legal) before
+the first re-root, and a failure changes nothing; from a turn start an action has at
+least one move. Evaluations are
+cached per (state, refresh epoch) (`set_epoch`; 0 in the dense configuration).
+
+**Memory.** The evaluation cache counts each entry for what it alone keeps alive once
+its search is gone - the map's node, its logits, its state's list of timelines, and the
+boards (with their timeline objects) the step into the state made
+(`EvalCache::entry_bytes`; within 0.75-1.33 of the heap actually freed in the tests,
+where the old estimate was 1.4-2.2 times low) - and is purged, deterministically, of
+every state with fewer boards than the root, on a search's creation and on every
+re-root: every move adds a board and none is ever removed, so those states cannot come
+back (`purge_fewer_boards`; a cache shared across games would lose live entries). Along
+a game a small shared cache so stays useful (review B: without it, no hit after about 60
+decisions). The graph's memory is estimated the same way (`memory_bytes`: nodes, edges,
+actions, states' own heap, the MCGS table; within 0.75-1.33 of the heap in the tests),
+and `Limits` carries a node budget and a memory budget besides playouts and evaluations:
+`run` stops between batches when one is reached - or when a wall-clock deadline
+(`Limits::seconds`, for tools and match play, never training) passes - and returns why (`StopReason`, also
+`stats().last_stop`).
+
+**Determinism** (H15). One thread; with a deterministic evaluator a search is
+bit-reproducible (`digest()` hashes every node's and edge's statistics in a canonical
+order); `synchronous` is the debug mode - batches of one leaf.
+
+**The evaluator** (`Evaluator`): a batch of `EvalRequest`s - the leaf's state, its
+expansion (everything the network takes: features, candidate moves, move graph,
+relations, W/E; `expand` sets k, the features and the relations), its key and epoch -
+answered with one logit per candidate move and a 51-bin distribution. Built in:
+`uniform` (logits 0, value 0), `random` (a function of seed, key and epoch only - so
+still a function of the state), `material` (`tanh(balance / 10)` over every
+timeline's head board; captures' logits 0.5 x the captured value; P N B R Q 1 3 3 5 9,
+the fairy pieces at the scanner's placeholders - unicorn 2.5, dragon 2, princess 7,
+brawn 1.25, common king 3 - build-log spec issue 56, one set for the engine).
+
+**The C API** (`t5d/capi_search.h`, in `t5d.dll` / `libt5d.so`): the step API for an
+external evaluator - `t5d_search_new(game, turn_start, params, &search)`,
+`t5d_search_gather(search, max_leaves, max_playouts, &count)`, `t5d_search_leaf(search,
+i, &leaf)` (a `t5d_leaf`: key, epoch, the acting player, D8's
+`submit_possible` and `submit_legal`, the `t5d_expansion` - which carries them too -
+and each move's legality), `t5d_search_deliver(search, logits, logit_count,
+submit_logits, submit_count, values, value_count, value_kind)` - one float32 logit per
+candidate move, logit i scoring `leaf.expansion.moves[i]`; one submit logit per leaf
+(NaN: none) or none at all (NULL, 0: the placeholder share); 51 float32 values per leaf
+as probabilities (`T5D_VALUE_PROBABILITIES`) or logits (`T5D_VALUE_LOGITS`), from the
+leaf's acting player - and `t5d_search_abandon`; then `t5d_search_info`, `_child`,
+`_choose`, `_choose_by_visits`, `_verify`, `_advance`, `_advance_action`,
+`_root_game`, `_set_epoch`, `_run` (built-in evaluators) and `_run_limits` (within a
+`t5d_search_limits`: playouts, evaluations, nodes, bytes; it reports the
+`T5D_STOP_*` reason), `_new_sharing` (a new search sharing another's evaluation cache:
+C14 through the binding), `_digest` (H15's digest - the
+tests compare the step loop's graph with the C++ search's by it), and `t5d_search_layout`
+(this header's struct layouts, as `t5d_layout` gives `t5d/capi.h`'s).
+`t5d_search_params` mirrors `SearchParams` (fill it with `t5d_search_params_default`).
+The header's structs are appended to, never reordered; the one struct of `t5d/capi.h`
+each embeds (`t5d_leaf::expansion`, `t5d_search_params::expand`) - provisional, and
+growing as that header does (E7 appended D8's fields to `t5d_expansion`) - is its last
+member, so that its growth moves none of the others (a test holds it last).
+A malformed batch is refused and abandoned. Errors: `T5D_ERR_ARGUMENT` for the caller's
+(an argument, or a call the search's state does not allow - deliver with no batch
+waiting, `max_leaves` 0, a new epoch under a waiting batch); `T5D_ERR_MEMORY`;
+`T5D_ERR_INTERNAL` for the search's own failure (a broken invariant, a bounds check) -
+the C++ API throws `std::invalid_argument` for the caller's errors and nothing else, so
+the boundary can tell them apart. Solver bounds are search state, never to be persisted
+as proofs (H19, H23; the header says so).
+
+**Validation.** Every real parameter must be finite (NaN or infinity in, say,
+`virtual_loss` or `cpuct_variance_scale` poisoned selection; each is refused by name),
+as must `choose_by_visits`'s temperature and random number and `two_hot`'s value.
+
+**Self-play** (`t5d/selfplay.hpp`, `play_game`). Self-play: a fresh search per decision
+(C14), sharing only the evaluation cache, the move sampled from the visits at
+`temperature` for `temperature_decisions` decisions, then the most visited, with root
+Dirichlet noise (E1, §8.4: `PlayParams::search` has `root_noise` on by default; a bare
+`SearchParams` has it off). Match play (`match_play`): one search carried across
+decisions, the final rule, noise off.
+Every turn start is judged first by E4's detector (checkmate, stalemate; unknown ends
+the game unjudged), then by the turn cap (scored a draw, counted:
+`GameRecord::cap_bound`, `search_turn_caps`). Every move is checked pseudo-legal and
+every submission legal before it is made; a chosen child the legality budget left unknown
+is classified exactly first (`GameRecord::verified_choices`), and the visits a decision's
+root already held (`reused_visits`: C12's reuse in match play, 0 in self-play) are
+counted. Under the board-move split an action is its
+moves and then a submit decision (never automatic); actions are counted at
+submissions, decisions as moves plus submissions.
+
+**t5d-play** prints the game's 5dpgn record (the reader's long form; `*` and a
+`Termination` header for a game the rules did not end, the turn cap's included), which
+the reader and `t5d-gate` replay; a summary goes to standard error:
+
+```
+t5d-play [--variant NAME] [--evaluator uniform|random|material] [--playouts N]
+         [--split ply|turn] [--graph] [--node-key state|origins] [--no-widening]
+         [--e2] [--e3] [--proof-channel] [--batch N] [--synchronous] [--match]
+         [--final visits|lcb]
+         [--temperature T] [--temperature-decisions N] [--noise | --no-noise] [--cap-turns N]
+         [--cap-boards N] [--max-actions N] [--listing-cap N] [--mate-nodes N]
+         [--max-seconds S] [--seed S] [--no-moves-after-shift] [--rules ENCODING]
+```
+
+Defaults: Standard, uniform, 64 playouts per decision, the board-move split, a tree,
+self-play with root noise (`--no-noise`: none), the proof channel off (H41;
+`--proof-channel` for experiments, said in the Engine header), a cap of
+20 turns or 300 boards (uniform play branches freely: by turn 12 a game can
+hold 300 boards on 50 timelines, and with root noise time travel can hold the present
+back for good - a Standard game reached 509 boards on 110 timelines in 39 actions
+without passing turn 20). `--mate-nodes N` sets the search's terminal-check
+budget; `--max-actions` (checked at turn starts) and `--max-seconds` (checked before
+every decision, and each search's deadline: an action under way when it passes is not
+recorded) are safety stops - the record ends `*`, its Termination header naming the
+stop. Every number is range-checked (never wrapped into a narrower type; reals finite):
+a bad one exits 2. The rules come through
+the tools' shared option reader (`tools::ruleset_option`), so the default is the
+engine's - Q4 as ruled, R8 - and `--no-moves-after-shift` (Q4's Guide-literal reading)
+or `--rules ENCODING` names another ruleset, written into the record's `Rules` header
+(the reader takes no rules from a record: replay it under the same option, as
+`t5d-gate --no-moves-after-shift` does). The summary on standard error says where the
+time went: the search's terminal checks, leaf expansions (the legality classification
+included), action listings and verifications, and the game's own turn-start verdicts.
+
+**Tests** (`tests/test_mcts.cpp`, `test_mcts_memory.cpp`, `test_selfplay.cpp`,
+`test_capi_search.cpp`, `test_play_exe.cpp`): §15.4's invariants under uniform and
+random evaluators, across six configurations (both splits, tree and graph, both node
+keys, widening on and off, E2 and E3, the proof channel on in three and off in three) -
+`check_invariants()` holds visit counts and backed-up values consistent
+through backup (a node's visits = the visits that ended there + its edges'), no
+virtual loss left, every node reachable, bounds never contradicting their children,
+terminals never evaluated, the turn cap never a proof; the solver proving a mate in
+one, a forced draw and a forced loss (each premise re-checked by E4's detectors);
+final selection only among eligible children (constructed statistics, 3,000 random
+sets, real searches); re-rooting keeping exactly the reachable nodes, the statistics
+and the cached evaluations; bit-reproducibility; transpositions evaluated once and
+duplicates bit-identical; the legality policy; self-play games under both splits from
+five variants and two constructed endings, every action replayed legal, every ending
+re-judged, every record replayed by the reader; `t5d-play`'s records replayed by
+`t5d-gate`'s full mode; the C step loop building the same tree as the C++ search.
+After D8: the submit edge offered exactly where submitting is possible, pruned exactly
+where C4 fails, never taken automatically, and the only edge that changes the acting
+player (both Q4 readings, with and without the pseudo-legal seam); the node key
+telling apart the acting player and what was played; the solver against E7's
+brute-force game tree (`test_game_tree.hpp`) under both Q4 readings - never opposite
+verdicts, every mate in one proved; decisions counted as moves plus submissions;
+`t5d-play`'s rules option. After the reviews: MCGS never merging a turn start with
+the same state during an action (the reviewers' three repros, each line reached first
+in turn; random graph searches with every dead end checked against the reference
+enumeration); the proof channel off by rule (H41), game ends still scored; H18's acting
+player in every key (a shifted, unsubmitted state and the opponent's turn start with
+the same boards: different Zobrist and node keys, told apart by the cache under one
+key, never one MCGS node with every key colliding); one test for each
+mutation review C found surviving (the backed-up value's side across submit edges,
+the residual's side, the step API against the C++ search by digest with finite submit
+logits, value logits in their order, proofs through unknown edges, the visit
+threshold, E2's weight, E3's floor, FPU, the submit share, the turn cap's boundary,
+the cache's epoch, MCGS's exact comparison under colliding keys, self-play's
+verification and fresh trees); the call sequences (atomic `advance_action`, the epoch
+under a waiting batch, stale submit logits); a `bad_alloc` injected at every
+allocation of `gather` and `deliver`; the cache's and the graph's byte counts against
+the heap; the purge; the budgets and the deadline; validation; the C ABI's embedded
+structs last; self-play's noise and time limit.
+
 ## 5DFEN
 
 `parse_fen_board` reads one board string, `[pieces:timeline:turn:colour]`, for a
@@ -2078,8 +2431,10 @@ Each is recorded where it is made (the header comments) and listed here:
   `classify_moves`); the expansion offers those only behind
   `ExpandOptions::legal_moves`, off by default until the spec says which moves it
   offers. Under a budget a move may be left unknown - kept, marked
-  (`Expansion::move_legality`), never called illegal without proof; how a search
-  treats it is the spec's to say (proposed in the build log).
+  (`Expansion::move_legality`), never called illegal without proof. How a search
+  treats it: stage E6a builds issue 46's proposal (proposed spec edit 43), parts
+  (a)-(f) each a parameter (see "Stage E6a", "How legality enters"); the spec still has
+  to adopt it.
 - **Every search has a memory ceiling** (stage E4): reaching it is `unknown` (H37),
   and the gate's run ends `error` - never a verdict, and never growth without bound
   on a shared machine.
@@ -2089,6 +2444,31 @@ Each is recorded where it is made (the header comments) and listed here:
 - **Parse mode stays pseudo-legal** (stage E4): it was introduced to compare what was
   set up before the check ruling, and keeps following a record past an action that
   leaves a royal capturable; full mode refuses that action (`cannot_submit`).
+- **The main search's placeholders and readings** (stage E6a; provisional build-log
+  spec-issue numbers, in the order the report proposes them):
+  75. submit's prior share when the evaluator gives no submit logit
+      (`submit_share` 0.5; D8's network logit is stage N5);
+  76. the whole-turn action prior from its moves' logits - their sum (default) or mean
+      (`action_prior`; §8.2 does not say);
+  77. the secure child's lower bound `Q - A / sqrt(n)`, A = 1 (`secure_child_a`);
+  78. "the visit threshold for solved-node selection" read as a per-child visit cap,
+      8 (`solved_visit_cap`);
+  79. FPU applied to unvisited *instantiated* children (§8.4 says uninstantiated ones;
+      with widening, uninstantiated children are never scored at all);
+  80. LCB's z = 3, its floor 15% of the most visits, and the optional categorical
+      term's weight 0 (`lcb_z`, `lcb_floor`, `lcb_categorical_weight`);
+  81. E2's and E3's formulas and constants (the clamps, `variance_reference` 0.4,
+      `variance_prior_weight` 2, the scale bounds, E3's cap 2);
+  82. issue 46's policy as built, (a)-(f) (above);
+  83. the evaluation cache shared across self-play's fresh searches (C14 says a fresh
+      tree; the cache is state-keyed) and purged of states behind the root;
+  84. the material evaluator's piece values, now the scanner's placeholders (issue 56);
+  85. the whole-turn arm's missing end-of-turn token (D8; not built);
+  86. the whole-turn listing's cap, now 256 for memory (`max_actions`);
+  87. (settled: H41 rules the in-tree solver part of the proof channel - its
+      propagation off by rule; no spec issue);
+  88. MCGS identity: the state AND whether an action is in progress (§8.5's "values
+      depend only on the state": proposed spec edit 61).
 - **An ambiguous move is still unreadable** (stage E4): the notation's "Omission" lets
   a writer leave out a piece that a pin rules out, but legality is judged per action,
   at submission, so a "pin" is no per-move notion; the reader does not try each

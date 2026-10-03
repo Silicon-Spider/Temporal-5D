@@ -27,6 +27,8 @@
 #include "t5d/state.hpp"
 #include "t5d/variants.hpp"
 
+#include "capi_internal.hpp"
+
 #ifndef T5D_VERSION_STRING
 #define T5D_VERSION_STRING "0.0.0"
 #endif
@@ -791,3 +793,20 @@ t5d_status t5d_game_state(const t5d_game* game, t5d_state** out) {
 }
 
 }  // extern "C"
+
+// ---- shared with src/capi_search.cpp (src/capi_internal.hpp) -----------------------
+
+namespace t5d::capi_internal {
+
+const GameState& game_state(const t5d_game& game) noexcept { return game.state; }
+t5d_game* new_game(const GameState& state) { return new t5d_game(state); }
+void describe_expansion(const Expansion& expansion, t5d_expansion& out) { ::describe(expansion, out); }
+ExpandOptions expand_options(const t5d_expand_options* options) {
+  try {
+    return ::expand_options_from(options);
+  } catch (const ::NotImplemented& e) {
+    throw Unsupported(e.what());
+  }
+}
+
+}  // namespace t5d::capi_internal
