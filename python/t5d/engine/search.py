@@ -19,7 +19,11 @@ layer over the C functions, and nothing in it computes a rule or a search decisi
 * **Fresh searches per decision (C14).** ``Search(game, share=donor)`` makes a search that
   shares ``donor``'s evaluation cache (``t5d_search_new_sharing``): self-play's fresh search
   per move with its state-keyed evaluations carried. A search's cache must only ever hold
-  one evaluator's evaluations - never share between searches fed by different networks.
+  one evaluator's evaluations - never share between searches fed by different networks - and
+  only evaluations of one input: sharing is refused unless the donor's split, expansion
+  options and legality classification match (``cache_mismatches``). An evaluator whose
+  evaluations depend on the search's root (the cached path's refresh epochs) sets the search's
+  epoch, so that the cache keeps them apart (``evaluator.start_epoch``).
 * **Lifetimes.** A leaf's pointers live until the next ``gather``, ``deliver``, ``abandon``
   or ``close``: ``leaf_expansion`` copies at once (``Expansion.from_c``). ``close`` (or the
   context manager, or garbage collection) releases the handle.
@@ -81,6 +85,20 @@ def search_params(lib: Library | None = None, **overrides) -> CSearchParams:
     if p.proof_channel != 0:
         raise ValueError("proof_channel stays 0: register H41 keeps solved-status propagation and export off until the gate passes")
     return p
+
+
+#: The parameters that decide what a leaf's evaluation is of - the network's input (the
+#: expansion's options, the split: D8's submit flags) and the leaf's candidate moves (the legality
+#: classification drops proved-illegal moves, so its budget changes the list the logits score).
+CACHE_KEYS: tuple[str, ...] = ("split", "legal_moves_only", "legality_checks", "legality_nodes")
+
+
+def cache_mismatches(a: CSearchParams, b: CSearchParams) -> list[str]:
+    """The parameters on which two searches' evaluations would differ for one state (empty: they
+    may share an evaluation cache - fed by the same evaluator)."""
+    out = [name for name in CACHE_KEYS if getattr(a, name) != getattr(b, name)]
+    out += [f"expand.{name}" for name, _ in ExpandOptions._fields_ if getattr(a.expand, name) != getattr(b.expand, name)]
+    return out
 
 
 @dataclass(frozen=True)
@@ -165,6 +183,13 @@ class Search:
         self.params = search_params(self._lib) if params is None else params
         if self.params.proof_channel != 0:
             raise ValueError("proof_channel stays 0 (register H41)")
+        if share is not None:
+            differ = cache_mismatches(share.params, self.params)
+            if differ:
+                raise ValueError(
+                    "a search shares an evaluation cache only with a donor whose leaves give the network the same input - "
+                    f"these parameters differ: {', '.join(differ)}"
+                )
         out = c_void_p()
         game_handle = game._live()
         with game._lock:
@@ -389,4 +414,4 @@ def is_legal(child: RootChild) -> bool:
     return child.legality == T5D_LEGALITY_LEGAL
 
 
-__all__ = ["LeafView", "RootChild", "Search", "SearchInfo", "is_legal", "search_params"]
+__all__ = ["CACHE_KEYS", "LeafView", "RootChild", "Search", "SearchInfo", "cache_mismatches", "is_legal", "search_params"]

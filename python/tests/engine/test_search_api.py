@@ -429,6 +429,62 @@ def test_fresh_searches_share_the_evaluation_cache():
     assert a.cache_hits > 0 and a.evaluations < b.evaluations
 
 
+@pytest.mark.parametrize(
+    "change,named",
+    [
+        ({"split": T5D_SPLIT_WHOLE_TURN}, "split"),
+        ({"expand": (4, "all", 0)}, "expand.window_k"),
+        ({"expand": (8, "all", 1 << 1)}, "expand.relations"),
+        ({"legal_moves_only": 0}, "legal_moves_only"),
+        ({"legality_checks": 7}, "legality_checks"),
+    ],
+)
+def test_a_cache_is_shared_only_between_searches_with_one_input(change, named):
+    """The review: a donor whose leaves give the network another input - other expansion
+    options, the other split, another legality classification of the candidate moves - would
+    serve its evaluations for the wrong input. Refused, naming what differs; the evaluation-
+    neutral parameters may differ."""
+    with Game.variant("Standard") as g:
+        donor = Search(g, params=search_params(seed=1))
+        with pytest.raises(ValueError, match=named):
+            Search(g, params=search_params(seed=1, **change), share=donor)
+        Search(g, params=search_params(seed=2, cpuct=2.0, root_noise=1, batch_size=3), share=donor).close()
+        donor.close()
+
+
+@pytest.mark.parametrize("refresh", [False, True], ids=["causal", "root-refresh"])
+def test_the_cached_path_keeps_its_epochs_apart_in_a_shared_cache(refresh):
+    """C14 with the cached path (C2): each search opens the evaluator's epoch at its root and the
+    engine caches evaluations per (state, epoch) - so with C3's root refresh a fresh search
+    sharing the previous one's cache reuses none of its evaluations (each root conditions its
+    own history), while in the shared causal epoch it reuses them."""
+    from t5d.engine.evaluator import CachedNetworkEvaluator, engine_epoch
+    from t5d.net.cache import CacheConfig, CachedEvaluator
+
+    model = build_model(
+        NetConfig(trunk_dtype="fp32", n_layers=1, d_model=64, n_heads=2, policy_dim=64, value_hidden=64, attn_scope="block_causal"), seed=5
+    ).eval()
+    ev = CachedNetworkEvaluator(CachedEvaluator(model, CacheConfig(root_refresh=refresh)))
+    params = dict(seed=4, batch_size=1)
+    with Game.variant("Standard - Two Timelines") as g:
+        first = Search(g, params=search_params(**params))
+        run_search(first, ev, playouts=24, batch_size=1)
+        first_epoch = first.info().epoch
+        g.apply(first.child(first.choose()[0]).moves[0])
+        shared = Search(g, turn_start=False, params=search_params(**params), share=first)
+        first.close()
+        run_search(shared, ev, playouts=24, batch_size=1)
+        alone = Search(g, turn_start=False, params=search_params(**params))
+        run_search(alone, ev, playouts=24, batch_size=1)
+    a, b = shared.info(), alone.info()
+    assert a.epoch == b.epoch == engine_epoch(ev.epoch) and first_epoch != 0
+    assert shared.digest() == alone.digest()
+    if refresh:
+        assert a.epoch != first_epoch and a.evaluations == b.evaluations  # nothing reused across refreshes
+    else:
+        assert a.epoch == first_epoch and a.evaluations < b.evaluations  # the causal epoch is shared
+
+
 # --- errors ---------------------------------------------------------------------------------------
 
 

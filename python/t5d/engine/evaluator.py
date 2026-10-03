@@ -40,6 +40,7 @@ build-log spec issue 9(d)).
 
 from __future__ import annotations
 
+import hashlib
 import math
 import time
 from collections.abc import Sequence
@@ -49,7 +50,7 @@ from typing import Protocol, runtime_checkable
 import numpy as np
 import torch
 
-from ..net.cache import CachedEvaluator, Epoch
+from ..net.cache import CachedEvaluator, Epoch, state_digest
 from ..net.model import NetOutput, T5DNet
 from ..net.state import PositionState, collate, relayout
 from .capi import T5D_VALUE_LOGITS, T5D_VALUE_PROBABILITIES
@@ -201,8 +202,13 @@ class CachedNetworkEvaluator:
         return state
 
     def start(self, root: PositionLike) -> Epoch:
+        """Open a search at ``root``: its epoch (the current one again when ``root`` is the
+        current epoch's anchor - the same search continuing)."""
+        state = self._fit(state_of(root))
+        if self.epoch is not None and self.epoch.anchor == state_digest(state):
+            return self.epoch
         with torch.no_grad():
-            self.epoch = self.cached.root_epoch(self._fit(state_of(root)))
+            self.epoch = self.cached.root_epoch(state)
         return self.epoch
 
     def __call__(self, positions: Sequence[PositionLike]) -> list[Evaluation]:
@@ -455,6 +461,34 @@ class CStepDriver:
         return self._done
 
 
+def engine_epoch(epoch: Epoch) -> int:
+    """The engine's 64-bit epoch number for a cached-path epoch (its key, hashed): the search
+    caches evaluations per (state, epoch), so evaluations made under different refresh
+    conditioning are never served for one another; the shared causal epoch maps to one number."""
+    return int.from_bytes(hashlib.blake2b(epoch.key.encode("utf-8"), digest_size=8).digest(), "little")
+
+
+def start_epoch(search: Search, evaluator: Evaluator, *, regs_per_board: int = 2, global_regs: int = 16) -> int | None:
+    """Open ``evaluator``'s epoch at ``search``'s root and set the search's epoch to it - for an
+    evaluator whose evaluations depend on the root (``start(root)``: the cached path, C3's root
+    refresh; ``CachedNetworkEvaluator``), so that a search sharing another's evaluation cache
+    (C14) never reuses evaluations made under another refresh. The engine epoch set, or None
+    for an evaluator without ``start`` (its evaluations are a function of the state alone: the
+    epoch stays as it is). The root's position is the root state's own expansion with the
+    search's expansion options."""
+    start = getattr(evaluator, "start", None)
+    if not callable(start):
+        return None
+    opts = search.params.expand
+    relations = [rid for rid in range(32) if (int(opts.relations) >> rid) & 1]
+    with search.root_game() as root:
+        position = root.position(regs_per_board=regs_per_board, global_regs=global_regs, relations=relations, window_k=int(opts.window_k))
+    number = engine_epoch(start(position))
+    if search.info().epoch != number:
+        search.set_epoch(number)
+    return number
+
+
 def run_search(
     search: Search,
     evaluator: Evaluator,
@@ -467,7 +501,9 @@ def run_search(
 ) -> tuple[ServeStats, CStepDriver]:
     """Run ``playouts`` simulations of ``search`` with ``evaluator`` through the step API
     (``CStepDriver`` and ``serve``, at most ``batch_size`` leaves per evaluation): the loop's
-    statistics and the driver (its ``stop`` says why it ended)."""
+    statistics and the driver (its ``stop`` says why it ended). An evaluator whose evaluations
+    depend on the search's root gets its epoch first (``start_epoch``)."""
+    start_epoch(search, evaluator, regs_per_board=regs_per_board, global_regs=global_regs)
     driver = CStepDriver(search, playouts=playouts, regs_per_board=regs_per_board, global_regs=global_regs, value_kind=value_kind)
     stats = serve(driver, evaluator, batch_size=batch_size)
     return stats, driver
@@ -497,7 +533,9 @@ __all__ = [
     "ServeStats",
     "UniformEvaluator",
     "check_evaluation",
+    "engine_epoch",
     "run_search",
+    "start_epoch",
     "serve",
     "state_of",
 ]
