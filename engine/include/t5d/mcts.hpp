@@ -290,6 +290,11 @@ struct SearchParams {
   /// are different positions for the network, so different nodes.
   NodeKey node_key = NodeKey::StateAndOrigins;
   double residual_epsilon = 0.05;     ///< placeholder
+  /// A test seam, not mirrored in the C API: node keys cut to their low
+  /// `key_bits` bits (1-64), so that keys collide and the exact comparison
+  /// behind every key match - the graph's and the evaluation cache's - is
+  /// exercised. 64 in play.
+  int key_bits = 64;
 
   // ---- H2, E9: the in-tree solver ------------------------------------------------
   /// Propagating proven bounds up the tree, and the decisions taken from them

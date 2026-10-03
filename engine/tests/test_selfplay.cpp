@@ -191,6 +191,7 @@ TEST(selfplay_match_play_carries_the_tree) {
       const GameRecord g = play_game(variant("Standard - Two Timelines"), *uniform, p);
       check_game(g, p.turn_cap);
       check_record(g, "Standard - Two Timelines");
+      CHECK(g.reused_visits > 0);  // C12: the tree carried
     }
   }
 }
@@ -247,6 +248,8 @@ TEST(selfplay_under_r8_moves_after_the_shift_are_played) {
 TEST(selfplay_plays_only_moves_known_legal_whatever_the_budget) {
   // The fast classification with no verification in search: many children stay
   // unknown, and the driver classifies a chosen one exactly before playing it.
+  // Self-play's searches are fresh per decision (C14: no visits reused);
+  // match play's tree is carried (C12).
   const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Random, 6);
   for (const bool match : {false, true}) {
     PlayParams p = quick(TurnSplit::BoardMove, 12);
@@ -254,10 +257,20 @@ TEST(selfplay_plays_only_moves_known_legal_whatever_the_budget) {
     p.search.verify_unknown = false;
     p.match_play = match;
     p.turn_cap.turns = 6;
+    std::uint64_t verified = 0;
+    std::uint64_t reused = 0;
     for (const char* name : {"Standard - Two Timelines", "Very Small - Open"}) {
       const GameRecord g = play_game(variant(name), *ev, p);
       check_game(g, p.turn_cap);
       check_record(g, name);
+      verified += g.verified_choices;
+      reused += g.reused_visits;
+    }
+    CHECK(verified > 0);
+    if (match) {
+      CHECK(reused > 0);
+    } else {
+      CHECK_EQ(reused, std::uint64_t{0});
     }
   }
 }

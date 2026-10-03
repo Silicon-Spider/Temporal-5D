@@ -314,6 +314,11 @@ T5D_API t5d_status t5d_search_root_game(const t5d_search* search, t5d_game** out
 /* The refresh epoch (§7.9): evaluations are cached per (state, epoch). */
 T5D_API t5d_status t5d_search_set_epoch(t5d_search* search, uint64_t epoch, char** error);
 
+/* H15: a digest of the whole search graph - every node's and edge's statistics
+ * in a canonical order - equal for bit-identical searches (the synchronous
+ * debug mode's check, and the step API's against the C++ search). */
+T5D_API t5d_status t5d_search_digest(const t5d_search* search, uint64_t* out);
+
 /* The layouts of this header's structs, as this library was built (t5d_layout's
  * contract, for "t5d_search_params", "t5d_leaf", "t5d_search_summary" and
  * "t5d_root_child"): with `field` NULL, sizeof(`type`); otherwise the offset of

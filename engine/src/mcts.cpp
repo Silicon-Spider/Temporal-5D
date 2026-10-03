@@ -456,6 +456,7 @@ struct Search::Impl {
         !finite_nonneg(p.unknown_prior_scale)) {
       throw std::invalid_argument("SearchParams: a parameter is out of range");
     }
+    if (p.key_bits < 1 || p.key_bits > 64) throw std::invalid_argument("SearchParams::key_bits: 1 to 64");
     if (p.expand.pin || p.expand.check || p.expand.travel_threat) {
       throw std::invalid_argument("SearchParams::expand: pin, check and travel-threat are not built");
     }
@@ -465,9 +466,15 @@ struct Search::Impl {
 
   bool compare_origins() const noexcept { return params_.node_key == NodeKey::StateAndOrigins; }
 
+  // The node key, cut to key_bits bits (a test seam: collisions on purpose).
+  std::uint64_t key_of(const GameState& s) const noexcept {
+    const std::uint64_t k = node_key(s, params_.node_key);
+    return params_.key_bits >= 64 ? k : k & ((std::uint64_t{1} << params_.key_bits) - 1);
+  }
+
   NodeId make_node(GameState state, bool turn_start) {
     Node n(std::move(state));
-    n.key = node_key(n.state, params_.node_key);
+    n.key = key_of(n.state);
     n.mover = n.state.to_move();
     n.turn_start = turn_start;
     if (turn_start) classify(n);
@@ -600,7 +607,7 @@ struct Search::Impl {
     }
     NodeId id = kNoNode;
     if (params_.graph) {
-      const std::uint64_t key = node_key(s, params_.node_key);
+      const std::uint64_t key = key_of(s);
       const NodeId found = find_node(key, s, turn_start);
       if (found != kNoNode) {
         id = found;
@@ -1748,7 +1755,7 @@ void Search::advance_to(const GameState& target, bool turn_start) {
   if (s.params_.graph) {
     // The same (state, action in progress) elsewhere in the graph - never a
     // turn start for a partial action, nor the reverse.
-    const NodeId found = s.find_node(node_key(target, s.params_.node_key), target, turn_start);
+    const NodeId found = s.find_node(s.key_of(target), target, turn_start);
     if (found != kNoNode && s.nodes_[found].state == target) {
       s.reroot(found);
       return;

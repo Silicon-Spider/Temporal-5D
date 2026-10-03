@@ -15,10 +15,14 @@
 // and the gate's to prove; these tests prove the search.
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <map>
+#include <memory>
+#include <optional>
 #include <set>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -1173,30 +1177,48 @@ TEST(mcts_an_unknown_edge_proves_nothing_until_verified) {
   // fast classification refutes the bishop's moves (the queen's capture of d2
   // stands with the board passed) and leaves the king's moves unknown (royal
   // moves). Unverified, the stalemate behind Kxc2 bounds the root from above
-  // but proves nothing (e); verified, it proves the draw.
+  // but proves nothing (e); verified, it proves the draw - unless the
+  // verification's own budget leaves it unknown, when it still proves nothing.
   const GameState s = forced_draw();
-  for (const bool verify : {false, true}) {
+  for (const int mode : {0, 1, 2}) {  // unverified; verified exactly; verified with no budget
+    const bool verify = mode != 0;
     SearchParams p = fast();
     p.solver = true;  // the in-tree solver under test (off by default, H23)
     p.widening = false;
     p.legality = LegalityOptions::budgeted(0, 0);
     p.verify_unknown = verify;
+    if (mode == 2) p.verify_legality = LegalityOptions::budgeted(0, 0);
     const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Uniform);
     Search search(s, p);
     search.run(*ev, Limits{300});
     CHECK(search.stats().unknown_edges > 0);
     const NodeView root = search.node(search.root());
     CHECK_EQ(root.hi, 0);
-    if (verify) {
+    if (mode == 1) {
       CHECK(search.root_solved());
       CHECK_EQ(root.lo, 0);
     } else {
       CHECK(!search.root_solved());
       CHECK_EQ(root.lo, -1);
-      // Final selection sees no proof through the unknown edge either.
+      // Final selection sees no proof through the unknown edge either: no
+      // secure child, no proven anything - the ordinary rule.
       for (const RootChild& c : search.root_children()) {
         if (c.legality == MoveLegality::Unknown) CHECK_EQ(c.lo, -1);
       }
+      const ChoiceReason reason = search.choose().reason;
+      CHECK(reason == ChoiceReason::Lcb || reason == ChoiceReason::Visits);
+    }
+    if (mode == 2) {
+      // Verified and still unknown: the edges stay flagged.
+      CHECK(search.stats().verified_unknown > 0);
+      std::uint64_t still_unknown = 0;
+      for (NodeId id = 0; id < search.node_count(); ++id) {
+        for (std::size_t i = 0; i < search.node(id).edge_count; ++i) {
+          const EdgeView e = search.edge(id, i);
+          if (e.verified && e.unknown) ++still_unknown;
+        }
+      }
+      CHECK_EQ(still_unknown, search.stats().verified_unknown);
     }
     // (e) everywhere: a node's lower bound rests on a child through a known edge.
     for (NodeId id = 0; id < search.node_count(); ++id) {
@@ -1891,4 +1913,291 @@ TEST(mcts_graph_invariants_hold_in_random_searches) {
   CHECK(searches >= 20);
   CHECK(checked > 0);
   CHECK(transpositions > 0);
+}
+
+// ---- What the mutation runs found unchecked (review C) ------------------------------------
+
+namespace {
+
+// Values by colour: `white` from White's view at every leaf - so +white from
+// the acting player's view at White's nodes and -white at Black's - and
+// uniform logits.
+class ByColour final : public Evaluator {
+ public:
+  explicit ByColour(double white) : white_(white) {}
+  void evaluate(std::span<const EvalRequest> batch, std::span<Evaluation> out) override {
+    for (std::size_t i = 0; i < batch.size(); ++i) {
+      out[i].logits.assign(batch[i].expansion->moves().size(), 0.0f);
+      const bool white = batch[i].expansion->acting_player() == Colour::White;
+      out[i].value = two_hot(white ? white_ : -white_);
+    }
+  }
+
+ private:
+  double white_;
+};
+
+// Uniform logits and one value distribution for every leaf.
+class Fixed final : public Evaluator {
+ public:
+  explicit Fixed(std::array<float, kValueBins> value) : value_(value) {}
+  void evaluate(std::span<const EvalRequest> batch, std::span<Evaluation> out) override {
+    for (std::size_t i = 0; i < batch.size(); ++i) {
+      out[i].logits.assign(batch[i].expansion->moves().size(), 0.0f);
+      out[i].value = value_;
+    }
+  }
+
+ private:
+  std::array<float, kValueBins> value_;
+};
+
+}  // namespace
+
+TEST(mcts_values_are_backed_up_from_the_acting_players_view) {
+  // Every leaf worth +0.5 to White: every edge's mean, seen from its parent's
+  // acting player, is +0.5 out of White's nodes and -0.5 out of Black's - the
+  // sign flipping across a submit edge (or a whole-turn action) and nowhere
+  // else. Under MCGS the residual corrections (Two Timelines' intra-turn
+  // transpositions) must agree too.
+  for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::WholeTurn}) {
+    for (const bool graph : {false, true}) {
+      SearchParams p = fast();
+      p.split = split;
+      p.graph = graph;
+      p.max_actions = 96;
+      ByColour ev(0.5);
+      Search search(variant("Standard - Two Timelines"), p);
+      search.run(ev, Limits{400});
+      REQUIRE_EQ(search.stats().terminal_visits, std::uint64_t{0});
+      CHECK_NOTHROW(search.check_invariants());
+      if (graph && split == TurnSplit::BoardMove) CHECK(search.stats().residual_backups > 0);
+      std::size_t flips = 0;
+      for (NodeId id = 0; id < search.node_count(); ++id) {
+        const NodeView n = search.node(id);
+        const double mine = n.mover == Colour::White ? 0.5 : -0.5;
+        if (n.weight > 0) CHECK(std::abs(n.value / n.weight - mine) < 1e-5);
+        for (std::size_t i = 0; i < n.edge_count; ++i) {
+          const EdgeView e = search.edge(id, i);
+          if (e.visits == 0) continue;
+          CHECK(std::abs(e.value / e.weight - mine) < 1e-5);
+          if (search.node(e.child).mover != n.mover) ++flips;
+        }
+      }
+      CHECK(flips > 0);
+    }
+  }
+}
+
+TEST(mcts_the_submit_share_is_the_prior_without_a_submit_logit) {
+  // With no submit logit from the evaluator (NaN: the built-ins), submit's
+  // prior is submit_share where moves are open beside it (R8: White has played
+  // its mandatory board 0, and may still play +1).
+  for (const double share : {0.5, 0.3}) {
+    SearchParams p = fast();
+    p.submit_share = share;
+    p.legality = LegalityOptions::exact();
+    const Meeting m = meeting("[3k/4/4/K3:0:1:w]", "[3k/4/4/K3:+1:2:w]", RuleOptions{});
+    GameState s = m.root;
+    t5d_test::play(s, "(0T1)Ka1(0T1)a2");
+    REQUIRE(s.obligations_met());
+    const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Uniform);
+    Search search(s, p, false);
+    search.run(*ev, Limits{20});
+    const NodeView root = search.node(search.root());
+    std::size_t submits = 0;
+    double moves = 0;
+    for (std::size_t i = 0; i < root.edge_count; ++i) {
+      const EdgeView e = search.edge(search.root(), i);
+      CHECK(!e.pruned);
+      if (e.submit) {
+        ++submits;
+        CHECK(std::abs(e.prior - share) < 1e-12);
+      } else {
+        moves += e.prior;
+      }
+    }
+    CHECK_EQ(submits, std::size_t{1});
+    CHECK(std::abs(moves - (1 - share)) < 1e-12);
+  }
+}
+
+TEST(mcts_the_turn_cap_binds_past_its_turn_and_at_its_board_count) {
+  // I11's cap: a present PAST `turns` turns (at turn turns + 1), or `boards`
+  // boards or more, at a turn start.
+  GameState s = variant("Standard");
+  for (int a = 0; a < 2; ++a) s = list_legal_actions(s, 1, Detector::Hypercuboid).actions.front().result;
+  REQUIRE_EQ(turn_of(s.present()), 2);
+  REQUIRE_EQ(s.multiverse().board_count(), std::size_t{3});
+  CHECK(!(TurnCap{2, 0}.reached(s)));
+  CHECK((TurnCap{1, 0}.reached(s)));
+  CHECK((TurnCap{0, 3}.reached(s)));
+  CHECK(!(TurnCap{0, 4}.reached(s)));
+  CHECK(!(TurnCap{0, 0}.reached(s)));
+}
+
+TEST(mcts_the_evaluation_cache_is_per_epoch_and_exact) {
+  const GameState a = variant("Standard");
+  const GameState b = variant("Standard - Two Timelines");
+  Evaluation ev;
+  ev.logits.assign(20, 0.25f);
+  ev.value = two_hot(0.5);
+  EvalCache cache(16, std::size_t{1} << 20);
+  cache.insert(7, 0, a, ev);
+  CHECK(cache.find(7, 0, a, true) != nullptr);
+  CHECK(cache.find(7, 1, a, true) == nullptr);  // another epoch: a miss (§7.9)
+  CHECK(cache.find(7, 0, b, true) == nullptr);  // the same key, another state: a miss
+  CHECK(cache.find(8, 0, a, true) == nullptr);
+  // In searches sharing a cache: the root evaluated once per epoch.
+  const SearchParams p = fast();
+  const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
+  Recording rec(*uniform);
+  const auto shared = std::make_shared<EvalCache>();
+  {
+    Search first(a, p, true, shared);
+    first.run(rec, Limits{1});
+  }
+  const std::size_t calls = rec.calls;
+  CHECK_EQ(calls, std::size_t{1});
+  {
+    Search second(a, p, true, shared);
+    second.run(rec, Limits{1});
+    CHECK_EQ(rec.calls, calls);  // a cache hit
+    CHECK_EQ(second.stats().cache_hits, std::uint64_t{1});
+  }
+  {
+    Search third(a, p, true, shared);
+    third.set_epoch(1);
+    third.run(rec, Limits{1});
+    CHECK_EQ(rec.calls, calls + 1);  // evaluated again under the new epoch
+  }
+}
+
+TEST(mcts_graph_keys_that_collide_are_compared_exactly) {
+  // Keys cut to 3 bits (the key_bits test seam): collisions everywhere. Every
+  // edge still leads to the state its move (or submission) makes.
+  for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::WholeTurn}) {
+    SearchParams p = fast();
+    p.split = split;
+    p.graph = true;
+    p.key_bits = 3;
+    p.max_actions = 64;
+    const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Random, 9);
+    Search search(two_timelines_after(1), p);
+    search.run(*ev, Limits{300});
+    CHECK_NOTHROW(search.check_invariants());
+    CHECK(search.stats().key_collisions > 0);
+    std::size_t checked = 0;
+    for (NodeId id = 0; id < search.node_count(); ++id) {
+      const NodeView n = search.node(id);
+      for (std::size_t i = 0; i < n.edge_count; ++i) {
+        const EdgeView e = search.edge(id, i);
+        if (e.child == kNoNode) continue;
+        GameState t = *n.state;
+        if (split == TurnSplit::WholeTurn) {
+          for (const Move& m : e.action) t.apply(m);
+          t.submit();
+        } else if (e.submit) {
+          t.submit();
+        } else {
+          t.apply(*e.move);
+        }
+        CHECK(*search.node(e.child).state == t);
+        ++checked;
+      }
+    }
+    CHECK(checked > 50);
+  }
+  SearchParams bad = fast();
+  bad.key_bits = 0;
+  CHECK_THROWS_AS(Search(variant("Standard"), bad), std::invalid_argument);
+}
+
+TEST(mcts_uncertainty_weighted_backup_down_weights_uncertain_values) {
+  // E2: a leaf's backup weight is sigma_ref^2 / (sigma_ref^2 + var). Every leaf
+  // here has variance 1 (half the mass at -1, half at +1): weight 0.16 / 1.16
+  // per visit, below 1.
+  std::array<float, kValueBins> split{};
+  split[0] = 0.5f;
+  split[kValueBins - 1] = 0.5f;
+  Fixed ev(split);
+  SearchParams p = fast();
+  p.uncertainty_weighted_backup = true;
+  Search search(variant("Standard"), p);
+  search.run(ev, Limits{100});
+  REQUIRE_EQ(search.stats().terminal_visits, std::uint64_t{0});
+  const double r2 = p.variance_reference * p.variance_reference;
+  const double w = r2 / (r2 + 1.0);
+  const NodeView root = search.node(search.root());
+  CHECK(std::abs(root.weight - w * root.visits) < 1e-6 * root.visits);
+  for (std::size_t i = 0; i < root.edge_count; ++i) {
+    const EdgeView e = search.edge(search.root(), i);
+    if (e.visits > 0) CHECK(std::abs(e.weight - w * e.visits) < 1e-6 * e.visits);
+  }
+}
+
+TEST(mcts_the_variance_bonus_never_falls_below_one) {
+  // E3 multiplies U by clamp(1 + beta (sigma / sigma_ref - 1), 1, cap): with
+  // every variance 0 (the uniform evaluator's value is one bin) the factor is
+  // 1, and the search is the one without E3, bit for bit.
+  std::uint64_t digests[2] = {0, 0};
+  for (const bool e3 : {false, true}) {
+    SearchParams p = fast();
+    p.synchronous = true;
+    p.variance_bonus = e3;
+    const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Uniform);
+    Search search(variant("Standard"), p);
+    search.run(*ev, Limits{300});
+    digests[e3 ? 1 : 0] = search.digest();
+  }
+  CHECK_EQ(digests[0], digests[1]);
+}
+
+TEST(mcts_first_play_urgency_is_reduced_not_optimistic) {
+  // FPU: an unvisited child scores Q(parent) - fpu_reduction * sqrt(visited
+  // prior mass). With one child holding all the prior and every value 0, the
+  // others (prior e^-30) score -0.25 and are never tried; an optimistic FPU
+  // (+0.25) would try them once U of the first child fell below 0.25.
+  SearchParams p = fast();
+  p.synchronous = true;
+  p.widening = false;
+  Sharp ev;
+  Search search(variant("Standard"), p);
+  search.run(ev, Limits{400});
+  const NodeView root = search.node(search.root());
+  std::size_t visited = 0;
+  for (std::size_t i = 0; i < root.edge_count; ++i) {
+    if (search.edge(search.root(), i).visits > 0) ++visited;
+  }
+  CHECK_EQ(visited, std::size_t{1});
+}
+
+TEST(mcts_a_solved_child_is_visited_only_up_to_the_threshold) {
+  // E9's visit threshold. White's Qd1-b3 stalemates Black ([k4/5/5/5/3QK]: the
+  // queen on b3 takes a4, b4 and b5 from the king on a5 without giving check):
+  // a child proven drawn. It is selected only while it has fewer than
+  // solved_visit_cap visits, while ordinary children remain.
+  const GameState s = game({"[k4/5/5/5/3QK:0:1:w]"}, BoardSize{5, 5});
+  GameState t = s;
+  const Move qb3 = t5d_test::play(t, "(0T1)Qd1(0T1)b3");
+  t.submit();
+  REQUIRE(verdict_of(t) == Outcome::Stalemate);
+  SearchParams p = fast();
+  p.solver = true;
+  p.synchronous = true;
+  p.widening = false;
+  p.turn_cap.turns = 1;  // nothing past Black's reply proven: the root stays open
+  const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Uniform);
+  Search search(s, p);
+  search.run(*ev, Limits{3000});
+  REQUIRE(!search.root_solved());
+  bool found = false;
+  for (const RootChild& c : search.root_children()) {
+    if (c.moves.size() != 1 || !(c.moves[0] == qb3)) continue;
+    found = true;
+    CHECK_EQ(c.lo, 0);
+    CHECK_EQ(c.hi, 0);
+    CHECK(c.visits <= p.solved_visit_cap);
+  }
+  CHECK(found);
 }

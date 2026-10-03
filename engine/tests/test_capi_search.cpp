@@ -4,12 +4,14 @@
 // evaluations give the same tree), its error handling (virtual loss released,
 // nothing backed up), and the results, choice and persistence calls.
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <limits>
 #include <memory>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -89,56 +91,145 @@ std::uint64_t drive(t5d_search* s, std::uint64_t playouts, int32_t value_kind, s
   return leaves;
 }
 
+// A deterministic, non-trivial answer for a leaf from its key alone: logits
+// in quarter steps, a finite submit logit where submitting is possible, and a
+// value of two bins off centre (0.75 and 0.25: exact in float32, summing to 1).
+std::uint64_t mix_key(std::uint64_t x) {
+  x ^= x >> 33;
+  x *= 0xff51afd7ed558ccdull;
+  x ^= x >> 33;
+  x *= 0xc4ceb9fe1a85ec53ull;
+  x ^= x >> 33;
+  return x;
+}
+float logit_of(std::uint64_t key, std::size_t i) {
+  return static_cast<float>(static_cast<int>(mix_key(key + 0x9E3779B9ull * (i + 1)) % 17) - 8) * 0.25f;
+}
+float submit_of(std::uint64_t key) {
+  return static_cast<float>(static_cast<int>(mix_key(key ^ 0x5B5Bull) % 9) - 4) * 0.5f;
+}
+void value_of(std::uint64_t key, float* out) {
+  std::fill(out, out + T5D_VALUE_BINS, 0.0f);
+  out[mix_key(key ^ 0xA1ull) % T5D_VALUE_BINS] += 0.75f;
+  out[mix_key(key ^ 0xB2ull) % T5D_VALUE_BINS] += 0.25f;
+}
+
+// The same answers as a C++ evaluator.
+class Hashed final : public t5d::mcts::Evaluator {
+ public:
+  void evaluate(std::span<const t5d::mcts::EvalRequest> batch, std::span<t5d::mcts::Evaluation> out) override {
+    for (std::size_t i = 0; i < batch.size(); ++i) {
+      const std::size_t moves = batch[i].expansion->moves().size();
+      out[i].logits.resize(moves);
+      for (std::size_t m = 0; m < moves; ++m) out[i].logits[m] = logit_of(batch[i].key, m);
+      out[i].submit_logit = batch[i].expansion->submit_possible() ? submit_of(batch[i].key) : std::nanf("");
+      value_of(batch[i].key, out[i].value.data());
+    }
+  }
+};
+
+// Drives a search through the step API with Hashed's answers.
+void drive_hashed(t5d_search* s, std::uint64_t playouts, std::size_t batch) {
+  for (int round = 0; round < 100000; ++round) {
+    t5d_search_summary info;
+    REQUIRE_EQ(t5d_search_info(s, &info), T5D_OK);
+    if (info.playouts >= playouts || info.root_terminal || info.root_solved) break;
+    std::size_t n = 0;
+    REQUIRE_EQ(t5d_search_gather(s, batch, playouts - info.playouts, &n, nullptr), T5D_OK);
+    if (n == 0) continue;
+    std::vector<float> logits;
+    std::vector<float> submits;
+    std::vector<float> values(n * T5D_VALUE_BINS);
+    for (std::size_t i = 0; i < n; ++i) {
+      t5d_leaf leaf;
+      REQUIRE_EQ(t5d_search_leaf(s, i, &leaf, nullptr), T5D_OK);
+      for (std::size_t m = 0; m < leaf.expansion.move_count; ++m) logits.push_back(logit_of(leaf.key, m));
+      submits.push_back(leaf.submit_possible ? submit_of(leaf.key) : std::nanf(""));
+      value_of(leaf.key, values.data() + i * T5D_VALUE_BINS);
+    }
+    REQUIRE_EQ(t5d_search_deliver(s, logits.data(), logits.size(), submits.data(), submits.size(),
+                                  values.data(), values.size(), T5D_VALUE_PROBABILITIES, nullptr),
+               T5D_OK);
+  }
+}
+
 }  // namespace
 
 TEST(capi_search_step_api_reproduces_the_cpp_search) {
-  // The C step loop with the uniform evaluator's answers builds the tree the
-  // C++ search builds with the uniform evaluator: the same root visits, child
-  // by child.
+  // The C step loop with Hashed's answers - logits, finite submit logits (D8),
+  // values off centre - builds the graph the C++ search builds with the same
+  // answers, bit for bit (H15's digest: every node's and edge's statistics,
+  // priors included, so every submit prior below the root too).
   for (const int32_t split : {T5D_SPLIT_BOARD_MOVE, T5D_SPLIT_WHOLE_TURN}) {
-    const Game g = variant_game("Standard - Two Timelines");
-    t5d_search_params p = quick_params();
-    p.split = split;
-    p.max_actions = 96;
-    p.batch_size = 4;
-    const SearchHandle s = new_search(g.get(), p);
-    drive(s.get(), 120, T5D_VALUE_PROBABILITIES, 4);
+    for (const int32_t graph : {0, 1}) {
+      const Game g = variant_game("Standard - Two Timelines");
+      t5d_search_params p = quick_params();
+      p.split = split;
+      p.graph = graph;
+      p.max_actions = 96;
+      p.batch_size = 4;
+      const SearchHandle s = new_search(g.get(), p);
+      drive_hashed(s.get(), 200, 4);
 
-    t5d::mcts::SearchParams q;
-    q.split = split == T5D_SPLIT_BOARD_MOVE ? t5d::mcts::TurnSplit::BoardMove : t5d::mcts::TurnSplit::WholeTurn;
-    q.max_actions = 96;
-    q.batch_size = 4;
-    q.expand.square_features = t5d::SquareFeatures::None;
-    t5d::mcts::Search reference(t5d::variant_start(*t5d::find_variant("Standard - Two Timelines")), q);
-    const std::unique_ptr<t5d::mcts::Evaluator> ev = t5d::mcts::make_evaluator(t5d::mcts::BuiltinEvaluator::Uniform);
-    reference.run(*ev, t5d::mcts::Limits{120});
+      t5d::mcts::SearchParams q;
+      q.split = split == T5D_SPLIT_BOARD_MOVE ? t5d::mcts::TurnSplit::BoardMove : t5d::mcts::TurnSplit::WholeTurn;
+      q.graph = graph != 0;
+      q.max_actions = 96;
+      q.batch_size = 4;
+      q.expand.square_features = t5d::SquareFeatures::None;
+      t5d::mcts::Search reference(t5d::variant_start(*t5d::find_variant("Standard - Two Timelines")), q);
+      Hashed ev;
+      reference.run(ev, t5d::mcts::Limits{200});
 
-    t5d_search_summary info;
-    REQUIRE_EQ(t5d_search_info(s.get(), &info), T5D_OK);
-    CHECK_EQ(info.playouts, reference.stats().playouts);
-    CHECK_EQ(info.evaluations, reference.stats().evaluations);
-    const std::vector<t5d::mcts::RootChild> children = reference.root_children();
-    REQUIRE_EQ(info.root_children, static_cast<std::uint64_t>(children.size()));
-    for (std::size_t i = 0; i < children.size(); ++i) {
-      t5d_root_child c;
-      std::vector<t5d_move> moves(8);
-      REQUIRE_EQ(t5d_search_child(s.get(), i, &c, moves.data(), moves.size(), nullptr), T5D_OK);
-      CHECK_EQ(c.visits, children[i].visits);
-      CHECK_EQ(c.prior, children[i].prior);
-      CHECK_EQ(c.move_count, children[i].moves.size());
-      for (std::size_t m = 0; m < c.move_count && m < moves.size(); ++m) {
-        CHECK_EQ(moves[m].from_timeline, children[i].moves[m].from_timeline);
-        CHECK_EQ(moves[m].to_square, static_cast<int8_t>(children[i].moves[m].to_square));
-        CHECK(moves[m].from_board >= 0);
-        CHECK(moves[m].to_board >= 0);
+      t5d_search_summary info;
+      REQUIRE_EQ(t5d_search_info(s.get(), &info), T5D_OK);
+      CHECK_EQ(info.playouts, reference.stats().playouts);
+      CHECK_EQ(info.evaluations, reference.stats().evaluations);
+      std::uint64_t digest = 0;
+      REQUIRE_EQ(t5d_search_digest(s.get(), &digest), T5D_OK);
+      CHECK_EQ(digest, reference.digest());
+      const std::vector<t5d::mcts::RootChild> children = reference.root_children();
+      REQUIRE_EQ(info.root_children, static_cast<std::uint64_t>(children.size()));
+      for (std::size_t i = 0; i < children.size(); ++i) {
+        t5d_root_child c;
+        std::vector<t5d_move> moves(8);
+        REQUIRE_EQ(t5d_search_child(s.get(), i, &c, moves.data(), moves.size(), nullptr), T5D_OK);
+        CHECK_EQ(c.visits, children[i].visits);
+        CHECK_EQ(c.prior, children[i].prior);
+        CHECK_EQ(c.move_count, children[i].moves.size());
+        for (std::size_t m = 0; m < c.move_count && m < moves.size(); ++m) {
+          CHECK_EQ(moves[m].from_timeline, children[i].moves[m].from_timeline);
+          CHECK_EQ(moves[m].to_square, static_cast<int8_t>(children[i].moves[m].to_square));
+          CHECK(moves[m].from_board >= 0);
+          CHECK(moves[m].to_board >= 0);
+        }
       }
     }
   }
+  // The digest's own errors.
+  std::uint64_t d = 0;
+  CHECK_EQ(t5d_search_digest(nullptr, &d), T5D_ERR_ARGUMENT);
 }
 
 TEST(capi_search_takes_value_logits_or_probabilities) {
   const Game g = variant_game("Standard");
   const t5d_search_params p = quick_params();
+  // The root alone, valued +0.6 (bin 40) from its player's view - as
+  // probabilities and as logits: the bins in their order, not mirrored.
+  for (const int32_t kind : {T5D_VALUE_PROBABILITIES, T5D_VALUE_LOGITS}) {
+    const SearchHandle s = new_search(g.get(), p);
+    std::size_t n = 0;
+    REQUIRE_EQ(t5d_search_gather(s.get(), 1, T5D_NO_LIMIT, &n, nullptr), T5D_OK);
+    REQUIRE_EQ(n, std::size_t{1});
+    std::vector<float> logits(20, 0.0f);
+    std::vector<float> v(T5D_VALUE_BINS, kind == T5D_VALUE_LOGITS ? -30.0f : 0.0f);
+    v[40] = kind == T5D_VALUE_LOGITS ? 30.0f : 1.0f;
+    REQUIRE_EQ(t5d_search_deliver(s.get(), logits.data(), logits.size(), nullptr, 0, v.data(), v.size(), kind, nullptr),
+               T5D_OK);
+    t5d_search_summary info;
+    REQUIRE_EQ(t5d_search_info(s.get(), &info), T5D_OK);
+    CHECK(std::abs(info.root_q - 0.6) < 1e-4);
+  }
   const SearchHandle a = new_search(g.get(), p);
   const SearchHandle b = new_search(g.get(), p);
   drive(a.get(), 50, T5D_VALUE_PROBABILITIES, 8);

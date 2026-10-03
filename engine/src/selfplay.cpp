@@ -138,6 +138,7 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
         search = fresh.get();
       }
       const SearchStats before = search->stats();
+      g.reused_visits += search->node(search->root()).visits;
       search->run(evaluator, Limits{params.playouts});
       const auto choose_now = [&]() -> std::size_t {
         bool visited = false;
@@ -157,6 +158,7 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
       std::vector<RootChild> children = search->root_children();
       while (children.at(pick).legality != MoveLegality::Legal) {
         const MoveLegality v = search->verify(pick, exact);
+        ++g.verified_choices;
         children = search->root_children();
         if (v == MoveLegality::Legal) break;
         if (v == MoveLegality::Illegal) {
