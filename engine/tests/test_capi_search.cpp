@@ -423,6 +423,15 @@ TEST(capi_search_reports_its_layouts) {
   CHECK_EQ(v, offsetof(t5d_leaf, submit_legal));
   REQUIRE_EQ(t5d_search_layout("t5d_leaf", "expansion", &v), T5D_OK);
   CHECK_EQ(v, offsetof(t5d_leaf, expansion));
+  // The embedded provisional structs come last (appending to t5d/capi.h's
+  // structs moves none of this header's fields).
+  CHECK(offsetof(t5d_leaf, expansion) > offsetof(t5d_leaf, legality));
+  CHECK(sizeof(t5d_leaf) - offsetof(t5d_leaf, expansion) < sizeof(t5d_expansion) + alignof(t5d_leaf));
+  CHECK(offsetof(t5d_search_params, expand) > offsetof(t5d_search_params, eval_cache_bytes));
+  CHECK(sizeof(t5d_search_params) - offsetof(t5d_search_params, expand) <
+        sizeof(t5d_expand_options) + alignof(t5d_search_params));
+  REQUIRE_EQ(t5d_search_layout("t5d_search_params", "expand", &v), T5D_OK);
+  CHECK_EQ(v, offsetof(t5d_search_params, expand));
   REQUIRE_EQ(t5d_search_layout("t5d_search_params", nullptr, &v), T5D_OK);
   CHECK_EQ(v, sizeof(t5d_search_params));
   REQUIRE_EQ(t5d_search_layout("t5d_search_params", "eval_cache_bytes", &v), T5D_OK);

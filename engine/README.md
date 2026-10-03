@@ -2126,6 +2126,10 @@ C14 through the binding), `_digest` (H15's digest - the
 tests compare the step loop's graph with the C++ search's by it), and `t5d_search_layout`
 (this header's struct layouts, as `t5d_layout` gives `t5d/capi.h`'s).
 `t5d_search_params` mirrors `SearchParams` (fill it with `t5d_search_params_default`).
+The header's structs are appended to, never reordered; the one struct of `t5d/capi.h`
+each embeds (`t5d_leaf::expansion`, `t5d_search_params::expand`) - provisional, and
+growing as that header does (E7 appended D8's fields to `t5d_expansion`) - is its last
+member, so that its growth moves none of the others (a test holds it last).
 A malformed batch is refused and abandoned.
 
 **Self-play** (`t5d/selfplay.hpp`, `play_game`). Self-play: a fresh search per decision
