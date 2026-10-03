@@ -43,6 +43,7 @@ static_assert(static_cast<int>(t5d::mcts::StopReason::Finished) == T5D_STOP_FINI
 static_assert(static_cast<int>(t5d::mcts::StopReason::Exhausted) == T5D_STOP_EXHAUSTED);
 static_assert(static_cast<int>(t5d::mcts::StopReason::Nodes) == T5D_STOP_NODES);
 static_assert(static_cast<int>(t5d::mcts::StopReason::Memory) == T5D_STOP_MEMORY);
+static_assert(static_cast<int>(t5d::mcts::StopReason::Deadline) == T5D_STOP_DEADLINE);
 
 struct t5d_search {
   explicit t5d_search(t5d::mcts::Search s) : search(std::move(s)) {}
@@ -75,9 +76,9 @@ t5d_status guarded(char** error, Body&& body) noexcept {
     return fail(T5D_ERR_UNSUPPORTED, e.what());
   } catch (const std::bad_alloc&) {
     return fail(T5D_ERR_MEMORY, "out of memory");
-  } catch (const std::logic_error& e) {  // invalid_argument and out_of_range included
+  } catch (const std::invalid_argument& e) {  // the caller's error: an argument, or the call's order
     return fail(T5D_ERR_ARGUMENT, e.what());
-  } catch (const std::exception& e) {
+  } catch (const std::exception& e) {  // any other logic_error (a bounds check, a broken invariant): ours
     return fail(T5D_ERR_INTERNAL, e.what());
   } catch (...) {
     return fail(T5D_ERR_INTERNAL, "unknown error");
@@ -370,6 +371,7 @@ constexpr LayoutEntry kLayout[] = {
     T5D_SEARCH_AT(t5d_search_limits, evaluations),
     T5D_SEARCH_AT(t5d_search_limits, nodes),
     T5D_SEARCH_AT(t5d_search_limits, bytes),
+    T5D_SEARCH_AT(t5d_search_limits, seconds),
 
     T5D_SEARCH_SIZE(t5d_root_child),
     T5D_SEARCH_AT(t5d_root_child, visits),
@@ -508,7 +510,7 @@ t5d_status t5d_search_leaf(t5d_search* search, size_t index, t5d_leaf* out, char
     if (search == nullptr || out == nullptr) throw std::invalid_argument("search or out is NULL");
     const std::span<const t5d::mcts::EvalRequest> requests = search->search.requests();
     if (index >= requests.size()) {
-      throw std::out_of_range("leaf " + std::to_string(index) + " of " + std::to_string(requests.size()));
+      throw std::invalid_argument("leaf " + std::to_string(index) + " of " + std::to_string(requests.size()));
     }
     const t5d::mcts::EvalRequest& r = requests[index];
     *out = t5d_leaf{};
@@ -531,7 +533,7 @@ t5d_status t5d_search_leaf_state(const t5d_search* search, size_t index, t5d_sta
     *out = nullptr;
     const std::span<const t5d::mcts::EvalRequest> requests = search->search.requests();
     if (index >= requests.size()) {
-      throw std::out_of_range("leaf " + std::to_string(index) + " of " + std::to_string(requests.size()));
+      throw std::invalid_argument("leaf " + std::to_string(index) + " of " + std::to_string(requests.size()));
     }
     t5d_game* g = t5d::capi_internal::new_game(*requests[index].state);
     const t5d_status s = t5d_game_state(g, out);
@@ -613,6 +615,7 @@ t5d_status t5d_search_run_limits(t5d_search* search, int32_t evaluator, uint64_t
     l.evaluations = limits->evaluations;
     l.nodes = limits->nodes;
     l.bytes = limits->bytes;
+    l.seconds = limits->seconds;
     const t5d::mcts::StopReason r = search->search.run(*ev, l);
     if (stop != nullptr) *stop = static_cast<int32_t>(r);
     return T5D_OK;
@@ -666,7 +669,7 @@ t5d_status t5d_search_child(const t5d_search* search, size_t index, t5d_root_chi
     const Search& s = search->search;
     const std::vector<t5d::mcts::RootChild> children = s.root_children();
     if (index >= children.size()) {
-      throw std::out_of_range("root child " + std::to_string(index) + " of " + std::to_string(children.size()));
+      throw std::invalid_argument("root child " + std::to_string(index) + " of " + std::to_string(children.size()));
     }
     const t5d::mcts::RootChild& c = children[index];
     *out = t5d_root_child{};

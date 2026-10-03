@@ -42,6 +42,19 @@
  * t5d_search_layout reports this header's struct layouts, as t5d_layout does
  * t5d/capi.h's, for a binding that mirrors them.
  *
+ * ERRORS: T5D_ERR_ARGUMENT for the caller's error - an argument, or a call the
+ * search's state does not allow (gather while a batch waits, deliver with none
+ * waiting, max_leaves 0, set_epoch under a waiting batch); T5D_ERR_MEMORY when
+ * an allocation fails (the search stays consistent: no batch left half-made);
+ * T5D_ERR_UNSUPPORTED for a feature not built; T5D_ERR_INTERNAL for the
+ * search's own failure (a broken invariant, a contradiction) - a bug to report.
+ *
+ * SOLVER BOUNDS (lo, hi) are search state: they may guide play, but they are
+ * never to be stored as proofs - no proof enters a persistent solved store
+ * until the generator has passed the gate (register H19, H23). The in-tree
+ * solver itself is off by default (t5d_search_params.solver) until the user
+ * rules on it (spec §11.1 item 2).
+ *
  * The pointers a leaf hands out are valid until the next t5d_search_gather,
  * t5d_search_deliver, t5d_search_abandon or t5d_search_destroy on the handle:
  * copy what must outlive that. A search handle is used from one thread at a
@@ -100,6 +113,7 @@ typedef struct t5d_search t5d_search;
 #define T5D_STOP_EXHAUSTED 3  /* no simulation could be made */
 #define T5D_STOP_NODES 4      /* the node budget */
 #define T5D_STOP_MEMORY 5     /* the memory budget */
+#define T5D_STOP_DEADLINE 6   /* the deadline */
 /* No limit, for the budgets below. */
 #define T5D_NO_LIMIT UINT64_MAX
 
@@ -213,7 +227,8 @@ typedef struct t5d_search_summary {
   int32_t root_turn_start;
   int32_t root_terminal;  /* the root's game is over (checkmate, stalemate, the cap) */
   int32_t root_solved;
-  int32_t root_lo;        /* the root's solver bounds, its player's view: -1, 0, 1 */
+  int32_t root_lo;        /* the root's solver bounds, its player's view: -1, 0, 1 - search
+                             state, never to be persisted as a proof (H19, H23) */
   int32_t root_hi;
   uint32_t root_visits;
   double root_q;
@@ -226,7 +241,7 @@ typedef struct t5d_search_summary {
   int32_t last_stop;      /* T5D_STOP_*: why the last run stopped */
 } t5d_search_summary;
 
-/* A run's budgets (t5d/mcts.hpp, Limits): T5D_NO_LIMIT for none. playouts and
+/* A run's budgets (t5d/mcts.hpp, Limits): T5D_NO_LIMIT for none (seconds: 0). playouts and
  * evaluations count from the call; nodes and bytes are the graph's. A run
  * stops between batches once one is reached. */
 typedef struct t5d_search_limits {
@@ -234,6 +249,7 @@ typedef struct t5d_search_limits {
   uint64_t evaluations;
   uint64_t nodes;
   uint64_t bytes;   /* t5d_search_summary.memory_bytes */
+  double seconds;   /* a wall-clock deadline from the call; 0: none (not deterministic) */
 } t5d_search_limits;
 
 /* One child of the root (t5d_search_child), from the root player's view. */
@@ -241,7 +257,8 @@ typedef struct t5d_root_child {
   uint32_t visits;     /* the policy target (f) */
   int32_t submit;      /* 1: "submit" (board-move split, Q4's other reading) */
   int32_t legality;    /* T5D_LEGALITY_LEGAL or _UNKNOWN */
-  int32_t lo;          /* solver bounds (-1 when unproven, and through an unknown move) */
+  int32_t lo;          /* solver bounds (-1 when unproven, and through an unknown move): search
+                          state, never to be persisted as a proof (H19, H23) */
   int32_t hi;
   double prior;
   double q;

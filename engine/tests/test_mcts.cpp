@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <limits>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -2305,4 +2306,88 @@ TEST(mcts_run_resets_every_field_of_its_evaluation_buffers) {
     digests[stale ? 1 : 0] = search.digest();
   }
   CHECK_EQ(digests[0], digests[1]);
+}
+
+// ---- Validation and the C++ API's error kinds (reviews A and B) ---------------------------
+
+TEST(mcts_every_real_parameter_must_be_finite) {
+  // NaN and infinity poison selection (review A: virtual_loss = inf and
+  // cpuct_variance_scale = NaN were accepted). Each is refused, by name.
+  const double inf = std::numeric_limits<double>::infinity();
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  struct Bad {
+    const char* name;
+    void (*set)(SearchParams&, double);
+    double value;
+  };
+  const std::vector<Bad> bad = {
+      {"virtual_loss", [](SearchParams& p, double v) { p.virtual_loss = v; }, inf},
+      {"variance_reference", [](SearchParams& p, double v) { p.variance_reference = v; }, inf},
+      {"dirichlet_alpha", [](SearchParams& p, double v) { p.dirichlet_alpha = v; }, inf},
+      {"widening_min", [](SearchParams& p, double v) { p.widening_min = v; }, inf},
+      {"cpuct_variance_scale", [](SearchParams& p, double v) { p.cpuct_variance_scale = v; }, nan},
+      {"cpuct_variance_scale", [](SearchParams& p, double v) { p.cpuct_variance_scale = v; }, inf},
+      {"policy_temperature", [](SearchParams& p, double v) { p.policy_temperature = v; }, inf},
+      {"cpuct_scale_min/max", [](SearchParams& p, double v) { p.cpuct_scale_max = v; }, inf},
+      {"variance_bonus_cap", [](SearchParams& p, double v) { p.variance_bonus_cap = v; }, inf},
+      {"cpuct", [](SearchParams& p, double v) { p.cpuct = v; }, nan},
+      {"submit_share", [](SearchParams& p, double v) { p.submit_share = v; }, nan},
+      {"lcb_floor", [](SearchParams& p, double v) { p.lcb_floor = v; }, nan},
+  };
+  for (const Bad& b : bad) {
+    SearchParams p = fast();
+    b.set(p, b.value);
+    try {
+      Search search(variant("Standard"), p);
+      CHECK(false);  // accepted
+    } catch (const std::invalid_argument& e) {
+      CHECK(std::string(e.what()).find(b.name) != std::string::npos);
+    }
+  }
+  SearchParams p = fast();
+  p.turn_cap.turns = -1;
+  CHECK_THROWS_AS(Search(variant("Standard"), p), std::invalid_argument);
+  CHECK_THROWS_AS((void)two_hot(nan), std::invalid_argument);
+  CHECK_NOTHROW((void)two_hot(inf));  // clamped to +1
+}
+
+TEST(mcts_the_cpp_api_tells_the_callers_errors_apart) {
+  // The caller's errors are std::invalid_argument (the C API's
+  // T5D_ERR_ARGUMENT); any other logic_error is the search's own.
+  Search search(variant("Standard"), fast());
+  CHECK_THROWS_AS((void)search.choose(), std::invalid_argument);  // nothing visited yet
+  CHECK_THROWS_AS((void)search.gather(0), std::invalid_argument);
+  CHECK_THROWS_AS(search.deliver({}), std::invalid_argument);  // no batch waiting
+  REQUIRE(search.gather(4) > 0);
+  CHECK_THROWS_AS((void)search.gather(4), std::invalid_argument);  // one is waiting
+  CHECK_THROWS_AS(search.advance(0), std::invalid_argument);
+  search.abandon();
+  const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Uniform);
+  search.run(*ev, Limits{30});
+  CHECK_THROWS_AS(search.advance(9999), std::invalid_argument);
+  CHECK_THROWS_AS((void)search.verify(9999), std::invalid_argument);
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  CHECK_THROWS_AS((void)search.choose_by_visits(nan, 0.5), std::invalid_argument);
+  CHECK_THROWS_AS((void)search.choose_by_visits(1.0, nan), std::invalid_argument);
+  CHECK_THROWS_AS((void)search.choose_by_visits(1.0, 2.0), std::invalid_argument);
+  CHECK_NOTHROW((void)search.choose_by_visits(1.0, 0.25));
+  // A huge max_leaves is bounded by the playouts, not overflowed.
+  const std::size_t n = search.gather(std::numeric_limits<std::size_t>::max(), 16);
+  CHECK(n <= 16);
+  search.abandon();
+  CHECK_NOTHROW(search.check_invariants());
+}
+
+TEST(mcts_a_deadline_stops_a_run) {
+  const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Uniform);
+  Search search(variant("Standard - Two Timelines"), fast());
+  Limits l;
+  l.playouts = std::uint64_t{1} << 40;
+  l.seconds = 0.05;
+  CHECK(search.run(*ev, l) == StopReason::Deadline);
+  CHECK(search.stats().playouts > 0);
+  l.seconds = -1;
+  CHECK_THROWS_AS(search.run(*ev, l), std::invalid_argument);
+  l.seconds = std::numeric_limits<double>::quiet_NaN();
+  CHECK_THROWS_AS(search.run(*ev, l), std::invalid_argument);
 }

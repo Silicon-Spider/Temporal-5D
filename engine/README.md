@@ -2092,7 +2092,8 @@ a game a small shared cache so stays useful (review B: without it, no hit after 
 decisions). The graph's memory is estimated the same way (`memory_bytes`: nodes, edges,
 actions, states' own heap, the MCGS table; within 0.75-1.33 of the heap in the tests),
 and `Limits` carries a node budget and a memory budget besides playouts and evaluations:
-`run` stops between batches when one is reached and returns why (`StopReason`, also
+`run` stops between batches when one is reached - or when a wall-clock deadline
+(`Limits::seconds`, for tools and match play, never training) passes - and returns why (`StopReason`, also
 `stats().last_stop`).
 
 **Determinism** (H15). One thread; with a deterministic evaluator a search is
@@ -2130,7 +2131,17 @@ The header's structs are appended to, never reordered; the one struct of `t5d/ca
 each embeds (`t5d_leaf::expansion`, `t5d_search_params::expand`) - provisional, and
 growing as that header does (E7 appended D8's fields to `t5d_expansion`) - is its last
 member, so that its growth moves none of the others (a test holds it last).
-A malformed batch is refused and abandoned.
+A malformed batch is refused and abandoned. Errors: `T5D_ERR_ARGUMENT` for the caller's
+(an argument, or a call the search's state does not allow - deliver with no batch
+waiting, `max_leaves` 0, a new epoch under a waiting batch); `T5D_ERR_MEMORY`;
+`T5D_ERR_INTERNAL` for the search's own failure (a broken invariant, a bounds check) -
+the C++ API throws `std::invalid_argument` for the caller's errors and nothing else, so
+the boundary can tell them apart. Solver bounds are search state, never to be persisted
+as proofs (H19, H23; the header says so).
+
+**Validation.** Every real parameter must be finite (NaN or infinity in, say,
+`virtual_loss` or `cpuct_variance_scale` poisoned selection; each is refused by name),
+as must `choose_by_visits`'s temperature and random number and `two_hot`'s value.
 
 **Self-play** (`t5d/selfplay.hpp`, `play_game`). Self-play: a fresh search per decision
 (C14), sharing only the evaluation cache, the move sampled from the visits at
@@ -2162,8 +2173,11 @@ t5d-play [--variant NAME] [--evaluator uniform|random|material] [--playouts N]
 Defaults: Standard, uniform, 64 playouts per decision, the board-move split, a tree,
 self-play, a cap of 20 turns (uniform play branches freely: by turn 12 a game can
 hold 300 boards on 50 timelines). `--mate-nodes N` sets the search's terminal-check
-budget; `--max-actions` and `--max-seconds` are safety stops (checked at turn starts;
-the record ends `*`, its Termination header naming the stop). The rules come through
+budget; `--max-actions` (checked at turn starts) and `--max-seconds` (checked before
+every decision, and each search's deadline: an action under way when it passes is not
+recorded) are safety stops - the record ends `*`, its Termination header naming the
+stop. Every number is range-checked (never wrapped into a narrower type; reals finite):
+a bad one exits 2. The rules come through
 the tools' shared option reader (`tools::ruleset_option`), so the default is the
 engine's - Q4 as ruled, R8 - and `--no-moves-after-shift` (Q4's Guide-literal reading)
 or `--rules ENCODING` names another ruleset, written into the record's `Rules` header

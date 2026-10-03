@@ -166,6 +166,17 @@ TEST(play_exe_command_line) {
   CHECK(read_all(dir / "e.txt").find("usage") != std::string::npos);
   CHECK_EQ(run(T5D_PLAY_EXE, {"--split", "sideways"}, {}, dir / "o.txt", dir / "e.txt"), 2);
   CHECK_EQ(run(T5D_PLAY_EXE, {"--variant", "No Such Variant"}, {}, dir / "o.txt", dir / "e.txt"), 2);
+  // Values out of range are refused, never wrapped into a narrower type.
+  for (const std::vector<std::string>& bad :
+       {std::vector<std::string>{"--max-actions", "4294967296"}, std::vector<std::string>{"--cap-turns", "2147483648"},
+        std::vector<std::string>{"--cap-boards", "18446744073709551615"}, std::vector<std::string>{"--max-seconds", "nan"},
+        std::vector<std::string>{"--max-seconds", "-1"}, std::vector<std::string>{"--playouts", "0"},
+        std::vector<std::string>{"--temperature", "inf"}, std::vector<std::string>{"--batch", "0"},
+        std::vector<std::string>{"--listing-cap", "0"}}) {
+    CHECK_EQ(run(T5D_PLAY_EXE, bad, {}, dir / "o.txt", dir / "e.txt"), 2);
+    CHECK(read_all(dir / "e.txt").find("range") != std::string::npos ||
+          read_all(dir / "e.txt").find("finite") != std::string::npos);
+  }
   CHECK_EQ(run(T5D_PLAY_EXE, {"--help"}, {}, dir / "o.txt", dir / "e.txt"), 0);
   CHECK(read_all(dir / "o.txt").find("usage") != std::string::npos);
 }

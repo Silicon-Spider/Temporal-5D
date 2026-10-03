@@ -327,6 +327,15 @@ TEST(capi_search_errors_release_the_batch) {
   CHECK_EQ(t5d_search_deliver(s.get(), logits.data(), logits.size(), nullptr, 0, values.data(), values.size(),
                               T5D_VALUE_PROBABILITIES, nullptr),
            T5D_OK);
+  // No batch waiting: delivering is an error, and nothing changes.
+  CHECK_EQ(t5d_search_deliver(s.get(), logits.data(), logits.size(), nullptr, 0, values.data(), values.size(),
+                              T5D_VALUE_PROBABILITIES, nullptr),
+           T5D_ERR_ARGUMENT);
+  // Zero leaves asked for: an error; any number at all: bounded, never overflowed.
+  CHECK_EQ(t5d_search_gather(s.get(), 0, T5D_NO_LIMIT, &n, nullptr), T5D_ERR_ARGUMENT);
+  REQUIRE_EQ(t5d_search_gather(s.get(), SIZE_MAX, 4, &n, nullptr), T5D_OK);
+  CHECK(n <= 4);
+  CHECK_EQ(t5d_search_abandon(s.get()), T5D_OK);
   t5d_search_summary info;
   REQUIRE_EQ(t5d_search_info(s.get(), &info), T5D_OK);
   CHECK_EQ(info.playouts, std::uint64_t{1});
@@ -509,7 +518,7 @@ TEST(capi_search_shares_its_cache_and_runs_within_budgets) {
   CHECK_EQ(t5d_search_new_sharing(nullptr, g.get(), 1, &p, &raw, nullptr), T5D_ERR_ARGUMENT);
   // A run within a node budget stops there, and says so.
   const SearchHandle s = new_search(g.get(), p);
-  t5d_search_limits limits{T5D_NO_LIMIT, T5D_NO_LIMIT, 300, T5D_NO_LIMIT};
+  t5d_search_limits limits{T5D_NO_LIMIT, T5D_NO_LIMIT, 300, T5D_NO_LIMIT, 0.0};
   int32_t stop = -1;
   REQUIRE_EQ(t5d_search_run_limits(s.get(), T5D_EVALUATOR_RANDOM, 3, &limits, &stop, nullptr), T5D_OK);
   CHECK_EQ(stop, T5D_STOP_NODES);
@@ -517,10 +526,16 @@ TEST(capi_search_shares_its_cache_and_runs_within_budgets) {
   REQUIRE_EQ(t5d_search_info(s.get(), &c), T5D_OK);
   CHECK(c.nodes >= 300);
   CHECK_EQ(c.last_stop, T5D_STOP_NODES);
-  limits = t5d_search_limits{T5D_NO_LIMIT, T5D_NO_LIMIT, T5D_NO_LIMIT, c.memory_bytes};
+  limits = t5d_search_limits{T5D_NO_LIMIT, T5D_NO_LIMIT, T5D_NO_LIMIT, c.memory_bytes, 0.0};
   REQUIRE_EQ(t5d_search_run_limits(s.get(), T5D_EVALUATOR_RANDOM, 3, &limits, &stop, nullptr), T5D_OK);
   CHECK_EQ(stop, T5D_STOP_MEMORY);
   CHECK_EQ(t5d_search_run_limits(s.get(), T5D_EVALUATOR_RANDOM, 3, nullptr, &stop, nullptr), T5D_ERR_ARGUMENT);
+  limits = t5d_search_limits{T5D_NO_LIMIT, T5D_NO_LIMIT, T5D_NO_LIMIT, T5D_NO_LIMIT, 0.02};
+  const SearchHandle timed = new_search(g.get(), p);
+  REQUIRE_EQ(t5d_search_run_limits(timed.get(), T5D_EVALUATOR_RANDOM, 3, &limits, &stop, nullptr), T5D_OK);
+  CHECK_EQ(stop, T5D_STOP_DEADLINE);
+  limits.seconds = -1;
+  CHECK_EQ(t5d_search_run_limits(timed.get(), T5D_EVALUATOR_RANDOM, 3, &limits, &stop, nullptr), T5D_ERR_ARGUMENT);
   size_t v = 0;
   REQUIRE_EQ(t5d_search_layout("t5d_search_limits", nullptr, &v), T5D_OK);
   CHECK_EQ(v, sizeof(t5d_search_limits));
