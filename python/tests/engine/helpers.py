@@ -1,7 +1,12 @@
 """Shared test helpers for the engine binding (stage N4).
 
-* ``requires_engine``: skips a test when the engine's shared library is not built (CI's
-  network job does not build it; see ``t5d/engine/capi.py`` for where it is looked for).
+* ``requires_engine``: a test that needs the engine's shared library (see
+  ``t5d/engine/capi.py`` for where it is looked for). Through the ``engine_required``
+  fixture (``tests/conftest.py``): it runs when the library loads; it **fails** when a library
+  was found or named but is refused - not a library, without the C API, or laid out otherwise
+  than the binding (a mirror bug must never turn into skipped tests) - or when
+  ``T5D_REQUIRE_ENGINE=1`` is set (CI's network job sets it) and no library is built; it is
+  skipped only when no library is built and none is required.
 * ``RECORDS``: short 5dpgn records written here, from the notation's move forms - a
   branching jump, a non-branching cross-timeline jump, a turn-zero start. They are this
   project's own data.
@@ -20,11 +25,36 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from t5d.engine import library_available
+from t5d.engine import library_status
 from t5d.net.state import COLOUR_BLACK, COLOUR_WHITE, PIECE_IDS
 
-ENGINE = library_available()
-requires_engine = pytest.mark.skipif(not ENGINE, reason="the engine library is not built (py engine/build.py), or T5D_ENGINE_LIB is wrong")
+#: The variable that makes a missing engine library a failure (CI sets it).
+REQUIRE_VAR = "T5D_REQUIRE_ENGINE"
+ENGINE_STATUS, ENGINE_PROBLEM = library_status()
+ENGINE = ENGINE_STATUS == "available"
+requires_engine = pytest.mark.usefixtures("engine_required")
+
+
+def engine_verdict(status: str, problem: str, required: bool) -> tuple[str, str]:
+    """What a test that needs the engine does: ``("run", "")``, ``("fail", why)`` or
+    ``("skip", why)`` - see the module docstring."""
+    if status == "available":
+        return "run", ""
+    if status == "refused":
+        return "fail", f"the engine library was found but refused: {problem}"
+    if required:
+        return "fail", f"{REQUIRE_VAR}=1 and the engine library is not available: {problem}"
+    return "skip", "the engine library is not built (py engine/build.py)"
+
+
+def engine_required() -> None:
+    """Run, fail or skip the calling test (``engine_verdict`` of this session's library)."""
+    action, why = engine_verdict(ENGINE_STATUS, ENGINE_PROBLEM, os.environ.get(REQUIRE_VAR, "").strip() == "1")
+    if action == "fail":
+        pytest.fail(why, pytrace=False)
+    if action == "skip":
+        pytest.skip(why)
+
 
 #: Kinds that carry the unmoved marker (the notation's "5DFEN Strictness" list).
 TRACKED = set("PRKW")

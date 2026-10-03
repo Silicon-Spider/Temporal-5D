@@ -31,7 +31,7 @@ The engine's rules are its own: nothing here computes a rule, and nothing here r
 oracle harness. The library is built by ``py engine/build.py`` (engine README).
 """
 
-from .capi import ENV_VAR, Library, default_build_dir, find_library, library_available, load_library
+from .capi import ENV_VAR, Library, default_build_dir, find_library, library_available, library_status, load_library
 from .convert import EngineScope, Position, PresentMismatch, relations_for, to_position, to_position_state
 from .errors import (
     EngineArgumentError,
@@ -101,6 +101,7 @@ __all__ = [
     "default_build_dir",
     "find_library",
     "library_available",
+    "library_status",
     "load_library",
     "relations_for",
     "to_position",
