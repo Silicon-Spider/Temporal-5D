@@ -211,8 +211,8 @@ endif()
 
 # Stage E9: verification v3 (spec 11.4) - Guard, Hunt, the asset map, proof
 # certificates checked against E4 alone; Hunt's ground truth and experiment 6b''.
-target_sources(t5d_core PRIVATE src/certificate.cpp)
-target_sources(t5d-tests PRIVATE tests/test_certificate.cpp)
+target_sources(t5d_core PRIVATE src/certificate.cpp src/guard.cpp)
+target_sources(t5d-tests PRIVATE tests/test_certificate.cpp tests/test_guard.cpp)
 
 # ---- MinGW: no dependence on the toolchain's runtime DLLs --------------------------
 #
