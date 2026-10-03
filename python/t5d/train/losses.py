@@ -4,7 +4,10 @@
   51 bins (a one-hot or two-hot distribution, ``heads.value_to_twohot``).
 * Policy and opponent reply: cross-entropy over each position's supplied candidate
   moves against a target distribution (visit counts for the policy; a one-hot reply for
-  the opponent-reply head). Padding entries carry no mass.
+  the opponent-reply head). Padding entries carry no mass. The policy's distribution is
+  over the decision's actions - the candidate moves and, where it is offered and legal,
+  the submit action (register D8, stage N5: ``NetOutput.action_logits``); its target is
+  the root's visits to each move and to the submit child (``Targets.submit``).
 * WDL: 3-class cross-entropy. Effort: cross-entropy over its bins (censored bin
   included). Moves-left: Huber loss on ``log1p(board-moves left)``.
 * Per-board and per-square heads: binary cross-entropy with logits, masked to real
@@ -33,13 +36,16 @@ from ..net.model import NetOutput
 class Targets:
     value: torch.Tensor  # (B, value_bins) distribution
     policy: torch.Tensor  # (B, M) distribution over supplied moves
-    wdl: torch.Tensor  # (B,) class index: 0 win, 1 draw, 2 loss (player to move)
+    wdl: torch.Tensor  # (B,) class index: 0 win, 1 draw, 2 loss (the acting player's, D8)
     moves_left: torch.Tensor  # (B,) board-moves left, >= 0
     opp_reply: torch.Tensor  # (B,) index into opp_moves, -1 where there is no target
     short_value: torch.Tensor  # (B, value_bins) distribution
     board: torch.Tensor  # (B, Nmax, 3) in {0, 1}
     square: torch.Tensor  # (B, L, n_square_labels) in {0, 1}
     effort: torch.Tensor  # (B,) bin index, -1 where there is no target (PCR cheap searches)
+    #: (B,) the policy target's mass on the submit action (D8; ``policy`` and ``submit``
+    #: together are one distribution over the decision's actions); None: none anywhere.
+    submit: torch.Tensor | None = None
 
 
 @dataclass
@@ -110,7 +116,8 @@ def compute_losses(out: NetOutput, tgt: Targets, cfg: LossConfig | None = None) 
     cfg = LossConfig() if cfg is None else cfg
     losses: dict[str, torch.Tensor] = {}
     losses["value"] = categorical_ce(out.value_logits, tgt.value)
-    losses["policy"] = masked_ce(out.policy_logits, out.move_valid, tgt.policy)
+    submit = tgt.policy.new_zeros(tgt.policy.shape[0]) if tgt.submit is None else tgt.submit.to(tgt.policy.dtype)
+    losses["policy"] = masked_ce(out.action_logits(), out.action_valid(), torch.cat([tgt.policy, submit[:, None]], dim=-1))
     losses["wdl"] = F.cross_entropy(out.wdl_logits.float(), tgt.wdl)
     losses["moves_left"] = F.huber_loss(out.moves_left_log, torch.log1p(tgt.moves_left.float()), delta=cfg.huber_delta)
     losses["opp_reply"] = index_ce(out.opp_reply_logits, out.opp_move_valid, tgt.opp_reply)

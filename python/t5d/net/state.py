@@ -63,6 +63,17 @@ Representation (design spec section 2; register A1-A4):
   timeline's first board, on another timeline, and is superseded (a travel onto a head
   continues that timeline rather than branching); a departure board is superseded (the
   jump makes its timeline's next board) and created before the arrival.
+* **The action (stage N5; register D8, spec section 8.2).** Turns have variable length
+  (rulebook R8): the mover keeps moving until it submits, and once the present has shifted
+  to the opponent (T5) the boards' present names the opponent while the action is still the
+  mover's. Three global facts carry it: ``acting_player`` (whose action this is; default the
+  present's colour, ``player_to_move`` - it differs exactly when the present has shifted,
+  ``shifted``), ``submit_possible`` (the action's obligations are met: under the ply split
+  submitting is an action beside the moves) and ``submit_legal`` (the submission passes C4).
+  The first is a network input (``NetConfig.acting_player_input``); the other two say
+  whether the submit action is a candidate and whether it is masked, as ``moves`` lists the
+  candidate moves. Validation: submitting is legal only where possible, and possible only
+  once the present has shifted. Values are from the acting player's perspective.
 
 Board storage order is free: the network has no absolute positions (section 4), so a
 reordering of boards permutes the per-board outputs and changes nothing else. Synthetic
@@ -268,6 +279,15 @@ class PositionState:
     parent: np.ndarray | None = None
     creation: np.ndarray | None = None
     source: np.ndarray | None = None
+    #: The action (register D8, stage N5; see the module docstring): the player whose action
+    #: is in progress until it submits (0 white, 1 black; None: derived - the present's
+    #: colour, ``player_to_move``, i.e. no shift inside the action); whether submitting is
+    #: possible (the action's obligations met, T5 - an action of its own under the ply
+    #: split, offered beside the moves) and legal (C4: no royal of the acting player's left
+    #: capturable). The value is from the acting player's perspective.
+    acting_player: int | None = None
+    submit_possible: bool = False
+    submit_legal: bool = False
 
     def __post_init__(self) -> None:
         self.timeline = _as_int(self.timeline, "timeline").reshape(-1)
@@ -293,7 +313,12 @@ class PositionState:
             self.source = np.full(n, -1, dtype=np.int64)
         else:
             self.source = _as_int(self.source, "source").reshape(-1)
+        self.submit_possible = bool(self.submit_possible)
+        self.submit_legal = bool(self.submit_legal)
         self.validate()
+        if self.acting_player is None:
+            self.acting_player = self.player_to_move
+        self.acting_player = int(self.acting_player)
 
     def previous_boards(self) -> np.ndarray:
         """``(N,)``: each board's timeline predecessor (the board at ``(p, h - 1)``), -1 where
@@ -323,8 +348,15 @@ class PositionState:
 
     @property
     def player_to_move(self) -> int:
-        """0 white, 1 black: the colour of the present boards."""
+        """0 white, 1 black: the colour of the present boards. Not the acting player once the
+        present has shifted inside an unsubmitted action (``shifted``)."""
         return self.h_present & 1
+
+    @property
+    def shifted(self) -> bool:
+        """Whether the present has shifted to the opponent inside the acting player's action
+        (T5's obligations met): the acting player is not the present's colour."""
+        return int(self.acting_player) != self.player_to_move
 
     @property
     def dt_present(self) -> np.ndarray:
@@ -382,6 +414,7 @@ class PositionState:
                 raise ValueError(f"timeline {p}: boards disagree about whether it is active")
         if not np.any(self.is_head & self.active):
             raise ValueError("no active timeline: the present is undefined")
+        self._validate_action()
         self._validate_lineage()
         layout = self.layout
         for name in ("edges", "moves", "opp_moves"):
@@ -397,6 +430,19 @@ class PositionState:
             arr = getattr(self, name)
             if arr.size and np.any((arr[:, 2] < 0) | (arr[:, 2] >= N_PIECE_TYPES)):
                 raise ValueError(f"{name}: promotion ids must be 0 (none) or a piece type id")
+
+    def _validate_action(self) -> None:
+        """The action (D8): the acting player is a colour; submitting is legal only where it is
+        possible, and possible only once the present lies on the opponent's colour (T5)."""
+        acting = self.player_to_move if self.acting_player is None else self.acting_player
+        if isinstance(acting, (bool, np.bool_)) or int(acting) != acting or int(acting) not in (0, 1):
+            raise ValueError("acting_player must be 0 (white) or 1 (black)")
+        if self.submit_legal and not self.submit_possible:
+            raise ValueError("submit_legal needs submit_possible: a submission is legal only where it is possible")
+        if self.submit_possible and int(acting) == self.player_to_move:
+            raise ValueError(
+                "submit_possible needs the present shifted to the opponent (T5): the acting player cannot be the present's colour"
+            )
 
     def _validate_lineage(self) -> None:
         """``parent`` and ``creation`` against the timeline structure (module docstring)."""
@@ -530,6 +576,9 @@ def permute_boards(state: PositionState, order: Sequence[int]) -> PositionState:
         parent=parent,
         creation=None if state.creation is None else state.creation[order],
         source=source,
+        acting_player=state.acting_player,
+        submit_possible=state.submit_possible,
+        submit_legal=state.submit_legal,
     )
 
 
@@ -610,6 +659,25 @@ class Batch:
     board_source: torch.Tensor | None = None  # long: a travel arrival's departure board, -1 none
     board_head: torch.Tensor | None = None  # bool: head (live) board
     has_creation: torch.Tensor | None = None  # (B,) bool: the position carries a creation order
+    # Per position (stage N5, register D8): (B,).
+    acting_player: torch.Tensor | None = None  # long: 0 white, 1 black - whose action this is
+    submit_possible: torch.Tensor | None = None  # bool: submitting is an action here (T5)
+    submit_legal: torch.Tensor | None = None  # bool: ... and legal (C4); the submit logit is masked otherwise
+
+    def acting(self) -> torch.Tensor:
+        """``(B,)`` long: each position's acting player (the present's colour for a batch made
+        without one)."""
+        if self.acting_player is not None:
+            return self.acting_player
+        return self.coord_ref[:, 1].long() & 1
+
+    def submit_mask(self) -> tuple[torch.Tensor, torch.Tensor]:
+        """``(possible, legal)``, each ``(B,)`` bool (all False for a batch made without them)."""
+        bsz = self.piece.shape[0]
+        none = torch.zeros(bsz, dtype=torch.bool, device=self.piece.device)
+        possible = none if self.submit_possible is None else self.submit_possible
+        legal = none if self.submit_legal is None else self.submit_legal
+        return possible, legal & possible
 
     @property
     def batch_size(self) -> int:
@@ -735,4 +803,7 @@ def collate(states: Sequence[PositionState]) -> Batch:
         board_source=torch.from_numpy(board_source),
         board_head=torch.from_numpy(board_head),
         has_creation=torch.from_numpy(has_creation),
+        acting_player=torch.tensor([int(s.acting_player) for s in states], dtype=torch.long),
+        submit_possible=torch.tensor([bool(s.submit_possible) for s in states], dtype=torch.bool),
+        submit_legal=torch.tensor([bool(s.submit_legal) for s in states], dtype=torch.bool),
     )
