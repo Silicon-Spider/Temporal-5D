@@ -103,6 +103,48 @@ int ruleset_option(int argc, char** argv, int i, RuleOptions& rules) {
 
 std::string ruleset_text(const RuleOptions& rules) { return describe(rules); }
 
+std::string absolute_rules_text(const RuleOptions& r) {
+  std::string out;
+  const auto add = [&out](const char* name, const std::string& value) {
+    if (!out.empty()) out += ' ';
+    out += name;
+    out += '=';
+    out += value;
+  };
+  const auto b = [](bool v) { return std::string(v ? "true" : "false"); };
+  add("activation", r.activation == ActivationRule::Count ? "Count" : "Consecutive");
+  add("initial_credit", r.initial_credit == InitialTimelineCredit::None ? "None" : "MinusZeroToBlack");
+  add("play_activates", b(r.play_activates));
+  add("moves_after_shift", b(r.moves_after_shift));
+  add("mandatory", r.mandatory == MandatoryBoards::InPresent ? "InPresent" : "AllActive");
+  add("reactivation", r.reactivation == Reactivation::Rewinds ? "Rewinds" : "Deferred");
+  add("turn_zero_reachable", b(r.turn_zero_reachable));
+  add("sliders_cross_void", b(r.sliders_cross_void));
+  add("past_self_blocks", b(r.past_self_blocks));
+  add("earlier_playable_jump_branches", b(r.earlier_playable_jump_branches));
+  add("inactive_history_is_destination", b(r.inactive_history_is_destination));
+  add("brawn_rank_timeline_capture", b(r.brawn_rank_timeline_capture));
+  add("double_step_right", r.double_step_right == DoubleStepRight::UnmovedFlag ? "UnmovedFlag" : "HomeRank");
+  add("timeline_double_step", b(r.timeline_double_step));
+  add("double_step_over_void", b(r.double_step_over_void));
+  add("branch_copies_keep_unmoved", b(r.branch_copies_keep_unmoved));
+  add("jumps_keep_unmoved", b(r.jumps_keep_unmoved));
+  add("en_passant_brawns", b(r.en_passant_brawns));
+  add("brawns_promote", b(r.brawns_promote));
+  add("brawn_cross_board_promotion", b(r.brawn_cross_board_promotion));
+  char mask[16];
+  std::snprintf(mask, sizeof mask, "0x%04x", static_cast<unsigned>(r.promotions.mask()));
+  add("promotions", mask);
+  add("castling_empty_between", b(r.castling_empty_between));
+  add("castling_destination_test", b(r.castling_destination_test));
+  add("castling_rook_path_test", b(r.castling_rook_path_test));
+  add("castling_any_rank", b(r.castling_any_rank));
+  add("castling_rook_two_away", b(r.castling_rook_two_away));
+  add("castling_on_optional_boards", b(r.castling_on_optional_boards));
+  add("family", r.family == RuleFamily::Standard ? "Standard" : "ReversedRoyalty");
+  return out;
+}
+
 bool is_synthetic(const PgnRecord& record) { return record.header("Synthetic") != nullptr; }
 
 }  // namespace t5d::tools

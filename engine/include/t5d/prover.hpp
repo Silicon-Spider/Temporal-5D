@@ -214,6 +214,30 @@ struct ProverOptions {
   bool attacker_probe = true;
 };
 
+/// Prover::tree_actions: the actions distinct by successor, and how many
+/// paths of the tree reached a submission (more than actions.size(): some
+/// action was enumerated twice).
+struct TreeActions {
+  std::vector<BuiltAction> actions;
+  std::size_t paths = 0;
+  /// Each path dropped as a repeat: the kept path's moves, and its own.
+  std::vector<std::pair<std::vector<Move>, std::vector<Move>>> repeated;
+};
+
+/// Prover::check_filter_view: the last-turn check filter at a turn start
+/// (the attacker to move), as the prover builds it. `applies` false: the
+/// filter does not apply there (maps recompute, a capture stands). Else, per
+/// move of `moves` (generate_moves' order): check-capable, and capable
+/// through a void stop alone; and whether a check-capable branch is assumed
+/// left (J6's twins, or a capable branching move).
+struct CheckFilterView {
+  bool applies = false;
+  MoveList moves;
+  std::vector<std::uint8_t> capable;
+  std::vector<std::uint8_t> by_void;
+  bool branch = false;
+};
+
 // ---------------------------------------------------------------------------
 // Proof certificates
 // ---------------------------------------------------------------------------
@@ -413,14 +437,21 @@ class Prover {
   // -- the pieces, for tools and tests (no budget) ---------------------------
 
   /// A's actions at `turn_start` in the class (seeds completed; Every: every
-  /// legal completion of every seed), distinct by successor.
+  /// legal completion of every seed), distinct by successor: tree_actions'
+  /// as the attacker.
   std::vector<BuiltAction> attacker_actions(const GameState& turn_start);
   /// The canonical completion of `seed` (pseudo-legal at `turn_start`).
   std::optional<BuiltAction> canonical_completion(const GameState& turn_start, const Move& seed);
-  /// Every legal action of the side to move at `turn_start`, as the semimove
-  /// tree enumerates them (defender's order), distinct by successor. Only
-  /// where decomposes(rules).
-  std::vector<BuiltAction> semimove_actions(const GameState& turn_start);
+  /// The actions the prover's own tree holds at `turn_start` for the side
+  /// to move as the ATTACKER (this prover's class; the literal class: the
+  /// semimove tree entered once; with the check filter: what survives it at
+  /// a last turn - the turn is searched as one with a half-turn left) or as
+  /// the DEFENDER (its semimove tree and its witness; none where it is
+  /// mated or stalemated): the production expansion (expand_turn,
+  /// expand_semi), every node expanded, no budget.
+  TreeActions tree_actions(const GameState& turn_start, bool attacker);
+  /// The last-turn check filter at `turn_start` (tests): see CheckFilterView.
+  CheckFilterView check_filter_view(const GameState& turn_start);
 
  private:
   struct Impl;

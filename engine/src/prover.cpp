@@ -226,6 +226,7 @@ enum class Phase : std::uint8_t { Plain, Branch };
 struct CheckFilter {
   std::vector<Move> moves;
   std::vector<std::uint8_t> capable_move;
+  std::vector<std::uint8_t> by_void;  // capable through a void stop alone
   std::unordered_multimap<std::uint64_t, std::size_t> index;
   std::vector<std::uint8_t> plain_from;  // axes.size() + 1 entries
   bool branch = false;
@@ -917,47 +918,6 @@ struct Worker {
     return false;
   }
 
-  // Every legal action of the semimove tree below `t` (tests): appended.
-  void every_action(const GameState& t, const RoyalAttackMap& c4, const TurnShape& shape,
-                    std::size_t j, Phase phase, std::vector<Move>& path, std::vector<Found>& out) {
-    const std::vector<std::int32_t>& axes = shape.axes;
-    if (phase == Phase::Plain) {
-      while (j < axes.size() && !t.playable_by_mover(axes[j])) ++j;
-      if (j == axes.size()) phase = Phase::Branch;
-    }
-    if (pass_left_dead(t, shape, j)) return;
-    if (phase == Phase::Plain) {
-      const int a = axes[j];
-      MoveList plain;
-      axis_moves(t, a, plain);
-      if (pass_viable(t, shape, j)) every_action(t, c4, shape, j + 1, Phase::Plain, path, out);
-      for (const Move& m : plain) {
-        GameState u = t;
-        apply(u, m);
-        const RoyalAttackMap next = c4.advanced(u.multiverse(), u.inactive_timelines());
-        if (stands(next, u)) continue;
-        path.push_back(m);
-        every_action(u, next, shape, j + 1, Phase::Plain, path, out);
-        path.pop_back();
-      }
-      return;
-    }
-    if (t.obligations_met() && !c4.any()) out.push_back(Found{path, std::make_unique<GameState>(t), c4});
-    if (!t.may_move()) return;
-    MoveList all;
-    generate_moves(t, all);
-    for (const Move& b : all) {
-      if (!b.branching()) continue;
-      GameState u = t;
-      apply(u, b);
-      const RoyalAttackMap next = c4.advanced(u.multiverse(), u.inactive_timelines());
-      if (stands(next, u)) continue;
-      path.push_back(b);
-      every_action(u, next, shape, axes.size(), Phase::Branch, path, out);
-      path.pop_back();
-    }
-  }
-
   // The turn's axes: the mover's playable boards. A's turns (and the
   // canonical completion): ascending timeline. D's: the boards a check rests
   // on first (`hot` of them), then the mandatory ones, then the rest.
@@ -1084,6 +1044,7 @@ struct Worker {
     auto f = std::make_shared<CheckFilter>();
     f->moves.assign(all.begin(), all.end());
     f->capable_move.assign(all.size(), 0);
+    f->by_void.assign(all.size(), 0);
     std::vector<RoyalAttackMap::VoidStop> stops;
     for (std::size_t i = 0; i < all.size(); ++i) {
       if (stopped) return nullptr;
@@ -1102,6 +1063,7 @@ struct Worker {
           if (!may_fill(v.timeline, v.half_turn)) continue;
           if (std::binary_search(stops0.begin(), stops0.end(), v)) continue;
           capable = true;  // a new line (or a resumed one) stopped where a board may come
+          f->by_void[i] = 1;
           break;
         }
       }
@@ -1909,6 +1871,80 @@ struct Worker {
     }
   }
 
+  // Every action under node `n`, every node expanded by the prover's own
+  // expansion (tests and tools, no budget): the moves from the turn start,
+  // and the successor; `paths` counts them before any is dropped as a
+  // duplicate.
+  void enumerate(std::uint32_t n, const GameState& s, TurnCtx& turn, const RoyalAttackMap& c4,
+                 std::vector<Move>& path, std::vector<BuiltAction>& out) {
+    if (!tree[n].expanded) {
+      if (tree[n].kind == Kind::Turn) {
+        expand_turn(n, s, turn);
+      } else {
+        expand_semi(n, s, turn, c4);
+      }
+    }
+    const std::vector<std::uint32_t> children = tree[n].children;  // the tree grows below
+    const bool at_turn = tree[n].kind == Kind::Turn;
+    for (const std::uint32_t ci : children) {
+      const Edge edge = tree[ci].edge;
+      const std::vector<Move> moves = tree[ci].moves;
+      switch (edge) {
+        case Edge::Pass:
+          enumerate(ci, s, turn, c4, path, out);
+          break;
+        case Edge::Enter:
+          enumerate(ci, s, turn, turn.opp_map, path, out);
+          break;
+        case Edge::Move: {
+          GameState t = s;
+          apply(t, moves.front());
+          const RoyalAttackMap next = at_turn ? advance(turn.opp_map, t) : advance(c4, t);
+          path.push_back(moves.front());
+          enumerate(ci, t, turn, next, path, out);
+          path.pop_back();
+          break;
+        }
+        case Edge::Submit: {
+          GameState t = s;
+          t.submit(CheckRuling::none());
+          out.push_back(BuiltAction{path, std::move(t)});
+          break;
+        }
+        case Edge::Action: {
+          GameState t = s;
+          for (const Move& m : moves) t.apply(m);
+          t.submit(CheckRuling::none());
+          out.push_back(BuiltAction{moves, std::move(t)});
+          break;
+        }
+        case Edge::Root:
+          break;
+      }
+    }
+  }
+
+  // The tree's actions at `turn_start` for a side (tree_actions).
+  std::vector<BuiltAction> actions_of(const GameState& turn_start) {
+    tree.clear();
+    st = ProverStats{};
+    stopped = false;
+    const std::uint32_t r = make_turn(turn_start, 1, Edge::Root, {});
+    tree[r].pn = 1;  // never read from a store: expanded, whatever is stored
+    tree[r].dn = 1;
+    TurnCtx ctx;
+    ctx.start = &turn_start;
+    ctx.node = r;
+    ctx.mover_map = RoyalAttackMap(turn_start.multiverse(), turn_start.rules(), turn_start.to_move(),
+                                   turn_start.inactive_timelines());
+    ctx.opp_map = RoyalAttackMap(turn_start.multiverse(), turn_start.rules(), opposite(turn_start.to_move()),
+                                 turn_start.inactive_timelines());
+    std::vector<Move> path;
+    std::vector<BuiltAction> out;
+    enumerate(r, turn_start, ctx, ctx.opp_map, path, out);
+    return out;
+  }
+
   // This thread's search of `shared_root`.
   void run(const GameState& shared_root, std::uint32_t& root_out, bool& decided) {
     std::optional<GameState> own;
@@ -2094,40 +2130,53 @@ SolvedStore& Prover::proofs() noexcept { return *impl_->shared.proofs; }
 DisproofStore& Prover::disproofs() noexcept { return *impl_->shared.disproofs; }
 
 std::vector<BuiltAction> Prover::attacker_actions(const GameState& turn_start) {
+  return tree_actions(turn_start, true).actions;
+}
+
+TreeActions Prover::tree_actions(const GameState& turn_start, bool attacker) {
+  Shared& sh = impl_->shared;
   Worker& w = *impl_->workers.front();
-  impl_->shared.budget = nullptr;
-  w.stopped = false;
-  std::vector<BuiltAction> out;
-  MoveList moves;
-  generate_moves(turn_start, moves);
-  const RoyalAttackMap opp(turn_start.multiverse(), turn_start.rules(), opposite(turn_start.to_move()),
-                           turn_start.inactive_timelines());
-  const TurnShape shape = w.shape_of(turn_start, w.attacker_axes(turn_start), 0, moves);
-  Worker::Seen seen;
-  for (const Move& m : moves) {
-    if (!w.is_seed(turn_start, m)) continue;
-    if (impl_->shared.opt.completion == CompletionClass::Canonical) {
-      const std::optional<Found> f = w.complete(turn_start, opp, shape, m);
-      if (!f) continue;
-      GameState next = *f->after;
-      next.submit(CheckRuling::none());
-      if (seen.add(next)) out.push_back(BuiltAction{f->moves, next});
-      continue;
+  sh.budget = nullptr;
+  sh.depth = 1;
+  sh.private_disproofs.clear();
+  sh.attacker = attacker ? turn_start.to_move() : opposite(turn_start.to_move());
+  TreeActions out;
+  std::vector<BuiltAction> all = w.actions_of(turn_start);
+  out.paths = all.size();
+  for (BuiltAction& a : all) {
+    bool fresh = true;
+    for (std::size_t i = 0; i < out.actions.size(); ++i) {
+      if (out.actions[i].successor.zobrist() == a.successor.zobrist() &&
+          same_position(out.actions[i].successor, a.successor)) {
+        out.repeated.emplace_back(out.actions[i].moves, a.moves);
+        fresh = false;
+        break;
+      }
     }
-    GameState t = turn_start;
-    t.apply(m);
-    const RoyalAttackMap c4 = opp.advanced(t.multiverse(), t.inactive_timelines());
-    if (Worker::stands(c4, t)) continue;
-    std::vector<Move> path{m};
-    std::vector<Found> found;
-    w.every_action(t, c4, shape, 0, Phase::Plain, path, found);
-    for (Found& f : found) {
-      GameState next = *f.after;
-      next.submit(CheckRuling::none());
-      if (seen.add(next)) out.push_back(BuiltAction{f.moves, next});
-    }
+    if (fresh) out.actions.push_back(std::move(a));
   }
   return out;
+}
+
+CheckFilterView Prover::check_filter_view(const GameState& turn_start) {
+  Shared& sh = impl_->shared;
+  Worker& w = *impl_->workers.front();
+  sh.budget = nullptr;
+  w.stopped = false;
+  CheckFilterView v;
+  generate_moves(turn_start, v.moves);
+  std::vector<std::int32_t> axes = w.attacker_axes(turn_start);
+  // Built whatever this prover's options say (the worker reads them).
+  const bool was = sh.opt.check_filter;
+  sh.opt.check_filter = true;
+  const std::shared_ptr<const CheckFilter> f = w.make_check_filter(turn_start, v.moves, axes);
+  sh.opt.check_filter = was;
+  if (f == nullptr) return v;
+  v.applies = true;
+  v.capable.assign(f->capable_move.begin(), f->capable_move.end());
+  v.by_void.assign(f->by_void.begin(), f->by_void.end());
+  v.branch = f->branch;
+  return v;
 }
 
 std::optional<BuiltAction> Prover::canonical_completion(const GameState& turn_start, const Move& seed) {
@@ -2144,31 +2193,6 @@ std::optional<BuiltAction> Prover::canonical_completion(const GameState& turn_st
   GameState next = *f->after;
   next.submit(CheckRuling::none());
   return BuiltAction{f->moves, next};
-}
-
-std::vector<BuiltAction> Prover::semimove_actions(const GameState& turn_start) {
-  Worker& w = *impl_->workers.front();
-  impl_->shared.budget = nullptr;
-  w.stopped = false;
-  std::vector<BuiltAction> out;
-  MoveList moves;
-  generate_moves(turn_start, moves);
-  const RoyalAttackMap opp(turn_start.multiverse(), turn_start.rules(), opposite(turn_start.to_move()),
-                           turn_start.inactive_timelines());
-  int hot = 0;
-  bool in_check = false;
-  std::vector<std::int32_t> axes = w.defender_axes(turn_start, opp, hot, in_check);
-  const TurnShape shape = w.shape_of(turn_start, std::move(axes), hot, moves);
-  std::vector<Move> path;
-  std::vector<Found> found;
-  w.every_action(turn_start, opp, shape, 0, Phase::Plain, path, found);
-  Worker::Seen seen;
-  for (Found& f : found) {
-    GameState next = *f.after;
-    next.submit(CheckRuling::none());
-    if (seen.add(next)) out.push_back(BuiltAction{f.moves, next});
-  }
-  return out;
 }
 
 }  // namespace t5d

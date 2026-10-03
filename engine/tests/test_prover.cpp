@@ -30,6 +30,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -145,36 +146,59 @@ void semimove_tree_is_exact(const RuleOptions& rules, int games, int turns, std:
   for (GameState& s : t5d_test::variant_positions(rules, {"Standard - Two Timelines"}, 3, seed + 1)) {
     all.push_back(std::move(s));
   }
-  Prover prover;
+  // The prover's own trees, as it expands them (expand_turn, expand_semi):
+  // the defender's, and the attacker's in the literal class (the semimove
+  // tree entered once - every legal action exactly once).
+  ProverOptions literal;
+  literal.seeds = SeedClass::All;
+  literal.completion = CompletionClass::Every;
   for (const GameState& s : all) {
     // (The reference's own bookkeeping is quadratic in the successors: kept
     // to positions it can enumerate in a moment.)
     const t5d_test::Reference ref = t5d_test::reference_actions(s, limit);
     if (ref.overflow) continue;
-    const std::vector<BuiltAction> got = prover.semimove_actions(s);
     ++positions;
-    actions += static_cast<int>(got.size());
-    bool ok = got.size() == ref.successors.size();
+    const ActionCount n = count_legal_successors(s, 100000, Detector::Hypercuboid);
     std::unordered_map<std::uint64_t, std::vector<const GameState*>> by_key;
     for (const GameState& r : ref.successors) by_key[r.zobrist()].push_back(&r);
-    for (const BuiltAction& a : got) {
-      // Each one legal, through the state machine, and the reference's.
-      GameState t = s;
-      for (const Move& m : a.moves) t.apply(m);
-      ok = ok && t.obligations_met() && royals_safe(t);
-      t.submit(CheckRuling::none());
-      ok = ok && same_position(t, a.successor);
-      const auto it = by_key.find(a.successor.zobrist());
-      ok = ok && it != by_key.end() &&
-           std::any_of(it->second.begin(), it->second.end(),
-                       [&](const GameState* r) { return same_position(*r, a.successor); });
-    }
-    const ActionCount n = count_legal_successors(s, 100000, Detector::Hypercuboid);
-    ok = ok && n.stats.exhaustive && n.count == got.size();
-    if (!ok) {
-      std::fprintf(stderr, "  semimove tree %zu vs reference %zu at %s\n", got.size(),
-                   ref.successors.size(), describe_position(s).c_str());
-      CHECK(false);
+    for (const bool as_attacker : {false, true}) {
+      Prover prover(as_attacker ? literal : ProverOptions{});
+      const TreeActions got = prover.tree_actions(s, as_attacker);
+      if (as_attacker) actions += static_cast<int>(got.actions.size());
+      bool ok = got.actions.size() == ref.successors.size();
+      for (const BuiltAction& a : got.actions) {
+        // Each one legal, through the state machine, and the reference's.
+        GameState t = s;
+        for (const Move& m : a.moves) t.apply(m);
+        ok = ok && t.obligations_met() && royals_safe(t);
+        t.submit(CheckRuling::none());
+        ok = ok && same_position(t, a.successor);
+        const auto it = by_key.find(a.successor.zobrist());
+        ok = ok && it != by_key.end() &&
+             std::any_of(it->second.begin(), it->second.end(),
+                         [&](const GameState* r) { return same_position(*r, a.successor); });
+      }
+      ok = ok && n.stats.exhaustive && n.count == got.actions.size();
+      // Every legal action - a move sequence, branches in the order made
+      // (two orders of two branches may reach one position: two actions) -
+      // is a path of the tree, once: the attacker's tree holds exactly the
+      // reference's actions; the defender's, its witness besides.
+      std::set<std::string> keys;
+      const bool even = s.multiverse().even();
+      for (const BuiltAction& a : got.actions) keys.insert(t5d_test::Reference::key(a.moves, even));
+      for (const auto& [kept, again] : got.repeated) keys.insert(t5d_test::Reference::key(again, even));
+      const std::size_t witness = !as_attacker && !ref.actions.empty() ? 1 : 0;
+      ok = ok && keys == ref.actions && got.paths == ref.actions.size() + witness;
+      if (!ok) {
+        std::fprintf(stderr, "  %s tree %zu (%zu paths) vs reference %zu at %s\n", as_attacker ? "attacker" : "defender",
+                     got.actions.size(), got.paths, ref.successors.size(), describe_position(s).c_str());
+        for (std::size_t k = 0; k < got.repeated.size() && k < 4; ++k) {
+          std::fprintf(stderr, "    repeated: %s | %s\n",
+                       action_text(got.repeated[k].first, s.multiverse().even()).c_str(),
+                       action_text(got.repeated[k].second, s.multiverse().even()).c_str());
+        }
+        CHECK(false);
+      }
     }
   }
 }
@@ -189,7 +213,7 @@ TEST(prover_semimove_tree_lists_exactly_the_legal_actions) {
     RuleOptions rules = base;
     rules.moves_after_shift = true;
     if (!decomposes(rules)) continue;
-    semimove_tree_is_exact(rules, 1, 3, seed++, 5000, positions, actions);
+    semimove_tree_is_exact(rules, 1, 3, seed++, 2000, positions, actions);
   }
   std::fprintf(stderr, "  %d positions, %d actions\n", positions, actions);
   CHECK(positions > 200);
@@ -357,8 +381,6 @@ TEST(prover_proofs_and_disproofs_go_to_the_stores_h19) {
   }
 }
 
-
-
 // ---- random play: every proof and disproof checked ---------------------------------------------
 
 namespace {
@@ -375,6 +397,20 @@ void random_play(const RuleOptions& rules, const ProverOptions& o, int games, in
 
 TEST(prover_literal_class_agrees_with_the_game_tree) {
   // Seeds All, completion Every: exactly "mate within d", both ways.
+  Tally tally;
+  std::uint64_t seed = 600;
+  for (const int depth : {1, 3}) {
+    ProverOptions o = literal();
+    o.depth = depth;
+    random_play(shift_rules(), o, 1, 2, seed++, 60'000, tally);
+    random_play(guide_literal_q4(), o, 1, 2, seed++, 60'000, tally);  // listings
+  }
+  tally.print("literal class");
+  CHECK(tally.proven > 2);
+  CHECK(tally.disproven > 10);
+}
+
+TEST(long_prover_literal_class_agrees_with_the_game_tree) {
   Tally tally;
   std::uint64_t seed = 600;
   for (const int depth : {1, 3}) {
@@ -404,12 +440,13 @@ TEST(prover_default_class_agrees_with_its_references) {
   CHECK(tally.disproven > 20);
 }
 
-TEST(prover_every_ruleset_proves_only_mates) {
-  // Every ruleset, with and without Q4's moves after the shift: every proof
-  // checked; disproofs within a small reference budget (the full checks are
-  // the tests above and the long_ one).
-  Tally tally;
-  tally.work_cap = 20'000;
+namespace {
+
+// Every ruleset, with and without Q4's moves after the shift: every proof
+// checked; disproofs within a small reference budget (the full checks are
+// the tests above and the long_ ones).
+void every_ruleset_property(int turns, std::uint64_t nodes, Tally& tally) {
+  tally.work_cap = nodes;
   std::uint64_t seed = 800;
   for (const RuleOptions& base : t5d_test::every_ruleset()) {
     if (base.moves_after_shift != RuleOptions{}.moves_after_shift) continue;  // both below
@@ -418,12 +455,26 @@ TEST(prover_every_ruleset_proves_only_mates) {
       rules.moves_after_shift = shift;
       ProverOptions o;
       o.depth = 3;
-      random_play(rules, o, 1, 3, seed++, 20'000, tally);
+      random_play(rules, o, 1, turns, seed++, nodes, tally);
       ProverOptions l = literal();
       l.depth = 1;
-      random_play(rules, l, 1, 3, seed++, 20'000, tally);
+      random_play(rules, l, 1, turns, seed++, nodes, tally);
     }
   }
+}
+
+}  // namespace
+
+TEST(prover_every_ruleset_proves_only_mates) {
+  Tally tally;
+  every_ruleset_property(2, 8'000, tally);
+  tally.print("every ruleset");
+  CHECK(tally.proven > 5);
+}
+
+TEST(long_prover_every_ruleset_proves_only_mates) {
+  Tally tally;
+  every_ruleset_property(3, 20'000, tally);
   tally.print("every ruleset");
   CHECK(tally.proven > 10);
 }
@@ -472,14 +523,14 @@ namespace {
 
 // Every budget below the search's own need: a decided answer only where the
 // references agree, never a proof the game tree denies.
-void budget_property(const std::vector<GameState>& positions, const ProverOptions& o,
+void budget_property(const std::vector<GameState>& positions, const ProverOptions& o, std::uint64_t steps,
                      int& stops, int& checked) {
   for (const GameState& s : positions) {
     Prover full_prover(o);
     const ProveResult full = full_prover.prove(s, ProveBudget::nodes(200'000));
     if (full.status == ProofStatus::Unknown) continue;
     const std::uint64_t need = full.stats.nodes;
-    const std::uint64_t step = std::max<std::uint64_t>(1, need / 60);
+    const std::uint64_t step = std::max<std::uint64_t>(1, need / steps);
     for (std::uint64_t b = 0; b < need; b += step) {
       Prover p(o);
       const ProveResult r = p.prove(s, ProveBudget::nodes(b));
@@ -501,18 +552,35 @@ void budget_property(const std::vector<GameState>& positions, const ProverOption
 
 }  // namespace
 
-TEST(prover_no_budget_stop_gives_a_verdict_h37) {
+namespace {
+
+void no_budget_stop(std::ptrdiff_t random_positions, std::uint64_t steps, int& stops, int& checked) {
   std::vector<GameState> positions;
   for (const GameState& s : {mate_in_one(shift_rules()), cross_board_mate(shift_rules()),
                              mate_in_two(shift_rules()), stale_checkmate_in_one(shift_rules())}) {
     positions.push_back(s);
   }
   const std::vector<GameState> random = playable(t5d_test::sparse_positions(shift_rules(), 1, 4, 1000));
-  positions.insert(positions.end(), random.begin(), random.begin() + std::min<std::ptrdiff_t>(20, static_cast<std::ptrdiff_t>(random.size())));
+  positions.insert(positions.end(), random.begin(),
+                   random.begin() + std::min<std::ptrdiff_t>(random_positions, static_cast<std::ptrdiff_t>(random.size())));
+  budget_property(positions, ProverOptions{}, steps, stops, checked);
+  budget_property(positions, literal(), steps, stops, checked);
+}
+
+}  // namespace
+
+TEST(prover_no_budget_stop_gives_a_verdict_h37) {
   int stops = 0;
   int checked = 0;
-  budget_property(positions, ProverOptions{}, stops, checked);
-  budget_property(positions, literal(), stops, checked);
+  no_budget_stop(3, 20, stops, checked);
+  std::fprintf(stderr, "  %d budgets, %d stopped unknown\n", checked, stops);
+  CHECK(stops > 30);
+}
+
+TEST(long_prover_no_budget_stop_gives_a_verdict_h37) {
+  int stops = 0;
+  int checked = 0;
+  no_budget_stop(20, 60, stops, checked);
   std::fprintf(stderr, "  %d budgets, %d stopped unknown\n", checked, stops);
   CHECK(stops > 100);
 }
@@ -530,9 +598,10 @@ TEST(prover_one_thread_is_deterministic_h15) {
 
 namespace {
 
-void threads_property(int threads, bool by_clock, std::uint64_t seed, Tally& tally) {
+void threads_property(int threads, bool by_clock, std::uint64_t seed, int turns, std::uint64_t nodes,
+                      Tally& tally) {
   std::vector<GameState> positions{mate_in_two(shift_rules()), cross_board_mate(shift_rules())};
-  const std::vector<GameState> random = playable(t5d_test::sparse_positions(shift_rules(), 1, 3, seed));
+  const std::vector<GameState> random = playable(t5d_test::sparse_positions(shift_rules(), 1, turns, seed));
   positions.insert(positions.end(), random.begin(), random.end());
   MemorySolvedStore proofs;  // shared by every search of this thread count
   DisproofStore disproofs;
@@ -543,13 +612,13 @@ void threads_property(int threads, bool by_clock, std::uint64_t seed, Tally& tal
     for (const GameState& s : positions) {
       Prover p(o, &proofs, &disproofs);
       const ProveResult r = by_clock ? p.prove(s, ProveBudget::time(std::chrono::milliseconds(20)))
-                                     : p.prove(s, ProveBudget::nodes(60'000));
+                                     : p.prove(s, ProveBudget::nodes(nodes));
       if (!tally.add(r, s, o)) CHECK(false);
       // And the same as one thread's, where both decide.
       ProverOptions one = o;
       one.threads = 1;
       Prover q(one);
-      const ProveResult r1 = q.prove(s, ProveBudget::nodes(60'000));
+      const ProveResult r1 = q.prove(s, ProveBudget::nodes(nodes));
       if (r.status != ProofStatus::Unknown && r1.status != ProofStatus::Unknown) {
         CHECK(r.status == r1.status);
       }
@@ -560,11 +629,20 @@ void threads_property(int threads, bool by_clock, std::uint64_t seed, Tally& tal
 }  // namespace
 
 TEST(prover_threads_agree_with_the_references) {
+  // M13's 5 threads, by nodes (by the clock, and 2 and 8 threads: the long_ test).
+  Tally tally;
+  tally.work_cap = 10'000;  // every proof checked; disproofs within this budget
+  threads_property(5, false, 1205, 1, 30'000, tally);
+  tally.print("threads 5");
+  CHECK(tally.proven > 2);
+}
+
+TEST(long_prover_threads_agree_with_the_references) {
   Tally tally;
   tally.work_cap = 50'000;  // every proof checked; disproofs within this budget
   for (const int threads : {2, 5, 8}) {
-    threads_property(threads, false, 1200 + static_cast<std::uint64_t>(threads), tally);
-    threads_property(threads, true, 1300 + static_cast<std::uint64_t>(threads), tally);
+    threads_property(threads, false, 1200 + static_cast<std::uint64_t>(threads), 3, 60'000, tally);
+    threads_property(threads, true, 1300 + static_cast<std::uint64_t>(threads), 3, 60'000, tally);
   }
   tally.print("threads 2-8");
   CHECK(tally.proven > 4);

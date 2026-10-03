@@ -2,8 +2,10 @@
 
 #include "hunt_truth.hpp"
 
+#include <algorithm>
 #include <cstdlib>
 #include <stdexcept>
+#include <unordered_map>
 
 #include "sha256.hpp"
 #include "tool_support.hpp"
@@ -125,21 +127,122 @@ HuntTruth parse_hunt_truth(std::string_view text) {
   return t;
 }
 
-std::string hunt_truth_manifest(std::string_view file_bytes) {
-  return sha256_hex(file_bytes) + "  " + kHuntTruthFile + "\n";
+std::string format_provenance(const HuntTruthProvenance& p) {
+  std::string out = "t5d-hunt-truth-provenance\t1\n";
+  out += "truth\t" + p.truth + "\n";
+  out += "rules\t" + p.rules + "\n";
+  out += "code\t" + p.code + "\n";
+  out += "records\t" + std::to_string(p.records.size()) + "\n";
+  for (std::size_t i = 0; i < p.records.size(); ++i) out += "record\t" + std::to_string(i) + "\t" + p.records[i] + "\n";
+  return out;
+}
+
+HuntTruthProvenance parse_provenance(std::string_view text) {
+  if (text.empty() || text.back() != '\n') throw std::runtime_error("hunt truth provenance: does not end in a newline");
+  HuntTruthProvenance p;
+  long long count = -1;
+  bool version = false;
+  std::size_t start = 0;
+  int line_no = 0;
+  while (start < text.size()) {
+    const std::size_t end = text.find('\n', start);
+    const std::string_view line = text.substr(start, end - start);
+    start = end + 1;
+    ++line_no;
+    const std::vector<std::string> f = split_tabs(line);
+    const auto need = [&](std::size_t n) {
+      if (f.size() != n || f[1].empty()) {
+        throw std::runtime_error("hunt truth provenance: malformed line " + std::to_string(line_no));
+      }
+    };
+    if (line_no == 1) {
+      if (f.size() != 2 || f[0] != "t5d-hunt-truth-provenance" || f[1] != "1") {
+        throw std::runtime_error("hunt truth provenance: not a version-1 provenance file");
+      }
+      version = true;
+    } else if (f[0] == "truth") {
+      need(2);
+      p.truth = f[1];
+    } else if (f[0] == "rules") {
+      need(2);
+      p.rules = f[1];
+    } else if (f[0] == "code") {
+      need(2);
+      p.code = f[1];
+    } else if (f[0] == "records") {
+      need(2);
+      count = number(f[1], "records");
+    } else if (f[0] == "record") {
+      need(3);
+      if (number(f[1], "record") != static_cast<long long>(p.records.size())) {
+        throw std::runtime_error("hunt truth provenance: records out of order");
+      }
+      p.records.push_back(f[2]);
+    } else {
+      throw std::runtime_error("hunt truth provenance: an unknown line " + std::to_string(line_no));
+    }
+  }
+  if (!version || p.truth.empty() || p.rules.empty() || p.code.empty() || count < 0) {
+    throw std::runtime_error("hunt truth provenance: a field is missing");
+  }
+  if (count != static_cast<long long>(p.records.size())) {
+    throw std::runtime_error("hunt truth provenance: the record count does not match its rows");
+  }
+  return p;
+}
+
+void check_provenance(const HuntTruth& truth, const HuntTruthProvenance& provenance) {
+  if (provenance.truth != "sha256:" + truth.sha256) {
+    throw std::runtime_error("hunt truth: the provenance names another truth (" + provenance.truth + ")");
+  }
+  std::unordered_map<std::string, std::size_t> position;
+  for (std::size_t i = 0; i < provenance.records.size(); ++i) position.emplace(provenance.records[i], i);
+  std::size_t last = 0;
+  for (const HuntTruthRoot& r : truth.roots) {
+    const auto it = position.find(r.record);
+    if (it == position.end()) {
+      throw std::runtime_error("hunt truth: root " + std::to_string(r.id) + "'s record is not in its provenance");
+    }
+    if (it->second < last) {
+      throw std::runtime_error("hunt truth: root " + std::to_string(r.id) + " is out of its provenance's order");
+    }
+    last = it->second;
+  }
+}
+
+std::string hunt_truth_manifest(std::string_view truth_bytes, std::string_view provenance_bytes) {
+  return sha256_hex(truth_bytes) + "  " + kHuntTruthFile + "\n" + sha256_hex(provenance_bytes) + "  " +
+         kHuntTruthProvenance + "\n";
 }
 
 HuntTruth load_hunt_truth(const std::string& dir) {
   const std::string bytes = read_file(dir + "/" + kHuntTruthFile);
+  const std::string provenance = read_file(dir + "/" + kHuntTruthProvenance);
   const std::string manifest = read_file(dir + "/" + kHuntTruthManifest);
   const std::string hash = sha256_hex(bytes);
-  if (manifest != hunt_truth_manifest(bytes)) {
-    throw std::runtime_error("hunt truth: " + dir + "/" + kHuntTruthFile + " does not match its MANIFEST (sha256 " +
-                             hash + ") - refused: never edit it by hand; re-record it (t5d-hunt-truth)");
+  if (manifest != hunt_truth_manifest(bytes, provenance)) {
+    throw std::runtime_error("hunt truth: " + dir + "/" + kHuntTruthFile + " (sha256 " + hash + ") and " +
+                             kHuntTruthProvenance + " (sha256 " + sha256_hex(provenance) +
+                             ") do not match their MANIFEST - refused: never edit them by hand; re-record "
+                             "(t5d-hunt-truth)");
   }
   HuntTruth t = parse_hunt_truth(bytes);
   t.sha256 = hash;
+  t.provenance = parse_provenance(provenance);
+  check_provenance(t, t.provenance);
   return t;
+}
+
+void check_records(const HuntTruthProvenance& provenance, const std::vector<std::string>& contents) {
+  for (std::size_t i = 0; i < std::max(contents.size(), provenance.records.size()); ++i) {
+    const std::string given = i < contents.size() ? contents[i] : std::string("(none)");
+    const std::string want = i < provenance.records.size() ? provenance.records[i] : std::string("(none)");
+    if (given != want) {
+      throw std::runtime_error("the records given are not the truth's: record " + std::to_string(i) + " is " +
+                               given + ", the truth's provenance has " + want +
+                               " (the same records, in the same order, are needed)");
+    }
+  }
 }
 
 }  // namespace t5d::tools

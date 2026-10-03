@@ -2597,10 +2597,15 @@ with its alternatives:
   `in_check`; C4 of every partial action equal to `royals_safe`). A non-extension is
   recomputed and still equal. `long_` plays ten times as many moves.
 - **The semimove tree** (`prover_semimove_tree_lists_exactly_the_legal_actions`):
-  under every ruleset that decomposes, the tree's actions are exactly the brute-force
-  reference's distinct successors, each replayed through the state machine and
-  C4-tested, and E4's count of them (699 positions, 89,015 actions in the default
-  run; `long_`: more and larger positions).
+  under every ruleset that decomposes, the prover's own trees - the defender's and the
+  attacker's in the literal class, built by the production expansion
+  (`Prover::tree_actions`: `expand_turn`, `expand_semi`, every node expanded; before
+  stage E9's review the test walked a test-only copy of it) - hold exactly the
+  brute-force reference's distinct successors, each replayed through the state machine
+  and C4-tested, and E4's count of them; and every legal action (a move sequence,
+  branches in the order made) is a path of the tree exactly once - the defender's
+  witness besides (685 positions, 81,887 actions in the default run; `long_`: more and
+  larger positions).
 - **The canonical completion** against its definition walked independently (no
   attack maps, no pruning but the rulebook's standing-capture lemma tested from
   scratch), for every move at every position, under every ruleset, under one Q4
@@ -2629,13 +2634,13 @@ with its alternatives:
   beyond the references; default class 4,495 decided, 4,463 confirmed, 32 beyond;
   no contradiction.
 - **H37**: for every root of a sample, budgets stepped from 0 to the full search's
-  need: a decided answer only where the full search gives the same one (1,900
-  budgets in the default run, every one stopped unknown).
+  need: a decided answer only where the full search gives the same one (213 budgets in
+  the default run, every one stopped unknown; `long_`: about 1,900).
 - **H15**: one thread with a node budget gives the same search twice, node for node.
-- **Threads** 2, 5 and 8, by node budget and by the clock (20 ms), with stores shared
-  across the searches: every decided answer confirmed by the references (a default
-  run: 324 decided, 309 confirmed, 15 beyond them - the clock moves the counts) and
-  equal to one thread's where both decide.
+- **Threads**: 5 by node budget in the default run (21 decided, 20 confirmed, 1
+  beyond the references); 2, 5 and 8, by node budget and by the clock (20 ms), in the
+  `long_` run - with stores shared across the searches, every decided answer confirmed
+  by the references and equal to one thread's where both decide.
 - **Stores** (H19): a proof's root `Win(k)` and the defender's `Loss` entries are in
   the solved store; a second prover answers from it without expanding a node; a
   disproof is recorded with its depth and class, and only for its class.
@@ -2835,9 +2840,11 @@ exact method short of enumerating their actions is known to this design (spec is
 df-pn in prove-only mode at the root: our forced mate within 5 half-turns (6b″) by our
 forcing class (the prover's placeholder default: checking seeds, canonical
 completions), against every legal defence. It stops at its budget and claims nothing.
-A found mate is a proof, exported to the permanent solved store only through H41's
-gate (`HuntOptions::export_proofs`, OFF until the generator passes the gate (H23), the
-search's soundness fixes land and the proof channel is signed off; the path is kept).
+A found mate is a proof, returned to the caller and never exported: no proof may enter
+a permanent solved store until the generator passes the gate (H23), the search's
+soundness fixes land and the proof channel is signed off (H41). `HuntOptions::export_proofs`
+is that switch, enforced as the search's `proof_store` is - Hunt refuses to be built with
+it on (`std::invalid_argument`); the export itself is not built.
 Soft priors behind a flag (`suggest`, OFF): without a proof, the root's open actions,
 least proof number first, weighted by 1/pn - §12.2 binds their use: a position where a
 suggestion steered the search is excluded from the policy targets (or its steered
@@ -2901,12 +2908,38 @@ skipped), each class's status and nodes, and the cross-check. THE PIN,
 `testdata/hunt-truth/MANIFEST`: the file's SHA-256. The 6b″ tool refuses a truth whose
 bytes do not match it or whose roots are not the records' (record, index,
 fingerprint); the engine's test refuses a changed byte and checks the committed file.
+
+THE PROVENANCE, `testdata/hunt-truth/provenance.tsv` (stage E9's review): what the truth
+was recorded from, beyond its header - the truth's SHA-256; the rules by **every option's
+value** (`absolute_rules_text`: the header's `describe()` and encoding are relative to the
+defaults of their day, which a later change of a default would silently reread); the
+**code signature** of the build that recorded it (`cmake/code_signature.cmake`: the
+SHA-256 over the rules engine, E4, the prover, the certificates, the record reader and
+the recorder - `T5D_TRUTH_SOURCES` - each read with CRLF as LF); and the **records' content
+ids in their order** (the order decides the roots' ids). The MANIFEST pins both files;
+a reader refuses either changed, a provenance naming another truth, or roots out of its
+records' order; the 6b″ tool also refuses a record list whose content ids, in order, are
+not the provenance's, and rules that are not its rules. The engine's test pins the
+committed truth's SHA-256 and the default rules' full text.
+
+THE RECORD LIST, `build/corpus.txt` (untracked; one path per line, relative to the
+repository root): every `[[record]]` of `oracles/corpus/manifest.toml`, in the file's
+order, at `oracles/third_party/<source>/<path>` (a `local` record: at `<path>`) - 41
+records. The provenance pins it: a list that differs in any record or in the order is
+refused. (The engine names no path under the oracle harness; this rule is how a reader
+rebuilds the list, and the content ids are how a tool checks it.)
+
 Never edited by hand; re-recording is a reviewed change:
 
 ```
 build/engine/t5d-hunt-truth --record-list build/corpus.txt --literal-nodes 4000000 \
     --default-nodes 4000000 --workers 6 --out engine/testdata/hunt-truth --engine <commit>
 ```
+
+(`--provenance-only --record-list build/corpus.txt --out engine/testdata/hunt-truth`
+writes the provenance of a truth already recorded: it rebuilds the roots from the records
+given and refuses unless they are the truth's - record, index, fingerprint - and its
+rules are the ones given; its code signature is then "unrecorded".)
 
 THE TRUTH as committed (`testdata/hunt-truth/`, sha256
 `ce62e5f8c52e0d53b1519ef145aae00760d84a4b271b9e9643e5fcab02cf1a73`; recorded at
@@ -2937,8 +2970,9 @@ found within the budget", never "no mate exists".
 ```
 t5d-scan6bpp --truth DIR [--record-list FILE --record-root DIR] [--threads T]
              [--guard-ms MS] [--hunt-ms MS] [--guard-depth D] [--hunt-depth D]
-             [--no-check-filter] [--no-crosscheck] [--check-positions N]
-             [--max-roots N] [--min-boards N] [--max-boards N] [--no-truth]
+             [--no-crosscheck] [--check-positions N] [--no-truth]
+             [--max-roots N] [--min-boards N] [--max-boards N]
+             [--guard-nodes N] [--hunt-nodes N] [--check-filter] [--no-attacker-probe]
              [--json FILE] [--summary FILE] [--per-position] [--rules ENCODING] [RECORD ...]
 ```
 
@@ -2956,7 +2990,24 @@ threads, 50 ms each - pre-registered, unchanged:
 - Per range: adopt Guard / adopt Hunt / not, with §13's note where each fails ("the
   chosen move goes unguarded in that range"; "proofs there come only from the search's
   solver"). No outcome stops anything.
-- Every refutation and mate is cross-checked against E4 alone, outside the timed runs.
+- Every refutation and mate is cross-checked against E4 alone, outside the timed runs,
+  and **only confirmed proofs count** (`tools/sixbpp.hpp`, where tests hold the counting
+  and the thresholds - exactly 95% and exactly 50% pass): a refutation at depth 1 or a
+  Hunt mate whose certificate is incomplete or undecided is reported apart and not
+  counted; a proof E4 **refutes withholds every verdict** (a prover that claims one false
+  mate is trusted nowhere until fixed); without the cross-check there is no verdict.
+  A Hunt verdict resting on fewer than 10 truth mates is flagged **too few to read** (the
+  pre-registered rule still gives it; 200+ has one).
+- **The configuration is Guard's and Hunt's as they ship** - the prover's check filter
+  off, the attacker probe on - and CONDITIONS and the JSON list every option of both
+  (and the prover's under each). `--check-filter`, `--no-attacker-probe`, node budgets
+  (`--guard-nodes`, `--hunt-nodes`: deterministic at `--threads 1`), other threads or
+  budgets and subsets are **information runs**: the summary says no verdict is read from
+  them. (Before the review the tool ran with the filter on - its default then - so the
+  first preliminary figures below measured a configuration Guard does not ship.)
+- A root Guard does not count says why, truthfully: its record ends there, or goes on
+  with an action the engine cannot read (`PgnRecord::unreadable`) or play; the records'
+  notes say "ok" only for a record read and played to its end. The roots stay 6b's.
 
 ### 6b″: preliminary figures (a shared machine - not the verdict)
 
@@ -3023,12 +3074,13 @@ s, then the cross-checks.)
 | Parameter | Default | Alternatives, and why the default |
 |---|---|---|
 | `ProverOptions::prove_only_pn_thresholds` | false: df-pn's usual thresholds | true: proof numbers alone - found fewer mates for more nodes |
-| `ProverOptions::check_filter` | false | true - sound; cost more than it saved on 6b's roots |
-| `GuardOptions::max_depth` | 4 (the opponent's actions) | any; the budget normally stops it first |
+| `ProverOptions::check_filter` | false (Guard, Hunt and the 6b″ tool alike) | true - cost more than it saved on 6b's roots; sound only since the review's J6-twin fix, after which it cuts almost nothing |
+| `ProverOptions::attacker_probe` | true | false - stage E9's first prover (measurement only; the same answers) |
+| `GuardOptions::max_depth` | 4 (the opponent's actions), clamped to 1..50 | any; the budget normally stops it first |
 | `GuardOptions::threads` | 1 (6b″: 5, M13) | 1 is deterministic (H15) |
 | Guard's listing cap (turns that do not decompose) | 65,536 | the prover's 4,096 (a capped listing never completes a depth) |
 | `HuntOptions::prover` | depth 5, checking seeds, canonical completions | the literal class (9/3/1/0% decided at 50 ms in 6b′); `Forcing` seeds |
-| `HuntOptions::export_proofs` | off | on only once the gate passes and the proof channel is signed off (H41, H23) |
+| `HuntOptions::export_proofs` | off - Hunt refuses it on | on only once the gate passes and the proof channel is signed off (H41, H23); the export is not built |
 | `HuntOptions::suggest`, `max_suggestions` | off, 8 | on with §12.2's exclusions in place |
 | `AssetOptions::qsearch_plies`, `qsearch_nodes` | 4, 128 | a small fixed budget (§11.2's table) |
 | `AssetOptions::flag_margin`, `boost_scale`, `max_boost` | 300, 900, 0.25 | a minor piece; a queen; a prior weight |
@@ -3039,45 +3091,65 @@ s, then the cross-checks.)
 
 ### As built: what the tests hold
 
-Default run (2026-10-03, every count from it):
+Default run (2026-10-04, after stage E9's review; every count from it). E9's 47 default
+tests take 84 s on a shared machine (one at a time; the review measured 1,038 s before
+the heavy cases moved to `long_` tests - each default test has a `long_` twin at the
+old size where it was cut):
 - **The prover's additions** (`tests/test_certificate.cpp`): the check filter changes no
-  verdict - 129 positions decided both ways (literal class, depths 1 and 3, both Q4
-  readings), the filter's answers held to the references (126 confirmed, 3 beyond); 6
-  partial actions cut. Prove-only never claims a disproof or records one and proves
-  every mate the full search proves at its budget (26 of 26; proof numbers alone: 25).
-  Every proof's line replays to E4's checkmate and every certificate is confirmed by
-  E4 alone (33 of 33); a certificate asked of too short a distance, or an empty one,
-  is not.
+  verdict (34 positions decided both ways; `long_`: both Q4 readings, 130); it **keeps
+  every legal action that leaves the defender in check** - its tree against the
+  reference's actions and R1's status after each, on 100 positions: 2,296 checking
+  actions kept, 2 of them only through a line stopped at a void another move fills (a
+  position built for it), 1 action cut; J6's twins counted (the review's two positions,
+  filter on and off, 1 and 5 threads, the certificate confirmed, the game tree
+  agreeing). Prove-only never claims a disproof or records one and proves every mate the
+  full search proves at its budget (13 of 13; proof numbers alone: 12). Every proof's
+  line replays to E4's checkmate and every certificate is confirmed by E4 alone (30 of
+  30); certificates at 5 threads, from a first and a second search of one prover (the
+  root read from the store), all confirmed (58); a certificate without the attacker's
+  answer to any one defence is refused (67 doctored, from 9 certificates), as is one
+  asked of too short a distance, or an empty one. An attacker with no legal action is
+  decided at once (the review's 32-board position, under 20,000 nodes); the attacker
+  probe changes no answer (69 positions, 10,053 attacker turns probed).
 - **Guard** (`tests/test_guard.cpp`): depth 1 against brute force - every opponent
-  action (the brute-force reference, else E4's listing) and E4's verdict after it - on
-  random play under both Q4 readings: 134 safe and 39 refuted exactly where the
-  reference says so, every refutation's line ending in our checkmate; 3 undecided,
-  all where the opponent had more than a few thousand actions (it completes wherever
-  they had fewer). Depth 2 and every refutation against the restricted game (the
-  opponent's every action) and the game tree: 55 depths and 13 refutations confirmed, 4
-  beyond the references. 987 budgets below the full search's need: never a refutation
-  or a depth the full search does not reach (H37). One thread deterministic; an
-  illegal action refused; the hook called exactly on each refutation.
-- **Hunt** (`tests/test_hunt.cpp`): the constructed mates proven at their distances
-  (mate in one, in two, across boards), lines ending in E4's checkmate; nothing
-  exported with the gate shut, the mate exported with it open; 507 budgets below the
-  need with a mate only where the full hunt has it (14 mates, each confirmed); one
-  thread deterministic; suggestions only behind the flag, ordered by proof number,
-  weights summing to 1.
+  action (the brute-force reference, else E4's listing) and E4's verdict after it - 22
+  safe and 6 refuted exactly where the reference says so, every refutation's line
+  ending in our checkmate, at 1 thread and at 5 (`long_`, both Q4 readings: 134 and
+  39). Depth 2 and every refutation against the restricted game and the game tree: 20
+  depths and 6 refutations confirmed, at 1 and 5 threads. 112 budgets below the full
+  search's need never claim more (H37); 78 results under small budgets, 65 of them
+  stopped, every one reporting only depths it searched. The review's twin position: a
+  refutation at depth 1 whatever the filter, at 1 and 5 threads. At most 50 depths.
+  One thread deterministic; an illegal action refused; the hook called exactly on each
+  refutation.
+- **Hunt** (`tests/test_hunt.cpp`): the constructed mates proven at their distances,
+  lines ending in E4's checkmate; the export switch refused (H23); 287 budgets below the
+  need with a mate only where the full hunt has it (11 mates, each confirmed); at 5
+  threads, by nodes and by the clock, 26 mates in 80 searches, each where one thread's
+  full hunt has it, at its distance, its certificate confirmed by E4 alone; one thread
+  deterministic; suggestions only behind the flag, ordered by proof number, weights
+  summing to 1.
 - **The asset map** (`tests/test_assets.cpp`): along random play from every sparse
   start, each superseded board assessed once (assessments equal the cache's size; a
   second refresh assesses nothing), heads never; two maps identical; a queen-up board
   flagged and its travel move boosted, an even one not; a royal the traveller can take
   worth `royal_value`.
 - **The ground truth** (`tests/test_hunt_truth.cpp`): SHA-256 against FIPS 180-4's
-  vectors; the file round-trips; a changed byte, a cut-off file and a wrong root count
-  are refused; the committed file matches its MANIFEST and is well formed (825 roots,
-  125 mates, each within 5 half-turns and cross-checked).
-- On the merged branch, with `--werror`: the whole suite 506 of 507 before the truth was
-  recorded (22 min, a shared machine), the one failure the committed-truth test, which
-  passes once it is; the Lazy SMP timing test, three times: 1 thread 293, 5 threads 313,
-  314, 311 (resolved depth summed over 32 positions at 40 ms).
-
+  vectors; the file and its provenance round-trip; a valid file under a wrong MANIFEST,
+  a changed byte that still parses, a provenance naming another truth or other records
+  or the roots out of its order, and records given in another order are refused; the
+  rules are recorded by every option's value (each option changed alone changes the
+  text); the committed truth is the one pinned by its SHA-256, matches its MANIFEST and
+  is well formed (825 roots, 125 mates, each within 5 half-turns and cross-checked; 41
+  records).
+- **6b″'s counting** (`tests/test_sixbpp.cpp`): the board-count ranges and the
+  thresholds at their edges (exactly 95%, exactly 50% pass; one root fewer fails); only
+  proofs E4 confirmed count; a refuted proof withholds every verdict; no cross-check,
+  no verdict; "too few to read" below 10 truth mates; the option lists name every
+  option, Guard's and Hunt's prover options as they run. 6b's roots from records
+  written there: a record that ends, one that goes on with an action the engine cannot
+  read, one with an illegal move - each last root labelled truthfully; content ids
+  read CRLF as LF; duplicates dropped; a missing record list refused.
 ## 5DFEN
 
 `parse_fen_board` reads one board string, `[pieces:timeline:turn:colour]`, for a
