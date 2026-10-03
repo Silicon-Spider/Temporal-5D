@@ -57,10 +57,10 @@ const char* proof_status_name(ProofStatus s) noexcept {
 }
 
 std::uint64_t disproof_shape(const ProverOptions& o) noexcept {
-  std::uint64_t h = 0x9E3779B97F4A7C15ull;
+  std::uint64_t h = std::uint64_t{0x9E3779B97F4A7C15};
   const auto mix = [&h](std::uint64_t v) {
-    h ^= v + 0x9E3779B97F4A7C15ull + (h << 6) + (h >> 2);
-    h *= 0xBF58476D1CE4E5B9ull;
+    h ^= v + std::uint64_t{0x9E3779B97F4A7C15} + (h << 6) + (h >> 2);
+    h *= std::uint64_t{0xBF58476D1CE4E5B9};
     h ^= h >> 31;
   };
   mix(static_cast<std::uint64_t>(o.seeds));
@@ -344,10 +344,10 @@ class EstimateTT {
 
 std::uint64_t tt_key(const GameState& s, bool or_node, int remaining) noexcept {
   std::uint64_t k = s.zobrist();
-  k ^= (static_cast<std::uint64_t>(remaining) + 1) * 0x9E3779B97F4A7C15ull;
-  k ^= or_node ? 0xD6E8FEB86659FD93ull : 0x2545F4914F6CDD1Dull;
+  k ^= (static_cast<std::uint64_t>(remaining) + 1) * std::uint64_t{0x9E3779B97F4A7C15};
+  k ^= or_node ? std::uint64_t{0xD6E8FEB86659FD93} : std::uint64_t{0x2545F4914F6CDD1D};
   k ^= k >> 29;
-  k *= 0xBF58476D1CE4E5B9ull;
+  k *= std::uint64_t{0xBF58476D1CE4E5B9};
   k ^= k >> 32;
   return k == 0 ? 1 : k;
 }
@@ -1607,10 +1607,10 @@ struct Worker {
   // A helper's tie-break: a per-thread hash of the child's place.
   std::uint64_t jitter(std::uint32_t child) const {
     if (id == 0) return 0;
-    std::uint64_t h = (static_cast<std::uint64_t>(child) + 1) * 0x9E3779B97F4A7C15ull ^
-                      static_cast<std::uint64_t>(id) * 0xC2B2AE3D27D4EB4Full;
+    std::uint64_t h = (static_cast<std::uint64_t>(child) + 1) * std::uint64_t{0x9E3779B97F4A7C15} ^
+                      static_cast<std::uint64_t>(id) * std::uint64_t{0xC2B2AE3D27D4EB4F};
     h ^= h >> 31;
-    h *= 0xBF58476D1CE4E5B9ull;
+    h *= std::uint64_t{0xBF58476D1CE4E5B9};
     h ^= h >> 29;
     return h;
   }
