@@ -283,21 +283,34 @@ def test_a_refreshed_epoch_with_the_action(arm):
 # --- the parameters ------------------------------------------------------------------------------
 
 
-def test_d8_parameters_and_their_draws():
+D8_PARAMETERS = ("embed.acting.weight", "submit.out.weight", "submit.out.bias")
+FLAG_SETS = [
+    {},
+    {"typed_edge_bias": True, "binned_bias": True},
+    {"rope_per_head": True, "binned_bias": True, "routing_table": True, "typed_edge_bias": True, "board_pair_smolgen": True},
+    {"board_register_spatial": "position_free", "policy_promotion": "offset"},
+]
+
+
+@pytest.mark.parametrize("flags", FLAG_SETS, ids=["default", "b6-b11", "b5-b6-b10-b11-b12", "position-free"])
+def test_d8_parameters_and_their_draws(flags):
     """The acting-player embedding (2 x d) and the linear submit readout (d + 1) are D8's only
-    parameters; they draw nothing while they are made and are drawn after every other trunk
-    and head parameter and before the flag-gated modules - so the readout's form leaves every
-    other weight as it is (the pre-N5 draws: checked against the pre-N5 package by hand when
-    N5 was built, every older tensor equal), and a flag leaves D8's weights as they are."""
-    base = build_model(NetConfig(), seed=0)
+    parameters. They draw nothing while they are made and are drawn from a generator of their
+    own, seeded from the model's seed - never from the global stream - so, whatever the flags,
+    D8's arms (the submit readout's form, where the acting player enters) leave every other
+    parameter as it is (checked against the pre-N5 package by hand: every older tensor equal,
+    for these flag sets and both arms), and no flag changes D8's weights."""
+    base = build_model(NetConfig(n_layers=2, **flags), seed=0)
     counts = parameter_breakdown(base)
     assert base.embed.acting.weight.shape == (2, 256) and counts["head.submit"] == 257
-    pointer = build_model(NetConfig(submit_head="pointer"), seed=0)
     base_params = dict(base.named_parameters())
-    for name, p in pointer.named_parameters():
-        assert not name.startswith("submit.")
-        assert torch.equal(p, base_params[name]), name
-    flagged = build_model(NetConfig(typed_edge_bias=True, binned_bias=True), seed=0)
-    assert torch.equal(flagged.embed.acting.weight, base.embed.acting.weight)
-    assert torch.equal(flagged.submit.out.weight, base.submit.out.weight)
-    assert torch.equal(flagged.trunk.blocks[0].attn.out_proj.weight, base.trunk.blocks[0].attn.out_proj.weight)
+    for arm in ({"submit_head": "pointer"}, {"acting_player_input": "all_tokens"}):
+        other = build_model(NetConfig(n_layers=2, **flags, **arm), seed=0)
+        for name, p in other.named_parameters():
+            if name not in D8_PARAMETERS:
+                assert torch.equal(p, base_params[name]), (arm, name)
+    plain = dict(build_model(NetConfig(n_layers=2), seed=0).named_parameters())
+    for name in D8_PARAMETERS:
+        assert torch.equal(base_params[name], plain[name]), name  # no flag changes D8's weights
+    reseeded = dict(build_model(NetConfig(n_layers=2, **flags), seed=1).named_parameters())
+    assert not torch.equal(reseeded["embed.acting.weight"], base_params["embed.acting.weight"])  # a function of the seed

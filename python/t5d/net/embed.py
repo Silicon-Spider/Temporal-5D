@@ -59,8 +59,8 @@ class InputEmbedding(nn.Module):
         self.global_register = nn.Embedding(max(cfg.global_regs, 1), d)
         self.not_square = nn.Parameter(torch.empty(d))
         #: Register D8: the acting player (0 white, 1 black) - where it is added is
-        #: ``cfg.acting_player_input``. Made without drawing from the RNG, and drawn after the
-        #: trunk and the heads (``model._init_weights``).
+        #: ``cfg.acting_player_input``. Made without drawing from the RNG, and drawn from D8's
+        #: own generator (``model._init_weights``), never from the global stream.
         self.acting = nn.utils.skip_init(nn.Embedding, 2, d)
 
     def dt_features(self, dt: torch.Tensor) -> torch.Tensor:
