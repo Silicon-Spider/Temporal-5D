@@ -141,7 +141,8 @@ def check_position(game, label: str = "", *, relations=("attack", "defence", "xr
     assert s.timeline.tolist() == [b[0] for b in snap.boards] and s.half_turn.tolist() == [b[1] for b in snap.boards], label
     assert np.array_equal(s.is_head, x.is_head) and np.array_equal(s.active, x.active), label
     assert np.array_equal(s.side_to_move, s.half_turn & 1), label
-    assert s.h_present == x.present == game.info().present and s.player_to_move == x.to_move, label
+    assert s.h_present == x.present == game.info().present and s.acting_player == x.acting_player == x.to_move, label
+    assert s.shifted == x.submit_possible == game.info().obligations_met and s.submit_legal == x.submit_legal, label
     assert np.allclose(s.dt_present, s.half_turn - x.present), label
     # squares: the engine's canonical 5DFEN board strings, decoded independently
     for b, (p, h, text) in enumerate(snap.boards):

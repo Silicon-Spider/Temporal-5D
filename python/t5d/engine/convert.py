@@ -16,7 +16,8 @@ boards, canonical order (timeline, then h)     storage order (board ``b`` is eng
 ``active``                                     ``active``
 ``side_to_move`` (h & 1)                       ``side_to_move``
 ``present``                                    checked equal to ``h_present`` (Δt is derived)
-``to_move``                                    checked equal to ``player_to_move``
+``acting_player`` (= ``to_move``)              ``acting_player`` (register D8, stage N5)
+``submit_possible``, ``submit_legal``          ``submit_possible``, ``submit_legal``
 ``piece`` (cells, 0 / 1..12 P N B R Q K U D    ``piece`` (``s = y*W + x``, ``PIECE_LETTERS``)
 S W C Y)
 ``colour`` (0 / 1 white / 2 black)             ``colour``
@@ -36,17 +37,23 @@ promotion)                                     promotion)`` - row i is engine mo
 **Readings**, each the engine's or forced by the contract:
 
 * **Δt-to-present.** ``PositionState`` derives it from ``h - h_present``, ``h_present`` the
-  least ``h`` over active heads; the engine's ``present`` (T4) is checked to be that value,
-  and its ``to_move`` to be ``h_present & 1``. They differ only once the present has shifted
-  to the opponent within an action not yet submitted (T5): the network contract has no
-  player-to-move feature apart from the present, so such a state reads as the opponent's
-  turn. ``to_position`` refuses it (``PresentMismatch``) unless ``strict=False``. Under the
-  default rules (Q4, ruled R8; engine stage E7) the mover may go on moving there until they
-  submit, so search meets such states; under Q4's Guide-literal reading
-  (``T5D_RULES_NO_MOVES_AFTER_SHIFT``) none has a move. Register D8 gives the network a
-  global **acting-player** input for them, and the submit action a policy logit of its own;
-  the expansion carries both (``acting_player``, ``submit_possible``, ``submit_legal``), but
-  the contract does not read them yet (stage N5), so the refusal stands until it does.
+  least ``h`` over active heads; the engine's ``present`` (T4) is checked to be that value
+  (``PresentMismatch`` otherwise).
+* **The action (register D8; stage N5).** Turns have variable length (Q4, ruled R8): once
+  the present has shifted to the opponent within an action not yet submitted (T5), the
+  boards' present names the opponent while the action is still the mover's, and under the
+  default rules the mover may go on moving until they submit - so search meets such states.
+  The expansion's ``acting_player`` (whose action this is, = ``to_move``) becomes the
+  network's global acting-player input (``PositionState.acting_player``), and its
+  ``submit_possible`` / ``submit_legal`` say whether the submit action - its own policy logit,
+  read from a global register - is offered, and whether it is masked. Such states convert:
+  stage N4 refused them (``PresentMismatch``), the network having no player-to-move feature
+  apart from the present. What is still checked (``PresentMismatch``, unless
+  ``strict=False``): the acting player is ``to_move``, and submitting is possible exactly
+  when the present has shifted (T5: the obligations are met when the present lies on the
+  opponent's colour) - so the acting player is the present's colour or, past the shift, its
+  opponent. Under Q4's Guide-literal reading (``T5D_RULES_NO_MOVES_AFTER_SHIFT``) a state
+  past the shift has no move and offers submit alone.
 * **Moves.** The engine's pseudo-legal moves of the player to move (the legal-moves
   filter is not in the C API), one row per move in the engine's order, so policy logit
   ``i`` scores engine move ``i`` (``t5d_game_apply_expanded(i)``). A branching move's
@@ -60,10 +67,14 @@ promotion)                                     promotion)`` - row i is engine mo
   check would read check detection; the spec defines no travel-threat edge).
 * **Opponent moves** (``opp_moves``, the D4 reply head) are not supplied: the expansion
   is the mover's (spec issue 17: E is read from the mover's moves); empty.
-* **Lineage.** ``parent`` is the engine's: a timeline's previous board, or for a timeline's
-  first board its branch origin (``Timeline::origin``), -1 for an initial timeline or an
-  origin nobody recorded - every branched timeline of a position read from 5DFEN (spec
-  issue 25). ``Position.origins_unknown`` is the engine's count over active timelines;
+* **Lineage - the causal past is ancestry (register C23).** ``parent`` is the engine's: a
+  timeline's previous board, or for a timeline's first board its branch origin
+  (``Timeline::origin``), -1 for an initial timeline or an origin nobody recorded - every
+  branched timeline of a position read from 5DFEN (spec issue 25). Its transitive closure -
+  ``NetConfig.causal_past="lineage"``, the default (``net/scope.py``) - is C23's ruled
+  reading: a board's own timeline's earlier boards and, recursively, its branch parent up to
+  the branch point; never a board merely earlier on the time axis, never one merely created
+  earlier. ``Position.origins_unknown`` is the engine's count over active timelines;
   ``Position.origins_unknown_all`` (when the game's creator count is given) counts every
   timeline. ``creation`` (board creation order) and ``source`` (a travel arrival's
   departure board) are not in the C API: None and all -1, so the ``creation`` causal past
@@ -85,8 +96,11 @@ from .expansion import Expansion
 
 
 class PresentMismatch(ValueError):
-    """The engine's present or player to move is not what ``PositionState`` derives from the
-    boards (see the ``convert`` module docstring, "Δt-to-present")."""
+    """The engine's present, acting player or submit flags disagree with what the boards say:
+    the present is not the least half-turn over active heads, the acting player is not the
+    player to move, or submitting is possible where the present has not shifted (or the
+    reverse). See the ``convert`` module docstring, "Δt-to-present" and "The action"; a state
+    past the shift is not a mismatch (stage N5)."""
 
 
 def relations_for(cfg: NetConfig) -> tuple[str, ...]:
@@ -182,7 +196,7 @@ class Position:
 
     state: PositionState
     moves: np.ndarray  # MOVE_DTYPE (M,): the engine's move records, in its order
-    to_move: int  # the player to move (0 white, 1 black) - the value's perspective
+    to_move: int  # the acting player (0 white, 1 black; the engine's to_move) - the value's perspective
     present: int
     may_move: bool
     origins_unknown: int  # the engine's: active branched timelines with no recorded origin
@@ -194,6 +208,26 @@ class Position:
     @property
     def move_count(self) -> int:
         return int(self.moves.shape[0])
+
+    @property
+    def acting_player(self) -> int:
+        """Whose action this is (register D8): the network's input and the value's perspective."""
+        return int(self.state.acting_player)
+
+    @property
+    def shifted(self) -> bool:
+        """The present has shifted to the opponent inside the acting player's action (T5)."""
+        return self.state.shifted
+
+    @property
+    def submit_possible(self) -> bool:
+        """Submitting is an action here (D8: offered beside the moves under the ply split)."""
+        return self.state.submit_possible
+
+    @property
+    def submit_legal(self) -> bool:
+        """... and legal (C4) - the submit logit is masked otherwise."""
+        return self.state.submit_legal
 
     @property
     def lineage_complete(self) -> bool | None:
@@ -212,7 +246,8 @@ def _check_cells(name: str, board: np.ndarray, cell: np.ndarray, n: int, wh: int
 
 def to_position_state(x: Expansion, *, regs_per_board: int = 2, global_regs: int = 16) -> PositionState:
     """The ``PositionState`` of an expansion made with every board's features (see the module
-    docstring's table); validated by ``PositionState`` itself."""
+    docstring's table) - the acting player and the submit action's flags included (D8);
+    validated by ``PositionState`` itself."""
     if x.square_features != "all" or not x.all_features:
         raise ValueError(
             "a PositionState needs every board's square features: expand with square_features='all' "
@@ -262,6 +297,9 @@ def to_position_state(x: Expansion, *, regs_per_board: int = 2, global_regs: int
         parent=x.parent.astype(np.int64),
         creation=None,
         source=None,
+        acting_player=int(x.acting_player),
+        submit_possible=bool(x.submit_possible),
+        submit_legal=bool(x.submit_legal),
     )
 
 
@@ -282,17 +320,24 @@ def to_position(
     ``PositionState``, the engine's moves it scores, the lineage's completeness and the W/E
     scope. ``created_timelines``: the game's timelines with a creator (``Game.created_timelines``)
     - given, ``origins_unknown_all`` counts the branched timelines whose first board has no
-    parent. ``strict``: refuse a state whose present has shifted within an unsubmitted action
-    (``PresentMismatch``)."""
-    state = to_position_state(x, regs_per_board=regs_per_board, global_regs=global_regs)
-    matches = state.h_present == x.present and state.player_to_move == x.to_move
+    parent. A state whose present has shifted within an unsubmitted action converts, with its
+    acting player and the submit action's flags (register D8). ``strict``: refuse an expansion
+    whose present, acting player or submit flags disagree with its boards
+    (``PresentMismatch``); with ``strict=False`` the remaining checks are ``PositionState``'s."""
+    live = x.is_head & x.active
+    if not live.any():
+        raise ValueError("the expansion has no active head: the present is undefined")
+    h_present = int(x.half_turn[live].min())
+    shifted = int(x.acting_player) != (h_present & 1)
+    matches = h_present == x.present and x.acting_player == x.to_move and bool(x.submit_possible) == shifted
     if strict and not matches:
         raise PresentMismatch(
-            f"the engine's present is h = {x.present} with {'wb'[x.to_move]} to move, but the boards' active heads put it at "
-            f"h = {state.h_present} ({'wb'[state.player_to_move]} to move): the present has shifted within an action that is "
-            "not submitted, which the network's input cannot represent yet (it has no player-to-move feature apart from the "
-            "present; register D8's acting-player input is stage N5) - submit the action first, or convert with strict=False"
+            f"the engine's present is h = {x.present}, its acting player {'wb'[x.acting_player]} (to move: {'wb'[x.to_move]}) and "
+            f"submitting {'possible' if x.submit_possible else 'not possible'}, but the boards' active heads put the present at "
+            f"h = {h_present} ({'wb'[h_present & 1]} to move on it): the present must be the boards', the acting player the player "
+            "to move, and submitting possible exactly when the present has shifted to the acting player's opponent (T5)"
         )
+    state = to_position_state(x, regs_per_board=regs_per_board, global_regs=global_regs)
     unknown_all = None
     if created_timelines is not None:
         first = state.parent[_first_boards(state)]
