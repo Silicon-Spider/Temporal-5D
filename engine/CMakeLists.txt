@@ -196,6 +196,17 @@ endif()
 # maps, the proof channel (df-pn over semimoves), the estimate channel; 6b'.
 target_sources(t5d_core PRIVATE src/attacks.cpp src/prover.cpp src/estimate.cpp)
 target_sources(t5d-tests PRIVATE tests/test_attacks.cpp tests/test_prover.cpp tests/test_estimate.cpp)
+add_executable(t5d-scan6bp tools/t5d_scan6bp.cpp)
+target_link_libraries(t5d-scan6bp PRIVATE t5d_tools Threads::Threads)
+target_compile_definitions(t5d-scan6bp PRIVATE
+  "T5D_BUILD_TYPE=\"${CMAKE_BUILD_TYPE}\""
+  "T5D_CXX_FLAGS=\"${T5D_FLAGS_TEXT}\"")
+if(WIN32)
+  target_link_libraries(t5d-scan6bp PRIVATE advapi32)  # RegGetValueA: the CPU's name
+endif()
+if(MINGW)
+  target_link_options(t5d-scan6bp PRIVATE -static)
+endif()
 
 # ---- MinGW: no dependence on the toolchain's runtime DLLs --------------------------
 #
