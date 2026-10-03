@@ -7,14 +7,15 @@
 //            [--playouts N] [--split ply|turn] [--graph] [--node-key state|origins]
 //            [--no-widening] [--e2] [--e3] [--solver] [--batch N] [--synchronous]
 //            [--match] [--final visits|lcb] [--temperature T] [--temperature-decisions N]
-//            [--noise] [--cap-turns N] [--cap-boards N] [--max-actions N]
+//            [--noise | --no-noise] [--cap-turns N] [--cap-boards N] [--max-actions N]
 //            [--listing-cap N] [--mate-nodes N] [--max-seconds S] [--seed S]
 //            [--no-moves-after-shift] [--rules ENCODING]
 //
 // Defaults: Standard, the uniform evaluator, 64 playouts per decision, the
 // board-move split (D2 is undecided: --split turn is the other arm), a tree
 // (--graph: MCGS, C11), self-play (a fresh search per decision, C14; visits
-// sampled at temperature 1 for the first 16 decisions) - --match plays the
+// sampled at temperature 1 for the first 16 decisions, Dirichlet noise at the
+// root: --no-noise for none) - --match plays the
 // final rule (E5, LCB by default) with the tree carried (C12) - and a turn cap
 // of 20 turns (I11: a convention, scored as a draw; --cap-turns 0 lifts it).
 // --solver turns on the in-tree solver (H2, E9), off by default until the
@@ -55,7 +56,8 @@ void usage(std::FILE* to) {
       "                [--playouts N] [--split ply|turn] [--graph] [--node-key state|origins]\n"
       "                [--no-widening] [--e2] [--e3] [--solver] [--batch N] [--synchronous]\n"
       "                [--match] [--final visits|lcb] [--temperature T]\n"
-      "                [--temperature-decisions N] [--noise] [--cap-turns N] [--cap-boards N]\n"
+      "                [--temperature-decisions N] [--noise | --no-noise] [--cap-turns N]\n"
+      "                [--cap-boards N]\n"
       "                [--max-actions N] [--listing-cap N] [--mate-nodes N]\n"
       "                [--max-seconds S] [--seed S]\n"
       "                [--no-moves-after-shift] [--rules ENCODING]\n",
@@ -175,7 +177,9 @@ int main(int argc, char** argv) {
       } else if (std::strcmp(a, "--temperature-decisions") == 0) {
         params.temperature_decisions = static_cast<std::uint32_t>(number_in(a, value(), 0, kU32));
       } else if (std::strcmp(a, "--noise") == 0) {
-        params.search.root_noise = true;
+        params.search.root_noise = true;  // the self-play default (match play has none)
+      } else if (std::strcmp(a, "--no-noise") == 0) {
+        params.search.root_noise = false;
       } else if (std::strcmp(a, "--cap-turns") == 0) {
         params.turn_cap.turns = static_cast<int>(number_in(a, value(), 0, kInt));
       } else if (std::strcmp(a, "--cap-boards") == 0) {
@@ -220,6 +224,7 @@ int main(int argc, char** argv) {
                          (params.search.split == TurnSplit::BoardMove ? "board-move split" : "whole-turn split") +
                          (params.search.graph ? ", graph" : ", tree") +
                          (params.search.solver ? ", solver" : "") +
+                         (params.search.root_noise && !params.match_play ? ", root noise" : "") +
                          (params.match_play ? ", match play" : ", self-play") + ", seed " +
                          std::to_string(params.seed);
     extra.emplace_back("Engine", engine);

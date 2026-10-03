@@ -35,15 +35,20 @@
 //    scored (§8.2: "a dead end to prune, not a loss"). With the exact legality
 //    classification it is never reached; with a budget (an unknown move) or
 //    the pseudo-legal test seam (SearchParams::legal_moves_only = false) it is
-//    found when the node is expanded, and pruned. After the shift with a legal
-//    submission the action can always be finished, whatever the further moves.
+//    found when the node is expanded, and pruned. After the shift a legal
+//    submission finishes the action at once - but a further optional move
+//    (R8) can still expose a royal, and such a move may lead to a dead end
+//    like any other.
 //  * TurnSplit::WholeTurn: a node is always a turn's start, and its children
 //    are the legal ACTIONS (t5d/search.hpp: list_legal_actions, E4's
 //    enumeration). The network's policy is over single moves (D1), so an
 //    action's prior is derived from the logits of its moves
 //    (SearchParams::action_prior; §8.2 does not say how). The listing stops at
 //    SearchParams::max_actions; a node whose listing stopped has incomplete
-//    children and is never proven lost.
+//    children and is never proven lost. D8's submit is no separate decision
+//    here (an action is listed submitted), so the evaluator's submit logit is
+//    not read and the C API reports submit_possible 0: the whole-turn arm has
+//    no end-of-turn token (a spec issue, not built).
 //
 // HOW LEGALITY ENTERS. Through one call site (mcts.cpp, leaf_expansion): the
 // expansion of a leaf (t5d/expand.hpp) with ExpandOptions::legal_moves under
@@ -60,8 +65,11 @@
 // the solver takes only exact verdicts: a child reached through an unknown edge
 // never raises its parent's lower bound (it may still bound it from above - a
 // superset of the legal children is a sound upper bound); (f) for training,
-// the policy target is the root's visit counts and the network's move mask
-// the legal and unknown moves (RootChild::legality). Under the whole-turn
+// the policy target is the root's visit counts (RootChild::visits:
+// root_children() lists the instantiated children, the others have none), and
+// the network's move mask is a leaf's legal and unknown moves - every
+// candidate the expansion kept, Expansion::move_legality (the C API's
+// t5d_leaf.legality), not the root's children. Under the whole-turn
 // split the expansion offers the pseudo-legal moves (the network's
 // candidates, over which every legal action's moves are found) and
 // list_legal_actions the children, which are legal.
@@ -216,13 +224,15 @@ enum class FinalRule : std::uint8_t {
 };
 
 /// Self-play's turn cap (I11): a convention defined from the state - a turn
-/// start whose present has reached `turns` turns, or whose multiverse holds
-/// `boards` boards, ends the game as a draw. 0 = no limit. Not a game rule.
+/// start whose present is PAST `turns` turns (turn turns + 1 or later: `turns`
+/// whole turns have been played), or whose multiverse holds `boards` boards or
+/// more, ends the game as a draw. 0 = no limit. Not a game rule.
 struct TurnCap {
   int turns = 0;
   int boards = 0;
   bool enabled() const noexcept { return turns > 0 || boards > 0; }
-  /// Whether the cap binds at this turn start.
+  /// Whether the cap binds at this turn start: its present past `turns`
+  /// turns, or `boards` boards or more.
   bool reached(const GameState& turn_start) const noexcept;
 };
 

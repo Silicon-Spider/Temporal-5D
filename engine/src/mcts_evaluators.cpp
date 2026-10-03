@@ -109,11 +109,13 @@ double material_value(PieceKind kind) noexcept {
     case PieceKind::Rook: return 5;
     case PieceKind::Queen: return 9;
     case PieceKind::King: return 0;        // royal
-    case PieceKind::Unicorn: return 3;
-    case PieceKind::Dragon: return 3;
-    case PieceKind::Princess: return 8;
-    case PieceKind::Brawn: return 1;
-    case PieceKind::CommonKing: return 3;  // not royal (4.12)
+    // The fairy pieces: the scanner's placeholders (build-log spec issue 56),
+    // one set for the engine until the spec gives values.
+    case PieceKind::Unicorn: return 2.5;
+    case PieceKind::Dragon: return 2.0;
+    case PieceKind::Princess: return 7.0;
+    case PieceKind::Brawn: return 1.25;
+    case PieceKind::CommonKing: return 3.0;  // not royal (4.12)
     case PieceKind::RoyalQueen: return 0;  // royal
   }
   return 0;
