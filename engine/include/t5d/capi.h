@@ -113,6 +113,16 @@ T5D_API const char* t5d_version(void);
 /* Releases memory the library returned (strings). NULL is ignored. */
 T5D_API void t5d_free(void* pointer);
 
+/* The struct layouts this library was built with, for a binding that mirrors them
+ * (python/t5d/engine/capi.py checks every one at load, so a binding and a library of
+ * different stages refuse each other instead of writing past a buffer): with `field`
+ * NULL, sizeof(`type`); otherwise the offset of `field` in `type`. `type` is one of
+ * "t5d_fingerprint", "t5d_info", "t5d_move", "t5d_expand_options",
+ * "t5d_game_summary", "t5d_expansion"; `field` is a member's name, as declared.
+ * T5D_ERR_ARGUMENT for a NULL `type` or `out`, an unknown type or an unknown field.
+ * (Stage E7.) */
+T5D_API t5d_status t5d_layout(const char* type, const char* field, size_t* out);
+
 /* ---- creating and releasing states ----------------------------------------- */
 
 /* "Standard": the standard board on timeline 0 at T1, white to move. */
@@ -180,14 +190,23 @@ T5D_API t5d_status t5d_state_board(const t5d_state* state, size_t index, int32_t
  * different handles may be used from different threads at once.
  *
  * Rulesets are passed as RuleOptions' canonical 64-bit encoding
- * (t5d/rules.hpp, RuleOptions::encode): 0 = the standard rules; bit 3 =
- * moves_after_shift (Q4); the engine README lists every option.
+ * (t5d/rules.hpp, RuleOptions::encode): 0 = the standard rules - with moves
+ * after the present has shifted, until submission (Q4, ruled R8); bit 3 =
+ * Q4's Guide-literal reading, no move once the present has shifted (a
+ * diagnostic); the engine README lists every option. Each bit marks a choice
+ * that differs from the default.
  * ============================================================================= */
 
 typedef struct t5d_game t5d_game;
 
 #define T5D_RULES_STANDARD UINT64_C(0)
-#define T5D_RULES_MOVES_AFTER_SHIFT (UINT64_C(1) << 3)
+/* Q4's Guide-literal reading: no move once the present has shifted. Bit 3 was
+ * named T5D_RULES_MOVES_AFTER_SHIFT, and meant the opposite, until R8 made
+ * moves after the shift the default (stage E7). */
+#define T5D_RULES_NO_MOVES_AFTER_SHIFT (UINT64_C(1) << 3)
+/* Moves after the shift: the default since R8, so no bit - kept so that a
+ * caller that asked for moves after the shift still gets them. */
+#define T5D_RULES_MOVES_AFTER_SHIFT UINT64_C(0)
 
 /* Which boards get per-square features (t5d_expand_options.square_features). */
 #define T5D_FEATURES_ALL 0   /* every board: the full-history input */
@@ -222,7 +241,8 @@ typedef struct t5d_game_summary {
   int32_t timelines;
   int32_t active_timelines; /* T10 */
   int32_t obligations_met;  /* 1: the present has shifted to the opponent (T5) */
-  int32_t may_move;         /* 1: a move may be made now (Q4) */
+  int32_t may_move;         /* 1: a move may be made now (by default always, R8; under Q4's
+                               Guide-literal reading only before the shift) */
   int32_t may_submit;       /* 1: the action may be submitted: the present shifted (T5), every royal safe (C4) */
   uint32_t ruleset;         /* the ruleset ID (0: standard) */
   uint64_t rules;           /* the ruleset's canonical encoding */
@@ -285,6 +305,18 @@ typedef struct t5d_expansion {
   const int32_t* window;    /* W(k) */
   const int32_t* e_boards;  /* E(k): travel destinations outside W(k) */
   const int32_t* src_extra; /* src_extra(k): move sources outside W(k) */
+
+  /* ---- appended at stage E7 (register D8; rulebook R8): every field above
+   * keeps its offset. Turns have variable length, so submitting is an action;
+   * these are global (the per-board and per-square features are unchanged). */
+  int32_t acting_player;   /* 0 white, 1 black: the side whose action this is (= to_move).
+                              Once the present has shifted inside the action it differs
+                              from the colour to move on the present (present & 1) */
+  int32_t submit_possible; /* 1: submitting is possible now - the action's obligations are
+                              met (T5) - so under the ply split it is an action beside the
+                              moves */
+  int32_t submit_legal;    /* 1: submitting is legal now - possible, and no royal piece of
+                              the acting player's left capturable (C4, R1; exact) */
 } t5d_expansion;
 
 /* A game from a 5dpgn record (`length` bytes of UTF-8 text; the record's
@@ -332,7 +364,8 @@ T5D_API t5d_status t5d_game_replay_next(t5d_game* game, char** error);
 /* Applies one move of the player to move: the generated move with the same
  * source and destination (timeline, half-turn, square) and promotion (0 for
  * none) - the other fields of `move` are not read. T5D_ERR_ILLEGAL if there is
- * none, or no move may be made now (Q4). */
+ * none, or no move may be made now (under Q4's Guide-literal reading, once the
+ * present has shifted). */
 T5D_API t5d_status t5d_game_apply(t5d_game* game, const t5d_move* move, char** error);
 
 /* Applies the move at `index` of the handle's last expansion, which must be

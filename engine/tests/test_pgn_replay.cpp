@@ -24,8 +24,9 @@ using t5d_test::at;
 
 namespace {
 
-PgnReplay replay(std::string_view text, const PgnOptions& options = {}) {
-  return PgnReplay(read_pgn(text, options), options);
+PgnReplay replay(std::string_view text, const PgnOptions& options = {},
+                 const RuleOptions& rules = {}) {
+  return PgnReplay(read_pgn(text, options), options, rules);
 }
 
 // Plays every action; returns the fault of the first that fails (nullopt if
@@ -43,9 +44,10 @@ std::optional<RecordFault> play(PgnReplay& r, std::string* message = nullptr) {
 // The fault (and message) of setting up and playing a whole record.
 std::optional<RecordFault> outcome(std::string_view text, const PgnOptions& options = {},
                                    std::string* message = nullptr,
-                                   std::size_t* played = nullptr) {
+                                   std::size_t* played = nullptr,
+                                   const RuleOptions& rules = {}) {
   try {
-    PgnReplay r = replay(text, options);
+    PgnReplay r = replay(text, options, rules);
     const std::optional<RecordFault> f = play(r, message);
     if (played != nullptr) *played = r.actions_played();
     return f;
@@ -57,9 +59,9 @@ std::optional<RecordFault> outcome(std::string_view text, const PgnOptions& opti
 }
 
 bool fails_with(std::string_view text, RecordFault fault, std::string_view says,
-                const PgnOptions& options = {}) {
+                const PgnOptions& options = {}, const RuleOptions& rules = {}) {
   std::string message;
-  const std::optional<RecordFault> f = outcome(text, options, &message);
+  const std::optional<RecordFault> f = outcome(text, options, &message, nullptr, rules);
   if (f != fault || message.find(says) == std::string::npos) {
     std::fprintf(stderr, "  record %s\n  gave %s: %s\n", std::string(text).c_str(),
                  f ? fault_name(*f) : "no fault", message.c_str());
@@ -512,10 +514,21 @@ TEST(pgn_actions_must_shift_the_present_t5) {
   // T5: an action that leaves a mandatory board unplayed cannot be submitted.
   CHECK(fails_with("[Board \"Standard - Two Timelines\"]\n1. (-0T1)e3 / (-0T1)e6",
                    RecordFault::CannotSubmit, "does not move on (+0T1, white to move)"));
-  // Q4 (default): no move once the present has shifted.
-  CHECK(fails_with("1. e3 e4", RecordFault::IllegalMove, "no move may be made after that (Q4)"));
+  // Q4, ruled R8 (the default): moves may follow the shift, on boards still
+  // playable - here none is: each board takes one move (T3).
+  CHECK(fails_with("1. e3 e4", RecordFault::IllegalMove, "White has no playable board"));
   CHECK(fails_with("[Board \"Standard - Two Timelines\"]\n1. (-0T1)e3 (+0T1)e3 (+0T1)d3",
-                   RecordFault::IllegalMove, "Q4"));
+                   RecordFault::IllegalMove, "is not a playable board of White's (L5, T3)"));
+  // An optional board after the shift: played by default, refused under Q4's
+  // Guide-literal reading.
+  const std::string late = "[Board \"custom\"][5/5/5/5/R4:0:1:w][5/5/5/5/R4:+1:2:w]\n"
+                           "1. (0T1)Ra2 (+1T2)Ra2\n";
+  CHECK(plays(late));
+  RuleOptions guide;
+  guide.moves_after_shift = false;
+  CHECK(fails_with(late, RecordFault::IllegalMove, "no move may be made after that", {}, guide));
+  CHECK(fails_with("1. e3 e4", RecordFault::IllegalMove, "no move may be made after that", {},
+                   guide));
 }
 
 TEST(pgn_failed_actions_leave_the_state_as_it_was) {

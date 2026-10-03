@@ -40,10 +40,13 @@ promotion)                                     promotion)`` - row i is engine mo
   and its ``to_move`` to be ``h_present & 1``. They differ only once the present has shifted
   to the opponent within an action not yet submitted (T5): the network contract has no
   player-to-move feature apart from the present, so such a state reads as the opponent's
-  turn. ``to_position`` refuses it (``PresentMismatch``) unless ``strict=False``; under the
-  default rules no move may be made there (Q4), so search submits first. Under Q4's other
-  reading (``T5D_RULES_MOVES_AFTER_SHIFT``) such a state has moves, and the contract cannot
-  represent it: the network would need a player-to-move feature of its own.
+  turn. ``to_position`` refuses it (``PresentMismatch``) unless ``strict=False``. Under the
+  default rules (Q4, ruled R8; engine stage E7) the mover may go on moving there until they
+  submit, so search meets such states; under Q4's Guide-literal reading
+  (``T5D_RULES_NO_MOVES_AFTER_SHIFT``) none has a move. Register D8 gives the network a
+  global **acting-player** input for them, and the submit action a policy logit of its own;
+  the expansion carries both (``acting_player``, ``submit_possible``, ``submit_legal``), but
+  the contract does not read them yet (stage N5), so the refusal stands until it does.
 * **Moves.** The engine's pseudo-legal moves of the player to move (the legal-moves
   filter is not in the C API), one row per move in the engine's order, so policy logit
   ``i`` scores engine move ``i`` (``t5d_game_apply_expanded(i)``). A branching move's
@@ -287,8 +290,8 @@ def to_position(
         raise PresentMismatch(
             f"the engine's present is h = {x.present} with {'wb'[x.to_move]} to move, but the boards' active heads put it at "
             f"h = {state.h_present} ({'wb'[state.player_to_move]} to move): the present has shifted within an action that is "
-            "not submitted, which the network's input cannot represent (it has no player-to-move feature apart from the "
-            "present) - submit the action first, or convert with strict=False"
+            "not submitted, which the network's input cannot represent yet (it has no player-to-move feature apart from the "
+            "present; register D8's acting-player input is stage N5) - submit the action first, or convert with strict=False"
         )
     unknown_all = None
     if created_timelines is not None:

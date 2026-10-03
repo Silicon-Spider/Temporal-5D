@@ -297,7 +297,10 @@ def serve(
 #
 # A state whose present has shifted inside an unsubmitted action cannot be converted
 # (convert.PresentMismatch); the step API should hand out leaves at action boundaries, or
-# mid-action before the shift (the ply split, D2).
+# mid-action before the shift (the ply split, D2). Under the default rules (Q4, ruled R8)
+# search meets such states - the mover may go on moving until they submit - and register D8
+# gives them to the network through a global acting-player input and a submit logit
+# (the expansion's acting_player / submit_possible / submit_legal): stage N5.
 # =============================================================================================
 
 

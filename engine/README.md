@@ -10,7 +10,7 @@ notation specification (H28).
 
 It is C++20, with a C API (a shared library) for Python and other callers.
 
-## Status: stages E3, E4 and E5a
+## Status: stages E3 to E5c, and E7
 
 Stage E1 built the parts of the engine that need no movement rules; stage E2a added
 the rules mechanics and pseudo-legal move generation (§11.0 items 4-5 and the
@@ -23,7 +23,11 @@ throughput, M9, and the |E| curve, M7); stage E4, after the CHECKPOINT 1 rulings
 adds check status and submission legality (H36), the legal actions and their count,
 the naive and hypercuboid mate detectors (H37), and the gate adapter's full mode
 (§11.0 items 1-3); stage E5a decides a single move's legality in sound tiers - fast,
-budgeted (legal / illegal / unknown) or exact - instead of a search per move. Rule IDs (L*, T*, J*, 4.*, S*, Q*, V*) are those of the project's
+budgeted (legal / illegal / unknown) or exact - instead of a search per move; stage
+E7, after the CHECKPOINT 2 rulings, makes moves after the present has shifted - until
+submission - the default rules (Q4, ruled R8; register D8), the Guide-literal reading
+a diagnostic, and gives the expansion and its C API the acting player and the submit
+action, possible and legal (D8). Rule IDs (L*, T*, J*, 4.*, S*, Q*, V*) are those of the project's
 rules reference, `docs/rules/README.md`, which the code cites throughout.
 
 | Part | Where | Spec |
@@ -54,9 +58,11 @@ rules reference, `docs/rules/README.md`, which the code cites throughout.
 | **E5a:** the legal moves in tiers: exact, budgeted, fast | `include/t5d/legal.hpp`, `src/legal.cpp` | C4, R1; build-log spec issues 28, 46 |
 | **E5b:** the tactical scanner: forcing actions, proofs and estimates, the solved store; experiment 6b's tool | `include/t5d/scanner.hpp`, `tools/t5d_scan6b.cpp` | §11.1-§11.3, §15.6, H1-H6, H15, H19, M8 |
 | **E5c:** the scanner's in-check stage (M12's optimisation pass), Lazy SMP and the shared solved store; 6b per board-count range at the design thread budget | `include/t5d/scanner.hpp`, `tools/t5d_scan6b.cpp` | §11.3, §15.6, H17, H19, M12, M13 |
+| **E7:** Q4 as ruled (R8) by default; the acting player and the submit action in the expansion and the C API | `include/t5d/rules.hpp`, `include/t5d/expand.hpp`, `include/t5d/capi.h` | §8.2, §11.0 item 2, D8 |
 
-Next: the gate run with the engine configured (parse mode, then full mode); the
-expansion's pin and check relations; which moves the expansion offers, and how a
+Next: the gate run with the engine configured in full mode - Q4's ruling (R8) is
+the default, and with it every one of the triage's 115 Q4 findings agrees with the
+oracles; the expansion's pin and check relations; which moves the expansion offers, and how a
 search treats a move left unknown (build-log spec issues 28, 46).
 
 **Moves are pseudo-legal; turns are legal.** A move is pseudo-legal when it obeys
@@ -195,7 +201,9 @@ engine/
   again (T3), and nothing need record which boards were played - the boards do. The
   obligations are met when no mandatory board (active, in the present, the mover's;
   T6) is left, i.e. when the present has shifted to the opponent (T5); then
-  `submit()`.
+  `submit()` - or, by default (Q4, ruled R8), first any further moves on the mover's
+  remaining playable boards: the turn ends only at submission. (Under Q4's
+  Guide-literal reading, `moves_after_shift = false`, no move may follow the shift.)
 
 ## Stage E2a: the rules mechanics
 
@@ -221,7 +229,8 @@ positions E1's `multiverse_from_fen` refused.
 ### Move generation and application
 
 `generate_moves` produces every pseudo-legal move from every playable board of the
-mover - an empty list once the obligations are met (Q4). Sliders advance one unit
+mover - after the obligations are met too, until submission (Q4, ruled R8); under
+Q4's Guide-literal reading, an empty list once they are met. Sliders advance one unit
 per moved axis per step over boards of the mover's colour, every intermediate
 square empty, void blocking (J7, J8); knights leap over pieces and void; pawns and
 brawns move forward on rank (+y White, -y Black) or timeline (-L White, +L Black),
@@ -271,8 +280,8 @@ values, appended at the end of the stream: no existing key changed).
 | `activation` | `Count`: the count rule - **the rule** since R2 closed Q1 (2026-10-01) | `Consecutive`: a player's creation right after their own previous one is inactive (a reading R2 rejected; kept for comparison) | T10, Q1, R2 |
 | `initial_credit` | `None`: initial timelines count for neither side | `MinusZeroToBlack`: in an even start, Black counts as having created "-0" | T10, T13, Q2 |
 | `play_activates` | false | a move by the non-creator on or onto an inactive timeline activates it | T11, Q3 |
-| `moves_after_shift` | false: no move once the present has shifted (G) | moves until submission | T5, Q4 |
-| `mandatory` | `InPresent`: active boards in the present (G) | `AllActive`: every active board of the mover's | T6, Q5 |
+| `moves_after_shift` | true: moves until submission - **the rule** since R8 ruled Q4 (2026-10-02; register D8) | false: Q4's Guide-literal reading, no move once the present has shifted - a diagnostic (`--no-moves-after-shift`). Encoding bit 3 marks it: the bit meant the opposite before stage E7 | T5, Q4, R8 |
+| `mandatory` | `InPresent`: active boards in the present (G) - settled by R9 (Q5) | `AllActive`: every active board of the mover's (the reading R9 ranks below the Guide; kept for comparison) | T6, Q5, R9 |
 | `reactivation` | `Rewinds`: a reactivated board of the mover's behind the present must be played | `Deferred`: it obliges the mover only from their next turn (the engine's formalisation) | T12, Q6 |
 | `turn_zero_reachable` | true: a T0 board is a history board, reachable by branching (L5) | a T0 board is no destination ("a board where a move has already occured") | L5, J3, Q8 |
 | `sliders_cross_void` | false: void blocks (J8) | sliders pass void (never landing on it) | J8, Q18 |
@@ -446,7 +455,8 @@ after the move (T4, T12).
   after position 0, never by the set-up.
 - *IllegalMove* - no pseudo-legal move fits: the board named is no playable board
   of the mover's (L5, T3: a board takes one move), no such timeline, no piece that
-  can make the move (sections 3-5), or any move once the present has shifted (Q4).
+  can make the move (sections 3-5), or - under Q4's Guide-literal reading only - any
+  move once the present has shifted (by default, R8, moves are read until submission).
 - *CannotSubmit* - the action ends with the present on the mover's colour (T5).
 
 A failed action leaves the replay where it was (`play_next` applies to a copy).
@@ -565,16 +575,23 @@ every action legal, 46 positions answered. The naive detector alone
 there (with the ceiling lifted it once gave the same 46 answers in 25 s).
 
 On the pinned corpus - every record of the gate's manifest, run as the gate runs
-them, one process at a time - full mode takes 8.3 s in all on this machine, no
-process above 50 MB at its peak; the slowest record, cwmtt's manyChecks (53
-positions, up to 17 timelines, many of them in check), takes 4.1 s, its slowest
-position 0.7 s. Three records need Q4's other reading (`--moves-after-shift`) to
-read to the end: cwmtt's 100_timelines 5.7 s (132 MB), ftxi's futures 0.1 s, cwmtt's
-niceAndrey 19.9 s for 122 positions (48 MB).
+them, one process at a time - full mode takes 36 s in all on this machine under the
+default rules (stage E7, R8; the machine shared with other runs), every record
+under 15 s and no position above 2 s, no process above 131 MB at its peak: cwmtt's
+niceAndrey 14.3 s for 122 positions (slowest position 0.38 s), 100_timelines 4.9 s
+(1.9 s; 131 MB), wide 4.6 s, manyChecks 4.4 s (1.2 s; 101 MB), every other record
+under 2 s. The ten records that made moves after the present had shifted, and
+stopped there under the Guide-literal reading, now read on: nine to their end, and
+cwmtt's futures to action 17, whose `x` marks a capture the move does not make
+(`unreadable`). The output is byte for byte what the stage-E4 engine printed under
+`--moves-after-shift` on all 41 records, and `--no-moves-after-shift` reproduces its
+default output (8.3 s in all at stage E4) on all 41.
 
 **Diagnostics** - for investigating a record by hand, never for the gate's
-configuration (`gate.toml`): `--moves-after-shift` (rules Q4's other reading),
-`--rule NAME=VALUE` (any `RuleOptions` field: `true`/`false`, or an enumerator such as
+configuration (`gate.toml`): `--no-moves-after-shift` (rules Q4's Guide-literal
+reading, no move once the present has shifted - the same as `--rule
+moves_after_shift=false`; `--moves-after-shift`, the default since R8, is accepted
+and ignored), `--rule NAME=VALUE` (any `RuleOptions` field: `true`/`false`, or an enumerator such as
 `activation=consecutive`, `mandatory=all_active`, `promotions=QRBN`),
 `--lenient-annotations` (`~`, `(>Lx)`, `(~Tx)` not checked), `--strict-annotations` (a disagreeing one is unreadable), `--pgn NAME=VALUE` (any
 `PgnOptions` field, `castling_shortcuts=any_king` ...), `--actions K` (position K's
@@ -663,8 +680,8 @@ settled) restricts them to the legal moves - those a legal action begins with - 
 the one place the expansion's moves are chosen (`src/expand.cpp`,
 `expansion_moves`). With pseudo-legal moves every |E| measured here is an upper bound;
 every throughput figure is re-measured once the spec settles which moves the
-expansion offers. Nothing below but that switch depends on what attacks a royal
-piece (check, pins). Where E3 meets E4: a C API game submits under the engine's check
+expansion offers. Nothing below but that switch and (g)'s submit legality (stage
+E7: the submission test, C4) depends on what attacks a royal piece (check, pins). Where E3 meets E4: a C API game submits under the engine's check
 ruling (`t5d_game_set_legality` switches a game to pseudo-legal submission, as a
 synthetic record's replay needs); the synthetic player submits with no ruling
 (`CheckRuling::none()`: its games are pseudo-legal by design); and the tools replay
@@ -756,7 +773,8 @@ record carries both.
 - **(f) features**: per board (every board) - timeline position p (the engine's
   mapping, "-0" → -1), half-turn h = 2T + (black to move), head, active timeline,
   side to move (h & 1), **playable now** (the head of its timeline with the mover to
-  move on it, L5, while a move may be made, Q4 - exactly the boards (a)'s moves
+  move on it, L5, while a move may be made - always by default, R8; before the
+  shift only under Q4's Guide-literal reading - exactly the boards (a)'s moves
   start from), and the network contract's lineage, **parent** (`board_parent()`:
   the timeline's previous board, or for a timeline's first board its branch origin;
   -1 for an initial timeline or an origin not recorded). These arrays are computed
@@ -770,6 +788,20 @@ record carries both.
   timeline without that timeline's head (an E board on an inactive timeline), which
   `python/t5d/net/state.py`'s `PositionState` refuses (one head per timeline) - what
   a windowed position holds is the window code's to define.
+- **(g) the action** (stage E7; register D8, rulebook R8: turns have variable
+  length, so submitting is an action) - global, not per board, and changing none of
+  (f): the **acting player** (`acting_player()`; the C API's `acting_player`) - the
+  side whose action this is, the player to move, who moves until they submit; once
+  the present has shifted inside the action it differs from the colour to move on
+  the present (`present() & 1`), which is why the network needs it as an input of its
+  own (BUILD_LOG issue 48): the boards' side-to-move flags cannot say whether the
+  player has already submitted; and the **submit action** - `submit_possible()`, the
+  action's obligations are met (T5), so under the ply split submitting is an action
+  beside the moves of (a), with its own policy logit; and `submit_legal()`, possible
+  and no royal of the acting player's capturable (C4, R1) - the submission test
+  itself, exact, one scan of the opponent's playable boards and no allocation, run
+  only once the obligations are met (never at a turn's start). Under whole-turn
+  generation submitting ends every enumerated action, and nothing more is needed.
 
 **Readings** (each a reading of the spec, for the build log):
 
@@ -817,10 +849,17 @@ and promotion), `t5d_game_apply_expanded` (by index into the last expansion),
 board's features, no relations), which fills a `t5d_expansion`: counts, and pointers
 to the flat arrays above (per board: timeline, half-turn, head, active, side,
 playable, window depth, band depth, origin, parent) - valid until the handle is next
-changed; `t5d_game_info`, `t5d_game_state` (a `t5d_state` copy, for the fingerprint
-and the boards), `t5d_game_copy`, `t5d_game_destroy`. Rulesets are passed as
-`RuleOptions::encode()`'s 64-bit encoding (`RuleOptions::decode` reads it back; 0 is
-standard, `T5D_RULES_MOVES_AFTER_SHIFT` is bit 3). New statuses:
+changed - and, appended at its end by stage E7 (every older field keeps its offset),
+(g)'s three `int32_t`: `acting_player` (0 white, 1 black), `submit_possible` and
+`submit_legal` (1 or 0); `t5d_game_info`, `t5d_game_state` (a `t5d_state` copy, for
+the fingerprint and the boards), `t5d_game_copy`, `t5d_game_destroy`. Rulesets are
+passed as `RuleOptions::encode()`'s 64-bit encoding (`RuleOptions::decode` reads it
+back): 0 is the standard rules - moves after the shift until submission among them
+(R8) - and `T5D_RULES_NO_MOVES_AFTER_SHIFT`, bit 3, Q4's Guide-literal reading. Until
+stage E7 bit 3 meant the opposite and was named `T5D_RULES_MOVES_AFTER_SHIFT`; that
+name is now 0 (the default), so a caller that asked for moves after the shift still
+gets them, but a caller that wrote the value 8 itself now gets the Guide-literal
+reading. New statuses:
 `T5D_ERR_UNSUPPORTED` (a variant or a relation not built) and `T5D_ERR_ILLEGAL` (a
 move or a submission the rules refuse - a submission that leaves a royal of the
 mover's capturable included, C4, R1, unless `t5d_game_set_legality` set the game to
@@ -851,12 +890,14 @@ random play: for throughput and stress only, never evidence for the |E| verdict
 ### t5d-measure
 
 ```
-t5d-measure [--moves-after-shift] [--rules ENCODING] [--name NAME] [--summary] [--legal] [RECORD ...]
+t5d-measure [--no-moves-after-shift] [--rules ENCODING] [--name NAME] [--summary] [--legal] [RECORD ...]
 ```
 
 Replays each 5dpgn record as the gate adapter's parse mode does (no RECORD, or `-`:
-standard input), under the ruleset given (`--moves-after-shift` is Q4's other
-reading; `--rules` takes any encoding, decimal or `0x` hex), and prints one JSON
+standard input), under the ruleset given (the engine's by default - moves after the
+shift until submission, R8; `--no-moves-after-shift` is Q4's Guide-literal reading, a
+diagnostic, and `--moves-after-shift` is accepted and ignored; `--rules` takes any
+encoding, decimal or `0x` hex), and prints one JSON
 object per line, deterministically:
 
 - `{"event":"record","record":...,"game":...,"synthetic":...,"rules":...,"rules_encoding":"0x..","moves":"pseudo-legal"|"legal","actions_in_record":N}`
@@ -888,12 +929,12 @@ Example, on the records of the pinned corpus (input data on the command line; th
 engine itself never names anything under `oracles/`):
 
 ```
-build/engine/t5d-measure --summary --moves-after-shift oracles/third_party/cwmtt/tests/5dpgn/NP.5dpgn ...
+build/engine/t5d-measure --summary oracles/third_party/cwmtt/tests/5dpgn/NP.5dpgn ...
 ```
 
-Several corpus records make moves after the present has shifted (Q4): under the
-default reading they stop with `illegal_move`, under `--moves-after-shift` they read
-to the end - the output says which ruleset was used.
+Several corpus records make moves after the present has shifted (Q4): by default
+(R8) they read to the end; under `--no-moves-after-shift` they stop with
+`illegal_move` - the output says which ruleset was used.
 
 Moves are pseudo-legal by default, so every |E| is an upper bound. `--legal` expands
 with the legal moves only (`ExpandOptions::legal_moves`, exact - no move left
@@ -909,7 +950,7 @@ t5d-bench [--classes N:T,...] [--no-synthetic] [--games G] [--children C]
           [--seed S] [--branch-percent P] [--threads 1,2,4,...]
           [--samples S] [--sample-ms MS] [--flat-ms MS] [--no-loop] [--no-pin]
           [--legal] [--legal-budget C,N] [--legal-profile] [--quick] [--emit DIR] [--json FILE]
-          [--moves-after-shift] [--rules ENCODING] [RECORD ...]
+          [--no-moves-after-shift] [--rules ENCODING] [RECORD ...]
 ```
 
 Expansion throughput (§15.6, M9), and how it changes with the length of the history.
@@ -989,7 +1030,8 @@ each timed on one thread, interleaved, the levels of a configuration back to bac
   mismatch are printed - this is the series M9's "at fixed |E|" asks about, and its growth is
   labelled "below/above +10% in every round" or "rounds straddle +10%: inconclusive";
 - **no_moves**: the positions after the action's moves are played, where no move may
-  be made (Q4): everything an expansion does but move generation - the history-length
+  be made - played under Q4's Guide-literal reading, since by default (R8) the mover
+  may go on after the shift: everything an expansion does but move generation - the history-length
   term measured directly, as nanoseconds per board (a least-squares slope over the
   levels) and as its share of a matched `scope+relations` expansion at the top level.
 
@@ -1061,8 +1103,10 @@ timeline.
 
 A **legal action** is a sequence of moves by the side to move - at most one from each
 board it starts on (T3), as the state machine allows them (the present and its shift;
-Q4's default that no move is made once the present has shifted) - that ends in a
-submittable state (T5) leaving every royal of the mover's safe (C4, R1).
+by default, R8, moves after the shift until submission - under Q4's Guide-literal
+reading none) - that ends in a submittable state (T5) leaving every royal of the
+mover's safe (C4, R1). By default, then, an action that can be submitted and an
+action that goes on from it to a further move are two actions, each counted.
 
 **Counting.** As the harness's manual defines the gate's `legal_actions`: an action
 is the **set of its moves, with its timeline-creating (branching) moves in the order
@@ -1090,9 +1134,9 @@ key nor the fingerprint holds it (`GameState`'s `==` does).
 `action_text`: the moves in the 5dpgn export form, first those that create no
 timeline (by ascending source timeline), then the branching ones in the order they
 were made (which numbers their timelines). That text names the action; it is not
-always an order in which the moves can be played (Q4 puts the move that shifts the
-present last), so each listed action also carries its moves in a playable order and
-its successor.
+always an order in which the moves can be played (under Q4's Guide-literal reading
+the move that shifts the present comes last), so each listed action also carries its
+moves in a playable order and its successor.
 
 Both counts, and the searches below, also run from a state **during** an action (its
 moves so far made): they then count, or look for, the ways to finish it.
@@ -1188,7 +1232,8 @@ legal action - one per order of the branching moves (the count's definition).
 
 **Realisation**, by the rules in force - three regimes:
 
-- *Ordered*: Q4's default (no move once the present has shifted), activity changed
+- *Ordered*: Q4's Guide-literal reading (no move once the present has shifted - the
+  default until stage E7, now a diagnostic), activity changed
   by creations alone and deterministically in their number - the count rule or Q1's
   consecutive reading, `Rewinds`, no activation by play - including T11's
   reactivation (the j-th creation reactivates the opponent's j-th earliest-created
@@ -1201,9 +1246,14 @@ legal action - one per order of the branching moves (the count's definition).
   all of them just before the last creation, which is then the last move. A
   depth-first search over the creation orders, stopping wherever a move ends the
   action with moves still to make, visits each realisable order once.
-- *FreeOrder*: Q4's other reading (moves after the shift), otherwise as above: the
-  moves that create no timeline first, then the branches in each creation order J6
-  allows.
+- *FreeOrder*: Q4's ruled reading (R8: moves after the shift, until submission) -
+  **the default rules' regime** since stage E7 - otherwise as above: the moves that
+  create no timeline first, then the branches in each creation order J6 allows. It
+  is no slower than Ordered: its realisation is one replay per creation order, and
+  its abstract check ends with every plain move made after the creations. (The
+  corpus records that both readings read in full take about the same time under
+  either - manyChecks 4.4 s against 4.2 s, aivsai 1.6 s against 1.5 s, silly 0.8 s
+  against 0.7 s; the default only has more actions to count.)
 - *General* - Q3's activation by play, Q6's deferral, castling on mandatory boards
   only: a depth-first search over every order of the point's moves, with a table of
   the states reached (each with its creations so far, in order); between two
@@ -1211,8 +1261,8 @@ legal action - one per order of the branching moves (the count's definition).
   obligations only turn from unmet to met as boards are played, so they are made in
   ascending order but for the action's very last move. A castling may come at any
   point: under Q21's alternative it needs its board mandatory, and under Q3 with
-  Q4's other reading another plain move can rewind the present off it. Exact for any
-  rules, slower.
+  Q4's ruled reading (R8) another plain move can rewind the present off it. Exact for
+  any rules, slower.
 
 **Eliminating whole boxes.** The search keeps the unexplored part of the space as
 disjoint *boxes* (a box: one subset of values per axis; the start: everything). It
@@ -1341,7 +1391,7 @@ Since stage E5a a hypercuboid node also counts each step of a box's abstract che
 | A checkmate on timeline 0 with 2n further mandatory boards each holding a knight whose moves cannot help (`detectors_the_hypercuboid_stays_small_near_mate`), n = 1 (3 timelines) | 2,407 nodes | 126 nodes |
 | the same, n = 2 (5 timelines) | 817,875 nodes, 0.6 s | 184 nodes, <1 ms |
 | the same, n = 3 (7 timelines) | stopped by the memory ceiling after 1,007,435 nodes, 0.7 s: `unknown` | 248 nodes, <1 ms |
-| 1x1 boards, timelines -3..+3, a queen on each at T4: every move a rewinding branch (`search_the_hypercuboid_stays_small_when_every_branch_rewinds`), 51 actions | 102 nodes | 510 nodes (34 million before the regimes) |
+| 1x1 boards, timelines -3..+3, a queen on each at T4: every move a rewinding branch, under Q4's Guide-literal reading (`search_the_hypercuboid_stays_small_when_every_branch_rewinds`), 51 actions | 102 nodes | 510 nodes (34 million before the regimes) |
 | cwmtt's manyChecks, position 42 (13 timelines, three of the opponent's inactive behind the present): 1,000 actions to the cap | 1 action, then the memory ceiling after 504,652 nodes, 1.9 s: `unknown` (with no ceiling, still 1 action after 30,000,000 nodes) | 12,445 nodes, 0.02 s |
 
 The long cross-check (`t5d-tests --long`, at stage E5a): random legal play from every
@@ -1502,8 +1552,8 @@ The synthetic M9 classes: 4 games per class, each position and 4 one-move childr
 | N400 T10 | 40 µs / 55 µs / 55 µs | 142 µs / 232 µs / 232 µs (47%) | 2.4 ms / 10 ms / 10 ms (25%) | 17 ms / 145 s / 145 s |
 | N600 T12 | 54 µs / 84 µs / 84 µs | 162 µs / 273 µs / 273 µs (27%) | 0.75 ms / 11 ms / 11 ms (7%) | 0.72 ms / 200 s / 200 s |
 
-The corpus records: every action start and its children, by N bucket, under
-`--moves-after-shift`.
+The corpus records: every action start and its children, by N bucket, under Q4's
+ruled reading (then `--moves-after-shift`; since stage E7 the default).
 
 | Boards | expansions | pseudo-legal | fast | budgeted 64,2000 | exact |
 |---|---|---|---|---|---|
@@ -1607,7 +1657,7 @@ t5d-scan6b [--every K] [--leaves N] [--leaf-depth D] [--max-nodes N] [--budgets 
            [--root-ms MS] [--no-root-wall]
            [--synthetic-variants V,... --synthetic-games G] [--synthetic-classes N:T,...]
            [--jobs N] [--json FILE] [--summary FILE] [--per-position]
-           [scanner options] [--moves-after-shift] [--rules ENCODING] [RECORD ...]
+           [scanner options] [--no-moves-after-shift] [--rules ENCODING] [RECORD ...]
 ```
 
 **Positions.**
@@ -1702,14 +1752,15 @@ Why this is sound (H2, H37):
 100,000-node scans) it searched the same trees as E5b, node for node.
 
 **Tests.** `scanner_evasion_probe_keeps_the_proofs` and its `long_` version scan the
-sparse starts' random play, under the default rules and under Q4's ruled reading, and
-the constructed positions. Each is scanned with the stage off, at 64 and at 1, at a
+sparse starts' random play, under both readings of Q4 - the Guide-literal one, asked
+for explicitly, and the ruled one (R8), the default since stage E7 - and the
+constructed positions. Each is scanned with the stage off, at 64 and at 1, at a
 generous budget and at random ones. Every proof of up to 1 half-turn (3 in the `long_`
 version) is checked against the game tree, and where two settings both prove, they
 prove the same. `scanner_evasion_probe_off_is_e5b` checks that 0 leaves the stage out.
 
 **The profile**, from `t5d-scan6b` on the corpus records under Q4's ruled reading
-(`--moves-after-shift`), 100,000-node deterministic scans, one job. The machine was
+(then `--moves-after-shift`; the default since stage E7), 100,000-node deterministic scans, one job. The machine was
 shared with other builds and tests, so the times are not quiet-machine figures. Each
 cell is the share of the scans' nodes, then of their wall time.
 
@@ -1802,7 +1853,8 @@ under Q4's ruled reading. The shares of roots reaching 5 forcing half-turns were
 **Tests.**
 - `scanner_lazy_smp_no_false_proofs` (and its `long_` version) scans with 2, 3, 4 and 8
   threads, by node budget and by the clock, over the sparse starts' random play under
-  the default rules and Q4's ruled reading, and over the constructed positions. All
+  both readings of Q4 (the Guide-literal one asked for explicitly; R8's the default),
+  and over the constructed positions. All
   scans of a thread count share one store. Every proof of up to 1 half-turn (3 in the
   `long_` version) is checked against the game tree, and every proof against one
   thread's.
@@ -1814,6 +1866,43 @@ under Q4's ruled reading. The shares of roots reaching 5 forcing half-turns were
   same 40 ms on a sample of positions from Standard and Two Timelines play. Summed
   over the sample, 5 threads must resolve at least one thread's depth (one retry, for
   timing noise).
+
+## Stage E7: Q4 as ruled, and the submit action (D8)
+
+Built after the user's CHECKPOINT 2 rulings (rulebook R8 and R9; register D8).
+
+- **Q4, R8 - the default.** A player may keep moving on their remaining playable
+  boards after the present has shifted; the turn ends only at submission.
+  `RuleOptions::moves_after_shift` defaults to true, and every tool and the gate
+  adapter follow it: `t5d-gate`, `t5d-measure`, `t5d-bench`, `t5d-scan6b` and the C
+  API's ruleset 0. The Guide-literal reading - no move once the present has shifted -
+  is a named alternative, for diagnosis only (never for `gate.toml`):
+  `--no-moves-after-shift` (and `t5d-gate --rule moves_after_shift=false`);
+  `--moves-after-shift` is accepted and ignored. The default ruleset's encoding and
+  ruleset ID stay 0, so no default Zobrist key changed; **bit 3 of the encoding now
+  marks the Guide-literal reading** - it meant the opposite before - and keeps the
+  ruleset ID that bit always had (`T5D_RULES_NO_MOVES_AFTER_SHIFT`; the old name
+  `T5D_RULES_MOVES_AFTER_SHIFT` is now 0). The legal actions the gate counts are then
+  the oracles' (an action that may be submitted and one that goes on from it are two),
+  the hypercuboid realises them in its FreeOrder regime, and on the corpus the
+  adapter's output is byte for byte the stage-E4 engine's under
+  `--moves-after-shift` (figures: "The gate adapter").
+- **Q5, R9.** Only the active boards in the present are mandatory - the default
+  already (`mandatory = InPresent`); `AllActive` stays as the documented alternative.
+- **D8 in the expansion and the C API**: (g) of "Expansion" - the acting player and
+  the submit action, possible (the obligations met) and legal (C4 too: the submission
+  test, exact) - appended to `t5d_expansion` as `acting_player`, `submit_possible`,
+  `submit_legal` (three `int32_t` after `src_extra`; every older field keeps its
+  offset). No per-board or per-square feature changed. Under the ply split the submit
+  action has its own policy logit (§8.2), read from a global register; under
+  whole-turn generation submitting ends every enumerated action.
+- **The Python binding** follows in the same change: `python/t5d/engine/capi.py`'s
+  `CExpansion` mirrors the three fields, `T5D_RULES_NO_MOVES_AFTER_SHIFT` is bit 3 and
+  `T5D_RULES_MOVES_AFTER_SHIFT` 0, `Expansion` copies `acting_player`,
+  `submit_possible`, `submit_legal`, and the binding checks every mirrored struct
+  against `t5d_layout` at load (see "The C API"). The network does not read the new
+  fields yet: its acting-player input and submit logit are stage N5, and until then
+  `to_position` refuses a state past the shift (`PresentMismatch`).
 
 ## 5DFEN
 
@@ -1887,7 +1976,14 @@ function that can fail returns a status (`t5d_version`, `t5d_free`,
 `t5d_state_destroy` and `t5d_game_destroy` cannot fail and return none); no exception
 crosses the boundary. Strings the library returns are freed with `t5d_free`. Stage E3
 adds games - a state under the rules, moved, replayed, submitted and expanded (see
-"The C API for games").
+"The C API for games"). Stage E7 adds `t5d_layout(type, field, &out)`: the size of each
+public struct (`t5d_fingerprint`, `t5d_info`, `t5d_move`, `t5d_expand_options`,
+`t5d_game_summary`, `t5d_expansion`) and the offset of each of its fields, as the
+library was compiled. The Python binding (`python/t5d/engine/capi.py`) checks every
+struct it mirrors against it when it loads the library, and refuses a library whose
+layout differs (or that lacks `t5d_layout`): a binding and a library from different
+stages would otherwise let the library write past a Python buffer - as an expansion
+did when stage E7 appended three fields to `t5d_expansion`.
 
 ## Choices the spec leaves open
 

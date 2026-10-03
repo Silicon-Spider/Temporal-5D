@@ -92,7 +92,7 @@ class GameInfo:
     timelines: int
     active_timelines: int
     obligations_met: bool  # the present has shifted to the opponent (T5)
-    may_move: bool  # a move may be made now (Q4)
+    may_move: bool  # a move may be made now (always by default, R8; Q4's Guide-literal reading: only before the shift)
     may_submit: bool  # the present shifted (T5) and every royal is safe (C4)
     ruleset: int
     rules: int

@@ -148,6 +148,29 @@ TEST(gate_exe_refuses_a_bad_command_line_with_status_2) {
   CHECK(!r.out.empty());
 }
 
+TEST(gate_exe_q4_moves_after_the_shift_r8) {
+  // R8 (Q4) is the adapter's default: an optional move after the present has
+  // shifted is played. --no-moves-after-shift (or --rule
+  // moves_after_shift=false) is the Guide-literal reading, a diagnostic: the
+  // move is refused. --moves-after-shift is accepted and changes nothing.
+  const std::string late = "[Board \"custom\"][5/5/5/5/R4:0:1:w][5/5/5/5/R4:+1:2:w]\n"
+                           "1. (0T1)Ra2 (+1T2)Ra2\n";
+  const ExeRun ruled = run_gate({}, late);
+  REQUIRE_EQ(ruled.status, 0);
+  CHECK(ruled.lines.back().find("\"status\":\"ok\"") != std::string::npos);
+  CHECK_EQ(run_gate({"--moves-after-shift"}, late).out, ruled.out);
+  for (const std::vector<std::string>& guide :
+       {std::vector<std::string>{"--no-moves-after-shift"},
+        std::vector<std::string>{"--rule", "moves_after_shift=false"}}) {
+    const ExeRun r = run_gate(guide, late);
+    CHECK_EQ(r.status, 0);
+    CHECK(r.lines.back().find("\"reason\":\"illegal_move\"") != std::string::npos);
+  }
+  const ExeRun help = run_gate({"--help"}, "");
+  CHECK(help.out.find("--no-moves-after-shift") != std::string::npos);
+  CHECK(help.out.find("--moves-after-shift          accepted and ignored") != std::string::npos);
+}
+
 TEST(gate_exe_reads_crlf_and_a_byte_order_mark) {
   // CR is white space to the reader, and a leading byte-order mark is
   // skipped (engine README, "Reading 5dpgn"): the same lines as plain LF.

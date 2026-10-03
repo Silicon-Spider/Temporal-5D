@@ -143,7 +143,8 @@ bool SearchRun::record(const GameState& after, const std::vector<Move>& moves) {
 //
 // Depth-first over move sequences, as the state machine generates them: from
 // the turn's start, every pseudo-legal move of the mover (generate_moves -
-// which offers nothing once the present has shifted, Q4's default), applied to
+// which, under Q4's Guide-literal reading, offers nothing once the present has
+// shifted; by default, R8, the mover goes on until submitting), applied to
 // a copy, recursively. A state whose obligations are met (T5) is a finished
 // action: legal if royals_safe (C4, R1). The pruning is a transposition table
 // of every state reached: the same moves in another order reach the same state,
@@ -174,7 +175,7 @@ class Naive {
       ++run_.stats.actions_tested;
       if (royals_safe(s) && !run_.record(s, path_)) return false;
       if (!budget_.hold(seen_.size() + run_.held(), run_.held_bytes())) return false;
-      if (!s.may_move()) return true;  // Q4's default: the action ends here
+      if (!s.may_move()) return true;  // Q4's Guide-literal reading: the action ends here
     }
     const std::size_t depth = path_.size();
     if (lists_.size() <= depth) lists_.emplace_back();
@@ -302,7 +303,7 @@ std::optional<bool> can_finish_legally(const GameState& state, Detector detector
                                        const SearchBudget& budget) {
   if (state.obligations_met()) {
     if (royals_safe(state)) return true;  // submit now
-    if (!state.may_move()) return false;  // Q4's default: nothing more may be played
+    if (!state.may_move()) return false;  // Q4's Guide-literal reading: nothing more to play
   }
   detail::SearchRun r(state, budget, 1, detail::Unit::Successors, false);
   run(r, detector);

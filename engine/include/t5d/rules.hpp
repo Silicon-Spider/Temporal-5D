@@ -5,7 +5,9 @@
 // (docs/rules/README.md; rule IDs L*, T*, J*, 4.*, S*, C*, Q*). Where that
 // reference marks a point as an open question (Q1, Q2, ...) or a conflict, the
 // engine implements the high-confidence reading - or the in-game Guide's (G) -
-// as the DEFAULT, and the alternative reading as a parameter here. Where the
+// as the DEFAULT, and the alternative reading as a parameter here; a question
+// the user has ruled on takes its ruling as the default (R8: Q4, moves after
+// the present has shifted; R9: Q5). Where the
 // design spec (docs/design/5d-chess-transformer-design.md) and the rules
 // reference disagree, the reference is the default and the spec's reading a
 // parameter where feasible. The engine README lists every parameter.
@@ -65,10 +67,12 @@ enum class InitialTimelineCredit : std::uint8_t {
 
 /// T6 / Q5: which boards the mover must play before submitting.
 enum class MandatoryBoards : std::uint8_t {
-  /// Default (T6, high; G): only the active boards in the present.
+  /// Default (T6, high; G; settled by R9): only the active boards in the
+  /// present.
   InPresent = 0,
-  /// Q5's alternative (Wikipedia's former paragraph): every active timeline
-  /// whose playable board is the mover's must be played each turn.
+  /// Q5's alternative (Wikipedia's former paragraph, which R9 ranks below the
+  /// Guide): every active timeline whose playable board is the mover's must
+  /// be played each turn. Kept for diagnosis; no rule.
   AllActive = 1,
 };
 
@@ -175,8 +179,15 @@ struct RuleOptions {
   bool play_activates = false;
   /// T5 / Q4: may the mover keep moving once the action's obligations are met
   /// (the present has shifted to the opponent) and before submitting? Default
-  /// false (G: "A player makes moves while it is their turn in The Present").
-  bool moves_after_shift = false;
+  /// true - ruling R8 (register D8): the turn ends only at submission, so once
+  /// the present has shifted every decision offers submitting alongside any
+  /// further move on the mover's remaining playable boards. False is the
+  /// Guide-literal reading ("A player makes moves while it is their turn in
+  /// The Present"), kept as a named alternative for diagnosis: no move once
+  /// the present has shifted. Its encoding bit (3) is therefore SET for
+  /// false - the bit marks a non-default choice, and the default ruleset's
+  /// encoding and ruleset ID stay 0.
+  bool moves_after_shift = true;
   /// T6 / Q5.
   MandatoryBoards mandatory = MandatoryBoards::InPresent;
   /// T12 / Q6.
@@ -312,7 +323,10 @@ struct RuleOptions {
 
   /// The canonical 64-bit encoding: 0 for the defaults, one bit per
   /// non-default choice, the rule family's number in bits 28-31, the
-  /// promotion set (XOR the default) in bits 32-47.
+  /// promotion set (XOR the default) in bits 32-47. A bit marks a choice
+  /// that differs from the default, whichever value that is: bit 3 is set
+  /// for moves_after_shift = false (Q4's Guide-literal reading) since the
+  /// default became true (R8; before stage E7 it was set for true).
   std::uint64_t encode() const noexcept;
 
   /// The options whose encode() is `encoding` - how the C API and the tools
