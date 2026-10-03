@@ -2,6 +2,7 @@
 
 #include "t5d/selfplay.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <memory>
 #include <stdexcept>
@@ -87,6 +88,10 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
   std::unique_ptr<Search> carried;
   GameState s = start;
   MoveList scratch;
+  const auto elapsed = [&t0] {
+    return std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+  };
+  const auto out_of_time = [&] { return params.max_seconds > 0 && elapsed() >= params.max_seconds; };
   SearchBudget verdict_budget;  // no node or time limit: a verdict is a proof (H37)
   verdict_budget.max_bytes = sp.mate_bytes;
   for (;;) {
@@ -115,14 +120,21 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
       g.end = GameEnd::ActionLimit;
       break;
     }
-    if (params.max_seconds > 0 &&
-        std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count() >= params.max_seconds) {
+    if (out_of_time()) {
       g.end = GameEnd::TimeLimit;
       break;
     }
     std::vector<Move> action;
     bool turn_start = true;
+    const GameState action_start = s;
+    bool timed_out = false;
     for (bool submitted = false; !submitted;) {
+      // The safety stop before every decision, not only at turn starts; a
+      // partial action is not recorded (the record ends at the turn start).
+      if (!turn_start && out_of_time()) {
+        timed_out = true;
+        break;
+      }
       std::unique_ptr<Search> fresh;
       Search* search = nullptr;
       if (params.match_play) {
@@ -139,11 +151,21 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
       }
       const SearchStats before = search->stats();
       g.reused_visits += search->node(search->root()).visits;
-      search->run(evaluator, Limits{params.playouts});
+      Limits limits{params.playouts};
+      if (params.max_seconds > 0) limits.seconds = std::max(params.max_seconds - elapsed(), 1e-6);
+      search->run(evaluator, limits);
+      const auto visited = [&] {
+        for (const RootChild& c : search->root_children()) {
+          if (c.visits > 0) return true;
+        }
+        return false;
+      };
+      if (!visited() && search->stats().last_stop == StopReason::Deadline) {
+        timed_out = true;
+        break;
+      }
       const auto choose_now = [&]() -> std::size_t {
-        bool visited = false;
-        for (const RootChild& c : search->root_children()) visited = visited || c.visits > 0;
-        if (!visited) search->run(evaluator, Limits{params.playouts});  // children were removed
+        if (!visited()) search->run(evaluator, limits);  // children were removed
         if (params.match_play) return search->choose().index;
         const double t = g.decisions < params.temperature_decisions ? params.temperature : 0.0;
         return search->choose_by_visits(t, uniform());
@@ -208,6 +230,11 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
       }
       if (params.match_play) search->advance(pick);
       turn_start = false;
+    }
+    if (timed_out) {
+      s = action_start;
+      g.end = GameEnd::TimeLimit;
+      break;
     }
     g.actions.push_back(std::move(action));
   }

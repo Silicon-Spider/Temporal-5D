@@ -69,8 +69,11 @@ struct PlayParams {
   std::uint64_t seed = 1;
   /// A safety stop: the most actions played (ActionLimit).
   std::uint32_t max_actions = 400;
-  /// A safety stop: wall-clock seconds, checked at each turn start (TimeLimit);
-  /// 0: none. Not deterministic - for tools, never for training games.
+  /// A safety stop: wall-clock seconds, checked before every decision and
+  /// given to each search as its deadline (Limits::seconds); when it passes
+  /// the game ends TimeLimit at the last turn start (an action under way is
+  /// not recorded). 0: none. Not deterministic - for tools, never for
+  /// training games.
   double max_seconds = 0;
 };
 

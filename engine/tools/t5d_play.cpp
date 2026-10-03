@@ -19,14 +19,19 @@
 // of 20 turns (I11: a convention, scored as a draw; --cap-turns 0 lifts it).
 // --solver turns on the in-tree solver (H2, E9), off by default until the
 // user rules (spec §11.1 item 2, H23).
-// --max-seconds stops a long game at a turn start (a safety stop, "*"), its
-// record and summary still printed.
-// Exit status: 0 for a game played, 2 for a bad command line, 1 for an error.
+// --max-seconds stops a long game (a safety stop, "*": checked before every
+// decision, and each search's deadline; the record ends at the last turn
+// start), its record and summary still printed.
+// Exit status: 0 for a game played, 2 for a bad command line (a number out of
+// range included), 1 for an error.
 
+#include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <exception>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -63,12 +68,30 @@ std::uint64_t number(const char* option, const char* text) {
   return *n;
 }
 
+// A whole number in [low, high] - never wrapped into a narrower type.
+std::uint64_t number_in(const char* option, const char* text, std::uint64_t low, std::uint64_t high) {
+  const std::uint64_t n = number(option, text);
+  if (n < low || n > high) {
+    throw std::invalid_argument(std::string(option) + ": " + text + " is out of range (" + std::to_string(low) +
+                                " to " + std::to_string(high) + ")");
+  }
+  return n;
+}
+
+// A finite real number, 0 or more.
 double real(const char* option, const char* text) {
   char* end = nullptr;
   const double v = std::strtod(text, &end);
   if (end == text || *end != '\0') throw std::invalid_argument(std::string(option) + ": not a number: " + text);
+  if (!std::isfinite(v) || v < 0) {
+    throw std::invalid_argument(std::string(option) + ": " + text + " is not a finite number of 0 or more");
+  }
   return v;
 }
+
+constexpr std::uint64_t kU32 = std::numeric_limits<std::uint32_t>::max();
+constexpr std::uint64_t kInt = static_cast<std::uint64_t>(std::numeric_limits<int>::max());
+constexpr std::uint64_t kAny = std::numeric_limits<std::uint64_t>::max();
 
 }  // namespace
 
@@ -102,7 +125,7 @@ int main(int argc, char** argv) {
           throw std::invalid_argument("--evaluator: uniform, random or material, not " + v);
         }
       } else if (std::strcmp(a, "--playouts") == 0) {
-        params.playouts = number(a, value());
+        params.playouts = number_in(a, value(), 1, kAny);
       } else if (std::strcmp(a, "--split") == 0) {
         const std::string v = value();
         if (v == "ply") {
@@ -133,7 +156,7 @@ int main(int argc, char** argv) {
       } else if (std::strcmp(a, "--solver") == 0) {
         params.search.solver = true;
       } else if (std::strcmp(a, "--batch") == 0) {
-        params.search.batch_size = static_cast<std::size_t>(number(a, value()));
+        params.search.batch_size = static_cast<std::size_t>(number_in(a, value(), 1, kU32));
       } else if (std::strcmp(a, "--synchronous") == 0) {
         params.search.synchronous = true;
       } else if (std::strcmp(a, "--match") == 0) {
@@ -150,19 +173,19 @@ int main(int argc, char** argv) {
       } else if (std::strcmp(a, "--temperature") == 0) {
         params.temperature = real(a, value());
       } else if (std::strcmp(a, "--temperature-decisions") == 0) {
-        params.temperature_decisions = static_cast<std::uint32_t>(number(a, value()));
+        params.temperature_decisions = static_cast<std::uint32_t>(number_in(a, value(), 0, kU32));
       } else if (std::strcmp(a, "--noise") == 0) {
         params.search.root_noise = true;
       } else if (std::strcmp(a, "--cap-turns") == 0) {
-        params.turn_cap.turns = static_cast<int>(number(a, value()));
+        params.turn_cap.turns = static_cast<int>(number_in(a, value(), 0, kInt));
       } else if (std::strcmp(a, "--cap-boards") == 0) {
-        params.turn_cap.boards = static_cast<int>(number(a, value()));
+        params.turn_cap.boards = static_cast<int>(number_in(a, value(), 0, kInt));
       } else if (std::strcmp(a, "--max-actions") == 0) {
-        params.max_actions = static_cast<std::uint32_t>(number(a, value()));
+        params.max_actions = static_cast<std::uint32_t>(number_in(a, value(), 1, kU32));
       } else if (std::strcmp(a, "--listing-cap") == 0) {
-        params.search.max_actions = static_cast<std::size_t>(number(a, value()));
+        params.search.max_actions = static_cast<std::size_t>(number_in(a, value(), 1, kU32));
       } else if (std::strcmp(a, "--mate-nodes") == 0) {
-        params.search.mate_nodes = number(a, value());
+        params.search.mate_nodes = number_in(a, value(), 1, kAny);
       } else if (std::strcmp(a, "--max-seconds") == 0) {
         params.max_seconds = real(a, value());
       } else if (std::strcmp(a, "--seed") == 0) {

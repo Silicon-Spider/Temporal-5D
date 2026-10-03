@@ -356,6 +356,9 @@ struct Limits {
   /// The memory budget: run() stops, between batches, once memory_bytes()
   /// reaches it (one batch may pass it: at most batch_size leaves expanded).
   std::uint64_t bytes = std::numeric_limits<std::uint64_t>::max();
+  /// A deadline in wall-clock seconds from the call, checked between batches;
+  /// 0: none. Not deterministic - for tools and match play, never training.
+  double seconds = 0;
 };
 
 /// Why run() stopped.
@@ -366,6 +369,7 @@ enum class StopReason : std::uint8_t {
   Exhausted,     ///< no simulation could be made
   Nodes,         ///< Limits::nodes reached
   Memory,        ///< Limits::bytes reached
+  Deadline,      ///< Limits::seconds passed
 };
 const char* stop_reason_name(StopReason reason) noexcept;
 
@@ -706,11 +710,12 @@ class Search {
   /// The root's instantiated children (in prior order).
   std::vector<RootChild> root_children() const;
   /// E5/E9: the child to play, by index into root_children(). Throws
-  /// std::logic_error if the root has no visited child.
+  /// std::invalid_argument if the root has no visited child.
   Choice choose() const;
   /// Self-play: a child sampled from the visit distribution at temperature t
   /// (t <= 0: the most visits, ties to the lower index), with `random` a
-  /// uniform number in [0, 1).
+  /// uniform number in [0, 1). Throws std::invalid_argument for a temperature
+  /// that is not finite or a `random` outside [0, 1].
   std::size_t choose_by_visits(double temperature, double random) const;
   /// Classifies root child `index`'s move under `options` (a move must be known
   /// legal before it is played): Illegal removes the child (its siblings'

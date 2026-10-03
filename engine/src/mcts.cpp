@@ -238,6 +238,7 @@ ValueMoments value_moments(const std::array<float, kValueBins>& value) {
 }
 
 std::array<float, kValueBins> two_hot(double v) {
+  if (std::isnan(v)) throw std::invalid_argument("two_hot: the value is NaN");
   std::array<float, kValueBins> out{};
   const double x = (std::clamp(v, -1.0, 1.0) + 1.0) * 0.5 * (kValueBins - 1);
   const int lower = std::clamp(static_cast<int>(std::floor(x)), 0, kValueBins - 1);
@@ -274,6 +275,7 @@ const char* stop_reason_name(StopReason reason) noexcept {
     case StopReason::Exhausted: return "exhausted";
     case StopReason::Nodes: return "nodes";
     case StopReason::Memory: return "memory";
+    case StopReason::Deadline: return "deadline";
   }
   return "?";
 }
@@ -520,20 +522,38 @@ struct Search::Impl {
           "solved store until the generator has passed the differential-testing gate (register "
           "H23; AGENTS.md, \"The proof channel\")");
     }
-    const auto finite_nonneg = [](double v) { return std::isfinite(v) && v >= 0; };
-    if (!finite_nonneg(p.cpuct) || !finite_nonneg(p.widening_alpha) ||
-        !finite_nonneg(p.widening_scale) || !(p.widening_min >= 1.0) ||
-        !finite_nonneg(p.fpu_reduction) || !(p.dirichlet_alpha > 0) ||
-        !(p.dirichlet_epsilon >= 0 && p.dirichlet_epsilon <= 1) || !(p.policy_temperature > 0) ||
-        !(p.variance_reference > 0) || !finite_nonneg(p.variance_prior_weight) ||
-        !(p.cpuct_scale_min > 0 && p.cpuct_scale_min <= p.cpuct_scale_max) ||
-        !(p.variance_bonus_cap >= 1.0) || !finite_nonneg(p.variance_bonus_scale) ||
-        !finite_nonneg(p.residual_epsilon) || !(p.lcb_floor >= 0 && p.lcb_floor <= 1) ||
-        !finite_nonneg(p.lcb_z) || !finite_nonneg(p.lcb_categorical_weight) ||
-        !finite_nonneg(p.secure_child_a) || !(p.virtual_loss > 0) || !(p.submit_share >= 0 && p.submit_share <= 1) ||
-        !finite_nonneg(p.unknown_prior_scale)) {
-      throw std::invalid_argument("SearchParams: a parameter is out of range");
-    }
+    // Every real parameter finite (NaN and infinity poison selection), the
+    // offending one named.
+    const auto require = [](bool ok, const char* name, const char* range) {
+      if (!ok) throw std::invalid_argument(std::string("SearchParams::") + name + ": " + range);
+    };
+    const auto nonneg = [](double v) { return std::isfinite(v) && v >= 0; };
+    const auto positive = [](double v) { return std::isfinite(v) && v > 0; };
+    const auto unit = [](double v) { return v >= 0 && v <= 1; };  // NaN fails
+    require(nonneg(p.cpuct), "cpuct", "finite, >= 0");
+    require(nonneg(p.widening_alpha), "widening_alpha", "finite, >= 0");
+    require(nonneg(p.widening_scale), "widening_scale", "finite, >= 0");
+    require(std::isfinite(p.widening_min) && p.widening_min >= 1.0, "widening_min", "finite, >= 1");
+    require(nonneg(p.fpu_reduction), "fpu_reduction", "finite, >= 0");
+    require(positive(p.dirichlet_alpha), "dirichlet_alpha", "finite, > 0");
+    require(unit(p.dirichlet_epsilon), "dirichlet_epsilon", "0 to 1");
+    require(positive(p.policy_temperature), "policy_temperature", "finite, > 0");
+    require(nonneg(p.cpuct_variance_scale), "cpuct_variance_scale", "finite, >= 0");
+    require(positive(p.variance_reference), "variance_reference", "finite, > 0");
+    require(nonneg(p.variance_prior_weight), "variance_prior_weight", "finite, >= 0");
+    require(positive(p.cpuct_scale_min) && std::isfinite(p.cpuct_scale_max) && p.cpuct_scale_min <= p.cpuct_scale_max,
+            "cpuct_scale_min/max", "finite, 0 < min <= max");
+    require(std::isfinite(p.variance_bonus_cap) && p.variance_bonus_cap >= 1.0, "variance_bonus_cap", "finite, >= 1");
+    require(nonneg(p.variance_bonus_scale), "variance_bonus_scale", "finite, >= 0");
+    require(nonneg(p.residual_epsilon), "residual_epsilon", "finite, >= 0");
+    require(unit(p.lcb_floor), "lcb_floor", "0 to 1");
+    require(nonneg(p.lcb_z), "lcb_z", "finite, >= 0");
+    require(nonneg(p.lcb_categorical_weight), "lcb_categorical_weight", "finite, >= 0");
+    require(nonneg(p.secure_child_a), "secure_child_a", "finite, >= 0");
+    require(positive(p.virtual_loss), "virtual_loss", "finite, > 0");
+    require(unit(p.submit_share), "submit_share", "0 to 1");
+    require(nonneg(p.unknown_prior_scale), "unknown_prior_scale", "finite, >= 0");
+    require(p.turn_cap.turns >= 0 && p.turn_cap.boards >= 0, "turn_cap", "0 (none) or more");
     if (p.key_bits < 1 || p.key_bits > 64) throw std::invalid_argument("SearchParams::key_bits: 1 to 64");
     if (p.expand.pin || p.expand.check || p.expand.travel_threat) {
       throw std::invalid_argument("SearchParams::expand: pin, check and travel-threat are not built");
@@ -1334,15 +1354,19 @@ struct Search::Impl {
 
   std::size_t gather(std::size_t max_leaves, std::uint64_t max_playouts) {
     if (!pending_.empty() || !collided_.empty()) {
-      throw std::logic_error("search: a batch is waiting for its evaluations");
+      throw std::invalid_argument("search: a batch is waiting for its evaluations");
     }
+    if (max_leaves == 0) throw std::invalid_argument("gather: max_leaves must be 1 or more");
     requests_.clear();
     unique_requests_ = 0;
-    if (params_.synchronous || max_leaves == 0) max_leaves = 1;
+    if (params_.synchronous) max_leaves = 1;
     std::uint64_t done = 0;
     std::size_t collisions = 0;
     std::size_t iterations = 0;
-    const std::size_t iteration_limit = 64 * max_leaves + 1024;
+    // Saturating: max_leaves may be anything up to SIZE_MAX.
+    const std::size_t iteration_limit =
+        max_leaves > (std::numeric_limits<std::size_t>::max() - 1024) / 64 ? std::numeric_limits<std::size_t>::max()
+                                                                           : 64 * max_leaves + 1024;
     // A batch is `max_leaves` visits: the leaves sent for evaluation AND the
     // visits completed without the evaluator (terminals, solved nodes, cache
     // hits, MCGS residuals). Counted apart, the latter piled up without bound
@@ -1395,6 +1419,7 @@ struct Search::Impl {
   }
 
   void deliver(std::span<const Evaluation> evaluations) {
+    if (pending_.empty()) throw std::invalid_argument("deliver: no batch is waiting");
     if (evaluations.size() != requests_.size()) {
       const std::size_t want = requests_.size();
       abandon();
@@ -1487,7 +1512,7 @@ struct Search::Impl {
   // the rest: garbage collection of path-dependent structure (§8.7).
   void reroot(NodeId new_root) {
     if (!pending_.empty() || !collided_.empty()) {
-      throw std::logic_error("search: cannot re-root while a batch is waiting");
+      throw std::invalid_argument("search: cannot re-root while a batch is waiting");
     }
     std::vector<NodeId> order;
     std::vector<NodeId> remap(nodes_.size(), kNoNode);
@@ -1689,10 +1714,12 @@ std::size_t Search::memory_bytes() const noexcept { return impl_->memory_bytes()
 
 StopReason Search::run(Evaluator& evaluator, const Limits& limits) {
   Impl& s = *impl_;
+  const auto t0 = std::chrono::steady_clock::now();
   const auto stop = [&s](StopReason r) {
     s.stats_.last_stop = r;
     return r;
   };
+  if (std::isnan(limits.seconds) || limits.seconds < 0) throw std::invalid_argument("Limits::seconds: 0 (none) or more");
   if (s.notified_generation_ != s.root_generation_) {
     evaluator.on_new_root(s.nodes_[s.root_].state, s.epoch_);
     s.notified_generation_ = s.root_generation_;
@@ -1708,6 +1735,7 @@ StopReason Search::run(Evaluator& evaluator, const Limits& limits) {
     if (s.root_finished()) return stop(StopReason::Finished);
     if (s.nodes_.size() >= limits.nodes) return stop(StopReason::Nodes);
     if (s.memory_bytes() >= limits.bytes) return stop(StopReason::Memory);
+    if (limits.seconds > 0 && detail::seconds_since(t0) >= limits.seconds) return stop(StopReason::Deadline);
     const std::uint64_t batch = std::max<std::size_t>(s.params_.batch_size, 1);
     const auto want = static_cast<std::size_t>(std::min(batch, limits.evaluations - evaluated));
     const std::uint64_t before = s.stats_.playouts;
@@ -1778,11 +1806,11 @@ std::vector<RootChild> Search::root_children() const {
 
 MoveLegality Search::verify(std::size_t index, const LegalityOptions& options) {
   Impl& s = *impl_;
-  if (!s.pending_.empty()) throw std::logic_error("search: cannot verify while a batch is waiting");
+  if (!s.pending_.empty()) throw std::invalid_argument("search: cannot verify while a batch is waiting");
   const std::vector<std::size_t> edges = s.root_edges();
   if (index >= edges.size()) {
-    throw std::out_of_range("verify: root child " + std::to_string(index) + " of " +
-                            std::to_string(edges.size()));
+    throw std::invalid_argument("verify: root child " + std::to_string(index) + " of " +
+                                std::to_string(edges.size()));
   }
   const Edge& e = s.nodes_[s.root_].edges[edges[index]];
   if (!e.unknown) return MoveLegality::Legal;
@@ -1794,11 +1822,13 @@ Choice Search::choose() const {
   const std::vector<FinalCandidate> c = impl_->root_candidates(edges);
   bool any = false;
   for (const FinalCandidate& f : c) any = any || f.visits > 0;
-  if (!any) throw std::logic_error("search: the root has no visited child to choose");
+  if (!any) throw std::invalid_argument("search: the root has no visited child to choose");
   return select_final(c, impl_->params_);
 }
 
 std::size_t Search::choose_by_visits(double temperature, double random) const {
+  if (!std::isfinite(temperature)) throw std::invalid_argument("choose_by_visits: the temperature is not finite");
+  if (!(random >= 0 && random <= 1)) throw std::invalid_argument("choose_by_visits: random must be in [0, 1]");
   const std::vector<std::size_t> edges = impl_->root_edges();
   const std::vector<FinalCandidate> c = impl_->root_candidates(edges);
   // A proven win is played; children proven lost are left out unless all are.
@@ -1834,26 +1864,26 @@ std::size_t Search::choose_by_visits(double temperature, double random) const {
       x -= weight[i];
     }
   }
-  if (best == kNoEdge) throw std::logic_error("search: the root has no visited child to choose");
+  if (best == kNoEdge) throw std::invalid_argument("search: the root has no visited child to choose");
   return best;
 }
 
 void Search::advance(std::size_t index) {
   Impl& s = *impl_;
-  if (!s.pending_.empty()) throw std::logic_error("search: cannot advance while a batch is waiting");
+  if (!s.pending_.empty()) throw std::invalid_argument("search: cannot advance while a batch is waiting");
   const std::vector<std::size_t> edges = s.root_edges();
   if (index >= edges.size()) {
-    throw std::out_of_range("advance: root child " + std::to_string(index) + " of " +
-                            std::to_string(edges.size()));
+    throw std::invalid_argument("advance: root child " + std::to_string(index) + " of " +
+                                std::to_string(edges.size()));
   }
   const NodeId c = s.ensure_child(s.root_, edges[index]);
-  if (c == kNoNode) throw std::logic_error("advance: that child is a dead end");
+  if (c == kNoNode) throw std::invalid_argument("advance: that child is a dead end (its move is illegal)");
   s.reroot(c);
 }
 
 void Search::advance_to(const GameState& target, bool turn_start) {
   Impl& s = *impl_;
-  if (!s.pending_.empty()) throw std::logic_error("search: cannot advance while a batch is waiting");
+  if (!s.pending_.empty()) throw std::invalid_argument("search: cannot advance while a batch is waiting");
   const std::size_t count = s.nodes_[s.root_].edges.size();
   for (std::size_t i = 0; i < count; ++i) {
     const Edge& e = s.nodes_[s.root_].edges[i];

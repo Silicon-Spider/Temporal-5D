@@ -8,8 +8,10 @@
 // cap's convention (I11), and every record replayed by the engine's 5dpgn
 // reader to the same final state.
 
+#include <chrono>
 #include <cstdint>
 #include <memory>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -306,4 +308,46 @@ TEST(selfplay_safety_stops_end_a_game_unscored) {
   CHECK(b.end == GameEnd::TimeLimit);
   CHECK(b.actions.empty());
   CHECK_EQ(b.result(), std::string("*"));
+}
+
+namespace {
+
+// The uniform evaluator, slowed: a few milliseconds per batch.
+class Slow final : public Evaluator {
+ public:
+  void evaluate(std::span<const EvalRequest> batch, std::span<Evaluation> out) override {
+    const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(3);
+    while (std::chrono::steady_clock::now() < until) {
+    }
+    for (std::size_t i = 0; i < batch.size(); ++i) {
+      out[i].logits.assign(batch[i].expansion->moves().size(), 0.0f);
+      out[i].value = two_hot(0.0);
+    }
+  }
+};
+
+}  // namespace
+
+TEST(selfplay_the_time_limit_is_checked_before_every_decision) {
+  // max_seconds is checked before every decision (not only at turn starts)
+  // and given to each search as its deadline. Wherever it falls - mid-action
+  // too - the game ends TimeLimit at its last turn start: the record holds
+  // complete actions only, and replays to the final state.
+  Slow slow;
+  for (const double limit : {0.02, 0.05, 0.1}) {
+    PlayParams p = quick(TurnSplit::BoardMove, 5);
+    p.playouts = 24;
+    p.max_seconds = limit;
+    const GameRecord g = play_game(variant("Standard - Two Timelines"), slow, p);
+    CHECK(g.end == GameEnd::TimeLimit);
+    CHECK_EQ(g.result(), std::string("*"));
+    GameState s = g.start;
+    for (const std::vector<Move>& action : g.actions) {
+      for (const Move& m : action) s.apply(m);
+      REQUIRE(s.submission_status() == SubmitStatus::Safe);
+      s.submit();
+    }
+    CHECK(s == g.final_state);
+    check_record(g, "Standard - Two Timelines");
+  }
 }
