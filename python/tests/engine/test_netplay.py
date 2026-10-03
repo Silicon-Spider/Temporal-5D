@@ -11,6 +11,8 @@ The record's move form and the turn-start verdicts are checked on their own.
 
 from __future__ import annotations
 
+import os
+
 import pytest
 import torch
 
@@ -29,12 +31,25 @@ from t5d.engine.netplay import (
 )
 from t5d.net import build_model
 from t5d.net.state import PIECE_IDS
-from tests.engine.helpers import ENGINE, requires_engine
+from tests.engine.helpers import ENGINE, REQUIRE_VAR, requires_engine
 
 pytestmark = requires_engine
 
 GATE = gate_executable() if ENGINE else None
-requires_gate = pytest.mark.skipif(GATE is None or not GATE.is_file(), reason="t5d-gate is not built (py engine/build.py)")
+
+
+@pytest.fixture
+def gate_required():
+    """The gate adapter beside the library: skip without it - or fail, under T5D_REQUIRE_ENGINE=1
+    (CI builds t5d-gate with the library)."""
+    if GATE is None or not GATE.is_file():
+        why = f"t5d-gate is not built beside the engine library (looked for {GATE})"
+        if os.environ.get(REQUIRE_VAR, "").strip() == "1":
+            pytest.fail(f"{REQUIRE_VAR}=1: {why}", pytrace=False)
+        pytest.skip(why)
+
+
+requires_gate = pytest.mark.usefixtures("gate_required")
 
 
 @pytest.fixture(scope="module")
