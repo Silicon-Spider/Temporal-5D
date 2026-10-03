@@ -2201,3 +2201,107 @@ TEST(mcts_a_solved_child_is_visited_only_up_to_the_threshold) {
   }
   CHECK(found);
 }
+
+// ---- Call sequences (review B) ------------------------------------------------------------
+
+TEST(mcts_advance_action_is_atomic) {
+  // A failed advance_action changes nothing: a move that is not one, a
+  // submission that is illegal, or an empty action at a turn start - the tree,
+  // its statistics and its root are as they were.
+  for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::WholeTurn}) {
+    SearchParams p = fast();
+    p.split = split;
+    p.max_actions = 64;
+    const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Random, 4);
+    Search search(variant("Standard - Two Timelines"), p);
+    search.run(*ev, Limits{100});
+    const std::uint64_t digest = search.digest();
+    const std::size_t nodes = search.node_count();
+    const GameState root = search.root_state();
+    // White's first legal action (two moves: both timelines are White's), and
+    // a move of Black's reply.
+    const ActionList white = list_legal_actions(root, 1, Detector::Hypercuboid);
+    REQUIRE(!white.actions.empty());
+    const std::vector<Move>& action = white.actions.front().moves;
+    REQUIRE_EQ(action.size(), std::size_t{2});
+    const ActionList black = list_legal_actions(white.actions.front().result, 1, Detector::Hypercuboid);
+    REQUIRE(!black.actions.empty());
+    const std::vector<Move> bad_move = {action[0], black.actions.front().moves[0]};
+    CHECK_THROWS_AS(search.advance_action(bad_move), std::invalid_argument);
+    // Every move fine, the submission not (a timeline left unplayed: T5).
+    const std::vector<Move> unfinished = {action[0]};
+    CHECK_THROWS_AS(search.advance_action(unfinished), std::invalid_argument);
+    // Nothing at a turn start.
+    CHECK_THROWS_AS(search.advance_action({}), std::invalid_argument);
+    CHECK_EQ(search.digest(), digest);
+    CHECK_EQ(search.node_count(), nodes);
+    CHECK(search.root_state() == root);
+    CHECK(search.root_turn_start());
+    // The whole action goes through.
+    search.advance_action(action);
+    CHECK(search.root_state() == white.actions.front().result);
+    CHECK(search.root_turn_start());
+    CHECK_NOTHROW(search.check_invariants());
+  }
+}
+
+TEST(mcts_the_epoch_does_not_change_under_a_waiting_batch) {
+  // set_epoch between gather and deliver would file the batch's evaluations
+  // under the new epoch: refused; after the batch, allowed.
+  const auto cache = std::make_shared<EvalCache>();
+  Search search(variant("Standard"), fast(), true, cache);
+  const std::size_t n = search.gather(1);
+  REQUIRE_EQ(n, std::size_t{1});
+  CHECK_THROWS_AS(search.set_epoch(5), std::invalid_argument);
+  CHECK_EQ(search.epoch(), std::uint64_t{0});
+  std::vector<Evaluation> ev(1);
+  const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
+  uniform->evaluate(search.requests(), ev);
+  search.deliver(ev);
+  CHECK(cache->find(search.node(search.root()).key, 0, variant("Standard"), true) != nullptr);
+  CHECK(cache->find(search.node(search.root()).key, 5, variant("Standard"), true) == nullptr);
+  search.set_epoch(5);
+  CHECK_EQ(search.epoch(), std::uint64_t{5});
+}
+
+namespace {
+
+// Uniform answers; on its first call only, a submit logit of 25 for leaves
+// where submitting is NOT possible (where the search never reads it) - so a
+// stale value in a reused buffer would leak into a later leaf that reads it.
+class StaleSubmit final : public Evaluator {
+ public:
+  explicit StaleSubmit(bool stale) : stale_(stale) {}
+  void evaluate(std::span<const EvalRequest> batch, std::span<Evaluation> out) override {
+    for (std::size_t i = 0; i < batch.size(); ++i) {
+      out[i].logits.assign(batch[i].expansion->moves().size(), 0.0f);
+      out[i].value = two_hot(0.0);
+      if (stale_ && calls_ == 0 && !batch[i].expansion->submit_possible()) out[i].submit_logit = 25.0f;
+    }
+    ++calls_;
+  }
+
+ private:
+  bool stale_;
+  int calls_ = 0;
+};
+
+}  // namespace
+
+TEST(mcts_run_resets_every_field_of_its_evaluation_buffers) {
+  // run() reuses its Evaluation buffers between batches: a submit logit left
+  // from an earlier leaf must not reach a later one. The meeting position: at
+  // White's root no submit is possible; after (0T1)Ka1-a2 it is, beside +1's
+  // moves - where a leaked logit of 25 would take submit's share.
+  const Meeting m = meeting("[3k/4/4/K3:0:1:w]", "[3k/4/4/K3:+1:2:w]", RuleOptions{});
+  std::uint64_t digests[2] = {0, 0};
+  for (const bool stale : {false, true}) {
+    SearchParams p = fast();
+    p.synchronous = true;  // batches of one: the same buffer every time
+    StaleSubmit ev(stale);
+    Search search(m.root, p);
+    search.run(ev, Limits{200});
+    digests[stale ? 1 : 0] = search.digest();
+  }
+  CHECK_EQ(digests[0], digests[1]);
+}

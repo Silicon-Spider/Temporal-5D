@@ -304,14 +304,18 @@ T5D_API t5d_status t5d_search_verify(t5d_search* search, size_t index, int32_t* 
 T5D_API t5d_status t5d_search_advance(t5d_search* search, size_t index, char** error);
 
 /* Re-roots on the turn start an action reaches - its moves, in a playable
- * order (each matched as t5d_game_apply matches one): the opponent's reply. */
+ * order (each matched as t5d_game_apply matches one): the opponent's reply.
+ * Atomic: the whole action is checked first, and on any error nothing has
+ * changed. From a turn start the action has at least one move (count 0 is an
+ * error there); from a state during an action, count 0 submits it. */
 T5D_API t5d_status t5d_search_advance_action(t5d_search* search, const t5d_move* moves,
                                              size_t count, char** error);
 
 /* The root's state, as a new game handle (legal submissions). */
 T5D_API t5d_status t5d_search_root_game(const t5d_search* search, t5d_game** out, char** error);
 
-/* The refresh epoch (§7.9): evaluations are cached per (state, epoch). */
+/* The refresh epoch (§7.9): evaluations are cached per (state, epoch). An
+ * error while a batch is waiting (deliver or abandon it first). */
 T5D_API t5d_status t5d_search_set_epoch(t5d_search* search, uint64_t epoch, char** error);
 
 /* H15: a digest of the whole search graph - every node's and edge's statistics

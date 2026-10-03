@@ -2,11 +2,17 @@
 // Expansion's buffers have grown, expanding positions no larger than those it
 // has seen allocates nothing. Counted by replacing the global operator new of
 // the test runner (this file only: replacement functions are program-wide, and
-// counting changes nothing else).
+// counting changes nothing else). The same replacement serves the other
+// tests' allocation hooks (test_alloc.hpp): a fault injected at the n-th
+// allocation, and the live bytes a structure holds - each block carries a
+// 16-byte header with its size and whether it was counted.
+
+#include "test_alloc.hpp"
 
 #include <atomic>
 #include <cstddef>
 #include <cstdlib>
+#include <cstring>
 #include <new>
 
 #include "synthetic.hpp"
@@ -14,17 +20,46 @@
 #include "t5d/state.hpp"
 #include "test_framework.hpp"
 
+namespace t5d_test::alloc {
+thread_local long long fail_countdown = -1;
+thread_local bool counting = false;
+thread_local long long live_bytes = 0;
+}  // namespace t5d_test::alloc
+
 namespace {
 std::atomic<long long> g_allocations{0};
+
+struct Header {
+  std::size_t size;
+  std::size_t counted;
+};
+static_assert(sizeof(Header) == 16);
 }  // namespace
 
 void* operator new(std::size_t size) {
   g_allocations.fetch_add(1, std::memory_order_relaxed);
-  if (void* p = std::malloc(size == 0 ? 1 : size)) return p;
-  throw std::bad_alloc();
+  namespace a = t5d_test::alloc;
+  if (a::fail_countdown >= 0 && a::fail_countdown-- == 0) throw std::bad_alloc();
+  void* raw = std::malloc(sizeof(Header) + (size == 0 ? 1 : size));
+  if (raw == nullptr) throw std::bad_alloc();
+  const Header h{size, a::counting ? std::size_t{1} : std::size_t{0}};
+  std::memcpy(raw, &h, sizeof h);
+  if (a::counting) a::live_bytes += static_cast<long long>(size);
+  return static_cast<char*>(raw) + sizeof(Header);
 }
-void operator delete(void* p) noexcept { std::free(p); }
-void operator delete(void* p, std::size_t) noexcept { std::free(p); }
+void operator delete(void* p) noexcept {
+  if (p == nullptr) return;
+  char* raw = static_cast<char*>(p) - sizeof(Header);
+  Header h;
+  std::memcpy(&h, raw, sizeof h);
+  namespace a = t5d_test::alloc;
+  if (h.counted != 0 && a::counting) a::live_bytes -= static_cast<long long>(h.size);
+  std::free(raw);
+}
+void operator delete(void* p, std::size_t) noexcept { operator delete(p); }
+void* operator new[](std::size_t size) { return operator new(size); }
+void operator delete[](void* p) noexcept { operator delete(p); }
+void operator delete[](void* p, std::size_t) noexcept { operator delete(p); }
 
 using namespace t5d;
 

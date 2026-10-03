@@ -1184,9 +1184,9 @@ struct Search::Impl {
         complete_residual(path_, ei, child);
         return Selected::Done;
       }
+      path_.push_back(Step{child, ei});  // first: a failed push_back adds no virtual loss
       nodes_[cur].edges[ei].vl += 1;
       nodes_[child].vl += 1;
-      path_.push_back(Step{child, ei});
       cur = child;
     }
   }
@@ -1241,9 +1241,9 @@ struct Search::Impl {
         break;
       }
     }
+    pending_.push_back(Pending{path_, pending_.size(), id, request});  // first: it may throw
     if (request == unique_requests_) ++unique_requests_;
     n.pending = true;
-    pending_.push_back(Pending{path_, pending_.size(), id, request});
     return Selected::Pending;
   }
 
@@ -1263,15 +1263,23 @@ struct Search::Impl {
     // hits, MCGS residuals). Counted apart, the latter piled up without bound
     // behind a pending leaf's virtual loss - a whole run's playouts down a line
     // of terminals while the one pending line starved.
-    while (pending_.size() + done < max_leaves && pending_.size() + done < max_playouts &&
-           iterations++ < iteration_limit) {
-      if (root_finished()) break;
-      const Selected s = select_once();
-      if (s == Selected::Done) {
-        ++done;
-      } else if (s == Selected::Collision) {
-        if (++collisions >= max_leaves) break;
+    try {
+      while (pending_.size() + done < max_leaves && pending_.size() + done < max_playouts &&
+             iterations++ < iteration_limit) {
+        if (root_finished()) break;
+        const Selected s = select_once();
+        if (s == Selected::Done) {
+          ++done;
+        } else if (s == Selected::Collision) {
+          if (++collisions >= max_leaves) break;
+        }
       }
+    } catch (...) {
+      // The batch is abandoned and the path being selected released: outside
+      // a batch no virtual loss exists, so every count is cleared.
+      abandon();
+      clear_virtual_loss();
+      throw;
     }
     for (const Pending& pd : pending_) {
       if (pd.request != requests_.size()) continue;  // a duplicate: its first leaf asks
@@ -1279,6 +1287,14 @@ struct Search::Impl {
       requests_.push_back(EvalRequest{&n.state, slots_[pd.slot].get(), n.key, epoch_});
     }
     return requests_.size();
+  }
+
+  void clear_virtual_loss() noexcept {
+    for (Node& n : nodes_) {
+      n.vl = 0;
+      for (Edge& e : n.edges) e.vl = 0;
+    }
+    path_.clear();
   }
 
   void abandon() noexcept {
@@ -1308,12 +1324,22 @@ struct Search::Impl {
       abandon();
       throw;
     }
-    for (const Pending& pd : pending_) {
-      const Evaluation& ev = evaluations[pd.request];
-      expand_node(pd.leaf, ev, *slots_[pd.slot]);
-      const Node& n = nodes_[pd.leaf];
-      if (cache_) cache_->insert(n.key, epoch_, n.state, ev);  // a duplicate is not stored twice
-      backup(pd.path, n.eval_mean, backup_weight(n.eval_var), true);
+    std::size_t delivered = 0;
+    try {
+      for (const Pending& pd : pending_) {
+        const Evaluation& ev = evaluations[pd.request];
+        expand_node(pd.leaf, ev, *slots_[pd.slot]);
+        const Node& n = nodes_[pd.leaf];
+        backup(pd.path, n.eval_mean, backup_weight(n.eval_var), true);
+        ++delivered;
+        if (cache_) cache_->insert(n.key, epoch_, n.state, ev);  // a duplicate is not stored twice
+      }
+    } catch (...) {
+      // What was delivered stays; the rest of the batch is abandoned.
+      pending_.erase(pending_.begin(), pending_.begin() + static_cast<std::ptrdiff_t>(delivered));
+      abandon();
+      clear_virtual_loss();
+      throw;
     }
     stats_.evaluations += requests_.size();
     ++stats_.batches;
@@ -1593,8 +1619,9 @@ void Search::run(Evaluator& evaluator, const Limits& limits) {
       continue;
     }
     out.resize(n);
-    for (Evaluation& e : out) {
+    for (Evaluation& e : out) {  // reused buffers: every field reset
       e.logits.clear();
+      e.submit_logit = std::numeric_limits<float>::quiet_NaN();
       e.value.fill(0.0f);
     }
     try {
@@ -1799,17 +1826,41 @@ void Search::advance_moves(std::span<const Move> moves) {
 }
 
 void Search::advance_action(std::span<const Move> moves) {
-  if (impl_->params_.split == TurnSplit::WholeTurn) {
+  const Impl& s = *impl_;
+  if (!s.pending_.empty()) throw std::invalid_argument("search: cannot advance while a batch is waiting");
+  if (moves.empty() && root_turn_start()) {
+    throw std::invalid_argument("advance_action: an action from a turn start has at least one move (T5)");
+  }
+  // The whole action, checked on a copy: nothing is re-rooted unless every
+  // move can be played and the submission is legal.
+  GameState t = root_state();
+  MoveList scratch;
+  for (const Move& m : moves) {
+    if (!t.may_move() || !is_pseudo_legal(t, m, scratch)) {
+      throw std::invalid_argument("advance_action: " + to_string(m, t.multiverse().even()) +
+                                  " is not a move of the acting player there");
+    }
+    t.apply(m);
+  }
+  if (t.submission_status() != SubmitStatus::Safe) {
+    throw std::invalid_argument("advance_action: the action cannot be submitted legally (T5, C4)");
+  }
+  if (s.params_.split == TurnSplit::WholeTurn) {
     advance_moves(moves);
     return;
   }
   for (const Move& m : moves) advance_moves(std::span<const Move>(&m, 1));
-  if (!root_turn_start()) advance_moves({});
+  advance_moves({});
 }
 
 std::uint64_t Search::epoch() const noexcept { return impl_->epoch_; }
 void Search::set_epoch(std::uint64_t epoch) {
   if (epoch == impl_->epoch_) return;
+  if (!impl_->pending_.empty()) {
+    throw std::invalid_argument(
+        "set_epoch: a batch is waiting - its evaluations belong to the current epoch (deliver or "
+        "abandon it first)");
+  }
   impl_->epoch_ = epoch;
   impl_->notify_root();
 }

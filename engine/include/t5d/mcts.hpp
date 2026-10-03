@@ -631,14 +631,18 @@ class Search {
   /// `max_playouts` simulations have been completed or gathered in this call.
   /// Returns the number of evaluations wanted - requests().size(): one per
   /// distinct state among the leaves (a tree may hold one state in two
-  /// nodes). Precondition: none is waiting.
+  /// nodes). Precondition: none is waiting. Exception-safe: if anything throws
+  /// (std::bad_alloc included), the batch is abandoned and no virtual loss is
+  /// left before the exception leaves.
   std::size_t gather(std::size_t max_leaves,
                      std::uint64_t max_playouts = std::numeric_limits<std::uint64_t>::max());
   /// The evaluations wanted, in order.
   std::span<const EvalRequest> requests() const noexcept;
   /// Their evaluations, one per request, in order: expands the leaves, backs
   /// up, releases the virtual loss. Throws std::invalid_argument (releasing
-  /// the virtual loss, nothing backed up) for a malformed evaluation.
+  /// the virtual loss, nothing backed up) for a malformed evaluation. If
+  /// anything else throws part-way (std::bad_alloc), the leaves already
+  /// delivered stay delivered and the rest of the batch is abandoned.
   void deliver(std::span<const Evaluation> evaluations);
   /// Releases the waiting leaves' virtual loss without backing anything up.
   void abandon() noexcept;
@@ -680,13 +684,19 @@ class Search {
   /// Re-roots on the turn start a whole action reaches - its moves in a
   /// playable order (the opponent's reply, at match play): under the
   /// board-move split one decision per move, then the submit decision; under
-  /// the whole-turn split advance_moves(moves).
+  /// the whole-turn split advance_moves(moves). Atomic: the whole action is
+  /// checked first (every move pseudo-legal where it is made, the submission
+  /// legal: T5, C4) and std::invalid_argument thrown with nothing changed if
+  /// it fails. From a turn start an action has at least one move; from a
+  /// state during an action, no moves means submitting it.
   void advance_action(std::span<const Move> moves);
   /// Re-roots on `target`, a state one decision from the root (a fresh root if
   /// the tree does not hold it). `turn_start` as for the constructor.
   void advance_to(const GameState& target, bool turn_start);
   /// The refresh epoch (§7.9): evaluations are cached per (state, epoch).
   std::uint64_t epoch() const noexcept;
+  /// Throws std::invalid_argument while a batch is waiting (its evaluations
+  /// belong to the epoch they were asked under): deliver or abandon it first.
   void set_epoch(std::uint64_t epoch);
   /// C12's invalidation hook: called with the new root and the epoch on every
   /// re-root and epoch change (after the evaluator's own on_new_root, when run()

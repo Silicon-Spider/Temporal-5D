@@ -287,6 +287,8 @@ TEST(capi_search_errors_release_the_batch) {
   CHECK_EQ(t5d_search_gather(s.get(), 4, T5D_NO_LIMIT, &m, &error), T5D_ERR_ARGUMENT);
   CHECK(error != nullptr);
   t5d_free(error);
+  // A new epoch while a batch waits (its evaluations belong to the old one).
+  CHECK_EQ(t5d_search_set_epoch(s.get(), 3, nullptr), T5D_ERR_ARGUMENT);
   // Submit logits: one per leaf or none; never infinite.
   {
     std::vector<float> l(20, 0.0f);
@@ -399,12 +401,18 @@ TEST(capi_search_choose_advance_and_reply) {
   REQUIRE_EQ(t5d_search_set_epoch(s.get(), 2, nullptr), T5D_OK);
   REQUIRE_EQ(t5d_search_info(s.get(), &info), T5D_OK);
   CHECK_EQ(info.epoch, std::uint64_t{2});
-  // A reply that is no move: refused.
+  // A reply that is no move, or none at a turn start: refused, nothing changed.
+  std::uint64_t before = 0;
+  REQUIRE_EQ(t5d_search_digest(s.get(), &before), T5D_OK);
   t5d_move bogus = reply;
   bogus.to_square = 63;
   bogus.to_timeline = 5;
   CHECK_EQ(t5d_search_advance_action(s.get(), &bogus, 1, nullptr), T5D_ERR_ARGUMENT);
+  CHECK_EQ(t5d_search_advance_action(s.get(), nullptr, 0, nullptr), T5D_ERR_ARGUMENT);
   CHECK_EQ(t5d_search_advance(s.get(), 9999, nullptr), T5D_ERR_ARGUMENT);
+  std::uint64_t after = 0;
+  REQUIRE_EQ(t5d_search_digest(s.get(), &after), T5D_OK);
+  CHECK_EQ(after, before);
 }
 
 TEST(capi_search_reports_its_layouts) {
