@@ -42,6 +42,15 @@ source and destination tokens (D1), the value head the mean of the global regist
 (D3, sections 7.3 and 8.3), the global auxiliary heads the pool ``aux_global_pool``
 selects (an open committed-class point), per-board heads each board's square mean and
 per-square heads every token (``heads.py``).
+
+Register D8 (stage N5): the acting player is an input (``embed.py``,
+``NetConfig.acting_player_input``) and the submit action's logit is read from a global
+register (``heads.SubmitHead``), offered where submitting is possible and masked unless it is
+legal; ``NetOutput.action_log_probs`` normalises the moves and submit together. Their
+parameters (the acting-player embedding, the submit readout) draw nothing while they are
+made and are drawn after every other trunk and head parameter and the learned register
+coordinates, before the flag-gated modules: for a seed, every parameter that existed before
+N5 is drawn as it was (the flag-gated modules' aside), and no flag changes D8's weights.
 """
 
 from __future__ import annotations
@@ -58,6 +67,7 @@ from .embed import InputEmbedding
 from .heads import (
     AuxHeads,
     PointerHead,
+    SubmitHead,
     ValueHead,
     board_mean_pool,
     categorical_mean,
@@ -93,6 +103,11 @@ class NetOutput:
     board_valid: torch.Tensor
     square_mask: torch.Tensor
     token_board: torch.Tensor  # (B, L) long: board index of each token, -1 where none
+    # D8 (stage N5): the submit action - its logit read from a global register, (B,) each.
+    submit_logits: torch.Tensor  # -inf where submit is no legal candidate (impossible, or illegal: masked)
+    submit_raw: torch.Tensor  # the register's readout before the mask (finite everywhere)
+    submit_possible: torch.Tensor  # bool: submit is offered (T5)
+    submit_valid: torch.Tensor  # bool: offered and legal (C4) - the entry carries probability
     trunk: torch.Tensor | None = None  # (B, L, d) final-normed trunk output, if requested
 
     def value_probs(self) -> torch.Tensor:
@@ -104,9 +119,35 @@ class NetOutput:
     def value_variance(self) -> torch.Tensor:
         return categorical_variance(self.value_probs())
 
+    def action_logits(self) -> torch.Tensor:
+        """``(B, M + 1)``: the move logits, then the submit logit (D8) - every action of a
+        decision under the board-move split; -inf where an entry is no legal candidate."""
+        return torch.cat([self.policy_logits, self.submit_logits[:, None]], dim=-1)
+
+    def action_valid(self) -> torch.Tensor:
+        """``(B, M + 1)`` bool: the candidate moves, then whether submit is a legal candidate."""
+        return torch.cat([self.move_valid, self.submit_valid[:, None]], dim=-1)
+
+    def action_log_probs(self) -> torch.Tensor:
+        """``(B, M + 1)``: log-softmax over each position's candidate moves and, where it is
+        offered and legal, submit (D8): one distribution over the decision's actions; -inf at
+        padding and on a masked or absent submit. A position with no candidate at all has
+        -inf everywhere."""
+        valid = self.action_valid()
+        logits = self.action_logits().masked_fill(~valid, float("-inf"))
+        logp = torch.log_softmax(logits, dim=-1)
+        return torch.where(valid, logp, torch.full_like(logp, float("-inf")))
+
     def policy_log_probs(self) -> torch.Tensor:
-        """Log-softmax over each position's supplied moves (-inf at padding)."""
-        return torch.log_softmax(self.policy_logits, dim=-1).masked_fill(~self.move_valid, float("-inf"))
+        """``(B, M)``: the moves' log-probabilities (-inf at padding), normalised together with
+        the submit action where it is a legal candidate - so the moves' probabilities and
+        ``submit_log_prob``'s sum to one; over the moves alone where submit is not offered."""
+        return self.action_log_probs()[:, :-1]
+
+    def submit_log_prob(self) -> torch.Tensor:
+        """``(B,)``: submit's log-probability in the decision's distribution (-inf where it is
+        not offered or not legal)."""
+        return self.action_log_probs()[:, -1]
 
 
 class T5DNet(nn.Module):
@@ -129,9 +170,14 @@ class T5DNet(nn.Module):
         self.policy = PointerHead(cfg.d_model, cfg.policy_dim, promotion=cfg.policy_promotion)
         self.value = ValueHead(cfg)
         self.aux = AuxHeads(cfg)
+        self.submit = SubmitHead(cfg)
         self._init_weights()
 
     # -- initialisation --
+
+    #: Register D8's parameters (stage N5), drawn after every other trunk and head parameter
+    #: and before the flag-gated modules (``_init_weights``).
+    _D8_MODULES = ("embed.acting", "submit")
 
     def _init_weights(self) -> None:
         cfg = self.cfg
@@ -140,6 +186,8 @@ class T5DNet(nn.Module):
             for name, module in self.named_modules():
                 if name.split(".")[0] == "smolgen":
                     continue  # drawn last (reset_parameters)
+                if any(name == d8 or name.startswith(d8 + ".") for d8 in self._D8_MODULES):
+                    continue  # drawn after the rest (below)
                 if isinstance(module, nn.Linear):
                     std = module.in_features**-0.5
                     if name.endswith("attn.out_proj") or name.endswith("ffn.lin_out"):
@@ -156,6 +204,13 @@ class T5DNet(nn.Module):
             if self.register_xy is not None:
                 self.register_xy.normal_(0.0, cfg.init_table_std)
                 self.register_xy.add_(3.5)  # board centre: off-lattice, at no square
+            # D8 (stage N5): after every parameter above, so that a seed draws them as before
+            # N5 (D8's modules draw nothing while they are made); before the flag-gated
+            # modules, so that no flag changes D8's weights.
+            nn.init.normal_(self.embed.acting.weight, 0.0, cfg.init_embed_std)
+            if self.submit.out is not None:
+                nn.init.normal_(self.submit.out.weight, 0.0, self.submit.out.in_features**-0.5)
+                nn.init.normal_(self.submit.out.bias, 0.0, cfg.init_bias_std)
             if self.binned_bias is not None:
                 nn.init.normal_(self.binned_bias.time_table, 0.0, cfg.init_table_std)
                 nn.init.normal_(self.binned_bias.timeline_table, 0.0, cfg.init_table_std)
@@ -282,6 +337,8 @@ class T5DNet(nn.Module):
             registers = global_register_pool(h, batch)  # the value head's input (D3)
             aux_in = registers if self.cfg.aux_global_pool == "global_registers" else square_pool(h, batch)
             boards = board_mean_pool(h, batch)
+            possible, legal = batch.submit_mask()
+            submit_raw = self.submit(h, batch, self.policy)  # D8: from a global register
             return NetOutput(
                 policy_logits=self.policy(h, batch.moves, batch.move_valid, sq),
                 value_logits=self.value(registers),
@@ -297,6 +354,10 @@ class T5DNet(nn.Module):
                 board_valid=batch.board_valid,
                 square_mask=sq,
                 token_board=batch.board,
+                submit_logits=submit_raw.masked_fill(~legal.to(submit_raw.device), float("-inf")),
+                submit_raw=submit_raw,
+                submit_possible=possible,
+                submit_valid=legal,
                 trunk=h if return_trunk else None,
             )
 
@@ -374,6 +435,7 @@ def parameter_breakdown(model: T5DNet) -> dict[str, int]:
         "attn.smolgen": count(model.smolgen),
         "head.policy": count(model.policy),
         "head.value": count(model.value),
+        "head.submit": count(model.submit),
     }
     for name, mod in model.aux.named_children():
         out[f"aux.{name}"] = count(mod)

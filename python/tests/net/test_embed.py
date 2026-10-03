@@ -62,9 +62,18 @@ def test_registers_get_type_and_not_a_square_embeddings():
     kinds = batch.kind[0]
     glob = x[kinds == TOKEN_GLOBAL_REGISTER]
     assert glob.shape[0] == 16 and torch.pdist(glob).min() > 1e-3, "each global register is distinct"
-    # Global registers hold no board: identical whatever the boards carry.
+    # Global registers hold no board: identical whatever the boards carry - given the acting
+    # player (register D8, stage N5: the default arm adds its embedding to every global register).
     other = collate([synthetic_state(77, 9)])
+    acting = int(batch.acting_player[0])
+    if int(other.acting_player[0]) != acting:
+        other.acting_player = torch.tensor([acting])
     assert torch.allclose(embed(other)[0][other.kind[0] == TOKEN_GLOBAL_REGISTER], glob)
+    flipped = collate([synthetic_state(31, 4)])
+    flipped.acting_player = 1 - flipped.acting_player
+    shift = embed.acting.weight[1 - acting] - embed.acting.weight[acting]
+    assert torch.allclose(embed(flipped)[0][kinds == TOKEN_GLOBAL_REGISTER], glob + shift, atol=1e-6)
+    assert torch.equal(embed(flipped)[0][kinds != TOKEN_GLOBAL_REGISTER], x[kinds != TOKEN_GLOBAL_REGISTER])
     # Per-board register slots differ from each other and from squares.
     breg = x[kinds == TOKEN_BOARD_REGISTER]
     assert (breg[0] - breg[1]).abs().max() > 1e-3

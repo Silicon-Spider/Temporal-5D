@@ -25,7 +25,9 @@ for the policy's destinations and the per-board heads).
 **Prefix sharing (section 7.2).** Entries are content-addressed: an entry's key is its
 epoch's key and a dependency digest - a hash of the board itself (``board_ident``:
 coordinates, contents with the has-moved markers, size; and under
-``frozen_features="current"`` its state-dependent flags) and of the digests of the boards
+``frozen_features="current"`` its state-dependent flags - the acting player among them
+under ``acting_player_input="all_tokens"``; register D8's input sits on the live global
+registers by default, so no frozen entry depends on it) and of the digests of the boards
 it reads (so two boards that differ only in their branch origin get two entries). Two nodes
 whose board has the same digest share the entry; a node computes only boards with novel
 digests. The digest of a board covers its whole causal past, so the store is section
@@ -263,10 +265,11 @@ class KVStore:
 # --- identities and digests ------------------------------------------------------------------------
 
 
-def board_ident(state: PositionState, board: int, frozen_features: str = "intrinsic") -> bytes:
+def board_ident(state: PositionState, board: int, frozen_features: str = "intrinsic", acting: bool = False) -> bytes:
     """A frozen board's identity: what its own input is - size, register count, coordinates,
     side to move, contents, and under ``frozen_features="current"`` its Delta-t-to-present
-    and active flag (state-dependent inputs of that reading)."""
+    and active flag (state-dependent inputs of that reading) and, with ``acting`` (D8's
+    ``acting_player_input="all_tokens"``), the acting player its tokens carry."""
     h = hashlib.blake2b(digest_size=16)
     head = (int(state.width), int(state.height), int(state.regs_per_board), int(state.timeline[board]), int(state.half_turn[board]))
     h.update(struct.pack("<5q", *head))
@@ -275,15 +278,19 @@ def board_ident(state: PositionState, board: int, frozen_features: str = "intrin
     h.update(state.moved[board].astype(np.int8).tobytes())
     if frozen_features == "current":
         h.update(struct.pack("<2q", int(state.half_turn[board]) - state.h_present, int(bool(state.active[board]))))
+        if acting:
+            h.update(struct.pack("<q", int(state.acting_player)))
     return h.digest()
 
 
 def state_digest(state: PositionState) -> str:
-    """A digest of a whole position (an epoch's anchor), as hex."""
+    """A digest of a whole position (an epoch's anchor), as hex: every board with its flags,
+    and the acting player (D8)."""
     h = hashlib.blake2b(digest_size=16)
     for b in range(state.n_boards):
         h.update(board_ident(state, b))
         h.update(struct.pack("<2q", int(state.is_head[b]), int(state.active[b])))
+    h.update(struct.pack("<q", int(state.acting_player)))
     return h.hexdigest()
 
 
@@ -421,7 +428,8 @@ class CachedEvaluator:
     def _plan(self, state: PositionState, epoch: Epoch) -> _Plan:
         cfg = self.model.cfg
         frozen = np.flatnonzero(~state.is_head)
-        ident = {int(b): board_ident(state, int(b), cfg.frozen_features) for b in frozen}
+        acting = cfg.acting_player_input == "all_tokens"  # D8: a frozen board's tokens carry it under "current"
+        ident = {int(b): board_ident(state, int(b), cfg.frozen_features, acting) for b in frozen}
         # History membership by the intrinsic identity: under frozen_features="current" a
         # board's input changes with the present, its belonging to the anchor does not.
         intrinsic = ident if cfg.frozen_features == "intrinsic" else {int(b): board_ident(state, int(b)) for b in frozen}
