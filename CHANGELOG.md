@@ -10,6 +10,20 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-03 - Design documents: the CHECKPOINT 4 ruling (verification v3), from upstream
+
+- `docs/design/` replaced with the upstream revision recording CHECKPOINT 4: §11.4
+  "The verification layer, v3" (exact rules always; the search's solver for
+  proofs; Guard and Hunt at every size; full settling scans only under 50 boards;
+  the offline audit lane; the adversarial league primary above 50 boards); §15.6's
+  CHECKPOINT 4 result and 6b″'s pre-registered tests; M16's three readings of the
+  window's rule; §11.1's ruling that the search's solver is part of the proof
+  channel; §11.3's acting player in every state key; the complexity trigger (C24)
+  and the dense top layers (C25, held open); register rows H1, H2, H6, H10-H12,
+  H18, M5, M14 updated and C24, C25, H41-H45, M16, M17 and reversal 23 added; the
+  architecture document's guard and hunt. Copied in unchanged.
+- Spec: the documents themselves.
+
 ### 2026-10-03 - 6b′ on a quiet machine: the verification redesign fails at 50-199 boards - M15's STOP
 
 - `docs/MEASUREMENTS.md`: experiment 6b′ (M15) with engine E8's prototype of the

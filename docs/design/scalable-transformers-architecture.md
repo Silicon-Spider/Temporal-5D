@@ -1276,7 +1276,12 @@ pay full exactness (completion, all replies, terminal checks) only on lines that
 in a proof, and let the estimate channel run cheap and inexact, since its outputs are soft
 priors and the generator remains the gate for legality. For the proof channel itself,
 prefer best-first proof search (proof-number methods) over a decomposed action tree,
-completing actions incrementally rather than re-solving them per line.
+completing actions incrementally rather than re-solving them per line. And when even that is too expensive — exact settling, which needs disproof, fails at
+scale — ask narrower, one-sided exact questions. A *guard* checks only the chosen action
+against forced refutation, where the shallowest level needs merely the existence of one
+legal reply per threat; a *hunt* looks only for forced wins in prove-only mode and claims
+nothing when the budget runs out. Neither pays for disproof, and under a fixed budget with
+iterative deepening both go deeper exactly where the position allows.
 ### 13.3 Separate the mechanism from the failure
 
 Recurring confusion in this problem class: *does an architectural restriction cause
