@@ -113,11 +113,13 @@ struct Ctx {
   int p = 0;  // the source's place
   int h = 0;
   const Board* board = nullptr;
+  bool all = false;  // every enemy piece a target, not royals only
 };
 
 Ctx make_ctx(const Multiverse& mv, const RuleOptions& rules, std::span<const int> inactive,
-             Colour attacker) {
-  Ctx c{mv, rules, inactive, attacker, mv.board_size(), 0, -1, -1, 0, 0, nullptr};
+             Colour attacker, CaptureTargets targets) {
+  Ctx c{mv, rules, inactive, attacker, mv.board_size(), 0, -1, -1, 0, 0, nullptr,
+        targets == CaptureTargets::All};
   if (!mv.empty()) {
     c.min_timeline = mv.min_timeline();
     c.max_timeline = mv.max_timeline();
@@ -186,7 +188,7 @@ bool walk(const Ctx& c, const Source::Line& line, int n, int x, int y, int l, in
       if (past_self_passes && occupant.kind() == line.piece.kind()) continue;
       return false;
     }
-    if (!occupant.royal() || !landable(c, spot, l)) return false;
+    if ((!c.all && !occupant.royal()) || !landable(c, spot, l)) return false;
     return sink.capture(line, n, l, spot.half_turn, to, occupant);
   }
 }
@@ -302,14 +304,20 @@ bool attack_maps_incremental(const RuleOptions& rules) noexcept {
 }
 
 RoyalAttackMap::RoyalAttackMap(std::shared_ptr<const Multiverse> mv, const RuleOptions& rules,
-                               Colour attacker, std::vector<int> inactive)
-    : mv_(std::move(mv)), rules_(rules), attacker_(attacker), inactive_(std::move(inactive)) {}
+                               Colour attacker, std::vector<int> inactive, CaptureTargets targets)
+    : mv_(std::move(mv)),
+      rules_(rules),
+      attacker_(attacker),
+      targets_(targets),
+      inactive_(std::move(inactive)) {}
 
 RoyalAttackMap::RoyalAttackMap(const Multiverse& multiverse, const RuleOptions& rules,
-                               Colour attacker, std::span<const int> inactive_timelines)
+                               Colour attacker, std::span<const int> inactive_timelines,
+                               CaptureTargets targets)
     : mv_(std::make_shared<const Multiverse>(multiverse)),
       rules_(rules),
       attacker_(attacker),
+      targets_(targets),
       inactive_(inactive_timelines.begin(), inactive_timelines.end()) {
   scan_all();
 }
@@ -318,7 +326,7 @@ void RoyalAttackMap::scan_all() {
   sources_.clear();
   capture_count_ = 0;
   if (!mv_ || mv_->empty()) return;
-  const Ctx c = make_ctx(*mv_, rules_, inactive_, attacker_);
+  const Ctx c = make_ctx(*mv_, rules_, inactive_, attacker_, targets_);
   for (const TimelineRef& t : mv_->timelines()) {
     if (to_move_at(t->last_half_turn()) != attacker_) continue;  // L5
     std::shared_ptr<Source> s = scan_new(c, *t);
@@ -382,13 +390,13 @@ bool RoyalAttackMap::derive(const Multiverse& next, std::span<const int> inactiv
     st.recomputed = true;
     if (out != nullptr) {
       *out = RoyalAttackMap(std::make_shared<const Multiverse>(next), rules_, attacker_,
-                            std::vector<int>(inactive.begin(), inactive.end()));
+                            std::vector<int>(inactive.begin(), inactive.end()), targets_);
       out->scan_all();
       st.sources_scanned = out->sources_.size();
       return out->any();
     }
     if (next.empty()) return false;
-    Ctx c = make_ctx(next, rules_, inactive, attacker_);
+    Ctx c = make_ctx(next, rules_, inactive, attacker_, targets_);
     Finder f;
     for (const TimelineRef& t : next.timelines()) {
       if (to_move_at(t->last_half_turn()) != attacker_) continue;
@@ -402,7 +410,7 @@ bool RoyalAttackMap::derive(const Multiverse& next, std::span<const int> inactiv
   }
 
   // Incremental: next extends the map's multiverse.
-  Ctx c = make_ctx(next, rules_, inactive, attacker_);
+  Ctx c = make_ctx(next, rules_, inactive, attacker_, targets_);
   std::vector<std::shared_ptr<const Source>> kept;  // still playable
   kept.reserve(sources_.size());
   for (const auto& s : sources_) {
@@ -497,7 +505,7 @@ bool RoyalAttackMap::derive(const Multiverse& next, std::span<const int> inactiv
   }
   if (out == nullptr) return false;
   *out = RoyalAttackMap(std::make_shared<const Multiverse>(next), rules_, attacker_,
-                        std::vector<int>(inactive.begin(), inactive.end()));
+                        std::vector<int>(inactive.begin(), inactive.end()), targets_);
   out->sources_ = std::move(updated);
   out->sources_.insert(out->sources_.end(), fresh.begin(), fresh.end());
   std::sort(out->sources_.begin(), out->sources_.end(),

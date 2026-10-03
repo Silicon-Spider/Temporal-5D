@@ -6,6 +6,8 @@
 // ruleset.
 
 #include <cstdint>
+#include <set>
+#include <tuple>
 #include <cstdio>
 #include <span>
 #include <string>
@@ -268,6 +270,66 @@ TEST(long_attacks_chained_maps_equal_the_scratch_scan_along_random_play) {
   }
   std::fprintf(stderr, "  %d moves, %d turn starts in check\n", checked, checks);
   CHECK(checked > 5000);
+}
+
+namespace {
+
+// The generator's captures of any enemy piece (en passant apart), as (from,
+// to) places and squares.
+using Key = std::tuple<int, int, int, int, int, int>;
+std::set<Key> generated_captures(const Multiverse& mv, const RuleOptions& rules, Colour attacker,
+                                 std::span<const int> inactive) {
+  std::set<Key> out;
+  MoveList moves;
+  for (const TimelineRef& t : mv.timelines()) {
+    moves.clear();
+    append_moves_of(mv, rules, attacker, t->position(), moves, inactive);
+    for (const Move& m : moves) {
+      if (!m.capture() || m.en_passant()) continue;
+      out.insert({m.from_timeline, m.from_half_turn, m.from_square, m.to_timeline, m.to_half_turn,
+                  m.to_square});
+    }
+  }
+  return out;
+}
+
+std::set<Key> mapped_captures(const RoyalAttackMap& map) {
+  std::set<Key> out;
+  for (const RoyalCapture& c : map.captures()) {
+    out.insert({c.from_timeline, c.from_half_turn, c.from_square, c.to_timeline, c.to_half_turn,
+                c.to_square});
+  }
+  return out;
+}
+
+}  // namespace
+
+TEST(attacks_all_capture_maps_equal_the_generators_captures) {
+  // CaptureTargets::All (the estimate channel's): every capture of an enemy
+  // piece the generator makes, built and advanced, under every ruleset.
+  t5d_test::Rng rng(1212);
+  int captures = 0;
+  for (const RuleOptions& rules : t5d_test::every_ruleset()) {
+    for (int i = 0; i < 25; ++i) {
+      Multiverse mv = random_multiverse(rng);
+      const std::vector<int> inactive;
+      for (const Colour c : {Colour::White, Colour::Black}) {
+        RoyalAttackMap map(mv, rules, c, inactive, CaptureTargets::All);
+        Multiverse cur = mv;
+        for (int step = 0; step < 4; ++step) {
+          const std::set<Key> want = generated_captures(cur, rules, c, inactive);
+          CHECK(mapped_captures(map) == want);
+          CHECK_EQ(map.capture_count(), want.size());
+          captures += static_cast<int>(want.size());
+          Multiverse next = cur;
+          extend_randomly(next, rng);
+          map = map.advanced(next, inactive);
+          cur = std::move(next);
+        }
+      }
+    }
+  }
+  CHECK(captures > 1000);
 }
 
 TEST(attacks_a_board_left_unplayed_keeps_its_record) {
