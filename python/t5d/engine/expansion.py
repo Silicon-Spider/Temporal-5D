@@ -137,7 +137,11 @@ class Expansion:
     timelines: int
     active_timelines: int
     window_k: int
-    may_move: bool
+    may_move: bool  # a move may be made now (always by default, R8; under Q4's Guide-literal reading only before the shift)
+    # the action (register D8; engine stage E7) - global, not per board
+    acting_player: int  # 0 white, 1 black: whose action this is (= to_move); once the present has shifted it differs from present & 1
+    submit_possible: bool  # the action's obligations are met (T5): submitting is an action now
+    submit_legal: bool  # ... and no royal of the acting player's capturable (C4, R1): the submit action's legality
     origins_unknown: int  # active branched timelines with no recorded origin (5DFEN)
     origin_count: int
     # per board (canonical order)
@@ -192,6 +196,9 @@ class Expansion:
             active_timelines=int(x.active_timelines),
             window_k=int(x.window_k),
             may_move=bool(x.may_move),
+            acting_player=int(x.acting_player),
+            submit_possible=bool(x.submit_possible),
+            submit_legal=bool(x.submit_legal),
             origins_unknown=int(x.origins_unknown),
             origin_count=int(x.origin_count),
             timeline=_copy(x.timeline, n, np.int32, "timeline"),

@@ -331,7 +331,9 @@ class Classifier {
     mandatory_ = s_.mandatory_timelines();
     // Tier 1 needs: no slide across void (Q18), activity changed by creations
     // alone (no Q3 activation by play) - the stripped superset and the quiet
-    // finishes rest on both - and the action still open (Q4: a move may be made).
+    // finishes rest on both - and the action still open (a move may be made:
+    // always by default, R8; only before the shift under Q4's Guide-literal
+    // reading).
     if (!s_.may_move() || rules_.sliders_cross_void || rules_.play_activates) {
       fillers();
       return;

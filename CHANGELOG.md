@@ -10,6 +10,93 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-03 - Engine E7: Q4 as ruled (R8) by default; the acting player and the submit action (D8), with the binding
+
+- `engine/` (merged from its worktree branch, main merged into it first):
+  `RuleOptions::moves_after_shift` defaults to true - a player may keep moving
+  after the present has shifted, until submitting (rulebook R8, register D8). The
+  Guide-literal reading is a named alternative, for diagnosis. The default
+  encoding and ruleset ID stay 0 (no default Zobrist key changed); encoding bit 3
+  now marks the Guide-literal reading - the opposite of its old meaning - as
+  `T5D_RULES_NO_MOVES_AFTER_SHIFT`, and `T5D_RULES_MOVES_AFTER_SHIFT` is 0.
+  t5d-gate, t5d-measure, t5d-bench, t5d-scan6b and the C API's ruleset 0 follow
+  the default; `--no-moves-after-shift` (t5d-gate also `--rule
+  moves_after_shift=false`) is the diagnostic, `--moves-after-shift` is accepted
+  and ignored. The hypercuboid's default regime is FreeOrder. Tests that assumed
+  the old default ask for it explicitly; E5c's scanner tests pair the
+  Guide-literal reading with the default over the same positions.
+- D8: `Expansion::acting_player()`, `submit_possible()` (the action's obligations
+  met, T5) and `submit_legal()` (and C4, exact), appended to `t5d_expansion` as
+  three `int32_t` after `src_extra` (size 272 -> 288; every earlier offset kept;
+  no board or square feature changed). `t5d_layout` reports every public struct's
+  size and field offsets.
+- `python/t5d/engine/` (the CHECKPOINT 3 ruling: merged together): `capi.py`
+  mirrors the new fields and constants and checks every mirrored struct against
+  `t5d_layout` at load, refusing a library of another stage instead of writing
+  past a buffer; `Expansion` copies the fields; the converter still refuses states
+  past the shift until N5 (the acting-player input and the submit logit).
+- The corpus through t5d-gate's full mode under R8: 41 records in 36-44 s on a
+  shared machine, none over 20 s, peak 131 MiB; the ten records that stopped on Q4
+  read on (cwmtt/futures stops at action 17 on notation, as known); the output is
+  byte-identical to the triage's earlier runs under this reading, so its 115 Q4
+  findings agree with the oracles.
+- Tests: C++ 389 (`--werror`); Python 631 passed, 2 skipped; ruff clean; verify,
+  boundary and the commit-tier gate green (the engine is not yet configured in
+  the gate). The Lazy SMP timing test, run before the merge as the user requires:
+  three runs on E7's branch and three on the merged tree, 5 threads 309-313
+  against 1 thread 293, no retry (`docs/BUILD_LOG.md`, the timing log).
+- `docs/BUILD_LOG.md`: E7 done; issue 48's engine side built; proposed spec edit
+  42 withdrawn (superseded by D8); the long tests still owed.
+- Spec: §8.2, §11.0 item 2 (D8, R8), §2.3 / A3 (issue 48); §15.6 (6b's and M9's
+  default streams are now R8's). No spec text edit needed.
+
+### 2026-10-03 - M7 on real games: the |E| curve from t0database, its verdict, the refused games
+
+- `docs/MEASUREMENTS.md`: the |E| phase curve over the 716 t0database games that
+  replay to the end (901e5be, Q4 as ruled, legal and pseudo-legal destinations),
+  the games' board counts (max 186; 14 reach 100 boards), and M7's verdict from
+  §15.6 as written: on at k = 8 from 50 to 186 boards; under 50 boards inside the
+  ±10% band (1.60x at k = 4, 1.45x at k = 8, against 1.5x), and the kill clause
+  turns on it - stopped for the user; no data above 186 (provisional). The
+  multiplier formula §15.6 leaves unwritten is the one reading that reproduces its
+  own table (m_cached^0.9 · m_dense^0.1). The corpus section is kept, superseded.
+- The 45 refused games classified (no engine change): 13 unfinished final actions
+  (12 completable - 11 with a clock at 0:00 or a timeout - and one played from a
+  position already checkmate; the engine is right under T4, T5, T10 and T11 by
+  every reading the rulebook lists); 15 Standard - Defended Pawn and 2 Two
+  Timelines games under the source's Turn Zero label, and 2 unknown fairy set-ups;
+  10 pawn captures with a doubled file (`ccxd5`), one record without sub-turn
+  separators, one stray token and one dropped turn.
+- `docs/BUILD_LOG.md`: register M7, the parked window, spec issue 26 answered to
+  186 boards, new issues 63-66, proposed edits 51-55, the three questions for the
+  user.
+- Spec: §15.6 "The window (|E| phase curve)", §10.4.2 step 1, register M7 (M4
+  write-back proposed); rules T4, T5, T10, T11.
+
+### 2026-10-03 - Build log: CHECKPOINT 3's rulings, Q2 written out, the timing-test rule
+
+- `docs/BUILD_LOG.md`: the CHECKPOINT 3 rulings (the M14 redesign as a prototype
+  and 6b′ with M15's outcome rules; the unpause order E7 -> E6a -> the gate -> N5;
+  cwmtt/many2's conversion and how it is carried out; t0database approved), what
+  is running and what follows; Q2 quoted with its candidate readings and what each
+  changes (only even-start variants; nothing in today's corpus or t0database
+  distinguishes them); a standing rule and a log for the Lazy SMP timing test
+  before any merge that touches the scanner.
+- Spec: §11.1, §15.6 (M14, M15); rules T10, T13, Q2; no spec change.
+
+### 2026-10-03 - Real game records: t0database, pinned, for the |E| curve
+
+- `data/t0database/`: MageOfficial/t0database's `Data.csv` and `LICENSE` (MIT) at
+  commit `d49da405...`, copied byte for byte (the user approved the download at
+  CHECKPOINT 3): 761 real games, 2021-2025, up to about 186 boards. A README with
+  the pin and hashes, and `to_5dpgn.py`, which writes each game as a 5dpgn record
+  with the source's own header convention (`[Board "Standard - Turn Zero"]` for a
+  game written without headers) and touches no move. `.gitattributes` keeps their
+  bytes; `PROVENANCE.md` lists them (measurement only: not an oracle, not a rules
+  source, not the gate's corpus).
+- Spec: §15.6 "The window (|E| phase curve)" and register M7 (the data the rule
+  needs; spec issue 26); the measurement follows in its own entry.
+
 ### 2026-10-03 - Design documents: the CHECKPOINT 3 ruling, from upstream
 
 - `docs/design/` replaced with the upstream revision recording CHECKPOINT 3: §11.1

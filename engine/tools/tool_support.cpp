@@ -78,17 +78,21 @@ std::optional<std::uint64_t> parse_number(std::string_view text) noexcept {
 
 int ruleset_option(int argc, char** argv, int i, RuleOptions& rules) {
   const char* arg = argv[i];
-  if (std::strcmp(arg, "--moves-after-shift") == 0) {
-    rules.moves_after_shift = true;
+  if (std::strcmp(arg, "--no-moves-after-shift") == 0) {
+    rules.moves_after_shift = false;
     return 1;
+  }
+  if (std::strcmp(arg, "--moves-after-shift") == 0) {
+    return 1;  // the default since R8: accepted, so that old command lines still run
   }
   if (std::strcmp(arg, "--rules") == 0) {
     if (i + 1 >= argc) throw std::invalid_argument("--rules needs an encoding");
     const std::optional<std::uint64_t> e = parse_number(argv[i + 1]);
     if (!e) throw std::invalid_argument(std::string("--rules: not a number: ") + argv[i + 1]);
-    // Combined with any option given before it.
+    // Combined with a --no-moves-after-shift given before it (the default is
+    // true, so either one asking for the Guide-literal reading decides).
     const RuleOptions given = RuleOptions::decode(*e);
-    const bool after_shift = rules.moves_after_shift || given.moves_after_shift;
+    const bool after_shift = rules.moves_after_shift && given.moves_after_shift;
     rules = given;
     rules.moves_after_shift = after_shift;
     rules.validate();

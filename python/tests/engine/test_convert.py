@@ -15,7 +15,7 @@ import numpy as np
 import pytest
 
 from t5d.engine import Game, PresentMismatch, relations_for, to_position, to_position_state
-from t5d.engine.capi import T5D_NO_WINDOW
+from t5d.engine.capi import T5D_NO_WINDOW, T5D_RULES_NO_MOVES_AFTER_SHIFT
 from t5d.engine.play import random_game
 from t5d.net import NetConfig
 from t5d.net.state import PIECE_IDS, RELATION_IDS, TokenLayout
@@ -184,16 +184,20 @@ def test_bands_only_drops_the_origins():
 
 
 def test_a_shifted_unsubmitted_action_is_refused():
-    with Game.variant("Standard") as g:
-        e4 = next(m for m in g.moves() if m.text() == "(0T1)Pe2(0T1)e4")
-        g.apply(e4)
-        x = g.expand()
-        with pytest.raises(PresentMismatch, match="submit the action first"):
-            to_position(x)
-        pos = to_position(x, strict=False)
-        assert not pos.present_matches and pos.move_count == 0 and not pos.may_move
-        g.submit()
-        assert g.position().present_matches
+    """After 1. e4 the present is Black's but the action is White's until submitted - under both
+    readings of Q4 (by default, R8, White may still move, but the one board has been played)."""
+    for rules in (0, T5D_RULES_NO_MOVES_AFTER_SHIFT):
+        with Game.variant("Standard", rules=rules) as g:
+            e4 = next(m for m in g.moves() if m.text() == "(0T1)Pe2(0T1)e4")
+            g.apply(e4)
+            x = g.expand()
+            with pytest.raises(PresentMismatch, match="submit the action first"):
+                to_position(x)
+            pos = to_position(x, strict=False)
+            assert not pos.present_matches and pos.move_count == 0 and pos.may_move == (rules == 0)
+            assert (x.acting_player, x.present & 1, x.submit_possible, x.submit_legal) == (0, 1, True, True)
+            g.submit()
+            assert g.position().present_matches
 
 
 def test_mid_action_before_the_shift_converts():
@@ -239,30 +243,47 @@ def test_scope_tokens_on_a_small_layout():
 
 
 def test_moves_after_the_shift_cannot_be_represented():
-    """Under Q4's other reading (T5D_RULES_MOVES_AFTER_SHIFT) a move may follow the shift: the
-    engine's player to move is not the one the boards' present names, and the network's
-    contract has no feature to say so - refused."""
-    from t5d.engine.capi import T5D_RULES_MOVES_AFTER_SHIFT
+    """Under the default rules (Q4, ruled R8) a move may follow the shift: the engine's acting
+    player is not the one the boards' present names, and the network's contract has no feature
+    to say so until register D8's acting-player input (stage N5) - refused. Under Q4's
+    Guide-literal reading (T5D_RULES_NO_MOVES_AFTER_SHIFT) the same random play never meets a
+    move after the shift."""
     from t5d.engine.play import ROYAL_IDS
 
-    rng = np.random.default_rng(0)
-    with Game.variant("Standard", rules=T5D_RULES_MOVES_AFTER_SHIFT) as g:
+    def first_move_after_the_shift(rules: int):
+        """Random play until a state past the shift has a move: the game, that state's expansion
+        (None if 400 steps found none) and how many shifted states were met."""
+        rng = np.random.default_rng(0)
+        g = Game.variant("Standard", rules=rules)
         g.set_legality(False)
+        shifted = 0
         for _ in range(400):
             x = g.expand(square_features="none")
             if g.info().obligations_met:
+                shifted += 1
+                assert x.submit_possible and x.acting_player == g.info().to_move != x.present & 1
                 if x.move_count:  # a move after the shift
-                    break
+                    return g, x, shifted
                 g.submit()
                 continue
+            assert not x.submit_possible
             g.apply(int(rng.choice(np.flatnonzero(~np.isin(x.moves["captured"], ROYAL_IDS)))))
-        else:
+        return g, None, shifted
+
+    g, found, _ = first_move_after_the_shift(0)
+    with g:
+        if found is None:
             pytest.fail("random play found no move after the shift")
         x = g.expand()
         assert x.may_move and x.move_count > 0
+        assert x.acting_player == x.to_move and x.acting_player != x.present & 1 and x.submit_possible
         with pytest.raises(PresentMismatch):
             to_position(x)
         assert not to_position(x, strict=False).present_matches
+    g, found, shifted = first_move_after_the_shift(T5D_RULES_NO_MOVES_AFTER_SHIFT)
+    with g:
+        assert found is None and shifted > 20  # many shifts (48), never a move after one
+        assert not g.info().may_move or not g.info().obligations_met
 
 
 def test_promotions_are_one_candidate_each_and_one_edge():

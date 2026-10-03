@@ -60,8 +60,10 @@ struct Options {
   std::size_t cap = 1000;
 
   // ---- diagnostics (never for gate.toml) ----------------------------------------
-  /// --rule NAME=VALUE, --moves-after-shift: the rules (default: the
-  /// standard rules; a record's variant and Promotions header still apply).
+  /// --rule NAME=VALUE, --no-moves-after-shift (Q4's Guide-literal reading,
+  /// the same as --rule moves_after_shift=false): the rules (default: the
+  /// standard rules, R8's moves after the shift among them; a record's
+  /// variant and Promotions header still apply).
   RuleOptions rules{};
   /// --pgn NAME=VALUE, --lenient-annotations: the reader's readings.
   PgnOptions pgn{};

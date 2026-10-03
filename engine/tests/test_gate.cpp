@@ -311,6 +311,8 @@ TEST(gate_diagnostics_list_actions_and_read_options) {
   // The rule and reader options, by name.
   RuleOptions rules;
   std::string error;
+  CHECK(gate::set_rule_option(rules, "moves_after_shift=false", &error));
+  CHECK(!rules.moves_after_shift);
   CHECK(gate::set_rule_option(rules, "moves_after_shift=true", &error));
   CHECK(rules.moves_after_shift);
   CHECK(gate::set_rule_option(rules, "activation=consecutive", &error));
@@ -327,13 +329,15 @@ TEST(gate_diagnostics_list_actions_and_read_options) {
   CHECK(gate::set_pgn_option(pgn, "castling_shortcuts=any_king", &error));
   CHECK(pgn.castling_shortcuts == CastlingShortcuts::AnyKing);
   CHECK(!gate::set_pgn_option(pgn, "castling_shortcuts=d_file", &error));
-  // Q4's other reading through the options: an optional move after the shift.
-  gate::Options q4;
-  q4.rules.moves_after_shift = true;
+  // Q4: an optional move after the shift - accepted by default (R8), refused
+  // under the Guide-literal reading given through the options.
+  gate::Options guide;
+  guide.rules.moves_after_shift = false;
   const std::string late = "[Board \"custom\"][5/5/5/5/R4:0:1:w][5/5/5/5/R4:+1:2:w]\n"
                             "1. (0T1)Ra2 (+1T2)Ra2\n";
-  CHECK(run(late, false).lines.back().find("\"reason\":\"illegal_move\"") != std::string::npos);
-  CHECK(run_with(late, q4).lines.back().find("\"status\":\"ok\"") != std::string::npos);
+  CHECK(run(late, false).lines.back().find("\"status\":\"ok\"") != std::string::npos);
+  CHECK(run_with(late, guide).lines.back().find("\"reason\":\"illegal_move\"") !=
+        std::string::npos);
 }
 
 TEST(gate_rejections_name_their_reason) {

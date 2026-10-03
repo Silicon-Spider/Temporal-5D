@@ -216,7 +216,84 @@ which the spec leaves undefined (spec issue 20) - a question for the user, with 
 below. Exact legality would not meet the target at any core count (its tail is
 minutes).
 
-### The window: |E| phase curve (M7) - NO VERDICT: the corpus cannot decide it
+### The window: |E| phase curve (M7) on real games - ON AT k = 8 FROM 50 TO 186 BOARDS; UNDER 50 BOARDS IN THE STOP BAND - STOP; NO DATA ABOVE 186
+
+2026-10-03, engine at 901e5be (Release, g++ 16.2, 383 tests passing). The data:
+t0database (`data/t0database/`, pinned, MIT): `py data/t0database/to_5dpgn.py
+build/t0db` writes its 761 games with the source's own `[Board "Standard - Turn
+Zero"]`; `t5d-measure --moves-after-shift --summary [--legal]` (Q4 as ruled, R8)
+over the **716 that replay to the end**. Positions are action starts, distinct by
+fingerprint and side to move; board counts include the T0 board. Games: the tool's
+grouping gives 674 (it joins identical records, prefixes, and 18 distinct games
+that share a 10-21-position opening); strictly 692 distinct games. Cross-checked
+by an independent re-computation of the summary from the per-position lines.
+
+From LEGAL destinations (the verdict uses these):
+
+| N bucket | positions | games | median N | active T (median) | \|W(8)\| (bands only) | \|W(4)\| | \|E(8)\| median / p95 / max | \|E(4)\| median / p95 / max | games' medians of \|E(8)\| |
+|---|---|---|---|---|---|---|---|---|---|
+| 1-49 | 19,410 | 674 | 24 | 1 | 9 (9) | 5 | 0 / 4 / 20 | 1 / 6 / 22 | 0 [0, 3] |
+| 50-99 | 3,162 | 256 | 60 | 2 | 19 (18) | 11 | 0 / 11 / 30 | 2 / 14 / 32 | 0 [0, 9] |
+| 100-159 | 171 | 14 | 112 | 4 | 36 (32) | 23 | 2 / 21 / 56 | 3 / 24.5 / 57 | 1.75 [0, 12] |
+| 160-239 | 18 | 2 | 169.5 | 2 | 19 (18) | 11 | 2 / 17.15 / 18 | 2 / 24.15 / 25 | 7.5 [1, 14] |
+| 240+ | 0 | 0 | | | | | | | |
+
+PSEUDO-LEGAL (upper bounds), |E(8)| and |E(4)| median / p95 / max: 1-49 0 / 5 / 20
+and 2 / 7 / 22; 50-99 1 / 13 / 33 and 4 / 16 / 35; 100-159 6 / 22.5 / 58 and 9 /
+26.5 / 62; 160-239 8.5 / 17.15 / 18 and 11.5 / 25.3 / 27. Positions whose move
+source lies outside both W(8) and E(8) (legal): 14 / 25 / 26 / 5.
+
+The games: final board count median 44, p95 85, maximum 186 (t0db-0487, 10
+timelines; then 178, 146, 142, 135, 116); 256 reach 50 boards, 14 reach 100, 2
+reach 160, none passes 186. Positions per game median 38, max 100. Moves by bucket:
+87.8% under 50 boards, 11.5% at 50-99, 0.6% at 100-159, 0.1% at 160-186. The 45
+refused games, measured up to their refusal, would add 644 / 230 / 2 / 0 positions
+and change no verdict.
+
+**The verdict, §15.6's rule as written** (no bar, ceiling or threshold moved). §15.6
+does not write the multiplier's formula; the one that reproduces its own table and
+its "~1.6 / 2.1 / 3.0 / 4.0" at |E| ≈ 25 is the log-weighted mix
+m = m_cached^0.9 · m_dense^0.1, from the N3 cost model (`python/t5d/net/cost.py`:
+T = 66N + 16 tokens, attention 4·Tq·Tk·d·L, linear 40·Tq·d²·L, d = 256, L = 16),
+so m_cached = (T_N + 2560) / (T_S + 2560) and m_dense = T_N(T_N + 2560) /
+(T_S(T_S + 2560)) at scope S = W + median |E| boards. It reproduces the k = 8
+ceilings as none / 31.0 / 76.3 / 166.9 / 285.2 (spec: none / 31 / 77 / 169 / 290)
+and the k = 4 ceilings 23.7 / 59.0 / 108.3 / 206.9 / 333.2 (23 / 59 / 109 / 209 /
+338); the harmonic reading falls 1-8 low, the arithmetic one gives 100 boards a
+ceiling the spec says it has not. Confirmation asked of the user.
+
+| Phase | N | k = 8: W + \|E\| | m (cached, dense) | ceiling \|E(8)\| | k = 4: W + \|E\| | m | ceiling \|E(4)\| | Verdict |
+|---|---|---|---|---|---|---|---|---|
+| 1-49 | 24 | 9 + 0 | **1.445** (1.312, 3.442) | −1.1 | 5 + 1 | **1.603** | 2.9 | on at k = 4 - **inside the ±10% band: STOP** |
+| 50-99 | 60 | 19 + 0 | 1.913 (1.707, 5.343) | 12.4 | 11 + 2 | 2.215 | 20.4 | **on at k = 8** |
+| 100-159 | 112 | 36 + 2 | 2.184 (1.961, 5.755) | 31.0 | 23 + 3 | 2.686 | 44.0 | **on at k = 8** |
+| 160-239 (data to 186) | 169.5 | 19 + 2 | 4.276 (3.474, 27.76) | 87.6 | 11 + 2 | 5.172 | 95.6 | on at k = 8 - **2 games** (t0db-0723 4.4x at 2 timelines; t0db-0487 1.73x at 9-10) |
+| 240+ | - | - | - | - | - | - | - | **no data: provisional** |
+
+Pseudo-legal |E| gives the same verdicts (1-49 at k = 4: 1.545). 50-99 and 100-159
+are robust: per position at k = 8 the median multiplier is 1.86 and 2.10, and 82%
+and 100% of positions clear the bar. 1-49 is not: per position its median is 1.45
+at k = 4 (46% clear the bar); under the harmonic formula it would be off; in
+10-board phases it splits - off under 20 boards, k = 4 at 20-29 (1.60x), k = 8
+from 30 (1.73-1.97x).
+
+**The kill clause** (weight each phase by its unwindowed per-node FLOPs × the
+moves spent in it; a 90/10 cached/dense blend, cached-only and dense-only shown):
+with 1-49 on (k = 4) the on-phases carry 100% - not killed; with 1-49 off they
+carry 21.8% blended (19.6% cached, 41.4% dense; 12.2% of moves) - **killed**; with
+10-board phases 69.8% blended (50.7% if 20-29 were also off). It rests on the human
+games' phase distribution - 88% of moves under 50 boards, the opposite of the
+spec's "the late game dominates" - with nodes per move assumed equal across phases.
+
+**Verdict: on at k = 8 from 50 to 186 boards; under 50 boards inside the ±10%
+band, and the kill clause turns on that phase - STOP for the user** (the formula,
+the phase definition and the kill clause's distribution: questions in
+`docs/BUILD_LOG.md`). Above 186 boards: no public data - provisional (the user's
+ruling). The spec's "at ~100 boards it cannot pay at k = 8" does not hold in real
+games, which run 4 active timelines there (the table assumes 6).
+
+### The window on the corpus (M7) - superseded by the real games above
+
 
 `t5d-measure --summary` over the 41 corpus records (2026-10-02, 2740e66),
 PSEUDO-LEGAL destinations (every |E| an upper bound), distinct positions, records
@@ -246,6 +323,19 @@ real games run 16-24 active timelines where §15.6's table assumes 7-12 - so W
 itself, not |E|, dominates the scope (at 160-239 boards W(8) = 122 against the
 table's 69). The rule needs real game records (spec issue 26; requested from the
 user); the window code stays parked (M5, M7).
+
+### Engine E7 - the gate's full mode on the corpus under R8 (2026-10-02/03)
+
+Machine: dev, g++ 16.2 -O2. `t5d-gate --cap 1000` with the default detector
+portfolio, one process at a time, 600 s limit per record, the default rules (now
+R8). Shared machine: other agents' t5d-scan6b runs during the first run, a long
+test beside the second. 41 records: 36.1 s in all (first run), 43.7 s (second).
+Slowest records: cwmtt/niceAndrey 14.3 s (19.9 s) for 122 positions, slowest
+position 0.38 s; cwmtt/100_timelines 4.9 s (5.5 s), slowest position 1.9 s, 128
+MiB working set; cwmtt/wide 4.6 s; cwmtt/manyChecks 4.4 s (slowest position 1.2 s,
+101 MiB). Every other record under 2 s; peak private memory 131 MiB. Under
+`--no-moves-after-shift` (the Guide-literal reading): 10.4 s, output identical to
+E4's default.
 
 ### The scanner: 6b (M8, M12) - RE-RUN AFTER THE OPTIMISATION PASS: 50-199 BOARDS FAIL - M12 OUTCOME: STOP
 

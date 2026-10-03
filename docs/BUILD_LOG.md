@@ -15,33 +15,62 @@ M5 - building it would break a rule).
 
 ## Where things stand
 
-### STOPPED 2026-10-03 - M12's outcome: 6b fails at 50-199 boards after the optimisation pass
+### CHECKPOINT 3 - stopped 2026-10-03 on 6b's re-run, ruled the same day; the run resumed
 
-Under the user's pre-registered rule (M12): "50-199 boards fail -> STOP: redesign
-the verification layer". The re-run on a quiet machine (docs/MEASUREMENTS.md, 6b):
-the 50 ms root scan at the scanner's design budget (5 threads, Lazy SMP) resolves
-5 forcing half-turns in 76.7% of positions under 50 boards, but 31.4% at 50-99,
-24.7% at 100-199 and 2.4% at 200+ (the first run: 25.7 / 18.6 / 2.4). Above 50
-boards it reaches that depth essentially only where it proves a result. Rung 1 and
-quiet-leaf reach fail in every range (drop rung 1; NNUE v2 deferred).
+The run stopped under M12's pre-registered rule: after the bounded optimisation
+pass (E5c), at the scanner's design budget (5 threads, Lazy SMP), the 50 ms root
+scan resolved 5 forcing half-turns in 76.7% of positions under 50 boards but
+31.4% at 50-99, 24.7% at 100-199 and 2.4% at 200+; rung 1 and quiet-leaf reach
+failed everywhere (MEASUREMENTS, 6b). The user's rulings (design documents
+committed 1e3a210: §11.1 "The redesign after 6b", §15.6's CHECKPOINT 3 block,
+register M14, M15, H1, H6, H10, reversal 22):
+- **The verification redesign (M14), a prototype until 6b′ decides it:** split
+  the scanner by channel - exactness (turn completion, all evasions, royal-capture
+  checks) only on lines that can end in a proof; the estimate channel a cheap,
+  inexact local search without turn completion, its outputs soft priors. The proof
+  channel: depth-limited df-pn over the semimove-decomposed turn tree with
+  hypercuboid-pruned completion, answering proven / disproven / unknown (H37).
+  Incremental royal-attack maps. Then **6b′ (M15)** - same positions, per range,
+  5 threads, 50 ms - with its outcome rules applied: every range from 50 boards up
+  passes -> adopt (below 50, keep whichever of brute force and df-pn decides more
+  roots); 50-199 pass, 200+ fail -> phase-dependent (proofs only at the root and
+  PV transitions above 200; the gap recorded in §13); **50-199 fail -> STOP** for
+  a design review. Rung 1 stays dropped and the NNUE deferred until then.
+- **Unpause, in this order:** merge E7 together with the Python binding's update;
+  rebase E6a onto it (the expansion struct changed) and merge after review; run
+  the gate with the engine configured; then N5.
+- **Q2:** quote the question, the candidate readings and what each changes
+  (below, "Waiting on the user").
+- **cwmtt/many2:** "the cwmtt driver converts the export form to the canonical
+  5dpgn form from the pinned notation spec; if it expresses something the spec
+  can't, mark the record unsupported. The engine's parser is not extended."
+  Carried out as: cwmtt's side of the harness converts that record's text, and
+  every source - the engine included - reads the converted text (converting only
+  what cwmtt reads would change nothing: cwmtt reads both forms). The goldens it
+  changes are re-recorded on a quiet machine.
+- **Game records: approved** - MageOfficial/t0database (MIT) downloaded, pinned
+  and recorded (`data/t0database/`, 901e5be); the |E| curve re-run on it. It tops
+  out around 186 boards: the window verdict above that stays provisional.
+- **The Lazy SMP timing test** runs before any merge that touches the scanner, on
+  a machine with 6+ hardware threads, each run logged ("The Lazy SMP timing test
+  log", below).
 
-**For the user:** the verification layer's redesign (§11.1's kill condition). The
-spec names df-pn as the leading candidate above the brute-force regime (§15.6,
-§14.4; its repetition gate is gone, H39); the measurement points at where the
-scanner's nodes now go (completion fallbacks 38-64% of nodes at 100+ boards,
-royal-capture scans 24%, in-check listings 23%).
-
-**Paused, untouched until the decision:**
-- engine E7 (Q4 as the default; D8's acting player and submit availability in the
-  expansion and C API), committed on branch `worktree-agent-a8f46f56bb33bef09`
-  (97d2cd1, 97bac3e, 285f28f), not merged. It must merge together with the Python
-  binding's update (the expansion struct grew from 272 to 288 bytes; the Q4
-  encoding bit now means the Guide-literal reading); one long test remains to
-  re-run.
-- engine E6a (the search core), on branch `worktree-agent-a2dfd073da81ec01e`, its
-  self-play edit reviewed and committed (1c6956d).
-- Not started: the gate with the engine configured (it waits on E7), network N5
-  (D8's submit logit and acting-player input, C23 fixed), N3's CPU wall times.
+**Done since the ruling (2026-10-03):** engine **E7 merged** with the Python
+binding (Q4 as ruled is the default; D8's acting player and submit availability
+in the expansion; `t5d_layout`, checked by the binding at load); the
+**t0database analysis** (M7 measured on real games - under 50 boards in the STOP
+band, waiting on the user; the 45 refused games classified, the 13 present-shift
+ones unfinished final turns, no engine defect); the **many2 conversion** built and
+reviewed on branch `worktree-agent-aa6c512c8bab6f3a8` (2a0b207), not merged - it
+merges with the re-recorded golden files. **Running:** engine **E8**, the M14
+prototype and the 6b′ tool. **Then:** rebase E6a onto main, review, merge; on a
+quiet machine, the decisive 6b′ run (STOP if 50-199 fail) and the many2 merge with
+`golden --write --repeat 2`; the gate with the engine configured; N5; N3's CPU
+wall times. **Long tests owed on main:** E5c's
+`long_scanner_evasion_probe_keeps_the_proofs` and
+`long_scanner_lazy_smp_no_false_proofs` (not yet run on the merged code) and
+`long_scanner_proofs_under_every_alternative_ruleset` (over 1.5 h under either
+reading; never run to completion).
 
 ### CHECKPOINT 2 - stopped 2026-10-02 on 6b, ruled the same day; the run resumed
 
@@ -127,35 +156,48 @@ with branch origins, C23); N3's CPU wall times.
   search (rung 1) and Lazy SMP, end-to-end play with the network's random weights,
   the NNUE only if 6b passes (M8).
 - **Waiting on the user:**
-  - **Q2** (rulebook): "How do initial timelines count when a variant starts with
-    several (Two Timelines, Tactician, Strategos, Formations, Invasion,
-    Battleground)? Does either side start as having "created" one? No source
-    states the rule." The engine's default credits neither side (`initial_credit
-    = None`); the alternative (`MinusZeroToBlack`) rests on the 5dpgn author's
-    unverified "Internally in the game, -0 is -1".
-  - **cwmtt/many2's export-form move**: the ruling says "the engine does not read
-    it: normalise it in the cwmtt driver". The gate's difference there is the
-    engine refusing the record's text (`(0T1)Pe2(0T1)e3`) where cwmtt played it;
-    normalising the text inside cwmtt's driver changes only what cwmtt reads, not
-    what the engine is given, so it would not remove that difference - asked which
-    is meant (the harness normalising the record for every source; cwmtt's driver
-    refusing the export form as the engine does; or an entry).
-  - **Real game records - proposed (2026-10-02), awaiting approval to download:**
-    (1) **MageOfficial/t0database** (github.com/MageOfficial/t0database, MIT,
-    "Copyright (c) 2022 MageOChicken"), `Data.csv` at commit
-    `d49da4054d02fec577fd3c53368993fe453c586e` (blob `35eb1010d066…`, 608,066
-    bytes): 761 real human games, 2021-2025 (World Championships 2022 and 2024,
-    leagues, tournaments), 5dpgn move text without headers (the repository's own
-    server adds `[Board "Standard - Turn Zero"]`), 468 of them with the official
-    client recorder's clock comments; about 186 boards at most - 19 games reach 100,
-    none 200. Before use: confirm with its author that MIT covers the games and where
-    they came from (record it in PROVENANCE.md); refuse, never edit, rows that do
-    not replay. (2) chessin5d.net's game server - possibly the largest archive - no
-    longer answers; it needs its operator (and 5d-chess-js, the pinned oracle, must
-    not be used to convert it on the engine side). (3) The community Discord servers -
-    only with the admins' and players' permission. No public source reaches 200-600
-    boards; the window verdict above 200 boards needs self-play or permission-based
-    sources. M7 stays provisional.
+  - **M7 - the window under 50 boards is in the STOP band** (2026-10-03,
+    MEASUREMENTS). §15.6: "per phase, the window is on at k = 8 where the measured
+    median |E| is under the k = 8 ceiling, on at k = 4 where only the k = 4 ceiling
+    is met, and off where neither is ... killed outright if the phases where it is
+    on carry under half the compute". On t0database's real games the window is on
+    at k = 8 from 50 to 186 boards (1.91x, 2.18x, 4.28x against 1.5x). Under 50
+    boards it is 1.60x at k = 4 and 1.45x at k = 8 - inside ±10% - and the kill
+    clause turns on that phase: 100% of compute on-phase if it is on, 21.8% (killed)
+    if it is off, 69.8% with 10-board phases. Three questions: (1) which reading
+    applies - (a) the 50-board bucket's median: on at k = 4; (b) finer phases (e.g.
+    10 boards): off under 20 boards, not killed; (c) the early game off and the
+    window killed under the human-game distribution; (2) is the multiplier
+    m = m_cached^0.9 · m_dense^0.1 (the only reading that reproduces §15.6's
+    table); (3) whose phase distribution weights the kill clause - human games
+    spend 88% of their moves under 50 boards, and self-play cannot be measured yet.
+    The window code stays parked until then; nothing else waits on it.
+  - **Q2** (rulebook) - *the question:* "How do initial timelines count when a
+    variant starts with several (Two Timelines, Tactician, Strategos, Formations,
+    Invasion, Battleground)? Does either side start as having "created" one? No
+    source states the rule." The only evidence is the 5dpgn author's two unverified
+    remarks about the program: "Internally in the game, `-0` is `-1`", and the
+    displayed index "gives a hint about who has or hasn't branching priority"
+    [25]. *The candidate readings:* **(A) none** (the engine's default,
+    `initial_credit = None`): initial timelines are nobody's creations; the count
+    rule (T10) counts created timelines only. **(B) "-0 is -1"**
+    (`MinusZeroToBlack`): in a game that starts with an even number of timelines,
+    Black counts as having created one already. (A mirror reading, White
+    credited, has no source at all and is not implemented.) *What each changes:*
+    only games that start with an even number of timelines - Two Timelines,
+    Tactician, Strategos, Formations, Invasion - and there only which branch is
+    active. Under (A) each side's first branch is active, and a side's second
+    only once the opponent has branched; under (B) White may create two active
+    timelines before Black branches, and Black's first branch is inactive until
+    White has branched once. Activity decides which boards are mandatory (R9),
+    where the present is, and which boards count for check (H36), so it changes
+    legal actions, check and mate in those variants. Odd starts (Battleground's
+    three timelines) are the same under both. A non-default choice changes the
+    ruleset ID and the Zobrist key. *On today's evidence nothing distinguishes
+    them:* the corpus's only even-start record (`notation/invasion`) is a
+    variant the engine does not set up, the Battleground record answers
+    identically under both, and t0database's games are all Standard - Turn Zero.
+    It matters only if self-play or the gate plays those variants.
 
 ## The brief - standing rules for every session
 
@@ -186,6 +228,11 @@ The run is one continuous build of the whole engine, untrained, per §15, until
   pseudo-legal upper bound that keeps the window decides early, one that kills it
   waits for the legal curve; the NNUE and the scanner's pruning only after 6b
   passes (M8); if movegen fails M9, fix movegen before building search on it.
+- **The Lazy SMP timing test** (`scanner_lazy_smp_reaches_the_single_threads_depth`,
+  which skips under 6 hardware threads): run it before any merge that touches
+  the scanner (`engine/src/scanner*`, `search*`, `include/t5d/scanner.hpp`,
+  `search.hpp`, or their tests), on a machine with 6+ hardware threads, and log
+  every run in "The Lazy SMP timing test log" (the user, CHECKPOINT 3).
 - **STOP and wait only when:** 6b's root-scan test fails (M8); a §15.6 result lands
   within ±10% of its threshold; the pre-flight fails or a problem blocks all
   remaining work; or everything else is done (then report for sign-off, proof
@@ -201,6 +248,19 @@ The run is one continuous build of the whole engine, untrained, per §15, until
   rewrite pushed history. No absolute user paths in tracked files. **Never edit the
   spec or the register** - propose edits below; they are applied upstream.
 - Licence: GPL-3.0 (keep LICENSE).
+
+## The Lazy SMP timing test log
+
+Each run of `scanner_lazy_smp_reaches_the_single_threads_depth` before a merge
+that touches the scanner: random Standard and Two Timelines positions (the count
+is printed) at 40 ms each, resolved depth summed over them
+at 1 and at 5 threads (a proof or an exhausted tree counts 17); it passes when 5
+threads reach at least one thread's sum (one retry on a shared machine).
+
+| Date | Merge | Commit tested | Machine | Positions | 1 thread | 5 threads | Retry | Result |
+|---|---|---|---|---|---|---|---|---|
+| 2026-10-03 | E7 | 2e7ee18 (E7's branch, main merged in) | dev, 24 logical; E8 running; load 5-12% before, 12-26% during | 32 | 293 | 311 / 313 / 309 (three runs) | none | pass x3 |
+| 2026-10-03 | E7 | main + E7, merged tree before the commit | dev, 24 logical; E8 running; load 23% | 32 | 293 | 311 / 311 / 313 (three runs) | none | pass x3 |
 
 ## Environment
 
@@ -675,7 +735,7 @@ for game records.
 
 | ID | Status | Notes |
 |---|---|---|
-| M7 | measured, no verdict | The corpus's curve recorded (MEASUREMENTS); 2-3 games above 160 boards, none above 400 - game records requested (spec issue 26) |
+| M7 | measured - STOP | On real games (t0database, 716 games, max 186 boards): on at k = 8 from 50 to 186 boards; under 50 boards inside the ±10% band and the kill clause turns on it - waiting on the user; above 186 provisional (MEASUREMENTS) |
 | M8 | measured - STOP | 6b re-run (M12): root scan 76.7% / 31.4% / 24.7% / 2.4% by range (< 50 / 50-99 / 100-199 / 200+); rung 1 and quiet-leaf reach fail everywhere; stand-pat valid |
 | M12 | applied - STOP | The bounded optimisation pass (E5c) and the re-run at 5 threads, Lazy SMP: 50-199 boards fail -> STOP, redesign the verification layer |
 | M13 | applied | 8 cores per GPU: M9 judged on 2 expansion cores (passes, 1.87x), the scanner measured at 5 |
@@ -691,11 +751,12 @@ Closed by them: repetition (H39 - there is none) and castling's cross-board atta
 option (H40 - the per-board test is the rule, so `CastlingAttacks::AnyBoard` goes).
 
 Still parked:
-- the window code (C5, C7): until the |E| verdict (M5, M7);
+- the window code (C5, C7): until the |E| verdict (M5, M7) - measured on real
+  games 2026-10-03; under 50 boards it waits on the user;
 - the NNUE (F4): until 6b passes (M5, M8);
-- the M7 verdict's phases above about 130 boards: the corpus's real games end
-  there (spec §10.4.2 asks for real game records) - waiting on game records from
-  the user.
+- the M7 verdict's phases above 186 boards: no public game record reaches them
+  (t0database's maximum is 186); provisional until self-play or permission-based
+  sources reach 200-600 boards.
 
 ## Spec issues (wrong, ambiguous, contradictory, silent)
 
@@ -873,7 +934,10 @@ decision), and what is parked.
     in the 100-159 / 160-239 / 240-399 / 400+ buckets, at 8 / 16 / 24 timelines
     against §15.6's assumed 7-12, and only under the Q4 reading the engine does
     not use by default. §10.4.2 asks for real game records; requested from the
-    user.
+    user. *Answered to 186 boards (2026-10-03):* t0database's 716 games that replay
+    - 14 reach 100 boards, 2 reach 160, none passes 186; active timelines by bucket
+    1 / 2 / 4 / 2 where §15.6's table assumes 6-12. M7 is decided to 186 boards
+    except under 50 (the STOP band); provisional above.
 27. **The STOP band is the brief's, not the spec's.** "A §15.6 result within
     ±10% of its threshold" stops the run; the band's reading (relative to the
     threshold) is recorded in step 5. Not a spec edit.
@@ -965,7 +1029,11 @@ decision), and what is parked.
     opponent's turn. Under the default rules such a state has no moves (Q4), so
     search submits first; under Q4's other reading it has moves and the network
     cannot represent it - the converter refuses it (`PresentMismatch`). Proposed
-    spec edit 42. Bears on the Q4 ruling.
+    spec edit 42. Bears on the Q4 ruling. *Ruled (D8, CHECKPOINT 2):* a global
+    acting-player input and a submit action. The engine side is built (E7:
+    `acting_player`, `submit_possible`, `submit_legal` in the expansion); the
+    network side (the input, the submit logit, and dropping `PresentMismatch`) is
+    N5.
 49. **§8.1's "generator-supplied legal moves"**: the C API offers pseudo-legal
     moves (spec issues 28, 46), so the policy scores pseudo-legal moves until the
     expansion's move set is decided. Proposed spec edit 41.
@@ -1011,6 +1079,23 @@ decision), and what is parked.
     rests on the corpus's many small positions; above 50 boards - the design's
     regime - the root scan fails (preliminary). M7's window rule is per phase.
 62. **§15.6's rung-1 "measured evaluation rate"** does not exist without a GPU.
+63. **§15.6 does not write the window's multiplier formula.** "A 1.5× all-in
+    multiplier, computed with 90% of compute at the cached per-node cost ... and
+    10% at the dense cost": of three readings, only the log-weighted
+    m = m_cached^0.9 · m_dense^0.1 reproduces §15.6's own ceilings and multipliers
+    (MEASUREMENTS, M7). Only the early phase's verdict depends on the choice.
+64. **"Phase" is undefined for M7.** The rule and the kill clause are "per phase";
+    whether a phase is a board-count bucket (which?), and whether its median N or
+    each position's own multiplier stands for it, decides the early game: the
+    50-board bucket is on at k = 4 (1.60x), 10-board phases put under 20 boards
+    off, the per-position median is 1.45x.
+65. **The kill clause's weights are unspecified**: whose phase distribution (human
+    games spend 88% of their moves under 50 boards; self-play cannot be measured
+    yet) and which per-move cost (cached, dense or blended). The spec's "the late
+    game dominates" is false for the only real games there are.
+66. **(Tool, not spec)** `t5d-measure`'s game grouping joins distinct games that
+    share an opening of 10-21 positions (674 groups for 692 distinct real games);
+    harmless for the corpus, misleading for a game database. To fix in the tool.
 
 ## Proposed spec edits
 
@@ -1141,9 +1226,10 @@ says now, what it should say, why.
     and en passant attack tests (H40)" (issue 47).
 41. **§8.1**: say whether the pointer head scores pseudo-legal moves, legal first
     moves, or actions - with D2 and spec issues 28, 46 (issue 49).
-42. **§2.3 / A3**: either add the player to move as a global input feature, or
-    state that leaves are evaluated only at action boundaries or before the
-    present shifts - needed under Q4's other reading (issue 48).
+42. *Withdrawn - superseded by D8 (CHECKPOINT 2), which the upstream documents
+    now carry.* ~~§2.3 / A3: either add the player to move as a global input
+    feature, or state that leaves are evaluated only at action boundaries or
+    before the present shifts - needed under Q4's other reading (issue 48).~~
 43. **§6, §15.6 ("expansion - legal moves") and §11.0 item 3**: "legal moves" is
     not defined beyond R1. Proposed: "the moves not proved illegal - each marked
     legal or unknown - by the rules engine's sound tiers under a budget (exact on
@@ -1162,6 +1248,21 @@ says now, what it should say, why.
     61, 62).
 49. **§15.3 "Scanner nodes/s"**: write back (M4) after the quiet run.
 50. **Register H6**: a 5D piece-value table, pending a decision (issue 56).
+51. **§15.6 "The window"**: write the multiplier's formula -
+    m = m_cached^0.9 · m_dense^0.1 with T = 66N + 16 tokens and the N3 cost model
+    - once the user confirms it (issue 63).
+52. **§15.6 "The window"**: define a phase for the rule and for the kill clause,
+    per the user's answer (issue 64), and whose distribution weights the kill
+    clause (issue 65).
+53. **§15.6's window table and the register (M4 write-back)**: add the measured
+    rows - N 24 / 60 / 112 / 170, active T 1 / 2 / 4 / 2, W(8) 9 / 19 / 36 / 19,
+    median |E(8)| 0 / 0 / 2 / 2, k = 8 ceilings −1.1 / 12.4 / 31.0 / 87.6, k = 4
+    ceilings 2.9 / 20.4 / 44.0 / 95.6 - and qualify "the late game dominates" and
+    "at ~100 boards it cannot pay at k = 8" against them.
+54. **§10.4.2 step 1**: the |E| phase curve is measured on real games to 186
+    boards; above that, provisional.
+55. **The register's open item "Real game records for the |E| curve"**: records
+    now measured (t0database); the verdict is provisional only above 186 boards.
 
 ## Session log
 
