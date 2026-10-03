@@ -475,3 +475,46 @@ TEST(capi_search_proves_a_mate_in_one) {
     }
   }
 }
+
+TEST(capi_search_shares_its_cache_and_runs_within_budgets) {
+  // C14 through the binding: a fresh search per move sharing the cache
+  // (t5d_search_new_sharing) finds what the first one evaluated.
+  const Game g = variant_game("Standard - Two Timelines");
+  t5d_search_params p = quick_params();
+  const SearchHandle first = new_search(g.get(), p);
+  REQUIRE_EQ(t5d_search_run(first.get(), T5D_EVALUATOR_UNIFORM, 0, 200, nullptr), T5D_OK);
+  t5d_search_summary a;
+  REQUIRE_EQ(t5d_search_info(first.get(), &a), T5D_OK);
+  CHECK(a.cache_entries > 0);
+  CHECK(a.cache_bytes > 0);
+  CHECK(a.memory_bytes > 0);
+  CHECK_EQ(a.last_stop, T5D_STOP_PLAYOUTS);
+  t5d_search* raw = nullptr;
+  REQUIRE_EQ(t5d_search_new_sharing(first.get(), g.get(), 1, &p, &raw, nullptr), T5D_OK);
+  const SearchHandle second(raw);
+  REQUIRE_EQ(t5d_search_run(second.get(), T5D_EVALUATOR_UNIFORM, 0, 200, nullptr), T5D_OK);
+  t5d_search_summary b;
+  REQUIRE_EQ(t5d_search_info(second.get(), &b), T5D_OK);
+  CHECK(b.cache_hits > 0);
+  CHECK_EQ(b.evaluations, std::uint64_t{0});  // the same search again: everything cached
+  CHECK_EQ(t5d_search_new_sharing(nullptr, g.get(), 1, &p, &raw, nullptr), T5D_ERR_ARGUMENT);
+  // A run within a node budget stops there, and says so.
+  const SearchHandle s = new_search(g.get(), p);
+  t5d_search_limits limits{T5D_NO_LIMIT, T5D_NO_LIMIT, 300, T5D_NO_LIMIT};
+  int32_t stop = -1;
+  REQUIRE_EQ(t5d_search_run_limits(s.get(), T5D_EVALUATOR_RANDOM, 3, &limits, &stop, nullptr), T5D_OK);
+  CHECK_EQ(stop, T5D_STOP_NODES);
+  t5d_search_summary c;
+  REQUIRE_EQ(t5d_search_info(s.get(), &c), T5D_OK);
+  CHECK(c.nodes >= 300);
+  CHECK_EQ(c.last_stop, T5D_STOP_NODES);
+  limits = t5d_search_limits{T5D_NO_LIMIT, T5D_NO_LIMIT, T5D_NO_LIMIT, c.memory_bytes};
+  REQUIRE_EQ(t5d_search_run_limits(s.get(), T5D_EVALUATOR_RANDOM, 3, &limits, &stop, nullptr), T5D_OK);
+  CHECK_EQ(stop, T5D_STOP_MEMORY);
+  CHECK_EQ(t5d_search_run_limits(s.get(), T5D_EVALUATOR_RANDOM, 3, nullptr, &stop, nullptr), T5D_ERR_ARGUMENT);
+  size_t v = 0;
+  REQUIRE_EQ(t5d_search_layout("t5d_search_limits", nullptr, &v), T5D_OK);
+  CHECK_EQ(v, sizeof(t5d_search_limits));
+  REQUIRE_EQ(t5d_search_layout("t5d_search_summary", "last_stop", &v), T5D_OK);
+  CHECK_EQ(v, offsetof(t5d_search_summary, last_stop));
+}

@@ -92,6 +92,21 @@ struct Edge {
   double wq2 = 0;             // weighted sum of squares
 };
 
+// A heap block's bookkeeping, about (malloc's header and alignment), and a
+// make_shared control block's.
+constexpr std::size_t kHeapBlock = 16;
+constexpr std::size_t kControlBlock = 16;
+
+// What a state holds on the heap that the state it came from does not: its
+// own list of timeline pointers and, for each board its last step made (a
+// move, or a whole action), the board and the timeline object holding it
+// (everything older is shared, t5d/multiverse.hpp).
+inline std::size_t state_heap_bytes(const GameState& state, std::size_t new_boards) noexcept {
+  return static_cast<std::size_t>(state.multiverse().timeline_count()) * sizeof(TimelineRef) + kHeapBlock +
+         std::max<std::size_t>(new_boards, 1) *
+             (sizeof(Timeline) + kControlBlock + kHeapBlock + sizeof(Board) + kControlBlock + kHeapBlock);
+}
+
 struct Node {
   explicit Node(GameState s) : state(std::move(s)) {}
 
@@ -127,6 +142,8 @@ struct Node {
   // once listed (empty: not listed yet).
   std::vector<Move> action_moves;
   std::vector<std::uint32_t> action_offsets;
+  std::size_t bytes = 0;      // memory_bytes' count for this node (account)
+  std::size_t new_boards = 1; // the boards the edge into it made (its state's own)
 
   std::size_t action_count() const noexcept {
     return action_offsets.empty() ? 0 : action_offsets.size() - 1;
@@ -247,6 +264,18 @@ std::uint64_t node_key(const GameState& state, NodeKey keying) noexcept {
     }
   }
   return key;
+}
+
+const char* stop_reason_name(StopReason reason) noexcept {
+  switch (reason) {
+    case StopReason::Playouts: return "playouts";
+    case StopReason::Evaluations: return "evaluations";
+    case StopReason::Finished: return "finished";
+    case StopReason::Exhausted: return "exhausted";
+    case StopReason::Nodes: return "nodes";
+    case StopReason::Memory: return "memory";
+  }
+  return "?";
 }
 
 const char* choice_reason_name(ChoiceReason reason) noexcept {
@@ -383,16 +412,39 @@ const Evaluation* EvalCache::find(std::uint64_t key, std::uint64_t epoch, const 
   return nullptr;
 }
 
+std::size_t EvalCache::entry_bytes(const GameState& state, const Evaluation& evaluation,
+                                   std::size_t new_boards) noexcept {
+  // The map's node (key, entry, link), the logits' block, and the state's own
+  // heap - what the entry keeps alive once its search is gone.
+  return sizeof(std::uint64_t) + sizeof(Entry) + sizeof(void*) + detail::kHeapBlock +
+         evaluation.logits.capacity() * sizeof(float) + detail::kHeapBlock +
+         detail::state_heap_bytes(state, new_boards);
+}
+
 void EvalCache::insert(std::uint64_t key, std::uint64_t epoch, const GameState& state,
-                       const Evaluation& evaluation) {
-  // An entry's cost, estimated: its logits, its value, the state's timeline
-  // list (boards are shared with the search), and the map's overhead.
-  const std::size_t cost = evaluation.logits.size() * sizeof(float) + sizeof(Entry) +
-                           static_cast<std::size_t>(state.multiverse().timeline_count()) * 24 + 64;
-  if (entries_.size() >= capacity_ || bytes_ + cost > max_bytes_) return;
+                       const Evaluation& evaluation, std::size_t new_boards) {
+  if (entries_.size() >= capacity_) return;
   if (find(key, epoch, state, true) != nullptr) return;
-  entries_.emplace(key, Entry{state, epoch, evaluation});
-  bytes_ += cost;
+  Entry e{state, epoch, evaluation, 0};
+  e.evaluation.logits.shrink_to_fit();
+  e.bytes = entry_bytes(e.state, e.evaluation, new_boards);
+  if (bytes_ + e.bytes > max_bytes_) return;
+  bytes_ += e.bytes;
+  entries_.emplace(key, std::move(e));
+}
+
+std::size_t EvalCache::purge_fewer_boards(std::size_t boards) {
+  std::size_t removed = 0;
+  for (auto it = entries_.begin(); it != entries_.end();) {
+    if (it->second.state.multiverse().board_count() < boards) {
+      bytes_ -= it->second.bytes;
+      it = entries_.erase(it);
+      ++removed;
+    } else {
+      ++it;
+    }
+  }
+  return removed;
 }
 
 // ---------------------------------------------------------------------------
@@ -417,6 +469,7 @@ struct Search::Impl {
   std::uint64_t notified_generation_ = 0;
   bool noise_applied_ = false;
   std::vector<Step> path_;
+  std::size_t tree_bytes_ = 0;  // the nodes' counts (Node::bytes), summed
 
   Impl(GameState root, const SearchParams& params, bool turn_start,
        std::shared_ptr<EvalCache> cache)
@@ -432,6 +485,31 @@ struct Search::Impl {
     }
     root_ = make_node(std::move(root), turn_start);
     register_node(root_);
+    purge_cache();
+  }
+
+  // The evaluation cache's entries behind the root, gone for good.
+  void purge_cache() {
+    if (cache_) stats_.cache_purged += cache_->purge_fewer_boards(nodes_[root_].state.multiverse().board_count());
+  }
+
+  // A node's memory: itself, its edges, its actions' moves, its state's own heap.
+  static std::size_t node_bytes(const Node& n) noexcept {
+    return sizeof(Node) + n.edges.capacity() * sizeof(Edge) + n.action_moves.capacity() * sizeof(Move) +
+           n.action_offsets.capacity() * sizeof(std::uint32_t) + 3 * detail::kHeapBlock +
+           detail::state_heap_bytes(n.state, n.new_boards);
+  }
+
+  void account(Node& n) noexcept {
+    const std::size_t b = node_bytes(n);
+    tree_bytes_ = tree_bytes_ - n.bytes + b;
+    n.bytes = b;
+  }
+
+  std::size_t memory_bytes() const noexcept {
+    // The MCGS table: a node per entry (key, id, link) and its bucket.
+    constexpr std::size_t kTableEntry = sizeof(std::uint64_t) + sizeof(NodeId) + 2 * sizeof(void*) + detail::kHeapBlock;
+    return tree_bytes_ + (nodes_.capacity() - nodes_.size()) * sizeof(Node) + table_.size() * kTableEntry;
   }
 
   void validate() const {
@@ -472,14 +550,16 @@ struct Search::Impl {
     return params_.key_bits >= 64 ? k : k & ((std::uint64_t{1} << params_.key_bits) - 1);
   }
 
-  NodeId make_node(GameState state, bool turn_start) {
+  NodeId make_node(GameState state, bool turn_start, std::size_t new_boards = 1) {
     Node n(std::move(state));
+    n.new_boards = new_boards;
     n.key = key_of(n.state);
     n.mover = n.state.to_move();
     n.turn_start = turn_start;
     if (turn_start) classify(n);
     nodes_.push_back(std::move(n));
     ++stats_.nodes_created;
+    account(nodes_.back());
     return static_cast<NodeId>(nodes_.size() - 1);
   }
 
@@ -606,6 +686,7 @@ struct Search::Impl {
       return kNoNode;
     }
     NodeId id = kNoNode;
+    const std::size_t made = s.multiverse().board_count() - nodes_[pid].state.multiverse().board_count();
     if (params_.graph) {
       const std::uint64_t key = key_of(s);
       const NodeId found = find_node(key, s, turn_start);
@@ -614,13 +695,13 @@ struct Search::Impl {
         ++stats_.transposition_hits;
       } else if (table_.count(identity(key, turn_start)) != 0) {
         ++stats_.key_collisions;  // kept apart: an unshared node
-        id = make_node(std::move(s), turn_start);
+        id = make_node(std::move(s), turn_start, made);
       } else {
-        id = make_node(std::move(s), turn_start);
+        id = make_node(std::move(s), turn_start, made);
         register_node(id);
       }
     } else {
-      id = make_node(std::move(s), turn_start);
+      id = make_node(std::move(s), turn_start, made);
     }
     nodes_[pid].edges[ei].child = id;
     if (nodes_[id].dead_end) {
@@ -708,8 +789,11 @@ struct Search::Impl {
       n.action_moves.insert(n.action_moves.end(), a.moves.begin(), a.moves.end());
       n.action_offsets.push_back(static_cast<std::uint32_t>(n.action_moves.size()));
     }
+    n.action_moves.shrink_to_fit();
+    n.action_offsets.shrink_to_fit();
     n.children_complete = list.stats.exhaustive;
     if (!n.children_complete) ++stats_.truncated_listings;
+    account(n);
   }
 
   Expansion& slot(std::size_t i) {
@@ -861,6 +945,7 @@ struct Search::Impl {
     n.expanded = true;
     n.pending = false;
     n.instantiated = 0;
+    account(n);
     widen(n);
     if (n.edges.empty()) {
       n.stuck = true;
@@ -1332,7 +1417,7 @@ struct Search::Impl {
         const Node& n = nodes_[pd.leaf];
         backup(pd.path, n.eval_mean, backup_weight(n.eval_var), true);
         ++delivered;
-        if (cache_) cache_->insert(n.key, epoch_, n.state, ev);  // a duplicate is not stored twice
+        if (cache_) cache_->insert(n.key, epoch_, n.state, ev, n.new_boards);  // a duplicate is not stored twice
       }
     } catch (...) {
       // What was delivered stays; the rest of the batch is abandoned.
@@ -1427,6 +1512,9 @@ struct Search::Impl {
     stats_.nodes_collected += nodes_.size() - kept.size();
     nodes_ = std::move(kept);
     root_ = 0;
+    tree_bytes_ = 0;
+    for (const Node& n : nodes_) tree_bytes_ += n.bytes;
+    purge_cache();
     table_.clear();
     for (NodeId id = 0; id < nodes_.size(); ++id) register_node(id);
     // Root noise belongs to a fresh root's expansion (self-play); a carried
@@ -1596,9 +1684,15 @@ Search& Search::operator=(Search&&) noexcept = default;
 const SearchParams& Search::params() const noexcept { return impl_->params_; }
 const SearchStats& Search::stats() const noexcept { return impl_->stats_; }
 const EvalCache* Search::cache() const noexcept { return impl_->cache_.get(); }
+std::shared_ptr<EvalCache> Search::shared_cache() const noexcept { return impl_->cache_; }
+std::size_t Search::memory_bytes() const noexcept { return impl_->memory_bytes(); }
 
-void Search::run(Evaluator& evaluator, const Limits& limits) {
+StopReason Search::run(Evaluator& evaluator, const Limits& limits) {
   Impl& s = *impl_;
+  const auto stop = [&s](StopReason r) {
+    s.stats_.last_stop = r;
+    return r;
+  };
   if (s.notified_generation_ != s.root_generation_) {
     evaluator.on_new_root(s.nodes_[s.root_].state, s.epoch_);
     s.notified_generation_ = s.root_generation_;
@@ -1609,13 +1703,17 @@ void Search::run(Evaluator& evaluator, const Limits& limits) {
   for (;;) {
     const std::uint64_t played = s.stats_.playouts - p0;
     const std::uint64_t evaluated = s.stats_.evaluations - e0;
-    if (played >= limits.playouts || evaluated >= limits.evaluations || s.root_finished()) break;
+    if (played >= limits.playouts) return stop(StopReason::Playouts);
+    if (evaluated >= limits.evaluations) return stop(StopReason::Evaluations);
+    if (s.root_finished()) return stop(StopReason::Finished);
+    if (s.nodes_.size() >= limits.nodes) return stop(StopReason::Nodes);
+    if (s.memory_bytes() >= limits.bytes) return stop(StopReason::Memory);
     const std::uint64_t batch = std::max<std::size_t>(s.params_.batch_size, 1);
     const auto want = static_cast<std::size_t>(std::min(batch, limits.evaluations - evaluated));
     const std::uint64_t before = s.stats_.playouts;
     const std::size_t n = s.gather(want, limits.playouts - played);
     if (n == 0) {
-      if (s.stats_.playouts == before) break;  // nothing more can be done
+      if (s.stats_.playouts == before) return stop(StopReason::Exhausted);  // nothing more can be done
       continue;
     }
     out.resize(n);

@@ -37,6 +37,12 @@ static_assert(static_cast<int>(t5d::mcts::ChoiceReason::SecureChild) == T5D_CHOI
 static_assert(static_cast<int>(t5d::mcts::ChoiceReason::Lcb) == T5D_CHOICE_LCB);
 static_assert(static_cast<int>(t5d::mcts::ChoiceReason::Visits) == T5D_CHOICE_VISITS);
 static_assert(static_cast<int>(t5d::mcts::ChoiceReason::AllLost) == T5D_CHOICE_ALL_LOST);
+static_assert(static_cast<int>(t5d::mcts::StopReason::Playouts) == T5D_STOP_PLAYOUTS);
+static_assert(static_cast<int>(t5d::mcts::StopReason::Evaluations) == T5D_STOP_EVALUATIONS);
+static_assert(static_cast<int>(t5d::mcts::StopReason::Finished) == T5D_STOP_FINISHED);
+static_assert(static_cast<int>(t5d::mcts::StopReason::Exhausted) == T5D_STOP_EXHAUSTED);
+static_assert(static_cast<int>(t5d::mcts::StopReason::Nodes) == T5D_STOP_NODES);
+static_assert(static_cast<int>(t5d::mcts::StopReason::Memory) == T5D_STOP_MEMORY);
 
 struct t5d_search {
   explicit t5d_search(t5d::mcts::Search s) : search(std::move(s)) {}
@@ -164,6 +170,15 @@ SearchParams params_from(const t5d_search_params* c) {
   p.eval_cache_entries = static_cast<std::size_t>(c->eval_cache_entries);
   p.eval_cache_bytes = static_cast<std::size_t>(c->eval_cache_bytes);
   return p;
+}
+
+t5d::mcts::BuiltinEvaluator builtin_of(int32_t evaluator) {
+  switch (evaluator) {
+    case T5D_EVALUATOR_UNIFORM: return t5d::mcts::BuiltinEvaluator::Uniform;
+    case T5D_EVALUATOR_RANDOM: return t5d::mcts::BuiltinEvaluator::Random;
+    case T5D_EVALUATOR_MATERIAL: return t5d::mcts::BuiltinEvaluator::Material;
+    default: throw std::invalid_argument("evaluator must be T5D_EVALUATOR_UNIFORM, _RANDOM or _MATERIAL");
+  }
 }
 
 // A board's index in a multiverse's canonical order, or -1.
@@ -344,6 +359,17 @@ constexpr LayoutEntry kLayout[] = {
     T5D_SEARCH_AT(t5d_search_summary, root_q),
     T5D_SEARCH_AT(t5d_search_summary, root_children),
     T5D_SEARCH_AT(t5d_search_summary, epoch),
+    T5D_SEARCH_AT(t5d_search_summary, memory_bytes),
+    T5D_SEARCH_AT(t5d_search_summary, cache_entries),
+    T5D_SEARCH_AT(t5d_search_summary, cache_bytes),
+    T5D_SEARCH_AT(t5d_search_summary, cache_purged),
+    T5D_SEARCH_AT(t5d_search_summary, last_stop),
+
+    T5D_SEARCH_SIZE(t5d_search_limits),
+    T5D_SEARCH_AT(t5d_search_limits, playouts),
+    T5D_SEARCH_AT(t5d_search_limits, evaluations),
+    T5D_SEARCH_AT(t5d_search_limits, nodes),
+    T5D_SEARCH_AT(t5d_search_limits, bytes),
 
     T5D_SEARCH_SIZE(t5d_root_child),
     T5D_SEARCH_AT(t5d_root_child, visits),
@@ -448,6 +474,19 @@ t5d_status t5d_search_new(const t5d_game* game, int32_t turn_start, const t5d_se
     const bool start = boolean(turn_start, "turn_start");
     const SearchParams p = params_from(params);
     *out = new t5d_search(Search(t5d::capi_internal::game_state(*game), p, start));
+    return T5D_OK;
+  });
+}
+
+t5d_status t5d_search_new_sharing(const t5d_search* donor, const t5d_game* game, int32_t turn_start,
+                                  const t5d_search_params* params, t5d_search** out, char** error) {
+  return guarded(error, [&]() -> t5d_status {
+    if (out == nullptr) throw std::invalid_argument("out is NULL");
+    *out = nullptr;
+    if (donor == nullptr || game == nullptr) throw std::invalid_argument("donor or game is NULL");
+    const bool start = boolean(turn_start, "turn_start");
+    const SearchParams p = params_from(params);
+    *out = new t5d_search(Search(t5d::capi_internal::game_state(*game), p, start, donor->search.shared_cache()));
     return T5D_OK;
   });
 }
@@ -557,15 +596,25 @@ t5d_status t5d_search_run(t5d_search* search, int32_t evaluator, uint64_t evalua
                           uint64_t playouts, char** error) {
   return guarded(error, [&]() -> t5d_status {
     if (search == nullptr) throw std::invalid_argument("search is NULL");
-    t5d::mcts::BuiltinEvaluator kind = t5d::mcts::BuiltinEvaluator::Uniform;
-    switch (evaluator) {
-      case T5D_EVALUATOR_UNIFORM: kind = t5d::mcts::BuiltinEvaluator::Uniform; break;
-      case T5D_EVALUATOR_RANDOM: kind = t5d::mcts::BuiltinEvaluator::Random; break;
-      case T5D_EVALUATOR_MATERIAL: kind = t5d::mcts::BuiltinEvaluator::Material; break;
-      default: throw std::invalid_argument("evaluator must be T5D_EVALUATOR_UNIFORM, _RANDOM or _MATERIAL");
-    }
+    const t5d::mcts::BuiltinEvaluator kind = builtin_of(evaluator);
     const std::unique_ptr<t5d::mcts::Evaluator> ev = t5d::mcts::make_evaluator(kind, evaluator_seed);
     search->search.run(*ev, t5d::mcts::Limits{playouts});
+    return T5D_OK;
+  });
+}
+
+t5d_status t5d_search_run_limits(t5d_search* search, int32_t evaluator, uint64_t evaluator_seed,
+                                 const t5d_search_limits* limits, int32_t* stop, char** error) {
+  return guarded(error, [&]() -> t5d_status {
+    if (search == nullptr || limits == nullptr) throw std::invalid_argument("search or limits is NULL");
+    const std::unique_ptr<t5d::mcts::Evaluator> ev = t5d::mcts::make_evaluator(builtin_of(evaluator), evaluator_seed);
+    t5d::mcts::Limits l;
+    l.playouts = limits->playouts;
+    l.evaluations = limits->evaluations;
+    l.nodes = limits->nodes;
+    l.bytes = limits->bytes;
+    const t5d::mcts::StopReason r = search->search.run(*ev, l);
+    if (stop != nullptr) *stop = static_cast<int32_t>(r);
     return T5D_OK;
   });
 }
@@ -598,6 +647,13 @@ t5d_status t5d_search_info(const t5d_search* search, t5d_search_summary* out) {
     out->root_q = root.weight > 0 ? root.value / root.weight : 0.0;
     out->root_children = s.root_children().size();
     out->epoch = s.epoch();
+    out->memory_bytes = s.memory_bytes();
+    if (const t5d::mcts::EvalCache* cache = s.cache()) {
+      out->cache_entries = cache->size();
+      out->cache_bytes = cache->bytes();
+    }
+    out->cache_purged = st.cache_purged;
+    out->last_stop = static_cast<int32_t>(st.last_stop);
     return T5D_OK;
   });
 }
