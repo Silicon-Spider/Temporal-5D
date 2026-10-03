@@ -83,6 +83,72 @@ def test_a_game_replays_legal(nets, variant, split, mode):
     replay = replay_with_gate(res.record, gate=GATE)
     assert check_replay(res, replay) == [], replay.lines[-3:]
     assert '[Termination "turn_cap (self-play' in res.record or res.end != "turn_cap"
+    assert res.reroot_fallbacks == 0  # match play re-rooted every carried search on the reply
+
+
+MATED_WHITE = "[8/8/8/8/8/5k2/6q1/7K:0:1:w]"  # Kh1, Qg2 protected by Kf3
+MATED_BLACK = "[8/8/8/8/8/5K2/6Q1/7k:0:1:b]"
+STALEMATED_WHITE = "[k7/8/8/8/8/6q1/8/7K:0:1:w]"  # Kh1 boxed in by Qg3, not in check
+
+
+@requires_gate
+@pytest.mark.parametrize(
+    "fen,end,winner,result",
+    [(MATED_WHITE, "checkmate", 1, "0-1"), (MATED_BLACK, "checkmate", 0, "1-0"), (STALEMATED_WHITE, "stalemate", None, "1/2-1/2")],
+)
+def test_the_result_is_the_final_positions(nets, fen, end, winner, result):
+    """A game from a finished custom start: the game's winner and result, the record's Result
+    header and closing token, are the ones the final position calls for - judged by the gate
+    (the side to move, its verdict) and the engine's reader. A wrong winner (the review's M9: the
+    mated side recorded as the winner), a wrong end or a wrong header is reported."""
+    from dataclasses import replace
+
+    cfg, evaluators = nets
+    with torch.no_grad():
+        res = play_game(evaluators[0], PlayConfig(start_fen=(fen,), playouts=4, cap_turns=0, cap_boards=0), net_cfg=cfg)
+    assert (res.end, res.winner, res.result, res.actions) == (end, winner, result, [])
+    assert '[Board "custom"]' in res.record and fen in res.record and f'[Result "{result}"]' in res.record
+    replay = replay_with_gate(res.record, gate=GATE)
+    assert check_replay(res, replay) == []
+    wrong = []
+    if end == "checkmate":
+        wrong.append(replace(res, winner=1 - winner))
+    wrong.append(replace(res, end="turn_cap", winner=None))
+    wrong.append(replace(res, record=res.record.replace(f'[Result "{result}"]', '[Result "*"]')))
+    for w in wrong:
+        assert check_replay(w, replay) != [], (w.end, w.winner)
+
+
+@requires_gate
+def test_a_game_that_ends_in_checkmate_replays_with_its_result(nets):
+    """Focused - Just Kings under whole turns: with these seeds the game ends in checkmate on the
+    development machine (the review's case); whatever it ends in, its result is the final
+    position's."""
+    cfg, evaluators = nets
+    play = PlayConfig(variant="Focused - Just Kings", split="turn", playouts=8, batch_size=4, cap_turns=4, cap_boards=40, seed=1)
+    with torch.no_grad():
+        res = play_game(evaluators[0], play, net_cfg=cfg)
+    replay = replay_with_gate(res.record, gate=GATE)
+    assert check_replay(res, replay) == [], (res.end, res.result, replay.last_side, replay.last_terminal)
+
+
+def test_a_reroot_that_fails_is_counted_not_hidden():
+    """Match play: a carried search that cannot re-root on the reply (here, a reply that is not
+    a legal action of the position) is dropped and the fallback reported."""
+    from t5d.engine.netplay import _reroot
+    from t5d.engine.search import Search
+
+    with Game.variant("Standard") as g:
+        s = Search(g)
+        e4 = next(m for m in g.moves() if m.text() == "(0T1)Pe2(0T1)e4")
+        carried = [None, s]
+        assert _reroot(carried, 1, [e4, e4], g) is False and carried[1] is None
+        s2 = Search(g)
+        g.apply(e4)
+        g.submit()
+        carried = [None, s2]
+        assert _reroot(carried, 1, [e4], g) is True and carried[1] is s2
+        s2.close()
 
 
 def test_self_play_is_deterministic_in_its_seed(nets):
@@ -103,6 +169,7 @@ def test_the_record_is_read_back_by_the_engines_reader(nets):
     with Game.from_pgn(res.record) as g:
         assert g.replay_all() == len(res.actions)
         assert g.snapshot().fingerprint == res.final_fingerprint
+    assert res.reroot_fallbacks == 0
 
 
 def _move(**kw) -> Move:
