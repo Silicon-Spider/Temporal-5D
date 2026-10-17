@@ -4,7 +4,8 @@ Section 15.2: "Displacement bias through the score function = the same bias mate
 small positions | The score-function implementation is exact | B15". Its protocol: random
 weights at realistic initialisation scale - never zeros, which make distinct paths agree
 trivially - several seeds, tolerances matched to the arithmetic, adversarial constructions
-(duplicated boards, deep travel, many timelines, every variant geometry).
+(duplicated boards, deep travel, many timelines, every variant - here every variant's board
+size, 8 x 8 to Global Warming's 1 x 1: ``CONSTRUCTIONS``).
 
 * **The classes against their definition.** ``Reference`` writes section 4.1's classes
   out pair by pair in plain Python - the exact box, the far bins, the line test in whole
@@ -157,12 +158,19 @@ def far_state(seed: int, size: int = 8, regs: int = 2, globals_: int = 16) -> Po
     """A lattice with boards far apart: every far bin, both signs of Delta-time, odd Delta-times,
     lines of every board direction with k = 3 .. 9 and beyond the clamp, and timelines with
     gaps - (timeline, half-turn) of each board below; contents, edges and candidate moves from a
-    synthetic state of the same layout (plausible as lists of tokens, not as geometry)."""
+    synthetic state of the same layout (plausible as lists of tokens, not as geometry). At
+    ``size=1`` the boards are Global Warming's (rulebook V3): one empty square, no edges and no
+    moves."""
     boards = [(0, 0), (0, 6), (0, 14), (3, 0), (3, 6), (-4, 8), (7, 1), (-9, 18), (12, 30), (5, 9)]
     timeline = np.array([p for p, _ in boards])
     half_turn = np.array([h for _, h in boards])
     is_head = np.array([h == half_turn[timeline == p].max() for p, h in boards])
-    src = synthetic_state(seed, len(boards), width=size, height=size, regs_per_board=regs, global_regs=globals_)
+    if size == 1:
+        empty = np.zeros((len(boards), 1), dtype=np.int64)
+        contents = dict(piece=empty, colour=empty, moved=empty.astype(bool))
+    else:
+        src = synthetic_state(seed, len(boards), width=size, height=size, regs_per_board=regs, global_regs=globals_)
+        contents = dict(piece=src.piece, colour=src.colour, moved=src.moved, edges=src.edges, moves=src.moves, opp_moves=src.opp_moves)
     return PositionState(
         width=size,
         height=size,
@@ -171,18 +179,16 @@ def far_state(seed: int, size: int = 8, regs: int = 2, globals_: int = 16) -> Po
         is_head=is_head,
         active=np.ones(len(boards), dtype=bool),
         side_to_move=half_turn & 1,
-        piece=src.piece,
-        colour=src.colour,
-        moved=src.moved,
-        edges=src.edges,
-        moves=src.moves,
-        opp_moves=src.opp_moves,
         regs_per_board=regs,
         global_regs=globals_,
+        **contents,
     )
 
 
 #: The adversarial constructions of section 15.2's protocol: each a list of positions, one batch.
+#: Every variant's board size is in one (rulebook V3): 8 x 8 throughout, 7 x 7 (Excessive), 6 x 6
+#: (Knights vs. Bishops), 5 x 5 (Small, Formations), 4 x 4 (Very Small, Tactician), 3 x 3 (Just
+#: Kings) and Global Warming's empty 1 x 1, near and far apart, padded beside larger boards.
 CONSTRUCTIONS = {
     "far": lambda s: [far_state(s)],
     "many_timelines": lambda s: [synthetic_state(s, 9, n_timelines=8)],
@@ -194,6 +200,13 @@ CONSTRUCTIONS = {
     "registers_4_0": lambda s: [synthetic_state(s, 5, regs_per_board=4, global_regs=0), far_state(s, regs=4, globals_=0)],
     "registers_0_16": lambda s: [synthetic_state(s, 5, regs_per_board=0, global_regs=16)],
     "registers_2_0": lambda s: [synthetic_state(s, 5, regs_per_board=2, global_regs=0)],
+    "variant_sizes": lambda s: [
+        synthetic_state(s, 4, width=7, height=7),
+        synthetic_state(s + 1, 5, width=6, height=6, n_timelines=2),
+        synthetic_state(s + 2, 6, width=4, height=4, n_timelines=3, deep_travel_prob=1.0),
+        synthetic_state(s + 3, 6, width=3, height=3, n_timelines=3, duplicate_prob=0.8),
+    ],
+    "far_variant_sizes": lambda s: [far_state(s, size=7), far_state(s, size=4), far_state(s, size=3), far_state(s, size=1)],
 }
 
 #: The placeholder default and two other settings of the unstated details (spec issues 205-207).
@@ -438,7 +451,7 @@ CPU_PATHS = {
     [dict(), dict(routing_table=True), dict(board_register_spatial="position_free"), dict(global_register_pairs="anchored")],
     ids=["b9", "routing", "regs-free", "anchored"],
 )
-@pytest.mark.parametrize("construction", ["far", "small_boards_mixed", "registers_4_0"])
+@pytest.mark.parametrize("construction", ["far", "small_boards_mixed", "registers_4_0", "far_variant_sizes"])
 def test_cpu_paths_equal_the_bias_materialised(construction, flags):
     """The CPU paths build B15's rows from the lookup, one query block (or key selection, or
     set of free rows) at a time: their outputs and gradients - Q, K, V and the table - equal

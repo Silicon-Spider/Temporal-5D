@@ -1237,13 +1237,13 @@ commits (F5 and F6 on `lane/net`, H47 and H48 on `lane/gate`, M22 on `lane/engin
 | B9 | built, tested | Network N2: move-graph mask on 2 heads; the built direction, register reads and head counting are now the v1 values (§6 "As built", M20; issue 16) |
 | B14 | built in part | Network N2: block-sparse attention in a CPU gather form. B14's score function built (`lane/net`, with B15): `attn_impl="flex"` (`python/t5d/net/flex.py`) runs torch's `flex_attention` with every bias computed inside its score function - B15's entry by integer arithmetic from the two tokens' coordinates, B11's typed relations, B12's board-pair table, a caller's bias - every mask in its mask function (padding, the block-causal scope, section 6's roles from per-token data and one edge bit per pair), and a lossless block mask built from the board-major order at board granularity. Eager on CPU (PyTorch 2.13): forward only, every score materialised - small positions, §15.2's B15 row (spec issue 211). Under v1's register rule the masked heads' block masks have no empty block (issue 209). Compiled and GPU kernels need GPU time (G9, M19) |
 | B5 | built, tested | Network N1, behind a flag (off); its as-built details are "v1 placeholders" (Provisional, CHECKPOINT 6; M20), tested by ablation 2 - §4.1 does not state them (edit 9) |
-| B6 | superseded; removed | By B15 (CHECKPOINT 6, reversal 25; M20). Removed from the code with B15 (`lane/net`): `binned_bias`, `binned_bias_rope` (issue 9f) and their fields - no arm survives, ablation 2's arm is B15 on or off. Its log buckets live on in `python/t5d/net/buckets.py` for B12's relative cells (`smolgen_time_*`, `smolgen_timeline_*`; smolgen's 152 cells and 47,136 parameters unchanged, issue 212) |
+| B6 | superseded; removed | By B15 (CHECKPOINT 6, reversal 25; M20). Removed from the code with B15 (`lane/net`): `binned_bias`, `binned_bias_rope` (issue 9f) and their fields - no arm survives, ablation 2's arm is B15 on or off. Its log buckets live on in `python/t5d/net/buckets.py` for B12's relative cells (`smolgen_time_*`, `smolgen_timeline_*`; smolgen's 152 cells and 47,136 parameters unchanged, issue 212). Under B15's far-bin placeholder B6 is not B15's special case, which §4.1, the register's B6 row and reversal 25 say it is: beyond the exact classes its per-axis buckets are not kept, only Δtime's sign and the clamp (issue 205, edit 159; put to the user) |
 | B10, B12 | built, tested | Network N2, behind flags (B12 as relative board-pair cells, full rank - the register now records it as built; the cells are the log buckets B6 used, re-homed in `buckets.py` when B6 went - issue 212). The register says smolgen "keeps its own normalisation" (F5); the built smolgen has none (`lane/net`'s issue 202) |
 | B11 | built behind a flag, tested; to change | Network N2 with six types; CHECKPOINT 6 folds travel-threat into attack (five types, reversal 26) - `travel_threat` is still in the network's type set (net lane). The engine emits attack, defence and x-ray; pin and check are refused until engine ABI round 1 builds them behind the relation mask; id 6 stays reserved |
 | B3 | not built (rule) | Contingency only; no trigger |
 | B7 | not built (rule) | Deferred; its gate now names ablation 2's head-allocation evidence (issue 121's B7 part closed, M20); no §15.2/§15.3 need (d_head is a config value anyway) |
 | B13 | not built (rule) | Refused |
-| B15 | built, tested | The 4D displacement bias, the v1 default (`lane/net`, `python/t5d/net/displacement.py`): one learned scalar per head per layer, a 15 x 15 slice for each of 54 board-distance classes (the 45 exact ones and 9 far bins), 368 line entries, 162 register entries and a global one - 12,681 per head per layer, 1,623,168 parameters (§4.1's ~1.6M; 7.07% of the network). Its unstated details are named placeholders: the far bins (`disp_far_edges`, issue 205), the line set (`disp_line_max`, issue 206), the register and global entries (`disp_register_pairs`, issue 207), the initialisation (`disp_init_std`, issue 208). Ablation 2's no-table arm: `displacement_bias=False` - the table draws from its own generator, so the arm is the network without it (bit for bit the pre-B15 v1). Per layer through `AttnContext.for_layer(h, layer)`, the cached path included (a frozen board's rows carry it at every layer; geometry, so every row). Tested: the classes against §4.1 written out pair by pair (grid and constructions, three placeholder settings); §15.2's B15 row - through B14's score function = materialised, bitwise at the bias, 1e-5 at the output - and the CPU paths' outputs and gradients; §15.2 row 1 with it on (every `test_cache` case) and with the layers' tables far apart. Boards wider than 8 are refused (none in any variant). Signs are raw colour signs until A7. §15.3's cost row ("negligible") is for the quiet-machine block: on CPU every head now carries a per-row bias |
+| B15 | built, tested | The 4D displacement bias, the v1 default (`lane/net`, `python/t5d/net/displacement.py`): one learned scalar per head per layer, a 15 x 15 slice for each of 54 board-distance classes (the 45 exact ones and 9 far bins), 368 line entries, 162 register entries and a global one - 12,681 per head per layer, 1,623,168 parameters (§4.1's ~1.6M; 7.07% of the network). Its unstated details are named placeholders: the far bins (`disp_far_edges`, issue 205), the line set (`disp_line_max`, issue 206), the register and global entries (`disp_register_pairs`, issue 207), the initialisation (`disp_init_std`, issue 208); the far bins' form and the line set's time unit and partition are fixed in code, and under the far form B6 is not B15's special case (issue 205, put to the user). Ablation 2's no-table arm: `displacement_bias=False` - the table draws from its own generator, so the arm is the network without it (bit for bit the pre-B15 v1). Per layer through `AttnContext.for_layer(h, layer)`, the cached path included (a frozen board's rows carry it at every layer; geometry, so every row). Tested: the classes against §4.1 written out pair by pair (grid and twelve constructions - every variant's board size, Global Warming's 1 x 1 included - three placeholder settings; each placeholder switch checked to regroup pairs); §15.2's B15 row - through B14's score function = materialised, bitwise at the bias, 1e-5 at the output - and the CPU paths' outputs and gradients; §15.2 row 1 with it on (every `test_cache` case) and with the layers' tables far apart. Boards wider than 8 are refused (none in any variant). Signs are raw colour signs until A7. §15.3's cost row ("negligible") is for the quiet-machine block: on CPU every head now carries a per-row bias |
 | B16 | not started | Score-time status key biases on frozen boards, with the cached configuration (settles issue 31): net lane, one owner. The intrinsic frozen features it completes are N3's default (`frozen_features = intrinsic`) |
 | B17 | not started | The key-side Shaw term - a prototype (ablation 2): net lane, behind its flag, with §15.2's B17 row and §15.3's cost row |
 | C1 | built, tested | `attn_scope = "dense"` is the default |
@@ -2272,7 +2272,35 @@ superseded or made moot says so; nothing is deleted.
     clamped, and crossed with the sign of Δtime (past, same time, future; B6 kept Δtime
     signed and Δtimeline unsigned): 9 far classes, 54 in all - with the line and register
     entries 12,681 per head per layer, 1,623,168 parameters. Δtimeline's sign is kept
-    inside the exact box (exact) and dropped in the far bins. Proposed edit 155.
+    inside the exact box (exact) and dropped in the far bins. Only the edges are a
+    setting: the form - one distance D, crossed with Δtime's sign, Δtimeline's sign
+    dropped - is fixed in code (`board_class` and the CPU paths' tiles), so a per-axis or
+    timeline-signed form is a code change (the geometry, both implementations, the tests'
+    reference, the pinned counts), not a switch. **Under this form B6 is not a special
+    case of B15**, which §4.1 ("of which it is the special case that ignores file and
+    rank"), register B6 ("B6 is its special case") and reversal 25 ("B6 its special
+    case") say it is. B6 was two per-axis tables added together - signed Δtime buckets
+    exact below 4 half-turns, then 4-7, 8-15, ..., 64-127, 128+ (19), and |Δtimeline|
+    exact below 4, then 4-7, 8-15, 16-31, 32+ (8) - so it is a special case only if each
+    far class lies within one of its cells, and the joint distance mixes them: Δ(timeline,
+    half-turns) (0, 20) and (0, 100) share class 53 (B6's time buckets 6 and 8), (10, 0)
+    and (30, 0) class 50 (timeline buckets 5 and 6), (3, 20) and (9, 20) class 53
+    (timeline buckets 3 and 5). Beyond the box the far classes hold a B6 bias f(Δtime) +
+    g(Δtimeline) only where it is a constant plus a function of Δtime's sign (a linear
+    solve over |Δtimeline| ≤ 300, |Δtime| ≤ 600 half-turns), and the board-axis line clamp
+    merges B6's buckets too (k ≥ 8 shares one entry). Lost against B6: its per-axis form
+    beyond the box, and its resolution there - Δtime to 128 half-turns and |Δtimeline| to
+    32, where B15 has three joint bins and clamps from D = 9 (17 half-turns or 9
+    timelines). Kept: Δtime's sign and the clamped extrapolation guard. Far classes that
+    refine B6's cells - the 131 of its 152 that reach beyond the box, 176 classes in all,
+    with the line clamp raised to B6's 64 turns - would be 40,945 entries per head per
+    layer, 5,240,960 parameters, over three times §4.1's ~1.6M: with a slice per class,
+    "special case" and "~1.6M" cannot both hold. (B6's two tables added beyond the box, 27
+    scalars per head per layer - 3,456 parameters - would keep both, at the cost of "one
+    learned scalar ... indexed by the pair's displacement".) B6 was removed with no arm
+    (M20), so ablation 2 cannot test what B6 resolved that B15 does not. Put to the user:
+    keep the sentence (the far classes change, or B6's tables are added - edit 155) or the
+    budget (the sentence goes - edit 159). Proposed edits 155, 159.
 206. **B15's line classes** (§4.1: "exact line classes for displacements beyond them:
     movement along one axis only, or equal steps along two, three or four axes"). Built:
     (a) in whole turns - the rulebook's displacement has dT in whole turns and a slider's
@@ -2285,7 +2313,12 @@ superseded or made moot says so; nothing is deleted.
     per pair, as "one learned scalar per head per layer" and B17's "the full table's
     ~12,000 classes" read) rather than adding to it. So three entries per head per layer
     are never indexed: the (0, 0) cell of the three same-time far slices, whose
-    displacements (the same square, timelines apart) are all lines. Proposed edit 155.
+    displacements (the same square, timelines apart) are all lines. Only (b)'s clamp is a
+    setting (`disp_line_max`); (a) and (c) are fixed in code - counting half-turns would
+    change the line set, and the additive reading would put two entries on a line pair, a
+    second lookup on every path - so either is a code change (the geometry, both
+    implementations, the tests' reference, the pinned counts), not a switch. Proposed
+    edit 155.
 207. **B15's register and global entries** (§4.1: "per-board registers by their
     board-distance class, global registers one entry per head (§5.3)"). Per-board
     registers: whether the pair's kind enters is not said. Built (placeholder,
@@ -2332,7 +2365,8 @@ superseded or made moot says so; nothing is deleted.
     FlexAttention runs only uncompiled - it materialises every score, evaluates the score
     and mask functions pair by pair under vmap, and has no backward. Built: B14's score
     function for that path (`attn_impl = "flex"`, forward only; it refuses under autograd
-    on CPU), and the row tested as written on ten constructions - the score function's
+    on CPU), and the row tested as written on twelve constructions (every variant's board
+    size among them, Global Warming's 1 × 1 included) - the score function's
     term at every pair is the hand-materialised bias bit for bit, and attention through it
     is attention with the bias materialised (FP32 roundoff); gradients through the CPU
     block paths, which build the same rows by lookup. The eager path ignores the block
@@ -2878,7 +2912,11 @@ struck through, where nothing of it is left to apply); the others stand as writt
     entries by class and pair kind (square reads register, register reads square,
     register reads register); the global entry per head per layer, either side; 12,681
     entries per head per layer, 1,623,168 parameters; initialisation N(0, 0.1) (issues
-    205-208).
+    205-208). If the user rules that B6 stays B15's special case (issue 205), the far
+    classes are instead B6's (Δtime, Δtimeline) cells beyond the exact box, with the
+    board-axis line clamp at 64 turns (about 5.2M parameters), or B6's two tables are
+    added beyond the box (3,456 more) - and "about 1.6M parameters" changes with the
+    first.
 156. **§9.2's Params row, register F1 and F2 (M4 write-back)**: now - F1 "~21.5M with heads
     (21,359,370 as built at N5)", F2 "L24-ff12 (44M)". Proposed - "22,961,802 as built
     after F5 and B15 (21,338,634 without B15's 1,623,168-parameter table)" and F2
@@ -2887,16 +2925,31 @@ struck through, where nothing of it is left to apply); the others stand as writt
     Proposed - add: "register rows that read every key on a masked head (v1's rule) are
     computed apart - a second call, or the registers ordered after the squares - or the
     block mask keeps every block" (issue 209).
-158. **§15.2's B15 row, §15.3 "Without a GPU" and register B14, G9**: now - "through the
-    score function", "a FlexAttention score function computed inside the kernel".
-    Proposed - name the untrained build's form: "the score function run by uncompiled
-    FlexAttention on CPU (forward only, every score materialised: small positions), its
-    gradients checked through the CPU block paths; the compiled kernel on GPU time"
-    (issue 211).
-159. **Register B6 and B12, §4.1's B6 paragraph**: now - B6 "Superseded by B15"; B12 "as
-    built over relative board-pair cells". Proposed - B6: "Superseded by B15 and removed
-    (no arm survives)"; B12: "over relative board-pair cells - the signed-Δtime x
-    Δtimeline log buckets B6 used (19 x 8), kept for smolgen" (issue 212).
+158. **§15.2's B15 row, §10.2 and register B14, G9**: now - §15.2: "Displacement bias
+    through the score function = the same bias materialised, on small positions"; §10.2
+    ("The inference path"): every attention bias "is a FlexAttention score function
+    computed inside the kernel"; register B14: "FlexAttention score_mod"; G9: "PyTorch
+    (torch.compile + FlexAttention)". Proposed - name the untrained build's form in each:
+    "the score function run by uncompiled FlexAttention on CPU (forward only, every score
+    materialised: small positions), its gradients checked through the CPU block paths,
+    which build the same biases by lookup; the compiled kernel on GPU time (M19)". §15.3's
+    "Without a GPU" already defers "the FlexAttention block-sparse kernel" to GPU time and
+    needs no edit (issue 211).
+159. **Register B6 and B12, §4.1's B6 paragraph, reversal 25**: now - §4.1: B6 is
+    "Superseded by the 4D displacement bias below (CHECKPOINT 6), of which it is the
+    special case that ignores file and rank"; register B6: "Superseded by B15 (CHECKPOINT
+    6) — B6 is its special case that ignores file and rank"; reversal 25: "A learned 4D
+    displacement bias beside RoPE (B15), B6 its special case"; B12 "as built over
+    relative board-pair cells". Proposed - B6's status: "Superseded by B15 and removed (no
+    arm survives)". The "special case" clause, in all three places, as the user rules on
+    issue 205: if B15's far classes stay as built (the ~1.6M holds), §4.1 reads
+    "Superseded by the 4D displacement bias below (CHECKPOINT 6), which keeps its clamped
+    extrapolation and Δtime's sign but not its per-axis buckets beyond the exact classes",
+    and register B6 and reversal 25 drop "its special case" the same way; if the clause is
+    to hold, the far classes change instead (edit 155) and the clause stays. B12: "over
+    relative board-pair cells - the signed-Δtime x Δtimeline log buckets B6 used (19 x
+    8), kept for smolgen" (issue 212). Why: as built the clause is false, and it is what
+    says that removing B6, with no arm left in ablation 2, loses nothing (issue 205).
 
 ## Session log
 

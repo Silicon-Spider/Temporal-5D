@@ -521,16 +521,43 @@ SWITCHES = {
 }
 
 
+#: B15's placeholders (spec issues 205-207). ``disp_line_max`` and ``disp_register_pairs`` change
+#: the table's size, and the table is drawn from one stream, so every head's row after the first
+#: starts at another point of it and the outputs differ whatever the switch does to the
+#: indexing: for these the test also checks that the switch regroups the batch's pairs - which
+#: pairs share a scalar.
+B15_PLACEHOLDERS = ("disp_far_edges", "disp_line_max", "disp_register_pairs")
+
+
+def _same_grouping(a: torch.Tensor, b: torch.Tensor) -> bool:
+    """Whether two labellings of the same pairs group them alike (each label of one is exactly
+    one label of the other)."""
+    joint = torch.unique(torch.stack([a.reshape(-1), b.reshape(-1)]), dim=1).shape[1]
+    return joint == torch.unique(a).numel() == torch.unique(b).numel()
+
+
 @pytest.mark.parametrize("name", list(SWITCHES))
 def test_every_switch_changes_the_network(name):
     """(The batch holds a position with boards far apart - test_displacement.far_state - so that
-    B15's far bins are in play.)"""
+    B15's far bins and lines are in play.)"""
     a_flags, b_flags = SWITCHES[name]
     batch = collate([synthetic_state(11, 5), far_state(11)])
-    a = _model(**a_flags)(batch)
-    b = _model(**b_flags)(batch)
+    model_a, model_b = _model(**a_flags), _model(**b_flags)
+    a, b = model_a(batch), model_b(batch)
     assert not torch.allclose(a.value_logits, b.value_logits, atol=1e-4), name
     assert not torch.allclose(a.policy_logits, b.policy_logits, atol=1e-4), name
+    if name in B15_PLACEHOLDERS:
+        rows = torch.arange(batch.n_tokens).expand(batch.batch_size, -1)
+        ea, eb = (m.make_context(batch).structure.disp_entries(rows) for m in (model_a, model_b))
+        assert not _same_grouping(ea, eb), f"{name} regroups no pair of the batch"
+
+
+def test_same_grouping():
+    a = torch.tensor([[0, 0, 1], [2, 2, 1]])
+    assert _same_grouping(a, a + 7) and _same_grouping(a, torch.tensor([[5, 5, 3], [9, 9, 3]]))
+    assert not _same_grouping(a, torch.tensor([[0, 1, 1], [2, 2, 1]])), "a split and a merge"
+    assert not _same_grouping(a, torch.tensor([[0, 0, 0], [2, 2, 0]])), "a merge"
+    assert not _same_grouping(a, torch.tensor([[0, 4, 1], [2, 2, 1]])), "a split"
 
 
 @pytest.mark.parametrize(

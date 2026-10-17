@@ -116,10 +116,11 @@ under 1.1 GB on both paths, against 3.4 GB for B9's default through the unchunke
 path. The block-sparse plans of a forward hold about 58 MB per sparse role at 240 boards
 (the move graph's blocks select 24% of the key boards on average). The timings and peak
 memory above were measured on the network before F5 and F6 (LayerNorm with biases, biased
-Q/K/V projections, GELU in the FFN) and before B15, as ``bench.py``'s table was, and have
-not been re-measured since; the plans' size does not depend on any of them. B15 puts a
-learned bias on every head, so v1's dense heads now run block by block with a per-row
-bias, as "every switch" did - and, under autograd, in the CPU math kernel.
+Q/K/V projections, GELU in the FFN) and before B15, as ``bench.py``'s table was - "every
+switch" with B6's binned biases on, since removed - and have not been re-measured since;
+the plans' size does not depend on any of them. B15 puts a learned bias on every head, so
+v1's dense heads now run block by block with a per-row bias, as "every switch" did - and,
+under autograd, in the CPU math kernel.
 """
 
 from __future__ import annotations
