@@ -170,8 +170,9 @@ class AttnContext:
     scope: BlockCausalScope | None = None
 
     def for_layer(self, h: torch.Tensor) -> AttnContext:
-        """The context of one layer whose (normed) input is ``h`` ``(B, L, d)``: the
-        structure's layer-dependent biases (board-pair smolgen, B12) generated from it."""
+        """The context of one layer whose attention input is ``h`` ``(B, L, d)``
+        (``trunk.Block.attn_input``): the structure's layer-dependent biases (board-pair
+        smolgen, B12) generated from it."""
         if self.structure is None or not self.structure.layer_dependent:
             return self
         return replace(self, structure=self.structure.for_layer(h))
@@ -821,16 +822,18 @@ ATTENTION = {
 
 
 class SelfAttention(nn.Module):
-    """Q/K/V/output projections around the attention implementations (``ATTENTION``)."""
+    """Q/K/V/output projections around the attention implementations (``ATTENTION``). F5
+    (section 9.3): no biases in the Q, K and V projections; the output projection keeps its
+    bias (``NetConfig.qkv_bias``, ``NetConfig.out_ffn_bias``)."""
 
     def __init__(self, cfg: NetConfig) -> None:
         super().__init__()
         self.n_heads, self.d_head = cfg.n_heads, cfg.d_head
         d = cfg.d_model
-        self.q_proj = nn.Linear(d, d, bias=cfg.linear_bias)
-        self.k_proj = nn.Linear(d, d, bias=cfg.linear_bias)
-        self.v_proj = nn.Linear(d, d, bias=cfg.linear_bias)
-        self.out_proj = nn.Linear(d, d, bias=cfg.linear_bias)
+        self.q_proj = nn.Linear(d, d, bias=cfg.qkv_bias)
+        self.k_proj = nn.Linear(d, d, bias=cfg.qkv_bias)
+        self.v_proj = nn.Linear(d, d, bias=cfg.qkv_bias)
+        self.out_proj = nn.Linear(d, d, bias=cfg.out_ffn_bias)
 
     def _split(self, x: torch.Tensor) -> torch.Tensor:
         bsz, length, _ = x.shape

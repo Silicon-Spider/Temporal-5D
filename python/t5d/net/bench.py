@@ -41,6 +41,10 @@ default 3.40 s / 1.47 GB with blocks recomputed, 3.03 s / 2.33 GB keeping them; 
 switch 25.1 s / 1.49 GB. Learned biases make the kernel's mask require gradient, which on
 CPU forces PyTorch's math kernel inside every block that carries them (the time of "every
 switch").
+
+These figures are of the network before F5 (CHECKPOINT 6: LayerNorm with biases, biased
+Q/K/V projections), which F5 replaced with gain-only RMSNorm and no Q/K/V biases - less
+per-token work, no new matmul; they were not re-measured (no quiet machine since).
 """
 
 from __future__ import annotations
@@ -58,7 +62,8 @@ import time
 #: of N2 on; "*-chunked" runs the same structure through ablation 6's dense-mask arm,
 #: "*-sdpa" through the unchunked fused path, which materialises (B, H, L, L) masks, and
 #: "*-keep" keeps every block for the backward pass instead of recomputing it
-#: (``attn_recompute=False``; training steps only).
+#: (``attn_recompute=False``; training steps only); "6y-*" are ablation 6y's trunk arms on
+#: N2's default.
 _ALL = dict(routing_table=True, typed_edge_bias=True, board_pair_smolgen=True, binned_bias=True)
 CONFIGS: dict[str, dict] = {
     "n1-dense": dict(move_graph_heads=0, attn_impl="sdpa"),
@@ -73,6 +78,7 @@ CONFIGS: dict[str, dict] = {
     "n2-default-keep": dict(attn_recompute=False),
     "n2-default-chunked-keep": dict(attn_impl="chunked", attn_recompute=False),
     "n2-all-keep": _ALL | dict(attn_recompute=False),
+    "6y-post-norm": dict(norm_placement="post"),
 }
 
 

@@ -1,6 +1,6 @@
 """Stage N2 in the whole network: N1's invariances still hold with every new switch on,
 parameter counts stay at section 9.2's figures, BF16 stays close to FP32, and board-pair
-smolgen (B12) reads each layer's own normed input, passes gradient back into the trunk,
+smolgen (B12) reads each layer's own attention input, passes gradient back into the trunk,
 and switching it on changes no other weight."""
 
 from __future__ import annotations
@@ -135,12 +135,16 @@ def _layer_contexts(monkeypatch) -> list[AttnContext]:
     return seen
 
 
+@pytest.mark.parametrize("placement", ["pre", "post"])
 @pytest.mark.parametrize("form", ["relative_cells", "board_bilinear"])
-def test_smolgen_reads_each_layers_normed_input(monkeypatch, form):
-    """Each layer's board-pair table is generated from that layer's normed attention input
-    - ``blocks[i].norm_attn`` of the residual stream - and not from the residual stream
-    itself: layers 0 and 1 rebuilt by hand."""
-    model = build_model(NetConfig(trunk_dtype="fp32", n_layers=2, board_pair_smolgen=True, smolgen_form=form), seed=8).eval()
+def test_smolgen_reads_each_layers_attention_input(monkeypatch, form, placement):
+    """Each layer's board-pair table is generated from that layer's attention input. Under
+    pre-norm (F5's v1) that is the normed residual stream - ``blocks[i].norm_attn(x)`` - and not
+    the residual stream itself; under the post-norm arm (6y) it is the block's input ``x``
+    (the previous block's FFN norm normed it; block 0's is the embedding), not ``norm_attn(x)``:
+    layers 0 and 1 rebuilt by hand."""
+    cfg = NetConfig(trunk_dtype="fp32", n_layers=2, board_pair_smolgen=True, smolgen_form=form, norm_placement=placement)
+    model = build_model(cfg, seed=8).eval()
     batch = collate([synthetic_state(80, 5)])
     seen = _layer_contexts(monkeypatch)
     with torch.no_grad():
@@ -148,10 +152,10 @@ def test_smolgen_reads_each_layers_normed_input(monkeypatch, form):
         smolgen_in = model.make_context(batch).structure.smolgen_in
         x = model.embed(batch)
         for layer, block in enumerate(model.trunk.blocks):
-            h = block.norm_attn(x)
+            h, other = (block.norm_attn(x), x) if placement == "pre" else (x, block.norm_attn(x))
             expected = F.pad(model.smolgen(h, smolgen_in).float(), (0, 1, 0, 1))
             assert torch.allclose(seen[layer].structure.pair_table, expected, atol=1e-6), layer
-            assert not torch.allclose(F.pad(model.smolgen(x, smolgen_in).float(), (0, 1, 0, 1)), expected, atol=1e-3)
+            assert not torch.allclose(F.pad(model.smolgen(other, smolgen_in).float(), (0, 1, 0, 1)), expected, atol=1e-3)
             x = block(x, model.make_context(batch))
 
 

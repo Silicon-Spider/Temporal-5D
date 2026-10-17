@@ -6,9 +6,12 @@ of the exact-but-static typed edges. Section 9.2 sizes it: "Smolgen latent 32, b
 per head", under 0.1M parameters. Token-level and within-board smolgen are refused
 (B13, section 14.4) and do not exist here.
 
-**The latent** (per layer, from that layer's normed attention input ``h``): the global
-context ``c`` is the mean of the global registers' states and ``z = silu(W_z c + b_z)``
-(32-dim; SiLU as in Lc0's smolgen) - the part generated "from the global registers".
+**The latent** (per layer, from that layer's attention input ``h`` - the normed residual
+stream under F5's pre-norm, the block's input under its post-norm arm,
+``trunk.Block.attn_input``): the global context ``c`` is the mean of the global registers'
+states and ``z = silu(W_z c + b_z)`` (32-dim; SiLU as in Lc0's smolgen) - the part
+generated "from the global registers". There is no norm inside the generator (F5's
+"everywhere except inside smolgen" finds none to keep - build log, spec issue 202).
 
 **Two generators** turn ``z`` into per-head biases over board pairs (``smolgen_form``;
 B12 is class R, so the form is an implementation choice and both are built):
@@ -162,7 +165,7 @@ class BoardPairSmolgen(nn.Module):
 
     def forward(self, h: torch.Tensor, inputs: SmolgenInputs) -> torch.Tensor:
         """Board-pair biases ``(B, H, Nb, Nb)`` (query board, key board) from a layer's
-        normed input ``h`` ``(B, L, d)``."""
+        attention input ``h`` ``(B, L, d)``."""
         bsz, _, d = h.shape
         z = F.silu(self.context(self._context_input(h, inputs)))  # (B, r)
         if self.form == "relative_cells":

@@ -10,6 +10,61 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-17 - Network F5: RMSNorm-style normalisation, no Q/K/V biases, pre-norm; the post-norm + DeepNet arm behind a flag
+
+- `python/t5d/net/trunk.py`: register F5 (committed, §9.3). `RMSNorm` - a learned gain over
+  the root mean square, no mean-centring, no bias (Zhang & Sennrich 2019), computed in FP32
+  with autocast off (G1) - replaces LayerNorm in both sublayer norms of every block and the
+  final norm. A block is now four steps (`attn_input`, the attention, `after_attn`,
+  `after_ffn`) and the trunk ends in `Trunk.output`; they carry the placement,
+  `NetConfig.norm_placement`: `"pre"` (the v1, as before) or ablation 6y's arm `"post"` -
+  DeepNorm as published (Wang et al. 2022, Figure 2): x ← N(αx + sublayer(x)), α = (2L)^(1/4),
+  no final norm, no norm on the embedding, smolgen reading the block's input (placeholders,
+  spec issue 201).
+- `attention.py`, `trunk.py`, `config.py`: the single `linear_bias` switch is split as §9.3
+  says - `qkv_bias=False` (F5: no Q/K/V projection biases) and `out_ffn_bias=True` (the
+  attention-output and FFN biases kept: "as here"; spec issue 200). `NetConfig(linear_bias=...)`
+  now raises `TypeError`. `norm_placement` and `norm_eps` validated; `deepnorm_alpha` and
+  `deepnorm_beta` derived from L. The heads, the embedding's Δt MLP and smolgen keep their
+  biases; smolgen has no norm of its own to keep (spec issue 202).
+- `model.py`: RMSNorm gains drawn 1 + N(0, `init_norm_std`), no bias draws; under post-norm
+  DeepNet's initialisation replaces the GPT-2 1/√(2L): gain β = (8L)^(-1/4) on the value,
+  attention-output and both FFN projections over the LeCun base, Q and K at gain 1. Every
+  seed's global RNG stream shifts (fewer draws); no test pins a golden output.
+- `cache.py`: `compute_board` and `live_pass` run the trunk's block steps instead of a
+  hand-written pre-norm block, so the cached path computes the trunk's function under
+  either placement (§15.2's rows hold under the arm).
+- Parameters: F1 21,338,634 (−20,736: the norms' biases 33 × 256, the Q/K/V biases 16 × 3 ×
+  256); F2's L24-ff12 preset 44,456,458, now pinned exactly; the post-norm arm 256 fewer.
+- Tests: `tests/net/test_trunk.py` (new) - RMSNorm by its formula in FP64 and against
+  PyTorch's `rms_norm`, no centring, FP32 under autocast; norms and biases where §9.3 puts
+  them; the bias switches; each placement equal to its formula block by block (smolgen on
+  and off), α applied; DeepNet's initialisation std ratios; the arm's count; validation.
+  `test_cache`: the 6y arm through §15.2's rows (cached = full pass on two geometries, root
+  refresh, transpositions bitwise, a transposition hit, the BF16 cache as the live
+  precision), and the every-switch matrix gains post-norm with the N2 structure;
+  `test_structure`: every `attn_impl` one function under post-norm, and "every switch
+  changes the network" gains `norm_placement`, `qkv_bias`, `out_ffn_bias`; `test_n2_model`:
+  smolgen reads each layer's attention input under both placements; `test_precision`: the
+  post-norm arm under G1's bounds; `test_model`: the RMSNorm gains non-identity, post-norm
+  too; `test_smoke`: the arm trains finite with every tensor moving; `test_params`: the new
+  counts (its stale smolgen figure corrected to 47,136).
+- Docstring figures re-measured on the new network (numerics, not timings; the machine is
+  loaded but these do not depend on it): `test_precision` (BF16 gap 0.23% RMS, bounds 3-11x
+  above), `test_cache`'s BF16 and FP8 gaps and mutant M14, `tests/engine/test_network.py`'s
+  real-position gaps - each of the same size as its pre-F5 figure (within a third), except
+  FP8-at-FP32's rare rounding flips (trunk RMS 6.1e-5 at seed 0, the largest of 12 seeds;
+  under its 2e-4 bound and 120x below mutant M14). `bench.py`: a `6y-post-norm`
+  configuration; its timing table marked as measured before F5 (not re-measured).
+- `docs/BUILD_LOG.md`: register rows F5 (new) and F1/F2 (the count); spec issues 200-203;
+  proposed edits 150-153.
+- Spec: §9.2 (Params), §9.3 (all three bullets' F5 parts), §13.1 6y, §14.4 (KataGo's
+  fixup, replaced by §9.3's RMSNorm-style layers - nothing built), §15.2 (rows 1-3 and the
+  G1 row, under the arm), §15.3's "displacement bias and normalisation changes" row (not
+  measured: no quiet machine); register F1, F2, F5, B12, G1. Proposed edits 150 (F5's
+  biases stated in §9.3's first bullet and the register), 151 (the post-norm arm's details
+  as built), 152 (B12's "keeps its own normalisation"), 153 (§9.2 and F1's count, M4).
+
 ### 2026-10-17 - Design documents: the CHECKPOINT 6 and 7 rulings, from upstream
 
 - `docs/design/5d-chess-decisions.md`, `docs/design/5d-chess-transformer-design.md`,

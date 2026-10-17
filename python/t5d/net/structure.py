@@ -263,7 +263,7 @@ class AttnStructure:
         return [(r, torch.tensor([h for h, x in enumerate(self.head_roles) if x == r], device=device)) for r in roles]
 
     def for_layer(self, h: torch.Tensor) -> AttnStructure:
-        """This structure with the board-pair table of one layer, whose normed input is ``h``."""
+        """This structure with the board-pair table of one layer, whose attention input is ``h``."""
         if self.smolgen is None:
             return self
         table = self.smolgen(h, self.smolgen_in).float()
