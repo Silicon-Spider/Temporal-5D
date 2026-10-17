@@ -10,9 +10,9 @@ section 2.3: "added to every token on the board") and its Delta-t-to-present emb
 (A3). Delta-t is continuous: a small learned MLP (GELU) over the features
 ``(dt / dt_scale, sign(dt) * log1p|dt|, [dt == 0])``, so the binary "present" flag is
 kept as Delta-t's zero (section 2.3) while the distance to the present stays readable
-at any range (implementation choice: the spec says only "embedded per board"; F6's Mish
-is the trunk FFN's activation, and this MLP is neither the FFN nor a head - spec issue
-204).
+at any range (implementation choice: the spec says only "embedded per board"). F6's Mish
+is the activation of the trunk FFN and of every head's hidden layers (CHECKPOINT 8); this
+MLP is neither, and F6 does not name it, so it keeps stage N1's GELU (spec issue 221).
 
 Register tokens get a register-type embedding (per-board slot 0..R-1, or global index
 0..G-1) plus one learned "not a square" embedding (section 5.3) instead of piece/colour/

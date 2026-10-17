@@ -10,6 +10,38 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-17 - Network F6: Mish in every head's hidden layers (the user's ruling on issue 204)
+
+- `python/t5d/net/heads.py`, `config.py`: register F6 as changed at CHECKPOINT 8 - "Mish for
+  v1, in the trunk FFN and every head's hidden layers ...; squared ReLU as the trunk-only
+  arm"; the user on spec issue 204: "yes: Mish in every head's hidden layers, the value head
+  included; squared ReLU stays a trunk-only arm". The value head's hidden layer is the only
+  head MLP (the policy and reply pointers are bilinear; the submit readout and the WDL,
+  moves-left, short-value, effort, per-board and per-square heads linear): `ValueHead` now
+  computes `out(mish(hidden(x)))` with no switch. `head_activation` (its placeholder "gelu"
+  and the "mish" option) and `HEAD_ACTIVATIONS` are removed rather than kept as an arm no
+  ruling or ablation names; nothing else needs a switch - 6y's squared ReLU stays
+  `ffn_activation`'s, which only the trunk's FFN reads.
+- No parameter changes (an activation has none): F1 stays 22,961,802. The value head's
+  outputs change (GELU to Mish); no test pins them.
+- Docstrings: `heads.py`, `config.py` (F6's bullet, the placeholder index, `ffn_activation`,
+  `value_hidden`), `trunk.py` (only the trunk's FFN follows the switch), `embed.py` and
+  `smolgen.py` (the Δt MLP's GELU and smolgen's SiLU, outside F6's words - spec issue 221).
+- Tests: `test_trunk.py` - `test_every_heads_hidden_layer_is_mish` (the value head by hand in
+  FP64 under both FFN arms, and not GELU) and `test_squared_relu_reaches_no_head` (the arm's
+  network and the v1's, built from one seed, have the same parameters, and over one trunk
+  output every head's output is equal bit for bit; the trunks differ); `head_activation` is
+  refused as an unknown field. `test_smoke.py`'s squared-ReLU arm runs without it. Mutants
+  patched in at test time (no file edited): a value head that follows the FFN's switch fails
+  both new tests under the arm; a GELU value head fails the by-hand test.
+- `docs/BUILD_LOG.md`: register F6; spec issue 204 marked built under its ruling; issue 221
+  (the Δt MLP and smolgen's SiLU are outside F6's words, as A6's and A8's embeddings will
+  be); proposed edit 154 settled upstream in part (the squared-ReLU arm's initialisation is
+  still unstated), edit 162.
+- Spec: §9.3's Mish bullet and register F6 - as built now; register D3 (the value head's
+  MLP). §2.2, §2.3 and register A6, A8, B12: the activations F6 does not name (issue 221,
+  proposed edit 162). §9.2 and F1: no parameter change.
+
 ### 2026-10-17 - Engine A6: the turn-state counts in the expansion and the C API; the in-action move count in the evaluation identity
 
 - Register A6 (Committed, class C; §2.3), the engine side - engine ABI round 1's first

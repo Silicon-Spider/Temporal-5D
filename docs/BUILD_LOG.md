@@ -1356,7 +1356,7 @@ commits (F5 and F6 on `lane/net`, H47 and H48 on `lane/gate`, M22 on `lane/engin
 | E6 | not built (rule) | Refused |
 | F1, F2 | built, tested | 22,961,802 parameters (F1 after F5 and B15: 21,338,634 - 20,736 fewer than N5's 21,359,370, gain-only norms, no Q/K/V biases, spec issue 203 - plus B15's 1,623,168, spec issue 210); the L24-ff12 preset, 46,891,210 (F2: 44,456,458 and B15's 2,434,752 over 24 layers). Unchanged by B11's fold (its flag is off; with it on, 40 scalars where there were 48) and by B16 (its 304 are in a network of the cached configuration only: 22,962,106 with `attn_scope = "block_causal"`) and B17 (off; with it on, 6,115,328 more - 29,077,130, or 23,726,218 with the vectors shared by the heads; spec issue 218) |
 | F5 | built, tested | Network: RMSNorm-style norms (a learned gain, no centring, no bias; FP32) everywhere in the trunk, no Q/K/V biases, the attention-output and FFN biases kept (spec issue 200), pre-norm. 6y's arm - post-norm with DeepNet's initialisation, `norm_placement="post"` - through the dense trunk and the cached path, its unstated details placeholders (issue 201); smolgen has no norm to keep (issue 202) |
-| F6 | built, tested | Network: Mish in the FFN (`ffn_activation="mish"`); 6y's arm, squared ReLU (`"squared_relu"`), through the dense trunk and the cached path. Whether Mish reaches the output heads is not decided by F6: the value head's MLP keeps GELU as a named placeholder (`head_activation`, spec issue 204) |
+| F6 | built, tested | Network: Mish in the trunk FFN (`ffn_activation="mish"`) and in every head's hidden layers - the value head's MLP, the only head with one (CHECKPOINT 8's ruling on issue 204, `lane/net` N-F6heads: no switch - `head_activation` and its GELU removed); 6y's arm, squared ReLU (`"squared_relu"`), in the trunk only, through the dense trunk and the cached path - tested: no head follows it. Outside F6's words, kept as built: the embedding's Δt MLP (GELU) and B12's smolgen (SiLU) - spec issue 221 |
 | F3 | not built (rule) | Refused |
 | G7 | not started | SPSA/SPRT tooling (training-time) |
 | F4 | not built (rule) | The NNUE is held open (H6, CHECKPOINT 4) |
@@ -2359,6 +2359,10 @@ superseded or made moot says so; nothing is deleted.
     (6y's arms are the FFN's, not the heads'; M20's dispositions predate it): put to
     the user to rule, or to name the ablation. Proposed edit 154.
     *Ruled at CHECKPOINT 8: Mish in every head's hidden layers, the value head included; squared ReLU a trunk-only arm (F6) - the network lane.*
+    *Built (`lane/net`, N-F6heads, 2026-10-17): the value head's hidden layer - the only head
+    MLP - is Mish with no switch (`head_activation` removed rather than kept as an unruled
+    arm); squared ReLU stays `ffn_activation`'s, and a test holds every head's output under
+    the arm to the v1's, bit for bit, over one trunk output. The Δt MLP is issue 221.*
 205. **B15's far bins** (§4.1, register B15: "binned and clamped beyond"). §4.1 gives the
     exact classes and says the classes beyond them are "binned and clamped, so unseen
     board counts extrapolate as the binned biases did", with no bins - not their edges,
@@ -2563,6 +2567,19 @@ superseded or made moot says so; nothing is deleted.
     0.1`): N(0, 0.1) from a generator of B17's own (`model.b17_seed`) - a query's entries have
     unit spread at initialisation, so the term starts with the spread of B15's scalars; the
     flag's off position is the B15 network bit for bit. Proposed edit 161.
+221. **The network's other activations are outside F6's words** (§9.3, register F6, §2.2,
+    §2.3, B12). F6 now names two places - "in the trunk FFN and every head's hidden layers"
+    (CHECKPOINT 8) - and the network has activations in neither: the input embedding's Δt MLP
+    (A3: `Linear(3, 32)`, GELU, `Linear(32, d)` - §2.3 says only "embedded per board"), and
+    B12's smolgen context layer (`z = silu(W_z c + b_z)`, SiLU as in Lc0's smolgen; a
+    prototype behind its flag). Two more are to come with their components: A6's turn-state
+    inputs, "embedded into the global registers" in no stated form (an MLP would need one),
+    and A8's "FFN after the embedding" (§2.2) - an FFN, but not the trunk's. All are inputs
+    or input-side generators, committed-class like the rest of the input encoding (a
+    network trained with one cannot run with another). Built: kept as they are - GELU in the
+    Δt MLP (stage N1's), SiLU in smolgen - documented as outside F6 (`embed.py`,
+    `smolgen.py`). For the user: Mish there too, or leave them implementation choices; A6's
+    and A8's components will need the answer. Proposed edit 162.
 
 <!-- A new list, so that the numbers from 140 render as written. -->
 
@@ -3187,6 +3204,9 @@ struck through, where nothing of it is left to apply); the others stand as writt
     hidden activation is Mish too (as built: the value head's MLP keeps GELU, a
     placeholder), so that D3's head rewrite does not settle it by accident; and, for
     6y's squared-ReLU arm, its initialisation if it is not Mish's (issue 204).
+    *Settled upstream at CHECKPOINT 8 in part: register F6 and §9.3 (Mish in the trunk FFN and
+    every head's hidden layers; squared ReLU the trunk-only arm) - built (N-F6heads). Still
+    open: the squared-ReLU arm's initialisation (as built: Mish's).*
 155. **§4.1's B15 bullets and register B15**: now - "binned and clamped" (no bins), "exact
     line classes ... equal steps along two, three or four axes", "per-board registers by
     their board-distance class, global registers one entry per head", "about 1.6M
@@ -3268,6 +3288,14 @@ struck through, where nothing of it is left to apply); the others stand as writt
     unrotated query and the scale 1/sqrt(d_head); N(0, 0.1) (issues 217-220). Why: B17 is class
     C, each is a committed-class detail of ablation 2's arm, and its size - a quarter of the
     network per head - is not one to leave unstated.
+162. **Register F6 and §9.3's Mish bullet (with §2.2, §2.3 and register A6, A8, B12)**: now -
+    "Mish for v1, in the trunk FFN and every head's hidden layers (CHECKPOINT 8)"; §9.3: "Mish
+    applies in every head's hidden layers too". Proposed - say whether the input side's MLPs
+    follow: the Δt-to-present embedding (§2.3; as built GELU), A6's turn-state embedding and
+    A8's "FFN after the embedding" (§2.2) when they are built, and B12's smolgen context layer
+    (as built SiLU, Lc0's) - Mish everywhere, or "the embedding's and smolgen's activations
+    are implementation choices". Why: F6 names two places and is read as naming only those;
+    the input encoding is committed-class too (issue 221).
 
 <!-- A new list, so that the numbers from 110 render as written. -->
 

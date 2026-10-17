@@ -9,7 +9,8 @@ per head", under 0.1M parameters. Token-level and within-board smolgen are refus
 **The latent** (per layer, from that layer's attention input ``h`` - the normed residual
 stream under F5's pre-norm, the block's input under its post-norm arm,
 ``trunk.Block.attn_input``): the global context ``c`` is the mean of the global registers'
-states and ``z = silu(W_z c + b_z)`` (32-dim; SiLU as in Lc0's smolgen) - the part
+states and ``z = silu(W_z c + b_z)`` (32-dim; SiLU as in Lc0's smolgen - F6's Mish names
+the trunk FFN and the heads' hidden layers, not smolgen: spec issue 221) - the part
 generated "from the global registers". There is no norm inside the generator (F5's
 "everywhere except inside smolgen" finds none to keep - build log, spec issue 202).
 
