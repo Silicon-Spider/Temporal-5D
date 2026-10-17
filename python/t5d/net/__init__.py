@@ -4,8 +4,10 @@ Stage N1 of the untrained build (spec section 15.1, Phase 2): the dense v1 netwo
 random weights. Stage N2: the attention structure of section 6 - the move-graph mask
 (B9, on), the routing table, typed edge biases and board-pair smolgen (B10-B12, flags) -
 and B14's attention paths, block-sparse (the default) and chunked, which build masks and
-biases one query block at a time - ``structure.py``, ``smolgen.py``, ``attention.py``
-(B14's FlexAttention ``score_mod`` is not built: no compiler or GPU here). Stage N3: the
+biases one query block at a time - ``structure.py``, ``smolgen.py``, ``attention.py``;
+B14's FlexAttention score function runs eagerly on CPU (``flex.py``: forward only, small
+inputs; compiled kernels need a GPU). CHECKPOINT 6: B15's 4D displacement bias, the v1
+default (``displacement.py``), superseding B6's binned biases. Stage N3: the
 block-causal scope (C17, C19 - ``scope.py``, ``NetConfig.attn_scope``), the lineage it rests
 on (``PositionState.parent`` / ``creation``), the cached evaluation path with supersession
 recompute, prefix sharing, refresh epochs and FP8 storage (C2, C3, C3a rung 1, C15, C20 -

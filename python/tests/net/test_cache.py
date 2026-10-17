@@ -128,18 +128,22 @@ def test_cached_equals_one_full_pass(geometry, reading, supersession):
 @pytest.mark.parametrize(
     "flags",
     [
-        dict(routing_table=True, typed_edge_bias=True, board_pair_smolgen=True, binned_bias=True, rope_per_head=True),
+        dict(routing_table=True, typed_edge_bias=True, board_pair_smolgen=True, rope_per_head=True),
         dict(board_register_spatial="position_free", global_register_pairs="anchored", masked_head_registers="self"),
         dict(board_register_spatial="zero_angle", move_graph_heads=4, rope_recenter=False),
         dict(frozen_features="current"),
         dict(norm_placement="post", ffn_activation="squared_relu", routing_table=True, typed_edge_bias=True, board_pair_smolgen=True),
+        dict(displacement_bias=False, routing_table=True, typed_edge_bias=True),
+        dict(disp_register_pairs="shared", disp_far_edges=(3, 4, 6), disp_line_max=4, disp_init_std=1.0),
     ],
-    ids=["n2-all", "regs-free-anchored", "zero-angle-raw", "current-features", "6y-arms-n2"],
+    ids=["n2-all", "regs-free-anchored", "zero-angle-raw", "current-features", "6y-arms-n2", "no-table-n2", "b15-placeholders"],
 )
 def test_cached_equals_one_full_pass_with_every_switch(flags):
-    """(a) under the section 6 structure and the open positional choices of stages N1-N3, and
-    under ablation 6y's two arms together with the structure on (F5's post-norm - smolgen then
-    reads the block's input - and F6's squared ReLU)."""
+    """(a) under the section 6 structure and the open positional choices of stages N1-N3, under
+    ablation 6y's two arms together with the structure on (F5's post-norm - smolgen then reads
+    the block's input - and F6's squared ReLU), on B15's no-table arm (ablation 2), and with
+    B15's placeholders moved (its table at unit scale). B15 - the v1 default - is on in every
+    other test here: a frozen board's rows carry it, layer by layer (``compute_board``)."""
     model = _model(3, **flags)
     root = _root("standard", 3)
     tree = SearchTree(CachedEvaluator(model), root)

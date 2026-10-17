@@ -28,9 +28,10 @@ matmuls and the attention kernel run in BF16 while the residual stream, the norm
 the master weights stay FP32 (``RMSNorm`` turns autocast off and computes in FP32); RoPE
 is FP32 regardless (``rope.py``).
 
-Each block hands its attention the context of its own layer (``AttnContext.for_layer``):
-board-pair smolgen (B12) generates that layer's biases from the attention's input - the
-block's normed input under pre-norm, the block's input under post-norm.
+Each block hands its attention the context of its own layer (``AttnContext.for_layer``,
+with the block's index ``Block.layer``): B15's displacement table of that layer, and
+board-pair smolgen's (B12) biases generated from the attention's input - the block's normed
+input under pre-norm, the block's input under post-norm.
 
 A block is four steps - ``Block.attn_input``, the attention, ``Block.after_attn``,
 ``Block.after_ffn`` - and the trunk ends in ``Trunk.output``. The cached path
@@ -100,11 +101,14 @@ class FeedForward(nn.Module):
 
 
 class Block(nn.Module):
-    """One residual block: the attention sublayer, then the FFN sublayer, each with its
-    RMSNorm (``norm_attn``, ``norm_ffn``) placed by ``NetConfig.norm_placement``."""
+    """One residual block - layer ``layer`` of the trunk: the attention sublayer, then the FFN
+    sublayer, each with its RMSNorm (``norm_attn``, ``norm_ffn``) placed by
+    ``NetConfig.norm_placement``."""
 
-    def __init__(self, cfg: NetConfig) -> None:
+    def __init__(self, cfg: NetConfig, layer: int) -> None:
         super().__init__()
+        #: The block's index in the trunk: which layer's biases its attention reads (B15).
+        self.layer = layer
         self.post_norm = cfg.norm_placement == "post"
         #: DeepNorm's residual up-scaling (post-norm; unused under pre-norm).
         self.alpha = cfg.deepnorm_alpha if self.post_norm else 1.0
@@ -130,13 +134,13 @@ class Block(nn.Module):
 
     def forward(self, x: torch.Tensor, ctx: AttnContext, kv_hook: Callable | None = None) -> torch.Tensor:
         h = self.attn_input(x)
-        return self.after_ffn(self.after_attn(x, self.attn(h, ctx.for_layer(h), kv_hook)))
+        return self.after_ffn(self.after_attn(x, self.attn(h, ctx.for_layer(h, self.layer), kv_hook)))
 
 
 class Trunk(nn.Module):
     def __init__(self, cfg: NetConfig) -> None:
         super().__init__()
-        self.blocks = nn.ModuleList(Block(cfg) for _ in range(cfg.n_layers))
+        self.blocks = nn.ModuleList(Block(cfg, layer) for layer in range(cfg.n_layers))
         #: The norm before the heads - pre-norm only: under post-norm the last block's FFN
         #: norm is the output's (placeholder, ``NetConfig.norm_placement``).
         self.final_norm = RMSNorm(cfg.d_model, cfg.norm_eps) if cfg.norm_placement == "pre" else None
@@ -156,4 +160,4 @@ class Trunk(nn.Module):
             x = block(x, ctx)
         block = self.blocks[layer]
         h = block.attn_input(x)
-        return block.attn.probabilities(h, ctx.for_layer(h))
+        return block.attn.probabilities(h, ctx.for_layer(h, layer))

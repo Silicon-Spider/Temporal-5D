@@ -4,7 +4,9 @@ One weight set, unified dense bidirectional attention over every token (spec sec
 3.1-3.2, 7.4), full MHA with 8 heads of 32 (C4, section 10.2). Connectivity is a mask,
 never a weight (B1): callers may pass any boolean mask and any additive per-head bias,
 and stage N2's structure (``structure.py``: the move-graph mask, the routing table, typed
-edge biases, board-pair biases) supplies its masks and biases one query block at a time.
+edge biases, board-pair biases, and B15's displacement bias - per layer: each layer's
+context comes from ``AttnContext.for_layer``) supplies its masks and biases one query
+block at a time.
 
 **Positions (section 4.1, B4).** Q and K are rotated in FP32 (G1) before the kernel. A
 token with no coordinate on an axis cannot be rotated on it under a relative encoding (a
@@ -30,7 +32,7 @@ the scope enters wherever the caller's mask does). A query row with no allowed k
 outputs zeros, and its gradient stays finite; neither the structure nor the scope ever
 empties a row.
 
-Five implementations compute the same function on every valid query
+Six implementations compute the same function on every valid query
 (``NetConfig.attn_impl``; a padding query's output is discarded, and the block-sparse
 path does not compute it the reference's way):
 
@@ -97,6 +99,14 @@ path does not compute it the reference's way):
 * ``"dense"``: every mask and bias materialised at ``(B, H, L, L)`` first
   (``AttnContext.densified``), then the explicit computation - the reference the tests
   compare the others with.
+* ``"flex"`` (B14's score function, ``flex.py``): torch's ``flex_attention`` with a score
+  function that computes every bias inside the attention - B15's from the tokens'
+  coordinates, B11's from the pair's typed relations, B12's from the layer's board-pair
+  table - and a mask function for every mask, with a block mask in board-major order.
+  Eager on CPU: PyTorch 2.13's FlexAttention has no CPU backward and, uncompiled,
+  materialises every score - so this path proves the in-kernel formulation exact on small
+  positions (section 15.2's B15 row), and the compiled GPU kernel and its speed wait for GPU
+  time (G9, M19).
 
 Indicative cost (``bench.py``, whose docstring has the table; development CPU, PyTorch
 2.13, one forward of the 16-layer network, one position, FP32; not section 15.3
@@ -106,14 +116,11 @@ under 1.1 GB on both paths, against 3.4 GB for B9's default through the unchunke
 path. The block-sparse plans of a forward hold about 58 MB per sparse role at 240 boards
 (the move graph's blocks select 24% of the key boards on average). The timings and peak
 memory above were measured on the network before F5 and F6 (LayerNorm with biases, biased
-Q/K/V projections, GELU in the FFN), as ``bench.py``'s table was, and have not been
-re-measured since; the plans' size does not depend on either.
-
-**Not built (B14):** FlexAttention's ``score_mod`` / block mask. Compiled FlexAttention
-needs ``torch.compile``, which has no C++ compiler on the development machine, and
-uncompiled it materialises every score; the block-sparse path above is its CPU stand-in,
-and the GPU kernel - block-sparse against dense, measured as section 6.1 asks - remains
-to be built where it can run.
+Q/K/V projections, GELU in the FFN) and before B15, as ``bench.py``'s table was - "every
+switch" with B6's binned biases on, since removed - and have not been re-measured since;
+the plans' size does not depend on any of them. B15 puts a learned bias on every head, so
+v1's dense heads now run block by block with a per-row bias, as "every switch" did - and,
+under autograd, in the CPU math kernel.
 """
 
 from __future__ import annotations
@@ -172,13 +179,14 @@ class AttnContext:
     #: ANDed in wherever the caller's mask is.
     scope: BlockCausalScope | None = None
 
-    def for_layer(self, h: torch.Tensor) -> AttnContext:
-        """The context of one layer whose attention input is ``h`` ``(B, L, d)``
-        (``trunk.Block.attn_input``): the structure's layer-dependent biases (board-pair
-        smolgen, B12) generated from it."""
+    def for_layer(self, h: torch.Tensor | None, layer: int) -> AttnContext:
+        """The context of layer ``layer``, whose attention input is ``h`` ``(B, L, d)``
+        (``trunk.Block.attn_input``): the structure's layer-dependent biases - board-pair
+        smolgen's table generated from ``h`` (B12; only B12 needs ``h``) and the layer's
+        displacement table (B15)."""
         if self.structure is None or not self.structure.layer_dependent:
             return self
-        return replace(self, structure=self.structure.for_layer(h))
+        return replace(self, structure=self.structure.for_layer(h, layer))
 
     def densified(self) -> AttnContext:
         """The same attention with every mask and bias - padding, the caller's, the
@@ -200,19 +208,28 @@ def _block_rows(ctx: AttnContext, start: int, stop: int) -> tuple[torch.Tensor, 
     stop)``, each broadcastable to ``(B, H, stop - start, L)``: padding, the caller's
     dense mask and bias, the scope's rows and the structure's masks and biases built for
     these rows."""
+    allowed = _block_mask(ctx, start, stop)
+    bias = None if ctx.bias is None else _rows(_as4d(ctx.bias), start, stop)
+    if ctx.structure is not None:
+        s_bias = ctx.structure.bias_rows(start, stop)
+        if s_bias is not None:
+            bias = s_bias if bias is None else bias + s_bias
+    return allowed, bias
+
+
+def _block_mask(ctx: AttnContext, start: int, stop: int) -> torch.Tensor:
+    """The allowed keys of ``_block_rows`` alone - padding, the caller's mask, the scope and
+    the structure's masks - which no layer changes."""
     allowed = ctx.key_valid[:, None, None, :]
     if ctx.mask is not None:
         allowed = allowed & _rows(_as4d(ctx.mask), start, stop)
     if ctx.scope is not None:
         allowed = allowed & ctx.scope.rows(start, stop)
-    bias = None if ctx.bias is None else _rows(_as4d(ctx.bias), start, stop)
     if ctx.structure is not None:
-        s_allowed, s_bias = ctx.structure.rows(start, stop)
+        s_allowed = ctx.structure.mask_rows(start, stop)
         if s_allowed is not None:
             allowed = allowed & s_allowed
-        if s_bias is not None:
-            bias = s_bias if bias is None else bias + s_bias
-    return allowed, bias
+    return allowed
 
 
 def _spatial_free(ctx: AttnContext) -> torch.Tensor | None:
@@ -815,12 +832,21 @@ def attention_block_sparse(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, ct
     return attention_sdpa(q, k, v, ctx, block_rows=ctx.block_rows, sparse=True)
 
 
+def attention_flex(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, ctx: AttnContext) -> torch.Tensor:
+    """B14's score function: torch's FlexAttention with every bias and mask computed inside
+    its score and mask functions (``flex.py``) - eager on CPU: forward only, small inputs."""
+    from .flex import attention_flex as flex
+
+    return flex(q, k, v, ctx)
+
+
 ATTENTION = {
     "block_sparse": attention_block_sparse,
     "chunked": attention_chunked,
     "sdpa": attention_sdpa,
     "explicit": attention_explicit,
     "dense": attention_dense,
+    "flex": attention_flex,
 }
 
 

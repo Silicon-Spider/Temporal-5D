@@ -4,7 +4,8 @@
   order of per-board and per-square outputs.
 * Translating every timeline by +k and every time by +2j changes nothing at all - the
   4D RoPE relative property, registers included (per-board registers rotate with their
-  board; global registers are position-free, or anchored at the recentred origin).
+  board; global registers are position-free, or anchored at the recentred origin) - and
+  B15's displacement bias (the v1 default), which sees only displacements.
 * A position's outputs do not depend on what else is in its batch.
 """
 
@@ -18,7 +19,8 @@ from t5d.net import NetConfig, build_model, collate, permute_boards, synthetic_s
 
 FLAG_SETS = {
     "v1": dict(),
-    "b5_b6_offset": dict(rope_per_head=True, binned_bias=True, policy_promotion="offset"),
+    "b5_offset": dict(rope_per_head=True, policy_promotion="offset"),
+    "no_table": dict(displacement_bias=False),
     "registers_position_free": dict(board_register_spatial="position_free", aux_global_pool="global_registers"),
     "anchored_zero_angle": dict(global_register_pairs="anchored", board_register_spatial="zero_angle"),
 }

@@ -52,7 +52,9 @@ token whose mask or bias depended on them would read the present through the str
 bias **live query rows only** (``live_tokens``): a frozen square's row on a move-graph or
 relations head holds itself alone, and carries no typed or smolgen bias. Rows that are
 pure geometry stay as they are for every token: the same-board and same-square heads
-(B10) and B6's binned biases. Section 6's own remark - "under the cached configuration
+(B10) and B15's displacement bias, a function of the two tokens' coordinates alone
+(section 4.1: "computed at score time from coordinates, so nothing cached goes stale").
+Section 6's own remark - "under the cached configuration
 the bias rows for frozen boards freeze with them" - is consistent with this: in the rules
 engine's export (stage E3) every move and relation starts on a playable board, so a
 frozen row's edges lead to live keys, which the scope already closes.
