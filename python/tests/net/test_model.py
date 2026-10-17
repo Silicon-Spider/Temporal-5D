@@ -24,6 +24,7 @@ from t5d.net.heads import (
     value_to_twohot,
 )
 from t5d.net.state import NO_PROMOTION, TOKEN_BOARD_REGISTER, PositionState
+from t5d.net.trunk import RMSNorm
 
 
 @pytest.mark.parametrize("n", [1, 2, 17, 60])
@@ -92,17 +93,24 @@ def test_determinism():
         assert torch.equal(torch.rand(3), x)
 
 
-@pytest.mark.parametrize("flags", [dict(), dict(rope_per_head=True, binned_bias=True, policy_promotion="offset")], ids=["v1", "flags"])
+@pytest.mark.parametrize(
+    "flags",
+    [dict(), dict(rope_per_head=True, policy_promotion="offset"), dict(norm_placement="post")],
+    ids=["v1", "flags", "post-norm"],
+)
 def test_no_parameter_is_zero_or_constant(flags):
     """Section 15.2: random weights at realistic scale, never zeros or near-zeros (which
-    make distinct paths agree trivially) - LayerNorm affines included."""
+    make distinct paths agree trivially) - the RMSNorm gains included (F5): every gain drawn
+    near 1, none at it."""
     model = build_model(NetConfig(**flags), seed=0)
     for name, p in model.named_parameters():
         assert p.abs().max() > 1e-3, f"{name} is (near) zero"
         if p.numel() > 1:
             assert p.std() > 1e-3, f"{name} is constant"
-    gains = torch.cat([m.weight for m in model.modules() if isinstance(m, torch.nn.LayerNorm)])
-    assert 0.5 < gains.mean() < 1.5 and gains.std() > 0.05, "LayerNorm gains near 1, not the identity"
+    gains = torch.cat([m.weight for m in model.modules() if isinstance(m, RMSNorm)])
+    assert gains.numel() == 256 * (32 + (model.cfg.norm_placement == "pre")), "two norms per block, and the final norm under pre-norm"
+    assert 0.5 < gains.mean() < 1.5 and gains.std() > 0.05, "RMSNorm gains near 1, not the identity"
+    assert not (gains == 1.0).any()
 
 
 def test_random_init_is_nontrivial(model_fp32):

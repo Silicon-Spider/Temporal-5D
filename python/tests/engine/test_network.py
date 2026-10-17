@@ -77,8 +77,8 @@ def test_a_small_network_batches_mixed_real_positions(mixed_positions):
 
 
 def test_every_switch_on_real_positions(mixed_positions):
-    """B5, B6, B10-B12 on, with the typed relations the engine builds."""
-    flags = dict(rope_per_head=True, binned_bias=True, routing_table=True, typed_edge_bias=True, board_pair_smolgen=True)
+    """B5, B10-B12 and B15 (the v1 default) on, with the typed relations the engine builds."""
+    flags = dict(rope_per_head=True, routing_table=True, typed_edge_bias=True, board_pair_smolgen=True)
     model = build_model(NetConfig(trunk_dtype="fp32", n_layers=2, **flags), seed=2).eval()
     from t5d.engine import relations_for
 
@@ -134,7 +134,8 @@ def test_cached_equals_one_full_pass_on_random_play():
 def test_f1_cached_on_a_real_position():
     """F1 as shipped but block-causal (BF16 trunk): cached against the BF16 full pass, at the
     BF16 bounds of tests/net/test_cache.py - about 4x the gaps measured here on these positions
-    (3 seeds): trunk RMS 2.0e-3 / max 1.1e-2, policy 6.6e-3, value 1.2e-3."""
+    (3 seeds; re-measured after F5 and F6): trunk RMS 2.0e-3 / max 1.4e-2, policy 8.0e-3, value
+    1.1e-3."""
     model = build_model(NetConfig(attn_scope="block_causal"), seed=0).eval()
     cached = CachedEvaluator(model)
     positions = _record_positions("cross_timeline")

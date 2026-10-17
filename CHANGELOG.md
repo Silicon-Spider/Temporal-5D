@@ -10,6 +10,398 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-17 - CLAUDE.md and AGENTS.md: the engine build before the gate (the one edit the user allowed in each)
+
+- `CLAUDE.md`, `AGENTS.md`: one line in each command list, before `gate --tier
+  commit`: `py engine/build.py` - the gate now runs the engine's adapter,
+  `build/engine/t5d-gate`, so it must be built first. Nothing else in either file
+  changed, as the user's CHECKPOINT 8 permission says; the diff is quoted in
+  `docs/BUILD_LOG.md` ("CHECKPOINT 8").
+- Spec: none - the instruction files; §11.0's gate is what the line serves.
+
+### 2026-10-17 - Design documents: the CHECKPOINT 8 rulings, from upstream
+
+- `docs/design/5d-chess-decisions.md`, `docs/design/5d-chess-transformer-design.md`:
+  the copies maintained upstream after CHECKPOINT 8, committed unedited - the user's
+  rulings on spec issues 122-126, 142 and 204. Register: H27 (upstream reports -
+  defects as bug reports, documented-rule disagreements as questions citing the
+  source, drafted by the agent and filed by the owner), H47 (gating aligned to two
+  oracles; the commit tier still fails if the engine declines a record it read on the
+  last green run, or reads none; restricted runs never produce a tier verdict), H51
+  added (capture markers read leniently - a project decision: a move is read as its
+  squares define it, a mismatch logged as a warning, the marker written strictly; a
+  source that refuses such a record gets a known-divergence entry citing H51), F6
+  (Mish in the trunk FFN and every head's hidden layers; squared ReLU a trunk-only
+  arm), M22 (measured in part; the mandatory, three-or-more, optional-move and
+  compute-share figures to follow), D2 (build order: the tree form, then the flat
+  form). Spec: §8.2 (the measured turn width and the build order), §9.3 (Mish in the
+  heads), §11.0 (the commit tier's two failure conditions, restricted runs, upstream
+  reports, lenient capture markers).
+- Spec: CHECKPOINT 8 as written upstream - §8.2, §9.3, §11.0; register D2, F6, H27,
+  H47, H51, M22. Nothing in them edited here.
+
+### 2026-10-17 - N-B15 review fixes: B6 is not B15's special case as built, recorded and put to the user; the placeholder switches checked to regroup pairs; every variant's board size in §15.2's B15 row
+
+- `docs/BUILD_LOG.md`, spec issue 205: under B15's far-bin placeholder B6 is not B15's
+  special case, which §4.1 ("of which it is the special case that ignores file and rank"),
+  register B6 and reversal 25 say it is - and nothing recorded it. B6 was two per-axis tables
+  (signed Δtime log buckets to 128 half-turns, |Δtimeline| to 32); the built far classes - one
+  distance D in three bins, crossed with Δtime's sign - mix its cells, so beyond the exact box
+  they hold a B6 bias only where it is a constant plus a function of Δtime's sign (a linear
+  solve over the built classes, in a scratch script), and the board-axis line clamp merges
+  its buckets too.
+  Lost: B6's per-axis form and its far resolution; kept: Δtime's sign and the clamp. Far
+  classes that refine B6's cells would cost 5,240,960 parameters, over three times §4.1's
+  ~1.6M, so "special case" and "~1.6M" cannot both hold with a slice per class; B6's two
+  tables added beyond the box (3,456 parameters) would keep both, at the cost of the
+  one-scalar-per-pair reading. B6 went with no arm (M20), so ablation 2 cannot test what it
+  resolved. Put to the user. Proposed edit 159 now reaches §4.1's B6 sentence, register B6's
+  status text and reversal 25; edit 155 gives the alternatives. The register rows B6 and B15,
+  `config.py` (`disp_far_edges`) and `displacement.py` say it beside the placeholder.
+- Issues 205 and 206: the far bins' form (one distance, Δtime's sign, Δtimeline's sign
+  dropped) and the line set's time unit and partition are fixed in code, and say so - only
+  `disp_far_edges` and `disp_line_max` are settings, so another form is a code change (the
+  geometry, both implementations, the tests' reference, the pinned counts). They are not made
+  switches: each alternative is a different class geometry, the additive line reading would
+  need a second lookup per pair on every path, and the documents lean to the readings built
+  (§4.1's "one learned scalar ... indexed by the pair's displacement", B17's "~12,000
+  classes"). `config.py`'s and `displacement.py`'s docstrings say the same.
+- `tests/net/test_structure.py`: the no-inert-switch test also checks that each of B15's
+  placeholder switches regroups the batch's pairs (which pairs share a scalar). Two of them,
+  `disp_line_max` and `disp_register_pairs`, change the table's size, which is drawn from one
+  stream, so the outputs differed whatever the switch did to the indexing: on scratch copies,
+  a line clamp hard-coded at 3 and the register kind dropped from the index each passed the
+  old test and fail the new one. `test_same_grouping` pins the helper.
+- `tests/net/test_displacement.py`: the constructions of §15.2's B15 row ("every variant")
+  now hold every variant's board size (rulebook V3), where they held 8 x 8 and 5 x 5 only:
+  7 x 7, 6 x 6, 4 x 4 and 3 x 3 boards (`variant_sizes`), and the far lattice at 7 x 7, 4 x 4,
+  3 x 3 and Global Warming's empty 1 x 1 (`far_variant_sizes`; `far_state` builds the 1 x 1
+  by hand, which `synthetic_state` cannot). The classes and the score function's term match
+  the reference bit for bit and attention through it is within 1e-5; the CPU paths' outputs
+  and gradients are checked on the far lattice too.
+- `config.py`: `attn_impl`'s docstring names the sixth path, "flex" (forward only on CPU -
+  it refuses under autograd - small inputs), and says "all six", not "all five"; the
+  L24-ff12 preset's "~44M" is marked as §9.2's count without B15's table (46,891,210 with
+  it, issue 210).
+- `bench.py`, `attention.py`: the "every switch" figures were measured with B6's binned
+  biases on (since removed) and no B15, so they are not today's "n2-all"'s either.
+- `docs/BUILD_LOG.md`: proposed edit 158 names §10.2, which its second quote is from, and
+  quotes each place's current text; §15.3's "Without a GPU" already defers the kernel and
+  needs no edit. Issue 211 and the B15 row: twelve constructions. The B15 entry below says
+  where these fixes changed it.
+- Spec: §4.1 (the B6 paragraph's "special case"; B15's far bins and line classes), §10.2 (the
+  score function), §15.2 (the B15 row's constructions, "every variant"), §9.2 (F2's count, as
+  issue 210 has it); register B6, B14, B15, F2, G9, M20; reversal 25. Proposed edits 155 (the
+  alternatives if B6 is to stay a special case), 158 (§10.2 named, the current texts quoted),
+  159 (extended to §4.1's B6 sentence, register B6's status text and reversal 25). No
+  parameter changes (the v1 stays 22,961,802).
+
+### 2026-10-17 - Network B15: the 4D displacement bias replacing B6, with its no-table flag; the score-function path and its equivalence test
+
+- `python/t5d/net/displacement.py` (new): register B15 (provisional, the v1 default; §4.1,
+  CHECKPOINT 6), written from §4.1 and the rulebook's conventions. One learned scalar per
+  head per layer, indexed by the pair's displacement (key minus query): a 15 x 15 file-rank
+  slice for each board-distance class - the 45 exact ones (|Δtimeline| ≤ 2, |Δtime| ≤ 4
+  half-turns) and 9 far bins - exact line classes beyond them (one entry per direction and
+  step, 368), register entries by class and pair kind (162) and one global entry: 12,681
+  per head per layer, 1,623,168 parameters (§4.1's ~1.6M, 7.07% of the network). The
+  unstated details are named placeholders, each a spec issue: the far bins
+  (`disp_far_edges`, the board distance D = max(|Δtimeline|, ⌈|Δtime|/2⌉) log2-binned from
+  3 and crossed with the sign of Δtime), the line set (in whole turns, so an odd Δtime is
+  never a line; a partition; board-axis lines clamped at `disp_line_max = 8`), the register
+  and global entries (`disp_register_pairs`), the initialisation (`disp_init_std`). Two
+  implementations: `pair_entry` computes a pair's entry by integer arithmetic from the
+  tokens' kinds and coordinates (B14's score function uses it), and the CPU paths look it up
+  in a static class map by board-pair tile and token code. Boards wider than 8 are refused.
+- `config.py`: `displacement_bias = True`; `False` is ablation 2's no-table arm. B15 draws
+  its table from a generator of its own (`model.b15_seed`, as D8's parameters do), so the
+  arm is the network without the table: checked against the parent commit, the arm's
+  outputs and parameters are bit for bit the pre-B15 v1's (B9's default, routing with typed
+  edges and smolgen, no masks, the chunked path, post-norm, and a cached evaluation).
+- Per layer (`structure.py`, `attention.py`, `trunk.py`, `cache.py`): `AttnContext.for_layer(h,
+  layer)` (the layer index now required; each `trunk.Block` knows its own) gives the
+  structure B15's table of that layer and, as before, B12's table from `h`. Masks need no
+  layer (`AttnStructure.mask_rows`, `attention._block_mask`). The cached path builds a
+  frozen board's bias per layer over its key set (it built one for every layer before), and
+  the live pass makes each layer's context; B15 biases frozen rows too (geometry -
+  `scope.py`). `model.py`: `self.displacement`, `parameter_breakdown`'s
+  `attn.displacement`.
+- `python/t5d/net/flex.py` (new): B14's score function (committed engineering; §6.1, §10.2),
+  `attn_impl = "flex"`: torch's `flex_attention` with every bias computed inside its score
+  function - B15's entry from the two tokens' coordinates, B11's typed relations, B12's
+  board-pair table, a caller's bias - every mask in its mask function (padding, the
+  block-causal scope, section 6's roles from per-token data and one edge bit per pair), the
+  positional pair rule by feature widening (at most three calls), and a lossless block mask
+  built from the board-major order at board granularity. Eager on CPU: forward only, every
+  score materialised - small positions (spec issue 211). Under v1's register rule the masked
+  heads' block masks have no empty block (spec issue 209).
+- B6 removed (superseded by B15, register B6, M20): `rope.py` loses `BinnedBias`, the
+  near-time arm and the buckets; `binned_bias`, `binned_bias_rope`, `binned_bias_near_time`
+  go (issue 9f's switch). The log buckets move to `buckets.py` for B12's relative cells,
+  whose fields are renamed `smolgen_time_*` / `smolgen_timeline_*`: smolgen unchanged, 152
+  cells and 47,136 parameters, bit for bit (spec issue 212). `bench.py`: the v1 default now
+  carries B15, `n2-no-table` is ablation 2's arm (B9's default before CHECKPOINT 6).
+- Tests: `tests/net/test_displacement.py` (new) - the classes against §4.1 written out pair
+  by pair (a grid reaching every far bin and clamp, every token kind, ten adversarial
+  constructions - twelve, every variant's board size among them, since N-B15's review fixes
+  (above) - three placeholder settings; integers compared exactly); §15.2's B15 row -
+  the score function's term at every pair equals the hand-materialised bias bit for bit, and
+  attention through it equals attention with that bias materialised (measured under 1e-6,
+  asserted 1e-5), three seeds, the table at its initial scale and at unit scale; the CPU
+  paths' outputs and gradients (Q, K, V, the table) equal it too; the whole network through
+  the score function equals the dense reference; the block mask is lossless and sparse
+  where no register row reads everything; the table's size, its layers, the cached path
+  with the layers' tables far apart, the no-table arm, translation and board order.
+  Existing suites carry B15 from now on (the v1 default) and keep the no-bias paths covered
+  through the no-table arm: `test_chunked` (four no-table combinations, two pair modes, the
+  caller's mask and bias), `test_cache` (every case; plus no-table and moved placeholders),
+  `test_structure` (B15 in every bias that adds up; four new switches - B15's placeholders
+  also checked to regroup pairs since the review fixes; `flex` among the one function),
+  `test_attention` (B5 with B15's bias, hand-materialised), `test_scope` (frozen
+  rows keep B15), `test_invariance`, `test_d8`, `test_n2_model`, `test_trunk`, `test_smoke`,
+  `tests/engine/test_network.py`. `test_params`: the v1 is 22,961,802 (21,338,634 and the
+  table), F2's preset 46,891,210 (spec issue 210).
+- Not measured: §15.3's "displacement bias and normalisation changes" row (the machine is
+  loaded; the quiet-machine block). On CPU every head now carries a per-row bias, so v1's
+  dense heads run block by block with it, as "every switch" did (`attention.py`,
+  `bench.py`).
+- `docs/BUILD_LOG.md`: register rows B15 (built, tested), B6 (superseded; removed), B14 and
+  G9 (the score function), B10/B12, C2 (the cached path with B15), F1/F2, M20 (B6's removal
+  done); spec issue 9's note (its (f) switch gone); spec issues 205-212; proposed edits
+  155-159.
+- Spec: §4.1 (the 4D displacement bias; B6's paragraph), §5.3 (register pairs), §6 and §6.1
+  (B14's score function and block mask), §9.2 (parameter counts), §10.2 (the score
+  function), §15.1 Phase 2, §15.2 (the B15 row; row 1, cached = dense, with B15 on; the
+  C19-C21 and G1 rows under it), §15.3 (the displacement-bias row, to measure); register
+  B4, B6, B8, B12, B14, B15, C2, C17, F1, F2, G9, M19, M20. Proposed edits 155 (B15's
+  placeholders), 156 (F1/F2 counts; supersedes 153), 157 (§6.1's block mask and the
+  register rows), 158 (the score function in the untrained build), 159 (B6 removed; B12's
+  cells - since the review fixes also B6's "special case" clause in §4.1, register B6 and
+  reversal 25, which the far bins as built make false: issue 205).
+
+### 2026-10-17 - Build log: each lane's numbers render as written; issue 142 waits on the user
+
+- `docs/BUILD_LOG.md`: an HTML comment at column 0 before the first spec issue of
+  each number block (300, 122, 200) and the first proposed edit of each (200, 150),
+  as the engine lane did for 140 and 110 - a Markdown ordered list renumbers its items
+  from its first, so on GitHub issue 300 read as 122 and every later number with it.
+  Issue 142 (merged with M22) joins "Waiting on the user".
+- Spec: none.
+
+### 2026-10-17 - M22: the turn-width measurement on t0database - mandatory boards per turn and optional moves played, per board-count range
+
+- `engine/tools/turn_width.hpp`, `turn_width.cpp` (new, in `t5d_tools`; not among
+  Hunt's truth sources): the turn width of one action, counted by the rules engine
+  alone (`TurnCounter`, `classify_action`). At the action's start: the mandatory
+  boards (the active boards in the present, T6 and R9), the playable and the optional
+  boards. Then its moves: the optional ones (made on a board not mandatory at the
+  start - the source, or the destination of a jump that does not branch: T3, J4),
+  with the reading by the source board alone and the reading by the status when made
+  beside it; the boards played (a jump that does not branch plays two); jumps between
+  two mandatory boards (A6's "two fewer"), from an optional board onto a mandatory one
+  and from a mandatory board onto an optional one; moves after the shift (R8);
+  rewinds (T8, T12); and the boards a rewind releases or a reactivation (T11, T12)
+  makes mandatory mid-action. And the summary's board-count ranges, mandatory classes
+  and statistics (`kTurnRanges`, `kTurnBuckets`, `mandatory_class`, `turn_stats`).
+  Why: register M22 must be recorded before the D2 tree and flat forms are built
+  (§15.1; the ply split is built), and nothing in the engine looked inside an action.
+- `engine/tools/t5d_measure.cpp`: `--turns` (a line per action) and `--turn-summary`
+  (per board-count range at the action's start - < 50, 50-99, 100-199, 200+, ten-board
+  buckets under 100, by mandatory class - under a strict reading that leaves out a
+  record repeating another, M7's grouping as sensitivity, and the refused records'
+  actions apart; a record that ends in "error" is in no reading, counted as
+  `errors`). Every action is played twice, by the replay and move by move, and the
+  two states must be equal. Without the new options the output is unchanged
+  (byte-identical on t0database, with and without `--summary --legal`).
+- `engine/tests/test_turnwidth.cpp` (18 tests: constructed actions with known
+  counts; the summary's ranges and classes at their edges and its statistics on
+  constructed widths; `t5d-measure` run on `engine/testdata/turn-width/` - the counts,
+  how records are classified, and actions starting at 9/10, 49/50, 99/100 and
+  199/200 boards); `engine/CMakeLists.txt`. 544 tests pass.
+- `docs/MEASUREMENTS.md`: "Turn width (M22)", a new section for Phase 1 counts with
+  no threshold. On t0database's 692 games under the default rules: more than one
+  playable board at the turn's start - where the D2 arms differ - in 15.1% of turns
+  under 50 boards, 65.2% at 50-99 and 99.4% at 100-199 (13 games; none at 200+); more
+  than one mandatory board in 5.8 / 27.1 / 64.0%; an optional board at the start in
+  10.5 / 44.5 / 65.7%, an optional move played in 1.2 / 2.5 / 1.1%; single-move turns
+  95.9 / 80.3 / 49.1%. Part L's prediction ("most human-game turns under 50 boards
+  have exactly one mandatory board") holds: 94.2%. No verdict.
+- `engine/README.md`: t5d-measure's new options and lines; the tables.
+- `docs/BUILD_LOG.md`: register M22 measured; step 5's M22 note; spec issues 140-142
+  (what "optional moves played" means; the ranges and the unit; nothing maps the
+  figures to an order of the D2 work - put to the user); proposed spec edits 110-115.
+- Review fixes, the same day (after 2864be0). The D2 reading counted "where the arms
+  differ" by the moves played (4.1 / 19.7 / 50.9% of turns of more than one move);
+  it is now counted by the turn's start, as §8.2's cost argument and the built ply
+  split count it (15.1 / 65.2 / 99.4%), in MEASUREMENTS, issue 142 and edit 110. An
+  optional move went by its source board alone, so a jump from a mandatory board onto
+  an optional one was not counted (35 turns of the 692 games) while its mirror was;
+  it now counts - the move is made on both boards (T3, J4), and the measurement's
+  brief defined optional moves as moves on boards not mandatory at the start - and
+  both kinds are counted apart and tested (issue 140, edit 111). The summary's
+  ranges, classes and statistics moved into `tools/turn_width.hpp` and are tested at
+  their edges; new records test a truncated record and the strict prefix rule;
+  fifteen mutations of the counting and the summary, the review's among them, now
+  each fail a test. Also: parse mode's effect stated (under C4, t0db-0115 is refused
+  at its 9th action - rules question Q8 - and the strict reading would hold 691
+  games); edit 111 names both ways a board's status changes; register D2 and part
+  K's turn-construction gate get the edit 6x gets (edit 115); the issue and edit
+  lists start new Markdown lists, so that GitHub shows 140 and 110 as written; the
+  `turn_summary_group` line and the `"error"` path documented; and the conditions
+  name the commit the figures were counted at (607e4b1, rebuilt and re-run there:
+  byte for byte), where the first version said only "this change", and say what the
+  fixes changed in the run's output against 2864be0's (one count, fields added,
+  nothing else).
+- Spec: §8.2 "Measure first" and §15.1's Phase 1 row (the M4 write-back proposed:
+  edits 110 and 114); §13.1 6x ("after the turn-width measurement", now met; edit
+  114); register M22, part K's turn-width item and part L's prediction (edits
+  111-113); register D2 and part K's §8.2 turn-construction item (edit 115); spec
+  issues 140-142. Rules cited: T3-T8, T11, T12, J3-J6, R8, R9; Q8.
+### 2026-10-17 - N-F5F6 review fixes: the post-norm arm's DeepNet initialisation as published; RMSNorm's eps tested
+
+- `python/t5d/net/model.py`, `config.py`: under ablation 6y's post-norm arm the trunk's
+  attention and FFN projections are drawn Xavier normal, std gain·√(2/(fan_in + fan_out)) -
+  DeepNet's initialisation as the paper's pseudocode draws it (Wang et al. 2022, Figure 2:
+  `xavier_normal_(w, gain=β)` for "ffn", "v_proj", "out_proj", gain 1 for "q_proj",
+  "k_proj") - instead of β times the trunk's LeCun normal. The two coincide on the square
+  attention projections; on the FFN's 256→2048 and 2048→256 matrices the LeCun base had
+  drawn 2.12x and 0.75x the paper's std (the FFN branch 1.59x), which no document said. The
+  task asked for the initialisation "as published"; the base is the pseudocode's example
+  ("it can be replaced with other standard initialization"), so it is recorded as a
+  placeholder (spec issue 201). The v1, F2's preset and every flag configuration draw bit
+  for bit as before (checked tensor by tensor); under the arm only the FFN weights change,
+  each the same draw rescaled.
+- Tests (`tests/net/test_trunk.py`): the arm's Xavier stds pinned; RMSNorm's eps checked
+  where it shows - on a small-RMS input, with no relative slack, eps outside the root or no
+  eps is 0.95 off - and the unit-scale formula test's asserts given `rtol=0`;
+  `NetConfig.norm_eps` reaches every trunk norm under both placements, stored and used. On
+  scratch copies, 8 of 8 mutations are caught: eps outside the root or absent, a hard-coded
+  1e-5 in the norm's forward or in any of the three norms' construction, a LeCun base under
+  the arm, a scaled Q/K.
+- The arm's docstring figures re-measured with the new initialisation (numerics, not
+  timings): `test_precision`'s post-norm BF16 gap 0.06% RMS, max 0.8%, value logits 6.3e-4,
+  policy 2.8e-3, value mean 2.1e-5 (1.5-7x below the v1's); `test_cache`'s 6y test, cached
+  against the BF16 full pass, RMS 5.3e-4 / max 6.0e-3, value 1.9e-4, policy 1.9e-3 (2.2-6.4x
+  below the v1's). Every bound unchanged.
+- `attention.py`: its indicative timings and peak memory, copied from `bench.py`'s table,
+  are marked as measured on the network before F5 and F6 and not re-measured, as
+  `bench.py`'s are.
+- `CHANGELOG.md`: the F5 and F6 entries' Spec lines cited "§15.2 (rows 1-3 ...)", but
+  §15.2's second and third rows are the windowed and lazy-K/V rows deferred with the
+  window (M18); the 6y test covers the cached = dense (C2, C17), supersession recompute
+  (C20), same state + epoch / transposition (C19-C21) and FP8/BF16 cache precision (G1)
+  rows, which the lines now name. The F5 entry's initialisation bullet and the F6 entry's
+  post-norm ratio point here.
+- `docs/BUILD_LOG.md`: spec issue 201 and proposed edit 151 state the Xavier base, issue 201
+  as a placeholder with what the LeCun base had drawn.
+- Spec: §9.3 (the second bullet: "post-norm with DeepNet initialisation"), §13.1 6y, §15.2
+  (the four rows above, under the arm); register F5 (the arm), F6 (the citation only), G1.
+  Proposed edit 151 amended (the arm's initialisation: Xavier normal at DeepNet's gains). No
+  parameter changes (F1 stays 21,338,634).
+
+### 2026-10-17 - Network F6: Mish in the FFN; squared ReLU behind a flag
+
+- `python/t5d/net/trunk.py`, `config.py`: register F6 (committed, §9.3). The FFN's
+  activation is `NetConfig.ffn_activation`: `"mish"` for v1 - `x tanh(softplus(x))` (Misra
+  2019; PyTorch's `mish`), replacing stage N1's GELU - or ablation 6y's arm
+  `"squared_relu"`, `relu(x)^2` (So et al. 2021, "Primer"), at Mish's initialisation (the
+  arm's is not stated). Validated; GELU is no longer an FFN option.
+- `heads.py`, `config.py`: whether Mish also covers the output heads is not decided by F6
+  ("FFN activation"; its "Chessformer's FFN and output heads" describes Chessformer), so the
+  value head's hidden activation - the only head MLP - stays GELU as a named placeholder,
+  `head_activation` ("gelu", or "mish"; spec issue 204). `embed.py`: the Δt MLP keeps GELU,
+  documented as outside F6.
+- The cached path needs nothing new: it calls the block's own FFN (F5's block steps).
+  §15.2's rows under the arm: `test_cache`'s 6y test runs both arms (cached = full pass,
+  root refresh, transpositions, a transposition hit, the BF16 cache), and the every-switch
+  matrix runs both arms together with the N2 structure.
+- Tests: `test_trunk.py` - the FFN equal to its formula in FP64 under each activation (and
+  not GELU); the value head's activation by hand under both placeholder values; validation.
+  `test_structure`: "every switch changes the network" gains `ffn_activation`; every
+  `attn_impl` one function under squared ReLU. `test_precision`: both 6y arms under G1.
+  `test_smoke`: squared ReLU (with the heads' Mish) trains finite with every tensor moving.
+- Precision bounds matched to the arm's arithmetic: squared ReLU squares its input's BF16
+  rounding (twice the relative error), and its measured BF16 gap is up to twice the v1's
+  (precision: 0.39% RMS against 0.24%; policy logits 0.021 against 0.010), so its bounds in
+  `test_precision` and `test_cache`'s 6y test are the v1's doubled (2.9-20x and 3.6-9x
+  above its measurements); the post-norm arm keeps the v1's (its gaps are 1.5-7x smaller, as
+  re-measured after N-F5F6's review fixes; 1.6-6.5x before them).
+  `test_fp8_cache_equals_the_fp8_network_at_fp32_resolution`: the trunk-RMS bound raised
+  from 2e-4 to 4e-4 - FP8 rounding flips are discrete and heavy-tailed (over 12 seeds of the
+  F5 and F6 networks each, a seed's largest was 1e-6 to 3e-5 typically and 7.8e-5 at most,
+  2.6x under the old bound); the new bound sits 5x above that and 19x below mutant M14.
+- Docstring figures re-measured after F6 (numerics, not timings): `test_precision`,
+  `test_cache` (its header's claim that the 16-layer gaps are no larger than the 2-layer
+  ones, written with F5, was wrong - they are up to 1.8x larger; corrected),
+  `tests/engine/test_network.py`. `bench.py`: a `6y-squared-relu` configuration; its table
+  marked as measured before F5 and F6.
+- `docs/BUILD_LOG.md`: register row F6 (new); spec issue 204 (put to the user: the heads'
+  activation awaits neither a ruling nor a named ablation); proposed edit 154.
+- Spec: §9.3 (the Mish bullet), §13.1 6y, §15.1 Phase 2 ("Mish" among CHECKPOINT 7's
+  items), §15.2 (the cached = dense (C2, C17), supersession recompute (C20), same state +
+  epoch / transposition (C19-C21) and FP8/BF16 cache precision (G1) rows, under the arm);
+  register F6, D3 (the heads' activation). No parameter changes (F1 stays 21,338,634).
+  Proposed edit 154 (whether the output heads' activation is Mish; the squared-ReLU arm's
+  initialisation).
+
+### 2026-10-17 - Network F5: RMSNorm-style normalisation, no Q/K/V biases, pre-norm; the post-norm + DeepNet arm behind a flag
+
+- `python/t5d/net/trunk.py`: register F5 (committed, §9.3). `RMSNorm` - a learned gain over
+  the root mean square, no mean-centring, no bias (Zhang & Sennrich 2019), computed in FP32
+  with autocast off (G1) - replaces LayerNorm in both sublayer norms of every block and the
+  final norm. A block is now four steps (`attn_input`, the attention, `after_attn`,
+  `after_ffn`) and the trunk ends in `Trunk.output`; they carry the placement,
+  `NetConfig.norm_placement`: `"pre"` (the v1, as before) or ablation 6y's arm `"post"` -
+  DeepNorm as published (Wang et al. 2022, Figure 2): x ← N(αx + sublayer(x)), α = (2L)^(1/4),
+  no final norm, no norm on the embedding, smolgen reading the block's input (placeholders,
+  spec issue 201).
+- `attention.py`, `trunk.py`, `config.py`: the single `linear_bias` switch is split as §9.3
+  says - `qkv_bias=False` (F5: no Q/K/V projection biases) and `out_ffn_bias=True` (the
+  attention-output and FFN biases kept: "as here"; spec issue 200). `NetConfig(linear_bias=...)`
+  now raises `TypeError`. `norm_placement` and `norm_eps` validated; `deepnorm_alpha` and
+  `deepnorm_beta` derived from L. The heads, the embedding's Δt MLP and smolgen keep their
+  biases; smolgen has no norm of its own to keep (spec issue 202).
+- `model.py`: RMSNorm gains drawn 1 + N(0, `init_norm_std`), no bias draws; under post-norm
+  DeepNet's initialisation replaces the GPT-2 1/√(2L): gain β = (8L)^(-1/4) on the value,
+  attention-output and both FFN projections, Q and K at gain 1 - over the LeCun base as
+  committed here, drawn Xavier normal as the paper's pseudocode since N-F5F6's review
+  fixes (above). Every seed's global RNG stream shifts (fewer draws); no test pins a
+  golden output.
+- `cache.py`: `compute_board` and `live_pass` run the trunk's block steps instead of a
+  hand-written pre-norm block, so the cached path computes the trunk's function under
+  either placement (§15.2's rows hold under the arm).
+- Parameters: F1 21,338,634 (−20,736: the norms' biases 33 × 256, the Q/K/V biases 16 × 3 ×
+  256); F2's L24-ff12 preset 44,456,458, now pinned exactly; the post-norm arm 256 fewer.
+- Tests: `tests/net/test_trunk.py` (new) - RMSNorm by its formula in FP64 and against
+  PyTorch's `rms_norm`, no centring, FP32 under autocast; norms and biases where §9.3 puts
+  them; the bias switches; each placement equal to its formula block by block (smolgen on
+  and off), α applied; DeepNet's initialisation std ratios; the arm's count; validation.
+  `test_cache`: the 6y arm through §15.2's rows (cached = full pass on two geometries, root
+  refresh, transpositions bitwise, a transposition hit, the BF16 cache as the live
+  precision), and the every-switch matrix gains post-norm with the N2 structure;
+  `test_structure`: every `attn_impl` one function under post-norm, and "every switch
+  changes the network" gains `norm_placement`, `qkv_bias`, `out_ffn_bias`; `test_n2_model`:
+  smolgen reads each layer's attention input under both placements; `test_precision`: the
+  post-norm arm under G1's bounds; `test_model`: the RMSNorm gains non-identity, post-norm
+  too; `test_smoke`: the arm trains finite with every tensor moving; `test_params`: the new
+  counts (its stale smolgen figure corrected to 47,136).
+- Docstring figures re-measured on the new network (numerics, not timings; the machine is
+  loaded but these do not depend on it): `test_precision` (BF16 gap 0.23% RMS, bounds 3-11x
+  above), `test_cache`'s BF16 and FP8 gaps and mutant M14, `tests/engine/test_network.py`'s
+  real-position gaps - each of the same size as its pre-F5 figure (within a third), except
+  FP8-at-FP32's rare rounding flips (trunk RMS 6.1e-5 at seed 0, the largest of 12 seeds;
+  under its 2e-4 bound and 120x below mutant M14). `bench.py`: a `6y-post-norm`
+  configuration; its timing table marked as measured before F5 (not re-measured).
+- `docs/BUILD_LOG.md`: register rows F5 (new) and F1/F2 (the count); spec issues 200-203;
+  proposed edits 150-153.
+- Spec: §9.2 (Params), §9.3 (all three bullets' F5 parts), §13.1 6y, §14.4 (KataGo's
+  fixup, replaced by §9.3's RMSNorm-style layers - nothing built), §15.2 (the cached = dense
+  (C2, C17), supersession recompute (C20), same state + epoch / transposition (C19-C21) and
+  FP8/BF16 cache precision (G1) rows, under the arm), §15.3's "displacement bias and
+  normalisation changes" row (not measured: no quiet machine); register F1, F2, F5, B12,
+  G1. Proposed edits 150 (F5's biases stated in §9.3's first bullet and the register), 151
+  (the post-norm arm's details as built), 152 (B12's "keeps its own normalisation"), 153
+  (§9.2 and F1's count, M4).
 ### 2026-10-17 - Gate: the engine configured; the commit tier green with it; 113 known divergences triaged against the rulebook
 
 - `oracles/gate.toml`: `[engine] command = ["./build/engine/t5d-gate"]`, full mode -
@@ -167,6 +559,80 @@ the spec describes the change.
   user); H47 is silent on an engine compared with nothing in a smoke test (spec
   issue 123, put to the user) and on a restricted run of a full-strength tier
   (spec issue 124, put to the user). H23 and the proof channel unchanged.
+### 2026-10-17 - Build log: the CHECKPOINT 6-7 rulings, the plan by lane, the register brought up to date
+
+- `docs/BUILD_LOG.md`, "Where things stand": a section "CHECKPOINTS 6 and 7 - ruled
+  upstream (design documents f07568c)" - what the rulings decide, by register ID
+  with the register's status words; how each question of 2026-10-04's "Waiting on
+  the user" is answered (Q-A -> H47, Q-B -> H48, the GPU question -> M19, issue
+  121 -> M20 except D8's readout form, A5 -> behind its flag, D8's whole-turn token ->
+  the flat form (D2), the training rows -> M21 and I12-I20); what changes for the
+  build. Then "Current state (2026-10-17)": what is on main; where each lane stands,
+  by commit, as of 16:54 (gate: H47 with its review's fixes, 7530e36, issues 122-124
+  put to the user, edit 98 pending the ruling on 122, the gate with the engine
+  configured in progress; engine: M22 measured, 2864be0, issue 142 put to the user;
+  net: F5 and F6 built, f830f31, issue 204 put to the user - none merged); how to
+  recreate a lane's worktree, and how the lanes share the one machine; the plan -
+  three lanes in worktrees (the main loop's plan under M23's rule), the number blocks
+  (spec issues: gate 122-139, engine 140-199, net 200-299, main loop 300 and up;
+  proposed edits: gate 98-109, engine 110-149, net 150-199, main loop 200 and up),
+  step 1 by lane in order (the gate lane's two steps named "gate step 1/2", not G1/G2,
+  which are register IDs; gate step 2 done only when nightly is green with the engine
+  configured; C15's STE fix before G2's quantiser and G8's hook; M21 building on the
+  losses and smoke test that exist), the readings and stop conditions the lanes work
+  under, step 2 by lane (the release tier with the engine configured as the
+  sign-off's gate evidence, H23; §15.2 re-run on the v1 network), what is parked and
+  why; the work remaining to §15.5, the lanes in parallel; what waits on the user
+  (nothing that blocks: the standing items, and the lanes' issues put to the user as
+  each lane merges). "Recovery": the comparison with the last green CI runs, made after
+  the user's `gh auth login` - the same results; the engine job's one failure on
+  3b33942 (g++-13) is an intermittent five-thread Guard test, queued for the engine
+  lane. The old state stays as history under "State on 2026-10-04 (before
+  the loss)", its held, running, remaining and waiting lists superseded; the recovery
+  notes point at the plan.
+- "Register status": rows added for A6-A8, B15-B17, D9, G8, G9, H49, H50, I12-I20,
+  M19-M21 (M21 built in part: the losses of today's heads and a three-step smoke test,
+  N1+N2 and N5), M23 and M24 (F5, F6, H47, H48 and M22 arrive with their lanes'
+  commits, as a note under the heading says); rows split or corrected where the
+  status or what is built changed - H1, H6, H10, H13/H14, H17, H19, H22, H23,
+  H24/H26/H28, H36, H41, H43, H44, A1-A3, A5, B1/B2/B4/B8, B5/B6 (B6 superseded by
+  B15), B7, B9, B10/B11/B12, B14, C2, C3, C10, C11, C14, C15 (with a known defect,
+  checked on CPU: the FP8 fake-quantiser's backward flushes or distorts gradients),
+  C17/C19/C20, D1-D4, D7, D8, E1-E5, E7-E9, F1/F2, G2, I1-I8 (I3 built in part: match
+  play's noise-off, final-rule configuration), I10, M9, M13 - each saying what is
+  built today: nothing of E10 on main, the old network defaults still in the code,
+  the ABI rounds still to come. H46's row moved into the H table, as the register
+  moved it.
+- "Spec issues": 79 marked settled upstream at CHECKPOINT 6/7 - 3, 6, 9, 11, 16, 17,
+  19, 23, 24, 26, 28, 30-32, 34, 35, 37-39, 42, 44-47, 49, 51-53, 55, 56, 58, 59,
+  62, 64, 67, 68, 71, 72, 74-79, 81-85, 87-93, 95-108, 110, 111, 113, 114, 116-120 -
+  and 7 in part (2, 33, 36, 54, 109, 112, 121), each with the register row or section
+  that settles it; 20 settled at CHECKPOINT 2 (M13), 63 superseded by M16's formula
+  (CHECKPOINT 4), 70 moot since v3 retired the estimate channel. New, the main loop's:
+  300 (early adjudication and MLH steering's "settled" outcome unspecified), 301 (the
+  tree form under MCGS - the engine refuses the combination as a parameter check,
+  parked; no document refuses it), 302 (A6's count in the evaluation identity), 303
+  (A7's frozen K/V per perspective under the cached configuration), 304 (§15.2's A7
+  row against the acting-colour input), 305 (one turn unit; E7's allocator counts
+  board-moves), 306 (the root-scan reserve with Guard offline). "Proposed spec
+  edits": 72 marked
+  applied upstream - 1-8, 11-16, 19, 20, 22-30, 32, 33, 35, 38-41, 43-47, 49, 50, 52,
+  54, 55, 58-68, 70, 73, 74, 76, 77, 79, 81-84, 87-92, 94, 95, 97 - and 14 in part,
+  with what is still needed (9, 21, 31, 34, 48, 53, 56, 69, 71, 72, 78, 80, 93, 96);
+  51, 57, 85 and 86 withdrawn, superseded or moot; 17, 18, 36, 37 and 75 stand as
+  written. New, the main loop's: 200-204 (for issues 302-306), 205 (§12.3's
+  parenthetical and §11.2's status note after 6b″), 206 (the register's status
+  vocabulary). The number blocks are stated at the top of both lists; nothing is
+  renumbered or deleted.
+- "Parked, and why": the plan's parked items (I10's calibration monitoring, C3's
+  conditioning-offset training hook, 6p's other arms, MLH steering - with what it
+  waits on - and early adjudication, issue 300) and §14.4's new held-open and refused
+  entries. The brief: M23's rule beside "never force-push". The session log.
+- Spec: register parts A-M as changed at CHECKPOINTS 6-7; no spec text edited here.
+  Proposed, the main loop's: edits 200-204 for issues 302-306 (§2.2, §7.1, §8.3,
+  §8.5, §8.6, §8.7, §10.3, §12.4, §12.8, §15.2's A7 row, §15.3's cached rows;
+  registers C11, C14, D3, D4, E7, H18, I13, I19), 205 (§12.3 and §11.2's status note,
+  after 6b″) and 206 (the register's status vocabulary).
 
 ### 2026-10-17 - Design documents: the CHECKPOINT 6 and 7 rulings, from upstream
 
