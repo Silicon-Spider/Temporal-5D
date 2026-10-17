@@ -5,7 +5,8 @@ The scope is checked against brute-force constructions written from its definiti
 causal past (spec issue 5) and both readings of C20; then through the network - every
 attention implementation computes the same function under it, frozen tokens never read a
 live head or a global register (a direct causality test), the section 6 structure opens
-live rows only, and a frozen board's state-dependent flags follow ``frozen_features``.
+live rows only - B16's status biases among them - and a frozen board's state-dependent flags
+follow ``frozen_features``.
 """
 
 from __future__ import annotations
@@ -392,9 +393,11 @@ def test_frozen_tokens_read_only_their_past(reading):
 
 def test_structure_opens_live_rows_only():
     """Under the block-causal scope the move graph, the relations head, B11's typed biases and
-    B12's smolgen leave frozen query rows alone (``scope.py``); live rows keep them all, and
-    every row keeps B15's displacement bias - geometry."""
+    B12's smolgen leave frozen query rows alone (``scope.py``); live rows keep them all, plus
+    B16's status biases on frozen keys (``status.py``), and every row keeps B15's displacement
+    bias - geometry."""
     from tests.net.test_displacement import reference_bias
+    from tests.net.test_status import status_reference
 
     flags = dict(routing_table=True, typed_edge_bias=True, board_pair_smolgen=True, trunk_dtype="fp32", n_layers=1)
     state = synthetic_state(51, 12, n_timelines=3)
@@ -417,10 +420,13 @@ def test_structure_opens_live_rows_only():
         else:
             assert torch.equal(rows_c[0, head], rows_d[0, head]), role
         assert torch.equal(rows_c[0, head][live], rows_d[0, head][live]), role
-    # Frozen rows keep B15's geometric bias and nothing else; live rows keep everything.
+    # Frozen rows keep B15's geometric bias and nothing else; live rows keep everything, and
+    # B16's status biases on the frozen boards' keys besides.
     geometric = reference_bias(causal, batch, 0)[0]
+    status = status_reference(causal, [state], 0)[0]
     assert torch.allclose(bias_c[0][:, ~live], geometric[:, ~live])
-    assert torch.allclose(bias_c[0][:, live], bias_d[0][:, live])
+    assert torch.allclose(bias_c[0][:, live], bias_d[0][:, live] + status[:, live])
+    assert bool((status[:, live] != 0).any()) and not bool((status[:, ~live] != 0).any())
     assert not torch.allclose(bias_d[0][:, ~live], geometric[:, ~live])
     # The scope itself is ANDed into every implementation's rows.
     allowed, _ = _block_rows(ctx_c, 0, batch.n_tokens)

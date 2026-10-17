@@ -378,6 +378,19 @@ class DisplacementIndex:
     coords: torch.Tensor  # (B, L, 4) long: raw (file, rank, timeline, half-turn)
 
 
+def lookup(index: DisplacementIndex, table_map: torch.Tensor, rows: torch.Tensor, cols: torch.Tensor | None = None) -> torch.Tensor:
+    """``(B, n, Lk)``: ``table_map`` - a ``(tiles, 65, 65)`` map like ``class_map`` (B15's entries,
+    or B17's classes) - at (the pair's board tile, the query's code, the key's code) for the queries
+    ``rows`` ``(B, n)`` and the keys ``cols`` ``(B, K)`` (every key when None)."""
+    slot_q, code_q = index.slot.gather(1, rows), index.code.gather(1, rows)
+    slot_k = index.slot if cols is None else index.slot.gather(1, cols)
+    code_k = index.code if cols is None else index.code.gather(1, cols)
+    b = torch.arange(rows.shape[0], device=rows.device)[:, None, None]
+    tile = index.tiles[b, slot_q[:, :, None], slot_k[:, None, :]]
+    flat = tile * (N_CODES * N_CODES) + (code_q * N_CODES)[:, :, None] + code_k[:, None, :]
+    return table_map.view(-1)[flat]
+
+
 def check_board_sizes(batch: Batch) -> None:
     """B15's slice spans boards up to 8 x 8 (section 4.1: "15 x 15")."""
     for lay in batch.layouts:
@@ -450,6 +463,7 @@ __all__ = [
     "displacement_index",
     "entry_from_class",
     "line_entry",
+    "lookup",
     "pair_entry",
     "tile_index",
 ]

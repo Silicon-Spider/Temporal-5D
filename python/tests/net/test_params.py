@@ -23,6 +23,8 @@ prototype): stage N2 builds it behind a flag, 47,136 parameters as relative cell
 (test_n2_model.py); its "base 256x16, ff8: 21.0M" is the trunk. B9's default masks add no
 parameter. F2's larger arm, L24-ff12, is 46,891,210 as built: 44,456,458 (section 9.2: 44.0M)
 and B15's 24 x 8 x 12,681 = 2,434,752.
+B16's status table (committed with the cached configuration) adds 304 to a block-causal
+network and nothing to the v1, whose scope is dense.
 """
 
 from __future__ import annotations
@@ -62,6 +64,20 @@ def test_f2_larger_arm_preset():
     assert counts["attn.displacement"] == F2_DISPLACEMENT, "B15's table: one per layer"
     assert abs(counts["total"] - F2_DISPLACEMENT - 44.0e6) / 44.0e6 < 0.02, "section 9.2: 44.0M (before B15)"
     assert NetConfig() == NetConfig.preset("F1"), "F1 stays the default"
+
+
+def test_the_cached_configuration_adds_b16s_table():
+    """B16 (committed with the cached configuration): the block-causal network carries its status
+    table - 8 heads x 19 Delta-t bins x 2 timeline statuses = 304, shared by the layers (4,864 with
+    one table per layer, 16 x 304; placeholders, spec issues 213-214) - and the v1, dense, none."""
+    v1 = parameter_breakdown(build_model(NetConfig()))
+    assert v1["attn.status"] == 0 and v1["total"] == V1_TOTAL
+    cached = parameter_breakdown(build_model(NetConfig(attn_scope="block_causal")))
+    assert cached["attn.status"] == 304 and cached["total"] == V1_TOTAL + 304
+    per_layer = parameter_breakdown(build_model(NetConfig(attn_scope="block_causal", status_bias_per_layer=True)))
+    assert per_layer["attn.status"] == 16 * 304 == 4_864
+    current = parameter_breakdown(build_model(NetConfig(attn_scope="block_causal", frozen_features="current")))
+    assert current["attn.status"] == 0 and current["total"] == V1_TOTAL
 
 
 def test_flag_parameters_are_small():

@@ -88,6 +88,22 @@ coordinates, "computed at score time from coordinates, so nothing cached goes st
 board's bias rows over its key set once per layer, from that layer's table, and the live pass
 gives each layer its own (``AttnContext.for_layer``).
 
+**B17's key-side Shaw term** (behind its flag; ``shaw.py``) is geometry and the query's own
+content - a frozen board's rows get it from the board's own queries, so ``compute_board``
+adds it to them, layer by layer, and the live pass to the live rows (``_FastPath``).
+
+**B16's status key biases** (committed with this configuration; ``status.py``) are the
+current status of the frozen boards - their Delta-t-to-present bin and active flag - as seen
+by the live rows that read them: the live pass adds them from the node's own present, every
+evaluation, so a frozen entry never goes stale when the present moves or a timeline is
+activated (its K/V carry intrinsic features only, and its digest no status). A frozen board's
+own rows never carry them (``AttnStructure.for_frozen_rows``). A refreshed epoch's history
+boards are biased like any other at every node below the anchor; at the anchor itself the
+evaluation is the refresh pass (section 7.9), so there they are left out - in ``prepare`` and
+in ``reference_output`` alike. That is one rule in both, which comparing them cannot test:
+``test_cache.py`` checks it against an oracle of its own (B16's table changed, the anchor's
+evaluation stays bit for bit and every node below it moves).
+
 **Not supported** (``CachedEvaluator`` refuses them): B12's ``board_bilinear`` form, which
 reads every board's per-board register states at every layer - frozen boards' hidden
 states are not cached; and B12 with no global registers (its context is then the mean of
@@ -463,11 +479,13 @@ class CachedEvaluator:
                 digest[b] = h.digest()
         return _Plan(scope, frozen, order, deps, ident, digest, history)
 
-    def _context(self, batch: Batch, plan: _Plan) -> AttnContext:
+    def _context(self, batch: Batch, plan: _Plan, at_anchor: bool = False) -> AttnContext:
+        """The node's block-causal context; ``at_anchor``: the node is its refreshed epoch's
+        anchor, whose evaluation is the refresh pass - no B16 (``status.py``)."""
         history = None
         if plan.history is not None and self.root_dependent:
             history = torch.from_numpy(plan.history)[None]
-        return self.model.make_context(batch, scope="block_causal", history=history)
+        return self.model.make_context(batch, scope="block_causal", history=history, status_bias=not at_anchor)
 
     # -- the frozen boards --
 
@@ -498,9 +516,9 @@ class CachedEvaluator:
         entries = [self.store[plan.key(epoch, j)] for j in key_boards]
         # Rows: the scope and the structure for this board's queries, on its key set - the
         # mask once, the bias per layer (B15's table is per layer). The structure's smolgen
-        # biases live rows only, so a frozen board's rows have none; B15 is geometry and
-        # biases them (``scope.py``).
-        st = None if ctx.structure is None else ctx.structure.without_smolgen()
+        # and B16's status biases are live rows' only, so a frozen board's rows have neither;
+        # B15 is geometry and biases them (``scope.py``).
+        st = None if ctx.structure is None else ctx.structure.for_frozen_rows()
         frozen_ctx = replace(ctx, structure=st)
         allowed = _block_mask(frozen_ctx, b * tpb, (b + 1) * tpb)[..., keys]
         caller_bias = None  # a caller's dense bias (the cache's own contexts have none)
@@ -542,6 +560,10 @@ class CachedEvaluator:
                     s_bias = st_l.bias_rows(b * tpb, (b + 1) * tpb, cols=keys[None])
                     if s_bias is not None:
                         bias = s_bias if bias is None else bias + s_bias
+                if ctx.shaw is not None:
+                    # B17: the board's own queries against its key set's classes (geometry).
+                    shaw = ctx.shaw.for_layer(layer).rows(q, own[None], cols=keys[None])
+                    bias = shaw if bias is None else bias + shaw
                 fast = _FastPath(qq, kk, vv, compact)
                 o = fast.full((n_keys - c, n_keys), None, fast.keys, allowed, bias)
                 x = block.after_ffn(block.after_attn(x, block.attn.output(o)))
@@ -555,7 +577,9 @@ class CachedEvaluator:
         """A node's inputs, before anything is computed."""
         batch = collate([state])
         plan = self._plan(state, epoch)
-        return NodeWork(state, epoch, batch, plan, self._context(batch, plan), self.model.embed_tokens(batch, "block_causal"))
+        at_anchor = epoch.refreshed and state_digest(state) == epoch.anchor
+        ctx = self._context(batch, plan, at_anchor)
+        return NodeWork(state, epoch, batch, plan, ctx, self.model.embed_tokens(batch, "block_causal"))
 
     def missing(self, work: NodeWork) -> list[int]:
         """The node's frozen boards with no entry yet, in the order they must be computed."""
@@ -617,9 +641,9 @@ class CachedEvaluator:
                 q_full[:, :, live_tok] = q
                 # A live row reads every valid key: the scope adds nothing to the live set's rows.
                 ctx_l = replace(ctx, scope=None)
-                if ctx.structure is not None and ctx.structure.layer_dependent:
+                if ctx.layer_dependent:
                     h_full = None
-                    if ctx.structure.smolgen is not None:  # B12 reads the layer's input (B15 does not)
+                    if ctx.structure is not None and ctx.structure.smolgen is not None:  # B12 reads the layer's input (B15 does not)
                         h_full = h.new_zeros(1, length, h.shape[-1])
                         h_full[:, live_tok] = h
                     ctx_l = ctx_l.for_layer(h_full, layer)
@@ -650,7 +674,7 @@ def _live_rows(fast: _FastPath, ctx: AttnContext, blocks: list[tuple[int, int]],
     rows than on one board's 66), each masked role block by block with its own rows. With a
     bias, every head runs per block with its rows and biases."""
     st = ctx.structure
-    if st is not None and st.has_bias:
+    if (st is not None and st.has_bias) or ctx.shaw is not None:
         return torch.cat([fast.all_heads_block(s, e) for s, e in blocks], dim=2)
     groups = [("dense", torch.arange(fast.q.shape[1]))] if st is None else st.head_groups()
     parts, order = [], []
@@ -695,7 +719,9 @@ def reference_output(
     ``anchor``: a refreshed epoch's anchor (section 7.9's two-level mask) - first the dense
     pass over the anchor; its frozen boards (which ``state`` must hold, frozen) keep the K/V
     of that pass, injected into the full pass at every layer, and its outputs. Every other
-    board is computed by the full pass. ``history_from``: under ``supersession_scope=
+    board is computed by the full pass. B16 biases every frozen key in the full pass, the
+    injected ones included, unless ``state`` is the anchor itself (``status.py``).
+    ``history_from``: under ``supersession_scope=
     "past_and_epoch_history"`` without a refresh, the search root whose frozen boards are the
     epoch's history. The network's frozen K/V format applies as in any forward: the model
     rounds every frozen board's K/V - injected ones included - after the injection."""
@@ -738,7 +764,10 @@ def reference_output(
     hist_t = None
     if history is not None and cfg.supersession_scope == "past_and_epoch_history":
         hist_t = torch.from_numpy(history)[None]
-    out = model(batch, scope="block_causal", history=hist_t, kv_hook=hook, return_trunk=True)
+    # B16 biases every frozen key, history boards' included - except at the anchor itself,
+    # whose evaluation is the refresh pass (section 7.9; ``status.py``).
+    at_anchor = anchor is not None and state_digest(state) == state_digest(anchor)
+    out = model(batch, scope="block_causal", history=hist_t, kv_hook=hook, return_trunk=True, status_bias=not at_anchor)
     if not injected:
         return out
     h = out.trunk.clone()

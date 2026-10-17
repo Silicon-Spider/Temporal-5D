@@ -76,3 +76,22 @@ def dense_flops(n_tokens: int, cfg: NetConfig) -> dict[str, int]:
 def kv_bytes(n_tokens: int, cfg: NetConfig, bytes_per_value: float) -> float:
     """K and V of ``n_tokens`` tokens at every layer (section 10.3: ~260 MB at 240 boards in BF16)."""
     return n_tokens * cfg.n_layers * 2 * cfg.d_model * bytes_per_value
+
+
+def qk_flops(t_query: int, t_key: int, cfg: NetConfig) -> int:
+    """The ``Q K^T`` product alone: ``2 * T_q * T_k * d_head * H * L`` (half of
+    ``attention_flops``) - what section 15.3's B17 row compares the Shaw term with."""
+    return 2 * t_query * t_key * cfg.d_head * cfg.n_heads * cfg.n_layers
+
+
+def shaw_flops(t_query: int, cfg: NetConfig, n_classes: int | None = None) -> int:
+    """B17's precomputed query-class products (``shaw.gather_term``): ``2 * T_q * C * d_head * H *
+    L`` - every query against every one of the ``C`` classes (``shaw.n_shaw_classes(cfg)`` when
+    None), on every head and layer; the gather that follows is no multiply. Against
+    ``qk_flops`` it is ``C / T_k``: section 15.3's "~0.5x the QK^T product at 44 boards, ~9% at
+    240, with ~1,400 classes" (0.51 and 0.094 with the placeholder's 1,493)."""
+    if n_classes is None:
+        from .shaw import n_shaw_classes
+
+        n_classes = n_shaw_classes(cfg)
+    return 2 * t_query * n_classes * cfg.d_head * cfg.n_heads * cfg.n_layers

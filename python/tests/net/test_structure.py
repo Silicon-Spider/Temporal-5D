@@ -305,9 +305,10 @@ def test_typed_biases_land_on_exactly_the_related_pairs(directed):
     assert torch.allclose(bias.double(), ref, atol=1e-6)
     related = ref.abs().sum(dim=1) > 0
     assert torch.equal(bias.abs().sum(dim=1) > 0, related), "non-zero exactly on related pairs"
-    # One type's scalar moves exactly the pairs of that type, on that head.
+    # One type's scalar moves exactly the pairs of that type, on that head (pin and check: the
+    # two the engine does not build yet - ABI round 1 - on the fixture's synthetic edges).
     saved = table.detach().clone()
-    for name in ("check", "travel_threat"):
+    for name in ("pin", "check"):
         t = TYPED_RELATIONS.index(name)
         with torch.no_grad():
             table[3, t] += 1.0
@@ -317,6 +318,22 @@ def test_typed_biases_land_on_exactly_the_related_pairs(directed):
         rows = reference_typed_bias(batch, torch.eye(len(TYPED_RELATIONS))[t][None, :, None].expand(1, -1, 2), directed=True)
         assert torch.equal(moved[:, 3] != 0, rows[:, 0] != 0), name
         assert torch.all(moved[:, [h for h in range(8) if h != 3]] == 0)
+
+
+def test_the_typed_relations_are_b11s_five():
+    """Register B11 (CHECKPOINT 6): "attack, defence, pin, x-ray, check - travel-threat folded
+    into attack". The network's relation ids are the C ABI's, whose id 6 (travel-threat) stays
+    reserved: no position may carry it, and the typed table has a scalar per head for each of
+    the five types."""
+    assert TYPED_RELATIONS == ("attack", "defence", "pin", "xray", "check")
+    assert RELATION_TYPES[1:] == TYPED_RELATIONS and RELATION_TYPES[0] == "move" and "travel_threat" not in RELATION_IDS
+    assert [RELATION_IDS[n] for n in RELATION_TYPES] == [0, 1, 2, 3, 4, 5], "the ids of engine/include/t5d/records.h"
+    state = synthetic_state(4, 2)
+    s, d = (int(t) for t in state.edges[0, :2])
+    with pytest.raises(ValueError, match="relation ids"):
+        replace(state, edges=np.array([[s, d, 6]]))
+    assert _model(typed_edge_bias=True).typed_edges.table.shape == (8, 5, 1)
+    assert _model(typed_edge_bias=True, typed_edge_directed=True).typed_edges.table.shape == (8, 5, 2)
 
 
 def test_typed_bias_counts_a_repeated_edge_once_and_a_mutual_relation_twice():
@@ -518,6 +535,13 @@ SWITCHES = {
     "disp_far_edges": (dict(), dict(disp_far_edges=(3, 4, 6))),
     "disp_line_max": (dict(), dict(disp_line_max=4)),
     "disp_register_pairs": (dict(), dict(disp_register_pairs="shared")),
+    # B16 lives in the cached configuration only (its bins are checked to regroup in test_status.py).
+    "status_key_bias (B16) off -> on": (dict(attn_scope="block_causal", status_key_bias=False), dict(attn_scope="block_causal")),
+    "status_bias_per_layer": (dict(attn_scope="block_causal"), dict(attn_scope="block_causal", status_bias_per_layer=True)),
+    "status_dt_exact": (dict(attn_scope="block_causal"), dict(attn_scope="block_causal", status_dt_exact=2)),
+    "shaw_key_term (B17) off -> on": (dict(), dict(shaw_key_term=True)),
+    "shaw_shared_heads": (dict(shaw_key_term=True), dict(shaw_key_term=True, shaw_shared_heads=True)),
+    "shaw_near": (dict(shaw_key_term=True), dict(shaw_key_term=True, shaw_near=1)),
 }
 
 

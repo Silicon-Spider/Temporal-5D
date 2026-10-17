@@ -20,6 +20,14 @@ after F5's RMSNorm and F6's Mish, 2026-10-17; the figures before them were withi
 of these.) Adversarial constructions: duplicated boards, deep travel, many timelines,
 non-standard board sizes, even starts, register-count arms, and supersession inside a
 refreshed subtree.
+
+B16's status key biases (committed with the cached configuration, ``status.py``) are on in every
+network here with intrinsic frozen features - the default; the ``frozen_features="current"`` test
+arm has none: every row (a)-(e) holds with them, the full pass's live rows carrying the same
+biases on the same frozen keys. At a refreshed epoch's anchor neither path adds them (its
+evaluation is the refresh pass, section 7.9) - a rule the cached path and ``reference_output``
+share, so ``test_status_biases_below_a_refreshed_anchor`` checks it against an oracle of its own.
+``test_status_biases_keep_frozen_boards_intrinsic`` checks what they are for.
 """
 
 from __future__ import annotations
@@ -33,6 +41,7 @@ import torch
 from t5d.net import NetConfig, build_model, collate, synthetic_state
 from t5d.net.cache import BoardKV, CacheConfig, CachedEvaluator, Epoch, KVStore, reference_output
 from t5d.net.tree import Multiverse, SearchTree
+from tests.net.test_status import status_keys
 
 #: Root positions: adversarial constructions and variant geometries (section 15.2).
 GEOMETRIES = {
@@ -135,15 +144,29 @@ def test_cached_equals_one_full_pass(geometry, reading, supersession):
         dict(norm_placement="post", ffn_activation="squared_relu", routing_table=True, typed_edge_bias=True, board_pair_smolgen=True),
         dict(displacement_bias=False, routing_table=True, typed_edge_bias=True),
         dict(disp_register_pairs="shared", disp_far_edges=(3, 4, 6), disp_line_max=4, disp_init_std=1.0),
+        dict(shaw_key_term=True, shaw_init_std=1.0, routing_table=True, typed_edge_bias=True, board_pair_smolgen=True),
+        dict(shaw_key_term=True, shaw_shared_heads=True, status_bias_per_layer=True, status_bias_init_std=1.0),
     ],
-    ids=["n2-all", "regs-free-anchored", "zero-angle-raw", "current-features", "6y-arms-n2", "no-table-n2", "b15-placeholders"],
+    ids=[
+        "n2-all",
+        "regs-free-anchored",
+        "zero-angle-raw",
+        "current-features",
+        "6y-arms-n2",
+        "no-table-n2",
+        "b15-placeholders",
+        "b17-n2-all",
+        "b17-shared-b16-per-layer",
+    ],
 )
 def test_cached_equals_one_full_pass_with_every_switch(flags):
     """(a) under the section 6 structure and the open positional choices of stages N1-N3, under
     ablation 6y's two arms together with the structure on (F5's post-norm - smolgen then reads
     the block's input - and F6's squared ReLU), on B15's no-table arm (ablation 2), and with
-    B15's placeholders moved (its table at unit scale). B15 - the v1 default - is on in every
-    other test here: a frozen board's rows carry it, layer by layer (``compute_board``)."""
+    B15's placeholders moved (its table at unit scale), and with B17's key-side Shaw term (a frozen
+    board's rows get it from its own queries) and B16's placeholders moved. B15 - the v1 default -
+    is on in every other test here: a frozen board's rows carry it, layer by layer
+    (``compute_board``)."""
     model = _model(3, **flags)
     root = _root("standard", 3)
     tree = SearchTree(CachedEvaluator(model), root)
@@ -643,6 +666,148 @@ def _present_moves(root: Multiverse) -> list[tuple]:
     state = root.state()
     live = state.is_head & state.active
     return [("physical", int(p)) for p in sorted(state.timeline[live & (state.half_turn == state.h_present)])]
+
+
+def _status_of(model, state) -> dict[tuple[int, int], int]:
+    """B16's status entry of each frozen board of ``state`` - from the structure its evaluation
+    builds - by the board's (timeline, half-turn)."""
+    key = model.make_context(collate([state]), scope="block_causal").structure.status_index.key[0]
+    tpb = state.layout.tokens_per_board
+    return {(int(state.timeline[b]), int(state.half_turn[b])): int(key[b * tpb]) for b in np.flatnonzero(~state.is_head)}
+
+
+def _activating_jump(root: Multiverse):
+    """A branching jump after which a timeline that was inactive - with a frozen board - is active
+    (the count rule: the opponent's new timeline makes room for one more of the creator's), and the
+    timelines it activates; None if the root has none."""
+    state = root.state()
+    asleep = {int(p) for p in state.timeline[~state.active & ~state.is_head]}
+    for p in sorted(root.heads()):
+        for dest in _jump_targets(root, p):
+            if root.is_head(dest):
+                continue
+            after = root.jump(p, dest).state()
+            woken = asleep & {int(q) for q in after.timeline[after.active]}
+            if woken:
+                return ("jump", p, dest), woken
+    return None
+
+
+def test_status_biases_keep_frozen_boards_intrinsic():
+    """B16's point (section 4.1): a frozen board's status changes after it freezes - a move that
+    shifts the present moves its Delta-t-to-present, a branch can activate its timeline - and
+    under the cached configuration that recomputes nothing. Every frozen board the parent holds
+    keeps its entry (the same key - its digest holds no status - and the same stored K/V), only
+    the board the move supersedes is computed, and the cached evaluation equals the full
+    block-causal pass, whose live rows carry the same status biases on the same frozen keys.
+    The status of boards both nodes hold did move: the bias moved, not the K/V."""
+    model = _model(15)
+    assert model.status is not None, "B16 is on in the cached configuration by default"
+    root = _root("standard", 15)
+    present = _present_moves(root)
+    cases = [("present", root, present[:-1], present[-1], None)]
+    for seed in range(60):
+        other = Multiverse.from_state(synthetic_state(1500 + seed, 14, n_timelines=5), seed=seed)
+        found = _activating_jump(other)
+        if found is not None:
+            cases.append(("activation", other, [], *found))
+            break
+    assert len(cases) == 2, "the fixture holds a branch that activates a timeline"
+    for name, start, prefix, move, woken in cases:
+        tree = SearchTree(CachedEvaluator(model), start)
+        parent = tree.path(prefix)
+        tree.evaluate(parent)
+        node = tree.child(parent, move)
+        store = tree.evaluator.store
+        before = store.computed["supersession"]
+        _close(tree.evaluate(node), reference_output(model, node.state), what=name)
+        assert store.computed["supersession"] - before == 1, name
+        plans = [tree.evaluator._plan(n.state, n.epoch) for n in (parent, node)]
+        index = [
+            {(int(n.state.timeline[b]), int(n.state.half_turn[b])): int(b) for b in p.frozen}
+            for n, p in zip((parent, node), plans, strict=True)
+        ]
+        old, new = _status_of(model, parent.state), _status_of(model, node.state)
+        moved = [k for k in index[0] if k in index[1] and old[k] != new[k]]
+        assert moved, (name, "a frozen board's status moved")
+        for k in index[0]:
+            if k in index[1]:
+                ka, kb = plans[0].key(parent.epoch, index[0][k]), plans[1].key(node.epoch, index[1][k])
+                assert ka == kb and ka in store, (name, k, "the same entry")
+        if woken is not None:
+            assert node.state.active[[index[1][k] for k in moved if k[0] in woken]].all()
+            assert any(old[k] % 2 == 0 and new[k] % 2 == 1 for k in moved if k[0] in woken), "the active flag of its status"
+
+
+def _refreshed_search(model, refresh: str, seed: int):
+    """A search with a refreshed epoch - a root refresh, or a node refresh two moves down - and
+    four nodes below its anchor, along a random path of moves and jumps (each supersedes boards,
+    so every node holds frozen boards besides the epoch's history)."""
+    root = _root("many_timelines" if refresh == "root" else "deep_travel", seed)
+    tree = SearchTree(CachedEvaluator(model, CacheConfig(root_refresh=refresh == "root", node_refresh=refresh == "node")), root)
+    anchor = tree.root
+    if refresh == "node":
+        anchor = tree.path(_random_moves(root, np.random.default_rng(seed), 2))
+        tree.refresh(anchor)
+    nodes, node = [], anchor
+    for move in _random_moves(anchor.universe, np.random.default_rng(seed + 50), 4, jump_prob=0.4):
+        node = tree.child(node, move)
+        nodes.append(node)
+    return tree, anchor, nodes
+
+
+@pytest.mark.parametrize("refresh", ["root", "node"])
+def test_status_biases_below_a_refreshed_anchor(refresh):
+    """B16 in a refreshed epoch, against an oracle of its own. The cached path and
+    ``reference_output`` share one rule - the anchor's own evaluation is the refresh pass and adds
+    no B16, and every node below the anchor carries it on every frozen key, the history boards'
+    included (issue 216) - so comparing the two cannot test the rule. Here B16's table changes
+    instead, between two fresh searches: the anchor's evaluation stays bit for bit as it was, in
+    both paths, and every node below the anchor moves, in both. Then only the entries of statuses
+    that the history boards hold and no other frozen board of a node does change: the node still
+    moves, in both - its live rows read the history boards' keys (whose K/V are the refresh's, with
+    no status of the node in them) with the node's own status."""
+    seed = 12 if refresh == "root" else 13
+    model = _model(seed)
+    table = model.status.table.detach().clone()
+    noise = torch.randn(table.shape, generator=torch.Generator().manual_seed(seed))
+
+    def evaluations(delta, which=None):
+        """With the table moved by ``delta``, in a fresh search (no entry shared with another run):
+        the cached evaluation and the reference of the anchor and of each node below it (``which``:
+        indices into that list)."""
+        model.status.table.copy_(table + delta)
+        tree, anchor, nodes = _refreshed_search(model, refresh, seed)
+        picked = [anchor, *nodes] if which is None else [[anchor, *nodes][i] for i in which]
+        return [(tree.evaluate(n), reference_output(model, n.state, anchor=anchor.state)) for n in picked], anchor, nodes
+
+    try:
+        base, anchor, nodes = evaluations(torch.zeros_like(table))
+        moved, _, _ = evaluations(noise)
+        for path in (0, 1):  # the cached path, the reference
+            assert _identical(base[0][path], moved[0][path]), (path, "the anchor: the refresh pass adds no B16")
+            for i in range(1, len(base)):
+                assert not torch.allclose(base[i][path].trunk, moved[i][path].trunk, atol=1e-4), (path, i, "below the anchor")
+        history = {(int(anchor.state.timeline[b]), int(anchor.state.half_turn[b])) for b in np.flatnonzero(~anchor.state.is_head)}
+        checked = 0
+        for i, node in enumerate(nodes, start=1):
+            state, tpb = node.state, node.state.layout.tokens_per_board
+            key, _ = status_keys(model, [state])  # written out from the node's position
+            held: dict[bool, set[int]] = {True: set(), False: set()}
+            for b in np.flatnonzero(~state.is_head):
+                held[(int(state.timeline[b]), int(state.half_turn[b])) in history].add(int(key[0, b * tpb]))
+            only = sorted(held[True] - held[False])
+            if not only:
+                continue
+            delta = torch.zeros_like(table)
+            delta[..., only] = noise[..., only]
+            (out,), _, _ = evaluations(delta, [i])
+            for path in (0, 1):
+                assert not torch.allclose(base[i][path].trunk, out[path].trunk, atol=1e-4), (path, i, "the history boards' keys")
+            checked += 1
+        assert checked, "a node whose history boards hold a status no other frozen board of it holds"
+    finally:
+        model.status.table.copy_(table)
 
 
 @pytest.mark.parametrize("supersession", [R2, R1])

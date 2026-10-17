@@ -182,6 +182,7 @@ def test_validation_rejects_register_endpoints():
         (dict(active=[True, False]), "disagree"),
         (dict(half_turn=[1, 1], side_to_move=[1, 1]), "two boards"),
         (dict(edges=[[0, 1, 7]]), "relation ids"),
+        (dict(edges=[[0, 1, 6]]), "relation ids"),  # the C ABI's reserved travel-threat id (B11)
         (dict(moves=[[66 + 60, 66 + 59, 13]]), "promotion ids"),
     ],
 )
