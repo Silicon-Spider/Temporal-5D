@@ -484,7 +484,82 @@ and `git push --dry-run origin HEAD` succeeded. The remote is private.
 - Not yet: the workflows as required status checks on `main` (branch protection
   is a repository setting - for the user).
 
-### 2. Finish the gate - 2A and 2B done; the engine triaged, waiting on Q4
+### 2. Finish the gate - 2A and 2B done; the engine configured and triaged (2026-10-17)
+
+**The gate with the engine configured (2026-10-17,** branch `lane/gate`; the work
+lost with the old machine, 61e9aa8, redone under H47). `oracles/gate.toml`'s
+`[engine] command` is `["./build/engine/t5d-gate"]`, full mode: the adapter as
+`engine/build.py` builds it, relative to the repository root, no diagnostic option.
+(On Windows Python finds a relative program from the harness's own working
+directory, not from the directory it runs the command in: run the harness from the
+repository root, as every documented command does - from anywhere else the spawn
+fails. On Linux, CI's platform, it is found from the root either way.) The engine
+is main's (unchanged since 3b33942). Compared with every recorded oracle answer by
+the harness's own comparison (a scratch script, not kept: `observations.compare` of
+the engine's report on each record with all six golden files - what the release
+tier would compare), it disagrees at 169 places: the 56 entries of 2026-10-02 all
+match (KD-0040 to KD-0043 too, now that R8 reads notation/1.2 to its end), and 113
+are new - the lost branch's count: 72 ftxi and 38 ftxi:naive check verdicts at 72
+positions (`in_check: engine=False vs ftxi=True`), and cwmtt/futures action 17
+against cwmtt, Chess in 5D and the notation parser. A nightly run before the new
+entries found 106 of them (its 120 s ftxi:naive budget stops short of niceAndrey
+90-97, which only the release tier's 300 s reaches).
+
+- **The check findings, by cluster (H31), settled by R1.** At each of the 72
+  positions the engine's own royal-capture scan (`for_each_royal_capture`,
+  `t5d/check.hpp`, over the multiverse with a passed copy of every playable board of
+  the side to move - a scratch program linked to the engine's library, not kept)
+  lists exactly the captures ftxi reports (`observe --source ftxi --explain`), 435 in
+  all, and at the 38 ftxi:naive positions exactly those ftxi:naive reports; the
+  engine's check status (R1's pass) finds none. Every capture starts on a board of
+  the side to move's that R1 does not pass: an active board ahead of the present
+  (RQ1, and RQ2 where it would branch into an inactive timeline) for all but four -
+  100_timelines@13's (inactive, behind the present: CHK-I1, RQ3) and three of
+  100_timelines@20's six (inactive, ahead; the position is decided by its active
+  captures, as CHECKPOINT 1 found). Chess in 5D answers False at all 72 (support,
+  never a vote). The 58 positions of CHECKPOINT 1's table re-derive exactly: side to
+  move, present, mandatory boards, cluster, deciding capture, number of captures.
+  cwmtt/many2's 14 (12, 14, 19, 21, 25, 31, 33, 36, 37, 39, 47, 49, 56, 60; ftxi:naive
+  at 12 and 14), read converted since CHECKPOINT 3 and so not in the table, file as
+  CHK-A1 by the report's method: all 253 of their captures start on active boards
+  ahead of the present. Entries by cluster: CHK-A1 64, CHK-A3 31 (new text: RQ2),
+  CHK-A5 10 (new text: RQ1 on both boards), CHK-A2 2, CHK-I1 2, CHK-A4 1. Five
+  positions rest on R2 (Q1) as well, and their six entries say so: wide@24, 28, 30,
+  32 (CHECKPOINT 1's own finding: under Q1's "consecutive" reading the present would
+  be T7w and the position check) and 100_timelines@13 (`t5d-gate --rule
+  activation=consecutive`, a consecutive reading with no count limit, makes +3
+  active and the position check). Under that diagnostic reading the engine also
+  refuses cwmtt/wide from action 23, niceAndrey from 30, many2 from 20 and NP and
+  NP0 from 62: these records are legal games only under R2's count rule. **No engine
+  defect.**
+- **The notation finding.** cwmtt/futures action 17, `(L1T5)Qf4>>x(L0T5)e4~`: at
+  position 16 the engine, ftxi, cwmtt and Chess in 5D hold one state, and (0T5)e4 is
+  empty - the `x` marks a capture the jump does not make. The engine refuses the move
+  as unreadable (its reader: a written `x` must capture), and ftxi refuses it too (no
+  matching move), so there is no divergence with ftxi; cwmtt, Chess in 5D and the
+  notation parser play it. KD-0167 to KD-0169 cite the specification's "Jumps"
+  syntax ("`x` if a piece is being taken"); what a reader does with an `x` that
+  disagrees, the specification does not say (spec issue 125). Standard - Turn Zero
+  stays ungated: the engine cannot read the record to its end.
+- **Runs** (this machine shared with other lanes: the timings are not measurements).
+  `py engine/build.py --werror` (MSYS2 g++ 16.2.0) clean. `verify` ok - its 17
+  `proof-channel-vacuous` notes are H48's. `selftest`: 633 tests, OK, 1 skipped.
+  `gate --tier commit`: oracle layer ok (ftxi 8256 of 8256 and notation 3012 of 3012
+  required values reproduced); `engine differential: SMOKE TEST - PASSED`, every
+  ruleset NOT gated and none meeting the gating conditions with ftxi alone;
+  calibration 1.25x the recording machine. `gate --tier nightly`: oracle layer ok,
+  every source's required set reproduced; `engine differential: PASSED`, no finding;
+  **gated: Standard - Half Reflected** (21 positions, at least 2 oracles behind each
+  record) **and Standard - Reversed Royalty** (122 positions, at least 3);
+  calibration 1.19x. NOT gated, and why: Standard (the engine cannot read
+  ftxi/softmate, KD-0047), Turn Zero (cwmtt/futures, KD-0167 to KD-0169), Very
+  Small - Open (cwmtt/ctp1, ftxi/verysmall), custom positions (ftxi/niceAndrey's
+  set-up), Misc - Small (no oracle follows notation/game), the Focused variants and
+  Timeline Battleground (no oracle gives a check verdict there), Timeline Invasion
+  and Marauders (the engine does not set them up). The release tier was not run: its
+  oracle layer fails on H48's notes until the re-recording, and the comparison with
+  every recorded value (above) covers what it would compare of the engine. The proof
+  channel stays disabled. CI on the branch waits on `gh auth login` (the user).
 
 **The engine's first gate runs (2026-10-02,** engine at 0a44cbf / 4ed2e92;
 reports in `oracles/.cache/reports/triage-2026-10-02/`, regenerable). With
@@ -853,7 +928,7 @@ for game records.
 | H43 | built, tested; adopted under 100 boards | Hunt (E9): 69.0% / 63.6% of the truth's mates under 50 / 50-99 boards (6b″) - adopted there; 35.0% at 100-199 and 0 of 1 at 200+ - not adopted; §13: proofs there come only from the search's solver. Export refused until H41/H23 |
 | H44 | built in part | The audit lane's tools: the certificate checker (E4 alone) and `t5d-hunt-truth` (E9); the decision sampler, the offline proof runner and the per-range report are E10's |
 | H45 | not built (rule) | The adversarial league (M5) |
-| H47 | built, tested | The check that some ruleset is gated (`engine-nothing-gated`, and `GateResult.ok`'s test of it) runs only in a tier that runs every oracle search over the whole corpus (`Tier.full_strength`: nightly, release) - keyed to what a tier runs, never its name (the self-tests pin both directions). Any other tier - commit - is a smoke test: an engine with no finding against it passes, gated or not, and the summary (`engine differential: SMOKE TEST - ...`) and the report (`smoke_test`; nothing under `gated`) say that it gates nothing and why. In every tier an unexplained divergence, a telltale or a contract breach fails the engine. `gate.toml` is refused if a tier that is not full strength sets `require_engine` (it could never pass); a tier that requires an engine reads only what its run may state as gated, and the summary says when it came through no named variant. A run restricted with `--source`/`--record` keeps its tier's rule (issue 124). The release tier's named-variant rule, the proof-channel line and parse mode are unchanged. Not yet run with the engine configured (`[engine] command` is still empty). Spec issues 122-124, proposed edit 98 |
+| H47 | built, tested | The check that some ruleset is gated (`engine-nothing-gated`, and `GateResult.ok`'s test of it) runs only in a tier that runs every oracle search over the whole corpus (`Tier.full_strength`: nightly, release) - keyed to what a tier runs, never its name (the self-tests pin both directions). Any other tier - commit - is a smoke test: an engine with no finding against it passes, gated or not, and the summary (`engine differential: SMOKE TEST - ...`) and the report (`smoke_test`; nothing under `gated`) say that it gates nothing and why. In every tier an unexplained divergence, a telltale or a contract breach fails the engine. `gate.toml` is refused if a tier that is not full strength sets `require_engine` (it could never pass); a tier that requires an engine reads only what its run may state as gated, and the summary says when it came through no named variant. A run restricted with `--source`/`--record` keeps its tier's rule (issue 124). The release tier's named-variant rule, the proof-channel line and parse mode are unchanged. Run with the engine configured since 2026-10-17: the commit tier's differential a smoke test, PASSED, with no ruleset meeting the gating conditions with ftxi alone; nightly PASSED, gating two (step 2). Spec issues 122-124, proposed edit 98 |
 | H48 | not started | Before the proof-channel sign-off: the naive searches' release budgets raised and the golden files re-recorded twice, on a quiet machine, so that no proof-channel check is vacuous (`verify`'s 17 `proof-channel-vacuous` notes) |
 | H15 | built, tested | The scanner's deterministic single-thread mode; the search's synchronous mode and digest (E6a; the digest in the C API) |
 | H16, H25, H29 | not built (rule) | Refused |
@@ -861,16 +936,16 @@ for game records.
 | H18 | built, tested | 5D Zobrist: coordinate-free content hash per board, multiply-rotate with (timeline, half-turn), addition across boards, ruleset ID, player to move, parity, creators, board size; incremental equals from-scratch; duplicated boards never cancel (engine E1, E2) |
 | H19 | built, tested | Proofs export to the solved store at once; the TT holds estimates only |
 | H22 | built, tested | All five items of §11.0 (E1, E2, E4); the register row's wording predates H36/H40 (proposed spec edit 40) |
-| H23 | built | The gate, oracle and engine sides; the engine passes the contract on the whole corpus; configured in `gate.toml` once Q4 is ruled; the proof channel stays disabled |
+| H23 | built, tested | The gate, oracle and engine sides. The engine is configured in `gate.toml` (`./build/engine/t5d-gate`, full mode, 2026-10-17) and compared in every tier: commit, a smoke test (H47), PASSED; nightly PASSED, gating Standard - Half Reflected and Standard - Reversed Royalty (step 2). The release tier, the one that can enable the proof channel, is not yet run with it: its oracle layer fails on H48's 17 notes until the re-recording. The proof channel stays disabled (H23, H41) |
 | H24, H26, H28 | built, tested | The generator and the 5dpgn/5DFEN parser are in-house (`engine/`), written from `docs/rules/README.md` and the notation spec's text; 259 engine tests; boundary clean |
 | H27 | built, tested | The oracle harness, committed 2026-10-01 |
 | H30 | built, tested | Step 2A (a04678c): every oracle reports its boards per ply; no placement divergence across the corpus |
-| H31 | done | CHECKPOINT 1: seven clusters triaged (903f4ae), settled by the user's rulings (H36-H40) |
+| H31 | done | CHECKPOINT 1: seven clusters triaged (903f4ae), settled by the user's rulings (H36-H40). Re-run 2026-10-17 with the engine configured: the 110 new check findings (72 positions) filed by cluster and settled by R1 (and R2 at five positions); the 58 positions of CHECKPOINT 1's table re-derive exactly, cwmtt/many2's 14 file as CHK-A1 (step 2) |
 | H32 | built, tested | Required sets at 100%, two recordings, cost files, calibration (2B) |
 | H33 | built, tested | MANIFEST, verified snapshot, harness-modified check, CODEOWNERS (2B) |
-| H34 | built, tested | Telltales by the comparison's rule (2B); 56 entries committed 2026-10-02, the two oracle defects among them (R7) |
+| H34 | built, tested | Telltales by the comparison's rule (2B); 169 entries: 56 of 2026-10-02 (the two oracle defects among them, R7) and 113 of 2026-10-17 (110 R1, 3 notation) - every disagreement of the engine's with a recorded oracle answer is one, and every entry matches one; no telltale |
 | H35 | done | Commit and nightly tiers green on Linux, 2026-10-01 (runs 36827435595, 36827459456) |
-| H36 | built, tested | Engine E4: check status and submission legality per R1; the gate's comparison with the oracles is next |
+| H36 | built, tested | Engine E4: check status and submission legality per R1; compared with the oracles by the gate since 2026-10-17: every check disagreement is at a position where the oracle's every capture starts on a board R1 does not pass (CHECKPOINT 1's RQ1-RQ4), each on record with R1's citation; no engine defect |
 | H37 | built, tested | Engine E4: verdicts only from exhaustive searches; node, time and memory budgets answer "unknown" (tested for every budget below the need) |
 | H38 | done | `docs/rules/README.md` is the rulebook (rulings R1-R7), pinned in `gate.toml`; `verify` fails when it changes until re-pinned |
 | H39 | done | No repetition rule; the engine has none to build |
@@ -1491,12 +1566,21 @@ decision), and what is parked.
     may be 1 - the harness's own tests meet the conditions with ftxi alone, canned
     and live. Whatever kept the commit tier from gating with the engine configured
     (Q-A, 2026-10-04: the branch is lost, its run not re-checked here), it was not
-    a two-oracle rule. Built: H47 keyed to `Tier.full_strength` (the tier runs
-    every oracle search over the whole corpus), never to a count of oracles; in any
-    other tier a ruleset that met the gating conditions with its oracles alone is
-    reported as not gated, with that reason (`gate.SMOKE_REASON`). No two-oracle
-    requirement was added: it would also change what nightly and release gate (the
-    variants one oracle reads) - a decision for the user. Put to the user: should a
+    a two-oracle rule. Measured 2026-10-17 with the engine configured: in the commit
+    tier no ruleset meets the gating conditions with ftxi alone - the engine cannot
+    read a record of Standard, of Turn Zero, of Very Small - Open (two) or the custom
+    positions' (known divergences cite the notation for each), ftxi follows no record
+    of Half Reflected, the Focused variants, Misc - Small or Timeline Battleground,
+    the engine does not set up Timeline Invasion or Marauders, and Reversed Royalty
+    has a check verdict at 85 of its 122 positions (ftxi's at the other 37 are on
+    record as wrong); nightly gates Standard - Half Reflected and Standard - Reversed
+    Royalty, with at least 2 and 3 oracles behind each record. Built: H47 keyed to
+    `Tier.full_strength` (the tier runs every oracle search over the whole corpus),
+    never to a count of oracles; in any other tier a ruleset that met the gating
+    conditions with its oracles alone is reported as not gated, with that reason
+    (`gate.SMOKE_REASON`). No two-oracle requirement was added: in nightly and release
+    it would leave ungated any variant only one oracle reads (none of the two nightly
+    gates today) - a decision for the user. Put to the user: should a
     ruleset be gated only when two oracles stand behind it, in every tier? Until it
     is ruled, proposed edit 98 gives both texts.
 123. **H47 is silent on an engine compared with nothing in a smoke test.** As
@@ -1521,6 +1605,35 @@ decision), and what is parked.
     smoke test and gates nothing. Pinned (`GateRunTests.test_a_restricted_run_keeps_its_tiers_rule`)
     and documented (`oracles/README.md`, "Other commands"). Put to the user;
     nothing is parked on it.
+125. **A written `x` on a move that takes nothing** (§11.0 "Running the gate":
+    parse divergences "are settled against the pinned notation specification";
+    register H28). The specification's "Jumps" syntax has "`x` if a piece is being
+    taken", and its own example reads `>>x` as "jumps and takes"; it says nothing of
+    a reader that meets an `x` on a move that takes no piece - unlike `~`, `(>Lx)`
+    and `(~Tx)`, which it calls "purely for better human comprehension". The engine's
+    reader refuses such a move as unreadable (a written `x` must capture) and reads a
+    capture written without one (`require_capture_marks` false): a reader's policy
+    in each direction, not a rule. The corpus has one case, cwmtt/futures action 17
+    (`(L1T5)Qf4>>x(L0T5)e4~`, onto an empty square): entries KD-0167 to KD-0169 record
+    cwmtt's, Chess in 5D's and the notation parser's playing it as a lenient reading,
+    citing the syntax - ftxi refuses it as the engine does. Taken as an annotation
+    (a warning, like `~`), the move would be read, those three entries would go,
+    ftxi's refusal would become a soft divergence whose entry would have to cite the
+    text as valid notation, which the syntax does not support, and Standard - Turn
+    Zero, whose record the engine would then read to its end, might gate. Built: the
+    strict reading. Put to the user; nothing is parked on it.
+126. **"(and reported upstream)"** (§11.0, "A known-divergences file": "if the
+    oracle is wrong, the divergence is recorded with its rulebook citation (and
+    reported upstream)"; register H31, H34). None of the 169 entries is reported
+    yet, each saying why: 147 - every one of R1's - "ftxi follows a different reading
+    of the check test; settled by ruling R1", as the 37 of 2026-10-02 did; the six of
+    the two defects R7 drafted for upstream (`docs/checkpoints/upstream/`) wait on the
+    user to file them; ten record lenient readers ("no defect to report"); six
+    oracle notation errors are "not yet drafted". As built, `verify` accepts an
+    entry that says why it is unreported. Put to the user: report ftxi's reading of
+    the check test upstream - one report would answer all 147 entries - or read
+    §11.0's clause as applying to defects (proposed edit 99)? Nothing is parked on
+    it.
 
 ## Proposed spec edits
 
@@ -1830,9 +1943,20 @@ says now, what it should say, why.
     commit tier, with one rules oracle, could gate nothing anyway. It changes what
     nightly and release gate: a ruleset with a record that only one oracle follows
     as far as the engine goes is gated in no tier, and the proof channel can never
-    be enabled for it - which rulesets, measured once the engine is configured.
+    be enabled for it - at the corpus of 2026-10-17, none of the two nightly gates
+    (Half Reflected and Reversed Royalty have 2 and 3 oracles behind each record).
     Why: §11.0 and H47 give a two-oracle rule as the reason the commit tier gates
     nothing; the gate has none, and whether to add one is the user's decision.
+99. **§11.0 "A known-divergences file" - pending the user's ruling on issue 126.**
+    It says: "if the oracle is wrong, the divergence is recorded with its rulebook
+    citation (and reported upstream)". (a) **If ftxi's reading of the check test is
+    not reported**: "... recorded with its citation - the rulebook's, or the pinned
+    notation specification's where it settles the matter - and reported upstream
+    when it is a defect of the oracle's (R7); an oracle that follows a reading the
+    rulebook rules against, or reads notation more leniently, is recorded as
+    unreported, with the reason". (b) **If it is reported**: no edit; the entries'
+    `upstream` fields name the report once it is filed. Why: 147 entries say
+    "unreported", and the spec's clause reads as though every entry is reported.
 
 ## Session log
 

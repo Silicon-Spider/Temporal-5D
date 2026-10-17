@@ -14,9 +14,19 @@ cap = 1000
 # repository root. The adapter is the engine's, and lives with it: a command that
 # names anything inside oracles/ is refused.
 #
-# Empty until the rules engine exists. While it is empty no engine has been
-# compared against the oracles, and the proof channel stays disabled (H23).
-command = []
+# The engine's adapter is t5d-gate (engine/tools/t5d_gate.cpp; engine/README.md,
+# "The gate adapter"), built by `python engine/build.py` into build/engine/ - build
+# it before a gate run, as both CI workflows do. It runs in full mode with the
+# engine's default rules, and never with a diagnostic option (engine/README.md
+# lists them: for investigating a record by hand, never for this file). The path
+# is relative, and no absolute path belongs here: on Linux and macOS it is found
+# from the repository root, where the harness runs the command; Windows finds a
+# relative program from the directory the harness itself was started in (and adds
+# the .exe), so run the harness from the repository root, as every documented
+# command does. Emptied, no engine is compared against the oracles and the proof
+# channel stays disabled (H23); configured, it stays disabled until a complete run
+# of the release tier says otherwise and the channel is signed off (H23, H41).
+command = ["./build/engine/t5d-gate"]
 # "full": the engine answers every question at every position.
 # "parse": the harness appends `--parse-only` after `--cap N`; the engine says what
 # it set up, whose move it is and how it replayed the record, and answers none of

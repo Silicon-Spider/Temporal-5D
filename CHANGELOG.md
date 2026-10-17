@@ -10,6 +10,62 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-17 - Gate: the engine configured; the commit tier green with it; 113 known divergences triaged against the rulebook
+
+- `oracles/gate.toml`: `[engine] command = ["./build/engine/t5d-gate"]`, full mode -
+  the engine's gate adapter as `engine/build.py` builds it, relative to the
+  repository root, with no diagnostic option (the comment says why, and that on
+  Windows, where Python finds a relative program from the harness's own working
+  directory, the harness must be run from the root, as every documented command
+  is). Why: H23 - the gate compares the engine. It redoes the work lost with the old
+  machine (61e9aa8), now under H47, so the commit tier is a smoke test that passes.
+- `oracles/known-divergences.toml`: 113 entries, KD-0057 to KD-0169 - every new
+  disagreement of the engine's with a recorded oracle answer, triaged by cluster and
+  settled by the rulebook (H31). 110 are ftxi's (72) and ftxi:naive's (38) check
+  verdicts at 72 positions, ruled wrong by R1: at each, the engine's own capture
+  scan with every playable board of the side to move passed lists exactly the
+  captures ftxi (and ftxi:naive) report through `observe --explain`, and every one
+  starts on a board R1 does not pass - an optional board ahead of the present, or an
+  inactive timeline (CHECKPOINT 1's RQ1-RQ4); CHECKPOINT 1's table re-derives
+  exactly at its 58 positions, and cwmtt/many2's 14, new, file as CHK-A1. Six rest
+  on R2 (Q1) as well, and cite it. 3 are cwmtt/futures action 17, a jump written as
+  a capture (`>>x`) onto an empty square, which the engine refuses as unreadable
+  and cwmtt, Chess in 5D and the notation parser play: cited to the notation
+  specification's "Jumps" syntax ("`x` if a piece is being taken"). No engine
+  defect. The header says where the entries came from, and KD-0040 to KD-0043 no
+  longer say they are inert until Q4 is ruled (R8 ruled it; they match).
+- `oracles/tests/test_repository.py`: the engine adapter is configured - the
+  relative path, full mode, outside the harness. `oracles/tests/test_gate.py`
+  (`GateRunTests.gate_toml`) and `oracles/tests/test_gate_live.py` (`run_gate`):
+  each world replaces the `[engine] command` line by pattern, whatever the
+  repository configures (exactly one), so no test runs the real engine on canned
+  records; the live tests' docstring no longer says there is no engine.
+- `oracles/README.md` (the engine configured; the engine contract's Windows note;
+  the check-disagreement and engine paragraphs of "What the disagreements are";
+  "Known divergences"; "Other commands"; "What this is not, yet") and
+  `engine/README.md` (the gate runs the engine): brought in line.
+- `docs/BUILD_LOG.md`: step 2 (the 2026-10-17 triage and runs); register rows H23,
+  H31, H34, H36 and H47; spec issue 122's measurement; spec issues 125 (a written
+  `x` on a move that takes nothing) and 126 ("(and reported upstream)"), both put
+  to the user; proposed spec edit 99 (pending issue 126).
+- Checks (2026-10-17, this machine shared with other lanes; timings are not
+  measurements): `py engine/build.py --werror` clean; `verify` ok (H48's 17
+  `proof-channel-vacuous` notes, as before); `selftest` 633 tests OK, 1 skipped;
+  `gate --tier commit` ok - oracle layer ok, `engine differential: SMOKE TEST -
+  PASSED` (calibration 1.25x); `gate --tier nightly` ok - oracle layer ok, `engine
+  differential: PASSED`, gated Standard - Half Reflected and Standard - Reversed
+  Royalty (calibration 1.19x). The engine compared with every recorded oracle answer
+  (all six golden files): 169 disagreements, every one matched by an entry, every
+  entry matched. The proof channel stays disabled.
+- Spec: §11.0 ("Tiered CI", "A known-divergences file", "Triage by cluster; settle
+  by rulebook, never by vote", "Telltales", "Parse mode before full mode"); register
+  H23, H27, H28, H31, H34, H36, H38, H47; rulings R1, R2, R7 and R8 cited. Spec
+  issues 125 and 126 put to the user; proposed edit 99, pending issue 126; spec
+  issue 122 and proposed edit 98 (b) now carry the measurement their ruling asked
+  for (with ftxi alone no ruleset meets the gating conditions in the commit tier;
+  nightly's two gated rulesets have 2 and 3 oracles behind each record). No spec
+  text edited.
+
 ### 2026-10-17 - Gate H47: the some-ruleset-is-gated check only in tiers that run every oracle
 
 - `oracles/oracle_harness/gate.py`: the check that some ruleset is gated -
