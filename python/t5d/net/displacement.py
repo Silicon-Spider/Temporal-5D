@@ -34,7 +34,11 @@ has no whole-turn ``dT`` (its boards have different colours to move).
   ``D``, log2-binned from 3 - bins ``[3, 4]``, ``[5, 8]``, ``[9, inf)`` by default, the last
   clamped, as B6's buckets were - crossed with the sign of ``dh`` (past, same time, future;
   B6 kept Delta-time signed): 3 x 3 = 9 far classes. 54 classes in all, each with its
-  15 x 15 slice.
+  15 x 15 slice. The edges are the setting; the form (one distance, ``dh``'s sign) is fixed
+  here. Under it B6 is not B15's special case, as section 4.1 says it is: each far class
+  mixes B6's Delta-time and Delta-timeline buckets, so beyond the exact box the far classes
+  hold a B6 bias only where it depends on nothing but ``dh``'s sign - its clamped
+  extrapolation survives, its per-axis buckets do not (issue 205).
 
 **Line classes** (``line_entry``): beyond the exact classes, a pair of squares whose
 displacement ``(dx, dy, dp, dT)`` in whole turns (``dh`` even) has every non-zero component of
@@ -46,7 +50,7 @@ directions with a board component, 64 also move on the board (``k <= 7`` there: 
 each) and 8 move on the board axes only, where ``k`` is unbounded: entries ``k = 3 ..
 disp_line_max``, the last clamped (every longer line shares it). COMMITTED-CLASS PLACEHOLDERS
 (spec issue 206): the partition reading, the time unit (whole turns: an odd ``dh`` is never a
-line), the clamp ``disp_line_max = 8``.
+line), the clamp ``disp_line_max = 8`` - the clamp a setting, the other two fixed here.
 
 **Register and global entries** (spec issue 207). A pair with a per-board register gets the
 entry of its two boards' class and its kind - square reads register, register reads square,

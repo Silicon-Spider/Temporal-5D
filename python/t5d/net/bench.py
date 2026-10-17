@@ -48,7 +48,11 @@ and no Q/K/V biases - less per-token work, no new matmul - and F6 with Mish; the
 re-measured (no quiet machine since). They are also of the network before B15: the rows
 "B9 default" are today's "n2-no-table", and the v1 default ("n2-default") carries B15's
 learned bias on every head - per-row biases on the dense heads too, as "every switch" had
-(section 15.3's "Displacement bias and normalisation changes" row is to measure).
+(section 15.3's "Displacement bias and normalisation changes" row is to measure). The
+"every switch" figures (the table's rows and the training steps) had B6's binned biases on,
+since removed, and no B15; today's "n2-all" carries B15 in their place - a per-layer lookup
+on every head where B6 added one board-pair table per batch - so they are not "n2-all"'s
+either.
 """
 
 from __future__ import annotations

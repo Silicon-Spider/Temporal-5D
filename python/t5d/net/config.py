@@ -86,7 +86,8 @@ import math
 from dataclasses import dataclass
 
 #: Named capacity presets (section 9.2's ladder). "F1" is the committed v1 network;
-#: "L24-ff12" is F2's larger arm (provisional; ~44M with heads per section 9.2).
+#: "L24-ff12" is F2's larger arm (provisional; section 9.2's ~44M with heads is the count
+#: without B15's table - 46,891,210 as built with it, spec issue 210).
 PRESETS: dict[str, dict] = {
     "F1": {},
     "L24-ff12": {"n_layers": 24, "ffn_ratio": 12},
@@ -232,8 +233,12 @@ class NetConfig:
     #: rows can reach (section 6.1); "chunked" scores every key and masks (ablation 6's
     #: dense-mask arm). "sdpa" is N1's fused path (one block), "explicit" materialised
     #: scores chunked over queries, "dense" the reference that materialises every mask and
-    #: bias first. All five compute the same function on every valid query (the
-    #: position-free pairs merged exactly - see attention.py); the tests compare them.
+    #: bias first, and "flex" B14's score function (``flex.py``): torch's FlexAttention with
+    #: every bias and mask computed inside its score and mask functions - eager on CPU, so
+    #: forward only there (under autograd it raises ``NotImplementedError``: not a training
+    #: path on CPU) and every score materialised (small inputs). All six compute the same
+    #: function on every valid query (the position-free pairs merged exactly - see
+    #: attention.py); the tests compare them.
     attn_impl: str = "block_sparse"
     #: Query rows per chunk in the explicit path.
     attn_chunk: int = 1024
@@ -438,14 +443,20 @@ class NetConfig:
     #: counts extrapolate as the binned biases did" and gives no bins.
     #: COMMITTED-CLASS SILENCE (B15 is class C; spec issue 205) - placeholder, not a decision:
     #: log2-spaced from 3 - bins [3, 4], [5, 8], [9, inf) - x 3 signs = 9 far classes, which
-    #: with the 45 exact ones gives section 4.1's ~1.6M parameters. The first edge is 3.
+    #: with the 45 exact ones gives section 4.1's ~1.6M parameters. The first edge is 3. Only
+    #: the edges are a setting: the form - one distance D, crossed with Delta-time's sign,
+    #: Delta-timeline's sign dropped - is fixed in code (``displacement.board_class``), and a
+    #: per-axis or timeline-signed form would be a code change. Under this form B6 is not
+    #: B15's special case, as section 4.1 says it is: no far class keeps B6's separate
+    #: Delta-time and Delta-timeline buckets (issue 205, put to the user).
     disp_far_edges: tuple[int, ...] = (3, 5, 9)
     #: A line along the board axes only (timelines and turns, the square fixed) beyond the
     #: exact classes has an entry per direction and step k = 3 .. ``disp_line_max``, the last
     #: shared by every longer line (lines that also move on the board stop at k = 7).
     #: COMMITTED-CLASS SILENCE (spec issue 206) - placeholder, not a decision: 8. So are the
-    #: line set's other details: a line counts whole turns (an odd Delta-time is never one),
-    #: and its entry replaces the far slice's for the pair (one scalar per pair).
+    #: line set's other details, which are fixed in code, not settings: a line counts whole
+    #: turns (an odd Delta-time is never one), and its entry replaces the far slice's for the
+    #: pair (one scalar per pair; adding the two instead would be a second lookup per pair).
     disp_line_max: int = 8
     #: Section 4.1: "per-board registers by their board-distance class". Whether the pair's
     #: kind enters is not said. COMMITTED-CLASS SILENCE (spec issue 207) - placeholder default,
