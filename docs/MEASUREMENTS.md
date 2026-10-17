@@ -611,9 +611,9 @@ order of the D2 work (register part K) and checks part L's prediction.
 **Conditions.** 2026-10-17, machine `dev-r` - counts, not timings, so the shared
 machine's load does not matter. The rules engine is `main`'s at f07568c, unchanged;
 the counting is `t5d-measure --turns --turn-summary` (`engine/tools/turn_width.hpp`)
-as of the commit that carries this paragraph (lane/engine: M22, 2864be0, with its
-review fixes), Release, MSYS2 g++ 16.2.0 (Rev3), `--werror`, 544 of 544 engine tests
-passing. Data: t0database (`data/t0database/`, commit `d49da405...`, `Data.csv`
+at 607e4b1 (lane/engine: M22, 2864be0, and its review fixes; rebuilt at that commit,
+the run reproduces the raw output byte for byte), Release, MSYS2 g++ 16.2.0 (Rev3),
+`--werror`, 544 of 544 engine tests passing. Data: t0database (`data/t0database/`, commit `d49da405...`, `Data.csv`
 sha256 `37fb7c1c...a4e`), converted by `py data/t0database/to_5dpgn.py build/t0db`
 (761 records, 237 empty rows skipped; the source's own `[Board "Standard - Turn
 Zero"]`; converted twice, identical file for file), then `build/engine/t5d-measure
