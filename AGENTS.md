@@ -127,6 +127,7 @@ python oracles/harness.py doctor               # which build tools and oracle bu
 python oracles/harness.py build [--bootstrap]  # build the oracles into oracles/.cache/
 python oracles/harness.py verify               # pins, corpus, divergences, boundary, provenance, golden files
 python oracles/harness.py selftest             # the harness's own tests
+py engine/build.py                             # build the engine first: the gate runs build/engine/t5d-gate
 python oracles/harness.py gate --tier commit   # the per-commit gate (nightly | release for the full one)
 ```
 

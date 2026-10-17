@@ -10,6 +10,15 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-17 - CLAUDE.md and AGENTS.md: the engine build before the gate (the one edit the user allowed in each)
+
+- `CLAUDE.md`, `AGENTS.md`: one line in each command list, before `gate --tier
+  commit`: `py engine/build.py` - the gate now runs the engine's adapter,
+  `build/engine/t5d-gate`, so it must be built first. Nothing else in either file
+  changed, as the user's CHECKPOINT 8 permission says; the diff is quoted in
+  `docs/BUILD_LOG.md` ("CHECKPOINT 8").
+- Spec: none - the instruction files; §11.0's gate is what the line serves.
+
 ### 2026-10-17 - Design documents: the CHECKPOINT 8 rulings, from upstream
 
 - `docs/design/5d-chess-decisions.md`, `docs/design/5d-chess-transformer-design.md`:
