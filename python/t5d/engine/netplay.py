@@ -4,7 +4,8 @@ The search is the engine's (``search.py``, ``t5d/capi_search.h``): it selects, e
 backs up, judges terminals and chooses; the network - random weights, nothing is trained -
 evaluates its leaves through ``evaluator.CStepDriver``. This module plays whole games so,
 writes each as a 5dpgn record, and replays the record through the engine's gate adapter
-(``t5d-gate``, full mode - the engine's own tool, never an oracle) to show it is legal. It
+(``t5d-gate``, full mode - the engine's own tool, never an oracle) to show it is legal and
+written strictly (the adapter's reader lets nothing pass: no warning). It
 mirrors the engine's ``play_game`` (``src/selfplay.cpp``; ``t5d-play``) step for step:
 
 * **A turn start is judged first** - by a probe search whose root classification is E4's
@@ -194,7 +195,8 @@ def pgn_move(m: Move, even: bool) -> str:
     """A move in the engine reader's long form: source board, piece letter, source square; then
     ``x`` and the destination square for a move on its board, or ``>``/``>>`` (a jump that does
     not branch / that branches), ``x`` for a capture, the destination board and square; ``=X``
-    for a promotion."""
+    for a promotion. The capture mark is written strictly (H51, rulebook R11): on every move
+    that takes a piece - en passant and jumps included - and on no other."""
     out = board_label(m.from_timeline, m.from_half_turn, even) + PIECE_LETTERS[m.piece] + square_name(m.from_square)
     capture = "x" if m.flags & T5D_MOVE_CAPTURE else ""
     if not m.flags & T5D_MOVE_TRAVEL:
@@ -489,6 +491,11 @@ class Replay:
     last_side: str | None  # the last position's "side": the player to move there, "white" or "black"
     final_boards: tuple[str, ...]  # the last state event's boards, "<L>:<T>:<c>:<placement>"
     lines: tuple[str, ...]
+    #: What the gate's reader let pass, as it prints it on standard error (``t5d-gate: warning:
+    #: ...``) - a capture mark that disagrees with its move (H51: read as its squares define it,
+    #: with a warning), an annotation or a turn number. Never part of the protocol: a record
+    #: read with a warning replays to the same events as the record without the slip.
+    warnings: tuple[str, ...] = ()
 
     @property
     def result(self) -> str | None:
@@ -503,14 +510,21 @@ class Replay:
         return "*"
 
 
+#: How ``t5d-gate`` starts a line of its reader's warnings on standard error.
+_GATE_WARNING = "t5d-gate: warning: "
+
+
 def replay_with_gate(record: str, *, gate: Path | None = None, timeout: float = 600.0) -> Replay:
     """Replay ``record`` through the engine's gate adapter in full mode (a subprocess: the
     engine's own tool - legal replay, check status, legal actions and terminal at every
-    position)."""
+    position), keeping the warnings its reader prints on standard error."""
     gate = gate_executable() if gate is None else gate
     proc = subprocess.run([str(gate)], input=record.encode("utf-8"), capture_output=True, timeout=timeout, check=False)
     if proc.returncode not in (0, 1):
         raise RuntimeError(f"t5d-gate exited {proc.returncode}: {proc.stderr.decode('utf-8', 'replace')}")
+    warnings = tuple(
+        line[len(_GATE_WARNING) :] for line in proc.stderr.decode("utf-8", "replace").splitlines() if line.startswith(_GATE_WARNING)
+    )
     lines = tuple(line for line in proc.stdout.decode("utf-8").splitlines() if line.strip())
     events = [json.loads(line) for line in lines]
     end = events[-1]
@@ -524,6 +538,7 @@ def replay_with_gate(record: str, *, gate: Path | None = None, timeout: float = 
         last_side=positions[-1].get("side") if positions else None,
         final_boards=tuple(states[-1]["boards"]) if states else (),
         lines=lines,
+        warnings=warnings,
     )
 
 
@@ -545,10 +560,15 @@ def check_replay(res: GameResult, replay: Replay) -> list[str]:
     Result header, its closing token and ``GameResult.result``/``winner`` - the one the final
     position calls for (the side to move there checkmated: the other side wins; stalemate a
     draw; otherwise ``*``), judged by the gate and, for the side to move, by the engine's reader
-    replaying the record; the final boards the reader's."""
+    replaying the record; the final boards the reader's; and nothing let pass - the record is
+    written strictly (H51: ``x`` on every move that takes a piece and on no other), so any
+    warning of the gate's reader is a problem: since H51 a capture mark that disagrees with its
+    move is read with a warning (before it, a superfluous ``x`` made the record unreadable and a
+    missing one passed unremarked)."""
     problems = []
     if replay.status != "ok":
         problems.append(f"status {replay.status}")
+    problems.extend(f"the gate's reader warned: {w}" for w in replay.warnings)
     if replay.actions_accepted != len(res.actions):
         problems.append(f"{replay.actions_accepted} actions accepted of {len(res.actions)}")
     if replay.positions != len(res.actions) + 1:
