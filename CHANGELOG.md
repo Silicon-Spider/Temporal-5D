@@ -10,6 +10,45 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-17 - M22: the turn-width measurement on t0database - mandatory boards per turn and optional moves played, per board-count range
+
+- `engine/tools/turn_width.hpp`, `turn_width.cpp` (new, in `t5d_tools`; not among
+  Hunt's truth sources): the turn width of one action, counted by the rules engine
+  alone (`TurnCounter`, `classify_action`). At the action's start: the mandatory
+  boards (the active boards in the present, T6 and R9), the playable and the optional
+  boards. Then its moves: the optional ones (source board not mandatory at the
+  start), the boards played (a jump that does not branch plays two, J4), jumps
+  between two mandatory boards (A6's "two fewer"), jumps from an optional board onto
+  a mandatory one, moves after the shift (R8), rewinds (T8, T12), and the boards a
+  rewind releases or a reactivation (T11, T12) makes mandatory mid-action - with the
+  other reading of "optional" (not mandatory when made) beside it. Why: register M22
+  must be recorded before the D2 arms are built (§15.1), and nothing in the engine
+  looked inside an action.
+- `engine/tools/t5d_measure.cpp`: `--turns` (a line per action) and `--turn-summary`
+  (per board-count range at the action's start - < 50, 50-99, 100-199, 200+, ten-board
+  buckets under 100, by mandatory class - under a strict reading that leaves out a
+  record repeating another, M7's grouping as sensitivity, and the refused records'
+  actions apart). Every action is played twice, by the replay and move by move, and
+  the two states must be equal. Without the new options the output is unchanged
+  (byte-identical on t0database, with and without `--summary --legal`).
+- `engine/tests/test_turnwidth.cpp` (11 tests: constructed actions with known
+  counts, and `t5d-measure` run on `engine/testdata/turn-width/`, three hand-written
+  records); `engine/CMakeLists.txt`. 537 tests pass.
+- `docs/MEASUREMENTS.md`: "Turn width (M22)", a new section for Phase 1 counts with
+  no threshold. On t0database's 692 games under the default rules: more than one
+  mandatory board in 5.8% of turns under 50 boards, 27.1% at 50-99 and 64.0% at
+  100-199 (13 games; none at 200+); single-move turns 95.9 / 80.3 / 49.1%; an
+  optional move in 1.1 / 2.1 / 0.6%. Part L's prediction ("most human-game turns
+  under 50 boards have exactly one mandatory board") holds: 94.2%. No verdict.
+- `engine/README.md`: t5d-measure's new options and lines; the tables.
+- `docs/BUILD_LOG.md`: register M22 measured; step 5's M22 note; spec issues 140-142
+  (what "optional moves played" means; the ranges and the unit; nothing maps the
+  figures to an order of the D2 work - put to the user); proposed spec edits 110-114.
+- Spec: §8.2 "Measure first" and §15.1's Phase 1 row (the M4 write-back proposed:
+  edits 110 and 114); §13.1 6x ("after the turn-width measurement", now met);
+  register M22, part K's turn-width item and part L's prediction (edits 111-113);
+  spec issues 140-142. Rules cited: T3-T8, T11, T12, J4-J6, R8, R9.
+
 ### 2026-10-17 - Design documents: the CHECKPOINT 6 and 7 rulings, from upstream
 
 - `docs/design/5d-chess-decisions.md`, `docs/design/5d-chess-transformer-design.md`,
