@@ -17,7 +17,9 @@ value logits, 8.4e-3 on policy logits - the size of the BF16 / FP32 gap itself (
 RMS); FP8 cached against the full pass with FP8 frozen K/V, RMS 4.3e-3 / max 3.3e-2,
 1.7e-3, 1.6e-2; FP8 against BF16, RMS 8.8e-3 / max 4.8e-2, 1.0e-2, 2.8e-2. (Re-measured
 after F5's RMSNorm and F6's Mish, 2026-10-17; the figures before them were within a third
-of these.) Adversarial constructions: duplicated boards, deep travel, many timelines,
+of these. Not re-measured since B15's table, F6's Mish in the heads and M20's defaults - the
+per-board registers' positions among them - changed the network; the bounds still hold.)
+Adversarial constructions: duplicated boards, deep travel, many timelines,
 non-standard board sizes, even starts, register-count arms, and supersession inside a
 refreshed subtree.
 
@@ -138,8 +140,8 @@ def test_cached_equals_one_full_pass(geometry, reading, supersession):
     "flags",
     [
         dict(routing_table=True, typed_edge_bias=True, board_pair_smolgen=True, rope_per_head=True),
-        dict(board_register_spatial="position_free", global_register_pairs="anchored", masked_head_registers="self"),
-        dict(board_register_spatial="zero_angle", move_graph_heads=4, rope_recenter=False),
+        dict(routing_table=True, masked_head_registers="self", same_board_registers="registers"),
+        dict(move_graph_heads=4, rope_recenter=False),
         dict(frozen_features="current"),
         dict(norm_placement="post", ffn_activation="squared_relu", routing_table=True, typed_edge_bias=True, board_pair_smolgen=True),
         dict(displacement_bias=False, routing_table=True, typed_edge_bias=True),
@@ -149,8 +151,8 @@ def test_cached_equals_one_full_pass(geometry, reading, supersession):
     ],
     ids=[
         "n2-all",
-        "regs-free-anchored",
-        "zero-angle-raw",
+        "routing-regs-self",
+        "mg4-raw",
         "current-features",
         "6y-arms-n2",
         "no-table-n2",
@@ -160,7 +162,8 @@ def test_cached_equals_one_full_pass(geometry, reading, supersession):
     ],
 )
 def test_cached_equals_one_full_pass_with_every_switch(flags):
-    """(a) under the section 6 structure and the open positional choices of stages N1-N3, under
+    """(a) under the section 6 structure and its register rules, raw coordinates and the frozen
+    features' test arm (the registers' positions, M20's - B8 - in every case), under
     ablation 6y's two arms together with the structure on (F5's post-norm - smolgen then reads
     the block's input - and F6's squared ReLU), on B15's no-table arm (ablation 2), and with
     B15's placeholders moved (its table at unit scale), and with B17's key-side Shaw term (a frozen

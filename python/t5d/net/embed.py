@@ -30,11 +30,10 @@ tokens that read them as B16's score-time key biases instead (``status.py``). Th
 **The acting player (stage N5, register D8: "a global acting-player input").** One learned
 embedding per colour - whose action this is, which differs from the present's colour once
 the present has shifted inside an unsubmitted action (``PositionState.acting_player``) - is
-added to the global register tokens (``acting_player_input="global_registers"``, the
-placeholder default), or to every token (``"all_tokens"``; a superseded board's tokens
-excepted under ``frozen_intrinsic``, as for Delta-t). Under the default a board token's
-embedding is unchanged: the input reaches the boards through attention to the global
-registers, which the live set reads and frozen boards never do under the block-causal scope.
+added to the global register tokens, and to no other (M20: "acting player -> global
+registers"; section 2.3's global turn-state inputs). A board token's embedding is unchanged by
+it: the input reaches the boards through attention to the global registers, which the live
+set reads and frozen boards never do under the block-causal scope.
 """
 
 from __future__ import annotations
@@ -62,9 +61,9 @@ class InputEmbedding(nn.Module):
         self.board_register = nn.Embedding(max(cfg.regs_per_board, 1), d)
         self.global_register = nn.Embedding(max(cfg.global_regs, 1), d)
         self.not_square = nn.Parameter(torch.empty(d))
-        #: Register D8: the acting player (0 white, 1 black) - where it is added is
-        #: ``cfg.acting_player_input``. Made without drawing from the RNG, and drawn from D8's
-        #: own generator (``model._init_weights``), never from the global stream.
+        #: Register D8: the acting player (0 white, 1 black), added to the global registers
+        #: (M20). Made without drawing from the RNG, and drawn from D8's own generator
+        #: (``model._init_weights``), never from the global stream.
         self.acting = nn.utils.skip_init(nn.Embedding, 2, d)
 
     def dt_features(self, dt: torch.Tensor) -> torch.Tensor:
@@ -99,19 +98,5 @@ class InputEmbedding(nn.Module):
         x = torch.where(is_square, square, zero)
         x = x + torch.where(is_breg, breg, zero)
         x = x + torch.where(on_board, board, zero)
-        x = x + torch.where(is_greg, greg, zero)
-        return x + torch.where(self.acting_mask(batch, frozen_intrinsic).unsqueeze(-1), self.acting(batch.acting())[:, None, :], zero)
-
-    def acting_mask(self, batch: Batch, frozen_intrinsic: bool = False) -> torch.Tensor:
-        """``(B, L)`` bool: the tokens that get the acting-player embedding (register D8;
-        ``NetConfig.acting_player_input``): the global registers, or every token of a board
-        too - but not a superseded board's under ``frozen_intrinsic`` (the acting player
-        changes after the board is frozen). Never padding."""
-        kind = batch.kind
-        mask = kind == TOKEN_GLOBAL_REGISTER
-        if self.cfg.acting_player_input == "all_tokens":
-            on_board = (kind == TOKEN_SQUARE) | (kind == TOKEN_BOARD_REGISTER)
-            if frozen_intrinsic:
-                on_board = on_board & (batch.is_head == 1)
-            mask = mask | on_board
-        return mask
+        # Register D8's acting player: on the global registers alone (M20).
+        return x + torch.where(is_greg, greg + self.acting(batch.acting())[:, None, :], zero)

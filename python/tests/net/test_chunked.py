@@ -71,9 +71,10 @@ def _combo_id(flags: dict) -> str:
     return f"{head}{extras}{'-no-table' if flags.get('displacement_bias') is False else ''}"
 
 
-def _batch(n: int, seed: int):
-    """A position of n boards beside a smaller one, so that padding is exercised."""
-    return collate([synthetic_state(1000 * seed + n, n), synthetic_state(1000 * seed + n + 1, max(1, n // 3))])
+def _batch(n: int, seed: int, **registers):
+    """A position of n boards beside a smaller one, so that padding is exercised (``registers``:
+    ``regs_per_board`` / ``global_regs``, ablation 3's arms)."""
+    return collate([synthetic_state(1000 * seed + n, n, **registers), synthetic_state(1000 * seed + n + 1, max(1, n // 3), **registers)])
 
 
 def _learned(model) -> list[tuple[str, torch.Tensor]]:
@@ -118,7 +119,8 @@ def _compare(batch, ref, other, atol_out=1e-5, atol_grad=1e-4, grad_rel=1e-5, wh
 def _case(flags: dict, n: int, seed: int, extra=None):
     cfg = NetConfig(trunk_dtype="fp32", n_layers=1, **flags, **(extra or {}))
     model = build_model(cfg, seed=seed)
-    batch = _batch(n, seed)
+    registers = {k: getattr(cfg, k) for k in ("regs_per_board", "global_regs") if getattr(cfg, k) != getattr(NetConfig, k)}
+    batch = _batch(n, seed, **registers)
     gen = torch.Generator().manual_seed(seed)
     shape = (batch.batch_size, cfg.n_heads, batch.n_tokens, cfg.d_head)
     qkv = [torch.randn(*shape, generator=gen) for _ in range(3)]
@@ -153,18 +155,21 @@ def test_a_scrambled_routing_table_equals_dense(flags, n):
         _compare(batch, ref, _run(attend, model, batch, qkv, h, w, block_rows=66), what=name)
 
 
-#: The pair-rule modes (global registers position-free or anchored, per-board registers
-#: position-free) and B5, which the fast paths also handle block by block - with B15's
-#: displacement bias (the v1 default) and, for two of them, without it (no structure at all
-#: under the dense flags).
+#: The pair rule (B8 as M20 rules it - every case here: global registers position-free, merged;
+#: per-board registers without file and rank, widened) under ablation 3's register arms - no
+#: per-board registers (no row or key lacks file and rank alone), no global registers (no merge)
+#: - the register rules on masked heads, and B5, which the fast paths also handle block by block;
+#: with B15's displacement bias (the v1 default) and, for two of them, without it (no structure
+#: at all under the dense flags).
 PAIR_MODES = {
-    "anchored": dict(global_register_pairs="anchored"),
-    "regs_free": dict(board_register_spatial="position_free"),
-    "regs_free_anchored_b5": dict(global_register_pairs="anchored", board_register_spatial="position_free", rope_per_head=True),
+    "v1": {},
+    "b5": dict(rope_per_head=True),
     "b5_regs_self": dict(rope_per_head=True, masked_head_registers="self", move_graph_direction="reverse"),
-    "anchored_regs_self": dict(global_register_pairs="anchored", masked_head_registers="self", same_board_registers="registers"),
-    "no_table_regs_free": dict(board_register_spatial="position_free", displacement_bias=False),
-    "no_table_anchored": dict(global_register_pairs="anchored", displacement_bias=False),
+    "regs_self": dict(masked_head_registers="self", same_board_registers="registers"),
+    "no_board_registers": dict(regs_per_board=0),
+    "no_global_registers": dict(global_regs=0),
+    "no_table": dict(displacement_bias=False),
+    "no_table_no_global_registers": dict(displacement_bias=False, global_regs=0),
 }
 
 
@@ -282,7 +287,7 @@ def test_fast_paths_never_build_more_than_one_block(monkeypatch, name):
     """The memory claim, checked structurally: every row set either fast path asks the
     structure for, and every per-row mask it hands the kernel, spans at most one block of
     query rows - never (L, L). The dense reference, by contrast, asks for all L rows."""
-    flags = dict(typed_edge_bias=True, board_pair_smolgen=True, board_register_spatial="position_free")
+    flags = dict(typed_edge_bias=True, board_pair_smolgen=True)
     model, batch, qkv, h, _ = _case(N2_COMBOS[0] | flags, 17, seed=5)
     block = 2 * 66
     spy = _Spy(monkeypatch)
@@ -437,12 +442,12 @@ def test_the_network_keeps_no_quadratic_tensor_for_backward(flags):
     ("flags", "extra"),
     [
         (ROUTING_ALL, {}),
-        (MG2, dict(board_register_spatial="position_free")),
-        (ROUTING_ALL, dict(board_register_spatial="position_free", global_register_pairs="anchored")),
-        (SCRAMBLED, dict(global_register_pairs="anchored")),
+        (MG2, {}),
+        (ROUTING_ALL, dict(global_regs=0)),
+        (SCRAMBLED, dict(regs_per_board=0)),
         (MG2, dict(displacement_bias=False)),
     ],
-    ids=["all", "mg2-regs-free", "routing-all-regs-free-anchored", "scrambled-anchored", "mg2-no-table"],
+    ids=["all", "mg2", "routing-all-no-global-registers", "scrambled-no-board-registers", "mg2-no-table"],
 )
 def test_block_size_does_not_change_the_function(flags, extra):
     """Board-aligned or not, one row or the whole body: the same outputs - blocks of 65

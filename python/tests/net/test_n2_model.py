@@ -27,10 +27,8 @@ N2_FLAG_SETS = {
         rope_per_head=True,
         rope_roles_source="masks",
     ),
-    "routing_regs_free_anchored": dict(
+    "routing_regs_self_forward": dict(
         routing_table=True,
-        board_register_spatial="position_free",
-        global_register_pairs="anchored",
         masked_head_registers="self",
         move_graph_direction="forward",
         board_pair_smolgen=True,
@@ -57,8 +55,6 @@ def test_timeline_storage_order_does_not_matter(flags):
 @pytest.mark.parametrize("recenter", [True, False], ids=["recentred", "raw-coords"])
 @pytest.mark.parametrize("flags", list(N2_FLAG_SETS))
 def test_translation_invariance(flags, recenter):
-    if not recenter and N2_FLAG_SETS[flags].get("global_register_pairs") == "anchored":
-        pytest.skip("anchored global registers need recentring (validate() refuses raw coordinates)")
     model = build_model(NetConfig(trunk_dtype="fp32", rope_recenter=recenter, **N2_FLAG_SETS[flags]), seed=2).eval()
     state = synthetic_state(32, 20)
     a = model(collate([state]))

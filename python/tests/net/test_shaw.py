@@ -195,8 +195,8 @@ CPU_PATHS = {
 @pytest.mark.grad
 @pytest.mark.parametrize(
     "flags",
-    [dict(), dict(routing_table=True), dict(board_register_spatial="position_free"), dict(shaw_shared_heads=True)],
-    ids=["b9", "routing", "regs-free", "shared-heads"],
+    [dict(), dict(routing_table=True), dict(masked_head_registers="self"), dict(shaw_shared_heads=True)],
+    ids=["b9", "routing", "regs-self", "shared-heads"],
 )
 @pytest.mark.parametrize("construction", ["far", "small_boards_mixed", "registers_4_0"])
 def test_cpu_paths_equal_the_direct_term(construction, flags):
@@ -265,9 +265,9 @@ def test_the_score_function_reads_the_products(construction):
         dict(),
         dict(routing_table=True, typed_edge_bias=True, board_pair_smolgen=True, shaw_shared_heads=True),
         dict(attn_scope="block_causal", typed_edge_bias=True),
-        dict(board_register_spatial="position_free", global_register_pairs="anchored", rope_per_head=True, shaw_init_std=1.0),
+        dict(masked_head_registers="self", rope_per_head=True, shaw_init_std=1.0),
     ],
-    ids=["b17", "n2-all-shared", "block-causal", "regs-free-anchored-b5"],
+    ids=["b17", "n2-all-shared", "block-causal", "regs-self-b5"],
 )
 def test_every_implementation_is_one_function(flags):
     """The whole network with B17 through every attention implementation - the dense reference
