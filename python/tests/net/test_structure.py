@@ -485,8 +485,13 @@ def test_every_bias_adds_up():
 
 # --- no inert switch ----------------------------------------------------------------------------
 
-#: Each pair of configurations differs in one switch of stage N2; the network must differ.
+#: Each pair of configurations differs in one switch of stage N2 or of the trunk (F5, F6);
+#: the network must differ. (``head_activation`` changes the value head alone - test_trunk.py.)
 SWITCHES = {
+    "norm_placement pre -> post": (dict(), dict(norm_placement="post")),
+    "qkv_bias": (dict(), dict(qkv_bias=True)),
+    "out_ffn_bias": (dict(), dict(out_ffn_bias=False)),
+    "ffn_activation mish -> squared_relu": (dict(), dict(ffn_activation="squared_relu")),
     "move_graph_heads 0 -> 2": (dict(move_graph_heads=0), dict()),
     "move_graph_heads 2 -> 4": (dict(), dict(move_graph_heads=4)),
     "routing_table": (dict(), dict(routing_table=True)),
@@ -531,9 +536,14 @@ def test_every_new_parameter_tensor_reaches_the_outputs(module, form):
         assert not torch.allclose(out.board_logits, base.board_logits, atol=1e-4), f"{module}.{name}"
 
 
-@pytest.mark.parametrize("flags", [dict(), dict(routing_table=True)], ids=["b9", "routing"])
+@pytest.mark.parametrize(
+    "flags",
+    [dict(), dict(routing_table=True), dict(norm_placement="post"), dict(ffn_activation="squared_relu")],
+    ids=["b9", "routing", "post-norm", "squared-relu"],
+)
 def test_attention_implementations_are_one_function(flags):
-    """``attn_impl`` changes how, never what: the one switch that must be inert."""
+    """``attn_impl`` changes how, never what: the one switch that must be inert - under
+    ablation 6y's arms (F5's post-norm, F6's squared ReLU) too."""
     batch = collate([synthetic_state(13, 4), synthetic_state(14, 2)])
     outs = [
         build_model(NetConfig(trunk_dtype="fp32", attn_impl=impl, typed_edge_bias=True, board_pair_smolgen=True, **flags), seed=1)(batch)
