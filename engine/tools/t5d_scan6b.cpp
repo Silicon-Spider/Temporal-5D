@@ -5,8 +5,10 @@
 //   t5d-scan6b [options] [RECORD ...]
 //
 // POSITIONS. ROOTS: the turn starts of the 5dpgn records given (replayed as
-// the gate adapter's parse mode does, under the ruleset given), every K-th
-// (--every), distinct by position; and SYNTHETIC positions (--synthetic):
+// the gate adapter's parse mode does, under the ruleset given, and read as 6b
+// read them - a written 'x' must capture, the reading before H51:
+// tool_support.hpp, sixb_pgn_options), every K-th (--every), distinct by
+// position; and SYNTHETIC positions (--synthetic):
 // random legal play from named variants (--synthetic-variants) and seeded
 // random pseudo-legal games of t5d-bench's classes (--synthetic-classes N:T),
 // each labelled SYNTHETIC and never part of a verdict. LEAVES: from each
@@ -683,9 +685,12 @@ int main(int argc, char** argv) {
   for (const std::string& path : o.records) {
     try {
       const std::string text = t5d::tools::read_file(path);
-      t5d::PgnRecord record = t5d::read_pgn(text);
+      // The reading 6b's figures were measured under (a written 'x' must
+      // capture - before H51): the roots stay 6b's (tool_support.hpp).
+      const t5d::PgnOptions reading = t5d::tools::sixb_pgn_options();
+      t5d::PgnRecord record = t5d::read_pgn(text, reading);
       const bool synthetic = t5d::tools::is_synthetic(record);
-      t5d::PgnReplay replay(std::move(record), t5d::PgnOptions{}, o.rules);
+      t5d::PgnReplay replay(std::move(record), reading, o.rules);
       t5d::tools::parse_mode(replay);
       std::string end = "ok";
       for (;;) {

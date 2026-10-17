@@ -909,7 +909,9 @@ entries found 106 of them (its 120 s ftxi:naive budget stops short of niceAndrey
   refuses cwmtt/wide from action 23, niceAndrey from 30, many2 from 20 and NP and
   NP0 from 62: these records are legal games only under R2's count rule. **No engine
   defect.**
-- **The notation finding.** cwmtt/futures action 17, `(L1T5)Qf4>>x(L0T5)e4~`: at
+- **The notation finding** (ruled at CHECKPOINT 8 - H51, R11: the reader is lenient
+  now, KD-0167 to KD-0169 are withdrawn and ftxi's refusal is KD-0170; "H51", below).
+  cwmtt/futures action 17, `(L1T5)Qf4>>x(L0T5)e4~`: at
   position 16 the engine, ftxi, cwmtt and Chess in 5D hold one state, and (0T5)e4 is
   empty - the `x` marks a capture the jump does not make. The engine refuses the move
   as unreadable (its reader: a written `x` must capture), and ftxi refuses it too (no
@@ -968,6 +970,90 @@ entries found 106 of them (its 120 s ftxi:naive budget stops short of niceAndrey
   not yet run with the engine: before the merge, dispatch it on the branch (`gh
   workflow run oracle-nightly.yml -f tier=nightly --ref lane/gate`) and record its
   result here.
+- **H51 - capture markers read leniently (2026-10-17; the user's CHECKPOINT 8 ruling on
+  spec issue 125; register H51, rulebook R11).** *The reader*
+  (`PgnOptions::capture_marks`, `CaptureMarks::Lenient` by default): a move is read as
+  its squares and boards define it, whether or not `x` is written - the mark selects no
+  move - and a mismatch either way is a warning in the reader's channel
+  (`PgnReplay::warnings()`), which `t5d-gate` prints on stderr beside the annotation and
+  turn-number warnings: the engine contract (the harness's manual) has no warning field,
+  and nothing in it changed. The reading before H51 (`MarkedMustCapture`) and the letter
+  both ways (`Strict`) stay behind the option (`--pgn capture_marks=...`; the old
+  `require_capture_marks=true|false` keeps its meaning). *The writer*
+  (`synthetic::pgn_move` - t5d-play's records and the synthetic ones; the engine writes
+  5dpgn nowhere else, `to_string(Move)` being the export form, which has no mark) writes
+  `x` exactly on captures: `synthetic_moves_mark_exactly_the_captures_h51` writes every
+  move offered at every position of 53 random games (9 variants under the default rules;
+  every alternative rule option in Two Timelines) and judges each from the boards - the
+  opponent's pieces on its target board against those on the board it makes there:
+  14,081 physical captures (24 en passant), 6,293 by non-branching jumps, 12,192 by
+  branches, and 408,383 quiet moves of those kinds, each kind required to occur; the
+  records replay with no warning by default and to their end under the strict reading,
+  as t5d-play's records do (`check_record`). *The corpus*, parse mode, this build
+  against the parent's: one record reads further - cwmtt/futures, to its end (19
+  actions, from 16); its action 17 is the corpus's only `x` on a move that takes
+  nothing; ten records write captures without `x` and are read as before, now with a
+  warning for each (100_timelines 17 moves, ctp2 33, exiledKings 4, manyChecks 39,
+  niceAndrey 91, tesseractMageOChicken 3, ftxi/verysmall 1, notation/aivsai 2,
+  notation/game-2 1; many2 as the gate converts it, not counted). *The rulebook*: R11,
+  labelled a project decision (H51), with a conventions line and source [141]; the diff
+  reviewed - no other entry changed - and re-pinned (`08fddc5e...` to `39e9ad58...`).
+  *The known divergences*: the commit tier, run with the reader changed and the entries
+  not yet, failed as expected - KD-0167 to KD-0169 as telltales (the engine now plays
+  action 17 as cwmtt, Chess in 5D and the notation parser do) and `[divergence]
+  cwmtt/futures action 17: legality: engine=accepted vs ftxi=rejected:no_matching_move
+  (soft: may be notation, not rules)`. The three were withdrawn on the ruling's
+  authority, as their header said; KD-0170 records ftxi's refusal, citing R11 and H51.
+  Triaged by the rulebook, never by vote: at position 16 every source holds one state;
+  ftxi's own listing of its legal actions there (`observe --source ftxi --record
+  cwmtt/futures --actions 16`: 128 actions) holds the queen's jump (+1T5)f4 -> (0T5)e4,
+  and its refusal parses the move with the capture flag set (`Invalid move: ... cp:yes
+  ...`): it refuses the mark, not the move. Upstream: unreported - neither a defect nor
+  a disagreement with a documented rule (spec issue 130). The nightly tier, run after
+  the entries changed, found nothing more: at cwmtt/futures' positions 17 to 19,
+  compared with the engine for the first time, it agrees with cwmtt and Chess in 5D at
+  every answer - check, count and mate; the record ends in checkmate at 19, as both say.
+  *Runs* (the machine shared with other lanes; timings are not measurements): `py
+  engine/build.py --werror --test` 550 of 550; `rulebook` ok after the pin; `verify` ok
+  (H48's 17 notes); `selftest` 638 tests OK, 1 skipped; `gate --tier commit`: oracle
+  layer ok (ftxi 8256 of 8256, notation 3012 of 3012), `engine differential: SMOKE
+  TEST - PASSED`, calibration 1.54x; Standard - Turn Zero "no oracle followed
+  cwmtt/futures, cwmtt/tesseractMageOChicken as far as the engine went" (ftxi stops at
+  futures' action 17; the notation parser stands behind no replay). `gate --tier
+  nightly`: oracle layer ok - every source's required set reproduced (ftxi 8256 of 8256,
+  ftxi:naive 6556 of 6556, cwmtt 6272 of 6272, cwmtt:naive 4755 of 4755, Chess in 5D
+  6461 of 6461, notation 3012 of 3012; calibration 1.47x); `engine differential:
+  PASSED`, no finding; **gated: Standard - Half Reflected** (1 record, 21 positions, at
+  least 2 oracles), **Standard - Reversed Royalty** (1 record, 122 positions, at least 3)
+  **and Standard - Turn Zero** - newly, now that the engine reads cwmtt/futures to its
+  end (7 records, 144 positions; check answered at 138, count and mate at 143; at least
+  1 oracle). Behind each Turn Zero record, as the differential counts them (a scratch
+  script over the run's report, not kept): cwmtt/100_timelines 3 (ftxi, cwmtt, Chess in
+  5D), exiledKings 3, futures 2 (cwmtt, Chess in 5D - ftxi refuses action 17, KD-0170),
+  small 3, tesseractMageOChicken 1 (cwmtt - ftxi stops at action 28 on the `+1` label,
+  KD-0054, and Chess in 5D cannot read action 25's notation), ftxi/futures 3,
+  notation/1.2 2 (ftxi, Chess in 5D). So the gate as built gates Turn Zero with one
+  oracle behind tesseractMageOChicken; under the two-oracle rule of spec issue 122 (the
+  next component) it would not gate Turn Zero - tesseractMageOChicken alone keeps it
+  out - and would still gate Half Reflected and Reversed Royalty. NOT gated, and why, as
+  before: Standard (ftxi/softmate unreadable, KD-0047), Very Small - Open (cwmtt/ctp1,
+  ftxi/verysmall), the custom positions (ftxi/niceAndrey's set-up), Misc - Small (no
+  oracle follows notation/game), the Focused variants and Timeline Battleground (no
+  check verdict), Timeline Invasion and Marauders (not set up by the engine). The proof
+  channel stays disabled. *t0database* (M7, M22; `py data/t0database/to_5dpgn.py
+  build/t0db`, 761 records): the parent commit's `t5d-measure` and this one's give
+  byte-identical output for M22's `--turns --turn-summary` and M7's `--moves-after-shift
+  --summary`, with and without `--legal` - no record and no action changes (716 replay
+  to the end; the gate adapter's end events identical too). No t0database record writes
+  `x` on a move that takes nothing; 661 write captures without `x` - 8,034 moves - read
+  as before, now with a warning each. `docs/MEASUREMENTS.md` unchanged (the engine lane
+  re-measures M22 after the merge). *6b's measurements*: kept reproducible by reading
+  with the reading they were measured under (spec issue 129; engine README, "Hunt's
+  ground truth", *After H51*): 6b″'s tool accepts the pinned truth (825 roots), 6b's and
+  6b′'s tools list the same 825 positions as the parent's build; the code signature
+  moved (parent sha256:02859783..., this build sha256:21175476...); the truth's
+  provenance records none, so the 6b″ tool reports it "unrecorded" beside this build's,
+  as before. Not re-recorded, not re-run.
 
 **The engine's first gate runs (2026-10-02,** engine at 0a44cbf / 4ed2e92;
 reports in `oracles/.cache/reports/triage-2026-10-02/`, regenerable). With
@@ -1369,21 +1455,22 @@ commits (F5 and F6 on `lane/net`, H47 and H48 on `lane/gate`, M22 on `lane/engin
 | H19 | built, tested | Proofs export to the solved store at once; the TT holds estimates only; class-relative disproofs live in their own store, never the solved store (E8, E9 - now in the register) |
 | H22 | built, tested | All five items of §11.0 (E1, E2, E4); the register's wording now matches what is built (proposed edit 40, applied upstream) |
 | H23 | built, tested | The gate, oracle and engine sides. The engine is configured in `gate.toml` (`./build/engine/t5d-gate`, full mode, 2026-10-17; the root's build on every platform, with a time limit of its own, `[engine] timeout_s`) and compared in every tier: commit, a smoke test (H47), PASSED, locally and in CI (run 39009070712); nightly PASSED locally, gating Standard - Half Reflected and Standard - Reversed Royalty - not yet run in CI with the engine (step 2). The release tier, the one that can enable the proof channel, is not yet run with it: its oracle layer fails on H48's 17 notes until the re-recording. The proof channel stays disabled (H23, H41) |
-| H24, H26, H28 | built, tested | The generator and the 5dpgn/5DFEN parser are in-house (`engine/`), written from `docs/rules/README.md` and the notation spec's text (526 engine tests on main); boundary clean. H28's one exception - the export-form record converted by the harness (CHECKPOINT 3) - is now in the register |
+| H24, H26, H28 | built, tested | The generator and the 5dpgn/5DFEN parser are in-house (`engine/`), written from `docs/rules/README.md` and the notation spec's text (550 engine tests on `lane/gate` at H51); boundary clean. H28's one exception - the export-form record converted by the harness (CHECKPOINT 3) - is now in the register. Where the specification says when to write a token and not how to read one that disagrees, the reader reads leniently: the capture mark since H51 (2026-10-17, rulebook R11; `PgnOptions::capture_marks`), as the annotations (T15) and turn numbers before it - the move read as its squares define it, the mismatch a warning (`PgnReplay::warnings()`) |
 | H27 | built, tested | The oracle harness, committed 2026-10-01 |
 | H30 | built, tested | Step 2A (a04678c): every oracle reports its boards per ply; no placement divergence across the corpus |
-| H31 | done | CHECKPOINT 1: seven clusters triaged (903f4ae), settled by the user's rulings (H36-H40). Re-run 2026-10-17 with the engine configured: the 110 new check findings (72 positions) filed by cluster and settled by R1 (and R2 at five positions); the 58 positions of CHECKPOINT 1's table re-derive exactly, cwmtt/many2's 14 file as CHK-A1 (step 2) |
+| H31 | done | CHECKPOINT 1: seven clusters triaged (903f4ae), settled by the user's rulings (H36-H40). Re-run 2026-10-17 with the engine configured: the 110 new check findings (72 positions) filed by cluster and settled by R1 (and R2 at five positions); the 58 positions of CHECKPOINT 1's table re-derive exactly, cwmtt/many2's 14 file as CHK-A1 (step 2). The notation finding (cwmtt/futures action 17, an `x` on a jump that takes nothing) settled by the user's ruling, never by vote (H51, R11): ftxi's refusal on record citing R11 (KD-0170), KD-0167 to KD-0169 withdrawn; the record's positions the engine now reads past it, 17 to 19, agree with cwmtt and Chess in 5D at every answer - the record ends in checkmate at 19, as both say (nightly, 2026-10-17: no finding) |
 | H32 | built, tested | Required sets at 100%, two recordings, cost files, calibration (2B) |
 | H33 | built, tested | MANIFEST, verified snapshot, harness-modified check, CODEOWNERS (2B) |
-| H34 | built, tested | Telltales by the comparison's rule (2B); 169 entries: 56 of 2026-10-02 (the two oracle defects among them, R7) and 113 of 2026-10-17 (110 R1, 3 notation - the 3 provisional, pending spec issue 125) - every disagreement of the engine's with a recorded oracle answer is one, and every entry matches one; no telltale |
+| H34 | built, tested | Telltales by the comparison's rule (2B); 167 entries: 56 of 2026-10-02 (the two oracle defects among them, R7), 110 of 2026-10-17 (R1) and KD-0170 (R11: ftxi's refusal of an `x` that takes nothing) - every disagreement of the engine's with a recorded oracle answer is one, and every entry matches one; no telltale. KD-0167 to KD-0169, the strict reading's three, turned telltale when the reader turned lenient (the commit tier said so, as their header had said it would) and were withdrawn on the ruling's authority (H51) |
 | H35 | done | Commit and nightly tiers green on Linux, 2026-10-01 (runs 36827435595, 36827459456) |
 | H36 | built, tested | Engine E4: check status and submission legality per R1; compared with the oracles by the gate since 2026-10-17: every check disagreement is at a position where the oracle's every capture starts on a board R1 does not pass (CHECKPOINT 1's RQ1-RQ4), each on record with R1's citation; no engine defect |
 | H37 | built, tested | Engine E4: verdicts only from exhaustive searches; node, time and memory budgets answer "unknown" (tested for every budget below the need) |
-| H38 | done | `docs/rules/README.md` is the rulebook (rulings R1-R7), pinned in `gate.toml`; `verify` fails when it changes until re-pinned |
+| H38 | done | `docs/rules/README.md` is the rulebook (rulings R1-R11), pinned in `gate.toml`; `verify` fails when it changes until re-pinned. R11 added 2026-10-17 (CHECKPOINT 8; H51, labelled a project decision: capture marks read leniently, with a conventions line and source [141]); its diff reviewed, no other entry changed, re-pinned (`rulebook --pin`: 08fddc5e... to 39e9ad58...) and the gate re-run |
 | H39 | done | No repetition rule; the engine has none to build |
 | H40 | built | Castling's attack test per-board (S2) and en passant per-board (S7); `CastlingAttacks::AnyBoard` removed (E4) |
 | H49 | not built (rule) | Held open: Hunt with a lazily expanded root, the likely remedy above 100 boards - adopted only through a fresh pre-registered test (§11.4, §14.4) |
 | H50 | built (placeholders) | The asset map's material values (`PieceValues`): P N B R Q at 100 / 300 / 300 / 500 / 900, unicorn 250, dragon 200, princess 700, brawn 125, common king 300, royals 0 - the register's provisional values exactly (issue 56) |
+| H51 | built, tested | Capture markers read leniently (CHECKPOINT 8; rulebook R11, a project decision). The reader: `PgnOptions::capture_marks`, `Lenient` by default - a move read as its squares and boards define it, the mark selecting no move, a mismatch either way (`x` on a move that takes nothing, a capture without `x`) a warning (`PgnReplay::warnings()`; `t5d-gate` prints it on stderr, outside the protocol - the engine contract unchanged); `MarkedMustCapture` (the reading before H51) and `Strict` (the letter both ways) only by option (`--pgn capture_marks=...`). The writer (`synthetic::pgn_move`, which t5d-play's and the synthetic records use) writes `x` exactly on captures: tested on every move offered at every position of 53 random games - 9 variants under the default rules, every alternative rule option in Two Timelines - judged from the boards (14,081 physical captures, 24 of them en passant, 6,293 by non-branching jumps, 12,192 by branches, and quiet moves of each kind), the records replaying with no warning and under the strict reading. ftxi's refusal of cwmtt/futures action 17 is KD-0170 (citing R11 and H51); KD-0167 to KD-0169 withdrawn. Gate: commit tier SMOKE TEST - PASSED; nightly PASSED, no finding, gating **Standard - Turn Zero** for the first time (7 records, 144 positions) beside Half Reflected and Reversed Royalty - its weakest record, cwmtt/tesseractMageOChicken, has one oracle behind it (cwmtt), cwmtt/futures two (cwmtt, Chess in 5D), so under the two-oracle rule of issue 122 (the next component) Turn Zero would not be gated. 6b's tools keep the reading before H51 (`sixb_pgn_options`; spec issue 129), so 6b's, 6b′'s and 6b″'s roots and Hunt's truth rebuild exactly; t0database: no record or action changes (M7's and M22's commands byte-identical). Spec issues 125 (settled), 129, 130; proposed edits 101, 102 |
 
 ### A-G, I - representation, network, search, training
 
@@ -2406,6 +2493,10 @@ superseded or made moot says so; nothing is deleted.
     is still open at the merge, the review's recommendation is to leave them out
     (`AGENTS.md`: no entry that cannot be justified may make the gate pass), and the
     gate is then red on that action alone. Nothing else is parked on it.
+    *Settled upstream at CHECKPOINT 8: register H51 and §11.0's "Capture markers are
+    read leniently" (a project decision) - a move is read as its squares define it,
+    a mismatch logged as a warning, the marker written strictly; built 2026-10-17
+    (H51's row; rulebook R11; KD-0167 to KD-0169 withdrawn, ftxi's refusal KD-0170).*
 126. **"(and reported upstream)"** (§11.0, "A known-divergences file": "if the
     oracle is wrong, the divergence is recorded with its rulebook citation (and
     reported upstream)"; register H31, H34). None of the 169 entries is reported
@@ -2446,6 +2537,41 @@ superseded or made moot says so; nothing is deleted.
     fails to reach can be told from a regression (proposed edit 100). Put to the
     user: the value, and whether the engine's limit should be per tier. Nothing is
     parked on it.
+129. **H51 and the measurements pinned before it** (§11.0 "Capture markers are read
+    leniently", register H51; §15.6's 6b, 6b′ and 6b″ and the user's ruling 5 on Hunt's
+    ground truth - "recorded once, pinned and hashed" - registers M8, M12, M15, M17,
+    H43). H51 makes the reader's default lenient. 6b, 6b′, 6b″ and the truth built
+    their roots from the corpus records under the reading before it, the default of
+    their day: a written `x` must capture. Read leniently, cwmtt/futures - the 8th
+    record of the list - goes on past its action 17, and 6b's construction (every turn
+    start, the first of equal positions kept) would take its positions 17 to 19 from
+    it rather than from ftxi/futures, later in the list, which holds the same three:
+    the roots from 169 on renumbered, and root 168's next action - that jump -
+    readable, so 6b″ would count that root for Guard. The truth's readers refuse a
+    truth whose roots are not the records' (record, index, fingerprint), and the
+    pinned figures would no longer rebuild. The documents do not say which reading a
+    measurement pinned before a reader change keeps. Built: the tools that rebuild
+    6b's roots - `t5d-scan6b`, `t5d-scan6bp`, `tools/sixb_roots` (so `t5d-scan6bpp` and
+    `t5d-hunt-truth`) - read with the reading they were measured under, an explicit
+    option (`tools/tool_support.hpp`, `sixb_pgn_options`: the defaults but
+    `CaptureMarks::MarkedMustCapture`); checked against the parent commit's build -
+    6b″'s tool accepts the pinned truth (all 825 roots), and 6b's and 6b′'s tools list
+    the same 825 positions. The truth was not re-recorded, 6b″ not re-run. The other
+    reading - every pinned measurement read under H51 - means re-recording the truth
+    and re-running 6b, 6b′ and 6b″ on a quiet machine, for one root's Guard
+    eligibility and three roots' attribution. Proposed edit 101. Nothing is parked on
+    it.
+130. **Upstream reports for a divergence that a project decision settles** (§11.0 "A
+    known-divergences file": "if the oracle is wrong, the divergence is recorded with
+    its rulebook citation (and reported upstream — defects as bug reports,
+    disagreements with a documented rule as questions citing the source ...)";
+    register H27, H51). ftxi's refusal of cwmtt/futures action 17 is recorded (KD-0170)
+    citing R11 - a project decision, where the notation specification is silent and no
+    other source speaks. It is no defect of ftxi's (its strict reading of the mark is
+    one a reader may take where the text is silent: its own action listing holds the
+    move), and there is no documented rule to put a question against; §11.0 and H27
+    name only those two kinds of report. Built: `upstream = "unreported: ..."` with
+    that reason, which `verify` accepts. Proposed edit 102. Nothing is parked on it.
 
 <!-- A new list, so that the numbers from 200 render as written. -->
 
@@ -3149,6 +3275,27 @@ struck through, where nothing of it is left to apply); the others stand as writt
     oracles', and the gate compares the engine's answers, not its speed." Register
     H32 does not name the probe: no edit. Why: as built no budget is scaled, and the
     engine's limit is not a tier budget (issue 128).
+101. **Register H51 and §11.0 "Capture markers are read leniently" - pending the
+    user's view on issue 129.** H51 says: "...; the engine writes the marker strictly;
+    a source that refuses such a record gets a known-divergence entry citing this row
+    (KD-0167–0169's case: cwmtt/futures, action 17)". It should say: "...; the engine
+    writes the marker strictly; a source that refuses such a record gets a
+    known-divergence entry citing this row (cwmtt/futures action 17: ftxi, KD-0170;
+    KD-0167–0169, which recorded the strict reading, withdrawn); measurements pinned
+    before it (6b, 6b′, 6b″, Hunt's ground truth) keep the reading they were made
+    under, a written x must capture, so they reproduce". §11.0, after "and the engine
+    writes the marker strictly.": "Measurements pinned before this decision keep the
+    reading they were made under, so they reproduce." Why: as built (issue 129), and
+    the entries the register names were withdrawn on the ruling.
+102. **§11.0 "A known-divergences file" and register H27 - pending the user's view on
+    issue 130.** §11.0 says: "(and reported upstream — defects as bug reports,
+    disagreements with a documented rule as questions citing the source, which also
+    tests our own reading; the owner files them)". It should add: "; a divergence that
+    a project decision settles, where no source states the rule, is recorded
+    unreported, with that reason". H27, after "drafted by the agent and filed by the
+    owner": "; divergences settled by a project decision are recorded unreported".
+    Why: KD-0170 (issue 130) - neither a defect nor a disagreement with a documented
+    rule.
 
 <!-- A new list, so that the numbers from 200 render as written. -->
 

@@ -329,6 +329,21 @@ TEST(gate_diagnostics_list_actions_and_read_options) {
   CHECK(gate::set_pgn_option(pgn, "castling_shortcuts=any_king", &error));
   CHECK(pgn.castling_shortcuts == CastlingShortcuts::AnyKing);
   CHECK(!gate::set_pgn_option(pgn, "castling_shortcuts=d_file", &error));
+  // H51's capture-mark readings, and the option's spelling before H51.
+  CHECK(PgnOptions{}.capture_marks == CaptureMarks::Lenient);
+  CHECK(gate::set_pgn_option(pgn, "capture_marks=strict", &error));
+  CHECK(pgn.capture_marks == CaptureMarks::Strict);
+  CHECK(gate::set_pgn_option(pgn, "capture_marks=marked_must_capture", &error));
+  CHECK(pgn.capture_marks == CaptureMarks::MarkedMustCapture);
+  CHECK(gate::set_pgn_option(pgn, "capture_marks=lenient", &error));
+  CHECK(pgn.capture_marks == CaptureMarks::Lenient);
+  CHECK(!gate::set_pgn_option(pgn, "capture_marks=loose", &error));
+  CHECK(error.find("lenient, marked_must_capture or strict") != std::string::npos);
+  CHECK(gate::set_pgn_option(pgn, "require_capture_marks=true", &error));
+  CHECK(pgn.capture_marks == CaptureMarks::Strict);
+  CHECK(gate::set_pgn_option(pgn, "require_capture_marks=false", &error));
+  CHECK(pgn.capture_marks == CaptureMarks::MarkedMustCapture);
+  CHECK(!gate::set_pgn_option(pgn, "require_capture_marks=yes", &error));
   // Q4: an optional move after the shift - accepted by default (R8), refused
   // under the Guide-literal reading given through the options.
   gate::Options guide;
@@ -338,6 +353,31 @@ TEST(gate_diagnostics_list_actions_and_read_options) {
   CHECK(run(late, false).lines.back().find("\"status\":\"ok\"") != std::string::npos);
   CHECK(run_with(late, guide).lines.back().find("\"reason\":\"illegal_move\"") !=
         std::string::npos);
+}
+
+TEST(gate_capture_marks_are_read_leniently_h51) {
+  // H51 (rulebook R11): a move written with 'x' that takes nothing is read as
+  // its squares define it - the record is replayed to its end - and the
+  // warning goes to the diagnostic channel (stderr), never into the protocol:
+  // the events are the record's without the mark.
+  const Run r = run("1. Nxf3 / Nc6\n");
+  REQUIRE(!r.lines.empty());
+  CHECK_EQ(r.lines.back(), std::string("{\"event\":\"end\",\"status\":\"ok\",\"actions_accepted\":2}"));
+  CHECK_EQ(r.lines, run("1. Nf3 / Nc6\n").lines);
+  REQUIRE_EQ(r.notes.size(), std::size_t{1});
+  CHECK(r.notes[0].rfind("t5d-gate: warning: action 1 (White's, turn 1), move 1 \"Nxf3\"", 0) == 0);
+  CHECK(r.notes[0].find("takes no piece") != std::string::npos);
+  // Full mode, likewise.
+  const Run full = run("1. Nxf3 / Nc6\n", false);
+  CHECK_EQ(full.lines, run("1. Nf3 / Nc6\n", false).lines);
+  // The reading before H51 refuses it as unreadable (a diagnostic now).
+  gate::Options marked;
+  marked.pgn.capture_marks = CaptureMarks::MarkedMustCapture;
+  const Run refused = run_with("1. Nxf3 / Nc6\n", marked);
+  REQUIRE(!refused.lines.empty());
+  CHECK_EQ(refused.lines.back(),
+           std::string("{\"event\":\"end\",\"status\":\"rejected\",\"actions_accepted\":0,"
+                       "\"reason\":\"unreadable\"}"));
 }
 
 TEST(gate_rejections_name_their_reason) {

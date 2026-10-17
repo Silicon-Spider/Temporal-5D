@@ -280,3 +280,40 @@ TEST(sixb_roots_label_their_next_actions_truthfully) {
   CHECK(contains(il.roots[1].no_next, "cannot be"));
   CHECK(!contains(il.roots[1].no_next, "ends here"));
 }
+
+TEST(sixb_roots_read_records_as_6b_read_them) {
+  // 6b's roots are rebuilt with the reading 6b, 6b', 6b'' and Hunt's ground
+  // truth were measured under: the reader's defaults but for the capture mark,
+  // which must capture where it is written - the reading before H51 made the
+  // mark lenient (tools/tool_support.hpp). A record with an 'x' on a jump that
+  // takes nothing stops there, as it did when the truth was recorded, where
+  // the reader's default (H51) reads on - the truth's readers would refuse it.
+  const t5d::PgnOptions six = t5d::tools::sixb_pgn_options();
+  const t5d::PgnOptions defaults;
+  CHECK(defaults.capture_marks == t5d::CaptureMarks::Lenient);
+  CHECK(six.capture_marks == t5d::CaptureMarks::MarkedMustCapture);
+  CHECK(six.castling_shortcuts == defaults.castling_shortcuts);
+  CHECK_EQ(six.verify_annotations, defaults.verify_annotations);
+  CHECK_EQ(six.annotation_mismatch_is_error, defaults.annotation_mismatch_is_error);
+  CHECK_EQ(six.infer_omitted_boards, defaults.infer_omitted_boards);
+  CHECK_EQ(six.check_turn_numbers, defaults.check_turn_numbers);
+  CHECK_EQ(six.turn_number_mismatch_is_error, defaults.turn_number_mismatch_is_error);
+
+  const std::string dir = (std::filesystem::path(T5D_TEST_SCRATCH) / "sixb-roots-h51").string();
+  std::filesystem::create_directories(dir);
+  const std::string text = "1. Nf3 / Nf6\n2. (0T2)Nf3>>x(0T1)f5~ / (1T1)e6\n";
+  write(dir + "/superfluous.5dpgn", text);
+  const t5d::tools::SixbRoots roots =
+      t5d::tools::sixb_roots({{"superfluous.5dpgn", dir + "/superfluous.5dpgn"}}, t5d::RuleOptions{}, 1, 0);
+  REQUIRE_EQ(roots.roots.size(), std::size_t{3});  // positions 0, 1 and 2: action 3 is not read
+  CHECK(!roots.roots[2].next_action.has_value());
+  CHECK(contains(roots.roots[2].no_next, "captures nothing"));
+  REQUIRE_EQ(roots.notes.size(), std::size_t{1});
+  CHECK(contains(roots.notes[0], "2 actions read, unreadable at action 3"));
+  // The reader's default reads the record to its end.
+  t5d::PgnReplay lenient(t5d::read_pgn(text));
+  t5d::tools::parse_mode(lenient);
+  lenient.play_all();
+  CHECK_EQ(lenient.actions_played(), std::size_t{4});
+  CHECK_EQ(lenient.warnings().size(), std::size_t{1});
+}

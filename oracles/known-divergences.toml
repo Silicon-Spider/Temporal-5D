@@ -31,9 +31,11 @@
 #     "rejected:ambiguous_move", "rejected:notation_mismatch" or
 #     "rejected:unrecognised"), or that read a different number of actions
 #     (kind "length"), may be stopped by notation it does not read and not by a
-#     rule. If that is what it is, cite the notation specification. If the
-#     oracle really does hold the move illegal, it is a rules matter after all
-#     and needs the rulebook like any other.
+#     rule. If that is what it is, cite the notation specification - or, where
+#     the specification is silent on how such text is read, the rulebook's
+#     project decision that settles it (R11: a capture mark that disagrees with
+#     its move). If the oracle really does hold the move illegal, it is a rules
+#     matter after all and needs the rulebook like any other.
 #   * The engine refusing as unreadable text an oracle played, in either mode
 #     (kind "legality", engine_value "rejected:unreadable", oracle_value
 #     "accepted"), at the action it could not read - index 0 being the
@@ -58,27 +60,29 @@
 # an entry: R8 ruled it, and the engine has followed the ruling by default since
 # stage E7.
 #
-# KD-0057 to KD-0169 (2026-10-17) come from the first runs with the engine
+# KD-0057 to KD-0166 (2026-10-17) come from the first runs with the engine
 # configured in gate.toml, which under R8 reads records further: ftxi's and
 # ftxi:naive's check verdicts that R1 rules wrong at the positions it now reaches -
 # each re-checked against the engine's own capture scan and ftxi's account of its
 # check test (`observe --explain`), cwmtt/many2's among them (read converted since
-# CHECKPOINT 3, so not in CHECKPOINT 1's table) - and a capture mark on a jump that
-# takes nothing, which the engine refuses and three oracles played. Some sit
-# beyond a tier's budgets: an entry that a run does not reach is not looked at, and
-# is never reported stale for it.
+# CHECKPOINT 3, so not in CHECKPOINT 1's table). Some sit beyond a tier's budgets:
+# an entry that a run does not reach is not looked at, and is never reported stale
+# for it.
 #
-# KD-0167 to KD-0169 are provisional. The notation's "Jumps" syntax writes x "if a
-# piece is being taken" and says nothing of a reader that meets an x on a move that
-# takes nothing; the engine's reader refuses one as unreadable (and reads a capture
-# written without x). That is a reading, put to the project owner
-# (docs/BUILD_LOG.md, spec issue 125), and these entries record what follows from
-# it. Ruled that way, they lose this note. Ruled the other way - such an x is a
-# writer's slip, read with a warning - the engine's reader changes and the three
-# entries are withdrawn in the same edit, on the ruling's authority: it says the
-# oracles that played the move made no error, so withdrawing them is not removing
-# an entry to silence a telltale (above). What ftxi's refusal of that move would
-# then need, the ruling says.
+# KD-0170 (2026-10-17) follows the project owner's ruling on the capture mark
+# (CHECKPOINT 8: docs/rules/README.md R11, register H51, a project decision). The
+# notation's "Jumps" syntax writes x "if a piece is being taken" and says nothing
+# of a reader that meets a mark that disagrees with its move; the ruling: a move is
+# read as its squares define it, the mismatch logged as a warning, and a source
+# that refuses such a record gets an entry citing the ruling. The engine's reader
+# now reads cwmtt/futures action 17 - an x on a jump that takes nothing - as
+# cwmtt, Chess in 5D and the notation parser do, and ftxi's refusal of it is
+# KD-0170. KD-0167 to KD-0169, which recorded those three's playing it while the
+# engine's reader refused a written x that takes nothing (a reading put to the
+# owner as spec issue 125, and marked provisional), were withdrawn in the same
+# edit, on the ruling's authority: it says the oracles that played the move made
+# no error, so withdrawing them is not removing an entry to silence a telltale
+# (above). Their ids are not reused.
 #
 # [[divergence]]
 # id = "KD-0001"
@@ -2589,46 +2593,16 @@ added = "2026-10-17"
 notes = "Triage 2026-10-17, class (a), ftxi's exhaustive search (ftxi:naive; the same check test). CHK-A1: the attacker stands on the playable board of an active timeline ahead of the present (an optional board of the side to move) and captures on that board. Black to move, present T14b, mandatory -2; deciding capture Q(-1T16w)d6 -> k(-1T16w)e7 (docs/checkpoints/checkpoint-1-check-clusters.md, 'All 78 positions'). Re-checked 2026-10-17: the engine's own royal-capture scan (t5d/check.hpp), with every playable board of the side to move passed, finds exactly ftxi:naive's (and ftxi's) 5 captures (observe --explain), each needing a board R1 does not pass. Chess in 5D answers False here, as the engine does."
 
 [[divergence]]
-id = "KD-0167"
-oracle = "cwmtt"
-pin = "9632e9969dd455c6e3d6c27c57c1936c251d7e97"
+id = "KD-0170"
+oracle = "ftxi"
+pin = "2ea9f1b82880f08faa9400d1ac20b20102604187"
 record = "cwmtt/futures"
 record_sha256 = "c8f0cc9ca72fae1bd125fe2220d874ecb7734db2dec141a132f32fdbe0e1228c"
 kind = "legality"
 index = 17
-engine_value = "rejected:unreadable"
-oracle_value = "accepted"
-notation = "README of adri326/5dchess-notation (oracles/third_party/notation/README.md). 'Jumps': 'Jumps use the following syntax: The super-physical coordinate of the origin board - The piece's letter - The piece's physical coordinate - >> if the jump is branching, > if the jump isn't branching - x if a piece is being taken - The super-physical coordinate of the target board - The physical coordinate of the target square - ...'; the specification's own example reads the x as a capture: '(-1T4)Nc3>>x(0T2)c3+~ (The knight from board -1L, T4, c3 jumps and takes on L, T2, c3, creating a new timeline (-2L) and moving the present)'. The record's '(L1T5)Qf4>>x(L0T5)e4~' (line 14, action 17) writes x on a jump onto (0T5)e4, an empty square: no piece is being taken, so - read strictly, as the engine's reader reads it, a reading put to the user (spec issue 125) - x is not part of this jump's syntax, and the record is not valid 5dpgn."
-upstream = "unreported: the record's text is not valid 5dpgn and the oracle's reader accepts it; a lenient reader is no defect to report upstream"
+engine_value = "accepted"
+oracle_value = "rejected:no_matching_move"
+rulebook = "docs/rules/README.md R11 (register H51; a project decision, CHECKPOINT 8): capture marks are read leniently. The notation specification (README of adri326/5dchess-notation, oracles/third_party/notation/README.md, 'Jumps': 'x if a piece is being taken') says when to write the mark and not how to read one that disagrees with its move, so a move is read as its squares and boards define it, whether or not it is written with x; a mark that disagrees is logged as a warning and never changes which move is read; and a source that refuses a record for such a mark gets an entry citing the ruling. The record's '(L1T5)Qf4>>x(L0T5)e4~' (line 14, action 17) writes x on a branching jump onto (0T5)e4, an empty square: read by its squares it is White's queen from (+1T5)f4 to (0T5)e4, which takes nothing - the move the engine plays (with the warning), as cwmtt, Chess in 5D and the notation parser play it. ftxi refuses the text as matching no move: a strict reading of the mark, which R11 does not follow."
+upstream = "unreported: ftxi reads the capture mark strictly where the notation specification is silent, and R11 is a project decision (H51) - no defect to report, and no documented rule to question"
 added = "2026-10-17"
-notes = "Triage 2026-10-17, class (d): a jump written as a capture ('>>x') that takes nothing. At position 16 the engine, ftxi, cwmtt and Chess in 5D hold one state (fingerprint 4f663c0054865244a62f8f37d62f310f; the notation parser the same boards and pieces), and White's board (0T5) has nothing on e4. The engine's reader refuses a written x that takes nothing (engine README, 'The reader's readings': a written x must capture; a capture written without x it reads, require_capture_marks false), and stops at action 17 - as ftxi does (no matching move), so there is no divergence with ftxi. The specification gives the condition under which x is written and says nothing of a reader that meets one that disagrees. Standard - Turn Zero is not gated while the engine cannot read this record to its end. Provisional: it records the strict reading of a written x, put to the user (docs/BUILD_LOG.md, spec issue 125); the header says how it goes if the ruling is the other way."
-
-[[divergence]]
-id = "KD-0168"
-oracle = "chessin5d"
-pin = "ee403c80e8c132fc4d168f5b99ddd9b8fe5cc17b"
-record = "cwmtt/futures"
-record_sha256 = "c8f0cc9ca72fae1bd125fe2220d874ecb7734db2dec141a132f32fdbe0e1228c"
-kind = "legality"
-index = 17
-engine_value = "rejected:unreadable"
-oracle_value = "accepted"
-notation = "README of adri326/5dchess-notation (oracles/third_party/notation/README.md). 'Jumps': 'Jumps use the following syntax: The super-physical coordinate of the origin board - The piece's letter - The piece's physical coordinate - >> if the jump is branching, > if the jump isn't branching - x if a piece is being taken - The super-physical coordinate of the target board - The physical coordinate of the target square - ...'; the specification's own example reads the x as a capture: '(-1T4)Nc3>>x(0T2)c3+~ (The knight from board -1L, T4, c3 jumps and takes on L, T2, c3, creating a new timeline (-2L) and moving the present)'. The record's '(L1T5)Qf4>>x(L0T5)e4~' (line 14, action 17) writes x on a jump onto (0T5)e4, an empty square: no piece is being taken, so - read strictly, as the engine's reader reads it, a reading put to the user (spec issue 125) - x is not part of this jump's syntax, and the record is not valid 5dpgn."
-upstream = "unreported: the record's text is not valid 5dpgn and the oracle's reader accepts it; a lenient reader is no defect to report upstream"
-added = "2026-10-17"
-notes = "Triage 2026-10-17, class (d): a jump written as a capture ('>>x') that takes nothing. At position 16 the engine, ftxi, cwmtt and Chess in 5D hold one state (fingerprint 4f663c0054865244a62f8f37d62f310f; the notation parser the same boards and pieces), and White's board (0T5) has nothing on e4. The engine's reader refuses a written x that takes nothing (engine README, 'The reader's readings': a written x must capture; a capture written without x it reads, require_capture_marks false), and stops at action 17 - as ftxi does (no matching move), so there is no divergence with ftxi. The specification gives the condition under which x is written and says nothing of a reader that meets one that disagrees. Standard - Turn Zero is not gated while the engine cannot read this record to its end. Provisional: it records the strict reading of a written x, put to the user (docs/BUILD_LOG.md, spec issue 125); the header says how it goes if the ruling is the other way."
-
-[[divergence]]
-id = "KD-0169"
-oracle = "notation"
-pin = "99f6163a9c95a6a9740b20fb5f3c7f6503a166a0"
-record = "cwmtt/futures"
-record_sha256 = "c8f0cc9ca72fae1bd125fe2220d874ecb7734db2dec141a132f32fdbe0e1228c"
-kind = "legality"
-index = 17
-engine_value = "rejected:unreadable"
-oracle_value = "accepted"
-notation = "README of adri326/5dchess-notation (oracles/third_party/notation/README.md). 'Jumps': 'Jumps use the following syntax: The super-physical coordinate of the origin board - The piece's letter - The piece's physical coordinate - >> if the jump is branching, > if the jump isn't branching - x if a piece is being taken - The super-physical coordinate of the target board - The physical coordinate of the target square - ...'; the specification's own example reads the x as a capture: '(-1T4)Nc3>>x(0T2)c3+~ (The knight from board -1L, T4, c3 jumps and takes on L, T2, c3, creating a new timeline (-2L) and moving the present)'. The record's '(L1T5)Qf4>>x(L0T5)e4~' (line 14, action 17) writes x on a jump onto (0T5)e4, an empty square: no piece is being taken, so - read strictly, as the engine's reader reads it, a reading put to the user (spec issue 125) - x is not part of this jump's syntax, and the record is not valid 5dpgn."
-upstream = "unreported: the record's text is not valid 5dpgn and the oracle's reader accepts it; a lenient reader is no defect to report upstream"
-added = "2026-10-17"
-notes = "Triage 2026-10-17, class (d): a jump written as a capture ('>>x') that takes nothing. At position 16 the engine, ftxi, cwmtt and Chess in 5D hold one state (fingerprint 4f663c0054865244a62f8f37d62f310f; the notation parser the same boards and pieces), and White's board (0T5) has nothing on e4. The engine's reader refuses a written x that takes nothing (engine README, 'The reader's readings': a written x must capture; a capture written without x it reads, require_capture_marks false), and stops at action 17 - as ftxi does (no matching move), so there is no divergence with ftxi. The specification gives the condition under which x is written and says nothing of a reader that meets one that disagrees. Standard - Turn Zero is not gated while the engine cannot read this record to its end. Provisional: it records the strict reading of a written x, put to the user (docs/BUILD_LOG.md, spec issue 125); the header says how it goes if the ruling is the other way."
+notes = "Triage 2026-10-17, after the user's ruling on spec issue 125 (CHECKPOINT 8: register H51, rulebook R11). At position 16 the engine, ftxi, cwmtt and Chess in 5D hold one state (fingerprint 4f663c0054865244a62f8f37d62f310f; the notation parser the same boards and pieces), and (0T5)e4 is empty. ftxi's own listing of its legal actions there (observe --source ftxi --record cwmtt/futures --actions 16) holds the one-move action (+1T5)f4 -> (0T5)e4, and its refusal names the move it parsed with the capture flag set ('Invalid move: ... pn:Q,ff:f,fr:4,ji:>>,cp:yes,tb:ab{s:0,l:0,t:5},tf:e,tr:4'): it refuses the mark, not the move - a reading of notation, not a rules verdict. The engine read the mark strictly until this ruling, and refused the action as ftxi does; KD-0167 to KD-0169, which recorded cwmtt's, Chess in 5D's and the notation parser's playing it, were withdrawn on the ruling's authority (the file's header). ftxi follows the record no further than position 16, so it stands behind none of the engine's positions after it."
