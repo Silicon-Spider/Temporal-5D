@@ -1262,7 +1262,7 @@ commits (F5 and F6 on `lane/net`, H47 and H48 on `lane/gate`, M22 on `lane/engin
 | B5 | built, tested | Network N1, behind a flag (off); its as-built details are "v1 placeholders" (Provisional, CHECKPOINT 6; M20), tested by ablation 2 - §4.1 does not state them (edit 9) |
 | B6 | superseded; removed | By B15 (CHECKPOINT 6, reversal 25; M20). Removed from the code with B15 (`lane/net`): `binned_bias`, `binned_bias_rope` (issue 9f) and their fields - no arm survives, ablation 2's arm is B15 on or off. Its log buckets live on in `python/t5d/net/buckets.py` for B12's relative cells (`smolgen_time_*`, `smolgen_timeline_*`; smolgen's 152 cells and 47,136 parameters unchanged, issue 212). Under B15's far-bin placeholder B6 is not B15's special case, which §4.1, the register's B6 row and reversal 25 say it is: beyond the exact classes its per-axis buckets are not kept, only Δtime's sign and the clamp (issue 205, edit 159; put to the user) |
 | B10, B12 | built, tested | Network N2, behind flags (B12 as relative board-pair cells, full rank - the register now records it as built; the cells are the log buckets B6 used, re-homed in `buckets.py` when B6 went - issue 212). The register says smolgen "keeps its own normalisation" (F5); the built smolgen has none (`lane/net`'s issue 202) |
-| B11 | built behind a flag, tested; to change | Network N2 with six types; CHECKPOINT 6 folds travel-threat into attack (five types, reversal 26) - `travel_threat` is still in the network's type set (net lane). The engine emits attack, defence and x-ray; pin and check are refused until engine ABI round 1 builds them behind the relation mask; id 6 stays reserved |
+| B11 | built behind a flag, tested | Network N2; five types since `lane/net`'s N-B11 - attack, defence, pin, x-ray, check: travel-threat folded into attack (CHECKPOINT 6, reversal 26) and dropped from the network's type set (`config.TYPED_RELATIONS`, `state.RELATION_TYPES`; the synthetic generator's cross-board attacks are its travel threats). One scalar per head per type, shared across layers: 8 x 5 = 40 (80 directed; 48 and 96 before), only with `typed_edge_bias` on - the v1's count is unchanged. Live query rows only under the cached configuration (built at N3). The relation ids are the C ABI's: id 6 stays reserved (append-only), never emitted, refused by `PositionState`'s validation. The engine emits attack, defence and x-ray; pin and check - in the type set as the register lists them - stay empty until engine ABI round 1 builds them behind the relation mask. The engine lane's documents still name travel-threat among the network's relation ids (the relation-id comments of `records.h` and `capi.py`, `engine/README.md`'s (e), `convert.py`'s docstring): theirs to bring in line with ABI round 1 |
 | B3 | not built (rule) | Contingency only; no trigger |
 | B7 | not built (rule) | Deferred; its gate now names ablation 2's head-allocation evidence (issue 121's B7 part closed, M20); no §15.2/§15.3 need (d_head is a config value anyway) |
 | B13 | not built (rule) | Refused |
@@ -1303,7 +1303,7 @@ commits (F5 and F6 on `lane/net`, H47 and H48 on `lane/gate`, M22 on `lane/engin
 | E2, E3 | built behind flags, tested | Off; awaiting 6m and 6t. They read the categorical variance; 6m's switch to the error head is engine ABI round 2 |
 | E8 | not started | Behind its flag (6v), with E11 in step 2 |
 | E6 | not built (rule) | Refused |
-| F1, F2 | built, tested | 22,961,802 parameters (F1 after F5 and B15: 21,338,634 - 20,736 fewer than N5's 21,359,370, gain-only norms, no Q/K/V biases, spec issue 203 - plus B15's 1,623,168, spec issue 210); the L24-ff12 preset, 46,891,210 (F2: 44,456,458 and B15's 2,434,752 over 24 layers) |
+| F1, F2 | built, tested | 22,961,802 parameters (F1 after F5 and B15: 21,338,634 - 20,736 fewer than N5's 21,359,370, gain-only norms, no Q/K/V biases, spec issue 203 - plus B15's 1,623,168, spec issue 210); the L24-ff12 preset, 46,891,210 (F2: 44,456,458 and B15's 2,434,752 over 24 layers). Unchanged by B11's fold (its flag is off; with it on, 40 scalars where there were 48) |
 | F5 | built, tested | Network: RMSNorm-style norms (a learned gain, no centring, no bias; FP32) everywhere in the trunk, no Q/K/V biases, the attention-output and FFN biases kept (spec issue 200), pre-norm. 6y's arm - post-norm with DeepNet's initialisation, `norm_placement="post"` - through the dense trunk and the cached path, its unstated details placeholders (issue 201); smolgen has no norm to keep (issue 202) |
 | F6 | built, tested | Network: Mish in the FFN (`ffn_activation="mish"`); 6y's arm, squared ReLU (`"squared_relu"`), through the dense trunk and the cached path. Whether Mish reaches the output heads is not decided by F6: the value head's MLP keeps GELU as a named placeholder (`head_activation`, spec issue 204) |
 | F3 | not built (rule) | Refused |
@@ -1559,7 +1559,8 @@ superseded or made moot says so; nothing is deleted.
     a 256-wide output over every pair, not of the generator. Proposed spec edits
     12-18.
     *Settled upstream at CHECKPOINT 6/7: §6 "As built - v1 values", B9 and B12 (a-g,
-    the smolgen form and its rank, the 14.7 MMAC figure); M20: 16a-g stand as v1.*
+    the smolgen form and its rank, the 14.7 MMAC figure); M20: 16a-g stand as v1.* *(d)
+    is B11's five types since travel-threat's fold (`lane/net`, N-B11, 2026-10-17).*
 17. **E's "some live piece"** (§10.4.1) is read as the mover's pieces: E comes
     from the move generator at the node, and the opponent's destinations enter at
     the child (§10.4.3's "search re-partitions per node"). R1 now makes the
@@ -1574,7 +1575,8 @@ superseded or made moot says so; nothing is deleted.
 19. **Travel-threat** is named in §6 and B11 and used as a class of forcing moves
     in §11.1; no edge is defined. Not built.
     *Settled upstream at CHECKPOINT 6/7: B11, §6 and reversal 26 (travel-threat
-    folded into attack).*
+    folded into attack).* *Applied in the network (`lane/net`, N-B11, 2026-10-17): no
+    network relation carries it; the C ABI's id 6 stays reserved.*
 20. **"Per GPU's CPU allocation"** (§15.6 M9) is undefined: how many cores is one
     GPU's share? The bench reports per thread and per machine.
     *Settled upstream at CHECKPOINT 2: M13 and §15.6's "CPU allocation" (8 cores per

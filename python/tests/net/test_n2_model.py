@@ -83,7 +83,8 @@ def test_batch_composition_does_not_matter(flags):
 
 
 def test_parameter_counts_stay_at_section_9_2():
-    """B9 and B10 are masks (no parameters); B11 adds 48 scalars (96 directed); B12 adds
+    """B9 and B10 are masks (no parameters); B11 adds 40 scalars (80 directed: 8 heads x its
+    five types - travel-threat folded into attack at CHECKPOINT 6); B12 adds
     47,136 with relative cells (8,224 for W_z, 8 x 152 x 32 for the cell table) and 32,832
     in its bilinear form (section 9.2: "<0.1M"); with everything on the total stays at section
     9.2's ~21.5M plus B15's ~1.6M displacement table (section 4.1; spec issue 210)."""
@@ -91,15 +92,15 @@ def test_parameter_counts_stay_at_section_9_2():
     routed = parameter_breakdown(build_model(NetConfig(routing_table=True)))
     assert routed["total"] == V1_TOTAL
     full = parameter_breakdown(build_model(NetConfig(routing_table=True, typed_edge_bias=True, board_pair_smolgen=True)))
-    assert full["attn.typed_edges"] == 8 * 6
+    assert full["attn.typed_edges"] == 8 * 5
     assert full["attn.smolgen"] == (256 * 32 + 32) + 8 * (19 * 8) * 32 == 47_136
     assert full["attn.smolgen"] < 0.1e6, "section 9.2: smolgen <0.1M"
-    assert full["total"] == V1_TOTAL + 48 + 47_136
+    assert full["total"] == V1_TOTAL + 40 + 47_136
     assert abs(full["total"] - 23.1e6) / 23.1e6 < 0.02, "section 9.2: ~21.5M with all heads, and section 4.1's ~1.6M"
     bilinear = parameter_breakdown(build_model(NetConfig(board_pair_smolgen=True, smolgen_form="board_bilinear")))
     assert bilinear["attn.smolgen"] == 2 * (256 * 32 + 32) + 2 * (8 * 32 * 32) == 32_832
     directed = parameter_breakdown(build_model(NetConfig(typed_edge_bias=True, typed_edge_directed=True)))
-    assert directed["attn.typed_edges"] == 8 * 6 * 2
+    assert directed["attn.typed_edges"] == 8 * 5 * 2
 
 
 @pytest.mark.parametrize("n", [2, 17])

@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 from t5d.net import PIECE_IDS, PositionState, synthetic_state
-from t5d.net.state import COLOUR_BLACK, COLOUR_WHITE, RELATION_IDS
+from t5d.net.state import COLOUR_BLACK, COLOUR_WHITE, RELATION_IDS, RELATION_TYPES
 from t5d.net.synthetic import reach_graph
 
 ROYALS = (PIECE_IDS["K"], PIECE_IDS["Y"])
@@ -35,8 +35,10 @@ def test_edges_are_plausible_relations(n):
     assert ((dst_piece != 0) & (dst_colour == src_colour))[defence].all(), "defence lands on own pieces"
     check = rel == RELATION_IDS["check"]
     assert (np.isin(dst_piece, ROYALS) & (dst_colour != src_colour))[check].all(), "check lands on an enemy royal"
-    travel = rel == RELATION_IDS["travel_threat"]
-    assert (sb != db)[travel].all() and (dst_colour != src_colour)[travel].all(), "travel threats are cross-board attacks"
+    # B11 (CHECKPOINT 6): travel-threat is folded into attack - a travel threat is an attack
+    # edge onto another board, and no relation of its own (its C id, 6, stays reserved).
+    assert (attack & (sb != db)).any(), "cross-board attacks - the travel threats - exist"
+    assert set(np.unique(rel).tolist()) <= set(range(len(RELATION_TYPES))) and "travel_threat" not in RELATION_IDS
     sliders = np.isin(src_piece, [PIECE_IDS[c] for c in "RBUDQSY"])
     for name in ("xray", "pin"):
         assert sliders[rel == RELATION_IDS[name]].all(), f"{name} relations come from sliders"
