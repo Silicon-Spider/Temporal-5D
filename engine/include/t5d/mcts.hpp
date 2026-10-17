@@ -428,8 +428,8 @@ struct EvalRequest {
 struct Evaluation {
   /// One logit per candidate move (expansion->moves().size()).
   std::vector<float> logits;
-  /// D8: the submit action's logit (under the ply split, read from a global
-  /// register), used when the leaf's submit is possible; NaN - none given -
+  /// D8: the submit action's logit (under the ply split, read from the pooled
+  /// global registers), used when the leaf's submit is possible; NaN - none given -
   /// stands for SearchParams::submit_share. Must not be infinite.
   float submit_logit = std::numeric_limits<float>::quiet_NaN();
   /// Probabilities over kValueBins bins (normalised by the search), from the

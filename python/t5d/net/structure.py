@@ -31,7 +31,7 @@ key ``j`` (padding keys are never allowed):
 
 * a per-board register query on a ``same_board`` head: any token of its own board, as
   for the board's squares - a per-board register is on its board (``same_board_registers=
-  "own_board"``, the placeholder default; ``"registers"``: as the next item);
+  "own_board"``, which stands as v1 - M20; ``"registers"``: as the next item);
 * every other register query - a per-board register on the ``move_graph``, ``relations``
   and ``same_square`` heads, whose relations join squares only, and a global register,
   which holds no board, on every masked head: every valid key
@@ -384,9 +384,10 @@ class AttnStructure:
 
         ``allowed`` ``(B, stop - start, L)`` is ``role_rows`` with padding keys removed.
         Every token of each board that a selecting query reaches is selected - whole
-        boards are section 6.1's blocks - and each reached token that has no board (a
-        global register among the kernel keys, ``global_register_pairs="anchored"``) on
-        its own. The selecting queries are the valid ones that are not free
+        boards are section 6.1's blocks - and each reached token that has no board on its
+        own (none is a kernel key since M20 left the global registers position-free - B8 -
+        to the merge; kept so that the selection stays lossless for any key set). The
+        selecting queries are the valid ones that are not free
         (``free_rows``): a free query reads every key and is computed apart, a padding
         query's output is discarded. The selection is lossless: every key a selecting
         query may read is selected."""

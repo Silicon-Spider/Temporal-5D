@@ -39,18 +39,28 @@ The build rules (spec section 15.1) decide what else appears here:
   switches - the root refresh, the rung-1 node refresh and its visit gate, C24's
   complexity trigger (prototype, ``complexity.py``), the KV storage format - are the
   evaluator's (``CacheConfig``), not the network's. Four points the
-  spec leaves open on this committed-class path are parameters with placeholder defaults
-  (``causal_past`` - since ruled by C23: ancestry, the ``"lineage"`` default -,
-  ``frozen_features`` - since ruled by M20: intrinsic, with B16's status biases -,
-  ``supersession_scope``, and the rule that the section 6 structure opens live rows only,
+  spec left open on this committed-class path were built as parameters (``causal_past`` -
+  since ruled by C23: ancestry, the ``"lineage"`` default -, ``frozen_features`` - since ruled
+  by M20: intrinsic, with B16's status biases -, ``supersession_scope`` - both readings built,
+  6c decides (C20, M20) - and the rule that the section 6 structure opens live rows only,
   documented in ``scope.py``). **B16** (committed with the cached configuration, section 4.1;
   ``status.py``) gives frozen boards' current status to the live queries that read them as
   score-time key biases (``status_key_bias``, on), its bins, layer sharing and initialisation
   placeholders.
-* **Stage N5** adds register D8 (committed): the global acting-player input and the submit
-  action's policy logit read from a global register. Where the input enters
-  (``acting_player_input``), which register the logit is read from (``submit_register``) and
-  how (``submit_head``) are not specified - parameters with placeholder defaults.
+* **Stage N5** adds register D8 (committed): the global acting-player input, on the global
+  registers (M20: "acting player -> global registers"), and the submit action's policy
+  logit, read from the pooled global registers (M20: "submit logit -> pooled global
+  registers") by a readout whose form is not ruled (``submit_head``, a placeholder).
+* **M20's placeholder dispositions** (committed, CHECKPOINT 6; register M20) are the
+  defaults, and the arms they dispose of - no named ablation needing them - are gone: the
+  registers' positions (B8: per-board registers rotated on timeline and time only, global
+  registers position-free on every pair - no switch), the promotion offset in the policy
+  (D1 - no switch), the auxiliary heads' pool (the squares; the value-type heads - the
+  categorical value, WDL and the short-term value - pool the global registers, D3, by mean),
+  moves-left in turns (D4), the acting player on the global registers and the pooled submit
+  logit (D8). B5's details, the per-square label set, stage N2's placeholders (16a-g) and B7
+  "stand as v1, tested by ablations 2, 6a and 6j" - the switches below stay, now the v1's
+  values.
 * **F5** (committed, CHECKPOINT 6, section 9.3): every trunk norm RMSNorm-style - no
   mean-centring, no bias (``trunk.RMSNorm``) - no biases in the Q, K and V projections
   (``qkv_bias``), the attention-output and FFN biases kept (``out_ffn_bias``), pre-norm;
@@ -63,23 +73,25 @@ The build rules (spec section 15.1) decide what else appears here:
   ``ffn_activation="squared_relu"``, in the trunk only.
 * **Where the spec is silent, ambiguous or contradictory on a committed-class point**
   the choice is a parameter and the default is marked as a placeholder, not a decision:
-  ``board_register_spatial`` (section 5.3 under RoPE), ``global_register_pairs`` (what
-  a global register's position is under a relative encoding), ``aux_global_pool``
-  (section 9.2 against section 12.4, B8 and D7), ``policy_promotion`` (section 8.1 says
-  nothing about promotions), ``rope_relations_head`` and the near-NoPE and split details
-  of B5, B15's far bins, line clamp, register entries and initialisation
-  (``disp_far_edges``, ``disp_line_max``, ``disp_register_pairs``, ``disp_init_std``), B16's
-  bins, layer sharing and initialisation (``status_dt_exact``, ``status_dt_max``,
-  ``status_bias_per_layer``, ``status_bias_init_std``; spec issues 213-215), B17's class set,
-  head sharing and initialisation (``shaw_near``, ``shaw_shared_heads``, ``shaw_init_std``; spec
-  issues 217, 218, 220), and from stage N2: ``move_graph_direction`` (which way a directed
-  move edge opens the mask), ``masked_head_registers`` (what registers do on masked heads),
-  ``same_board_registers`` (what a per-board register reads on the same-board head),
-  ``relations_head_types`` (which relations "attack/defend relations" covers),
-  ``relations_head_direction`` (which way a typed edge opens the relations head),
-  ``rope_roles_source`` (how B5's per-head allocation meets B9's masks when the routing table
-  is off) and how the routing table meets B9's head count (``move_graph_heads``,
-  ``rope_head_roles``).
+  D8's submit readout form (``submit_head``; spec issue 109 - not on M20's list), B15's far
+  bins, line clamp, register entries and initialisation (``disp_far_edges``,
+  ``disp_line_max``, ``disp_register_pairs``, ``disp_init_std``), B16's bins, layer sharing
+  and initialisation (``status_dt_exact``, ``status_dt_max``, ``status_bias_per_layer``,
+  ``status_bias_init_std``; spec issues 213-215), and B17's class set, head sharing and
+  initialisation (``shaw_near``, ``shaw_shared_heads``, ``shaw_init_std``; spec issues 217,
+  218, 220).
+* **Stand as v1 (M20)**, each a switch whose default is now the v1's value, tested by the
+  ablation that names it: B5's details (ablation 2) - ``rope_relations_head``,
+  ``rope_same_square_split``, ``rope_near_nope_max_angle`` and ``rope_roles_source`` (how B5's
+  per-head allocation meets B9's masks when the routing table is off); and stage N2's
+  (issue 16a-g; register B9's "v1 as built", ablation 6a for the routing table's):
+  ``move_graph_direction`` (which way a directed move edge opens the mask),
+  ``masked_head_registers`` (what registers do on masked heads), ``same_board_registers``
+  (what a per-board register reads on the same-board head), ``relations_head_types`` (which
+  relations "attack/defend relations" covers), ``relations_head_direction`` (which way a
+  typed edge opens the relations head) and how the routing table meets B9's head count
+  (``move_graph_heads``, ``rope_head_roles``). The per-square label set
+  (``heads.SQUARE_LABELS``) stands as v1 too (ablation 6j).
 * Refused and held-open items have no switch at all (B3 axial, B13 token/within-board
   smolgen, C18 local/global interleave, C21 snapshot shortcuts, F3 d = 512, G4-G6;
   threat relations never become tokens, section 14.4).
@@ -154,9 +166,8 @@ FROZEN_FEATURES: tuple[str, ...] = ("intrinsic", "current")
 #: Readings of C20's "causal past plus the conditioned history of its refresh epoch"
 #: (``scope.py``).
 SUPERSESSION_SCOPES: tuple[str, ...] = ("causal_past", "past_and_epoch_history")
-#: Where register D8's acting-player input enters (stage N5; ``embed.py``).
-ACTING_PLAYER_INPUTS: tuple[str, ...] = ("global_registers", "all_tokens")
-#: How D8's submit logit is read from its global register (stage N5; ``heads.SubmitHead``).
+#: How D8's submit logit is read from the pooled global registers (stage N5, M20;
+#: ``heads.SubmitHead``).
 SUBMIT_HEADS: tuple[str, ...] = ("linear", "pointer")
 #: Where each sublayer's norm sits (F5; ``trunk.py``): "pre" (the v1) or "post" (ablation
 #: 6y's arm: Lc0's post-norm with DeepNet initialisation).
@@ -176,7 +187,14 @@ class NetConfig:
     n_heads: int = 8
     d_head: int = 32
     ffn_ratio: int = 8
-    # --- A1 / B8: registers (section 5.2) ---
+    # --- A1 / B8: registers (sections 5.2, 5.3) ---
+    #: Their positions have no switch (B8, ruled at CHECKPOINT 6 - M20; section 5.3): a
+    #: per-board register is rotated on its board's timeline and time pairs only - every pair
+    #: with one uses unrotated file/rank dims on both sides - and a global register on none -
+    #: every pair with one is unrotated on both sides (``attention.py``'s pair rule; "a learned
+    #: 'not a square' angle is a (file, rank) in disguise"). Both kinds add the learned
+    #: additive "not a square" embedding (content, not position; ``embed.py``). Ablation 3
+    #: varies the counts (registers on/off, 2 vs 4 per board), not the positions.
     regs_per_board: int = 2
     global_regs: int = 16
     # --- D3: categorical value head (section 8.3) ---
@@ -196,41 +214,8 @@ class NetConfig:
     #: Subtract a per-position reference (p_ref, h_present) from the timeline and time
     #: coordinates before computing angles. A pair rotated on both sides sees only the
     #: difference of its coordinates, so this changes no such score; it keeps the FP32
-    #: angles small (G1), and it is what places the anchor of
-    #: ``global_register_pairs="anchored"``. Off only to test the relative property of
-    #: the rotation itself.
+    #: angles small (G1). Off only to test the relative property of the rotation itself.
     rope_recenter: bool = True
-    #: Where a per-board register sits on the spatial (file, rank) axes. Section 5.3:
-    #: registers get their board's (timeline, time) but "must not receive a (file, rank).
-    #: Use a learned 'not a square' embedding on the spatial axes or they collide with
-    #: the movement geometry." Under RoPE that admits three readings.
-    #: COMMITTED-CLASS AMBIGUITY (B4, B8) - placeholder default, not a decision:
-    #:   "learned_angle" - a learned off-lattice (file, rank) coordinate per register slot
-    #:                     (initialised at the board centre, where no square is): a learned
-    #:                     spatial position that is not a square's;
-    #:   "position_free" - no spatial coordinate at all: every pair involving a per-board
-    #:                     register uses unrotated file/rank dims on both sides (the
-    #:                     timeline/time dims still rotate). The literal "must not receive
-    #:                     a (file, rank)"; it widens the fast kernel's query/key features;
-    #:   "zero_angle"    - unrotated (angle 0) spatial pairs on the register's side only.
-    #:                     Under a relative encoding that is exactly square a1's position,
-    #:                     i.e. the collision section 5.3 warns of; kept for ablation.
-    #: Every option also adds the learned additive "not a square" embedding.
-    board_register_spatial: str = "learned_angle"
-    #: What position a global register has. Global registers hold no board (section
-    #: 5.2), and a fixed angle on one side of a relative encoding is itself a position.
-    #: COMMITTED-CLASS AMBIGUITY (B4, B8) - placeholder default, not a decision:
-    #:   "position_free" - every pair involving a global register is unrotated on both
-    #:                     sides (exact NoPE for those pairs); costs an exact log-sum-exp
-    #:                     merge in the fast attention path;
-    #:   "anchored"      - global registers are unrotated tokens at recentred coordinate 0,
-    #:                     i.e. at (a1, p_ref, h_present): a board token's score with them
-    #:                     depends on its file/rank and its offset from the lowest timeline
-    #:                     and the present line. Translation-invariant because the anchor
-    #:                     moves with the position; needs ``rope_recenter`` (with raw
-    #:                     coordinates the anchor would be the absolute origin - an absolute
-    #:                     positional encoding, section 14.1). One stock kernel call.
-    global_register_pairs: str = "position_free"
 
     # --- G1: precision (section 10.2) ---
     #: "bf16": the trunk runs under CPU/GPU autocast to BF16 (matmuls and attention in
@@ -320,32 +305,22 @@ class NetConfig:
     dt_scale: float = 16.0
 
     # --- heads (sections 8.1, 8.3, 12.4) ---
-    #: Width of the policy pointer projections f and g (D1).
+    #: Width of the policy pointer projections f and g (D1). Promotions add a learned
+    #: per-piece logit offset read from the destination token (D1, section 8.1, M20:
+    #: "promotion scoring -> learned per-piece offset" - no switch; ``heads.PointerHead``).
     policy_dim: int = 256
-    #: How a promotion's piece enters the policy score. Section 8.1's score
-    #: f(h_src)^T g(h_dst) cannot tell promotions to different pieces apart.
-    #: COMMITTED-CLASS AMBIGUITY - placeholder default, not a decision:
-    #:   "none"   - the literal section 8.1 formula (promotion variants tie);
-    #:   "offset" - plus a learned per-piece offset read from the destination token.
-    policy_promotion: str = "none"
     #: Width of the opponent-reply pointer projections (aux, ~0.1M budget of section 9.2).
     opp_policy_dim: int = 128
     #: Hidden width of the value head's MLP (its activation is F6's Mish - ``heads.ValueHead``).
+    #: Where each head reads has no switch (M20; ``model.T5DNet.heads``): the value-type heads
+    #: - the 51-bin value, WDL, the short-term value - the mean of the global registers (D3,
+    #: section 8.3: "pooled by mean from the global registers"); the other global auxiliary
+    #: heads - moves-left, search effort - the mean of every square token (M20: "aux pooling ->
+    #: squares"; section 12.4, B8, D7: registers stay free scratch); per-board heads each
+    #: board's squares, per-square heads every token.
     value_hidden: int = 256
-    #: What the global auxiliary heads (WDL, moves-left, short-horizon value, search
-    #: effort) read. Section 9.2's table: "Mean-pool board squares (per-board) / global
-    #: registers (global)". Section 12.4: "Registers stay free. Auxiliary heads pool from
-    #: the trunk; hard-assigning registers to auxiliary quantities conscripts the scratch
-    #: space"; register B8: "aux heads pool from the trunk - registers stay free scratch";
-    #: D7: registers are "never assigned aux targets".
-    #: COMMITTED-CLASS CONTRADICTION (B8, D4) - placeholder default, not a decision:
-    #:   "squares"          - the mean of every square token of the position (registers
-    #:                        stay free: section 12.4, B8, D7);
-    #:   "global_registers" - the mean of the global registers, the value head's input
-    #:                        (section 9.2's table).
-    #: The value head itself pools the global registers either way (D3, sections 7.3, 8.3).
-    aux_global_pool: str = "squares"
-    #: Per-square deep-attack-fact labels (provisional, undecided set: heads.SQUARE_LABELS).
+    #: Per-square deep-attack-fact labels (``heads.SQUARE_LABELS``: the set stands as v1 - M20,
+    #: ablation 6j).
     n_square_labels: int = 8
     #: Search-effort bins (section 8.6): log2-visit bins plus a censored top bin.
     effort_bins: int = 16
@@ -354,35 +329,26 @@ class NetConfig:
     #: Turns have variable length (Q4, rulebook R8): once the present has shifted inside an
     #: action the colour to move on the present is the opponent's while the action is still
     #: the mover's, so per-board side-to-move flags cannot say whose action it is. Register
-    #: D8: "a global acting-player input". Where it enters is not specified.
-    #: COMMITTED-CLASS SILENCE (D8, A3) - placeholder default, not a decision:
-    #:   "global_registers" - a learned acting-player embedding (white / black) added to every
-    #:                        global register token: a global input on the global tokens
-    #:                        (section 5.2), read by every live token. Global registers are
-    #:                        live, so the cached path stays exact with no change to a frozen
-    #:                        board's K/V; under the block-causal scope frozen boards never
-    #:                        see it (C17: present-to-frozen flow only at refreshes);
-    #:   "all_tokens"       - the same embedding also on every token of every board, like a
-    #:                        section 2.3 per-board flag. Under the block-causal scope with
-    #:                        ``frozen_features="intrinsic"`` a frozen board does not get it
-    #:                        (it changes after the board is frozen); under ``"current"`` it
-    #:                        does, and a frozen board's cache identity carries it.
-    acting_player_input: str = "global_registers"
-    #: Register D8: under the board-move split submitting is "an explicit action with its own
-    #: policy logit, read from a global register" (section 8.2). Which register, and how the
-    #: logit is read, are not specified. COMMITTED-CLASS SILENCE (D8) - placeholder defaults,
-    #: not decisions. ``submit_register``: the index of the global register the logit is read
-    #: from (0; with no global registers - an ablation-3 arm - the mean of the square tokens,
-    #: as the value head falls back). ``submit_head``:
-    #:   "linear"  - its own learned linear readout of that register (``heads.SubmitHead``):
+    #: D8: "a global acting-player input" - on the global registers (M20: "acting player ->
+    #: global registers"; section 2.3's global turn-state inputs): a learned embedding (white /
+    #: black) added to every global register token (``embed.py``), no switch. Global registers
+    #: are live, so the cached path stays exact with no change to a frozen board's K/V.
+    #:
+    #: Under the board-move split submitting is "an explicit action with its own policy logit,
+    #: read from the pooled global registers as the value head is" (section 8.2; M20: "submit
+    #: logit -> pooled global registers", so no register is assigned a role and D7 holds): the
+    #: mean of the global registers' final states (with no global registers - an ablation-3
+    #: arm - the mean of the square tokens, as the value head falls back). How the logit is
+    #: read from it is not ruled (M20 leaves it out; spec issue 109). COMMITTED-CLASS SILENCE
+    #: (D8) - placeholder default, not a decision. ``submit_head``:
+    #:   "linear"  - its own learned linear readout of the pooled state (``heads.SubmitHead``):
     #:               d + 1 parameters, on the move logits' scale at initialisation;
-    #:   "pointer" - the policy's own bilinear form with the register at both ends,
-    #:               ``f(h_r)^T g(h_r) / sqrt(d_policy)``: no parameter of its own, one
-    #:               scoring function for moves and submit.
+    #:   "pointer" - the policy's own bilinear form with the pooled state at both ends,
+    #:               ``f(r)^T g(r) / sqrt(d_policy)``: no parameter of its own, one scoring
+    #:               function for moves and submit.
     #: The logit is offered where submitting is possible (the obligations met, T5:
     #: ``PositionState.submit_possible``) and masked to -inf unless it is legal (C4:
     #: ``submit_legal``); the policy distribution is then over the moves and submit together.
-    submit_register: int = 0
     submit_head: str = "linear"
 
     # --- initialisation (section 15.2: realistic scale, never zeros) ---
@@ -398,8 +364,7 @@ class NetConfig:
     #: RMSNorm gains are 1 + N(0, init_norm_std): not the identity, so that a path that
     #: dropped or misplaced a norm's gain could not agree with one that kept it.
     init_norm_std: float = 0.1
-    #: B11's typed-edge scalars and learned register coordinates' noise (B15's table has its
-    #: own, ``disp_init_std``).
+    #: B11's typed-edge scalars (B15's table has its own, ``disp_init_std``).
     init_table_std: float = 0.1
 
     # --- B5: per-head positional specialisation (provisional; default off) ---
@@ -412,25 +377,25 @@ class NetConfig:
     #: Where B5 takes each head's rotary role from. Section 4.1 specialises heads
     #: "matching section 6's routing table", and register B5 (provisional) presupposes B10
     #: (prototype); with the routing table off, the move-graph masks of B9 sit on heads
-    #: 0..k-1 whatever the table says. COMMITTED-CLASS AMBIGUITY (B5 is class C) -
-    #: placeholder default, not a decision:
+    #: 0..k-1 whatever the table says. B5's as-built details are "v1 placeholders" (register
+    #: B5) that STAND AS V1 (M20; spec issue 16f), tested by ablation 2:
     #:   "table" - roles from ``rope_head_roles`` by head index, whatever the masks (N1's
-    #:             behaviour: with B9's default, head 1 is move-graph masked and rotates
-    #:             on file and rank only);
+    #:             behaviour, the v1's: with B9's default, head 1 is move-graph masked and
+    #:             rotates on file and rank only);
     #:   "masks" - each head's role is the role of the mask it carries: B9's move-graph
     #:             heads near-NoPE ("its structure comes from the mask"), every unmasked
     #:             head the dense B4 split.
     #: Under the routing table the two coincide (the masks are the table).
     rope_roles_source: str = "table"
     #: Allocation of the attack/defend-relations head (routing table head 4), which
-    #: section 4.1 does not mention. COMMITTED-CLASS AMBIGUITY (B5 is class C):
-    #: "dense" (the B4 split; placeholder default) or "near_nope" (like the move-graph head).
+    #: section 4.1 does not mention: "dense" (the B4 split; the v1's - B5's details stand as
+    #: v1, M20, ablation 2) or "near_nope" (like the move-graph head).
     rope_relations_head: str = "dense"
-    #: Same-square-across-boards head: rotary pairs on (timeline, time). Placeholder
-    #: default keeps B4's 4:6 ratio over 16 pairs.
+    #: Same-square-across-boards head: rotary pairs on (timeline, time). B4's 4:6 ratio over 16
+    #: pairs - B5's detail, standing as v1 (M20, ablation 2).
     rope_same_square_split: tuple[int, int] = (6, 10)
     #: Near-NoPE heads rotate every pair at a frequency giving at most this angle over its
-    #: axis's whole range. Placeholder default.
+    #: axis's whole range - B5's detail, standing as v1 (M20, ablation 2).
     rope_near_nope_max_angle: float = math.pi / 8
 
     # --- B15: the 4D displacement bias (provisional, the v1 default; section 4.1; displacement.py) ---
@@ -506,25 +471,24 @@ class NetConfig:
     # --- B9: the move-graph mask (committed; section 6) ---
     #: Heads 0..k-1 carry the hard move-graph mask, the rest are dense ("2 heads with hard
     #: move-graph masks, remainder dense"; ablation 4 runs 0 / 2 / 4).
-    #: Under ``routing_table`` the table assigns every head and this count is not used.
-    #: COMMITTED-CLASS AMBIGUITY (B9 committed "on >=2 heads"; B10 class C) - placeholder,
-    #: not a decision: section 6's table has one move-graph head (head 1) beside the
-    #: attack/defend relations head (head 4), and whether B9's ">=2" counts the relations
-    #: head or the table should carry two move-graph heads is open. The table is built as
-    #: written (``rope_head_roles`` can give it two), and ``validate`` refuses any count
-    #: but the default under the routing table, so that an ablation-4 arm cannot run with
-    #: the table's single move-graph head without saying so.
+    #: Under ``routing_table`` the table assigns every head and this count is not used:
+    #: section 6's table has one move-graph head (head 1) beside the attack/defend relations
+    #: head (head 4), and the table is built as written (``rope_head_roles`` can give it two).
+    #: STANDS AS V1 (M20, spec issue 16g; register B9: "v1 as built: ... the relations head
+    #: counts toward the two"), tested by ablation 6a with the table. ``validate`` refuses any
+    #: count but the default under the routing table, so that an ablation-4 arm cannot run
+    #: with the table's single move-graph head without saying so.
     move_graph_heads: int = 2
     #: Which way a directed edge ``(src, dst, relation)`` opens a masked head - the move
     #: graph (B9), and the relations head (B10) unless ``relations_head_direction`` says
     #: otherwise. Section 6 says "which squares reach which" and gives no direction.
-    #: COMMITTED-CLASS AMBIGUITY (B9 is class R in the register, but the direction fixes
-    #: what every masked head is trained to read) - placeholder default, not a decision:
+    #: STANDS AS V1 (M20, spec issue 16a; register B9: "v1 as built: symmetric"):
     #:   "forward"   - the query is the edge's source: a piece's square reads the squares
     #:                 it reaches;
     #:   "reverse"   - the query is the edge's destination: a square reads the squares
     #:                 whose pieces reach it ("which pieces control it", section 5.1);
-    #:   "symmetric" - both (the symmetric closure; each other arm is a restriction of it).
+    #:   "symmetric" - both (the symmetric closure; each other arm is a restriction of it) -
+    #:                 the v1's.
     move_graph_direction: str = "symmetric"
     #: What a register query does on a masked head (any head whose role is not "dense")
     #: where the head's relation does not cover it. Registers are never edge endpoints
@@ -533,9 +497,9 @@ class NetConfig:
     #: 5.2), so no relation covers them at all. (A per-board register is on its board: the
     #: same-board head's relation can cover it - ``same_board_registers``.) A query's own
     #: token is always a key, so no valid token's row is ever empty.
-    #: COMMITTED-CLASS AMBIGUITY (section 6 is silent) - placeholder default, not a decision:
+    #: STANDS AS V1 (M20, spec issue 16b; section 6 is silent):
     #:   "read" - such a register reads every valid key, as on a dense head (for global
-    #:            registers section 7.3's "reading is free, being read is not");
+    #:            registers section 7.3's "reading is free, being read is not") - the v1's;
     #:   "self" - it reads only itself (the literal hard mask for every token).
     #: Either way a square never reads a register on a masked head, except its own
     #: board's per-board registers on the same-board head (they are on its board).
@@ -543,10 +507,10 @@ class NetConfig:
     #: What a per-board register reads on the same-board head (B10). Section 6's head 2 is
     #: "Same board only", and a per-board register is on its board - "appended to each
     #: board" (section 5), it "belong[s] to [its] board's block" (section 7.3) - so that
-    #: relation covers it as a query. COMMITTED-CLASS AMBIGUITY (B10 is class C; section 6
-    #: does not mention registers) - placeholder default, not a decision:
+    #: relation covers it as a query. STANDS AS V1 (M20, spec issue 16c; section 6 does not
+    #: mention registers), tested by ablation 6a with the table:
     #:   "own_board" - it reads its own board's tokens, squares and per-board registers,
-    #:                 as the board's squares do (the literal "same board only");
+    #:                 as the board's squares do (the literal "same board only") - the v1's;
     #:   "registers" - it follows ``masked_head_registers``, as on every other masked head
     #:                 (stage N2's first build).
     same_board_registers: str = "own_board"
@@ -557,15 +521,15 @@ class NetConfig:
     #: attack/defend relations, 5-8 dense - 0-based in code).
     routing_table: bool = False
     #: The relation types whose edges open the relations head ("attack/defend relations").
-    #: COMMITTED-CLASS AMBIGUITY (B10 is class C) - placeholder default, not a decision:
-    #: every typed relation of B11 (section 6: heads 1 and 4 "receive binary masks:
-    #: connected or not", which B11's types upgrade) - five since travel-threat was folded
-    #: into attack (CHECKPOINT 6); the narrow reading is ("attack", "defence").
+    #: STANDS AS V1 (M20, spec issue 16d), tested by ablation 6a with the table: every typed
+    #: relation of B11 (section 6: heads 1 and 4 "receive binary masks: connected or not",
+    #: which B11's types upgrade) - five since travel-threat was folded into attack
+    #: (CHECKPOINT 6); the narrow reading is ("attack", "defence").
     relations_head_types: tuple[str, ...] = TYPED_RELATIONS
     #: Which way a typed edge opens the relations head: "forward", "reverse" or
-    #: "symmetric", as ``move_graph_direction`` defines them; None - the placeholder
-    #: default - takes ``move_graph_direction``'s value. COMMITTED-CLASS AMBIGUITY (B10 is
-    #: class C; section 6 gives no direction for "attack/defend relations" either).
+    #: "symmetric", as ``move_graph_direction`` defines them; None - the v1's - takes
+    #: ``move_graph_direction``'s value. STANDS AS V1 (M20, spec issue 16e; section 6 gives no
+    #: direction for "attack/defend relations" either), tested by ablation 6a with the table.
     relations_head_direction: str | None = None
 
     # --- B11: typed edge biases (provisional; default off; section 6) ---
@@ -698,7 +662,8 @@ class NetConfig:
     status_bias_init_std: float = 0.1
     #: C20 (committed): a board superseded inside the search is recomputed "under the
     #: state-defined mask - its causal past plus the conditioned history of its refresh
-    #: epoch". COMMITTED-CLASS AMBIGUITY - placeholder default, not a decision:
+    #: epoch". BOTH READINGS BUILT (C20, M20: "supersession scope -> both built, 6c decides"):
+    #: 6c decides with the cache; "causal_past" is the default arm until then:
     #:   "causal_past"            - it reads its causal past only, the past's history
     #:                              boards carrying their epoch's (refreshed) K/V - so
     #:                              with no refresh the mask is the state's block-causal
@@ -808,27 +773,10 @@ class NetConfig:
             raise ValueError(f"attn_impl must be one of {ATTN_IMPLS}")
         if self.attn_chunk < 1 or self.attn_block_boards < 1:
             raise ValueError("attn_chunk and attn_block_boards must be positive")
-        if self.board_register_spatial not in ("learned_angle", "position_free", "zero_angle"):
-            raise ValueError("board_register_spatial must be 'learned_angle', 'position_free' or 'zero_angle'")
-        if self.global_register_pairs not in ("position_free", "anchored"):
-            raise ValueError("global_register_pairs must be 'position_free' or 'anchored'")
-        if self.global_register_pairs == "anchored" and not self.rope_recenter:
-            raise ValueError(
-                "global_register_pairs='anchored' needs rope_recenter=True: without recentring the anchor is the "
-                "absolute origin, an absolute positional encoding (section 14.1)"
-            )
-        if self.aux_global_pool not in ("squares", "global_registers"):
-            raise ValueError("aux_global_pool must be 'squares' or 'global_registers'")
-        if self.policy_promotion not in ("none", "offset"):
-            raise ValueError("policy_promotion must be 'none' or 'offset'")
         if self.value_bins < 2 or self.effort_bins < 2:
             raise ValueError("categorical heads need at least two bins")
-        if self.acting_player_input not in ACTING_PLAYER_INPUTS:
-            raise ValueError(f"acting_player_input must be one of {ACTING_PLAYER_INPUTS}")
         if self.submit_head not in SUBMIT_HEADS:
             raise ValueError(f"submit_head must be one of {SUBMIT_HEADS}")
-        if self.submit_register < 0 or (self.global_regs > 0 and self.submit_register >= self.global_regs):
-            raise ValueError(f"submit_register must name a global register (0..{max(self.global_regs - 1, 0)})")
         if self.regs_per_board < 0 or self.global_regs < 0:
             raise ValueError("register counts must be non-negative")
         if self.rope_per_head or self.routing_table:

@@ -4,7 +4,7 @@ The search (engine stage E6a, PUCT over the engine's own tree) evaluates leaves 
 itself: it collects a batch of leaf positions, hands them to an evaluator, and takes back,
 for each leaf, **policy logits over that leaf's candidate moves** (spec §8.1: the pointer
 head scores generator-supplied moves only), **the submit action's logit** where the leaf
-offers a legal submission (register D8, §8.2: read from a global register) and **a 51-bin
+offers a legal submission (register D8, §8.2: read from the pooled global registers) and **a 51-bin
 value distribution** (§8.3, D3). This module is that evaluator, written against an abstract
 interface:
 
@@ -34,8 +34,8 @@ the network's ``value_bins`` (51) finite entries, bins centred on ``-1 + 2k/50``
 perspective of the acting player** (register D8: the player whose action is in progress
 until it submits - the present's colour except past the shift; the network's target
 convention, ``net/heads.py``, and the search's) - the side whose candidate moves the policy
-scores. Promotions to different pieces tie under ``policy_promotion="none"`` (literal §8.1;
-build-log spec issue 9(d)).
+scores. Promotions to different pieces get different logits: the policy adds a learned
+per-piece offset (§8.1, D1; M20).
 """
 
 from __future__ import annotations
@@ -76,7 +76,7 @@ class Evaluation:
 
     policy_logits: np.ndarray  # (M,) float32: one per candidate move, in the leaf's move order
     value_logits: np.ndarray  # (V,) float32: V = value_bins, the acting player's perspective
-    #: D8: the submit action's logit, read from a global register - finite where the leaf
+    #: D8: the submit action's logit, read from the pooled global registers - finite where the leaf
     #: offers a legal submit, NaN otherwise (not offered, or masked as illegal; NaN where it is
     #: legal stands for "none given": the search's placeholder share).
     submit_logit: float = math.nan

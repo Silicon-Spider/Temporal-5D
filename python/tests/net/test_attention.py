@@ -1,5 +1,5 @@
 """Attention core: the pair rule against a brute-force reference, the SDPA path equal to
-the explicit one in every pair-rule mode, masks and biases, and the B5/B15 wiring."""
+the explicit one under every register arm, masks and biases, and the B5/B15 wiring."""
 
 from __future__ import annotations
 
@@ -14,25 +14,30 @@ from t5d.net.attention import AttnContext, attention_explicit, attention_sdpa
 from t5d.net.rope import AXIS_FILE, AXIS_RANK, head_allocation, rope_angles, rope_cos_sin
 from t5d.net.state import TOKEN_BOARD_REGISTER, TOKEN_GLOBAL_REGISTER
 
-#: The open committed-class switches that change which pairs are rotated (NetConfig):
-#: (global_register_pairs, board_register_spatial).
+#: The pair rule is B8's as ruled (M20): global registers position-free on every pair, per-board
+#: registers on file and rank. What changes which pairs the rule leaves unrotated is which
+#: registers exist - ablation 3's arms: (per-board registers, global registers).
 PAIR_MODES = {
-    "default": ("position_free", "learned_angle"),
-    "anchored": ("anchored", "learned_angle"),
-    "regs_free": ("position_free", "position_free"),
-    "regs_free_anchored": ("anchored", "position_free"),
-    "zero_angle": ("position_free", "zero_angle"),
+    "v1": (2, 16),
+    "no_board_registers": (0, 16),
+    "no_global_registers": (2, 0),
+    "no_registers": (0, 0),
 }
 
 
 def _config(mode: str, **extra) -> NetConfig:
-    pairs, spatial = PAIR_MODES[mode]
-    return NetConfig(trunk_dtype="fp32", global_register_pairs=pairs, board_register_spatial=spatial, **extra)
+    regs, globals_ = PAIR_MODES[mode]
+    return NetConfig(trunk_dtype="fp32", regs_per_board=regs, global_regs=globals_, **extra)
 
 
-def _setup(mode="default", n_boards=(4, 2), seed=0, **extra):
+def _states(mode: str, n_boards, seed: int):
+    regs, globals_ = PAIR_MODES[mode]
+    return [synthetic_state(seed + i, n, regs_per_board=regs, global_regs=globals_) for i, n in enumerate(n_boards)]
+
+
+def _setup(mode="v1", n_boards=(4, 2), seed=0, **extra):
     model = build_model(_config(mode, **extra), seed=0)
-    batch = collate([synthetic_state(seed + i, n) for i, n in enumerate(n_boards)])
+    batch = collate(_states(mode, n_boards, seed))
     gen = torch.Generator().manual_seed(seed)
     shape = (batch.batch_size, 8, batch.n_tokens, 32)
     q, k, v = (torch.randn(*shape, generator=gen) for _ in range(3))
@@ -42,30 +47,26 @@ def _setup(mode="default", n_boards=(4, 2), seed=0, **extra):
 
 
 def _ctx(model, batch, coords, **kw) -> AttnContext:
-    cfg = model.cfg
     cos, sin = rope_cos_sin(rope_angles(coords, model.rope_axis, model.rope_freq))
-    spatial_free = batch.valid & (batch.kind == TOKEN_BOARD_REGISTER) if cfg.board_register_spatial == "position_free" else None
     return AttnContext(
         cos=cos,
         sin=sin,
         body_len=batch.body_len,
         key_valid=batch.valid,
-        global_free=cfg.global_register_pairs == "position_free",
-        spatial_free=spatial_free,
+        spatial_free=batch.valid & (batch.kind == TOKEN_BOARD_REGISTER),
         spatial_dims=model.rope_spatial,
         **kw,
     )
 
 
-def _has_axes(cfg: NetConfig, batch) -> torch.Tensor:
-    """(B, L, 4) bool: which axes each token has a coordinate on, by the config."""
+def _has_axes(batch) -> torch.Tensor:
+    """(B, L, 4) bool: which axes each token has a coordinate on (B8, M20): a global register
+    none, a per-board register timeline and time, a square all four."""
     has = torch.ones(*batch.kind.shape, 4, dtype=torch.bool)
-    if cfg.global_register_pairs == "position_free":
-        has[batch.kind == TOKEN_GLOBAL_REGISTER] = False
-    if cfg.board_register_spatial == "position_free":
-        breg = batch.kind == TOKEN_BOARD_REGISTER
-        has[..., AXIS_FILE] &= ~breg
-        has[..., AXIS_RANK] &= ~breg
+    has[batch.kind == TOKEN_GLOBAL_REGISTER] = False
+    breg = batch.kind == TOKEN_BOARD_REGISTER
+    has[..., AXIS_FILE] &= ~breg
+    has[..., AXIS_RANK] &= ~breg
     return has
 
 
@@ -98,16 +99,23 @@ def _close_on_valid(a, b, batch, atol):
 
 def _adversarial_mask(batch, gen, density=0.3):
     """A random mask with the hard rows: nothing allowed, only a global key, no global
-    key, a per-board register with nothing allowed, a global query with nothing allowed."""
+    key, a per-board register (or, without them, the next board's first square) with nothing
+    allowed, a global query (or the last token) with nothing allowed. Without global
+    registers row 7 reads key 3 alone instead."""
     big_l = batch.n_tokens
     mask = torch.rand(batch.batch_size, 8, big_l, big_l, generator=gen) < density
     mask[:, :, 5, :] = False
     mask[:, :, 7, :] = False
-    mask[:, :, 7, batch.body_len + 3] = True
+    mask[:, :, 7, _only_key(batch)] = True
     mask[:, :, 9, batch.body_len :] = False
     mask[:, :, 64, :] = False
     mask[:, :, -1, :] = False
     return mask
+
+
+def _only_key(batch) -> int:
+    """The one key ``_adversarial_mask`` leaves row 7: a global register when there are any."""
+    return batch.body_len + 3 if batch.n_tokens > batch.body_len else 3
 
 
 @pytest.mark.parametrize("mode", list(PAIR_MODES))
@@ -119,7 +127,7 @@ def test_pair_rule_matches_brute_force(mode):
     ctx = _ctx(model, batch, coords, mask=mask, bias=bias)
     _, probs = attention_explicit(q, k, v, ctx, return_probs=True)
     allowed = batch.valid[:, None, None, :] & mask
-    ref = _reference_probs(q, k, coords, _has_axes(model.cfg, batch), model.rope_axis, model.rope_freq, allowed, bias)
+    ref = _reference_probs(q, k, coords, _has_axes(batch), model.rope_axis, model.rope_freq, allowed, bias)
     assert torch.allclose(probs.double(), ref, atol=1e-5), float((probs.double() - ref).abs().max())
 
 
@@ -142,10 +150,10 @@ def test_sdpa_equals_explicit_with_mask_bias_and_empty_rows(mode):
         if "mask" in kw:
             for row in (5, 64, -1):
                 assert torch.all(a[:, :, row] == 0), f"row {row}: no allowed key gives zeros"
-            assert torch.allclose(a[:, :, 7], v[:, :, batch.body_len + 3], atol=1e-6)
+            assert torch.allclose(a[:, :, 7], v[:, :, _only_key(batch)], atol=1e-6)
 
 
-@pytest.mark.parametrize("mode", ["default", "regs_free"])
+@pytest.mark.parametrize("mode", ["v1", "no_board_registers"])
 def test_sdpa_merge_is_stable_at_large_logits(mode):
     model, batch, coords, q, k, v, _ = _setup(mode, n_boards=(3,))
     ctx = _ctx(model, batch, coords)
@@ -155,7 +163,7 @@ def test_sdpa_merge_is_stable_at_large_logits(mode):
     _close_on_valid(a, b, batch, 1e-4)
 
 
-@pytest.mark.parametrize("mode", ["default", "regs_free"])
+@pytest.mark.parametrize("mode", ["v1", "no_board_registers"])
 def test_explicit_chunking_is_exact(mode):
     model, batch, coords, q, k, v, _ = _setup(mode, n_boards=(3, 1))
     whole = attention_explicit(q, k, v, _ctx(model, batch, coords, chunk=10_000))
@@ -175,28 +183,16 @@ def test_padded_keys_receive_no_attention(mode):
         _close_on_valid(attend(q, k, v, ctx), attend(q, k, v2, ctx), batch, 1e-4)
 
 
-def test_pair_modes_change_the_function():
-    """Each switch changes what attention computes (none of them is inert)."""
-    outs = {}
-    for mode in ("default", "anchored", "regs_free", "zero_angle"):
-        model, batch, coords, q, k, v, _ = _setup(mode, n_boards=(3,))
-        outs[mode] = attention_sdpa(q, k, v, _ctx(model, batch, coords))
-    for mode in ("anchored", "regs_free", "zero_angle"):
-        assert not torch.allclose(outs[mode], outs["default"], atol=1e-3), mode
-
-
 @pytest.mark.parametrize(
     "flags",
     [
         dict(),
         dict(rope_per_head=True),
-        dict(policy_promotion="offset", board_register_spatial="zero_angle"),
-        dict(global_register_pairs="anchored"),
-        dict(board_register_spatial="position_free"),
-        dict(global_register_pairs="anchored", board_register_spatial="position_free", rope_per_head=True),
+        dict(submit_head="pointer", routing_table=True),
+        dict(masked_head_registers="self", rope_per_head=True),
         dict(displacement_bias=False, move_graph_heads=0),
     ],
-    ids=["default", "b5", "offset_zero_angle", "anchored", "regs_free", "anchored_regs_free_b5", "no_table_n1"],
+    ids=["default", "b5", "pointer_submit_routing", "regs_self_b5", "no_table_n1"],
 )
 def test_model_paths_agree(flags):
     """The whole network gives the same outputs on either attention path."""
@@ -245,7 +241,7 @@ def _kernel_with_nan_rows(q, k, v, attn_mask=None, scale=None):
 
 
 @pytest.mark.grad
-@pytest.mark.parametrize("mode", ["default", "anchored", "regs_free"])
+@pytest.mark.parametrize("mode", ["v1", "no_board_registers", "no_global_registers"])
 def test_empty_rows_do_not_rely_on_the_kernel(mode, monkeypatch):
     """The fast path never hands the kernel a fully masked row, so it stays exact and
     NaN-free on kernels that return NaN there (the dependency pins no torch version)."""
@@ -269,7 +265,7 @@ def _layer0_qkv(model, batch):
     return block.attn.qkv(block.norm_attn(model.embed(batch)))
 
 
-@pytest.mark.parametrize("mode", ["default", "regs_free_anchored"])
+@pytest.mark.parametrize("mode", ["v1", "no_board_registers"])
 def test_per_head_roles_and_the_displacement_bias_reach_attention(mode):
     """B5: every head rotates by its own role's allocation (section 6's routing table);
     B15: layer 0's displacement table, materialised by hand (test_displacement.py), is added to
@@ -280,7 +276,7 @@ def test_per_head_roles_and_the_displacement_bias_reach_attention(mode):
 
     cfg = _config(mode, rope_per_head=True, move_graph_heads=0)
     model = build_model(cfg, seed=3).eval()
-    batch = collate([synthetic_state(9, 2)])
+    batch = collate(_states(mode, (2,), 9))
     ctx = model.make_context(batch)
     assert ctx.cos.shape[1] == cfg.n_heads, "B5: one rotation table per head"
     coords = model.coordinates(batch)
@@ -289,7 +285,7 @@ def test_per_head_roles_and_the_displacement_bias_reach_attention(mode):
     probs = model.attention_probabilities(batch, layer=0)
     q, k, _ = _layer0_qkv(model, batch)
     allowed = batch.valid[:, None, None, :].expand(1, 1, batch.n_tokens, batch.n_tokens)
-    has = _has_axes(cfg, batch)
+    has = _has_axes(batch)
     for head, role in enumerate(cfg.rope_head_roles):
         alloc = head_allocation(role, cfg)
         axis = torch.tensor([[a for a, _ in alloc]])

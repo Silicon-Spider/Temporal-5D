@@ -1,14 +1,16 @@
-"""4D RoPE (B4), per-head specialisation (B5), register positions; smolgen's log buckets (re-homed from B6)."""
+"""4D RoPE (B4), per-head specialisation (B5), register positions (B8, as M20 rules them); smolgen's
+log buckets (re-homed from B6)."""
 
 from __future__ import annotations
 
+import dataclasses
 import itertools
 import math
 
 import pytest
 import torch
 
-from t5d.net import NetConfig, build_model, collate, synthetic_state, translate
+from t5d.net import NetConfig, build_model, collate, synthetic_state
 from t5d.net.attention import AttnContext, attention_explicit, attention_sdpa
 from t5d.net.buckets import log_bucket, n_log_buckets, n_signed_log_buckets, signed_log_bucket
 from t5d.net.rope import (
@@ -22,7 +24,7 @@ from t5d.net.rope import (
     rope_cos_sin,
     rope_tables,
 )
-from t5d.net.state import TOKEN_BOARD_REGISTER, TOKEN_GLOBAL_REGISTER
+from t5d.net.state import TOKEN_BOARD_REGISTER, TOKEN_GLOBAL_REGISTER, TOKEN_SQUARE
 
 
 def test_frequency_ladders():
@@ -94,16 +96,15 @@ def test_rotation_is_relative():
 
 
 def _context(batch, model, coords):
-    cfg = model.cfg
+    """The attention context as the model builds it (B8): per-board registers without file and
+    rank, global registers - the tokens ``[body_len, L)`` - without any axis."""
     cos, sin = rope_cos_sin(rope_angles(coords, model.rope_axis, model.rope_freq))
-    spatial_free = batch.valid & (batch.kind == TOKEN_BOARD_REGISTER) if cfg.board_register_spatial == "position_free" else None
     return AttnContext(
         cos=cos,
         sin=sin,
         body_len=batch.body_len,
         key_valid=batch.valid,
-        global_free=cfg.global_register_pairs == "position_free",
-        spatial_free=spatial_free,
+        spatial_free=batch.valid & (batch.kind == TOKEN_BOARD_REGISTER),
         spatial_dims=model.rope_spatial,
     )
 
@@ -115,9 +116,9 @@ def _qkv(batch, seed):
 
 @pytest.mark.parametrize("impl", ["sdpa", "explicit"])
 def test_global_registers_are_position_free(impl):
-    """Under the default ``global_register_pairs="position_free"`` pairs with a global
-    register use unrotated Q and K on both sides: whatever angle a global register is
-    given, and wherever the boards sit, its attention is unchanged."""
+    """B8 (M20: "global registers position-free"): pairs with a global register use unrotated Q
+    and K on both sides - whatever angle a global register is given, and wherever the boards sit,
+    its attention is unchanged."""
     model = build_model(NetConfig(trunk_dtype="fp32"), seed=0)
     batch = collate([synthetic_state(0, 6)])
     q, k, v = _qkv(batch, 1)
@@ -135,92 +136,62 @@ def test_global_registers_are_position_free(impl):
     assert torch.allclose(base[:, :, g], attend(q, k, v, _context(batch, model, shifted))[:, :, g], atol=1e-4)
 
 
-def test_anchored_global_registers_need_recentring():
-    """A global register unrotated on its own side sits at coordinate 0 of the frame the
-    board tokens are rotated in. With recentred coordinates that is the anchor (a1, p_ref,
-    h_present), which moves with the position, so translating the position changes
-    nothing. With raw coordinates it would be the absolute origin - an absolute positional
-    encoding (section 14.1) - so the config refuses that combination."""
-    with pytest.raises(ValueError, match="rope_recenter"):
-        NetConfig(global_register_pairs="anchored", rope_recenter=False).validate()
-    model = build_model(NetConfig(trunk_dtype="fp32", global_register_pairs="anchored"), seed=0).eval()
-    state = synthetic_state(5, 8)
-    moved = translate(state, dp=4, dh=12)
-    a, b = model(collate([state])), model(collate([moved]))
-    assert torch.equal(a.value_logits, b.value_logits) and torch.equal(a.wdl_logits, b.wdl_logits)
-    # The refused combination: the same attention in the raw frame leaks the translation
-    # into the global registers' rows.
-    batch, batch_moved = collate([state]), collate([moved])
-    q, k, v = _qkv(batch, 3)
-
-    def raw_frame(bt):
-        coords = bt.coords.float().clone()
-        coords[bt.kind == TOKEN_GLOBAL_REGISTER] = 0.0  # the absolute origin
-        return attention_explicit(q, k, v, _context(bt, model, coords))
-
-    g = slice(batch.body_len, None)
-    assert not torch.allclose(raw_frame(batch)[:, :, g], raw_frame(batch_moved)[:, :, g], atol=1e-3)
-
-
-@pytest.mark.parametrize("impl", ["sdpa", "explicit"])
-def test_anchored_global_registers_see_board_positions(impl):
-    """Under ``"anchored"`` a global register's attention depends on where the boards sit
-    relative to the anchor (unlike ``"position_free"``)."""
-    model = build_model(NetConfig(trunk_dtype="fp32", global_register_pairs="anchored"), seed=0)
-    batch = collate([synthetic_state(0, 6)])
-    q, k, v = _qkv(batch, 1)
-    attend = attention_sdpa if impl == "sdpa" else attention_explicit
-    coords = model.coordinates(batch)
-    assert torch.all(coords[batch.kind == TOKEN_GLOBAL_REGISTER] == 0), "the anchor: recentred coordinate 0"
-    shifted = coords.clone()
-    shifted[0, : batch.body_len, 3] += 7
-    g = slice(batch.body_len, None)
-    base = attend(q, k, v, _context(batch, model, coords))
-    assert not torch.allclose(base[:, :, g], attend(q, k, v, _context(batch, model, shifted))[:, :, g], atol=1e-3)
-
-
-def test_register_spatial_modes():
+def test_the_registers_have_no_learned_coordinate():
+    """B8 (M20): a per-board register keeps its board's (timeline, time) and gets no (file,
+    rank) - no learned off-lattice coordinate (``learned_angle``'s 2 x 2 parameters are gone),
+    and its file/rank pairs are never rotated (below); a global register has no coordinate.
+    The registers' learned "not a square" embedding is content, not position (``embed.py``)."""
     batch = collate([synthetic_state(1, 3)])
     breg = batch.kind == TOKEN_BOARD_REGISTER
-    # Placeholder default: a learned off-lattice coordinate per register slot.
-    learned = build_model(NetConfig(trunk_dtype="fp32"), seed=0)
-    assert learned.cfg.board_register_spatial == "learned_angle"
-    c = learned.coordinates(batch)
-    slots = batch.reg_index[breg]
-    assert torch.allclose(c[breg][:, :2], learned.register_xy[slots])
+    model = build_model(NetConfig(trunk_dtype="fp32"), seed=0)
+    assert not any("register_xy" in name for name, _ in model.named_parameters())
+    c = model.coordinates(batch)
     assert torch.all(c[breg][:, 2] == batch.coords[breg][:, 2] - batch.coord_ref[0, 0]), "the board's timeline"
     assert torch.all(c[breg][:, 3] == batch.coords[breg][:, 3] - batch.coord_ref[0, 1]), "the board's time"
-    # Off-lattice at initialisation: never exactly on a square's coordinate.
-    assert torch.all((learned.register_xy - learned.register_xy.round()).abs() > 0.05)
-    # zero_angle: the register rotates exactly as square a1 of its board does - the
-    # collision with the movement geometry section 5.3 warns of (kept as an ablation arm).
-    zero = build_model(NetConfig(trunk_dtype="fp32", board_register_spatial="zero_angle"), seed=0)
-    cos, sin = rope_cos_sin(rope_angles(zero.coordinates(batch), zero.rope_axis, zero.rope_freq))
-    reg, a1 = batch.body_len - 66 + 64, batch.body_len - 66  # board 2's first register, board 2's a1
-    assert torch.equal(cos[0, :, reg], cos[0, :, a1]) and torch.equal(sin[0, :, reg], sin[0, :, a1])
+    assert torch.all(c[batch.kind == TOKEN_GLOBAL_REGISTER] == 0), "never read: every pair with a global register is unrotated"
 
 
 @pytest.mark.parametrize("impl", ["sdpa", "explicit"])
 def test_position_free_registers_have_no_file_or_rank(impl):
-    """``board_register_spatial="position_free"``: a register's whole attention row is
-    blind to every token's file and rank (its pairs use unrotated file/rank dims), yet
-    sees timeline and time. Under ``learned_angle`` the same row is not blind."""
+    """B8 (M20: "per-board registers position-free on file and rank"): a register's whole
+    attention row is blind to every token's file and rank (its pairs use unrotated file/rank
+    dims), yet sees timeline and time; a square's row, with the same keys, is not blind."""
     batch = collate([synthetic_state(2, 4)])
     q, k, v = _qkv(batch, 4)
     attend = attention_sdpa if impl == "sdpa" else attention_explicit
     gen = torch.Generator().manual_seed(5)
     regs = (batch.kind == TOKEN_BOARD_REGISTER)[0]
-    for spatial, blind in (("position_free", True), ("learned_angle", False)):
-        model = build_model(NetConfig(trunk_dtype="fp32", board_register_spatial=spatial), seed=0)
-        coords = model.coordinates(batch)
-        base = attend(q, k, v, _context(batch, model, coords))[:, :, regs]
-        moved_xy = coords.clone()
-        moved_xy[..., :2] = torch.randint(0, 8, moved_xy[..., :2].shape, generator=gen).float()
-        out_xy = attend(q, k, v, _context(batch, model, moved_xy))[:, :, regs]
-        assert torch.allclose(base, out_xy, atol=1e-5) == blind, spatial
-        moved_t = coords.clone()
-        moved_t[0, :66, 3] += 5  # board 0 moves in time: the registers see it
-        assert not torch.allclose(base, attend(q, k, v, _context(batch, model, moved_t))[:, :, regs], atol=1e-3)
+    model = build_model(NetConfig(trunk_dtype="fp32"), seed=0)
+    coords = model.coordinates(batch)
+    base = attend(q, k, v, _context(batch, model, coords))
+    moved_xy = coords.clone()
+    moved_xy[..., :2] = torch.randint(0, 8, moved_xy[..., :2].shape, generator=gen).float()
+    out_xy = attend(q, k, v, _context(batch, model, moved_xy))
+    assert torch.allclose(base[:, :, regs], out_xy[:, :, regs], atol=1e-5), "registers: blind to file and rank"
+    squares = (batch.kind == TOKEN_SQUARE)[0]
+    assert not torch.allclose(base[:, :, squares], out_xy[:, :, squares], atol=1e-3), "squares: not blind"
+    moved_t = coords.clone()
+    moved_t[0, :66, 3] += 5  # board 0 moves in time: the registers see it
+    assert not torch.allclose(base[:, :, regs], attend(q, k, v, _context(batch, model, moved_t))[:, :, regs], atol=1e-3)
+
+
+def test_a_registers_scores_ignore_the_squares_positions_in_the_network():
+    """B8 in the whole network, RoPE and B15's displacement bias together (section 5.3; B15 enters
+    a register's pairs by board-distance class alone): layer 0's attention of every per-board
+    register is unchanged when every square's (file, rank) is scrambled, while the squares'
+    attention changes."""
+    model = build_model(NetConfig(trunk_dtype="fp32", n_layers=1), seed=6).eval()
+    batch = collate([synthetic_state(6, 5, n_timelines=2)])
+    scrambled = batch.coords.clone()
+    sq = batch.kind == TOKEN_SQUARE
+    perm = torch.randperm(int(sq.sum()), generator=torch.Generator().manual_seed(6))
+    scrambled[..., :2][sq] = batch.coords[..., :2][sq][perm]
+    other = dataclasses.replace(batch, coords=scrambled)
+    a = model.attention_probabilities(batch, layer=0)
+    b = model.attention_probabilities(other, layer=0)
+    regs = batch.kind[0] == TOKEN_BOARD_REGISTER
+    assert torch.allclose(a[:, :, regs], b[:, :, regs], atol=1e-6), "a per-board register reads no square's file or rank"
+    assert not torch.allclose(a[:, :, sq[0]], b[:, :, sq[0]], atol=1e-3), "a square does"
 
 
 def test_log_buckets_clamp():

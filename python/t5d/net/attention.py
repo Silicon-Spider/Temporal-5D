@@ -13,14 +13,12 @@ token with no coordinate on an axis cannot be rotated on it under a relative enc
 fixed angle on one side is itself a position, ``rope.py``), so every pair that involves
 such a token uses that axis's *unrotated* Q/K dims on both sides. The pair rule, for
 query ``i`` and key ``j``: an axis is rotated iff both tokens have it. Two token classes
-can lack axes, each by an open committed-class switch (``NetConfig``):
+lack axes (B8 and section 5.3, ruled at CHECKPOINT 6 - M20):
 
-* global registers under ``global_register_pairs="position_free"`` (the placeholder
-  default) lack all four axes, so their pairs use unrotated Q and K; under
-  ``"anchored"`` they are ordinary tokens at coordinate 0 (``global_free=False``);
-* per-board registers under ``board_register_spatial="position_free"`` lack file and
-  rank, so their pairs use unrotated file/rank dims and rotated timeline/time dims
-  (``spatial_free``).
+* global registers (the tokens ``[body_len, L)``) lack all four axes, so their pairs use
+  unrotated Q and K;
+* per-board registers lack file and rank, so their pairs use unrotated file/rank dims and
+  rotated timeline/time dims (``spatial_free``).
 
 **Masks and biases.** ``key_valid`` (padding) always; ``mask`` (bool, broadcastable to
 ``(B, H, L, L)``, True = may attend) and ``bias`` (float, same shape) optionally, from the
@@ -91,13 +89,14 @@ path does not compute it the reference's way):
   biases it is one kernel call; with them it materialises ``(B, H, L, L)`` rows - small
   inputs only.
 
-  Cost of one attention call over one plain kernel call (``"anchored"`` with learned or
-  zero-angle registers, which *is* one plain call), FP32 / BF16, on the development CPU
-  (single position, median of 5-9 calls, PyTorch 2.13; indicative timings, not section
-  15.3 measurements): the global merge (the default) +28% / +7% at 60 boards and
-  +15% / +8% at 240; position-free per-board registers +36% / +14% at 60 and
-  +37% / +15% at 240 when anchored, +59% / +26% and +55% / +20% with the merge. The
-  widened features (width 44 instead of 32 for the default allocation) are most of it.
+  Cost of one attention call over one plain kernel call (every pair rotated, as the arms
+  M20 removed - anchored global registers with learned- or zero-angle per-board registers -
+  computed it), FP32 / BF16, on the development CPU (single position, median of 5-9 calls,
+  PyTorch 2.13; indicative timings, not section 15.3 measurements): the global merge alone
+  +28% / +7% at 60 boards and +15% / +8% at 240; position-free per-board registers alone
+  +36% / +14% at 60 and +37% / +15% at 240; both - the pair rule as ruled (B8), now the
+  only one - +59% / +26% and +55% / +20%. The widened features (width 44 instead of 32 for
+  the default allocation) are most of it.
 * ``"explicit"``: materialised scores, chunked over queries (``chunk`` rows), each
   chunk's mask and bias rows built for it alone.
 * ``"dense"``: every mask and bias materialised at ``(B, H, L, L)`` first
@@ -163,10 +162,9 @@ class AttnContext:
     compute_dtype: torch.dtype = torch.float32
     impl: str = "sdpa"
     chunk: int = 1024
-    #: Global registers lack every axis: each pair with one is unrotated on both sides.
-    #: False: they are ordinary rotated tokens (``global_register_pairs="anchored"``).
-    global_free: bool = True
-    #: (B, L) bool: tokens that lack file and rank (None: no such token).
+    #: (B, L) bool: tokens that lack file and rank - the per-board registers (B8; None: no
+    #: such token). The global registers, ``[body_len, L)``, lack every axis: each pair with
+    #: one is unrotated on both sides.
     spatial_free: torch.Tensor | None = None
     #: (Hr, d_head) bool: the dims of each head's file/rank pairs; needed with spatial_free.
     spatial_dims: torch.Tensor | None = None
@@ -394,7 +392,7 @@ def attention_explicit(
     sf = _spatial_free(ctx)
     if sf is not None:
         qt, kt = _time_rotated(ctx, q, k, qr, kr)
-    global_free = ctx.global_free and lb < length
+    global_free = lb < length
     outs, probs_all = [], []
     step = max(1, ctx.chunk)
     for start in range(0, length, step):
@@ -678,7 +676,7 @@ class _FastPath:
         self.qr = apply_rope(q, ctx.cos, ctx.sin)
         kr = apply_rope(k, ctx.cos, ctx.sin)
         self.sf = sf = _spatial_free(ctx)
-        self.kl = kl = ctx.body_len if ctx.global_free else length
+        self.kl = kl = ctx.body_len  # the kernel keys; the position-free global registers are merged
         self.kern, self.rest = slice(0, kl), slice(kl, length)
         merged = kl < length
         k_feat = kr[:, :, self.kern] if sf is None else _widened_k(ctx, sf[:, self.kern], k[:, :, self.kern], kr[:, :, self.kern])
