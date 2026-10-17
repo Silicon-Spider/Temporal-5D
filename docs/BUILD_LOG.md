@@ -489,15 +489,26 @@ and `git push --dry-run origin HEAD` succeeded. The remote is private.
 **The gate with the engine configured (2026-10-17,** branch `lane/gate`; the work
 lost with the old machine, 61e9aa8, redone under H47). `oracles/gate.toml`'s
 `[engine] command` is `["./build/engine/t5d-gate"]`, full mode: the adapter as
-`engine/build.py` builds it, relative to the repository root, no diagnostic option.
-(On Windows Python finds a relative program from the harness's own working
-directory, not from the directory it runs the command in: run the harness from the
-repository root, as every documented command does - from anywhere else the spawn
-fails. On Linux, CI's platform, it is found from the root either way.) The engine
-is main's (unchanged since 3b33942). Compared with every recorded oracle answer by
+`engine/build.py` builds it, relative to the repository root, no diagnostic option;
+build it before a gate run and after any engine change - the gate runs whatever
+build is there (`oracles/README.md`'s and `CONTRIBUTING.md`'s command lists say so;
+`AGENTS.md`'s and `CLAUDE.md`'s, the agents' instructions, are the user's to change,
+and do not yet). The harness takes a relative
+program from the repository root on every platform (`gate.engine_argv`, a review
+fix): Windows had looked for it from the directory the harness was started in, so
+a lane's harness started from the main checkout ran main's build, and the
+engine-in-harness check looked at another file than the one that ran. A run's
+report names the file it ran and its SHA-256 (`engine_run`). The engine has its own
+time limit, `[engine] timeout_s = 300` per record (the tier's own `timeout_s` where
+longer; a review fix): CI's first commit-tier run with the engine (below) took
+44.4 s on cwmtt/many2 on a runner that ran the calibration probe at 0.75x, the
+runners range from 0.59x to 1.09x (eleven commit-tier runs, 2026-10-17), and the
+commit tier's 60 s, which the engine had shared with the oracles, would not cover
+the slower ones. It changes no oracle budget or required set. The engine is
+main's (unchanged since 3b33942). Compared with every recorded oracle answer by
 the harness's own comparison (a scratch script, not kept: `observations.compare` of
-the engine's report on each record with all six golden files - what the release
-tier would compare), it disagrees at 169 places: the 56 entries of 2026-10-02 all
+the engine's report on each record with all six golden files - what a release run
+would compare on the recording machine, see "Runs" below), it disagrees at 169 places: the 56 entries of 2026-10-02 all
 match (KD-0040 to KD-0043 too, now that R8 reads notation/1.2 to its end), and 113
 are new - the lost branch's count: 72 ftxi and 38 ftxi:naive check verdicts at 72
 positions (`in_check: engine=False vs ftxi=True`), and cwmtt/futures action 17
@@ -540,7 +551,15 @@ entries found 106 of them (its 120 s ftxi:naive budget stops short of niceAndrey
   notation parser play it. KD-0167 to KD-0169 cite the specification's "Jumps"
   syntax ("`x` if a piece is being taken"); what a reader does with an `x` that
   disagrees, the specification does not say (spec issue 125). Standard - Turn Zero
-  stays ungated: the engine cannot read the record to its end.
+  stays ungated: the engine cannot read the record to its end. **The three entries
+  are provisional** (a review finding): they follow the engine reader's strict
+  reading, not a settled text, and stay only on the user's ruling on issue 125 -
+  marked so in their notes and in the file's header, which says how they go if the
+  ruling is the other way. Without them the commit tier fails on the notation
+  parser's playing action 17 (checked on cwmtt/futures alone: `[divergence]
+  cwmtt/futures action 17: legality: engine=rejected:unreadable vs notation=accepted
+  (soft: may be notation, not rules)`), and nightly on cwmtt's, Chess in 5D's and
+  the notation parser's.
 - **Runs** (this machine shared with other lanes: the timings are not measurements).
   `py engine/build.py --werror` (MSYS2 g++ 16.2.0) clean. `verify` ok - its 17
   `proof-channel-vacuous` notes are H48's. `selftest`: 633 tests, OK, 1 skipped.
@@ -557,9 +576,32 @@ entries found 106 of them (its 120 s ftxi:naive budget stops short of niceAndrey
   set-up), Misc - Small (no oracle follows notation/game), the Focused variants and
   Timeline Battleground (no oracle gives a check verdict there), Timeline Invasion
   and Marauders (the engine does not set them up). The release tier was not run: its
-  oracle layer fails on H48's notes until the re-recording, and the comparison with
-  every recorded value (above) covers what it would compare of the engine. The proof
-  channel stays disabled. CI on the branch waits on `gh auth login` (the user).
+  oracle layer fails on H48's notes until the re-recording. The comparison with
+  every recorded value (above) covers what a release run would compare of the engine
+  on the recording machine or a slower one - not on a faster one, which a CI runner
+  can be (0.59x): there ftxi:naive's 300 s may reach past its recorded horizons
+  (100_timelines 19, exiledKings 18, many2 16, niceAndrey 101, wide 11), where ftxi
+  says check at R1 positions the engine answers False (100_timelines 20, exiledKings
+  18, many2 19-60, niceAndrey 101-118, wide 12-46), and no entry can record those
+  until H48's re-recording puts them in the golden file (`divergence-golden`). The
+  proof channel stays disabled. After the review fixes (the same machine, as loaded):
+  `py engine/build.py --werror` clean; `verify` ok (H48's 17 notes); `selftest` 638
+  tests OK, 1 skipped; `gate --tier commit` ok - oracle layer ok (ftxi 8256 of 8256,
+  notation 3012 of 3012), `engine differential: SMOKE TEST - PASSED`, the NOT gated
+  reasons as before, calibration 1.33x; its log names the build it ran (the
+  worktree's `t5d-gate.exe`, SHA-256 71a9d6a9...), and a one-record run started in
+  another directory ran the same build (before the fix, Windows would have found
+  none there); `gate --tier nightly` ok - every source's required set reproduced,
+  `engine differential: PASSED`, gated Standard - Half Reflected and Standard -
+  Reversed Royalty (2 and 3 oracles), calibration 1.20x. The engine's slowest
+  records under the new limit: many2 28.7 s (commit) and 25.5 s (nightly).
+- **CI.** The commit workflow ran on the branch at 3a46da9 with the engine compared
+  (run 39009070712, ubuntu-24.04, success): selftest 633 tests OK (16 skipped), the
+  engine built, `engine differential: SMOKE TEST - PASSED`, calibration 0.75x;
+  cwmtt/many2 took the engine 44.4 s and niceAndrey 31.6 s. The nightly workflow has
+  not yet run with the engine: before the merge, dispatch it on the branch (`gh
+  workflow run oracle-nightly.yml -f tier=nightly --ref lane/gate`) and record its
+  result here.
 
 **The engine's first gate runs (2026-10-02,** engine at 0a44cbf / 4ed2e92;
 reports in `oracles/.cache/reports/triage-2026-10-02/`, regenerable). With
@@ -936,14 +978,14 @@ for game records.
 | H18 | built, tested | 5D Zobrist: coordinate-free content hash per board, multiply-rotate with (timeline, half-turn), addition across boards, ruleset ID, player to move, parity, creators, board size; incremental equals from-scratch; duplicated boards never cancel (engine E1, E2) |
 | H19 | built, tested | Proofs export to the solved store at once; the TT holds estimates only |
 | H22 | built, tested | All five items of §11.0 (E1, E2, E4); the register row's wording predates H36/H40 (proposed spec edit 40) |
-| H23 | built, tested | The gate, oracle and engine sides. The engine is configured in `gate.toml` (`./build/engine/t5d-gate`, full mode, 2026-10-17) and compared in every tier: commit, a smoke test (H47), PASSED; nightly PASSED, gating Standard - Half Reflected and Standard - Reversed Royalty (step 2). The release tier, the one that can enable the proof channel, is not yet run with it: its oracle layer fails on H48's 17 notes until the re-recording. The proof channel stays disabled (H23, H41) |
+| H23 | built, tested | The gate, oracle and engine sides. The engine is configured in `gate.toml` (`./build/engine/t5d-gate`, full mode, 2026-10-17; the root's build on every platform, with a time limit of its own, `[engine] timeout_s`) and compared in every tier: commit, a smoke test (H47), PASSED, locally and in CI (run 39009070712); nightly PASSED locally, gating Standard - Half Reflected and Standard - Reversed Royalty - not yet run in CI with the engine (step 2). The release tier, the one that can enable the proof channel, is not yet run with it: its oracle layer fails on H48's 17 notes until the re-recording. The proof channel stays disabled (H23, H41) |
 | H24, H26, H28 | built, tested | The generator and the 5dpgn/5DFEN parser are in-house (`engine/`), written from `docs/rules/README.md` and the notation spec's text; 259 engine tests; boundary clean |
 | H27 | built, tested | The oracle harness, committed 2026-10-01 |
 | H30 | built, tested | Step 2A (a04678c): every oracle reports its boards per ply; no placement divergence across the corpus |
 | H31 | done | CHECKPOINT 1: seven clusters triaged (903f4ae), settled by the user's rulings (H36-H40). Re-run 2026-10-17 with the engine configured: the 110 new check findings (72 positions) filed by cluster and settled by R1 (and R2 at five positions); the 58 positions of CHECKPOINT 1's table re-derive exactly, cwmtt/many2's 14 file as CHK-A1 (step 2) |
 | H32 | built, tested | Required sets at 100%, two recordings, cost files, calibration (2B) |
 | H33 | built, tested | MANIFEST, verified snapshot, harness-modified check, CODEOWNERS (2B) |
-| H34 | built, tested | Telltales by the comparison's rule (2B); 169 entries: 56 of 2026-10-02 (the two oracle defects among them, R7) and 113 of 2026-10-17 (110 R1, 3 notation) - every disagreement of the engine's with a recorded oracle answer is one, and every entry matches one; no telltale |
+| H34 | built, tested | Telltales by the comparison's rule (2B); 169 entries: 56 of 2026-10-02 (the two oracle defects among them, R7) and 113 of 2026-10-17 (110 R1, 3 notation - the 3 provisional, pending spec issue 125) - every disagreement of the engine's with a recorded oracle answer is one, and every entry matches one; no telltale |
 | H35 | done | Commit and nightly tiers green on Linux, 2026-10-01 (runs 36827435595, 36827459456) |
 | H36 | built, tested | Engine E4: check status and submission legality per R1; compared with the oracles by the gate since 2026-10-17: every check disagreement is at a position where the oracle's every capture starts on a board R1 does not pass (CHECKPOINT 1's RQ1-RQ4), each on record with R1's citation; no engine defect |
 | H37 | built, tested | Engine E4: verdicts only from exhaustive searches; node, time and memory budgets answer "unknown" (tested for every budget below the need) |
@@ -1566,21 +1608,12 @@ decision), and what is parked.
     may be 1 - the harness's own tests meet the conditions with ftxi alone, canned
     and live. Whatever kept the commit tier from gating with the engine configured
     (Q-A, 2026-10-04: the branch is lost, its run not re-checked here), it was not
-    a two-oracle rule. Measured 2026-10-17 with the engine configured: in the commit
-    tier no ruleset meets the gating conditions with ftxi alone - the engine cannot
-    read a record of Standard, of Turn Zero, of Very Small - Open (two) or the custom
-    positions' (known divergences cite the notation for each), ftxi follows no record
-    of Half Reflected, the Focused variants, Misc - Small or Timeline Battleground,
-    the engine does not set up Timeline Invasion or Marauders, and Reversed Royalty
-    has a check verdict at 85 of its 122 positions (ftxi's at the other 37 are on
-    record as wrong); nightly gates Standard - Half Reflected and Standard - Reversed
-    Royalty, with at least 2 and 3 oracles behind each record. Built: H47 keyed to
-    `Tier.full_strength` (the tier runs every oracle search over the whole corpus),
-    never to a count of oracles; in any other tier a ruleset that met the gating
-    conditions with its oracles alone is reported as not gated, with that reason
-    (`gate.SMOKE_REASON`). No two-oracle requirement was added: in nightly and release
-    it would leave ungated any variant only one oracle reads (none of the two nightly
-    gates today) - a decision for the user. Put to the user: should a
+    a two-oracle rule. Built: H47 keyed to `Tier.full_strength` (the tier runs
+    every oracle search over the whole corpus), never to a count of oracles; in any
+    other tier a ruleset that met the gating conditions with its oracles alone is
+    reported as not gated, with that reason (`gate.SMOKE_REASON`). No two-oracle
+    requirement was added: it would also change what nightly and release gate (the
+    variants one oracle reads) - a decision for the user. Put to the user: should a
     ruleset be gated only when two oracles stand behind it, in every tier? Until it
     is ruled, proposed edit 98 gives both texts.
 123. **H47 is silent on an engine compared with nothing in a smoke test.** As
@@ -1621,7 +1654,24 @@ decision), and what is parked.
     ftxi's refusal would become a soft divergence whose entry would have to cite the
     text as valid notation, which the syntax does not support, and Standard - Turn
     Zero, whose record the engine would then read to its end, might gate. Built: the
-    strict reading. Put to the user; nothing is parked on it.
+    strict reading. Read the same way in the other direction - `x` if and only if a
+    piece is taken - it would make the engine refuse ten records it now reads, each
+    at a capture written without `x` (`t5d-gate --parse-only --pgn
+    require_capture_marks=true`, 2026-10-17): cwmtt/100_timelines at action 12,
+    ctp2 2, exiledKings 8, many2 7, manyChecks 7, niceAndrey 23,
+    tesseractMageOChicken 25, ftxi/verysmall 1 (refused at 3 already),
+    notation/aivsai 13 and notation/game-2 34; 89 of the 110 R1 entries of
+    2026-10-17, and 20 earlier ones, sit past those points. So the engine's reading
+    is lenient one way and strict the other, and the three entries are marked
+    provisional - in their notes and in the file's header, which says how they go if
+    the ruling is the other way: withdrawn with the reader's change, on the ruling's
+    authority, not as telltales (a review finding). **Put to the user, and wanted
+    before lane/gate is merged**: the gate's green rests on these three entries.
+    Without them the commit tier fails on action 17 against the notation parser,
+    and nightly against cwmtt, Chess in 5D and the notation parser; if the question
+    is still open at the merge, the review's recommendation is to leave them out
+    (`AGENTS.md`: no entry that cannot be justified may make the gate pass), and the
+    gate is then red on that action alone. Nothing else is parked on it.
 126. **"(and reported upstream)"** (§11.0, "A known-divergences file": "if the
     oracle is wrong, the divergence is recorded with its rulebook citation (and
     reported upstream)"; register H31, H34). None of the 169 entries is reported
@@ -1634,6 +1684,34 @@ decision), and what is parked.
     the check test upstream - one report would answer all 147 entries - or read
     §11.0's clause as applying to defects (proposed edit 99)? Nothing is parked on
     it.
+127. **Issue 122 and proposed edit 98 (b), measured** (2026-10-17, the engine
+    configured; step 2). Both are as put to the user; this is the measurement edit
+    98 (b) waits on. In the commit tier no ruleset meets the gating conditions with
+    ftxi alone: the engine cannot read a record of Standard (ftxi/softmate), of Turn
+    Zero (cwmtt/futures), of Very Small - Open (cwmtt/ctp1, ftxi/verysmall) or the
+    custom positions' (ftxi/niceAndrey's set-up) - the known divergences cite the
+    notation for each; ftxi follows no record of Half Reflected, the Focused
+    variants, Misc - Small or Timeline Battleground; the engine does not set up
+    Timeline Invasion or Marauders; and Reversed Royalty has a check verdict at 85
+    of its 122 positions (ftxi's at the other 37 are on record as wrong). Nightly
+    gates Standard - Half Reflected and Standard - Reversed Royalty, with at least 2
+    and 3 oracles behind each record: at this corpus a two-oracle rule (edit 98 (b))
+    would leave no ruleset ungated that nightly now gates. Nothing is parked on it.
+128. **The engine's time limit in the gate** (§11.0 "Tiered CI" and "Stable answers
+    only", register H32: the tiers' budgets are the oracles'; nothing says how long
+    the engine may take on a record). It had the tier's `timeout_s` - in the commit
+    tier 60 s - and CI's first commit run with the engine (run 39009070712) took
+    44.4 s on cwmtt/many2 on a runner that ran the calibration probe at 0.75x, the
+    runners ranging from 0.59x to 1.09x. Built (a review fix): `[engine] timeout_s`,
+    300 s a record in every tier, or the tier's own `timeout_s` where that is longer
+    (release, 600 s), so no tier gives the engine less time than before; a record
+    not finished by then fails the engine, as before. It touches no oracle budget,
+    required set or golden file. Also: §11.0 says "a calibration probe scales
+    budgets to slower runners" - as built the probe scales nothing: it says how much
+    slower than the recording machine a runner is, so that a value a slow runner
+    fails to reach can be told from a regression (proposed edit 100). Put to the
+    user: the value, and whether the engine's limit should be per tier. Nothing is
+    parked on it.
 
 ## Proposed spec edits
 
@@ -1943,8 +2021,7 @@ says now, what it should say, why.
     commit tier, with one rules oracle, could gate nothing anyway. It changes what
     nightly and release gate: a ruleset with a record that only one oracle follows
     as far as the engine goes is gated in no tier, and the proof channel can never
-    be enabled for it - at the corpus of 2026-10-17, none of the two nightly gates
-    (Half Reflected and Reversed Royalty have 2 and 3 oracles behind each record).
+    be enabled for it - which rulesets, measured once the engine is configured.
     Why: §11.0 and H47 give a two-oracle rule as the reason the commit tier gates
     nothing; the gate has none, and whether to add one is the user's decision.
 99. **§11.0 "A known-divergences file" - pending the user's ruling on issue 126.**
@@ -1957,6 +2034,16 @@ says now, what it should say, why.
     unreported, with the reason". (b) **If it is reported**: no edit; the entries'
     `upstream` fields name the report once it is filed. Why: 147 entries say
     "unreported", and the spec's clause reads as though every entry is reported.
+100. **§11.0 "Stable answers only"** (issue 128). It says: "each tier requires the
+    stable values, recorded at least twice, whose recorded cost times a margin fits
+    its budget, and a calibration probe scales budgets to slower runners." It should
+    say: "... fits its budget; a calibration probe says how much slower than the
+    recording machine a runner is, so that a value a slow runner fails to reach can
+    be told from a regression - it scales no budget. The engine has a time limit of
+    its own per record, never shorter than the tier's: the tiers' budgets are the
+    oracles', and the gate compares the engine's answers, not its speed." Register
+    H32 does not name the probe: no edit. Why: as built no budget is scaled, and the
+    engine's limit is not a tier budget (issue 128).
 
 ## Session log
 

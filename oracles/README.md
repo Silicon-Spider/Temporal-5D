@@ -106,8 +106,15 @@ python oracles/harness.py doctor             # what is installed, what is built
 python oracles/harness.py build --bootstrap  # build the oracles
 python oracles/harness.py verify             # static checks
 python oracles/harness.py selftest           # the harness's own tests
+python engine/build.py                       # build the engine, whose adapter the gate runs
 python oracles/harness.py gate --tier commit # the per-commit gate
 ```
+
+The gate compares the engine's adapter as it finds it, `build/engine/t5d-gate`
+(`gate.toml`, `[engine] command`): build it before a gate run, and again after any
+change to the engine (`engine/README.md` says what that needs) - a gate run
+compares whatever build is there, and its report names the file and its SHA-256
+(`engine_run`). Unbuilt, every record fails with `engine-failed`.
 
 The harness needs Python 3.12+ and git. Building the oracles needs:
 
@@ -414,7 +421,10 @@ files.
 
 A golden value is a statement *by that oracle*, not a statement of truth. At every
 entry in `DISAGREEMENTS.md` at least one oracle is wrong or reads the rules
-differently, and none has been adjudicated.
+differently. The rulebook has settled the check disagreements (R1) and two oracle
+defects (R7), and where the engine meets one of them `known-divergences.toml`
+records the losing oracle's answer, with its citation; the other entries are
+listed, not adjudicated.
 
 ```
 python oracles/harness.py golden --write --repeat 2   # run every oracle over the corpus twice, and record it
@@ -731,10 +741,11 @@ The gate reaches the engine across a process boundary and nowhere else. Set
 never inside `oracles/`, where it would sit beside every answer the oracles have
 given (`verify` refuses such a command) - that:
 
-- is run from the repository root with `--cap N` appended (a relative command is
-  found from there on Linux and macOS; Windows finds a relative program from the
-  directory the harness itself was started in, so run the harness from the
-  repository root, as every command in this manual does);
+- is run from the repository root with `--cap N` appended - a program named by a
+  relative path is the root's on every platform, wherever the harness was started
+  (the harness resolves it there: Windows would otherwise look for it from the
+  directory the harness was started in), so the file `verify` checks is the file
+  that runs, and the gate's report names it, with its SHA-256 (`engine_run`);
 - reads one 5dpgn record on stdin (UTF-8, LF line endings);
 - writes one JSON object per line on stdout, flushing each line - for the
   Standard start and `1. e3`:
@@ -807,7 +818,10 @@ oracle - not even one that refuses the same action as illegal - stands behind it
 
 Breaking the contract, an `error` and a time-out each fail the gate. So does every
 disagreement with an oracle - a parse divergence included - unless
-`known-divergences.toml` records it. An oracle value that differed between the
+`known-divergences.toml` records it. (The engine's time limit is its own:
+`[engine] timeout_s` per record, or the tier's `timeout_s` where that is longer -
+a tier's budgets decide what it requires of the oracles, H32, and the gate
+compares the engine's answers, not its speed.) An oracle value that differed between the
 recordings (unstable) is taken out of each fresh oracle report before it is
 compared with the engine: it can neither fail the engine nor stand behind it. An entry for a placement divergence cites the
 notation specification, never the rulebook; one for a marker-only divergence may
@@ -858,13 +872,17 @@ included; and the fewest oracles that stood behind any record. Where a ruleset
 falls short of the floor and answers were set aside because the oracle's markers
 differed from the engine's, the reason says how many.
 
-At the current pins this keeps "Very Small - Open" ungated: ftxi is its only
-oracle with a check verdict, and ftxi's layout for it draws the king and rook of
-each side without the unmoved marker, so it holds them as having moved where an
-engine that follows the contract does not (`DISAGREEMENTS.md` shows the marker-only
-divergence from cwmtt, which marks them). Castling is impossible in that layout,
-so the two positions play alike - but the harness does not know the rules, and
-does not count an answer about another position.
+"Very Small - Open" is ungated in every tier first because the engine cannot read
+two of its records, cwmtt/ctp1 and ftxi/verysmall: each writes a jump without the
+moving piece's square, which the notation specification requires
+(`known-divergences.toml`, KD-0044, KD-0045, KD-0049, KD-0050). And at the current
+pins the last condition would keep it ungated even then: ftxi is its only oracle
+with a check verdict, and ftxi's layout for it draws the king and rook of each side
+without the unmoved marker, so it holds them as having moved where an engine that
+follows the contract does not (`DISAGREEMENTS.md` shows the marker-only divergence
+from cwmtt, which marks them). Castling is impossible in that layout, so the two
+positions play alike - but the harness does not know the rules, and does not count
+an answer about another position.
 
 Only a tier that runs every oracle search over the whole corpus (`nightly`,
 `release`) gates a ruleset, and there an engine with no finding against it that
@@ -942,7 +960,9 @@ with, has failed. The release tier, which requires an engine, fails in parse mod
 
 When the engine and an oracle disagree, the rulebook decides. If the oracle is
 wrong, the disagreement goes into `known-divergences.toml` with the citation that
-settles it and a link to the upstream report.
+settles it, and a link to the upstream report - or why it is unreported. None is
+reported yet; each entry says why, and spec issue 126 in `docs/BUILD_LOG.md` asks
+the user which of them must be.
 
 The rulebook is `docs/rules/README.md` (decision H38), and it is pinned:
 `gate.toml` `[rulebook]` holds the SHA-256 of its text (CRLF folded to LF), and
@@ -987,6 +1007,9 @@ Every other kind needs the rulebook. The file's header says how, and where its
 entries came from: the engine's gate runs of 2026-10-02 and, with the engine
 configured, of 2026-10-17 - between them every disagreement of the engine's with a
 recorded oracle answer, each settled by its citation (`docs/BUILD_LOG.md`, step 2).
+Three are provisional: KD-0167 to KD-0169 record the strict reading of an `x`
+written on a move that takes nothing, which is put to the user (spec issue 125),
+and the header says how they go if the ruling is the other way.
 
 ## Other commands
 

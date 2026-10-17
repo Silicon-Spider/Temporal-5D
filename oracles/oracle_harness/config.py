@@ -113,6 +113,18 @@ class GateConfig:
     calibration: Calibration
     rulebook: Rulebook
     engine_mode: str = "full"
+    # [engine] timeout_s: the engine's wall clock per record in every tier, where it is longer than the tier's own.
+    # None: the tier's own.
+    engine_timeout_s: float | None = None
+
+    def engine_timeout(self, tier: Tier) -> float:
+        """The engine's wall clock per record in this tier: [engine] timeout_s, or the tier's timeout_s if longer.
+
+        Not a budget in H32's sense: a tier's budgets decide which recorded oracle answers it requires, and the
+        engine has no recorded answers. A record the engine has not finished by then fails it (a time-out), so this
+        is a limit on how slow the engine may be, never a reason to compare less.
+        """
+        return max(tier.timeout_s, self.engine_timeout_s or 0.0)
 
     def tier(self, name: str) -> Tier:
         try:
@@ -201,6 +213,11 @@ def load(path: Path | None = None) -> GateConfig:
     mode = engine.get("mode", "full")
     if mode not in ENGINE_MODES:
         raise HarnessError(f"{path.name}: [engine] mode must be one of {ENGINE_MODES}")
+    engine_timeout = None
+    if "timeout_s" in engine:
+        engine_timeout = _number(engine, "timeout_s", f"{path.name} [engine]")
+        if engine_timeout <= 0:
+            raise HarnessError(f"{path.name} [engine]: timeout_s must be positive")
 
     tiers: dict[str, Tier] = {}
     for name, table in (data.get("tier") or {}).items():
@@ -272,4 +289,4 @@ def load(path: Path | None = None) -> GateConfig:
                            "0 < copy_min_line_chars < copy_long_line_chars")
     return GateConfig(cap=cap, engine_command=tuple(command), tiers=tiers, boundary=boundary,
                       stability=_stability(data, tiers, path.name), calibration=_calibration(data, path.name),
-                      rulebook=_rulebook(data, path.name), engine_mode=mode)
+                      rulebook=_rulebook(data, path.name), engine_mode=mode, engine_timeout_s=engine_timeout)

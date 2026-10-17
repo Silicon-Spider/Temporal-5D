@@ -36,6 +36,7 @@ import json
 import os
 import platform
 import re
+import shutil
 import time
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
@@ -74,7 +75,7 @@ from .corpus import CUSTOM_POSITIONS, Record
 from .lockfile import Lock
 from .observations import HARD_REJECTIONS, OBSERVABLES, REPLAY_KINDS, UNREADABLE, Observation
 from .snapshot import Snapshot
-from .util import Finding, HarnessError, platform_key, sha256_text
+from .util import Finding, HarnessError, is_windows, platform_key, sha256_file, sha256_text
 
 Log = Callable[[str], None]
 Section = tuple[str, list[Finding]]
@@ -202,6 +203,9 @@ class GateResult:
     # record id -> how every source read it, for the records not read as stored:
     # converted from the official client's export form, or given to no source (export_form.py).
     converted: dict[str, str] = field(default_factory=dict)
+    # The engine as this run ran it - its command, the file that ran and that file's SHA-256, its time limit
+    # (engine_program) - or None where no engine ran.
+    engine_run: dict | None = None
 
     def findings(self) -> list[Finding]:
         return [finding for _, items in (*self.sections, *self.engine_sections) for finding in items]
@@ -304,6 +308,51 @@ def _progress(log: Log) -> Callable[[Observation], None]:
             f"{len(observation.positions):>4} positions  {observation.elapsed_s:6.1f}s")
 
     return report
+
+
+def engine_argv(command: tuple[str, ...] | list[str]) -> list[str]:
+    """The engine command as the gate runs it: a program named by a relative path is the repository root's.
+
+    The command runs from the repository root (adapters/engine.py). Linux and macOS find a relative program from
+    there; Windows finds it from the directory the harness itself was started in - another checkout's build, or
+    none, if that is not the root. Resolved here, every platform runs the file engine_command_findings checks,
+    wherever the harness was started. Only the program: its arguments are the program's to read, and it runs in
+    the root. A bare name is looked up on PATH, as before.
+    """
+    argv = list(command)
+    if argv and not os.path.isabs(argv[0]) and os.path.dirname(argv[0]):
+        argv[0] = str(paths.REPO_ROOT / argv[0])
+    return argv
+
+
+def engine_program(argv: list[str]) -> dict:
+    """Which file the engine command runs: so that a run says which build of the engine it compared.
+
+    The program as run (engine_argv) and the file found for it - on Windows, a program named without an extension
+    runs as its .exe; a bare name, the file on PATH - with its SHA-256 and when it was last written. No file found:
+    the engine cannot be started, and every record fails with it.
+    """
+    if not argv:
+        return {}
+    program = argv[0]
+    if os.path.dirname(program):
+        candidates = [Path(program)]
+        if is_windows() and not Path(program).suffix:
+            candidates.append(Path(program + ".exe"))
+        found = next((candidate for candidate in candidates if candidate.is_file()), None)
+    else:
+        on_path = shutil.which(program)
+        found = Path(on_path) if on_path else None
+    if found is None:
+        return {"program": program, "file": None, "sha256": None, "modified": None}
+    return {"program": program, "file": str(found), "sha256": sha256_file(found),
+            "modified": time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime(found.stat().st_mtime))}
+
+
+def _describe_engine_run(run: dict) -> str:
+    if not run.get("file"):
+        return f"{run.get('program')}: no such file - has the engine been built?"
+    return f"{run['file']} (SHA-256 {run['sha256'][:16]}, written {run['modified']})"
 
 
 def engine_command_findings(command: tuple[str, ...] | list[str]) -> list[Finding]:
@@ -831,7 +880,8 @@ def run_tier(
             sources.append(source)
     result.sections.append(("oracle builds", unavailable))
 
-    engine = EngineSource(list(cfg.engine_command), cfg.engine_mode)
+    # The program the command names is the repository root's on every platform (engine_argv).
+    engine = EngineSource(engine_argv(cfg.engine_command), cfg.engine_mode)
     engine_runs = engine.available() is None
     log("timing the calibration probe")
     result.calibration = calibrate(lock, cfg, all_records, frozen.calibration)
@@ -888,9 +938,15 @@ def run_tier(
         result.sections.append(("ftxi driver vs stock 5dtools", fidelity_findings))
 
     if engine_runs:
-        log(f"running the engine adapter ({cfg.engine_mode} mode)")
+        # The engine's own time limit: a tier's timeout_s is a budget for the oracles - it decides what the tier
+        # requires of them (H32) - and the gate compares the engine's answers, not its speed.
+        engine_timeout = cfg.engine_timeout(tier)
+        result.engine_run = {"command": list(cfg.engine_command), "mode": cfg.engine_mode,
+                             "timeout_s": engine_timeout, **engine_program(engine.command)}
+        log(f"running the engine adapter ({cfg.engine_mode} mode, {number(engine_timeout)} s a record): "
+            f"{_describe_engine_run(result.engine_run)}")
         engine_results = runner.run_sources([engine], records, lock,
-                                            lambda source, record: _options(cfg, tier.timeout_s, tier.mate_budget_ms),
+                                            lambda source, record: _options(cfg, engine_timeout, tier.mate_budget_ms),
                                             jobs=jobs, progress=_progress(log))
         engine_findings = runner.self_consistency(engine_results)
         # The divergences are the snapshot's, read before the engine ran: an
@@ -944,6 +1000,8 @@ def _write_report(result: GateResult, results: runner.Results, cfg: config.GateC
         "partial": result.partial,
         "engine": result.engine,
         "engine_mode": result.engine_mode,
+        # Which build of the engine this run compared, and under what time limit (null where no engine ran).
+        "engine_run": result.engine_run,
         # In a smoke test (H47) nothing is gated, and this says why; otherwise null.
         "smoke_test": SMOKE_TEST if result.smoke_test else None,
         "gated": {ruleset: asdict(item) for ruleset, item in gated.items()},
