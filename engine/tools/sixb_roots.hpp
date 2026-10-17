@@ -3,7 +3,9 @@
 // parse mode does, under the ruleset given), every K-th, distinct by position
 // - t5d-scan6b's construction, unchanged - with each root's NEXT ACTION, the
 // action its record plays from it (the chosen move 6b'' guards). The records
-// come on the command line: no code here names a corpus.
+// are read as 6b read them (tool_support.hpp, sixb_pgn_options: a written 'x'
+// must capture - the reading before H51), not with the reader's defaults. The
+// records come on the command line: no code here names a corpus.
 
 #ifndef T5D_TOOLS_SIXB_ROOTS_HPP
 #define T5D_TOOLS_SIXB_ROOTS_HPP

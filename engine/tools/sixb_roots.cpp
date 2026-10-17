@@ -105,9 +105,12 @@ SixbRoots sixb_roots(const std::vector<RecordRef>& records, const RuleOptions& r
     try {
       const std::string text = read_file(ref.path);
       const std::string content = record_content_id(text);
-      PgnRecord record = read_pgn(text);
+      // The reading 6b and the truth were measured under (a written 'x' must
+      // capture - before H51): the roots stay the truth's (tool_support.hpp).
+      const PgnOptions reading = sixb_pgn_options();
+      PgnRecord record = read_pgn(text, reading);
       const bool synthetic = is_synthetic(record);
-      PgnReplay replay(std::move(record), PgnOptions{}, rules);
+      PgnReplay replay(std::move(record), reading, rules);
       parse_mode(replay);
       std::string end = "ok";
       for (;;) {
