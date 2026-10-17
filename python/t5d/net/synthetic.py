@@ -346,11 +346,11 @@ class _Lattice:
             self.emit(src[~occupied], dst[~occupied], _REL["move"])
         if not quiet_only:
             self.emit(src[enemy], dst[enemy], _REL["move"])
+            # An attack onto another board is a travel threat: B11 carries it as an attack
+            # (travel-threat folded into attack, CHECKPOINT 6).
             self.emit(src[enemy], dst[enemy], _REL["attack"])
             royal = enemy & np.isin(occupant, _ROYALS)
             self.emit(src[royal], dst[royal], _REL["check"])
-            travel = enemy & (board != self.board[sel])
-            self.emit(src[travel], dst[travel], _REL["travel_threat"])
             own = occupied & ~enemy
             self.emit(src[own], dst[own], _REL["defence"])
         return occupied, enemy
@@ -416,10 +416,10 @@ def reach_graph(state: PositionState, max_reach: int = 8) -> np.ndarray:
     along the time axis moves two half-turns (same colour to move), along the timeline
     axis to the neighbouring timeline at the same half-turn; a landing exists only where
     the lattice has a board. Relations: ``move`` onto an empty or enemy square; ``attack``
-    onto an enemy, ``check`` onto an enemy royal (K or royal queen), ``travel_threat`` an
-    attack onto another board, ``defence`` onto an own piece; for sliders, ``xray`` to the
-    second piece along a ray and ``pin`` to the first when the second is an enemy royal
-    behind an enemy non-royal. Rows are distinct and sorted.
+    onto an enemy - on any board, so a travel threat is an attack (B11 folds it into attack,
+    CHECKPOINT 6); ``check`` onto an enemy royal (K or royal queen), ``defence`` onto an own
+    piece; for sliders, ``xray`` to the second piece along a ray and ``pin`` to the first when
+    the second is an enemy royal behind an enemy non-royal. Rows are distinct and sorted.
     """
     lat = _Lattice(state)
     for d in _DIRECTIONS:

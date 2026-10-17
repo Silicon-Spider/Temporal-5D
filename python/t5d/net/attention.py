@@ -30,7 +30,11 @@ and ``scope`` (stage N3, ``scope.BlockCausalScope``: the block-causal scope, C17
 whose rows come from a board-slot table the same way (``_block_rows`` combines all four;
 the scope enters wherever the caller's mask does). A query row with no allowed key
 outputs zeros, and its gradient stays finite; neither the structure nor the scope ever
-empties a row.
+empties a row. B17's key-side Shaw term (``ctx.shaw``, behind its flag; ``shaw.py``) depends
+on the queries, so it is not one of the structure's rows: every path adds it beside them, from
+the rows' unrotated queries - gathered from the precomputed query-class products, block by
+block (any key selection, any row set), or pair by pair in the dense reference (section 15.2's
+B17 row compares the two).
 
 Six implementations compute the same function on every valid query
 (``NetConfig.attn_impl``; a padding query's output is discarded, and the block-sparse
@@ -98,7 +102,7 @@ path does not compute it the reference's way):
   chunk's mask and bias rows built for it alone.
 * ``"dense"``: every mask and bias materialised at ``(B, H, L, L)`` first
   (``AttnContext.densified``), then the explicit computation - the reference the tests
-  compare the others with.
+  compare the others with (B17's term computed there pair by pair, ``shaw.direct_term``).
 * ``"flex"`` (B14's score function, ``flex.py``): torch's ``flex_attention`` with a score
   function that computes every bias inside the attention - B15's from the tokens'
   coordinates, B11's from the pair's typed relations, B12's from the layer's board-pair
@@ -139,6 +143,7 @@ from .rope import apply_rope
 
 if TYPE_CHECKING:
     from .scope import BlockCausalScope
+    from .shaw import ShawRows
     from .structure import AttnStructure
 
 NEG_INF = float("-inf")
@@ -178,22 +183,35 @@ class AttnContext:
     #: The block-causal scope (stage N3; None: the dense scope): rows built per block, and
     #: ANDed in wherever the caller's mask is.
     scope: BlockCausalScope | None = None
+    #: B17's key-side Shaw term (``shaw.py``; None: off) - a function of each block's own
+    #: (unrotated) queries, added to the scores beside the structure's biases.
+    shaw: ShawRows | None = None
+
+    @property
+    def layer_dependent(self) -> bool:
+        """Whether a layer's context differs from another's (``for_layer``)."""
+        return self.shaw is not None or (self.structure is not None and self.structure.layer_dependent)
 
     def for_layer(self, h: torch.Tensor | None, layer: int) -> AttnContext:
         """The context of layer ``layer``, whose attention input is ``h`` ``(B, L, d)``
         (``trunk.Block.attn_input``): the structure's layer-dependent biases - board-pair
-        smolgen's table generated from ``h`` (B12; only B12 needs ``h``) and the layer's
-        displacement table (B15)."""
-        if self.structure is None or not self.structure.layer_dependent:
-            return self
-        return replace(self, structure=self.structure.for_layer(h, layer))
+        smolgen's table generated from ``h`` (B12; only B12 needs ``h``), the layer's
+        displacement table (B15) and B16's when it is per layer - and B17's vectors of the layer."""
+        changes: dict = {}
+        if self.structure is not None and self.structure.layer_dependent:
+            changes["structure"] = self.structure.for_layer(h, layer)
+        if self.shaw is not None:
+            changes["shaw"] = self.shaw.for_layer(layer)
+        return replace(self, **changes) if changes else self
 
     def densified(self) -> AttnContext:
         """The same attention with every mask and bias - padding, the caller's, the
         structure's and the scope's - materialised at ``(B, H, L, L)``: the reference, for
-        small inputs."""
+        small inputs. B17's term needs the queries, so it is kept beside the materialised rows
+        and computed pair by pair (``shaw.direct_term``) - section 15.2's direct form."""
         allowed, bias = _block_rows(self, 0, self.key_valid.shape[1])
-        return replace(self, mask=allowed, bias=bias, structure=None, scope=None)
+        shaw = None if self.shaw is None else replace(self.shaw, direct=True)
+        return replace(self, mask=allowed, bias=bias, structure=None, scope=None, shaw=shaw)
 
 
 def _as4d(t: torch.Tensor | None) -> torch.Tensor | None:
@@ -230,6 +248,18 @@ def _block_mask(ctx: AttnContext, start: int, stop: int) -> torch.Tensor:
         if s_allowed is not None:
             allowed = allowed & s_allowed
     return allowed
+
+
+def _plus(a: torch.Tensor | None, b: torch.Tensor | None) -> torch.Tensor | None:
+    """``a + b`` where either may be absent."""
+    if a is None:
+        return b
+    return a if b is None else a + b
+
+
+def _span(rows: tuple[int, int], bsz: int, device) -> torch.Tensor:
+    """``(B, stop - start)``: the query rows ``[start, stop)`` of every position."""
+    return torch.arange(rows[0], rows[1], device=device).expand(bsz, rows[1] - rows[0])
 
 
 def _spatial_free(ctx: AttnContext) -> torch.Tensor | None:
@@ -354,7 +384,8 @@ def attention_explicit(
     """Reference attention; ``q``, ``k`` unrotated ``(B, H, L, dh)``, ``v`` ``(B, H, L, dv)``.
 
     Scores are materialised one chunk of ``ctx.chunk`` query rows at a time, with that
-    chunk's mask and bias rows (``_block_rows``)."""
+    chunk's mask and bias rows (``_block_rows``) and B17's term from the chunk's unrotated
+    queries (``ctx.shaw``: gathered, or per pair in the dense reference)."""
     length, dh = q.shape[-2:]
     lb, cd = ctx.body_len, ctx.compute_dtype
     scale = dh**-0.5
@@ -382,6 +413,8 @@ def attention_explicit(
                 s[:, :, g0 - start :] = _scores(q[:, :, g0:stop], k, scale, cd)
         if bias is not None:
             s = s + bias.float()
+        if ctx.shaw is not None:
+            s = s + ctx.shaw.rows(q[:, :, start:stop], _span((start, stop), q.shape[0], q.device))
         s = s.masked_fill(~allowed, NEG_INF)
         p = _softmax_rows(s)
         outs.append(torch.matmul(p.to(cd), v.to(cd)))
@@ -696,12 +729,25 @@ class _FastPath:
         a_k, b_k, a_g, b_g = _cols(allowed, self.kern), _cols(bias, self.kern), _cols(allowed, self.rest), _cols(bias, self.rest)
         return self.attend(rows, heads, keys, a_k, b_k, a_g, b_g)
 
+    def shaw_rows(self, rows, heads: torch.Tensor | None, cols: torch.Tensor | None = None) -> torch.Tensor | None:
+        """B17's term ``(B, Hg, n, Lk)`` of the query rows ``rows`` - a block ``(start, stop)`` or
+        each position's rows ``(B, n)`` - on ``heads`` over every key (``cols`` None) or the keys
+        ``cols`` ``(B, K)``, from the rows' unrotated queries (None: B17 off)."""
+        if self.ctx.shaw is None:
+            return None
+        if isinstance(rows, tuple):
+            q_c, index = self.q[:, :, rows[0] : rows[1]], _span(rows, self.q.shape[0], self.q.device)
+        else:
+            q_c, index = _rows_at(self.q, rows), rows
+        return self.ctx.shaw.rows(_heads(q_c, heads), index, cols, heads)
+
     # -- the block computations --
 
     def all_heads_block(self, start: int, stop: int) -> torch.Tensor:
         """Every head of the rows ``[start, stop)`` in one call (the chunked path with a
         bias or a caller's per-row mask, and the one-block paths)."""
         allowed, bias = _block_rows(self.ctx, start, stop)
+        bias = _plus(bias, self.shaw_rows((start, stop), None))
         return self.full((start, stop), None, self.keys, allowed, bias)
 
     def group_block(self, role: str, heads: torch.Tensor, start: int, stop: int, sparse: bool) -> torch.Tensor:
@@ -720,6 +766,7 @@ class _FastPath:
             s_bias = structure.bias_rows(start, stop, heads=heads)
             if s_bias is not None:
                 bias = s_bias if bias is None else bias + s_bias
+            bias = _plus(bias, self.shaw_rows((start, stop), heads))
             return self.full((start, stop), heads, group_keys, allowed, bias)
         idx = plan.index
         if idx.shape[1] == 0:
@@ -732,6 +779,7 @@ class _FastPath:
         s_bias = structure.bias_rows(start, stop, heads=heads, cols=idx, cols_valid=plan.valid)
         if s_bias is not None:
             b_k = s_bias if b_k is None else b_k + s_bias
+        b_k = _plus(b_k, self.shaw_rows((start, stop), heads, cols=idx))
         # No selecting query of a sparse plan reads a position-free global key, so the
         # selection drops the merge's extra key (the free and padding queries' outputs
         # here are replaced or discarded).
@@ -746,7 +794,8 @@ class _FastPath:
             return out
         take, put, real = index
         group_keys = self.keys.heads(heads)
-        row_free = self.ctx.mask is None and self.ctx.bias is None and self.ctx.scope is None and not self.ctx.structure.has_bias
+        ctx = self.ctx
+        row_free = ctx.mask is None and ctx.bias is None and ctx.scope is None and not ctx.structure.has_bias and ctx.shaw is None
         size = take.shape[1] if row_free else max(1, step)
         outs = []
         for a in range(0, take.shape[1], size):
@@ -757,6 +806,7 @@ class _FastPath:
                 s_bias = self.ctx.structure.bias_rows_at(rows, rows_real, heads=heads)
                 if s_bias is not None:
                     bias = s_bias if bias is None else bias + s_bias
+                bias = _plus(bias, self.shaw_rows(rows, heads))
                 return self.full(rows, heads, group_keys, allowed, bias)
 
             outs.append(run() if row_free else _maybe_recompute(run, self.ctx.recompute))
@@ -777,13 +827,15 @@ def attention_sdpa(
     fast = _FastPath(q, k, v, ctx)
     kl, length, cd, scale = fast.kl, fast.length, fast.cd, fast.scale
     structure = ctx.structure
-    per_row = structure is not None or _per_row(ctx.mask) or _per_row(ctx.bias) or ctx.scope is not None
+    per_row = structure is not None or _per_row(ctx.mask) or _per_row(ctx.bias) or ctx.scope is not None or ctx.shaw is not None
     step = kl if block_rows is None or not per_row else max(1, block_rows)
     blocks = [(start, min(kl, start + step)) for start in range(0, kl, step)]
     recompute = ctx.recompute and per_row
     # "No bias" also means no per-row mask from the caller or the scope: the dense heads
     # then run in one call over all rows.
-    no_bias = ctx.mask is None and ctx.bias is None and ctx.scope is None and (structure is None or not structure.has_bias)
+    no_bias = (
+        ctx.mask is None and ctx.bias is None and ctx.scope is None and ctx.shaw is None and (structure is None or not structure.has_bias)
+    )
     if structure is not None and (sparse or no_bias):
         # By role: heads that share a mask role share one kernel call per block and one
         # (B, 1, block, L) mask (or, sparse, one key selection); without any bias the

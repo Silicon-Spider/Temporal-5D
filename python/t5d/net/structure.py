@@ -56,19 +56,19 @@ that fraction of an ``(L, L)`` bool mask in all (and, for a move graph whose boa
 a bounded number of boards, an amount that grows linearly in N).
 
 **Typed edge biases** (B11, provisional, ``typed_edge_bias``): a learned scalar per head
-per relation type (``TYPED_RELATIONS``: attack, defence, pin, x-ray, check,
-travel-threat), shared by all layers, added on every head to the logits of the related
-pairs: for an edge ``(s, d, type)``, query ``s`` / key ``d`` gets the type's scalar for
+per relation type (``TYPED_RELATIONS``: attack, defence, pin, x-ray, check - travel-threat
+folded into attack at CHECKPOINT 6), shared by all layers, added on every head to the logits
+of the related pairs: for an edge ``(s, d, type)``, query ``s`` / key ``d`` gets the type's scalar for
 "query is the source" and query ``d`` / key ``s`` the scalar for "query is the target" -
 one scalar for both unless ``typed_edge_directed``. A pair related several ways gets the
 sum; an edge repeated in a list counts once (a relation holds or it does not). On a
 masked head the bias reaches only allowed pairs, so a type that head's mask never opens
 keeps a scalar no gradient reaches - defence on a move-graph head, for one (own pieces
 are never move targets); "per head per type" is kept literally, every head has every
-type's scalar. Cross-board edges are included. The meaning of the ``check`` relation
-depends on the check ruling still pending (CHECKPOINT 1 of the build log: which boards
-count as sources of attack); the network takes whatever the rules engine labels
-``check``.
+type's scalar. Cross-board edges are included (a travel threat is an attack edge across
+boards). The network takes whatever the rules engine labels each type: it builds attack,
+defence and x-ray today; pin and check are its ABI round 1's, and until then no position
+from the engine carries them.
 
 **Board-pair biases** (``pair_table`` ``(B, H, Nb + 1, Nb + 1)``; row and column ``Nb``
 stand for "no board" and are zero): B12's smolgen (``smolgen.py``) generates a table per
@@ -85,8 +85,8 @@ row compares these rows with B14's score function (``flex.py``), which computes 
 entries by arithmetic on the coordinates, and with the bias materialised by hand.
 
 **Per layer.** ``for_layer(h, layer)`` adds what one layer's structure needs: B12's table,
-generated from the layer's attention input ``h``, and B15's table of layer ``layer``. Masks
-never depend on the layer; ``mask_rows`` builds them without it.
+generated from the layer's attention input ``h``, B15's table of layer ``layer``, and B16's
+when it is per layer. Masks never depend on the layer; ``mask_rows`` builds them without it.
 
 **Under the block-causal scope** (stage N3, ``scope.py``) the edge-derived masks and
 biases (B9's move graph, B10's relations head, B11's typed biases) and B12's smolgen
@@ -95,6 +95,12 @@ generated per position, and a frozen token that read through them would read the
 present. ``scope.py`` documents the reading. The geometric roles (same board, same
 square) and B15's displacement bias - a function of the two tokens' coordinates alone -
 apply to every row, frozen ones included.
+
+**B16's status key biases** (committed with the cached configuration; ``status.py``) exist
+under the block-causal scope only: on a live query row, a frozen board's token as key gets
+its head's entry for that board's status - Delta-t-to-present bin and active flag, from the
+batch's own present - and nothing else gets anything (``status_rows``). A frozen board's rows
+carry neither B12 nor B16 (``for_frozen_rows``).
 """
 
 from __future__ import annotations
@@ -106,7 +112,7 @@ import torch.nn.functional as F
 from torch import nn
 
 from .config import TYPED_RELATIONS, NetConfig
-from .displacement import N_CODES, DisplacementBias, DisplacementIndex, displacement_index
+from .displacement import DisplacementBias, DisplacementIndex, displacement_index, lookup
 from .smolgen import BoardPairSmolgen, SmolgenInputs, smolgen_inputs
 from .state import (
     RELATION_IDS,
@@ -117,6 +123,7 @@ from .state import (
     TOKEN_SQUARE,
     Batch,
 )
+from .status import StatusIndex, StatusKeyBias, status_index
 
 #: The roles that carry a mask (every role but "dense").
 MASK_ROLES: tuple[str, ...] = ("move_graph", "same_board", "same_square", "relations")
@@ -253,6 +260,11 @@ class AttnStructure:
     disp: DisplacementBias | None = None  # B15
     disp_index: DisplacementIndex | None = None  # B15's per-batch slots, codes and tiles
     disp_table: torch.Tensor | None = None  # (H, entries + 1): this layer's B15 table (set by ``for_layer``)
+    status: StatusKeyBias | None = None  # B16 (the block-causal scope only)
+    status_index: StatusIndex | None = None  # B16's per-token status entries and live rows
+    #: (H, statuses + 1): B16's table - shared by every layer (set when built) or this layer's
+    #: (set by ``for_layer``).
+    status_table: torch.Tensor | None = None
     #: Block-sparse plans by (role, block, kernel keys, fraction), shared by every layer's
     #: copy of the structure (``for_layer`` copies the reference).
     plans: dict = field(default_factory=dict, repr=False)
@@ -265,13 +277,13 @@ class AttnStructure:
 
     @property
     def has_bias(self) -> bool:
-        return self.typed is not None or self.disp is not None or self.smolgen is not None
+        return self.typed is not None or self.disp is not None or self.smolgen is not None or self.status is not None
 
     @property
     def layer_dependent(self) -> bool:
-        """Whether the bias rows differ by layer: B12's table (from each layer's input) and
-        B15's table (one per layer)."""
-        return self.smolgen is not None or self.disp is not None
+        """Whether the bias rows differ by layer: B12's table (from each layer's input), B15's
+        table (one per layer) and B16's when it is per layer."""
+        return self.smolgen is not None or self.disp is not None or (self.status is not None and self.status.per_layer)
 
     def head_groups(self) -> list[tuple[str, torch.Tensor]]:
         """Heads grouped by role, in order of first appearance: ``[(role, head indices)]``."""
@@ -281,8 +293,8 @@ class AttnStructure:
 
     def for_layer(self, h: torch.Tensor | None, layer: int) -> AttnStructure:
         """This structure for layer ``layer``, whose attention input is ``h`` ``(B, L, d)``:
-        B12's board-pair table generated from ``h`` (which only B12 needs) and B15's table of
-        that layer."""
+        B12's board-pair table generated from ``h`` (which only B12 needs), B15's table of
+        that layer and B16's when it is per layer."""
         changes: dict = {}
         if self.smolgen is not None:
             if h is None:
@@ -293,12 +305,16 @@ class AttnStructure:
             changes["pair_table"] = F.pad(table, (0, 1, 0, 1))
         if self.disp is not None:
             changes["disp_table"] = self.disp.layer_table(layer)
+        if self.status is not None and self.status.per_layer:
+            changes["status_table"] = self.status.layer_table(layer)
         return replace(self, **changes) if changes else self
 
-    def without_smolgen(self) -> AttnStructure:
-        """This structure with B12 left out - what a frozen board's rows carry under the
-        block-causal scope (``cache.py``), where smolgen biases live rows only."""
-        return replace(self, smolgen=None, smolgen_in=None, pair_table=None, smolgen_rows=None)
+    def for_frozen_rows(self) -> AttnStructure:
+        """This structure with B12 and B16 left out - what a frozen board's rows carry under the
+        block-causal scope (``cache.py``), where both bias live rows only."""
+        return replace(
+            self, smolgen=None, smolgen_in=None, pair_table=None, smolgen_rows=None, status=None, status_index=None, status_table=None
+        )
 
     # -- which queries a masked role's relation covers --
 
@@ -475,6 +491,8 @@ class AttnStructure:
             raise RuntimeError("this structure's board-pair smolgen needs the layer input: use AttnContext.for_layer")
         if self.disp is not None and self.disp_table is None:
             raise RuntimeError("B15's displacement table is per layer: use AttnContext.for_layer to choose the layer")
+        if self.status is not None and self.status_table is None:
+            raise RuntimeError("B16's status table is per layer here: use AttnContext.for_layer to choose the layer")
         bsz, length = self.kind.shape
         n_heads = len(self.head_roles) if heads is None else int(heads.shape[0])
         n_rows = rows.shape[1]
@@ -490,6 +508,9 @@ class AttnStructure:
         if self.disp is not None:
             disp = self.disp_rows(rows, cols, heads)
             bias = disp if bias is None else bias + disp
+        if self.status is not None and self.status_index.any_frozen:
+            status = self.status_rows(rows, cols, heads)
+            bias = status if bias is None else bias + status
         if self.typed is not None:
             typed = self.typed
             if span is not None:
@@ -520,20 +541,25 @@ class AttnStructure:
         """B15's entry ``(B, n, Lk)`` of every pair of the queries ``rows`` ``(B, n)`` and the
         keys ``cols`` ``(B, K)`` (every key when None): the static class map at (the pair's
         board tile, the query's code, the key's code) - the same at every layer."""
-        idx = self.disp_index
-        slot_q, code_q = idx.slot.gather(1, rows), idx.code.gather(1, rows)
-        slot_k = idx.slot if cols is None else idx.slot.gather(1, cols)
-        code_k = idx.code if cols is None else idx.code.gather(1, cols)
-        b = torch.arange(rows.shape[0], device=rows.device)[:, None, None]
-        tile = idx.tiles[b, slot_q[:, :, None], slot_k[:, None, :]]
-        flat = tile * (N_CODES * N_CODES) + (code_q * N_CODES)[:, :, None] + code_k[:, None, :]
-        return self.disp.class_map.view(-1)[flat]
+        return lookup(self.disp_index, self.disp.class_map, rows, cols)
 
     def disp_rows(self, rows: torch.Tensor, cols: torch.Tensor | None = None, heads: torch.Tensor | None = None) -> torch.Tensor:
         """B15's bias ``(B, Hg, n, Lk)`` of the queries ``rows`` over the keys ``cols`` (every
         key when None) on the heads ``heads`` (every head when None), from this layer's table."""
         table = self.disp_table if heads is None else self.disp_table[heads]
         return table[:, self.disp_entries(rows, cols)].transpose(0, 1)
+
+    def status_rows(self, rows: torch.Tensor, cols: torch.Tensor | None = None, heads: torch.Tensor | None = None) -> torch.Tensor:
+        """B16's bias ``(B, Hg, n, Lk)`` of the queries ``rows`` ``(B, n)`` over the keys ``cols``
+        (every key when None) on the heads ``heads`` (every head when None): the table's entry for
+        the key's board's status where the query is live and the key a frozen board's token, zero
+        everywhere else (the table's appended zero, or a frozen query row)."""
+        idx = self.status_index
+        table = self.status_table if heads is None else self.status_table[heads]  # (Hg, statuses + 1)
+        key = idx.key if cols is None else idx.key.gather(1, cols)  # (B, Lk)
+        values = table[:, key].transpose(0, 1)[:, :, None, :]  # (B, Hg, 1, Lk)
+        live = idx.live.gather(1, rows)[:, None, :, None]  # (B, 1, n, 1)
+        return torch.where(live, values, values.new_zeros(()))
 
     def dense_mask(self) -> torch.Tensor | None:
         """Every row's allowed keys ``(B, H, L, L)`` (small inputs; tests)."""
@@ -565,17 +591,22 @@ def build_structure(
     smolgen: BoardPairSmolgen | None = None,
     live: torch.Tensor | None = None,
     live_boards: torch.Tensor | None = None,
+    status: StatusKeyBias | None = None,
 ) -> AttnStructure | None:
     """The batch's attention structure, or None when every head is dense and nothing adds
     a bias (then attention needs only the padding mask). ``live`` ``(B, L)`` /
     ``live_boards`` ``(B, Nb)``: under the block-causal scope, the tokens and boards whose
     rows the edge-derived masks and biases and B12's smolgen may open or bias (None:
     every row - the dense scope). B15's displacement bias applies to every row (its
-    entries come from the batch's raw coordinates, ``displacement.displacement_index``)."""
+    entries come from the batch's raw coordinates, ``displacement.displacement_index``).
+    ``status``: B16's table, under the block-causal scope only (it needs ``live``): the live
+    rows' biases on frozen boards' tokens, from the batch's own Delta-t and active flags."""
     roles = cfg.head_roles
     structured = any(role != "dense" for role in roles)
-    if not (structured or typed_edges is not None or displacement is not None or smolgen is not None):
+    if not (structured or typed_edges is not None or displacement is not None or smolgen is not None or status is not None):
         return None
+    if status is not None and live is None:
+        raise ValueError("B16's status biases exist under the block-causal scope only: they need its live rows")
     n_max = batch.board_valid.shape[1]
     board_idx = torch.where(batch.valid & (batch.board >= 0), batch.board, torch.full_like(batch.board, n_max))
     xy = batch.coords[..., :2].round().long()
@@ -607,4 +638,7 @@ def build_structure(
         smolgen_rows=live_boards if smolgen is not None else None,
         disp=displacement,
         disp_index=None if displacement is None else displacement_index(batch, displacement.geom),
+        status=status,
+        status_index=None if status is None else status_index(batch, status, live),
+        status_table=None if status is None or status.per_layer else status.layer_table(0),
     )

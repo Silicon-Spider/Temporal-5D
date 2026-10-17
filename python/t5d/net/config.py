@@ -22,7 +22,8 @@ The build rules (spec section 15.1) decide what else appears here:
   Delta-time/Delta-timeline biases, which are removed (register B6, M20).
 * **Provisional and prototype items** are behind flags, all default off: per-head
   positional specialisation (B5, provisional), the fixed routing table (B10, prototype),
-  typed edge biases (B11, provisional), board-pair smolgen (B12, prototype), and the larger
+  typed edge biases (B11, provisional), board-pair smolgen (B12, prototype), the key-side
+  Shaw term on top of B15 (B17, prototype; ``shaw_key_term``, ``shaw.py``), and the larger
   capacity arm L24-ff12 (F2, provisional) as the named preset ``"L24-ff12"``.
 * **Items of later stages** have their flag here so the config names every switch, but
   enabling one raises ``NotImplementedError`` until its stage lands: piece-centric
@@ -40,8 +41,12 @@ The build rules (spec section 15.1) decide what else appears here:
   evaluator's (``CacheConfig``), not the network's. Four points the
   spec leaves open on this committed-class path are parameters with placeholder defaults
   (``causal_past`` - since ruled by C23: ancestry, the ``"lineage"`` default -,
-  ``frozen_features``, ``supersession_scope``, and the rule that the
-  section 6 structure opens live rows only, documented in ``scope.py``).
+  ``frozen_features`` - since ruled by M20: intrinsic, with B16's status biases -,
+  ``supersession_scope``, and the rule that the section 6 structure opens live rows only,
+  documented in ``scope.py``). **B16** (committed with the cached configuration, section 4.1;
+  ``status.py``) gives frozen boards' current status to the live queries that read them as
+  score-time key biases (``status_key_bias``, on), its bins, layer sharing and initialisation
+  placeholders.
 * **Stage N5** adds register D8 (committed): the global acting-player input and the submit
   action's policy logit read from a global register. Where the input enters
   (``acting_player_input``), which register the logit is read from (``submit_register``) and
@@ -63,14 +68,18 @@ The build rules (spec section 15.1) decide what else appears here:
   nothing about promotions), ``head_activation`` (whether F6's Mish reaches the heads),
   ``rope_relations_head`` and the near-NoPE and split details
   of B5, B15's far bins, line clamp, register entries and initialisation
-  (``disp_far_edges``, ``disp_line_max``, ``disp_register_pairs``, ``disp_init_std``), and from
-  stage N2: ``move_graph_direction`` (which way a directed move edge opens the mask),
-  ``masked_head_registers`` (what registers do on masked heads), ``same_board_registers``
-  (what a per-board register reads on the same-board head), ``relations_head_types``
-  (which relations "attack/defend relations" covers), ``relations_head_direction``
-  (which way a typed edge opens the relations head), ``rope_roles_source`` (how B5's
-  per-head allocation meets B9's masks when the routing table is off) and how the routing
-  table meets B9's head count (``move_graph_heads``, ``rope_head_roles``).
+  (``disp_far_edges``, ``disp_line_max``, ``disp_register_pairs``, ``disp_init_std``), B16's
+  bins, layer sharing and initialisation (``status_dt_exact``, ``status_dt_max``,
+  ``status_bias_per_layer``, ``status_bias_init_std``; spec issues 213-215), B17's class set,
+  head sharing and initialisation (``shaw_near``, ``shaw_shared_heads``, ``shaw_init_std``; spec
+  issues 217, 218, 220), and from stage N2: ``move_graph_direction`` (which way a directed
+  move edge opens the mask), ``masked_head_registers`` (what registers do on masked heads),
+  ``same_board_registers`` (what a per-board register reads on the same-board head),
+  ``relations_head_types`` (which relations "attack/defend relations" covers),
+  ``relations_head_direction`` (which way a typed edge opens the relations head),
+  ``rope_roles_source`` (how B5's per-head allocation meets B9's masks when the routing table
+  is off) and how the routing table meets B9's head count (``move_graph_heads``,
+  ``rope_head_roles``).
 * Refused and held-open items have no switch at all (B3 axial, B13 token/within-board
   smolgen, C18 local/global interleave, C21 snapshot shortcuts, F3 d = 512, G4-G6;
   threat relations never become tokens, section 14.4).
@@ -109,8 +118,14 @@ ROUTING_TABLE_ROLES: tuple[str, ...] = (
 
 _ROLES = {"move_graph", "same_board", "same_square", "relations", "dense"}
 
-#: The typed relations of B11 (section 6): every relation type but the move graph itself.
-TYPED_RELATIONS: tuple[str, ...] = ("attack", "defence", "pin", "xray", "check", "travel_threat")
+#: The typed relations of B11 (section 6): every relation type but the move graph itself -
+#: "attack, defence, pin, x-ray, check". Travel-threat, once a sixth, is folded into attack
+#: (CHECKPOINT 6, register B11, reversal 26: a travel threat is a cross-board attack, which the
+#: attack type already carries); its C id stays reserved in the append-only ABI and is never
+#: emitted. The engine builds attack, defence and x-ray; pin and check are its later work
+#: (engine ABI round 1) - listed here as the register lists them, their edges empty until the
+#: engine supplies them.
+TYPED_RELATIONS: tuple[str, ...] = ("attack", "defence", "pin", "xray", "check")
 
 #: Attention implementations (``attention.py``): "block_sparse" (B14, the default: the
 #: fused kernel over board-aligned query blocks, each masked head reading only the key
@@ -473,6 +488,30 @@ class NetConfig:
     #: placeholder, not a decision: 0.1, the scale of the other learned bias tables (B11).
     disp_init_std: float = 0.1
 
+    # --- B17: the key-side Shaw term (prototype; default off; section 4.1; shaw.py) ---
+    #: Each query (unrotated) dotted with a learned vector for its pair's class in a compact set,
+    #: scaled by 1/sqrt(d_head) and added to the score - Shaw et al.'s key-side relative
+    #: representation, "on top of B15" (it needs ``displacement_bias``). Ablation 2's arm, behind
+    #: its flag; value-side vectors are held open (section 14.4) and not built.
+    shaw_key_term: bool = False
+    #: "A compact class set (~1,400: the exact near classes plus the line classes)" - section 4.1
+    #: defines neither. COMMITTED-CLASS SILENCE (B17 is class C; spec issue 217) - placeholder, not
+    #: a decision: inside B15's 45 exact board-distance classes, the file-rank offsets with
+    #: |Delta-file|, |Delta-rank| <= ``shaw_near`` (2: 1,125 classes), plus B15's line classes
+    #: (368): 1,493, which gives both of section 4.1's cost figures. Pairs with a register get none.
+    #: The nearest board-distance classes with their full slices would give the same count and
+    #: costs and cover other pairs (issue 217, put to the user) - a code change
+    #: (``shaw.compact_classes``), not this setting.
+    shaw_near: int = 2
+    #: A vector per class per head per layer (False), or one per class per layer shared by the
+    #: heads (True, as Shaw et al. share them). COMMITTED-CLASS SILENCE (spec issue 218) -
+    #: placeholder: per head - 6,115,328 parameters at the v1's dimensions (764,416 shared).
+    shaw_shared_heads: bool = False
+    #: The vectors' initialisation, ``N(0, shaw_init_std)`` from B17's own generator.
+    #: COMMITTED-CLASS SILENCE (spec issue 220) - placeholder: 0.1 - a query's entries have unit
+    #: spread at initialisation, so the term starts with the spread of B15's scalars.
+    shaw_init_std: float = 0.1
+
     # --- B9: the move-graph mask (committed; section 6) ---
     #: Heads 0..k-1 carry the hard move-graph mask, the rest are dense ("2 heads with hard
     #: move-graph masks, remainder dense"; ablation 4 runs 0 / 2 / 4).
@@ -528,9 +567,9 @@ class NetConfig:
     routing_table: bool = False
     #: The relation types whose edges open the relations head ("attack/defend relations").
     #: COMMITTED-CLASS AMBIGUITY (B10 is class C) - placeholder default, not a decision:
-    #: all six typed relations of B11 (section 6: heads 1 and 4 "receive binary masks:
-    #: connected or not", which B11's types upgrade); the narrow reading is
-    #: ("attack", "defence").
+    #: every typed relation of B11 (section 6: heads 1 and 4 "receive binary masks:
+    #: connected or not", which B11's types upgrade) - five since travel-threat was folded
+    #: into attack (CHECKPOINT 6); the narrow reading is ("attack", "defence").
     relations_head_types: tuple[str, ...] = TYPED_RELATIONS
     #: Which way a typed edge opens the relations head: "forward", "reverse" or
     #: "symmetric", as ``move_graph_direction`` defines them; None - the placeholder
@@ -539,9 +578,10 @@ class NetConfig:
     relations_head_direction: str | None = None
 
     # --- B11: typed edge biases (provisional; default off; section 6) ---
-    #: A learned scalar per head per relation type (``TYPED_RELATIONS``), shared by all
-    #: layers (section 6: "a handful of learned scalars per head per type"), added to the
-    #: logits of the related token pairs, cross-board pairs included.
+    #: A learned scalar per head per relation type (``TYPED_RELATIONS``: five), shared by all
+    #: layers (section 6: "one learned scalar per head per type, shared across layers"), added
+    #: to the logits of the related token pairs, cross-board pairs included - 8 x 5 = 40
+    #: parameters (80 directed). Under the block-causal scope they bias live query rows only.
     typed_edge_bias: bool = False
     #: False: one scalar per head per type, added to both orientations of each related
     #: pair (the literal "a learned scalar per head per relation type"); True: two - one
@@ -618,20 +658,53 @@ class NetConfig:
     causal_past: str = "lineage"
     #: What a frozen board's state-dependent per-board features are under the block-causal
     #: scope: Delta-t-to-present (A3) changes whenever the present moves and the timeline's
-    #: active flag when the timeline is activated, after the board is frozen. The spec
-    #: (A3, A4, C2, C17) is silent. COMMITTED-CLASS SILENCE - placeholder default, not a
-    #: decision:
+    #: active flag when the timeline is activated, after the board is frozen. RULED: M20
+    #: ("frozen features -> intrinsic, with score-time status biases (B16)"; spec issue 31),
+    #: with register A3 and B16 and sections 2.3, 4.1 and 7.3 - "intrinsic", the default:
     #:   "intrinsic" - a frozen board's tokens get neither (only its contents, side to move
     #:                 and the superseded flag): knowing where the present is would be
-    #:                present-to-frozen flow, which C17 allows only at refreshes (the root
-    #:                refresh, a dense pass, gives every board its features as of the
-    #:                root). The only reading under which a frozen board's K/V stay valid
-    #:                between refreshes;
-    #:   "current"   - a frozen board carries the evaluated state's values (A3 literally):
-    #:                 every shift of the present changes every frozen board's input, so
-    #:                 the cache recomputes them all - the cost section 7.1 does not price.
+    #:                 present-to-frozen flow, which C17 allows only at refreshes (the root
+    #:                 refresh, a dense pass, gives every board its features as of the
+    #:                 root - kept as built, M20). Its current status reaches the live
+    #:                 queries that read it as B16's score-time key biases
+    #:                 (``status_key_bias``);
+    #:   "current"   - a test arm only, no reading of the documents any more: a frozen board
+    #:                 carries the evaluated state's values (A3 literally), so every shift of
+    #:                 the present changes every frozen board's input and the cache recomputes
+    #:                 them all - the cost section 7.1 does not price. No B16 under it.
     #: Live boards always carry both features.
     frozen_features: str = "intrinsic"
+    #: B16 (committed with the cached configuration; sections 4.1, 7.3; register B16, A3, M20;
+    #: ``status.py``): under the block-causal scope with ``frozen_features="intrinsic"`` a frozen
+    #: board's current status - "the key board's Delta-t-to-present bin and timeline status" -
+    #: enters as a learned key bias per head, recomputed every evaluation, on the scores of
+    #: live query rows (head boards' tokens, global registers) against the tokens of frozen
+    #: boards; frozen rows never get it (their K/V would go stale - C17). Built only for a
+    #: network of that configuration (``status_bias_built``): inert, with no parameter, under
+    #: the dense scope - the v1 - and under ``"current"``. A forward that overrides a dense-scope
+    #: network's scope to the block-causal one is refused while this is on with intrinsic frozen
+    #: features (``T5DNet.make_context``): its frozen boards would lose their status with no
+    #: table to give it back. On by default; ``False`` is the network without it (every other
+    #: weight the same: its table draws from a generator of its own) - no named ablation has that
+    #: arm (gate 6c's are the refresh's; spec issue 213).
+    status_key_bias: bool = True
+    #: B16's Delta-t-to-present bins (``buckets.signed_log_bucket`` of ``h - h_present`` in
+    #: half-turns): exact below ``status_dt_exact``, log2-spaced up to ``status_dt_max``, then
+    #: clamped, past and future apart. Section 4.1 says "Delta-t-to-present bin" and gives no
+    #: bins. COMMITTED-CLASS SILENCE (B16 is class C; spec issue 213) - placeholder, not a
+    #: decision: 4 and 128, the time buckets B6 used and smolgen keeps - 19 bins. The timeline
+    #: status is read as A3's active/inactive flag (head/superseded is constant on frozen
+    #: boards): 19 x 2 = 38 statuses per head.
+    status_dt_exact: int = 4
+    status_dt_max: int = 128
+    #: One table per layer, or one shared by all layers. Section 4.1 says "per head" only.
+    #: COMMITTED-CLASS SILENCE (spec issue 214) - placeholder, not a decision: shared, as B11's
+    #: scalars are (8 x 38 = 304 parameters; 4,864 with one table per layer, 16 x 304).
+    status_bias_per_layer: bool = False
+    #: The table's initialisation, ``N(0, status_bias_init_std)`` from B16's own generator
+    #: (section 15.2: realistic scale, never zeros). COMMITTED-CLASS SILENCE (spec issue 215) -
+    #: placeholder, not a decision: 0.1, the scale of B11's and B15's tables.
+    status_bias_init_std: float = 0.1
     #: C20 (committed): a board superseded inside the search is recomputed "under the
     #: state-defined mask - its causal past plus the conditioned history of its refresh
     #: epoch". COMMITTED-CLASS AMBIGUITY - placeholder default, not a decision:
@@ -705,6 +778,13 @@ class NetConfig:
             return tuple(self.rope_head_roles)
         k = self.move_graph_heads
         return ("move_graph",) * k + ("dense",) * (self.n_heads - k)
+
+    @property
+    def status_bias_built(self) -> bool:
+        """Whether the network has B16's status key biases (``status_key_bias``): only under the
+        block-causal scope with intrinsic frozen features - the cached configuration B16 is
+        committed with."""
+        return self.status_key_bias and self.attn_scope == "block_causal" and self.frozen_features == "intrinsic"
 
     @property
     def relations_direction(self) -> str:
@@ -789,6 +869,16 @@ class NetConfig:
             raise ValueError(f"disp_register_pairs must be one of {DISP_REGISTER_PAIRS}")
         if not (math.isfinite(self.disp_init_std) and self.disp_init_std >= 0):
             raise ValueError("disp_init_std must be finite and non-negative")
+        if self.shaw_key_term and not self.displacement_bias:
+            raise ValueError("shaw_key_term (B17) is on top of B15: it needs displacement_bias (its classes are B15's)")
+        if not 0 <= self.shaw_near <= 7:
+            raise ValueError("shaw_near must be in 0..7 (a file-rank offset within B15's 15 x 15 slice)")
+        if not (math.isfinite(self.shaw_init_std) and self.shaw_init_std >= 0):
+            raise ValueError("shaw_init_std must be finite and non-negative")
+        if self.status_dt_exact < 1 or self.status_dt_max < self.status_dt_exact:
+            raise ValueError("status_dt_exact must be positive and status_dt_max not below it (B16's Delta-t bins)")
+        if not (math.isfinite(self.status_bias_init_std) and self.status_bias_init_std >= 0):
+            raise ValueError("status_bias_init_std must be finite and non-negative")
         if self.smolgen_time_exact < 1 or self.smolgen_timeline_exact < 1:
             raise ValueError("smolgen_time_exact and smolgen_timeline_exact must be positive")
         if self.smolgen_time_max < self.smolgen_time_exact or self.smolgen_timeline_max < self.smolgen_timeline_exact:

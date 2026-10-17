@@ -72,7 +72,8 @@ import time
 #: same structure through ablation 6's dense-mask arm, "*-sdpa" through the unchunked fused
 #: path, which materialises (B, H, L, L) masks, and "*-keep" keeps every block for the
 #: backward pass instead of recomputing it (``attn_recompute=False``; training steps only);
-#: "6y-*" are ablation 6y's trunk arms on the v1 default.
+#: "6y-*" are ablation 6y's trunk arms on the v1 default, and "b17-shaw" is ablation 2's
+#: key-side Shaw arm on it (section 15.3's B17 row: its wall time beside "n2-default"'s).
 _ALL = dict(routing_table=True, typed_edge_bias=True, board_pair_smolgen=True)
 CONFIGS: dict[str, dict] = {
     "n1-dense": dict(move_graph_heads=0, attn_impl="sdpa", displacement_bias=False),
@@ -90,6 +91,7 @@ CONFIGS: dict[str, dict] = {
     "n2-all-keep": _ALL | dict(attn_recompute=False),
     "6y-post-norm": dict(norm_placement="post"),
     "6y-squared-relu": dict(ffn_activation="squared_relu"),
+    "b17-shaw": dict(shaw_key_term=True),
 }
 
 

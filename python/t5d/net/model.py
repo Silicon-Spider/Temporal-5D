@@ -38,21 +38,32 @@ Initialisation (implementation choice where the spec is silent):
   issue 208), drawn - like D8's parameters, below - from a generator of its own seeded from
   the model's seed (``b15_seed``), never from the global stream, after everything else: its
   no-table arm (ablation 2) has every other weight of the v1, bit for bit, and no flag
-  changes the table.
+  changes the table. B16's status table (a network of the cached configuration only)
+  ``N(0, status_bias_init_std)`` (a placeholder, spec issue 215) and B17's Shaw vectors (behind
+  their flag) ``N(0, shaw_init_std)`` (spec issue 220) the same way, each from its own generator
+  (``b16_seed``, ``b17_seed``).
 
 Attention structure (stage N2, ``structure.py``): ``make_context`` builds the batch's
 masks (B9's move graph on ``move_graph_heads`` heads, or B10's routing table) and biases
 (B11, B12, B15) once per forward, as sparse lists, board-pair tables and B15's per-batch
 index; every layer's attention builds dense rows from them one query block at a time
-(B14), with its own layer's tables (``AttnContext.for_layer``).
+(B14), with its own layer's tables (``AttnContext.for_layer``). B17's key-side Shaw term
+(behind its flag, ``shaw.py``) rides beside the structure (``AttnContext.shaw``): it needs
+each block's queries, which the structure's rows do not see.
 
 Attention scope (stage N3, ``scope.py``): ``NetConfig.attn_scope`` - dense (C1) or
 block-causal (C17, C19) - and any forward may override it (``scope=``): the cached path's
 refreshes are dense passes of a block-causal network (C3, ``cache.py``). Under the
 block-causal scope ``make_context`` adds the scope's rows, keeps the edge-derived
 structure to live rows, and the embedding drops a frozen board's state-dependent flags
-(``frozen_features``). ``history`` gives each position's epoch history (C20's second
-reading, ``supersession_scope``) and ``kv_hook`` sees every layer's keys and values.
+(``frozen_features``), whose current values B16 gives the live rows that read the board as
+score-time key biases (``status.py``; a network of that configuration has the table -
+``status_bias=False`` leaves it out of one forward: the anchor's own evaluation in a
+refreshed epoch, which is the refresh pass, section 7.9). A network of the dense scope has no
+table, so a block-causal override of its scope is refused while B16 is switched on with
+intrinsic frozen features (``make_context``): its frozen boards would lose their status with
+nothing in its place. ``history`` gives each position's epoch history (C20's second reading,
+``supersession_scope``) and ``kv_hook`` sees every layer's keys and values.
 
 Heads (``T5DNet.heads``) read the final-normed trunk: the policy pointer at each move's
 source and destination tokens (D1), the value head the mean of the global registers
@@ -98,8 +109,10 @@ from .heads import (
 from .kvformat import fake_quantise
 from .rope import rope_angles, rope_cos_sin, rope_tables, spatial_dims
 from .scope import BlockCausalScope
+from .shaw import ShawKeyTerm, ShawRows
 from .smolgen import BoardPairSmolgen
 from .state import TOKEN_BOARD_REGISTER, TOKEN_GLOBAL_REGISTER, Batch
+from .status import StatusKeyBias
 from .structure import TypedEdgeBias, build_structure
 from .trunk import RMSNorm, Trunk
 
@@ -186,6 +199,8 @@ class T5DNet(nn.Module):
         self.typed_edges = TypedEdgeBias(cfg) if cfg.typed_edge_bias else None
         self.smolgen = BoardPairSmolgen(cfg) if cfg.board_pair_smolgen else None
         self.displacement = DisplacementBias(cfg) if cfg.displacement_bias else None
+        self.status = StatusKeyBias(cfg) if cfg.status_bias_built else None
+        self.shaw = ShawKeyTerm(cfg, self.displacement.geom) if cfg.shaw_key_term else None
         self.policy = PointerHead(cfg.d_model, cfg.policy_dim, promotion=cfg.policy_promotion)
         self.value = ValueHead(cfg)
         self.aux = AuxHeads(cfg)
@@ -262,6 +277,16 @@ class T5DNet(nn.Module):
                 b15 = torch.Generator(device="cpu").manual_seed(b15_seed(torch.initial_seed()))
                 table = self.displacement.table
                 table.copy_(torch.empty(table.shape).normal_(0.0, cfg.disp_init_std, generator=b15))
+            # B16 (with the cached configuration) likewise: switching it changes no other weight.
+            if self.status is not None:
+                b16 = torch.Generator(device="cpu").manual_seed(b16_seed(torch.initial_seed()))
+                table = self.status.table
+                table.copy_(torch.empty(table.shape).normal_(0.0, cfg.status_bias_init_std, generator=b16))
+            # B17 (prototype, behind its flag) likewise: its arm differs from the v1 in B17 alone.
+            if self.shaw is not None:
+                b17 = torch.Generator(device="cpu").manual_seed(b17_seed(torch.initial_seed()))
+                vectors = self.shaw.vectors
+                vectors.copy_(torch.empty(vectors.shape).normal_(0.0, cfg.shaw_init_std, generator=b17))
 
     # -- positional context --
 
@@ -308,13 +333,35 @@ class T5DNet(nn.Module):
         *,
         scope: str | None = None,
         history: torch.Tensor | None = None,
+        status_bias: bool = True,
     ) -> AttnContext:
         """The attention context of a batch: RoPE tables, padding, the structure of stage N2
         (``structure.py``: B9/B10 masks, B11/B12/B15 biases - built sparsely, rows on demand),
         under the block-causal scope its rows (stage N3, ``scope.py``; ``history``: each
-        position's epoch history, ``(B, Nmax)`` bool), and optionally a caller's dense
-        ``attn_mask`` / ``attn_bias`` on top."""
+        position's epoch history, ``(B, Nmax)`` bool) and B16's status key biases (a network
+        of the cached configuration; ``status_bias=False`` leaves them out - the anchor's own
+        evaluation in a refreshed epoch, ``status.py``), and optionally a caller's dense
+        ``attn_mask`` / ``attn_bias`` on top.
+
+        A block-causal forward of a network of the dense scope is refused while its
+        ``status_key_bias`` is on with intrinsic frozen features (unless ``status_bias=False``):
+        its frozen boards would lose their status from their inputs (``embed_tokens``) with no
+        B16 table to give it back - a function no configuration defines (the table exists only
+        in a network of the cached configuration, ``NetConfig.status_bias_built``)."""
         cfg = self.cfg
+        if (
+            self.scope_of(scope) == "block_causal"
+            and status_bias
+            and cfg.status_key_bias
+            and cfg.frozen_features == "intrinsic"
+            and not cfg.status_bias_built
+        ):
+            raise ValueError(
+                "a block-causal forward of a network of the dense scope drops its frozen boards' status (intrinsic frozen "
+                "features) and has no B16 table to give it back: B16 exists only in a network of the cached configuration "
+                "(attn_scope='block_causal') - build that, or status_key_bias=False for the network without B16, or pass "
+                "status_bias=False"
+            )
         coords = self.coordinates(batch)
         cos, sin = rope_cos_sin(rope_angles(coords, self.rope_axis, self.rope_freq))
         spatial_free = None
@@ -325,10 +372,12 @@ class T5DNet(nn.Module):
             block_scope = BlockCausalScope.build(batch, cfg, history)
         live = None if block_scope is None else block_scope.live_tokens
         live_boards = None if block_scope is None else block_scope.live_boards
+        status = self.status if block_scope is not None and status_bias else None
         structure = build_structure(
-            batch, cfg, coords, self.typed_edges, self.displacement, self.smolgen, live=live, live_boards=live_boards
+            batch, cfg, coords, self.typed_edges, self.displacement, self.smolgen, live=live, live_boards=live_boards, status=status
         )
         tokens_per_board = max(lay.tokens_per_board for lay in batch.layouts)
+        shaw = None if self.shaw is None else ShawRows(self.shaw, structure.disp_index)
         return AttnContext(
             cos=cos,
             sin=sin,
@@ -347,6 +396,7 @@ class T5DNet(nn.Module):
             recompute=cfg.attn_recompute,
             sparse_max_fraction=cfg.attn_sparse_max_fraction,
             scope=block_scope,
+            shaw=shaw,
         )
 
     # -- forward --
@@ -354,13 +404,15 @@ class T5DNet(nn.Module):
     def _autocast(self, device: torch.device):
         return torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=self.cfg.trunk_dtype == "bf16")
 
-    def trunk_output(self, batch: Batch, attn_mask=None, attn_bias=None, *, scope=None, history=None, kv_hook=None) -> torch.Tensor:
+    def trunk_output(
+        self, batch: Batch, attn_mask=None, attn_bias=None, *, scope=None, history=None, kv_hook=None, status_bias: bool = True
+    ) -> torch.Tensor:
         """Final-normed trunk output ``(B, L, d)`` in FP32 (``scope``, ``history``,
-        ``kv_hook``: see the module docstring). Under the block-causal scope with
-        ``frozen_kv_format="fp8"`` every frozen board's K/V go through FP8 before attention
+        ``kv_hook``, ``status_bias``: see the module docstring). Under the block-causal scope
+        with ``frozen_kv_format="fp8"`` every frozen board's K/V go through FP8 before attention
         (after ``kv_hook``, which sees them as computed)."""
         x = self.embed_tokens(batch, scope)
-        ctx = self.make_context(batch, attn_mask, attn_bias, scope=scope, history=history)
+        ctx = self.make_context(batch, attn_mask, attn_bias, scope=scope, history=history, status_bias=status_bias)
         if self.scope_of(scope) == "block_causal" and self.cfg.frozen_kv_format != "match":
             kv_hook = _then(kv_hook, _frozen_kv_rounding(batch, self.cfg.frozen_kv_format))
         with self._autocast(x.device):
@@ -368,9 +420,18 @@ class T5DNet(nn.Module):
         return h.float()
 
     def forward(
-        self, batch: Batch, attn_mask=None, attn_bias=None, return_trunk: bool = False, *, scope=None, history=None, kv_hook=None
+        self,
+        batch: Batch,
+        attn_mask=None,
+        attn_bias=None,
+        return_trunk: bool = False,
+        *,
+        scope=None,
+        history=None,
+        kv_hook=None,
+        status_bias: bool = True,
     ) -> NetOutput:
-        h = self.trunk_output(batch, attn_mask, attn_bias, scope=scope, history=history, kv_hook=kv_hook)
+        h = self.trunk_output(batch, attn_mask, attn_bias, scope=scope, history=history, kv_hook=kv_hook, status_bias=status_bias)
         return self.heads(h, batch, return_trunk=return_trunk)
 
     def heads(self, h: torch.Tensor, batch: Batch, return_trunk: bool = False) -> NetOutput:
@@ -465,6 +526,17 @@ def b15_seed(seed: int) -> int:
     return (int(seed) * 0x9E3779B97F4A7C15 + 0xB15) & 0xFFFFFFFFFFFFFFFF
 
 
+def b17_seed(seed: int) -> int:
+    """The seed of B17's own generator (its vectors, ``T5DNet._init_weights``), from the model's."""
+    return (int(seed) * 0x9E3779B97F4A7C15 + 0xB17) & 0xFFFFFFFFFFFFFFFF
+
+
+def b16_seed(seed: int) -> int:
+    """The seed of B16's own generator (its status table, ``T5DNet._init_weights``), from the
+    model's."""
+    return (int(seed) * 0x9E3779B97F4A7C15 + 0xB16) & 0xFFFFFFFFFFFFFFFF
+
+
 def build_model(cfg: NetConfig | None = None, seed: int = 0) -> T5DNet:
     """A randomly initialised network, deterministic in ``seed`` (global RNG untouched)."""
     with torch.random.fork_rng(devices=[]):
@@ -488,6 +560,8 @@ def parameter_breakdown(model: T5DNet) -> dict[str, int]:
         "attn.typed_edges": count(model.typed_edges),
         "attn.smolgen": count(model.smolgen),
         "attn.displacement": count(model.displacement),
+        "attn.status": count(model.status),
+        "attn.shaw": count(model.shaw),
         "head.policy": count(model.policy),
         "head.value": count(model.value),
         "head.submit": count(model.submit),

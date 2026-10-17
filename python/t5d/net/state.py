@@ -26,11 +26,14 @@ Representation (design spec section 2; register A1-A4):
 * **Relations and moves.** Typed edges ``(src_token, dst_token, relation)`` between
   square tokens, relation ids in ``RELATION_TYPES``: ``move`` edges are the move graph
   that opens the move-graph heads' mask (B9, section 6: "which squares reach which,
-  across all boards"); the other six are the typed relations of B11 (attack, defence,
-  pin, x-ray, check, travel-threat - the relations head's mask under B10, and the typed
-  biases). Cross-board edges are ordinary edges. What each relation means is the rules
-  engine's to define (the ``check`` relation waits on the check ruling, CHECKPOINT 1);
-  the network only consumes the lists (``structure.py``). Candidate moves
+  across all boards"); the other five are the typed relations of B11 (attack, defence,
+  pin, x-ray, check - the relations head's mask under B10, and the typed biases).
+  Travel-threat, once a sixth, is folded into attack (CHECKPOINT 6, reversal 26: a travel
+  threat is a cross-board attack); the C ABI keeps its id, 6, reserved and never emitted,
+  and validation refuses it here. Cross-board edges are ordinary edges. What each relation
+  means is the rules engine's to define (it builds attack, defence and x-ray; pin and check
+  are engine ABI round 1's, so their lists stay empty until then); the network only
+  consumes the lists (``structure.py``). Candidate moves
   ``(src_square_token, dst_square_token, promotion)`` feed the policy pointer head (D1,
   section 8.1). Registers are never edge or move endpoints (section 5.3); validation
   rejects any that are.
@@ -100,8 +103,10 @@ COLOUR_NONE, COLOUR_WHITE, COLOUR_BLACK = 0, 1, 2
 N_COLOURS = 3
 
 #: Edge relation ids (section 6). ``move`` is the move graph (B9's mask); the rest are
-#: B11's typed relations (``config.TYPED_RELATIONS``).
-RELATION_TYPES: tuple[str, ...] = ("move", "attack", "defence", "pin", "xray", "check", "travel_threat")
+#: B11's typed relations (``config.TYPED_RELATIONS``). The ids are the C ABI's
+#: (``engine/include/t5d/records.h``), which keeps id 6 - travel-threat, folded into attack at
+#: CHECKPOINT 6 - reserved: the engine never emits it, and no network relation has it.
+RELATION_TYPES: tuple[str, ...] = ("move", "attack", "defence", "pin", "xray", "check")
 RELATION_IDS: dict[str, int] = {name: i for i, name in enumerate(RELATION_TYPES)}
 
 #: Token kinds.
