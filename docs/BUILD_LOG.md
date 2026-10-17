@@ -377,9 +377,12 @@ main and issue 300 is ruled. Early adjudication (§12.3) has no specification (i
 comparison recorded in "Recovery", above); the standing items - branch protection with
 the workflows as required checks; filing the two oracle bug drafts in
 `docs/checkpoints/upstream/`; applying the proposed spec edits upstream. Put to the
-user on the lane branches, joining this list as each lane merges: spec issues
-122-124 (`lane/gate` 7530e36; edit 98 pending the ruling on 122), 142 (`lane/engine`
-2864be0) and 204 (`lane/net` f830f31). The main loop's issues 300-306 go to the user
+user, none blocking: spec issues 122-124 (merged with H47 - whether a ruleset should
+need two oracles to be gated, as §11.0's wording says and the gate does not; whether
+the commit smoke test should fail an engine compared with nothing; whether a
+restricted run of a full-strength tier should be a smoke test; edit 98 waits on the
+ruling on 122). Joining this list as their lanes merge: 142 (`lane/engine` 2864be0)
+and 204 (`lane/net` f830f31). The main loop's issues 300-306 go to the user
 with step 2's consolidated list; nothing in step 1 waits on them.
 
 ### State on 2026-10-04 (before the loss)
@@ -1193,6 +1196,8 @@ commits (F5 and F6 on `lane/net`, H47 and H48 on `lane/gate`, M22 on `lane/engin
 | H44 | built in part | The audit lane's tools: the certificate checker (E4 alone) and `t5d-hunt-truth` (E9); the decision sampler, the offline proof runner and the per-range report were E10's - lost, redone in step 2 (curriculum hooks as interfaces only) |
 | H45 | not built (rule) | The adversarial league (M5) |
 | H46 | built, tested | Q2 (provisional): initial timelines count as created by neither player - a variant's set-up reads every timeline as initial (rulebook R10) |
+| H47 | built, tested | The check that some ruleset is gated (`engine-nothing-gated`, and `GateResult.ok`'s test of it) runs only in a tier that runs every oracle search over the whole corpus (`Tier.full_strength`: nightly, release) - keyed to what a tier runs, never its name (the self-tests pin both directions). Any other tier - commit - is a smoke test: an engine with no finding against it passes, gated or not, and the summary (`engine differential: SMOKE TEST - ...`) and the report (`smoke_test`; nothing under `gated`) say that it gates nothing and why. In every tier an unexplained divergence, a telltale or a contract breach fails the engine. `gate.toml` is refused if a tier that is not full strength sets `require_engine` (it could never pass); a tier that requires an engine reads only what its run may state as gated, and the summary says when it came through no named variant. A run restricted with `--source`/`--record` keeps its tier's rule (issue 124). The release tier's named-variant rule, the proof-channel line and parse mode are unchanged. Not yet run with the engine configured (`[engine] command` is still empty). Spec issues 122-124, proposed edit 98 |
+| H48 | not started | Before the proof-channel sign-off: the naive searches' release budgets raised and the golden files re-recorded twice, on a quiet machine, so that no proof-channel check is vacuous (`verify`'s 17 `proof-channel-vacuous` notes) |
 | H15 | built, tested | The scanner's deterministic single-thread mode; the search's synchronous mode and digest (E6a; the digest in the C API) |
 | H16, H25, H29 | not built (rule) | Refused |
 | H17 | built in part | Lazy SMP in the scanner (E5c): same-root threads, a shared TT and a concurrent solved store; in-game decay and rung helpers wait for the search; no help for exhaustive refutations (measured on Guard, now in the register) |
@@ -2154,6 +2159,48 @@ superseded or made moot says so; nothing is deleted.
     trigger §11.1's re-search, the reserve returns for them, under 50 boards.
     Proposed edit 204.
 
+122. **"Gating needs two oracles" is not the gating rule as built** (§11.0 "Tiered
+    CI": "a ruleset is gated only when two or more oracles answer for it"; register
+    H47: "since gating needs two oracles"). The engine differential
+    (`gate.engine_differential`; `oracles/README.md`, "The engine contract") gates a
+    ruleset when the engine replayed each of its records, at least one oracle
+    followed each as far as the engine went, and the oracles' agreeing verdicts
+    settle check, count and mate at no less than `min_checked` of the engine's
+    positions; `Gated.oracles` counts the oracles behind the weakest record, and it
+    may be 1 - the harness's own tests meet the conditions with ftxi alone, canned
+    and live. Whatever kept the commit tier from gating with the engine configured
+    (Q-A, 2026-10-04: the branch is lost, its run not re-checked here), it was not
+    a two-oracle rule. Built: H47 keyed to `Tier.full_strength` (the tier runs
+    every oracle search over the whole corpus), never to a count of oracles; in any
+    other tier a ruleset that met the gating conditions with its oracles alone is
+    reported as not gated, with that reason (`gate.SMOKE_REASON`). No two-oracle
+    requirement was added: it would also change what nightly and release gate (the
+    variants one oracle reads) - a decision for the user. Put to the user: should a
+    ruleset be gated only when two oracles stand behind it, in every tier? Until it
+    is ruled, proposed edit 98 gives both texts.
+123. **H47 is silent on an engine compared with nothing in a smoke test.** As
+    built, an engine with no finding against it passes the commit tier's
+    differential even when it declined every record (nothing was compared, so
+    nothing was found); nightly and release fail it (`engine-nothing-gated`),
+    and parse mode keeps its own floor (`engine-nothing-compared`) in every tier.
+    The self-tests pin it (`test_gate_live`, `GateRunTests`), so the consequence is
+    visible. Put to the user: should the smoke test hold full mode to parse mode's
+    floor - the engine replayed at least one record, and an oracle's answer was
+    compared with it? Nothing is parked on it.
+124. **H47 is silent on a run of a full-strength tier restricted to some sources
+    or records** (`gate --tier nightly --source ftxi`; "tiers that run every
+    oracle"). Built - the literal reading: the run keeps its tier's rule
+    (`GateResult.full_strength` is the tier's; the run is marked partial). It names
+    as gated what met the gating conditions with the sources and records it ran -
+    one oracle can (issue 122) - and fails an engine with no finding against it
+    that came through no ruleset, so a run of sources that cannot gate (cwmtt alone:
+    no check verdict) always fails such an engine. The proof channel stays off for
+    every partial run, and CI runs none, so no verdict anyone relies on depends on
+    it. The other reading: a run that leaves out one of its tier's sources is a
+    smoke test and gates nothing. Pinned (`GateRunTests.test_a_restricted_run_keeps_its_tiers_rule`)
+    and documented (`oracles/README.md`, "Other commands"). Put to the user;
+    nothing is parked on it.
+
 ## Proposed spec edits
 
 Edits the spec or the register needs, for applying upstream. Each: where, what it
@@ -2572,6 +2619,32 @@ struck through, where nothing of it is left to apply); the others stand as writt
     needs a GPU evaluation rate (issue 120); until then the CPU figure (N5's 6.9 F1
     evaluations/s on CPU) is the only one, and the re-check is deferred.
     *Applied upstream (CHECKPOINT 6/7).*
+98. **§11.0 "Tiered CI" (from "The commit tier is a smoke test") and register
+    H47 - pending the user's ruling on issue 122** (and on issues 123-124, whose
+    answers go here too). §11.0 says "The commit tier is a smoke test: a ruleset is
+    gated only when two or more oracles answer for it, so the check that *some*
+    ruleset is gated runs only in the tiers that run every oracle — nightly and
+    release (CHECKPOINT 6)"; H47 ends "since gating needs two oracles". The gate as
+    built has no two-oracle rule (issue 122), so the text depends on the ruling:
+    (a) **No two-oracle rule** (as built). §11.0: "The commit tier is a smoke test:
+    it does not run every oracle search over the whole corpus, and gates no
+    ruleset; an engine with no finding against it passes it, and the gate's output
+    says that the tier gates nothing. A ruleset is gated, and the check that *some*
+    ruleset is gated runs, only in a tier that runs every oracle search over the
+    whole corpus — nightly and release (CHECKPOINT 6). In every tier an unexplained
+    divergence, a telltale or a breach of the engine contract fails the engine."
+    H47: "... the check that some ruleset is gated runs only in tiers that run
+    every oracle search over the whole corpus (nightly, release); the commit tier
+    gates nothing, and says so."
+    (b) **A two-oracle rule.** §11.0's sentence and H47's reason stay, and the
+    gate gains the condition: a ruleset is gated only when two independent oracles
+    stand behind each of its records (`Gated.oracles` ≥ 2), in every tier - so the
+    commit tier, with one rules oracle, could gate nothing anyway. It changes what
+    nightly and release gate: a ruleset with a record that only one oracle follows
+    as far as the engine goes is gated in no tier, and the proof channel can never
+    be enabled for it - which rulesets, measured once the engine is configured.
+    Why: §11.0 and H47 give a two-oracle rule as the reason the commit tier gates
+    nothing; the gate has none, and whether to add one is the user's decision.
 
 200. **§8.5, §8.7 and register C11, C14, H18 (identity and the evaluation cache's
     key)**: now - MCGS identity "adds branch origins and whether a turn is in

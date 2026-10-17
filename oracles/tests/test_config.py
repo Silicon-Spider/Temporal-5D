@@ -65,6 +65,19 @@ class TierConfigTests(unittest.TestCase):
         tiers = config.load().tiers
         self.assertEqual([name for name, tier in tiers.items() if tier.can_enable_proof_channel], ["release"])
 
+    def test_only_a_tier_that_runs_every_oracle_search_over_the_whole_corpus_may_require_an_engine(self):
+        # Such a tier fails unless an engine came through a named variant, and any other tier is a smoke test that
+        # gates nothing (H47): no engine could ever pass it. Refused, not left to fail with nothing to say why.
+        for old, new in (('record_tiers = ["commit"]\ntimeout_s = 60\n',
+                          'record_tiers = ["commit"]\ntimeout_s = 60\nrequire_engine = true\n'),
+                         ('record_tiers = ["commit", "nightly"]\ntimeout_s = 600\n',
+                          'record_tiers = ["commit"]\ntimeout_s = 600\n')):
+            with self.assertRaises(HarnessError, msg=new) as raised:
+                self.load({old: new})
+            self.assertIn("require_engine needs a tier that runs every oracle source over every record tier",
+                          str(raised.exception))
+        self.assertTrue(config.load().tier("release").require_engine)
+
     def test_budgets_for_a_source_the_tier_does_not_run_are_refused(self):
         # Probably a typo - and a budget that silently applies to nothing.
         with self.assertRaises(HarnessError):
