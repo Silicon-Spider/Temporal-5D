@@ -179,6 +179,15 @@ target_link_libraries(t5d_tools PUBLIC t5d_core)
 add_executable(t5d-measure tools/t5d_measure.cpp)
 target_link_libraries(t5d-measure PRIVATE t5d_tools)
 
+# Register M22: the turn width of an action (tools/turn_width.*), measured on
+# records by t5d-measure --turns / --turn-summary; test_turnwidth.cpp counts
+# constructed actions and runs t5d-measure itself on engine/testdata/turn-width.
+# Not one of the truth's sources (T5D_TRUTH_SOURCES below).
+target_sources(t5d_tools PRIVATE tools/turn_width.cpp)
+target_sources(t5d-tests PRIVATE tests/test_turnwidth.cpp)
+add_dependencies(t5d-tests t5d-measure)
+target_compile_definitions(t5d-tests PRIVATE "T5D_MEASURE_EXE=\"$<TARGET_FILE:t5d-measure>\"")
+
 # The benchmark names its build in its output: the build type and the flags.
 find_package(Threads REQUIRED)
 add_executable(t5d-bench tools/t5d_bench.cpp)

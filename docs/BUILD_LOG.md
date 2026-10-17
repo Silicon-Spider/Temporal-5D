@@ -382,8 +382,9 @@ need two oracles to be gated, as §11.0's wording says and the gate does not; wh
 the commit smoke test should fail an engine compared with nothing; whether a
 restricted run of a full-strength tier should be a smoke test; edit 98 waits on the
 ruling on 122); 204 (merged with F5/F6 - whether F6's Mish reaches the output heads:
-the value head keeps GELU as the named placeholder `head_activation`). Joining this
-list as its lane merges: 142 (`lane/engine` 2864be0). The main loop's issues 300-306 go to the user
+the value head keeps GELU as the named placeholder `head_activation`); 142 (merged
+with M22 - nothing maps the turn-width figures to an order of the D2 work; the figures
+and a suggestion that 6x report by playable-board count are in the issue). The main loop's issues 300-306 go to the user
 with step 2's consolidated list; nothing in step 1 waits on them.
 
 ### State on 2026-10-04 (before the loss)
@@ -1166,6 +1167,24 @@ for game records.
   check). M8's thresholds, with the brief's ±10% STOP band; a failed root scan
   STOPS the run.
 
+**M22 - the turn width, measured (2026-10-17).** The last Phase 1 count, recorded
+before the D2 tree and flat forms are built (§15.1; register M22) - the ply split,
+D2's default arm, is built already (the D2 row below); 2864be0's message, "before
+any D2 turn-construction arm is built", should have named the two turn-start forms:
+`t5d-measure --turns
+--turn-summary` over t0database (716 records replay, 692 games), the default rules,
+parse mode; every action replayed move by move and checked against the replay; the
+summary recomputed independently. Figures, definitions and the part L check in
+`docs/MEASUREMENTS.md` ("Turn width (M22)"). Reviewed the same day: an optional move
+now counts a jump from a mandatory board onto an optional one (T3, J4 - the move is
+made on both boards), the summary gives the turns with more than one playable board
+(where the arms differ) and with an optional board, its ranges, classes and
+statistics live in `tools/turn_width.hpp` and are tested at their edges, and the D2
+reading counts width at the turn's start, not by the moves played. The tool's
+per-action counter (`tools/turn_width.hpp`, `TurnCounter`) is outside Hunt's truth
+sources and can serve 6x's reports "by mandatory-board count". Open: how the figures
+order the D2 work (issue 142).
+
 ### 6. Phases 2-3 - in progress (see "Current state")
 
 ## Register status
@@ -1333,6 +1352,7 @@ commits (F5 and F6 on `lane/net`, H47 and H48 on `lane/gate`, M22 on `lane/engin
 | M12 | applied - STOP | The bounded optimisation pass (E5c) and the re-run at 5 threads, Lazy SMP: 50-199 boards fail -> STOP, redesign the verification layer |
 | M13 | applied | 8 cores per GPU: M9 judged on 2 expansion cores (passes, 1.87x), the scanner measured at 5; with the scanner retired, its five cores serve Hunt, the settling scans and the audit lane (E10's scheduler, H14) |
 | M9 | measured | Pseudo-legal: PASS (2.2x / 2.5x the targets on one thread), history term 2%; with E5a's fast legality: 1.01x at 240 boards on one core (in the band), 1.87x on two; 1.21x at 600. The Phase-3 re-check waits for a GPU evaluation rate (M19) |
+| M22 | measured | Turn width on t0database (692 games, the default rules, `t5d-measure --turns --turn-summary`; `tools/turn_width.hpp`): more than one playable board at the turn's start - where the D2 arms differ - in 15.1% / 65.2% / 99.4% of turns (< 50 / 50-99 / 100-199 boards; 13 games at 100-199, none at 200+); more than one mandatory board in 5.8 / 27.1 / 64.0%, three or more in 0.7 / 6.7 / 16.0%; an optional board at the start in 10.5 / 44.5 / 65.7%; an optional move played in 1.2 / 2.5 / 1.1%; single-move turns 95.9 / 80.3 / 49.1% (a count of what was played, not of width). Part L's prediction holds (94.2% one mandatory board under 50). No threshold, no verdict: how it orders the D2 work is put to the user (issue 142); definitions issues 140-141, edits 110-115 |
 | M11 | built | Licence recorded in PROVENANCE.md |
 
 ## Parked, and why
@@ -2077,6 +2097,8 @@ superseded or made moot says so; nothing is deleted.
     disposed of; B7's gate now names ablation 2's head-allocation evidence); D8's
     readout form (`submit_head`, issue 109) is not on M20's list.*
 
+<!-- A new list, so that the numbers from 300 render as written. -->
+
 300. **Early adjudication and MLH steering's "settled" outcome have no specification**
     (§12.3; register I3, I18). §12.3 gives match play "moves-left steering active —
     prefer faster wins and slower losses once the outcome is settled (Lc0's MLH
@@ -2162,6 +2184,8 @@ superseded or made moot says so; nothing is deleted.
     trigger §11.1's re-search, the reserve returns for them, under 50 boards.
     Proposed edit 204.
 
+<!-- A new list, so that the numbers from 122 render as written. -->
+
 122. **"Gating needs two oracles" is not the gating rule as built** (§11.0 "Tiered
     CI": "a ruleset is gated only when two or more oracles answer for it"; register
     H47: "since gating needs two oracles"). The engine differential
@@ -2203,6 +2227,8 @@ superseded or made moot says so; nothing is deleted.
     smoke test and gates nothing. Pinned (`GateRunTests.test_a_restricted_run_keeps_its_tiers_rule`)
     and documented (`oracles/README.md`, "Other commands"). Put to the user;
     nothing is parked on it.
+
+<!-- A new list, so that the numbers from 200 render as written. -->
 
 200. **F5's biases and norm, as built** (§9.3, register F5). (a) Register F5 names
     two bias rules - the norms have none ("no mean-centring, no bias") and the Q, K
@@ -2259,6 +2285,67 @@ superseded or made moot says so; nothing is deleted.
     committed-class placeholder that awaits neither a ruling nor a named ablation
     (6y's arms are the FFN's, not the heads'; M20's dispositions predate it): put to
     the user to rule, or to name the ablation. Proposed edit 154.
+
+<!-- A new list, so that the numbers from 140 render as written. -->
+
+140. **M22's "optional moves played" is undefined** (§8.2 "Measure first", §15.1's
+    Phase 1 row, register M22 and part K). Measured as the moves made on a board that
+    was not mandatory at the action's start (T6, R9) - on either board a move is made
+    on (T3: its source and, for a jump that does not branch, its destination, J4). So
+    a jump from an optional board onto a mandatory one counts (it also satisfies the
+    mandatory board, T6), and so does a jump from a mandatory board onto an optional
+    one; both kinds are counted apart. The first version went by the source board
+    alone, which counted the first kind and left out the second (35 turns of the
+    27,097: 24 / 10 / 1 by range) - an asymmetry the review found; that reading is
+    kept beside the other (`optional_by_source`). A board's status can change
+    mid-action: a rewind (T8, T12) releases the mandatory boards left unplayed, and a
+    reactivation (T11, T12) can make a board mandatory, with or without a rewind.
+    Such boards keep their status at the start; the moves on them are counted apart,
+    and the reading by the boards' status when the move was made is computed beside
+    it. On t0database it differs on 4 of 27,097 actions. A fourth reading, the moves
+    beyond the obligations' minimum, is not computed. The documents are silent on all
+    of it. "Mandatory boards per turn" is read as the count at the action's start
+    (`GameState::mandatory_count()`), not the mandatory boards played; the two differ
+    only where a rewind releases some, which is counted (and the moves from mandatory
+    boards are fewer still where one jump plays two of them, also counted). Proposed
+    edit 111.
+141. **M22 names no board-count ranges and no unit** (§8.2, §15.1, register M22).
+    Built with 6b's and 6b″'s ranges (< 50, 50-99, 100-199, 200+) by the board count
+    at the action's start (every board, history included - M7's N), with ten-board
+    buckets under 100; M7 used 1-49 / 50-99 / 100-159 / 160-239 / 240+, and the
+    per-action lines allow any. The unit is the action (turn) of a distinct game: a
+    record that equals or is a prefix of another is counted once (692 games, M7's
+    strict count); M7's grouping (674 games) is a sensitivity reading, and the refused
+    records' actions are reported apart. A range resting on fewer than 10 games is
+    flagged too few to read (issue 118's convention, applied to games). Proposed
+    edit 111.
+142. **Nothing maps M22's figures to an order of the D2 work** (register part K:
+    "Priority of the D2 arms (M22)"; §15.1: "Cheap measurements before the code they
+    gate"). §15.6 sets no threshold, and both turn-start forms are Phase-2
+    deliverables whatever the figure (§15.1's Phase 2 row; §15.5 needs both D2 rows
+    of §15.2), so the measurement can order the work but not cancel an arm. Recorded
+    without a verdict (MEASUREMENTS, "Turn width (M22)"); the order is put to the
+    user. The figures, read by the turn's start, which is where the arms differ - not
+    by the moves the player made: a turn that starts with one playable board is one
+    move and a submission under every arm, and every other start is searched
+    differently (the ply split evaluates every node inside the turn and, after the
+    shift, offers submit beside each optional move; the tree form inherits the
+    turn-start priors; the flat form gives optional boards a "leave it" option).
+    Turns that start with more than one playable board: 15.1% of the human games'
+    turns under 50 boards, 65.2% at 50-99 and 99.4% at 100-199 (13 games); with more
+    than one mandatory board - §8.2's "k evaluations along every path" - 5.8%, 27.1%
+    and 64.0%; with three or more - part L's regime for the turn-start forms - 0.7%,
+    6.7% and 16.0%; with an optional board 10.5%, 44.5% and 65.7%, an optional move
+    played in 1.2%, 2.5% and 1.1%. The turns of more than one move (4.1%, 19.7%,
+    50.9%) understate it: 414, 220 and 23 turns start with two or more mandatory
+    boards and are played with one move (a jump between two of them, or a rewinding
+    branch). And 6x is "reported by mandatory-board count" (§13.1): its one-board
+    class would hold both the turns where every arm is identical and those with
+    optional boards beside the one (9.3%, 38.1% and 35.4% of all turns), where the
+    arms differ - a report by playable boards as well would separate them. No human
+    turn starts at 200 boards or more, so the regime of §8.2's cost argument is
+    unmeasured until the pilot self-play run (M18). (The first version of this issue
+    called the multi-move turns "where the arms differ"; corrected at review.)
 
 ## Proposed spec edits
 
@@ -2705,6 +2792,8 @@ struck through, where nothing of it is left to apply); the others stand as writt
     Why: §11.0 and H47 give a two-oracle rule as the reason the commit tier gates
     nothing; the gate has none, and whether to add one is the user's decision.
 
+<!-- A new list, so that the numbers from 200 render as written. -->
+
 200. **§8.5, §8.7 and register C11, C14, H18 (identity and the evaluation cache's
     key)**: now - MCGS identity "adds branch origins and whether a turn is in
     progress"; the cache is "state-keyed (with ruleset and refresh epoch)". Proposed -
@@ -2755,6 +2844,8 @@ struck through, where nothing of it is left to apply); the others stand as writt
     measured, per range. Why: the vocabulary is how a reader tells how firm a row is,
     and these words are outside it.
 
+<!-- A new list, so that the numbers from 150 render as written. -->
+
 150. **§9.3's first bullet and register F5**: now - the norms "no mean-centring, no
     bias" and "no biases in the Q, K and V projections", the attention-output and FFN
     biases kept only in the Mish bullet's "as here". Proposed - the first bullet and
@@ -2781,6 +2872,68 @@ struck through, where nothing of it is left to apply); the others stand as writt
     hidden activation is Mish too (as built: the value head's MLP keeps GELU, a
     placeholder), so that D3's head rewrite does not settle it by accident; and, for
     6y's squared-ReLU arm, its initialisation if it is not Mish's (issue 204).
+
+<!-- A new list, so that the numbers from 110 render as written. -->
+
+110. **§8.2 "Measure first" (M4 write-back of M22)**: says "How many turns have more
+    than one mandatory board, and how many optional moves are played, per
+    board-count range, on the human games — rules engine only, hours. Under 50
+    boards the human games' median position has one active timeline, so most turns
+    there are single moves, where every arm is identical; the arms differ only where
+    turns are wide." Proposed, appended: "Measured (M22; t0database's 692 games,
+    MEASUREMENTS), by the turn's start: turns with more than one playable board -
+    where the arms differ - 15.1% under 50 boards, 65.2% at 50-99, 99.4% at 100-199
+    (13 games); with more than one mandatory board 5.8%, 27.1%, 64.0%; with three or
+    more 0.7%, 6.7%, 16.0%; with an optional board 10.5%, 44.5%, 65.7%; turns with an
+    optional move played 1.2%, 2.5%, 1.1%. No human turn starts at 200 boards or
+    more." Why: M4 - the measured figures go beside the paragraph's expectation, which
+    they confirm under 50 boards when it is read by the turn's start (84.9% of the
+    turns there start with one playable board, where every arm is identical) - not by
+    the share played with one move (95.9%), which counts as single moves the turns
+    with several boards that a jump between two of them or a rewinding branch
+    resolves in one move, and every arm searches those differently.
+111. **Register M22**: says "Turn-width measurement before the D2 arms: mandatory
+    boards per turn and optional moves played, per board-count range, on the human
+    games — rules engine only | Committed (process)". Proposed: record it measured
+    (2026-10-17, MEASUREMENTS "Turn width (M22)"), with its definitions: mandatory
+    boards = the active boards in the present at the action's start (R9); an
+    optional move = a move made on a board not mandatory at the action's start - its
+    source, or the destination of a jump that does not branch (T3, J4), so a jump
+    across the line counts either way (issue 140); boards whose status changes
+    mid-action - released by a rewind (T8, T12) or made mandatory by a reactivation
+    (T11, T12) - keep their status at the action's start; ranges < 50 / 50-99 /
+    100-199 / 200+ boards at the action's start; the unit the action of a distinct
+    game (issue 141). Why: the measurement is done; the row should say what its words
+    were taken to mean.
+112. **Register part K, "Turn width on human games: share of turns with more than
+    one mandatory board; optional moves played | Priority of the D2 arms (M22)"**:
+    strike the item through as the resolved ones are ("~~...~~ — measured (M22):
+    more than one mandatory board in 5.8% / 27.1% / 64.0% of turns under 50 / at
+    50-99 / at 100-199 boards, more than one playable board in 15.1% / 65.2% /
+    99.4%; optional moves played in 1.2% / 2.5% / 1.1%"), and keep its open half -
+    how the figures order the D2 work - as a new item, or under the §8.2
+    turn-construction item, until the user rules (issue 142). Why: the measured half
+    is answered; the ordering half has no rule.
+113. **Register part L, "Most human-game turns under 50 boards have exactly one
+    mandatory board | §8.2 (turn-width measurement)"**: append the outcome as part L
+    does for the others - "— **held** (M22): 94.2% of the turns under 50 boards
+    (22,605 of 24,002, in 692 games)". Why: part L keeps each prediction with its
+    outcome.
+114. **§15.1's Phase 1 row "Turn width: mandatory boards per turn and optional moves
+    played, per board-count range, on the human games | How much the D2 arms matter
+    (§8.2)"**: record the outcome in its "Settles" column (measured, M22,
+    MEASUREMENTS), as the scanner's row records 6b's; and note that §13.1 6x's "after
+    the turn-width measurement (§15.1)" is now met. Why: the build order should show
+    which Phase 1 measurements are done.
+115. **Register D2 and part K's "§8.2 turn construction — ply split vs tree form vs
+    flat form | Couples MCGS; measured jointly; turn-width measurement first
+    (M22)"**: D2's status says "**Undecided** — measured jointly with widening and
+    MCGS, after the turn-width measurement (M22)". Proposed: note in both, in the
+    words edit 114 uses for §13.1 6x, that the turn-width measurement is done (M22,
+    2026-10-17, MEASUREMENTS "Turn width (M22)"); D2 stays Undecided, decided by 6x.
+    Why: edit 114 alone would leave the register's D2 status and part K's gate still
+    waiting on M22 while the spec says the precondition is met - and a decision changes
+    in the spec and the register in the same edit (CLAUDE.md).
 
 ## Session log
 

@@ -10,6 +10,84 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-17 - Build log: each lane's numbers render as written; issue 142 waits on the user
+
+- `docs/BUILD_LOG.md`: an HTML comment at column 0 before the first spec issue of
+  each number block (300, 122, 200) and the first proposed edit of each (200, 150),
+  as the engine lane did for 140 and 110 - a Markdown ordered list renumbers its items
+  from its first, so on GitHub issue 300 read as 122 and every later number with it.
+  Issue 142 (merged with M22) joins "Waiting on the user".
+- Spec: none.
+
+### 2026-10-17 - M22: the turn-width measurement on t0database - mandatory boards per turn and optional moves played, per board-count range
+
+- `engine/tools/turn_width.hpp`, `turn_width.cpp` (new, in `t5d_tools`; not among
+  Hunt's truth sources): the turn width of one action, counted by the rules engine
+  alone (`TurnCounter`, `classify_action`). At the action's start: the mandatory
+  boards (the active boards in the present, T6 and R9), the playable and the optional
+  boards. Then its moves: the optional ones (made on a board not mandatory at the
+  start - the source, or the destination of a jump that does not branch: T3, J4),
+  with the reading by the source board alone and the reading by the status when made
+  beside it; the boards played (a jump that does not branch plays two); jumps between
+  two mandatory boards (A6's "two fewer"), from an optional board onto a mandatory one
+  and from a mandatory board onto an optional one; moves after the shift (R8);
+  rewinds (T8, T12); and the boards a rewind releases or a reactivation (T11, T12)
+  makes mandatory mid-action. And the summary's board-count ranges, mandatory classes
+  and statistics (`kTurnRanges`, `kTurnBuckets`, `mandatory_class`, `turn_stats`).
+  Why: register M22 must be recorded before the D2 tree and flat forms are built
+  (§15.1; the ply split is built), and nothing in the engine looked inside an action.
+- `engine/tools/t5d_measure.cpp`: `--turns` (a line per action) and `--turn-summary`
+  (per board-count range at the action's start - < 50, 50-99, 100-199, 200+, ten-board
+  buckets under 100, by mandatory class - under a strict reading that leaves out a
+  record repeating another, M7's grouping as sensitivity, and the refused records'
+  actions apart; a record that ends in "error" is in no reading, counted as
+  `errors`). Every action is played twice, by the replay and move by move, and the
+  two states must be equal. Without the new options the output is unchanged
+  (byte-identical on t0database, with and without `--summary --legal`).
+- `engine/tests/test_turnwidth.cpp` (18 tests: constructed actions with known
+  counts; the summary's ranges and classes at their edges and its statistics on
+  constructed widths; `t5d-measure` run on `engine/testdata/turn-width/` - the counts,
+  how records are classified, and actions starting at 9/10, 49/50, 99/100 and
+  199/200 boards); `engine/CMakeLists.txt`. 544 tests pass.
+- `docs/MEASUREMENTS.md`: "Turn width (M22)", a new section for Phase 1 counts with
+  no threshold. On t0database's 692 games under the default rules: more than one
+  playable board at the turn's start - where the D2 arms differ - in 15.1% of turns
+  under 50 boards, 65.2% at 50-99 and 99.4% at 100-199 (13 games; none at 200+); more
+  than one mandatory board in 5.8 / 27.1 / 64.0%; an optional board at the start in
+  10.5 / 44.5 / 65.7%, an optional move played in 1.2 / 2.5 / 1.1%; single-move turns
+  95.9 / 80.3 / 49.1%. Part L's prediction ("most human-game turns under 50 boards
+  have exactly one mandatory board") holds: 94.2%. No verdict.
+- `engine/README.md`: t5d-measure's new options and lines; the tables.
+- `docs/BUILD_LOG.md`: register M22 measured; step 5's M22 note; spec issues 140-142
+  (what "optional moves played" means; the ranges and the unit; nothing maps the
+  figures to an order of the D2 work - put to the user); proposed spec edits 110-115.
+- Review fixes, the same day (after 2864be0). The D2 reading counted "where the arms
+  differ" by the moves played (4.1 / 19.7 / 50.9% of turns of more than one move);
+  it is now counted by the turn's start, as §8.2's cost argument and the built ply
+  split count it (15.1 / 65.2 / 99.4%), in MEASUREMENTS, issue 142 and edit 110. An
+  optional move went by its source board alone, so a jump from a mandatory board onto
+  an optional one was not counted (35 turns of the 692 games) while its mirror was;
+  it now counts - the move is made on both boards (T3, J4), and the measurement's
+  brief defined optional moves as moves on boards not mandatory at the start - and
+  both kinds are counted apart and tested (issue 140, edit 111). The summary's
+  ranges, classes and statistics moved into `tools/turn_width.hpp` and are tested at
+  their edges; new records test a truncated record and the strict prefix rule;
+  fifteen mutations of the counting and the summary, the review's among them, now
+  each fail a test. Also: parse mode's effect stated (under C4, t0db-0115 is refused
+  at its 9th action - rules question Q8 - and the strict reading would hold 691
+  games); edit 111 names both ways a board's status changes; register D2 and part
+  K's turn-construction gate get the edit 6x gets (edit 115); the issue and edit
+  lists start new Markdown lists, so that GitHub shows 140 and 110 as written; the
+  `turn_summary_group` line and the `"error"` path documented; and the conditions
+  name the commit the figures were counted at (607e4b1, rebuilt and re-run there:
+  byte for byte), where the first version said only "this change", and say what the
+  fixes changed in the run's output against 2864be0's (one count, fields added,
+  nothing else).
+- Spec: §8.2 "Measure first" and §15.1's Phase 1 row (the M4 write-back proposed:
+  edits 110 and 114); §13.1 6x ("after the turn-width measurement", now met; edit
+  114); register M22, part K's turn-width item and part L's prediction (edits
+  111-113); register D2 and part K's §8.2 turn-construction item (edit 115); spec
+  issues 140-142. Rules cited: T3-T8, T11, T12, J3-J6, R8, R9; Q8.
 ### 2026-10-17 - N-F5F6 review fixes: the post-norm arm's DeepNet initialisation as published; RMSNorm's eps tested
 
 - `python/t5d/net/model.py`, `config.py`: under ablation 6y's post-norm arm the trunk's
