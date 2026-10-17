@@ -166,8 +166,8 @@ def test_the_6y_arms_through_the_cached_path(arm):
     nothing and is identical; (e) the BF16 cache is the live precision: as close to the FP32
     full pass as the BF16 full pass is, and within test_bf16_cache_is_the_live_precision's
     bounds of it times the arm's factor. Largest gaps of the cached evaluation against the
-    BF16 full pass on these trees (seeds 0-2, 2 and 16 layers): post-norm RMS 6.5e-4 / max
-    7.1e-3, value 1.9e-4, policy 3.1e-3 - 1.8-6x below the v1's; squared ReLU RMS 3.7e-3 /
+    BF16 full pass on these trees (seeds 0-2, 2 and 16 layers): post-norm RMS 5.3e-4 / max
+    6.0e-3, value 1.9e-4, policy 1.9e-3 - 2.2-6.4x below the v1's; squared ReLU RMS 3.7e-3 /
     max 2.2e-2, value 2.1e-3, policy 1.9e-2 - about twice the v1's (at the tests' 2 layers
     3.6-9x below its doubled bounds)."""
     flags, scale = ARMS_6Y[arm]

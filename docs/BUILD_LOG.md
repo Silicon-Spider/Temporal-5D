@@ -1495,16 +1495,21 @@ decision), and what is parked.
     initialisation"** (§9.3, §13.1 6y, register F5). Built (`norm_placement="post"`)
     as DeepNorm from the paper (Wang et al. 2022, "DeepNet: Scaling Transformers to
     1,000 Layers", Figure 2) - Lc0's code is not consulted (AGENTS.md):
-    x ← N(αx + Attn(x)), x ← N(αx + FFN(x)), α = (2L)^(1/4); the value,
-    attention-output and both FFN projections drawn at gain β = (8L)^(-1/4) over the
-    trunk's LeCun base (the paper's example base is Xavier, "can be replaced with
-    other standard initialization"; for the square projections the two coincide), Q
-    and K at gain 1, and pre-norm's GPT-2 1/√(2L) dropped. Placeholders: the paper's
-    constants rather than Lc0's; no final norm (the last FFN norm is the output's);
-    no norm on the embedding before block 0; board-pair smolgen reads the attention's
-    input, which is then the block's input. Tested through the dense trunk and the
-    cached path (cached = full pass, transpositions, root refresh, the BF16 cache).
-    Proposed edit 151.
+    x ← N(αx + Attn(x)), x ← N(αx + FFN(x)), α = (2L)^(1/4); DeepNet's
+    initialisation as the paper's pseudocode draws it - Xavier normal, std
+    gain·√(2/(fan_in + fan_out)), at gain β = (8L)^(-1/4) on the value,
+    attention-output and both FFN projections and gain 1 on Q and K - and pre-norm's
+    GPT-2 1/√(2L) dropped. Placeholders: the paper's constants rather than Lc0's;
+    Xavier normal as the initialisation's base, the pseudocode's example ("it can be
+    replaced with other standard initialization") - the rest of the network is LeCun
+    normal, and the arm was first built on that base (N-F5F6's review fixes changed
+    it), which starts the FFN's 256→2048 and 2048→256 matrices at 2.12x and 0.75x the
+    pseudocode's std (the FFN branch 1.59x; the square attention projections are the
+    same on either); no final norm (the last FFN norm is the output's); no norm on the
+    embedding before block 0; board-pair smolgen reads the attention's input, which
+    is then the block's input. Tested through the dense trunk and the cached path
+    (cached = full pass, transpositions, root refresh, the BF16 cache). Proposed edit
+    151.
 202. **Smolgen "keeps its own normalisation"** (register B12: "(F5)"; F5:
     "everywhere except inside smolgen"): both presuppose a norm inside smolgen, as
     Lc0's has; the built smolgen (B12, either form) has none, and no document says to
@@ -1827,9 +1832,10 @@ says now, what it should say, why.
 151. **§9.3's second bullet, §13.1 6y and register F5**: now - "Lc0's post-norm with
     DeepNet initialisation". Proposed - name the arm as built, as placeholders until
     Lc0's arrangement is given where it differs: DeepNorm with the paper's constants
-    for an L-layer stack, α = (2L)^(1/4) on the residual and β = (8L)^(-1/4) on the
-    value, attention-output and FFN projections' initialisation; no final norm; no
-    norm on the embedding; smolgen reading the block's input (issue 201).
+    for an L-layer stack, α = (2L)^(1/4) on the residual and β = (8L)^(-1/4) as the
+    gain of the Xavier normal the value, attention-output and FFN projections are
+    drawn from (Q and K at gain 1), as the paper's pseudocode draws them; no final
+    norm; no norm on the embedding; smolgen reading the block's input (issue 201).
 152. **Register B12**: now - "keeps its own normalisation (F5)". Proposed - "has no
     normalisation inside (none is built; F5's exception is moot)", unless one is to be
     added (issue 202).

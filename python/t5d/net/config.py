@@ -257,7 +257,8 @@ class NetConfig:
     #:            alpha = ``deepnorm_alpha``, with DeepNet's initialisation (``deepnorm_beta``;
     #:            ``model._init_weights``). PLACEHOLDERS for what neither section 9.3 nor the
     #:            register states (spec issue 201) - DeepNet's published constants for an
-    #:            L-layer stack, not Lc0's (whose code may not be consulted); no final norm (the
+    #:            L-layer stack, not Lc0's (whose code may not be consulted); the base of its
+    #:            initialisation Xavier normal, as its pseudocode draws it; no final norm (the
     #:            last block's FFN norm is the output's, as in a post-norm encoder); no norm on
     #:            the embedding before block 0; board-pair smolgen reads the attention's input,
     #:            which is then the block's input.
@@ -367,8 +368,10 @@ class NetConfig:
     # --- initialisation (section 15.2: realistic scale, never zeros) ---
     #: Linear weights: normal with std 1/sqrt(fan_in) (LeCun). Under pre-norm the attention
     #: output and FFN output projections are further scaled by 1/sqrt(2 * n_layers) (GPT-2
-    #: style); under post-norm DeepNet's ``deepnorm_beta`` scales the value, attention-output
-    #: and both FFN projections instead (``model._init_weights``).
+    #: style); under post-norm the trunk's attention and FFN projections are drawn by DeepNet's
+    #: initialisation instead - Xavier normal, std gain * sqrt(2 / (fan_in + fan_out)), at gain
+    #: ``deepnorm_beta`` on the value, attention-output and both FFN projections and gain 1 on
+    #: the query and key projections (``model._init_weights``).
     init_embed_std: float = 0.5
     #: Linear biases.
     init_bias_std: float = 0.02
@@ -634,8 +637,8 @@ class NetConfig:
     @property
     def deepnorm_beta(self) -> float:
         """DeepNet's initialisation down-scaling under ``norm_placement="post"``: ``(8L)^(-1/4)``
-        (Wang et al. 2022, Figure 2), the gain on the value, attention-output and FFN
-        projections' initialisation; the query and key projections keep gain 1."""
+        (Wang et al. 2022, Figure 2), the gain of the Xavier normal the value, attention-output
+        and FFN projections are drawn from; the query and key projections' gain is 1."""
         return (8 * self.n_layers) ** -0.25
 
     @property

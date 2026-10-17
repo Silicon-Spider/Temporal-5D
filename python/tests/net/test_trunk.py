@@ -33,16 +33,50 @@ def _norm(d: int, seed: int) -> RMSNorm:
 
 def test_rmsnorm_is_the_root_mean_square_formula():
     """``x / sqrt(mean(x^2) + eps) * g``: against the formula in FP64 and against PyTorch's own
-    ``rms_norm`` (an implementation independent of this one); a gain and nothing else."""
+    ``rms_norm`` (an implementation independent of this one); a gain and nothing else. (At
+    this input's scale where eps sits moves the output by under 1e-5: the next test checks it
+    where it matters.)"""
     norm = _norm(16, 0)
     x = 3.0 * torch.randn(3, 5, 16, generator=torch.Generator().manual_seed(1))
     out = norm(x)
     x64 = x.double()
     expected = x64 / torch.sqrt(x64.pow(2).mean(dim=-1, keepdim=True) + 1e-5) * norm.weight.double()
     assert out.dtype == torch.float32
-    assert torch.allclose(out.double(), expected, atol=1e-6)
-    assert torch.allclose(out, F.rms_norm(x, (16,), norm.weight, 1e-5), atol=1e-6)
+    assert torch.allclose(out.double(), expected, rtol=0.0, atol=1e-6)
+    assert torch.allclose(out, F.rms_norm(x, (16,), norm.weight, 1e-5), rtol=0.0, atol=1e-6)
     assert [name for name, _ in norm.named_parameters()] == ["weight"], "a gain only: no bias"
+
+
+def test_rmsnorm_eps_sits_inside_the_root():
+    """eps inside the root, as in PyTorch's ``rms_norm`` (spec issue 200(b)), where it shows: on
+    a small-RMS input (x ~ 3e-3, so mean(x^2) is about eps) the norm is the FP64 formula and
+    ``rms_norm`` with no relative slack (measured: to 1.9e-7, and bit for bit). eps outside the
+    root, ``x / (sqrt(mean(x^2)) + eps)``, or no eps at all, is 0.95 away there."""
+    norm = _norm(16, 6)
+    x = 3e-3 * torch.randn(3, 5, 16, generator=torch.Generator().manual_seed(7))
+    out = norm(x)
+    x64, g = x.double(), norm.weight.double()
+    ms = x64.pow(2).mean(dim=-1, keepdim=True)
+    assert torch.allclose(out.double(), x64 / torch.sqrt(ms + 1e-5) * g, rtol=0.0, atol=1e-6)
+    assert torch.allclose(out, F.rms_norm(x, (16,), norm.weight, 1e-5), rtol=0.0, atol=1e-6)
+    for wrong in (x64 / (torch.sqrt(ms) + 1e-5) * g, x64 / torch.sqrt(ms) * g):  # eps outside the root; none
+        assert float((out.double() - wrong).abs().max()) > 0.1
+
+
+@pytest.mark.parametrize("placement", ["pre", "post"])
+def test_norm_eps_reaches_every_trunk_norm(placement):
+    """``NetConfig.norm_eps`` is every trunk norm's eps, stored and used: at 1e-2 each norm of the
+    model computes ``rms_norm`` with eps 1e-2 on a small-RMS input (x ~ 1e-2), where the default
+    1e-5 gives outputs 9.5x larger."""
+    model = build_model(NetConfig(n_layers=2, norm_placement=placement, norm_eps=1e-2), seed=0)
+    norms = [m for m in model.modules() if isinstance(m, RMSNorm)]
+    assert len(norms) == 2 * 2 + (placement == "pre")
+    x = 1e-2 * torch.randn(4, 256, generator=torch.Generator().manual_seed(8))
+    for norm in norms:
+        assert norm.eps == 1e-2
+        out = norm(x)
+        assert torch.allclose(out, F.rms_norm(x, (256,), norm.weight, 1e-2), rtol=0.0, atol=1e-6)
+        assert not torch.allclose(out, F.rms_norm(x, (256,), norm.weight, 1e-5), rtol=0.0, atol=0.1)
 
 
 def test_rmsnorm_does_not_centre():
@@ -162,24 +196,29 @@ def test_the_post_norm_output_is_normed():
 
 
 def test_deepnet_initialisation_under_post_norm():
-    """6y's arm: DeepNet's initialisation (Wang et al. 2022, Figure 2) - the value,
-    attention-output and both FFN projections at beta = (8L)^(-1/4) times the base (LeCun)
-    std, the query and key projections at the base. Under pre-norm the GPT-2 1/sqrt(2L) on
-    the two residual outputs instead, and nothing else scaled."""
+    """6y's arm: DeepNet's initialisation as the paper's pseudocode draws it (Wang et al. 2022,
+    Figure 2: ``xavier_normal_(w, gain=beta)`` for "ffn", "v_proj", "out_proj" and
+    ``gain=1`` for "q_proj", "k_proj") - Xavier normal, std ``gain sqrt(2 / (fan_in +
+    fan_out))``, beta = (8L)^(-1/4). On the square attention projections that is LeCun's std
+    times the gain; the FFN's two matrices are both drawn at ``beta sqrt(2 / 2304)``, not at
+    beta times LeCun's ``1/sqrt(256)`` and ``1/sqrt(2048)`` (2.1x and 0.75x it). Under
+    pre-norm LeCun, the GPT-2 ``1/sqrt(2L)`` on the two residual outputs, and nothing else
+    scaled."""
     n_layers = 16
     beta = (8 * n_layers) ** -0.25
     assert NetConfig().deepnorm_beta == pytest.approx(beta)
     gpt2 = 1.0 / math.sqrt(2 * n_layers)
     pre = build_model(NetConfig(), seed=0)
     post = build_model(NetConfig(norm_placement="post"), seed=0)
-    d, ffn = 256**-0.5, 2048**-0.5
+    d, ffn = 256**-0.5, 2048**-0.5  # LeCun: 1/sqrt(fan_in)
+    xavier_attn, xavier_ffn = math.sqrt(2 / (256 + 256)), math.sqrt(2 / (256 + 2048))
     expected = {  # name: (pre-norm std, post-norm std)
-        "attn.q_proj": (d, d),
-        "attn.k_proj": (d, d),
-        "attn.v_proj": (d, beta * d),
-        "attn.out_proj": (gpt2 * d, beta * d),
-        "ffn.lin_in": (d, beta * d),
-        "ffn.lin_out": (gpt2 * ffn, beta * ffn),
+        "attn.q_proj": (d, xavier_attn),
+        "attn.k_proj": (d, xavier_attn),
+        "attn.v_proj": (d, beta * xavier_attn),
+        "attn.out_proj": (gpt2 * d, beta * xavier_attn),
+        "ffn.lin_in": (d, beta * xavier_ffn),
+        "ffn.lin_out": (gpt2 * ffn, beta * xavier_ffn),
     }
     for layer in (0, 15):
         for name, (s_pre, s_post) in expected.items():

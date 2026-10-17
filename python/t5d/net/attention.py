@@ -104,7 +104,10 @@ measurements): at 240 boards B9's default takes 9.0 s block-sparse and 13.8 s ch
 against 8.5 s with no mask, every switch of stage N2 29.5 s and 39.3 s; peak memory stays
 under 1.1 GB on both paths, against 3.4 GB for B9's default through the unchunked fused
 path. The block-sparse plans of a forward hold about 58 MB per sparse role at 240 boards
-(the move graph's blocks select 24% of the key boards on average).
+(the move graph's blocks select 24% of the key boards on average). The timings and peak
+memory above were measured on the network before F5 and F6 (LayerNorm with biases, biased
+Q/K/V projections, GELU in the FFN), as ``bench.py``'s table was, and have not been
+re-measured since; the plans' size does not depend on either.
 
 **Not built (B14):** FlexAttention's ``score_mod`` / block mask. Compiled FlexAttention
 needs ``torch.compile``, which has no C++ compiler on the development machine, and

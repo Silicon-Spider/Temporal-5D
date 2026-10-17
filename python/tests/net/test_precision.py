@@ -10,11 +10,11 @@ above those measurements, so they catch a precision bug (e.g. RoPE computed in B
 an angle of 400 rad carries ~1.5 rad of error) without flaking.
 
 Ablation 6y's arms, measured the same way: F5's post-norm has the smaller gap (0.06% RMS,
-max 0.7%; 7.9e-4 on value logits, 3.1e-3 on policy logits, 2.3e-5 on the value mean -
-every sublayer's output is normed in FP32) and is held to the v1's bounds. F6's squared
-ReLU squares its input's BF16 rounding (twice the relative error), and its gap is up to
-twice the v1's (0.39% RMS, max 2.0%; 4.1e-3, 0.021, 2.0e-4), so its bounds are doubled -
-2.9-20x above its measurements.
+max 0.8%; 6.3e-4 on value logits, 2.8e-3 on policy logits, 2.1e-5 on the value mean -
+every sublayer's output is normed in FP32; re-measured with DeepNet's Xavier-normal
+initialisation) and is held to the v1's bounds. F6's squared ReLU squares its input's BF16
+rounding (twice the relative error), and its gap is up to twice the v1's (0.39% RMS, max
+2.0%; 4.1e-3, 0.021, 2.0e-4), so its bounds are doubled - 2.9-20x above its measurements.
 """
 
 from __future__ import annotations
