@@ -496,6 +496,61 @@ TEST(capi_search_takes_the_moves_made_from_the_game_a6) {
   REQUIRE_EQ(t5d_search_root_game(s.get(), &root, nullptr), T5D_OK);
   CHECK_EQ(summary(root).moves_made, 2);
   t5d_game_destroy(root);
+
+  // Two moves into an action: a count the turn-start flag could never give (0
+  // or 1 - a search that read the handle's count as that flag passes every
+  // check above, the count of 2 reached there by re-rooting, not from the
+  // handle). Three White boards in the present, all mandatory (T5): two
+  // played, one owed - the root's moves have a count of 3.
+  const char* three[] = {"[3k/4/4/K3:-1:1:w]", "[3k/4/4/K3:0:1:w]", "[3k/4/4/K3:+1:1:w]"};
+  t5d_game* raw = nullptr;
+  REQUIRE_EQ(t5d_game_new_from_fen(three, 3, 4, 4, T5D_PARITY_INFER, T5D_TO_MOVE_INFER, T5D_RULES_STANDARD, &raw,
+                                   nullptr),
+             T5D_OK);
+  const Game h(raw);
+  for (const int32_t timeline : {-1, 0}) {
+    REQUIRE_EQ(t5d_game_expand(h.get(), nullptr, &x, nullptr), T5D_OK);
+    std::size_t index = x.move_count;
+    for (std::size_t i = 0; i < x.move_count && index == x.move_count; ++i) {
+      const t5d_move& m = x.moves[i];
+      if (m.from_timeline == timeline && m.to_timeline == timeline && m.from_half_turn == m.to_half_turn) index = i;
+    }
+    REQUIRE(index < x.move_count);
+    REQUIRE_EQ(t5d_game_apply_expanded(h.get(), index, nullptr), T5D_OK);
+  }
+  REQUIRE_EQ(summary(h.get()).moves_made, 2);
+  CHECK_EQ(t5d_search_new(h.get(), 1, &p, &bad, nullptr), T5D_ERR_ARGUMENT);
+  const SearchHandle two = new_search(h.get(), p, 0);
+  sharing = nullptr;
+  REQUIRE_EQ(t5d_search_new_sharing(two.get(), h.get(), 0, &p, &sharing, nullptr), T5D_OK);
+  const SearchHandle shared(sharing);
+  for (t5d_search* each : {two.get(), shared.get()}) {
+    REQUIRE_EQ(t5d_search_root_game(each, &root, nullptr), T5D_OK);
+    CHECK_EQ(summary(root).moves_made, 2);
+    t5d_game_destroy(root);
+    REQUIRE_EQ(t5d_search_gather(each, 1, T5D_NO_LIMIT, &n, nullptr), T5D_OK);
+    REQUIRE_EQ(n, std::size_t{1});
+    t5d_leaf leaf;
+    REQUIRE_EQ(t5d_search_leaf(each, 0, &leaf, nullptr), T5D_OK);  // the root's own expansion
+    CHECK_EQ(leaf.expansion.moves_made, 2);
+    CHECK_EQ(leaf.expansion.mandatory_remaining, 1);
+    CHECK_EQ(leaf.submit_possible, 0);
+    CHECK_EQ(t5d_search_abandon(each), T5D_OK);
+  }
+  // One move below the root: 3.
+  REQUIRE_EQ(t5d_search_run(two.get(), T5D_EVALUATOR_RANDOM, 3, 40, nullptr), T5D_OK);
+  REQUIRE_EQ(t5d_search_info(two.get(), &info), T5D_OK);
+  move_child = info.root_children;
+  for (std::size_t i = 0; i < info.root_children && move_child == info.root_children; ++i) {
+    t5d_root_child c;
+    REQUIRE_EQ(t5d_search_child(two.get(), i, &c, nullptr, 0, nullptr), T5D_OK);
+    if (c.submit == 0 && c.visits > 0) move_child = i;
+  }
+  REQUIRE(move_child < info.root_children);
+  REQUIRE_EQ(t5d_search_advance(two.get(), move_child, nullptr), T5D_OK);
+  REQUIRE_EQ(t5d_search_root_game(two.get(), &root, nullptr), T5D_OK);
+  CHECK_EQ(summary(root).moves_made, 3);
+  t5d_game_destroy(root);
 }
 
 TEST(capi_search_reports_its_layouts) {

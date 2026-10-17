@@ -917,6 +917,100 @@ TEST(mcts_pondering_searches_the_reply_and_reroots_on_it) {
   }
 }
 
+namespace {
+
+// A node's move edges that lead to a visited child, most visited first.
+std::vector<std::size_t> visited_moves(const Search& search, NodeId id) {
+  std::vector<std::size_t> out;
+  for (std::size_t i = 0; i < search.node(id).edge_count; ++i) {
+    const EdgeView e = search.edge(id, i);
+    if (!e.submit && !e.pruned && e.move != nullptr && e.child != kNoNode && e.visits > 0) out.push_back(i);
+  }
+  std::stable_sort(out.begin(), out.end(),
+                   [&](std::size_t a, std::size_t b) { return search.edge(id, a).visits > search.edge(id, b).visits; });
+  return out;
+}
+
+// A node's submit edge's child, if the submission was made and visited.
+NodeId visited_submit(const Search& search, NodeId id) {
+  for (std::size_t i = 0; i < search.node(id).edge_count; ++i) {
+    const EdgeView e = search.edge(id, i);
+    if (e.submit && !e.pruned && e.child != kNoNode && e.visits > 0) return e.child;
+  }
+  return kNoNode;
+}
+
+}  // namespace
+
+TEST(mcts_advancing_a_move_at_a_time_carries_the_tree_at_each_count_a6) {
+  // C12 and C13 with A6's count in a node's identity: advance_moves and
+  // advance_action find the child the tree holds by its state AND its moves
+  // made in the action - a move's is the root's + 1, a submission's 0 - so the
+  // child's statistics are carried. A count that is not exact - the
+  // turn-start flag's 1 for an action's second move - misses the child and
+  // starts a fresh root: the pondered subtree silently dropped, and the
+  // opponent's reply at match play (advance_action, a move at a time) never
+  // finds its tree. Two Timelines: two moves an action. Tree and graph.
+  for (const bool graph : {false, true}) {
+    SearchParams p = fast();
+    p.split = TurnSplit::BoardMove;
+    p.graph = graph;
+    const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Random, 9);
+    Search search(variant("Standard - Two Timelines"), p);
+    // The root is now the node the tree held, carried: its state, its count and
+    // its visits, with nodes below it.
+    const auto carried = [&search](const GameState& state, int made, std::uint32_t visits) {
+      CHECK(search.root_state() == state);
+      CHECK_EQ(search.root_moves_made(), made);
+      CHECK_EQ(search.node(search.root()).moves_made, made);
+      CHECK_EQ(search.node(search.root()).visits, visits);
+      CHECK(search.node_count() > 1);
+      CHECK_NOTHROW(search.check_invariants());
+    };
+    search.run(*ev, Limits{400});
+    // (a) Our action a move at a time, by advance_moves - counts 1 and 2 -
+    // then its submission (count 0, the opponent's turn start).
+    for (int made = 1; made <= 2; ++made) {
+      const std::vector<std::size_t> moves = visited_moves(search, search.root());
+      REQUIRE(!moves.empty());
+      const EdgeView e = search.edge(search.root(), moves.front());
+      const GameState state = *search.node(e.child).state;
+      const std::uint32_t visits = search.node(e.child).visits;
+      search.advance_moves(std::vector<Move>{*e.move});
+      carried(state, made, visits);
+      search.run(*ev, Limits{200});
+    }
+    const NodeId submitted = visited_submit(search, search.root());
+    REQUIRE(submitted != kNoNode);
+    const GameState opponent = *search.node(submitted).state;
+    const std::uint32_t opponent_visits = search.node(submitted).visits;
+    search.advance_moves({});
+    carried(opponent, 0, opponent_visits);
+    // (b) Ponder the opponent's turn, then its reply along the line pondered
+    // - two moves and the submission, by advance_action.
+    search.run(*ev, Limits{800});
+    std::vector<Move> reply;
+    NodeId reached = kNoNode;
+    for (const std::size_t i : visited_moves(search, search.root())) {
+      const EdgeView first = search.edge(search.root(), i);
+      for (const std::size_t j : visited_moves(search, first.child)) {
+        const EdgeView second = search.edge(first.child, j);
+        const NodeId after = visited_submit(search, second.child);
+        if (after == kNoNode) continue;
+        reply = {*first.move, *second.move};
+        reached = after;
+        break;
+      }
+      if (reached != kNoNode) break;
+    }
+    REQUIRE(reached != kNoNode);
+    const GameState state = *search.node(reached).state;
+    const std::uint32_t visits = search.node(reached).visits;
+    search.advance_action(reply);
+    carried(state, 0, visits);
+  }
+}
+
 TEST(mcts_advance_to_a_state_the_tree_does_not_hold_starts_afresh) {
   Search search(variant("Standard"), fast());
   const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Uniform);

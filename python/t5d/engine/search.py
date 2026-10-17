@@ -163,7 +163,7 @@ class LeafView:
     """One gathered leaf, copied out: the expansion (the network's input) and D8's flags."""
 
     index: int
-    key: int
+    key: int  # the state's node key; the leaf's evaluation identity is (key, expansion.moves_made, epoch) (A6)
     epoch: int
     acting_player: int
     submit_possible: bool

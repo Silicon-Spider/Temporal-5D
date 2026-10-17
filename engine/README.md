@@ -907,14 +907,14 @@ playable, window depth, band depth, origin, parent) - valid until the handle is 
 changed - and, appended at its end by stage E7 (every older field keeps its offset),
 (g)'s three `int32_t`: `acting_player` (0 white, 1 black), `submit_possible` and
 `submit_legal` (1 or 0); then, appended by engine ABI round 1 (register A6), (h)'s
-three: `mandatory_remaining`, `optional_playable` and `moves_made`. A game handle
-counts the moves made in its action itself (no state records them): 0 at every set-up
-(a turn start, T5), one more per `t5d_game_apply` or `_apply_expanded`, 0 again after
+three: `mandatory_remaining`, `optional_playable` and `moves_made`; `t5d_game_info`,
+`t5d_game_state` (a `t5d_state` copy, for the fingerprint and the boards),
+`t5d_game_copy`, `t5d_game_destroy`. A game handle counts the moves made in its action
+itself (no state records them, and a `t5d_state` holds none): 0 at every set-up (a
+turn start, T5), one more per `t5d_game_apply` or `_apply_expanded`, 0 again after
 `t5d_game_submit` or `t5d_game_replay_next` (a whole action), carried by
 `t5d_game_copy`; `t5d_game_info` reports it (`t5d_game_summary.moves_made`, appended
-after `rules`) and every `t5d_game_expand` passes it to the expansion.
-`t5d_game_info`, `t5d_game_state` (a `t5d_state` copy, for the fingerprint and the
-boards), `t5d_game_copy`, `t5d_game_destroy`. Rulesets are
+after `rules`) and every `t5d_game_expand` passes it to the expansion. Rulesets are
 passed as `RuleOptions::encode()`'s 64-bit encoding (`RuleOptions::decode` reads it
 back): 0 is the standard rules - moves after the shift until submission among them
 (R8) - and `T5D_RULES_NO_MOVES_AFTER_SHIFT`, bit 3, Q4's Guide-literal reading. Until
@@ -2150,7 +2150,8 @@ up behind a waiting leaf's virtual loss; each waiting path
 carries one virtual visit, counted as a loss, on every node and edge it crosses. A
 second path reaching a waiting leaf is a collision (its virtual loss held until the
 batch ends, so later selections diverge). One evaluation is asked per distinct state
-in the batch. The virtual loss is always released: by `deliver`, by `abandon`, when the
+and moves made in its action in the batch (A6: one state with two counts is two
+inputs, asked twice - below). The virtual loss is always released: by `deliver`, by `abandon`, when the
 evaluator throws, when an evaluation is malformed - and when anything fails inside
 `gather` or `deliver`, an allocation included: `gather` abandons its batch before the
 exception leaves, `deliver` keeps what it delivered and abandons the rest (the tests
@@ -2227,7 +2228,7 @@ Self-play samples the root's visits at a temperature instead (`choose_by_visits`
 **Persistence** (C12, C13). `advance(child)`, `advance_moves`, `advance_action` (the
 opponent's reply) and `advance_to(state)` re-root: the new root's subtree is carried,
 every node it cannot reach deleted (renumbered breadth-first); the evaluation cache -
-state-keyed - survives; the root hook (`set_root_hook`) and the evaluator's
+keyed by the state, its count and the epoch, not by a path - survives; the root hook (`set_root_hook`) and the evaluator's
 `on_new_root` are told, for an evaluator holding K/V of the old conditioning. Pondering
 is `run` on the post-move root, then `advance_action` on the reply - atomic: the whole
 action is checked (each move pseudo-legal where it is made, the submission legal) before
@@ -2276,7 +2277,10 @@ root's count back),
 i, &leaf)` (a `t5d_leaf`: key, epoch, the acting player, D8's
 `submit_possible` and `submit_legal`, the `t5d_expansion` - which carries them too, and
 A6's turn state: the leaf's mandatory and optional boards and the moves made in its
-action - and each move's legality), `t5d_search_deliver(search, logits, logit_count,
+action - and each move's legality; the key is the state's, so an evaluator that
+caches or de-duplicates leaves keys them as the search does, by (key,
+`expansion.moves_made`, epoch) with the state behind the key, never by the key, the
+state or `t5d_search_leaf_state`'s fingerprint alone), `t5d_search_deliver(search, logits, logit_count,
 submit_logits, submit_count, values, value_count, value_kind)` - one float32 logit per
 candidate move, logit i scoring `leaf.expansion.moves[i]`; one submit logit per leaf
 (NaN: none) or none at all (NULL, 0: the placeholder share); 51 float32 values per leaf
@@ -2394,7 +2398,13 @@ verification and fresh trees); the call sequences (atomic `advance_action`, the 
 under a waiting batch, stale submit logits); a `bad_alloc` injected at every
 allocation of `gather` and `deliver`; the cache's and the graph's byte counts against
 the heap; the purge; the budgets and the deadline; validation; the C ABI's embedded
-structs last; self-play's noise and time limit.
+structs last; self-play's noise and time limit. After A6 (engine ABI round 1): a turn
+start and the same state during an action two cache entries and two evaluations, equal
+states with different counts never one MCGS node while one action's orders merge, a
+batch asking once per (state, count), every node's count from its path; and, from its
+review, the C API's root count two moves into an action (where the old flag's 0 or 1
+cannot pass) and the tree carried at each count by `advance_moves` and
+`advance_action`, under tree and graph search.
 
 ## Stage E8: the verification layer's redesign (M14, a prototype until 6b′)
 
@@ -3531,7 +3541,7 @@ Each is recorded where it is made (the header comments) and listed here:
       depend only on the state": proposed spec edit 61) - since engine ABI round 1 the
       moves made in the action, which subsumes it, and the evaluation cache's key and
       the batch's de-duplication with it (A6: the network sees the count; build-log
-      spec issue 302, proposed edit 200).
+      spec issue 302, proposed edits 200 and 119).
 - **A6's turn state** (engine ABI round 1; build-log spec issues 143-145): the
   mandatory count is the state machine's own - A6's "−1 / −2 / 0" arithmetic holds only
   where no activity changes (T6's arrivals, T11/T12's reactivations and Q5 lie outside

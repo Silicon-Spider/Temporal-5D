@@ -413,7 +413,10 @@ struct EvalRequest {
   /// mandatory and optional boards and the moves made in the action
   /// (expansion->mandatory_remaining(), optional_playable(), moves_made()).
   const Expansion* expansion = nullptr;
-  std::uint64_t key = 0;    ///< the node key
+  /// The state's node key - not the request's identity, which is (key,
+  /// moves_made, epoch) with the state compared exactly: equal states with
+  /// different counts share a key (A6).
+  std::uint64_t key = 0;
   std::uint64_t epoch = 0;  ///< the refresh epoch (§7.9)
   /// The moves made in the leaf's action (A6; = expansion->moves_made(); 0: a
   /// turn start) - an input of the network's that no state records, so leaves
@@ -509,7 +512,8 @@ bool final_eligible(std::span<const FinalCandidate> children, std::size_t i,
                     ChoiceReason reason, const SearchParams& params);
 
 // ---------------------------------------------------------------------------
-// The evaluation cache: state-keyed evaluations (C11, C14, §8.7)
+// The evaluation cache: evaluations keyed by the state, the moves made in its
+// action (A6) and the refresh epoch (C11, C14, §8.7)
 // ---------------------------------------------------------------------------
 
 class EvalCache {
@@ -575,7 +579,7 @@ struct SearchStats {
   std::uint64_t cache_hits = 0;        ///< leaves answered from the evaluation cache
   std::uint64_t batches = 0;
   std::uint64_t collisions = 0;        ///< a leaf already waiting in the batch
-  std::uint64_t batch_duplicates = 0;  ///< a leaf whose state another leaf of the batch has
+  std::uint64_t batch_duplicates = 0;  ///< a leaf whose state and count (A6) another leaf of the batch has
   std::uint64_t terminal_visits = 0;   ///< visits ending on a terminal or solved node
   std::uint64_t residual_backups = 0;  ///< MCGS: corrections backed up
   std::uint64_t transposition_hits = 0;  ///< MCGS: an edge linked to an existing node
@@ -719,8 +723,9 @@ class Search {
   /// and solved nodes, cache hits, MCGS corrections) as long as fewer than
   /// `max_playouts` simulations have been completed or gathered in this call.
   /// Returns the number of evaluations wanted - requests().size(): one per
-  /// distinct state among the leaves (a tree may hold one state in two
-  /// nodes). Precondition: none is waiting. Exception-safe: if anything throws
+  /// distinct (state, moves made in its action) among the leaves (a tree may
+  /// hold one in two nodes; one state with two counts is two inputs, A6, and
+  /// asked twice). Precondition: none is waiting. Exception-safe: if anything throws
   /// (std::bad_alloc included), the batch is abandoned and no virtual loss is
   /// left before the exception leaves.
   std::size_t gather(std::size_t max_leaves,
@@ -789,7 +794,8 @@ class Search {
   void advance_to(const GameState& target, int moves_made);
   /// The flag it took before A6 (see the constructor's): a compile error.
   void advance_to(const GameState& target, bool turn_start) = delete;
-  /// The refresh epoch (§7.9): evaluations are cached per (state, epoch).
+  /// The refresh epoch (§7.9): evaluations are cached per (state, moves made in
+  /// its action, epoch) (A6).
   std::uint64_t epoch() const noexcept;
   /// Throws std::invalid_argument while a batch is waiting (its evaluations
   /// belong to the epoch they were asked under): deliver or abandon it first.
