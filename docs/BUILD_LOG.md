@@ -67,6 +67,29 @@ deciding thread's tree holds no continuation"), yet the five-thread test asserts
 Queued for the engine lane (make the line complete from the certificate, or test
 the documented contract).
 
+### CHECKPOINT 8 - ruled 2026-10-17 (design documents d5cc8d1)
+
+**The instruction files: the one edit the user allowed in each.** The user's words:
+"CLAUDE.md and AGENTS.md: you may make exactly one edit to each - add the engine build
+step (py engine/build.py) before the gate commands in their command lists. Nothing
+else in those files; commit it separately and quote the diff in the build log." The
+diff, in full:
+
+```diff
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -129,2 +129,3 @@ python oracles/harness.py verify               # pins, corpus, divergences, boun
+ python oracles/harness.py selftest             # the harness's own tests
++py engine/build.py                             # build the engine first: the gate runs build/engine/t5d-gate
+ python oracles/harness.py gate --tier commit   # the per-commit gate (nightly | release for the full one)
+--- a/CLAUDE.md
++++ b/CLAUDE.md
+@@ -64,2 +64,3 @@ python oracles/harness.py selftest             # the harness's own unit tests
+ python oracles/harness.py rulebook             # is docs/rules/README.md the pinned rulebook? (--pin after review)
++py engine/build.py                             # build the engine first: the gate runs build/engine/t5d-gate
+ python oracles/harness.py gate --tier commit   # per-commit gate; nightly and release run all three oracles
+```
+
 ### CHECKPOINTS 6 and 7 - ruled upstream (design documents f07568c)
 
 The user's rulings at CHECKPOINTS 6 and 7, as the design documents maintained
