@@ -10,6 +10,151 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-17 - N-F5F6 review fixes: the post-norm arm's DeepNet initialisation as published; RMSNorm's eps tested
+
+- `python/t5d/net/model.py`, `config.py`: under ablation 6y's post-norm arm the trunk's
+  attention and FFN projections are drawn Xavier normal, std gain·√(2/(fan_in + fan_out)) -
+  DeepNet's initialisation as the paper's pseudocode draws it (Wang et al. 2022, Figure 2:
+  `xavier_normal_(w, gain=β)` for "ffn", "v_proj", "out_proj", gain 1 for "q_proj",
+  "k_proj") - instead of β times the trunk's LeCun normal. The two coincide on the square
+  attention projections; on the FFN's 256→2048 and 2048→256 matrices the LeCun base had
+  drawn 2.12x and 0.75x the paper's std (the FFN branch 1.59x), which no document said. The
+  task asked for the initialisation "as published"; the base is the pseudocode's example
+  ("it can be replaced with other standard initialization"), so it is recorded as a
+  placeholder (spec issue 201). The v1, F2's preset and every flag configuration draw bit
+  for bit as before (checked tensor by tensor); under the arm only the FFN weights change,
+  each the same draw rescaled.
+- Tests (`tests/net/test_trunk.py`): the arm's Xavier stds pinned; RMSNorm's eps checked
+  where it shows - on a small-RMS input, with no relative slack, eps outside the root or no
+  eps is 0.95 off - and the unit-scale formula test's asserts given `rtol=0`;
+  `NetConfig.norm_eps` reaches every trunk norm under both placements, stored and used. On
+  scratch copies, 8 of 8 mutations are caught: eps outside the root or absent, a hard-coded
+  1e-5 in the norm's forward or in any of the three norms' construction, a LeCun base under
+  the arm, a scaled Q/K.
+- The arm's docstring figures re-measured with the new initialisation (numerics, not
+  timings): `test_precision`'s post-norm BF16 gap 0.06% RMS, max 0.8%, value logits 6.3e-4,
+  policy 2.8e-3, value mean 2.1e-5 (1.5-7x below the v1's); `test_cache`'s 6y test, cached
+  against the BF16 full pass, RMS 5.3e-4 / max 6.0e-3, value 1.9e-4, policy 1.9e-3 (2.2-6.4x
+  below the v1's). Every bound unchanged.
+- `attention.py`: its indicative timings and peak memory, copied from `bench.py`'s table,
+  are marked as measured on the network before F5 and F6 and not re-measured, as
+  `bench.py`'s are.
+- `CHANGELOG.md`: the F5 and F6 entries' Spec lines cited "§15.2 (rows 1-3 ...)", but
+  §15.2's second and third rows are the windowed and lazy-K/V rows deferred with the
+  window (M18); the 6y test covers the cached = dense (C2, C17), supersession recompute
+  (C20), same state + epoch / transposition (C19-C21) and FP8/BF16 cache precision (G1)
+  rows, which the lines now name. The F5 entry's initialisation bullet and the F6 entry's
+  post-norm ratio point here.
+- `docs/BUILD_LOG.md`: spec issue 201 and proposed edit 151 state the Xavier base, issue 201
+  as a placeholder with what the LeCun base had drawn.
+- Spec: §9.3 (the second bullet: "post-norm with DeepNet initialisation"), §13.1 6y, §15.2
+  (the four rows above, under the arm); register F5 (the arm), F6 (the citation only), G1.
+  Proposed edit 151 amended (the arm's initialisation: Xavier normal at DeepNet's gains). No
+  parameter changes (F1 stays 21,338,634).
+
+### 2026-10-17 - Network F6: Mish in the FFN; squared ReLU behind a flag
+
+- `python/t5d/net/trunk.py`, `config.py`: register F6 (committed, §9.3). The FFN's
+  activation is `NetConfig.ffn_activation`: `"mish"` for v1 - `x tanh(softplus(x))` (Misra
+  2019; PyTorch's `mish`), replacing stage N1's GELU - or ablation 6y's arm
+  `"squared_relu"`, `relu(x)^2` (So et al. 2021, "Primer"), at Mish's initialisation (the
+  arm's is not stated). Validated; GELU is no longer an FFN option.
+- `heads.py`, `config.py`: whether Mish also covers the output heads is not decided by F6
+  ("FFN activation"; its "Chessformer's FFN and output heads" describes Chessformer), so the
+  value head's hidden activation - the only head MLP - stays GELU as a named placeholder,
+  `head_activation` ("gelu", or "mish"; spec issue 204). `embed.py`: the Δt MLP keeps GELU,
+  documented as outside F6.
+- The cached path needs nothing new: it calls the block's own FFN (F5's block steps).
+  §15.2's rows under the arm: `test_cache`'s 6y test runs both arms (cached = full pass,
+  root refresh, transpositions, a transposition hit, the BF16 cache), and the every-switch
+  matrix runs both arms together with the N2 structure.
+- Tests: `test_trunk.py` - the FFN equal to its formula in FP64 under each activation (and
+  not GELU); the value head's activation by hand under both placeholder values; validation.
+  `test_structure`: "every switch changes the network" gains `ffn_activation`; every
+  `attn_impl` one function under squared ReLU. `test_precision`: both 6y arms under G1.
+  `test_smoke`: squared ReLU (with the heads' Mish) trains finite with every tensor moving.
+- Precision bounds matched to the arm's arithmetic: squared ReLU squares its input's BF16
+  rounding (twice the relative error), and its measured BF16 gap is up to twice the v1's
+  (precision: 0.39% RMS against 0.24%; policy logits 0.021 against 0.010), so its bounds in
+  `test_precision` and `test_cache`'s 6y test are the v1's doubled (2.9-20x and 3.6-9x
+  above its measurements); the post-norm arm keeps the v1's (its gaps are 1.5-7x smaller, as
+  re-measured after N-F5F6's review fixes; 1.6-6.5x before them).
+  `test_fp8_cache_equals_the_fp8_network_at_fp32_resolution`: the trunk-RMS bound raised
+  from 2e-4 to 4e-4 - FP8 rounding flips are discrete and heavy-tailed (over 12 seeds of the
+  F5 and F6 networks each, a seed's largest was 1e-6 to 3e-5 typically and 7.8e-5 at most,
+  2.6x under the old bound); the new bound sits 5x above that and 19x below mutant M14.
+- Docstring figures re-measured after F6 (numerics, not timings): `test_precision`,
+  `test_cache` (its header's claim that the 16-layer gaps are no larger than the 2-layer
+  ones, written with F5, was wrong - they are up to 1.8x larger; corrected),
+  `tests/engine/test_network.py`. `bench.py`: a `6y-squared-relu` configuration; its table
+  marked as measured before F5 and F6.
+- `docs/BUILD_LOG.md`: register row F6 (new); spec issue 204 (put to the user: the heads'
+  activation awaits neither a ruling nor a named ablation); proposed edit 154.
+- Spec: §9.3 (the Mish bullet), §13.1 6y, §15.1 Phase 2 ("Mish" among CHECKPOINT 7's
+  items), §15.2 (the cached = dense (C2, C17), supersession recompute (C20), same state +
+  epoch / transposition (C19-C21) and FP8/BF16 cache precision (G1) rows, under the arm);
+  register F6, D3 (the heads' activation). No parameter changes (F1 stays 21,338,634).
+  Proposed edit 154 (whether the output heads' activation is Mish; the squared-ReLU arm's
+  initialisation).
+
+### 2026-10-17 - Network F5: RMSNorm-style normalisation, no Q/K/V biases, pre-norm; the post-norm + DeepNet arm behind a flag
+
+- `python/t5d/net/trunk.py`: register F5 (committed, §9.3). `RMSNorm` - a learned gain over
+  the root mean square, no mean-centring, no bias (Zhang & Sennrich 2019), computed in FP32
+  with autocast off (G1) - replaces LayerNorm in both sublayer norms of every block and the
+  final norm. A block is now four steps (`attn_input`, the attention, `after_attn`,
+  `after_ffn`) and the trunk ends in `Trunk.output`; they carry the placement,
+  `NetConfig.norm_placement`: `"pre"` (the v1, as before) or ablation 6y's arm `"post"` -
+  DeepNorm as published (Wang et al. 2022, Figure 2): x ← N(αx + sublayer(x)), α = (2L)^(1/4),
+  no final norm, no norm on the embedding, smolgen reading the block's input (placeholders,
+  spec issue 201).
+- `attention.py`, `trunk.py`, `config.py`: the single `linear_bias` switch is split as §9.3
+  says - `qkv_bias=False` (F5: no Q/K/V projection biases) and `out_ffn_bias=True` (the
+  attention-output and FFN biases kept: "as here"; spec issue 200). `NetConfig(linear_bias=...)`
+  now raises `TypeError`. `norm_placement` and `norm_eps` validated; `deepnorm_alpha` and
+  `deepnorm_beta` derived from L. The heads, the embedding's Δt MLP and smolgen keep their
+  biases; smolgen has no norm of its own to keep (spec issue 202).
+- `model.py`: RMSNorm gains drawn 1 + N(0, `init_norm_std`), no bias draws; under post-norm
+  DeepNet's initialisation replaces the GPT-2 1/√(2L): gain β = (8L)^(-1/4) on the value,
+  attention-output and both FFN projections, Q and K at gain 1 - over the LeCun base as
+  committed here, drawn Xavier normal as the paper's pseudocode since N-F5F6's review
+  fixes (above). Every seed's global RNG stream shifts (fewer draws); no test pins a
+  golden output.
+- `cache.py`: `compute_board` and `live_pass` run the trunk's block steps instead of a
+  hand-written pre-norm block, so the cached path computes the trunk's function under
+  either placement (§15.2's rows hold under the arm).
+- Parameters: F1 21,338,634 (−20,736: the norms' biases 33 × 256, the Q/K/V biases 16 × 3 ×
+  256); F2's L24-ff12 preset 44,456,458, now pinned exactly; the post-norm arm 256 fewer.
+- Tests: `tests/net/test_trunk.py` (new) - RMSNorm by its formula in FP64 and against
+  PyTorch's `rms_norm`, no centring, FP32 under autocast; norms and biases where §9.3 puts
+  them; the bias switches; each placement equal to its formula block by block (smolgen on
+  and off), α applied; DeepNet's initialisation std ratios; the arm's count; validation.
+  `test_cache`: the 6y arm through §15.2's rows (cached = full pass on two geometries, root
+  refresh, transpositions bitwise, a transposition hit, the BF16 cache as the live
+  precision), and the every-switch matrix gains post-norm with the N2 structure;
+  `test_structure`: every `attn_impl` one function under post-norm, and "every switch
+  changes the network" gains `norm_placement`, `qkv_bias`, `out_ffn_bias`; `test_n2_model`:
+  smolgen reads each layer's attention input under both placements; `test_precision`: the
+  post-norm arm under G1's bounds; `test_model`: the RMSNorm gains non-identity, post-norm
+  too; `test_smoke`: the arm trains finite with every tensor moving; `test_params`: the new
+  counts (its stale smolgen figure corrected to 47,136).
+- Docstring figures re-measured on the new network (numerics, not timings; the machine is
+  loaded but these do not depend on it): `test_precision` (BF16 gap 0.23% RMS, bounds 3-11x
+  above), `test_cache`'s BF16 and FP8 gaps and mutant M14, `tests/engine/test_network.py`'s
+  real-position gaps - each of the same size as its pre-F5 figure (within a third), except
+  FP8-at-FP32's rare rounding flips (trunk RMS 6.1e-5 at seed 0, the largest of 12 seeds;
+  under its 2e-4 bound and 120x below mutant M14). `bench.py`: a `6y-post-norm`
+  configuration; its timing table marked as measured before F5 (not re-measured).
+- `docs/BUILD_LOG.md`: register rows F5 (new) and F1/F2 (the count); spec issues 200-203;
+  proposed edits 150-153.
+- Spec: §9.2 (Params), §9.3 (all three bullets' F5 parts), §13.1 6y, §14.4 (KataGo's
+  fixup, replaced by §9.3's RMSNorm-style layers - nothing built), §15.2 (the cached = dense
+  (C2, C17), supersession recompute (C20), same state + epoch / transposition (C19-C21) and
+  FP8/BF16 cache precision (G1) rows, under the arm), §15.3's "displacement bias and
+  normalisation changes" row (not measured: no quiet machine); register F1, F2, F5, B12,
+  G1. Proposed edits 150 (F5's biases stated in §9.3's first bullet and the register), 151
+  (the post-norm arm's details as built), 152 (B12's "keeps its own normalisation"), 153
+  (§9.2 and F1's count, M4).
 ### 2026-10-17 - Gate H47: the some-ruleset-is-gated check only in tiers that run every oracle
 
 - `oracles/oracle_harness/gate.py`: the check that some ruleset is gated -

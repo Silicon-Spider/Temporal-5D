@@ -104,7 +104,10 @@ measurements): at 240 boards B9's default takes 9.0 s block-sparse and 13.8 s ch
 against 8.5 s with no mask, every switch of stage N2 29.5 s and 39.3 s; peak memory stays
 under 1.1 GB on both paths, against 3.4 GB for B9's default through the unchunked fused
 path. The block-sparse plans of a forward hold about 58 MB per sparse role at 240 boards
-(the move graph's blocks select 24% of the key boards on average).
+(the move graph's blocks select 24% of the key boards on average). The timings and peak
+memory above were measured on the network before F5 and F6 (LayerNorm with biases, biased
+Q/K/V projections, GELU in the FFN), as ``bench.py``'s table was, and have not been
+re-measured since; the plans' size does not depend on either.
 
 **Not built (B14):** FlexAttention's ``score_mod`` / block mask. Compiled FlexAttention
 needs ``torch.compile``, which has no C++ compiler on the development machine, and
@@ -170,8 +173,9 @@ class AttnContext:
     scope: BlockCausalScope | None = None
 
     def for_layer(self, h: torch.Tensor) -> AttnContext:
-        """The context of one layer whose (normed) input is ``h`` ``(B, L, d)``: the
-        structure's layer-dependent biases (board-pair smolgen, B12) generated from it."""
+        """The context of one layer whose attention input is ``h`` ``(B, L, d)``
+        (``trunk.Block.attn_input``): the structure's layer-dependent biases (board-pair
+        smolgen, B12) generated from it."""
         if self.structure is None or not self.structure.layer_dependent:
             return self
         return replace(self, structure=self.structure.for_layer(h))
@@ -821,16 +825,18 @@ ATTENTION = {
 
 
 class SelfAttention(nn.Module):
-    """Q/K/V/output projections around the attention implementations (``ATTENTION``)."""
+    """Q/K/V/output projections around the attention implementations (``ATTENTION``). F5
+    (section 9.3): no biases in the Q, K and V projections; the output projection keeps its
+    bias (``NetConfig.qkv_bias``, ``NetConfig.out_ffn_bias``)."""
 
     def __init__(self, cfg: NetConfig) -> None:
         super().__init__()
         self.n_heads, self.d_head = cfg.n_heads, cfg.d_head
         d = cfg.d_model
-        self.q_proj = nn.Linear(d, d, bias=cfg.linear_bias)
-        self.k_proj = nn.Linear(d, d, bias=cfg.linear_bias)
-        self.v_proj = nn.Linear(d, d, bias=cfg.linear_bias)
-        self.out_proj = nn.Linear(d, d, bias=cfg.linear_bias)
+        self.q_proj = nn.Linear(d, d, bias=cfg.qkv_bias)
+        self.k_proj = nn.Linear(d, d, bias=cfg.qkv_bias)
+        self.v_proj = nn.Linear(d, d, bias=cfg.qkv_bias)
+        self.out_proj = nn.Linear(d, d, bias=cfg.out_ffn_bias)
 
     def _split(self, x: torch.Tensor) -> torch.Tensor:
         bsz, length, _ = x.shape

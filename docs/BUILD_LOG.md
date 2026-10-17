@@ -381,8 +381,9 @@ user, none blocking: spec issues 122-124 (merged with H47 - whether a ruleset sh
 need two oracles to be gated, as §11.0's wording says and the gate does not; whether
 the commit smoke test should fail an engine compared with nothing; whether a
 restricted run of a full-strength tier should be a smoke test; edit 98 waits on the
-ruling on 122). Joining this list as their lanes merge: 142 (`lane/engine` 2864be0)
-and 204 (`lane/net` f830f31). The main loop's issues 300-306 go to the user
+ruling on 122); 204 (merged with F5/F6 - whether F6's Mish reaches the output heads:
+the value head keeps GELU as the named placeholder `head_activation`). Joining this
+list as its lane merges: 142 (`lane/engine` 2864be0). The main loop's issues 300-306 go to the user
 with step 2's consolidated list; nothing in step 1 waits on them.
 
 ### State on 2026-10-04 (before the loss)
@@ -1279,7 +1280,9 @@ commits (F5 and F6 on `lane/net`, H47 and H48 on `lane/gate`, M22 on `lane/engin
 | E2, E3 | built behind flags, tested | Off; awaiting 6m and 6t. They read the categorical variance; 6m's switch to the error head is engine ABI round 2 |
 | E8 | not started | Behind its flag (6v), with E11 in step 2 |
 | E6 | not built (rule) | Refused |
-| F1, F2 | built, tested | 21,359,370 parameters (F1, with N5's D8 embedding and readout) - before CHECKPOINT 6-7's normalisation, displacement-bias, input and head changes, which change it; the L24-ff12 preset, 44.5M (F2). FFN ratio in question (2x under test, ablation 5): FFN 2x and 4x measured in step 2's quiet-machine block |
+| F1, F2 | built, tested | 21,338,634 parameters (F1 after F5: 20,736 fewer than N5's 21,359,370 - gain-only norms, no Q/K/V biases; spec issue 203); the L24-ff12 preset, 44,456,458 (F2) |
+| F5 | built, tested | Network: RMSNorm-style norms (a learned gain, no centring, no bias; FP32) everywhere in the trunk, no Q/K/V biases, the attention-output and FFN biases kept (spec issue 200), pre-norm. 6y's arm - post-norm with DeepNet's initialisation, `norm_placement="post"` - through the dense trunk and the cached path, its unstated details placeholders (issue 201); smolgen has no norm to keep (issue 202) |
+| F6 | built, tested | Network: Mish in the FFN (`ffn_activation="mish"`); 6y's arm, squared ReLU (`"squared_relu"`), through the dense trunk and the cached path. Whether Mish reaches the output heads is not decided by F6: the value head's MLP keeps GELU as a named placeholder (`head_activation`, spec issue 204) |
 | F3 | not built (rule) | Refused |
 | G7 | not started | SPSA/SPRT tooling (training-time) |
 | F4 | not built (rule) | The NNUE is held open (H6, CHECKPOINT 4) |
@@ -2201,6 +2204,62 @@ superseded or made moot says so; nothing is deleted.
     and documented (`oracles/README.md`, "Other commands"). Put to the user;
     nothing is parked on it.
 
+200. **F5's biases and norm, as built** (§9.3, register F5). (a) Register F5 names
+    two bias rules - the norms have none ("no mean-centring, no bias") and the Q, K
+    and V projections have none - and is silent on the attention-output and FFN
+    biases; §9.3 keeps them, but only in passing, in its Mish bullet (Chessformer's
+    networks "also keep their FFN and attention-output biases, as here"), while a
+    broad reading of "no bias ... everywhere except inside smolgen" would drop them.
+    Built as §9.3 reads: the old single `linear_bias` switch is split into
+    `qkv_bias=False` and `out_ffn_bias=True`; the heads and the embedding's Δt MLP
+    keep their biases. (b) "RMSNorm-style" implies a learned gain, and eps is not
+    stated: 1e-5, kept from N1, inside the root as in PyTorch's `rms_norm`.
+    Proposed edit 150.
+201. **Ablation 6y's post-norm arm is unpinned beyond "Lc0's post-norm with DeepNet
+    initialisation"** (§9.3, §13.1 6y, register F5). Built (`norm_placement="post"`)
+    as DeepNorm from the paper (Wang et al. 2022, "DeepNet: Scaling Transformers to
+    1,000 Layers", Figure 2) - Lc0's code is not consulted (AGENTS.md):
+    x ← N(αx + Attn(x)), x ← N(αx + FFN(x)), α = (2L)^(1/4); DeepNet's
+    initialisation as the paper's pseudocode draws it - Xavier normal, std
+    gain·√(2/(fan_in + fan_out)), at gain β = (8L)^(-1/4) on the value,
+    attention-output and both FFN projections and gain 1 on Q and K - and pre-norm's
+    GPT-2 1/√(2L) dropped. Placeholders: the paper's constants rather than Lc0's;
+    Xavier normal as the initialisation's base, the pseudocode's example ("it can be
+    replaced with other standard initialization") - the rest of the network is LeCun
+    normal, and the arm was first built on that base (N-F5F6's review fixes changed
+    it), which starts the FFN's 256→2048 and 2048→256 matrices at 2.12x and 0.75x the
+    pseudocode's std (the FFN branch 1.59x; the square attention projections are the
+    same on either); no final norm (the last FFN norm is the output's); no norm on the
+    embedding before block 0; board-pair smolgen reads the attention's input, which
+    is then the block's input. Tested through the dense trunk and the cached path
+    (cached = full pass, transpositions, root refresh, the BF16 cache). Proposed edit
+    151.
+202. **Smolgen "keeps its own normalisation"** (register B12: "(F5)"; F5:
+    "everywhere except inside smolgen"): both presuppose a norm inside smolgen, as
+    Lc0's has; the built smolgen (B12, either form) has none, and no document says to
+    add one. Left as built - there is nothing to keep - and recorded. Proposed edit
+    152.
+203. **F1's parameter count** is now 21,338,634: 20,736 fewer than issue 113's
+    21,359,370 - the norms' biases (33 × 256) and the Q/K/V projections' biases (16 ×
+    3 × 256). F2's L24-ff12 preset is 44,456,458 (§9.2: 44.0M); the post-norm arm has
+    256 fewer (no final norm). §9.2 already marks 21,359,370 as before CHECKPOINT 6's
+    normalisation; B15's table will add ~1.6M. Proposed edit 153.
+204. **Whether F6's Mish reaches the output heads** (register F6, §9.3, D3). F6 binds
+    the "FFN activation"; its parenthetical "(Lc0 from T79; Chessformer's FFN and
+    output heads)" and §9.3's "Chessformer uses it in the feed-forward sublayer and
+    the output heads" describe Chessformer, and neither says whether this network's
+    heads follow. The value head's hidden layer is the only head MLP (the auxiliary
+    heads are linear): built as `head_activation`, placeholder "gelu" (as built at
+    N1), "mish" available; CHECKPOINT 7's D3 head rewrite is where the heads change.
+    The input embedding's Δt MLP keeps GELU (neither the FFN nor a head: an
+    implementation choice). Squared ReLU, 6y's arm, is built as `relu(x)^2` (So et
+    al. 2021, "Primer") at Mish's initialisation - the arm's initialisation is not
+    stated; its BF16 gap is about twice the v1's (it squares its input's rounding),
+    and the precision tests' bounds for it are doubled. `head_activation` is a
+    committed-class placeholder that awaits neither a ruling nor a named ablation
+    (6y's arms are the FFN's, not the heads'; M20's dispositions predate it): put to
+    the user to rule, or to name the ablation. Proposed edit 154.
+
 ## Proposed spec edits
 
 Edits the spec or the register needs, for applying upstream. Each: where, what it
@@ -2695,6 +2754,33 @@ struck through, where nothing of it is left to apply); the others stand as writt
     recorded, its verdict in the row; Adopted under / Not adopted in: shipped as
     measured, per range. Why: the vocabulary is how a reader tells how firm a row is,
     and these words are outside it.
+
+150. **§9.3's first bullet and register F5**: now - the norms "no mean-centring, no
+    bias" and "no biases in the Q, K and V projections", the attention-output and FFN
+    biases kept only in the Mish bullet's "as here". Proposed - the first bullet and
+    the row say it: "the attention-output and FFN projections keep their biases", and
+    name the gain and eps if they are to be pinned (as built: a learned gain, eps 1e-5
+    inside the root). Why: a register row that leaves them out can be read either way
+    (issue 200).
+151. **§9.3's second bullet, §13.1 6y and register F5**: now - "Lc0's post-norm with
+    DeepNet initialisation". Proposed - name the arm as built, as placeholders until
+    Lc0's arrangement is given where it differs: DeepNorm with the paper's constants
+    for an L-layer stack, α = (2L)^(1/4) on the residual and β = (8L)^(-1/4) as the
+    gain of the Xavier normal the value, attention-output and FFN projections are
+    drawn from (Q and K at gain 1), as the paper's pseudocode draws them; no final
+    norm; no norm on the embedding; smolgen reading the block's input (issue 201).
+152. **Register B12**: now - "keeps its own normalisation (F5)". Proposed - "has no
+    normalisation inside (none is built; F5's exception is moot)", unless one is to be
+    added (issue 202).
+153. **§9.2's Params row and register F1 (M4 write-back)**: now - "21,359,370 as built
+    at N5, before CHECKPOINT 6's normalisation and displacement-bias changes".
+    Proposed - "21,338,634 as built after F5 (before B15's displacement table)", and
+    F2's preset 44,456,458 against the ladder's 44.0M (issue 203). Supersedes edit 83.
+154. **Register F6 and §9.3's third bullet**: now - "Mish for v1 (Lc0 from T79;
+    Chessformer's FFN and output heads)". Proposed - say whether the output heads'
+    hidden activation is Mish too (as built: the value head's MLP keeps GELU, a
+    placeholder), so that D3's head rewrite does not settle it by accident; and, for
+    6y's squared-ReLU arm, its initialisation if it is not Mish's (issue 204).
 
 ## Session log
 

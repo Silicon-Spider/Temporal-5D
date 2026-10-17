@@ -518,8 +518,10 @@ class CachedEvaluator:
         x = emb[:, b * tpb : (b + 1) * tpb]
         layers: list[torch.Tensor] = []
         with model._autocast(x.device):
+            # The trunk's own block steps around this attention (``trunk.Block``): the same
+            # function under either norm placement (F5).
             for layer, block in enumerate(model.trunk.blocks):
-                h = block.norm_attn(x)
+                h = block.attn_input(x)
                 q, k, v = block.attn.qkv(h)
                 layers.append(torch.stack([k[0], v[0]]))
                 k, v = fake_quantise(k, fmt), fake_quantise(v, fmt)
@@ -529,9 +531,8 @@ class CachedEvaluator:
                 qq = torch.cat([q.new_zeros(1, q.shape[1], n_keys - c, q.shape[-1]), q], dim=2)
                 fast = _FastPath(qq, kk, vv, compact)
                 o = fast.full((n_keys - c, n_keys), None, fast.keys, allowed, bias)
-                x = x + block.attn.output(o)
-                x = x + block.ffn(block.norm_ffn(x))
-            out = model.trunk.final_norm(x.float())
+                x = block.after_ffn(block.after_attn(x, block.attn.output(o)))
+            out = model.trunk.output(x)
         deps = tuple(plan.key(epoch, j) for j in key_boards)
         self.store.put(plan.key(epoch, b), self._entry(torch.stack(layers), out[0], deps, source))
 
@@ -587,8 +588,8 @@ class CachedEvaluator:
         x = emb[:, live_tok]
         d_head = cfg.d_head
         with model._autocast(x.device):
-            for layer, block in enumerate(model.trunk.blocks):
-                h = block.norm_attn(x)
+            for layer, block in enumerate(model.trunk.blocks):  # the trunk's block steps (``trunk.Block``)
+                h = block.attn_input(x)
                 q, k, v = block.attn.qkv(h)
                 n_heads = q.shape[1]
                 k_full = k.new_zeros(1, n_heads, length, d_head)
@@ -617,9 +618,8 @@ class CachedEvaluator:
                     s_g = s_g.masked_fill(~allowed_g, float("-inf"))
                     outs.append(torch.matmul(_softmax_rows(s_g).to(fast.cd), v_full.to(fast.cd)))
                 o = torch.cat([t.to(fast.cd) for t in outs], dim=2)
-                x = x + block.attn.output(o)
-                x = x + block.ffn(block.norm_ffn(x))
-            out_live = model.trunk.final_norm(x.float())
+                x = block.after_ffn(block.after_attn(x, block.attn.output(o)))
+            out_live = model.trunk.output(x)
         h_all = out_live.new_zeros(1, length, out_live.shape[-1])
         h_all[:, live_tok] = out_live
         for b, e in zip(frozen, entries, strict=True):
