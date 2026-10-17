@@ -42,9 +42,10 @@ switch 25.1 s / 1.49 GB. Learned biases make the kernel's mask require gradient,
 CPU forces PyTorch's math kernel inside every block that carries them (the time of "every
 switch").
 
-These figures are of the network before F5 (CHECKPOINT 6: LayerNorm with biases, biased
-Q/K/V projections), which F5 replaced with gain-only RMSNorm and no Q/K/V biases - less
-per-token work, no new matmul; they were not re-measured (no quiet machine since).
+These figures are of the network before F5 and F6 (CHECKPOINTS 6-7: LayerNorm with
+biases, biased Q/K/V projections, GELU in the FFN), which F5 replaced with gain-only RMSNorm
+and no Q/K/V biases - less per-token work, no new matmul - and F6 with Mish; they were not
+re-measured (no quiet machine since).
 """
 
 from __future__ import annotations
@@ -79,6 +80,7 @@ CONFIGS: dict[str, dict] = {
     "n2-default-chunked-keep": dict(attn_impl="chunked", attn_recompute=False),
     "n2-all-keep": _ALL | dict(attn_recompute=False),
     "6y-post-norm": dict(norm_placement="post"),
+    "6y-squared-relu": dict(ffn_activation="squared_relu"),
 }
 
 
