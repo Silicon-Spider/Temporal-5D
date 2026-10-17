@@ -1,4 +1,4 @@
-"""The transformer trunk (B1, B2, C1, F1, F5; spec sections 3, 7.4, 9.2, 9.3).
+"""The transformer trunk (B1, B2, C1, F1, F5, F6; spec sections 3, 7.4, 9.2, 9.3).
 
 One weight set; L identical residual blocks, each unified dense bidirectional attention
 over every token followed by a two-matrix FFN of width ``ffn_ratio * d`` (section 9.1's
@@ -19,8 +19,9 @@ the norms sit is ``NetConfig.norm_placement``:
   (``model._init_weights``). No final norm - the last block's FFN norm is the output's -
   and no norm on the embedding before block 0 (placeholders, ``NetConfig.norm_placement``).
 
-Implementation choice (the spec is silent; not committed-class): GELU (exact erf form)
-inside the FFN.
+**The FFN's activation (F6, section 9.3)** is ``NetConfig.ffn_activation``: Mish,
+``x tanh(softplus(x))`` (Misra 2019), for the v1; squared ReLU, ``relu(x)^2`` (So et al.
+2021), as ablation 6y's arm. The heads' activation is not the FFN's (``heads.py``).
 
 Precision (G1): under ``trunk_dtype="bf16"`` the trunk runs inside autocast, so its
 matmuls and the attention kernel run in BF16 while the residual stream, the norms and
@@ -71,14 +72,31 @@ class RMSNorm(nn.Module):
             return x * torch.rsqrt(x.pow(2).mean(dim=-1, keepdim=True) + self.eps) * self.weight
 
 
+def squared_relu(x: torch.Tensor) -> torch.Tensor:
+    """``relu(x)^2`` - ablation 6y's FFN activation (F6; So et al. 2021, "Primer: Searching
+    for Efficient Transformers for Language Modeling")."""
+    return torch.relu(x).square()
+
+
+#: The FFN's activations (F6, ``NetConfig.ffn_activation``): Mish ``x tanh(softplus(x))``
+#: (Misra 2019; PyTorch's ``mish``) and squared ReLU.
+FFN_ACTIVATION_FNS: dict[str, Callable[[torch.Tensor], torch.Tensor]] = {
+    "mish": torch.nn.functional.mish,
+    "squared_relu": squared_relu,
+}
+
+
 class FeedForward(nn.Module):
+    """``lin_out(act(lin_in(x)))`` with F6's activation (``NetConfig.ffn_activation``)."""
+
     def __init__(self, cfg: NetConfig) -> None:
         super().__init__()
         self.lin_in = nn.Linear(cfg.d_model, cfg.d_ffn, bias=cfg.out_ffn_bias)
         self.lin_out = nn.Linear(cfg.d_ffn, cfg.d_model, bias=cfg.out_ffn_bias)
+        self.activation = FFN_ACTIVATION_FNS[cfg.ffn_activation]
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.lin_out(torch.nn.functional.gelu(self.lin_in(x)))
+        return self.lin_out(self.activation(self.lin_in(x)))
 
 
 class Block(nn.Module):

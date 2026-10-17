@@ -1,9 +1,11 @@
-"""The trunk's normalisation and biases (F5; spec section 9.3) and ablation 6y's post-norm arm.
+"""The trunk's normalisation, biases and activation (F5, F6; spec section 9.3) and ablation 6y's arms.
 
 F5: every norm RMSNorm-style - no mean-centring, no bias - no Q/K/V biases, the
 attention-output and FFN biases kept, the output heads' biases kept; pre-norm for v1,
 "Lc0's post-norm with DeepNet initialisation" as 6y's arm (DeepNorm and DeepNet's
-initialisation, Wang et al. 2022). Each block is computed by hand here, from the formulas.
+initialisation, Wang et al. 2022). F6: Mish in the FFN for v1, squared ReLU as 6y's arm;
+the heads' activation a named placeholder. Each block is computed by hand here, from the
+formulas.
 """
 
 from __future__ import annotations
@@ -191,10 +193,50 @@ def test_post_norm_parameter_count():
     assert parameter_breakdown(build_model(NetConfig(norm_placement="post"), seed=0))["total"] == V1_TOTAL - 256
 
 
-def test_norm_options_are_validated():
+def test_trunk_options_are_validated():
     with pytest.raises(ValueError, match="norm_placement"):
         NetConfig(norm_placement="sandwich").validate()
+    with pytest.raises(ValueError, match="ffn_activation"):
+        NetConfig(ffn_activation="gelu").validate()  # N1's; F6 replaced it
+    with pytest.raises(ValueError, match="head_activation"):
+        NetConfig(head_activation="relu").validate()
     with pytest.raises(ValueError, match="norm_eps"):
         NetConfig(norm_eps=0.0).validate()
     with pytest.raises(TypeError):
         NetConfig(linear_bias=True)  # split into qkv_bias and out_ffn_bias (F5)
+
+
+# --- the FFN's activation (F6) --------------------------------------------------------------------
+
+
+def _mish(x: torch.Tensor) -> torch.Tensor:
+    """Mish (Misra 2019): ``x tanh(softplus(x))``."""
+    return x * torch.tanh(torch.log1p(torch.exp(x)))
+
+
+@pytest.mark.parametrize("activation", ["mish", "squared_relu"])
+def test_the_ffn_is_its_formula(activation):
+    """F6: ``FFN(x) = W_out act(W_in x + b_in) + b_out`` - Mish for v1, squared ReLU ``relu(x)^2``
+    as 6y's arm - by hand in FP64; and it is not stage N1's GELU."""
+    model = build_model(NetConfig(trunk_dtype="fp32", n_layers=1, ffn_activation=activation), seed=6)
+    ffn = model.trunk.blocks[0].ffn
+    x = torch.randn(3, 7, 256, generator=torch.Generator().manual_seed(6))
+    pre = x.double() @ ffn.lin_in.weight.double().T + ffn.lin_in.bias.double()
+    act = _mish(pre) if activation == "mish" else pre.clamp(min=0.0) ** 2
+    expected = act @ ffn.lin_out.weight.double().T + ffn.lin_out.bias.double()
+    out = ffn(x)
+    assert torch.allclose(out.double(), expected, atol=1e-4)
+    assert not torch.allclose(out, ffn.lin_out(F.gelu(ffn.lin_in(x))), atol=1e-3), "not N1's GELU"
+
+
+@pytest.mark.parametrize("activation", ["gelu", "mish"])
+def test_the_value_heads_activation_is_a_named_placeholder(activation):
+    """F6 binds the FFN; the value head's hidden activation - the only output-head MLP - is
+    ``head_activation``: GELU as built (a placeholder, spec issue 204) or Mish."""
+    assert NetConfig().head_activation == "gelu"
+    model = build_model(NetConfig(trunk_dtype="fp32", n_layers=1, head_activation=activation), seed=7).eval()
+    pooled = torch.randn(4, 256, generator=torch.Generator().manual_seed(7))
+    hidden = model.value.hidden(pooled).double()
+    act = F.gelu(hidden) if activation == "gelu" else _mish(hidden)
+    expected = act @ model.value.out.weight.double().T + model.value.out.bias.double()
+    assert torch.allclose(model.value(pooled).double(), expected, atol=1e-5)

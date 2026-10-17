@@ -921,6 +921,7 @@ for game records.
 | E6 | not built (rule) | Refused |
 | F1, F2 | built, tested | 21,338,634 parameters (F1 after F5: 20,736 fewer than N5's 21,359,370 - gain-only norms, no Q/K/V biases; spec issue 203); the L24-ff12 preset, 44,456,458 (F2) |
 | F5 | built, tested | Network: RMSNorm-style norms (a learned gain, no centring, no bias; FP32) everywhere in the trunk, no Q/K/V biases, the attention-output and FFN biases kept (spec issue 200), pre-norm. 6y's arm - post-norm with DeepNet's initialisation, `norm_placement="post"` - through the dense trunk and the cached path, its unstated details placeholders (issue 201); smolgen has no norm to keep (issue 202) |
+| F6 | built, tested | Network: Mish in the FFN (`ffn_activation="mish"`); 6y's arm, squared ReLU (`"squared_relu"`), through the dense trunk and the cached path. Whether Mish reaches the output heads is not decided by F6: the value head's MLP keeps GELU as a named placeholder (`head_activation`, spec issue 204) |
 | F3 | not built (rule) | Refused |
 | G7 | not started | SPSA/SPRT tooling (training-time) |
 | F4 | not built (rule) | The NNUE is held open (H6, CHECKPOINT 4) |
@@ -1514,6 +1515,21 @@ decision), and what is parked.
     3 × 256). F2's L24-ff12 preset is 44,456,458 (§9.2: 44.0M); the post-norm arm has
     256 fewer (no final norm). §9.2 already marks 21,359,370 as before CHECKPOINT 6's
     normalisation; B15's table will add ~1.6M. Proposed edit 153.
+204. **Whether F6's Mish reaches the output heads** (register F6, §9.3, D3). F6 binds
+    the "FFN activation"; its parenthetical "(Lc0 from T79; Chessformer's FFN and
+    output heads)" and §9.3's "Chessformer uses it in the feed-forward sublayer and
+    the output heads" describe Chessformer, and neither says whether this network's
+    heads follow. The value head's hidden layer is the only head MLP (the auxiliary
+    heads are linear): built as `head_activation`, placeholder "gelu" (as built at
+    N1), "mish" available; CHECKPOINT 7's D3 head rewrite is where the heads change.
+    The input embedding's Δt MLP keeps GELU (neither the FFN nor a head: an
+    implementation choice). Squared ReLU, 6y's arm, is built as `relu(x)^2` (So et
+    al. 2021, "Primer") at Mish's initialisation - the arm's initialisation is not
+    stated; its BF16 gap is about twice the v1's (it squares its input's rounding),
+    and the precision tests' bounds for it are doubled. `head_activation` is a
+    committed-class placeholder that awaits neither a ruling nor a named ablation
+    (6y's arms are the FFN's, not the heads'; M20's dispositions predate it): put to
+    the user to rule, or to name the ablation. Proposed edit 154.
 
 ## Proposed spec edits
 
@@ -1821,6 +1837,11 @@ says now, what it should say, why.
     at N5, before CHECKPOINT 6's normalisation and displacement-bias changes".
     Proposed - "21,338,634 as built after F5 (before B15's displacement table)", and
     F2's preset 44,456,458 against the ladder's 44.0M (issue 203). Supersedes edit 83.
+154. **Register F6 and §9.3's third bullet**: now - "Mish for v1 (Lc0 from T79;
+    Chessformer's FFN and output heads)". Proposed - say whether the output heads'
+    hidden activation is Mish too (as built: the value head's MLP keeps GELU, a
+    placeholder), so that D3's head rewrite does not settle it by accident; and, for
+    6y's squared-ReLU arm, its initialisation if it is not Mish's (issue 204).
 
 ## Session log
 

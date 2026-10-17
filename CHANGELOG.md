@@ -10,6 +10,48 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-17 - Network F6: Mish in the FFN; squared ReLU behind a flag
+
+- `python/t5d/net/trunk.py`, `config.py`: register F6 (committed, §9.3). The FFN's
+  activation is `NetConfig.ffn_activation`: `"mish"` for v1 - `x tanh(softplus(x))` (Misra
+  2019; PyTorch's `mish`), replacing stage N1's GELU - or ablation 6y's arm
+  `"squared_relu"`, `relu(x)^2` (So et al. 2021, "Primer"), at Mish's initialisation (the
+  arm's is not stated). Validated; GELU is no longer an FFN option.
+- `heads.py`, `config.py`: whether Mish also covers the output heads is not decided by F6
+  ("FFN activation"; its "Chessformer's FFN and output heads" describes Chessformer), so the
+  value head's hidden activation - the only head MLP - stays GELU as a named placeholder,
+  `head_activation` ("gelu", or "mish"; spec issue 204). `embed.py`: the Δt MLP keeps GELU,
+  documented as outside F6.
+- The cached path needs nothing new: it calls the block's own FFN (F5's block steps).
+  §15.2's rows under the arm: `test_cache`'s 6y test runs both arms (cached = full pass,
+  root refresh, transpositions, a transposition hit, the BF16 cache), and the every-switch
+  matrix runs both arms together with the N2 structure.
+- Tests: `test_trunk.py` - the FFN equal to its formula in FP64 under each activation (and
+  not GELU); the value head's activation by hand under both placeholder values; validation.
+  `test_structure`: "every switch changes the network" gains `ffn_activation`; every
+  `attn_impl` one function under squared ReLU. `test_precision`: both 6y arms under G1.
+  `test_smoke`: squared ReLU (with the heads' Mish) trains finite with every tensor moving.
+- Precision bounds matched to the arm's arithmetic: squared ReLU squares its input's BF16
+  rounding (twice the relative error), and its measured BF16 gap is up to twice the v1's
+  (precision: 0.39% RMS against 0.24%; policy logits 0.021 against 0.010), so its bounds in
+  `test_precision` and `test_cache`'s 6y test are the v1's doubled (2.9-20x and 3.6-9x
+  above its measurements); the post-norm arm keeps the v1's (its gaps are 1.6-6.5x smaller).
+  `test_fp8_cache_equals_the_fp8_network_at_fp32_resolution`: the trunk-RMS bound raised
+  from 2e-4 to 4e-4 - FP8 rounding flips are discrete and heavy-tailed (over 12 seeds of the
+  F5 and F6 networks each, a seed's largest was 1e-6 to 3e-5 typically and 7.8e-5 at most,
+  2.6x under the old bound); the new bound sits 5x above that and 19x below mutant M14.
+- Docstring figures re-measured after F6 (numerics, not timings): `test_precision`,
+  `test_cache` (its header's claim that the 16-layer gaps are no larger than the 2-layer
+  ones, written with F5, was wrong - they are up to 1.8x larger; corrected),
+  `tests/engine/test_network.py`. `bench.py`: a `6y-squared-relu` configuration; its table
+  marked as measured before F5 and F6.
+- `docs/BUILD_LOG.md`: register row F6 (new); spec issue 204 (put to the user: the heads'
+  activation awaits neither a ruling nor a named ablation); proposed edit 154.
+- Spec: §9.3 (the Mish bullet), §13.1 6y, §15.1 Phase 2 ("Mish" among CHECKPOINT 7's
+  items), §15.2 (rows 1-3 and the G1 row under the arm); register F6, D3 (the heads'
+  activation). No parameter changes (F1 stays 21,338,634). Proposed edit 154 (whether the
+  output heads' activation is Mish; the squared-ReLU arm's initialisation).
+
 ### 2026-10-17 - Network F5: RMSNorm-style normalisation, no Q/K/V biases, pre-norm; the post-norm + DeepNet arm behind a flag
 
 - `python/t5d/net/trunk.py`: register F5 (committed, §9.3). `RMSNorm` - a learned gain over
