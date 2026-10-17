@@ -87,8 +87,11 @@ struct GuardResult {
   /// The opponent's actions to mate (refuted).
   int refutation_depth = 0;
   /// The opponent's forcing line (refuted): their action, our longest
-  /// defence, ..., their mating action. `line_complete` false: it stops
-  /// where the deciding thread's tree holds no continuation.
+  /// defence, ..., their mating action (t5d/prover.hpp, ProveResult::line).
+  /// `line_complete` false: it stops where the reporting thread's tree holds
+  /// no continuation (a node another thread, or an earlier depth, solved and
+  /// exported) - never at depth 1, whose stores start empty. Whatever the
+  /// line, the refutation is the proof's: refuted and refutation_depth.
   std::vector<std::vector<Move>> line;
   bool line_complete = false;
   /// The budget stopped the last depth tried.

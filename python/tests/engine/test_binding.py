@@ -33,6 +33,7 @@ from t5d.engine.capi import (
     T5D_RULES_MOVES_AFTER_SHIFT,
     T5D_RULES_NO_MOVES_AFTER_SHIFT,
     CExpansion,
+    GameSummary,
     MoveRecord,
     layout_mismatches,
 )
@@ -263,22 +264,69 @@ def test_the_binding_mirrors_the_librarys_struct_layouts():
     struct that differs - a binding older than its library - is named."""
     lib = load_library()
     assert layout_mismatches(lib) == []
-    # D8's three int32 come last, after every older field (engine stage E7)
+    # D8's three int32 come after every older field (engine stage E7), A6's three after them
+    # (engine ABI round 1): appended, so no older offset moved
     tail = (CExpansion.acting_player.offset, CExpansion.submit_possible.offset, CExpansion.submit_legal.offset)
     assert tail[0] >= CExpansion.src_extra.offset + ctypes.sizeof(ctypes.c_void_p)
     assert tail == (tail[0], tail[0] + 4, tail[0] + 8)
+    a6 = (CExpansion.mandatory_remaining.offset, CExpansion.optional_playable.offset, CExpansion.moves_made.offset)
+    assert a6 == (tail[2] + 4, tail[2] + 8, tail[2] + 12)
+    assert GameSummary.moves_made.offset >= GameSummary.rules.offset + 8
     if ctypes.sizeof(ctypes.c_void_p) == 8:
-        assert tail == (272, 276, 280) and ctypes.sizeof(CExpansion) == 288
+        assert tail == (272, 276, 280) and a6 == (284, 288, 292) and ctypes.sizeof(CExpansion) == 296
+        assert GameSummary.moves_made.offset == 64 and ctypes.sizeof(GameSummary) == 72
 
-    class OldExpansion(ctypes.Structure):  # before stage E7: no acting player, no submit action
+    class OldExpansion(ctypes.Structure):  # before engine ABI round 1: no turn state
         _fields_ = CExpansion._fields_[:-3]
 
-    try:
-        MIRRORED_STRUCTS["t5d_expansion"] = OldExpansion
-        found = layout_mismatches(lib)
-    finally:
-        MIRRORED_STRUCTS["t5d_expansion"] = CExpansion
-    assert any(m.startswith("t5d_expansion: size") for m in found)
+    class OlderExpansion(ctypes.Structure):  # before stage E7: no acting player, no submit action either
+        _fields_ = CExpansion._fields_[:-6]
+
+    for old in (OldExpansion, OlderExpansion):
+        try:
+            MIRRORED_STRUCTS["t5d_expansion"] = old
+            found = layout_mismatches(lib)
+        finally:
+            MIRRORED_STRUCTS["t5d_expansion"] = CExpansion
+        assert any(m.startswith("t5d_expansion: size") for m in found)
+
+
+@requires_engine
+@pytest.mark.parametrize("rules", [0, T5D_RULES_NO_MOVES_AFTER_SHIFT], ids=["R8", "guide-literal"])
+def test_the_expansion_carries_the_turn_state_a6(rules):
+    """Register A6: the turn state the engine exports - the mandatory boards still to move, the
+    optional boards still playable, the moves made in the action (the handle's count: no state
+    records it) - through apply, copy, submit and a record's replay. White's 0 at T1 is owed;
+    its +1 at T2, ahead of the present, is optional."""
+    with Game.from_fen(["[3k/4/4/K3:0:1:w]", "[3k/4/4/K3:+1:2:w]"], rules=rules) as g:
+        x = g.expand(square_features="none")
+        assert (x.mandatory_remaining, x.optional_playable, x.moves_made) == (1, 1, 0)
+        assert g.info().moves_made == 0 and g.info().turn_start
+        on_zero = next(m for m in x.move_list() if m.text() == "(0T1)Ka1(0T1)a2")
+        g.apply(on_zero)
+        x = g.expand(square_features="none")
+        r8 = rules == 0
+        assert (x.mandatory_remaining, x.optional_playable, x.moves_made) == (0, 1 if r8 else 0, 1)
+        assert x.submit_possible and x.mandatory_remaining == 0
+        assert g.info().moves_made == 1 and not g.info().turn_start
+        if r8:  # moves after the shift (R8): the optional board, the count going on - in a copy
+            h = g.copy()
+            assert h.info().moves_made == 1
+            h.apply(next(m for m in h.moves() if m.text() == "(+1T2)Ka1(+1T2)b1"))
+            y = h.expand(square_features="none")
+            assert (y.mandatory_remaining, y.optional_playable, y.moves_made) == (0, 0, 2)
+            assert g.info().moves_made == 1  # the original keeps its own count
+            h.close()
+        g.submit()
+        assert g.info().moves_made == 0
+        x = g.expand(square_features="none")
+        assert x.moves_made == 0 and x.mandatory_remaining > 0  # Black's turn start owes a board (T5)
+    # A record's replay: whole actions, so 0 after each.
+    with Game.from_pgn("1. e4 / e5 2. Nf3\n") as g:
+        for _ in g.replay():
+            assert g.info().moves_made == 0 and g.expand(square_features="none").moves_made == 0
+        g.apply(g.moves()[0])
+        assert g.info().moves_made == 1
 
 
 @requires_engine

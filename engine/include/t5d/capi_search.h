@@ -16,8 +16,12 @@
  *
  * What a leaf carries is everything the network takes from it - the leaf's
  * expansion (t5d_expansion: per-board and per-square features, the candidate
- * moves, the move graph, typed relations, W(k)/E(k)), its node key and the
- * refresh epoch. Its evaluation is:
+ * moves, the move graph, typed relations, W(k)/E(k), and the turn state:
+ * the mandatory and optional boards and the moves made in the leaf's action -
+ * register A6), its node key and the refresh epoch. The search evaluates and
+ * caches a leaf by its state AND its moves made in the action (no state
+ * records the count; equal states with different counts are different
+ * inputs). Its evaluation is:
  *
  *  - POLICY: one float32 logit per candidate move, logit i scoring
  *    leaf.expansion.moves[i] (the expansion's own order). Under the whole-turn
@@ -197,9 +201,13 @@ typedef struct t5d_search_params {
   t5d_expand_options expand;   /* the leaves' network input (k, features, relations); last */
 } t5d_search_params;
 
-/* One leaf of a gathered batch. */
+/* One leaf of a gathered batch. Its evaluation's identity - what the search
+ * caches and de-duplicates it by - is (key, expansion.moves_made, epoch), the
+ * state compared exactly behind the key: the key alone does not tell equal
+ * states with different counts apart (A6), and neither does t5d_search_leaf_state. */
 typedef struct t5d_leaf {
-  uint64_t key;            /* the node key (H18; t5d_search_params.node_key) */
+  uint64_t key;            /* the state's node key (H18; t5d_search_params.node_key) - not
+                              the leaf's identity, which adds expansion.moves_made (A6) */
   uint64_t epoch;          /* the refresh epoch (t5d_search_set_epoch) */
   int32_t acting_player;   /* D8: whose action is in progress, until it submits: 0 white,
                               1 black - the value's perspective */
@@ -269,9 +277,12 @@ typedef struct t5d_root_child {
 /* The defaults (t5d/mcts.hpp). Cannot fail; NULL is ignored. */
 T5D_API void t5d_search_params_default(t5d_search_params* out);
 
-/* A search from the game's current state. turn_start: 1 if no move has been
- * made yet in the action under way (the whole-turn split requires it). `params`
- * NULL: the defaults. The game handle is not kept. On failure *out is NULL. */
+/* A search from the game's current state, with the game handle's count of moves
+ * made in the action under way (t5d_game_summary.moves_made; register A6).
+ * turn_start: 1 if no move has been made yet in that action (the whole-turn
+ * split requires it) - it must agree with the handle's count (1 exactly where
+ * it is 0; T5D_ERR_ARGUMENT otherwise). `params` NULL: the defaults. The game
+ * handle is not kept. On failure *out is NULL. */
 T5D_API t5d_status t5d_search_new(const t5d_game* game, int32_t turn_start,
                                   const t5d_search_params* params, t5d_search** out,
                                   char** error);
@@ -292,7 +303,8 @@ T5D_API void t5d_search_destroy(t5d_search* search);
 /* Selects up to max_leaves leaves (virtual loss on their paths), completing on
  * the way the simulations that need no evaluation, while fewer than
  * max_playouts simulations are completed or waiting (T5D_NO_LIMIT: none).
- * *count: the evaluations wanted (one per distinct state among the leaves); 0
+ * *count: the evaluations wanted (one per distinct state and moves made in its
+ * action among the leaves - one state with two counts is asked twice, A6); 0
  * when the search needs none (its root is terminal or solved, or the
  * playouts are spent). T5D_ERR_ARGUMENT if a batch is already waiting. */
 T5D_API t5d_status t5d_search_gather(t5d_search* search, size_t max_leaves,
@@ -302,7 +314,9 @@ T5D_API t5d_status t5d_search_gather(t5d_search* search, size_t max_leaves,
 T5D_API t5d_status t5d_search_leaf(t5d_search* search, size_t index, t5d_leaf* out,
                                    char** error);
 
-/* Leaf `index`'s state, as a t5d_state (fingerprint, boards). */
+/* Leaf `index`'s state, as a t5d_state (fingerprint, boards). A state holds no
+ * count: the leaf's moves made in its action are t5d_leaf.expansion.moves_made
+ * (A6), so the fingerprint alone does not identify the leaf's input. */
 T5D_API t5d_status t5d_search_leaf_state(const t5d_search* search, size_t index,
                                          t5d_state** out, char** error);
 
@@ -372,11 +386,13 @@ T5D_API t5d_status t5d_search_advance(t5d_search* search, size_t index, char** e
 T5D_API t5d_status t5d_search_advance_action(t5d_search* search, const t5d_move* moves,
                                              size_t count, char** error);
 
-/* The root's state, as a new game handle (legal submissions). */
+/* The root's state, as a new game handle (legal submissions), with the root's
+ * count of moves made in its action (A6). */
 T5D_API t5d_status t5d_search_root_game(const t5d_search* search, t5d_game** out, char** error);
 
-/* The refresh epoch (§7.9): evaluations are cached per (state, epoch). An
- * error while a batch is waiting (deliver or abandon it first). */
+/* The refresh epoch (§7.9): evaluations are cached per (state, moves made in its
+ * action, epoch) (A6). An error while a batch is waiting (deliver or abandon it
+ * first). */
 T5D_API t5d_status t5d_search_set_epoch(t5d_search* search, uint64_t epoch, char** error);
 
 /* H15: a digest of the whole search graph - every node's and edge's statistics

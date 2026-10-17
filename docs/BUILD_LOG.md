@@ -67,6 +67,62 @@ deciding thread's tree holds no continuation"), yet the five-thread test asserts
 Queued for the engine lane (make the line complete from the certificate, or test
 the documented contract).
 
+### CHECKPOINT 8 - ruled 2026-10-17 (design documents d5cc8d1)
+
+**The instruction files: the one edit the user allowed in each.** The user's words:
+"CLAUDE.md and AGENTS.md: you may make exactly one edit to each - add the engine build
+step (py engine/build.py) before the gate commands in their command lists. Nothing
+else in those files; commit it separately and quote the diff in the build log." The
+diff, in full:
+
+```diff
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -129,2 +129,3 @@ python oracles/harness.py verify               # pins, corpus, divergences, boun
+ python oracles/harness.py selftest             # the harness's own tests
++py engine/build.py                             # build the engine first: the gate runs build/engine/t5d-gate
+ python oracles/harness.py gate --tier commit   # the per-commit gate (nightly | release for the full one)
+--- a/CLAUDE.md
++++ b/CLAUDE.md
+@@ -64,2 +64,3 @@ python oracles/harness.py selftest             # the harness's own unit tests
+ python oracles/harness.py rulebook             # is docs/rules/README.md the pinned rulebook? (--pin after review)
++py engine/build.py                             # build the engine first: the gate runs build/engine/t5d-gate
+ python oracles/harness.py gate --tier commit   # per-commit gate; nightly and release run all three oracles
+```
+
+**The rulings** (register H27, H47, H51, F6, M22, D2 as changed at CHECKPOINT 8), and
+where each is built:
+- **125 - capture markers read leniently (H51, a project decision).** The notation
+  spec says when to write `x`, not how to read a superfluous or missing one: a move is
+  read as its squares define it, a mismatch logged as a warning, the marker written
+  strictly. The reader lenient in both directions, a test that the writer marks
+  exactly the captures, a rulebook entry labelled a project decision, KD-0167-0169
+  removed and ftxi's refusal recorded citing H51 and that entry, nightly re-run
+  (Standard - Turn Zero gated if two oracles answer for it). Gate lane, "gate step
+  3a" (running). The reader is a truth source: the pinned measurements (6b, 6b′,
+  6b″, Hunt's truth) are kept reproducible, never re-recorded in it.
+- **122 - a ruleset is gated only when two or more oracles answer for it** (H47: "as
+  built the gate required one, and is aligned to two"); "a single oracle cannot tell
+  its own bug from ours". **123 - yes**: the commit tier fails if the engine declines a
+  record it read on the last green run, or reads none. **124 - no**: a restricted run
+  (`--source`/`--record`) never produces a tier verdict; its output is labelled
+  "restricted - not a tier result". **126 - report it too**, as a question citing the
+  source and a few representative positions, not as a bug (H27: defects as bug
+  reports, documented-rule disagreements as questions; drafted by the agent, filed by
+  the owner) - drafted in `docs/checkpoints/upstream/`. Gate lane, "gate step 3b",
+  after 3a; the gate lane merges once both are reviewed.
+- **142 - the D2 build order: the tree form first** (it modifies the existing tree and
+  is anchored by its equivalence to the ply split), **then the flat form; both are
+  built.** M22's figures count playable boards, which include optional ones; per range
+  it also reports the share of turns with more than one and with three or more
+  mandatory boards, the optional moves actually played, and the compute share of
+  multi-board turns (moves x per-move cost). Engine lane: the figures after H51
+  merges (the reader changes what t0database replays, if anything), then the tree
+  form, then the flat form.
+- **204 - yes: Mish in every head's hidden layers, the value head included; squared
+  ReLU stays a trunk-only arm** (F6). Network lane, its next component.
+- **CLAUDE.md and AGENTS.md** - the one edit allowed in each, above (11caec9).
+
 ### CHECKPOINTS 6 and 7 - ruled upstream (design documents f07568c)
 
 The user's rulings at CHECKPOINTS 6 and 7, as the design documents maintained
@@ -376,15 +432,9 @@ main and issue 300 is ruled. Early adjudication (§12.3) has no specification (i
 **Waiting on the user:** nothing that blocks (the `gh` login is done and the CI
 comparison recorded in "Recovery", above); the standing items - branch protection with
 the workflows as required checks; filing the two oracle bug drafts in
-`docs/checkpoints/upstream/`; applying the proposed spec edits upstream. Put to the
-user, none blocking: spec issues 122-124 (merged with H47 - whether a ruleset should
-need two oracles to be gated, as §11.0's wording says and the gate does not; whether
-the commit smoke test should fail an engine compared with nothing; whether a
-restricted run of a full-strength tier should be a smoke test; edit 98 waits on the
-ruling on 122); 204 (merged with F5/F6 - whether F6's Mish reaches the output heads:
-the value head keeps GELU as the named placeholder `head_activation`); 142 (merged
-with M22 - nothing maps the turn-width figures to an order of the D2 work; the figures
-and a suggestion that 6x report by playable-board count are in the issue); 205
+`docs/checkpoints/upstream/` (and, after gate step 3b, the ftxi question of issue
+126); applying the proposed spec edits upstream. Ruled at CHECKPOINT 8: spec issues
+122-126, 142 and 204 ("CHECKPOINT 8", above). Put to the user, none blocking: 205
 (merged with B15 - under the far-bin placeholder B6 is not B15's special case, as
 §4.1, register B6 and reversal 25 say it is: keep the sentence and give the far
 classes B6's cells, about 5.2M parameters, or keep §4.1's ~1.6M and drop the
@@ -761,6 +811,7 @@ threads reach at least one thread's sum (one retry on a shared machine).
 | 2026-10-03 | E9 | 4ab7f81 (E8+E9's branch, before review) | dev, 24 logical; shared | 32 | 293 | 313 / 314 / 311 | none | pass x3 |
 | 2026-10-04 | E9 | 9328e31 (after its review fixes) | dev, 24 logical; shared | 32 | 293 | 311 / 312 / 313 | none | pass x3 |
 | 2026-10-04 | E9 | main + E9, merged tree before the commit | dev, 24 logical; nothing else running | 32 | 293 | 311 / 311 / 313 | none | pass x3 |
+| 2026-10-17 | A6 (the prover reports a searching thread's line) | main a8a5920 + lane/engine 3f57416, merged tree before the commit | dev-r, 24 logical; the gate and network lanes running; load 9-11% before, 20-22% after | 32 | 293 | 311 / 311 / 311 | none | pass x3 |
 
 ## Environment
 
@@ -1215,7 +1266,7 @@ commits (F5 and F6 on `lane/net`, H47 and H48 on `lane/gate`, M22 on `lane/engin
 | H13 | built (component), not wired | The asset map (E9) as the register now records it: the material estimate, 4 plies and 128 nodes per board, flagged at 300, boost 0.25 × min(1, value/900), every number a placeholder (issue 106). Wiring its boosts into the search's priors was E10's - lost, redone in step 2 (with the steered visits flagged for I2) |
 | H14 | not started (lost with E10) | Restated at CHECKPOINT 6: budgets for the reduced ladder - Hunt, the asset map, the settling scans under 50 boards (Guard offline) - against shared movegen, on M13's five cores. E10's scheduler, redone in step 2 |
 | H41 | built, tested | `SearchParams::proof_channel` (C `proof_channel`, `t5d-play --proof-channel`) - the switch the register now names: propagation of solved status (marking nodes solved, pruning siblings, secure-child selection) and export, off by rule; game ends are scored as results. Not yet: the cross-checks of the solver's proofs against df-pn and the oracles' mate verdicts (§15.4) - step 2's missing tests |
-| H42 | built, tested; not adopted | Guard (E9): depth 1 completes in 65.1 / 15.8 / 5.2 / 0.0% of roots against 95% (6b″) - adopted in no range; §13: the chosen move goes unguarded. Built and kept (the audit lane's shallow-mate report uses its question offline; the search's re-search hook stays unwired-by-adoption) |
+| H42 | built, tested; not adopted | Guard (E9): depth 1 completes in 65.1 / 15.8 / 5.2 / 0.0% of roots against 95% (6b″) - adopted in no range; §13: the chosen move goes unguarded. Built and kept (the audit lane's shallow-mate report uses its question offline; the search's re-search hook stays unwired-by-adoption). Its five-thread depth-1 test failed once in CI (run 37146667584): a thread that read the root's proof from a helper's export - its tree empty - was the one reported, so the refutation's line was empty. Fixed in the prover's report (2026-10-17, `lane/engine`): the line of a thread that searched, complete at depth 1; the test pins the race and checks the line's contract at depth 2. What Guard decides is unchanged. Beyond depth 1 the line keeps its contract (it can stop where a node was solved from the store): a certificate holds the attacker's proving actions only, so the line could take the attacker's step past such a node from one but not the defender's longest defence, which needs an enumeration of the defender's actions (the first record of this fix gave another reason - that 6b″ ran Guard without certificates; it ran with them, for its cross-check against E4) |
 | H43 | built, tested; adopted under 100 boards; not wired | Hunt (E9): 69.0% / 63.6% of the truth's mates under 50 / 50-99 boards (6b″) - adopted there; 35.0% at 100-199 and 0 of 1 at 200+ - not adopted; §13: proofs there come only from the search's solver. Export refused until H41/H23. Not wired into the search on main: E10 was lost; redone in step 2 (Hunt at the root under 100 boards, the measured configuration) |
 | H44 | built in part | The audit lane's tools: the certificate checker (E4 alone) and `t5d-hunt-truth` (E9); the decision sampler, the offline proof runner and the per-range report were E10's - lost, redone in step 2 (curriculum hooks as interfaces only) |
 | H45 | not built (rule) | The adversarial league (M5) |
@@ -1224,7 +1275,7 @@ commits (F5 and F6 on `lane/net`, H47 and H48 on `lane/gate`, M22 on `lane/engin
 | H48 | not started | Before the proof-channel sign-off: the naive searches' release budgets raised and the golden files re-recorded twice, on a quiet machine, so that no proof-channel check is vacuous (`verify`'s 17 `proof-channel-vacuous` notes) |
 | H15 | built, tested | The scanner's deterministic single-thread mode; the search's synchronous mode and digest (E6a; the digest in the C API) |
 | H16, H25, H29 | not built (rule) | Refused |
-| H17 | built in part | Lazy SMP in the scanner (E5c): same-root threads, a shared TT and a concurrent solved store; in-game decay and rung helpers wait for the search; no help for exhaustive refutations (measured on Guard, now in the register) |
+| H17 | built in part | Lazy SMP in the scanner (E5c): same-root threads, a shared TT and a concurrent solved store; in-game decay and rung helpers wait for the search; no help for exhaustive refutations (measured on Guard, now in the register). **A crash in the shared stores on Windows** (found 2026-10-17 at E-A6's review; not fixed - see "Parked, and why"): `scanner_lazy_smp_store_refuses_contradictions` segfaults in about 2% of its runs on the development machine - first seen as a full test run of A6's final tree that ended with exit 1 and no summary line, then 11 of 600 runs of the test alone (MSYS2 ucrt64 g++ 16.2, Release) - in `same_position` under `ConcurrentSolvedStore::put`, in the test's eight-thread phase (gdb). The cause: with this toolchain (its winpthreads), a `std::shared_mutex` that several threads take for the first time at once does not always exclude a writer. A standalone test (8 threads on 64 fresh locks, 2,000 rounds) lost the exclusion in 259 rounds with readers and 108 with writers only, in none where each lock had first been taken once by one thread, and in none with `std::mutex`; taking each shard's lock once in the store's constructor (an experiment, reverted) gave 0 crashes in 600 runs. The prover's `ConcurrentSolvedStore` and `DisproofStore` (Guard, Hunt) are built fresh per call and first used by all their threads at once in the same way. Linux builds (CI) are untested for it |
 | H18 | built, tested | 5D Zobrist: coordinate-free content hash per board, multiply-rotate with (timeline, half-turn), addition across boards, ruleset ID, player to move, parity, creators, board size; incremental equals from-scratch; duplicated boards never cancel (engine E1, E2) |
 | H19 | built, tested | Proofs export to the solved store at once; the TT holds estimates only; class-relative disproofs live in their own store, never the solved store (E8, E9 - now in the register) |
 | H22 | built, tested | All five items of §11.0 (E1, E2, E4); the register's wording now matches what is built (proposed edit 40, applied upstream) |
@@ -1252,7 +1303,7 @@ commits (F5 and F6 on `lane/net`, H47 and H48 on `lane/gate`, M22 on `lane/engin
 | A1-A3 | built, tested | Network N1: tokens, features, per-board flags, Δt-to-present. A3 on frozen boards under the cached configuration: intrinsic features (N3's default, ruled by M20), their status as B16's score-time key biases (`lane/net`, N-B16); live boards keep A3's features as inputs. A3's side to move becomes us/them with A7 |
 | A4 | built, tested | Engine: every board immutable once published; persistent multiverse sharing history in chunks |
 | A5 | not started | Piece-centric tokenisation - ruled at CHECKPOINT 6: build behind its flag; the window's provisional kill does not decide it, and the joint test with the window waits for the pilot run (M18). Last in the net lane, dense scope only (`piece_centric` raises today) |
-| A6 | not started | Global turn-state inputs on the global registers. The acting player is in (D8, N5); the acting colour comes with A7; the counts - mandatory boards still to move, optional boards still playable, moves already made this turn - are engine ABI round 1 (in the expansion, kept out of the truth sources; the count also in the evaluation identity - issue 302), then the net lane's inputs, with §15.2's recount test |
+| A6 | engine side built, tested; network inputs not started | Global turn-state inputs on the global registers. The acting player is in (D8, N5); the acting colour comes with A7. Engine ABI round 1 (2026-10-17, `lane/engine`): the counts are in the expansion (`mandatory_remaining`, `optional_playable`, `moves_made`; the state's own mandatory count - A6's commit changed no truth source, while the component's first commit, H42's fix, changed the prover's report, so the truth's code signature differs from main's) and the C API (`t5d_expansion`'s three appended fields; `t5d_game_summary.moves_made`; the game handle counts the moves of its action - 0 at a set-up, +1 per move, 0 after a submission or a replayed action), with the Python mirror (`Expansion`, `GameInfo.moves_made`; `Search`'s `turn_start` from the handle). The count is in the evaluation identity (issue 302): `EvalRequest`, the evaluation cache's key, the batch's de-duplication and MCGS identity, where it subsumes the turn-start flag; `t5d_search_new` takes the handle's count and checks `turn_start` against it (tested two moves into an action, from C++ and Python, where a flag's 0 or 1 cannot pass); `advance_moves` and `advance_action` carry the tree at each count (tested, tree and graph). §15.2's A6 row: `test_turn_state.cpp` recounts the three from the rulebook at every state of random play under every ruleset (both Q4 readings), through the expansion and a `t5d_game`, and checks the spec's arithmetic move by move where no activity changes (issues 143-145). Next: the net lane's inputs - `PositionState`'s counts, the embedding, the converter's copy and cross-check, and `cache.state_digest` (an epoch's anchor), which takes the count when the network's input does |
 | A7 | not started | Perspective canonicalisation - pieces as ours/theirs, ranks mirrored and timelines negated when Black acts, outputs mapped back: net lane, with M20's dispositions, §15.2's colour-swap mirror test (read with the acting colour equalised, issue 304), and frozen K/V keyed by perspective in the cached path (issue 303). Today the input is absolute (colour, side to move, raw coordinates) |
 | A8 | not started | The board-layout embedding - a prototype (6p): net lane, behind its flag, with §15.3's cost row |
 | B1, B2, B4 | built, tested | Network N1: one weight set, unified attention, 4D RoPE (whose positional term factorises per axis - joint-axis geometry is B15's, register B4) |
@@ -1280,9 +1331,9 @@ commits (F5 and F6 on `lane/net`, H47 and H48 on `lane/gate`, M22 on `lane/engin
 | C6 | step 1 done | The \|E\| curve measured (M7); the head-to-head is Ablation 1, halted with the window until the pilot run (M18) |
 | C8 | honoured | C24's add-only rule (and rung 1's) - refreshes are only ever added |
 | C9 | to check | Reported built in `expand.cpp` by the 2026-10-04 audit; to verify against its row |
-| C11 | built behind a flag, tested | MCGS (E6a): identity is the state key with branch origins and whether an action is in progress, compared exactly - as §8.5 and the register now say (issue 87); A6's move count joins it in engine ABI round 1 (issue 302); awaiting 6k |
+| C11 | built behind a flag, tested | MCGS (E6a): identity is the state key with branch origins and the moves made in the action in progress (A6; since engine ABI round 1 - issue 302, proposed edit 200, and 119 for §11.3's full key), which subsumes whether an action is in progress (§8.5 and the register say only that: issue 87), compared exactly; one action's move orders still merge (tested); awaiting 6k |
 | C12, C13 | built, tested | Re-rooting with garbage collection, the persistence hook and pondering (E6a) |
-| C14 | built, tested | Fresh searches per decision in self-play; the evaluation cache shared across them, purged by board count (issue 89); the C API's `t5d_search_new_sharing`; from Python (N5) only between searches with the same network input, with the cached path's refresh epochs set on the search - as §8.7 now has it (the register's C14 names the shared, board-count-purged cache and one cache per evaluator in match play). A6's move count joins the cache key in engine ABI round 1 (issue 302) |
+| C14 | built, tested | Fresh searches per decision in self-play; the evaluation cache shared across them, purged by board count (issue 89); the C API's `t5d_search_new_sharing`; from Python (N5) only between searches with the same network input, with the cached path's refresh epochs set on the search - as §8.7 now has it (the register's C14 names the shared, board-count-purged cache and one cache per evaluator in match play). Since engine ABI round 1 the cache's key holds A6's moves made in the action beside the state and the epoch (issue 302, proposed edit 200; edit 119 for §15.2's purity row, §7.9 and §8.5) |
 | C23 | built, tested | The node key's default carries branch origins (lineage, `NodeKey::StateAndOrigins`); the network's causal past is the ruled ancestry (`causal_past="lineage"`, tested against ancestry computed from the branching record, N5) |
 | C15 | built in part | FP8 e4m3 frozen K/V (`frozen_kv_format = "fp8"`, applied by the forward itself); varlen/ragged kernels not built (none on CPU; GPU time, M19). The register: FP8 K/V obey G1 only with an FP8 trunk or FP8-frozen-K/V training (issue 34). **Known defect, not yet fixed:** `fake_quantise(x, "fp8")` (`kvformat.py`), which both the forward's FP8 rounding (`model._frozen_kv_rounding`) and the cached path use, casts to FP8 inside autograd with no straight-through estimator, so its backward casts the gradient to FP8 unscaled. Checked 2026-10-17 on CPU (torch 2.13.0+cpu; one 8 × 8 block, seed 0): with \|x\| about 0.1, 63 of 64 gradients were zero; with \|x\| about 1, they were 0.90-1.03 where 1 is expected. FP8-frozen-K/V training (the remedy above) and G8's hook need the net lane's STE fix, with a gradient test, before G2 and G8 |
 | C16 | not built (rule) | Deferred; last, only if node-starved |
@@ -1383,7 +1434,17 @@ Still parked:
   engine round 2) and round 2's per-leaf moves-left, and the documents give no rule
   for when an outcome is "settled" (issue 300) - resumed behind a flag, off, once
   those are in main and issue 300 is ruled; early adjudication (§12.3) has no
-  specification (issue 300) and is not built.
+  specification (issue 300) and is not built;
+- the shared stores' locks on Windows (H17's row): `ConcurrentSolvedStore`
+  (`engine/src/scanner.cpp`) and `DisproofStore` (`engine/src/prover.cpp`) guard their
+  64 shards with `std::shared_mutex`, which this toolchain does not make exclusive on a
+  lock's first concurrent use - a data race in the scanner's and the prover's threads
+  (the scanner, Guard, Hunt) on Windows. Found at E-A6's review (2026-10-17) and not
+  fixed there: both files are among the truth's sources, M17 was measured on this
+  toolchain at five threads, and a change to the scanner runs the Lazy SMP timing test.
+  A candidate fix: take each shard's lock once in the store's constructor (the
+  experiment), or a plain `std::mutex` per shard. For the main loop, with whether M17's
+  figures need re-measuring (its refutations and mates were all confirmed by E4 alone).
 Not parked any more, but not built by rule: the NNUE (F4, H6, H7) is held open
 (CHECKPOINT 4); rung 1, rung 3 and rung 5 are retired (M5). Added to §14.4 at
 CHECKPOINTS 6-7, held open: our own next move as a head (Lc0's `policy_next`), the
@@ -2214,6 +2275,7 @@ superseded or made moot says so; nothing is deleted.
     variants one oracle reads) - a decision for the user. Put to the user: should a
     ruleset be gated only when two oracles stand behind it, in every tier? Until it
     is ruled, proposed edit 98 gives both texts.
+    *Ruled at CHECKPOINT 8: a ruleset is gated only when two or more oracles answer for it (H47) - gate step 3b.*
 123. **H47 is silent on an engine compared with nothing in a smoke test.** As
     built, an engine with no finding against it passes the commit tier's
     differential even when it declined every record (nothing was compared, so
@@ -2223,6 +2285,7 @@ superseded or made moot says so; nothing is deleted.
     visible. Put to the user: should the smoke test hold full mode to parse mode's
     floor - the engine replayed at least one record, and an oracle's answer was
     compared with it? Nothing is parked on it.
+    *Ruled at CHECKPOINT 8: yes - the commit tier fails if the engine declines a record it read on the last green run, or reads none (H47) - gate step 3b.*
 124. **H47 is silent on a run of a full-strength tier restricted to some sources
     or records** (`gate --tier nightly --source ftxi`; "tiers that run every
     oracle"). Built - the literal reading: the run keeps its tier's rule
@@ -2236,6 +2299,7 @@ superseded or made moot says so; nothing is deleted.
     smoke test and gates nothing. Pinned (`GateRunTests.test_a_restricted_run_keeps_its_tiers_rule`)
     and documented (`oracles/README.md`, "Other commands"). Put to the user;
     nothing is parked on it.
+    *Ruled at CHECKPOINT 8: no - a restricted run never produces a tier verdict; its output says "restricted - not a tier result" (H47) - gate step 3b.*
 
 <!-- A new list, so that the numbers from 200 render as written. -->
 
@@ -2294,6 +2358,7 @@ superseded or made moot says so; nothing is deleted.
     committed-class placeholder that awaits neither a ruling nor a named ablation
     (6y's arms are the FFN's, not the heads'; M20's dispositions predate it): put to
     the user to rule, or to name the ablation. Proposed edit 154.
+    *Ruled at CHECKPOINT 8: Mish in every head's hidden layers, the value head included; squared ReLU a trunk-only arm (F6) - the network lane.*
 205. **B15's far bins** (§4.1, register B15: "binned and clamped beyond"). §4.1 gives the
     exact classes and says the classes beyond them are "binned and clamped, so unseen
     board counts extrapolate as the binned biases did", with no bins - not their edges,
@@ -2559,6 +2624,42 @@ superseded or made moot says so; nothing is deleted.
     turn starts at 200 boards or more, so the regime of §8.2's cost argument is
     unmeasured until the pilot self-play run (M18). (The first version of this issue
     called the multi-move turns "where the arms differ"; corrected at review.)
+    *Ruled at CHECKPOINT 8: the tree form first, then the flat form, both built (D2, M22); M22 also reports per range the mandatory shares (more than one, three or more), the optional moves actually played and the compute share of multi-board turns - the engine lane.*
+143. **A6's arithmetic for the mandatory count is not the rules' count** (§2.3; register
+    A6: "mandatory boards still to move — exact from the rules engine: −1 per ordinary
+    move, −2 for a move between two present boards, 0 after a rewinding branch"). Checked
+    against a recount from the rulebook at every state of random play under every ruleset
+    (`engine/tests/test_turn_state.cpp`): the three cases hold wherever no timeline starts
+    or stops counting, but the arithmetic leaves out (a) T6's arrivals - a jump that does
+    not branch plays the board it lands on, so one from an optional board onto a mandatory
+    one is −1 (the optional count −1 too), and one from a mandatory board onto an optional
+    one is −1, neither "a move between two present boards"; (b) T11/T12 - a creation that
+    reactivates a timeline behind the present rewinds it (Rewinds, the default), and the
+    count rises when that board is the mover's (10 times in the default test's 3,842
+    states, 752 in the long test's 77,926); (c) Q5's AllActive reading, under which a
+    rewinding branch zeroes nothing; (d) Q3's play activation and Q6's deferrals, which
+    change what counts. §2.3's "exact counts, never predicted ones: the rules engine knows
+    them" governs: the count built is the state machine's own
+    (`GameState::mandatory_count`), never the arithmetic. Proposed edit 116.
+144. **"Optional boards still playable" and "moves already made this turn" are not
+    defined** (§2.3; register A6). Read, from the rulebook's terms: optional = the acting
+    player's playable boards (L5: the heads with the mover to move - active or not, in the
+    present or not, T6) that are not mandatory, and none once no move may be made (Q4's
+    Guide-literal reading, after the shift); a playable board with no legal move counts
+    (L5 asks for none; the expansion's per-board `playable` flag marks the same set, so
+    mandatory + optional is the number of boards it marks), and so do inactive and
+    deferred (Q6) heads. Moves made = the moves made since the action's turn start (a turn
+    being one player's action, issue 305), one per move - a jump between two boards is one
+    move, though A6's "−2" counts the two boards it plays; 0 at a turn start. The
+    alternatives - only boards with a legal move, only active ones, boards played instead
+    of moves - are not built; each would be a few lines in `expand.cpp`. Proposed edit 117.
+145. **§15.4's turn-structure invariant does not name the count** (§15.4: "a submit edge
+    leads to a turn start and a move edge to a mid-turn state"; register A6, C11). With
+    A6's count in a node's identity (issue 302) the invariant is the count's: 0 below a
+    submit edge or a whole-turn action, the parent's + 1 below a move - in a graph as in a
+    tree, every parent of a node agreeing. Built into `Search::check_invariants` and
+    checked from outside the search (`mcts_every_node_counts_the_moves_made_since_its_turn_start`).
+    Proposed edit 118.
 
 ## Proposed spec edits
 
@@ -3004,6 +3105,7 @@ struck through, where nothing of it is left to apply); the others stand as writt
     be enabled for it - which rulesets, measured once the engine is configured.
     Why: §11.0 and H47 give a two-oracle rule as the reason the commit tier gates
     nothing; the gate has none, and whether to add one is the user's decision.
+    *Settled upstream at CHECKPOINT 8: the user ruled for a two-oracle rule (issue 122); §11.0 and register H47 now say the gate is aligned to two oracles, with the commit tier's baseline rule and restricted runs (issues 123-124).*
 
 <!-- A new list, so that the numbers from 200 render as written. -->
 
@@ -3228,6 +3330,50 @@ struck through, where nothing of it is left to apply); the others stand as writt
     Why: edit 114 alone would leave the register's D2 status and part K's gate still
     waiting on M22 while the spec says the precondition is met - and a decision changes
     in the spec and the register in the same edit (CLAUDE.md).
+116. **Register A6 and §2.3's turn-state bullet (the mandatory count)**: now - "exact from
+    the rules engine: −1 per ordinary move, −2 for a move between two present boards, 0
+    after a rewinding branch" (A6); "one fewer per ordinary move, two fewer for a move
+    between two present boards (it creates a board on both), zero once a branch rewinds the
+    present" (§2.3). Proposed: "exact from the rules engine - the state machine's count (T5,
+    T6; Q5, Q6): a move lowers it by the mandatory boards it plays (one; two for a jump
+    between two of them - a jump that does not branch plays the board it lands on, T6, so
+    one from an optional board onto a mandatory board lowers it by one); a branch that
+    rewinds the present zeroes it (T8; not under Q5's AllActive reading); a reactivation
+    behind the present can raise it (T11, T12)". Why: the arithmetic as written leaves out
+    T6's arrivals, T12's reactivations and Q5 (issue 143), and "exact counts, never
+    predicted ones" makes the rules engine's count the input - which is what is built.
+117. **§2.3 and register A6 (the two undefined counts)**: now - "optional boards still
+    playable" and "moves already made this turn", undefined. Proposed: "optional boards
+    still playable: the acting player's playable boards (L5) that are not mandatory -
+    active or not, in the present or not (T6) - and none once no move may be made (Q4)";
+    "moves already made this turn: the moves made since the action's turn start, one per
+    move (a jump between two boards included); 0 at a turn start - no state records it, so
+    the search and the game carry it, and it is part of identity (edit 200)". Why: issue
+    144; as built.
+118. **§15.4's turn structure**: now - "a submit edge leads to a turn start and a move edge
+    to a mid-turn state". Proposed, appended: "and the moves made in the action (A6) count
+    the move edges since the last submission: 0 below a submit edge or a whole-turn
+    action, the parent's + 1 below a move, every parent of a graph node agreeing". Why:
+    issue 145; the count is part of a node's identity (edit 200), and this invariant is
+    what holds it.
+119. **§11.3 "The full key, as built", §15.2's purity row, §7.9 and §8.5's purity
+    sentence (the count in identity, beside edit 200)**: now - §11.3: "MCGS node identity
+    adds each timeline's branch origin and whether a turn is in progress (§8.5)"; §15.2:
+    "Same state + epoch → same evaluation; MCGS transposition hits return identical
+    evaluations | Evaluation purity | C19–C21"; §7.9: "Evaluations become a function of
+    (state, refresh epoch)"; §8.5: "so values depend only on the state (and the refresh
+    epoch, §7.9)". Proposed - §11.3: "MCGS node identity adds each timeline's branch
+    origin and the moves made in the action in progress (A6), which subsumes whether a
+    turn is in progress (§8.5)"; §15.2: "Same state, moves made in its action and epoch →
+    same evaluation; MCGS transposition hits return identical evaluations"; §7.9: "a
+    function of (state, moves made in its action, refresh epoch)"; §8.5: "so values
+    depend only on the state and the moves made in its action (and the refresh epoch,
+    §7.9)". Why: edit 200 rewords the identity and the cache's key in §8.5's first
+    paragraph, §8.7 and register C11, C14 and H18, but these four sentences state the
+    same identity and purity - §11.3's is H18's twin (a decision changes in both), and
+    with the count an input (A6) one state at one epoch has two evaluations where its
+    counts differ, which the row's literal "same state + epoch" forbids (the engine's
+    EQ-06 test asserts exactly that since engine ABI round 1; issue 302).
 
 ## Session log
 

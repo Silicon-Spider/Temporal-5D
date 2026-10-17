@@ -157,6 +157,9 @@ target_sources(t5d-tests PRIVATE
   tests/test_play_exe.cpp
   tests/test_selfplay.cpp
   src/capi_search.cpp)
+# Register A6 (engine ABI round 1): the turn-state counts of the expansion and
+# the C API against a recount from the rulebook, under every ruleset.
+target_sources(t5d-tests PRIVATE tests/test_turn_state.cpp)
 
 add_executable(t5d-gate tools/t5d_gate.cpp)
 target_link_libraries(t5d-gate PRIVATE t5d_core)
