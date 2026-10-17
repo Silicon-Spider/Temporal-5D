@@ -9,17 +9,21 @@ Stage N2 (the attention structure, spec section 6) adds the hard move-graph mask
 heads (B9, committed: on by default) and B14's attention paths (committed engineering):
 ``"block_sparse"`` (the default ``attn_impl``), whose masked heads read only the key
 boards their query block can reach (board-major order, section 6.1), and ``"chunked"``,
-the dense-mask arm of ablation 6. B14's FlexAttention ``score_mod`` is not built: it
-needs a compiler (torch.compile has none on the development machine) and a GPU to be
-measured - see ``attention.py``.
+the dense-mask arm of ablation 6. B14's FlexAttention score function (``"flex"``,
+``flex.py``) runs eagerly on CPU - forward only, every score materialised: it proves the
+in-kernel formulation exact on small positions; compiled kernels and their speed need a
+GPU (G9, M19).
 
 The build rules (spec section 15.1) decide what else appears here:
 
+* **B15, the 4D displacement bias** (provisional, the v1 default; CHECKPOINT 6, section
+  4.1; ``displacement.py``) is on: ``displacement_bias``, whose off position is ablation 2's
+  no-table arm. Its unstated details are placeholders (below). It supersedes B6's binned
+  Delta-time/Delta-timeline biases, which are removed (register B6, M20).
 * **Provisional and prototype items** are behind flags, all default off: per-head
-  positional specialisation (B5, provisional), binned clamped Delta-time/Delta-timeline
-  biases (B6, prototype), the fixed routing table (B10, prototype), typed edge biases
-  (B11, provisional), board-pair smolgen (B12, prototype), and the larger capacity arm
-  L24-ff12 (F2, provisional) as the named preset ``"L24-ff12"``.
+  positional specialisation (B5, provisional), the fixed routing table (B10, prototype),
+  typed edge biases (B11, provisional), board-pair smolgen (B12, prototype), and the larger
+  capacity arm L24-ff12 (F2, provisional) as the named preset ``"L24-ff12"``.
 * **Items of later stages** have their flag here so the config names every switch, but
   enabling one raises ``NotImplementedError`` until its stage lands: piece-centric
   tokenisation (A5), the history window (C5/C7, provisional; its code waits on the |E|
@@ -58,7 +62,8 @@ The build rules (spec section 15.1) decide what else appears here:
   (section 9.2 against section 12.4, B8 and D7), ``policy_promotion`` (section 8.1 says
   nothing about promotions), ``head_activation`` (whether F6's Mish reaches the heads),
   ``rope_relations_head`` and the near-NoPE and split details
-  of B5, ``binned_bias_rope`` (what B6's "RoPE for near-time" leaves rotated), and from
+  of B5, B15's far bins, line clamp, register entries and initialisation
+  (``disp_far_edges``, ``disp_line_max``, ``disp_register_pairs``, ``disp_init_std``), and from
   stage N2: ``move_graph_direction`` (which way a directed move edge opens the mask),
   ``masked_head_registers`` (what registers do on masked heads), ``same_board_registers``
   (what a per-board register reads on the same-board head), ``relations_head_types``
@@ -111,9 +116,11 @@ TYPED_RELATIONS: tuple[str, ...] = ("attack", "defence", "pin", "xray", "check",
 #: boards its block can reach), "chunked" (the same blocks against every key - the dense-
 #: mask arm of ablation 6), "sdpa" (N1's fused path in one block - materialises
 #: (B, H, L, L) rows once a mask or a bias is present), "explicit" (materialised scores,
-#: chunked over queries) and "dense" (the reference: every mask and bias materialised at
-#: (B, H, L, L) first - small inputs).
-ATTN_IMPLS: tuple[str, ...] = ("block_sparse", "chunked", "sdpa", "explicit", "dense")
+#: chunked over queries), "dense" (the reference: every mask and bias materialised at
+#: (B, H, L, L) first - small inputs) and "flex" (B14's score function, ``flex.py``: torch's
+#: FlexAttention with every bias and mask computed inside its score and mask functions -
+#: eager on CPU, so forward only and every score materialised: small inputs).
+ATTN_IMPLS: tuple[str, ...] = ("block_sparse", "chunked", "sdpa", "explicit", "dense", "flex")
 
 #: B12's generator forms (``smolgen.py``).
 SMOLGEN_FORMS: tuple[str, ...] = ("relative_cells", "board_bilinear")
@@ -143,6 +150,8 @@ NORM_PLACEMENTS: tuple[str, ...] = ("pre", "post")
 FFN_ACTIVATIONS: tuple[str, ...] = ("mish", "squared_relu")
 #: The value head's hidden activation (``heads.ValueHead``; ``NetConfig.head_activation``).
 HEAD_ACTIVATIONS: tuple[str, ...] = ("gelu", "mish")
+#: B15's entries for pairs with a per-board register (``NetConfig.disp_register_pairs``).
+DISP_REGISTER_PAIRS: tuple[str, ...] = ("by_kind", "shared")
 
 
 @dataclass(frozen=True)
@@ -166,7 +175,7 @@ class NetConfig:
     #: the lowest frequency of an axis is pi / range, so offsets up to the range never
     #: alias. Files and ranks span 8; timelines are sized for 64 apart; time (half-turns)
     #: for 256 apart, beyond which the time axis rotates into untrained territory - the
-    #: extrapolation risk B6 guards.
+    #: extrapolation risk B15's clamped far bins guard (B6's binned biases did, before it).
     rope_ranges: tuple[float, float, float, float] = (8.0, 8.0, 64.0, 256.0)
     #: Highest frequency of every axis (radians per unit offset), as in standard RoPE.
     rope_max_freq: float = 1.0
@@ -378,7 +387,8 @@ class NetConfig:
     #: RMSNorm gains are 1 + N(0, init_norm_std): not the identity, so that a path that
     #: dropped or misplaced a norm's gain could not agree with one that kept it.
     init_norm_std: float = 0.1
-    #: Learned bias tables (B6, B11's typed-edge scalars) and learned register coordinates' noise.
+    #: B11's typed-edge scalars and learned register coordinates' noise (B15's table has its
+    #: own, ``disp_init_std``).
     init_table_std: float = 0.1
 
     # --- B5: per-head positional specialisation (provisional; default off) ---
@@ -412,24 +422,45 @@ class NetConfig:
     #: axis's whole range. Placeholder default.
     rope_near_nope_max_angle: float = math.pi / 8
 
-    # --- B6: binned clamped Delta-time / Delta-timeline biases (prototype; default off) ---
-    binned_bias: bool = False
-    #: What RoPE keeps when the biases are on. Section 4.1 says "RoPE for file, rank and
-    #: near-time; binned learned biases for Delta-time and Delta-timeline" while register
-    #: B6 says "RoPE + binned clamped biases". COMMITTED-CLASS AMBIGUITY:
-    #: "keep" - B4's rotation unchanged, biases added (placeholder default);
-    #: "near_time" - timeline pairs and the time pairs coarser than ``binned_bias_near_time``
-    #:               half-turns are left unrotated; the biases carry the coarse offsets.
-    binned_bias_rope: str = "keep"
-    binned_bias_near_time: float = 16.0
-    #: Buckets: offsets below ``*_exact`` get their own bucket; beyond, log2-spaced
-    #: buckets up to ``*_max``, then clamped (the last bucket is shared by every larger
-    #: offset). Delta-time is signed (past and future differ); Delta-timeline symmetric
-    #: (branching order makes its sign semi-arbitrary, section 4.4).
-    bias_time_exact: int = 4
-    bias_time_max: int = 128
-    bias_timeline_exact: int = 4
-    bias_timeline_max: int = 32
+    # --- B15: the 4D displacement bias (provisional, the v1 default; section 4.1; displacement.py) ---
+    #: One learned scalar per head per layer, indexed by the pair's displacement (Delta-file,
+    #: Delta-rank, Delta-timeline, Delta-time in half-turns): a 15 x 15 file-rank slice per
+    #: board-distance class (exact up to two timelines and two turns apart, binned and clamped
+    #: beyond), exact line classes beyond the exact ones, register and global entries; beside
+    #: RoPE, which stays (CHECKPOINT 6; it supersedes B6, removed). ``False`` is ablation 2's
+    #: no-table arm: no table and no bias - every other weight as in the v1 (the table draws
+    #: from a generator of its own).
+    displacement_bias: bool = True
+    #: Lower edges of the far bins of the board distance ``D = max(|Delta-timeline|,
+    #: ceil(|Delta-time| / 2))`` (in timelines and whole turns) beyond the exact classes
+    #: (``D <= 2``), each crossed with the sign of Delta-time; the last bin is clamped (it
+    #: holds every larger distance). Section 4.1 says "binned and clamped, so unseen board
+    #: counts extrapolate as the binned biases did" and gives no bins.
+    #: COMMITTED-CLASS SILENCE (B15 is class C; spec issue 205) - placeholder, not a decision:
+    #: log2-spaced from 3 - bins [3, 4], [5, 8], [9, inf) - x 3 signs = 9 far classes, which
+    #: with the 45 exact ones gives section 4.1's ~1.6M parameters. The first edge is 3.
+    disp_far_edges: tuple[int, ...] = (3, 5, 9)
+    #: A line along the board axes only (timelines and turns, the square fixed) beyond the
+    #: exact classes has an entry per direction and step k = 3 .. ``disp_line_max``, the last
+    #: shared by every longer line (lines that also move on the board stop at k = 7).
+    #: COMMITTED-CLASS SILENCE (spec issue 206) - placeholder, not a decision: 8. So are the
+    #: line set's other details: a line counts whole turns (an odd Delta-time is never one),
+    #: and its entry replaces the far slice's for the pair (one scalar per pair).
+    disp_line_max: int = 8
+    #: Section 4.1: "per-board registers by their board-distance class". Whether the pair's
+    #: kind enters is not said. COMMITTED-CLASS SILENCE (spec issue 207) - placeholder default,
+    #: not a decision:
+    #:   "by_kind" - an entry per class for each of square reads register, register reads
+    #:               square and register reads register (3 x 54 = 162 per head per layer);
+    #:   "shared"  - one entry per class for every pair with a per-board register (54).
+    #: Register slots are not told apart, and a register's (file, rank) never enters (B8:
+    #: position-free on file and rank). Global registers: one entry per head per layer for
+    #: every pair with one, as section 4.1 says.
+    disp_register_pairs: str = "by_kind"
+    #: The table's initialisation, ``N(0, disp_init_std)`` from B15's own generator (section
+    #: 15.2: realistic scale, never zeros). COMMITTED-CLASS SILENCE (spec issue 208) -
+    #: placeholder, not a decision: 0.1, the scale of the other learned bias tables (B11).
+    disp_init_std: float = 0.1
 
     # --- B9: the move-graph mask (committed; section 6) ---
     #: Heads 0..k-1 carry the hard move-graph mask, the rest are dense ("2 heads with hard
@@ -514,14 +545,25 @@ class NetConfig:
     smolgen_latent: int = 32
     #: The generator (``SMOLGEN_FORMS``; implementation choice - B12 is class R):
     #:   "relative_cells" - per head, the latent read through a learned table over
-    #:                      relative board-pair cells (B6's Delta-time / Delta-timeline
-    #:                      buckets): generated from the global registers alone and
-    #:                      full-rank over board pairs (section 6, register B12);
+    #:                      relative board-pair cells (log-scale Delta-time / Delta-timeline
+    #:                      buckets, ``smolgen_time_*`` / ``smolgen_timeline_*``): generated
+    #:                      from the global registers alone and full-rank over board pairs
+    #:                      (section 6, register B12);
     #:   "board_bilinear" - per head, a bilinear form between board descriptors taken
     #:                      from each board's per-board registers, modulated by the latent:
     #:                      rank <= ``smolgen_latent`` - the low-rank form section 6
     #:                      equates with extra Q/K dims (stage N2's first build).
     smolgen_form: str = "relative_cells"
+    #: The relative cells' buckets (``buckets.py``; they were B6's, and B12's register row
+    #: records smolgen "as built over relative board-pair cells"): offsets below ``*_exact``
+    #: get their own bucket; beyond, log2-spaced buckets up to ``*_max``, then clamped (the
+    #: last bucket is shared by every larger offset). Delta-time is signed (past and future
+    #: differ); Delta-timeline symmetric (branching order makes its sign semi-arbitrary,
+    #: section 4.4). 19 x 8 = 152 cells.
+    smolgen_time_exact: int = 4
+    smolgen_time_max: int = 128
+    smolgen_timeline_exact: int = 4
+    smolgen_timeline_max: int = 32
 
     # --- stage N3: the attention scope (C1, C17, C19; scope.py) ---
     #: "dense" (C1: build dense first - every token reads every token, section 6's masks
@@ -719,8 +761,27 @@ class NetConfig:
                 raise ValueError("rope_same_square_split must sum to d_head / 2")
         if self.rope_roles_source not in ("table", "masks"):
             raise ValueError("rope_roles_source must be 'table' or 'masks'")
-        if self.binned_bias_rope not in ("keep", "near_time"):
-            raise ValueError("binned_bias_rope must be 'keep' or 'near_time'")
+        edges = tuple(self.disp_far_edges)
+        if (
+            not edges
+            or edges[0] != 3
+            or any(not isinstance(e, int) for e in edges)
+            or any(b <= a for a, b in zip(edges[:-1], edges[1:], strict=True))
+        ):
+            raise ValueError(
+                "disp_far_edges must be strictly increasing integers starting at 3 (the first board distance beyond the exact "
+                "classes, section 4.1)"
+            )
+        if self.disp_line_max < 3:
+            raise ValueError("disp_line_max must be at least 3 (a line beyond the exact classes moves 3 steps or more)")
+        if self.disp_register_pairs not in DISP_REGISTER_PAIRS:
+            raise ValueError(f"disp_register_pairs must be one of {DISP_REGISTER_PAIRS}")
+        if not (math.isfinite(self.disp_init_std) and self.disp_init_std >= 0):
+            raise ValueError("disp_init_std must be finite and non-negative")
+        if self.smolgen_time_exact < 1 or self.smolgen_timeline_exact < 1:
+            raise ValueError("smolgen_time_exact and smolgen_timeline_exact must be positive")
+        if self.smolgen_time_max < self.smolgen_time_exact or self.smolgen_timeline_max < self.smolgen_timeline_exact:
+            raise ValueError("smolgen's *_max buckets must not be below their *_exact")
         if not 0 <= self.move_graph_heads <= self.n_heads:
             raise ValueError(f"move_graph_heads must be in 0..{self.n_heads}")
         default_heads = NetConfig.__dataclass_fields__["move_graph_heads"].default

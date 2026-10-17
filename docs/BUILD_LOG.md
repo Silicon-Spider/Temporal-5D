@@ -1235,21 +1235,21 @@ commits (F5 and F6 on `lane/net`, H47 and H48 on `lane/gate`, M22 on `lane/engin
 | B1, B2, B4 | built, tested | Network N1: one weight set, unified attention, 4D RoPE (whose positional term factorises per axis - joint-axis geometry is B15's, register B4) |
 | B8 | built, tested; default to change | Network N1's 2 + 16 registers. The ruled positions (CHECKPOINT 6, M20): per-board registers position-free on file and rank, global registers on every pair. Global: the default (`global_register_pairs = position_free`); per-board: the non-default arm `board_register_spatial = position_free` - the default (`learned_angle`) changes with M20 in the net lane |
 | B9 | built, tested | Network N2: move-graph mask on 2 heads; the built direction, register reads and head counting are now the v1 values (§6 "As built", M20; issue 16) |
-| B14 | built in part | Network N2: block-sparse attention in a CPU gather form. The eager FlexAttention score_mod and block mask come with B15 in the net lane (with §15.2's B15 row); compiled and GPU kernels need GPU time (G9, M19) |
+| B14 | built in part | Network N2: block-sparse attention in a CPU gather form. B14's score function built (`lane/net`, with B15): `attn_impl="flex"` (`python/t5d/net/flex.py`) runs torch's `flex_attention` with every bias computed inside its score function - B15's entry by integer arithmetic from the two tokens' coordinates, B11's typed relations, B12's board-pair table, a caller's bias - every mask in its mask function (padding, the block-causal scope, section 6's roles from per-token data and one edge bit per pair), and a lossless block mask built from the board-major order at board granularity. Eager on CPU (PyTorch 2.13): forward only, every score materialised - small positions, §15.2's B15 row (spec issue 211). Under v1's register rule the masked heads' block masks have no empty block (issue 209). Compiled and GPU kernels need GPU time (G9, M19) |
 | B5 | built, tested | Network N1, behind a flag (off); its as-built details are "v1 placeholders" (Provisional, CHECKPOINT 6; M20), tested by ablation 2 - §4.1 does not state them (edit 9) |
-| B6 | superseded | By B15 (CHECKPOINT 6, reversal 25). `binned_bias` is still in the code (N1, off) until B15 lands in the net lane; its bucket functions stay - B12's relative cells use them |
-| B10, B12 | built, tested | Network N2, behind flags (B12 as relative board-pair cells, full rank - the register now records it as built). The register says smolgen "keeps its own normalisation" (F5); the built smolgen has none (`lane/net`'s issue 202) |
+| B6 | superseded; removed | By B15 (CHECKPOINT 6, reversal 25; M20). Removed from the code with B15 (`lane/net`): `binned_bias`, `binned_bias_rope` (issue 9f) and their fields - no arm survives, ablation 2's arm is B15 on or off. Its log buckets live on in `python/t5d/net/buckets.py` for B12's relative cells (`smolgen_time_*`, `smolgen_timeline_*`; smolgen's 152 cells and 47,136 parameters unchanged, issue 212) |
+| B10, B12 | built, tested | Network N2, behind flags (B12 as relative board-pair cells, full rank - the register now records it as built; the cells are the log buckets B6 used, re-homed in `buckets.py` when B6 went - issue 212). The register says smolgen "keeps its own normalisation" (F5); the built smolgen has none (`lane/net`'s issue 202) |
 | B11 | built behind a flag, tested; to change | Network N2 with six types; CHECKPOINT 6 folds travel-threat into attack (five types, reversal 26) - `travel_threat` is still in the network's type set (net lane). The engine emits attack, defence and x-ray; pin and check are refused until engine ABI round 1 builds them behind the relation mask; id 6 stays reserved |
 | B3 | not built (rule) | Contingency only; no trigger |
 | B7 | not built (rule) | Deferred; its gate now names ablation 2's head-allocation evidence (issue 121's B7 part closed, M20); no §15.2/§15.3 need (d_head is a config value anyway) |
 | B13 | not built (rule) | Refused |
-| B15 | not started | The 4D displacement bias, the v1 default (provisional; ablation 2 keeps a no-table arm): net lane, replacing B6, with B14's eager score_mod and §15.2's B15 row; about 1.6M parameters (the register's and §4.1's estimate) - F1's count changes |
+| B15 | built, tested | The 4D displacement bias, the v1 default (`lane/net`, `python/t5d/net/displacement.py`): one learned scalar per head per layer, a 15 x 15 slice for each of 54 board-distance classes (the 45 exact ones and 9 far bins), 368 line entries, 162 register entries and a global one - 12,681 per head per layer, 1,623,168 parameters (§4.1's ~1.6M; 7.07% of the network). Its unstated details are named placeholders: the far bins (`disp_far_edges`, issue 205), the line set (`disp_line_max`, issue 206), the register and global entries (`disp_register_pairs`, issue 207), the initialisation (`disp_init_std`, issue 208). Ablation 2's no-table arm: `displacement_bias=False` - the table draws from its own generator, so the arm is the network without it (bit for bit the pre-B15 v1). Per layer through `AttnContext.for_layer(h, layer)`, the cached path included (a frozen board's rows carry it at every layer; geometry, so every row). Tested: the classes against §4.1 written out pair by pair (grid and constructions, three placeholder settings); §15.2's B15 row - through B14's score function = materialised, bitwise at the bias, 1e-5 at the output - and the CPU paths' outputs and gradients; §15.2 row 1 with it on (every `test_cache` case) and with the layers' tables far apart. Boards wider than 8 are refused (none in any variant). Signs are raw colour signs until A7. §15.3's cost row ("negligible") is for the quiet-machine block: on CPU every head now carries a per-row bias |
 | B16 | not started | Score-time status key biases on frozen boards, with the cached configuration (settles issue 31): net lane, one owner. The intrinsic frozen features it completes are N3's default (`frozen_features = intrinsic`) |
 | B17 | not started | The key-side Shaw term - a prototype (ablation 2): net lane, behind its flag, with §15.2's B17 row and §15.3's cost row |
 | C1 | built, tested | `attn_scope = "dense"` is the default |
 | C4 | built, tested | Full MHA (N1) |
 | C17, C19, C20 | built, tested | Network N3: the block-causal scope (`attn_scope = "block_causal"`), the live set fully bidirectional, supersession recomputed once under the state-defined mask - both of C20's readings built (`supersession_scope`; 6c decides, now in the register); the causal past is the ruled ancestry (`causal_past = "lineage"`, C23) |
-| C2 | built (for §15.2/§15.3) | Network N3's cached path; the decision itself stays deferred (6c, §7.7), now re-weighed against the pilot run's game sizes (M18). The path absorbs B15, B16, A6 and A7 as they land (A7: frozen K/V keyed by perspective, issue 303) |
+| C2 | built (for §15.2/§15.3) | Network N3's cached path; the decision itself stays deferred (6c, §7.7), now re-weighed against the pilot run's game sizes (M18). The path absorbs B15, B16, A6 and A7 as they land (A7: frozen K/V keyed by perspective, issue 303); B15 is in (`lane/net`: a frozen board's bias rows built per layer, cached = one full pass with it on) |
 | C10 | not built (rule) | Lazy K/V for boards entering E: deferred with the window (M16) |
 | C3, C3a (rung 1) | built, tested | Root refresh and the travel-triggered, visit-gated rung-1 fork (copy-on-write epochs), behind flags. C3's conditioning-offset training hook is parked with the deferred cached configuration ("Parked", below) |
 | C3a (rungs 2-3), C18, C22 | not built (rule) | Held open (M5 for rungs 2-3) |
@@ -1280,7 +1280,7 @@ commits (F5 and F6 on `lane/net`, H47 and H48 on `lane/gate`, M22 on `lane/engin
 | E2, E3 | built behind flags, tested | Off; awaiting 6m and 6t. They read the categorical variance; 6m's switch to the error head is engine ABI round 2 |
 | E8 | not started | Behind its flag (6v), with E11 in step 2 |
 | E6 | not built (rule) | Refused |
-| F1, F2 | built, tested | 21,338,634 parameters (F1 after F5: 20,736 fewer than N5's 21,359,370 - gain-only norms, no Q/K/V biases; spec issue 203); the L24-ff12 preset, 44,456,458 (F2) |
+| F1, F2 | built, tested | 22,961,802 parameters (F1 after F5 and B15: 21,338,634 - 20,736 fewer than N5's 21,359,370, gain-only norms, no Q/K/V biases, spec issue 203 - plus B15's 1,623,168, spec issue 210); the L24-ff12 preset, 46,891,210 (F2: 44,456,458 and B15's 2,434,752 over 24 layers) |
 | F5 | built, tested | Network: RMSNorm-style norms (a learned gain, no centring, no bias; FP32) everywhere in the trunk, no Q/K/V biases, the attention-output and FFN biases kept (spec issue 200), pre-norm. 6y's arm - post-norm with DeepNet's initialisation, `norm_placement="post"` - through the dense trunk and the cached path, its unstated details placeholders (issue 201); smolgen has no norm to keep (issue 202) |
 | F6 | built, tested | Network: Mish in the FFN (`ffn_activation="mish"`); 6y's arm, squared ReLU (`"squared_relu"`), through the dense trunk and the cached path. Whether Mish reaches the output heads is not decided by F6: the value head's MLP keeps GELU as a named placeholder (`head_activation`, spec issue 204) |
 | F3 | not built (rule) | Refused |
@@ -1290,7 +1290,7 @@ commits (F5 and F6 on `lane/net`, H47 and H48 on `lane/gate`, M22 on `lane/engin
 | G2 | not started | 8-bit inference, FP8 before INT8 (gate 6w): the trunk's matrix multiplications, attention included; heads and RoPE FP32. G2's quantiser serves G8's hook in the net lane; its CPU emulation is step 2's; real kernels need GPU time (M19). `fp8_attention` raises today |
 | G3, G4, G5, G6 | not built (rule) | Deferred / held open / refused |
 | G8 | not started | QAT prepared, not adopted: fake-quantisation hooks behind a flag in the training code, smoke-tested - the net lane, with G2's quantiser; the simulated format is pinned with the inference path. Written from papers: Monroe's `quantize` option (Lc0's training code) is an idea only (AGENTS.md, H29) |
-| G9 | built in part | PyTorch drives the C++ search through the C API (N5, eager, on CPU). Not built: torch.compile and FlexAttention (the eager score_mod comes with B15; compiled kernels need GPU time, M19); ONNX/TensorRT export - refused for now (M5). The bounded AMD attempt (AMD's PyTorch for Windows on the RX 9070 XT, figures AMD-labelled): any time, in `build/` only |
+| G9 | built in part | PyTorch drives the C++ search through the C API (N5, eager, on CPU). FlexAttention runs eagerly through B14's score function (`attn_impl="flex"`, `lane/net`: forward only on CPU). Not built: torch.compile and compiled FlexAttention kernels (GPU time, M19); ONNX/TensorRT export - refused for now (M5). The bounded AMD attempt (AMD's PyTorch for Windows on the RX 9070 XT, figures AMD-labelled): any time, in `build/` only |
 | I1 | not started (rule) | Self-play training: no training runs in the untrained build (the brief); the pilot run (M18) comes after §15.5 |
 | I2 | not started | Targets from the pruned visits - since CHECKPOINT 7 the search-value targets too: M21's targets (net lane) from I15's records; the engine's forced and steered visit fields in ABI round 2 |
 | I3 | built in part | Match play as I3 configures it: root noise off, the final rule (LCB), the tree carried (`t5d-play --match`, E6a; netplay's `mode="match"`, N5). The mature regime is training-time. In the untrained build: the curriculum hooks as interfaces only (H44, step 2) and I18's resignation rule (M21); MLH steering and early adjudication parked (issue 300; "Parked", below) |
@@ -1320,7 +1320,7 @@ commits (F5 and F6 on `lane/net`, H47 and H48 on `lane/gate`, M22 on `lane/engin
 | M16 | applied, confirmed | M7's readings (corrected at CHECKPOINT 5): time-share multiplier, human-game weighting, the per-phase rule under 50 boards with the band resolving to off - the window is killed, provisionally |
 | M18 | not started (rule) | A pilot self-play run before serious self-play re-checks the window and the other compute-weighted decisions - after §15.5, not in the untrained build |
 | M19 | applied | No GPU: counted FLOPs and CPU-labelled wall times (`dev-r`) are the untrained build's write-back; the GPU figures - FA4-class evaluations/s, the leaf-batching gain, FP8, the block-sparse and varlen kernels, the Phase-3 movegen re-check - named as deferred, measured on rented NVIDIA time before the pilot run; the bounded AMD attempt is G9's |
-| M20 | not started | The placeholder dispositions (issue 121), applied in the net lane with A7. To change: the promotion offset (D1), the reply a prototype (D4), moves-left in turns, position-free per-board registers (B8), B16's status biases, the submit logit from the pooled registers (D8), B6 removed (B15). Already the defaults: aux pooling from squares, value pooling by mean, global registers position-free, intrinsic frozen features, the acting player on the global registers, both supersession readings (C20). B5, the per-square labels, 16a-g and B7 stand as v1 - relabelled, not changed. Not on the list: D8's readout form (linear or pointer) |
+| M20 | built in part | The placeholder dispositions (issue 121), applied in the net lane with A7. Done: B6 removed (B15, `lane/net`). To change: the promotion offset (D1), the reply a prototype (D4), moves-left in turns, position-free per-board registers (B8), B16's status biases, the submit logit from the pooled registers (D8). Already the defaults: aux pooling from squares, value pooling by mean, global registers position-free, intrinsic frozen features, the acting player on the global registers, both supersession readings (C20). B5, the per-square labels, 16a-g and B7 stand as v1 - relabelled, not changed. Not on the list: D8's readout form (linear or pointer) |
 | M21 | built in part | The training loop, written and smoke-tested, no training (§15.5 does not require it; the pilot run does). Built (N1+N2; the submit target at N5): losses for today's heads - value, policy with submit, WDL, moves-left, opponent reply, short value, per-board, per-square, effort, each at weight 1.0 (`t5d.train.losses`) - and a smoke test of at most three optimiser steps on synthetic targets (`t5d.train.smoke`). Missing - the net lane, after engine round 2 and the heads: I15's records first, then I2's targets with §12.2's exclusions and provenance, the new heads' losses (D3, D4, D9), PCR (I5) with I20, I12 with 6u's and I6's arms, I13, I14's hook disabled, I16-I19 (§12.8's mechanics), the QAT hook (G8), §15.2's round-trip test |
 | M23 | applied | Every working branch is pushed after each commit and takes main by merge, never rebase. The three lanes and their number blocks are the main loop's plan under this rule ("Current state (2026-10-17)") |
 | M24 | not started (rule) | Ablations on a shared dataset - after the pilot run; what the untrained build owes it is I15's record completeness |
@@ -1479,7 +1479,8 @@ superseded or made moot says so; nothing is deleted.
    *Settled upstream at CHECKPOINT 6/7: M20, with B8 and §5.3 (a, b), §9.2 (c), D1
    and §8.1 (d), B5 standing as v1 (e), B15 making (f) moot, D4 and §12.4 (g-i: the
    reply's move space; the label set standing as v1; moves-left in turns), D3 and
-   §8.3 (j: the mean).*
+   §8.3 (j: the mean).* *(f)'s switch went with B6 when B15 was built (`lane/net`,
+   2026-10-17).*
 10. **Castling's attacked-square test: spec §11.0 item 4 vs the rules reference.**
     The spec says every "is this square attacked?" query inside castling is a 5D
     query; the rules reference (S2, high, a developer ruling) says castling is
@@ -2259,6 +2260,91 @@ superseded or made moot says so; nothing is deleted.
     committed-class placeholder that awaits neither a ruling nor a named ablation
     (6y's arms are the FFN's, not the heads'; M20's dispositions predate it): put to
     the user to rule, or to name the ablation. Proposed edit 154.
+205. **B15's far bins** (§4.1, register B15: "binned and clamped beyond"). §4.1 gives the
+    exact classes and says the classes beyond them are "binned and clamped, so unseen
+    board counts extrapolate as the binned biases did", with no bins - not their edges,
+    not their signs, not whether each axis is binned or one distance. ~1.6M parameters
+    (about 12,500 entries per head per layer) leaves room for 9-10 far slices beyond the
+    45 exact ones; a per-axis product - each axis exact inside the box, two signed bins
+    beyond - would be 72, ~3.4M. Built (placeholder, `disp_far_edges = (3, 5, 9)`): the
+    exact box's own distance D = max(|Δtimeline|, ⌈|Δtime|/2⌉) - in timelines and whole
+    turns; the exact classes are D ≤ 2 - log2-binned [3, 4], [5, 8], [9, ∞), the last
+    clamped, and crossed with the sign of Δtime (past, same time, future; B6 kept Δtime
+    signed and Δtimeline unsigned): 9 far classes, 54 in all - with the line and register
+    entries 12,681 per head per layer, 1,623,168 parameters. Δtimeline's sign is kept
+    inside the exact box (exact) and dropped in the far bins. Proposed edit 155.
+206. **B15's line classes** (§4.1: "exact line classes for displacements beyond them:
+    movement along one axis only, or equal steps along two, three or four axes"). Built:
+    (a) in whole turns - the rulebook's displacement has dT in whole turns and a slider's
+    path runs over boards of the mover's colour (J7), so an odd Δtime is never a line,
+    though B15's index counts half-turns; (b) "exact" read as one entry per direction and
+    step k: the 64 directions that also move on the board, k = 3..7 (a square line stops
+    at 7), and the 8 along the board axes only, where k is unbounded - clamped at
+    `disp_line_max = 8` (placeholder: every longer line shares k = 8's entry); 368 entries;
+    (c) a partition: a line's entry replaces its far slice's entry for the pair (one scalar
+    per pair, as "one learned scalar per head per layer" and B17's "the full table's
+    ~12,000 classes" read) rather than adding to it. So three entries per head per layer
+    are never indexed: the (0, 0) cell of the three same-time far slices, whose
+    displacements (the same square, timelines apart) are all lines. Proposed edit 155.
+207. **B15's register and global entries** (§4.1: "per-board registers by their
+    board-distance class, global registers one entry per head (§5.3)"). Per-board
+    registers: whether the pair's kind enters is not said. Built (placeholder,
+    `disp_register_pairs = "by_kind"`): an entry per class for each of square reads
+    register, register reads square and register reads register (162); `"shared"`, one
+    per class (54), is the other reading. Register slots are not told apart (ablation 3's
+    4-per-board arm keeps the layout), and a register's (file, rank) never enters (B8's
+    ruling). Global registers: "one entry per head" read per layer (the table is) and for
+    either side of a pair. As built it moves only board queries' attention to the global
+    registers: every key of a global query's row gets the same entry, which the softmax
+    ignores - so the value head, pooling the global registers, cannot see the last layer's
+    table (tested). A per-direction global entry (global reads board, board reads global)
+    would reach the global rows. Proposed edit 155.
+208. **B15's initialisation** (§4.1, §15.2): not stated. Built (placeholder,
+    `disp_init_std = 0.1`): N(0, 0.1), the scale of the other learned bias tables (B11),
+    drawn from a generator of B15's own seeded from the model's (as D8's are), so the
+    no-table arm keeps every other weight and §15.2's "never zeros" holds. A trained
+    network's starting table (zeros, say, as relative-bias tables often start) is a
+    training choice the documents leave open. Proposed edit 155.
+209. **A FlexAttention block mask in board-major order has no empty block on the masked
+    heads under v1's register rule** (§6.1, register B14; B9's v1 values, issue 16b). §6.1:
+    "FlexAttention exploits block sparsity losslessly". Under `masked_head_registers =
+    "read"` (v1, M20) a register query on a masked head reads every key, and every board's
+    tokens end with its registers, so every board-aligned block of query rows holds rows
+    that read everything: B14's block mask (`flex.board_block_mask`, lossless by
+    construction) computes every block of the move-graph heads; under `"self"` it skips
+    67% of them on a 14-board position with board-aligned blocks of 66 tokens, and 22% with
+    FlexAttention's default 128-token blocks, which straddle boards (counted once; the
+    tests check that blocks are skipped, and that under "read" none is). The CPU
+    block-sparse path computes those rows apart (`free_rows`); a GPU kernel must too - a
+    second call over the register rows, or the registers ordered after the squares among
+    the queries - and its tile size meets the 66-token board. A cost, not correctness; the
+    kernel is G9's and M19's. Proposed edit 157.
+210. **F1's and F2's counts with B15** (§9.2, register F1, F2; §4.1): the v1 is 22,961,802
+    parameters - issue 203's 21,338,634 and B15's 1,623,168 (7.07%: §4.1's "~7% of the
+    network" holds); F2's L24-ff12 is 46,891,210 (44,456,458 and 2,434,752 over 24
+    layers). §9.2's "~21.5M with all heads" and "44.0M", and register F1's 21.5M, are the
+    network without the table: `test_params.py` pins the totals and holds the no-table
+    counts to them. Proposed edit 156 (supersedes 153).
+211. **What stands in for "the score function" in the untrained build** (§15.2's B15 row,
+    §10.2, register B14, G9, M19). §10.2: every bias "is a FlexAttention score function
+    computed inside the kernel"; §15.2: "Displacement bias through the score function =
+    the same bias materialised, on small positions". Here (PyTorch 2.13 on CPU)
+    FlexAttention runs only uncompiled - it materialises every score, evaluates the score
+    and mask functions pair by pair under vmap, and has no backward. Built: B14's score
+    function for that path (`attn_impl = "flex"`, forward only; it refuses under autograd
+    on CPU), and the row tested as written on ten constructions - the score function's
+    term at every pair is the hand-materialised bias bit for bit, and attention through it
+    is attention with the bias materialised (FP32 roundoff); gradients through the CPU
+    block paths, which build the same rows by lookup. The eager path ignores the block
+    mask's sparsity, so its losslessness is tested apart. Compiled kernels: GPU time (M19).
+    Proposed edit 158.
+212. **B12's relative cells outlive B6** (register B6, B12; §4.1, §6). B12's cells are B6's
+    log buckets (B12: "as built over relative board-pair cells"); with B6 removed
+    (superseded, M20) nothing else defines them. Kept as built - smolgen's 152 cells and
+    47,136 parameters, bit for bit - in `buckets.py`, the fields renamed `smolgen_time_*`
+    and `smolgen_timeline_*`. Re-basing the cells on B15's 54 board-distance classes (54 x
+    8 x 32 + 8,224 = 22,048 parameters) is the other reading; no document asks for it.
+    Proposed edit 159.
 
 ## Proposed spec edits
 
@@ -2781,6 +2867,36 @@ struck through, where nothing of it is left to apply); the others stand as writt
     hidden activation is Mish too (as built: the value head's MLP keeps GELU, a
     placeholder), so that D3's head rewrite does not settle it by accident; and, for
     6y's squared-ReLU arm, its initialisation if it is not Mish's (issue 204).
+155. **§4.1's B15 bullets and register B15**: now - "binned and clamped" (no bins), "exact
+    line classes ... equal steps along two, three or four axes", "per-board registers by
+    their board-distance class, global registers one entry per head", "about 1.6M
+    parameters", no initialisation. Proposed - state the as-built placeholders, or what
+    replaces them: far classes by D = max(|Δtimeline|, ⌈|Δtime|/2⌉), log2 bins from 3
+    ([3, 4], [5, 8], 9+, the last clamped) crossed with the sign of Δtime; line classes in
+    whole turns (an odd Δtime is never a line), one entry per direction and step,
+    replacing the far slice's, board-axis lines clamped at 8 steps; per-board register
+    entries by class and pair kind (square reads register, register reads square,
+    register reads register); the global entry per head per layer, either side; 12,681
+    entries per head per layer, 1,623,168 parameters; initialisation N(0, 0.1) (issues
+    205-208).
+156. **§9.2's Params row, register F1 and F2 (M4 write-back)**: now - F1 "~21.5M with heads
+    (21,359,370 as built at N5)", F2 "L24-ff12 (44M)". Proposed - "22,961,802 as built
+    after F5 and B15 (21,338,634 without B15's 1,623,168-parameter table)" and F2
+    "46,891,210 (44,456,458 without the table)" (issue 210). Supersedes edit 153.
+157. **§6.1 and register B14**: now - "FlexAttention exploits block sparsity losslessly".
+    Proposed - add: "register rows that read every key on a masked head (v1's rule) are
+    computed apart - a second call, or the registers ordered after the squares - or the
+    block mask keeps every block" (issue 209).
+158. **§15.2's B15 row, §15.3 "Without a GPU" and register B14, G9**: now - "through the
+    score function", "a FlexAttention score function computed inside the kernel".
+    Proposed - name the untrained build's form: "the score function run by uncompiled
+    FlexAttention on CPU (forward only, every score materialised: small positions), its
+    gradients checked through the CPU block paths; the compiled kernel on GPU time"
+    (issue 211).
+159. **Register B6 and B12, §4.1's B6 paragraph**: now - B6 "Superseded by B15"; B12 "as
+    built over relative board-pair cells". Proposed - B6: "Superseded by B15 and removed
+    (no arm survives)"; B12: "over relative board-pair cells - the signed-Δtime x
+    Δtimeline log buckets B6 used (19 x 8), kept for smolgen" (issue 212).
 
 ## Session log
 

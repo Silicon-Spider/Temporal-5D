@@ -82,6 +82,12 @@ by the model itself) - and for a refreshed epoch, the dense pass over the anchor
 whose history K/V are injected into that full pass (the two-level mask of section 7.9), the
 history boards' outputs taken from the anchor pass.
 
+**B15's displacement bias** (the v1 default) is geometry - a function of the two tokens'
+coordinates, "computed at score time from coordinates, so nothing cached goes stale" (section
+4.1) - so it biases every row, a frozen board's included: ``compute_board`` builds a frozen
+board's bias rows over its key set once per layer, from that layer's table, and the live pass
+gives each layer its own (``AttnContext.for_layer``).
+
 **Not supported** (``CachedEvaluator`` refuses them): B12's ``board_bilinear`` form, which
 reads every board's per-board register states at every layer - frozen boards' hidden
 states are not cached; and B12 with no global registers (its context is then the mean of
@@ -100,7 +106,7 @@ from dataclasses import dataclass, field, replace
 import numpy as np
 import torch
 
-from .attention import AttnContext, _block_rows, _FastPath, _scores, _softmax_rows
+from .attention import AttnContext, _block_mask, _block_rows, _FastPath, _scores, _softmax_rows
 from .kvformat import FROZEN_KV_FORMATS, dequantise_fp8, fake_quantise, quantise_fp8
 from .model import NetOutput, T5DNet
 from .rope import rope_angles, rope_cos_sin
@@ -490,15 +496,16 @@ class CachedEvaluator:
         keys = torch.cat([torch.arange(j * tpb, (j + 1) * tpb) for j in key_boards] + [own])
         n_keys, c = keys.shape[0], tpb
         entries = [self.store[plan.key(epoch, j)] for j in key_boards]
-        # Rows: the scope and the structure for this board's queries, on its key set. The
-        # structure's smolgen opens live rows only, so a frozen board's rows have none.
-        frozen_ctx = ctx
-        if ctx.structure is not None and ctx.structure.smolgen is not None:
-            st = ctx.structure
-            frozen_ctx = replace(ctx, structure=replace(st, smolgen=None, smolgen_in=None, pair_table=st.base_pair_table, layer_ready=True))
-        allowed, bias = _block_rows(frozen_ctx, b * tpb, (b + 1) * tpb)
-        allowed = allowed[..., keys]
-        bias = None if bias is None else bias[..., keys]
+        # Rows: the scope and the structure for this board's queries, on its key set - the
+        # mask once, the bias per layer (B15's table is per layer). The structure's smolgen
+        # biases live rows only, so a frozen board's rows have none; B15 is geometry and
+        # biases them (``scope.py``).
+        st = None if ctx.structure is None else ctx.structure.without_smolgen()
+        frozen_ctx = replace(ctx, structure=st)
+        allowed = _block_mask(frozen_ctx, b * tpb, (b + 1) * tpb)[..., keys]
+        caller_bias = None  # a caller's dense bias (the cache's own contexts have none)
+        if ctx.bias is not None:
+            caller_bias = _block_rows(replace(frozen_ctx, structure=None), b * tpb, (b + 1) * tpb)[1][..., keys]
         # Positions relative to the board itself (integer offsets: exact in any frame).
         coords = coords_all[:, keys].clone()
         coords[..., 2:4] -= coords_all[:, b * tpb, 2:4][:, None, :]
@@ -529,6 +536,12 @@ class CachedEvaluator:
                 kk = torch.cat([p[0][None] for p in past] + [k], dim=2)
                 vv = torch.cat([p[1][None] for p in past] + [v], dim=2)
                 qq = torch.cat([q.new_zeros(1, q.shape[1], n_keys - c, q.shape[-1]), q], dim=2)
+                bias = caller_bias
+                if st is not None:
+                    st_l = st.for_layer(None, layer) if st.layer_dependent else st
+                    s_bias = st_l.bias_rows(b * tpb, (b + 1) * tpb, cols=keys[None])
+                    if s_bias is not None:
+                        bias = s_bias if bias is None else bias + s_bias
                 fast = _FastPath(qq, kk, vv, compact)
                 o = fast.full((n_keys - c, n_keys), None, fast.keys, allowed, bias)
                 x = block.after_ffn(block.after_attn(x, block.attn.output(o)))
@@ -605,9 +618,11 @@ class CachedEvaluator:
                 # A live row reads every valid key: the scope adds nothing to the live set's rows.
                 ctx_l = replace(ctx, scope=None)
                 if ctx.structure is not None and ctx.structure.layer_dependent:
-                    h_full = h.new_zeros(1, length, h.shape[-1])
-                    h_full[:, live_tok] = h
-                    ctx_l = ctx_l.for_layer(h_full)
+                    h_full = None
+                    if ctx.structure.smolgen is not None:  # B12 reads the layer's input (B15 does not)
+                        h_full = h.new_zeros(1, length, h.shape[-1])
+                        h_full[:, live_tok] = h
+                    ctx_l = ctx_l.for_layer(h_full, layer)
                 fast = _FastPath(q_full, k_full, v_full, ctx_l)
                 outs = [_live_rows(fast, ctx_l, blocks, kernel_rows)] if blocks else []
                 if global_free:

@@ -153,13 +153,13 @@ def _by_hand(model, batch, alpha: float | None = None):
     x = model.embed(batch)
     post = model.cfg.norm_placement == "post"
     alpha = model.cfg.deepnorm_alpha if alpha is None else alpha
-    for block in model.trunk.blocks:
+    for layer, block in enumerate(model.trunk.blocks):
         if post:
-            x = block.norm_attn(alpha * x + block.attn(x, ctx.for_layer(x)))
+            x = block.norm_attn(alpha * x + block.attn(x, ctx.for_layer(x, layer)))
             x = block.norm_ffn(alpha * x + block.ffn(x))
         else:
             h = block.norm_attn(x)
-            x = x + block.attn(h, ctx.for_layer(h))
+            x = x + block.attn(h, ctx.for_layer(h, layer))
             x = x + block.ffn(block.norm_ffn(x))
     return x if post else model.trunk.final_norm(x)
 

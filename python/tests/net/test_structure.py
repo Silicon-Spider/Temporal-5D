@@ -1,7 +1,8 @@
 """Stage N2's attention structure (spec section 6): the masks of B9 and B10 against a
 brute-force reference, no empty rows, how B5 meets the masks, typed edge biases (B11) on
 exactly the related pairs, board-pair smolgen (B12) depending on the global registers
-and on board pairs only, and no inert switch."""
+and on board pairs only, every bias adding up with B15's (test_displacement.py has B15
+itself), and no inert switch."""
 
 from __future__ import annotations
 
@@ -27,7 +28,8 @@ from t5d.net.state import (
     PositionState,
 )
 from t5d.net.structure import TYPED_INDEX
-from tests.net.test_attention import _b6_lookup, _has_axes, _reference_probs
+from tests.net.test_attention import _has_axes, _reference_probs
+from tests.net.test_displacement import far_state, reference_bias
 
 # --- fixtures --------------------------------------------------------------------------------
 
@@ -201,7 +203,7 @@ def test_no_row_is_ever_empty(name, n_boards):
     # Rows built per block equal the dense rows (any block boundaries).
     length = batch.n_tokens
     for start, stop in ((0, 7), (7, 70), (70, length - 5), (length - 5, length)):
-        rows, _ = structure.rows(start, stop)
+        rows = structure.mask_rows(start, stop)
         assert torch.equal(rows & batch.valid[:, None, None, :], mask[:, :, start:stop])
 
 
@@ -250,7 +252,8 @@ def test_rope_roles_follow_the_table_or_the_masks():
 )
 def test_each_head_rotates_by_its_role_under_its_mask(flags):
     """B5 with B9/B10: layer 0's probabilities, head by head, against a reference built
-    from the head's own rotary allocation and its brute-force key set."""
+    from the head's own rotary allocation, its brute-force key set and B15's bias at layer 0
+    materialised by hand."""
     model = _model(**flags)
     cfg = model.cfg
     batch = _batch(seed=2, sizes=(2,))
@@ -260,11 +263,14 @@ def test_each_head_rotates_by_its_role_under_its_mask(flags):
     coords = model.coordinates(batch)
     allowed = torch.from_numpy(reference_allowed(batch, cfg))
     has = _has_axes(cfg, batch)
+    bias = reference_bias(model, batch, 0)
     for head, role in enumerate(cfg.rope_roles):
         alloc = head_allocation(role, cfg)
         axis = torch.tensor([[a for a, _ in alloc]])
         freq = torch.tensor([[f for _, f in alloc]], dtype=torch.float32)
-        ref = _reference_probs(q[:, head : head + 1], k[:, head : head + 1], coords, has, axis, freq, allowed[:, head : head + 1])
+        ref = _reference_probs(
+            q[:, head : head + 1], k[:, head : head + 1], coords, has, axis, freq, allowed[:, head : head + 1], bias[:, head : head + 1]
+        )
         assert torch.allclose(probs[:, head : head + 1].double(), ref, atol=1e-5), (head, role)
 
 
@@ -290,7 +296,7 @@ def reference_typed_bias(batch, table: torch.Tensor, directed: bool) -> torch.Te
 
 @pytest.mark.parametrize("directed", [False, True])
 def test_typed_biases_land_on_exactly_the_related_pairs(directed):
-    model = _model(typed_edge_bias=True, typed_edge_directed=directed, move_graph_heads=0)
+    model = _model(typed_edge_bias=True, typed_edge_directed=directed, move_graph_heads=0, displacement_bias=False)
     table = model.typed_edges.table
     assert table.shape == (8, len(TYPED_RELATIONS), 2 if directed else 1)
     batch = _batch(seed=3)
@@ -314,7 +320,7 @@ def test_typed_biases_land_on_exactly_the_related_pairs(directed):
 
 
 def test_typed_bias_counts_a_repeated_edge_once_and_a_mutual_relation_twice():
-    model = _model(typed_edge_bias=True, move_graph_heads=0)
+    model = _model(typed_edge_bias=True, move_graph_heads=0, displacement_bias=False)
     state = synthetic_state(4, 2)
     s, d = (int(t) for t in state.edges[0, :2])
     base = replace(state, edges=np.array([[s, d, RELATION_IDS["pin"]]]))
@@ -345,13 +351,13 @@ def test_typed_biases_reach_masked_heads_only_on_allowed_pairs():
 
 
 def _smolgen_bias(model, batch, h: torch.Tensor) -> torch.Tensor:
-    ctx = model.make_context(batch).for_layer(h)
+    ctx = model.make_context(batch).for_layer(h, 0)
     return ctx.structure.dense_bias()
 
 
 @pytest.mark.parametrize("form", SMOLGEN_FORMS)
 def test_smolgen_bias_is_board_pair_constant_and_skips_global_registers(form):
-    model = _model(board_pair_smolgen=True, smolgen_form=form, move_graph_heads=0)
+    model = _model(board_pair_smolgen=True, smolgen_form=form, move_graph_heads=0, displacement_bias=False)
     batch = _batch(seed=6)
     h = torch.randn(batch.batch_size, batch.n_tokens, 256, generator=torch.Generator().manual_seed(6))
     bias = _smolgen_bias(model, batch, h)
@@ -367,8 +373,9 @@ def test_smolgen_bias_is_board_pair_constant_and_skips_global_registers(form):
 
 
 def _bucket(d: int, exact: int, maximum: int) -> int:
-    """B6's bucket of an offset's size, written out: exact below ``exact``, then one bucket
-    per doubling up to ``maximum``, the last shared by every larger offset."""
+    """Smolgen's bucket of an offset's size (B6's before it), written out: exact below
+    ``exact``, then one bucket per doubling up to ``maximum``, the last shared by every larger
+    offset."""
     d = abs(d)
     if d < exact:
         return d
@@ -378,11 +385,11 @@ def _bucket(d: int, exact: int, maximum: int) -> int:
 def _cell(cfg: NetConfig, dp: int, dh: int) -> int:
     """The relative cell of a board pair (key minus query): signed Delta-time bucket times
     the Delta-timeline buckets, plus the Delta-timeline bucket."""
-    n_time = _bucket(10**9, cfg.bias_time_exact, cfg.bias_time_max) + 1
-    n_timeline = _bucket(10**9, cfg.bias_timeline_exact, cfg.bias_timeline_max) + 1
-    t = _bucket(dh, cfg.bias_time_exact, cfg.bias_time_max)
+    n_time = _bucket(10**9, cfg.smolgen_time_exact, cfg.smolgen_time_max) + 1
+    n_timeline = _bucket(10**9, cfg.smolgen_timeline_exact, cfg.smolgen_timeline_max) + 1
+    t = _bucket(dh, cfg.smolgen_time_exact, cfg.smolgen_time_max)
     signed = t if dh >= 0 else n_time - 1 + t
-    return signed * n_timeline + _bucket(dp, cfg.bias_timeline_exact, cfg.bias_timeline_max)
+    return signed * n_timeline + _bucket(dp, cfg.smolgen_timeline_exact, cfg.smolgen_timeline_max)
 
 
 @pytest.mark.parametrize(("regs", "globals_"), [(2, 16), (0, 16), (2, 0)], ids=["registers", "no-board-registers", "no-globals"])
@@ -437,7 +444,7 @@ def test_smolgen_reads_the_global_registers(form):
     """Both forms are generated from the global registers; the bilinear form also reads
     each board's per-board registers, the relative-cell form nothing else; squares enter
     neither."""
-    model = _model(board_pair_smolgen=True, smolgen_form=form, move_graph_heads=0)
+    model = _model(board_pair_smolgen=True, smolgen_form=form, move_graph_heads=0, displacement_bias=False)
     batch = _batch(seed=8, sizes=(4,))
     gen = torch.Generator().manual_seed(8)
     h = torch.randn(1, batch.n_tokens, 256, generator=gen)
@@ -461,16 +468,17 @@ def test_smolgen_needs_the_layer_input():
         ctx.structure.dense_bias()
 
 
-def test_every_bias_adds_up():
-    """B6, B11 and B12 together: a layer's bias is the B6 table lookup, plus the typed
-    edges', plus that layer's smolgen table at the two tokens' boards - each built
-    independently here."""
-    model = _model(binned_bias=True, typed_edge_bias=True, board_pair_smolgen=True, move_graph_heads=0)
+@pytest.mark.parametrize("layer", [0, 1])
+def test_every_bias_adds_up(layer):
+    """B11, B12 and B15 together: a layer's bias is B15's table of that layer at each pair's
+    entry (materialised by hand, test_displacement.py), plus the typed edges', plus that
+    layer's smolgen table at the two tokens' boards - each built independently here."""
+    model = _model(n_layers=2, typed_edge_bias=True, board_pair_smolgen=True, move_graph_heads=0)
     batch = _batch(seed=10, sizes=(3, 2))
     h = torch.randn(batch.batch_size, batch.n_tokens, 256, generator=torch.Generator().manual_seed(10))
     ctx = model.make_context(batch)
-    bias = ctx.for_layer(h).structure.dense_bias()
-    b6 = _b6_lookup(model, batch, model.coordinates(batch))
+    bias = ctx.for_layer(h, layer).structure.dense_bias()
+    b15 = reference_bias(model, batch, layer)
     typed = reference_typed_bias(batch, model.typed_edges.table.detach(), directed=False)
     table = model.smolgen(h, ctx.structure.smolgen_in)
     smolgen = torch.zeros_like(bias)
@@ -480,7 +488,7 @@ def test_every_bias_adds_up():
         block = torch.zeros(8, int(has.sum()), batch.n_tokens)
         block[:, :, has] = table[b][:, idx][:, :, idx]
         smolgen[b][:, has] = block
-    assert torch.allclose(bias.double(), (b6 + smolgen).double() + typed, atol=1e-5)
+    assert torch.allclose(bias.double(), (b15 + smolgen).double() + typed, atol=1e-5)
 
 
 # --- no inert switch ----------------------------------------------------------------------------
@@ -506,20 +514,28 @@ SWITCHES = {
     "smolgen_form": (dict(board_pair_smolgen=True), dict(board_pair_smolgen=True, smolgen_form="board_bilinear")),
     "same_board_registers": (dict(routing_table=True), dict(routing_table=True, same_board_registers="registers")),
     "relations_head_direction": (dict(routing_table=True), dict(routing_table=True, relations_head_direction="forward")),
+    "displacement_bias (B15) off -> on": (dict(displacement_bias=False), dict()),
+    "disp_far_edges": (dict(), dict(disp_far_edges=(3, 4, 6))),
+    "disp_line_max": (dict(), dict(disp_line_max=4)),
+    "disp_register_pairs": (dict(), dict(disp_register_pairs="shared")),
 }
 
 
 @pytest.mark.parametrize("name", list(SWITCHES))
 def test_every_switch_changes_the_network(name):
+    """(The batch holds a position with boards far apart - test_displacement.far_state - so that
+    B15's far bins are in play.)"""
     a_flags, b_flags = SWITCHES[name]
-    batch = collate([synthetic_state(11, 5)])
+    batch = collate([synthetic_state(11, 5), far_state(11)])
     a = _model(**a_flags)(batch)
     b = _model(**b_flags)(batch)
     assert not torch.allclose(a.value_logits, b.value_logits, atol=1e-4), name
     assert not torch.allclose(a.policy_logits, b.policy_logits, atol=1e-4), name
 
 
-@pytest.mark.parametrize(("module", "form"), [("typed_edges", "relative_cells"), *(("smolgen", f) for f in SMOLGEN_FORMS)])
+@pytest.mark.parametrize(
+    ("module", "form"), [("typed_edges", "relative_cells"), ("displacement", "relative_cells"), *(("smolgen", f) for f in SMOLGEN_FORMS)]
+)
 def test_every_new_parameter_tensor_reaches_the_outputs(module, form):
     model = _model(typed_edge_bias=True, board_pair_smolgen=True, typed_edge_directed=True, smolgen_form=form)
     batch = collate([synthetic_state(12, 6)])
@@ -543,11 +559,12 @@ def test_every_new_parameter_tensor_reaches_the_outputs(module, form):
 )
 def test_attention_implementations_are_one_function(flags):
     """``attn_impl`` changes how, never what: the one switch that must be inert - under
-    ablation 6y's arms (F5's post-norm, F6's squared ReLU) too."""
+    ablation 6y's arms (F5's post-norm, F6's squared ReLU) too, with B15's displacement bias
+    (the v1 default) and B14's score function ("flex", forward only) among them."""
     batch = collate([synthetic_state(13, 4), synthetic_state(14, 2)])
     outs = [
         build_model(NetConfig(trunk_dtype="fp32", attn_impl=impl, typed_edge_bias=True, board_pair_smolgen=True, **flags), seed=1)(batch)
-        for impl in ("block_sparse", "chunked", "sdpa", "explicit", "dense")
+        for impl in ("block_sparse", "chunked", "sdpa", "explicit", "dense", "flex")
     ]
     for out in outs[1:]:
         assert torch.allclose(out.value_logits, outs[0].value_logits, atol=1e-4)

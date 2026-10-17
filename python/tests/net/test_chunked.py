@@ -4,8 +4,10 @@ The reference (``attention_dense``) materialises every mask and bias at (B, H, L
 computes explicit scores; the chunked path runs the fused kernel over query blocks of
 whole boards, building each block's masks and biases from the sparse structure, and the
 block-sparse path also hands each masked head only the key boards its block can reach.
-They must agree - outputs and gradients, to the parameters of B6, B11 and B12 included -
-for several seeds, N in {1, 5, 17, 40} and every combination of stage N2's switches; they
+They must agree - outputs and gradients, to the parameters of B11, B12 and B15 included -
+for several seeds, N in {1, 5, 17, 40} and every combination of stage N2's switches, with
+B15's displacement bias (the v1 default) on and, for the paths a structure without a bias
+takes, off (ablation 2's no-table arm); they
 must never build a row set larger than one block, in the attention call or in the whole
 network; the block-sparse selection must be lossless and actually skip boards; and under
 autograd neither may keep an O(L^2) tensor for the backward pass.
@@ -35,6 +37,10 @@ N2_COMBOS = [
     for (heads, routing), typed, smolgen in itertools.product(((0, False), (2, False), (4, False), (2, True)), (False, True), (False, True))
 ]
 MG2, ROUTING, ROUTING_ALL = N2_COMBOS[4], N2_COMBOS[12], N2_COMBOS[-1]
+#: The combinations without a learned bias under B15's no-table arm (ablation 2): a structure
+#: with masks and no bias - or none at all - takes the by-role path whose dense heads run in
+#: one call over every row.
+NO_TABLE_COMBOS = [c | dict(displacement_bias=False) for c in N2_COMBOS if not (c["typed_edge_bias"] or c["board_pair_smolgen"])]
 #: A routing table whose roles are not contiguous in head order, with and without biases.
 SCRAMBLED = dict(routing_table=True, rope_head_roles=SCRAMBLED_ROLES)
 SCRAMBLED_BIASED = SCRAMBLED | dict(typed_edge_bias=True, board_pair_smolgen=True, smolgen_form="board_bilinear")
@@ -61,7 +67,8 @@ FAST = {
 
 def _combo_id(flags: dict) -> str:
     head = "routing" if flags["routing_table"] else f"mg{flags['move_graph_heads']}"
-    return f"{head}{'-typed' if flags['typed_edge_bias'] else ''}{'-smolgen' if flags['board_pair_smolgen'] else ''}"
+    extras = f"{'-typed' if flags['typed_edge_bias'] else ''}{'-smolgen' if flags['board_pair_smolgen'] else ''}"
+    return f"{head}{extras}{'-no-table' if flags.get('displacement_bias') is False else ''}"
 
 
 def _batch(n: int, seed: int):
@@ -70,7 +77,7 @@ def _batch(n: int, seed: int):
 
 
 def _learned(model) -> list[tuple[str, torch.Tensor]]:
-    mods = {"typed": model.typed_edges, "smolgen": model.smolgen, "b6": model.binned_bias}
+    mods = {"typed": model.typed_edges, "smolgen": model.smolgen, "b15": model.displacement}
     return [(f"{k}.{n}", p) for k, m in mods.items() if m is not None for n, p in m.named_parameters()]
 
 
@@ -78,7 +85,7 @@ def _run(attend, model, batch, qkv, h, w, block_rows=None, recompute=None):
     """Output and gradients (q, k, v, every structure parameter) of one implementation,
     with a fresh context so that no graph is shared between implementations."""
     model.zero_grad(set_to_none=True)
-    ctx = model.make_context(batch).for_layer(h)
+    ctx = model.make_context(batch).for_layer(h, 0)
     if block_rows is not None:
         ctx = replace(ctx, block_rows=block_rows)
     if recompute is not None:
@@ -121,7 +128,7 @@ def _case(flags: dict, n: int, seed: int, extra=None):
 
 
 @pytest.mark.parametrize("n", [1, 5, 17, 40])
-@pytest.mark.parametrize("flags", N2_COMBOS, ids=[_combo_id(f) for f in N2_COMBOS])
+@pytest.mark.parametrize("flags", N2_COMBOS + NO_TABLE_COMBOS, ids=[_combo_id(f) for f in N2_COMBOS + NO_TABLE_COMBOS])
 def test_chunked_equals_dense(flags, n):
     """Outputs and gradients, two seeds, both paths, blocks of one and of three boards (the
     mixed sparse/dense variant on 3-board blocks from 17 boards, where both kinds occur)."""
@@ -147,14 +154,17 @@ def test_a_scrambled_routing_table_equals_dense(flags, n):
 
 
 #: The pair-rule modes (global registers position-free or anchored, per-board registers
-#: position-free) and B5/B6, which the fast paths also handle block by block.
+#: position-free) and B5, which the fast paths also handle block by block - with B15's
+#: displacement bias (the v1 default) and, for two of them, without it (no structure at all
+#: under the dense flags).
 PAIR_MODES = {
     "anchored": dict(global_register_pairs="anchored"),
     "regs_free": dict(board_register_spatial="position_free"),
     "regs_free_anchored_b5": dict(global_register_pairs="anchored", board_register_spatial="position_free", rope_per_head=True),
-    "b6_near_time": dict(binned_bias=True, binned_bias_rope="near_time"),
-    "b5_b6_regs_self": dict(rope_per_head=True, binned_bias=True, masked_head_registers="self", move_graph_direction="reverse"),
+    "b5_regs_self": dict(rope_per_head=True, masked_head_registers="self", move_graph_direction="reverse"),
     "anchored_regs_self": dict(global_register_pairs="anchored", masked_head_registers="self", same_board_registers="registers"),
+    "no_table_regs_free": dict(board_register_spatial="position_free", displacement_bias=False),
+    "no_table_anchored": dict(global_register_pairs="anchored", displacement_bias=False),
 }
 
 
@@ -186,7 +196,7 @@ def test_chunked_is_stable_at_large_logits(flags):
 def test_recompute_changes_nothing(flags):
     """Recomputing each block in the backward pass (``attn_recompute``) is exact: the same
     outputs and gradients as keeping every block, on both paths, with every bias on."""
-    model, batch, qkv, h, w = _case(flags | dict(typed_edge_bias=True, board_pair_smolgen=True), 17, seed=9, extra=dict(binned_bias=True))
+    model, batch, qkv, h, w = _case(flags | dict(typed_edge_bias=True, board_pair_smolgen=True), 17, seed=9)
     for name, attend in FAST.items():
         kept = _run(attend, model, batch, qkv, h, w, block_rows=66, recompute=False)
         again = _run(attend, model, batch, qkv, h, w, block_rows=66, recompute=True)
@@ -195,8 +205,8 @@ def test_recompute_changes_nothing(flags):
 
 @pytest.mark.parametrize(
     "flags",
-    [MG2, N2_COMBOS[7], ROUTING_ALL, dict(binned_bias=True, rope_per_head=True, typed_edge_bias=True)],
-    ids=["mg2", "mg2-typed-smolgen", "routing-all", "b5-b6-typed"],
+    [MG2, N2_COMBOS[7], ROUTING_ALL, dict(rope_per_head=True, typed_edge_bias=True), MG2 | dict(displacement_bias=False)],
+    ids=["mg2", "mg2-typed-smolgen", "routing-all", "b5-typed", "mg2-no-table"],
 )
 def test_model_chunked_equals_dense(flags):
     """The whole network (two layers): every head's output and every parameter's gradient."""
@@ -218,7 +228,7 @@ def test_model_chunked_equals_dense(flags):
         assert torch.allclose(a.board_logits, b.board_logits, atol=1e-4)
         for name in ga:
             assert (ga[name] is None) == (gb[name] is None), name
-            if name.startswith(("trunk.", "embed.", "typed_edges.", "smolgen.", "binned_bias.")):
+            if name.startswith(("trunk.", "embed.", "typed_edges.", "smolgen.", "displacement.")):
                 assert ga[name] is not None, f"{name}: the loss reaches every trunk and structure parameter"
             if ga[name] is not None:
                 assert torch.allclose(ga[name], gb[name], atol=2e-4, rtol=1e-3), (name, float((ga[name] - gb[name]).abs().max()))
@@ -272,12 +282,12 @@ def test_fast_paths_never_build_more_than_one_block(monkeypatch, name):
     """The memory claim, checked structurally: every row set either fast path asks the
     structure for, and every per-row mask it hands the kernel, spans at most one block of
     query rows - never (L, L). The dense reference, by contrast, asks for all L rows."""
-    flags = dict(typed_edge_bias=True, board_pair_smolgen=True, binned_bias=True, board_register_spatial="position_free")
+    flags = dict(typed_edge_bias=True, board_pair_smolgen=True, board_register_spatial="position_free")
     model, batch, qkv, h, _ = _case(N2_COMBOS[0] | flags, 17, seed=5)
     block = 2 * 66
     spy = _Spy(monkeypatch)
     with torch.no_grad():
-        ctx = replace(model.make_context(batch).for_layer(h), block_rows=block)
+        ctx = replace(model.make_context(batch).for_layer(h, 0), block_rows=block)
         FAST[name](*qkv, ctx)
         assert spy.spans and max(spy.spans) <= block
         assert spy.per_row_masks() and all(m[-2] <= block for m in spy.per_row_masks())
@@ -289,7 +299,7 @@ def test_fast_paths_never_build_more_than_one_block(monkeypatch, name):
 @pytest.mark.parametrize("impl", ["block_sparse", "chunked"])
 @pytest.mark.parametrize(
     "flags",
-    [dict(), dict(routing_table=True, typed_edge_bias=True, board_pair_smolgen=True, binned_bias=True)],
+    [dict(), dict(routing_table=True, typed_edge_bias=True, board_pair_smolgen=True)],
     ids=["default", "routing-all-biases"],
 )
 def test_the_network_attends_one_block_at_a_time(monkeypatch, flags, impl):
@@ -345,8 +355,10 @@ def test_block_sparse_reads_only_the_boards_its_block_reaches(monkeypatch):
     qkv = [torch.randn(batch.batch_size, 8, length, 32, generator=torch.Generator().manual_seed(s)) for s in range(3)]
     spy = _Spy(monkeypatch)
     with torch.no_grad():
-        attention_block_sparse(*qkv, replace(model.make_context(batch), block_rows=block, sparse_max_fraction=1.0))
-    key_counts = [k for _, k, m in spy.kernel if m is not None and m[-2] > 1]
+        attention_block_sparse(*qkv, replace(model.make_context(batch).for_layer(None, 0), block_rows=block, sparse_max_fraction=1.0))
+    # The move-graph heads' calls (B9's two heads; the six dense heads carry B15's per-row
+    # bias and read every key).
+    key_counts = [k for _, k, m in spy.kernel if m is not None and m[-2] > 1 and m[1] == 2]
     assert key_counts and min(key_counts) < kl and sum(key_counts) / len(key_counts) < 0.8 * kl
 
 
@@ -361,7 +373,7 @@ def _kept(attend, flags: dict, n: int, recompute: bool) -> tuple[int, list[tuple
     shape = (1, cfg.n_heads, batch.n_tokens, cfg.d_head)
     leaves = [torch.randn(*shape, generator=gen).requires_grad_(True) for _ in range(3)]
     h = torch.randn(1, batch.n_tokens, cfg.d_model, generator=gen)
-    ctx = replace(model.make_context(batch).for_layer(h), block_rows=4 * 66, recompute=recompute)
+    ctx = replace(model.make_context(batch).for_layer(h, 0), block_rows=4 * 66, recompute=recompute)
     saved: list[torch.Tensor] = []
 
     def pack(t: torch.Tensor):
@@ -383,7 +395,7 @@ def _attention_shaped(saved: list[torch.Tensor]) -> list[tuple[int, ...]]:
 
 
 @pytest.mark.parametrize("name", ["block_sparse", "chunked"])
-@pytest.mark.parametrize("flags", [MG2, ROUTING_ALL | dict(binned_bias=True)], ids=["mg2", "routing-all-biases"])
+@pytest.mark.parametrize("flags", [MG2, ROUTING_ALL], ids=["mg2", "routing-all-biases"])
 def test_autograd_keeps_no_quadratic_tensor(flags, name):
     """Under autograd each block is recomputed in the backward pass, so the forward keeps
     no attention-shaped tensor and what it keeps grows linearly in L: from 10 to 40 boards
@@ -424,19 +436,20 @@ def test_the_network_keeps_no_quadratic_tensor_for_backward(flags):
 @pytest.mark.parametrize(
     ("flags", "extra"),
     [
-        (ROUTING_ALL, dict(binned_bias=True)),
+        (ROUTING_ALL, {}),
         (MG2, dict(board_register_spatial="position_free")),
         (ROUTING_ALL, dict(board_register_spatial="position_free", global_register_pairs="anchored")),
         (SCRAMBLED, dict(global_register_pairs="anchored")),
+        (MG2, dict(displacement_bias=False)),
     ],
-    ids=["all-b6", "mg2-regs-free", "routing-all-regs-free-anchored", "scrambled-anchored"],
+    ids=["all", "mg2-regs-free", "routing-all-regs-free-anchored", "scrambled-anchored", "mg2-no-table"],
 )
 def test_block_size_does_not_change_the_function(flags, extra):
     """Board-aligned or not, one row or the whole body: the same outputs - blocks of 65
     rows split a board's two registers, so a block holds a single spatial-free query."""
     model, batch, qkv, h, _ = _case(flags, 5, seed=6, extra=extra)
     with torch.no_grad():
-        ctx = model.make_context(batch).for_layer(h)
+        ctx = model.make_context(batch).for_layer(h, 0)
         ref = attention_dense(*qkv, ctx)
         for (name, attend), rows in itertools.product(FAST.items(), (1, 17, 65, 66, 200, 10_000)):
             out = attend(*qkv, replace(ctx, block_rows=rows))
@@ -445,13 +458,15 @@ def test_block_size_does_not_change_the_function(flags, extra):
 
 
 #: Structures with and without biases: a caller's mask and bias must combine with each -
-#: those without a bias take the by-role path, where the chunked arm's dense heads run in
-#: one call over every row.
+#: those without a bias (B15's no-table arm) take the by-role path, where the chunked arm's
+#: dense heads run in one call over every row.
 CALLER_CASES = {
-    "routing-all-b6": (ROUTING_ALL, dict(binned_bias=True)),
+    "routing-all": (ROUTING_ALL, {}),
     "mg2": (MG2, {}),
     "routing": (ROUTING, {}),
     "scrambled": (SCRAMBLED, {}),
+    "mg2-no-table": (MG2, dict(displacement_bias=False)),
+    "scrambled-no-table": (SCRAMBLED, dict(displacement_bias=False)),
 }
 
 
@@ -471,7 +486,7 @@ def test_a_callers_mask_and_bias_combine_with_the_structure(impl, case, parts):
     mask = mask if parts in ("mask", "both") else None
     bias = bias if parts in ("bias", "both") else None
     with torch.no_grad():
-        ctx = replace(model.make_context(batch).for_layer(h), mask=mask, bias=bias, block_rows=66)
+        ctx = replace(model.make_context(batch).for_layer(h, 0), mask=mask, bias=bias, block_rows=66)
         structure = ctx.structure
         s_mask, s_bias = structure.dense_mask(), structure.dense_bias()
         full_mask = s_mask if mask is None else mask & s_mask
@@ -482,11 +497,12 @@ def test_a_callers_mask_and_bias_combine_with_the_structure(impl, case, parts):
     assert torch.allclose(out * valid, ref * valid, atol=1e-5)
 
 
-@pytest.mark.parametrize("flags", [dict(), dict(routing_table=True)], ids=["default", "routing"])
+@pytest.mark.parametrize("flags", [dict(), dict(routing_table=True), dict(displacement_bias=False)], ids=["default", "routing", "no-table"])
 def test_the_networks_attn_mask_and_attn_bias_reach_every_path(flags):
-    """``model(batch, attn_mask=..., attn_bias=...)`` on the default network (no bias in
-    the structure: the by-role path) and under the routing table: the same outputs on the
-    block-sparse and chunked paths as on the dense reference."""
+    """``model(batch, attn_mask=..., attn_bias=...)`` on the default network (B15's bias in the
+    structure), under the routing table, and on B15's no-table arm (no bias in the structure:
+    the by-role path): the same outputs on the block-sparse and chunked paths as on the dense
+    reference."""
     batch = _batch(4, seed=11)
     gen = torch.Generator().manual_seed(11)
     shape = (batch.batch_size, 8, batch.n_tokens, batch.n_tokens)
