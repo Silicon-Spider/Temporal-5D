@@ -20,6 +20,12 @@ after F5's RMSNorm and F6's Mish, 2026-10-17; the figures before them were withi
 of these.) Adversarial constructions: duplicated boards, deep travel, many timelines,
 non-standard board sizes, even starts, register-count arms, and supersession inside a
 refreshed subtree.
+
+B16's status key biases (committed with the cached configuration, ``status.py``) are on in every
+block-causal network here - the default: every row (a)-(e) holds with them, the full pass's live
+rows carrying the same biases on the same frozen keys; at a refreshed epoch's anchor neither
+path adds them (its evaluation is the refresh pass, section 7.9).
+``test_status_biases_keep_frozen_boards_intrinsic`` checks what they are for.
 """
 
 from __future__ import annotations
@@ -643,6 +649,77 @@ def _present_moves(root: Multiverse) -> list[tuple]:
     state = root.state()
     live = state.is_head & state.active
     return [("physical", int(p)) for p in sorted(state.timeline[live & (state.half_turn == state.h_present)])]
+
+
+def _status_of(model, state) -> dict[tuple[int, int], int]:
+    """B16's status entry of each frozen board of ``state`` - from the structure its evaluation
+    builds - by the board's (timeline, half-turn)."""
+    key = model.make_context(collate([state]), scope="block_causal").structure.status_index.key[0]
+    tpb = state.layout.tokens_per_board
+    return {(int(state.timeline[b]), int(state.half_turn[b])): int(key[b * tpb]) for b in np.flatnonzero(~state.is_head)}
+
+
+def _activating_jump(root: Multiverse):
+    """A branching jump after which a timeline that was inactive - with a frozen board - is active
+    (the count rule: the opponent's new timeline makes room for one more of the creator's), and the
+    timelines it activates; None if the root has none."""
+    state = root.state()
+    asleep = {int(p) for p in state.timeline[~state.active & ~state.is_head]}
+    for p in sorted(root.heads()):
+        for dest in _jump_targets(root, p):
+            if root.is_head(dest):
+                continue
+            after = root.jump(p, dest).state()
+            woken = asleep & {int(q) for q in after.timeline[after.active]}
+            if woken:
+                return ("jump", p, dest), woken
+    return None
+
+
+def test_status_biases_keep_frozen_boards_intrinsic():
+    """B16's point (section 4.1): a frozen board's status changes after it freezes - a move that
+    shifts the present moves its Delta-t-to-present, a branch can activate its timeline - and
+    under the cached configuration that recomputes nothing. Every frozen board the parent holds
+    keeps its entry (the same key - its digest holds no status - and the same stored K/V), only
+    the board the move supersedes is computed, and the cached evaluation equals the full
+    block-causal pass, whose live rows carry the same status biases on the same frozen keys.
+    The status of boards both nodes hold did move: the bias moved, not the K/V."""
+    model = _model(15)
+    assert model.status is not None, "B16 is on in the cached configuration by default"
+    root = _root("standard", 15)
+    present = _present_moves(root)
+    cases = [("present", root, present[:-1], present[-1], None)]
+    for seed in range(60):
+        other = Multiverse.from_state(synthetic_state(1500 + seed, 14, n_timelines=5), seed=seed)
+        found = _activating_jump(other)
+        if found is not None:
+            cases.append(("activation", other, [], *found))
+            break
+    assert len(cases) == 2, "the fixture holds a branch that activates a timeline"
+    for name, start, prefix, move, woken in cases:
+        tree = SearchTree(CachedEvaluator(model), start)
+        parent = tree.path(prefix)
+        tree.evaluate(parent)
+        node = tree.child(parent, move)
+        store = tree.evaluator.store
+        before = store.computed["supersession"]
+        _close(tree.evaluate(node), reference_output(model, node.state), what=name)
+        assert store.computed["supersession"] - before == 1, name
+        plans = [tree.evaluator._plan(n.state, n.epoch) for n in (parent, node)]
+        index = [
+            {(int(n.state.timeline[b]), int(n.state.half_turn[b])): int(b) for b in p.frozen}
+            for n, p in zip((parent, node), plans, strict=True)
+        ]
+        old, new = _status_of(model, parent.state), _status_of(model, node.state)
+        moved = [k for k in index[0] if k in index[1] and old[k] != new[k]]
+        assert moved, (name, "a frozen board's status moved")
+        for k in index[0]:
+            if k in index[1]:
+                ka, kb = plans[0].key(parent.epoch, index[0][k]), plans[1].key(node.epoch, index[1][k])
+                assert ka == kb and ka in store, (name, k, "the same entry")
+        if woken is not None:
+            assert node.state.active[[index[1][k] for k in moved if k[0] in woken]].all()
+            assert any(old[k] % 2 == 0 and new[k] % 2 == 1 for k in moved if k[0] in woken), "the active flag of its status"
 
 
 @pytest.mark.parametrize("supersession", [R2, R1])

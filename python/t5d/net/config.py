@@ -40,8 +40,12 @@ The build rules (spec section 15.1) decide what else appears here:
   evaluator's (``CacheConfig``), not the network's. Four points the
   spec leaves open on this committed-class path are parameters with placeholder defaults
   (``causal_past`` - since ruled by C23: ancestry, the ``"lineage"`` default -,
-  ``frozen_features``, ``supersession_scope``, and the rule that the
-  section 6 structure opens live rows only, documented in ``scope.py``).
+  ``frozen_features`` - since ruled by M20: intrinsic, with B16's status biases -,
+  ``supersession_scope``, and the rule that the section 6 structure opens live rows only,
+  documented in ``scope.py``). **B16** (committed with the cached configuration, section 4.1;
+  ``status.py``) gives frozen boards' current status to the live queries that read them as
+  score-time key biases (``status_key_bias``, on), its bins, layer sharing and initialisation
+  placeholders.
 * **Stage N5** adds register D8 (committed): the global acting-player input and the submit
   action's policy logit read from a global register. Where the input enters
   (``acting_player_input``), which register the logit is read from (``submit_register``) and
@@ -625,20 +629,50 @@ class NetConfig:
     causal_past: str = "lineage"
     #: What a frozen board's state-dependent per-board features are under the block-causal
     #: scope: Delta-t-to-present (A3) changes whenever the present moves and the timeline's
-    #: active flag when the timeline is activated, after the board is frozen. The spec
-    #: (A3, A4, C2, C17) is silent. COMMITTED-CLASS SILENCE - placeholder default, not a
-    #: decision:
+    #: active flag when the timeline is activated, after the board is frozen. RULED: M20
+    #: ("frozen features -> intrinsic, with score-time status biases (B16)"; spec issue 31),
+    #: with register A3 and B16 and sections 2.3, 4.1 and 7.3 - "intrinsic", the default:
     #:   "intrinsic" - a frozen board's tokens get neither (only its contents, side to move
     #:                 and the superseded flag): knowing where the present is would be
-    #:                present-to-frozen flow, which C17 allows only at refreshes (the root
-    #:                refresh, a dense pass, gives every board its features as of the
-    #:                root). The only reading under which a frozen board's K/V stay valid
-    #:                between refreshes;
-    #:   "current"   - a frozen board carries the evaluated state's values (A3 literally):
-    #:                 every shift of the present changes every frozen board's input, so
-    #:                 the cache recomputes them all - the cost section 7.1 does not price.
+    #:                 present-to-frozen flow, which C17 allows only at refreshes (the root
+    #:                 refresh, a dense pass, gives every board its features as of the
+    #:                 root - kept as built, M20). Its current status reaches the live
+    #:                 queries that read it as B16's score-time key biases
+    #:                 (``status_key_bias``);
+    #:   "current"   - a test arm only, no reading of the documents any more: a frozen board
+    #:                 carries the evaluated state's values (A3 literally), so every shift of
+    #:                 the present changes every frozen board's input and the cache recomputes
+    #:                 them all - the cost section 7.1 does not price. No B16 under it.
     #: Live boards always carry both features.
     frozen_features: str = "intrinsic"
+    #: B16 (committed with the cached configuration; sections 4.1, 7.3; register B16, A3, M20;
+    #: ``status.py``): under the block-causal scope with ``frozen_features="intrinsic"`` a frozen
+    #: board's current status - "the key board's Delta-t-to-present bin and timeline status" -
+    #: enters as a learned key bias per head, recomputed every evaluation, on the scores of
+    #: live query rows (head boards' tokens, global registers) against the tokens of frozen
+    #: boards; frozen rows never get it (their K/V would go stale - C17). Built only for a
+    #: network of that configuration (``status_bias_built``): inert, with no parameter, under
+    #: the dense scope - the v1 - and under ``"current"``. On by default; ``False`` is the
+    #: network without it (every other weight the same: its table draws from a generator of
+    #: its own) - no named ablation has that arm (gate 6c's are the refresh's; spec issue 213).
+    status_key_bias: bool = True
+    #: B16's Delta-t-to-present bins (``buckets.signed_log_bucket`` of ``h - h_present`` in
+    #: half-turns): exact below ``status_dt_exact``, log2-spaced up to ``status_dt_max``, then
+    #: clamped, past and future apart. Section 4.1 says "Delta-t-to-present bin" and gives no
+    #: bins. COMMITTED-CLASS SILENCE (B16 is class C; spec issue 213) - placeholder, not a
+    #: decision: 4 and 128, the time buckets B6 used and smolgen keeps - 19 bins. The timeline
+    #: status is read as A3's active/inactive flag (head/superseded is constant on frozen
+    #: boards): 19 x 2 = 38 statuses per head.
+    status_dt_exact: int = 4
+    status_dt_max: int = 128
+    #: One table per layer, or one shared by all layers. Section 4.1 says "per head" only.
+    #: COMMITTED-CLASS SILENCE (spec issue 214) - placeholder, not a decision: shared, as B11's
+    #: scalars are (8 x 38 = 304 parameters; 4,864 per layer).
+    status_bias_per_layer: bool = False
+    #: The table's initialisation, ``N(0, status_bias_init_std)`` from B16's own generator
+    #: (section 15.2: realistic scale, never zeros). COMMITTED-CLASS SILENCE (spec issue 215) -
+    #: placeholder, not a decision: 0.1, the scale of B11's and B15's tables.
+    status_bias_init_std: float = 0.1
     #: C20 (committed): a board superseded inside the search is recomputed "under the
     #: state-defined mask - its causal past plus the conditioned history of its refresh
     #: epoch". COMMITTED-CLASS AMBIGUITY - placeholder default, not a decision:
@@ -712,6 +746,13 @@ class NetConfig:
             return tuple(self.rope_head_roles)
         k = self.move_graph_heads
         return ("move_graph",) * k + ("dense",) * (self.n_heads - k)
+
+    @property
+    def status_bias_built(self) -> bool:
+        """Whether the network has B16's status key biases (``status_key_bias``): only under the
+        block-causal scope with intrinsic frozen features - the cached configuration B16 is
+        committed with."""
+        return self.status_key_bias and self.attn_scope == "block_causal" and self.frozen_features == "intrinsic"
 
     @property
     def relations_direction(self) -> str:
@@ -796,6 +837,10 @@ class NetConfig:
             raise ValueError(f"disp_register_pairs must be one of {DISP_REGISTER_PAIRS}")
         if not (math.isfinite(self.disp_init_std) and self.disp_init_std >= 0):
             raise ValueError("disp_init_std must be finite and non-negative")
+        if self.status_dt_exact < 1 or self.status_dt_max < self.status_dt_exact:
+            raise ValueError("status_dt_exact must be positive and status_dt_max not below it (B16's Delta-t bins)")
+        if not (math.isfinite(self.status_bias_init_std) and self.status_bias_init_std >= 0):
+            raise ValueError("status_bias_init_std must be finite and non-negative")
         if self.smolgen_time_exact < 1 or self.smolgen_timeline_exact < 1:
             raise ValueError("smolgen_time_exact and smolgen_timeline_exact must be positive")
         if self.smolgen_time_max < self.smolgen_time_exact or self.smolgen_timeline_max < self.smolgen_timeline_exact:

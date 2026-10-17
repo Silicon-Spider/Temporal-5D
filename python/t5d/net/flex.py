@@ -10,7 +10,9 @@ torch's ``flex_attention`` (``NetConfig.attn_impl="flex"``):
 * the **score function** (``score_mod``) adds, per (position, head, query, key): B15's
   displacement bias - the pair's entry computed by integer arithmetic from the two tokens'
   kinds and raw coordinates (``displacement.pair_entry``, "at score time from coordinates"),
-  then the layer's compact table; B11's typed biases - the pair's typed relations, counted
+  then the layer's compact table; B16's status key bias under the block-causal scope - on a
+  live query row, the head's entry for the key's frozen board's status, read from a
+  per-token index (``status.py``); B11's typed biases - the pair's typed relations, counted
   per type and orientation, times the head's scalars; B12's board-pair bias - the layer's
   table at the two tokens' boards; and a caller's dense bias;
 * the **mask function** (``mask_mod``) allows a key by padding, the caller's mask, the
@@ -101,6 +103,10 @@ class ScoreInputs:
     disp_coords: torch.Tensor | None = None  # (B, L, 4) long, raw
     disp_table: torch.Tensor | None = None  # (H, entries + 1): the layer's
     disp_geom: object = None
+    # B16
+    status_key: torch.Tensor | None = None  # (B, L) long: a frozen board's token's status entry (statuses: none)
+    status_live: torch.Tensor | None = None  # (B, L) bool: the live query rows
+    status_table: torch.Tensor | None = None  # (H, statuses + 1): the layer's
 
     @classmethod
     def from_context(cls, ctx: AttnContext, n_heads: int) -> ScoreInputs:
@@ -143,6 +149,10 @@ class ScoreInputs:
                 raise RuntimeError("B15's displacement table is per layer: use AttnContext.for_layer to choose the layer")
             out.disp_kind, out.disp_coords = st.disp_index.kind, st.disp_index.coords
             out.disp_table, out.disp_geom = st.disp_table, st.disp.geom
+        if st.status is not None and st.status_index.any_frozen:
+            if st.status_table is None:
+                raise RuntimeError("B16's status table is per layer here: use AttnContext.for_layer to choose the layer")
+            out.status_key, out.status_live, out.status_table = st.status_index.key, st.status_index.live, st.status_table
         return out
 
 
@@ -157,6 +167,11 @@ def make_score_mod(inp: ScoreInputs):
                 inp.disp_kind[b, q], inp.disp_kind[b, k], ck[0] - cq[0], ck[1] - cq[1], ck[2] - cq[2], ck[3] - cq[3], inp.disp_geom
             )
             s = s + inp.disp_table[h, e]
+        if inp.status_table is not None:
+            # B16: a live query's key on a frozen board - the head's entry for that board's
+            # status (its last, zero entry for any other key); nothing on a frozen query row.
+            status = inp.status_table[h, inp.status_key[b, k]]
+            s = s + torch.where(inp.status_live[b, q], status, torch.zeros_like(status))
         if inp.typed is not None:
             s = s + (inp.typed[b, q, k] * inp.typed_table[h]).sum()
         if inp.pair_table is not None:

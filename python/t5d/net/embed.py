@@ -19,11 +19,13 @@ Register tokens get a register-type embedding (per-board slot 0..R-1, or global 
 has-moved. Global registers hold no board, so they get no board flags and no Delta-t.
 Padding tokens embed to zero (they are masked out of attention as keys).
 
-Under the block-causal scope with ``frozen_features="intrinsic"`` (stage N3, an open
-committed-class point - ``NetConfig.frozen_features``), a superseded board's tokens get
-neither of the two flags that change after the board is frozen - Delta-t-to-present and
-the active/inactive timeline flag - so that a frozen board's input depends on the board
-alone; head boards keep both. The model passes ``frozen_intrinsic`` for that scope only.
+Under the block-causal scope with ``frozen_features="intrinsic"`` (stage N3; ruled by M20 -
+``NetConfig.frozen_features``), a superseded board's tokens get neither of the two flags that
+change after the board is frozen - Delta-t-to-present and the active/inactive timeline flag -
+so that a frozen board's input depends on the board alone; head boards keep both ("Live tokens
+keep A3's features as inputs", section 4.1). The frozen boards' current values reach the live
+tokens that read them as B16's score-time key biases instead (``status.py``). The model passes
+``frozen_intrinsic`` for that scope only.
 
 **The acting player (stage N5, register D8: "a global acting-player input").** One learned
 embedding per colour - whose action this is, which differs from the present's colour once
