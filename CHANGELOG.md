@@ -10,6 +10,81 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-17 - Build log: the CHECKPOINT 6-7 rulings, the plan by lane, the register brought up to date
+
+- `docs/BUILD_LOG.md`, "Where things stand": a section "CHECKPOINTS 6 and 7 - ruled
+  upstream (design documents f07568c)" - what the rulings decide, by register ID
+  with the register's status words; how each question of 2026-10-04's "Waiting on
+  the user" is answered (Q-A -> H47, Q-B -> H48, the GPU question -> M19, issue
+  121 -> M20 except D8's readout form, A5 -> behind its flag, D8's whole-turn token ->
+  the flat form (D2), the training rows -> M21 and I12-I20); what changes for the
+  build. Then "Current state (2026-10-17)": what is on main; where each lane stands,
+  by commit, as of 16:54 (gate: H47 with its review's fixes, 7530e36, issues 122-124
+  put to the user, edit 98 pending the ruling on 122, the gate with the engine
+  configured in progress; engine: M22 measured, 2864be0, issue 142 put to the user;
+  net: F5 and F6 built, f830f31, issue 204 put to the user - none merged); how to
+  recreate a lane's worktree, and how the lanes share the one machine; the plan -
+  three lanes in worktrees (the main loop's plan under M23's rule), the number blocks
+  (spec issues: gate 122-139, engine 140-199, net 200-299, main loop 300 and up;
+  proposed edits: gate 98-109, engine 110-149, net 150-199, main loop 200 and up),
+  step 1 by lane in order (the gate lane's two steps named "gate step 1/2", not G1/G2,
+  which are register IDs; gate step 2 done only when nightly is green with the engine
+  configured; C15's STE fix before G2's quantiser and G8's hook; M21 building on the
+  losses and smoke test that exist), the readings and stop conditions the lanes work
+  under, step 2 by lane (the release tier with the engine configured as the
+  sign-off's gate evidence, H23; §15.2 re-run on the v1 network), what is parked and
+  why; the work remaining to §15.5, the lanes in parallel; what waits on the user
+  (nothing that blocks: the standing items, and the lanes' issues put to the user as
+  each lane merges). "Recovery": the comparison with the last green CI runs, made after
+  the user's `gh auth login` - the same results; the engine job's one failure on
+  3b33942 (g++-13) is an intermittent five-thread Guard test, queued for the engine
+  lane. The old state stays as history under "State on 2026-10-04 (before
+  the loss)", its held, running, remaining and waiting lists superseded; the recovery
+  notes point at the plan.
+- "Register status": rows added for A6-A8, B15-B17, D9, G8, G9, H49, H50, I12-I20,
+  M19-M21 (M21 built in part: the losses of today's heads and a three-step smoke test,
+  N1+N2 and N5), M23 and M24 (F5, F6, H47, H48 and M22 arrive with their lanes'
+  commits, as a note under the heading says); rows split or corrected where the
+  status or what is built changed - H1, H6, H10, H13/H14, H17, H19, H22, H23,
+  H24/H26/H28, H36, H41, H43, H44, A1-A3, A5, B1/B2/B4/B8, B5/B6 (B6 superseded by
+  B15), B7, B9, B10/B11/B12, B14, C2, C3, C10, C11, C14, C15 (with a known defect,
+  checked on CPU: the FP8 fake-quantiser's backward flushes or distorts gradients),
+  C17/C19/C20, D1-D4, D7, D8, E1-E5, E7-E9, F1/F2, G2, I1-I8 (I3 built in part: match
+  play's noise-off, final-rule configuration), I10, M9, M13 - each saying what is
+  built today: nothing of E10 on main, the old network defaults still in the code,
+  the ABI rounds still to come. H46's row moved into the H table, as the register
+  moved it.
+- "Spec issues": 79 marked settled upstream at CHECKPOINT 6/7 - 3, 6, 9, 11, 16, 17,
+  19, 23, 24, 26, 28, 30-32, 34, 35, 37-39, 42, 44-47, 49, 51-53, 55, 56, 58, 59,
+  62, 64, 67, 68, 71, 72, 74-79, 81-85, 87-93, 95-108, 110, 111, 113, 114, 116-120 -
+  and 7 in part (2, 33, 36, 54, 109, 112, 121), each with the register row or section
+  that settles it; 20 settled at CHECKPOINT 2 (M13), 63 superseded by M16's formula
+  (CHECKPOINT 4), 70 moot since v3 retired the estimate channel. New, the main loop's:
+  300 (early adjudication and MLH steering's "settled" outcome unspecified), 301 (the
+  tree form under MCGS - the engine refuses the combination as a parameter check,
+  parked; no document refuses it), 302 (A6's count in the evaluation identity), 303
+  (A7's frozen K/V per perspective under the cached configuration), 304 (§15.2's A7
+  row against the acting-colour input), 305 (one turn unit; E7's allocator counts
+  board-moves), 306 (the root-scan reserve with Guard offline). "Proposed spec
+  edits": 72 marked
+  applied upstream - 1-8, 11-16, 19, 20, 22-30, 32, 33, 35, 38-41, 43-47, 49, 50, 52,
+  54, 55, 58-68, 70, 73, 74, 76, 77, 79, 81-84, 87-92, 94, 95, 97 - and 14 in part,
+  with what is still needed (9, 21, 31, 34, 48, 53, 56, 69, 71, 72, 78, 80, 93, 96);
+  51, 57, 85 and 86 withdrawn, superseded or moot; 17, 18, 36, 37 and 75 stand as
+  written. New, the main loop's: 200-204 (for issues 302-306), 205 (§12.3's
+  parenthetical and §11.2's status note after 6b″), 206 (the register's status
+  vocabulary). The number blocks are stated at the top of both lists; nothing is
+  renumbered or deleted.
+- "Parked, and why": the plan's parked items (I10's calibration monitoring, C3's
+  conditioning-offset training hook, 6p's other arms, MLH steering - with what it
+  waits on - and early adjudication, issue 300) and §14.4's new held-open and refused
+  entries. The brief: M23's rule beside "never force-push". The session log.
+- Spec: register parts A-M as changed at CHECKPOINTS 6-7; no spec text edited here.
+  Proposed, the main loop's: edits 200-204 for issues 302-306 (§2.2, §7.1, §8.3,
+  §8.5, §8.6, §8.7, §10.3, §12.4, §12.8, §15.2's A7 row, §15.3's cached rows;
+  registers C11, C14, D3, D4, E7, H18, I13, I19), 205 (§12.3 and §11.2's status note,
+  after 6b″) and 206 (the register's status vocabulary).
+
 ### 2026-10-17 - Design documents: the CHECKPOINT 6 and 7 rulings, from upstream
 
 - `docs/design/5d-chess-decisions.md`, `docs/design/5d-chess-transformer-design.md`,
