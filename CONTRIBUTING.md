@@ -187,8 +187,13 @@ now true (first section above), then run:
 ```
 python oracles/harness.py verify      # pins, corpus, divergences, boundary, provenance, golden files
 python oracles/harness.py selftest    # the harness's own tests
+python engine/build.py                # the engine: the gate runs its adapter, build/engine/t5d-gate
 python oracles/harness.py gate --tier commit
 ```
+
+The gate compares whatever build of the engine it finds at `build/engine/t5d-gate`,
+so build it after any change to the engine; a gate run's report names the file it
+ran and its SHA-256.
 
 `python oracles/harness.py doctor` shows which build tools are present;
 `build --bootstrap` fetches the pinned ones into `oracles/.cache/` without touching

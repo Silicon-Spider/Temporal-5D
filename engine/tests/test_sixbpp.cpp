@@ -4,23 +4,37 @@
 // withholds every verdict; the option lists name every option; and 6b's
 // roots label each missing next action truthfully - the record ends, or goes
 // on with an action the engine cannot read or play - from records written
-// here (the engine's tests read no corpus).
+// here (the engine's tests read no corpus). 6b's and 6b''s own tools
+// (t5d-scan6b, t5d-scan6bp: the build passes their paths) are run here too,
+// for the roots they read.
 
+#include <cctype>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
+#if !defined(_WIN32)
+#include <sys/wait.h>
+#endif
+
 #include "sixb_roots.hpp"
 #include "sixbpp.hpp"
+#include "t5d/fingerprint.hpp"
 #include "t5d/rules.hpp"
 #include "test_framework.hpp"
 #include "tool_support.hpp"
 
 #ifndef T5D_TEST_SCRATCH
 #error "T5D_TEST_SCRATCH: a directory the tests may write"
+#endif
+#if !defined(T5D_SCAN6B_EXE) || !defined(T5D_SCAN6BP_EXE)
+#error "T5D_SCAN6B_EXE, T5D_SCAN6BP_EXE: the paths of 6b's and 6b''s tools"
 #endif
 
 namespace pp = t5d::tools::sixbpp;
@@ -59,6 +73,55 @@ void write(const std::string& path, const std::string& bytes) {
 }
 
 bool contains(const std::string& text, const std::string& part) { return text.find(part) != std::string::npos; }
+
+std::string read_all(const std::filesystem::path& p) {
+  std::ifstream in(p, std::ios::binary);
+  return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+}
+
+std::string quoted(const std::string& s) { return "\"" + s + "\""; }
+
+// Runs `exe` with `args`, standard output and error to files; the exit status.
+int run_tool(const std::string& exe, const std::vector<std::string>& args, const std::filesystem::path& out,
+             const std::filesystem::path& err) {
+  std::string command = quoted(std::filesystem::path(exe).make_preferred().string());
+  for (const std::string& a : args) command += " " + quoted(a);
+  command += " > " + quoted(out.string()) + " 2> " + quoted(err.string());
+#if defined(_WIN32)
+  command = "\"" + command + "\"";
+#endif
+  std::fflush(nullptr);
+  const int status = std::system(command.c_str());
+#if !defined(_WIN32)
+  return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+#else
+  return status;
+#endif
+}
+
+// The positions a tool's --per-position JSON lists, in order, as
+// "index:fingerprint" - each fingerprint with the index its object gives
+// before it.
+std::string listed_positions(const std::string& json) {
+  const std::string index_key = "\"index\":";
+  const std::string fingerprint_key = "\"fingerprint\":\"";
+  const std::size_t start = json.find("\"positions\":[");
+  if (start == std::string::npos) return "(no positions listed)";
+  std::string out;
+  for (std::size_t at = start;;) {
+    const std::size_t f = json.find(fingerprint_key, at);
+    if (f == std::string::npos) break;
+    const std::size_t i = json.rfind(index_key, f);
+    if (i == std::string::npos || i < start) return out + " (a fingerprint without its index)";
+    std::size_t end = i + index_key.size();
+    while (end < json.size() && std::isdigit(static_cast<unsigned char>(json[end])) != 0) ++end;
+    const std::size_t value = f + fingerprint_key.size();
+    out += (out.empty() ? "" : ",") + json.substr(i + index_key.size(), end - i - index_key.size()) + ":" +
+           json.substr(value, 32);
+    at = value;
+  }
+  return out;
+}
 
 }  // namespace
 
@@ -279,4 +342,83 @@ TEST(sixb_roots_label_their_next_actions_truthfully) {
   CHECK(!il.roots[1].next_action.has_value());
   CHECK(contains(il.roots[1].no_next, "cannot be"));
   CHECK(!contains(il.roots[1].no_next, "ends here"));
+}
+
+TEST(sixb_roots_read_records_as_6b_read_them) {
+  // 6b's roots are rebuilt with the reading 6b, 6b', 6b'' and Hunt's ground
+  // truth were measured under: the reader's defaults but for the capture mark,
+  // which must capture where it is written - the reading before H51 made the
+  // mark lenient (tools/tool_support.hpp). A record with an 'x' on a jump that
+  // takes nothing stops there, as it did when the truth was recorded, where
+  // the reader's default (H51) reads on - the truth's readers would refuse it.
+  const t5d::PgnOptions six = t5d::tools::sixb_pgn_options();
+  const t5d::PgnOptions defaults;
+  CHECK(defaults.capture_marks == t5d::CaptureMarks::Lenient);
+  CHECK(six.capture_marks == t5d::CaptureMarks::MarkedMustCapture);
+  CHECK(six.castling_shortcuts == defaults.castling_shortcuts);
+  CHECK_EQ(six.verify_annotations, defaults.verify_annotations);
+  CHECK_EQ(six.annotation_mismatch_is_error, defaults.annotation_mismatch_is_error);
+  CHECK_EQ(six.infer_omitted_boards, defaults.infer_omitted_boards);
+  CHECK_EQ(six.check_turn_numbers, defaults.check_turn_numbers);
+  CHECK_EQ(six.turn_number_mismatch_is_error, defaults.turn_number_mismatch_is_error);
+
+  const std::string dir = (std::filesystem::path(T5D_TEST_SCRATCH) / "sixb-roots-h51").string();
+  std::filesystem::create_directories(dir);
+  const std::string text = "1. Nf3 / Nf6\n2. (0T2)Nf3>>x(0T1)f5~ / (1T1)e6\n";
+  write(dir + "/superfluous.5dpgn", text);
+  const t5d::tools::SixbRoots roots =
+      t5d::tools::sixb_roots({{"superfluous.5dpgn", dir + "/superfluous.5dpgn"}}, t5d::RuleOptions{}, 1, 0);
+  REQUIRE_EQ(roots.roots.size(), std::size_t{3});  // positions 0, 1 and 2: action 3 is not read
+  CHECK(!roots.roots[2].next_action.has_value());
+  CHECK(contains(roots.roots[2].no_next, "captures nothing"));
+  REQUIRE_EQ(roots.notes.size(), std::size_t{1});
+  CHECK(contains(roots.notes[0], "2 actions read, unreadable at action 3"));
+  // The reader's default reads the record to its end.
+  t5d::PgnReplay lenient(t5d::read_pgn(text));
+  t5d::tools::parse_mode(lenient);
+  lenient.play_all();
+  CHECK_EQ(lenient.actions_played(), std::size_t{4});
+  CHECK_EQ(lenient.warnings().size(), std::size_t{1});
+}
+
+TEST(sixb_tools_read_records_as_6b_read_them) {
+  // t5d-scan6b and t5d-scan6bp read their records in loops of their own, not
+  // through sixb_roots: each is run here on a record with an 'x' on a jump
+  // that takes nothing, and must list the roots sixb_roots builds - index and
+  // fingerprint, in order - and stop where it stops. A tool that read with the
+  // reader's default (H51: on, with a warning) would list positions 3 and 4
+  // too; on the corpus, 6b's or 6b''s roots would be renumbered from 169
+  // (build-log spec issue 129), which no other check compares.
+  namespace fs = std::filesystem;
+  const fs::path dir = fs::path(T5D_TEST_SCRATCH) / "sixb-tools-h51";
+  fs::create_directories(dir);
+  const std::string record = (dir / "superfluous.5dpgn").string();
+  write(record, "1. Nf3 / Nf6\n2. (0T2)Nf3>>x(0T1)f5~ / (1T1)e6\n");
+  const t5d::tools::SixbRoots six = t5d::tools::sixb_roots({{record, record}}, t5d::RuleOptions{}, 1, 0);
+  REQUIRE_EQ(six.roots.size(), std::size_t{3});
+  std::string roots;
+  for (const t5d::tools::SixbRoot& r : six.roots) {
+    roots += (roots.empty() ? "" : ",") + std::to_string(r.index) + ":" +
+             t5d::fingerprint(r.state.multiverse()).fingerprint;
+  }
+
+  // 6b: the roots only (no leaves), a one-node curve, no wall-clock scans, no
+  // stand-pat check - its positions, not its figures.
+  const fs::path json_6b = dir / "6b.json";
+  REQUIRE_EQ(run_tool(T5D_SCAN6B_EXE,
+                      {"--leaves", "0", "--max-nodes", "1", "--budgets", "1", "--nps", "1000", "--no-root-wall",
+                       "--no-spv", "--per-position", "--json", json_6b.string(), record},
+                      dir / "6b-stdout.txt", dir / "6b-stderr.txt"),
+             0);
+  const std::string out_6b = read_all(json_6b);
+  CHECK_EQ(listed_positions(out_6b), roots);
+  CHECK(contains(out_6b, "2 actions read, unreadable at action 3"));
+
+  // 6b': every position outside its board window - listed, not measured.
+  const fs::path json_6bp = dir / "6bp.json";
+  REQUIRE_EQ(run_tool(T5D_SCAN6BP_EXE, {"--min-boards", "1000", "--per-position", "--json", json_6bp.string(), record},
+                      dir / "6bp-stdout.txt", dir / "6bp-stderr.txt"),
+             0);
+  CHECK_EQ(listed_positions(read_all(json_6bp)), roots);
+  CHECK(contains(read_all(dir / "6bp-stdout.txt"), "2 actions read, unreadable at action 3"));
 }

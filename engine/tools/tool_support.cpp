@@ -17,6 +17,12 @@ namespace t5d::tools {
 
 void parse_mode(PgnReplay& replay) { replay.set_check_ruling(CheckRuling::none()); }
 
+PgnOptions sixb_pgn_options() {
+  PgnOptions o;
+  o.capture_marks = CaptureMarks::MarkedMustCapture;  // the reading before H51
+  return o;
+}
+
 std::string read_file(const std::string& path) {
   std::FILE* f = std::fopen(path.c_str(), "rb");
   if (f == nullptr) throw std::runtime_error("cannot open " + path);

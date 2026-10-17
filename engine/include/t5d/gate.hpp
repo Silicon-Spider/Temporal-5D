@@ -147,8 +147,12 @@ std::string position_event(const GameState& state, std::size_t index, const Verd
 bool set_rule_option(RuleOptions& rules, std::string_view assignment, std::string* error);
 
 /// The same for the reader's PgnOptions (verify_annotations,
-/// require_capture_marks, infer_omitted_boards, check_turn_numbers,
-/// castling_shortcuts=e_file_only|any_king|e_file_one_king).
+/// annotation_mismatch_is_error, turn_number_mismatch_is_error,
+/// infer_omitted_boards, check_turn_numbers,
+/// castling_shortcuts=e_file_only|any_king|e_file_one_king,
+/// capture_marks=lenient|marked_must_capture|strict - and
+/// require_capture_marks=true|false, its spelling before H51: strict, and the
+/// reading that was then the default, marked_must_capture).
 bool set_pgn_option(PgnOptions& options, std::string_view assignment, std::string* error);
 
 /// `text` as a JSON string literal, quotes included. Control characters are

@@ -61,6 +61,24 @@ class TierConfigTests(unittest.TestCase):
         with self.assertRaises(HarnessError):
             self.load({'mode = "full"\n': 'mode = "rules-ish"\n'})
 
+    def test_the_engines_time_limit_is_its_own_or_the_tiers_where_that_is_longer(self):
+        # [engine] timeout_s: how slow the engine may be on a record, in every tier. Never less than the tier's own
+        # timeout_s - no tier gives the engine less time than it did - and it changes no budget of an oracle's.
+        line = '\ntimeout_s = 300\n# "full"'
+        cfg = self.load({line: '\ntimeout_s = 200\n# "full"'})
+        self.assertEqual(cfg.engine_timeout_s, 200.0)
+        self.assertEqual({name: cfg.engine_timeout(tier) for name, tier in cfg.tiers.items()},
+                         {"commit": 200.0, "nightly": 300.0, "release": 600.0})
+        self.assertEqual({name: tier.timeout_s for name, tier in cfg.tiers.items()},
+                         {name: tier.timeout_s for name, tier in config.load().tiers.items()})
+        # Left out: the tier's own.
+        cfg = self.load({line: '\n# "full"'})
+        self.assertIsNone(cfg.engine_timeout_s)
+        self.assertEqual(cfg.engine_timeout(cfg.tier("commit")), cfg.tier("commit").timeout_s)
+        for value in ("0", "-5", '"5m"', "true"):
+            with self.assertRaises(HarnessError, msg=value):
+                self.load({line: f'\ntimeout_s = {value}\n# "full"'})
+
     def test_only_a_tier_that_requires_an_engine_and_runs_everything_can_enable_the_proof_channel(self):
         tiers = config.load().tiers
         self.assertEqual([name for name, tier in tiers.items() if tier.can_enable_proof_channel], ["release"])

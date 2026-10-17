@@ -80,9 +80,16 @@ rules reference, `docs/rules/README.md`, which the code cites throughout.
 | **E9:** Hunt's ground truth; experiment 6b″'s tool | `tools/t5d_hunt_truth.cpp`, `testdata/hunt-truth/`, `tools/t5d_scan6bpp.cpp` | §15.6 (CHECKPOINT 4), M17 |
 | **M22:** the turn width of an action - mandatory boards at its start, its moves, the optional ones, rewinds - and t5d-measure's `--turns` / `--turn-summary` | `tools/turn_width.hpp`, `tools/t5d_measure.cpp`, `testdata/turn-width/` | §8.2, §15.1; M22 |
 
-Next: the gate run with the engine configured in full mode - Q4's ruling (R8) is
-the default, and with it every one of the triage's 115 Q4 findings agrees with the
-oracles; the proof channel's sign-off (H41: the in-tree solver's propagation stays off
+The gate runs the engine: `oracles/gate.toml` configures `t5d-gate` in full mode
+(2026-10-17). Under Q4's ruling (R8), the default, every one of the 2026-10-02
+triage's 115 Q4 findings agrees with the oracles, and every other disagreement with
+a recorded oracle answer is on record in `oracles/known-divergences.toml` with the
+rule that settles it - no engine defect was found. Capture marks are read leniently
+(H51, rulebook R11 - the user's ruling on build-log spec issue 125, CHECKPOINT 8): the
+reader reads cwmtt/futures action 17, an `x` written on a jump that takes nothing,
+as its squares define it, with a warning, and ftxi's refusal of it is on record
+citing R11. Next: the proof channel's
+sign-off (H41: the in-tree solver's propagation stays off
 until the gate passes, the search's soundness fixes land with tests, and the channel
 is signed off, its proofs cross-checked against df-pn and oracle mate verdicts);
 the network's stage N5 (the acting-player input and the submit logit the search already
@@ -426,7 +433,7 @@ What is read:
 | Turns | `N.`, `Nw.`, `/`, `Nb.`; `1b.` first in black-first records | Colours alternate; with `check_turn_numbers` (default) the numbers count the turns. An action left empty at the end (`23. ... / 1-0`) was never played and is dropped; an empty one elsewhere is unreadable |
 | Board coordinates | `(<a>T<b>)` and `(L<a> T<b>)` | Labels `0`, `-0`, `+0`, `+n`, `-n`, unsigned `n`; `-0`/`+0` only in even games, `0` only in odd ones |
 | Physical moves | SAN: `[piece][file][rank][x]<square>` - `e4`, `exd5`, `Nbd7`, `R1a3`, `Qh4e1`, `Qg7g6` | Piece letters upper case for both colours: `P W K C Q Y`/`RQ` `S`/`PR` `N R B U D`; no letter: a pawn. The board prefix may be left out only while there is one timeline ("Moves") |
-| Jumps | `(<a>T<b>)<piece><square>` `>` or `>>`, `x`, `(<a>T<b>)<square>` | The piece's square in full ("Omission"); the pawn letter may be left out (`(-1T19)c6>(0T19)c6`) |
+| Jumps | `(<a>T<b>)<piece><square>` `>` or `>>`, `x`, `(<a>T<b>)<square>` | The piece's square in full ("Omission"); the pawn letter may be left out (`(-1T19)c6>(0T19)c6`). The capture mark `x`, here and in SAN, is read as `capture_marks` says: by default (H51) it never changes the move read |
 | Promotions | `=X` before the marks | Required when the ruleset offers more than one piece |
 | Castling | `O-O`, `O-O-O`; or the king's move, `Ke1g1`, `Kg1` | See `castling_shortcuts` |
 | Marks | `+`, `#`, `*` (softmate), then `~`, then `!`/`?` (the examples' assessments, up to two) | `+`, `#`, `*` are read and never checked: a writer's mark is never a check verdict (the engine's is R1's, `t5d/check.hpp`) |
@@ -446,7 +453,7 @@ open, ambiguous or contradicts itself:
 | Option | Default | Alternative | Grounds |
 |---|---|---|---|
 | `castling_shortcuts` | `EFileOnly`: `O-O`/`O-O-O` are `Ke1g1`/`Ke8g8` and `Ke1c1`/`Ke8c8` - the king's move from e1/e8 only - usable only when every king of the starting position stands on e1 (White) or e8 (Black) - "more than one king" read per board, so Two Timelines and Turn Zero use them, Half Reflected and Reversed Royalty do not; otherwise unreadable | `AnyKing`: castling towards file h / file a from wherever the king stands - the specification's own 2020 example game castles `O-O` from d1. `EFileOneKing`: the specification's letter, "more than one king for either player" read over the whole starting position - as `EFileOnly`, but not in Two Timelines or Turn Zero (two kings a side), where the king's move is written | S6 (high), Q26; notation "Castling" |
-| `require_capture_marks` | false: a missing `x` is read (the squares determine the move, so it never makes one ambiguous); a written `x` must capture | true: SAN's letter - a capture without `x` is unreadable | "Moves", "Jumps" |
+| `capture_marks` | `Lenient` (register H51, rulebook R11 - a project decision, CHECKPOINT 8): the mark never changes a move's meaning. A move is read as its squares and boards define it, with or without `x`, and the mark selects no move (a move that fits two pseudo-legal moves is ambiguous whatever its mark says - which only `infer_omitted_boards` can make happen). A mark that disagrees - `x` on a move that takes nothing, or a capture written without `x` - is a warning (`PgnReplay::warnings()`; `t5d-gate` prints it on stderr) and the move is played: the specification says when to write `x`, not how to read a superfluous or missing one, and the mark carries nothing the squares do not | `MarkedMustCapture` (`marked_must_capture`): the reading before H51, the default until CHECKPOINT 8 - a written `x` must capture (unreadable otherwise), a capture written without one is read with no warning; 6b's tools read with it (`tools/tool_support.hpp`, `sixb_pgn_options`: "Hunt's ground truth", below). `Strict` (`strict`): `x` if and only if a piece is taken, either mismatch unreadable - a diagnostic. `t5d-gate --pgn capture_marks=...`; the option's spelling before H51, `require_capture_marks=true`/`false`, still means what it meant: `strict`/`marked_must_capture` | "Moves" (SAN), "Jumps" ("`x` if a piece is being taken"); H51, R11 |
 | `verify_annotations` | true: a written `~`, `(>Lx)`, `(~Tx)` is checked against the state; one left out is never an error | false: ignored | T15 ("should match"), Q26 |
 | `annotation_mismatch_is_error` | false: a token that disagrees is a warning (`PgnReplay::warnings()`; `t5d-gate` prints it on stderr) and the move is played - the notation calls these tokens "purely for better human comprehension", so a wrong one is the writer's slip, and refusing would hide the record's later positions from the gate | true: the move is unreadable (`t5d-gate --strict-annotations`) | T15, Q26 |
 | `infer_omitted_boards` | false: a move without its board while there are several timelines is unreadable | true: matched on every playable board of the mover's, unreadable if ambiguous | "Moves" ("must be preceded") |
@@ -479,8 +486,10 @@ after the move (T4, T12).
   moves (the reader never guesses: "Omission" lets a writer leave out a pinned
   piece, but legality is judged per action, so a pin is no per-move notion - see
   "Choices the spec leaves open"); a promotion left unwritten when
-  several are offered; a `>`/`>>` or `x` that disagrees with the move (J3: `>>`
-  must branch, `>` must not); an annotation that disagrees; an action by the
+  several are offered; a `>`/`>>` that disagrees with the move (J3: `>>`
+  must branch, `>` must not); an annotation that disagrees, or an `x` that does,
+  only under the non-default readings (`annotation_mismatch_is_error`, `capture_marks`;
+  by default each is a warning); an action by the
   player who is not to move - the first one included, refused by the replay
   after position 0, never by the set-up.
 - *IllegalMove* - no pseudo-legal move fits: the board named is no playable board
@@ -556,7 +565,13 @@ It reads one 5dpgn record on standard input (UTF-8; read in binary, CR-LF or LF)
 writes one JSON object per line, flushed, with no other output on standard output.
 `--cap N` (the gate appends it) caps the count of legal actions (1000 when not given,
 the manual's cap). Human-readable notes - why a record was rejected, with the token,
-line and column, or the capture that makes an action illegal - go to standard error.
+line and column, or the capture that makes an action illegal - go to standard error,
+and so do the reader's warnings (`t5d-gate: warning: ...`, each saying where it is): a
+turn number that does not count the turns (its line and column), an annotation that
+disagrees with the state or a capture mark that disagrees with its move (H51) - each
+of these two naming the action and the move as written, with its line and column.
+They are never part of the protocol: the events of a record read with a warning are
+those of the same record without the slip.
 
 **Full mode** (stage E4): for every position K (0 = the set-up, K = after K submitted
 actions),
@@ -613,9 +628,15 @@ niceAndrey 14.3 s for 122 positions (slowest position 0.38 s), 100_timelines 4.9
 under 2 s. The ten records that made moves after the present had shifted, and
 stopped there under the Guide-literal reading, now read on: nine to their end, and
 cwmtt's futures to action 17, whose `x` marks a capture the move does not make
-(`unreadable`). The output is byte for byte what the stage-E4 engine printed under
+(`unreadable` then; read since H51 - CHECKPOINT 8 - to its end, 19 actions, with a
+warning). The output is byte for byte what the stage-E4 engine printed under
 `--moves-after-shift` on all 41 records, and `--no-moves-after-shift` reproduces its
-default output (8.3 s in all at stage E4) on all 41.
+default output (8.3 s in all at stage E4) on all 41. (Those figures are stage E7's,
+on the machine lost in October 2026, before cwmtt/many2 was read converted -
+CHECKPOINT 3 - to its 63 positions. With the engine configured in the gate,
+2026-10-17, many2 is its slowest record: 25-34 s on the development machine shared
+with other work, and 44 s on a CI runner - observations, not measurements; the gate
+gives the engine `[engine] timeout_s`, 300 s, per record.)
 
 **Diagnostics** - for investigating a record by hand, never for the gate's
 configuration (`gate.toml`): `--no-moves-after-shift` (rules Q4's Guide-literal
@@ -624,7 +645,7 @@ moves_after_shift=false`; `--moves-after-shift`, the default since R8, is accept
 and ignored), `--rule NAME=VALUE` (any `RuleOptions` field: `true`/`false`, or an enumerator such as
 `activation=consecutive`, `mandatory=all_active`, `promotions=QRBN`),
 `--lenient-annotations` (`~`, `(>Lx)`, `(~Tx)` not checked), `--strict-annotations` (a disagreeing one is unreadable), `--pgn NAME=VALUE` (any
-`PgnOptions` field, `castling_shortcuts=any_king` ...), `--actions K` (position K's
+`PgnOptions` field, `castling_shortcuts=any_king`, `capture_marks=strict` ...), `--actions K` (position K's
 legal actions on standard error: their count, then one line per action, the
 canonical action texts sorted - a second order of two branching moves is a line of
 its own), `--detector naive|hypercuboid|portfolio` (which counts, the portfolio by
@@ -654,7 +675,7 @@ Then exactly one end event; every end event carries `actions_accepted`:
 | Status | When | Fields |
 |---|---|---|
 | `ok` | every action read was replayed | `"actions_accepted":N` |
-| `rejected` | `"reason":"illegal_move"`, `"cannot_submit"` or `"unreadable"` (text, an ambiguous move, a disagreeing annotation, an action by the player not to move; also a set-up that cannot be built - see below) | `"actions_accepted":N,"reason":...` |
+| `rejected` | `"reason":"illegal_move"`, `"cannot_submit"` or `"unreadable"` (text, an ambiguous move, an action by the player not to move - and, only under a diagnostic reading, a disagreeing annotation or capture mark; also a set-up that cannot be built - see below) | `"actions_accepted":N,"reason":...` |
 | `unsupported` | before position 0: a game the engine does not play - mode, variant, custom boards over 8x8, a promotion set it does not implement - whatever else is wrong with the record | `"actions_accepted":0,"reason":"<what>"` |
 | `error` | an internal failure (none is known), or - full mode - the two detectors disagreeing, or a count stopped by the memory ceiling (no verdict, H37) | `"actions_accepted":N,"reason":"<what>"` |
 
@@ -1799,7 +1820,10 @@ t5d-scan6b [--every K] [--leaves N] [--leaf-depth D] [--max-nodes N] [--budgets 
 ```
 
 **Positions.**
-- Roots are the turn starts of the records given, replayed as parse mode does.
+- Roots are the turn starts of the records given, replayed as parse mode does,
+  and read as 6b read them: the reader's defaults but for the capture mark, which
+  must capture where it is written - the reading before H51 (`tools/tool_support.hpp`,
+  `sixb_pgn_options`; see "Hunt's ground truth", *After H51*).
 - SYNTHETIC positions are labelled and never in a verdict.
 - Leaves are a few half-turns of random legal play below each root.
 - A position whose side to move could capture a royal (its last action broke C4), or
@@ -3128,6 +3152,35 @@ Found by both classes 88, by the default class alone 32, by the literal question
 at 677; the default class proved 120, exhausted 450, ran out at 235. A "none" is "no mate
 found within the budget", never "no mate exists".
 
+**After H51** (CHECKPOINT 8, 2026-10-17: capture marks read leniently, rulebook R11) the
+truth was not re-recorded and 6b″ was not re-run: no root is read differently. The
+reader's default now reads a move as its squares define it, whether or not `x` is
+written; read so, cwmtt/futures - the 8th record of the list - goes on past its action
+17 (an `x` on a jump that takes nothing), and its positions 17 to 19, which 6b's
+construction takes today from ftxi/futures (the same positions, later in the list), would
+be its: roots renumbered from 169, and root 168's next action (that jump) readable, so
+6b″ would count it for Guard. So the tools that rebuild 6b's roots - `t5d-scan6b`,
+`t5d-scan6bp` and `tools/sixb_roots.hpp` (`t5d-scan6bpp`, `t5d-hunt-truth`) - read the
+records with the reading 6b, 6b′, 6b″ and the truth were measured under: the reader's
+defaults of their day, which differ from today's only there - a written `x` must
+capture (`tools/tool_support.hpp`, `sixb_pgn_options`: `CaptureMarks::MarkedMustCapture`;
+the engine's tests pin it: `sixb_roots_read_records_as_6b_read_them` the option and
+`sixb_roots`, and `sixb_tools_read_records_as_6b_read_them` the two tools that read in
+loops of their own - it runs `t5d-scan6b` and `t5d-scan6bp` on a record with an `x` on
+a jump that takes nothing, and each must list `sixb_roots`' roots and stop where it
+stops). Checked on 2026-10-17 against the parent commit's build: `t5d-scan6bpp --truth
+engine/testdata/hunt-truth --record-list build/corpus.txt` accepts the truth - all 825
+roots by record, index and fingerprint, the records' content ids in order - and
+`t5d-scan6b` and `t5d-scan6bp` list the same 825 positions (record, index, fingerprint,
+boards) as that build. The reader (`pgn.hpp`, `pgn.cpp`), the tool support and
+`sixb_roots` are among `T5D_TRUTH_SOURCES`, so the **code signature changed** with H51.
+The truth's provenance records none (its `code` is "unrecorded: ..."), so the 6b″ tool
+prints the truth's code signature as unrecorded beside this build's, as before; a truth
+recorded with a signature other than the build's would be reported "recorded by OTHER
+CODE ... - its verdicts stand as recorded; re-record it if a change could alter one". No
+change here could: the rules, the prover, the certificates and the recorder are as they
+were, and the roots are read as they were.
+
 ### Experiment 6b″ (M17): `t5d-scan6bpp`
 
 ```
@@ -3476,7 +3529,7 @@ Each is recorded where it is made (the header comments) and listed here:
 - **The 5dpgn reader's readings** (stage E2b): `O-O` outside e1/e8 games (S6 vs the
   specification's own example, Q26), and in starts with more than one king a side
   (per board by default; the specification's letter, over the whole starting
-  position, is `EFileOneKing`), a missing `x`, checking `~`/`(>Lx)`/`(~Tx)` (T15,
+  position, is `EFileOneKing`), a missing or superfluous `x` (H51, R11 - ruled), checking `~`/`(>Lx)`/`(~Tx)` (T15,
   Q26), moves without their board, turn numbers - each a `PgnOptions` field, listed
   under "Stage E2b". Also read, with no option: `Variant` for a missing `Board`,
   header names in any case, a line break between a header's name and value

@@ -353,16 +353,110 @@ TEST(pgn_resolve_no_matching_move_is_illegal) {
   CHECK(fails_with("1. e4 / Nf3", RecordFault::IllegalMove, "no knight of Black's"));
 }
 
-TEST(pgn_resolve_capture_marks) {
-  // A missing 'x' is read (default); a written 'x' must capture.
+TEST(pgn_resolve_capture_marks_are_read_leniently_h51) {
+  // H51 (rulebook R11, a project decision): the notation says when to write
+  // 'x', not how to read a superfluous or missing one. A move is read as its
+  // squares define it, and a mark that disagrees is kept as a warning.
   CHECK(plays("1. e4 / d5 2. exd5"));
   CHECK(plays("1. e4 / d5 2. ed5"));
   CHECK(plays("1. e4 / d5 2. Pexd5"));
-  CHECK(fails_with("1. Nxf3", RecordFault::Unreadable, "captures nothing"));
+  PgnReplay marked = replay("1. e4 / d5 2. exd5");
+  marked.play_all();
+  CHECK(marked.warnings().empty());
+  // A capture written without 'x': read, with a warning.
+  PgnReplay missing = replay("1. e4 / d5 2. ed5");
+  missing.play_all();
+  CHECK(at(head(missing, 0), "d5") == Piece(PieceKind::Pawn, Colour::White));
+  REQUIRE_EQ(missing.warnings().size(), std::size_t{1});
+  CHECK(missing.warnings()[0].find("action 3 (White's, turn 2), move 1 \"ed5\"") !=
+        std::string::npos);
+  CHECK(missing.warnings()[0].find("takes a piece, written without 'x'") != std::string::npos);
+  CHECK(missing.warnings()[0].find("H51") != std::string::npos);
+  // 'x' on a physical move that takes nothing: read, with a warning.
+  PgnReplay superfluous = replay("1. Nxf3");
+  superfluous.play_all();
+  CHECK(at(head(superfluous, 0), "f3") == Piece(PieceKind::Knight, Colour::White));
+  REQUIRE_EQ(superfluous.warnings().size(), std::size_t{1});
+  CHECK(superfluous.warnings()[0].find("written as a capture ('x'), but (0T1)Ng1(0T1)f3 takes "
+                                      "no piece") != std::string::npos);
+  // En passant takes a piece: its 'x' agrees.
+  PgnReplay ep = replay("1. e4 / a6 2. e5 / d5 3. exd6");
+  ep.play_all();
+  CHECK(ep.warnings().empty());
+  PgnReplay ep_unmarked = replay("1. e4 / a6 2. e5 / d5 3. ed6");
+  ep_unmarked.play_all();
+  CHECK(at(head(ep_unmarked, 0), "d5").empty());
+  CHECK_EQ(ep_unmarked.warnings().size(), std::size_t{1});
+}
+
+TEST(pgn_resolve_capture_marks_on_jumps_h51) {
+  // The corpus's case, cwmtt/futures action 17, in the same shape: a branching
+  // jump written '>>x' onto an empty square, with '~'. Read as its squares
+  // define it - the branch made, the annotation checked - with a warning.
+  const std::string start = "1. Nf3 / Nf6\n2. (0T2)Nf3>>x(0T1)f5~";
+  PgnReplay r = replay(start + " / (1T1)e6");
+  r.play_all();
+  CHECK(r.finished());
+  CHECK_EQ(r.state().multiverse().timeline_count(), 2);
+  REQUIRE_EQ(r.warnings().size(), std::size_t{1});
+  CHECK(r.warnings()[0].find("takes no piece") != std::string::npos);
+  // The jump that does take (f7), written with and without 'x'.
+  const std::string capture = "1. Nf3 / Nf6\n2. (0T2)Nf3>>(0T1)f5~ / (1T1)e6\n3. (1T2)Nf5>>";
+  PgnReplay with = replay(capture + "x(0T2)f7");
+  with.play_all();
+  CHECK(with.warnings().empty());
+  PgnReplay without = replay(capture + "(0T2)f7");
+  without.play_all();
+  REQUIRE_EQ(without.warnings().size(), std::size_t{1});
+  CHECK(without.warnings()[0].find("written without 'x'") != std::string::npos);
+  CHECK(with.state() == without.state());
+  // A non-branching jump written '>x' onto an empty square.
+  const std::string two = "[Board \"Standard - Two Timelines\"]\n"
+                          "1. (-0T1)Nf3 (+0T1)Nf3 / (-0T1)Nf6 (+0T1)Nf6\n";
+  PgnReplay hop = replay(two + "2. (-0T2)Nf3>x(+0T2)d3");
+  hop.play_all();
+  CHECK_EQ(hop.warnings().size(), std::size_t{1});
+  PgnReplay plain = replay(two + "2. (-0T2)Nf3>(+0T2)d3");
+  plain.play_all();
+  CHECK(hop.state() == plain.state());
+}
+
+TEST(pgn_resolve_capture_marks_select_no_move_h51) {
+  // The mark never decides which move is meant. With infer_omitted_boards (a
+  // move without its board matched on every playable board of the mover's),
+  // "Rxa2" fits a capture on -0 and a quiet move on +0: ambiguous by default;
+  // under the reading before H51, a written 'x' kept only the capture.
+  const std::string two =
+      "[Board \"custom\"][4k/5/5/p4/R3K:-0:1:w][4k/5/5/5/R3K:+0:1:w]\n1. Rxa2 Ra2";
+  PgnOptions infer;
+  infer.infer_omitted_boards = true;
+  CHECK(fails_with(two, RecordFault::Unreadable, "ambiguous", infer));
+  infer.capture_marks = CaptureMarks::MarkedMustCapture;
+  CHECK(plays(two, infer));
+}
+
+TEST(pgn_resolve_capture_marks_other_readings) {
+  // CaptureMarks::MarkedMustCapture - the reading before H51, which 6b's tools
+  // keep (tools/tool_support.hpp): a written 'x' must capture; a capture
+  // written without one is read, with no warning.
+  PgnOptions marked;
+  marked.capture_marks = CaptureMarks::MarkedMustCapture;
+  CHECK(fails_with("1. Nxf3", RecordFault::Unreadable, "captures nothing", marked));
+  CHECK(fails_with("1. Nf3 / Nf6\n2. (0T2)Nf3>>x(0T1)f5~", RecordFault::Unreadable,
+                   "captures nothing", marked));
+  PgnReplay r = replay("1. e4 / d5 2. ed5", marked);
+  r.play_all();
+  CHECK(r.warnings().empty());
+  // CaptureMarks::Strict - the letter both ways (a diagnostic).
   PgnOptions strict;
-  strict.require_capture_marks = true;
+  strict.capture_marks = CaptureMarks::Strict;
   CHECK(plays("1. e4 / d5 2. exd5", strict));
   CHECK(fails_with("1. e4 / d5 2. ed5", RecordFault::Unreadable, "without 'x'", strict));
+  CHECK(fails_with("1. Nxf3", RecordFault::Unreadable, "captures nothing", strict));
+  CHECK_EQ(std::string(capture_marks_name(CaptureMarks::Lenient)), std::string("lenient"));
+  CHECK_EQ(std::string(capture_marks_name(CaptureMarks::MarkedMustCapture)),
+           std::string("marked_must_capture"));
+  CHECK_EQ(std::string(capture_marks_name(CaptureMarks::Strict)), std::string("strict"));
 }
 
 TEST(pgn_resolve_jump_markers_must_agree_with_branching_j3) {

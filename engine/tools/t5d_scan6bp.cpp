@@ -5,7 +5,9 @@
 //
 // POSITIONS - the same roots as 6b's (t5d-scan6b): the turn starts of the
 // 5dpgn records given (replayed as the gate adapter's parse mode does, under
-// the ruleset given), every K-th (--every), distinct by position. A position
+// the ruleset given, and read as 6b read them - a written 'x' must capture,
+// the reading before H51: tool_support.hpp, sixb_pgn_options), every K-th
+// (--every), distinct by position. A position
 // whose side to move could capture a royal (the record's last action broke
 // C4), or that has no legal action, is counted and not measured. (6b-prime's
 // leaves and its test (B) of the per-leaf estimate channel are gone: the
@@ -406,9 +408,12 @@ int main(int argc, char** argv) {
   for (const std::string& path : o.records) {
     try {
       const std::string text = t5d::tools::read_file(path);
-      t5d::PgnRecord record = t5d::read_pgn(text);
+      // The reading 6b's figures were measured under (a written 'x' must
+      // capture - before H51): the roots stay 6b's (tool_support.hpp).
+      const t5d::PgnOptions reading = t5d::tools::sixb_pgn_options();
+      t5d::PgnRecord record = t5d::read_pgn(text, reading);
       const bool synthetic = t5d::tools::is_synthetic(record);
-      t5d::PgnReplay replay(std::move(record), t5d::PgnOptions{}, o.rules);
+      t5d::PgnReplay replay(std::move(record), reading, o.rules);
       t5d::tools::parse_mode(replay);
       std::string end = "ok";
       for (;;) {
