@@ -11,12 +11,16 @@ Initialisation (implementation choice where the spec is silent):
   pre-norm (F5's v1) the two residual-output projections of every block (attention out,
   FFN out) are further scaled by ``1/sqrt(2L)`` (GPT-2), keeping the residual stream
   bounded over depth. Under the post-norm arm (ablation 6y: "post-norm with DeepNet
-  initialisation") DeepNet's initialisation replaces that scaling: the value,
-  attention-output and both FFN projections are drawn at gain ``beta = (8L)^(-1/4)``, the
-  query and key projections at gain 1 (Wang et al. 2022, Figure 2 - whose pseudocode
-  takes Xavier normal as its example of the base initialisation, "it can be replaced with
-  other standard initialization"; LeCun normal is this trunk's, and for the square
-  projections the two coincide).
+  initialisation") the trunk's projections are drawn by DeepNet's initialisation instead,
+  as the paper's pseudocode draws it (Wang et al. 2022, Figure 2, ``deepnorm_init``):
+  every attention and FFN projection Xavier normal, ``std = gain sqrt(2 / (fan_in +
+  fan_out))``, at gain ``beta = (8L)^(-1/4)`` on the value, attention-output and both FFN
+  projections and gain 1 on the query and key projections. The figure's caption lets
+  another standard initialisation replace Xavier; the arm keeps the pseudocode's (a
+  placeholder, spec issue 201). For the square attention projections Xavier and LeCun
+  coincide; for the FFN's ``d -> 8d`` and ``8d -> d`` matrices Xavier draws both at
+  ``sqrt(2/9)/sqrt(d)`` - about 0.47x and 1.33x LeCun's - so the FFN branch starts about
+  0.63x as large as it would on a LeCun base.
 * Linear biases ``N(0, init_bias_std)`` (the Q, K and V projections have none - F5);
   embeddings and the "not a square" vector ``N(0, init_embed_std)``; RMSNorm gains
   ``1 + N(0, init_norm_std)`` - near the identity, but not it, so that no parameter is
@@ -187,18 +191,31 @@ class T5DNet(nn.Module):
     #: and before the flag-gated modules (``_init_weights``).
     _D8_MODULES = ("embed.acting", "submit")
 
-    #: The trunk projections that DeepNet's initialisation draws at gain beta under
-    #: post-norm ("ffn", "v_proj", "out_proj" in Wang et al. 2022, Figure 2), and those the
-    #: GPT-2 scaling shrinks under pre-norm (the residual outputs).
+    #: The trunk projections that DeepNet's initialisation draws under post-norm (Wang et al.
+    #: 2022, Figure 2): Xavier normal at gain beta ("ffn", "v_proj", "out_proj") and at gain
+    #: 1 ("q_proj", "k_proj"); and those the GPT-2 scaling shrinks under pre-norm (the
+    #: residual outputs).
     _DEEPNET_SCALED = ("attn.v_proj", "attn.out_proj", "ffn.lin_in", "ffn.lin_out")
+    _DEEPNET_UNSCALED = ("attn.q_proj", "attn.k_proj")
     _GPT2_SCALED = ("attn.out_proj", "ffn.lin_out")
+
+    def _linear_std(self, name: str, module: nn.Linear) -> float:
+        """The std of the normal a Linear's weight is drawn from (the module docstring): LeCun
+        normal, the pre-norm residual outputs at GPT-2's ``1/sqrt(2L)`` of it, and under
+        post-norm the trunk's projections at DeepNet's Xavier normal - ``xavier_normal_(w,
+        gain)``'s std, one draw per weight from the same stream whichever applies."""
+        cfg = self.cfg
+        trunk = name.startswith("trunk.")
+        if trunk and cfg.norm_placement == "post" and name.endswith(self._DEEPNET_SCALED + self._DEEPNET_UNSCALED):
+            gain = cfg.deepnorm_beta if name.endswith(self._DEEPNET_SCALED) else 1.0
+            return gain * math.sqrt(2.0 / (module.in_features + module.out_features))
+        std = module.in_features**-0.5
+        if trunk and cfg.norm_placement == "pre" and name.endswith(self._GPT2_SCALED):
+            std *= 1.0 / math.sqrt(2 * cfg.n_layers)
+        return std
 
     def _init_weights(self) -> None:
         cfg = self.cfg
-        if cfg.norm_placement == "post":
-            scaled, scale = self._DEEPNET_SCALED, cfg.deepnorm_beta
-        else:
-            scaled, scale = self._GPT2_SCALED, 1.0 / math.sqrt(2 * cfg.n_layers)
         with torch.no_grad():
             for name, module in self.named_modules():
                 if name.split(".")[0] == "smolgen":
@@ -206,10 +223,7 @@ class T5DNet(nn.Module):
                 if any(name == d8 or name.startswith(d8 + ".") for d8 in self._D8_MODULES):
                     continue  # drawn after the rest (below)
                 if isinstance(module, nn.Linear):
-                    std = module.in_features**-0.5
-                    if name.startswith("trunk.") and name.endswith(scaled):
-                        std *= scale
-                    nn.init.normal_(module.weight, 0.0, std)
+                    nn.init.normal_(module.weight, 0.0, self._linear_std(name, module))
                     if module.bias is not None:
                         nn.init.normal_(module.bias, 0.0, cfg.init_bias_std)
                 elif isinstance(module, nn.Embedding):
