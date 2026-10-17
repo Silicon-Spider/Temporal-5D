@@ -830,8 +830,9 @@ for game records.
 
 **M22 - the turn width, measured (2026-10-17).** The last Phase 1 count, recorded
 before the D2 tree and flat forms are built (§15.1; register M22) - the ply split,
-D2's default arm, is built already (the D2 row below), so "before the D2 arms" in
-2864be0's message means the two turn-start forms: `t5d-measure --turns
+D2's default arm, is built already (the D2 row below); 2864be0's message, "before
+any D2 turn-construction arm is built", should have named the two turn-start forms:
+`t5d-measure --turns
 --turn-summary` over t0database (716 records replay, 692 games), the default rules,
 parse mode; every action replayed move by move and checked against the replay; the
 summary recomputed independently. Figures, definitions and the part L check in
