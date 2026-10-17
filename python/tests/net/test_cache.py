@@ -141,15 +141,29 @@ def test_cached_equals_one_full_pass(geometry, reading, supersession):
         dict(norm_placement="post", ffn_activation="squared_relu", routing_table=True, typed_edge_bias=True, board_pair_smolgen=True),
         dict(displacement_bias=False, routing_table=True, typed_edge_bias=True),
         dict(disp_register_pairs="shared", disp_far_edges=(3, 4, 6), disp_line_max=4, disp_init_std=1.0),
+        dict(shaw_key_term=True, shaw_init_std=1.0, routing_table=True, typed_edge_bias=True, board_pair_smolgen=True),
+        dict(shaw_key_term=True, shaw_shared_heads=True, status_bias_per_layer=True, status_bias_init_std=1.0),
     ],
-    ids=["n2-all", "regs-free-anchored", "zero-angle-raw", "current-features", "6y-arms-n2", "no-table-n2", "b15-placeholders"],
+    ids=[
+        "n2-all",
+        "regs-free-anchored",
+        "zero-angle-raw",
+        "current-features",
+        "6y-arms-n2",
+        "no-table-n2",
+        "b15-placeholders",
+        "b17-n2-all",
+        "b17-shared-b16-per-layer",
+    ],
 )
 def test_cached_equals_one_full_pass_with_every_switch(flags):
     """(a) under the section 6 structure and the open positional choices of stages N1-N3, under
     ablation 6y's two arms together with the structure on (F5's post-norm - smolgen then reads
     the block's input - and F6's squared ReLU), on B15's no-table arm (ablation 2), and with
-    B15's placeholders moved (its table at unit scale). B15 - the v1 default - is on in every
-    other test here: a frozen board's rows carry it, layer by layer (``compute_board``)."""
+    B15's placeholders moved (its table at unit scale), and with B17's key-side Shaw term (a frozen
+    board's rows get it from its own queries) and B16's placeholders moved. B15 - the v1 default -
+    is on in every other test here: a frozen board's rows carry it, layer by layer
+    (``compute_board``)."""
     model = _model(3, **flags)
     root = _root("standard", 3)
     tree = SearchTree(CachedEvaluator(model), root)

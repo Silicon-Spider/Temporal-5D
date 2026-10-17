@@ -39,14 +39,17 @@ Initialisation (implementation choice where the spec is silent):
   the model's seed (``b15_seed``), never from the global stream, after everything else: its
   no-table arm (ablation 2) has every other weight of the v1, bit for bit, and no flag
   changes the table. B16's status table (a network of the cached configuration only)
-  ``N(0, status_bias_init_std)`` (a placeholder, spec issue 215) the same way, from its own
-  generator (``b16_seed``).
+  ``N(0, status_bias_init_std)`` (a placeholder, spec issue 215) and B17's Shaw vectors (behind
+  their flag) ``N(0, shaw_init_std)`` (spec issue 220) the same way, each from its own generator
+  (``b16_seed``, ``b17_seed``).
 
 Attention structure (stage N2, ``structure.py``): ``make_context`` builds the batch's
 masks (B9's move graph on ``move_graph_heads`` heads, or B10's routing table) and biases
 (B11, B12, B15) once per forward, as sparse lists, board-pair tables and B15's per-batch
 index; every layer's attention builds dense rows from them one query block at a time
-(B14), with its own layer's tables (``AttnContext.for_layer``).
+(B14), with its own layer's tables (``AttnContext.for_layer``). B17's key-side Shaw term
+(behind its flag, ``shaw.py``) rides beside the structure (``AttnContext.shaw``): it needs
+each block's queries, which the structure's rows do not see.
 
 Attention scope (stage N3, ``scope.py``): ``NetConfig.attn_scope`` - dense (C1) or
 block-causal (C17, C19) - and any forward may override it (``scope=``): the cached path's
@@ -104,6 +107,7 @@ from .heads import (
 from .kvformat import fake_quantise
 from .rope import rope_angles, rope_cos_sin, rope_tables, spatial_dims
 from .scope import BlockCausalScope
+from .shaw import ShawKeyTerm, ShawRows
 from .smolgen import BoardPairSmolgen
 from .state import TOKEN_BOARD_REGISTER, TOKEN_GLOBAL_REGISTER, Batch
 from .status import StatusKeyBias
@@ -194,6 +198,7 @@ class T5DNet(nn.Module):
         self.smolgen = BoardPairSmolgen(cfg) if cfg.board_pair_smolgen else None
         self.displacement = DisplacementBias(cfg) if cfg.displacement_bias else None
         self.status = StatusKeyBias(cfg) if cfg.status_bias_built else None
+        self.shaw = ShawKeyTerm(cfg, self.displacement.geom) if cfg.shaw_key_term else None
         self.policy = PointerHead(cfg.d_model, cfg.policy_dim, promotion=cfg.policy_promotion)
         self.value = ValueHead(cfg)
         self.aux = AuxHeads(cfg)
@@ -275,6 +280,11 @@ class T5DNet(nn.Module):
                 b16 = torch.Generator(device="cpu").manual_seed(b16_seed(torch.initial_seed()))
                 table = self.status.table
                 table.copy_(torch.empty(table.shape).normal_(0.0, cfg.status_bias_init_std, generator=b16))
+            # B17 (prototype, behind its flag) likewise: its arm differs from the v1 in B17 alone.
+            if self.shaw is not None:
+                b17 = torch.Generator(device="cpu").manual_seed(b17_seed(torch.initial_seed()))
+                vectors = self.shaw.vectors
+                vectors.copy_(torch.empty(vectors.shape).normal_(0.0, cfg.shaw_init_std, generator=b17))
 
     # -- positional context --
 
@@ -346,6 +356,7 @@ class T5DNet(nn.Module):
             batch, cfg, coords, self.typed_edges, self.displacement, self.smolgen, live=live, live_boards=live_boards, status=status
         )
         tokens_per_board = max(lay.tokens_per_board for lay in batch.layouts)
+        shaw = None if self.shaw is None else ShawRows(self.shaw, structure.disp_index)
         return AttnContext(
             cos=cos,
             sin=sin,
@@ -364,6 +375,7 @@ class T5DNet(nn.Module):
             recompute=cfg.attn_recompute,
             sparse_max_fraction=cfg.attn_sparse_max_fraction,
             scope=block_scope,
+            shaw=shaw,
         )
 
     # -- forward --
@@ -493,6 +505,11 @@ def b15_seed(seed: int) -> int:
     return (int(seed) * 0x9E3779B97F4A7C15 + 0xB15) & 0xFFFFFFFFFFFFFFFF
 
 
+def b17_seed(seed: int) -> int:
+    """The seed of B17's own generator (its vectors, ``T5DNet._init_weights``), from the model's."""
+    return (int(seed) * 0x9E3779B97F4A7C15 + 0xB17) & 0xFFFFFFFFFFFFFFFF
+
+
 def b16_seed(seed: int) -> int:
     """The seed of B16's own generator (its status table, ``T5DNet._init_weights``), from the
     model's."""
@@ -523,6 +540,7 @@ def parameter_breakdown(model: T5DNet) -> dict[str, int]:
         "attn.smolgen": count(model.smolgen),
         "attn.displacement": count(model.displacement),
         "attn.status": count(model.status),
+        "attn.shaw": count(model.shaw),
         "head.policy": count(model.policy),
         "head.value": count(model.value),
         "head.submit": count(model.submit),

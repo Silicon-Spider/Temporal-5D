@@ -10,6 +10,56 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-17 - Network B17: the key-side Shaw term behind its flag
+
+- `python/t5d/net/shaw.py` (new): register B17 (prototype, class C, ablation 2; §4.1), behind
+  `shaw_key_term` (off; it needs B15: "on top of B15"). Each query - the unrotated one - dotted
+  with a learned vector for its pair's class in a compact set, scaled by 1/sqrt(d_head), added
+  to the score beside B15's scalar: Shaw et al.'s key-side relative term. Value-side vectors are
+  held open (§14.4) and not built.
+- Its unstated details are named placeholders, each a spec issue: the compact set - "the exact
+  near classes plus the line classes" - read as B15's exact board-distance classes' cells with
+  |Δfile|, |Δrank| <= `shaw_near` = 2, plus B15's line classes: 1,493 classes, which gives both
+  of §4.1's cost figures (issue 217); a vector per class per head per layer, 6,115,328 parameters
+  (26.6% of the v1; `shaw_shared_heads`: 764,416, as Shaw et al. share them) - no document states
+  the count (issue 218); the unrotated query (forced: a rotated one would be an absolute
+  position, §14.1) and the scale (issue 219); N(0, 0.1) from a generator of its own,
+  `model.b17_seed` (issue 220). Pairs with a register get no term.
+- Section 15.2's B17 row, both computations built: the gather - precomputed query-class
+  products P = q R^T, then each pair's entry gathered by its class (`gather_term`) - in every
+  CPU path, block by block, over any key selection or row set (`attention.py`: `AttnContext.shaw`,
+  beside the structure, since it needs each block's queries), in the cached path for a frozen
+  board's rows from its own queries (`cache.py`), and in B14's score function, which reads P
+  inside the attention with the class computed there from B15's entry (`flex.py`); and the
+  direct per-pair form (`direct_term`, head by head over row chunks), which the dense reference
+  materialises (`AttnContext.densified`). Classes come from B15's per-batch index through a
+  static map (`displacement.lookup`, now shared with B15's own rows).
+- `cost.py`: `qk_flops` and `shaw_flops` - section 15.3's B17 row is C/T of Q K^T: 0.511 at 44
+  boards and 0.094 at 240 with 1,493 classes (§15.3: "~0.5x ... ~9%"). `bench.py`: a `b17-shaw`
+  configuration for the quiet-machine block's wall times (none taken: the machine is loaded).
+  `config.py`, `model.py` (`attn.shaw` in `parameter_breakdown`): the flag, its placeholders and
+  validation, its generator.
+- Tests: `tests/net/test_shaw.py` (new) - the class set written out from B15's layout (three
+  settings, displacements one by one); section 15.2's row - the gather and the direct form equal
+  the per-pair computation written out (FP64 to 1e-12, FP32 to roundoff) over every key, blocks,
+  key selections, row sets and head subsets, on all twelve of §15.2's constructions, three
+  seeds, initial and unit scale, shared and per head; the CPU paths' outputs and gradients (the
+  vectors' included) against attention with the direct term materialised; B14's score function
+  and attention through it; the whole network one function across all six implementations;
+  cached = one full pass (block-causal, B16 on); translation, raw-coordinate translation and
+  board order with it on, and a rotated query shown absolute; the count, the generator (off is
+  the B15 network bit for bit, zero vectors give B15's outputs), every layer's reach; the cost
+  row, analytic and counted (the counted FLOPs exceed B17-off's by exactly the products).
+  Existing suites carry it: `test_cache` (two every-switch cases), `test_structure` (three
+  switches), `test_invariance`, `test_n2_model`. Checked by mutation on scratch copies: leaving
+  it out of the block-sparse selection or of a frozen board's rows fails.
+- `docs/BUILD_LOG.md`: register rows B17 (built behind its flag, tested), B14, C2 and F1 (the
+  v1 unchanged; 29,077,130 with B17 on); spec issues 217-220; proposed edit 161.
+- Spec: §4.1 ("Not Lc0's BT5 encoding"), §14.1, §14.4 (value-side vectors held open), §15.2
+  (the B17 row), §15.3 (the B17 row: the analytic ratio and the counted products; the CPU wall
+  time not measured - the quiet-machine block), §13.1 ablation 2; register B17, B15, B14, F1.
+  Proposed edit 161 (issues 217-220).
+
 ### 2026-10-17 - Network B16: score-time status key biases on frozen boards
 
 - `python/t5d/net/status.py` (new): register B16 (committed with the cached configuration,

@@ -12,7 +12,9 @@ torch's ``flex_attention`` (``NetConfig.attn_impl="flex"``):
   kinds and raw coordinates (``displacement.pair_entry``, "at score time from coordinates"),
   then the layer's compact table; B16's status key bias under the block-causal scope - on a
   live query row, the head's entry for the key's frozen board's status, read from a
-  per-token index (``status.py``); B11's typed biases - the pair's typed relations, counted
+  per-token index (``status.py``); B17's key-side Shaw term (behind its flag) - the query's
+  precomputed product with the class of its pair, the class from B15's entry (``shaw.py``);
+  B11's typed biases - the pair's typed relations, counted
   per type and orientation, times the head's scalars; B12's board-pair bias - the layer's
   table at the two tokens' boards; and a caller's dense bias;
 * the **mask function** (``mask_mod``) allows a key by padding, the caller's mask, the
@@ -107,9 +109,14 @@ class ScoreInputs:
     status_key: torch.Tensor | None = None  # (B, L) long: a frozen board's token's status entry (statuses: none)
     status_live: torch.Tensor | None = None  # (B, L) bool: the live query rows
     status_table: torch.Tensor | None = None  # (H, statuses + 1): the layer's
+    # B17
+    shaw_products: torch.Tensor | None = None  # (B, H, L, C + 1): P = q R^T, this layer's, the last column zero
+    shaw_compact: torch.Tensor | None = None  # (entries + 1,) long: B15's entry -> B17's class (C: none)
 
     @classmethod
-    def from_context(cls, ctx: AttnContext, n_heads: int) -> ScoreInputs:
+    def from_context(cls, ctx: AttnContext, n_heads: int, q: torch.Tensor | None = None) -> ScoreInputs:
+        """The inputs of a context's score and mask functions; ``q`` ``(B, H, L, d)``, the unrotated
+        queries, for B17's products (``ctx.shaw``)."""
         bsz, length = ctx.key_valid.shape
         out = cls(key_valid=ctx.key_valid)
         shape = (bsz, n_heads, length, length)
@@ -119,6 +126,10 @@ class ScoreInputs:
             out.bias = _as4d(ctx.bias).float().expand(shape)
         if ctx.scope is not None:
             out.scope_slot, out.scope_allowed = ctx.scope.slot, ctx.scope.allowed
+        if ctx.shaw is not None:
+            if q is None:
+                raise ValueError("B17's term needs the queries: ScoreInputs.from_context(ctx, n_heads, q)")
+            out.shaw_products, out.shaw_compact = ctx.shaw.products(q), ctx.shaw.term.compact
         st = ctx.structure
         if st is None:
             return out
@@ -167,6 +178,9 @@ def make_score_mod(inp: ScoreInputs):
                 inp.disp_kind[b, q], inp.disp_kind[b, k], ck[0] - cq[0], ck[1] - cq[1], ck[2] - cq[2], ck[3] - cq[3], inp.disp_geom
             )
             s = s + inp.disp_table[h, e]
+            if inp.shaw_products is not None:
+                # B17 (on top of B15): the query's precomputed product with its pair's class.
+                s = s + inp.shaw_products[b, h, q, inp.shaw_compact[e]]
         if inp.status_table is not None:
             # B16: a live query's key on a frozen board - the head's entry for that board's
             # status (its last, zero entry for any other key); nothing on a frozen query row.
@@ -339,7 +353,7 @@ def attention_flex(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, ctx: AttnC
         )
     bsz, n_heads, length, dh = q.shape
     cd = ctx.compute_dtype
-    inp = ScoreInputs.from_context(ctx, n_heads)
+    inp = ScoreInputs.from_context(ctx, n_heads, q)
     score_mod, mask_mod = make_score_mod(inp), make_mask_mod(inp)
     block_mask = board_block_mask(ctx, n_heads, block_size, mask_mod)
     qr, kr = apply_rope(q, ctx.cos, ctx.sin), apply_rope(k, ctx.cos, ctx.sin)
