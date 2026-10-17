@@ -6,7 +6,8 @@
 #   release  before any generator release or proof-channel enablement: run it by
 #            hand (workflow_dispatch, tier = release) or push a generator-v* tag.
 #            It fails unless an engine was compared against the oracles and came
-#            through at least one ruleset.
+#            through at least one named variant (custom positions are evidence
+#            about no variant).
 #
 # The oracle builds are cached, and the harness decides which of them are stale:
 # `build --plan` names the tools the stale ones need, and only those are

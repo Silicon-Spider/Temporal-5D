@@ -10,6 +10,71 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-17 - Gate H47: the some-ruleset-is-gated check only in tiers that run every oracle
+
+- `oracles/oracle_harness/gate.py`: the check that some ruleset is gated -
+  `engine-nothing-gated`, raised when nothing else was found against a full-mode
+  engine but it came through no ruleset, and `GateResult.ok`'s test of it - runs
+  only in a tier that runs every oracle search over the whole corpus
+  (`Tier.full_strength`: nightly, release), keyed to what a tier runs, never its
+  name. Any other tier - commit, ftxi and the notation parser - is a smoke test
+  (H47, Q-A): an engine with no finding against it passes its differential, gated
+  or not. A smoke pass never reads as gating: the summary says `engine
+  differential: SMOKE TEST - PASSED` (or `FAILED`) and that the tier gates nothing,
+  and why (`SMOKE_TEST`); every ruleset is listed as `NOT gated`, one that met the
+  gating conditions with the tier's oracles alone saying so (`SMOKE_REASON`); the
+  report has no ruleset under `gated` and the reason under `smoke_test`. In every
+  tier an unexplained divergence (one `known-divergences.toml` does not record), a
+  telltale or a breach of the engine contract fails the engine. New:
+  `GateResult.smoke_test` and `GateResult.verdicts` (what a run may state);
+  `GateResult.variants` reads only what the run may state as gated, so a tier that
+  requires an engine can never pass on rulesets its own summary prints as `NOT
+  gated`; and when such a tier fails because the engine came through no named
+  variant (custom positions at most) - which no finding says - the summary says so.
+  A run restricted with `--source` or `--record` keeps its tier's rule (spec issue
+  124). Unchanged: the rule in nightly and release, the release tier's requirement
+  of a named variant, the proof-channel line, parse mode and its floor, and the
+  differential itself (`GateResult.gated` still holds what met the conditions, in
+  every tier). Why: with ftxi alone the commit tier gated no ruleset once the
+  engine was configured (2026-10-04, Q-A), so the rule would have turned the commit
+  workflow red; the ruling (CHECKPOINT 6) took option (a).
+- `oracles/oracle_harness/config.py`: `gate.toml` is refused if a tier that does
+  not run every oracle source over every record tier sets `require_engine` - such
+  a tier gates nothing, so no engine could ever pass it (it would fail with nothing
+  to say why).
+- `oracles/tests/test_gate.py`, `oracles/tests/test_gate_live.py`,
+  `oracles/tests/test_config.py`: both sides pinned - in a commit-shaped tier an
+  agreeing engine that gates nothing passes (ok, the proof channel disabled, the
+  output saying the tier gates nothing); in nightly- and release-shaped tiers it
+  fails on `engine-nothing-gated`; an unexplained divergence fails every tier; an
+  engine that declines every record passes only the smoke test; the report's
+  `smoke_test` and `gated`; a real-ftxi commit run never prints a ruleset as gated.
+  And where a tier's name and shape disagree - a "nightly" that runs less, a
+  "commit" that runs everything, a custom-named tier that runs every oracle search
+  over the whole corpus, nightly cut to the commit records - it goes by the shape
+  (a rule keyed to the name now fails these tests); a restricted run of nightly
+  keeps its rule;
+  a tier that requires an engine reads only what its run may state as gated, and
+  says why it failed; `require_engine` on a tier that is not full strength is
+  refused. Tests that read a commit-shaped result as gating now use a nightly
+  shape.
+- `oracles/README.md` ("Tiers", "The engine contract", "Other commands"),
+  `oracles/gate.toml` (comments only), `CONTRIBUTING.md` ("The proof channel") and
+  `.github/workflows/oracle-nightly.yml` (its header comment): the commit tier is a
+  smoke test that gates nothing, because it does not run every oracle search over
+  the whole corpus - H47's own reason quoted beside the gating conditions as built;
+  what fails the engine in every tier (a divergence on record does not); a
+  restricted run keeps its tier's rule; `require_engine` only on a full-strength
+  tier; the release tier's rule named as a named variant.
+- `docs/BUILD_LOG.md`: register rows H47 (built, tested) and H48 (not started);
+  spec issues 122-124, each put to the user; proposed spec edit 98, pending the
+  ruling on issue 122, with the text for each answer.
+- Spec: §11.0 "Tiered CI" and register H47 - proposed edit 98, pending the user's
+  ruling: the spec's reason ("a ruleset is gated only when two or more oracles
+  answer for it") is not the gating rule as built (spec issue 122, put to the
+  user); H47 is silent on an engine compared with nothing in a smoke test (spec
+  issue 123, put to the user) and on a restricted run of a full-strength tier
+  (spec issue 124, put to the user). H23 and the proof channel unchanged.
 ### 2026-10-17 - Build log: the CHECKPOINT 6-7 rulings, the plan by lane, the register brought up to date
 
 - `docs/BUILD_LOG.md`, "Where things stand": a section "CHECKPOINTS 6 and 7 - ruled
