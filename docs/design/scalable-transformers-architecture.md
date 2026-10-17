@@ -251,6 +251,25 @@ of the ablation order.
 **Default to `m`-dimensional RoPE** unless you have a reason not to. It is the only option
 that is both relative and free at the kernel level.
 
+Two caveats from practice. First, RoPE's positional term is a sum over axes, so each head's
+positional preference factorises into one factor per axis: it cannot express relations
+that couple axes — a head cannot favour displacements (1,1) and (2,2) while disfavouring
+(1,2) and (2,1). If the domain's relations couple axes (in chess, diagonals and knight
+moves), add a **learned joint-displacement bias** beside RoPE: one scalar per head per
+layer, indexed by the full displacement, exact for short displacements and binned and
+clamped for long ones so it extrapolates. A controlled chess ablation found a static
+displacement table worth ~40 Elo over absolute embeddings at equal compute. Check whether
+anything else in the token content can carry the missing geometry — absolute coordinates
+in the features would — before assuming the bias is needed. Index it jointly: when the
+distance between substructures changes what an in-substructure offset means, a table
+reused across substructures relearns the wrong geometry, so each substructure distance
+gets its own slice. Content-dependent variants (Shaw-style vectors on queries, keys and
+values) beat a static table in chess at 64 tokens, but their key-side cost grows with
+`T` × classes and their value side needs a custom kernel — keep the class set compact, or
+take the key side alone, which in the original ablation carried the whole gain. Second,
+"free at the kernel level" holds only until something else needs a score-modifying kernel;
+once one does, learned biases cost nothing extra.
+
 ### 4.4 The head-dimension trap
 
 Splitting `d_head` across `m` axes means each axis gets `d_head / m` dimensions. At
@@ -278,6 +297,16 @@ different treatment — a coarser bucketing, a learned-embedding fallback, or ex
 the relative scheme.
 
 Identify which of your `m` axes are which before treating them uniformly.
+
+### 4.6 Encode from the actor's side
+
+If the domain has two (or more) symmetric actors, encode the state from the acting one's
+perspective — pieces as ours and theirs, axes mirrored so that "forward" always means the
+same direction, actor-created structure always on the same side of any signed axis — and
+map outputs back. AlphaZero, Lc0 and KataGo all do; it halves what the model must learn
+about the actors, and it costs nothing at inference. Keep the actor's identity as a global
+input for whatever the rules make asymmetric (who moves first). It is an input-encoding
+decision, so it is committed before training.
 
 ---
 
@@ -471,7 +500,17 @@ If a single decision comprises several sub-actions across substructures:
 - **Decompose into independent steps** — simpler, integrates with search, loses
   intra-decision coordination.
 
-No general answer. Benchmark both.
+No general answer. Benchmark both — and a third option where the component options are
+scored together anyway (a pointer head scores every component's options in one pass):
+**evaluate at decision boundaries.** Evaluate once at the decision's start, assemble the
+combination from those priors without evaluating in between — either a sub-action tree
+whose inner nodes inherit the start's priors, re-evaluating only where sub-actions
+interact, or a best-first generator over complete legal combinations by summed scores,
+widened progressively — and evaluate only complete decisions. It trades in-decision
+conditioning for lookahead that is k times deeper per evaluation, for k sub-actions; the
+prior art is combinatorial-bandit MCTS (naïve sampling) and Sampled MuZero. Whichever arm,
+give the model the decision's progress as **exact counts from the rules** — obligations
+remaining, options remaining, sub-actions taken — never as estimates.
 
 ### 7.3 Scalar heads have a precision floor
 
@@ -534,6 +573,14 @@ details recur: use log-scale bins for heavy-tailed quantities (effort, duration)
 give **censored** labels — observations truncated by a budget — a top bin of their own,
 so the head learns "beyond budget" as a class instead of absorbing it into a corrupted
 mean.
+
+**A categorical head needs a continuous target.** Trained on a discrete outcome — three
+results, say — it fills three bins and leaves the rest empty, and its "variance" measures
+how unclear the result is, not how uncertain the estimate is. Train the outcome head on the
+outcome, and the distributional head on a continuous target the system itself produces —
+the search's value, or exponentially averaged future values — smoothed into neighbouring
+bins (HL-Gauss). An error head predicting the gap between the value and its short-horizon
+version is the cheap companion, and worth training from the start.
 
 ---
 
@@ -785,6 +832,13 @@ the noisiest input — floor it conservatively. And denominate any adaptive exte
 compute units, with the wall-clock ceiling held tight where per-step cost peaks — an
 extension mechanism must never be able to trigger itself.
 
+**Price capacity at the typical size, not the stress size.** A component's share of cost
+moves with state size: at large `N` attention dominates and per-token capacity (wider
+FFNs, wider projections) looks nearly free; at the size where most compute is actually
+spent it may be a third or more of the bill. Re-price every capacity choice against the
+measured size distribution, and check it against domain evidence on whether that capacity
+earns its keep.
+
 ---
 
 ## 10. Precision
@@ -863,7 +917,13 @@ territory; cached frontier evaluation sits near the knee.
 
 ### 11.2 Conditional
 
-- **FlexAttention** — needed if using learned attention biases; unnecessary with RoPE.
+- **FlexAttention** — needed if using learned attention biases; unnecessary with RoPE alone.
+- **Exported inference graphs** (ONNX → TensorRT and similar) — they suit fixed-shape
+  networks. A network whose attention carries computed biases and variable token counts
+  must either materialise `T²` bias tensors per position or ship a custom attention
+  plugin. If the search is native code, keep the network where its programmable attention
+  runs and drive the search from there through a C API; export only when a measured gap
+  is worth a plugin.
 - **KV-head reduction (GQA/MQA)** — see §12.2. Usually not worth it, and retrofittable.
 - **FP8** — see §10.
 - **Mixture-of-Depths** — routing low-information tokens through fewer layers fits this
@@ -910,7 +970,12 @@ latency-bound.
 
 The pattern: compute-reducing tricks transfer or are neutral; capacity-reducing tricks on
 the key axis hit the same wall; self-assessment tricks join the confidence family. No new
-principle is needed to sort the second tier.
+principle is needed to sort the second tier. One refinement on 8-bit inference: where the hardware runs FP8 and INT8 at
+the same rate, try FP8 first — it holds accuracy far better when applied after training —
+and *prepare* quantisation-aware training as a flag in the training code rather than
+adopting it. A two-arm test (equal wall-clock, equal internal work) decides whether to
+switch it on, as a late fine-tuning stage, and it must simulate exactly the deployed
+format.
 
 ---
 
@@ -927,6 +992,7 @@ The most useful planning distinction, and one that is rarely made explicit.
 | Tokenisation and scope (§3) | **Committed** | Determines what the model has ever seen |
 | Width, depth | **Committed** | Retraining required |
 | KV-head reduction (§12.2) | **Retrofittable** | Uptrains at ~5% of original compute |
+| Normalisation type and placement | **Committed** | Baked into learned representations. Drop mean-centring and biases (RMSNorm-style, no Q/K/V biases) where evidence says it is free |
 | Kernel choice, precision | **Free** | Inference-time |
 | Serving stack (§11.1) | **Free** | Inference-time |
 
@@ -940,6 +1006,12 @@ an unadopted committed-class choice must have its deciding experiment scheduled 
 training, while an unadopted retrofittable one can simply wait. Conflating "we haven't
 decided" with "we don't need to decide yet" is how committed-class decisions get made by
 default instead of by measurement.
+
+An archive softens "irreversible" to "expensive". If self-play records keep the raw
+outputs and search statistics later choices need (§13.8), a new architecture can be
+trained supervised on the archive and then continue — a retrain, not a restart. The class
+still matters: the archive was generated by the old model's search, so the new one starts
+behind where its own self-play would have taken it.
 
 ### 12.2 KV-head reduction: usually the wrong call here
 
@@ -1318,6 +1390,40 @@ than the quality costs, at the budget that actually binds), and **equal internal
 is systematically misleading: equal wall-clock hides the quality cost inside the speed
 gain, equal work hides the speed gain entirely. The trade is only priced when you hold
 each side fixed once.
+
+### 13.7 Work that lives on one machine is a single point of failure
+
+A long build run by an agent accumulates work in local branches and worktrees. If only
+merged work is pushed, a dead machine costs everything in flight — here, a component
+mid-build and a branch holding a hundred triaged entries. Push every working branch to the
+remote after each commit; once a branch is pushed, bring main into it by merge rather than
+rebase, so the no-force-push rule never collides with keeping a branch current. Write the
+resume document so that a fresh session on a fresh machine can continue from the
+repository alone.
+
+### 13.8 Learn from the search's corrections — fix the targets, keep the positions
+
+Self-play generates its own mistakes, and the strongest engines train on them deliberately.
+**Sample by surprise**: weight positions by how far the search moved the model's prior
+(KL divergence), half uniform so nothing starves, at full weight rather than
+importance-scaled. **Repair targets damaged by exploration**: when an exploratory action
+was clearly worse than the search's choice, train earlier positions on the search's value
+rather than the final result — removing the bad positions instead hurts, because the value
+head needs to see them. **Rescore with exact facts** wherever they exist — tablebases, proofs.
+And **keep rich records** — raw model outputs, the search's values for the best and played
+actions, visit counts with provenance flags — so every one of these choices can be
+re-applied later without regenerating data. Surprise sampling is additive, like every
+self-rated mechanism: a mistake the search shares produces no surprise.
+
+### 13.9 Ablate network-only choices on a shared dataset
+
+A self-play run per ablation arm is the expensive way to compare architectures. If a choice
+touches only the network — positional encoding, width, depth, input features,
+normalisation — train each arm supervised on one fixed dataset of self-play records, rank by
+loss and accuracy, then confirm the finalists with strength measured through search. Choices
+that change the search or the data distribution still need self-play. The caveat is
+on-policy effects: fixed data comes from one model's search, so the supervised ranking is
+a screen, not a verdict.
 
 ---
 
