@@ -32,6 +32,7 @@ class Tier:
     source_timeout_s: dict[str, float]
     mate_budget_ms: int
     min_checked: float
+    # Fails unless an engine came through a named variant. Only on a full-strength tier: any other gates nothing (H47).
     require_engine: bool
 
     def timeout_for(self, source: str) -> float:
@@ -237,6 +238,12 @@ def load(path: Path | None = None) -> GateConfig:
             min_checked=checked,
             require_engine=bool(table.get("require_engine", False)),
         )
+        if tiers[name].require_engine and not tiers[name].full_strength:
+            # Such a tier requires an engine to come through a named variant, and a tier that does not run every
+            # oracle search over the whole corpus is a smoke test that gates nothing (H47): no engine could pass it.
+            raise HarnessError(f"{where}: require_engine needs a tier that runs every oracle source over every record "
+                               "tier - any other tier is a smoke test that gates nothing (H47), so no engine could "
+                               "come through a named variant in it")
     if not tiers:
         raise HarnessError(f"{path.name}: no [tier.*] tables")
 

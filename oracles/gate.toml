@@ -50,11 +50,13 @@ mode = "full"
 # what position it read at every ply and how far it read, and answers no rules
 # question. It is fast and deterministic, so every tier runs it.
 #
-# The commit tier is a smoke test (H47): with one rules oracle it gates no
-# ruleset. An engine that contradicts no oracle passes it, and the gate's output
-# says that the tier gates nothing. Only a tier that runs every oracle search over
-# every record tier (nightly, release) gates a ruleset, and fails an engine that
-# contradicts nothing but comes through none.
+# The commit tier is a smoke test (H47): it does not run every oracle search over
+# every record tier, so it gates no ruleset. An engine with no finding against it
+# passes it, and the gate's output says that the tier gates nothing. Only a tier
+# that runs every oracle search over every record tier (nightly, release) gates a
+# ruleset, and fails an engine with no finding against it that comes through none.
+# In every tier an unexplained divergence, a telltale or a breach of the engine
+# contract fails the engine.
 [tier.commit]
 sources = ["ftxi", "notation"]
 record_tiers = ["commit"]
@@ -82,11 +84,12 @@ chessin5d = 600
 
 # Before any generator release or proof-channel enablement. Fails unless an
 # engine was compared and came through at least one named variant (custom
-# positions are evidence about no variant). Only a tier that requires an engine
-# and runs every source over every record tier can enable the proof channel; it
-# runs every search to its budget (no run is stopped early). The golden files are
-# recorded under these budgets ([stability] recording_tier): a change here marks
-# them stale.
+# positions are evidence about no variant). Only a tier that runs every source
+# over every record tier may require an engine - this file is refused otherwise,
+# since any other tier gates nothing (H47) - and only a tier that requires an
+# engine can enable the proof channel; it runs every search to its budget (no run
+# is stopped early). The golden files are recorded under these budgets
+# ([stability] recording_tier): a change here marks them stale.
 [tier.release]
 sources = ["ftxi", "ftxi:naive", "cwmtt", "cwmtt:naive", "chessin5d", "notation"]
 record_tiers = ["commit", "nightly"]
