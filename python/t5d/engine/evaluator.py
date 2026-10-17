@@ -469,8 +469,9 @@ class CStepDriver:
 
 def engine_epoch(epoch: Epoch) -> int:
     """The engine's 64-bit epoch number for a cached-path epoch (its key, hashed): the search
-    caches evaluations per (state, epoch), so evaluations made under different refresh
-    conditioning are never served for one another; the shared causal epoch maps to one number."""
+    caches evaluations per (state, moves made in its action, epoch) (register A6), so
+    evaluations made under different refresh conditioning are never served for one another;
+    the shared causal epoch maps to one number."""
     return int.from_bytes(hashlib.blake2b(epoch.key.encode("utf-8"), digest_size=8).digest(), "little")
 
 
@@ -479,8 +480,8 @@ def start_epoch(search: Search, evaluator: Evaluator, *, regs_per_board: int = 2
     evaluator whose evaluations depend on the root (``start(root)``: the cached path, C3's root
     refresh; ``CachedNetworkEvaluator``), so that a search sharing another's evaluation cache
     (C14) never reuses evaluations made under another refresh. The engine epoch set, or None
-    for an evaluator without ``start`` (its evaluations are a function of the state alone: the
-    epoch stays as it is). The root's position is the root state's own expansion with the
+    for an evaluator without ``start`` (its evaluations are a function of the leaf's input alone:
+    the epoch stays as it is). The root's position is the root state's own expansion with the
     search's expansion options."""
     start = getattr(evaluator, "start", None)
     if not callable(start):

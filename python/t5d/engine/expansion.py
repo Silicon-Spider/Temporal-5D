@@ -142,6 +142,10 @@ class Expansion:
     acting_player: int  # 0 white, 1 black: whose action this is (= to_move); once the present has shifted it differs from present & 1
     submit_possible: bool  # the action's obligations are met (T5): submitting is an action now
     submit_legal: bool  # ... and no royal of the acting player's capturable (C4, R1): the submit action's legality
+    # the turn state (register A6, engine ABI round 1) - global, exact counts from the rules engine
+    mandatory_remaining: int  # boards the acting player must still play (T5, T6; Q5, Q6): 0 iff submit_possible
+    optional_playable: int  # its other playable boards (L5: playable, not mandatory); 0 when no move may be made (Q4)
+    moves_made: int  # moves made in the action in progress - no state records it: the handle's, or the leaf's path's
     origins_unknown: int  # active branched timelines with no recorded origin (5DFEN)
     origin_count: int
     # per board (canonical order)
@@ -199,6 +203,9 @@ class Expansion:
             acting_player=int(x.acting_player),
             submit_possible=bool(x.submit_possible),
             submit_legal=bool(x.submit_legal),
+            mandatory_remaining=int(x.mandatory_remaining),
+            optional_playable=int(x.optional_playable),
+            moves_made=int(x.moves_made),
             origins_unknown=int(x.origins_unknown),
             origin_count=int(x.origin_count),
             timeline=_copy(x.timeline, n, np.int32, "timeline"),

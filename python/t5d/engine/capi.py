@@ -171,6 +171,8 @@ class GameSummary(ctypes.Structure):
         ("may_submit", c_int32),
         ("ruleset", c_uint32),
         ("rules", c_uint64),
+        # appended in engine ABI round 1 (register A6): the handle's count - no state records it
+        ("moves_made", c_int32),  # moves made in the action in progress: 0 at a turn start
     ]
 
 
@@ -225,6 +227,10 @@ class CExpansion(ctypes.Structure):
         ("acting_player", c_int32),  # 0 white, 1 black: whose action this is (= to_move)
         ("submit_possible", c_int32),  # 1: the action's obligations are met (T5)
         ("submit_legal", c_int32),  # 1: ... and no royal of the acting player's capturable (C4, R1)
+        # appended in engine ABI round 1 (register A6, spec 2.3): the turn state, exact counts
+        ("mandatory_remaining", c_int32),  # boards the acting player must still play (T5, T6): 0 iff submit_possible
+        ("optional_playable", c_int32),  # its other playable boards (L5); 0 when no move may be made (Q4)
+        ("moves_made", c_int32),  # moves made in the action in progress (the handle's, a leaf's path's): 0 at a turn start
     ]
 
 

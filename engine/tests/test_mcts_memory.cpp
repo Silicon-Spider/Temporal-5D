@@ -106,7 +106,7 @@ TEST(mcts_the_evaluation_cache_counts_the_heap_it_holds) {
       {
         const t5d_test::alloc::Counting on;
         {
-          Search s(root, p, true, cache);
+          Search s(root, p, 0, cache);
           s.run(*random, Limits{split == TurnSplit::BoardMove ? 1500u : 300u});
         }
         counted = cache->bytes();
@@ -162,12 +162,12 @@ TEST(mcts_the_cache_is_purged_of_states_behind_the_root) {
   const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
   const auto cache = std::make_shared<EvalCache>(2000, std::size_t{1} << 30);
   GameState s = start("Standard - Two Timelines");
-  bool turn_start = true;
+  int moves_made = 0;  // A6: the moves made in the root's action
   std::uint64_t purged = 0;
   std::uint64_t late_hits = 0;
   for (int decision = 0; decision < 40; ++decision) {
     SearchParams p = quick();
-    Search search(s, p, turn_start, cache);
+    Search search(s, p, moves_made, cache);
     search.run(*uniform, Limits{300});
     purged += search.stats().cache_purged;
     if (decision >= 30) late_hits += search.stats().cache_hits;
@@ -176,13 +176,16 @@ TEST(mcts_the_cache_is_purged_of_states_behind_the_root) {
     const RootChild c = search.root_children().at(search.choose().index);
     if (c.submit) {
       s.submit();
-      turn_start = true;
+      moves_made = 0;
     } else {
       for (const Move& m : c.moves) s.apply(m);
-      if (p.split == TurnSplit::WholeTurn) s.submit();
-      turn_start = false;
+      moves_made += static_cast<int>(c.moves.size());
+      if (p.split == TurnSplit::WholeTurn) {
+        s.submit();
+        moves_made = 0;
+      }
     }
-    if (turn_start && detect_mate(s, Detector::Hypercuboid).verdict != Outcome::Ongoing) break;
+    if (moves_made == 0 && detect_mate(s, Detector::Hypercuboid).verdict != Outcome::Ongoing) break;
   }
   CHECK(purged > 0);
   CHECK(late_hits > 0);

@@ -19,6 +19,7 @@
 #include <cmath>
 #include <limits>
 #include <cstdint>
+#include <cstdio>
 #include <map>
 #include <memory>
 #include <optional>
@@ -851,6 +852,7 @@ TEST(mcts_rerooting_keeps_only_reachable_nodes_and_cached_evaluations) {
     REQUIRE(sibling != kNoNode);
     const GameState sibling_state = *search.node(sibling).state;
     const std::uint64_t sibling_key = search.node(sibling).key;
+    const int sibling_moves = search.node(sibling).moves_made;
     const std::size_t before = search.node_count();
     search.advance(ch.index);
     CHECK_EQ(hooks, std::size_t{1});
@@ -863,7 +865,7 @@ TEST(mcts_rerooting_keeps_only_reachable_nodes_and_cached_evaluations) {
     CHECK_NOTHROW(search.check_invariants());
     CHECK(search.stats().nodes_collected == before - search.node_count());
     REQUIRE(search.cache() != nullptr);
-    CHECK(search.cache()->find(sibling_key, 0, sibling_state, true) != nullptr);
+    CHECK(search.cache()->find(sibling_key, sibling_moves, 0, sibling_state, true) != nullptr);
     // Searching on: the evaluator is told of the new root, and never asked
     // about a state the cache holds.
     const std::size_t roots = ev.new_roots;
@@ -915,6 +917,100 @@ TEST(mcts_pondering_searches_the_reply_and_reroots_on_it) {
   }
 }
 
+namespace {
+
+// A node's move edges that lead to a visited child, most visited first.
+std::vector<std::size_t> visited_moves(const Search& search, NodeId id) {
+  std::vector<std::size_t> out;
+  for (std::size_t i = 0; i < search.node(id).edge_count; ++i) {
+    const EdgeView e = search.edge(id, i);
+    if (!e.submit && !e.pruned && e.move != nullptr && e.child != kNoNode && e.visits > 0) out.push_back(i);
+  }
+  std::stable_sort(out.begin(), out.end(),
+                   [&](std::size_t a, std::size_t b) { return search.edge(id, a).visits > search.edge(id, b).visits; });
+  return out;
+}
+
+// A node's submit edge's child, if the submission was made and visited.
+NodeId visited_submit(const Search& search, NodeId id) {
+  for (std::size_t i = 0; i < search.node(id).edge_count; ++i) {
+    const EdgeView e = search.edge(id, i);
+    if (e.submit && !e.pruned && e.child != kNoNode && e.visits > 0) return e.child;
+  }
+  return kNoNode;
+}
+
+}  // namespace
+
+TEST(mcts_advancing_a_move_at_a_time_carries_the_tree_at_each_count_a6) {
+  // C12 and C13 with A6's count in a node's identity: advance_moves and
+  // advance_action find the child the tree holds by its state AND its moves
+  // made in the action - a move's is the root's + 1, a submission's 0 - so the
+  // child's statistics are carried. A count that is not exact - the
+  // turn-start flag's 1 for an action's second move - misses the child and
+  // starts a fresh root: the pondered subtree silently dropped, and the
+  // opponent's reply at match play (advance_action, a move at a time) never
+  // finds its tree. Two Timelines: two moves an action. Tree and graph.
+  for (const bool graph : {false, true}) {
+    SearchParams p = fast();
+    p.split = TurnSplit::BoardMove;
+    p.graph = graph;
+    const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Random, 9);
+    Search search(variant("Standard - Two Timelines"), p);
+    // The root is now the node the tree held, carried: its state, its count and
+    // its visits, with nodes below it.
+    const auto carried = [&search](const GameState& state, int made, std::uint32_t visits) {
+      CHECK(search.root_state() == state);
+      CHECK_EQ(search.root_moves_made(), made);
+      CHECK_EQ(search.node(search.root()).moves_made, made);
+      CHECK_EQ(search.node(search.root()).visits, visits);
+      CHECK(search.node_count() > 1);
+      CHECK_NOTHROW(search.check_invariants());
+    };
+    search.run(*ev, Limits{400});
+    // (a) Our action a move at a time, by advance_moves - counts 1 and 2 -
+    // then its submission (count 0, the opponent's turn start).
+    for (int made = 1; made <= 2; ++made) {
+      const std::vector<std::size_t> moves = visited_moves(search, search.root());
+      REQUIRE(!moves.empty());
+      const EdgeView e = search.edge(search.root(), moves.front());
+      const GameState state = *search.node(e.child).state;
+      const std::uint32_t visits = search.node(e.child).visits;
+      search.advance_moves(std::vector<Move>{*e.move});
+      carried(state, made, visits);
+      search.run(*ev, Limits{200});
+    }
+    const NodeId submitted = visited_submit(search, search.root());
+    REQUIRE(submitted != kNoNode);
+    const GameState opponent = *search.node(submitted).state;
+    const std::uint32_t opponent_visits = search.node(submitted).visits;
+    search.advance_moves({});
+    carried(opponent, 0, opponent_visits);
+    // (b) Ponder the opponent's turn, then its reply along the line pondered
+    // - two moves and the submission, by advance_action.
+    search.run(*ev, Limits{800});
+    std::vector<Move> reply;
+    NodeId reached = kNoNode;
+    for (const std::size_t i : visited_moves(search, search.root())) {
+      const EdgeView first = search.edge(search.root(), i);
+      for (const std::size_t j : visited_moves(search, first.child)) {
+        const EdgeView second = search.edge(first.child, j);
+        const NodeId after = visited_submit(search, second.child);
+        if (after == kNoNode) continue;
+        reply = {*first.move, *second.move};
+        reached = after;
+        break;
+      }
+      if (reached != kNoNode) break;
+    }
+    REQUIRE(reached != kNoNode);
+    const GameState state = *search.node(reached).state;
+    const std::uint32_t visits = search.node(reached).visits;
+    search.advance_action(reply);
+    carried(state, 0, visits);
+  }
+}
+
 TEST(mcts_advance_to_a_state_the_tree_does_not_hold_starts_afresh) {
   Search search(variant("Standard"), fast());
   const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Uniform);
@@ -924,7 +1020,7 @@ TEST(mcts_advance_to_a_state_the_tree_does_not_hold_starts_afresh) {
   GameState far = variant("Standard");
   far = list_legal_actions(far, 1, Detector::Hypercuboid).actions.front().result;
   far = list_legal_actions(far, 1, Detector::Hypercuboid).actions.front().result;
-  search.advance_to(far, true);
+  search.advance_to(far, 0);
   CHECK_EQ(search.node_count(), std::size_t{1});
   CHECK(search.root_state() == far);
   search.run(*ev, Limits{10});
@@ -1598,7 +1694,7 @@ TEST(mcts_parameters_are_validated) {
   CHECK_THROWS_AS(Search(variant("Standard"), p), std::invalid_argument);
   p = fast();
   p.split = TurnSplit::WholeTurn;
-  CHECK_THROWS_AS(Search(variant("Standard"), p, false), std::invalid_argument);
+  CHECK_THROWS_AS(Search(variant("Standard"), p, 1), std::invalid_argument);  // whole turns: from turn starts
   p = fast();
   p.expand.pin = true;
   CHECK_THROWS_AS(Search(variant("Standard"), p), std::invalid_argument);
@@ -1836,6 +1932,316 @@ TEST(mcts_graph_never_prunes_a_mating_submission_for_a_dead_end_elsewhere) {
   }
 }
 
+// ---- A6: the moves made in the action, in a node's and an evaluation's identity -----------
+
+namespace {
+
+// Prefers the given moves (logit 8, every other move -8) and submitting (8),
+// and values a leaf by the moves made in its action alone (register A6: the
+// network sees the count) - so an evaluation served for another count than
+// the leaf's shows. It records what it is asked, batch by batch.
+class CountAware final : public Evaluator {
+ public:
+  explicit CountAware(std::vector<std::string> preferred) : preferred_(std::move(preferred)) {}
+  static double value_of(int moves_made) { return -0.6 + 0.3 * std::min(moves_made, 4); }
+  void evaluate(std::span<const EvalRequest> batch, std::span<Evaluation> out) override {
+    batches.emplace_back();
+    for (std::size_t i = 0; i < batch.size(); ++i) {
+      const EvalRequest& r = batch[i];
+      if (r.moves_made != r.expansion->moves_made()) ++disagreements;
+      batches.back().push_back(Asked{*r.state, r.moves_made});
+      const MoveList& moves = r.expansion->moves();
+      out[i].logits.resize(moves.size());
+      for (std::size_t m = 0; m < moves.size(); ++m) {
+        const std::string text = to_string(moves[m], r.state->multiverse().even());
+        const bool preferred = std::find(preferred_.begin(), preferred_.end(), text) != preferred_.end();
+        out[i].logits[m] = preferred ? 8.0f : -8.0f;
+      }
+      out[i].submit_logit = r.expansion->submit_possible() ? 8.0f : std::nanf("");
+      out[i].value = two_hot(value_of(r.moves_made));
+    }
+  }
+  struct Asked {
+    GameState state;
+    int moves_made = 0;
+  };
+  std::vector<std::vector<Asked>> batches;
+  int disagreements = 0;
+
+ private:
+  std::vector<std::string> preferred_;
+};
+
+// Every expanded node's evaluation is its own count's (CountAware).
+void check_own_evaluations(const Search& search) {
+  for (NodeId id = 0; id < search.node_count(); ++id) {
+    const NodeView n = search.node(id);
+    if (!n.expanded) continue;
+    if (std::abs(n.eval_mean - CountAware::value_of(n.moves_made)) >= 1e-6) {
+      std::fprintf(stderr, "  node %u: %d moves made, evaluated %.6f\n", static_cast<unsigned>(id), n.moves_made,
+                   n.eval_mean);
+      CHECK(false);
+    }
+  }
+}
+
+// The nodes holding `s`, by their moves made.
+std::map<int, std::vector<NodeId>> holders_by_count(const Search& search, const GameState& s) {
+  std::map<int, std::vector<NodeId>> out;
+  for (NodeId id = 0; id < search.node_count(); ++id) {
+    const NodeView n = search.node(id);
+    if (*n.state == s) out[n.moves_made].push_back(id);
+  }
+  return out;
+}
+
+std::size_t parents_of(const Search& search, NodeId child) {
+  std::size_t parents = 0;
+  for (NodeId id = 0; id < search.node_count(); ++id) {
+    for (std::size_t i = 0; i < search.node(id).edge_count; ++i) parents += search.edge(id, i).child == child ? 1u : 0u;
+  }
+  return parents;
+}
+
+// White's 0 at T1 (mandatory), and +1 and -1 at T2 (White's and Black's first
+// timelines, both active): line C plays 0, submits, Black plays 0 and submits,
+// then White plays +1 and -1 - two moves into an action whose 0 is still owed;
+// line D plays +1 and 0, submits, Black plays 0 and submits, then White plays
+// -1 - one move. The same boards, the same player, the same present: one
+// GameState, with 2 and 1 moves made in its action (the plan review's example
+// of A6's count across turns).
+struct Counted {
+  GameState root;
+  GameState two;   // line C's state
+  GameState one;   // line D's
+};
+
+Counted counted(const RuleOptions& rules) {
+  const GameState root =
+      game({"[3k/4/4/K3:0:1:w]", "[3k/4/4/K3:+1:2:w]", "[3k/4/4/K3:-1:2:w]"}, BoardSize{4, 4}, rules, Colour::White);
+  GameState c = root;
+  t5d_test::play(c, "(0T1)Ka1(0T1)a2");
+  c.submit();
+  t5d_test::play(c, "(0T1)Kd4(0T1)d3");
+  c.submit();
+  t5d_test::play(c, "(+1T2)Ka1(+1T2)b1");
+  t5d_test::play(c, "(-1T2)Ka1(-1T2)b1");
+  GameState d = root;
+  t5d_test::play(d, "(+1T2)Ka1(+1T2)b1");
+  t5d_test::play(d, "(0T1)Ka1(0T1)a2");
+  d.submit();
+  t5d_test::play(d, "(0T1)Kd4(0T1)d3");
+  d.submit();
+  t5d_test::play(d, "(-1T2)Ka1(-1T2)b1");
+  return Counted{root, std::move(c), std::move(d)};
+}
+
+const std::vector<std::string> kCountedLines = {"(0T1)Ka1(0T1)a2", "(0T1)Kd4(0T1)d3", "(+1T2)Ka1(+1T2)b1",
+                                                "(-1T2)Ka1(-1T2)b1"};
+
+}  // namespace
+
+TEST(mcts_the_evaluation_cache_keeps_a_turn_start_apart_from_the_same_state_during_an_action) {
+  // EQ-06 under A6 (§15.2: "same state + epoch -> same evaluation"): the
+  // network sees the moves made in the action, so line A's turn start (none
+  // made) and line B's state during White's action (one made) - one GameState
+  // - are two inputs: two evaluations, two cache entries, each its own. Keyed
+  // by the state and the epoch alone, the cache served one line's evaluation
+  // for the other.
+  for (const bool after_shift : {true, false}) {
+    RuleOptions rules;
+    rules.moves_after_shift = after_shift;
+    const Meeting m = meeting("[3k/4/4/K3:0:1:w]", "[3k/4/4/K3:+1:2:w]", rules);
+    REQUIRE(m.at_turn_start == m.during_action);
+    for (const bool graph : {false, true}) {
+      SearchParams p = fast();
+      p.graph = graph;
+      p.legality = LegalityOptions::exact();
+      Search search(m.root, p);
+      CountAware ev(kMeetingLines);
+      search.run(ev, Limits{1500});
+      CHECK_NOTHROW(search.check_invariants());
+      CHECK_EQ(ev.disagreements, 0);  // each request's count is its expansion's
+      check_own_evaluations(search);
+      const Holders h = holders(search, m.at_turn_start);
+      REQUIRE(h.start != kNoNode);
+      REQUIRE(h.mid != kNoNode);
+      CHECK_EQ(search.node(h.start).moves_made, 0);
+      CHECK_EQ(search.node(h.mid).moves_made, 1);
+      const EvalCache* cache = search.cache();
+      REQUIRE(cache != nullptr);
+      const std::uint64_t key = search.node(h.start).key;
+      const Evaluation* a = cache->find(key, 0, 0, m.at_turn_start, true);
+      const Evaluation* b = cache->find(key, 1, 0, m.during_action, true);
+      REQUIRE(a != nullptr);
+      REQUIRE(b != nullptr);
+      CHECK(std::abs(value_moments(a->value).mean - CountAware::value_of(0)) < 1e-6);
+      CHECK(std::abs(value_moments(b->value).mean - CountAware::value_of(1)) < 1e-6);
+      // The evaluator was asked for both inputs.
+      std::set<int> asked;
+      for (const std::vector<CountAware::Asked>& batch : ev.batches) {
+        for (const CountAware::Asked& q : batch) {
+          if (q.state == m.at_turn_start) asked.insert(q.moves_made);
+        }
+      }
+      CHECK((asked == std::set<int>{0, 1}));
+    }
+  }
+}
+
+TEST(mcts_graph_keeps_equal_states_with_different_move_counts_apart) {
+  // A6's count across turns (the plan review's example; build-log spec issue
+  // 302): one GameState during White's action with 2 moves made (line C) and
+  // with 1 (line D) - and as a turn start (line E). The network tells them
+  // apart, so MCGS keeps them apart - its identity is the state with the moves
+  // made in its action - while every ordering of one action's moves from one
+  // turn start still merges (line C's +1 then -1, and -1 then +1, reach one
+  // node).
+  for (const bool after_shift : {true, false}) {
+    RuleOptions rules;
+    rules.moves_after_shift = after_shift;
+    const Counted c = counted(rules);
+    REQUIRE(c.two == c.one);
+    REQUIRE(!c.two.obligations_met());  // White's 0 still owed: an action in progress
+    REQUIRE_EQ(node_key(c.two, NodeKey::StateAndOrigins), node_key(c.one, NodeKey::StateAndOrigins));
+    for (const bool graph : {false, true}) {
+      SearchParams p = fast();
+      p.graph = graph;
+      p.legality = LegalityOptions::exact();
+      Search search(c.root, p);
+      CountAware ev(kCountedLines);
+      search.run(ev, Limits{3000});
+      CHECK_NOTHROW(search.check_invariants());
+      CHECK_EQ(ev.disagreements, 0);
+      check_own_evaluations(search);
+      // The counts met: 2 (line C), 1 (line D), and 0 - line E, White's first
+      // action playing all three boards: after Black's reply, White's turn start
+      // holds the same boards (a turn start, as in the meeting tests).
+      const std::map<int, std::vector<NodeId>> by_count = holders_by_count(search, c.two);
+      std::set<int> counts;
+      for (const auto& [count, ids] : by_count) counts.insert(count);
+      CHECK((counts == std::set<int>{0, 1, 2}));
+      REQUIRE_EQ(by_count.count(1), std::size_t{1});
+      REQUIRE_EQ(by_count.count(2), std::size_t{1});
+      if (graph) {
+        for (const auto& [count, ids] : by_count) CHECK_EQ(ids.size(), std::size_t{1});  // one node per count
+        CHECK(by_count.at(1).front() != by_count.at(2).front());
+        // Line C's two orders of +1 and -1: one node, two parents.
+        CHECK(parents_of(search, by_count.at(2).front()) >= 2);
+        CHECK(search.stats().transposition_hits > 0);
+      }
+      const EvalCache* cache = search.cache();
+      REQUIRE(cache != nullptr);
+      const std::uint64_t key = search.node(by_count.at(1).front()).key;
+      const Evaluation* one = cache->find(key, 1, 0, c.one, true);
+      const Evaluation* two = cache->find(key, 2, 0, c.two, true);
+      REQUIRE(one != nullptr);
+      REQUIRE(two != nullptr);
+      CHECK(std::abs(value_moments(one->value).mean - CountAware::value_of(1)) < 1e-6);
+      CHECK(std::abs(value_moments(two->value).mean - CountAware::value_of(2)) < 1e-6);
+    }
+  }
+}
+
+TEST(mcts_a_batch_asks_once_per_state_and_count) {
+  // The batch's de-duplication matches the whole network input (A6): in a tree
+  // (no merging) the meeting state is held by several nodes - line A's turn
+  // start by two orders of White's first action, line B's mid-action state -
+  // and a batch asks once per (state, moves made): never twice for one, never
+  // once for both counts.
+  const Meeting m = meeting("[3k/4/4/K3:0:1:w]", "[3k/4/4/K3:+1:2:w]", RuleOptions{});
+  SearchParams p = fast();
+  p.graph = false;
+  p.legality = LegalityOptions::exact();
+  p.batch_size = 32;
+  Search search(m.root, p);
+  CountAware ev(kMeetingLines);
+  search.run(ev, Limits{3000});
+  CHECK_NOTHROW(search.check_invariants());
+  check_own_evaluations(search);
+  std::size_t both_counts = 0;
+  for (const std::vector<CountAware::Asked>& batch : ev.batches) {
+    std::set<int> meeting_counts;
+    for (std::size_t i = 0; i < batch.size(); ++i) {
+      for (std::size_t j = i + 1; j < batch.size(); ++j) {
+        CHECK(!(batch[i].moves_made == batch[j].moves_made && batch[i].state == batch[j].state));
+      }
+      if (batch[i].state == m.at_turn_start) meeting_counts.insert(batch[i].moves_made);
+    }
+    if (meeting_counts.size() == 2) ++both_counts;
+  }
+  CHECK(search.stats().batch_duplicates > 0);  // equal inputs did share a request
+  CHECK(both_counts > 0);                      // equal states with two counts did not
+  std::fprintf(stderr, "  %zu batches, %llu duplicates shared, %zu batches asking for both counts\n",
+               ev.batches.size(), static_cast<unsigned long long>(search.stats().batch_duplicates), both_counts);
+}
+
+TEST(mcts_every_node_counts_the_moves_made_since_its_turn_start) {
+  // §15.4's turn structure with A6's count, read from outside the search: from
+  // the root's count, 0 below every submit edge (or whole action), the parent's
+  // + 1 below every move - in a tree and in a graph (where every parent agrees),
+  // from a turn start and from a root during an action; every request the
+  // evaluator gets carries its node's count.
+  GameState mid = two_timelines_after(2);
+  t5d_test::play(mid, t5d_test::texts(mid).front());
+  for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::WholeTurn}) {
+    for (const bool graph : {false, true}) {
+      for (const bool from_mid : {false, true}) {
+        if (split == TurnSplit::WholeTurn && from_mid) continue;  // whole turns: from turn starts only
+        SearchParams p = fast();
+        p.split = split;
+        p.graph = graph;
+        p.max_actions = 64;
+        const GameState root = from_mid ? mid : two_timelines_after(2);
+        Search search(root, p, from_mid ? 1 : 0);
+        CHECK_EQ(search.root_moves_made(), from_mid ? 1 : 0);
+        CountAware ev({});
+        search.run(ev, Limits{300});
+        CHECK_NOTHROW(search.check_invariants());
+        CHECK_EQ(ev.disagreements, 0);
+        check_own_evaluations(search);
+        std::size_t checked = 0;
+        std::size_t above_one = 0;
+        for (NodeId id = 0; id < search.node_count(); ++id) {
+          const NodeView n = search.node(id);
+          CHECK_EQ(n.turn_start, n.moves_made == 0);
+          for (std::size_t i = 0; i < n.edge_count; ++i) {
+            const EdgeView e = search.edge(id, i);
+            if (e.child == kNoNode) continue;
+            const int want = split == TurnSplit::WholeTurn || e.submit ? 0 : n.moves_made + 1;
+            CHECK_EQ(search.node(e.child).moves_made, want);
+            ++checked;
+            above_one += want > 1 ? 1u : 0u;
+          }
+        }
+        CHECK(checked > 20);
+        if (split == TurnSplit::BoardMove) CHECK(above_one > 0);
+      }
+    }
+  }
+}
+
+TEST(mcts_a_root_with_no_move_made_must_be_a_turn_start) {
+  // A root's count is the caller's: 0 - a turn start - where the obligations are
+  // met is refused (every turn starts with a board owed, T5), and so is a count
+  // below 0 or, under whole turns, above 0; a state's count is not guessed.
+  GameState s = variant("Standard");
+  t5d_test::play(s, "(0T1)Pe2(0T1)e3");
+  REQUIRE(s.obligations_met());
+  CHECK_THROWS_WITH(Search(s, fast(), 0), std::invalid_argument, "T5");
+  CHECK_THROWS_AS(Search(s, fast(), -1), std::invalid_argument);
+  CHECK_NOTHROW(Search(s, fast(), 1));
+  SearchParams whole = fast();
+  whole.split = TurnSplit::WholeTurn;
+  CHECK_THROWS_AS(Search(variant("Standard"), whole, 1), std::invalid_argument);
+  // advance_to keeps the rule.
+  Search search(variant("Standard"), fast());
+  CHECK_THROWS_AS(search.advance_to(s, 0), std::invalid_argument);
+  search.advance_to(s, 1);
+  CHECK_EQ(search.root_moves_made(), 1);
+  CHECK(!search.root_turn_start());
+}
+
 TEST(mcts_graph_dead_ends_have_no_legal_completion) {
   // The review's third repro (a fast legality budget, so moves stay unknown
   // until verified): every node marked a dead end truly has no legal
@@ -2005,7 +2411,7 @@ TEST(mcts_the_submit_share_is_the_prior_without_a_submit_logit) {
     t5d_test::play(s, "(0T1)Ka1(0T1)a2");
     REQUIRE(s.obligations_met());
     const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Uniform);
-    Search search(s, p, false);
+    Search search(s, p, 1);  // one move made in the action (A6)
     search.run(*ev, Limits{20});
     const NodeView root = search.node(search.root());
     std::size_t submits = 0;
@@ -2046,30 +2452,31 @@ TEST(mcts_the_evaluation_cache_is_per_epoch_and_exact) {
   ev.logits.assign(20, 0.25f);
   ev.value = two_hot(0.5);
   EvalCache cache(16, std::size_t{1} << 20);
-  cache.insert(7, 0, a, ev);
-  CHECK(cache.find(7, 0, a, true) != nullptr);
-  CHECK(cache.find(7, 1, a, true) == nullptr);  // another epoch: a miss (§7.9)
-  CHECK(cache.find(7, 0, b, true) == nullptr);  // the same key, another state: a miss
-  CHECK(cache.find(8, 0, a, true) == nullptr);
+  cache.insert(7, 0, 0, a, ev);
+  CHECK(cache.find(7, 0, 0, a, true) != nullptr);
+  CHECK(cache.find(7, 0, 1, a, true) == nullptr);  // another epoch: a miss (§7.9)
+  CHECK(cache.find(7, 0, 0, b, true) == nullptr);  // the same key, another state: a miss
+  CHECK(cache.find(8, 0, 0, a, true) == nullptr);
+  CHECK(cache.find(7, 1, 0, a, true) == nullptr);  // another count of moves made (A6): a miss
   // In searches sharing a cache: the root evaluated once per epoch.
   const SearchParams p = fast();
   const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
   Recording rec(*uniform);
   const auto shared = std::make_shared<EvalCache>();
   {
-    Search first(a, p, true, shared);
+    Search first(a, p, 0, shared);
     first.run(rec, Limits{1});
   }
   const std::size_t calls = rec.calls;
   CHECK_EQ(calls, std::size_t{1});
   {
-    Search second(a, p, true, shared);
+    Search second(a, p, 0, shared);
     second.run(rec, Limits{1});
     CHECK_EQ(rec.calls, calls);  // a cache hit
     CHECK_EQ(second.stats().cache_hits, std::uint64_t{1});
   }
   {
-    Search third(a, p, true, shared);
+    Search third(a, p, 0, shared);
     third.set_epoch(1);
     third.run(rec, Limits{1});
     CHECK_EQ(rec.calls, calls + 1);  // evaluated again under the new epoch
@@ -2252,7 +2659,7 @@ TEST(mcts_the_epoch_does_not_change_under_a_waiting_batch) {
   // set_epoch between gather and deliver would file the batch's evaluations
   // under the new epoch: refused; after the batch, allowed.
   const auto cache = std::make_shared<EvalCache>();
-  Search search(variant("Standard"), fast(), true, cache);
+  Search search(variant("Standard"), fast(), 0, cache);
   const std::size_t n = search.gather(1);
   REQUIRE_EQ(n, std::size_t{1});
   CHECK_THROWS_AS(search.set_epoch(5), std::invalid_argument);
@@ -2261,8 +2668,8 @@ TEST(mcts_the_epoch_does_not_change_under_a_waiting_batch) {
   const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
   uniform->evaluate(search.requests(), ev);
   search.deliver(ev);
-  CHECK(cache->find(search.node(search.root()).key, 0, variant("Standard"), true) != nullptr);
-  CHECK(cache->find(search.node(search.root()).key, 5, variant("Standard"), true) == nullptr);
+  CHECK(cache->find(search.node(search.root()).key, 0, 0, variant("Standard"), true) != nullptr);
+  CHECK(cache->find(search.node(search.root()).key, 0, 5, variant("Standard"), true) == nullptr);
   search.set_epoch(5);
   CHECK_EQ(search.epoch(), std::uint64_t{5});
 }
@@ -2431,10 +2838,12 @@ TEST(mcts_h18_the_acting_player_is_in_every_key) {
       ev.logits.assign(4, 0.0f);
       ev.value = two_hot(0.5);
       EvalCache cache;
-      cache.insert(42, 0, shifted, ev);
-      CHECK(cache.find(42, 0, shifted, true) != nullptr);
-      CHECK(cache.find(42, 0, opponent, true) == nullptr);
-      CHECK(cache.find(42, 0, opponent, false) == nullptr);
+      const int made = static_cast<int>(acts.actions.front().moves.size());  // A6
+      cache.insert(42, made, 0, shifted, ev);
+      CHECK(cache.find(42, made, 0, shifted, true) != nullptr);
+      CHECK(cache.find(42, made, 0, opponent, true) == nullptr);  // the count equal, the state not
+      CHECK(cache.find(42, made, 0, opponent, false) == nullptr);
+      CHECK(cache.find(42, 0, 0, opponent, true) == nullptr);
       // MCGS with keys cut to one bit (every key collides): the shifted root's
       // submit edge leads to a node of its own holding the opponent's turn
       // start, never back to the root, and every node's player is its state's.
@@ -2443,7 +2852,7 @@ TEST(mcts_h18_the_acting_player_is_in_every_key) {
       p.key_bits = 1;
       p.widening = false;
       const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
-      Search search(shifted, p, false);
+      Search search(shifted, p, made);
       search.run(*uniform, Limits{120});
       CHECK_NOTHROW(search.check_invariants());
       std::size_t submits = 0;

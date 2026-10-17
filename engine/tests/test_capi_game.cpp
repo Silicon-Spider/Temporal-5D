@@ -102,6 +102,9 @@ void check_view(const t5d_expansion& v, const Expansion& x) {
   CHECK_EQ(v.acting_player, index_of(x.acting_player()));
   CHECK_EQ(v.submit_possible, x.submit_possible() ? 1 : 0);
   CHECK_EQ(v.submit_legal, x.submit_legal() ? 1 : 0);
+  CHECK_EQ(v.mandatory_remaining, x.mandatory_remaining());
+  CHECK_EQ(v.optional_playable, x.optional_playable());
+  CHECK_EQ(v.moves_made, x.moves_made());
 }
 
 synthetic::Game sample_game() {
@@ -501,6 +504,121 @@ TEST(capi_expansion_says_who_acts_and_whether_submitting_is_legal_d8) {
   CHECK_EQ(t5d_game_submit(game.p, nullptr), T5D_OK);
 }
 
+namespace {
+
+t5d_move king_move(int32_t timeline, int32_t half_turn, int8_t from, int8_t to) {
+  t5d_move m{};
+  m.from_timeline = m.to_timeline = timeline;
+  m.from_half_turn = m.to_half_turn = half_turn;
+  m.from_square = from;
+  m.to_square = to;
+  return m;
+}
+
+int32_t moves_made(t5d_game* g) {
+  t5d_game_summary info{};
+  REQUIRE_EQ(t5d_game_info(g, &info), T5D_OK);
+  return info.moves_made;
+}
+
+t5d_expansion expanded(t5d_game* g) {
+  t5d_expansion v{};
+  REQUIRE_EQ(t5d_game_expand(g, nullptr, &v, nullptr), T5D_OK);
+  return v;
+}
+
+}  // namespace
+
+TEST(capi_game_counts_the_moves_in_its_action_a6) {
+  // Register A6: the moves made in the action in progress - no state records
+  // them - are the handle's: 0 at every set-up (a turn start, T5), +1 per move
+  // applied, 0 after a submission or a replayed action, carried by a copy, and
+  // in every expansion beside the mandatory and optional boards. Appended to
+  // t5d_expansion after D8's three fields (every older offset kept), and to
+  // t5d_game_summary after `rules`.
+  static_assert(offsetof(t5d_expansion, mandatory_remaining) ==
+                offsetof(t5d_expansion, submit_legal) + sizeof(int32_t));
+  static_assert(offsetof(t5d_expansion, optional_playable) ==
+                offsetof(t5d_expansion, mandatory_remaining) + sizeof(int32_t));
+  static_assert(offsetof(t5d_expansion, moves_made) == offsetof(t5d_expansion, optional_playable) + sizeof(int32_t));
+  static_assert(sizeof(t5d_expansion) >= offsetof(t5d_expansion, moves_made) + sizeof(int32_t));
+  static_assert(offsetof(t5d_game_summary, moves_made) >= offsetof(t5d_game_summary, rules) + sizeof(uint64_t));
+  // White's timeline 0 at T1 - mandatory - and +1 at T2, ahead of the present -
+  // optional.
+  const char* boards[] = {"[3k/4/4/K3:0:1:w]", "[3k/4/4/K3:+1:2:w]"};
+  const t5d_move on_zero = king_move(0, 2, 0, 8);  // (0T1)Ka1(0T1)a2
+  const t5d_move on_one = king_move(1, 4, 0, 1);   // (+1T2)Ka1(+1T2)b1
+  for (const uint64_t rules : {T5D_RULES_STANDARD, T5D_RULES_NO_MOVES_AFTER_SHIFT}) {
+    const bool r8 = rules == T5D_RULES_STANDARD;
+    Game game;
+    REQUIRE_EQ(t5d_game_new_from_fen(boards, 2, 4, 4, T5D_PARITY_INFER, T5D_TO_MOVE_INFER, rules, &game.p, nullptr),
+               T5D_OK);
+    CHECK_EQ(moves_made(game.p), 0);
+    t5d_expansion v = expanded(game.p);
+    CHECK_EQ(v.mandatory_remaining, 1);
+    CHECK_EQ(v.optional_playable, 1);
+    CHECK_EQ(v.moves_made, 0);
+    // Refused moves and submissions count nothing.
+    Text error;
+    CHECK_EQ(t5d_game_submit(game.p, &error.p), T5D_ERR_ILLEGAL);
+    t5d_move bogus = on_zero;
+    bogus.to_square = 63;
+    CHECK_EQ(t5d_game_apply(game.p, &bogus, nullptr), T5D_ERR_ILLEGAL);
+    CHECK_EQ(moves_made(game.p), 0);
+    // The mandatory board played: the present shifts (T5).
+    REQUIRE_EQ(t5d_game_apply(game.p, &on_zero, nullptr), T5D_OK);
+    CHECK_EQ(moves_made(game.p), 1);
+    v = expanded(game.p);
+    CHECK_EQ(v.mandatory_remaining, 0);
+    CHECK_EQ(v.submit_possible, 1);
+    CHECK_EQ(v.optional_playable, r8 ? 1 : 0);  // Q4: under the Guide-literal reading no move follows the shift
+    CHECK_EQ(v.moves_made, 1);
+    if (r8) {
+      // A copy carries the count; each handle counts its own moves after it.
+      Game copy;
+      REQUIRE_EQ(t5d_game_copy(game.p, &copy.p), T5D_OK);
+      CHECK_EQ(moves_made(copy.p), 1);
+      v = expanded(copy.p);
+      size_t index = v.move_count;
+      for (size_t i = 0; i < v.move_count; ++i) {
+        const t5d_move& m = v.moves[i];
+        if (m.from_timeline == 1 && m.to_timeline == 1 && m.to_half_turn == 4 && m.to_square == 1) index = i;
+      }
+      REQUIRE(index < v.move_count);
+      REQUIRE_EQ(t5d_game_apply_expanded(copy.p, index, nullptr), T5D_OK);  // the optional board, after the shift
+      CHECK_EQ(moves_made(copy.p), 2);
+      CHECK_EQ(moves_made(game.p), 1);
+      v = expanded(copy.p);
+      CHECK_EQ(v.mandatory_remaining, 0);
+      CHECK_EQ(v.optional_playable, 0);
+      CHECK_EQ(v.moves_made, 2);
+      REQUIRE_EQ(t5d_game_apply(game.p, &on_one, nullptr), T5D_OK);
+      CHECK_EQ(moves_made(game.p), 2);
+    }
+    // Submitted: Black's turn start.
+    REQUIRE_EQ(t5d_game_submit(game.p, nullptr), T5D_OK);
+    CHECK_EQ(moves_made(game.p), 0);
+    v = expanded(game.p);
+    CHECK_EQ(v.moves_made, 0);
+    CHECK(v.mandatory_remaining > 0);
+  }
+  // A record's replay: every action whole, so 0 after each; a move after it
+  // counts, and leaves the record.
+  const std::string record = "1. e4 / e5 2. Nf3\n";
+  Game game;
+  REQUIRE_EQ(t5d_game_new_from_pgn(record.data(), record.size(), T5D_RULES_STANDARD, &game.p, nullptr), T5D_OK);
+  for (int a = 0; a < 3; ++a) {
+    REQUIRE_EQ(t5d_game_replay_next(game.p, nullptr), T5D_OK);
+    CHECK_EQ(moves_made(game.p), 0);
+  }
+  const t5d_expansion v = expanded(game.p);
+  REQUIRE(v.move_count > 0);
+  REQUIRE_EQ(t5d_game_apply_expanded(game.p, 0, nullptr), T5D_OK);
+  CHECK_EQ(moves_made(game.p), 1);
+  CHECK_EQ(t5d_game_replay_next(game.p, nullptr), T5D_ERR_ARGUMENT);  // it left its record
+  CHECK_EQ(moves_made(game.p), 1);
+}
+
 TEST(capi_layout_reports_the_structs_as_compiled) {
   // t5d_layout: what a binding checks its mirrors against at load (stage E7).
   size_t v = 0;
@@ -514,6 +632,16 @@ TEST(capi_layout_reports_the_structs_as_compiled) {
   CHECK_EQ(v, offsetof(t5d_expansion, submit_legal));
   REQUIRE_EQ(t5d_layout("t5d_expansion", "src_extra", &v), T5D_OK);
   CHECK_EQ(v, offsetof(t5d_expansion, src_extra));
+  REQUIRE_EQ(t5d_layout("t5d_expansion", "mandatory_remaining", &v), T5D_OK);  // A6
+  CHECK_EQ(v, offsetof(t5d_expansion, mandatory_remaining));
+  REQUIRE_EQ(t5d_layout("t5d_expansion", "optional_playable", &v), T5D_OK);
+  CHECK_EQ(v, offsetof(t5d_expansion, optional_playable));
+  REQUIRE_EQ(t5d_layout("t5d_expansion", "moves_made", &v), T5D_OK);
+  CHECK_EQ(v, offsetof(t5d_expansion, moves_made));
+  REQUIRE_EQ(t5d_layout("t5d_game_summary", "moves_made", &v), T5D_OK);
+  CHECK_EQ(v, offsetof(t5d_game_summary, moves_made));
+  REQUIRE_EQ(t5d_layout("t5d_game_summary", nullptr, &v), T5D_OK);
+  CHECK_EQ(v, sizeof(t5d_game_summary));
   REQUIRE_EQ(t5d_layout("t5d_move", nullptr, &v), T5D_OK);
   CHECK_EQ(v, size_t{32});
   REQUIRE_EQ(t5d_layout("t5d_move", "flags", &v), T5D_OK);

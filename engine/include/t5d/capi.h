@@ -182,7 +182,10 @@ T5D_API t5d_status t5d_state_board(const t5d_state* state, size_t index, int32_t
 /* =============================================================================
  * Games (stage E3): a game state under the rules - the player to move, the
  * present, the action in progress - with its expansion (t5d/expand.hpp, the
- * engine README's "Expansion"). Moves are pseudo-legal; submissions are
+ * engine README's "Expansion") and the number of moves made in the action in
+ * progress (register A6: no state records it - t5d_game_summary.moves_made,
+ * t5d_expansion.moves_made). Every game is made at a turn start (count 0).
+ * Moves are pseudo-legal; submissions are
  * LEGAL: a submission that leaves a royal piece of the mover's capturable is
  * refused (C4, R1; stage E4), and a game read from a record replays it so.
  *
@@ -246,6 +249,11 @@ typedef struct t5d_game_summary {
   int32_t may_submit;       /* 1: the action may be submitted: the present shifted (T5), every royal safe (C4) */
   uint32_t ruleset;         /* the ruleset ID (0: standard) */
   uint64_t rules;           /* the ruleset's canonical encoding */
+  /* appended in engine ABI round 1 (register A6): */
+  int32_t moves_made;       /* the moves made in the action in progress (the handle's
+                               count - no state records it): 0 at a turn start, one more
+                               per t5d_game_apply or _apply_expanded, 0 again after
+                               t5d_game_submit and t5d_game_replay_next */
 } t5d_game_summary;
 
 /* The arrays of one expansion: every pointer stays valid until the next
@@ -317,6 +325,20 @@ typedef struct t5d_expansion {
                               moves */
   int32_t submit_legal;    /* 1: submitting is legal now - possible, and no royal piece of
                               the acting player's left capturable (C4, R1; exact) */
+
+  /* ---- appended in engine ABI round 1 (register A6, spec 2.3: the turn state, exact
+   * counts from the rules engine): every field above keeps its offset. Global, like the
+   * three above. */
+  int32_t mandatory_remaining; /* the boards the acting player must still play before
+                                  submitting is possible (T5, T6; Q5, Q6): 0 exactly when
+                                  submit_possible */
+  int32_t optional_playable;   /* the acting player's other playable boards (L5: playable,
+                                  not mandatory); 0 when no move may be made (Q4) */
+  int32_t moves_made;          /* the moves already made in the action in progress, since
+                                  its turn start (t5d_game_summary.moves_made for a game's
+                                  expansion; a search leaf's from its path): 0 at a turn
+                                  start. No state records it: equal boards with different
+                                  counts are different network inputs */
 } t5d_expansion;
 
 /* A game from a 5dpgn record (`length` bytes of UTF-8 text; the record's
@@ -338,7 +360,8 @@ T5D_API t5d_status t5d_game_new_from_fen(const char* const* boards, size_t count
 T5D_API t5d_status t5d_game_new_variant(const char* name, uint64_t rules, t5d_game** out,
                                         char** error);
 
-/* An independent copy (sharing the immutable boards; not the expansion). */
+/* An independent copy (sharing the immutable boards; not the expansion), with
+ * the count of moves made in the action. */
 T5D_API t5d_status t5d_game_copy(const t5d_game* game, t5d_game** out);
 
 /* Releases a game. NULL is ignored. */
@@ -354,7 +377,8 @@ T5D_API t5d_status t5d_game_record_actions(const t5d_game* game, size_t* total, 
 
 /* Replays the record's next action - its moves, then the submission, under
  * the game's legality (t5d_game_set_legality: by default legally, as the
- * gate adapter's full mode does). On failure the game is unchanged:
+ * gate adapter's full mode does) - to the next turn start (moves made: 0).
+ * On failure the game is unchanged:
  * T5D_ERR_ILLEGAL (an illegal move or a submission the rules refuse),
  * T5D_ERR_NOTATION (a move that cannot be read, or fits several moves),
  * T5D_ERR_ARGUMENT (no action left, or the game has left its record by
@@ -365,16 +389,16 @@ T5D_API t5d_status t5d_game_replay_next(t5d_game* game, char** error);
  * source and destination (timeline, half-turn, square) and promotion (0 for
  * none) - the other fields of `move` are not read. T5D_ERR_ILLEGAL if there is
  * none, or no move may be made now (under Q4's Guide-literal reading, once the
- * present has shifted). */
+ * present has shifted). The action has one more move (moves made + 1). */
 T5D_API t5d_status t5d_game_apply(t5d_game* game, const t5d_move* move, char** error);
 
 /* Applies the move at `index` of the handle's last expansion, which must be
- * of the current state (T5D_ERR_ARGUMENT otherwise). */
+ * of the current state (T5D_ERR_ARGUMENT otherwise); moves made + 1. */
 T5D_API t5d_status t5d_game_apply_expanded(t5d_game* game, size_t index, char** error);
 
-/* Submits the action (T5). T5D_ERR_ILLEGAL while the present has not shifted
- * to the opponent, or if a royal piece of the mover's is left capturable (C4,
- * R1). */
+/* Submits the action (T5): the opponent's turn start (moves made: 0).
+ * T5D_ERR_ILLEGAL while the present has not shifted to the opponent, or if a
+ * royal piece of the mover's is left capturable (C4, R1). */
 T5D_API t5d_status t5d_game_submit(t5d_game* game, char** error);
 
 /* What a game's submissions - and its record's replay - are tested for:
@@ -387,7 +411,8 @@ T5D_API t5d_status t5d_game_submit(t5d_game* game, char** error);
 T5D_API t5d_status t5d_game_set_legality(t5d_game* game, int32_t legality, char** error);
 
 /* Expands the current state into the handle's buffers and describes them in
- * *out. `options` may be NULL: k = 8, every board's features, no relations. */
+ * *out, with the handle's count of moves made in the action (A6). `options`
+ * may be NULL: k = 8, every board's features, no relations. */
 T5D_API t5d_status t5d_game_expand(t5d_game* game, const t5d_expand_options* options,
                                    t5d_expansion* out, char** error);
 

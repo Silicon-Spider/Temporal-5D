@@ -455,7 +455,7 @@ def test_a_cache_is_shared_only_between_searches_with_one_input(change, named):
 @pytest.mark.parametrize("refresh", [False, True], ids=["causal", "root-refresh"])
 def test_the_cached_path_keeps_its_epochs_apart_in_a_shared_cache(refresh):
     """C14 with the cached path (C2): each search opens the evaluator's epoch at its root and the
-    engine caches evaluations per (state, epoch) - so with C3's root refresh a fresh search
+    engine caches evaluations per (state, moves made, epoch) - so with C3's root refresh a fresh search
     sharing the previous one's cache reuses none of its evaluations (each root conditions its
     own history), while in the shared causal epoch it reuses them."""
     from t5d.engine.evaluator import CachedNetworkEvaluator, engine_epoch
@@ -542,3 +542,68 @@ def test_the_leaf_carries_d8():
         assert v.submit_possible and v.acting_player != x.present & 1
         assert v.legality is None or v.legality.shape == (x.move_count,)
         s.abandon()
+
+
+# --- A6: the root's moves made in its action ------------------------------------------------------
+
+
+def test_the_root_takes_the_games_moves_made_a6():
+    """Register A6: a search's root takes the game handle's count of moves made in its action -
+    ``turn_start`` defaults to it, and a ``turn_start`` that contradicts it is refused - and every
+    leaf's expansion carries its own count: 0 at a turn start (which always owes a board, T5),
+    the root's + 1 per move below it."""
+    with Game.variant("Standard - Two Timelines") as g:
+        with pytest.raises(EngineArgumentError, match="moves in its action"):
+            Search(g, turn_start=False)
+        s = Search(g)
+        assert s.info().root_turn_start and s.root_game().info().moves_made == 0
+        s.close()
+        g.apply(g.moves()[0])
+        assert g.info().moves_made == 1
+        with pytest.raises(EngineArgumentError, match="moves in its action"):
+            Search(g, turn_start=True)
+        s = Search(g, params=search_params(seed=3))
+        assert not s.info().root_turn_start
+        with s.root_game() as root:
+            assert root.info().moves_made == 1
+        s.run(T5D_EVALUATOR_RANDOM, 120, seed=3)
+        n = s.gather(16)
+        counts = []
+        for i in range(n):
+            x = s.leaf_view(i).expansion
+            counts.append(x.moves_made)
+            assert x.moves_made >= 0 and (x.moves_made > 0 or x.mandatory_remaining > 0)
+            assert (x.mandatory_remaining == 0) == x.submit_possible
+        s.abandon()
+        assert n > 0 and max(counts) >= 2  # moves below the root's first
+        s.close()
+
+
+def test_the_root_takes_a_count_the_turn_start_flag_cannot_give_a6():
+    """Two moves into an action: the root's count is the handle's 2, not the 0 or 1 a boolean
+    reading of it would give (the count of 2 in the test above comes from moves below the root,
+    not from the handle). Three White boards in the present, all mandatory (T5): two played, one
+    owed - the root's own leaf counts 2, a move below it 3; a search sharing the first's cache
+    takes the handle's count too."""
+    boards = ["[3k/4/4/K3:-1:1:w]", "[3k/4/4/K3:0:1:w]", "[3k/4/4/K3:+1:1:w]"]
+    with Game.from_fen(boards) as g:
+        for timeline in (-1, 0):
+            g.apply(next(m for m in g.moves() if m.from_timeline == m.to_timeline == timeline and m.from_half_turn == m.to_half_turn))
+        assert g.info().moves_made == 2
+        with pytest.raises(EngineArgumentError, match="moves in its action"):
+            Search(g, turn_start=True)
+        s = Search(g, params=search_params(seed=3))
+        shared = Search(g, params=search_params(seed=3), share=s)
+        for each in (s, shared):
+            with each.root_game() as root:
+                assert root.info().moves_made == 2
+            assert each.gather(1) == 1
+            x = each.leaf_view(0).expansion  # the root's own
+            assert (x.moves_made, x.mandatory_remaining, bool(x.submit_possible)) == (2, 1, False)
+            each.abandon()
+        shared.close()
+        s.run(T5D_EVALUATOR_RANDOM, 40, seed=3)
+        s.advance(next(c.index for c in s.children() if not c.submit and c.visits > 0))
+        with s.root_game() as root:
+            assert root.info().moves_made == 3
+        s.close()

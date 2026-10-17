@@ -38,12 +38,20 @@ struct t5d_state {
 };
 
 struct t5d_game {
-  explicit t5d_game(t5d::GameState s) : state(std::move(s)) {}
+  explicit t5d_game(t5d::GameState s, int32_t moves = 0) : state(std::move(s)), moves_in_action(moves) {}
   t5d_game(const t5d_game& other)
-      : state(other.state), ruling(other.ruling), replay(other.replay), on_record(other.on_record) {}
+      : state(other.state),
+        moves_in_action(other.moves_in_action),
+        ruling(other.ruling),
+        replay(other.replay),
+        on_record(other.on_record) {}
   t5d_game& operator=(const t5d_game&) = delete;
 
   t5d::GameState state;
+  // The moves made in the action in progress (register A6): no state records
+  // it, so the handle counts - 0 at a turn start, +1 per move applied, 0 again
+  // after a submission or a replayed action.
+  int32_t moves_in_action = 0;
   // The ruling submissions are tested under: the engine's (C4, R1; stage
   // E4) - a submission that leaves a royal piece capturable is refused.
   t5d::CheckRuling ruling = t5d::standard_check_ruling();
@@ -281,15 +289,19 @@ void describe(const t5d::Expansion& x, t5d_expansion& out) {
   out.acting_player = t5d::index_of(x.acting_player());
   out.submit_possible = x.submit_possible() ? 1 : 0;
   out.submit_legal = x.submit_legal() ? 1 : 0;
+  out.mandatory_remaining = x.mandatory_remaining();
+  out.optional_playable = x.optional_playable();
+  out.moves_made = x.moves_made();
 }
 
 bool submittable(t5d::SubmitStatus s) noexcept {
   return s == t5d::SubmitStatus::Unchecked || s == t5d::SubmitStatus::Safe;
 }
 
-// Applies a move generated for the game's state.
+// Applies a move generated for the game's state: one more move in the action.
 void apply_to(t5d_game& game, const t5d::Move& move) {
   game.state.apply(move);
+  ++game.moves_in_action;
   game.on_record = false;
   game.expansion_current = false;
 }
@@ -360,6 +372,7 @@ constexpr LayoutEntry kLayout[] = {
     T5D_AT(t5d_game_summary, may_submit),
     T5D_AT(t5d_game_summary, ruleset),
     T5D_AT(t5d_game_summary, rules),
+    T5D_AT(t5d_game_summary, moves_made),
 
     T5D_SIZE(t5d_expansion),
     T5D_AT(t5d_expansion, width),
@@ -404,6 +417,9 @@ constexpr LayoutEntry kLayout[] = {
     T5D_AT(t5d_expansion, acting_player),
     T5D_AT(t5d_expansion, submit_possible),
     T5D_AT(t5d_expansion, submit_legal),
+    T5D_AT(t5d_expansion, mandatory_remaining),
+    T5D_AT(t5d_expansion, optional_playable),
+    T5D_AT(t5d_expansion, moves_made),
 };
 
 #undef T5D_AT
@@ -655,6 +671,7 @@ t5d_status t5d_game_info(const t5d_game* game, t5d_game_summary* out) {
   out->may_submit = submittable(s.submission_status(game->ruling)) ? 1 : 0;
   out->ruleset = mv.ruleset();
   out->rules = s.rules().encode();
+  out->moves_made = game->moves_in_action;
   return T5D_OK;
 }
 
@@ -686,6 +703,7 @@ t5d_status t5d_game_replay_next(t5d_game* game, char** error) {
     }
     game->replay->play_next();  // the strong guarantee: unchanged on failure
     game->state = game->replay->state();
+    game->moves_in_action = 0;  // a whole action, submitted: the next turn start
     game->expansion_current = false;
     return T5D_OK;
   });
@@ -750,6 +768,7 @@ t5d_status t5d_game_submit(t5d_game* game, char** error) {
       throw IllegalAction("cannot submit: a royal piece of the mover's is left capturable (C4, R1)");
     }
     game->state.submit(game->ruling);
+    game->moves_in_action = 0;  // the opponent's turn start
     game->on_record = false;
     game->expansion_current = false;
     return T5D_OK;
@@ -775,7 +794,7 @@ t5d_status t5d_game_expand(t5d_game* game, const t5d_expand_options* options, t5
     if (game == nullptr || out == nullptr) throw std::invalid_argument("game or out is NULL");
     const t5d::ExpandOptions o = expand_options_from(options);
     game->expansion_current = false;
-    t5d::expand(game->state, o, game->expansion);
+    t5d::expand(game->state, o, game->expansion, game->moves_in_action);
     game->expansion_current = true;
     describe(game->expansion, *out);
     return T5D_OK;
@@ -799,7 +818,11 @@ t5d_status t5d_game_state(const t5d_game* game, t5d_state** out) {
 namespace t5d::capi_internal {
 
 const GameState& game_state(const t5d_game& game) noexcept { return game.state; }
-t5d_game* new_game(const GameState& state) { return new t5d_game(state); }
+int game_moves_in_action(const t5d_game& game) noexcept { return game.moves_in_action; }
+t5d_game* new_game(const GameState& state, int moves_in_action) {
+  if (moves_in_action < 0) throw std::invalid_argument("a game's moves in its action must be 0 or more");
+  return new t5d_game(state, moves_in_action);
+}
 void describe_expansion(const Expansion& expansion, t5d_expansion& out) { ::describe(expansion, out); }
 ExpandOptions expand_options(const t5d_expand_options* options) {
   try {
