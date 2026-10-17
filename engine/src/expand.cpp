@@ -359,10 +359,14 @@ inline void set_bit(std::vector<std::uint64_t>& bits, std::int32_t board) noexce
 
 }  // namespace
 
-void expand(const GameState& state, const ExpandOptions& options, Expansion& out) {
+void expand(const GameState& state, const ExpandOptions& options, Expansion& out, int moves_made) {
   if (options.window_k < 0) {
     throw std::invalid_argument("expand: window_k must be 0 or more, not " +
                                 std::to_string(options.window_k));
+  }
+  if (moves_made < 0) {
+    throw std::invalid_argument("expand: moves_made (the moves made in the action, A6) must be 0 or more, not " +
+                                std::to_string(moves_made));
   }
   if (options.pin || options.check) {
     throw std::invalid_argument(
@@ -391,6 +395,10 @@ void expand(const GameState& state, const ExpandOptions& options, Expansion& out
   // when C4 holds too (the submission test itself; it allocates nothing).
   out.submit_possible_ = state.obligations_met();
   out.submit_legal_ = out.submit_possible_ && royals_safe(state);
+  // A6 (h): the boards the acting player must still play (T5, T6; Q5, Q6) -
+  // the state's own count - and the moves made in its action, the caller's.
+  out.mandatory_remaining_ = state.mandatory_count();
+  out.moves_made_ = moves_made;
   out.window_k_ = options.window_k;
   out.timeline_count_ = mv.timeline_count();
   out.board_count_ = n;
@@ -405,6 +413,7 @@ void expand(const GameState& state, const ExpandOptions& options, Expansion& out
   out.tl_active_.resize(timelines);
   out.tl_origin_.resize(timelines);
   int active_count = 0;
+  int playable = 0;  // the mover's playable boards (L5): heads with the mover to move
   std::int32_t b = 0;
   for (std::size_t i = 0; i < timelines; ++i) {
     const Timeline& t = *mv.timelines()[i];
@@ -415,9 +424,19 @@ void expand(const GameState& state, const ExpandOptions& options, Expansion& out
     out.tl_length_[i] = t.length();
     out.tl_active_[i] = is_active ? 1 : 0;
     active_count += is_active ? 1 : 0;
+    playable += to_move_at(t.first_half_turn() + t.length() - 1) == out.to_move_ ? 1 : 0;
     b += t.length();
   }
   out.active_count_ = active_count;
+  // A6 (h): the optional boards - the playable ones (T6: active or not, in the
+  // present or not) that are not mandatory - while a move may be made (Q4). The
+  // mandatory boards are among the playable ones (a head in the present on
+  // the mover's colour, or any active head of the mover's under Q5).
+  out.optional_playable_ = out.may_move_ ? playable - out.mandatory_remaining_ : 0;
+  if (out.optional_playable_ < 0) {
+    throw std::logic_error("expand: more mandatory boards (" + std::to_string(out.mandatory_remaining_) +
+                           ") than playable ones (" + std::to_string(playable) + ")");
+  }
 
   // -- the board bitsets: N/64 words each
   const std::size_t words = (n + 63) / 64;

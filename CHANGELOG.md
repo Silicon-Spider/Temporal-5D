@@ -10,6 +10,221 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-17 - Engine A6: the turn-state counts in the expansion and the C API; the in-action move count in the evaluation identity
+
+- Register A6 (Committed, class C; §2.3), the engine side - engine ABI round 1's first
+  part. `engine/include/t5d/expand.hpp`, `src/expand.cpp`: item (h), the turn state -
+  `mandatory_remaining()` (the boards the acting player must still play: the state
+  machine's own count, T5, T6; Q5, Q6), `optional_playable()` (its other playable boards,
+  L5; none once no move may be made, Q4) and `moves_made()` (the moves made in the action
+  in progress). No state records that count - one `GameState` can be a turn start, or one
+  or two moves into an action, by different paths - so `expand` takes it from its caller
+  (`expand(state, options, out, moves_made)`; the three-argument form is a turn start's).
+  Eager, O(timelines), allocation-free. This commit changes none of the truth's sources
+  (`T5D_TRUTH_SOURCES`: the state machine, movegen, check, legal ... untouched). Commit 1
+  changed two of them, `prover.hpp` and `prover.cpp` (the line the prover reports, only:
+  no verdict, distance or node count changes), so after this component the truth's code
+  signature differs from main's - as main's already differs from M17's (d96d6d9; 9be6f04
+  typed the prover's hash constants). The main loop runs the Lazy SMP timing test before
+  merging.
+- `engine/include/t5d/capi.h`, `src/capi.cpp`, `src/capi_internal.hpp`: `t5d_expansion`
+  gains `mandatory_remaining`, `optional_playable`, `moves_made` after D8's three fields
+  (appended: every older offset kept; `t5d_layout` reports them); a `t5d_game` counts the
+  moves of its action - 0 at every set-up (a turn start, T5), +1 per `t5d_game_apply` or
+  `_apply_expanded`, 0 after `t5d_game_submit` or `t5d_game_replay_next`, carried by
+  `t5d_game_copy` - reported as `t5d_game_summary.moves_made` (appended after `rules`)
+  and passed to every `t5d_game_expand`.
+- The count in the evaluation identity (issue 302, the main loop's reading, and the plan
+  critic's settled one): the network will see it, so equal states with different counts
+  are different inputs. `engine/include/t5d/mcts.hpp`, `src/mcts.cpp`: a node carries the
+  moves made in its action (0 below a submit edge or a whole action, the parent's + 1
+  below a move - the turn-start flag is its being 0); MCGS identity is the state key with
+  the count, which subsumes the turn-in-progress bit (every ordering of one action's moves
+  from one turn start has the same count, so MCGS keeps its merges inside an action);
+  `EvalRequest::moves_made` carries it with the leaf's expansion; the evaluation cache's
+  key (`EvalCache::find`/`insert`) and the batch's de-duplication match it beside the
+  state and the epoch, so §15.2's purity rows hold (the comment that called the turn
+  start "a path property the network must not see" is gone); `check_invariants` holds
+  the count's turn structure (§15.4); the digest hashes it. `Search(root, params,
+  moves_made, cache)` and `advance_to(target, moves_made)` take the count - a `bool`
+  there (the old turn-start flag) is a compile error, not a silent 0 or 1 - and refuse
+  a count of 0 where the root's obligations are met (a turn start owes a board, T5);
+  `root_moves_made()`. `src/capi_search.cpp`, `include/t5d/capi_search.h`:
+  `t5d_search_new` and `_new_sharing` take the game handle's count and refuse a
+  `turn_start` that contradicts it; `t5d_search_root_game` hands the root's count back (a
+  game handle with it); a leaf's count is `t5d_leaf.expansion.moves_made`
+  (`t5d_search_leaf_state` returns a `t5d_state`, which holds no count). `src/selfplay.cpp`
+  carries the count.
+- Python mirror (`python/t5d/engine`): `capi.py`'s `CExpansion` and `GameSummary` (the
+  layout check passes); `Expansion.mandatory_remaining`, `optional_playable`,
+  `moves_made`; `GameInfo.moves_made` and `turn_start`; `Search`'s `turn_start` defaults
+  to the handle's (given, the engine checks it); `netplay.py` no longer tracks it.
+  Not here (the net lane's A6 inputs): `PositionState`'s counts, their embedding, the
+  converter's copy, and `net/cache.state_digest` (an epoch's anchor), which takes the
+  count when the network's input carries it.
+- Tests: `engine/tests/test_turn_state.cpp` (new; §15.2's A6 row) - the three counts
+  against a recount written from the rulebook at every state of random play under every
+  ruleset, both Q4 readings among them, through `expand` and through a `t5d_game` playing
+  the same moves; A6's arithmetic checked move by move wherever no activity changes, the
+  rest counted (T6's arrivals, T11/T12's reactivations raising the count); the spec's
+  cases by construction (a jump between two present boards, an optional board onto a
+  mandatory one, a rewinding branch releasing an unplayed board, moves after the shift
+  under R8 and the Guide-literal reading). `test_expand_reference.cpp`: (h) against the
+  reference. `test_mcts.cpp`: EQ-06's
+  `mcts_the_evaluation_cache_keeps_a_turn_start_apart_from_the_same_state_during_an_action`,
+  equal states with 2, 1 and 0 moves made kept apart by MCGS while one action's orders
+  merge, a batch asking once per (state, count), every node's count from its path, the
+  root's count refused where it cannot be - each failing on the matching mutant (the
+  cache key, the de-duplication or MCGS identity without the count). `test_capi_game.cpp`,
+  `test_capi_search.cpp`: the handle's count and the search's; the layouts. Python:
+  `test_binding.py` (the layout, the counts through apply, copy, submit and replay),
+  `test_search_api.py` (the root's count). Engine 554 of 554 tests (`--werror`) - after a
+  first full run of the final tree that ended with exit 1 and no summary line, inside
+  `scanner_lazy_smp_store_refuses_contradictions` (a test this component does not touch:
+  a crash in the shared stores on Windows, reproduced and traced at review - below); the
+  long tests it touches 7 of 7 (the recount over 77,926 states); network 817 passed, 2
+  skipped (`T5D_REQUIRE_ENGINE=1`); ruff clean; `verify` ok.
+- `engine/README.md`: expansion (h), the game handle's count, MCGS identity and the
+  evaluation cache with the count, the step API's `turn_start`, the readings.
+  `docs/BUILD_LOG.md`: register A6 (engine side built, tested), C11, C14; spec issues
+  143-145 (A6's arithmetic is not the rules' count; the two undefined counts read; §15.4's
+  turn structure and the count); proposed edits 116-118.
+- Review fixes, the same day (after 7bccea6). The C API's root count was tested only at
+  0 and 1, which the old flag gives too: a search reading the handle's count as the flag
+  passed every engine and Python test. `capi_search_takes_the_moves_made_from_the_game_a6`
+  and `test_the_root_takes_a_count_the_turn_start_flag_cannot_give_a6` now build a search,
+  and one sharing its cache, two moves into a three-board action: the root counts 2 (its
+  game handle and its own leaf), a move below it 3. `advance_moves`' exact count (the
+  root's + 1) and the tree it carries were untested - with a count of 1 there, a
+  pondered subtree was dropped and the intermediate root miscounted, with no test
+  failing; `mcts_advancing_a_move_at_a_time_carries_the_tree_at_each_count_a6` advances
+  move by move (counts 1 and 2, then the submission's 0) and replays a two-move reply
+  along the pondered line by `advance_action`, under tree and graph search, each new root
+  the node the tree held, with its visits. Each fails on its mutant (the count read as the
+  flag: 5 failed checks in C++, and the Python twin; `advance_moves` giving 1: 12). The
+  docs that still said a batch asks one evaluation per distinct state and evaluations are
+  cached per (state, epoch) - `capi_search.h` (`t5d_search_gather`, `_set_epoch`,
+  `t5d_leaf.key`, `_leaf_state`), `mcts.hpp` (`EvalRequest::key`, `EvalCache`, `gather`,
+  `epoch`, `batch_duplicates`), `mcts.cpp`, the README, `evaluator.py` and `search.py`'s
+  `LeafView.key` - now say (state, moves made in its action, epoch), and that neither the
+  key nor a leaf's `t5d_state` identifies its input; the README's list of game functions
+  is whole again, and its summary of the search's tests names A6's. This entry no longer
+  says `_leaf_state` hands the count back, or that M17's configuration keeps commit 1's
+  signature (above), and commit 1's entry gives the true reason its line stays
+  incomplete beyond depth 1, and §11.3 for Lazy SMP. The abort
+  above, reproduced: `scanner_lazy_smp_store_refuses_contradictions` segfaults in 11 of
+  600 runs here, in `ConcurrentSolvedStore::put` (gdb) - with MSYS2 ucrt64 g++ 16.2 a
+  `std::shared_mutex` that several threads take for the first time at once does not
+  always exclude a writer (a standalone test; none once each lock has been taken once,
+  and none with `std::mutex`), and taking each shard's lock once at construction (an
+  experiment, reverted) gave 0 in 600. Not fixed here: the scanner's and the prover's
+  stores are among the truth's sources, M17 was measured on this toolchain, and Guard and
+  Hunt's stores share the hazard - logged for the main loop (BUILD_LOG: H17's row,
+  "Parked, and why"). Proposed edit 119: §11.3's full key, §15.2's purity row, §7.9 and
+  §8.5, which state the identity edit 200 leaves out. Checks after the fixes: engine 555
+  of 555 (`--werror`); the five-thread Guard tests 25 runs in a row (5 through
+  `build.py`, 20 direct under the Python suite's load); network 818 passed, 2 skipped
+  (`T5D_REQUIRE_ENGINE=1`); ruff clean; `verify` ok.
+- Spec: §2.3 and register A6 (edits 116, 117; issues 143, 144); §8.5, §8.7 and register
+  C11, C14, H18 - the count in identity and the cache's key, the main loop's proposed
+  edit 200 (issue 302); §11.3's full key, §15.2's purity row (C19-C21: as built, the same
+  state, count and epoch give the same evaluation), §7.9 and §8.5's purity sentence (edit
+  119); §15.2's A6 row (built); §15.4's turn structure (edit 118, issue 145); §11.3's Lazy
+  SMP (H17: the shared stores' lock on Windows, logged, no edit).
+
+### 2026-10-17 - Engine A6, first commit: Guard's five-thread test against its contract; the prover reports the line of a thread that searched
+
+- The cause of the intermittent failure of `guard_at_five_threads_depth_one_is_the_opponents_mate_in_one`
+  (CI run 37146667584, g++-13: `line_complete` and the line's mate both false). Under
+  Lazy SMP the first thread to prove the root exports the proof at once (H19), and a
+  thread that builds its root after that - thread 0 most often, which builds its root
+  after starting the four helpers, so on a loaded two-vCPU runner - reads the proof from
+  the store and decides the root with no tree beneath it. The prover reported the
+  lowest-numbered thread at the least distance: that thread, its line empty and its
+  first action empty too. Made certain in a new test (a solved store that holds thread
+  0's first lookup until the root's proof is exported): the old prover failed it on
+  every run.
+- `engine/src/prover.cpp` (`Prover::Impl::report_proof`): among the threads that proved
+  the root at the least distance, those that searched their root come first, the first
+  complete line is reported, else the longest; the first action is the reporting
+  thread's (a root read from the store: the line's, from the certificate, if any).
+  Sound and cheap: every thread's tree holds only exact results, a line is a walk of at
+  most a few hundred nodes per thread, and the verdict and the distance are chosen as
+  before - what Guard and Hunt decide is unchanged, and one thread reports exactly what
+  it did. Which of the two remedies, and why: the line is now complete wherever some
+  thread's tree holds it - always at depth 1, whose stores start empty (the thread that
+  proved the root first searched it, and its line ends at the mated defender). Beyond
+  that the documented contract stays: a line can still stop where every tree reached a
+  node another thread (or an earlier depth) solved. A certificate does not complete it:
+  it holds the attacker's proving actions only, so the line takes the attacker's step
+  past such a node from it (`proof_line` does, when one is recorded) and stops at the
+  defender's turn - continuing needs the defender's longest defence, which only an
+  enumeration of the defender's actions finds (not cheap). So the tests check the
+  contract. (Corrected at review: this entry and e554da0's message first gave as the
+  reason that Guard records no certificate, 6b″ having measured it without one - but
+  6b″'s tool ran Guard with `record_certificate` on, for its cross-check against E4
+  (M17's "every refutation confirmed by E4"); only Guard's default records none.)
+- `engine/include/t5d/prover.hpp`, `guard.hpp`, `engine/README.md` ("The proof's line"):
+  `ProveResult::line`, `first_action` and `GuardResult::line` say whose line is reported
+  and when it is complete.
+- `engine/tests/test_guard.cpp`: the race pinned
+  (`guard_at_five_threads_a_thread_late_to_its_root_reports_the_line_of_one_that_searched`:
+  Guard's literal class, the default class and prove-only on three mates in one, the
+  twin's included); the depth-1 properties at one and five threads keep `line_complete`
+  (guaranteed now) and check the line's length; the depth-2 properties check every
+  refutation's line against its contract - a prefix that replays, complete at depth 1,
+  a complete line the opponent's mate at the refutation's depth by E4 - beside the
+  references' confirmation of every refutation.
+- `docs/BUILD_LOG.md`: register H42's row. The prover is among the truth's sources
+  (`T5D_TRUTH_SOURCES`), so the code signature changes; the committed truth's
+  provenance records none ("unrecorded"), and no verdict, distance or node count
+  changes. The main loop runs the Lazy SMP timing test before merging.
+- Spec: §11.4 (Guard; register H42), §11.1's df-pn, and §11.3's Lazy SMP (H17) and
+  immediate export (H19) - no part of the spec describes the proof's line or which
+  thread reports it; no edit proposed.
+### 2026-10-17 - Build log: the CHECKPOINT 8 rulings and where each is built
+
+- `docs/BUILD_LOG.md`, "CHECKPOINT 8": the user's rulings on spec issues 122-126, 142
+  and 204 and the lane that builds each - H51 (the reader lenient on capture markers,
+  the writer strict, a rulebook entry, KD-0167-0169 retired and ftxi's refusal
+  recorded) as the gate lane's step 3a; the two-oracle rule, the commit tier's
+  baseline rule, restricted runs and the ftxi upstream question as its step 3b; M22's
+  further figures and the D2 order (the tree form, then the flat form) on the engine
+  lane; Mish in the heads on the network lane. Issues 122-124, 142 and 204 marked
+  ruled; proposed edit 98 settled upstream; "Waiting on the user" now holds only issue
+  205 and the standing items.
+- Spec: register H27, H47, H51, F6, M22 and D2 as changed at CHECKPOINT 8; no spec
+  text edited here.
+
+### 2026-10-17 - CLAUDE.md and AGENTS.md: the engine build before the gate (the one edit the user allowed in each)
+
+- `CLAUDE.md`, `AGENTS.md`: one line in each command list, before `gate --tier
+  commit`: `py engine/build.py` - the gate now runs the engine's adapter,
+  `build/engine/t5d-gate`, so it must be built first. Nothing else in either file
+  changed, as the user's CHECKPOINT 8 permission says; the diff is quoted in
+  `docs/BUILD_LOG.md` ("CHECKPOINT 8").
+- Spec: none - the instruction files; §11.0's gate is what the line serves.
+
+### 2026-10-17 - Design documents: the CHECKPOINT 8 rulings, from upstream
+
+- `docs/design/5d-chess-decisions.md`, `docs/design/5d-chess-transformer-design.md`:
+  the copies maintained upstream after CHECKPOINT 8, committed unedited - the user's
+  rulings on spec issues 122-126, 142 and 204. Register: H27 (upstream reports -
+  defects as bug reports, documented-rule disagreements as questions citing the
+  source, drafted by the agent and filed by the owner), H47 (gating aligned to two
+  oracles; the commit tier still fails if the engine declines a record it read on the
+  last green run, or reads none; restricted runs never produce a tier verdict), H51
+  added (capture markers read leniently - a project decision: a move is read as its
+  squares define it, a mismatch logged as a warning, the marker written strictly; a
+  source that refuses such a record gets a known-divergence entry citing H51), F6
+  (Mish in the trunk FFN and every head's hidden layers; squared ReLU a trunk-only
+  arm), M22 (measured in part; the mandatory, three-or-more, optional-move and
+  compute-share figures to follow), D2 (build order: the tree form, then the flat
+  form). Spec: §8.2 (the measured turn width and the build order), §9.3 (Mish in the
+  heads), §11.0 (the commit tier's two failure conditions, restricted runs, upstream
+  reports, lenient capture markers).
+- Spec: CHECKPOINT 8 as written upstream - §8.2, §9.3, §11.0; register D2, F6, H27,
+  H47, H51, M22. Nothing in them edited here.
 ### 2026-10-17 - N-B11-B16-B17 review fixes: B16 below a refreshed anchor tested against an oracle of its own; B17 through refreshed epochs; a dense network's block-causal forward without B16 refused; issue 217's second reading
 
 - `tests/net/test_cache.py`: `test_status_biases_below_a_refreshed_anchor` (a root and a node

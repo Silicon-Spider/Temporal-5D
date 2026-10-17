@@ -62,6 +62,7 @@ python oracles/harness.py build --bootstrap    # build the oracles; fetch missin
 python oracles/harness.py verify               # static checks: pins, corpus, boundary, provenance, golden files
 python oracles/harness.py selftest             # the harness's own unit tests
 python oracles/harness.py rulebook             # is docs/rules/README.md the pinned rulebook? (--pin after review)
+py engine/build.py                             # build the engine first: the gate runs build/engine/t5d-gate
 python oracles/harness.py gate --tier commit   # per-commit gate; nightly and release run all three oracles
 ```
 

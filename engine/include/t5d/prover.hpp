@@ -374,7 +374,10 @@ struct ProveResult {
   Proof proof;
   /// The depth asked.
   int depth = 0;
-  /// Proven: the attacker's first action of the proof, in a playable order.
+  /// Proven: the attacker's first action of the proof, in a playable order -
+  /// the reporting thread's (see `line`); empty only where no thread's tree
+  /// holds the root's children and no certificate holds its action (every
+  /// thread read the root's proof from a store).
   std::vector<Move> first_action;
   /// The root's children in the main thread's tree - A's actions in the
   /// class (Canonical), or its seeds (Every; one child, the semimove tree,
@@ -386,9 +389,15 @@ struct ProveResult {
   /// prove-only does not claim (status stays Unknown).
   bool exhausted = false;
   /// Proven: the proof's line - the attacker's action, the defender's
-  /// longest defence, ..., the attacker's mating action - from the deciding
-  /// thread's tree. `line_complete` false: it stops where a node was solved
-  /// from a store and the tree holds no continuation.
+  /// longest defence, ..., the attacker's mating action - from the tree of a
+  /// thread that proved the root at the least distance: the first whose tree
+  /// holds the whole line, else the longest line (Lazy SMP: a thread that
+  /// read the root's proof from another thread's export has no tree beneath
+  /// its root). `line_complete` false: it stops where a node was solved from
+  /// a store (another thread's export, an earlier search's) and the tree
+  /// holds no continuation. At depth 1 it is complete whenever the store did
+  /// not hold the root's proof already: the thread that proved the root first
+  /// searched it, and its line ends at the mated defender.
   std::vector<std::vector<Move>> line;
   bool line_complete = false;
   /// record_certificate, Proven: the prover's certificate so far (every
