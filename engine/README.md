@@ -82,7 +82,10 @@ The gate runs the engine: `oracles/gate.toml` configures `t5d-gate` in full mode
 (2026-10-17). Under Q4's ruling (R8), the default, every one of the 2026-10-02
 triage's 115 Q4 findings agrees with the oracles, and every other disagreement with
 a recorded oracle answer is on record in `oracles/known-divergences.toml` with the
-rule that settles it - no engine defect was found. Next: the proof channel's
+rule that settles it - no engine defect was found. Three of those entries are
+provisional: they follow the reader's refusal of an `x` written on a move that takes
+nothing (cwmtt/futures action 17), a reading put to the user (build-log spec issue
+125). Next: the proof channel's
 sign-off (H41: the in-tree solver's propagation stays off
 until the gate passes, the search's soundness fixes land with tests, and the channel
 is signed off, its proofs cross-checked against df-pn and oracle mate verdicts);
@@ -614,7 +617,12 @@ stopped there under the Guide-literal reading, now read on: nine to their end, a
 cwmtt's futures to action 17, whose `x` marks a capture the move does not make
 (`unreadable`). The output is byte for byte what the stage-E4 engine printed under
 `--moves-after-shift` on all 41 records, and `--no-moves-after-shift` reproduces its
-default output (8.3 s in all at stage E4) on all 41.
+default output (8.3 s in all at stage E4) on all 41. (Those figures are stage E7's,
+on the machine lost in October 2026, before cwmtt/many2 was read converted -
+CHECKPOINT 3 - to its 63 positions. With the engine configured in the gate,
+2026-10-17, many2 is its slowest record: 25-34 s on the development machine shared
+with other work, and 44 s on a CI runner - observations, not measurements; the gate
+gives the engine `[engine] timeout_s`, 300 s, per record.)
 
 **Diagnostics** - for investigating a record by hand, never for the gate's
 configuration (`gate.toml`): `--no-moves-after-shift` (rules Q4's Guide-literal

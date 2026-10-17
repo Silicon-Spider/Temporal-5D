@@ -174,8 +174,9 @@ class GateWithAStandInEngineTests(unittest.TestCase):
         command = json.dumps([sys.executable, str(self.engine), str(self.recorded), *(modes or ("-",))])
         gate_file = self.root / "gate.toml"
         text = paths.GATE_FILE.read_text(encoding="utf-8")
-        # The repository's gate.toml with the stand-in in place of whatever engine it configures.
-        text, found = re.subn(r"(?m)^command = \[.*\]$", lambda _: f"command = {command}", text, count=1)
+        # The repository's gate.toml with the stand-in in place of whatever engine it configures (every such line is
+        # counted, so a second one fails here).
+        text, found = re.subn(r"(?m)^command = \[.*\]$", lambda _: f"command = {command}", text)
         self.assertEqual(found, 1, "gate.toml's [engine] command line")
         text = text.replace('mode = "full"', f'mode = "{mode}"')
         gate_file.write_text(text, encoding="utf-8")

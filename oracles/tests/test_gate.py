@@ -10,7 +10,7 @@ from pathlib import Path
 from unittest import mock
 
 import support
-from oracle_harness import config, fingerprint, gate, golden, integrity, lockfile, paths, snapshot, stability
+from oracle_harness import config, fingerprint, gate, golden, integrity, lockfile, paths, snapshot, stability, util
 from oracle_harness.adapters import ORACLE_SOURCES, PARSE_ONLY_SOURCES, EngineSource, RunOptions, Source
 from oracle_harness.corpus import CUSTOM_POSITIONS, Record
 from oracle_harness.divergences import Divergence
@@ -820,6 +820,38 @@ class EngineCommandTests(unittest.TestCase):
         self.assertEqual(self.codes("cmd", "/c", "cd Oracles & shim.bat"), ["engine-in-harness"])
         self.assertEqual(self.codes("engine", "--oracles-dir=oracles"), ["engine-in-harness"])
 
+    def test_a_relative_program_is_the_repository_roots_wherever_the_harness_was_started(self):
+        # Windows finds a relative program from the directory the harness was started in, not the one the command
+        # runs in: resolved against the root, every platform runs the file engine_command_findings checks.
+        built = str(paths.REPO_ROOT / "build" / "engine" / "t5d-gate")
+        self.assertEqual(gate.engine_argv(["./build/engine/t5d-gate", "--x"]), [built, "--x"])
+        self.assertEqual(gate.engine_argv(("build/engine/t5d-gate",)), [built])
+        with tempfile.TemporaryDirectory() as folder, contextlib.chdir(folder):
+            self.assertEqual(gate.engine_argv(["./build/engine/t5d-gate"]), [built])
+        # Only the program: its arguments are its own to read, in the root it runs in.
+        self.assertEqual(gate.engine_argv(["python", "engine/adapter.py"]), ["python", "engine/adapter.py"])
+        # An absolute program, and a bare name (looked up on PATH), as they are.
+        self.assertEqual(gate.engine_argv([sys.executable, "a.py"]), [sys.executable, "a.py"])
+        self.assertEqual(gate.engine_argv(["t5d-gate"]), ["t5d-gate"])
+        self.assertEqual(gate.engine_argv([]), [])
+
+    def test_a_run_names_the_file_it_ran(self):
+        # So a report says which build was compared - and a stale or missing one shows.
+        with tempfile.TemporaryDirectory() as folder:
+            program = Path(folder) / "adapter.bin"
+            program.write_bytes(b"an engine")
+            ran = gate.engine_program([str(program), "--x"])
+            self.assertEqual((ran["program"], ran["file"], ran["sha256"]),
+                             (str(program), str(program), util.sha256_bytes(b"an engine")))
+            self.assertIn("SHA-256", gate._describe_engine_run(ran))
+            # Windows runs a program named without an extension as its .exe.
+            (Path(folder) / "t5d.exe").write_bytes(b"x")
+            self.assertEqual(gate.engine_program([str(Path(folder) / "t5d")])["file"],
+                             str(Path(folder) / "t5d.exe") if util.is_windows() else None)
+            missing = gate.engine_program([str(Path(folder) / "build" / "t5d-gate")])
+            self.assertEqual((missing["file"], missing["sha256"]), (None, None))
+            self.assertIn("no such file - has the engine been built?", gate._describe_engine_run(missing))
+
 
 class ResultTests(unittest.TestCase):
     ONE = Gated(records=1, positions=2, checked=FULL, oracles=1, aligned=2, matched=2)
@@ -1134,9 +1166,8 @@ class GateRunTests(unittest.TestCase):
         """The repository's gate.toml, with this engine command and mode; ``edit`` reshapes it further (text -> text)."""
         text = (paths.HARNESS_ROOT / "gate.toml").read_text(encoding="utf-8")
         # Whatever command the repository configures, this world runs this one (none by default): a world that kept
-        # the real engine would run it on canned records.
-        text, found = re.subn(r"(?m)^command = \[.*\]$", lambda _: f"command = {json.dumps(list(command))}", text,
-                              count=1)
+        # the real engine would run it on canned records. Every such line is counted, so a second one fails here.
+        text, found = re.subn(r"(?m)^command = \[.*\]$", lambda _: f"command = {json.dumps(list(command))}", text)
         self.assertEqual(found, 1, "gate.toml's [engine] command line")
         text = text.replace('mode = "full"', f'mode = "{mode}"')
         text = text.replace('source = "ftxi:naive"\nrecord = "cwmtt/manyChecks"\npositions = 38',
@@ -1262,6 +1293,48 @@ class GateRunTests(unittest.TestCase):
         self.assertEqual(result.calibration.factor, 0.02)
         self.report.assert_called_once()
         self.assertEqual(result.converted, {})
+        # The run says which program it compared, as it ran it.
+        self.assertEqual((result.engine_run["program"], result.engine_run["file"], result.engine_run["mode"]),
+                         (sys.executable, str(Path(sys.executable)), "full"))
+        self.assertEqual(result.engine_run["sha256"], util.sha256_file(Path(sys.executable)))
+
+    def test_the_engine_runs_under_its_own_time_limit(self):
+        # [engine] timeout_s, or the tier's own timeout_s where that is longer: never the oracles' budget alone, which
+        # decides what a tier requires of them (H32) - the gate compares the engine's answers, not its speed.
+        limits = []
+        run_sources = gate.runner.run_sources
+
+        def spy(sources, records, lock, options_for, **options):
+            limits.extend(options_for(source, item).timeout_s for source in sources if source.name == "engine"
+                          for item in records)
+            return run_sources(sources, records, lock, options_for, **options)
+
+        def engine_timeout(value):
+            def edit(text):
+                line = '\ntimeout_s = 300\n# "full"'  # [engine] timeout_s, as the repository sets it
+                self.assertEqual(text.count(line), 1, "gate.toml's [engine] timeout_s line")
+                return text.replace(line, f'\ntimeout_s = {value}\n# "full"')
+            return edit
+
+        for value, tier, expected in ((300, "commit", 300.0), (10, "commit", 60.0), (300, "release", 600.0)):
+            self.engine(edit=engine_timeout(value))
+            limits.clear()
+            with mock.patch.object(gate.runner, "run_sources", side_effect=spy):
+                result = self.run_gate(tier)
+            self.assertEqual((set(limits), result.engine_run["timeout_s"]), ({expected}, expected), (tier, value))
+        # The oracles keep their budgets.
+        self.assertEqual({options.timeout_s for name, _, options in self.asked if name == "ftxi:naive"}, {300.0})
+
+    def test_a_relative_engine_command_runs_the_repository_roots_program_wherever_the_harness_was_started(self):
+        # Windows looks for a relative program from the directory the harness was started in: the gate resolves it
+        # against the root first (engine_argv), so this run, started elsewhere, runs - here fails to find - the root's.
+        self.gate_toml(command=["./no-such-directory/engine-stand-in"])
+        with tempfile.TemporaryDirectory() as folder, contextlib.chdir(folder):
+            result = self.run_gate()
+        root = str(paths.REPO_ROOT / "no-such-directory" / "engine-stand-in")
+        self.assertEqual((result.engine_run["program"], result.engine_run["file"]), (root, None))
+        self.assertEqual(self.codes(result), ["engine-failed"])
+        self.assertEqual(result.engine, "failed")
 
     def test_only_a_tier_that_runs_every_oracle_fails_an_engine_that_came_through_no_ruleset(self):
         # H47. No ruleset reaches the floor in any tier, although the engine agrees with every answer there is.

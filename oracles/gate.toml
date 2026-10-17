@@ -16,17 +16,27 @@ cap = 1000
 #
 # The engine's adapter is t5d-gate (engine/tools/t5d_gate.cpp; engine/README.md,
 # "The gate adapter"), built by `python engine/build.py` into build/engine/ - build
-# it before a gate run, as both CI workflows do. It runs in full mode with the
-# engine's default rules, and never with a diagnostic option (engine/README.md
-# lists them: for investigating a record by hand, never for this file). The path
-# is relative, and no absolute path belongs here: on Linux and macOS it is found
-# from the repository root, where the harness runs the command; Windows finds a
-# relative program from the directory the harness itself was started in (and adds
-# the .exe), so run the harness from the repository root, as every documented
-# command does. Emptied, no engine is compared against the oracles and the proof
-# channel stays disabled (H23); configured, it stays disabled until a complete run
-# of the release tier says otherwise and the channel is signed off (H23, H41).
+# it before a gate run, and again after any change to the engine, as both CI
+# workflows do: the gate runs whatever build it finds there, and its report names
+# the file and its SHA-256. It runs in full mode with the engine's default rules,
+# and never with a diagnostic option (engine/README.md lists them: for
+# investigating a record by hand, never for this file). The path is relative, and
+# no absolute path belongs here: the harness takes a relative program from the
+# repository root on every platform, wherever it was started (Windows adds the
+# .exe), so the file `verify` checks is the file that runs. Emptied, no engine is
+# compared against the oracles and the proof channel stays disabled (H23);
+# configured, it stays disabled until a complete run of the release tier says
+# otherwise and the channel is signed off (H23, H41).
 command = ["./build/engine/t5d-gate"]
+# The engine's wall clock per record, in every tier - the tier's own timeout_s
+# where that is longer. A record the engine has not finished by then fails it, so
+# this is how slow the engine may be, never what the gate compares: unlike a
+# tier's budgets, it decides nothing a tier requires of an oracle (H32), and the
+# golden files do not depend on it. Its slowest record, cwmtt/many2, took 44 s on
+# a CI runner that ran the calibration probe at 0.75x the recording machine's
+# time (2026-10-17, run 39009070712); the runners range from about 0.6x to 1.1x,
+# and on the slower ones the commit tier's own 60 s would not be enough.
+timeout_s = 300
 # "full": the engine answers every question at every position.
 # "parse": the harness appends `--parse-only` after `--cap N`; the engine says what
 # it set up, whose move it is and how it replayed the record, and answers none of
