@@ -1,6 +1,7 @@
 import contextlib
 import dataclasses
 import json
+import re
 import sys
 import tempfile
 import unittest
@@ -1132,7 +1133,11 @@ class GateRunTests(unittest.TestCase):
     def gate_toml(self, *, command=(), mode="full", naive_timeout=None, edit=None):
         """The repository's gate.toml, with this engine command and mode; ``edit`` reshapes it further (text -> text)."""
         text = (paths.HARNESS_ROOT / "gate.toml").read_text(encoding="utf-8")
-        text = text.replace("\ncommand = []\n", f"\ncommand = {json.dumps(list(command))}\n")
+        # Whatever command the repository configures, this world runs this one (none by default): a world that kept
+        # the real engine would run it on canned records.
+        text, found = re.subn(r"(?m)^command = \[.*\]$", lambda _: f"command = {json.dumps(list(command))}", text,
+                              count=1)
+        self.assertEqual(found, 1, "gate.toml's [engine] command line")
         text = text.replace('mode = "full"', f'mode = "{mode}"')
         text = text.replace('source = "ftxi:naive"\nrecord = "cwmtt/manyChecks"\npositions = 38',
                             'source = "ftxi"\nrecord = "r/std"\npositions = 1')

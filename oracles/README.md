@@ -6,10 +6,13 @@ and an independent reader of the notation, pinned; a pinned corpus of game recor
 the machinery that runs the one over the other; and the check that keeps all of it
 out of the engine.
 
-**No engine is configured yet.** What is here is the oracle side of the gate, built
-and running, with the engine's slot in `gate.toml` empty; the engine's adapter,
-which reads records but does not yet judge them, is to be compared in parse mode
-first ("The engine contract", below).
+**The engine is configured.** `gate.toml`'s `[engine] command` is the engine's
+gate adapter, `build/engine/t5d-gate` (built by `engine/build.py`), compared in
+full mode by every tier: the commit tier as a smoke test that gates nothing,
+nightly and release gating the rulesets their oracles can vouch for ("The engine
+contract", below). That is not yet a passed gate: the proof channel stays disabled
+until a complete run of the release tier says it may be enabled and the channel
+is signed off (H23, H41).
 
 ## The rule
 
@@ -500,8 +503,9 @@ Read this with `DISAGREEMENTS.md` open; revisit it when a pin or the corpus move
   checkmate versus stalemate when no action exists. The rulebook has settled it
   (R1, decision H36, CHECKPOINT 1): check status passes all active boards in the
   present, so at these positions ftxi's "check" is wrong and Chess in 5D's "no
-  check" right. Until known divergences record ftxi's answers there, an engine
-  that follows the rulebook disagrees with ftxi at each of them.
+  check" right. An engine that follows the rulebook disagrees with ftxi at each of
+  them that it reaches; `known-divergences.toml` records ftxi's (and ftxi:naive's)
+  answers there, with R1's citation.
 - **Two mate verdicts.** Chess in 5D calls two final positions checkmate where ftxi
   counts legal actions. On one of them, the record cwmtt's author named
   `chessin5d-illegal-move-example`, cwmtt counts legal actions too; the other is a
@@ -538,10 +542,11 @@ Read this with `DISAGREEMENTS.md` open; revisit it when a pin or the corpus move
   oracle refuses the action that ignores a check.
 
 What this means for the engine: no engine can agree with all three oracles. One
-that answered exactly as ftxi does would pass the commit tier and then fail the
-nightly tier at every entry of `DISAGREEMENTS.md` that has ftxi on one side - the
-ruleset each entry sits in stays ungated until the entry is adjudicated and the
-losing oracle's answer is recorded in `known-divergences.toml`.
+that answered exactly as ftxi does would fail every tier on telltales - each of
+ftxi's answers on record as wrong in `known-divergences.toml` is one (H34) - and,
+in the nightly tier, on its disagreements with Chess in 5D at those positions. A
+disagreement no entry records leaves the ruleset it sits in ungated until it is
+adjudicated and the losing oracle's answer is recorded in `known-divergences.toml`.
 
 ## Stable answers: the required sets (H32)
 
@@ -726,7 +731,10 @@ The gate reaches the engine across a process boundary and nowhere else. Set
 never inside `oracles/`, where it would sit beside every answer the oracles have
 given (`verify` refuses such a command) - that:
 
-- is run from the repository root with `--cap N` appended;
+- is run from the repository root with `--cap N` appended (a relative command is
+  found from there on Linux and macOS; Windows finds a relative program from the
+  directory the harness itself was started in, so run the harness from the
+  repository root, as every command in this manual does);
 - reads one 5dpgn record on stdin (UTF-8, LF line endings);
 - writes one JSON object per line on stdout, flushing each line - for the
   Standard start and `1. e3`:
@@ -975,8 +983,10 @@ Some entries cite the notation specification in place of the rulebook:
   whether the text is valid notation is the specification's to say, never the
   rulebook's.
 
-Every other kind needs the rulebook. The file's header says how. The file is empty
-until there is an engine to disagree with anything.
+Every other kind needs the rulebook. The file's header says how, and where its
+entries came from: the engine's gate runs of 2026-10-02 and, with the engine
+configured, of 2026-10-17 - between them every disagreement of the engine's with a
+recorded oracle answer, each settled by its citation (`docs/BUILD_LOG.md`, step 2).
 
 ## Other commands
 
@@ -995,7 +1005,7 @@ enable the proof channel. It keeps its tier's rule (H47; a reading - spec issue
 gated the rulesets that met the gating conditions with only the sources and
 records it ran, so its verdicts are no stronger than those, and it fails an engine
 with no finding against it that came through no ruleset; a restricted run of
-`commit` is a smoke test, like the whole tier. So once an engine is configured, a
+`commit` is a smoke test, like the whole tier. So, with the engine configured, a
 run of sources that cannot gate a ruleset fails such an engine on
 `engine-nothing-gated` - the example above among them: cwmtt gives no check
 verdict.
@@ -1029,7 +1039,11 @@ branching moves, which count as two actions (`legal_actions`, above).
 
 ## What this is not, yet
 
-- **Not a passed gate.** No engine has been compared with anything.
+- **Not a passed gate.** The engine is compared in every tier, and the nightly
+  tier gates the rulesets its oracles can vouch for (`docs/BUILD_LOG.md`, step 2,
+  names them). The proof channel opens only on a complete run of the release tier,
+  whose naive searches' required sets are still too thin for it at their budgets
+  (`verify`'s `proof-channel-vacuous` notes, H48), and on the user's sign-off (H41).
 - **Not enforced as a required check.** The two workflows run on Linux - the
   commit tier on every push and pull request, the nightly tier every night - and
   first went green on 2026-10-01. They are not yet required status checks on the
@@ -1047,10 +1061,12 @@ branching moves, which count as two actions (`legal_actions`, above).
   uneven: counts are capped at 1000, so on wide positions two oracles are compared
   only as "both at least 1000"; several variants have one oracle, or none; and
   stalemate is exercised only by the records written here.
-- **Not adjudicated, entry by entry.** The rulebook is pinned (H38) and has ruled
-  on the check disagreements (R1) and two oracle defects (R7), but
-  `known-divergences.toml` is still empty: an entry records the engine's answer
-  beside the oracle's, and the rest of `DISAGREEMENTS.md` is listed, not settled.
+- **Not adjudicated beyond the engine's disagreements.** The rulebook is pinned
+  (H38) and has ruled on the check disagreements (R1) and two oracle defects (R7);
+  `known-divergences.toml` records, each with its citation, where the engine and an
+  oracle's recorded answer disagree. The oracles' disagreements among themselves
+  that touch no answer of the engine's are listed in `DISAGREEMENTS.md`, not
+  settled.
 - **Not a repetition oracle.** None of the three observables touches the 5D
   repetition rules, the most load-bearing open item in the register.
 - **Not proof against a port.** The boundary check finds pasted code. An oracle's

@@ -78,9 +78,12 @@ rules reference, `docs/rules/README.md`, which the code cites throughout.
 | **E9:** the superseded-board asset map | `include/t5d/assets.hpp` | §11.2 rung 4, §11.4, H10 |
 | **E9:** Hunt's ground truth; experiment 6b″'s tool | `tools/t5d_hunt_truth.cpp`, `testdata/hunt-truth/`, `tools/t5d_scan6bpp.cpp` | §15.6 (CHECKPOINT 4), M17 |
 
-Next: the gate run with the engine configured in full mode - Q4's ruling (R8) is
-the default, and with it every one of the triage's 115 Q4 findings agrees with the
-oracles; the proof channel's sign-off (H41: the in-tree solver's propagation stays off
+The gate runs the engine: `oracles/gate.toml` configures `t5d-gate` in full mode
+(2026-10-17). Under Q4's ruling (R8), the default, every one of the 2026-10-02
+triage's 115 Q4 findings agrees with the oracles, and every other disagreement with
+a recorded oracle answer is on record in `oracles/known-divergences.toml` with the
+rule that settles it - no engine defect was found. Next: the proof channel's
+sign-off (H41: the in-tree solver's propagation stays off
 until the gate passes, the search's soundness fixes land with tests, and the channel
 is signed off, its proofs cross-checked against df-pn and oracle mate verdicts);
 the network's stage N5 (the acting-player input and the submit logit the search already

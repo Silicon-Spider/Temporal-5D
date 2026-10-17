@@ -1,14 +1,15 @@
 """The whole gate, end to end, with a stand-in engine.
 
-There is no engine yet, so these tests plug in a program that answers every
-record with what the ftxi driver printed for it - and then ones that get a
-verdict wrong, leave one out, decline every record, read a move as another
-position, mark a piece's having moved differently, or say nothing of what they
-set up - to show that the gate passes the first, fails the others, and accepts a
-wrong verdict only once the difference is on record with a citation. (They run
-the commit tier, a smoke test that gates nothing - H47 - so the one that declines
-every record, which contradicts nothing, passes it, and the gate's output says
-that the tier gates nothing.)
+The gate's machinery is tested apart from the real engine (gate.toml configures
+it; these tests put the stand-in in its place): they plug in a program that
+answers every record with what the ftxi driver printed for it - and then ones
+that get a verdict wrong, leave one out, decline every record, read a move as
+another position, mark a piece's having moved differently, or say nothing of what
+they set up - to show that the gate passes the first, fails the others, and
+accepts a wrong verdict only once the difference is on record with a citation.
+(They run the commit tier, a smoke test that gates nothing - H47 - so the one
+that declines every record, which contradicts nothing, passes it, and the gate's
+output says that the tier gates nothing.)
 
 How the stand-in is fed. The engine contract asks for a state event before every
 position: every board of the multiverse, as the engine set it up. No golden file
@@ -32,6 +33,7 @@ where the golden files predate the harness's schema.
 """
 
 import json
+import re
 import sys
 import tempfile
 import unittest
@@ -172,8 +174,10 @@ class GateWithAStandInEngineTests(unittest.TestCase):
         command = json.dumps([sys.executable, str(self.engine), str(self.recorded), *(modes or ("-",))])
         gate_file = self.root / "gate.toml"
         text = paths.GATE_FILE.read_text(encoding="utf-8")
-        self.assertIn("\ncommand = []\n", text)
-        text = text.replace("\ncommand = []\n", f"\ncommand = {command}\n").replace('mode = "full"', f'mode = "{mode}"')
+        # The repository's gate.toml with the stand-in in place of whatever engine it configures.
+        text, found = re.subn(r"(?m)^command = \[.*\]$", lambda _: f"command = {command}", text, count=1)
+        self.assertEqual(found, 1, "gate.toml's [engine] command line")
+        text = text.replace('mode = "full"', f'mode = "{mode}"')
         gate_file.write_text(text, encoding="utf-8")
         divergences_file = self.root / "known-divergences.toml"
         divergences_file.write_text(divergences_text, encoding="utf-8")
