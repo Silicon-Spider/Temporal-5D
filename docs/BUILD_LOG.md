@@ -1249,7 +1249,7 @@ commits (F5 and F6 on `lane/net`, H47 and H48 on `lane/gate`, M22 on `lane/engin
 
 | ID | Status | Notes |
 |---|---|---|
-| A1-A3 | built, tested | Network N1: tokens, features, per-board flags, Δt-to-present. A3 on frozen boards under the cached configuration: the intrinsic features are N3's default; their status as score-time key biases is B16's. A3's side to move becomes us/them with A7 |
+| A1-A3 | built, tested | Network N1: tokens, features, per-board flags, Δt-to-present. A3 on frozen boards under the cached configuration: intrinsic features (N3's default, ruled by M20), their status as B16's score-time key biases (`lane/net`, N-B16); live boards keep A3's features as inputs. A3's side to move becomes us/them with A7 |
 | A4 | built, tested | Engine: every board immutable once published; persistent multiverse sharing history in chunks |
 | A5 | not started | Piece-centric tokenisation - ruled at CHECKPOINT 6: build behind its flag; the window's provisional kill does not decide it, and the joint test with the window waits for the pilot run (M18). Last in the net lane, dense scope only (`piece_centric` raises today) |
 | A6 | not started | Global turn-state inputs on the global registers. The acting player is in (D8, N5); the acting colour comes with A7; the counts - mandatory boards still to move, optional boards still playable, moves already made this turn - are engine ABI round 1 (in the expansion, kept out of the truth sources; the count also in the evaluation identity - issue 302), then the net lane's inputs, with §15.2's recount test |
@@ -1258,7 +1258,7 @@ commits (F5 and F6 on `lane/net`, H47 and H48 on `lane/gate`, M22 on `lane/engin
 | B1, B2, B4 | built, tested | Network N1: one weight set, unified attention, 4D RoPE (whose positional term factorises per axis - joint-axis geometry is B15's, register B4) |
 | B8 | built, tested; default to change | Network N1's 2 + 16 registers. The ruled positions (CHECKPOINT 6, M20): per-board registers position-free on file and rank, global registers on every pair. Global: the default (`global_register_pairs = position_free`); per-board: the non-default arm `board_register_spatial = position_free` - the default (`learned_angle`) changes with M20 in the net lane |
 | B9 | built, tested | Network N2: move-graph mask on 2 heads; the built direction, register reads and head counting are now the v1 values (§6 "As built", M20; issue 16) |
-| B14 | built in part | Network N2: block-sparse attention in a CPU gather form. B14's score function built (`lane/net`, with B15): `attn_impl="flex"` (`python/t5d/net/flex.py`) runs torch's `flex_attention` with every bias computed inside its score function - B15's entry by integer arithmetic from the two tokens' coordinates, B11's typed relations, B12's board-pair table, a caller's bias - every mask in its mask function (padding, the block-causal scope, section 6's roles from per-token data and one edge bit per pair), and a lossless block mask built from the board-major order at board granularity. Eager on CPU (PyTorch 2.13): forward only, every score materialised - small positions, §15.2's B15 row (spec issue 211). Under v1's register rule the masked heads' block masks have no empty block (issue 209). Compiled and GPU kernels need GPU time (G9, M19) |
+| B14 | built in part | Network N2: block-sparse attention in a CPU gather form. B14's score function built (`lane/net`, with B15): `attn_impl="flex"` (`python/t5d/net/flex.py`) runs torch's `flex_attention` with every bias computed inside its score function - B15's entry by integer arithmetic from the two tokens' coordinates, B16's status entry from a per-token index (N-B16), B11's typed relations, B12's board-pair table, a caller's bias - every mask in its mask function (padding, the block-causal scope, section 6's roles from per-token data and one edge bit per pair), and a lossless block mask built from the board-major order at board granularity. Eager on CPU (PyTorch 2.13): forward only, every score materialised - small positions, §15.2's B15 row (spec issue 211). Under v1's register rule the masked heads' block masks have no empty block (issue 209). Compiled and GPU kernels need GPU time (G9, M19) |
 | B5 | built, tested | Network N1, behind a flag (off); its as-built details are "v1 placeholders" (Provisional, CHECKPOINT 6; M20), tested by ablation 2 - §4.1 does not state them (edit 9) |
 | B6 | superseded; removed | By B15 (CHECKPOINT 6, reversal 25; M20). Removed from the code with B15 (`lane/net`): `binned_bias`, `binned_bias_rope` (issue 9f) and their fields - no arm survives, ablation 2's arm is B15 on or off. Its log buckets live on in `python/t5d/net/buckets.py` for B12's relative cells (`smolgen_time_*`, `smolgen_timeline_*`; smolgen's 152 cells and 47,136 parameters unchanged, issue 212). Under B15's far-bin placeholder B6 is not B15's special case, which §4.1, the register's B6 row and reversal 25 say it is: beyond the exact classes its per-axis buckets are not kept, only Δtime's sign and the clamp (issue 205, edit 159; put to the user) |
 | B10, B12 | built, tested | Network N2, behind flags (B12 as relative board-pair cells, full rank - the register now records it as built; the cells are the log buckets B6 used, re-homed in `buckets.py` when B6 went - issue 212). The register says smolgen "keeps its own normalisation" (F5); the built smolgen has none (`lane/net`'s issue 202) |
@@ -1267,12 +1267,12 @@ commits (F5 and F6 on `lane/net`, H47 and H48 on `lane/gate`, M22 on `lane/engin
 | B7 | not built (rule) | Deferred; its gate now names ablation 2's head-allocation evidence (issue 121's B7 part closed, M20); no §15.2/§15.3 need (d_head is a config value anyway) |
 | B13 | not built (rule) | Refused |
 | B15 | built, tested | The 4D displacement bias, the v1 default (`lane/net`, `python/t5d/net/displacement.py`): one learned scalar per head per layer, a 15 x 15 slice for each of 54 board-distance classes (the 45 exact ones and 9 far bins), 368 line entries, 162 register entries and a global one - 12,681 per head per layer, 1,623,168 parameters (§4.1's ~1.6M; 7.07% of the network). Its unstated details are named placeholders: the far bins (`disp_far_edges`, issue 205), the line set (`disp_line_max`, issue 206), the register and global entries (`disp_register_pairs`, issue 207), the initialisation (`disp_init_std`, issue 208); the far bins' form and the line set's time unit and partition are fixed in code, and under the far form B6 is not B15's special case (issue 205, put to the user). Ablation 2's no-table arm: `displacement_bias=False` - the table draws from its own generator, so the arm is the network without it (bit for bit the pre-B15 v1). Per layer through `AttnContext.for_layer(h, layer)`, the cached path included (a frozen board's rows carry it at every layer; geometry, so every row). Tested: the classes against §4.1 written out pair by pair (grid and twelve constructions - every variant's board size, Global Warming's 1 x 1 included - three placeholder settings; each placeholder switch checked to regroup pairs); §15.2's B15 row - through B14's score function = materialised, bitwise at the bias, 1e-5 at the output - and the CPU paths' outputs and gradients; §15.2 row 1 with it on (every `test_cache` case) and with the layers' tables far apart. Boards wider than 8 are refused (none in any variant). Signs are raw colour signs until A7. §15.3's cost row ("negligible") is for the quiet-machine block: on CPU every head now carries a per-row bias |
-| B16 | not started | Score-time status key biases on frozen boards, with the cached configuration (settles issue 31): net lane, one owner. The intrinsic frozen features it completes are N3's default (`frozen_features = intrinsic`) |
+| B16 | built, tested | `lane/net`, N-B16 (`python/t5d/net/status.py`): under the block-causal scope with intrinsic frozen features, a learned key bias per head by the key board's status - its Δt-to-present bin and its timeline's active flag - on live query rows (head boards' tokens, global registers) against frozen boards' tokens (squares and per-board registers), recomputed from the evaluated position's present every evaluation; never on a frozen row (C17), never under the dense scope (the v1, every refresh pass). Its unstated details are named placeholders: the bins (`status_dt_exact = 4`, `status_dt_max = 128`: 19 signed log2 bins, issue 213 - which also reads "timeline status" as the active flag), shared across layers (`status_bias_per_layer`, issue 214), N(0, 0.1) from its own generator (`status_bias_init_std`, issue 215): 304 parameters, only in a network of the cached configuration (`status_key_bias`, on; the v1's count unchanged). The refresh stays as built (M20, the main loop's reading): history boards keep the anchor's features in their K/V and are biased at every node below the anchor; the anchor's own evaluation is the refresh pass and adds none (§7.9; `make_context(status_bias=False)`; issue 216). In every path: the structure's rows (the CPU paths), B14's score function, the dense reference, the cached live pass. Tested: the rows against §4.1 written out from the positions (every bin, past and future, active and inactive; §15.2's constructions; four placeholder settings), bitwise; the score function's term bitwise and attention through it; the CPU paths' outputs and gradients (the table's included); every implementation one function; §15.2 row 1 (every `test_cache` case runs with it on) and a moving present and an activating branch - frozen entries all hits, only the superseded board computed, the bias moved and not the K/V; purity and refresh forks with it on; the table's size, generator, reach, switches; translation and board order |
 | B17 | not started | The key-side Shaw term - a prototype (ablation 2): net lane, behind its flag, with §15.2's B17 row and §15.3's cost row |
 | C1 | built, tested | `attn_scope = "dense"` is the default |
 | C4 | built, tested | Full MHA (N1) |
 | C17, C19, C20 | built, tested | Network N3: the block-causal scope (`attn_scope = "block_causal"`), the live set fully bidirectional, supersession recomputed once under the state-defined mask - both of C20's readings built (`supersession_scope`; 6c decides, now in the register); the causal past is the ruled ancestry (`causal_past = "lineage"`, C23) |
-| C2 | built (for §15.2/§15.3) | Network N3's cached path; the decision itself stays deferred (6c, §7.7), now re-weighed against the pilot run's game sizes (M18). The path absorbs B15, B16, A6 and A7 as they land (A7: frozen K/V keyed by perspective, issue 303); B15 is in (`lane/net`: a frozen board's bias rows built per layer, cached = one full pass with it on) |
+| C2 | built (for §15.2/§15.3) | Network N3's cached path; the decision itself stays deferred (6c, §7.7), now re-weighed against the pilot run's game sizes (M18). The path absorbs B15, B16, A6 and A7 as they land (A7: frozen K/V keyed by perspective, issue 303); B15 is in (`lane/net`: a frozen board's bias rows built per layer, cached = one full pass with it on), and B16 (`lane/net`: the live pass adds the status biases from the node's present; frozen rows and entries never carry them; none at a refreshed epoch's anchor) |
 | C10 | not built (rule) | Lazy K/V for boards entering E: deferred with the window (M16) |
 | C3, C3a (rung 1) | built, tested | Root refresh and the travel-triggered, visit-gated rung-1 fork (copy-on-write epochs), behind flags. C3's conditioning-offset training hook is parked with the deferred cached configuration ("Parked", below) |
 | C3a (rungs 2-3), C18, C22 | not built (rule) | Held open (M5 for rungs 2-3) |
@@ -1303,7 +1303,7 @@ commits (F5 and F6 on `lane/net`, H47 and H48 on `lane/gate`, M22 on `lane/engin
 | E2, E3 | built behind flags, tested | Off; awaiting 6m and 6t. They read the categorical variance; 6m's switch to the error head is engine ABI round 2 |
 | E8 | not started | Behind its flag (6v), with E11 in step 2 |
 | E6 | not built (rule) | Refused |
-| F1, F2 | built, tested | 22,961,802 parameters (F1 after F5 and B15: 21,338,634 - 20,736 fewer than N5's 21,359,370, gain-only norms, no Q/K/V biases, spec issue 203 - plus B15's 1,623,168, spec issue 210); the L24-ff12 preset, 46,891,210 (F2: 44,456,458 and B15's 2,434,752 over 24 layers). Unchanged by B11's fold (its flag is off; with it on, 40 scalars where there were 48) |
+| F1, F2 | built, tested | 22,961,802 parameters (F1 after F5 and B15: 21,338,634 - 20,736 fewer than N5's 21,359,370, gain-only norms, no Q/K/V biases, spec issue 203 - plus B15's 1,623,168, spec issue 210); the L24-ff12 preset, 46,891,210 (F2: 44,456,458 and B15's 2,434,752 over 24 layers). Unchanged by B11's fold (its flag is off; with it on, 40 scalars where there were 48) and by B16 (its 304 are in a network of the cached configuration only: 22,962,106 with `attn_scope = "block_causal"`) |
 | F5 | built, tested | Network: RMSNorm-style norms (a learned gain, no centring, no bias; FP32) everywhere in the trunk, no Q/K/V biases, the attention-output and FFN biases kept (spec issue 200), pre-norm. 6y's arm - post-norm with DeepNet's initialisation, `norm_placement="post"` - through the dense trunk and the cached path, its unstated details placeholders (issue 201); smolgen has no norm to keep (issue 202) |
 | F6 | built, tested | Network: Mish in the FFN (`ffn_activation="mish"`); 6y's arm, squared ReLU (`"squared_relu"`), through the dense trunk and the cached path. Whether Mish reaches the output heads is not decided by F6: the value head's MLP keeps GELU as a named placeholder (`head_activation`, spec issue 204) |
 | F3 | not built (rule) | Refused |
@@ -1343,7 +1343,7 @@ commits (F5 and F6 on `lane/net`, H47 and H48 on `lane/gate`, M22 on `lane/engin
 | M16 | applied, confirmed | M7's readings (corrected at CHECKPOINT 5): time-share multiplier, human-game weighting, the per-phase rule under 50 boards with the band resolving to off - the window is killed, provisionally |
 | M18 | not started (rule) | A pilot self-play run before serious self-play re-checks the window and the other compute-weighted decisions - after §15.5, not in the untrained build |
 | M19 | applied | No GPU: counted FLOPs and CPU-labelled wall times (`dev-r`) are the untrained build's write-back; the GPU figures - FA4-class evaluations/s, the leaf-batching gain, FP8, the block-sparse and varlen kernels, the Phase-3 movegen re-check - named as deferred, measured on rented NVIDIA time before the pilot run; the bounded AMD attempt is G9's |
-| M20 | built in part | The placeholder dispositions (issue 121), applied in the net lane with A7. Done: B6 removed (B15, `lane/net`). To change: the promotion offset (D1), the reply a prototype (D4), moves-left in turns, position-free per-board registers (B8), B16's status biases, the submit logit from the pooled registers (D8). Already the defaults: aux pooling from squares, value pooling by mean, global registers position-free, intrinsic frozen features, the acting player on the global registers, both supersession readings (C20). B5, the per-square labels, 16a-g and B7 stand as v1 - relabelled, not changed. Not on the list: D8's readout form (linear or pointer) |
+| M20 | built in part | The placeholder dispositions (issue 121), applied in the net lane with A7. Done: B6 removed (B15, `lane/net`); B16's status biases (`lane/net`, N-B16), with intrinsic frozen features. To change: the promotion offset (D1), the reply a prototype (D4), moves-left in turns, position-free per-board registers (B8), the submit logit from the pooled registers (D8). Already the defaults: aux pooling from squares, value pooling by mean, global registers position-free, intrinsic frozen features, the acting player on the global registers, both supersession readings (C20). B5, the per-square labels, 16a-g and B7 stand as v1 - relabelled, not changed. Not on the list: D8's readout form (linear or pointer) |
 | M21 | built in part | The training loop, written and smoke-tested, no training (§15.5 does not require it; the pilot run does). Built (N1+N2; the submit target at N5): losses for today's heads - value, policy with submit, WDL, moves-left, opponent reply, short value, per-board, per-square, effort, each at weight 1.0 (`t5d.train.losses`) - and a smoke test of at most three optimiser steps on synthetic targets (`t5d.train.smoke`). Missing - the net lane, after engine round 2 and the heads: I15's records first, then I2's targets with §12.2's exclusions and provenance, the new heads' losses (D3, D4, D9), PCR (I5) with I20, I12 with 6u's and I6's arms, I13, I14's hook disabled, I16-I19 (§12.8's mechanics), the QAT hook (G8), §15.2's round-trip test |
 | M23 | applied | Every working branch is pushed after each commit and takes main by merge, never rebase. The three lanes and their number blocks are the main loop's plan under this rule ("Current state (2026-10-17)") |
 | M24 | not started (rule) | Ablations on a shared dataset - after the pilot run; what the untrained build owes it is I15's record completeness |
@@ -1642,7 +1642,9 @@ superseded or made moot says so; nothing is deleted.
     carry neither; a refresh gives them the anchor's values) | `current` (every
     shift of the present recomputes every frozen board, a cost §7.1 does not price).
     *Settled upstream at CHECKPOINT 6/7: B16 ("settles BUILD_LOG issue 31"), M20,
-    §2.3 and §4.1 (intrinsic features; status as score-time key biases).*
+    §2.3 and §4.1 (intrinsic features; status as score-time key biases).* *Built
+    (`lane/net`, N-B16, 2026-10-17): B16 on intrinsic frozen features; the refresh as
+    built; issues 213-216.*
 32. **C20's "causal past plus the conditioned history of its refresh epoch"**:
     `supersession_scope = causal_past` (placeholder) | `past_and_epoch_history`. The
     union has a cycle under the creation reading unless the epoch's history is a
@@ -2411,6 +2413,49 @@ superseded or made moot says so; nothing is deleted.
     and `smolgen_timeline_*`. Re-basing the cells on B15's 54 board-distance classes (54 x
     8 x 32 + 8,224 = 22,048 parameters) is the other reading; no document asks for it.
     Proposed edit 159.
+213. **B16's bins, its status and its switch** (§4.1: "per head, by the key board's
+    Δt-to-present bin and timeline status"; register B16, class C). (a) No bins are given.
+    Built (placeholder, `status_dt_exact = 4`, `status_dt_max = 128`): signed log2 buckets of
+    Δt-to-present in half-turns - exact below 4, one per doubling up to 128, clamped beyond,
+    past and future apart: 19 bins, the time buckets B6 used and smolgen keeps
+    (`buckets.signed_log_bucket`). (b) "Timeline status" is read as A3's active/inactive flag,
+    the one status of a frozen board's timeline that changes after it freezes (head/superseded
+    is constant there: every keyed board is superseded) - 19 x 2 = 38 entries per head. (c)
+    Whether B16 has an off position: its gate, 6c, names the refresh's arms, none of B16's.
+    Built as `status_key_bias`, on; off is the network without the table (B16 draws from a
+    generator of its own, so every other weight is the same) - for comparisons, no named arm.
+    Proposed edit 160.
+214. **B16 per layer or shared by the layers** (§4.1, register B16: "per head"). Neither
+    says; B11 is shared across layers, B15 per layer. Built (placeholder,
+    `status_bias_per_layer = False`): one table for every layer, as B11's - 8 x 38 = 304
+    parameters (4,864 per layer). Proposed edit 160.
+215. **B16's initialisation** (§4.1, §15.2): not stated. Built (placeholder,
+    `status_bias_init_std = 0.1`): N(0, 0.1), the scale of B11's and B15's tables, from a
+    generator of B16's own seeded from the model's (`model.b16_seed`), so switching it changes
+    no other weight and §15.2's "never zeros" holds. A trained network's starting table is a
+    training choice the documents leave open. Proposed edit 160.
+216. **§4.1's "frozen boards therefore carry only intrinsic features" against the refresh as
+    built; B16's rows; the anchor's own evaluation** (§2.3, §4.1, §7.3, §7.9; register A3, B16,
+    C3, M20). (a) §4.1 says it of the whole cached configuration, and §2.3 that "frozen tokens
+    keep only intrinsic features" - read literally, a refresh's history boards too. But M20
+    ruled issue 31's option, "intrinsic (placeholder: frozen boards carry neither; a refresh
+    gives them the anchor's values)", and the refresh - a dense pass - stays as built (the main
+    loop's reading, "Current state"): a refreshed epoch's history boards carry the anchor's A3
+    features in their K/V. Built so; B16 biases them at every node below the anchor, with the
+    node's own status, like every other frozen key (the main loop's reading). (b) Which rows:
+    §4.1 says "key biases", §7.3 "current status reaches it at score time", and neither names the
+    query rows. Built (forced): live rows only - the head boards' tokens and the global registers
+    - against frozen boards' tokens, squares and per-board registers; on a frozen row the bias
+    would make the frozen board's outputs and K/V depend on the present, which C17 allows only
+    at refreshes (§7.3's "reaches it" read as reaching the live rows that read it). (c) The
+    anchor's own evaluation in its refreshed epoch: §7.9 - "The refresh pass itself is the
+    ordinary dense model: at the root the two-level mask reduces to full dense attention" - so it
+    adds no B16 there (`T5DNet.make_context(status_bias=False)`, in the cached path and in its
+    reference); every node below the anchor carries it. Conditioning-offset training's k = 0 is
+    then "fully dense", as §7.9 says, and k > 0 carries B16. Below the anchor a history board's
+    status enters twice: as the anchor's values in its K/V and as the node's in B16. Built
+    otherwise (B16 at the anchor too), the root's evaluation would not be the dense pass, which
+    `test_cache.py` pins (C3). Proposed edit 160.
 
 <!-- A new list, so that the numbers from 140 render as written. -->
 
@@ -3047,6 +3092,24 @@ struck through, where nothing of it is left to apply); the others stand as writt
     relative board-pair cells - the signed-Δtime x Δtimeline log buckets B6 used (19 x
     8), kept for smolgen" (issue 212). Why: as built the clause is false, and it is what
     says that removing B6, with no arm left in ablation 2, loses nothing (issue 205).
+160. **§4.1's status paragraph ("Relative to the present, at score time"), §2.3's Δt bullet,
+    §7.3's last sentence on frozen boards, and register B16 and A3 (with M20)**: now - §4.1:
+    "Under the cached configuration frozen boards therefore carry only intrinsic features, and
+    current status enters as score-time key biases — per head, by the key board's
+    Δt-to-present bin and timeline status — recomputed every evaluation for the cost of a
+    lookup"; §7.3: "carries only intrinsic features; current status reaches it at score time";
+    register B16: "Score-time status key biases on frozen boards — Δt-to-present bin and
+    timeline status — so frozen tokens carry intrinsic features only". Proposed - say (1) where
+    the biases apply: on live query rows (head boards' tokens and the global registers) against
+    frozen boards' tokens, never on a frozen row (C17); (2) the refresh: "frozen boards carry
+    only intrinsic features, except a refreshed epoch's history boards, whose K/V carry the
+    anchor's (§7.9, M20's ruling of issue 31); B16 biases them at every node below the anchor,
+    and adds nothing at the anchor, whose evaluation is the refresh pass"; (3) the as-built
+    placeholders, or what replaces them: signed log2 Δt bins exact below 4 half-turns and
+    clamped at 128 (19), "timeline status" the active/inactive flag, one table per head shared
+    by the layers (304 parameters), N(0, 0.1), and whether an off arm exists (issues
+    213-216). Why: as written, §4.1 and §7.3 can be read to put intrinsic features and B16 into
+    the refresh too, which M20 ruled against, and they leave every committed-class detail open.
 
 <!-- A new list, so that the numbers from 110 render as written. -->
 

@@ -10,6 +10,61 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-17 - Network B16: score-time status key biases on frozen boards
+
+- `python/t5d/net/status.py` (new): register B16 (committed with the cached configuration,
+  class C, gate 6c; §4.1, §7.3), with A3 and M20 ("frozen features -> intrinsic, with
+  score-time status biases (B16)"; spec issue 31). Under the block-causal scope with intrinsic
+  frozen features, a learned bias per head by the key board's status - the bin of its
+  Δt-to-present and its timeline's active flag - on the scores of live query rows (head boards'
+  tokens and the global registers) against the tokens of frozen boards, squares and per-board
+  registers alike, recomputed from the evaluated position's own present at every evaluation.
+  Never on a frozen row: the frozen board's outputs and K/V would then depend on the present
+  (C17) - a forced reading. Never under the dense scope (the v1; every refresh pass).
+- Its unstated details are named placeholders, each a spec issue: the bins (`status_dt_exact
+  = 4`, `status_dt_max = 128`: 19 signed log2 bins, the time buckets B6 used and smolgen keeps;
+  "timeline status" read as the active flag - issue 213), one table shared by the layers
+  (`status_bias_per_layer`, issue 214), N(0, 0.1) from a generator of its own (`status_bias_init_std`,
+  `model.b16_seed`, issue 215). `status_key_bias` (on) switches it; off is the network without
+  it, bit for bit in every other weight.
+- The refresh stays as built (M20; the main loop's reading): a refreshed epoch's history boards
+  keep the anchor's A3 features in their K/V, and B16 biases them at every node below the
+  anchor. At the anchor itself the evaluation is the refresh pass (§7.9: "at the root the
+  two-level mask reduces to full dense attention"), so B16 adds nothing there:
+  `T5DNet.make_context`/`forward(status_bias=False)`, which `cache.py` passes for the anchor's
+  own state - in the cached path and in `reference_output` (issue 216, with §4.1's categorical
+  "frozen boards therefore carry only intrinsic features", logged as the briefs' critic asked).
+- `config.py`: `frozen_features` documented as ruled (M20) - "current" kept only as a test arm,
+  with no B16 under it; B16's fields, validation and `status_bias_built` (the table exists only
+  in a network of the cached configuration: 304 parameters there, none in the v1, whose count
+  stays 22,961,802). `structure.py`: B16's rows (`status_rows`) in every bias row the CPU paths
+  build - any block, key selection or row set - and `for_frozen_rows` (no B12, no B16) for a
+  frozen board's rows in `cache.py`. `flex.py`: B16 inside B14's score function, from a
+  per-token index. `model.py`: the table, its generator, `parameter_breakdown`'s
+  `attn.status`. Docstrings: `embed.py`, `scope.py`, `cache.py`, `__init__.py`.
+- Tests: `tests/net/test_status.py` (new) - the bins written out; the rows against §4.1 from
+  the positions (every bin, past and future, active and inactive timelines, §15.2's
+  constructions, four placeholder settings, any block, key selection and row set), bit for
+  bit, alone and added to B15's; none outside the cached configuration, under a dense or
+  status-free forward; a frozen board's status change moves the live outputs and leaves every
+  frozen output and K/V bit for bit; B14's score function bitwise and attention through it;
+  the CPU paths' outputs and gradients, the table's included; every implementation one
+  function; the table's size, generator, reach, placeholders (each regroups the statuses) and
+  validation; translation and board order. `test_cache.py`: every case runs with B16 on (the
+  default), and `test_status_biases_keep_frozen_boards_intrinsic` - a move that shifts the
+  present and a branch that activates a timeline: every frozen entry kept, only the superseded
+  board computed, cached = the full pass, the statuses moved. `test_scope.py`: live rows carry
+  B16 besides the structure. `test_structure.py`: three new switches. `test_params.py`: 304 in
+  the cached configuration (4,864 per layer), none in the v1. Checked by mutation on scratch
+  copies: B16 on frozen rows fails the definition and cached = dense; B16 at the anchor fails
+  the root refresh and refresh-fork rows.
+- `docs/BUILD_LOG.md`: register rows B16 (built, tested), A1-A3, B14, C2, F1 and M20; spec
+  issue 31 annotated; spec issues 213-216; proposed edit 160.
+- Spec: §2.3, §4.1 ("Relative to the present, at score time"), §7.3, §7.9 (the anchor's
+  evaluation), §15.2 (row 1 and the purity rows with B16 on); register A3, B16, C2, C3, C17, M20.
+  Proposed edit 160 (issues 213-216). No §15.3 figure is measured (B16 is a lookup per
+  live-row x frozen-key pair, inside "Cached cost per node").
+
 ### 2026-10-17 - Network B11: travel-threat folded into attack
 
 - `python/t5d/net/config.py`, `state.py`: register B11 (provisional, class R, ablation 2) as

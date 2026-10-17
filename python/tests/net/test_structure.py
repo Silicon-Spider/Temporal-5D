@@ -535,6 +535,10 @@ SWITCHES = {
     "disp_far_edges": (dict(), dict(disp_far_edges=(3, 4, 6))),
     "disp_line_max": (dict(), dict(disp_line_max=4)),
     "disp_register_pairs": (dict(), dict(disp_register_pairs="shared")),
+    # B16 lives in the cached configuration only (its bins are checked to regroup in test_status.py).
+    "status_key_bias (B16) off -> on": (dict(attn_scope="block_causal", status_key_bias=False), dict(attn_scope="block_causal")),
+    "status_bias_per_layer": (dict(attn_scope="block_causal"), dict(attn_scope="block_causal", status_bias_per_layer=True)),
+    "status_dt_exact": (dict(attn_scope="block_causal"), dict(attn_scope="block_causal", status_dt_exact=2)),
 }
 
 

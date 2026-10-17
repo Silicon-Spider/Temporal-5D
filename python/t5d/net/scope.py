@@ -59,6 +59,11 @@ the bias rows for frozen boards freeze with them" - is consistent with this: in 
 engine's export (stage E3) every move and relation starts on a playable board, so a
 frozen row's edges lead to live keys, which the scope already closes.
 
+**B16's status key biases** (``status.py``) follow the same rule from the key's side: a
+frozen board's current status (Delta-t-to-present bin, active flag) biases the live query
+rows that read its tokens, recomputed every evaluation, and never a frozen row - whose input
+carries intrinsic features only (``frozen_features="intrinsic"``, M20).
+
 Padding queries read every valid key (their outputs are discarded), so no row of the
 scope is ever empty.
 """
