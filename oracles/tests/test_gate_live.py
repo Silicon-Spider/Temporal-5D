@@ -7,9 +7,11 @@ that get a verdict wrong, leave one out, decline every record, read a move as
 another position, mark a piece's having moved differently, or say nothing of what
 they set up - to show that the gate passes the first, fails the others, and
 accepts a wrong verdict only once the difference is on record with a citation.
-(They run the commit tier, a smoke test that gates nothing - H47 - so the one
-that declines every record, which contradicts nothing, passes it, and the gate's
-output says that the tier gates nothing.)
+(They run the commit tier restricted to its ftxi source: a restricted run, which
+is never a tier result - H47, CHECKPOINT 8 - so they read its findings, which are
+all its exit code reflects. The engine's baseline they hold the stand-in to is
+the stand-in's own, recorded from its honest run as `baseline --write` records
+one; so the one that declines every record fails on each record it read then.)
 
 How the stand-in is fed. The engine contract asks for a state event before every
 position: every board of the multiverse, as the engine set it up. No golden file
@@ -40,7 +42,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from oracle_harness import build, config, corpus, gate, gitutil, lockfile, paths, util
+from oracle_harness import baseline, build, config, corpus, gate, gitutil, lockfile, paths, util
 from oracle_harness.adapters import RunOptions, make_source
 from oracle_harness.adapters import base as adapter_base
 from oracle_harness.util import sha256_bytes
@@ -169,18 +171,33 @@ class GateWithAStandInEngineTests(unittest.TestCase):
         cls.engine = root / "engine.py"
         cls.engine.write_text(ENGINE, encoding="utf-8")
         cls.root = root
+        # The stand-in's own baseline - what it read on its honest run - as `baseline --write` records one (H47): the
+        # repository's is the engine's, which reads some records further than ftxi does.
+        cls.baseline_file = root / "engine-baseline.json"
+        honest = cls._run(compare_baseline=False)
+        if honest.findings():
+            raise AssertionError(f"the honest stand-in's run found something: {honest.findings()[:3]}")
+        cls.baseline_text = baseline.dump(baseline.from_run("commit", cls.records, honest.engine_reads,
+                                                            honest.engine_run))
+        cls.baseline_file.write_text(cls.baseline_text, encoding="utf-8", newline="\n")
+        cls.read_then = sum(1 for item in baseline.parse(cls.baseline_text.encode()).records.values() if item.positions)
 
-    def run_gate(self, *modes: str, divergences_text: str = "schema = 1\n", mode: str = "full"):
-        command = json.dumps([sys.executable, str(self.engine), str(self.recorded), *(modes or ("-",))])
-        gate_file = self.root / "gate.toml"
+    @classmethod
+    def _run(cls, *modes: str, divergences_text: str = "schema = 1\n", mode: str = "full", compare_baseline: bool = True):
+        command = json.dumps([sys.executable, str(cls.engine), str(cls.recorded), *(modes or ("-",))])
+        gate_file = cls.root / "gate.toml"
         text = paths.GATE_FILE.read_text(encoding="utf-8")
         # The repository's gate.toml with the stand-in in place of whatever engine it configures (every such line is
         # counted, so a second one fails here).
         text, found = re.subn(r"(?m)^command = \[.*\]$", lambda _: f"command = {command}", text)
-        self.assertEqual(found, 1, "gate.toml's [engine] command line")
+        if found != 1:
+            raise AssertionError("gate.toml's [engine] command line")
         text = text.replace('mode = "full"', f'mode = "{mode}"')
         gate_file.write_text(text, encoding="utf-8")
-        divergences_file = self.root / "known-divergences.toml"
+        if cls.baseline_file.exists():
+            # Pinned as `baseline --write` pins it: the stand-in's baseline, not the repository's.
+            config.write_sha256(gate_file, "baseline", util.sha256_text(cls.baseline_file.read_bytes()))
+        divergences_file = cls.root / "known-divergences.toml"
         divergences_file.write_text(divergences_text, encoding="utf-8")
         # A test run must not overwrite the report of a real gate run. It runs the
         # commit tier's ftxi source only: the stand-in replays ftxi, and what any
@@ -189,41 +206,42 @@ class GateWithAStandInEngineTests(unittest.TestCase):
         # between oracles - DISAGREEMENTS.md's business, not this test's.
         with mock.patch.object(paths, "GATE_FILE", gate_file), \
                 mock.patch.object(paths, "DIVERGENCES_FILE", divergences_file), \
+                mock.patch.object(paths, "ENGINE_BASELINE_FILE", cls.baseline_file), \
                 mock.patch.object(gate, "_write_report") as report:
-            self.assertGreaterEqual(len(config.load().engine_command), 4)
-            result = gate.run_tier("commit", only_sources=["ftxi"], include_untracked=False, log=lambda message: None)
+            if len(config.load().engine_command) < 4:
+                raise AssertionError("the stand-in is not the configured engine")
+            result = gate.run_tier("commit", only_sources=["ftxi"], include_untracked=False, log=lambda message: None,
+                                   compare_baseline=compare_baseline)
         report.assert_called_once()
         return result
+
+    def run_gate(self, *modes: str, divergences_text: str = "schema = 1\n", mode: str = "full"):
+        return self._run(*modes, divergences_text=divergences_text, mode=mode)
 
     def test_an_engine_that_agrees_with_the_oracle_passes(self):
         result = self.run_gate()
         self.assertEqual(result.findings(), [])
         self.assertEqual(result.engine, "passed")
         self.assertTrue(result.ok)
-        self.assertIn(WRONG_BOARD, result.gated)
-        # ftxi gave every verdict at every position the stand-in reports, and
-        # said what it set up at each, unmoved markers included: every position
-        # is known to be the same one.
-        behind = result.gated[WRONG_BOARD]
-        self.assertEqual(set(behind.checked.values()), {behind.positions})
-        self.assertEqual((behind.aligned, behind.matched), (behind.positions, behind.positions))
-        self.assertEqual(behind.oracles, 1)
+        # ftxi replays the ruleset completely, and agrees with the stand-in at every position - but it is one oracle,
+        # and a ruleset is gated only when two answer for each of its records (H47, CHECKPOINT 8).
+        self.assertNotIn(WRONG_BOARD, result.gated)
+        self.assertTrue(result.ungated[WRONG_BOARD].startswith("only one oracle followed "), result.ungated[WRONG_BOARD])
+        self.assertIn("(ftxi) as far as the engine went", result.ungated[WRONG_BOARD])
         # A ruleset the stand-in reports as unsupported (it echoes ftxi, which does
         # not know this board) was never compared, so it is not gated.
         self.assertIn("Focused - Just Kings", result.ungated)
         # Nor is one where the only oracle stopped because it could not read a move.
         self.assertIn("no oracle followed", result.ungated[UNCONFIRMED_BOARD])
-        # A commit-tier pass never enables the proof channel.
-        self.assertTrue(result.proof_channel.startswith("DISABLED"))
-        # And never reads as gating: the commit tier is a smoke test (H47). What met the gating conditions with ftxi
-        # alone is not gated, and says so.
-        self.assertTrue(result.smoke_test)
-        self.assertEqual(result.verdicts[0], {})
+        # It read every record as far as it did on its last green run.
+        self.assertIn(": 0 declined", result.baseline_note)
+        # A restricted run is never a tier result: no ruleset gated or not, no smoke test, the proof channel DISABLED.
+        self.assertEqual((result.restricted, result.smoke_test, result.verdicts), (True, False, ({}, {})))
+        self.assertEqual(result.proof_channel, f"DISABLED - {gate.RESTRICTED}")
         text = gate.summarise(result)
-        self.assertIn(f"engine differential: SMOKE TEST - PASSED (PARTIAL RUN - restricted sources or records): "
-                      f"{gate.SMOKE_TEST}", text)
-        self.assertIn(f"NOT gated: {WRONG_BOARD} - {gate.SMOKE_REASON} (", text)
-        self.assertNotIn("gated:     ", text)
+        self.assertIn(f"{gate.RESTRICTED}: tier 'commit' restricted to sources ftxi - 0 findings", text)
+        self.assertNotIn("oracle layer [", text)
+        self.assertNotIn("gated:", text)
 
     def test_one_wrong_verdict_fails_the_gate(self):
         record, index = WRONG_AT
@@ -277,18 +295,20 @@ class GateWithAStandInEngineTests(unittest.TestCase):
         self.assertTrue(messages[0].startswith(f"{record} position {index}: in_check: engine=True vs ftxi=False"))
         self.assertTrue(messages[1].startswith(f"{record} position {index}: unmoved: engine="), messages[1])
 
-    def test_an_engine_that_declines_everything_gates_nothing(self):
-        # Compared with nothing, it contradicts nothing. The commit tier is a smoke test that gates nothing (H47): it
-        # passes the engine, and says why no ruleset is gated. A tier that runs every oracle fails it
-        # (engine-nothing-gated - test_gate.GateRunTests, with canned oracles).
+    def test_an_engine_that_declines_everything_it_read_on_the_last_green_run_fails(self):
+        # Compared with nothing, it contradicts nothing - but it declines every record it read on its last green run
+        # (H47, CHECKPOINT 8): one finding for each, in this restricted run as in any. (That it reads none at all is a
+        # check of the tier as a whole, which a restricted run does not make: test_gate.GateRunTests.)
         result = self.run_gate("unsupported")
         self.assertEqual(result.gated, {})
-        self.assertEqual(result.findings(), [])
-        self.assertEqual((result.engine, result.ok, result.smoke_test), ("passed", True, True))
-        self.assertTrue(result.ungated)
+        codes = [finding.code for finding in result.findings()]
+        self.assertEqual(codes, ["engine-declined"] * self.read_then)
+        self.assertGreater(self.read_then, 30)
+        self.assertEqual((result.engine, result.ok, result.smoke_test), ("failed", False, False))
         self.assertTrue(all(reason.startswith("the engine did not replay") for reason in result.ungated.values()),
                         result.ungated)
-        self.assertIn("engine differential: SMOKE TEST - PASSED", gate.summarise(result))
+        self.assertIn(f"engine differential ({gate.RESTRICTED}): {self.read_then} findings against the engine",
+                      gate.summarise(result))
         self.assertTrue(result.proof_channel.startswith("DISABLED"))
 
     def test_a_recorded_divergence_with_a_citation_is_accepted_and_nothing_else_is(self):
@@ -347,8 +367,11 @@ added = "2026-10-01"
         self.assertEqual((result.engine_mode, result.engine, result.gated), ("parse", "passed", {}))
         self.assertGreater(result.parse.boards, 0)
         self.assertEqual(result.parse.boards, result.parse.described)
-        self.assertIn("engine differential: PARSE MODE - PASSED", gate.summarise(result))
-        self.assertTrue(result.proof_channel.startswith("DISABLED - parse mode"))
+        # A restricted run, so no tier verdict: what it compared, and its findings - none.
+        text = gate.summarise(result)
+        self.assertIn(f"engine differential (parse mode, {gate.RESTRICTED}): 0 findings against the engine", text)
+        self.assertIn("  compared: the engine read ", text)
+        self.assertEqual(result.proof_channel, f"DISABLED - {gate.RESTRICTED}")
         # What it set up is still compared.
         misread = self.run_gate(f"misread:{record}@{index}", mode="parse")
         self.assertEqual([finding.code for finding in misread.findings()], ["divergence"])

@@ -8,16 +8,26 @@ Tiers (design spec 11.0):
            in nightly, and it fails unless an engine was compared and came
            through at least one named variant
 
-Only a tier that runs every oracle search over the whole corpus (nightly,
-release) gates a ruleset, and there an engine with no finding against it that
-came through no ruleset fails (engine-nothing-gated). Any other tier - commit - is
-a smoke test (H47): an engine with no finding against it passes, and the summary
-and report say that the tier gates nothing. In every tier the engine fails on an
-unexplained divergence (one known-divergences.toml does not record), a telltale or
-a breach of the engine contract. The rule is keyed to what a tier runs, never to
-its name; a run restricted to some sources or records keeps its tier's rule, and
-only a tier that runs every oracle search over the whole corpus may require an
-engine (config.load refuses any other: it could gate nothing).
+A ruleset is gated only when two or more oracles answer for it - each of its
+records followed, as far as the engine went, by at least two independent
+implementations (H47, CHECKPOINT 8): a single oracle cannot tell its own bug from
+the engine's. Only a tier that runs every oracle search over the whole corpus
+(nightly, release) gates a ruleset, and there an engine with no finding against it
+that came through no ruleset fails (engine-nothing-gated). Any other tier - commit,
+whose one rules oracle could gate nothing anyway - is a smoke test (H47): the
+summary and report say that the tier gates nothing. In every tier the engine fails
+on an unexplained divergence (one known-divergences.toml does not record), a
+telltale, a breach of the engine contract, a record it read on the last green run
+and now declines (the engine's baseline, baseline.py), or on reading none. The rule
+is keyed to what a tier runs, never to its name, and only a tier that runs every
+oracle search over the whole corpus may require an engine (config.load refuses any
+other: it could gate nothing).
+
+A run restricted with --source or --record never produces a tier verdict (H47,
+CHECKPOINT 8): its summary and report say "restricted - not a tier result", it
+gates nothing, applies none of the checks that judge a tier as a whole (that the
+engine read some record, came through some ruleset, was compared at all), never
+enables the proof channel, and its exit code reflects its findings only.
 
 Each run reads what it compares against once, verified (snapshot.py, H33); then
 requires 100% of each tier's required set of recorded answers (stability.py,
@@ -43,6 +53,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from . import (
+    baseline,
     boundary,
     config,
     corpus,
@@ -88,8 +99,14 @@ PROBE_TIMEOUT_S = 900.0
 # What a tier that does not run every oracle search over the whole corpus says of an engine compared in full mode
 # (H47), and why a ruleset that met the gating conditions with its oracles alone is still not gated.
 SMOKE_TEST = ("this tier gates nothing - only a tier that runs every oracle search over the whole corpus gates a "
-              "ruleset, or fails an engine that came through none (H47)")
+              "ruleset, or fails an engine that came through none; this one fails an engine on a finding against it, "
+              "a record it read on the last green run and now declines, or reading none (H47)")
 SMOKE_REASON = "a smoke test: it met the gating conditions with this tier's oracles alone"
+# What a run restricted with --source or --record is, in its summary and its report (H47, CHECKPOINT 8).
+RESTRICTED = "restricted - not a tier result"
+# A ruleset is gated only when at least this many independent implementations followed each of its records as far as
+# the engine went (H47, CHECKPOINT 8: "a single oracle cannot tell its own bug from ours").
+GATING_ORACLES = 2
 
 
 @dataclass(frozen=True)
@@ -193,10 +210,11 @@ class GateResult:
     gated: dict[str, Gated] = field(default_factory=dict)
     ungated: dict[str, str] = field(default_factory=dict)  # ruleset -> why it is not gated
     parse: ParseAgreement | None = None  # an engine compared in parse mode
-    partial: bool = False
+    # A run restricted with --source or --record: {"sources": [...] or None, "records": [...] or None}, what it was
+    # restricted to. Such a run never produces a tier verdict (H47, CHECKPOINT 8). None: a complete run of the tier.
+    restricted_to: dict | None = None
     require_engine: bool = False
-    # The tier runs every oracle search over the whole corpus. A tier's name promises nothing. A run restricted to
-    # some sources or records keeps its tier's value (and is marked partial).
+    # The tier runs every oracle search over the whole corpus. A tier's name promises nothing.
     full_strength: bool = False
     margin: float = 1.0
     calibration: Probe | None = None
@@ -206,9 +224,18 @@ class GateResult:
     # The engine as this run ran it - its command, the file that ran and that file's SHA-256, its time limit
     # (engine_program) - or None where no engine ran.
     engine_run: dict | None = None
+    # Record id -> the engine's report on it, in full mode: what `baseline --write` records.
+    engine_reads: dict[str, Observation] = field(default_factory=dict)
+    # What the comparison with the engine's baseline found (baseline.compare), or None where none was made.
+    baseline_note: str | None = None
 
     def findings(self) -> list[Finding]:
         return [finding for _, items in (*self.sections, *self.engine_sections) for finding in items]
+
+    @property
+    def restricted(self) -> bool:
+        """Was the run restricted with --source or --record? Then it is never a tier result (H47, CHECKPOINT 8)."""
+        return self.restricted_to is not None
 
     @property
     def oracle_layer_ok(self) -> bool:
@@ -218,22 +245,23 @@ class GateResult:
     def variants(self) -> dict[str, Gated]:
         """The gated rulesets that are named variants - what a proof could be about.
 
-        Only what this run may state as gated (`verdicts`): in a smoke test, none.
+        Only what this run may state as gated (`verdicts`): in a smoke test, or a restricted run, none.
         """
         gated, _ = self.verdicts
         return {ruleset: item for ruleset, item in gated.items() if ruleset != CUSTOM_POSITIONS}
 
     @property
     def smoke_test(self) -> bool:
-        """Was an engine compared in full mode by a tier that does not run every oracle search over the whole corpus?
+        """Was an engine compared in full mode by a complete run of a tier that does not run every oracle search?
 
         Such a tier is a smoke test (H47): it gates nothing. An engine with no
         finding against it passes it, whether or not some ruleset met the gating
         conditions with the tier's oracles alone, and its summary and report say
         that the tier gates nothing. Keyed to what the tier runs (full_strength),
-        never to its name.
+        never to its name. A restricted run is no test of a tier at all.
         """
-        return self.engine != "not configured" and self.engine_mode == "full" and not self.full_strength
+        return (not self.restricted and self.engine != "not configured" and self.engine_mode == "full"
+                and not self.full_strength)
 
     @property
     def verdicts(self) -> tuple[dict[str, Gated], dict[str, str]]:
@@ -241,7 +269,10 @@ class GateResult:
 
         In a smoke test nothing is gated: a ruleset that met the gating
         conditions with the tier's oracles alone is not gated either, and says so.
+        A restricted run states nothing about any ruleset.
         """
+        if self.restricted:
+            return {}, {}
         if not self.smoke_test:
             return self.gated, self.ungated
         met = {ruleset: f"{SMOKE_REASON} ({item.describe()})" for ruleset, item in self.gated.items()}
@@ -249,6 +280,9 @@ class GateResult:
 
     @property
     def ok(self) -> bool:
+        if self.restricted:
+            # Not a tier's verdict: whether the run found anything, which is all its exit code says.
+            return not self.findings()
         if not self.oracle_layer_ok or self.engine == "failed":
             return False
         if self.engine == "passed":
@@ -272,6 +306,8 @@ class GateResult:
 
     @property
     def proof_channel(self) -> str:
+        if self.restricted:
+            return f"DISABLED - {RESTRICTED}"
         if self.engine == "not configured":
             return "DISABLED - no engine has been compared against the oracles (H23)"
         if self.engine_mode == "parse":
@@ -279,7 +315,7 @@ class GateResult:
                     "never on check, counts or mate (H23)")
         if not self.ok:
             return "DISABLED - the gate failed"
-        if self.partial or not (self.require_engine and self.full_strength):
+        if not (self.require_engine and self.full_strength):
             return ("DISABLED - only a complete run of a tier that requires an engine and runs every oracle "
                     "over the whole corpus can enable it")
         if not self.variants:
@@ -402,9 +438,16 @@ def _rendered(cfg: config.GateConfig, records: list[Record], frozen: Snapshot) -
                                        stability.required_table(cfg, records, frozen.golden, frozen.costs))
 
 
+BASELINE_SECTION = "engine baseline"
+
+
 def static_checks(lock: Lock, cfg: config.GateConfig, records: list[Record], frozen: Snapshot, *,
-                  include_untracked: bool = True) -> list[Section]:
-    """Everything that can be checked without building or running an oracle, against one verified snapshot."""
+                  include_untracked: bool = True, baseline_checks: bool = True) -> list[Section]:
+    """Everything that can be checked without building or running an oracle, against one verified snapshot.
+
+    ``baseline_checks``: check the engine's baseline (H47) - pinned, the file its pin names, about the corpus as it is.
+    False only for `baseline --write`, which writes it anew.
+    """
     sections: list[Section] = [
         ("pins", lockfile.verify(lock)),
         ("corpus", corpus.verify(records, lock) + corpus.verify_local(records)
@@ -416,6 +459,10 @@ def static_checks(lock: Lock, cfg: config.GateConfig, records: list[Record], fro
          + engine_command_findings(cfg.engine_command)),
         ("provenance", provenance.check(lock, records)),
     ]
+    if baseline_checks:
+        # What the engine read on the last green run (H47): what the commit tier holds it to.
+        sections.append((BASELINE_SECTION, baseline.static_findings(cfg, records, frozen.baseline,
+                                                                    frozen.baseline_problems)))
     sources = [make_source(name, lock) for name in ORACLE_SOURCES]
     golden_findings = golden.verify_static(sources, lambda source: recording_options(cfg, source), records, frozen)
     golden_findings += _calibration_findings(cfg, lock, records, frozen)
@@ -560,13 +607,16 @@ def engine_differential(
       * the engine replayed each one - read it to its end, or to an action it
         holds illegal (a refusal as unreadable is no verdict) - and no
         unexplained divergence or telltale remains;
-      * each one was followed as far as the engine went by at least one oracle;
+      * each one was followed as far as the engine went by at least
+        ``GATING_ORACLES`` (two) oracles - independent implementations, so two
+        searches of one count once, and a parse-only source never counts (H47,
+        CHECKPOINT 8: a single oracle cannot tell its own bug from the engine's);
       * for each observable - check, count, mate - some oracle gave an answer
         that settles it at no less than ``min_checked`` of the engine's positions.
 
-    Without the last two an engine could "pass" a ruleset nothing had looked at:
-    several variants are read by a single oracle, and one of those has no check
-    verdict to give.
+    Without the last two an engine could "pass" a ruleset nothing independent had
+    looked at, or that one oracle alone vouched for: several variants are read
+    by a single oracle, and one of those has no check verdict to give.
     """
     findings: list[Finding] = []
     found: list[observations.Disagreement] = []
@@ -662,6 +712,9 @@ def engine_differential(
         unplayed = [item.id for item in items if engine_results[(engine.name, item.id)].status not in _COMPLETE]
         unread = [item.id for item in items if _unread(engine_results[(engine.name, item.id)])]
         alone = [item.id for item in items if not vouched[item.id]]
+        # Followed by some oracle, but by fewer than a ruleset needs: each named with the oracles that did.
+        single = [f"{item.id} ({', '.join(sorted(vouched[item.id]))})" for item in items
+                  if 0 < len(vouched[item.id]) < GATING_ORACLES]
         positions = sum(reported[item.id] for item in items)
         checked = {name: sum(settled[item.id][name] for item in items) for name in OBSERVABLES}
         thin = [name for name in OBSERVABLES if checked[name] < min_checked * positions]
@@ -675,6 +728,9 @@ def engine_differential(
             ungated[ruleset] = f"the engine could not read {_some(unread)} (a refusal as unreadable is no verdict)"
         elif alone:
             ungated[ruleset] = f"no oracle followed {_some(alone)} as far as the engine went"
+        elif single:
+            ungated[ruleset] = (f"only one oracle followed {_some(single)} as far as the engine went - a ruleset is "
+                                f"gated only when at least {GATING_ORACLES} answer for each of its records (H47)")
         elif thin:
             name = thin[0]
             ungated[ruleset] = (f"the oracles give a {_LABELS[name]} verdict at only {checked[name]} of the engine's "
@@ -699,8 +755,12 @@ def parse_differential(
     engine_results: runner.Results,
     entries: list[divergences.Divergence],
     recorded: divergences.Recorded | None = None,
+    floor: bool = True,
 ) -> tuple[list[Finding], ParseAgreement]:
     """Compare an engine in parse mode with every oracle report; returns (findings, agreement).
+
+    ``floor``: fail an engine that was compared with nothing (engine-nothing-compared) - a check of the tier as a
+    whole, which a restricted run does not make.
 
     What is compared: what the engine set up with what each oracle set up
     (placement and marker-only divergences, findings unless excused), the side to
@@ -779,10 +839,10 @@ def parse_differential(
     findings += _stale_findings(stale)
     agreement = ParseAgreement(records=len(records), **tally)
     # Agreeing with the oracles about nothing is not a pass.
-    if not agreement.read:
+    if floor and not agreement.read:
         findings.append(Finding("engine-nothing-compared",
                                 "in parse mode the engine replayed no record of this tier, so nothing was compared"))
-    elif not agreement.described and not agreement.replays:
+    elif floor and not agreement.described and not agreement.replays:
         findings.append(Finding("engine-nothing-compared",
                                 f"in parse mode the engine replayed {agreement.read} record(s), but no oracle said what it "
                                 "set up at any of their positions, and no implementation's replay of them was compared: "
@@ -837,18 +897,31 @@ def run_tier(
     jobs: int | None = None,
     include_untracked: bool = True,
     log: Log = print,
+    compare_baseline: bool = True,
 ) -> GateResult:
+    """Run one tier of the gate; ``only_sources``/``only_records`` restrict it (and it is then no tier result).
+
+    ``compare_baseline``: compare the engine with its baseline (H47), and check the baseline. False only for
+    `baseline --write`, which records it anew from this run.
+    """
     lock = lockfile.load()
     cfg = config.load()
     tier = cfg.tier(tier_name)
     all_records = corpus.load()
     # Everything compared against is read once, here, and verified (H33).
-    frozen = snapshot.take()
-    # What the tier runs, not what this run ran: a run restricted with --source or --record keeps its tier's rule
-    # (H47) and is marked partial below, which keeps the proof channel shut (spec issue 124 in the build log).
+    frozen = snapshot.take(baseline_pin=cfg.baseline if compare_baseline else None)
+    # A run restricted with --source or --record never produces a tier verdict (H47, CHECKPOINT 8): it is labelled
+    # "restricted - not a tier result", gates nothing, applies none of the checks of a tier as a whole, and its exit code
+    # reflects its findings only (GateResult.ok).
+    restricted_to = None
+    if only_sources or only_records:
+        restricted_to = {"sources": list(only_sources) if only_sources else None,
+                         "records": list(only_records) if only_records else None}
+        log(f"{RESTRICTED}: tier '{tier_name}' {_restriction(restricted_to)}")
     result = GateResult(tier=tier_name, require_engine=tier.require_engine, full_strength=tier.full_strength,
-                        engine_mode=cfg.engine_mode, margin=cfg.stability.margin)
-    result.sections += static_checks(lock, cfg, all_records, frozen, include_untracked=include_untracked)
+                        engine_mode=cfg.engine_mode, margin=cfg.stability.margin, restricted_to=restricted_to)
+    result.sections += static_checks(lock, cfg, all_records, frozen, include_untracked=include_untracked,
+                                     baseline_checks=compare_baseline)
     if tier.can_enable_proof_channel:
         # H32: a tier that can enable the proof channel must not require next to nothing.
         readiness = proof_channel_readiness(cfg, all_records, frozen)
@@ -862,7 +935,6 @@ def run_tier(
             raise HarnessError(f"tier '{tier_name}' does not run: {', '.join(unknown)}")
         names = [name for name in names if name in only_sources]
     records = corpus.select(all_records, tier.record_tiers, only_records)
-    result.partial = len(names) < len(tier.sources) or bool(only_records)
     if not records:
         result.sections.append(("records", [Finding("no-records", f"tier '{tier_name}' selects no corpus records: nothing was checked")]))
     result.converted = {record.id: record.reading for record in records if record.reading}
@@ -954,19 +1026,32 @@ def run_tier(
         # oracle's recordings disagreed about is compared with nothing (H32).
         answers = without_unstable(results, frozen)
         if cfg.engine_mode == "parse":
+            # Its floor (engine-nothing-compared) judges the tier as a whole: not in a restricted run.
             differential, result.parse = parse_differential(engine, sources, records, answers, engine_results,
-                                                            frozen.divergences, frozen.recorded)
+                                                            frozen.divergences, frozen.recorded,
+                                                            floor=not result.restricted)
             engine_findings += differential
         else:
             differential, result.gated, result.ungated = engine_differential(
                 engine, sources, records, answers, engine_results, frozen.divergences, tier.min_checked,
                 frozen.recorded)
             engine_findings += differential
-            if not engine_findings and not result.gated and tier.full_strength:
+            result.engine_reads = {record.id: engine_results[(engine.name, record.id)] for record in records}
+            if frozen.baseline is not None:
+                # H47: a record the engine read on the last green run, and now declines, fails every tier - each one a
+                # finding about that record, so a restricted run reports it too.
+                declined, result.baseline_note = baseline.compare(frozen.baseline, records, result.engine_reads)
+                engine_findings += declined
+            nothing = None if result.restricted else baseline.read_nothing(records, result.engine_reads)
+            if nothing is not None:
+                # H47: an engine that reads none of a tier's records fails it - every tier, the smoke test included.
+                engine_findings.append(nothing)
+            elif not engine_findings and not result.gated and tier.full_strength and not result.restricted:
                 # Agreeing with the oracles about nothing is not a pass - in a tier
                 # that runs every oracle search over the whole corpus. Any other
                 # tier is a smoke test that gates nothing (H47), and says so. Keyed
-                # to what the tier runs, never to its name.
+                # to what the tier runs, never to its name. A restricted run is no
+                # tier's result, and gates nothing.
                 engine_findings.append(Finding(
                     "engine-nothing-gated",
                     "nothing was found against the engine (no unexplained divergence, telltale or breach of the "
@@ -992,13 +1077,19 @@ def _write_report(result: GateResult, results: runner.Results, cfg: config.GateC
         budgets[source.name] = source.budget(options)
         signatures[source.name] = golden.signature(source, options)
     gated, ungated = result.verdicts
+    restricted = result.restricted
     body = {
         "tier": result.tier,
         "when": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        # A run restricted with --source or --record is no tier result (H47): this label, and what it was restricted
+        # to; null for a complete run of the tier.
+        "restricted": RESTRICTED if restricted else None,
+        "restricted_to": result.restricted_to,
+        # For a restricted run, only whether it found nothing - all its exit code says; otherwise the tier's verdict.
         "ok": result.ok,
-        "oracle_layer_ok": result.oracle_layer_ok,
-        "partial": result.partial,
-        "engine": result.engine,
+        # Verdicts of a tier: null in a restricted run.
+        "oracle_layer_ok": None if restricted else result.oracle_layer_ok,
+        "engine": ("compared" if result.engine != "not configured" else result.engine) if restricted else result.engine,
         "engine_mode": result.engine_mode,
         # Which build of the engine this run compared, and under what time limit (null where no engine ran).
         "engine_run": result.engine_run,
@@ -1006,6 +1097,8 @@ def _write_report(result: GateResult, results: runner.Results, cfg: config.GateC
         "smoke_test": SMOKE_TEST if result.smoke_test else None,
         "gated": {ruleset: asdict(item) for ruleset, item in gated.items()},
         "ungated": ungated,
+        # What the comparison with the engine's baseline - what it read on the last green run - found (H47).
+        "baseline": result.baseline_note,
         "parse_agreement": asdict(result.parse) if result.parse is not None else None,
         "proof_channel": result.proof_channel,
         # The records every source read other than as stored (export_form.py).
@@ -1025,10 +1118,16 @@ def _write_report(result: GateResult, results: runner.Results, cfg: config.GateC
         "observations": {f"{source}|{record}": {**observations.to_json(item), "elapsed_s": round(item.elapsed_s, 3)}
                          for (source, record), item in sorted(results.items())},
     }
-    # A partial run never stands in for a complete one, not even in the cache.
-    path = reports / f"gate-{result.tier}{'-partial' if result.partial else ''}.json"
+    # A restricted run never stands in for a complete one, not even in the cache.
+    path = reports / f"gate-{result.tier}{'-restricted' if restricted else ''}.json"
     path.write_text(json.dumps(body, indent=1) + "\n", encoding="utf-8")
     return path
+
+
+def _restriction(restricted_to: dict) -> str:
+    """What a restricted run was restricted to, in words: "restricted to sources ftxi, notation and records r/1"."""
+    parts = [f"{kind} {', '.join(names)}" for kind, names in restricted_to.items() if names]
+    return "restricted to " + " and ".join(parts)
 
 
 def _summarise_sections(sections: list[Section]) -> list[str]:
@@ -1054,19 +1153,22 @@ def summarise(result: GateResult) -> str:
         lines.append(f"        this runner is {speed} the recording machine; margin {number(result.margin)}")
     lines += _summarise_sections(result.engine_sections)
     lines.append("")
-    scope = " (PARTIAL RUN - restricted sources or records)" if result.partial else ""
-    lines.append(f"oracle layer [{result.tier}]: {'ok' if result.oracle_layer_ok else 'FAILED'}{scope}")
+    if result.restricted:
+        return "\n".join(lines + _summarise_restricted(result))
+    lines.append(f"oracle layer [{result.tier}]: {'ok' if result.oracle_layer_ok else 'FAILED'}")
     if result.engine == "not configured":
         lines.append("engine differential: NOT RUN - no engine adapter is configured in oracles/gate.toml")
     elif result.engine_mode == "parse":
         agreement = result.parse.describe() if result.parse is not None else "nothing was compared"
-        lines.append(f"engine differential: PARSE MODE - {result.engine.upper()}{scope}: {agreement}")
+        lines.append(f"engine differential: PARSE MODE - {result.engine.upper()}: {agreement}")
     else:
         if result.smoke_test:
             # Passed or failed, it never reads as gating (H47).
-            lines.append(f"engine differential: SMOKE TEST - {result.engine.upper()}{scope}: {SMOKE_TEST}")
+            lines.append(f"engine differential: SMOKE TEST - {result.engine.upper()}: {SMOKE_TEST}")
         else:
-            lines.append(f"engine differential: {result.engine.upper()}{scope}")
+            lines.append(f"engine differential: {result.engine.upper()}")
+        if result.baseline_note:
+            lines.append(f"  baseline:  {result.baseline_note}")
         gated, ungated = result.verdicts
         for described in _describe_gated(gated):
             lines.append(f"  gated:     {described}")
@@ -1082,6 +1184,30 @@ def summarise(result: GateResult) -> str:
         lines.append("this tier requires an engine that came through a named variant: FAILED - it came through none "
                      "(custom positions are evidence about no variant)")
     return "\n".join(lines)
+
+
+def _summarise_restricted(result: GateResult) -> list[str]:
+    """The last lines of a restricted run: what it found, and never a tier's verdict (H47, CHECKPOINT 8).
+
+    No "oracle layer [tier]" line, no ruleset gated or not, nothing a tier requires, and no proof channel beyond
+    DISABLED: the run's exit code says whether it found anything, and nothing more.
+    """
+    found = len(result.findings())
+    lines = [f"{RESTRICTED}: tier '{result.tier}' {_restriction(result.restricted_to)} - "
+             f"{found} finding{'' if found == 1 else 's'}"]
+    if result.engine == "not configured":
+        lines.append("engine differential: NOT RUN - no engine adapter is configured in oracles/gate.toml")
+    else:
+        against = sum(len(items) for _, items in result.engine_sections)
+        mode = "parse mode, " if result.engine_mode == "parse" else ""
+        lines.append(f"engine differential ({mode}{RESTRICTED}): {against} finding{'' if against == 1 else 's'} "
+                     "against the engine; a restricted run gates no ruleset")
+        if result.parse is not None:
+            lines.append(f"  compared: {result.parse.describe()}")
+        if result.baseline_note:
+            lines.append(f"  baseline: {result.baseline_note}")
+    lines.append(f"proof channel: {result.proof_channel}")
+    return lines
 
 
 def _measure_probe(lock: Lock, cfg: config.GateConfig, records: list[Record], log: Log) -> golden.Calibration | None:
@@ -1222,6 +1348,38 @@ def _shown(path: Path) -> str:
         return path.resolve().relative_to(paths.REPO_ROOT.resolve()).as_posix()
     except ValueError:
         return path.as_posix()
+
+
+def write_baseline(*, jobs: int | None = None, include_untracked: bool = True, log: Log = print
+                   ) -> tuple[GateResult, list[str] | None]:
+    """Run the baseline's tier in full with the engine and, if the run is green, record what the engine read (H47).
+
+    Returns (the run, what the new baseline holds differently from the one it replaces - losses first), with None in
+    place of the second where nothing was written. The run neither checks the old baseline nor compares the engine
+    with it - it is being replaced - and must be green on everything else, the rule that the engine reads some record
+    included: a complete run of gate.toml [baseline]'s tier (never restricted), the engine in full mode. The file is
+    written, then pinned in gate.toml (baseline.write). Never called by a gate run: only `baseline --write` (H33).
+    """
+    cfg = config.load()
+    spec = cfg.baseline
+    if spec is None:
+        raise HarnessError(f"{paths.GATE_FILE.name} has no [baseline] table: it names the tier whose green run the "
+                           "engine's baseline records (H47)")
+    if not cfg.engine_command:
+        raise HarnessError("no engine is configured ([engine] command in gate.toml): there is no engine to record")
+    if cfg.engine_mode != "full":
+        raise HarnessError(f"the baseline records what the engine read in full mode, and [engine] mode is "
+                           f"'{cfg.engine_mode}'")
+    result = run_tier(spec.tier, jobs=jobs, include_untracked=include_untracked, log=log, compare_baseline=False)
+    if not result.ok or result.engine != "passed" or result.restricted:
+        return result, None
+    records = corpus.select(corpus.load(), cfg.tier(spec.tier).record_tiers, None)
+    previous = baseline.read_previous()
+    new = baseline.from_run(spec.tier, records, result.engine_reads, result.engine_run)
+    old, pinned = baseline.write(new)
+    log(f"wrote {_shown(paths.ENGINE_BASELINE_FILE)} ({new.read()} of {len(new.records)} records replayed); pinned it "
+        f"in {_shown(paths.GATE_FILE)} [baseline]: {old[:12] or 'no pin'} -> {pinned[:12]}")
+    return result, baseline.changes(previous, new)
 
 
 def render_disagreements(*, log: Log = print) -> None:

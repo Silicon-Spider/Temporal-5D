@@ -71,12 +71,14 @@ mode = "full"
 # question. It is fast and deterministic, so every tier runs it.
 #
 # The commit tier is a smoke test (H47): it does not run every oracle search over
-# every record tier, so it gates no ruleset. An engine with no finding against it
-# passes it, and the gate's output says that the tier gates nothing. Only a tier
-# that runs every oracle search over every record tier (nightly, release) gates a
-# ruleset, and fails an engine with no finding against it that comes through none.
-# In every tier an unexplained divergence, a telltale or a breach of the engine
-# contract fails the engine.
+# every record tier, so it gates no ruleset - and with one rules oracle it could
+# gate none anyway: a ruleset is gated only when two or more oracles answer for
+# each of its records (CHECKPOINT 8). The gate's output says that the tier gates
+# nothing. Only a tier that runs every oracle search over every record tier
+# (nightly, release) gates a ruleset, and fails an engine with no finding against
+# it that comes through none. In every tier the engine fails on an unexplained
+# divergence, a telltale, a breach of the engine contract, a record it read on the
+# last green run and now declines ([baseline], below), or on reading none.
 [tier.commit]
 sources = ["ftxi", "notation"]
 record_tiers = ["commit"]
@@ -177,6 +179,26 @@ positions = 38
 [rulebook]
 path = "docs/rules/README.md"
 sha256 = "ab01119ebdfa2612e38df10860a916e15b4227c9966f3c4018aac552049c2261"
+
+# --- The engine's baseline (H47) ----------------------------------------------
+# The commit tier fails an engine that declines a record it read on the last
+# green run, or that reads none (CHECKPOINT 8). The last green run is on record in
+# oracles/engine-baseline.json: for each record of this tier, how the engine's
+# replay of it ended and how many positions it reported, on a complete run of the
+# tier that passed. Every tier compares the engine with it, over the records it
+# holds that the run runs (oracle_harness/baseline.py says what counts as
+# declining). It is a recorded answer (H33): written only by
+# `python oracles/harness.py baseline --write`, which runs this tier in full and
+# records the engine's reads only if the run is green - never by a gate run, never
+# by hand - and pinned here, as the rulebook is: `sha256` is the SHA-256 of its
+# text (CRLF folded to LF), written by the same command, and every read of the
+# file verifies it first. Here and not in golden/MANIFEST, which every
+# `golden --write` rewrites: re-recording the oracles must never re-pin it. A
+# re-recording is reviewed as a diff, one line per record; the command lists what
+# the new baseline no longer holds - a loss of checking, never churn.
+[baseline]
+tier = "commit"
+sha256 = "ad689cf3be80b7cddf9b0e1b5b264edbd6cae875823db55120eebaaf9b3f06e0"
 
 # --- Boundary -----------------------------------------------------------------
 # Every file outside oracles/ is checked. These lists sort the files into kinds,

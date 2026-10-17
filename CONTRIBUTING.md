@@ -121,6 +121,18 @@ The oracles already disagree with **each other** in places: see
 `oracles/DISAGREEMENTS.md`. None of those has been adjudicated. They are where the
 first known divergences will come from.
 
+**The engine's baseline.** The commit tier is a smoke test that gates no ruleset,
+but it fails an engine that declines a record it read on the last green run, or
+that reads none (H47). What the engine read then is `oracles/engine-baseline.json`,
+pinned in `oracles/gate.toml` `[baseline]` and written only by `python
+oracles/harness.py baseline --write`, which records it from a green run of the
+commit tier - never by hand. When the engine comes to read a record further,
+record a new baseline so that the commit tier holds it to that, and review the
+diff. A new baseline that lists a `LOSS` - a record the engine now reads less of -
+is a loss of checking: fix the engine, or raise the question; never record one to
+make a gate run pass. And a run restricted with `--source` or `--record` is never
+a tier's result (H47): it reports findings, nothing more.
+
 ## Changing a pin
 
 A pin is not updated routinely. When one has to move:

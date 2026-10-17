@@ -1521,7 +1521,7 @@ commits (F5 and F6 on `lane/net`, H47 and H48 on `lane/gate`, M22 on `lane/engin
 | H44 | built in part | The audit lane's tools: the certificate checker (E4 alone) and `t5d-hunt-truth` (E9); the decision sampler, the offline proof runner and the per-range report were E10's - lost, redone in step 2 (curriculum hooks as interfaces only) |
 | H45 | not built (rule) | The adversarial league (M5) |
 | H46 | built, tested | Q2 (provisional): initial timelines count as created by neither player - a variant's set-up reads every timeline as initial (rulebook R10) |
-| H47 | built, tested | The check that some ruleset is gated (`engine-nothing-gated`, and `GateResult.ok`'s test of it) runs only in a tier that runs every oracle search over the whole corpus (`Tier.full_strength`: nightly, release) - keyed to what a tier runs, never its name (the self-tests pin both directions). Any other tier - commit - is a smoke test: an engine with no finding against it passes, gated or not, and the summary (`engine differential: SMOKE TEST - ...`) and the report (`smoke_test`; nothing under `gated`) say that it gates nothing and why. In every tier an unexplained divergence, a telltale or a contract breach fails the engine. `gate.toml` is refused if a tier that is not full strength sets `require_engine` (it could never pass); a tier that requires an engine reads only what its run may state as gated, and the summary says when it came through no named variant. A run restricted with `--source`/`--record` keeps its tier's rule (issue 124). The release tier's named-variant rule, the proof-channel line and parse mode are unchanged. Run with the engine configured since 2026-10-17: the commit tier's differential a smoke test, PASSED, with no ruleset meeting the gating conditions with ftxi alone; nightly PASSED, gating two (step 2). Spec issues 122-124, proposed edit 98 |
+| H47 | built, tested | Tiered CI reading (Q-A at CHECKPOINT 6, amended at CHECKPOINT 8; spec issues 122-124 ruled, built 2026-10-17). **Two oracles to gate a ruleset**: every record of a ruleset followed, as far as the engine went, by at least two independent implementations (`gate.GATING_ORACLES`; two searches of one count once, the notation parser never), in every tier - so the commit tier, with one rules oracle, can gate nothing at all. **The check that some ruleset is gated** (`engine-nothing-gated`, and `GateResult.ok`'s test of it) runs only in a tier that runs every oracle search over the whole corpus (`Tier.full_strength`: nightly, release) - keyed to what a tier runs, never its name; any other tier - commit - is a smoke test, and its summary (`engine differential: SMOKE TEST - ...`) and report (`smoke_test`; nothing under `gated`) say that it gates nothing. **The commit tier's last-green-run rule**: the engine's baseline, `oracles/engine-baseline.json` - written by `harness.py baseline --write` from a green run of the commit tier, pinned in `gate.toml` `[baseline]`, checked by `verify` and before every comparison; recorded 2026-10-17 from the engine as built on `lane/gate`, 35 of the 41 commit records replayed - and every tier fails an engine that declines a record it read then (`engine-declined`) or reads none (`engine-read-nothing`). **Restricted runs** (`--source`/`--record`) never produce a tier verdict: labelled "restricted - not a tier result", findings only, the exit code from them, no check of a tier as a whole - undoing issue 124's first reading. In every tier an unexplained divergence, a telltale or a contract breach fails the engine; `gate.toml` is refused if a tier that is not full strength sets `require_engine`; the release tier's named-variant rule, the proof-channel line and parse mode are unchanged. Run 2026-10-17 with the engine configured: commit SMOKE TEST - PASSED (baseline: 41 records compared, 0 declined); nightly PASSED, gating Standard - Half Reflected (2 oracles behind its record) and Standard - Reversed Royalty (3), and not Standard - Turn Zero (one oracle behind cwmtt/tesseractMageOChicken); a restricted run (`gate --tier nightly --source ftxi --record cwmtt/standard`) labelled "restricted - not a tier result", 0 findings. Spec issues 122-124, 131-133; proposed edits 103-104 |
 | H48 | not started | Before the proof-channel sign-off: the naive searches' release budgets raised and the golden files re-recorded twice, on a quiet machine, so that no proof-channel check is vacuous (`verify`'s 17 `proof-channel-vacuous` notes) |
 | H15 | built, tested | The scanner's deterministic single-thread mode; the search's synchronous mode and digest (E6a; the digest in the C API) |
 | H16, H25, H29 | not built (rule) | Refused |
@@ -1529,9 +1529,9 @@ commits (F5 and F6 on `lane/net`, H47 and H48 on `lane/gate`, M22 on `lane/engin
 | H18 | built, tested | 5D Zobrist: coordinate-free content hash per board, multiply-rotate with (timeline, half-turn), addition across boards, ruleset ID, player to move, parity, creators, board size; incremental equals from-scratch; duplicated boards never cancel (engine E1, E2) |
 | H19 | built, tested | Proofs export to the solved store at once; the TT holds estimates only; class-relative disproofs live in their own store, never the solved store (E8, E9 - now in the register) |
 | H22 | built, tested | All five items of §11.0 (E1, E2, E4); the register's wording now matches what is built (proposed edit 40, applied upstream) |
-| H23 | built, tested | The gate, oracle and engine sides. The engine is configured in `gate.toml` (`./build/engine/t5d-gate`, full mode, 2026-10-17; the root's build on every platform, with a time limit of its own, `[engine] timeout_s`) and compared in every tier: commit, a smoke test (H47), PASSED, locally and in CI (run 39009070712); nightly PASSED locally, gating Standard - Half Reflected and Standard - Reversed Royalty - not yet run in CI with the engine (step 2). The release tier, the one that can enable the proof channel, is not yet run with it: its oracle layer fails on H48's 17 notes until the re-recording. The proof channel stays disabled (H23, H41) |
+| H23 | built, tested | The gate, oracle and engine sides. The engine is configured in `gate.toml` (`./build/engine/t5d-gate`, full mode, 2026-10-17; the root's build on every platform, with a time limit of its own, `[engine] timeout_s`) and compared in every tier: commit, a smoke test (H47), PASSED, locally and in CI (run 39009070712); nightly PASSED locally (2026-10-17, under the two-oracle rule), gating Standard - Half Reflected and Standard - Reversed Royalty; Standard - Turn Zero, gated since H51, has one oracle behind cwmtt/tesseractMageOChicken and is not - not yet run in CI with the engine (step 2). Since CHECKPOINT 8 (H47, built 2026-10-17) a ruleset is gated only when two oracles stand behind each of its records, and the commit tier holds the engine to its baseline (spec issues 131-133). The release tier, the one that can enable the proof channel, is not yet run with it: its oracle layer fails on H48's 17 notes until the re-recording. The proof channel stays disabled (H23, H41) |
 | H24, H26, H28 | built, tested | The generator and the 5dpgn/5DFEN parser are in-house (`engine/`), written from `docs/rules/README.md` and the notation spec's text (551 engine tests on `lane/gate` after H51's review); boundary clean. H28's one exception - the export-form record converted by the harness (CHECKPOINT 3) - is now in the register. Where the specification says when to write a token and not how to read one that disagrees, the reader reads leniently: the capture mark since H51 (2026-10-17, rulebook R11; `PgnOptions::capture_marks`), as the annotations (T15) and turn numbers before it - the move read as its squares define it, the mismatch a warning (`PgnReplay::warnings()`) |
-| H27 | built, tested | The oracle harness, committed 2026-10-01 |
+| H27 | built, tested | The oracle harness, committed 2026-10-01. Tiered CI as H47 reads it since CHECKPOINT 8 (built 2026-10-17): ftxi per commit as a smoke test that gates nothing - two oracles are needed to gate a ruleset - and fails an engine that declines a record it read on the last green run, or reads none; cwmtt and Chess in 5D nightly and before releases; a run restricted to chosen sources or records is never a tier result |
 | H30 | built, tested | Step 2A (a04678c): every oracle reports its boards per ply; no placement divergence across the corpus |
 | H31 | done | CHECKPOINT 1: seven clusters triaged (903f4ae), settled by the user's rulings (H36-H40). Re-run 2026-10-17 with the engine configured: the 110 new check findings (72 positions) filed by cluster and settled by R1 (and R2 at five positions); the 58 positions of CHECKPOINT 1's table re-derive exactly, cwmtt/many2's 14 file as CHK-A1 (step 2). The notation finding (cwmtt/futures action 17, an `x` on a jump that takes nothing) settled by the user's ruling, never by vote (H51, R11): ftxi's refusal on record citing R11 (KD-0170), KD-0167 to KD-0169 withdrawn; the record's positions the engine now reads past it, 17 to 19, agree with cwmtt and Chess in 5D wherever each answers - the mate at 19 is Chess in 5D's call and the engine's (cwmtt reports no legal action there, `no_action`, which does not say checkmate or stalemate, and gives no check verdict; nightly, 2026-10-17: no finding) |
 | H32 | built, tested | Required sets at 100%, two recordings, cost files, calibration (2B) |
@@ -2512,6 +2512,8 @@ superseded or made moot says so; nothing is deleted.
     variants one oracle reads) - a decision for the user. Put to the user: should a
     ruleset be gated only when two oracles stand behind it, in every tier? Until it
     is ruled, proposed edit 98 gives both texts.
+    *Ruled at CHECKPOINT 8: a ruleset is gated only when two or more oracles answer for it (H47) - gate step 3b.*
+    *Built 2026-10-17 (gate step 3b): in every tier, each record of a ruleset followed as far as the engine went by at least two independent implementations (`gate.GATING_ORACLES`; a parse-only source never counts); nightly now gates Standard - Half Reflected (2 oracles behind its record) and Standard - Reversed Royalty (3), and no longer Standard - Turn Zero (cwmtt/tesseractMageOChicken: cwmtt alone). The reading is spec issue 131; proposed edit 103.*
 123. **H47 is silent on an engine compared with nothing in a smoke test.** As
     built, an engine with no finding against it passes the commit tier's
     differential even when it declined every record (nothing was compared, so
@@ -2521,6 +2523,8 @@ superseded or made moot says so; nothing is deleted.
     visible. Put to the user: should the smoke test hold full mode to parse mode's
     floor - the engine replayed at least one record, and an oracle's answer was
     compared with it? Nothing is parked on it.
+    *Ruled at CHECKPOINT 8: yes - the commit tier fails if the engine declines a record it read on the last green run, or reads none (H47) - gate step 3b.*
+    *Built 2026-10-17 (gate step 3b): the last green run is the engine's baseline, `oracles/engine-baseline.json` - written by `harness.py baseline --write` from a green run of the commit tier, pinned in `gate.toml` `[baseline]`, recorded from the engine as built on `lane/gate` (35 of the 41 commit records replayed); every tier fails an engine that declines a record it read then (`engine-declined`) or reads none (`engine-read-nothing`). What is recorded, "declines", "reads none" and why every tier: spec issue 132; proposed edits 103-104.*
 124. **H47 is silent on a run of a full-strength tier restricted to some sources
     or records** (`gate --tier nightly --source ftxi`; "tiers that run every
     oracle"). Built - the literal reading: the run keeps its tier's rule
@@ -2534,6 +2538,8 @@ superseded or made moot says so; nothing is deleted.
     smoke test and gates nothing. Pinned (`GateRunTests.test_a_restricted_run_keeps_its_tiers_rule`)
     and documented (`oracles/README.md`, "Other commands"). Put to the user;
     nothing is parked on it.
+    *Ruled at CHECKPOINT 8: no - a restricted run never produces a tier verdict; its output says "restricted - not a tier result" (H47) - gate step 3b.*
+    *Built 2026-10-17 (gate step 3b), undoing the reading above: a run restricted with `--source` or `--record` is labelled "restricted - not a tier result" in its summary and report, states no ruleset gated or not, makes none of the checks of a tier as a whole, keeps the proof channel DISABLED and exits on its findings only (spec issue 133; proposed edit 103).*
 125. **A written `x` on a move that takes nothing** (§11.0 "Running the gate":
     parse divergences "are settled against the pinned notation specification";
     register H28). The specification's "Jumps" syntax has "`x` if a piece is being
@@ -2651,6 +2657,105 @@ superseded or made moot says so; nothing is deleted.
     move), and there is no documented rule to put a question against; §11.0 and H27
     name only those two kinds of report. Built: `upstream = "unreported: ..."` with
     that reason, which `verify` accepts. Proposed edit 102. Nothing is parked on it.
+131. **"Two or more oracles answer for it", as built** (§11.0 "Tiered CI": "a ruleset
+    is gated only when two or more oracles answer for it"; register H47: "as built
+    the gate required one, and is aligned to two"; the ruling on issue 122). The
+    documents do not say what answering for a ruleset is. Built - a reading: the
+    gate's own "standing behind" a record (`gate.engine_differential`'s vouching,
+    unchanged), counted per record: a ruleset is gated only if each of its records
+    was followed, as far as the engine went, by at least two independent
+    implementations (`gate.GATING_ORACLES` = 2, over the count `Gated.oracles`
+    already reported). Two searches of one implementation count once (ftxi and
+    ftxi:naive are one oracle); the notation parser, which judges nothing, never
+    counts; an oracle that replayed the record otherwise or parted from the
+    engine's position does not count, as before. A record that only one oracle
+    follows ungates its ruleset with its own reason ("only one oracle followed
+    <record> (<oracle>) as far as the engine went ..."), after "no oracle
+    followed" and before the verdict floor. The floor on check, count and mate
+    (`min_checked`) is unchanged: any oracle's agreeing verdict settles a position,
+    so two oracles that answer different questions - cwmtt the counts, Chess in 5D
+    check and mate - between them gate a ruleset. The other reading, two agreeing
+    verdicts for each observable, would also ungate Standard - Half Reflected
+    (cwmtt/test1: cwmtt alone counts, Chess in 5D alone gives check). Consequence:
+    the commit tier, with one rules oracle, can meet the gating conditions for no
+    ruleset (`gate.SMOKE_REASON` now shows only in a smoke test of a tier with two
+    oracles that is not full strength). Nightly, run 2026-10-17: PASSED, gating
+    Standard - Half Reflected (its record followed by 2 oracles) and Standard -
+    Reversed Royalty (by 3); Standard - Turn Zero, which it gated since H51, is not -
+    cwmtt/tesseractMageOChicken has one oracle behind it, cwmtt - and the Focused
+    variants and Timeline Battleground, ungated before on the check floor, now give
+    the one-oracle reason (cwmtt alone). Proposed edit 103. Nothing is parked on it.
+132. **The commit tier's last-green-run rule, as built** (§11.0 "Tiered CI": "The
+    commit tier still fails if the engine declines a record it read on the last
+    green run, or reads none"; register H47; H33; the ruling on issue 123). The
+    documents do not say where the last green run is on record, what declining or
+    reading is, or which tiers compare. Built - four readings:
+    (a) **The record.** `oracles/engine-baseline.json`: for each record of the tier
+    `gate.toml` `[baseline]` names (`commit`), how the engine's replay ended (`ok`,
+    `rejected:<reason>`, `unsupported`), how many positions it reported, and the
+    SHA-256 of the record text it was given; with the engine's command and mode, the
+    platform and the program's SHA-256, for the reader. Kept as H33 keeps recorded
+    answers: written only by `harness.py baseline --write`, which runs the tier in
+    full and writes only from a run green on everything else - never by a gate run,
+    and never by the engine (the file is in the harness, hashed at the start and end
+    of every run, and nothing outside the harness may name it); pinned by its SHA-256
+    in `gate.toml` `[baseline]`, as the rulebook is (H38) - not in `golden/MANIFEST`,
+    which every `golden --write` rewrites; verified against its pin before every
+    comparison (the snapshot) and by `verify` (`engine-baseline-missing`,
+    `-integrity`, `-invalid`, `-stale`); one record per line, `baseline --write`
+    listing what the new file no longer holds (`LOSS`) first. So "the last green run"
+    is the last one recorded: a gate run never records itself (H33), and a later
+    green run moves the baseline only when someone records it - which is also what
+    keeps an engine that comes to read less from moving it unreviewed. Recorded
+    2026-10-17 from a green commit run of the engine as built on `lane/gate`
+    (t5d-gate, SHA-256 ec0b3944...): 35 of 41 records replayed - not cwmtt/ctp1
+    (unreadable after 10 positions), ftxi/softmate and ftxi/verysmall (after 3),
+    ftxi/niceAndrey (set-up refused), notation/invasion and notation/marauders
+    (declined).
+    (b) **Declines a record it read.** It reads less of the record than then: fewer
+    positions; or as many without the verdict it ended with then - other than `ok`
+    where the baseline ended `ok` (the definition the plan suggested), or other than
+    a refusal as illegal (`illegal_move`, `cannot_submit`) where it ended in one
+    (added: a refusal as illegal that becomes a refusal as unreadable at the same
+    action reads less, and no differential finding shows it - both runs refuse that
+    action). A record the baseline gives no position cannot be declined; an `error`
+    or a time-out is `engine-failed` already and is not reported again; a record
+    read further is no decline (the summary counts them, and a new baseline holds
+    the engine to them).
+    (c) **Reads none.** In a complete run of a tier the engine replays no record -
+    none ends `ok` or in a refusal as illegal (the gate's own "replayed": a refusal
+    as unreadable is no verdict). The second half of the parse-mode floor issue 123
+    offered - that an oracle's answer was compared with the engine - is not built:
+    the register's words name only reading.
+    (d) **Every tier.** H47 names the commit tier, the one that gates nothing (in
+    nightly and release an engine that reads none fails already, on
+    `engine-nothing-gated`). But the baseline is a fact about the engine, not the
+    tier: nightly and release run every record the commit tier runs, with the same
+    engine and a time limit no shorter, and a tier that runs every oracle should
+    check at least what the smoke test checks - otherwise nightly could pass an
+    engine the commit tier fails on the same commit. A restricted run reports each
+    decline (a finding about one record) but not reading none (a check of a tier as
+    a whole; issue 133); parse mode compares nothing with the baseline, which holds
+    full-mode reads. While the corpus has no nightly-only record, the commit-only
+    reading would differ only in the findings nightly and release print.
+    Proposed edits 103 and 104. Nothing is parked on it.
+133. **Restricted runs, as built** (§11.0 "Tiered CI": "a run restricted to chosen
+    sources or records is a developer convenience and never produces a tier
+    verdict"; register H47; the ruling on issue 124, "label its output 'restricted -
+    not a tier result'"). Built: any `--source` or `--record` restricts a run, even
+    one that names every source of the tier (the ruling names the options). Its
+    summary and report say "restricted - not a tier result"; it prints no `oracle
+    layer [tier]` line, no ruleset as gated or `NOT gated`, no smoke-test or
+    "this tier requires" line, and its proof channel is `DISABLED - restricted - not
+    a tier result`. It reports every finding - of the oracle layer and against the
+    engine, a decline from the baseline included - and exits 1 on any, 0 on none.
+    Not made, as checks of a tier as a whole: `engine-nothing-gated`,
+    `engine-read-nothing`, parse mode's `engine-nothing-compared`, and a tier's
+    `require_engine`. Its report is `gate-<tier>-restricted.json` (`restricted`,
+    `restricted_to`; `oracle_layer_ok` null, `engine` "compared", nothing under
+    `gated`/`ungated`), so it never stands in for a complete run's. This undoes the
+    reading of issue 124 (a restricted run kept its tier's rule). Proposed edit 103.
+    Nothing is parked on it.
 
 <!-- A new list, so that the numbers from 200 render as written. -->
 
@@ -3375,6 +3480,37 @@ struck through, where nothing of it is left to apply); the others stand as writt
     owner": "; divergences settled by a project decision are recorded unreported".
     Why: KD-0170 (issue 130) - neither a defect nor a disagreement with a documented
     rule.
+103. **§11.0 "Tiered CI" and register H47 - as built at CHECKPOINT 8** (issues
+    131-133). §11.0 now ends: "... The commit tier still fails if the engine declines
+    a record it read on the last green run, or reads none; a run restricted to chosen
+    sources or records is a developer convenience and never produces a tier verdict
+    (CHECKPOINT 8)." It should add: "As built: a ruleset is gated only when each of
+    its records is followed, as far as the engine went, by at least two independent
+    implementations (two searches of one count once; a parse-only source never
+    counts). The last green run is the engine's baseline - for each record of the
+    commit tier, how the engine's replay ended and how many positions it reported on
+    a green run - written by an explicit command from a green run, never by the
+    gate, and pinned like any recorded answer; every tier compares the engine with
+    it, over the records both hold. A restricted run reports its findings, labelled
+    'restricted - not a tier result', and its exit code reflects them only." H47
+    now: "... since gating needs two oracles — as built the gate required one, and is
+    aligned to two; the commit tier still fails ..." It should say: "... since gating
+    needs two oracles (each record of a ruleset followed by two independent
+    implementations; built 2026-10-17); the commit tier still fails if the engine
+    declines a record it read on the last green run (a pinned baseline, compared in
+    every tier), or reads none; ...". Why: the documents say what is ruled and not how
+    it is read; issues 131-133 give the readings built.
+104. **§11.0 "Recorded-answer integrity" and register H33** (issue 132). §11.0 now:
+    "Recorded answers are immutable, with committed content hashes verified before
+    every comparison; the comparison logic lives in harness code the engine adapter
+    cannot modify; harness changes require review." It should add: "The engine's
+    baseline (H47) is a recorded answer too: written only by an explicit command
+    from a green run, pinned by its hash in the gate's policy beside the rulebook's
+    pin - not in the golden manifest, so that re-recording the oracles never re-pins
+    it - and verified before every comparison." H33, after "verified before every
+    comparison": "(the oracles' golden files, and the engine's baseline of what it
+    read on the last green run)". Why: H33 covers recorded answers, and the baseline
+    is one (issue 132).
 
 <!-- A new list, so that the numbers from 200 render as written. -->
 
