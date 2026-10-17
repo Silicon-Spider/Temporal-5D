@@ -71,7 +71,9 @@ the spec describes the change.
   lists start new Markdown lists, so that GitHub shows 140 and 110 as written; the
   `turn_summary_group` line and the `"error"` path documented; and the conditions
   name the commit the figures were counted at (607e4b1, rebuilt and re-run there:
-  byte for byte), where the first version said only "this change".
+  byte for byte), where the first version said only "this change", and say what the
+  fixes changed in the run's output against 2864be0's (one count, fields added,
+  nothing else).
 - Spec: §8.2 "Measure first" and §15.1's Phase 1 row (the M4 write-back proposed:
   edits 110 and 114); §13.1 6x ("after the turn-width measurement", now met; edit
   114); register M22, part K's turn-width item and part L's prediction (edits

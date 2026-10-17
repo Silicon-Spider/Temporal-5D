@@ -613,8 +613,9 @@ machine's load does not matter. The rules engine is `main`'s at f07568c, unchang
 the counting is `t5d-measure --turns --turn-summary` (`engine/tools/turn_width.hpp`)
 at 607e4b1 (lane/engine: M22, 2864be0, and its review fixes; rebuilt at that commit,
 the run reproduces the raw output byte for byte), Release, MSYS2 g++ 16.2.0 (Rev3),
-`--werror`, 544 of 544 engine tests passing. Data: t0database (`data/t0database/`, commit `d49da405...`, `Data.csv`
-sha256 `37fb7c1c...a4e`), converted by `py data/t0database/to_5dpgn.py build/t0db`
+`--werror`, 544 of 544 engine tests passing. Data: t0database (`data/t0database/`,
+commit `d49da405...`, `Data.csv` sha256 `37fb7c1c...a4e`), converted by `py
+data/t0database/to_5dpgn.py build/t0db`
 (761 records, 237 empty rows skipped; the source's own `[Board "Standard - Turn
 Zero"]`; converted twice, identical file for file), then `build/engine/t5d-measure
 --turns --turn-summary build/t0db/*.5dpgn`. Rules: the default ruleset (encoding
@@ -638,11 +639,14 @@ included - was played twice, by the replay and move by move from its start, and
 reached the same state. The summary was recomputed independently from the
 per-action lines (a separate script working from the definitions): 1,648 figures, no
 difference. Raw output `build/m22/turns.jsonl` (git-ignored; reproducible). This
-section was first written from the tool at 2864be0; the review fixes changed two
-readings - an optional move now counts a jump from a mandatory board onto an
-optional one, which the first version left out (36 actions in all, 35 of them in the
-692 games), and the summary gained the shares of turns with more than one playable
-board and with an optional board - and nothing else in the output.
+section was first written from the tool at 2864be0. Against that run, the review
+fixes changed one count - an optional move, at the action's start and when made,
+now includes a jump from a mandatory board onto an optional one, which the first
+version left out (36 actions in all, 35 of them in the 692 games) - and added
+fields: the source-board reading, those jumps' own count, and the summary's shares of
+turns with more than one playable board and with an optional board, among others.
+Every other value of the output is unchanged, but for the summary's figures of that
+count.
 
 **Definitions** (`engine/tools/turn_width.hpp`). A *turn* is one player's action,
 from its start to its submission (T1). At the action's start: the board count N
