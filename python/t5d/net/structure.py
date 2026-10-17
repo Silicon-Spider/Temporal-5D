@@ -56,19 +56,19 @@ that fraction of an ``(L, L)`` bool mask in all (and, for a move graph whose boa
 a bounded number of boards, an amount that grows linearly in N).
 
 **Typed edge biases** (B11, provisional, ``typed_edge_bias``): a learned scalar per head
-per relation type (``TYPED_RELATIONS``: attack, defence, pin, x-ray, check,
-travel-threat), shared by all layers, added on every head to the logits of the related
-pairs: for an edge ``(s, d, type)``, query ``s`` / key ``d`` gets the type's scalar for
+per relation type (``TYPED_RELATIONS``: attack, defence, pin, x-ray, check - travel-threat
+folded into attack at CHECKPOINT 6), shared by all layers, added on every head to the logits
+of the related pairs: for an edge ``(s, d, type)``, query ``s`` / key ``d`` gets the type's scalar for
 "query is the source" and query ``d`` / key ``s`` the scalar for "query is the target" -
 one scalar for both unless ``typed_edge_directed``. A pair related several ways gets the
 sum; an edge repeated in a list counts once (a relation holds or it does not). On a
 masked head the bias reaches only allowed pairs, so a type that head's mask never opens
 keeps a scalar no gradient reaches - defence on a move-graph head, for one (own pieces
 are never move targets); "per head per type" is kept literally, every head has every
-type's scalar. Cross-board edges are included. The meaning of the ``check`` relation
-depends on the check ruling still pending (CHECKPOINT 1 of the build log: which boards
-count as sources of attack); the network takes whatever the rules engine labels
-``check``.
+type's scalar. Cross-board edges are included (a travel threat is an attack edge across
+boards). The network takes whatever the rules engine labels each type: it builds attack,
+defence and x-ray today; pin and check are its ABI round 1's, and until then no position
+from the engine carries them.
 
 **Board-pair biases** (``pair_table`` ``(B, H, Nb + 1, Nb + 1)``; row and column ``Nb``
 stand for "no board" and are zero): B12's smolgen (``smolgen.py``) generates a table per

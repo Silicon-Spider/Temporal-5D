@@ -10,6 +10,39 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-17 - Network B11: travel-threat folded into attack
+
+- `python/t5d/net/config.py`, `state.py`: register B11 (provisional, class R, ablation 2) as
+  CHECKPOINT 6 rules it - "attack, defence, pin, x-ray, check - travel-threat folded into
+  attack" (reversal 26; §6: a travel threat is a cross-board attack, which the attack type
+  already carries). `TYPED_RELATIONS` loses `travel_threat` (five types) and `RELATION_TYPES`
+  with it (relation ids 0-5, the C ABI's). The ABI's id 6 (`T5D_RELATION_TRAVEL_THREAT`) stays
+  reserved - the ABI is append-only, and the engine never emits it - and `PositionState`'s
+  validation now refuses it. Pin and check stay in the type set, as the register lists them:
+  the engine builds them in its ABI round 1, so no position from the engine carries them yet.
+- `synthetic.py`: the generator no longer emits a travel-threat edge beside each cross-board
+  attack - the attack edge is the travel threat. Every other edge and the candidate moves are
+  unchanged (the dropped edges drew nothing from the random stream).
+- B11's table: 8 heads x 5 types = 40 parameters (80 directed), where it had 48 (96), and only
+  with `typed_edge_bias` on - off by default, so the v1's 22,961,802 is unchanged. With B11 and
+  B12 both on, smolgen (drawn after B11 from the same stream) starts from other values; no
+  output is pinned anywhere.
+- Docstrings: `structure.py` (the five types; its note that the check relation waits on the
+  check ruling - stale since CHECKPOINT 1's rulings - replaced by what the engine builds),
+  `heads.py`.
+- Tests: `test_structure.py` - the type set and its ids, id 6 refused, the table's shape; the
+  per-type test moves pin and check (it moved check and travel-threat); `test_state.py` - id 6
+  refused; `test_reach_graph.py` - cross-board attacks exist, and no relation is
+  travel-threat's; `test_n2_model.py` - 40 and 80 scalars.
+- Not changed: the engine and its Python ABI mirror, which are the engine lane's. The
+  relation-id comments of `records.h` and `capi.py`, `engine/README.md`'s (e) and
+  `convert.py`'s docstring still name travel-threat among the network's relation ids; the B11
+  row records it for engine ABI round 1, which builds pin and check there.
+- `docs/BUILD_LOG.md`: register rows B11 and F1 (unchanged count); spec issues 16 ((d): five
+  types) and 19 (applied) annotated.
+- Spec: §6 ("Typed edge biases"), register B11 and reversal 26 - the change applies them as
+  written; no edit is proposed. No part of the spec states B11's parameter count.
+
 ### 2026-10-17 - N-B15 review fixes: B6 is not B15's special case as built, recorded and put to the user; the placeholder switches checked to regroup pairs; every variant's board size in §15.2's B15 row
 
 - `docs/BUILD_LOG.md`, spec issue 205: under B15's far-bin placeholder B6 is not B15's

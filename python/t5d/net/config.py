@@ -109,8 +109,14 @@ ROUTING_TABLE_ROLES: tuple[str, ...] = (
 
 _ROLES = {"move_graph", "same_board", "same_square", "relations", "dense"}
 
-#: The typed relations of B11 (section 6): every relation type but the move graph itself.
-TYPED_RELATIONS: tuple[str, ...] = ("attack", "defence", "pin", "xray", "check", "travel_threat")
+#: The typed relations of B11 (section 6): every relation type but the move graph itself -
+#: "attack, defence, pin, x-ray, check". Travel-threat, once a sixth, is folded into attack
+#: (CHECKPOINT 6, register B11, reversal 26: a travel threat is a cross-board attack, which the
+#: attack type already carries); its C id stays reserved in the append-only ABI and is never
+#: emitted. The engine builds attack, defence and x-ray; pin and check are its later work
+#: (engine ABI round 1) - listed here as the register lists them, their edges empty until the
+#: engine supplies them.
+TYPED_RELATIONS: tuple[str, ...] = ("attack", "defence", "pin", "xray", "check")
 
 #: Attention implementations (``attention.py``): "block_sparse" (B14, the default: the
 #: fused kernel over board-aligned query blocks, each masked head reading only the key
@@ -528,9 +534,9 @@ class NetConfig:
     routing_table: bool = False
     #: The relation types whose edges open the relations head ("attack/defend relations").
     #: COMMITTED-CLASS AMBIGUITY (B10 is class C) - placeholder default, not a decision:
-    #: all six typed relations of B11 (section 6: heads 1 and 4 "receive binary masks:
-    #: connected or not", which B11's types upgrade); the narrow reading is
-    #: ("attack", "defence").
+    #: every typed relation of B11 (section 6: heads 1 and 4 "receive binary masks:
+    #: connected or not", which B11's types upgrade) - five since travel-threat was folded
+    #: into attack (CHECKPOINT 6); the narrow reading is ("attack", "defence").
     relations_head_types: tuple[str, ...] = TYPED_RELATIONS
     #: Which way a typed edge opens the relations head: "forward", "reverse" or
     #: "symmetric", as ``move_graph_direction`` defines them; None - the placeholder
@@ -539,9 +545,10 @@ class NetConfig:
     relations_head_direction: str | None = None
 
     # --- B11: typed edge biases (provisional; default off; section 6) ---
-    #: A learned scalar per head per relation type (``TYPED_RELATIONS``), shared by all
-    #: layers (section 6: "a handful of learned scalars per head per type"), added to the
-    #: logits of the related token pairs, cross-board pairs included.
+    #: A learned scalar per head per relation type (``TYPED_RELATIONS``: five), shared by all
+    #: layers (section 6: "one learned scalar per head per type, shared across layers"), added
+    #: to the logits of the related token pairs, cross-board pairs included - 8 x 5 = 40
+    #: parameters (80 directed). Under the block-causal scope they bias live query rows only.
     typed_edge_bias: bool = False
     #: False: one scalar per head per type, added to both orientations of each related
     #: pair (the literal "a learned scalar per head per relation type"); True: two - one

@@ -65,9 +65,10 @@ BOARD_HEADS: tuple[str, ...] = ("travelled_into", "timeline_active_at_end", "tac
 #: Per-square deep attack facts - an UNDECIDED PLACEHOLDER set. Section 12.4 specifies
 #: only "deep attack facts beyond the section 6 input bias" (generator-exact), and that
 #: "predicting what the model is handed as input teaches nothing". The section 6 input is
-#: the legal move graph (B9, committed) and typed attack / defence / pin / x-ray / check /
-#: travel-threat edges (B11, provisional), so the one-step facts those state - attacked-by,
-#: pinned, a legal move's destination - are excluded. Each candidate below is a fact no
+#: the legal move graph (B9, committed) and typed attack / defence / pin / x-ray / check
+#: edges (B11, provisional; travel-threat folded into attack at CHECKPOINT 6), so the
+#: one-step facts those state - attacked-by, pinned, a legal move's destination - are
+#: excluded. Each candidate below is a fact no
 #: input relation states: multi-step (an exchange sequence, two-move reach, the position
 #: after a move) or a geometric neighbourhood that is no relation type (the royal zone;
 #: for the side to move it partly overlaps the king's legal moves). The set is fixed only
