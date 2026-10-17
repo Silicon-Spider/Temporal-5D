@@ -64,6 +64,7 @@ rules reference, `docs/rules/README.md`, which the code cites throughout.
 | **E5b:** the tactical scanner: forcing actions, proofs and estimates, the solved store; experiment 6b's tool | `include/t5d/scanner.hpp`, `tools/t5d_scan6b.cpp` | §11.1-§11.3, §15.6, H1-H6, H15, H19, M8 |
 | **E5c:** the scanner's in-check stage (M12's optimisation pass), Lazy SMP and the shared solved store; 6b per board-count range at the design thread budget | `include/t5d/scanner.hpp`, `tools/t5d_scan6b.cpp` | §11.3, §15.6, H17, H19, M12, M13 |
 | **E7:** Q4 as ruled (R8) by default; the acting player and the submit action in the expansion and the C API | `include/t5d/rules.hpp`, `include/t5d/expand.hpp`, `include/t5d/capi.h` | §8.2, §11.0 item 2, D8 |
+| **ABI round 1:** the turn state in the expansion and the C API - mandatory and optional boards, moves made in the action (the game handle's count); the count in the search's identity, evaluation requests, evaluation cache and batches | `include/t5d/expand.hpp`, `include/t5d/capi.h`, `include/t5d/mcts.hpp` | §2.3, §8.5, §15.2; A6, C11, C14 |
 | **E6a:** the main search: PUCT, widening, both D2 arms, MCGS, the solver, final selection, persistence; built-in evaluators | `include/t5d/mcts.hpp`, `src/mcts.cpp`, `src/mcts_evaluators.cpp` | §8.1-8.7, §11.1, §15.4; D2, E1-E9, C11-C14, H2, H15 |
 | **E6a:** self-play and match play; the turn cap | `include/t5d/selfplay.hpp`, `src/selfplay.cpp` | §8.7, §12.3; C12-C14, I11 |
 | **E6a:** the search's C API: the step API for an external evaluator | `include/t5d/capi_search.h`, `src/capi_search.cpp` | §8.1, §8.3; D1, D3 |
@@ -831,6 +832,31 @@ record carries both.
   itself, exact, one scan of the opponent's playable boards and no allocation, run
   only once the obligations are met (never at a turn's start). Under whole-turn
   generation submitting ends every enumerated action, and nothing more is needed.
+- **(h) the turn state** (engine ABI round 1; register A6, spec §2.3: "exact counts,
+  never predicted ones: the rules engine knows them") - global like (g), the network's
+  inputs on its global registers: `mandatory_remaining()`, the boards the acting player
+  must still play before submitting is possible (T5, T6: the active boards in the present
+  on the mover's colour; Q5 AllActive: every active board of the mover's; Q6: a deferred
+  timeline's board is not among them) - the state's own `mandatory_count()`, 0 exactly
+  when submitting is possible; `optional_playable()`, the mover's other playable boards
+  (L5: heads with the mover to move - active or not, in the present or not, T6), 0 when
+  no move may be made (Q4's Guide-literal reading after the shift) - with the mandatory
+  ones, exactly the boards `board_playable()` marks; and `moves_made()`, the moves
+  already made in the action in progress. No state records that count (the boards say
+  what was played, not in which action: one `GameState` can be a turn start, or one,
+  two ... moves into an action, by different paths), so the caller gives it -
+  `expand(state, options, out, moves_made)`, 0 at a turn start (the three-argument
+  `expand` is a turn start's) - and the search and the C API's game handle keep it.
+  The counts move as the rules say, not as one formula: a move lowers the mandatory
+  count by the mandatory boards it plays (one; two for a jump between two of them - a
+  jump that does not branch plays the board it lands on, T6 - and one for a jump from an
+  optional board onto a mandatory one), a branch that rewinds the present zeroes it
+  (T8: the present lies on the opponent's colour; not under Q5), and a reactivation
+  behind the present can raise it (T11, T12). A jump between two boards is one move.
+  `test_turn_state.cpp` recounts all three from the rulebook at every state of random
+  play under every ruleset, through `expand` and through a `t5d_game`, and checks that
+  arithmetic move by move wherever no activity changes, counting the cases outside it;
+  `test_expand_reference.cpp` holds them to its reference too.
 
 **Readings** (each a reading of the spec, for the build log):
 
@@ -880,8 +906,15 @@ to the flat arrays above (per board: timeline, half-turn, head, active, side,
 playable, window depth, band depth, origin, parent) - valid until the handle is next
 changed - and, appended at its end by stage E7 (every older field keeps its offset),
 (g)'s three `int32_t`: `acting_player` (0 white, 1 black), `submit_possible` and
-`submit_legal` (1 or 0); `t5d_game_info`, `t5d_game_state` (a `t5d_state` copy, for
-the fingerprint and the boards), `t5d_game_copy`, `t5d_game_destroy`. Rulesets are
+`submit_legal` (1 or 0); then, appended by engine ABI round 1 (register A6), (h)'s
+three: `mandatory_remaining`, `optional_playable` and `moves_made`. A game handle
+counts the moves made in its action itself (no state records them): 0 at every set-up
+(a turn start, T5), one more per `t5d_game_apply` or `_apply_expanded`, 0 again after
+`t5d_game_submit` or `t5d_game_replay_next` (a whole action), carried by
+`t5d_game_copy`; `t5d_game_info` reports it (`t5d_game_summary.moves_made`, appended
+after `rules`) and every `t5d_game_expand` passes it to the expansion.
+`t5d_game_info`, `t5d_game_state` (a `t5d_state` copy, for the fingerprint and the
+boards), `t5d_game_copy`, `t5d_game_destroy`. Rulesets are
 passed as `RuleOptions::encode()`'s 64-bit encoding (`RuleOptions::decode` reads it
 back): 0 is the standard rules - moves after the shift until submission among them
 (R8) - and `T5D_RULES_NO_MOVES_AFTER_SHIFT`, bit 3, Q4's Guide-literal reading. Until
@@ -2137,14 +2170,24 @@ itself does - `Multiverse::zobrist` mixes in the player to move, which is the ac
 player until the submission - so a state whose present has shifted inside an unsubmitted
 action and the opponent's turn start with the same boards have different keys, and the
 exact comparison behind a key match tells them apart too). A node's identity in the
-graph is its key **and whether an action is in progress**: a turn start and a state during an action can be one `GameState` (an
-optional board played at the end of one action, or at the start of the next - same
-boards, same player, same present), yet only a turn start can end the game (C5) or be
-capped (I11), and only a partial action can be a dead end, so they are never one node
-(a submit edge always leads to a turn start, a move to a state during an action;
-`check_invariants` holds it). Whether a leaf is a turn start is a property of the path,
-not of the state, so the evaluator is never told it: an evaluation is a function of
-the state and the epoch, and the cache is shared between the two. An exact comparison
+graph is its key **and the moves made in its action** (engine ABI round 1; register
+A6, build-log spec issue 302): one `GameState` can be a turn start and a state during
+an action (an optional board played at the end of one action, or at the start of the
+next - same boards, same player, same present), or one and two moves into an action
+by paths across turns, and the network sees the count (A6's input), so equal states
+with different counts are different inputs - and never one node. The count subsumes
+"whether an action is in progress" (0: a turn start; only a turn start can end the
+game, C5, or be capped, I11, and only a partial action can be a dead end). Every
+ordering of one action's moves from one turn start reaches its state with the same
+count, so MCGS keeps its merges inside an action and loses only the rare ones across
+turns. The count follows the edges (§15.4's turn structure, which `check_invariants`
+holds: 0 below a submit edge or a whole action, the parent's + 1 below a move), and a
+search's root takes it from its caller (`Search(root, params, moves_made)`; the C
+API reads the game handle's). Before A6 the identity held only the turn-start flag,
+and the evaluator was told nothing of it - "a path property the network must not see";
+now `EvalRequest::moves_made` carries the count with the leaf's expansion, and an
+evaluation is a function of the state, the count and the epoch: the evaluation cache
+and a batch's de-duplication match all three (§15.2's purity row). An exact comparison
 follows every key match (a collision gets an unshared node; `key_bits`, a test seam not
 in the C API, cuts the keys short so that the tests meet collisions). Statistics
 live on the edges (path statistics; in a tree they equal the child's). Reaching an
@@ -2190,7 +2233,8 @@ is `run` on the post-move root, then `advance_action` on the reply - atomic: the
 action is checked (each move pseudo-legal where it is made, the submission legal) before
 the first re-root, and a failure changes nothing; from a turn start an action has at
 least one move. Evaluations are
-cached per (state, refresh epoch) (`set_epoch`; 0 in the dense configuration).
+cached per (state, moves made in its action, refresh epoch) (A6; `set_epoch`; 0 in the
+dense configuration).
 
 **Memory.** The evaluation cache counts each entry for what it alone keeps alive once
 its search is gone - the map's node, its logits, its state's list of timelines, and the
@@ -2214,7 +2258,8 @@ order); `synchronous` is the debug mode - batches of one leaf.
 
 **The evaluator** (`Evaluator`): a batch of `EvalRequest`s - the leaf's state, its
 expansion (everything the network takes: features, candidate moves, move graph,
-relations, W/E; `expand` sets k, the features and the relations), its key and epoch -
+relations, W/E, D8's acting player and submit action, A6's turn state; `expand` sets k,
+the features and the relations), its key and epoch, and the moves made in its action -
 answered with one logit per candidate move and a 51-bin distribution. Built in:
 `uniform` (logits 0, value 0), `random` (a function of seed, key and epoch only - so
 still a function of the state), `material` (`tanh(balance / 10)` over every
@@ -2223,11 +2268,15 @@ the fairy pieces at the scanner's placeholders - unicorn 2.5, dragon 2, princess
 brawn 1.25, common king 3 - build-log spec issue 56, one set for the engine).
 
 **The C API** (`t5d/capi_search.h`, in `t5d.dll` / `libt5d.so`): the step API for an
-external evaluator - `t5d_search_new(game, turn_start, params, &search)`,
+external evaluator - `t5d_search_new(game, turn_start, params, &search)` (the root takes
+the game handle's moves made in its action, A6; `turn_start` must agree with it: 1
+exactly where none is made, `T5D_ERR_ARGUMENT` otherwise; `_root_game` hands the
+root's count back),
 `t5d_search_gather(search, max_leaves, max_playouts, &count)`, `t5d_search_leaf(search,
 i, &leaf)` (a `t5d_leaf`: key, epoch, the acting player, D8's
-`submit_possible` and `submit_legal`, the `t5d_expansion` - which carries them too -
-and each move's legality), `t5d_search_deliver(search, logits, logit_count,
+`submit_possible` and `submit_legal`, the `t5d_expansion` - which carries them too, and
+A6's turn state: the leaf's mandatory and optional boards and the moves made in its
+action - and each move's legality), `t5d_search_deliver(search, logits, logit_count,
 submit_logits, submit_count, values, value_count, value_kind)` - one float32 logit per
 candidate move, logit i scoring `leaf.expansion.moves[i]`; one submit logit per leaf
 (NaN: none) or none at all (NULL, 0: the placeholder share); 51 float32 values per leaf
@@ -3479,7 +3528,18 @@ Each is recorded where it is made (the header comments) and listed here:
   87. (settled: H41 rules the in-tree solver part of the proof channel - its
       propagation off by rule; no spec issue);
   88. MCGS identity: the state AND whether an action is in progress (§8.5's "values
-      depend only on the state": proposed spec edit 61).
+      depend only on the state": proposed spec edit 61) - since engine ABI round 1 the
+      moves made in the action, which subsumes it, and the evaluation cache's key and
+      the batch's de-duplication with it (A6: the network sees the count; build-log
+      spec issue 302, proposed edit 200).
+- **A6's turn state** (engine ABI round 1; build-log spec issues 143-145): the
+  mandatory count is the state machine's own - A6's "−1 / −2 / 0" arithmetic holds only
+  where no activity changes (T6's arrivals, T11/T12's reactivations and Q5 lie outside
+  it); "optional boards still playable" are the mover's playable boards (L5) that are not
+  mandatory, active or not, with or without a legal move, none once no move may be made
+  (Q4); "moves already made" counts moves since the action's turn start, a jump between
+  two boards being one; and §15.4's turn structure holds the count (0 below a submit,
+  the parent's + 1 below a move).
 - **An ambiguous move is still unreadable** (stage E4): the notation's "Omission" lets
   a writer leave out a piece that a pin rules out, but legality is judged per action,
   at submission, so a "pin" is no per-move notion; the reader does not try each

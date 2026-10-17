@@ -61,6 +61,16 @@
 //     submit action stands beside the moves of (a); under whole-turn
 //     generation it ends every enumerated action. Global, not per board: the
 //     per-board features of (f) are unchanged by it.
+//  h. the turn state (register A6, spec §2.3: "exact counts, never predicted
+//     ones: the rules engine knows them"), global like (g): the MANDATORY
+//     boards the acting player must still play before submitting is possible
+//     (T5, T6; GameState::mandatory_count), the OPTIONAL boards it may still
+//     play (its playable boards, L5, that are not mandatory), and the MOVES
+//     already made in the action in progress - which no state records (the
+//     boards say what was played, not in which action), so the caller gives
+//     it: expand()'s `moves_made`, 0 at a turn start. The search and the C API's
+//     game handle keep the count; equal states with different counts are
+//     different network inputs (register A6, build-log spec issue 302).
 //
 // READINGS (engine README, "Expansion"):
 //
@@ -252,6 +262,31 @@ class Expansion {
   /// t5d/check.hpp royals_safe - exact, and one scan of the opponent's
   /// playable boards). The submit action's legality mask (D8).
   bool submit_legal() const noexcept { return submit_legal_; }
+
+  // -- the turn state (register A6; spec §2.3): exact counts, global (h) -------------
+
+  /// MANDATORY boards still to move: the boards the acting player must still
+  /// play before submitting is possible (T5, T6: the active boards in the
+  /// present on the mover's colour; Q5 AllActive: every active board of the
+  /// mover's; Q6 Deferred: a deferred one is not among them) -
+  /// GameState::mandatory_count(). 0 exactly when submit_possible(). A move
+  /// lowers it by the mandatory boards it plays (one, or two for a jump between
+  /// two of them - T6: a board a piece arrives on is played too), a branch that
+  /// rewinds the present (T8) zeroes it - the present then lies on the
+  /// opponent's colour; not under Q5 AllActive - and a reactivation behind the
+  /// present can raise it (T11, T12).
+  int mandatory_remaining() const noexcept { return mandatory_remaining_; }
+  /// OPTIONAL boards still playable: the acting player's playable boards (L5:
+  /// the heads with the mover to move - active or not, in the present or not,
+  /// T6) that are not mandatory; 0 when no move may be made (Q4's Guide-literal
+  /// reading, after the shift). With mandatory_remaining(): the boards
+  /// board_playable() marks.
+  int optional_playable() const noexcept { return optional_playable_; }
+  /// MOVES already made in the action in progress, since its turn start: no
+  /// state records it, so it is the caller's (expand()'s `moves_made`) - 0 at a
+  /// turn start (and a turn start never has its obligations met, T5).
+  int moves_made() const noexcept { return moves_made_; }
+
   int timeline_count() const noexcept { return timeline_count_; }
   int active_timeline_count() const noexcept { return active_count_; }
   /// Active timelines created by branching whose origin is unknown (a position
@@ -406,7 +441,7 @@ class Expansion {
   void src_extra(int k, std::vector<std::int32_t>& out, Window which = Window::WithOrigins) const;
 
  private:
-  friend void expand(const GameState& state, const ExpandOptions& options, Expansion& out);
+  friend void expand(const GameState& state, const ExpandOptions& options, Expansion& out, int moves_made);
 
   void materialize() const;
   // The index of the timeline holding a board (0 <= board < board_count()).
@@ -425,6 +460,9 @@ class Expansion {
   bool may_move_ = false;
   bool submit_possible_ = false;
   bool submit_legal_ = false;
+  int mandatory_remaining_ = 0;
+  int optional_playable_ = 0;
+  int moves_made_ = 0;
   int timeline_count_ = 0;
   int active_count_ = 0;
   int origins_unknown_ = 0;
@@ -488,9 +526,20 @@ class Expansion {
 };
 
 /// Expands `state` into `out` (see the header comment), reusing out's storage.
-/// Throws std::invalid_argument for a negative window_k or a reserved relation.
-/// (Any k >= kNoWindow - 1 is taken as kNoWindow - 1: every band whole.)
-void expand(const GameState& state, const ExpandOptions& options, Expansion& out);
+/// `moves_made`: the moves already made in the action in progress (h; 0 at a
+/// turn start) - the caller's, since no state records it. Throws
+/// std::invalid_argument for a negative window_k, a reserved relation or a
+/// negative moves_made. (Any k >= kNoWindow - 1 is taken as kNoWindow - 1: every
+/// band whole.)
+void expand(const GameState& state, const ExpandOptions& options, Expansion& out, int moves_made);
+
+/// The same with no move made yet in the action - a turn start's expansion
+/// (tools that read no turn state may use it at any state; what a network
+/// reads comes from the search or the C API's game handle, which keep the
+/// count).
+inline void expand(const GameState& state, const ExpandOptions& options, Expansion& out) {
+  expand(state, options, out, 0);
+}
 
 }  // namespace t5d
 

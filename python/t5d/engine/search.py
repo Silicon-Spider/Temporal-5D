@@ -16,6 +16,11 @@ layer over the C functions, and nothing in it computes a rule or a search decisi
   triple. **The proof channel stays off** (register H41): ``proof_channel`` must be 0 - no
   solved-status propagation and no export until the gate passes and the channel is signed
   off; ``search_params`` refuses anything else.
+* **The root's turn state (register A6).** A search's root takes the game handle's count of
+  moves made in its action (``GameInfo.moves_made``): the network sees the count, and the
+  search keeps states with different counts apart (its graph's identity, its evaluation cache,
+  its batches). ``turn_start`` defaults to what the handle says; given, the engine checks it
+  against the count.
 * **Fresh searches per decision (C14).** ``Search(game, share=donor)`` makes a search that
   shares ``donor``'s evaluation cache (``t5d_search_new_sharing``): self-play's fresh search
   per move with its state-keyed evaluations carried. A search's cache must only ever hold
@@ -174,7 +179,7 @@ class Search:
         self,
         game: Game,
         *,
-        turn_start: bool = True,
+        turn_start: bool | None = None,
         params: CSearchParams | None = None,
         share: Search | None = None,
         lib: Library | None = None,
@@ -193,6 +198,8 @@ class Search:
         out = c_void_p()
         game_handle = game._live()
         with game._lock:
+            if turn_start is None:  # A6: the handle knows whether a move has been made in its action
+                turn_start = game.info().turn_start
             if share is None:
                 self._lib.call("t5d_search_new", game_handle, int(bool(turn_start)), byref(self.params), byref(out), error=True)
             else:
