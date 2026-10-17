@@ -57,16 +57,16 @@ The build rules (spec section 15.1) decide what else appears here:
   ablation 6y's arm, Lc0's post-norm with DeepNet initialisation, is
   ``norm_placement="post"`` (the placement is provisional), with the arm's unstated
   details as placeholders.
-* **F6** (committed, CHECKPOINT 7, section 9.3): Mish in the FFN (``ffn_activation``);
-  ablation 6y's arm, squared ReLU, is ``ffn_activation="squared_relu"``. Whether Mish
-  reaches the output heads is not decided: ``head_activation`` (below).
+* **F6** (committed, CHECKPOINTS 7-8, section 9.3): Mish in the trunk FFN
+  (``ffn_activation``) and in every head's hidden layers (CHECKPOINT 8: the value head's MLP,
+  ``heads.ValueHead`` - no switch); ablation 6y's arm, squared ReLU, is
+  ``ffn_activation="squared_relu"``, in the trunk only.
 * **Where the spec is silent, ambiguous or contradictory on a committed-class point**
   the choice is a parameter and the default is marked as a placeholder, not a decision:
   ``board_register_spatial`` (section 5.3 under RoPE), ``global_register_pairs`` (what
   a global register's position is under a relative encoding), ``aux_global_pool``
   (section 9.2 against section 12.4, B8 and D7), ``policy_promotion`` (section 8.1 says
-  nothing about promotions), ``head_activation`` (whether F6's Mish reaches the heads),
-  ``rope_relations_head`` and the near-NoPE and split details
+  nothing about promotions), ``rope_relations_head`` and the near-NoPE and split details
   of B5, B15's far bins, line clamp, register entries and initialisation
   (``disp_far_edges``, ``disp_line_max``, ``disp_register_pairs``, ``disp_init_std``), B16's
   bins, layer sharing and initialisation (``status_dt_exact``, ``status_dt_max``,
@@ -161,11 +161,9 @@ SUBMIT_HEADS: tuple[str, ...] = ("linear", "pointer")
 #: Where each sublayer's norm sits (F5; ``trunk.py``): "pre" (the v1) or "post" (ablation
 #: 6y's arm: Lc0's post-norm with DeepNet initialisation).
 NORM_PLACEMENTS: tuple[str, ...] = ("pre", "post")
-#: The FFN's activation (F6; ``trunk.FeedForward``): "mish" (the v1) or "squared_relu"
-#: (ablation 6y's arm).
+#: The trunk FFN's activation (F6; ``trunk.FeedForward``): "mish" (the v1) or "squared_relu"
+#: (ablation 6y's trunk-only arm). The heads' hidden layers are Mish under either.
 FFN_ACTIVATIONS: tuple[str, ...] = ("mish", "squared_relu")
-#: The value head's hidden activation (``heads.ValueHead``; ``NetConfig.head_activation``).
-HEAD_ACTIVATIONS: tuple[str, ...] = ("gelu", "mish")
 #: B15's entries for pairs with a per-board register (``NetConfig.disp_register_pairs``).
 DISP_REGISTER_PAIRS: tuple[str, ...] = ("by_kind", "shared")
 
@@ -306,11 +304,13 @@ class NetConfig:
     #: 200): True is that reading of section 9.3, not a new decision.
     out_ffn_bias: bool = True
 
-    # --- F6: the FFN's activation (committed; section 9.3, CHECKPOINT 7; trunk.py) ---
-    #: ``FFN_ACTIVATIONS``. Register F6: "Mish for v1 ... squared ReLU as the arm" (ablation
-    #: 6y): "mish" - ``x tanh(softplus(x))`` (Misra 2019, "Mish: A Self Regularized
-    #: Non-Monotonic Activation Function"); "squared_relu" - ``relu(x)^2`` (So et al. 2021,
-    #: "Primer"), drawn at the same initialisation (the arm's is not stated - spec issue 204).
+    # --- F6: the activation (committed; section 9.3, CHECKPOINTS 7-8; trunk.py, heads.py) ---
+    #: The trunk FFN's, ``FFN_ACTIVATIONS``. Register F6: "Mish for v1, in the trunk FFN and every
+    #: head's hidden layers (CHECKPOINT 8) ...; squared ReLU as the trunk-only arm" (ablation 6y):
+    #: "mish" - ``x tanh(softplus(x))`` (Misra 2019, "Mish: A Self Regularized Non-Monotonic
+    #: Activation Function"); "squared_relu" - ``relu(x)^2`` (So et al. 2021, "Primer"), drawn at
+    #: the same initialisation (the arm's is not stated - spec issue 204). Only the trunk's FFN
+    #: follows this switch: the heads' hidden layers are Mish under both (``heads.ValueHead``).
     ffn_activation: str = "mish"
 
     # --- embeddings (A2, A3, B8, section 5.3) ---
@@ -330,17 +330,8 @@ class NetConfig:
     policy_promotion: str = "none"
     #: Width of the opponent-reply pointer projections (aux, ~0.1M budget of section 9.2).
     opp_policy_dim: int = 128
-    #: Hidden width of the value head's MLP.
+    #: Hidden width of the value head's MLP (its activation is F6's Mish - ``heads.ValueHead``).
     value_hidden: int = 256
-    #: The value head's hidden activation - the one output-head MLP (``heads.ValueHead``; the
-    #: other heads are linear). Register F6 binds the "FFN activation"; its "(Chessformer's
-    #: FFN and output heads)" and section 9.3's "Chessformer uses it in the feed-forward
-    #: sublayer and the output heads" describe Chessformer, not whether this network's heads
-    #: follow. COMMITTED-CLASS SILENCE (F6, D3; spec issue 204) - placeholder default, not a
-    #: decision:
-    #:   "gelu" - as built at stage N1 (exact erf form);
-    #:   "mish" - F6's activation, as in Chessformer's heads.
-    head_activation: str = "gelu"
     #: What the global auxiliary heads (WDL, moves-left, short-horizon value, search
     #: effort) read. Section 9.2's table: "Mean-pool board squares (per-board) / global
     #: registers (global)". Section 12.4: "Registers stay free. Auxiliary heads pool from
@@ -908,7 +899,6 @@ class NetConfig:
         for name, options in (
             ("norm_placement", NORM_PLACEMENTS),
             ("ffn_activation", FFN_ACTIVATIONS),
-            ("head_activation", HEAD_ACTIVATIONS),
             ("attn_scope", ATTN_SCOPES),
             ("causal_past", CAUSAL_PASTS),
             ("frozen_features", FROZEN_FEATURES),

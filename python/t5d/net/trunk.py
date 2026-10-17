@@ -21,7 +21,9 @@ the norms sit is ``NetConfig.norm_placement``:
 
 **The FFN's activation (F6, section 9.3)** is ``NetConfig.ffn_activation``: Mish,
 ``x tanh(softplus(x))`` (Misra 2019), for the v1; squared ReLU, ``relu(x)^2`` (So et al.
-2021), as ablation 6y's arm. The heads' activation is not the FFN's (``heads.py``).
+2021), as ablation 6y's arm - "the trunk-only arm" (CHECKPOINT 8): the heads' hidden layers
+are Mish under either (``heads.ValueHead``), so nothing outside the trunk's FFN follows the
+switch.
 
 Precision (G1): under ``trunk_dtype="bf16"`` the trunk runs inside autocast, so its
 matmuls and the attention kernel run in BF16 while the residual stream, the norms and

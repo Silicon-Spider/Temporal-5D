@@ -12,9 +12,11 @@ submitting is possible (T5), masked to -inf unless it is legal (C4), and normali
 with the move logits - one distribution over the moves and submit (``NetOutput``).
 
 **Value (D3, section 8.3).** 51-bin categorical over outcomes in [-1, 1], bin centres
-``-1 + 2k/50``; pooled from the global registers, through a hidden layer whose activation
-is ``NetConfig.head_activation`` (GELU, a placeholder: F6's Mish is the FFN's, and whether it
-reaches the heads is not decided - spec issue 204). Helpers give the distribution, its
+``-1 + 2k/50``; pooled from the global registers, through a hidden layer with Mish (register
+F6 since CHECKPOINT 8: "Mish ... in the trunk FFN and every head's hidden layers"; ablation
+6y's squared ReLU is "the trunk-only arm", so no head follows ``NetConfig.ffn_activation``).
+The value head's is the only hidden layer among the heads: the others are linear or
+bilinear. Helpers give the distribution, its
 mean and its variance (what variance-scaled cPUCT and the time manager consume). The
 value is from the perspective of the **acting player** (``PositionState.acting_player``,
 register D8: the player whose action is in progress until it submits - the present's colour,
@@ -248,19 +250,17 @@ class SubmitHead(nn.Module):
         return (policy.src(r) * policy.dst(r)).sum(dim=-1) / math.sqrt(policy.dim)
 
 
-#: The value head's hidden activations (``NetConfig.head_activation``).
-HEAD_ACTIVATION_FNS = {"gelu": torch.nn.functional.gelu, "mish": torch.nn.functional.mish}
-
-
 class ValueHead(nn.Module):
+    """``out(mish(hidden(pooled)))``: F6's Mish in the head's hidden layer, whatever the trunk
+    FFN's activation (6y's squared ReLU is a trunk-only arm - CHECKPOINT 8)."""
+
     def __init__(self, cfg: NetConfig) -> None:
         super().__init__()
         self.hidden = nn.Linear(cfg.d_model, cfg.value_hidden)
         self.out = nn.Linear(cfg.value_hidden, cfg.value_bins)
-        self.activation = HEAD_ACTIVATION_FNS[cfg.head_activation]
 
     def forward(self, pooled: torch.Tensor) -> torch.Tensor:
-        return self.out(self.activation(self.hidden(pooled)))
+        return self.out(torch.nn.functional.mish(self.hidden(pooled)))
 
 
 class AuxHeads(nn.Module):

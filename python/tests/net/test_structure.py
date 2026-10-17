@@ -511,7 +511,7 @@ def test_every_bias_adds_up(layer):
 # --- no inert switch ----------------------------------------------------------------------------
 
 #: Each pair of configurations differs in one switch of stage N2 or of the trunk (F5, F6);
-#: the network must differ. (``head_activation`` changes the value head alone - test_trunk.py.)
+#: the network must differ.
 SWITCHES = {
     "norm_placement pre -> post": (dict(), dict(norm_placement="post")),
     "qkv_bias": (dict(), dict(qkv_bias=True)),

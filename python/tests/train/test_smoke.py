@@ -31,7 +31,7 @@ def test_smoke_three_steps(trunk_dtype):
         dict(rope_per_head=True, policy_promotion="offset", disp_register_pairs="shared"),
         dict(global_register_pairs="anchored", board_register_spatial="position_free", aux_global_pool="global_registers"),
         dict(norm_placement="post"),
-        dict(ffn_activation="squared_relu", head_activation="mish"),
+        dict(ffn_activation="squared_relu"),
         dict(displacement_bias=False),
     ],
     ids=["b5_learned_offset_b15_shared", "anchored_regs_free", "post_norm", "squared_relu", "no_table"],
@@ -39,8 +39,8 @@ def test_smoke_three_steps(trunk_dtype):
 def test_smoke_with_the_options_on(flags):
     """Every option's parameters receive gradient and move: B15's table, a learned register
     coordinate or a promotion offset that the forward pass ignored would stay put. Ablation
-    6y's arms - F5's post-norm, F6's squared ReLU (here with the heads' Mish) - train finite,
-    every tensor moving."""
+    6y's arms - F5's post-norm, F6's squared ReLU (in the trunk only: the heads keep Mish) -
+    train finite, every tensor moving."""
     report = smoke_train(NetConfig(trunk_dtype="fp32", **flags), steps=1, seed=0, board_counts=(1, 3, 6, 9))
     assert all(math.isfinite(v) for v in report.losses[0].values())
     assert report.changed_fraction == 1.0
