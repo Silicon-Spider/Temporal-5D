@@ -5,7 +5,10 @@ record with what the ftxi driver printed for it - and then ones that get a
 verdict wrong, leave one out, decline every record, read a move as another
 position, mark a piece's having moved differently, or say nothing of what they
 set up - to show that the gate passes the first, fails the others, and accepts a
-wrong verdict only once the difference is on record with a citation.
+wrong verdict only once the difference is on record with a citation. (They run
+the commit tier, a smoke test that gates nothing - H47 - so the one that declines
+every record, which contradicts nothing, passes it, and the gate's output says
+that the tier gates nothing.)
 
 How the stand-in is fed. The engine contract asks for a state event before every
 position: every board of the multiverse, as the engine set it up. No golden file
@@ -207,6 +210,15 @@ class GateWithAStandInEngineTests(unittest.TestCase):
         self.assertIn("no oracle followed", result.ungated[UNCONFIRMED_BOARD])
         # A commit-tier pass never enables the proof channel.
         self.assertTrue(result.proof_channel.startswith("DISABLED"))
+        # And never reads as gating: the commit tier is a smoke test (H47). What met the gating conditions with ftxi
+        # alone is not gated, and says so.
+        self.assertTrue(result.smoke_test)
+        self.assertEqual(result.verdicts[0], {})
+        text = gate.summarise(result)
+        self.assertIn(f"engine differential: SMOKE TEST - PASSED (PARTIAL RUN - restricted sources or records): "
+                      f"{gate.SMOKE_TEST}", text)
+        self.assertIn(f"NOT gated: {WRONG_BOARD} - {gate.SMOKE_REASON} (", text)
+        self.assertNotIn("gated:     ", text)
 
     def test_one_wrong_verdict_fails_the_gate(self):
         record, index = WRONG_AT
@@ -260,12 +272,19 @@ class GateWithAStandInEngineTests(unittest.TestCase):
         self.assertTrue(messages[0].startswith(f"{record} position {index}: in_check: engine=True vs ftxi=False"))
         self.assertTrue(messages[1].startswith(f"{record} position {index}: unmoved: engine="), messages[1])
 
-    def test_an_engine_that_declines_everything_has_not_passed(self):
+    def test_an_engine_that_declines_everything_gates_nothing(self):
+        # Compared with nothing, it contradicts nothing. The commit tier is a smoke test that gates nothing (H47): it
+        # passes the engine, and says why no ruleset is gated. A tier that runs every oracle fails it
+        # (engine-nothing-gated - test_gate.GateRunTests, with canned oracles).
         result = self.run_gate("unsupported")
         self.assertEqual(result.gated, {})
-        self.assertEqual(result.engine, "failed")
-        self.assertFalse(result.ok)
-        self.assertEqual([finding.code for finding in result.findings()], ["engine-nothing-gated"])
+        self.assertEqual(result.findings(), [])
+        self.assertEqual((result.engine, result.ok, result.smoke_test), ("passed", True, True))
+        self.assertTrue(result.ungated)
+        self.assertTrue(all(reason.startswith("the engine did not replay") for reason in result.ungated.values()),
+                        result.ungated)
+        self.assertIn("engine differential: SMOKE TEST - PASSED", gate.summarise(result))
+        self.assertTrue(result.proof_channel.startswith("DISABLED"))
 
     def test_a_recorded_divergence_with_a_citation_is_accepted_and_nothing_else_is(self):
         record_id, index = WRONG_AT
