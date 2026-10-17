@@ -16,7 +16,9 @@ A3, M20), in every attention path.
   bit, and attention through it equals attention with the bias materialised; the CPU paths'
   outputs and gradients - the table's included - equal it too; the whole network agrees across
   every implementation. Section 15.2's row 1 (cached = dense) runs with B16 on in
-  ``test_cache.py`` (every case: the default), which also checks a moving present.
+  ``test_cache.py`` (every case with intrinsic frozen features, the default; its
+  ``frozen_features="current"`` test arm has no B16), which also checks a moving present and,
+  against an oracle of its own, B16 below a refreshed epoch's anchor and none at the anchor.
 * **The table**: 304 parameters at the placeholders, from a generator of its own (switching it
   changes no other weight), reaching the outputs; translation and board order leave it alone.
 """
@@ -213,14 +215,47 @@ def test_where_there_is_none():
     ):
         model = build_model(NetConfig(trunk_dtype="fp32", n_layers=1, **flags), seed=8)
         assert model.status is None and parameter_breakdown(model)["attn.status"] == 0, flags
-        st = model.make_context(batch, scope="block_causal").structure
-        assert st.status is None, flags
+        assert model.make_context(batch, scope="block_causal", status_bias=False).structure.status is None, flags
+        if flags["attn_scope"] == "block_causal":  # the dense scope's override: refused (below)
+            assert model.make_context(batch, scope="block_causal").structure.status is None, flags
     model = _model(seed=8, layers=1)
     assert model.status is not None
     assert model.make_context(batch, scope="dense").structure.status is None, "a refresh pass is a dense pass"
     assert model.make_context(batch, status_bias=False).structure.status is None
     b15 = reference_bias(model, batch, 0)
     assert torch.equal(model.make_context(batch, status_bias=False).for_layer(None, 0).structure.dense_bias(), b15)
+
+
+def test_a_dense_network_is_not_forwarded_block_causally_without_b16():
+    """A network of the dense scope (the v1) has no B16 table, and a block-causal forward strips its
+    frozen boards' status from their inputs (intrinsic frozen features): with B16 switched on that
+    forward would carry the status nowhere - section 4.1's "current status enters as score-time key
+    biases" (register A3: "instead (B16)") broken, silently. So it is refused - through the model,
+    its attention probabilities and the dense path's evaluator alike - and allowed where it means
+    what it says: with ``status_bias=False``, ``status_key_bias=False`` or
+    ``frozen_features="current"`` (the status then stays in the inputs: shifting it moves the
+    outputs)."""
+    from t5d.engine.evaluator import NetworkEvaluator
+
+    state = status_state(10)
+    batch = collate([state])
+    v1 = build_model(NetConfig(trunk_dtype="fp32", n_layers=1), seed=10).eval()
+    assert v1.status is None
+    for call in (
+        lambda: v1(batch, scope="block_causal"),
+        lambda: v1.attention_probabilities(batch, scope="block_causal"),
+        lambda: NetworkEvaluator(v1, scope="block_causal")([state]),
+    ):
+        with pytest.raises(ValueError, match="no B16 table"):
+            call()
+    v1(batch, scope="block_causal", status_bias=False)  # says it means the network without B16
+    v1(batch)  # its own scope, dense: every board carries its status as inputs
+    frozen = (batch.is_head == 0) & (batch.board >= 0)
+    shifted = replace(batch, dt=torch.where(frozen, batch.dt - 37.0, batch.dt), active=torch.where(frozen, 1 - batch.active, batch.active))
+    for flags, moves in ((dict(status_key_bias=False), False), (dict(frozen_features="current"), True)):
+        model = build_model(NetConfig(trunk_dtype="fp32", n_layers=1, **flags), seed=10).eval()
+        a, b = (model(x, scope="block_causal", return_trunk=True).trunk for x in (batch, shifted))
+        assert (not torch.equal(a, b)) == moves, flags
 
 
 def test_a_status_change_moves_the_bias_not_the_frozen_boards():
@@ -362,9 +397,10 @@ def test_every_implementation_is_one_function(flags):
 
 
 def test_the_tables_size_and_its_own_generator():
-    """304 parameters at the placeholders (8 heads x 19 bins x 2 statuses; 4,864 per layer),
-    added only to a network of the cached configuration; drawn from B16's own generator, so the
-    network without it has every other weight bit for bit, no flag changes it, the seed does."""
+    """304 parameters at the placeholders (8 heads x 19 bins x 2 statuses; 4,864 with one table per
+    layer, 16 x 304), added only to a network of the cached configuration; drawn from B16's own
+    generator, so the network without it has every other weight bit for bit, no flag changes it,
+    the seed does."""
     on, off = _model(seed=11, layers=3), _model(seed=11, layers=3, status_key_bias=False)
     a, b = parameter_breakdown(on), parameter_breakdown(off)
     assert a["attn.status"] == 8 * 19 * 2 == 304 and a["total"] - b["total"] == 304 and b["attn.status"] == 0

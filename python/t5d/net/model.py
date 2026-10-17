@@ -59,9 +59,11 @@ structure to live rows, and the embedding drops a frozen board's state-dependent
 (``frozen_features``), whose current values B16 gives the live rows that read the board as
 score-time key biases (``status.py``; a network of that configuration has the table -
 ``status_bias=False`` leaves it out of one forward: the anchor's own evaluation in a
-refreshed epoch, which is the refresh pass, section 7.9). ``history`` gives each position's
-epoch history (C20's second reading, ``supersession_scope``) and ``kv_hook`` sees every
-layer's keys and values.
+refreshed epoch, which is the refresh pass, section 7.9). A network of the dense scope has no
+table, so a block-causal override of its scope is refused while B16 is switched on with
+intrinsic frozen features (``make_context``): its frozen boards would lose their status with
+nothing in its place. ``history`` gives each position's epoch history (C20's second reading,
+``supersession_scope``) and ``kv_hook`` sees every layer's keys and values.
 
 Heads (``T5DNet.heads``) read the final-normed trunk: the policy pointer at each move's
 source and destination tokens (D1), the value head the mean of the global registers
@@ -339,8 +341,27 @@ class T5DNet(nn.Module):
         position's epoch history, ``(B, Nmax)`` bool) and B16's status key biases (a network
         of the cached configuration; ``status_bias=False`` leaves them out - the anchor's own
         evaluation in a refreshed epoch, ``status.py``), and optionally a caller's dense
-        ``attn_mask`` / ``attn_bias`` on top."""
+        ``attn_mask`` / ``attn_bias`` on top.
+
+        A block-causal forward of a network of the dense scope is refused while its
+        ``status_key_bias`` is on with intrinsic frozen features (unless ``status_bias=False``):
+        its frozen boards would lose their status from their inputs (``embed_tokens``) with no
+        B16 table to give it back - a function no configuration defines (the table exists only
+        in a network of the cached configuration, ``NetConfig.status_bias_built``)."""
         cfg = self.cfg
+        if (
+            self.scope_of(scope) == "block_causal"
+            and status_bias
+            and cfg.status_key_bias
+            and cfg.frozen_features == "intrinsic"
+            and not cfg.status_bias_built
+        ):
+            raise ValueError(
+                "a block-causal forward of a network of the dense scope drops its frozen boards' status (intrinsic frozen "
+                "features) and has no B16 table to give it back: B16 exists only in a network of the cached configuration "
+                "(attn_scope='block_causal') - build that, or status_key_bias=False for the network without B16, or pass "
+                "status_bias=False"
+            )
         coords = self.coordinates(batch)
         cos, sin = rope_cos_sin(rope_angles(coords, self.rope_axis, self.rope_freq))
         spatial_free = None

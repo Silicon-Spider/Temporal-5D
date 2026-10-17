@@ -3,9 +3,10 @@ B17 row: "Key-side Shaw term via precomputed query-class products = direct per-p
 on small positions | The gather implementation is exact | B17".
 
 * **The class set against its definition.** B17's class of a pair is B15's entry restricted to
-  "the exact near classes plus the line classes" (the placeholder: the exact board-distance
-  classes' cells with |Delta-file|, |Delta-rank| <= 2, and B15's line entries) - written out here
-  from ``test_displacement.Reference``, B15's own written-out layout: 1,493 classes.
+  "the exact near classes plus the line classes" (the placeholder - one of two readings of 1,493
+  classes, spec issue 217: the exact board-distance classes' cells with |Delta-file|,
+  |Delta-rank| <= 2, and B15's line entries) - written out here from
+  ``test_displacement.Reference``, B15's own written-out layout: 1,493 classes.
 * **Section 15.2's row.** The term computed pair by pair here - each query dotted with its pair's
   class vector, from the hand-written classes - equals the module's gather (precomputed products,
   then a gather by class) and its direct form, over every key, query blocks, key selections, row
@@ -14,7 +15,9 @@ on small positions | The gather implementation is exact | B17".
   vectors at their initial scale and at unit scale. Through attention: the CPU paths (the gather)
   equal attention with the direct term materialised - outputs and gradients, the vectors'
   included; B14's score function reads the products inside the attention and equals it too; the
-  whole network agrees across every implementation, and the cached path equals the full pass.
+  whole network agrees across every implementation, and the cached path equals the full pass - in
+  the causal epoch and in root- and node-refreshed ones, supersession inside the refreshed subtree
+  included.
 * **The query is unrotated** - so the term is relative: translation and board order leave the
   network as it was with B17 on, which a rotated query would not.
 * **The vectors**: 6,115,328 per head per layer (764,416 shared by the heads), from a generator of
@@ -34,13 +37,14 @@ import torch
 
 from t5d.net import NetConfig, build_model, collate, parameter_breakdown, permute_boards, synthetic_state, translate
 from t5d.net.attention import attention_block_sparse, attention_chunked, attention_explicit, attention_sdpa
-from t5d.net.cache import CachedEvaluator, reference_output
+from t5d.net.cache import CacheConfig, CachedEvaluator, reference_output
 from t5d.net.cost import count_flops, qk_flops, shaw_flops
 from t5d.net.displacement import DisplacementGeometry
 from t5d.net.flex import ScoreInputs, attention_flex, make_score_mod, materialise_score
 from t5d.net.rope import apply_rope
 from t5d.net.shaw import compact_classes, direct_term, gather_term, n_shaw_classes
 from t5d.net.tree import Multiverse, SearchTree
+from tests.net.test_cache import _random_moves
 from tests.net.test_displacement import CONSTRUCTIONS, Reference, reference_bias, reference_entries
 
 # --- the class set, written out ---------------------------------------------------------------------
@@ -299,6 +303,48 @@ def test_the_cached_path_equals_the_full_pass(init_std):
         cached, ref = tree.evaluate(node), reference_output(model, node.state)
         assert torch.allclose(cached.trunk, ref.trunk, atol=2e-5), float((cached.trunk - ref.trunk).abs().max())
     assert tree.evaluator.store.computed["supersession"] >= 2
+
+
+@pytest.mark.parametrize("supersession", ["causal_past", "past_and_epoch_history"])
+@pytest.mark.parametrize("refresh", ["root", "node"])
+def test_the_cached_path_through_a_refreshed_epoch(refresh, supersession):
+    """Section 15.2's row 1 with B17 on in a refreshed epoch, its adversarial construction
+    "supersession inside a refreshed subtree" included: the history boards' K/V come from the dense
+    refresh pass, whose rows carry the term from their own queries, and a board superseded below
+    the anchor gets it from its own (``compute_board``). Every node's cached evaluation equals the
+    two-level reference anchored at the refresh, under both of C20's readings, with the vectors and
+    B16's table at unit scale; with a root refresh the root's evaluation is the dense model's."""
+    seed = 30 + 2 * (refresh == "node") + (supersession == "past_and_epoch_history")
+    cfg = NetConfig(
+        trunk_dtype="fp32",
+        n_layers=2,
+        attn_scope="block_causal",
+        shaw_key_term=True,
+        shaw_init_std=1.0,
+        status_bias_init_std=1.0,
+        supersession_scope=supersession,
+    )
+    model = build_model(cfg, seed=seed).eval()
+    root = Multiverse.from_state(synthetic_state(1030 + seed, 14, n_timelines=5, deep_travel_prob=1.0), seed=seed)
+    tree = SearchTree(CachedEvaluator(model, CacheConfig(root_refresh=refresh == "root", node_refresh=refresh == "node")), root)
+    anchor = tree.root
+    if refresh == "root":
+        dense = model(collate([root.state()]), scope="dense", return_trunk=True)
+        cached = tree.evaluate(anchor)
+        assert torch.allclose(cached.trunk, dense.trunk, atol=2e-5), float((cached.trunk - dense.trunk).abs().max())
+    else:
+        anchor = tree.path(_random_moves(root, np.random.default_rng(seed), 2))
+        tree.refresh(anchor)
+    store = tree.evaluator.store
+    before = store.computed["supersession"]
+    node = anchor
+    for move in [None, *_random_moves(anchor.universe, np.random.default_rng(seed + 50), 5, jump_prob=0.4)]:
+        if move is not None:
+            node = tree.child(node, move)
+        cached, ref = tree.evaluate(node), reference_output(model, node.state, anchor=anchor.state)
+        assert torch.allclose(cached.trunk, ref.trunk, atol=2e-5), (move, float((cached.trunk - ref.trunk).abs().max()))
+        assert torch.allclose(cached.value_logits, ref.value_logits, atol=1e-4), move
+    assert store.computed["supersession"] > before, "boards superseded inside the refreshed subtree"
 
 
 # --- the unrotated query ---------------------------------------------------------------------------

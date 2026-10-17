@@ -10,6 +10,74 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-17 - N-B11-B16-B17 review fixes: B16 below a refreshed anchor tested against an oracle of its own; B17 through refreshed epochs; a dense network's block-causal forward without B16 refused; issue 217's second reading
+
+- `tests/net/test_cache.py`: `test_status_biases_below_a_refreshed_anchor` (a root and a node
+  refresh). The cached path and `reference_output` share one at-anchor rule - the anchor's own
+  evaluation is the refresh pass and adds no B16, every node below it carries B16 on every
+  frozen key, history boards included (issue 216) - and every refreshed-epoch row compared the
+  one with the other, so B16 dropped at every node of a refreshed epoch, in both, passed the
+  whole suite. The new test's oracle does not share the rule: B16's table changed between two
+  fresh searches leaves the anchor's evaluation bit for bit and moves every node below it
+  (0.33-0.46 in the trunk), in both paths; changing only the statuses that the history boards
+  alone hold still moves every node (0.15-0.33) - B16 reaches the history keys. `cache.py`'s
+  docstring points to it. Mutants patched in at test time (no file edited), over `test_cache`,
+  `test_d8`, `test_complexity`, `test_status` and `test_shaw`: B16 dropped at every node of a
+  refreshed epoch, in both paths, fails these two cases and nothing else (it failed nothing
+  before); B16 at the anchor fails them too - 16 tests with the cached path alone carrying it
+  (10 before), 9 with both paths (5 before; the other two new ones are B17's root-refresh
+  cases below, through their dense-model check).
+- `tests/net/test_shaw.py`: `test_the_cached_path_through_a_refreshed_epoch` - §15.2 row 1 with
+  B17 on through root and node refreshes, supersession inside the refreshed subtree (§15.2's
+  adversarial construction), both C20 readings, the vectors and B16's table at unit scale; with a
+  root refresh the root's evaluation against the dense model. No B17 case ran a refresh before:
+  a refresh pass computed without B17's term passed the suite, and fails all four cases now.
+- `python/t5d/net/model.py`: `make_context` refuses a block-causal forward of a network of the
+  dense scope while its `status_key_bias` is on with intrinsic frozen features (unless
+  `status_bias=False`). B16's table is built by the configured scope (`status_bias_built`), a
+  frozen board's Δt-to-present and active flag are stripped by the forward's: so
+  `model(batch, scope="block_causal")` or `NetworkEvaluator(v1, scope="block_causal")` on the
+  v1 dropped the frozen boards' status with nothing in its place, silently - §4.1's "current
+  status enters as score-time key biases" (A3: "instead (B16)") broken for that forward (the
+  cached path never reached it: `CachedEvaluator` refuses a dense-scope network). The forms that say what they
+  compute stay allowed: `status_bias=False`, `status_key_bias=False`,
+  `frozen_features="current"`. Docstrings: the model's, `status.py`'s, `config.py`'s
+  `status_key_bias`, `NetworkEvaluator`'s `scope`. `tests/net/test_status.py`: the refusal through the model, its
+  attention probabilities and the dense path's evaluator, and the allowed forms;
+  `test_where_there_is_none` asks the dense network's block-causal context with
+  `status_bias=False`.
+- Spec issue 217 rewritten, with proposed edit 161, the B17 row, `shaw.py`, `config.py`'s
+  `shaw_near` and `test_shaw.py`'s docstring: the built reading of "the exact near classes" -
+  the file-rank offsets within ±2 in every one of B15's 45 exact board-distance classes - is one
+  of two that give 1,493 classes, so the same parameter count and both of §4.1's cost figures.
+  The other, the nearest board-distance classes with their full 15 x 15 slices (say the same
+  board and the four one timeline or one turn away), covers every relation on one board - as
+  built a rook, bishop or queen relation beyond two squares on one board gets no term - and none
+  two boards away. Both put to the user; the issue said "near" must cut the file-rank offset,
+  which does not follow. The second reading is not built (it would be another
+  `shaw.compact_classes`).
+- Records corrected. The B17 row's unescaped pipes (`|Δfile|, |Δrank|`) made 7 cells of a
+  3-column row, and GitHub's renderer dropped everything after "the exact near classes -":
+  reworded without pipes; C6's `|E|` escaped in passing (its cell rendered as "The"); every
+  table row of the log now has its header's cell count. "Every `test_cache` case runs with B16
+  on" (the B16 row, the B16 entry below, `test_cache.py`'s and `test_status.py`'s docstrings):
+  every case with intrinsic frozen features - the `frozen_features="current"` test arm has none.
+  "4,864 per layer" (issue 214, `config.py`, `status.py`, `test_params.py`, `test_status.py`,
+  the B16 entry): 4,864 with one table per layer, 16 x 304 - 304 per layer. `config.py`'s index
+  of committed-class placeholders names B16's four and B17's three. The B11 row and entry add
+  `game.py`'s `relation_bits` docstring to the engine lane's files that still name travel-threat
+  among the network's relation ids. The B16 and B17 entries' mutation checks were temporary
+  edits of the worktree's own files, restored afterwards, not "scratch copies"; and B16 at the
+  anchor fails the refresh-fork rows only when the cached path alone carries it.
+- `docs/BUILD_LOG.md`: register rows B11, B16, B17, C2 and C6; spec issues 214 and 217;
+  proposed edit 161. F1's count, A1-A3 and M20 are unchanged.
+- Spec: §4.1 (B16's "current status enters as score-time key biases"; B17's compact class
+  set), §7.9 (the anchor's evaluation is the refresh pass), §15.2 (row 1 with B16 and B17
+  in refreshed epochs; "supersession inside a refreshed subtree"); register B16, B17, B11, A3,
+  C2, C3, M20. Proposed edit 161 rewritten with issue 217's two readings. No new issue or edit:
+  the refusal guards a function no configuration defines and decides nothing the documents
+  leave open.
+
 ### 2026-10-17 - Network B17: the key-side Shaw term behind its flag
 
 - `python/t5d/net/shaw.py` (new): register B17 (prototype, class C, ablation 2; §4.1), behind
@@ -20,7 +88,8 @@ the spec describes the change.
 - Its unstated details are named placeholders, each a spec issue: the compact set - "the exact
   near classes plus the line classes" - read as B15's exact board-distance classes' cells with
   |Δfile|, |Δrank| <= `shaw_near` = 2, plus B15's line classes: 1,493 classes, which gives both
-  of §4.1's cost figures (issue 217); a vector per class per head per layer, 6,115,328 parameters
+  of §4.1's cost figures (issue 217 - one of two readings that do, as the review fixes above
+  record it); a vector per class per head per layer, 6,115,328 parameters
   (26.6% of the v1; `shaw_shared_heads`: 764,416, as Shaw et al. share them) - no document states
   the count (issue 218); the unrotated query (forced: a rotated one would be an absolute
   position, §14.1) and the scale (issue 219); N(0, 0.1) from a generator of its own,
@@ -46,13 +115,15 @@ the spec describes the change.
   seeds, initial and unit scale, shared and per head; the CPU paths' outputs and gradients (the
   vectors' included) against attention with the direct term materialised; B14's score function
   and attention through it; the whole network one function across all six implementations;
-  cached = one full pass (block-causal, B16 on); translation, raw-coordinate translation and
+  cached = one full pass (block-causal, B16 on; through refreshed epochs only since the review
+  fixes above); translation, raw-coordinate translation and
   board order with it on, and a rotated query shown absolute; the count, the generator (off is
   the B15 network bit for bit, zero vectors give B15's outputs), every layer's reach; the cost
   row, analytic and counted (the counted FLOPs exceed B17-off's by exactly the products).
   Existing suites carry it: `test_cache` (two every-switch cases), `test_structure` (three
-  switches), `test_invariance`, `test_n2_model`. Checked by mutation on scratch copies: leaving
-  it out of the block-sparse selection or of a frozen board's rows fails.
+  switches), `test_invariance`, `test_n2_model`. Checked by temporary mutants of the worktree's
+  own files, restored afterwards: leaving it out of the block-sparse selection or of a frozen
+  board's rows fails.
 - `docs/BUILD_LOG.md`: register rows B17 (built behind its flag, tested), B14, C2 and F1 (the
   v1 unchanged; 29,077,130 with B17 on); spec issues 217-220; proposed edit 161.
 - Spec: §4.1 ("Not Lc0's BT5 encoding"), §14.1, §14.4 (value-side vectors held open), §15.2
@@ -100,14 +171,23 @@ the spec describes the change.
   frozen output and K/V bit for bit; B14's score function bitwise and attention through it;
   the CPU paths' outputs and gradients, the table's included; every implementation one
   function; the table's size, generator, reach, placeholders (each regroups the statuses) and
-  validation; translation and board order. `test_cache.py`: every case runs with B16 on (the
-  default), and `test_status_biases_keep_frozen_boards_intrinsic` - a move that shifts the
+  validation; translation and board order. `test_cache.py`: every case with intrinsic frozen
+  features runs with B16 on (the default; the `frozen_features="current"` test arm has none),
+  and `test_status_biases_keep_frozen_boards_intrinsic` - a move that shifts the
   present and a branch that activates a timeline: every frozen entry kept, only the superseded
   board computed, cached = the full pass, the statuses moved. `test_scope.py`: live rows carry
   B16 besides the structure. `test_structure.py`: three new switches. `test_params.py`: 304 in
-  the cached configuration (4,864 per layer), none in the v1. Checked by mutation on scratch
-  copies: B16 on frozen rows fails the definition and cached = dense; B16 at the anchor fails
-  the root refresh and refresh-fork rows.
+  the cached configuration (4,864 with one table per layer, 16 x 304), none in the v1. Checked
+  by temporary mutants of the worktree's own files, restored afterwards: B16 on frozen rows
+  fails the definition and cached = dense; B16 at the anchor fails the root-refresh and
+  refresh-fork rows - in the cached path alone. (The review fixes above re-ran the anchor
+  mutants on the suite before their new tests - B17's commit, fe99a55 - patched in at test
+  time, over `test_cache`, `test_d8` and `test_complexity`: in the cached path alone B16 at the anchor fails those rows and every
+  other that compares a refreshed anchor's evaluation with the reference or the dense model -
+  the 6y, BF16, D8 and C24 cases, 10 in all; in both paths it fails the root-refresh, BF16 and
+  6y rows, 5, and not the refresh-fork rows, which compare the two paths; and B16 dropped at
+  every node of a refreshed epoch, in both paths, failed nothing - 134 passed - the gap the
+  review fixes' new test closes.)
 - `docs/BUILD_LOG.md`: register rows B16 (built, tested), A1-A3, B14, C2, F1 and M20; spec
   issue 31 annotated; spec issues 213-216; proposed edit 160.
 - Spec: §2.3, §4.1 ("Relative to the present, at score time"), §7.3, §7.9 (the anchor's
@@ -140,9 +220,11 @@ the spec describes the change.
   refused; `test_reach_graph.py` - cross-board attacks exist, and no relation is
   travel-threat's; `test_n2_model.py` - 40 and 80 scalars.
 - Not changed: the engine and its Python ABI mirror, which are the engine lane's. The
-  relation-id comments of `records.h` and `capi.py`, `engine/README.md`'s (e) and
-  `convert.py`'s docstring still name travel-threat among the network's relation ids; the B11
-  row records it for engine ABI round 1, which builds pin and check there.
+  relation-id comments of `records.h` and `capi.py`, `engine/README.md`'s (e),
+  `convert.py`'s docstring and `game.py`'s `relation_bits` docstring ("names the network's
+  contract has but the engine does not build (pin, check, travel_threat)"; added to this list
+  by the review fixes above) still name travel-threat among the network's relation ids; the
+  B11 row records it for engine ABI round 1, which builds pin and check there.
 - `docs/BUILD_LOG.md`: register rows B11 and F1 (unchanged count); spec issues 16 ((d): five
   types) and 19 (applied) annotated.
 - Spec: §6 ("Typed edge biases"), register B11 and reversal 26 - the change applies them as

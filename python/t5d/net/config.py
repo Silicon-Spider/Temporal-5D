@@ -68,14 +68,18 @@ The build rules (spec section 15.1) decide what else appears here:
   nothing about promotions), ``head_activation`` (whether F6's Mish reaches the heads),
   ``rope_relations_head`` and the near-NoPE and split details
   of B5, B15's far bins, line clamp, register entries and initialisation
-  (``disp_far_edges``, ``disp_line_max``, ``disp_register_pairs``, ``disp_init_std``), and from
-  stage N2: ``move_graph_direction`` (which way a directed move edge opens the mask),
-  ``masked_head_registers`` (what registers do on masked heads), ``same_board_registers``
-  (what a per-board register reads on the same-board head), ``relations_head_types``
-  (which relations "attack/defend relations" covers), ``relations_head_direction``
-  (which way a typed edge opens the relations head), ``rope_roles_source`` (how B5's
-  per-head allocation meets B9's masks when the routing table is off) and how the routing
-  table meets B9's head count (``move_graph_heads``, ``rope_head_roles``).
+  (``disp_far_edges``, ``disp_line_max``, ``disp_register_pairs``, ``disp_init_std``), B16's
+  bins, layer sharing and initialisation (``status_dt_exact``, ``status_dt_max``,
+  ``status_bias_per_layer``, ``status_bias_init_std``; spec issues 213-215), B17's class set,
+  head sharing and initialisation (``shaw_near``, ``shaw_shared_heads``, ``shaw_init_std``; spec
+  issues 217, 218, 220), and from stage N2: ``move_graph_direction`` (which way a directed
+  move edge opens the mask), ``masked_head_registers`` (what registers do on masked heads),
+  ``same_board_registers`` (what a per-board register reads on the same-board head),
+  ``relations_head_types`` (which relations "attack/defend relations" covers),
+  ``relations_head_direction`` (which way a typed edge opens the relations head),
+  ``rope_roles_source`` (how B5's per-head allocation meets B9's masks when the routing table
+  is off) and how the routing table meets B9's head count (``move_graph_heads``,
+  ``rope_head_roles``).
 * Refused and held-open items have no switch at all (B3 axial, B13 token/within-board
   smolgen, C18 local/global interleave, C21 snapshot shortcuts, F3 d = 512, G4-G6;
   threat relations never become tokens, section 14.4).
@@ -495,6 +499,9 @@ class NetConfig:
     #: a decision: inside B15's 45 exact board-distance classes, the file-rank offsets with
     #: |Delta-file|, |Delta-rank| <= ``shaw_near`` (2: 1,125 classes), plus B15's line classes
     #: (368): 1,493, which gives both of section 4.1's cost figures. Pairs with a register get none.
+    #: The nearest board-distance classes with their full slices would give the same count and
+    #: costs and cover other pairs (issue 217, put to the user) - a code change
+    #: (``shaw.compact_classes``), not this setting.
     shaw_near: int = 2
     #: A vector per class per head per layer (False), or one per class per layer shared by the
     #: heads (True, as Shaw et al. share them). COMMITTED-CLASS SILENCE (spec issue 218) -
@@ -674,9 +681,12 @@ class NetConfig:
     #: live query rows (head boards' tokens, global registers) against the tokens of frozen
     #: boards; frozen rows never get it (their K/V would go stale - C17). Built only for a
     #: network of that configuration (``status_bias_built``): inert, with no parameter, under
-    #: the dense scope - the v1 - and under ``"current"``. On by default; ``False`` is the
-    #: network without it (every other weight the same: its table draws from a generator of
-    #: its own) - no named ablation has that arm (gate 6c's are the refresh's; spec issue 213).
+    #: the dense scope - the v1 - and under ``"current"``. A forward that overrides a dense-scope
+    #: network's scope to the block-causal one is refused while this is on with intrinsic frozen
+    #: features (``T5DNet.make_context``): its frozen boards would lose their status with no
+    #: table to give it back. On by default; ``False`` is the network without it (every other
+    #: weight the same: its table draws from a generator of its own) - no named ablation has that
+    #: arm (gate 6c's are the refresh's; spec issue 213).
     status_key_bias: bool = True
     #: B16's Delta-t-to-present bins (``buckets.signed_log_bucket`` of ``h - h_present`` in
     #: half-turns): exact below ``status_dt_exact``, log2-spaced up to ``status_dt_max``, then
@@ -689,7 +699,7 @@ class NetConfig:
     status_dt_max: int = 128
     #: One table per layer, or one shared by all layers. Section 4.1 says "per head" only.
     #: COMMITTED-CLASS SILENCE (spec issue 214) - placeholder, not a decision: shared, as B11's
-    #: scalars are (8 x 38 = 304 parameters; 4,864 per layer).
+    #: scalars are (8 x 38 = 304 parameters; 4,864 with one table per layer, 16 x 304).
     status_bias_per_layer: bool = False
     #: The table's initialisation, ``N(0, status_bias_init_std)`` from B16's own generator
     #: (section 15.2: realistic scale, never zeros). COMMITTED-CLASS SILENCE (spec issue 215) -
