@@ -22,7 +22,8 @@ The build rules (spec section 15.1) decide what else appears here:
   Delta-time/Delta-timeline biases, which are removed (register B6, M20).
 * **Provisional and prototype items** are behind flags, all default off: per-head
   positional specialisation (B5, provisional), the fixed routing table (B10, prototype),
-  typed edge biases (B11, provisional), board-pair smolgen (B12, prototype), and the larger
+  typed edge biases (B11, provisional), board-pair smolgen (B12, prototype), the key-side
+  Shaw term on top of B15 (B17, prototype; ``shaw_key_term``, ``shaw.py``), and the larger
   capacity arm L24-ff12 (F2, provisional) as the named preset ``"L24-ff12"``.
 * **Items of later stages** have their flag here so the config names every switch, but
   enabling one raises ``NotImplementedError`` until its stage lands: piece-centric
@@ -483,6 +484,27 @@ class NetConfig:
     #: placeholder, not a decision: 0.1, the scale of the other learned bias tables (B11).
     disp_init_std: float = 0.1
 
+    # --- B17: the key-side Shaw term (prototype; default off; section 4.1; shaw.py) ---
+    #: Each query (unrotated) dotted with a learned vector for its pair's class in a compact set,
+    #: scaled by 1/sqrt(d_head) and added to the score - Shaw et al.'s key-side relative
+    #: representation, "on top of B15" (it needs ``displacement_bias``). Ablation 2's arm, behind
+    #: its flag; value-side vectors are held open (section 14.4) and not built.
+    shaw_key_term: bool = False
+    #: "A compact class set (~1,400: the exact near classes plus the line classes)" - section 4.1
+    #: defines neither. COMMITTED-CLASS SILENCE (B17 is class C; spec issue 217) - placeholder, not
+    #: a decision: inside B15's 45 exact board-distance classes, the file-rank offsets with
+    #: |Delta-file|, |Delta-rank| <= ``shaw_near`` (2: 1,125 classes), plus B15's line classes
+    #: (368): 1,493, which gives both of section 4.1's cost figures. Pairs with a register get none.
+    shaw_near: int = 2
+    #: A vector per class per head per layer (False), or one per class per layer shared by the
+    #: heads (True, as Shaw et al. share them). COMMITTED-CLASS SILENCE (spec issue 218) -
+    #: placeholder: per head - 6,115,328 parameters at the v1's dimensions (764,416 shared).
+    shaw_shared_heads: bool = False
+    #: The vectors' initialisation, ``N(0, shaw_init_std)`` from B17's own generator.
+    #: COMMITTED-CLASS SILENCE (spec issue 220) - placeholder: 0.1 - a query's entries have unit
+    #: spread at initialisation, so the term starts with the spread of B15's scalars.
+    shaw_init_std: float = 0.1
+
     # --- B9: the move-graph mask (committed; section 6) ---
     #: Heads 0..k-1 carry the hard move-graph mask, the rest are dense ("2 heads with hard
     #: move-graph masks, remainder dense"; ablation 4 runs 0 / 2 / 4).
@@ -837,6 +859,12 @@ class NetConfig:
             raise ValueError(f"disp_register_pairs must be one of {DISP_REGISTER_PAIRS}")
         if not (math.isfinite(self.disp_init_std) and self.disp_init_std >= 0):
             raise ValueError("disp_init_std must be finite and non-negative")
+        if self.shaw_key_term and not self.displacement_bias:
+            raise ValueError("shaw_key_term (B17) is on top of B15: it needs displacement_bias (its classes are B15's)")
+        if not 0 <= self.shaw_near <= 7:
+            raise ValueError("shaw_near must be in 0..7 (a file-rank offset within B15's 15 x 15 slice)")
+        if not (math.isfinite(self.shaw_init_std) and self.shaw_init_std >= 0):
+            raise ValueError("shaw_init_std must be finite and non-negative")
         if self.status_dt_exact < 1 or self.status_dt_max < self.status_dt_exact:
             raise ValueError("status_dt_exact must be positive and status_dt_max not below it (B16's Delta-t bins)")
         if not (math.isfinite(self.status_bias_init_std) and self.status_bias_init_std >= 0):

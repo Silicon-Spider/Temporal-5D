@@ -112,7 +112,7 @@ import torch.nn.functional as F
 from torch import nn
 
 from .config import TYPED_RELATIONS, NetConfig
-from .displacement import N_CODES, DisplacementBias, DisplacementIndex, displacement_index
+from .displacement import DisplacementBias, DisplacementIndex, displacement_index, lookup
 from .smolgen import BoardPairSmolgen, SmolgenInputs, smolgen_inputs
 from .state import (
     RELATION_IDS,
@@ -541,14 +541,7 @@ class AttnStructure:
         """B15's entry ``(B, n, Lk)`` of every pair of the queries ``rows`` ``(B, n)`` and the
         keys ``cols`` ``(B, K)`` (every key when None): the static class map at (the pair's
         board tile, the query's code, the key's code) - the same at every layer."""
-        idx = self.disp_index
-        slot_q, code_q = idx.slot.gather(1, rows), idx.code.gather(1, rows)
-        slot_k = idx.slot if cols is None else idx.slot.gather(1, cols)
-        code_k = idx.code if cols is None else idx.code.gather(1, cols)
-        b = torch.arange(rows.shape[0], device=rows.device)[:, None, None]
-        tile = idx.tiles[b, slot_q[:, :, None], slot_k[:, None, :]]
-        flat = tile * (N_CODES * N_CODES) + (code_q * N_CODES)[:, :, None] + code_k[:, None, :]
-        return self.disp.class_map.view(-1)[flat]
+        return lookup(self.disp_index, self.disp.class_map, rows, cols)
 
     def disp_rows(self, rows: torch.Tensor, cols: torch.Tensor | None = None, heads: torch.Tensor | None = None) -> torch.Tensor:
         """B15's bias ``(B, Hg, n, Lk)`` of the queries ``rows`` over the keys ``cols`` (every

@@ -88,6 +88,10 @@ coordinates, "computed at score time from coordinates, so nothing cached goes st
 board's bias rows over its key set once per layer, from that layer's table, and the live pass
 gives each layer its own (``AttnContext.for_layer``).
 
+**B17's key-side Shaw term** (behind its flag; ``shaw.py``) is geometry and the query's own
+content - a frozen board's rows get it from the board's own queries, so ``compute_board``
+adds it to them, layer by layer, and the live pass to the live rows (``_FastPath``).
+
 **B16's status key biases** (committed with this configuration; ``status.py``) are the
 current status of the frozen boards - their Delta-t-to-present bin and active flag - as seen
 by the live rows that read them: the live pass adds them from the node's own present, every
@@ -554,6 +558,10 @@ class CachedEvaluator:
                     s_bias = st_l.bias_rows(b * tpb, (b + 1) * tpb, cols=keys[None])
                     if s_bias is not None:
                         bias = s_bias if bias is None else bias + s_bias
+                if ctx.shaw is not None:
+                    # B17: the board's own queries against its key set's classes (geometry).
+                    shaw = ctx.shaw.for_layer(layer).rows(q, own[None], cols=keys[None])
+                    bias = shaw if bias is None else bias + shaw
                 fast = _FastPath(qq, kk, vv, compact)
                 o = fast.full((n_keys - c, n_keys), None, fast.keys, allowed, bias)
                 x = block.after_ffn(block.after_attn(x, block.attn.output(o)))
@@ -631,9 +639,9 @@ class CachedEvaluator:
                 q_full[:, :, live_tok] = q
                 # A live row reads every valid key: the scope adds nothing to the live set's rows.
                 ctx_l = replace(ctx, scope=None)
-                if ctx.structure is not None and ctx.structure.layer_dependent:
+                if ctx.layer_dependent:
                     h_full = None
-                    if ctx.structure.smolgen is not None:  # B12 reads the layer's input (B15 does not)
+                    if ctx.structure is not None and ctx.structure.smolgen is not None:  # B12 reads the layer's input (B15 does not)
                         h_full = h.new_zeros(1, length, h.shape[-1])
                         h_full[:, live_tok] = h
                     ctx_l = ctx_l.for_layer(h_full, layer)
@@ -664,7 +672,7 @@ def _live_rows(fast: _FastPath, ctx: AttnContext, blocks: list[tuple[int, int]],
     rows than on one board's 66), each masked role block by block with its own rows. With a
     bias, every head runs per block with its rows and biases."""
     st = ctx.structure
-    if st is not None and st.has_bias:
+    if (st is not None and st.has_bias) or ctx.shaw is not None:
         return torch.cat([fast.all_heads_block(s, e) for s, e in blocks], dim=2)
     groups = [("dense", torch.arange(fast.q.shape[1]))] if st is None else st.head_groups()
     parts, order = [], []

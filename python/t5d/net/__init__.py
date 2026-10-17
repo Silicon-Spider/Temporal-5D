@@ -8,7 +8,8 @@ biases one query block at a time - ``structure.py``, ``smolgen.py``, ``attention
 B14's FlexAttention score function runs eagerly on CPU (``flex.py``: forward only, small
 inputs; compiled kernels need a GPU). CHECKPOINT 6: B15's 4D displacement bias, the v1
 default (``displacement.py``), superseding B6's binned biases; B16's score-time status key
-biases on frozen boards, with the cached configuration (``status.py``). Stage N3: the
+biases on frozen boards, with the cached configuration (``status.py``); B17's key-side Shaw
+term on top of B15, behind its flag (``shaw.py``). Stage N3: the
 block-causal scope (C17, C19 - ``scope.py``, ``NetConfig.attn_scope``), the lineage it rests
 on (``PositionState.parent`` / ``creation``), the cached evaluation path with supersession
 recompute, prefix sharing, refresh epochs and FP8 storage (C2, C3, C3a rung 1, C15, C20 -

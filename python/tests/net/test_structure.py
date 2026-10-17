@@ -539,6 +539,9 @@ SWITCHES = {
     "status_key_bias (B16) off -> on": (dict(attn_scope="block_causal", status_key_bias=False), dict(attn_scope="block_causal")),
     "status_bias_per_layer": (dict(attn_scope="block_causal"), dict(attn_scope="block_causal", status_bias_per_layer=True)),
     "status_dt_exact": (dict(attn_scope="block_causal"), dict(attn_scope="block_causal", status_dt_exact=2)),
+    "shaw_key_term (B17) off -> on": (dict(), dict(shaw_key_term=True)),
+    "shaw_shared_heads": (dict(shaw_key_term=True), dict(shaw_key_term=True, shaw_shared_heads=True)),
+    "shaw_near": (dict(shaw_key_term=True), dict(shaw_key_term=True, shaw_near=1)),
 }
 
 

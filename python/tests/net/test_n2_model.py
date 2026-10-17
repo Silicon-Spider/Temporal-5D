@@ -37,6 +37,7 @@ N2_FLAG_SETS = {
     ),
     "bilinear_smolgen_chunked": dict(board_pair_smolgen=True, smolgen_form="board_bilinear", typed_edge_bias=True, attn_impl="chunked"),
     "no_table_routing_typed": dict(displacement_bias=False, routing_table=True, typed_edge_bias=True),
+    "b17_shaw_routing_typed": dict(shaw_key_term=True, routing_table=True, typed_edge_bias=True, attn_impl="chunked"),
 }
 
 
