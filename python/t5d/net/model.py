@@ -4,15 +4,22 @@
 initialisation scale (spec section 15.2: "never zeros or near-zeros"), deterministically
 from the seed. ``T5DNet(batch)`` returns a ``NetOutput`` with every head.
 
-Initialisation (implementation choice; the spec is silent):
+Initialisation (implementation choice where the spec is silent):
 
 * Linear weights ``N(0, 1/fan_in)`` (LeCun normal) - attention logits then have
-  roughly unit spread at initialisation, so attention is far from uniform; the two
-  residual-output projections of every block (attention out, FFN out) are further
-  scaled by ``1/sqrt(2L)`` (GPT-2), keeping the residual stream bounded over depth.
-* Linear biases ``N(0, init_bias_std)``; embeddings and the "not a square" vector
-  ``N(0, init_embed_std)``; LayerNorm gain ``1 + N(0, init_norm_std)`` and bias
-  ``N(0, init_bias_std)`` - near the identity, but not it, so that no parameter is
+  roughly unit spread at initialisation, so attention is far from uniform. Under
+  pre-norm (F5's v1) the two residual-output projections of every block (attention out,
+  FFN out) are further scaled by ``1/sqrt(2L)`` (GPT-2), keeping the residual stream
+  bounded over depth. Under the post-norm arm (ablation 6y: "post-norm with DeepNet
+  initialisation") DeepNet's initialisation replaces that scaling: the value,
+  attention-output and both FFN projections are drawn at gain ``beta = (8L)^(-1/4)``, the
+  query and key projections at gain 1 (Wang et al. 2022, Figure 2 - whose pseudocode
+  takes Xavier normal as its example of the base initialisation, "it can be replaced with
+  other standard initialization"; LeCun normal is this trunk's, and for the square
+  projections the two coincide).
+* Linear biases ``N(0, init_bias_std)`` (the Q, K and V projections have none - F5);
+  embeddings and the "not a square" vector ``N(0, init_embed_std)``; RMSNorm gains
+  ``1 + N(0, init_norm_std)`` - near the identity, but not it, so that no parameter is
   zero or constant (section 15.2: zeros "make distinct paths agree trivially").
 * B6 bias tables and B11's typed-edge scalars ``N(0, init_table_std)``; learned register
   coordinates (option ``learned_angle``) at the board centre plus ``N(0, init_table_std)``
@@ -83,7 +90,7 @@ from .scope import BlockCausalScope
 from .smolgen import BoardPairSmolgen
 from .state import TOKEN_BOARD_REGISTER, TOKEN_GLOBAL_REGISTER, Batch
 from .structure import TypedEdgeBias, build_structure
-from .trunk import Trunk
+from .trunk import RMSNorm, Trunk
 
 
 @dataclass
@@ -180,9 +187,18 @@ class T5DNet(nn.Module):
     #: and before the flag-gated modules (``_init_weights``).
     _D8_MODULES = ("embed.acting", "submit")
 
+    #: The trunk projections that DeepNet's initialisation draws at gain beta under
+    #: post-norm ("ffn", "v_proj", "out_proj" in Wang et al. 2022, Figure 2), and those the
+    #: GPT-2 scaling shrinks under pre-norm (the residual outputs).
+    _DEEPNET_SCALED = ("attn.v_proj", "attn.out_proj", "ffn.lin_in", "ffn.lin_out")
+    _GPT2_SCALED = ("attn.out_proj", "ffn.lin_out")
+
     def _init_weights(self) -> None:
         cfg = self.cfg
-        residual_scale = 1.0 / math.sqrt(2 * cfg.n_layers)
+        if cfg.norm_placement == "post":
+            scaled, scale = self._DEEPNET_SCALED, cfg.deepnorm_beta
+        else:
+            scaled, scale = self._GPT2_SCALED, 1.0 / math.sqrt(2 * cfg.n_layers)
         with torch.no_grad():
             for name, module in self.named_modules():
                 if name.split(".")[0] == "smolgen":
@@ -191,16 +207,15 @@ class T5DNet(nn.Module):
                     continue  # drawn after the rest (below)
                 if isinstance(module, nn.Linear):
                     std = module.in_features**-0.5
-                    if name.endswith("attn.out_proj") or name.endswith("ffn.lin_out"):
-                        std *= residual_scale
+                    if name.startswith("trunk.") and name.endswith(scaled):
+                        std *= scale
                     nn.init.normal_(module.weight, 0.0, std)
                     if module.bias is not None:
                         nn.init.normal_(module.bias, 0.0, cfg.init_bias_std)
                 elif isinstance(module, nn.Embedding):
                     nn.init.normal_(module.weight, 0.0, cfg.init_embed_std)
-                elif isinstance(module, nn.LayerNorm):
+                elif isinstance(module, RMSNorm):
                     nn.init.normal_(module.weight, 1.0, cfg.init_norm_std)
-                    nn.init.normal_(module.bias, 0.0, cfg.init_bias_std)
             nn.init.normal_(self.embed.not_square, 0.0, cfg.init_embed_std)
             if self.register_xy is not None:
                 self.register_xy.normal_(0.0, cfg.init_table_std)

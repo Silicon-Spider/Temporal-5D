@@ -2,11 +2,15 @@
 
 Tolerances. BF16 keeps an 8-bit significand (relative rounding ~2^-9 = 0.2%). With the
 residual stream and norms in FP32 and only matmuls and attention in BF16, the measured
-gap after 16 layers (default configuration, model seeds 0, 5 and 11, N = 2, 17, 60) is
-at most 0.24% RMS on the unit-RMS final-normed trunk output (max 1.5%), 0.0035 on value
-logits, 0.009 on policy logits and 1.6e-4 on the value mean. The bounds below sit 3-12x
-above those measurements, so they catch a precision bug (e.g. RoPE computed in BF16,
-where an angle of 400 rad carries ~1.5 rad of error) without flaking.
+gap after 16 layers (default configuration - F5's pre-norm RMSNorm - model seeds 0, 5 and
+11, ``synthetic_state(30 + N, N)`` for N = 2, 17, 60; re-measured after F5) is at most
+0.23% RMS on the unit-RMS final-normed trunk output (max 1.3%), 0.0037 on value logits,
+0.0088 on policy logits and 1.9e-4 on the value mean. The bounds below sit 3-11x above
+those measurements, so they catch a precision bug (e.g. RoPE computed in BF16, where an
+angle of 400 rad carries ~1.5 rad of error) without flaking. F5's post-norm arm (ablation
+6y) is held to the same bounds; its measured gap is smaller (0.06% RMS, max 0.7%; 8.3e-4
+on value logits, 2.5e-3 on policy logits, 1.9e-5 on the value mean), since every
+sublayer's output is normed in FP32.
 """
 
 from __future__ import annotations
@@ -24,11 +28,11 @@ POLICY_LOGITS_MAX = 0.03
 VALUE_MEAN_MAX = 2e-3
 
 
-@pytest.fixture(scope="module")
-def pair():
+@pytest.fixture(scope="module", params=["pre", "post"], ids=["v1", "post-norm"])
+def pair(request):
     return (
-        build_model(NetConfig(trunk_dtype="fp32"), seed=5).eval(),
-        build_model(NetConfig(trunk_dtype="bf16"), seed=5).eval(),
+        build_model(NetConfig(trunk_dtype="fp32", norm_placement=request.param), seed=5).eval(),
+        build_model(NetConfig(trunk_dtype="bf16", norm_placement=request.param), seed=5).eval(),
     )
 
 

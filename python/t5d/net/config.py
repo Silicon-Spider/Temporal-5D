@@ -42,6 +42,12 @@ The build rules (spec section 15.1) decide what else appears here:
   action's policy logit read from a global register. Where the input enters
   (``acting_player_input``), which register the logit is read from (``submit_register``) and
   how (``submit_head``) are not specified - parameters with placeholder defaults.
+* **F5** (committed, CHECKPOINT 6, section 9.3): every trunk norm RMSNorm-style - no
+  mean-centring, no bias (``trunk.RMSNorm``) - no biases in the Q, K and V projections
+  (``qkv_bias``), the attention-output and FFN biases kept (``out_ffn_bias``), pre-norm;
+  ablation 6y's arm, Lc0's post-norm with DeepNet initialisation, is
+  ``norm_placement="post"`` (the placement is provisional), with the arm's unstated
+  details as placeholders.
 * **Where the spec is silent, ambiguous or contradictory on a committed-class point**
   the choice is a parameter and the default is marked as a placeholder, not a decision:
   ``board_register_spatial`` (section 5.3 under RoPE), ``global_register_pairs`` (what
@@ -61,8 +67,8 @@ The build rules (spec section 15.1) decide what else appears here:
   threat relations never become tokens, section 14.4).
 
 Implementation choices where the spec is silent and the point is not committed-class
-(norm, activation, initialisation scale, RoPE frequencies, head internals) are
-documented beside their fields and in the modules that use them.
+(activation, initialisation scale, RoPE frequencies, head internals) are documented
+beside their fields and in the modules that use them.
 """
 
 from __future__ import annotations
@@ -125,6 +131,9 @@ SUPERSESSION_SCOPES: tuple[str, ...] = ("causal_past", "past_and_epoch_history")
 ACTING_PLAYER_INPUTS: tuple[str, ...] = ("global_registers", "all_tokens")
 #: How D8's submit logit is read from its global register (stage N5; ``heads.SubmitHead``).
 SUBMIT_HEADS: tuple[str, ...] = ("linear", "pointer")
+#: Where each sublayer's norm sits (F5; ``trunk.py``): "pre" (the v1) or "post" (ablation
+#: 6y's arm: Lc0's post-norm with DeepNet initialisation).
+NORM_PLACEMENTS: tuple[str, ...] = ("pre", "post")
 
 
 @dataclass(frozen=True)
@@ -228,11 +237,35 @@ class NetConfig:
     #: 24% of the key boards on average (implementation choice; 1.0 gathers every block).
     attn_sparse_max_fraction: float = 0.5
 
-    # --- trunk details (implementation choices; spec silent) ---
-    #: Pre-norm residual blocks with LayerNorm; FFN activation GELU (exact erf form).
+    # --- F5: normalisation and biases (committed; section 9.3, CHECKPOINT 6; trunk.py) ---
+    #: Where each sublayer's norm sits (``NORM_PLACEMENTS``). Register F5: "pre-norm for v1,
+    #: Lc0's post-norm with DeepNet initialisation as the arm" (ablation 6y; the placement is
+    #: provisional, the RMSNorm-style norms are committed):
+    #:   "pre"  - the v1: ``x + Attn(N(x))`` then ``x + FFN(N(x))``, and a final norm before
+    #:            the heads;
+    #:   "post" - 6y's arm, DeepNorm (Wang et al. 2022, "DeepNet: Scaling Transformers to
+    #:            1,000 Layers"): ``x <- N(alpha x + Attn(x))`` then ``x <- N(alpha x + FFN(x))``,
+    #:            alpha = ``deepnorm_alpha``, with DeepNet's initialisation (``deepnorm_beta``;
+    #:            ``model._init_weights``). PLACEHOLDERS for what neither section 9.3 nor the
+    #:            register states (spec issue 201) - DeepNet's published constants for an
+    #:            L-layer stack, not Lc0's (whose code may not be consulted); no final norm (the
+    #:            last block's FFN norm is the output's, as in a post-norm encoder); no norm on
+    #:            the embedding before block 0; board-pair smolgen reads the attention's input,
+    #:            which is then the block's input.
+    norm_placement: str = "pre"
+    #: Every trunk norm is RMSNorm-style (F5: "no mean-centring, no bias"; ``trunk.RMSNorm``):
+    #: ``x / sqrt(mean(x^2) + eps) * g`` with a learned gain ``g``. The gain is implied by
+    #: "RMSNorm-style" and eps is not stated (spec issue 200): eps 1e-5, kept from stage N1.
     norm_eps: float = 1e-5
-    #: Linear layers carry biases.
-    linear_bias: bool = True
+    #: Biases in the Q, K and V projections. F5 (committed): "no biases in the Q, K and V
+    #: projections" (section 9.3). True is no arm of any ablation - 6y's arms are both
+    #: without them; it exists so that the switch F5 turned off stays named.
+    qkv_bias: bool = False
+    #: Biases in the attention output projection and both FFN matrices. Section 9.3 keeps
+    #: them: Chessformer's networks "also keep their FFN and attention-output biases, as
+    #: here". Register F5 does not say so, and its "no bias" belongs to the norms (spec issue
+    #: 200): True is that reading of section 9.3, not a new decision.
+    out_ffn_bias: bool = True
 
     # --- embeddings (A2, A3, B8, section 5.3) ---
     #: Hidden width of the small MLP that embeds Delta-t-to-present.
@@ -307,13 +340,15 @@ class NetConfig:
     submit_head: str = "linear"
 
     # --- initialisation (section 15.2: realistic scale, never zeros) ---
-    #: Linear weights: normal with std 1/sqrt(fan_in) (LeCun); the attention output and
-    #: FFN output projections are further scaled by 1/sqrt(2 * n_layers) (GPT-2 style).
+    #: Linear weights: normal with std 1/sqrt(fan_in) (LeCun). Under pre-norm the attention
+    #: output and FFN output projections are further scaled by 1/sqrt(2 * n_layers) (GPT-2
+    #: style); under post-norm DeepNet's ``deepnorm_beta`` scales the value, attention-output
+    #: and both FFN projections instead (``model._init_weights``).
     init_embed_std: float = 0.5
-    #: Linear and LayerNorm biases.
+    #: Linear biases.
     init_bias_std: float = 0.02
-    #: LayerNorm gains are 1 + N(0, init_norm_std): not the identity, so that a path that
-    #: dropped or misplaced a norm's affine could not agree with one that kept it.
+    #: RMSNorm gains are 1 + N(0, init_norm_std): not the identity, so that a path that
+    #: dropped or misplaced a norm's gain could not agree with one that kept it.
     init_norm_std: float = 0.1
     #: Learned bias tables (B6, B11's typed-edge scalars) and learned register coordinates' noise.
     init_table_std: float = 0.1
@@ -565,6 +600,20 @@ class NetConfig:
         return self.d_head // 2
 
     @property
+    def deepnorm_alpha(self) -> float:
+        """DeepNorm's residual up-scaling under ``norm_placement="post"``: ``(2L)^(1/4)`` for an
+        L-layer stack (Wang et al. 2022, Figure 2's table: encoder-only ``(2N)^(1/4)``,
+        decoder-only ``(2M)^(1/4)`` - the same for one stack). A constant, not learned."""
+        return (2 * self.n_layers) ** 0.25
+
+    @property
+    def deepnorm_beta(self) -> float:
+        """DeepNet's initialisation down-scaling under ``norm_placement="post"``: ``(8L)^(-1/4)``
+        (Wang et al. 2022, Figure 2), the gain on the value, attention-output and FFN
+        projections' initialisation; the query and key projections keep gain 1."""
+        return (8 * self.n_layers) ** -0.25
+
+    @property
     def head_roles(self) -> tuple[str, ...]:
         """Each head's attention role: the mask it carries ("dense" for none).
 
@@ -601,6 +650,8 @@ class NetConfig:
             raise ValueError("rope_ranges must be 4 positive numbers")
         if self.trunk_dtype not in ("bf16", "fp32"):
             raise ValueError("trunk_dtype must be 'bf16' or 'fp32'")
+        if not self.norm_eps > 0:
+            raise ValueError("norm_eps must be positive")
         if self.attn_impl not in ATTN_IMPLS:
             raise ValueError(f"attn_impl must be one of {ATTN_IMPLS}")
         if self.attn_chunk < 1 or self.attn_block_boards < 1:
@@ -665,6 +716,7 @@ class NetConfig:
         if self.smolgen_form not in SMOLGEN_FORMS:
             raise ValueError(f"smolgen_form must be one of {SMOLGEN_FORMS}")
         for name, options in (
+            ("norm_placement", NORM_PLACEMENTS),
             ("attn_scope", ATTN_SCOPES),
             ("causal_past", CAUSAL_PASTS),
             ("frozen_features", FROZEN_FEATURES),

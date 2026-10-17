@@ -1,0 +1,200 @@
+"""The trunk's normalisation and biases (F5; spec section 9.3) and ablation 6y's post-norm arm.
+
+F5: every norm RMSNorm-style - no mean-centring, no bias - no Q/K/V biases, the
+attention-output and FFN biases kept, the output heads' biases kept; pre-norm for v1,
+"Lc0's post-norm with DeepNet initialisation" as 6y's arm (DeepNorm and DeepNet's
+initialisation, Wang et al. 2022). Each block is computed by hand here, from the formulas.
+"""
+
+from __future__ import annotations
+
+import math
+
+import pytest
+import torch
+import torch.nn.functional as F
+
+from t5d.net import NetConfig, build_model, collate, parameter_breakdown, synthetic_state
+from t5d.net.smolgen import BoardPairSmolgen
+from t5d.net.trunk import RMSNorm
+from tests.net.test_params import V1_TOTAL
+
+# --- the norm ------------------------------------------------------------------------------------
+
+
+def _norm(d: int, seed: int) -> RMSNorm:
+    norm = RMSNorm(d, eps=1e-5)
+    with torch.no_grad():
+        norm.weight.copy_(1.0 + 0.1 * torch.randn(d, generator=torch.Generator().manual_seed(seed)))
+    return norm
+
+
+def test_rmsnorm_is_the_root_mean_square_formula():
+    """``x / sqrt(mean(x^2) + eps) * g``: against the formula in FP64 and against PyTorch's own
+    ``rms_norm`` (an implementation independent of this one); a gain and nothing else."""
+    norm = _norm(16, 0)
+    x = 3.0 * torch.randn(3, 5, 16, generator=torch.Generator().manual_seed(1))
+    out = norm(x)
+    x64 = x.double()
+    expected = x64 / torch.sqrt(x64.pow(2).mean(dim=-1, keepdim=True) + 1e-5) * norm.weight.double()
+    assert out.dtype == torch.float32
+    assert torch.allclose(out.double(), expected, atol=1e-6)
+    assert torch.allclose(out, F.rms_norm(x, (16,), norm.weight, 1e-5), atol=1e-6)
+    assert [name for name, _ in norm.named_parameters()] == ["weight"], "a gain only: no bias"
+
+
+def test_rmsnorm_does_not_centre():
+    """No mean-centring: adding the same constant to every component moves the output - a
+    LayerNorm would not see it - while a positive rescale does not, up to eps (relative
+    ~eps / (2 mean x^2), about 5e-6 here)."""
+    norm = _norm(16, 2)
+    x = torch.randn(4, 16, generator=torch.Generator().manual_seed(3))
+    out = norm(x)
+    assert not torch.allclose(norm(x + 0.7), out, atol=1e-2), "a shift moves the output: no centring"
+    assert torch.allclose(F.layer_norm(x + 0.7, (16,)), F.layer_norm(x, (16,)), atol=1e-5), "the contrast: a LayerNorm ignores it"
+    assert torch.allclose(norm(4.0 * x), out, rtol=2e-5, atol=1e-6)
+
+
+def test_rmsnorm_runs_in_fp32_under_autocast():
+    """G1: the norms stay FP32 inside the BF16 trunk's autocast - a BF16 input is normalised in
+    FP32, and the output is the FP32 computation of the same values, bit for bit."""
+    norm = _norm(32, 4)
+    x = torch.randn(6, 32, generator=torch.Generator().manual_seed(5)).to(torch.bfloat16)
+    with torch.autocast("cpu", dtype=torch.bfloat16):
+        out = norm(x)
+    assert out.dtype == torch.float32
+    assert torch.equal(out, norm(x.float()))
+
+
+# --- where the norms and biases are --------------------------------------------------------------
+
+
+@pytest.mark.parametrize("placement", ["pre", "post"])
+def test_norms_and_biases_where_section_9_3_puts_them(placement):
+    """No LayerNorm anywhere; every trunk norm an ``RMSNorm`` (2 per block, plus the final
+    norm under pre-norm); no Q/K/V biases; the attention-output and FFN biases kept; every
+    Linear outside the trunk - the output heads ("small and FP32"), the embedding's Delta-t
+    MLP, smolgen - keeps its bias, and smolgen has no norm of its own."""
+    model = build_model(NetConfig(n_layers=3, norm_placement=placement, board_pair_smolgen=True), seed=0)
+    assert not any(isinstance(m, torch.nn.LayerNorm) for m in model.modules())
+    norms = [m for m in model.trunk.modules() if isinstance(m, RMSNorm)]
+    assert len(norms) == 2 * 3 + (placement == "pre")
+    assert all(isinstance(m, RMSNorm) for m in model.modules() if "norm" in type(m).__name__.lower())
+    for block in model.trunk.blocks:
+        attn, ffn = block.attn, block.ffn
+        assert attn.q_proj.bias is None and attn.k_proj.bias is None and attn.v_proj.bias is None, "no Q/K/V biases"
+        assert attn.out_proj.bias is not None and ffn.lin_in.bias is not None and ffn.lin_out.bias is not None
+    outside = {name: m for name, m in model.named_modules() if isinstance(m, torch.nn.Linear) and not name.startswith("trunk.")}
+    assert {"value.hidden", "value.out", "policy.src", "aux.wdl", "embed.dt_in", "smolgen.context"} <= set(outside)
+    assert all(m.bias is not None for m in outside.values()), "the heads, the embedding and smolgen keep their biases"
+    assert isinstance(model.smolgen, BoardPairSmolgen)
+    assert not any(isinstance(m, RMSNorm) for m in model.smolgen.modules())
+
+
+def test_the_bias_switches():
+    """``qkv_bias`` and ``out_ffn_bias`` - F5's split of the old single switch - each add exactly
+    their biases: 3 x 256 per layer on Q, K and V; 256 + 2048 + 256 per layer on the output
+    projection and the FFN."""
+    cfg = dict(n_layers=2)
+    base = parameter_breakdown(build_model(NetConfig(**cfg), seed=0))
+    with_qkv = parameter_breakdown(build_model(NetConfig(qkv_bias=True, **cfg), seed=0))
+    without = parameter_breakdown(build_model(NetConfig(out_ffn_bias=False, **cfg), seed=0))
+    assert with_qkv["trunk.attention"] - base["trunk.attention"] == 2 * 3 * 256
+    assert base["trunk.attention"] - without["trunk.attention"] == 2 * 256
+    assert base["trunk.ffn"] - without["trunk.ffn"] == 2 * (2048 + 256)
+    model = build_model(NetConfig(qkv_bias=True, out_ffn_bias=False, **cfg), seed=0)
+    attn = model.trunk.blocks[0].attn
+    assert attn.q_proj.bias is not None and attn.out_proj.bias is None and model.trunk.blocks[0].ffn.lin_in.bias is None
+
+
+# --- the two placements, block by block ----------------------------------------------------------
+
+
+def _by_hand(model, batch, alpha: float | None = None):
+    """The trunk computed from the formulas, block by block: pre-norm ``x + Attn(N(x))``, ``x +
+    FFN(N(x))``, final norm; post-norm ``N(alpha x + Attn(x))``, ``N(alpha x + FFN(x))``."""
+    ctx = model.make_context(batch)
+    x = model.embed(batch)
+    post = model.cfg.norm_placement == "post"
+    alpha = model.cfg.deepnorm_alpha if alpha is None else alpha
+    for block in model.trunk.blocks:
+        if post:
+            x = block.norm_attn(alpha * x + block.attn(x, ctx.for_layer(x)))
+            x = block.norm_ffn(alpha * x + block.ffn(x))
+        else:
+            h = block.norm_attn(x)
+            x = x + block.attn(h, ctx.for_layer(h))
+            x = x + block.ffn(block.norm_ffn(x))
+    return x if post else model.trunk.final_norm(x)
+
+
+@pytest.mark.parametrize("smolgen", [False, True], ids=["plain", "smolgen"])
+@pytest.mark.parametrize("placement", ["pre", "post"])
+def test_each_placement_is_its_formula(placement, smolgen):
+    """The trunk equals its formula under each placement; under post-norm alpha = (2L)^(1/4)
+    scales the residual (alpha = 1 computes something else) and there is no final norm."""
+    cfg = NetConfig(trunk_dtype="fp32", n_layers=3, norm_placement=placement, board_pair_smolgen=smolgen)
+    model = build_model(cfg, seed=3).eval()
+    batch = collate([synthetic_state(50, 4), synthetic_state(51, 2)])
+    trunk = model(batch, return_trunk=True).trunk
+    assert torch.allclose(trunk, _by_hand(model, batch), atol=1e-6)
+    if placement == "post":
+        assert cfg.deepnorm_alpha == pytest.approx(6**0.25) and model.trunk.final_norm is None
+        assert not torch.allclose(trunk, _by_hand(model, batch, alpha=1.0), atol=1e-3), "the residual is scaled"
+    else:
+        assert model.trunk.final_norm is not None
+
+
+def test_the_post_norm_output_is_normed():
+    """Under post-norm the last block's FFN norm is the trunk's output norm: each token's output
+    is that norm's gain times a unit-RMS vector."""
+    model = build_model(NetConfig(trunk_dtype="fp32", n_layers=2, norm_placement="post"), seed=4).eval()
+    batch = collate([synthetic_state(52, 3)])
+    out = model(batch, return_trunk=True).trunk[0][batch.valid[0]]
+    gain = model.trunk.blocks[-1].norm_ffn.weight
+    unit = out / gain
+    assert torch.allclose(unit.pow(2).mean(dim=-1), torch.ones(unit.shape[0]), atol=1e-4)
+
+
+# --- initialisation -------------------------------------------------------------------------------
+
+
+def test_deepnet_initialisation_under_post_norm():
+    """6y's arm: DeepNet's initialisation (Wang et al. 2022, Figure 2) - the value,
+    attention-output and both FFN projections at beta = (8L)^(-1/4) times the base (LeCun)
+    std, the query and key projections at the base. Under pre-norm the GPT-2 1/sqrt(2L) on
+    the two residual outputs instead, and nothing else scaled."""
+    n_layers = 16
+    beta = (8 * n_layers) ** -0.25
+    assert NetConfig().deepnorm_beta == pytest.approx(beta)
+    gpt2 = 1.0 / math.sqrt(2 * n_layers)
+    pre = build_model(NetConfig(), seed=0)
+    post = build_model(NetConfig(norm_placement="post"), seed=0)
+    d, ffn = 256**-0.5, 2048**-0.5
+    expected = {  # name: (pre-norm std, post-norm std)
+        "attn.q_proj": (d, d),
+        "attn.k_proj": (d, d),
+        "attn.v_proj": (d, beta * d),
+        "attn.out_proj": (gpt2 * d, beta * d),
+        "ffn.lin_in": (d, beta * d),
+        "ffn.lin_out": (gpt2 * ffn, beta * ffn),
+    }
+    for layer in (0, 15):
+        for name, (s_pre, s_post) in expected.items():
+            full = f"trunk.blocks.{layer}.{name}.weight"
+            assert float(pre.get_parameter(full).std()) == pytest.approx(s_pre, rel=0.02), (full, "pre")
+            assert float(post.get_parameter(full).std()) == pytest.approx(s_post, rel=0.02), (full, "post")
+
+
+def test_post_norm_parameter_count():
+    """The post-norm arm has no final norm: 256 parameters fewer than the v1."""
+    assert parameter_breakdown(build_model(NetConfig(norm_placement="post"), seed=0))["total"] == V1_TOTAL - 256
+
+
+def test_norm_options_are_validated():
+    with pytest.raises(ValueError, match="norm_placement"):
+        NetConfig(norm_placement="sandwich").validate()
+    with pytest.raises(ValueError, match="norm_eps"):
+        NetConfig(norm_eps=0.0).validate()
+    with pytest.raises(TypeError):
+        NetConfig(linear_bias=True)  # split into qkv_bias and out_ffn_bias (F5)
