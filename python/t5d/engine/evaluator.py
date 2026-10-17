@@ -154,9 +154,11 @@ def _split(out: NetOutput, states: Sequence[PositionState]) -> list[Evaluation]:
 
 class NetworkEvaluator:
     """The dense path: ``collate`` and one forward per ``max_batch`` positions. ``scope``
-    overrides the network's attention scope (None: its own). The model is used as given
-    (put it in ``eval()`` mode); positions converted with other register counts than the
-    network's are re-laid out (``state.relayout``, exact)."""
+    overrides the network's attention scope (None: its own); the network refuses a
+    block-causal override of a dense-scope network while its B16 is switched on
+    (``T5DNet.make_context``: its frozen boards would lose their status with no B16 table to
+    give it back). The model is used as given (put it in ``eval()`` mode); positions converted
+    with other register counts than the network's are re-laid out (``state.relayout``, exact)."""
 
     def __init__(self, model: T5DNet, *, max_batch: int = 32, device: torch.device | str | None = None, scope: str | None = None) -> None:
         if max_batch < 1:

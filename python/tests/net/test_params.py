@@ -68,8 +68,8 @@ def test_f2_larger_arm_preset():
 
 def test_the_cached_configuration_adds_b16s_table():
     """B16 (committed with the cached configuration): the block-causal network carries its status
-    table - 8 heads x 19 Delta-t bins x 2 timeline statuses = 304, shared by the layers (4,864 per
-    layer; placeholders, spec issues 213-214) - and the v1, dense, none."""
+    table - 8 heads x 19 Delta-t bins x 2 timeline statuses = 304, shared by the layers (4,864 with
+    one table per layer, 16 x 304; placeholders, spec issues 213-214) - and the v1, dense, none."""
     v1 = parameter_breakdown(build_model(NetConfig()))
     assert v1["attn.status"] == 0 and v1["total"] == V1_TOTAL
     cached = parameter_breakdown(build_model(NetConfig(attn_scope="block_causal")))

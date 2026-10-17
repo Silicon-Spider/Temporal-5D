@@ -23,10 +23,14 @@ classes, restricted - inside B15's 45 exact board-distance classes (|Delta-timel
 |Delta-time| <= 4 half-turns) the file-rank offsets with |Delta-file|, |Delta-rank| <=
 ``shaw_near`` (2: 25 per class, 1,125 in all), plus every line class of B15's (368 at its
 defaults: one per direction and step beyond the exact classes): 1,493 classes - section 4.1's
-~1,400, and the reading that gives both of its cost figures (``cost.shaw_flops``: 0.51 x QK^T at
+~1,400, and a reading that gives both of its cost figures (``cost.shaw_flops``: 0.51 x QK^T at
 44 boards, 9.4% at 240). Every other pair - the far slices' cells, near-class offsets beyond the
 window, and every pair with a register or a global register (no (file, rank), B8) - has no class
-and gets no term (placeholder too).
+and gets no term (placeholder too). It is not the only such reading: the nearest board-distance
+classes with their full 15 x 15 slices - say the same board and the four one timeline or one turn
+away, 5 x 225 + 368 = 1,493 - give the same count and the same costs, and cover other pairs (every
+relation on one board, which this window cuts at two squares; none two boards away). Issue 217
+puts the two to the user; the other would be another ``compact_classes``, not a setting.
 
 **The query** is the unrotated one - the projection's output, before RoPE: the class is a function
 of the pair's displacement, so ``q_i . R[c]`` is relative; a rotated query would make it depend

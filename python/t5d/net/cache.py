@@ -100,7 +100,9 @@ activated (its K/V carry intrinsic features only, and its digest no status). A f
 own rows never carry them (``AttnStructure.for_frozen_rows``). A refreshed epoch's history
 boards are biased like any other at every node below the anchor; at the anchor itself the
 evaluation is the refresh pass (section 7.9), so there they are left out - in ``prepare`` and
-in ``reference_output`` alike.
+in ``reference_output`` alike. That is one rule in both, which comparing them cannot test:
+``test_cache.py`` checks it against an oracle of its own (B16's table changed, the anchor's
+evaluation stays bit for bit and every node below it moves).
 
 **Not supported** (``CachedEvaluator`` refuses them): B12's ``board_bilinear`` form, which
 reads every board's per-board register states at every layer - frozen boards' hidden

@@ -26,7 +26,10 @@ head's entry for the key board's status. Nowhere else:
   At the anchor itself the evaluation is the refresh pass (section 7.9: "at the root the
   two-level mask reduces to full dense attention"), so B16 adds nothing there
   (``T5DNet.make_context(status_bias=False)``, which ``cache.py`` passes for the anchor's own
-  state in a refreshed epoch; spec issue 216).
+  state in a refreshed epoch; spec issue 216);
+* not in a network of the dense scope, which has no table - and a block-causal forward of such
+  a network, which would strip its frozen boards' status from their inputs with nothing in its
+  place, is refused while ``status_key_bias`` is on (``T5DNet.make_context``).
 
 **A key board's status**: its Delta-t-to-present ``h - h_present`` in half-turns, binned, and
 its timeline's active/inactive flag (A3's) - ``bin * 2 + active``. Head/superseded is no status
@@ -37,7 +40,7 @@ it; spec issues 213-215):
   half-turns, one per doubling up to 128, then clamped, past and future apart - 19 bins, the
   time buckets B6 used and smolgen keeps (``buckets.signed_log_bucket``);
 * one table shared by all layers (``status_bias_per_layer=False``), as B11's scalars are: 8
-  heads x 19 bins x 2 = 304 parameters (4,864 per layer);
+  heads x 19 bins x 2 = 304 parameters (4,864 with one table per layer, 16 x 304);
 * ``N(0, status_bias_init_std = 0.1)``, the scale of B11's and B15's tables, drawn from a
   generator of B16's own (``model.b16_seed``): switching B16 changes no other weight.
 
