@@ -164,7 +164,7 @@ struct Pending {
   std::vector<Step> path;
   std::size_t slot = 0;
   NodeId leaf = kNoNode;
-  std::size_t request = 0;  // its evaluation: one per distinct state in the batch
+  std::size_t request = 0;  // its evaluation: one per distinct (state, count) in the batch (A6)
 };
 
 enum class Selected : std::uint8_t { Pending, Done, Collision, DeadEnd };

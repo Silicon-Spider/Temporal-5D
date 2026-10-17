@@ -20,9 +20,13 @@ the spec describes the change.
   in progress). No state records that count - one `GameState` can be a turn start, or one
   or two moves into an action, by different paths - so `expand` takes it from its caller
   (`expand(state, options, out, moves_made)`; the three-argument form is a turn start's).
-  Eager, O(timelines), allocation-free. Nothing in the truth's sources changes
-  (`T5D_TRUTH_SOURCES`: the state machine, movegen, check, legal ... untouched), so the
-  code signature of M17's measured configuration is commit 1's.
+  Eager, O(timelines), allocation-free. This commit changes none of the truth's sources
+  (`T5D_TRUTH_SOURCES`: the state machine, movegen, check, legal ... untouched). Commit 1
+  changed two of them, `prover.hpp` and `prover.cpp` (the line the prover reports, only:
+  no verdict, distance or node count changes), so after this component the truth's code
+  signature differs from main's - as main's already differs from M17's (d96d6d9; 9be6f04
+  typed the prover's hash constants). The main loop runs the Lazy SMP timing test before
+  merging.
 - `engine/include/t5d/capi.h`, `src/capi.cpp`, `src/capi_internal.hpp`: `t5d_expansion`
   gains `mandatory_remaining`, `optional_playable`, `moves_made` after D8's three fields
   (appended: every older offset kept; `t5d_layout` reports them); a `t5d_game` counts the
@@ -47,8 +51,10 @@ the spec describes the change.
   a count of 0 where the root's obligations are met (a turn start owes a board, T5);
   `root_moves_made()`. `src/capi_search.cpp`, `include/t5d/capi_search.h`:
   `t5d_search_new` and `_new_sharing` take the game handle's count and refuse a
-  `turn_start` that contradicts it; `t5d_search_root_game` and `_leaf_state` hand the
-  count back. `src/selfplay.cpp` carries the count.
+  `turn_start` that contradicts it; `t5d_search_root_game` hands the root's count back (a
+  game handle with it); a leaf's count is `t5d_leaf.expansion.moves_made`
+  (`t5d_search_leaf_state` returns a `t5d_state`, which holds no count). `src/selfplay.cpp`
+  carries the count.
 - Python mirror (`python/t5d/engine`): `capi.py`'s `CExpansion` and `GameSummary` (the
   layout check passes); `Expansion.mandatory_remaining`, `optional_playable`,
   `moves_made`; `GameInfo.moves_made` and `turn_start`; `Search`'s `turn_start` defaults
@@ -72,18 +78,59 @@ the spec describes the change.
   cache key, the de-duplication or MCGS identity without the count). `test_capi_game.cpp`,
   `test_capi_search.cpp`: the handle's count and the search's; the layouts. Python:
   `test_binding.py` (the layout, the counts through apply, copy, submit and replay),
-  `test_search_api.py` (the root's count). Engine 554 of 554 tests (`--werror`); the long
-  tests it touches 7 of 7 (the recount over 77,926 states); network 817 passed, 2 skipped
-  (`T5D_REQUIRE_ENGINE=1`); ruff clean; `verify` ok.
+  `test_search_api.py` (the root's count). Engine 554 of 554 tests (`--werror`) - after a
+  first full run of the final tree that ended with exit 1 and no summary line, inside
+  `scanner_lazy_smp_store_refuses_contradictions` (a test this component does not touch:
+  a crash in the shared stores on Windows, reproduced and traced at review - below); the
+  long tests it touches 7 of 7 (the recount over 77,926 states); network 817 passed, 2
+  skipped (`T5D_REQUIRE_ENGINE=1`); ruff clean; `verify` ok.
 - `engine/README.md`: expansion (h), the game handle's count, MCGS identity and the
   evaluation cache with the count, the step API's `turn_start`, the readings.
   `docs/BUILD_LOG.md`: register A6 (engine side built, tested), C11, C14; spec issues
   143-145 (A6's arithmetic is not the rules' count; the two undefined counts read; §15.4's
   turn structure and the count); proposed edits 116-118.
+- Review fixes, the same day (after 7bccea6). The C API's root count was tested only at
+  0 and 1, which the old flag gives too: a search reading the handle's count as the flag
+  passed every engine and Python test. `capi_search_takes_the_moves_made_from_the_game_a6`
+  and `test_the_root_takes_a_count_the_turn_start_flag_cannot_give_a6` now build a search,
+  and one sharing its cache, two moves into a three-board action: the root counts 2 (its
+  game handle and its own leaf), a move below it 3. `advance_moves`' exact count (the
+  root's + 1) and the tree it carries were untested - with a count of 1 there, a
+  pondered subtree was dropped and the intermediate root miscounted, with no test
+  failing; `mcts_advancing_a_move_at_a_time_carries_the_tree_at_each_count_a6` advances
+  move by move (counts 1 and 2, then the submission's 0) and replays a two-move reply
+  along the pondered line by `advance_action`, under tree and graph search, each new root
+  the node the tree held, with its visits. Each fails on its mutant (the count read as the
+  flag: 5 failed checks in C++, and the Python twin; `advance_moves` giving 1: 12). The
+  docs that still said a batch asks one evaluation per distinct state and evaluations are
+  cached per (state, epoch) - `capi_search.h` (`t5d_search_gather`, `_set_epoch`,
+  `t5d_leaf.key`, `_leaf_state`), `mcts.hpp` (`EvalRequest::key`, `EvalCache`, `gather`,
+  `epoch`, `batch_duplicates`), `mcts.cpp`, the README, `evaluator.py` and `search.py`'s
+  `LeafView.key` - now say (state, moves made in its action, epoch), and that neither the
+  key nor a leaf's `t5d_state` identifies its input; the README's list of game functions
+  is whole again, and its summary of the search's tests names A6's. This entry no longer
+  says `_leaf_state` hands the count back, or that M17's configuration keeps commit 1's
+  signature (above), and commit 1's entry gives the true reason its line stays
+  incomplete beyond depth 1, and §11.3 for Lazy SMP. The abort
+  above, reproduced: `scanner_lazy_smp_store_refuses_contradictions` segfaults in 11 of
+  600 runs here, in `ConcurrentSolvedStore::put` (gdb) - with MSYS2 ucrt64 g++ 16.2 a
+  `std::shared_mutex` that several threads take for the first time at once does not
+  always exclude a writer (a standalone test; none once each lock has been taken once,
+  and none with `std::mutex`), and taking each shard's lock once at construction (an
+  experiment, reverted) gave 0 in 600. Not fixed here: the scanner's and the prover's
+  stores are among the truth's sources, M17 was measured on this toolchain, and Guard and
+  Hunt's stores share the hazard - logged for the main loop (BUILD_LOG: H17's row,
+  "Parked, and why"). Proposed edit 119: §11.3's full key, §15.2's purity row, §7.9 and
+  §8.5, which state the identity edit 200 leaves out. Checks after the fixes: engine 555
+  of 555 (`--werror`); the five-thread Guard tests 25 runs in a row (5 through
+  `build.py`, 20 direct under the Python suite's load); network 818 passed, 2 skipped
+  (`T5D_REQUIRE_ENGINE=1`); ruff clean; `verify` ok.
 - Spec: §2.3 and register A6 (edits 116, 117; issues 143, 144); §8.5, §8.7 and register
   C11, C14, H18 - the count in identity and the cache's key, the main loop's proposed
-  edit 200 (issue 302); §15.2's A6 row (built) and purity row (C19-C21: holds with the
-  count); §15.4's turn structure (edit 118, issue 145).
+  edit 200 (issue 302); §11.3's full key, §15.2's purity row (C19-C21: as built, the same
+  state, count and epoch give the same evaluation), §7.9 and §8.5's purity sentence (edit
+  119); §15.2's A6 row (built); §15.4's turn structure (edit 118, issue 145); §11.3's Lazy
+  SMP (H17: the shared stores' lock on Windows, logged, no edit).
 
 ### 2026-10-17 - Engine A6, first commit: Guard's five-thread test against its contract; the prover reports the line of a thread that searched
 
@@ -108,10 +155,15 @@ the spec describes the change.
   thread's tree holds it - always at depth 1, whose stores start empty (the thread that
   proved the root first searched it, and its line ends at the mated defender). Beyond
   that the documented contract stays: a line can still stop where every tree reached a
-  node another thread (or an earlier depth) solved; completing it from the certificate
-  or the store would mean recording certificates in Guard (a cost 6b″'s configuration
-  did not pay) or enumerating actions to find the continuation (not cheap). So the
-  tests check the contract.
+  node another thread (or an earlier depth) solved. A certificate does not complete it:
+  it holds the attacker's proving actions only, so the line takes the attacker's step
+  past such a node from it (`proof_line` does, when one is recorded) and stops at the
+  defender's turn - continuing needs the defender's longest defence, which only an
+  enumeration of the defender's actions finds (not cheap). So the tests check the
+  contract. (Corrected at review: this entry and e554da0's message first gave as the
+  reason that Guard records no certificate, 6b″ having measured it without one - but
+  6b″'s tool ran Guard with `record_certificate` on, for its cross-check against E4
+  (M17's "every refutation confirmed by E4"); only Guard's default records none.)
 - `engine/include/t5d/prover.hpp`, `guard.hpp`, `engine/README.md` ("The proof's line"):
   `ProveResult::line`, `first_action` and `GuardResult::line` say whose line is reported
   and when it is complete.
@@ -127,8 +179,9 @@ the spec describes the change.
   (`T5D_TRUTH_SOURCES`), so the code signature changes; the committed truth's
   provenance records none ("unrecorded"), and no verdict, distance or node count
   changes. The main loop runs the Lazy SMP timing test before merging.
-- Spec: §11.4 (Guard; register H42) and §11.1's df-pn with Lazy SMP (H17, H19) - no part
-  of the spec describes the proof's line or which thread reports it; no edit proposed.
+- Spec: §11.4 (Guard; register H42), §11.1's df-pn, and §11.3's Lazy SMP (H17) and
+  immediate export (H19) - no part of the spec describes the proof's line or which
+  thread reports it; no edit proposed.
 
 ### 2026-10-17 - Build log: each lane's numbers render as written; issue 142 waits on the user
 
