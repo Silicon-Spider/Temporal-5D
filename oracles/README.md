@@ -350,9 +350,15 @@ however the CLI's run ended.
 
 | Tier | When | Sources | Notes |
 |---|---|---|---|
-| `commit` | every push and pull request | `ftxi`, `notation` | three positions per record in the driver check (below); a **smoke test**: it gates no ruleset, and an engine that contradicts no oracle passes it (H47, "The engine contract") |
-| `nightly` | every night | all six | the naive searches get shorter budgets; they time out on wide positions by design; it **fails an engine that contradicts nothing but comes through no ruleset** |
+| `commit` | every push and pull request | `ftxi`, `notation` | three positions per record in the driver check (below); a **smoke test**: it gates no ruleset, and an engine with no finding against it passes it (H47, "The engine contract") |
+| `nightly` | every night | all six | the naive searches get shorter budgets; they time out on wide positions by design; it **fails an engine with no finding against it that comes through no ruleset** |
 | `release` | before any generator release or proof-channel enablement | all six | the longest budgets - the golden files are recorded under them - and it **fails unless an engine was compared and came through at least one named variant** |
+
+What a tier vouches for follows from what it runs, never from its name: only a
+tier that runs every oracle search over the whole corpus gates a ruleset ("The
+engine contract"). So only such a tier may require an engine
+(`require_engine = true`): `gate.toml` is refused if any other tier does, since
+it could gate nothing, and so no engine could come through a named variant in it.
 
 Workflows: `.github/workflows/oracle-commit.yml` and `oracle-nightly.yml` (the
 latter also runs the release tier, by hand or on a `generator-v*` tag). Each runs
@@ -853,23 +859,30 @@ so the two positions play alike - but the harness does not know the rules, and
 does not count an answer about another position.
 
 Only a tier that runs every oracle search over the whole corpus (`nightly`,
-`release`) gates a ruleset, and there an engine that contradicts nothing but comes
-through no ruleset has **failed**: agreeing with the oracles about nothing is not a
-pass. Any other tier - `commit`, with its one rules oracle - is a **smoke test**
-(H47): an engine that contradicts no oracle passes its differential, whether or
-not a ruleset met the conditions above with that tier's oracles alone, and what it
-says of the rulesets is never a gating verdict. Its last lines say `engine
-differential: SMOKE TEST - PASSED` (or `FAILED`) and that the tier gates nothing;
-every ruleset is listed as `NOT gated`, one that met the conditions with the
-tier's oracles alone saying so; and the report holds no ruleset under `gated`, and
-the reason under `smoke_test`. An engine that declines every record contradicts
-nothing, so it passes the smoke test - and fails the nightly tier. Why the commit
-tier gates nothing: its one rules oracle, ftxi, is ruled wrong in places (R1);
-where the engine contradicts it, its answer confirms nothing, and only another
-oracle's answer can confirm the engine there - so whether some ruleset is gated is
-asked only of the tiers that run them all (H47, CHECKPOINT 6). In every tier a
-contradiction fails the engine, and so does an answer a known divergence records
-as an oracle's error (a telltale, H34, above).
+`release`) gates a ruleset, and there an engine with no finding against it that
+comes through no ruleset has **failed** (`engine-nothing-gated`): agreeing with the
+oracles about nothing is not a pass. Any other tier - `commit`, which runs one
+rules oracle over the commit records - is a **smoke test** (H47): an engine with no
+finding against it passes its differential, whether or not a ruleset met the
+conditions above with that tier's oracles alone, and what it says of the rulesets
+is never a gating verdict. Its last lines say `engine differential: SMOKE TEST -
+PASSED` (or `FAILED`) and that the tier gates nothing; every ruleset is listed as
+`NOT gated`, one that met the conditions with the tier's oracles alone saying so;
+and the report holds no ruleset under `gated`, and the reason under `smoke_test`.
+An engine that declines every record has no finding against it, so it passes the
+smoke test - and fails the nightly tier. The gate tells the two kinds of tier
+apart by what a tier runs (`Tier.full_strength`), never by its name or by a count
+of oracles. H47 (CHECKPOINT 6, Q-A) gives the reason "gating needs two oracles";
+the conditions above ask for one oracle behind each record, not two - whether a
+ruleset should need two is put to the user (spec issue 122 in
+`docs/BUILD_LOG.md`).
+
+In every tier the engine fails on an unexplained divergence - a disagreement with
+an oracle that `known-divergences.toml` does not record - on an answer a known
+divergence records as an oracle's error (a telltale, H34, above), and on a breach
+of the contract, an `error` or a time-out (above). A divergence on record fails no
+tier: there the oracle's answer confirms nothing, and only another oracle's answer
+can confirm the engine.
 
 The proof channel may be enabled only by a complete run of a tier that requires an
 engine and runs every oracle search over the whole corpus (the `release` tier),
@@ -977,7 +990,15 @@ python oracles/harness.py gate --tier nightly --source cwmtt --record cwmtt/stan
 ```
 
 A gate run restricted with `--source` or `--record` is marked partial and can never
-enable the proof channel.
+enable the proof channel. It keeps its tier's rule (H47; a reading - spec issue
+124 in `docs/BUILD_LOG.md`): a restricted run of `nightly` or `release` names as
+gated the rulesets that met the gating conditions with only the sources and
+records it ran, so its verdicts are no stronger than those, and it fails an engine
+with no finding against it that came through no ruleset; a restricted run of
+`commit` is a smoke test, like the whole tier. So once an engine is configured, a
+run of sources that cannot gate a ruleset fails such an engine on
+`engine-nothing-gated` - the example above among them: cwmtt gives no check
+verdict.
 
 `observe` can also ask a source's driver for two diagnostics, which it prints after
 the report as one JSON object per line. They are never compared and never

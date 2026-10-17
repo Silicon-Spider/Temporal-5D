@@ -853,7 +853,7 @@ for game records.
 | H43 | built, tested; adopted under 100 boards | Hunt (E9): 69.0% / 63.6% of the truth's mates under 50 / 50-99 boards (6b″) - adopted there; 35.0% at 100-199 and 0 of 1 at 200+ - not adopted; §13: proofs there come only from the search's solver. Export refused until H41/H23 |
 | H44 | built in part | The audit lane's tools: the certificate checker (E4 alone) and `t5d-hunt-truth` (E9); the decision sampler, the offline proof runner and the per-range report are E10's |
 | H45 | not built (rule) | The adversarial league (M5) |
-| H47 | built, tested | The check that some ruleset is gated (`engine-nothing-gated`, and `GateResult.ok`'s test of it) runs only in a tier that runs every oracle search over the whole corpus (`Tier.full_strength`: nightly, release). Any other tier - commit - is a smoke test: an engine that contradicts no oracle passes it, gated or not, and the summary (`engine differential: SMOKE TEST - ...`) and the report (`smoke_test`; nothing under `gated`) say that it gates nothing and why. A contradiction fails every tier; the release tier's named-variant rule, the proof-channel line and parse mode are unchanged. Not yet run with the engine configured (`[engine] command` is still empty). Spec issues 122-123, proposed edit 98 |
+| H47 | built, tested | The check that some ruleset is gated (`engine-nothing-gated`, and `GateResult.ok`'s test of it) runs only in a tier that runs every oracle search over the whole corpus (`Tier.full_strength`: nightly, release) - keyed to what a tier runs, never its name (the self-tests pin both directions). Any other tier - commit - is a smoke test: an engine with no finding against it passes, gated or not, and the summary (`engine differential: SMOKE TEST - ...`) and the report (`smoke_test`; nothing under `gated`) say that it gates nothing and why. In every tier an unexplained divergence, a telltale or a contract breach fails the engine. `gate.toml` is refused if a tier that is not full strength sets `require_engine` (it could never pass); a tier that requires an engine reads only what its run may state as gated, and the summary says when it came through no named variant. A run restricted with `--source`/`--record` keeps its tier's rule (issue 124). The release tier's named-variant rule, the proof-channel line and parse mode are unchanged. Not yet run with the engine configured (`[engine] command` is still empty). Spec issues 122-124, proposed edit 98 |
 | H48 | not started | Before the proof-channel sign-off: the naive searches' release budgets raised and the golden files re-recorded twice, on a quiet machine, so that no proof-channel check is vacuous (`verify`'s 17 `proof-channel-vacuous` notes) |
 | H15 | built, tested | The scanner's deterministic single-thread mode; the search's synchronous mode and digest (E6a; the digest in the C API) |
 | H16, H25, H29 | not built (rule) | Refused |
@@ -1496,16 +1496,31 @@ decision), and what is parked.
     other tier a ruleset that met the gating conditions with its oracles alone is
     reported as not gated, with that reason (`gate.SMOKE_REASON`). No two-oracle
     requirement was added: it would also change what nightly and release gate (the
-    variants one oracle reads) - a decision for the user. Proposed edit 98.
+    variants one oracle reads) - a decision for the user. Put to the user: should a
+    ruleset be gated only when two oracles stand behind it, in every tier? Until it
+    is ruled, proposed edit 98 gives both texts.
 123. **H47 is silent on an engine compared with nothing in a smoke test.** As
-    built, an engine that contradicts no oracle passes the commit tier's
+    built, an engine with no finding against it passes the commit tier's
     differential even when it declined every record (nothing was compared, so
-    nothing was contradicted); nightly and release fail it (`engine-nothing-gated`),
+    nothing was found); nightly and release fail it (`engine-nothing-gated`),
     and parse mode keeps its own floor (`engine-nothing-compared`) in every tier.
     The self-tests pin it (`test_gate_live`, `GateRunTests`), so the consequence is
     visible. Put to the user: should the smoke test hold full mode to parse mode's
     floor - the engine replayed at least one record, and an oracle's answer was
     compared with it? Nothing is parked on it.
+124. **H47 is silent on a run of a full-strength tier restricted to some sources
+    or records** (`gate --tier nightly --source ftxi`; "tiers that run every
+    oracle"). Built - the literal reading: the run keeps its tier's rule
+    (`GateResult.full_strength` is the tier's; the run is marked partial). It names
+    as gated what met the gating conditions with the sources and records it ran -
+    one oracle can (issue 122) - and fails an engine with no finding against it
+    that came through no ruleset, so a run of sources that cannot gate (cwmtt alone:
+    no check verdict) always fails such an engine. The proof channel stays off for
+    every partial run, and CI runs none, so no verdict anyone relies on depends on
+    it. The other reading: a run that leaves out one of its tier's sources is a
+    smoke test and gates nothing. Pinned (`GateRunTests.test_a_restricted_run_keeps_its_tiers_rule`)
+    and documented (`oracles/README.md`, "Other commands"). Put to the user;
+    nothing is parked on it.
 
 ## Proposed spec edits
 
@@ -1793,19 +1808,31 @@ says now, what it should say, why.
     needs a GPU evaluation rate (issue 120); until then the CPU figure (N5's 6.9 F1
     evaluations/s on CPU) is the only one, and the re-check is deferred.
 98. **§11.0 "Tiered CI" (from "The commit tier is a smoke test") and register
-    H47**: §11.0 says "The commit tier is a smoke test: a ruleset is gated only when
-    two or more oracles answer for it, so the check that *some* ruleset is gated
-    runs only in the tiers that run every oracle — nightly and release (CHECKPOINT
-    6)"; H47 ends "since gating needs two oracles". Proposed for §11.0: "The commit
-    tier is a smoke test: it runs one rules oracle, and gates no ruleset - an engine
-    that contradicts no oracle passes it, and the gate's output says that the tier
-    gates nothing. A ruleset is gated, and the check that *some* ruleset is gated
-    runs, only in a tier that runs every oracle search over the whole corpus —
-    nightly and release (CHECKPOINT 6). A contradiction fails every tier." For H47:
-    "... the check that some ruleset is gated runs only in tiers that run every
-    oracle search over the whole corpus (nightly, release); the commit tier gates
-    nothing, and says so." Why: the gate as built has no two-oracle rule (issue 122);
-    this is the rule H47 is built as. If issue 123 is ruled, its floor goes here too.
+    H47 - pending the user's ruling on issue 122** (and on issues 123-124, whose
+    answers go here too). §11.0 says "The commit tier is a smoke test: a ruleset is
+    gated only when two or more oracles answer for it, so the check that *some*
+    ruleset is gated runs only in the tiers that run every oracle — nightly and
+    release (CHECKPOINT 6)"; H47 ends "since gating needs two oracles". The gate as
+    built has no two-oracle rule (issue 122), so the text depends on the ruling:
+    (a) **No two-oracle rule** (as built). §11.0: "The commit tier is a smoke test:
+    it does not run every oracle search over the whole corpus, and gates no
+    ruleset; an engine with no finding against it passes it, and the gate's output
+    says that the tier gates nothing. A ruleset is gated, and the check that *some*
+    ruleset is gated runs, only in a tier that runs every oracle search over the
+    whole corpus — nightly and release (CHECKPOINT 6). In every tier an unexplained
+    divergence, a telltale or a breach of the engine contract fails the engine."
+    H47: "... the check that some ruleset is gated runs only in tiers that run
+    every oracle search over the whole corpus (nightly, release); the commit tier
+    gates nothing, and says so."
+    (b) **A two-oracle rule.** §11.0's sentence and H47's reason stay, and the
+    gate gains the condition: a ruleset is gated only when two independent oracles
+    stand behind each of its records (`Gated.oracles` ≥ 2), in every tier - so the
+    commit tier, with one rules oracle, could gate nothing anyway. It changes what
+    nightly and release gate: a ruleset with a record that only one oracle follows
+    as far as the engine goes is gated in no tier, and the proof channel can never
+    be enabled for it - which rulesets, measured once the engine is configured.
+    Why: §11.0 and H47 give a two-oracle rule as the reason the commit tier gates
+    nothing; the gate has none, and whether to add one is the user's decision.
 
 ## Session log
 

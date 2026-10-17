@@ -9,10 +9,15 @@ Tiers (design spec 11.0):
            through at least one named variant
 
 Only a tier that runs every oracle search over the whole corpus (nightly,
-release) gates a ruleset, and fails an engine that contradicted nothing but came
-through none. Any other tier - commit - is a smoke test (H47): an engine that
-contradicts no oracle passes it, and its summary and report say that it gates
-nothing. A contradiction fails every tier.
+release) gates a ruleset, and there an engine with no finding against it that
+came through no ruleset fails (engine-nothing-gated). Any other tier - commit - is
+a smoke test (H47): an engine with no finding against it passes, and the summary
+and report say that the tier gates nothing. In every tier the engine fails on an
+unexplained divergence (one known-divergences.toml does not record), a telltale or
+a breach of the engine contract. The rule is keyed to what a tier runs, never to
+its name; a run restricted to some sources or records keeps its tier's rule, and
+only a tier that runs every oracle search over the whole corpus may require an
+engine (config.load refuses any other: it could gate nothing).
 
 Each run reads what it compares against once, verified (snapshot.py, H33); then
 requires 100% of each tier's required set of recorded answers (stability.py,
@@ -189,7 +194,8 @@ class GateResult:
     parse: ParseAgreement | None = None  # an engine compared in parse mode
     partial: bool = False
     require_engine: bool = False
-    # The tier runs every oracle search over the whole corpus. A tier's name promises nothing.
+    # The tier runs every oracle search over the whole corpus. A tier's name promises nothing. A run restricted to
+    # some sources or records keeps its tier's value (and is marked partial).
     full_strength: bool = False
     margin: float = 1.0
     calibration: Probe | None = None
@@ -206,17 +212,22 @@ class GateResult:
 
     @property
     def variants(self) -> dict[str, Gated]:
-        """The gated rulesets that are named variants - what a proof could be about."""
-        return {ruleset: gated for ruleset, gated in self.gated.items() if ruleset != CUSTOM_POSITIONS}
+        """The gated rulesets that are named variants - what a proof could be about.
+
+        Only what this run may state as gated (`verdicts`): in a smoke test, none.
+        """
+        gated, _ = self.verdicts
+        return {ruleset: item for ruleset, item in gated.items() if ruleset != CUSTOM_POSITIONS}
 
     @property
     def smoke_test(self) -> bool:
         """Was an engine compared in full mode by a tier that does not run every oracle search over the whole corpus?
 
-        Such a tier is a smoke test (H47): it gates nothing. An engine that
-        contradicted no oracle passes it, whether or not some ruleset met the
-        gating conditions with the tier's oracles alone, and its summary and
-        report say that the tier gates nothing.
+        Such a tier is a smoke test (H47): it gates nothing. An engine with no
+        finding against it passes it, whether or not some ruleset met the gating
+        conditions with the tier's oracles alone, and its summary and report say
+        that the tier gates nothing. Keyed to what the tier runs (full_strength),
+        never to its name.
         """
         return self.engine != "not configured" and self.engine_mode == "full" and not self.full_strength
 
@@ -243,13 +254,16 @@ class GateResult:
                 return not self.require_engine
             if self.require_engine:
                 # A tier that requires an engine requires it to come through a
-                # variant a proof could be about.
+                # variant a proof could be about - one this run may state as
+                # gated, so never in a smoke test (config.load refuses a tier that
+                # requires an engine and is one).
                 return bool(self.variants)
-            # In a tier that runs every oracle, an engine that contradicted
-            # nothing and came through no ruleset was not compared with
-            # anything. Any other tier is a smoke test that gates nothing (H47):
-            # contradicting nothing passes it.
-            return bool(self.gated) or not self.full_strength
+            # In a tier that runs every oracle search over the whole corpus, an
+            # engine with no finding against it that came through no ruleset has
+            # not passed: agreeing with the oracles about nothing is not a pass.
+            # Any other tier is a smoke test that gates nothing (H47): an engine
+            # with no finding against it passes.
+            return bool(self.gated) or self.smoke_test
         return not self.require_engine
 
     @property
@@ -781,6 +795,8 @@ def run_tier(
     all_records = corpus.load()
     # Everything compared against is read once, here, and verified (H33).
     frozen = snapshot.take()
+    # What the tier runs, not what this run ran: a run restricted with --source or --record keeps its tier's rule
+    # (H47) and is marked partial below, which keeps the proof channel shut (spec issue 124 in the build log).
     result = GateResult(tier=tier_name, require_engine=tier.require_engine, full_strength=tier.full_strength,
                         engine_mode=cfg.engine_mode, margin=cfg.stability.margin)
     result.sections += static_checks(lock, cfg, all_records, frozen, include_untracked=include_untracked)
@@ -893,10 +909,12 @@ def run_tier(
             if not engine_findings and not result.gated and tier.full_strength:
                 # Agreeing with the oracles about nothing is not a pass - in a tier
                 # that runs every oracle search over the whole corpus. Any other
-                # tier is a smoke test that gates nothing (H47), and says so.
+                # tier is a smoke test that gates nothing (H47), and says so. Keyed
+                # to what the tier runs, never to its name.
                 engine_findings.append(Finding(
                     "engine-nothing-gated",
-                    "the engine contradicted no oracle, but it came through no ruleset either: "
+                    "nothing was found against the engine (no unexplained divergence, telltale or breach of the "
+                    "contract), but it came through no ruleset either: "
                     + "; ".join(f"{ruleset} - {reason}" for ruleset, reason in sorted(result.ungated.items()))))
         result.engine_sections.append(("engine vs oracles", engine_findings))
         result.engine = "failed" if engine_findings else "passed"
@@ -1001,6 +1019,10 @@ def summarise(result: GateResult) -> str:
         lines.append("this tier requires an engine: FAILED")
     elif result.require_engine and result.engine_mode == "parse":
         lines.append("this tier requires an engine compared on the rules, not in parse mode: FAILED")
+    elif result.require_engine and result.engine == "passed" and not result.variants:
+        # No finding says why: the engine passed the differential, but this run states no named variant gated.
+        lines.append("this tier requires an engine that came through a named variant: FAILED - it came through none "
+                     "(custom positions are evidence about no variant)")
     return "\n".join(lines)
 
 
