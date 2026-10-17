@@ -15,7 +15,46 @@ M5 - building it would break a rule).
 
 ## Where things stand
 
-### Current state (2026-10-04) - read this first
+### Recovery after the lost machine (2026-10-17) - read this first
+
+The development machine was lost after 2026-10-04 and rebuilt (same hardware, a
+fresh Windows profile; "Environment" below, machine row `dev-r` in
+`docs/MEASUREMENTS.md`). The repository came back as a fresh clone of the remote,
+whose only branch is `main` at 3b33942 - the last commit of 2026-10-04 - with all
+four submodules at their pinned commits and unmodified.
+
+**Survived** (all of it on `main`): everything "On main" in "Current state
+(2026-10-04)" below - the rules engine, the search core, verification v3's
+components, the network N1-N5, C24, the oracle harness and the golden files,
+t0database, and this log.
+
+**Lost - never pushed - and to be redone:**
+- **The gate with the engine configured** (branch
+  `worktree-agent-a1a2868a52f6c83b9`, 61e9aa8): 113 triaged known divergences
+  (110 R1, 3 notation), no engine defect, nightly passed. Redone under H47 (step 1a
+  of the CHECKPOINT 6-7 plan).
+- **Engine E10** (it was running in a worktree): Hunt under 100 boards, the df-pn
+  settling scans under 50 and the asset map wired into the search, Guard's
+  re-search hook (off), the offline audit lane's tooling (H44). Redone in step 2.
+- Regenerable caches only: `oracles/.cache/` (rebuilt: every oracle built,
+  GHC 9.10.3 fetched by `build --bootstrap`) and its reports (the 2026-10-02
+  triage and CHECKPOINT 1 evidence - regenerable by the commands that made them);
+  `build/`. Anything else done after 3b33942 and not pushed cannot be recovered
+  from the repository; the lost branches above are the ones known.
+
+**Main verified on `dev-r` (2026-10-17, 3b33942):** the engine from clean with
+`--werror` (MSYS2 g++ 16.2.0, the `.venv`'s CMake 4.4.3 and Ninja 1.13.2) - 526 of
+526 tests; the network - `ruff check` and `ruff format --check` clean, pytest
+**775 passed, 2 skipped** (the two by design: no `T5D_RECORDS`, and the anchored
+global registers arm) in 8 min 26 s with `T5D_REQUIRE_ENGINE=1`; `verify` ok (its
+17 `proof-channel-vacuous` notes are H48's, as before); `selftest` 623 tests, 1
+skipped (symlinks cannot be created by this Windows profile; CI runs it); `gate
+--tier commit` ok - ftxi 8256 of 8256 and notation 3012 of 3012 required values
+reproduced; calibration 10.00 s against the recording machine's 8.47 s (1.18x).
+**The comparison with the last green CI run waits on `gh auth login`** (the
+repository is private; `gh` has no login on the rebuilt machine).
+
+### Current state (2026-10-04)
 
 **On main (CI green):** the rules engine (E1-E5c, E7: Q4 as ruled, D8's submit
 action, H46), the search core (E6a, reviewed: PUCT/MCGS, both D2 arms, the solver
@@ -385,8 +424,28 @@ threads reach at least one thread's sum (one retry on a shared machine).
 - Development machine: Windows 11, AMD Ryzen 9 9900X (12 cores / 24 threads,
   AVX-512 incl. BF16), 32 GB RAM, AMD Radeon RX 9070 XT. **No CUDA**, so the
   network runs on CPU PyTorch (2.13.0+cpu) here; every GPU figure in §15.3 is
-  measured on CPU and labelled so. No Rust, no MSVC: MSYS2 ucrt64 g++ 16.2, Python
-  3.14 (`py`), Node 24.
+  measured on CPU and labelled so.
+- **Rebuilt 2026-10-17 after the lost machine** (same hardware; a fresh Windows
+  profile; machine row `dev-r` in `docs/MEASUREMENTS.md` - figures before the loss
+  are `dev`): Windows 11 Pro 10.0.26300; **MSYS2 ucrt64 g++ 16.2.0** (Rev3 - the
+  MSYS2 tree survived the loss), put first on PATH for every build
+  (`$env:PATH = "C:\msys64\ucrt64\bin;" + $env:PATH`, or `CXX`): a WinLibs
+  GCC 16.2.0 is also installed and comes first on the user's PATH; **Python
+  3.14.7** (`py`; 3.12.10 is also installed); the project `.venv` on 3.14.7
+  (`--system-site-packages`) with torch 2.13.0+cpu, numpy 2.5.2, pytest, ruff
+  0.16.5, cmake 4.4.3 and ninja 1.13.2 (the versions CI and the harness pin);
+  Node 24.20.0 / npm 11.19.0; git 2.55; gh 2.102. Rust is installed but unused; no
+  MSVC. Commits are made as the repository's existing author, set repo-locally.
+- **Rebuilding from nothing** (what was done on 2026-10-17, in order): install
+  git, Python 3.14, Node 24 and MSYS2 with `pacman -S mingw-w64-ucrt-x86_64-gcc`;
+  clone, then `py oracles/harness.py sync`; `py -3.14 -m venv
+  --system-site-packages .venv`; `.venv\Scripts\python -m pip install
+  --index-url https://download.pytorch.org/whl/cpu torch==2.13.0` and `pip install
+  numpy==2.5.2 pytest ruff==0.16.5 cmake==4.4.3 ninja==1.13.2`; `py
+  oracles/harness.py build --bootstrap` (fetches GHC 9.10.3 into the cache); then
+  the checks: `py engine/build.py --clean --werror --test`, from `python/` `ruff
+  check .`, `ruff format --check .` and `T5D_REQUIRE_ENGINE=1 python -m pytest -q`,
+  `py oracles/harness.py verify`, `selftest` and `gate --tier commit`.
 - CI: GitHub Actions, ubuntu-24.04 (`.github/workflows/`). The repository is
   private, so Actions minutes are billed: the nightly tier runs every night.
 - Oracle toolchains live in `oracles/.cache/` (`build --bootstrap`); never on the
@@ -1709,3 +1768,18 @@ says now, what it should say, why.
 
 - **2026-10-01** - Pre-flight passed. Design documents moved into `docs/design/`
   (they had been kept untracked as `Specification documents/`). Step 1 started.
+- **2026-10-04 to 2026-10-17 - the machine was lost.** Work after 3b33942 that
+  had not been pushed went with it: the gate-with-engine branch and E10 ("Recovery
+  after the lost machine" above). The user rebuilt the machine's general tools and
+  cloned the repository; the design documents of CHECKPOINTS 6 and 7 arrived from
+  upstream, uncommitted.
+- **2026-10-17 - recovery** (the user's brief, step 0). The register holds every
+  row the brief names (A7, A8, B15, B17, D9, F5, F6, G9, I12-I20, M19-M24); the clone
+  is of the right remote, the four submodules at their pins and clean, `git
+  ls-remote origin` and `git push --dry-run origin HEAD` work. Installed, each
+  asked first: Python 3.14.7 (winget, user scope), the project `.venv`; GHC 9.10.3
+  into the harness cache by `build --bootstrap`; the repository's author identity
+  set repo-locally. MSYS2's g++ 16.2.0 survived and is the compiler, as before.
+  Main verified (figures above). Not yet: the comparison with the last green CI
+  run (no `gh` login). Rule from now on (M23): every working branch is pushed
+  after each commit, and takes main by merge, never rebase.

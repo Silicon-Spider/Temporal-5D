@@ -22,7 +22,19 @@ the run for the user.
 
 | Name | Hardware | Software |
 |---|---|---|
-| dev | AMD Ryzen 9 9900X (12 cores / 24 threads, AVX-512 with BF16), 32 GB RAM; AMD Radeon RX 9070 XT, unused (no CUDA) | Windows 11; MSYS2 ucrt64 g++ 16.2; Python 3.14; PyTorch 2.13.0+cpu |
+| dev | AMD Ryzen 9 9900X (12 cores / 24 threads, AVX-512 with BF16), 32 GB RAM; AMD Radeon RX 9070 XT, unused (no CUDA) | Windows 11; MSYS2 ucrt64 g++ 16.2; Python 3.14; PyTorch 2.13.0+cpu - every figure up to 2026-10-04 |
+| dev-r | The same machine, rebuilt after its loss (2026-10-17); GPU driver 32.0.31041.1004, the GPU still unused by the CPU figures | Windows 11 Pro 10.0.26300 (a fresh install); MSYS2 ucrt64 g++ 16.2.0 (Rev3); CMake 4.4.3 and Ninja 1.13.2 from the project `.venv`; Python 3.14.7; PyTorch 2.13.0+cpu; NumPy 2.5.2; Node 24.20.0; GHC 9.10.3 (harness cache) - every figure from 2026-10-17 |
+
+`dev` and `dev-r` are different conditions: the operating system was reinstalled and
+the Python patch level and CMake changed, so a figure from one is never compared with
+one from the other as if they were the same measurement - a figure that matters is
+re-measured on `dev-r`. The first sign is the gate's calibration probe (a fixed
+ftxi:naive workload, `[calibration]` in `oracles/gate.toml`): on `dev-r`'s first
+commit-tier run, right after the rebuild with no other job of the build running,
+it took **10.00 s against 8.47 s on the machine that recorded the golden files
+(1.18x)**. The golden files were recorded on `dev`; their costs decide which values
+each tier requires, so a re-recording (H48) is done on a quiet `dev-r` (the
+quiet-machine block).
 
 ## §15.3 cost figures
 

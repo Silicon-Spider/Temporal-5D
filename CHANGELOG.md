@@ -10,6 +10,24 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-17 - Recovery after the lost machine: the toolchain rebuilt, main verified, the losses listed
+
+- `docs/BUILD_LOG.md`: "Recovery after the lost machine" at the top - what survived
+  (everything on `main` at 3b33942), what was lost because it was never pushed (the
+  gate-with-engine branch with its 113 triaged known divergences; engine E10) and
+  where each is redone; main's verification on the rebuilt machine (engine 526 of
+  526, network 775 passed and 2 skipped, `verify`, `selftest`, the commit-tier
+  gate); the comparison with the last green CI run still to do. "Environment"
+  rewritten for the rebuilt machine, with the recipe that rebuilt it. The session
+  log records the loss and the recovery.
+- `docs/MEASUREMENTS.md`: machine row `dev-r` (the same hardware, reinstalled;
+  Python 3.14.7, CMake 4.4.3, the same g++ 16.2.0 and PyTorch 2.13.0+cpu): figures
+  from before and after the loss carry different conditions; the gate's calibration
+  probe ran 1.18x the recording machine's time on the first run after the rebuild.
+- Spec: none - the record of a recovery; §15.3's conditions rule (every figure with
+  its machine) is what the new machine row serves. Register M23 (push every branch
+  after each commit) is the rule followed from here.
+
 ### 2026-10-04 - Build log: the current state, the work remaining to §15.5, and the register brought up to date
 
 - `docs/BUILD_LOG.md`: a "Current state" section at the top (what is on main, the
