@@ -290,7 +290,8 @@ def test_token_scope_matches_brute_force(reading):
 N2_FLAGS = {
     "v1": dict(move_graph_heads=0),
     "b9": dict(),
-    "all": dict(routing_table=True, typed_edge_bias=True, board_pair_smolgen=True, binned_bias=True, rope_per_head=True),
+    "all": dict(routing_table=True, typed_edge_bias=True, board_pair_smolgen=True, rope_per_head=True),
+    "no_table": dict(displacement_bias=False),
     "regs_free_anchored": dict(board_register_spatial="position_free", global_register_pairs="anchored"),
 }
 
@@ -391,15 +392,18 @@ def test_frozen_tokens_read_only_their_past(reading):
 
 def test_structure_opens_live_rows_only():
     """Under the block-causal scope the move graph, the relations head, B11's typed biases and
-    B12's smolgen leave frozen query rows alone (``scope.py``); live rows keep them all."""
-    flags = dict(routing_table=True, typed_edge_bias=True, board_pair_smolgen=True, binned_bias=True, trunk_dtype="fp32", n_layers=1)
+    B12's smolgen leave frozen query rows alone (``scope.py``); live rows keep them all, and
+    every row keeps B15's displacement bias - geometry."""
+    from tests.net.test_displacement import reference_bias
+
+    flags = dict(routing_table=True, typed_edge_bias=True, board_pair_smolgen=True, trunk_dtype="fp32", n_layers=1)
     state = synthetic_state(51, 12, n_timelines=3)
     batch = collate([state])
     causal = build_model(NetConfig(attn_scope="block_causal", **flags), seed=5).eval()
     dense = build_model(NetConfig(**flags), seed=5).eval()
     h = torch.randn(1, batch.n_tokens, 256, generator=torch.Generator().manual_seed(0))
-    ctx_c = causal.make_context(batch).for_layer(h)
-    ctx_d = dense.make_context(batch).for_layer(h)
+    ctx_c = causal.make_context(batch).for_layer(h, 0)
+    ctx_d = dense.make_context(batch).for_layer(h, 0)
     rows_c, bias_c = ctx_c.structure.rows(0, batch.n_tokens)
     rows_d, bias_d = ctx_d.structure.rows(0, batch.n_tokens)
     live = ctx_c.scope.live_tokens[0]
@@ -413,10 +417,8 @@ def test_structure_opens_live_rows_only():
         else:
             assert torch.equal(rows_c[0, head], rows_d[0, head]), role
         assert torch.equal(rows_c[0, head][live], rows_d[0, head][live]), role
-    # Frozen rows keep B6's geometric biases and nothing else; live rows keep everything.
-    b6 = causal.make_context(batch).structure.base_pair_table
-    board_idx = ctx_c.structure.board_idx[0]
-    geometric = b6[0][:, board_idx][:, :, board_idx]
+    # Frozen rows keep B15's geometric bias and nothing else; live rows keep everything.
+    geometric = reference_bias(causal, batch, 0)[0]
     assert torch.allclose(bias_c[0][:, ~live], geometric[:, ~live])
     assert torch.allclose(bias_c[0][:, live], bias_d[0][:, live])
     assert not torch.allclose(bias_d[0][:, ~live], geometric[:, ~live])

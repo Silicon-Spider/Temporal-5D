@@ -19,13 +19,12 @@ from tests.net.test_params import V1_TOTAL
 N2_FLAG_SETS = {
     "b9_default": dict(),
     "routing_typed_smolgen": dict(routing_table=True, typed_edge_bias=True, board_pair_smolgen=True),
-    "mg4_all_b5_b6": dict(
+    "mg4_all_b5": dict(
         move_graph_heads=4,
         typed_edge_bias=True,
         typed_edge_directed=True,
         board_pair_smolgen=True,
         rope_per_head=True,
-        binned_bias=True,
         rope_roles_source="masks",
     ),
     "routing_regs_free_anchored": dict(
@@ -36,9 +35,8 @@ N2_FLAG_SETS = {
         move_graph_direction="forward",
         board_pair_smolgen=True,
     ),
-    "bilinear_smolgen_chunked": dict(
-        board_pair_smolgen=True, smolgen_form="board_bilinear", binned_bias=True, typed_edge_bias=True, attn_impl="chunked"
-    ),
+    "bilinear_smolgen_chunked": dict(board_pair_smolgen=True, smolgen_form="board_bilinear", typed_edge_bias=True, attn_impl="chunked"),
+    "no_table_routing_typed": dict(displacement_bias=False, routing_table=True, typed_edge_bias=True),
 }
 
 
@@ -87,7 +85,8 @@ def test_batch_composition_does_not_matter(flags):
 def test_parameter_counts_stay_at_section_9_2():
     """B9 and B10 are masks (no parameters); B11 adds 48 scalars (96 directed); B12 adds
     47,136 with relative cells (8,224 for W_z, 8 x 152 x 32 for the cell table) and 32,832
-    in its bilinear form (section 9.2: "<0.1M"); with everything on the total stays ~21.5M."""
+    in its bilinear form (section 9.2: "<0.1M"); with everything on the total stays at section
+    9.2's ~21.5M plus B15's ~1.6M displacement table (section 4.1; spec issue 210)."""
     assert parameter_breakdown(build_model(NetConfig()))["total"] == V1_TOTAL, "the B9 default adds no parameter"
     routed = parameter_breakdown(build_model(NetConfig(routing_table=True)))
     assert routed["total"] == V1_TOTAL
@@ -96,7 +95,7 @@ def test_parameter_counts_stay_at_section_9_2():
     assert full["attn.smolgen"] == (256 * 32 + 32) + 8 * (19 * 8) * 32 == 47_136
     assert full["attn.smolgen"] < 0.1e6, "section 9.2: smolgen <0.1M"
     assert full["total"] == V1_TOTAL + 48 + 47_136
-    assert abs(full["total"] - 21.5e6) / 21.5e6 < 0.02, "section 9.2: ~21.5M with all heads"
+    assert abs(full["total"] - 23.1e6) / 23.1e6 < 0.02, "section 9.2: ~21.5M with all heads, and section 4.1's ~1.6M"
     bilinear = parameter_breakdown(build_model(NetConfig(board_pair_smolgen=True, smolgen_form="board_bilinear")))
     assert bilinear["attn.smolgen"] == 2 * (256 * 32 + 32) + 2 * (8 * 32 * 32) == 32_832
     directed = parameter_breakdown(build_model(NetConfig(typed_edge_bias=True, typed_edge_directed=True)))
@@ -107,7 +106,7 @@ def test_parameter_counts_stay_at_section_9_2():
 def test_bf16_close_to_fp32_with_every_switch(n):
     """G1 with stage N2's switches on: the chunked BF16 trunk stays within N1's bounds
     (test_precision.py) of the FP32 one."""
-    flags = N2_FLAG_SETS["mg4_all_b5_b6"]
+    flags = N2_FLAG_SETS["mg4_all_b5"]
     m32 = build_model(NetConfig(trunk_dtype="fp32", **flags), seed=5).eval()
     m16 = build_model(NetConfig(trunk_dtype="bf16", **flags), seed=5).eval()
     batch = collate([synthetic_state(40 + n, n)])
@@ -169,7 +168,7 @@ def test_smolgen_passes_gradient_back_into_the_trunk(monkeypatch):
         model = build_model(NetConfig(trunk_dtype="fp32", n_layers=2, board_pair_smolgen=True), seed=9)
         if detach:
             original = AttnContext.for_layer
-            monkeypatch.setattr(AttnContext, "for_layer", lambda self, h: original(self, h.detach()))
+            monkeypatch.setattr(AttnContext, "for_layer", lambda self, h, layer: original(self, h.detach(), layer))
         out = model(batch)
         out.value_logits.sum().backward()
         monkeypatch.undo()

@@ -1,4 +1,4 @@
-"""4D rotary position encoding (B4), per-head specialisation (B5), binned biases (B6).
+"""4D rotary position encoding (B4) and per-head specialisation (B5).
 
 **B4 (committed), spec section 4.1.** Each head's ``d_head`` dims form ``d_head/2``
 rotary pairs. Pair ``k`` rotates dims ``(k, k + d_head/2)`` (the "rotate-half" layout)
@@ -53,10 +53,11 @@ committed-class point) decides the rotation: "table" keeps N1's roles by head in
 "masks" gives each head the role of the mask it carries (near-NoPE on the move-graph
 heads, the B4 split elsewhere).
 
-**B6 (prototype, flag ``binned_bias``).** Learned per-head bias tables, shared by all
-layers ("bins x heads parameters", section 4.1), indexed by log-scale buckets of the
-signed Delta-time and the absolute Delta-timeline between the two tokens' boards,
-clamped at the last bucket. Pairs involving a global register get no bias.
+**RoPE's positional term factorises per axis** (register B4): no rotation can favour the
+displacements (1, 1) and (2, 2) while disfavouring (1, 2) and (2, 1), so diagonals and knight
+moves are inexpressible as position. That joint-axis geometry is B15's - the 4D displacement
+bias beside RoPE (``displacement.py``), which superseded B6's binned Delta-time/Delta-timeline
+biases (CHECKPOINT 6; B6 and its "RoPE for near-time" arm are removed).
 """
 
 from __future__ import annotations
@@ -64,7 +65,6 @@ from __future__ import annotations
 import math
 
 import torch
-from torch import nn
 
 from .config import NetConfig
 
@@ -105,13 +105,6 @@ def head_allocation(role: str, cfg: NetConfig) -> list[tuple[int, float]]:
         alloc = [(axis, cfg.rope_near_nope_max_angle / cfg.rope_ranges[axis]) for axis, _ in dense]
     else:
         raise ValueError(f"unknown head role {role!r}")
-    if cfg.binned_bias and cfg.binned_bias_rope == "near_time":
-        # Section 4.1's hybrid: RoPE keeps file, rank and near-time; the biases carry the
-        # coarse Delta-time and Delta-timeline. Unrotated pairs become position-free dims.
-        alloc = [
-            (axis, 0.0) if axis == AXIS_TIMELINE or (axis == AXIS_TIME and f > 0 and math.pi / f > cfg.binned_bias_near_time) else (axis, f)
-            for axis, f in alloc
-        ]
     assert len(alloc) == cfg.n_pairs
     return alloc
 
@@ -162,93 +155,3 @@ def apply_rope(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.T
         half = x.shape[-1] // 2
         rotated = torch.cat([-x[..., half:], x[..., :half]], dim=-1)
         return x * cos + rotated * sin
-
-
-# --- B6: binned clamped biases -------------------------------------------------------------
-
-
-def log_bucket(distance: torch.Tensor, n_exact: int, max_distance: int) -> torch.Tensor:
-    """Bucket of a non-negative integer offset: exact below ``n_exact``, then log2-spaced
-    up to ``max_distance``, clamped (every larger offset shares the last bucket)."""
-    distance = distance.abs()
-    n_log = int(math.floor(math.log2(max_distance / n_exact)))
-    safe = distance.clamp(min=1).float()
-    log_idx = n_exact + torch.floor(torch.log2(safe / n_exact)).long()
-    log_idx = log_idx.clamp(max=n_exact + n_log)
-    return torch.where(distance < n_exact, distance.long(), log_idx)
-
-
-def n_log_buckets(n_exact: int, max_distance: int) -> int:
-    return n_exact + int(math.floor(math.log2(max_distance / n_exact))) + 1
-
-
-def n_time_buckets(cfg: NetConfig) -> int:
-    """Signed Delta-time buckets: ``2 * n - 1`` for ``n`` buckets of the offset's size."""
-    return 2 * n_log_buckets(cfg.bias_time_exact, cfg.bias_time_max) - 1
-
-
-def n_timeline_buckets(cfg: NetConfig) -> int:
-    return n_log_buckets(cfg.bias_timeline_exact, cfg.bias_timeline_max)
-
-
-def time_bucket(dh: torch.Tensor, cfg: NetConfig) -> torch.Tensor:
-    """Bucket of a signed Delta-time: ``b`` for ``dh >= 0``, ``n - 1 + b`` for ``dh < 0``
-    (``b >= 1`` there), ``b`` the bucket of ``|dh|`` and ``n`` their count."""
-    n = n_log_buckets(cfg.bias_time_exact, cfg.bias_time_max)
-    b = log_bucket(dh, cfg.bias_time_exact, cfg.bias_time_max)
-    return torch.where(dh >= 0, b, n - 1 + b)
-
-
-def timeline_bucket(dp: torch.Tensor, cfg: NetConfig) -> torch.Tensor:
-    """Bucket of a Delta-timeline, symmetric (its sign is semi-arbitrary, section 4.4)."""
-    return log_bucket(dp, cfg.bias_timeline_exact, cfg.bias_timeline_max)
-
-
-class BinnedBias(nn.Module):
-    """B6: per-head learned additive biases over bucketed Delta-time and Delta-timeline."""
-
-    def __init__(self, cfg: NetConfig) -> None:
-        super().__init__()
-        self.cfg = cfg
-        self.n_time = n_log_buckets(cfg.bias_time_exact, cfg.bias_time_max)
-        self.n_timeline = n_timeline_buckets(cfg)
-        # Signed Delta-time: bucket b for dh >= 0, n_time - 1 + b for dh < 0 (b >= 1).
-        self.time_table = nn.Parameter(torch.empty(cfg.n_heads, n_time_buckets(cfg)))
-        self.timeline_table = nn.Parameter(torch.empty(cfg.n_heads, self.n_timeline))
-
-    def time_index(self, dh: torch.Tensor) -> torch.Tensor:
-        return time_bucket(dh, self.cfg)
-
-    def timeline_index(self, dp: torch.Tensor) -> torch.Tensor:
-        return timeline_bucket(dp, self.cfg)
-
-    def forward(self, p: torch.Tensor, h: torch.Tensor, has_board: torch.Tensor) -> torch.Tensor:
-        """Bias ``(B, H, L, L)`` from per-token board coordinates ``p``, ``h`` ``(B, L)``.
-
-        Query ``i``, key ``j``: Delta-time is ``h_j - h_i`` (signed), Delta-timeline
-        ``|p_j - p_i|``. Zero wherever either token has no board (global registers, pad).
-        """
-        p = p.long()
-        h = h.long()
-        dh = h[:, None, :] - h[:, :, None]  # (B, L, L): key minus query
-        dp = p[:, None, :] - p[:, :, None]
-        ti = self.time_index(dh)
-        pi = self.timeline_index(dp)
-        bias = self.time_table[:, ti] + self.timeline_table[:, pi]  # (H, B, L, L)
-        bias = bias.permute(1, 0, 2, 3)
-        pair = (has_board[:, None, :] & has_board[:, :, None])[:, None]
-        return bias * pair.to(bias.dtype)
-
-    def board_table(self, p: torch.Tensor, h: torch.Tensor) -> torch.Tensor:
-        """The same bias over board pairs, ``(B, H, N + 1, N + 1)`` (query board, key board)
-        from per-board ``p``, ``h`` ``(B, N)``. Row and column ``N`` stand for "no board"
-        (global registers, padding) and are zero. Every token of a board carries its board's
-        ``(p, h)``, so ``forward``'s bias for a token pair is this table at the two tokens'
-        boards - which is how the chunked attention path builds it (``structure.py``),
-        never at ``(L, L)``."""
-        p = p.long()
-        h = h.long()
-        dh = h[:, None, :] - h[:, :, None]  # (B, N, N): key board minus query board
-        dp = p[:, None, :] - p[:, :, None]
-        bias = self.time_table[:, self.time_index(dh)] + self.timeline_table[:, self.timeline_index(dp)]  # (H, B, N, N)
-        return torch.nn.functional.pad(bias.permute(1, 0, 2, 3), (0, 1, 0, 1))

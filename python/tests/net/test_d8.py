@@ -286,13 +286,13 @@ def test_a_refreshed_epoch_with_the_action(arm):
 D8_PARAMETERS = ("embed.acting.weight", "submit.out.weight", "submit.out.bias")
 FLAG_SETS = [
     {},
-    {"typed_edge_bias": True, "binned_bias": True},
-    {"rope_per_head": True, "binned_bias": True, "routing_table": True, "typed_edge_bias": True, "board_pair_smolgen": True},
+    {"typed_edge_bias": True, "displacement_bias": False},
+    {"rope_per_head": True, "routing_table": True, "typed_edge_bias": True, "board_pair_smolgen": True},
     {"board_register_spatial": "position_free", "policy_promotion": "offset"},
 ]
 
 
-@pytest.mark.parametrize("flags", FLAG_SETS, ids=["default", "b6-b11", "b5-b6-b10-b11-b12", "position-free"])
+@pytest.mark.parametrize("flags", FLAG_SETS, ids=["default", "b11-no-table", "b5-b10-b11-b12", "position-free"])
 def test_d8_parameters_and_their_draws(flags):
     """The acting-player embedding (2 x d) and the linear submit readout (d + 1) are D8's only
     parameters. They draw nothing while they are made and are drawn from a generator of their

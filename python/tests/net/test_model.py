@@ -95,7 +95,7 @@ def test_determinism():
 
 @pytest.mark.parametrize(
     "flags",
-    [dict(), dict(rope_per_head=True, binned_bias=True, policy_promotion="offset"), dict(norm_placement="post")],
+    [dict(), dict(rope_per_head=True, policy_promotion="offset"), dict(norm_placement="post")],
     ids=["v1", "flags", "post-norm"],
 )
 def test_no_parameter_is_zero_or_constant(flags):

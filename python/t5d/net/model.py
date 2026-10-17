@@ -25,20 +25,26 @@ Initialisation (implementation choice where the spec is silent):
   embeddings and the "not a square" vector ``N(0, init_embed_std)``; RMSNorm gains
   ``1 + N(0, init_norm_std)`` - near the identity, but not it, so that no parameter is
   zero or constant (section 15.2: zeros "make distinct paths agree trivially").
-* B6 bias tables and B11's typed-edge scalars ``N(0, init_table_std)``; learned register
-  coordinates (option ``learned_angle``) at the board centre plus ``N(0, init_table_std)``
-  noise; B12's weights by ``BoardPairSmolgen.reset_parameters`` (biases of spread of order
-  one at initialisation).
+* B11's typed-edge scalars ``N(0, init_table_std)``; learned register coordinates (option
+  ``learned_angle``) at the board centre plus ``N(0, init_table_std)`` noise; B12's weights
+  by ``BoardPairSmolgen.reset_parameters`` (biases of spread of order one at
+  initialisation).
 * The learned register coordinates and the structure's flag-gated modules draw last, in
-  the order register coordinates, B6, B11, B12, and none of them draws from the RNG while
+  the order register coordinates, B11, B12, and none of them draws from the RNG while
   it is constructed: switching one on changes its own weights and those of the
   flag-gated modules drawn after it, never the trunk's or the heads' - so an on/off
   comparison of B12, say, differs in B12 alone.
+* B15's displacement table (the v1 default) ``N(0, disp_init_std)`` (a placeholder, spec
+  issue 208), drawn - like D8's parameters, below - from a generator of its own seeded from
+  the model's seed (``b15_seed``), never from the global stream, after everything else: its
+  no-table arm (ablation 2) has every other weight of the v1, bit for bit, and no flag
+  changes the table.
 
 Attention structure (stage N2, ``structure.py``): ``make_context`` builds the batch's
 masks (B9's move graph on ``move_graph_heads`` heads, or B10's routing table) and biases
-(B6, B11, B12) once per forward, as sparse lists and board-pair tables; every layer's
-attention builds dense rows from them one query block at a time (B14).
+(B11, B12, B15) once per forward, as sparse lists, board-pair tables and B15's per-batch
+index; every layer's attention builds dense rows from them one query block at a time
+(B14), with its own layer's tables (``AttnContext.for_layer``).
 
 Attention scope (stage N3, ``scope.py``): ``NetConfig.attn_scope`` - dense (C1) or
 block-causal (C17, C19) - and any forward may override it (``scope=``): the cached path's
@@ -75,6 +81,7 @@ from torch import nn
 
 from .attention import AttnContext
 from .config import NetConfig
+from .displacement import DisplacementBias
 from .embed import InputEmbedding
 from .heads import (
     AuxHeads,
@@ -89,7 +96,7 @@ from .heads import (
     square_pool,
 )
 from .kvformat import fake_quantise
-from .rope import BinnedBias, rope_angles, rope_cos_sin, rope_tables, spatial_dims
+from .rope import rope_angles, rope_cos_sin, rope_tables, spatial_dims
 from .scope import BlockCausalScope
 from .smolgen import BoardPairSmolgen
 from .state import TOKEN_BOARD_REGISTER, TOKEN_GLOBAL_REGISTER, Batch
@@ -176,9 +183,9 @@ class T5DNet(nn.Module):
         self.register_buffer("rope_spatial", spatial_dims(axis), persistent=False)
         learned_xy = cfg.board_register_spatial == "learned_angle" and cfg.regs_per_board > 0
         self.register_xy = nn.Parameter(torch.empty(cfg.regs_per_board, 2)) if learned_xy else None
-        self.binned_bias = BinnedBias(cfg) if cfg.binned_bias else None
         self.typed_edges = TypedEdgeBias(cfg) if cfg.typed_edge_bias else None
         self.smolgen = BoardPairSmolgen(cfg) if cfg.board_pair_smolgen else None
+        self.displacement = DisplacementBias(cfg) if cfg.displacement_bias else None
         self.policy = PointerHead(cfg.d_model, cfg.policy_dim, promotion=cfg.policy_promotion)
         self.value = ValueHead(cfg)
         self.aux = AuxHeads(cfg)
@@ -245,13 +252,16 @@ class T5DNet(nn.Module):
                 out = self.submit.out
                 out.weight.copy_(torch.empty(out.weight.shape).normal_(0.0, out.in_features**-0.5, generator=d8))
                 out.bias.copy_(torch.empty(out.bias.shape).normal_(0.0, cfg.init_bias_std, generator=d8))
-            if self.binned_bias is not None:
-                nn.init.normal_(self.binned_bias.time_table, 0.0, cfg.init_table_std)
-                nn.init.normal_(self.binned_bias.timeline_table, 0.0, cfg.init_table_std)
             if self.typed_edges is not None:
                 nn.init.normal_(self.typed_edges.table, 0.0, cfg.init_table_std)
             if self.smolgen is not None:
                 self.smolgen.reset_parameters(cfg)
+            # B15 (the v1 default): from a generator of its own, as D8's parameters are, so that
+            # its no-table arm (ablation 2) leaves every other weight as it is.
+            if self.displacement is not None:
+                b15 = torch.Generator(device="cpu").manual_seed(b15_seed(torch.initial_seed()))
+                table = self.displacement.table
+                table.copy_(torch.empty(table.shape).normal_(0.0, cfg.disp_init_std, generator=b15))
 
     # -- positional context --
 
@@ -300,7 +310,7 @@ class T5DNet(nn.Module):
         history: torch.Tensor | None = None,
     ) -> AttnContext:
         """The attention context of a batch: RoPE tables, padding, the structure of stage N2
-        (``structure.py``: B9/B10 masks, B6/B11/B12 biases - built sparsely, rows on demand),
+        (``structure.py``: B9/B10 masks, B11/B12/B15 biases - built sparsely, rows on demand),
         under the block-causal scope its rows (stage N3, ``scope.py``; ``history``: each
         position's epoch history, ``(B, Nmax)`` bool), and optionally a caller's dense
         ``attn_mask`` / ``attn_bias`` on top."""
@@ -316,7 +326,7 @@ class T5DNet(nn.Module):
         live = None if block_scope is None else block_scope.live_tokens
         live_boards = None if block_scope is None else block_scope.live_boards
         structure = build_structure(
-            batch, cfg, coords, self.typed_edges, self.binned_bias, self.smolgen, live=live, live_boards=live_boards
+            batch, cfg, coords, self.typed_edges, self.displacement, self.smolgen, live=live, live_boards=live_boards
         )
         tokens_per_board = max(lay.tokens_per_board for lay in batch.layouts)
         return AttnContext(
@@ -449,6 +459,12 @@ def d8_seed(seed: int) -> int:
     return (int(seed) * 0x9E3779B97F4A7C15 + 0xD8) & 0xFFFFFFFFFFFFFFFF
 
 
+def b15_seed(seed: int) -> int:
+    """The seed of B15's own generator (its displacement table, ``T5DNet._init_weights``),
+    from the model's."""
+    return (int(seed) * 0x9E3779B97F4A7C15 + 0xB15) & 0xFFFFFFFFFFFFFFFF
+
+
 def build_model(cfg: NetConfig | None = None, seed: int = 0) -> T5DNet:
     """A randomly initialised network, deterministic in ``seed`` (global RNG untouched)."""
     with torch.random.fork_rng(devices=[]):
@@ -469,9 +485,9 @@ def parameter_breakdown(model: T5DNet) -> dict[str, int]:
         "trunk.ffn": sum(count(b.ffn) for b in blocks),
         "trunk.norms": sum(count(b.norm_attn) + count(b.norm_ffn) for b in blocks) + count(model.trunk.final_norm),
         "rope.register_xy": 0 if model.register_xy is None else model.register_xy.numel(),
-        "rope.binned_bias": count(model.binned_bias),
         "attn.typed_edges": count(model.typed_edges),
         "attn.smolgen": count(model.smolgen),
+        "attn.displacement": count(model.displacement),
         "head.policy": count(model.policy),
         "head.value": count(model.value),
         "head.submit": count(model.submit),
