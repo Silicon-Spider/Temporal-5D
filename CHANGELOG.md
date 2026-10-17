@@ -10,6 +10,145 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-17 - N-B15 review fixes: B6 is not B15's special case as built, recorded and put to the user; the placeholder switches checked to regroup pairs; every variant's board size in §15.2's B15 row
+
+- `docs/BUILD_LOG.md`, spec issue 205: under B15's far-bin placeholder B6 is not B15's
+  special case, which §4.1 ("of which it is the special case that ignores file and rank"),
+  register B6 and reversal 25 say it is - and nothing recorded it. B6 was two per-axis tables
+  (signed Δtime log buckets to 128 half-turns, |Δtimeline| to 32); the built far classes - one
+  distance D in three bins, crossed with Δtime's sign - mix its cells, so beyond the exact box
+  they hold a B6 bias only where it is a constant plus a function of Δtime's sign (a linear
+  solve over the built classes, in a scratch script), and the board-axis line clamp merges
+  its buckets too.
+  Lost: B6's per-axis form and its far resolution; kept: Δtime's sign and the clamp. Far
+  classes that refine B6's cells would cost 5,240,960 parameters, over three times §4.1's
+  ~1.6M, so "special case" and "~1.6M" cannot both hold with a slice per class; B6's two
+  tables added beyond the box (3,456 parameters) would keep both, at the cost of the
+  one-scalar-per-pair reading. B6 went with no arm (M20), so ablation 2 cannot test what it
+  resolved. Put to the user. Proposed edit 159 now reaches §4.1's B6 sentence, register B6's
+  status text and reversal 25; edit 155 gives the alternatives. The register rows B6 and B15,
+  `config.py` (`disp_far_edges`) and `displacement.py` say it beside the placeholder.
+- Issues 205 and 206: the far bins' form (one distance, Δtime's sign, Δtimeline's sign
+  dropped) and the line set's time unit and partition are fixed in code, and say so - only
+  `disp_far_edges` and `disp_line_max` are settings, so another form is a code change (the
+  geometry, both implementations, the tests' reference, the pinned counts). They are not made
+  switches: each alternative is a different class geometry, the additive line reading would
+  need a second lookup per pair on every path, and the documents lean to the readings built
+  (§4.1's "one learned scalar ... indexed by the pair's displacement", B17's "~12,000
+  classes"). `config.py`'s and `displacement.py`'s docstrings say the same.
+- `tests/net/test_structure.py`: the no-inert-switch test also checks that each of B15's
+  placeholder switches regroups the batch's pairs (which pairs share a scalar). Two of them,
+  `disp_line_max` and `disp_register_pairs`, change the table's size, which is drawn from one
+  stream, so the outputs differed whatever the switch did to the indexing: on scratch copies,
+  a line clamp hard-coded at 3 and the register kind dropped from the index each passed the
+  old test and fail the new one. `test_same_grouping` pins the helper.
+- `tests/net/test_displacement.py`: the constructions of §15.2's B15 row ("every variant")
+  now hold every variant's board size (rulebook V3), where they held 8 x 8 and 5 x 5 only:
+  7 x 7, 6 x 6, 4 x 4 and 3 x 3 boards (`variant_sizes`), and the far lattice at 7 x 7, 4 x 4,
+  3 x 3 and Global Warming's empty 1 x 1 (`far_variant_sizes`; `far_state` builds the 1 x 1
+  by hand, which `synthetic_state` cannot). The classes and the score function's term match
+  the reference bit for bit and attention through it is within 1e-5; the CPU paths' outputs
+  and gradients are checked on the far lattice too.
+- `config.py`: `attn_impl`'s docstring names the sixth path, "flex" (forward only on CPU -
+  it refuses under autograd - small inputs), and says "all six", not "all five"; the
+  L24-ff12 preset's "~44M" is marked as §9.2's count without B15's table (46,891,210 with
+  it, issue 210).
+- `bench.py`, `attention.py`: the "every switch" figures were measured with B6's binned
+  biases on (since removed) and no B15, so they are not today's "n2-all"'s either.
+- `docs/BUILD_LOG.md`: proposed edit 158 names §10.2, which its second quote is from, and
+  quotes each place's current text; §15.3's "Without a GPU" already defers the kernel and
+  needs no edit. Issue 211 and the B15 row: twelve constructions. The B15 entry below says
+  where these fixes changed it.
+- Spec: §4.1 (the B6 paragraph's "special case"; B15's far bins and line classes), §10.2 (the
+  score function), §15.2 (the B15 row's constructions, "every variant"), §9.2 (F2's count, as
+  issue 210 has it); register B6, B14, B15, F2, G9, M20; reversal 25. Proposed edits 155 (the
+  alternatives if B6 is to stay a special case), 158 (§10.2 named, the current texts quoted),
+  159 (extended to §4.1's B6 sentence, register B6's status text and reversal 25). No
+  parameter changes (the v1 stays 22,961,802).
+
+### 2026-10-17 - Network B15: the 4D displacement bias replacing B6, with its no-table flag; the score-function path and its equivalence test
+
+- `python/t5d/net/displacement.py` (new): register B15 (provisional, the v1 default; §4.1,
+  CHECKPOINT 6), written from §4.1 and the rulebook's conventions. One learned scalar per
+  head per layer, indexed by the pair's displacement (key minus query): a 15 x 15 file-rank
+  slice for each board-distance class - the 45 exact ones (|Δtimeline| ≤ 2, |Δtime| ≤ 4
+  half-turns) and 9 far bins - exact line classes beyond them (one entry per direction and
+  step, 368), register entries by class and pair kind (162) and one global entry: 12,681
+  per head per layer, 1,623,168 parameters (§4.1's ~1.6M, 7.07% of the network). The
+  unstated details are named placeholders, each a spec issue: the far bins
+  (`disp_far_edges`, the board distance D = max(|Δtimeline|, ⌈|Δtime|/2⌉) log2-binned from
+  3 and crossed with the sign of Δtime), the line set (in whole turns, so an odd Δtime is
+  never a line; a partition; board-axis lines clamped at `disp_line_max = 8`), the register
+  and global entries (`disp_register_pairs`), the initialisation (`disp_init_std`). Two
+  implementations: `pair_entry` computes a pair's entry by integer arithmetic from the
+  tokens' kinds and coordinates (B14's score function uses it), and the CPU paths look it up
+  in a static class map by board-pair tile and token code. Boards wider than 8 are refused.
+- `config.py`: `displacement_bias = True`; `False` is ablation 2's no-table arm. B15 draws
+  its table from a generator of its own (`model.b15_seed`, as D8's parameters do), so the
+  arm is the network without the table: checked against the parent commit, the arm's
+  outputs and parameters are bit for bit the pre-B15 v1's (B9's default, routing with typed
+  edges and smolgen, no masks, the chunked path, post-norm, and a cached evaluation).
+- Per layer (`structure.py`, `attention.py`, `trunk.py`, `cache.py`): `AttnContext.for_layer(h,
+  layer)` (the layer index now required; each `trunk.Block` knows its own) gives the
+  structure B15's table of that layer and, as before, B12's table from `h`. Masks need no
+  layer (`AttnStructure.mask_rows`, `attention._block_mask`). The cached path builds a
+  frozen board's bias per layer over its key set (it built one for every layer before), and
+  the live pass makes each layer's context; B15 biases frozen rows too (geometry -
+  `scope.py`). `model.py`: `self.displacement`, `parameter_breakdown`'s
+  `attn.displacement`.
+- `python/t5d/net/flex.py` (new): B14's score function (committed engineering; §6.1, §10.2),
+  `attn_impl = "flex"`: torch's `flex_attention` with every bias computed inside its score
+  function - B15's entry from the two tokens' coordinates, B11's typed relations, B12's
+  board-pair table, a caller's bias - every mask in its mask function (padding, the
+  block-causal scope, section 6's roles from per-token data and one edge bit per pair), the
+  positional pair rule by feature widening (at most three calls), and a lossless block mask
+  built from the board-major order at board granularity. Eager on CPU: forward only, every
+  score materialised - small positions (spec issue 211). Under v1's register rule the masked
+  heads' block masks have no empty block (spec issue 209).
+- B6 removed (superseded by B15, register B6, M20): `rope.py` loses `BinnedBias`, the
+  near-time arm and the buckets; `binned_bias`, `binned_bias_rope`, `binned_bias_near_time`
+  go (issue 9f's switch). The log buckets move to `buckets.py` for B12's relative cells,
+  whose fields are renamed `smolgen_time_*` / `smolgen_timeline_*`: smolgen unchanged, 152
+  cells and 47,136 parameters, bit for bit (spec issue 212). `bench.py`: the v1 default now
+  carries B15, `n2-no-table` is ablation 2's arm (B9's default before CHECKPOINT 6).
+- Tests: `tests/net/test_displacement.py` (new) - the classes against §4.1 written out pair
+  by pair (a grid reaching every far bin and clamp, every token kind, ten adversarial
+  constructions - twelve, every variant's board size among them, since N-B15's review fixes
+  (above) - three placeholder settings; integers compared exactly); §15.2's B15 row -
+  the score function's term at every pair equals the hand-materialised bias bit for bit, and
+  attention through it equals attention with that bias materialised (measured under 1e-6,
+  asserted 1e-5), three seeds, the table at its initial scale and at unit scale; the CPU
+  paths' outputs and gradients (Q, K, V, the table) equal it too; the whole network through
+  the score function equals the dense reference; the block mask is lossless and sparse
+  where no register row reads everything; the table's size, its layers, the cached path
+  with the layers' tables far apart, the no-table arm, translation and board order.
+  Existing suites carry B15 from now on (the v1 default) and keep the no-bias paths covered
+  through the no-table arm: `test_chunked` (four no-table combinations, two pair modes, the
+  caller's mask and bias), `test_cache` (every case; plus no-table and moved placeholders),
+  `test_structure` (B15 in every bias that adds up; four new switches - B15's placeholders
+  also checked to regroup pairs since the review fixes; `flex` among the one function),
+  `test_attention` (B5 with B15's bias, hand-materialised), `test_scope` (frozen
+  rows keep B15), `test_invariance`, `test_d8`, `test_n2_model`, `test_trunk`, `test_smoke`,
+  `tests/engine/test_network.py`. `test_params`: the v1 is 22,961,802 (21,338,634 and the
+  table), F2's preset 46,891,210 (spec issue 210).
+- Not measured: §15.3's "displacement bias and normalisation changes" row (the machine is
+  loaded; the quiet-machine block). On CPU every head now carries a per-row bias, so v1's
+  dense heads run block by block with it, as "every switch" did (`attention.py`,
+  `bench.py`).
+- `docs/BUILD_LOG.md`: register rows B15 (built, tested), B6 (superseded; removed), B14 and
+  G9 (the score function), B10/B12, C2 (the cached path with B15), F1/F2, M20 (B6's removal
+  done); spec issue 9's note (its (f) switch gone); spec issues 205-212; proposed edits
+  155-159.
+- Spec: §4.1 (the 4D displacement bias; B6's paragraph), §5.3 (register pairs), §6 and §6.1
+  (B14's score function and block mask), §9.2 (parameter counts), §10.2 (the score
+  function), §15.1 Phase 2, §15.2 (the B15 row; row 1, cached = dense, with B15 on; the
+  C19-C21 and G1 rows under it), §15.3 (the displacement-bias row, to measure); register
+  B4, B6, B8, B12, B14, B15, C2, C17, F1, F2, G9, M19, M20. Proposed edits 155 (B15's
+  placeholders), 156 (F1/F2 counts; supersedes 153), 157 (§6.1's block mask and the
+  register rows), 158 (the score function in the untrained build), 159 (B6 removed; B12's
+  cells - since the review fixes also B6's "special case" clause in §4.1, register B6 and
+  reversal 25, which the far bins as built make false: issue 205).
+
 ### 2026-10-17 - Build log: each lane's numbers render as written; issue 142 waits on the user
 
 - `docs/BUILD_LOG.md`: an HTML comment at column 0 before the first spec issue of

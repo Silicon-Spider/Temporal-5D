@@ -1,4 +1,4 @@
-"""4D RoPE (B4), per-head specialisation (B5), binned biases (B6), register positions."""
+"""4D RoPE (B4), per-head specialisation (B5), register positions; smolgen's log buckets (re-homed from B6)."""
 
 from __future__ import annotations
 
@@ -10,15 +10,14 @@ import torch
 
 from t5d.net import NetConfig, build_model, collate, synthetic_state, translate
 from t5d.net.attention import AttnContext, attention_explicit, attention_sdpa
+from t5d.net.buckets import log_bucket, n_log_buckets, n_signed_log_buckets, signed_log_bucket
 from t5d.net.rope import (
     AXIS_FILE,
     AXIS_RANK,
     AXIS_TIME,
     AXIS_TIMELINE,
-    BinnedBias,
     apply_rope,
     axis_frequencies,
-    log_bucket,
     rope_angles,
     rope_cos_sin,
     rope_tables,
@@ -64,14 +63,6 @@ def test_per_head_allocation_b5():
     near = rope_tables(NetConfig(rope_per_head=True, rope_relations_head="near_nope"))
     rel = roles.index("relations")
     assert torch.equal(near[1][rel], near[1][roles.index("move_graph")])
-
-
-def test_b6_near_time_leaves_coarse_pairs_unrotated():
-    axis, freq = rope_tables(NetConfig(binned_bias=True, binned_bias_rope="near_time"))
-    assert torch.all(freq[axis == AXIS_TIMELINE] == 0)
-    kept = freq[(axis == AXIS_TIME) & (freq > 0)]
-    assert torch.all(math.pi / kept <= 16.0) and len(kept) >= 1
-    assert torch.all(freq[(axis == AXIS_FILE) | (axis == AXIS_RANK)] > 0)
 
 
 def test_rotation_is_relative():
@@ -238,23 +229,21 @@ def test_log_buckets_clamp():
     assert log_bucket(-d, 4, 128).tolist() == log_bucket(d, 4, 128).tolist()
 
 
-def test_binned_bias_tables_and_pairs():
-    cfg = NetConfig(binned_bias=True)
-    bias = BinnedBias(cfg)
-    gen = torch.Generator().manual_seed(6)
-    for table in (bias.time_table, bias.timeline_table):
-        table.copy_(torch.randn(table.shape, generator=gen))
-    assert bias.time_table.shape == (8, 19) and bias.timeline_table.shape == (8, 8)
-    p = torch.tensor([[0, 0, 2, 0]])
-    h = torch.tensor([[0, 5, 5, 0]])
-    has = torch.tensor([[True, True, True, False]])
-    out = bias(p, h, has)
-    assert out.shape == (1, 8, 4, 4)
-    assert torch.all(out[0, :, 3, :] == 0) and torch.all(out[0, :, :, 3] == 0), "no bias for board-less tokens"
-    # Signed time: query 0 (h=0) -> key 1 (h=5) differs from the reverse.
-    assert not torch.allclose(out[0, :, 0, 1], out[0, :, 1, 0])
-    # Symmetric timeline: |dp| only. Query 1 (p=0, h=5) and key 2 (p=2, h=5) vs reverse.
-    assert torch.allclose(out[0, :, 1, 2], out[0, :, 2, 1])
-    # Clamped: offsets past the last bucket share it.
-    far = bias(torch.tensor([[0, 0, 0]]), torch.tensor([[0, 300, 3000]]), torch.ones(1, 3, dtype=torch.bool))
-    assert torch.allclose(far[0, :, 0, 1], far[0, :, 0, 2])
+def test_signed_buckets():
+    """Smolgen's signed Delta-time buckets (B12's relative cells): the two signs share bucket 0
+    and nothing else, the last bucket of each sign is clamped."""
+    d = torch.tensor([0, 1, 3, 4, 7, 8, 127, 128, 129, 10_000])
+    pos, neg = signed_log_bucket(d, 4, 128), signed_log_bucket(-d, 4, 128)
+    n = n_log_buckets(4, 128)
+    assert n == 10 and n_signed_log_buckets(4, 128) == 19
+    assert pos.tolist() == log_bucket(d, 4, 128).tolist()
+    assert neg[0] == 0 and torch.equal(neg[1:], pos[1:] + n - 1)
+    assert int(neg.max()) == 18 and int(pos.max()) == 9
+
+
+def test_b6_is_gone():
+    """B6 is superseded by B15 (CHECKPOINT 6, register B6) and removed with its switches - no
+    arm survives (ablation 2's arm is B15 on or off)."""
+    for name in ("binned_bias", "binned_bias_rope", "binned_bias_near_time", "bias_time_exact"):
+        with pytest.raises(TypeError):
+            NetConfig(**{name: True})

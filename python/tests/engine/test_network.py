@@ -77,8 +77,8 @@ def test_a_small_network_batches_mixed_real_positions(mixed_positions):
 
 
 def test_every_switch_on_real_positions(mixed_positions):
-    """B5, B6, B10-B12 on, with the typed relations the engine builds."""
-    flags = dict(rope_per_head=True, binned_bias=True, routing_table=True, typed_edge_bias=True, board_pair_smolgen=True)
+    """B5, B10-B12 and B15 (the v1 default) on, with the typed relations the engine builds."""
+    flags = dict(rope_per_head=True, routing_table=True, typed_edge_bias=True, board_pair_smolgen=True)
     model = build_model(NetConfig(trunk_dtype="fp32", n_layers=2, **flags), seed=2).eval()
     from t5d.engine import relations_for
 
