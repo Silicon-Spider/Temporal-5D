@@ -1,9 +1,11 @@
 """A game handle: ``Game`` wraps one ``t5d_game`` of the engine's C API (``t5d/capi.h``).
 
 A game is a state under the rules - the player to move, the present, the action in
-progress - with its expansion buffers. It is made from a 5dpgn record (set up at its first
-position, then replayed action by action), from 5DFEN board strings, or from a named
-variant; it is moved (``apply``), submitted (``submit``) and expanded (``expand``).
+progress - with its expansion buffers and its count of the moves made in the action in
+progress (register A6: no state records it - ``GameInfo.moves_made``, ``Expansion.moves_made``).
+It is made from a 5dpgn record (set up at its first position, then replayed action by
+action), from 5DFEN board strings, or from a named variant - always at a turn start; it is
+moved (``apply``), submitted (``submit``) and expanded (``expand``).
 
 **Moves are pseudo-legal; submissions are legal** (engine README, "Status"): the moves an
 expansion offers - ``moves()`` lists them, in the engine's order - are the pseudo-legal
@@ -96,6 +98,14 @@ class GameInfo:
     may_submit: bool  # the present shifted (T5) and every royal is safe (C4)
     ruleset: int
     rules: int
+    #: Register A6: the moves made in the action in progress - the handle's count (no state records it): 0 at a turn start,
+    #: one more per ``apply``, 0 again after ``submit`` or ``replay_next``.
+    moves_made: int = 0
+
+    @property
+    def turn_start(self) -> bool:
+        """No move made yet in the action under way (what ``Search``'s ``turn_start`` must say)."""
+        return self.moves_made == 0
 
 
 @dataclass(frozen=True)
@@ -278,6 +288,7 @@ class Game:
             may_submit=bool(s.may_submit),
             ruleset=int(s.ruleset),
             rules=int(s.rules),
+            moves_made=int(s.moves_made),
         )
 
     def record_actions(self) -> RecordProgress:

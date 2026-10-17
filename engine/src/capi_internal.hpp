@@ -1,6 +1,7 @@
 // What the C API's translation units share (src/capi.cpp, src/capi_search.cpp):
-// a game handle's state, making a game handle, and the description of an
-// expansion in the C layout. Internal: not part of the library's interface.
+// a game handle's state and its count of moves in the action, making a game
+// handle, and the description of an expansion in the C layout. Internal: not
+// part of the library's interface.
 
 #ifndef T5D_SRC_CAPI_INTERNAL_HPP
 #define T5D_SRC_CAPI_INTERNAL_HPP
@@ -21,8 +22,12 @@ class Unsupported : public std::runtime_error {
 
 /// The state a game handle holds.
 const GameState& game_state(const t5d_game& game) noexcept;
-/// A new game handle on `state` (legal submissions, no record). Throws std::bad_alloc.
-t5d_game* new_game(const GameState& state);
+/// The moves made in the handle's action in progress (register A6; 0 at a turn start).
+int game_moves_in_action(const t5d_game& game) noexcept;
+/// A new game handle on `state` with `moves_in_action` moves made in its action
+/// (legal submissions, no record). Throws std::bad_alloc, or std::invalid_argument
+/// for a negative count.
+t5d_game* new_game(const GameState& state, int moves_in_action);
 /// An expansion's arrays in t5d_expansion's layout (t5d_game_expand's).
 void describe_expansion(const Expansion& expansion, t5d_expansion& out);
 /// An expansion's options from the C layout (t5d_game_expand's reading; NULL:

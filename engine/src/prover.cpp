@@ -2016,6 +2016,56 @@ struct Prover::Impl {
   Shared shared;
   std::vector<std::unique_ptr<Worker>> workers;
 
+  // A proven root's first action and line, from a thread that proved it at the
+  // least distance - one whose tree holds the whole line where any does. Under
+  // Lazy SMP a thread can decide the root without searching it: the first
+  // thread to prove the root exports the proof at once (H19), and a thread
+  // that builds its root after that reads the proof from the store, with no
+  // tree beneath it - thread 0 most often, which builds its root after
+  // starting the helpers. Taking the lowest-numbered thread at the least
+  // distance reported such a thread's empty line and no first action (Guard's
+  // five-thread test, CI run 37146667584). So the threads that searched their
+  // root come first, in thread order, the first complete line ends the
+  // choice, and otherwise the longest is kept; of the threads that read the
+  // root from the store, one is asked (none has a tree, so each line is the
+  // certificate's, if any). The verdict and the distance are not touched.
+  void report_proof(const std::vector<std::uint32_t>& roots, const std::vector<char>& decided,
+                    const GameState& root, const ProofCertificate* cert, ProveResult& result) const {
+    const auto at_the_least_distance = [&](std::size_t i) {
+      if (decided[i] == 0) return false;
+      const Node& r = workers[i]->tree[roots[i]];
+      return r.proven() && r.dist == result.proof.distance;
+    };
+    std::vector<std::size_t> order;
+    for (std::size_t i = 0; i < workers.size(); ++i) {
+      if (at_the_least_distance(i) && workers[i]->tree[roots[i]].expanded) order.push_back(i);
+    }
+    for (std::size_t i = 0; i < workers.size(); ++i) {
+      if (at_the_least_distance(i) && !workers[i]->tree[roots[i]].expanded) {
+        order.push_back(i);
+        break;
+      }
+    }
+    bool have = false;
+    std::size_t chosen = 0;
+    for (const std::size_t i : order) {
+      std::vector<std::vector<Move>> line;
+      bool complete = false;
+      workers[i]->proof_line(roots[i], root, cert, line, complete);
+      if (!have || complete || line.size() > result.line.size()) {
+        result.line = std::move(line);
+        result.line_complete = complete;
+        chosen = i;
+        have = true;
+      }
+      if (complete) break;
+    }
+    result.first_action = workers[chosen]->first_action_of_proof(roots[chosen]);
+    // A root read from the store has no tree: its first action is the line's
+    // (the certificate's), if any.
+    if (result.first_action.empty() && !result.line.empty()) result.first_action = result.line.front();
+  }
+
   ProveResult prove(const GameState& root, const ProveBudget& budget, int depth) {
     Shared& sh = shared;
     sh.budget = &budget;
@@ -2069,19 +2119,15 @@ struct Prover::Impl {
     }
     for (std::size_t i = 0; i < workers.size(); ++i) accumulate(result.stats, workers[i]->st);
     // The root's verdict: any thread's (they agree, or the stores would have
-    // refused a contradiction).
+    // refused a contradiction). A proof's distance is the least any thread
+    // proved.
     bool proven = false;
     bool disproven = false;
-    std::size_t decider = 0;
     for (std::size_t i = 0; i < workers.size(); ++i) {
       if (!decided[i]) continue;
       const Node& r = workers[i]->tree[roots[i]];
       if (r.proven()) {
-        if (!proven || r.dist < result.proof.distance) {
-          result.proof = Proof::win(r.dist);
-          result.first_action = workers[i]->first_action_of_proof(roots[i]);
-          decider = i;
-        }
+        if (!proven || r.dist < result.proof.distance) result.proof = Proof::win(r.dist);
         proven = true;
       }
       if (r.disproven()) disproven = true;
@@ -2090,14 +2136,13 @@ struct Prover::Impl {
       throw std::logic_error("prover: the threads proved and disproved the root");
     }
     if (proven) {
-      const Worker& w = *workers[decider];
       std::shared_ptr<ProofCertificate> cert;
       if (sh.opt.record_certificate) {
         std::lock_guard<std::mutex> lock(sh.cert_mutex);
         cert = std::make_shared<ProofCertificate>(sh.cert);
         result.certificate = cert;
       }
-      w.proof_line(roots[decider], root, cert.get(), result.line, result.line_complete);
+      report_proof(roots, decided, root, cert.get(), result);
     }
     result.status = proven ? ProofStatus::Proven : disproven ? ProofStatus::Disproven : ProofStatus::Unknown;
     if (sh.opt.prove_only && result.status == ProofStatus::Disproven) {

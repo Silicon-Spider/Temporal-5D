@@ -125,28 +125,30 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
       break;
     }
     std::vector<Move> action;
-    bool turn_start = true;
+    // A6: the moves made in the action so far - the searches' roots carry the
+    // count (the network sees it; equal states with other counts are other nodes).
+    int moves_made = 0;
     const GameState action_start = s;
     bool timed_out = false;
     for (bool submitted = false; !submitted;) {
       // The safety stop before every decision, not only at turn starts; a
       // partial action is not recorded (the record ends at the turn start).
-      if (!turn_start && out_of_time()) {
+      if (moves_made > 0 && out_of_time()) {
         timed_out = true;
         break;
       }
       std::unique_ptr<Search> fresh;
       Search* search = nullptr;
       if (params.match_play) {
-        if (!carried) carried = std::make_unique<Search>(s, sp, turn_start, cache);
+        if (!carried) carried = std::make_unique<Search>(s, sp, moves_made, cache);
         search = carried.get();
-        if (!(search->root_state() == s)) {
-          throw std::logic_error("play: the carried search's root is not the game's position");
+        if (!(search->root_state() == s) || search->root_moves_made() != moves_made) {
+          throw std::logic_error("play: the carried search's root is not the game's position (with its moves made, A6)");
         }
       } else {
         SearchParams dp = sp;
         dp.seed = mix(sp.seed + 0x9E3779B97F4A7C15ull * (g.decisions + 1));
-        fresh = std::make_unique<Search>(s, dp, turn_start, cache);  // C14: fresh per move
+        fresh = std::make_unique<Search>(s, dp, moves_made, cache);  // C14: fresh per move
         search = fresh.get();
       }
       const SearchStats before = search->stats();
@@ -229,7 +231,7 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
         action.push_back(m);
       }
       if (params.match_play) search->advance(pick);
-      turn_start = false;
+      if (!submitted) ++moves_made;
     }
     if (timed_out) {
       s = action_start;
