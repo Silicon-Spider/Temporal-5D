@@ -37,6 +37,15 @@ const char* fault_name(RecordFault fault) noexcept {
   return "unreadable";
 }
 
+const char* capture_marks_name(CaptureMarks marks) noexcept {
+  switch (marks) {
+    case CaptureMarks::Lenient: return "lenient";
+    case CaptureMarks::MarkedMustCapture: return "marked_must_capture";
+    case CaptureMarks::Strict: return "strict";
+  }
+  return "lenient";
+}
+
 namespace {
 
 // ---- characters ------------------------------------------------------------------------
@@ -1277,8 +1286,8 @@ Move PgnReplay::resolve(const GameState& state, const PgnMove& w) const {
   for (const int p : sources) append_board_moves(state, p, generated);
 
   const int home_rank = mover == Colour::White ? 0 : 7;
-  std::vector<Move> fits;        // what is written, every mark included
-  std::vector<Move> near_fits;   // the same but for the capture mark
+  std::vector<Move> fits;        // what is written - the capture mark as the reading says
+  std::vector<Move> near_fits;   // the same but for a capture mark the reading holds against it
   for (const Move& m : generated) {
     if (castling) {
       if (e_file_reading) {
@@ -1305,17 +1314,27 @@ Move PgnReplay::resolve(const GameState& state, const PgnMove& w) const {
       continue;
     }
     if (w.promotion && (!m.promotes() || m.promotion != *w.promotion)) continue;
-    const bool marks_agree = w.capture ? m.capture()
-                                       : (!options_.require_capture_marks || !m.capture());
+    // The capture mark (H51, R11): by default it selects nothing - the move is
+    // read as its squares and boards define it, and play_next keeps a mark
+    // that disagrees as a warning.
+    bool marks_agree = true;
+    switch (options_.capture_marks) {
+      case CaptureMarks::Lenient: break;
+      case CaptureMarks::MarkedMustCapture: marks_agree = !w.capture || m.capture(); break;
+      case CaptureMarks::Strict: marks_agree = w.capture == m.capture(); break;
+    }
     (marks_agree ? fits : near_fits).push_back(m);
   }
 
   if (fits.empty()) {
     if (!near_fits.empty()) {
       unreadable(w.capture ? "it is written as a capture ('x'), but " +
-                                 to_string(near_fits.front(), even) + " captures nothing"
+                                 to_string(near_fits.front(), even) + " captures nothing (" +
+                                 capture_marks_name(options_.capture_marks) +
+                                 " reading of 'x'; by default, H51, it is read with a warning)"
                            : to_string(near_fits.front(), even) +
-                                 " is a capture, written without 'x' (require_capture_marks)");
+                                 " is a capture, written without 'x' (strict reading of 'x'; "
+                                 "by default, H51, it is read with a warning)");
     }
     std::string what;
     if (castling) {
@@ -1432,10 +1451,28 @@ void PgnReplay::play_next() {
     }
     unreadable(name + ": it is " + colour_name(s.to_move()) + "'s turn" + why);
   }
+  // "action N (...), move J \"text\" (line L, column C)" - for warnings and faults.
+  const auto where_of = [&](std::size_t j, const PgnMove& w) {
+    std::string where = name + ", move " + std::to_string(j + 1) + " " + quoted(w.text);
+    if (w.line != 0) {
+      where += " (line " + std::to_string(w.line) + ", column " + std::to_string(w.column) + ")";
+    }
+    return where;
+  };
   for (std::size_t j = 0; j < action.moves.size(); ++j) {
     const PgnMove& w = action.moves[j];
     try {
       const Move m = resolve(s, w);
+      if (options_.capture_marks == CaptureMarks::Lenient && w.capture != m.capture()) {
+        // H51, R11: the move is read as its squares define it; the mark that
+        // disagrees is the writer's slip, kept as a warning.
+        const bool even = s.multiverse().even();
+        warnings_.push_back(where_of(j, w) + ": " +
+                            (w.capture ? "written as a capture ('x'), but " + to_string(m, even) +
+                                             " takes no piece"
+                                       : to_string(m, even) + " takes a piece, written without 'x'") +
+                            " - read as its squares define it (capture mark only: H51, R11)");
+      }
       const bool annotated =
           options_.verify_annotations &&
           (w.present_moved || w.created.has_value() || w.present_turn.has_value());
@@ -1448,23 +1485,15 @@ void PgnReplay::play_next() {
           try {
             check_annotations(before, s, m, w);
           } catch (const RecordError& e) {
-            std::string where = name + ", move " + std::to_string(j + 1) + " " + quoted(w.text);
-            if (w.line != 0) {
-              where += " (line " + std::to_string(w.line) + ", column " + std::to_string(w.column) +
-                       ")";
-            }
-            warnings_.push_back(where + ": " + e.what() + " - played anyway (annotation only)");
+            warnings_.push_back(where_of(j, w) + ": " + e.what() +
+                                " - played anyway (annotation only)");
           }
         }
       } else {
         s.apply(m);
       }
     } catch (const RecordError& e) {
-      std::string where = name + ", move " + std::to_string(j + 1) + " " + quoted(w.text);
-      if (w.line != 0) {
-        where += " (line " + std::to_string(w.line) + ", column " + std::to_string(w.column) + ")";
-      }
-      throw RecordError(e.fault(), where + ": " + e.what());
+      throw RecordError(e.fault(), where_of(j, w) + ": " + e.what());
     }
   }
   const SubmitStatus status = s.submission_status(ruling_);

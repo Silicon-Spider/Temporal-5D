@@ -10,6 +10,97 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-17 - H51: capture markers read leniently - the reader in both directions, the writer strict, rulebook R11; ftxi's refusal recorded, KD-0167-0169 retired
+
+- `engine/include/t5d/pgn.hpp`, `engine/src/pgn.cpp`: the user's ruling on spec issue 125
+  (CHECKPOINT 8; register H51, spec §11.0 "Capture markers are read leniently"). The reader
+  refused a written `x` that takes nothing and read a capture written without one (the bool
+  `PgnOptions::require_capture_marks`, false by default, made only that second reading
+  strict). It now has `PgnOptions::capture_marks`, `CaptureMarks::Lenient` by default - and
+  the bool is gone: a move is read as its
+  squares and boards define it, whether or not `x` is written, and the mark selects no move
+  (a move that fits two pseudo-legal moves stays ambiguous whatever its mark says); a mark
+  that disagrees in either direction - `x` on a move that takes nothing, a capture written
+  without `x` - goes into the reader's warning channel, `PgnReplay::warnings()`, naming the
+  action, the move as written and where. `t5d-gate` prints it on stderr, as it prints the
+  annotation and turn-number warnings: the engine contract has no warning field, and its
+  required fields are unchanged. `CaptureMarks::MarkedMustCapture` keeps the reading before
+  H51 and `Strict` the letter both ways (a diagnostic), by option only;
+  `capture_marks_name`.
+- `engine/src/gate.cpp`, `engine/include/t5d/gate.hpp`: `--pgn
+  capture_marks=lenient|marked_must_capture|strict`; the option's spelling before H51,
+  `require_capture_marks=true|false`, keeps its meaning (strict / marked_must_capture).
+- The pinned measurements (`engine/tools/tool_support.*`, `sixb_roots.*`, `t5d_scan6b.cpp`,
+  `t5d_scan6bp.cpp`): `sixb_pgn_options()`, the reading 6b, 6b′, 6b″ and Hunt's ground truth
+  were measured under - the reader's defaults of their day, which differ from today's only
+  in `MarkedMustCapture`. `t5d-scan6b`, `t5d-scan6bp` and `sixb_roots` (`t5d-scan6bpp`,
+  `t5d-hunt-truth`) read with it: read leniently, cwmtt/futures goes on past its action 17
+  and 6b's construction would take three roots from it rather than from ftxi/futures,
+  renumbering the roots from 169 and making root 168's next action readable - the truth's
+  readers would refuse it. Checked against the parent commit's build: 6b″'s tool accepts the
+  pinned truth (825 roots by record, index and fingerprint), and 6b's and 6b′'s tools list
+  the same 825 positions. The truth was not re-recorded and 6b″ not re-run. The reader is
+  among `T5D_TRUTH_SOURCES`, so the code signature changed (the truth's provenance records
+  none: "unrecorded"); `engine/README.md` says so ("Hunt's ground truth", *After H51*).
+- Tests (550 engine tests, from 544): `test_pgn_replay.cpp` - the lenient reading both
+  ways, with its warnings, on physical moves, en passant and both kinds of jump (the
+  corpus case's shape, `>>x ... ~`); the mark selecting no move (an `x` that would have
+  told two moves apart under `infer_omitted_boards`); the two other readings.
+  `test_gate.cpp` - the adapter reads `1. Nxf3 / Nc6` to its end, its events those of
+  `1. Nf3 / Nc6` in both modes and the warning on the diagnostic channel; the options.
+  `test_synthetic.cpp` - **the writer** (`synthetic::pgn_move`, which t5d-play's records and
+  the synthetic records use) writes `x` exactly on captures: every move offered at every
+  position of 53 random games - 9 variants under the default rules, every alternative rule
+  option in Two Timelines - is written and judged from the boards, never from the move's
+  flags (the opponent's pieces on the target board against those on the board the move
+  makes there): 32,566 captures (14,081 physical, 24 of them en passant; 6,293 by
+  non-branching jumps; 12,192 by branches) and 408,383 quiet moves of the same kinds, each
+  kind required; the records replay with no warning under the default reading and to their
+  end under the strict one. `test_selfplay.cpp` - t5d-play's records likewise.
+  `test_sixbpp.cpp` - 6b's roots read as 6b read them.
+- `docs/rules/README.md`: R11, capture marks read leniently - labelled a project decision
+  (H51, CHECKPOINT 8), in the file's style, with its source ranking (R3) and the notation
+  specification cited for notation only; a conventions line; source [141]. Its diff
+  reviewed (no other entry changed) and re-pinned (`rulebook --pin`, `oracles/gate.toml`:
+  `08fddc5e...` to `39e9ad58...`).
+- `oracles/known-divergences.toml`: KD-0167 to KD-0169 withdrawn, on the ruling's authority
+  (with the reader lenient they were telltales - the engine plays action 17 as cwmtt,
+  Chess in 5D and the notation parser do - as their header had said); **KD-0170**: ftxi's
+  refusal of that action (`rejected:no_matching_move`), citing R11 and H51 - triaged by the
+  rulebook, not by vote: ftxi's own legal-action listing at position 16 holds the queen's
+  jump, and its refusal parses the move with the capture flag set (`cp:yes`), so it refuses
+  the mark, not the move; unreported upstream (spec issue 130). The header's paragraphs
+  updated (a soft refusal may cite the rulebook's project decision where the specification
+  is silent). `oracles/README.md` likewise.
+- Gate (this machine shared with other lanes; timings not measurements): `verify` ok (H48's
+  17 notes); `selftest` 638 tests OK, 1 skipped; `gate --tier commit`: SMOKE TEST - PASSED
+  (before the entries changed it failed, as expected: KD-0167 to KD-0169 as telltales,
+  ftxi's refusal unexplained); `gate --tier nightly`: every source's required set
+  reproduced, `engine differential: PASSED` with no finding, gating Standard - Half
+  Reflected (at least 2 oracles), Standard - Reversed Royalty (at least 3) and - newly, the
+  engine now reading cwmtt/futures to its end - **Standard - Turn Zero** (7 records, 144
+  positions, at least 1 oracle: cwmtt/futures has 2 behind it, cwmtt and Chess in 5D, which
+  agree with the engine at its new positions 17 to 19, checkmate at 19; but
+  cwmtt/tesseractMageOChicken has 1, cwmtt, so the two-oracle rule of spec issue 122 - the
+  next component - would not gate Turn Zero). The proof channel stays disabled. The Python
+  engine-binding tests (`T5D_REQUIRE_ENGINE=1 pytest tests/engine`): 164 passed, 1 skipped.
+- t0database (M7, M22): converted (`py data/t0database/to_5dpgn.py build/t0db`, 761
+  records) and measured with the parent commit's `t5d-measure` and this one's: M22's
+  `--turns --turn-summary` and M7's `--moves-after-shift --summary`, with and without
+  `--legal`, are byte-identical - no record and no action changes (716 replay to the end, as
+  before). No t0database record writes `x` on a move that takes nothing; 661 of them write
+  captures without `x` (8,034 moves), which the reader now reads with a warning, as before
+  but for the warning. `docs/MEASUREMENTS.md` unchanged.
+- `engine/README.md` (the reader's readings, the adapter's warnings, the corpus note, 6b's
+  roots, *After H51*), `docs/BUILD_LOG.md` (step 2; register rows H51 - new - H28, H31, H34,
+  H38; spec issue 125 settled; issues 129 and 130; proposed edits 101 and 102).
+- Spec: §11.0 ("Running the gate": capture markers read leniently - built; "A
+  known-divergences file"), register H51 (built), H28, H31, H34, H38, H27, and the pinned
+  measurements' registers M8, M12, M15, M17, H43 (their roots keep the reading they were
+  measured under - spec issue 129). Spec issue 125 settled upstream; new issues 129 and 130;
+  proposed edits 101 (H51 and §11.0: the pinned measurements' reading, the KD numbers) and
+  102 (§11.0 and H27: divergences settled by a project decision recorded unreported).
+
 ### 2026-10-17 - CLAUDE.md and AGENTS.md: the engine build before the gate (the one edit the user allowed in each)
 
 - `CLAUDE.md`, `AGENTS.md`: one line in each command list, before `gate --tier

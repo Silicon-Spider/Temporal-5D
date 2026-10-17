@@ -96,7 +96,9 @@ GameState check_game(const GameRecord& g, const TurnCap& cap) {
 }
 
 // The record, replayed by the engine's reader under the engine's check ruling
-// (R1), reaches the same state.
+// (R1), reaches the same state - with nothing let pass: the capture mark is
+// written strictly (H51), so the reader's default warns of none, and the
+// strict reading of the mark plays it too.
 void check_record(const GameRecord& g, const char* board, const RuleOptions& rules = {}) {
   const std::string text = tools::play_record(g, board);
   PgnReplay replay(read_pgn(text), PgnOptions{}, rules);
@@ -105,6 +107,12 @@ void check_record(const GameRecord& g, const char* board, const RuleOptions& rul
   CHECK(replay.state() == g.final_state);
   CHECK_EQ(fingerprint(replay.state().multiverse()).fingerprint,
            fingerprint(g.final_state.multiverse()).fingerprint);
+  CHECK(replay.warnings().empty());
+  PgnOptions strict;
+  strict.capture_marks = CaptureMarks::Strict;
+  PgnReplay letter(read_pgn(text, strict), strict, rules);
+  CHECK_NOTHROW(letter.play_all());
+  CHECK(letter.state() == g.final_state);
 }
 
 }  // namespace

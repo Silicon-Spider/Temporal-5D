@@ -31,7 +31,9 @@
 //    leave out a pinned piece when disambiguating, "Omission", but legality is
 //    judged per action, at submission - C4 - not per move); a token that
 //    disagrees with the state where the
-//    notation says it should agree (">"/">>", "x", "~", "(>Lx)", "(~Tx)");
+//    notation says it should agree (">"/">>"; "~", "(>Lx)", "(~Tx)" only under
+//    annotation_mismatch_is_error; "x" only under the non-default capture-mark
+//    readings - by default, H51, a capture mark that disagrees is a warning);
 //    headers that contradict each other; an action by the player who is not
 //    to move.
 //  * Unsupported - a game the engine does not play: a Mode other than "5D", a
@@ -126,15 +128,43 @@ enum class CastlingShortcuts : std::uint8_t {
   EFileOneKing = 2,
 };
 
+/// How the capture mark "x" is read (register H51; rulebook R11). The
+/// specification says when to write it - SAN for physical moves ("Moves"),
+/// and "x if a piece is being taken" for jumps ("Jumps") - and not how to read
+/// one that is superfluous or missing.
+enum class CaptureMarks : std::uint8_t {
+  /// Default - H51, R11 (a project decision, CHECKPOINT 8): the mark never
+  /// changes a move's meaning. A move is read as its squares and boards define
+  /// it, whether or not "x" is written: the mark selects no move (a move that
+  /// fits two or more pseudo-legal moves is ambiguous whatever its mark says).
+  /// A mark that disagrees - "x" on a move that takes nothing, or a capture
+  /// written without "x" - is kept in PgnReplay::warnings() and the move is
+  /// played: the mark carries nothing the squares do not, and refusing such a
+  /// record would hide its later positions from the gate.
+  Lenient = 0,
+  /// The reading before H51 - the default that experiments 6b, 6b' and 6b''
+  /// and Hunt's ground truth read their records under: a written "x" must
+  /// capture (a move written with one that takes nothing is unreadable), and a
+  /// capture written without one is read, with no warning (PGN's import
+  /// reading). The tools that rebuild 6b's roots read with it, so the pinned
+  /// figures and the truth's roots rebuild exactly (tools/tool_support.hpp,
+  /// sixb_pgn_options).
+  MarkedMustCapture = 1,
+  /// The specification's letter in both directions: "x" if and only if a piece
+  /// is taken; a mark that disagrees either way makes the move unreadable. A
+  /// diagnostic (t5d-gate --pgn capture_marks=strict).
+  Strict = 2,
+};
+
+/// "lenient", "marked_must_capture", "strict" - the spellings t5d-gate's
+/// --pgn capture_marks=... takes.
+const char* capture_marks_name(CaptureMarks marks) noexcept;
+
 struct PgnOptions {
   /// S6 / Q26.
   CastlingShortcuts castling_shortcuts = CastlingShortcuts::EFileOnly;
-  /// Must a capture be written with "x"? Default false: a missing "x" is
-  /// accepted - the move's squares and boards determine it, so leaving it out
-  /// never makes a move ambiguous (PGN's import reading). A written "x" must
-  /// always be a capture. True is the specification's letter (SAN; "Jumps":
-  /// "x if a piece is being taken").
-  bool require_capture_marks = false;
+  /// H51, R11: see CaptureMarks.
+  CaptureMarks capture_marks = CaptureMarks::Lenient;
   /// T15: check "~", "(~Tx)" and "(>Lx)" against the state - the
   /// specification says they "should match with what can be induced from the
   /// described state of the game". A written token that disagrees makes the
@@ -217,7 +247,8 @@ struct PgnMove {
   /// A jump writes both ("Jumps": "The piece's physical coordinate").
   int from_file = -1;
   int from_rank = -1;
-  /// "x".
+  /// "x", as written - the writer's mark, which never changes the move it
+  /// names under the default reading (CaptureMarks, H51).
   bool capture = false;
   Jump jump = Jump::None;
   /// A jump's target board.
@@ -353,8 +384,12 @@ class PgnReplay {
   std::size_t actions_played() const noexcept { return played_; }
   /// Whether every action read has been played.
   bool finished() const noexcept { return played_ == record_.actions.size(); }
-  /// Every annotation that disagreed with the state and was let pass
-  /// (PgnOptions::annotation_mismatch_is_error false), in the order met.
+  /// What the reader and the replay let pass, in the order met: the record's
+  /// own warnings (PgnRecord::warnings), then, as the actions are played,
+  /// every capture mark that disagreed with its move (CaptureMarks::Lenient,
+  /// H51) and every annotation that disagreed with the state
+  /// (PgnOptions::annotation_mismatch_is_error false). Each names the action,
+  /// the move as written and where it is.
   const std::vector<std::string>& warnings() const noexcept { return warnings_; }
 
   /// Plays the next action: its moves in order, then the submission under
@@ -378,7 +413,9 @@ class PgnReplay {
   void play_all();
 
   /// The move `move` names in `state`, for the player to move, under this
-  /// replay's options. Throws RecordError (Unreadable or IllegalMove).
+  /// replay's options. Throws RecordError (Unreadable or IllegalMove). It
+  /// records nothing: a capture mark that disagrees with the move found
+  /// (CaptureMarks::Lenient) becomes a warning only when play_next plays it.
   Move resolve(const GameState& state, const PgnMove& move) const;
 
  private:

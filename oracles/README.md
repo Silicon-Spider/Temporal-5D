@@ -995,8 +995,11 @@ Some entries cite the notation specification in place of the rulebook:
   pieces carry the marker) or the rulebook (what having moved means);
 - a **length** divergence, or a **legality** one where the oracle stopped because it
   could not match a move's text (a soft rejection) and the engine played on, may
-  cite it where the cause is notation the oracle does not read and no rule at all.
-  If the oracle really does hold the move illegal, it is a rules matter after all;
+  cite it where the cause is notation the oracle does not read and no rule at all -
+  or, where the specification is silent on how such text is read, the rulebook's
+  project decision that settles it (R11: a capture mark that disagrees with its
+  move is read as the move's squares define it, register H51). If the oracle really
+  does hold the move illegal, it is a rules matter after all;
 - a **legality** one where the engine, in either mode, refused as unreadable
   text an oracle played (`engine_value = "rejected:unreadable"`) - an action's, or
   at action 0 the record's set-up: its headers or board strings - must cite it:
@@ -1007,9 +1010,14 @@ Every other kind needs the rulebook. The file's header says how, and where its
 entries came from: the engine's gate runs of 2026-10-02 and, with the engine
 configured, of 2026-10-17 - between them every disagreement of the engine's with a
 recorded oracle answer, each settled by its citation (`docs/BUILD_LOG.md`, step 2).
-Three are provisional: KD-0167 to KD-0169 record the strict reading of an `x`
-written on a move that takes nothing, which is put to the user (spec issue 125),
-and the header says how they go if the ruling is the other way.
+Capture marks are read leniently (CHECKPOINT 8: rulebook R11, register H51, a
+project decision): a move is read as its squares define it, whether or not it is
+written with `x`, and the engine logs a mark that disagrees as a warning (on its
+standard error - never in the protocol). So the engine plays cwmtt/futures action
+17, an `x` on a jump that takes nothing, as cwmtt, Chess in 5D and the notation
+parser do, and ftxi's refusal of it is KD-0170, citing R11; KD-0167 to KD-0169,
+which recorded the strict reading the engine followed before the ruling, were
+withdrawn on its authority.
 
 ## Other commands
 

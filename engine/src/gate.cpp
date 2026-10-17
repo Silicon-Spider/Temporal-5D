@@ -423,11 +423,29 @@ bool set_pgn_option(PgnOptions& o, std::string_view assignment, std::string* err
   if (name == "verify_annotations") flag = &o.verify_annotations;
   if (name == "annotation_mismatch_is_error") flag = &o.annotation_mismatch_is_error;
   if (name == "turn_number_mismatch_is_error") flag = &o.turn_number_mismatch_is_error;
-  if (name == "require_capture_marks") flag = &o.require_capture_marks;
   if (name == "infer_omitted_boards") flag = &o.infer_omitted_boards;
   if (name == "check_turn_numbers") flag = &o.check_turn_numbers;
   if (flag != nullptr) {
     if (!read_bool(value, *flag)) return fail(std::string(name) + " takes true or false");
+    return true;
+  }
+  if (name == "capture_marks") {
+    for (const CaptureMarks c :
+         {CaptureMarks::Lenient, CaptureMarks::MarkedMustCapture, CaptureMarks::Strict}) {
+      if (value == capture_marks_name(c)) {
+        o.capture_marks = c;
+        return true;
+      }
+    }
+    return fail("capture_marks takes lenient, marked_must_capture or strict");
+  }
+  if (name == "require_capture_marks") {
+    // The option's spelling before H51, kept so that old command lines mean
+    // what they meant: true was the strict reading, false the reading that
+    // was then the default (a written 'x' must capture).
+    bool strict = false;
+    if (!read_bool(value, strict)) return fail("require_capture_marks takes true or false");
+    o.capture_marks = strict ? CaptureMarks::Strict : CaptureMarks::MarkedMustCapture;
     return true;
   }
   if (name == "castling_shortcuts") {
