@@ -10,6 +10,27 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-17 - Design documents: the CHECKPOINT 8 rulings, from upstream
+
+- `docs/design/5d-chess-decisions.md`, `docs/design/5d-chess-transformer-design.md`:
+  the copies maintained upstream after CHECKPOINT 8, committed unedited - the user's
+  rulings on spec issues 122-126, 142 and 204. Register: H27 (upstream reports -
+  defects as bug reports, documented-rule disagreements as questions citing the
+  source, drafted by the agent and filed by the owner), H47 (gating aligned to two
+  oracles; the commit tier still fails if the engine declines a record it read on the
+  last green run, or reads none; restricted runs never produce a tier verdict), H51
+  added (capture markers read leniently - a project decision: a move is read as its
+  squares define it, a mismatch logged as a warning, the marker written strictly; a
+  source that refuses such a record gets a known-divergence entry citing H51), F6
+  (Mish in the trunk FFN and every head's hidden layers; squared ReLU a trunk-only
+  arm), M22 (measured in part; the mandatory, three-or-more, optional-move and
+  compute-share figures to follow), D2 (build order: the tree form, then the flat
+  form). Spec: §8.2 (the measured turn width and the build order), §9.3 (Mish in the
+  heads), §11.0 (the commit tier's two failure conditions, restricted runs, upstream
+  reports, lenient capture markers).
+- Spec: CHECKPOINT 8 as written upstream - §8.2, §9.3, §11.0; register D2, F6, H27,
+  H47, H51, M22. Nothing in them edited here.
+
 ### 2026-10-17 - N-B15 review fixes: B6 is not B15's special case as built, recorded and put to the user; the placeholder switches checked to regroup pairs; every variant's board size in §15.2's B15 row
 
 - `docs/BUILD_LOG.md`, spec issue 205: under B15's far-bin placeholder B6 is not B15's
