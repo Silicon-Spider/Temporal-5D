@@ -10,6 +10,50 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-17 - Gate H27 (CHECKPOINT 8): the ftxi check-reading question drafted for upstream
+
+The user's ruling on spec issue 126: "report it too, as a question citing the source and a
+few representative positions, not as a bug: if ftxi's author can show the game behaves
+ftxi's way, our rulebook is wrong and we want to know. Draft it in
+docs/checkpoints/upstream/; I'll file it."
+
+- `docs/checkpoints/upstream/ftxi-check-test-passed-boards.md` (new): a question to
+  ftxi's author, in the form of the two bug-report drafts beside it. To tell checkmate from
+  stalemate, `state::phantom()` passes every timeline whose last board is the player's to
+  play; ruling R1 passes only the active boards in the present. The draft quotes R1, the
+  code (two lines, with a permalink at the pin), the sources R1 rests on as the rulebook
+  ranks them - the current in-game Guide (silent on which boards are passed), the older
+  guide text and the developer's remark ("in the present"), Wikipedia's sentence R1
+  adopts - and the evidence the other way (a client observation reported in the
+  developer-quoting document, wiki.gg), and says which positions each reading puts in
+  check. Five representative positions from public records, one from each of CHECKPOINT
+  1's rule questions RQ1-RQ4 (`docs/checkpoints/checkpoint-1-check-clusters.md`: silly@28,
+  Bg2@19, niceAndrey@57, manyChecks@20, standard@13): the record at its pinned commit, the
+  `--at` turn, the boards the player must and may play, the capture ftxi finds and why R1
+  does not count it. Each capture re-observed 2026-10-17 through the pinned library (the
+  harness's ftxi driver, `observe --explain`: `has_phantom_check()` and the captures
+  `find_checks()` lists on the phantom) and each position's timeline counts with the stock
+  `5dtools stats`. `docs/checkpoints/upstream/README.md` lists it, with what to check
+  before filing.
+- `oracles/known-divergences.toml`: the 147 entries R1 settles (ftxi's and ftxi:naive's
+  check verdicts, 92 positions in 12 records) now say `unreported: ... drafted as a
+  question citing the source in docs/checkpoints/upstream/ftxi-check-test-passed-boards.md,
+  to be filed by the project owner (CHECKPOINT 8)`; the header says what follows from the
+  answer. No binding (oracle, pin, record, kind, index, values) and no citation changed.
+- `oracles/README.md`, "Known divergences": defects reported as bugs and disagreements with
+  a documented rule as questions (H27), and what is drafted. `docs/BUILD_LOG.md`: issue
+  126's ruling and built notes, register row H27.
+- Checks (2026-10-17): `py engine/build.py --werror` - nothing to rebuild; `harness.py verify` - every
+  section ok, H48's 17 `proof-channel-vacuous` notes as before; `selftest` - 660 tests OK, 1
+  skipped; `gate --tier commit` - ok, `SMOKE TEST - PASSED`, the baseline 41 compared and 0
+  declined; `gate --tier nightly` - ok, `PASSED`, gating Standard - Half Reflected and Standard
+  - Reversed Royalty, as before; `gate --tier nightly --source ftxi --record cwmtt/silly` -
+  `restricted - not a tier result: ... - 0 findings`, exit 0.
+- Spec: §11.0 "A known-divergences file" ("reported upstream - defects as bug reports,
+  disagreements with a documented rule as questions citing the source ...; the owner files
+  them"); register H27, H36 (R1). Spec issue 126 (ruled at CHECKPOINT 8; built); proposed
+  edit 99 (b) applies - no edit until the question is filed.
+
 ### 2026-10-17 - Gate H47 (CHECKPOINT 8): two oracles to gate a ruleset; the commit tier's last-green-run rule; restricted runs never a tier verdict
 
 The user's CHECKPOINT 8 rulings on spec issues 122-124 (register H47 as amended).

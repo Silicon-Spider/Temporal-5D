@@ -1027,9 +1027,15 @@ with, has failed. The release tier, which requires an engine, fails in parse mod
 
 When the engine and an oracle disagree, the rulebook decides. If the oracle is
 wrong, the disagreement goes into `known-divergences.toml` with the citation that
-settles it, and a link to the upstream report - or why it is unreported. None is
-reported yet; each entry says why, and spec issue 126 in `docs/BUILD_LOG.md` asks
-the user which of them must be.
+settles it, and a link to the upstream report - or why it is unreported. Upstream,
+a defect is reported as a bug and a disagreement with a documented rule as a
+question citing the source (register H27, CHECKPOINT 8); the agent drafts them in
+`docs/checkpoints/upstream/` and the project owner files them. None is filed yet,
+and each entry says why: the two defects ruling R7 recorded are drafted as bug
+reports, and ftxi's reading of the check test - the 147 entries R1 settles - as one
+question, `ftxi-check-test-passed-boards.md`, which asks whether the game passes
+the boards ftxi passes; if it does, the rulebook is wrong. Once a report is filed,
+its URL takes the place of `unreported: ...` in each entry it answers.
 
 The rulebook is `docs/rules/README.md` (decision H38), and it is pinned:
 `gate.toml` `[rulebook]` holds the SHA-256 of its text (CRLF folded to LF), and
