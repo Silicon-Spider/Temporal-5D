@@ -90,6 +90,39 @@ diff, in full:
  python oracles/harness.py gate --tier commit   # per-commit gate; nightly and release run all three oracles
 ```
 
+**The rulings** (register H27, H47, H51, F6, M22, D2 as changed at CHECKPOINT 8), and
+where each is built:
+- **125 - capture markers read leniently (H51, a project decision).** The notation
+  spec says when to write `x`, not how to read a superfluous or missing one: a move is
+  read as its squares define it, a mismatch logged as a warning, the marker written
+  strictly. The reader lenient in both directions, a test that the writer marks
+  exactly the captures, a rulebook entry labelled a project decision, KD-0167-0169
+  removed and ftxi's refusal recorded citing H51 and that entry, nightly re-run
+  (Standard - Turn Zero gated if two oracles answer for it). Gate lane, "gate step
+  3a" (running). The reader is a truth source: the pinned measurements (6b, 6b′,
+  6b″, Hunt's truth) are kept reproducible, never re-recorded in it.
+- **122 - a ruleset is gated only when two or more oracles answer for it** (H47: "as
+  built the gate required one, and is aligned to two"); "a single oracle cannot tell
+  its own bug from ours". **123 - yes**: the commit tier fails if the engine declines a
+  record it read on the last green run, or reads none. **124 - no**: a restricted run
+  (`--source`/`--record`) never produces a tier verdict; its output is labelled
+  "restricted - not a tier result". **126 - report it too**, as a question citing the
+  source and a few representative positions, not as a bug (H27: defects as bug
+  reports, documented-rule disagreements as questions; drafted by the agent, filed by
+  the owner) - drafted in `docs/checkpoints/upstream/`. Gate lane, "gate step 3b",
+  after 3a; the gate lane merges once both are reviewed.
+- **142 - the D2 build order: the tree form first** (it modifies the existing tree and
+  is anchored by its equivalence to the ply split), **then the flat form; both are
+  built.** M22's figures count playable boards, which include optional ones; per range
+  it also reports the share of turns with more than one and with three or more
+  mandatory boards, the optional moves actually played, and the compute share of
+  multi-board turns (moves x per-move cost). Engine lane: the figures after H51
+  merges (the reader changes what t0database replays, if anything), then the tree
+  form, then the flat form.
+- **204 - yes: Mish in every head's hidden layers, the value head included; squared
+  ReLU stays a trunk-only arm** (F6). Network lane, its next component.
+- **CLAUDE.md and AGENTS.md** - the one edit allowed in each, above (11caec9).
+
 ### CHECKPOINTS 6 and 7 - ruled upstream (design documents f07568c)
 
 The user's rulings at CHECKPOINTS 6 and 7, as the design documents maintained
@@ -399,15 +432,9 @@ main and issue 300 is ruled. Early adjudication (§12.3) has no specification (i
 **Waiting on the user:** nothing that blocks (the `gh` login is done and the CI
 comparison recorded in "Recovery", above); the standing items - branch protection with
 the workflows as required checks; filing the two oracle bug drafts in
-`docs/checkpoints/upstream/`; applying the proposed spec edits upstream. Put to the
-user, none blocking: spec issues 122-124 (merged with H47 - whether a ruleset should
-need two oracles to be gated, as §11.0's wording says and the gate does not; whether
-the commit smoke test should fail an engine compared with nothing; whether a
-restricted run of a full-strength tier should be a smoke test; edit 98 waits on the
-ruling on 122); 204 (merged with F5/F6 - whether F6's Mish reaches the output heads:
-the value head keeps GELU as the named placeholder `head_activation`); 142 (merged
-with M22 - nothing maps the turn-width figures to an order of the D2 work; the figures
-and a suggestion that 6x report by playable-board count are in the issue); 205
+`docs/checkpoints/upstream/` (and, after gate step 3b, the ftxi question of issue
+126); applying the proposed spec edits upstream. Ruled at CHECKPOINT 8: spec issues
+122-126, 142 and 204 ("CHECKPOINT 8", above). Put to the user, none blocking: 205
 (merged with B15 - under the far-bin placeholder B6 is not B15's special case, as
 §4.1, register B6 and reversal 25 say it is: keep the sentence and give the far
 classes B6's cells, about 5.2M parameters, or keep §4.1's ~1.6M and drop the
@@ -2233,6 +2260,7 @@ superseded or made moot says so; nothing is deleted.
     variants one oracle reads) - a decision for the user. Put to the user: should a
     ruleset be gated only when two oracles stand behind it, in every tier? Until it
     is ruled, proposed edit 98 gives both texts.
+    *Ruled at CHECKPOINT 8: a ruleset is gated only when two or more oracles answer for it (H47) - gate step 3b.*
 123. **H47 is silent on an engine compared with nothing in a smoke test.** As
     built, an engine with no finding against it passes the commit tier's
     differential even when it declined every record (nothing was compared, so
@@ -2242,6 +2270,7 @@ superseded or made moot says so; nothing is deleted.
     visible. Put to the user: should the smoke test hold full mode to parse mode's
     floor - the engine replayed at least one record, and an oracle's answer was
     compared with it? Nothing is parked on it.
+    *Ruled at CHECKPOINT 8: yes - the commit tier fails if the engine declines a record it read on the last green run, or reads none (H47) - gate step 3b.*
 124. **H47 is silent on a run of a full-strength tier restricted to some sources
     or records** (`gate --tier nightly --source ftxi`; "tiers that run every
     oracle"). Built - the literal reading: the run keeps its tier's rule
@@ -2255,6 +2284,7 @@ superseded or made moot says so; nothing is deleted.
     smoke test and gates nothing. Pinned (`GateRunTests.test_a_restricted_run_keeps_its_tiers_rule`)
     and documented (`oracles/README.md`, "Other commands"). Put to the user;
     nothing is parked on it.
+    *Ruled at CHECKPOINT 8: no - a restricted run never produces a tier verdict; its output says "restricted - not a tier result" (H47) - gate step 3b.*
 
 <!-- A new list, so that the numbers from 200 render as written. -->
 
@@ -2313,6 +2343,7 @@ superseded or made moot says so; nothing is deleted.
     committed-class placeholder that awaits neither a ruling nor a named ablation
     (6y's arms are the FFN's, not the heads'; M20's dispositions predate it): put to
     the user to rule, or to name the ablation. Proposed edit 154.
+    *Ruled at CHECKPOINT 8: Mish in every head's hidden layers, the value head included; squared ReLU a trunk-only arm (F6) - the network lane.*
 205. **B15's far bins** (§4.1, register B15: "binned and clamped beyond"). §4.1 gives the
     exact classes and says the classes beyond them are "binned and clamped, so unseen
     board counts extrapolate as the binned biases did", with no bins - not their edges,
@@ -2493,6 +2524,7 @@ superseded or made moot says so; nothing is deleted.
     turn starts at 200 boards or more, so the regime of §8.2's cost argument is
     unmeasured until the pilot self-play run (M18). (The first version of this issue
     called the multi-move turns "where the arms differ"; corrected at review.)
+    *Ruled at CHECKPOINT 8: the tree form first, then the flat form, both built (D2, M22); M22 also reports per range the mandatory shares (more than one, three or more), the optional moves actually played and the compute share of multi-board turns - the engine lane.*
 
 ## Proposed spec edits
 
@@ -2938,6 +2970,7 @@ struck through, where nothing of it is left to apply); the others stand as writt
     be enabled for it - which rulesets, measured once the engine is configured.
     Why: §11.0 and H47 give a two-oracle rule as the reason the commit tier gates
     nothing; the gate has none, and whether to add one is the user's decision.
+    *Settled upstream at CHECKPOINT 8: the user ruled for a two-oracle rule (issue 122); §11.0 and register H47 now say the gate is aligned to two oracles, with the commit tier's baseline rule and restricted runs (issues 123-124).*
 
 <!-- A new list, so that the numbers from 200 render as written. -->
 

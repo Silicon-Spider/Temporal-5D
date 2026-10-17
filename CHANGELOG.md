@@ -10,6 +10,20 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-17 - Build log: the CHECKPOINT 8 rulings and where each is built
+
+- `docs/BUILD_LOG.md`, "CHECKPOINT 8": the user's rulings on spec issues 122-126, 142
+  and 204 and the lane that builds each - H51 (the reader lenient on capture markers,
+  the writer strict, a rulebook entry, KD-0167-0169 retired and ftxi's refusal
+  recorded) as the gate lane's step 3a; the two-oracle rule, the commit tier's
+  baseline rule, restricted runs and the ftxi upstream question as its step 3b; M22's
+  further figures and the D2 order (the tree form, then the flat form) on the engine
+  lane; Mish in the heads on the network lane. Issues 122-124, 142 and 204 marked
+  ruled; proposed edit 98 settled upstream; "Waiting on the user" now holds only issue
+  205 and the standing items.
+- Spec: register H27, H47, H51, F6, M22 and D2 as changed at CHECKPOINT 8; no spec
+  text edited here.
+
 ### 2026-10-17 - CLAUDE.md and AGENTS.md: the engine build before the gate (the one edit the user allowed in each)
 
 - `CLAUDE.md`, `AGENTS.md`: one line in each command list, before `gate --tier
