@@ -5,13 +5,15 @@ Short games - self-play and match play, both arms of D2, Standard and Two Timeli
 turn cap and a board cap - each written as a 5dpgn record and replayed by the engine's own
 tools: its reader (in process) and its gate adapter in full mode (``t5d-gate``, a
 subprocess): every action legal, one position per action and the start, the last position's
-verdict the game's end, the final boards the game's. Self-play is deterministic in its seed.
-The record's move form and the turn-start verdicts are checked on their own.
+verdict the game's end, the final boards the game's, no warning from the reader. Self-play
+is deterministic in its seed. The record's move form and the turn-start verdicts are checked
+on their own, and the capture mark (H51: written strictly) against the boards.
 """
 
 from __future__ import annotations
 
 import os
+import random
 
 import pytest
 import torch
@@ -20,6 +22,7 @@ from t5d.engine import Game, NetworkEvaluator
 from t5d.engine.capi import T5D_MOVE_BRANCHING, T5D_MOVE_CAPTURE, T5D_MOVE_TRAVEL
 from t5d.engine.expansion import Move
 from t5d.engine.netplay import (
+    GameResult,
     PlayConfig,
     check_replay,
     gate_executable,
@@ -28,10 +31,12 @@ from t5d.engine.netplay import (
     play_game,
     replay_with_gate,
     turn_start_verdict,
+    write_record,
 )
+from t5d.engine.play import ROYAL_IDS
 from t5d.net import build_model
-from t5d.net.state import PIECE_IDS
-from tests.engine.helpers import ENGINE, REQUIRE_VAR, requires_engine
+from t5d.net.state import COLOUR_BLACK, COLOUR_WHITE, PIECE_IDS
+from tests.engine.helpers import ENGINE, REQUIRE_VAR, decode_board, requires_engine
 
 pytestmark = requires_engine
 
@@ -193,6 +198,129 @@ def test_the_record_writes_the_readers_long_form():
     assert pgn_move(across, even=True) == "(-0T1)Ng1>x(+0T1)g3"
     promo = _move(from_square=52, to_square=60, promotion=PIECE_IDS["Q"])
     assert pgn_move(promo, even=False) == "(0T1)Pe7e8=Q"
+
+
+def _marks_judged_by_the_boards(g: Game, tally: dict) -> list[Move]:
+    """Every move offered now, written by ``pgn_move`` and judged from the boards - never from
+    its flags: the opponent's pieces on its target board against those on the board it makes
+    there (the source board's successor for a move on its board; for a jump, the other board it
+    makes). Its kind is read from the boards too: a capture onto an empty square is en passant,
+    a jump that makes a timeline a branch. Returns the moves."""
+    snap = g.snapshot()
+    before = {(p, h): fen for p, h, fen in snap.boards}
+    timelines = {p for p, _ in before}
+    opponent = COLOUR_BLACK if snap.to_move == 0 else COLOUR_WHITE
+
+    def theirs(fen: str) -> tuple[int, dict]:
+        board = decode_board(fen, snap.width, snap.height)
+        return int(((board["colour"] == opponent) & (board["piece"] != 0)).sum()), board
+
+    moves = g.moves()
+    for m in moves:
+        with g.copy() as after:
+            after.apply(m)
+            made = {(p, h): fen for p, h, fen in after.snapshot().boards if (p, h) not in before}
+        successor = (m.from_timeline, m.from_half_turn + 1)
+        others = [k for k in made if k != successor]
+        assert successor in made and len(others) <= 1, (m.text(snap.even), sorted(made))
+        count_before, target = theirs(before[(m.to_timeline, m.to_half_turn)])
+        count_after, _ = theirs(made[others[0]] if others else made[successor])
+        takes = count_after < count_before
+        if not others:
+            kind = "en passant" if takes and target["piece"][m.to_cell] == 0 else "on its board"
+        else:
+            kind = "jump" if others[0][0] in timelines else "branch"
+        written = pgn_move(m, snap.even)
+        assert ("x" in written) == takes, (written, kind, "takes a piece" if takes else "takes none")
+        tally[kind, takes] = tally.get((kind, takes), 0) + 1
+    return moves
+
+
+#: Two en passant captures on offer: White's exd6 and Black's exd3.
+EN_PASSANT = (
+    '[Mode "5D"]\n[Board "Standard"]\n\n1. e4 / a6\n2. e5 / d5\n',
+    '[Mode "5D"]\n[Board "Standard"]\n\n1. a3 / e5\n2. a4 / e4\n3. d4\n',
+)
+
+
+def test_the_writer_marks_exactly_the_captures():
+    """H51 (rulebook R11): the engine writes the capture mark strictly - ``x`` on every move that
+    takes a piece and on no other. This writer (``pgn_move``, which N5's self-play and match
+    records use) beside the C++ one (``synthetic::pgn_move``, the engine's test
+    ``synthetic_moves_mark_exactly_the_captures_h51``): every move offered at every position of
+    random pseudo-legal games under five variants - their actions' optional moves included - and
+    at two en passant positions is written and judged from the boards; each kind of capture
+    (on its board, en passant, by a jump, by a branch) and of quiet move must occur."""
+    tally: dict = {}
+    for variant in ("Standard", "Standard - Two Timelines", "Standard - Turn Zero", "Very Small - Open", "Focused - Just Brawns"):
+        for seed in (1, 2):
+            rng = random.Random(f"{variant}/{seed}")
+            with Game.variant(variant) as g:
+                g.set_legality(False)  # as t5d.engine.play: royals may be left capturable
+                for _ in range(10):  # actions
+                    for _ in range(4):  # moves in an action, at most: after the shift, optional ones
+                        moves = _marks_judged_by_the_boards(g, tally)
+                        if g.info().obligations_met and rng.random() < 0.6:
+                            break
+                        pool = [m for m in moves if m.captured not in ROYAL_IDS]  # never a royal taken
+                        if not pool:
+                            break
+                        g.apply(rng.choice(pool))
+                    if not g.info().obligations_met:
+                        break  # stuck
+                    g.submit()
+    for record in EN_PASSANT:
+        with Game.from_pgn(record) as g:
+            g.replay_all()
+            _marks_judged_by_the_boards(g, tally)
+    kinds = [("on its board", True), ("on its board", False), ("en passant", True)]
+    kinds += [("jump", True), ("jump", False), ("branch", True), ("branch", False)]
+    assert all(tally.get(k, 0) > 0 for k in kinds), tally
+
+
+def _played(variant: str, texts: list[list[str]]) -> tuple[list[list[Move]], bool]:
+    """The moves named (in ``Move.text`` form) played as actions from ``variant``'s start."""
+    actions = []
+    with Game.variant(variant) as g:
+        even = g.snapshot().even
+        for action in texts:
+            moves = []
+            for text in action:
+                m = next(m for m in g.moves() if m.text(even) == text)
+                g.apply(m)
+                moves.append(m)
+            g.submit()
+            actions.append(moves)
+    return actions, even
+
+
+@requires_gate
+def test_a_capture_mark_that_disagrees_is_a_problem():
+    """Since H51 the gate's reader reads a capture mark that disagrees with its move - ``x`` on a
+    move that takes nothing, a capture written without ``x`` - as the squares define it, with a
+    warning on standard error, where before it the record was refused (superfluous ``x``). The
+    replay keeps the warnings and ``check_replay`` reports each: a record the engine writes must
+    replay with none."""
+    from dataclasses import replace
+
+    texts = [["(0T1)Pe2(0T1)e4"], ["(0T1)Pd7(0T1)d5"], ["(0T2)Pe4(0T2)d5"], ["(0T2)Ng8(0T2)f6"]]
+    actions, even = _played("Standard", texts)
+    record = write_record("Standard", actions, even=even, first_turn=1, result="*", termination="unknown")
+    assert "(0T2)Pe4xd5" in record and "(0T1)Pe2e4" in record
+    res = GameResult(config=PlayConfig(), record=record, actions=actions, end="unknown", winner=None)
+    replay = replay_with_gate(record, gate=GATE)
+    assert replay.warnings == () and check_replay(res, replay) == []
+    slips = [
+        (record.replace("(0T1)Pe2e4", "(0T1)Pe2xe4"), "takes no piece"),  # superfluous: refused before H51
+        (record.replace("Pe4xd5", "Pe4d5"), "written without 'x'"),  # missing: read with no warning before H51
+    ]
+    for wrong, slip in slips:
+        slipped = replay_with_gate(wrong, gate=GATE)
+        assert slipped.status == "ok" and slipped.actions_accepted == len(actions), slipped.lines[-1:]
+        assert slipped.final_boards == replay.final_boards
+        assert len(slipped.warnings) == 1 and slip in slipped.warnings[0], slipped.warnings
+        problems = check_replay(replace(res, record=wrong), slipped)
+        assert problems == [f"the gate's reader warned: {slipped.warnings[0]}"], problems
 
 
 @pytest.mark.parametrize(

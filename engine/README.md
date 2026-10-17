@@ -565,9 +565,10 @@ writes one JSON object per line, flushed, with no other output on standard outpu
 `--cap N` (the gate appends it) caps the count of legal actions (1000 when not given,
 the manual's cap). Human-readable notes - why a record was rejected, with the token,
 line and column, or the capture that makes an action illegal - go to standard error,
-and so do the reader's warnings (`t5d-gate: warning: ...`, each naming the action and
-the move as written): a turn number that does not count the turns, an annotation
-that disagrees with the state, a capture mark that disagrees with its move (H51).
+and so do the reader's warnings (`t5d-gate: warning: ...`, each saying where it is): a
+turn number that does not count the turns (its line and column), an annotation that
+disagrees with the state or a capture mark that disagrees with its move (H51) - each
+of these two naming the action and the move as written, with its line and column.
 They are never part of the protocol: the events of a record read with a warning are
 those of the same record without the slip.
 
@@ -3096,8 +3097,11 @@ be its: roots renumbered from 169, and root 168's next action (that jump) readab
 records with the reading 6b, 6b′, 6b″ and the truth were measured under: the reader's
 defaults of their day, which differ from today's only there - a written `x` must
 capture (`tools/tool_support.hpp`, `sixb_pgn_options`: `CaptureMarks::MarkedMustCapture`;
-the engine's test `sixb_roots_read_records_as_6b_read_them` pins it). Checked on
-2026-10-17 against the parent commit's build: `t5d-scan6bpp --truth
+the engine's tests pin it: `sixb_roots_read_records_as_6b_read_them` the option and
+`sixb_roots`, and `sixb_tools_read_records_as_6b_read_them` the two tools that read in
+loops of their own - it runs `t5d-scan6b` and `t5d-scan6bp` on a record with an `x` on
+a jump that takes nothing, and each must list `sixb_roots`' roots and stop where it
+stops). Checked on 2026-10-17 against the parent commit's build: `t5d-scan6bpp --truth
 engine/testdata/hunt-truth --record-list build/corpus.txt` accepts the truth - all 825
 roots by record, index and fingerprint, the records' content ids in order - and
 `t5d-scan6b` and `t5d-scan6bp` list the same 825 positions (record, index, fingerprint,

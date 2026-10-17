@@ -234,6 +234,12 @@ endif()
 if(MINGW)
   target_link_options(t5d-scan6bp PRIVATE -static)
 endif()
+# test_sixbpp.cpp runs 6b's and 6b''s tools on a record written there: their
+# roots must be the ones 6b read (tool_support.hpp, sixb_pgn_options; H51).
+add_dependencies(t5d-tests t5d-scan6b t5d-scan6bp)
+target_compile_definitions(t5d-tests PRIVATE
+  "T5D_SCAN6B_EXE=\"$<TARGET_FILE:t5d-scan6b>\""
+  "T5D_SCAN6BP_EXE=\"$<TARGET_FILE:t5d-scan6bp>\"")
 
 # Stage E9: verification v3 (spec 11.4) - Guard, Hunt, the asset map, proof
 # certificates checked against E4 alone; Hunt's ground truth and experiment 6b''.

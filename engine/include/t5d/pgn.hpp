@@ -388,8 +388,10 @@ class PgnReplay {
   /// own warnings (PgnRecord::warnings), then, as the actions are played,
   /// every capture mark that disagreed with its move (CaptureMarks::Lenient,
   /// H51) and every annotation that disagreed with the state
-  /// (PgnOptions::annotation_mismatch_is_error false). Each names the action,
-  /// the move as written and where it is.
+  /// (PgnOptions::annotation_mismatch_is_error false). Each says where it is:
+  /// a capture mark's or an annotation's names the action and the move as
+  /// written (and its line and column, where known); a turn number's - one of
+  /// the record's own - gives only the line and column.
   const std::vector<std::string>& warnings() const noexcept { return warnings_; }
 
   /// Plays the next action: its moves in order, then the submission under
