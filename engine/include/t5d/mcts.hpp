@@ -111,12 +111,22 @@
 // boards after submission differ in it) - and, since C23 ruled a board's
 // causal past to be its ancestry (lineage; spec issue 30), each timeline's
 // branch origin (NodeKey::StateAndOrigins, the default) - with an exact
-// comparison on every key match.
+// comparison on every key match. A node's identity adds the MOVES MADE in its
+// action (register A6, build-log spec issue 302): the network sees the count
+// and no state records it, so equal states with different counts are
+// different inputs, and different nodes. The count subsumes whether a turn is
+// in progress (0: a turn start - only a turn start can end the game, C5, or be
+// capped, I11; only a partial action can be a dead end). Every ordering of one
+// action's moves from one turn start reaches its state with the same count, so
+// MCGS still merges them; only states reached across turns with different
+// counts stay apart.
 // Statistics live on the edges (path statistics); a transposition reached
 // through an edge whose Q lags the node's by more than epsilon backs up the
 // residual correction instead of descending (Czech, Korus and Kersting 2021).
-// Evaluations are a function of the state and the refresh epoch only
-// (EvalCache), so a transposition is a zero-cost evaluation.
+// Evaluations are a function of the state, the moves made in its action and
+// the refresh epoch (EvalCache: §15.2's "same state + epoch -> same
+// evaluation", the count part of what the state means to the network), so a
+// transposition is a zero-cost evaluation.
 //
 // THE PROOF CHANNEL'S CONSUMER (H2, E9), behind SearchParams::proof_channel -
 // OFF by rule (H41: the search's own solver is part of the proof channel;
@@ -397,14 +407,18 @@ const char* stop_reason_name(StopReason reason) noexcept;
 /// relations, W(k)/E(k). Pointers are valid until the batch is delivered.
 struct EvalRequest {
   const GameState* state = nullptr;
-  /// Its global inputs include D8's: the acting player
+  /// Its global inputs include D8's - the acting player
   /// (expansion->acting_player()) and the submit action
-  /// (expansion->submit_possible(), submit_legal()).
+  /// (expansion->submit_possible(), submit_legal()) - and A6's turn state: the
+  /// mandatory and optional boards and the moves made in the action
+  /// (expansion->mandatory_remaining(), optional_playable(), moves_made()).
   const Expansion* expansion = nullptr;
   std::uint64_t key = 0;    ///< the node key
   std::uint64_t epoch = 0;  ///< the refresh epoch (§7.9)
-  // Not here: whether the leaf is a turn start - a path property the network
-  // must not see (an evaluation is a function of the state and the epoch).
+  /// The moves made in the leaf's action (A6; = expansion->moves_made(); 0: a
+  /// turn start) - an input of the network's that no state records, so leaves
+  /// with equal states and different counts are evaluated, and cached, apart.
+  int moves_made = 0;
 };
 
 /// The network's answer for one leaf.
@@ -495,7 +509,7 @@ bool final_eligible(std::span<const FinalCandidate> children, std::size_t i,
                     ChoiceReason reason, const SearchParams& params);
 
 // ---------------------------------------------------------------------------
-// The evaluation cache: state-keyed evaluations (C11, §8.7)
+// The evaluation cache: state-keyed evaluations (C11, C14, §8.7)
 // ---------------------------------------------------------------------------
 
 class EvalCache {
@@ -508,13 +522,14 @@ class EvalCache {
   explicit EvalCache(std::size_t capacity = std::size_t{1} << 16,
                      std::size_t max_bytes = std::size_t{256} << 20)
       : capacity_(capacity), max_bytes_(max_bytes) {}
-  /// The cached evaluation of `state` at `epoch`, compared exactly (keys may
-  /// collide), or nullptr.
-  const Evaluation* find(std::uint64_t key, std::uint64_t epoch, const GameState& state,
+  /// The cached evaluation of `state`, with `moves_made` moves made in its
+  /// action (A6: the network sees the count), at `epoch` - every part compared
+  /// exactly (keys may collide) - or nullptr.
+  const Evaluation* find(std::uint64_t key, int moves_made, std::uint64_t epoch, const GameState& state,
                          bool compare_origins) const;
   /// Stores it (unless full); `new_boards`: the boards the step into the
   /// state made - its own, the rest shared with its predecessors.
-  void insert(std::uint64_t key, std::uint64_t epoch, const GameState& state,
+  void insert(std::uint64_t key, int moves_made, std::uint64_t epoch, const GameState& state,
               const Evaluation& evaluation, std::size_t new_boards = 1);
   /// Removes every entry whose state has fewer than `boards` boards, and
   /// returns how many. Every move adds a board and none is ever removed, so
@@ -538,6 +553,7 @@ class EvalCache {
  private:
   struct Entry {
     GameState state;
+    int moves_made;  // A6: the moves made in the state's action
     std::uint64_t epoch;
     Evaluation evaluation;
     std::size_t bytes;  // entry_bytes, as counted on insertion
@@ -618,7 +634,8 @@ struct NodeView {
   const GameState* state = nullptr;
   std::uint64_t key = 0;
   Colour mover = Colour::White;
-  bool turn_start = true;
+  int moves_made = 0;  ///< A6: the moves made in its action - part of its identity
+  bool turn_start = true;  ///< moves_made == 0
   Terminal terminal = Terminal::None;
   bool expanded = false;
   bool stuck = false;
@@ -658,11 +675,17 @@ struct RootChild {
 
 class Search {
  public:
-  /// A search from `root`. `turn_start`: no move has been made yet in the
-  /// root's action (the whole-turn split requires it). Throws
-  /// std::invalid_argument for inconsistent parameters (proof_store among them).
-  explicit Search(GameState root, SearchParams params = {}, bool turn_start = true,
+  /// A search from `root`, with `moves_made` moves already made in the root's
+  /// action (register A6; 0: a turn start - the whole-turn split requires it).
+  /// Throws std::invalid_argument for inconsistent parameters (proof_store
+  /// among them), a negative count, or a count of 0 where the root's
+  /// obligations are met (a turn start's present lies on the mover's colour,
+  /// T5 - such a root's action has moves).
+  explicit Search(GameState root, SearchParams params = {}, int moves_made = 0,
                   std::shared_ptr<EvalCache> cache = nullptr);
+  /// Before A6 the third argument was a flag, "turn start"; a bool is no
+  /// count, so passing one is a compile error rather than a count of 0 or 1.
+  Search(GameState root, SearchParams params, bool turn_start, std::shared_ptr<EvalCache> cache = nullptr) = delete;
   ~Search();
   Search(const Search&) = delete;
   Search& operator=(const Search&) = delete;
@@ -717,6 +740,8 @@ class Search {
 
   NodeId root() const noexcept;
   const GameState& root_state() const noexcept;
+  /// The moves made in the root's action (A6); root_turn_start() is its being 0.
+  int root_moves_made() const noexcept;
   bool root_turn_start() const noexcept;
   /// The root is terminal (its game is over) or solved.
   bool root_terminal() const noexcept;
@@ -758,8 +783,12 @@ class Search {
   /// state during an action, no moves means submitting it.
   void advance_action(std::span<const Move> moves);
   /// Re-roots on `target`, a state one decision from the root (a fresh root if
-  /// the tree does not hold it). `turn_start` as for the constructor.
-  void advance_to(const GameState& target, bool turn_start);
+  /// the tree does not hold it), with `moves_made` moves made in its action as
+  /// for the constructor (a move: the root's count + 1; a submission or a
+  /// whole action: 0).
+  void advance_to(const GameState& target, int moves_made);
+  /// The flag it took before A6 (see the constructor's): a compile error.
+  void advance_to(const GameState& target, bool turn_start) = delete;
   /// The refresh epoch (§7.9): evaluations are cached per (state, epoch).
   std::uint64_t epoch() const noexcept;
   /// Throws std::invalid_argument while a batch is waiting (its evaluations

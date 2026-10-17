@@ -12,7 +12,10 @@
 // the rules reference - J7, J8, L4, 4.1-4.12, and the ruleset's alternatives
 // that change what a ray reaches: Q8 (no turn-zero destination), Q14 (the
 // brawn's rank-and-timeline capture), Q18 (sliders crossing void), Q19 (past
-// selves passed), Q20 (no destination on an inactive timeline's history).
+// selves passed), Q20 (no destination on an inactive timeline's history). And
+// (h), the turn state (register A6): the mandatory and optional boards from
+// T4-T6 and L5, and the moves made - the synthetic player's moves into the
+// action.
 
 #include <algorithm>
 #include <array>
@@ -113,6 +116,9 @@ struct Reference {
   std::set<Quint> relations;
   std::set<int> destinations, sources, origins;
   int origins_unknown = 0;
+  // (h) A6: the boards the mover must still play, and its other playable ones.
+  int mandatory = 0;
+  int optional = 0;
   // W(k) and its bands alone (W(k) without the origins), k = 0..kMaxK.
   static constexpr int kMaxK = 24;
   std::vector<std::set<int>> window, bands;
@@ -150,6 +156,33 @@ Reference reference(const GameState& s, bool attack, bool defence, bool xray) {
   });
   const auto cell = [&](int square) { return rank_of(square) * size.width + file_of(square); };
   const auto board_of = [&](int p, int h) { return r.index.at({p, h}); };
+
+  // (h) The turn state, from the definitions: a timeline counts for the present
+  // when active (T10) and not deferred (Q6); the present is the least head of
+  // the counting timelines (T4); a head with the mover to move is playable
+  // (L5) - mandatory if it counts and lies in the present (T6), or counts at all
+  // under Q5's AllActive; optional if playable, not mandatory, and a move may be
+  // made (Q4: always, R8; Guide-literal, only while one is mandatory).
+  {
+    const auto counts = [&](int p) {
+      for (const GameState::Deferral& d : s.deferred_timelines()) {
+        if (d.timeline == p) return false;
+      }
+      return s.active(p);
+    };
+    int present = 1 << 30;
+    for (const TimelineRef& t : mv.timelines()) {
+      if (counts(t->position())) present = std::min(present, t->last_half_turn());
+    }
+    int playable = 0;
+    for (const TimelineRef& t : mv.timelines()) {
+      const int h = t->last_half_turn();
+      if (to_move_at(h) != s.to_move()) continue;
+      ++playable;
+      if (counts(t->position()) && (rules.mandatory == MandatoryBoards::AllActive || h == present)) ++r.mandatory;
+    }
+    r.optional = rules.moves_after_shift || r.mandatory > 0 ? playable - r.mandatory : 0;
+  }
 
   // The lineage: a board's previous board on its timeline, or a timeline's
   // first board's branch origin (-1: an initial timeline, or not recorded).
@@ -381,11 +414,13 @@ struct Coverage {
   long long no_moves = 0;
   long long submit_possible = 0;  // (g): submitting possible
   long long submit_illegal = 0;   // ... but not legal (C4)
+  long long mid_action = 0;       // (h): positions with moves made in their action
+  long long optional = 0;         // ... with an optional board
 };
 Coverage coverage;
 
-// The whole comparison, for one position.
-void compare(const GameState& s, bool relations_on) {
+// The whole comparison, for one position, `moves_made` moves into its action.
+void compare(const GameState& s, bool relations_on, int moves_made) {
   const Reference r = reference(s, relations_on, relations_on, relations_on);
   ExpandOptions o;
   o.attack = o.defence = o.xray = relations_on;
@@ -393,7 +428,7 @@ void compare(const GameState& s, bool relations_on) {
     o.window_k = k;
     o.square_features = k == 3 ? SquareFeatures::Scope : SquareFeatures::All;
     Expansion x;
-    expand(s, o, x);
+    expand(s, o, x, moves_made);
     ++checked;
 
     // (f) boards
@@ -438,6 +473,12 @@ void compare(const GameState& s, bool relations_on) {
     CHECK_EQ(x.submit_legal(), submit == SubmitStatus::Safe);
     if (x.submit_possible()) ++coverage.submit_possible;
     if (x.submit_possible() && !x.submit_legal()) ++coverage.submit_illegal;
+    // (h) the turn state (A6)
+    CHECK_EQ(x.mandatory_remaining(), r.mandatory);
+    CHECK_EQ(x.optional_playable(), r.optional);
+    CHECK_EQ(x.moves_made(), moves_made);
+    if (moves_made > 0) ++coverage.mid_action;
+    if (x.optional_playable() > 0) ++coverage.optional;
     // (f) squares
     const std::size_t cells = static_cast<std::size_t>(s.multiverse().board_size().square_count());
     REQUIRE_EQ(x.square_pieces().size(), x.feature_boards().size() * cells);
@@ -571,27 +612,27 @@ void run(const char* variant, std::uint64_t seed, int target_boards, int target_
   GameState s = g.start;
   for (std::size_t a = 0; a < g.actions.size(); ++a) {
     if (a % 3 == 0) {
-      compare(s, a % 2 == 0);
+      compare(s, a % 2 == 0, 0);
       check_moves_by_piece(s);
       // The same position read back from its 5DFEN board strings: 5DFEN
       // records no origin, so its created timelines' origins are unknown.
       if (a % 2 == 1 && s.multiverse().created_by(Colour::White) +
                                 s.multiverse().created_by(Colour::Black) >
                             0) {
-        compare(read_back(s), true);
+        compare(read_back(s), true, 0);
       }
     }
     // Into the action: the position after its first move, mid-action.
     GameState mid = s;
     mid.apply(g.actions[a].front());
-    if (a % 4 == 1) compare(mid, true);
+    if (a % 4 == 1) compare(mid, true, 1);
     for (const Move& m : g.actions[a]) s.apply(m);
     // The action played, before its submission (D8: submit possible; legal or
     // not - the synthetic games are pseudo-legal).
-    if (a % 4 == 3) compare(s, false);
+    if (a % 4 == 3) compare(s, false, static_cast<int>(g.actions[a].size()));
     s.submit(CheckRuling{});  // the synthetic games are pseudo-legal
   }
-  compare(s, true);
+  compare(s, true, 0);
 }
 
 }  // namespace
@@ -624,15 +665,18 @@ TEST(expand_agrees_with_the_reference_on_random_positions) {
   CHECK(coverage.src_only > 0);
   CHECK(coverage.submit_possible > 20);
   CHECK(coverage.submit_illegal > 5);
+  CHECK(coverage.mid_action > 20);
+  CHECK(coverage.optional > 5);
   std::printf("  reference: %d expansions; relations %lld/%lld/%lld (attack/defence/x-ray); "
               "E boards %lld; src_extra %lld (src_only %lld); branching moves %lld; with inactive "
               "timelines %lld; small boards %lld; unknown origins %lld; origins on inactive "
-              "timelines %lld; no moves %lld; submit possible %lld (not legal %lld)\n",
+              "timelines %lld; no moves %lld; submit possible %lld (not legal %lld); mid-action %lld; with an "
+              "optional board %lld\n",
               checked, coverage.relations[kRelationAttack], coverage.relations[kRelationDefence],
               coverage.relations[kRelationXRay], coverage.e_boards, coverage.src_extra,
               coverage.src_only, coverage.branching, coverage.inactive, coverage.small_boards,
               coverage.unknown_origins, coverage.origins_on_inactive, coverage.no_moves,
-              coverage.submit_possible, coverage.submit_illegal);
+              coverage.submit_possible, coverage.submit_illegal, coverage.mid_action, coverage.optional);
 }
 
 TEST(expand_agrees_with_the_reference_when_moves_follow_the_shift) {

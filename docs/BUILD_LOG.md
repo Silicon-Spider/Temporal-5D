@@ -1248,7 +1248,7 @@ commits (F5 and F6 on `lane/net`, H47 and H48 on `lane/gate`, M22 on `lane/engin
 | A1-A3 | built, tested | Network N1: tokens, features, per-board flags, Δt-to-present. A3 on frozen boards under the cached configuration: the intrinsic features are N3's default; their status as score-time key biases is B16's. A3's side to move becomes us/them with A7 |
 | A4 | built, tested | Engine: every board immutable once published; persistent multiverse sharing history in chunks |
 | A5 | not started | Piece-centric tokenisation - ruled at CHECKPOINT 6: build behind its flag; the window's provisional kill does not decide it, and the joint test with the window waits for the pilot run (M18). Last in the net lane, dense scope only (`piece_centric` raises today) |
-| A6 | not started | Global turn-state inputs on the global registers. The acting player is in (D8, N5); the acting colour comes with A7; the counts - mandatory boards still to move, optional boards still playable, moves already made this turn - are engine ABI round 1 (in the expansion, kept out of the truth sources; the count also in the evaluation identity - issue 302), then the net lane's inputs, with §15.2's recount test |
+| A6 | engine side built, tested; network inputs not started | Global turn-state inputs on the global registers. The acting player is in (D8, N5); the acting colour comes with A7. Engine ABI round 1 (2026-10-17, `lane/engine`): the counts are in the expansion (`mandatory_remaining`, `optional_playable`, `moves_made`; the state's own mandatory count, nothing in the truth sources changed) and the C API (`t5d_expansion`'s three appended fields; `t5d_game_summary.moves_made`; the game handle counts the moves of its action - 0 at a set-up, +1 per move, 0 after a submission or a replayed action), with the Python mirror (`Expansion`, `GameInfo.moves_made`; `Search`'s `turn_start` from the handle). The count is in the evaluation identity (issue 302): `EvalRequest`, the evaluation cache's key, the batch's de-duplication and MCGS identity, where it subsumes the turn-start flag; `t5d_search_new` takes the handle's count and checks `turn_start` against it. §15.2's A6 row: `test_turn_state.cpp` recounts the three from the rulebook at every state of random play under every ruleset (both Q4 readings), through the expansion and a `t5d_game`, and checks the spec's arithmetic move by move where no activity changes (issues 143-145). Next: the net lane's inputs - `PositionState`'s counts, the embedding, the converter's copy and cross-check, and `cache.state_digest` (an epoch's anchor), which takes the count when the network's input does |
 | A7 | not started | Perspective canonicalisation - pieces as ours/theirs, ranks mirrored and timelines negated when Black acts, outputs mapped back: net lane, with M20's dispositions, §15.2's colour-swap mirror test (read with the acting colour equalised, issue 304), and frozen K/V keyed by perspective in the cached path (issue 303). Today the input is absolute (colour, side to move, raw coordinates) |
 | A8 | not started | The board-layout embedding - a prototype (6p): net lane, behind its flag, with §15.3's cost row |
 | B1, B2, B4 | built, tested | Network N1: one weight set, unified attention, 4D RoPE (whose positional term factorises per axis - joint-axis geometry is B15's, register B4) |
@@ -1276,9 +1276,9 @@ commits (F5 and F6 on `lane/net`, H47 and H48 on `lane/gate`, M22 on `lane/engin
 | C6 | step 1 done | The |E| curve measured (M7); the head-to-head is Ablation 1, halted with the window until the pilot run (M18) |
 | C8 | honoured | C24's add-only rule (and rung 1's) - refreshes are only ever added |
 | C9 | to check | Reported built in `expand.cpp` by the 2026-10-04 audit; to verify against its row |
-| C11 | built behind a flag, tested | MCGS (E6a): identity is the state key with branch origins and whether an action is in progress, compared exactly - as §8.5 and the register now say (issue 87); A6's move count joins it in engine ABI round 1 (issue 302); awaiting 6k |
+| C11 | built behind a flag, tested | MCGS (E6a): identity is the state key with branch origins and the moves made in the action in progress (A6; since engine ABI round 1 - issue 302, proposed edit 200), which subsumes whether an action is in progress (§8.5 and the register say only that: issue 87), compared exactly; one action's move orders still merge (tested); awaiting 6k |
 | C12, C13 | built, tested | Re-rooting with garbage collection, the persistence hook and pondering (E6a) |
-| C14 | built, tested | Fresh searches per decision in self-play; the evaluation cache shared across them, purged by board count (issue 89); the C API's `t5d_search_new_sharing`; from Python (N5) only between searches with the same network input, with the cached path's refresh epochs set on the search - as §8.7 now has it (the register's C14 names the shared, board-count-purged cache and one cache per evaluator in match play). A6's move count joins the cache key in engine ABI round 1 (issue 302) |
+| C14 | built, tested | Fresh searches per decision in self-play; the evaluation cache shared across them, purged by board count (issue 89); the C API's `t5d_search_new_sharing`; from Python (N5) only between searches with the same network input, with the cached path's refresh epochs set on the search - as §8.7 now has it (the register's C14 names the shared, board-count-purged cache and one cache per evaluator in match play). Since engine ABI round 1 the cache's key holds A6's moves made in the action beside the state and the epoch (issue 302, proposed edit 200) |
 | C23 | built, tested | The node key's default carries branch origins (lineage, `NodeKey::StateAndOrigins`); the network's causal past is the ruled ancestry (`causal_past="lineage"`, tested against ancestry computed from the branching record, N5) |
 | C15 | built in part | FP8 e4m3 frozen K/V (`frozen_kv_format = "fp8"`, applied by the forward itself); varlen/ragged kernels not built (none on CPU; GPU time, M19). The register: FP8 K/V obey G1 only with an FP8 trunk or FP8-frozen-K/V training (issue 34). **Known defect, not yet fixed:** `fake_quantise(x, "fp8")` (`kvformat.py`), which both the forward's FP8 rounding (`model._frozen_kv_rounding`) and the cached path use, casts to FP8 inside autograd with no straight-through estimator, so its backward casts the gradient to FP8 unscaled. Checked 2026-10-17 on CPU (torch 2.13.0+cpu; one 8 × 8 block, seed 0): with \|x\| about 0.1, 63 of 64 gradients were zero; with \|x\| about 1, they were 0.90-1.03 where 1 is expected. FP8-frozen-K/V training (the remedy above) and G8's hook need the net lane's STE fix, with a gradient test, before G2 and G8 |
 | C16 | not built (rule) | Deferred; last, only if node-starved |
@@ -2346,6 +2346,41 @@ superseded or made moot says so; nothing is deleted.
     turn starts at 200 boards or more, so the regime of §8.2's cost argument is
     unmeasured until the pilot self-play run (M18). (The first version of this issue
     called the multi-move turns "where the arms differ"; corrected at review.)
+143. **A6's arithmetic for the mandatory count is not the rules' count** (§2.3; register
+    A6: "mandatory boards still to move — exact from the rules engine: −1 per ordinary
+    move, −2 for a move between two present boards, 0 after a rewinding branch"). Checked
+    against a recount from the rulebook at every state of random play under every ruleset
+    (`engine/tests/test_turn_state.cpp`): the three cases hold wherever no timeline starts
+    or stops counting, but the arithmetic leaves out (a) T6's arrivals - a jump that does
+    not branch plays the board it lands on, so one from an optional board onto a mandatory
+    one is −1 (the optional count −1 too), and one from a mandatory board onto an optional
+    one is −1, neither "a move between two present boards"; (b) T11/T12 - a creation that
+    reactivates a timeline behind the present rewinds it (Rewinds, the default), and the
+    count rises when that board is the mover's (10 times in the default test's 3,842
+    states, 752 in the long test's 77,926); (c) Q5's AllActive reading, under which a
+    rewinding branch zeroes nothing; (d) Q3's play activation and Q6's deferrals, which
+    change what counts. §2.3's "exact counts, never predicted ones: the rules engine knows
+    them" governs: the count built is the state machine's own
+    (`GameState::mandatory_count`), never the arithmetic. Proposed edit 116.
+144. **"Optional boards still playable" and "moves already made this turn" are not
+    defined** (§2.3; register A6). Read, from the rulebook's terms: optional = the acting
+    player's playable boards (L5: the heads with the mover to move - active or not, in the
+    present or not, T6) that are not mandatory, and none once no move may be made (Q4's
+    Guide-literal reading, after the shift); a playable board with no legal move counts
+    (L5 asks for none; the expansion's per-board `playable` flag marks the same set, so
+    mandatory + optional is the number of boards it marks), and so do inactive and
+    deferred (Q6) heads. Moves made = the moves made since the action's turn start (a turn
+    being one player's action, issue 305), one per move - a jump between two boards is one
+    move, though A6's "−2" counts the two boards it plays; 0 at a turn start. The
+    alternatives - only boards with a legal move, only active ones, boards played instead
+    of moves - are not built; each would be a few lines in `expand.cpp`. Proposed edit 117.
+145. **§15.4's turn-structure invariant does not name the count** (§15.4: "a submit edge
+    leads to a turn start and a move edge to a mid-turn state"; register A6, C11). With
+    A6's count in a node's identity (issue 302) the invariant is the count's: 0 below a
+    submit edge or a whole-turn action, the parent's + 1 below a move - in a graph as in a
+    tree, every parent of a node agreeing. Built into `Search::check_invariants` and
+    checked from outside the search (`mcts_every_node_counts_the_moves_made_since_its_turn_start`).
+    Proposed edit 118.
 
 ## Proposed spec edits
 
@@ -2934,6 +2969,32 @@ struck through, where nothing of it is left to apply); the others stand as writt
     Why: edit 114 alone would leave the register's D2 status and part K's gate still
     waiting on M22 while the spec says the precondition is met - and a decision changes
     in the spec and the register in the same edit (CLAUDE.md).
+116. **Register A6 and §2.3's turn-state bullet (the mandatory count)**: now - "exact from
+    the rules engine: −1 per ordinary move, −2 for a move between two present boards, 0
+    after a rewinding branch" (A6); "one fewer per ordinary move, two fewer for a move
+    between two present boards (it creates a board on both), zero once a branch rewinds the
+    present" (§2.3). Proposed: "exact from the rules engine - the state machine's count (T5,
+    T6; Q5, Q6): a move lowers it by the mandatory boards it plays (one; two for a jump
+    between two of them - a jump that does not branch plays the board it lands on, T6, so
+    one from an optional board onto a mandatory board lowers it by one); a branch that
+    rewinds the present zeroes it (T8; not under Q5's AllActive reading); a reactivation
+    behind the present can raise it (T11, T12)". Why: the arithmetic as written leaves out
+    T6's arrivals, T12's reactivations and Q5 (issue 143), and "exact counts, never
+    predicted ones" makes the rules engine's count the input - which is what is built.
+117. **§2.3 and register A6 (the two undefined counts)**: now - "optional boards still
+    playable" and "moves already made this turn", undefined. Proposed: "optional boards
+    still playable: the acting player's playable boards (L5) that are not mandatory -
+    active or not, in the present or not (T6) - and none once no move may be made (Q4)";
+    "moves already made this turn: the moves made since the action's turn start, one per
+    move (a jump between two boards included); 0 at a turn start - no state records it, so
+    the search and the game carry it, and it is part of identity (edit 200)". Why: issue
+    144; as built.
+118. **§15.4's turn structure**: now - "a submit edge leads to a turn start and a move edge
+    to a mid-turn state". Proposed, appended: "and the moves made in the action (A6) count
+    the move edges since the last submission: 0 below a submit edge or a whole-turn
+    action, the parent's + 1 below a move, every parent of a graph node agreeing". Why:
+    issue 145; the count is part of a node's identity (edit 200), and this invariant is
+    what holds it.
 
 ## Session log
 

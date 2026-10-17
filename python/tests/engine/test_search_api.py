@@ -542,3 +542,38 @@ def test_the_leaf_carries_d8():
         assert v.submit_possible and v.acting_player != x.present & 1
         assert v.legality is None or v.legality.shape == (x.move_count,)
         s.abandon()
+
+
+# --- A6: the root's moves made in its action ------------------------------------------------------
+
+
+def test_the_root_takes_the_games_moves_made_a6():
+    """Register A6: a search's root takes the game handle's count of moves made in its action -
+    ``turn_start`` defaults to it, and a ``turn_start`` that contradicts it is refused - and every
+    leaf's expansion carries its own count: 0 at a turn start (which always owes a board, T5),
+    the root's + 1 per move below it."""
+    with Game.variant("Standard - Two Timelines") as g:
+        with pytest.raises(EngineArgumentError, match="moves in its action"):
+            Search(g, turn_start=False)
+        s = Search(g)
+        assert s.info().root_turn_start and s.root_game().info().moves_made == 0
+        s.close()
+        g.apply(g.moves()[0])
+        assert g.info().moves_made == 1
+        with pytest.raises(EngineArgumentError, match="moves in its action"):
+            Search(g, turn_start=True)
+        s = Search(g, params=search_params(seed=3))
+        assert not s.info().root_turn_start
+        with s.root_game() as root:
+            assert root.info().moves_made == 1
+        s.run(T5D_EVALUATOR_RANDOM, 120, seed=3)
+        n = s.gather(16)
+        counts = []
+        for i in range(n):
+            x = s.leaf_view(i).expansion
+            counts.append(x.moves_made)
+            assert x.moves_made >= 0 and (x.moves_made > 0 or x.mandatory_remaining > 0)
+            assert (x.mandatory_remaining == 0) == x.submit_possible
+        s.abandon()
+        assert n > 0 and max(counts) >= 2  # moves below the root's first
+        s.close()

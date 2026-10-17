@@ -329,21 +329,20 @@ def play_game(evaluators: Evaluator | Sequence[Evaluator], cfg: PlayConfig, *, n
                 break
             mover = game.info().to_move
             action: list[Move] = []
-            turn_start = True
             if cfg.mode == "match" and carried[mover] is not None and res.actions and not _reroot(carried, mover, res.actions[-1], game):
                 res.reroot_fallbacks += 1
             while True:
                 if cfg.mode == "self":
                     seed = _mix(cfg.seed + 0x9E3779B97F4A7C15 * (res.decisions + 1))
                     params = _decision_params(game, cfg, relations, seed=seed, noise=True)
-                    search = Search(game, turn_start=turn_start, params=params, share=shared)
+                    search = Search(game, params=params, share=shared)  # its root: the game's moves made (A6)
                     if shared is not None:
                         shared.close()  # the cache lives on in the new search
                     shared = search
                 else:
                     if carried[mover] is None:
                         params = _decision_params(game, cfg, relations, seed=_mix(cfg.seed + 17 * mover), noise=False)
-                        carried[mover] = Search(game, turn_start=turn_start, params=params)
+                        carried[mover] = Search(game, params=params)
                     search = carried[mover]
                 before = search.info()
                 evaluator = evs[mover] if cfg.mode == "match" else evs[0]
@@ -374,7 +373,6 @@ def play_game(evaluators: Evaluator | Sequence[Evaluator], cfg: PlayConfig, *, n
                     action.append(child.moves[0])
                 if cfg.mode == "match":
                     search.advance(pick)
-                turn_start = False
                 if submitted:
                     break
             res.actions.append(action)

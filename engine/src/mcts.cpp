@@ -113,7 +113,8 @@ struct Node {
   GameState state;
   std::uint64_t key = 0;
   Colour mover = Colour::White;
-  bool turn_start = true;
+  std::int32_t moves_made = 0;  // A6: the moves made in its action - part of its identity
+  bool turn_start = true;       // moves_made == 0
   Terminal terminal = Terminal::None;
   bool expanded = false;
   bool pending = false;       // waiting in the batch for its evaluation
@@ -403,11 +404,12 @@ Choice select_final(std::span<const FinalCandidate> children, const SearchParams
 // The evaluation cache
 // ---------------------------------------------------------------------------
 
-const Evaluation* EvalCache::find(std::uint64_t key, std::uint64_t epoch, const GameState& state,
+const Evaluation* EvalCache::find(std::uint64_t key, int moves_made, std::uint64_t epoch, const GameState& state,
                                   bool compare_origins) const {
   const auto [first, last] = entries_.equal_range(key);
   for (auto it = first; it != last; ++it) {
-    if (it->second.epoch == epoch && detail::same_state(it->second.state, state, compare_origins)) {
+    if (it->second.epoch == epoch && it->second.moves_made == moves_made &&
+        detail::same_state(it->second.state, state, compare_origins)) {
       return &it->second.evaluation;
     }
   }
@@ -423,11 +425,11 @@ std::size_t EvalCache::entry_bytes(const GameState& state, const Evaluation& eva
          detail::state_heap_bytes(state, new_boards);
 }
 
-void EvalCache::insert(std::uint64_t key, std::uint64_t epoch, const GameState& state,
+void EvalCache::insert(std::uint64_t key, int moves_made, std::uint64_t epoch, const GameState& state,
                        const Evaluation& evaluation, std::size_t new_boards) {
   if (entries_.size() >= capacity_) return;
-  if (find(key, epoch, state, true) != nullptr) return;
-  Entry e{state, epoch, evaluation, 0};
+  if (find(key, moves_made, epoch, state, true) != nullptr) return;
+  Entry e{state, moves_made, epoch, evaluation, 0};
   e.evaluation.logits.shrink_to_fit();
   e.bytes = entry_bytes(e.state, e.evaluation, new_boards);
   if (bytes_ + e.bytes > max_bytes_) return;
@@ -473,21 +475,37 @@ struct Search::Impl {
   std::vector<Step> path_;
   std::size_t tree_bytes_ = 0;  // the nodes' counts (Node::bytes), summed
 
-  Impl(GameState root, const SearchParams& params, bool turn_start,
-       std::shared_ptr<EvalCache> cache)
+  Impl(GameState root, const SearchParams& params, int moves_made, std::shared_ptr<EvalCache> cache)
       : params_(params) {
     validate();
+    check_moves_made(root, moves_made);
     if (cache) {
       cache_ = std::move(cache);
     } else if (params_.eval_cache_entries > 0) {
       cache_ = std::make_shared<EvalCache>(params_.eval_cache_entries, params_.eval_cache_bytes);
     }
-    if (params_.split == TurnSplit::WholeTurn && !turn_start) {
-      throw std::invalid_argument("the whole-turn split searches from turn starts only");
-    }
-    root_ = make_node(std::move(root), turn_start);
+    root_ = make_node(std::move(root), moves_made);
     register_node(root_);
     purge_cache();
+  }
+
+  // A root's count of moves made in its action (A6): 0 or more; 0 - a turn
+  // start - only where the obligations are not met (every turn begins with the
+  // present on the mover's colour, T5, so with a mandatory board); under the
+  // whole-turn split, 0 only.
+  void check_moves_made(const GameState& root, int moves_made) const {
+    if (moves_made < 0) {
+      throw std::invalid_argument("search: moves_made (the moves made in the root's action, A6) must be 0 or more, "
+                                  "not " + std::to_string(moves_made));
+    }
+    if (params_.split == TurnSplit::WholeTurn && moves_made != 0) {
+      throw std::invalid_argument("the whole-turn split searches from turn starts only (moves_made 0)");
+    }
+    if (moves_made == 0 && root.obligations_met()) {
+      throw std::invalid_argument(
+          "search: a root with no move made in its action is a turn start, and a turn start's present lies on "
+          "the mover's colour (T5) - this root's obligations are met, so its action has moves: give their count (A6)");
+    }
   }
 
   // The evaluation cache's entries behind the root, gone for good.
@@ -570,39 +588,46 @@ struct Search::Impl {
     return params_.key_bits >= 64 ? k : k & ((std::uint64_t{1} << params_.key_bits) - 1);
   }
 
-  NodeId make_node(GameState state, bool turn_start, std::size_t new_boards = 1) {
+  NodeId make_node(GameState state, int moves_made, std::size_t new_boards = 1) {
     Node n(std::move(state));
     n.new_boards = new_boards;
     n.key = key_of(n.state);
     n.mover = n.state.to_move();
-    n.turn_start = turn_start;
-    if (turn_start) classify(n);
+    n.moves_made = moves_made;
+    n.turn_start = moves_made == 0;
+    if (n.turn_start) classify(n);
     nodes_.push_back(std::move(n));
     ++stats_.nodes_created;
     account(nodes_.back());
     return static_cast<NodeId>(nodes_.size() - 1);
   }
 
-  // MCGS identity: the state key AND whether an action is in progress. A turn
-  // start and a state during an action can hold the same GameState (an
-  // optional board played at the end of one action, or at the start of the
-  // next), yet only a turn start can end the game (C5) or be capped (I11),
-  // and only a partial action can be a dead end - so they are never one node.
-  static std::uint64_t identity(std::uint64_t key, bool turn_start) noexcept {
-    return turn_start ? detail::combine(key, 0x7475726E5F737461ull) : key;
+  // MCGS identity: the state key AND the moves made in the action in progress
+  // (A6). The network sees the count, and no state records it: equal states
+  // with different counts are different inputs, so never one node (§15.2: a
+  // transposition's evaluation must be the node's). The count subsumes
+  // whether an action is in progress - a turn start and a state during an
+  // action can hold the same GameState (an optional board played at the end of
+  // one action, or at the start of the next), yet only a turn start can end the
+  // game (C5) or be capped (I11), and only a partial action can be a dead end.
+  // Every ordering of one action's moves from its turn start gives the same
+  // count, so the merges inside an action are kept.
+  static std::uint64_t identity(std::uint64_t key, int moves_made) noexcept {
+    if (moves_made == 0) return detail::combine(key, 0x7475726E5F737461ull);
+    return detail::combine(key, detail::mix64(0x6D6F7665735F6D61ull + static_cast<std::uint64_t>(moves_made)));
   }
 
   void register_node(NodeId id) {
-    if (params_.graph) table_.emplace(identity(nodes_[id].key, nodes_[id].turn_start), id);
+    if (params_.graph) table_.emplace(identity(nodes_[id].key, nodes_[id].moves_made), id);
   }
 
-  // The node of the graph holding (state, turn_start), compared exactly; kNoNode.
-  NodeId find_node(std::uint64_t key, const GameState& s, bool turn_start) const {
-    const auto it = table_.find(identity(key, turn_start));
+  // The node of the graph holding (state, moves made in its action), compared
+  // exactly; kNoNode.
+  NodeId find_node(std::uint64_t key, const GameState& s, int moves_made) const {
+    const auto it = table_.find(identity(key, moves_made));
     if (it == table_.end()) return kNoNode;
     const Node& n = nodes_[it->second];
-    return n.turn_start == turn_start && detail::same_state(n.state, s, compare_origins()) ? it->second
-                                                                                          : kNoNode;
+    return n.moves_made == moves_made && detail::same_state(n.state, s, compare_origins()) ? it->second : kNoNode;
   }
 
   // A turn start: the game's end, by E4's exhaustive detector only (H37), or
@@ -649,12 +674,12 @@ struct Search::Impl {
     return r.terminal != Terminal::None || solved(r) || r.stuck || r.dead_end;
   }
 
-  // The state an edge leads to; `turn_start` is set for the opponent's turn
-  // start - after a submit edge or a whole action, never after a move (D8:
-  // nothing is submitted automatically). `illegal` is set for an edge whose
-  // action can no longer be legal (kept for a caller's checks; no edge made by
-  // the search is such).
-  GameState child_state(NodeId pid, std::size_t ei, bool& turn_start, bool& illegal) const {
+  // The state an edge leads to, and the moves made in its action (A6, §15.4's
+  // turn structure): 0 - the opponent's turn start - after a submit edge or a
+  // whole action; the parent's count + 1 after a move (D8: nothing is submitted
+  // automatically). `illegal` is set for an edge whose action can no longer be
+  // legal (kept for a caller's checks; no edge made by the search is such).
+  GameState child_state(NodeId pid, std::size_t ei, int& moves_made, bool& illegal) const {
     const Node& p = nodes_[pid];
     const Edge& e = p.edges[ei];
     GameState s = p.state;
@@ -665,21 +690,21 @@ struct Search::Impl {
         throw std::logic_error("search: a listed legal action cannot be submitted");
       }
       s.submit();
-      turn_start = true;
+      moves_made = 0;
       return s;
     }
     if (e.submit) {
       if (s.submission_status() != SubmitStatus::Safe) {
         illegal = true;  // C4 fails: never followed (the edge is pruned)
-        turn_start = false;
+        moves_made = p.moves_made;
         return s;
       }
       s.submit();
-      turn_start = true;
+      moves_made = 0;
       return s;
     }
     s.apply(e.move);
-    turn_start = false;
+    moves_made = p.moves_made + 1;
     return s;
   }
 
@@ -697,9 +722,9 @@ struct Search::Impl {
         return e.child;
       }
     }
-    bool turn_start = false;
+    int moves_made = 0;
     bool illegal = false;
-    GameState s = child_state(pid, ei, turn_start, illegal);
+    GameState s = child_state(pid, ei, moves_made, illegal);
     if (illegal) {
       prune(pid, ei);
       ++stats_.dead_ends;
@@ -709,19 +734,19 @@ struct Search::Impl {
     const std::size_t made = s.multiverse().board_count() - nodes_[pid].state.multiverse().board_count();
     if (params_.graph) {
       const std::uint64_t key = key_of(s);
-      const NodeId found = find_node(key, s, turn_start);
+      const NodeId found = find_node(key, s, moves_made);
       if (found != kNoNode) {
         id = found;
         ++stats_.transposition_hits;
-      } else if (table_.count(identity(key, turn_start)) != 0) {
+      } else if (table_.count(identity(key, moves_made)) != 0) {
         ++stats_.key_collisions;  // kept apart: an unshared node
-        id = make_node(std::move(s), turn_start, made);
+        id = make_node(std::move(s), moves_made, made);
       } else {
-        id = make_node(std::move(s), turn_start, made);
+        id = make_node(std::move(s), moves_made, made);
         register_node(id);
       }
     } else {
-      id = make_node(std::move(s), turn_start, made);
+      id = make_node(std::move(s), moves_made, made);
     }
     nodes_[pid].edges[ei].child = id;
     if (nodes_[id].dead_end) {
@@ -744,7 +769,7 @@ struct Search::Impl {
     ExpandOptions o = params_.expand;
     o.legal_moves = params_.split == TurnSplit::BoardMove && params_.legal_moves_only;
     o.legality = params_.legality;
-    expand(n.state, o, out);
+    expand(n.state, o, out, n.moves_made);  // A6: the node's count, from its path
     stats_.seconds_expand += detail::seconds_since(t0);
   }
 
@@ -1325,8 +1350,10 @@ struct Search::Impl {
       release(path_);
       return Selected::DeadEnd;
     }
+    // The cache and the batch match the whole network input: the state and the
+    // moves made in its action (A6), at the epoch.
     if (cache_) {
-      if (const Evaluation* ev = cache_->find(n.key, epoch_, n.state, compare_origins())) {
+      if (const Evaluation* ev = cache_->find(n.key, n.moves_made, epoch_, n.state, compare_origins())) {
         const Evaluation copy = *ev;
         expand_node(id, copy, x);
         ++stats_.cache_hits;
@@ -1335,12 +1362,12 @@ struct Search::Impl {
         return Selected::Done;
       }
     }
-    // One evaluation per distinct state in the batch: a tree can hold one
-    // state in two nodes (a transposition it does not merge).
+    // One evaluation per distinct input in the batch: a tree can hold one
+    // state with one count in two nodes (a transposition it does not merge).
     std::size_t request = unique_requests_;
     for (const Pending& other : pending_) {
       const Node& o = nodes_[other.leaf];
-      if (o.key == n.key && detail::same_state(o.state, n.state, compare_origins())) {
+      if (o.key == n.key && o.moves_made == n.moves_made && detail::same_state(o.state, n.state, compare_origins())) {
         request = other.request;
         ++stats_.batch_duplicates;
         break;
@@ -1393,7 +1420,7 @@ struct Search::Impl {
     for (const Pending& pd : pending_) {
       if (pd.request != requests_.size()) continue;  // a duplicate: its first leaf asks
       const Node& n = nodes_[pd.leaf];
-      requests_.push_back(EvalRequest{&n.state, slots_[pd.slot].get(), n.key, epoch_});
+      requests_.push_back(EvalRequest{&n.state, slots_[pd.slot].get(), n.key, epoch_, n.moves_made});
     }
     return requests_.size();
   }
@@ -1442,7 +1469,8 @@ struct Search::Impl {
         const Node& n = nodes_[pd.leaf];
         backup(pd.path, n.eval_mean, backup_weight(n.eval_var), true);
         ++delivered;
-        if (cache_) cache_->insert(n.key, epoch_, n.state, ev, n.new_boards);  // a duplicate is not stored twice
+        // A duplicate is not stored twice.
+        if (cache_) cache_->insert(n.key, n.moves_made, epoch_, n.state, ev, n.new_boards);
       }
     } catch (...) {
       // What was delivered stays; the rest of the batch is abandoned.
@@ -1604,7 +1632,9 @@ struct Search::Impl {
         }
         // An action ends only by a submit edge (D8), and a submit edge always ends
         // one: whether a node is a turn start follows from the edge into it alone,
-        // in a graph as in a tree.
+        // in a graph as in a tree. And the moves made in the action (A6) count
+        // the move edges since: 0 after a submit edge or a whole action, the
+        // parent's + 1 after a move (§15.4's turn structure).
         if (e.child != kNoNode && params_.split == TurnSplit::BoardMove &&
             nodes_[e.child].turn_start != e.submit) {
           fail(e.submit ? "a submit edge into a node during an action" : "a move edge into a turn start", id);
@@ -1612,6 +1642,18 @@ struct Search::Impl {
         if (e.child != kNoNode && params_.split == TurnSplit::WholeTurn && !nodes_[e.child].turn_start) {
           fail("a whole-turn action into a node during an action", id);
         }
+        if (e.child != kNoNode) {
+          const int want = params_.split == TurnSplit::WholeTurn || e.submit ? 0 : n.moves_made + 1;
+          if (nodes_[e.child].moves_made != want) {
+            const char* edge = params_.split == TurnSplit::WholeTurn ? "action" : e.submit ? "submit" : "move";
+            fail("a child with " + std::to_string(nodes_[e.child].moves_made) + " moves made in its action where its " +
+                     edge + " edge gives " + std::to_string(want),
+                 id);
+          }
+        }
+      }
+      if (n.moves_made < 0 || n.turn_start != (n.moves_made == 0)) {
+        fail("a turn start's count of moves made is not 0, or a partial action's is", id);
       }
       if (!n.turn_start && n.terminal != Terminal::None) fail("a game end during an action (C5)", id);
       if (n.turn_start && n.dead_end) fail("a turn start marked a dead end", id);
@@ -1668,6 +1710,7 @@ struct Search::Impl {
     for (const NodeId id : order) {
       const Node& n = nodes_[id];
       h = combine(h, n.key);
+      h = combine(h, static_cast<std::uint64_t>(static_cast<std::uint32_t>(n.moves_made)));  // A6: identity
       h = combine(h, (static_cast<std::uint64_t>(n.visits) << 32) | n.ends);
       h = combine(h, bits_of(n.w));
       h = combine(h, bits_of(n.wq));
@@ -1700,8 +1743,8 @@ struct Search::Impl {
 // Search: the public face
 // ---------------------------------------------------------------------------
 
-Search::Search(GameState root, SearchParams params, bool turn_start, std::shared_ptr<EvalCache> cache)
-    : impl_(std::make_unique<Impl>(std::move(root), params, turn_start, std::move(cache))) {}
+Search::Search(GameState root, SearchParams params, int moves_made, std::shared_ptr<EvalCache> cache)
+    : impl_(std::make_unique<Impl>(std::move(root), params, moves_made, std::move(cache))) {}
 Search::~Search() = default;
 Search::Search(Search&&) noexcept = default;
 Search& Search::operator=(Search&&) noexcept = default;
@@ -1769,6 +1812,7 @@ void Search::abandon() noexcept { impl_->abandon(); }
 
 NodeId Search::root() const noexcept { return impl_->root_; }
 const GameState& Search::root_state() const noexcept { return impl_->nodes_[impl_->root_].state; }
+int Search::root_moves_made() const noexcept { return impl_->nodes_[impl_->root_].moves_made; }
 bool Search::root_turn_start() const noexcept { return impl_->nodes_[impl_->root_].turn_start; }
 bool Search::root_terminal() const noexcept {
   return impl_->nodes_[impl_->root_].terminal != Terminal::None;
@@ -1881,25 +1925,26 @@ void Search::advance(std::size_t index) {
   s.reroot(c);
 }
 
-void Search::advance_to(const GameState& target, bool turn_start) {
+void Search::advance_to(const GameState& target, int moves_made) {
   Impl& s = *impl_;
   if (!s.pending_.empty()) throw std::invalid_argument("search: cannot advance while a batch is waiting");
+  s.check_moves_made(target, moves_made);
   const std::size_t count = s.nodes_[s.root_].edges.size();
   for (std::size_t i = 0; i < count; ++i) {
     const Edge& e = s.nodes_[s.root_].edges[i];
     if (e.pruned) continue;
     if (e.child != kNoNode) {
       const Node& c = s.nodes_[e.child];
-      if (c.turn_start == turn_start && c.state == target) {
+      if (c.moves_made == moves_made && c.state == target) {
         s.reroot(e.child);
         return;
       }
       continue;
     }
-    bool ts = false;
+    int made = 0;
     bool illegal = false;
-    const GameState child = s.child_state(s.root_, i, ts, illegal);
-    if (!illegal && ts == turn_start && child == target) {
+    const GameState child = s.child_state(s.root_, i, made, illegal);
+    if (!illegal && made == moves_made && child == target) {
       const NodeId c = s.ensure_child(s.root_, i);
       if (c != kNoNode) {
         s.reroot(c);
@@ -1908,15 +1953,16 @@ void Search::advance_to(const GameState& target, bool turn_start) {
     }
   }
   if (s.params_.graph) {
-    // The same (state, action in progress) elsewhere in the graph - never a
-    // turn start for a partial action, nor the reverse.
-    const NodeId found = s.find_node(s.key_of(target), target, turn_start);
+    // The same (state, moves made in its action) elsewhere in the graph - never
+    // a turn start for a partial action, nor the reverse, nor one count for
+    // another (A6).
+    const NodeId found = s.find_node(s.key_of(target), target, moves_made);
     if (found != kNoNode && s.nodes_[found].state == target) {
       s.reroot(found);
       return;
     }
   }
-  const NodeId fresh = s.make_node(target, turn_start);
+  const NodeId fresh = s.make_node(target, moves_made);
   s.reroot(fresh);
 }
 
@@ -1937,20 +1983,19 @@ void Search::advance_moves(std::span<const Move> moves) {
     }
     target.submit();
   };
-  bool turn_start = false;
+  int moves_made = 0;  // A6: 0 after a submission, the root's + 1 after a move
   if (s.params_.split == TurnSplit::WholeTurn) {
     for (const Move& m : moves) play(m);
     submit();
-    turn_start = true;
   } else if (moves.empty()) {
     submit();
-    turn_start = true;
   } else if (moves.size() == 1) {
     play(moves[0]);  // never submitted with it (D8): submitting is its own decision
+    moves_made = s.nodes_[s.root_].moves_made + 1;
   } else {
     throw std::invalid_argument("advance_moves: the board-move split takes one move per decision");
   }
-  advance_to(target, turn_start);
+  advance_to(target, moves_made);
 }
 
 void Search::advance_action(std::span<const Move> moves) {
@@ -2006,6 +2051,7 @@ NodeView Search::node(NodeId id) const {
   v.state = &n.state;
   v.key = n.key;
   v.mover = n.mover;
+  v.moves_made = n.moves_made;
   v.turn_start = n.turn_start;
   v.terminal = n.terminal;
   v.expanded = n.expanded;

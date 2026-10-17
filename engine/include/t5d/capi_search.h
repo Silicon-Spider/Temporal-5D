@@ -16,8 +16,12 @@
  *
  * What a leaf carries is everything the network takes from it - the leaf's
  * expansion (t5d_expansion: per-board and per-square features, the candidate
- * moves, the move graph, typed relations, W(k)/E(k)), its node key and the
- * refresh epoch. Its evaluation is:
+ * moves, the move graph, typed relations, W(k)/E(k), and the turn state:
+ * the mandatory and optional boards and the moves made in the leaf's action -
+ * register A6), its node key and the refresh epoch. The search evaluates and
+ * caches a leaf by its state AND its moves made in the action (no state
+ * records the count; equal states with different counts are different
+ * inputs). Its evaluation is:
  *
  *  - POLICY: one float32 logit per candidate move, logit i scoring
  *    leaf.expansion.moves[i] (the expansion's own order). Under the whole-turn
@@ -269,9 +273,12 @@ typedef struct t5d_root_child {
 /* The defaults (t5d/mcts.hpp). Cannot fail; NULL is ignored. */
 T5D_API void t5d_search_params_default(t5d_search_params* out);
 
-/* A search from the game's current state. turn_start: 1 if no move has been
- * made yet in the action under way (the whole-turn split requires it). `params`
- * NULL: the defaults. The game handle is not kept. On failure *out is NULL. */
+/* A search from the game's current state, with the game handle's count of moves
+ * made in the action under way (t5d_game_summary.moves_made; register A6).
+ * turn_start: 1 if no move has been made yet in that action (the whole-turn
+ * split requires it) - it must agree with the handle's count (1 exactly where
+ * it is 0; T5D_ERR_ARGUMENT otherwise). `params` NULL: the defaults. The game
+ * handle is not kept. On failure *out is NULL. */
 T5D_API t5d_status t5d_search_new(const t5d_game* game, int32_t turn_start,
                                   const t5d_search_params* params, t5d_search** out,
                                   char** error);
@@ -372,7 +379,8 @@ T5D_API t5d_status t5d_search_advance(t5d_search* search, size_t index, char** e
 T5D_API t5d_status t5d_search_advance_action(t5d_search* search, const t5d_move* moves,
                                              size_t count, char** error);
 
-/* The root's state, as a new game handle (legal submissions). */
+/* The root's state, as a new game handle (legal submissions), with the root's
+ * count of moves made in its action (A6). */
 T5D_API t5d_status t5d_search_root_game(const t5d_search* search, t5d_game** out, char** error);
 
 /* The refresh epoch (§7.9): evaluations are cached per (state, epoch). An

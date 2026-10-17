@@ -387,6 +387,20 @@ constexpr LayoutEntry kLayout[] = {
 #undef T5D_SEARCH_SIZE
 #undef T5D_SEARCH_AT
 
+// The game handle's count of moves made in its action (A6), which the search's
+// root takes; `turn_start` - the caller's word for it - must agree.
+int root_moves_made(const t5d_game& game, int32_t turn_start) {
+  const bool start = boolean(turn_start, "turn_start");
+  const int moves = t5d::capi_internal::game_moves_in_action(game);
+  if (start != (moves == 0)) {
+    throw std::invalid_argument("turn_start is " + std::to_string(turn_start) + " but the game handle has made " +
+                                std::to_string(moves) +
+                                " moves in its action (t5d_game_summary.moves_made; register A6): turn_start is 1 "
+                                "exactly where it has made none");
+  }
+  return moves;
+}
+
 }  // namespace
 
 extern "C" {
@@ -473,9 +487,9 @@ t5d_status t5d_search_new(const t5d_game* game, int32_t turn_start, const t5d_se
     if (out == nullptr) throw std::invalid_argument("out is NULL");
     *out = nullptr;
     if (game == nullptr) throw std::invalid_argument("game is NULL");
-    const bool start = boolean(turn_start, "turn_start");
+    const int moves = root_moves_made(*game, turn_start);
     const SearchParams p = params_from(params);
-    *out = new t5d_search(Search(t5d::capi_internal::game_state(*game), p, start));
+    *out = new t5d_search(Search(t5d::capi_internal::game_state(*game), p, moves));
     return T5D_OK;
   });
 }
@@ -486,9 +500,9 @@ t5d_status t5d_search_new_sharing(const t5d_search* donor, const t5d_game* game,
     if (out == nullptr) throw std::invalid_argument("out is NULL");
     *out = nullptr;
     if (donor == nullptr || game == nullptr) throw std::invalid_argument("donor or game is NULL");
-    const bool start = boolean(turn_start, "turn_start");
+    const int moves = root_moves_made(*game, turn_start);
     const SearchParams p = params_from(params);
-    *out = new t5d_search(Search(t5d::capi_internal::game_state(*game), p, start, donor->search.shared_cache()));
+    *out = new t5d_search(Search(t5d::capi_internal::game_state(*game), p, moves, donor->search.shared_cache()));
     return T5D_OK;
   });
 }
@@ -535,7 +549,7 @@ t5d_status t5d_search_leaf_state(const t5d_search* search, size_t index, t5d_sta
     if (index >= requests.size()) {
       throw std::invalid_argument("leaf " + std::to_string(index) + " of " + std::to_string(requests.size()));
     }
-    t5d_game* g = t5d::capi_internal::new_game(*requests[index].state);
+    t5d_game* g = t5d::capi_internal::new_game(*requests[index].state, requests[index].moves_made);
     const t5d_status s = t5d_game_state(g, out);
     t5d_game_destroy(g);
     return s;
@@ -747,7 +761,7 @@ t5d_status t5d_search_root_game(const t5d_search* search, t5d_game** out, char**
   return guarded(error, [&]() -> t5d_status {
     if (search == nullptr || out == nullptr) throw std::invalid_argument("search or out is NULL");
     *out = nullptr;
-    *out = t5d::capi_internal::new_game(search->search.root_state());
+    *out = t5d::capi_internal::new_game(search->search.root_state(), search->search.root_moves_made());
     return T5D_OK;
   });
 }

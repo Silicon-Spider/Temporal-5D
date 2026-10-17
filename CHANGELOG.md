@@ -10,6 +10,81 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-17 - Engine A6: the turn-state counts in the expansion and the C API; the in-action move count in the evaluation identity
+
+- Register A6 (Committed, class C; §2.3), the engine side - engine ABI round 1's first
+  part. `engine/include/t5d/expand.hpp`, `src/expand.cpp`: item (h), the turn state -
+  `mandatory_remaining()` (the boards the acting player must still play: the state
+  machine's own count, T5, T6; Q5, Q6), `optional_playable()` (its other playable boards,
+  L5; none once no move may be made, Q4) and `moves_made()` (the moves made in the action
+  in progress). No state records that count - one `GameState` can be a turn start, or one
+  or two moves into an action, by different paths - so `expand` takes it from its caller
+  (`expand(state, options, out, moves_made)`; the three-argument form is a turn start's).
+  Eager, O(timelines), allocation-free. Nothing in the truth's sources changes
+  (`T5D_TRUTH_SOURCES`: the state machine, movegen, check, legal ... untouched), so the
+  code signature of M17's measured configuration is commit 1's.
+- `engine/include/t5d/capi.h`, `src/capi.cpp`, `src/capi_internal.hpp`: `t5d_expansion`
+  gains `mandatory_remaining`, `optional_playable`, `moves_made` after D8's three fields
+  (appended: every older offset kept; `t5d_layout` reports them); a `t5d_game` counts the
+  moves of its action - 0 at every set-up (a turn start, T5), +1 per `t5d_game_apply` or
+  `_apply_expanded`, 0 after `t5d_game_submit` or `t5d_game_replay_next`, carried by
+  `t5d_game_copy` - reported as `t5d_game_summary.moves_made` (appended after `rules`)
+  and passed to every `t5d_game_expand`.
+- The count in the evaluation identity (issue 302, the main loop's reading, and the plan
+  critic's settled one): the network will see it, so equal states with different counts
+  are different inputs. `engine/include/t5d/mcts.hpp`, `src/mcts.cpp`: a node carries the
+  moves made in its action (0 below a submit edge or a whole action, the parent's + 1
+  below a move - the turn-start flag is its being 0); MCGS identity is the state key with
+  the count, which subsumes the turn-in-progress bit (every ordering of one action's moves
+  from one turn start has the same count, so MCGS keeps its merges inside an action);
+  `EvalRequest::moves_made` carries it with the leaf's expansion; the evaluation cache's
+  key (`EvalCache::find`/`insert`) and the batch's de-duplication match it beside the
+  state and the epoch, so §15.2's purity rows hold (the comment that called the turn
+  start "a path property the network must not see" is gone); `check_invariants` holds
+  the count's turn structure (§15.4); the digest hashes it. `Search(root, params,
+  moves_made, cache)` and `advance_to(target, moves_made)` take the count - a `bool`
+  there (the old turn-start flag) is a compile error, not a silent 0 or 1 - and refuse
+  a count of 0 where the root's obligations are met (a turn start owes a board, T5);
+  `root_moves_made()`. `src/capi_search.cpp`, `include/t5d/capi_search.h`:
+  `t5d_search_new` and `_new_sharing` take the game handle's count and refuse a
+  `turn_start` that contradicts it; `t5d_search_root_game` and `_leaf_state` hand the
+  count back. `src/selfplay.cpp` carries the count.
+- Python mirror (`python/t5d/engine`): `capi.py`'s `CExpansion` and `GameSummary` (the
+  layout check passes); `Expansion.mandatory_remaining`, `optional_playable`,
+  `moves_made`; `GameInfo.moves_made` and `turn_start`; `Search`'s `turn_start` defaults
+  to the handle's (given, the engine checks it); `netplay.py` no longer tracks it.
+  Not here (the net lane's A6 inputs): `PositionState`'s counts, their embedding, the
+  converter's copy, and `net/cache.state_digest` (an epoch's anchor), which takes the
+  count when the network's input carries it.
+- Tests: `engine/tests/test_turn_state.cpp` (new; §15.2's A6 row) - the three counts
+  against a recount written from the rulebook at every state of random play under every
+  ruleset, both Q4 readings among them, through `expand` and through a `t5d_game` playing
+  the same moves; A6's arithmetic checked move by move wherever no activity changes, the
+  rest counted (T6's arrivals, T11/T12's reactivations raising the count); the spec's
+  cases by construction (a jump between two present boards, an optional board onto a
+  mandatory one, a rewinding branch releasing an unplayed board, moves after the shift
+  under R8 and the Guide-literal reading). `test_expand_reference.cpp`: (h) against the
+  reference. `test_mcts.cpp`: EQ-06's
+  `mcts_the_evaluation_cache_keeps_a_turn_start_apart_from_the_same_state_during_an_action`,
+  equal states with 2, 1 and 0 moves made kept apart by MCGS while one action's orders
+  merge, a batch asking once per (state, count), every node's count from its path, the
+  root's count refused where it cannot be - each failing on the matching mutant (the
+  cache key, the de-duplication or MCGS identity without the count). `test_capi_game.cpp`,
+  `test_capi_search.cpp`: the handle's count and the search's; the layouts. Python:
+  `test_binding.py` (the layout, the counts through apply, copy, submit and replay),
+  `test_search_api.py` (the root's count). Engine 554 of 554 tests (`--werror`); the long
+  tests it touches 7 of 7 (the recount over 77,926 states); network 817 passed, 2 skipped
+  (`T5D_REQUIRE_ENGINE=1`); ruff clean; `verify` ok.
+- `engine/README.md`: expansion (h), the game handle's count, MCGS identity and the
+  evaluation cache with the count, the step API's `turn_start`, the readings.
+  `docs/BUILD_LOG.md`: register A6 (engine side built, tested), C11, C14; spec issues
+  143-145 (A6's arithmetic is not the rules' count; the two undefined counts read; §15.4's
+  turn structure and the count); proposed edits 116-118.
+- Spec: §2.3 and register A6 (edits 116, 117; issues 143, 144); §8.5, §8.7 and register
+  C11, C14, H18 - the count in identity and the cache's key, the main loop's proposed
+  edit 200 (issue 302); §15.2's A6 row (built) and purity row (C19-C21: holds with the
+  count); §15.4's turn structure (edit 118, issue 145).
+
 ### 2026-10-17 - Engine A6, first commit: Guard's five-thread test against its contract; the prover reports the line of a thread that searched
 
 - The cause of the intermittent failure of `guard_at_five_threads_depth_one_is_the_opponents_mate_in_one`
