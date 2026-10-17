@@ -3,18 +3,24 @@
 // Two Timelines' (T13), a jump between two present boards (J4, A6's "two
 // fewer"), a rewinding branch that releases a mandatory board (T8), moves
 // after the shift (R8), moves on boards ahead of the present and on an
-// inactive timeline (T6), a jump from an optional board onto a mandatory one
-// (T6), a reactivation that makes a board mandatory mid-action, with a rewind
-// (T12) and without one (T11) - and
-// t5d-measure --turns / --turn-summary run end to end on the hand-written
-// records of engine/testdata/turn-width (the build passes the executable's
-// path, T5D_MEASURE_EXE, the engine directory, T5D_ENGINE_DIR, and a scratch
-// directory, T5D_TEST_SCRATCH).
+// inactive timeline (T6), the jumps across the line between mandatory and
+// optional boards - from an optional board onto a mandatory one (T6), from a
+// mandatory board onto an optional one, and between two optional boards (T3,
+// J4) - and a reactivation that makes a board mandatory mid-action, with a
+// rewind (T12) and without one (T11); the summary's ranges and classes at
+// their edges, and its statistics on constructed widths; and t5d-measure
+// --turns / --turn-summary run end to end on the hand-written records of
+// engine/testdata/turn-width - the counts, how records are classified (a
+// repeat, a prefix, a truncated record, two records that differ only in
+// their last action) and the board-count ranges at their edges (the build
+// passes the executable's path, T5D_MEASURE_EXE, the engine directory,
+// T5D_ENGINE_DIR, and a scratch directory, T5D_TEST_SCRATCH).
 //
 // Every position and record here is written for the test from the rules
 // reference (docs/rules/README.md) and the notation specification's text -
 // never taken from t0database, a game corpus or another implementation.
 
+#include <array>
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
@@ -144,6 +150,8 @@ TEST(turn_width_a_jump_between_two_present_boards_plays_both_j4) {
   CHECK_EQ(w.moves, 1);
   CHECK_EQ(w.moves_from_mandatory, 1);
   CHECK_EQ(w.optional_moves, 0);
+  CHECK_EQ(w.optional_by_source, 0);
+  CHECK_EQ(w.optional_when_made, 0);
   CHECK_EQ(w.boards_played, 2);
   CHECK_EQ(w.mandatory_played, 2);
   CHECK_EQ(w.optional_played, 0);
@@ -151,6 +159,7 @@ TEST(turn_width_a_jump_between_two_present_boards_plays_both_j4) {
   CHECK_EQ(w.branches, 0);
   CHECK_EQ(w.jumps_between_mandatory, 1);
   CHECK_EQ(w.optional_onto_mandatory, 0);
+  CHECK_EQ(w.mandatory_onto_optional, 0);
   CHECK_EQ(w.mandatory_released, 0);
 }
 
@@ -178,6 +187,7 @@ TEST(turn_width_a_rewinding_branch_releases_a_mandatory_board_t8) {
   CHECK_EQ(v.moves, 2);
   CHECK_EQ(v.moves_from_mandatory, 2);
   CHECK_EQ(v.optional_moves, 0);
+  CHECK_EQ(v.optional_by_source, 0);
   CHECK_EQ(v.optional_when_made, 1);
   CHECK_EQ(v.moves_on_released, 1);
   CHECK_EQ(v.moves_after_shift, 1);
@@ -216,6 +226,7 @@ TEST(turn_width_optional_boards_ahead_and_inactive_t6) {
   CHECK_EQ(w.moves, 3);
   CHECK_EQ(w.moves_from_mandatory, 1);
   CHECK_EQ(w.optional_moves, 2);
+  CHECK_EQ(w.optional_by_source, 2);
   CHECK_EQ(w.optional_when_made, 2);
   CHECK_EQ(w.moves_after_shift, 0);
   CHECK_EQ(w.boards_played, 3);
@@ -241,14 +252,81 @@ TEST(turn_width_a_jump_from_an_optional_board_onto_a_mandatory_one_t6) {
   CHECK_EQ(w.moves, 1);
   CHECK_EQ(w.moves_from_mandatory, 0);
   CHECK_EQ(w.optional_moves, 1);
+  CHECK_EQ(w.optional_by_source, 1);
+  CHECK_EQ(w.optional_when_made, 1);
   CHECK_EQ(w.jumps, 1);
   CHECK_EQ(w.branches, 0);
   CHECK_EQ(w.optional_onto_mandatory, 1);
+  CHECK_EQ(w.mandatory_onto_optional, 0);
   CHECK_EQ(w.jumps_between_mandatory, 0);
   CHECK_EQ(w.boards_played, 2);
   CHECK_EQ(w.mandatory_played, 1);
   CHECK_EQ(w.optional_played, 1);
   CHECK_EQ(w.mandatory_released, 0);
+}
+
+TEST(turn_width_a_jump_from_a_mandatory_board_onto_an_optional_one_t3_j4) {
+  // The mirror case: a bishop on 0's board in the present (mandatory) jumps
+  // forward one timeline and one turn onto +1's playable board, which lies
+  // ahead of the present (optional; J3: a playable board, so no branch). The
+  // move is made on both boards (T3, J4): by its source it is not optional,
+  // by its destination it is - an optional move under M22's reading, and a
+  // move on an optional board played.
+  const GameState s = game({"[5/5/5/5/5:0:1:w]", "[5/5/5/5/5:0:1:b]", "[5/5/5/5/B4:0:2:w]",
+                            "[5/5/5/5/5:+1:3:w]"},
+                           k5x5);
+  REQUIRE(s.mandatory_timelines() == std::vector<int>({0}));
+  REQUIRE(s.playable_timelines() == std::vector<int>({0, 1}));
+  TurnCounter c(s);
+  const Move jump = move_of(s, "(0T2)Ba1(+1T3)a1");
+  CHECK(!jump.branching());
+  c.apply(jump);
+  CHECK(c.state().obligations_met());
+  const TurnWidth w = c.width();
+  CHECK_EQ(w.mandatory, 1);
+  CHECK_EQ(w.optional, 1);
+  CHECK_EQ(w.moves, 1);
+  CHECK_EQ(w.moves_from_mandatory, 1);
+  CHECK_EQ(w.optional_by_source, 0);
+  CHECK_EQ(w.optional_moves, 1);
+  CHECK_EQ(w.optional_when_made, 1);
+  CHECK_EQ(w.jumps, 1);
+  CHECK_EQ(w.branches, 0);
+  CHECK_EQ(w.mandatory_onto_optional, 1);
+  CHECK_EQ(w.optional_onto_mandatory, 0);
+  CHECK_EQ(w.jumps_between_mandatory, 0);
+  CHECK_EQ(w.boards_played, 2);
+  CHECK_EQ(w.mandatory_played, 1);
+  CHECK_EQ(w.optional_played, 1);
+  CHECK_EQ(w.moves_after_shift, 0);
+  CHECK_EQ(w.mandatory_released, 0);
+}
+
+TEST(turn_width_a_jump_between_two_optional_boards_plays_both_t3_j4) {
+  // A rook on +1 (ahead of the present) moves one timeline up onto +2's
+  // playable board (an inactive timeline: optional too) - one optional move,
+  // two optional boards played; then the mandatory board.
+  const GameState s = game({"[5/5/5/5/5:0:1:w]", "[5/5/5/5/5:0:1:b]", "[5/5/5/5/K4:0:2:w]",
+                            "[5/5/5/5/R4:+1:3:w]", "[5/5/5/5/5:+2:3:w]"},
+                           k5x5);
+  REQUIRE(s.mandatory_timelines() == std::vector<int>({0}));
+  REQUIRE(!s.active(2));
+  const TurnWidth w = count(s, {"(+1T3)Ra1(+2T3)a1", "(0T2)Ka1(0T2)a2"});
+  CHECK_EQ(w.mandatory, 1);
+  CHECK_EQ(w.optional, 2);
+  CHECK_EQ(w.moves, 2);
+  CHECK_EQ(w.moves_from_mandatory, 1);
+  CHECK_EQ(w.optional_by_source, 1);
+  CHECK_EQ(w.optional_moves, 1);
+  CHECK_EQ(w.optional_when_made, 1);
+  CHECK_EQ(w.jumps, 1);
+  CHECK_EQ(w.jumps_between_mandatory, 0);
+  CHECK_EQ(w.optional_onto_mandatory, 0);
+  CHECK_EQ(w.mandatory_onto_optional, 0);
+  CHECK_EQ(w.boards_played, 3);
+  CHECK_EQ(w.mandatory_played, 1);
+  CHECK_EQ(w.optional_played, 2);
+  CHECK_EQ(w.moves_after_shift, 0);
 }
 
 TEST(turn_width_a_reactivation_gains_a_mandatory_board_t12) {
@@ -275,6 +353,7 @@ TEST(turn_width_a_reactivation_gains_a_mandatory_board_t12) {
   CHECK_EQ(w.moves, 2);
   CHECK_EQ(w.moves_from_mandatory, 1);
   CHECK_EQ(w.optional_moves, 1);
+  CHECK_EQ(w.optional_by_source, 1);
   CHECK_EQ(w.optional_when_made, 0);  // +2 was mandatory when its move was made
   CHECK_EQ(w.moves_on_gained, 1);
   CHECK_EQ(w.mandatory_gained, 1);
@@ -334,6 +413,184 @@ TEST(turn_width_a_move_that_does_not_fit_changes_nothing) {
   CHECK_THROWS_AS(c.apply(second), std::invalid_argument);
   CHECK(c.width() == before);
   CHECK(c.state() == state_before);
+}
+
+// ---- the summary: ranges, classes and statistics -------------------------------------------
+
+namespace {
+
+// The label of the one range of `ranges` holding `boards` ("" if none; a
+// failed check if several do).
+template <std::size_t N>
+std::string range_of(const t5d::tools::BoardRange (&ranges)[N], std::size_t boards) {
+  std::string found;
+  for (const t5d::tools::BoardRange& r : ranges) {
+    if (!r.contains(boards)) continue;
+    CHECK(found.empty());
+    found = r.label;
+  }
+  return found;
+}
+
+}  // namespace
+
+TEST(turn_width_summary_ranges_and_classes_at_their_edges) {
+  using t5d::tools::kAllBoards;
+  using t5d::tools::kTurnBuckets;
+  using t5d::tools::kTurnRanges;
+  using t5d::tools::mandatory_class;
+  // 6b's ranges, by the board count at the action's start: [lo, hi).
+  CHECK_EQ(range_of(kTurnRanges, 1), std::string("<50"));
+  CHECK_EQ(range_of(kTurnRanges, 49), std::string("<50"));
+  CHECK_EQ(range_of(kTurnRanges, 50), std::string("50-99"));
+  CHECK_EQ(range_of(kTurnRanges, 99), std::string("50-99"));
+  CHECK_EQ(range_of(kTurnRanges, 100), std::string("100-199"));
+  CHECK_EQ(range_of(kTurnRanges, 199), std::string("100-199"));
+  CHECK_EQ(range_of(kTurnRanges, 200), std::string("200+"));
+  CHECK_EQ(range_of(kTurnRanges, 5000), std::string("200+"));
+  // Ten-board buckets under 100, each inside one range; none from 100.
+  CHECK_EQ(range_of(kTurnBuckets, 1), std::string("1-9"));
+  CHECK_EQ(range_of(kTurnBuckets, 9), std::string("1-9"));
+  CHECK_EQ(range_of(kTurnBuckets, 10), std::string("10-19"));
+  CHECK_EQ(range_of(kTurnBuckets, 19), std::string("10-19"));
+  CHECK_EQ(range_of(kTurnBuckets, 20), std::string("20-29"));
+  CHECK_EQ(range_of(kTurnBuckets, 49), std::string("40-49"));
+  CHECK_EQ(range_of(kTurnBuckets, 50), std::string("50-59"));
+  CHECK_EQ(range_of(kTurnBuckets, 90), std::string("90-99"));
+  CHECK_EQ(range_of(kTurnBuckets, 99), std::string("90-99"));
+  CHECK_EQ(range_of(kTurnBuckets, 100), std::string());
+  for (std::size_t n = 1; n < 1000; ++n) {
+    CHECK(!range_of(kTurnRanges, n).empty());  // exactly one range
+    CHECK(kAllBoards.contains(n));
+    const std::string bucket = range_of(kTurnBuckets, n);
+    CHECK_EQ(bucket.empty(), n >= 100);
+    for (const t5d::tools::BoardRange& b : kTurnBuckets) {
+      if (!b.contains(n)) continue;
+      for (const t5d::tools::BoardRange& r : kTurnRanges) {
+        if (r.contains(n)) CHECK(r.lo <= b.lo && b.hi <= r.hi);
+      }
+    }
+  }
+  // Mandatory classes: 1, 2, 3, 4+.
+  CHECK_EQ(mandatory_class(1), 0);
+  CHECK_EQ(mandatory_class(2), 1);
+  CHECK_EQ(mandatory_class(3), 2);
+  CHECK_EQ(mandatory_class(4), 3);
+  CHECK_EQ(mandatory_class(5), 3);
+  CHECK_EQ(mandatory_class(40), 3);
+  CHECK_EQ(std::string(t5d::tools::kMandatoryClasses[3]), std::string("4+"));
+  CHECK_THROWS_AS(mandatory_class(0), std::invalid_argument);
+}
+
+TEST(turn_width_summary_quantiles_interpolate_between_order_statistics) {
+  using t5d::tools::quantile;
+  CHECK_EQ(quantile({}, 0.5), 0.0);
+  CHECK_EQ(quantile({3, 1, 2}, 0.5), 2.0);
+  CHECK_EQ(quantile({1, 2}, 0.5), 1.5);
+  std::vector<double> eleven;
+  for (int i = 10; i >= 0; --i) eleven.push_back(i);  // 0..10, unsorted
+  CHECK_EQ(quantile(eleven, 0.9), 9.0);
+  CHECK_EQ(quantile(eleven, 0.95), 9.5);
+  CHECK_EQ(quantile(eleven, 1.0), 10.0);
+}
+
+TEST(turn_width_summary_statistics_of_constructed_widths) {
+  // Eleven actions with known counts (eleven, so that the median and p90 are
+  // order statistics): each statistic has a known value, and the three
+  // readings of "optional" differ in both the actions with one and the totals.
+  const auto width = [](int mandatory, int optional, int moves) {
+    TurnWidth w;
+    w.boards = 10;
+    w.mandatory = mandatory;
+    w.optional = optional;
+    w.playable = mandatory + optional;
+    w.moves = moves;
+    w.boards_played = moves;
+    return w;
+  };
+  std::vector<TurnWidth> a;
+  a.push_back(width(1, 0, 1));  // 0
+  a.push_back(width(1, 0, 1));  // 1
+  a.push_back(width(1, 1, 1));  // 2: an optional board left
+  a.push_back(width(1, 1, 2));  // 3: an optional move after the shift
+  a.back().optional_moves = a.back().optional_by_source = a.back().optional_when_made = 1;
+  a.back().optional_played = a.back().moves_after_shift = 1;
+  a.push_back(width(2, 0, 1));  // 4: one jump plays both mandatory boards
+  a.back().jumps = a.back().jumps_between_mandatory = 1;
+  a.back().boards_played = 2;
+  a.push_back(width(1, 1, 1));  // 5: a jump from the mandatory board onto the optional one
+  a.back().jumps = a.back().mandatory_onto_optional = 1;
+  a.back().optional_moves = a.back().optional_when_made = a.back().optional_played = 1;
+  a.back().boards_played = 2;
+  a.push_back(width(3, 0, 2));  // 6: a rewinding branch, then a move on a released board
+  a.back().jumps = a.back().branches = a.back().rewinds = 1;
+  a.back().mandatory_released = a.back().optional_when_made = a.back().moves_on_released = 1;
+  a.back().moves_after_shift = 1;
+  a.push_back(width(4, 3, 7));  // 7: every board played
+  a.back().optional_moves = a.back().optional_by_source = a.back().optional_when_made = 3;
+  a.back().optional_played = a.back().moves_after_shift = 3;
+  a.push_back(width(5, 1, 2));  // 8: as 6, three boards released
+  a.back().jumps = a.back().branches = a.back().rewinds = 1;
+  a.back().mandatory_released = 3;
+  a.back().optional_when_made = a.back().moves_on_released = a.back().moves_after_shift = 1;
+  a.push_back(width(2, 1, 2));  // 9: a reactivation (T12): the optional board gained
+  a.back().jumps = a.back().branches = a.back().rewinds = 1;
+  a.back().mandatory_released = a.back().mandatory_gained = a.back().moves_on_gained = 1;
+  a.back().optional_moves = a.back().optional_by_source = a.back().optional_played = 1;
+  a.push_back(width(1, 1, 1));  // 10: a jump from the optional board onto the mandatory one
+  a.back().jumps = a.back().optional_onto_mandatory = 1;
+  a.back().optional_moves = a.back().optional_by_source = a.back().optional_when_made = 1;
+  a.back().optional_played = 1;
+  a.back().boards_played = 2;
+  std::vector<const TurnWidth*> in;
+  for (const TurnWidth& w : a) in.push_back(&w);
+
+  const t5d::tools::TurnStats s = t5d::tools::turn_stats(in);
+  using Counts = std::array<std::size_t, 4>;
+  CHECK_EQ(s.actions, std::size_t{11});
+  CHECK(s.mandatory_classes == Counts({6, 2, 1, 2}));  // 4 and 5 are both "4+"
+  CHECK_EQ(s.mandatory_over_1, std::size_t{5});
+  CHECK_EQ(s.mandatory_over_2, std::size_t{3});
+  CHECK_EQ(s.playable_over_1, std::size_t{9});
+  CHECK_EQ(s.with_optional_boards, std::size_t{7});
+  // Mandatory boards 1,1,1,1,1,1,2,2,3,4,5; optional 0,0,0,0,1,1,1,1,1,1,3;
+  // moves 1,1,1,1,1,1,2,2,2,2,7 (sorted).
+  CHECK(s.mandatory == (t5d::tools::Spread{2.0, 1.0, 4.0, 5.0}));
+  CHECK(s.optional_boards == (t5d::tools::Spread{9.0 / 11.0, 1.0, 1.0, 3.0}));
+  CHECK(s.moves == (t5d::tools::Spread{21.0 / 11.0, 1.0, 2.0, 7.0}));
+  CHECK(s.moves_classes == Counts({6, 4, 0, 1}));
+  CHECK(s.optional_moves_classes == Counts({6, 4, 0, 1}));
+  CHECK_EQ(s.one_move_over_1_mandatory, std::size_t{1});
+  CHECK_EQ(s.with_optional_moves, std::size_t{5});
+  CHECK_EQ(s.with_optional_by_source, std::size_t{4});
+  CHECK_EQ(s.with_optional_when_made, std::size_t{6});
+  CHECK_EQ(s.optional_moves, 7);
+  CHECK_EQ(s.optional_by_source, 6);
+  CHECK_EQ(s.optional_when_made, 8);
+  CHECK_EQ(s.optional_played, 7);
+  CHECK_EQ(s.boards_played, 24);
+  CHECK_EQ(s.with_travel, std::size_t{6});
+  CHECK_EQ(s.with_branch, std::size_t{3});
+  CHECK_EQ(s.rewound, std::size_t{3});
+  CHECK_EQ(s.with_moves_after_shift, std::size_t{4});
+  CHECK_EQ(s.moves_after_shift, 6);
+  CHECK_EQ(s.with_mandatory_released, std::size_t{3});
+  CHECK_EQ(s.mandatory_released, 5);
+  CHECK_EQ(s.mandatory_gained, 1);
+  CHECK_EQ(s.moves_on_released, 2);
+  CHECK_EQ(s.moves_on_gained, 1);
+  CHECK_EQ(s.jumps_between_mandatory, 1);
+  CHECK_EQ(s.optional_onto_mandatory, 1);
+  CHECK_EQ(s.mandatory_onto_optional, 1);
+
+  // No action: nothing counted. An action without a mandatory board or a
+  // move is not one (T5).
+  CHECK_EQ(t5d::tools::turn_stats({}).actions, std::size_t{0});
+  TurnWidth none = width(0, 1, 1);
+  const TurnWidth* bad[] = {&none};
+  CHECK_THROWS_AS(t5d::tools::turn_stats(bad), std::invalid_argument);
+  none = width(1, 0, 0);
+  CHECK_THROWS_AS(t5d::tools::turn_stats(bad), std::invalid_argument);
 }
 
 // ---- t5d-measure --turns / --turn-summary, end to end -----------------------------------------
@@ -412,6 +669,21 @@ std::vector<std::string> with(const std::vector<std::string>& lines, const std::
   return out;
 }
 
+// The one turn_summary line of `reading` and `range` (failing if there is not
+// exactly one).
+std::string summary_line(const std::vector<std::string>& lines, const std::string& reading,
+                         const std::string& range) {
+  const std::vector<std::string> found =
+      with(lines, "{\"event\":\"turn_summary\",\"reading\":\"" + reading + "\",\"range\":\"" +
+                      range + "\",");
+  CHECK_EQ(found.size(), std::size_t{1});
+  return found.empty() ? std::string() : found[0];
+}
+
+std::string data_path(const char* name) {
+  return (std::filesystem::path(T5D_ENGINE_DIR) / "testdata" / "turn-width" / name).string();
+}
+
 }  // namespace
 
 TEST(measure_exe_turns_on_hand_written_records) {
@@ -453,13 +725,13 @@ TEST(measure_exe_turns_on_hand_written_records) {
     const char* side;
     long long boards, timelines, mandatory, playable, optional, moves, from_mandatory,
         optional_moves, when_made, played, jumps, branches, between, after_shift, rewinds,
-        released, on_released;
+        released, on_released, by_source, optional_played;
   };
   const Expected expected[4] = {
-      {"white", 2, 2, 2, 2, 0, 2, 2, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0},
-      {"black", 4, 2, 2, 2, 0, 1, 1, 0, 0, 2, 1, 0, 1, 0, 0, 0, 0},
-      {"white", 6, 2, 2, 2, 0, 2, 2, 0, 1, 2, 1, 1, 0, 1, 1, 0, 1},
-      {"black", 9, 3, 1, 3, 2, 2, 1, 1, 1, 2, 0, 0, 0, 1, 0, 0, 0},
+      {"white", 2, 2, 2, 2, 0, 2, 2, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+      {"black", 4, 2, 2, 2, 0, 1, 1, 0, 0, 2, 1, 0, 1, 0, 0, 0, 0, 0, 0},
+      {"white", 6, 2, 2, 2, 0, 2, 2, 0, 1, 2, 1, 1, 0, 1, 1, 0, 1, 0, 0},
+      {"black", 9, 3, 1, 3, 2, 2, 1, 1, 1, 2, 0, 0, 0, 1, 0, 0, 0, 1, 1},
   };
   for (std::size_t i = 0; i < 4; ++i) {
     const std::string& t = turns[i];
@@ -483,6 +755,10 @@ TEST(measure_exe_turns_on_hand_written_records) {
     CHECK_EQ(int_field(t, "rewinds"), e.rewinds);
     CHECK_EQ(int_field(t, "mandatory_released"), e.released);
     CHECK_EQ(int_field(t, "moves_on_released"), e.on_released);
+    CHECK_EQ(int_field(t, "optional_by_source"), e.by_source);
+    CHECK_EQ(int_field(t, "optional_played"), e.optional_played);
+    CHECK_EQ(int_field(t, "mandatory_onto_optional"), 0);
+    CHECK_EQ(int_field(t, "optional_onto_mandatory"), 0);
   }
   // Each action's position after it is the next action's start.
   for (std::size_t i = 0; i + 1 < 4; ++i) {
@@ -500,15 +776,21 @@ TEST(measure_exe_turns_on_hand_written_records) {
   CHECK_EQ(int_field(head[0], "records"), 3);
   CHECK_EQ(int_field(head[0], "replayed"), 2);
   CHECK_EQ(int_field(head[0], "refused"), 1);
+  CHECK_EQ(int_field(head[0], "errors"), 0);
   CHECK_EQ(int_field(head[0], "actions_checked"), 4 + 2 + 2);
   CHECK_EQ(int_field(head[0], "strict_games"), 1);
   CHECK_EQ(int_field(head[0], "grouped_games"), 1);
   CHECK(has(head[0], "prefix.5dpgn\",\"repeats\":"));
-  std::string strict, grouped, apart, by_two;
+  // The grouped game of two records is listed.
+  const std::vector<std::string> groups = with(lines, "\"event\":\"turn_summary_group\"");
+  REQUIRE_EQ(groups.size(), std::size_t{1});
+  CHECK(has(groups[0], "two-timelines.5dpgn\",\"also\":[\""));
+  CHECK(has(groups[0], "prefix.5dpgn\"]}"));
+  const std::string strict = summary_line(lines, "strict", "<50");
+  const std::string grouped = summary_line(lines, "grouped", "<50");
+  const std::string apart = summary_line(lines, "refused", "<50");
+  std::string by_two;
   for (const std::string& l : lines) {
-    if (has(l, "\"event\":\"turn_summary\",\"reading\":\"strict\",\"range\":\"<50\"")) strict = l;
-    if (has(l, "\"event\":\"turn_summary\",\"reading\":\"grouped\",\"range\":\"<50\"")) grouped = l;
-    if (has(l, "\"event\":\"turn_summary\",\"reading\":\"refused\",\"range\":\"<50\"")) apart = l;
     if (has(l, "\"reading\":\"strict\",\"range\":\"<50\",\"mandatory_class\":\"2\"")) by_two = l;
   }
   REQUIRE(!strict.empty() && !grouped.empty() && !apart.empty() && !by_two.empty());
@@ -516,18 +798,40 @@ TEST(measure_exe_turns_on_hand_written_records) {
   CHECK_EQ(int_field(strict, "games"), 1);
   CHECK(has(strict, "\"mandatory\":{\"1\":1,\"2\":3,\"3\":0,\"4+\":0}"));
   CHECK(has(strict, "\"mandatory_over_1\":0.75,"));
+  // Playable 2, 2, 2, 3; optional boards 0, 0, 0, 2 (p90 1.4: 0.7 of the way
+  // from the third to the fourth).
+  CHECK(has(strict, "\"playable_over_1\":1,\"with_optional_boards\":0.25,"));
+  CHECK(has(strict, "\"optional_boards_mean\":0.5,\"optional_boards_median\":0,"
+                    "\"optional_boards_p90\":1.4,\"optional_boards_max\":2,"));
   CHECK(has(strict, "\"optional_moves\":{\"0\":3,\"1\":1,\"2\":0,\"3+\":0}"));
+  CHECK(has(strict, "\"optional_moves_mean\":0.25,\"with_optional_moves\":0.25,"));
+  CHECK(has(strict, "\"optional_by_source_mean\":0.25,\"with_optional_by_source\":0.25,"));
+  // The move on the board the rewind released is optional when made.
+  CHECK(has(strict, "\"optional_when_made_mean\":0.5,\"with_optional_when_made\":0.5,"));
+  CHECK(has(strict, "\"optional_played_mean\":0.25,"));
   CHECK(has(strict, "\"moves\":{\"1\":1,\"2\":3,\"3\":0,\"4+\":0}"));
-  CHECK(has(strict, "\"moves_mean\":1.75,"));
-  CHECK(has(strict, "\"with_branch\":0.25,"));
+  CHECK(has(strict, "\"moves_mean\":1.75,\"moves_median\":2,\"moves_p90\":2,\"moves_max\":2,"));
+  CHECK_EQ(int_field(strict, "one_move_over_1_mandatory"), 1);  // the jump between them
+  CHECK(has(strict, "\"with_travel\":0.5,\"with_branch\":0.25,"));
+  CHECK(has(strict, "\"with_moves_after_shift\":0.5,"));
   CHECK_EQ(int_field(strict, "jumps_between_mandatory"), 1);
+  CHECK_EQ(int_field(strict, "optional_onto_mandatory"), 0);
+  CHECK_EQ(int_field(strict, "mandatory_onto_optional"), 0);
+  CHECK_EQ(int_field(strict, "moves_on_released"), 1);
   CHECK_EQ(int_field(grouped, "actions"), 4);
+  CHECK_EQ(int_field(grouped, "games"), 1);
   CHECK_EQ(int_field(apart, "actions"), 2);
   CHECK_EQ(int_field(apart, "records"), 1);
   CHECK_EQ(int_field(by_two, "actions"), 3);
-  // Nothing at 50 boards or more.
+  CHECK_EQ(int_field(by_two, "games"), 1);
+  // Every action under 10 boards; nothing at 50 or more.
+  CHECK_EQ(int_field(summary_line(lines, "strict", "1-9"), "actions"), 4);
+  CHECK_EQ(int_field(summary_line(lines, "strict", "1-9"), "games"), 1);
+  CHECK_EQ(int_field(summary_line(lines, "strict", "10-19"), "actions"), 0);
+  CHECK_EQ(int_field(summary_line(lines, "strict", "all"), "actions"), 4);
   for (const std::string& l : with(lines, "\"reading\":\"strict\",\"range\":\"50-99\"")) {
     CHECK_EQ(int_field(l, "actions"), 0);
+    CHECK_EQ(int_field(l, "games"), 0);
   }
 
   // Without --turns and --turn-summary the tool prints no turn line.
@@ -535,4 +839,96 @@ TEST(measure_exe_turns_on_hand_written_records) {
   CHECK_EQ(status, 0);
   CHECK(with(plain, "\"event\":\"turn").empty());
   CHECK_EQ(with(plain, "\"event\":\"position\"").size(), std::size_t{5});
+}
+
+TEST(measure_exe_turn_summary_classifies_records) {
+  // last-action.5dpgn is two-timelines.5dpgn but for its last action ("/
+  // (+1T1)e6" alone): neither is a prefix of the other, so the strict reading
+  // counts both - four actions each - and the grouped reading too (they share
+  // four positions of five: not a long enough opening to be one game).
+  // prefix.5dpgn is a prefix of both: it repeats the first. truncated.5dpgn's
+  // move text stops after its second action (1. d4 / d5 2. c): every action
+  // read is played, yet the record is refused - its two actions apart, as at
+  // M7 - and it is not among the games.
+  const std::string two = data_path("two-timelines.5dpgn");
+  const std::string prefix = data_path("prefix.5dpgn");
+  const std::string last = data_path("last-action.5dpgn");
+  const std::string truncated = data_path("truncated.5dpgn");
+  int status = -1;
+  const std::vector<std::string> lines =
+      run_measure({"--turn-summary", two, prefix, last, truncated}, status);
+  CHECK_EQ(status, 0);
+  const std::vector<std::string> ends = with(lines, "\"event\":\"end\"");
+  REQUIRE_EQ(ends.size(), std::size_t{4});
+  CHECK(has(ends[2], "\"status\":\"ok\""));
+  CHECK(has(ends[3], "\"status\":\"rejected\""));
+  CHECK(has(ends[3], "\"truncated\":true"));
+  CHECK(has(ends[3], "\"reason\":\"unreadable\""));
+  CHECK_EQ(int_field(ends[3], "actions_accepted"), 2);
+  CHECK_EQ(int_field(ends[3], "actions_in_record"), 2);
+
+  const std::vector<std::string> head = with(lines, "\"event\":\"turn_summary_records\"");
+  REQUIRE_EQ(head.size(), std::size_t{1});
+  CHECK_EQ(int_field(head[0], "records"), 4);
+  CHECK_EQ(int_field(head[0], "replayed"), 3);
+  CHECK_EQ(int_field(head[0], "refused"), 1);
+  CHECK_EQ(int_field(head[0], "errors"), 0);
+  CHECK_EQ(int_field(head[0], "actions_checked"), 4 + 2 + 4 + 2);
+  CHECK_EQ(int_field(head[0], "strict_games"), 2);
+  CHECK_EQ(int_field(head[0], "grouped_games"), 2);
+  CHECK(has(head[0], "\"strict_repeats\":[{\"record\":"));
+  CHECK(has(head[0], "prefix.5dpgn\",\"repeats\":"));
+  CHECK(!has(head[0], "last-action.5dpgn\",\"repeats\":"));
+  CHECK(!has(head[0], "truncated.5dpgn"));
+
+  const std::string strict = summary_line(lines, "strict", "<50");
+  CHECK_EQ(int_field(strict, "actions"), 8);
+  CHECK_EQ(int_field(strict, "games"), 2);
+  CHECK(has(strict, "\"moves\":{\"1\":3,\"2\":5,\"3\":0,\"4+\":0}"));
+  CHECK(has(strict, "\"optional_moves\":{\"0\":7,\"1\":1,\"2\":0,\"3+\":0}"));
+  const std::string grouped = summary_line(lines, "grouped", "<50");
+  CHECK_EQ(int_field(grouped, "actions"), 8);
+  CHECK_EQ(int_field(grouped, "games"), 2);
+  const std::string apart = summary_line(lines, "refused", "<50");
+  CHECK_EQ(int_field(apart, "actions"), 2);
+  CHECK_EQ(int_field(apart, "records"), 1);
+  CHECK(has(apart, "\"mandatory\":{\"1\":2,\"2\":0,\"3\":0,\"4+\":0}"));
+}
+
+TEST(measure_exe_turn_summary_ranges_at_their_edges) {
+  // Custom positions (one timeline of 3x3 boards, the kings alone) whose
+  // first action starts at 9, 49, 99 and 199 boards; each action adds one
+  // board, so the second starts at 10, 50, 100 and 200 - every edge of the
+  // ranges, and the first of the ten-board buckets.
+  int status = -1;
+  const std::vector<std::string> lines = run_measure(
+      {"--turn-summary", data_path("edges/start-9.5dpgn"), data_path("edges/start-49.5dpgn"),
+       data_path("edges/start-99.5dpgn"), data_path("edges/start-199.5dpgn")},
+      status);
+  CHECK_EQ(status, 0);
+  const std::vector<std::string> head = with(lines, "\"event\":\"turn_summary_records\"");
+  REQUIRE_EQ(head.size(), std::size_t{1});
+  CHECK_EQ(int_field(head[0], "replayed"), 4);
+  CHECK_EQ(int_field(head[0], "strict_games"), 4);
+  struct Expected {
+    const char* range;
+    long long actions, games;
+  };
+  const Expected expected[] = {
+      {"<50", 3, 2},     {"50-99", 2, 2}, {"100-199", 2, 2}, {"200+", 1, 1},
+      {"1-9", 1, 1},     {"10-19", 1, 1}, {"20-29", 0, 0},   {"30-39", 0, 0},
+      {"40-49", 1, 1},   {"50-59", 1, 1}, {"60-69", 0, 0},   {"70-79", 0, 0},
+      {"80-89", 0, 0},   {"90-99", 1, 1}, {"all", 8, 4},
+  };
+  for (const Expected& e : expected) {
+    const std::string line = summary_line(lines, "strict", e.range);
+    CHECK_EQ(int_field(line, "actions"), e.actions);
+    CHECK_EQ(int_field(line, "games"), e.games);
+  }
+  // Per mandatory class: every action has one mandatory board.
+  for (const std::string& l : with(lines, "\"event\":\"turn_summary_by_mandatory\"")) {
+    const bool one = has(l, "\"mandatory_class\":\"1\"");
+    if (has(l, "\"range\":\"<50\"")) CHECK_EQ(int_field(l, "actions"), one ? 3 : 0);
+    if (has(l, "\"range\":\"200+\"")) CHECK_EQ(int_field(l, "actions"), one ? 1 : 0);
+  }
 }

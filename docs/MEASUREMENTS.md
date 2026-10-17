@@ -604,93 +604,112 @@ valid.
 **What it is.** Register M22 (Committed, process; spec §15.1's Phase 1 row and §8.2
 "Measure first"): mandatory boards per turn and optional moves played, per
 board-count range, on the human games, by the rules engine alone - before the D2
-turn-construction arms are built. §15.6 sets no threshold for it, so there is no
-verdict and no STOP band: it informs the order of the D2 work (register part K) and
-checks part L's prediction.
+tree and flat forms are built (the ply split, D2's default arm, is built). §15.6
+sets no threshold for it, so there is no verdict and no STOP band: it informs the
+order of the D2 work (register part K) and checks part L's prediction.
 
 **Conditions.** 2026-10-17, machine `dev-r` - counts, not timings, so the shared
 machine's load does not matter. The rules engine is `main`'s at f07568c, unchanged;
-the counting is this change's `t5d-measure --turns --turn-summary`
-(`engine/tools/turn_width.hpp`), Release, MSYS2 g++ 16.2.0 (Rev3), `--werror`, 537 of
-537 engine tests passing. Data: t0database (`data/t0database/`, commit
-`d49da405...`, `Data.csv` sha256 `37fb7c1c...a4e`), converted by `py
-data/t0database/to_5dpgn.py build/t0db` (761 records, 237 empty rows skipped; the
-source's own `[Board "Standard - Turn Zero"]`), then `build/engine/t5d-measure --turns
---turn-summary build/t0db/*.5dpgn`. Rules: the default ruleset (encoding `0x0`) -
-moves after the shift until submission (R8), only the active boards in the present
-mandatory (R9), the count rule with reactivation and rewinds (R2, T11, T12), initial
-timelines created by neither player (R10) - in parse mode, as M7: C4's royal-safety
-test is not made at submission, which changes no count (they count the moves the
-records made). Records: 761 read, **716 replay to the end**, 45 refused as at M7 (13
-unfinished final actions, 17 other variants filed under the Turn Zero label, 2
-unknown fairy set-ups, 10 doubled-file pawn captures, 3 notation faults). Of the 716,
-24 equal or are a prefix of another record, by their sequence of positions (a game
-recorded twice, or cut short), and are left out: **692 games**, M7's strict count.
-Every one of the 29,292 actions read - the refused records' 1,165 included - was
-played twice, by the replay and move by move from its start, and reached the same
-state. The summary was recomputed independently from the per-action lines (a
-separate script working from the definitions): 1,382 figures, no difference. Raw
-output `build/m22/turns.jsonl` (git-ignored; reproducible).
+the counting is `t5d-measure --turns --turn-summary` (`engine/tools/turn_width.hpp`)
+as of the commit that carries this paragraph (lane/engine: M22, 2864be0, with its
+review fixes), Release, MSYS2 g++ 16.2.0 (Rev3), `--werror`, 544 of 544 engine tests
+passing. Data: t0database (`data/t0database/`, commit `d49da405...`, `Data.csv`
+sha256 `37fb7c1c...a4e`), converted by `py data/t0database/to_5dpgn.py build/t0db`
+(761 records, 237 empty rows skipped; the source's own `[Board "Standard - Turn
+Zero"]`; converted twice, identical file for file), then `build/engine/t5d-measure
+--turns --turn-summary build/t0db/*.5dpgn`. Rules: the default ruleset (encoding
+`0x0`) - moves after the shift until submission (R8), only the active boards in the
+present mandatory (R9), the count rule with reactivation and rewinds (R2, T11, T12),
+initial timelines created by neither player (R10) - in parse mode, as M7: C4's
+royal-safety test is not made at submission. The per-action counts do not depend on
+it (they count the moves the records made), but which records replay to the end
+does: replayed with C4, one record changes - t0db-0115, one of the 692 games below,
+is refused at its 9th action (a black bishop on (0T5)e6 could capture White's king
+on Turn Zero's T0 board by a branching jump; how the T0 board is played is rules
+question Q8) - so under C4 the strict reading would hold 691 games, its 18 actions
+out (the 8 before its refusal in the refused reading instead); every other record
+reads the same way both times. Records: 761 read, **716 replay to the end**, 45
+refused as at M7 (13 unfinished final actions, 17 other variants filed under the Turn
+Zero label, 2 unknown fairy set-ups, 10 doubled-file pawn captures, 3 notation
+faults). Of the 716, 24 equal or are a prefix of another record, by their sequence of
+positions (a game recorded twice, or cut short), and are left out: **692 games**,
+M7's strict count. Every one of the 29,292 actions read - the refused records' 1,165
+included - was played twice, by the replay and move by move from its start, and
+reached the same state. The summary was recomputed independently from the
+per-action lines (a separate script working from the definitions): 1,648 figures, no
+difference. Raw output `build/m22/turns.jsonl` (git-ignored; reproducible). This
+section was first written from the tool at 2864be0; the review fixes changed two
+readings - an optional move now counts a jump from a mandatory board onto an
+optional one, which the first version left out (36 actions in all, 35 of them in the
+692 games), and the summary gained the shares of turns with more than one playable
+board and with an optional board - and nothing else in the output.
 
 **Definitions** (`engine/tools/turn_width.hpp`). A *turn* is one player's action,
 from its start to its submission (T1). At the action's start: the board count N
 (every board, history boards and Turn Zero's T0 board included - M7's N); the
 **mandatory boards**, the active boards in the present on the mover's colour (T6,
 R9); the **optional boards**, the mover's other playable boards - ahead of the
-present, or on an inactive timeline. A move is made on its source board and, when it
-is a jump that does not branch, on its destination board too (T3, J4). An **optional
-move** is a move whose source board was not mandatory at the action's start
-(register M22 does not define "optional moves played": build-log spec issue 140). A
-board's status can change mid-action - a rewind (T8, T12) releases the mandatory
-boards left unplayed, and a reactivation (T11, T12) can make a board mandatory; such
-boards keep their status at the start here, the moves on them are counted apart, and
-the other reading (not mandatory when the move was made) is computed beside it - it
-differs on 4 actions of 27,097. Ranges by N at the action's start: 6b's (the register
-names none: spec issue 141), with ten-board buckets under 100. A range resting on
-fewer than 10 games is flagged too few to read (issue 118's convention, applied to
-games).
+present, or on an inactive timeline; the **playable boards**, both together. A move
+is made on every board it starts or ends on (T3): its source board and, when it is a
+jump that does not branch, its destination too (J4; a branching jump's destination
+is a history board, J5). An **optional move** is a move made on a board that was not
+mandatory at the action's start - so a jump from an optional board onto a mandatory
+one counts, and so does a jump from a mandatory board onto an optional one (register
+M22 does not define "optional moves played": build-log spec issue 140). Two other
+readings are computed beside it: by the source board alone (it leaves out the jumps
+from a mandatory board onto an optional one; it differs on 35 turns of 27,097) and
+by the boards' status when each move was made (it differs on 4). A board's status
+can change mid-action - a rewind (T8, T12) releases the mandatory boards left
+unplayed, and a reactivation (T11, T12) can make a board mandatory, with or without
+a rewind; such boards keep their status at the start here, and the moves on them are
+counted apart. Ranges by N at the action's start: 6b's (the register names none:
+spec issue 141), with ten-board buckets under 100. A range resting on fewer than 10
+games is flagged too few to read (issue 118's convention, applied to games).
 
-**Mandatory boards and moves per turn** (the strict reading: every action of the 692
-games):
+**Mandatory boards, playable boards and moves per turn** (the strict reading: every
+action of the 692 games):
 
-| N at the turn's start | turns | games | mandatory boards: 1 / 2 / 3 / 4+ | more than one | three or more | max | optional boards at the start (mean) | moves: 1 / 2 / 3 / 4+ | moves: mean / p90 / max |
-|---|---|---|---|---|---|---|---|---|---|
-| < 50 | 24,002 | 692 | **94.2%** / 5.1% / 0.6% / 0.2% | **5.8%** | 0.7% | 7 | 0.12 | 95.9% / 3.8% / 0.3% / 0.1% | 1.05 / 1 / 4 |
-| 50-99 | 2,920 | 237 | **72.9%** / 20.4% / 3.8% / 2.9% | **27.1%** | 6.7% | 6 | 0.70 | 80.3% / 15.7% / 2.5% / 1.4% | 1.25 / 2 / 5 |
-| 100-199 | 175 | 13 | **36.0%** / 48.0% / 2.3% / 13.7% | **64.0%** | 16.0% | 8 | 1.65 | 49.1% / 39.4% / 2.9% / 8.6% | 1.77 / 3 / 7 |
-| 200+ | 0 | 0 | no data | | | | | | |
-| pooled (context) | 27,097 | 692 | 91.5% / 7.0% / 0.9% / 0.5% | 8.5% | 1.5% | 8 | 0.20 | 93.9% / 5.3% / 0.6% / 0.3% | 1.07 / 1 / 7 |
+| N at the turn's start | turns | games | mandatory boards: 1 / 2 / 3 / 4+ | more than one | three or more | max | more than one playable board | an optional board at the start (mean per turn) | moves: 1 / 2 / 3 / 4+ | moves: mean / p90 / max |
+|---|---|---|---|---|---|---|---|---|---|---|
+| < 50 | 24,002 | 692 | **94.2%** / 5.1% / 0.6% / 0.2% | **5.8%** | 0.7% | 7 | **15.1%** | 10.5% (0.12) | 95.9% / 3.8% / 0.3% / 0.1% | 1.05 / 1 / 4 |
+| 50-99 | 2,920 | 237 | **72.9%** / 20.4% / 3.8% / 2.9% | **27.1%** | 6.7% | 6 | **65.2%** | 44.5% (0.70) | 80.3% / 15.7% / 2.5% / 1.4% | 1.25 / 2 / 5 |
+| 100-199 | 175 | 13 | **36.0%** / 48.0% / 2.3% / 13.7% | **64.0%** | 16.0% | 8 | **99.4%** | 65.7% (1.65) | 49.1% / 39.4% / 2.9% / 8.6% | 1.77 / 3 / 7 |
+| 200+ | 0 | 0 | no data | | | | | | | |
+| pooled (context) | 27,097 | 692 | 91.5% / 7.0% / 0.9% / 0.5% | 8.5% | 1.5% | 8 | 21.0% | 14.5% (0.20) | 93.9% / 5.3% / 0.6% / 0.3% | 1.07 / 1 / 7 |
 
 The human games' turns lie 88.6% under 50 boards, 10.8% at 50-99 and 0.6% at
 100-199; no turn starts above 178 boards (the last positions reach 186). A game
 counts in a range when one of its turns starts there - so 237 and 13 games against
-M7's 256 and 14, which counted the last position too.
+M7's 256 and 14, which counted the last position too. A turn with one playable board
+is one mandatory board and nothing else: one move, then the submission (84.9% of the
+turns under 50 boards, 34.8% at 50-99, 0.6% at 100-199).
 
 **Optional moves and the rest of the turn** (strict):
 
-| N | turns with an optional move | optional moves per turn (mean) | with a jump | with a branch | rewound (T8, T12) | a mandatory board released | jumps between two mandatory boards | jumps from an optional board onto a mandatory one | turns with a move after the shift (R8) | boards made mandatory mid-turn (T11, T12) |
-|---|---|---|---|---|---|---|---|---|---|---|
-| < 50 | 1.1% (256 with one, 4 with two) | 0.011 | 5.3% | 4.1% | 3.8% | 1.8% (511 boards) | 229 | 29 | 11 | 2 |
-| 50-99 | 2.1% (62, one each) | 0.021 | 15.1% | 9.4% | 8.6% | 5.8% (259) | 149 | 12 | 0 | 0 |
-| 100-199 | 0.6% (1) | 0.006 | 21.7% | 7.4% | 5.7% | 5.7% (25) | 25 | 0 | 0 | 0 |
+| N | turns with an optional move | optional moves per turn (mean) | the same by the source board alone | jumps from a mandatory board onto an optional one | jumps from an optional board onto a mandatory one | jumps between two mandatory boards | with a jump | with a branch | rewound (T8, T12) | a mandatory board released | turns with a move after the shift (R8) | boards made mandatory mid-turn (T11, T12) |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| < 50 | 1.2% (280 with one, 4 with two) | 0.012 | 1.1% | 24 | 29 | 229 | 5.3% | 4.1% | 3.8% | 1.8% (511 boards) | 11 | 2 |
+| 50-99 | 2.5% (72, one each) | 0.025 | 2.1% | 10 | 12 | 149 | 15.1% | 9.4% | 8.6% | 5.8% (259) | 0 | 0 |
+| 100-199 | 1.1% (2, one each) | 0.011 | 0.6% | 1 | 0 | 25 | 21.7% | 7.4% | 5.7% | 5.7% (25) | 0 | 0 |
 
-No turn makes more than two optional moves. By the other reading (not mandatory when
-made) the shares are 1.1% / 2.1% / 0.6% too.
+No turn makes more than two optional moves. By the boards' status when each move was
+made the shares are 1.2% / 2.5% / 1.1% too. The source-board reading is the one this
+section first reported (1.1% / 2.1% / 0.6%).
 
 **Ten-board buckets under 100** (strict):
 
-| N | turns | games | one mandatory board | more than one | three or more | one move | moves (mean) | an optional move |
-|---|---|---|---|---|---|---|---|---|
-| 1-9 | 5,524 | 692 | 99.98% | 0.02% | 0 | 99.98% | 1.000 | 0 |
-| 10-19 | 6,551 | 688 | 99.0% | 1.0% | 0.03% | 99.4% | 1.006 | 0.6% |
-| 20-29 | 5,504 | 648 | 93.8% | 6.2% | 0.2% | 95.8% | 1.043 | 1.6% |
-| 30-39 | 3,901 | 535 | 87.3% | 12.7% | 1.9% | 90.5% | 1.107 | 2.0% |
-| 40-49 | 2,522 | 395 | 80.3% | 19.7% | 3.3% | 86.0% | 1.163 | 2.2% |
-| 50-59 | 1,418 | 237 | 76.3% | 23.7% | 4.4% | 83.1% | 1.200 | 2.0% |
-| 60-69 | 738 | 136 | 73.2% | 26.8% | 7.9% | 80.6% | 1.267 | 2.2% |
-| 70-79 | 387 | 73 | 65.4% | 34.6% | 9.3% | 74.9% | 1.310 | 2.3% |
-| 80-89 | 241 | 42 | 67.6% | 32.4% | 10.8% | 74.7% | 1.365 | 2.5% |
-| 90-99 | 136 | 28 | 66.2% | 33.8% | 8.8% | 75.7% | 1.331 | 1.5% |
+| N | turns | games | one mandatory board | more than one | three or more | more than one playable board | one move | moves (mean) | an optional move |
+|---|---|---|---|---|---|---|---|---|---|
+| 1-9 | 5,524 | 692 | 99.98% | 0.02% | 0 | 0.07% | 99.98% | 1.000 | 0 |
+| 10-19 | 6,551 | 688 | 99.0% | 1.0% | 0.03% | 5.7% | 99.4% | 1.006 | 0.6% |
+| 20-29 | 5,504 | 648 | 93.8% | 6.2% | 0.2% | 16.7% | 95.8% | 1.043 | 1.7% |
+| 30-39 | 3,901 | 535 | 87.3% | 12.7% | 1.9% | 30.5% | 90.5% | 1.107 | 2.2% |
+| 40-49 | 2,522 | 395 | 80.3% | 19.7% | 3.3% | 45.0% | 86.0% | 1.163 | 2.4% |
+| 50-59 | 1,418 | 237 | 76.3% | 23.7% | 4.4% | 53.9% | 83.1% | 1.200 | 2.4% |
+| 60-69 | 738 | 136 | 73.2% | 26.8% | 7.9% | 69.9% | 80.6% | 1.267 | 2.8% |
+| 70-79 | 387 | 73 | 65.4% | 34.6% | 9.3% | 78.6% | 74.9% | 1.310 | 2.3% |
+| 80-89 | 241 | 42 | 67.6% | 32.4% | 10.8% | 83.8% | 74.7% | 1.365 | 2.5% |
+| 90-99 | 136 | 28 | 66.2% | 33.8% | 8.8% | 86.8% | 75.7% | 1.331 | 1.5% |
 
 **By mandatory boards at the start** (strict; moves per turn):
 
@@ -709,29 +728,52 @@ made) the shares are 1.1% / 2.1% / 0.6% too.
 A turn with k mandatory boards makes fewer than k moves when a jump between two of
 them plays both (A6's "two fewer") or a branch rewinds the present and releases the
 rest (T8): under 50 boards 450 turns do, 228 by such a jump and 222 by a rewind; at
-50-99, 269 turns, 145 and 125 (one both).
+50-99, 269 turns, 145 and 125 (one both). Played with a single move from two or more
+mandatory boards: 414 turns under 50 boards (194 by a jump between two of them, 220
+by a rewind), 220 at 50-99 (97, 123) and 23 at 100-199 (14, 9).
 
 **Sensitivity.** Grouping the records into games as M7's tool does (674 games: two
 endings of one game joined, each distinct action counted once): under 50 boards
-23,773 turns, 94.1% with one mandatory board, 5.9% with more, 95.8% one move; 50-99
-and 100-199 unchanged. The 45 refused records' 1,165 actions before their refusal
-(not de-duplicated; 943 / 221 / 1 by range) would move none of the shares above by
-more than 0.7 points (50-99: more than one mandatory board 27.1% -> 27.7%, one move
-80.3% -> 79.7%).
+23,773 turns, 94.1% with one mandatory board, 5.9% with more, 15.2% with more than one
+playable board, 95.8% one move; 50-99 and 100-199 unchanged. The 45 refused records'
+1,165 actions before their refusal (not de-duplicated; 943 / 221 / 1 by range) would
+move none of the shares above by more than 0.9 points (50-99: more than one playable
+board 65.2% -> 66.1%, more than one mandatory board 27.1% -> 27.7%, one move 80.3% ->
+79.7%).
 
 **Part L's prediction** - "Most human-game turns under 50 boards have exactly one
 mandatory board" (§8.2): **holds**. 94.2% of the turns under 50 boards (22,605 of
 24,002, in 692 games), 94.1% under the grouped reading, 94.2% with the refused records'
-actions added. §8.2's own claim beside it, "most turns there are single moves", holds
-too: 95.9% of them make one move.
+actions added. §8.2's own claim beside it - "most turns there are single moves, where
+every arm is identical" - holds too, read by the turn's start as §8.2 derives it (from
+"one active timeline") and as its cost argument counts ("a turn with k mandatory
+boards costs k evaluations"): 84.9% of the turns under 50 boards start with one
+playable board, one move and a submission under every arm. 95.9% of them are played
+with one move, but that counts what the players chose, not what the search faces
+(below).
 
-**What it says about the D2 arms** (a reading, not a verdict: nothing maps the figure
-to an order of work - spec issue 142). The arms differ only on turns of more than one
-move: 4.1% of the human games' turns under 50 boards, 19.7% at 50-99, 50.9% at
-100-199 (13 games). Part L's other prediction puts the turn-start-only forms ahead
-once turns have three or more mandatory boards: 0.7%, 6.7% and 16.0% of turns in the
-three ranges. Optional moves are rare everywhere - 0.6-2.1% of turns, never more than
-two in a turn, moves after the shift (R8) in 11 turns of 27,097 - so in human play the
-width that matters is the mandatory boards', not the optional boards'. Nothing is
-measured at 200 boards and up, where §8.2's cost argument mostly applies: the pilot
-self-play run (M18) is the first source of the engine's own distribution there.
+**What it says about the D2 arms** (a reading, not a verdict: nothing maps the
+figures to an order of work - spec issue 142). Where the arms differ is set at the
+turn's start, not by the moves the player went on to make. A turn that starts with one
+playable board is one move and a submission whatever the turn construction. Every
+other start is searched differently by the arms: the ply split evaluates every node
+inside the turn - "a turn with k mandatory boards costs k evaluations along every
+path" (§8.2) - and, once the present has shifted, offers submit beside each further
+optional move; the tree form inherits the turn-start priors for the boards still to
+move; the flat form gives each optional board a "leave it" option. Turns that start
+with more than one playable board: **15.1%** of the human games' turns under 50
+boards, **65.2%** at 50-99, **99.4%** at 100-199 (13 games). Of all turns, those with
+more than one mandatory board - §8.2's cost case - are 5.8%, 27.1% and 64.0%; those
+with one mandatory board and optional boards beside it 9.3%, 38.1% and 35.4%. A turn
+played with one move is not a narrow turn: 414 turns under 50 boards, 220 at 50-99 and
+23 at 100-199 start with two or more mandatory boards and are played with a single
+move - a jump between two of them (J4) or a rewinding branch (T8) - so the turns of
+more than one move (4.1%, 19.7%, 50.9%) understate where the arms differ. Part L's
+other prediction puts the turn-start-only forms ahead once turns have three or more
+mandatory boards: 0.7%, 6.7% and 16.0% of turns. Optional moves are rarely played -
+1.2%, 2.5% and 1.1% of turns, never more than two in a turn, moves after the shift
+(R8) in 11 turns of 27,097 - but optional boards are there, to be played or left, at
+10.5%, 44.5% and 65.7% of turn starts, and every arm must decide them whatever the
+player chose. Nothing is measured at 200 boards and up, where §8.2's cost argument
+mostly applies: the pilot self-play run (M18) is the first source of the engine's own
+distribution there.

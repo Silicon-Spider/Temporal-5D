@@ -30,8 +30,14 @@
 //   {"event":"position","record":NAME,"index":K,...}       at every action start
 //   {"event":"turn","record":NAME,"index":K,...}            with --turns, per action
 //   {"event":"end","record":NAME,"status":...,...}          how far, and why it stopped
+//   {"event":"summary_game","record":NAME,"also":[...]}     with --summary, per game of
+//                                                           several records
 //   {"event":"summary","bucket":...,...}                    with --summary, per N bucket
-//   {"event":"turn_summary",...}                            with --turn-summary
+//   {"event":"turn_summary_records",...}                    with --turn-summary: the records
+//   {"event":"turn_summary_group","record":NAME,"also":[...]}  ... per grouped game of
+//                                                           several records
+//   {"event":"turn_summary","reading":...,"range":...,...}  ... per reading and range
+//   {"event":"turn_summary_by_mandatory",...}               ... strict, per range and class
 //
 // THE SUMMARY (--summary) is the curve M7 reads, made so that a game counts
 // once: positions are distinct by fingerprint (H30) and side to move - a
@@ -54,8 +60,11 @@
 // move resolved against the state the earlier ones reached
 // (PgnReplay::resolve) and counted (tools/turn_width.hpp, which defines every
 // count) - and the result, submitted without the royal-safety test as parse
-// mode submits, must equal the replay's state, or the tool stops with an
-// internal error. The turn summary's unit is the ACTION, read three ways:
+// mode submits, must equal the replay's state. If it does not - a fault of
+// the engine or of this tool, never of the record - the record ends in
+// "error", the tool goes on to the next record, and its exit status is 1;
+// the summary counts such a record under "errors", in no reading. The turn
+// summary's unit is the ACTION, read three ways:
 //
 //  * "strict" (the figures): every action of every record that replays to
 //    the end, a record counted once - a record whose sequence of positions
@@ -66,22 +75,30 @@
 //    groups them (two endings of one game - a shared opening of 10 positions
 //    or more and half the shorter record - are one game), each game's
 //    distinct actions (by the positions before and after) counted once;
-//  * "refused" (apart): the actions played before a record was refused.
+//  * "refused" (apart): the actions played before a record was refused - a
+//    record whose move text stops early (truncated) included, every action
+//    it read having been played.
 //
-// Per board-count range at the action's start (<50, 50-99, 100-199, 200+ -
-// 6b's ranges; then ten-board buckets under 100; then every action pooled,
-// context only): the actions and the games they come from; the distribution
-// of mandatory boards at the start (1, 2, 3, 4+), the share with more than
-// one and with more than two, their mean, median, p90 and max; the optional
-// boards at the start; optional moves per action (0, 1, 2, 3+), their mean
-// and the share with any - and the same by the other reading (not mandatory
-// when made); moves per action (1, 2, 3, 4+), mean, median, p90, max; boards
-// played; the shares with a jump ("travel"), a branch, a move after the
-// shift, a rewind and a mandatory board released; and the counts of jumps
-// between two mandatory boards, jumps from an optional board onto a mandatory
-// one, boards released and gained, and moves on boards released or gained.
-// The strict reading is also given per mandatory class (1, 2, 3, 4+) in each
-// range. Synthetic records are left out, and counted.
+// Per board-count range at the action's start (tools/turn_width.hpp's
+// kTurnRanges: <50, 50-99, 100-199, 200+ - 6b's ranges; then kTurnBuckets,
+// ten-board buckets under 100; then every action pooled, context only): the
+// actions and the games they come from, and tools::turn_stats - the
+// distribution of mandatory boards at the start (1, 2, 3, 4+); the shares
+// with more than one, with more than two, with more than one playable board
+// (a start with one playable board is one move and a submission whatever
+// the turn construction) and with an optional board; the mandatory and the
+// optional boards' mean, median, p90 and max; optional moves per action (0,
+// 1, 2, 3+), their mean and the share with any - and the same by the source
+// board alone and by the boards' status when the move was made - and the
+// optional boards played per action; moves per action (1, 2, 3, 4+), mean,
+// median, p90, max, and the one-move actions from more than one mandatory
+// board; boards played; the shares with a jump ("travel"), a branch, a move
+// after the shift, a rewind and a mandatory board released; and the counts of
+// jumps between two mandatory boards, from an optional board onto a
+// mandatory one and from a mandatory board onto an optional one, of boards
+// released and gained, and of moves on boards released or gained. The strict
+// reading is also given per mandatory class (1, 2, 3, 4+) in each range.
+// Synthetic records are left out, and counted.
 //
 // Moves are PSEUDO-LEGAL (the expansion's default, legal_moves off):
 // every |E| is an upper bound. Records marked synthetic ("Synthetic" header)
@@ -89,6 +106,7 @@
 // exact either way: they count the moves the record made.
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -217,6 +235,7 @@ std::string turn_line(const std::string& name, bool synthetic, std::size_t index
   line += field("moves", w.moves);
   line += field("moves_from_mandatory", w.moves_from_mandatory);
   line += field("optional_moves", w.optional_moves);
+  line += field("optional_by_source", w.optional_by_source);
   line += field("optional_when_made", w.optional_when_made);
   line += field("boards_played", w.boards_played);
   line += field("mandatory_played", w.mandatory_played);
@@ -225,6 +244,7 @@ std::string turn_line(const std::string& name, bool synthetic, std::size_t index
   line += field("branches", w.branches);
   line += field("jumps_between_mandatory", w.jumps_between_mandatory);
   line += field("optional_onto_mandatory", w.optional_onto_mandatory);
+  line += field("mandatory_onto_optional", w.mandatory_onto_optional);
   line += field("moves_after_shift", w.moves_after_shift);
   line += field("rewinds", w.rewinds);
   line += field("mandatory_released", w.mandatory_released);
@@ -269,6 +289,7 @@ struct TurnRecord {
   std::string name;
   bool synthetic = false;
   bool replayed = false;          // read and played to the end ("ok")
+  bool error = false;             // ended in "error": a fault of the engine or the tool
   std::vector<std::string> keys;  // every position: each action's start, then the last
   std::vector<TurnKept> turns;    // every action played
 };
@@ -342,7 +363,7 @@ bool measure(const std::string& name, const std::string& text, const t5d::RuleOp
   // Every record, so that one refused before its first position counts too.
   TurnRecord* turn_record = nullptr;
   if (g_turn_summary) {
-    g_turn_records.push_back(TurnRecord{name, synthetic, false, {}, {}});
+    g_turn_records.push_back(TurnRecord{name, synthetic, false, false, {}, {}});
     turn_record = &g_turn_records.back();
   }
   try {
@@ -421,6 +442,7 @@ bool measure(const std::string& name, const std::string& text, const t5d::RuleOp
                   truncated, t5d::fault_name(e.fault()), e.what()));
     return true;
   } catch (const std::exception& e) {
+    if (turn_record != nullptr) turn_record->error = true;
     emit(end_line(name, "error", positions, accepted, in_record, truncated, "error", e.what()));
     return false;
   }
@@ -572,21 +594,8 @@ void print_summary() {
 
 // ---- the turn summary (--turn-summary; register M22) --------------------------------------
 
-// A board-count range at the action's start: [lo, hi).
-struct BoardRange {
-  const char* label;
-  std::size_t lo;
-  std::size_t hi;
-};
-
-// 6b's and 6b''s ranges (M22 names none: build-log spec issue 141).
-constexpr BoardRange kMainRanges[] = {
-    {"<50", 0, 50}, {"50-99", 50, 100}, {"100-199", 100, 200}, {"200+", 200, SIZE_MAX}};
-constexpr BoardRange kFineRanges[] = {{"1-9", 0, 10},   {"10-19", 10, 20}, {"20-29", 20, 30},
-                                      {"30-39", 30, 40}, {"40-49", 40, 50}, {"50-59", 50, 60},
-                                      {"60-69", 60, 70}, {"70-79", 70, 80}, {"80-89", 80, 90},
-                                      {"90-99", 90, 100}};
-constexpr BoardRange kPooled = {"all", 0, SIZE_MAX};
+using t5d::tools::BoardRange;
+using t5d::tools::TurnStats;
 
 // One action as a reading counts it, and the game (or record) it is from.
 struct Counted {
@@ -598,117 +607,93 @@ std::string share(std::size_t part, std::size_t whole) {
   return number(whole == 0 ? 0.0 : static_cast<double>(part) / static_cast<double>(whole));
 }
 
-// ,"NAME_mean":..,"NAME_median":..,"NAME_p90":..,"NAME_max":.. of a non-empty set.
-std::string distribution(const std::vector<double>& v, const char* name) {
-  double sum = 0;
-  for (const double x : v) sum += x;
+// ,"NAME_mean":..,"NAME_median":..,"NAME_p90":..,"NAME_max":..
+std::string spread_fields(const t5d::tools::Spread& s, const char* name) {
   const std::string n = std::string(",\"") + name;
-  return n + "_mean\":" + number(sum / static_cast<double>(v.size())) + n +
-         "_median\":" + number(quantile(v, 0.5)) + n + "_p90\":" + number(quantile(v, 0.9)) + n +
-         "_max\":" + number(*std::max_element(v.begin(), v.end()));
+  return n + "_mean\":" + number(s.mean) + n + "_median\":" + number(s.median) + n +
+         "_p90\":" + number(s.p90) + n + "_max\":" + number(s.max);
 }
 
-// The statistics of a set of actions: the fields after "actions" and its
-// games (see the file comment).
-std::string turn_stats(const std::vector<Counted>& actions) {
-  const std::size_t n = actions.size();
-  std::size_t mandatory_class[4] = {}, optional_class[4] = {}, moves_class[4] = {};
-  std::vector<double> mandatory, optional_boards, moves;
-  std::size_t over_1 = 0, over_2 = 0, with_optional = 0, with_optional_made = 0;
-  std::size_t with_travel = 0, with_branch = 0, with_after_shift = 0, rewound = 0;
-  std::size_t with_released = 0;
-  long long sum_optional = 0, sum_optional_made = 0, sum_played = 0, sum_after_shift = 0;
-  long long between = 0, onto = 0, released = 0, gained = 0, on_released = 0, on_gained = 0;
-  for (const Counted& c : actions) {
-    const TurnWidth& w = *c.width;
-    ++mandatory_class[std::min(w.mandatory, 4) - 1];  // w.mandatory >= 1 (count_action)
-    ++optional_class[std::min(w.optional_moves, 3)];
-    ++moves_class[std::min(w.moves, 4) - 1];  // w.moves >= 1
-    mandatory.push_back(w.mandatory);
-    optional_boards.push_back(w.optional);
-    moves.push_back(w.moves);
-    over_1 += w.mandatory > 1 ? 1 : 0;
-    over_2 += w.mandatory > 2 ? 1 : 0;
-    with_optional += w.optional_moves > 0 ? 1 : 0;
-    with_optional_made += w.optional_when_made > 0 ? 1 : 0;
-    with_travel += w.jumps > 0 ? 1 : 0;
-    with_branch += w.branches > 0 ? 1 : 0;
-    with_after_shift += w.moves_after_shift > 0 ? 1 : 0;
-    rewound += w.rewinds > 0 ? 1 : 0;
-    with_released += w.mandatory_released > 0 ? 1 : 0;
-    sum_optional += w.optional_moves;
-    sum_optional_made += w.optional_when_made;
-    sum_played += w.boards_played;
-    sum_after_shift += w.moves_after_shift;
-    between += w.jumps_between_mandatory;
-    onto += w.optional_onto_mandatory;
-    released += w.mandatory_released;
-    gained += w.mandatory_gained;
-    on_released += w.moves_on_released;
-    on_gained += w.moves_on_gained;
+// ,"NAME":{"L0":..,"L1":..,"L2":..,"L3":..}
+std::string class_fields(const std::array<std::size_t, 4>& counts, const char* name,
+                         const char* const (&labels)[4]) {
+  std::string s = std::string(",\"") + name + "\":{";
+  for (std::size_t i = 0; i < 4; ++i) {
+    if (i != 0) s += ',';
+    s += std::string("\"") + labels[i] + "\":" + std::to_string(counts[i]);
   }
+  return s + "}";
+}
+
+// The fields of a set of actions' statistics, after "actions" and its games
+// (see the file comment; tools::turn_stats counts them).
+std::string turn_stats_fields(const TurnStats& t) {
+  const std::size_t n = t.actions;
   if (n == 0) return "";
   const double dn = static_cast<double>(n);
   const auto mean = [dn](long long sum) { return number(static_cast<double>(sum) / dn); };
+  static const char* const kMoves[4] = {"1", "2", "3", "4+"};
+  static const char* const kOptional[4] = {"0", "1", "2", "3+"};
   std::string s;
-  s += ",\"mandatory\":{\"1\":" + std::to_string(mandatory_class[0]) +
-       ",\"2\":" + std::to_string(mandatory_class[1]) +
-       ",\"3\":" + std::to_string(mandatory_class[2]) +
-       ",\"4+\":" + std::to_string(mandatory_class[3]) + "}";
-  s += ",\"mandatory_over_1\":" + share(over_1, n) + ",\"mandatory_over_2\":" + share(over_2, n);
-  s += distribution(mandatory, "mandatory");
-  s += distribution(optional_boards, "optional_boards");
-  s += ",\"optional_moves\":{\"0\":" + std::to_string(optional_class[0]) +
-       ",\"1\":" + std::to_string(optional_class[1]) +
-       ",\"2\":" + std::to_string(optional_class[2]) +
-       ",\"3+\":" + std::to_string(optional_class[3]) + "}";
-  s += ",\"optional_moves_mean\":" + mean(sum_optional) +
-       ",\"with_optional_moves\":" + share(with_optional, n);
-  s += ",\"optional_when_made_mean\":" + mean(sum_optional_made) +
-       ",\"with_optional_when_made\":" + share(with_optional_made, n);
-  s += ",\"moves\":{\"1\":" + std::to_string(moves_class[0]) +
-       ",\"2\":" + std::to_string(moves_class[1]) + ",\"3\":" + std::to_string(moves_class[2]) +
-       ",\"4+\":" + std::to_string(moves_class[3]) + "}";
-  s += distribution(moves, "moves");
-  s += ",\"boards_played_mean\":" + mean(sum_played);
-  s += ",\"with_travel\":" + share(with_travel, n) + ",\"with_branch\":" + share(with_branch, n);
-  s += ",\"with_moves_after_shift\":" + share(with_after_shift, n) +
-       ",\"moves_after_shift_mean\":" + mean(sum_after_shift);
-  s += ",\"rewound\":" + share(rewound, n);
-  s += ",\"jumps_between_mandatory\":" + std::to_string(between) +
-       ",\"optional_onto_mandatory\":" + std::to_string(onto);
-  s += ",\"with_mandatory_released\":" + share(with_released, n) +
-       ",\"mandatory_released\":" + std::to_string(released) +
-       ",\"mandatory_gained\":" + std::to_string(gained) +
-       ",\"moves_on_released\":" + std::to_string(on_released) +
-       ",\"moves_on_gained\":" + std::to_string(on_gained);
+  s += class_fields(t.mandatory_classes, "mandatory", t5d::tools::kMandatoryClasses);
+  s += ",\"mandatory_over_1\":" + share(t.mandatory_over_1, n) +
+       ",\"mandatory_over_2\":" + share(t.mandatory_over_2, n);
+  s += ",\"playable_over_1\":" + share(t.playable_over_1, n) +
+       ",\"with_optional_boards\":" + share(t.with_optional_boards, n);
+  s += spread_fields(t.mandatory, "mandatory");
+  s += spread_fields(t.optional_boards, "optional_boards");
+  s += class_fields(t.optional_moves_classes, "optional_moves", kOptional);
+  s += ",\"optional_moves_mean\":" + mean(t.optional_moves) +
+       ",\"with_optional_moves\":" + share(t.with_optional_moves, n);
+  s += ",\"optional_by_source_mean\":" + mean(t.optional_by_source) +
+       ",\"with_optional_by_source\":" + share(t.with_optional_by_source, n);
+  s += ",\"optional_when_made_mean\":" + mean(t.optional_when_made) +
+       ",\"with_optional_when_made\":" + share(t.with_optional_when_made, n);
+  s += ",\"optional_played_mean\":" + mean(t.optional_played);
+  s += class_fields(t.moves_classes, "moves", kMoves);
+  s += spread_fields(t.moves, "moves");
+  s += ",\"one_move_over_1_mandatory\":" + std::to_string(t.one_move_over_1_mandatory);
+  s += ",\"boards_played_mean\":" + mean(t.boards_played);
+  s += ",\"with_travel\":" + share(t.with_travel, n) +
+       ",\"with_branch\":" + share(t.with_branch, n);
+  s += ",\"with_moves_after_shift\":" + share(t.with_moves_after_shift, n) +
+       ",\"moves_after_shift_mean\":" + mean(t.moves_after_shift);
+  s += ",\"rewound\":" + share(t.rewound, n);
+  s += ",\"jumps_between_mandatory\":" + std::to_string(t.jumps_between_mandatory) +
+       ",\"optional_onto_mandatory\":" + std::to_string(t.optional_onto_mandatory) +
+       ",\"mandatory_onto_optional\":" + std::to_string(t.mandatory_onto_optional);
+  s += ",\"with_mandatory_released\":" + share(t.with_mandatory_released, n) +
+       ",\"mandatory_released\":" + std::to_string(t.mandatory_released) +
+       ",\"mandatory_gained\":" + std::to_string(t.mandatory_gained) +
+       ",\"moves_on_released\":" + std::to_string(t.moves_on_released) +
+       ",\"moves_on_gained\":" + std::to_string(t.moves_on_gained);
   return s;
 }
 
-// One summary line: the actions of `all` whose board count lies in `r`.
+// One summary line: the actions of `all` whose board count at the start lies
+// in `r` - and, unless `mandatory_class` is -1, whose mandatory class is it
+// (tools::mandatory_class: 0 for one board ... 3 for four or more).
 void emit_turn_summary(const char* event, const char* reading, const BoardRange& r,
-                       const char* mandatory_class, const char* unit,
-                       const std::vector<Counted>& all) {
-  std::vector<Counted> in;
+                       int mandatory_class, const char* unit, const std::vector<Counted>& all) {
+  std::vector<const TurnWidth*> in;
   std::set<std::size_t> games;
   for (const Counted& c : all) {
-    if (c.width->boards < r.lo || c.width->boards >= r.hi) continue;
-    if (mandatory_class != nullptr) {
-      const int m = c.width->mandatory;
-      const bool four_plus = std::strcmp(mandatory_class, "4+") == 0;
-      if (four_plus ? m < 4 : std::to_string(m) != mandatory_class) continue;
+    if (!r.contains(c.width->boards)) continue;
+    if (mandatory_class >= 0 && t5d::tools::mandatory_class(c.width->mandatory) != mandatory_class) {
+      continue;
     }
-    in.push_back(c);
+    in.push_back(c.width);
     games.insert(c.game);
   }
   std::string line = std::string("{\"event\":\"") + event + "\",\"reading\":\"" + reading +
                      "\",\"range\":\"" + r.label + "\"";
-  if (mandatory_class != nullptr) {
-    line += std::string(",\"mandatory_class\":\"") + mandatory_class + "\"";
+  if (mandatory_class >= 0) {
+    line += std::string(",\"mandatory_class\":\"") +
+            t5d::tools::kMandatoryClasses[static_cast<std::size_t>(mandatory_class)] + "\"";
   }
   line += field("actions", static_cast<long long>(in.size()));
   line += field(unit, static_cast<long long>(games.size()));
-  line += turn_stats(in);
+  line += turn_stats_fields(t5d::tools::turn_stats(in));
   emit(line + "}");
 }
 
@@ -717,12 +702,16 @@ bool is_prefix(const std::vector<std::string>& a, const std::vector<std::string>
 }
 
 void print_turn_summary() {
+  // A record that ended in "error" is in no reading: its counts are not the
+  // record's but a fault's (the exit status is 1).
   std::vector<std::size_t> replayed, refused;
-  std::size_t synthetic_actions = 0;
+  std::size_t synthetic_actions = 0, errors = 0;
   for (std::size_t r = 0; r < g_turn_records.size(); ++r) {
     const TurnRecord& t = g_turn_records[r];
     if (t.synthetic) {
       synthetic_actions += t.turns.size();
+    } else if (t.error) {
+      ++errors;
     } else {
       (t.replayed ? replayed : refused).push_back(r);
     }
@@ -777,6 +766,7 @@ void print_turn_summary() {
   head += field("records", static_cast<long long>(g_turn_records.size()));
   head += field("replayed", static_cast<long long>(replayed.size()));
   head += field("refused", static_cast<long long>(refused.size()));
+  head += field("errors", static_cast<long long>(errors));
   head += field("synthetic_actions_left_out", static_cast<long long>(synthetic_actions));
   head += field("actions_checked", static_cast<long long>(g_turns_checked));
   head += field("strict_games", static_cast<long long>(strict.size()));
@@ -819,29 +809,35 @@ void print_turn_summary() {
     }
   }
 
-  for (const BoardRange& r : kMainRanges) {
-    emit_turn_summary("turn_summary", "strict", r, nullptr, "games", strict_actions);
+  using t5d::tools::kAllBoards;
+  using t5d::tools::kTurnBuckets;
+  using t5d::tools::kTurnRanges;
+  constexpr int kAnyClass = -1;
+  for (const BoardRange& r : kTurnRanges) {
+    emit_turn_summary("turn_summary", "strict", r, kAnyClass, "games", strict_actions);
   }
-  for (const BoardRange& r : kFineRanges) {
-    emit_turn_summary("turn_summary", "strict", r, nullptr, "games", strict_actions);
+  for (const BoardRange& r : kTurnBuckets) {
+    emit_turn_summary("turn_summary", "strict", r, kAnyClass, "games", strict_actions);
   }
-  emit_turn_summary("turn_summary", "strict", kPooled, nullptr, "games", strict_actions);
-  for (const BoardRange& r : kMainRanges) {
-    for (const char* m : {"1", "2", "3", "4+"}) {
+  emit_turn_summary("turn_summary", "strict", kAllBoards, kAnyClass, "games", strict_actions);
+  for (const BoardRange& r : kTurnRanges) {
+    for (int m = 0; m < 4; ++m) {
       emit_turn_summary("turn_summary_by_mandatory", "strict", r, m, "games", strict_actions);
     }
   }
-  for (const char* m : {"1", "2", "3", "4+"}) {
-    emit_turn_summary("turn_summary_by_mandatory", "strict", kPooled, m, "games", strict_actions);
+  for (int m = 0; m < 4; ++m) {
+    emit_turn_summary("turn_summary_by_mandatory", "strict", kAllBoards, m, "games",
+                      strict_actions);
   }
-  for (const BoardRange& r : kMainRanges) {
-    emit_turn_summary("turn_summary", "grouped", r, nullptr, "games", grouped_actions);
+  for (const BoardRange& r : kTurnRanges) {
+    emit_turn_summary("turn_summary", "grouped", r, kAnyClass, "games", grouped_actions);
   }
-  emit_turn_summary("turn_summary", "grouped", kPooled, nullptr, "games", grouped_actions);
-  for (const BoardRange& r : kMainRanges) {
-    emit_turn_summary("turn_summary", "refused", r, nullptr, "records", refused_actions);
+  emit_turn_summary("turn_summary", "grouped", kAllBoards, kAnyClass, "games", grouped_actions);
+  for (const BoardRange& r : kTurnRanges) {
+    emit_turn_summary("turn_summary", "refused", r, kAnyClass, "records", refused_actions);
   }
-  emit_turn_summary("turn_summary", "refused", kPooled, nullptr, "records", refused_actions);
+  emit_turn_summary("turn_summary", "refused", kAllBoards, kAnyClass, "records",
+                    refused_actions);
 }
 
 }  // namespace
