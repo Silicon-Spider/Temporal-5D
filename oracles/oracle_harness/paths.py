@@ -23,6 +23,9 @@ CORPUS_MANIFEST = CORPUS_DIR / "manifest.toml"
 DIVERGENCES_FILE = HARNESS_ROOT / "known-divergences.toml"
 GOLDEN_DIR = HARNESS_ROOT / "golden"
 DISAGREEMENTS_FILE = HARNESS_ROOT / "DISAGREEMENTS.md"
+# What the engine read on the last green run (decision H47; baseline.py). Inside the harness, so that every gate run
+# hashes it at its start and end, and the engine may not name it.
+ENGINE_BASELINE_FILE = HARNESS_ROOT / "engine-baseline.json"
 PROVENANCE_FILE = REPO_ROOT / "PROVENANCE.md"
 
 

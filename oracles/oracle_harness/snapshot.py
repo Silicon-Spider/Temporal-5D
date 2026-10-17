@@ -1,10 +1,12 @@
 """One verified snapshot of everything a gate run compares against (decision H33).
 
-A gate run reads the golden files, their cost files, the calibration reference
-and known-divergences.toml once, when it starts - each recorded-answer file only
-after its bytes are shown to match MANIFEST - and hands that snapshot to every
-consumer: the static checks, the comparison of fresh oracle runs with the
-recorded answers, and the engine differential. Nothing is read from those files
+A gate run reads the golden files, their cost files, the calibration reference,
+the engine's baseline (H47) and known-divergences.toml once, when it starts -
+each recorded-answer file only after its bytes are shown to match MANIFEST, and
+the baseline only after they match its pin in gate.toml - and hands that
+snapshot to every consumer: the static checks, the comparison of fresh oracle
+runs with the recorded answers, and the engine differential - its comparison
+with the engine's baseline included. Nothing is read from those files
 again while the run lasts, so nothing the engine adapter does to them can change
 what it is compared with: the divergences that excuse it are the ones on record
 when the run began. And every harness file that is compared or executed is
@@ -16,7 +18,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from . import divergences, golden, integrity, paths
+from . import baseline as engine_baseline
+from . import config, divergences, golden, integrity, paths
 from .adapters import ORACLE_SOURCES
 from .divergences import Divergence
 from .observations import Observation
@@ -37,6 +40,10 @@ class Snapshot:
     # What is wrong with MANIFEST and the golden directory as a whole.
     manifest_problems: list[Finding] = field(default_factory=list)
     calibration_problem: str = ""
+    # The engine's baseline (H47), read when the snapshot was asked for it and gate.toml pins one; otherwise None, and
+    # why it could not be read where it was asked for.
+    baseline: engine_baseline.Baseline | None = None
+    baseline_problems: list[Finding] = field(default_factory=list)
 
     def recorded(self, source: str, record_id: str) -> Observation | None:
         """What the golden file records ``source`` saying about a record, or None."""
@@ -55,8 +62,13 @@ def _relative(path) -> str:
         return path.resolve().as_posix()
 
 
-def take(sources: tuple[str, ...] | list[str] = ORACLE_SOURCES) -> Snapshot:
-    """Hash the harness, then read and verify every recorded-answer file and the known divergences, once."""
+def take(sources: tuple[str, ...] | list[str] = ORACLE_SOURCES, *, baseline_pin: config.Baseline | None = None
+         ) -> Snapshot:
+    """Hash the harness, then read and verify every recorded-answer file and the known divergences, once.
+
+    ``baseline_pin`` (gate.toml [baseline]): read the engine's baseline as well, verified against its pin - where it
+    pins one.
+    """
     snapshot = Snapshot(harness=integrity.hash_harness())
     snapshot.manifest_problems = integrity.verify_manifest()
     try:
@@ -100,6 +112,12 @@ def take(sources: tuple[str, ...] | list[str] = ORACLE_SOURCES) -> Snapshot:
         raise HarnessError(f"missing file: {paths.DIVERGENCES_FILE}") from None
     snapshot.divergences = divergences.load(data=data)  # parsed from the very bytes that are hashed
     read[_relative(paths.DIVERGENCES_FILE)] = sha256_text(data)
+    if baseline_pin is not None and baseline_pin.sha256:
+        try:
+            snapshot.baseline = engine_baseline.load(baseline_pin.sha256)
+            read[_relative(paths.ENGINE_BASELINE_FILE)] = snapshot.baseline.digest
+        except engine_baseline.BaselineError as error:
+            snapshot.baseline_problems.append(Finding(error.code, str(error)))
     # What was read must be what was hashed a moment before: a file changed in
     # between would leave the run comparing against something it never hashed.
     for name, digest in read.items():

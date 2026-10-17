@@ -4,7 +4,7 @@ oracles have been built) the oracles' answers to questions with known answers.""
 import json
 import unittest
 
-from oracle_harness import build, config, corpus, gate, gitutil, lockfile, paths
+from oracle_harness import baseline, build, config, corpus, gate, gitutil, lockfile, paths, snapshot
 from oracle_harness.adapters import ORACLE_SOURCES, PARSE_ONLY_SOURCES, RunOptions, make_source
 from oracle_harness.util import run
 from support import golden_files_predate_this_schema
@@ -45,6 +45,21 @@ class ConfigurationTests(unittest.TestCase):
         # commit tier's (gate.toml says why).
         self.assertEqual(gate.engine_argv(self.cfg.engine_command), [str(paths.REPO_ROOT / "build" / "engine" / "t5d-gate")])
         self.assertGreater(self.cfg.engine_timeout(self.cfg.tier("commit")), self.cfg.tier("commit").timeout_s)
+
+    def test_the_engine_baseline_is_pinned_and_current(self):
+        # H47 (CHECKPOINT 8): the commit tier holds the engine to what it read on the last green run - recorded by
+        # `baseline --write`, pinned in gate.toml, about the corpus as it is, and covering every record of its tier.
+        spec = self.cfg.baseline
+        self.assertEqual(spec.tier, "commit")
+        frozen = snapshot.take([], baseline_pin=spec)
+        records = corpus.load()
+        self.assertEqual(baseline.static_findings(self.cfg, records, frozen.baseline, frozen.baseline_problems), [])
+        loaded = frozen.baseline
+        tier = self.cfg.tier(spec.tier)
+        self.assertEqual(set(loaded.records), {record.id for record in corpus.select(records, tier.record_tiers, None)})
+        self.assertGreater(loaded.read(), 0)
+        # Recorded from the engine as gate.toml configures it, in full mode: a relative command, no machine's path.
+        self.assertEqual((loaded.engine["command"], loaded.engine["mode"]), (list(self.cfg.engine_command), "full"))
 
     def test_the_tier_that_can_enable_the_proof_channel_runs_everything(self):
         # Every search of every oracle, over every record, and it insists on an engine.

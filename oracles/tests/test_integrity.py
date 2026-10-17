@@ -89,8 +89,10 @@ class HarnessHashTests(unittest.TestCase):
                          f"{harness}/drivers/ftxi/ftxi_driver.cpp", f"{harness}/oracles.lock.toml",
                          f"{harness}/corpus/manifest.toml"):
             self.assertIn(expected, names)
-        # Wherever they live (a test may point the gate at copies of its own).
-        for path in (paths.DIVERGENCES_FILE, paths.GATE_FILE, paths.DISAGREEMENTS_FILE, *integrity.recorded_files()):
+        # Wherever they live (a test may point the gate at copies of its own). The engine's baseline too (H47): what a
+        # gate run holds the engine to, which the engine must not be able to rewrite while it runs.
+        for path in (paths.DIVERGENCES_FILE, paths.GATE_FILE, paths.DISAGREEMENTS_FILE, paths.ENGINE_BASELINE_FILE,
+                     *integrity.recorded_files()):
             self.assertIn(integrity._name(path), names)
         self.assertFalse(any("__pycache__" in name or name.endswith(".pyc") for name in names))
 

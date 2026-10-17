@@ -10,6 +10,87 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-17 - Gate H47 (CHECKPOINT 8): two oracles to gate a ruleset; the commit tier's last-green-run rule; restricted runs never a tier verdict
+
+The user's CHECKPOINT 8 rulings on spec issues 122-124 (register H47 as amended).
+
+- **Two oracles to gate a ruleset** (issue 122: "a ruleset is gated only when two or more
+  oracles answer for it. A single oracle cannot tell its own bug from ours").
+  `oracles/oracle_harness/gate.py`: `engine_differential` gates a ruleset only if each of
+  its records was followed, as far as the engine went, by at least `GATING_ORACLES` (2)
+  independent implementations - the count `Gated.oracles` already gave; two searches of
+  one implementation count once, the notation parser never. A record one oracle follows
+  ungates its ruleset with its own reason, naming the record and the oracle. In every
+  tier; the commit tier, with one rules oracle, can no longer meet the conditions at all.
+  Nightly, run with the engine: PASSED, gating Standard - Half Reflected (two oracles behind its
+  record) and Standard - Reversed Royalty (three) - and no longer Standard - Turn Zero, whose
+  cwmtt/tesseractMageOChicken only cwmtt follows as far as the engine goes.
+- **The commit tier's last-green-run rule** (issue 123: "the commit tier fails if the
+  engine declines a record it read on the last green run, or reads none").
+  `oracles/oracle_harness/baseline.py` (new): the engine's baseline,
+  `oracles/engine-baseline.json` (new) - for each commit-tier record, how the engine's
+  replay ended and how many positions it reported on a green run, one record per line.
+  Kept as H33 keeps recorded answers: written only by the new `harness.py baseline
+  --write`, which runs the `[baseline]` tier in full and records only from a run green
+  on everything else, then lists what the new file no longer holds (`LOSS`) first; never
+  by a gate run or the engine; pinned by its SHA-256 in `gate.toml` `[baseline]` (new) -
+  beside the rulebook's pin, not in `golden/MANIFEST`, which every `golden --write`
+  rewrites - and read once per run, verified (`snapshot.take`), and checked by `verify`
+  (`engine-baseline-missing`, `-integrity`, `-invalid`, `-stale`); `harness.py baseline`
+  checks it alone. Every tier fails an engine that reads less of a record than then -
+  fewer positions, or as many without the verdict it ended with (`engine-declined`) -
+  or replays none of the tier's records (`engine-read-nothing`); the summary and report
+  say what was compared. Recorded from a green commit run of the engine as built on this
+  branch: 35 of the 41 records replayed. `paths.ENGINE_BASELINE_FILE`;
+  `integrity.harness_files` hashes it wherever a test points it; `config.Baseline`, and
+  `config.write_sha256`, now also the rulebook's pin writer (`rulebook.pin`, unchanged
+  in behaviour).
+- **Restricted runs never a tier verdict** (issue 124: "A restricted run (--source/--record)
+  never produces a tier verdict; label its output 'restricted - not a tier result'").
+  `gate.py`: `GateResult.restricted_to` replaces `partial`; any `--source` or `--record`
+  restricts. Such a run prints and reports `restricted - not a tier result`, no `oracle
+  layer [tier]` line, no ruleset gated or not, no smoke-test line, a proof channel
+  `DISABLED - restricted - not a tier result`; it reports every finding and its exit code
+  reflects them only - none of the checks of a tier as a whole (`engine-nothing-gated`,
+  `engine-read-nothing`, `engine-nothing-compared`, `require_engine`). Its report is
+  `gate-<tier>-restricted.json`. This undoes the reading built for issue 124 (a
+  restricted run kept its tier's rule).
+- Tests: `oracles/tests/test_baseline.py` (new: the readings of "declines" and "reads
+  none", the comparison, the file, its pin and its static check), and in `test_gate.py`
+  the two-oracle rule (one oracle, two searches of one, a parse-only source, a weakest
+  record), the baseline in whole gate runs (a decline in every tier, reading none, an
+  engine that edits its baseline while it runs, a baseline edited by hand, missing or
+  stale, `baseline --write` from green and non-green runs), restricted runs (result,
+  summary, report); `test_config.py` (the `[baseline]` table; a pin written into its own
+  table, either line ending); `test_integrity.py`; `test_repository.py` (the repository's
+  baseline pinned, current and complete); `test_gate_live.py` - its runs are restricted
+  runs, holding the stand-in to a baseline of its own honest run. 660 self-tests, from
+  638: `test_baseline.py`'s 13, 6 more in `test_gate.py` (99 to 105), 2 in
+  `test_config.py`, 1 in `test_repository.py`.
+- Documents: `oracles/README.md` (the tier table, the engine contract's conditions, the
+  smoke test, a new "The engine's baseline", recorded-answer integrity, "Other
+  commands"); `oracles/gate.toml`'s comments; `CONTRIBUTING.md`; `docs/BUILD_LOG.md`
+  (register rows H23, H27, H47; issues 122-124's built notes; issues 131-133; edits
+  103-104).
+- Checks (2026-10-17, MSYS2 g++ 16.2; timings on a shared machine are not
+  measurements): `py engine/build.py --werror` - nothing to rebuild (the engine is
+  unchanged on this branch); `harness.py verify` - every section ok, `engine baseline`
+  among them, with H48's 17 `proof-channel-vacuous` notes as before; `harness.py
+  baseline` - the pinned baseline (ad689cf3be80); `selftest` - 660 tests OK, 1 skipped
+  (symlinks cannot be created by this Windows profile); `gate --tier commit` - ok, `SMOKE
+  TEST - PASSED`, ftxi 8256 of 8256 and notation 3012 of 3012 required values
+  reproduced, the baseline 41 records compared and 0 declined, Standard - Reversed Royalty
+  `NOT gated` with the one-oracle reason (ftxi alone); `gate --tier nightly` - ok,
+  `PASSED`, every source's required set reproduced, gating the two rulesets above; `gate
+  --tier nightly --source ftxi --record cwmtt/standard` - `restricted - not a tier result:
+  ... - 0 findings`, the proof channel `DISABLED - restricted - not a tier result`, exit 0,
+  its report `gate-nightly-restricted.json`; `ruff check oracles` - clean.
+- Spec: §11.0 "Tiered CI" and "Recorded-answer integrity"; register H47 (built), H33,
+  H27, H23. Spec issues 122-124 (ruled at CHECKPOINT 8; built), 131 (the two-oracle
+  rule per record), 132 (the baseline: what it records, "declines", "reads none", every
+  tier), 133 (restricted runs); proposed edits 103 (§11.0 "Tiered CI", H47 as built) and
+  104 (§11.0 "Recorded-answer integrity", H33: the baseline as a recorded answer).
+
 ### 2026-10-17 - H51: capture markers read leniently - the reader in both directions, the writer strict, rulebook R11; ftxi's refusal recorded, KD-0167-0169 retired
 
 - `engine/include/t5d/pgn.hpp`, `engine/src/pgn.cpp`: the user's ruling on spec issue 125

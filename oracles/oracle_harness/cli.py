@@ -9,6 +9,7 @@ import sys
 import unittest
 
 from . import (
+    baseline,
     boundary,
     build,
     config,
@@ -61,7 +62,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
     lock = lockfile.load()
     cfg = config.load()
     records = corpus.load()
-    frozen = snapshot.take()
+    frozen = snapshot.take(baseline_pin=cfg.baseline)
     sections = gate.static_checks(lock, cfg, records, frozen, include_untracked=not args.tracked_only)
     code = _report(sections)
     # What each tier requires of each source, and why the rest is not required (H32).
@@ -195,6 +196,37 @@ def cmd_gate(args: argparse.Namespace) -> int:
     return 0 if result.ok else 1
 
 
+def cmd_baseline(args: argparse.Namespace) -> int:
+    """The engine's baseline (H47): check it (default), or record it from a green run of its tier (--write)."""
+    if args.write:
+        result, changed = gate.write_baseline(jobs=args.jobs, include_untracked=not args.tracked_only, log=_say)
+        print()
+        print(gate.summarise(result))
+        print()
+        if changed is None:
+            print("The run is not green: no baseline was recorded. The engine's baseline holds what it read on a green "
+                  "run of its tier, and nothing else (H47).")
+            return 1
+        print("The engine's baseline is recorded and pinned. Review the diff before committing: every changed line of\n"
+              f"{paths.HARNESS_REL}/{paths.ENGINE_BASELINE_FILE.name} is a record the engine now reads otherwise. A LOSS below is a\n"
+              "record the commit tier no longer holds the engine to - a loss of checking, never churn: never record\n"
+              "one to make a gate run pass.")
+        for line in changed:
+            print(f"  {line}")
+        return 0
+    cfg = config.load()
+    frozen = snapshot.take(baseline_pin=cfg.baseline)
+    findings = baseline.static_findings(cfg, corpus.load(), frozen.baseline, frozen.baseline_problems)
+    loaded = frozen.baseline
+    if not findings and loaded is not None:
+        print(f"{paths.ENGINE_BASELINE_FILE.name} is the baseline gate.toml pins ({loaded.digest[:12]}): the green run "
+              f"of the {loaded.tier} tier recorded {loaded.recorded}, in which the engine replayed {loaded.read()} of "
+              f"{len(loaded.records)} records")
+    elif not findings:
+        print("no baseline is pinned, and none is needed: no engine is compared in full mode")
+    return _report([("engine baseline", findings)])
+
+
 def cmd_provenance(args: argparse.Namespace) -> int:
     lock = lockfile.load()
     records = corpus.load()
@@ -292,8 +324,18 @@ def parser() -> argparse.ArgumentParser:
 
     sub = add("gate", cmd_gate, "Run a gate tier: static checks, oracle runs against golden, engine differential.")
     sub.add_argument("--tier", required=True)
-    sub.add_argument("--source", action="append", help="restrict to these sources (marks the run partial)")
-    sub.add_argument("--record", action="append", help="restrict to these records (marks the run partial)")
+    restricted = ("a restricted run never produces a tier verdict: it reports its findings, labelled "
+                  f"'{gate.RESTRICTED}', and exits 1 only on a finding")
+    sub.add_argument("--source", action="append", help=f"restrict to these sources ({restricted})")
+    sub.add_argument("--record", action="append", help=f"restrict to these records ({restricted})")
+    sub.add_argument("--jobs", type=int)
+    sub.add_argument("--tracked-only", action="store_true", help=tracked_only)
+
+    sub = add("baseline", cmd_baseline,
+              "Check the engine's baseline - what it read on the last green run (H47) - or record it (--write).")
+    sub.add_argument("--write", action="store_true",
+                     help="run the baseline's tier (gate.toml [baseline]) in full with the engine and, only if the run "
+                          "is green, record what the engine read and pin it in gate.toml")
     sub.add_argument("--jobs", type=int)
     sub.add_argument("--tracked-only", action="store_true", help=tracked_only)
 

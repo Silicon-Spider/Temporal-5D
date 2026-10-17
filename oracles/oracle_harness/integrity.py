@@ -23,6 +23,12 @@ cannot modify; harness changes require review. Here:
     requires is a table of DISAGREEMENTS.md, which `verify` re-renders from the
     golden and cost files and gate.toml (stability.required_table) - a cost file
     edited to shrink a required set changes a line of it;
+  * the engine's baseline - what it read on the last green run (H47) - is a
+    recorded answer too, kept apart from golden/: oracles/engine-baseline.json,
+    pinned by its SHA-256 in gate.toml [baseline] (as the rulebook is), so that
+    re-recording the oracles never re-pins it; written only by
+    `baseline --write`, and verified against its pin before it is compared
+    (baseline.py);
   * a hash of every harness file, taken when a gate run starts and again when it
     ends - every file under oracles/ but its caches (.cache/ and the like, and
     __pycache__/, whose bytecode harness.py never runs) and the pinned oracles
@@ -172,7 +178,8 @@ def harness_files() -> list[Path]:
     found = _files_under(paths.HARNESS_ROOT)
     for folder in (paths.DRIVERS, paths.GOLDEN_DIR, paths.CORPUS_DIR):
         found += _files_under(folder)
-    found += [paths.DIVERGENCES_FILE, paths.GATE_FILE, paths.DISAGREEMENTS_FILE, paths.LOCK_FILE]
+    found += [paths.DIVERGENCES_FILE, paths.GATE_FILE, paths.DISAGREEMENTS_FILE, paths.LOCK_FILE,
+              paths.ENGINE_BASELINE_FILE]
     unique: dict[str, Path] = {}
     for path in found:
         unique.setdefault(os.path.normcase(os.path.abspath(path)), path)
