@@ -10,6 +10,40 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-17 - Design documents: the CHECKPOINT 6 and 7 rulings, from upstream
+
+- `docs/design/5d-chess-decisions.md`, `docs/design/5d-chess-transformer-design.md`,
+  `docs/design/scalable-transformers-architecture.md`: the copies maintained
+  upstream after CHECKPOINTS 6 and 7, committed unedited. Register rows added: A6
+  (turn-state inputs), A7 (perspective canonicalisation), A8 (board-layout
+  embedding), B15 (the 4D displacement bias, superseding B6), B16 (score-time status
+  key biases), B17 (the key-side Shaw term), D9 (the optimistic policy), F5
+  (normalisation and biases), F6 (Mish), G8 (QAT prepared), G9 (the inference path;
+  ONNX/TensorRT refused for now), H47 (the "some ruleset is gated" check only in
+  tiers that run every oracle - Q-A), H48 (the naive searches' release budgets
+  raised and re-recorded before the sign-off - Q-B), H49 (Hunt with a lazily
+  expanded root - held open), H50 (the asset map's 5D piece values - provisional
+  placeholders), I12-I20 (§12.8's
+  training mechanics: surprise sampling, deblundering, proof rescoring, rich
+  records, the replay window, SWA, the false-resign check, exploration
+  placeholders, KL-adaptive searches), M19 (no GPU: counted FLOPs and CPU-labelled
+  wall times, GPU figures deferred), M20 (the placeholder dispositions), M21 (the
+  training loop smoke-tested), M22 (the turn-width measurement before the D2 arms),
+  M23 (push every branch; merge, never rebase), M24 (ablations on a shared
+  dataset). Changed: A3, A5 (build behind its flag), B4-B9, B11, B12, C2, C5, C7,
+  C10 (the window killed provisionally), C11, C14, C15, C20, C24, D1-D4 (D3 corrected:
+  WDL on the result, the categorical over the root search value; D4's reply head
+  reinstated as a prototype), D8, E1, E4, E7, F1, F2, F4 and H7 (held open with the
+  NNUE), G2, H1, H5, H13, H14, H17-H19, H22, H28, H30, H32, H33, H37, H41-H44, I2,
+  I3, I5, I6, I9-I11, M5, M8, M9, M13, M15, M17; reversals 25-29; part K and part L
+  entries added. Many of the build log's proposed spec edits are now carried
+  upstream; which ones, and the plan the rulings set, are in the build log.
+- Spec: the whole of CHECKPOINTS 6 and 7, as written upstream - 139 changed
+  passages in §0, §2.2-§2.3, §4.1-§4.2, §5.3, §6, §7.1, §7.3, §7.9, §8.1-§8.7, §9.2,
+  the new §9.3, §10.2-§10.4, §11.0-§11.4, §12.2-§12.8 (§12.8 new), §13, §13.1,
+  §14.1, §14.4, §15.1-§15.6 and the summary; the register's parts A-M; the general
+  pattern document. Nothing in them edited here.
+
 ### 2026-10-17 - Recovery after the lost machine: the toolchain rebuilt, main verified, the losses listed
 
 - `docs/BUILD_LOG.md`: "Recovery after the lost machine" at the top - what survived
