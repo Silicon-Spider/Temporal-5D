@@ -2858,7 +2858,15 @@ kept - the asset map runs its own one-board quiescence.
   off; its test switches it on. Whatever the filter, a defender's turn at the horizon
   is decided "not mated" from R1's status alone when it is not in check.
 - **The proof's line** (the attacker's actions, the defender's longest defences, to
-  the mate) and, on request (`record_certificate`), its **certificate** - every
+  the mate), from a thread that proved the root at the least distance: of those that
+  searched their root, the first whose tree holds the whole line, else the longest. A
+  thread can decide the root without searching it - the first prover exports the proof
+  at once, and a thread that builds its root later reads it from the store (thread 0
+  most often: it starts last) - and reporting such a thread gave an empty line and no
+  first action (Guard's five-thread test, intermittent in CI until 2026-10-17). At depth
+  1 the line is complete whenever the store did not already hold the root's proof;
+  deeper, it can stop where every tree reached a node another thread or an earlier
+  search solved. And, on request (`record_certificate`), its **certificate** - every
   attacker position the prover proved by expanding it, in any thread and any of its
   searches, with its proving action (recorded as each proof is exported), so that a
   proof read back from the solved store is certified too. A proof read from a store

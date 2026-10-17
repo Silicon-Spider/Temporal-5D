@@ -10,6 +10,51 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-17 - Engine A6, first commit: Guard's five-thread test against its contract; the prover reports the line of a thread that searched
+
+- The cause of the intermittent failure of `guard_at_five_threads_depth_one_is_the_opponents_mate_in_one`
+  (CI run 37146667584, g++-13: `line_complete` and the line's mate both false). Under
+  Lazy SMP the first thread to prove the root exports the proof at once (H19), and a
+  thread that builds its root after that - thread 0 most often, which builds its root
+  after starting the four helpers, so on a loaded two-vCPU runner - reads the proof from
+  the store and decides the root with no tree beneath it. The prover reported the
+  lowest-numbered thread at the least distance: that thread, its line empty and its
+  first action empty too. Made certain in a new test (a solved store that holds thread
+  0's first lookup until the root's proof is exported): the old prover failed it on
+  every run.
+- `engine/src/prover.cpp` (`Prover::Impl::report_proof`): among the threads that proved
+  the root at the least distance, those that searched their root come first, the first
+  complete line is reported, else the longest; the first action is the reporting
+  thread's (a root read from the store: the line's, from the certificate, if any).
+  Sound and cheap: every thread's tree holds only exact results, a line is a walk of at
+  most a few hundred nodes per thread, and the verdict and the distance are chosen as
+  before - what Guard and Hunt decide is unchanged, and one thread reports exactly what
+  it did. Which of the two remedies, and why: the line is now complete wherever some
+  thread's tree holds it - always at depth 1, whose stores start empty (the thread that
+  proved the root first searched it, and its line ends at the mated defender). Beyond
+  that the documented contract stays: a line can still stop where every tree reached a
+  node another thread (or an earlier depth) solved; completing it from the certificate
+  or the store would mean recording certificates in Guard (a cost 6b″'s configuration
+  did not pay) or enumerating actions to find the continuation (not cheap). So the
+  tests check the contract.
+- `engine/include/t5d/prover.hpp`, `guard.hpp`, `engine/README.md` ("The proof's line"):
+  `ProveResult::line`, `first_action` and `GuardResult::line` say whose line is reported
+  and when it is complete.
+- `engine/tests/test_guard.cpp`: the race pinned
+  (`guard_at_five_threads_a_thread_late_to_its_root_reports_the_line_of_one_that_searched`:
+  Guard's literal class, the default class and prove-only on three mates in one, the
+  twin's included); the depth-1 properties at one and five threads keep `line_complete`
+  (guaranteed now) and check the line's length; the depth-2 properties check every
+  refutation's line against its contract - a prefix that replays, complete at depth 1,
+  a complete line the opponent's mate at the refutation's depth by E4 - beside the
+  references' confirmation of every refutation.
+- `docs/BUILD_LOG.md`: register H42's row. The prover is among the truth's sources
+  (`T5D_TRUTH_SOURCES`), so the code signature changes; the committed truth's
+  provenance records none ("unrecorded"), and no verdict, distance or node count
+  changes. The main loop runs the Lazy SMP timing test before merging.
+- Spec: §11.4 (Guard; register H42) and §11.1's df-pn with Lazy SMP (H17, H19) - no part
+  of the spec describes the proof's line or which thread reports it; no edit proposed.
+
 ### 2026-10-17 - Build log: each lane's numbers render as written; issue 142 waits on the user
 
 - `docs/BUILD_LOG.md`: an HTML comment at column 0 before the first spec issue of
