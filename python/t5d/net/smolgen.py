@@ -6,17 +6,21 @@ of the exact-but-static typed edges. Section 9.2 sizes it: "Smolgen latent 32, b
 per head", under 0.1M parameters. Token-level and within-board smolgen are refused
 (B13, section 14.4) and do not exist here.
 
-**The latent** (per layer, from that layer's normed attention input ``h``): the global
-context ``c`` is the mean of the global registers' states and ``z = silu(W_z c + b_z)``
-(32-dim; SiLU as in Lc0's smolgen) - the part generated "from the global registers".
+**The latent** (per layer, from that layer's attention input ``h`` - the normed residual
+stream under F5's pre-norm, the block's input under its post-norm arm,
+``trunk.Block.attn_input``): the global context ``c`` is the mean of the global registers'
+states and ``z = silu(W_z c + b_z)`` (32-dim; SiLU as in Lc0's smolgen) - the part
+generated "from the global registers". There is no norm inside the generator (F5's
+"everywhere except inside smolgen" finds none to keep - build log, spec issue 202).
 
 **Two generators** turn ``z`` into per-head biases over board pairs (``smolgen_form``;
 B12 is class R, so the form is an implementation choice and both are built):
 
 * ``"relative_cells"`` (the default): ``S_h(b1, b2) = z . W_h[cell(b1, b2)] / sqrt(32)``.
-  ``cell`` is the pair's relative cell - B6's signed Delta-time bucket and Delta-timeline
-  bucket of the key board against the query board (19 x 8 = 152 cells at B6's default
-  buckets) - and ``W_h`` a learned 32-vector per cell per head. This is Lc0's construction
+  ``cell`` is the pair's relative cell - the signed Delta-time bucket and the Delta-timeline
+  bucket of the key board against the query board (``buckets.py``; 19 x 8 = 152 cells at the
+  default ``smolgen_time_*`` / ``smolgen_timeline_*`` buckets - the buckets B6's binned biases
+  used before B15 superseded them) - and ``W_h`` a learned 32-vector per cell per head. This is Lc0's construction
   with its output grid moved from absolute pairs to relative cells: Lc0's 64 x 64 output
   layer works because squares have fixed indices, while boards have none (N varies, and
   absolute board indices are an absolute positional encoding, section 14.1) - their
@@ -37,7 +41,7 @@ B12 is class R, so the form is an implementation choice and both are built):
 
 The bias applies to every token pair by the boards the two tokens belong to - squares and
 per-board registers alike. **Global registers are excluded**: they belong to no board, so
-a pair with one gets no smolgen bias (as with B6's binned biases); padding neither.
+a pair with one gets no smolgen bias; padding neither.
 
 Weights are shared by all layers (implementation choice, forced by the budget: per-layer
 weights would be 16 x 47.1k = 0.75M for relative cells, 16 x 32.8k = 0.53M for the
@@ -70,8 +74,8 @@ import torch.nn.functional as F
 from torch import nn
 from torch.nn.utils import skip_init
 
+from .buckets import log_bucket, n_log_buckets, n_signed_log_buckets, signed_log_bucket
 from .config import NetConfig
-from .rope import n_time_buckets, n_timeline_buckets, time_bucket, timeline_bucket
 from .state import TOKEN_BOARD_REGISTER, TOKEN_SQUARE, Batch
 
 
@@ -86,14 +90,23 @@ class SmolgenInputs:
     cell: torch.Tensor | None = None  # (B, Nb, Nb) long: relative cell of (query board, key board)
 
 
+def n_relative_cells(cfg: NetConfig) -> int:
+    """The relative cells: signed Delta-time buckets x Delta-timeline buckets (19 x 8 = 152)."""
+    return n_signed_log_buckets(cfg.smolgen_time_exact, cfg.smolgen_time_max) * n_log_buckets(
+        cfg.smolgen_timeline_exact, cfg.smolgen_timeline_max
+    )
+
+
 def relative_cells(ph: torch.Tensor, cfg: NetConfig) -> torch.Tensor:
     """``(B, Nb, Nb)`` relative cell of each (query board, key board) pair from per-board
-    ``(p, h)`` ``(B, Nb, 2)``: B6's signed Delta-time bucket (key minus query) times the
-    Delta-timeline buckets, plus the Delta-timeline bucket."""
+    ``(p, h)`` ``(B, Nb, 2)``: the signed Delta-time bucket (key minus query) times the
+    Delta-timeline buckets, plus the Delta-timeline bucket (``buckets.py``)."""
     p, h = ph[..., 0].round().long(), ph[..., 1].round().long()
     dh = h[:, None, :] - h[:, :, None]
     dp = p[:, None, :] - p[:, :, None]
-    return time_bucket(dh, cfg) * n_timeline_buckets(cfg) + timeline_bucket(dp, cfg)
+    n_timeline = n_log_buckets(cfg.smolgen_timeline_exact, cfg.smolgen_timeline_max)
+    time = signed_log_bucket(dh, cfg.smolgen_time_exact, cfg.smolgen_time_max)
+    return time * n_timeline + log_bucket(dp, cfg.smolgen_timeline_exact, cfg.smolgen_timeline_max)
 
 
 def smolgen_inputs(batch: Batch, cfg: NetConfig, ph: torch.Tensor) -> SmolgenInputs:
@@ -140,7 +153,7 @@ class BoardPairSmolgen(nn.Module):
         self.has_globals = cfg.global_regs > 0
         self.context = skip_init(nn.Linear, cfg.d_model, r)  # W_z: global registers -> latent z
         if self.form == "relative_cells":
-            self.n_cells = n_time_buckets(cfg) * n_timeline_buckets(cfg)
+            self.n_cells = n_relative_cells(cfg)
             self.cells = nn.Parameter(torch.empty(cfg.n_heads, self.n_cells, r))  # W_h[cell]
         else:
             self.board = skip_init(nn.Linear, cfg.d_model, r)  # W_u: a board's registers -> descriptor u_b
@@ -162,7 +175,7 @@ class BoardPairSmolgen(nn.Module):
 
     def forward(self, h: torch.Tensor, inputs: SmolgenInputs) -> torch.Tensor:
         """Board-pair biases ``(B, H, Nb, Nb)`` (query board, key board) from a layer's
-        normed input ``h`` ``(B, L, d)``."""
+        attention input ``h`` ``(B, L, d)``."""
         bsz, _, d = h.shape
         z = F.silu(self.context(self._context_input(h, inputs)))  # (B, r)
         if self.form == "relative_cells":

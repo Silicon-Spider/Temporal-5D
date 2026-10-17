@@ -77,6 +77,7 @@ rules reference, `docs/rules/README.md`, which the code cites throughout.
 | **E9:** Hunt - do we have a forced mate? df-pn, prove-only | `include/t5d/hunt.hpp` | §11.4, §12.2, H43, H41 |
 | **E9:** the superseded-board asset map | `include/t5d/assets.hpp` | §11.2 rung 4, §11.4, H10 |
 | **E9:** Hunt's ground truth; experiment 6b″'s tool | `tools/t5d_hunt_truth.cpp`, `testdata/hunt-truth/`, `tools/t5d_scan6bpp.cpp` | §15.6 (CHECKPOINT 4), M17 |
+| **M22:** the turn width of an action - mandatory boards at its start, its moves, the optional ones, rewinds - and t5d-measure's `--turns` / `--turn-summary` | `tools/turn_width.hpp`, `tools/t5d_measure.cpp`, `testdata/turn-width/` | §8.2, §15.1; M22 |
 
 The gate runs the engine: `oracles/gate.toml` configures `t5d-gate` in full mode
 (2026-10-17). Under Q4's ruling (R8), the default, every one of the 2026-10-02
@@ -145,7 +146,7 @@ Targets (all in `build/engine`):
 | `t5d-tests` | the test runner (exit status non-zero on any failure) |
 | `t5d-gate` | the gate's engine adapter: full mode and parse mode (see "The gate adapter") |
 | `t5d_tools` | static library of the tools: synthetic positions, record input |
-| `t5d-measure` | W(k), E(k), src_extra(k) at every position of records (see "t5d-measure") |
+| `t5d-measure` | W(k), E(k), src_extra(k) at every position of records, and every action's turn width (see "t5d-measure") |
 | `t5d-bench` | expansion throughput (see "t5d-bench") |
 | `t5d-scan6b` | experiment 6b: the scanner's horizon per node budget (see "Stage E5b") |
 | `t5d-play` | the engine plays itself and prints the 5dpgn record (see "Stage E6a") |
@@ -173,6 +174,8 @@ engine/
   tools/t5d_measure.cpp, t5d_bench.cpp   the measurement tools (stage E3)
   tools/synthetic.*  SYNTHETIC positions by seeded random play (tools and tests)
   tools/tool_support.*  what the tools share: reading records, ruleset options
+  tools/turn_width.*  the turn width of one action and the summary's statistics (M22),
+                     for t5d-measure --turns / --turn-summary
 ```
 
 ## Conventions
@@ -927,7 +930,8 @@ random play: for throughput and stress only, never evidence for the |E| verdict
 ### t5d-measure
 
 ```
-t5d-measure [--no-moves-after-shift] [--rules ENCODING] [--name NAME] [--summary] [--legal] [RECORD ...]
+t5d-measure [--no-moves-after-shift] [--rules ENCODING] [--name NAME] [--summary] [--legal]
+            [--turns] [--turn-summary] [RECORD ...]
 ```
 
 Replays each 5dpgn record as the gate adapter's parse mode does (no RECORD, or `-`:
@@ -961,6 +965,61 @@ object per line, deterministically:
   8, 16 (quantiles interpolated linearly between order statistics),
   `"e_k8_game_medians"` and `"e_k4_game_medians"` (the spread of the games' own
   medians), `"positions_with_src_only_k8"`, and the synthetic positions left out.
+- with `--turns`, after each action's start position, the action's **turn width**
+  (register M22; `tools/turn_width.hpp` defines every count): `{"event":"turn",
+  "record":...,"synthetic":...,"index":K,"side":...,"boards":N,"timelines":...,
+  "active":...,"mandatory":...,"playable":...,"optional":...,"moves":...,
+  "moves_from_mandatory":...,"optional_moves":...,"optional_by_source":...,
+  "optional_when_made":...,"boards_played":...,"mandatory_played":...,
+  "optional_played":...,"jumps":...,"branches":...,"jumps_between_mandatory":...,
+  "optional_onto_mandatory":...,"mandatory_onto_optional":...,"moves_after_shift":...,
+  "rewinds":...,"mandatory_released":...,"mandatory_gained":...,"moves_on_released":...,
+  "moves_on_gained":...,"fingerprint":...,"fingerprint_after":...}`. At the action's
+  start: the mandatory boards (the active boards in the present, T6 and R9), the mover's
+  playable boards, and the optional ones (the rest - ahead of the present, or
+  inactive). Then the moves. A move is made on its source board and, when it is a jump
+  that does not branch, on its destination board too (T3, J4); an optional move is one
+  made on a board that was not mandatory at the action's start - so both a jump from
+  an optional board onto a mandatory one and a jump from a mandatory board onto an
+  optional one count, and each kind is also counted apart. `optional_by_source` is the
+  reading by the source board alone (`moves_from_mandatory` is the rest of the moves).
+  A rewind (T8, T12) releases the mandatory boards left unplayed, and a reactivation
+  (T11, T12) can make a board mandatory mid-action, with or without a rewind - the
+  moves on such boards are counted apart, and `optional_when_made` is the reading by
+  the boards' status when the move was made. Every action is played twice - by the
+  replay, and move by move from its start (`PgnReplay::resolve`,
+  `tools::TurnCounter`) - and the two states must be equal; if they are not (a fault
+  of the engine or the tool, never of the record) the record ends in `"error"`, the
+  tool goes on to the next record, and its exit status is 1.
+- with `--turn-summary`, after the records (and after `--summary`'s lines): a
+  `{"event":"turn_summary_records",...}` line (records, replayed to the end, refused,
+  `errors` - records that ended in `"error"`, in no reading - actions checked, games
+  under two readings, and `strict_repeats`: which records repeat which); a
+  `{"event":"turn_summary_group","record":...,"also":[...]}` line for each grouped game
+  of several records (the `grouped` reading's games, as `summary_game` lists
+  `--summary`'s); then per board-count range at the action's start - `<50`, `50-99`,
+  `100-199`, `200+`, ten-board buckets under 100, and `all` (pooled, context only) -
+  `{"event":"turn_summary","reading":...,"range":...,"actions":...,"games":...}` with
+  the distribution of mandatory boards (1, 2, 3, 4+), the shares with more than one,
+  with more than two, with more than one playable board (`playable_over_1`: a start
+  with one playable board is one move and a submission whatever the turn
+  construction) and with an optional board (`with_optional_boards`), the mandatory and
+  the optional boards' mean, median, p90 and max, optional moves per action (0, 1, 2,
+  3+; mean; share with any; the same by `optional_by_source` and by
+  `optional_when_made`) and the optional boards played per action, moves per action
+  (1, 2, 3, 4+; mean, median, p90, max) and the one-move actions from more than one
+  mandatory board (`one_move_over_1_mandatory`), boards played, the shares with a
+  jump, a branch, a move after the shift, a rewind and a released board, and the
+  totals of the rarer counts. The readings: `strict` (every action of every record
+  that replays to the end, a record that equals or is a prefix of another's - by its
+  sequence of positions - left out), also per mandatory class
+  (`turn_summary_by_mandatory`); `grouped` (`--summary`'s games, two endings of one
+  game joined, each distinct action once - a sensitivity check); `refused` (the
+  actions played before a record was refused - a truncated record's included - with
+  `"records"` for games). Synthetic records are left out. Quantiles are interpolated
+  linearly, as in `--summary`. The ranges, the classes and the statistics are
+  `tools/turn_width.hpp`'s (`kTurnRanges`, `kTurnBuckets`, `mandatory_class`,
+  `turn_stats`).
 
 Example, on the records of the pinned corpus (input data on the command line; the
 engine itself never names anything under `oracles/`):
@@ -977,6 +1036,26 @@ Moves are pseudo-legal by default, so every |E| is an upper bound. `--legal` exp
 with the legal moves only (`ExpandOptions::legal_moves`, exact - no move left
 unknown): |E(k)| then counts the destinations of moves a legal action can begin
 with, M7's tighter bound. On the 41 corpus records it takes 10 s in all.
+
+M22's run (`docs/MEASUREMENTS.md`, "Turn width (M22)"), on t0database's games under the
+default rules:
+
+```
+py data/t0database/to_5dpgn.py build/t0db
+mkdir build/m22
+build/engine/t5d-measure --turns --turn-summary build/t0db/*.5dpgn > build/m22/turns.jsonl
+```
+
+The turn counts do not depend on `--legal` (they count the moves the record made).
+They are counted in parse mode, without C4's royal-safety test at submission: that
+changes no action's counts, but it decides which records replay to the end (on
+t0database, one record more than under C4 - MEASUREMENTS, "Turn width (M22)").
+`tests/test_turnwidth.cpp` checks the counts on constructed actions with known
+answers, the summary's ranges and classes at their edges and its statistics on
+constructed widths, and runs the tool on the hand-written records of
+`testdata/turn-width/`: the counts, how records are classified (a repeat, a prefix, a
+truncated record, two records that differ only in their last action), and custom
+positions whose actions start on every range edge (`testdata/turn-width/edges/`).
 
 ### t5d-bench
 

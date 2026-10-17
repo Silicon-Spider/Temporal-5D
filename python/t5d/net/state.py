@@ -120,9 +120,9 @@ def timeline_index(label: str | int, *, even_start: bool = False) -> int:
     itself: ``"0"``, ``"+1"``/``"1"``, ``"-1"``. Even-start variants have a ``-0``/``+0``
     pair: ``"-0" -> -1`` and ``"+0" -> 0``, so ``"-n" -> -n - 1`` and ``"+n" -> n``.
 
-    The network is invariant to a common shift of every ``p`` (RoPE and the binned
-    biases see only differences), so only the adjacency property is load-bearing; which
-    of the pair is 0 is a convention.
+    The network is invariant to a common shift of every ``p`` (RoPE, B15's displacement
+    bias and smolgen's relative cells see only differences), so only the adjacency property
+    is load-bearing; which of the pair is 0 is a convention.
     """
     if isinstance(label, (int, np.integer)):
         if even_start:

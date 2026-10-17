@@ -3,7 +3,9 @@
 // count, the timelines, the moves, and |W(k)|, |E(k)| and src_extra(k) at
 // k = 0, 4, 8, 16 (t5d/expand.hpp), against W(k) and against its bands alone
 // (without the branch origins), and the position's fingerprint (H30) so that
-// a record that repeats another's game can be told apart. One JSON object per
+// a record that repeats another's game can be told apart - and, with --turns
+// and --turn-summary, the turn width of every action (register M22; design
+// spec §8.2 "Measure first"; tools/turn_width.hpp). One JSON object per
 // line, deterministic.
 //
 //   t5d-measure [options] [RECORD ...]      no RECORD, or "-": standard input
@@ -15,6 +17,9 @@
 //   --rules ENCODING      any ruleset: RuleOptions' canonical encoding
 //   --name NAME           the name printed for a record read from standard input
 //   --summary             after the records, the |E| curve: one line per N bucket
+//   --legal               the legal moves only (M7's tighter |E| bound)
+//   --turns               a line per action: its turn width (M22)
+//   --turn-summary        after the records, the turn width per board-count range
 //   --help, --version
 //
 // Each record is replayed as the gate adapter's parse mode does
@@ -23,8 +28,16 @@
 //
 //   {"event":"record","record":NAME,"game":...,"synthetic":B,"rules":...}
 //   {"event":"position","record":NAME,"index":K,...}       at every action start
+//   {"event":"turn","record":NAME,"index":K,...}            with --turns, per action
 //   {"event":"end","record":NAME,"status":...,...}          how far, and why it stopped
+//   {"event":"summary_game","record":NAME,"also":[...]}     with --summary, per game of
+//                                                           several records
 //   {"event":"summary","bucket":...,...}                    with --summary, per N bucket
+//   {"event":"turn_summary_records",...}                    with --turn-summary: the records
+//   {"event":"turn_summary_group","record":NAME,"also":[...]}  ... per grouped game of
+//                                                           several records
+//   {"event":"turn_summary","reading":...,"range":...,...}  ... per reading and range
+//   {"event":"turn_summary_by_mandatory",...}               ... strict, per range and class
 //
 // THE SUMMARY (--summary) is the curve M7 reads, made so that a game counts
 // once: positions are distinct by fingerprint (H30) and side to move - a
@@ -41,17 +54,67 @@
 // |E(8)| and |E(4)|, and how many positions have a source outside W(8) and
 // E(8) (src_only). Synthetic records are left out of it, and counted.
 //
+// THE TURNS (--turns, --turn-summary; M22). Every action is played twice:
+// by the replay itself (PgnReplay::play_next, which decides whether the
+// record reads on), then move by move from the action's start - each written
+// move resolved against the state the earlier ones reached
+// (PgnReplay::resolve) and counted (tools/turn_width.hpp, which defines every
+// count) - and the result, submitted without the royal-safety test as parse
+// mode submits, must equal the replay's state. If it does not - a fault of
+// the engine or of this tool, never of the record - the record ends in
+// "error", the tool goes on to the next record, and its exit status is 1;
+// the summary counts such a record under "errors", in no reading. The turn
+// summary's unit is the ACTION, read three ways:
+//
+//  * "strict" (the figures): every action of every record that replays to
+//    the end, a record counted once - a record whose sequence of positions
+//    (fingerprint and side to move, every action start and the last) equals
+//    or is a prefix of another's is that record (a game recorded twice, or
+//    cut short), and is left out;
+//  * "grouped" (sensitivity): the records grouped into games as --summary
+//    groups them (two endings of one game - a shared opening of 10 positions
+//    or more and half the shorter record - are one game), each game's
+//    distinct actions (by the positions before and after) counted once;
+//  * "refused" (apart): the actions played before a record was refused - a
+//    record whose move text stops early (truncated) included, every action
+//    it read having been played.
+//
+// Per board-count range at the action's start (tools/turn_width.hpp's
+// kTurnRanges: <50, 50-99, 100-199, 200+ - 6b's ranges; then kTurnBuckets,
+// ten-board buckets under 100; then every action pooled, context only): the
+// actions and the games they come from, and tools::turn_stats - the
+// distribution of mandatory boards at the start (1, 2, 3, 4+); the shares
+// with more than one, with more than two, with more than one playable board
+// (a start with one playable board is one move and a submission whatever
+// the turn construction) and with an optional board; the mandatory and the
+// optional boards' mean, median, p90 and max; optional moves per action (0,
+// 1, 2, 3+), their mean and the share with any - and the same by the source
+// board alone and by the boards' status when the move was made - and the
+// optional boards played per action; moves per action (1, 2, 3, 4+), mean,
+// median, p90, max, and the one-move actions from more than one mandatory
+// board; boards played; the shares with a jump ("travel"), a branch, a move
+// after the shift, a rewind and a mandatory board released; and the counts of
+// jumps between two mandatory boards, from an optional board onto a
+// mandatory one and from a mandatory board onto an optional one, of boards
+// released and gained, and of moves on boards released or gained. The strict
+// reading is also given per mandatory class (1, 2, 3, 4+) in each range.
+// Synthetic records are left out, and counted.
+//
 // Moves are PSEUDO-LEGAL (the expansion's default, legal_moves off):
 // every |E| is an upper bound. Records marked synthetic ("Synthetic" header)
-// are random play, never evidence for the |E| verdict.
+// are random play, never evidence for the |E| verdict. The turn counts are
+// exact either way: they count the moves the record made.
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <exception>
 #include <map>
 #include <set>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -63,6 +126,7 @@
 #include "t5d/rules.hpp"
 #include "t5d/state.hpp"
 #include "tool_support.hpp"
+#include "turn_width.hpp"
 
 #if defined(_WIN32)
 #include <fcntl.h>
@@ -76,13 +140,15 @@
 namespace {
 
 using t5d::gate::json_string;
+using t5d::tools::TurnWidth;
 
 constexpr int kWindowKs[] = {0, 4, 8, 16};
 
 void print_usage(std::FILE* stream) {
   std::fputs(
       "t5d-measure " T5D_VERSION_STRING
-      " - |W(k)|, |E(k)| and src_extra(k) at every position of 5dpgn records.\n"
+      " - |W(k)|, |E(k)| and src_extra(k) at every position of 5dpgn records,\n"
+      "and the turn width of every action.\n"
       "\n"
       "usage: t5d-measure [options] [RECORD ...]   (no RECORD, or -, reads standard input)\n"
       "  --no-moves-after-shift  a diagnostic: rules Q4's Guide-literal reading, no move\n"
@@ -95,6 +161,10 @@ void print_usage(std::FILE* stream) {
       "                        positions and games; synthetic records left out)\n"
       "  --legal               the legal moves only (ExpandOptions::legal_moves, exact): E\n"
       "                        from the legal moves' destinations - M7's tighter bound\n"
+      "  --turns               a line per action: its turn width (register M22) - the\n"
+      "                        mandatory boards at its start, its moves, the optional ones\n"
+      "  --turn-summary        after the records, the turn width per board-count range\n"
+      "                        (<50, 50-99, 100-199, 200+, ten-board buckets under 100)\n"
       "  --help, --version\n"
       "\n"
       "One JSON object per line (see the engine README, \"t5d-measure\"). Moves are\n"
@@ -111,13 +181,15 @@ std::string field(const char* name, long long value) {
   return std::string(",\"") + name + "\":" + std::to_string(value);
 }
 
+const char* side_name(t5d::Colour c) { return c == t5d::Colour::White ? "white" : "black"; }
+
 std::string position_line(const std::string& name, bool synthetic, std::size_t index,
-                          const t5d::GameState& state, const t5d::Expansion& x) {
+                          const t5d::GameState& state, const t5d::Expansion& x,
+                          const std::string& fingerprint) {
   std::string line = "{\"event\":\"position\",\"record\":" + json_string(name);
   line += std::string(",\"synthetic\":") + (synthetic ? "true" : "false");
   line += field("index", static_cast<long long>(index));
-  line += std::string(",\"side\":\"") +
-          (state.to_move() == t5d::Colour::White ? "white" : "black") + "\"";
+  line += std::string(",\"side\":\"") + side_name(state.to_move()) + "\"";
   line += field("boards", static_cast<long long>(x.board_count()));
   line += field("timelines", x.timeline_count());
   line += field("active", x.active_timeline_count());
@@ -142,7 +214,45 @@ std::string position_line(const std::string& name, bool synthetic, std::size_t i
     line += field(("src_only_bands" + suffix).c_str(),
                   static_cast<long long>(x.src_only_count(k, bands)));
   }
-  line += ",\"fingerprint\":\"" + t5d::fingerprint(state.multiverse()).fingerprint + "\"";
+  line += ",\"fingerprint\":\"" + fingerprint + "\"";
+  line += '}';
+  return line;
+}
+
+std::string turn_line(const std::string& name, bool synthetic, std::size_t index,
+                      t5d::Colour side, const TurnWidth& w, const std::string& fingerprint,
+                      const std::string& fingerprint_after) {
+  std::string line = "{\"event\":\"turn\",\"record\":" + json_string(name);
+  line += std::string(",\"synthetic\":") + (synthetic ? "true" : "false");
+  line += field("index", static_cast<long long>(index));
+  line += std::string(",\"side\":\"") + side_name(side) + "\"";
+  line += field("boards", static_cast<long long>(w.boards));
+  line += field("timelines", w.timelines);
+  line += field("active", w.active);
+  line += field("mandatory", w.mandatory);
+  line += field("playable", w.playable);
+  line += field("optional", w.optional);
+  line += field("moves", w.moves);
+  line += field("moves_from_mandatory", w.moves_from_mandatory);
+  line += field("optional_moves", w.optional_moves);
+  line += field("optional_by_source", w.optional_by_source);
+  line += field("optional_when_made", w.optional_when_made);
+  line += field("boards_played", w.boards_played);
+  line += field("mandatory_played", w.mandatory_played);
+  line += field("optional_played", w.optional_played);
+  line += field("jumps", w.jumps);
+  line += field("branches", w.branches);
+  line += field("jumps_between_mandatory", w.jumps_between_mandatory);
+  line += field("optional_onto_mandatory", w.optional_onto_mandatory);
+  line += field("mandatory_onto_optional", w.mandatory_onto_optional);
+  line += field("moves_after_shift", w.moves_after_shift);
+  line += field("rewinds", w.rewinds);
+  line += field("mandatory_released", w.mandatory_released);
+  line += field("mandatory_gained", w.mandatory_gained);
+  line += field("moves_on_released", w.moves_on_released);
+  line += field("moves_on_gained", w.moves_on_gained);
+  line += ",\"fingerprint\":\"" + fingerprint + "\"";
+  line += ",\"fingerprint_after\":\"" + fingerprint_after + "\"";
   line += '}';
   return line;
 }
@@ -168,6 +278,27 @@ std::vector<RecordKept> g_kept;
 bool g_summary = false;
 bool g_legal = false;  // --legal: the legal moves only
 
+// What the turn summary keeps of one action, and of one record.
+struct TurnKept {
+  TurnWidth width;
+  std::string key;        // the action's start: fingerprint and side to move
+  std::string key_after;  // the position after its submission
+};
+
+struct TurnRecord {
+  std::string name;
+  bool synthetic = false;
+  bool replayed = false;          // read and played to the end ("ok")
+  bool error = false;             // ended in "error": a fault of the engine or the tool
+  std::vector<std::string> keys;  // every position: each action's start, then the last
+  std::vector<TurnKept> turns;    // every action played
+};
+
+std::vector<TurnRecord> g_turn_records;
+bool g_turns = false;         // --turns
+bool g_turn_summary = false;  // --turn-summary
+std::size_t g_turns_checked = 0;
+
 std::string end_line(const std::string& name, const char* status, std::size_t positions,
                      std::size_t accepted, std::size_t in_record, bool truncated,
                      const char* reason, const std::string& detail) {
@@ -183,14 +314,58 @@ std::string end_line(const std::string& name, const char* status, std::size_t po
   return line;
 }
 
+std::string position_key(const std::string& fingerprint, const t5d::GameState& state) {
+  return fingerprint + (state.to_move() == t5d::Colour::White ? "w" : "b");
+}
+
+// The turn width of the action replay.play_next() has just played: its moves
+// resolved and counted one by one from `start`, the state before it. The
+// result, submitted as parse mode submits, must be the replay's own state.
+// Any failure here is the tool's (the replay has accepted the action), so it
+// is a std::logic_error, never a RecordError.
+TurnWidth count_action(const t5d::PgnReplay& replay, const t5d::GameState& start,
+                       std::size_t index) {
+  const t5d::PgnAction& action = replay.record().actions[index];
+  const std::string which = "action " + std::to_string(index + 1);
+  t5d::tools::TurnCounter counter(start);
+  try {
+    for (const t5d::PgnMove& written : action.moves) {
+      counter.apply(replay.resolve(counter.state(), written));
+    }
+  } catch (const t5d::RecordError& e) {
+    throw std::logic_error(which + ": the replay played it, but resolving its moves one by one "
+                                   "failed: " + std::string(e.what()));
+  }
+  t5d::GameState submitted = counter.state();
+  submitted.submit(t5d::CheckRuling::none());  // parse mode: royal safety untested
+  if (!(submitted == replay.state())) {
+    throw std::logic_error(which + ": its moves played one by one do not reach the state the "
+                                   "replay reached");
+  }
+  const TurnWidth w = counter.width();
+  // T5: every turn begins with the present on the mover's colour (a board is
+  // mandatory) and has a move.
+  if (w.mandatory < 1 || w.moves < 1) {
+    throw std::logic_error(which + ": no mandatory board at its start, or no move");
+  }
+  return w;
+}
+
 // One record: returns false on an internal error.
 bool measure(const std::string& name, const std::string& text, const t5d::RuleOptions& rules) {
   t5d::PgnRecord record = t5d::read_pgn(text);
   const bool synthetic = t5d::tools::is_synthetic(record);
   const std::size_t in_record = record.actions.size();
   const bool truncated = record.unreadable.has_value();
+  const bool turns = g_turns || g_turn_summary;
   std::size_t positions = 0;
   std::size_t accepted = 0;
+  // Every record, so that one refused before its first position counts too.
+  TurnRecord* turn_record = nullptr;
+  if (g_turn_summary) {
+    g_turn_records.push_back(TurnRecord{name, synthetic, false, false, {}, {}});
+    turn_record = &g_turn_records.back();
+  }
   try {
     t5d::PgnReplay replay(std::move(record), t5d::PgnOptions{}, rules);
     t5d::tools::parse_mode(replay);
@@ -215,9 +390,11 @@ bool measure(const std::string& name, const std::string& text, const t5d::RuleOp
       g_kept.push_back(RecordKept{name, synthetic, {}});
       kept = &g_kept.back();
     }
+    std::string fingerprint = t5d::fingerprint(replay.state().multiverse()).fingerprint;
     for (;;) {
+      const std::string key = position_key(fingerprint, replay.state());
       t5d::expand(replay.state(), options, x);
-      emit(position_line(name, synthetic, replay.actions_played(), replay.state(), x));
+      emit(position_line(name, synthetic, replay.actions_played(), replay.state(), x, fingerprint));
       if (kept != nullptr) {
         Kept k;
         k.boards = x.board_count();
@@ -226,19 +403,36 @@ bool measure(const std::string& name, const std::string& text, const t5d::RuleOp
         k.w_bands8 = x.window_size(8, t5d::Window::BandsOnly);
         for (std::size_t i = 0; i < 4; ++i) k.e[i] = x.e_count(kWindowKs[i]);
         k.src_only8 = x.src_only_count(8);
-        k.key = t5d::fingerprint(replay.state().multiverse()).fingerprint +
-                (replay.state().to_move() == t5d::Colour::White ? "w" : "b");
+        k.key = key;
         kept->positions.push_back(std::move(k));
       }
+      if (turn_record != nullptr) turn_record->keys.push_back(key);
       ++positions;
       if (replay.finished()) break;
+      if (!turns) {
+        replay.play_next();
+        accepted = replay.actions_played();
+        fingerprint = t5d::fingerprint(replay.state().multiverse()).fingerprint;
+        continue;
+      }
+      const std::size_t index = replay.actions_played();
+      const t5d::GameState start = replay.state();
       replay.play_next();
       accepted = replay.actions_played();
+      const TurnWidth w = count_action(replay, start, index);
+      ++g_turns_checked;
+      const std::string after = t5d::fingerprint(replay.state().multiverse()).fingerprint;
+      if (g_turns) emit(turn_line(name, synthetic, index, start.to_move(), w, fingerprint, after));
+      if (turn_record != nullptr) {
+        turn_record->turns.push_back(TurnKept{w, key, position_key(after, replay.state())});
+      }
+      fingerprint = after;
     }
     if (truncated) {
       emit(end_line(name, "rejected", positions, accepted, in_record, true,
                     t5d::fault_name(t5d::RecordFault::Unreadable), *replay.record().unreadable));
     } else {
+      if (turn_record != nullptr) turn_record->replayed = true;
       emit(end_line(name, "ok", positions, accepted, in_record, false, nullptr, ""));
     }
     return true;
@@ -248,6 +442,7 @@ bool measure(const std::string& name, const std::string& text, const t5d::RuleOp
                   truncated, t5d::fault_name(e.fault()), e.what()));
     return true;
   } catch (const std::exception& e) {
+    if (turn_record != nullptr) turn_record->error = true;
     emit(end_line(name, "error", positions, accepted, in_record, truncated, "error", e.what()));
     return false;
   }
@@ -397,6 +592,254 @@ void print_summary() {
   }
 }
 
+// ---- the turn summary (--turn-summary; register M22) --------------------------------------
+
+using t5d::tools::BoardRange;
+using t5d::tools::TurnStats;
+
+// One action as a reading counts it, and the game (or record) it is from.
+struct Counted {
+  const TurnWidth* width;
+  std::size_t game;
+};
+
+std::string share(std::size_t part, std::size_t whole) {
+  return number(whole == 0 ? 0.0 : static_cast<double>(part) / static_cast<double>(whole));
+}
+
+// ,"NAME_mean":..,"NAME_median":..,"NAME_p90":..,"NAME_max":..
+std::string spread_fields(const t5d::tools::Spread& s, const char* name) {
+  const std::string n = std::string(",\"") + name;
+  return n + "_mean\":" + number(s.mean) + n + "_median\":" + number(s.median) + n +
+         "_p90\":" + number(s.p90) + n + "_max\":" + number(s.max);
+}
+
+// ,"NAME":{"L0":..,"L1":..,"L2":..,"L3":..}
+std::string class_fields(const std::array<std::size_t, 4>& counts, const char* name,
+                         const char* const (&labels)[4]) {
+  std::string s = std::string(",\"") + name + "\":{";
+  for (std::size_t i = 0; i < 4; ++i) {
+    if (i != 0) s += ',';
+    s += std::string("\"") + labels[i] + "\":" + std::to_string(counts[i]);
+  }
+  return s + "}";
+}
+
+// The fields of a set of actions' statistics, after "actions" and its games
+// (see the file comment; tools::turn_stats counts them).
+std::string turn_stats_fields(const TurnStats& t) {
+  const std::size_t n = t.actions;
+  if (n == 0) return "";
+  const double dn = static_cast<double>(n);
+  const auto mean = [dn](long long sum) { return number(static_cast<double>(sum) / dn); };
+  static const char* const kMoves[4] = {"1", "2", "3", "4+"};
+  static const char* const kOptional[4] = {"0", "1", "2", "3+"};
+  std::string s;
+  s += class_fields(t.mandatory_classes, "mandatory", t5d::tools::kMandatoryClasses);
+  s += ",\"mandatory_over_1\":" + share(t.mandatory_over_1, n) +
+       ",\"mandatory_over_2\":" + share(t.mandatory_over_2, n);
+  s += ",\"playable_over_1\":" + share(t.playable_over_1, n) +
+       ",\"with_optional_boards\":" + share(t.with_optional_boards, n);
+  s += spread_fields(t.mandatory, "mandatory");
+  s += spread_fields(t.optional_boards, "optional_boards");
+  s += class_fields(t.optional_moves_classes, "optional_moves", kOptional);
+  s += ",\"optional_moves_mean\":" + mean(t.optional_moves) +
+       ",\"with_optional_moves\":" + share(t.with_optional_moves, n);
+  s += ",\"optional_by_source_mean\":" + mean(t.optional_by_source) +
+       ",\"with_optional_by_source\":" + share(t.with_optional_by_source, n);
+  s += ",\"optional_when_made_mean\":" + mean(t.optional_when_made) +
+       ",\"with_optional_when_made\":" + share(t.with_optional_when_made, n);
+  s += ",\"optional_played_mean\":" + mean(t.optional_played);
+  s += class_fields(t.moves_classes, "moves", kMoves);
+  s += spread_fields(t.moves, "moves");
+  s += ",\"one_move_over_1_mandatory\":" + std::to_string(t.one_move_over_1_mandatory);
+  s += ",\"boards_played_mean\":" + mean(t.boards_played);
+  s += ",\"with_travel\":" + share(t.with_travel, n) +
+       ",\"with_branch\":" + share(t.with_branch, n);
+  s += ",\"with_moves_after_shift\":" + share(t.with_moves_after_shift, n) +
+       ",\"moves_after_shift_mean\":" + mean(t.moves_after_shift);
+  s += ",\"rewound\":" + share(t.rewound, n);
+  s += ",\"jumps_between_mandatory\":" + std::to_string(t.jumps_between_mandatory) +
+       ",\"optional_onto_mandatory\":" + std::to_string(t.optional_onto_mandatory) +
+       ",\"mandatory_onto_optional\":" + std::to_string(t.mandatory_onto_optional);
+  s += ",\"with_mandatory_released\":" + share(t.with_mandatory_released, n) +
+       ",\"mandatory_released\":" + std::to_string(t.mandatory_released) +
+       ",\"mandatory_gained\":" + std::to_string(t.mandatory_gained) +
+       ",\"moves_on_released\":" + std::to_string(t.moves_on_released) +
+       ",\"moves_on_gained\":" + std::to_string(t.moves_on_gained);
+  return s;
+}
+
+// One summary line: the actions of `all` whose board count at the start lies
+// in `r` - and, unless `mandatory_class` is -1, whose mandatory class is it
+// (tools::mandatory_class: 0 for one board ... 3 for four or more).
+void emit_turn_summary(const char* event, const char* reading, const BoardRange& r,
+                       int mandatory_class, const char* unit, const std::vector<Counted>& all) {
+  std::vector<const TurnWidth*> in;
+  std::set<std::size_t> games;
+  for (const Counted& c : all) {
+    if (!r.contains(c.width->boards)) continue;
+    if (mandatory_class >= 0 && t5d::tools::mandatory_class(c.width->mandatory) != mandatory_class) {
+      continue;
+    }
+    in.push_back(c.width);
+    games.insert(c.game);
+  }
+  std::string line = std::string("{\"event\":\"") + event + "\",\"reading\":\"" + reading +
+                     "\",\"range\":\"" + r.label + "\"";
+  if (mandatory_class >= 0) {
+    line += std::string(",\"mandatory_class\":\"") +
+            t5d::tools::kMandatoryClasses[static_cast<std::size_t>(mandatory_class)] + "\"";
+  }
+  line += field("actions", static_cast<long long>(in.size()));
+  line += field(unit, static_cast<long long>(games.size()));
+  line += turn_stats_fields(t5d::tools::turn_stats(in));
+  emit(line + "}");
+}
+
+bool is_prefix(const std::vector<std::string>& a, const std::vector<std::string>& b) {
+  return a.size() <= b.size() && std::equal(a.begin(), a.end(), b.begin());
+}
+
+void print_turn_summary() {
+  // A record that ended in "error" is in no reading: its counts are not the
+  // record's but a fault's (the exit status is 1).
+  std::vector<std::size_t> replayed, refused;
+  std::size_t synthetic_actions = 0, errors = 0;
+  for (std::size_t r = 0; r < g_turn_records.size(); ++r) {
+    const TurnRecord& t = g_turn_records[r];
+    if (t.synthetic) {
+      synthetic_actions += t.turns.size();
+    } else if (t.error) {
+      ++errors;
+    } else {
+      (t.replayed ? replayed : refused).push_back(r);
+    }
+  }
+  const auto longest_first = [](std::vector<std::size_t> v) {
+    std::stable_sort(v.begin(), v.end(), [](std::size_t a, std::size_t b) {
+      return g_turn_records[a].keys.size() > g_turn_records[b].keys.size();
+    });
+    return v;
+  };
+
+  // Strict: a record that equals, or is a prefix of, another is that record.
+  std::vector<std::size_t> strict;
+  std::vector<std::pair<std::size_t, std::size_t>> duplicates;  // (record, the one it repeats)
+  for (const std::size_t r : longest_first(replayed)) {
+    bool repeat = false;
+    for (const std::size_t g : strict) {
+      if (is_prefix(g_turn_records[r].keys, g_turn_records[g].keys)) {
+        duplicates.emplace_back(r, g);
+        repeat = true;
+        break;
+      }
+    }
+    if (!repeat) strict.push_back(r);
+  }
+  std::sort(strict.begin(), strict.end());
+  std::sort(duplicates.begin(), duplicates.end());
+
+  // Grouped: --summary's games (a prefix, or a shared opening of 10 positions
+  // or more and half the shorter record), joined to the longest record.
+  const auto same_game = [](const TurnRecord& a, const TurnRecord& b) {
+    const std::size_t shorter = std::min(a.keys.size(), b.keys.size());
+    std::size_t shared = 0;
+    while (shared < shorter && a.keys[shared] == b.keys[shared]) ++shared;
+    return shared == shorter || (shared >= 10 && 2 * shared >= shorter);
+  };
+  std::vector<std::vector<std::size_t>> groups;
+  for (const std::size_t r : longest_first(replayed)) {
+    bool joined = false;
+    for (std::vector<std::size_t>& group : groups) {
+      if (same_game(g_turn_records[r], g_turn_records[group[0]])) {
+        group.push_back(r);
+        joined = true;
+        break;
+      }
+    }
+    if (!joined) groups.push_back({r});
+  }
+  std::sort(groups.begin(), groups.end());
+
+  std::string head = "{\"event\":\"turn_summary_records\"";
+  head += field("records", static_cast<long long>(g_turn_records.size()));
+  head += field("replayed", static_cast<long long>(replayed.size()));
+  head += field("refused", static_cast<long long>(refused.size()));
+  head += field("errors", static_cast<long long>(errors));
+  head += field("synthetic_actions_left_out", static_cast<long long>(synthetic_actions));
+  head += field("actions_checked", static_cast<long long>(g_turns_checked));
+  head += field("strict_games", static_cast<long long>(strict.size()));
+  head += field("grouped_games", static_cast<long long>(groups.size()));
+  head += ",\"strict_repeats\":[";
+  for (std::size_t i = 0; i < duplicates.size(); ++i) {
+    if (i != 0) head += ',';
+    head += "{\"record\":" + json_string(g_turn_records[duplicates[i].first].name) +
+            ",\"repeats\":" + json_string(g_turn_records[duplicates[i].second].name) + "}";
+  }
+  emit(head + "]}");
+  for (const std::vector<std::size_t>& group : groups) {
+    if (group.size() < 2) continue;
+    std::string line = "{\"event\":\"turn_summary_group\",\"record\":" +
+                       json_string(g_turn_records[group[0]].name) + ",\"also\":[";
+    for (std::size_t i = 1; i < group.size(); ++i) {
+      if (i != 1) line += ',';
+      line += json_string(g_turn_records[group[i]].name);
+    }
+    emit(line + "]}");
+  }
+
+  std::vector<Counted> strict_actions, grouped_actions, refused_actions;
+  for (std::size_t g = 0; g < strict.size(); ++g) {
+    for (const TurnKept& t : g_turn_records[strict[g]].turns) {
+      strict_actions.push_back({&t.width, g});
+    }
+  }
+  for (std::size_t g = 0; g < groups.size(); ++g) {
+    std::set<std::pair<std::string, std::string>> seen;  // an action: the positions around it
+    for (const std::size_t r : groups[g]) {
+      for (const TurnKept& t : g_turn_records[r].turns) {
+        if (seen.insert({t.key, t.key_after}).second) grouped_actions.push_back({&t.width, g});
+      }
+    }
+  }
+  for (std::size_t i = 0; i < refused.size(); ++i) {
+    for (const TurnKept& t : g_turn_records[refused[i]].turns) {
+      refused_actions.push_back({&t.width, i});
+    }
+  }
+
+  using t5d::tools::kAllBoards;
+  using t5d::tools::kTurnBuckets;
+  using t5d::tools::kTurnRanges;
+  constexpr int kAnyClass = -1;
+  for (const BoardRange& r : kTurnRanges) {
+    emit_turn_summary("turn_summary", "strict", r, kAnyClass, "games", strict_actions);
+  }
+  for (const BoardRange& r : kTurnBuckets) {
+    emit_turn_summary("turn_summary", "strict", r, kAnyClass, "games", strict_actions);
+  }
+  emit_turn_summary("turn_summary", "strict", kAllBoards, kAnyClass, "games", strict_actions);
+  for (const BoardRange& r : kTurnRanges) {
+    for (int m = 0; m < 4; ++m) {
+      emit_turn_summary("turn_summary_by_mandatory", "strict", r, m, "games", strict_actions);
+    }
+  }
+  for (int m = 0; m < 4; ++m) {
+    emit_turn_summary("turn_summary_by_mandatory", "strict", kAllBoards, m, "games",
+                      strict_actions);
+  }
+  for (const BoardRange& r : kTurnRanges) {
+    emit_turn_summary("turn_summary", "grouped", r, kAnyClass, "games", grouped_actions);
+  }
+  emit_turn_summary("turn_summary", "grouped", kAllBoards, kAnyClass, "games", grouped_actions);
+  for (const BoardRange& r : kTurnRanges) {
+    emit_turn_summary("turn_summary", "refused", r, kAnyClass, "records", refused_actions);
+  }
+  emit_turn_summary("turn_summary", "refused", kAllBoards, kAnyClass, "records",
+                    refused_actions);
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -430,6 +873,14 @@ int main(int argc, char** argv) {
         g_legal = true;
         continue;
       }
+      if (std::strcmp(arg, "--turns") == 0) {
+        g_turns = true;
+        continue;
+      }
+      if (std::strcmp(arg, "--turn-summary") == 0) {
+        g_turn_summary = true;
+        continue;
+      }
       if (arg[0] == '-' && arg[1] != '\0') {
         std::fprintf(stderr, "t5d-measure: unknown argument \"%s\"\n\n", arg);
         print_usage(stderr);
@@ -459,5 +910,6 @@ int main(int argc, char** argv) {
     std::fflush(stdout);
   }
   if (g_summary) print_summary();
+  if (g_turn_summary) print_turn_summary();
   return ok ? 0 : 1;
 }

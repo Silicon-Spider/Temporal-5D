@@ -7,10 +7,12 @@ reach attention through the 4D RoPE (B4).
 Every token of a board - its squares and its per-board registers - additionally gets
 the board's flag embeddings (head/superseded, active/inactive timeline, side to move;
 section 2.3: "added to every token on the board") and its Delta-t-to-present embedding
-(A3). Delta-t is continuous: a small learned MLP over the features
+(A3). Delta-t is continuous: a small learned MLP (GELU) over the features
 ``(dt / dt_scale, sign(dt) * log1p|dt|, [dt == 0])``, so the binary "present" flag is
 kept as Delta-t's zero (section 2.3) while the distance to the present stays readable
-at any range (implementation choice: the spec says only "embedded per board").
+at any range (implementation choice: the spec says only "embedded per board"; F6's Mish
+is the trunk FFN's activation, and this MLP is neither the FFN nor a head - spec issue
+204).
 
 Register tokens get a register-type embedding (per-board slot 0..R-1, or global index
 0..G-1) plus one learned "not a square" embedding (section 5.3) instead of piece/colour/

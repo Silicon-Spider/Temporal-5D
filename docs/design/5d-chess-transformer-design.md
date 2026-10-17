@@ -1056,6 +1056,17 @@ Under 50 boards the human games' median position has one active timeline, so mos
 there are single moves, where every arm is identical; the arms differ only where turns are
 wide.
 
+**Measured (CHECKPOINT 8, human games):** more than one playable board at the turn's start in
+5.8%, 27.1% and 64.0% of turns under 50, 50–99 and 100–199 boards. Playable boards include
+optional ones, so these bound the mandatory share from above: under 50 boards, where the
+human games spend 88% of their moves, at least 94% of turns are single-board and the arms
+nearly coincide; the difference concentrates where the compute is. Still to report: the
+same counts for mandatory boards, the share with three or more, the optional moves actually
+played, and the compute share of multi-board turns. **Build order:** the tree form first — it
+modifies the existing tree and is anchored by its equivalence to the ply split — then the
+flat form. Both are built either way, since D2 is committed-class; the figures set 6x's
+priority, not whether the arms exist.
+
 **Prediction on record:** both turn-start-only forms beat the evaluate-every-node ply split
 at equal wall-clock once turns have three or more mandatory boards, and the tree form beats
 the flat form where boards interact.
@@ -1498,8 +1509,9 @@ committed-class: set before training, fixed after.
   costs more than the last fraction of quality; Lc0's arrangement is ablation 6y's arm.
 - **Mish activation in the FFN** — the spec never named one. Lc0's networks use it from its
   T79 run, and Chessformer uses it in the feed-forward sublayer and the output heads, which
-  also keep their FFN and attention-output biases, as here. Squared ReLU is 6y's arm:
-  Monroe's training notes report +0.6% policy accuracy for about 10% more latency.
+  also keep their FFN and attention-output biases, as here. Mish applies in every head's
+  hidden layers too (CHECKPOINT 8). Squared ReLU is 6y's arm, in the trunk only: Monroe's
+  training notes report +0.6% policy accuracy for about 10% more latency.
 
 ---
 
@@ -2048,10 +2060,15 @@ first commit:
   before any generator release or proof-channel enablement. The game-record corpus is
   pinned too. The commit tier is a smoke test: a ruleset is gated only when two or more
   oracles answer for it, so the check that *some* ruleset is gated runs only in the tiers
-  that run every oracle — nightly and release (CHECKPOINT 6).
+  that run every oracle — nightly and release (CHECKPOINT 6). The commit tier still fails if
+  the engine declines a record it read on the last green run, or reads none; a run
+  restricted to chosen sources or records is a developer convenience and never produces a
+  tier verdict (CHECKPOINT 8).
 - **A known-divergences file.** When the engine and an oracle disagree, the rulebook
   decides; if the oracle is wrong, the divergence is recorded with its rulebook citation
-  (and reported upstream), so it stays expected without masking future regressions. Any
+  (and reported upstream — defects as bug reports, disagreements with a documented rule as
+  questions citing the source, which also tests our own reading; the owner files them), so
+  it stays expected without masking future regressions. Any
   new divergence fails the gate. Oracles can be wrong — the official client is.
 - **Provenance and instructions.** A provenance file records what came from where, under
   which licence, in which role; contributor instructions — for human developers and coding
@@ -2077,7 +2094,13 @@ first commit:
   (CHECKPOINT 3): a corpus record in the official client's export form is converted by the
   harness to the specification's 5dpgn, as notation only, and every source — the engine
   included — reads the converted text; a record the specification cannot express goes to
-  no source.
+  no source. **Capture markers are read leniently** (CHECKPOINT 8, a project decision): the
+  specification says when to write `x` — "if a piece is being taken" — not how to read a
+  superfluous or missing one. The marker never changes a move's meaning: a move is read as
+  its squares define it, a mismatch is logged as a warning, and the engine writes the marker
+  strictly. The marker carries nothing the squares do not, and refusing such records costs
+  gate coverage for no rules information. A source that refuses one gets a known-divergence
+  entry citing this decision.
 - **Triage by cluster; settle by rulebook, never by vote.** Disagreements that survive
   fingerprinting are grouped by the attacker's situation — whose turn it is on the
   attacking board, active or inactive timeline, head or earlier board, ordinary or

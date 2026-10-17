@@ -1,5 +1,5 @@
 """Attention core: the pair rule against a brute-force reference, the SDPA path equal to
-the explicit one in every pair-rule mode, masks and biases, and the B5/B6 wiring."""
+the explicit one in every pair-rule mode, masks and biases, and the B5/B15 wiring."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from t5d.net import NetConfig, build_model, collate, synthetic_state
 from t5d.net import attention as attention_module
 from t5d.net.attention import AttnContext, attention_explicit, attention_sdpa
 from t5d.net.rope import AXIS_FILE, AXIS_RANK, head_allocation, rope_angles, rope_cos_sin
-from t5d.net.state import TOKEN_BOARD_REGISTER, TOKEN_GLOBAL_REGISTER, TOKEN_SQUARE
+from t5d.net.state import TOKEN_BOARD_REGISTER, TOKEN_GLOBAL_REGISTER
 
 #: The open committed-class switches that change which pairs are rotated (NetConfig):
 #: (global_register_pairs, board_register_spatial).
@@ -189,13 +189,14 @@ def test_pair_modes_change_the_function():
     "flags",
     [
         dict(),
-        dict(rope_per_head=True, binned_bias=True),
+        dict(rope_per_head=True),
         dict(policy_promotion="offset", board_register_spatial="zero_angle"),
         dict(global_register_pairs="anchored"),
         dict(board_register_spatial="position_free"),
-        dict(global_register_pairs="anchored", board_register_spatial="position_free", rope_per_head=True, binned_bias=True),
+        dict(global_register_pairs="anchored", board_register_spatial="position_free", rope_per_head=True),
+        dict(displacement_bias=False, move_graph_heads=0),
     ],
-    ids=["default", "b5_b6", "offset_zero_angle", "anchored", "regs_free", "anchored_regs_free_b5_b6"],
+    ids=["default", "b5", "offset_zero_angle", "anchored", "regs_free", "anchored_regs_free_b5", "no_table_n1"],
 )
 def test_model_paths_agree(flags):
     """The whole network gives the same outputs on either attention path."""
@@ -260,7 +261,7 @@ def test_empty_rows_do_not_rely_on_the_kernel(mode, monkeypatch):
     _close_on_valid(out.detach(), attention_explicit(q, k, v, ctx), batch, 1e-5)
 
 
-# --- B5 and B6 reach the computation (register B5 provisional, B6 prototype) -------------------
+# --- B5 and B15 reach the computation (register B5 provisional, B15 the v1 default) -------------
 
 
 def _layer0_qkv(model, batch):
@@ -268,33 +269,23 @@ def _layer0_qkv(model, batch):
     return block.attn.qkv(block.norm_attn(model.embed(batch)))
 
 
-def _b6_lookup(model, batch, coords) -> torch.Tensor:
-    """The B6 bias by direct table lookup: Delta-time signed (key minus query),
-    Delta-timeline absolute; zero for any pair with a token that has no board."""
-    bb = model.binned_bias
-    p, h = coords[..., 2].round().long(), coords[..., 3].round().long()
-    dh = h[:, None, :] - h[:, :, None]
-    dp = (p[:, None, :] - p[:, :, None]).abs()
-    bias = bb.time_table[:, bb.time_index(dh)] + bb.timeline_table[:, bb.timeline_index(dp)]
-    board = batch.valid & ((batch.kind == TOKEN_SQUARE) | (batch.kind == TOKEN_BOARD_REGISTER))
-    return bias.permute(1, 0, 2, 3) * (board[:, None, :] & board[:, :, None])[:, None]
-
-
 @pytest.mark.parametrize("mode", ["default", "regs_free_anchored"])
-def test_per_head_roles_and_binned_bias_reach_attention(mode):
+def test_per_head_roles_and_the_displacement_bias_reach_attention(mode):
     """B5: every head rotates by its own role's allocation (section 6's routing table);
-    B6: the bins x heads tables are added to the scores. Checked against layer 0's
-    probabilities, rebuilt head by head from ``head_allocation``. (B9's move-graph mask is
-    off here so that every head's reference is the unmasked one; the masks, and B5 with
-    them, are checked in test_structure.py.)"""
-    cfg = _config(mode, rope_per_head=True, binned_bias=True, move_graph_heads=0)
+    B15: layer 0's displacement table, materialised by hand (test_displacement.py), is added to
+    the scores. Checked against layer 0's probabilities, rebuilt head by head from
+    ``head_allocation``. (B9's move-graph mask is off here so that every head's reference is
+    the unmasked one; the masks, and B5 with them, are checked in test_structure.py.)"""
+    from tests.net.test_displacement import reference_bias
+
+    cfg = _config(mode, rope_per_head=True, move_graph_heads=0)
     model = build_model(cfg, seed=3).eval()
     batch = collate([synthetic_state(9, 2)])
     ctx = model.make_context(batch)
     assert ctx.cos.shape[1] == cfg.n_heads, "B5: one rotation table per head"
     coords = model.coordinates(batch)
-    bias = _b6_lookup(model, batch, coords)
-    assert torch.allclose(ctx.structure.dense_bias(), bias), "B6 bias wired into the context (stage N2: its structure)"
+    bias = reference_bias(model, batch, 0)
+    assert torch.equal(ctx.for_layer(None, 0).structure.dense_bias(), bias), "B15 wired into the context (its structure, per layer)"
     probs = model.attention_probabilities(batch, layer=0)
     q, k, _ = _layer0_qkv(model, batch)
     allowed = batch.valid[:, None, None, :].expand(1, 1, batch.n_tokens, batch.n_tokens)
@@ -305,24 +296,17 @@ def test_per_head_roles_and_binned_bias_reach_attention(mode):
         freq = torch.tensor([[f for _, f in alloc]], dtype=torch.float32)
         ref = _reference_probs(q[:, head : head + 1], k[:, head : head + 1], coords, has, axis, freq, allowed, bias[:, head : head + 1])
         assert torch.allclose(probs[:, head : head + 1].double(), ref, atol=1e-5), (head, role)
-    # Not vacuous: without B5 (the dense split everywhere) the routed heads differ.
+    # Not vacuous: without B5 (the dense split everywhere) the routed heads differ, and so do
+    # the heads without B15's bias.
     dense = head_allocation("dense", cfg)
     axis = torch.tensor([[a for a, _ in dense]])
     freq = torch.tensor([[f for _, f in dense]], dtype=torch.float32)
     for head in (cfg.rope_head_roles.index("same_board"), cfg.rope_head_roles.index("move_graph")):
         ref = _reference_probs(q[:, head : head + 1], k[:, head : head + 1], coords, has, axis, freq, allowed, bias[:, head : head + 1])
         assert not torch.allclose(probs[:, head : head + 1].double(), ref, atol=1e-3), head
-
-
-def test_binned_bias_tables_change_the_outputs():
-    model = build_model(NetConfig(trunk_dtype="fp32", binned_bias=True), seed=4).eval()
-    batch = collate([synthetic_state(10, 6)])
-    base = model(batch)
-    gen = torch.Generator().manual_seed(4)
-    for table in (model.binned_bias.time_table, model.binned_bias.timeline_table):
-        saved = table.detach().clone()
-        table.add_(torch.randn(table.shape, generator=gen))
-        out = model(batch)
-        table.copy_(saved)
-        assert not torch.allclose(out.value_logits, base.value_logits, atol=1e-4)
-        assert not torch.allclose(out.board_logits, base.board_logits, atol=1e-4)
+    head = cfg.rope_head_roles.index("dense")
+    alloc = head_allocation("dense", cfg)
+    axis = torch.tensor([[a for a, _ in alloc]])
+    freq = torch.tensor([[f for _, f in alloc]], dtype=torch.float32)
+    unbiased = _reference_probs(q[:, head : head + 1], k[:, head : head + 1], coords, has, axis, freq, allowed)
+    assert not torch.allclose(probs[:, head : head + 1].double(), unbiased, atol=1e-3)

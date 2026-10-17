@@ -41,6 +41,18 @@ default 3.40 s / 1.47 GB with blocks recomputed, 3.03 s / 2.33 GB keeping them; 
 switch 25.1 s / 1.49 GB. Learned biases make the kernel's mask require gradient, which on
 CPU forces PyTorch's math kernel inside every block that carries them (the time of "every
 switch").
+
+These figures are of the network before F5 and F6 (CHECKPOINTS 6-7: LayerNorm with
+biases, biased Q/K/V projections, GELU in the FFN), which F5 replaced with gain-only RMSNorm
+and no Q/K/V biases - less per-token work, no new matmul - and F6 with Mish; they were not
+re-measured (no quiet machine since). They are also of the network before B15: the rows
+"B9 default" are today's "n2-no-table", and the v1 default ("n2-default") carries B15's
+learned bias on every head - per-row biases on the dense heads too, as "every switch" had
+(section 15.3's "Displacement bias and normalisation changes" row is to measure). The
+"every switch" figures (the table's rows and the training steps) had B6's binned biases on,
+since removed, and no B15; today's "n2-all" carries B15 in their place - a per-layer lookup
+on every head where B6 added one board-pair table per batch - so they are not "n2-all"'s
+either.
 """
 
 from __future__ import annotations
@@ -53,16 +65,19 @@ import subprocess
 import sys
 import time
 
-#: Named configurations: N1's dense baseline (no masks, the one-call fused path), stage
-#: N2's default (B9 on 2 heads, block-sparse), the routing table alone, and every switch
-#: of N2 on; "*-chunked" runs the same structure through ablation 6's dense-mask arm,
-#: "*-sdpa" through the unchunked fused path, which materialises (B, H, L, L) masks, and
-#: "*-keep" keeps every block for the backward pass instead of recomputing it
-#: (``attn_recompute=False``; training steps only).
-_ALL = dict(routing_table=True, typed_edge_bias=True, board_pair_smolgen=True, binned_bias=True)
+#: Named configurations: N1's dense baseline (no masks, no displacement bias, the one-call
+#: fused path), the v1 default (B9 on 2 heads and B15's displacement bias, block-sparse) and
+#: its no-table arm ("n2-no-table": ablation 2, B15 off - the stage N2 default before
+#: CHECKPOINT 6), the routing table alone, and every switch of N2 on; "*-chunked" runs the
+#: same structure through ablation 6's dense-mask arm, "*-sdpa" through the unchunked fused
+#: path, which materialises (B, H, L, L) masks, and "*-keep" keeps every block for the
+#: backward pass instead of recomputing it (``attn_recompute=False``; training steps only);
+#: "6y-*" are ablation 6y's trunk arms on the v1 default.
+_ALL = dict(routing_table=True, typed_edge_bias=True, board_pair_smolgen=True)
 CONFIGS: dict[str, dict] = {
-    "n1-dense": dict(move_graph_heads=0, attn_impl="sdpa"),
+    "n1-dense": dict(move_graph_heads=0, attn_impl="sdpa", displacement_bias=False),
     "n2-default": dict(),
+    "n2-no-table": dict(displacement_bias=False),
     "n2-default-chunked": dict(attn_impl="chunked"),
     "n2-default-sdpa": dict(attn_impl="sdpa"),
     "n2-routing": dict(routing_table=True),
@@ -73,6 +88,8 @@ CONFIGS: dict[str, dict] = {
     "n2-default-keep": dict(attn_recompute=False),
     "n2-default-chunked-keep": dict(attn_impl="chunked", attn_recompute=False),
     "n2-all-keep": _ALL | dict(attn_recompute=False),
+    "6y-post-norm": dict(norm_placement="post"),
+    "6y-squared-relu": dict(ffn_activation="squared_relu"),
 }
 
 
@@ -173,7 +190,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--boards", type=int, nargs="+", default=[60, 240])
     parser.add_argument("--dtype", nargs="+", default=["fp32", "bf16"], choices=["fp32", "bf16"])
-    parser.add_argument("--config", nargs="+", default=["n1-dense", "n2-default", "n2-all"], choices=sorted(CONFIGS))
+    parser.add_argument("--config", nargs="+", default=["n1-dense", "n2-no-table", "n2-default", "n2-all"], choices=sorted(CONFIGS))
     parser.add_argument("--train", action="store_true", help="time a training step (forward and backward) instead")
     parser.add_argument("--layers", type=int, default=None, help="trunk depth (default: the configuration's, 16)")
     args = parser.parse_args(argv)

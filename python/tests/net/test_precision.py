@@ -2,11 +2,19 @@
 
 Tolerances. BF16 keeps an 8-bit significand (relative rounding ~2^-9 = 0.2%). With the
 residual stream and norms in FP32 and only matmuls and attention in BF16, the measured
-gap after 16 layers (default configuration, model seeds 0, 5 and 11, N = 2, 17, 60) is
-at most 0.24% RMS on the unit-RMS final-normed trunk output (max 1.5%), 0.0035 on value
-logits, 0.009 on policy logits and 1.6e-4 on the value mean. The bounds below sit 3-12x
-above those measurements, so they catch a precision bug (e.g. RoPE computed in BF16,
-where an angle of 400 rad carries ~1.5 rad of error) without flaking.
+gap after 16 layers (default configuration - F5's pre-norm RMSNorm, F6's Mish - model
+seeds 0, 5 and 11, ``synthetic_state(30 + N, N)`` for N = 2, 17, 60; re-measured after F6)
+is at most 0.24% RMS on the unit-RMS final-normed trunk output (max 1.2%), 0.0036 on value
+logits, 0.010 on policy logits and 1.5e-4 on the value mean. The bounds below sit 2.9-13x
+above those measurements, so they catch a precision bug (e.g. RoPE computed in BF16, where
+an angle of 400 rad carries ~1.5 rad of error) without flaking.
+
+Ablation 6y's arms, measured the same way: F5's post-norm has the smaller gap (0.06% RMS,
+max 0.8%; 6.3e-4 on value logits, 2.8e-3 on policy logits, 2.1e-5 on the value mean -
+every sublayer's output is normed in FP32; re-measured with DeepNet's Xavier-normal
+initialisation) and is held to the v1's bounds. F6's squared ReLU squares its input's BF16
+rounding (twice the relative error), and its gap is up to twice the v1's (0.39% RMS, max
+2.0%; 4.1e-3, 0.021, 2.0e-4), so its bounds are doubled - 2.9-20x above its measurements.
 """
 
 from __future__ import annotations
@@ -24,25 +32,36 @@ POLICY_LOGITS_MAX = 0.03
 VALUE_MEAN_MAX = 2e-3
 
 
-@pytest.fixture(scope="module")
-def pair():
+#: The v1 and ablation 6y's arms (F5's post-norm, F6's squared ReLU), each with the factor
+#: its arithmetic puts on the bounds (see the module docstring).
+ARMS = {
+    "v1": (dict(), 1.0),
+    "post-norm": (dict(norm_placement="post"), 1.0),
+    "squared-relu": (dict(ffn_activation="squared_relu"), 2.0),
+}
+
+
+@pytest.fixture(scope="module", params=list(ARMS))
+def pair(request):
+    flags, scale = ARMS[request.param]
     return (
-        build_model(NetConfig(trunk_dtype="fp32"), seed=5).eval(),
-        build_model(NetConfig(trunk_dtype="bf16"), seed=5).eval(),
+        build_model(NetConfig(trunk_dtype="fp32", **flags), seed=5).eval(),
+        build_model(NetConfig(trunk_dtype="bf16", **flags), seed=5).eval(),
+        scale,
     )
 
 
 @pytest.mark.parametrize("n", [2, 17])
 def test_bf16_trunk_close_to_fp32(pair, n):
-    m32, m16 = pair
+    m32, m16, scale = pair
     batch = collate([synthetic_state(30 + n, n)])
     a, b = m32(batch, return_trunk=True), m16(batch, return_trunk=True)
     diff = (a.trunk - b.trunk)[batch.valid]
-    assert diff.pow(2).mean().sqrt() < TRUNK_RMS
-    assert diff.abs().max() < TRUNK_MAX
-    assert (a.value_logits - b.value_logits).abs().max() < VALUE_LOGITS_MAX
-    assert (a.policy_logits - b.policy_logits)[batch.move_valid].abs().max() < POLICY_LOGITS_MAX
-    assert (a.value_mean() - b.value_mean()).abs().max() < VALUE_MEAN_MAX
+    assert diff.pow(2).mean().sqrt() < TRUNK_RMS * scale
+    assert diff.abs().max() < TRUNK_MAX * scale
+    assert (a.value_logits - b.value_logits).abs().max() < VALUE_LOGITS_MAX * scale
+    assert (a.policy_logits - b.policy_logits)[batch.move_valid].abs().max() < POLICY_LOGITS_MAX * scale
+    assert (a.value_mean() - b.value_mean()).abs().max() < VALUE_MEAN_MAX * scale
     # And BF16 really is in use: the outputs are not bitwise FP32.
     assert not torch.equal(a.trunk, b.trunk)
 

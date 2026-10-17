@@ -9,14 +9,17 @@ Protocol (section 15.2): random weights at realistic initialisation scale, sever
 tolerances matched to the arithmetic, adversarial constructions. FP32 paths agree to the
 last bits that their different summation orders allow (measured: under 2.4e-6 on the
 unit-scale trunk output after 16 layers, so 2e-5 is asserted), and paths that compute the
-same thing in the same order are compared bitwise. BF16 and FP8 bounds sit 3-4x above the
-gaps measured on these trees (2 and 16 layers, 3 seeds): BF16 cached against the BF16 full
-pass, RMS 1.9e-3 / max 1.3e-2 on the trunk, 1.2e-3 on value logits, 7.7e-3 on policy
-logits - the size of the BF16 / FP32 gap itself (2.4e-3 RMS); FP8 cached against the full
-pass with FP8 frozen K/V, RMS 4.3e-3 / max 3.6e-2, 1.6e-3, 1.3e-2; FP8 against BF16, RMS
-9e-3 / max 5.3e-2, 1.1e-2, 3.0e-2. Adversarial constructions: duplicated boards, deep
-travel, many timelines, non-standard board sizes, even starts, register-count arms, and
-supersession inside a refreshed subtree.
+same thing in the same order are compared bitwise. The BF16 and FP8 tests run 2 layers,
+and their bounds sit 2.7-8x above the largest gaps measured on these trees at 2 layers
+(seeds 0-2); at 16 layers the gaps are up to 1.8x larger. The largest over both depths:
+BF16 cached against the BF16 full pass, RMS 1.9e-3 / max 1.3e-2 on the trunk, 1.2e-3 on
+value logits, 8.4e-3 on policy logits - the size of the BF16 / FP32 gap itself (2.4e-3
+RMS); FP8 cached against the full pass with FP8 frozen K/V, RMS 4.3e-3 / max 3.3e-2,
+1.7e-3, 1.6e-2; FP8 against BF16, RMS 8.8e-3 / max 4.8e-2, 1.0e-2, 2.8e-2. (Re-measured
+after F5's RMSNorm and F6's Mish, 2026-10-17; the figures before them were within a third
+of these.) Adversarial constructions: duplicated boards, deep travel, many timelines,
+non-standard board sizes, even starts, register-count arms, and supersession inside a
+refreshed subtree.
 """
 
 from __future__ import annotations
@@ -125,15 +128,22 @@ def test_cached_equals_one_full_pass(geometry, reading, supersession):
 @pytest.mark.parametrize(
     "flags",
     [
-        dict(routing_table=True, typed_edge_bias=True, board_pair_smolgen=True, binned_bias=True, rope_per_head=True),
+        dict(routing_table=True, typed_edge_bias=True, board_pair_smolgen=True, rope_per_head=True),
         dict(board_register_spatial="position_free", global_register_pairs="anchored", masked_head_registers="self"),
         dict(board_register_spatial="zero_angle", move_graph_heads=4, rope_recenter=False),
         dict(frozen_features="current"),
+        dict(norm_placement="post", ffn_activation="squared_relu", routing_table=True, typed_edge_bias=True, board_pair_smolgen=True),
+        dict(displacement_bias=False, routing_table=True, typed_edge_bias=True),
+        dict(disp_register_pairs="shared", disp_far_edges=(3, 4, 6), disp_line_max=4, disp_init_std=1.0),
     ],
-    ids=["n2-all", "regs-free-anchored", "zero-angle-raw", "current-features"],
+    ids=["n2-all", "regs-free-anchored", "zero-angle-raw", "current-features", "6y-arms-n2", "no-table-n2", "b15-placeholders"],
 )
 def test_cached_equals_one_full_pass_with_every_switch(flags):
-    """(a) under the section 6 structure and the open positional choices of stages N1-N3."""
+    """(a) under the section 6 structure and the open positional choices of stages N1-N3, under
+    ablation 6y's two arms together with the structure on (F5's post-norm - smolgen then reads
+    the block's input - and F6's squared ReLU), on B15's no-table arm (ablation 2), and with
+    B15's placeholders moved (its table at unit scale). B15 - the v1 default - is on in every
+    other test here: a frozen board's rows carry it, layer by layer (``compute_board``)."""
     model = _model(3, **flags)
     root = _root("standard", 3)
     tree = SearchTree(CachedEvaluator(model), root)
@@ -142,6 +152,80 @@ def test_cached_equals_one_full_pass_with_every_switch(flags):
         if move is not None:
             node = tree.child(node, move)
         _close(tree.evaluate(node), reference_output(model, node.state), what=move)
+
+
+#: Ablation 6y's trunk arms (section 13.1) - F5's post-norm with DeepNet initialisation, F6's
+#: squared ReLU - each with the factor its arithmetic puts on the v1's BF16 bounds: squared
+#: ReLU squares its input's BF16 rounding, and its BF16 gaps are about twice the v1's.
+ARMS_6Y = {"post-norm": (dict(norm_placement="post"), 1.0), "squared-relu": (dict(ffn_activation="squared_relu"), 2.0)}
+
+
+@pytest.mark.parametrize("arm", list(ARMS_6Y))
+def test_the_6y_arms_through_the_cached_path(arm):
+    """Section 15.2's network rows under ablation 6y's arms - the cached path runs the trunk's
+    own block steps, so it computes the arm's function: (a) cached = one full pass along random
+    paths (two geometries), and with a root refresh the dense pass at the root and the
+    two-level reference below it; (b) two move orders of one multiverse, each in its own
+    store, bitwise identical and equal to the full pass; (d) a transposition hit recomputes
+    nothing and is identical; (e) the BF16 cache is the live precision: as close to the FP32
+    full pass as the BF16 full pass is, and within test_bf16_cache_is_the_live_precision's
+    bounds of it times the arm's factor. Largest gaps of the cached evaluation against the
+    BF16 full pass on these trees (seeds 0-2, 2 and 16 layers): post-norm RMS 5.3e-4 / max
+    6.0e-3, value 1.9e-4, policy 1.9e-3 - 2.2-6.4x below the v1's; squared ReLU RMS 3.7e-3 /
+    max 2.2e-2, value 2.1e-3, policy 1.9e-2 - about twice the v1's (at the tests' 2 layers
+    3.6-9x below its doubled bounds)."""
+    flags, scale = ARMS_6Y[arm]
+    for geometry, seed in (("standard", 21), ("deep_travel", 22)):
+        model = _model(seed, **flags)
+        root = _root(geometry, seed)
+        tree = SearchTree(CachedEvaluator(model), root)
+        node = tree.root
+        for move in [None, *_random_moves(root, np.random.default_rng(seed), 6)]:
+            if move is not None:
+                node = tree.child(node, move)
+            _close(tree.evaluate(node), reference_output(model, node.state), what=(arm, geometry, move))
+    model = _model(23, **flags)
+    root = _root("many_timelines", 23)
+    refreshed = SearchTree(CachedEvaluator(model, CacheConfig(root_refresh=True)), root)
+    _close(refreshed.evaluate(refreshed.root), model(collate([root.state()]), scope="dense", return_trunk=True))
+    node = refreshed.path(_random_moves(root, np.random.default_rng(23), 4))
+    _close(refreshed.evaluate(node), reference_output(model, node.state, anchor=root.state()))
+
+    model = _model(24, **flags)
+    root = _root("standard", 24)
+    for first, second in _transpositions(root):
+        ends = []
+        for moves in (first, second):
+            tree = SearchTree(CachedEvaluator(model), root)
+            node = tree.path(moves)
+            tree.evaluate(node.parent)  # on the way, so the two stores' histories differ
+            ends.append((node, tree.evaluate(node)))
+        (n1, o1), (n2, o2) = ends
+        assert n1.universe.digest() == n2.universe.digest() and _identical(o1, o2), (arm, first, second)
+        _close(o1, reference_output(model, n1.state))
+    tree = SearchTree(CachedEvaluator(model), root)
+    first, second = _transpositions(root)[1]
+    a = tree.evaluate(tree.path(first))
+    computed = dict(tree.evaluator.store.computed)
+    for n in [tree.path(second[:i]) for i in range(1, len(second) + 1)]:
+        out = tree.evaluate(n)
+    assert tree.evaluator.store.computed == computed, "a transposition recomputes nothing"
+    assert _identical(out, a)
+
+    for seed in (0, 1, 2):
+        m16, m32 = _model(seed, "bf16", **flags), _model(seed, "fp32", **flags)
+        root, moves = _bf16_trees(seed)
+        tree = SearchTree(CachedEvaluator(m16), root)
+        node = tree.root
+        for move in [None, *moves]:
+            if move is not None:
+                node = tree.child(node, move)
+            cached, live, exact = tree.evaluate(node), reference_output(m16, node.state), reference_output(m32, node.state)
+            g_cached, g_live = _gaps(cached, exact), _gaps(live, exact)
+            assert g_cached["trunk_rms"] < 1.3 * g_live["trunk_rms"] + 3e-4, (arm, g_cached, g_live)
+            g = _gaps(cached, live)
+            bounds = {"trunk_rms": 6e-3, "trunk_max": 4e-2, "value": 5e-3, "policy": 2.5e-2}
+            assert all(g[k] < scale * b for k, b in bounds.items()), (arm, g)
 
 
 @pytest.mark.slow
@@ -374,7 +458,7 @@ def test_bf16_cache_is_the_live_precision():
     """(e), G1: the BF16 cache stores K/V exactly as the BF16 trunk computes them (no
     rounding of its own), so a cached BF16 evaluation is as accurate as a live one: its
     distance to the FP32 full pass is the BF16 full pass's own distance (measured: RMS
-    2.2-2.5e-3 for both, at 2 and 16 layers). At a refreshed root it is the dense BF16 pass
+    2.2-2.4e-3 for both, at 2 and 16 layers). At a refreshed root it is the dense BF16 pass
     up to summation order (bitwise on some positions; RMS under 1e-3 on the others)."""
     for seed in (0, 1, 2):
         m16, m32 = _model(seed, "bf16"), _model(seed, "fp32")
@@ -403,7 +487,7 @@ def test_fp8_cache_equals_the_fp8_network():
     """(e), C15: with ``frozen_kv_format="fp8"`` the network's ordinary forward - the one it
     would be trained with - rounds every read of a frozen board's K/V through FP8, and the
     FP8 cache serves exactly that function: equal to the plain forward within BF16 noise
-    (measured RMS 2.7e-3), at half the BF16 cache's bytes. G1's claim stays with "match"
+    (measured RMS 2.9e-3), at half the BF16 cache's bytes. G1's claim stays with "match"
     (test_bf16_cache_is_the_live_precision); this is the FP8 network's own precision."""
     for seed in (0, 1, 2):
         m8 = _model(seed, "bf16", frozen_kv_format="fp8")
@@ -424,13 +508,18 @@ def test_fp8_cache_equals_the_fp8_network():
 def test_fp8_cache_equals_the_fp8_network_at_fp32_resolution():
     """(e), C15, at FP32 resolution: under the FP32 trunk the FP8 cache equals the FP8
     network's ordinary forward up to the rare FP8 rounding flip an FP32 rounding difference
-    tips over (measured: trunk RMS 1.2e-5, value 1.7e-6, policy 4.5e-6) - FP8 is the format's
-    rounding, applied identically on both paths, and nothing else.
+    tips over (measured, the largest over these trees: trunk RMS 7.8e-5, value 4.4e-6, policy
+    1.0e-4) - FP8 is the format's rounding, applied identically on both paths, and nothing
+    else.
 
-    The policy bound is a max over logits, so it must absorb one such flip: on Linux CI one
-    flip moved a logit by 1.3e-3 (FP32 summation order differs by platform). The trunk's RMS
-    is what discriminates - a frozen board reading its own K/V unquantised (mutant M14)
-    gives trunk RMS 7.4e-3, value 2.5e-3, policy 2.1e-2."""
+    The flips are discrete and their count heavy-tailed: over 12 seeds each of the F5 and F6
+    networks a seed's largest trunk RMS was typically 1e-6 to 3e-5 and at most 7.8e-5, so the
+    trunk bound, 4e-4, sits 5x above the largest (raised from 2e-4 with F6, when the margin
+    had fallen to 2.6x). The policy bound is a max over logits, so it must absorb one such
+    flip: on Linux CI one flip moved a logit by 1.3e-3 (FP32 summation order differs by
+    platform). The trunk's RMS is what discriminates - a frozen board reading its own K/V
+    unquantised (mutant M14) gives trunk RMS 7.6e-3 (19x the bound), value 3.5e-3, policy
+    2.4e-2."""
     for seed in (0, 1, 2):
         model = _model(seed, frozen_kv_format="fp8")
         root, moves = _bf16_trees(seed)
@@ -440,13 +529,13 @@ def test_fp8_cache_equals_the_fp8_network_at_fp32_resolution():
             if move is not None:
                 node = tree.child(node, move)
             g = _gaps(tree.evaluate(node), model(collate([node.state]), return_trunk=True))
-            assert g["trunk_rms"] < 2e-4 and g["value"] < 5e-5 and g["policy"] < 5e-3, g
+            assert g["trunk_rms"] < 4e-4 and g["value"] < 5e-5 and g["policy"] < 5e-3, g
 
 
 def test_the_fp8_network_is_a_bounded_approximation_of_match():
     """C15 against G1, measured rather than claimed: the same weights with FP8 frozen K/V
     compute a different function from the "match" network - about 3.8x the BF16-vs-FP32 gap
-    (measured RMS 8.7e-3). Bounded, and not zero (FP8 is in use); serving a "match" network
+    (measured RMS 8.8e-3). Bounded, and not zero (FP8 is in use); serving a "match" network
     from an FP8 cache would be this approximation, which is why the cache never does."""
     for seed in (0, 1):
         m8, m16 = _model(seed, "bf16", frozen_kv_format="fp8"), _model(seed, "bf16")
