@@ -838,6 +838,9 @@ class ResultTests(unittest.TestCase):
     def release(self, **options):
         return self.result(tier="release", require_engine=True, full_strength=True, **options)
 
+    def nightly(self, **options):
+        return self.result(tier="nightly", full_strength=True, **options)
+
     def test_without_an_engine_the_oracle_layer_can_pass_but_the_proof_channel_stays_off(self):
         result = self.result()
         self.assertTrue(result.ok)
@@ -851,11 +854,59 @@ class ResultTests(unittest.TestCase):
         self.assertTrue(result.proof_channel.startswith("DISABLED"))
         self.assertIn("this tier requires an engine: FAILED", gate.summarise(result))
 
-    def test_an_engine_that_came_through_nothing_has_not_passed(self):
+    def test_an_engine_that_came_through_nothing_has_not_passed_a_tier_that_runs_every_oracle(self):
         # "Passed" with no ruleset gated would be a pass on the strength of nothing.
         self.assertFalse(self.release(engine="passed").ok)
-        self.assertFalse(self.result(engine="passed").ok)
-        self.assertTrue(self.result(engine="passed", gated={"Standard": self.ONE}).ok)
+        self.assertFalse(self.nightly(engine="passed").ok)
+        self.assertTrue(self.nightly(engine="passed", gated={"Standard": self.ONE}).ok)
+        for result in (self.release(engine="passed"), self.nightly(engine="passed", gated={"Standard": self.ONE})):
+            self.assertFalse(result.smoke_test)
+            self.assertNotIn("SMOKE TEST", gate.summarise(result))
+        self.assertEqual(self.nightly(engine="passed", gated={"Standard": self.ONE}).verdicts, ({"Standard": self.ONE}, {}))
+
+    def test_any_other_tier_is_a_smoke_test_that_gates_nothing(self):
+        # H47: a tier that does not run every oracle search over the whole corpus (the commit tier) does not check that
+        # some ruleset is gated. An engine that contradicted nothing passes it, gated or not - and the tier says that it
+        # gates nothing, so that a smoke pass never reads as gating.
+        nothing = self.result(engine="passed")
+        self.assertTrue(nothing.smoke_test)
+        self.assertTrue(nothing.ok)
+        self.assertTrue(nothing.proof_channel.startswith("DISABLED - only a complete run of a tier that requires an "
+                                                         "engine and runs every oracle"), nothing.proof_channel)
+        self.assertIn(f"engine differential: SMOKE TEST - PASSED: {gate.SMOKE_TEST}", gate.summarise(nothing))
+        # A ruleset that met the gating conditions with the tier's oracles alone is not gated either, and says so.
+        met = self.result(engine="passed", gated={"Standard": self.THREE})
+        met.ungated = {"Misc - Small": "no oracle followed notation/game as far as the engine went"}
+        self.assertTrue(met.ok)
+        self.assertEqual(met.verdicts, ({}, {"Misc - Small": "no oracle followed notation/game as far as the engine went",
+                                            "Standard": f"{gate.SMOKE_REASON} ({self.THREE.describe()})"}))
+        text = gate.summarise(met)
+        self.assertNotIn("gated:     ", text)
+        self.assertIn(f"NOT gated: Standard - {gate.SMOKE_REASON} (4 records, 90 positions; ", text)
+        self.assertIn("NOT gated: Misc - Small - no oracle followed notation/game as far as the engine went", text)
+        self.assertTrue(met.proof_channel.startswith("DISABLED"))
+        # A partial run says so too, and a contradiction fails it like any tier.
+        partial = self.result(engine="passed", partial=True)
+        self.assertIn("engine differential: SMOKE TEST - PASSED (PARTIAL RUN - restricted sources or records): "
+                      f"{gate.SMOKE_TEST}", gate.summarise(partial))
+        failed = self.result(engine="failed", engine_findings=[Finding("divergence", "r/1 position 3: ...")])
+        self.assertFalse(failed.ok)
+        self.assertIn(f"engine differential: SMOKE TEST - FAILED: {gate.SMOKE_TEST}", gate.summarise(failed))
+        # Neither without an engine nor in parse mode: there is no full-mode differential to read as gating.
+        self.assertFalse(self.result().smoke_test)
+        self.assertFalse(self.result(engine="passed", mode="parse", parse=gate.ParseAgreement(records=1, read=1)).smoke_test)
+
+    def test_the_report_of_a_smoke_test_holds_no_gated_ruleset_and_says_why(self):
+        with tempfile.TemporaryDirectory() as folder, mock.patch.object(paths, "cache_dir", return_value=Path(folder)):
+            smoke = json.loads(gate._write_report(self.result(engine="passed", gated={"Standard": self.THREE}), {})
+                               .read_text(encoding="utf-8"))
+            self.assertEqual((smoke["tier"], smoke["ok"], smoke["smoke_test"], smoke["gated"]),
+                             ("commit", True, gate.SMOKE_TEST, {}))
+            self.assertEqual(smoke["ungated"], {"Standard": f"{gate.SMOKE_REASON} ({self.THREE.describe()})"})
+            full = json.loads(gate._write_report(self.nightly(engine="passed", gated={"Standard": self.THREE}), {})
+                              .read_text(encoding="utf-8"))
+            self.assertEqual((full["tier"], full["smoke_test"], full["gated"], full["ungated"]),
+                             ("nightly", None, {"Standard": dataclasses.asdict(self.THREE)}, {}))
 
     def test_only_a_complete_run_of_a_full_strength_tier_that_requires_an_engine_enables_the_proof_channel(self):
         passed = dict(engine="passed", gated={"Standard": self.THREE, "Very Small - Open": self.ONE})
@@ -879,7 +930,7 @@ class ResultTests(unittest.TestCase):
         only_custom = self.release(engine="passed", gated={CUSTOM_POSITIONS: self.ONE})
         self.assertFalse(only_custom.ok)
         self.assertTrue(only_custom.proof_channel.startswith("DISABLED"))
-        self.assertTrue(self.result(engine="passed", gated={CUSTOM_POSITIONS: self.ONE}).ok)
+        self.assertTrue(self.nightly(engine="passed", gated={CUSTOM_POSITIONS: self.ONE}).ok)
         both = self.release(engine="passed", gated={CUSTOM_POSITIONS: self.ONE, "Standard": self.ONE})
         self.assertTrue(both.ok)
         self.assertNotIn(CUSTOM_POSITIONS, both.proof_channel)
@@ -937,16 +988,19 @@ class ResultTests(unittest.TestCase):
         self.assertIn("FAIL", gate.summarise(result))
 
     def test_a_failed_engine_differential_fails_the_gate_but_not_the_oracle_layer(self):
-        result = self.result(engine="failed", engine_findings=[Finding("divergence", "r/1 position 3: ...")])
-        self.assertFalse(result.ok)
-        self.assertTrue(result.oracle_layer_ok)
-        text = gate.summarise(result)
-        self.assertIn("oracle layer [commit]: ok", text)
-        self.assertIn("engine differential: FAILED", text)
-        self.assertEqual([item.code for item in result.findings()], ["divergence"])
+        # In every tier: a smoke test (H47) included.
+        for result in (self.result(engine="failed", engine_findings=[Finding("divergence", "r/1 position 3: ...")]),
+                       self.nightly(engine="failed", engine_findings=[Finding("divergence", "r/1 position 3: ...")])):
+            self.assertFalse(result.ok)
+            self.assertTrue(result.oracle_layer_ok)
+            text = gate.summarise(result)
+            self.assertIn(f"oracle layer [{result.tier}]: ok", text)
+            self.assertIn("engine differential: SMOKE TEST - FAILED" if result.smoke_test else
+                          "engine differential: FAILED", text)
+            self.assertEqual([item.code for item in result.findings()], ["divergence"])
 
     def test_the_summary_says_why_a_ruleset_is_not_gated(self):
-        result = self.result(engine="passed", gated={"Standard": self.THREE})
+        result = self.nightly(engine="passed", gated={"Standard": self.THREE})
         result.ungated = {"Misc - Small": "no oracle followed notation/game as far as the engine went"}
         text = gate.summarise(result)
         self.assertIn("gated:     Standard (4 records, 90 positions; an oracle held the engine's boards and pieces at "
@@ -1087,9 +1141,10 @@ class GateRunTests(unittest.TestCase):
         support.vouch()
         gate.render_disagreements(log=lambda _: None)
 
-    def engine(self, flips=(), tamper=(), mode="full", naive_timeout=None, **breach):
+    def engine(self, flips=(), tamper=(), mode="full", naive_timeout=None, declines=False, **breach):
         """The engine fixture: it says what the oracles say, except check at each (record, position) in ``flips``.
 
+        ``declines`` makes it decline every record as a ruleset it does not implement (allowed by the contract).
         ``breach`` breaks the contract on purpose: answers=True answers the rules questions in parse mode too,
         stateless=True prints no state event.
         """
@@ -1103,6 +1158,8 @@ class GateRunTests(unittest.TestCase):
                                "in_check": (item.id, index) in flips or row[1], "legal_actions": row[2],
                                "terminal": row[3]})
             events.append({"event": "end", "status": "ok", "actions_accepted": 1})
+            if declines:
+                events = [{"event": "end", "status": "unsupported", "actions_accepted": 0, "reason": "variant"}]
             plan["records"][self.text(item.id)] = events
         (self.folder / "plan.json").write_text(json.dumps(plan), encoding="utf-8")
         (self.folder / "engine.py").write_text(ENGINE, encoding="utf-8")
@@ -1129,6 +1186,9 @@ class GateRunTests(unittest.TestCase):
         self.assertEqual(result.findings(), [])
         self.assertEqual((result.engine, result.ok), ("passed", True))
         self.assertEqual(sorted(result.gated), ["Standard", TZ])
+        # Both met the gating conditions with ftxi alone; the commit tier is a smoke test (H47), and gates neither.
+        self.assertTrue(result.smoke_test)
+        self.assertEqual(result.verdicts[0], {})
         self.assertIn("harness unchanged while the gate ran", [title for title, _ in result.sections])
         self.assertIn("rulebook", [title for title, _ in result.sections])
         self.assertEqual(result.tallies["ftxi"].values, 32)  # two records, two positions, eight values each
@@ -1137,6 +1197,56 @@ class GateRunTests(unittest.TestCase):
         self.assertEqual(result.calibration.factor, 0.02)
         self.report.assert_called_once()
         self.assertEqual(result.converted, {})
+
+    def test_only_a_tier_that_runs_every_oracle_fails_an_engine_that_came_through_no_ruleset(self):
+        # H47. No oracle gives a check verdict at position 1 of either record, so no ruleset reaches the floor (75% of
+        # the engine's positions) in any tier, although the engine agrees with every answer there is.
+        for (name, _), answer in self.table.items():
+            if name not in PARSE_ONLY_SOURCES:
+                answer.positions[1] = dataclasses.replace(answer.positions[1], in_check=None)
+        self.record_golden()
+        self.engine()
+        # The commit tier is a smoke test: it passes the engine, and says that it gates nothing.
+        smoke = self.run_gate("commit")
+        self.assertEqual(smoke.findings(), [])
+        self.assertEqual((smoke.engine, smoke.ok, smoke.smoke_test, smoke.gated), ("passed", True, True, {}))
+        self.assertTrue(smoke.proof_channel.startswith("DISABLED"))
+        text = gate.summarise(smoke)
+        self.assertIn(f"engine differential: SMOKE TEST - PASSED: {gate.SMOKE_TEST}", text)
+        self.assertIn("NOT gated: Standard - the oracles give a check verdict at only 1 of the engine's 2 positions", text)
+        self.assertIs(self.report.call_args.args[0], smoke)
+        # A tier that runs every oracle search over the whole corpus fails it, as before.
+        for tier in ("nightly", "release"):
+            result = self.run_gate(tier)
+            self.assertEqual(self.codes(result), ["engine-nothing-gated"], tier)
+            self.assertEqual((result.engine, result.ok, result.smoke_test), ("failed", False, False), tier)
+            self.assertEqual(result.proof_channel, "DISABLED - the gate failed", tier)
+            self.assertIn("engine differential: FAILED", gate.summarise(result), tier)
+
+    def test_an_engine_that_declines_every_record_fails_only_a_tier_that_runs_every_oracle(self):
+        # Compared with nothing, it contradicts nothing. The commit tier, a smoke test that gates nothing (H47), passes
+        # it - and says that it gates nothing, and why each ruleset is not gated. (Parse mode keeps its own floor,
+        # engine-nothing-compared, in every tier.)
+        self.engine(declines=True)
+        smoke = self.run_gate("commit")
+        self.assertEqual((smoke.findings(), smoke.engine, smoke.ok), ([], "passed", True))
+        self.assertEqual(smoke.verdicts, ({}, {"Standard": "the engine did not replay r/std",
+                                               TZ: "the engine did not replay r/tz"}))
+        self.assertIn(f"engine differential: SMOKE TEST - PASSED: {gate.SMOKE_TEST}", gate.summarise(smoke))
+        for tier in ("nightly", "release"):
+            result = self.run_gate(tier)
+            self.assertEqual(self.codes(result), ["engine-nothing-gated"], tier)
+            self.assertFalse(result.ok, tier)
+
+    def test_a_contradiction_fails_every_tier_the_smoke_test_included(self):
+        self.engine(flips={("r/std", 1)})
+        for tier in ("commit", "nightly", "release"):
+            result = self.run_gate(tier)
+            self.assertEqual(self.codes(result), ["divergence"], tier)
+            self.assertEqual((result.engine, result.ok), ("failed", False), tier)
+            self.assertEqual(result.proof_channel, "DISABLED - the gate failed", tier)
+            self.assertIn("engine differential: SMOKE TEST - FAILED" if tier == "commit" else
+                          "engine differential: FAILED", gate.summarise(result), tier)
 
     def test_a_record_read_converted_from_the_export_form_is_named_in_the_log_and_the_report(self):
         # export_form.py (CHECKPOINT 3): every source reads such a record converted, and a run says which were.

@@ -10,6 +10,47 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-17 - Gate H47: the some-ruleset-is-gated check only in tiers that run every oracle
+
+- `oracles/oracle_harness/gate.py`: the check that some ruleset is gated - the
+  `engine-nothing-gated` finding against a full-mode engine that contradicted
+  nothing and came through no ruleset, and `GateResult.ok`'s test of it - runs only
+  in a tier that runs every oracle search over the whole corpus
+  (`Tier.full_strength`: nightly, release). Any other tier - commit, ftxi and the
+  notation parser - is a smoke test (H47, Q-A): an engine that contradicts no
+  oracle passes its differential, gated or not. A smoke pass never reads as
+  gating: the summary says `engine differential: SMOKE TEST - PASSED` (or
+  `FAILED`) and that the tier gates nothing, and why (`SMOKE_TEST`); every ruleset
+  is listed as `NOT gated`, one that met the gating conditions with the tier's
+  oracles alone saying so (`SMOKE_REASON`); the report has no ruleset under
+  `gated` and the reason under `smoke_test`. New: `GateResult.smoke_test` and
+  `GateResult.verdicts` (what a run may state). Unchanged: the rule in nightly and
+  release, the release tier's requirement of a named variant, the proof-channel
+  line, parse mode and its floor, and the differential itself
+  (`GateResult.gated` still holds what met the conditions, in every tier). Why:
+  with ftxi alone the commit tier gated no ruleset once the engine was configured
+  (2026-10-04, Q-A), so the rule would have turned the commit workflow red; the
+  ruling (CHECKPOINT 6) took option (a).
+- `oracles/tests/test_gate.py`, `oracles/tests/test_gate_live.py`: both sides
+  pinned - in a commit-shaped tier an agreeing engine that gates nothing passes
+  (ok, the proof channel disabled, the output saying the tier gates nothing); in
+  nightly- and release-shaped tiers it fails on `engine-nothing-gated`; a
+  contradiction fails every tier; an engine that declines every record passes
+  only the smoke test; the report's `smoke_test` and `gated`; a real-ftxi commit
+  run never prints a ruleset as gated. Tests that read a commit-shaped result as
+  gating now use a nightly shape.
+- `oracles/README.md` ("Tiers", "The engine contract"), `oracles/gate.toml`
+  (comments only) and `CONTRIBUTING.md` ("The proof channel"): the commit tier is
+  a smoke test that gates nothing, and why; the release tier's comment names its
+  rule (a named variant).
+- `docs/BUILD_LOG.md`: register rows H47 (built, tested) and H48 (not started);
+  spec issues 122-123; proposed spec edit 98.
+- Spec: §11.0 "Tiered CI" and register H47 - proposed edit 98, because the spec's
+  reason ("a ruleset is gated only when two or more oracles answer for it") is not
+  the gating rule as built (spec issue 122); H47 is silent on an engine compared
+  with nothing in a smoke test (spec issue 123, put to the user). H23 and the
+  proof channel unchanged.
+
 ### 2026-10-17 - Design documents: the CHECKPOINT 6 and 7 rulings, from upstream
 
 - `docs/design/5d-chess-decisions.md`, `docs/design/5d-chess-transformer-design.md`,

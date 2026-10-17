@@ -5,8 +5,14 @@ Tiers (design spec 11.0):
   commit   every push - the boundary, the pins, the corpus, and the fast oracle
   nightly  the two heavier oracles as well, on the whole corpus
   release  before any generator release or proof-channel enablement - everything
-           in nightly, and it fails unless an engine was compared and at least
-           one ruleset came through
+           in nightly, and it fails unless an engine was compared and came
+           through at least one named variant
+
+Only a tier that runs every oracle search over the whole corpus (nightly,
+release) gates a ruleset, and fails an engine that contradicted nothing but came
+through none. Any other tier - commit - is a smoke test (H47): an engine that
+contradicts no oracle passes it, and its summary and report say that it gates
+nothing. A contradiction fails every tier.
 
 Each run reads what it compares against once, verified (snapshot.py, H33); then
 requires 100% of each tier's required set of recorded answers (stability.py,
@@ -73,6 +79,11 @@ _COMPLETE = ("ok", "rejected")
 _LABELS = {"in_check": "check", "legal_actions": "count", "terminal": "mate"}
 # How long the calibration probe may take, on any machine.
 PROBE_TIMEOUT_S = 900.0
+# What a tier that does not run every oracle search over the whole corpus says of an engine compared in full mode
+# (H47), and why a ruleset that met the gating conditions with its oracles alone is still not gated.
+SMOKE_TEST = ("this tier gates nothing - only a tier that runs every oracle search over the whole corpus gates a "
+              "ruleset, or fails an engine that came through none (H47)")
+SMOKE_REASON = "a smoke test: it met the gating conditions with this tier's oracles alone"
 
 
 @dataclass(frozen=True)
@@ -170,6 +181,9 @@ class GateResult:
     tallies: dict[str, stability.Tally] = field(default_factory=dict)  # source -> its runs against their required sets
     engine: str = "not configured"  # not configured | passed | failed
     engine_mode: str = "full"  # full | parse
+    # The rulesets that met the gating conditions (engine_differential) with the oracles this run ran, and why the
+    # others did not. A gating verdict only where the tier runs every oracle (H47): in a smoke test nothing is
+    # gated, and what may be said of the rulesets is `verdicts`.
     gated: dict[str, Gated] = field(default_factory=dict)
     ungated: dict[str, str] = field(default_factory=dict)  # ruleset -> why it is not gated
     parse: ParseAgreement | None = None  # an engine compared in parse mode
@@ -196,6 +210,29 @@ class GateResult:
         return {ruleset: gated for ruleset, gated in self.gated.items() if ruleset != CUSTOM_POSITIONS}
 
     @property
+    def smoke_test(self) -> bool:
+        """Was an engine compared in full mode by a tier that does not run every oracle search over the whole corpus?
+
+        Such a tier is a smoke test (H47): it gates nothing. An engine that
+        contradicted no oracle passes it, whether or not some ruleset met the
+        gating conditions with the tier's oracles alone, and its summary and
+        report say that the tier gates nothing.
+        """
+        return self.engine != "not configured" and self.engine_mode == "full" and not self.full_strength
+
+    @property
+    def verdicts(self) -> tuple[dict[str, Gated], dict[str, str]]:
+        """(the gated rulesets, every other ruleset -> why it is not gated), as this run may state them.
+
+        In a smoke test nothing is gated: a ruleset that met the gating
+        conditions with the tier's oracles alone is not gated either, and says so.
+        """
+        if not self.smoke_test:
+            return self.gated, self.ungated
+        met = {ruleset: f"{SMOKE_REASON} ({item.describe()})" for ruleset, item in self.gated.items()}
+        return {}, dict(sorted({**self.ungated, **met}.items()))
+
+    @property
     def ok(self) -> bool:
         if not self.oracle_layer_ok or self.engine == "failed":
             return False
@@ -204,10 +241,15 @@ class GateResult:
                 # An engine compared in parse mode gates nothing; a tier that
                 # requires an engine requires one compared on the rules.
                 return not self.require_engine
-            # An engine that contradicted nothing and came through no ruleset
-            # was not compared with anything; a tier that requires an engine
-            # requires it to come through a variant a proof could be about.
-            return bool(self.variants) if self.require_engine else bool(self.gated)
+            if self.require_engine:
+                # A tier that requires an engine requires it to come through a
+                # variant a proof could be about.
+                return bool(self.variants)
+            # In a tier that runs every oracle, an engine that contradicted
+            # nothing and came through no ruleset was not compared with
+            # anything. Any other tier is a smoke test that gates nothing (H47):
+            # contradicting nothing passes it.
+            return bool(self.gated) or not self.full_strength
         return not self.require_engine
 
     @property
@@ -848,8 +890,10 @@ def run_tier(
                 engine, sources, records, answers, engine_results, frozen.divergences, tier.min_checked,
                 frozen.recorded)
             engine_findings += differential
-            if not engine_findings and not result.gated:
-                # Agreeing with the oracles about nothing is not a pass.
+            if not engine_findings and not result.gated and tier.full_strength:
+                # Agreeing with the oracles about nothing is not a pass - in a tier
+                # that runs every oracle search over the whole corpus. Any other
+                # tier is a smoke test that gates nothing (H47), and says so.
                 engine_findings.append(Finding(
                     "engine-nothing-gated",
                     "the engine contradicted no oracle, but it came through no ruleset either: "
@@ -873,6 +917,7 @@ def _write_report(result: GateResult, results: runner.Results, cfg: config.GateC
         options = _options(cfg, tier.timeout_for(source.name), tier.mate_budget_ms)
         budgets[source.name] = source.budget(options)
         signatures[source.name] = golden.signature(source, options)
+    gated, ungated = result.verdicts
     body = {
         "tier": result.tier,
         "when": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
@@ -881,8 +926,10 @@ def _write_report(result: GateResult, results: runner.Results, cfg: config.GateC
         "partial": result.partial,
         "engine": result.engine,
         "engine_mode": result.engine_mode,
-        "gated": {ruleset: asdict(item) for ruleset, item in result.gated.items()},
-        "ungated": result.ungated,
+        # In a smoke test (H47) nothing is gated, and this says why; otherwise null.
+        "smoke_test": SMOKE_TEST if result.smoke_test else None,
+        "gated": {ruleset: asdict(item) for ruleset, item in gated.items()},
+        "ungated": ungated,
         "parse_agreement": asdict(result.parse) if result.parse is not None else None,
         "proof_channel": result.proof_channel,
         # The records every source read other than as stored (export_form.py).
@@ -939,10 +986,15 @@ def summarise(result: GateResult) -> str:
         agreement = result.parse.describe() if result.parse is not None else "nothing was compared"
         lines.append(f"engine differential: PARSE MODE - {result.engine.upper()}{scope}: {agreement}")
     else:
-        lines.append(f"engine differential: {result.engine.upper()}{scope}")
-        for described in _describe_gated(result.gated):
+        if result.smoke_test:
+            # Passed or failed, it never reads as gating (H47).
+            lines.append(f"engine differential: SMOKE TEST - {result.engine.upper()}{scope}: {SMOKE_TEST}")
+        else:
+            lines.append(f"engine differential: {result.engine.upper()}{scope}")
+        gated, ungated = result.verdicts
+        for described in _describe_gated(gated):
             lines.append(f"  gated:     {described}")
-        for ruleset, reason in sorted(result.ungated.items()):
+        for ruleset, reason in sorted(ungated.items()):
             lines.append(f"  NOT gated: {ruleset} - {reason}")
     lines.append(f"proof channel: {result.proof_channel}")
     if result.require_engine and result.engine == "not configured":

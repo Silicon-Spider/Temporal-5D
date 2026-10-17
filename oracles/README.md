@@ -350,8 +350,8 @@ however the CLI's run ended.
 
 | Tier | When | Sources | Notes |
 |---|---|---|---|
-| `commit` | every push and pull request | `ftxi`, `notation` | three positions per record in the driver check (below) |
-| `nightly` | every night | all six | the naive searches get shorter budgets; they time out on wide positions by design |
+| `commit` | every push and pull request | `ftxi`, `notation` | three positions per record in the driver check (below); a **smoke test**: it gates no ruleset, and an engine that contradicts no oracle passes it (H47, "The engine contract") |
+| `nightly` | every night | all six | the naive searches get shorter budgets; they time out on wide positions by design; it **fails an engine that contradicts nothing but comes through no ruleset** |
 | `release` | before any generator release or proof-channel enablement | all six | the longest budgets - the golden files are recorded under them - and it **fails unless an engine was compared and came through at least one named variant** |
 
 Workflows: `.github/workflows/oracle-commit.yml` and `oracle-nightly.yml` (the
@@ -368,7 +368,8 @@ and of every other recorded answer it gave, or failed to give where no budget
 explains it; a check of the ftxi driver against ftxi's stock CLI; when an engine
 is configured, the engine differential; and last, a check that no harness file
 changed while it ran. The last lines of the output say whether the engine was
-compared and whether the proof channel may be enabled.
+compared, whether the tier gates anything (a smoke test says that it gates
+nothing), and whether the proof channel may be enabled.
 
 A tier has no coverage floor: it requires **100% of its required set** - every
 recorded value its budgets can be shown to reach - and loses none of them without
@@ -851,9 +852,24 @@ divergence from cwmtt, which marks them). Castling is impossible in that layout,
 so the two positions play alike - but the harness does not know the rules, and
 does not count an answer about another position.
 
-An engine that contradicts nothing but comes through no ruleset has **failed**:
-agreeing with the oracles about nothing is not a pass. Nor has one that gives an
-answer a known divergence records as an oracle's error (a telltale, H34, above).
+Only a tier that runs every oracle search over the whole corpus (`nightly`,
+`release`) gates a ruleset, and there an engine that contradicts nothing but comes
+through no ruleset has **failed**: agreeing with the oracles about nothing is not a
+pass. Any other tier - `commit`, with its one rules oracle - is a **smoke test**
+(H47): an engine that contradicts no oracle passes its differential, whether or
+not a ruleset met the conditions above with that tier's oracles alone, and what it
+says of the rulesets is never a gating verdict. Its last lines say `engine
+differential: SMOKE TEST - PASSED` (or `FAILED`) and that the tier gates nothing;
+every ruleset is listed as `NOT gated`, one that met the conditions with the
+tier's oracles alone saying so; and the report holds no ruleset under `gated`, and
+the reason under `smoke_test`. An engine that declines every record contradicts
+nothing, so it passes the smoke test - and fails the nightly tier. Why the commit
+tier gates nothing: its one rules oracle, ftxi, is ruled wrong in places (R1);
+where the engine contradicts it, its answer confirms nothing, and only another
+oracle's answer can confirm the engine there - so whether some ruleset is gated is
+asked only of the tiers that run them all (H47, CHECKPOINT 6). In every tier a
+contradiction fails the engine, and so does an answer a known divergence records
+as an oracle's error (a telltale, H34, above).
 
 The proof channel may be enabled only by a complete run of a tier that requires an
 engine and runs every oracle search over the whole corpus (the `release` tier),
