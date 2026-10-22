@@ -1710,7 +1710,7 @@ width (M22)", "The CHECKPOINT 8 figures"). Found on the way: the ruling's premis
 | I12 | not started | Surprise-weighted sampling, the default sampler (6u): M21, with 6u's and I6's arms |
 | I13 | engine side built, tested; deblundering not started | Deblundering (6z): M21. What it needs from the search is built (engine ABI round 2a, issue 148): the draw probability backed up beside the value, so the best child's search WDL is its (q, d); moves-left not backed up - each root child's network moves-left (and WDL, error) recorded instead, the target builder adding the offset |
 | I14 | not started | Proof rescoring (6z): M21 builds the hook disabled - hard-off until the H23/H41 sign-off |
-| I15 | engine side built, tested (ABI round 2); the records not started | Rich training records, fixed before the pilot run: first in M21 (net lane), with §15.2's round-trip row. The engine side built: the root's raw outputs (round 2a: its WDL, moves-left, error; the categorical and the raw logits by the memo, keyed by `root_key`), the root children's search (q, d) and network outputs (2a), the root side table and summary fields (2c: `child_key`, `prior_noise_free`, `value_variance`, `boost`, `exploration_scale`, `forced_visits`, `steered_visits`; `root_key`, `root_cpuct`, `root_best_since` - issues 153, 154) and `t5d_game_expand`'s `legal_moves` with its budget, which rebuilds a decision's input (issue 155); proofs by reference wait on the sign-off (H23/H41) |
+| I15 | built, tested (M21 commit 1, `lane/net`) | Rich training records, fixed before the pilot run. The engine side (ABI round 2): the root's raw outputs, the root children's search (q, d) and network outputs, the root side table (`child_key`, `prior_noise_free`, `value_variance`, `boost`, `exploration_scale`, `forced_visits`, `steered_visits`; `root_key`, `root_cpuct`, `root_best_since` - issues 153, 154) and `t5d_game_expand`'s `legal_moves` with its budget (issue 155). The records (`python/t5d/train/records.py`, format version 1, one `.npz` per game, read with `allow_pickle=False`): per decision the raw root outputs (WDL and categorical logits, the raw logit of every candidate move and of submit, error, moves-left), the root search value (q, d), visits, cPUCT and effort change point, the best and played children, every root child's statistics with its forced and steered counts and its own network evaluation, the decision's boards, the move and root temperatures, the PCR flag, cap and playouts, the seed; per game the conditions (engine version, ruleset, variant or 5DFEN start, the network's weight hash and configuration, every `t5d_search_params` field, the input's window and relations, the generator's configuration), the result and the 5dpgn. Proofs by reference: none while the proof channel is off (H23/H41). Written by the generator (`train/selfplay.py`); each decision's input rebuilt from the record alone (`replay_positions`, digest-equal to the generation's). The raw root outputs are the network's evaluation of the decision's own input, not a memo of the search's (issue 234). Section 15.2's round trip: the record bit for bit here; the targets with M21's target builder |
 | I16 | not started | The replay window growing sublinearly (6z): M21, a placeholder rule |
 | I17 | not started | SWA (6z): M21, smoke-tested |
 | I18 | not started | The false-resign check: M21 - resignation disabled in 10% of self-play games, false resignations measured per board-count range |
@@ -1727,7 +1727,7 @@ width (M22)", "The CHECKPOINT 8 figures"). Found on the way: the ruling's premis
 | M18 | not started (rule) | A pilot self-play run before serious self-play re-checks the window and the other compute-weighted decisions - after §15.5, not in the untrained build |
 | M19 | applied | No GPU: counted FLOPs and CPU-labelled wall times (`dev-r`) are the untrained build's write-back; the GPU figures - FA4-class evaluations/s, the leaf-batching gain, FP8, the block-sparse and varlen kernels, the Phase-3 movegen re-check - named as deferred, measured on rented NVIDIA time before the pilot run; the bounded AMD attempt is G9's |
 | M20 | built, tested; the reply prototype parked with the heads (after engine round 2) | The placeholder dispositions (issue 121), each the code's default and its disposed-of arms removed where no named ablation needs them (`lane/net`; A7 is a component of its own). N-M20: the promotion offset in the policy (D1; `policy_promotion` gone); position-free per-board registers and global registers on every pair (B8; `board_register_spatial`, `global_register_pairs` and the learned coordinates gone); aux pooling from squares - moves-left, effort - with D3's value-type heads (WDL and the short value too) pooled from the global registers by mean (`aux_global_pool` gone; issue 223); moves-left in turns (issue 224); the acting player on the global registers (`acting_player_input` and `all_tokens` gone; with no global registers on the board tokens, issue 225; `cache.board_ident`'s `acting` keying kept for A7, issue 303); the submit logit from the pooled registers (D8; `submit_register` gone). Earlier: B6 removed (B15); B16's status biases with intrinsic frozen features (N-B16 - its `frozen_features = "current"` test arm stays, as N-B16 left it: no named ablation needs it, and whether to remove it is the main loop's call - the N-F6heads-M20 review); both supersession readings (C20; docs relabelled). Relabelled, not changed: B5's details (ablation 2), 16a-g (B9's "v1 as built", ablation 6a), the per-square labels (6j) - now v1 values, not placeholders; B7 has no code. Not here: the reply head's reinstatement as a prototype (D4) - the heads' rebuild after engine round 2; until then it is always built, as at N1. Not on M20's list: D8's readout form (`submit_head`, issue 109) |
-| M21 | built in part | The training loop, written and smoke-tested, no training (§15.5 does not require it; the pilot run does). Built (N1+N2; the submit target at N5): losses for today's heads - value, policy with submit, WDL, moves-left, opponent reply, short value, per-board, per-square, effort, each at weight 1.0 (`t5d.train.losses`) - and a smoke test of at most three optimiser steps on synthetic targets (`t5d.train.smoke`). Missing - the net lane, after engine round 2 and the heads: I15's records first, then I2's targets with §12.2's exclusions and provenance, the new heads' losses (D3, D4, D9), PCR (I5) with I20, I12 with 6u's and I6's arms, I13, I14's hook disabled, I16-I19 (§12.8's mechanics), the QAT hook (G8), §15.2's round-trip test |
+| M21 | built in part | The training loop, written and smoke-tested, no training (§15.5 does not require it; the pilot run does). Built (N1+N2; the submit target at N5): losses for today's heads - value, policy with submit, WDL, moves-left, opponent reply, short value, per-board, per-square, effort, each at weight 1.0 (`t5d.train.losses`) - and a smoke test of at most three optimiser steps on synthetic targets (`t5d.train.smoke`). I15's records and the generator (commit 1, `lane/net`; issue 234). Missing - the net lane: I2's targets with §12.2's exclusions and provenance, the new heads' losses (D3, D4, D9), PCR (I5) with I20, I12 with 6u's and I6's arms, I13, I14's hook disabled, I16-I19 (§12.8's mechanics), the QAT hook (G8), §15.2's round-trip test |
 | M23 | applied | Every working branch is pushed after each commit and takes main by merge, never rebase. The three lanes and their number blocks are the main loop's plan under this rule ("Current state (2026-10-17)") |
 | M24 | not started (rule) | Ablations on a shared dataset - after the pilot run; what the untrained build owes it is I15's record completeness |
 | M1-M6, M10 | applied | The plan's process rows: the build follows them (this log) |
@@ -3420,6 +3420,29 @@ superseded or made moot says so; nothing is deleted.
     share a cache (C14, as built), so no normal evaluation is served as an optimistic one or the
     reverse. No I15 training record is written from match play (its game record's Engine header
     names the optimistic prior), so I15's records always hold the normal prior. Proposed edit 174.
+234. **I15's records, as built: what the register and §12.8 leave unstated** (§12.8 "Rich training
+    records", §15.2's I15 row; register I15, I2, D2, D8; issues 153-155). M21 commit 1 (`lane/net`).
+    Each a reading or a PLACEHOLDER, none a committed-class choice: (a) **the raw root outputs** are
+    the network's evaluation of the decision's own input - the root state expanded as the search's
+    leaves are (the legal-moves filter under the search's legality budget, issue 155) - evaluated
+    once per decision by the generator's evaluator; BUILD_LOG's I15 row planned a memo of every
+    delivered evaluation keyed by `root_key`, but the search's root is often a cache hit served from
+    an earlier search (C14) and a memo spanning a game costs memory, while the root's own evaluation
+    is what the archive can give again (the network's weight hash and the rebuilt input). The
+    engine's normalised WDL of the evaluation the search used is recorded beside it, and the tests
+    hold the two together (to 1e-5) and the search's noise-free prior to the softmax of the raw
+    logits at the root's temperature. (b) **The whole-turn arm writes no records**: its root
+    children are actions while the policy scores single moves, so no policy target is defined (the
+    arm is superseded by the flat form at CHECKPOINT 6); the generator plays the board-move split
+    and the tree form. (c) **Candidate legality** is recorded for the root children only (legal or
+    unknown under the budget; `t5d_game_expand` reports none per move); a child verified illegal at
+    the choice is gone from the record's children, its count kept (`verified_illegal`). (d) **The
+    format**: one compressed `.npz` per game with a JSON header, columns per decision and
+    concatenated per-candidate and per-child arrays with offsets, version 1, another version refused
+    on reading; the network's identity a BLAKE2b-128 hash of its state dict in order; the search
+    configuration every `t5d_search_params` field of the full (and, with PCR, the cheap) search, each
+    decision's seed and root temperature its own. (e) **A decision with nothing played** (a
+    resignation, I18) keeps its search and has played child -1. Proposed edit 175.
 
 <!-- A new list, so that the numbers from 140 render as written. -->
 
@@ -4614,6 +4637,15 @@ struck through, where nothing of it is left to apply); the others stand as writt
     baseline, the network's W - L, stands or falls with edit 172's error-head reading (issue
     231(c), 233(a)); and the head's form and the loss are committed-class and unstated (issue
     233).
+175. **§12.8's "Rich training records" paragraph and register I15**: now - "the network's raw
+    outputs at the root (WDL, value distribution, prior over the legal moves and submit, error
+    head) ... proofs by solved-store reference, and the conditions". Proposed - add as built or as
+    ruled: "the raw outputs are the network's evaluation of the decision's own input, rebuilt as the
+    search's leaves are (the legal-moves filter under the legality budget, recorded), with the
+    network's weight hash; the record keeps the candidate moves, so the input can be rebuilt by
+    replay; a whole-turn decision writes no policy record". Why: which evaluation counts as "raw"
+    when the search's root is a cache hit, and how an archive's input is rebuilt, are unstated
+    (issue 234).
 
 <!-- A new list, so that the numbers from 110 render as written. -->
 

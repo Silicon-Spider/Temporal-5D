@@ -10,6 +10,41 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-23 - M21 (1/4): I15's training records and the self-play generator that writes them
+
+Register M21's first part, in the net lane: the record format before anything that reads it.
+
+- **`python/t5d/train/records.py`** (new): register I15's record, format version 1 - one
+  compressed `.npz` per game (`allow_pickle=False`), a JSON header with the conditions (engine
+  version, ruleset, variant or 5DFEN start, the network's weight hash and configuration, every
+  `t5d_search_params` field - the legality budget among them - the input's window and relations,
+  the generator's configuration, the result, the 5dpgn, the resignation events, the proof
+  references: none, the proof channel being off), per decision the raw root outputs (WDL and
+  categorical logits, a raw logit per candidate move and for submit, error, moves-left), the root
+  search value (q, d), visits, cPUCT, the effort change point, the best and played children, the
+  move and root temperatures, the PCR flag, cap and playouts, the seed and the prior-to-target
+  divergence's slot, the decision's boards and candidate moves, and every root child's statistics
+  (visits with the forced and steered counts, both priors, (q, d), value variance, E3's factor,
+  E10's boost, its key and own network evaluation, the solver bounds). Another version is refused
+  on reading; `record_differences` compares two records bit for bit.
+- **`python/t5d/train/selfplay.py`** (new): the generator - netplay's self-play loop (turn starts
+  judged first, a fresh search per decision sharing the cache, noise on, a chosen child made known
+  legal) writing a record per game; the board-move split and the tree form (the whole-turn arm
+  writes no policy target and is refused); D9's optimistic evaluator refused (`self_play=True` on
+  every search); `replay_positions` rebuilds each decision's network input from a record alone.
+  The raw root outputs are the network's evaluation of the decision's own input (issue 234's
+  reading, not a memo of the search's). `engine/netplay.py` unchanged.
+- **Tests** (`python/tests/train/test_records.py`): records written and read back bit for bit
+  under four configurations (the ply split, the tree form, Two Timelines, a tight legality budget
+  with unknown moves) and a custom 5DFEN start with branched timelines; each decision's input
+  rebuilt from the stored record, digest for digest; the raw WDL equal to the engine's root WDL
+  and the search's noise-free prior the softmax of the raw logits; the conditions present; another
+  version refused; the weight hash following the weights.
+- Nothing trains: the generator plays tiny games with random weights in the tests.
+- Spec: §12.8 "Rich training records", §15.2's I15 row (the targets' half lands with the target
+  builder); register I15, M21, D2, D8, D9, H23/H41. Issue 234; proposed edit 175. BUILD_LOG's I15
+  and M21 rows updated.
+
 ### 2026-10-23 - Network heads review fixes: the error target and D9's z as the register and KataGo have them; the losses' masks, moves-left's unit and the old parameters pinned
 
 Two reviewers of N-D3, N-D4 and N-D9 (spec fidelity; 46 mutants). One high finding, three medium,

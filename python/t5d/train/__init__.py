@@ -1,6 +1,11 @@
-"""Training-side code for the untrained build.
+"""Training-side code for the untrained build (register M21).
 
-Only losses and a few-step smoke test exist: the build brief allows training code to be
-written and smoke-tested with at most a few optimiser steps on synthetic data, and no
-training runs (spec section 15: "build everything; train nothing - first").
+The build brief allows training code to be written and smoke-tested with at most a few
+optimiser steps on synthetic data, and no training runs (spec section 15: "build everything;
+train nothing - first"). What exists:
+
+* ``losses`` - every head's loss over a ``Targets`` interface; ``smoke`` - three optimiser steps
+  on synthetic targets; ``reply_map`` - D4's reply prototype's move space.
+* ``records`` - register I15's training records: one versioned file per self-play game.
+* ``selfplay`` - the generator: self-play through the engine's search, written as records.
 """
