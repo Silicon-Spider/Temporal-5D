@@ -63,7 +63,7 @@ def test_registers_get_type_and_not_a_square_embeddings():
     glob = x[kinds == TOKEN_GLOBAL_REGISTER]
     assert glob.shape[0] == 16 and torch.pdist(glob).min() > 1e-3, "each global register is distinct"
     # Global registers hold no board: identical whatever the boards carry - given the acting
-    # player (register D8, stage N5: the default arm adds its embedding to every global register).
+    # player (register D8, stage N5: its embedding is added to every global register - M20).
     other = collate([synthetic_state(77, 9)])
     acting = int(batch.acting_player[0])
     if int(other.acting_player[0]) != acting:
@@ -81,3 +81,28 @@ def test_registers_get_type_and_not_a_square_embeddings():
     board0 = embed.head_flag(batch.is_head[0, 64]) + embed.active_flag(batch.active[0, 64]) + embed.stm_flag(batch.stm[0, 64])
     dt0 = embed.dt_out(torch.nn.functional.gelu(embed.dt_in(embed.dt_features(batch.dt[0, 64]))))
     assert torch.allclose(x[64], expected + board0 + dt0, atol=1e-6)
+
+
+def test_with_no_global_registers_the_acting_player_is_on_the_board_tokens():
+    """Register D8 with no global registers (an ablation-3 arm; a placeholder, spec issue 225):
+    the acting player's embedding on every square and per-board register, by hand - and under
+    the block-causal scope on the head boards' alone, so no frozen board's input depends on it."""
+    model = build_model(NetConfig(trunk_dtype="fp32", n_layers=1, global_regs=0), seed=0)
+    embed = model.embed
+    batch = collate([synthetic_state(31, 9, n_timelines=3, global_regs=0)])
+    flipped = collate([synthetic_state(31, 9, n_timelines=3, global_regs=0)])
+    flipped.acting_player = 1 - flipped.acting_player
+    acting = int(batch.acting_player[0])
+    shift = embed.acting.weight[1 - acting] - embed.acting.weight[acting]
+    kinds = batch.kind[0]
+    on_board = (kinds == TOKEN_SQUARE) | (kinds == TOKEN_BOARD_REGISTER)
+    head = on_board & (batch.is_head[0] == 1)
+    assert bool(on_board.all()) and bool(head.any()) and not bool(head.all())  # no global register, frozen boards too
+    for block_causal, carriers in ((False, on_board), (True, head)):
+        before = embed(batch, block_causal=block_causal)[0]
+        after = embed(flipped, block_causal=block_causal)[0]
+        assert torch.allclose(after[carriers], before[carriers] + shift, atol=1e-6), block_causal
+        assert torch.equal(after[~carriers], before[~carriers]), block_causal
+    # The model passes the scope: every board token under the dense one, the heads' under the other.
+    assert torch.equal(model.embed_tokens(batch, "dense"), embed(batch))
+    assert torch.equal(model.embed_tokens(batch, "block_causal"), embed(batch, frozen_intrinsic=True, block_causal=True))

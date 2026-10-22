@@ -52,7 +52,11 @@ learned bias on every head - per-row biases on the dense heads too, as "every sw
 "every switch" figures (the table's rows and the training steps) had B6's binned biases on,
 since removed, and no B15; today's "n2-all" carries B15 in their place - a per-layer lookup
 on every head where B6 added one board-pair table per batch - so they are not "n2-all"'s
-either.
+either. And they are of the network before M20's register positions (B8, CHECKPOINT 6): its
+per-board registers sat at a learned off-lattice angle, so only the global registers' pairs
+were merged; position-free per-board registers widen every row's features and recompute the
+register rows - about +35% / +11% per attention call at 240 boards, FP32 / BF16, over that
+default by ``attention.py``'s per-call timings (indicative, not measurements).
 """
 
 from __future__ import annotations

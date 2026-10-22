@@ -31,7 +31,7 @@
  *    the board-move split submitting is an action of its own wherever it is
  *    possible (leaf.submit_possible: the obligations met, T5), legal only where
  *    the submission passes C4 (leaf.submit_legal, exact). Its logit - one
- *    float32 per leaf, read from a global register (D8) - is optional: NULL,
+ *    float32 per leaf, read from the pooled global registers (D8) - is optional: NULL,
  *    or NaN for a leaf, gives the search's placeholder
  *    (t5d_search_params.submit_share). A leaf may be a state whose present has
  *    shifted inside the action (R8: moves may follow the shift).

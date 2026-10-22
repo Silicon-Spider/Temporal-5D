@@ -293,7 +293,7 @@ N2_FLAGS = {
     "b9": dict(),
     "all": dict(routing_table=True, typed_edge_bias=True, board_pair_smolgen=True, rope_per_head=True),
     "no_table": dict(displacement_bias=False),
-    "regs_free_anchored": dict(board_register_spatial="position_free", global_register_pairs="anchored"),
+    "regs_self_mg4": dict(masked_head_registers="self", move_graph_heads=4),
 }
 
 
