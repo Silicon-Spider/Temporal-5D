@@ -79,6 +79,40 @@ class TierConfigTests(unittest.TestCase):
             with self.assertRaises(HarnessError, msg=value):
                 self.load({line: f'\ntimeout_s = {value}\n# "full"'})
 
+    def test_the_engines_baseline_names_a_tier_and_its_pin(self):
+        # H47: what the engine read on the last green run of a tier, pinned like the rulebook (baseline.py).
+        spec = config.load().baseline
+        self.assertEqual(spec.tier, "commit")
+        self.assertRegex(spec.sha256, r"^(?:[0-9a-f]{64})?$")
+        table = f'[baseline]\ntier = "commit"\nsha256 = "{spec.sha256}"\n'
+        for bad in ('[baseline]\ntier = "weekly"\nsha256 = ""\n', '[baseline]\ntier = "commit"\nsha256 = "ABC"\n',
+                    '[baseline]\ntier = "commit"\nsha256 = ""\nmargin = 2\n', '[baseline]\nsha256 = ""\n'):
+            with self.assertRaises(HarnessError, msg=bad):
+                self.load({table: bad})
+        # Before one is recorded, the pin is empty; without the table there is none to compare with.
+        self.assertEqual(self.load({table: '[baseline]\ntier = "commit"\nsha256 = ""\n'}).baseline,
+                         config.Baseline(tier="commit", sha256=""))
+        self.assertIsNone(self.load({table: ""}).baseline)
+
+    def test_a_pin_is_written_into_its_own_table_and_nowhere_else(self):
+        # The baseline's pin and the rulebook's are both `sha256 = "..."`: writing one leaves the other, and every
+        # comment and setting of the file, as it was - whatever its line endings.
+        text = paths.GATE_FILE.read_text(encoding="utf-8")
+        digest = "f" * 64
+        for newline in ("\n", "\r\n"):
+            with tempfile.TemporaryDirectory() as folder:
+                path = Path(folder) / "gate.toml"
+                path.write_bytes(text.replace("\n", newline).encode("utf-8"))
+                config.write_sha256(path, "baseline", digest)
+                written = path.read_bytes().decode("utf-8")
+                loaded = config.load(path)
+                self.assertEqual((loaded.baseline.sha256, loaded.rulebook), (digest, config.load().rulebook))
+                expected = text.replace(f'tier = "commit"\nsha256 = "{config.load().baseline.sha256}"',
+                                        f'tier = "commit"\nsha256 = "{digest}"').replace("\n", newline)
+                self.assertEqual(written, expected)
+                with self.assertRaises(HarnessError):
+                    config.write_sha256(path, "no-such-table", digest)
+
     def test_only_a_tier_that_requires_an_engine_and_runs_everything_can_enable_the_proof_channel(self):
         tiers = config.load().tiers
         self.assertEqual([name for name, tier in tiers.items() if tier.can_enable_proof_channel], ["release"])

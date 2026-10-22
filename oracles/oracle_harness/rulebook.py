@@ -19,16 +19,12 @@ on Linux.
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 from . import config, paths
 from .util import Finding, HarnessError, sha256_text
 
 PIN_COMMAND = f"python {paths.HARNESS_REL}/harness.py rulebook --pin"
-_TABLE = re.compile(r"^\[rulebook\][ \t]*(?:#.*)?$", re.M)
-_NEXT_TABLE = re.compile(r"^\[", re.M)
-_PIN = re.compile(r'^(sha256[ \t]*=[ \t]*)"[0-9a-fA-F]*"', re.M)
 
 
 def rulebook_path(spec: config.Rulebook) -> Path:
@@ -69,17 +65,7 @@ def pin(gate_file: Path | None = None) -> tuple[str, str]:
     current = digest(spec)
     if current is None:
         raise HarnessError(f"the rulebook, {spec.path}, is not there: there is nothing to pin")
-    text = gate_file.read_bytes().decode("utf-8")
-    table = _TABLE.search(text)
-    if table is None:
-        raise HarnessError(f"{gate_file.name}: no [rulebook] table to write the pin into")
-    following = _NEXT_TABLE.search(text, table.end())
-    end = following.start() if following else len(text)
-    body = text[table.end():end]
-    pinned, count = _PIN.subn(lambda match: f'{match.group(1)}"{current}"', body, count=1)
-    if count != 1:
-        raise HarnessError(f'{gate_file.name}: the [rulebook] table has no sha256 = "..." line to update')
-    gate_file.write_bytes((text[:table.end()] + pinned + text[end:]).encode("utf-8"))
+    config.write_sha256(gate_file, "rulebook", current)
     if config.load(gate_file).rulebook.sha256 != current:  # what was written must read back as the pin
         raise HarnessError(f"{gate_file.name}: the rulebook pin did not read back as written")
     return spec.sha256, current

@@ -85,6 +85,16 @@ class Rulebook:
 
 
 @dataclass(frozen=True)
+class Baseline:
+    """The engine's baseline (decision H47; baseline.py): which tier's green run it records, and the file's pin."""
+
+    tier: str  # the tier whose last green run it records: "commit"
+    # The SHA-256 of oracles/engine-baseline.json (CRLF folded to LF), written by `baseline --write`; "" until a
+    # baseline is recorded.
+    sha256: str
+
+
+@dataclass(frozen=True)
 class Waiver:
     path: str
     rule: str
@@ -116,6 +126,8 @@ class GateConfig:
     # [engine] timeout_s: the engine's wall clock per record in every tier, where it is longer than the tier's own.
     # None: the tier's own.
     engine_timeout_s: float | None = None
+    # [baseline]: what the engine read on the last green run (H47). None: the file has no such table.
+    baseline: Baseline | None = None
 
     def engine_timeout(self, tier: Tier) -> float:
         """The engine's wall clock per record in this tier: [engine] timeout_s, or the tier's timeout_s if longer.
@@ -194,6 +206,49 @@ def _rulebook(data: dict, name: str) -> Rulebook:
     if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
         raise HarnessError(f"{where}: sha256 must be the 64 lower-case hex digits of the rulebook's SHA-256")
     return Rulebook(path=path, sha256=digest)
+
+
+def _baseline(data: dict, tiers: dict[str, Tier], name: str) -> Baseline | None:
+    table = data.get("baseline")
+    if table is None:
+        return None
+    where = f"{name} [baseline]"
+    if not isinstance(table, dict):
+        raise HarnessError(f"{where}: must be a table")
+    strays = sorted(set(table) - {"tier", "sha256"})
+    if strays:
+        raise HarnessError(f"{where}: unknown key(s) {', '.join(strays)} - it holds the tier whose green run the "
+                           "baseline records, and the baseline's pin")
+    tier = table.get("tier")
+    if not isinstance(tier, str) or tier not in tiers:
+        raise HarnessError(f"{where}: tier must name a tier (have: {', '.join(tiers)})")
+    digest = table.get("sha256", "")
+    if not isinstance(digest, str) or not re.fullmatch(r"(?:[0-9a-f]{64})?", digest):
+        raise HarnessError(f'{where}: sha256 must be the 64 lower-case hex digits of the baseline\'s SHA-256, or "" '
+                           "until one is recorded (baseline --write)")
+    return Baseline(tier=tier, sha256=digest)
+
+
+_NEXT_TABLE = re.compile(r"^\[", re.M)
+_PIN_LINE = re.compile(r'^(sha256[ \t]*=[ \t]*)"[0-9a-fA-F]*"', re.M)
+
+
+def write_sha256(gate_file: Path, table: str, digest: str) -> None:
+    """Rewrite the `sha256 = "..."` line of one table of gate.toml - a pin (the rulebook's, the baseline's).
+
+    Only that one value of the file changes: its comments and every other
+    setting are kept as they are.
+    """
+    text = gate_file.read_bytes().decode("utf-8")
+    found = re.search(rf"^\[{re.escape(table)}\][ \t]*(?:#[^\r\n]*)?\r?$", text, re.M)
+    if found is None:
+        raise HarnessError(f"{gate_file.name}: no [{table}] table to write the pin into")
+    following = _NEXT_TABLE.search(text, found.end())
+    end = following.start() if following else len(text)
+    body, count = _PIN_LINE.subn(lambda match: f'{match.group(1)}"{digest}"', text[found.end():end], count=1)
+    if count != 1:
+        raise HarnessError(f'{gate_file.name}: the [{table}] table has no sha256 = "..." line to update')
+    gate_file.write_bytes((text[:found.end()] + body + text[end:]).encode("utf-8"))
 
 
 def load(path: Path | None = None) -> GateConfig:
@@ -289,4 +344,5 @@ def load(path: Path | None = None) -> GateConfig:
                            "0 < copy_min_line_chars < copy_long_line_chars")
     return GateConfig(cap=cap, engine_command=tuple(command), tiers=tiers, boundary=boundary,
                       stability=_stability(data, tiers, path.name), calibration=_calibration(data, path.name),
-                      rulebook=_rulebook(data, path.name), engine_mode=mode, engine_timeout_s=engine_timeout)
+                      rulebook=_rulebook(data, path.name), engine_mode=mode, engine_timeout_s=engine_timeout,
+                      baseline=_baseline(data, tiers, path.name))

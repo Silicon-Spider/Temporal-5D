@@ -10,6 +10,203 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-22 - Build log: the gate lane's step 1 done; issue 217 and two AGENTS.md lines wait on the user
+
+- `docs/BUILD_LOG.md`, "Current state": the gate lane's step 1 is merged; "Waiting on
+  the user" gains spec issue 217 (B17's class set) and the two lines the gate lane
+  proposes for AGENTS.md (the engine baseline is never edited by hand; a LOSS is never
+  recorded to make a gate run pass).
+- Spec: none.
+
+### 2026-10-22 - G3b-H47-CP8 review fixes: the baseline read verified before it is replaced; restricted runs skip the proof-channel readiness check; the ftxi question cites C7's sources
+
+Thirteen review findings on the two entries below (none refuted).
+
+- **`baseline --write` replaces only the pinned baseline** (`oracles/oracle_harness/gate.py`
+  `write_baseline`, `baseline.py`). It read the file it replaces leniently
+  (`read_previous`, removed), so a hand edit of the file could empty the `LOSS` list it
+  prints. It now reads it with `baseline.load` against the `[baseline]` pin and, where the
+  file is not the one pinned (edited, or gone), runs and writes nothing; the integrity and
+  missing findings now say to restore the file (`git checkout -- oracles/engine-baseline.json`),
+  never to record over it. `baseline.static_findings` also fails a baseline that holds no
+  line for a record of its tier (`engine-baseline-stale`), so `verify` - not only
+  `selftest` - catches a record added to the commit tier, or a line deleted. The docs
+  (`baseline.py`, `integrity.py`, `gate.toml`'s comment, the README's integrity bullet and
+  "The engine's baseline", `CONTRIBUTING.md`) now say that every read is verified and state
+  the pin's limit as MANIFEST's: a file edited together with its pin passes it - review's
+  job (H33). `CONTRIBUTING.md`'s "Changing a pin" (a new step 8) and "Adding game records"
+  say to record the baseline again after a change to the commit tier's records;
+  `test_repository`'s assertion names the command.
+- **Restricted runs** (`gate.py`): a restricted run of the release tier no longer makes the
+  proof-channel readiness check (`proof-channel-vacuous`, a check of the tier as a whole
+  that only a complete run can act on; `verify` still prints it) - it failed every
+  restricted release run on H48's 17 notes. A restricted report's `ok` is now null, like
+  `oracle_layer_ok`, so that no script reads it as a tier pass; its `findings` say what it
+  found. Tests: parse mode's floor with `floor=False`, a whole restricted parse-mode run
+  of an engine that declines everything (no finding; the complete run fails on
+  `engine-nothing-compared`), a restricted release run with no readiness section, the
+  report's `ok`, and `baseline --write` refusing an edited or missing baseline.
+- **Documents**: `oracles/README.md`'s smoke-test paragraph no longer says a commit-tier
+  ruleset can meet the gating conditions with that tier's oracles alone. `docs/BUILD_LOG.md`:
+  the H47 row (what changed for a restricted run; the `AGENTS.md` lines put to the user -
+  never edit the baseline or its pin by hand, never record a `LOSS` to make a gate run
+  pass); issue 126's ruling line in main's exact wording (a8a5920) and its built note;
+  issues 132 (a) and 133; proposed edit 104 carries H33's double-edit limit to the
+  baseline's pin.
+- **The ftxi question** (`docs/checkpoints/upstream/ftxi-check-test-passed-boards.md`): the
+  sources C7 cites added in the rulebook's rank order (wiki.gg's Exiling page, TV Tropes
+  with C7's caveat, and the forum statements on boards ahead of the present - Asp,
+  Patashu, Dark MAvL - and on inactive timelines - Perseus, Rayalot72); "92 positions in 12
+  game records (91 distinct in 11 games: cwmtt/NP and NP0 are one game)"; the copy the
+  attacker moves from is the next half-turn's board, distances counted from it; the
+  captures named as those `check_position::for_phantom(...).checks()` lists (what the
+  driver observed), not `phantom().find_checks()`; R1 quoted in full, no paraphrase in
+  quotation marks, "cwmtt has no check verdict", and the inactive-timeline proviso for
+  positions 3 and 5. `docs/checkpoints/upstream/README.md` and the entry below corrected
+  to match.
+- Checks (2026-10-22, MSYS2 g++; timings on a shared machine are not measurements): `py
+  engine/build.py --werror` - nothing to rebuild; `harness.py verify` - every section ok,
+  `engine baseline` among them, H48's 17 `proof-channel-vacuous` notes as before;
+  `harness.py baseline` - the pinned baseline (ad689cf3be80), unchanged; `selftest` - 663
+  tests OK, 1 skipped; `gate --tier commit` - ok, `SMOKE TEST - PASSED`, the baseline 41
+  compared and 0 declined; `gate --tier nightly` - ok, `PASSED`, every source's required
+  set reproduced, gating Standard - Half Reflected (2 oracles) and Standard - Reversed
+  Royalty (3), as before; `gate --tier release --source notation --record notation/1.1
+  --tracked-only` - `restricted - not a tier result: ... - 0 findings`, exit 0 (it exited
+  1 on the 17 readiness findings before); `ruff check oracles` - clean.
+- Spec: §11.0 "Tiered CI", "Recorded-answer integrity" and "A known-divergences file";
+  register H47, H33, H27, H36 (R1, C7). Spec issues 126, 132, 133 (built notes corrected);
+  proposed edit 104 (extended: the pin's limit). No golden file, budget, `min_checked`,
+  margin, `proof_share`, waiver, adapter or driver changed; the baseline and its pin are
+  unchanged.
+
+### 2026-10-17 - Gate H27 (CHECKPOINT 8): the ftxi check-reading question drafted for upstream
+
+The user's ruling on spec issue 126: "report it too, as a question citing the source and a
+few representative positions, not as a bug: if ftxi's author can show the game behaves
+ftxi's way, our rulebook is wrong and we want to know. Draft it in
+docs/checkpoints/upstream/; I'll file it."
+
+- `docs/checkpoints/upstream/ftxi-check-test-passed-boards.md` (new): a question to
+  ftxi's author, in the form of the two bug-report drafts beside it. To tell checkmate from
+  stalemate, `state::phantom()` passes every timeline whose last board is the player's to
+  play; ruling R1 passes only the active boards in the present. The draft quotes R1, the
+  code (two lines, with a permalink at the pin), the sources R1 rests on as the rulebook
+  ranks them - the current in-game Guide (silent on which boards are passed), the older
+  guide text and the developer's remark ("in the present"), Wikipedia's sentence R1
+  adopts - and the evidence the other way (a client observation reported in the
+  developer-quoting document, wiki.gg), and says which positions each reading puts in
+  check. Five representative positions from public records, one from each of CHECKPOINT
+  1's rule questions RQ1-RQ4 (`docs/checkpoints/checkpoint-1-check-clusters.md`: silly@28,
+  Bg2@19, niceAndrey@57, manyChecks@20, standard@13): the record at its pinned commit, the
+  `--at` turn, the boards the player must and may play, the capture ftxi finds and why R1
+  does not count it. Each capture re-observed 2026-10-17 through the pinned library (the
+  harness's ftxi driver, `observe --explain`: `has_phantom_check()` and the captures
+  ftxi's royal-capture scanner lists on the phantom, `check_position::for_phantom(...)
+  .checks()` - not `phantom().find_checks()`, as first written here; corrected in the
+  review fixes above) and each position's timeline counts with the stock
+  `5dtools stats`. `docs/checkpoints/upstream/README.md` lists it, with what to check
+  before filing.
+- `oracles/known-divergences.toml`: the 147 entries R1 settles (ftxi's and ftxi:naive's
+  check verdicts, 92 positions in 12 records) now say `unreported: ... drafted as a
+  question citing the source in docs/checkpoints/upstream/ftxi-check-test-passed-boards.md,
+  to be filed by the project owner (CHECKPOINT 8)`; the header says what follows from the
+  answer. No binding (oracle, pin, record, kind, index, values) and no citation changed.
+- `oracles/README.md`, "Known divergences": defects reported as bugs and disagreements with
+  a documented rule as questions (H27), and what is drafted. `docs/BUILD_LOG.md`: issue
+  126's ruling and built notes, register row H27.
+- Checks (2026-10-17): `py engine/build.py --werror` - nothing to rebuild; `harness.py verify` - every
+  section ok, H48's 17 `proof-channel-vacuous` notes as before; `selftest` - 660 tests OK, 1
+  skipped; `gate --tier commit` - ok, `SMOKE TEST - PASSED`, the baseline 41 compared and 0
+  declined; `gate --tier nightly` - ok, `PASSED`, gating Standard - Half Reflected and Standard
+  - Reversed Royalty, as before; `gate --tier nightly --source ftxi --record cwmtt/silly` -
+  `restricted - not a tier result: ... - 0 findings`, exit 0.
+- Spec: §11.0 "A known-divergences file" ("reported upstream - defects as bug reports,
+  disagreements with a documented rule as questions citing the source ...; the owner files
+  them"); register H27, H36 (R1). Spec issue 126 (ruled at CHECKPOINT 8; built); proposed
+  edit 99 (b) applies - no edit until the question is filed.
+
+### 2026-10-17 - Gate H47 (CHECKPOINT 8): two oracles to gate a ruleset; the commit tier's last-green-run rule; restricted runs never a tier verdict
+
+The user's CHECKPOINT 8 rulings on spec issues 122-124 (register H47 as amended).
+
+- **Two oracles to gate a ruleset** (issue 122: "a ruleset is gated only when two or more
+  oracles answer for it. A single oracle cannot tell its own bug from ours").
+  `oracles/oracle_harness/gate.py`: `engine_differential` gates a ruleset only if each of
+  its records was followed, as far as the engine went, by at least `GATING_ORACLES` (2)
+  independent implementations - the count `Gated.oracles` already gave; two searches of
+  one implementation count once, the notation parser never. A record one oracle follows
+  ungates its ruleset with its own reason, naming the record and the oracle. In every
+  tier; the commit tier, with one rules oracle, can no longer meet the conditions at all.
+  Nightly, run with the engine: PASSED, gating Standard - Half Reflected (two oracles behind its
+  record) and Standard - Reversed Royalty (three) - and no longer Standard - Turn Zero, whose
+  cwmtt/tesseractMageOChicken only cwmtt follows as far as the engine goes.
+- **The commit tier's last-green-run rule** (issue 123: "the commit tier fails if the
+  engine declines a record it read on the last green run, or reads none").
+  `oracles/oracle_harness/baseline.py` (new): the engine's baseline,
+  `oracles/engine-baseline.json` (new) - for each commit-tier record, how the engine's
+  replay ended and how many positions it reported on a green run, one record per line.
+  Kept as H33 keeps recorded answers: written only by the new `harness.py baseline
+  --write`, which runs the `[baseline]` tier in full and records only from a run green
+  on everything else, then lists what the new file no longer holds (`LOSS`) first; never
+  by a gate run or the engine; pinned by its SHA-256 in `gate.toml` `[baseline]` (new) -
+  beside the rulebook's pin, not in `golden/MANIFEST`, which every `golden --write`
+  rewrites - and read once per run, verified (`snapshot.take`), and checked by `verify`
+  (`engine-baseline-missing`, `-integrity`, `-invalid`, `-stale`); `harness.py baseline`
+  checks it alone. Every tier fails an engine that reads less of a record than then -
+  fewer positions, or as many without the verdict it ended with (`engine-declined`) -
+  or replays none of the tier's records (`engine-read-nothing`); the summary and report
+  say what was compared. Recorded from a green commit run of the engine as built on this
+  branch: 35 of the 41 records replayed. `paths.ENGINE_BASELINE_FILE`;
+  `integrity.harness_files` hashes it wherever a test points it; `config.Baseline`, and
+  `config.write_sha256`, now also the rulebook's pin writer (`rulebook.pin`, unchanged
+  in behaviour).
+- **Restricted runs never a tier verdict** (issue 124: "A restricted run (--source/--record)
+  never produces a tier verdict; label its output 'restricted - not a tier result'").
+  `gate.py`: `GateResult.restricted_to` replaces `partial`; any `--source` or `--record`
+  restricts. Such a run prints and reports `restricted - not a tier result`, no `oracle
+  layer [tier]` line, no ruleset gated or not, no smoke-test line, a proof channel
+  `DISABLED - restricted - not a tier result`; it reports every finding and its exit code
+  reflects them only - none of the checks of a tier as a whole (`engine-nothing-gated`,
+  `engine-read-nothing`, `engine-nothing-compared`, `require_engine`). Its report is
+  `gate-<tier>-restricted.json`. This undoes the reading built for issue 124 (a
+  restricted run kept its tier's rule).
+- Tests: `oracles/tests/test_baseline.py` (new: the readings of "declines" and "reads
+  none", the comparison, the file, its pin and its static check), and in `test_gate.py`
+  the two-oracle rule (one oracle, two searches of one, a parse-only source, a weakest
+  record), the baseline in whole gate runs (a decline in every tier, reading none, an
+  engine that edits its baseline while it runs, a baseline edited by hand, missing or
+  stale, `baseline --write` from green and non-green runs), restricted runs (result,
+  summary, report); `test_config.py` (the `[baseline]` table; a pin written into its own
+  table, either line ending); `test_integrity.py`; `test_repository.py` (the repository's
+  baseline pinned, current and complete); `test_gate_live.py` - its runs are restricted
+  runs, holding the stand-in to a baseline of its own honest run. 660 self-tests, from
+  638: `test_baseline.py`'s 13, 6 more in `test_gate.py` (99 to 105), 2 in
+  `test_config.py`, 1 in `test_repository.py`.
+- Documents: `oracles/README.md` (the tier table, the engine contract's conditions, the
+  smoke test, a new "The engine's baseline", recorded-answer integrity, "Other
+  commands"); `oracles/gate.toml`'s comments; `CONTRIBUTING.md`; `docs/BUILD_LOG.md`
+  (register rows H23, H27, H47; issues 122-124's built notes; issues 131-133; edits
+  103-104).
+- Checks (2026-10-17, MSYS2 g++ 16.2; timings on a shared machine are not
+  measurements): `py engine/build.py --werror` - nothing to rebuild (the engine is
+  unchanged on this branch); `harness.py verify` - every section ok, `engine baseline`
+  among them, with H48's 17 `proof-channel-vacuous` notes as before; `harness.py
+  baseline` - the pinned baseline (ad689cf3be80); `selftest` - 660 tests OK, 1 skipped
+  (symlinks cannot be created by this Windows profile); `gate --tier commit` - ok, `SMOKE
+  TEST - PASSED`, ftxi 8256 of 8256 and notation 3012 of 3012 required values
+  reproduced, the baseline 41 records compared and 0 declined, Standard - Reversed Royalty
+  `NOT gated` with the one-oracle reason (ftxi alone); `gate --tier nightly` - ok,
+  `PASSED`, every source's required set reproduced, gating the two rulesets above; `gate
+  --tier nightly --source ftxi --record cwmtt/standard` - `restricted - not a tier result:
+  ... - 0 findings`, the proof channel `DISABLED - restricted - not a tier result`, exit 0,
+  its report `gate-nightly-restricted.json`; `ruff check oracles` - clean.
+- Spec: §11.0 "Tiered CI" and "Recorded-answer integrity"; register H47 (built), H33,
+  H27, H23. Spec issues 122-124 (ruled at CHECKPOINT 8; built), 131 (the two-oracle
+  rule per record), 132 (the baseline: what it records, "declines", "reads none", every
+  tier), 133 (restricted runs); proposed edits 103 (§11.0 "Tiered CI", H47 as built) and
+  104 (§11.0 "Recorded-answer integrity", H33: the baseline as a recorded answer).
+
 ### 2026-10-17 - Build log: the current state after the evening's merges
 
 - `docs/BUILD_LOG.md`, "Current state (2026-10-17)": what is on main now - H47, F5/F6,
