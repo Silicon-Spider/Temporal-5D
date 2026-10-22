@@ -412,6 +412,7 @@ constexpr LayoutEntry kLayout[] = {
     T5D_SEARCH_AT(t5d_search_summary, root_key),
     T5D_SEARCH_AT(t5d_search_summary, root_cpuct),
     T5D_SEARCH_AT(t5d_search_summary, root_best_since),
+    T5D_SEARCH_AT(t5d_search_summary, uncertainty_missing),
 
     T5D_SEARCH_SIZE(t5d_search_limits),
     T5D_SEARCH_AT(t5d_search_limits, playouts),
@@ -659,6 +660,16 @@ t5d_status t5d_search_deliver_evaluations(t5d_search* search, const t5d_evaluati
         throw std::invalid_argument("deliver: " + std::to_string(b.wdl_count) + " WDL numbers for " +
                                     std::to_string(leaves) + " leaves (3 per leaf, required: D3's value)");
       }
+      // Both kinds are checked whatever is given (a binding's wrong constant is
+      // caught on its first delivery, not the first with a categorical).
+      const auto check_kind = [](int32_t kind, const char* name) {
+        if (kind != T5D_VALUE_PROBABILITIES && kind != T5D_VALUE_LOGITS) {
+          throw std::invalid_argument(std::string("deliver: ") + name +
+                                      " must be T5D_VALUE_PROBABILITIES or T5D_VALUE_LOGITS");
+        }
+      };
+      check_kind(b.wdl_kind, "wdl_kind");
+      check_kind(b.value_kind, "value_kind");
       const bool submits = per_leaf(b.submit_logits, b.submit_count, leaves, 1, "submit logits");
       const bool values = per_leaf(b.values, b.value_count, leaves, T5D_VALUE_BINS, "categorical values");
       const bool errors = per_leaf(b.errors, b.error_count, leaves, 1, "error-head outputs");
@@ -774,6 +785,7 @@ t5d_status t5d_search_info(const t5d_search* search, t5d_search_summary* out) {
     out->root_key = root.key;
     out->root_cpuct = s.root_cpuct();
     out->root_best_since = s.root_best_since();
+    out->uncertainty_missing = st.uncertainty_missing;
     return T5D_OK;
   });
 }

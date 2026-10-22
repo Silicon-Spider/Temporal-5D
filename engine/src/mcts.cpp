@@ -539,6 +539,10 @@ struct Search::Impl {
   // edge order - filled by the root's own expansion; empty for a carried root
   // (expanded as a child: its prior is that already).
   std::vector<double> root_prior_noise_free_;
+  // ... and the Dirichlet concentration the root noise drew each edge's
+  // variate with (E1: dirichlet_alphas over the open edges; a pruned edge's
+  // unused one), in the same order - empty when no noise was drawn.
+  std::vector<double> root_noise_alpha_;
   // D4's effort label (I15): the root edge with the most visits, and the root's
   // visits when it became so ("visits until the decision stabilises", §8.6).
   std::size_t best_edge_ = kNoEdge;
@@ -969,7 +973,18 @@ struct Search::Impl {
 
   // -- expanding a node with its evaluation ----------------------------------------
 
-  static void check_evaluation(const Evaluation& ev, std::size_t moves) {
+  // 6m (register I10; build-log spec issue 149): whether E2, E3 or E5's
+  // optional term reads a node's uncertainty signal, and whether an
+  // evaluation lacks the one uncertainty_source selects.
+  bool uncertainty_read() const noexcept {
+    return params_.variance_scaled_cpuct || params_.uncertainty_weighted_backup || params_.variance_bonus ||
+           (params_.final_rule == FinalRule::Lcb && params_.lcb_categorical_weight > 0);
+  }
+  bool lacks_uncertainty(const Evaluation& ev) const noexcept {
+    return params_.uncertainty_source == UncertaintySource::ErrorHead ? std::isnan(ev.error) : !ev.value;
+  }
+
+  void check_evaluation(const Evaluation& ev, std::size_t moves) const {
     if (ev.logits.size() != moves) {
       throw std::invalid_argument("an evaluation has " + std::to_string(ev.logits.size()) +
                                   " logits for " + std::to_string(moves) + " candidate moves");
@@ -988,6 +1003,17 @@ struct Search::Impl {
     if (!std::isnan(ev.moves_left) && !(std::isfinite(ev.moves_left) && ev.moves_left >= 0)) {
       throw std::invalid_argument("an evaluation's moves-left is negative or infinite (NaN: none given)");
     }
+    // 6m: a signal that is read must be given - refused, not read as 0 (a
+    // missing signal taken as no variance would halve E2's cPUCT and give the
+    // backup its largest weight: a 6m arm run silently wrong).
+    if (uncertainty_read() && lacks_uncertainty(ev)) {
+      throw std::invalid_argument(
+          params_.uncertainty_source == UncertaintySource::ErrorHead
+              ? "an evaluation has no error head output (NaN), the uncertainty signal uncertainty_source selects, "
+                "while E2, E3 or E5's term reads it"
+              : "an evaluation has no categorical, the uncertainty signal uncertainty_source selects, "
+                "while E2, E3 or E5's term reads it");
+    }
   }
 
   void expand_node(NodeId id, const Evaluation& ev, const Expansion& x) {
@@ -995,7 +1021,9 @@ struct Search::Impl {
     const MoveList& moves = x.moves();
     check_evaluation(ev, moves.size());
     // D3: the value search uses is the WDL's; the uncertainty signal is the
-    // categorical's variance or the error head's output (6m), 0 without one.
+    // categorical's variance or the error head's output (6m) - 0 without one,
+    // which only a search that reads no signal accepts (check_evaluation), and
+    // counted.
     const WdlValue v = wdl_value(ev.wdl);
     n.eval_mean = v.q;
     n.eval_draw = v.d;
@@ -1006,6 +1034,7 @@ struct Search::Impl {
     } else {
       n.eval_var = ev.value ? value_moments(*ev.value).variance : 0.0;
     }
+    if (lacks_uncertainty(ev)) ++stats_.uncertainty_missing;
     n.has_eval = true;
     n.edges.clear();
     std::vector<double> logits;
@@ -1125,6 +1154,7 @@ struct Search::Impl {
       std::vector<double> before;
       before.reserve(n.edges.size());
       for (const Edge& e : n.edges) before.push_back(e.prior);
+      root_noise_alpha_.clear();
       if (params_.root_noise && !noise_applied_ && n.edges.size() > 1) {
         apply_noise(n);
         noise_applied_ = true;
@@ -1138,10 +1168,13 @@ struct Search::Impl {
       std::vector<Edge> sorted;
       sorted.reserve(n.edges.size());
       root_prior_noise_free_.clear();
+      std::vector<double> alphas;
       for (const std::size_t i : order) {
         sorted.push_back(n.edges[i]);
         root_prior_noise_free_.push_back(before[i]);
+        if (root_noise_alpha_.size() == order.size()) alphas.push_back(root_noise_alpha_[i]);
       }
+      root_noise_alpha_ = std::move(alphas);
       n.edges = std::move(sorted);
       best_edge_ = kNoEdge;
       best_since_ = 0;
@@ -1180,13 +1213,16 @@ struct Search::Impl {
                                     : params_.dirichlet_alpha;
     detail::SplitMix rng{params_.seed ^ detail::mix64(n.key)};
     std::vector<double> eta(n.edges.size());
+    std::vector<double> drawn(n.edges.size());
     double sum = 0;
     std::size_t k = 0;
     for (std::size_t i = 0; i < n.edges.size(); ++i) {
       const double alpha = n.edges[i].pruned ? pruned_alpha : alphas[k++];
+      drawn[i] = alpha;
       eta[i] = detail::gamma_sample(alpha, rng);
       sum += eta[i];
     }
+    root_noise_alpha_ = std::move(drawn);
     if (!(sum > 0)) return;
     double open = 0;  // the noise goes to the edges that may be taken
     for (std::size_t i = 0; i < n.edges.size(); ++i) open += n.edges[i].pruned ? 0.0 : eta[i];
@@ -1316,7 +1352,9 @@ struct Search::Impl {
 
   // MCGS: whether to back up a correction through edge (pid, ei) into the
   // existing node cid instead of descending (Czech et al.: the edge's Q lags
-  // the node's by more than epsilon; an edge never crossed takes the node's value).
+  // the node's by more than epsilon; an edge never crossed takes the node's
+  // value). D3: the draw probability is part of the value, so a D that lags by
+  // more than epsilon is corrected the same way (the one epsilon for both).
   bool needs_residual(NodeId pid, std::size_t ei, NodeId cid) const noexcept {
     const Node& c = nodes_[cid];
     if (!c.expanded || c.terminal != Terminal::None || solved(c) || c.stuck || c.visits == 0) {
@@ -1325,7 +1363,8 @@ struct Search::Impl {
     const Edge& e = nodes_[pid].edges[ei];
     const double vc = detail::sign_between(nodes_[pid], c) * node_q(c);
     if (e.visits == 0 || !(e.w > 0)) return true;
-    return std::abs(e.wq / e.w - vc) > params_.residual_epsilon;
+    return std::abs(e.wq / e.w - vc) > params_.residual_epsilon ||
+           std::abs(e.wd / e.w - node_d(c)) > params_.residual_epsilon;
   }
 
   // -- backup ------------------------------------------------------------------------
@@ -1770,6 +1809,7 @@ struct Search::Impl {
     // its effort label starts here (the history above it is not kept).
     noise_applied_ = nodes_[0].expanded;
     root_prior_noise_free_.clear();
+    root_noise_alpha_.clear();
     reset_best();
     ++stats_.reroots;
     notify_root();
@@ -2053,6 +2093,7 @@ std::vector<RootChild> Search::root_children() const {
     c.child = e.child;
     // I15's side table.
     c.prior_noise_free = s.root_prior_noise_free_.size() == r.edges.size() ? s.root_prior_noise_free_[i] : e.prior;
+    c.noise_alpha = s.root_noise_alpha_.size() == r.edges.size() ? s.root_noise_alpha_[i] : 0.0;
     if (e.w > 0) {
       const double mean = e.wq / e.w;
       c.value_variance = std::max(0.0, e.wq2 / e.w - mean * mean);

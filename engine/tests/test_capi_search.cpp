@@ -14,6 +14,7 @@
 #include <memory>
 #include <span>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "t5d/capi.h"
@@ -205,7 +206,10 @@ TEST(capi_search_step_api_reproduces_the_cpp_search) {
   // (D3) - builds the graph the C++ search builds with the same answers, bit
   // for bit (H15's digest: every node's and edge's statistics, priors and
   // backed-up draws included, so every submit prior below the root too), under
-  // either uncertainty signal (6m).
+  // either uncertainty signal (6m) - with root noise, a root policy temperature,
+  // E2 and E3 on, so that the root's side table (each child's noise-free prior,
+  // value variance, E3 factor and key) and the root's cPUCT and effort label
+  // read back through the C API field for field.
   for (const int32_t split : {T5D_SPLIT_BOARD_MOVE, T5D_SPLIT_WHOLE_TURN}) {
     for (const int32_t graph : {0, 1}) {
       const int32_t source = graph != 0 ? T5D_UNCERTAINTY_ERROR_HEAD : T5D_UNCERTAINTY_CATEGORICAL;
@@ -217,6 +221,9 @@ TEST(capi_search_step_api_reproduces_the_cpp_search) {
       p.batch_size = 4;
       p.uncertainty_source = source;
       p.variance_scaled_cpuct = 1;  // E2 on: the signal steers selection
+      p.variance_bonus = 1;         // E3 on: each child's factor
+      p.root_noise = 1;
+      p.root_policy_temperature = 1.3;
       const SearchHandle s = new_search(g.get(), p);
       drive_hashed(s.get(), 200, 4);
 
@@ -227,6 +234,9 @@ TEST(capi_search_step_api_reproduces_the_cpp_search) {
       q.batch_size = 4;
       q.uncertainty_source = static_cast<t5d::mcts::UncertaintySource>(source);
       q.variance_scaled_cpuct = true;
+      q.variance_bonus = true;
+      q.root_noise = true;
+      q.root_policy_temperature = 1.3;
       q.expand.square_features = t5d::SquareFeatures::None;
       t5d::mcts::Search reference(t5d::variant_start(*t5d::find_variant("Standard - Two Timelines")), q);
       Hashed ev;
@@ -241,6 +251,14 @@ TEST(capi_search_step_api_reproduces_the_cpp_search) {
       CHECK_EQ(digest, reference.digest());
       const std::vector<t5d::mcts::RootChild> children = reference.root_children();
       REQUIRE_EQ(info.root_children, static_cast<std::uint64_t>(children.size()));
+      // The root's cPUCT (E2's scale on it) and effort label.
+      CHECK_EQ(info.root_cpuct, reference.root_cpuct());
+      CHECK(info.root_cpuct != p.cpuct);
+      CHECK_EQ(info.root_best_since, reference.root_best_since());
+      CHECK(info.root_best_since > 0);
+      std::size_t noised = 0;
+      std::size_t scaled = 0;
+      std::size_t spread = 0;
       for (std::size_t i = 0; i < children.size(); ++i) {
         t5d_root_child c;
         std::vector<t5d_move> moves(8);
@@ -249,6 +267,14 @@ TEST(capi_search_step_api_reproduces_the_cpp_search) {
         CHECK_EQ(c.prior, children[i].prior);
         CHECK_EQ(c.q, children[i].q);
         CHECK_EQ(c.d, children[i].d);
+        // I15's side table, field for field.
+        CHECK_EQ(c.prior_noise_free, children[i].prior_noise_free);
+        CHECK_EQ(c.value_variance, children[i].value_variance);
+        CHECK_EQ(c.exploration_scale, children[i].exploration_scale);
+        CHECK_EQ(c.child_key, children[i].child_key);
+        noised += c.prior_noise_free != c.prior ? 1u : 0u;
+        scaled += c.exploration_scale != 1.0 ? 1u : 0u;
+        spread += c.value_variance != c.d && c.value_variance > 0 ? 1u : 0u;
         CHECK_EQ(c.evaluated != 0, children[i].evaluated);
         if (c.evaluated != 0) {
           for (int k = 0; k < T5D_WDL; ++k) CHECK_EQ(c.network_wdl[k], children[i].network_wdl[static_cast<std::size_t>(k)]);
@@ -264,6 +290,11 @@ TEST(capi_search_step_api_reproduces_the_cpp_search) {
           CHECK(moves[m].to_board >= 0);
         }
       }
+      // Not vacuous: the noise moved priors, E3 scaled children, and values
+      // varied (a variance that is not the draw probability).
+      CHECK(noised > 0);
+      CHECK(scaled > 0);
+      CHECK(spread > 0);
     }
   }
   // The digest's own errors.
@@ -386,6 +417,23 @@ TEST(capi_search_errors_release_the_batch) {
   });
   // A kind that does not exist; a categorical that is no distribution, or the wrong count.
   refused(T5D_ERR_ARGUMENT, [&] { return deliver(s.get(), l, {}, wdl, values, 7); });
+  // Each kind is checked whatever is given: value_kind with no categorical, wdl_kind beside a good one.
+  for (const auto [wdl_kind, value_kind] : {std::pair{T5D_VALUE_PROBABILITIES, 7}, std::pair{-1, T5D_VALUE_LOGITS}}) {
+    refused(T5D_ERR_ARGUMENT, [&] {
+      t5d_evaluations b{};
+      b.logits = l.data();
+      b.logit_count = l.size();
+      b.wdl = wdl.data();
+      b.wdl_count = wdl.size();
+      b.wdl_kind = wdl_kind;
+      b.value_kind = value_kind;
+      char* message = nullptr;
+      const t5d_status st = t5d_search_deliver_evaluations(s.get(), &b, &message);
+      CHECK(message != nullptr && std::string(message).find(wdl_kind == -1 ? "wdl_kind" : "value_kind") != std::string::npos);
+      t5d_free(message);
+      return st;
+    });
+  }
   refused(T5D_ERR_ARGUMENT, [&] {
     return deliver(s.get(), l, {}, wdl, std::vector<float>(T5D_VALUE_BINS, 0.0f), T5D_VALUE_PROBABILITIES);
   });
@@ -412,6 +460,37 @@ TEST(capi_search_errors_release_the_batch) {
   REQUIRE_EQ(t5d_search_gather(s.get(), 4, T5D_NO_LIMIT, &n, nullptr), T5D_OK);
   // The optional heads absent (NULL, 0); NaN for "none given" at a leaf.
   CHECK_EQ(deliver(s.get(), l, {}, wdl, {}, T5D_VALUE_PROBABILITIES, {std::nanf("")}, {std::nanf("")}), T5D_OK);
+  {
+    // 6m: nothing reads the uncertainty signal here - its absence is counted.
+    t5d_search_summary counted;
+    REQUIRE_EQ(t5d_search_info(s.get(), &counted), T5D_OK);
+    CHECK_EQ(counted.uncertainty_missing, std::uint64_t{1});
+    // With E2 on, a delivery without the selected signal is refused, the batch released.
+    for (const int32_t source : {T5D_UNCERTAINTY_CATEGORICAL, T5D_UNCERTAINTY_ERROR_HEAD}) {
+      t5d_search_params e2 = quick_params();
+      e2.variance_scaled_cpuct = 1;
+      e2.uncertainty_source = source;
+      const SearchHandle reader = new_search(g.get(), e2);
+      std::size_t k = 0;
+      REQUIRE_EQ(t5d_search_gather(reader.get(), 1, T5D_NO_LIMIT, &k, nullptr), T5D_OK);
+      REQUIRE_EQ(k, std::size_t{1});
+      const std::vector<float> lacking_values = source == T5D_UNCERTAINTY_CATEGORICAL ? std::vector<float>{} : values;
+      const std::vector<float> lacking_errors =
+          source == T5D_UNCERTAINTY_CATEGORICAL ? std::vector<float>{0.5f} : std::vector<float>{std::nanf("")};
+      char* message = nullptr;
+      CHECK_EQ(deliver(reader.get(), l, {}, wdl, lacking_values, T5D_VALUE_PROBABILITIES, lacking_errors, {}, &message),
+               T5D_ERR_ARGUMENT);
+      CHECK(message != nullptr && std::string(message).find("uncertainty signal") != std::string::npos);
+      t5d_free(message);
+      REQUIRE_EQ(t5d_search_gather(reader.get(), 1, T5D_NO_LIMIT, &k, nullptr), T5D_OK);  // released
+      REQUIRE_EQ(k, std::size_t{1});
+      CHECK_EQ(deliver(reader.get(), l, {}, wdl, values, T5D_VALUE_PROBABILITIES, {0.5f}), T5D_OK);
+      t5d_search_summary read;
+      REQUIRE_EQ(t5d_search_info(reader.get(), &read), T5D_OK);
+      CHECK_EQ(read.uncertainty_missing, std::uint64_t{0});
+      CHECK_EQ(read.playouts, std::uint64_t{1});
+    }
+  }
   // No batch waiting: delivering is an error, and nothing changes.
   CHECK_EQ(deliver(s.get(), l, {}, wdl, values, T5D_VALUE_PROBABILITIES), T5D_ERR_ARGUMENT);
   // Zero leaves asked for: an error; any number at all: bounded, never overflowed.
@@ -752,7 +831,9 @@ TEST(capi_search_reports_its_layouts) {
   // Round 2c (I15, I2): appended.
   CHECK(offsetof(t5d_search_summary, root_key) > offsetof(t5d_search_summary, root_error));
   CHECK(offsetof(t5d_root_child, child_key) > offsetof(t5d_root_child, network_error));
-  for (const char* field : {"root_key", "root_cpuct", "root_best_since"}) {
+  // The review fixes (I10, 6m): appended.
+  CHECK(offsetof(t5d_search_summary, uncertainty_missing) > offsetof(t5d_search_summary, root_best_since));
+  for (const char* field : {"root_key", "root_cpuct", "root_best_since", "uncertainty_missing"}) {
     CHECK_EQ(t5d_search_layout("t5d_search_summary", field, &v), T5D_OK);
   }
   for (const char* field : {"child_key", "prior_noise_free", "value_variance", "boost", "exploration_scale",

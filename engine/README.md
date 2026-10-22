@@ -925,7 +925,10 @@ and promotion), `t5d_game_apply_expanded` (by index into the last expansion),
 board's features, no relations, the pseudo-legal moves - engine ABI round 2 appends
 `legal_moves` and the budget `legality_checks`, `legality_nodes`: with `legal_moves` 1 the
 moves are a search leaf's under the same budget, the legal and unknown ones in the same
-order, so that a training record's network input can be rebuilt - register I15; a
+order, so that a training record's network input can be rebuilt - register I15; that is
+a leaf of a board-move search with `legal_moves_only` (both defaults; the search's default
+budget is (64, 2000), `T5D_NO_LIMIT` both here is exact), while a whole-turn search's
+leaves, and the pseudo-legal seam's, carry the pseudo-legal moves (`legal_moves` 0); a
 search's own `expand` options refuse it, its `legal_moves_only` and `legality_*`
 deciding its leaves), which fills a `t5d_expansion`: counts, and pointers
 to the flat arrays above (per board: timeline, half-turn, head, active, side,
@@ -2177,7 +2180,8 @@ round 2), each from the leaf's acting player:
 - **WDL - the value search uses.** A leaf's value is `W - L` (the three normalised;
   `wdl_value`), and its draw probability `D` is backed up beside the value on every
   node and edge (Lc0's way; a mate backs up D 0, a stalemate and the turn cap's
-  convention D 1; an MCGS residual corrects D as it corrects Q). A root child's search
+  convention D 1; an MCGS residual corrects D as it corrects Q - a lag in either fires
+  one, since the ABI round 2 review fixes). A root child's search
   WDL is so `((1 - d + q) / 2, d, (1 - d - q) / 2)` (`RootChild::d`), which is what
   I13's deblundering and D3's `q_ratio` blend need from the search.
 - **The 51-bin categorical** over the root search value (optional; bins centred on
@@ -2187,8 +2191,12 @@ round 2), each from the leaf's acting player:
 - **The error head** (optional; >= 0, the predicted squared value - short-term gap):
   the other signal. `SearchParams::uncertainty_source` (6m; register I10: "6m decides
   which uncertainty signal search consumes") picks one - `Categorical` by default,
-  `ErrorHead` - as each node's variance, the one E2, E3 and E5's optional term read;
-  either signal absent is 0.
+  `ErrorHead` - as each node's variance, the one E2, E3 and E5's optional term read.
+  While one of them is on (E5's term only under the LCB rule) an evaluation without the
+  chosen signal is refused, as a malformed one is (a 6m arm on a network without the
+  error head fails at once instead of running with variance 0: E2's cPUCT halved, the
+  backup's largest weight); read by nothing, an absent signal is 0 and counted
+  (`SearchStats::uncertainty_missing`, `t5d_search_summary.uncertainty_missing`).
 - **Moves-left** (optional; D4) is recorded per node and never backed up: what one
   edge adds to a moves-left count waits on the unit of "turn" (build-log spec issue
   305), so the search keeps each root child's network outputs instead
@@ -2347,8 +2355,10 @@ and a batch's de-duplication match all three (§15.2's purity row). An exact com
 follows every key match (a collision gets an unshared node; `key_bits`, a test seam not
 in the C API, cuts the keys short so that the tests meet collisions). Statistics
 live on the edges (path statistics; in a tree they equal the child's). Reaching an
-expanded node through an edge whose Q lags the node's by more than `residual_epsilon`
-(or an edge never crossed) backs up the residual correction instead of descending.
+expanded node through an edge whose Q or draw probability D (D3) lags the node's by
+more than `residual_epsilon` (or an edge never crossed) backs up the residual
+correction of both instead of descending (before the ABI round 2 review fixes only a Q
+lag fired one, so a D lag under an unchanged Q was never corrected).
 5D has no repetition rule and every move adds a board, so the graph is acyclic.
 
 **The solver** (H2, E9; behind `proof_channel`, **off by rule**). Register H41
@@ -2457,7 +2467,10 @@ its mean - the reading D3's correction retired; no shim was kept (a shim would h
 invent a draw probability the documents do not give, and its one caller, the Python
 binding, moved in the same commit) - and `t5d_search_abandon`; then `t5d_search_info`
 (round 2 appends the root's backed-up `root_d` and its own evaluation: `root_evaluated`,
-`root_wdl`, `root_moves_left`, `root_error`), `_child` (round 2 appends `d`,
+`root_wdl`, `root_moves_left`, `root_error`; `root_q` and `root_d` are the backed-up
+averages, a solved root's too - `root_lo` and `root_hi` carry what is proven; the review
+fixes append `uncertainty_missing`, the nodes expanded without the chosen uncertainty
+signal where nothing reads it), `_child` (round 2 appends `d`,
 `evaluated`, `network_wdl`, `network_moves_left`, `network_error`; round 2c the root's
 side table - below),
 `_choose`, `_choose_by_visits`, `_verify`, `_advance`, `_advance_action`,
@@ -2504,7 +2517,8 @@ root's PUCT) and `root_best_since`, D4's effort label: the root's visits when it
 visited child last changed (strictly more visits than the incumbent; §8.6's "visits until
 the decision stabilises"; issue 154; for a root carried by `advance`, counted from the
 re-root). And `t5d_game_expand`'s `legal_moves` (above) rebuilds a record's candidate
-moves (issue 155).
+moves (issue 155). The noise's alphas, child by child, are C++ only (`RootChild::noise_alpha`,
+the tests' check of E1's split; not in the C side table).
 
 **Validation.** Every real parameter must be finite (NaN or infinity in, say,
 `virtual_loss` or `cpuct_variance_scale` poisoned selection; each is refused by name),
@@ -2613,7 +2627,9 @@ cannot pass) and the tree carried at each count by `advance_moves` and
 edge, tree and graph, both splits; game ends' D (mate 0, stalemate and cap 1); the
 categorical changing nothing with E2, E3 and E5's term off, steering with E2 on, and
 unread under the error-head signal (6m), which the error head's output then steers;
-each signal absent read as 0; the cache returning every head bit for bit (a fresh
+each signal absent read as 0 where nothing reads it, and counted - and refused, the
+batch released, where E2's scale or weight, E3 or E5's LCB term reads it, a shared
+cache's evaluation without it included (the round 2 review fixes); the cache returning every head bit for bit (a fresh
 search's root from a shared cache included); the built-in evaluators' WDL; every
 malformed head refused and released; `run`'s reused buffers reset head by head; the
 C step loop with WDLs, categoricals, errors and moves-left equal to the C++ search by
@@ -2634,6 +2650,23 @@ steering and forcing counts 0; `root_cpuct` cpuct with E2 off and its scaled val
 E2 on; the effort label replayed one playout at a time and from a re-root; and
 `t5d_game_expand`'s `legal_moves` giving a search leaf's moves byte for byte (Standard,
 and a king in check, where the pseudo-legal list has one more), a search refusing it.
+After the round's review fixes: under MCGS, with Q 0 everywhere and D 0.1 or 0.9 by node
+key, stepped one simulation at a time, every edge descended within `residual_epsilon` of
+its shared child's D and every residual setting the edge's D to the child's exactly (or
+as near as the clamp allows), some fired by D alone; every reader of the uncertainty
+signal (E2's scale, E2's weight, E3, E5's LCB term) refusing an evaluation without the
+chosen one under either source, the batch released, and the count of absent signals
+where nothing reads it, in C++ and through the C API and Python; a proven win's root
+child (q, d) = (1, 0), a proven draw's (0, 1), a solved drawn node's visits backing up
+D 1, a stuck node's (an Unknown verdict, or every child a dead end under the seam) its
+own D; the root noise's alphas, child by child, the open edges' split - a mid-action root
+with an illegal submit, unshaped and shaped; E3's factor recomputed from each child's
+own node and edge; the C step loop with root noise, a root temperature, E2 and E3 on,
+the side table, `root_cpuct` and `root_best_since` equal to the C++ search's field for
+field; both value kinds checked whether or not a categorical is given; and, in Python,
+the noise-free prior the tempered softmax of known logits, `Game.expand(legal_moves=True)`
+a board-move leaf's moves at budget (0, 0) with moves left unknown (a whole-turn leaf's
+the pseudo-legal ones), the error head read by its pinned `NetOutput` field name.
 
 ## Stage E8: the verification layer's redesign (M14, a prototype until 6b′)
 
@@ -3832,7 +3865,8 @@ Each is recorded where it is made (the header comments) and listed here:
     child's network WDL, moves-left and error exposed instead - I13's inputs (issue 148);
   - 6m's switch, `uncertainty_source`: the categorical's variance (default) or the error
     head's output as each node's variance, read by E2, E3 and E5's optional term; a
-    signal not given is 0 (issue 149);
+    signal not given is refused while one of them reads it, 0 and counted otherwise
+    (issue 149);
   - the root noise's total concentration split across the root's open edges - the moves
     the expansion kept, legal or unknown, and a legal submit; the listed actions under
     the whole-turn split - drawn per decision (each decision's fresh search is a root;

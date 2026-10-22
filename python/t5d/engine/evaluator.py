@@ -65,6 +65,14 @@ from .search import LeafView, Search
 
 PositionLike = Position | PositionState
 
+#: The ``NetOutput`` field the error head's output is read from (D3; 6m's other uncertainty
+#: signal) - absent until the network lane's heads add it, and the evaluations' ``error`` NaN till
+#: then. Pinned by ``tests/engine/test_evaluator.py``: a ``NetOutput`` field for the error head
+#: under any other name fails that test rather than going unread. With ``uncertainty_source``
+#: ``T5D_UNCERTAINTY_ERROR_HEAD`` and E2, E3 or E5's term on, the search refuses a delivery
+#: without it (the engine's ``uncertainty_missing`` counts it where nothing reads it).
+ERROR_HEAD_FIELD = "value_error"
+
 
 def state_of(position: PositionLike) -> PositionState:
     """The ``PositionState`` of a converted position (or the state itself)."""
@@ -165,13 +173,13 @@ class Evaluator(Protocol):
 def _split(out: NetOutput, states: Sequence[PositionState]) -> list[Evaluation]:
     """Per-position evaluations of a batch's output (row ``i`` is ``states[i]``): the policy,
     the submit logit and D3's value heads - the WDL, the categorical, the error head's output
-    where the network has one (``value_error``; NaN until the network lane's heads add it) and
+    where the network has one (``ERROR_HEAD_FIELD``; NaN until the network lane's heads add it) and
     moves-left in turns (``expm1`` of the head's ``log1p``, floored at 0)."""
     logits = out.policy_logits.detach().float().cpu()
     valid = out.move_valid.detach().cpu()
     values = out.value_logits.detach().float().cpu()
     wdl = out.wdl_logits.detach().float().cpu()
-    error_out = getattr(out, "value_error", None)
+    error_out = getattr(out, ERROR_HEAD_FIELD, None)
     errors = None if error_out is None else error_out.detach().float().cpu().reshape(-1)
     moves_left = torch.expm1(out.moves_left_log.detach().double().cpu().clamp(min=0.0))
     submit = out.submit_logits.detach().float().cpu()
@@ -613,6 +621,7 @@ class UniformEvaluator:
 __all__ = [
     "CStepDriver",
     "CachedNetworkEvaluator",
+    "ERROR_HEAD_FIELD",
     "Evaluation",
     "Evaluator",
     "Leaf",

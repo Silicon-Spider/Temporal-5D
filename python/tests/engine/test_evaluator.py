@@ -10,13 +10,16 @@ without the engine (CI's network job); the rest skip when it is not built.
 
 from __future__ import annotations
 
+import dataclasses
 import math
+import types
 
 import numpy as np
 import pytest
 import torch
 
 from t5d.engine.evaluator import (
+    ERROR_HEAD_FIELD,
     CachedNetworkEvaluator,
     CStepDriver,
     Evaluation,
@@ -24,11 +27,13 @@ from t5d.engine.evaluator import (
     Leaf,
     NetworkEvaluator,
     SearchDriver,
+    _split,
     check_evaluation,
     serve,
 )
 from t5d.net import NetConfig, build_model, collate, relayout, synthetic_state
 from t5d.net.cache import CachedEvaluator, reference_output
+from t5d.net.model import NetOutput
 from tests.engine.helpers import RECORDS, requires_engine
 
 
@@ -203,6 +208,24 @@ def test_a_non_finite_network_submit_logit_is_refused(bad):
         NetworkEvaluator(model)([_shift(s, True)])
     for ok in (s, _shift(s, False), _shift(s, None)):
         assert np.isnan(NetworkEvaluator(model)([ok])[0].submit_logit)
+
+
+def test_the_error_head_is_read_by_its_pinned_name(small_model):
+    """D3 / 6m: the evaluator reads the error head's output from ``NetOutput``'s
+    ``ERROR_HEAD_FIELD`` - no other field of ``NetOutput`` may name an error head (one added under
+    another name would go unread, every evaluation's ``error`` NaN, and a 6m arm on the error
+    head refused by the search); with the field present each evaluation carries its row."""
+    assert ERROR_HEAD_FIELD == "value_error"
+    names = [f.name for f in dataclasses.fields(NetOutput)]
+    assert [n for n in names if "error" in n] in ([], [ERROR_HEAD_FIELD])
+    s = synthetic_state(43, 4)
+    (plain,) = NetworkEvaluator(small_model)([s])
+    assert math.isnan(plain.error)
+    out = small_model(collate([s]))
+    fields = {n: getattr(out, n) for n in names}
+    with_error = types.SimpleNamespace(**fields, **{ERROR_HEAD_FIELD: torch.tensor([0.375])})
+    (read,) = _split(with_error, [s])
+    assert read.error == 0.375
 
 
 def test_check_evaluation_refuses_a_wrong_submit_logit():

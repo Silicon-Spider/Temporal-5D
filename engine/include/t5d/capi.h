@@ -427,7 +427,11 @@ T5D_API t5d_status t5d_game_set_legality(t5d_game* game, int32_t legality, char*
  * may be NULL: k = 8, every board's features, no relations, the pseudo-legal
  * moves. With options->legal_moves, the moves are a search leaf's under the
  * same budget (t5d_search_params.legality_checks and _nodes): the same moves in
- * the same order, the classification being deterministic. */
+ * the same order, the classification being deterministic - a leaf of a
+ * board-move search with legal_moves_only (the defaults; T5D_NO_LIMIT both here
+ * is exact, the search's default budget is not). A whole-turn search's leaves,
+ * and those of the pseudo-legal test seam, carry the pseudo-legal moves
+ * (legal_moves 0). */
 T5D_API t5d_status t5d_game_expand(t5d_game* game, const t5d_expand_options* options,
                                    t5d_expansion* out, char** error);
 
