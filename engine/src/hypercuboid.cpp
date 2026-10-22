@@ -38,6 +38,7 @@
 #include "t5d/check.hpp"
 #include "t5d/movegen.hpp"
 #include "t5d/multiverse.hpp"
+#include "t5d/turngen.hpp"
 
 namespace t5d::detail {
 
@@ -274,6 +275,161 @@ class Hyper {
     // a legal action (a search for one) or at the cap.
     run_.stats.exhaustive = !stopped && stack.empty();
     run_.stats.seconds = budget_.seconds();
+  }
+
+  // -- best-first generation (D2's flat form; t5d/turngen.hpp) --------------------------------
+  //
+  // The search above with its stack replaced by a queue ordered by each box's
+  // bound (the sum of its axes' best scores), and each box's best point judged:
+  // the points are judged in non-increasing score. The functions below are
+  // new; the depth-first search's own (build, propagate, feasible, judge,
+  // subtract) are shared unchanged.
+
+  enum class Step : std::uint8_t { Progress, Done, Stopped };
+
+  // Builds the axes and every value's score (TurnScorer's), and queues the
+  // whole space. False if the budget stopped it. Throws std::invalid_argument
+  // for a non-finite score.
+  bool start_best_first(const TurnScorer& scorer) {
+    if (!build()) return false;
+    scores_.assign(axes_.size(), {});
+    for (std::size_t i = 0; i < axes_.size(); ++i) {
+      const Axis& a = axes_[i];
+      std::vector<double>& s = scores_[i];
+      s.reserve(a.values.size());
+      for (const Value& v : a.values) {
+        // A Pass leaves the board; any other value is its move, scored on this
+        // axis's board (the source's, or - an arrival - the destination's).
+        const double score = v.kind == Kind::Pass
+                                 ? scorer.leave(a.timeline)
+                                 : scorer.move(moves_[static_cast<std::size_t>(v.move)], a.timeline);
+        if (!std::isfinite(score)) throw std::invalid_argument("turn generator: a non-finite score");
+        s.push_back(score);
+      }
+    }
+    queue(full_box());
+    return true;
+  }
+
+  // One step: the best box taken, narrowed, and its best point judged (its
+  // legal actions recorded in run_ - with scored() their score). Done: nothing
+  // is left. Stopped: the budget stopped the search.
+  Step step_best_first() {
+    if (budget_.stopped()) return Step::Stopped;
+    if (queue_.empty()) return Step::Done;
+    if (!budget_.hold(run_.held(), run_.held_bytes() + queue_bytes())) return Step::Stopped;
+    std::pop_heap(queue_.begin(), queue_.end(), worse);
+    Queued top = std::move(queue_.back());
+    queue_.pop_back();
+    if (!propagate(top.box)) return Step::Progress;  // no point of it can be an action
+    const double bound = bound_of(top.box);
+    // Narrowing lowered the bound below another box's: that one first.
+    if (bound < top.bound && !queue_.empty() && bound < queue_.front().bound) {
+      queue(std::move(top.box), bound);
+      return Step::Progress;
+    }
+    if (regime_ != Regime::General) {
+      const Feasibility f = feasible(top.box, abstract_);
+      if (!budget_.spend_many(1 + abstract_.steps)) return Step::Stopped;
+      if (f == Feasibility::No) {
+        ++run_.stats.regions;  // the whole box: no skeleton of it is realisable
+        ++run_.stats.unrealisable_boxes;
+        return Step::Progress;
+      }
+      if (f == Feasibility::Unknown) ++run_.stats.abstract_gave_up;
+    }
+    const std::vector<int> x = best_point(top.box);
+    scored_ = score_of(x);
+    Region region;
+    if (!judge(x, top.box, region)) return Step::Stopped;  // the budget: no cap stops it
+    for (std::size_t i = 0; i < region.axes.size(); ++i) {
+      if (!bit(region.allowed[i], x[static_cast<std::size_t>(region.axes[i])])) {
+        throw std::logic_error("hypercuboid: a region that does not hold its own point");
+      }
+    }
+    ++run_.stats.regions;
+    std::vector<Box> rest;
+    subtract(top.box, region, axes_, rest);
+    for (Box& b : rest) {
+      const double bb = bound_of(b);
+      queue(std::move(b), bb);
+    }
+    return Step::Progress;
+  }
+
+  // The score of the point judged last.
+  double scored() const noexcept { return scored_; }
+  // The best bound queued (-infinity: none).
+  double best_bound() const noexcept {
+    return queue_.empty() ? -std::numeric_limits<double>::infinity() : queue_.front().bound;
+  }
+  bool stopped() const noexcept { return budget_.stopped(); }
+  std::size_t queued() const noexcept { return queue_.size(); }
+  // The queue's memory, and the tables', estimated.
+  std::size_t queue_bytes() const noexcept { return queue_.capacity() * (sizeof(Queued) + words_ * 8 + 32); }
+  std::size_t table_bytes() const noexcept {
+    std::size_t b = moves_.capacity() * sizeof(Move);
+    for (const Axis& a : axes_) b += a.values.capacity() * sizeof(Value) + sizeof(Axis);
+    for (const std::vector<double>& s : scores_) b += s.capacity() * sizeof(double) + 32;
+    return b;
+  }
+
+ private:
+  struct Queued {
+    double bound = 0;
+    std::uint64_t order = 0;  // the queueing order: ties go to the box queued first
+    Box box;
+  };
+
+  // The heap's order: a box is worse than another with a higher bound, or an
+  // equal bound queued earlier.
+  static bool worse(const Queued& a, const Queued& b) noexcept {
+    if (a.bound != b.bound) return a.bound < b.bound;
+    return a.order > b.order;
+  }
+
+  void queue(Box box, double bound) {
+    queue_.push_back(Queued{bound, next_order_++, std::move(box)});
+    std::push_heap(queue_.begin(), queue_.end(), worse);
+  }
+  void queue(Box box) {
+    const double b = bound_of(box);
+    queue(std::move(box), b);
+  }
+
+  // The sum, axis by axis in order, of the best score each axis has left in
+  // the box: no point of the box scores more.
+  double bound_of(const Box& box) const {
+    double sum = 0;
+    for (std::size_t i = 0; i < axes_.size(); ++i) {
+      const Axis& a = axes_[i];
+      double best = -std::numeric_limits<double>::infinity();
+      for (std::size_t v = 0; v < a.values.size(); ++v) {
+        if (has(box, a, static_cast<int>(v))) best = std::max(best, scores_[i][v]);
+      }
+      sum += best;
+    }
+    return sum;
+  }
+
+  // Each axis's best value in the box (the lowest of equal ones): its score is
+  // bound_of(box).
+  std::vector<int> best_point(const Box& box) const {
+    std::vector<int> x(axes_.size(), -1);
+    for (std::size_t i = 0; i < axes_.size(); ++i) {
+      const Axis& a = axes_[i];
+      for (std::size_t v = 0; v < a.values.size(); ++v) {
+        if (!has(box, a, static_cast<int>(v))) continue;
+        if (x[i] < 0 || scores_[i][v] > scores_[i][static_cast<std::size_t>(x[i])]) x[i] = static_cast<int>(v);
+      }
+    }
+    return x;
+  }
+
+  double score_of(const std::vector<int>& x) const {
+    double sum = 0;
+    for (std::size_t i = 0; i < axes_.size(); ++i) sum += scores_[i][static_cast<std::size_t>(x[i])];
+    return sum;
   }
 
  private:
@@ -1789,6 +1945,12 @@ class Hyper {
   std::size_t words_ = 0;
   MoveList scratch_;
   Abstract abstract_;
+  // Best-first generation only (t5d/turngen.hpp): each value's score, the
+  // queue of boxes, and the score of the point judged last.
+  std::vector<std::vector<double>> scores_;
+  std::vector<Queued> queue_;
+  std::uint64_t next_order_ = 0;
+  double scored_ = 0;
 };
 
 }  // namespace
@@ -1796,3 +1958,95 @@ class Hyper {
 void run_hypercuboid(SearchRun& run) { Hyper(run).search(); }
 
 }  // namespace t5d::detail
+
+// ---- the flat form's turn generator (t5d/turngen.hpp) ---------------------------------------
+
+namespace t5d {
+
+struct TurnGenerator::Impl {
+  // The state, then the run reading it, then the search reading both: the
+  // generator owns its copy, and never moves (it lives behind a pointer).
+  GameState start;
+  detail::SearchRun run;
+  detail::Hyper hyper;
+  TurnUnit unit;
+  // Turns found and not yet emitted (one point's actions: equal scores).
+  std::vector<GeneratedTurn> ready;
+  std::size_t next_ready = 0;
+  std::size_t emitted = 0;
+  // The successor states emitted so far are run.successors[0, next_successor).
+  std::size_t next_successor = 0;
+  bool exhausted = false;
+
+  Impl(const GameState& turn_start, TurnUnit u, const SearchBudget& budget)
+      : start(turn_start),
+        run(start, budget, std::numeric_limits<std::size_t>::max(), detail::Unit::Actions, true),
+        hyper(run),
+        unit(u) {}
+
+  // The actions the last judged point recorded, as turns (under
+  // Successors, only those reaching a state not reached before); the run's
+  // kept listing then emptied, its bytes returned.
+  void collect() {
+    for (std::size_t i = 0; i < run.actions.size(); ++i) {
+      // What record() counted for the kept action (its key stays counted).
+      run.kept_bytes -= std::min(run.kept_bytes, run.actions[i].size() * sizeof(Move) + run.texts[i].size() + 96);
+      const std::size_t result = run.results[i];
+      const bool fresh = result >= next_successor;
+      if (fresh) next_successor = result + 1;
+      if (unit == TurnUnit::Actions || fresh) {
+        ready.push_back(GeneratedTurn{std::move(run.actions[i]), run.successors[result], hyper.scored()});
+      }
+    }
+    run.actions.clear();
+    run.texts.clear();
+    run.results.clear();
+  }
+
+  std::optional<GeneratedTurn> next() {
+    while (next_ready == ready.size()) {
+      ready.clear();
+      next_ready = 0;
+      if (exhausted || hyper.stopped()) return std::nullopt;
+      using Step = decltype(hyper.step_best_first());
+      const Step s = hyper.step_best_first();
+      if (s == Step::Done) {
+        exhausted = true;
+        run.stats.exhaustive = true;
+      }
+      collect();
+    }
+    ++emitted;
+    return std::move(ready[next_ready++]);
+  }
+};
+
+TurnGenerator::TurnGenerator(const GameState& turn_start, const TurnScorer& scorer, TurnUnit unit,
+                             const SearchBudget& budget) {
+  if (turn_start.obligations_met()) {
+    throw std::invalid_argument("turn generator: not a turn start (its obligations are met, T5)");
+  }
+  impl_ = std::make_unique<Impl>(turn_start, unit, budget);
+  if (!impl_->hyper.start_best_first(scorer)) return;  // stopped by the budget
+}
+
+TurnGenerator::~TurnGenerator() = default;
+
+std::optional<GeneratedTurn> TurnGenerator::next() { return impl_->next(); }
+bool TurnGenerator::exhausted() const noexcept { return impl_->exhausted && impl_->next_ready == impl_->ready.size(); }
+bool TurnGenerator::stopped() const noexcept { return impl_->hyper.stopped(); }
+std::size_t TurnGenerator::generated() const noexcept { return impl_->emitted; }
+double TurnGenerator::bound() const noexcept {
+  if (impl_->next_ready < impl_->ready.size()) return impl_->ready[impl_->next_ready].score;
+  return impl_->hyper.best_bound();
+}
+const SearchStats& TurnGenerator::stats() const noexcept { return impl_->run.stats; }
+std::size_t TurnGenerator::memory_bytes() const noexcept {
+  const Impl& g = *impl_;
+  std::size_t ready_bytes = 0;
+  for (const GeneratedTurn& t : g.ready) ready_bytes += sizeof(GeneratedTurn) + t.moves.capacity() * sizeof(Move);
+  return sizeof(Impl) + g.hyper.queue_bytes() + g.hyper.table_bytes() + g.run.held_bytes() + ready_bytes +
+         g.run.successors.size() * detail::position_bytes(g.start);
+}
+
+}  // namespace t5d

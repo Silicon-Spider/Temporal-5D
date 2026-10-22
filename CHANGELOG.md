@@ -10,6 +10,54 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-23 - D2's flat form, part 1: the turn generator - the hypercuboid search best first (spec 15.2's row)
+
+The flat form's generator (§8.2: "A generator assembles complete legal turns best-first by
+summed logits, through the rules engine ... The hypercuboid search already walks this
+product space for mate detection; ordered by prior, it becomes the turn generator"), the
+first half of D2's flat form; its search arm, which retires the enumerating whole-turn arm,
+follows.
+
+- **`t5d/turngen.hpp`, `src/hypercuboid.cpp`**: `TurnGenerator` - the legal turns of a turn
+  start, one at a time, in non-increasing score. A `TurnScorer` scores each option of each
+  playable board (leaving it - the detector's Pass, §8.2's "leave it"; a move as its source
+  board's option, a non-branching jump also as its destination's - "a move between two present
+  boards resolves both"; J6's twin as its jump); a turn's score is the sum of its options'
+  over the boards in ascending timeline. The generator is the hypercuboid detector's search
+  with its stack replaced by a priority queue of boxes keyed by their bound (the sum of their
+  axes' best remaining scores), each box narrowed as the detector narrows it and its best point
+  judged by the detector's own `judge` - so the points are judged, and the turns emitted, in
+  non-increasing score, and the search is complete by the detector's argument. Units: actions
+  or distinct successor states (`TurnUnit`); ties deterministic; one budget over the
+  generator's life, a stopped generator never exhausted (H37). New methods only in the
+  detector's class: its depth-first search (`detect_mate`, the counts, the listings, the
+  legal-move tiers) is unchanged.
+- **The depth-first search pinned** (`engine/tests/test_detectors.cpp`,
+  `detectors_the_hypercuboid_search_is_pinned`): every answer and statistic of the
+  hypercuboid detector's (verdicts, witnesses, counts, listings, legal moves, the ways to
+  finish after each first move; nodes, points, regions, boxes removed, the most positions
+  held) on 571 positions - 300 tiny multiverses under random rulesets, random games from the
+  sparse starts under five rulesets and from every named variant - unlimited and under node
+  budgets that stop it, hashed; the hash recorded at 2f07079, before the generator, and equal
+  after it. `tiny_position` moved, unchanged, from test_detectors.cpp to
+  `engine/tests/test_tiny.hpp` to be shared.
+- **Spec 15.2's row** (`engine/tests/test_turngen.cpp`): on 300 tiny multiverses (265 with
+  two playable boards or more; all three regimes), five constructed multi-board presents
+  (jumps between present boards, a rewinding branch) and random games from every variant's
+  start, under continuous scores and small integer ones that tie, the whole output is the
+  legal turns exactly, each once (against the brute-force reference and the engine's
+  exhaustive listing, as actions and as successors), in non-increasing score, each score
+  recomputed from the turn's moves alone bit for bit, equal to the sorted scores of every
+  legal action, each successor's its best action's, deterministic, and a budget-stopped run a
+  stopped prefix of the full one; `long_` runs ten times as many.
+- Docs: engine/README.md (the generator's design beside the hypercuboid's); docs/BUILD_LOG.md
+  (the D2 row; spec issue 163; proposed edit 131).
+
+Spec: §8.2 ("Flat form"), §11.0 item 3, §15.2 (the flat generator's row - built and passing),
+§15.3 (a new row proposed: proposed edit 131); register D2 (its row in the build log; the
+register's own row unchanged until the flat arm is built). Spec issue 163 (the generator's
+unit, ties and budget - placeholders).
+
 ### 2026-10-23 - D2 tree form review fixes: a carried inherited root is evaluated; the inherited value's refusal; the untested readings tested; the counts committed
 
 Two reviews of the tree form (f2b4679) - one finding HIGH, six MEDIUM, nine LOW, and a

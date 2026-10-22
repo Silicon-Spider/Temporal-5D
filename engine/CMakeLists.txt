@@ -146,6 +146,8 @@ target_sources(t5d-tests PRIVATE
   tests/test_detectors.cpp
   tests/test_gate_exe.cpp
   tests/test_search.cpp)
+# D2's flat form: the turn generator (spec 15.2's row).
+target_sources(t5d-tests PRIVATE tests/test_turngen.cpp)
 
 # Stage E6a's tests: the search's invariants (§15.4), self-play end to end,
 # t5d-play's records through t5d-gate, the search's C API (linked in, as
