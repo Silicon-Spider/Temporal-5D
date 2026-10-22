@@ -276,6 +276,13 @@ def test_moves_that_are_not_the_acting_players_are_refused():
     assert past.move_count > 0 and past.submit_possible
     to_position(past)  # the real one converts
     relabelled = replace(past, acting_player=1 - past.acting_player, to_move=1 - past.to_move, submit_possible=False, submit_legal=False)
+    # ... with the turn state relabelled to match (register A6): the opponent's playable heads, its
+    # present ones owed, no move made - so that the moves are what is refused.
+    playable = past.is_head & (past.side_to_move == relabelled.acting_player)
+    owed = int(np.count_nonzero(playable & past.active & (past.half_turn == past.present)))
+    relabelled = replace(
+        relabelled, playable=playable, mandatory_remaining=owed, optional_playable=int(playable.sum()) - owed, moves_made=0
+    )
     with pytest.raises(PresentMismatch, match=f"{past.move_count} of {past.move_count} moves start on boards"):
         to_position(relabelled)
     assert not to_position(relabelled, strict=False).present_matches
