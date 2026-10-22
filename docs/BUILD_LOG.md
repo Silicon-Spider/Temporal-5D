@@ -452,8 +452,8 @@ your spending limit needs to be increased" (the account's 'Billing & plans'): un
 it is fixed nothing is confirmed on Linux, and the main loop runs every check
 locally, the nightly tier included, before each merge. **CLAUDE.md's table still says
 "the user's rulings R1-R10"** - the rulebook now has R11 (H51); the instruction files
-are the user's to edit. Ruled at CHECKPOINT 8: spec issues 122-126, 142 and 204
-("CHECKPOINT 8", above). Put to the user, none blocking: 129 (the measurements
+are the user's to edit. **Spec issue 156 corrects text the user wrote from our report:** the 5.8 / 27.1 / 64.0% that §8.2's "Measured (CHECKPOINT 8)" paragraph and register M22 call shares of turns with more than one *playable* board are the shares with more than one *mandatory* board (the main loop mislabelled them in the M22 merge, 3d2e73a); the playable shares are 15.1 / 65.2 / 99.4%, so "these bound the mandatory share from above" does not hold - proposed edits 127 and 128 give the corrected text; the ruled build order does not depend on it. Ruled at CHECKPOINT 8: spec issues 122-126, 142 and 204
+("CHECKPOINT 8", above). Put to the user, none blocking: 148-155 (engine ABI round 2's readings: D backed up and moves-left recorded; 6m's consumers and default; the noise's edge set; the shaping form; the root temperature's default; forced playouts not built; the effort label; the legality budget as a recorded condition), 129 (the measurements
 pinned before H51 - 6b, 6b′, 6b″, Hunt's truth - keep the reading they were made
 under, a written x must capture, so they reproduce; proposed edit 101), 130 (how a
 divergence settled by a project decision is recorded upstream - KD-0170 is neither
@@ -1548,6 +1548,32 @@ per-action counter (`tools/turn_width.hpp`, `TurnCounter`) is outside Hunt's tru
 sources and can serve 6x's reports "by mandatory-board count". Open: how the figures
 order the D2 work (issue 142).
 
+**M22 - the CHECKPOINT 8 figures (2026-10-23).** The user's ruling on issue 142 asked,
+per range, for the shares of turns with more than one and with three or more mandatory
+boards, the optional moves actually played, and the compute share of multi-board turns
+(moves x per-move cost). `tools/turn_width.hpp`'s summary now gives each of the four
+by name: `mandatory_over_1` and `mandatory_over_2` (there already), the optional moves'
+share of turns, mean and total as a share of all moves (`moves_total`,
+`optional_moves_total`, `optional_moves_share_of_moves`), and the compute shares
+(`compute_share_*`, of the turns with more than one mandatory board, three or more, and
+more than one playable board). The cost of a move: one evaluation, since the ply split
+evaluates every node inside a turn (§8.2), of the dense v1 network (§7) at the turn's
+board count, by §9.1-9.2's analytic model as N3's `cost.py` computes it (4 T^2 d L +
+40 T d^2 L, T = 66N + 16, d = 256, L = 16; `tools::dense_eval_flops`), with a constant
+cost per move beside it as the sensitivity reading - arithmetic, no network run. Tested
+on constructed widths and on the hand-written records end to end, the dense cost worked
+by hand. Run on t0database (692 games; every earlier line of the output unchanged; the
+new figures recomputed independently, no difference): more than one mandatory board
+5.8% / 27.1% / 64.0% of turns (< 50 / 50-99 / 100-199 boards), three or more 0.7% /
+6.7% / 16.0%; an optional move in 1.2% / 2.5% / 1.1% of turns, 0.012 / 0.025 / 0.011 per
+turn, 1.1% / 2.0% / 0.6% of all moves; the compute share of the turns with more than one
+mandatory board 18.0% / 43.4% / 81.9% dense (9.9% / 41.7% / 79.7% constant), 33.3%
+pooled (14.7%); three or more 3.3% / 14.9% / 33.4% (10.3% pooled). The figures,
+conditions and the reading against part L and §8.2 are in `docs/MEASUREMENTS.md` ("Turn
+width (M22)", "The CHECKPOINT 8 figures"). Found on the way: the ruling's premise, and
+§8.2's paragraph, register M22 and part L, label the mandatory shares as playable ones
+(issue 156; proposed edits 127, 128).
+
 ### 6. Phases 2-3 - in progress (see "Current state")
 
 ## Register status
@@ -1712,7 +1738,7 @@ order the D2 work (issue 142).
 | M12 | applied - STOP | The bounded optimisation pass (E5c) and the re-run at 5 threads, Lazy SMP: 50-199 boards fail -> STOP, redesign the verification layer |
 | M13 | applied | 8 cores per GPU: M9 judged on 2 expansion cores (passes, 1.87x), the scanner measured at 5; with the scanner retired, its five cores serve Hunt, the settling scans and the audit lane (E10's scheduler, H14) |
 | M9 | measured | Pseudo-legal: PASS (2.2x / 2.5x the targets on one thread), history term 2%; with E5a's fast legality: 1.01x at 240 boards on one core (in the band), 1.87x on two; 1.21x at 600. The Phase-3 re-check waits for a GPU evaluation rate (M19) |
-| M22 | measured | Turn width on t0database (692 games, the default rules, `t5d-measure --turns --turn-summary`; `tools/turn_width.hpp`): more than one playable board at the turn's start - where the D2 arms differ - in 15.1% / 65.2% / 99.4% of turns (< 50 / 50-99 / 100-199 boards; 13 games at 100-199, none at 200+); more than one mandatory board in 5.8 / 27.1 / 64.0%, three or more in 0.7 / 6.7 / 16.0%; an optional board at the start in 10.5 / 44.5 / 65.7%; an optional move played in 1.2 / 2.5 / 1.1%; single-move turns 95.9 / 80.3 / 49.1% (a count of what was played, not of width). Part L's prediction holds (94.2% one mandatory board under 50). No threshold, no verdict: how it orders the D2 work is put to the user (issue 142); definitions issues 140-141, edits 110-115 |
+| M22 | measured | Turn width on t0database (692 games, the default rules, `t5d-measure --turns --turn-summary`; `tools/turn_width.hpp`): more than one playable board at the turn's start - where the D2 arms differ - in 15.1% / 65.2% / 99.4% of turns (< 50 / 50-99 / 100-199 boards; 13 games at 100-199, none at 200+); more than one mandatory board in 5.8 / 27.1 / 64.0%, three or more in 0.7 / 6.7 / 16.0%; an optional board at the start in 10.5 / 44.5 / 65.7%; an optional move played in 1.2 / 2.5 / 1.1%; single-move turns 95.9 / 80.3 / 49.1% (a count of what was played, not of width). Part L's prediction holds (94.2% one mandatory board under 50). No threshold, no verdict: how it orders the D2 work is put to the user (issue 142); definitions issues 140-141, edits 110-115. **The CHECKPOINT 8 figures (2026-10-23)**, per range: the optional moves played are 0.012 / 0.025 / 0.011 per turn and 1.1 / 2.0 / 0.6% of all moves; the compute share of the turns with more than one mandatory board (moves x one dense evaluation at the turn's N, §9.1-9.2's model; constant cost per move as the sensitivity reading) 18.0 / 43.4 / 81.9% (9.9 / 41.7 / 79.7%), 33.3% pooled (14.7%); of those with three or more 3.3 / 14.9 / 33.4%, 10.3% pooled. The ruled order (tree form, then flat) stands. The 5.8 / 27.1 / 64.0% the ruling and §8.2's CHECKPOINT 8 paragraph call playable are the mandatory shares (issue 156); edits 127, 128 |
 | M11 | built | Licence recorded in PROVENANCE.md |
 
 ## Parked, and why
@@ -3331,6 +3357,16 @@ superseded or made moot says so; nothing is deleted.
     unmeasured until the pilot self-play run (M18). (The first version of this issue
     called the multi-move turns "where the arms differ"; corrected at review.)
     *Ruled at CHECKPOINT 8: the tree form first, then the flat form, both built (D2, M22); M22 also reports per range the mandatory shares (more than one, three or more), the optional moves actually played and the compute share of multi-board turns - the engine lane.*
+    *Built 2026-10-23 (the CHECKPOINT 8 figures; MEASUREMENTS "Turn width (M22)"): per
+    range - < 50 / 50-99 / 100-199 boards, and ten-board buckets under 100 - more than
+    one mandatory board 5.8% / 27.1% / 64.0% of turns, three or more 0.7% / 6.7% /
+    16.0%; optional moves played in 1.2% / 2.5% / 1.1% of turns, 0.012 / 0.025 / 0.011
+    per turn, 1.1% / 2.0% / 0.6% of all moves; the compute share of the turns with more
+    than one mandatory board 18.0% / 43.4% / 81.9% (33.3% pooled), a move costed as one
+    dense evaluation at the turn's board count (§8.2: the ply split evaluates every node
+    inside a turn; §7: v1 is dense; §9.1-9.2's model) - with a constant cost per move,
+    9.9% / 41.7% / 79.7% (14.7%). The 5.8%, 27.1% and 64.0% the ruling reads as playable
+    shares were the mandatory ones already (issue 156). Proposed edits 127, 128.*
 143. **A6's arithmetic for the mandatory count is not the rules' count** (§2.3; register
     A6: "mandatory boards still to move — exact from the rules engine: −1 per ordinary
     move, −2 for a move between two present boards, 0 after a rewinding branch"). Checked
@@ -3524,6 +3560,24 @@ superseded or made moot says so; nothing is deleted.
     ("search configuration"). A root child verified illegal after the network scored it
     leaves the record with the network's raw prior over the leaf's moves (the memo) and
     the search's priors renormalised over the survivors. Proposed edit 126.
+156. **CHECKPOINT 8's M22 text calls the mandatory shares playable** (§8.2's "Measured
+    (CHECKPOINT 8, human games)" paragraph; register M22; register part L's outcome
+    note on "Most human-game turns under 50 boards have exactly one mandatory board").
+    §8.2 says "more than one playable board at the turn's start in 5.8%, 27.1% and
+    64.0% of turns under 50, 50–99 and 100–199 boards. Playable boards include optional
+    ones, so these bound the mandatory share from above"; register M22 says "> 1
+    playable board at 5.8 / 27.1 / 64.0% of turn starts"; part L says "at most one
+    playable board at 94.2% of turn starts under 50 boards". M22's report (MEASUREMENTS,
+    issue 142, the M22 row) gives 5.8%, 27.1% and 64.0% as the turns with more than one
+    **mandatory** board and 94.2% as those with one mandatory board; the turns with
+    more than one playable board are 15.1%, 65.2% and 99.4%, and one playable board
+    84.9% under 50 boards. So the figures are not an upper bound on the mandatory share
+    but the share itself, and "at least 94% of turns are single-board" holds of
+    mandatory boards (94.2%) and not of playable ones (84.9%). Nothing ruled changes:
+    the build order (tree form, then flat) does not rest on the labels, and the figures
+    the ruling asked for are reported (issue 142's Built note). For the user: the
+    ruling's premise ("Your figures count playable boards") read the labels the wrong
+    way round. Proposed edits 127, 128.
 
 ## Proposed spec edits
 
@@ -4441,6 +4495,51 @@ struck through, where nothing of it is left to apply); the others stand as writt
     network, search configuration, temperature, PCR flag)". Proposed - add "the legality
     classification's budget, with which the engine's expansion rebuilds each decision's
     candidate moves - the network's input - exactly". Why: issue 155.
+127. **§8.2's "Measured (CHECKPOINT 8, human games)" paragraph and register M22 (M4
+    write-back of M22's CHECKPOINT 8 figures)**: §8.2 now - "more than one playable
+    board at the turn's start in 5.8%, 27.1% and 64.0% of turns under 50, 50–99 and
+    100–199 boards. Playable boards include optional ones, so these bound the mandatory
+    share from above: under 50 boards, where the human games spend 88% of their moves,
+    at least 94% of turns are single-board and the arms nearly coincide; the difference
+    concentrates where the compute is. Still to report: the same counts for mandatory
+    boards, the share with three or more, the optional moves actually played, and the
+    compute share of multi-board turns." Proposed, up to "**Build order:**" - "more
+    than one mandatory board at the turn's start in 5.8%, 27.1% and 64.0% of turns under
+    50, 50–99 and 100–199 boards, three or more in 0.7%, 6.7% and 16.0%; more than one
+    playable board, optional ones included, in 15.1%, 65.2% and 99.4%. Under 50 boards,
+    where the human games make 86% of their moves, 94% of turns have one mandatory board
+    (85% one playable board, where the arms coincide). The difference concentrates where
+    the compute is: with a move costed as one dense evaluation at the turn's board count
+    (§9.1 - the ply split evaluates every node inside a turn), the turns with more than
+    one mandatory board carry 18.0%, 43.4% and 81.9% of the compute in the three ranges
+    (9.9%, 41.7% and 79.7% of the moves) and 33.3% of it overall (8.5% of turns, 14.7%
+    of moves); those with three or more 3.3%, 14.9% and 33.4% (10.3% overall). Optional
+    moves are rarely played: in 1.2%, 2.5% and 1.1% of turns - 1.1%, 2.0% and 0.6% of
+    the moves, never more than two in a turn - though optional boards are there at
+    10.5%, 44.5% and 65.7% of turn starts. No human turn starts at 200 boards or more
+    (M22; MEASUREMENTS, "Turn width (M22)")." Register M22 now - "... measured
+    (CHECKPOINT 8): > 1 playable board at 5.8 / 27.1 / 64.0% of turn starts under 50 /
+    50–99 / 100–199 boards; mandatory, three-or-more, optional-move and compute-share
+    figures to follow; build order tree form, then flat | Measured (in part)". Proposed -
+    "... measured (CHECKPOINT 8; M22): > 1 mandatory board at 5.8 / 27.1 / 64.0% of turn
+    starts under 50 / 50–99 / 100–199 boards, ≥ 3 at 0.7 / 6.7 / 16.0% (> 1 playable
+    board 15.1 / 65.2 / 99.4%); optional moves played in 1.2 / 2.5 / 1.1% of turns, 1.1
+    / 2.0 / 0.6% of moves; compute share of turns with > 1 mandatory board 18.0 / 43.4 /
+    81.9%, 33.3% overall (a move = one dense evaluation at the turn's N, §9.1; at a
+    constant cost per move 9.9 / 41.7 / 79.7%, 14.7%); build order tree form, then flat
+    | Measured". Why: M4 - the figures the ruling asked for are measured, and the
+    paragraph's "Still to report" is done; and issue 156 - the paragraph and the row
+    call the mandatory shares playable, and reason from that ("bound the mandatory share
+    from above") to a conclusion the figures support directly.
+128. **Register part L's outcome note on "Most human-game turns under 50 boards have
+    exactly one mandatory board", and (optional) the prediction above it**: now - "—
+    **confirmed at CHECKPOINT 8**: at most one playable board at 94.2% of turn starts
+    under 50 boards". Proposed - "— **confirmed at CHECKPOINT 8**: one mandatory board
+    at 94.2% of turn starts under 50 boards (one playable board at 84.9%)". And, if part
+    L records a prediction's regime before its test, on "Turn-start-only forms ... once
+    turns have three or more mandatory boards": "(on the human games that regime is
+    1.5% of turns and 10.3% of the dense compute - M22; 6x tests it)". Why: issue 156;
+    the second so that 6x's outcome is read against how much of the compute it covers.
 
 ## Session log
 

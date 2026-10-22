@@ -65,6 +65,36 @@
 // THE SUMMARY (turn_stats): a set of actions' distributions and shares - the
 // fields of --turn-summary's lines - per board-count range at the action's
 // start (kTurnRanges, kTurnBuckets) and per mandatory class (1, 2, 3, 4+).
+// Among them the four the user's CHECKPOINT 8 ruling on build-log spec issue
+// 142 names, per range: the shares of actions with more than one and with
+// three or more MANDATORY boards (mandatory_over_1, mandatory_over_2); the
+// optional moves actually played - the share of actions with one, their mean
+// per action, and their total as a share of all the moves; and the COMPUTE
+// SHARE of multi-board actions - the sum over the actions with more than one
+// mandatory board of moves x the cost of a move, over the same sum for every
+// action (beside it, the same for three or more mandatory boards and for more
+// than one playable board).
+//
+// THE COST OF A MOVE (the compute share's model - arithmetic, not a network
+// run; nothing here touches a network). An action's compute is its moves x
+// the cost of one move. Under the ply split - D2's built arm and default -
+// every node inside a turn gets its own network evaluation (spec §8.2: "a
+// turn with k mandatory boards costs k evaluations along every path"), so a
+// move costs one evaluation. Two readings:
+//  * DENSE (the figure): one evaluation of the dense network - v1 is dense
+//    (spec §7: "Build dense") - at the action's board count N, by spec §9.1
+//    and §9.2's analytic model as stage N3's cost model computes it
+//    (python/t5d/net/cost.py, dense_flops; docs/MEASUREMENTS.md's window
+//    verdict uses it too): attention 4 T^2 d L, the four projections and the
+//    FFN 40 T d^2 L (8 + 4r at FFN ratio r = 8), T = 66 N + 16 tokens (64
+//    squares and 2 registers a board, 16 global registers), d = 256, L = 16 -
+//    4.78 TFLOPs at 240 boards, §9.2's figure (dense_eval_flops);
+//  * CONSTANT (the sensitivity reading): every move costs the same, so the
+//    compute share is the share of the moves.
+// N is the count at the action's start for each of its moves; each move adds
+// a board or two, so a long action's later moves are slightly understated,
+// which understates the multi-board share, if anything. The submission is not
+// a move and costs nothing here.
 
 #ifndef T5D_TOOLS_TURN_WIDTH_HPP
 #define T5D_TOOLS_TURN_WIDTH_HPP
@@ -180,6 +210,24 @@ inline constexpr const char* kMandatoryClasses[] = {"1", "2", "3", "4+"};
 /// none (T5: every action starts with a mandatory board).
 int mandatory_class(int mandatory);
 
+/// The cost model's constants (see the header comment): tokens per board and
+/// global tokens (T = 66 N + 16), d_model, layers, and the linear terms'
+/// coefficient (8 + 4r at FFN ratio r = 8) - spec §9.2's starting spec.
+inline constexpr double kCostTokensPerBoard = 66;
+inline constexpr double kCostGlobalTokens = 16;
+inline constexpr double kCostDModel = 256;
+inline constexpr double kCostLayers = 16;
+inline constexpr double kCostLinearCoefficient = 40;
+/// The cost model in words, for the summary's head line.
+inline constexpr const char* kCostModel =
+    "moves x one dense evaluation at N, the board count at the action's start: "
+    "4 T^2 d L + 40 T d^2 L FLOPs, T = 66 N + 16, d = 256, L = 16 (spec 9.1-9.2; N3's "
+    "dense_flops); _constant: moves x 1";
+
+/// The dense network's analytic FLOPs for one evaluation at `boards` boards:
+/// 4 T^2 d L + 40 T d^2 L with T = 66 N + 16, d = 256, L = 16.
+double dense_eval_flops(std::size_t boards);
+
 /// Linear interpolation between order statistics (numpy's default); 0 for
 /// an empty set.
 double quantile(std::vector<double> values, double q);
@@ -233,7 +281,23 @@ struct TurnStats {
   long long mandatory_gained = 0;
   long long moves_on_released = 0;
   long long moves_on_gained = 0;
+  // -- the compute (the cost of a move, header comment): sums of moves x the
+  //    cost of a move over every action and over those with more than one
+  //    mandatory board, with three or more, and with more than one playable
+  //    board - constant (the moves) and dense (FLOPs)
+  long long moves_total = 0;
+  long long moves_mandatory_over_1 = 0;
+  long long moves_mandatory_over_2 = 0;
+  long long moves_playable_over_1 = 0;
+  double dense_flops = 0;
+  double dense_flops_mandatory_over_1 = 0;
+  double dense_flops_mandatory_over_2 = 0;
+  double dense_flops_playable_over_1 = 0;
 };
+
+/// part / whole, 0 when whole is 0 - the summary's shares (the compute
+/// shares among them: dense_flops_mandatory_over_1 / dense_flops, ...).
+double share_of(double part, double whole);
 
 /// The statistics of `actions`. std::invalid_argument for an action with no
 /// mandatory board or no move (T5: every action has both).

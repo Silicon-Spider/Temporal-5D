@@ -623,7 +623,7 @@ valid.
 
 ## Phase 1 counts with no threshold
 
-### Turn width (M22) on the human games - one mandatory board in 94% of turns under 50 boards, 73% at 50-99, 36% at 100-199 (no threshold, no verdict)
+### Turn width (M22) on the human games - one mandatory board in 94% of turns under 50 boards, 73% at 50-99, 36% at 100-199; the turns with more than one carry 18%, 43% and 82% of the dense compute (no threshold, no verdict)
 
 **What it is.** Register M22 (Committed, process; spec §15.1's Phase 1 row and §8.2
 "Measure first"): mandatory boards per turn and optional moves played, per
@@ -805,3 +805,124 @@ mandatory boards: 0.7%, 6.7% and 16.0% of turns. Optional moves are rarely playe
 player chose. Nothing is measured at 200 boards and up, where §8.2's cost argument
 mostly applies: the pilot self-play run (M18) is the first source of the engine's own
 distribution there.
+
+**The CHECKPOINT 8 figures (2026-10-23): mandatory boards, optional moves played and
+the compute share of multi-board turns.** The user's ruling on spec issue 142: "Your
+figures count playable boards, which include optional ones. Per range, also report:
+the share of turns with more than one and with three or more mandatory boards, optional
+moves actually played, and the compute share of multi-board turns (moves x per-move
+cost)." The figures of 2026-10-17 that the ruling quotes - 5.8%, 27.1% and 64.0% -
+were already the shares with more than one **mandatory** board (the tables above); the
+playable shares are 15.1%, 65.2% and 99.4%. Spec §8.2's CHECKPOINT 8 paragraph and
+register M22 and part L carry the two swapped (build-log spec issue 156). Below, each of
+the four figures the ruling names, per range.
+
+*Conditions.* 2026-10-23, machine `dev-r` - counts and arithmetic, not timings, so the
+shared machine's load does not matter. The engine is `main`'s at 7f5f853 (after H51,
+across which M22's command was byte-identical); the counting is `t5d-measure --turns
+--turn-summary` with this entry's additions to `tools/turn_width.hpp` (the commit that
+adds this paragraph, on 7f5f853), Release, MSYS2 g++ 16.2.0 (Rev3), `--werror`, 583 of
+583 engine tests passing. Data and command as above: t0database at `d49da405...`
+(`Data.csv` sha256 `37fb7c1c...`), converted afresh by `py data/t0database/to_5dpgn.py
+build/t0db` (761 records, 237 empty rows skipped; identical, file for file, to a second
+conversion), then `build/engine/t5d-measure --turns --turn-summary build/t0db/*.5dpgn` -
+run twice, the same bytes. Rules: the default ruleset (`0x0`), parse mode, as above.
+Records and games as above: 716 replay, 692 games, 27,097 turns, 29,073 moves. Every
+line of the output that existed before - each turn's counts and every earlier summary
+field - is unchanged; the new fields are `moves_total`, `optional_moves_total`,
+`optional_moves_share_of_moves`, `compute_share_{mandatory_over_1, mandatory_over_2,
+playable_over_1}` and their `_constant` readings, `dense_tflops`, and the head line's
+`cost_model`. The figures were recomputed independently from the per-turn lines (a
+separate script working from the definitions and the cost formula): 15 ranges x 16
+figures, no difference.
+
+*The cost of a move* (`tools/turn_width.hpp`, "THE COST OF A MOVE"). A turn's compute
+is its moves x the cost of one move. Under the ply split - D2's built arm and default -
+"every node inside a turn gets its own network evaluation, so a turn with k mandatory
+boards costs k evaluations along every path" (§8.2), so a move costs one evaluation.
+The documents leave its size open; two readings:
+
+- **dense (the figure)**: one evaluation of the dense network - v1 is dense (§7: "Build
+  dense") - at the turn's board count N, by §9.1-9.2's analytic model as stage N3's cost
+  model computes it (`python/t5d/net/cost.py`, `dense_flops`; the window verdict above
+  uses the same model): 4 T^2 d L + 40 T d^2 L FLOPs, T = 66N + 16 tokens, d = 256,
+  L = 16 - 0.036 TFLOPs at 10 boards, 0.99 at 100, 4.78 at 240 (§9.2's figure). It
+  weighs a move at 100 boards 28 times one at 10.
+- **constant (the sensitivity reading)**: every move costs the same, so the compute
+  share is the share of the moves.
+
+N is the count at the turn's start for each of its moves (each move adds a board or
+two, so a long turn's later moves are slightly understated - the multi-board shares, if
+anything, too). The submission costs nothing. These are the shares of the **played
+line's** compute - the moves the players made, each costed as the ply split costs a
+node - not of a search: they stand for the ply split's search in proportion only if its
+paths through a turn are as long as the turn played. What the turn-start forms save is
+6x's to measure.
+
+| N at the turn's start | turns | moves | more than one mandatory board | three or more | (more than one playable board) | turns with an optional move | optional moves per turn (mean) | optional moves, share of all moves | compute share of turns with more than one mandatory board: dense / constant | three or more: dense / constant | (more than one playable board: dense / constant) |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| < 50 | 24,002 | 25,110 | **5.8%** | **0.7%** | 15.1% | **1.2%** | **0.012** | **1.1%** (288) | **18.0%** / 9.9% | 3.3% / 1.6% | 32.4% / 18.8% |
+| 50-99 | 2,920 | 3,653 | **27.1%** | **6.7%** | 65.2% | **2.5%** | **0.025** | **2.0%** (72) | **43.4%** / 41.7% | 14.9% / 13.6% | 75.5% / 72.2% |
+| 100-199 (13 games) | 175 | 310 | **64.0%** | **16.0%** | 99.4% | **1.1%** | **0.011** | **0.6%** (2) | **81.9%** / 79.7% | 33.4% / 31.0% | 99.8% / 99.7% |
+| 200+ | 0 | 0 | no data | | | | | | | | |
+| pooled (context) | 27,097 | 29,073 | 8.5% | 1.5% | 21.0% | 1.3% | 0.013 | 1.2% (362) | **33.3%** / 14.7% | 10.3% / 3.4% | 54.4% / 26.4% |
+
+Ten-board buckets under 100 (strict; within a bucket N barely varies, so the dense and
+constant shares nearly agree):
+
+| N | turns | moves | more than one mandatory | three or more | turns with an optional move | optional moves per turn | optional moves / all moves | compute share, more than one mandatory: dense / constant | three or more: dense / constant |
+|---|---|---|---|---|---|---|---|---|---|
+| 1-9 | 5,524 | 5,525 | 0.02% | 0 | 0 | 0 | 0 | 0.06% / 0.04% | 0 / 0 |
+| 10-19 | 6,551 | 6,593 | 1.0% | 0.03% | 0.6% | 0.006 | 0.6% (41) | 1.9% / 1.6% | 0.10% / 0.08% |
+| 20-29 | 5,504 | 5,740 | 6.2% | 0.2% | 1.7% | 0.017 | 1.7% (96) | 10.5% / 10.0% | 0.5% / 0.4% |
+| 30-39 | 3,901 | 4,318 | 12.7% | 1.9% | 2.2% | 0.023 | 2.0% (88) | 21.4% / 20.9% | 4.2% / 4.0% |
+| 40-49 | 2,522 | 2,934 | 19.7% | 3.3% | 2.4% | 0.025 | 2.1% (63) | 31.0% / 30.9% | 6.6% / 6.6% |
+| 50-59 | 1,418 | 1,701 | 23.7% | 4.4% | 2.4% | 0.024 | 2.0% (34) | 36.4% / 36.3% | 8.7% / 8.6% |
+| 60-69 | 738 | 935 | 26.8% | 7.9% | 2.8% | 0.028 | 2.2% (21) | 42.2% / 42.1% | 16.8% / 16.8% |
+| 70-79 | 387 | 507 | 34.6% | 9.3% | 2.3% | 0.023 | 1.8% (9) | 50.1% / 50.1% | 16.6% / 16.8% |
+| 80-89 | 241 | 329 | 32.4% | 10.8% | 2.5% | 0.025 | 1.8% (6) | 50.5% / 50.5% | 22.7% / 22.8% |
+| 90-99 | 136 | 181 | 33.8% | 8.8% | 1.5% | 0.015 | 1.1% (2) | 50.2% / 50.3% | 17.9% / 18.2% |
+
+Where the compute lies, by range (strict, dense): under 50 boards 54.4% of it (86.4% of
+the moves, 88.6% of the turns), at 50-99 36.0% (12.6%, 10.8%), at 100-199 9.6% (1.1%,
+0.6%); 4,911 TFLOPs along the 692 games' played lines in all. The optional move is the
+measured one of issue 140 (a move made on a board not mandatory at the turn's start,
+either of its boards); its other readings are in the table above.
+
+*Sensitivity.* Grouped into games as M7 does (674 games): under 50 boards more than one
+mandatory board 5.9%, three or more 0.7%, an optional move in 1.2% of turns and 1.2% of
+moves, compute share 18.1% / 10.0% (three or more 3.3% / 1.6%); 50-99 and 100-199
+unchanged; pooled 33.4% / 14.8%. The 45 refused records' 1,165 actions added: no figure
+of the table moves by more than 0.7 points (50-99: compute share 43.4% -> 44.1%, more
+than one mandatory board 27.1% -> 27.7%).
+
+*Read against part L and §8.2.*
+
+- Part L, "Most human-game turns under 50 boards have exactly one mandatory board":
+  **holds**, 94.2% (unchanged). The register's outcome note says "at most one playable
+  board at 94.2%" - that figure is one mandatory board; one playable board is 84.9%
+  (issue 156).
+- Part L, the turn-start-only forms ahead "once turns have three or more mandatory
+  boards" (6x decides it; nothing here tests it): on the human games that regime is
+  0.7%, 6.7% and 16.0% of turns, 1.6%, 13.6% and 31.0% of moves, and **3.3%, 14.9% and
+  33.4% of the dense compute** - pooled, 1.5% of turns, 3.4% of moves and **10.3% of
+  the compute**. Where the prediction applies, it bears on a tenth of the human games'
+  compute; above 200 boards, unmeasured, it may bear on more.
+- §8.2, "under 50 boards, where the human games spend 88% of their moves": 86.4% of the
+  moves (88.6% of the turns; M7 counted 87.8% of positions) - but 54.4% of the dense
+  compute.
+- §8.2, "at least 94% of turns are single-board and the arms nearly coincide": 94.2%
+  have one mandatory board; 84.9% one playable board, where the arms are identical.
+  The turns with more than one mandatory board there are 9.9% of the moves and 18.0% of
+  the dense compute; those with more than one playable board 18.8% and 32.4%.
+- §8.2, "the difference concentrates where the compute is": **holds under the dense
+  model**. Pooled, turns with more than one mandatory board are 8.5% of turns, 14.7% of
+  moves and 33.3% of the dense compute; within each range the dense share exceeds the
+  turn share (18.0% against 5.8%, 43.4% against 27.1%, 81.9% against 64.0%). Under a
+  constant cost per move the concentration is the moves' alone (14.7% pooled).
+- §8.2, "Playable boards include optional ones, so these bound the mandatory share from
+  above": the figures it quotes are the mandatory shares themselves; the playable ones
+  are 15.1%, 65.2% and 99.4% (issue 156).
+- Optional moves actually played: 1.2%, 2.5% and 1.1% of turns, 1.1%, 2.0% and 0.6% of
+  moves (362 of 29,073 in all), never more than two in a turn - against optional boards
+  at 10.5%, 44.5% and 65.7% of turn starts.
