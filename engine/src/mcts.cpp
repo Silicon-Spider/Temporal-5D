@@ -547,7 +547,8 @@ struct Search::Impl {
   // I15's root side table: each root edge's prior before the noise (after the
   // temperatures, the unknown-move scale and the submit share), in the root's
   // edge order - filled by the root's own expansion; empty for a carried root
-  // (expanded as a child: its prior is that already).
+  // (expanded as a child: its prior is that already) until the tree form
+  // re-evaluates one it inherited (reevaluate: that is its own expansion).
   std::vector<double> root_prior_noise_free_;
   // ... and the Dirichlet concentration the root noise drew each edge's
   // variate with (E1: dirichlet_alphas over the open edges; a pruned edge's
@@ -675,6 +676,19 @@ struct Search::Impl {
           "inside-turn node's inherited priors, and whether the network evaluated it, would depend on the path "
           "that created it, and identity is the state (§8.5, C11; §14.4 and C21 refuse path-dependent "
           "evaluations); the documents do not say how the two combine (build-log spec issue 301)");
+    }
+    if (p.split == TurnSplit::Tree && !p.tree_inherit_value && uncertainty_read()) {
+      // 6m's rule (check_evaluation): a signal that is read must be given.
+      // Without its parent's value an inherited node has no uncertainty signal
+      // (its eval_var 0), and E2's cPUCT scale (a node's own, read at every
+      // inherited node selected through) and E5's terms (a child's: the
+      // variance bonus, the LCB's categorical part) would read that 0 as no
+      // variance - an arm run silently wrong. Refused wherever 6m refuses a
+      // missing signal (uncertainty_read), E3's backup included.
+      throw std::invalid_argument(
+          "SearchParams::tree_inherit_value: off, the tree form's inherited nodes have no uncertainty signal, "
+          "which E2, E3 or E5's term reads (variance_scaled_cpuct, uncertainty_weighted_backup, variance_bonus, "
+          "or the LCB rule with lcb_categorical_weight > 0) - a signal that is read must be given (6m)");
     }
     if (p.expand.pin || p.expand.check || p.expand.travel_threat) {
       throw std::invalid_argument("SearchParams::expand: pin, check and travel-threat are not built");
@@ -1048,10 +1062,9 @@ struct Search::Impl {
     }
   }
 
-  void expand_node(NodeId id, const Evaluation& ev, const Expansion& x) {
-    Node& n = nodes_[id];
-    const MoveList& moves = x.moves();
-    check_evaluation(ev, moves.size());
+  // A node's evaluation taken: its value, uncertainty signal, error and
+  // moves-left (eval_*).
+  void take_value(Node& n, const Evaluation& ev) {
     // D3: the value search uses is the WDL's; the uncertainty signal is the
     // categorical's variance or the error head's output (6m) - 0 without one,
     // which only a search that reads no signal accepts (check_evaluation), and
@@ -1068,6 +1081,24 @@ struct Search::Impl {
     }
     if (lacks_uncertainty(ev)) ++stats_.uncertainty_missing;
     n.has_eval = true;
+  }
+
+  // A leaf's evaluation delivered (or found in the cache): an unexpanded
+  // leaf is expanded with it; an expanded one is a carried root the tree form
+  // inherited (select_once), re-evaluated.
+  void take_evaluation(NodeId id, const Evaluation& ev, const Expansion& x) {
+    if (nodes_[id].expanded) {
+      reevaluate(id, ev, x);
+    } else {
+      expand_node(id, ev, x);
+    }
+  }
+
+  void expand_node(NodeId id, const Evaluation& ev, const Expansion& x) {
+    Node& n = nodes_[id];
+    const MoveList& moves = x.moves();
+    check_evaluation(ev, moves.size());
+    take_value(n, ev);
     n.edges.clear();
     std::vector<double> logits;
     n.submit_logit = ev.submit_logit;
@@ -1134,6 +1165,59 @@ struct Search::Impl {
       }
     }
     set_priors(id, logits, std::isnan(ev.submit_logit));
+  }
+
+  // D2's tree form: a carried root expanded on inherited priors, evaluated now
+  // that it is the root (select_once) - "the root" is always the network's.
+  // Its edges stay, with their children, visits and values (C12: the
+  // statistics carried), their unknown, verified and pruned flags; each takes
+  // the evaluation's logit for its move, matched to the expansion's moves by
+  // source, destination and promotion (the expansion is of the same state
+  // under the same classification, so every edge's move is there; one that
+  // were not would take the lowest), the submit edge the evaluation's submit
+  // logit. Its value, uncertainty signal, error and moves-left become the
+  // evaluation's, and its priors their softmax as the root's own expansion
+  // takes them (set_priors: the root's temperature, I15's side table; no
+  // noise - a carried root takes none). The edges are ordered by the new
+  // priors and widening keeps every edge already taken. Nothing else changes:
+  // the node's visits, value sums and solver bounds, its children's priors
+  // (inherited from the logits above it), A6's count.
+  void reevaluate(NodeId id, const Evaluation& ev, const Expansion& x) {
+    const MoveList& moves = x.moves();
+    check_evaluation(ev, moves.size());
+    using Coord = std::tuple<int, int, int, int, int, int, int>;
+    const auto coord = [](const Move& mv) {
+      return Coord{mv.from_timeline, mv.from_half_turn, mv.from_square, mv.to_timeline,
+                   mv.to_half_turn, mv.to_square, mv.promotes() ? index_of(mv.promotion) + 1 : 0};
+    };
+    std::map<Coord, float> index;
+    float lowest = 0;
+    for (std::size_t i = 0; i < moves.size(); ++i) {
+      index.emplace(coord(moves[i]), ev.logits[i]);
+      lowest = i == 0 ? ev.logits[i] : std::min(lowest, ev.logits[i]);
+    }
+    Node& n = nodes_[id];
+    take_value(n, ev);
+    n.inherited = false;
+    n.submit_logit = ev.submit_logit;
+    std::vector<double> logits;
+    logits.reserve(n.edges.size());
+    for (Edge& e : n.edges) {
+      if (e.submit) {
+        e.logit = ev.submit_logit;
+        logits.push_back(std::isnan(ev.submit_logit) ? 0.0 : static_cast<double>(ev.submit_logit));
+        continue;
+      }
+      const auto it = index.find(coord(e.move));
+      e.logit = it != index.end() ? it->second : lowest;
+      logits.push_back(static_cast<double>(e.logit));
+    }
+    set_priors(id, logits, std::isnan(ev.submit_logit));
+    Node& r = nodes_[id];
+    for (std::size_t i = r.instantiated; i < r.edges.size(); ++i) {
+      if (r.edges[i].child != kNoNode || r.edges[i].visits > 0) r.instantiated = i + 1;
+    }
+    if (id == root_) reset_best();  // the effort label's edge, in the new order
   }
 
   // The prior of node `id`'s edges from their logits (`logits[i]` edge i's; a
@@ -1737,6 +1821,19 @@ struct Search::Impl {
         backup(path_, n.eval_mean, n.eval_draw, backup_weight(n.eval_var), true);
         return Selected::Done;
       }
+      // D2's tree form: a root the network never saw - an inherited node
+      // carried by a re-root (advance; match play, C12) - is a leaf to the
+      // first simulation after the re-root: evaluated, its statistics kept
+      // (reevaluate), before any simulation goes on through it. The batch's
+      // other simulations wait for it, as for a fresh root.
+      if (n.inherited && cur == root_) {
+        if (n.pending) {
+          ++stats_.collisions;
+          collided_.push_back(path_);
+          return Selected::Collision;
+        }
+        return leaf(cur);
+      }
       if (!n.expanded) {
         if (n.pending) {
           ++stats_.collisions;
@@ -1834,7 +1931,7 @@ struct Search::Impl {
     if (cache_) {
       if (const Evaluation* ev = cache_->find(n.key, n.moves_made, epoch_, n.state, compare_origins())) {
         const Evaluation copy = *ev;
-        expand_node(id, copy, x);
+        take_evaluation(id, copy, x);
         ++stats_.cache_hits;
         const Node& done = nodes_[id];
         backup(path_, done.eval_mean, done.eval_draw, backup_weight(done.eval_var), true);
@@ -1944,7 +2041,7 @@ struct Search::Impl {
     try {
       for (const Pending& pd : pending_) {
         const Evaluation& ev = evaluations[pd.request];
-        expand_node(pd.leaf, ev, *slots_[pd.slot]);
+        take_evaluation(pd.leaf, ev, *slots_[pd.slot]);
         const Node& n = nodes_[pd.leaf];
         backup(pd.path, n.eval_mean, n.eval_draw, backup_weight(n.eval_var), true);
         ++delivered;
@@ -2056,7 +2153,8 @@ struct Search::Impl {
     table_.clear();
     for (NodeId id = 0; id < nodes_.size(); ++id) register_node(id);
     // Root noise belongs to a fresh root's expansion (self-play); a carried
-    // root (match play, where noise is off) gets none - nor a side table, and
+    // root (match play, where noise is off) gets none - nor a side table
+    // (until the tree form re-evaluates an inherited one: reevaluate), and
     // its effort label starts here (the history above it is not kept).
     noise_applied_ = nodes_[0].expanded;
     root_prior_noise_free_.clear();
@@ -2148,12 +2246,13 @@ struct Search::Impl {
       if (!n.turn_start && n.terminal != Terminal::None) fail("a game end during an action (C5)", id);
       if (n.turn_start && n.dead_end) fail("a turn start marked a dead end", id);
       // D2's tree form: an inherited node is a mid-turn node the network never
-      // saw - no evaluation, and no visit ends there unless it is solved (or a
-      // carried root with no child left).
+      // saw - no evaluation, and no visit ends there unless it is solved (a
+      // carried root is evaluated before any simulation runs through it, so it
+      // is no longer inherited when a visit could end there, stuck or not).
       if (n.inherited) {
         if (params_.split != TurnSplit::Tree) fail("an inherited node outside the tree form", id);
         if (n.has_eval || n.turn_start) fail("an inherited node evaluated, or a turn start", id);
-        if (n.ends != 0 && !solved(n) && !n.stuck) fail("a visit ended at an inherited node", id);
+        if (n.ends != 0 && !solved(n)) fail("a visit ended at an inherited node", id);
       }
       if (static_cast<std::uint64_t>(n.visits) != n.ends + through) {
         fail("visits " + std::to_string(n.visits) + " != ends " + std::to_string(n.ends) +

@@ -16,7 +16,8 @@
 // board-move split (D2 is undecided: --split turn and --split tree are the
 // other arms; the tree form's gates, --tree-gates, are §8.2's four by default -
 // a comma-separated list of between, capture, check and present, or always:
-// every mid-turn node evaluated, the ply split's search), a tree
+// every mid-turn node evaluated, the ply split's search; refused with another
+// split, which reads no gate; the Engine header names them), a tree
 // (--graph: MCGS, C11), self-play (a fresh search per decision, C14; visits
 // sampled at temperature 1 for the first 16 decisions, Dirichlet noise at the
 // root: --no-noise for none) - --match plays the
@@ -101,6 +102,20 @@ double real(const char* option, const char* text) {
   return v;
 }
 
+// The tree form's gates by name, as --tree-gates takes them.
+std::string gate_names(std::uint32_t gates) {
+  if (gates == 0) return "none";
+  if ((gates & kGateAlways) != 0) return "always";
+  std::string out;
+  for (const auto& [bit, name] : {std::pair<std::uint32_t, const char*>{kGateBetween, "between"},
+                                  {kGateCapture, "capture"}, {kGateCheck, "check"}, {kGatePresent, "present"}}) {
+    if ((gates & bit) == 0) continue;
+    if (!out.empty()) out += ",";
+    out += name;
+  }
+  return out;
+}
+
 constexpr std::uint64_t kU32 = std::numeric_limits<std::uint32_t>::max();
 constexpr std::uint64_t kInt = static_cast<std::uint64_t>(std::numeric_limits<int>::max());
 constexpr std::uint64_t kAny = std::numeric_limits<std::uint64_t>::max();
@@ -115,6 +130,7 @@ int main(int argc, char** argv) {
   params.turn_cap.turns = 20;
   params.turn_cap.boards = 300;
   RuleOptions rules;
+  bool tree_gates_given = false;
   try {
     for (int i = 1; i < argc; ++i) {
       const char* a = argv[i];
@@ -178,6 +194,7 @@ int main(int argc, char** argv) {
           }
         }
         params.search.tree_gates = gates;
+        tree_gates_given = true;
       } else if (std::strcmp(a, "--graph") == 0) {
         params.search.graph = true;
       } else if (std::strcmp(a, "--node-key") == 0) {
@@ -243,6 +260,11 @@ int main(int argc, char** argv) {
         throw std::invalid_argument(std::string("unknown option ") + a);
       }
     }
+    // The gates are the tree form's alone: given with another split they
+    // would be read by nothing, and the record would not say so.
+    if (tree_gates_given && params.search.split != TurnSplit::Tree) {
+      throw std::invalid_argument("--tree-gates: the tree form's interaction gates, read only with --split tree");
+    }
   } catch (const std::exception& e) {
     std::fprintf(stderr, "t5d-play: %s\n", e.what());
     usage(stderr);
@@ -265,7 +287,7 @@ int main(int argc, char** argv) {
                          (params.search.split == TurnSplit::BoardMove   ? "board-move split"
                           : params.search.split == TurnSplit::WholeTurn ? "whole-turn split"
                                                                          : "tree form, gates " +
-                                                                               std::to_string(params.search.tree_gates)) +
+                                                                               gate_names(params.search.tree_gates)) +
                          (params.search.graph ? ", graph" : ", tree") +
                          (params.search.proof_channel ? ", proof channel ON (H41: experiments only)" : "") +
                          (params.search.root_noise && !params.match_play ? ", root noise" : "") +

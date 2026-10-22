@@ -153,6 +153,7 @@ Targets (all in `build/engine`):
 | `t5d-bench` | expansion throughput (see "t5d-bench") |
 | `t5d-scan6b` | experiment 6b: the scanner's horizon per node budget (see "Stage E5b") |
 | `t5d-play` | the engine plays itself and prints the 5dpgn record (see "Stage E6a") |
+| `t5d-tree-count` | D2's tree form against the ply split on recorded games' turn starts: evaluation counts (`tools/t5d_tree_count.cpp`; docs/MEASUREMENTS.md) |
 
 Release builds use -O2; every target builds with `-Wall -Wextra -Wpedantic -Wshadow
 -Wconversion -Wsign-conversion`, warning-free (`--werror` makes that binding). On
@@ -2268,7 +2269,9 @@ whole-turn arm is superseded by the flat form, CHECKPOINT 6, and retires with it
   classification, submit as at a leaf), their priors its parent's logits matched move by
   move by source, destination and promotion (a J6 branch onto a board played since takes
   the non-branching jump's logit; a move the parent did not have, the parent's lowest
-  logit; submit's logit carried down, NaN giving `submit_share`) - and the simulation runs
+  logit - such moves arise, a move proved illegal as the parent's next one becoming
+  legal after another board is played, issue 161(b); submit's logit carried down, NaN giving
+  `submit_share`) - and the simulation runs
   on through it. Each node keeps its logits on its edges, so below a gated
   re-evaluation its logits replace the turn start's. The network is called at the root,
   at turn starts (a complete turn) and at a gated mid-turn node, which is an ordinary
@@ -2276,9 +2279,18 @@ whole-turn arm is superseded by the flat form, CHECKPOINT 6, and retires with it
   node backs up nothing of its own - the leaf's value passes through it as through any
   inner node (its visits are its children's, no visit ends there unless it is solved);
   with `tree_inherit_value` (on) its FPU base and uncertainty signal are its parent's
-  evaluation's (`NodeView::inherited`; `RootChild::evaluated` is false for it). The
-  gates, §8.2's four, each reading a parameter with a placeholder (build-log spec issues
-  157-161):
+  evaluation's (`NodeView::inherited`; `RootChild::evaluated` is false for it) - off,
+  with a term that reads the uncertainty signal on (E2, E3, E5's variance bonus or LCB
+  term), it is refused (6m: a signal that is read must be given). **The root is always
+  evaluated**: a re-root (`advance`, `advance_to`, `advance_moves`; match play carries the
+  tree, C12) onto an inherited node makes it a leaf to the first simulation after it - the
+  network evaluates it (one request; the batch's other simulations wait, as for a fresh
+  root), its edges keep their children and statistics, its value and its edges' logits
+  and priors become the evaluation's (a fresh root's at that state: the root temperature,
+  no noise, I15's side table refilled), the edges are ordered by the new priors with
+  every visited one still instantiated, and it is no longer inherited. Its children keep
+  the priors they inherited. The gates, §8.2's four, each reading a parameter with a
+  placeholder (build-log spec issues 157-161):
 
   | Gate (`kGate*`) | Fires on the move into a mid-turn node when | Reading's parameter: placeholder / alternative |
   |---|---|---|
@@ -2300,11 +2312,20 @@ whole-turn arm is superseded by the flat form, CHECKPOINT 6, and retires with it
   tree configuration, budgeted and exact legality and the pseudo-legal seam, batched and
   synchronous; with no gate the network sees only the root and turn starts; with one
   gate exactly the mid-turn nodes whose move fires it (each predicate recomputed in the
-  test); the capture reading on constructed positions; the inherited logits (a J6 twin
-  included) and their softmax; §15.4's turn structure and dead ends; the refusal. The C
-  step API reproduces it by digest, and Python drives it (`T5D_SPLIT_TREE`, the
-  `tree_*` fields, the summary's `inherited_nodes` and `gate_*`); `t5d-play --split
-  tree [--tree-gates all|none|always|between,capture,check,present]`.
+  test), under both readings of the boards still to move (positions with an optional
+  board, where they differ); the capture reading on constructed positions; the inherited
+  logits (a J6 twin and promotions included) and their softmax, the inherited submit
+  logit (Python, through the step API), the inherited value (with `tree_inherit_value`
+  on and off) and its refusal; an inherited node's legality classification (no budget:
+  every move unknown; the pseudo-legal seam: illegal moves kept, dead ends found without
+  the network); a carried root the tree form inherited evaluated once, its statistics
+  kept, its priors a fresh root's (C++ and through the Python step API with the network);
+  §15.4's turn structure and dead ends; the refusal. The C step API reproduces it by
+  digest, and Python drives it (`T5D_SPLIT_TREE`, the `tree_*` fields, the summary's
+  `inherited_nodes` and `gate_*`); `t5d-play --split tree [--tree-gates
+  all|none|always|between,capture,check,present]` (refused with another split; the
+  Engine header names the gates). The evaluation counts against the ply split on human
+  games: `t5d-tree-count` (docs/MEASUREMENTS.md).
 
 **How legality enters** - one call site (`leaf_expansion` in `src/mcts.cpp`): a leaf's
 expansion with `ExpandOptions::legal_moves`, classified by E5a's tiers under
@@ -2620,7 +2641,8 @@ t5d-play [--variant NAME] [--evaluator uniform|random|material] [--playouts N]
 
 Defaults: Standard, uniform, 64 playouts per decision, the board-move split (the tree
 form's gates, under `--split tree`, §8.2's four - a comma-separated list of between,
-capture, check and present, or always), a tree,
+capture, check and present, or always; refused with another split, which reads no gate;
+the Engine header names them), a tree,
 self-play with root noise (`--no-noise`: none), the proof channel off (H41;
 `--proof-channel` for experiments, said in the Engine header), a cap of
 20 turns or 300 boards (uniform play branches freely: by turn 12 a game can
@@ -3919,8 +3941,10 @@ Each is recorded where it is made (the header comments) and listed here:
   boards still to move passed, or C4's test), a shift of the present (any move of it, or
   a rewind only) - each a parameter; the inheritance source (the nearest evaluated node
   above, move by move; unmatched moves the lowest logit; submit's logit carried down),
-  the inherited node's value (its parent's evaluation's, for FPU and E2/E3), a gated
-  node an ordinary leaf, the root always evaluated; MCGS refused (issue 301); §8.2's fixed
+  the inherited node's value (its parent's evaluation's, for FPU and E2/E5; off with a
+  term that reads it refused), a gated node an ordinary leaf, the root always evaluated (a
+  carried inherited root re-evaluated by the network, its statistics kept); MCGS refused
+  (issue 301); §8.2's fixed
   board order not built (an add-on, issue 162).
 - **A6's turn state** (engine ABI round 1; build-log spec issues 143-145): the
   mandatory count is the state machine's own - A6's "−1 / −2 / 0" arithmetic holds only

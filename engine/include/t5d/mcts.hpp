@@ -67,9 +67,17 @@
 //    evaluation backed up, the simulation ended. An inherited node takes no
 //    evaluation and backs up nothing of its own: the value of the leaf below
 //    it passes through it as through any inner node (its visits = its
-//    children's, ends 0 unless it is solved). With kGateAlways (§15.2's "every
-//    interaction gate firing") every mid-turn node is a leaf and the search is
-//    the ply split's, bit for bit. Refused with graph search (C11): under MCGS
+//    children's, ends 0 unless it is solved). The root is always the
+//    network's: a re-root (advance, advance_to, advance_moves; match play
+//    carries the tree, C12) onto an inherited node makes it a leaf to the
+//    first simulation after it - the network evaluates it, its edges and
+//    their statistics kept, its value and its edges' logits and priors the
+//    evaluation's (as a fresh root's, no noise), no longer inherited; the
+//    batch's other simulations wait for it, as for a fresh root. With
+//    kGateAlways (§15.2's "every interaction gate firing") every mid-turn
+//    node is a leaf and the search is the ply split's, bit for bit (H15's
+//    digest; memory_bytes() is not compared - a node is larger by the tree
+//    form's fields under every split). Refused with graph search (C11): under MCGS
 //    an inherited node's priors, and whether it was evaluated, would depend on
 //    the path that created it (build-log spec issue 301).
 //
@@ -439,9 +447,14 @@ struct SearchParams {
   CheckChange tree_check = CheckChange::Passed;            ///< placeholder
   PresentShift tree_present = PresentShift::Any;           ///< placeholder
   /// An inherited node's value before any backup (its FPU base: Q(parent) for
-  /// its unvisited children) and its uncertainty signal (E2's prior variance)
-  /// are its parent's evaluation - the one its priors came from - rather than
-  /// an unevaluated node's 0. Placeholder (§8.2 is silent).
+  /// its unvisited children) and its uncertainty signal are its parent's
+  /// evaluation - the one its priors came from - rather than an unevaluated
+  /// node's 0. The signal is read wherever a node's eval_var is: E2's cPUCT
+  /// scale (the node's own prior variance), E5's variance bonus (a child's;
+  /// RootChild::exploration_scale) and E5's LCB term (a root child's, with
+  /// lcb_categorical_weight > 0) - so off, with any of them (or E3) on, it is
+  /// refused (6m: a signal that is read must be given). Placeholder (§8.2 is
+  /// silent).
   bool tree_inherit_value = true;
 
   // ---- E1: PUCT, top-k instantiation, entropy-adaptive widening, FPU, noise -----
@@ -572,7 +585,9 @@ struct Limits {
   /// this many nodes (not counted from the call: the graph's size).
   std::uint64_t nodes = std::numeric_limits<std::uint64_t>::max();
   /// The memory budget: run() stops, between batches, once memory_bytes()
-  /// reaches it (one batch may pass it: at most batch_size leaves expanded).
+  /// reaches it (one batch may pass it: at most batch_size leaves expanded -
+  /// and under D2's tree form the nodes each of their paths expanded on
+  /// inherited priors, up to one per move of a turn).
   std::uint64_t bytes = std::numeric_limits<std::uint64_t>::max();
   /// A deadline in wall-clock seconds from the call, checked between batches;
   /// 0: none. Not deterministic - for tools and match play, never training.
@@ -922,7 +937,8 @@ struct NodeView {
   float eval_moves_left = std::numeric_limits<float>::quiet_NaN();  ///< moves-left (NaN: none)
   bool evaluated = false;    ///< it has an evaluation (eval_*)
   /// D2's tree form: expanded on inherited priors, never evaluated (eval_*
-  /// are its parent's with tree_inherit_value, 0 without).
+  /// are its parent's with tree_inherit_value, 0 without) - until a re-root
+  /// makes it the root and the network evaluates it.
   bool inherited = false;
   double k0 = 0;
   std::size_t instantiated = 0;
