@@ -2166,9 +2166,30 @@ Single-threaded; no time management (E7, E8), scanner (rung 1) or Lazy SMP yet.
 shifted inside the action it is no longer the colour to move on the present. Values
 are in [-1, 1] from that player's view; backing up across an edge flips the sign only
 when the two nodes' acting players differ - under the ply split, only across a submit
-edge. The evaluator's value is a 51-bin categorical
-distribution (D3), bins centred on `(2k - 50) / 50`; its mean is the leaf's value and
-its variance feeds E2, E3 and LCB.
+edge. The evaluator's value heads are D3's as corrected at CHECKPOINT 7 (engine ABI
+round 2), each from the leaf's acting player:
+
+- **WDL - the value search uses.** A leaf's value is `W - L` (the three normalised;
+  `wdl_value`), and its draw probability `D` is backed up beside the value on every
+  node and edge (Lc0's way; a mate backs up D 0, a stalemate and the turn cap's
+  convention D 1; an MCGS residual corrects D as it corrects Q). A root child's search
+  WDL is so `((1 - d + q) / 2, d, (1 - d - q) / 2)` (`RootChild::d`), which is what
+  I13's deblundering and D3's `q_ratio` blend need from the search.
+- **The 51-bin categorical** over the root search value (optional; bins centred on
+  `(2k - 50) / 50`): its mean is never backed up (before round 2 it was the leaf's
+  value - the reading reversal 28 corrected). Its variance is one of the two
+  uncertainty signals.
+- **The error head** (optional; >= 0, the predicted squared value - short-term gap):
+  the other signal. `SearchParams::uncertainty_source` (6m; register I10: "6m decides
+  which uncertainty signal search consumes") picks one - `Categorical` by default,
+  `ErrorHead` - as each node's variance, the one E2, E3 and E5's optional term read;
+  either signal absent is 0.
+- **Moves-left** (optional; D4) is recorded per node and never backed up: what one
+  edge adds to a moves-left count waits on the unit of "turn" (build-log spec issue
+  305), so the search keeps each root child's network outputs instead
+  (`RootChild::evaluated`, `network_wdl`, `network_moves_left`, `network_error`, the
+  root player's view) and the targets add the offset - the record I13 needs beside the
+  backed-up `(q, d)`.
 
 **D2's two arms** (`SearchParams::split`; D2 is undecided, ablations 6g/6k):
 
@@ -2245,8 +2266,9 @@ policy's entropy H - sharp policies narrow, flat ones widen. FPU: an unvisited c
 scores `Q(parent) - fpu_reduction * sqrt(visited prior mass)`. Root Dirichlet noise for
 self-play (`root_noise`, `dirichlet_alpha` per child, `dirichlet_epsilon`; seeded,
 deterministic). Behind flags: E2 - cPUCT scaled by `clamp(1 + lambda (sigma / sigma_ref
-- 1))`, sigma the node's value deviation (the categorical variance as a prior of
-weight `variance_prior_weight`, blended with the backed-up values'), and backups
+- 1))`, sigma the node's value deviation (its uncertainty signal - the categorical's
+variance by default, `uncertainty_source` - as a prior of weight
+`variance_prior_weight`, blended with the backed-up values'), and backups
 weighted `sigma_ref^2 / (sigma_ref^2 + var)`; E3 - U multiplied by `clamp(1 + beta
 (sigma_child / sigma_ref - 1), 1, cap)`, never below 1, nothing for an unevaluated
 child.
@@ -2264,7 +2286,7 @@ evaluator throws, when an evaluation is malformed - and when anything fails insi
 `gather` or `deliver`, an allocation included: `gather` abandons its batch before the
 exception leaves, `deliver` keeps what it delivered and abandons the rest (the tests
 inject a `bad_alloc` at every allocation of both). `run` resets every field of the
-evaluation buffers it reuses, the submit logit included. The epoch cannot change while a
+evaluation buffers it reuses, the submit logit and D3's heads included. The epoch cannot change while a
 batch waits (its evaluations belong to the epoch they were asked under).
 
 **MCGS** (C11, prototype, `graph`). Nodes keyed by `node_key(state, keying)`: the 5D
@@ -2328,8 +2350,9 @@ children proven lost are ineligible unless all are; if an eligible child is solv
 largest lower bound, exact for a solved child and `Q - A / sqrt(n)` otherwise; else
 `final_rule`: `Visits` (the baseline) or `Lcb` (default) - among children with at least
 `lcb_floor` (15%) of the most visits, the largest `Q - z sqrt(var / n)`, var plus
-`lcb_categorical_weight` times the child's categorical variance (the optional second
-term). Under MCGS the visits are the edges'. No depth factor (E6, refused).
+`lcb_categorical_weight` times the child's uncertainty signal (the optional second
+term; the categorical's variance unless `uncertainty_source` says the error head).
+Under MCGS the visits are the edges'. No depth factor (E6, refused).
 `select_final` is a pure function (`final_eligible` says who may be chosen).
 Self-play samples the root's visits at a temperature instead (`choose_by_visits`).
 
@@ -2369,10 +2392,15 @@ order); `synchronous` is the debug mode - batches of one leaf.
 expansion (everything the network takes: features, candidate moves, move graph,
 relations, W/E, D8's acting player and submit action, A6's turn state; `expand` sets k,
 the features and the relations), its key and epoch, and the moves made in its action -
-answered with one logit per candidate move and a 51-bin distribution. Built in:
-`uniform` (logits 0, value 0), `random` (a function of seed, key and epoch only - so
-still a function of the state), `material` (`tanh(balance / 10)` over every
-timeline's head board; captures' logits 0.5 x the captured value; P N B R Q 1 3 3 5 9,
+answered (`Evaluation`) with one logit per candidate move, a submit logit (optional)
+and D3's heads: the WDL (required), the categorical (`std::optional`), the error head's
+output and moves-left (NaN: none). The search refuses a malformed one: a WDL or
+categorical that is no distribution, a negative or infinite error or moves-left. Built
+in, each giving a WDL and a categorical: `uniform` (logits 0, WDL `{1, 1, 1}` - value
+exactly 0, draw 1/3 - the categorical's mass on 0), `random` (a function of seed, key
+and epoch only - so still a function of the state; a draw share up to one half),
+`material` (`v = tanh(balance / 10)` over every timeline's head board, as `wdl_of(v)` -
+no draw - and `two_hot(v)`; captures' logits 0.5 x the captured value; P N B R Q 1 3 3 5 9,
 the fairy pieces at the scanner's placeholders - unicorn 2.5, dragon 2, princess 7,
 brawn 1.25, common king 3 - build-log spec issue 56, one set for the engine).
 
@@ -2388,12 +2416,24 @@ A6's turn state: the leaf's mandatory and optional boards and the moves made in 
 action - and each move's legality; the key is the state's, so an evaluator that
 caches or de-duplicates leaves keys them as the search does, by (key,
 `expansion.moves_made`, epoch) with the state behind the key, never by the key, the
-state or `t5d_search_leaf_state`'s fingerprint alone), `t5d_search_deliver(search, logits, logit_count,
-submit_logits, submit_count, values, value_count, value_kind)` - one float32 logit per
-candidate move, logit i scoring `leaf.expansion.moves[i]`; one submit logit per leaf
-(NaN: none) or none at all (NULL, 0: the placeholder share); 51 float32 values per leaf
-as probabilities (`T5D_VALUE_PROBABILITIES`) or logits (`T5D_VALUE_LOGITS`), from the
-leaf's acting player - and `t5d_search_abandon`; then `t5d_search_info`, `_child`,
+state or `t5d_search_leaf_state`'s fingerprint alone),
+`t5d_search_deliver_evaluations(search, &batch)` - a `t5d_evaluations` (engine ABI
+round 2): one float32 logit per candidate move, logit i scoring
+`leaf.expansion.moves[i]`; one submit logit per leaf (NaN: none) or none at all (NULL,
+0: the placeholder share); D3's heads from the leaf's acting player - `T5D_WDL` (3)
+WDL numbers per leaf (required) and `T5D_VALUE_BINS` (51) categorical numbers per leaf
+or none, each as probabilities (`T5D_VALUE_PROBABILITIES`) or logits
+(`T5D_VALUE_LOGITS`, `wdl_kind` and `value_kind`), one error-head output and one
+moves-left per leaf or none (NaN at a leaf: none given); `board_logits` is reserved for
+D2's flat form (not built: anything but NULL is `T5D_ERR_UNSUPPORTED`). The struct is
+appended to like the others, so the flat form's per-board logits need no new entry
+point. It replaced `t5d_search_deliver`, which took the categorical alone and backed up
+its mean - the reading D3's correction retired; no shim was kept (a shim would have to
+invent a draw probability the documents do not give, and its one caller, the Python
+binding, moved in the same commit) - and `t5d_search_abandon`; then `t5d_search_info`
+(round 2 appends the root's backed-up `root_d` and its own evaluation: `root_evaluated`,
+`root_wdl`, `root_moves_left`, `root_error`), `_child` (round 2 appends `d`,
+`evaluated`, `network_wdl`, `network_moves_left`, `network_error`),
 `_choose`, `_choose_by_visits`, `_verify`, `_advance`, `_advance_action`,
 `_root_game`, `_set_epoch`, `_run` (built-in evaluators) and `_run_limits` (within a
 `t5d_search_limits`: playouts, evaluations, nodes, bytes; it reports the
@@ -2401,7 +2441,9 @@ leaf's acting player - and `t5d_search_abandon`; then `t5d_search_info`, `_child
 C14 through the binding), `_digest` (H15's digest - the
 tests compare the step loop's graph with the C++ search's by it), and `t5d_search_layout`
 (this header's struct layouts, as `t5d_layout` gives `t5d/capi.h`'s).
-`t5d_search_params` mirrors `SearchParams` (fill it with `t5d_search_params_default`).
+`t5d_search_params` mirrors `SearchParams` (fill it with `t5d_search_params_default`;
+round 2 adds `uncertainty_source`, `T5D_UNCERTAINTY_CATEGORICAL` by default, in front
+of `expand`).
 The header's structs are appended to, never reordered; the one struct of `t5d/capi.h`
 each embeds (`t5d_leaf::expansion`, `t5d_search_params::expand`) - provisional, and
 growing as that header does (E7 appended D8's fields to `t5d_expansion`) - is its last
@@ -2512,7 +2554,17 @@ states with different counts never one MCGS node while one action's orders merge
 batch asking once per (state, count), every node's count from its path; and, from its
 review, the C API's root count two moves into an action (where the old flag's 0 or 1
 cannot pass) and the tree carried at each count by `advance_moves` and
-`advance_action`, under tree and graph search.
+`advance_action`, under tree and graph search. After D3's correction (engine ABI round
+2): W - L backed up whatever the categorical says, and D beside it, on every node and
+edge, tree and graph, both splits; game ends' D (mate 0, stalemate and cap 1); the
+categorical changing nothing with E2, E3 and E5's term off, steering with E2 on, and
+unread under the error-head signal (6m), which the error head's output then steers;
+each signal absent read as 0; the cache returning every head bit for bit (a fresh
+search's root from a shared cache included); the built-in evaluators' WDL; every
+malformed head refused and released; `run`'s reused buffers reset head by head; the
+C step loop with WDLs, categoricals, errors and moves-left equal to the C++ search by
+digest under both signals with E2 on, the root children's `d` and network outputs
+included; the batch struct's every refusal.
 
 ## Stage E8: the verification layer's redesign (M14, a prototype until 6b′)
 
@@ -3704,6 +3756,14 @@ Each is recorded where it is made (the header comments) and listed here:
   (Q4); "moves already made" counts moves since the action's turn start, a jump between
   two boards being one; and §15.4's turn structure holds the count (0 below a submit,
   the parent's + 1 below a move).
+- **Engine ABI round 2's readings** (build-log spec issues 148 and up):
+  - the draw probability D backed up beside the value on every node and edge (a mate D
+    0, a stalemate and the turn cap D 1); moves-left recorded per node, never backed up
+    (its turn unit and the action in progress are open: issues 224, 305), each root
+    child's network WDL, moves-left and error exposed instead - I13's inputs (issue 148);
+  - 6m's switch, `uncertainty_source`: the categorical's variance (default) or the error
+    head's output as each node's variance, read by E2, E3 and E5's optional term; a
+    signal not given is 0 (issue 149).
 - **An ambiguous move is still unreadable** (stage E4): the notation's "Omission" lets
   a writer leave out a piece that a pin rules out, but legality is judged per action,
   at submission, so a "pin" is no per-move notion; the reader does not try each

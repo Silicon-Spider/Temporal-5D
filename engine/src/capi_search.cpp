@@ -32,6 +32,9 @@ static_assert(static_cast<int>(t5d::MoveLegality::Illegal) == T5D_LEGALITY_ILLEG
 static_assert(static_cast<int>(t5d::MoveLegality::Unknown) == T5D_LEGALITY_UNKNOWN);
 static_assert(sizeof(t5d::MoveLegality) == sizeof(uint8_t));
 static_assert(T5D_VALUE_BINS == t5d::mcts::kValueBins);
+static_assert(T5D_WDL == t5d::mcts::kWdl);
+static_assert(static_cast<int>(t5d::mcts::UncertaintySource::Categorical) == T5D_UNCERTAINTY_CATEGORICAL);
+static_assert(static_cast<int>(t5d::mcts::UncertaintySource::ErrorHead) == T5D_UNCERTAINTY_ERROR_HEAD);
 static_assert(static_cast<int>(t5d::mcts::ChoiceReason::ProvenWin) == T5D_CHOICE_PROVEN_WIN);
 static_assert(static_cast<int>(t5d::mcts::ChoiceReason::SecureChild) == T5D_CHOICE_SECURE_CHILD);
 static_assert(static_cast<int>(t5d::mcts::ChoiceReason::Lcb) == T5D_CHOICE_LCB);
@@ -170,6 +173,12 @@ SearchParams params_from(const t5d_search_params* c) {
   p.turn_cap.boards = c->turn_cap_boards;
   p.eval_cache_entries = static_cast<std::size_t>(c->eval_cache_entries);
   p.eval_cache_bytes = static_cast<std::size_t>(c->eval_cache_bytes);
+  switch (c->uncertainty_source) {
+    case T5D_UNCERTAINTY_CATEGORICAL: p.uncertainty_source = t5d::mcts::UncertaintySource::Categorical; break;
+    case T5D_UNCERTAINTY_ERROR_HEAD: p.uncertainty_source = t5d::mcts::UncertaintySource::ErrorHead; break;
+    default:
+      throw std::invalid_argument("uncertainty_source must be T5D_UNCERTAINTY_CATEGORICAL or _ERROR_HEAD");
+  }
   return p;
 }
 
@@ -238,28 +247,42 @@ t5d::Move move_of(const t5d::GameState& state, const t5d_move& r) {
                               ", " + std::to_string(r.to_square) + ")");
 }
 
-std::array<float, t5d::mcts::kValueBins> value_from(const float* v, int32_t kind) {
-  std::array<float, t5d::mcts::kValueBins> out{};
+// N numbers as probabilities (as given; the search checks and normalises them)
+// or the softmax of logits (`what` names them in errors: "value", "WDL").
+template <std::size_t N>
+std::array<float, N> distribution_from(const float* v, int32_t kind, const char* what) {
+  std::array<float, N> out{};
   if (kind == T5D_VALUE_PROBABILITIES) {
-    for (std::size_t k = 0; k < out.size(); ++k) out[k] = v[k];
+    for (std::size_t k = 0; k < N; ++k) out[k] = v[k];
     return out;
   }
   if (kind != T5D_VALUE_LOGITS) {
-    throw std::invalid_argument("value_kind must be T5D_VALUE_PROBABILITIES or T5D_VALUE_LOGITS");
+    throw std::invalid_argument(std::string(what) + " kind must be T5D_VALUE_PROBABILITIES or T5D_VALUE_LOGITS");
   }
   double top = -std::numeric_limits<double>::infinity();
-  for (std::size_t k = 0; k < out.size(); ++k) {
-    if (!std::isfinite(v[k])) throw std::invalid_argument("a value logit is not finite");
+  for (std::size_t k = 0; k < N; ++k) {
+    if (!std::isfinite(v[k])) throw std::invalid_argument(std::string("a ") + what + " logit is not finite");
     top = std::max(top, static_cast<double>(v[k]));
   }
   double sum = 0;
-  std::array<double, t5d::mcts::kValueBins> e{};
-  for (std::size_t k = 0; k < out.size(); ++k) {
+  std::array<double, N> e{};
+  for (std::size_t k = 0; k < N; ++k) {
     e[k] = std::exp(static_cast<double>(v[k]) - top);
     sum += e[k];
   }
-  for (std::size_t k = 0; k < out.size(); ++k) out[k] = static_cast<float>(e[k] / sum);
+  for (std::size_t k = 0; k < N; ++k) out[k] = static_cast<float>(e[k] / sum);
   return out;
+}
+
+// One count per leaf, or none (0): an optional array's count, checked.
+bool per_leaf(const float* data, std::size_t count, std::size_t leaves, std::size_t each, const char* name) {
+  if (data == nullptr && count > 0) throw std::invalid_argument(std::string("deliver: ") + name + " is NULL");
+  if (count == 0) return false;
+  if (count != leaves * each) {
+    throw std::invalid_argument("deliver: " + std::to_string(count) + " " + name + " for " + std::to_string(leaves) +
+                                " leaves (give " + std::to_string(each) + " per leaf, or none)");
+  }
+  return true;
 }
 
 // t5d_search_layout's table: each struct's size (field nullptr) and every
@@ -327,6 +350,7 @@ constexpr LayoutEntry kLayout[] = {
     T5D_SEARCH_AT(t5d_search_params, turn_cap_boards),
     T5D_SEARCH_AT(t5d_search_params, eval_cache_entries),
     T5D_SEARCH_AT(t5d_search_params, eval_cache_bytes),
+    T5D_SEARCH_AT(t5d_search_params, uncertainty_source),
     T5D_SEARCH_AT(t5d_search_params, expand),
 
     T5D_SEARCH_SIZE(t5d_leaf),
@@ -365,6 +389,11 @@ constexpr LayoutEntry kLayout[] = {
     T5D_SEARCH_AT(t5d_search_summary, cache_bytes),
     T5D_SEARCH_AT(t5d_search_summary, cache_purged),
     T5D_SEARCH_AT(t5d_search_summary, last_stop),
+    T5D_SEARCH_AT(t5d_search_summary, root_evaluated),
+    T5D_SEARCH_AT(t5d_search_summary, root_d),
+    T5D_SEARCH_AT(t5d_search_summary, root_wdl),
+    T5D_SEARCH_AT(t5d_search_summary, root_moves_left),
+    T5D_SEARCH_AT(t5d_search_summary, root_error),
 
     T5D_SEARCH_SIZE(t5d_search_limits),
     T5D_SEARCH_AT(t5d_search_limits, playouts),
@@ -382,6 +411,29 @@ constexpr LayoutEntry kLayout[] = {
     T5D_SEARCH_AT(t5d_root_child, prior),
     T5D_SEARCH_AT(t5d_root_child, q),
     T5D_SEARCH_AT(t5d_root_child, move_count),
+    T5D_SEARCH_AT(t5d_root_child, d),
+    T5D_SEARCH_AT(t5d_root_child, evaluated),
+    T5D_SEARCH_AT(t5d_root_child, network_wdl),
+    T5D_SEARCH_AT(t5d_root_child, network_moves_left),
+    T5D_SEARCH_AT(t5d_root_child, network_error),
+
+    T5D_SEARCH_SIZE(t5d_evaluations),
+    T5D_SEARCH_AT(t5d_evaluations, logits),
+    T5D_SEARCH_AT(t5d_evaluations, logit_count),
+    T5D_SEARCH_AT(t5d_evaluations, submit_logits),
+    T5D_SEARCH_AT(t5d_evaluations, submit_count),
+    T5D_SEARCH_AT(t5d_evaluations, wdl),
+    T5D_SEARCH_AT(t5d_evaluations, wdl_count),
+    T5D_SEARCH_AT(t5d_evaluations, wdl_kind),
+    T5D_SEARCH_AT(t5d_evaluations, value_kind),
+    T5D_SEARCH_AT(t5d_evaluations, values),
+    T5D_SEARCH_AT(t5d_evaluations, value_count),
+    T5D_SEARCH_AT(t5d_evaluations, errors),
+    T5D_SEARCH_AT(t5d_evaluations, error_count),
+    T5D_SEARCH_AT(t5d_evaluations, moves_left),
+    T5D_SEARCH_AT(t5d_evaluations, moves_left_count),
+    T5D_SEARCH_AT(t5d_evaluations, board_logits),
+    T5D_SEARCH_AT(t5d_evaluations, board_logit_count),
 };
 
 #undef T5D_SEARCH_SIZE
@@ -479,6 +531,7 @@ void t5d_search_params_default(t5d_search_params* out) {
   out->turn_cap_boards = p.turn_cap.boards;
   out->eval_cache_entries = p.eval_cache_entries;
   out->eval_cache_bytes = p.eval_cache_bytes;
+  out->uncertainty_source = static_cast<int32_t>(p.uncertainty_source);
 }
 
 t5d_status t5d_search_new(const t5d_game* game, int32_t turn_start, const t5d_search_params* params,
@@ -556,42 +609,47 @@ t5d_status t5d_search_leaf_state(const t5d_search* search, size_t index, t5d_sta
   });
 }
 
-t5d_status t5d_search_deliver(t5d_search* search, const float* logits, size_t logit_count,
-                              const float* submit_logits, size_t submit_count,
-                              const float* values, size_t value_count, int32_t value_kind,
-                              char** error) {
+t5d_status t5d_search_deliver_evaluations(t5d_search* search, const t5d_evaluations* batch, char** error) {
   return guarded(error, [&]() -> t5d_status {
     if (search == nullptr) throw std::invalid_argument("search is NULL");
     Search& s = search->search;
     const std::span<const t5d::mcts::EvalRequest> requests = s.requests();
     try {
+      if (batch == nullptr) throw std::invalid_argument("deliver: the batch is NULL");
+      const t5d_evaluations& b = *batch;
+      const std::size_t leaves = requests.size();
       std::size_t want = 0;
       for (const t5d::mcts::EvalRequest& r : requests) want += r.expansion->moves().size();
-      if (logit_count != want) {
-        throw std::invalid_argument("deliver: " + std::to_string(logit_count) + " logits for " +
+      if (b.logit_count != want) {
+        throw std::invalid_argument("deliver: " + std::to_string(b.logit_count) + " logits for " +
                                     std::to_string(want) + " candidate moves");
       }
-      if (value_count != requests.size() * T5D_VALUE_BINS) {
-        throw std::invalid_argument("deliver: " + std::to_string(value_count) + " values for " +
-                                    std::to_string(requests.size()) + " leaves of 51 bins");
+      if (b.logits == nullptr && b.logit_count > 0) throw std::invalid_argument("deliver: logits is NULL");
+      if (b.wdl == nullptr || b.wdl_count != leaves * T5D_WDL) {
+        throw std::invalid_argument("deliver: " + std::to_string(b.wdl_count) + " WDL numbers for " +
+                                    std::to_string(leaves) + " leaves (3 per leaf, required: D3's value)");
       }
-      if (submit_count != 0 && submit_count != requests.size()) {
-        throw std::invalid_argument("deliver: " + std::to_string(submit_count) +
-                                    " submit logits for " + std::to_string(requests.size()) +
-                                    " leaves (give one per leaf, or none)");
+      const bool submits = per_leaf(b.submit_logits, b.submit_count, leaves, 1, "submit logits");
+      const bool values = per_leaf(b.values, b.value_count, leaves, T5D_VALUE_BINS, "categorical values");
+      const bool errors = per_leaf(b.errors, b.error_count, leaves, 1, "error-head outputs");
+      const bool moves_left = per_leaf(b.moves_left, b.moves_left_count, leaves, 1, "moves-left outputs");
+      if (b.board_logits != nullptr || b.board_logit_count != 0) {
+        throw t5d::capi_internal::Unsupported(
+            "deliver: per-board logits are read only by D2's flat form, which is not built");
       }
-      if ((logits == nullptr && logit_count > 0) || (values == nullptr && value_count > 0) ||
-          (submit_logits == nullptr && submit_count > 0)) {
-        throw std::invalid_argument("deliver: logits, submit_logits or values is NULL");
-      }
-      std::vector<t5d::mcts::Evaluation> evs(requests.size());
+      std::vector<t5d::mcts::Evaluation> evs(leaves);
       std::size_t at = 0;
-      for (std::size_t i = 0; i < requests.size(); ++i) {
+      for (std::size_t i = 0; i < leaves; ++i) {
         const std::size_t m = requests[i].expansion->moves().size();
-        evs[i].logits.assign(logits + at, logits + at + m);
+        evs[i].logits.assign(b.logits + at, b.logits + at + m);
         at += m;
-        if (submit_count > 0) evs[i].submit_logit = submit_logits[i];  // NaN: none
-        evs[i].value = value_from(values + i * T5D_VALUE_BINS, value_kind);
+        if (submits) evs[i].submit_logit = b.submit_logits[i];  // NaN: none
+        evs[i].wdl = distribution_from<T5D_WDL>(b.wdl + i * T5D_WDL, b.wdl_kind, "WDL");
+        if (values) {
+          evs[i].value = distribution_from<T5D_VALUE_BINS>(b.values + i * T5D_VALUE_BINS, b.value_kind, "value");
+        }
+        if (errors) evs[i].error = b.errors[i];  // NaN: none
+        if (moves_left) evs[i].moves_left = b.moves_left[i];
       }
       s.deliver(evs);
     } catch (...) {
@@ -671,6 +729,18 @@ t5d_status t5d_search_info(const t5d_search* search, t5d_search_summary* out) {
     }
     out->cache_purged = st.cache_purged;
     out->last_stop = static_cast<int32_t>(st.last_stop);
+    out->root_d = root.weight > 0 ? root.draw / root.weight : 0.0;
+    out->root_evaluated = flag(root.evaluated);
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    out->root_wdl[0] = out->root_wdl[1] = out->root_wdl[2] = nan;
+    out->root_moves_left = out->root_error = nan;
+    if (root.evaluated) {
+      out->root_wdl[0] = (1.0 - root.eval_draw + root.eval_mean) * 0.5;
+      out->root_wdl[1] = root.eval_draw;
+      out->root_wdl[2] = (1.0 - root.eval_draw - root.eval_mean) * 0.5;
+      out->root_moves_left = root.eval_moves_left;
+      out->root_error = root.eval_error;
+    }
     return T5D_OK;
   });
 }
@@ -695,6 +765,13 @@ t5d_status t5d_search_child(const t5d_search* search, size_t index, t5d_root_chi
     out->prior = c.prior;
     out->q = c.q;
     out->move_count = c.moves.size();
+    out->d = c.d;
+    out->evaluated = flag(c.evaluated);
+    for (std::size_t k = 0; k < c.network_wdl.size(); ++k) {
+      out->network_wdl[k] = c.evaluated ? c.network_wdl[k] : std::numeric_limits<double>::quiet_NaN();
+    }
+    out->network_moves_left = c.network_moves_left;
+    out->network_error = c.network_error;
     const t5d::Multiverse& mv = s.root_state().multiverse();
     for (std::size_t i = 0; i < c.moves.size() && i < capacity; ++i) moves[i] = record_of(c.moves[i], mv);
     return T5D_OK;

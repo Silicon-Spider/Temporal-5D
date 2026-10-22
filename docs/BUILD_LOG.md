@@ -1637,13 +1637,13 @@ order the D2 work (issue 142).
 | C9 | to check | Reported built in `expand.cpp` by the 2026-10-04 audit; to verify against its row |
 | C11 | built behind a flag, tested | MCGS (E6a): identity is the state key with branch origins and the moves made in the action in progress (A6; since engine ABI round 1 - issue 302, proposed edit 200, and 119 for §11.3's full key), which subsumes whether an action is in progress (§8.5 and the register say only that: issue 87), compared exactly; one action's move orders still merge (tested); awaiting 6k |
 | C12, C13 | built, tested | Re-rooting with garbage collection, the persistence hook and pondering (E6a) |
-| C14 | built, tested | Fresh searches per decision in self-play; the evaluation cache shared across them, purged by board count (issue 89); the C API's `t5d_search_new_sharing`; from Python (N5) only between searches with the same network input, with the cached path's refresh epochs set on the search - as §8.7 now has it (the register's C14 names the shared, board-count-purged cache and one cache per evaluator in match play). Since engine ABI round 1 the cache's key holds A6's moves made in the action beside the state and the epoch (issue 302, proposed edit 200; edit 119 for §15.2's purity row, §7.9 and §8.5) |
+| C14 | built, tested | Fresh searches per decision in self-play; the evaluation cache shared across them, purged by board count (issue 89); the C API's `t5d_search_new_sharing`; from Python (N5) only between searches with the same network input, with the cached path's refresh epochs set on the search - as §8.7 now has it (the register's C14 names the shared, board-count-purged cache and one cache per evaluator in match play). Since engine ABI round 1 the cache's key holds A6's moves made in the action beside the state and the epoch (issue 302, proposed edit 200; edit 119 for §15.2's purity row, §7.9 and §8.5). Since round 2a an entry holds every D3 head (`Evaluation` 232 -> 256 bytes: the WDL, the error and moves-left outputs, the categorical made optional), returned bit for bit on a hit (tested) |
 | C23 | built, tested | The node key's default carries branch origins (lineage, `NodeKey::StateAndOrigins`); the network's causal past is the ruled ancestry (`causal_past="lineage"`, tested against ancestry computed from the branching record, N5) |
 | C15 | built in part | FP8 e4m3 frozen K/V (`frozen_kv_format = "fp8"`, applied by the forward itself); varlen/ragged kernels not built (none on CPU; GPU time, M19). The register: FP8 K/V obey G1 only with an FP8 trunk or FP8-frozen-K/V training (issue 34). **Known defect, not yet fixed:** `fake_quantise(x, "fp8")` (`kvformat.py`), which both the forward's FP8 rounding (`model._frozen_kv_rounding`) and the cached path use, casts to FP8 inside autograd with no straight-through estimator, so its backward casts the gradient to FP8 unscaled. Checked 2026-10-17 on CPU (torch 2.13.0+cpu; one 8 × 8 block, seed 0): with \|x\| about 0.1, 63 of 64 gradients were zero; with \|x\| about 1, they were 0.90-1.03 where 1 is expected. FP8-frozen-K/V training (the remedy above) and G8's hook need the net lane's STE fix, with a gradient test, before G2 and G8 |
 | C16 | not built (rule) | Deferred; last, only if node-starved |
 | C21 | not built (rule) | Refused; a mutant that snapshots is caught by the tests |
 | D1 | built, tested | Network N1's pointer policy over the moves the engine supplies - in search, legal or unknown, unknowns verified when first selected (E5a, E6a), as §8.1 now says; the game API's expansion stays pseudo-legal until ABI round 2's `legal_moves` option. The promotion offset (CHECKPOINT 6, M20) is the v1 (`lane/net` N-M20): a learned per-piece logit read from the destination token, always on in the policy - `policy_promotion` and its `none` arm removed (+3,341 parameters). The opponent-reply head has none, as built at N1: which other pointer heads carry it, and the offset's form, are issue 222 |
-| D3 | built in part (the pre-CHECKPOINT-7 head) | Network N1's 51-bin value head over the pooled global registers, smoke-trained on the outcome; the search backs up its mean. Its MLP is Mish (F6, CHECKPOINT 8). Pooling as M20 rules it (`lane/net` N-M20): the 51-bin head, WDL and the short-term value all read the mean of the global registers - WDL and the short-term value moved off the squares with `aux_global_pool` (issue 223); a test holds them invariant to permuting the registers' final states. Corrected at CHECKPOINT 7 (reversal 28): WDL on the result as the search's value, the categorical over the root search value (HL-Gauss), short-term values, the error head - engine ABI round 2 (WDL in the search, one new deliver call), then the net lane's heads |
+| D3 | engine side built, tested (engine ABI round 2a); network heads built in part (the pre-CHECKPOINT-7 head) | The search (round 2a): WDL is the search's value - W − L backed up, the draw probability D beside it on every node and edge (issue 148) - the categorical optional and read only as an uncertainty signal (6m's switch, issue 149), the error head's output and moves-left per leaf, all through one new deliver call (`t5d_search_deliver_evaluations` and its `t5d_evaluations` struct; the old `t5d_search_deliver`, which backed up the categorical's mean, retired); each root child's search (q, d) and network WDL, moves-left and error recorded, and the root's own; the built-in evaluators give a WDL. The Python evaluator delivers the network's WDL, categorical and moves-left, and its error output once the net lane names one `value_error` (NaN until then); `Evaluation.value_mean` is now W − L. The network: N1's 51-bin value head over the pooled global registers, smoke-trained on the outcome. Its MLP is Mish (F6, CHECKPOINT 8). Pooling as M20 rules it (`lane/net` N-M20): the 51-bin head, WDL and the short-term value all read the mean of the global registers - WDL and the short-term value moved off the squares with `aux_global_pool` (issue 223); a test holds them invariant to permuting the registers' final states. Corrected at CHECKPOINT 7 (reversal 28): the categorical over the root search value (HL-Gauss), short-term values, the error head - the net lane's heads |
 | D4 | built in part | Network N1's aux heads: WDL, moves-left, short value, effort, per-board, per-square (the label set stands as v1, M20) and the opponent reply, always built at weight 1.0. M20 in the code (`lane/net` N-M20): moves-left counts turns - one player's action each (issue 305) - in the head, its helper and the losses' docs (the record-to-target builder is M21's, and so is whether the action in progress counts: issue 224); moves-left and effort read the squares, WDL and the short value the global registers (D3; issue 223). To change (CHECKPOINT 7): the soft policy added (weight 8), the reply a prototype behind its flag at 0.15 with §15.2's mapping test - the net lane's heads, after engine round 2 (the reply head is left as built until then); the per-square label generator is step 2's |
 | D5 | not started (rule) | A training principle |
 | D6 | built (flag) | `board_reduction`, awaiting 6j |
@@ -1653,9 +1653,9 @@ order the D2 work (issue 142).
 | D9 | not started | The optimistic policy - a prototype (6t), match play only; its use in self-play is held open (§14.4): the net lane's heads, behind its flag, after engine round 2 |
 | E4 | principle (weakened) | "Narrow hard, because the auditor is watching" - the register now says weakened: it holds where the settling scans (< 50 boards) and Hunt (< 100) run, neither wired into the search on main (E10 lost; step 2); above that, narrowing is a bet on the audit lane and the league |
 | E1 | built in part, tested | PUCT with entropy-adaptive top-k widening and FPU; root noise in self-play with a per-child α (0.3); the policy temperature applied at every node. CHECKPOINT 7 (with I19): the root noise's total concentration split across the legal moves (a field appended beside `dirichlet_alpha`), shaping behind a flag, a root policy temperature; the widening schedule may depend on the mandatory-board count - engine ABI round 2. Every constant a placeholder, named in §8.4's "Constants as built" (issue 82) |
-| E5, E9 | built, tested | LCB with a visit floor (E5); the solver behind H41's switch, the secure child, a visit cap on solved children (E9) - constants named as placeholders in §8.4 (issues 84-85) |
+| E5, E9 | built, tested | LCB with a visit floor (E5); the solver behind H41's switch, the secure child, a visit cap on solved children (E9) - constants named as placeholders in §8.4 (issues 84-85). E5's optional term (weight 0) reads the child's uncertainty signal - 6m's switch, since engine ABI round 2a (issue 149) |
 | E7 | not started | Time management, E11 in step 2 (engine lane): the moves-left integral allocator - moves-left counted in turns, converted to board-moves (issue 305) - and the stop/extend table, with 6o's arms (flat-evals and flat-wall-clock allocators, the signals on/off, the spiral guard at high N); the second volatility source is Hunt's and the settling scans' proofs (the register). The register keeps a "root-scan reserve" (§8.6); its one named consumer, Guard's re-search, is offline (adopted nowhere), so E11 holds none - a reading (issue 306) |
-| E2, E3 | built behind flags, tested | Off; awaiting 6m and 6t. They read the categorical variance; 6m's switch to the error head is engine ABI round 2 |
+| E2, E3 | built behind flags, tested | Off; awaiting 6m and 6t. They read a node's uncertainty signal: the categorical's variance by default, the error head's output under 6m's switch (`uncertainty_source`, engine ABI round 2a; issue 149); their constants placeholders twice over (issues 81, 149) |
 | E8 | not started | Behind its flag (6v), with E11 in step 2 |
 | E6 | not built (rule) | Refused |
 | F1, F2 | built, tested | 22,965,139 parameters (F1 after F5, B15 and M20: 21,338,634 after F5 - 20,736 fewer than N5's 21,359,370, gain-only norms, no Q/K/V biases, spec issue 203 - plus B15's 1,623,168, spec issue 210, plus M20's 3,337: the policy's promotion offset, 3,341, less the learned register coordinates, 4); the L24-ff12 preset, 46,894,547 (F2: 44,459,795 and B15's 2,434,752 over 24 layers). Unchanged by F6's Mish in the heads, by B11's fold (its flag is off; with it on, 40 scalars where there were 48) and by B16 (its 304 are in a network of the cached configuration only: 22,965,443 with `attn_scope = "block_causal"`) and B17 (off; with it on, 6,115,328 more - 29,080,467, or 23,729,555 with the vectors shared by the heads; spec issue 218) |
@@ -1676,11 +1676,11 @@ order the D2 work (issue 142).
 | I5 | not started | PCR in the self-play drivers and the training loop, smoke-tested (M21, net lane) |
 | I6 | not started | A prototype: its epistemic triggers as sampler arms beside I12 (6u), in M21 |
 | I7, I8 | not built (rule) | M5 |
-| I10 | parked | Calibration monitoring measures nothing on random weights - the pilot run. The error head it watches is D3's (net lane); 6m's switch is engine ABI round 2 |
+| I10 | parked (monitoring); 6m's switch built, tested | Calibration monitoring measures nothing on random weights - the pilot run. The error head it watches is D3's (net lane). 6m's switch (`SearchParams::uncertainty_source`, categorical by default) built in engine ABI round 2a (issue 149) |
 | I9 | built, tested | The ruleset ID in every state and store key (H18): the Zobrist key, the solved and disproof stores, the evaluation cache |
 | I11 | built, tested | Self-play's turn cap from the state (and t5d-play's 300-board cap), scored as a draw, its frequency logged (issue 88) |
 | I12 | not started | Surprise-weighted sampling, the default sampler (6u): M21, with 6u's and I6's arms |
-| I13 | not started | Deblundering (6z): M21; it needs the best move's WDL and moves-left in the records - the draw/moves-left backup or a recorded substitute (engine ABI round 2) |
+| I13 | engine side built, tested; deblundering not started | Deblundering (6z): M21. What it needs from the search is built (engine ABI round 2a, issue 148): the draw probability backed up beside the value, so the best child's search WDL is its (q, d); moves-left not backed up - each root child's network moves-left (and WDL, error) recorded instead, the target builder adding the offset |
 | I14 | not started | Proof rescoring (6z): M21 builds the hook disabled - hard-off until the H23/H41 sign-off |
 | I15 | not started | Rich training records, fixed before the pilot run: first in M21 (net lane), with §15.2's round-trip row; the engine's per-root-child and summary fields and `t5d_game_expand`'s `legal_moves` option in ABI round 2 |
 | I16 | not started | The replay window growing sublinearly (6z): M21, a placeholder rule |
@@ -3310,6 +3310,47 @@ superseded or made moot says so; nothing is deleted.
     boards (50%; 7 of 20 truth mates found, 10 needed) is nearer. Whether to re-run 6b″ on a
     quiet machine (about a minute) is the main loop's call; no edit is proposed until a
     re-run says something.
+148. **The search's draw and moves-left: backed up, or recorded** (§8.3, §12.8; register
+    D3, D4, I13, I15; the plan critic's missing item 3). D3 makes the WDL "the value
+    search uses", D3's `q_ratio` blends the WDL target towards "search value", I13 has
+    earlier positions "take the best move's value and moves-left instead of the result",
+    and I15 records "root and best/played children's values" - in Lc0's sense (q, d, m).
+    No document says whether the search backs up a draw probability or a moves-left
+    count, or what stands in for them; before engine ABI round 2 it backed up a scalar
+    only. Done (engine ABI round 2a, an engineering reading, no committed-class choice):
+    the **draw probability D is backed up** beside the value on every node and edge, as
+    Lc0 backs up D - a leaf's D its WDL's (normalised), a mate's 0, a stalemate's and the
+    turn cap's 1 (I11 scores it a draw), a solved node's 1 for a proven draw and 0 for a
+    proven result; an MCGS residual corrects D as it corrects Q. D does not flip across
+    a change of acting player. A root child's search WDL is so `((1 - d + q) / 2, d,
+    (1 - d - q) / 2)` (`RootChild::d`, `t5d_root_child.d`). **Moves-left is not backed
+    up**: what one edge adds to a moves-left count needs the unit of a turn (issue 305's
+    reading: one player's action) and whether the action in progress counts (issue 224,
+    open), so the search records each node's network moves-left as given and exposes,
+    per root child, the child's own evaluation - its network WDL, moves-left and error
+    output, in the root player's view (`RootChild::evaluated`, `network_wdl`,
+    `network_moves_left`, `network_error`), and the root's own (`t5d_search_summary`'s
+    `root_evaluated`, `root_wdl`, `root_moves_left`, `root_error`). I13's best-move value
+    is the best child's backed-up (q, d), its moves-left the child's network output plus
+    the offset the target builder (M21) adds. If moves-left is ever to be backed up
+    (Lc0's M, e.g. for MLH's steering, issue 300), it is a later change to the backup
+    once issues 224 and 305 are settled. Proposed edit 121.
+149. **6m's switch: what the uncertainty signal is, and who reads it** (§8.3, §8.4, §13.1
+    6m; register D3, E2, E3, E5, I10). I10: "6m decides which uncertainty signal search
+    consumes"; §13.1 6m: "the categorical variance vs the error head - both trained from
+    the start (§8.3) - as the signal search consumes". Neither names the consumers, the
+    default, or how the error head's output becomes a variance. Done (engine ABI round
+    2a; placeholders): `SearchParams::uncertainty_source` (`t5d_search_params.
+    uncertainty_source`) - `Categorical` (the categorical's variance; the default, by
+    D3's own words "its variance and overlap feed search, commit and time") or
+    `ErrorHead` (the error head's output taken as the variance: it predicts a squared
+    gap, a variance by construction) - is each node's variance, and so what all three of
+    its readers take: E2's cPUCT scale and backup weight, E3's bonus and E5's optional
+    LCB term. A signal not given (no categorical delivered; the error NaN) is 0 - no
+    uncertainty. E2's and E3's constants (`variance_reference` 0.4, the prior weight, the
+    clamps; issue 81) were sized against a categorical over outcomes; the categorical is
+    now over root search values (reversal 28) or replaced by the error head, so they are
+    placeholders twice over - SPSA (G7) with 6m. Proposed edit 122.
 
 ## Proposed spec edits
 
@@ -4154,6 +4195,26 @@ struck through, where nothing of it is left to apply); the others stand as writt
     TT - acceptable in production, banned while debugging; the stores of facts are never
     racy." Why: issue 146 - the spec's only word on the threads' races is "benign", which
     holds for the TT alone.
+121. **§8.3's WDL paragraph, §12.8's deblundering and register D3, I13 (the search's draw
+    and moves-left)**: now - WDL is "the value search uses"; I13's earlier positions "take
+    the best move's value and moves-left"; nothing says what the search backs up beside
+    the value. Proposed - in §8.3 after "the value search uses": "The search backs up W − L
+    as Q and the draw probability D beside it, per node and per edge (Lc0's way; a mate
+    has D 0, a stalemate and the turn cap D 1), so each root child carries a search WDL.
+    Moves-left is not backed up until its turn unit and the action in progress are
+    settled; the search records each node's network moves-left, WDL and error output,
+    and the records keep the root children's." In I13: "the best move's value (its
+    backed-up Q and D) and moves-left (its network output, offset by the target
+    builder)". Why: issue 148.
+122. **§13.1 6m, §8.4's E2/E3 paragraph and the constants list, register I10 and E2 (the
+    uncertainty switch)**: now - "6m decides which uncertainty signal search consumes";
+    E2 and E3 are described as reading "the categorical variance". Proposed - "6m's
+    switch (as built `uncertainty_source`, the categorical's variance by default, the
+    error head's output its arm, an absent signal 0) gives each node one variance, which
+    E2's scale and backup weight, E3's bonus and E5's optional LCB term all read"; and in
+    the constants list: "E2's and E3's constants, sized before CHECKPOINT 7 against an
+    outcome categorical, are placeholders for the search-value categorical and the error
+    head alike". Why: issue 149.
 
 ## Session log
 
@@ -4189,3 +4250,7 @@ struck through, where nothing of it is left to apply); the others stand as writt
   local results equal the last green CI runs on the same code ("Recovery", above);
   the engine job's one failure on 3b33942 (g++-13) is the intermittent five-thread
   Guard test, queued for the engine lane.
+- **2026-10-22 - engine ABI round 2a** (`lane/engine`): D3's value outputs in the search -
+  WDL the search's value with its draw backed up beside it, moves-left recorded (issue
+  148), one deliver call for every head (`t5d_search_deliver_evaluations`; the old call
+  retired), 6m's switch (issue 149). Register D3, C14, E2/E3, E5, I10, I13; edits 121-122.

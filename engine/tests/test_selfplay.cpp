@@ -345,6 +345,7 @@ class Slow final : public Evaluator {
     }
     for (std::size_t i = 0; i < batch.size(); ++i) {
       out[i].logits.assign(batch[i].expansion->moves().size(), 0.0f);
+      out[i].wdl = wdl_of(0.0);
       out[i].value = two_hot(0.0);
     }
   }

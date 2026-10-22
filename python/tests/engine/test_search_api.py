@@ -149,7 +149,7 @@ def _unit(x: int) -> float:
 class PyRandom:
     """The engine's built-in ``random`` evaluator (``src/mcts_evaluators.cpp``) rewritten in
     Python - a function of the seed, each leaf's key and its epoch (``CStepDriver.batch``) - with
-    its value as exact probabilities (``T5D_VALUE_PROBABILITIES``)."""
+    its WDL and categorical as exact probabilities (``T5D_VALUE_PROBABILITIES``)."""
 
     def __init__(self, seed: int) -> None:
         self.seed = seed
@@ -175,7 +175,9 @@ class PyRandom:
             total = 0.0
             for b in bump:
                 total += b
-            out.append(Evaluation(logits, np.array([np.float32(b / total) for b in bump], np.float32)))
+            draw = 0.5 * _unit(_mix(base ^ 0xD4D4))
+            wdl = np.array([(1.0 - draw) * (1.0 + mean) * 0.5, draw, (1.0 - draw) * (1.0 - mean) * 0.5], np.float32)
+            out.append(Evaluation(logits, wdl, np.array([np.float32(b / total) for b in bump], np.float32)))
         return out
 
 
@@ -223,9 +225,10 @@ def test_the_random_evaluator_from_a_root_past_the_shift(game_seed, graph):
 
 class WhiteWins:
     """Value +1 for White, expressed from each leaf's acting player - the network's convention
-    and the search's: the top bin where White acts, the bottom bin where Black acts.
-    ``perspective="present"`` expresses it from the present's colour instead - the negative
-    control, wrong exactly at leaves past the shift."""
+    and the search's: the WDL's win where White acts, its loss where Black acts (and the
+    categorical, which the search does not back up, the other way round). ``perspective=
+    "present"`` expresses it from the present's colour instead - the negative control, wrong
+    exactly at leaves past the shift."""
 
     def __init__(self, perspective: str = "acting") -> None:
         self.perspective = perspective
@@ -239,9 +242,11 @@ class WhiteWins:
             who = s.acting_player if self.perspective == "acting" else s.player_to_move
             self.leaves += 1
             self.shifted += s.shifted
+            wdl = np.full(3, -1.0e4, np.float32)
+            wdl[0 if who == 0 else 2] = 0.0
             v = np.full(51, -1.0e4, np.float32)
-            v[50 if who == 0 else 0] = 0.0
-            out.append(Evaluation(np.zeros(p.move_count, np.float32), v))
+            v[0 if who == 0 else 50] = 0.0  # the opposite: D3's value is the WDL alone
+            out.append(Evaluation(np.zeros(p.move_count, np.float32), wdl, v))
         return out
 
 
@@ -296,6 +301,65 @@ def test_the_present_colour_is_not_the_acting_player():
     assert ev.shifted > 0 and _off_sign(s, root_player) != []
 
 
+class Heads:
+    """D3's heads at every leaf, from White's view: W - L = ``white`` with a draw probability
+    ``draw`` (as probabilities); a categorical whose mean is not the value; the error head's
+    output and moves-left."""
+
+    def __init__(self, white: float, draw: float, error: float = 0.25, moves_left: float = 7.5) -> None:
+        self.white, self.draw, self.error, self.moves_left = white, draw, error, moves_left
+
+    def __call__(self, positions):
+        out = []
+        for p in positions:
+            v = self.white if p.state.acting_player == 0 else -self.white
+            wdl = np.array([(1 - self.draw + v) / 2, self.draw, (1 - self.draw - v) / 2], np.float32)
+            cat = np.zeros(51, np.float32)
+            cat[3] = 1.0  # -0.88 (probabilities): never the value
+            out.append(Evaluation(np.zeros(p.move_count, np.float32), wdl, cat, error=self.error, moves_left=self.moves_left))
+        return out
+
+
+@pytest.mark.parametrize("graph", [0, 1], ids=["tree", "graph"])
+def test_d3_the_wdl_is_the_search_value_and_its_draw_is_backed_up(graph):
+    """D3 through the step API: the WDL's W - L is what the search backs up (the categorical
+    says otherwise), its draw probability is backed up beside it, and every root child reports
+    the search's (q, d) and the network's own WDL, error and moves-left, in the root player's view
+    - as does the root itself (I13's and I15's memo)."""
+    with Game.variant("Standard - Two Timelines") as g:
+        s = Search(g, params=search_params(seed=1, graph=graph))
+        driver = CStepDriver(s, playouts=200, value_kind=T5D_VALUE_PROBABILITIES)
+        serve(driver, Heads(0.4, 0.2), batch_size=8)
+    info = s.info()
+    assert info.checkmates == info.stalemates == info.turn_caps == 0
+    assert info.root_q == pytest.approx(0.4, abs=1e-5) and info.root_d == pytest.approx(0.2, abs=1e-5)
+    assert info.root_evaluated and info.root_wdl == pytest.approx((0.6, 0.2, 0.2), abs=1e-6)
+    assert (info.root_error, info.root_moves_left) == (0.25, 7.5)
+    visited = [c for c in s.children() if c.visits > 0]
+    assert len(visited) > 1
+    for c in visited:
+        assert c.q == pytest.approx(0.4, abs=1e-5) and c.d == pytest.approx(0.2, abs=1e-5)
+        assert c.evaluated and c.network_wdl == pytest.approx((0.6, 0.2, 0.2), abs=1e-6)
+        assert (c.network_error, c.network_moves_left) == (0.25, 7.5)
+    s.close()
+
+
+def test_d3_6m_the_uncertainty_source_is_a_parameter():
+    """6m (register I10): the categorical's variance by default, the error head's output on
+    request - a node's variance for E2: with E2 on the two signals grow different searches."""
+    from t5d.engine.capi import T5D_UNCERTAINTY_CATEGORICAL, T5D_UNCERTAINTY_ERROR_HEAD
+
+    assert search_params().uncertainty_source == T5D_UNCERTAINTY_CATEGORICAL
+    digests = []
+    for source in (T5D_UNCERTAINTY_CATEGORICAL, T5D_UNCERTAINTY_ERROR_HEAD):
+        with Game.variant("Standard") as g:
+            s = Search(g, params=search_params(seed=1, variance_scaled_cpuct=1, uncertainty_source=source))
+            serve(CStepDriver(s, playouts=120, value_kind=T5D_VALUE_PROBABILITIES), Heads(0.1, 0.3, error=0.9), batch_size=8)
+            digests.append(s.digest())
+            s.close()
+    assert digests[0] != digests[1]
+
+
 # --- what the evaluations mean --------------------------------------------------------------------
 
 
@@ -303,7 +367,7 @@ class Ramp:
     """Logit i = i / 4 for move i of every leaf, no submit logit, a flat value."""
 
     def __call__(self, positions):
-        return [Evaluation(np.arange(p.move_count, dtype=np.float32) / 4, np.zeros(51, np.float32)) for p in positions]
+        return [Evaluation(np.arange(p.move_count, dtype=np.float32) / 4, np.zeros(3, np.float32)) for p in positions]
 
 
 def test_logit_i_scores_move_i():
@@ -334,7 +398,7 @@ class Submitter:
         out = []
         for p in positions:
             s = self.submit if (p.state.submit_possible and p.state.submit_legal) else math.nan
-            out.append(Evaluation(np.zeros(p.move_count, np.float32), np.zeros(51, np.float32), submit_logit=s))
+            out.append(Evaluation(np.zeros(p.move_count, np.float32), np.zeros(3, np.float32), np.zeros(51, np.float32), submit_logit=s))
         return out
 
 
@@ -492,7 +556,7 @@ def test_errors_come_back_as_exceptions():
     with Game.variant("Standard") as g:
         s = Search(g)
         with pytest.raises(EngineArgumentError):
-            s.deliver(np.zeros(3, np.float32), np.zeros(51, np.float32))  # no batch waiting
+            s.deliver(np.zeros(3, np.float32), np.zeros(3, np.float32))  # no batch waiting
         n = s.gather(4)
         assert n == 1
         with pytest.raises(EngineArgumentError, match="batch is waiting"):
@@ -500,11 +564,21 @@ def test_errors_come_back_as_exceptions():
         with pytest.raises(EngineArgumentError):
             s.set_epoch(1)
         with pytest.raises(EngineArgumentError, match="logits"):
-            s.deliver(np.zeros(3, np.float32), np.zeros(51, np.float32))  # 20 candidate moves
+            s.deliver(np.zeros(3, np.float32), np.zeros(3, np.float32))  # 20 candidate moves
         assert s.gather(4) == 1  # the refused batch was abandoned
         m = s.leaf_view(0).expansion.move_count
         with pytest.raises(EngineArgumentError, match="infinite submit"):
-            s.deliver(np.zeros(m, np.float32), np.zeros(51, np.float32), submit_logits=[math.inf])
+            s.deliver(np.zeros(m, np.float32), np.zeros(3, np.float32), submit_logits=[math.inf])
+        assert s.gather(4) == 1
+        with pytest.raises(EngineArgumentError, match="WDL"):
+            s.deliver(np.zeros(m, np.float32), np.zeros(2, np.float32))  # D3: 3 per leaf
+        assert s.gather(4) == 1
+        with pytest.raises(EngineArgumentError, match="error head"):
+            s.deliver(np.zeros(m, np.float32), np.zeros(3, np.float32), errors=[-1.0])
+        assert s.gather(4) == 1
+        with pytest.raises(ValueError, match="wdl_kind"):
+            s.deliver(np.zeros(m, np.float32), np.zeros(3, np.float32), wdl_kind=9)
+        s.deliver(np.zeros(m, np.float32), np.zeros(3, np.float32))  # the optional heads absent
         s.close()
         with pytest.raises(EngineArgumentError, match="closed"):
             s.info()

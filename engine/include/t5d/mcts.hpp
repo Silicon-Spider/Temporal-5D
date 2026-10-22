@@ -83,10 +83,23 @@
 // VALUES are from the perspective of the node's ACTING PLAYER (register D8:
 // the side whose action is in progress, until it submits - after the present
 // has shifted inside the action it is no longer the colour to move on the
-// present), in [-1, 1]. The evaluator's value is a 51-bin categorical
-// distribution (D3) over the bin centres (2k - 50) / 50, from the leaf's
-// acting player. Backing up across an edge flips the sign iff the two nodes'
-// acting players differ - under the ply split, only across a submit edge.
+// present), in [-1, 1]. Backing up across an edge flips the sign iff the two
+// nodes' acting players differ - under the ply split, only across a submit
+// edge. The evaluator's value heads (register D3, corrected at CHECKPOINT 7),
+// all from the leaf's acting player:
+//  * WDL - the value search uses: a leaf's value is W - L (the three
+//    normalised), and its draw probability D is backed up beside it, per node
+//    and per edge, as Lc0 backs up D (a mate scores D 0, a stalemate and the
+//    turn cap D 1) - so a root child's search value is (Q, D) and a WDL;
+//  * the 51-bin categorical over the root search value, bin centres
+//    (2k - 50) / 50 - optional; with the error head's output (optional) it is
+//    one of the two uncertainty signals 6m chooses between
+//    (SearchParams::uncertainty_source; register I10): the chosen one is the
+//    node's variance that E2, E3 and E5's optional term read;
+//  * moves-left (D4; optional) - recorded per node, never backed up: what a
+//    moves-left count adds per edge waits on the unit of "turn" (build-log
+//    spec issue 305), so the records keep each root child's network output
+//    (RootChild::network_moves_left) and the targets add the offset.
 //
 // SELECTION (E1, committed): PUCT, U = c * P * sqrt(N) / (1 + n), over the
 // INSTANTIATED children only: the children sorted by prior, the first
@@ -95,8 +108,9 @@
 // policies narrow, flat ones widen. FPU reduction for unvisited children
 // (Q_parent - fpu * sqrt(visited prior mass)). Root Dirichlet noise for
 // self-play. E2 (provisional, flags): cPUCT scaled by the node's value
-// standard deviation (the categorical variance as a prior, blended with the
-// backed-up values'), and uncertainty-weighted backups. E3 (prototype, flag):
+// standard deviation (the uncertainty signal - the categorical variance by
+// default - as a prior, blended with the backed-up values'), and
+// uncertainty-weighted backups. E3 (prototype, flag):
 // a per-child variance bonus, multiplicative on U, capped, never below 1.
 //
 // VIRTUAL LOSS (§15.4): leaves are gathered in batches; each path carries one
@@ -201,6 +215,9 @@ constexpr double value_bin_centre(int k) noexcept {
   return (2.0 * k - (kValueBins - 1)) / static_cast<double>(kValueBins - 1);
 }
 
+/// D3: the WDL head's outputs - win, draw, loss, in that order.
+inline constexpr int kWdl = 3;
+
 using NodeId = std::uint32_t;
 inline constexpr NodeId kNoNode = std::numeric_limits<NodeId>::max();
 
@@ -226,6 +243,15 @@ enum class ActionPrior : std::uint8_t {
 enum class NodeKey : std::uint8_t {
   State = 0,            ///< the 5D Zobrist key (ruleset ID included); origins ignored
   StateAndOrigins = 1,  ///< also each timeline's branch origin (the lineage reading)
+};
+
+/// The uncertainty signal search consumes (register I10; ablation 6m): "the
+/// categorical variance vs the error head - both trained from the start
+/// (§8.3)". The chosen one is each node's variance - what E2, E3 and E5's
+/// optional term read.
+enum class UncertaintySource : std::uint8_t {
+  Categorical = 0,  ///< the 51-bin categorical's variance (0 where none was given)
+  ErrorHead = 1,    ///< the error head's output (0 where none was given)
 };
 
 /// The final-selection rule outside solved positions (E5).
@@ -302,6 +328,9 @@ struct SearchParams {
   double cpuct_scale_min = 0.5;
   double cpuct_scale_max = 2.0;
   bool uncertainty_weighted_backup = false;  ///< w = sigma_ref^2 / (sigma_ref^2 + var)
+  /// 6m (register I10): which signal is a node's variance for E2, E3 and E5's
+  /// optional term. The register's default reading: the categorical.
+  UncertaintySource uncertainty_source = UncertaintySource::Categorical;
 
   // ---- E3 (prototype): per-child variance bonus ----------------------------------
   bool variance_bonus = false;
@@ -346,7 +375,9 @@ struct SearchParams {
   FinalRule final_rule = FinalRule::Lcb;
   double lcb_floor = 0.15;              ///< "~15% of the max-visit child"
   double lcb_z = 3.0;                   ///< "a few standard errors"; placeholder
-  double lcb_categorical_weight = 0.0;  ///< the optional categorical term (0: off)
+  /// The optional term (0: off) - the child's uncertainty signal
+  /// (uncertainty_source: the categorical's variance by default).
+  double lcb_categorical_weight = 0.0;
   double secure_child_a = 1.0;          ///< secure child: Q - A / sqrt(n); placeholder
 
   // ---- leaves -----------------------------------------------------------------------
@@ -432,9 +463,23 @@ struct Evaluation {
   /// global registers), used when the leaf's submit is possible; NaN - none given -
   /// stands for SearchParams::submit_share. Must not be infinite.
   float submit_logit = std::numeric_limits<float>::quiet_NaN();
-  /// Probabilities over kValueBins bins (normalised by the search), from the
-  /// leaf's acting player.
-  std::array<float, kValueBins> value{};
+  /// D3: the WDL head - the value search uses. Probabilities of a win, a draw
+  /// and a loss for the leaf's acting player (kWdl, in that order; normalised
+  /// by the search - non-negative, finite, not all zero). The leaf's value is
+  /// W - L and its draw probability D (wdl_value).
+  std::array<float, kWdl> wdl{};
+  /// D3: the 51-bin categorical over the root search value - probabilities over
+  /// kValueBins bins (normalised by the search), from the leaf's acting player;
+  /// empty: none given. Its variance is the node's uncertainty signal under
+  /// UncertaintySource::Categorical (0 without one); its mean is never backed up.
+  std::optional<std::array<float, kValueBins>> value;
+  /// D3: the error head's output - the predicted squared gap between the value
+  /// and the short-term value, >= 0; NaN: none given. The node's uncertainty
+  /// signal under UncertaintySource::ErrorHead (0 without one).
+  float error = std::numeric_limits<float>::quiet_NaN();
+  /// D4: the moves-left head's output, in the network's unit, >= 0; NaN: none
+  /// given. Recorded on the node, never backed up (see VALUES above).
+  float moves_left = std::numeric_limits<float>::quiet_NaN();
 };
 
 /// The mean and variance of a value distribution (normalised first). Throws
@@ -449,6 +494,20 @@ ValueMoments value_moments(const std::array<float, kValueBins>& value);
 /// nearest centres (mean exactly v).
 std::array<float, kValueBins> two_hot(double v);
 
+/// A WDL head's value (normalised first): q = (W - L) / (W + D + L) and the
+/// draw probability d = D / (W + D + L). Throws std::invalid_argument for a
+/// negative, non-finite or all-zero one.
+struct WdlValue {
+  double q = 0;
+  double d = 0;
+};
+WdlValue wdl_value(const std::array<float, kWdl>& wdl);
+
+/// A WDL with no draw whose value is `v` (clamped to [-1, 1]):
+/// {(1 + v) / 2, 0, (1 - v) / 2} - the built-in material evaluator's, and the
+/// tests'. Throws std::invalid_argument for NaN.
+std::array<float, kWdl> wdl_of(double v);
+
 class Evaluator {
  public:
   virtual ~Evaluator() = default;
@@ -460,12 +519,16 @@ class Evaluator {
   virtual void on_new_root(const GameState& /*root*/, std::uint64_t /*epoch*/) {}
 };
 
-/// Built-in evaluators, for tests, invariants and the tools.
-///  * uniform: every logit 0, value exactly 0;
-///  * random: logits and a value distribution pseudo-random but a function of
-///    (seed, node key, epoch) only - so evaluation stays a function of the state;
-///  * material: value tanh(material balance / 10) over every timeline's head
-///    board, from the player to move; capture logits 0.5 x the captured value.
+/// Built-in evaluators, for tests, invariants and the tools. Each gives the
+/// WDL and the categorical (no error head, no moves-left):
+///  * uniform: every logit 0; WDL {1, 1, 1} (value exactly 0, draw 1/3) and the
+///    categorical's mass on 0;
+///  * random: logits, a WDL and a value distribution pseudo-random but a
+///    function of (seed, node key, epoch) only - so evaluation stays a function
+///    of the state;
+///  * material: value v = tanh(material balance / 10) over every timeline's
+///    head board, from the player to move - WDL wdl_of(v), categorical
+///    two_hot(v); capture logits 0.5 x the captured value.
 enum class BuiltinEvaluator : std::uint8_t { Uniform = 0, Random = 1, Material = 2 };
 std::unique_ptr<Evaluator> make_evaluator(BuiltinEvaluator kind, std::uint64_t seed = 1);
 const char* evaluator_name(BuiltinEvaluator kind) noexcept;
@@ -482,7 +545,7 @@ struct FinalCandidate {
   std::uint32_t visits = 0;   ///< path visits
   double q = 0;               ///< mean backed-up value
   double variance = 0;        ///< variance of the backed-up values
-  double eval_variance = 0;   ///< the child's categorical variance (0 if none)
+  double eval_variance = 0;   ///< the child's uncertainty signal (uncertainty_source; 0 if none)
   int lo = -1;                ///< solver bounds
   int hi = 1;
   bool solved() const noexcept { return lo == hi; }
@@ -635,6 +698,7 @@ struct EdgeView {
   double weight = 0;    ///< sum of backup weights
   double value = 0;     ///< weighted sum of backed-up values (the parent's view)
   double value_sq = 0;  ///< weighted sum of squares
+  double draw = 0;      ///< weighted sum of backed-up draw probabilities (D3)
 };
 
 struct NodeView {
@@ -658,8 +722,13 @@ struct NodeView {
   double weight = 0;
   double value = 0;
   double value_sq = 0;
-  double eval_mean = 0;
-  double eval_variance = 0;
+  double draw = 0;           ///< weighted sum of backed-up draw probabilities (D3)
+  double eval_mean = 0;      ///< its evaluation's value, W - L (D3)
+  double eval_draw = 0;      ///< ... and draw probability
+  double eval_variance = 0;  ///< ... and uncertainty signal (uncertainty_source)
+  float eval_error = std::numeric_limits<float>::quiet_NaN();       ///< the error head's output (NaN: none)
+  float eval_moves_left = std::numeric_limits<float>::quiet_NaN();  ///< moves-left (NaN: none)
+  bool evaluated = false;    ///< it has an evaluation (eval_*)
   double k0 = 0;
   std::size_t instantiated = 0;
   std::size_t edge_count = 0;
@@ -674,10 +743,20 @@ struct RootChild {
   MoveLegality legality = MoveLegality::Legal;
   double prior = 0;
   std::uint32_t visits = 0;  ///< (f) the policy target
-  double q = 0;
+  double q = 0;  ///< the backed-up value, W - L (D3)
   int lo = -1;  ///< bounds; a child through an unknown edge proves nothing (lo -1)
   int hi = 1;
   NodeId child = kNoNode;
+  /// D3: the backed-up draw probability (0 before a visit) - with q, the
+  /// child's search WDL: W = (1 - d + q) / 2, L = (1 - d - q) / 2.
+  double d = 0;
+  /// The child node's own evaluation, the network's (I13's and I15's memo; the
+  /// root player's view): whether it has one; its WDL (win, draw, loss); its
+  /// moves-left and error head's outputs (NaN: none given).
+  bool evaluated = false;
+  std::array<double, kWdl> network_wdl{};
+  double network_moves_left = std::numeric_limits<double>::quiet_NaN();
+  double network_error = std::numeric_limits<double>::quiet_NaN();
 };
 
 class Search {

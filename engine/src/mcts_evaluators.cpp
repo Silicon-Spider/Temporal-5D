@@ -34,6 +34,7 @@ class UniformEvaluator final : public Evaluator {
   void evaluate(std::span<const EvalRequest> batch, std::span<Evaluation> out) override {
     for (std::size_t i = 0; i < batch.size(); ++i) {
       out[i].logits.assign(batch[i].expansion->moves().size(), 0.0f);
+      out[i].wdl = {1.0f, 1.0f, 1.0f};  // value exactly 0, draw 1/3
       out[i].value = two_hot(0.0);
     }
   }
@@ -63,7 +64,14 @@ class RandomEvaluator final : public Evaluator {
         p[static_cast<std::size_t>(k)] = std::exp(-0.5 * d * d);
         sum += p[static_cast<std::size_t>(k)];
       }
-      for (std::size_t k = 0; k < p.size(); ++k) out[i].value[k] = static_cast<float>(p[k] / sum);
+      std::array<float, kValueBins> value{};
+      for (std::size_t k = 0; k < p.size(); ++k) value[k] = static_cast<float>(p[k] / sum);
+      out[i].value = value;
+      // The WDL: a random draw share, the rest split so that W - L is the
+      // bump's mean scaled by it.
+      const double draw = 0.5 * unit(mix(base ^ 0xD4D4ull));
+      out[i].wdl = {static_cast<float>((1.0 - draw) * (1.0 + mean) * 0.5), static_cast<float>(draw),
+                    static_cast<float>((1.0 - draw) * (1.0 - mean) * 0.5)};
     }
   }
 
@@ -88,7 +96,9 @@ class MaterialEvaluator final : public Evaluator {
           balance += (p.colour() == mover ? 1.0 : -1.0) * material_value(p.kind());
         }
       }
-      out[i].value = two_hot(std::tanh(balance / 10.0));
+      const double v = std::tanh(balance / 10.0);
+      out[i].wdl = wdl_of(v);
+      out[i].value = two_hot(v);
       const MoveList& moves = batch[i].expansion->moves();
       out[i].logits.resize(moves.size());
       for (std::size_t m = 0; m < moves.size(); ++m) {

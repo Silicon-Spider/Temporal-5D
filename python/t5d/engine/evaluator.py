@@ -4,9 +4,10 @@ The search (engine stage E6a, PUCT over the engine's own tree) evaluates leaves 
 itself: it collects a batch of leaf positions, hands them to an evaluator, and takes back,
 for each leaf, **policy logits over that leaf's candidate moves** (spec §8.1: the pointer
 head scores generator-supplied moves only), **the submit action's logit** where the leaf
-offers a legal submission (register D8, §8.2: read from the pooled global registers) and **a 51-bin
-value distribution** (§8.3, D3). This module is that evaluator, written against an abstract
-interface:
+offers a legal submission (register D8, §8.2: read from the pooled global registers) and
+**D3's value heads** (§8.3, corrected at CHECKPOINT 7): the WDL - the value search uses -
+the 51-bin categorical over the root search value, the error head's output and moves-left
+(D4). This module is that evaluator, written against an abstract interface:
 
 * ``Evaluator`` - a callable from a list of positions (``convert.Position`` or
   ``PositionState``) to a list of ``Evaluation``, in the same order.
@@ -20,22 +21,26 @@ interface:
   evaluation against its leaf.
 * ``CStepDriver`` - the ``SearchDriver`` over the engine's C step API (``t5d/capi_search.h``,
   ``search.py``; stage N5): gathers a batch of leaves, converts each leaf's expansion into
-  the network's input, delivers move logits, submit logits and values; ``run_search`` runs
-  one search with it.
+  the network's input, delivers move logits, submit logits and the value heads; ``run_search``
+  runs one search with it.
 
 **The contract an evaluation keeps** (``check_evaluation``): ``policy_logits`` has exactly
 one finite entry per candidate move of the leaf, in the leaf's move order - for a position
 converted by ``convert.to_position`` that is the engine's move order, so logit ``i`` scores
 the move ``t5d_game_apply_expanded(i)`` would play (and, for a search leaf, the move
 ``leaf.expansion.moves[i]``); ``submit_logit`` is finite where the leaf offers a legal
-submission and NaN otherwise - not offered, or masked as illegal (C4); ``value_logits`` has
-the network's ``value_bins`` (51) finite entries, bins centred on ``-1 + 2k/50``
-(``net/heads.py``), and ``value_probs`` is their softmax. **The value is from the
-perspective of the acting player** (register D8: the player whose action is in progress
-until it submits - the present's colour except past the shift; the network's target
-convention, ``net/heads.py``, and the search's) - the side whose candidate moves the policy
-scores. Promotions to different pieces get different logits: the policy adds a learned
-per-piece offset (§8.1, D1; M20).
+submission and NaN otherwise - not offered, or masked as illegal (C4); ``wdl_logits`` has 3
+finite entries (win, draw, loss): **the value is W - L** of their softmax (``value_mean``),
+backed up by the search with the draw probability beside it; ``value_logits`` - the
+categorical, optional (None) - has the network's ``value_bins`` (51) finite entries, bins
+centred on ``-1 + 2k/50`` (``net/heads.py``): its variance is the search's default
+uncertainty signal (6m), its mean is not the value; ``error`` (the error head's output) and
+``moves_left`` are >= 0, or NaN for none given. **Every value head is from the perspective of
+the acting player** (register D8: the player whose action is in progress until it submits -
+the present's colour except past the shift; the network's target convention,
+``net/heads.py``, and the search's) - the side whose candidate moves the policy scores.
+Promotions to different pieces get different logits: the policy adds a learned per-piece
+offset (§8.1, D1; M20).
 """
 
 from __future__ import annotations
@@ -70,30 +75,63 @@ def move_count(position: PositionLike) -> int:
     return int(state_of(position).moves.shape[0])
 
 
+def _softmax(z: np.ndarray) -> np.ndarray:
+    z = np.asarray(z, dtype=np.float64)
+    e = np.exp(z - z.max())
+    return e / e.sum()
+
+
 @dataclass(frozen=True, eq=False)
 class Evaluation:
     """One leaf's evaluation (see the module docstring for the contract)."""
 
     policy_logits: np.ndarray  # (M,) float32: one per candidate move, in the leaf's move order
-    value_logits: np.ndarray  # (V,) float32: V = value_bins, the acting player's perspective
+    wdl_logits: np.ndarray  # (3,) float32: win, draw, loss - D3's value, the acting player's perspective
+    #: D3: the categorical over the root search value, (V,) float32 with V = value_bins, the acting
+    #: player's perspective - or None (not given: the search's categorical signal is then 0).
+    value_logits: np.ndarray | None = None
     #: D8: the submit action's logit, read from the pooled global registers - finite where the leaf
     #: offers a legal submit, NaN otherwise (not offered, or masked as illegal; NaN where it is
     #: legal stands for "none given": the search's placeholder share).
     submit_logit: float = math.nan
+    #: D3: the error head's output (the predicted squared value - short-term gap), >= 0; NaN: none.
+    error: float = math.nan
+    #: D4: moves-left, in the network's unit (turns, M20), >= 0; NaN: none.
+    moves_left: float = math.nan
 
     @property
-    def value_probs(self) -> np.ndarray:
-        """The 51-bin value distribution (softmax of the logits, float32)."""
-        z = self.value_logits.astype(np.float64)
-        e = np.exp(z - z.max())
-        return (e / e.sum()).astype(np.float32)
+    def wdl_probs(self) -> np.ndarray:
+        """``(3,)``: win, draw, loss (softmax of the logits, float32)."""
+        return _softmax(self.wdl_logits).astype(np.float32)
 
     @property
     def value_mean(self) -> float:
-        """The distribution's mean on [-1, 1]."""
-        v = self.value_logits.shape[0]
-        centres = (2.0 * np.arange(v) - (v - 1)) / (v - 1)
-        return float((self.value_probs.astype(np.float64) * centres).sum())
+        """The value search uses (D3): W - L, on [-1, 1]."""
+        p = _softmax(self.wdl_logits)
+        return float(p[0] - p[2])
+
+    @property
+    def value_probs(self) -> np.ndarray:
+        """The categorical (softmax of its logits, float32); ``ValueError`` if none was given."""
+        if self.value_logits is None:
+            raise ValueError("this evaluation has no categorical")
+        return _softmax(self.value_logits).astype(np.float32)
+
+    def _centres(self) -> np.ndarray:
+        v = self.value_probs.shape[0]
+        return (2.0 * np.arange(v) - (v - 1)) / (v - 1)
+
+    @property
+    def categorical_mean(self) -> float:
+        """The categorical's mean on [-1, 1] - not the value (D3)."""
+        return float((self.value_probs.astype(np.float64) * self._centres()).sum())
+
+    @property
+    def categorical_variance(self) -> float:
+        """The categorical's variance - the search's default uncertainty signal (6m)."""
+        p, c = self.value_probs.astype(np.float64), self._centres()
+        m = float((p * c).sum())
+        return float((p * (c - m) ** 2).sum())
 
     def action_probs(self) -> np.ndarray:
         """``(M + 1,)``: the decision's distribution - the candidate moves, then submit (D8) -
@@ -125,10 +163,17 @@ class Evaluator(Protocol):
 
 
 def _split(out: NetOutput, states: Sequence[PositionState]) -> list[Evaluation]:
-    """Per-position evaluations of a batch's output (row ``i`` is ``states[i]``)."""
+    """Per-position evaluations of a batch's output (row ``i`` is ``states[i]``): the policy,
+    the submit logit and D3's value heads - the WDL, the categorical, the error head's output
+    where the network has one (``value_error``; NaN until the network lane's heads add it) and
+    moves-left in turns (``expm1`` of the head's ``log1p``, floored at 0)."""
     logits = out.policy_logits.detach().float().cpu()
     valid = out.move_valid.detach().cpu()
     values = out.value_logits.detach().float().cpu()
+    wdl = out.wdl_logits.detach().float().cpu()
+    error_out = getattr(out, "value_error", None)
+    errors = None if error_out is None else error_out.detach().float().cpu().reshape(-1)
+    moves_left = torch.expm1(out.moves_left_log.detach().double().cpu().clamp(min=0.0))
     submit = out.submit_logits.detach().float().cpu()
     submit_valid = out.submit_valid.detach().cpu()
     results = []
@@ -145,8 +190,11 @@ def _split(out: NetOutput, states: Sequence[PositionState]) -> list[Evaluation]:
         results.append(
             Evaluation(
                 policy_logits=logits[i, :m].numpy().copy(),
+                wdl_logits=wdl[i].numpy().copy(),
                 value_logits=values[i].numpy().copy(),
                 submit_logit=s if legal else math.nan,  # masked (-inf) or absent: no logit
+                error=math.nan if errors is None else float(errors[i]),
+                moves_left=float(moves_left[i]),
             )
         )
     return results
@@ -259,18 +307,28 @@ class SearchDriver(Protocol):
 
 def check_evaluation(leaf: Leaf, evaluation: Evaluation, value_bins: int | None = None) -> None:
     """Raise ``ValueError`` unless ``evaluation`` keeps the contract for ``leaf``: the move
-    logits as before; the submit logit (D8) never infinite, and NaN unless the leaf offers a
-    legal submit (where NaN means "none given")."""
+    logits as before; D3's heads - 3 finite WDL logits, the categorical None or ``value_bins``
+    finite logits, the error and moves-left NaN or finite and >= 0; the submit logit (D8) never
+    infinite, and NaN unless the leaf offers a legal submit (where NaN means "none given")."""
     m = move_count(leaf.position)
-    pl, vl = evaluation.policy_logits, evaluation.value_logits
+    pl, wl, vl = evaluation.policy_logits, evaluation.wdl_logits, evaluation.value_logits
     if pl.shape != (m,):
         raise ValueError(f"leaf {leaf.id}: {pl.shape[0] if pl.ndim == 1 else pl.shape} policy logits for {m} candidate moves")
     if not np.all(np.isfinite(pl)):
         raise ValueError(f"leaf {leaf.id}: a policy logit is not finite")
-    if vl.ndim != 1 or (value_bins is not None and vl.shape[0] != value_bins):
-        raise ValueError(f"leaf {leaf.id}: value logits of shape {vl.shape}, expected ({value_bins},)")
-    if not np.all(np.isfinite(vl)):
-        raise ValueError(f"leaf {leaf.id}: a value logit is not finite")
+    if np.shape(wl) != (3,):
+        raise ValueError(f"leaf {leaf.id}: WDL logits of shape {np.shape(wl)}, expected (3,)")
+    if not np.all(np.isfinite(wl)):
+        raise ValueError(f"leaf {leaf.id}: a WDL logit is not finite")
+    if vl is not None:
+        if vl.ndim != 1 or (value_bins is not None and vl.shape[0] != value_bins):
+            raise ValueError(f"leaf {leaf.id}: value logits of shape {vl.shape}, expected ({value_bins},)")
+        if not np.all(np.isfinite(vl)):
+            raise ValueError(f"leaf {leaf.id}: a value logit is not finite")
+    for name in ("error", "moves_left"):
+        x = float(getattr(evaluation, name))
+        if not math.isnan(x) and not (math.isfinite(x) and x >= 0.0):
+            raise ValueError(f"leaf {leaf.id}: the {name.replace('_', '-')} output is {x} (>= 0, or NaN for none)")
     s = float(evaluation.submit_logit)
     if math.isinf(s):
         raise ValueError(f"leaf {leaf.id}: the submit logit is infinite (masked or absent is NaN)")
@@ -360,9 +418,10 @@ class CStepDriver:
 
     ``deliver(results)``: every leaf of the batch, by leaf id: the move logits concatenated
     in leaf order, one submit logit per leaf - the evaluation's where the leaf offers a legal
-    submit, NaN elsewhere (not offered; or illegal, which the search prunes) - and the 51
-    value logits (``T5D_VALUE_LOGITS``), from the leaf's acting player. A refused delivery
-    raises the engine's error; the engine has abandoned the batch.
+    submit, NaN elsewhere (not offered; or illegal, which the search prunes) - and D3's heads,
+    from the leaf's acting player: the 3 WDL logits, the 51 categorical logits (given for every
+    leaf of the batch or for none), the error head's output and moves-left (NaN: none). A
+    refused delivery raises the engine's error; the engine has abandoned the batch.
 
     The search's ``expand`` options must give every board's features (``"all"``): the
     network's input is the full history. Errors from the engine raise as exceptions
@@ -370,10 +429,10 @@ class CStepDriver:
     when evaluation fails). ``batch`` is the waiting batch's leaves (``LeafView``: key, epoch,
     D8's flags, the expansion), in the order the evaluator receives their positions.
 
-    ``value_kind``: what an evaluation's ``value_logits`` hold - ``T5D_VALUE_LOGITS`` (the
-    network's, the default) or ``T5D_VALUE_PROBABILITIES`` (an evaluator with exact
-    probabilities - the engine's built-in evaluators rewritten in Python, for bit-identical
-    comparisons with the engine's own runs)."""
+    ``value_kind``: what an evaluation's ``wdl_logits`` and ``value_logits`` hold -
+    ``T5D_VALUE_LOGITS`` (the network's, the default) or ``T5D_VALUE_PROBABILITIES`` (an
+    evaluator with exact probabilities - the engine's built-in evaluators rewritten in Python,
+    for bit-identical comparisons with the engine's own runs)."""
 
     def __init__(
         self, search: Search, *, playouts: int, regs_per_board: int = 2, global_regs: int = 16, value_kind: int = T5D_VALUE_LOGITS
@@ -453,11 +512,27 @@ class CStepDriver:
             raise RuntimeError(f"deliver: evaluations for leaves {sorted(by_id)}, the batch is leaves 0..{len(views) - 1}")
         evs = [by_id[i] for i in range(len(views))]
         logits = np.concatenate([np.asarray(ev.policy_logits, dtype=np.float32).reshape(-1) for ev in evs] + [np.zeros(0, np.float32)])
-        values = np.stack([np.asarray(ev.value_logits, dtype=np.float32) for ev in evs])
+        wdl = np.stack([np.asarray(ev.wdl_logits, dtype=np.float32) for ev in evs])
+        given = [ev.value_logits is not None for ev in evs]
+        if any(given) and not all(given):
+            self.abandon()
+            raise RuntimeError("deliver: a categorical for some leaves of the batch and not others (all or none)")
+        values = np.stack([np.asarray(ev.value_logits, dtype=np.float32) for ev in evs]) if all(given) else None
+        errors = np.array([ev.error for ev in evs], dtype=np.float32)
+        moves_left = np.array([ev.moves_left for ev in evs], dtype=np.float32)
         offered = [v.submit_possible and v.submit_legal for v in views]
         submit = np.array([ev.submit_logit if ok else math.nan for ev, ok in zip(evs, offered, strict=True)], dtype=np.float32)
         self._waiting = None  # delivered or refused, the engine no longer holds the batch
-        self.search.deliver(logits, values, submit_logits=submit, value_kind=self.value_kind)
+        self.search.deliver(
+            logits,
+            wdl,
+            values=values,
+            errors=errors,
+            moves_left=moves_left,
+            submit_logits=submit,
+            wdl_kind=self.value_kind,
+            value_kind=self.value_kind,
+        )
 
     def abandon(self) -> None:
         """Release a waiting batch (nothing backed up)."""
@@ -519,16 +594,20 @@ def run_search(
 
 
 class UniformEvaluator:
-    """Logits 0 for every move, no submit logit (the search's placeholder share), the value 0
-    (every bin's mass on the centre bin) - the engine's built-in ``uniform`` evaluator, in
-    Python: a search driven by it through the step API is the engine's own run, bit for bit."""
+    """Logits 0 for every move, no submit logit (the search's placeholder share), WDL logits
+    (0, 0, 0) - the value exactly 0, the draw probability 1/3 - and the categorical's mass on
+    its centre bin - the engine's built-in ``uniform`` evaluator, in Python: a search driven by
+    it through the step API is the engine's own run, bit for bit."""
 
     def __init__(self, value_bins: int = 51) -> None:
         self.value_logits = np.full(value_bins, -1.0e4, dtype=np.float32)
         self.value_logits[value_bins // 2] = 0.0
 
     def __call__(self, positions: Sequence[PositionLike]) -> list[Evaluation]:
-        return [Evaluation(np.zeros(move_count(p), dtype=np.float32), self.value_logits.copy()) for p in positions]
+        return [
+            Evaluation(np.zeros(move_count(p), dtype=np.float32), np.zeros(3, dtype=np.float32), self.value_logits.copy())
+            for p in positions
+        ]
 
 
 __all__ = [

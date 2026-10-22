@@ -10,6 +10,115 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-22 - Engine ABI round 2a: D3's value outputs in the search - the WDL backed up with its draw, one deliver call for every head, 6m's switch
+
+- Register D3 (Committed, class C; §8.3, corrected at CHECKPOINT 7, reversal 28): "WDL on
+  the game result - the value search uses". The engine side, in engine ABI round 2's first
+  commit (one round, one owner: the engine lane; the Python mirror in the same commit).
+  `engine/include/t5d/mcts.hpp`, `src/mcts.cpp`: an `Evaluation` carries D3's heads from
+  the leaf's acting player - `wdl` (win, draw, loss; required; `kWdl`), `value` (the
+  51-bin categorical over the root search value, now `std::optional`), `error` (the error
+  head's output, >= 0; NaN: none) and `moves_left` (D4; NaN: none). A leaf's value is
+  W − L of the normalised WDL (`wdl_value`); the categorical's mean is no longer backed up
+  (it was the leaf's value before - the reading reversal 28 corrected). The search refuses
+  a WDL or categorical that is no distribution and a negative or infinite error or
+  moves-left, releasing the batch.
+- The draw/moves-left decision (the plan critic's missing item 3; issue 148): the **draw
+  probability D is backed up** beside the value on every node and edge, Lc0's way - a
+  leaf's its WDL's, a mate's 0, a stalemate's and the turn cap's 1 (I11: a draw), a solved
+  node's 1 for a proven draw; an MCGS residual corrects D as it corrects Q; D does not flip
+  across a change of acting player. So a root child's search WDL is `((1 - d + q) / 2, d,
+  (1 - d - q) / 2)` - what I13's best-move value and D3's `q_ratio` blend need. **Moves-left
+  is recorded, not backed up**: what an edge adds to the count needs the unit of a turn
+  (issue 305) and whether the action in progress counts (issue 224, open); each node keeps
+  its network outputs, and `RootChild` exposes the child's own evaluation in the root
+  player's view (`evaluated`, `network_wdl`, `network_moves_left`, `network_error`) beside
+  the backed-up `d`, so I13's targets are buildable: the best child's (q, d) and its
+  network moves-left plus the target builder's offset. `check_invariants` holds the draws
+  consistent through backup and within [0, 1]; the digest hashes them. `Node` +40 bytes,
+  `Edge` +8 (one double).
+- 6m's switch (register I10, §13.1 6m; the critic's missing item 2; issue 149):
+  `SearchParams::uncertainty_source` - `Categorical` (the categorical's variance; the
+  default, by D3's "its variance and overlap feed search") or `ErrorHead` (the error head's
+  output, a squared gap, taken as the variance) - is each node's variance, which all three
+  readers take: E2's cPUCT scale and backup weight, E3's bonus, E5's optional LCB term. A
+  signal not given is 0. E2's and E3's constants stay placeholders (issues 81, 149).
+- The built-in evaluators give a WDL: `uniform` `{1, 1, 1}` (value exactly 0, draw 1/3),
+  `random` a hash-derived draw share in [0, 0.5] with W − L its bump's mean scaled,
+  `material` `wdl_of(v)` (no draw) beside `two_hot(v)`. `Search::run` resets every head of
+  its reused buffers. Search results change only as the new value semantics require: the
+  uniform evaluator's searches are bit-identical in every statistic but the new draw sums
+  (its W − L is exactly the categorical's old mean, 0); `random` and `material` now back up
+  their WDL's W − L instead of the categorical's mean (`material` the same value up to
+  float rounding); every search hashes its draws into the digest; root noise and
+  everything else unchanged.
+- The C API (`engine/include/t5d/capi_search.h`, `src/capi_search.cpp`): **one new deliver
+  call**, `t5d_search_deliver_evaluations(search, const t5d_evaluations*, error)` - a struct
+  of the batch's arrays: the logits, the submit logits (optional), `T5D_WDL` (3) WDL
+  numbers per leaf (required) and the categorical (51 per leaf, optional), each as
+  probabilities or logits (`wdl_kind`, `value_kind`), one error-head output and one
+  moves-left per leaf (optional; NaN at a leaf: none), and `board_logits` reserved for D2's
+  flat form (not built: anything but NULL is `T5D_ERR_UNSUPPORTED`). A struct is appended
+  to like the others, so the flat form's per-board logits need no third entry point. **The
+  old `t5d_search_deliver` is retired**, not shimmed: it took the categorical alone and
+  backed up its mean; a shim would have had to invent a draw probability the documents do
+  not give, and its one caller, the Python binding, moves in this commit.
+  `t5d_search_params` gains `uncertainty_source` (`T5D_UNCERTAINTY_CATEGORICAL` by
+  default, `_ERROR_HEAD`) in front of the embedded `expand`; `t5d_search_summary` appends
+  the root's backed-up `root_d` and its own evaluation (`root_evaluated`, `root_wdl`,
+  `root_moves_left`, `root_error` - the network's raw outputs at the root, I15);
+  `t5d_root_child` appends `d`, `evaluated`, `network_wdl`, `network_moves_left`,
+  `network_error`; `t5d_search_layout` reports every new field and `t5d_evaluations`.
+- Python mirror (`python/t5d/engine`): `capi.py` (`CEvaluations`, the new fields, the
+  constants `T5D_WDL` and `T5D_UNCERTAINTY_*`; the layout check passes); `search.py`
+  (`Search.deliver(logits, wdl, *, values=None, errors=None, moves_left=None,
+  submit_logits=None, wdl_kind, value_kind)`; `SearchInfo` and `RootChild` gain the new
+  fields); `evaluator.py` - `Evaluation(policy_logits, wdl_logits, value_logits=None,
+  submit_logit, error, moves_left)`: `value_mean` is now W − L, the categorical's moments
+  are `categorical_mean` and `categorical_variance`; `_split` delivers the network's WDL
+  logits, its categorical, moves-left in turns (`expm1` of the head's `log1p`, floored at
+  0) and the error head's output where the network has one (`NetOutput.value_error`; NaN
+  until the network lane's D3 heads add it); `check_evaluation` checks every head;
+  `CStepDriver.deliver` sends them all (the categorical for every leaf of a batch or none);
+  `UniformEvaluator` gives WDL logits (0, 0, 0), bit-exact with the engine's `uniform`.
+- Tests. `engine/tests/test_mcts.cpp`: `mcts_d3_the_wdl_is_the_value_and_its_draw_is_
+  backed_up` (W − L backed up whatever the categorical says, D beside it, every node and
+  edge, both splits, tree and graph - residual corrections included - and the root
+  children's `d` and network WDL); `mcts_d3_the_categorical_changes_only_the_uncertainty`
+  (with E2, E3 and E5's term off two categoricals grow the same tree value for value; with
+  E2 on they steer; under the error-head signal the categorical is unread and the error
+  steers); `mcts_d3_6m_chooses_the_nodes_uncertainty_signal` (each signal, each absent:
+  0); `mcts_d3_game_ends_back_up_their_draw_probability` (mate 0, stalemate and cap 1);
+  `mcts_d3_the_evaluation_cache_returns_every_head` (§15.2's purity row: every head bit for
+  bit, a fresh search's root from a shared cache included); `mcts_d3_the_builtin_
+  evaluators_give_a_wdl`; `mcts_run_hands_the_evaluator_reset_buffers`; the malformed-
+  evaluation test head by head; the turn-cap test's D. `test_capi_search.cpp`: the step
+  loop with WDLs, categoricals, errors and moves-left equal to the C++ search by digest
+  under both signals with E2 on, the root children's `q`, `d` and network outputs equal;
+  the WDL as probabilities and logits (win, draw, loss not mirrored; the categorical not
+  the value); every refusal of the batch struct, each releasing the batch; the layouts;
+  `uncertainty_source` validated. Python (`tests/engine`): the engine's `random` evaluator
+  rewritten with its WDL still equal to the engine's run by digest (both arms, tree and
+  graph, noise, synchronous, past the shift); `test_d3_the_wdl_is_the_search_value_and_
+  its_draw_is_backed_up` through the step API (the root's and the children's network
+  outputs included); `test_d3_6m_the_uncertainty_source_is_a_parameter`; the
+  acting-player tests with the WDL (the categorical set the other way round); the
+  evaluator's heads against the network's own outputs, the helpers, `check_evaluation`.
+  Checks: engine 571 of 571 (`py engine/build.py --werror --test`); Python `tests/engine`
+  177 passed, 1 skipped (`T5D_REQUIRE_ENGINE=1`; the skip is `T5D_RECORDS`'); ruff check and
+  format clean; `harness verify` ok; `gate --tier commit`: the oracle layer ok, the engine differential "SMOKE TEST - PASSED" (41
+  records compared with the last green run, 0 declined), the proof channel DISABLED.
+- `engine/README.md`: "Nodes and values", E2's and E5's signal, "The evaluator", the C
+  API (the new call, the retirement, the new fields), the tests, the readings (issues 148,
+  149). `docs/BUILD_LOG.md`: register D3 (engine side built), C14 (the cache's entries:
+  `Evaluation` 232 -> 256 bytes), E2/E3, E5, I10 (6m's switch built), I13 (the engine side
+  built); spec issues 148-149; proposed edits 121-122.
+- Spec: §8.3 and register D3, I13 - the search backs up W − L and D, records moves-left
+  (edit 121, issue 148); §13.1 6m, §8.4's E2/E3 text and constants, register I10, E2 - the
+  switch, its readers and default (edit 122, issue 149); §15.2's purity row (C19-C21) - an
+  evaluation's every head, as built; C14's cache entry size (an engineering figure, no
+  edit). No truth source changed (`T5D_TRUTH_SOURCES`).
+
 ### 2026-10-22 - Engine: the shared proof stores' locks correct on every platform (a data race under winpthreads' shared_mutex)
 
 - The defect (register H17; found at E-A6's review on 2026-10-17 and parked there).
