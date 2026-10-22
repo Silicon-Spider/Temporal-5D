@@ -8,7 +8,9 @@
 // mandatory board onto an optional one, and between two optional boards (T3,
 // J4) - and a reactivation that makes a board mandatory mid-action, with a
 // rewind (T12) and without one (T11); the summary's ranges and classes at
-// their edges, and its statistics on constructed widths; and t5d-measure
+// their edges, and its statistics on constructed widths - the cost of a move
+// (the dense model, worked by hand) and the compute shares and the optional
+// moves' share of the moves (the CHECKPOINT 8 figures) among them; and t5d-measure
 // --turns / --turn-summary run end to end on the hand-written records of
 // engine/testdata/turn-width - the counts, how records are classified (a
 // repeat, a prefix, a truncated record, two records that differ only in
@@ -22,6 +24,7 @@
 
 #include <array>
 #include <cctype>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -582,6 +585,11 @@ TEST(turn_width_summary_statistics_of_constructed_widths) {
   CHECK_EQ(s.jumps_between_mandatory, 1);
   CHECK_EQ(s.optional_onto_mandatory, 1);
   CHECK_EQ(s.mandatory_onto_optional, 1);
+  // The optional moves as a share of every move: 7 of 21.
+  CHECK_EQ(s.moves_total, 21);
+  CHECK_EQ(t5d::tools::share_of(static_cast<double>(s.optional_moves),
+                                static_cast<double>(s.moves_total)),
+           7.0 / 21.0);
 
   // No action: nothing counted. An action without a mandatory board or a
   // move is not one (T5).
@@ -591,6 +599,74 @@ TEST(turn_width_summary_statistics_of_constructed_widths) {
   CHECK_THROWS_AS(t5d::tools::turn_stats(bad), std::invalid_argument);
   none = width(1, 0, 0);
   CHECK_THROWS_AS(t5d::tools::turn_stats(bad), std::invalid_argument);
+}
+
+TEST(turn_width_the_cost_of_a_move_is_the_dense_model) {
+  // 4 T^2 d L + 40 T d^2 L, T = 66 N + 16, d = 256, L = 16 (spec §9.1-9.2),
+  // worked by hand in integers: N = 0 is the 16 global tokens alone; N = 1 is
+  // T = 82; N = 240 is T = 15,856 - spec §9.2's 4.12 + 0.67 = 4.78 TFLOPs.
+  using t5d::tools::dense_eval_flops;
+  CHECK_EQ(dense_eval_flops(0), 4.0 * 16 * 16 * 256 * 16 + 40.0 * 16 * 256 * 256 * 16);
+  CHECK_EQ(dense_eval_flops(0), 675282944.0);
+  CHECK_EQ(dense_eval_flops(1), 3549495296.0);
+  CHECK_EQ(dense_eval_flops(10), 35840589824.0);
+  CHECK_EQ(dense_eval_flops(100), 994646687744.0);
+  CHECK_EQ(dense_eval_flops(240), 4784195108864.0);
+  CHECK(std::abs(dense_eval_flops(240) / 1e12 - 4.78) < 0.005);
+  CHECK_EQ(t5d::tools::share_of(1, 0), 0.0);
+  CHECK_EQ(t5d::tools::share_of(1, 4), 0.25);
+}
+
+TEST(turn_width_summary_compute_share_of_constructed_widths) {
+  // Six actions with known costs: the compute share of the actions with more
+  // than one mandatory board is their moves x the cost of a move at their
+  // board count, over every action's - by the dense model, and with every
+  // move costing the same (the share of the moves).
+  const auto width = [](std::size_t boards, int mandatory, int playable, int moves) {
+    TurnWidth w;
+    w.boards = boards;
+    w.mandatory = mandatory;
+    w.playable = playable;
+    w.optional = playable - mandatory;
+    w.moves = moves;
+    w.boards_played = moves;
+    return w;
+  };
+  std::vector<TurnWidth> a;
+  a.push_back(width(10, 1, 1, 1));   // one board, one move
+  a.push_back(width(10, 1, 1, 1));   // again
+  a.push_back(width(10, 2, 2, 2));   // two mandatory boards, two moves
+  a.push_back(width(100, 1, 3, 2));  // one mandatory board, an optional move beside it
+  a.back().optional_moves = 1;
+  a.push_back(width(100, 3, 3, 3));  // three mandatory boards
+  a.push_back(width(100, 2, 2, 1));  // two mandatory boards, one jump between them
+  std::vector<const TurnWidth*> in;
+  for (const TurnWidth& w : a) in.push_back(&w);
+  const t5d::tools::TurnStats s = t5d::tools::turn_stats(in);
+
+  const double c10 = 35840589824.0, c100 = 994646687744.0;  // the dense model's
+  CHECK_EQ(s.moves_total, 10);
+  CHECK_EQ(s.moves_mandatory_over_1, 2 + 3 + 1);
+  CHECK_EQ(s.moves_mandatory_over_2, 3);
+  CHECK_EQ(s.moves_playable_over_1, 2 + 2 + 3 + 1);
+  CHECK_EQ(s.dense_flops, 4 * c10 + 6 * c100);
+  CHECK_EQ(s.dense_flops_mandatory_over_1, 2 * c10 + 4 * c100);
+  CHECK_EQ(s.dense_flops_mandatory_over_2, 3 * c100);
+  CHECK_EQ(s.dense_flops_playable_over_1, 2 * c10 + 6 * c100);
+  // The shares: dense 0.6628 against 6 of 10 moves; three or more 0.4883
+  // against 3 of 10 - the dense model weighs a move at 100 boards ~28x one at
+  // 10 (0.9947 against 0.0358 TFLOPs).
+  using t5d::tools::share_of;
+  const double share = share_of(s.dense_flops_mandatory_over_1, s.dense_flops);
+  CHECK(std::abs(share - (2 * c10 + 4 * c100) / (4 * c10 + 6 * c100)) < 1e-15);
+  CHECK(std::abs(share - 0.662757) < 1e-6);
+  CHECK(std::abs(share_of(s.dense_flops_mandatory_over_2, s.dense_flops) - 0.488271) < 1e-6);
+  CHECK_EQ(share_of(static_cast<double>(s.moves_mandatory_over_1),
+                    static_cast<double>(s.moves_total)),
+           6.0 / 10.0);
+  // The optional moves: one action of six with one, one move of ten.
+  CHECK_EQ(s.with_optional_moves, std::size_t{1});
+  CHECK_EQ(s.optional_moves, 1);
 }
 
 // ---- t5d-measure --turns / --turn-summary, end to end -----------------------------------------
@@ -886,6 +962,23 @@ TEST(measure_exe_turn_summary_classifies_records) {
   CHECK_EQ(int_field(strict, "games"), 2);
   CHECK(has(strict, "\"moves\":{\"1\":3,\"2\":5,\"3\":0,\"4+\":0}"));
   CHECK(has(strict, "\"optional_moves\":{\"0\":7,\"1\":1,\"2\":0,\"3+\":0}"));
+  // The CHECKPOINT 8 figures: of the 13 moves, one optional; the actions
+  // with two mandatory boards - the first three of each record, at 2, 4 and 6
+  // boards - make 10 of them; by the dense model their share is X / (X + 3 c(9))
+  // with X = 2 (2 c(2) + c(4) + 2 c(6)), 0.5824 of 0.2276 TFLOPs (c(N) = 4 T^2 d
+  // L + 40 T d^2 L, T = 66 N + 16, worked apart); no action has three or more;
+  // every one has two playable boards or more.
+  CHECK_EQ(int_field(strict, "moves_total"), 13);
+  CHECK_EQ(int_field(strict, "optional_moves_total"), 1);
+  CHECK(has(strict, "\"optional_moves_share_of_moves\":0.07692,"));
+  CHECK(has(strict, "\"compute_share_mandatory_over_1\":0.5824,"));
+  CHECK(has(strict, "\"compute_share_mandatory_over_1_constant\":0.7692,"));
+  CHECK(has(strict, "\"compute_share_mandatory_over_2\":0,"));
+  CHECK(has(strict, "\"compute_share_mandatory_over_2_constant\":0,"));
+  CHECK(has(strict, "\"compute_share_playable_over_1\":1,"));
+  CHECK(has(strict, "\"compute_share_playable_over_1_constant\":1,"));
+  CHECK(has(strict, "\"dense_tflops\":0.2276"));
+  CHECK(has(head[0], "\"cost_model\":\"moves x one dense evaluation at N"));
   const std::string grouped = summary_line(lines, "grouped", "<50");
   CHECK_EQ(int_field(grouped, "actions"), 8);
   CHECK_EQ(int_field(grouped, "games"), 2);

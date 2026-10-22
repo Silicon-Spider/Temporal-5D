@@ -96,7 +96,15 @@
 // after the shift, a rewind and a mandatory board released; and the counts of
 // jumps between two mandatory boards, from an optional board onto a
 // mandatory one and from a mandatory board onto an optional one, of boards
-// released and gained, and of moves on boards released or gained. The strict
+// released and gained, and of moves on boards released or gained; the moves
+// and the optional moves in all, and the optional moves' share of the moves;
+// and the compute shares (the CHECKPOINT 8 ruling) - of the actions with more
+// than one mandatory board, with three or more, and with more than one
+// playable board: their moves x the cost of a move over every action's, the
+// cost a dense evaluation at the action's board count (compute_share_*) or
+// constant (compute_share_*_constant; tools/turn_width.hpp, "THE COST OF A
+// MOVE", and the head line's "cost_model"), and the dense total in TFLOPs
+// (dense_tflops). The strict
 // reading is also given per mandatory class (1, 2, 3, 4+) in each range.
 // Synthetic records are left out, and counted.
 //
@@ -595,6 +603,7 @@ void print_summary() {
 // ---- the turn summary (--turn-summary; register M22) --------------------------------------
 
 using t5d::tools::BoardRange;
+using t5d::tools::share_of;
 using t5d::tools::TurnStats;
 
 // One action as a reading counts it, and the game (or record) it is from.
@@ -650,6 +659,11 @@ std::string turn_stats_fields(const TurnStats& t) {
   s += ",\"optional_when_made_mean\":" + mean(t.optional_when_made) +
        ",\"with_optional_when_made\":" + share(t.with_optional_when_made, n);
   s += ",\"optional_played_mean\":" + mean(t.optional_played);
+  // The optional moves' total, and as a share of every move made.
+  s += ",\"moves_total\":" + std::to_string(t.moves_total) +
+       ",\"optional_moves_total\":" + std::to_string(t.optional_moves) +
+       ",\"optional_moves_share_of_moves\":" +
+       number(share_of(static_cast<double>(t.optional_moves), static_cast<double>(t.moves_total)));
   s += class_fields(t.moves_classes, "moves", kMoves);
   s += spread_fields(t.moves, "moves");
   s += ",\"one_move_over_1_mandatory\":" + std::to_string(t.one_move_over_1_mandatory);
@@ -667,6 +681,17 @@ std::string turn_stats_fields(const TurnStats& t) {
        ",\"mandatory_gained\":" + std::to_string(t.mandatory_gained) +
        ",\"moves_on_released\":" + std::to_string(t.moves_on_released) +
        ",\"moves_on_gained\":" + std::to_string(t.moves_on_gained);
+  // The compute share (tools/turn_width.hpp, "THE COST OF A MOVE"): dense, and
+  // _constant (the share of the moves).
+  const auto compute = [&](const char* name, double flops, long long moves) {
+    return std::string(",\"compute_share_") + name + "\":" + number(share_of(flops, t.dense_flops)) +
+           ",\"compute_share_" + name + "_constant\":" +
+           number(share_of(static_cast<double>(moves), static_cast<double>(t.moves_total)));
+  };
+  s += compute("mandatory_over_1", t.dense_flops_mandatory_over_1, t.moves_mandatory_over_1);
+  s += compute("mandatory_over_2", t.dense_flops_mandatory_over_2, t.moves_mandatory_over_2);
+  s += compute("playable_over_1", t.dense_flops_playable_over_1, t.moves_playable_over_1);
+  s += ",\"dense_tflops\":" + number(t.dense_flops / 1e12);
   return s;
 }
 
@@ -771,6 +796,7 @@ void print_turn_summary() {
   head += field("actions_checked", static_cast<long long>(g_turns_checked));
   head += field("strict_games", static_cast<long long>(strict.size()));
   head += field("grouped_games", static_cast<long long>(groups.size()));
+  head += std::string(",\"cost_model\":") + json_string(t5d::tools::kCostModel);
   head += ",\"strict_repeats\":[";
   for (std::size_t i = 0; i < duplicates.size(); ++i) {
     if (i != 0) head += ',';
