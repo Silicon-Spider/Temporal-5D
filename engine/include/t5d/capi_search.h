@@ -285,6 +285,14 @@ typedef struct t5d_search_summary {
   double root_wdl[T5D_WDL];  /* the root's network WDL, normalised */
   double root_moves_left;
   double root_error;
+  /* engine ABI round 2c (register I15, I2, D4): the root's identity, its PUCT's effective
+     cPUCT now (cpuct x E2's root scale; for a replica of the root's selection - I2's
+     target-side pruning) and the effort label: the root's visits when its most visited
+     child last changed (§8.6; counted from the re-root for a carried root) */
+  uint64_t root_key;      /* the root's node key: with the moves made in its action and the
+                             epoch, its evaluation's identity */
+  double root_cpuct;
+  uint32_t root_best_since;
 } t5d_search_summary;
 
 /* A run's budgets (t5d/mcts.hpp, Limits): T5D_NO_LIMIT for none (seconds: 0). playouts and
@@ -317,6 +325,16 @@ typedef struct t5d_root_child {
   double network_wdl[T5D_WDL];  /* its WDL, normalised, the root player's view */
   double network_moves_left;    /* NaN: none given (or not evaluated) */
   double network_error;         /* NaN: none given (or not evaluated) */
+  /* engine ABI round 2c (register I15, I2): the root's side table - what the records and
+     the target-side pruning need */
+  uint64_t child_key;           /* the child node's key; 0: no child node yet */
+  double prior_noise_free;      /* the prior before the root noise (after the temperatures,
+                                   the unknown-move scale, the submit share) */
+  double value_variance;        /* of the values backed up through it (0 before a visit) */
+  double boost;                 /* E10's asset-map boost: 0 (not wired) */
+  double exploration_scale;     /* E3's factor on its exploration term (1: off) */
+  uint32_t forced_visits;       /* forced playouts: 0 (not built - pruning is target-side) */
+  uint32_t steered_visits;      /* visits a steering source decided: 0 (none wired, E10) */
 } t5d_root_child;
 
 /* One batch's evaluations (t5d_search_deliver_evaluations), leaf by leaf in the

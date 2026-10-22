@@ -163,6 +163,11 @@ SearchParams params_from(const t5d_search_params* c) {
   p.virtual_loss = c->virtual_loss;
   p.synchronous = boolean(c->synchronous, "synchronous");
   p.seed = c->seed;
+  if (c->expand.legal_moves != 0) {
+    throw std::invalid_argument(
+        "expand.legal_moves: a search's children are set by legal_moves_only and legality_checks/_nodes - leave "
+        "its expand options' legal_moves 0");
+  }
   p.expand = t5d::capi_internal::expand_options(&c->expand);
   p.mate_nodes = c->mate_nodes;
   p.mate_bytes = static_cast<std::size_t>(c->mate_bytes);
@@ -404,6 +409,9 @@ constexpr LayoutEntry kLayout[] = {
     T5D_SEARCH_AT(t5d_search_summary, root_wdl),
     T5D_SEARCH_AT(t5d_search_summary, root_moves_left),
     T5D_SEARCH_AT(t5d_search_summary, root_error),
+    T5D_SEARCH_AT(t5d_search_summary, root_key),
+    T5D_SEARCH_AT(t5d_search_summary, root_cpuct),
+    T5D_SEARCH_AT(t5d_search_summary, root_best_since),
 
     T5D_SEARCH_SIZE(t5d_search_limits),
     T5D_SEARCH_AT(t5d_search_limits, playouts),
@@ -426,6 +434,13 @@ constexpr LayoutEntry kLayout[] = {
     T5D_SEARCH_AT(t5d_root_child, network_wdl),
     T5D_SEARCH_AT(t5d_root_child, network_moves_left),
     T5D_SEARCH_AT(t5d_root_child, network_error),
+    T5D_SEARCH_AT(t5d_root_child, child_key),
+    T5D_SEARCH_AT(t5d_root_child, prior_noise_free),
+    T5D_SEARCH_AT(t5d_root_child, value_variance),
+    T5D_SEARCH_AT(t5d_root_child, boost),
+    T5D_SEARCH_AT(t5d_root_child, exploration_scale),
+    T5D_SEARCH_AT(t5d_root_child, forced_visits),
+    T5D_SEARCH_AT(t5d_root_child, steered_visits),
 
     T5D_SEARCH_SIZE(t5d_evaluations),
     T5D_SEARCH_AT(t5d_evaluations, logits),
@@ -756,6 +771,9 @@ t5d_status t5d_search_info(const t5d_search* search, t5d_search_summary* out) {
       out->root_moves_left = root.eval_moves_left;
       out->root_error = root.eval_error;
     }
+    out->root_key = root.key;
+    out->root_cpuct = s.root_cpuct();
+    out->root_best_since = s.root_best_since();
     return T5D_OK;
   });
 }
@@ -787,6 +805,13 @@ t5d_status t5d_search_child(const t5d_search* search, size_t index, t5d_root_chi
     }
     out->network_moves_left = c.network_moves_left;
     out->network_error = c.network_error;
+    out->child_key = c.child_key;
+    out->prior_noise_free = c.prior_noise_free;
+    out->value_variance = c.value_variance;
+    out->boost = c.boost;
+    out->exploration_scale = c.exploration_scale;
+    out->forced_visits = c.forced_visits;
+    out->steered_visits = c.steered_visits;
     const t5d::Multiverse& mv = s.root_state().multiverse();
     for (std::size_t i = 0; i < c.moves.size() && i < capacity; ++i) moves[i] = record_of(c.moves[i], mv);
     return T5D_OK;

@@ -1865,6 +1865,154 @@ TEST(mcts_i19_the_root_policy_temperature_flattens_the_root_only_before_the_nois
   CHECK(std::abs(share - p.dirichlet_epsilon) < 1e-9);
 }
 
+TEST(mcts_i15_the_root_side_table) {
+  // I15 / I2 (engine ABI round 2c): each root child's prior before the noise,
+  // its node's key, the variance of its backed-up values, and the steering
+  // and forcing counts (none wired: 0), E3's factor (1 with E3 off).
+  SearchParams p = fast();
+  p.widening = false;
+  p.root_noise = true;
+  p.root_policy_temperature = 1.25;
+  ByMove ev;
+  Search search(variant("Standard"), p);
+  search.run(ev, Limits{200});
+  const std::vector<RootChild> children = search.root_children();
+  const std::vector<double> tempered = softmax_priors(search, search.root(), 1.25);
+  REQUIRE_EQ(children.size(), tempered.size());
+  double free_sum = 0;
+  double noise_share = 0;
+  for (std::size_t i = 0; i < children.size(); ++i) {
+    const RootChild& c = children[i];
+    const EdgeView e = search.edge(search.root(), i);  // widening off: every edge a child, in order
+    CHECK(std::abs(c.prior_noise_free - tempered[i]) < 1e-12);  // the tempered prior, before the noise
+    const double x = c.prior - (1.0 - p.dirichlet_epsilon) * c.prior_noise_free;
+    CHECK(x >= -1e-12);
+    noise_share += x;
+    free_sum += c.prior_noise_free;
+    CHECK_EQ(c.child_key, c.child == kNoNode ? std::uint64_t{0} : search.node(c.child).key);
+    if (e.weight > 0) {
+      const double mean = e.value / e.weight;
+      CHECK(std::abs(c.value_variance - std::max(0.0, e.value_sq / e.weight - mean * mean)) < 1e-15);
+    } else {
+      CHECK_EQ(c.value_variance, 0.0);
+    }
+    CHECK_EQ(c.boost, 0.0);
+    CHECK_EQ(c.forced_visits, std::uint32_t{0});
+    CHECK_EQ(c.steered_visits, std::uint32_t{0});
+    CHECK_EQ(c.exploration_scale, 1.0);
+  }
+  CHECK(std::abs(free_sum - 1.0) < 1e-9);
+  CHECK(std::abs(noise_share - p.dirichlet_epsilon) < 1e-9);
+  // Without noise the two priors are one.
+  SearchParams quiet = fast();
+  Search plain(variant("Standard"), quiet);
+  plain.run(ev, Limits{50});
+  for (const RootChild& c : plain.root_children()) CHECK_EQ(c.prior_noise_free, c.prior);
+  // A carried root keeps no side table: its prior is already noise-free.
+  plain.advance(0);
+  for (const RootChild& c : plain.root_children()) CHECK_EQ(c.prior_noise_free, c.prior);
+  // E3 on: its factor on each evaluated child's exploration term, in [1, cap].
+  SearchParams e3 = fast();
+  e3.variance_bonus = true;
+  class Spread final : public Evaluator {  // variance about 1: E3's factor above 1
+   public:
+    void evaluate(std::span<const EvalRequest> batch, std::span<Evaluation> out) override {
+      for (std::size_t i = 0; i < batch.size(); ++i) {
+        out[i].logits.assign(batch[i].expansion->moves().size(), 0.0f);
+        out[i].wdl = {1.0f, 0.0f, 1.0f};
+        std::array<float, kValueBins> c{};
+        c[0] = c[kValueBins - 1] = 0.5f;
+        out[i].value = c;
+      }
+    }
+  } spread;
+  Search bonus(variant("Standard"), e3);
+  bonus.run(spread, Limits{200});
+  std::size_t scaled = 0;
+  for (const RootChild& c : bonus.root_children()) {
+    CHECK(c.exploration_scale >= 1.0 && c.exploration_scale <= e3.variance_bonus_cap);
+    scaled += c.exploration_scale > 1.0 ? 1u : 0u;
+  }
+  CHECK(scaled > 0);
+  // Pruning renormalises both priors: a root whose fastest classification
+  // leaves moves unknown, legal and illegal, every one verified - the illegal
+  // ones removed.
+  SearchParams v = fast();
+  v.widening = false;
+  v.root_noise = true;
+  v.legality = LegalityOptions::budgeted(0, 0);
+  v.verify_unknown = false;
+  const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
+  Search verified(position_with_unknown_moves(), v);
+  verified.run(*uniform, Limits{20});
+  const std::size_t before = verified.root_children().size();
+  for (std::size_t i = 0; i < verified.root_children().size();) {
+    if (verified.verify(i) == MoveLegality::Legal) ++i;
+  }
+  REQUIRE(verified.root_children().size() < before);
+  double prior = 0;
+  double noise_free = 0;
+  for (const RootChild& c : verified.root_children()) {
+    prior += c.prior;
+    noise_free += c.prior_noise_free;
+  }
+  CHECK(std::abs(prior - 1.0) < 1e-9);
+  CHECK(std::abs(noise_free - 1.0) < 1e-9);
+}
+
+TEST(mcts_i15_root_cpuct_and_the_effort_label) {
+  // I2's replica of the root's PUCT needs the root's effective cPUCT; D4's
+  // effort label is the root's visits when its most visited child last
+  // changed - replayed here one playout at a time.
+  SearchParams p = fast();
+  p.synchronous = true;
+  p.widening = false;
+  const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Random, 11);
+  Search search(variant("Standard - Two Timelines"), p);
+  CHECK_EQ(search.root_best_since(), std::uint32_t{0});
+  CHECK_EQ(search.root_cpuct(), p.cpuct);  // E2 off
+  std::vector<std::uint32_t> visits;
+  constexpr std::size_t kNone = std::numeric_limits<std::size_t>::max();
+  std::size_t best = kNone;
+  std::uint32_t since = 0;
+  std::size_t changes = 0;
+  for (int step = 0; step < 400; ++step) {
+    search.run(*ev, Limits{1});
+    const NodeView root = search.node(search.root());
+    visits.resize(root.edge_count, 0);
+    for (std::size_t i = 0; i < root.edge_count; ++i) {
+      const std::uint32_t now = search.edge(search.root(), i).visits;
+      if (now != visits[i]) {
+        visits[i] = now;
+        if (best == kNone || (i != best && now > visits[best])) {
+          best = i;
+          since = root.visits;
+          ++changes;
+        }
+      }
+    }
+    CHECK_EQ(search.root_best_since(), since);
+  }
+  CHECK(changes > 1);
+  CHECK(since > 1);
+  // A re-root counts from the re-root.
+  search.advance(0);
+  bool visited = false;
+  for (std::size_t i = 0; i < search.node(search.root()).edge_count; ++i) {
+    visited = visited || search.edge(search.root(), i).visits > 0;
+  }
+  REQUIRE(visited);
+  CHECK_EQ(search.root_best_since(), search.node(search.root()).visits);
+  // E2 on: the root's scale applies.
+  SearchParams e2 = fast();
+  e2.variance_scaled_cpuct = true;
+  Search scaled(variant("Standard"), e2);
+  scaled.run(*ev, Limits{100});
+  const double c = scaled.root_cpuct();
+  CHECK(c >= e2.cpuct * e2.cpuct_scale_min && c <= e2.cpuct * e2.cpuct_scale_max);
+  CHECK(c != e2.cpuct);
+}
+
 TEST(mcts_value_distribution_helpers) {
   for (const double v : {-1.0, -0.63, 0.0, 0.25, 0.999, 1.0}) {
     const ValueMoments m = value_moments(two_hot(v));

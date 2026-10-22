@@ -11,7 +11,9 @@ moved (``apply``), submitted (``submit``) and expanded (``expand``).
 expansion offers - ``moves()`` lists them, in the engine's order - are the pseudo-legal
 moves of the player to move; a submission that leaves a royal piece of the mover's
 capturable is refused (``IllegalError``) unless ``set_legality(False)``. The engine's
-legal-moves filter (``ExpandOptions::legal_moves``) is not in the C API yet.
+legal-moves filter (``ExpandOptions::legal_moves``) is ``expand(legal_moves=True)`` (engine
+ABI round 2): a search leaf's moves under the same legality budget, for rebuilding a
+record's network input (I15).
 
 **Lifetimes.** The handle is released by ``close()`` (or the context manager, or garbage
 collection). ``expand()`` copies the expansion out at once (``Expansion.from_c``), so what
@@ -35,6 +37,7 @@ from .capi import (
     BUILT_RELATIONS,
     RESERVED_RELATIONS,
     T5D_LEGAL,
+    T5D_NO_LIMIT,
     T5D_PARITY_EVEN,
     T5D_PARITY_INFER,
     T5D_PARITY_ODD,
@@ -402,16 +405,29 @@ class Game:
 
     # -- expanding --
 
-    def expand(self, *, window_k: int = 8, square_features: str | int = "all", relations: Iterable[str | int] = ()) -> Expansion:
+    def expand(
+        self,
+        *,
+        window_k: int = 8,
+        square_features: str | int = "all",
+        relations: Iterable[str | int] = (),
+        legal_moves: bool = False,
+        legality_checks: int = T5D_NO_LIMIT,
+        legality_nodes: int = T5D_NO_LIMIT,
+    ) -> Expansion:
         """Expand the current state and copy the result out (``Expansion``). ``window_k``: k
         of W(k), E(k) and src_extra(k), in half-turns. ``square_features``: "all" (every
         board - what a ``PositionState`` needs), "scope" (W + E + src_extra) or "none".
         ``relations``: typed relations to build - "attack", "defence", "xray" (provisional,
-        B11); "pin", "check" and "travel_threat" are refused by the engine."""
+        B11); "pin", "check" and "travel_threat" are refused by the engine. ``legal_moves``:
+        the moves a search leaf has - the legal ones, those proved illegal under the budget
+        (``legality_checks``, ``legality_nodes``: a search's ``legality_checks`` and
+        ``legality_nodes``; ``T5D_NO_LIMIT`` both: exact) dropped, unknown ones kept, in the
+        same order (I15: a record's input rebuilt); else the pseudo-legal moves."""
         features = _choice(square_features, SQUARE_FEATURES, "square_features")
         names = {v: k for k, v in SQUARE_FEATURES.items()}
         bits = relation_bits(relations)
-        options = ExpandOptions(int(window_k), features, bits)
+        options = ExpandOptions(int(window_k), features, bits, int(bool(legal_moves)), int(legality_checks), int(legality_nodes))
         out = CExpansion()
         with self._lock:
             self._lib.call("t5d_game_expand", self._live(), byref(options), byref(out), error=True)
@@ -423,14 +439,31 @@ class Game:
         return self.expand(square_features="none").move_list()
 
     def position(
-        self, *, regs_per_board: int = 2, global_regs: int = 16, relations: Iterable[str | int] = (), window_k: int = 8, strict: bool = True
+        self,
+        *,
+        regs_per_board: int = 2,
+        global_regs: int = 16,
+        relations: Iterable[str | int] = (),
+        window_k: int = 8,
+        strict: bool = True,
+        legal_moves: bool = False,
+        legality_checks: int = T5D_NO_LIMIT,
+        legality_nodes: int = T5D_NO_LIMIT,
     ) -> Position:
         """The current state as the network's input (``convert.Position``): expanded with
         every board's features, converted, validated, with the W/E scope at ``window_k``
         and the count of unknown branch origins over every timeline. ``relations``: the typed
         relations to put in the edges (``convert.relations_for(cfg)`` gives a network's);
-        ``strict``: see ``convert.to_position``."""
-        x = self.expand(window_k=window_k, square_features="all", relations=relations)
+        ``strict``: see ``convert.to_position``; ``legal_moves`` and the budget: a search
+        leaf's candidate moves (``expand``)."""
+        x = self.expand(
+            window_k=window_k,
+            square_features="all",
+            relations=relations,
+            legal_moves=legal_moves,
+            legality_checks=legality_checks,
+            legality_nodes=legality_nodes,
+        )
         created = self.created_timelines()
         return to_position(x, regs_per_board=regs_per_board, global_regs=global_regs, created_timelines=created, strict=strict)
 

@@ -153,7 +153,16 @@ MOVE_DTYPE = np.dtype(
 
 
 class ExpandOptions(ctypes.Structure):
-    _fields_ = [("window_k", c_int32), ("square_features", c_int32), ("relations", c_uint32)]
+    _fields_ = [
+        ("window_k", c_int32),
+        ("square_features", c_int32),
+        ("relations", c_uint32),
+        # appended in engine ABI round 2 (register I15): the search leaves' legal-moves filter for
+        # t5d_game_expand (a search refuses it in its own expand options)
+        ("legal_moves", c_int32),  # 1: the legal moves, classified under the budget below; 0: pseudo-legal
+        ("legality_checks", c_uint64),  # the budget, as t5d_search_params' (T5D_NO_LIMIT both: exact)
+        ("legality_nodes", c_uint64),
+    ]
 
 
 class GameSummary(ctypes.Structure):
@@ -376,6 +385,12 @@ class CSearchSummary(ctypes.Structure):
         ("root_wdl", c_double * 3),  # win, draw, loss - the root player's view
         ("root_moves_left", c_double),
         ("root_error", c_double),
+        # appended in engine ABI round 2c (register I15, I2, D4): the root's node key, its effective
+        # cPUCT now (cpuct x E2's root scale), the effort label (the root's visits when its most
+        # visited child last changed)
+        ("root_key", c_uint64),
+        ("root_cpuct", c_double),
+        ("root_best_since", c_uint32),
     ]
 
 
@@ -404,6 +419,14 @@ class CRootChild(ctypes.Structure):
         ("network_wdl", c_double * 3),
         ("network_moves_left", c_double),  # NaN: none given (or not evaluated)
         ("network_error", c_double),
+        # appended in engine ABI round 2c (register I15, I2): the root's side table
+        ("child_key", c_uint64),  # the child node's key; 0: no child node yet
+        ("prior_noise_free", c_double),  # the prior before the root noise
+        ("value_variance", c_double),  # of the values backed up through it
+        ("boost", c_double),  # E10's asset-map boost: 0 (not wired)
+        ("exploration_scale", c_double),  # E3's factor on its exploration term (1: off)
+        ("forced_visits", c_uint32),  # forced playouts: 0 (not built - pruning is target-side)
+        ("steered_visits", c_uint32),  # visits a steering source decided: 0 (none wired, E10)
     ]
 
 
@@ -437,8 +460,8 @@ def _check_layouts() -> None:
     for name, _ in MoveRecord._fields_:
         if getattr(MoveRecord, name).offset != MOVE_DTYPE.fields[name][1]:
             raise ImportError(f"t5d_move.{name}: the ctypes and numpy layouts disagree")
-    if ctypes.sizeof(ExpandOptions) != 12:
-        raise ImportError("t5d_expand_options must be 12 bytes (three 32-bit fields)")
+    if ctypes.sizeof(ExpandOptions) != 32:
+        raise ImportError("t5d_expand_options must be 32 bytes (four 32-bit fields, two 64-bit)")
     for struct, last in ((CSearchParams, "expand"), (CLeaf, "expansion")):
         if struct._fields_[-1][0] != last:
             raise ImportError(f"{struct.__name__}: the embedded struct of t5d/capi.h must be the last member (t5d/capi_search.h)")
