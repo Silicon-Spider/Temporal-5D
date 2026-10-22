@@ -19,11 +19,14 @@ I15), not this module's.
   - Short-term values: squared error against each horizon's exponentially averaged future
     search values (``Targets.short_term``, NaN where a horizon has none) - the form a
     placeholder (issue 231).
-  - The error head: Huber loss against ``(short_term[:, error_horizon] - (W - L))^2``, the value
-    the network's own WDL with no gradient (KataGo's uncertainty target: the squared gap between
-    the value and the short-term value) - so no gradient flows from the error target into the
-    WDL or the short-term heads. Which horizon, the stop-gradient and the loss are placeholders
-    (issue 231).
+  - The error head: Huber loss against ``(predicted short-term value - short-term target)^2`` at
+    ``error_horizon`` - the network's own short-term output taken with no gradient (``error_target``),
+    so no gradient flows from the error target into the short-term or WDL heads. Section 8.3's
+    "the squared gap between the value and the short-term value" reads two ways; this is the
+    reading of register D9's "the predicted short-term value" and KataGo's form (its short-term
+    error loss: the detached short-term prediction against the short-term target, Huber delta
+    0.4). The other reading - the network's value W - L against the short-term target - is
+    recorded for the user (spec issue 231). Which horizon and the Huber delta are placeholders.
 
 * Policy: cross-entropy over each position's supplied candidate moves against a target
   distribution (the root's visits). Padding entries carry no mass. The policy's distribution is
@@ -40,8 +43,9 @@ I15), not this module's.
   ``Targets.opp_reply``, the opponent's next turn as a distribution over its mapped moves
   (``train.reply_map``), weight 0.15 (KataGo's); a position with no target (an ambiguous or
   absent reply) is skipped.
-* Effort: cross-entropy over its bins (censored bin included). Moves-left: Huber loss on
-  ``log1p(turns left)`` - a turn one player's action (D4, M20; spec issue 305).
+* Effort: cross-entropy over its bins (censored bin included), full searches only (section 12.4:
+  "full-search moves only"; a cheap search's row is skipped whatever its target). Moves-left:
+  Huber loss on ``log1p(turns left)`` - a turn one player's action (D4, M20; spec issue 305).
 * Per-board and per-square heads: binary cross-entropy with logits, masked to real
   boards and squares; a per-board loss sums its three targets, a per-square loss
   averages its labels and then the board's squares, so both are one number per board.
@@ -52,12 +56,12 @@ I15), not this module's.
 * **D9's optimistic policy** (a prototype behind ``NetConfig.optimistic_policy``; section 8.1):
   its own actions against the normal policy target (full searches only), each sample weighted by
   ``optimistic_weights`` - ``clamp(0, 1, sigmoid((z - 1.5) x 3))`` with ``z = (short-term target -
-  (W - L)) / sqrt(error + eps)``, the network's value and error head taken without gradient
-  (KataGo's z-score: how far the mover beat the network's expectation, in units of its predicted
-  error; no score term in 5D) - the loss the weighted sum over the full-search positions divided
-  by their number. The horizon is the error head's (``error_horizon``), so the error head's
-  prediction is the z-score's own variance; that, eps and the normalisation are placeholders
-  (spec issue 233).
+  predicted short-term value) / sqrt(error + eps)``, the network's short-term output and error
+  head taken without gradient - register D9's "how far the mover beat the predicted short-term
+  value", in units of the predicted error, and KataGo's z_value (no score term in 5D) - the loss
+  the weighted sum over the full-search positions divided by their number. The horizon is the
+  error head's (``error_horizon``), so the error head predicts the numerator's square; that, eps
+  (KataGo's 1e-4) and the normalisation are placeholders (spec issue 233).
 
 Every loss weight is a placeholder (6j) unless a document gives it.
 
@@ -93,7 +97,7 @@ class Targets:
     moves_left: torch.Tensor  # (B,) turns left (one player's action each, D4), >= 0
     board: torch.Tensor  # (B, Nmax, 3) in {0, 1}
     square: torch.Tensor  # (B, L, n_square_labels) in {0, 1}
-    effort: torch.Tensor  # (B,) bin index, -1 where there is no target (PCR cheap searches)
+    effort: torch.Tensor  # (B,) bin index, -1 where there is no target (skipped too where not ``full_search``)
     #: (B,) the policy target's mass on the submit action (D8; ``policy`` and ``submit``
     #: together are one distribution over the decision's actions); None: none anywhere.
     submit: torch.Tensor | None = None
@@ -137,12 +141,13 @@ class LossConfig:
     #: D3: the short-term horizon the error head's target reads (an index into
     #: ``NetConfig.short_term_horizons``; KataGo's uses its shortest) - PLACEHOLDER (issue 231).
     error_horizon: int = 0
-    #: D3: the error head's Huber delta - PLACEHOLDER (issue 231).
+    #: D3: the error head's Huber delta - PLACEHOLDER (issue 231; KataGo's is 0.4).
     error_huber_delta: float = 1.0
     #: D4: the soft policy's power - "the policy target raised to the power 1/4" (section 12.4).
     soft_policy_power: float = 0.25
     #: D9: each sample's weight ``clamp(0, 1, sigmoid((z - centre) x scale))`` (section 8.1: 1.5 and
-    #: 3, KataGo's), and the eps under the z-score's square root - PLACEHOLDER (issue 233).
+    #: 3, KataGo's), and the eps under the z-score's square root (KataGo's 1e-4) - PLACEHOLDER
+    #: (issue 233).
     optimistic_centre: float = 1.5
     optimistic_scale: float = 3.0
     optimistic_eps: float = 1e-4
@@ -217,29 +222,34 @@ def wdl_target(tgt: Targets, q_ratio: float) -> torch.Tensor:
     return (1.0 - q_ratio) * result + q_ratio * tgt.root_wdl.float()
 
 
-def error_target(short_term: torch.Tensor, search_value: torch.Tensor, horizon: int) -> torch.Tensor:
-    """D3's error head target ``(B,)``: the squared gap between the short-term value target at
-    ``horizon`` and the network's value (W - L, with no gradient); NaN where the horizon has none."""
+def error_target(predicted: torch.Tensor, short_term: torch.Tensor, horizon: int) -> torch.Tensor:
+    """D3's error head target ``(B,)``: the squared gap between the network's short-term value
+    output at ``horizon`` (``predicted``, ``(B, K)``, taken with no gradient) and the short-term
+    value target there (``short_term``, ``(B, K)``); NaN where the horizon has no target.
+    Register D9's "predicted short-term value" and KataGo's form (spec issue 231; the reading
+    with the network's W - L in place of the short-term output is the alternative recorded)."""
     if not 0 <= horizon < short_term.shape[-1]:
         raise ValueError(f"error_horizon {horizon} is not one of the {short_term.shape[-1]} short-term horizons")
-    return (short_term[:, horizon].float() - search_value.detach().float()) ** 2
+    return (predicted[:, horizon].detach().float() - short_term[:, horizon].float()) ** 2
 
 
 def optimistic_weights(
     short_term: torch.Tensor,
-    search_value: torch.Tensor,
+    predicted: torch.Tensor,
     value_error: torch.Tensor,
     *,
     centre: float = 1.5,
     scale: float = 3.0,
     eps: float = 1e-4,
 ) -> torch.Tensor:
-    """D9's per-sample weights ``(B,)``: ``clamp(0, 1, sigmoid((z - centre) x scale))``, ``z = (short_term
-    - search_value) / sqrt(value_error + eps)`` - how far the mover's short-term outcome beat the
-    network's value, in units of its predicted error (section 8.1; KataGo's, without the score
-    term). The network's outputs are taken without gradient, so the weight trains nothing; NaN
-    where the short-term target is missing."""
-    z = (short_term.float() - search_value.detach().float()) / torch.sqrt(value_error.detach().float().clamp(min=0.0) + eps)
+    """D9's per-sample weights ``(B,)``: ``clamp(0, 1, sigmoid((z - centre) x scale))``, ``z =
+    (short_term - predicted) / sqrt(value_error + eps)`` - ``short_term`` the short-term value
+    target, ``predicted`` the network's short-term output at the same horizon - how far the mover
+    beat the predicted short-term value (register D9), in units of the error head's predicted
+    error (section 8.1; KataGo's z_value, without the score term). The network's outputs are
+    taken without gradient, so the weight trains nothing; NaN where the short-term target is
+    missing."""
+    z = (short_term.float() - predicted.detach().float()) / torch.sqrt(value_error.detach().float().clamp(min=0.0) + eps)
     return torch.sigmoid((z - centre) * scale).clamp(0.0, 1.0)
 
 
@@ -273,7 +283,7 @@ def compute_losses(out: NetOutput, tgt: Targets, cfg: LossConfig | None = None) 
     st = tgt.short_term.float()
     has_st = torch.isfinite(st)
     losses["short_term"] = _masked_mean((out.short_term - torch.where(has_st, st, torch.zeros_like(st))) ** 2, has_st)
-    err = error_target(st, out.search_value(), cfg.error_horizon)
+    err = error_target(out.short_term, st, cfg.error_horizon)
     has_err = torch.isfinite(err)
     per = F.huber_loss(out.value_error, torch.where(has_err, err, torch.zeros_like(err)), delta=cfg.error_huber_delta, reduction="none")
     losses["value_error"] = _masked_mean(per, has_err)
@@ -287,9 +297,14 @@ def compute_losses(out: NetOutput, tgt: Targets, cfg: LossConfig | None = None) 
 
     # D9 (section 8.1; a prototype behind its flag): the normal target, each sample weighted.
     if out.optimistic_logits is not None:
-        st = tgt.short_term[:, cfg.error_horizon].float()
+        h = cfg.error_horizon
         w = optimistic_weights(
-            st, out.search_value(), out.value_error, centre=cfg.optimistic_centre, scale=cfg.optimistic_scale, eps=cfg.optimistic_eps
+            tgt.short_term[:, h].float(),
+            out.short_term[:, h],
+            out.value_error,
+            centre=cfg.optimistic_centre,
+            scale=cfg.optimistic_scale,
+            eps=cfg.optimistic_eps,
         )
         logits = out.optimistic_action_logits().masked_fill(~out.action_valid(), float("-inf"))
         logp = torch.log_softmax(logits.float(), dim=-1).masked_fill(~out.action_valid(), 0.0)
@@ -305,7 +320,7 @@ def compute_losses(out: NetOutput, tgt: Targets, cfg: LossConfig | None = None) 
     per_board = _board_square_mean(bce_s, out.token_board, out.square_mask, out.board_valid.shape[1])
     losses["square"] = _reduce_boards(per_board, out.board_valid, cfg.board_reduction)
 
-    keep = tgt.effort >= 0
+    keep = (tgt.effort >= 0) & full.to(tgt.effort.device)  # section 12.4: "full-search moves only"
     losses["effort"] = (
         F.cross_entropy(out.effort_logits[keep].float(), tgt.effort[keep]) if bool(keep.any()) else out.effort_logits.new_zeros(())
     )

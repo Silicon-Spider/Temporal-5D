@@ -10,6 +10,54 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-23 - Network heads review fixes: the error target and D9's z as the register and KataGo have them; the losses' masks, moves-left's unit and the old parameters pinned
+
+Two reviewers of N-D3, N-D4 and N-D9 (spec fidelity; 46 mutants). One high finding, three medium,
+nine low; all fixed.
+
+- **HIGH - the error head's target and D9's z** (`train/losses.py`): both had compared the
+  short-term target with the network's W - L and called that KataGo's; it is not. KataGo's
+  short-term error loss compares the detached short-term value prediction with the short-term
+  target (Huber delta 0.4), and its optimistic z_value is (short-term target - short-term
+  prediction) / sqrt(predicted short-term error + 1e-4) - which is also register D9's literal
+  "how far the mover beat the predicted short-term value". Rebuilt that way:
+  `error_target(predicted, short_term, horizon)` = (short-term output[h], without gradient -
+  target[h])^2, and `optimistic_weights(short_term, predicted, value_error)`'s z over the
+  short-term output at the error head's horizon. The Huber delta stays a named placeholder (1.0;
+  KataGo's 0.4 noted). Section 8.3's "the value and the short-term value" is ambiguous: the W - L
+  reading is recorded as the alternative for the user (issues 231(c), 233(a) and edits 172, 174
+  rewritten); every false "KataGo's" removed (`losses.py`, `heads.py`, the tests' docstrings).
+- **MEDIUM**: the error loss pinned to the Huber loss against the built target over the finite
+  rows, at two horizons; the short-term loss pinned to the mean over the finite entries only, a
+  row with no target getting no gradient (`tests/train/test_value_heads.py`); moves-left's unit
+  across the network -> evaluator -> search boundary shown with a head biased to log1p(37) - the
+  evaluation and the search's record of its root read 37 turns (`tests/engine/test_evaluator.py`;
+  the random head's outputs clamp to 0, so the old checks could not tell turns from log1p).
+- **LOW**: the pre-D3 parameters pinned - a fingerprint of the 64 parameters a small network had
+  at 47bc857 (seed 7), recorded there, under the default flags and with every prototype on
+  (`tests/net/test_params.py`; three float64 sums, not a hash of the bytes, so as not to depend
+  on float32 libm across platforms); D9's submit mask tested on an offered but illegal submit
+  (`tests/net/test_model.py`); the reply map's `ambiguous="turn"` arm on a reply with one masked
+  and one clean played move, and each mapped move's piece checked against the decision board's
+  same cell (`tests/train/test_reply_map.py`); the cache's equivalence test compares the submit
+  readout and the masked submit logits (`tests/net/test_cache.py`); each `Evaluation` names its
+  prior (`policy`), `check_evaluation` refuses an unknown one, and `serve` / `run_search` take
+  `self_play` and refuse an optimistic evaluation there, however the evaluator is wrapped -
+  `play_game` sets it, M21's generator must (`engine/evaluator.py`, `engine/netplay.py`); the
+  match record's Engine header names the optimistic prior; issue 233(e) says "no I15 training
+  record"; the effort loss reads full searches only (§12.4's "full-search moves only"); stale
+  `heads.ValueHead` references (`net/config.py`, `net/trunk.py`).
+- **The mutants re-run** (the reviewer's import-hook set; those whose code the high fix rewrote
+  retargeted at the new code): every one tied to a finding is caught (err_catmean, st_no_nanmask,
+  ev_ml_log, no_retired_draws, d9_submit_possible, reply_turn_arm), as are d3_global_stream by the
+  new pin and two new ones (the `serve` guard, the effort mask). `play_game`'s own optimistic
+  check, disabled, now goes unnoticed: `run_search` refuses the same evaluator with the same
+  message - a second layer, kept because it refuses before the game is opened.
+- F1 unchanged (22,965,426): no parameter added or moved.
+- The three heads' entries below corrected where they said what was not so.
+- Spec: §8.1 (D9's z), §8.3 (the error head), §12.4 (the effort row), §15.2's D4 row; register
+  D3, D4, D9. Issues 231(c), 233(a), 233(e) rewritten; proposed edits 172 and 174 rewritten.
+
 ### 2026-10-23 - Network D9: the optimistic policy head behind its flag
 
 Register D9 (§8.1, CHECKPOINT 7) - a prototype, behind its flag, off; match play only.
@@ -23,7 +71,8 @@ Register D9 (§8.1, CHECKPOINT 7) - a prototype, behind its flag, off; match pla
 - **The loss** (`train/losses.py`): its actions against the normal policy target over the full
   searches, each sample weighted by `optimistic_weights` - clamp(0, 1, sigmoid((z - 1.5) x 3)),
   z = (short-term target - (W - L)) / sqrt(error head + eps) at the error head's horizon, the
-  network's outputs without gradient; `LossConfig.optimistic_centre`, `_scale`, `_eps`; weight 1.0.
+  network's outputs without gradient (*corrected by the review fixes above: the baseline is the
+  network's short-term output, D9's and KataGo's; W - L is the alternative*); `LossConfig.optimistic_centre`, `_scale`, `_eps`; weight 1.0.
   Placeholders: spec issue 233.
 - **Match play only** (`engine/evaluator.py`, `engine/netplay.py`): `NetworkEvaluator` and
   `CachedNetworkEvaluator` take `policy="normal" | "optimistic"` (`POLICY_SOURCES`,
@@ -72,7 +121,8 @@ Register D4 (§12.4, CHECKPOINT 7, reversal 29) in the network.
 - **Tests**: `tests/train/test_reply_map.py` - §15.2's D4 row on turns played through the engine
   from handwritten 5dpgn (a branching jump with White and with Black acting; two branches into one
   past board in Two Timelines, ambiguous and masked at the turn's start, mapped at the decision
-  point between the jumps), each mapped square checked against an independent lineage walk, and the
+  point between the jumps), each mapped square checked against the test's own lineage walk (the same algorithm, so not
+  independent: *the review fixes above add a content check*), and the
   mapped space fed to the reply head; `tests/train/test_policy_heads.py` (the quarter-power target,
   the soft loss at weight 8 reaching only its own head, full searches only, the reply loss only
   under its flag at 0.15, a few optimiser steps reducing each); `tests/net/test_model.py` (each
@@ -111,7 +161,8 @@ already consumes them.
   the categorical train on full searches only) and `root_wdl` (for `LossConfig.q_ratio`, 0). The
   categorical's loss smooths the root value by HL-Gauss (sigma 0.75 bin widths); the error head's
   target is `(short_term[h] - (W - L))^2` with the network's value taken without gradient
-  (`error_target`, `error_horizon` 0), Huber. Loss names `categorical`, `short_term`,
+  (`error_target`, `error_horizon` 0), Huber (*corrected by the review fixes above: the
+  short-term output against its target, register D9's and KataGo's form*). Loss names `categorical`, `short_term`,
   `value_error` (was `value`, `short_value`). Every unstated detail a placeholder (spec issue
   231). `train/smoke.py`'s synthetic targets follow (every third position a cheap search).
 - **The evaluator** (`engine/evaluator.py`) now delivers the error head's output with the WDL,
@@ -120,7 +171,8 @@ already consumes them.
   +257, the short value head -13,107), F2's L24-ff12 46,891,236.
 - **Tests**: `tests/train/test_value_heads.py` (HL-Gauss, the WDL target and its blend, the
   categorical on full searches only, no gradient from the error target into the WDL or
-  short-term heads, missing targets skipped, three optimiser steps reducing each loss alone);
+  short-term heads, missing targets skipped (only shown finite: *pinned by the review fixes*),
+  three optimiser steps reducing each loss alone);
   `tests/net/test_model.py` (shapes, `search_value`, the heads FP32 under a BF16 autocast against
   an FP64 recomputation, the horizons' validation; the register-pool and permutation tests cover
   the four); `tests/engine/test_evaluator.py` (the error head read by its pinned name, and the

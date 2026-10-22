@@ -363,6 +363,14 @@ def test_the_optimistic_policy_is_kept_out_of_self_play(optimistic_nets, nets):
         play_game([optimistic[0], nets[1][1]], PlayConfig(mode="match", optimistic=True, playouts=4, cap_turns=1), net_cfg=cfg)
     with pytest.raises(ValueError, match="both sides"):
         play_game(optimistic, PlayConfig(mode="match", playouts=4, cap_turns=1), net_cfg=cfg)
+    # An evaluator wrapped so that it names no prior: its evaluations still carry theirs, and the
+    # self-play search refuses them.
+
+    def wrapped(positions):
+        return optimistic[0](positions)
+
+    with pytest.raises(ValueError, match="self-play"):
+        play_game(wrapped, PlayConfig(mode="self", playouts=4, cap_turns=1), net_cfg=cfg)
 
 
 @requires_gate
@@ -376,5 +384,6 @@ def test_a_match_with_the_optimistic_policy_replays_legal(optimistic_nets):
     with torch.no_grad():
         res = play_game(evaluators, play, net_cfg=cfg)
     assert res.end in ("checkmate", "stalemate", "turn_cap") and res.actions
+    assert "both sides with the optimistic prior (D9)" in res.record, "the Engine header names the prior"
     replay = replay_with_gate(res.record, gate=GATE)
     assert check_replay(res, replay) == [], replay.lines[-3:]

@@ -10,6 +10,7 @@ from dataclasses import replace
 
 import pytest
 import torch
+import torch.nn.functional as F
 
 from t5d.net import NetConfig, build_model, collate, synthetic_states
 from t5d.net.heads import categorical_mean, hl_gauss, value_bin_centres
@@ -93,29 +94,59 @@ def test_the_categorical_trains_on_full_searches_only():
 
 
 def test_no_gradient_flows_from_the_error_target_into_the_value_or_short_term_heads():
-    """D3's error head predicts the squared gap between the value (W - L) and the short-term
-    value; its target uses the network's value with no gradient (KataGo's) - the error loss moves
-    the error head and the shared layer, never the WDL or short-term outputs."""
+    """D3's error head predicts the squared gap between the network's short-term value and its
+    target (register D9's "predicted short-term value" and KataGo's form; spec issue 231 records
+    the W - L reading as the alternative); its target takes the network's short-term output with
+    no gradient - the error loss moves the error head and the shared layer, never the WDL or
+    short-term outputs."""
     cfg, model, batch, tgt = _setup(4)
     out = model(batch)
-    err = error_target(tgt.short_term, out.search_value(), LossConfig().error_horizon)
-    assert torch.allclose(err, (tgt.short_term[:, 0] - out.search_value().detach()) ** 2)
+    err = error_target(out.short_term, tgt.short_term, LossConfig().error_horizon)
+    assert torch.allclose(err, (out.short_term[:, 0].detach() - tgt.short_term[:, 0]) ** 2)
+    assert not torch.allclose(err, (tgt.short_term[:, 0] - out.search_value().detach()) ** 2), "not the W - L reading"
     assert not err.requires_grad
     compute_losses(out, tgt)["value_error"].backward()
     for head in (model.value.wdl, model.value.short_term, model.value.categorical):
         assert all(p.grad is None or float(p.grad.abs().sum()) == 0.0 for p in head.parameters()), head
     assert float(model.value.error.weight.grad.abs().sum()) > 0 and float(model.value.hidden.weight.grad.abs().sum()) > 0
     with pytest.raises(ValueError, match="error_horizon"):
-        error_target(tgt.short_term, out.search_value(), 3)
+        error_target(out.short_term, tgt.short_term, 3)
+
+
+def test_the_error_loss_is_huber_against_the_built_target_over_the_rows_that_have_one():
+    """The error head's loss is the Huber loss (the placeholder delta) of its output against
+    ``(short-term output - short-term target)^2`` at the error head's horizon - any horizon -
+    averaged over the positions whose target there is finite."""
+    cfg, model, batch, tgt = _setup(7)
+    st = tgt.short_term.clone()
+    st[2, 0] = math.nan  # (the synthetic targets already leave the last position's last horizon out)
+    tgt = replace(tgt, short_term=st)
+    out = model(batch)
+    for h in (0, 2):
+        lc = LossConfig(error_horizon=h)
+        built = (out.short_term[:, h].detach() - st[:, h]) ** 2
+        has = torch.isfinite(built)
+        assert int(has.sum()) == 3, h
+        expected = F.huber_loss(out.value_error[has], built[has], delta=lc.error_huber_delta)
+        assert torch.allclose(compute_losses(out, tgt, lc)["value_error"], expected, rtol=1e-6), h
 
 
 def test_missing_short_term_targets_are_skipped():
-    """A horizon without a target (NaN) contributes nothing to the short-term or error loss."""
+    """A missing short-term target (NaN) contributes nothing: the short-term loss is the mean
+    squared error over the finite entries only, a position with none gets no gradient, and the
+    error loss is zero where its horizon has a target nowhere."""
     cfg, model, batch, tgt = _setup(5)
     st = tgt.short_term.clone()
     st[:, 0] = math.nan
-    losses = compute_losses(model(batch), replace(tgt, short_term=st))
-    assert torch.isfinite(losses["short_term"]) and torch.isfinite(losses["total"])
+    st[1, :] = math.nan
+    out = model(batch)
+    losses = compute_losses(out, replace(tgt, short_term=st))
+    finite = torch.isfinite(st)
+    expected = ((out.short_term - st) ** 2)[finite].mean()
+    assert torch.allclose(losses["short_term"], expected, rtol=1e-6) and torch.isfinite(losses["total"])
+    (grad,) = torch.autograd.grad(losses["short_term"], out.short_term, retain_graph=True)
+    assert float(grad[~finite].abs().sum()) == 0.0 and float(grad[1].abs().sum()) == 0.0, "no target, no gradient"
+    assert float(grad[finite].abs().min()) > 0
     assert float(losses["value_error"].detach()) == 0.0, "the error head's horizon has no target anywhere"
 
 
@@ -138,3 +169,16 @@ def test_a_few_optimiser_steps_reduce_each_value_loss():
         loss.backward()
         opt.step()
     assert seen[-1] < seen[0], seen
+
+
+def test_the_effort_loss_reads_full_searches_only():
+    """Section 12.4's search-effort target is "full-search moves only": a cheap search's row is
+    skipped even where its effort target is given."""
+    cfg, model, batch, tgt = _setup(8)
+    out = model(batch)
+    keep = (tgt.effort >= 0) & tgt.full_search
+    assert keep.tolist() == [True, True, False, True] and bool((tgt.effort >= 0).all())
+    expected = F.cross_entropy(out.effort_logits[keep], tgt.effort[keep])
+    assert torch.allclose(compute_losses(out, tgt)["effort"], expected, rtol=1e-6)
+    cheap = compute_losses(out, replace(tgt, full_search=torch.zeros(4, dtype=torch.bool)))
+    assert float(cheap["effort"].detach()) == 0.0

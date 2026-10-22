@@ -154,7 +154,7 @@ class NetOutput:
     wdl_logits: torch.Tensor  # (B, 3): win, draw, loss on the game result - the value search uses (W - L)
     value_logits: torch.Tensor  # (B, value_bins): the categorical over the root search value (HL-Gauss target)
     short_term: torch.Tensor  # (B, K) on [-1, 1]: the short-term values at NetConfig.short_term_horizons
-    value_error: torch.Tensor  # (B,) >= 0: the error head - the predicted squared value - short-term gap
+    value_error: torch.Tensor  # (B,) >= 0: the error head - the predicted squared short-term output - target gap
     moves_left_log: torch.Tensor  # (B,)  predicted log1p(turns left) - a turn is one player's action (D4, M20)
     board_logits: torch.Tensor  # (B, Nmax, 3): heads.BOARD_HEADS
     square_logits: torch.Tensor  # (B, L, n_square_labels); meaningful where square_mask

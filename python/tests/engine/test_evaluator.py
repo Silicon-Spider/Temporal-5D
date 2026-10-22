@@ -10,6 +10,7 @@ without the engine (CI's network job); the rest skip when it is not built.
 
 from __future__ import annotations
 
+import copy
 import dataclasses
 import math
 import types
@@ -76,6 +77,15 @@ def _error(out) -> float:
     return float(getattr(out, ERROR_HEAD_FIELD)[0])
 
 
+def _moves_left_says(model, turns: float):
+    """A copy of ``model`` whose moves-left head outputs ``log1p(turns)`` for every position."""
+    biased = copy.deepcopy(model)
+    with torch.no_grad():
+        biased.aux.moves_left.weight.zero_()
+        biased.aux.moves_left.bias.fill_(math.log1p(turns))
+    return biased
+
+
 # --- without the engine (synthetic states) --------------------------------------------------------
 
 
@@ -101,6 +111,17 @@ def test_serve_evaluates_every_leaf_in_batches(small_model):
         assert abs(float(ev.value_probs.sum()) - 1.0) < 1e-5 and -1.0 <= ev.value_mean <= 1.0
         p = ev.wdl_probs.astype(np.float64)
         assert ev.value_mean == pytest.approx(p[0] - p[2], abs=1e-6)
+
+
+def test_moves_left_is_delivered_in_turns(small_model):
+    """D4 / M20: the head predicts ``log1p`` of the turns left; the evaluation carries turns
+    (``expm1``), floored at 0 - shown with a head that says 37 turns, and one that says less
+    than none."""
+    states = [synthetic_state(120 + i, n) for i, n in enumerate((1, 3, 2))]
+    for ev in NetworkEvaluator(_moves_left_says(small_model, 37.0))(states):
+        assert ev.moves_left == pytest.approx(37.0, rel=1e-5)
+    for ev in NetworkEvaluator(_moves_left_says(small_model, -0.5))(states):
+        assert ev.moves_left == 0.0
 
 
 def test_evaluation_helpers():
@@ -371,6 +392,14 @@ def test_the_network_delivers_every_value_head_to_the_search(small_model):
         assert info.root_moves_left == pytest.approx(root.moves_left, rel=1e-5)
         assert all(ev.value_logits is not None and math.isfinite(ev.error) for evs in rec.calls for ev in evs)
         assert info.evaluations == sum(len(evs) for evs in rec.calls) and info.uncertainty_missing == 0, source
+    # Moves-left's unit across the boundary: a head that says log1p(37) everywhere reaches the
+    # search as 37 turns (the random head's outputs are clamped to 0 turns, so they cannot show it).
+    with Game.variant("Standard") as g:
+        s = Search(g, params=search_params(seed=1))
+        run_search(s, NetworkEvaluator(_moves_left_says(small_model, 37.0), max_batch=4), playouts=8, batch_size=4)
+        info = s.info()
+        s.close()
+    assert info.root_evaluated and info.root_moves_left == pytest.approx(37.0, rel=1e-5)
 
 
 def test_an_optimistic_evaluator_delivers_the_optimistic_prior_with_the_same_values():
@@ -403,6 +432,18 @@ def test_an_optimistic_evaluator_delivers_the_optimistic_prior_with_the_same_val
         assert (a.error, a.moves_left) == (b.error, b.moves_left)
     (c,) = cached([states[0]])
     np.testing.assert_allclose(c.policy_logits, out.optimistic_logits[0, : int(states[0].moves.shape[0])].numpy(), atol=1e-4)
+    # Each evaluation names its prior, so a wrapper that hides the evaluator's cannot carry the
+    # optimistic prior into self-play: serve (and run_search) refuse it there.
+    assert c.policy == "optimistic" and {ev.policy for ev in optimistic(states)} == {"optimistic"}
+    assert {ev.policy for ev in normal(states)} == {"normal"}
+    hidden = Recording(optimistic)
+    assert policy_source(hidden) == "normal", "the wrapper names no prior"
+    with pytest.raises(ValueError, match="self-play"):
+        serve(PoolDriver(states), hidden, batch_size=2, self_play=True)
+    assert serve(PoolDriver(states), Recording(normal), batch_size=2, self_play=True).leaves == len(states)
+    assert serve(PoolDriver(states), hidden, batch_size=2).leaves == len(states), "match play takes it"
+    with pytest.raises(ValueError, match="prior"):
+        check_evaluation(Leaf(0, states[2]), dataclasses.replace(c, policy="greedy"))
     with pytest.raises(ValueError, match="D9"):
         NetworkEvaluator(build_model(NetConfig(trunk_dtype="fp32", n_layers=1), seed=0), policy="optimistic")
     with pytest.raises(ValueError, match="policy must be"):

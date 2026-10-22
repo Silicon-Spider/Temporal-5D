@@ -46,6 +46,7 @@ network and nothing to the v1, whose scope is dense.
 from __future__ import annotations
 
 import pytest
+import torch
 
 from t5d.net import NetConfig, build_model, parameter_breakdown
 
@@ -127,3 +128,42 @@ def test_m20s_dispositions_have_no_switch():
     for field in removed:
         with pytest.raises(TypeError):
             NetConfig(**{field: None})
+
+
+#: The parameters the network had before register D3's value heads (``47bc857``, the merge before
+#: N-D3), drawn at seed 7 in a small configuration, under their present names (N1's value output
+#: is the categorical, its WDL head moved onto the value MLP) - pinned as ``_fingerprint`` of them,
+#: recorded on that commit's build. D3, D4 and D9 add heads (``_NEW``) and retire two (N1's short
+#: value head, its always-built reply head) whose draws stay in the global stream.
+_SMALL = dict(trunk_dtype="fp32", n_layers=2, d_model=64, n_heads=2, ffn_ratio=4, policy_dim=64, value_hidden=64, opp_policy_dim=32)
+_NEW = ("value.short_term.", "value.error.", "aux.soft_policy.", "aux.opp_reply.", "optimistic.")
+_PRE_D3 = (64, (-28.9795080817193, -896.406780811631, 15039.884536167086))
+
+
+def _fingerprint(params: dict) -> tuple[float, float, float]:
+    """Three float64 sums over the tensors in name order - each tensor's dot product with a fixed
+    exact pattern, summed plain and weighted by the tensor's rank, and the absolute sum: any draw
+    moved or two tensors swapped changes them, and they need no bit-exact float32 libm across
+    platforms (a hash of the bytes would)."""
+    f = [0.0, 0.0, 0.0]
+    for i, name in enumerate(sorted(params)):
+        x = params[name].detach().double().flatten()
+        w = torch.remainder(torch.arange(x.numel(), dtype=torch.float64) * 0.6180339887498949, 1.0) - 0.5
+        d = float((w * x).sum())
+        f[0] += d
+        f[1] += (i + 1) * d
+        f[2] += float(x.abs().sum())
+    return f[0], f[1], f[2]
+
+
+@pytest.mark.parametrize("flags", [{}, dict(opp_reply=True, optimistic_policy=True, soft_policy=False)], ids=["default", "prototypes"])
+def test_the_parameters_before_d3_are_drawn_as_before(flags):
+    """Every parameter that existed before D3 is drawn as before: D3's rebuild, D4's heads and
+    D9's prototype - whatever their flags - leave every earlier parameter as it was drawn."""
+    model = build_model(NetConfig(**_SMALL, **flags), seed=7)
+    kept = {n: p for n, p in model.named_parameters() if not n.startswith(_NEW)}
+    count, expected = _PRE_D3
+    assert len(kept) == count
+    got = _fingerprint(kept)
+    assert got[0] == pytest.approx(expected[0], abs=1e-5) and got[1] == pytest.approx(expected[1], abs=1e-5), got
+    assert got[2] == pytest.approx(expected[2], rel=1e-9), got
