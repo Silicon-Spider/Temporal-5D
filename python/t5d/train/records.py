@@ -46,7 +46,9 @@ typed relations, the register counts), ``generator_config``, ``seed``, ``result`
 ``final_active_timelines``), ``pgn`` (the game's 5dpgn), ``resign`` (``enabled`` and the
 would-resign events, I18), ``proof_refs`` (solved-store references: always empty - no proof
 enters a store before the H23/H41 sign-off), ``target_config`` (the target builder's
-configuration that ``prior_to_target_kl`` was measured under).
+configuration that ``prior_to_target_kl`` was measured under - the builder's defaults when the
+generator was given none). A synthetic record (``trainer.synthetic_record``, never the
+generator's) also says ``synthetic``: the only rows the untrained build steps on.
 
 Decision ``d_proof_ref`` is -1 throughout for the same reason. Another version is refused on
 reading (``RecordVersionError``); a field is never removed or reinterpreted within a version.

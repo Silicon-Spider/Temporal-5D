@@ -20,12 +20,13 @@ from t5d.net import NetConfig, build_model
 from t5d.net.heads import effort_bin as torch_effort_bin
 from t5d.train.losses import compute_losses
 from t5d.train.records import Children, DecisionRecord, GameRecord, read_game, write_game
-from t5d.train.selfplay import GeneratorConfig, generate_game, replay_positions
+from t5d.train.selfplay import GeneratorConfig, PCRConfig, generate_game, replay_positions
 from t5d.train.targets import (
     PROOF_CHANNEL_SIGNED_OFF,
     TARGET_SOURCES,
     Row,
     TargetConfig,
+    best_child_moves_left,
     build_targets,
     collate_rows,
     effort_bin,
@@ -44,23 +45,25 @@ from tests.engine.helpers import requires_engine
 # --- constructed records ------------------------------------------------------------------------------
 
 
-def _children(visits, q, prior, *, candidate=None, d=None, steered=None, moves_left=None, boost=None):
+def _children(
+    visits, q, prior, *, candidate=None, d=None, steered=None, moves_left=None, boost=None, noise_free=None, scale=None, evaluated=None
+):
     n = len(visits)
     return Children(
         candidate=list(range(n)) if candidate is None else candidate,
         legality=[0] * n,
         visits=visits,
         prior=prior,
-        prior_noise_free=prior,
+        prior_noise_free=prior if noise_free is None else noise_free,
         q=q,
         d=[0.2] * n if d is None else d,
         value_variance=[0.0] * n,
         boost=[0.0] * n if boost is None else boost,
-        exploration_scale=[1.0] * n,
+        exploration_scale=[1.0] * n if scale is None else scale,
         forced_visits=[0] * n,
         steered_visits=[0] * n if steered is None else steered,
         child_key=list(range(1, n + 1)),
-        evaluated=[True] * n,
+        evaluated=[True] * n if evaluated is None else evaluated,
         network_wdl=np.tile([0.4, 0.2, 0.4], (n, 1)),
         network_moves_left=[10.0] * n if moves_left is None else moves_left,
         network_error=[math.nan] * n,
@@ -138,11 +141,12 @@ NO_DEBLUNDER = TargetConfig(deblunder=False)
 # --- I2: pruning, exclusion and provenance -----------------------------------------------------------
 
 
-def _kata_go(n, q, p, best, c, sqrt_parent, k):
+def _kata_go(n, q, p, best, c, sqrt_parent, k, scale=None):
     """KataGo's pruned count for a non-best child, derived in closed form (not by the builder's
-    loop): the least n' >= n - floor(sqrt(k P sum N)) with q + c P sqrt(N) / (1 + n') below the
-    best child's score; one visit left is none."""
-    bar = q[best] + c * p[best] * sqrt_parent / (1 + n[best])
+    loop): the least n' >= n - floor(sqrt(k P sum N)) with q + c P sqrt(N) s / (1 + n') below the
+    best child's score (s E3's factor, 1 by default); one visit left is none."""
+    s = [1.0] * len(n) if scale is None else scale
+    bar = q[best] + c * p[best] * sqrt_parent / (1 + n[best]) * s[best]
     total = sum(n)
     out = []
     for i in range(len(n)):
@@ -151,7 +155,7 @@ def _kata_go(n, q, p, best, c, sqrt_parent, k):
             continue
         lowest = n[i] - math.floor(math.sqrt(k * p[i] * total))
         if bar > q[i]:
-            x = c * p[i] * sqrt_parent / (bar - q[i]) - 1.0
+            x = c * p[i] * s[i] * sqrt_parent / (bar - q[i]) - 1.0
             least_below = math.floor(x) + 1  # the least integer n' with n' > x
         else:
             least_below = n[i]  # it never falls below the bar: nothing is pruned
@@ -206,6 +210,42 @@ def test_the_boost_is_taken_out_of_the_replica():
     assert pruned_visits(_decision(0, boosted), cfg).tolist() == pruned_visits(_decision(0, base), cfg).tolist()
 
 
+def test_the_replica_reads_its_recorded_inputs():
+    """The PUCT replica's inputs, each pinned: E3's factor on the exploration term, the prior
+    ``prune_prior`` names (the search's, after the noise, or the noise-free one) and the root's
+    recorded visits - not the children's sum (they differ wherever children were removed or the
+    root was visited before them) - each moving the answer, which is KataGo's closed form."""
+    n, q = [60, 30, 20, 12], [0.30, 0.10, 0.05, 0.0]
+    p_search, p_free, scale = [0.4, 0.3, 0.2, 0.1], [0.55, 0.15, 0.2, 0.1], [1.0, 0.5, 2.0, 1.5]
+    d = _decision(0, _children(n, q, p_search, noise_free=p_free, scale=scale), root_visits=400)
+    search = pruned_visits(d, TargetConfig(prune_prior="search")).tolist()
+    free = pruned_visits(d, TargetConfig(prune_prior="noise_free")).tolist()
+    assert search == _kata_go(n, q, p_search, 0, 1.5, math.sqrt(400), 2.0, scale) == [60.0, 22.0, 20.0, 9.0]
+    assert free == _kata_go(n, q, p_free, 0, 1.5, math.sqrt(400), 2.0, scale) == [60.0, 24.0, 20.0, 8.0]
+    unscaled = _decision(0, _children(n, q, p_search, noise_free=p_free), root_visits=400)
+    assert pruned_visits(unscaled, TargetConfig()).tolist() == [60.0, 22.0, 14.0, 8.0]  # E3's factor read
+    assert pruned_visits(replace(d, root_visits=sum(n)), TargetConfig()).tolist() == [60.0, 22.0, 18.0, 8.0]  # the root's visits read
+
+
+def test_the_value_targets_read_the_pruned_visits():
+    """I2 (CHECKPOINT 7): where pruning removes visits, the search value, D3's categorical, the
+    q_ratio blend's root WDL and the short-term values are the pruned visits' average - by hand
+    from KataGo's closed form - and not the raw visits'."""
+    n, q, p, dd = [80, 15, 5, 2], [0.3, -0.2, -0.4, -0.3], [0.4, 0.3, 0.2, 0.1], [0.1, 0.2, 0.3, 0.4]
+    d = _decision(0, _children(n, q, p, d=dd))
+    cfg = replace(NO_DEBLUNDER, short_term_horizons=(2.0,))
+    t = build_targets(_game([d], end="checkmate", winner=0), cfg)
+    kept = np.array(_kata_go(n, q, p, 0, 1.5, math.sqrt(sum(n) + 1), 2.0))
+    assert kept.sum() < sum(n)  # pruning removed visits
+    v, dv = float((kept * q).sum() / kept.sum()), float((kept * dd).sum() / kept.sum())
+    raw = float(np.dot(n, q) / sum(n))
+    assert abs(v - raw) > 0.01
+    assert t.search_value[0] == pruned_value(d, pruned_visits(d, cfg))[0]
+    assert t.search_value[0] == pytest.approx(v, abs=1e-12) and t.categorical[0] == pytest.approx(v, abs=1e-12)
+    assert t.root_wdl[0] == pytest.approx([(1 - dv + v) / 2, dv, (1 - dv - v) / 2], abs=1e-12)
+    assert t.short_term[0, 0] == pytest.approx(0.5 * v + 0.5 * 1.0, abs=1e-12)  # l = 1/2, one turn to White's win
+
+
 def test_the_pruned_root_value_is_the_pruned_visits_average():
     c = _children([60, 30, 10], [0.5, 0.1, -0.4], [0.5, 0.3, 0.2], d=[0.1, 0.3, 0.5])
     d = _decision(0, c)
@@ -226,6 +266,35 @@ def test_soft_policy_kl_and_the_raw_prior():
     sub = replace(d, submit_possible=True, submit_legal=True, raw_submit_logit=math.log(0.5))
     assert np.allclose(raw_prior(sub), [1 / 3, 1 / 6, 1 / 6, 1 / 3])
     assert np.allclose(raw_prior(replace(sub, raw_submit_logit=math.nan), submit_share=0.1), [0.45, 0.225, 0.225, 0.1])
+
+
+def _kl_by_hand(t, p):
+    return sum(a * math.log(a / b) for a, b in zip(t, p, strict=True) if a > 0)
+
+
+def test_the_builders_kl_is_the_target_against_the_raw_prior():
+    """I12/I15's divergence as the builder records it: KL(policy target || raw prior), KataGo's
+    direction - by hand on an asymmetric case where the reverse differs - and, where the network
+    gave no submit logit, the raw prior carrying the search's submit share from the header."""
+    cfg = TargetConfig(deblunder=False, forced_k=0.0)  # nothing pruned: the target is the visits
+    d = _decision(0, _children([60, 30, 10], [0.0, 0.0, 0.0], [0.4, 0.3, 0.3]), raw_logits=np.log([0.2, 0.3, 0.5]))
+    t = build_targets(_game([d]), cfg)
+    target, prior = [0.6, 0.3, 0.1], [0.2, 0.3, 0.5]
+    assert t.kl[0] == pytest.approx(_kl_by_hand(target, prior), rel=1e-6)  # the logits stored as float32
+    assert abs(_kl_by_hand(target, prior) - _kl_by_hand(prior, target)) > 0.05
+    assert t.kl[0] == kl_divergence(t.policy[0], raw_prior(d))
+    sub = _decision(
+        0,
+        _children([50, 30, 20], [0.0, 0.0, 0.0], [0.4, 0.3, 0.3], candidate=[0, 1, -1]),
+        n_moves=2,
+        raw_logits=np.log([0.25, 0.75]),
+        submit_possible=True,
+        submit_legal=True,
+    )
+    g = _game([sub])
+    g.header["search"] = {"full": {"submit_share": 0.1}}
+    t = build_targets(g, cfg)
+    assert t.kl[0] == pytest.approx(_kl_by_hand([0.5, 0.3, 0.2], [0.25 * 0.9, 0.75 * 0.9, 0.1]), rel=1e-6)
 
 
 def test_effort_bins_match_the_heads_helper():
@@ -316,6 +385,60 @@ def test_deblundering_interpolates_across_the_band():
     zero = TargetConfig(deblunder_band=0.0)
     g = _line(2, values=[0.5, 0.0], played=[1, 0], q_played=[0.35, -0.05])
     assert build_targets(g, zero).deblunder_weight[0] == 1.0
+
+
+def test_short_term_targets_of_a_resigned_game_by_hand():
+    """A resignation's turn is the game's last (the record's action count leaves it out): its
+    short-term values by hand, the resigner's last decision within [-1, 1]."""
+    values = [0.2, -0.1, 0.4]
+    g = _line(3, values=values, played=[0, 0, -1], end="resign", winner=1)  # White resigns at turn 2
+    g.header["result"]["actions"] = 2  # as the generator writes it: the resigned turn is not an action played
+    t = build_targets(g, replace(NO_DEBLUNDER, short_term_horizons=(2.0, 5.0)))
+    v = t.search_value
+    for j, h in enumerate((2.0, 5.0)):
+        lam = 1 - 1 / h
+        st0 = (1 - lam) * (v[0] - lam * v[1] + lam**2 * v[2]) + lam**3 * -1.0  # White lost
+        st1 = (1 - lam) * (v[1] - lam * v[2]) + lam**2 * 1.0  # Black won
+        st2 = (1 - lam) * v[2] + lam * -1.0
+        assert t.short_term[:, j] == pytest.approx([st0, st1, st2], abs=1e-12)
+    assert (np.abs(t.short_term) <= 1.0).all()
+    assert t.wdl[2].tolist() == [0.0, 0.0, 1.0] and np.isnan(t.moves_left).all()
+
+
+def test_a_submit_best_child_ends_its_turn():
+    """I13's moves-left from a best child that is the submit: its network output plus the turn its
+    submission ends (issue 148's offset); a move-child's stays in the turn."""
+
+    def game(candidate):
+        c = _children([50, 10], [0.5, 0.2], [0.5, 0.5], candidate=candidate, moves_left=[4.0, 3.0])
+        d0 = _decision(0, c, played=1, n_moves=1, submit_possible=True, submit_legal=True)
+        d1 = _decision(1, _children([10, 5], [0.0, -0.05], [0.5, 0.5]))
+        return build_targets(_game([d0, d1], end="checkmate", winner=1), TargetConfig())
+
+    sub, move = game([-1, 0]), game([0, -1])
+    assert sub.deblunder_weight[0] == move.deblunder_weight[0] == 1.0
+    assert sub.moves_left[0] == 4.0 + 1.0 and move.moves_left[0] == 4.0
+
+
+def test_an_unevaluated_best_move_child_blends_moves_left_with_the_wdl():
+    """D2's tree form expands mid-turn children on inherited priors, so a best move-child can carry
+    no network moves-left: I13 then reads the decision's own raw moves-left (the same action's
+    state) and blends it with the WDL - never the WDL alone; an unevaluated submit child gives no
+    estimate, and moves-left is masked from that decision back (issue 235(g))."""
+    best = np.array([(1 - 0.2 + 0.5) / 2, 0.2, (1 - 0.2 - 0.5) / 2])
+
+    def game(candidate):
+        c = _children([50, 10], [0.5, 0.2], [0.5, 0.5], candidate=candidate, moves_left=[math.nan, 3.0], evaluated=[False, True])
+        d0 = _decision(0, c, played=1, n_moves=1, submit_possible=True, submit_legal=True, raw_moves_left=6.0)
+        d1 = _decision(1, _children([10, 5], [0.0, -0.05], [0.5, 0.5]))
+        return build_targets(_game([d0, d1], end="checkmate", winner=1), TargetConfig())
+
+    move = game([0, -1])
+    assert move.deblunder_weight[0] == 1.0 and move.wdl[0] == pytest.approx(best)
+    assert move.moves_left.tolist() == [6.0, 1.0]  # the root's own 6 turns from turn 0; after the blunder the game's count
+    sub = game([-1, 0])
+    assert sub.deblunder_weight[0] == 1.0 and sub.wdl[0] == pytest.approx(best)
+    assert math.isnan(sub.moves_left[0]) and sub.moves_left[1] == 1.0
 
 
 # --- per-board labels -------------------------------------------------------------------------------------
@@ -418,6 +541,48 @@ def test_targets_rederived_from_stored_records_equal_those_written_at_generation
     assert target_differences(g.targets, rederived) == []  # the reply maps too (not stored: rebuilt)
     assert [d.prior_to_target_kl for d in record.decisions] == pytest.approx(rederived.kl.tolist(), nan_ok=True)
     assert all(r is None or r.target.sum() in (0.0, pytest.approx(1.0)) for r in rederived.reply)
+
+
+@requires_engine
+def test_tree_form_deblundering_blends_moves_left_wherever_it_blends_the_wdl(evaluator):
+    """I13 on D2's tree form, where a visited move-child is often never evaluated (inherited
+    priors): every such child has a moves-left estimate (the decision's own), and with every
+    non-best choice a whole blend, each blunder's two outcome targets are both its best child's -
+    the WDL and the moves-left, never the WDL alone (issue 235(g); the review's probe found the
+    WDL rewritten on 29 decisions and moves-left on 16)."""
+    cfg = GeneratorConfig(split="tree", playouts=24, batch_size=4, cap_turns=4, cap_boards=30, seed=7, pcr=PCRConfig(enabled=False))
+    with torch.no_grad():
+        g = generate_game(evaluator, cfg, net_cfg=NET)
+    ds = g.record.decisions
+    inherited = [
+        (d, k)
+        for d in ds
+        for k in range(len(d.children))
+        if d.children.visits[k] > 0 and d.children.candidate[k] >= 0 and not math.isfinite(d.children.network_moves_left[k])
+    ]
+    assert inherited, "the tree form leaves visited move-children unevaluated"
+    assert all(math.isfinite(best_child_moves_left(d, k)) for d, k in inherited)
+    tc = TargetConfig(
+        short_term_horizons=NET.short_term_horizons,
+        deblunder_threshold=-1.0,
+        deblunder_band=0.0,
+        moves_left_censored=("unknown", "action_limit"),  # the capped game's moves-left kept, to compare
+    )
+    t = build_targets(g.record, tc)
+    assert np.isfinite(t.moves_left).all()
+    whole, from_inherited = 0, 0
+    for i, d in enumerate(ds):
+        if t.deblunder_weight[i] == 0:
+            continue
+        assert t.deblunder_weight[i] == 1.0  # band 0: every blend whole
+        b = int(np.argmax(t.pruned[i]))
+        c = d.children
+        mine = np.array([(1 - c.d[b] + c.q[b]) / 2, c.d[b], (1 - c.d[b] - c.q[b]) / 2])  # the acting player's view
+        assert t.wdl[i] == pytest.approx(mine, abs=1e-12)
+        assert t.moves_left[i] == pytest.approx(best_child_moves_left(d, b) + (1.0 if c.candidate[b] < 0 else 0.0), abs=1e-9)
+        whole += 1
+        from_inherited += int(c.candidate[b] >= 0 and not math.isfinite(c.network_moves_left[b]))
+    assert whole >= 2 and from_inherited >= 1, (whole, from_inherited)
 
 
 @requires_engine

@@ -14,8 +14,10 @@ parameter of ``TargetConfig`` with a placeholder default (spec issue 235).
   child c* keeps its visits; every other child c loses up to ``n_forced(c) = sqrt(k P(c) sum N)``
   of them while its PUCT score, recomputed with the reduced count, stays below c*'s - a replica
   of the engine's root selection (``mcts.cpp`` ``select_child``: ``q + c P sqrt(N_parent) / (1 +
-  n)``, ``c`` the root's effective cPUCT, E3's factor on the exploration term); a child left with
-  one visit is pruned outright. **Steered visits** (E10's boosts and Hunt's suggestions, section
+  n)``, ``c`` the root's effective cPUCT, E3's factor on the exploration term) - E2's root scale
+  and E3's factor as recorded, their values at the search's end, which the selection did not
+  necessarily see throughout: exact under the defaults, where both are off (issue 235(a)); a child
+  left with one visit is pruned outright. **Steered visits** (E10's boosts and Hunt's suggestions, section
   12.2) are removed under ``policy_mode="exclusion"`` or kept at ``provenance_weight`` under
   ``"provenance"`` (which one is open - 6e; the counts are 0 until E10 wires them), and the
   PUCT replica compares priors without the recorded boost. Recorded forced visits (none: forced
@@ -43,8 +45,11 @@ parameter of ``TargetConfig`` with a placeholder default (spec issue 235).
   blends the outcome targets it and every earlier decision take towards the best child's WDL (its
   backed-up (q, d)) and moves-left (its network output plus the turn its move ends, BUILD_LOG
   issue 148), with weight ``clamp((delta - (threshold - band / 2)) / band, 0, 1)`` - Lc0's
-  threshold 0.1, the band a placeholder. Game-record facts (the per-board labels) stay as
-  recorded.
+  threshold 0.1, the band a placeholder. A move-child the search never evaluated (D2's tree form
+  expands mid-turn children on inherited priors) takes the decision's own raw moves-left - the
+  same action's state; with no estimate at all, moves-left is masked from that decision back
+  rather than left unblended beside a blended WDL (issue 235(g)). Game-record facts (the
+  per-board labels) stay as recorded.
 * **Per-board targets (D4)**: travelled-into - a played move within ``travel_horizon`` turns from
   the decision (its own included) lands on the board by travel (its destination, for a branching
   move the history board it targets) - and timeline-active-at-end; tactical volatility needs proofs
@@ -394,7 +399,7 @@ def build_targets(record: GameRecord, cfg: TargetConfig | None = None, *, positi
                 active = (1.0 - w) * active + w * best_abs
             elif w >= 1.0:  # an unscored game's outcome is the best child's where the blend is whole
                 active = best_abs
-            m_b = float(d.children.network_moves_left[b])
+            m_b = best_child_moves_left(d, b)
             if math.isfinite(m_b):
                 offset = 1.0 if d.children.candidate[b] < 0 else 0.0  # a submit ends the turn in progress
                 end_b = d.action + lead + m_b + offset
@@ -402,6 +407,11 @@ def build_targets(record: GameRecord, cfg: TargetConfig | None = None, *, positi
                     active_end = (1 - w) * active_end + w * end_b
                 elif w >= 1.0:
                     active_end = end_b
+            else:
+                # No estimate of the best child's moves-left: the blend cannot be applied whole, so
+                # moves-left is masked here and before (until a whole blend restores it) - never the
+                # WDL blended while moves-left keeps the result's (issue 235(g)).
+                active_end = math.nan
             blend[i] = w
         wdl[i] = _abs_wdl(active, d.acting_player)
         moves_left[i] = active_end - d.action - lead if math.isfinite(active_end) else math.nan
@@ -450,6 +460,17 @@ def build_targets(record: GameRecord, cfg: TargetConfig | None = None, *, positi
         kl=kl,
         reply=reply,
     )
+
+
+def best_child_moves_left(d: DecisionRecord, b: int) -> float:
+    """I13's moves-left estimate for root child ``b`` (turns, the child's own count): its network
+    output; for a move-child the search never evaluated - D2's tree form expands mid-turn children
+    on inherited priors - the decision's own raw moves-left, the child being a state of the same
+    action (issue 235(g)); NaN where there is none (an unevaluated submit child)."""
+    m = float(d.children.network_moves_left[b])
+    if not math.isfinite(m) and int(d.children.candidate[b]) >= 0:
+        m = float(d.raw_moves_left)
+    return m
 
 
 def _blunder_weight(d: DecisionRecord, pruned: np.ndarray, cfg: TargetConfig) -> float:
@@ -577,6 +598,7 @@ class Row:
     state: object  # PositionState
     targets: GameTargets
     index: int  # the decision
+    synthetic: bool = False  # from a synthetic record (``trainer.synthetic_record``): the only rows the untrained build steps on
 
 
 def collate_rows(rows: Sequence[Row], net_cfg) -> tuple:
@@ -647,6 +669,7 @@ __all__ = [
     "TARGET_SOURCES",
     "GameTargets",
     "TargetConfig",
+    "best_child_moves_left",
     "build_targets",
     "collate_rows",
     "effort_bin",

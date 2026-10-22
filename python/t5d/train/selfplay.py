@@ -41,9 +41,13 @@ one's evaluation cache (C14), root noise on, a chosen child made known legal bef
   would-resign event is recorded instead, so that ``false_resign_report`` measures false
   resignations per board-count range. The threshold is None (no resignation) until the value head
   is calibrated - a placeholder, as are ``consecutive`` and the ranges.
-* **The move-temperature schedule (I19, section 12.8)**: Lc0's T60 - 0.9 decaying linearly to 0.45
-  over 60 turns, 0 (the most visited) from turn 60 - with a turn one player's action (issue 305);
-  the root policy temperature KataGo's 1.25 decaying to 1.1 over the same span (register I19). Both
+* **The move-temperature schedule (I19, section 12.8)**: Lc0's T60 read as Lc0's options define it -
+  ``temp-cutoff-move``, "Move number, starting from which endgame temperature is used rather than
+  initial temperature", and ``temp-endgame``, "Temperature used during endgame (starting from cutoff
+  move). Endgame temperature doesn't decay" - so 0.9 before the cutoff turn (60) and a constant
+  endgame temperature 0.45 from it (the main loop's ruling on the review, issue 236(d)); a linear
+  decay before the cutoff is an option (``decay_to``, off). A turn is one player's action (issue
+  305). The root policy temperature KataGo's 1.25 decaying to 1.1 over 60 turns (register I19). All
   placeholders, SPSA-tuned later (G7); each decision records the temperatures it ran at.
 
 Nothing here trains (the untrained build's rule): the generator only plays and records.
@@ -137,10 +141,11 @@ class ResignConfig:
 class TemperatureSchedule:
     """Register I19's self-play exploration schedules (module docstring) - PLACEHOLDERS."""
 
-    start: float = 0.9  # Lc0's T60
-    end: float = 0.45
-    decay_turns: int = 60
-    cutoff_turn: int = 60  # from this turn on: the most visited (temperature 0)
+    start: float = 0.9  # Lc0's T60: the initial temperature, before the cutoff
+    cutoff_turn: int = 60  # Lc0's temp-cutoff-move: from this turn on, the endgame temperature
+    endgame: float = 0.45  # Lc0's temp-endgame: constant from the cutoff on (it "doesn't decay")
+    decay_to: float | None = None  # an optional linear decay before the cutoff, start -> decay_to (None: none)
+    decay_turns: int = 60  # the optional decay's span
     root_start: float = 1.25  # KataGo's root policy temperature, early ...
     root_end: float = 1.1  # ... and late
     root_decay_turns: int = 60
@@ -190,8 +195,9 @@ class GeneratorConfig:
         if not 0.0 <= r.disabled_fraction <= 1.0:
             raise ValueError("I18: disabled_fraction in [0, 1]")
         t = self.schedule
-        if min(t.start, t.end) < 0 or min(t.root_start, t.root_end) <= 0 or min(t.decay_turns, t.root_decay_turns) < 1:
-            raise ValueError("I19: temperatures non-negative (root temperatures positive), decay spans positive")
+        moves = (t.start, t.endgame) + (() if t.decay_to is None else (t.decay_to,))
+        if min(moves) < 0 or min(t.root_start, t.root_end) <= 0 or min(t.decay_turns, t.root_decay_turns, t.cutoff_turn) < 1:
+            raise ValueError("I19: temperatures non-negative (root temperatures positive), the cutoff and decay spans positive")
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -208,8 +214,8 @@ class GeneratedGame:
     #: Each decision's network input, kept when ``generate_game(keep_positions=True)`` (the live
     #: side of section 15.2's round trip; the reply target's positions).
     positions: list[Position] = field(default_factory=list)
-    #: The targets written at generation (``generate_game(target_config=...)``): the live side of
-    #: section 15.2's I15 row; None when none were asked for.
+    #: The targets written at generation (``generate_game(target_config=...)``, the builder's
+    #: defaults when none is given): the live side of section 15.2's I15 row.
     targets: GameTargets | None = None
     seconds: float = 0.0
 
@@ -289,9 +295,13 @@ def children_record(children: list[RootChild], index: dict[tuple[int, ...], int]
     )
 
 
-def network_info(evaluator, net_cfg: NetConfig, *, seed: int | None = None, swa_snapshots: int = 0) -> dict:
-    """The record's ``network`` condition for an evaluator with a ``model`` (its weights' hash)."""
+def network_info(evaluator, net_cfg: NetConfig, *, seed: int | None = None, swa_snapshots: int | None = None) -> dict:
+    """The record's ``network`` condition for an evaluator with a ``model`` (its weights' hash);
+    ``swa_snapshots`` None: the count a published network carries (``Trainer.publish`` sets
+    ``model.swa_snapshots``), else 0."""
     model = getattr(evaluator, "model", None)
+    if swa_snapshots is None:
+        swa_snapshots = getattr(model, "swa_snapshots", 0) if model is not None else 0
     return {
         "id": None if model is None else network_id(model),
         "config": asdict(net_cfg),
@@ -335,10 +345,13 @@ def _decay(start: float, end: float, span: int, turn: int) -> float:
 
 
 def move_temperature(cfg: GeneratorConfig, action: int) -> float:
-    """I19's move temperature at turn ``action`` (a turn one player's action, issue 305): linear
-    from ``start`` to ``end`` over ``decay_turns``, 0 from ``cutoff_turn`` on."""
+    """I19's move temperature at turn ``action`` (a turn one player's action, issue 305), Lc0's
+    semantics: ``start`` before ``cutoff_turn`` (with ``decay_to``, linear from ``start`` to it over
+    ``decay_turns``), the constant ``endgame`` temperature from ``cutoff_turn`` on."""
     t = cfg.schedule
-    return 0.0 if action >= t.cutoff_turn else _decay(t.start, t.end, t.decay_turns, action)
+    if action >= t.cutoff_turn:
+        return float(t.endgame)
+    return float(t.start) if t.decay_to is None else _decay(t.start, t.decay_to, t.decay_turns, action)
 
 
 def root_temperature(cfg: GeneratorConfig, action: int) -> float:
@@ -406,13 +419,19 @@ def generate_game(
     network: dict | None = None,
     keep_positions: bool = False,
     target_config: TargetConfig | None = None,
+    on_decision: Callable[[Search, DecisionRecord, Position], None] | None = None,
 ) -> GeneratedGame:
     """Play one self-play game and record it (module docstring). ``network``: the record's
     network condition (``network_info``; None: from the evaluator's model). ``target_config``:
-    build the game's targets at generation (``train.targets``) - each decision's prior-to-target
-    divergence is then recorded, and the configuration in the header; the reply prototype's
-    targets too when ``keep_positions``."""
+    the target builder's configuration (``train.targets``; None: its defaults at the network's
+    short-term horizons) - the game's targets are built at generation, each decision's
+    prior-to-target divergence recorded under it and the configuration named in the header; the
+    reply prototype's targets too when ``keep_positions``. ``on_decision``: called with the live
+    search, the decision's record and its input once each decision is recorded, before its child
+    is played (the tests hold the record to the live search)."""
     cfg.validate()
+    if target_config is None:
+        target_config = TargetConfig(short_term_horizons=tuple(net_cfg.short_term_horizons))
     if policy_source(evaluator) != "normal":
         raise ValueError("an optimistic evaluator searches at match play only, never in self-play (register D9, section 8.1)")
     t0 = time.perf_counter()
@@ -530,6 +549,8 @@ def generate_game(
                 )
                 if keep_positions:
                     positions.append(position)
+                if on_decision is not None:
+                    on_decision(search, decisions[-1], position)
                 if resigning:
                     resigned = True
                     end, winner = "resign", 1 - position.acting_player
@@ -604,12 +625,10 @@ def generate_game(
             shared.close()
         game.close()
     record = GameRecord(header=header, decisions=decisions)
-    targets = None
-    if target_config is not None:
-        targets = build_targets(record, target_config, positions=positions if keep_positions else None)
-        for d, kl in zip(decisions, targets.kl.tolist(), strict=True):
-            d.prior_to_target_kl = kl
-        header["target_config"] = target_config.to_dict()
+    targets = build_targets(record, target_config, positions=positions if keep_positions else None)
+    for d, kl in zip(decisions, targets.kl.tolist(), strict=True):
+        d.prior_to_target_kl = kl
+    header["target_config"] = target_config.to_dict()
     return GeneratedGame(record=record, actions=actions, positions=positions, targets=targets, seconds=time.perf_counter() - t0)
 
 
@@ -648,15 +667,20 @@ def false_resign_report(records, ranges: tuple[int, ...] = ResignConfig().ranges
     return out
 
 
-def replay_positions(record: GameRecord, net_cfg: NetConfig | None = None) -> list[Position]:
+def replay_positions(record: GameRecord, net_cfg: NetConfig | None = None, *, window_k: int | None = None) -> list[Position]:
     """Each decision's network input rebuilt from the record alone (I15: "later architectures
     retrained on the archive"): the start replayed through the engine, every decision's state
     expanded with the recorded window, relations and legal-moves filter under the recorded
     legality budget, its candidate moves checked against the record's, then the recorded child
-    played. ``net_cfg``: the register counts and relations to build (None: the record's).
-    Raises ``ValueError`` where the record and the engine disagree."""
+    played. ``net_cfg``: the register counts and relations to build (None: the record's) - a
+    trainer passes its own network's; ``window_k``: the history window (None: the record's).
+    Raises ``ValueError`` where the record and the engine disagree, the ruleset and the rules
+    encoding included (the engine version is not compared: a rebuild that differs shows in the
+    candidate moves and the final state, both checked - issue 234(f))."""
     h = record.header
     exp = h["expand"]
+    if window_k is None:
+        window_k = exp["window_k"]
     regs = dict(regs_per_board=exp["regs_per_board"], global_regs=exp["global_regs"])
     relations = list(exp["relations"])
     if net_cfg is not None:
@@ -670,10 +694,14 @@ def replay_positions(record: GameRecord, net_cfg: NetConfig | None = None) -> li
     game = Game.variant(h["variant"]) if h["start_fen"] is None else Game.from_fen(list(h["start_fen"]))
     out: list[Position] = []
     try:
+        info = game.info()
+        for key in ("ruleset", "rules"):
+            if key in h and int(h[key]) != int(getattr(info, key)):
+                raise ValueError(f"the record's {key} {h[key]} is not the replayed game's {getattr(info, key)}")
         for d in record.decisions:
             legal, checks, nodes = budget["full" if d.full_search or "cheap" not in budget else "cheap"]
             pos = game.position(
-                **regs, relations=relations, window_k=exp["window_k"], legal_moves=legal, legality_checks=checks, legality_nodes=nodes
+                **regs, relations=relations, window_k=window_k, legal_moves=legal, legality_checks=checks, legality_nodes=nodes
             )
             if pos.moves.tobytes() != d.candidates.tobytes():
                 raise ValueError(f"decision {d.decision}: the rebuilt input's candidate moves are not the record's")

@@ -10,6 +10,57 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-23 - M21 review fixes: inputs rebuilt under the trainer's configuration, steps on synthetic rows only and capped per model, I19's cutoff as Lc0's, I13 whole in the tree form, the untested claims tested
+
+Two reviews of M21 (spec fidelity; a 46-mutant pass that left 19 mutants alive).
+
+- **The trainer's inputs** (`train/trainer.py`, `train/selfplay.py`): `Trainer.add_game` rebuilt a
+  record's inputs under the record's register counts and relations, not the trainer's - a trainer
+  of another configuration got inputs its network does not take (a 1/4- and a 3/8-register
+  trainer, a typed-relations one with 20 edges for 47). Now `replay_positions(record, net_cfg,
+  window_k=...)` under the trainer's, with `TrainerConfig.window_k` (None: the record's; it sets
+  the positions' W/E scope, the cached configuration's - a row keeps the state alone). Replay
+  also refuses a record whose ruleset or rules encoding is not the replayed game's (the engine
+  version a logged reading, issue 234(f)).
+- **No training runs, to the letter** (the main loop's reading of the user's rule, issue 237(a)):
+  optimiser steps only on synthetic rows (`synthetic_record`'s header says `synthetic`; `step_on`
+  refuses any other row); record rows go through the loop forward only (`Trainer.losses_on`);
+  `MAX_STEPS` is enforced per model (`smoke.check_step`/`record_step`: a count the model and its
+  copies carry), so a second `Trainer`, a smoke run or the published copy cannot add steps.
+- **I19's cutoff as Lc0 defines it** (the main loop's ruling, issue 236(d)): `TemperatureSchedule`
+  now holds 0.9 before the cutoff turn 60 and a constant endgame temperature 0.45 from it
+  (`endgame`; `temp-endgame` "doesn't decay"), a decay before the cutoff optional (`decay_to`,
+  off). Commit 3 had decayed to 0.45 and cut to temperature 0 at turn 60.
+- **I13 whole in the tree form** (`train/targets.py`, issue 235(g)): a best move-child the search
+  never evaluated (inherited priors) had no network moves-left, so the WDL was blended and
+  moves-left was not. It now takes the decision's own raw moves-left (`best_child_moves_left`);
+  with no estimate at all moves-left is masked from that decision back.
+- **Smaller**: `Trainer.publish` gives the network its SWA snapshot count, which the records'
+  network condition now carries (it said 0); the generator records the prior-to-target divergence
+  under the builder's defaults when given no target configuration (it was NaN), and takes an
+  `on_decision` hook (the live search, the record, the input) for the tests; `synthetic_record`'s
+  float32 fields are float32-exact, so it round-trips through a file.
+- **Tests** - each tied to a finding, each mutant it names now killed: the value targets (search
+  value, categorical, root WDL, short-term) from the pruned visits by hand; the builder's KL as
+  KL(target || raw prior) on an asymmetric case and with the header's submit share; the replica's
+  inputs (E3's factor, the search's and the noise-free prior, the root's recorded visits);
+  short-term targets of a resigned game by hand; the submit child's moves-left offset; the tree
+  form's deblundering (constructed, and a generated tree-form game); I20 running to the cap on a
+  root that keeps moving; I18's sign (a value inside the threshold never resigns) and its 10%
+  (the default, and the disabled share over 4000 seeds); each record held to the live search at
+  generation (the root's cPUCT with E2 off and on, the best child, the place in the action, the
+  pruned and unpruned policy target and root value); forced and steered counts through a file;
+  newer, older and missing versions refused; another ruleset refused; a rebuilt input compared
+  field for field with its W/E scope, under a window other than 8; a resigned record replayed and added to a trainer; a trainer of three other
+  configurations rebuilding the generator's inputs under its own; the step cap per model and the
+  synthetic-rows rule; the miniature loop with its steps on synthetic rows and the snapshot count
+  in the next record.
+- Spec: §12.2, §12.5, §12.8 (I15's records, deblundering, the exploration bullet), §15.1's M21
+  sentence; register I2, I13, I15, I17, I18, I19, I20, M21. Issues 234(f)-(g), 235(a) and (g),
+  236(d), 237(a), (e), (f); proposed edits 175, 176, 178 and 181 extended (181 now quotes Lc0's
+  options). BUILD_LOG's I13, I15, I19 and M21 rows updated (M21 kept qualified: the QAT hook a seam
+  until G8, the user ruling on edit 182).
+
 ### 2026-10-23 - M21 (4/4): the training loop end to end, smoke-tested - records, sampler, window, targets, losses, optimiser steps, SWA
 
 - **`python/t5d/train/trainer.py`** (new): `Trainer` - a game's I15 record in (its inputs rebuilt
@@ -26,6 +77,10 @@ the spec describes the change.
   published network differs from the raw one and drives self-play, its hash in the record; the same
   loop on synthetic records (AdamW and NAdam); the total loss falling at each of three steps on a fixed
   synthetic batch; the step cap and the QAT seam refusing.
+- *Corrected by the review fixes (2026-10-23, above)*: the inputs were rebuilt under the record's
+  network configuration, not the trainer's; the optimiser steps on self-play records broke the
+  user's rule (steps on synthetic data only), and the cap was per `Trainer`, not per model; the
+  published network's records said `swa_snapshots` 0.
 - Spec: §15.1's M21 sentence, §10.2, §12.8; register M21, G8, C3, I17. Issue 237; proposed edit 182.
   BUILD_LOG's M21 and G8 rows and the C3 park updated.
 
@@ -53,6 +108,9 @@ the spec describes the change.
   recency; SWA's capped mean and publication; the temperature schedules; PCR's seeded fraction and a
   game mixing full and cheap searches; I20 stopping on a quiet root; a resignation (record, result,
   5dpgn replayed by the engine) and the check's events and per-range rates.
+- *Corrected by the review fixes (2026-10-23, above)*: "0 from turn 60" contradicted the Lc0
+  semantics it cited (the endgame temperature 0.45 holds from the cutoff, undecayed); the I20 test
+  could not tell a quiet root from a moving one; I18's sign and its 10% default were untested.
 - Spec: §12.3, §12.5, §12.8, §13.1 6l, 6u, 6z; register I3, I5, I6, I12, I16, I17, I18, I19, I20, M21.
   Issue 236; proposed edits 179-181. BUILD_LOG's rows for these and M21 updated.
 
@@ -86,6 +144,11 @@ the spec describes the change.
   record (its inputs rebuilt by replay) equal the targets written at generation, bit for bit, the
   reply maps included; record-derived batches give every loss finite, with and without the reply
   prototype (forward only).
+- *Corrected by the review fixes (2026-10-23, above)*: no test pinned the search-value targets to
+  the pruned visits, the builder's KL direction, the PUCT replica's inputs (E3's factor, the prior,
+  the root's visits) or the moves-left offset of a submit best child, though this entry claimed
+  them; the I13 blend was half-applied in the tree form (WDL without moves-left); short-term
+  targets of a resigned game were untested.
 - Spec: §8.3, §8.6, §12.2, §12.4, §12.5, §12.8, §15.2's I15 row; register I2, I5, I13, I14, D3, D4,
   D5, D9, M21. Issue 235; proposed edits 176-178. BUILD_LOG's I2, I13, I14 and M21 rows updated.
 
@@ -120,6 +183,11 @@ Register M21's first part, in the net lane: the record format before anything th
   and the search's noise-free prior the softmax of the raw logits; the conditions present; another
   version refused; the weight hash following the weights.
 - Nothing trains: the generator plays tiny games with random weights in the tests.
+- *Corrected by the review fixes (2026-10-23, above)*: the bit-for-bit round trip cannot see a
+  value recorded wrongly at generation (the cPUCT, the best child, the place in the action), the
+  forced and steered counts were 0 in every tested record, "another version refused" was tested
+  one way only, and replay ignored the header's ruleset and rules and the reader's network
+  configuration.
 - Spec: §12.8 "Rich training records", §15.2's I15 row (the targets' half lands with the target
   builder); register I15, M21, D2, D8, D9, H23/H41. Issue 234; proposed edit 175. BUILD_LOG's I15
   and M21 rows updated.
