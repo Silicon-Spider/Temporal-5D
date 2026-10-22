@@ -1045,7 +1045,8 @@ object per line, deterministically:
 - with `--turn-summary`, after the records (and after `--summary`'s lines): a
   `{"event":"turn_summary_records",...}` line (records, replayed to the end, refused,
   `errors` - records that ended in `"error"`, in no reading - actions checked, games
-  under two readings, and `strict_repeats`: which records repeat which); a
+  under two readings, `cost_model`: the compute shares' cost of a move, in words, and
+  `strict_repeats`: which records repeat which); a
   `{"event":"turn_summary_group","record":...,"also":[...]}` line for each grouped game
   of several records (the `grouped` reading's games, as `summary_game` lists
   `--summary`'s); then per board-count range at the action's start - `<50`, `50-99`,
@@ -1060,8 +1061,18 @@ object per line, deterministically:
   `optional_when_made`) and the optional boards played per action, moves per action
   (1, 2, 3, 4+; mean, median, p90, max) and the one-move actions from more than one
   mandatory board (`one_move_over_1_mandatory`), boards played, the shares with a
-  jump, a branch, a move after the shift, a rewind and a released board, and the
-  totals of the rarer counts. The readings: `strict` (every action of every record
+  jump, a branch, a move after the shift, a rewind and a released board, the
+  totals of the rarer counts, the moves and the optional moves in all
+  (`moves_total`, `optional_moves_total`, `optional_moves_share_of_moves`), and the
+  compute shares of the user's CHECKPOINT 8 ruling - of the actions with more than one
+  mandatory board, with three or more, and with more than one playable board, their
+  moves x the cost of a move over every action's: `compute_share_mandatory_over_1`,
+  `..._mandatory_over_2`, `..._playable_over_1` with the cost a dense evaluation at
+  the action's board count N (4 T^2 d L + 40 T d^2 L FLOPs, T = 66N + 16, d = 256,
+  L = 16 - spec §9.1-9.2 as N3's `cost.py` computes it; `tools::dense_eval_flops`),
+  each with a `_constant` reading (every move costs the same: the share of the moves),
+  and `dense_tflops`, the dense total. The cost model is arithmetic - no network runs -
+  and `tools/turn_width.hpp` ("THE COST OF A MOVE") gives its reasons. The readings: `strict` (every action of every record
   that replays to the end, a record that equals or is a prefix of another's - by its
   sequence of positions - left out), also per mandatory class
   (`turn_summary_by_mandatory`); `grouped` (`--summary`'s games, two endings of one
@@ -1103,7 +1114,8 @@ changes no action's counts, but it decides which records replay to the end (on
 t0database, one record more than under C4 - MEASUREMENTS, "Turn width (M22)").
 `tests/test_turnwidth.cpp` checks the counts on constructed actions with known
 answers, the summary's ranges and classes at their edges and its statistics on
-constructed widths, and runs the tool on the hand-written records of
+constructed widths (the dense cost worked by hand, the compute shares and the optional
+moves' share of the moves among them), and runs the tool on the hand-written records of
 `testdata/turn-width/`: the counts, how records are classified (a repeat, a prefix, a
 truncated record, two records that differ only in their last action), and custom
 positions whose actions start on every range edge (`testdata/turn-width/edges/`).
