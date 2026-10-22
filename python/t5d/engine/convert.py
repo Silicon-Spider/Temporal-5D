@@ -19,6 +19,8 @@ boards, canonical order (timeline, then h)     storage order (board ``b`` is eng
 ``present``                                    checked equal to ``h_present`` (Δt is derived)
 ``acting_player`` (= ``to_move``)              ``acting_player`` (register D8, stage N5)
 ``submit_possible``, ``submit_legal``          ``submit_possible``, ``submit_legal``
+``mandatory_remaining``,                       ``mandatory_remaining``, ``optional_playable``,
+``optional_playable``, ``moves_made`` (A6)     ``moves_made`` (the turn state's exact counts)
 ``piece`` (cells, 0 / 1..12 P N B R Q K U D    ``piece`` (``s = y*W + x``, ``PIECE_LETTERS``)
 S W C Y)
 ``colour`` (0 / 1 white / 2 black)             ``colour``
@@ -58,6 +60,16 @@ promotion)                                     promotion)`` - row i is engine mo
   where no move may be made. An acting player that is no colour is refused even then. Under
   Q4's Guide-literal reading (``T5D_RULES_NO_MOVES_AFTER_SHIFT``) a state past the shift has
   no move and offers submit alone.
+* **The turn state (register A6).** The expansion's three counts - the mandatory boards still
+  to move (the state machine's own count, spec issue 143), the optional boards still playable
+  and the moves made in the action (the game handle's or the search leaf's path's: no state
+  records it; spec issue 144) - are copied as they are: section 2.3's "exact counts, never
+  predicted ones: the rules engine knows them". Nothing here recounts them by a ruleset (the
+  expansion names none). What is checked (``PresentMismatch``, unless ``strict=False``) is
+  what the expansion itself defines them by, whatever the rules: the counts are non-negative,
+  the mandatory and optional boards are exactly the boards it marks ``playable`` (L5; none when
+  no move may be made, Q4), the mandatory ones no more than those of active timelines (T10),
+  and no mandatory board is left exactly when submitting is possible (T5).
 * **The acting player's view (register A7).** The state keeps the engine's absolute facts -
   colours, ranks, timeline labels - and the network reads them from the acting player's side
   (``net/state.py``: owners ours/theirs, side to move us/them, ranks mirrored and timelines
@@ -257,8 +269,8 @@ def _check_cells(name: str, board: np.ndarray, cell: np.ndarray, n: int, wh: int
 
 def to_position_state(x: Expansion, *, regs_per_board: int = 2, global_regs: int = 16) -> PositionState:
     """The ``PositionState`` of an expansion made with every board's features (see the module
-    docstring's table) - the acting player and the submit action's flags included (D8);
-    validated by ``PositionState`` itself."""
+    docstring's table) - the acting player and the submit action's flags included (D8), and the
+    turn state's counts (A6); validated by ``PositionState`` itself."""
     if x.square_features != "all" or not x.all_features:
         raise ValueError(
             "a PositionState needs every board's square features: expand with square_features='all' "
@@ -312,6 +324,9 @@ def to_position_state(x: Expansion, *, regs_per_board: int = 2, global_regs: int
         submit_possible=bool(x.submit_possible),
         submit_legal=bool(x.submit_legal),
         even_start=bool(x.even),
+        mandatory_remaining=int(x.mandatory_remaining),
+        optional_playable=int(x.optional_playable),
+        moves_made=int(x.moves_made),
     )
 
 
@@ -338,7 +353,8 @@ def to_position(
     (``PresentMismatch``): the present must be the boards', the acting player the player to
     move, submitting possible exactly when the present has shifted (T5), every move's source
     board one whose colour to move is the acting player's and its piece the acting player's,
-    and no move where none may be made. With ``strict=False`` only ``PositionState``'s checks
+    no move where none may be made, and the turn state's counts what the expansion defines
+    them by (``_turn_state_problem``). With ``strict=False`` only ``PositionState``'s checks
     remain (``present_matches`` says whether these held). An acting player or player to move
     that is no colour is refused either way."""
     for name in ("acting_player", "to_move"):
@@ -357,6 +373,10 @@ def to_position(
             f"h = {h_present} ({'wb'[h_present & 1]} to move on it): the present must be the boards', the acting player the player "
             "to move, and submitting possible exactly when the present has shifted to the acting player's opponent (T5)"
         )
+    turn = _turn_state_problem(x)
+    matches = matches and turn is None
+    if strict and turn is not None:
+        raise PresentMismatch(turn)
     state = to_position_state(x, regs_per_board=regs_per_board, global_regs=global_regs)
     problem = _move_problem(x, state)
     matches = matches and problem is None
@@ -378,6 +398,34 @@ def to_position(
         scope=EngineScope.from_expansion(x) if scope else None,
         present_matches=matches,
     )
+
+
+def _turn_state_problem(x: Expansion) -> str | None:
+    """Why the expansion's turn state (register A6) disagrees with what defines it (None when it
+    does not): a negative count; mandatory and optional boards that are not the boards marked
+    ``playable`` (L5: the heads with the mover to move, while a move may be made); more mandatory
+    boards than playable heads of active timelines (an inactive timeline owes nothing, T10); a
+    mandatory board left where submitting is possible, or none where it is not (T5). Which
+    playable boards of active timelines are owed is the ruleset's (Q5, Q6), which the expansion
+    does not name: that split is the engine's, unchecked here."""
+    counts = (int(x.mandatory_remaining), int(x.optional_playable), int(x.moves_made))
+    if min(counts) < 0:
+        return f"the expansion's turn state {counts} has a negative count"
+    playable = int(np.count_nonzero(x.playable))
+    if counts[0] + counts[1] != playable:
+        return (
+            f"the expansion's mandatory and optional boards ({counts[0]} + {counts[1]}) are not the {playable} boards it marks "
+            "playable (L5)"
+        )
+    owed = int(np.count_nonzero(x.playable & x.active))
+    if counts[0] > owed:
+        return f"the expansion has {counts[0]} mandatory boards, more than its {owed} playable boards of active timelines (T6, T10)"
+    if (counts[0] == 0) != bool(x.submit_possible):
+        return (
+            f"the expansion has {counts[0]} mandatory boards left with submitting {'possible' if x.submit_possible else 'not possible'}: "
+            "submitting is possible exactly when none is left (T5)"
+        )
+    return None
 
 
 def _move_problem(x: Expansion, state: PositionState) -> str | None:

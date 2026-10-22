@@ -91,6 +91,12 @@ meant every parameter that existed before N5 was drawn as at N4; M20's promotion
 ordinary module that draws from the global stream while it is made, moved every parameter
 drawn from that stream - all but B15's, B16's, B17's and D8's, which have generators of their
 own.)
+
+Register A6: the turn-state counts (mandatory boards still to move, optional boards still
+playable, moves made in the action) are inputs beside the acting colour, on the same tokens
+(``embed.py``; their MLP a placeholder, spec issue 230). Its parameters (``embed.turn_in``,
+``embed.turn_out``) likewise draw nothing while they are made and are drawn from a generator of
+their own (``a6_seed``): adding them changed no other parameter's draw.
 """
 
 from __future__ import annotations
@@ -221,6 +227,8 @@ class T5DNet(nn.Module):
     #: Register D8's parameters (stage N5), drawn after every other trunk and head parameter
     #: and before the flag-gated modules (``_init_weights``).
     _D8_MODULES = ("embed.acting", "submit")
+    #: Register A6's parameters (the turn-state MLP), drawn from their own generator.
+    _A6_MODULES = ("embed.turn_in", "embed.turn_out")
 
     #: The trunk projections that DeepNet's initialisation draws under post-norm (Wang et al.
     #: 2022, Figure 2): Xavier normal at gain beta ("ffn", "v_proj", "out_proj") and at gain
@@ -251,7 +259,7 @@ class T5DNet(nn.Module):
             for name, module in self.named_modules():
                 if name.split(".")[0] == "smolgen":
                     continue  # drawn last (reset_parameters)
-                if any(name == d8 or name.startswith(d8 + ".") for d8 in self._D8_MODULES):
+                if any(name == own or name.startswith(own + ".") for own in self._D8_MODULES + self._A6_MODULES):
                     continue  # drawn after the rest (below)
                 if isinstance(module, nn.Linear):
                     nn.init.normal_(module.weight, 0.0, self._linear_std(name, module))
@@ -273,6 +281,12 @@ class T5DNet(nn.Module):
                 out = self.submit.out
                 out.weight.copy_(torch.empty(out.weight.shape).normal_(0.0, out.in_features**-0.5, generator=d8))
                 out.bias.copy_(torch.empty(out.bias.shape).normal_(0.0, cfg.init_bias_std, generator=d8))
+            # A6: the turn-state MLP, from a generator of its own in the same way (LeCun normal
+            # weights, biases at init_bias_std, as every Linear here).
+            a6 = torch.Generator(device="cpu").manual_seed(a6_seed(torch.initial_seed()))
+            for lin in (self.embed.turn_in, self.embed.turn_out):
+                lin.weight.copy_(torch.empty(lin.weight.shape).normal_(0.0, lin.in_features**-0.5, generator=a6))
+                lin.bias.copy_(torch.empty(lin.bias.shape).normal_(0.0, cfg.init_bias_std, generator=a6))
             if self.typed_edges is not None:
                 nn.init.normal_(self.typed_edges.table, 0.0, cfg.init_table_std)
             if self.smolgen is not None:
@@ -521,6 +535,12 @@ def _frozen_kv_rounding(batch: Batch, kv_format: str):
 def d8_seed(seed: int) -> int:
     """The seed of register D8's own generator (``T5DNet._init_weights``), from the model's."""
     return (int(seed) * 0x9E3779B97F4A7C15 + 0xD8) & 0xFFFFFFFFFFFFFFFF
+
+
+def a6_seed(seed: int) -> int:
+    """The seed of register A6's own generator (the turn-state MLP, ``T5DNet._init_weights``),
+    from the model's."""
+    return (int(seed) * 0x9E3779B97F4A7C15 + 0xA6) & 0xFFFFFFFFFFFFFFFF
 
 
 def b15_seed(seed: int) -> int:

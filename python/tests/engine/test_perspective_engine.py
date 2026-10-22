@@ -99,14 +99,15 @@ def _rows(arr: np.ndarray) -> list[tuple[int, ...]]:
 def test_the_engines_mirror_is_the_mirror(pairs):
     """Board by board, square by square, move by move: the engine's conversion of the mirrored
     5DFEN equals ``state.mirror`` of the original's conversion - for both acting colours, odd and
-    even variants, every board size."""
+    even variants, every board size - and the engine's turn-state counts (register A6: the acting
+    player's, which the mirror keeps) are the original's."""
     assert {int(s.acting_player) for _, s, _, _ in pairs} == {0, 1}
     assert any(s.even_start for _, s, _, _ in pairs) and max(s.n_boards for _, s, _, _ in pairs) >= 30
     for label, s, engine, order in pairs:
         m, e = mirror(s), permute_boards(engine, order)
         for name in ("timeline", "half_turn", "is_head", "active", "side_to_move", "piece", "colour", "moved", "parent", "source"):
             assert np.array_equal(getattr(m, name), getattr(e, name)), (label, name)
-        for name in ("acting_player", "submit_possible", "submit_legal", "even_start", "width", "height"):
+        for name in ("acting_player", "submit_possible", "submit_legal", "even_start", "width", "height", "turn_state"):
             assert getattr(m, name) == getattr(e, name), (label, name)
         for name in ("moves", "edges"):
             assert _rows(getattr(m, name)) == _rows(getattr(e, name)), (label, name)  # the engine's order is its own
