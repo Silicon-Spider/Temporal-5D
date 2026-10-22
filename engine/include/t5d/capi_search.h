@@ -11,7 +11,7 @@
  *     t5d_search_gather(s, max_leaves, ...)        leaves to evaluate: n
  *     for i < n: t5d_search_leaf(s, i, &leaf)       each leaf's network input:
  *                                                    leaf.expansion (t5d/capi.h)
- *     t5d_search_deliver(s, logits, values, ...)   their evaluations, in order
+ *     t5d_search_deliver_evaluations(s, &batch, ...)  their evaluations, in order
  *   t5d_search_choose / _child / _advance ...
  *
  * What a leaf carries is everything the network takes from it - the leaf's
@@ -35,13 +35,32 @@
  *    or NaN for a leaf, gives the search's placeholder
  *    (t5d_search_params.submit_share). A leaf may be a state whose present has
  *    shifted inside the action (R8: moves may follow the shift).
- *  - VALUE: 51 float32 numbers (T5D_VALUE_BINS; bins centred on -1 + 2k/50,
- *    register D3), as PROBABILITIES (T5D_VALUE_PROBABILITIES: non-negative, the
- *    search normalises them) or as LOGITS (T5D_VALUE_LOGITS: the search takes
- *    their softmax), from the perspective of the leaf's ACTING PLAYER - the
- *    player whose action is in progress, until it submits (leaf.acting_player,
- *    = leaf.expansion.acting_player; after the shift it is not the colour to
- *    move on the present).
+ *  - THE VALUE HEADS (register D3, corrected at CHECKPOINT 7), each from the
+ *    perspective of the leaf's ACTING PLAYER - the player whose action is in
+ *    progress, until it submits (leaf.acting_player, = leaf.expansion.
+ *    acting_player; after the shift it is not the colour to move on the
+ *    present):
+ *    - WDL (required): 3 float32 numbers (T5D_WDL: win, draw, loss) - the
+ *      value search uses: the leaf's value is W - L, and its draw probability
+ *      D is backed up beside it (t5d_root_child.d);
+ *    - the CATEGORICAL over the root search value (optional): 51 float32
+ *      numbers (T5D_VALUE_BINS; bins centred on -1 + 2k/50) - its variance is
+ *      the default uncertainty signal (t5d_search_params.uncertainty_source),
+ *      its mean is never backed up;
+ *    - the ERROR head (optional): 1 float32 >= 0 - the predicted squared gap
+ *      between the value and the short-term value; the other uncertainty signal.
+ *      The signal uncertainty_source selects is REQUIRED of every leaf while E2,
+ *      E3 or E5's term reads it (variance_scaled_cpuct, uncertainty_weighted_backup,
+ *      variance_bonus, or final_rule T5D_FINAL_LCB with lcb_categorical_weight
+ *      > 0): a delivery without it is refused (T5D_ERR_ARGUMENT, the batch
+ *      abandoned). Read by nothing, a missing one is 0 and counted
+ *      (t5d_search_summary.uncertainty_missing);
+ *    - MOVES-LEFT (optional; register D4): 1 float32 >= 0, in the network's
+ *      unit - recorded per node (t5d_root_child.network_moves_left), never
+ *      backed up.
+ *    The WDL and the categorical come as PROBABILITIES (T5D_VALUE_PROBABILITIES:
+ *    non-negative, the search normalises them) or as LOGITS (T5D_VALUE_LOGITS:
+ *    the search takes their softmax).
  *
  * t5d_search_layout reports this header's struct layouts, as t5d_layout does
  * t5d/capi.h's, for a binding that mirrors them.
@@ -60,7 +79,7 @@
  * (t5d_search_params.proof_channel).
  *
  * The pointers a leaf hands out are valid until the next t5d_search_gather,
- * t5d_search_deliver, t5d_search_abandon or t5d_search_destroy on the handle:
+ * t5d_search_deliver_evaluations, t5d_search_abandon or t5d_search_destroy on the handle:
  * copy what must outlive that. A search handle is used from one thread at a
  * time. Every probability-like output is a double; counts are unsigned.
  */
@@ -79,6 +98,8 @@ extern "C" {
 typedef struct t5d_search t5d_search;
 
 #define T5D_VALUE_BINS 51
+/* D3: the WDL head's outputs per leaf - win, draw, loss. */
+#define T5D_WDL 3
 
 /* D2 (undecided): the board-move split, or whole turns. */
 #define T5D_SPLIT_BOARD_MOVE 0
@@ -92,9 +113,12 @@ typedef struct t5d_search t5d_search;
 /* The final-selection rule (E5). */
 #define T5D_FINAL_VISITS 0
 #define T5D_FINAL_LCB 1
-/* t5d_search_deliver: what `values` holds. */
+/* t5d_evaluations: what `wdl` and `values` hold. */
 #define T5D_VALUE_PROBABILITIES 0
 #define T5D_VALUE_LOGITS 1
+/* The uncertainty signal search consumes (register I10; ablation 6m). */
+#define T5D_UNCERTAINTY_CATEGORICAL 0 /* the categorical's variance (the default) */
+#define T5D_UNCERTAINTY_ERROR_HEAD 1  /* the error head's output */
 /* The built-in evaluators (t5d_search_run). */
 #define T5D_EVALUATOR_UNIFORM 0
 #define T5D_EVALUATOR_RANDOM 1
@@ -157,7 +181,8 @@ typedef struct t5d_search_params {
   double widening_min;
   double fpu_reduction;
   int32_t root_noise;
-  double dirichlet_alpha;
+  double dirichlet_alpha;       /* per edge - read only when dirichlet_concentration is 0
+                                  (the arm before CHECKPOINT 7); unused by default */
   double dirichlet_epsilon;
   double policy_temperature;
   /* E2 */
@@ -198,6 +223,17 @@ typedef struct t5d_search_params {
   int32_t turn_cap_boards;     /* 0: none */
   uint64_t eval_cache_entries; /* 0: no cache */
   uint64_t eval_cache_bytes;   /* its memory ceiling (estimated) */
+  /* engine ABI round 2 (register D3, I10) */
+  int32_t uncertainty_source;  /* T5D_UNCERTAINTY_*: a node's variance for E2, E3 and E5's
+                                  optional term (6m) */
+  /* engine ABI round 2b (register E1, I19): the root noise's total concentration and its
+     shaping, the root policy temperature - placeholders */
+  double dirichlet_concentration; /* split across the root's open edges (default 0.03 x 361);
+                                     0: dirichlet_alpha per edge */
+  int32_t dirichlet_shaping;      /* KataGo-style shaping: a prototype, 0 (off) */
+  double dirichlet_shaping_share; /* the shaped share of the total (0.5) */
+  double dirichlet_shaping_cap;   /* the shaping's prior cap (0.01) */
+  double root_policy_temperature; /* the root's softmax temperature, before the noise (1: off) */
   t5d_expand_options expand;   /* the leaves' network input (k, features, relations); last */
 } t5d_search_params;
 
@@ -240,7 +276,9 @@ typedef struct t5d_search_summary {
                              state, never to be persisted as a proof (H19, H23) */
   int32_t root_hi;
   uint32_t root_visits;
-  double root_q;
+  double root_q;          /* the root's backed-up mean value, its player's view (0 before a
+                             visit) - a solved root's too, not its proven value: root_lo and
+                             root_hi carry what is proven */
   uint64_t root_children;
   uint64_t epoch;
   uint64_t memory_bytes;  /* the graph's memory, estimated (the evaluation cache apart) */
@@ -248,6 +286,26 @@ typedef struct t5d_search_summary {
   uint64_t cache_bytes;   /* ... and their bytes, as it counts them */
   uint64_t cache_purged;  /* entries behind the root this search purged */
   int32_t last_stop;      /* T5D_STOP_*: why the last run stopped */
+  /* engine ABI round 2 (register D3): the root's backed-up draw probability
+     (root_q's companion) and its own evaluation - the network's raw outputs at
+     the root (I15), its player's view; NaN: not given (or not evaluated) */
+  int32_t root_evaluated;    /* 1: the root has an evaluation */
+  double root_d;             /* backed-up average, as root_q (a solved root's too) */
+  double root_wdl[T5D_WDL];  /* the root's network WDL, normalised */
+  double root_moves_left;
+  double root_error;
+  /* engine ABI round 2c (register I15, I2, D4): the root's identity, its PUCT's effective
+     cPUCT now (cpuct x E2's root scale; for a replica of the root's selection - I2's
+     target-side pruning) and the effort label: the root's visits when its most visited
+     child last changed (§8.6; counted from the re-root for a carried root) */
+  uint64_t root_key;      /* the root's node key: with the moves made in its action and the
+                             epoch, its evaluation's identity */
+  double root_cpuct;
+  uint32_t root_best_since;
+  /* engine ABI round 2 review fixes (register I10, 6m): nodes expanded from an evaluation
+     without the uncertainty signal uncertainty_source selects - only while nothing reads it
+     (with E2, E3 or E5's term on such a delivery is refused) */
+  uint64_t uncertainty_missing;
 } t5d_search_summary;
 
 /* A run's budgets (t5d/mcts.hpp, Limits): T5D_NO_LIMIT for none (seconds: 0). playouts and
@@ -270,9 +328,53 @@ typedef struct t5d_root_child {
                           state, never to be persisted as a proof (H19, H23) */
   int32_t hi;
   double prior;
-  double q;
+  double q;            /* the backed-up value, W - L (D3) */
   size_t move_count;   /* its moves: 1 (board-move), an action's (whole-turn), 0 (submit) */
+  /* engine ABI round 2 (register D3): the search's draw probability, and the
+     child's own evaluation - the network's (I13's and I15's memo) */
+  double d;            /* backed up beside q: the child's search WDL is
+                          ((1 - d + q) / 2, d, (1 - d - q) / 2) */
+  int32_t evaluated;   /* 1: the child node has an evaluation (the network_* fields) */
+  double network_wdl[T5D_WDL];  /* its WDL, normalised, the root player's view */
+  double network_moves_left;    /* NaN: none given (or not evaluated) */
+  double network_error;         /* NaN: none given (or not evaluated) */
+  /* engine ABI round 2c (register I15, I2): the root's side table - what the records and
+     the target-side pruning need */
+  uint64_t child_key;           /* the child node's key; 0: no child node yet */
+  double prior_noise_free;      /* the prior before the root noise (after the temperatures,
+                                   the unknown-move scale, the submit share) */
+  double value_variance;        /* of the values backed up through it (0 before a visit) */
+  double boost;                 /* E10's asset-map boost: 0 (not wired) */
+  double exploration_scale;     /* E3's factor on its exploration term (1: off) */
+  uint32_t forced_visits;       /* forced playouts: 0 (not built - pruning is target-side) */
+  uint32_t steered_visits;      /* visits a steering source decided: 0 (none wired, E10) */
 } t5d_root_child;
+
+/* One batch's evaluations (t5d_search_deliver_evaluations), leaf by leaf in the
+ * batch's order; a NULL array with count 0 is "none given" where the field is
+ * optional. Appended to, never reordered (t5d_search_layout reports it). */
+typedef struct t5d_evaluations {
+  const float* logits;          /* each leaf's move_count logits, concatenated */
+  size_t logit_count;           /* = the leaves' move counts summed */
+  const float* submit_logits;   /* one per leaf (read where its submit is possible; NaN:
+                                   none given), or NULL: the placeholder share everywhere */
+  size_t submit_count;          /* the leaf count, or 0 */
+  const float* wdl;             /* T5D_WDL per leaf (required) */
+  size_t wdl_count;             /* = leaves x 3 */
+  int32_t wdl_kind;             /* T5D_VALUE_PROBABILITIES or _LOGITS */
+  int32_t value_kind;           /* ... for `values` - checked even when `values` is NULL */
+  const float* values;          /* T5D_VALUE_BINS per leaf (the categorical), or NULL */
+  size_t value_count;           /* = leaves x 51, or 0 */
+  const float* errors;          /* one per leaf (>= 0; NaN: none given), or NULL */
+  size_t error_count;           /* the leaf count, or 0 */
+  const float* moves_left;      /* one per leaf (>= 0; NaN: none given), or NULL */
+  size_t moves_left_count;      /* the leaf count, or 0 */
+  /* Reserved for D2's flat form (per-board logits; not built): NULL and 0 -
+     anything else is T5D_ERR_UNSUPPORTED. Its per-leaf layout is fixed when
+     the flat form is built. */
+  const float* board_logits;
+  size_t board_logit_count;
+} t5d_evaluations;
 
 /* The defaults (t5d/mcts.hpp). Cannot fail; NULL is ignored. */
 T5D_API void t5d_search_params_default(t5d_search_params* out);
@@ -322,20 +424,16 @@ T5D_API t5d_status t5d_search_leaf(t5d_search* search, size_t index, t5d_leaf* o
 T5D_API t5d_status t5d_search_leaf_state(const t5d_search* search, size_t index,
                                          t5d_state** out, char** error);
 
-/* The batch's evaluations, leaf by leaf in order: `logits` concatenates each
- * leaf's move_count logits (logit_count = their sum); `submit_logits` holds one
- * submit logit per leaf (submit_count = count; read where the leaf's submit is
- * possible; NaN: none given) or is NULL with submit_count 0 (the search's
- * placeholder everywhere); `values` holds T5D_VALUE_BINS numbers per leaf
- * (value_count = count x 51), probabilities or logits by value_kind. Backs up
- * and releases the virtual loss. On T5D_ERR_ARGUMENT (counts that do not match,
- * a non-finite logit, an infinite submit logit, a value that is no
- * distribution) the batch is abandoned: virtual loss released, nothing backed
- * up. */
-T5D_API t5d_status t5d_search_deliver(t5d_search* search, const float* logits,
-                                      size_t logit_count, const float* submit_logits,
-                                      size_t submit_count, const float* values,
-                                      size_t value_count, int32_t value_kind, char** error);
+/* The batch's evaluations (t5d_evaluations, above): expands the leaves, backs up
+ * W - L and D, releases the virtual loss. On T5D_ERR_ARGUMENT (counts that do
+ * not match, a non-finite logit, an infinite submit logit, a WDL or categorical
+ * that is no distribution, a negative or infinite error or moves-left, an
+ * unknown kind) or T5D_ERR_UNSUPPORTED (per-board logits) the batch is
+ * abandoned: virtual loss released, nothing backed up. (It replaced
+ * t5d_search_deliver, which took the categorical alone and backed up its mean -
+ * the reading D3 corrected at CHECKPOINT 7.) */
+T5D_API t5d_status t5d_search_deliver_evaluations(t5d_search* search, const t5d_evaluations* batch,
+                                                  char** error);
 
 /* Releases the waiting batch's virtual loss without backing anything up. */
 T5D_API t5d_status t5d_search_abandon(t5d_search* search);
@@ -403,10 +501,10 @@ T5D_API t5d_status t5d_search_set_epoch(t5d_search* search, uint64_t epoch, char
 T5D_API t5d_status t5d_search_digest(const t5d_search* search, uint64_t* out);
 
 /* The layouts of this header's structs, as this library was built (t5d_layout's
- * contract, for "t5d_search_params", "t5d_leaf", "t5d_search_summary" and
- * "t5d_root_child"): with `field` NULL, sizeof(`type`); otherwise the offset of
- * `field`. T5D_ERR_ARGUMENT for a NULL `type` or `out`, an unknown type or
- * field. */
+ * contract, for "t5d_search_params", "t5d_leaf", "t5d_search_summary",
+ * "t5d_search_limits", "t5d_root_child" and "t5d_evaluations"): with `field`
+ * NULL, sizeof(`type`); otherwise the offset of `field`. T5D_ERR_ARGUMENT for a
+ * NULL `type` or `out`, an unknown type or field. */
 T5D_API t5d_status t5d_search_layout(const char* type, const char* field, size_t* out);
 
 #ifdef __cplusplus

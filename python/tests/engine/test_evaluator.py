@@ -10,11 +10,16 @@ without the engine (CI's network job); the rest skip when it is not built.
 
 from __future__ import annotations
 
+import dataclasses
+import math
+import types
+
 import numpy as np
 import pytest
 import torch
 
 from t5d.engine.evaluator import (
+    ERROR_HEAD_FIELD,
     CachedNetworkEvaluator,
     CStepDriver,
     Evaluation,
@@ -22,11 +27,13 @@ from t5d.engine.evaluator import (
     Leaf,
     NetworkEvaluator,
     SearchDriver,
+    _split,
     check_evaluation,
     serve,
 )
 from t5d.net import NetConfig, build_model, collate, relayout, synthetic_state
 from t5d.net.cache import CachedEvaluator, reference_output
+from t5d.net.model import NetOutput
 from tests.engine.helpers import RECORDS, requires_engine
 
 
@@ -62,7 +69,7 @@ def small_model():
 def _direct(model, state):
     out = model(collate([state]))
     m = int(state.moves.shape[0])
-    return out.policy_logits[0, :m].numpy(), out.value_logits[0].numpy()
+    return out.policy_logits[0, :m].numpy(), out.value_logits[0].numpy(), out.wdl_logits[0].numpy(), out.moves_left_log[0].item()
 
 
 # --- without the engine (synthetic states) --------------------------------------------------------
@@ -80,32 +87,52 @@ def test_serve_evaluates_every_leaf_in_batches(small_model):
     assert stats.leaves == len(states) and stats.batch_sizes == [3, 3, 1] and stats.rounds == 3
     for i, state in enumerate(states):
         ev = driver.delivered[i]
-        pol, val = _direct(small_model, state)
+        pol, val, wdl, moves_left_log = _direct(small_model, state)
         np.testing.assert_allclose(ev.policy_logits, pol, atol=1e-4)
         np.testing.assert_allclose(ev.value_logits, val, atol=1e-4)
+        np.testing.assert_allclose(ev.wdl_logits, wdl, atol=1e-4)  # D3: the WDL is the search's value
+        assert ev.moves_left == pytest.approx(math.expm1(max(moves_left_log, 0.0)), rel=1e-4, abs=1e-5)
+        assert math.isnan(ev.error)  # no error head in this network yet (the network lane's D3)
         assert ev.policy_logits.dtype == np.float32 and ev.value_probs.shape == (51,)
         assert abs(float(ev.value_probs.sum()) - 1.0) < 1e-5 and -1.0 <= ev.value_mean <= 1.0
+        p = ev.wdl_probs.astype(np.float64)
+        assert ev.value_mean == pytest.approx(p[0] - p[2], abs=1e-6)
 
 
 def test_evaluation_helpers():
-    ev = Evaluation(policy_logits=np.array([0.0, np.log(3.0)], np.float32), value_logits=np.zeros(51, np.float32))
+    ev = Evaluation(np.array([0.0, np.log(3.0)], np.float32), np.log(np.array([0.5, 0.25, 0.25], np.float32)), np.zeros(51, np.float32))
     np.testing.assert_allclose(ev.policy_probs(), [0.25, 0.75], atol=1e-6)
-    assert abs(ev.value_mean) < 1e-9  # a uniform distribution over symmetric bins
-    peaked = Evaluation(policy_logits=np.zeros(0, np.float32), value_logits=np.r_[np.full(50, -1e4), 0.0].astype(np.float32))
-    assert peaked.value_mean == pytest.approx(1.0) and peaked.policy_probs().shape == (0,)
+    assert ev.value_mean == pytest.approx(0.25, abs=1e-6)  # D3: W - L, not the categorical's mean
+    assert abs(ev.categorical_mean) < 1e-9  # a uniform distribution over symmetric bins
+    assert ev.categorical_variance == pytest.approx(float(np.mean(((2.0 * np.arange(51) - 50) / 50) ** 2)), rel=1e-5)
+    peaked = Evaluation(np.zeros(0, np.float32), np.zeros(3, np.float32), np.r_[np.full(50, -1e4), 0.0].astype(np.float32))
+    assert peaked.categorical_mean == pytest.approx(1.0) and peaked.policy_probs().shape == (0,)
+    assert peaked.value_mean == pytest.approx(0.0) and peaked.categorical_variance == pytest.approx(0.0, abs=1e-9)
+    with pytest.raises(ValueError, match="no categorical"):
+        _ = Evaluation(np.zeros(0, np.float32), np.zeros(3, np.float32)).categorical_mean
 
 
 def test_check_evaluation_refuses_what_breaks_the_contract():
     leaf = Leaf(7, synthetic_state(5, 3))
     m = int(leaf.position.moves.shape[0])
-    good = Evaluation(np.zeros(m, np.float32), np.zeros(51, np.float32))
+    w = np.zeros(3, np.float32)
+    good = Evaluation(np.zeros(m, np.float32), w, np.zeros(51, np.float32))
     check_evaluation(leaf, good, 51)
+    check_evaluation(leaf, Evaluation(np.zeros(m, np.float32), w, error=0.5, moves_left=12.0), 51)  # the categorical optional
     with pytest.raises(ValueError, match="policy logits for"):
-        check_evaluation(leaf, Evaluation(np.zeros(m + 1, np.float32), np.zeros(51, np.float32)), 51)
+        check_evaluation(leaf, Evaluation(np.zeros(m + 1, np.float32), w, np.zeros(51, np.float32)), 51)
     with pytest.raises(ValueError, match="not finite"):
-        check_evaluation(leaf, Evaluation(np.full(m, np.nan, np.float32), np.zeros(51, np.float32)), 51)
+        check_evaluation(leaf, Evaluation(np.full(m, np.nan, np.float32), w, np.zeros(51, np.float32)), 51)
     with pytest.raises(ValueError, match="value logits"):
-        check_evaluation(leaf, Evaluation(np.zeros(m, np.float32), np.zeros(50, np.float32)), 51)
+        check_evaluation(leaf, Evaluation(np.zeros(m, np.float32), w, np.zeros(50, np.float32)), 51)
+    with pytest.raises(ValueError, match="WDL logits of shape"):
+        check_evaluation(leaf, Evaluation(np.zeros(m, np.float32), np.zeros(51, np.float32)), 51)
+    with pytest.raises(ValueError, match="WDL logit is not finite"):
+        check_evaluation(leaf, Evaluation(np.zeros(m, np.float32), np.array([0, np.inf, 0], np.float32)), 51)
+    with pytest.raises(ValueError, match="error output"):
+        check_evaluation(leaf, Evaluation(np.zeros(m, np.float32), w, error=-0.1), 51)
+    with pytest.raises(ValueError, match="moves-left output"):
+        check_evaluation(leaf, Evaluation(np.zeros(m, np.float32), w, moves_left=math.inf), 51)
 
 
 def test_serve_refuses_a_broken_evaluator_or_driver(small_model):
@@ -183,14 +210,32 @@ def test_a_non_finite_network_submit_logit_is_refused(bad):
         assert np.isnan(NetworkEvaluator(model)([ok])[0].submit_logit)
 
 
+def test_the_error_head_is_read_by_its_pinned_name(small_model):
+    """D3 / 6m: the evaluator reads the error head's output from ``NetOutput``'s
+    ``ERROR_HEAD_FIELD`` - no other field of ``NetOutput`` may name an error head (one added under
+    another name would go unread, every evaluation's ``error`` NaN, and a 6m arm on the error
+    head refused by the search); with the field present each evaluation carries its row."""
+    assert ERROR_HEAD_FIELD == "value_error"
+    names = [f.name for f in dataclasses.fields(NetOutput)]
+    assert [n for n in names if "error" in n] in ([], [ERROR_HEAD_FIELD])
+    s = synthetic_state(43, 4)
+    (plain,) = NetworkEvaluator(small_model)([s])
+    assert math.isnan(plain.error)
+    out = small_model(collate([s]))
+    fields = {n: getattr(out, n) for n in names}
+    with_error = types.SimpleNamespace(**fields, **{ERROR_HEAD_FIELD: torch.tensor([0.375])})
+    (read,) = _split(with_error, [s])
+    assert read.error == 0.375
+
+
 def test_check_evaluation_refuses_a_wrong_submit_logit():
     s = synthetic_state(41, 3)
     m = int(s.moves.shape[0])
     with pytest.raises(ValueError, match="offers no legal submit"):
-        check_evaluation(Leaf(1, s), Evaluation(np.zeros(m, np.float32), np.zeros(51, np.float32), submit_logit=0.5), 51)
+        check_evaluation(Leaf(1, s), Evaluation(np.zeros(m, np.float32), np.zeros(3, np.float32), submit_logit=0.5), 51)
     with pytest.raises(ValueError, match="infinite"):
-        check_evaluation(Leaf(2, _shift(s, True)), Evaluation(np.zeros(m, np.float32), np.zeros(51, np.float32), submit_logit=np.inf), 51)
-    check_evaluation(Leaf(3, _shift(s, True)), Evaluation(np.zeros(m, np.float32), np.zeros(51, np.float32)), 51)  # NaN: none given
+        check_evaluation(Leaf(2, _shift(s, True)), Evaluation(np.zeros(m, np.float32), np.zeros(3, np.float32), submit_logit=np.inf), 51)
+    check_evaluation(Leaf(3, _shift(s, True)), Evaluation(np.zeros(m, np.float32), np.zeros(3, np.float32)), 51)  # NaN: none given
 
 
 # --- with the engine (real positions) ---------------------------------------------------------------

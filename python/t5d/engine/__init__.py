@@ -19,7 +19,8 @@ the network as the evaluator - end to end, with random weights.
   (``t5d/capi_search.h``, stage E6a) - gather leaves, deliver evaluations, choose, advance,
   share the evaluation cache across fresh searches (C14); the proof channel stays off (H41).
 * ``evaluator.py`` - the evaluator side of the search protocol: positions in, per-move
-  policy logits, the submit logit (D8) and 51-bin value distributions out, batched through
+  policy logits, the submit logit (D8) and D3's value heads (the WDL - the search's value -
+  the 51-bin categorical, moves-left; the error head once the network has one) out, batched through
   ``collate`` and the model (dense or cached); ``CStepDriver``, the protocol over the C step
   API (stage N5).
 * ``netplay.py`` - games through the C step API with the network as the evaluator:

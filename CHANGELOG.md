@@ -10,6 +10,360 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-22 - ABI round 2 review fixes: an MCGS residual fires on a draw lag, a missing uncertainty signal refused where it is read, the side table and the noise's edge set tested
+
+Two reviews of engine ABI round 2 (7c650d3, 7828d0d, 9d919c2) found four medium faults
+and eight low ones; reviewer B's twelve mutants left ten alive. Every medium one is
+fixed, and every low one but part of B-L7 (below).
+
+- **An MCGS residual fires on a draw lag** (A-M1, B-M2; register D3, C11; issue 148).
+  `engine/src/mcts.cpp`'s `needs_residual` compared only the edge's Q with its shared
+  child's, so with Q in line a draw probability that lagged was never corrected - the
+  2a entry's "an MCGS residual corrects D as it corrects Q" was untrue (reviewer A's
+  probe: Q 0 at every leaf, D 0.1 or 0.9 by node key - edges descended with their D 0.40
+  from the child's). Now a lag beyond `residual_epsilon` in Q **or** D fires the
+  residual, which corrects both (one epsilon for the two: a reading, issue 148).
+- **A missing uncertainty signal is refused where it is read** (A-M2; register I10, 6m;
+  issue 149). A node's variance was 0 when its evaluation lacked the signal
+  `uncertainty_source` selects - which E2 reads as its cPUCT scale's floor (exploration
+  halved) and its backup's largest weight; so a 6m arm on the error head, with the Python
+  evaluator's `error` NaN until the network lane names `NetOutput.value_error`, would have
+  run silently as another search. Chosen: **refuse**, not "absence is no prior" (weight 0
+  in the blend, a neutral backup weight) - that too runs an arm other than the one asked
+  for, mixed node by node, and an ablation should fail loudly. While E2's scale or weight,
+  E3, or E5's term under the LCB rule reads the signal, an evaluation without it is
+  refused as a malformed one (`std::invalid_argument`, `T5D_ERR_ARGUMENT`; the batch
+  released) - a shared cache's entry without it too. Read by nothing, it is 0 and
+  counted: `SearchStats::uncertainty_missing`, appended to `t5d_search_summary` (Python's
+  `CSearchSummary` and `SearchInfo` mirror it).
+- **The side table through the C API, tested** (B-M1). Four wrong copies in
+  `capi_search.cpp` (the noise-free prior as the prior, the value variance as d, E3's
+  factor as 1, the root cPUCT as the parameter) passed every test: the C step loop now
+  runs with root noise, a root temperature of 1.3, E2 and E3 on, and compares each child's
+  `prior_noise_free`, `value_variance`, `exploration_scale`, `child_key` and the summary's
+  `root_cpuct`, `root_best_since` with the C++ search field for field, under both splits,
+  tree and graph (and checks they are not vacuous: priors noised, factors above 1,
+  variances not the draw). Python's noise-free-prior test, which held with the two priors
+  equal, now checks the tempered softmax of known logits.
+- **The noise's edge set, tested** (B-M3; register E1). Counting a pruned edge in the
+  split survived every test (no noise test had a pruned edge; the spread's 15% tolerance
+  cannot tell n from n + 1). `RootChild::noise_alpha` (C++ only, not in the C side table:
+  root-only, `Edge` does not grow) records the concentration each root child's variate was
+  drawn with; a test at a mid-action root with an illegal submit (the pseudo-legal seam)
+  checks every child's alpha against `dirichlet_alphas` over the open edges, unshaped and
+  shaped, the open alphas summing to the total.
+- Low findings. A-L1, B-L4: a proven win's root child (q, d) = (1, 0), a proven draw's
+  (0, 1), a solved drawn node's visits backing up D 1, a stuck node's - an Unknown verdict,
+  or every child a dead end under the seam - its own D (the three zeroing mutants that survived now caught).
+  A-L2, B-L6: `t5d_search_deliver_evaluations` checks `wdl_kind` and `value_kind` whether
+  or not a categorical is given. A-L3: `root_q` and `root_d` documented as the backed-up
+  averages, a solved root's too (`root_lo`, `root_hi` carry the proof) - not changed to
+  the exact values, which would change `root_q`'s meaning for its callers. B-L5: E3's
+  factor recomputed per child from its own node and edge. B-L7: the legal-moves
+  equivalence's condition stated (`capi.h`, the README, `Game.expand`'s docstring: a
+  board-move search's leaves with `legal_moves_only`, at its budget; a whole-turn
+  search's are pseudo-legal) and tested in Python at budget (0, 0) where moves stay
+  unknown; `Game.expand`'s default budget stays exact - "the legal moves" for a caller
+  that is not rebuilding a search's input, which passes the search's budget explicitly
+  (the docstring says so). B-L8: the error head's field name is
+  `evaluator.ERROR_HEAD_FIELD`, pinned by a test (no other `NetOutput` field may name an
+  error head; the field read when present); `t5d_search_params.dirichlet_alpha` is
+  commented as unused while `dirichlet_concentration` is above 0 (the default).
+- Search results change only where a fix requires: an MCGS (graph) search under the
+  board-move split whose edges' D lags a shared child's while Q does not now backs up the
+  residual - of 48 configurations (Standard and Two Timelines; tree and graph; both
+  splits; E2/E3 off and on; the uniform, random and material evaluators; root noise; 1500
+  playouts) one digest changed, the graph board-move random-evaluator search on Two
+  Timelines (30 residuals -> 32); every tree search, every whole-turn search and the
+  constant-draw evaluators' graph searches are bit-identical. A search with a reader on
+  and an evaluator lacking the chosen signal now stops with an error instead of running
+  on variance 0.
+- Tests. `test_mcts.cpp`: `mcts_d3_an_mcgs_residual_corrects_a_draw_lag` (stepped one
+  simulation at a time after a 2500-playout warm-up: every descended edge within epsilon
+  of its child's D, every residual exact or as near as the clamp allows - 221 residuals,
+  all by D alone, 476 descents checked), `mcts_6m_a_signal_that_is_read_must_be_given`,
+  `mcts_e1_the_noise_splits_its_concentration_over_the_open_edges_only`,
+  `mcts_d3_proven_stuck_and_dead_end_visits_back_up_their_draw`; E3's recomputation in
+  `mcts_i15_the_root_side_table`. `test_capi_search.cpp`: the step loop's side table; the
+  kinds; the refusal and the count through the C API; the layout. Python: the refusal and
+  the count, the tempered noise-free prior, the rebuilt input's condition, the error
+  head's name. Reviewer B's mutants re-run on the fixed tree, with three more undoing
+  these fixes: all fifteen caught (the review's scratch tree).
+  Checks: engine 581 of 581 (`--werror`); Python, the whole suite, 1086 passed, 1 skipped
+  (`T5D_REQUIRE_ENGINE=1`; 26 min on a shared machine); `tests/engine` 191 passed, 1 skipped; ruff check and format
+  clean; `harness verify` ok; `gate --tier commit`: the oracle layer ok, the engine
+  differential "SMOKE TEST - PASSED" (41 records compared with the last green run, 0
+  declined), the proof channel DISABLED.
+- Corrected in this round's own entries (below, in brackets): 2a's residual claim and its
+  test's, its "a signal not given is 0"; 2b's open-edge split as tested; 2c's "the side
+  table through the C API" and its Python noise-free-prior test.
+- `engine/README.md`: the residual and the 6m paragraphs, the C API's summary, the
+  noise's alphas, the legal-moves condition, the tests, the readings. `docs/BUILD_LOG.md`:
+  issues 148 and 149 corrected, register D3 and I10, proposed edit 122 amended.
+- Spec: §8.3 / register D3, C11 - the residual corrects D with Q, a lag in either firing
+  it (issue 148; the spec's residual text, §8.5's "residual-correction backup", says
+  nothing narrower, so no edit); §13.1 6m, §8.4 / register I10, E2 - a missing signal
+  refused while read (issue 149; proposed edit 122 amended); §12.8 / register I15 - the
+  rebuilt input's condition (issue 155; edit 126 unchanged). No truth source changed.
+
+### 2026-10-22 - Engine ABI round 2c: I15's record fields - the root side table, the root's key, cPUCT and effort label, `t5d_game_expand`'s legal moves; forced playouts not built
+
+- Register I15 (Committed, process; §12.8: "raw root outputs ..., root and best/played
+  children's values, visits with I2's forced and steered flags, prior-to-target divergence,
+  proofs by reference, and conditions") and I2 (Committed; §12.2, §12.5: search-value and
+  policy targets from the pruned visits) - the engine side, the plan critic's missing
+  item 12, in round 2's last commit. `engine/include/t5d/mcts.hpp`, `src/mcts.cpp`: each
+  `RootChild` gains **the root side table** - `child_key` (the child node's key; 0 for no
+  node), `prior_noise_free` (the prior before the root noise: after the temperatures, the
+  unknown-move scale and the submit share; held in a root-only vector filled by the root's
+  own expansion and sorted with its edges, so `Edge` does not grow; renormalised with
+  `prior` when a sibling is pruned; a carried root's is its prior), `value_variance` (of
+  its backed-up values), `exploration_scale` (E3's factor on its exploration term, 1 with
+  E3 off), `boost` and `steered_visits` (E10's asset-map boosts and Hunt's suggestions: 0,
+  none wired until step 2's E10), `forced_visits` (0). `Search::root_cpuct()` (cpuct times
+  E2's scale at the root) and `Search::root_best_since()`, D4's effort label: the root's
+  visits when its most visited child last changed (strictly more visits to take over; a
+  pruned incumbent found again; from the re-root for a carried root) - "visits until the
+  decision stabilises" (§8.6; issue 154).
+- **Forced playouts: not built** (the critic's contradiction 4; issue 153). §12.5 adopts
+  KataGo's forced-playout *pruning* at target construction - the training loop's (M21) - and
+  no document asks the search to force playouts; the record carries what that pruning and
+  a replica of the root's PUCT need (each child's visits, both priors, q, value variance,
+  E3's factor; the root's effective cPUCT). `forced_visits` exists, appended once, and stays
+  0 unless forcing is ever built.
+- `t5d_game_expand`'s **legal-moves option** (issue 155; the training brief's conflict 3):
+  `engine/include/t5d/capi.h`, `src/capi.cpp` - `t5d_expand_options` appends
+  `legal_moves`, `legality_checks`, `legality_nodes`; with `legal_moves` 1 the game's
+  expansion is a search leaf's under the same budget (the legal and unknown moves, in the
+  same order: the classification is deterministic), so a record's network input can be
+  rebuilt. `t5d_search_params.expand` grows with it (the embedded struct stays last); a
+  search refuses `expand.legal_moves` (its `legal_moves_only` and `legality_*` decide its
+  leaves).
+- C API (`capi_search.h`, `capi_search.cpp`): `t5d_root_child` appends the side table's
+  seven fields; `t5d_search_summary` appends `root_key` (the memo's key for the root's raw
+  outputs, which C14's shared cache hides from Python on a hit), `root_cpuct` and
+  `root_best_since`; `t5d_search_layout` and `t5d_layout` report them. Python mirror in
+  the same commit: `capi.py` (`ExpandOptions` 12 -> 32 bytes, `CSearchSummary`,
+  `CRootChild`), `search.py` (`SearchInfo`, `RootChild`), `game.py` (`Game.expand` and
+  `Game.position` take `legal_moves`, `legality_checks`, `legality_nodes`); the docstrings
+  of `game.py` and `convert.py` that said the filter was not in the C API corrected.
+  `mcts.hpp`'s and the README's (f): the policy target is built from the visits by I2's
+  pruning at target construction, not taken raw.
+- Search results do not change: the side table, the summary fields and the effort label
+  are read, never steer (the root's edges are sorted by a stable sort of their indices,
+  which orders them exactly as the stable sort of the edges did).
+- Tests. `test_mcts.cpp`: `mcts_i15_the_root_side_table` (with root noise and a root
+  temperature of 1.25: the noise-free prior is the tempered softmax, `prior - (1 - eps)
+  prior_noise_free` non-negative and summing to eps; the noise-free prior equal to the
+  prior without noise and at a carried root; `child_key` the node's; `value_variance` the
+  edge's; E3's factor within [1, cap] and above 1 somewhere; the steering and forcing
+  counts 0; both priors summing to 1 after verification removes illegal children);
+  `mcts_i15_root_cpuct_and_the_effort_label` (cpuct with E2 off, its scaled value with
+  E2 on; the effort label replayed one synchronous playout at a time over 400 playouts,
+  and from a re-root). `test_capi_search.cpp`:
+  `capi_search_game_expand_gives_a_leafs_legal_moves_i15` (byte for byte at the Standard
+  start and with a king in check, where the pseudo-legal list has one move more; a bad
+  flag refused; `root_key` the root leaf's key; the side table through the C API - [corrected
+  by the review fixes: only with no noise and E2/E3 off, where four wrong copies passed;
+  the C step loop now compares it field for field with noise, a root temperature, E2 and
+  E3 on] - a search refusing `expand.legal_moves`); the layouts. Python (`tests/engine`): the record's
+  input rebuilt by `Game.expand(legal_moves=True)` (both positions), `root_key`,
+  `root_cpuct`, the effort label, the side table, the refusal; the noise-free prior beside
+  the noised one [corrected by the review fixes: that test held with `prior_noise_free`
+  equal to `prior`; it now checks the tempered softmax of known logits]. Checks: engine 577 of 577 (`--werror`); Python, the whole suite, 1083 passed, 1 skipped
+  (`T5D_REQUIRE_ENGINE=1`; 19 min on a shared machine);
+  ruff check and format clean; `harness verify` ok; `gate --tier commit`: the oracle layer ok, the
+  engine differential "SMOKE TEST - PASSED" (41 records compared with the last green run, 0
+  declined), the proof channel DISABLED.
+- `engine/README.md`: "The records' fields", (f), the game C API's `legal_moves`, the
+  readings (issues 153-155), the tests. `docs/BUILD_LOG.md`: register I2, I15 (their
+  engine sides built), D4 (the effort label's source); spec issues 153-155; proposed edits
+  124-126.
+- Spec: §12.8's record list and §12.2/§12.5 (register I15, I2) - forced playouts not built,
+  the pruning target-side, what the record carries for it (edit 124, issue 153); §8.6's and
+  §12.4's effort label (register D4; edit 125, issue 154); §12.8's conditions - the
+  legality budget, with which the input is rebuilt (edit 126, issue 155). No truth source
+  changed (`capi.cpp` and `capi.h` are not among them).
+
+### 2026-10-22 - Engine ABI round 2b: E1 and I19's exploration - the root noise's total concentration split across the open edges, shaping behind a flag, a root policy temperature
+
+- Register E1 (Committed, class R; §8.4): "root Dirichlet with its total concentration
+  split across the legal moves (KataGo; shaping a prototype) and a root policy temperature
+  (I19); constants are named placeholders"; I19 (Committed placeholders; §8.4, §12.8).
+  `engine/include/t5d/mcts.hpp`, `src/mcts.cpp`: `SearchParams::dirichlet_concentration`,
+  the root noise's **total** (placeholder `kDirichletConcentration`, KataGo's 0.03 x 361 =
+  10.83), split across the root's open edges by `dirichlet_alphas` - the moves the
+  expansion kept (legal or unknown), a legal submit, or under whole turns the listed
+  actions (issue 150) - so the noise's overall strength holds as the move count changes.
+  [Corrected by the review fixes: which edges the split counts was untested - every noise
+  test's root had no pruned edge; now checked alpha by alpha at a root with an illegal
+  submit.]
+  `dirichlet_alpha` keeps its per-child meaning, as the arm at `dirichlet_concentration`
+  0, its draws exactly those before this commit. KataGo-style **shaping**, a prototype
+  behind `dirichlet_shaping` (off): `dirichlet_shaping_share` (0.5, the paraphrase's
+  "half") spread by how far each edge's log-prior, capped at `dirichlet_shaping_cap`
+  (0.01), lies above the mean, the rest uniform - a reading of §8.4's paraphrase, from the
+  spec's words and KataGo's published description, no code (issue 151, H29). The **root
+  policy temperature** `root_policy_temperature` (1, off, by default): the root's own
+  expansion takes its softmax at `policy_temperature x root_policy_temperature`, before
+  the noise; k0 reads the tempered prior; a carried root is never re-tempered (issue
+  152). Validation: the concentration finite and >= 0, the share in [0, 1], the cap in
+  (0, 1], the temperature finite and > 0.
+- I19's schedules are the training generator's (the plan critic's contradiction 9): the
+  move-temperature schedule (Lc0's T60, 0.9 -> 0.45, cut at move 60) and the root
+  temperature's self-play value and decay (KataGo 1.25 -> 1.1) are set per search by M21's
+  generator, in Python; the engine exposes `root_policy_temperature` beside the move
+  temperature `choose_by_visits` already takes, and no more. `selfplay.cpp`'s and
+  `netplay.py`'s step schedules and a root temperature of 1 stand until then.
+- Search results change only where the new semantics require: a search with root noise
+  on now splits the total (self-play's default; `t5d-play`'s, `selfplay.cpp`'s and
+  `netplay.py`'s noisy searches draw other noise); a search without noise is unchanged,
+  and so is one with `dirichlet_concentration` 0.
+- C API (`capi_search.h`, `capi_search.cpp`): `t5d_search_params` gains
+  `dirichlet_concentration`, `dirichlet_shaping`, `dirichlet_shaping_share`,
+  `dirichlet_shaping_cap`, `root_policy_temperature` in front of the embedded `expand`
+  (reported by `t5d_search_layout`; `dirichlet_shaping` a 0/1 flag). Python mirror
+  (`capi.py`'s `CSearchParams`) in the same commit; the layout check passes.
+- Tests. `test_mcts.cpp`: `mcts_e1_dirichlet_alphas_split_the_total_concentration` (the
+  total, an even split, exactly `dirichlet_alpha` per edge in the old arm; shaping: a
+  uniform prior uniform, ranked edges never fewer, never below the uniform half's share,
+  capped priors alike); `mcts_e1_the_noise_keeps_its_strength_as_the_move_count_changes`
+  (600 seeds each: the noise's relative spread `n^2 Var / (n - 1)` 0.0852 at 20 moves and
+  0.0856 at 62, against `1/(C + 1)` = 0.0845); `mcts_i19_the_root_policy_temperature_
+  flattens_the_root_only_before_the_noise` (the root's priors the softmax at 1.25, every
+  other node's at 1; with the noise, `P' - (1 - eps) P_T` non-negative and summing to eps;
+  temperature 1 the default's search bit for bit); the new parameters' validation.
+  `test_capi_search.cpp`: the defaults through the C API, the fields' layout in front of
+  `expand`, a bad flag and a zero temperature refused. Python: the step loop equal to the
+  engine's own run by digest with shaped and tempered noise and with the per-child arm
+  (the uniform and the random evaluator); the defaults and the refusal by name.
+  Checks: engine 574 of 574 (`--werror`); Python `tests/engine` 185 passed, 1 skipped
+  (`T5D_REQUIRE_ENGINE=1`); ruff check and format clean; `harness verify` ok; `gate
+  --tier commit`: the oracle layer ok, the engine differential "SMOKE TEST - PASSED" (41
+  records compared with the last green run, 0 declined), the proof channel DISABLED.
+- `engine/README.md`: the root's exploration under "Selection", the C API's new fields,
+  self-play's schedules (the generator's), the tests, the readings (issues 150-152).
+  `docs/BUILD_LOG.md`: register E1 (built; the mandatory-count widening option, a "may",
+  not built), I19 (the engine side built; the schedules the generator's); spec issues
+  150-152; proposed edit 123.
+- Spec: §8.4's noise and temperature text and its constants list, register E1, I19 -
+  the open edges, per decision, the shaping's form, Lc0's every-node temperature against
+  KataGo's root one (edit 123; issues 150-152); §12.8's exploration and §12.3's match play
+  - the root temperature self-play only, its schedule the generator's (issue 152). No
+  truth source changed.
+
+### 2026-10-22 - Engine ABI round 2a: D3's value outputs in the search - the WDL backed up with its draw, one deliver call for every head, 6m's switch
+
+- Register D3 (Committed, class C; §8.3, corrected at CHECKPOINT 7, reversal 28): "WDL on
+  the game result - the value search uses". The engine side, in engine ABI round 2's first
+  commit (one round, one owner: the engine lane; the Python mirror in the same commit).
+  `engine/include/t5d/mcts.hpp`, `src/mcts.cpp`: an `Evaluation` carries D3's heads from
+  the leaf's acting player - `wdl` (win, draw, loss; required; `kWdl`), `value` (the
+  51-bin categorical over the root search value, now `std::optional`), `error` (the error
+  head's output, >= 0; NaN: none) and `moves_left` (D4; NaN: none). A leaf's value is
+  W − L of the normalised WDL (`wdl_value`); the categorical's mean is no longer backed up
+  (it was the leaf's value before - the reading reversal 28 corrected). The search refuses
+  a WDL or categorical that is no distribution and a negative or infinite error or
+  moves-left, releasing the batch.
+- The draw/moves-left decision (the plan critic's missing item 3; issue 148): the **draw
+  probability D is backed up** beside the value on every node and edge, Lc0's way - a
+  leaf's its WDL's, a mate's 0, a stalemate's and the turn cap's 1 (I11: a draw), a solved
+  node's 1 for a proven draw; an MCGS residual corrects D as it corrects Q [untrue as first
+  built - only a Q lag fired a residual; corrected by the review fixes]; D does not flip
+  across a change of acting player. So a root child's search WDL is `((1 - d + q) / 2, d,
+  (1 - d - q) / 2)` - what I13's best-move value and D3's `q_ratio` blend need. **Moves-left
+  is recorded, not backed up**: what an edge adds to the count needs the unit of a turn
+  (issue 305) and whether the action in progress counts (issue 224, open); each node keeps
+  its network outputs, and `RootChild` exposes the child's own evaluation in the root
+  player's view (`evaluated`, `network_wdl`, `network_moves_left`, `network_error`) beside
+  the backed-up `d`, so I13's targets are buildable: the best child's (q, d) and its
+  network moves-left plus the target builder's offset. `check_invariants` holds the draws
+  consistent through backup and within [0, 1]; the digest hashes them. `Node` +40 bytes,
+  `Edge` +8 (one double).
+- 6m's switch (register I10, §13.1 6m; the critic's missing item 2; issue 149):
+  `SearchParams::uncertainty_source` - `Categorical` (the categorical's variance; the
+  default, by D3's "its variance and overlap feed search") or `ErrorHead` (the error head's
+  output, a squared gap, taken as the variance) - is each node's variance, which all three
+  readers take: E2's cPUCT scale and backup weight, E3's bonus, E5's optional LCB term. A
+  signal not given is 0 [corrected by the review fixes: refused while one of them reads
+  it, 0 and counted otherwise]. E2's and E3's constants stay placeholders (issues 81, 149).
+- The built-in evaluators give a WDL: `uniform` `{1, 1, 1}` (value exactly 0, draw 1/3),
+  `random` a hash-derived draw share in [0, 0.5] with W − L its bump's mean scaled,
+  `material` `wdl_of(v)` (no draw) beside `two_hot(v)`. `Search::run` resets every head of
+  its reused buffers. Search results change only as the new value semantics require: the
+  uniform evaluator's searches are bit-identical in every statistic but the new draw sums
+  (its W − L is exactly the categorical's old mean, 0); `random` and `material` now back up
+  their WDL's W − L instead of the categorical's mean (`material` the same value up to
+  float rounding); every search hashes its draws into the digest; root noise and
+  everything else unchanged.
+- The C API (`engine/include/t5d/capi_search.h`, `src/capi_search.cpp`): **one new deliver
+  call**, `t5d_search_deliver_evaluations(search, const t5d_evaluations*, error)` - a struct
+  of the batch's arrays: the logits, the submit logits (optional), `T5D_WDL` (3) WDL
+  numbers per leaf (required) and the categorical (51 per leaf, optional), each as
+  probabilities or logits (`wdl_kind`, `value_kind`), one error-head output and one
+  moves-left per leaf (optional; NaN at a leaf: none), and `board_logits` reserved for D2's
+  flat form (not built: anything but NULL is `T5D_ERR_UNSUPPORTED`). A struct is appended
+  to like the others, so the flat form's per-board logits need no third entry point. **The
+  old `t5d_search_deliver` is retired**, not shimmed: it took the categorical alone and
+  backed up its mean; a shim would have had to invent a draw probability the documents do
+  not give, and its one caller, the Python binding, moves in this commit.
+  `t5d_search_params` gains `uncertainty_source` (`T5D_UNCERTAINTY_CATEGORICAL` by
+  default, `_ERROR_HEAD`) in front of the embedded `expand`; `t5d_search_summary` appends
+  the root's backed-up `root_d` and its own evaluation (`root_evaluated`, `root_wdl`,
+  `root_moves_left`, `root_error` - the network's raw outputs at the root, I15);
+  `t5d_root_child` appends `d`, `evaluated`, `network_wdl`, `network_moves_left`,
+  `network_error`; `t5d_search_layout` reports every new field and `t5d_evaluations`.
+- Python mirror (`python/t5d/engine`): `capi.py` (`CEvaluations`, the new fields, the
+  constants `T5D_WDL` and `T5D_UNCERTAINTY_*`; the layout check passes); `search.py`
+  (`Search.deliver(logits, wdl, *, values=None, errors=None, moves_left=None,
+  submit_logits=None, wdl_kind, value_kind)`; `SearchInfo` and `RootChild` gain the new
+  fields); `evaluator.py` - `Evaluation(policy_logits, wdl_logits, value_logits=None,
+  submit_logit, error, moves_left)`: `value_mean` is now W − L, the categorical's moments
+  are `categorical_mean` and `categorical_variance`; `_split` delivers the network's WDL
+  logits, its categorical, moves-left in turns (`expm1` of the head's `log1p`, floored at
+  0) and the error head's output where the network has one (`NetOutput.value_error`; NaN
+  until the network lane's D3 heads add it); `check_evaluation` checks every head;
+  `CStepDriver.deliver` sends them all (the categorical for every leaf of a batch or none);
+  `UniformEvaluator` gives WDL logits (0, 0, 0), bit-exact with the engine's `uniform`.
+- Tests. `engine/tests/test_mcts.cpp`: `mcts_d3_the_wdl_is_the_value_and_its_draw_is_
+  backed_up` (W − L backed up whatever the categorical says, D beside it, every node and
+  edge, both splits, tree and graph - residual corrections included [whose draw correction
+  this could not test: every leaf's D was 0.2; tested since the review fixes] - and the root
+  children's `d` and network WDL); `mcts_d3_the_categorical_changes_only_the_uncertainty`
+  (with E2, E3 and E5's term off two categoricals grow the same tree value for value; with
+  E2 on they steer; under the error-head signal the categorical is unread and the error
+  steers); `mcts_d3_6m_chooses_the_nodes_uncertainty_signal` (each signal, each absent:
+  0); `mcts_d3_game_ends_back_up_their_draw_probability` (mate 0, stalemate and cap 1);
+  `mcts_d3_the_evaluation_cache_returns_every_head` (§15.2's purity row: every head bit for
+  bit, a fresh search's root from a shared cache included); `mcts_d3_the_builtin_
+  evaluators_give_a_wdl`; `mcts_run_hands_the_evaluator_reset_buffers`; the malformed-
+  evaluation test head by head; the turn-cap test's D. `test_capi_search.cpp`: the step
+  loop with WDLs, categoricals, errors and moves-left equal to the C++ search by digest
+  under both signals with E2 on, the root children's `q`, `d` and network outputs equal;
+  the WDL as probabilities and logits (win, draw, loss not mirrored; the categorical not
+  the value); every refusal of the batch struct, each releasing the batch; the layouts;
+  `uncertainty_source` validated. Python (`tests/engine`): the engine's `random` evaluator
+  rewritten with its WDL still equal to the engine's run by digest (both arms, tree and
+  graph, noise, synchronous, past the shift); `test_d3_the_wdl_is_the_search_value_and_
+  its_draw_is_backed_up` through the step API (the root's and the children's network
+  outputs included); `test_d3_6m_the_uncertainty_source_is_a_parameter`; the
+  acting-player tests with the WDL (the categorical set the other way round); the
+  evaluator's heads against the network's own outputs, the helpers, `check_evaluation`.
+  Checks: engine 571 of 571 (`py engine/build.py --werror --test`); Python `tests/engine`
+  177 passed, 1 skipped (`T5D_REQUIRE_ENGINE=1`; the skip is `T5D_RECORDS`'); ruff check and
+  format clean; `harness verify` ok; `gate --tier commit`: the oracle layer ok, the engine differential "SMOKE TEST - PASSED" (41
+  records compared with the last green run, 0 declined), the proof channel DISABLED.
+- `engine/README.md`: "Nodes and values", E2's and E5's signal, "The evaluator", the C
+  API (the new call, the retirement, the new fields), the tests, the readings (issues 148,
+  149). `docs/BUILD_LOG.md`: register D3 (engine side built), C14 (the cache's entries:
+  `Evaluation` 232 -> 256 bytes), E2/E3, E5, I10 (6m's switch built), I13 (the engine side
+  built); spec issues 148-149; proposed edits 121-122.
+- Spec: §8.3 and register D3, I13 - the search backs up W − L and D, records moves-left
+  (edit 121, issue 148); §13.1 6m, §8.4's E2/E3 text and constants, register I10, E2 - the
+  switch, its readers and default (edit 122, issue 149); §15.2's purity row (C19-C21) - an
+  evaluation's every head, as built; C14's cache entry size (an engineering figure, no
+  edit). No truth source changed (`T5D_TRUTH_SOURCES`).
+
 ### 2026-10-23 - Build log: issues 225, 226 and 229 wait on the user
 
 - `docs/BUILD_LOG.md`, "Waiting on the user": spec issue 225 (F6/M20: the acting

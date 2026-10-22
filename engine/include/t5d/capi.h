@@ -232,6 +232,18 @@ typedef struct t5d_expand_options {
   int32_t square_features; /* T5D_FEATURES_* (default ALL) */
   uint32_t relations;      /* T5D_RELATIONS_* bits: the typed relations - provisional, B11
                               (default 0: none) */
+  /* appended in engine ABI round 2 (register I15): the legal-moves filter of the search's
+     leaves, for t5d_game_expand - so that a record's network input (its candidate moves)
+     can be rebuilt exactly. A search refuses it in t5d_search_params.expand (its own
+     legal_moves_only and legality_checks/_nodes decide its leaves). */
+  int32_t legal_moves;      /* 1: the moves after which the action can still be finished
+                               legally (C4, R1), classified by E5a's tiers under the budget
+                               below - a move proved illegal dropped, an unknown one kept;
+                               0 (default): the pseudo-legal moves */
+  uint64_t legality_checks; /* the classification's budget, as t5d_search_params':
+                               checks ... */
+  uint64_t legality_nodes;  /* ... and search nodes (T5D_NO_LIMIT both: exact; read only
+                               with legal_moves) */
 } t5d_expand_options;
 
 typedef struct t5d_game_summary {
@@ -412,7 +424,14 @@ T5D_API t5d_status t5d_game_set_legality(t5d_game* game, int32_t legality, char*
 
 /* Expands the current state into the handle's buffers and describes them in
  * *out, with the handle's count of moves made in the action (A6). `options`
- * may be NULL: k = 8, every board's features, no relations. */
+ * may be NULL: k = 8, every board's features, no relations, the pseudo-legal
+ * moves. With options->legal_moves, the moves are a search leaf's under the
+ * same budget (t5d_search_params.legality_checks and _nodes): the same moves in
+ * the same order, the classification being deterministic - a leaf of a
+ * board-move search with legal_moves_only (the defaults; T5D_NO_LIMIT both here
+ * is exact, the search's default budget is not). A whole-turn search's leaves,
+ * and those of the pseudo-legal test seam, carry the pseudo-legal moves
+ * (legal_moves 0). */
 T5D_API t5d_status t5d_game_expand(t5d_game* game, const t5d_expand_options* options,
                                    t5d_expansion* out, char** error);
 
