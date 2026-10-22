@@ -10,6 +10,33 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-23 - M21 (3/4): section 12.8's mechanics - I12's sampler with 6u's arms, I16's window, I17's SWA; PCR, I20, I18 and I19 in the generator
+
+- **`train/selfplay.py`**: playout cap randomisation (I5, `PCRConfig`: each decision full with
+  probability 0.25, re-derivable from the seed; cheap searches at a smaller cap without noise; the
+  difficulty mixture held below 1 and not built above 0 - issue 236); KL-adaptive full searches (I20,
+  `KLAdaptiveConfig`, a prototype, off: chunks until the root's visit distribution stops moving,
+  bounded by the full cap, the stop recorded as `kl`); resignation with the false-resign check (I18,
+  `ResignConfig`: off in 10% of games by the seed, would-resign events recorded, `false_resign_report`
+  per board-count range; the threshold None until the value head is calibrated); I19's schedules
+  (`TemperatureSchedule`: the move temperature 0.9 -> 0.45 over 60 turns, 0 from turn 60; the root
+  policy temperature 1.25 -> 1.1). The full cap's default is now 800 (a placeholder). A resignation
+  ends the game `resign`, the other side winning, with the record's last decision playing nothing.
+- **`train/sampler.py`** (new): I12's surprise weighting - half uniform, half in proportion to KL from
+  the raw prior to the pruned target, a small value-surprise share - per game, written as frequency
+  copies at full weight; 6u's arms: uniform, I6's raw variance and persistent bucket (`BucketTracker`).
+- **`train/window.py`** (new): I16's sublinear replay window, KataGo's shape and constants as
+  placeholders. **`train/swa.py`** (new): I17's capped running weight average and the published network.
+- **Tests** (`python/tests/train/test_mechanics.py`; `test_records.py` and `test_targets.py` updated for
+  PCR): the surprise weights by hand (mean 1, uniform on equal surprise, in proportion to the KL, value
+  surprise, cheap rows), steering kept out of the surprise by the pruned target, the copies seeded and
+  unbiased, 6u's arms; the window's growth (identity below c, monotone, sublinear, KataGo's 22M) and
+  recency; SWA's capped mean and publication; the temperature schedules; PCR's seeded fraction and a
+  game mixing full and cheap searches; I20 stopping on a quiet root; a resignation (record, result,
+  5dpgn replayed by the engine) and the check's events and per-range rates.
+- Spec: §12.3, §12.5, §12.8, §13.1 6l, 6u, 6z; register I3, I5, I6, I12, I16, I17, I18, I19, I20, M21.
+  Issue 236; proposed edits 179-181. BUILD_LOG's rows for these and M21 updated.
+
 ### 2026-10-23 - M21 (2/4): the targets from I15's records - I2's pruning, D3's and D4's targets, I13, I14's refusal; section 15.2's round trip
 
 - **`python/t5d/train/targets.py`** (new): every head's targets from a record alone, in float64,
