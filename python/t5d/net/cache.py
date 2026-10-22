@@ -26,7 +26,8 @@ for the policy's destinations and the per-board heads).
 epoch's key and a dependency digest - a hash of the board itself (``board_ident``:
 coordinates, contents with the has-moved markers, size; and under
 ``frozen_features="current"`` its state-dependent flags; register D8's acting player sits on
-the live global registers alone - M20 - so no frozen entry depends on it) and of the digests of the boards
+the live global registers - M20 - or, with none, on the live boards' tokens - spec issue 225 -
+so no frozen entry depends on it) and of the digests of the boards
 it reads (so two boards that differ only in their branch origin get two entries). Two nodes
 whose board has the same digest share the entry; a node computes only boards with novel
 digests. The digest of a board covers its whole causal past, so the store is section
@@ -290,11 +291,12 @@ def board_ident(state: PositionState, board: int, frozen_features: str = "intrin
     """A frozen board's identity: what its own input is - size, register count, coordinates,
     side to move, contents, and under ``frozen_features="current"`` its Delta-t-to-present
     and active flag (state-dependent inputs of that reading). ``acting`` adds the acting
-    player, for a board input that depends on it: no input of this network does - M20 put D8's
-    acting player on the global registers alone (the ``"all_tokens"`` arm that put it on a
-    board's tokens is gone) - so the cached path never asks; it is kept for A7's perspective
-    canonicalisation, under which every frozen board's input depends on the acting colour and
-    its K/V are keyed by perspective (spec issue 303)."""
+    player, for a board input that depends on it: no frozen board's input of this network does
+    - M20 put D8's acting player on the global registers (the ``"all_tokens"`` arm that put it
+    on every board's tokens is gone), and with no global registers it goes on the live boards'
+    tokens alone (spec issue 225) - so the cached path never asks; it is kept for A7's
+    perspective canonicalisation, under which every frozen board's input depends on the acting
+    colour and its K/V are keyed by perspective (spec issue 303)."""
     h = hashlib.blake2b(digest_size=16)
     head = (int(state.width), int(state.height), int(state.regs_per_board), int(state.timeline[board]), int(state.half_turn[board]))
     h.update(struct.pack("<5q", *head))

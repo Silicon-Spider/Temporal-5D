@@ -48,9 +48,10 @@ The build rules (spec section 15.1) decide what else appears here:
   score-time key biases (``status_key_bias``, on), its bins, layer sharing and initialisation
   placeholders.
 * **Stage N5** adds register D8 (committed): the global acting-player input, on the global
-  registers (M20: "acting player -> global registers"), and the submit action's policy
-  logit, read from the pooled global registers (M20: "submit logit -> pooled global
-  registers") by a readout whose form is not ruled (``submit_head``, a placeholder).
+  registers (M20: "acting player -> global registers"; with none, on the board tokens - a
+  placeholder, spec issue 225), and the submit action's policy logit, read from the pooled
+  global registers (M20: "submit logit -> pooled global registers") by a readout whose form
+  is not ruled (``submit_head``, a placeholder).
 * **M20's placeholder dispositions** (committed, CHECKPOINT 6; register M20) are the
   defaults, and the arms they dispose of - no named ablation needing them - are gone: the
   registers' positions (B8: per-board registers rotated on timeline and time only, global
@@ -72,8 +73,14 @@ The build rules (spec section 15.1) decide what else appears here:
   ``heads.ValueHead`` - no switch); ablation 6y's arm, squared ReLU, is
   ``ffn_activation="squared_relu"``, in the trunk only.
 * **Where the spec is silent, ambiguous or contradictory on a committed-class point**
-  the choice is a parameter and the default is marked as a placeholder, not a decision:
-  D8's submit readout form (``submit_head``; spec issue 109 - not on M20's list), B15's far
+  the choice is a parameter and the default is marked as a placeholder, not a decision -
+  or, where no second arm exists to switch to, a placeholder fixed in code and marked so:
+  where D8's acting player enters a network with no global registers (an ablation-3 arm: the
+  board tokens, the live boards' under the block-causal scope) and what the value-type heads
+  and the submit logit pool there (the squares; spec issue 225, ``global_regs``), and the
+  activations outside F6's words - the Delta-t embedding's MLP (GELU, ``embed.py``) and B12's
+  smolgen (SiLU, ``smolgen.py``), input-side and committed-class like the rest of the input
+  encoding (spec issue 221); D8's submit readout form (``submit_head``; spec issue 109 - not on M20's list), B15's far
   bins, line clamp, register entries and initialisation (``disp_far_edges``,
   ``disp_line_max``, ``disp_register_pairs``, ``disp_init_std``), B16's bins, layer sharing
   and initialisation (``status_dt_exact``, ``status_dt_max``, ``status_bias_per_layer``,
@@ -97,8 +104,9 @@ The build rules (spec section 15.1) decide what else appears here:
   threat relations never become tokens, section 14.4).
 
 Implementation choices where the spec is silent and the point is not committed-class
-(initialisation scale, RoPE frequencies, head internals, the Delta-t embedding's MLP) are
-documented beside their fields and in the modules that use them.
+(initialisation scale, RoPE frequencies, head internals, the Delta-t embedding's MLP width and
+input features - its activation is spec issue 221's, above) are documented beside their
+fields and in the modules that use them.
 """
 
 from __future__ import annotations
@@ -108,7 +116,7 @@ from dataclasses import dataclass
 
 #: Named capacity presets (section 9.2's ladder). "F1" is the committed v1 network;
 #: "L24-ff12" is F2's larger arm (provisional; section 9.2's ~44M with heads is the count
-#: without B15's table - 46,891,210 as built with it, spec issue 210).
+#: without B15's table - 46,894,547 as built with it, spec issue 210).
 PRESETS: dict[str, dict] = {
     "F1": {},
     "L24-ff12": {"n_layers": 24, "ffn_ratio": 12},
@@ -194,7 +202,10 @@ class NetConfig:
     #: every pair with one is unrotated on both sides (``attention.py``'s pair rule; "a learned
     #: 'not a square' angle is a (file, rank) in disguise"). Both kinds add the learned
     #: additive "not a square" embedding (content, not position; ``embed.py``). Ablation 3
-    #: varies the counts (registers on/off, 2 vs 4 per board), not the positions.
+    #: varies the counts (registers on/off, 2 vs 4 per board), not the positions. With no
+    #: global registers D8's acting player goes on the board tokens and the value-type heads and
+    #: the submit logit pool the squares - placeholders (spec issue 225: no document says
+    #: whether "off" removes the global registers, or where their inputs then go).
     regs_per_board: int = 2
     global_regs: int = 16
     # --- D3: categorical value head (section 8.3) ---
@@ -294,12 +305,13 @@ class NetConfig:
     #: head's hidden layers (CHECKPOINT 8) ...; squared ReLU as the trunk-only arm" (ablation 6y):
     #: "mish" - ``x tanh(softplus(x))`` (Misra 2019, "Mish: A Self Regularized Non-Monotonic
     #: Activation Function"); "squared_relu" - ``relu(x)^2`` (So et al. 2021, "Primer"), drawn at
-    #: the same initialisation (the arm's is not stated - spec issue 204). Only the trunk's FFN
+    #: the same initialisation (the arm's is not stated - spec issue 204, proposed edit 154). Only the trunk's FFN
     #: follows this switch: the heads' hidden layers are Mish under both (``heads.ValueHead``).
     ffn_activation: str = "mish"
 
     # --- embeddings (A2, A3, B8, section 5.3) ---
-    #: Hidden width of the small MLP that embeds Delta-t-to-present.
+    #: Hidden width of the small MLP that embeds Delta-t-to-present (its GELU: a placeholder
+    #: fixed in code, spec issue 221 - ``embed.py``).
     dt_hidden: int = 32
     #: Delta-t is fed as (dt / dt_scale, sign(dt) log1p|dt|, [dt == 0]).
     dt_scale: float = 16.0
@@ -332,13 +344,19 @@ class NetConfig:
     #: D8: "a global acting-player input" - on the global registers (M20: "acting player ->
     #: global registers"; section 2.3's global turn-state inputs): a learned embedding (white /
     #: black) added to every global register token (``embed.py``), no switch. Global registers
-    #: are live, so the cached path stays exact with no change to a frozen board's K/V.
+    #: are live, so the cached path stays exact with no change to a frozen board's K/V. With
+    #: no global registers (``global_regs = 0``, an ablation-3 arm) it is added to every board
+    #: token instead - under the block-causal scope the live boards' only, so a frozen board's
+    #: K/V still never depend on it. COMMITTED-CLASS SILENCE (D8; section 2.3 puts it "into the
+    #: global registers" and says nothing of a network without them; spec issue 225) - a
+    #: placeholder, fixed in code: dropping the input with the registers is no reading of D8.
     #:
     #: Under the board-move split submitting is "an explicit action with its own policy logit,
     #: read from the pooled global registers as the value head is" (section 8.2; M20: "submit
     #: logit -> pooled global registers", so no register is assigned a role and D7 holds): the
     #: mean of the global registers' final states (with no global registers - an ablation-3
-    #: arm - the mean of the square tokens, as the value head falls back). How the logit is
+    #: arm - the mean of the square tokens, as the value head falls back: a placeholder, spec
+    #: issue 225). How the logit is
     #: read from it is not ruled (M20 leaves it out; spec issue 109). COMMITTED-CLASS SILENCE
     #: (D8) - placeholder default, not a decision. ``submit_head``:
     #:   "linear"  - its own learned linear readout of the pooled state (``heads.SubmitHead``):

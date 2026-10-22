@@ -123,7 +123,12 @@ Q/K/V projections, GELU in the FFN) and before B15, as ``bench.py``'s table was 
 switch" with B6's binned biases on, since removed - and have not been re-measured since;
 the plans' size does not depend on any of them. B15 puts a learned bias on every head, so
 v1's dense heads now run block by block with a per-row bias, as "every switch" did - and,
-under autograd, in the CPU math kernel.
+under autograd, in the CPU math kernel. They are also of the network before M20 made the
+per-board registers position-free on file and rank (B8; until then they sat at a learned
+off-lattice angle and only the global registers were merged): every row's features are now
+widened and the register rows recomputed - by the per-call timings above, at 240 boards about
++35% / +11% per attention call (FP32 / BF16) over that default, whose merge alone cost +15% /
++8% against one plain call.
 """
 
 from __future__ import annotations

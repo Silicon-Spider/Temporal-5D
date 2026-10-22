@@ -10,9 +10,11 @@ section 2.3: "added to every token on the board") and its Delta-t-to-present emb
 (A3). Delta-t is continuous: a small learned MLP (GELU) over the features
 ``(dt / dt_scale, sign(dt) * log1p|dt|, [dt == 0])``, so the binary "present" flag is
 kept as Delta-t's zero (section 2.3) while the distance to the present stays readable
-at any range (implementation choice: the spec says only "embedded per board"). F6's Mish
-is the activation of the trunk FFN and of every head's hidden layers (CHECKPOINT 8); this
-MLP is neither, and F6 does not name it, so it keeps stage N1's GELU (spec issue 221).
+at any range (the spec says only "embedded per board": the features and the width are
+implementation choices). F6's Mish is the activation of the trunk FFN and of every head's
+hidden layers (CHECKPOINT 8); this MLP is neither, and F6 does not name it, so it keeps stage
+N1's GELU - a placeholder fixed in code: the activation is part of the input encoding,
+committed-class and open (spec issue 221).
 
 Register tokens get a register-type embedding (per-board slot 0..R-1, or global index
 0..G-1) plus one learned "not a square" embedding (section 5.3) instead of piece/colour/
@@ -34,6 +36,16 @@ added to the global register tokens, and to no other (M20: "acting player -> glo
 registers"; section 2.3's global turn-state inputs). A board token's embedding is unchanged by
 it: the input reaches the boards through attention to the global registers, which the live
 set reads and frozen boards never do under the block-causal scope.
+
+**With no global registers** (``global_regs = 0``, an ablation-3 arm: "registers on/off")
+there is nothing to carry it, and section 2.3 says nothing of that case; dropping it would
+drop a committed input with the registers - the network could not tell an action whose
+present has shifted from the opponent's turn start on the same boards, section 2.3's own case.
+So it is added to every board token instead - squares and per-board registers - and under
+the block-causal scope (``block_causal``) to the live (head) boards' tokens only, so that a
+frozen board's input never depends on it, as with global registers. A PLACEHOLDER of a
+committed-class silence, fixed in code (spec issue 225): A6's turn-state counts, when they are
+built, meet the same question.
 """
 
 from __future__ import annotations
@@ -62,7 +74,8 @@ class InputEmbedding(nn.Module):
         self.global_register = nn.Embedding(max(cfg.global_regs, 1), d)
         self.not_square = nn.Parameter(torch.empty(d))
         #: Register D8: the acting player (0 white, 1 black), added to the global registers
-        #: (M20). Made without drawing from the RNG, and drawn from D8's own generator
+        #: (M20) - with none, to the board tokens (the module docstring; spec issue 225). Made
+        #: without drawing from the RNG, and drawn from D8's own generator
         #: (``model._init_weights``), never from the global stream.
         self.acting = nn.utils.skip_init(nn.Embedding, 2, d)
 
@@ -70,9 +83,11 @@ class InputEmbedding(nn.Module):
         dt = dt.float()
         return torch.stack([dt / self.cfg.dt_scale, torch.sign(dt) * torch.log1p(dt.abs()), (dt == 0).float()], dim=-1)
 
-    def forward(self, batch: Batch, frozen_intrinsic: bool = False) -> torch.Tensor:
+    def forward(self, batch: Batch, frozen_intrinsic: bool = False, block_causal: bool = False) -> torch.Tensor:
         """Token embeddings ``(B, L, d)``. ``frozen_intrinsic``: superseded boards' tokens
-        get no Delta-t and no active flag (see the module docstring)."""
+        get no Delta-t and no active flag; ``block_causal``: the forward's scope is the
+        block-causal one, so with no global registers only the head boards' tokens get the
+        acting player (see the module docstring)."""
         kind = batch.kind
         is_square = (kind == TOKEN_SQUARE).unsqueeze(-1)
         is_breg = (kind == TOKEN_BOARD_REGISTER).unsqueeze(-1)
@@ -95,8 +110,15 @@ class InputEmbedding(nn.Module):
         greg = self.global_register(slots.clamp(max=self.global_register.num_embeddings - 1)) + self.not_square
 
         zero = torch.zeros((), dtype=square.dtype, device=square.device)
+        acting = self.acting(batch.acting())[:, None, :]
         x = torch.where(is_square, square, zero)
         x = x + torch.where(is_breg, breg, zero)
         x = x + torch.where(on_board, board, zero)
-        # Register D8's acting player: on the global registers alone (M20).
-        return x + torch.where(is_greg, greg + self.acting(batch.acting())[:, None, :], zero)
+        # Register D8's acting player: on the global registers (M20).
+        x = x + torch.where(is_greg, greg + acting, zero)
+        if batch.global_regs == 0:
+            # None to carry it (an ablation-3 arm): on the board tokens - the live boards' only
+            # under the block-causal scope (a placeholder, spec issue 225).
+            carry = on_board & (batch.is_head == 1).unsqueeze(-1) if block_causal else on_board
+            x = x + torch.where(carry, acting, zero)
+        return x

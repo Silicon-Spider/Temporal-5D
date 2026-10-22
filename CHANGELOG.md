@@ -10,6 +10,61 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-17 - N-F6heads-M20 review fixes: the acting player without global registers; the documents brought in line
+
+Three reviewers' findings on the two commits below (none refuted):
+
+- **D8 with no global registers (ablation 3's arms).** M20 put the acting player on the global
+  registers alone, so with `global_regs = 0` it vanished: every output was bit-identical under
+  either acting player and the embedding got no gradient - the arm measured "no registers"
+  mixed with "no D8 input". `embed.py` now adds the acting player's embedding to every board
+  token when there are no global registers - squares and per-board registers - and under the
+  block-causal scope to the live (head) boards' tokens only, so no frozen board's input
+  depends on it and the cached path stays exact (`InputEmbedding.forward`'s `block_causal`,
+  passed by `T5DNet.embed_tokens`). A placeholder fixed in code (spec issue 225): no document
+  says whether ablation 3's "off" removes the global registers, or where their inputs go; the
+  value-type heads and the submit logit pool the squares there, as built since N1. No
+  parameter changes. Tests: `test_d8.py` - the encoding test under three register arms (the
+  carriers by scope), the acting player reaching the policy, every value-type head, moves-left,
+  effort and the submit readout under all six register arms the configuration accepts and both
+  scopes, the cached = full-pass and refresh rows with no global registers; `test_embed.py` -
+  the embedding by hand with no global registers, dense and block-causal;
+  `tests/engine/test_network.py` - the shifted action against the opponent's turn on real
+  positions under three register arms, and the acting player alone (same boards, edges and
+  moves) moving every value-type output and the submit readout. Mutants patched in at test
+  time (no file edited): no fallback fails 17 tests; the fallback on frozen boards too fails
+  the cached = full-pass rows with no global registers.
+- **Docstrings.** The pre-M20 parameter totals (`config.py`'s presets comment: F2 46,894,547;
+  `shaw.py`, `test_displacement.py`: the v1's 22,965,139); `rope.py`'s `rope_roles_source`
+  now stands as v1 (M20, issue 16f), not an open point; D8's draw-order claim in `model.py` and
+  `heads.py` narrowed to what holds - D8's parameters change no other parameter's draw - and
+  M20's promotion offset noted as having moved every global-stream draw; the Δt MLP's and
+  smolgen's activations listed among `config.py`'s committed-class placeholders (issue 221),
+  the "not committed-class" sentence narrowed to the MLP's width and features, and `embed.py`
+  pointing at issue 221 instead of calling the activation an implementation choice;
+  `config.py`'s `ffn_activation` cites proposed edit 154 for the squared-ReLU arm's
+  initialisation; `attention.py`'s and `bench.py`'s cost caveats name M20's register
+  positions (about +35% / +11% per attention call over the old default, FP32 / BF16).
+- `docs/MEASUREMENTS.md`: N3's counts and the §15.3 rows built on them carry a conditions note
+  - counted on the network before F5, B15, B16 and M20's register positions; no new figure.
+  The M20 entry's reason for not re-counting is corrected (counts do not depend on load), and
+  its cost figures say "against one plain call".
+- `docs/BUILD_LOG.md`: spec issue 225 and proposed edit 166 (new); notes on issue 108, 204
+  (the squared-ReLU arm's initialisation still open), 218 (the post-M20 count) and 303
+  (`board_ident`'s `acting` keying independent of the frozen-feature reading, unused until
+  A7); register rows A7 (M20 built; A7 its own component), D8, M20 (the `"current"` arm kept
+  with no named ablation - the main loop's call); the Register status preface no longer lists
+  F5 and F6 as missing.
+- Not done: `frozen_features = "current"` stays (removing it is a B16 change the component was
+  told not to redo; recorded for the main loop).
+- Checks: network 1067 passed, 1 skipped (`T5D_REQUIRE_ENGINE=1`; the skip is `T5D_RECORDS`'s,
+  by design) in 23 min 30 s; ruff clean; `verify` ok (its 17 `proof-channel-vacuous` notes are
+  H48's, as before).
+- Spec: §2.3, §13.1 ablation 3 and register D8, A6, D3, M20 - spec issue 225, proposed edit 166;
+  §9.3 and register F6 (issue 221's activations, committed-class; issue 204, edit 154);
+  §15.3's dense and cached cost rows (the N3 counts predate M20; re-count pending, no
+  figure changed); §9.2 and F1 (no parameter change: 22,965,139).
+
 ### 2026-10-17 - Network M20: the placeholder dispositions as the register rules them
 
 - Register M20 (Committed; BUILD_LOG issue 121, CHECKPOINT 6) in the network: each
@@ -42,11 +97,13 @@ the spec describes the change.
     anchored rows in `cache.py`'s live pass and `flex.py`, and `model.coordinates`'s learned
     branch. `rope_recenter` stays (FP32 angle hygiene). The CPU fast path now widens every
     row's Q/K/V (44 wide for the B4 allocation) and recomputes the register rows:
-    indicatively +20% / +55% per attention call at 240 boards (BF16 / FP32; `attention.py`'s
-    earlier timings, not section 15.3 measurements). N3's counted dense FLOPs in
-    `docs/MEASUREMENTS.md` were taken with the old `learned_angle` registers; they are not
-    re-counted here (a loaded machine; step 2's quiet-machine block re-counts them with the
-    wall times).
+    indicatively +20% / +55% per attention call at 240 boards against one plain call - about
+    +11% / +35% over the old default (BF16 / FP32; `attention.py`'s earlier timings, not
+    section 15.3 measurements). N3's counted dense FLOPs in `docs/MEASUREMENTS.md` were
+    taken with the old `learned_angle` registers; they are not re-counted here (the counts
+    do not depend on load, but counting runs the passes themselves - 28 TF at 600 boards -
+    so step 2's quiet-machine block re-counts them with the wall times; corrected in the
+    review fixes, which also note it in `docs/MEASUREMENTS.md`).
   - **Frozen features -> intrinsic, with B16; binned-bias-with-RoPE -> moot (B15);
     supersession scope -> both built (C20).** Already in the code (N-B16, N-B15, N3); checked,
     not redone. `config.py` now calls `supersession_scope`'s `causal_past` the default arm

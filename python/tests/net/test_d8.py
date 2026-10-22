@@ -9,11 +9,14 @@ possible and masked unless it is legal; the policy is one distribution over the 
 submit.
 
 Checked here on synthetic states (no engine): where the input enters the encoding, under each
-scope; that it reaches the outputs; the submit logit's three cases (absent, masked, live), its
-pooled source and both readouts; the joint normalisation; section 15.2's dense-vs-cached
-equivalence with the new input (C2, C17, C19, C20) under both ``frozen_features`` readings and
-a root refresh; the parameters and their draw order. Real engine positions before and after
-the shift: ``tests/engine``.
+scope - on the global registers, or with none (ablation 3's arms without them) on the board
+tokens, the live boards' under the block-causal scope (a placeholder, spec issue 225); that it
+reaches the outputs under every register arm; the submit logit's three cases (absent, masked,
+live), its pooled source and both readouts; the joint normalisation; section 15.2's
+dense-vs-cached equivalence with the new input (C2, C17, C19, C20) under both
+``frozen_features`` readings and a root refresh, with and without global registers; the
+parameters and their draw order. Real engine positions before and after the shift:
+``tests/engine``.
 """
 
 from __future__ import annotations
@@ -28,7 +31,7 @@ import torch
 from t5d.net import NetConfig, build_model, collate, parameter_breakdown, permute_boards, synthetic_state, translate
 from t5d.net.cache import CacheConfig, CachedEvaluator, board_ident, reference_output
 from t5d.net.heads import global_register_pool, square_pool
-from t5d.net.state import TOKEN_GLOBAL_REGISTER, TOKEN_PAD
+from t5d.net.state import TOKEN_BOARD_REGISTER, TOKEN_GLOBAL_REGISTER, TOKEN_PAD, TOKEN_SQUARE
 
 
 def shifted(state, legal: bool | None = True):
@@ -87,35 +90,63 @@ def test_a_batch_carries_the_action():
 # --- where the input enters ----------------------------------------------------------------------
 
 
+#: Every register arm the configuration accepts (ablation 3: registers on/off, 2 vs 4 per
+#: board): (per-board, global).
+REGISTER_ARMS = [(2, 16), (4, 16), (0, 16), (2, 0), (4, 0), (0, 0)]
+REGISTER_IDS = [f"registers-{r}-{g}" for r, g in REGISTER_ARMS]
+
+
+@pytest.mark.parametrize("registers", [(2, 16), (2, 0), (0, 0)], ids=["registers-2-16", "registers-2-0", "registers-0-0"])
 @pytest.mark.parametrize(
     "scope,features",
     [("dense", "intrinsic"), ("block_causal", "intrinsic"), ("block_causal", "current")],
 )
-def test_the_acting_player_changes_the_encoding_exactly_where_it_should(scope, features):
+def test_the_acting_player_changes_the_encoding_exactly_where_it_should(scope, features, registers):
     """Two readings of the same boards that differ only in the acting player: the token
     embeddings differ on the global registers (M20: "acting player -> global registers") and
     nowhere else - no board token, frozen or live, under either scope or frozen-feature
-    reading; padding never."""
-    model = _small(1, frozen_features=features)
-    a, b = synthetic_state(11, 9, n_timelines=3), synthetic_state(12, 4)
+    reading; padding never. With no global registers (an ablation-3 arm) they differ on the
+    board tokens instead - squares and per-board registers - every board's under the dense
+    scope, the head boards' alone under the block-causal one, either frozen-feature reading (a
+    placeholder, spec issue 225: no frozen board's input depends on the acting player)."""
+    r, g = registers
+    model = _small(1, frozen_features=features, regs_per_board=r, global_regs=g)
+    a = synthetic_state(11, 9, n_timelines=3, regs_per_board=r, global_regs=g)
+    b = synthetic_state(12, 4, regs_per_board=r, global_regs=g)
     before = collate([a, b])
     after = collate([shifted(a), b])
     ea, eb = model.embed_tokens(before, scope), model.embed_tokens(after, scope)
     differs = (ea - eb).abs().amax(dim=-1) > 0
     kind = before.kind
     expected = torch.zeros_like(differs)
-    expected[0] = kind[0] == TOKEN_GLOBAL_REGISTER
+    if g:
+        expected[0] = kind[0] == TOKEN_GLOBAL_REGISTER
+    else:
+        on_board = (kind[0] == TOKEN_SQUARE) | (kind[0] == TOKEN_BOARD_REGISTER)
+        expected[0] = on_board if scope == "dense" else on_board & (before.is_head[0] == 1)
+        assert bool(expected[0].any()) and (scope == "dense" or not bool(expected[0][on_board].all()))
     assert torch.equal(differs, expected)
     assert not differs[0][kind[0] == TOKEN_PAD].any() and not differs[1].any()
-    assert int(differs[0].sum()) == a.global_regs
+    if g:
+        assert int(differs[0].sum()) == a.global_regs
 
 
-def test_the_acting_player_reaches_the_outputs():
-    model = _small(2)
-    s = synthetic_state(13, 6)
+@pytest.mark.parametrize("scope", ["dense", "block_causal"])
+@pytest.mark.parametrize("registers", REGISTER_ARMS, ids=REGISTER_IDS)
+def test_the_acting_player_reaches_the_outputs(registers, scope):
+    """The same boards under the other acting player (section 2.3's case: after the present
+    shifts a state can share every board with the opponent's turn start) give other outputs -
+    under every register arm the configuration accepts, those without global registers among
+    them (spec issue 225), under either scope: the policy, the value-type heads, the squares'
+    heads and the submit readout all move."""
+    r, g = registers
+    model = _small(2, regs_per_board=r, global_regs=g, attn_scope=scope)
+    s = synthetic_state(13, 6, n_timelines=2, regs_per_board=r, global_regs=g)
     one, two = model(collate([s])), model(collate([shifted(s, legal=None)]))
-    assert not torch.allclose(one.value_logits, two.value_logits)
-    assert not torch.allclose(one.policy_logits, two.policy_logits)
+    v = one.move_valid
+    for name in ("value_logits", "wdl_logits", "short_value_logits", "moves_left_log", "effort_logits", "submit_raw"):
+        assert not torch.allclose(getattr(one, name), getattr(two, name)), name
+    assert not torch.allclose(one.policy_logits[v], two.policy_logits[v])
 
 
 # --- the submit action -------------------------------------------------------------------------
@@ -242,16 +273,18 @@ def _close(a, b, atol_trunk=2e-5, atol=1e-4):
     assert torch.allclose(a.action_log_probs()[a.action_valid()], b.action_log_probs()[b.action_valid()], atol=atol)
 
 
+@pytest.mark.parametrize("global_regs", [16, 0])
 @pytest.mark.parametrize("features", ["intrinsic", "current"])
 @pytest.mark.parametrize("seed", [0, 1])
-def test_cached_equals_one_full_pass_with_the_action(features, seed):
+def test_cached_equals_one_full_pass_with_the_action(features, seed, global_regs):
     """Section 15.2 row (a) with D8: the same boards under both acting players and all three
     submit cases, evaluated incrementally from one store, each equal to one full block-causal
-    pass. The acting player is on the global registers alone (M20), which are live, so it never
-    reaches a frozen board - under either frozen-feature reading - and the second reading
-    computes no frozen board."""
-    model = build_model(NetConfig(trunk_dtype="fp32", n_layers=2, attn_scope="block_causal", frozen_features=features), seed=seed).eval()
-    root = synthetic_state(300 + seed, 16, n_timelines=4, duplicate_prob=0.3)
+    pass. The acting player is on the global registers (M20) - with none, on the live boards'
+    tokens (spec issue 225) - which are live either way, so it never reaches a frozen board -
+    under either frozen-feature reading - and the second reading computes no frozen board."""
+    cfg = NetConfig(trunk_dtype="fp32", n_layers=2, attn_scope="block_causal", frozen_features=features, global_regs=global_regs)
+    model = build_model(cfg, seed=seed).eval()
+    root = synthetic_state(300 + seed, 16, n_timelines=4, duplicate_prob=0.3, global_regs=global_regs)
     cached = CachedEvaluator(model)
     epoch = cached.root_epoch(root)
     computed = dict(cached.store.computed)
@@ -275,12 +308,14 @@ def test_a_frozen_boards_identity_carries_the_acting_player_only_when_asked():
             assert board_ident(s, int(b), features, acting=True) != board_ident(s, int(b), features)
 
 
-def test_a_refreshed_epoch_with_the_action():
+@pytest.mark.parametrize("global_regs", [16, 0])
+def test_a_refreshed_epoch_with_the_action(global_regs):
     """Under a root refresh (C3) the anchor's dense pass conditions the history on the anchor's
-    acting player; a node whose acting player differs is still one function of (state, epoch):
+    acting player - through the global registers, or with none through every board token (spec
+    issue 225); a node whose acting player differs is still one function of (state, epoch):
     the cached path equals the two-level reference."""
-    model = build_model(NetConfig(trunk_dtype="fp32", n_layers=2, attn_scope="block_causal"), seed=3).eval()
-    root = synthetic_state(310, 14, n_timelines=3)
+    model = build_model(NetConfig(trunk_dtype="fp32", n_layers=2, attn_scope="block_causal", global_regs=global_regs), seed=3).eval()
+    root = synthetic_state(310, 14, n_timelines=3, global_regs=global_regs)
     cached = CachedEvaluator(model, CacheConfig(root_refresh=True))
     epoch = cached.root_epoch(root)
     for variant in (root, shifted(root, legal=True)):

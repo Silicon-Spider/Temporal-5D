@@ -45,10 +45,10 @@ split. The relations head is a parameter (``rope_relations_head``).
 How B5 meets the masks of stage N2 (``NetConfig.rope_roles``): one role table,
 ``rope_head_roles``, serves both B5 (rotation) and B10 (masks), so under the routing
 table every head's rotation and mask come from the same entry. With the routing table
-off, B9 puts the move-graph mask on heads 0..k-1 and ``rope_roles_source`` (an open
-committed-class point) decides the rotation: "table" keeps N1's roles by head index,
-"masks" gives each head the role of the mask it carries (near-NoPE on the move-graph
-heads, the B4 split elsewhere).
+off, B9 puts the move-graph mask on heads 0..k-1 and ``rope_roles_source`` decides the
+rotation - one of B5's details, which stand as v1 (M20; spec issue 16f): "table", the v1's,
+keeps N1's roles by head index; "masks", ablation 2's arm, gives each head the role of the
+mask it carries (near-NoPE on the move-graph heads, the B4 split elsewhere).
 
 **RoPE's positional term factorises per axis** (register B4): no rotation can favour the
 displacements (1, 1) and (2, 2) while disfavouring (1, 2) and (2, 1), so diagonals and knight
