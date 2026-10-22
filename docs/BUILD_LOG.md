@@ -1695,7 +1695,7 @@ width (M22)", "The CHECKPOINT 8 figures"). Found on the way: the ruling's premis
 | G1 | built, tested | BF16 trunk under autocast; FP32 heads and RoPE; the cache stores K/V in the live format (§15.2 row (e)) |
 | G2 | not started | 8-bit inference, FP8 before INT8 (gate 6w): the trunk's matrix multiplications, attention included; heads and RoPE FP32. G2's quantiser serves G8's hook in the net lane; its CPU emulation is step 2's; real kernels need GPU time (M19). `fp8_attention` raises today |
 | G3, G4, G5, G6 | not built (rule) | Deferred / held open / refused |
-| G8 | not started | QAT prepared, not adopted: fake-quantisation hooks behind a flag in the training code, smoke-tested - the net lane, with G2's quantiser; the simulated format is pinned with the inference path. Written from papers: Monroe's `quantize` option (Lc0's training code) is an idea only (AGENTS.md, H29) |
+| G8 | seam only (M21 commit 4, `lane/net`); the hooks not started | QAT prepared, not adopted: fake-quantisation hooks behind a flag in the training code, smoke-tested - the net lane, with G2's quantiser; the simulated format is pinned with the inference path. Written from papers: Monroe's `quantize` option (Lc0's training code) is an idea only (AGENTS.md, H29). The loop's seam: `TrainerConfig.qat` and `train.trainer.apply_qat`, which raises until the quantiser and the pinned format exist (issue 237; proposed edit 182) |
 | G9 | built in part | PyTorch drives the C++ search through the C API (N5, eager, on CPU). FlexAttention runs eagerly through B14's score function (`attn_impl="flex"`, `lane/net`: forward only on CPU). Not built: torch.compile and compiled FlexAttention kernels (GPU time, M19); ONNX/TensorRT export - refused for now (M5). The bounded AMD attempt (AMD's PyTorch for Windows on the RX 9070 XT, figures AMD-labelled): any time, in `build/` only |
 | I1 | not started (rule) | Self-play training: no training runs in the untrained build (the brief); the pilot run (M18) comes after §15.5 |
 | I2 | built, tested (engine round 2c; targets M21 commit 2, `lane/net`) | Targets from the pruned visits - the search-value targets too (CHECKPOINT 7). The engine side (engine ABI round 2c, issue 153): per root child its visits, priors with and without the noise, q, value variance, E3's factor, `boost`, `steered_visits`, `forced_visits`, and the root's effective cPUCT; search-side forced playouts not built. The targets (`python/t5d/train/targets.py`): KataGo's forced-playout pruning at target construction against a replica of the root's PUCT, a one-visit remainder dropped; steered visits excluded (`policy_mode="exclusion"`, the placeholder) or kept at a weight (`"provenance"`) - open, 6e; the replica's prior without the boost; the policy, soft-policy, categorical, short-term and deblundering values and the q_ratio blend's root WDL all from the pruned visits; the steering counts 0 until E10 wires the asset map and Hunt (no self-play data with E10's boosts before this - it now exists). Placeholders: issue 235 |
@@ -1727,7 +1727,7 @@ width (M22)", "The CHECKPOINT 8 figures"). Found on the way: the ruling's premis
 | M18 | not started (rule) | A pilot self-play run before serious self-play re-checks the window and the other compute-weighted decisions - after §15.5, not in the untrained build |
 | M19 | applied | No GPU: counted FLOPs and CPU-labelled wall times (`dev-r`) are the untrained build's write-back; the GPU figures - FA4-class evaluations/s, the leaf-batching gain, FP8, the block-sparse and varlen kernels, the Phase-3 movegen re-check - named as deferred, measured on rented NVIDIA time before the pilot run; the bounded AMD attempt is G9's |
 | M20 | built, tested; the reply prototype parked with the heads (after engine round 2) | The placeholder dispositions (issue 121), each the code's default and its disposed-of arms removed where no named ablation needs them (`lane/net`; A7 is a component of its own). N-M20: the promotion offset in the policy (D1; `policy_promotion` gone); position-free per-board registers and global registers on every pair (B8; `board_register_spatial`, `global_register_pairs` and the learned coordinates gone); aux pooling from squares - moves-left, effort - with D3's value-type heads (WDL and the short value too) pooled from the global registers by mean (`aux_global_pool` gone; issue 223); moves-left in turns (issue 224); the acting player on the global registers (`acting_player_input` and `all_tokens` gone; with no global registers on the board tokens, issue 225; `cache.board_ident`'s `acting` keying kept for A7, issue 303); the submit logit from the pooled registers (D8; `submit_register` gone). Earlier: B6 removed (B15); B16's status biases with intrinsic frozen features (N-B16 - its `frozen_features = "current"` test arm stays, as N-B16 left it: no named ablation needs it, and whether to remove it is the main loop's call - the N-F6heads-M20 review); both supersession readings (C20; docs relabelled). Relabelled, not changed: B5's details (ablation 2), 16a-g (B9's "v1 as built", ablation 6a), the per-square labels (6j) - now v1 values, not placeholders; B7 has no code. Not here: the reply head's reinstatement as a prototype (D4) - the heads' rebuild after engine round 2; until then it is always built, as at N1. Not on M20's list: D8's readout form (`submit_head`, issue 109) |
-| M21 | built in part | The training loop, written and smoke-tested, no training (§15.5 does not require it; the pilot run does). Built (N1+N2; the submit target at N5): losses for today's heads - value, policy with submit, WDL, moves-left, opponent reply, short value, per-board, per-square, effort, each at weight 1.0 (`t5d.train.losses`) - and a smoke test of at most three optimiser steps on synthetic targets (`t5d.train.smoke`). I15's records and the generator (commit 1, `lane/net`; issue 234); the target builder with I2's pruning, D3's and D4's targets, I13 and I14's refused hook, the losses' masks for missing targets, and §15.2's round trip (commit 2; issue 235); PCR (I5) with I20 behind its flag, I18's resignation and check, I19's schedules in the generator, I12's sampler with 6u's and I6's arms, I16's window, I17's SWA (commit 3; issue 236). Missing - the net lane: I2's targets with §12.2's exclusions and provenance, the new heads' losses (D3, D4, D9), PCR (I5) with I20, I12 with 6u's and I6's arms, I13, I14's hook disabled, I16-I19 (§12.8's mechanics), the QAT hook (G8), §15.2's round-trip test |
+| M21 | built, smoke-tested (`lane/net`, commits 1-4); the QAT hook a seam | The training loop, written and smoke-tested, no training (§15.5 does not require it; the pilot run does). Built: I15's records and the generator (commit 1, issue 234); the target builder - I2's pruning with exclusion and provenance, D3's and D4's targets, I13, I14's refused hook, the losses' masks - with §15.2's I15 round trip (commit 2, issue 235); PCR (I5) with I20 behind its flag, I18, I19's schedules, I12's sampler with 6u's and I6's arms, I16's window, I17's SWA (commit 3, issue 236); the loop (`train/trainer.py`, commit 4, issue 237): records -> sampler -> window -> targets -> losses -> at most three optimiser steps -> SWA's published network, smoke-tested on self-play records from a random network and on synthetic records, the losses falling on a fixed synthetic batch. Not built: G8's QAT hook - a named seam (`apply_qat` raises) until the precision component's quantiser and the pinned format exist (edit 182); C3's conditioning-offset training - parked with the cached configuration; the per-square label generator (D4, step 2) - its labels masked |
 | M23 | applied | Every working branch is pushed after each commit and takes main by merge, never rebase. The three lanes and their number blocks are the main loop's plan under this rule ("Current state (2026-10-17)") |
 | M24 | not started (rule) | Ablations on a shared dataset - after the pilot run; what the untrained build owes it is I15's record completeness |
 | M1-M6, M10 | applied | The plan's process rows: the build follows them (this log) |
@@ -1758,7 +1758,8 @@ Still parked:
 - I10's calibration monitoring: it measures nothing on random weights - the pilot
   run (the plan of 2026-10-17);
 - C3's conditioning-offset training hook: with the deferred cached configuration
-  (C2);
+  (C2); M21's loop (2026-10-23) has no hook for it - the dense configuration trains no
+  refresh offsets (issue 237);
 - 6p's other arms (per-square attacked-by, defended-by, pinned and in-check counts
   in the embedding; registers initialised from aggregates, D7): after the pilot run,
   on the shared dataset (M24);
@@ -3508,6 +3509,20 @@ superseded or made moot says so; nothing is deleted.
     raw root W - L against the result) above 0.25 at each of the last 3 checkpoints, its rows boosted
     2x and renormalised. (g) **I16**: KataGo's window shape and constants, copies counted as rows. (h)
     **I17**: every 100 steps, at most 10 snapshots in the running average. Proposed edits 179-181.
+237. **M21's loop, as built** (§15.1's M21 sentence, §10.2, §12.8; register M21, G8, C3, I17).
+    M21 commit 4 (`lane/net`, `python/t5d/train/trainer.py`). (a) **No training runs**: the loop
+    refuses more than `MAX_STEPS` (3) optimiser steps. The smoke test steps on batches from self-play
+    records of a random network as well as on synthetic records - the main loop's instruction for this
+    build; the brief's "a few optimiser steps on synthetic data" read as covering random-weight
+    self-play data (the training brief's ambiguity (1)): the user may rule it back to synthetic batches
+    only. (b) **Placeholders**: AdamW (the smoke test's) with NAdam (Chessformer's, I17's provenance) as
+    the other choice, lr 1e-4, weight decay 0, batch 64; a batch drawn uniformly from the window, each
+    frequency copy a row. (c) **G8's QAT hook is a named seam, not built**: register M21 lists "the QAT
+    hook" among what is smoke-tested, but G8 pins the simulated format "with the inference path, K/V
+    cache included", and the precision component (G2's quantiser) is not built; `TrainerConfig.qat` and
+    `apply_qat` mark where it plugs in and refuse until then - for the user: build the hook now on a
+    provisional format, or keep the seam until G2 (edit 182). (d) **C3's conditioning-offset
+    training** stays parked with the deferred cached configuration: no hook. Proposed edit 182.
 
 <!-- A new list, so that the numbers from 140 render as written. -->
 
@@ -4749,6 +4764,11 @@ struck through, where nothing of it is left to apply); the others stand as writt
     decaying to 0.45, cut off at move 60"; "a stochastic weight average of recent snapshots". Proposed -
     add the as-built forms of issue 236(d)-(h) as placeholders, and name the turn (one player's action)
     as the schedule's unit. Why: each is unstated (issue 236).
+182. **§15.1's M21 sentence and register M21, G8**: now - "the training loop is written and
+    smoke-tested ... the QAT hook". Proposed, as ruled: either "the QAT hook's seam (the hooks follow the
+    precision component's quantiser and the pinned format, G2/G8)", or the hook built now on a
+    provisional format and re-pinned later. Why: G8 pins the simulated format with the inference path,
+    which is not chosen; the loop has the seam only (issue 237(c)).
 
 <!-- A new list, so that the numbers from 110 render as written. -->
 
