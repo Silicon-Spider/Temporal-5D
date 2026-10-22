@@ -27,7 +27,11 @@ built); and the KV memory per state. Each is given four ways:
 dense path through B14's block-sparse attention; the cached path under the block-causal
 scope with the lineage causal past, ``frozen_features="intrinsic"``, C20's first reading
 (the placeholder defaults), the creation reading too for the supersession figure, and an
-FP8-frozen-K/V network for the FP8 storage figures; no window (C5 is not built); random
+FP8-frozen-K/V network for the FP8 storage figures; register A7's per-perspective frozen
+K/V (spec issue 303): the search root's history and a refresh are built from both colours'
+sides, so the store holds two entries per frozen board (``kv_memory``'s ``cache_bytes``; one
+state's, ``cache_bytes_per_perspective``, is half) and a refresh is two dense passes (the
+refresh rows; ``analytic_both_perspectives`` beside the spec's one-pass formula); no window (C5 is not built); random
 weights; PyTorch's default intra-op threads (recorded). Timelines (= live head boards):
 the spec's assumption - 8 at 240 boards, 12 at 600 (section 7.1's "~8 live head boards",
 section 15.6's table) - and the engine corpus's real games, 24 timelines at 240-399 boards
@@ -369,7 +373,7 @@ def job_cached(
         if len(totals) > 1:
             spreads[f"{name}_supersession"] = spread(totals)
     out["peak_gb_cached"] = _peak_bytes() / 2**30
-    # A root refresh (C3): the dense pass with K/V capture and the store's entries, each in a
+    # A root refresh (C3): the dense pass with K/V capture - one per perspective (A7) - and the store's entries, each in a
     # fresh evaluator so that no repeat holds another's epoch.
     refresh_times = []
     for _ in range(repeats):
@@ -609,12 +613,14 @@ def summarise(results: list[dict]) -> dict:
             "kernel_s": r["refresh_kernel_s"] if refresh_ok else None,
             "in_node_evals_full_history": {
                 "analytic": a_dense / a_node,
+                "analytic_both_perspectives": 2 * a_dense / a_node,
                 "wall_cpu_prototype": r["refresh_s"] / r["live_pass_s"] if refresh_ok else None,
                 "kernel": r["refresh_kernel_s"] / r["live_pass_kernel_s"] if refresh_ok else None,
             },
             "overhead": {
                 str(n): {
                     "analytic": a_dense / (n * a_node),
+                    "analytic_both_perspectives": 2 * a_dense / (n * a_node),
                     "wall_cpu_prototype": r["refresh_s"] / (n * r["live_pass_s"]) if refresh_ok else None,
                     "kernel": r["refresh_kernel_s"] / (n * r["live_pass_kernel_s"]) if refresh_ok else None,
                 }
@@ -623,6 +629,7 @@ def summarise(results: list[dict]) -> dict:
         }
         row["kv_memory"] = {
             "cache_bytes": r["kv_bytes"],
+            "cache_bytes_per_perspective": r["kv_bytes"] / 2,
             "cache_bytes_fp8_network": fp8 and fp8["kv_bytes"],
             "outputs_bytes": r["out_bytes"],
             "analytic_all_tokens_bf16": kv_bytes(t, cfg, 2),

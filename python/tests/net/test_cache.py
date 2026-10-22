@@ -41,7 +41,7 @@ import pytest
 import torch
 
 from t5d.net import NetConfig, build_model, collate, synthetic_state
-from t5d.net.cache import BoardKV, CacheConfig, CachedEvaluator, Epoch, KVStore, reference_output
+from t5d.net.cache import BoardKV, CacheConfig, CachedEvaluator, Epoch, KVStore, reference_output, viewed_by
 from t5d.net.tree import Multiverse, SearchTree
 from tests.net.test_status import status_keys
 
@@ -337,7 +337,10 @@ def test_creation_order_reading_is_path_dependent():
 def test_same_state_and_epoch_same_evaluation(root_refresh):
     """(d): a node re-evaluated is bitwise the same; so is the same node in a second store;
     and an MCGS transposition hit in one store computes nothing new and returns an identical
-    evaluation."""
+    evaluation. The other order's intermediate nodes are evaluated first: under register A7 a
+    node whose acting player differs reads its frozen boards from its own side, so its novel
+    boards are computed once more for that perspective (spec issue 303) - the transposition
+    itself then computes nothing."""
     model = _model(4)
     root = _root("standard", 4)
     config = CacheConfig(root_refresh=root_refresh)
@@ -348,10 +351,11 @@ def test_same_state_and_epoch_same_evaluation(root_refresh):
     assert _identical(a, tree.evaluate(node))
     other = SearchTree(CachedEvaluator(model, config), root)
     assert _identical(a, other.evaluate(other.path(first)))
+    for n in [tree.path(second[:i]) for i in range(1, len(second))]:
+        tree.evaluate(n)
     computed = dict(tree.evaluator.store.computed)
     hits = tree.evaluator.store.hits
-    for n in [tree.path(second[:i]) for i in range(1, len(second) + 1)]:
-        out = tree.evaluate(n)
+    out = tree.evaluate(tree.path(second))
     assert tree.evaluator.store.computed == computed, "a transposition recomputes nothing"
     assert tree.evaluator.store.hits > hits
     assert _identical(out, a)
@@ -583,24 +587,36 @@ def test_the_fp8_network_is_a_bounded_approximation_of_match():
 
 def test_prefix_sharing_computes_each_board_once():
     """Section 7.2: siblings share every inherited entry; a board superseded at a node is
-    computed once and shared by its whole subtree; nothing is computed twice."""
+    computed once (per perspective - register A7: the root's history is built from both sides,
+    spec issue 303) and shared by its whole subtree; nothing is computed twice."""
     model = _model(12)
     root = _root("standard", 12)
     tree = SearchTree(CachedEvaluator(model), root)
     store = tree.evaluator.store
     n_root = int((~root.state().is_head).sum())
-    assert store.computed["history"] == n_root
+    assert store.computed["history"] == 2 * n_root  # both perspectives (A7)
     ps = sorted(root.heads())
     child = tree.child(tree.root, ("physical", ps[0]))
     tree.evaluate(child)
     assert store.computed["supersession"] == 1  # the old head of timeline ps[0]
+    nodes = [child]
     for p in ps[1:]:  # grandchildren: each supersedes one more board, reuses the rest
-        tree.evaluate(tree.child(child, ("physical", p)))
-    assert store.computed["supersession"] == len(ps)
+        nodes.append(tree.child(child, ("physical", p)))
+        tree.evaluate(nodes[-1])
+    # Each distinct (board, perspective) entry the nodes read is computed exactly once: a
+    # grandchild whose move gives the other colour the action reads child's superseded board
+    # from that side too (A7).
+    keys = set()
+    for n in nodes:
+        plan = tree.evaluator._plan(n.state, n.epoch)
+        keys |= {plan.key(n.epoch, int(b)) for b in plan.frozen}
+    novel = len(keys - {k for k, e in store.entries.items() if e.source == "history"})
+    assert len(ps) <= novel <= 2 * len(ps) - 1
+    assert store.computed["supersession"] == novel
     sibling = tree.child(tree.root, ("physical", ps[1]))
     tree.evaluate(sibling)  # its supersession was computed already, in child's subtree
-    assert store.computed["supersession"] == len(ps)
-    assert len(store.entries) == n_root + len(ps)
+    assert store.computed["supersession"] == novel
+    assert len(store.entries) == 2 * n_root + novel
 
 
 def test_the_store_is_a_radix_structure():
@@ -627,7 +643,9 @@ def test_the_store_is_a_radix_structure():
 @pytest.mark.parametrize("dtype,fmt,itemsize", [("fp32", "match", 4), ("bf16", "match", 2), ("bf16", "fp8", 1)])
 def test_kv_memory_accounting(dtype, fmt, itemsize):
     """Section 15.3's KV memory: per frozen board, layers x 2 x heads x tokens x d_head
-    values of the storage format (plus, for FP8, one FP32 scale per layer, K-or-V and head)."""
+    values of the storage format (plus, for FP8, one FP32 scale per layer, K-or-V and head) - per
+    perspective: under register A7 the root's history is built from both sides, so the store
+    holds two entries per frozen board (spec issue 303)."""
     model = _model(14, dtype, layers=3, frozen_kv_format=fmt)
     state = synthetic_state(1014, 10, n_timelines=3)
     ev = CachedEvaluator(model)
@@ -636,14 +654,16 @@ def test_kv_memory_accounting(dtype, fmt, itemsize):
     per_board = cfg.n_layers * 2 * cfg.n_heads * state.layout.tokens_per_board * cfg.d_head * itemsize
     scales = cfg.n_layers * 2 * cfg.n_heads * 4 if fmt == "fp8" else 0
     n_frozen = int((~state.is_head).sum())
-    assert ev.store.kv_bytes() == n_frozen * (per_board + scales)
-    assert ev.store.out_bytes() == n_frozen * state.layout.tokens_per_board * cfg.d_model * 4
+    assert ev.store.kv_bytes() == 2 * n_frozen * (per_board + scales)
+    assert ev.store.out_bytes() == 2 * n_frozen * state.layout.tokens_per_board * cfg.d_model * 4
 
 
 def test_current_features_recompute_when_the_present_moves():
     """Under ``frozen_features="current"`` a move that shifts the present changes every frozen
     board's input, and the cache recomputes them all (still equal to the full pass); under
-    "intrinsic" the same move recomputes only the board it supersedes."""
+    "intrinsic" the same move recomputes only the board it supersedes. The move that shifts the
+    present gives the other colour the action here, so the parent's boards are first evaluated
+    from that side (register A7: each perspective its own entries, spec issue 303)."""
     root = _root("standard", 15)
     state = root.state()
     live = state.is_head & state.active
@@ -657,6 +677,7 @@ def test_current_features_recompute_when_the_present_moves():
         tree.evaluate(before_node)
         node = tree.child(before_node, moves[-1])
         assert node.state.h_present > before_node.state.h_present
+        tree.evaluator.evaluate(viewed_by(before_node.state, node.state.acting_player), before_node.epoch)
         before = tree.evaluator.store.computed["supersession"]
         _close(tree.evaluate(node), reference_output(model, node.state))
         counts[features] = tree.evaluator.store.computed["supersession"] - before
@@ -703,7 +724,9 @@ def test_status_biases_keep_frozen_boards_intrinsic():
     keeps its entry (the same key - its digest holds no status - and the same stored K/V), only
     the board the move supersedes is computed, and the cached evaluation equals the full
     block-causal pass, whose live rows carry the same status biases on the same frozen keys.
-    The status of boards both nodes hold did move: the bias moved, not the K/V."""
+    The status of boards both nodes hold did move: the bias moved, not the K/V. (The parent's
+    boards are first evaluated from the node's side: under register A7 each perspective has its
+    own entries - spec issue 303 - and the move may give the other colour the action.)"""
     model = _model(15)
     assert model.status is not None, "B16 is on in the cached configuration by default"
     root = _root("standard", 15)
@@ -721,11 +744,13 @@ def test_status_biases_keep_frozen_boards_intrinsic():
         parent = tree.path(prefix)
         tree.evaluate(parent)
         node = tree.child(parent, move)
+        view = viewed_by(parent.state, node.state.acting_player)
+        tree.evaluator.evaluate(view, parent.epoch)
         store = tree.evaluator.store
         before = store.computed["supersession"]
         _close(tree.evaluate(node), reference_output(model, node.state), what=name)
         assert store.computed["supersession"] - before == 1, name
-        plans = [tree.evaluator._plan(n.state, n.epoch) for n in (parent, node)]
+        plans = [tree.evaluator._plan(view, parent.epoch), tree.evaluator._plan(node.state, node.epoch)]
         index = [
             {(int(n.state.timeline[b]), int(n.state.half_turn[b])): int(b) for b in p.frozen}
             for n, p in zip((parent, node), plans, strict=True)

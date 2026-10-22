@@ -194,8 +194,10 @@ def _shift_pair(variant: str, seed: int):
 def test_the_acting_player_alone_tells_a_shifted_action_from_the_opponents_turn(variant, registers):
     """Register D8 on real positions: an action whose present has shifted and the opponent's
     turn start after its submission hold the same boards; the network's token input differs in
-    the acting player alone - on the global registers, or with none (ablation 3's arms without
-    them) on every board token (a placeholder, spec issue 225) - and the network's outputs
+    the acting player alone - which under register A7 is the frame of every token (owners, side
+    to move, mirrored coordinates), so every token's embedding moves; the acting colour's own
+    embedding alone moves the global registers, or with none (ablation 3's arms without them)
+    every board token (a placeholder, spec issue 225) - and the network's outputs
     differ, also where the acting player is the only difference: the shifted state's own
     boards, edges and moves read as the other player's (the moves and edges, the acting
     player's, would tell the two apart without it)."""
@@ -209,6 +211,9 @@ def test_the_acting_player_alone_tells_a_shifted_action_from_the_opponents_turn(
     model = build_model(NetConfig(trunk_dtype="fp32", n_layers=2, regs_per_board=r, global_regs=g), seed=1).eval()
     ba, bb = collate([a]), collate([b])
     differs = (model.embed_tokens(ba) - model.embed_tokens(bb)).abs().amax(dim=-1)[0] > 0
+    assert bool(differs.all())  # A7: the acting player's view of every token
+    colour_only = replace(ba, acting_player=bb.acting_player)
+    differs = (model.embed_tokens(ba) - model.embed_tokens(colour_only)).abs().amax(dim=-1)[0] > 0
     kind = ba.kind[0]
     carriers = kind == TOKEN_GLOBAL_REGISTER if g else (kind == TOKEN_SQUARE) | (kind == TOKEN_BOARD_REGISTER)
     assert torch.equal(differs, carriers)

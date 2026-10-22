@@ -100,6 +100,27 @@ VARIANTS = (
     "Misc - Timeline Strategos",
 )
 
+#: Every named variant the engine sets up - its whole table (``engine/src/variants.cpp``;
+#: engine README, "The variants"), each once (``Misc - Small`` is ``Small``'s alias).
+ENGINE_VARIANTS = (
+    "Standard",
+    "Standard - Turn Zero",
+    "Standard - Two Timelines",
+    "Standard - Half Reflected",
+    "Standard - Defended Pawn",
+    "Standard - Reversed Royalty",
+    "Very Small - Open",
+    "Very Small",
+    "Small",
+    "Focused - Just Kings",
+    "Focused - Just Pawns",
+    "Focused - Just Brawns",
+    "Misc - Timeline Battleground",
+    "Misc - Timeline Tactician",
+    "Misc - Timeline Strategos",
+    "Misc - Timeline Formations",
+)
+
 
 def decode_board(text: str, width: int, height: int) -> dict:
     """A 5DFEN board string as per-cell arrays (cell = rank * width + file) and its fields."""

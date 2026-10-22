@@ -8,6 +8,9 @@
   B15's displacement bias (the v1 default), which sees only displacements, and B17's
   key-side Shaw term (behind its flag), which dots the unrotated query with its pair's class.
 * A position's outputs do not depend on what else is in its batch.
+
+Each holds for either acting player (register A7 reads the input from the acting player's side:
+the other acting player mirrors the ranks and negates the timelines - ``test_perspective.py``).
 """
 
 from __future__ import annotations
@@ -17,6 +20,7 @@ import pytest
 import torch
 
 from t5d.net import NetConfig, build_model, collate, permute_boards, synthetic_state, translate
+from tests.net.test_d8 import shifted
 
 FLAG_SETS = {
     "v1": dict(),
@@ -52,15 +56,16 @@ def _token_perm(order: np.ndarray, n_boards: int) -> torch.Tensor:
 @pytest.mark.parametrize("flags", list(FLAG_SETS), ids=list(FLAG_SETS))
 def test_timeline_storage_order_does_not_matter(flags):
     model = build_model(NetConfig(trunk_dtype="fp32", **FLAG_SETS[flags]), seed=1).eval()
-    state = synthetic_state(21, 24, n_timelines=6)
-    timelines = np.unique(state.timeline)
-    shuffled = np.random.default_rng(3).permutation(timelines)
-    # Reorder whole timelines (and the boards within each, backwards for good measure).
-    order = np.concatenate([np.flatnonzero(state.timeline == p)[::-1] for p in shuffled])
-    assert not np.array_equal(order, np.arange(state.n_boards))
-    a = model(collate([state]))
-    b = model(collate([permute_boards(state, order)]))
-    _assert_same(a, b, board_perm=torch.from_numpy(order), token_perm=_token_perm(order, state.n_boards))
+    base = synthetic_state(21, 24, n_timelines=6)
+    for state in (base, shifted(base, legal=None)):  # either acting player (A7)
+        timelines = np.unique(state.timeline)
+        shuffled = np.random.default_rng(3).permutation(timelines)
+        # Reorder whole timelines (and the boards within each, backwards for good measure).
+        order = np.concatenate([np.flatnonzero(state.timeline == p)[::-1] for p in shuffled])
+        assert not np.array_equal(order, np.arange(state.n_boards))
+        a = model(collate([state]))
+        b = model(collate([permute_boards(state, order)]))
+        _assert_same(a, b, board_perm=torch.from_numpy(order), token_perm=_token_perm(order, state.n_boards))
 
 
 TRANSLATION_CASES = [
@@ -74,18 +79,19 @@ TRANSLATION_CASES = [
 def test_translation_invariance(flags, recenter):
     cfg = NetConfig(trunk_dtype="fp32", rope_recenter=recenter, **FLAG_SETS[flags])
     model = build_model(cfg, seed=2).eval()
-    state = synthetic_state(22, 20)
-    a = model(collate([state]))
-    for dp, dh in ((7, 30), (-11, 400)):
-        b = model(collate([translate(state, dp=dp, dh=dh)]))
-        if recenter:
-            # Recentring makes the translated input identical, bit for bit.
-            assert torch.equal(a.value_logits, b.value_logits) and torch.equal(a.board_logits, b.board_logits)
-        else:
-            # Raw coordinates: the rotation itself must cancel the shift. FP32 angles of up
-            # to ~400 rad carry ~3e-5 rad of rounding, yet the measured output change is
-            # ~1.5e-6 at +400 half-turns (2.2e-6 at +1000), so the same bound holds.
-            _assert_same(a, b)
+    base = synthetic_state(22, 20)
+    for state in (base, shifted(base, legal=None)):  # either acting player (A7)
+        a = model(collate([state]))
+        for dp, dh in ((7, 30), (-11, 400)):
+            b = model(collate([translate(state, dp=dp, dh=dh)]))
+            if recenter:
+                # Recentring makes the translated input identical, bit for bit.
+                assert torch.equal(a.value_logits, b.value_logits) and torch.equal(a.board_logits, b.board_logits)
+            else:
+                # Raw coordinates: the rotation itself must cancel the shift. FP32 angles of up
+                # to ~400 rad carry ~3e-5 rad of rounding, yet the measured output change is
+                # ~1.5e-6 at +400 half-turns (2.2e-6 at +1000), so the same bound holds.
+                _assert_same(a, b)
 
 
 def test_translation_invariance_default_config(model_default):
