@@ -10,6 +10,25 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-23 - M21 (4/4): the training loop end to end, smoke-tested - records, sampler, window, targets, losses, optimiser steps, SWA
+
+- **`python/t5d/train/trainer.py`** (new): `Trainer` - a game's I15 record in (its inputs rebuilt
+  from the record, its targets built, its rows weighted by I12's sampler and written into I16's window
+  as frequency copies), a batch drawn from the window, collated, every head's loss, one optimiser step,
+  SWA's update (I17); `publish` gives the averaged network self-play receives. At most `MAX_STEPS` (3)
+  optimiser steps - no training runs. AdamW or NAdam, placeholders (issue 237). **G8's QAT hook is a
+  named seam, not built** (`TrainerConfig.qat`, `apply_qat` raises until the precision component's
+  quantiser and the pinned format exist - for the user, edit 182). **C3's conditioning-offset training
+  stays parked** with the cached configuration. `synthetic_record` builds a well-formed record over
+  synthetic inputs.
+- **Tests** (`python/tests/train/test_trainer.py`): two tiny self-play games with a random network ->
+  records written and read back -> three optimiser steps (every loss finite, a fourth refused) -> the
+  published network differs from the raw one and drives self-play, its hash in the record; the same
+  loop on synthetic records (AdamW and NAdam); the total loss falling at each of three steps on a fixed
+  synthetic batch; the step cap and the QAT seam refusing.
+- Spec: §15.1's M21 sentence, §10.2, §12.8; register M21, G8, C3, I17. Issue 237; proposed edit 182.
+  BUILD_LOG's M21 and G8 rows and the C3 park updated.
+
 ### 2026-10-23 - M21 (3/4): section 12.8's mechanics - I12's sampler with 6u's arms, I16's window, I17's SWA; PCR, I20, I18 and I19 in the generator
 
 - **`train/selfplay.py`**: playout cap randomisation (I5, `PCRConfig`: each decision full with

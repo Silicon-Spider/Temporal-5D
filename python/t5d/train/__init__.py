@@ -12,4 +12,6 @@ train nothing - first"). What exists:
   targets, I13's deblundering, I14's hook (refused until the sign-off), the batch's ``Targets``.
 * ``sampler`` - I12's surprise-weighted sampling and 6u's arms (I6's triggers); ``window`` - I16's
   sublinear replay window; ``swa`` - I17's weight average, the network published to self-play.
+* ``trainer`` - the loop: records -> sampler -> window -> targets -> losses -> at most three
+  optimiser steps -> SWA; G8's QAT hook a named seam (``apply_qat``), not built.
 """
