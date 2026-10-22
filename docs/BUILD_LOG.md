@@ -836,6 +836,11 @@ threads reach at least one thread's sum (one retry on a shared machine).
 | 2026-10-04 | E9 | main + E9, merged tree before the commit | dev, 24 logical; nothing else running | 32 | 293 | 311 / 311 / 313 | none | pass x3 |
 | 2026-10-17 | A6 (the prover reports a searching thread's line) | main a8a5920 + lane/engine 3f57416, merged tree before the commit | dev-r, 24 logical; the gate and network lanes running; load 9-11% before, 20-22% after | 32 | 293 | 311 / 311 / 311 | none | pass x3 |
 | 2026-10-17 | the gate lane: the engine configured, H51 (the reader; the 6b tools read as measured) | main e8de15e + lane/gate f5b6330, merged tree before the commit | dev-r, 24 logical; the network and engine lanes running; load 8-10% before, 8-12% after | 32 | 293 | 313 / 312 / 313 | none | pass x3 |
+| 2026-10-17 | the stores' lock (`ShardLock`; before review) | lane/engine e8de15e + the stores' lock, the tree before the commit, inside its full `--werror --test` run | dev-r, 24 logical; other lanes running; load 27% before the build | 32 | 292 | 304 | none | pass |
+| 2026-10-17 | the stores' lock (`ShardLock`; before review) | the same tree, the test alone | dev-r, 24 logical; another lane's Python job on about 12 cores and this branch's long tests on 1; load 100% before, 99% after | 32 | 293 / 292 / 292 | 308 / 312 / 309 | none | pass x3 |
+| 2026-10-22 | the stores' lock (`ShardLock`; completed) | lane/engine e8de15e + the stores' lock, the tree before the commit, inside its full `--werror --test` run | dev-r, 24 logical; other lanes running; load not recorded | 32 | 291 | 313 | none | pass |
+| 2026-10-22 | the stores' lock (`ShardLock`; completed) | the same tree, the test alone | dev-r, 24 logical; another lane's Python job running; load 94% before, 96% after | 32 | 292 / 292 / 293 | 308 / 311 / 309 | none | pass x3 |
+| 2026-10-22 | the stores' lock (`ShardLock`; reviewed, 9c3c8c8) | main f18761f + lane/engine 9c3c8c8, merged tree before the commit | dev-r, 24 logical; the network lane running; load 51-53% before and after | 32 | 293 | 308 / 309 / 309 | none | pass x3 |
 
 ## Environment
 
@@ -1573,7 +1578,7 @@ order the D2 work (issue 142).
 | H48 | not started | Before the proof-channel sign-off: the naive searches' release budgets raised and the golden files re-recorded twice, on a quiet machine, so that no proof-channel check is vacuous (`verify`'s 17 `proof-channel-vacuous` notes) |
 | H15 | built, tested | The scanner's deterministic single-thread mode; the search's synchronous mode and digest (E6a; the digest in the C API) |
 | H16, H25, H29 | not built (rule) | Refused |
-| H17 | built in part | Lazy SMP in the scanner (E5c): same-root threads, a shared TT and a concurrent solved store; in-game decay and rung helpers wait for the search; no help for exhaustive refutations (measured on Guard, now in the register). **A crash in the shared stores on Windows** (found 2026-10-17 at E-A6's review; not fixed - see "Parked, and why"): `scanner_lazy_smp_store_refuses_contradictions` segfaults in about 2% of its runs on the development machine - first seen as a full test run of A6's final tree that ended with exit 1 and no summary line, then 11 of 600 runs of the test alone (MSYS2 ucrt64 g++ 16.2, Release) - in `same_position` under `ConcurrentSolvedStore::put`, in the test's eight-thread phase (gdb). The cause: with this toolchain (its winpthreads), a `std::shared_mutex` that several threads take for the first time at once does not always exclude a writer. A standalone test (8 threads on 64 fresh locks, 2,000 rounds) lost the exclusion in 259 rounds with readers and 108 with writers only, in none where each lock had first been taken once by one thread, and in none with `std::mutex`; taking each shard's lock once in the store's constructor (an experiment, reverted) gave 0 crashes in 600 runs. The prover's `ConcurrentSolvedStore` and `DisproofStore` (Guard, Hunt) are built fresh per call and first used by all their threads at once in the same way. Linux builds (CI) are untested for it |
+| H17 | built in part | Lazy SMP in the scanner (E5c): same-root threads, a shared TT and a concurrent solved store; in-game decay and rung helpers wait for the search; no help for exhaustive refutations (measured on Guard, now in the register). **The shared stores' data race on Windows - fixed 2026-10-22** (`lane/engine`; found at E-A6's review, where `scanner_lazy_smp_store_refuses_contradictions` segfaulted in 11 of 600 runs on the development machine - MSYS2 ucrt64 g++ 16.2, Release; gdb: `same_position` under `ConcurrentSolvedStore::put`). The cause, confirmed in winpthreads' source and by experiment: libstdc++'s `std::shared_mutex` is a `pthread_rwlock_t` with the static initialiser; winpthreads initialises it on its first call and returns `EINVAL` to the threads that lose that race (8 threads on 64 fresh locks: 149,878 and 156,542 of 1,024,000 `pthread_rwlock_wrlock` calls, in two runs; `pthread_mutex_lock` never failed); libstdc++ ignores the error - so a losing thread ran its critical section without the lock, then unlocked a lock it did not hold. Every store the scanner's and the prover's threads share is first taken by all of them at once (a scanner's own; Guard's and Hunt's, built per call; the disproof stores). Fixed by construction: both stores' shards are behind `ShardLock` (`t5d/scanner.hpp`), a `std::mutex` - libstdc++'s `lock()` throws on any error the platform reports, never returning without the lock. A warm-up (each shard's lock taken once at construction; 0 crashes in 600 runs at E-A6's review) was not chosen: it rests on winpthreads' internals, not on the lock's contract, and keeps the slow lock. The audit: no other `std::shared_mutex`, `shared_lock` or `shared_timed_mutex` in `engine/`; the TTs are lockless; MCGS and the evaluation cache have no lock and are single-threaded (H15) - `t5d_search_new_sharing`, `EvalCache` and the Python `Search` now say that searches sharing a cache are used one at a time. Tests (`test_shared_stores.cpp`): `shared_store_lock_excludes_at_first_concurrent_use` and `shared_stores_hold_at_first_concurrent_use` - built with the old lock (`e8de15e` with the new test file, in a scratch copy) each failed in every run - 120 of 120 on 2026-10-17, 50 of 50 on 2026-10-22 (the lock test with 136-1,003 overlaps a run over 2026-10-17 and 2026-10-22, the store test by crashing) - and with `ShardLock` neither failed in 500 (2026-10-17) or 300 (2026-10-22) runs; `scanner_lazy_smp_store_refuses_contradictions` failed with the old stores in 14 of 600 runs on 2026-10-17 (10 crashes, 3 stores holding a position twice, 1 lost distance) and 85 of 600 on 2026-10-22 (58 crashes), and with the new in 0 of 1,000 each day. The cost, indicative (a shared machine; not in MEASUREMENTS): winpthreads' reader-writer lock takes about 1.4 µs a call and a process-wide spinlock, so the mutex is far faster here - store operations about 25× as many at 1 thread and 450-1,000× as many at 5 and 12; at 5 threads Hunt 1.45-1.69×, Guard 2.71-2.90× and the scanner 1.22-1.34× the nodes per second (two days; at 1 thread 0.94-1.07×, noise, and the same nodes and proofs as the old build). `scanner.hpp`, `scanner.cpp`, `prover.hpp` and `prover.cpp` are truth sources: the code signature changes, no verdict logic (M17's row; issue 147). Linux (glibc) not yet run: the engine job (ubuntu-24.04, g++ 13/14) runs the tests on every push, but no GitHub Actions job has started on any branch since 2026-10-17 09:56 UTC, the nightly of 2026-10-22 included ("recent account payments have failed or your spending limit needs to be increased") - re-run the engine workflow once billing is fixed. Issue 146, edit 120; the old lock also leaked Windows handles (about 2.75 per lock used; review of 0e4b6c5) |
 | H18 | built, tested | 5D Zobrist: coordinate-free content hash per board, multiply-rotate with (timeline, half-turn), addition across boards, ruleset ID, player to move, parity, creators, board size; incremental equals from-scratch; duplicated boards never cancel (engine E1, E2) |
 | H19 | built, tested | Proofs export to the solved store at once; the TT holds estimates only; class-relative disproofs live in their own store, never the solved store (E8, E9 - now in the register) |
 | H22 | built, tested | All five items of §11.0 (E1, E2, E4); the register's wording now matches what is built (proposed edit 40, applied upstream) |
@@ -1698,7 +1703,7 @@ order the D2 work (issue 142).
 | M23 | applied | Every working branch is pushed after each commit and takes main by merge, never rebase. The three lanes and their number blocks are the main loop's plan under this rule ("Current state (2026-10-17)") |
 | M24 | not started (rule) | Ablations on a shared dataset - after the pilot run; what the untrained build owes it is I15's record completeness |
 | M1-M6, M10 | applied | The plan's process rows: the build follows them (this log) |
-| M17 | measured | 6b″ on a quiet machine (d96d6d9): Guard 65.1 / 15.8 / 5.2 / 0.0% - adopted in no range; Hunt 69.0 / 63.6 / 35.0 / 0.0% (200+: one truth mate, too few to read) - adopted under 100 boards; every refutation and mate confirmed by E4 |
+| M17 | measured | 6b″ on a quiet machine (d96d6d9): Guard 65.1 / 15.8 / 5.2 / 0.0% - adopted in no range; Hunt 69.0 / 63.6 / 35.0 / 0.0% (200+: one truth mate, too few to read) - adopted under 100 boards; every refutation and mate confirmed by E4. Measured with the stores' old lock (H17's row): the verdicts' soundness stands - every refutation and mate counted was confirmed by E4 alone, and no verdict logic has changed since (the truth's sources have, three times: README, "The truth's sources since M17") - but its 5-thread rates may understate Guard and Hunt (indicatively 2.7-2.9× and 1.45-1.7× the nodes per second with the fixed lock). Whether 6b″ is re-run on a quiet machine is the main loop's call (issue 147) |
 | C24 | built, tested | The refresh ladder's complexity trigger behind a flag (`CacheConfig.complexity_refresh`, off; prototype, gated like rung 1 on 6c's existence test); add-only over rung 1 for every signal; every number a placeholder (spec issues 75-79) |
 | C25 | not built (rule) | Held open |
 | M7 | measured; killed, provisionally (M16, CHECKPOINT 5) | On real games (t0database, 716 games, max 186 boards): on at k = 8 from 50 to 186 boards, off under 50, and the kill clause kills it under the human-game weighting (on-phases 18-38% of compute); confirmed by the user; above 186 provisional (MEASUREMENTS) |
@@ -1733,17 +1738,18 @@ Still parked:
   engine round 2) and round 2's per-leaf moves-left, and the documents give no rule
   for when an outcome is "settled" (issue 300) - resumed behind a flag, off, once
   those are in main and issue 300 is ruled; early adjudication (§12.3) has no
-  specification (issue 300) and is not built;
-- the shared stores' locks on Windows (H17's row): `ConcurrentSolvedStore`
-  (`engine/src/scanner.cpp`) and `DisproofStore` (`engine/src/prover.cpp`) guard their
-  64 shards with `std::shared_mutex`, which this toolchain does not make exclusive on a
-  lock's first concurrent use - a data race in the scanner's and the prover's threads
-  (the scanner, Guard, Hunt) on Windows. Found at E-A6's review (2026-10-17) and not
-  fixed there: both files are among the truth's sources, M17 was measured on this
-  toolchain at five threads, and a change to the scanner runs the Lazy SMP timing test.
-  A candidate fix: take each shard's lock once in the store's constructor (the
-  experiment), or a plain `std::mutex` per shard. For the main loop, with whether M17's
-  figures need re-measuring (its refutations and mates were all confirmed by E4 alone).
+  specification (issue 300) and is not built.
+
+Unparked 2026-10-22 (`lane/engine`): the shared stores' locks on Windows. Each shard
+of `ConcurrentSolvedStore` and `DisproofStore` is now behind a `std::mutex` (`ShardLock`)
+in place of a `std::shared_mutex` that this toolchain did not make exclusive on its first
+concurrent use - correct by construction on every platform, with tests that failed on
+every run of the old lock (H17's row). Left to the main loop: the Lazy SMP timing test
+before the merge, and whether M17 is re-run on a quiet machine with the fixed lock (issue
+147; its verdicts' soundness stands - every refutation and mate was confirmed by E4 alone).
+Not yet confirmed on Linux (glibc): no GitHub Actions job has run since 2026-10-17
+(billing), so the engine workflow is re-run once that is fixed.
+
 Not parked any more, but not built by rule: the NNUE (F4, H6, H7) is held open
 (CHECKPOINT 4); rung 1, rung 3 and rung 5 are retired (M5). Added to §14.4 at
 CHECKPOINTS 6-7, held open: our own next move as a head (Lc0's `policy_next`), the
@@ -3282,6 +3288,28 @@ superseded or made moot says so; nothing is deleted.
     tree, every parent of a node agreeing. Built into `Search::check_invariants` and
     checked from outside the search (`mcts_every_node_counts_the_moves_made_since_its_turn_start`).
     Proposed edit 118.
+146. **§11.3 calls Lazy SMP's races benign and says nothing of the stores its threads share**
+    (§11.3 "Proofs never live only in the TT", "Determinism debt, extended"; register H17,
+    H19). The TT's races are benign because it holds estimates: a torn or lost entry costs
+    an ordering hint or a re-search. The solved store and the disproof store hold facts and
+    are shared by the same threads, and a race there is not benign: as found (H17's row),
+    a racing solved store held one position twice and lost a shorter distance - and a
+    position held twice can hold two kinds of proof, the contradiction the store exists to
+    refuse. The spec states no concurrency contract for them. As built: every call on a
+    shard is serialised by an exclusive lock (`ShardLock`, a `std::mutex`), and the stores
+    are tested fresh, written by 8 threads at once from their first use. Proposed edit 120.
+147. **6b″'s figures were measured with the stores' racing, slow lock** (§11.4's 6b″
+    result, §15.6; register M17, H42, H43). 6b″ ran Guard and Hunt at 5 threads, 50 ms per
+    root, on the development machine, whose toolchain's `std::shared_mutex` both raced
+    (H17's row) and cost 1.4-1.8 µs a call behind a process-wide spinlock. With the fixed
+    lock, indicatively (a shared machine, test positions), Guard runs 2.7-2.9× and Hunt
+    1.45-1.7× as many nodes per second at 5 threads. The verdicts' soundness stands - every refutation
+    and mate counted was confirmed against E4 alone, and no verdict logic has changed - but
+    the rates (Guard 65.1 / 15.8 / 5.2 / 0.0%, Hunt 69.0 / 63.6 / 35.0 / 0.0%) may understate
+    what 50 ms reaches. Guard's bar (95%) is far from every range's rate; Hunt's at 100-199
+    boards (50%; 7 of 20 truth mates found, 10 needed) is nearer. Whether to re-run 6b″ on a
+    quiet machine (about a minute) is the main loop's call; no edit is proposed until a
+    re-run says something.
 
 ## Proposed spec edits
 
@@ -4112,6 +4140,20 @@ struck through, where nothing of it is left to apply); the others stand as writt
     with the count an input (A6) one state at one epoch has two evaluations where its
     counts differ, which the row's literal "same state + epoch" forbids (the engine's
     EQ-06 test asserts exactly that since engine ABI round 1; issue 302).
+120. **§11.3, "Proofs never live only in the TT" and "Determinism debt, extended"
+    (register H17, H19)**: now - the TT "is a lossy cache: entries are evicted and
+    overwritten by benign races", proofs export to the permanent solved store, and "Lazy
+    SMP's character is benign nondeterminism"; nothing on the stores' own concurrency.
+    Proposed - after "the TT never holds the sole copy.": "The stores are shared by the
+    threads too, and they are not the TT: they hold facts, so they are exact under
+    concurrency - every probe and every write whole, no entry lost, doubled or torn; their
+    races are never benign. (As built: 64 shards by key, each behind an exclusive lock; a
+    reader-writer lock that did not exclude on its first concurrent use under one
+    toolchain's threads library doubled and lost entries, 2026-10-17.)" And in
+    "Determinism debt, extended": "Lazy SMP's character is benign nondeterminism in the
+    TT - acceptable in production, banned while debugging; the stores of facts are never
+    racy." Why: issue 146 - the spec's only word on the threads' races is "benign", which
+    holds for the TT alone.
 
 ## Session log
 

@@ -10,6 +10,133 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-22 - Engine: the shared proof stores' locks correct on every platform (a data race under winpthreads' shared_mutex)
+
+- The defect (register H17; found at E-A6's review on 2026-10-17 and parked there).
+  `ConcurrentSolvedStore` (`engine/src/scanner.cpp`) and `DisproofStore`
+  (`engine/src/prover.cpp`) guarded their 64 shards with `std::shared_mutex`, which with
+  this machine's toolchain (MSYS2 ucrt64 g++ 16.2, winpthreads) does not exclude on a lock's
+  first concurrent use. The cause, confirmed by experiment: libstdc++ builds `shared_mutex`
+  on a `pthread_rwlock_t` with the static initialiser; winpthreads initialises it on its
+  first call and returns `EINVAL` to the threads that lose that race (8 threads on 64 fresh
+  locks: 149,878 and 156,542 of 1,024,000 `pthread_rwlock_wrlock` calls, in two runs); and
+  libstdc++'s `shared_mutex` ignores the error (only an assertion build would see it). So
+  the losing thread ran its critical section without the lock, then unlocked a lock it did
+  not hold. Every store the scanner's and the prover's threads share is first taken by all
+  of them at once: a scanner's own, and Guard's and Hunt's, built per call. A race in a
+  proof store is a soundness hazard, not only a crash: under
+  `scanner_lazy_smp_store_refuses_contradictions` the old stores crashed, held one position
+  twice and lost a shorter distance (14 of 600 runs on 2026-10-17, 85 of 600 on 2026-10-22),
+  and a position held twice can hold two kinds of proof.
+- The fix, correct by construction on every platform: `t5d::ShardLock`
+  (`engine/include/t5d/scanner.hpp`), a `std::mutex`, guards every shard of both stores, and
+  every call - probes included - takes it with `std::lock_guard`. libstdc++'s
+  `std::mutex::lock()` throws `std::system_error` on any error the platform reports, so it
+  never returns without the lock: the correctness rests on that contract, not on how a
+  threads library initialises a lock. (In the same experiment `pthread_mutex_lock` never
+  failed; glibc's mutex needs no first-use initialisation.) The review's warm-up (each
+  shard's lock taken once at construction) was not chosen: it would rest on winpthreads'
+  internals, not on the lock's contract, and it keeps the slow lock (below).
+- The audit of `engine/`. No other `std::shared_mutex`, `shared_lock` or
+  `shared_timed_mutex` is left. The scanner's and the prover's TTs are lockless (atomics).
+  The remaining locks are `std::mutex`: the serialisation of a caller's store that is not
+  safe for threads, the prover's certificate, and the tools' output (`t5d-bench`'s pool
+  waits on a `std::barrier`). MCGS and the evaluation cache have no lock and are
+  single-threaded (H15). `t5d_search_new_sharing` (`capi_search.h`), `EvalCache`
+  (`mcts.hpp`) and the Python `Search` docstring (`python/t5d/engine/search.py`) now say
+  that the searches sharing one cache are used one at a time.
+- Tests (`engine/tests/test_shared_stores.cpp`, new; `engine/CMakeLists.txt`):
+  - `shared_store_lock_excludes_at_first_concurrent_use` runs 400 rounds of 64 fresh
+    `ShardLock`s, with 8 threads released at once, each taking every lock in the same order
+    and holding it a few microseconds. No thread may find another inside, and no increment
+    may be lost.
+  - `shared_stores_hold_at_first_concurrent_use` runs 150 rounds of a fresh
+    `ConcurrentSolvedStore` and `DisproofStore`. 8 threads released at once probe and write
+    185 positions spread over 60 of the 64 shards. Every shortest proof, every deepest
+    disproof and exactly one entry per position must be kept.
+  - Built against the old code (a scratch copy of `e8de15e` with this file, `ShardLock`
+    named `std::shared_mutex`), each failed in every run: 50 of 50 on 2026-10-22 (the lock
+    test with 136-876 overlaps a run, and lost increments in 31 runs; the store test by
+    crashing), as in 120 of 120 on 2026-10-17. With `ShardLock` both passed 300 of 300 runs
+    (500 of 500 on 2026-10-17).
+  - `scanner_lazy_smp_store_refuses_contradictions` is kept: with the old stores it failed
+    in 85 of 600 runs (58 crashes; 27 runs with a position held twice or a shorter distance
+    lost), and with the new it passed 1,000 of 1,000 with 0 crashes (as on 2026-10-17).
+- No result changes. No verdict logic, proof, disproof or distance is decided differently.
+  At 1 thread the old and new builds searched the same nodes and found the same proofs (184
+  positions from random play, 20,000 nodes each: Hunt 1,252,177 nodes and 39 mates, Guard
+  2,786,845 and 30 refutations, the scanner 1,510,209 and 49 proofs).
+- The cost, indicative only: the shared development machine, so not a measurement and not in
+  MEASUREMENTS. winpthreads' reader-writer lock costs 1.4-1.8 µs a call uncontended (the
+  mutex 9 ns), and every call takes one process-wide spinlock. Over 509 positions, at
+  find/put mixes of 99/1, 90/10 and 50/50, the stores ran these operations per second, every
+  thread together (2026-10-22, load 56%; the old store a replica, each shard's lock warmed
+  first, so this is the cost alone):
+
+  | Threads | Old (`std::shared_mutex`, shared probes) | `ConcurrentSolvedStore` | `DisproofStore` |
+  |---|---|---|---|
+  | 1 | 0.50-0.54 M | 12.5-13.9 M | 13.0-13.5 M |
+  | 5 | 0.07 M | 39-43 M | 22-31 M |
+  | 12 | 0.05 M | 44-51 M | 31-46 M |
+
+  In the searches, with 20,000-node budgets on 184 positions from random play (the old and
+  new builds alternated, the median of three), at 5 threads Hunt ran 1.45× (2026-10-17) and
+  1.69× (2026-10-22, load 91-96%), Guard 2.71× and 2.90×, and the scanner 1.22× and 1.34× as
+  many nodes per second as before; at 1 thread 0.94-1.07×, noise. On Linux (glibc) the old
+  lock was correct, and the change there gives up readers' sharing of a shard (one of 64)
+  for a plain mutex - not measured here.
+- The truth's sources. `scanner.hpp`, `scanner.cpp`, `prover.hpp` and `prover.cpp` are in
+  `T5D_TRUTH_SOURCES`, so the truth's code signature changes again. It already differed from
+  M17's: `9be6f04` typed the prover's hash constants, and `e554da0` changed the prover's
+  reported line. No verdict logic changes. M17's verdicts stand on what they were read from:
+  every 6b″ refutation and mate was confirmed by E4 alone. M17's 5-thread rates, though, were
+  measured with the old lock's race and cost, so they may understate what 50 ms reaches.
+  Whether to re-run 6b″ on a quiet machine is the main loop's call (issue 147). This touches
+  the scanner and the provers, so the main loop runs the Lazy SMP timing test before
+  merging.
+- Docs:
+  - `engine/README.md`: "The stores' lock" under Lazy SMP (why not a reader-writer lock, why
+    a mutex is correct by construction, why not a warm-up, the audit, the cost, the tests),
+    with the scaling figures marked as taken with the old lock; "The truth's sources since
+    M17" under 6b″.
+  - `docs/BUILD_LOG.md`: the H17 and M17 rows; "Parked, and why" (the stores' locks
+    unparked); spec issues 146-147; proposed edit 120; the Lazy SMP timing test log (this
+    branch's runs, before review).
+- Checks (MSYS2 ucrt64 g++ 16.2, Release, a shared machine):
+  - `py engine/build.py --werror --test`: "t5d-tests: 557 passed, 0 failed, 557 run".
+  - The two new tests, 300 runs each: 300 passed, 0 failed, 0 crashed, each. Against the old
+    code, 50 runs each: the lock test 50 failed, the store test 50 crashed.
+  - `scanner_lazy_smp_store_refuses_contradictions`, 1,000 runs: 1,000 passed, 0 failed, 0
+    crashed (the old code, 600 runs: 515 passed, 27 failed, 58 crashed).
+  - The Lazy SMP timing test (32 positions): 1 thread 292 / 292 / 293, 5 threads 308 / 311 /
+    309, pass x3 (load 94-96%); 291 / 313 inside the full run (the timing test log).
+  - The threaded long tests over the shared stores (`--long long_guard long_hunt
+    long_prover_threads long_scanner_lazy_smp`): "t5d-tests: 6 passed, 0 failed, 6 run"
+    (24 min). Their counts are those of the runs before the change (2026-10-17) but for
+    two that threads make nondeterministic (H15): the prover's threads gave 159 proven, 166
+    disproven, 59 unknown (one unknown more decided; 309 confirmed, 16 beyond the
+    references), and the scanner's Lazy SMP 1,994 proofs agreeing with one thread's
+    (1,996).
+  - Python, from `python/`: `ruff check .` "All checks passed!"; `ruff format --check .` "72
+    files already formatted"; `T5D_REQUIRE_ENGINE=1 pytest -q tests/engine` "168 passed, 1
+    skipped".
+  - `verify`: ok (its 17 `proof-channel-vacuous` notes, H48). `gate --tier commit`: "oracle
+    layer [commit]: ok"; "engine differential: NOT RUN - no engine adapter is configured in
+    oracles/gate.toml"; "proof channel: DISABLED".
+  - Linux (glibc): not run. The engine job runs these tests on ubuntu-24.04 with g++ 13 and
+    14 on every push, but no GitHub Actions job has started on any branch since 2026-10-17
+    09:56 UTC, the nightly of 2026-10-22 included (the account's billing), so it waits for
+    a re-run.
+- Review fixes (one reviewer, three low findings): the evaluation cache's no-two-threads
+  rule worded as the caller's duty in `capi_search.h`, `mcts.hpp` and `search.py`; the old
+  lock's handle leak recorded (README "The stores' lock", the H17 row); the H17 row's
+  overlap range dated.
+- Spec: §11.3 (Lazy SMP, the shared stores; register H17, H19) - issue 146, proposed edit 120
+  (the stores exact under concurrency, their races never benign). Register H41: the stores
+  hold what the proof channel would export; it stays off, and this removes a soundness
+  hazard from under it - no edit. §11.4's 6b″ result and §15.6 (register M17, H42, H43) -
+  issue 147, no edit until a re-run. No part of the spec describes the stores' locks.
+
 ### 2026-10-22 - Build log: a stale note removed from "Register status"
 
 - `docs/BUILD_LOG.md`: the preface saying H47, H48 and M22 had no row yet is gone -
