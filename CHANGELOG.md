@@ -10,6 +10,73 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-23 - Network A6: the turn-state inputs embedded into the global registers
+
+Register A6's network side (the engine side, ABI round 1, merged at e8de15e): the three exact
+turn-state counts - mandatory boards still to move, optional boards still playable, moves
+already made in the action - reach the network.
+
+- **The state** (`net/state.py`). `PositionState` gains `mandatory_remaining`,
+  `optional_playable` and `moves_made`; `turn_state` gives the counts in effect. A count given
+  as None is derived from the boards under the default rules (`derived_turn_state`:
+  mandatory = the active heads in the present with the acting player to move, optional = its
+  other heads, moves made 0 before the shift and 1 past it) and re-derived whenever the state
+  is rebuilt, so it follows the acting player; a given count is kept - by `permute_boards`,
+  `translate`, `relayout` and `mirror` (the counts are the acting player's, which A7's mirror
+  keeps). Validated: non-negative integers; submitting possible only with nothing owed (T5);
+  mandatory and optional within the playable heads (L5). `collate` puts them in
+  `Batch.turn_state` (`(B, 3)`; `turn_counts()` is 0 for a batch made without them).
+  `TurnState` is exported.
+- **The converter** (`engine/convert.py`) copies the expansion's counts and, unless
+  `strict=False`, refuses (`PresentMismatch`) counts that break what the expansion defines them
+  by: negative; mandatory + optional not the boards it marks playable; more mandatory boards
+  than playable boards of active timelines; nothing owed and submitting not possible, or the
+  reverse. Which playable boards are owed is the ruleset's, which the expansion does not name,
+  so the split is the engine's.
+- **The embedding** (`net/embed.py`, `net/model.py`, `net/config.py`): each count as
+  `(n / 8, log1p n, [n = 0])`, the nine features through Linear(9, 32), GELU, Linear(32, d),
+  one vector added to every global register beside D8's acting colour; with no global
+  registers, issue 225's placeholder (the board tokens, the live boards' alone under the
+  block-causal scope). The form is a placeholder of a committed-class silence, fixed in code
+  (spec issue 230; `NetConfig.turn_state_hidden = 32`, `turn_state_scale = 8.0`). Its 8,768
+  parameters draw nothing while made and are drawn from a generator of their own
+  (`model.a6_seed`): no other parameter changed. F1 22,973,907 (was 22,965,139), F2's
+  L24-ff12 46,903,315 (`tests/net/test_params.py`; the totals quoted in `shaw.py`, `config.py`
+  and `test_displacement.py` updated).
+- **The caches** (`net/cache.py`). `state_digest` - an epoch's anchor, and the Python
+  evaluator's epoch reuse - carries the three counts (a refresh's dense pass lets every board
+  read the global registers); frozen K/V never depend on them. A refresh's other-colour view
+  (`viewed_by`) takes the counts its boards give that colour (the anchor's are its acting
+  player's; issue 230 with 229). `python/t5d/engine/evaluator.py` and `search.py` are
+  unchanged: leaves convert through `to_position`, which now copies the counts.
+- **The fixtures** (`net/synthetic.py`, `net/tree.py`) produce turn starts with the boards'
+  own counts, as documented. The tree fixture does not count moves per path: its moves are no
+  actions (a physical move is made by whoever is to move on that timeline), and a per-path
+  count split its two move orders of one multiverse - which `test_cache.py`'s transposition
+  tests read as one state - into two (tried and reverted). Mid-turn states are its states with
+  the counts given.
+- **Tests.** `tests/engine/test_turn_state_engine.py` (section 15.2's A6 row on the network
+  side): every state of eight seeded random plays under both Q4 readings - 956 states: turn
+  starts, mid-action, past the shift with and without moves; jumps between two present boards,
+  rewinding branches, T12 rises - converts to the expansion's counts, moves made the handle's
+  count, mandatory and optional a recount from the rulebook's definitions; a mid-turn state and
+  its own 5DFEN (a turn start with equal boards and acting player) differ in moves made alone,
+  and in digest and output, full and cached; inconsistent counts refused.
+  `tests/net/test_turn_state.py`: derivation and validation; each count moves exactly the
+  tokens the global inputs enter and nothing else; every output moves with each count under
+  every register arm and both scopes; equal boards with different counts are never confused by
+  the store, an epoch or a refreshed epoch's anchor; cached = full pass along the tree
+  fixture's paths with each node also given mid-turn counts; the parameters' draws.
+  The A7 mirror tests compare the counts (a mid-turn construction added; the engine's 5DFEN
+  mirror's own counts); `test_convert.py`'s relabelled turn start relabels its counts too, so
+  that its moves are what is refused; `test_embed.py`'s global registers are equal given the
+  acting player and the counts.
+- `docs/BUILD_LOG.md`: register rows A6 (now built, tested) and F1; spec issue 225's A6
+  sentence answered and issue 230 new; proposed edit 156's figures moved, edit 171 new.
+- Spec: §2.3 (turn-state inputs), §7.9 (the refresh's other-colour view), §8.5 and §15.2's A6
+  and purity rows, §9.2's Params row; register A6, F1, F2, D8, C3. Proposed edits 171 (the
+  embedding's form, the other colour's counts) and 156 (the parameter count, M4).
+
 ### 2026-10-23 - Build log: issues 225, 226 and 229 wait on the user
 
 - `docs/BUILD_LOG.md`, "Waiting on the user": spec issue 225 (F6/M20: the acting

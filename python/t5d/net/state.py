@@ -94,6 +94,25 @@ Representation (design spec section 2; register A1-A4):
   whether the submit action is a candidate and whether it is masked, as ``moves`` lists the
   candidate moves. Validation: submitting is legal only where possible, and possible only
   once the present has shifted. Values are from the acting player's perspective.
+* **The turn state (register A6, section 2.3).** Three exact counts, global like the action:
+  the mandatory boards still to move (``mandatory_remaining``), the optional boards still
+  playable (``optional_playable``) and the moves already made in the action
+  (``moves_made``) - the rules engine's (``Expansion``; spec issues 143-144: the mandatory
+  count is the state machine's own, not section 2.3's arithmetic; optional = the acting
+  player's playable heads, L5, that are not mandatory, 0 once no move may be made; one per
+  move, 0 at a turn start). Moves made is no function of the boards: a turn start and a
+  mid-turn state can share every board and the acting player (section 8.5), so a state built
+  without the engine says what it means - given as None, each count is derived from the
+  boards under the default rules (``derived_turn_state``): mandatory = the active heads in the
+  present with the acting player to move (T6, Q5's InPresent reading); optional = the other
+  heads with the acting player to move (L5; R8: moves after the shift allowed); moves made =
+  0 before the shift, 1 past it (the fewest a shift needs). A derived count is re-derived
+  whenever the state is rebuilt (``replace``), so it follows the acting player; a given one
+  is kept. Under A7 the counts are the acting player's, so the colour-swap mirror keeps them.
+  They are network inputs on the global registers (``embed.py``), and part of the evaluation
+  identity (``cache.state_digest``). Validation: non-negative integers; submitting possible
+  only when no mandatory board is left (T5: the obligations met); mandatory and optional
+  together no more than the heads with the acting player to move (L5's playable boards).
 
 Board storage order is free: the network has no absolute positions (section 4), so a
 reordering of boards permutes the per-board outputs and changes nothing else. Synthetic
@@ -104,6 +123,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
+from typing import NamedTuple
 
 import numpy as np
 import torch
@@ -136,6 +156,18 @@ TOKEN_SQUARE, TOKEN_BOARD_REGISTER, TOKEN_GLOBAL_REGISTER, TOKEN_PAD = 0, 1, 2, 
 
 #: Promotion id 0 means "no promotion"; otherwise the promoted-to piece's type id.
 NO_PROMOTION = 0
+
+
+class TurnState(NamedTuple):
+    """Register A6's global turn-state counts (section 2.3; ``PositionState.turn_state``)."""
+
+    mandatory_remaining: int  # mandatory boards still to move (T5, T6)
+    optional_playable: int  # optional boards still playable (L5, not mandatory)
+    moves_made: int  # moves already made in the action (0 at a turn start)
+
+
+#: The turn state's fields, in ``Batch.turn_state``'s column order.
+TURN_STATE_FIELDS: tuple[str, ...] = TurnState._fields
 
 
 def timeline_index(label: str | int, *, even_start: bool = False) -> int:
@@ -335,6 +367,13 @@ class PositionState:
     #: register A7's timeline negation is ``p -> -1 - p`` rather than ``p -> -p`` (section
     #: 12.6's index mapping). The engine's ``Expansion.even``.
     even_start: bool = False
+    #: Register A6's turn state (the module docstring): the mandatory boards still to move, the
+    #: optional boards still playable and the moves already made in the action - the rules
+    #: engine's exact counts; None: derived from the boards (``derived_turn_state``), and
+    #: re-derived whenever the state is rebuilt. ``turn_state`` gives the counts in effect.
+    mandatory_remaining: int | None = None
+    optional_playable: int | None = None
+    moves_made: int | None = None
 
     def __post_init__(self) -> None:
         self.timeline = _as_int(self.timeline, "timeline").reshape(-1)
@@ -363,6 +402,12 @@ class PositionState:
         self.submit_possible = bool(self.submit_possible)
         self.submit_legal = bool(self.submit_legal)
         self.even_start = bool(self.even_start)
+        for name in TURN_STATE_FIELDS:
+            value = getattr(self, name)
+            if value is not None:
+                if isinstance(value, (bool, np.bool_)) or int(value) != value:
+                    raise ValueError(f"{name} must be an integer count (or None: derived)")
+                setattr(self, name, int(value))
         self.validate()
         if self.acting_player is None:
             self.acting_player = self.player_to_move
@@ -405,6 +450,32 @@ class PositionState:
         """Whether the present has shifted to the opponent inside the acting player's action
         (T5's obligations met): the acting player is not the present's colour."""
         return int(self.acting_player) != self.player_to_move
+
+    def _acting(self) -> int:
+        """The acting player, derived if not given (validation runs before it is filled in)."""
+        return self.player_to_move if self.acting_player is None else int(self.acting_player)
+
+    @property
+    def playable_heads(self) -> int:
+        """The heads with the acting player to move (L5's playable boards, active or not)."""
+        return int(np.count_nonzero(self.is_head & (self.side_to_move == self._acting())))
+
+    @property
+    def derived_turn_state(self) -> TurnState:
+        """Register A6's counts as the boards give them under the default rules (the module
+        docstring): mandatory = the active heads in the present with the acting player to move;
+        optional = its other playable heads; moves made = 0 before the shift, 1 past it."""
+        acting = self._acting()
+        mine = self.is_head & (self.side_to_move == acting)
+        mandatory = int(np.count_nonzero(mine & self.active & (self.half_turn == self.h_present)))
+        return TurnState(mandatory, self.playable_heads - mandatory, int(acting != self.player_to_move))
+
+    @property
+    def turn_state(self) -> TurnState:
+        """Register A6's counts in effect: each as given, or derived (``derived_turn_state``)."""
+        derived = self.derived_turn_state
+        given = (getattr(self, name) for name in TURN_STATE_FIELDS)
+        return TurnState(*(d if g is None else int(g) for g, d in zip(given, derived, strict=True)))
 
     @property
     def dt_present(self) -> np.ndarray:
@@ -486,6 +557,7 @@ class PositionState:
         if not np.any(self.is_head & self.active):
             raise ValueError("no active timeline: the present is undefined")
         self._validate_action()
+        self._validate_turn_state()
         self._validate_lineage()
         layout = self.layout
         for name in ("edges", "moves", "opp_moves"):
@@ -513,6 +585,21 @@ class PositionState:
         if self.submit_possible and int(acting) == self.player_to_move:
             raise ValueError(
                 "submit_possible needs the present shifted to the opponent (T5): the acting player cannot be the present's colour"
+            )
+
+    def _validate_turn_state(self) -> None:
+        """The turn state (A6): non-negative counts; submitting possible only with no mandatory
+        board left (T5); the mandatory and optional boards among the playable heads (L5)."""
+        counts = self.turn_state
+        for name, value in zip(TURN_STATE_FIELDS, counts, strict=True):
+            if value < 0:
+                raise ValueError(f"{name} must be non-negative")
+        if self.submit_possible and counts.mandatory_remaining != 0:
+            raise ValueError("submit_possible needs mandatory_remaining == 0 (T5: submitting is possible once the obligations are met)")
+        if counts.mandatory_remaining + counts.optional_playable > self.playable_heads:
+            raise ValueError(
+                f"mandatory_remaining + optional_playable ({counts.mandatory_remaining} + {counts.optional_playable}) exceeds the "
+                f"{self.playable_heads} heads with the acting player to move (L5's playable boards)"
             )
 
     def _validate_lineage(self) -> None:
@@ -656,6 +743,9 @@ def permute_boards(state: PositionState, order: Sequence[int]) -> PositionState:
         submit_possible=state.submit_possible,
         submit_legal=state.submit_legal,
         even_start=state.even_start,
+        mandatory_remaining=state.mandatory_remaining,
+        optional_playable=state.optional_playable,
+        moves_made=state.moves_made,
     )
 
 
@@ -687,8 +777,9 @@ def mirror(state: PositionState) -> PositionState:
     other colour - White's T-th board becomes Black's T-th, Black's becomes White's T+1-th -
     which every board shares, so no time difference, Delta-t or present changes (A7: "the
     time axis is unchanged"; the network sees time only relative to the present, section 4).
-    Board order, lineage, the head and active flags, the submit flags and the variant's parity
-    are kept. The mirror of the mirror is the position moved two half-turns later
+    Board order, lineage, the head and active flags, the submit flags, register A6's turn state
+    (the acting player's counts, which the mirror's acting player has too - a derived count
+    derives to the same value) and the variant's parity are kept. The mirror of the mirror is the position moved two half-turns later
     (``translate(state, dh=2)``), to which the network is invariant.
 
     The timeline negation is written here independently of ``canonical_timeline``, as the
@@ -808,6 +899,8 @@ class Batch:
     acting_player: torch.Tensor | None = None  # long: 0 white, 1 black - whose action this is
     submit_possible: torch.Tensor | None = None  # bool: submitting is an action here (T5)
     submit_legal: torch.Tensor | None = None  # bool: ... and legal (C4); the submit logit is masked otherwise
+    # Per position (register A6): (B, 3) long - TURN_STATE_FIELDS, PositionState.turn_state.
+    turn_state: torch.Tensor | None = None
 
     def acting(self) -> torch.Tensor:
         """``(B,)`` long: each position's acting player (the present's colour for a batch made
@@ -815,6 +908,13 @@ class Batch:
         if self.acting_player is not None:
             return self.acting_player
         return self.coord_ref[:, 1].long() & 1
+
+    def turn_counts(self) -> torch.Tensor:
+        """``(B, 3)`` long: each position's turn-state counts (register A6;
+        ``TURN_STATE_FIELDS``) - all 0 for a batch made without them."""
+        if self.turn_state is not None:
+            return self.turn_state
+        return torch.zeros((self.piece.shape[0], len(TURN_STATE_FIELDS)), dtype=torch.long, device=self.piece.device)
 
     def submit_mask(self) -> tuple[torch.Tensor, torch.Tensor]:
         """``(possible, legal)``, each ``(B,)`` bool (all False for a batch made without them)."""
@@ -951,4 +1051,5 @@ def collate(states: Sequence[PositionState]) -> Batch:
         acting_player=torch.tensor([int(s.acting_player) for s in states], dtype=torch.long),
         submit_possible=torch.tensor([bool(s.submit_possible) for s in states], dtype=torch.bool),
         submit_legal=torch.tensor([bool(s.submit_legal) for s in states], dtype=torch.bool),
+        turn_state=torch.tensor([list(s.turn_state) for s in states], dtype=torch.long).reshape(bsz, len(TURN_STATE_FIELDS)),
     )

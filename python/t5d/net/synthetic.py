@@ -33,7 +33,12 @@ What the generator guarantees, so that tests can rely on it:
 * candidate moves (for both players) drawn from that move graph: the player's own
   pieces on its playable boards (heads of its colour), in random order, promotions
   included where a pawn reaches its last rank - so every candidate move is a move-graph
-  edge, as a legal move is.
+  edge, as a legal move is;
+* a turn start: the acting player is the present's colour, no submission is offered, and
+  register A6's turn state is the boards' own (``PositionState.derived_turn_state``: the
+  active present heads mandatory, the acting player's other heads optional, no move made).
+  A mid-turn state with the same boards is ``replace(state, moves_made=k)``; one past the
+  shift, ``replace(state, acting_player=1 - state.player_to_move)`` (the counts re-derived).
 
 Nothing here comes from a rules engine; the contents are for exercising the network's
 shapes, invariances and costs only. The geometry is plausible, not the rules: no check,
