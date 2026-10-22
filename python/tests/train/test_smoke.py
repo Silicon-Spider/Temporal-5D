@@ -33,8 +33,10 @@ def test_smoke_three_steps(trunk_dtype):
         dict(norm_placement="post"),
         dict(ffn_activation="squared_relu"),
         dict(displacement_bias=False),
+        dict(opp_reply=True, submit_head="pointer"),
+        dict(soft_policy=False, pointer_promotion_offset=False),
     ],
-    ids=["b5_b15_shared", "routing_typed_pointer_submit", "post_norm", "squared_relu", "no_table"],
+    ids=["b5_b15_shared", "routing_typed_pointer_submit", "post_norm", "squared_relu", "no_table", "d4_reply", "d4_soft_off"],
 )
 def test_smoke_with_the_options_on(flags):
     """Every option's parameters receive gradient and move: B15's table, B11's scalars or the
@@ -52,9 +54,9 @@ def test_smoke_refuses_more_steps():
 
 
 def test_every_loss_is_finite_and_reaches_its_head():
-    cfg = NetConfig(trunk_dtype="fp32")
+    cfg = NetConfig(trunk_dtype="fp32", opp_reply=True)
     model = build_model(cfg, seed=1)
-    batch = collate(synthetic_states(1, [2, 5]))
+    batch = collate(with_actions(synthetic_states(1, [2, 5])))  # the second offers a legal submit (D8; the soft policy's own)
     targets = synthetic_targets(batch, cfg, torch.Generator().manual_seed(1))
     for reduction in ("mean", "sum"):  # register D6's open knob
         losses = compute_losses(model(batch), targets, LossConfig(board_reduction=reduction))
@@ -65,8 +67,10 @@ def test_every_loss_is_finite_and_reaches_its_head():
         "categorical": model.value.categorical,
         "short_term": model.value.short_term,
         "value_error": model.value.error,
+        "soft_policy": model.aux.soft_policy,  # D4
+        # D4's prototype (its flag on here): f and g - the synthetic opponent moves promote nothing
+        "opp_reply": torch.nn.ModuleList([model.aux.opp_reply.src, model.aux.opp_reply.dst]),
         "moves_left": model.aux.moves_left,
-        "opp_reply": model.aux.opp_reply,
         "board": model.aux.board,
         "square": model.aux.square,
         "effort": model.aux.effort,

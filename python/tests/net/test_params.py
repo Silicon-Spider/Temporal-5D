@@ -1,13 +1,17 @@
 """Parameter counts against spec section 9.2 (F1 ~21.5M with all heads; F2's L24-ff12 44.0M) and
 section 4.1 (B15's displacement table, "about 1.6M parameters - ~7% of the network").
 
-Exact v1 count (default config): 22,961,828 =
+Exact v1 count (default config): 22,965,426 =
     embeddings 28,864 + trunk attention 4,198,400 + trunk FFN 16,814,080
     + trunk norms 8,448 + policy 134,925 (its promotion offset 3,341 among them)
-    + value 80,698 + submit 257 + aux 72,988
+    + value 80,698 + submit 257 + aux 76,586 (the soft policy's 69,390 among them)
     + B15's displacement table 1,623,168 (16 layers x 8 heads x 12,681 entries: 54
       board-distance classes x 225, 368 line entries, 162 register entries, 1 global - the
       unstated details at their placeholders, spec issues 205-208).
+Register D4's heads (CHECKPOINT 7) added 3,598 to 22,961,828: the soft policy, on - its own f and
+g at width 128 (65,792), D1's promotion offset (3,341) and its own submit readout (257), 69,390 -
+and the opponent-reply head (65,792) now a prototype behind its flag, off (on: 69,133 with the
+offset - 23,034,559).
 Register D3's value heads (CHECKPOINT 7) took 12,079 from 22,973,907: the four heads share the
 value MLP's hidden layer (256 -> 256, 65,792) - the categorical (13,107) and WDL (771, N1's WDL
 head moved onto the shared layer) as before, three short-term outputs (771) and the error head
@@ -33,8 +37,8 @@ registers (M20) - (256 + 1; ``submit_head="pointer"`` has none).
 Section 9.2's "~21.5M with all heads" also counts board-pair smolgen (<0.1M, B12,
 prototype): stage N2 builds it behind a flag, 47,136 parameters as relative cells
 (test_n2_model.py); its "base 256x16, ff8: 21.0M" is the trunk. B9's default masks add no
-parameter. F2's larger arm, L24-ff12, is 46,891,236 as built: 44,456,484 (section 9.2: 44.0M)
-and B15's 24 x 8 x 12,681 = 2,434,752 (A6's 8,768 among the 44,456,484; D3's rebuild -12,079).
+parameter. F2's larger arm, L24-ff12, is 46,894,834 as built: 44,460,082 (section 9.2: 44.0M)
+and B15's 24 x 8 x 12,681 = 2,434,752 (A6's 8,768 among the 44,460,082; D3's rebuild -12,079, D4's +3,598).
 B16's status table (committed with the cached configuration) adds 304 to a block-causal
 network and nothing to the v1, whose scope is dense.
 """
@@ -45,8 +49,8 @@ import pytest
 
 from t5d.net import NetConfig, build_model, parameter_breakdown
 
-V1_TOTAL = 22_961_828
-F2_TOTAL = 46_891_236
+V1_TOTAL = 22_965_426
+F2_TOTAL = 46_894_834
 #: B15's table in the v1 (16 layers) and in F2's arm (24 layers).
 V1_DISPLACEMENT = 16 * 8 * 12_681
 F2_DISPLACEMENT = 24 * 8 * 12_681
@@ -61,7 +65,7 @@ def test_v1_parameter_count():
     trunk = counts["trunk.attention"] + counts["trunk.ffn"] + counts["trunk.norms"]
     assert abs(trunk - 21.0e6) / 21.0e6 < 0.01, "section 9.2 ladder: base 256x16 ff8 = 21.0M"
     aux = sum(v for k, v in counts.items() if k.startswith("aux."))
-    assert 0.05e6 < aux < 0.15e6, "section 9.2: aux heads ~0.1M total"
+    assert 0.05e6 < aux < 0.15e6, "section 9.2: aux heads ~0.1M total (D4's soft policy among them)"
     assert counts["trunk.attention"] == 16 * (4 * 256 * 256 + 256), "full MHA, 8 KV heads (C4); F5: only the output projection has a bias"
     assert counts["trunk.ffn"] == 16 * (2 * 256 * 2048 + 2048 + 256), "FFN 8x, its biases kept (F5)"
     assert counts["trunk.norms"] == (2 * 16 + 1) * 256, "F5: RMSNorm gains, no biases"
@@ -70,7 +74,10 @@ def test_v1_parameter_count():
     assert counts["head.value"] == (256 * 256 + 256) + (256 * 51 + 51) + (256 * 3 + 3) + (256 * 3 + 3) + (256 + 1), (
         "D3: the shared hidden layer, the categorical, WDL, three short-term outputs, the error head"
     )
-    assert counts["aux.opp_reply"] == 2 * (256 * 128 + 128), "the reply head: f and g, no promotion offset (as built at N1)"
+    assert counts["aux.soft_policy"] == 2 * (256 * 128 + 128) + (256 * 13 + 13) + (256 + 1), "D4: f, g, the offset, its own submit"
+    assert "aux.opp_reply" not in counts, "D4's reply is a prototype, off"
+    reply = parameter_breakdown(build_model(NetConfig(opp_reply=True)))
+    assert reply["aux.opp_reply"] == 2 * (256 * 128 + 128) + (256 * 13 + 13) and reply["total"] == V1_TOTAL + 69_133
     assert counts["head.submit"] == 256 + 1, "D8: the submit logit's linear readout of the pooled global registers (placeholder form)"
     assert counts["embeddings"] == 19_584 + 2 * 256 + 8_768, "D8: the acting-player embedding (stage N5); A6: the counts' MLP"
 
@@ -104,7 +111,9 @@ def test_flag_parameters_are_small():
     flagged = parameter_breakdown(build_model(NetConfig(typed_edge_bias=True)))
     assert flagged["attn.typed_edges"] == 8 * 5 and flagged["total"] - base == 40, "B11: a scalar per head per type"
     pointer = parameter_breakdown(build_model(NetConfig(submit_head="pointer")))
-    assert pointer["head.submit"] == 0 and pointer["total"] == V1_TOTAL - 257, "D8's other readout form: the policy's own"
+    assert pointer["head.submit"] == 0 and pointer["total"] == V1_TOTAL - 2 * 257, (
+        "D8's other readout form: each head's own f and g (the soft policy's too)"
+    )
     no_table = parameter_breakdown(build_model(NetConfig(displacement_bias=False)))
     assert no_table["attn.displacement"] == 0 and no_table["total"] == V1_TOTAL - V1_DISPLACEMENT, "ablation 2's no-table arm"
     assert "rope.binned_bias" not in no_table, "B6 is removed (superseded by B15)"

@@ -79,7 +79,17 @@ MODES = ("self", "match")
 
 #: A small network for end-to-end play on a CPU (random weights; nothing is trained): two
 #: layers at d = 64 - the F1 architecture's shape, scaled down so that a game takes seconds.
-SMALL = dict(trunk_dtype="fp32", n_layers=2, d_model=64, n_heads=2, ffn_ratio=4, policy_dim=64, value_hidden=64, opp_policy_dim=32)
+SMALL = dict(
+    trunk_dtype="fp32",
+    n_layers=2,
+    d_model=64,
+    n_heads=2,
+    ffn_ratio=4,
+    policy_dim=64,
+    value_hidden=64,
+    opp_policy_dim=32,
+    soft_policy_dim=32,
+)
 
 
 def network_config(name: str) -> NetConfig:

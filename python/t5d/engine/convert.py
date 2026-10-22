@@ -88,8 +88,9 @@ promotion)                                     promotion)`` - row i is engine mo
   builds them only for the player to move's pieces on the boards its moves start from.
   **Pin (3), check (5) and travel-threat (6) are absent**: the engine refuses them (pin and
   check would read check detection; the spec defines no travel-threat edge).
-* **Opponent moves** (``opp_moves``, the D4 reply head) are not supplied: the expansion
-  is the mover's (spec issue 17: E is read from the mover's moves); empty.
+* **Opponent moves** (``opp_moves``, the D4 reply prototype's move space) are not supplied:
+  they are the opponent's next turn mapped onto this position (``train.reply_map``), a training
+  target built from records, never needed at inference; empty.
 * **Lineage - the causal past is ancestry (register C23).** ``parent`` is the engine's: a
   timeline's previous board, or for a timeline's first board its branch origin
   (``Timeline::origin``), -1 for an initial timeline or an origin nobody recorded - every

@@ -37,7 +37,10 @@ def _assert_same(a, b, atol=ATOL, board_perm=None, token_perm=None):
     for name in ("value_logits", "wdl_logits", "moves_left_log", "short_term", "value_error", "effort_logits"):
         x, y = getattr(a, name), getattr(b, name)
         assert torch.allclose(x, y, atol=atol), (name, float((x - y).abs().max()))
-    for name, valid in (("policy_logits", a.move_valid), ("opp_reply_logits", a.opp_move_valid)):
+    for name, valid in (("policy_logits", a.move_valid), ("soft_policy_logits", a.move_valid), ("opp_reply_logits", a.opp_move_valid)):
+        if getattr(a, name) is None:
+            assert getattr(b, name) is None, name
+            continue
         x, y = getattr(a, name)[valid], getattr(b, name)[valid]
         assert torch.allclose(x, y, atol=atol), (name, float((x - y).abs().max()))
     boards_a = a.board_logits[0] if board_perm is None else a.board_logits[0, board_perm]

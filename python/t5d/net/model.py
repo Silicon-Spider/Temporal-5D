@@ -97,7 +97,9 @@ categorical and WDL readouts are drawn from the global stream where N1's value o
 head were, the short-term values and the error head (new) from a generator of their own
 (``d3_seed``), and N1's 51-bin short value head, gone, keeps its draws in the global stream
 (``_retired_draws``, and its construction-time draw in ``heads.AuxHeads``) - so D3's rebuild
-changed no parameter that existed before it, bit for bit.
+changed no parameter that existed before it, bit for bit. Register D4 (CHECKPOINT 7) the same
+way: the soft policy and the opponent-reply prototype each from a generator of their own
+(``d4_soft_seed``, ``d4_reply_seed``), N1's always-built reply head's draws kept.
 
 Register A6: the turn-state counts (mandatory boards still to move, optional boards still
 playable, moves made in the action) are inputs beside the acting colour, on the same tokens
@@ -153,7 +155,6 @@ class NetOutput:
     short_term: torch.Tensor  # (B, K) on [-1, 1]: the short-term values at NetConfig.short_term_horizons
     value_error: torch.Tensor  # (B,) >= 0: the error head - the predicted squared value - short-term gap
     moves_left_log: torch.Tensor  # (B,)  predicted log1p(turns left) - a turn is one player's action (D4, M20)
-    opp_reply_logits: torch.Tensor  # (B, M2), -inf at padding
     board_logits: torch.Tensor  # (B, Nmax, 3): heads.BOARD_HEADS
     square_logits: torch.Tensor  # (B, L, n_square_labels); meaningful where square_mask
     effort_logits: torch.Tensor  # (B, effort_bins)
@@ -167,6 +168,12 @@ class NetOutput:
     submit_raw: torch.Tensor  # the pooled registers' readout before the mask (finite everywhere)
     submit_possible: torch.Tensor  # bool: submit is offered (T5)
     submit_valid: torch.Tensor  # bool: offered and legal (C4) - the entry carries probability
+    # D4 (CHECKPOINT 7), None where the head is not built: the soft policy - its own move logits
+    # (B, M), -inf at padding, over the policy's candidates, and its own submit logit (B,), masked
+    # as ``submit_logits`` is - and the opponent-reply prototype's logits over ``opp_moves`` (B, M2).
+    soft_policy_logits: torch.Tensor | None = None
+    soft_submit_logits: torch.Tensor | None = None
+    opp_reply_logits: torch.Tensor | None = None
     trunk: torch.Tensor | None = None  # (B, L, d) final-normed trunk output, if requested
 
     def wdl_probs(self) -> torch.Tensor:
@@ -194,6 +201,13 @@ class NetOutput:
         """``(B, M + 1)``: the move logits, then the submit logit (D8) - every action of a
         decision under the board-move split; -inf where an entry is no legal candidate."""
         return torch.cat([self.policy_logits, self.submit_logits[:, None]], dim=-1)
+
+    def soft_action_logits(self) -> torch.Tensor:
+        """``(B, M + 1)``: the soft policy's move logits, then its submit logit (D4) - over the same
+        actions as ``action_logits``, masked the same way; ``ValueError`` if it is not built."""
+        if self.soft_policy_logits is None or self.soft_submit_logits is None:
+            raise ValueError("this network has no soft policy head (NetConfig.soft_policy)")
+        return torch.cat([self.soft_policy_logits, self.soft_submit_logits[:, None]], dim=-1)
 
     def action_valid(self) -> torch.Tensor:
         """``(B, M + 1)`` bool: the candidate moves, then whether submit is a legal candidate."""
@@ -254,15 +268,21 @@ class T5DNet(nn.Module):
     #: Register D3's outputs that N1 did not have (the short-term values, the error head), drawn
     #: from their own generator (``d3_seed``).
     _D3_MODULES = ("value.short_term", "value.error")
+    #: Register D4's soft policy and opponent-reply prototype (CHECKPOINT 7), each drawn from a
+    #: generator of its own (``d4_soft_seed``, ``d4_reply_seed``).
+    _D4_MODULES = ("aux.soft_policy", "aux.opp_reply")
 
     def _retired_draws(self, name: str) -> tuple[tuple[int, int], ...]:
         """The ``(out, in)`` shapes of retired Linear modules whose initialisation draws follow
         module ``name``'s: a head removed from the global stream keeps its draws there (and its
         construction-time draw, ``heads.AuxHeads``), so that removing it changes no other
-        parameter's draw. N1's 51-bin short value head (after moves-left; D3's rebuild)."""
+        parameter's draw. N1's 51-bin short value head (after moves-left; D3's rebuild) and N1's
+        always-built opponent-reply head, its f and g (after the per-square head; D4's prototype)."""
         cfg = self.cfg
         if name == "aux.moves_left":
             return ((cfg.value_bins, cfg.d_model),)
+        if name == "aux.square":
+            return ((cfg.opp_policy_dim, cfg.d_model), (cfg.opp_policy_dim, cfg.d_model))
         return ()
 
     #: The trunk projections that DeepNet's initialisation draws under post-norm (Wang et al.
@@ -294,7 +314,10 @@ class T5DNet(nn.Module):
             for name, module in self.named_modules():
                 if name.split(".")[0] == "smolgen":
                     continue  # drawn last (reset_parameters)
-                if any(name == own or name.startswith(own + ".") for own in self._D8_MODULES + self._A6_MODULES + self._D3_MODULES):
+                if any(
+                    name == own or name.startswith(own + ".")
+                    for own in self._D8_MODULES + self._A6_MODULES + self._D3_MODULES + self._D4_MODULES
+                ):
                     continue  # drawn after the rest (below)
                 if isinstance(module, nn.Linear):
                     nn.init.normal_(module.weight, 0.0, self._linear_std(name, module))
@@ -329,6 +352,14 @@ class T5DNet(nn.Module):
             d3 = torch.Generator(device="cpu").manual_seed(d3_seed(torch.initial_seed()))
             for lin in (self.value.short_term, self.value.error):
                 _draw_linear(lin, d3, cfg.init_bias_std)
+            # D4 (CHECKPOINT 7): the soft policy and the reply prototype, each from its own generator,
+            # so that switching either changes no other parameter (and no flag changes theirs).
+            for head, seed_of in ((self.aux.soft_policy, d4_soft_seed), (self.aux.opp_reply, d4_reply_seed)):
+                if head is not None:
+                    gen = torch.Generator(device="cpu").manual_seed(seed_of(torch.initial_seed()))
+                    for lin in head.modules():
+                        if isinstance(lin, nn.Linear):
+                            _draw_linear(lin, gen, cfg.init_bias_std)
             if self.typed_edges is not None:
                 nn.init.normal_(self.typed_edges.table, 0.0, cfg.init_table_std)
             if self.smolgen is not None:
@@ -504,6 +535,13 @@ class T5DNet(nn.Module):
             possible, legal = batch.submit_mask()
             submit_raw = self.submit(h, batch, self.policy)  # D8: from the pooled global registers (M20)
             wdl, categorical, short_term, value_error = self.value(registers)
+            soft_moves = soft_submit = None
+            if self.aux.soft_policy is not None:  # D4: its own projections and submit logit
+                soft_moves, soft_raw = self.aux.soft_policy(h, batch)
+                soft_submit = soft_raw.masked_fill(~legal.to(soft_raw.device), float("-inf"))
+            reply = None
+            if self.aux.opp_reply is not None:  # D4's prototype, behind its flag
+                reply = self.aux.opp_reply(h, batch.opp_moves, batch.opp_move_valid, sq)
             return NetOutput(
                 policy_logits=self.policy(h, batch.moves, batch.move_valid, sq),
                 wdl_logits=wdl,
@@ -511,7 +549,6 @@ class T5DNet(nn.Module):
                 short_term=short_term,
                 value_error=value_error,
                 moves_left_log=self.aux.moves_left(squares).squeeze(-1),
-                opp_reply_logits=self.aux.opp_reply(h, batch.opp_moves, batch.opp_move_valid, sq),
                 board_logits=self.aux.board(boards),
                 square_logits=self.aux.square(h),
                 effort_logits=self.aux.effort(squares),
@@ -524,6 +561,9 @@ class T5DNet(nn.Module):
                 submit_raw=submit_raw,
                 submit_possible=possible,
                 submit_valid=legal,
+                soft_policy_logits=soft_moves,
+                soft_submit_logits=soft_submit,
+                opp_reply_logits=reply,
                 trunk=h if return_trunk else None,
             )
 
@@ -599,6 +639,17 @@ def d3_seed(seed: int) -> int:
     """The seed of register D3's own generator (the short-term values and the error head,
     ``T5DNet._init_weights``), from the model's."""
     return (int(seed) * 0x9E3779B97F4A7C15 + 0xD3) & 0xFFFFFFFFFFFFFFFF
+
+
+def d4_soft_seed(seed: int) -> int:
+    """The seed of D4's soft policy's own generator (``T5DNet._init_weights``), from the model's."""
+    return (int(seed) * 0x9E3779B97F4A7C15 + 0xD45) & 0xFFFFFFFFFFFFFFFF
+
+
+def d4_reply_seed(seed: int) -> int:
+    """The seed of D4's opponent-reply prototype's own generator (``T5DNet._init_weights``), from
+    the model's."""
+    return (int(seed) * 0x9E3779B97F4A7C15 + 0xD4E) & 0xFFFFFFFFFFFFFFFF
 
 
 def b15_seed(seed: int) -> int:

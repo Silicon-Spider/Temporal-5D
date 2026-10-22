@@ -25,13 +25,21 @@ I15), not this module's.
     WDL or the short-term heads. Which horizon, the stop-gradient and the loss are placeholders
     (issue 231).
 
-* Policy and opponent reply: cross-entropy over each position's supplied candidate moves
-  against a target distribution (visit counts for the policy; a one-hot reply for the
-  opponent-reply head). Padding entries carry no mass. The policy's distribution is over the
-  decision's actions - the candidate moves and, where it is offered and legal, the submit
-  action (register D8, stage N5: ``NetOutput.action_logits``); its target is the root's visits
-  to each move and to the submit child (``Targets.submit``) - of full searches only (section
-  12.5: "only full-search moves emit policy targets").
+* Policy: cross-entropy over each position's supplied candidate moves against a target
+  distribution (the root's visits). Padding entries carry no mass. The policy's distribution is
+  over the decision's actions - the candidate moves and, where it is offered and legal, the
+  submit action (register D8, stage N5: ``NetOutput.action_logits``); its target is the root's
+  visits to each move and to the submit child (``Targets.submit``) - of full searches only
+  (section 12.5: "only full-search moves emit policy targets").
+* **D4's soft policy** (section 12.4, CHECKPOINT 7): its own head's actions
+  (``NetOutput.soft_action_logits``) against the policy target "raised to the power 1/4 and
+  renormalised" (``soft_policy_target``; the power ``LossConfig.soft_policy_power``), "at eight
+  times the policy loss weight" (``weights["soft_policy"]`` 8, the policy's 1), full searches
+  only - the order (the pruned target first, section 12.2, then the power) the builder's.
+* **D4's opponent-reply prototype** (behind ``NetConfig.opp_reply``): cross-entropy against
+  ``Targets.opp_reply``, the opponent's next turn as a distribution over its mapped moves
+  (``train.reply_map``), weight 0.15 (KataGo's); a position with no target (an ambiguous or
+  absent reply) is skipped.
 * Effort: cross-entropy over its bins (censored bin included). Moves-left: Huber loss on
   ``log1p(turns left)`` - a turn one player's action (D4, M20; spec issue 305).
 * Per-board and per-square heads: binary cross-entropy with logits, masked to real
@@ -73,7 +81,6 @@ class Targets:
     #: NaN where a horizon has none.
     short_term: torch.Tensor
     moves_left: torch.Tensor  # (B,) turns left (one player's action each, D4), >= 0
-    opp_reply: torch.Tensor  # (B,) index into opp_moves, -1 where there is no target
     board: torch.Tensor  # (B, Nmax, 3) in {0, 1}
     square: torch.Tensor  # (B, L, n_square_labels) in {0, 1}
     effort: torch.Tensor  # (B,) bin index, -1 where there is no target (PCR cheap searches)
@@ -86,6 +93,10 @@ class Targets:
     #: (B, 3): the search's WDL at the root - ``((1 - d + q) / 2, d, (1 - d - q) / 2)`` from the
     #: backed-up (q, d) (spec issue 148) - for ``LossConfig.q_ratio``'s blend; None: not given.
     root_wdl: torch.Tensor | None = None
+    #: D4's reply prototype: ``(B, M2)``, the opponent's next turn as a distribution over the mapped
+    #: moves (``PositionState.opp_moves``; ``train.reply_map``), all zero where there is no target;
+    #: None: none anywhere.
+    opp_reply: torch.Tensor | None = None
 
 
 @dataclass
@@ -97,8 +108,9 @@ class LossConfig:
             "categorical": 1.0,
             "short_term": 1.0,
             "value_error": 1.0,
+            "soft_policy": 8.0,  # section 12.4: "at eight times the policy loss weight"
+            "opp_reply": 0.15,  # section 12.4: "weight 0.15, KataGo's"
             "moves_left": 1.0,
-            "opp_reply": 1.0,
             "board": 1.0,
             "square": 1.0,
             "effort": 1.0,
@@ -116,6 +128,8 @@ class LossConfig:
     error_horizon: int = 0
     #: D3: the error head's Huber delta - PLACEHOLDER (issue 231).
     error_huber_delta: float = 1.0
+    #: D4: the soft policy's power - "the policy target raised to the power 1/4" (section 12.4).
+    soft_policy_power: float = 0.25
 
 
 def categorical_ce(logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
@@ -132,14 +146,23 @@ def masked_ce(logits: torch.Tensor, valid: torch.Tensor, target: torch.Tensor) -
     return per[has].mean() if bool(has.any()) else logits.new_zeros(())
 
 
-def index_ce(logits: torch.Tensor, valid: torch.Tensor, index: torch.Tensor) -> torch.Tensor:
+def distribution_ce(logits: torch.Tensor, valid: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    """Cross-entropy over variable-length candidate lists, averaged over the positions whose
+    target has mass (a position with none - no target - is skipped)."""
     if logits.shape[-1] == 0:
         return logits.new_zeros(())
-    keep = index >= 0
-    if not bool(keep.any()):
-        return logits.new_zeros(())
-    logp = torch.log_softmax(logits.float(), dim=-1).masked_fill(~valid, 0.0)
-    return -logp[keep].gather(-1, index[keep][:, None]).mean()
+    logp = torch.log_softmax(logits.float().masked_fill(~valid, float("-inf")), dim=-1).masked_fill(~valid, 0.0)
+    per = -(target.float() * logp).sum(dim=-1)
+    keep = (target.float().sum(dim=-1) > 0) & valid.any(dim=-1)
+    return _masked_mean(per, keep)
+
+
+def soft_policy_target(target: torch.Tensor, power: float = 0.25) -> torch.Tensor:
+    """D4's soft policy target: each row raised to ``power`` and renormalised (section 12.4:
+    "the policy target raised to the power 1/4 and renormalised"); a row with no mass stays zero."""
+    t = target.float().clamp(min=0.0) ** power
+    total = t.sum(dim=-1, keepdim=True)
+    return torch.where(total > 0, t / total.clamp(min=1e-30), torch.zeros_like(t))
 
 
 def _board_square_mean(per_token: torch.Tensor, token_board: torch.Tensor, square_mask: torch.Tensor, n_boards: int) -> torch.Tensor:
@@ -221,8 +244,14 @@ def compute_losses(out: NetOutput, tgt: Targets, cfg: LossConfig | None = None) 
     per = F.huber_loss(out.value_error, torch.where(has_err, err, torch.zeros_like(err)), delta=cfg.error_huber_delta, reduction="none")
     losses["value_error"] = _masked_mean(per, has_err)
 
+    # D4 (section 12.4): the soft policy (full searches only) and the reply prototype (behind its flag).
+    if out.soft_policy_logits is not None:
+        soft = soft_policy_target(action_target, cfg.soft_policy_power)
+        losses["soft_policy"] = masked_ce(out.soft_action_logits()[full], out.action_valid()[full], soft[full])
+    if out.opp_reply_logits is not None and tgt.opp_reply is not None:
+        losses["opp_reply"] = distribution_ce(out.opp_reply_logits, out.opp_move_valid, tgt.opp_reply)
+
     losses["moves_left"] = F.huber_loss(out.moves_left_log, torch.log1p(tgt.moves_left.float()), delta=cfg.huber_delta)
-    losses["opp_reply"] = index_ce(out.opp_reply_logits, out.opp_move_valid, tgt.opp_reply)
 
     bce_b = F.binary_cross_entropy_with_logits(out.board_logits, tgt.board.float(), reduction="none").sum(-1)
     losses["board"] = _reduce_boards(bce_b, out.board_valid, cfg.board_reduction)
