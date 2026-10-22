@@ -138,6 +138,10 @@ const std::vector<Config> kConfigs = {
     {"ply tree, no widening, E2+E3", TurnSplit::BoardMove, false, false, true, true, NodeKey::State, false},
     {"turn tree, solver", TurnSplit::WholeTurn, false, true, false, false, NodeKey::State, true},
     {"turn graph, E2+E3", TurnSplit::WholeTurn, true, true, true, true, NodeKey::State, false},
+    // D2's tree form (§8.2's interaction gates, the default readings): a tree
+    // only - refused under MCGS (build-log spec issue 301).
+    {"tree form, solver", TurnSplit::Tree, false, true, false, false, NodeKey::State, true},
+    {"tree form, no widening, E2+E3", TurnSplit::Tree, false, false, true, true, NodeKey::StateAndOrigins, false},
 };
 
 SearchParams params_of(const Config& c) {
@@ -863,9 +867,19 @@ TEST(mcts_rerooting_keeps_only_reachable_nodes_and_cached_evaluations) {
     // A sibling that will be deleted: its state's evaluation is a state-keyed fact.
     NodeId sibling = kNoNode;
     for (std::size_t i = 0; i < children.size(); ++i) {
-      if (i != ch.index && children[i].child != kNoNode && search.node(children[i].child).expanded &&
+      if (i != ch.index && children[i].child != kNoNode && search.node(children[i].child).evaluated &&
           !seen.count(children[i].child)) {
         sibling = children[i].child;
+      }
+    }
+    // The tree form evaluates a root child only where a gate fires (the rest
+    // inherit, and hold no evaluation to keep): then any evaluated node the new
+    // root will not reach, and the purge will not take (as many boards).
+    const std::size_t kept_boards = search.node(kept).state->multiverse().board_count();
+    for (NodeId id = 0; sibling == kNoNode && id < search.node_count(); ++id) {
+      if (id != search.root() && !seen.count(id) && search.node(id).evaluated &&
+          search.node(id).state->multiverse().board_count() >= kept_boards) {
+        sibling = id;
       }
     }
     REQUIRE(sibling != kNoNode);

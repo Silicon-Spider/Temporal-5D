@@ -111,6 +111,19 @@ TEST(play_exe_records_replay_through_the_gate_adapter) {
   play_and_gate({"--split", "turn", "--playouts", "8", "--cap-turns", "5", "--seed", "4",
                  "--listing-cap", "128"},
                 {});
+  // D2's tree form, with its gates by name and with none.
+  play_and_gate({"--variant", "Standard - Two Timelines", "--split", "tree", "--playouts", "16", "--cap-turns", "4",
+                 "--cap-boards", "60", "--seed", "5", "--evaluator", "random"},
+                {});
+  const t5d::PgnRecord gated =
+      play_and_gate({"--variant", "Misc - Timeline Tactician", "--split", "tree", "--tree-gates", "between,check",
+                     "--playouts", "16", "--cap-turns", "4", "--cap-boards", "60", "--seed", "6", "--match"},
+                    {});
+  REQUIRE(gated.header("Engine") != nullptr);
+  CHECK(gated.header("Engine")->find("tree form, gates between,check,") != std::string::npos);
+  play_and_gate({"--variant", "Very Small - Open", "--split", "tree", "--tree-gates", "none", "--evaluator",
+                 "material", "--playouts", "16", "--cap-turns", "8", "--seed", "7"},
+                {});
   play_and_gate({"--variant", "Standard - Two Timelines", "--graph", "--match", "--playouts", "10",
                  "--cap-turns", "4", "--evaluator", "random"},
                 {});
@@ -175,6 +188,15 @@ TEST(play_exe_command_line) {
   CHECK(read_all(dir / "o.txt").empty());
   CHECK(read_all(dir / "e.txt").find("usage") != std::string::npos);
   CHECK_EQ(run(T5D_PLAY_EXE, {"--split", "sideways"}, {}, dir / "o.txt", dir / "e.txt"), 2);
+  CHECK_EQ(run(T5D_PLAY_EXE, {"--split", "tree", "--tree-gates", "between,sideways"}, {}, dir / "o.txt",
+               dir / "e.txt"),
+           2);
+  // The gates are read by the tree form alone: refused with another split.
+  for (const char* split : {"ply", "turn"}) {
+    CHECK_EQ(run(T5D_PLAY_EXE, {"--split", split, "--tree-gates", "none"}, {}, dir / "o.txt", dir / "e.txt"), 2);
+    CHECK(read_all(dir / "e.txt").find("--split tree") != std::string::npos);
+  }
+  CHECK_EQ(run(T5D_PLAY_EXE, {"--tree-gates", "all"}, {}, dir / "o.txt", dir / "e.txt"), 2);
   CHECK_EQ(run(T5D_PLAY_EXE, {"--variant", "No Such Variant"}, {}, dir / "o.txt", dir / "e.txt"), 2);
   // Values out of range are refused, never wrapped into a narrower type.
   for (const std::vector<std::string>& bad :
