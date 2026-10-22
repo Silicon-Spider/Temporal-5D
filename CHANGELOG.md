@@ -10,6 +10,39 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-23 - M21 (2/4): the targets from I15's records - I2's pruning, D3's and D4's targets, I13, I14's refusal; section 15.2's round trip
+
+- **`python/t5d/train/targets.py`** (new): every head's targets from a record alone, in float64,
+  deterministically. The policy target from full searches only (I5) with KataGo's forced-playout
+  pruning applied at target construction against a replica of the root's PUCT (§12.5), steered
+  visits excluded or, under the provenance arm, down-weighted (I2, §12.2; the counts are 0 until
+  E10); the soft-policy target; the search-value targets - D3's categorical over the root search
+  value of full searches with 6j's short-term arm as a switch, the short-term values at the heads'
+  horizons, the q_ratio blend's root WDL - from the pruned visits (I2, CHECKPOINT 7); WDL on the
+  result and moves-left in turns (issue 224's placeholder: the turn in progress counts), both
+  deblundered (I13: Lc0's threshold 0.1, the band a placeholder); travelled-into and
+  timeline-active-at-end per board, tactical volatility masked until proofs exist; the effort label
+  from the change point (issue 154); the reply prototype through `reply_map` from the rebuilt
+  inputs; D9's weights stay the loss's. I14's proof rescoring refused while
+  `PROOF_CHANNEL_SIGNED_OFF` is False. `TARGET_SOURCES` names each target's source - none a learned
+  verifier (D5). `collate_rows` turns record rows into the network's batch and the losses' `Targets`.
+- **`train/selfplay.py`**: `generate_game(target_config=...)` builds the targets at generation and
+  records each decision's prior-to-target divergence and the configuration.
+- **`train/losses.py`**: a missing target is masked - a NaN WDL row (an unscored game), moves-left
+  (a censored game), per-board or per-square label; unchanged where every target is present.
+- **Tests** (`python/tests/train/test_targets.py`): pruning against KataGo's amount derived in
+  closed form, the best child untouched, the submit child pruned like a move, a one-visit remainder
+  dropped, exclusion and provenance, the boost taken out; the pruned root value, soft policy, raw
+  prior and KL by hand; WDL, moves-left, short-term targets and deblundering (rewrite, band,
+  perspective, moves-left offset) on constructed games; travelled-into by brute force; effort
+  labels; the I14 refusal; the losses' masks. **Section 15.2's I15 row**: on generated games under
+  three game configurations and three target configurations, the targets re-derived from the stored
+  record (its inputs rebuilt by replay) equal the targets written at generation, bit for bit, the
+  reply maps included; record-derived batches give every loss finite, with and without the reply
+  prototype (forward only).
+- Spec: §8.3, §8.6, §12.2, §12.4, §12.5, §12.8, §15.2's I15 row; register I2, I5, I13, I14, D3, D4,
+  D5, D9, M21. Issue 235; proposed edits 176-178. BUILD_LOG's I2, I13, I14 and M21 rows updated.
+
 ### 2026-10-23 - M21 (1/4): I15's training records and the self-play generator that writes them
 
 Register M21's first part, in the net lane: the record format before anything that reads it.
