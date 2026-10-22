@@ -46,9 +46,9 @@ quiet-machine block).
 | Cached cost per node | 0.16 TF; 15-20× realistic | counted 0.168 TF; 24.4× / 29.2× counted (vs block-sparse / every-key dense) at 8 timelines; **8.4× / 9.9× at 24 timelines**; CPU wall pending | N3 table below; the network before M20's register positions - re-count pending | 1.05 (FLOPs); ratio at 24 timelines below the 15-20× - spec issue 36 | 2026-10-02, N3 |
 | Live-set recompute | 3.7-5.6× changed-boards-only | counted 3.68× (240, 8 TL), 5.47× (600, 12), **10.84× at 24 timelines** | N3 table below; the network before M20's register positions - re-count pending | 1.0 at the spec's timelines; ~2-3× above it at 24 | 2026-10-02, N3 |
 | Supersession recompute | +8-24% per node | counted, lineage: +5.9% / +12.0% (240, 8 TL; 1 / 2 boards), +0.3-2.8% elsewhere; creation reading cascades (spec issue 35) | N3 table below | within the bound under lineage | 2026-10-02, N3 |
-| Root refresh overhead (800 sims) | +3.6% / +6.1% full; +1.3% windowed | analytic only so far (3.64% / 6.13% at the spec's timelines; 1.24% / 3.10% at 24); CPU wall pending | N3 table below | - | 2026-10-02, N3 |
+| Root refresh overhead (800 sims) | +3.6% / +6.1% full; +1.3% windowed | analytic only so far (3.64% / 6.13% at the spec's timelines; 1.24% / 3.10% at 24); CPU wall pending | N3 table below; one dense pass - two under A7 (note below) | - | 2026-10-02, N3 |
 | One refresh | ≈ 10 node-evaluations | not measured: the estimate is windowed and the window is not built (spec issue 39) | | | |
-| KV memory per state | ~260 MB (240) / ~649 MB (600); ~113 MB windowed | BF16 250.9 MB (240, 8 TL), 635.8 MB (600, 12 TL) - frozen boards only, exact; FP8 50.1% | N3 table below | 0.97 / 0.98 | 2026-10-02, N3 |
+| KV memory per state | ~260 MB (240) / ~649 MB (600); ~113 MB windowed | BF16 250.9 MB (240, 8 TL), 635.8 MB (600, 12 TL) - frozen boards only, exact; FP8 50.1% | N3 table below; one perspective - under A7 every store holds two entries per root frozen board from the moment its epoch is made (note below) | 0.97 / 0.98 | 2026-10-02, N3 |
 | Local/global interleave | 0.067 TF per node | - | | | |
 | Leaf-batching gain | 1.2-1.5× | - | | | |
 | NNUE eval | ~10k MACs, sub-µs | - | | | |
@@ -86,7 +86,21 @@ dense pass), so the re-count is step 2's quiet-machine block's, with the wall ti
 | 600 boards, 24 TL (corpus) | 27.375 / 22.490 / 28.180 | 1.1056 / 1.1378 | 24.8 / 19.8 / 24.8x | 10.81 / 10.84x | 0.3% / 0.9% | 622.9 / 312.0 / 1245.7 |
 
 Root refresh at 800 sims, analytic: 3.64% / 1.24% / 6.13% / 3.10% (rows in
-order). KV bytes are the cache's exact tensor bytes, frozen boards only; the trunk
+order).
+
+*Conditions note (2026-10-22, `lane/net` N-A7):* register A7 reads every board from the
+acting player's side, so the cached path keys frozen K/V by the acting player (spec issue
+303). Everything in this table is one perspective's. As built, a search root's history is
+computed from both colours' sides and a refresh runs its dense pass twice, so by
+construction the history build and the root-refresh overheads double (analytic at 800
+simulations: 7.28% / 2.48% / 12.26% / 6.20%). The other side is computed eagerly
+(`root_epoch`, `_refresh`), so every store holds two entries per root (or refresh anchor)
+frozen board from the moment its epoch is made, whichever colours' nodes are then reached -
+twice the KV bytes above for those boards, while one state's figure is unchanged; a board
+frozen later (a superseded one) gets its second entry only when the other colour's nodes
+read it. Arithmetic from the construction, not a measurement: the counts and
+wall times are step 2's quiet-machine block's (`cache_bench`'s `analytic_both_perspectives`
+and `cache_bytes_per_perspective`). KV bytes are the cache's exact tensor bytes, frozen boards only; the trunk
 outputs the cache also holds add about 16 MB at 240 boards and 40 MB at 600. The
 spec's all-token figures (259.8 / 649.1 MB) are reproduced by the analytic model.
 

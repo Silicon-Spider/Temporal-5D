@@ -1,12 +1,14 @@
 """Input embeddings (A2, A3, B8; spec sections 2.2, 2.3, 5.3).
 
-Square tokens: learned embeddings of piece type (13 incl. empty), colour (none, white,
-black) and the has-moved flag, summed (A2). Coordinates are not embedded here: they
-reach attention through the 4D RoPE (B4).
+Square tokens: learned embeddings of piece type (13 incl. empty), owner (none, ours,
+theirs - relative to the acting player, register A7) and the has-moved flag, summed (A2).
+Coordinates are not embedded here: they reach attention through the 4D RoPE (B4), in the
+acting player's frame (A7: ranks mirrored and timelines negated when Black acts -
+``state.py``).
 
 Every token of a board - its squares and its per-board registers - additionally gets
-the board's flag embeddings (head/superseded, active/inactive timeline, side to move;
-section 2.3: "added to every token on the board") and its Delta-t-to-present embedding
+the board's flag embeddings (head/superseded, active/inactive timeline, side to move - us
+or them, relative to the acting player, A7; section 2.3: "added to every token on the board") and its Delta-t-to-present embedding
 (A3). Delta-t is continuous: a small learned MLP (GELU) over the features
 ``(dt / dt_scale, sign(dt) * log1p|dt|, [dt == 0])``, so the binary "present" flag is
 kept as Delta-t's zero (section 2.3) while the distance to the present stays readable
@@ -24,28 +26,32 @@ Padding tokens embed to zero (they are masked out of attention as keys).
 Under the block-causal scope with ``frozen_features="intrinsic"`` (stage N3; ruled by M20 -
 ``NetConfig.frozen_features``), a superseded board's tokens get neither of the two flags that
 change after the board is frozen - Delta-t-to-present and the active/inactive timeline flag -
-so that a frozen board's input depends on the board alone; head boards keep both ("Live tokens
+so that a frozen board's input depends on the board alone - and, under A7, on whose view it is
+encoded in (the acting player: below); head boards keep both ("Live tokens
 keep A3's features as inputs", section 4.1). The frozen boards' current values reach the live
 tokens that read them as B16's score-time key biases instead (``status.py``). The model passes
 ``frozen_intrinsic`` for that scope only.
 
-**The acting player (stage N5, register D8: "a global acting-player input").** One learned
-embedding per colour - whose action this is, which differs from the present's colour once
-the present has shifted inside an unsubmitted action (``PositionState.acting_player``) - is
-added to the global register tokens, and to no other (M20: "acting player -> global
-registers"; section 2.3's global turn-state inputs). A board token's embedding is unchanged by
-it: the input reaches the boards through attention to the global registers, which the live
-set reads and frozen boards never do under the block-causal scope.
+**The acting player (stage N5, register D8: "a global acting-player input"; A6, A7: "acting
+colour kept as a global input").** One learned embedding per colour - whose action this is,
+which differs from the present's colour once the present has shifted inside an unsubmitted
+action (``PositionState.acting_player``) - is added to the global register tokens, and to no
+other (M20: "acting player -> global registers"; section 2.3's global turn-state inputs). Under
+A7 it is the acting *colour*: every board token's features are already the acting player's
+view (owner, side to move, canonical coordinates), so "acting player" as such is always "us";
+this embedding is what is left of the colour, "for the few colour-asymmetric facts (White
+moves first)" (section 2.2). Every board token's embedding depends on who acts through that
+view - frozen boards' included, so the cached path keys frozen K/V by the acting player
+(``cache.py``; spec issue 303) - and on nothing else of it: the colour reaches the boards
+through attention to the global registers.
 
 **With no global registers** (``global_regs = 0``, an ablation-3 arm: "registers on/off")
 there is nothing to carry it, and section 2.3 says nothing of that case; dropping it would
-drop a committed input with the registers - the network could not tell an action whose
-present has shifted from the opponent's turn start on the same boards, section 2.3's own case.
-So it is added to every board token instead - squares and per-board registers - and under
-the block-causal scope (``block_causal``) to the live (head) boards' tokens only, so that a
-frozen board's input never depends on it, as with global registers. A PLACEHOLDER of a
-committed-class silence, fixed in code (spec issue 225): A6's turn-state counts, when they are
-built, meet the same question.
+drop a committed input with the registers (A7 keeps the acting colour as an input). So it is
+added to every board token instead - squares and per-board registers - and under the
+block-causal scope (``block_causal``) to the live (head) boards' tokens only, as with global
+registers, where no frozen board reads it. A PLACEHOLDER of a committed-class silence, fixed in
+code (spec issue 225): A6's turn-state counts, when they are built, meet the same question.
 """
 
 from __future__ import annotations
@@ -54,7 +60,7 @@ import torch
 from torch import nn
 
 from .config import NetConfig
-from .state import N_COLOURS, N_PIECE_TYPES, TOKEN_BOARD_REGISTER, TOKEN_GLOBAL_REGISTER, TOKEN_SQUARE, Batch
+from .state import N_OWNERS, N_PIECE_TYPES, TOKEN_BOARD_REGISTER, TOKEN_GLOBAL_REGISTER, TOKEN_SQUARE, Batch
 
 
 class InputEmbedding(nn.Module):
@@ -63,17 +69,17 @@ class InputEmbedding(nn.Module):
         d = cfg.d_model
         self.cfg = cfg
         self.piece = nn.Embedding(N_PIECE_TYPES, d)
-        self.colour = nn.Embedding(N_COLOURS, d)
+        self.owner = nn.Embedding(N_OWNERS, d)  # A7: none, ours, theirs (A2's colour, relative)
         self.moved = nn.Embedding(2, d)
         self.head_flag = nn.Embedding(2, d)  # 0 superseded, 1 head
         self.active_flag = nn.Embedding(2, d)  # 0 inactive, 1 active timeline
-        self.stm_flag = nn.Embedding(2, d)  # 0 white to move on the board, 1 black
+        self.stm_flag = nn.Embedding(2, d)  # 0 us (the acting player) to move on the board, 1 them (A7)
         self.dt_in = nn.Linear(3, cfg.dt_hidden)
         self.dt_out = nn.Linear(cfg.dt_hidden, d)
         self.board_register = nn.Embedding(max(cfg.regs_per_board, 1), d)
         self.global_register = nn.Embedding(max(cfg.global_regs, 1), d)
         self.not_square = nn.Parameter(torch.empty(d))
-        #: Register D8: the acting player (0 white, 1 black), added to the global registers
+        #: Register D8 / A7: the acting colour (0 white, 1 black), added to the global registers
         #: (M20) - with none, to the board tokens (the module docstring; spec issue 225). Made
         #: without drawing from the RNG, and drawn from D8's own generator
         #: (``model._init_weights``), never from the global stream.
@@ -94,7 +100,7 @@ class InputEmbedding(nn.Module):
         is_greg = (kind == TOKEN_GLOBAL_REGISTER).unsqueeze(-1)
         on_board = is_square | is_breg
 
-        square = self.piece(batch.piece) + self.colour(batch.colour) + self.moved(batch.moved)
+        square = self.piece(batch.piece) + self.owner(batch.owner) + self.moved(batch.moved)
         board = (
             self.head_flag(batch.is_head)
             + self.active_flag(batch.active)

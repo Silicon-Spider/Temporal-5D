@@ -117,6 +117,8 @@ class Multiverse:
         ``0`` - and ``-1`` too for an even start - initial)."""
         if state.creation is None:
             raise ValueError("the fixture needs the boards' creation order")
+        if even_start is None and state.even_start:
+            even_start = True
         if even_start is None:
             first_m1 = state.half_turn[state.timeline == -1]
             even_start = bool(first_m1.size) and int(first_m1.min()) == int(state.half_turn.min())
@@ -290,6 +292,7 @@ class Multiverse:
             parent=np.array([index[self.boards[k].parent] if self.boards[k].parent is not None else -1 for k in keys], dtype=np.int64),
             creation=np.array([self.boards[k].creation for k in keys], dtype=np.int64),
             source=np.array([index[self.boards[k].source] if self.boards[k].source is not None else -1 for k in keys], dtype=np.int64),
+            even_start=self.even_start,
         )
         probe = PositionState(**kwargs)
         graph = reach_graph(probe)

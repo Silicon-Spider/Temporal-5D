@@ -91,17 +91,38 @@ BOARD_HEADS: tuple[str, ...] = ("travelled_into", "timeline_active_at_end", "tac
 #: neighbourhood that is no relation type (the royal zone; for the side to move it partly
 #: overlaps the king's legal moves). The labels' generator (exact, from the rules engine) is
 #: not built (step 2, the engine lane). Facts are about the whole multiverse, cross-board
-#: lines included:
+#: lines included. Register A7: the network reads every input from the acting player's side,
+#: so the colour-specific labels are the acting player's ("ours") and the opponent's
+#: ("theirs") - a relabelling of the set's white/black facts, not a new set (spec issue 226) -
+#: and ``square_labels_by_colour`` maps them back to colours:
 SQUARE_LABELS: tuple[str, ...] = (
     "exchange_loses_occupant",  # the static exchange on the square loses material for the occupant's side
-    "reachable_in_two_white",  # some white piece reaches the square in exactly two of its own moves
-    "reachable_in_two_black",
-    "arrival_gives_check_white",  # some white piece moving onto the square gives check from it
-    "arrival_gives_check_black",
-    "royal_zone_white",  # within one 4D king step of a white royal piece
-    "royal_zone_black",
-    "arrival_gives_mate",  # some legal move of the player to move onto the square mates
+    "reachable_in_two_ours",  # some piece of the acting player reaches the square in exactly two of its own moves
+    "reachable_in_two_theirs",
+    "arrival_gives_check_ours",  # some piece of the acting player moving onto the square gives check from it
+    "arrival_gives_check_theirs",
+    "royal_zone_ours",  # within one 4D king step of a royal piece of the acting player
+    "royal_zone_theirs",
+    "arrival_gives_mate",  # some legal move of the acting player onto the square mates
 )
+
+#: The labels by colour (white/black), in ``SQUARE_LABELS``' order with "ours" read as White.
+SQUARE_LABELS_BY_COLOUR: tuple[str, ...] = tuple(name.replace("_ours", "_white").replace("_theirs", "_black") for name in SQUARE_LABELS)
+
+
+def square_labels_by_colour(square_logits: torch.Tensor, acting_player: torch.Tensor) -> torch.Tensor:
+    """Register A7's "outputs mapped back" for the per-square labels: ``square_logits``
+    ``(B, L, len(SQUARE_LABELS))`` (ours/theirs) as ``SQUARE_LABELS_BY_COLOUR`` (white/black),
+    given each position's acting player ``(B,)`` (0 white, 1 black) - the ours and theirs
+    channels swapped where Black acts. The tokens need no mapping (the canonical view moves
+    none - ``state.py``)."""
+    swap = torch.arange(len(SQUARE_LABELS), device=square_logits.device)
+    for i, name in enumerate(SQUARE_LABELS):
+        if name.endswith("_ours"):
+            j = SQUARE_LABELS.index(name[: -len("_ours")] + "_theirs")
+            swap[i], swap[j] = j, i
+    black = (acting_player.to(square_logits.device) == 1)[:, None, None]
+    return torch.where(black, square_logits[..., swap], square_logits)
 
 
 # --- categorical helpers ------------------------------------------------------------------

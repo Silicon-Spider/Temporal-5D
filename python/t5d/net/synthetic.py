@@ -263,6 +263,7 @@ def synthetic_state(
         global_regs=global_regs,
         parent=parent,
         creation=creation,
+        even_start=even_start,
     )
     probe = PositionState(**state_kwargs)
     layout = probe.layout

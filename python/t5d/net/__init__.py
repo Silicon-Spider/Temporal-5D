@@ -16,7 +16,8 @@ recompute, prefix sharing, refresh epochs and FP8 storage (C2, C3, C3a rung 1, C
 ``cache.py``), the refresh ladder's complexity trigger (C24, prototype - ``complexity.py``),
 a search-tree fixture (``tree.py``), and section 15.3's cost model and
 benchmark (``cost.py``, ``cache_bench.py``). See ``config.py`` for which register rows are
-built here and which are flags for later stages.
+built here and which are flags for later stages. Register A7: the input is read from the acting
+player's side (``state.py``; ``mirror`` is a position's colour-swapped mirror).
 """
 
 from .cache import CacheConfig, CachedEvaluator, Epoch, KVStore, reference_output
@@ -33,6 +34,7 @@ from .state import (
     PositionState,
     TokenLayout,
     collate,
+    mirror,
     permute_boards,
     relayout,
     timeline_index,
@@ -69,6 +71,7 @@ __all__ = [
     "PositionState",
     "TokenLayout",
     "collate",
+    "mirror",
     "permute_boards",
     "relayout",
     "timeline_index",

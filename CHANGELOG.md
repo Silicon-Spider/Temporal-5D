@@ -10,6 +10,165 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-23 - Build log: issues 225, 226 and 229 wait on the user
+
+- `docs/BUILD_LOG.md`, "Waiting on the user": spec issue 225 (F6/M20: the acting
+  player with no global registers) and 226 and 229 (A7: the per-square labels as
+  ours/theirs; the other colour's refresh view), none blocking.
+- Spec: none.
+
+### 2026-10-22 - A7 review fixes: the other colour's refresh view without the anchor's moves; the mirror's own timeline map
+
+Two reviewers' findings on the A7 commit (00c4c41); no wrong result in the canonicalisation
+itself.
+
+- **A refresh's other-colour view** (`net/cache.py`, `viewed_by`; spec issue 229, new). It
+  swapped the acting player and cleared the submit flags but kept the anchor's moves and
+  edges, which are the anchor's acting player's (the engine builds the move graph and the
+  typed relations for the player to move's pieces only): from the other colour's side every
+  move edge started on "their" pieces, and under B9's symmetric move-graph mask frozen squares
+  attended along them in the dense refresh pass - an input no conversion produces (strict
+  conversion refuses it), encoded into the history K/V of every node the other colour acts at,
+  and invisible to the equivalence tests because `reference_output` built the same anchor.
+  The view now carries no moves, no reply moves and no edges. Chosen over giving it the other
+  colour's own moves: no expansion supplies them (the anchor's boards with the other colour
+  acting are no game state, and the network computes no rule), while a position with no move
+  is one conversion does produce. A committed-class silence under the deferred cached
+  configuration (C2, C3), so a placeholder fixed in code, with no second arm until something
+  supplies the other colour's move graph. Under the block-causal scope the edges open and bias
+  live rows only, so a root's other-side history built without a refresh is unchanged.
+  Tests: `test_the_other_perspectives_anchor_has_no_moves_or_edges` (synthetic, six
+  constructions, two seeds) and `test_the_other_perspectives_anchor_on_real_positions` (the
+  engine's positions, both acting colours) capture every dense pass of a refresh and of
+  `reference_output`: the own view keeps the anchor's moves and edges (on the engine's, every
+  source the acting player's), the other's has no move, reply move or edge - none whose source
+  is not that view's acting player's - and cached = reference from both sides. Both fail
+  against the old `viewed_by`.
+- **The mirror's timeline map** (`net/state.py`, `mirror`). It negated timelines through
+  `canonical_timeline`, the map under test; that map is self-inverse, so any wrong
+  self-inverse map cancelled in the synthetic mirror test (patched to the identity, every
+  output test still passed). `mirror` now writes the negation itself (`-1 - p` in a +-0
+  variant, else `-p`), as it already wrote the rank mirror; its docstring says the engine test
+  pins the map against the notation. Mutants of `canonical_timeline`, patched in at test time
+  (no file kept edited), against `tests/net/test_perspective.py -k mirror`: the identity - 90
+  failed, 18 passed; `-p` for `-1 - p` - 2 failed (`test_mirror_has_identical_canonical_inputs`
+  on `even_start` and `shifted_submit_absent`; the outputs cannot see a shift of one, the
+  coordinates being recentred).
+- **The engine test's variants** (`tests/engine/test_perspective_engine.py`): it iterated
+  `helpers.VARIANTS`, ten of the engine's variants, while its docstring and the A7 entry said
+  "every variant". It now iterates `helpers.ENGINE_VARIANTS` (new): the engine's whole table,
+  16 named variants (`Misc - Small` is `Small`'s alias); about 20 s for the file.
+- **Documents.** The memory cost read as conditional ("once both colours' nodes are
+  reached"); as built, `root_epoch` and `_refresh` compute the other side eagerly, so every
+  store holds two entries per root (or refresh anchor) frozen board from the moment its epoch
+  is made, and a board superseded later gets its second entry only when the other colour reads
+  it: reworded in `docs/MEASUREMENTS.md` (the KV-memory row and the A7 conditions note),
+  issue 303's note and the A7 entry below. `tie()` in `tests/net/test_perspective.py` says
+  that the untied carrier assertion is what guards anything routed through the acting-colour
+  embedding. `docs/BUILD_LOG.md`: the A7 row (the variants; the review fixes; a note for A8:
+  the board-layout embedding must flatten each board in canonical (x, y) order, not storage
+  order, or A7 breaks for Black), issue 303's note, spec issue 229 and proposed edit 170
+  (new).
+- Checks: network 1197 passed, 1 skipped (`T5D_REQUIRE_ENGINE=1`; the skip is `T5D_RECORDS`'s);
+  `ruff check` and `ruff format --check` clean; `harness.py verify` ok.
+- Spec: §7.9 (the refresh pass; conditioning-offset training), §7.7, §2.2, §15.2's A7 row,
+  §15.3's KV-memory row; register A7, C2, C3, B9 - spec issue 229 (new: the other colour's
+  refresh view, a placeholder) and proposed edit 170 (new), with the main loop's 201; issue
+  303's note reworded.
+
+### 2026-10-22 - Network A7: perspective canonicalisation, the colour-swap mirror test
+
+Register A7 (Committed, class C; spec §2.2): the network reads every input from the acting
+player's side, as AlphaZero, Lc0 and KataGo do.
+
+- **The view** (`net/state.py`). `PositionState` keeps the engine's absolute facts; its
+  `token_arrays` and `collate` give the network the acting player's view: each square's owner
+  ours/theirs (`OWNER_*`, `PositionState.owner`) instead of its colour, each board's side to move
+  us/them (§2.3), and when Black acts every rank mirrored (`y -> H - 1 - y`, §2.2's
+  `r -> size + 1 - r`) and every timeline negated (`p -> -p`; in a ±0 variant `p -> -1 - p`,
+  §2.2's `i -> -1 - i` in §12.6's index mapping, which swaps -0 and +0). File, time and Δt are
+  unchanged. `PositionState.even_start` (new, default False) carries the variant's parity: the
+  converter fills it from the engine's `Expansion.even`, `synthetic_state` and the tree fixture
+  from their own. `Batch.colour` is now `Batch.owner`; `Batch.stm` is relative; `Batch.coords`'
+  rank and timeline and `coord_ref`'s timeline reference are canonical.
+- **Outputs mapped back.** The view moves no token, so every token-indexed output - the policy's
+  moves, the reply's, the per-board and per-square outputs - maps back by the identity (policy
+  logit `i` still scores engine move `i`, for either colour); the value is already the acting
+  player's (D8). The per-square labels' white/black facts are relabelled ours/theirs
+  (`heads.SQUARE_LABELS`; spec issue 226), and `heads.square_labels_by_colour` maps the logits
+  back to the colour names (`SQUARE_LABELS_BY_COLOUR`).
+- **The embedding** (`net/embed.py`). A2's colour table is the owner table (`embed.owner`: none,
+  ours, theirs - renamed in place, so no parameter and no draw changes; F1 and `V1_TOTAL` as
+  they were); the side-to-move flag reads us/them. D8's acting-player embedding stays where M20
+  put it and is now A7's acting colour, "for the few colour-asymmetric facts (White moves
+  first)" - one input for A6's "acting player and acting colour" (spec issue 228). The
+  docstrings of `embed.py`, `model.py`, `state.py`, `convert.py` and `evaluator.py` say so;
+  `embed.py`'s and `cache.py`'s premise that no board token depends on the acting player is gone.
+- **The cached path** (`net/cache.py`; spec issue 303, as the plan read it). A frozen board's
+  input is now the acting player's view of it, so every frozen board's K/V are keyed by the
+  acting player (`board_ident(..., acting=True)` in the dependency digest); history membership
+  stays by the intrinsic identity. A search root's frozen boards are built from both colours'
+  sides when its epoch is made (`root_epoch`), and a refresh runs its dense pass twice - the
+  anchor as it is and the same boards with the other colour acting (`viewed_by`, new) - so a
+  node of either acting player reads history in its own frame and no node recomputes a root
+  board. `reference_output`'s anchor pass is the node's view. The cost - twice the history
+  build and the refresh, and, the other side being computed eagerly, two entries per root
+  frozen board in every store from the moment its epoch is made (review fix) - is
+  C2's to weigh (issue 303's note); `cache_bench` reports `analytic_both_perspectives` and
+  `cache_bytes_per_perspective` beside its one-perspective figures.
+- **The mirror** (`state.mirror`, with `mirror_tokens`, `square_mirror`, `canonical_timeline`
+  and `canonical_rank`; `mirror` exported from `t5d.net`): a position's colour-swapped mirror -
+  colours swapped, ranks mirrored (edges and moves remapped), timelines negated by A7's map,
+  the acting player swapped - with every board one half-turn later so that its side to move is
+  the other colour (spec issue 227: invisible to the network, which reads time relative to the
+  present; the mirror of the mirror is the position two half-turns later).
+- **Tests.** `tests/net/test_perspective.py` (new) - §15.2's A7 row read as issue 304 says:
+  every field of the canonical input equal bit for bit at the mirrored token but the acting
+  colour, the embeddings differing exactly where it enters (the global registers; with none,
+  issue 225's board tokens); every output equal mapped back with the colour embedding's rows
+  tied (a test hook), FP32 within 1e-5, the shipped BF16 network no further from its mirror
+  than from its own FP32 computation; untied, the outputs differ; on 18 constructions (many
+  timelines, deep travel, duplicated boards, ±0, fairy pieces, past the shift with submit
+  legal, masked and absent, 7x7 to Global Warming's 1x1, far apart, 4/0 and 0/16 registers),
+  3 seeds, both scopes, B5/B10/B11/B12/B17 and B15 off; the board order; the index mapping;
+  the label map-back; and the cached path under both supersession readings, with and without
+  a root refresh, equal to the full pass for both acting colours and equal across the mirror.
+  `tests/engine/test_perspective_engine.py` (new) - the engine's own 5DFEN mirror (rows
+  reversed, case swapped, labels negated, one half-turn later) converts to `mirror` of the
+  conversion, moves, move graph and relations included, for both acting colours, ten of the
+  engine's variants (review fix: all 16), the records' positions and random play; the network agrees on the two (both
+  scopes, B11 on, moves matched in the engine's own order); positions past the shift agree
+  with their mirrors. `test_d8.py` rewritten for A7: a flipped acting player changes every
+  board token's encoding (owners, side to move, mirrored coordinates), and its colour
+  embedding alone changes the embeddings only where it enters; cached = full pass with two
+  entries per frozen board and no node recomputing one; a refresh stores each perspective's
+  own K/V. `test_cache.py`'s counts are per perspective (the root's history twice; a node
+  whose move gives the other colour the action reads its parent's boards from that side, so the
+  purity, prefix-sharing, `"current"`-features and B16 tests evaluate that view first or count
+  each (board, perspective) entry once); `tests/engine/test_network.py`'s shifted-action test:
+  every token's embedding moves, the colour's own embedding only where it enters;
+  `test_invariance.py` runs its storage-order and translation checks for both acting players;
+  `test_embed.py` reads `Batch.owner`. Mutants patched in at test time (no file
+  edited): no rank mirror, no timeline negation, absolute owners, absolute side to move,
+  frozen keys without the perspective - each caught; `-p` for `-1 - p` in a ±0 variant
+  changes no output (the coordinates are recentred) and is caught by the canonical-input test.
+- `docs/BUILD_LOG.md`: register rows A7 (built, tested), A1-A3, A6, B15, C2, D4, D8; notes on
+  issues 303 (built; its cost by construction) and 304 (built); spec issues 226-228 and
+  proposed edits 167-169 (new). `docs/MEASUREMENTS.md`: a conditions note - the cached rows
+  are one perspective's; under A7 the history build and the refresh double (analytic root
+  refresh at 800 simulations 7.28% / 2.48% / 12.26% / 6.20%) and every store holds twice the
+  KV bytes for its root's frozen boards (review fix: computed eagerly); arithmetic from the construction, the counts and wall times the
+  quiet-machine block's.
+- Checks: network 1190 passed, 1 skipped (`T5D_REQUIRE_ENGINE=1`; the skip is `T5D_RECORDS`'s);
+  `ruff check` and `ruff format --check` clean; `harness.py verify` ok (pins, corpus, known
+  divergences, rulebook, boundary, provenance, golden observations). F1 and `V1_TOTAL` unchanged.
+- Spec: §2.2 (perspective canonicalisation), §2.3 (side to move us/them; the acting colour),
+  §12.4's per-square row, §15.2's A7 row, §7.1, §7.9, §10.3 and §15.3's cached rows; register
+  A7, A2, A3, A6, D4, D8, C2, C3, C17, M20 - spec issues 226 (the per-square labels'
+  relabelling), 227 (the mirror's half-turn shift; the identity map-back), 228 (one
+  acting-colour input), notes on 303 and 304; proposed edits 167-169 (new), with the main
+  loop's 201 and 202, which this change builds.
+
 ### 2026-10-22 - Engine: the shared proof stores' locks correct on every platform (a data race under winpthreads' shared_mutex)
 
 - The defect (register H17; found at E-A6's review on 2026-10-17 and parked there).
