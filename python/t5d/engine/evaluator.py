@@ -35,7 +35,10 @@ perspective of the acting player** (register D8: the player whose action is in p
 until it submits - the present's colour except past the shift; the network's target
 convention, ``net/heads.py``, and the search's) - the side whose candidate moves the policy
 scores. Promotions to different pieces get different logits: the policy adds a learned
-per-piece offset (§8.1, D1; M20).
+per-piece offset (§8.1, D1; M20). The network reads the position from the acting player's
+side (register A7: ranks mirrored and timelines negated when Black acts - ``net/state.py``);
+that moves no token, so the logits come back in the leaf's move order for either colour, and
+nothing here maps them.
 """
 
 from __future__ import annotations

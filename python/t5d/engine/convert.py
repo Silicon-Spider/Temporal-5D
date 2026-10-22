@@ -11,6 +11,7 @@ Engine (``t5d_expansion``)                     ``PositionState``
 ``width``, ``height``                          ``width``, ``height``
 boards, canonical order (timeline, then h)     storage order (board ``b`` is engine board ``b``)
 ``timeline`` (p; "-0" -> -1, "+0" -> 0)        ``timeline`` (= ``state.timeline_index``)
+``even`` (a +-0 variant)                       ``even_start`` (A7's timeline negation)
 ``half_turn`` (h = 2T + black)                 ``half_turn``
 ``is_head``                                    ``is_head`` (head vs superseded)
 ``active``                                     ``active``
@@ -57,6 +58,12 @@ promotion)                                     promotion)`` - row i is engine mo
   where no move may be made. An acting player that is no colour is refused even then. Under
   Q4's Guide-literal reading (``T5D_RULES_NO_MOVES_AFTER_SHIFT``) a state past the shift has
   no move and offers submit alone.
+* **The acting player's view (register A7).** The state keeps the engine's absolute facts -
+  colours, ranks, timeline labels - and the network reads them from the acting player's side
+  (``net/state.py``: owners ours/theirs, side to move us/them, ranks mirrored and timelines
+  negated when Black acts, ``p -> -1 - p`` in a +-0 variant, hence ``even_start``). Nothing
+  here is re-indexed for it: the boards and squares keep the engine's order, so policy logit
+  ``i`` still scores engine move ``i`` whoever acts.
 * **Moves.** The engine's pseudo-legal moves of the player to move (the legal-moves
   filter is not in the C API), one row per move in the engine's order, so policy logit
   ``i`` scores engine move ``i`` (``t5d_game_apply_expanded(i)``). A branching move's
@@ -303,6 +310,7 @@ def to_position_state(x: Expansion, *, regs_per_board: int = 2, global_regs: int
         acting_player=int(x.acting_player),
         submit_possible=bool(x.submit_possible),
         submit_legal=bool(x.submit_legal),
+        even_start=bool(x.even),
     )
 
 

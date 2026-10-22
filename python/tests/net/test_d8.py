@@ -9,14 +9,17 @@ possible and masked unless it is legal; the policy is one distribution over the 
 submit.
 
 Checked here on synthetic states (no engine): where the input enters the encoding, under each
-scope - on the global registers, or with none (ablation 3's arms without them) on the board
-tokens, the live boards' under the block-causal scope (a placeholder, spec issue 225); that it
-reaches the outputs under every register arm; the submit logit's three cases (absent, masked,
-live), its pooled source and both readouts; the joint normalisation; section 15.2's
-dense-vs-cached equivalence with the new input (C2, C17, C19, C20) under both
-``frozen_features`` readings and a root refresh, with and without global registers; the
-parameters and their draw order. Real engine positions before and after the shift:
-``tests/engine``.
+scope - since register A7 the acting player is the frame of the whole input (every board token
+is read from its side: owners, side to move, mirrored ranks and negated timelines; the
+colour-swap mirror itself is ``test_perspective.py``), and its colour's own embedding enters on
+the global registers, or with none (ablation 3's arms without them) on the board tokens, the
+live boards' under the block-causal scope (a placeholder, spec issue 225); that it reaches the
+outputs under every register arm; the submit logit's three cases (absent, masked, live), its
+pooled source and both readouts; the joint normalisation; section 15.2's dense-vs-cached
+equivalence with the new input (C2, C17, C19, C20) under both ``frozen_features`` readings and
+a root refresh, with and without global registers - frozen K/V keyed by the acting player
+(A7; spec issue 303); the parameters and their draw order. Real engine positions before and
+after the shift: ``tests/engine``.
 """
 
 from __future__ import annotations
@@ -31,7 +34,7 @@ import torch
 from t5d.net import NetConfig, build_model, collate, parameter_breakdown, permute_boards, synthetic_state, translate
 from t5d.net.cache import CacheConfig, CachedEvaluator, board_ident, reference_output
 from t5d.net.heads import global_register_pool, square_pool
-from t5d.net.state import TOKEN_BOARD_REGISTER, TOKEN_GLOBAL_REGISTER, TOKEN_PAD, TOKEN_SQUARE
+from t5d.net.state import OWNER_NONE, OWNER_OURS, OWNER_THEIRS, TOKEN_BOARD_REGISTER, TOKEN_GLOBAL_REGISTER, TOKEN_PAD, TOKEN_SQUARE
 
 
 def shifted(state, legal: bool | None = True):
@@ -102,20 +105,48 @@ REGISTER_IDS = [f"registers-{r}-{g}" for r, g in REGISTER_ARMS]
     [("dense", "intrinsic"), ("block_causal", "intrinsic"), ("block_causal", "current")],
 )
 def test_the_acting_player_changes_the_encoding_exactly_where_it_should(scope, features, registers):
-    """Two readings of the same boards that differ only in the acting player: the token
-    embeddings differ on the global registers (M20: "acting player -> global registers") and
-    nowhere else - no board token, frozen or live, under either scope or frozen-feature
-    reading; padding never. With no global registers (an ablation-3 arm) they differ on the
-    board tokens instead - squares and per-board registers - every board's under the dense
+    """Two readings of the same boards that differ only in the acting player.
+
+    (i) Register A7: the acting player is the frame of the whole input, so every board token of
+    the position reads the other side - its pieces' owners swap (ours <-> theirs), its side to
+    move flips (us <-> them), its rank is mirrored and its timeline negated - and so every board
+    token's embedding moves, frozen or live, under either scope and frozen-feature reading
+    (the side-to-move flag is on every board token); the global registers move with the acting
+    colour; the file and the time stay; padding and the other position never move.
+
+    (ii) The acting colour's own embedding (D8; A7's "acting colour kept as a global input"):
+    the same canonical batch with the acting player alone changed differs on the global
+    registers (M20) and nowhere else. With no global registers (an ablation-3 arm) it differs on
+    the board tokens instead - squares and per-board registers - every board's under the dense
     scope, the head boards' alone under the block-causal one, either frozen-feature reading (a
-    placeholder, spec issue 225: no frozen board's input depends on the acting player)."""
+    placeholder, spec issue 225)."""
     r, g = registers
     model = _small(1, frozen_features=features, regs_per_board=r, global_regs=g)
     a = synthetic_state(11, 9, n_timelines=3, regs_per_board=r, global_regs=g)
     b = synthetic_state(12, 4, regs_per_board=r, global_regs=g)
     before = collate([a, b])
     after = collate([shifted(a), b])
+    kind = before.kind
+    on_board = (kind[0] == TOKEN_SQUARE) | (kind[0] == TOKEN_BOARD_REGISTER)
+    square = kind[0] == TOKEN_SQUARE
+    # (i) The view (A7).
+    swapped = {OWNER_NONE: OWNER_NONE, OWNER_OURS: OWNER_THEIRS, OWNER_THEIRS: OWNER_OURS}
+    assert after.owner[0].tolist() == [swapped[o] for o in before.owner[0].tolist()]
+    assert bool((before.owner[0][square] != OWNER_NONE).any())
+    assert torch.equal(after.stm[0][on_board], 1 - before.stm[0][on_board])
+    c0, c1 = before.coords[0], after.coords[0]
+    assert torch.equal(c1[:, 0], c0[:, 0]) and torch.equal(c1[:, 3], c0[:, 3]), "file and time unchanged"
+    assert torch.equal(c1[square, 1], a.height - 1 - c0[square, 1]), "ranks mirrored"
+    assert torch.equal(c1[on_board, 2], -c0[on_board, 2]), "timelines negated (an odd start)"
+    for name in ("owner", "stm", "coords", "piece", "moved", "is_head", "active", "dt"):
+        assert torch.equal(getattr(before, name)[1], getattr(after, name)[1]), name
     ea, eb = model.embed_tokens(before, scope), model.embed_tokens(after, scope)
+    differs = (ea - eb).abs().amax(dim=-1) > 0
+    valid = before.valid[0] & (kind[0] != TOKEN_PAD)
+    assert torch.equal(differs[0], valid) and not differs[1].any()
+    # (ii) The acting colour's embedding alone.
+    colour_only = replace(before, acting_player=after.acting_player)
+    eb = model.embed_tokens(colour_only, scope)
     differs = (ea - eb).abs().amax(dim=-1) > 0
     kind = before.kind
     expected = torch.zeros_like(differs)
@@ -279,26 +310,29 @@ def _close(a, b, atol_trunk=2e-5, atol=1e-4):
 def test_cached_equals_one_full_pass_with_the_action(features, seed, global_regs):
     """Section 15.2 row (a) with D8: the same boards under both acting players and all three
     submit cases, evaluated incrementally from one store, each equal to one full block-causal
-    pass. The acting player is on the global registers (M20) - with none, on the live boards'
-    tokens (spec issue 225) - which are live either way, so it never reaches a frozen board -
-    under either frozen-feature reading - and the second reading computes no frozen board."""
+    pass, under either frozen-feature reading. Register A7 reads every board from the acting
+    player's side, so a frozen board's K/V depend on who acts (spec issue 303): the search's
+    root computes each frozen board from both sides - one entry per frozen board and
+    perspective - and no node computes one again, whoever acts."""
     cfg = NetConfig(trunk_dtype="fp32", n_layers=2, attn_scope="block_causal", frozen_features=features, global_regs=global_regs)
     model = build_model(cfg, seed=seed).eval()
     root = synthetic_state(300 + seed, 16, n_timelines=4, duplicate_prob=0.3, global_regs=global_regs)
     cached = CachedEvaluator(model)
     epoch = cached.root_epoch(root)
     computed = dict(cached.store.computed)
+    n_frozen = int((~root.is_head).sum())
+    assert computed["history"] == len(cached.store.entries) == 2 * n_frozen  # one per frozen board and perspective
     for variant in (root, shifted(root, legal=None), shifted(root, legal=False), shifted(root, legal=True)):
         _close(cached.evaluate(variant, epoch), reference_output(model, variant))
-    recomputed = sum(cached.store.computed.values()) - sum(computed.values())
-    assert recomputed == 0  # the frozen boards' K/V do not depend on the acting player
+    assert cached.store.computed == computed  # no node computes a frozen board again
 
 
 def test_a_frozen_boards_identity_carries_the_acting_player_only_when_asked():
-    """``cache.board_ident``'s ``acting``: no frozen board's input depends on the acting player
-    since M20 put it on the global registers alone, so the cached path keys boards without it
-    (above: nothing recomputed) - the mechanism stays for A7's per-perspective keys (spec issue
-    303), and keys by the acting player under either frozen-feature reading."""
+    """``cache.board_ident``'s ``acting``: register A7 reads every frozen board from the acting
+    player's side, so the cached path keys frozen K/V with it (above: one entry per frozen board
+    and perspective; spec issue 303), under either frozen-feature reading; without it the
+    identity is the board's intrinsic one - an epoch's history membership, the same whoever
+    acts."""
     s = synthetic_state(305, 8, n_timelines=3)
     t = shifted(s)
     for b in np.flatnonzero(~s.is_head):
@@ -310,16 +344,25 @@ def test_a_frozen_boards_identity_carries_the_acting_player_only_when_asked():
 
 @pytest.mark.parametrize("global_regs", [16, 0])
 def test_a_refreshed_epoch_with_the_action(global_regs):
-    """Under a root refresh (C3) the anchor's dense pass conditions the history on the anchor's
-    acting player - through the global registers, or with none through every board token (spec
-    issue 225); a node whose acting player differs is still one function of (state, epoch):
-    the cached path equals the two-level reference."""
+    """Under a root refresh (C3) the history is per perspective (register A7; spec issue 303):
+    the refresh runs the dense pass over the anchor from each colour's side, so it stores two
+    entries per frozen board - different K/V - and a node whose acting player differs reads the
+    history encoded in its own frame, not the anchor's. Each is one function of (state, epoch):
+    the cached path equals the two-level reference, whose anchor pass is the node's view
+    (through the global registers, or with none through the board tokens - spec issue 225)."""
     model = build_model(NetConfig(trunk_dtype="fp32", n_layers=2, attn_scope="block_causal", global_regs=global_regs), seed=3).eval()
     root = synthetic_state(310, 14, n_timelines=3, global_regs=global_regs)
     cached = CachedEvaluator(model, CacheConfig(root_refresh=True))
     epoch = cached.root_epoch(root)
+    n_frozen = int((~root.is_head).sum())
+    assert cached.store.computed["refresh"] == 2 * n_frozen
+    for b in np.flatnonzero(~root.is_head).tolist():
+        ours = cached.store[(epoch.key, cached._plan(root, epoch).digest[b])]
+        theirs = cached.store[(epoch.key, cached._plan(shifted(root), epoch).digest[b])]
+        assert not torch.equal(ours.kv, theirs.kv), b  # each perspective's own K/V
     for variant in (root, shifted(root, legal=True)):
         _close(cached.evaluate(variant, epoch), reference_output(model, variant, anchor=root))
+    assert cached.store.computed["refresh"] == 2 * n_frozen  # nothing refreshed again
 
 
 # --- the parameters ------------------------------------------------------------------------------

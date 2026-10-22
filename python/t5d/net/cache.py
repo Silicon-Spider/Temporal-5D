@@ -15,7 +15,8 @@ board of the position that has no entry yet is computed - once, one board at a t
 under the state-defined mask: its causal past, with the past's K/V taken from the store
 (C20: "recompute the board once under the state-defined mask ... and share it down the
 subtree", never snapshotted - C21). A search root's own frozen boards are computed the
-same way, so an entry is one function of its digest wherever it is computed - which
+same way - from both colours' sides (register A7: each perspective its own entry) - so an
+entry is one function of its digest wherever it is computed - which
 root a store started from never changes a value, not even in the last bit; (2) the live pass: the heads and the global registers,
 every layer, against the stored K/V of all frozen boards and their own (C19: the heads
 read each other both ways and are recomputed at every node); (3) the heads of the network
@@ -24,11 +25,14 @@ for the policy's destinations and the per-board heads).
 
 **Prefix sharing (section 7.2).** Entries are content-addressed: an entry's key is its
 epoch's key and a dependency digest - a hash of the board itself (``board_ident``:
-coordinates, contents with the has-moved markers, size; and under
-``frozen_features="current"`` its state-dependent flags; register D8's acting player sits on
-the live global registers - M20 - or, with none, on the live boards' tokens - spec issue 225 -
-so no frozen entry depends on it) and of the digests of the boards
-it reads (so two boards that differ only in their branch origin get two entries). Two nodes
+coordinates, contents with the has-moved markers, size; under ``frozen_features="current"``
+its state-dependent flags; and the acting player, since register A7 encodes every board from
+the acting player's side - owners, side to move, mirrored ranks and negated timelines - so a
+frozen board's K/V differ by perspective: spec issue 303) and of the digests of the boards
+it reads (so two boards that differ only in their branch origin get two entries). A frozen
+board has up to two entries per epoch, one per acting colour; the acting colour's own
+embedding sits on the live global registers (D8, M20) - with none, on the live boards' tokens
+(spec issue 225) - which no frozen board's input carries. Two nodes
 whose board has the same digest share the entry; a node computes only boards with novel
 digests. The digest of a board covers its whole causal past, so the store is section
 7.2's radix structure with the board as the unit: under the lineage reading its entries
@@ -61,7 +65,12 @@ after the anchor is recomputed under the state-defined mask, reading its past's 
 the epoch - "recomputing against the root epoch inside a refreshed subtree would silently
 undo the refresh". Evaluations are a function of (state, epoch) (section 7.9). A board
 belongs to an epoch's history by its intrinsic identity (coordinates and contents), so
-under ``frozen_features="current"`` a history board stays one when the present moves.
+under ``frozen_features="current"`` a history board stays one when the present moves, and it
+belongs whoever acts. Its refreshed K/V are per perspective (register A7; spec issue 303): a
+refresh runs the dense pass over the anchor once from each colour's side - the anchor as it
+is, and the same boards with the other colour acting (``viewed_by``) - so a node of either
+acting player reads history encoded in its own frame; about twice one refresh's compute and
+history memory, a cost of the deferred cached configuration (C2).
 
 **Storage precision (C15, G1).** The cache stores frozen K/V in the network's own format,
 ``NetConfig.frozen_kv_format`` (``kvformat.py``): ``"match"`` (default) stores them exactly
@@ -206,7 +215,8 @@ class Epoch:
     kind: str  # "causal", "root" or "node"
     parent: Epoch | None = None  # the epoch this one forked from (node refreshes)
     anchor: str | None = None  # digest of the anchor state (root or refreshed node)
-    #: Intrinsic idents (``board_ident``) of the anchor's frozen boards: the epoch's history.
+    #: Intrinsic idents (``board_ident``, no perspective) of the anchor's frozen boards: the
+    #: epoch's history.
     #: Empty for the shared causal epoch (C20's first reading needs none).
     history: frozenset[bytes] = frozenset()
     #: True: the history's K/V come from a dense pass over the anchor (a refresh).
@@ -291,12 +301,10 @@ def board_ident(state: PositionState, board: int, frozen_features: str = "intrin
     """A frozen board's identity: what its own input is - size, register count, coordinates,
     side to move, contents, and under ``frozen_features="current"`` its Delta-t-to-present
     and active flag (state-dependent inputs of that reading). ``acting`` adds the acting
-    player, for a board input that depends on it: no frozen board's input of this network does
-    - M20 put D8's acting player on the global registers (the ``"all_tokens"`` arm that put it
-    on every board's tokens is gone), and with no global registers it goes on the live boards'
-    tokens alone (spec issue 225) - so the cached path never asks; it is kept for A7's
-    perspective canonicalisation, under which every frozen board's input depends on the acting
-    colour and its K/V are keyed by perspective (spec issue 303)."""
+    player: under register A7 every board's input is encoded from the acting player's side
+    (``state.py``), so the cached path keys every frozen board's K/V with it (spec issue 303);
+    without it the identity is the board's intrinsic one - an epoch's history membership,
+    which does not depend on who acts."""
     h = hashlib.blake2b(digest_size=16)
     head = (int(state.width), int(state.height), int(state.regs_per_board), int(state.timeline[board]), int(state.half_turn[board]))
     h.update(struct.pack("<5q", *head))
@@ -410,7 +418,9 @@ class CachedEvaluator:
     def root_epoch(self, root: PositionState) -> Epoch:
         """The epoch of a new search at ``root``: a root refresh (C3) or the causal epoch,
         whose missing frozen boards are computed here, one board at a time like every other
-        (so a value never depends on which root computed it)."""
+        (so a value never depends on which root computed it) - from each colour's side
+        (register A7; spec issue 303): the root's acting player's, and the other's, whose
+        nodes the search reaches after the root's action is submitted."""
         if self.config.root_refresh:
             return self._refresh(root, "root", None)
         anchor = state_digest(root)
@@ -419,9 +429,10 @@ class CachedEvaluator:
             epoch = Epoch(f"causal@{anchor}", "causal", None, anchor, history, False)
         else:
             epoch = Epoch("causal", "causal", None, anchor, frozenset(), False)
-        work = self.prepare(root, epoch)
-        for b in self.missing(work):
-            self.compute_board(work, b, source="history")
+        for view in (root, viewed_by(root, 1 - int(root.acting_player))):
+            work = self.prepare(view, epoch)
+            for b in self.missing(work):
+                self.compute_board(work, b, source="history")
         return epoch
 
     def refresh(self, state: PositionState, parent: Epoch) -> Epoch:
@@ -429,25 +440,24 @@ class CachedEvaluator:
         return self._refresh(state, "node", parent)
 
     def _refresh(self, state: PositionState, kind: str, parent: Epoch | None) -> Epoch:
+        """A refresh epoch anchored at ``state``: the dense pass over it once per perspective
+        (register A7; the module docstring) - the anchor's own acting player first - with its
+        frozen boards' K/V stored as the epoch's history under each."""
         model = self.model
-        batch = collate([state])
-        captured: list[tuple[torch.Tensor, torch.Tensor]] = []
-
-        def capture(layer, k, v):
-            captured.append((k, v))
-            return k, v
-
-        out = model(batch, scope="dense", kv_hook=capture, return_trunk=True)
         frozen = np.flatnonzero(~state.is_head)
         idents = {int(b): board_ident(state, int(b)) for b in frozen}  # intrinsic: history membership
         anchor = state_digest(state)
         epoch = Epoch(f"{kind}:{next(self._epochs)}:{anchor[:12]}", kind, parent, anchor, frozenset(idents.values()), True)
         tpb = state.layout.tokens_per_board
-        for b in frozen:
-            sl = slice(int(b) * tpb, (int(b) + 1) * tpb)
-            kv = torch.stack([torch.stack([k[0, :, sl], v[0, :, sl]]) for k, v in captured])
-            entry = self._entry(kv, out.trunk[0, sl], (), "refresh")
-            self.store.put((epoch.key, _history_digest(idents[int(b)])), entry)
+        acting = int(state.acting_player)
+        for view in (state, viewed_by(state, 1 - acting)):
+            captured: list[tuple[torch.Tensor, torch.Tensor]] = []
+            out = model(collate([view]), scope="dense", kv_hook=_capture_into(captured), return_trunk=True)
+            for b in frozen:
+                sl = slice(int(b) * tpb, (int(b) + 1) * tpb)
+                kv = torch.stack([torch.stack([k[0, :, sl], v[0, :, sl]]) for k, v in captured])
+                entry = self._entry(kv, out.trunk[0, sl], (), "refresh")
+                self.store.put((epoch.key, _history_digest(board_ident(view, int(b), acting=True))), entry)
         return epoch
 
     # -- planning --
@@ -455,10 +465,15 @@ class CachedEvaluator:
     def _plan(self, state: PositionState, epoch: Epoch) -> _Plan:
         cfg = self.model.cfg
         frozen = np.flatnonzero(~state.is_head)
-        ident = {int(b): board_ident(state, int(b), cfg.frozen_features) for b in frozen}
+        # Register A7: a frozen board's input is the acting player's view of it, so its K/V are
+        # keyed by the acting player (spec issue 303).
+        ident = {int(b): board_ident(state, int(b), cfg.frozen_features, acting=True) for b in frozen}
         # History membership by the intrinsic identity: under frozen_features="current" a
-        # board's input changes with the present, its belonging to the anchor does not.
-        intrinsic = ident if cfg.frozen_features == "intrinsic" else {int(b): board_ident(state, int(b)) for b in frozen}
+        # board's input changes with the present, and under A7 with the acting player; its
+        # belonging to the anchor does neither. A refreshed history board's K/V are its
+        # perspective's (``_refresh``).
+        intrinsic = {int(b): board_ident(state, int(b)) for b in frozen}
+        viewed = {int(b): board_ident(state, int(b), acting=True) for b in frozen}
         history = None
         if epoch.history:
             history = np.zeros(state.n_boards, dtype=bool)
@@ -475,7 +490,7 @@ class CachedEvaluator:
         digest: dict[int, bytes] = {}
         for b in order:
             if epoch.refreshed and history is not None and history[b]:
-                digest[b] = _history_digest(intrinsic[b])
+                digest[b] = _history_digest(viewed[b])
             else:
                 h = hashlib.blake2b(ident[b], digest_size=16)
                 for d in sorted(digest[j] for j in deps[b]):
@@ -687,6 +702,26 @@ def _live_rows(fast: _FastPath, ctx: AttnContext, blocks: list[tuple[int, int]],
     return torch.cat(parts, dim=1)[:, torch.argsort(torch.cat(order))]
 
 
+def viewed_by(state: PositionState, acting: int) -> PositionState:
+    """``state``'s boards with ``acting`` (0 white, 1 black) the acting player: ``state``
+    itself when that is its own; otherwise the same boards read from the other colour's side
+    (register A7), with no submit action offered (the submit flags reach no K/V). The view a
+    refresh's dense pass over its anchor takes for each acting colour (spec issue 303)."""
+    if int(acting) == int(state.acting_player):
+        return state
+    return replace(state, acting_player=int(acting), submit_possible=False, submit_legal=False)
+
+
+def _capture_into(captured: list) -> object:
+    """A ``kv_hook`` that records every layer's K and V into ``captured``, unchanged."""
+
+    def capture(layer, k, v):
+        captured.append((k, v))
+        return k, v
+
+    return capture
+
+
 def _history_digest(ident: bytes) -> bytes:
     """The digest of a refreshed history board: its K/V are the epoch's, whatever it reads."""
     return hashlib.blake2b(b"H" + ident, digest_size=16).digest()
@@ -717,7 +752,8 @@ def reference_output(
     ``state`` under the block-causal scope (any ``attn_impl``).
 
     ``anchor``: a refreshed epoch's anchor (section 7.9's two-level mask) - first the dense
-    pass over the anchor; its frozen boards (which ``state`` must hold, frozen) keep the K/V
+    pass over the anchor, from ``state``'s acting player's side (register A7: the anchor's
+    boards with that player acting, ``viewed_by``; spec issue 303); its frozen boards (which ``state`` must hold, frozen) keep the K/V
     of that pass, injected into the full pass at every layer, and its outputs. Every other
     board is computed by the full pass. B16 biases every frozen key in the full pass, the
     injected ones included, unless ``state`` is the anchor itself (``status.py``).
@@ -750,7 +786,8 @@ def reference_output(
             anchor_kv.append((k, v))
             return k, v
 
-        anchor_out = model(collate([anchor]), scope="dense", kv_hook=capture, return_trunk=True).trunk
+        view = viewed_by(anchor, int(state.acting_player))
+        anchor_out = model(collate([view]), scope="dense", kv_hook=capture, return_trunk=True).trunk
 
     def hook(layer, k, v):
         if not injected:
@@ -789,4 +826,5 @@ __all__ = [
     "quantise_fp8",
     "reference_output",
     "state_digest",
+    "viewed_by",
 ]
