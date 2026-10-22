@@ -20,9 +20,11 @@ mirrors the engine's ``play_game`` (``src/selfplay.cpp``; ``t5d-play``) step for
   each side carries its own search across its decisions (C12: ``advance``) and re-roots it
   on the opponent's reply (``advance_action``); final selection by the search's rule (LCB),
   noise off. The two searches never share a cache - each holds one network's evaluations.
-* **D2's two arms** (``split``): the board-move split - an action is its moves, each its
-  own decision, then a submit decision (D8: never automatic); or whole turns - a decision is
-  an action, submitted with its last move.
+* **D2's arms** (``split``): the board-move split - an action is its moves, each its own
+  decision, then a submit decision (D8: never automatic); the tree form (``"tree"``) - the
+  same decisions, each search inheriting the turn-start priors inside the turn and calling
+  the network again only where an interaction gate fires (the engine's default gates); or
+  whole turns - a decision is an action, submitted with its last move.
 * **A move is played only once known legal**: a chosen child the legality budget left
   unknown is classified exactly first (``Search.verify``) - illegal, it is removed and the
   choice made again; still unknown, the most visited child known legal is played. Every
@@ -65,6 +67,7 @@ from .capi import (
     T5D_MOVE_TRAVEL,
     T5D_NO_LIMIT,
     T5D_SPLIT_BOARD_MOVE,
+    T5D_SPLIT_TREE,
     T5D_SPLIT_WHOLE_TURN,
     find_library,
 )
@@ -74,7 +77,8 @@ from .expansion import Move, board_label, square_name
 from .game import Game, relation_bits
 from .search import Search, search_params
 
-SPLITS = {"ply": T5D_SPLIT_BOARD_MOVE, "turn": T5D_SPLIT_WHOLE_TURN}
+SPLITS = {"ply": T5D_SPLIT_BOARD_MOVE, "turn": T5D_SPLIT_WHOLE_TURN, "tree": T5D_SPLIT_TREE}
+SPLIT_NAMES = {"ply": "board-move split", "turn": "whole turns", "tree": "tree form"}
 MODES = ("self", "match")
 
 #: A small network for end-to-end play on a CPU (random weights; nothing is trained): two
@@ -97,7 +101,7 @@ class PlayConfig:
     the engine's default (``t5d_search_params_default``); the proof channel is off (H41)."""
 
     variant: str = "Standard"
-    split: str = "ply"  # D2: "ply" (board-move split) or "turn" (whole turns)
+    split: str = "ply"  # D2: "ply" (board-move split), "tree" (the tree form) or "turn" (whole turns)
     mode: str = "self"  # "self" or "match"
     playouts: int = 16  # per decision
     batch_size: int = 8  # leaves per network call
@@ -388,7 +392,7 @@ def play_game(evaluators: Evaluator | Sequence[Evaluator], cfg: PlayConfig, *, n
             (
                 "Engine",
                 f"t5d search through the C step API: network evaluator (random weights), {cfg.playouts} playouts per decision, "
-                f"{'board-move split' if cfg.split == 'ply' else 'whole turns'}, "
+                f"{SPLIT_NAMES[cfg.split]}, "
                 f"{'self-play, root noise' if cfg.mode == 'self' else 'match play, two networks'}, seed {cfg.seed}",
             ),
             ("TurnCap", f"turns {cfg.cap_turns}, boards {cfg.cap_boards}"),
@@ -602,7 +606,7 @@ def check_replay(res: GameResult, replay: Replay) -> list[str]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Games through the C step API with the network (random weights) as the evaluator.")
     parser.add_argument("--variant", action="append", help="a named variant (repeatable; default Standard and Two Timelines)")
-    parser.add_argument("--split", action="append", choices=sorted(SPLITS), help="D2's arm (repeatable; default both)")
+    parser.add_argument("--split", action="append", choices=sorted(SPLITS), help="D2's arm (repeatable; default ply and turn)")
     parser.add_argument("--mode", action="append", choices=MODES, help="self-play or match play (repeatable; default both)")
     parser.add_argument("--games", type=int, default=1, help="games per (variant, split, mode)")
     parser.add_argument("--net", default="small", choices=["small", "F1"])

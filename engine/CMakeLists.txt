@@ -154,6 +154,7 @@ target_sources(t5d-tests PRIVATE
   tests/test_capi_search.cpp
   tests/test_mcts.cpp
   tests/test_mcts_memory.cpp
+  tests/test_mcts_tree.cpp
   tests/test_play_exe.cpp
   tests/test_selfplay.cpp
   src/capi_search.cpp)
@@ -314,6 +315,14 @@ add_dependencies(t5d-tests t5d-play)
 target_compile_definitions(t5d-tests PRIVATE "T5D_PLAY_EXE=\"$<TARGET_FILE:t5d-play>\"")
 if(MINGW)
   target_link_options(t5d-play PRIVATE -static)
+endif()
+
+# D2's tree form against the ply split on recorded games' turn starts:
+# evaluation counts (docs/MEASUREMENTS.md). Not one of the truth's sources.
+add_executable(t5d-tree-count tools/t5d_tree_count.cpp)
+target_link_libraries(t5d-tree-count PRIVATE t5d_tools)
+if(MINGW)
+  target_link_options(t5d-tree-count PRIVATE -static)
 endif()
 
 # ---- MinGW: no dependence on the toolchain's runtime DLLs --------------------------

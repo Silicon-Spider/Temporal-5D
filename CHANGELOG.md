@@ -10,6 +10,167 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-23 - D2 tree form review fixes: a carried inherited root is evaluated; the inherited value's refusal; the untested readings tested; the counts committed
+
+Two reviews of the tree form (f2b4679) - one finding HIGH, six MEDIUM, nine LOW, and a
+pass of 24 mutants of its code of which 13 survived the tree tests.
+
+- **The root is always evaluated - now true** (`engine/src/mcts.cpp`). A re-root onto
+  a child the tree form inherited (`advance`, `advance_to`, `advance_moves`; match play
+  carries the tree, C12: self-play's netplay "match" mode, `selfplay.cpp`'s match play,
+  the C API's and Python's advance) left the new root inherited: the network never
+  evaluated it, its priors stayed the ones inherited from the old turn start, its value
+  the old parent's (a stuck one backed up that value), the C API reported
+  `root_evaluated` 0 and a NaN root WDL - against mcts.hpp, the README, issue 161(f),
+  the register row and the changelog, which all said the root is always evaluated.
+  Now `select_once` makes such a root a leaf to the first simulation after the re-root
+  (the batch's other simulations wait for it, as for a fresh root), and the evaluation
+  re-evaluates it (`reevaluate`): its edges keep their children, visits, values and
+  flags (C12, "carry statistics"), each takes the evaluation's logit for its move
+  (matched by coordinates), the submit edge the submit logit; its value, uncertainty,
+  error and moves-left become the evaluation's; its priors are recomputed as a fresh
+  root's (the root temperature, no noise, I15's side table refilled), the edges
+  ordered by them, every visited one still instantiated, the effort label found again;
+  it is no longer inherited. Its children keep the priors they inherited. The
+  invariant no longer excuses a visit ending at a stuck inherited root (none can be).
+  Why this rather than correcting the documents: an inherited carried root would run a
+  whole decision's search on priors the network never gave for that state, with no
+  value of its own; the change costs one evaluation per re-root onto an inherited node,
+  touches no other arm (no other node is ever inherited) and leaves the solver, D3's
+  values, A6's count and I15's side table sound. The ply split and the whole-turn arm
+  are unchanged bit for bit: 60 searches of each (five variants' starts and random-play
+  positions, six configurations - MCGS, the solver with exact legality, E2/E3/root
+  noise, the pseudo-legal seam), H15's digest before and after a re-root, the
+  evaluations and `memory_bytes()`, all equal before and after the fix; under the tree
+  form the same 60 searches are unchanged before the re-root, and 40 differ after it -
+  exactly the 40 whose chosen child was an inherited node.
+- **`tree_inherit_value` off is refused where the uncertainty signal is read**
+  (`validate`): with E2, E3 or E5's terms on (`uncertainty_read`), an inherited node's
+  signal would be read as 0 - no variance - as 6m refuses for a missing evaluation
+  signal.
+- **Tested** (`engine/tests/test_mcts_tree.cpp`; `python/tests/engine/
+  test_search_api.py`): a carried inherited root evaluated once, by the first
+  simulation, its edges' statistics kept, its value, logits and priors a fresh root's,
+  never asked about again (C++, gates none and natural, one playout and a batch); the
+  same through the Python step API with the network (root WDL defined, children's
+  visits kept); the inherited value on (a node's eval_* its parent's, below turn starts
+  too) and off (0), the searches differing and keeping the invariants, and the refusal
+  for each reading term; the gates under the Mandatory reading of the boards still to
+  move, on positions with an optional board where the readings differ (the between gate
+  - a jump onto an inactive timeline's board - and the check gate); an inherited node's
+  legality classification against the expansion's (every move unknown with no budget,
+  illegal moves kept under the pseudo-legal seam, dead ends found without the
+  network); promotions matched by the inherited logits (a four-piece promotion set);
+  a move the parent did not have taking its lowest logit - reachable after all: a move
+  proved illegal as the parent's next one (no legal completion begins with it) is legal
+  once another board is played, 21 such edges on the promotion position (issue 161(b)
+  corrected); a root child's `evaluated` false for an inherited child; the inherited submit logit (Python: the tree form's
+  case of `test_the_submit_logit_reaches_the_submit_child`). Reviewer B's mutants
+  re-run: every one tied to a finding is caught, but for one that cannot be (below).
+- **The counts committed** (`engine/tools/t5d_tree_count.cpp`, `t5d-tree-count`; not
+  one of the truth's sources): the uncommitted scratch harness the tree form's figures
+  came from, as a tool; the figures, which it reproduces value for value, with their
+  conditions in `docs/MEASUREMENTS.md`.
+- **t5d-play**: `--tree-gates` with `--split ply` or `turn` is refused (it was read by
+  nothing); the Engine header names the gates (`between,check`, not `6`).
+- **Comments and documents**: mcts.hpp - the carried root, `memory_bytes()` not compared
+  by §15.2's row, `Limits::bytes`' overshoot under the tree form, everything
+  `tree_inherit_value` feeds; the C API header; engine/README.md.
+- **Not changed**: a passed board keeping its en-passant square cannot change a
+  gate (the square belongs to a double step of the side now to move on the copy, and an
+  en-passant capture needs the other side's pawn), so that mutant is equivalent and no
+  test can catch it; the between gate under the Mandatory reading reads the
+  destination only (issue 157 says so; for the user).
+- `docs/BUILD_LOG.md`: register row D2; issues 157, 159, 160, 161(b), (e), (f);
+  proposed edit 129.
+- Spec: §8.2 "Evaluating at turn boundaries" (the tree form; the root always
+  evaluated), §8.4/C12 (the carried tree), 6m/I10 (the refusal), §15.2's tree-form row,
+  §15.3 (proposed edit 130's row: the counts recorded in docs/MEASUREMENTS.md, not
+  written back); register D2, C12, I10 - spec issues 157, 159, 160, 161; proposed edit
+  129 amended. No new spec issue.
+
+### 2026-10-23 - Engine D2: the tree form - turn-start priors inherited inside the turn; re-evaluation at interactions and complete turns
+
+D2's tree form (§8.2, "Evaluating at turn boundaries"), the first of the two arms
+CHECKPOINT 8's build order names, built behind `SearchParams::split` beside the ply
+split (still the default) and the whole-turn arm (left as it is until the flat form
+replaces it).
+
+- **The arm** (`engine/include/t5d/mcts.hpp`, `engine/src/mcts.cpp`; `TurnSplit::Tree`):
+  the ply split's tree, nodes, edges, submit and turn structure. A node during an
+  action whose incoming move fires no enabled interaction gate is expanded without the
+  network - its children exactly a leaf's (the same legality classification and
+  submit), their priors its parent's logits matched move by move (a J6 branch takes the
+  non-branching jump's; an unmatched move the parent's lowest; submit's logit carried
+  down) - and the simulation runs on through it. The network is called at the root, at
+  turn starts and at gated mid-turn nodes (ordinary leaves). [Corrected by the review
+  fixes above: a root carried onto an inherited node was not evaluated; it is now.] An inherited node backs up
+  nothing of its own: the leaf's value passes through it (its visits its children's);
+  its FPU base and uncertainty signal are its parent's evaluation's
+  (`tree_inherit_value`) [untested until the review fixes; off with a term that reads the
+  signal now refused]. Each edge keeps the logit its prior came from (`Edge::logit`;
+  `EdgeView::logit`), each node its submit logit;
+  `NodeView::inherited`; `SearchStats::inherited_nodes`, `gate_fired`,
+  `seconds_gates`; the digest folds the inherited flag in (zero for every other arm, so
+  no digest changes). The ply split's code paths are shared, not copied
+  (`set_priors`, `ply()`), so its searches are bit for bit what they were [in their
+  digests; `memory_bytes()` grew - a node carries the submit logit and the inherited
+  flag under every split: +4,096 bytes on most 200-playout ply searches (up to +16,384),
+  +1,024 on 60-playout whole-turn ones].
+- **The interaction gates**, §8.2's four, each reading a parameter with a placeholder
+  default (`tree_gates`, `tree_still_to_move`, `tree_capture`, `tree_check`,
+  `tree_present`): a non-branching jump; a capture of a piece with a pseudo-legal move
+  onto a passed board still to move (R1's passing); the acting player's "in check" with
+  the boards still to move passed (R1's construction) differing across the move; any
+  move of the present. `kGateAlways` is the test seam for §15.2's row.
+- **Refused under MCGS** (`graph`): `std::invalid_argument` naming spec issue 301
+  (`T5D_ERR_ARGUMENT`, `EngineArgumentError`) - under graph search an inherited node's
+  priors and its being evaluated would be the path's.
+- **C API and Python, one commit** (`capi_search.h`, `capi_search.cpp`, append-only):
+  `T5D_SPLIT_TREE`, `T5D_TREE_GATE_*`, `T5D_STILL_TO_MOVE_*`, `T5D_CAPTURE_*`,
+  `T5D_CHECK_*`, `T5D_PRESENT_*`; `t5d_search_params` gains `tree_gates`,
+  `tree_still_to_move`, `tree_capture`, `tree_check`, `tree_inherit_value`,
+  `tree_present` (before `expand`), `t5d_search_summary` `inherited_nodes` and
+  `gate_between`/`_capture`/`_check`/`_present`/`_always`; a tree-form leaf reports its
+  submit flags as the ply split's. `python/t5d/engine/capi.py` and `search.py` mirror
+  them (checked against `t5d_search_layout`), `netplay.py` plays `split="tree"`;
+  `t5d-play --split tree --tree-gates`.
+- **Tests**: `engine/tests/test_mcts_tree.cpp` (new) - §15.2's row bit for bit
+  (digest, statistics, root children, across a re-root) on every named variant,
+  random-play roots with many timelines and deep travel, roots during an action and
+  past the shift, two evaluators at realistic scale, every tree configuration, budgeted
+  and exact legality and the pseudo-legal seam, batched and synchronous; no gate - the
+  network sees only the root and turn starts; one gate - exactly the mid-turn nodes whose
+  move fires it, by predicates recomputed from the rules engine; the capture reading on
+  constructed positions; the inherited logits (a J6 twin) and their softmax [the
+  inherited submit logit, the Mandatory reading and an inherited node's legality were
+  untested - the review fixes test them]; §15.4's
+  turn structure and dead ends; the refusal; more turn starts per evaluation. Two
+  tree-form configurations join `test_mcts.cpp`'s invariant suite (one test's sibling
+  choice generalised: an inherited sibling holds no evaluation to keep); the C step API
+  against the C++ search by digest, the C API's refusals, self-play end to end and in
+  match play, the allocation-failure test, the memory estimate (x1.04) and t5d-play's
+  records through the gate adapter under the tree form. Python: the step loop is the
+  engine's run under the tree form (uniform and random evaluators), §15.2's row through
+  the step API with the network at random weights (two variants and a root past the
+  shift, three legality settings, batched and synchronous), the network asked only at
+  turn starts without gates, the refusal, and netplay games under the tree form replayed
+  by the gate adapter.
+- **Measured, indicative** (counts; seven t0database turn starts, 1-4 mandatory boards,
+  30-60 boards; the built-in random evaluator, synchronous, no cache, a scratch harness
+  [committed by the review fixes as `t5d-tree-count`, the figures in
+  docs/MEASUREMENTS.md]):
+  at 400 evaluations the turn starts evaluated - ply split 74-122, tree form 111-142, with
+  the present gate read as rewinds only 173-290, with no gate 400. The literal present
+  gate fires at every action's shift (issue 160).
+- `docs/BUILD_LOG.md`: register rows D2 and C11; issue 301's Built note; spec issues
+  157-162; proposed edits 129-130. `engine/README.md`: stage E6a's arms, the gates'
+  table, t5d-play's options, the choices list. The Lazy SMP timing test runs before the
+  merge (the main loop).
+- Spec: §8.2 "Evaluating at turn boundaries" (tree form), §15.2's D2 tree-form row,
+  §15.4 (turn structure), §8.5/C11 and §14.4/C21 (the refusal), §13.1 6x, §15.3 (a new
+  row); register D2, C11, D8, A6 - spec issues 157-162 and 301, proposed edits 129-130.
+
 ### 2026-10-23 - N-A6 review fixes: the optional count in the digest pinned; the batch fallback documented
 
 - One reviewer, no high or medium findings (20 of 21 mutants caught; the survivor - a

@@ -106,7 +106,8 @@ SearchParams params_from(const t5d_search_params* c) {
   switch (c->split) {
     case T5D_SPLIT_BOARD_MOVE: p.split = t5d::mcts::TurnSplit::BoardMove; break;
     case T5D_SPLIT_WHOLE_TURN: p.split = t5d::mcts::TurnSplit::WholeTurn; break;
-    default: throw std::invalid_argument("split must be T5D_SPLIT_BOARD_MOVE or _WHOLE_TURN");
+    case T5D_SPLIT_TREE: p.split = t5d::mcts::TurnSplit::Tree; break;
+    default: throw std::invalid_argument("split must be T5D_SPLIT_BOARD_MOVE, _WHOLE_TURN or _TREE");
   }
   switch (c->action_prior) {
     case T5D_ACTION_PRIOR_SUM: p.action_prior = t5d::mcts::ActionPrior::SumLogits; break;
@@ -189,6 +190,28 @@ SearchParams params_from(const t5d_search_params* c) {
   p.dirichlet_shaping_share = c->dirichlet_shaping_share;
   p.dirichlet_shaping_cap = c->dirichlet_shaping_cap;
   p.root_policy_temperature = c->root_policy_temperature;
+  p.tree_gates = c->tree_gates;  // its bits checked by the search
+  switch (c->tree_still_to_move) {
+    case T5D_STILL_TO_MOVE_PLAYABLE: p.tree_still_to_move = t5d::mcts::StillToMove::Playable; break;
+    case T5D_STILL_TO_MOVE_MANDATORY: p.tree_still_to_move = t5d::mcts::StillToMove::Mandatory; break;
+    default: throw std::invalid_argument("tree_still_to_move must be T5D_STILL_TO_MOVE_PLAYABLE or _MANDATORY");
+  }
+  switch (c->tree_capture) {
+    case T5D_CAPTURE_REACH: p.tree_capture = t5d::mcts::CaptureReach::Reach; break;
+    case T5D_CAPTURE_ANY: p.tree_capture = t5d::mcts::CaptureReach::Any; break;
+    default: throw std::invalid_argument("tree_capture must be T5D_CAPTURE_REACH or _ANY");
+  }
+  switch (c->tree_check) {
+    case T5D_CHECK_PASSED: p.tree_check = t5d::mcts::CheckChange::Passed; break;
+    case T5D_CHECK_SUBMISSION: p.tree_check = t5d::mcts::CheckChange::Submission; break;
+    default: throw std::invalid_argument("tree_check must be T5D_CHECK_PASSED or _SUBMISSION");
+  }
+  p.tree_inherit_value = boolean(c->tree_inherit_value, "tree_inherit_value");
+  switch (c->tree_present) {
+    case T5D_PRESENT_ANY: p.tree_present = t5d::mcts::PresentShift::Any; break;
+    case T5D_PRESENT_REWIND: p.tree_present = t5d::mcts::PresentShift::Rewind; break;
+    default: throw std::invalid_argument("tree_present must be T5D_PRESENT_ANY or _REWIND");
+  }
   return p;
 }
 
@@ -366,6 +389,12 @@ constexpr LayoutEntry kLayout[] = {
     T5D_SEARCH_AT(t5d_search_params, dirichlet_shaping_share),
     T5D_SEARCH_AT(t5d_search_params, dirichlet_shaping_cap),
     T5D_SEARCH_AT(t5d_search_params, root_policy_temperature),
+    T5D_SEARCH_AT(t5d_search_params, tree_gates),
+    T5D_SEARCH_AT(t5d_search_params, tree_still_to_move),
+    T5D_SEARCH_AT(t5d_search_params, tree_capture),
+    T5D_SEARCH_AT(t5d_search_params, tree_check),
+    T5D_SEARCH_AT(t5d_search_params, tree_inherit_value),
+    T5D_SEARCH_AT(t5d_search_params, tree_present),
     T5D_SEARCH_AT(t5d_search_params, expand),
 
     T5D_SEARCH_SIZE(t5d_leaf),
@@ -413,6 +442,12 @@ constexpr LayoutEntry kLayout[] = {
     T5D_SEARCH_AT(t5d_search_summary, root_cpuct),
     T5D_SEARCH_AT(t5d_search_summary, root_best_since),
     T5D_SEARCH_AT(t5d_search_summary, uncertainty_missing),
+    T5D_SEARCH_AT(t5d_search_summary, inherited_nodes),
+    T5D_SEARCH_AT(t5d_search_summary, gate_between),
+    T5D_SEARCH_AT(t5d_search_summary, gate_capture),
+    T5D_SEARCH_AT(t5d_search_summary, gate_check),
+    T5D_SEARCH_AT(t5d_search_summary, gate_present),
+    T5D_SEARCH_AT(t5d_search_summary, gate_always),
 
     T5D_SEARCH_SIZE(t5d_search_limits),
     T5D_SEARCH_AT(t5d_search_limits, playouts),
@@ -501,7 +536,9 @@ void t5d_search_params_default(t5d_search_params* out) {
   if (out == nullptr) return;
   const SearchParams p;
   *out = t5d_search_params{};
-  out->split = p.split == t5d::mcts::TurnSplit::BoardMove ? T5D_SPLIT_BOARD_MOVE : T5D_SPLIT_WHOLE_TURN;
+  out->split = p.split == t5d::mcts::TurnSplit::BoardMove   ? T5D_SPLIT_BOARD_MOVE
+               : p.split == t5d::mcts::TurnSplit::WholeTurn ? T5D_SPLIT_WHOLE_TURN
+                                                             : T5D_SPLIT_TREE;
   out->action_prior = p.action_prior == t5d::mcts::ActionPrior::SumLogits ? T5D_ACTION_PRIOR_SUM
                                                                            : T5D_ACTION_PRIOR_MEAN;
   out->max_actions = p.max_actions;
@@ -563,6 +600,13 @@ void t5d_search_params_default(t5d_search_params* out) {
   out->dirichlet_shaping_share = p.dirichlet_shaping_share;
   out->dirichlet_shaping_cap = p.dirichlet_shaping_cap;
   out->root_policy_temperature = p.root_policy_temperature;
+  out->tree_gates = p.tree_gates;
+  out->tree_still_to_move =
+      p.tree_still_to_move == t5d::mcts::StillToMove::Playable ? T5D_STILL_TO_MOVE_PLAYABLE : T5D_STILL_TO_MOVE_MANDATORY;
+  out->tree_capture = p.tree_capture == t5d::mcts::CaptureReach::Reach ? T5D_CAPTURE_REACH : T5D_CAPTURE_ANY;
+  out->tree_check = p.tree_check == t5d::mcts::CheckChange::Passed ? T5D_CHECK_PASSED : T5D_CHECK_SUBMISSION;
+  out->tree_inherit_value = flag(p.tree_inherit_value);
+  out->tree_present = p.tree_present == t5d::mcts::PresentShift::Any ? T5D_PRESENT_ANY : T5D_PRESENT_REWIND;
 }
 
 t5d_status t5d_search_new(const t5d_game* game, int32_t turn_start, const t5d_search_params* params,
@@ -615,7 +659,7 @@ t5d_status t5d_search_leaf(t5d_search* search, size_t index, t5d_leaf* out, char
     out->key = r.key;
     out->epoch = r.epoch;
     out->acting_player = t5d::index_of(r.expansion->acting_player());
-    const bool ply = search->search.params().split == t5d::mcts::TurnSplit::BoardMove;
+    const bool ply = search->search.params().split != t5d::mcts::TurnSplit::WholeTurn;
     out->submit_possible = flag(ply && r.expansion->submit_possible());
     out->submit_legal = flag(ply && r.expansion->submit_legal());
     t5d::capi_internal::describe_expansion(*r.expansion, out->expansion);
@@ -786,6 +830,12 @@ t5d_status t5d_search_info(const t5d_search* search, t5d_search_summary* out) {
     out->root_cpuct = s.root_cpuct();
     out->root_best_since = s.root_best_since();
     out->uncertainty_missing = st.uncertainty_missing;
+    out->inherited_nodes = st.inherited_nodes;
+    out->gate_between = st.gate_fired[0];
+    out->gate_capture = st.gate_fired[1];
+    out->gate_check = st.gate_fired[2];
+    out->gate_present = st.gate_fired[3];
+    out->gate_always = st.gate_fired[4];
     return T5D_OK;
   });
 }
