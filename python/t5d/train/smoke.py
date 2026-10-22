@@ -24,6 +24,27 @@ from .losses import LossConfig, Targets, compute_losses
 
 MAX_STEPS = 3
 
+#: The optimiser steps a model has taken (an attribute of the model, so copies of it - the
+#: SWA-published network among them - carry the count): the cap is per model, never per trainer
+#: or per call, so a second trainer or another smoke run cannot add steps (BUILD_LOG issue 237(a)).
+STEPS_ATTR = "t5d_optimiser_steps"
+
+
+def optimiser_steps(model: torch.nn.Module) -> int:
+    """The optimiser steps ``model`` has taken in this build (``STEPS_ATTR``)."""
+    return int(getattr(model, STEPS_ATTR, 0))
+
+
+def check_step(model: torch.nn.Module) -> None:
+    """Refuse an optimiser step past ``MAX_STEPS`` on ``model`` - no training runs."""
+    if optimiser_steps(model) >= MAX_STEPS:
+        raise RuntimeError(f"the untrained build runs at most {MAX_STEPS} optimiser steps on a model (no training runs)")
+
+
+def record_step(model: torch.nn.Module) -> None:
+    """Count one optimiser step taken on ``model``."""
+    setattr(model, STEPS_ATTR, optimiser_steps(model) + 1)
+
 
 @dataclass
 class SmokeReport:
@@ -110,6 +131,7 @@ def smoke_train(
     opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=0.0)
     history: list[dict[str, float]] = []
     for _ in range(steps):
+        check_step(model)
         opt.zero_grad(set_to_none=True)
         losses = compute_losses(model(batch), targets, loss_cfg)
         values = {name: float(value.detach()) for name, value in losses.items()}
@@ -121,6 +143,7 @@ def smoke_train(
             if p.grad is not None and not torch.isfinite(p.grad).all():
                 raise FloatingPointError(f"non-finite gradient in {name}")
         opt.step()
+        record_step(model)
         history.append(values)
     deltas = [(p.detach() - b) for p, b in zip(model.parameters(), before, strict=True)]
     change = math.sqrt(sum(float(d.pow(2).sum()) for d in deltas))

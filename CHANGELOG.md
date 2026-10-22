@@ -10,6 +10,188 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-23 - M21 review fixes: inputs rebuilt under the trainer's configuration, steps on synthetic rows only and capped per model, I19's cutoff as Lc0's, I13 whole in the tree form, the untested claims tested
+
+Two reviews of M21 (spec fidelity; a 46-mutant pass that left 19 mutants alive).
+
+- **The trainer's inputs** (`train/trainer.py`, `train/selfplay.py`): `Trainer.add_game` rebuilt a
+  record's inputs under the record's register counts and relations, not the trainer's - a trainer
+  of another configuration got inputs its network does not take (a 1/4- and a 3/8-register
+  trainer, a typed-relations one with 20 edges for 47). Now `replay_positions(record, net_cfg,
+  window_k=...)` under the trainer's, with `TrainerConfig.window_k` (None: the record's; it sets
+  the positions' W/E scope, the cached configuration's - a row keeps the state alone). Replay
+  also refuses a record whose ruleset or rules encoding is not the replayed game's (the engine
+  version a logged reading, issue 234(f)).
+- **No training runs, to the letter** (the main loop's reading of the user's rule, issue 237(a)):
+  optimiser steps only on synthetic rows (`synthetic_record`'s header says `synthetic`; `step_on`
+  refuses any other row); record rows go through the loop forward only (`Trainer.losses_on`);
+  `MAX_STEPS` is enforced per model (`smoke.check_step`/`record_step`: a count the model and its
+  copies carry), so a second `Trainer`, a smoke run or the published copy cannot add steps.
+- **I19's cutoff as Lc0 defines it** (the main loop's ruling, issue 236(d)): `TemperatureSchedule`
+  now holds 0.9 before the cutoff turn 60 and a constant endgame temperature 0.45 from it
+  (`endgame`; `temp-endgame` "doesn't decay"), a decay before the cutoff optional (`decay_to`,
+  off). Commit 3 had decayed to 0.45 and cut to temperature 0 at turn 60.
+- **I13 whole in the tree form** (`train/targets.py`, issue 235(g)): a best move-child the search
+  never evaluated (inherited priors) had no network moves-left, so the WDL was blended and
+  moves-left was not. It now takes the decision's own raw moves-left (`best_child_moves_left`);
+  with no estimate at all moves-left is masked from that decision back.
+- **Smaller**: `Trainer.publish` gives the network its SWA snapshot count, which the records'
+  network condition now carries (it said 0); the generator records the prior-to-target divergence
+  under the builder's defaults when given no target configuration (it was NaN), and takes an
+  `on_decision` hook (the live search, the record, the input) for the tests; `synthetic_record`'s
+  float32 fields are float32-exact, so it round-trips through a file.
+- **Tests** - each tied to a finding, each mutant it names now killed: the value targets (search
+  value, categorical, root WDL, short-term) from the pruned visits by hand; the builder's KL as
+  KL(target || raw prior) on an asymmetric case and with the header's submit share; the replica's
+  inputs (E3's factor, the search's and the noise-free prior, the root's recorded visits);
+  short-term targets of a resigned game by hand; the submit child's moves-left offset; the tree
+  form's deblundering (constructed, and a generated tree-form game); I20 running to the cap on a
+  root that keeps moving; I18's sign (a value inside the threshold never resigns) and its 10%
+  (the default, and the disabled share over 4000 seeds); each record held to the live search at
+  generation (the root's cPUCT with E2 off and on, the best child, the place in the action, the
+  pruned and unpruned policy target and root value); forced and steered counts through a file;
+  newer, older and missing versions refused; another ruleset refused; a rebuilt input compared
+  field for field with its W/E scope, under a window other than 8; a resigned record replayed and added to a trainer; a trainer of three other
+  configurations rebuilding the generator's inputs under its own; the step cap per model and the
+  synthetic-rows rule; the miniature loop with its steps on synthetic rows and the snapshot count
+  in the next record.
+- Spec: §12.2, §12.5, §12.8 (I15's records, deblundering, the exploration bullet), §15.1's M21
+  sentence; register I2, I13, I15, I17, I18, I19, I20, M21. Issues 234(f)-(g), 235(a) and (g),
+  236(d), 237(a), (e), (f); proposed edits 175, 176, 178 and 181 extended (181 now quotes Lc0's
+  options). BUILD_LOG's I13, I15, I19 and M21 rows updated (M21 kept qualified: the QAT hook a seam
+  until G8, the user ruling on edit 182).
+
+### 2026-10-23 - M21 (4/4): the training loop end to end, smoke-tested - records, sampler, window, targets, losses, optimiser steps, SWA
+
+- **`python/t5d/train/trainer.py`** (new): `Trainer` - a game's I15 record in (its inputs rebuilt
+  from the record, its targets built, its rows weighted by I12's sampler and written into I16's window
+  as frequency copies), a batch drawn from the window, collated, every head's loss, one optimiser step,
+  SWA's update (I17); `publish` gives the averaged network self-play receives. At most `MAX_STEPS` (3)
+  optimiser steps - no training runs. AdamW or NAdam, placeholders (issue 237). **G8's QAT hook is a
+  named seam, not built** (`TrainerConfig.qat`, `apply_qat` raises until the precision component's
+  quantiser and the pinned format exist - for the user, edit 182). **C3's conditioning-offset training
+  stays parked** with the cached configuration. `synthetic_record` builds a well-formed record over
+  synthetic inputs.
+- **Tests** (`python/tests/train/test_trainer.py`): two tiny self-play games with a random network ->
+  records written and read back -> three optimiser steps (every loss finite, a fourth refused) -> the
+  published network differs from the raw one and drives self-play, its hash in the record; the same
+  loop on synthetic records (AdamW and NAdam); the total loss falling at each of three steps on a fixed
+  synthetic batch; the step cap and the QAT seam refusing.
+- *Corrected by the review fixes (2026-10-23, above)*: the inputs were rebuilt under the record's
+  network configuration, not the trainer's; the optimiser steps on self-play records broke the
+  user's rule (steps on synthetic data only), and the cap was per `Trainer`, not per model; the
+  published network's records said `swa_snapshots` 0.
+- Spec: §15.1's M21 sentence, §10.2, §12.8; register M21, G8, C3, I17. Issue 237; proposed edit 182.
+  BUILD_LOG's M21 and G8 rows and the C3 park updated.
+
+### 2026-10-23 - M21 (3/4): section 12.8's mechanics - I12's sampler with 6u's arms, I16's window, I17's SWA; PCR, I20, I18 and I19 in the generator
+
+- **`train/selfplay.py`**: playout cap randomisation (I5, `PCRConfig`: each decision full with
+  probability 0.25, re-derivable from the seed; cheap searches at a smaller cap without noise; the
+  difficulty mixture held below 1 and not built above 0 - issue 236); KL-adaptive full searches (I20,
+  `KLAdaptiveConfig`, a prototype, off: chunks until the root's visit distribution stops moving,
+  bounded by the full cap, the stop recorded as `kl`); resignation with the false-resign check (I18,
+  `ResignConfig`: off in 10% of games by the seed, would-resign events recorded, `false_resign_report`
+  per board-count range; the threshold None until the value head is calibrated); I19's schedules
+  (`TemperatureSchedule`: the move temperature 0.9 -> 0.45 over 60 turns, 0 from turn 60; the root
+  policy temperature 1.25 -> 1.1). The full cap's default is now 800 (a placeholder). A resignation
+  ends the game `resign`, the other side winning, with the record's last decision playing nothing.
+- **`train/sampler.py`** (new): I12's surprise weighting - half uniform, half in proportion to KL from
+  the raw prior to the pruned target, a small value-surprise share - per game, written as frequency
+  copies at full weight; 6u's arms: uniform, I6's raw variance and persistent bucket (`BucketTracker`).
+- **`train/window.py`** (new): I16's sublinear replay window, KataGo's shape and constants as
+  placeholders. **`train/swa.py`** (new): I17's capped running weight average and the published network.
+- **Tests** (`python/tests/train/test_mechanics.py`; `test_records.py` and `test_targets.py` updated for
+  PCR): the surprise weights by hand (mean 1, uniform on equal surprise, in proportion to the KL, value
+  surprise, cheap rows), steering kept out of the surprise by the pruned target, the copies seeded and
+  unbiased, 6u's arms; the window's growth (identity below c, monotone, sublinear, KataGo's 22M) and
+  recency; SWA's capped mean and publication; the temperature schedules; PCR's seeded fraction and a
+  game mixing full and cheap searches; I20 stopping on a quiet root; a resignation (record, result,
+  5dpgn replayed by the engine) and the check's events and per-range rates.
+- *Corrected by the review fixes (2026-10-23, above)*: "0 from turn 60" contradicted the Lc0
+  semantics it cited (the endgame temperature 0.45 holds from the cutoff, undecayed); the I20 test
+  could not tell a quiet root from a moving one; I18's sign and its 10% default were untested.
+- Spec: §12.3, §12.5, §12.8, §13.1 6l, 6u, 6z; register I3, I5, I6, I12, I16, I17, I18, I19, I20, M21.
+  Issue 236; proposed edits 179-181. BUILD_LOG's rows for these and M21 updated.
+
+### 2026-10-23 - M21 (2/4): the targets from I15's records - I2's pruning, D3's and D4's targets, I13, I14's refusal; section 15.2's round trip
+
+- **`python/t5d/train/targets.py`** (new): every head's targets from a record alone, in float64,
+  deterministically. The policy target from full searches only (I5) with KataGo's forced-playout
+  pruning applied at target construction against a replica of the root's PUCT (§12.5), steered
+  visits excluded or, under the provenance arm, down-weighted (I2, §12.2; the counts are 0 until
+  E10); the soft-policy target; the search-value targets - D3's categorical over the root search
+  value of full searches with 6j's short-term arm as a switch, the short-term values at the heads'
+  horizons, the q_ratio blend's root WDL - from the pruned visits (I2, CHECKPOINT 7); WDL on the
+  result and moves-left in turns (issue 224's placeholder: the turn in progress counts), both
+  deblundered (I13: Lc0's threshold 0.1, the band a placeholder); travelled-into and
+  timeline-active-at-end per board, tactical volatility masked until proofs exist; the effort label
+  from the change point (issue 154); the reply prototype through `reply_map` from the rebuilt
+  inputs; D9's weights stay the loss's. I14's proof rescoring refused while
+  `PROOF_CHANNEL_SIGNED_OFF` is False. `TARGET_SOURCES` names each target's source - none a learned
+  verifier (D5). `collate_rows` turns record rows into the network's batch and the losses' `Targets`.
+- **`train/selfplay.py`**: `generate_game(target_config=...)` builds the targets at generation and
+  records each decision's prior-to-target divergence and the configuration.
+- **`train/losses.py`**: a missing target is masked - a NaN WDL row (an unscored game), moves-left
+  (a censored game), per-board or per-square label; unchanged where every target is present.
+- **Tests** (`python/tests/train/test_targets.py`): pruning against KataGo's amount derived in
+  closed form, the best child untouched, the submit child pruned like a move, a one-visit remainder
+  dropped, exclusion and provenance, the boost taken out; the pruned root value, soft policy, raw
+  prior and KL by hand; WDL, moves-left, short-term targets and deblundering (rewrite, band,
+  perspective, moves-left offset) on constructed games; travelled-into by brute force; effort
+  labels; the I14 refusal; the losses' masks. **Section 15.2's I15 row**: on generated games under
+  three game configurations and three target configurations, the targets re-derived from the stored
+  record (its inputs rebuilt by replay) equal the targets written at generation, bit for bit, the
+  reply maps included; record-derived batches give every loss finite, with and without the reply
+  prototype (forward only).
+- *Corrected by the review fixes (2026-10-23, above)*: no test pinned the search-value targets to
+  the pruned visits, the builder's KL direction, the PUCT replica's inputs (E3's factor, the prior,
+  the root's visits) or the moves-left offset of a submit best child, though this entry claimed
+  them; the I13 blend was half-applied in the tree form (WDL without moves-left); short-term
+  targets of a resigned game were untested.
+- Spec: §8.3, §8.6, §12.2, §12.4, §12.5, §12.8, §15.2's I15 row; register I2, I5, I13, I14, D3, D4,
+  D5, D9, M21. Issue 235; proposed edits 176-178. BUILD_LOG's I2, I13, I14 and M21 rows updated.
+
+### 2026-10-23 - M21 (1/4): I15's training records and the self-play generator that writes them
+
+Register M21's first part, in the net lane: the record format before anything that reads it.
+
+- **`python/t5d/train/records.py`** (new): register I15's record, format version 1 - one
+  compressed `.npz` per game (`allow_pickle=False`), a JSON header with the conditions (engine
+  version, ruleset, variant or 5DFEN start, the network's weight hash and configuration, every
+  `t5d_search_params` field - the legality budget among them - the input's window and relations,
+  the generator's configuration, the result, the 5dpgn, the resignation events, the proof
+  references: none, the proof channel being off), per decision the raw root outputs (WDL and
+  categorical logits, a raw logit per candidate move and for submit, error, moves-left), the root
+  search value (q, d), visits, cPUCT, the effort change point, the best and played children, the
+  move and root temperatures, the PCR flag, cap and playouts, the seed and the prior-to-target
+  divergence's slot, the decision's boards and candidate moves, and every root child's statistics
+  (visits with the forced and steered counts, both priors, (q, d), value variance, E3's factor,
+  E10's boost, its key and own network evaluation, the solver bounds). Another version is refused
+  on reading; `record_differences` compares two records bit for bit.
+- **`python/t5d/train/selfplay.py`** (new): the generator - netplay's self-play loop (turn starts
+  judged first, a fresh search per decision sharing the cache, noise on, a chosen child made known
+  legal) writing a record per game; the board-move split and the tree form (the whole-turn arm
+  writes no policy target and is refused); D9's optimistic evaluator refused (`self_play=True` on
+  every search); `replay_positions` rebuilds each decision's network input from a record alone.
+  The raw root outputs are the network's evaluation of the decision's own input (issue 234's
+  reading, not a memo of the search's). `engine/netplay.py` unchanged.
+- **Tests** (`python/tests/train/test_records.py`): records written and read back bit for bit
+  under four configurations (the ply split, the tree form, Two Timelines, a tight legality budget
+  with unknown moves) and a custom 5DFEN start with branched timelines; each decision's input
+  rebuilt from the stored record, digest for digest; the raw WDL equal to the engine's root WDL
+  and the search's noise-free prior the softmax of the raw logits; the conditions present; another
+  version refused; the weight hash following the weights.
+- Nothing trains: the generator plays tiny games with random weights in the tests.
+- *Corrected by the review fixes (2026-10-23, above)*: the bit-for-bit round trip cannot see a
+  value recorded wrongly at generation (the cPUCT, the best child, the place in the action), the
+  forced and steered counts were 0 in every tested record, "another version refused" was tested
+  one way only, and replay ignored the header's ruleset and rules and the reader's network
+  configuration.
+- Spec: §12.8 "Rich training records", §15.2's I15 row (the targets' half lands with the target
+  builder); register I15, M21, D2, D8, D9, H23/H41. Issue 234; proposed edit 175. BUILD_LOG's I15
+  and M21 rows updated.
+
 ### 2026-10-23 - Network heads review fixes: the error target and D9's z as the register and KataGo have them; the losses' masks, moves-left's unit and the old parameters pinned
 
 Two reviewers of N-D3, N-D4 and N-D9 (spec fidelity; 46 mutants). One high finding, three medium,
