@@ -73,6 +73,11 @@ search effort - the mean of every square token (M20: "aux pooling -> squares"; s
 B8, D7); per-board heads each board's square mean and per-square heads every token
 (``heads.py``).
 
+Register A7: every input is read from the acting player's side - owners ours/theirs, side to
+move us/them, ranks mirrored and timelines negated when Black acts (``state.py``,
+``collate``) - so nothing here knows the colours; token-indexed outputs map back by the
+identity, the per-square labels by ``heads.square_labels_by_colour``.
+
 Register D8 (stage N5): the acting player is an input on the global registers (``embed.py``;
 M20 - with none, an ablation-3 arm, on the board tokens: a placeholder, spec issue 225) and
 the submit action's logit is read from the pooled global registers (``heads.SubmitHead``;
@@ -317,8 +322,9 @@ class T5DNet(nn.Module):
     def embed_tokens(self, batch: Batch, scope: str | None = None) -> torch.Tensor:
         """Token embeddings under a scope: under the block-causal scope with
         ``frozen_features="intrinsic"`` frozen boards get no state-dependent flags, and under
-        that scope with no global registers no frozen board gets the acting player (D8; spec
-        issue 225 - ``embed.py``)."""
+        that scope with no global registers no frozen board gets the acting colour's embedding
+        (D8; spec issue 225 - ``embed.py``) - though every board's features are the acting
+        player's view (A7)."""
         block_causal = self.scope_of(scope) == "block_causal"
         intrinsic = block_causal and self.cfg.frozen_features == "intrinsic"
         return self.embed(batch, frozen_intrinsic=intrinsic, block_causal=block_causal)

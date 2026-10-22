@@ -50,9 +50,9 @@ def test_square_features_only_reach_squares():
     sq = (batch.kind == TOKEN_SQUARE)[0]
     target = int(torch.nonzero(sq)[5])
     piece[0, target] = (piece[0, target] % 12) + 1
-    colour = batch.colour.clone()
-    colour[0, target] = 1 + (colour[0, target] % 2)
-    changed = _changed_tokens(embed, batch, {"piece": piece, "colour": colour})
+    owner = batch.owner.clone()
+    owner[0, target] = 1 + (owner[0, target] % 2)
+    changed = _changed_tokens(embed, batch, {"piece": piece, "owner": owner})
     assert changed.nonzero().flatten().tolist() == [target]
 
 

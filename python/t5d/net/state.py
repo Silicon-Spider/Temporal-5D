@@ -23,6 +23,23 @@ Representation (design spec section 2; register A1-A4):
   ``h = 2*T + (1 if black to move)``, head/superseded, active/inactive timeline, side to
   move, and the continuous Delta-t-to-present ``h - h_present`` (derived here, so it
   can never disagree with ``h``).
+* **Perspective canonicalisation (register A7, section 2.2).** A ``PositionState`` holds the
+  engine's absolute facts; the network reads them from the acting player's side
+  (``token_arrays``, ``collate``): a piece's owner is ours or theirs (``OWNER_*``) rather
+  than its colour, a board's side to move is us or them (section 2.3), and when Black acts
+  ranks are mirrored (``y -> H - 1 - y``, section 2.2's ``r -> size + 1 - r``) and timeline
+  labels negated - ``p -> -p``, or in a +-0 variant (``even_start``) ``p -> -1 - p``,
+  section 2.2's ``i -> -1 - i`` in section 12.6's index mapping, which swaps ``-0`` and
+  ``+0``. File, time and Delta-t are unchanged. Only features and coordinates change: the
+  tokens keep the storage order above, so every token-indexed output - the policy's moves,
+  the reply head's, the per-square and per-board outputs - maps back to the position by the
+  identity ("policy outputs map back through the inverse": the inverse of a transform that
+  moves no token), and the value is already the acting player's (D8); the per-square labels
+  name ours and theirs (``heads.SQUARE_LABELS``; ``heads.square_labels_by_colour`` maps
+  them back to colours). The acting colour itself stays an input, on the global registers
+  (``embed.py``; section 2.2: "for the few colour-asymmetric facts (White moves first)").
+  ``mirror`` builds a position's colour-swapped mirror, whose canonical input is the same
+  but for that input (section 15.2's A7 row).
 * **Relations and moves.** Typed edges ``(src_token, dst_token, relation)`` between
   square tokens, relation ids in ``RELATION_TYPES``: ``move`` edges are the move graph
   that opens the move-graph heads' mask (B9, section 6: "which squares reach which,
@@ -102,6 +119,11 @@ N_PIECE_TYPES = len(PIECE_LETTERS)  # 13, empty included (section 2.2: "~13 stat
 COLOUR_NONE, COLOUR_WHITE, COLOUR_BLACK = 0, 1, 2
 N_COLOURS = 3
 
+#: A piece's owner relative to the acting player (register A7, section 2.2): the network's
+#: square feature in place of the colour.
+OWNER_NONE, OWNER_OURS, OWNER_THEIRS = 0, 1, 2
+N_OWNERS = 3
+
 #: Edge relation ids (section 6). ``move`` is the move graph (B9's mask); the rest are
 #: B11's typed relations (``config.TYPED_RELATIONS``). The ids are the C ABI's
 #: (``engine/include/t5d/records.h``), which keeps id 6 - travel-threat, folded into attack at
@@ -150,6 +172,22 @@ def timeline_index(label: str | int, *, even_start: bool = False) -> int:
     if sign == 0:
         raise ValueError(f"even-start timeline labels are signed ('-0', '+0', ...), got {label!r}")
     return magnitude if sign > 0 else -magnitude - 1
+
+
+def canonical_timeline(p, acting: int, even_start: bool = False):
+    """Register A7: a timeline coordinate from the acting player's side - ``p`` when White
+    (0) acts; when Black (1) acts negated, ``-p`` (``+n <-> -n``), or in a +-0 variant
+    ``-1 - p`` (``+0 <-> -0``: section 12.6's index mapping, ``i -> -1 - i``). An
+    involution: applying it twice gives ``p`` back."""
+    if int(acting) == 0:
+        return p
+    return -1 - p if even_start else -p
+
+
+def canonical_rank(y, height: int, acting: int):
+    """Register A7: a rank (0 = rank 1) from the acting player's side - ``y`` when White acts,
+    mirrored ``height - 1 - y`` when Black acts (section 2.2's ``r -> size + 1 - r``)."""
+    return y if int(acting) == 0 else int(height) - 1 - y
 
 
 # --- token layout ------------------------------------------------------------------------
@@ -293,6 +331,10 @@ class PositionState:
     acting_player: int | None = None
     submit_possible: bool = False
     submit_legal: bool = False
+    #: A +-0 variant (two starting timelines, ``-0`` and ``+0``; ``timeline_index``), where
+    #: register A7's timeline negation is ``p -> -1 - p`` rather than ``p -> -p`` (section
+    #: 12.6's index mapping). The engine's ``Expansion.even``.
+    even_start: bool = False
 
     def __post_init__(self) -> None:
         self.timeline = _as_int(self.timeline, "timeline").reshape(-1)
@@ -320,6 +362,7 @@ class PositionState:
             self.source = _as_int(self.source, "source").reshape(-1)
         self.submit_possible = bool(self.submit_possible)
         self.submit_legal = bool(self.submit_legal)
+        self.even_start = bool(self.even_start)
         self.validate()
         if self.acting_player is None:
             self.acting_player = self.player_to_move
@@ -372,6 +415,29 @@ class PositionState:
     def p_ref(self) -> int:
         """A translation-equivariant timeline reference: the smallest ``p`` present."""
         return int(self.timeline.min())
+
+    # -- the acting player's view (register A7; the module docstring) --
+
+    @property
+    def canonical_timeline(self) -> np.ndarray:
+        """``(N,)``: each board's timeline from the acting player's side (``canonical_timeline``)."""
+        return canonical_timeline(self.timeline, int(self.acting_player), self.even_start)
+
+    @property
+    def canonical_p_ref(self) -> int:
+        """The smallest canonical timeline: ``p_ref`` of the acting player's view."""
+        return int(self.canonical_timeline.min())
+
+    @property
+    def owner(self) -> np.ndarray:
+        """``(N, W*H)``: each square's owner relative to the acting player (``OWNER_*``)."""
+        ours = COLOUR_WHITE + int(self.acting_player)
+        return np.where(self.colour == COLOUR_NONE, OWNER_NONE, np.where(self.colour == ours, OWNER_OURS, OWNER_THEIRS)).astype(np.int64)
+
+    @property
+    def relative_side_to_move(self) -> np.ndarray:
+        """``(N,)``: who moves on each board - 0 us (the acting player), 1 them (section 2.3)."""
+        return self.side_to_move ^ int(self.acting_player)
 
     # -- validation --
 
@@ -498,7 +564,10 @@ class PositionState:
     # -- token-level arrays --
 
     def token_arrays(self) -> dict[str, np.ndarray]:
-        """Per-token arrays in this position's own (canonical) layout, length ``T``."""
+        """Per-token arrays in this position's own layout (storage order), length ``T``, in the
+        acting player's view (register A7; the module docstring): ``owner`` (``OWNER_*``),
+        ``stm`` (0 us, 1 them), and the rank ``y`` and timeline ``p`` canonical; the file
+        ``x``, the time ``h`` and ``dt`` as stored."""
         lay = self.layout
         n, wh, tpb, nb = self.n_boards, lay.squares_per_board, lay.tokens_per_board, lay.n_body
         t = np.arange(nb)
@@ -507,23 +576,25 @@ class PositionState:
         is_sq = local < wh
         sq = np.where(is_sq, local, 0)
         kind = np.where(is_sq, TOKEN_SQUARE, TOKEN_BOARD_REGISTER)
+        owner = self.owner
+        rank = canonical_rank(sq // self.width, self.height, int(self.acting_player))
         out = {
             "kind": np.concatenate([kind, np.full(lay.global_regs, TOKEN_GLOBAL_REGISTER)]),
             "board": np.concatenate([board, np.full(lay.global_regs, -1)]),
             "reg_index": np.concatenate([np.where(is_sq, 0, local - wh), np.arange(lay.global_regs)]),
             "piece": np.concatenate([np.where(is_sq, self.piece[board, sq], 0), np.zeros(lay.global_regs, np.int64)]),
-            "colour": np.concatenate([np.where(is_sq, self.colour[board, sq], 0), np.zeros(lay.global_regs, np.int64)]),
+            "owner": np.concatenate([np.where(is_sq, owner[board, sq], 0), np.zeros(lay.global_regs, np.int64)]),
             "moved": np.concatenate([np.where(is_sq, self.moved[board, sq], False), np.zeros(lay.global_regs, bool)]),
             "x": np.concatenate([np.where(is_sq, sq % self.width, 0), np.zeros(lay.global_regs, np.int64)]),
-            "y": np.concatenate([np.where(is_sq, sq // self.width, 0), np.zeros(lay.global_regs, np.int64)]),
+            "y": np.concatenate([np.where(is_sq, rank, 0), np.zeros(lay.global_regs, np.int64)]),
         }
         dt = self.dt_present
         for name, per_board in (
-            ("p", self.timeline),
+            ("p", self.canonical_timeline),
             ("h", self.half_turn),
             ("is_head", self.is_head.astype(np.int64)),
             ("active", self.active.astype(np.int64)),
-            ("stm", self.side_to_move),
+            ("stm", self.relative_side_to_move),
         ):
             out[name] = np.concatenate([per_board[board], np.zeros(lay.global_regs, np.int64)])
         out["dt"] = np.concatenate([dt[board], np.zeros(lay.global_regs, np.float32)]).astype(np.float32)
@@ -584,6 +655,65 @@ def permute_boards(state: PositionState, order: Sequence[int]) -> PositionState:
         acting_player=state.acting_player,
         submit_possible=state.submit_possible,
         submit_legal=state.submit_legal,
+        even_start=state.even_start,
+    )
+
+
+def square_mirror(width: int, height: int) -> np.ndarray:
+    """``(W*H,)``: the square index each square's rank mirror has (``(x, y) -> (x, H-1-y)``);
+    an involution."""
+    sq = np.arange(int(width) * int(height))
+    return (int(height) - 1 - sq // int(width)) * int(width) + sq % int(width)
+
+
+def mirror_tokens(layout: TokenLayout) -> np.ndarray:
+    """``(T,)``: each token's counterpart in the colour-swapped mirror (``mirror``) - a square
+    token goes to its rank mirror on the same board; registers stay. An involution."""
+    out = np.arange(layout.n_tokens)
+    flip = square_mirror(layout.width, layout.height)
+    for b in range(layout.n_boards):
+        start = b * layout.tokens_per_board
+        out[start : start + layout.squares_per_board] = start + flip
+    return out
+
+
+def mirror(state: PositionState) -> PositionState:
+    """The colour-swapped mirror of a position (section 15.2's A7 row): the colours swapped,
+    every board's ranks mirrored (``(x, y) -> (x, H-1-y)``; edges and moves remapped, their
+    list order kept), timelines negated by register A7's map (``canonical_timeline`` with
+    Black acting: ``p -> -p``, or ``-1 - p`` in a +-0 variant), and the acting player swapped.
+
+    Each board moves one half-turn later (``h -> h + 1``) so that its side to move is the
+    other colour - White's T-th board becomes Black's T-th, Black's becomes White's T+1-th -
+    which every board shares, so no time difference, Delta-t or present changes (A7: "the
+    time axis is unchanged"; the network sees time only relative to the present, section 4).
+    Board order, lineage, the head and active flags, the submit flags and the variant's parity
+    are kept. The mirror of the mirror is the position moved two half-turns later
+    (``translate(state, dh=2)``), to which the network is invariant."""
+    lay = state.layout
+    flip = square_mirror(state.width, state.height)
+    tokens = mirror_tokens(lay)
+    colour = np.where(state.colour == COLOUR_NONE, COLOUR_NONE, COLOUR_WHITE + COLOUR_BLACK - state.colour)
+
+    def remap(arr: np.ndarray) -> np.ndarray:
+        if arr.size == 0:
+            return arr.copy()
+        out = arr.copy()
+        out[:, :2] = tokens[arr[:, :2]]
+        return out
+
+    return replace(
+        state,
+        timeline=canonical_timeline(state.timeline, 1, state.even_start),
+        half_turn=state.half_turn + 1,
+        side_to_move=1 - state.side_to_move,
+        piece=state.piece[:, flip],
+        colour=colour[:, flip],
+        moved=state.moved[:, flip],
+        edges=remap(state.edges),
+        moves=remap(state.moves),
+        opp_moves=remap(state.opp_moves),
+        acting_player=1 - int(state.acting_player),
     )
 
 
@@ -623,27 +753,31 @@ def relayout(state: PositionState, regs_per_board: int, global_regs: int) -> Pos
 class Batch:
     """A padded batch of positions, as tensors.
 
+    The features are the acting player's view (register A7; the module docstring): owner,
+    side to move and the rank and timeline coordinates are canonical; the token order is
+    the positions' own.
+
     Batch token layout: position ``b``'s board tokens (squares and per-board registers,
-    in its canonical order) occupy ``[0, n_body[b])``, padding fills ``[n_body[b],
+    in its storage order) occupy ``[0, n_body[b])``, padding fills ``[n_body[b],
     body_len)``, and the global registers occupy ``[body_len, body_len + G)`` for every
     position. For a single position there is no padding and the batch layout *is* the
-    canonical layout. Square-token indices coincide in both layouts, so edges and moves
+    position's own layout. Square-token indices coincide in both layouts, so edges and moves
     are passed through unchanged. (Token order carries no meaning to the network, so
     where padding sits changes nothing; padded keys are masked.)
     """
 
     piece: torch.Tensor  # (B, L) long
-    colour: torch.Tensor  # (B, L) long
+    owner: torch.Tensor  # (B, L) long: OWNER_* - ours or theirs, relative to the acting player (A7)
     moved: torch.Tensor  # (B, L) long
     kind: torch.Tensor  # (B, L) long: TOKEN_* constants
     reg_index: torch.Tensor  # (B, L) long: register slot (per-board) or index (global)
     board: torch.Tensor  # (B, L) long: board index within the position, -1 if none
     is_head: torch.Tensor  # (B, L) long, board flag per token (0 where no board)
     active: torch.Tensor  # (B, L) long
-    stm: torch.Tensor  # (B, L) long
+    stm: torch.Tensor  # (B, L) long: who moves on the token's board, 0 us (the acting player), 1 them (A7)
     dt: torch.Tensor  # (B, L) float32, Delta-t-to-present of the token's board
-    coords: torch.Tensor  # (B, L, 4) float32: file x, rank y, timeline p, time h (raw)
-    coord_ref: torch.Tensor  # (B, 2) float32: (p_ref, h_present) per position
+    coords: torch.Tensor  # (B, L, 4) float32: file x, rank y, timeline p, time h (raw; y and p canonical - A7)
+    coord_ref: torch.Tensor  # (B, 2) float32: (canonical p_ref, h_present) per position
     valid: torch.Tensor  # (B, L) bool: not padding
     n_body: torch.Tensor  # (B,) long
     n_boards: torch.Tensor  # (B,) long
@@ -736,7 +870,7 @@ def collate(states: Sequence[PositionState]) -> Batch:
     bsz = len(states)
     n_max = max(lay.n_boards for lay in layouts)
 
-    long_fields = ("piece", "colour", "moved", "kind", "reg_index", "board", "is_head", "active", "stm")
+    long_fields = ("piece", "owner", "moved", "kind", "reg_index", "board", "is_head", "active", "stm")
     arrays = {name: np.zeros((bsz, big_l), dtype=np.int64) for name in long_fields}
     arrays["kind"][:] = TOKEN_PAD
     arrays["board"][:] = -1
@@ -768,7 +902,7 @@ def collate(states: Sequence[PositionState]) -> Batch:
         coords[i, dest, 1] = tok["y"]
         coords[i, dest, 2] = tok["p"]
         coords[i, dest, 3] = tok["h"]
-        coord_ref[i] = (state.p_ref, state.h_present)
+        coord_ref[i] = (state.canonical_p_ref, state.h_present)
         valid[i, dest] = True
         board_valid[i, : lay.n_boards] = True
 
@@ -778,7 +912,7 @@ def collate(states: Sequence[PositionState]) -> Batch:
     t = {name: torch.from_numpy(a) for name, a in arrays.items()}
     return Batch(
         piece=t["piece"],
-        colour=t["colour"],
+        owner=t["owner"],
         moved=t["moved"],
         kind=t["kind"],
         reg_index=t["reg_index"],
