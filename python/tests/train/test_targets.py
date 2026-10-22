@@ -434,7 +434,10 @@ def test_record_targets_feed_every_loss(evaluator, flags):
         losses = compute_losses(model(batch), tgt)
     assert all(torch.isfinite(v) for v in losses.values()), losses
     assert ("opp_reply" in losses) == bool(flags)
-    assert bool(tgt.full_search.all()) and torch.allclose(tgt.policy.sum(-1) + tgt.submit, torch.ones(len(rows), dtype=torch.float32))
+    full = tgt.full_search
+    assert 0 < int(full.sum()) < len(rows), "PCR (I5) mixes full and cheap searches"
+    assert torch.allclose(tgt.policy.sum(-1) + tgt.submit, full.float())  # cheap searches: no policy target
+    assert bool((tgt.effort[~full] == -1).all()) and bool(torch.isnan(tgt.root_value[~full]).all())
 
 
 def test_missing_targets_are_masked_in_the_losses():

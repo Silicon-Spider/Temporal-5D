@@ -33,7 +33,7 @@ from t5d.train.records import (
     to_arrays,
     write_game,
 )
-from t5d.train.selfplay import GeneratorConfig, generate_game, replay_positions
+from t5d.train.selfplay import GeneratorConfig, generate_game, is_full_search, move_temperature, replay_positions, root_temperature
 from tests.engine.helpers import requires_engine
 
 NET = NetConfig(**SMALL)
@@ -172,9 +172,10 @@ def test_the_records_conditions(evaluator, tmp_path):
     assert h["proof_refs"] == [] and all(d.proof_ref == -1 for d in g.record.decisions)
     assert h["value_source"] == "wdl"
     for d in g.record.decisions:
-        assert d.n_boards == d.boards.shape[0] and d.full_search and d.playout_cap == cfg.playouts
+        assert d.n_boards == d.boards.shape[0] and d.full_search == is_full_search(cfg, d.decision)
+        assert d.playout_cap == (cfg.playouts if d.full_search else cfg.pcr.cheap_cap(cfg.playouts))
         assert (d.children.forced_visits == 0).all() and (d.children.steered_visits == 0).all()
-        assert d.move_temperature in (0.0, cfg.temperature)
+        assert d.move_temperature == move_temperature(cfg, d.action) and d.root_policy_temperature == root_temperature(cfg, d.action)
     # The tight budget leaves moves unknown at some root.
     assert any((d.children.legality != T5D_LEGALITY_LEGAL).any() for d in g.record.decisions)
 
