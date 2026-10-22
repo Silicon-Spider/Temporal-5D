@@ -56,12 +56,24 @@ The build rules (spec section 15.1) decide what else appears here:
   defaults, and the arms they dispose of - no named ablation needing them - are gone: the
   registers' positions (B8: per-board registers rotated on timeline and time only, global
   registers position-free on every pair - no switch), the promotion offset in the policy
-  (D1 - no switch), the auxiliary heads' pool (the squares; the value-type heads - the
-  categorical value, WDL and the short-term value - pool the global registers, D3, by mean),
+  (D1 - no switch), the auxiliary heads' pool (the squares; D3's value heads pool the global
+  registers, by mean),
   moves-left in turns (D4), the acting player on the global registers and the pooled submit
   logit (D8). B5's details, the per-square label set, stage N2's placeholders (16a-g) and B7
   "stand as v1, tested by ablations 2, 6a and 6j" - the switches below stay, now the v1's
   values.
+* **D3's value heads** (committed, corrected at CHECKPOINT 7, section 8.3; ``heads.ValueHeads``):
+  WDL - the value search uses - the 51-bin categorical over the root search value, short-term
+  values at ``short_term_horizons`` (placeholders in turns) and the error head, all FP32 from the
+  pooled global registers; the targets' unstated details (HL-Gauss' sigma, the error head's
+  horizon and loss) are the training code's placeholders (``train.losses.LossConfig``; spec
+  issue 231).
+* **D4's soft policy** (committed, CHECKPOINT 7, section 12.4) is on (``soft_policy``, 6j's
+  on/off arm); **the opponent-reply head** is a prototype behind its flag, off (``opp_reply``);
+  their widths and the other pointer heads' promotion offset are placeholders (spec issues 222,
+  232).
+* **D9's optimistic policy** (prototype, CHECKPOINT 7, section 8.1) is behind its flag, off
+  (``optimistic_policy``); match play only (spec issue 233).
 * **F5** (committed, CHECKPOINT 6, section 9.3): every trunk norm RMSNorm-style - no
   mean-centring, no bias (``trunk.RMSNorm``) - no biases in the Q, K and V projections
   (``qkv_bias``), the attention-output and FFN biases kept (``out_ffn_bias``), pre-norm;
@@ -69,8 +81,8 @@ The build rules (spec section 15.1) decide what else appears here:
   ``norm_placement="post"`` (the placement is provisional), with the arm's unstated
   details as placeholders.
 * **F6** (committed, CHECKPOINTS 7-8, section 9.3): Mish in the trunk FFN
-  (``ffn_activation``) and in every head's hidden layers (CHECKPOINT 8: the value head's MLP,
-  ``heads.ValueHead`` - no switch); ablation 6y's arm, squared ReLU, is
+  (``ffn_activation``) and in every head's hidden layers (CHECKPOINT 8: the value heads' shared layer,
+  ``heads.ValueHeads`` - no switch); ablation 6y's arm, squared ReLU, is
   ``ffn_activation="squared_relu"``, in the trunk only.
 * **Where the spec is silent, ambiguous or contradictory on a committed-class point**
   the choice is a parameter and the default is marked as a placeholder, not a decision -
@@ -306,7 +318,7 @@ class NetConfig:
     #: "mish" - ``x tanh(softplus(x))`` (Misra 2019, "Mish: A Self Regularized Non-Monotonic
     #: Activation Function"); "squared_relu" - ``relu(x)^2`` (So et al. 2021, "Primer"), drawn at
     #: the same initialisation (the arm's is not stated - spec issue 204, proposed edit 154). Only the trunk's FFN
-    #: follows this switch: the heads' hidden layers are Mish under both (``heads.ValueHead``).
+    #: follows this switch: the heads' hidden layers are Mish under both (``heads.ValueHeads``).
     ffn_activation: str = "mish"
 
     # --- embeddings (A2, A3, B8, section 5.3) ---
@@ -330,16 +342,49 @@ class NetConfig:
     #: per-piece logit offset read from the destination token (D1, section 8.1, M20:
     #: "promotion scoring -> learned per-piece offset" - no switch; ``heads.PointerHead``).
     policy_dim: int = 256
+    #: D4's soft policy (CHECKPOINT 7, section 12.4): "a second pointer head - its own source and
+    #: destination projections and its own submit logit" (``heads.ActionHead``), on - its off arm is
+    #: 6j's "soft policy on/off". Its projections' width: COMMITTED-CLASS SILENCE (D4; spec issue
+    #: 232) - placeholder default, not a decision: 128, half the policy's (section 9.2's "~0.1M"
+    #: auxiliary budget).
+    soft_policy: bool = True
+    soft_policy_dim: int = 128
+    #: D4's opponent-reply head - a PROTOTYPE (reinstated at CHECKPOINT 7: "weight 0.15, the
+    #: opponent's next turn mapped onto current squares, ambiguous mappings masked"), behind its
+    #: flag, off: its move space is ``PositionState.opp_moves`` as ``train.reply_map`` builds it.
+    opp_reply: bool = False
     #: Width of the opponent-reply pointer projections (aux, ~0.1M budget of section 9.2).
     opp_policy_dim: int = 128
-    #: Hidden width of the value head's MLP (its activation is F6's Mish - ``heads.ValueHead``).
-    #: Where each head reads has no switch (M20; ``model.T5DNet.heads``): the value-type heads
-    #: - the 51-bin value, WDL, the short-term value - the mean of the global registers (D3,
-    #: section 8.3: "pooled by mean from the global registers"); the other global auxiliary
-    #: heads - moves-left, search effort - the mean of every square token (M20: "aux pooling ->
-    #: squares"; section 12.4, B8, D7: registers stay free scratch); per-board heads each
-    #: board's squares, per-square heads every token.
+    #: Whether the pointer heads other than the policy (the soft policy, the reply, D9's
+    #: optimistic policy) carry D1's per-piece promotion offset. COMMITTED-CLASS SILENCE (D1 names
+    #: the policy; spec issue 222) - placeholder default: yes, since the bilinear form ties their
+    #: promotions as it ties the policy's.
+    pointer_promotion_offset: bool = True
+    #: D9's optimistic policy - a PROTOTYPE (CHECKPOINT 7, section 8.1; gate 6t): "a second policy
+    #: head on the normal target, each sample weighted ... by how far the mover beat the predicted
+    #: short-term value", searched with "at match play only ... kept out of self-play". Behind its
+    #: flag, off. Its own f, g, promotion offset and submit logit (``heads.ActionHead``); its width
+    #: a placeholder (the policy's 256; spec issue 233). Which evaluator uses it is the match
+    #: player's choice (``engine.evaluator``'s ``policy="optimistic"``; self-play refuses it).
+    optimistic_policy: bool = False
+    optimistic_policy_dim: int = 256
+    #: Hidden width of D3's value heads' shared layer (its activation is F6's Mish -
+    #: ``heads.ValueHeads``: WDL, the categorical, the short-term values and the error head).
+    #: Where each head reads has no switch (M20; ``model.T5DNet.heads``): D3's value heads the
+    #: mean of the global registers (section 8.3: "each pooled by mean from the global
+    #: registers"); the global auxiliary heads - moves-left, search effort - the mean of every
+    #: square token (M20: "aux pooling -> squares"; section 12.4, B8, D7: registers stay free
+    #: scratch); per-board heads each board's squares, per-square heads every token.
     value_hidden: int = 256
+    #: D3's short-term value heads (section 8.3: "short-term value at two or three horizons -
+    #: exponentially averaged future search values ... the horizons are placeholders scaled to 5D
+    #: game length until the pilot run measures it"): one output per horizon, its mean horizon in
+    #: turns - one player's action each (issue 305's unit, as moves-left's). COMMITTED-CLASS
+    #: SILENCE (D3; spec issue 231) - placeholder default, not a decision: three horizons,
+    #: KataGo's 6, 16 and 50 turns in Go scaled by about a third (a 5D game's length is not
+    #: measured: register K, M18). Each output is a scalar on [-1, 1] (tanh), trained by squared
+    #: error (``train.losses``) - the form a placeholder fixed in code (issue 231).
+    short_term_horizons: tuple[float, ...] = (2.0, 5.0, 16.0)
     #: Per-square deep-attack-fact labels (``heads.SQUARE_LABELS``: the set stands as v1 - M20,
     #: ablation 6j).
     n_square_labels: int = 8
@@ -804,6 +849,12 @@ class NetConfig:
             raise ValueError("dt_hidden, turn_state_hidden, dt_scale and turn_state_scale must be positive")
         if self.value_bins < 2 or self.effort_bins < 2:
             raise ValueError("categorical heads need at least two bins")
+        horizons = tuple(self.short_term_horizons)
+        increasing = all(a < b for a, b in zip(horizons[:-1], horizons[1:], strict=True))
+        if not horizons or not increasing or any(not (math.isfinite(h) and h > 0) for h in horizons):
+            raise ValueError("short_term_horizons must be one or more finite positive horizons (turns), increasing (D3)")
+        if self.soft_policy_dim < 1 or self.opp_policy_dim < 1 or self.optimistic_policy_dim < 1:
+            raise ValueError("soft_policy_dim, opp_policy_dim and optimistic_policy_dim must be positive")
         if self.submit_head not in SUBMIT_HEADS:
             raise ValueError(f"submit_head must be one of {SUBMIT_HEADS}")
         if self.regs_per_board < 0 or self.global_regs < 0:

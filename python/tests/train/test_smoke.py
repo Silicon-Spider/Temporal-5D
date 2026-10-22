@@ -33,8 +33,10 @@ def test_smoke_three_steps(trunk_dtype):
         dict(norm_placement="post"),
         dict(ffn_activation="squared_relu"),
         dict(displacement_bias=False),
+        dict(opp_reply=True, submit_head="pointer"),
+        dict(soft_policy=False, pointer_promotion_offset=False),
     ],
-    ids=["b5_b15_shared", "routing_typed_pointer_submit", "post_norm", "squared_relu", "no_table"],
+    ids=["b5_b15_shared", "routing_typed_pointer_submit", "post_norm", "squared_relu", "no_table", "d4_reply", "d4_soft_off"],
 )
 def test_smoke_with_the_options_on(flags):
     """Every option's parameters receive gradient and move: B15's table, B11's scalars or the
@@ -52,20 +54,23 @@ def test_smoke_refuses_more_steps():
 
 
 def test_every_loss_is_finite_and_reaches_its_head():
-    cfg = NetConfig(trunk_dtype="fp32")
+    cfg = NetConfig(trunk_dtype="fp32", opp_reply=True)
     model = build_model(cfg, seed=1)
-    batch = collate(synthetic_states(1, [2, 5]))
+    batch = collate(with_actions(synthetic_states(1, [2, 5])))  # the second offers a legal submit (D8; the soft policy's own)
     targets = synthetic_targets(batch, cfg, torch.Generator().manual_seed(1))
     for reduction in ("mean", "sum"):  # register D6's open knob
         losses = compute_losses(model(batch), targets, LossConfig(board_reduction=reduction))
         assert all(torch.isfinite(v) and v > 0 for v in losses.values()), losses
     heads = {
         "policy": model.policy,
-        "value": model.value,
-        "wdl": model.aux.wdl,
+        "wdl": model.value.wdl,  # D3's four value heads, each its own output layer
+        "categorical": model.value.categorical,
+        "short_term": model.value.short_term,
+        "value_error": model.value.error,
+        "soft_policy": model.aux.soft_policy,  # D4
+        # D4's prototype (its flag on here): f and g - the synthetic opponent moves promote nothing
+        "opp_reply": torch.nn.ModuleList([model.aux.opp_reply.src, model.aux.opp_reply.dst]),
         "moves_left": model.aux.moves_left,
-        "opp_reply": model.aux.opp_reply,
-        "short_value": model.aux.short_value,
         "board": model.aux.board,
         "square": model.aux.square,
         "effort": model.aux.effort,
@@ -154,8 +159,8 @@ def test_smoke_covers_stage_n2_parameters(form, n_new):
 def test_the_policy_loss_covers_the_submit_action(form):
     """Register D8 (stage N5): the policy's target is one distribution over the moves and the
     submit action; its loss is the cross-entropy against the joint log-softmax - an illegal or
-    absent submit carries neither probability nor target - and it reaches the submit readout
-    and the acting-player embedding."""
+    absent submit carries neither probability nor target - averaged over the full searches
+    (section 12.5), and it reaches the submit readout and the acting-player embedding."""
     cfg = NetConfig(trunk_dtype="fp32", n_layers=2, submit_head=form)
     model = build_model(cfg, seed=4)
     batch = collate(with_actions(synthetic_states(4, [2, 4, 3, 5])))
@@ -169,7 +174,9 @@ def test_the_policy_loss_covers_the_submit_action(form):
     logp = out.action_log_probs()
     per = [-(target[i] * logp[i]).masked_fill(~out.action_valid()[i], 0.0).sum() for i in range(4)]
     losses = compute_losses(out, targets)
-    assert torch.allclose(losses["policy"], torch.stack(per).mean(), rtol=1e-5)
+    full = targets.full_search  # section 12.5: only full searches emit policy targets
+    assert full.tolist() == [True, True, False, True]
+    assert torch.allclose(losses["policy"], torch.stack(per)[full].mean(), rtol=1e-5)
     losses["policy"].backward()
     if form == "linear":
         assert model.submit.out.weight.grad.abs().sum() > 0

@@ -91,9 +91,10 @@ FLAG_SETS = {
     "b12": dict(board_pair_smolgen=True),
     "b17": dict(shaw_key_term=True, shaw_init_std=1.0),
     "no_table_pointer_submit": dict(displacement_bias=False, submit_head="pointer"),
+    "d4_reply_d9": dict(opp_reply=True, optimistic_policy=True),
 }
 
-VALUE_HEADS = ("value_logits", "wdl_logits", "short_value_logits", "moves_left_log", "effort_logits", "submit_raw")
+VALUE_HEADS = ("value_logits", "wdl_logits", "short_term", "value_error", "moves_left_log", "effort_logits", "submit_raw")
 
 
 def tie(model):
@@ -254,7 +255,14 @@ def assert_mirrored(a, b, perm: torch.Tensor, acting: tuple[int, int], atol: flo
     assert torch.equal(torch.isinf(a.submit_logits), torch.isinf(b.submit_logits))
     assert torch.equal(a.move_valid, b.move_valid) and torch.equal(a.opp_move_valid, b.opp_move_valid)
     close(a.policy_logits[a.move_valid], b.policy_logits[b.move_valid], "policy")
-    close(a.opp_reply_logits[a.opp_move_valid], b.opp_reply_logits[b.opp_move_valid], "reply")
+    close(a.soft_policy_logits[a.move_valid], b.soft_policy_logits[b.move_valid], "soft policy")  # D4
+    live = torch.isfinite(a.soft_submit_logits)
+    assert torch.equal(live, torch.isfinite(b.soft_submit_logits))
+    close(a.soft_submit_logits[live], b.soft_submit_logits[live], "soft submit")
+    if a.optimistic_logits is not None:  # D9
+        close(a.optimistic_logits[a.move_valid], b.optimistic_logits[b.move_valid], "optimistic policy")
+    if a.opp_reply_logits is not None:
+        close(a.opp_reply_logits[a.opp_move_valid], b.opp_reply_logits[b.opp_move_valid], "reply")
     close(a.action_log_probs()[a.action_valid()], b.action_log_probs()[b.action_valid()], "actions")
     close(a.board_logits, b.board_logits, "board")
     mask = a.square_mask[0]
@@ -339,7 +347,7 @@ def test_acting_colour_is_the_only_difference(construction, scope):
     s, m = _pair(construction, 0)
     model = _model(5, scope, tied=False, **_config_for(s))
     a, b = _outputs(model, s), _outputs(model, m)
-    for name in ("value_logits", "wdl_logits", "short_value_logits", "moves_left_log", "effort_logits", "submit_raw"):
+    for name in ("value_logits", "wdl_logits", "short_term", "value_error", "moves_left_log", "effort_logits", "submit_raw"):
         assert not torch.allclose(getattr(a, name), getattr(b, name), atol=1e-4), name
     assert not torch.allclose(a.policy_logits[a.move_valid], b.policy_logits[b.move_valid], atol=1e-4)
     tie(model)
