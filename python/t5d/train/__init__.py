@@ -13,5 +13,6 @@ train nothing - first"). What exists:
 * ``sampler`` - I12's surprise-weighted sampling and 6u's arms (I6's triggers); ``window`` - I16's
   sublinear replay window; ``swa`` - I17's weight average, the network published to self-play.
 * ``trainer`` - the loop: records -> sampler -> window -> targets -> losses -> at most three
-  optimiser steps -> SWA; G8's QAT hook a named seam (``apply_qat``), not built.
+  optimiser steps -> SWA; G8's QAT hook (``apply_qat``: G2's FP8 trunk, ``net/quant.py``) behind
+  its flag, off.
 """
