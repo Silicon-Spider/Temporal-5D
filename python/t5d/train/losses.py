@@ -52,6 +52,10 @@ I15), not this module's.
   Their reduction over a position's boards is register D6's open knob ("sum-vs-mean",
   ablation 6j): ``board_reduction="mean"`` (default) averages; ``"sum"`` sums them, so
   the auxiliary gradient grows with N. Positions are then averaged with equal weight.
+* **Missing targets** (M21's record-derived targets, ``train.targets``): a NaN WDL row (an unscored
+  game), a NaN moves-left (a censored game) and a NaN per-board or per-square label (tactical
+  volatility until proofs exist; the per-square labels until their generator) are no target - each
+  loss averages over the targets present.
 
 * **D9's optimistic policy** (a prototype behind ``NetConfig.optimistic_policy``; section 8.1):
   its own actions against the normal policy target (full searches only), each sample weighted by
@@ -85,7 +89,8 @@ from ..net.model import NetOutput
 class Targets:
     policy: torch.Tensor  # (B, M) distribution over supplied moves (with ``submit``: over the actions)
     #: D3's WDL target - the game result, the acting player's (D8): ``(B,)`` class index (0 win,
-    #: 1 draw, 2 loss) or ``(B, 3)`` distribution (I13's deblundered targets are).
+    #: 1 draw, 2 loss) or ``(B, 3)`` distribution (I13's deblundered targets are) - a NaN row: no
+    #: target (an unscored game; ``train.targets``).
     wdl: torch.Tensor
     #: D3's categorical target: ``(B,)`` the root search value of a full search, recomputed from
     #: the pruned visits (section 12.2), on [-1, 1]; NaN where there is none (the loss smooths it,
@@ -94,9 +99,9 @@ class Targets:
     #: D3's short-term targets: ``(B, K)`` on [-1, 1], one per ``NetConfig.short_term_horizons``;
     #: NaN where a horizon has none.
     short_term: torch.Tensor
-    moves_left: torch.Tensor  # (B,) turns left (one player's action each, D4), >= 0
-    board: torch.Tensor  # (B, Nmax, 3) in {0, 1}
-    square: torch.Tensor  # (B, L, n_square_labels) in {0, 1}
+    moves_left: torch.Tensor  # (B,) turns left (one player's action each, D4), >= 0; NaN: no target (a censored game)
+    board: torch.Tensor  # (B, Nmax, 3) in {0, 1}; NaN: no label (tactical volatility until proofs exist)
+    square: torch.Tensor  # (B, L, n_square_labels) in {0, 1}; NaN: no label (no generator yet)
     effort: torch.Tensor  # (B,) bin index, -1 where there is no target (skipped too where not ``full_search``)
     #: (B,) the policy target's mass on the submit action (D8; ``policy`` and ``submit``
     #: together are one distribution over the decision's actions); None: none anywhere.
@@ -272,7 +277,10 @@ def compute_losses(out: NetOutput, tgt: Targets, cfg: LossConfig | None = None) 
     losses["policy"] = masked_ce(out.action_logits()[full], out.action_valid()[full], action_target[full])
 
     # D3 (section 8.3).
-    losses["wdl"] = -(wdl_target(tgt, cfg.q_ratio) * torch.log_softmax(out.wdl_logits.float(), dim=-1)).sum(dim=-1).mean()
+    wt = wdl_target(tgt, cfg.q_ratio).to(out.wdl_logits.device)
+    has_wdl = torch.isfinite(wt).all(dim=-1)  # a NaN row: no target (an unscored game)
+    per = -(torch.where(has_wdl[:, None], wt, torch.zeros_like(wt)) * torch.log_softmax(out.wdl_logits.float(), dim=-1)).sum(dim=-1)
+    losses["wdl"] = _masked_mean(per, has_wdl)
     n_bins = out.value_logits.shape[-1]
     root = tgt.root_value.float()
     has_root = full & torch.isfinite(root)
@@ -312,12 +320,24 @@ def compute_losses(out: NetOutput, tgt: Targets, cfg: LossConfig | None = None) 
         keep = full & torch.isfinite(w) & out.action_valid().any(dim=-1)
         losses["optimistic"] = _masked_mean(torch.where(keep, w, torch.zeros_like(w)) * per, keep)
 
-    losses["moves_left"] = F.huber_loss(out.moves_left_log, torch.log1p(tgt.moves_left.float()), delta=cfg.huber_delta)
+    ml = tgt.moves_left.float()
+    has_ml = torch.isfinite(ml)  # NaN: no target (a censored game)
+    log_ml = torch.log1p(torch.where(has_ml, ml, torch.zeros_like(ml)))
+    per = F.huber_loss(out.moves_left_log, log_ml, delta=cfg.huber_delta, reduction="none")
+    losses["moves_left"] = _masked_mean(per, has_ml)
 
-    bce_b = F.binary_cross_entropy_with_logits(out.board_logits, tgt.board.float(), reduction="none").sum(-1)
+    # Per-board and per-square labels: a NaN label is none (masked) - each board sums its labels
+    # present, each square averages its labels present (a square with none is left out).
+    bt = tgt.board.float()
+    has_b = torch.isfinite(bt)
+    bce_b = F.binary_cross_entropy_with_logits(out.board_logits, torch.where(has_b, bt, torch.zeros_like(bt)), reduction="none")
+    bce_b = (bce_b * has_b).sum(-1)
     losses["board"] = _reduce_boards(bce_b, out.board_valid, cfg.board_reduction)
-    bce_s = F.binary_cross_entropy_with_logits(out.square_logits, tgt.square.float(), reduction="none").mean(-1)
-    per_board = _board_square_mean(bce_s, out.token_board, out.square_mask, out.board_valid.shape[1])
+    sq = tgt.square.float()
+    has_s = torch.isfinite(sq)
+    bce_s = F.binary_cross_entropy_with_logits(out.square_logits, torch.where(has_s, sq, torch.zeros_like(sq)), reduction="none")
+    bce_s = (bce_s * has_s).sum(-1) / has_s.sum(-1).clamp(min=1)
+    per_board = _board_square_mean(bce_s, out.token_board, out.square_mask & has_s.any(-1), out.board_valid.shape[1])
     losses["square"] = _reduce_boards(per_board, out.board_valid, cfg.board_reduction)
 
     keep = (tgt.effort >= 0) & full.to(tgt.effort.device)  # section 12.4: "full-search moves only"

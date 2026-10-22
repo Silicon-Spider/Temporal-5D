@@ -45,6 +45,7 @@ from ..engine.netplay import turn_start_verdict, write_record
 from ..engine.search import RootChild, Search, search_params
 from ..net.config import NetConfig
 from .records import RECORD_VERSION, Children, DecisionRecord, GameRecord, network_id, params_dict
+from .targets import GameTargets, TargetConfig, build_targets
 
 #: D2's arms the generator plays (module docstring).
 SPLITS = {"ply": T5D_SPLIT_BOARD_MOVE, "tree": T5D_SPLIT_TREE}
@@ -121,6 +122,9 @@ class GeneratedGame:
     #: Each decision's network input, kept when ``generate_game(keep_positions=True)`` (the live
     #: side of section 15.2's round trip; the reply target's positions).
     positions: list[Position] = field(default_factory=list)
+    #: The targets written at generation (``generate_game(target_config=...)``): the live side of
+    #: section 15.2's I15 row; None when none were asked for.
+    targets: GameTargets | None = None
     seconds: float = 0.0
 
 
@@ -252,9 +256,13 @@ def generate_game(
     net_cfg: NetConfig,
     network: dict | None = None,
     keep_positions: bool = False,
+    target_config: TargetConfig | None = None,
 ) -> GeneratedGame:
     """Play one self-play game and record it (module docstring). ``network``: the record's
-    network condition (``network_info``; None: from the evaluator's model)."""
+    network condition (``network_info``; None: from the evaluator's model). ``target_config``:
+    build the game's targets at generation (``train.targets``) - each decision's prior-to-target
+    divergence is then recorded, and the configuration in the header; the reply prototype's
+    targets too when ``keep_positions``."""
     cfg.validate()
     if policy_source(evaluator) != "normal":
         raise ValueError("an optimistic evaluator searches at match play only, never in self-play (register D9, section 8.1)")
@@ -418,12 +426,14 @@ def generate_game(
         if shared is not None:
             shared.close()
         game.close()
-    return GeneratedGame(
-        record=GameRecord(header=header, decisions=decisions),
-        actions=actions,
-        positions=positions,
-        seconds=time.perf_counter() - t0,
-    )
+    record = GameRecord(header=header, decisions=decisions)
+    targets = None
+    if target_config is not None:
+        targets = build_targets(record, target_config, positions=positions if keep_positions else None)
+        for d, kl in zip(decisions, targets.kl.tolist(), strict=True):
+            d.prior_to_target_kl = kl
+        header["target_config"] = target_config.to_dict()
+    return GeneratedGame(record=record, actions=actions, positions=positions, targets=targets, seconds=time.perf_counter() - t0)
 
 
 def replay_positions(record: GameRecord, net_cfg: NetConfig | None = None) -> list[Position]:

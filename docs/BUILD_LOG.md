@@ -1698,7 +1698,7 @@ width (M22)", "The CHECKPOINT 8 figures"). Found on the way: the ruling's premis
 | G8 | not started | QAT prepared, not adopted: fake-quantisation hooks behind a flag in the training code, smoke-tested - the net lane, with G2's quantiser; the simulated format is pinned with the inference path. Written from papers: Monroe's `quantize` option (Lc0's training code) is an idea only (AGENTS.md, H29) |
 | G9 | built in part | PyTorch drives the C++ search through the C API (N5, eager, on CPU). FlexAttention runs eagerly through B14's score function (`attn_impl="flex"`, `lane/net`: forward only on CPU). Not built: torch.compile and compiled FlexAttention kernels (GPU time, M19); ONNX/TensorRT export - refused for now (M5). The bounded AMD attempt (AMD's PyTorch for Windows on the RX 9070 XT, figures AMD-labelled): any time, in `build/` only |
 | I1 | not started (rule) | Self-play training: no training runs in the untrained build (the brief); the pilot run (M18) comes after §15.5 |
-| I2 | engine side built, tested (round 2c); targets not started | Targets from the pruned visits - since CHECKPOINT 7 the search-value targets too: M21's targets (net lane) from I15's records. The engine side (engine ABI round 2c, issue 153): what target-side pruning needs, per root child (visits, priors with and without the noise, q, value variance, E3's factor, `boost`, `steered_visits`, `forced_visits`) and the root's effective cPUCT; search-side forced playouts not built (§12.5's pruning is at target construction); the steering counts 0 until E10 wires the asset map and Hunt (no self-play data with E10's boosts before the pruning exists) |
+| I2 | built, tested (engine round 2c; targets M21 commit 2, `lane/net`) | Targets from the pruned visits - the search-value targets too (CHECKPOINT 7). The engine side (engine ABI round 2c, issue 153): per root child its visits, priors with and without the noise, q, value variance, E3's factor, `boost`, `steered_visits`, `forced_visits`, and the root's effective cPUCT; search-side forced playouts not built. The targets (`python/t5d/train/targets.py`): KataGo's forced-playout pruning at target construction against a replica of the root's PUCT, a one-visit remainder dropped; steered visits excluded (`policy_mode="exclusion"`, the placeholder) or kept at a weight (`"provenance"`) - open, 6e; the replica's prior without the boost; the policy, soft-policy, categorical, short-term and deblundering values and the q_ratio blend's root WDL all from the pruned visits; the steering counts 0 until E10 wires the asset map and Hunt (no self-play data with E10's boosts before this - it now exists). Placeholders: issue 235 |
 | I3 | built in part | Match play as I3 configures it: root noise off, the final rule (LCB), the tree carried (`t5d-play --match`, E6a; netplay's `mode="match"`, N5). The mature regime is training-time. In the untrained build: the curriculum hooks as interfaces only (H44, step 2) and I18's resignation rule (M21); MLH steering and early adjudication parked (issue 300; "Parked", below) |
 | I4 | principle | Confidence-family mechanisms never scale down the confidence-independent layer - followed: C24 is add-only; E8 (not started) to follow |
 | I5 | not started | PCR in the self-play drivers and the training loop, smoke-tested (M21, net lane) |
@@ -1708,8 +1708,8 @@ width (M22)", "The CHECKPOINT 8 figures"). Found on the way: the ruling's premis
 | I9 | built, tested | The ruleset ID in every state and store key (H18): the Zobrist key, the solved and disproof stores, the evaluation cache |
 | I11 | built, tested | Self-play's turn cap from the state (and t5d-play's 300-board cap), scored as a draw, its frequency logged (issue 88) |
 | I12 | not started | Surprise-weighted sampling, the default sampler (6u): M21, with 6u's and I6's arms |
-| I13 | engine side built, tested; deblundering not started | Deblundering (6z): M21. What it needs from the search is built (engine ABI round 2a, issue 148): the draw probability backed up beside the value, so the best child's search WDL is its (q, d); moves-left not backed up - each root child's network moves-left (and WDL, error) recorded instead, the target builder adding the offset |
-| I14 | not started | Proof rescoring (6z): M21 builds the hook disabled - hard-off until the H23/H41 sign-off |
+| I13 | built, tested (M21 commit 2, `lane/net`) | Deblundering (6z) in the target builder: walking back from the end, a played child not the best by pruned visits whose q falls more than the threshold (0.1, Lc0's) below the best's blends the WDL and moves-left targets of its decision and every earlier one towards the best child's backed-up (q, d) and its network moves-left plus the turn its move ends (issue 148), linearly across the band (0.05, a placeholder); per-board labels untouched. Placeholders: issue 235(g) |
+| I14 | hook built, refused (M21 commit 2, `lane/net`) | Proof rescoring (6z): `TargetConfig.proof_rescoring` and `build_targets(proofs=...)` are refused while `targets.PROOF_CHANNEL_SIGNED_OFF` is False - no proof enters a target before the H23/H41 sign-off; records carry no proof reference. The rescoring itself is written at the sign-off |
 | I15 | built, tested (M21 commit 1, `lane/net`) | Rich training records, fixed before the pilot run. The engine side (ABI round 2): the root's raw outputs, the root children's search (q, d) and network outputs, the root side table (`child_key`, `prior_noise_free`, `value_variance`, `boost`, `exploration_scale`, `forced_visits`, `steered_visits`; `root_key`, `root_cpuct`, `root_best_since` - issues 153, 154) and `t5d_game_expand`'s `legal_moves` with its budget (issue 155). The records (`python/t5d/train/records.py`, format version 1, one `.npz` per game, read with `allow_pickle=False`): per decision the raw root outputs (WDL and categorical logits, the raw logit of every candidate move and of submit, error, moves-left), the root search value (q, d), visits, cPUCT and effort change point, the best and played children, every root child's statistics with its forced and steered counts and its own network evaluation, the decision's boards, the move and root temperatures, the PCR flag, cap and playouts, the seed; per game the conditions (engine version, ruleset, variant or 5DFEN start, the network's weight hash and configuration, every `t5d_search_params` field, the input's window and relations, the generator's configuration), the result and the 5dpgn. Proofs by reference: none while the proof channel is off (H23/H41). Written by the generator (`train/selfplay.py`); each decision's input rebuilt from the record alone (`replay_positions`, digest-equal to the generation's). The raw root outputs are the network's evaluation of the decision's own input, not a memo of the search's (issue 234). Section 15.2's round trip: the record bit for bit here; the targets with M21's target builder |
 | I16 | not started | The replay window growing sublinearly (6z): M21, a placeholder rule |
 | I17 | not started | SWA (6z): M21, smoke-tested |
@@ -1727,7 +1727,7 @@ width (M22)", "The CHECKPOINT 8 figures"). Found on the way: the ruling's premis
 | M18 | not started (rule) | A pilot self-play run before serious self-play re-checks the window and the other compute-weighted decisions - after §15.5, not in the untrained build |
 | M19 | applied | No GPU: counted FLOPs and CPU-labelled wall times (`dev-r`) are the untrained build's write-back; the GPU figures - FA4-class evaluations/s, the leaf-batching gain, FP8, the block-sparse and varlen kernels, the Phase-3 movegen re-check - named as deferred, measured on rented NVIDIA time before the pilot run; the bounded AMD attempt is G9's |
 | M20 | built, tested; the reply prototype parked with the heads (after engine round 2) | The placeholder dispositions (issue 121), each the code's default and its disposed-of arms removed where no named ablation needs them (`lane/net`; A7 is a component of its own). N-M20: the promotion offset in the policy (D1; `policy_promotion` gone); position-free per-board registers and global registers on every pair (B8; `board_register_spatial`, `global_register_pairs` and the learned coordinates gone); aux pooling from squares - moves-left, effort - with D3's value-type heads (WDL and the short value too) pooled from the global registers by mean (`aux_global_pool` gone; issue 223); moves-left in turns (issue 224); the acting player on the global registers (`acting_player_input` and `all_tokens` gone; with no global registers on the board tokens, issue 225; `cache.board_ident`'s `acting` keying kept for A7, issue 303); the submit logit from the pooled registers (D8; `submit_register` gone). Earlier: B6 removed (B15); B16's status biases with intrinsic frozen features (N-B16 - its `frozen_features = "current"` test arm stays, as N-B16 left it: no named ablation needs it, and whether to remove it is the main loop's call - the N-F6heads-M20 review); both supersession readings (C20; docs relabelled). Relabelled, not changed: B5's details (ablation 2), 16a-g (B9's "v1 as built", ablation 6a), the per-square labels (6j) - now v1 values, not placeholders; B7 has no code. Not here: the reply head's reinstatement as a prototype (D4) - the heads' rebuild after engine round 2; until then it is always built, as at N1. Not on M20's list: D8's readout form (`submit_head`, issue 109) |
-| M21 | built in part | The training loop, written and smoke-tested, no training (§15.5 does not require it; the pilot run does). Built (N1+N2; the submit target at N5): losses for today's heads - value, policy with submit, WDL, moves-left, opponent reply, short value, per-board, per-square, effort, each at weight 1.0 (`t5d.train.losses`) - and a smoke test of at most three optimiser steps on synthetic targets (`t5d.train.smoke`). I15's records and the generator (commit 1, `lane/net`; issue 234). Missing - the net lane: I2's targets with §12.2's exclusions and provenance, the new heads' losses (D3, D4, D9), PCR (I5) with I20, I12 with 6u's and I6's arms, I13, I14's hook disabled, I16-I19 (§12.8's mechanics), the QAT hook (G8), §15.2's round-trip test |
+| M21 | built in part | The training loop, written and smoke-tested, no training (§15.5 does not require it; the pilot run does). Built (N1+N2; the submit target at N5): losses for today's heads - value, policy with submit, WDL, moves-left, opponent reply, short value, per-board, per-square, effort, each at weight 1.0 (`t5d.train.losses`) - and a smoke test of at most three optimiser steps on synthetic targets (`t5d.train.smoke`). I15's records and the generator (commit 1, `lane/net`; issue 234); the target builder with I2's pruning, D3's and D4's targets, I13 and I14's refused hook, the losses' masks for missing targets, and §15.2's round trip (commit 2; issue 235). Missing - the net lane: I2's targets with §12.2's exclusions and provenance, the new heads' losses (D3, D4, D9), PCR (I5) with I20, I12 with 6u's and I6's arms, I13, I14's hook disabled, I16-I19 (§12.8's mechanics), the QAT hook (G8), §15.2's round-trip test |
 | M23 | applied | Every working branch is pushed after each commit and takes main by merge, never rebase. The three lanes and their number blocks are the main loop's plan under this rule ("Current state (2026-10-17)") |
 | M24 | not started (rule) | Ablations on a shared dataset - after the pilot run; what the untrained build owes it is I15's record completeness |
 | M1-M6, M10 | applied | The plan's process rows: the build follows them (this log) |
@@ -3443,6 +3443,44 @@ superseded or made moot says so; nothing is deleted.
     configuration every `t5d_search_params` field of the full (and, with PCR, the cheap) search, each
     decision's seed and root temperature its own. (e) **A decision with nothing played** (a
     resignation, I18) keeps its search and has played child -1. Proposed edit 175.
+235. **The targets from I15's records: what the documents leave unstated** (§8.3, §8.6, §12.2,
+    §12.4, §12.5, §12.8, §15.2's I15 row; register I2, I5, I13, I14, D3, D4, D5, D9; issues 148,
+    153, 154, 224, 231, 305). M21 commit 2 (`lane/net`, `python/t5d/train/targets.py`). Each a
+    named `TargetConfig` field, a PLACEHOLDER or a reading: (a) **I2's pruning**: KataGo's
+    n_forced(c) = sqrt(k P(c) sum N), k = 2 (KataGo's), floored, against a replica of the engine's
+    root selection (`q + c P sqrt(N_root) / (1 + n)`, N_root the root's visits as `select_child`
+    reads them, c the recorded effective cPUCT, E3's factor on the exploration term); the prior is
+    the search's, after the noise (KataGo's - `prune_prior`, the noise-free one the arm), less the
+    recorded boost; a child reduced to one visit is pruned; recorded forced visits (none) are pruned
+    like any other. **Exclusion** (steered visits removed) is the default and **provenance** (kept at
+    `provenance_weight` 0.5) the arm - §12.2 calls the choice open (6e). (b) **The pruned root value**
+    is the pruned-visit average of the children's q **and** d; with no visit surviving, the recorded
+    root's (q, d). The q_ratio blend's search WDL is that pruned (q, d) - I2's rule read as covering
+    it. (c) **D3's short-term targets**: `ST_h(t) = (1 - l)[v_t + sum_{a > a_t} l^(a - a_t) u_a] +
+    l^(A - a_t) z`, l = 1 - 1/h, h in turns (issue 305), v_t the decision's own pruned value, u_a
+    each later turn's first decision's - cheap searches' included - z the game's result before
+    deblundering (§12.8 limits deblundering to WDL and moves-left), all in the decision's acting
+    player's view; none in an unscored game. (d) **6j's categorical arm**: the short-term target at
+    `categorical_horizon` 0, full searches only. (e) **WDL**: a resignation is the other side's win;
+    `unknown` and the safety stop have no WDL target (masked). (f) **Moves-left**: the turn in
+    progress counted (issue 224's placeholder, `moves_left_counts_current`); censored, so masked:
+    `unknown`, the safety stop, I11's cap and a resignation. (g) **I13**: the band 0.05; the best
+    child by pruned visits (I2); "positions before it" read as including the blunder's own decision;
+    a played child with no visits never a blunder; cheap searches' choices count; the best child's
+    moves-left its network output plus one turn if it is the submit (issue 148's offset); an
+    unscored game's outcome targets taken from the best child where the blend is whole. (h) **Per
+    board**: travelled-into within `travel_horizon` 2 turns, the decision's own move included, a
+    travel's destination board (for a branching move the history board it targets);
+    timeline-active-at-end from the final state; tactical volatility masked (proofs, gated). (i)
+    **Effort**: the bin of `root_best_since`, converged when the most visited child led for at least
+    `effort_stable_fraction` 0.5 of the root's visits, or when I20's KL rule stopped the search;
+    full searches only. (j) **The prior-to-target divergence** (I12, I15): KL(target || raw prior),
+    the raw prior the softmax of the recorded logits at temperature 1 over every candidate and a
+    legal submit - not renormalised over children verified illegal (the record does not flag which
+    candidates they were). (k) **D9's weights** are computed in the loss from the trained network's
+    own short-term and error outputs, as KataGo does at training time; the records give its target.
+    (l) **The losses** mask a missing target: a NaN WDL row, moves-left, per-board or per-square
+    label. Proposed edits 176-178.
 
 <!-- A new list, so that the numbers from 140 render as written. -->
 
@@ -4646,6 +4684,28 @@ struck through, where nothing of it is left to apply); the others stand as writt
     replay; a whole-turn decision writes no policy record". Why: which evaluation counts as "raw"
     when the search's root is a cache hit, and how an archive's input is rebuilt, are unstated
     (issue 234).
+176. **§12.2 and §12.5 (forced-playout pruning) and register I2**: now - "adopt KataGo's
+    forced-playout pruning with √(playouts) decay at target construction"; "each root's value
+    recomputed as the pruned-visit-weighted average of its children's values". Proposed - add as
+    built or as ruled: "the pruning compares each child's PUCT score, recomputed with the reduced
+    count, with the most visited child's - the root's own selection rule with the recorded cPUCT and
+    the search's prior less any boost; KataGo's k = 2; a child left with one visit is pruned; the
+    root's draw probability is averaged the same way as its value, and the WDL target's q_ratio blend
+    reads the pruned (q, d)". Why: the replica's terms, which prior, and whether D and the blend fall
+    under I2's rule are unstated (issue 235(a), (b)).
+177. **§8.3's short-term paragraph, §12.4's moves-left, travelled-into and effort rows, and register
+    D3, D4**: now - "exponentially averaged future search values"; "Moves-left - counted in turns";
+    "Travelled-into within k plies"; "Search effort to convergence". Proposed - add as built or as
+    ruled the formula of issue 235(c) (the turn as its step, each later turn's first search, the
+    result as the tail), that moves-left counts the turn in progress, that k is in turns (2, a
+    placeholder) from the decision's own move, and that convergence is the most visited child
+    leading for half the search (a placeholder) or I20's stop. Why: each is committed-class and
+    unstated (issue 235(c)-(i)).
+178. **§12.8's deblundering paragraph and register I13**: now - "positions before it take the best
+    move's value and moves-left instead of the result, interpolated across a transition band".
+    Proposed - add: "the blunder's own position included; the best move by pruned visits; the band a
+    width in value (Lc0's), its placeholder 0.05; the best move's moves-left its network estimate
+    plus the turn its move ends". Why: unstated (issue 235(g)).
 
 <!-- A new list, so that the numbers from 110 render as written. -->
 

@@ -8,4 +8,6 @@ train nothing - first"). What exists:
   on synthetic targets; ``reply_map`` - D4's reply prototype's move space.
 * ``records`` - register I15's training records: one versioned file per self-play game.
 * ``selfplay`` - the generator: self-play through the engine's search, written as records.
+* ``targets`` - every head's targets re-derived from a record: I2's pruned visits, D3's and D4's
+  targets, I13's deblundering, I14's hook (refused until the sign-off), the batch's ``Targets``.
 """
