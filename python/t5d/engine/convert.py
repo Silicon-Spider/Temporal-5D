@@ -46,7 +46,7 @@ promotion)                                     promotion)`` - row i is engine mo
   The expansion's ``acting_player`` (whose action this is, = ``to_move``) becomes the
   network's global acting-player input (``PositionState.acting_player``), and its
   ``submit_possible`` / ``submit_legal`` say whether the submit action - its own policy logit,
-  read from a global register - is offered, and whether it is masked. Such states convert:
+  read from the pooled global registers - is offered, and whether it is masked. Such states convert:
   stage N4 refused them (``PresentMismatch``), the network having no player-to-move feature
   apart from the present. What is still checked (``PresentMismatch``, unless
   ``strict=False``): the acting player is ``to_move``, and submitting is possible exactly

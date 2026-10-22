@@ -359,7 +359,7 @@ def attention_flex(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, ctx: AttnC
     qr, kr = apply_rope(q, ctx.cos, ctx.sin), apply_rope(k, ctx.cos, ctx.sin)
     sf = _spatial_free(ctx)
     lb = ctx.body_len
-    global_free = ctx.global_free and lb < length
+    global_free = lb < length  # position-free global registers (B8)
 
     def with_global_keys(qf: torch.Tensor, kf: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """Append the unrotated dims that score a position-free global key."""

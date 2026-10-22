@@ -333,8 +333,8 @@ CPU_PATHS = {
 @pytest.mark.grad
 @pytest.mark.parametrize(
     "flags",
-    [dict(), dict(routing_table=True), dict(board_register_spatial="position_free"), dict(status_bias_per_layer=True)],
-    ids=["b9", "routing", "regs-free", "per-layer"],
+    [dict(), dict(routing_table=True), dict(masked_head_registers="self"), dict(status_bias_per_layer=True)],
+    ids=["b9", "routing", "regs-self", "per-layer"],
 )
 def test_cpu_paths_equal_the_bias_materialised(flags):
     """The CPU paths build B16's rows block by block (key selections, free rows): their outputs

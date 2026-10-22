@@ -10,13 +10,15 @@ on real positions (``net/cache.py``'s reference), at the tolerances of ``tests/n
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import numpy as np
 import pytest
 import torch
 
 from t5d.engine import Game
 from t5d.engine.play import random_position_game
-from t5d.net import NetConfig, build_model, collate
+from t5d.net import NetConfig, build_model, collate, relayout
 from t5d.net.cache import CachedEvaluator, reference_output
 from tests.engine.helpers import RECORDS, requires_engine
 
@@ -134,8 +136,9 @@ def test_cached_equals_one_full_pass_on_random_play():
 def test_f1_cached_on_a_real_position():
     """F1 as shipped but block-causal (BF16 trunk): cached against the BF16 full pass, at the
     BF16 bounds of tests/net/test_cache.py - about 4x the gaps measured here on these positions
-    (3 seeds; re-measured after F5 and F6): trunk RMS 2.0e-3 / max 1.4e-2, policy 8.0e-3, value
-    1.1e-3."""
+    (3 seeds; re-measured after F5 and F6, before B15's table, F6's Mish in the heads and M20's
+    defaults changed the network - not re-measured since): trunk RMS 2.0e-3 / max 1.4e-2, policy
+    8.0e-3, value 1.1e-3."""
     model = build_model(NetConfig(attn_scope="block_causal"), seed=0).eval()
     cached = CachedEvaluator(model)
     positions = _record_positions("cross_timeline")
@@ -186,22 +189,37 @@ def _shift_pair(variant: str, seed: int):
         g.close()
 
 
+@pytest.mark.parametrize("registers", [(2, 16), (2, 0), (0, 0)], ids=["registers-2-16", "registers-2-0", "registers-0-0"])
 @pytest.mark.parametrize("variant", ["Standard", "Standard - Two Timelines"])
-def test_the_acting_player_alone_tells_a_shifted_action_from_the_opponents_turn(variant):
+def test_the_acting_player_alone_tells_a_shifted_action_from_the_opponents_turn(variant, registers):
     """Register D8 on real positions: an action whose present has shifted and the opponent's
-    turn start after its submission hold the same boards; the network's input differs in the
-    acting player alone - on the global registers under the default arm - and the network's
-    outputs differ."""
+    turn start after its submission hold the same boards; the network's token input differs in
+    the acting player alone - on the global registers, or with none (ablation 3's arms without
+    them) on every board token (a placeholder, spec issue 225) - and the network's outputs
+    differ, also where the acting player is the only difference: the shifted state's own
+    boards, edges and moves read as the other player's (the moves and edges, the acting
+    player's, would tell the two apart without it)."""
+    from t5d.net.state import TOKEN_BOARD_REGISTER, TOKEN_GLOBAL_REGISTER, TOKEN_SQUARE
+
     shifted_pos, submitted = _shift_pair(variant, seed=11)
-    a, b = shifted_pos.state, submitted.state
+    r, g = registers
+    a, b = relayout(shifted_pos.state, r, g), relayout(submitted.state, r, g)
     assert a.shifted and not b.shifted and a.acting_player != b.acting_player
     assert np.array_equal(a.piece, b.piece) and np.array_equal(a.half_turn, b.half_turn) and np.array_equal(a.is_head, b.is_head)
-    model = build_model(NetConfig(trunk_dtype="fp32", n_layers=2), seed=1).eval()
+    model = build_model(NetConfig(trunk_dtype="fp32", n_layers=2, regs_per_board=r, global_regs=g), seed=1).eval()
     ba, bb = collate([a]), collate([b])
     differs = (model.embed_tokens(ba) - model.embed_tokens(bb)).abs().amax(dim=-1)[0] > 0
-    from t5d.net.state import TOKEN_GLOBAL_REGISTER
-
-    assert torch.equal(differs, ba.kind[0] == TOKEN_GLOBAL_REGISTER)
+    kind = ba.kind[0]
+    carriers = kind == TOKEN_GLOBAL_REGISTER if g else (kind == TOKEN_SQUARE) | (kind == TOKEN_BOARD_REGISTER)
+    assert torch.equal(differs, carriers)
     oa, ob = model(ba), model(bb)
     assert not torch.allclose(oa.value_logits, ob.value_logits)
     assert bool(oa.submit_possible[0]) and not bool(ob.submit_possible[0])
+    alone = replace(a, acting_player=1 - a.acting_player, submit_possible=False, submit_legal=False)
+    oc = model(collate([alone]))
+    for name in ("value_logits", "wdl_logits", "moves_left_log", "submit_raw"):
+        assert not torch.allclose(getattr(oa, name), getattr(oc, name)), name
+    # These shifted states have no move left to score (the policy is empty); the policy's
+    # dependence is ``tests/net/test_d8.py``'s, on synthetic states with moves.
+    if oa.policy_logits.numel():
+        assert not torch.allclose(oa.policy_logits, oc.policy_logits)

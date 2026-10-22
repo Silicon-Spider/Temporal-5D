@@ -4,7 +4,7 @@
   order of per-board and per-square outputs.
 * Translating every timeline by +k and every time by +2j changes nothing at all - the
   4D RoPE relative property, registers included (per-board registers rotate with their
-  board; global registers are position-free, or anchored at the recentred origin) - and
+  board on timeline and time; global registers are position-free - B8, M20) - and
   B15's displacement bias (the v1 default), which sees only displacements, and B17's
   key-side Shaw term (behind its flag), which dots the unrotated query with its pair's class.
 * A position's outputs do not depend on what else is in its batch.
@@ -20,10 +20,9 @@ from t5d.net import NetConfig, build_model, collate, permute_boards, synthetic_s
 
 FLAG_SETS = {
     "v1": dict(),
-    "b5_offset": dict(rope_per_head=True, policy_promotion="offset"),
+    "b5": dict(rope_per_head=True),
     "no_table": dict(displacement_bias=False),
-    "registers_position_free": dict(board_register_spatial="position_free", aux_global_pool="global_registers"),
-    "anchored_zero_angle": dict(global_register_pairs="anchored", board_register_spatial="zero_angle"),
+    "routing_typed_pointer_submit": dict(routing_table=True, typed_edge_bias=True, submit_head="pointer"),
     "b17_shaw": dict(shaw_key_term=True, shaw_init_std=1.0),
 }
 
@@ -64,12 +63,10 @@ def test_timeline_storage_order_does_not_matter(flags):
     _assert_same(a, b, board_perm=torch.from_numpy(order), token_perm=_token_perm(order, state.n_boards))
 
 
-#: Anchored global registers need recentring (validate() refuses raw coordinates).
 TRANSLATION_CASES = [
     pytest.param(flags, recenter, id=f"{'recentred' if recenter else 'raw-coords'}-{flags}")
     for flags in FLAG_SETS
     for recenter in (False, True)
-    if recenter or FLAG_SETS[flags].get("global_register_pairs") != "anchored"
 ]
 
 

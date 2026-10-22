@@ -10,6 +10,209 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-22 - Build log: a stale note removed from "Register status"
+
+- `docs/BUILD_LOG.md`: the preface saying H47, H48 and M22 had no row yet is gone -
+  their rows arrived with the gate and engine lanes' merges.
+- Spec: none.
+
+### 2026-10-17 - N-F6heads-M20 review fixes: the acting player without global registers; the documents brought in line
+
+Three reviewers' findings on the two commits below (none refuted):
+
+- **D8 with no global registers (ablation 3's arms).** M20 put the acting player on the global
+  registers alone, so with `global_regs = 0` it vanished: every output was bit-identical under
+  either acting player and the embedding got no gradient - the arm measured "no registers"
+  mixed with "no D8 input". `embed.py` now adds the acting player's embedding to every board
+  token when there are no global registers - squares and per-board registers - and under the
+  block-causal scope to the live (head) boards' tokens only, so no frozen board's input
+  depends on it and the cached path stays exact (`InputEmbedding.forward`'s `block_causal`,
+  passed by `T5DNet.embed_tokens`). A placeholder fixed in code (spec issue 225): no document
+  says whether ablation 3's "off" removes the global registers, or where their inputs go; the
+  value-type heads and the submit logit pool the squares there, as built since N1. No
+  parameter changes. Tests: `test_d8.py` - the encoding test under three register arms (the
+  carriers by scope), the acting player reaching the policy, every value-type head, moves-left,
+  effort and the submit readout under all six register arms the configuration accepts and both
+  scopes, the cached = full-pass and refresh rows with no global registers; `test_embed.py` -
+  the embedding by hand with no global registers, dense and block-causal;
+  `tests/engine/test_network.py` - the shifted action against the opponent's turn on real
+  positions under three register arms, and the acting player alone (same boards, edges and
+  moves) moving every value-type output and the submit readout. Mutants patched in at test
+  time (no file edited): no fallback fails 17 tests; the fallback on frozen boards too fails
+  the cached = full-pass rows with no global registers.
+- **Docstrings.** The pre-M20 parameter totals (`config.py`'s presets comment: F2 46,894,547;
+  `shaw.py`, `test_displacement.py`: the v1's 22,965,139); `rope.py`'s `rope_roles_source`
+  now stands as v1 (M20, issue 16f), not an open point; D8's draw-order claim in `model.py` and
+  `heads.py` narrowed to what holds - D8's parameters change no other parameter's draw - and
+  M20's promotion offset noted as having moved every global-stream draw; the Δt MLP's and
+  smolgen's activations listed among `config.py`'s committed-class placeholders (issue 221),
+  the "not committed-class" sentence narrowed to the MLP's width and features, and `embed.py`
+  pointing at issue 221 instead of calling the activation an implementation choice;
+  `config.py`'s `ffn_activation` cites proposed edit 154 for the squared-ReLU arm's
+  initialisation; `attention.py`'s and `bench.py`'s cost caveats name M20's register
+  positions (about +35% / +11% per attention call over the old default, FP32 / BF16).
+- `docs/MEASUREMENTS.md`: N3's counts and the §15.3 rows built on them carry a conditions note
+  - counted on the network before F5, B15, B16 and M20's register positions; no new figure.
+  The M20 entry's reason for not re-counting is corrected (counts do not depend on load), and
+  its cost figures say "against one plain call".
+- `docs/BUILD_LOG.md`: spec issue 225 and proposed edit 166 (new); notes on issue 108, 204
+  (the squared-ReLU arm's initialisation still open), 218 (the post-M20 count) and 303
+  (`board_ident`'s `acting` keying independent of the frozen-feature reading, unused until
+  A7); register rows A7 (M20 built; A7 its own component), D8, M20 (the `"current"` arm kept
+  with no named ablation - the main loop's call); the Register status preface no longer lists
+  F5 and F6 as missing.
+- Not done: `frozen_features = "current"` stays (removing it is a B16 change the component was
+  told not to redo; recorded for the main loop).
+- Checks: network 1067 passed, 1 skipped (`T5D_REQUIRE_ENGINE=1`; the skip is `T5D_RECORDS`'s,
+  by design) in 23 min 30 s; ruff clean; `verify` ok (its 17 `proof-channel-vacuous` notes are
+  H48's, as before).
+- Spec: §2.3, §13.1 ablation 3 and register D8, A6, D3, M20 - spec issue 225, proposed edit 166;
+  §9.3 and register F6 (issue 221's activations, committed-class; issue 204, edit 154);
+  §15.3's dense and cached cost rows (the N3 counts predate M20; re-count pending, no
+  figure changed); §9.2 and F1 (no parameter change: 22,965,139).
+
+### 2026-10-17 - Network M20: the placeholder dispositions as the register rules them
+
+- Register M20 (Committed; BUILD_LOG issue 121, CHECKPOINT 6) in the network: each
+  disposition is now the code's default, and an arm it disposes of is removed where no named
+  ablation needs it (an unknown field now, not a switch at a ruled default). By disposition:
+  - **Promotion scoring -> learned per-piece offset (D1).** `heads.PointerHead` takes
+    `promotion_offset`; the policy always has it - one logit per piece type read from the
+    destination token, as N1's `offset` arm built it - and `policy_promotion` (with its
+    `none` default) is gone. The opponent-reply head stays without one, as built at N1
+    (issue 222: D1 names §8.1's policy; which other pointer heads carry it is the heads'
+    rebuild's).
+  - **Opponent-reply head -> a prototype (D4).** Not here: its reinstatement (behind a flag,
+    weight 0.15, the reply mapped onto current squares) is the heads' component, after
+    engine ABI round 2; the head is left always built, as at N1, until then.
+  - **Aux pooling -> squares; value pooling -> mean (D3).** `aux_global_pool` is gone.
+    `T5DNet.heads`: the value-type heads - the 51-bin value, WDL and the short-term value -
+    read the global registers' mean (D3, §8.3: "each pooled by mean from the global
+    registers"; WDL and the short value moved off the squares, which N1's placeholder default
+    read), the other global auxiliary heads - moves-left, search effort - every square's
+    mean; per-board and per-square heads as before (issue 223).
+  - **Moves-left -> turns.** The head predicts log1p of the turns left, a turn one player's
+    action (issue 305's unit): `heads.py`'s docstring, `moves_left_from_log`,
+    `NetOutput.moves_left_log`, `losses.Targets.moves_left` and the losses' docstring. The
+    record-to-target builder is the training loop's (M21), and so is whether the action in
+    progress counts (issue 224); the smoke test's random targets are unit-free.
+  - **Registers' positions (B8).** Per-board registers rotated on timeline and time only,
+    global registers position-free on every pair - no switch: `board_register_spatial`
+    (`learned_angle`, the old default, with its 2 x 2 learned coordinates, and `zero_angle`)
+    and `global_register_pairs` (`anchored`) are gone, with `AttnContext.global_free`, the
+    anchored rows in `cache.py`'s live pass and `flex.py`, and `model.coordinates`'s learned
+    branch. `rope_recenter` stays (FP32 angle hygiene). The CPU fast path now widens every
+    row's Q/K/V (44 wide for the B4 allocation) and recomputes the register rows:
+    indicatively +20% / +55% per attention call at 240 boards against one plain call - about
+    +11% / +35% over the old default (BF16 / FP32; `attention.py`'s earlier timings, not
+    section 15.3 measurements). N3's counted dense FLOPs in `docs/MEASUREMENTS.md` were
+    taken with the old `learned_angle` registers; they are not re-counted here (the counts
+    do not depend on load, but counting runs the passes themselves - 28 TF at 600 boards -
+    so step 2's quiet-machine block re-counts them with the wall times; corrected in the
+    review fixes, which also note it in `docs/MEASUREMENTS.md`).
+  - **Frozen features -> intrinsic, with B16; binned-bias-with-RoPE -> moot (B15);
+    supersession scope -> both built (C20).** Already in the code (N-B16, N-B15, N3); checked,
+    not redone. `config.py` now calls `supersession_scope`'s `causal_past` the default arm
+    until 6c, not a placeholder. `frozen_features = "current"` stays the test arm N-B16 kept.
+  - **Acting player -> global registers (D8).** `acting_player_input` and its `all_tokens`
+    arm are gone; `embed.py` adds the embedding to the global registers alone (bit for bit
+    the old default). `cache.board_ident` keeps its `acting` keying, now independent of
+    `frozen_features` and unused by the cached path: the plan's critic kept it for A7's
+    per-perspective frozen K/V (issue 303).
+  - **Submit logit -> pooled global registers (D8).** `heads.SubmitHead` reads
+    `global_register_pool` - the registers' mean, as the value head does - by either readout;
+    `submit_register` and `submit_register_state` are gone. The readout's form stays the
+    placeholder `submit_head` (linear, or the policy's bilinear form): not on M20's list
+    (issue 109).
+  - **B5's details, the per-square label set, 16a-g and B7 stand as v1.** Relabelled, not
+    changed: `config.py` (`rope_roles_source`, `rope_relations_head`,
+    `rope_same_square_split`, `rope_near_nope_max_angle`, `move_graph_heads`,
+    `move_graph_direction`, `masked_head_registers`, `same_board_registers`,
+    `relations_head_types`, `relations_head_direction`) and `heads.SQUARE_LABELS` now call
+    them the v1's values, tested by ablations 2, 6a and 6j; B7 has no code.
+- Parameters: F1 22,965,139 (+3,337: the offset's 3,341, less the 4 learned register
+  coordinates); F2's preset 46,894,547; with the cached configuration 22,965,443.
+  `test_params.py`'s V1_TOTAL and docstring, BUILD_LOG's F1 row.
+- Docstrings: `config.py`, `model.py`, `heads.py`, `embed.py`, `attention.py`, `rope.py`,
+  `cache.py`, `structure.py`, `state.py`, `flex.py`, `losses.py`, `engine/evaluator.py` and
+  `engine/convert.py` (the pooled submit, the promotion offset); `engine/README.md`,
+  `engine/include/t5d/capi_search.h` and `mcts.hpp` - comments only (the submit logit read
+  from the pooled global registers); no truth source. The BF16 / FP8 gaps recorded in
+  `test_precision.py`, `test_cache.py` and `tests/engine/test_network.py` are now labelled as
+  measured before B15's table, the heads' Mish and M20's defaults changed the network - not
+  re-measured in this component; their bounds hold under the new defaults (the suite passes).
+- Tests. New: `test_model.py` - each global head reads its pool (perturbing every square
+  moves only moves-left and effort, one global register only the value-type heads and the
+  submit logit, the per-board registers none), the register-pooled heads invariant to
+  permuting the global registers' final states, promotions of one move to four pieces get
+  four logits whose bilinear part ties, a move without a promotion keeps its bilinear score;
+  `test_d8.py` - the submit logit is the readout of the registers' mean under both forms,
+  unmoved by permuting them, moved by any one, deaf to the squares, and the squares' mean
+  with no global registers; `board_ident`'s `acting` keying; `test_rope.py` - a register's
+  attention row blind to every token's file and rank while a square's is not, and, through
+  the whole network (RoPE and B15 together), layer 0's register rows unchanged when every
+  square's (file, rank) is scrambled; `test_params.py` - the removed switches are unknown
+  fields, the policy and reply heads' counts. Updated to the ruled defaults: the arms'
+  parametrisations in `test_attention` (the pair rule now crossed with ablation 3's register
+  arms - no per-board registers, no global registers - where the widening or the merge drops
+  out), `test_chunked` (the same arms through `_case`), `test_invariance`, `test_n2_model`
+  (its anchored skip gone), `test_cache`, `test_scope`, `test_shaw`, `test_status`,
+  `test_displacement`, `test_structure`, `test_d8` and `train/test_smoke`. Mutants patched
+  in at test time (no file edited), each failing the new tests: WDL and the short value back
+  on the squares; moves-left and effort on the registers; the submit logit from register 0
+  (either readout); no promotion offset (the parameter count too); per-board registers
+  rotated on file and rank (both register tests, through the attention and the whole
+  network); the acting player on every board token (the encoding test, and the cached =
+  full-pass row: frozen K/V keyed without it go stale).
+- `docs/BUILD_LOG.md`: register rows M20, B8, D1, D3, D4, D7, D8, F1; spec issues 9, 16,
+  32, 108, 109, 121 and 210 and proposed edit 156 marked built, relabelled or moved; issues
+  222-224; proposed edits 163-165.
+- Checks: engine 555 of 555 (`--werror`, rebuilt after the header comments); network 1040
+  passed, 1 skipped (`T5D_REQUIRE_ENGINE=1`; the skip is `T5D_RECORDS`'s, by design - the
+  anchored arm's skip went with the arm) in 20 min 20 s beside another lane's long engine
+  tests; ruff clean; `verify` ok (its 17 `proof-channel-vacuous` notes are H48's, as before).
+- Spec: register M20 and the rows it disposes (D1, D3, D4, D7, D8, B8, B16, C20, B15/B6, B5,
+  B7, B9/B10) - as built now; §5.3 (registers' positions), §8.1 (the promotion offset),
+  §8.2 (the pooled submit logit), §8.3 and §9.2 (value heads on the global registers, aux
+  heads on the squares), §12.4 (moves-left in turns), §2.3 (the acting player on the global
+  registers); §9.2 and F1 (the parameter count - proposed edit 156's figures move by 3,337,
+  noted there); §15.2's rows (cached = dense, translation and storage-order invariance) run
+  under the new defaults; §15.3's dense cost to re-count. Proposed edits 163 (the offset's
+  form and heads), 164 (which heads "aux pooling -> squares" covers), 165 (moves-left's
+  action in progress).
+
+### 2026-10-17 - Network F6: Mish in every head's hidden layers (the user's ruling on issue 204)
+
+- `python/t5d/net/heads.py`, `config.py`: register F6 as changed at CHECKPOINT 8 - "Mish for
+  v1, in the trunk FFN and every head's hidden layers ...; squared ReLU as the trunk-only
+  arm"; the user on spec issue 204: "yes: Mish in every head's hidden layers, the value head
+  included; squared ReLU stays a trunk-only arm". The value head's hidden layer is the only
+  head MLP (the policy and reply pointers are bilinear; the submit readout and the WDL,
+  moves-left, short-value, effort, per-board and per-square heads linear): `ValueHead` now
+  computes `out(mish(hidden(x)))` with no switch. `head_activation` (its placeholder "gelu"
+  and the "mish" option) and `HEAD_ACTIVATIONS` are removed rather than kept as an arm no
+  ruling or ablation names; nothing else needs a switch - 6y's squared ReLU stays
+  `ffn_activation`'s, which only the trunk's FFN reads.
+- No parameter changes (an activation has none): F1 stays 22,961,802. The value head's
+  outputs change (GELU to Mish); no test pins them.
+- Docstrings: `heads.py`, `config.py` (F6's bullet, the placeholder index, `ffn_activation`,
+  `value_hidden`), `trunk.py` (only the trunk's FFN follows the switch), `embed.py` and
+  `smolgen.py` (the Δt MLP's GELU and smolgen's SiLU, outside F6's words - spec issue 221).
+- Tests: `test_trunk.py` - `test_every_heads_hidden_layer_is_mish` (the value head by hand in
+  FP64 under both FFN arms, and not GELU) and `test_squared_relu_reaches_no_head` (the arm's
+  network and the v1's, built from one seed, have the same parameters, and over one trunk
+  output every head's output is equal bit for bit; the trunks differ); `head_activation` is
+  refused as an unknown field. `test_smoke.py`'s squared-ReLU arm runs without it. Mutants
+  patched in at test time (no file edited): a value head that follows the FFN's switch fails
+  both new tests under the arm; a GELU value head fails the by-hand test.
+- `docs/BUILD_LOG.md`: register F6; spec issue 204 marked built under its ruling; issue 221
+  (the Δt MLP and smolgen's SiLU are outside F6's words, as A6's and A8's embeddings will
+  be); proposed edit 154 settled upstream in part (the squared-ReLU arm's initialisation is
+  still unstated), edit 162.
+- Spec: §9.3's Mish bullet and register F6 - as built now; register D3 (the value head's
+  MLP). §2.2, §2.3 and register A6, A8, B12: the activations F6 does not name (issue 221,
+  proposed edit 162). §9.2 and F1: no parameter change.
+
 ### 2026-10-22 - Build log: the gate lane's step 1 done; issue 217 and two AGENTS.md lines wait on the user
 
 - `docs/BUILD_LOG.md`, "Current state": the gate lane's step 1 is merged; "Waiting on

@@ -25,15 +25,14 @@ Initialisation (implementation choice where the spec is silent):
   embeddings and the "not a square" vector ``N(0, init_embed_std)``; RMSNorm gains
   ``1 + N(0, init_norm_std)`` - near the identity, but not it, so that no parameter is
   zero or constant (section 15.2: zeros "make distinct paths agree trivially").
-* B11's typed-edge scalars ``N(0, init_table_std)``; learned register coordinates (option
-  ``learned_angle``) at the board centre plus ``N(0, init_table_std)`` noise; B12's weights
-  by ``BoardPairSmolgen.reset_parameters`` (biases of spread of order one at
-  initialisation).
-* The learned register coordinates and the structure's flag-gated modules draw last, in
-  the order register coordinates, B11, B12, and none of them draws from the RNG while
-  it is constructed: switching one on changes its own weights and those of the
-  flag-gated modules drawn after it, never the trunk's or the heads' - so an on/off
-  comparison of B12, say, differs in B12 alone.
+* B11's typed-edge scalars ``N(0, init_table_std)``; B12's weights by
+  ``BoardPairSmolgen.reset_parameters`` (biases of spread of order one at initialisation).
+  (The learned register coordinates of the ``learned_angle`` arm drew here, first, until M20
+  ruled per-board registers position-free on file and rank - B8 - and the arm went.)
+* The structure's flag-gated modules draw last, in the order B11, B12, and none of them
+  draws from the RNG while it is constructed: switching one on changes its own weights and
+  those of the flag-gated modules drawn after it, never the trunk's or the heads' - so an
+  on/off comparison of B12, say, differs in B12 alone.
 * B15's displacement table (the v1 default) ``N(0, disp_init_std)`` (a placeholder, spec
   issue 208), drawn - like D8's parameters, below - from a generator of its own seeded from
   the model's seed (``b15_seed``), never from the global stream, after everything else: its
@@ -65,21 +64,28 @@ intrinsic frozen features (``make_context``): its frozen boards would lose their
 nothing in its place. ``history`` gives each position's epoch history (C20's second reading,
 ``supersession_scope``) and ``kv_hook`` sees every layer's keys and values.
 
-Heads (``T5DNet.heads``) read the final-normed trunk: the policy pointer at each move's
-source and destination tokens (D1), the value head the mean of the global registers
-(D3, sections 7.3 and 8.3), the global auxiliary heads the pool ``aux_global_pool``
-selects (an open committed-class point), per-board heads each board's square mean and
-per-square heads every token (``heads.py``).
+Heads (``T5DNet.heads``) read the final-normed trunk, each where M20's dispositions put it:
+the policy pointer at each move's source and destination tokens, with the promotion offset
+at the destination (D1); the value-type heads - the 51-bin value, WDL and the short-term
+value - the mean of the global registers (D3, sections 7.3 and 8.3: "each pooled by mean
+from the global registers"); the other global auxiliary heads - moves-left (in turns),
+search effort - the mean of every square token (M20: "aux pooling -> squares"; section 12.4,
+B8, D7); per-board heads each board's square mean and per-square heads every token
+(``heads.py``).
 
-Register D8 (stage N5): the acting player is an input (``embed.py``,
-``NetConfig.acting_player_input``) and the submit action's logit is read from a global
-register (``heads.SubmitHead``), offered where submitting is possible and masked unless it is
-legal; ``NetOutput.action_log_probs`` normalises the moves and submit together. Their
-parameters (the acting-player embedding, the submit readout) draw nothing while they are
-made and are drawn from a generator of their own, seeded from the model's seed
-(``d8_seed``), never from the global stream: for a seed, every parameter that existed before
-N5 is drawn exactly as it was - with any flags on and under either of D8's arms - and no flag
-changes D8's weights.
+Register D8 (stage N5): the acting player is an input on the global registers (``embed.py``;
+M20 - with none, an ablation-3 arm, on the board tokens: a placeholder, spec issue 225) and
+the submit action's logit is read from the pooled global registers (``heads.SubmitHead``;
+M20), offered where submitting is possible and masked unless it is legal;
+``NetOutput.action_log_probs`` normalises the moves and submit together. Their parameters
+(the acting-player embedding, the submit readout) draw nothing while they are made and are
+drawn from a generator of their own, seeded from the model's seed (``d8_seed``), never from
+the global stream: D8's parameters, and the submit readout's form, change no other
+parameter's draw - with any flags on - and no flag changes D8's weights. (Until M20 that also
+meant every parameter that existed before N5 was drawn as at N4; M20's promotion offset, an
+ordinary module that draws from the global stream while it is made, moved every parameter
+drawn from that stream - all but B15's, B16's, B17's and D8's, which have generators of their
+own.)
 """
 
 from __future__ import annotations
@@ -124,7 +130,7 @@ class NetOutput:
     policy_logits: torch.Tensor  # (B, M), -inf at padding
     value_logits: torch.Tensor  # (B, value_bins)
     wdl_logits: torch.Tensor  # (B, 3)
-    moves_left_log: torch.Tensor  # (B,)  predicted log1p(board-moves left)
+    moves_left_log: torch.Tensor  # (B,)  predicted log1p(turns left) - a turn is one player's action (D4, M20)
     opp_reply_logits: torch.Tensor  # (B, M2), -inf at padding
     short_value_logits: torch.Tensor  # (B, value_bins)
     board_logits: torch.Tensor  # (B, Nmax, 3): heads.BOARD_HEADS
@@ -135,9 +141,9 @@ class NetOutput:
     board_valid: torch.Tensor
     square_mask: torch.Tensor
     token_board: torch.Tensor  # (B, L) long: board index of each token, -1 where none
-    # D8 (stage N5): the submit action - its logit read from a global register, (B,) each.
+    # D8 (stage N5): the submit action - its logit read from the pooled global registers, (B,) each.
     submit_logits: torch.Tensor  # -inf where submit is no legal candidate (impossible, or illegal: masked)
-    submit_raw: torch.Tensor  # the register's readout before the mask (finite everywhere)
+    submit_raw: torch.Tensor  # the pooled registers' readout before the mask (finite everywhere)
     submit_possible: torch.Tensor  # bool: submit is offered (T5)
     submit_valid: torch.Tensor  # bool: offered and legal (C4) - the entry carries probability
     trunk: torch.Tensor | None = None  # (B, L, d) final-normed trunk output, if requested
@@ -194,14 +200,12 @@ class T5DNet(nn.Module):
         self.register_buffer("rope_axis", axis, persistent=False)
         self.register_buffer("rope_freq", freq, persistent=False)
         self.register_buffer("rope_spatial", spatial_dims(axis), persistent=False)
-        learned_xy = cfg.board_register_spatial == "learned_angle" and cfg.regs_per_board > 0
-        self.register_xy = nn.Parameter(torch.empty(cfg.regs_per_board, 2)) if learned_xy else None
         self.typed_edges = TypedEdgeBias(cfg) if cfg.typed_edge_bias else None
         self.smolgen = BoardPairSmolgen(cfg) if cfg.board_pair_smolgen else None
         self.displacement = DisplacementBias(cfg) if cfg.displacement_bias else None
         self.status = StatusKeyBias(cfg) if cfg.status_bias_built else None
         self.shaw = ShawKeyTerm(cfg, self.displacement.geom) if cfg.shaw_key_term else None
-        self.policy = PointerHead(cfg.d_model, cfg.policy_dim, promotion=cfg.policy_promotion)
+        self.policy = PointerHead(cfg.d_model, cfg.policy_dim, promotion_offset=True)  # D1: the promotion offset (M20)
         self.value = ValueHead(cfg)
         self.aux = AuxHeads(cfg)
         self.submit = SubmitHead(cfg)
@@ -253,13 +257,10 @@ class T5DNet(nn.Module):
                 elif isinstance(module, RMSNorm):
                     nn.init.normal_(module.weight, 1.0, cfg.init_norm_std)
             nn.init.normal_(self.embed.not_square, 0.0, cfg.init_embed_std)
-            if self.register_xy is not None:
-                self.register_xy.normal_(0.0, cfg.init_table_std)
-                self.register_xy.add_(3.5)  # board centre: off-lattice, at no square
             # D8 (stage N5): from a generator of its own, seeded from the global one's seed
             # (``build_model``'s), never from the global stream - and D8's modules draw nothing
-            # while they are made - so that every parameter that existed before N5 is drawn as
-            # it was, whatever the flags and D8's own arms, and no flag changes D8's weights.
+            # while they are made - so that D8's parameters and its own arms change no other
+            # parameter's draw, whatever the flags, and no flag changes D8's weights.
             d8 = torch.Generator(device="cpu").manual_seed(d8_seed(torch.initial_seed()))
             acting = torch.empty(self.embed.acting.weight.shape).normal_(0.0, cfg.init_embed_std, generator=d8)
             self.embed.acting.weight.copy_(acting)
@@ -293,24 +294,18 @@ class T5DNet(nn.Module):
     def coordinates(self, batch: Batch) -> torch.Tensor:
         """Per-token RoPE coordinates ``(B, L, 4)`` (file, rank, timeline, time), FP32.
 
-        Global registers sit at 0 on every axis after recentring: the anchor
-        ``(a1, p_ref, h_present)`` of ``global_register_pairs="anchored"`` (unused under
-        ``"position_free"``, where no pair with a global register is rotated). Per-board
-        registers keep their board's (timeline, time); their (file, rank) is 0, or the
-        learned coordinate under ``board_register_spatial="learned_angle"`` (unused under
-        ``"position_free"``).
+        Per-board registers keep their board's (timeline, time) and global registers sit at 0
+        on every axis; neither is rotated where it has no coordinate (B8, M20): every pair with
+        a global register is unrotated, every pair with a per-board register unrotated on
+        file and rank (``attention.py``), so a register's (file, rank) - and a global
+        register's every coordinate - is never read.
         """
         coords = batch.coords.float().clone()
         if self.cfg.rope_recenter:
             coords[..., 2] -= batch.coord_ref[:, None, 0]
             coords[..., 3] -= batch.coord_ref[:, None, 1]
         is_global = (batch.kind == TOKEN_GLOBAL_REGISTER)[..., None]
-        coords = torch.where(is_global, torch.zeros_like(coords), coords)
-        if self.register_xy is not None:
-            breg = batch.kind == TOKEN_BOARD_REGISTER
-            xy = self.register_xy[batch.reg_index.clamp(min=0, max=self.register_xy.shape[0] - 1)]
-            coords[..., :2] = torch.where(breg[..., None], xy, coords[..., :2])
-        return coords
+        return torch.where(is_global, torch.zeros_like(coords), coords)
 
     def scope_of(self, scope: str | None) -> str:
         """The attention scope of a forward: ``scope``, or the config's when None."""
@@ -321,9 +316,12 @@ class T5DNet(nn.Module):
 
     def embed_tokens(self, batch: Batch, scope: str | None = None) -> torch.Tensor:
         """Token embeddings under a scope: under the block-causal scope with
-        ``frozen_features="intrinsic"`` frozen boards get no state-dependent flags."""
-        intrinsic = self.scope_of(scope) == "block_causal" and self.cfg.frozen_features == "intrinsic"
-        return self.embed(batch, frozen_intrinsic=intrinsic)
+        ``frozen_features="intrinsic"`` frozen boards get no state-dependent flags, and under
+        that scope with no global registers no frozen board gets the acting player (D8; spec
+        issue 225 - ``embed.py``)."""
+        block_causal = self.scope_of(scope) == "block_causal"
+        intrinsic = block_causal and self.cfg.frozen_features == "intrinsic"
+        return self.embed(batch, frozen_intrinsic=intrinsic, block_causal=block_causal)
 
     def make_context(
         self,
@@ -364,9 +362,9 @@ class T5DNet(nn.Module):
             )
         coords = self.coordinates(batch)
         cos, sin = rope_cos_sin(rope_angles(coords, self.rope_axis, self.rope_freq))
-        spatial_free = None
-        if cfg.board_register_spatial == "position_free":
-            spatial_free = batch.valid & (batch.kind == TOKEN_BOARD_REGISTER)
+        # B8 (M20): per-board registers lack file and rank; global registers lack every axis
+        # (the context's body_len).
+        spatial_free = batch.valid & (batch.kind == TOKEN_BOARD_REGISTER)
         block_scope = None
         if self.scope_of(scope) == "block_causal":
             block_scope = BlockCausalScope.build(batch, cfg, history)
@@ -388,7 +386,6 @@ class T5DNet(nn.Module):
             compute_dtype=torch.bfloat16 if cfg.trunk_dtype == "bf16" else torch.float32,
             impl=cfg.attn_impl,
             chunk=cfg.attn_chunk,
-            global_free=cfg.global_register_pairs == "position_free",
             spatial_free=spatial_free,
             spatial_dims=self.rope_spatial,
             structure=structure,
@@ -439,21 +436,21 @@ class T5DNet(nn.Module):
         with torch.autocast(device_type=h.device.type, enabled=False):
             h = h.float()
             sq = batch.square_mask
-            registers = global_register_pool(h, batch)  # the value head's input (D3)
-            aux_in = registers if self.cfg.aux_global_pool == "global_registers" else square_pool(h, batch)
+            registers = global_register_pool(h, batch)  # the value-type heads' input (D3, M20)
+            squares = square_pool(h, batch)  # the other global aux heads' (M20: "aux pooling -> squares")
             boards = board_mean_pool(h, batch)
             possible, legal = batch.submit_mask()
-            submit_raw = self.submit(h, batch, self.policy)  # D8: from a global register
+            submit_raw = self.submit(h, batch, self.policy)  # D8: from the pooled global registers (M20)
             return NetOutput(
                 policy_logits=self.policy(h, batch.moves, batch.move_valid, sq),
                 value_logits=self.value(registers),
-                wdl_logits=self.aux.wdl(aux_in),
-                moves_left_log=self.aux.moves_left(aux_in).squeeze(-1),
+                wdl_logits=self.aux.wdl(registers),
+                moves_left_log=self.aux.moves_left(squares).squeeze(-1),
                 opp_reply_logits=self.aux.opp_reply(h, batch.opp_moves, batch.opp_move_valid, sq),
-                short_value_logits=self.aux.short_value(aux_in),
+                short_value_logits=self.aux.short_value(registers),
                 board_logits=self.aux.board(boards),
                 square_logits=self.aux.square(h),
-                effort_logits=self.aux.effort(aux_in),
+                effort_logits=self.aux.effort(squares),
                 move_valid=batch.move_valid,
                 opp_move_valid=batch.opp_move_valid,
                 board_valid=batch.board_valid,
@@ -556,7 +553,6 @@ def parameter_breakdown(model: T5DNet) -> dict[str, int]:
         "trunk.attention": sum(count(b.attn) for b in blocks),
         "trunk.ffn": sum(count(b.ffn) for b in blocks),
         "trunk.norms": sum(count(b.norm_attn) + count(b.norm_ffn) for b in blocks) + count(model.trunk.final_norm),
-        "rope.register_xy": 0 if model.register_xy is None else model.register_xy.numel(),
         "attn.typed_edges": count(model.typed_edges),
         "attn.smolgen": count(model.smolgen),
         "attn.displacement": count(model.displacement),

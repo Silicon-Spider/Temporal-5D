@@ -1,27 +1,32 @@
 """Parameter counts against spec section 9.2 (F1 ~21.5M with all heads; F2's L24-ff12 44.0M) and
 section 4.1 (B15's displacement table, "about 1.6M parameters - ~7% of the network").
 
-Exact v1 count (default config): 22,961,802 =
+Exact v1 count (default config): 22,965,139 =
     embeddings 20,096 + trunk attention 4,198,400 + trunk FFN 16,814,080
-    + trunk norms 8,448 + learned register coordinates 4 + policy 131,584
+    + trunk norms 8,448 + policy 134,925 (its promotion offset 3,341 among them)
     + value 78,899 + submit 257 + aux 86,866
     + B15's displacement table 1,623,168 (16 layers x 8 heads x 12,681 entries: 54
       board-distance classes x 225, 368 line entries, 162 register entries, 1 global - the
       unstated details at their placeholders, spec issues 205-208).
-B15 (CHECKPOINT 6, the v1 default) added the table to 21,338,634; section 9.2's "~21.5M"
-predates it (spec issue 210): the network without the table - ablation 2's no-table arm,
-``displacement_bias=False`` - is 21,338,634, and that is what section 9.2's figure is held
-to below.
+M20's dispositions (CHECKPOINT 6) added 3,337 to 22,961,802: the policy's promotion offset (D1:
+a 256 -> 13 readout of the destination token, 3,341) and no learned register coordinates (B8:
+per-board registers position-free on file and rank - the learned_angle arm's 2 x 2 gone, -4);
+the pooled submit logit, the heads' pools, moves-left in turns and the acting player on the
+global registers add nothing.
+B15 (CHECKPOINT 6, the v1 default) added the table to 21,338,634 (21,341,971 with M20's
+dispositions); section 9.2's "~21.5M" predates it (spec issue 210): the network without the
+table - ablation 2's no-table arm, ``displacement_bias=False`` - is 21,341,971, and that is
+what section 9.2's figure is held to below.
 F5 (CHECKPOINT 6, section 9.3) took 20,736 from stage N5's 21,359,370: the norms are
 RMSNorm-style gains without biases (33 x 256 = 8,448 fewer) and the Q, K and V projections
 have no biases (16 x 3 x 256 = 12,288 fewer); the attention-output and FFN biases stay.
 Stage N5 (register D8) had added 769 to stage N1's 21,358,601: the acting-player embedding
-(2 x 256, in the embeddings) and the submit action's linear readout of a global register
-(256 + 1; ``submit_head="pointer"`` has none).
+(2 x 256, in the embeddings) and the submit action's linear readout - now of the pooled global
+registers (M20) - (256 + 1; ``submit_head="pointer"`` has none).
 Section 9.2's "~21.5M with all heads" also counts board-pair smolgen (<0.1M, B12,
 prototype): stage N2 builds it behind a flag, 47,136 parameters as relative cells
 (test_n2_model.py); its "base 256x16, ff8: 21.0M" is the trunk. B9's default masks add no
-parameter. F2's larger arm, L24-ff12, is 46,891,210 as built: 44,456,458 (section 9.2: 44.0M)
+parameter. F2's larger arm, L24-ff12, is 46,894,547 as built: 44,459,795 (section 9.2: 44.0M)
 and B15's 24 x 8 x 12,681 = 2,434,752.
 B16's status table (committed with the cached configuration) adds 304 to a block-causal
 network and nothing to the v1, whose scope is dense.
@@ -29,10 +34,12 @@ network and nothing to the v1, whose scope is dense.
 
 from __future__ import annotations
 
+import pytest
+
 from t5d.net import NetConfig, build_model, parameter_breakdown
 
-V1_TOTAL = 22_961_802
-F2_TOTAL = 46_891_210
+V1_TOTAL = 22_965_139
+F2_TOTAL = 46_894_547
 #: B15's table in the v1 (16 layers) and in F2's arm (24 layers).
 V1_DISPLACEMENT = 16 * 8 * 12_681
 F2_DISPLACEMENT = 24 * 8 * 12_681
@@ -51,8 +58,10 @@ def test_v1_parameter_count():
     assert counts["trunk.attention"] == 16 * (4 * 256 * 256 + 256), "full MHA, 8 KV heads (C4); F5: only the output projection has a bias"
     assert counts["trunk.ffn"] == 16 * (2 * 256 * 2048 + 2048 + 256), "FFN 8x, its biases kept (F5)"
     assert counts["trunk.norms"] == (2 * 16 + 1) * 256, "F5: RMSNorm gains, no biases"
-    assert counts["rope.register_xy"] == 2 * 2, "learned (file, rank) per register slot (placeholder default)"
-    assert counts["head.submit"] == 256 + 1, "D8: the submit logit's linear readout of a global register (placeholder)"
+    assert "rope.register_xy" not in counts, "B8 (M20): no learned register coordinate - position-free on file and rank"
+    assert counts["head.policy"] == 2 * (256 * 256 + 256) + (256 * 13 + 13), "D1 (M20): f, g and the per-piece promotion offset"
+    assert counts["aux.opp_reply"] == 2 * (256 * 128 + 128), "the reply head: f and g, no promotion offset (as built at N1)"
+    assert counts["head.submit"] == 256 + 1, "D8: the submit logit's linear readout of the pooled global registers (placeholder form)"
     assert counts["embeddings"] == 19_584 + 2 * 256, "D8: the acting-player embedding (stage N5)"
 
 
@@ -82,11 +91,20 @@ def test_the_cached_configuration_adds_b16s_table():
 
 def test_flag_parameters_are_small():
     base = parameter_breakdown(build_model(NetConfig()))["total"]
-    flagged = parameter_breakdown(build_model(NetConfig(policy_promotion="offset")))
-    assert 0 < flagged["total"] - base < 10_000
+    flagged = parameter_breakdown(build_model(NetConfig(typed_edge_bias=True)))
+    assert flagged["attn.typed_edges"] == 8 * 5 and flagged["total"] - base == 40, "B11: a scalar per head per type"
+    pointer = parameter_breakdown(build_model(NetConfig(submit_head="pointer")))
+    assert pointer["head.submit"] == 0 and pointer["total"] == V1_TOTAL - 257, "D8's other readout form: the policy's own"
     no_table = parameter_breakdown(build_model(NetConfig(displacement_bias=False)))
     assert no_table["attn.displacement"] == 0 and no_table["total"] == V1_TOTAL - V1_DISPLACEMENT, "ablation 2's no-table arm"
     assert "rope.binned_bias" not in no_table, "B6 is removed (superseded by B15)"
-    for spatial in ("zero_angle", "position_free"):
-        counts = parameter_breakdown(build_model(NetConfig(board_register_spatial=spatial)))
-        assert counts["rope.register_xy"] == 0 and counts["total"] == V1_TOTAL - 4, spatial
+
+
+def test_m20s_dispositions_have_no_switch():
+    """M20 disposed of these placeholders and no named ablation needs the arms: each switch is
+    gone (an unknown field), not kept at a ruled default."""
+    removed = ("board_register_spatial", "global_register_pairs", "policy_promotion")
+    removed += ("aux_global_pool", "acting_player_input", "submit_register")
+    for field in removed:
+        with pytest.raises(TypeError):
+            NetConfig(**{field: None})

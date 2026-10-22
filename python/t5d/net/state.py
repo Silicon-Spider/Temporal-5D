@@ -73,7 +73,7 @@ Representation (design spec section 2; register A1-A4):
   present's colour, ``player_to_move`` - it differs exactly when the present has shifted,
   ``shifted``), ``submit_possible`` (the action's obligations are met: under the ply split
   submitting is an action beside the moves) and ``submit_legal`` (the submission passes C4).
-  The first is a network input (``NetConfig.acting_player_input``); the other two say
+  The first is a network input, on the global registers (``embed.py``; M20); the other two say
   whether the submit action is a candidate and whether it is masked, as ``moves`` lists the
   candidate moves. Validation: submitting is legal only where possible, and possible only
   once the present has shifted. Values are from the acting player's perspective.

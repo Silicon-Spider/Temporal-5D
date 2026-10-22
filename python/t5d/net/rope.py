@@ -23,20 +23,17 @@ timeline 4     64      1.000, 0.366, 0.134, 0.049
 time     6     256     1.000, 0.415, 0.172, 0.071, 0.030, 0.012
 ======== ===== ======= ===============================================
 
-**Tokens without a coordinate (section 5.3; open committed-class points, see
-``NetConfig``).** Under a relative encoding a fixed angle on one side of a pair is itself
-a position: an unrotated token sits at coordinate 0 of whatever frame the other side is
-rotated in. So a token that must have *no* coordinate on an axis gets that axis's pairs
-unrotated on *both* sides of every pair it is in (exact NoPE for that part of the pair;
-``attention.py`` applies the rule). Per-board registers carry their board's ``(p, h)``
-on the timeline/time pairs; on the spatial pairs ``board_register_spatial`` selects a
-learned off-lattice coordinate (``learned_angle``), no coordinate (``position_free``) or
-angle 0 (``zero_angle`` - square a1's position). Global registers hold no board:
-``global_register_pairs`` makes every pair with one position-free (``position_free``),
-or places them at recentred coordinate 0 (``anchored``: the anchor ``(a1, p_ref,
-h_present)`` moves with the position, so this stays translation-invariant; with raw
-coordinates it would be the absolute origin - an absolute positional encoding, which
-section 14.1 rejects, hence ``anchored`` requires recentring).
+**Tokens without a coordinate (section 5.3, B8 - ruled at CHECKPOINT 6, M20).** Under a
+relative encoding a fixed angle on one side of a pair is itself a position: an unrotated
+token sits at coordinate 0 of whatever frame the other side is rotated in. So a token that
+must have *no* coordinate on an axis gets that axis's pairs unrotated on *both* sides of
+every pair it is in (exact NoPE for that part of the pair; ``attention.py`` applies the
+rule). Per-board registers carry their board's ``(p, h)`` on the timeline/time pairs and no
+coordinate on the spatial pairs ("a learned 'not a square' angle is a (file, rank) in
+disguise" - section 5.3); global registers hold no board and have no coordinate on any pair.
+(Stage N1 built two other readings of each as placeholder arms - a learned off-lattice or a
+zero spatial angle for per-board registers, global registers anchored at the recentred
+origin; M20 disposed of them.)
 
 **B5 (provisional, flag ``rope_per_head``).** Allocation per head role, following
 section 6's routing table: the same-board head spends all its pairs on file/rank (8 + 8),
@@ -48,10 +45,10 @@ split. The relations head is a parameter (``rope_relations_head``).
 How B5 meets the masks of stage N2 (``NetConfig.rope_roles``): one role table,
 ``rope_head_roles``, serves both B5 (rotation) and B10 (masks), so under the routing
 table every head's rotation and mask come from the same entry. With the routing table
-off, B9 puts the move-graph mask on heads 0..k-1 and ``rope_roles_source`` (an open
-committed-class point) decides the rotation: "table" keeps N1's roles by head index,
-"masks" gives each head the role of the mask it carries (near-NoPE on the move-graph
-heads, the B4 split elsewhere).
+off, B9 puts the move-graph mask on heads 0..k-1 and ``rope_roles_source`` decides the
+rotation - one of B5's details, which stand as v1 (M20; spec issue 16f): "table", the v1's,
+keeps N1's roles by head index; "masks", ablation 2's arm, gives each head the role of the
+mask it carries (near-NoPE on the move-graph heads, the B4 split elsewhere).
 
 **RoPE's positional term factorises per axis** (register B4): no rotation can favour the
 displacements (1, 1) and (2, 2) while disfavouring (1, 2) and (2, 1), so diagonals and knight

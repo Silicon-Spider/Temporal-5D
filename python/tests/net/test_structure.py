@@ -246,9 +246,9 @@ def test_rope_roles_follow_the_table_or_the_masks():
     [
         dict(rope_per_head=True, routing_table=True),
         dict(rope_per_head=True, rope_roles_source="masks"),
-        dict(rope_per_head=True, routing_table=True, global_register_pairs="anchored", board_register_spatial="position_free"),
+        dict(rope_per_head=True, routing_table=True, masked_head_registers="self", same_board_registers="registers"),
     ],
-    ids=["routed", "masks_source", "routed_anchored_regs_free"],
+    ids=["routed", "masks_source", "routed_regs_self"],
 )
 def test_each_head_rotates_by_its_role_under_its_mask(flags):
     """B5 with B9/B10: layer 0's probabilities, head by head, against a reference built
@@ -262,7 +262,7 @@ def test_each_head_rotates_by_its_role_under_its_mask(flags):
     q, k, _ = block.attn.qkv(block.norm_attn(model.embed(batch)))
     coords = model.coordinates(batch)
     allowed = torch.from_numpy(reference_allowed(batch, cfg))
-    has = _has_axes(cfg, batch)
+    has = _has_axes(batch)
     bias = reference_bias(model, batch, 0)
     for head, role in enumerate(cfg.rope_roles):
         alloc = head_allocation(role, cfg)
@@ -511,7 +511,7 @@ def test_every_bias_adds_up(layer):
 # --- no inert switch ----------------------------------------------------------------------------
 
 #: Each pair of configurations differs in one switch of stage N2 or of the trunk (F5, F6);
-#: the network must differ. (``head_activation`` changes the value head alone - test_trunk.py.)
+#: the network must differ.
 SWITCHES = {
     "norm_placement pre -> post": (dict(), dict(norm_placement="post")),
     "qkv_bias": (dict(), dict(qkv_bias=True)),

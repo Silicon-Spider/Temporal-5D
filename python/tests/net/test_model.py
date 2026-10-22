@@ -95,7 +95,7 @@ def test_determinism():
 
 @pytest.mark.parametrize(
     "flags",
-    [dict(), dict(rope_per_head=True, policy_promotion="offset"), dict(norm_placement="post")],
+    [dict(), dict(rope_per_head=True, typed_edge_bias=True), dict(norm_placement="post")],
     ids=["v1", "flags", "post-norm"],
 )
 def test_no_parameter_is_zero_or_constant(flags):
@@ -148,28 +148,33 @@ def test_value_distribution_and_helpers(model_fp32):
     assert torch.all(categorical_variance(target) < (2 / 50) ** 2)
 
 
-@pytest.mark.parametrize("pool", ["squares", "global_registers"])
-def test_value_and_global_aux_heads_read_their_pools(pool):
-    """D3: the value head reads the mean of the global registers (sections 7.3, 8.3). The
-    global aux heads read what ``aux_global_pool`` selects: every square token's mean (the
-    placeholder default - section 12.4, B8, D7) or the global registers (section 9.2).
-    Per-board registers feed neither."""
-    model = build_model(NetConfig(trunk_dtype="fp32", aux_global_pool=pool), seed=0).eval()
+#: The heads M20's dispositions route (``T5DNet.heads``): the value-type heads and D8's submit
+#: logit read the mean of the global registers (D3, section 8.3; "submit logit -> pooled global
+#: registers"), the other global auxiliary heads the mean of every square ("aux pooling ->
+#: squares"; section 12.4, B8, D7).
+REGISTER_POOLED = ("value_logits", "wdl_logits", "short_value_logits", "submit_raw")
+SQUARE_POOLED = ("moves_left_log", "effort_logits")
+
+
+def test_each_global_head_reads_its_pool():
+    """M20 and D3: the 51-bin value, WDL and the short-term value read the mean of the global
+    registers, as the submit logit does (D8); moves-left and search effort the mean of every
+    square token. Per-board registers feed none of them, nor the per-board heads."""
+    model = build_model(NetConfig(trunk_dtype="fp32"), seed=0).eval()
     batch = collate([synthetic_state(16, 4), synthetic_state(17, 2)])
     out = model(batch, return_trunk=True)
     h = out.trunk
     sq = batch.square_mask
     registers = h[:, batch.body_len : batch.body_len + batch.global_regs].mean(1)
     squares = (h * sq[..., None]).sum(1) / sq.sum(1, keepdim=True)
-    aux_in = squares if pool == "squares" else registers
     assert torch.allclose(out.value_logits, model.value(registers), atol=1e-5)
-    assert torch.allclose(out.wdl_logits, model.aux.wdl(aux_in), atol=1e-5)
-    assert torch.allclose(out.moves_left_log, model.aux.moves_left(aux_in).squeeze(-1), atol=1e-5)
-    assert torch.allclose(out.short_value_logits, model.aux.short_value(aux_in), atol=1e-5)
-    assert torch.allclose(out.effort_logits, model.aux.effort(aux_in), atol=1e-5)
+    assert torch.allclose(out.wdl_logits, model.aux.wdl(registers), atol=1e-5)
+    assert torch.allclose(out.short_value_logits, model.aux.short_value(registers), atol=1e-5)
+    assert torch.allclose(out.submit_raw, model.submit.out(registers).squeeze(-1), atol=1e-5)
+    assert torch.allclose(out.moves_left_log, model.aux.moves_left(squares).squeeze(-1), atol=1e-5)
+    assert torch.allclose(out.effort_logits, model.aux.effort(squares), atol=1e-5)
 
     gen = torch.Generator().manual_seed(18)
-    global_aux = ("wdl_logits", "moves_left_log", "short_value_logits", "effort_logits")
 
     def perturbed(rows: torch.Tensor):
         h2 = h.clone()
@@ -177,20 +182,40 @@ def test_value_and_global_aux_heads_read_their_pools(pool):
         return model.heads(h2, batch)
 
     every_square = perturbed(sq)
-    assert torch.equal(every_square.value_logits, out.value_logits), "the value head ignores the squares"
-    for name in global_aux:
-        moved = not torch.allclose(getattr(every_square, name), getattr(out, name), atol=1e-4)
-        assert moved == (pool == "squares"), name
     one_register = torch.zeros_like(sq)
     one_register[:, batch.body_len + 5] = True
     reg = perturbed(one_register)
-    assert not torch.allclose(reg.value_logits, out.value_logits, atol=1e-4), "the value head reads the global registers"
-    for name in global_aux:
-        moved = not torch.allclose(getattr(reg, name), getattr(out, name), atol=1e-4)
-        assert moved == (pool == "global_registers"), f"{name}: registers stay free under 'squares'"
+    for name in REGISTER_POOLED:
+        assert torch.equal(getattr(every_square, name), getattr(out, name)), f"{name} ignores the squares"
+        assert not torch.allclose(getattr(reg, name), getattr(out, name), atol=1e-4), f"{name} reads the global registers"
+    for name in SQUARE_POOLED:
+        assert not torch.allclose(getattr(every_square, name), getattr(out, name), atol=1e-4), f"{name} reads the squares"
+        assert torch.equal(getattr(reg, name), getattr(out, name)), f"{name}: the registers stay free scratch"
     board_regs = perturbed(batch.kind == TOKEN_BOARD_REGISTER)
-    for name in ("value_logits", "board_logits", *global_aux):
+    for name in ("board_logits", *REGISTER_POOLED, *SQUARE_POOLED):
         assert torch.equal(getattr(board_regs, name), getattr(out, name)), f"{name} reads no per-board register"
+
+
+def test_the_register_pooled_heads_are_invariant_to_permuting_the_global_registers():
+    """M20's "value pooling -> mean" (D3) and the pooled submit logit (D8): the heads read the
+    global registers' mean, so no register has a role (D7) - permuting their final states
+    changes none of them (nor any other head), while changing one changes them all."""
+    model = build_model(NetConfig(trunk_dtype="fp32"), seed=1).eval()
+    batch = collate([synthetic_state(19, 3)])
+    h = model(batch, return_trunk=True).trunk
+    base = model.heads(h, batch)
+    g = torch.arange(batch.body_len, batch.body_len + batch.global_regs)
+    shuffled = h.clone()
+    shuffled[:, g] = h[:, g[torch.randperm(g.numel(), generator=torch.Generator().manual_seed(19))]]
+    out = model.heads(shuffled, batch)
+    for name in (*REGISTER_POOLED, *SQUARE_POOLED, "policy_logits", "opp_reply_logits", "board_logits"):
+        assert torch.allclose(getattr(out, name), getattr(base, name), atol=1e-5), name
+    for register in (0, 15):
+        one = h.clone()
+        one[:, batch.body_len + register] += 1.0
+        moved = model.heads(one, batch)
+        for name in REGISTER_POOLED:
+            assert not torch.allclose(getattr(moved, name), getattr(base, name), atol=1e-4), (name, register)
 
 
 def _with_promotions(state: PositionState) -> PositionState:
@@ -200,11 +225,12 @@ def _with_promotions(state: PositionState) -> PositionState:
     return PositionState(**{**_fields(state), "moves": np.concatenate([state.moves, extra])})
 
 
-@pytest.mark.parametrize("promotion", ["none", "offset"])
-def test_pointer_heads_score_each_moves_own_endpoints(promotion):
+def test_pointer_heads_score_each_moves_own_endpoints():
     """D1, section 8.1: score(move) = f(h_src)^T g(h_dst) / sqrt(dim), read at the move's
-    own source and destination tokens - for the policy and the opponent-reply head."""
-    model = build_model(NetConfig(trunk_dtype="fp32", policy_promotion=promotion), seed=0).eval()
+    own source and destination tokens - for the policy, plus its per-piece promotion offset
+    read at the destination (M20), and for the opponent-reply head, which has none."""
+    model = build_model(NetConfig(trunk_dtype="fp32"), seed=0).eval()
+    assert model.policy.promo is not None and model.aux.opp_reply.promo is None
     batch = collate([_with_promotions(synthetic_state(13, 5)), synthetic_state(14, 2)])
     out = model(batch, return_trunk=True)
     h = out.trunk
@@ -216,7 +242,7 @@ def test_pointer_heads_score_each_moves_own_endpoints(promotion):
         for b in range(batch.batch_size):
             src, dst, promo = moves[b][valid[b]].unbind(-1)
             expected = (head.src(h[b, src]) * head.dst(h[b, dst])).sum(-1) / math.sqrt(head.dim)
-            if promotion == "offset":
+            if head.promo is not None:
                 offset = head.promo(h[b, dst]).gather(-1, promo[:, None]).squeeze(-1)
                 expected = expected + torch.where(promo != NO_PROMOTION, offset, torch.zeros_like(offset))
             assert torch.allclose(logits[b][valid[b]], expected, atol=1e-5), (head, b)
@@ -269,16 +295,23 @@ def test_policy_head_rejects_register_endpoints(model_fp32):
         model_fp32(batch)
 
 
-def test_promotion_handling_is_a_parameter():
+def test_promotions_get_a_learned_per_piece_offset():
+    """D1 and section 8.1 (M20: "promotion scoring -> learned per-piece offset"): the bilinear
+    form gives one pawn move's promotions to four pieces the same score; the policy's offset
+    tells them apart, one learned logit per piece read at the destination - and leaves the
+    move without a promotion at its bilinear score."""
     state = synthetic_state(13, 2)
-    pawn_dst = state.moves[0, 1]
-    moves = np.array([[state.moves[0, 0], pawn_dst, promo] for promo in (2, 3, 4, 5)])
-    s = PositionState(**{**_fields(state), "moves": moves})
-    batch = collate([s])
-    tie = build_model(NetConfig(trunk_dtype="fp32", policy_promotion="none"), seed=0)(batch).policy_logits[0]
-    assert torch.allclose(tie, tie[0].expand(4)), "the literal section 8.1 score ties promotion variants"
-    split = build_model(NetConfig(trunk_dtype="fp32", policy_promotion="offset"), seed=0)(batch).policy_logits[0]
-    assert split.unique().numel() == 4
+    src, dst = state.moves[0, :2]
+    moves = np.array([[src, dst, promo] for promo in (NO_PROMOTION, 2, 3, 4, 5)])
+    batch = collate([PositionState(**{**_fields(state), "moves": moves})])
+    model = build_model(NetConfig(trunk_dtype="fp32"), seed=0).eval()
+    out = model(batch, return_trunk=True)
+    logits, h = out.policy_logits[0], out.trunk[0]
+    bilinear = (model.policy.src(h[src]) * model.policy.dst(h[dst])).sum() / math.sqrt(model.policy.dim)
+    assert torch.allclose(logits[0], bilinear, atol=1e-5), "no promotion: the bilinear score alone"
+    assert logits[1:].unique().numel() == 4, "four promotions, four logits"
+    offsets = model.policy.promo(h[dst])[[2, 3, 4, 5]]
+    assert torch.allclose(logits[1:], bilinear + offsets, atol=1e-5), "the bilinear score (tied) plus each piece's offset"
 
 
 def test_board_pool_excludes_registers():
@@ -320,8 +353,9 @@ def test_effort_helpers():
 
 
 def test_moves_left_from_log_inverts_the_target_transform():
-    board_moves = torch.tensor([0.0, 1.0, 7.0, 250.0])
-    assert torch.allclose(moves_left_from_log(torch.log1p(board_moves)), board_moves, rtol=1e-5)
+    """The moves-left head counts turns - one player's action each (D4, M20) - on a log scale."""
+    turns = torch.tensor([0.0, 1.0, 7.0, 250.0])
+    assert torch.allclose(moves_left_from_log(torch.log1p(turns)), turns, rtol=1e-5)
     assert moves_left_from_log(torch.tensor([-0.4])).item() == 0.0, "never negative"
 
 
@@ -340,8 +374,7 @@ def test_later_stage_flags_raise():
 
 
 def test_open_choices_reject_unknown_values():
-    fields = ("board_register_spatial", "global_register_pairs", "aux_global_pool", "policy_promotion")
-    fields += ("attn_scope", "causal_past", "frozen_features", "supersession_scope")
+    fields = ("submit_head", "attn_scope", "causal_past", "frozen_features", "supersession_scope")
     for field in fields:
         with pytest.raises(ValueError, match=field):
             NetConfig(**{field: "nonsense"}).validate()

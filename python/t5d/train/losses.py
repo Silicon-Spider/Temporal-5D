@@ -9,7 +9,9 @@
   the submit action (register D8, stage N5: ``NetOutput.action_logits``); its target is
   the root's visits to each move and to the submit child (``Targets.submit``).
 * WDL: 3-class cross-entropy. Effort: cross-entropy over its bins (censored bin
-  included). Moves-left: Huber loss on ``log1p(board-moves left)``.
+  included). Moves-left: Huber loss on ``log1p(turns left)`` - a turn one player's action
+  (D4, M20; spec issue 305); building the target from a game record is the training loop's
+  (M21).
 * Per-board and per-square heads: binary cross-entropy with logits, masked to real
   boards and squares; a per-board loss sums its three targets, a per-square loss
   averages its labels and then the board's squares, so both are one number per board.
@@ -37,7 +39,7 @@ class Targets:
     value: torch.Tensor  # (B, value_bins) distribution
     policy: torch.Tensor  # (B, M) distribution over supplied moves
     wdl: torch.Tensor  # (B,) class index: 0 win, 1 draw, 2 loss (the acting player's, D8)
-    moves_left: torch.Tensor  # (B,) board-moves left, >= 0
+    moves_left: torch.Tensor  # (B,) turns left (one player's action each, D4), >= 0
     opp_reply: torch.Tensor  # (B,) index into opp_moves, -1 where there is no target
     short_value: torch.Tensor  # (B, value_bins) distribution
     board: torch.Tensor  # (B, Nmax, 3) in {0, 1}

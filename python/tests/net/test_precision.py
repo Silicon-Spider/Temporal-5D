@@ -3,7 +3,9 @@
 Tolerances. BF16 keeps an 8-bit significand (relative rounding ~2^-9 = 0.2%). With the
 residual stream and norms in FP32 and only matmuls and attention in BF16, the measured
 gap after 16 layers (default configuration - F5's pre-norm RMSNorm, F6's Mish - model
-seeds 0, 5 and 11, ``synthetic_state(30 + N, N)`` for N = 2, 17, 60; re-measured after F6)
+seeds 0, 5 and 11, ``synthetic_state(30 + N, N)`` for N = 2, 17, 60; re-measured after F6,
+before B15's table, F6's Mish in the heads and M20's defaults - the per-board registers'
+positions among them - changed the network: not re-measured since; the bounds still hold)
 is at most 0.24% RMS on the unit-RMS final-normed trunk output (max 1.2%), 0.0036 on value
 logits, 0.010 on policy logits and 1.5e-4 on the value mean. The bounds below sit 2.9-13x
 above those measurements, so they catch a precision bug (e.g. RoPE computed in BF16, where

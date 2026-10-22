@@ -305,7 +305,7 @@ def test_spot_checks():
 def test_the_tables_size():
     """Section 4.1: "about 1.6M parameters - ~7% of the network": 54 classes x 225 + 368 line
     entries + 162 register entries + 1 global = 12,681 per head per layer; x 8 x 16 = 1,623,168,
-    7.07% of the v1's 22,961,802. Three of each head's entries are never indexed: the (0, 0)
+    7.07% of the v1's 22,965,139. Three of each head's entries are never indexed: the (0, 0)
     cell of the same-time far classes, whose displacements are all board-axis lines."""
     geom = DisplacementGeometry()
     assert (geom.n_board_classes, geom.lines_offset, geom.n_entries) == (54, 54 * 225, 12_681)
@@ -448,8 +448,8 @@ CPU_PATHS = {
 @pytest.mark.grad
 @pytest.mark.parametrize(
     "flags",
-    [dict(), dict(routing_table=True), dict(board_register_spatial="position_free"), dict(global_register_pairs="anchored")],
-    ids=["b9", "routing", "regs-free", "anchored"],
+    [dict(), dict(routing_table=True), dict(masked_head_registers="self"), dict(move_graph_heads=4, rope_per_head=True)],
+    ids=["b9", "routing", "regs-self", "mg4-b5"],
 )
 @pytest.mark.parametrize("construction", ["far", "small_boards_mixed", "registers_4_0", "far_variant_sizes"])
 def test_cpu_paths_equal_the_bias_materialised(construction, flags):
@@ -482,11 +482,11 @@ def test_cpu_paths_equal_the_bias_materialised(construction, flags):
         dict(),
         dict(routing_table=True, typed_edge_bias=True, typed_edge_directed=True, board_pair_smolgen=True),
         dict(attn_scope="block_causal", typed_edge_bias=True, board_pair_smolgen=True),
-        dict(board_register_spatial="position_free", masked_head_registers="self", rope_per_head=True),
-        dict(global_register_pairs="anchored", move_graph_heads=4),
+        dict(masked_head_registers="self", rope_per_head=True),
+        dict(move_graph_heads=4, rope_recenter=False),
         dict(displacement_bias=False),
     ],
-    ids=["v1", "routing-typed-smolgen", "block-causal", "regs-free-self-b5", "anchored-mg4", "no-table"],
+    ids=["v1", "routing-typed-smolgen", "block-causal", "regs-self-b5", "mg4-raw", "no-table"],
 )
 def test_the_network_through_the_score_function(flags):
     """The whole network (two layers) with every attention through the score function equals

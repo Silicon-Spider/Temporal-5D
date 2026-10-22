@@ -3,13 +3,14 @@
 F5: every norm RMSNorm-style - no mean-centring, no bias - no Q/K/V biases, the
 attention-output and FFN biases kept, the output heads' biases kept; pre-norm for v1,
 "Lc0's post-norm with DeepNet initialisation" as 6y's arm (DeepNorm and DeepNet's
-initialisation, Wang et al. 2022). F6: Mish in the FFN for v1, squared ReLU as 6y's arm;
-the heads' activation a named placeholder. Each block is computed by hand here, from the
-formulas.
+initialisation, Wang et al. 2022). F6: Mish in the FFN for v1, squared ReLU as 6y's arm; Mish
+in every head's hidden layers too, under either arm - squared ReLU is a trunk-only arm
+(CHECKPOINT 8). Each block is computed by hand here, from the formulas.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import math
 
 import pytest
@@ -237,8 +238,8 @@ def test_trunk_options_are_validated():
         NetConfig(norm_placement="sandwich").validate()
     with pytest.raises(ValueError, match="ffn_activation"):
         NetConfig(ffn_activation="gelu").validate()  # N1's; F6 replaced it
-    with pytest.raises(ValueError, match="head_activation"):
-        NetConfig(head_activation="relu").validate()
+    with pytest.raises(TypeError):
+        NetConfig(head_activation="gelu")  # F6 rules the heads' (Mish, CHECKPOINT 8): no switch
     with pytest.raises(ValueError, match="norm_eps"):
         NetConfig(norm_eps=0.0).validate()
     with pytest.raises(TypeError):
@@ -268,14 +269,33 @@ def test_the_ffn_is_its_formula(activation):
     assert not torch.allclose(out, ffn.lin_out(F.gelu(ffn.lin_in(x))), atol=1e-3), "not N1's GELU"
 
 
-@pytest.mark.parametrize("activation", ["gelu", "mish"])
-def test_the_value_heads_activation_is_a_named_placeholder(activation):
-    """F6 binds the FFN; the value head's hidden activation - the only output-head MLP - is
-    ``head_activation``: GELU as built (a placeholder, spec issue 204) or Mish."""
-    assert NetConfig().head_activation == "gelu"
-    model = build_model(NetConfig(trunk_dtype="fp32", n_layers=1, head_activation=activation), seed=7).eval()
+@pytest.mark.parametrize("ffn_activation", ["mish", "squared_relu"])
+def test_every_heads_hidden_layer_is_mish(ffn_activation):
+    """F6 (CHECKPOINT 8): Mish "in every head's hidden layers, the value head included" - the
+    value head's MLP is the only head with one (the others are linear or bilinear) - by hand in
+    FP64, under the v1's FFN and under 6y's squared ReLU alike; and it is not stage N1's GELU."""
+    model = build_model(NetConfig(trunk_dtype="fp32", n_layers=1, ffn_activation=ffn_activation), seed=7).eval()
     pooled = torch.randn(4, 256, generator=torch.Generator().manual_seed(7))
     hidden = model.value.hidden(pooled).double()
-    act = F.gelu(hidden) if activation == "gelu" else _mish(hidden)
-    expected = act @ model.value.out.weight.double().T + model.value.out.bias.double()
-    assert torch.allclose(model.value(pooled).double(), expected, atol=1e-5)
+    expected = _mish(hidden) @ model.value.out.weight.double().T + model.value.out.bias.double()
+    out = model.value(pooled)
+    assert torch.allclose(out.double(), expected, atol=1e-5)
+    assert not torch.allclose(out, model.value.out(F.gelu(model.value.hidden(pooled))), atol=1e-3), "not N1's GELU"
+
+
+def test_squared_relu_reaches_no_head():
+    """6y's squared ReLU is "the trunk-only arm" (F6, CHECKPOINT 8). The arm's network and the
+    v1's, built from one seed, have the same parameters (an activation draws nothing); over one
+    trunk output their heads give the same outputs, bit for bit - a head that followed the FFN's
+    switch would not - while the trunks differ."""
+    batch = collate([synthetic_state(8, 4), synthetic_state(9, 2)])
+    v1 = build_model(NetConfig(trunk_dtype="fp32", n_layers=1), seed=8).eval()
+    arm = build_model(NetConfig(trunk_dtype="fp32", n_layers=1, ffn_activation="squared_relu"), seed=8).eval()
+    arm_params = dict(arm.named_parameters())
+    assert all(torch.equal(p, arm_params[name]) for name, p in v1.named_parameters())
+    h = torch.randn(batch.batch_size, batch.n_tokens, 256, generator=torch.Generator().manual_seed(8))
+    a, b = v1.heads(h, batch), arm.heads(h, batch)
+    for field in dataclasses.fields(a):
+        x, y = getattr(a, field.name), getattr(b, field.name)
+        assert (x is None and y is None) or torch.equal(x, y), field.name
+    assert not torch.allclose(v1.trunk_output(batch), arm.trunk_output(batch), atol=1e-4), "the arm is the trunk's"

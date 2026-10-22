@@ -2056,7 +2056,7 @@ Built after the user's CHECKPOINT 2 rulings (rulebook R8 and R9; register D8).
   test, exact) - appended to `t5d_expansion` as `acting_player`, `submit_possible`,
   `submit_legal` (three `int32_t` after `src_extra`; every older field keeps its
   offset). No per-board or per-square feature changed. Under the ply split the submit
-  action has its own policy logit (§8.2), read from a global register; under
+  action has its own policy logit (§8.2), read from the pooled global registers (M20); under
   whole-turn generation submitting ends every enumerated action.
 - **The Python binding** follows in the same change: `python/t5d/engine/capi.py`'s
   `CExpansion` mirrors the three fields, `T5D_RULES_NO_MOVES_AFTER_SHIFT` is bit 3 and
@@ -2099,7 +2099,7 @@ its variance feeds E2, E3 and LCB.
   on that player's remaining playable boards (R8, the default rules; under Q4's
   Guide-literal reading, `moves_after_shift = false`, submit alone). Only a submit
   edge changes the acting player. Submit's prior is the evaluator's submit logit
-  (D8: from a global register - the network's stage N5) when it gives one, else the
+  (D8: from the pooled global registers - the network's stage N5, M20) when it gives one, else the
   placeholder `submit_share` (0.5) of the prior where moves are open too: with a flat
   move policy a submit logit of 0 among N moves would make every action play nearly
   every optional board (measured: 101 moves in 14 actions, 54 timelines). Mid-turn

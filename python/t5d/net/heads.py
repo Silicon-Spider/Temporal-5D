@@ -4,17 +4,25 @@
 g(h_dst) / sqrt(d_policy)`` with separate learned projections ``f`` and ``g``,
 evaluated only over the supplied candidate moves; padding entries score ``-inf``.
 Endpoints are square tokens only - registers are never move endpoints (section 5.3).
-Promotions: see ``NetConfig.policy_promotion`` (an open committed-class point).
+Promotions add a learned per-piece logit offset read from the destination token, "because
+the bilinear form gives every promotion piece the same score" (section 8.1, D1; M20:
+"promotion scoring -> learned per-piece offset"): ``PointerHead``'s ``promotion_offset``,
+always on in the policy.
 
 **Submit (D8, section 8.2; stage N5).** Under the board-move split submitting is an action
-with "its own policy logit, read from a global register" (``SubmitHead``): offered where
+with "its own policy logit, read from the pooled global registers as the value head is"
+(``SubmitHead``; M20: no single register is assigned a role, so D7 holds): offered where
 submitting is possible (T5), masked to -inf unless it is legal (C4), and normalised together
-with the move logits - one distribution over the moves and submit (``NetOutput``).
+with the move logits - one distribution over the moves and submit (``NetOutput``). The
+readout's form (linear, or the policy's bilinear form) is not ruled: ``NetConfig.submit_head``.
 
 **Value (D3, section 8.3).** 51-bin categorical over outcomes in [-1, 1], bin centres
-``-1 + 2k/50``; pooled from the global registers, through a hidden layer whose activation
-is ``NetConfig.head_activation`` (GELU, a placeholder: F6's Mish is the FFN's, and whether it
-reaches the heads is not decided - spec issue 204). Helpers give the distribution, its
+``-1 + 2k/50``; pooled by mean from the global registers (D3: "mean-pooled over the global
+registers"; M20: "value pooling -> mean"), through a hidden layer with Mish (register
+F6 since CHECKPOINT 8: "Mish ... in the trunk FFN and every head's hidden layers"; ablation
+6y's squared ReLU is "the trunk-only arm", so no head follows ``NetConfig.ffn_activation``).
+The value head's is the only hidden layer among the heads: the others are linear or
+bilinear. Helpers give the distribution, its
 mean and its variance (what variance-scaled cPUCT and the time manager consume). The
 value is from the perspective of the **acting player** (``PositionState.acting_player``,
 register D8: the player whose action is in progress until it submits - the present's colour,
@@ -24,27 +32,36 @@ search's (``t5d/capi_search.h``: values "from the perspective of the leaf's acti
 player").
 
 **Auxiliary heads (D4, section 12.4).** Linear heads ("head compute is negligible -
-linear heads over d = 256"). Per-board heads read the mean of the board's *square*
-tokens (section 9.2), so the per-board registers stay free. What the global heads (WDL,
-moves-left, short-horizon value, search effort) read is an open committed-class point,
-``NetConfig.aux_global_pool``: section 9.2's table says the global registers, while
-section 12.4 ("Auxiliary heads pool from the trunk; hard-assigning registers to
-auxiliary quantities conscripts the scratch space"), register B8 ("registers stay free
-scratch") and D7 ("never assigned aux targets") keep them off the registers. The
-placeholder default is the mean of every square token (``square_pool``); the other arm
-is the value head's input (``global_register_pool``).
+linear heads over d = 256"). Where each reads (M20; ``model.T5DNet.heads``): the value-type
+heads - WDL and the short-term value, beside the 51-bin value head - the mean of the
+global registers (``global_register_pool``; D3 and section 8.3: "each pooled by mean from
+the global registers"); the other global heads - moves-left, search effort - the mean of
+every square token (``square_pool``; M20: "aux pooling -> squares" - section 12.4:
+"Auxiliary heads pool from the trunk; hard-assigning registers to auxiliary quantities
+conscripts the scratch space", register B8 and D7); the per-board heads the mean of each
+board's *square* tokens (section 9.2), so the per-board registers stay free; the
+per-square heads every token. Pooling all sixteen global registers assigns none a role, so
+D7 holds for the value-type heads too (D8's argument for the submit logit).
 
 * WDL: 3 logits (win, draw, loss for the acting player).
-* Moves-left: one scalar, the predicted ``log1p`` of the number of board-moves left
-  in the game (each board-move adds one board, so it predicts final N minus N - the
-  quantity section 8.6's integral allocator needs). Log scale because the target spans
-  0 to hundreds; train with a Huber/L2 loss on ``log1p(target)`` (implementation choice).
-* Opponent reply: a second pointer head over the opponent's candidate moves.
+* Moves-left: one scalar, the predicted ``log1p`` of the number of turns left in the game,
+  a turn being one player's action, from a turn start to its submission (D4: "moves-left
+  (in turns)"; M20: "moves-left -> turns"; the unit is spec issue 305's, so every D2 arm
+  shares it). Which turns count - the one in progress among them or not - is the target
+  builder's (the training loop, M21); section 8.6's allocator converts turns to the
+  board-moves it projects N by (E11's boards-per-turn figure, issue 305). Log scale because
+  the target spans 0 to hundreds; train with a Huber/L2 loss on ``log1p(target)``
+  (implementation choice).
+* Opponent reply: a second pointer head over the opponent's candidate moves, always built,
+  with no promotion offset (as built at N1: D1 names the policy). D4 reinstated it as a
+  prototype at CHECKPOINT 7 - behind a flag, weight 0.15, its target mapped onto current
+  squares - which the heads' rebuild after engine ABI round 2 builds; this head is left as
+  it was until then.
 * Short-horizon value: categorical like the value head.
 * Per board: travelled-into within k plies; timeline still active at game end;
   tactical volatility - one logit each (k is a target-construction parameter).
-* Per square: a small multi-label vector of deep attack facts (``SQUARE_LABELS``, an
-  undecided placeholder set).
+* Per square: a small multi-label vector of deep attack facts (``SQUARE_LABELS``; the set
+  stands as v1 - M20 - tested by ablation 6j).
 * Search effort (section 8.6): categorical over log2-visit bins with a censored top bin
   ("did not converge within budget").
 """
@@ -62,18 +79,19 @@ from .state import NO_PROMOTION, Batch
 #: Per-board auxiliary logits, in output order.
 BOARD_HEADS: tuple[str, ...] = ("travelled_into", "timeline_active_at_end", "tactical_volatility")
 
-#: Per-square deep attack facts - an UNDECIDED PLACEHOLDER set. Section 12.4 specifies
-#: only "deep attack facts beyond the section 6 input bias" (generator-exact), and that
-#: "predicting what the model is handed as input teaches nothing". The section 6 input is
-#: the legal move graph (B9, committed) and typed attack / defence / pin / x-ray / check
-#: edges (B11, provisional; travel-threat folded into attack at CHECKPOINT 6), so the
+#: Per-square deep attack facts - the set STANDS AS V1 (M20: "the per-square label set ...
+#: stand[s] as v1", tested by ablation 6j; register D4: "label set a placeholder"). Section
+#: 12.4 specifies only "deep attack facts beyond the section 6 input bias" (generator-exact),
+#: and that "predicting what the model is handed as input teaches nothing". The section 6
+#: input is the legal move graph (B9, committed) and typed attack / defence / pin / x-ray /
+#: check edges (B11, provisional; travel-threat folded into attack at CHECKPOINT 6), so the
 #: one-step facts those state - attacked-by, pinned, a legal move's destination - are
-#: excluded. Each candidate below is a fact no
-#: input relation states: multi-step (an exchange sequence, two-move reach, the position
-#: after a move) or a geometric neighbourhood that is no relation type (the royal zone;
-#: for the side to move it partly overlaps the king's legal moves). The set is fixed only
-#: once the section 6 input set is (B11 is provisional) and the data pipeline exists.
-#: Facts are about the whole multiverse, cross-board lines included:
+#: excluded. Each candidate below is a fact no input relation states: multi-step (an
+#: exchange sequence, two-move reach, the position after a move) or a geometric
+#: neighbourhood that is no relation type (the royal zone; for the side to move it partly
+#: overlaps the king's legal moves). The labels' generator (exact, from the rules engine) is
+#: not built (step 2, the engine lane). Facts are about the whole multiverse, cross-board
+#: lines included:
 SQUARE_LABELS: tuple[str, ...] = (
     "exchange_loses_occupant",  # the static exchange on the square loses material for the occupant's side
     "reachable_in_two_white",  # some white piece reaches the square in exactly two of its own moves
@@ -151,7 +169,8 @@ def effort_censored_prob(probs: torch.Tensor) -> torch.Tensor:
 
 
 def moves_left_from_log(x: torch.Tensor) -> torch.Tensor:
-    """Board-moves left from the moves-left head's ``log1p`` prediction; never negative."""
+    """Turns left - each one player's action (D4, M20; spec issue 305) - from the moves-left
+    head's ``log1p`` prediction; never negative."""
     return torch.expm1(x.float().clamp(min=0.0))
 
 
@@ -159,14 +178,19 @@ def moves_left_from_log(x: torch.Tensor) -> torch.Tensor:
 
 
 def square_pool(h: torch.Tensor, batch: Batch) -> torch.Tensor:
-    """Mean of every square token of each position, ``(B, d)`` (registers excluded)."""
+    """Mean of every square token of each position, ``(B, d)`` (registers excluded) - what
+    the global auxiliary heads read (moves-left, search effort; M20: "aux pooling ->
+    squares")."""
     w = batch.square_mask.to(h.dtype)
     return (h * w[..., None]).sum(dim=1) / w.sum(dim=1, keepdim=True).clamp(min=1.0)
 
 
 def global_register_pool(h: torch.Tensor, batch: Batch) -> torch.Tensor:
-    """Mean of the global registers, ``(B, d)`` - the value head's input (D3, section
-    8.3). With no global registers (an ablation-3 arm), ``square_pool`` instead."""
+    """Mean of the global registers, ``(B, d)`` - what the value-type heads (the 51-bin
+    value, WDL, the short-term value; D3, section 8.3, M20: "value pooling -> mean") and D8's
+    submit logit (section 8.2, M20) read. With no global registers (an ablation-3 arm),
+    ``square_pool`` instead - as built since N1, a placeholder (no document says what these
+    heads read without them; spec issue 225)."""
     if batch.global_regs > 0:
         return h[:, batch.body_len : batch.body_len + batch.global_regs].mean(dim=1)
     return square_pool(h, batch)
@@ -187,15 +211,19 @@ def board_mean_pool(h: torch.Tensor, batch: Batch) -> torch.Tensor:
 
 
 class PointerHead(nn.Module):
-    """``score = f(h_src)^T g(h_dst) / sqrt(dim)`` over supplied moves (D1)."""
+    """``score = f(h_src)^T g(h_dst) / sqrt(dim)`` over supplied moves (D1), plus, with
+    ``promotion_offset``, a learned per-piece offset for a promotion: ``promo(h_dst)[piece]``,
+    one logit per piece type read from the destination token (section 8.1: "Promotions add a
+    learned per-piece logit offset"; Chessformer's promotion bias). The policy has it (D1,
+    M20); the opponent-reply head is built without it, as at N1 (D4's prototype is rebuilt
+    with the heads)."""
 
-    def __init__(self, d_model: int, dim: int, promotion: str = "none", n_piece_types: int = 13, bias: bool = True) -> None:
+    def __init__(self, d_model: int, dim: int, promotion_offset: bool, n_piece_types: int = 13, bias: bool = True) -> None:
         super().__init__()
         self.dim = dim
         self.src = nn.Linear(d_model, dim, bias=bias)  # f
         self.dst = nn.Linear(d_model, dim, bias=bias)  # g
-        self.promotion = promotion
-        self.promo = nn.Linear(d_model, n_piece_types, bias=bias) if promotion == "offset" else None
+        self.promo = nn.Linear(d_model, n_piece_types, bias=bias) if promotion_offset else None
 
     def forward(self, h: torch.Tensor, moves: torch.Tensor, valid: torch.Tensor, square_mask: torch.Tensor) -> torch.Tensor:
         """Logits ``(B, M)``; ``moves`` ``(B, M, 3)`` hold (src token, dst token, promotion)."""
@@ -218,52 +246,44 @@ class PointerHead(nn.Module):
         return score.masked_fill(~valid, float("-inf"))
 
 
-def submit_register_state(h: torch.Tensor, batch: Batch, register: int) -> torch.Tensor:
-    """The final trunk state ``(B, d)`` the submit logit is read from (D8): global register
-    ``register``; with no global registers (an ablation-3 arm) the mean of the square tokens,
-    as ``global_register_pool`` falls back."""
-    if batch.global_regs > 0:
-        return h[:, batch.body_len + register]
-    return square_pool(h, batch)
-
-
 class SubmitHead(nn.Module):
-    """Register D8 (section 8.2): the submit action's own policy logit, read from a global
-    register (``NetConfig.submit_register``) - by a learned linear readout (``"linear"``) or
-    by the policy's bilinear form with the register at both ends (``"pointer"``,
-    ``NetConfig.submit_head``). Returns the unmasked logit ``(B,)``; the model masks it."""
+    """Register D8 (section 8.2): the submit action's own policy logit, read from the pooled
+    global registers as the value head is (``global_register_pool``: their mean - M20, so no
+    register is assigned a role and D7 holds) - by a learned linear readout (``"linear"``) or by
+    the policy's bilinear form with the pooled state at both ends (``"pointer"``;
+    ``NetConfig.submit_head``, the readout's form a placeholder - spec issue 109). Returns the
+    unmasked logit ``(B,)``; the model masks it."""
 
     def __init__(self, cfg: NetConfig) -> None:
         super().__init__()
         self.form = cfg.submit_head
-        self.register = cfg.submit_register
         # Made without drawing from the RNG; drawn from D8's own generator
-        # (``model._init_weights``), so that a seed draws every older parameter as before N5.
+        # (``model._init_weights``), so that it changes no other parameter's draw.
         self.out = nn.utils.skip_init(nn.Linear, cfg.d_model, 1) if self.form == "linear" else None
 
     def forward(self, h: torch.Tensor, batch: Batch, policy: PointerHead) -> torch.Tensor:
-        r = submit_register_state(h, batch, self.register)
+        r = global_register_pool(h, batch)
         if self.out is not None:
             return self.out(r).squeeze(-1)
         return (policy.src(r) * policy.dst(r)).sum(dim=-1) / math.sqrt(policy.dim)
 
 
-#: The value head's hidden activations (``NetConfig.head_activation``).
-HEAD_ACTIVATION_FNS = {"gelu": torch.nn.functional.gelu, "mish": torch.nn.functional.mish}
-
-
 class ValueHead(nn.Module):
+    """``out(mish(hidden(pooled)))``: F6's Mish in the head's hidden layer, whatever the trunk
+    FFN's activation (6y's squared ReLU is a trunk-only arm - CHECKPOINT 8)."""
+
     def __init__(self, cfg: NetConfig) -> None:
         super().__init__()
         self.hidden = nn.Linear(cfg.d_model, cfg.value_hidden)
         self.out = nn.Linear(cfg.value_hidden, cfg.value_bins)
-        self.activation = HEAD_ACTIVATION_FNS[cfg.head_activation]
 
     def forward(self, pooled: torch.Tensor) -> torch.Tensor:
-        return self.out(self.activation(self.hidden(pooled)))
+        return self.out(torch.nn.functional.mish(self.hidden(pooled)))
 
 
 class AuxHeads(nn.Module):
+    """D4's heads (the module docstring): what each reads is the model's (``T5DNet.heads``)."""
+
     def __init__(self, cfg: NetConfig) -> None:
         super().__init__()
         d = cfg.d_model
@@ -273,4 +293,4 @@ class AuxHeads(nn.Module):
         self.effort = nn.Linear(d, cfg.effort_bins)
         self.board = nn.Linear(d, len(BOARD_HEADS))
         self.square = nn.Linear(d, cfg.n_square_labels)
-        self.opp_reply = PointerHead(d, cfg.opp_policy_dim, promotion=cfg.policy_promotion)
+        self.opp_reply = PointerHead(d, cfg.opp_policy_dim, promotion_offset=False)
