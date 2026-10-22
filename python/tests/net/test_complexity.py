@@ -124,6 +124,7 @@ def _by_path(tree: SearchTree) -> dict[tuple, object]:
 
 def _identical(a, b) -> bool:
     names = ("trunk", "value_logits", "policy_logits", "opp_reply_logits", "board_logits", "square_logits", "wdl_logits", "effort_logits")
+    names += ("short_term", "value_error")
     return all(torch.equal(getattr(a, n), getattr(b, n)) for n in names)
 
 

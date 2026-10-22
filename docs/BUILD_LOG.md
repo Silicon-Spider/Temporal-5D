@@ -1670,7 +1670,7 @@ width (M22)", "The CHECKPOINT 8 figures"). Found on the way: the ruling's premis
 | C16 | not built (rule) | Deferred; last, only if node-starved |
 | C21 | not built (rule) | Refused; a mutant that snapshots is caught by the tests |
 | D1 | built, tested | Network N1's pointer policy over the moves the engine supplies - in search, legal or unknown, unknowns verified when first selected (E5a, E6a), as §8.1 now says; the game API's expansion stays pseudo-legal until ABI round 2's `legal_moves` option. The promotion offset (CHECKPOINT 6, M20) is the v1 (`lane/net` N-M20): a learned per-piece logit read from the destination token, always on in the policy - `policy_promotion` and its `none` arm removed (+3,341 parameters). The opponent-reply head has none, as built at N1: which other pointer heads carry it, and the offset's form, are issue 222 |
-| D3 | engine side built, tested (engine ABI round 2a); network heads built in part (the pre-CHECKPOINT-7 head) | The search (round 2a): WDL is the search's value - W − L backed up, the draw probability D beside it on every node and edge (issue 148) - the categorical optional and read only as an uncertainty signal (6m's switch, issue 149), the error head's output and moves-left per leaf, all through one new deliver call (`t5d_search_deliver_evaluations` and its `t5d_evaluations` struct; the old `t5d_search_deliver`, which backed up the categorical's mean, retired); each root child's search (q, d) and network WDL, moves-left and error recorded, and the root's own; the built-in evaluators give a WDL. The Python evaluator delivers the network's WDL, categorical and moves-left, and its error output once the net lane names one `value_error` (NaN until then; the name pinned by a test, `evaluator.ERROR_HEAD_FIELD`); `Evaluation.value_mean` is now W − L. The network: N1's 51-bin value head over the pooled global registers, smoke-trained on the outcome. Its MLP is Mish (F6, CHECKPOINT 8). Pooling as M20 rules it (`lane/net` N-M20): the 51-bin head, WDL and the short-term value all read the mean of the global registers - WDL and the short-term value moved off the squares with `aux_global_pool` (issue 223); a test holds them invariant to permuting the registers' final states. Corrected at CHECKPOINT 7 (reversal 28): the categorical over the root search value (HL-Gauss), short-term values, the error head - the net lane's heads |
+| D3 | built, tested | The search (engine ABI round 2a): WDL is the search's value - W − L backed up, the draw probability D beside it on every node and edge (issue 148) - the categorical optional and read only as an uncertainty signal (6m's switch, issue 149), the error head's output and moves-left per leaf, all through one deliver call (`t5d_search_deliver_evaluations`); each root child's search (q, d) and network WDL, moves-left and error recorded, and the root's own. The network (`lane/net` N-D3, as corrected at CHECKPOINT 7): four heads over the global registers' mean, FP32, the acting player's perspective (`heads.ValueHeads`) - one shared hidden layer with Mish (N1's value MLP), then WDL (the value search uses, `NetOutput.search_value()` = W − L), the 51-bin categorical over the root search value, short-term values at `short_term_horizons` (2, 5, 16 turns: placeholders, issue 305's unit) on [-1, 1], and the error head (`NetOutput.value_error`, softplus, the name the evaluator reads); N1's 51-bin short value head gone. The evaluator delivers all four's search inputs (WDL, categorical, error, moves-left) through the C step API, tested against the search's record of its root, with the 6m signal present at every leaf under either `uncertainty_source`. Losses (`train/losses.py`): WDL on the result with the `q_ratio` blend (0), the categorical on HL-Gauss of the root search value of full searches only, squared error on the short-term values, Huber on the error head's stop-gradient target - every unstated detail a placeholder (issue 231); the record-to-target builder is M21's. Every parameter that existed before is drawn as before (`d3_seed`; the retired head's draws kept) |
 | D4 | built in part | Network N1's aux heads: WDL, moves-left, short value, effort, per-board, per-square (the label set stands as v1, M20; its colour-specific labels relabelled ours/theirs under A7, `lane/net` N-A7, issue 226) and the opponent reply, always built at weight 1.0. M20 in the code (`lane/net` N-M20): moves-left counts turns - one player's action each (issue 305) - in the head, its helper and the losses' docs (the record-to-target builder is M21's, and so is whether the action in progress counts: issue 224); moves-left and effort read the squares, WDL and the short value the global registers (D3; issue 223). To change (CHECKPOINT 7): the soft policy added (weight 8), the reply a prototype behind its flag at 0.15 with §15.2's mapping test - the net lane's heads, after engine round 2 (the reply head is left as built until then); the per-square label generator is step 2's. The effort label's source is in the search (engine ABI round 2c: `root_best_since`, the root's visits when its most visited child last changed - issue 154) |
 | D5 | not started (rule) | A training principle |
 | D6 | built (flag) | `board_reduction`, awaiting 6j |
@@ -1685,7 +1685,7 @@ width (M22)", "The CHECKPOINT 8 figures"). Found on the way: the ruling's premis
 | E2, E3 | built behind flags, tested | Off; awaiting 6m and 6t. They read a node's uncertainty signal: the categorical's variance by default, the error head's output under 6m's switch (`uncertainty_source`, engine ABI round 2a; issue 149); their constants placeholders twice over (issues 81, 149) |
 | E8 | not started | Behind its flag (6v), with E11 in step 2 |
 | E6 | not built (rule) | Refused |
-| F1, F2 | built, tested | 22,973,907 parameters (F1 after F5, B15, M20 and A6: 21,338,634 after F5 - 20,736 fewer than N5's 21,359,370, gain-only norms, no Q/K/V biases, spec issue 203 - plus B15's 1,623,168, spec issue 210, plus M20's 3,337: the policy's promotion offset, 3,341, less the learned register coordinates, 4 - plus A6's 8,768: the turn-state counts' MLP, spec issue 230); the L24-ff12 preset, 46,903,315 (F2: 44,468,563 and B15's 2,434,752 over 24 layers). Unchanged by F6's Mish in the heads, by B11's fold (its flag is off; with it on, 40 scalars where there were 48) and by B16 (its 304 are in a network of the cached configuration only: 22,974,211 with `attn_scope = "block_causal"`) and B17 (off; with it on, 6,115,328 more - 29,089,235, or 23,738,323 with the vectors shared by the heads; spec issue 218) |
+| F1, F2 | built, tested | 22,961,828 parameters (F1 after F5, B15, M20, A6 and D3: 21,338,634 after F5 - 20,736 fewer than N5's 21,359,370, gain-only norms, no Q/K/V biases, spec issue 203 - plus B15's 1,623,168, spec issue 210, plus M20's 3,337: the policy's promotion offset, 3,341, less the learned register coordinates, 4 - plus A6's 8,768: the turn-state counts' MLP, spec issue 230 - less D3's 12,079: three short-term outputs, 771, and the error head, 257, on the value MLP's shared layer, and N1's 51-bin short value head, 13,107, gone, issue 231); the L24-ff12 preset, 46,891,236 (F2: 44,456,484 and B15's 2,434,752 over 24 layers). Unchanged by F6's Mish in the heads, by B11's fold (its flag is off; with it on, 40 scalars where there were 48) and by B16 (its 304 are in a network of the cached configuration only: 22,962,132 with `attn_scope = "block_causal"`) and B17 (off; with it on, 6,115,328 more - 29,077,156, or 23,726,244 with the vectors shared by the heads; spec issue 218) |
 | F5 | built, tested | Network: RMSNorm-style norms (a learned gain, no centring, no bias; FP32) everywhere in the trunk, no Q/K/V biases, the attention-output and FFN biases kept (spec issue 200), pre-norm. 6y's arm - post-norm with DeepNet's initialisation, `norm_placement="post"` - through the dense trunk and the cached path, its unstated details placeholders (issue 201); smolgen has no norm to keep (issue 202) |
 | F6 | built, tested | Network: Mish in the trunk FFN (`ffn_activation="mish"`) and in every head's hidden layers - the value head's MLP, the only head with one (CHECKPOINT 8's ruling on issue 204, `lane/net` N-F6heads: no switch - `head_activation` and its GELU removed); 6y's arm, squared ReLU (`"squared_relu"`), in the trunk only, through the dense trunk and the cached path - tested: no head follows it. Outside F6's words, kept as built: the embedding's Δt MLP (GELU) and B12's smolgen (SiLU) - spec issue 221 |
 | F3 | not built (rule) | Refused |
@@ -3328,6 +3328,33 @@ superseded or made moot says so; nothing is deleted.
     read no global register under the block-causal scope). The engine's caches key on the
     moves made (issue 302); the other two are functions of the state. For the user with A6
     (and ablation 3, issue 225): whether this form stands. Proposed edit 171.
+231. **D3's value heads: the form of what section 8.3 leaves unstated** (§8.3, §12.4, §12.5,
+    §13.1 6j/6m/6z; register D3, D4, I2, I10, I15; issues 148, 149, 223, 305). Built (`lane/net`
+    N-D3), each a PLACEHOLDER of a committed-class silence, for the user with D3: (a) **The
+    heads' shape**: one shared hidden layer (N1's value MLP, 256 -> 256, Mish - F6) over the
+    global registers' mean feeds all four outputs (KataGo's value head shares one; §8.3 says
+    "four heads" and nothing of their layers) - fixed in code. (b) **Short-term values**: three
+    (`NetConfig.short_term_horizons`, "two or three"), at mean horizons 2, 5 and 16 turns -
+    KataGo's 6, 16 and 50 in Go scaled by about a third, a 5D game's length unmeasured (register
+    K, M18) - in issue 305's unit (one player's action); each a scalar on [-1, 1] (tanh) trained
+    by squared error - not a categorical or a WDL per horizon (fixed in code). How the target
+    averages future search values (the weights - KataGo's are exponential with mean horizon h -,
+    the result past the game's end, the sign across the players' turns) is the record-to-target
+    builder's (M21, I15). (c) **The error head's target**: `(short_term[h] - (W - L))^2` with
+    the network's own W - L taken without gradient (KataGo's), h the shortest horizon
+    (`LossConfig.error_horizon = 0`), Huber loss (delta 1) on a softplus output - "the value" read
+    as D3's "the value search uses", not the categorical's mean. (d) **HL-Gauss**: sigma 0.75 bin
+    widths (Farebrother et al.'s ratio; 0.03 at 51 bins), each bin spanning its centre +- half
+    a width (support [-1.02, 1.02]), the mass outside dropped and the rest renormalised. (e)
+    **Masks**: the categorical and the policy train on full searches only (`Targets.full_search`;
+    §12.5's "only full-search moves emit policy targets", §8.3's "of full searches"); short-term
+    and error targets wherever given (NaN: none). (f) **Weights**: 1.0 each (6j); `q_ratio` 0
+    (6z), its blend towards the search's root WDL from the backed-up (q, d) (issue 148) - moot at
+    0. (g) **Draws**: the categorical and WDL readouts are drawn where N1's value output and WDL
+    head were, the new outputs from a generator of their own, and the retired 51-bin short value
+    head's draws are kept in the global stream, so no parameter that existed before changed.
+    The search reads the WDL, the categorical (6m's default), the error head and moves-left;
+    the short-term outputs are trained, never delivered. Proposed edit 172.
 
 <!-- A new list, so that the numbers from 140 render as written. -->
 
@@ -4241,7 +4268,8 @@ struck through, where nothing of it is left to apply); the others stand as writt
     register coordinates -4): F1 22,965,139 (21,341,971 without the table), F2 46,894,547
     (44,459,795) - the figures this edit should carry.* *Moved again by A6's turn-state MLP
     (`lane/net`, N-A6: +8,768, issue 230): F1 22,973,907 (21,350,739 without the table), F2
-    46,903,315 (44,468,563).*
+    46,903,315 (44,468,563).* *Moved by D3's value heads (`lane/net`, N-D3: -12,079, issue 231):
+    F1 22,961,828 (21,338,660 without the table), F2 46,891,236 (44,456,484).*
 157. **§6.1 and register B14**: now - "FlexAttention exploits block sparsity losslessly".
     Proposed - add: "register rows that read every key on a masked head (v1's rule) are
     computed apart - a second call, or the registers ordered after the squares - or the
@@ -4370,6 +4398,15 @@ struck through, where nothing of it is left to apply); the others stand as writt
     view takes the turn state its boards give that colour". Why: the input encoding is
     committed-class and the form is unstated; and the anchor's counts are its acting
     player's, so the other colour's refresh view needs counts of its own (issue 230).
+172. **§8.3 and register D3 (with §12.4's value rows)**: now - "Short-term value at two or
+    three horizons ... placeholders scaled to 5D game length"; "An error head, predicting the
+    squared gap between the value and the short-term value"; "each scalar target smoothed into
+    neighbouring bins by a Gaussian (HL-Gauss ...)". Proposed - add the forms as built or as
+    ruled: "the four share one hidden layer"; "each horizon a scalar on [-1, 1], squared error;
+    horizons in turns (one player's action), placeholders 2, 5 and 16"; "the error head's target
+    is the squared gap between the short-term value at the shortest horizon and the network's
+    own W - L, taken without gradient (KataGo's)"; "sigma three quarters of a bin width". Why:
+    each is committed-class and unstated (issue 231).
 
 <!-- A new list, so that the numbers from 110 render as written. -->
 
@@ -4631,3 +4668,8 @@ struck through, where nothing of it is left to apply); the others stand as writt
   `exploration_scale`, `forced_visits`, `steered_visits`), the summary's `root_key`,
   `root_cpuct` and `root_best_since`, `t5d_game_expand`'s `legal_moves` with its budget;
   forced playouts not built (issues 153-155). Register I2, I15, D4; edits 124-126.
+- **2026-10-23 - network D3** (`lane/net`): the value heads as corrected at CHECKPOINT 7 -
+  WDL the search's value, the categorical over the root search value (HL-Gauss), three
+  short-term values, the error head (`value_error`), FP32 from the global registers' mean; their
+  losses with clear target interfaces; delivered to the search through the C step API. F1
+  22,961,828. Register D3, F1; issue 231; edits 156, 172.

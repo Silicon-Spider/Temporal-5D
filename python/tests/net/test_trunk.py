@@ -122,7 +122,7 @@ def test_norms_and_biases_where_section_9_3_puts_them(placement):
         assert attn.q_proj.bias is None and attn.k_proj.bias is None and attn.v_proj.bias is None, "no Q/K/V biases"
         assert attn.out_proj.bias is not None and ffn.lin_in.bias is not None and ffn.lin_out.bias is not None
     outside = {name: m for name, m in model.named_modules() if isinstance(m, torch.nn.Linear) and not name.startswith("trunk.")}
-    assert {"value.hidden", "value.out", "policy.src", "aux.wdl", "embed.dt_in", "smolgen.context"} <= set(outside)
+    assert {"value.hidden", "value.categorical", "value.wdl", "policy.src", "embed.dt_in", "smolgen.context"} <= set(outside)
     assert all(m.bias is not None for m in outside.values()), "the heads, the embedding and smolgen keep their biases"
     assert isinstance(model.smolgen, BoardPairSmolgen)
     assert not any(isinstance(m, RMSNorm) for m in model.smolgen.modules())
@@ -271,16 +271,24 @@ def test_the_ffn_is_its_formula(activation):
 
 @pytest.mark.parametrize("ffn_activation", ["mish", "squared_relu"])
 def test_every_heads_hidden_layer_is_mish(ffn_activation):
-    """F6 (CHECKPOINT 8): Mish "in every head's hidden layers, the value head included" - the
-    value head's MLP is the only head with one (the others are linear or bilinear) - by hand in
-    FP64, under the v1's FFN and under 6y's squared ReLU alike; and it is not stage N1's GELU."""
+    """F6 (CHECKPOINT 8): Mish "in every head's hidden layers, the value head included" - D3's
+    value heads' shared layer is the only hidden layer among the heads (the others are linear or
+    bilinear) - by hand in FP64, under the v1's FFN and under 6y's squared ReLU alike, for each of
+    its four outputs; and it is not stage N1's GELU."""
     model = build_model(NetConfig(trunk_dtype="fp32", n_layers=1, ffn_activation=ffn_activation), seed=7).eval()
     pooled = torch.randn(4, 256, generator=torch.Generator().manual_seed(7))
-    hidden = model.value.hidden(pooled).double()
-    expected = _mish(hidden) @ model.value.out.weight.double().T + model.value.out.bias.double()
-    out = model.value(pooled)
-    assert torch.allclose(out.double(), expected, atol=1e-5)
-    assert not torch.allclose(out, model.value.out(F.gelu(model.value.hidden(pooled))), atol=1e-3), "not N1's GELU"
+    x = _mish(model.value.hidden(pooled).double())
+
+    def lin(module):
+        return x @ module.weight.double().T + module.bias.double()
+
+    wdl, categorical, short_term, error = model.value(pooled)
+    assert torch.allclose(wdl.double(), lin(model.value.wdl), atol=1e-5)
+    assert torch.allclose(categorical.double(), lin(model.value.categorical), atol=1e-5)
+    assert torch.allclose(short_term.double(), torch.tanh(lin(model.value.short_term)), atol=1e-5)
+    assert torch.allclose(error.double(), F.softplus(lin(model.value.error)).squeeze(-1), atol=1e-5)
+    gelu = model.value.categorical(F.gelu(model.value.hidden(pooled)))
+    assert not torch.allclose(categorical, gelu, atol=1e-3), "not N1's GELU"
 
 
 def test_squared_relu_reaches_no_head():

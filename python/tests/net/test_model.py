@@ -38,7 +38,7 @@ def test_output_shapes_default_config(model_default, n):
     assert out.trunk.shape == (1, t, 256)
     assert out.policy_logits.shape == (1, len(state.moves))
     assert out.opp_reply_logits.shape == (1, len(state.opp_moves))
-    assert out.value_logits.shape == (1, 51) and out.short_value_logits.shape == (1, 51)
+    assert out.value_logits.shape == (1, 51) and out.short_term.shape == (1, 3) and out.value_error.shape == (1,)
     assert out.wdl_logits.shape == (1, 3) and out.moves_left_log.shape == (1,)
     assert out.effort_logits.shape == (1, 16)
     assert out.board_logits.shape == (1, n, len(BOARD_HEADS))
@@ -49,7 +49,8 @@ def test_output_shapes_default_config(model_default, n):
         "wdl_logits",
         "moves_left_log",
         "opp_reply_logits",
-        "short_value_logits",
+        "short_term",
+        "value_error",
         "board_logits",
         "square_logits",
         "effort_logits",
@@ -130,16 +131,25 @@ def test_random_init_is_nontrivial(model_fp32):
     assert ratio.median() > 3.0
 
 
-def test_value_distribution_and_helpers(model_fp32):
+def test_value_heads_and_helpers(model_fp32):
+    """D3: the value search uses is W - L of the WDL (``search_value``); the categorical's mean
+    and variance are its own (the variance the search's default uncertainty signal, 6m); the
+    short-term values lie on [-1, 1], one per horizon, and the error head's output is >= 0."""
     out = model_fp32(collate([synthetic_state(9, 4), synthetic_state(10, 7)]))
+    wdl = torch.softmax(out.wdl_logits, -1)
+    assert torch.allclose(out.wdl_probs(), wdl) and torch.allclose(out.search_value(), wdl[:, 0] - wdl[:, 2])
+    assert torch.all(out.search_value().abs() <= 1)
     probs = out.value_probs()
     assert torch.allclose(probs.sum(-1), torch.ones(2), atol=1e-6)
     centres = value_bin_centres(51)
     assert centres[0] == -1 and centres[25] == 0 and centres[50] == 1
     mean = (probs * centres).sum(-1)
-    assert torch.allclose(out.value_mean(), mean)
-    assert torch.allclose(out.value_variance(), (probs * centres**2).sum(-1) - mean**2, atol=1e-6)
-    assert torch.all(out.value_variance() >= 0)
+    assert torch.allclose(out.categorical_mean(), mean)
+    assert torch.allclose(out.categorical_variance(), (probs * centres**2).sum(-1) - mean**2, atol=1e-6)
+    assert torch.all(out.categorical_variance() >= 0)
+    assert not torch.allclose(out.categorical_mean(), out.search_value(), atol=1e-3), "the categorical is not the value"
+    assert out.short_term.shape == (2, len(model_fp32.cfg.short_term_horizons)) and torch.all(out.short_term.abs() <= 1)
+    assert torch.all(out.value_error >= 0) and out.short_term.std() > 1e-3
     # Two-hot targets have the value as their mean, and sum to one.
     v = torch.tensor([-1.0, -0.37, 0.0, 0.5, 0.999, 1.0])
     target = value_to_twohot(v, 51)
@@ -148,18 +158,47 @@ def test_value_distribution_and_helpers(model_fp32):
     assert torch.all(categorical_variance(target) < (2 / 50) ** 2)
 
 
+def test_the_value_heads_run_in_fp32_under_bf16_autocast(model_default):
+    """D3 and G1: "FP32" - the value heads run at FP32 behind the default BF16 trunk, even inside
+    a caller's BF16 autocast: each output is float32 and equals an FP64 recomputation from the
+    trunk's (FP32) output to FP32 rounding, which a BF16 head (~3 significant digits) would not."""
+    batch = collate([synthetic_state(21, 3), synthetic_state(22, 5)])
+    out = model_default(batch, return_trunk=True)
+    with torch.autocast("cpu", dtype=torch.bfloat16):
+        inside = model_default.heads(out.trunk, batch)
+    v = model_default.value
+    r = out.trunk[:, batch.body_len : batch.body_len + batch.global_regs].double().mean(1)
+    x = torch.nn.functional.mish(r @ v.hidden.weight.double().T + v.hidden.bias.double())
+
+    def lin(m):
+        return x @ m.weight.double().T + m.bias.double()
+
+    expected = {
+        "wdl_logits": lin(v.wdl),
+        "value_logits": lin(v.categorical),
+        "short_term": torch.tanh(lin(v.short_term)),
+        "value_error": torch.nn.functional.softplus(lin(v.error)).squeeze(-1),
+    }
+    for name, ref in expected.items():
+        for o in (out, inside):
+            got = getattr(o, name)
+            assert got.dtype == torch.float32, name
+            assert torch.allclose(got.double(), ref, atol=1e-5), (name, float((got.double() - ref).abs().max()))
+
+
 #: The heads M20's dispositions route (``T5DNet.heads``): the value-type heads and D8's submit
 #: logit read the mean of the global registers (D3, section 8.3; "submit logit -> pooled global
 #: registers"), the other global auxiliary heads the mean of every square ("aux pooling ->
 #: squares"; section 12.4, B8, D7).
-REGISTER_POOLED = ("value_logits", "wdl_logits", "short_value_logits", "submit_raw")
+REGISTER_POOLED = ("value_logits", "wdl_logits", "short_term", "value_error", "submit_raw")
 SQUARE_POOLED = ("moves_left_log", "effort_logits")
 
 
 def test_each_global_head_reads_its_pool():
-    """M20 and D3: the 51-bin value, WDL and the short-term value read the mean of the global
-    registers, as the submit logit does (D8); moves-left and search effort the mean of every
-    square token. Per-board registers feed none of them, nor the per-board heads."""
+    """M20 and D3: the four value heads - WDL, the categorical, the short-term values, the error
+    head - read the mean of the global registers, as the submit logit does (D8); moves-left and
+    search effort the mean of every square token. Per-board registers feed none of them, nor
+    the per-board heads."""
     model = build_model(NetConfig(trunk_dtype="fp32"), seed=0).eval()
     batch = collate([synthetic_state(16, 4), synthetic_state(17, 2)])
     out = model(batch, return_trunk=True)
@@ -167,9 +206,9 @@ def test_each_global_head_reads_its_pool():
     sq = batch.square_mask
     registers = h[:, batch.body_len : batch.body_len + batch.global_regs].mean(1)
     squares = (h * sq[..., None]).sum(1) / sq.sum(1, keepdim=True)
-    assert torch.allclose(out.value_logits, model.value(registers), atol=1e-5)
-    assert torch.allclose(out.wdl_logits, model.aux.wdl(registers), atol=1e-5)
-    assert torch.allclose(out.short_value_logits, model.aux.short_value(registers), atol=1e-5)
+    wdl, categorical, short_term, value_error = model.value(registers)
+    assert torch.allclose(out.wdl_logits, wdl, atol=1e-5) and torch.allclose(out.value_logits, categorical, atol=1e-5)
+    assert torch.allclose(out.short_term, short_term, atol=1e-5) and torch.allclose(out.value_error, value_error, atol=1e-5)
     assert torch.allclose(out.submit_raw, model.submit.out(registers).squeeze(-1), atol=1e-5)
     assert torch.allclose(out.moves_left_log, model.aux.moves_left(squares).squeeze(-1), atol=1e-5)
     assert torch.allclose(out.effort_logits, model.aux.effort(squares), atol=1e-5)
@@ -399,3 +438,14 @@ def _fields(state: PositionState) -> dict:
         "global_regs",
     )
     return {n: getattr(state, n) for n in names}
+
+
+def test_the_short_term_horizons_are_a_parameter():
+    """D3's "two or three horizons" (placeholders in turns, spec issue 231): one output per
+    horizon; the horizons must be positive and increasing."""
+    assert NetConfig().short_term_horizons == (2.0, 5.0, 16.0)
+    two = build_model(NetConfig(trunk_dtype="fp32", n_layers=1, short_term_horizons=(3.0, 12.0)), seed=0).eval()
+    assert two(collate([synthetic_state(23, 2)])).short_term.shape == (1, 2)
+    for bad in ((), (0.0, 4.0), (5.0, 2.0), (2.0, math.inf)):
+        with pytest.raises(ValueError, match="short_term_horizons"):
+            NetConfig(short_term_horizons=bad).validate()

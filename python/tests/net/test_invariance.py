@@ -34,7 +34,7 @@ ATOL = 1e-5  # FP32 trunk: reordering changes only floating-point summation orde
 
 
 def _assert_same(a, b, atol=ATOL, board_perm=None, token_perm=None):
-    for name in ("value_logits", "wdl_logits", "moves_left_log", "short_value_logits", "effort_logits"):
+    for name in ("value_logits", "wdl_logits", "moves_left_log", "short_term", "value_error", "effort_logits"):
         x, y = getattr(a, name), getattr(b, name)
         assert torch.allclose(x, y, atol=atol), (name, float((x - y).abs().max()))
     for name, valid in (("policy_logits", a.move_valid), ("opp_reply_logits", a.opp_move_valid)):

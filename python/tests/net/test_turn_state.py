@@ -187,7 +187,7 @@ def test_each_count_reaches_the_outputs(registers, scope):
         ("moves", replace(s, moves_made=k + 2)),
     ):
         out = model(collate([t]))
-        for head in ("value_logits", "wdl_logits", "short_value_logits", "moves_left_log", "effort_logits", "submit_raw"):
+        for head in ("value_logits", "wdl_logits", "short_term", "value_error", "moves_left_log", "effort_logits", "submit_raw"):
             assert not torch.allclose(getattr(base, head), getattr(out, head)), (name, head)
         assert not torch.allclose(base.policy_logits[base.move_valid], out.policy_logits[out.move_valid]), name
 

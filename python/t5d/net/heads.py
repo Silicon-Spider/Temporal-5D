@@ -16,34 +16,45 @@ submitting is possible (T5), masked to -inf unless it is legal (C4), and normali
 with the move logits - one distribution over the moves and submit (``NetOutput``). The
 readout's form (linear, or the policy's bilinear form) is not ruled: ``NetConfig.submit_head``.
 
-**Value (D3, section 8.3).** 51-bin categorical over outcomes in [-1, 1], bin centres
-``-1 + 2k/50``; pooled by mean from the global registers (D3: "mean-pooled over the global
-registers"; M20: "value pooling -> mean"), through a hidden layer with Mish (register
-F6 since CHECKPOINT 8: "Mish ... in the trunk FFN and every head's hidden layers"; ablation
-6y's squared ReLU is "the trunk-only arm", so no head follows ``NetConfig.ffn_activation``).
-The value head's is the only hidden layer among the heads: the others are linear or
-bilinear. Helpers give the distribution, its
-mean and its variance (what variance-scaled cPUCT and the time manager consume). The
-value is from the perspective of the **acting player** (``PositionState.acting_player``,
-register D8: the player whose action is in progress until it submits - the present's colour,
-``h_present & 1``, except once the present has shifted inside the action) - a target
-convention for training, stated here so that every consumer reads it the same way; it is the
-search's (``t5d/capi_search.h``: values "from the perspective of the leaf's acting
-player").
+**Value (D3, section 8.3, as corrected at CHECKPOINT 7).** "Four heads, each pooled by mean
+from the global registers, FP32, from the acting player's perspective" (``ValueHeads``): one
+hidden layer with Mish over the registers' mean (register F6 since CHECKPOINT 8: "Mish ... in
+the trunk FFN and every head's hidden layers"; ablation 6y's squared ReLU is "the trunk-only
+arm", so no head follows ``NetConfig.ffn_activation``), shared by four outputs - the shared
+layer a placeholder fixed in code (KataGo's value head shares one; spec issue 231):
+
+* **WDL** on the game result - 3 logits (win, draw, loss): **the value search uses**, W - L
+  (``wdl_value``; the search backs it up with D beside it, spec issue 148).
+* **The categorical**, 51 bins centred on ``-1 + 2k/50`` "over the root search value of full
+  searches" (recomputed from the pruned visits, section 12.2), its target "smoothed into
+  neighbouring bins by a Gaussian" (``hl_gauss``: HL-Gauss, Farebrother et al. 2024; its sigma a
+  placeholder, ``train.losses.LossConfig``). Not the value: its variance (and, with E7, its
+  overlap) is the search's default uncertainty signal (6m; ``categorical_variance``).
+* **Short-term values** at ``NetConfig.short_term_horizons`` (turns, issue 305's unit - one
+  player's action): one scalar each on [-1, 1] (tanh), the exponentially averaged future search
+  values of section 8.3 - their number, horizons and form placeholders (spec issue 231).
+* **The error head** (``value_error``), >= 0 (softplus): the predicted squared gap between the
+  value and the short-term value at one horizon (``LossConfig.error_horizon``; KataGo's
+  uncertainty target) - trained from the start; 6m decides whether it or the categorical's
+  variance feeds search (the engine's ``uncertainty_source``, spec issue 149).
+
+Pooled by mean from the global registers (D3; M20: "value pooling -> mean"): pooling all sixteen
+assigns none a role, so D7 holds (D8's argument for the submit logit). Every value output is
+from the perspective of the **acting player** (``PositionState.acting_player``, register D8:
+the player whose action is in progress until it submits - the present's colour,
+``h_present & 1``, except once the present has shifted inside the action) - the target
+convention, and the search's (``t5d/capi_search.h``: values "from the perspective of the
+leaf's acting player").
 
 **Auxiliary heads (D4, section 12.4).** Linear heads ("head compute is negligible -
-linear heads over d = 256"). Where each reads (M20; ``model.T5DNet.heads``): the value-type
-heads - WDL and the short-term value, beside the 51-bin value head - the mean of the
-global registers (``global_register_pool``; D3 and section 8.3: "each pooled by mean from
-the global registers"); the other global heads - moves-left, search effort - the mean of
-every square token (``square_pool``; M20: "aux pooling -> squares" - section 12.4:
-"Auxiliary heads pool from the trunk; hard-assigning registers to auxiliary quantities
-conscripts the scratch space", register B8 and D7); the per-board heads the mean of each
-board's *square* tokens (section 9.2), so the per-board registers stay free; the
-per-square heads every token. Pooling all sixteen global registers assigns none a role, so
-D7 holds for the value-type heads too (D8's argument for the submit logit).
+linear heads over d = 256"). Where each reads (M20; ``model.T5DNet.heads``): the global
+heads - moves-left, search effort - the mean of every square token (``square_pool``; M20:
+"aux pooling -> squares" - section 12.4: "Auxiliary heads pool from the trunk; hard-assigning
+registers to auxiliary quantities conscripts the scratch space", register B8 and D7); the
+per-board heads the mean of each board's *square* tokens (section 9.2), so the per-board
+registers stay free; the per-square heads every token. D3's value heads, auxiliary targets in
+D4's list, are the value group above (spec issue 223).
 
-* WDL: 3 logits (win, draw, loss for the acting player).
 * Moves-left: one scalar, the predicted ``log1p`` of the number of turns left in the game,
   a turn being one player's action, from a turn start to its submission (D4: "moves-left
   (in turns)"; M20: "moves-left -> turns"; the unit is spec issue 305's, so every D2 arm
@@ -57,7 +68,6 @@ D7 holds for the value-type heads too (D8's argument for the submit logit).
   prototype at CHECKPOINT 7 - behind a flag, weight 0.15, its target mapped onto current
   squares - which the heads' rebuild after engine ABI round 2 builds; this head is left as
   it was until then.
-* Short-horizon value: categorical like the value head.
 * Per board: travelled-into within k plies; timeline still active at game end;
   tactical volatility - one logit each (k is a target-construction parameter).
 * Per square: a small multi-label vector of deep attack facts (``SQUARE_LABELS``; the set
@@ -166,6 +176,29 @@ def value_to_twohot(value: torch.Tensor, n_bins: int = 51) -> torch.Tensor:
     return out
 
 
+def hl_gauss(value: torch.Tensor, n_bins: int = 51, sigma: float = 0.03) -> torch.Tensor:
+    """HL-Gauss (Farebrother et al. 2024, "Stop Regressing"): the categorical target of a scalar
+    value in [-1, 1] - a Gaussian ``N(value, sigma^2)`` integrated over each bin, ``(..., n_bins)``.
+    Bin ``k`` spans its centre (``value_bin_centres``) plus and minus half a bin width, so the
+    support is ``[-1 - w/2, 1 + w/2]`` with ``w = 2 / (n_bins - 1)``; the mass outside the support
+    is dropped and the rest renormalised (the paper's truncation). D3's categorical "over the root
+    search value ... each scalar target smoothed into neighbouring bins by a Gaussian"; sigma is a
+    placeholder (``train.losses.LossConfig.hl_gauss_sigma``, spec issue 231). A non-finite value
+    gives a row of NaN (no target)."""
+    v = value.double()
+    half = 1.0 / (n_bins - 1)
+    edges = value_bin_centres(n_bins, value.device).double()
+    edges = torch.cat([edges - half, edges[-1:] + half])  # (n_bins + 1,)
+    cdf = 0.5 * (1.0 + torch.erf((edges - v[..., None]) / (float(sigma) * math.sqrt(2.0))))
+    mass = cdf[..., 1:] - cdf[..., :-1]
+    return (mass / (cdf[..., -1:] - cdf[..., :1])).to(torch.float32)
+
+
+def wdl_value(wdl_probs: torch.Tensor) -> torch.Tensor:
+    """The value search uses (D3): W - L of a (win, draw, loss) distribution, on [-1, 1]."""
+    return wdl_probs[..., 0] - wdl_probs[..., 2]
+
+
 def effort_bin(visits: torch.Tensor, converged: torch.Tensor, n_bins: int = 16) -> torch.Tensor:
     """Effort target bin: ``floor(log2 visits)`` capped at ``n_bins - 2`` when the decision
     converged within the search; the censored top bin ``n_bins - 1`` when it did not."""
@@ -207,9 +240,8 @@ def square_pool(h: torch.Tensor, batch: Batch) -> torch.Tensor:
 
 
 def global_register_pool(h: torch.Tensor, batch: Batch) -> torch.Tensor:
-    """Mean of the global registers, ``(B, d)`` - what the value-type heads (the 51-bin
-    value, WDL, the short-term value; D3, section 8.3, M20: "value pooling -> mean") and D8's
-    submit logit (section 8.2, M20) read. With no global registers (an ablation-3 arm),
+    """Mean of the global registers, ``(B, d)`` - what D3's value heads (``ValueHeads``:
+    section 8.3, M20: "value pooling -> mean") and D8's submit logits (section 8.2, M20) read. With no global registers (an ablation-3 arm),
     ``square_pool`` instead - as built since N1, a placeholder (no document says what these
     heads read without them; spec issue 225)."""
     if batch.global_regs > 0:
@@ -289,17 +321,30 @@ class SubmitHead(nn.Module):
         return (policy.src(r) * policy.dst(r)).sum(dim=-1) / math.sqrt(policy.dim)
 
 
-class ValueHead(nn.Module):
-    """``out(mish(hidden(pooled)))``: F6's Mish in the head's hidden layer, whatever the trunk
-    FFN's activation (6y's squared ReLU is a trunk-only arm - CHECKPOINT 8)."""
+class ValueHeads(nn.Module):
+    """D3's four value heads over the global registers' mean (the module docstring): a shared
+    hidden layer with F6's Mish (whatever the trunk FFN's activation - 6y's squared ReLU is a
+    trunk-only arm, CHECKPOINT 8), then the WDL logits, the categorical's logits, the short-term
+    values (tanh) and the error head's output (softplus). Returns them in that order.
+
+    ``hidden``, ``categorical`` and ``wdl`` are drawn from the global stream where N1's value
+    MLP and its WDL head were (their shapes unchanged at ``value_hidden = d_model``);
+    ``short_term`` and ``error`` are made without drawing and drawn from a generator of their own
+    (``model.d3_seed``), so D3's rebuild changed no parameter that existed before it."""
 
     def __init__(self, cfg: NetConfig) -> None:
         super().__init__()
         self.hidden = nn.Linear(cfg.d_model, cfg.value_hidden)
-        self.out = nn.Linear(cfg.value_hidden, cfg.value_bins)
+        self.categorical = nn.Linear(cfg.value_hidden, cfg.value_bins)
+        self.wdl = nn.Linear(cfg.value_hidden, 3)
+        self.short_term = nn.utils.skip_init(nn.Linear, cfg.value_hidden, len(cfg.short_term_horizons))
+        self.error = nn.utils.skip_init(nn.Linear, cfg.value_hidden, 1)
 
-    def forward(self, pooled: torch.Tensor) -> torch.Tensor:
-        return self.out(torch.nn.functional.mish(self.hidden(pooled)))
+    def forward(self, pooled: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        x = torch.nn.functional.mish(self.hidden(pooled))
+        short_term = torch.tanh(self.short_term(x))
+        error = torch.nn.functional.softplus(self.error(x)).squeeze(-1)
+        return self.wdl(x), self.categorical(x), short_term, error
 
 
 class AuxHeads(nn.Module):
@@ -308,9 +353,11 @@ class AuxHeads(nn.Module):
     def __init__(self, cfg: NetConfig) -> None:
         super().__init__()
         d = cfg.d_model
-        self.wdl = nn.Linear(d, 3)
         self.moves_left = nn.Linear(d, 1)
-        self.short_value = nn.Linear(d, cfg.value_bins)
+        # N1's 51-bin short value head went with D3's rebuild (the short-term values are the value
+        # group's): its construction-time draw is kept, so that every later parameter is drawn as
+        # before (``model.T5DNet._RETIRED_DRAWS`` keeps its initialisation draw).
+        nn.Linear(d, cfg.value_bins)
         self.effort = nn.Linear(d, cfg.effort_bins)
         self.board = nn.Linear(d, len(BOARD_HEADS))
         self.square = nn.Linear(d, cfg.n_square_labels)

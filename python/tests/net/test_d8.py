@@ -175,7 +175,7 @@ def test_the_acting_player_reaches_the_outputs(registers, scope):
     s = synthetic_state(13, 6, n_timelines=2, regs_per_board=r, global_regs=g)
     one, two = model(collate([s])), model(collate([shifted(s, legal=None)]))
     v = one.move_valid
-    for name in ("value_logits", "wdl_logits", "short_value_logits", "moves_left_log", "effort_logits", "submit_raw"):
+    for name in ("value_logits", "wdl_logits", "short_term", "value_error", "moves_left_log", "effort_logits", "submit_raw"):
         assert not torch.allclose(getattr(one, name), getattr(two, name)), name
     assert not torch.allclose(one.policy_logits[v], two.policy_logits[v])
 

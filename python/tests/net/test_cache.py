@@ -88,7 +88,7 @@ def _random_moves(u: Multiverse, rng: np.random.Generator, n: int, jump_prob: fl
 def _close(a, b, atol_trunk=2e-5, atol=1e-4, what=""):
     """Every output of two evaluations, FP32 tolerance."""
     assert torch.allclose(a.trunk, b.trunk, atol=atol_trunk), (what, float((a.trunk - b.trunk).abs().max()))
-    for name in ("value_logits", "wdl_logits", "moves_left_log", "short_value_logits", "effort_logits", "board_logits"):
+    for name in ("value_logits", "wdl_logits", "moves_left_log", "short_term", "value_error", "effort_logits", "board_logits"):
         assert torch.allclose(getattr(a, name), getattr(b, name), atol=atol), (what, name)
     for name, valid in (("policy_logits", a.move_valid), ("opp_reply_logits", a.opp_move_valid)):
         assert torch.allclose(getattr(a, name)[valid], getattr(b, name)[valid], atol=atol), (what, name)
@@ -98,6 +98,7 @@ def _close(a, b, atol_trunk=2e-5, atol=1e-4, what=""):
 
 def _identical(a, b) -> bool:
     names = ("trunk", "value_logits", "policy_logits", "opp_reply_logits", "board_logits", "square_logits", "wdl_logits", "effort_logits")
+    names += ("short_term", "value_error")
     return all(torch.equal(getattr(a, n), getattr(b, n)) for n in names)
 
 
