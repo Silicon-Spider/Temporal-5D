@@ -119,6 +119,12 @@ def _check(decision: PositionState, points: list[PositionState], played: list[in
                 ends.append((db, cell, steps))
             if any(db in ambiguous for db, _, _ in ends):
                 continue
+            # The content, independently of any lineage walk: the moving piece stands on the same
+            # cell of the decision board it maps to (our turn moved none of the opponent's pieces,
+            # and its own moves this turn left the boards it moves on untouched).
+            sb, scell = divmod(int(src), lay.tokens_per_board)
+            assert int(x.piece[sb, scell]) == int(decision.piece[ends[0][0], scell]) != 0, (src, dst)
+            assert int(x.colour[sb, scell]) == int(decision.colour[ends[0][0], scell]), (src, dst)
             t = (ends[0][0] * tpb + ends[0][1], ends[1][0] * tpb + ends[1][1], promo)
             if t not in seen:
                 seen.add(t)
@@ -198,6 +204,33 @@ def test_two_branches_into_one_board_are_masked_and_the_map_is_per_decision_poin
     facts = _check(decisions[1], points, played, mid)
     assert mid.ambiguous_boards == () and facts["masked"] == 0 and facts["hits"] == len(played)
     assert mid.target.sum() == pytest.approx(1.0) and len(mid.moves) > len(at_start.moves)
+
+
+def test_the_turn_arm_drops_a_turn_with_one_masked_played_move():
+    """A reply with one played move that maps cleanly (an optional move on the +0 timeline's
+    present board) and one that touches the ambiguous board: ``ambiguous="move"`` keeps the clean one as
+    the whole target; ``"turn"`` drops the turn's target - the candidates are the same under both."""
+    from t5d.engine import Game
+
+    with Game.from_pgn(TWO_TIMELINES) as g:
+        g.set_legality(False)
+        g.replay_all()
+        decisions = _play_turn(g, ["(+0T3)Nf3(-0T1)f3", "(-0T3)Nf3(-0T1)g3"])
+        start = _state(g)
+        branched = {k for k in board_keys(start) if k not in board_keys(decisions[0]) and k[0] not in (-1, 0)}
+        moves = g.moves()
+        clean = next(i for i, m in enumerate(moves) if (m.from_timeline, m.from_half_turn) == (m.to_timeline, m.to_half_turn) == (0, 7))
+        g.apply(moves[clean])  # an optional move on the +0 timeline's present board
+        points, played = _play_reply(g, branched)
+        points, played = [start, *points], [clean, *played]
+    by_move = map_reply(decisions[0], points, played)
+    facts = _check(decisions[0], points, played, by_move)
+    assert facts["ambiguous"] == 1 and facts["hits"] == 1 < len(played), "one played move kept, the rest masked"
+    assert by_move.target.sum() == pytest.approx(1.0)
+    by_turn = map_reply(decisions[0], points, played, ambiguous="turn")
+    assert by_turn.target.sum() == 0.0, "the turn arm: a masked played move drops the turn"
+    np.testing.assert_array_equal(by_turn.moves, by_move.moves)
+    assert by_turn.masked == by_move.masked
 
 
 def test_the_mapped_space_feeds_the_reply_head():

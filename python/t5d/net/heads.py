@@ -34,9 +34,12 @@ layer a placeholder fixed in code (KataGo's value head shares one; spec issue 23
   player's action): one scalar each on [-1, 1] (tanh), the exponentially averaged future search
   values of section 8.3 - their number, horizons and form placeholders (spec issue 231).
 * **The error head** (``value_error``), >= 0 (softplus): the predicted squared gap between the
-  value and the short-term value at one horizon (``LossConfig.error_horizon``; KataGo's
-  uncertainty target) - trained from the start; 6m decides whether it or the categorical's
-  variance feeds search (the engine's ``uncertainty_source``, spec issue 149).
+  short-term value output and its target at one horizon (``LossConfig.error_horizon``;
+  ``train.losses.error_target``: register D9's "predicted short-term value" and KataGo's
+  short-term error target - section 8.3's "the value and the short-term value" also reads as
+  W - L against the target, the alternative recorded in spec issue 231) - trained from the
+  start; 6m decides whether it or the categorical's variance feeds search (the engine's
+  ``uncertainty_source``, spec issue 149).
 
 Pooled by mean from the global registers (D3; M20: "value pooling -> mean"): pooling all sixteen
 assigns none a role, so D7 holds (D8's argument for the submit logit). Every value output is

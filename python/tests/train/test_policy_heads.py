@@ -98,8 +98,9 @@ def test_a_few_optimiser_steps_reduce_the_soft_and_reply_losses():
 
 def test_the_optimistic_weight():
     """Section 8.1 / D9: each sample weighted clamp(0, 1, sigmoid((z - 1.5) x 3)), z how far the
-    mover's short-term outcome beat the network's value in units of its predicted error: 0.5 at
-    z = 1.5, towards 1 above, towards 0 below; NaN without a short-term target; no gradient."""
+    mover beat the predicted short-term value (the short-term target less the network's
+    short-term output) in units of its predicted error: 0.5 at z = 1.5, towards 1 above, towards
+    0 below; NaN without a short-term target; no gradient."""
     v = torch.zeros(5, requires_grad=True)
     err = torch.full((5,), 0.25, requires_grad=True)  # sqrt = 0.5
     st = torch.tensor([0.75, 3.0, -1.0, 0.0, math.nan])  # z = 1.5, 6, -2, 0, nan
@@ -120,7 +121,10 @@ def test_the_optimistic_loss_exists_only_under_its_flag_and_trains_only_its_head
     out = model(batch)
     losses = compute_losses(out, tgt)
     lc = LossConfig()
-    w = optimistic_weights(tgt.short_term[:, lc.error_horizon], out.search_value(), out.value_error)
+    h = lc.error_horizon
+    w = optimistic_weights(tgt.short_term[:, h], out.short_term[:, h], out.value_error)
+    z = (tgt.short_term[:, h] - out.short_term[:, h].detach()) / torch.sqrt(out.value_error.detach() + 1e-4)
+    assert torch.allclose(w, torch.sigmoid((z - 1.5) * 3.0), equal_nan=True), "D9's z: the predicted short-term value"
     target = torch.cat([tgt.policy, tgt.submit[:, None]], -1)
     valid = out.action_valid()
     logp = torch.log_softmax(out.optimistic_action_logits().masked_fill(~valid, float("-inf")), -1).masked_fill(~valid, 0.0)
@@ -135,8 +139,8 @@ def test_the_optimistic_loss_exists_only_under_its_flag_and_trains_only_its_head
 
 
 def test_a_few_optimiser_steps_reduce_the_optimistic_loss():
-    """At most three optimiser steps on synthetic targets (short-term targets above the network's
-    value, so the samples weigh): the loss, optimised alone, falls. Not training."""
+    """At most three optimiser steps on synthetic targets (the weight's centre moved to -10, so
+    every sample weighs): the loss, optimised alone, falls. Not training."""
     cfg = NetConfig(trunk_dtype="fp32", n_layers=2, optimistic_policy=True)
     report = smoke_train(cfg, steps=3, seed=6, loss_cfg=LossConfig(weights={"optimistic": 1.0}, optimistic_centre=-10.0))
     first, last = report.losses[0]["optimistic"], report.losses[-1]["optimistic"]

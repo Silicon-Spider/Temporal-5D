@@ -88,7 +88,13 @@ def _random_moves(u: Multiverse, rng: np.random.Generator, n: int, jump_prob: fl
 def _close(a, b, atol_trunk=2e-5, atol=1e-4, what=""):
     """Every output of two evaluations, FP32 tolerance."""
     assert torch.allclose(a.trunk, b.trunk, atol=atol_trunk), (what, float((a.trunk - b.trunk).abs().max()))
-    for name in ("value_logits", "wdl_logits", "moves_left_log", "short_term", "value_error", "effort_logits", "board_logits"):
+    names = ("value_logits", "wdl_logits", "moves_left_log", "short_term", "value_error", "effort_logits", "board_logits")
+    for name in (*names, "submit_raw"):  # the submit readout before its mask: finite everywhere
+        assert torch.allclose(getattr(a, name), getattr(b, name), atol=atol), (what, name)
+    for name in ("submit_logits", "soft_submit_logits", "optimistic_submit_logits"):  # -inf where masked, on both
+        if getattr(a, name) is None:
+            assert getattr(b, name) is None, name
+            continue
         assert torch.allclose(getattr(a, name), getattr(b, name), atol=atol), (what, name)
     for name, valid in (
         ("policy_logits", a.move_valid),

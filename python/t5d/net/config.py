@@ -318,7 +318,7 @@ class NetConfig:
     #: "mish" - ``x tanh(softplus(x))`` (Misra 2019, "Mish: A Self Regularized Non-Monotonic
     #: Activation Function"); "squared_relu" - ``relu(x)^2`` (So et al. 2021, "Primer"), drawn at
     #: the same initialisation (the arm's is not stated - spec issue 204, proposed edit 154). Only the trunk's FFN
-    #: follows this switch: the heads' hidden layers are Mish under both (``heads.ValueHead``).
+    #: follows this switch: the heads' hidden layers are Mish under both (``heads.ValueHeads``).
     ffn_activation: str = "mish"
 
     # --- embeddings (A2, A3, B8, section 5.3) ---

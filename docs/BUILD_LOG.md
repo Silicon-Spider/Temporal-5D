@@ -1670,14 +1670,14 @@ width (M22)", "The CHECKPOINT 8 figures"). Found on the way: the ruling's premis
 | C16 | not built (rule) | Deferred; last, only if node-starved |
 | C21 | not built (rule) | Refused; a mutant that snapshots is caught by the tests |
 | D1 | built, tested | Network N1's pointer policy over the moves the engine supplies - in search, legal or unknown, unknowns verified when first selected (E5a, E6a), as §8.1 now says; the game API's expansion stays pseudo-legal until ABI round 2's `legal_moves` option. The promotion offset (CHECKPOINT 6, M20) is the v1 (`lane/net` N-M20): a learned per-piece logit read from the destination token, always on in the policy - `policy_promotion` and its `none` arm removed (+3,341 parameters). The other pointer heads - D4's soft policy and reply prototype (`lane/net` N-D4), D9's optimistic policy - carry one of their own under `pointer_promotion_offset` (on: a placeholder, issue 222) |
-| D3 | built, tested | The search (engine ABI round 2a): WDL is the search's value - W − L backed up, the draw probability D beside it on every node and edge (issue 148) - the categorical optional and read only as an uncertainty signal (6m's switch, issue 149), the error head's output and moves-left per leaf, all through one deliver call (`t5d_search_deliver_evaluations`); each root child's search (q, d) and network WDL, moves-left and error recorded, and the root's own. The network (`lane/net` N-D3, as corrected at CHECKPOINT 7): four heads over the global registers' mean, FP32, the acting player's perspective (`heads.ValueHeads`) - one shared hidden layer with Mish (N1's value MLP), then WDL (the value search uses, `NetOutput.search_value()` = W − L), the 51-bin categorical over the root search value, short-term values at `short_term_horizons` (2, 5, 16 turns: placeholders, issue 305's unit) on [-1, 1], and the error head (`NetOutput.value_error`, softplus, the name the evaluator reads); N1's 51-bin short value head gone. The evaluator delivers all four's search inputs (WDL, categorical, error, moves-left) through the C step API, tested against the search's record of its root, with the 6m signal present at every leaf under either `uncertainty_source`. Losses (`train/losses.py`): WDL on the result with the `q_ratio` blend (0), the categorical on HL-Gauss of the root search value of full searches only, squared error on the short-term values, Huber on the error head's stop-gradient target - every unstated detail a placeholder (issue 231); the record-to-target builder is M21's. Every parameter that existed before is drawn as before (`d3_seed`; the retired head's draws kept) |
-| D4 | built, tested (the label generators are step 2's) | Network N1's aux heads: moves-left, effort, per-board, per-square (the label set stands as v1, M20; its colour-specific labels relabelled ours/theirs under A7, `lane/net` N-A7, issue 226). M20 in the code (`lane/net` N-M20): moves-left counts turns - one player's action each (issue 305) - in the head, its helper and the losses' docs (the record-to-target builder is M21's, and so is whether the action in progress counts: issue 224); moves-left and effort read the squares (issue 223); WDL, the short-term value, the value error and the value distribution are D3's value heads (`lane/net` N-D3). CHECKPOINT 7 (`lane/net` N-D4): **the soft policy**, on - its own f and g (width 128) with D1's offset and its own submit logit from the pooled global registers, masked as the policy's (`heads.ActionHead`, `NetOutput.soft_policy_logits`/`soft_submit_logits`), trained on the policy target to the power 1/4 at weight 8 on full searches (`train/losses.py`); **the opponent-reply prototype**, behind `opp_reply` (off), weight 0.15, its move space the opponent's next turn mapped onto the decision point's squares through each new board's lineage with ambiguous mappings masked (`train/reply_map.py`), tested by §15.2's row on constructed turns with travel (a branch, White and Black acting; two branches into one past board, masked at the turn's start and mapped at the decision point between them); the unstated details placeholders (issue 232). Both drawn from generators of their own; N1's always-built reply head gone, its draws kept. The per-square label generator is step 2's. The effort label's source is in the search (engine ABI round 2c: `root_best_since`, issue 154) |
+| D3 | built, tested | The search (engine ABI round 2a): WDL is the search's value - W − L backed up, the draw probability D beside it on every node and edge (issue 148) - the categorical optional and read only as an uncertainty signal (6m's switch, issue 149), the error head's output and moves-left per leaf, all through one deliver call (`t5d_search_deliver_evaluations`); each root child's search (q, d) and network WDL, moves-left and error recorded, and the root's own. The network (`lane/net` N-D3, as corrected at CHECKPOINT 7): four heads over the global registers' mean, FP32, the acting player's perspective (`heads.ValueHeads`) - one shared hidden layer with Mish (N1's value MLP), then WDL (the value search uses, `NetOutput.search_value()` = W − L), the 51-bin categorical over the root search value, short-term values at `short_term_horizons` (2, 5, 16 turns: placeholders, issue 305's unit) on [-1, 1], and the error head (`NetOutput.value_error`, softplus, the name the evaluator reads); N1's 51-bin short value head gone. The evaluator delivers all four's search inputs (WDL, categorical, error, moves-left) through the C step API, tested against the search's record of its root (moves-left's unit - turns, `expm1` of the head's `log1p` - shown with a head biased to 37 turns: the random head's outputs clamp to 0), with the 6m signal present at every leaf under either `uncertainty_source`. Losses (`train/losses.py`): WDL on the result with the `q_ratio` blend (0), the categorical on HL-Gauss of the root search value of full searches only, squared error on the short-term values (missing targets skipped, tested on the loss's value and gradient), Huber on the error head's target - the squared gap between the short-term output, without gradient, and its target: register D9's "predicted short-term value" and KataGo's form (review fixes; the W - L reading, first built, is the alternative for the user, issue 231(c)) - every unstated detail a placeholder (issue 231); the record-to-target builder is M21's. Every parameter that existed before is drawn as before (`d3_seed`; the retired head's draws kept) - pinned by a fingerprint of the pre-D3 parameters recorded on 47bc857 (`tests/net/test_params.py`) |
+| D4 | built, tested (the label generators are step 2's) | Network N1's aux heads: moves-left, effort, per-board, per-square (the label set stands as v1, M20; its colour-specific labels relabelled ours/theirs under A7, `lane/net` N-A7, issue 226). M20 in the code (`lane/net` N-M20): moves-left counts turns - one player's action each (issue 305) - in the head, its helper and the losses' docs (the record-to-target builder is M21's, and so is whether the action in progress counts: issue 224); moves-left and effort read the squares (issue 223); WDL, the short-term value, the value error and the value distribution are D3's value heads (`lane/net` N-D3). CHECKPOINT 7 (`lane/net` N-D4): **the soft policy**, on - its own f and g (width 128) with D1's offset and its own submit logit from the pooled global registers, masked as the policy's (`heads.ActionHead`, `NetOutput.soft_policy_logits`/`soft_submit_logits`), trained on the policy target to the power 1/4 at weight 8 on full searches (`train/losses.py`); **the opponent-reply prototype**, behind `opp_reply` (off), weight 0.15, its move space the opponent's next turn mapped onto the decision point's squares through each new board's lineage with ambiguous mappings masked (`train/reply_map.py`), tested by §15.2's row on constructed turns with travel (a branch, White and Black acting; two branches into one past board, masked at the turn's start and mapped at the decision point between them); the unstated details placeholders (issue 232). Both drawn from generators of their own; N1's always-built reply head gone, its draws kept. The reply map's `ambiguous="turn"` arm is tested on a reply with one masked and one clean played move, and each mapped move's piece checked against the decision board's same cell. The effort loss reads full searches only (§12.4's "full-search moves only"; review fixes). The per-square label generator is step 2's. The effort label's source is in the search (engine ABI round 2c: `root_best_since`, issue 154) |
 | D5 | not started (rule) | A training principle |
 | D6 | built (flag) | `board_reduction`, awaiting 6j |
 | D7 | built in part (6p's initialisation not) | 6p's aggregate initialisation (training-side) - parked with 6p's other arms. No register is assigned an auxiliary target: D3's value heads and every submit logit (the policy's, the soft policy's, D9's) read the global registers' mean only - tested invariant to permuting them - and every auxiliary head reads squares (`lane/net` N-M20, N-D3, N-D4). B8/§12.4's "registers stay free" against D3's pooled value heads is read through D8's argument (issue 223) |
 | D2 | built in part | The ply split (`SearchParams::split`, the default) and the whole-turn arm, driven from Python through the C step API (N5). CHECKPOINT 6: the whole-turn arm and its 256 cap are superseded by the flat form; the tree form and the flat form are not started - engine lane, after M22 and ABI round 2: the tree form under the tree search only (the engine refuses it with MCGS as a parameter combination - parked and logged, issue 301; no document refuses it), the flat form on the in-house hypercuboid search after the gate is configured, each with its §15.2 row (the tree form with every interaction gate firing = the ply split; the flat form's generator = an exhaustive listing of legal turns in summed-logit order) and §15.4's turn-structure invariants; then the whole-turn arm retired; the flat form's head in the net lane. Gate 6x (with 6g, 6k) |
 | D8 | built, tested | Engine and search (E7, E6a): submit an explicit edge, legal only when C4 holds, never automatic. Network (N5): a global acting-player input on the global registers (the ruled place, M20 - the `all_tokens` arm and `acting_player_input` removed, `lane/net` N-M20; with no global registers, an ablation-3 arm, on the board tokens - the live boards' under the block-causal scope - a placeholder fixed in code, issue 225, tested to reach every output under every register arm), one distribution over moves + submit, values from the acting player's perspective; the submit logit read from the pooled global registers - their mean, as the value head reads them (M20, N-M20: `submit_register` and register 0 gone; tested invariant to permuting the registers, moved by any one). The readout's form (`submit_head`: linear, 257 parameters, or the policy's bilinear form) is still a placeholder (issue 109). Under the flat form the generator ends turns itself (issue 92). Under A7 the input is the acting colour, every board token being the acting player's view (`lane/net` N-A7; issue 228) |
-| D9 | built, tested (behind its flag, off) | The optimistic policy - a prototype (6t), match play only (`lane/net` N-D9): its own f and g at the policy's width, D1's offset and its own submit logit (`T5DNet.optimistic`, `heads.ActionHead`; `NetConfig.optimistic_policy`, off; 135,182 parameters when on, drawn from a generator of its own); trained on the normal policy target of full searches, each sample weighted clamp(0, 1, sigmoid((z - 1.5) x 3)), z the short-term target's gap above the network's W - L in units of the error head's predicted error, both without gradient (`losses.optimistic_weights`). Searched with by an evaluator built with `policy="optimistic"` (dense or cached), the values unchanged; `netplay.play_game` refuses one in self-play, `PlayConfig.optimistic` is match-only and both sides must deliver it - tested, and a match with it replays legal through `t5d-gate`. Its use in self-play stays held open (§14.4). Placeholders: issue 233 |
+| D9 | built, tested (behind its flag, off) | The optimistic policy - a prototype (6t), match play only (`lane/net` N-D9): its own f and g at the policy's width, D1's offset and its own submit logit (`T5DNet.optimistic`, `heads.ActionHead`; `NetConfig.optimistic_policy`, off; 135,182 parameters when on, drawn from a generator of its own); trained on the normal policy target of full searches, each sample weighted clamp(0, 1, sigmoid((z - 1.5) x 3)), z the short-term target's gap above the network's short-term output - D9's "predicted short-term value", KataGo's z_value (review fixes; the W - L baseline first built is the alternative for the user, issue 233(a)) - in units of the error head's predicted error, both without gradient (`losses.optimistic_weights`). Searched with by an evaluator built with `policy="optimistic"` (dense or cached), the values unchanged; `netplay.play_game` refuses one in self-play, and each evaluation names its prior (`Evaluation.policy`), so a self-play search (`run_search(..., self_play=True)`; M21's generator must set it) refuses an optimistic evaluation however the evaluator is wrapped; `PlayConfig.optimistic` is match-only and both sides must deliver it - tested, and a match with it replays legal through `t5d-gate`. Its use in self-play stays held open (§14.4). Placeholders: issue 233 |
 | E4 | principle (weakened) | "Narrow hard, because the auditor is watching" - the register now says weakened: it holds where the settling scans (< 50 boards) and Hunt (< 100) run, neither wired into the search on main (E10 lost; step 2); above that, narrowing is a bet on the audit lane and the league |
 | E1 | built, tested (the mandatory-count widening option not built) | PUCT with entropy-adaptive top-k widening and FPU; the policy temperature at every node. CHECKPOINT 7 (with I19), engine ABI round 2b: root noise in self-play with its total concentration (`dirichlet_concentration`, placeholder 0.03 x 361, appended beside the per-child `dirichlet_alpha`, which stays as its arm at 0) split across the root's open edges, per decision (issue 150); KataGo-style shaping a prototype behind `dirichlet_shaping`, off (its form a reading, issue 151); the root policy temperature (I19; issue 152), before the noise. "The widening schedule may depend on the mandatory-board count" - an option for 6g, not built (A6's count is in the expansion). Every constant a placeholder, named in §8.4's "Constants as built" (issue 82; edit 123) |
 | E5, E9 | built, tested | LCB with a visit floor (E5); the solver behind H41's switch, the secure child, a visit cap on solved children (E9) - constants named as placeholders in §8.4 (issues 84-85). E5's optional term (weight 0) reads the child's uncertainty signal - 6m's switch, since engine ABI round 2a (issue 149) |
@@ -3343,10 +3343,16 @@ superseded or made moot says so; nothing is deleted.
     by squared error - not a categorical or a WDL per horizon (fixed in code). How the target
     averages future search values (the weights - KataGo's are exponential with mean horizon h -,
     the result past the game's end, the sign across the players' turns) is the record-to-target
-    builder's (M21, I15). (c) **The error head's target**: `(short_term[h] - (W - L))^2` with
-    the network's own W - L taken without gradient (KataGo's), h the shortest horizon
-    (`LossConfig.error_horizon = 0`), Huber loss (delta 1) on a softplus output - "the value" read
-    as D3's "the value search uses", not the categorical's mean. (d) **HL-Gauss**: sigma 0.75 bin
+    builder's (M21, I15). (c) **The error head's target**: §8.3's "the squared gap between the
+    value and the short-term value" reads two ways. Built as the register's literal reading -
+    D9's "the predicted short-term value" - and KataGo's form (its short-term error loss compares
+    the short-term value prediction, detached, with the short-term target; Huber delta 0.4):
+    `(short-term output[h] - short-term target[h])^2`, the network's short-term output taken
+    without gradient, h the shortest horizon (`LossConfig.error_horizon = 0`), Huber loss (delta 1,
+    a placeholder) on a softplus output. **For the user, the other reading**: "the value" as D3's
+    "the value search uses" - `(short-term target[h] - (W - L))^2`, the network's W - L without
+    gradient (N-D3 first built this one and called it KataGo's; it is not). The choice carries
+    D9's z with it (issue 233(a)). (d) **HL-Gauss**: sigma 0.75 bin
     widths (Farebrother et al.'s ratio; 0.03 at 51 bins), each bin spanning its centre +- half
     a width (support [-1.02, 1.02]), the mass outside dropped and the rest renormalised. (e)
     **Masks**: the categorical and the policy train on full searches only (`Targets.full_search`;
@@ -3388,21 +3394,27 @@ superseded or made moot says so; nothing is deleted.
 233. **D9's optimistic policy: z, the head and the loss** (§8.1, §8.3, §12.4, §14.4, §13.1 6t;
     register D9, D3, D1, D8, C14, I15; issues 222, 231). Built (`lane/net` N-D9), behind its flag,
     each a PLACEHOLDER: (a) **z**: §8.1's "the z-scores comparing short-term outcomes with the
-    predicted error" against D9's "how far the mover beat the predicted short-term value" - read
-    as KataGo's `z = (short-term target - predicted value) / sqrt(predicted error + eps)`, the
-    predicted value the network's own W - L (D3's "the value search uses"), the error the error
-    head's, both without gradient, at the error head's horizon (`LossConfig.error_horizon`, so the
-    denominator predicts the numerator's square), eps 1e-4 (KataGo's). (b) **The head**: its own
+    predicted error" and D9's "how far the mover beat the predicted short-term value" - built as
+    D9's literal reading, which is KataGo's z_value: `z = (short-term target - the network's
+    short-term output) / sqrt(predicted error + eps)`, the error the error head's, both outputs
+    without gradient, at the error head's horizon (`LossConfig.error_horizon`, so the denominator
+    predicts the numerator's square - the error head's target, 231(c)), eps 1e-4 (KataGo's). The
+    other reading - the network's W - L in place of the short-term output, as N-D9 first built it
+    and wrongly called KataGo's - is for the user with 231(c)'s: the two stand or fall together.
+    (b) **The head**: its own
     f and g at the policy's width (256), D1's offset (issue 222) and its own submit logit (moves
     and submit are one distribution, D8) - 135,182 parameters. (c) **The loss**: the weighted
     cross-entropy summed over the full-search positions and divided by their number (not by the
     weights' sum), weight 1.0. (d) **"Searched with for both sides"**: the evaluator delivers the
     optimistic head's prior at every leaf, its own side's and the opponent's, with the normal
     value heads; the match's evaluators both deliver it or neither does. (e) **Isolation**:
-    self-play refuses an optimistic evaluator (a check in `play_game`); match play's two searches
-    never share a cache (C14, as built), so no normal evaluation is served as an optimistic one or
-    the reverse. No record is written from match play, so I15's records always hold the normal
-    prior. Proposed edit 174.
+    self-play refuses an optimistic evaluator (a check in `play_game`) and, since each evaluation
+    names its prior (`Evaluation.policy`), every optimistic evaluation reaching a self-play search
+    (`run_search(..., self_play=True)`, checked in `serve`), however the evaluator is wrapped -
+    M21's generator must run its searches with `self_play=True`. Match play's two searches never
+    share a cache (C14, as built), so no normal evaluation is served as an optimistic one or the
+    reverse. No I15 training record is written from match play (its game record's Engine header
+    names the optimistic prior), so I15's records always hold the normal prior. Proposed edit 174.
 
 <!-- A new list, so that the numbers from 140 render as written. -->
 
@@ -4454,9 +4466,13 @@ struck through, where nothing of it is left to apply); the others stand as writt
     neighbouring bins by a Gaussian (HL-Gauss ...)". Proposed - add the forms as built or as
     ruled: "the four share one hidden layer"; "each horizon a scalar on [-1, 1], squared error;
     horizons in turns (one player's action), placeholders 2, 5 and 16"; "the error head's target
-    is the squared gap between the short-term value at the shortest horizon and the network's
-    own W - L, taken without gradient (KataGo's)"; "sigma three quarters of a bin width". Why:
-    each is committed-class and unstated (issue 231).
+    is the squared gap between the short-term value head's output, taken without gradient, and
+    the short-term target, at the shortest horizon - the error of the predicted short-term value
+    (register D9's words; KataGo's form)"; "sigma three quarters of a bin width". Why: each is
+    committed-class and unstated (issue 231); and "the value and the short-term value" reads two
+    ways - the short-term prediction against its target (built), or the network's W - L against
+    the short-term target (the alternative in issue 231(c), for the user to rule; if ruled, the
+    error head's sentence says so instead).
 173. **§12.4's soft-policy and reply paragraphs and register D4 (with §9.2's aux row)**: now -
     "its own source and destination projections and its own submit logit"; "each square of a
     reply maps to the same square on that board ... Two new boards descending from one board ...
@@ -4472,11 +4488,14 @@ struck through, where nothing of it is left to apply); the others stand as writt
 174. **§8.1's optimistic-policy paragraph and register D9**: now - "the z-scores comparing
     short-term outcomes with the predicted error (§8.3)"; D9: "by how far the mover beat the
     predicted short-term value". Proposed - one wording, as built or as ruled: "z = (the
-    short-term value target - the network's value) / sqrt(the error head's prediction + eps),
-    the network's outputs without gradient, at the error head's horizon"; and add "its own
-    projections and submit logit (as the soft policy's)" and the loss's normalisation. Why: the
-    two texts name different baselines (the value against the short-term head), and the head's
-    form and the loss are committed-class and unstated (issue 233).
+    short-term value target - the network's short-term value output) / sqrt(the error head's
+    prediction + eps), the network's outputs without gradient, at the error head's horizon" (D9's
+    "predicted short-term value", read literally; KataGo's z_value); and add "its own projections
+    and submit logit (as the soft policy's)" and the loss's normalisation. Why: §8.1 names only
+    the predicted error and D9 only the baseline - one wording carries both; the alternative
+    baseline, the network's W - L, stands or falls with edit 172's error-head reading (issue
+    231(c), 233(a)); and the head's form and the loss are committed-class and unstated (issue
+    233).
 
 <!-- A new list, so that the numbers from 110 render as written. -->
 
@@ -4753,3 +4772,11 @@ struck through, where nothing of it is left to apply); the others stand as writt
   error head; searched with by an evaluator built with `policy="optimistic"`, match play only
   (self-play refuses it, tested). F1 unchanged (22,965,426; 23,100,608 with it on). Register
   D9; issue 233; edit 174.
+- **2026-10-23 - network heads review fixes** (`lane/net`): the error head's target and D9's z
+  rebuilt as register D9's "predicted short-term value" and KataGo's form - the short-term
+  output, without gradient, against the short-term target (N-D3 and N-D9 had used W - L and
+  called it KataGo's; that reading is now the alternative for the user, issues 231(c), 233(a);
+  edits 172, 174 rewritten); the losses' masks and baselines pinned by tests, moves-left's unit
+  across the search boundary shown, the pre-D3 parameters pinned, each evaluation carrying its
+  prior (self-play refuses an optimistic one in `serve`), the effort loss on full searches only.
+  F1 unchanged. Register D3, D4, D9; issues 231-233; edits 172, 174.

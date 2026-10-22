@@ -533,5 +533,10 @@ def test_d9s_optimistic_policy_is_its_own_head_behind_its_flag():
     assert torch.equal(torch.isfinite(out.optimistic_submit_logits), out.submit_valid)
     assert not torch.allclose(out.optimistic_logits[out.move_valid], out.policy_logits[out.move_valid], atol=1e-3)
     _check_pointer_heads(out.trunk, batch, ((on.optimistic.pointer, batch.moves, batch.move_valid, out.optimistic_logits),))
+    # Submit absent, offered but illegal (masked, C4) and live - as the soft policy's test has it.
+    four = on(collate(with_actions([synthetic_state(30 + i, n) for i, n in enumerate((2, 3, 2, 4))])))
+    assert (four.submit_possible & ~four.submit_valid).any() and four.submit_valid.any() and (~four.submit_possible).any()
+    assert torch.equal(torch.isfinite(four.optimistic_submit_logits), four.submit_valid)
+    assert torch.isinf(four.optimistic_submit_logits[~four.submit_valid]).all()
     with pytest.raises(ValueError, match="optimistic"):
         base.optimistic_action_logits()

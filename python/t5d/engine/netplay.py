@@ -22,7 +22,10 @@ mirrors the engine's ``play_game`` (``src/selfplay.cpp``; ``t5d-play``) step for
   noise off. The two searches never share a cache - each holds one network's evaluations.
   Only match play may search with D9's optimistic policy (section 8.1: "searched with for both
   sides at match play only ... kept out of self-play"): ``PlayConfig.optimistic`` and evaluators
-  built with ``policy="optimistic"``; ``play_game`` refuses an optimistic evaluator in self-play.
+  built with ``policy="optimistic"``; ``play_game`` refuses an optimistic evaluator in self-play,
+  and its self-play searches refuse every evaluation that carries the optimistic prior
+  (``run_search``'s ``self_play``), however the evaluator is wrapped. The record's Engine header
+  names the optimistic prior where it was searched with; no I15 training record is written here.
 * **D2's two arms** (``split``): the board-move split - an action is its moves, each its
   own decision, then a submit decision (D8: never automatic); or whole turns - a decision is
   an action, submitted with its last move.
@@ -371,7 +374,9 @@ def play_game(evaluators: Evaluator | Sequence[Evaluator], cfg: PlayConfig, *, n
                     search = carried[mover]
                 before = search.info()
                 evaluator = evs[mover] if cfg.mode == "match" else evs[0]
-                stats, _ = run_search(search, evaluator, playouts=cfg.playouts, batch_size=cfg.batch_size, **regs)
+                stats, _ = run_search(
+                    search, evaluator, playouts=cfg.playouts, batch_size=cfg.batch_size, self_play=cfg.mode != "match", **regs
+                )
                 pick = _choose(search, cfg, res, stats, evaluator, regs, rng)
                 after = search.info()
                 res.decisions += 1
@@ -412,7 +417,8 @@ def play_game(evaluators: Evaluator | Sequence[Evaluator], cfg: PlayConfig, *, n
                 "Engine",
                 f"t5d search through the C step API: network evaluator (random weights), {cfg.playouts} playouts per decision, "
                 f"{'board-move split' if cfg.split == 'ply' else 'whole turns'}, "
-                f"{'self-play, root noise' if cfg.mode == 'self' else 'match play, two networks'}, seed {cfg.seed}",
+                f"{'self-play, root noise' if cfg.mode == 'self' else 'match play, two networks'}"
+                f"{', both sides with the optimistic prior (D9)' if cfg.optimistic else ''}, seed {cfg.seed}",
             ),
             ("TurnCap", f"turns {cfg.cap_turns}, boards {cfg.cap_boards}"),
         ]
@@ -446,7 +452,7 @@ def _choose(search: Search, cfg: PlayConfig, res: GameResult, stats, evaluator, 
 
     def choose_now() -> int:
         if not visited():  # children were removed: search again
-            more, _ = run_search(search, evaluator, playouts=cfg.playouts, batch_size=cfg.batch_size, **regs)
+            more, _ = run_search(search, evaluator, playouts=cfg.playouts, batch_size=cfg.batch_size, self_play=cfg.mode != "match", **regs)
             stats.batch_sizes.extend(more.batch_sizes)
             stats.evaluate_seconds += more.evaluate_seconds
         if cfg.mode == "match":
