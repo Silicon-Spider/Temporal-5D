@@ -4,7 +4,7 @@ a random network -> rebuilt under the trainer's own network configuration -> the
 targets -> every loss, forward only; optimiser steps on synthetic rows alone, at most three per
 model whatever the trainer -> SWA's published network back into self-play, its snapshot count in
 the record; the losses falling over a few steps on a fixed synthetic batch; the step cap, the
-synthetic-rows rule and G8's seam refusing."""
+synthetic-rows rule refusing (G8's QAT hook: ``test_qat.py``)."""
 
 from __future__ import annotations
 
@@ -195,12 +195,10 @@ def test_steps_on_synthetic_rows_only():
     assert optimiser_steps(model) == 1
 
 
-def test_the_step_cap_and_the_qat_seam():
+def test_the_step_cap_and_the_horizons():
     model = build_model(NET, seed=0)
     with pytest.raises(ValueError, match="never a training run"):
         TrainerConfig(max_steps=MAX_STEPS + 1).validate()
-    with pytest.raises(NotImplementedError, match="G8"):
-        Trainer(model, NET, TrainerConfig(qat=True))
     with pytest.raises(ValueError, match="horizons"):
         from t5d.train.targets import TargetConfig
 

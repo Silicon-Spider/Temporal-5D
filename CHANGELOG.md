@@ -10,6 +10,30 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-23 - G8's QAT hook behind its flag (off), plugged into M21's trainer
+
+The precision component, step 2 of 2 (`lane/net`). The user's brief: "QAT hooks G8 (FP8 E4M3, flag
+off, never the heads or RoPE; the FFN ratio stays a config parameter)" - edit 182 ruled for the
+hook.
+
+- **The hook** (`train/trainer.py`): `TrainerConfig.qat` (off) and `qat_format = "fp8_e4m3"`
+  (provisional, pinned with the inference path); `apply_qat`, the M21 seam that raised, now
+  switches the trainer's network in place to G2's FP8 trunk (`T5DNet.set_trunk_quant`) - fake
+  quantisation with straight-through gradients, the heads, RoPE, embeddings and norms untouched,
+  the network's frozen-K/V format kept - and refuses a network already in another 8-bit format.
+  In place so that the network's optimiser-step count stays with it (issue 237(a)).
+- **Tests** (`tests/train/test_qat.py`): off by default; QAT's forward equal bit for bit to G2's
+  inference forward with the same weights - dense, the block-causal scope with FP8 frozen K/V
+  ("K/V cache included"), BF16 with the chunked path; a smoke test of three optimiser steps on
+  synthetic rows only (BF16 and FP32): losses finite, a dense gradient on every quantised weight,
+  every trunk parameter moved, the fourth step refused; each projection's gradient within relative
+  distance 0.12 of the unquantised network's (the flushing cast gave zero); FFN ratios 2 and 12.
+  `test_trainer.py`'s seam check is gone with the seam.
+
+Spec: §10.2, §15.1, §12.8; register G8 (built behind its flag, smoke-tested), M21 (the QAT hook
+built), G2, C15, I17. Proposed: edit 182, rewritten as ruled (§15.1's M21 sentence and G8: the
+hook built behind its flag on the provisional E4M3 emulation). Spec issues 239, 237(c) (ruled).
+
 ### 2026-10-23 - G2's FP8 E4M3 emulation behind its flag (off), and C15's straight-through fix
 
 The precision component, step 1 of 2 (`lane/net`).
