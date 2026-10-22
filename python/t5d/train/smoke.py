@@ -50,8 +50,9 @@ def synthetic_targets(batch: Batch, cfg: NetConfig, generator: torch.Generator) 
     submit_visits = rand(bsz) * submit_legal  # D8: the submit child's visits, where it is a legal candidate
     total = (visits.sum(dim=-1) + submit_visits).clamp(min=1e-9)
     policy = visits / total[:, None]
-    n_opp = batch.opp_move_valid.sum(dim=-1)
-    opp = torch.where(n_opp > 0, (rand(bsz) * n_opp.clamp(min=1)).long(), torch.full((bsz,), -1))
+    # D4's reply prototype: a distribution over each position's ``opp_moves`` (synthetic, not mapped).
+    opp = rand(*batch.opp_move_valid.shape) * batch.opp_move_valid
+    opp = opp / opp.sum(dim=-1, keepdim=True).clamp(min=1e-9)
     effort_visits = torch.randint(1, 4096, (bsz,), generator=g)
     converged = rand(bsz) < 0.8
     full = torch.arange(bsz) % 3 != 2
@@ -66,13 +67,13 @@ def synthetic_targets(batch: Batch, cfg: NetConfig, generator: torch.Generator) 
         root_value=root_value,
         short_term=short_term,
         moves_left=torch.randint(0, 200, (bsz,), generator=g).float(),
-        opp_reply=opp,
         board=(rand(bsz, batch.board_valid.shape[1], 3) < 0.3).float(),
         square=(rand(bsz, length, cfg.n_square_labels) < 0.2).float(),
         effort=effort_bin(effort_visits, converged, cfg.effort_bins),
         submit=submit_visits / total,
         full_search=full,
         root_wdl=torch.stack([(1 - d + q) / 2, d, (1 - d - q) / 2], dim=-1),  # the search's (q, d) as a WDL
+        opp_reply=opp,
     )
 
 

@@ -1669,12 +1669,12 @@ width (M22)", "The CHECKPOINT 8 figures"). Found on the way: the ruling's premis
 | C15 | built in part | FP8 e4m3 frozen K/V (`frozen_kv_format = "fp8"`, applied by the forward itself); varlen/ragged kernels not built (none on CPU; GPU time, M19). The register: FP8 K/V obey G1 only with an FP8 trunk or FP8-frozen-K/V training (issue 34). **Known defect, not yet fixed:** `fake_quantise(x, "fp8")` (`kvformat.py`), which both the forward's FP8 rounding (`model._frozen_kv_rounding`) and the cached path use, casts to FP8 inside autograd with no straight-through estimator, so its backward casts the gradient to FP8 unscaled. Checked 2026-10-17 on CPU (torch 2.13.0+cpu; one 8 × 8 block, seed 0): with \|x\| about 0.1, 63 of 64 gradients were zero; with \|x\| about 1, they were 0.90-1.03 where 1 is expected. FP8-frozen-K/V training (the remedy above) and G8's hook need the net lane's STE fix, with a gradient test, before G2 and G8 |
 | C16 | not built (rule) | Deferred; last, only if node-starved |
 | C21 | not built (rule) | Refused; a mutant that snapshots is caught by the tests |
-| D1 | built, tested | Network N1's pointer policy over the moves the engine supplies - in search, legal or unknown, unknowns verified when first selected (E5a, E6a), as §8.1 now says; the game API's expansion stays pseudo-legal until ABI round 2's `legal_moves` option. The promotion offset (CHECKPOINT 6, M20) is the v1 (`lane/net` N-M20): a learned per-piece logit read from the destination token, always on in the policy - `policy_promotion` and its `none` arm removed (+3,341 parameters). The opponent-reply head has none, as built at N1: which other pointer heads carry it, and the offset's form, are issue 222 |
+| D1 | built, tested | Network N1's pointer policy over the moves the engine supplies - in search, legal or unknown, unknowns verified when first selected (E5a, E6a), as §8.1 now says; the game API's expansion stays pseudo-legal until ABI round 2's `legal_moves` option. The promotion offset (CHECKPOINT 6, M20) is the v1 (`lane/net` N-M20): a learned per-piece logit read from the destination token, always on in the policy - `policy_promotion` and its `none` arm removed (+3,341 parameters). The other pointer heads - D4's soft policy and reply prototype (`lane/net` N-D4), D9's optimistic policy - carry one of their own under `pointer_promotion_offset` (on: a placeholder, issue 222) |
 | D3 | built, tested | The search (engine ABI round 2a): WDL is the search's value - W − L backed up, the draw probability D beside it on every node and edge (issue 148) - the categorical optional and read only as an uncertainty signal (6m's switch, issue 149), the error head's output and moves-left per leaf, all through one deliver call (`t5d_search_deliver_evaluations`); each root child's search (q, d) and network WDL, moves-left and error recorded, and the root's own. The network (`lane/net` N-D3, as corrected at CHECKPOINT 7): four heads over the global registers' mean, FP32, the acting player's perspective (`heads.ValueHeads`) - one shared hidden layer with Mish (N1's value MLP), then WDL (the value search uses, `NetOutput.search_value()` = W − L), the 51-bin categorical over the root search value, short-term values at `short_term_horizons` (2, 5, 16 turns: placeholders, issue 305's unit) on [-1, 1], and the error head (`NetOutput.value_error`, softplus, the name the evaluator reads); N1's 51-bin short value head gone. The evaluator delivers all four's search inputs (WDL, categorical, error, moves-left) through the C step API, tested against the search's record of its root, with the 6m signal present at every leaf under either `uncertainty_source`. Losses (`train/losses.py`): WDL on the result with the `q_ratio` blend (0), the categorical on HL-Gauss of the root search value of full searches only, squared error on the short-term values, Huber on the error head's stop-gradient target - every unstated detail a placeholder (issue 231); the record-to-target builder is M21's. Every parameter that existed before is drawn as before (`d3_seed`; the retired head's draws kept) |
-| D4 | built in part | Network N1's aux heads: WDL, moves-left, short value, effort, per-board, per-square (the label set stands as v1, M20; its colour-specific labels relabelled ours/theirs under A7, `lane/net` N-A7, issue 226) and the opponent reply, always built at weight 1.0. M20 in the code (`lane/net` N-M20): moves-left counts turns - one player's action each (issue 305) - in the head, its helper and the losses' docs (the record-to-target builder is M21's, and so is whether the action in progress counts: issue 224); moves-left and effort read the squares, WDL and the short value the global registers (D3; issue 223). To change (CHECKPOINT 7): the soft policy added (weight 8), the reply a prototype behind its flag at 0.15 with §15.2's mapping test - the net lane's heads, after engine round 2 (the reply head is left as built until then); the per-square label generator is step 2's. The effort label's source is in the search (engine ABI round 2c: `root_best_since`, the root's visits when its most visited child last changed - issue 154) |
+| D4 | built, tested (the label generators are step 2's) | Network N1's aux heads: moves-left, effort, per-board, per-square (the label set stands as v1, M20; its colour-specific labels relabelled ours/theirs under A7, `lane/net` N-A7, issue 226). M20 in the code (`lane/net` N-M20): moves-left counts turns - one player's action each (issue 305) - in the head, its helper and the losses' docs (the record-to-target builder is M21's, and so is whether the action in progress counts: issue 224); moves-left and effort read the squares (issue 223); WDL, the short-term value, the value error and the value distribution are D3's value heads (`lane/net` N-D3). CHECKPOINT 7 (`lane/net` N-D4): **the soft policy**, on - its own f and g (width 128) with D1's offset and its own submit logit from the pooled global registers, masked as the policy's (`heads.ActionHead`, `NetOutput.soft_policy_logits`/`soft_submit_logits`), trained on the policy target to the power 1/4 at weight 8 on full searches (`train/losses.py`); **the opponent-reply prototype**, behind `opp_reply` (off), weight 0.15, its move space the opponent's next turn mapped onto the decision point's squares through each new board's lineage with ambiguous mappings masked (`train/reply_map.py`), tested by §15.2's row on constructed turns with travel (a branch, White and Black acting; two branches into one past board, masked at the turn's start and mapped at the decision point between them); the unstated details placeholders (issue 232). Both drawn from generators of their own; N1's always-built reply head gone, its draws kept. The per-square label generator is step 2's. The effort label's source is in the search (engine ABI round 2c: `root_best_since`, issue 154) |
 | D5 | not started (rule) | A training principle |
 | D6 | built (flag) | `board_reduction`, awaiting 6j |
-| D7 | not built | 6p's aggregate initialisation (training-side) - parked with 6p's other arms. The tension with D8 is settled: the submit logit is read from the pooled global registers, so D7 holds (D8, M20) - in the code since `lane/net`'s N-M20, with the value-type heads pooled the same way |
+| D7 | built in part (6p's initialisation not) | 6p's aggregate initialisation (training-side) - parked with 6p's other arms. No register is assigned an auxiliary target: D3's value heads and every submit logit (the policy's, the soft policy's, D9's) read the global registers' mean only - tested invariant to permuting them - and every auxiliary head reads squares (`lane/net` N-M20, N-D3, N-D4). B8/§12.4's "registers stay free" against D3's pooled value heads is read through D8's argument (issue 223) |
 | D2 | built in part | The ply split (`SearchParams::split`, the default) and the whole-turn arm, driven from Python through the C step API (N5). CHECKPOINT 6: the whole-turn arm and its 256 cap are superseded by the flat form; the tree form and the flat form are not started - engine lane, after M22 and ABI round 2: the tree form under the tree search only (the engine refuses it with MCGS as a parameter combination - parked and logged, issue 301; no document refuses it), the flat form on the in-house hypercuboid search after the gate is configured, each with its §15.2 row (the tree form with every interaction gate firing = the ply split; the flat form's generator = an exhaustive listing of legal turns in summed-logit order) and §15.4's turn-structure invariants; then the whole-turn arm retired; the flat form's head in the net lane. Gate 6x (with 6g, 6k) |
 | D8 | built, tested | Engine and search (E7, E6a): submit an explicit edge, legal only when C4 holds, never automatic. Network (N5): a global acting-player input on the global registers (the ruled place, M20 - the `all_tokens` arm and `acting_player_input` removed, `lane/net` N-M20; with no global registers, an ablation-3 arm, on the board tokens - the live boards' under the block-causal scope - a placeholder fixed in code, issue 225, tested to reach every output under every register arm), one distribution over moves + submit, values from the acting player's perspective; the submit logit read from the pooled global registers - their mean, as the value head reads them (M20, N-M20: `submit_register` and register 0 gone; tested invariant to permuting the registers, moved by any one). The readout's form (`submit_head`: linear, 257 parameters, or the policy's bilinear form) is still a placeholder (issue 109). Under the flat form the generator ends turns itself (issue 92). Under A7 the input is the acting colour, every board token being the acting player's view (`lane/net` N-A7; issue 228) |
 | D9 | not started | The optimistic policy - a prototype (6t), match play only; its use in self-play is held open (§14.4): the net lane's heads, behind its flag, after engine round 2 |
@@ -1685,7 +1685,7 @@ width (M22)", "The CHECKPOINT 8 figures"). Found on the way: the ruling's premis
 | E2, E3 | built behind flags, tested | Off; awaiting 6m and 6t. They read a node's uncertainty signal: the categorical's variance by default, the error head's output under 6m's switch (`uncertainty_source`, engine ABI round 2a; issue 149); their constants placeholders twice over (issues 81, 149) |
 | E8 | not started | Behind its flag (6v), with E11 in step 2 |
 | E6 | not built (rule) | Refused |
-| F1, F2 | built, tested | 22,961,828 parameters (F1 after F5, B15, M20, A6 and D3: 21,338,634 after F5 - 20,736 fewer than N5's 21,359,370, gain-only norms, no Q/K/V biases, spec issue 203 - plus B15's 1,623,168, spec issue 210, plus M20's 3,337: the policy's promotion offset, 3,341, less the learned register coordinates, 4 - plus A6's 8,768: the turn-state counts' MLP, spec issue 230 - less D3's 12,079: three short-term outputs, 771, and the error head, 257, on the value MLP's shared layer, and N1's 51-bin short value head, 13,107, gone, issue 231); the L24-ff12 preset, 46,891,236 (F2: 44,456,484 and B15's 2,434,752 over 24 layers). Unchanged by F6's Mish in the heads, by B11's fold (its flag is off; with it on, 40 scalars where there were 48) and by B16 (its 304 are in a network of the cached configuration only: 22,962,132 with `attn_scope = "block_causal"`) and B17 (off; with it on, 6,115,328 more - 29,077,156, or 23,726,244 with the vectors shared by the heads; spec issue 218) |
+| F1, F2 | built, tested | 22,965,426 parameters (F1 after F5, B15, M20, A6, D3 and D4: 21,338,634 after F5 - 20,736 fewer than N5's 21,359,370, gain-only norms, no Q/K/V biases, spec issue 203 - plus B15's 1,623,168, spec issue 210, plus M20's 3,337: the policy's promotion offset, 3,341, less the learned register coordinates, 4 - plus A6's 8,768: the turn-state counts' MLP, spec issue 230 - less D3's 12,079: three short-term outputs, 771, and the error head, 257, on the value MLP's shared layer, and N1's 51-bin short value head, 13,107, gone, issue 231 - plus D4's 3,598: the soft policy, 69,390, and N1's always-built reply head, 65,792, now a prototype off - 69,133 with its offset when on, issue 232); the L24-ff12 preset, 46,894,834 (F2: 44,460,082 and B15's 2,434,752 over 24 layers). Unchanged by F6's Mish in the heads, by B11's fold (its flag is off; with it on, 40 scalars where there were 48) and by B16 (its 304 are in a network of the cached configuration only: 22,965,730 with `attn_scope = "block_causal"`) and B17 (off; with it on, 6,115,328 more - 29,080,754, or 23,729,842 with the vectors shared by the heads; spec issue 218) |
 | F5 | built, tested | Network: RMSNorm-style norms (a learned gain, no centring, no bias; FP32) everywhere in the trunk, no Q/K/V biases, the attention-output and FFN biases kept (spec issue 200), pre-norm. 6y's arm - post-norm with DeepNet's initialisation, `norm_placement="post"` - through the dense trunk and the cached path, its unstated details placeholders (issue 201); smolgen has no norm to keep (issue 202) |
 | F6 | built, tested | Network: Mish in the trunk FFN (`ffn_activation="mish"`) and in every head's hidden layers - the value head's MLP, the only head with one (CHECKPOINT 8's ruling on issue 204, `lane/net` N-F6heads: no switch - `head_activation` and its GELU removed); 6y's arm, squared ReLU (`"squared_relu"`), in the trunk only, through the dense trunk and the cached path - tested: no head follows it. Outside F6's words, kept as built: the embedding's Δt MLP (GELU) and B12's smolgen (SiLU) - spec issue 221 |
 | F3 | not built (rule) | Refused |
@@ -3200,7 +3200,10 @@ superseded or made moot says so; nothing is deleted.
     to the move's bilinear score; (b) the policy only: the reply head stays as built at N1,
     without one - its rebuild as D4's prototype is the heads' component (after engine round
     2), which builds the soft policy and D9 too. For the user with the heads: whether those
-    heads carry the offset. Proposed edit 163.
+    heads carry the offset. Proposed edit 163. *Built with the heads (`lane/net` N-D4, N-D9): the
+    soft policy, the reply prototype and D9's optimistic policy each carry an offset of their
+    own, of (a)'s form (`NetConfig.pointer_promotion_offset`, on - a placeholder; off, they tie
+    promotions as the bilinear form does).*
 223. **Which heads "aux pooling -> squares" covers** (M20, register B8, D3, D4, D7; §8.3,
     §9.2, §12.4). M20 rules "aux pooling -> squares" and "value pooling -> mean (D3)"; D4
     lists WDL, the short-term value, the value error and the value distribution among the
@@ -3355,6 +3358,33 @@ superseded or made moot says so; nothing is deleted.
     head's draws are kept in the global stream, so no parameter that existed before changed.
     The search reads the WDL, the categorical (6m's default), the error head and moves-left;
     the short-term outputs are trained, never delivered. Proposed edit 172.
+232. **D4's soft policy and reply prototype: what section 12.4 leaves unstated** (§12.4, §9.2,
+    §12.2, §12.5, §15.2's D4 row; register D1, D4, D7, M20; issues 222, 223, 305). Built
+    (`lane/net` N-D4), each a PLACEHOLDER of a committed-class silence: (a) **The soft head's
+    width**: 128 (`soft_policy_dim`; half the policy's, inside §9.2's "~0.1M" aux budget - 69,390
+    parameters with its offset and submit readout); its submit logit read from the pooled global
+    registers in `submit_head`'s form, masked exactly as the policy's. (b) **The soft target**:
+    the policy target over the moves and submit (one distribution, D8) to the power 1/4,
+    renormalised, of full searches only (§12.5), weight 8 against the policy's 1 (absolute in
+    `LossConfig.weights`); pruning first (§12.2), then the power, is the builder's order. (c)
+    **The reply's move space** (`train/reply_map.py`): board identity `(timeline, half-turn)`;
+    each reply board mapped to its nearest ancestor existing at the decision point through the
+    engine's lineage (C23); a board with none (an unknown origin) masked. "Ambiguous" read as: two
+    distinct boards a reply move touches map onto one decision-point board - two new boards from
+    one (§12.4's case), or a board and its own new descendant - and every move touching it is
+    masked, candidates and played moves alike. (d) **The candidate set** the head normalises
+    over: the mapped candidates of every reply decision point, turn start first, de-duplicated
+    (§12.4 names none; the turn's later moves need not be candidates at its start). (e) **The
+    target**: uniform over the played moves' mapped entries (the game record's turn; the submit
+    has no mapped move); a masked played move is dropped and the rest kept (`ambiguous="move"`;
+    the arm `"turn"` drops the turn). (f) **Granularity**: per decision point - the map is
+    recomputed in each of our decision points' frames, so a reply ambiguous at our turn's start
+    may map cleanly after our first move made one of the boards (tested); §12.4's granularity
+    table lists "reply prediction" as Global while its menu says Per move - built per move. (g)
+    **The frame** under A7: tokens are not moved by the canonical view, so the map is the same
+    for either acting player (tested with Black acting). (h) **Draws**: each head from a
+    generator of its own; N1's always-built reply head's draws kept in the global stream, so no
+    existing parameter changed. Proposed edit 173.
 
 <!-- A new list, so that the numbers from 140 render as written. -->
 
@@ -4269,7 +4299,9 @@ struck through, where nothing of it is left to apply); the others stand as writt
     (44,459,795) - the figures this edit should carry.* *Moved again by A6's turn-state MLP
     (`lane/net`, N-A6: +8,768, issue 230): F1 22,973,907 (21,350,739 without the table), F2
     46,903,315 (44,468,563).* *Moved by D3's value heads (`lane/net`, N-D3: -12,079, issue 231):
-    F1 22,961,828 (21,338,660 without the table), F2 46,891,236 (44,456,484).*
+    F1 22,961,828 (21,338,660 without the table), F2 46,891,236 (44,456,484).* *Moved by D4's heads
+    (`lane/net`, N-D4: +3,598, issue 232): F1 22,965,426 (21,342,258 without the table), F2
+    46,894,834 (44,460,082).*
 157. **§6.1 and register B14**: now - "FlexAttention exploits block sparsity losslessly".
     Proposed - add: "register rows that read every key on a masked head (v1's rule) are
     computed apart - a second call, or the registers ordered after the squares - or the
@@ -4407,6 +4439,18 @@ struck through, where nothing of it is left to apply); the others stand as writt
     is the squared gap between the short-term value at the shortest horizon and the network's
     own W - L, taken without gradient (KataGo's)"; "sigma three quarters of a bin width". Why:
     each is committed-class and unstated (issue 231).
+173. **§12.4's soft-policy and reply paragraphs and register D4 (with §9.2's aux row)**: now -
+    "its own source and destination projections and its own submit logit"; "each square of a
+    reply maps to the same square on that board ... Two new boards descending from one board ...
+    make the mapping ambiguous, and those replies are masked". Proposed - add as built or as
+    ruled: the soft head's width (128) and that its submit logit is masked as the policy's;
+    "a board maps to its nearest ancestor existing at the decision point; the mapping is
+    ambiguous wherever two boards a reply touches map onto one board, and each move touching it
+    is masked"; "the head normalises over the mapped candidates of the opponent's decision points
+    in that turn; the target is uniform over its played moves"; and in §12.4's granularity table,
+    "reply prediction" per move, not global. §9.2's "Aux heads ~0.1M total" holds with the soft
+    head (76,586 as built; the reply prototype adds 69,133 when on). Why: each is committed-class
+    and unstated (issue 232).
 
 <!-- A new list, so that the numbers from 110 render as written. -->
 
@@ -4673,3 +4717,8 @@ struck through, where nothing of it is left to apply); the others stand as writt
   short-term values, the error head (`value_error`), FP32 from the global registers' mean; their
   losses with clear target interfaces; delivered to the search through the C step API. F1
   22,961,828. Register D3, F1; issue 231; edits 156, 172.
+- **2026-10-23 - network D4** (`lane/net`): the soft policy (its own projections, offset and
+  submit logit; the target to the power 1/4 at weight 8) and the opponent-reply prototype behind
+  its flag (weight 0.15; `train/reply_map.py`, the mapped move space with ambiguous mappings
+  masked, and §15.2's mapping test on constructed turns with travel). F1 22,965,426. Register
+  D1, D4, D7, F1; issues 222, 232; edits 156, 173.

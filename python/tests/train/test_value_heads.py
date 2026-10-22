@@ -121,8 +121,20 @@ def test_missing_short_term_targets_are_skipped():
 
 def test_a_few_optimiser_steps_reduce_each_value_loss():
     """Section 15's build rule: at most three optimiser steps on synthetic targets - each of D3's
-    losses, optimised alone, falls (AdamW). Not training."""
-    for name in ("wdl", "categorical", "short_term", "value_error"):
+    losses, optimised alone, falls (AdamW). Not training. The error head's target moves with the
+    network's own value, so its loss is stepped on the error head's parameters alone (its target
+    then fixed)."""
+    for name in ("wdl", "categorical", "short_term"):
         report = smoke_train(NetConfig(trunk_dtype="fp32", n_layers=2), steps=3, seed=6, loss_cfg=LossConfig(weights={name: 1.0}))
         first, last = report.losses[0][name], report.losses[-1][name]
         assert last < first, (name, first, last)
+    cfg, model, batch, tgt = _setup(6)
+    opt = torch.optim.AdamW(model.value.error.parameters(), lr=1e-2, weight_decay=0.0)
+    seen = []
+    for _ in range(3):
+        opt.zero_grad(set_to_none=True)
+        loss = compute_losses(model(batch), tgt)["value_error"]
+        seen.append(float(loss.detach()))
+        loss.backward()
+        opt.step()
+    assert seen[-1] < seen[0], seen

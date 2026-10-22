@@ -10,6 +10,50 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-23 - Network D4: the soft-policy head and the opponent-reply prototype
+
+Register D4 (§12.4, CHECKPOINT 7, reversal 29) in the network.
+
+- **The soft policy** (`net/heads.py` `ActionHead`, `AuxHeads.soft_policy`; `NetConfig.soft_policy`,
+  on - 6j's on/off arm): "a second pointer head - its own source and destination projections and
+  its own submit logit": f and g at width 128 (`soft_policy_dim`, a placeholder), D1's promotion
+  offset, and a submit readout of the pooled global registers in `submit_head`'s form, masked
+  exactly as the policy's (`NetOutput.soft_policy_logits`, `soft_submit_logits`,
+  `soft_action_logits()`). Loss (`train/losses.py`): its own actions against the policy target to
+  the power 1/4, renormalised (`soft_policy_target`, `LossConfig.soft_policy_power`), full searches
+  only, weight 8 (the policy's 1).
+- **The opponent-reply prototype** (`NetConfig.opp_reply`, off): its pointer head scores
+  `PositionState.opp_moves`; loss `distribution_ce` against `Targets.opp_reply`, now the turn's
+  distribution `(B, M2)` (positions without one skipped), weight 0.15. `train/reply_map.py`
+  (`map_reply`) builds the move space: the opponent's next turn mapped onto one of our decision
+  points - each reply board to its nearest ancestor there through the engine's lineage, the same
+  square; every move touching a board two distinct reply boards map onto masked; candidates the
+  mapped moves of every reply decision point; the target uniform over the played moves.
+  `opp_moves` docs updated (`net/state.py`, `engine/convert.py`); inference supplies none.
+- **The other pointer heads' offset**: `NetConfig.pointer_promotion_offset` (on, a placeholder,
+  issue 222).
+- **Draws**: each head from a generator of its own (`model.d4_soft_seed`, `d4_reply_seed`); N1's
+  always-built reply head's draws kept in the global stream - every existing parameter unchanged
+  (checked against the previous commit under three configurations), and switching either flag
+  changes no other parameter (tested).
+- **Parameters**: F1 22,965,426 (+69,390 the soft policy, -65,792 the reply now off; 23,034,559
+  with the reply on), F2's L24-ff12 46,894,834; §9.2's aux budget 76,586. `netplay.SMALL` gives the
+  soft head width 32.
+- **Tests**: `tests/train/test_reply_map.py` - §15.2's D4 row on turns played through the engine
+  from handwritten 5dpgn (a branching jump with White and with Black acting; two branches into one
+  past board in Two Timelines, ambiguous and masked at the turn's start, mapped at the decision
+  point between the jumps), each mapped square checked against an independent lineage walk, and the
+  mapped space fed to the reply head; `tests/train/test_policy_heads.py` (the quarter-power target,
+  the soft loss at weight 8 reaching only its own head, full searches only, the reply loss only
+  under its flag at 0.15, a few optimiser steps reducing each); `tests/net/test_model.py` (each
+  pointer head's own endpoints and offset, the soft submit logit masked like the policy's in both
+  readout forms, the flags changing no other parameter); the A7 mirror (a reply arm added), cached =
+  dense (a reply and pointer-submit arm), invariance and smoke tests over the new outputs;
+  `tests/net/test_params.py`.
+- Spec: §8.1 (promotions), §9.2 (Params; Aux heads), §12.4 (soft policy, reply), §12.5, §15.2's D4
+  row; register D1, D4, D7, F1. Spec issue 232 (new) and 222 (built note); proposed edit 173; edit
+  156's running figure updated.
+
 ### 2026-10-23 - Network D3: the value heads as corrected at CHECKPOINT 7
 
 Register D3 (§8.3, corrected at CHECKPOINT 7, reversal 28) in the network: the 51 bins had been

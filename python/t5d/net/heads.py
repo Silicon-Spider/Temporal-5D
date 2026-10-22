@@ -63,11 +63,19 @@ D4's list, are the value group above (spec issue 223).
   board-moves it projects N by (E11's boards-per-turn figure, issue 305). Log scale because
   the target spans 0 to hundreds; train with a Huber/L2 loss on ``log1p(target)``
   (implementation choice).
-* Opponent reply: a second pointer head over the opponent's candidate moves, always built,
-  with no promotion offset (as built at N1: D1 names the policy). D4 reinstated it as a
-  prototype at CHECKPOINT 7 - behind a flag, weight 0.15, its target mapped onto current
-  squares - which the heads' rebuild after engine ABI round 2 builds; this head is left as
-  it was until then.
+* Soft policy (CHECKPOINT 7; section 12.4): "a second pointer head - its own source and
+  destination projections and its own submit logit" (``ActionHead``), scoring the same
+  candidate moves as the policy and normalised with its own submit logit the same way; trained
+  on the policy target raised to the power 1/4 at eight times the policy's weight
+  (``train.losses``). On (``NetConfig.soft_policy``: 6j's on/off arm); its width a placeholder
+  (``soft_policy_dim``, spec issue 232).
+* Opponent reply (a prototype since CHECKPOINT 7; ``NetConfig.opp_reply``, off): a pointer head
+  over the opponent's next turn mapped onto this decision point's squares
+  (``PositionState.opp_moves``, built by ``train.reply_map`` - ambiguous mappings masked),
+  weight 0.15 - a training target's head (empty at inference).
+* The pointer heads other than the policy carry D1's promotion offset too
+  (``NetConfig.pointer_promotion_offset``, a placeholder - spec issue 222): the bilinear form
+  ties their promotions as it ties the policy's.
 * Per board: travelled-into within k plies; timeline still active at game end;
   tactical volatility - one logit each (k is a target-construction parameter).
 * Per square: a small multi-label vector of deep attack facts (``SQUARE_LABELS``; the set
@@ -268,15 +276,22 @@ class PointerHead(nn.Module):
     ``promotion_offset``, a learned per-piece offset for a promotion: ``promo(h_dst)[piece]``,
     one logit per piece type read from the destination token (section 8.1: "Promotions add a
     learned per-piece logit offset"; Chessformer's promotion bias). The policy has it (D1,
-    M20); the opponent-reply head is built without it, as at N1 (D4's prototype is rebuilt
-    with the heads)."""
+    M20); the other pointer heads (the soft policy, the reply prototype, D9's optimistic policy)
+    under ``NetConfig.pointer_promotion_offset`` (a placeholder, spec issue 222)."""
 
-    def __init__(self, d_model: int, dim: int, promotion_offset: bool, n_piece_types: int = 13, bias: bool = True) -> None:
+    def __init__(
+        self, d_model: int, dim: int, promotion_offset: bool, n_piece_types: int = 13, bias: bool = True, *, draw: bool = True
+    ) -> None:
         super().__init__()
         self.dim = dim
-        self.src = nn.Linear(d_model, dim, bias=bias)  # f
-        self.dst = nn.Linear(d_model, dim, bias=bias)  # g
-        self.promo = nn.Linear(d_model, n_piece_types, bias=bias) if promotion_offset else None
+
+        def linear(n_in: int, n_out: int) -> nn.Linear:
+            # ``draw=False``: made without drawing from the RNG (a head drawn from its own generator)
+            return nn.Linear(n_in, n_out, bias=bias) if draw else nn.utils.skip_init(nn.Linear, n_in, n_out, bias=bias)
+
+        self.src = linear(d_model, dim)  # f
+        self.dst = linear(d_model, dim)  # g
+        self.promo = linear(d_model, n_piece_types) if promotion_offset else None
 
     def forward(self, h: torch.Tensor, moves: torch.Tensor, valid: torch.Tensor, square_mask: torch.Tensor) -> torch.Tensor:
         """Logits ``(B, M)``; ``moves`` ``(B, M, 3)`` hold (src token, dst token, promotion)."""
@@ -321,6 +336,24 @@ class SubmitHead(nn.Module):
         return (policy.src(r) * policy.dst(r)).sum(dim=-1) / math.sqrt(policy.dim)
 
 
+class ActionHead(nn.Module):
+    """A pointer head with its own submit logit - "its own source and destination projections
+    and its own submit logit" (section 12.4's soft policy; D9's optimistic policy the same way):
+    a ``PointerHead`` over the position's candidate moves and a ``SubmitHead`` of the pooled
+    global registers in ``NetConfig.submit_head``'s form (the ``"pointer"`` form reads this head's
+    own f and g). Made without drawing from the RNG; drawn from a generator of its own
+    (``model.T5DNet._init_weights``). Returns the move logits (-inf at padding) and the unmasked
+    submit logit; the model masks it as it masks the policy's."""
+
+    def __init__(self, cfg: NetConfig, dim: int, promotion_offset: bool) -> None:
+        super().__init__()
+        self.pointer = PointerHead(cfg.d_model, dim, promotion_offset, draw=False)
+        self.submit = SubmitHead(cfg)
+
+    def forward(self, h: torch.Tensor, batch: Batch) -> tuple[torch.Tensor, torch.Tensor]:
+        return self.pointer(h, batch.moves, batch.move_valid, batch.square_mask), self.submit(h, batch, self.pointer)
+
+
 class ValueHeads(nn.Module):
     """D3's four value heads over the global registers' mean (the module docstring): a shared
     hidden layer with F6's Mish (whatever the trunk FFN's activation - 6y's squared ReLU is a
@@ -361,4 +394,11 @@ class AuxHeads(nn.Module):
         self.effort = nn.Linear(d, cfg.effort_bins)
         self.board = nn.Linear(d, len(BOARD_HEADS))
         self.square = nn.Linear(d, cfg.n_square_labels)
-        self.opp_reply = PointerHead(d, cfg.opp_policy_dim, promotion_offset=False)
+        # N1's always-built reply head went with D4's prototype (below): its construction-time
+        # draws are kept, as the short value head's are.
+        PointerHead(d, cfg.opp_policy_dim, promotion_offset=False)
+        # D4 (CHECKPOINT 7): the soft policy (on) and the opponent-reply prototype (behind its flag,
+        # off) - made without drawing, each drawn from a generator of its own (``model.d4_seeds``).
+        offset = cfg.pointer_promotion_offset
+        self.soft_policy = ActionHead(cfg, cfg.soft_policy_dim, offset) if cfg.soft_policy else None
+        self.opp_reply = PointerHead(d, cfg.opp_policy_dim, offset, draw=False) if cfg.opp_reply else None

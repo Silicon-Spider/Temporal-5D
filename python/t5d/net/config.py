@@ -68,6 +68,10 @@ The build rules (spec section 15.1) decide what else appears here:
   pooled global registers; the targets' unstated details (HL-Gauss' sigma, the error head's
   horizon and loss) are the training code's placeholders (``train.losses.LossConfig``; spec
   issue 231).
+* **D4's soft policy** (committed, CHECKPOINT 7, section 12.4) is on (``soft_policy``, 6j's
+  on/off arm); **the opponent-reply head** is a prototype behind its flag, off (``opp_reply``);
+  their widths and the other pointer heads' promotion offset are placeholders (spec issues 222,
+  232).
 * **F5** (committed, CHECKPOINT 6, section 9.3): every trunk norm RMSNorm-style - no
   mean-centring, no bias (``trunk.RMSNorm``) - no biases in the Q, K and V projections
   (``qkv_bias``), the attention-output and FFN biases kept (``out_ffn_bias``), pre-norm;
@@ -336,8 +340,24 @@ class NetConfig:
     #: per-piece logit offset read from the destination token (D1, section 8.1, M20:
     #: "promotion scoring -> learned per-piece offset" - no switch; ``heads.PointerHead``).
     policy_dim: int = 256
+    #: D4's soft policy (CHECKPOINT 7, section 12.4): "a second pointer head - its own source and
+    #: destination projections and its own submit logit" (``heads.ActionHead``), on - its off arm is
+    #: 6j's "soft policy on/off". Its projections' width: COMMITTED-CLASS SILENCE (D4; spec issue
+    #: 232) - placeholder default, not a decision: 128, half the policy's (section 9.2's "~0.1M"
+    #: auxiliary budget).
+    soft_policy: bool = True
+    soft_policy_dim: int = 128
+    #: D4's opponent-reply head - a PROTOTYPE (reinstated at CHECKPOINT 7: "weight 0.15, the
+    #: opponent's next turn mapped onto current squares, ambiguous mappings masked"), behind its
+    #: flag, off: its move space is ``PositionState.opp_moves`` as ``train.reply_map`` builds it.
+    opp_reply: bool = False
     #: Width of the opponent-reply pointer projections (aux, ~0.1M budget of section 9.2).
     opp_policy_dim: int = 128
+    #: Whether the pointer heads other than the policy (the soft policy, the reply, D9's
+    #: optimistic policy) carry D1's per-piece promotion offset. COMMITTED-CLASS SILENCE (D1 names
+    #: the policy; spec issue 222) - placeholder default: yes, since the bilinear form ties their
+    #: promotions as it ties the policy's.
+    pointer_promotion_offset: bool = True
     #: Hidden width of D3's value heads' shared layer (its activation is F6's Mish -
     #: ``heads.ValueHeads``: WDL, the categorical, the short-term values and the error head).
     #: Where each head reads has no switch (M20; ``model.T5DNet.heads``): D3's value heads the
@@ -823,6 +843,8 @@ class NetConfig:
         increasing = all(a < b for a, b in zip(horizons[:-1], horizons[1:], strict=True))
         if not horizons or not increasing or any(not (math.isfinite(h) and h > 0) for h in horizons):
             raise ValueError("short_term_horizons must be one or more finite positive horizons (turns), increasing (D3)")
+        if self.soft_policy_dim < 1 or self.opp_policy_dim < 1:
+            raise ValueError("soft_policy_dim and opp_policy_dim must be positive")
         if self.submit_head not in SUBMIT_HEADS:
             raise ValueError(f"submit_head must be one of {SUBMIT_HEADS}")
         if self.regs_per_board < 0 or self.global_regs < 0:
