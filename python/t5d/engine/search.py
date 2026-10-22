@@ -1,7 +1,8 @@
 """The main search from Python: ``Search`` wraps one ``t5d_search`` of the engine's step API
 (``t5d/capi_search.h``; engine stage E6a, ``t5d/mcts.hpp``).
 
-The search is the engine's - PUCT or MCGS over game states under either arm of D2, with its
+The search is the engine's - PUCT or MCGS over game states under any arm of D2 (the tree form
+under PUCT only), with its
 legality policy, terminal detection, turn cap, evaluation cache and final selection. Python
 is its **evaluator**: ``gather`` selects a batch of leaves, ``leaf`` describes each (its
 expansion - the network's input - with D8's acting player and submit flags), ``deliver``
@@ -155,6 +156,14 @@ class SearchInfo:
     root_best_since: int  # the effort label: the root's visits when its most visited child last changed
     # engine ABI round 2 review fixes (register I10, 6m)
     uncertainty_missing: int  # nodes expanded without the selected uncertainty signal (none read it)
+    # D2's tree form: mid-turn nodes expanded on inherited priors (never evaluated), and the mid-turn
+    # nodes sent to the network (or the cache) instead, by the first gate found to fire
+    inherited_nodes: int
+    gate_between: int
+    gate_capture: int
+    gate_check: int
+    gate_present: int
+    gate_always: int
 
     @property
     def root_finished(self) -> bool:

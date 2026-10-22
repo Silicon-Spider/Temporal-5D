@@ -20,6 +20,7 @@
 #include <tuple>
 #include <utility>
 
+#include "t5d/board.hpp"
 #include "t5d/check.hpp"
 #include "t5d/movegen.hpp"
 #include "t5d/multiverse.hpp"
@@ -87,6 +88,10 @@ struct Edge {
   NodeId child = kNoNode;     // created on first selection
   std::uint32_t visits = 0;
   std::uint32_t vl = 0;       // virtual visits of paths waiting in the batch
+  // The logit its prior was taken from, before the temperature: a move's the
+  // evaluator's (tree form: inherited - what its children inherit), an
+  // action's the action prior's, submit's the submit logit (NaN: none given).
+  float logit = 0;
   double w = 0;               // sum of backup weights
   double wq = 0;              // weighted sum of values
   double wq2 = 0;             // weighted sum of squares
@@ -125,6 +130,7 @@ struct Node {
   bool submit_possible = false; // board-move, D8: a submit edge (obligations met, T5)
   bool submit_legal = false;    // ... legal (C4), else kept pruned
   bool has_eval = false;
+  bool inherited = false;     // tree form: expanded on its parent's logits, never evaluated
   std::int8_t lo = -1;        // solver bounds, the mover's view
   std::int8_t hi = 1;
   std::uint32_t visits = 0;
@@ -142,6 +148,9 @@ struct Node {
   double eval_var = 0;        // ... and uncertainty signal (SearchParams::uncertainty_source)
   float eval_error = std::numeric_limits<float>::quiet_NaN();       // the error head's output
   float eval_moves_left = std::numeric_limits<float>::quiet_NaN();  // moves-left (never backed up)
+  // The submit logit its submit edge's prior is (or would be) taken from: its
+  // evaluation's, or (tree form, inherited) its parent's - NaN: none given.
+  float submit_logit = std::numeric_limits<float>::quiet_NaN();
   double k0 = 1;
   std::size_t instantiated = 0;
   std::vector<Edge> edges;
@@ -530,6 +539,7 @@ struct Search::Impl {
   std::vector<EvalRequest> requests_;
   std::size_t unique_requests_ = 0;
   std::vector<std::unique_ptr<Expansion>> slots_;
+  Expansion inherit_x_;  // the tree form's inherited expansions (their moves only)
   std::function<void(const GameState&, std::uint64_t)> hook_;
   std::uint64_t root_generation_ = 1;
   std::uint64_t notified_generation_ = 0;
@@ -652,6 +662,20 @@ struct Search::Impl {
     require(nonneg(p.unknown_prior_scale), "unknown_prior_scale", "finite, >= 0");
     require(p.turn_cap.turns >= 0 && p.turn_cap.boards >= 0, "turn_cap", "0 (none) or more");
     if (p.key_bits < 1 || p.key_bits > 64) throw std::invalid_argument("SearchParams::key_bits: 1 to 64");
+    if ((p.tree_gates & ~kGatesAll) != 0) {
+      throw std::invalid_argument("SearchParams::tree_gates: a mask of kGateBetween, kGateCapture, kGateCheck, "
+                                  "kGatePresent and kGateAlways, not " + std::to_string(p.tree_gates));
+    }
+    if (p.split == TurnSplit::Tree && p.graph) {
+      // Parked, not a design refusal (build-log spec issue 301): under MCGS a
+      // mid-turn node is made by the first path to reach it, so the priors it
+      // inherits and whether it was evaluated at all would be that path's.
+      throw std::invalid_argument(
+          "SearchParams: the tree form (split Tree) is refused under graph search (graph) - under MCGS an "
+          "inside-turn node's inherited priors, and whether the network evaluated it, would depend on the path "
+          "that created it, and identity is the state (§8.5, C11; §14.4 and C21 refuse path-dependent "
+          "evaluations); the documents do not say how the two combine (build-log spec issue 301)");
+    }
     if (p.expand.pin || p.expand.check || p.expand.travel_threat) {
       throw std::invalid_argument("SearchParams::expand: pin, check and travel-threat are not built");
     }
@@ -660,6 +684,10 @@ struct Search::Impl {
   // -- nodes ------------------------------------------------------------------
 
   bool compare_origins() const noexcept { return params_.node_key == NodeKey::StateAndOrigins; }
+
+  // The ply split's tree: the board-move split and the tree form (D2), whose
+  // nodes, edges and turn structure are the same.
+  bool ply() const noexcept { return params_.split != TurnSplit::WholeTurn; }
 
   // The node key, cut to key_bits bits (a test seam: collisions on purpose).
   std::uint64_t key_of(const GameState& s) const noexcept {
@@ -741,11 +769,15 @@ struct Search::Impl {
 
   bool solved(const Node& n) const noexcept { return params_.proof_channel && n.lo == n.hi; }
 
+  // Whether the node's eval_* hold a value: its evaluation's, or (tree form,
+  // tree_inherit_value) the one an inherited node takes from its parent.
+  bool valued(const Node& n) const noexcept { return n.has_eval || (n.inherited && params_.tree_inherit_value); }
+
   double node_q(const Node& n) const noexcept {
     if (n.terminal != Terminal::None) return detail::terminal_value(n.terminal);
     if (solved(n)) return n.lo;
     if (n.w > 0) return n.wq / n.w;
-    return n.has_eval ? n.eval_mean : 0.0;
+    return valued(n) ? n.eval_mean : 0.0;
   }
 
   // D3: the node's draw probability, as node_q its value (a solved node's: 1
@@ -754,7 +786,7 @@ struct Search::Impl {
     if (n.terminal != Terminal::None) return detail::terminal_draw(n.terminal);
     if (solved(n)) return n.lo == 0 ? 1.0 : 0.0;
     if (n.w > 0) return n.wd / n.w;
-    return n.has_eval ? n.eval_draw : 0.0;
+    return valued(n) ? n.eval_draw : 0.0;
   }
 
   bool root_finished() const noexcept {
@@ -855,7 +887,7 @@ struct Search::Impl {
   void leaf_expansion(const Node& n, Expansion& out) {
     const auto t0 = std::chrono::steady_clock::now();
     ExpandOptions o = params_.expand;
-    o.legal_moves = params_.split == TurnSplit::BoardMove && params_.legal_moves_only;
+    o.legal_moves = ply() && params_.legal_moves_only;
     o.legality = params_.legality;
     expand(n.state, o, out, n.moves_made);  // A6: the node's count, from its path
     stats_.seconds_expand += detail::seconds_since(t0);
@@ -1038,7 +1070,8 @@ struct Search::Impl {
     n.has_eval = true;
     n.edges.clear();
     std::vector<double> logits;
-    if (params_.split == TurnSplit::BoardMove) {
+    n.submit_logit = ev.submit_logit;
+    if (ply()) {
       n.edges.reserve(moves.size() + (n.submit_possible ? std::size_t{1} : std::size_t{0}));
       const std::span<const MoveLegality> legality = x.move_legality();
       for (std::size_t i = 0; i < moves.size(); ++i) {
@@ -1047,6 +1080,7 @@ struct Search::Impl {
         // (a) Kept unknown moves are flagged (proved-illegal ones were dropped).
         e.unknown = i < legality.size() && legality[i] == MoveLegality::Unknown;
         if (e.unknown) ++stats_.unknown_edges;
+        e.logit = ev.logits[i];
         n.edges.push_back(e);
         logits.push_back(static_cast<double>(ev.logits[i]));
       }
@@ -1056,6 +1090,7 @@ struct Search::Impl {
         Edge e;
         e.submit = true;
         e.pruned = !n.submit_legal;
+        e.logit = ev.submit_logit;
         n.edges.push_back(e);
         ++stats_.submit_edges;
         if (e.pruned) ++stats_.illegal_submits;
@@ -1093,16 +1128,25 @@ struct Search::Impl {
                                  : sum / static_cast<double>(action.size());
         Edge e;
         e.action = static_cast<std::uint32_t>(a);
+        e.logit = static_cast<float>(logit);
         n.edges.push_back(e);
         logits.push_back(logit);
       }
     }
+    set_priors(id, logits, std::isnan(ev.submit_logit));
+  }
+
+  // The prior of node `id`'s edges from their logits (`logits[i]` edge i's; a
+  // submit edge's 0 when `no_submit_logit`) - shared by an evaluated node's
+  // expansion and an inherited one's - then the root's noise, the order by
+  // prior and the widening: the node is expanded.
+  void set_priors(NodeId id, const std::vector<double>& logits, bool no_submit_logit) {
+    Node& n = nodes_[id];
     // The prior: a softmax at the policy temperature over the edges that may
     // be taken (an illegal submit gets none); its entropy sets k0. A legal
     // submit without the evaluator's logit takes submit_share and leaves the
     // rest to the moves (D8's logit is the network's; this is the placeholder).
-    const bool shared_submit = params_.split == TurnSplit::BoardMove && n.submit_legal &&
-                               std::isnan(ev.submit_logit) && !n.edges.empty() &&
+    const bool shared_submit = ply() && n.submit_legal && no_submit_logit && !n.edges.empty() &&
                                n.edges.back().submit;
     const auto in_softmax = [&](std::size_t i) {
       return !n.edges[i].pruned && !(shared_submit && n.edges[i].submit);
@@ -1245,6 +1289,197 @@ struct Search::Impl {
     n.instantiated = std::max(n.instantiated, static_cast<std::size_t>(capped));
   }
 
+  // -- D2's tree form: the interaction gates and inherited expansions ----------------
+
+  // "The boards still to move" in `s` (tree_still_to_move), by timeline,
+  // ascending.
+  std::vector<int> still_to_move(const GameState& s) const {
+    return params_.tree_still_to_move == StillToMove::Mandatory ? s.mandatory_timelines() : s.playable_timelines();
+  }
+
+  // Timeline p's playable board passed in `mv`: advanced by a copy, its
+  // owner's opponent to move - as R1's check status passes a board (C6: the
+  // same pieces, no en-passant square). Returns the copy's half-turn.
+  static int pass_board(Multiverse& mv, int p) {
+    BoardBuilder b(*mv.head(p));
+    b.set_en_passant(kNoSquare);
+    mv.append_board(p, b.publish());
+    return mv.timeline(p)->last_half_turn();
+  }
+
+  // (ii) Whether the piece move `m` captures could reach a board still to move
+  // (CaptureReach::Reach): in the multiverse before the move, with its own
+  // board and every board still to move after it passed, the captured piece
+  // has a pseudo-legal move, by the generator's rules, onto one of the boards
+  // still to move's passed copies.
+  bool capture_reaches(const GameState& before, const GameState& after, const Move& m) const {
+    if (m.branching()) return false;  // taken on a history board, which no move leaves (J3)
+    const std::vector<int> still = still_to_move(after);
+    if (still.empty() || !before.playable_by_mover(m.to_timeline)) return false;
+    const int square = m.en_passant() ? m.aux_square : m.to_square;
+    Multiverse mv = before.multiverse();
+    std::vector<std::pair<int, int>> targets;  // the passed copies: (timeline, half-turn)
+    for (const int p : still) {
+      if (p == m.to_timeline || !before.playable_by_mover(p)) continue;
+      targets.emplace_back(p, pass_board(mv, p));
+    }
+    if (targets.empty()) return false;
+    pass_board(mv, m.to_timeline);
+    MoveList moves;
+    append_moves_of(mv, before.rules(), opposite(before.to_move()), m.to_timeline, moves,
+                    before.inactive_timelines());
+    for (const Move& o : moves) {
+      if (o.from_square != square) continue;
+      for (const auto& [p, h] : targets) {
+        if (o.to_timeline == p && o.to_half_turn == h) return true;
+      }
+    }
+    return false;
+  }
+
+  // (iii) Whether the acting player is "in check" in `s`, as the gate reads it
+  // (tree_check): CheckChange::Passed - R1's construction carried into the
+  // action: with every board still to move passed, a piece of the opponent's
+  // can capture one of the acting player's royals (from any of the
+  // opponent's playable boards: the passed copies, the boards played in the
+  // action, the rest); CheckChange::Submission - C4's test on the state as it
+  // stands (royals_safe), nothing passed.
+  bool in_check_now(const GameState& s) const {
+    if (params_.tree_check == CheckChange::Submission) return !royals_safe(s);
+    Multiverse mv = s.multiverse();
+    for (const int p : still_to_move(s)) {
+      if (s.playable_by_mover(p)) pass_board(mv, p);
+    }
+    return royal_capture_exists(mv, s.rules(), opposite(s.to_move()), s.inactive_timelines());
+  }
+
+  // The first enabled interaction gate that fires on the move of edge (pid, ei)
+  // into mid-turn node cid - its bit's index (between 0, capture 1, check 2,
+  // present 3, always 4) - or -1: none. The cheapest are tested first.
+  int fired_gate(NodeId pid, std::size_t ei, NodeId cid) {
+    const std::uint32_t gates = params_.tree_gates;
+    if ((gates & kGateAlways) != 0) return 4;
+    if ((gates & kGatesInteraction) == 0) return -1;
+    const auto t0 = std::chrono::steady_clock::now();
+    const GameState& before = nodes_[pid].state;
+    const GameState& after = nodes_[cid].state;
+    const Move& m = nodes_[pid].edges[ei].move;
+    int fired = -1;
+    if ((gates & kGatePresent) != 0 && (params_.tree_present == PresentShift::Rewind
+                                            ? after.present() < before.present()
+                                            : after.present() != before.present())) {
+      fired = 3;
+    } else if ((gates & kGateBetween) != 0 && m.jump() && !m.branching() &&
+               (params_.tree_still_to_move == StillToMove::Playable || before.mandatory(m.to_timeline))) {
+      fired = 0;  // (i) its destination is a playable board of the mover's not yet played (J4, J6)
+    } else if ((gates & kGateCapture) != 0 && m.capture() &&
+               (params_.tree_capture == CaptureReach::Any || capture_reaches(before, after, m))) {
+      fired = 1;
+    } else if ((gates & kGateCheck) != 0 && in_check_now(before) != in_check_now(after)) {
+      fired = 2;
+    }
+    stats_.seconds_gates += detail::seconds_since(t0);
+    return fired;
+  }
+
+  // Expands mid-turn node `id`, below `pid`, WITHOUT the network: its children
+  // exactly as a leaf's (the legal moves under the same classification, and
+  // submit), their priors from the parent's logits - each move matched to the
+  // parent's edge with its source, destination and promotion (a J6 branch
+  // onto a board played since has the coordinates of the non-branching jump it
+  // was), a move the parent did not have taking the parent's lowest logit -
+  // and submit's from the parent's submit logit (NaN: submit_share). The
+  // parent's logits are its evaluation's, or its own inherited ones: so the
+  // logits of the last node the network evaluated above it. Returns false for
+  // a dead end (marked, the path released).
+  bool inherit(NodeId id, NodeId pid) {
+    {
+      const auto t0 = std::chrono::steady_clock::now();
+      ExpandOptions o;  // the children only: no features, relations or window are read
+      o.window_k = 0;
+      o.square_features = SquareFeatures::None;
+      o.legal_moves = params_.legal_moves_only;
+      o.legality = params_.legality;
+      expand(nodes_[id].state, o, inherit_x_, nodes_[id].moves_made);
+      stats_.seconds_expand += detail::seconds_since(t0);
+    }
+    const Expansion& x = inherit_x_;
+    const MoveList& moves = x.moves();
+    if (moves.empty() && !x.submit_legal()) {
+      // No legal completion (as at a leaf, §8.2): a dead end, never scored.
+      nodes_[id].submit_possible = x.submit_possible();
+      nodes_[id].submit_legal = false;
+      mark_dead_end(path_);
+      release(path_);
+      return false;
+    }
+    using Coord = std::tuple<int, int, int, int, int, int, int>;
+    const auto coord = [](const Move& mv) {
+      return Coord{mv.from_timeline, mv.from_half_turn, mv.from_square, mv.to_timeline,
+                   mv.to_half_turn, mv.to_square, mv.promotes() ? index_of(mv.promotion) + 1 : 0};
+    };
+    std::map<Coord, float> parent;
+    float lowest = 0;
+    {
+      const Node& p = nodes_[pid];
+      bool first = true;
+      for (const Edge& e : p.edges) {
+        if (e.submit) continue;
+        parent.emplace(coord(e.move), e.logit);
+        lowest = first ? e.logit : std::min(lowest, e.logit);
+        first = false;
+      }
+    }
+    std::vector<Edge> edges;
+    std::vector<double> logits;
+    edges.reserve(moves.size() + 1);
+    logits.reserve(moves.size() + 1);
+    const std::span<const MoveLegality> legality = x.move_legality();
+    std::uint64_t unknown = 0;
+    for (std::size_t i = 0; i < moves.size(); ++i) {
+      Edge e;
+      e.move = moves[i];
+      e.unknown = i < legality.size() && legality[i] == MoveLegality::Unknown;
+      if (e.unknown) ++unknown;
+      const auto it = parent.find(coord(moves[i]));
+      e.logit = it != parent.end() ? it->second : lowest;
+      edges.push_back(e);
+      logits.push_back(static_cast<double>(e.logit));
+    }
+    const Node& p = nodes_[pid];
+    const float submit_logit = p.submit_logit;
+    const double eval_mean = p.eval_mean;
+    const double eval_draw = p.eval_draw;
+    const double eval_var = p.eval_var;
+    Node& n = nodes_[id];
+    n.submit_possible = x.submit_possible();
+    n.submit_legal = x.submit_legal();
+    if (n.submit_possible) {
+      Edge e;
+      e.submit = true;
+      e.pruned = !n.submit_legal;
+      e.logit = submit_logit;
+      edges.push_back(e);
+      logits.push_back(std::isnan(submit_logit) ? 0.0 : static_cast<double>(submit_logit));
+    }
+    n.edges = std::move(edges);
+    n.submit_logit = submit_logit;
+    n.inherited = true;
+    if (params_.tree_inherit_value) {
+      n.eval_mean = eval_mean;
+      n.eval_draw = eval_draw;
+      n.eval_var = eval_var;
+    }
+    stats_.unknown_edges += unknown;
+    if (n.submit_possible) {
+      ++stats_.submit_edges;
+      if (!n.submit_legal) ++stats_.illegal_submits;
+    }
+    ++stats_.inherited_nodes;
+    set_priors(id, logits, std::isnan(submit_logit));
+    return true;
+  }
+
   // -- selection -------------------------------------------------------------------
 
   // A variance blended from the categorical prior (weight w0) and the
@@ -1331,7 +1566,7 @@ struct Search::Impl {
           }
         }
         double u = c * e.prior * sqrt_n / (1.0 + static_cast<double>(e.visits) + vlw);
-        if (params_.variance_bonus && child != nullptr && child->has_eval) {
+        if (params_.variance_bonus && child != nullptr && valued(*child)) {
           u *= variance_bonus(*child, e);
         }
         const double score = q + u;
@@ -1507,6 +1742,22 @@ struct Search::Impl {
           ++stats_.collisions;
           collided_.push_back(path_);  // its virtual loss stays until the batch ends
           return Selected::Collision;
+        }
+        // D2's tree form: a mid-turn node whose incoming move fires no gate is
+        // expanded on inherited priors and the simulation goes on through it;
+        // the root, a turn start (the turn complete) and a gated node are leaves.
+        if (params_.split == TurnSplit::Tree && cur != root_ && !n.turn_start) {
+          const NodeId pid = path_[path_.size() - 2].node;
+          const int gate = fired_gate(pid, path_.back().edge, cur);
+          if (gate < 0) {
+            if (!inherit(cur, pid)) return Selected::DeadEnd;
+            continue;
+          }
+          // Counted once the leaf goes to the network or the cache (a dead
+          // end goes to neither).
+          const Selected s = leaf(cur);
+          if (s != Selected::DeadEnd) ++stats_.gate_fired[static_cast<std::size_t>(gate)];
+          return s;
         }
         return leaf(cur);
       }
@@ -1756,7 +2007,7 @@ struct Search::Impl {
       }
       if (e.child != kNoNode) {
         const Node& child = nodes_[e.child];
-        c.eval_variance = child.has_eval ? child.eval_var : 0.0;
+        c.eval_variance = valued(child) ? child.eval_var : 0.0;
         if (params_.proof_channel) {
           const auto [lo, hi] = detail::bounds_in_parent(r, child);
           c.lo = e.unknown ? -1 : lo;  // (e) no proof through an unknown edge
@@ -1875,8 +2126,7 @@ struct Search::Impl {
         // in a graph as in a tree. And the moves made in the action (A6) count
         // the move edges since: 0 after a submit edge or a whole action, the
         // parent's + 1 after a move (§15.4's turn structure).
-        if (e.child != kNoNode && params_.split == TurnSplit::BoardMove &&
-            nodes_[e.child].turn_start != e.submit) {
+        if (e.child != kNoNode && ply() && nodes_[e.child].turn_start != e.submit) {
           fail(e.submit ? "a submit edge into a node during an action" : "a move edge into a turn start", id);
         }
         if (e.child != kNoNode && params_.split == TurnSplit::WholeTurn && !nodes_[e.child].turn_start) {
@@ -1897,6 +2147,14 @@ struct Search::Impl {
       }
       if (!n.turn_start && n.terminal != Terminal::None) fail("a game end during an action (C5)", id);
       if (n.turn_start && n.dead_end) fail("a turn start marked a dead end", id);
+      // D2's tree form: an inherited node is a mid-turn node the network never
+      // saw - no evaluation, and no visit ends there unless it is solved (or a
+      // carried root with no child left).
+      if (n.inherited) {
+        if (params_.split != TurnSplit::Tree) fail("an inherited node outside the tree form", id);
+        if (n.has_eval || n.turn_start) fail("an inherited node evaluated, or a turn start", id);
+        if (n.ends != 0 && !solved(n) && !n.stuck) fail("a visit ended at an inherited node", id);
+      }
       if (static_cast<std::uint64_t>(n.visits) != n.ends + through) {
         fail("visits " + std::to_string(n.visits) + " != ends " + std::to_string(n.ends) +
                  " + child visits " + std::to_string(through),
@@ -1971,6 +2229,7 @@ struct Search::Impl {
                          (static_cast<std::uint64_t>(n.expanded) << 24) |
                          (static_cast<std::uint64_t>(n.stuck) << 25) |
                          (static_cast<std::uint64_t>(n.dead_end) << 26) |
+                         (static_cast<std::uint64_t>(n.inherited) << 27) |
                          (static_cast<std::uint64_t>(n.instantiated) << 32));
       for (const Edge& e : n.edges) {
         h = combine(h, bits_of(e.prior));
@@ -2101,7 +2360,7 @@ std::vector<RootChild> Search::root_children() const {
     if (e.child != kNoNode) {
       const Node& n = s.nodes_[e.child];
       c.child_key = n.key;
-      if (s.params_.variance_bonus && n.has_eval) c.exploration_scale = s.variance_bonus(n, e);
+      if (s.params_.variance_bonus && s.valued(n)) c.exploration_scale = s.variance_bonus(n, e);
     }
     if (e.child != kNoNode && s.nodes_[e.child].has_eval) {
       // The child's own evaluation, the network's, in the root player's view.
@@ -2349,6 +2608,7 @@ NodeView Search::node(NodeId id) const {
   v.eval_error = n.eval_error;
   v.eval_moves_left = n.eval_moves_left;
   v.evaluated = n.has_eval;
+  v.inherited = n.inherited;
   v.k0 = n.k0;
   v.instantiated = n.instantiated;
   v.edge_count = n.edges.size();
@@ -2372,6 +2632,7 @@ EdgeView Search::edge(NodeId id, std::size_t index) const {
   v.pruned = e.pruned;
   v.unknown = e.unknown;
   v.verified = e.verified;
+  v.logit = static_cast<double>(e.logit);
   v.prior = e.prior;
   v.child = e.child;
   v.visits = e.visits;

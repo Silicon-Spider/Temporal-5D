@@ -71,6 +71,8 @@ def nets():
         ("Standard - Two Timelines", "ply", "match"),
         ("Standard", "turn", "match"),
         ("Standard - Two Timelines", "turn", "self"),
+        ("Standard - Two Timelines", "tree", "self"),
+        ("Misc - Timeline Tactician", "tree", "match"),
     ],
 )
 def test_a_game_replays_legal(nets, variant, split, mode):

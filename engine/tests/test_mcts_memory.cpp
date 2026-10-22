@@ -51,10 +51,14 @@ TEST(mcts_an_allocation_failure_in_gather_or_deliver_leaves_the_search_consisten
   const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
   std::size_t gather_faults = 0;
   std::size_t deliver_faults = 0;
-  for (const bool graph : {false, true}) {
+  // The ply split in a tree and a graph, and D2's tree form (a tree only), whose
+  // inherited expansions happen inside gather.
+  for (const int arm : {0, 1, 2}) {
+    const bool graph = arm == 1;
     for (long long k = 0; k < 2400; k += 13) {
       SearchParams p = quick();
       p.graph = graph;
+      if (arm == 2) p.split = TurnSplit::Tree;
       Search s(start("Standard - Two Timelines"), p);
       s.run(*uniform, Limits{40});
       bool threw = false;
@@ -131,8 +135,9 @@ TEST(mcts_the_memory_estimate_follows_the_heap) {
   // heap, the MCGS table) against the heap the search holds, its evaluation
   // cache off.
   const std::unique_ptr<Evaluator> random = make_evaluator(BuiltinEvaluator::Random, 7);
-  for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::WholeTurn}) {
+  for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::WholeTurn, TurnSplit::Tree}) {
     for (const bool graph : {false, true}) {
+      if (split == TurnSplit::Tree && graph) continue;  // refused (build-log spec issue 301)
       SearchParams p = quick();
       p.split = split;
       p.graph = graph;
@@ -140,11 +145,14 @@ TEST(mcts_the_memory_estimate_follows_the_heap) {
       const GameState root = after("Standard - Two Timelines", 6);
       const t5d_test::alloc::Counting on;
       Search s(root, p);
-      s.run(*random, Limits{split == TurnSplit::BoardMove ? 2000u : 400u});
+      s.run(*random, Limits{split != TurnSplit::WholeTurn ? 2000u : 400u});
       const long long live = t5d_test::alloc::live_bytes;
       const double ratio = static_cast<double>(s.memory_bytes()) / static_cast<double>(live);
       std::printf("  graph memory, %s split, %s: %zu nodes, estimate %zu bytes, heap %lld: x%.2f\n",
-                  split == TurnSplit::BoardMove ? "ply" : "turn", graph ? "graph" : "tree", s.node_count(),
+                  split == TurnSplit::BoardMove   ? "ply"
+                  : split == TurnSplit::WholeTurn ? "turn"
+                                                  : "tree-form",
+                  graph ? "graph" : "tree", s.node_count(),
                   s.memory_bytes(), live, ratio);
       CHECK(ratio > 0.75);
       CHECK(ratio < 1.33);

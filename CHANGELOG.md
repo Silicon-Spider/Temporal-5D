@@ -10,6 +10,79 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-23 - Engine D2: the tree form - turn-start priors inherited inside the turn; re-evaluation at interactions and complete turns
+
+D2's tree form (§8.2, "Evaluating at turn boundaries"), the first of the two arms
+CHECKPOINT 8's build order names, built behind `SearchParams::split` beside the ply
+split (still the default) and the whole-turn arm (left as it is until the flat form
+replaces it).
+
+- **The arm** (`engine/include/t5d/mcts.hpp`, `engine/src/mcts.cpp`; `TurnSplit::Tree`):
+  the ply split's tree, nodes, edges, submit and turn structure. A node during an
+  action whose incoming move fires no enabled interaction gate is expanded without the
+  network - its children exactly a leaf's (the same legality classification and
+  submit), their priors its parent's logits matched move by move (a J6 branch takes the
+  non-branching jump's; an unmatched move the parent's lowest; submit's logit carried
+  down) - and the simulation runs on through it. The network is called at the root, at
+  turn starts and at gated mid-turn nodes (ordinary leaves). An inherited node backs up
+  nothing of its own: the leaf's value passes through it (its visits its children's);
+  its FPU base and uncertainty signal are its parent's evaluation's
+  (`tree_inherit_value`). Each edge keeps the logit its prior came from (`Edge::logit`;
+  `EdgeView::logit`), each node its submit logit;
+  `NodeView::inherited`; `SearchStats::inherited_nodes`, `gate_fired`,
+  `seconds_gates`; the digest folds the inherited flag in (zero for every other arm, so
+  no digest changes). The ply split's code paths are shared, not copied
+  (`set_priors`, `ply()`), so its searches are bit for bit what they were.
+- **The interaction gates**, §8.2's four, each reading a parameter with a placeholder
+  default (`tree_gates`, `tree_still_to_move`, `tree_capture`, `tree_check`,
+  `tree_present`): a non-branching jump; a capture of a piece with a pseudo-legal move
+  onto a passed board still to move (R1's passing); the acting player's "in check" with
+  the boards still to move passed (R1's construction) differing across the move; any
+  move of the present. `kGateAlways` is the test seam for §15.2's row.
+- **Refused under MCGS** (`graph`): `std::invalid_argument` naming spec issue 301
+  (`T5D_ERR_ARGUMENT`, `EngineArgumentError`) - under graph search an inherited node's
+  priors and its being evaluated would be the path's.
+- **C API and Python, one commit** (`capi_search.h`, `capi_search.cpp`, append-only):
+  `T5D_SPLIT_TREE`, `T5D_TREE_GATE_*`, `T5D_STILL_TO_MOVE_*`, `T5D_CAPTURE_*`,
+  `T5D_CHECK_*`, `T5D_PRESENT_*`; `t5d_search_params` gains `tree_gates`,
+  `tree_still_to_move`, `tree_capture`, `tree_check`, `tree_inherit_value`,
+  `tree_present` (before `expand`), `t5d_search_summary` `inherited_nodes` and
+  `gate_between`/`_capture`/`_check`/`_present`/`_always`; a tree-form leaf reports its
+  submit flags as the ply split's. `python/t5d/engine/capi.py` and `search.py` mirror
+  them (checked against `t5d_search_layout`), `netplay.py` plays `split="tree"`;
+  `t5d-play --split tree --tree-gates`.
+- **Tests**: `engine/tests/test_mcts_tree.cpp` (new) - §15.2's row bit for bit
+  (digest, statistics, root children, across a re-root) on every named variant,
+  random-play roots with many timelines and deep travel, roots during an action and
+  past the shift, two evaluators at realistic scale, every tree configuration, budgeted
+  and exact legality and the pseudo-legal seam, batched and synchronous; no gate - the
+  network sees only the root and turn starts; one gate - exactly the mid-turn nodes whose
+  move fires it, by predicates recomputed from the rules engine; the capture reading on
+  constructed positions; the inherited logits (a J6 twin) and their softmax; §15.4's
+  turn structure and dead ends; the refusal; more turn starts per evaluation. Two
+  tree-form configurations join `test_mcts.cpp`'s invariant suite (one test's sibling
+  choice generalised: an inherited sibling holds no evaluation to keep); the C step API
+  against the C++ search by digest, the C API's refusals, self-play end to end and in
+  match play, the allocation-failure test, the memory estimate (x1.04) and t5d-play's
+  records through the gate adapter under the tree form. Python: the step loop is the
+  engine's run under the tree form (uniform and random evaluators), §15.2's row through
+  the step API with the network at random weights (two variants and a root past the
+  shift, three legality settings, batched and synchronous), the network asked only at
+  turn starts without gates, the refusal, and netplay games under the tree form replayed
+  by the gate adapter.
+- **Measured, indicative** (counts; seven t0database turn starts, 1-4 mandatory boards,
+  30-60 boards; the built-in random evaluator, synchronous, no cache, a scratch harness):
+  at 400 evaluations the turn starts evaluated - ply split 74-122, tree form 111-142, with
+  the present gate read as rewinds only 173-290, with no gate 400. The literal present
+  gate fires at every action's shift (issue 160).
+- `docs/BUILD_LOG.md`: register rows D2 and C11; issue 301's Built note; spec issues
+  157-162; proposed edits 129-130. `engine/README.md`: stage E6a's arms, the gates'
+  table, t5d-play's options, the choices list. The Lazy SMP timing test runs before the
+  merge (the main loop).
+- Spec: §8.2 "Evaluating at turn boundaries" (tree form), §15.2's D2 tree-form row,
+  §15.4 (turn structure), §8.5/C11 and §14.4/C21 (the refusal), §13.1 6x, §15.3 (a new
+  row); register D2, C11, D8, A6 - spec issues 157-162 and 301, proposed edits 129-130.
+
 ### 2026-10-23 - Build log: issue 156 (a mislabel in CHECKPOINT 8's turn-width figures) and issues 148-155 wait on the user
 
 - `docs/BUILD_LOG.md`, "Waiting on the user": spec issue 156 - the turn-width shares

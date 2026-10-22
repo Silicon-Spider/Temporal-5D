@@ -28,7 +28,8 @@ E7, after the CHECKPOINT 2 rulings, makes moves after the present has shifted - 
 submission - the default rules (Q4, ruled R8; register D8), the Guide-literal reading
 a diagnostic, and gives the expansion and its C API the acting player and the submit
 action, possible and legal (D8); stage E6a adds the main search - PUCT over a tree or,
-behind a flag, a graph, both D2 arms, the in-tree solver behind the proof channel's
+behind a flag, a graph, D2's arms (the ply split, whole turns and, since 2026-10-23,
+the tree form), the in-tree solver behind the proof channel's
 switch - off by rule (H41) - final selection, persistence, self-play
 and match play, the step C API an external evaluator drives, and t5d-play - revised
 after three adversarial reviews (MCGS identity, the solver's default, test strength,
@@ -2216,7 +2217,8 @@ round 2), each from the leaf's acting player:
   root player's view) and the targets add the offset - the record I13 needs beside the
   backed-up `(q, d)`.
 
-**D2's two arms** (`SearchParams::split`; D2 is undecided, ablations 6g/6k):
+**D2's arms** (`SearchParams::split`; D2 is undecided, ablation 6x with 6g and 6k; the
+whole-turn arm is superseded by the flat form, CHECKPOINT 6, and retires with it):
 
 - *Board-move as ply* (`BoardMove`, the placeholder default): a node is a turn's start
   or a state during an action; its children are the legal moves and - turns have
@@ -2258,6 +2260,51 @@ round 2), each from the leaf's acting player:
   moves' logits - their sum (a product of per-move factors; default) or their mean
   (`action_prior`) - each move matched to the turn start's pseudo-legal candidate with
   its squares and promotion (a J6 branch has the non-branching jump's coordinates).
+- *The tree form* (`Tree`; §8.2, "Evaluating at turn boundaries", built first at
+  CHECKPOINT 8): the ply split's nodes, edges, submit, dead ends and turn structure, with
+  the turn-start priors inherited inside a turn. A node during an action whose incoming
+  move fires no enabled **interaction gate** (`tree_gates`) is not a leaf: it is expanded
+  at once without the network - its children exactly a leaf's (the same legality
+  classification, submit as at a leaf), their priors its parent's logits matched move by
+  move by source, destination and promotion (a J6 branch onto a board played since takes
+  the non-branching jump's logit; a move the parent did not have, the parent's lowest
+  logit; submit's logit carried down, NaN giving `submit_share`) - and the simulation runs
+  on through it. Each node keeps its logits on its edges, so below a gated
+  re-evaluation its logits replace the turn start's. The network is called at the root,
+  at turn starts (a complete turn) and at a gated mid-turn node, which is an ordinary
+  leaf: evaluated, its value backed up, the simulation ended. **Values**: an inherited
+  node backs up nothing of its own - the leaf's value passes through it as through any
+  inner node (its visits are its children's, no visit ends there unless it is solved);
+  with `tree_inherit_value` (on) its FPU base and uncertainty signal are its parent's
+  evaluation's (`NodeView::inherited`; `RootChild::evaluated` is false for it). The
+  gates, §8.2's four, each reading a parameter with a placeholder (build-log spec issues
+  157-161):
+
+  | Gate (`kGate*`) | Fires on the move into a mid-turn node when | Reading's parameter: placeholder / alternative |
+  |---|---|---|
+  | `Between` (i) | it is a non-branching jump (its destination a playable board not yet played) | `tree_still_to_move`: `Playable` / `Mandatory` (the destination mandatory) |
+  | `Capture` (ii) | it captures a piece that could reach a board still to move | `tree_capture`: `Reach` (a pseudo-legal move of the piece onto a passed board still to move, R1's passing) / `Any` |
+  | `Check` (iii) | the acting player's "in check" differs before and after | `tree_check`: `Passed` (R1's construction, the boards still to move passed) / `Submission` (C4's test as the state stands) |
+  | `Present` (iv) | the present moves | `tree_present`: `Any` (its T5 advance at every action's shift included) / `Rewind` |
+  | `Always` | every move - a test seam: §15.2's "every interaction gate firing" | - |
+
+  They are tested cheapest first (always, present, between, capture, check);
+  `SearchStats::gate_fired` counts the mid-turn leaves by the first that fired and
+  `inherited_nodes` the nodes expanded without the network (`seconds_gates` the gates'
+  time). **Refused under MCGS** (`graph`; build-log spec issue 301): a mid-turn node would
+  inherit the priors, and the evaluated-or-not status, of the path that made it. §8.2's
+  fixed board order is an add-on (issue 162), not built. Tested
+  (`tests/test_mcts_tree.cpp`): §15.2's row bit for bit against the ply split (digest,
+  statistics, root children, across a re-root) on every named variant, random-play roots
+  with many timelines and deep travel, roots during an action and past the shift, every
+  tree configuration, budgeted and exact legality and the pseudo-legal seam, batched and
+  synchronous; with no gate the network sees only the root and turn starts; with one
+  gate exactly the mid-turn nodes whose move fires it (each predicate recomputed in the
+  test); the capture reading on constructed positions; the inherited logits (a J6 twin
+  included) and their softmax; §15.4's turn structure and dead ends; the refusal. The C
+  step API reproduces it by digest, and Python drives it (`T5D_SPLIT_TREE`, the
+  `tree_*` fields, the summary's `inherited_nodes` and `gate_*`); `t5d-play --split
+  tree [--tree-gates all|none|always|between,capture,check,present]`.
 
 **How legality enters** - one call site (`leaf_expansion` in `src/mcts.cpp`): a leaf's
 expansion with `ExpandOptions::legal_moves`, classified by E5a's tiers under
@@ -2562,7 +2609,8 @@ the reader and `t5d-gate` replay; a summary goes to standard error:
 
 ```
 t5d-play [--variant NAME] [--evaluator uniform|random|material] [--playouts N]
-         [--split ply|turn] [--graph] [--node-key state|origins] [--no-widening]
+         [--split ply|turn|tree] [--tree-gates all|none|always|LIST] [--graph]
+         [--node-key state|origins] [--no-widening]
          [--e2] [--e3] [--proof-channel] [--batch N] [--synchronous] [--match]
          [--final visits|lcb]
          [--temperature T] [--temperature-decisions N] [--noise | --no-noise] [--cap-turns N]
@@ -2570,7 +2618,9 @@ t5d-play [--variant NAME] [--evaluator uniform|random|material] [--playouts N]
          [--max-seconds S] [--seed S] [--no-moves-after-shift] [--rules ENCODING]
 ```
 
-Defaults: Standard, uniform, 64 playouts per decision, the board-move split, a tree,
+Defaults: Standard, uniform, 64 playouts per decision, the board-move split (the tree
+form's gates, under `--split tree`, §8.2's four - a comma-separated list of between,
+capture, check and present, or always), a tree,
 self-play with root noise (`--no-noise`: none), the proof channel off (H41;
 `--proof-channel` for experiments, said in the Engine header), a cap of
 20 turns or 300 boards (uniform play branches freely: by turn 12 a game can
@@ -3862,6 +3912,16 @@ Each is recorded where it is made (the header comments) and listed here:
       moves made in the action, which subsumes it, and the evaluation cache's key and
       the batch's de-duplication with it (A6: the network sees the count; build-log
       spec issue 302, proposed edits 200 and 119).
+- **D2's tree form** (build-log spec issues 157-162, 301): the boards still to move
+  (every playable board not yet played, or the mandatory ones), a move between them (a
+  non-branching jump), a capture of a piece that could reach them (a move onto a passed
+  board still to move, or any capture), a change in check (R1's construction with the
+  boards still to move passed, or C4's test), a shift of the present (any move of it, or
+  a rewind only) - each a parameter; the inheritance source (the nearest evaluated node
+  above, move by move; unmatched moves the lowest logit; submit's logit carried down),
+  the inherited node's value (its parent's evaluation's, for FPU and E2/E3), a gated
+  node an ordinary leaf, the root always evaluated; MCGS refused (issue 301); §8.2's fixed
+  board order not built (an add-on, issue 162).
 - **A6's turn state** (engine ABI round 1; build-log spec issues 143-145): the
   mandatory count is the state machine's own - A6's "−1 / −2 / 0" arithmetic holds only
   where no activity changes (T6's arrivals, T11/T12's reactivations and Q5 lie outside
