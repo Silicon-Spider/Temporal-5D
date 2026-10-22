@@ -139,6 +139,14 @@ int mandatory_class(int mandatory) {
   return std::min(mandatory, 4) - 1;
 }
 
+double dense_eval_flops(std::size_t boards) {
+  const double t = kCostTokensPerBoard * static_cast<double>(boards) + kCostGlobalTokens;
+  return 4 * t * t * kCostDModel * kCostLayers +
+         kCostLinearCoefficient * t * kCostDModel * kCostDModel * kCostLayers;
+}
+
+double share_of(double part, double whole) { return whole == 0 ? 0 : part / whole; }
+
 double quantile(std::vector<double> values, double q) {
   if (values.empty()) return 0;
   std::sort(values.begin(), values.end());
@@ -205,6 +213,22 @@ TurnStats turn_stats(std::span<const TurnWidth* const> actions) {
     s.mandatory_gained += w.mandatory_gained;
     s.moves_on_released += w.moves_on_released;
     s.moves_on_gained += w.moves_on_gained;
+    // The compute: moves x the cost of a move, constant and dense.
+    const double flops = static_cast<double>(w.moves) * dense_eval_flops(w.boards);
+    s.moves_total += w.moves;
+    s.dense_flops += flops;
+    if (w.mandatory > 1) {
+      s.moves_mandatory_over_1 += w.moves;
+      s.dense_flops_mandatory_over_1 += flops;
+    }
+    if (w.mandatory > 2) {
+      s.moves_mandatory_over_2 += w.moves;
+      s.dense_flops_mandatory_over_2 += flops;
+    }
+    if (w.playable > 1) {
+      s.moves_playable_over_1 += w.moves;
+      s.dense_flops_playable_over_1 += flops;
+    }
   }
   s.mandatory = spread_of(mandatory);
   s.optional_boards = spread_of(optional_boards);

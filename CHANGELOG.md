@@ -10,6 +10,62 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-23 - Build log: issue 156 (a mislabel in CHECKPOINT 8's turn-width figures) and issues 148-155 wait on the user
+
+- `docs/BUILD_LOG.md`, "Waiting on the user": spec issue 156 - the turn-width shares
+  the main loop reported as "more than one playable board" (M22's merge message) are
+  the shares with more than one mandatory board, and CHECKPOINT 8's §8.2 paragraph and
+  register M22 carry the mislabel; proposed edits 127-128 correct them. Also engine ABI
+  round 2's readings, issues 148-155.
+- Spec: §8.2, register M22 (edits 127-128).
+
+### 2026-10-23 - M22: the mandatory-board shares, optional moves played and the compute share of multi-board turns (the CHECKPOINT 8 ruling)
+
+The user's ruling on spec issue 142 asked M22 to report, per board-count range, the
+share of turns with more than one and with three or more mandatory boards, the optional
+moves actually played, and the compute share of multi-board turns (moves x per-move
+cost).
+
+- **The summary names the four** (`engine/tools/turn_width.hpp`, `turn_width.cpp`,
+  `t5d_measure.cpp`). `--turn-summary`'s lines gain `moves_total`,
+  `optional_moves_total` and `optional_moves_share_of_moves` (the optional moves'
+  share of turns and mean were there), and the compute shares - of the turns with more
+  than one mandatory board, three or more, and more than one playable board:
+  `compute_share_*` and `compute_share_*_constant` - with `dense_tflops`; the head line
+  states the `cost_model`. Every value the output gave before is unchanged.
+- **The cost of a move**: one evaluation - the ply split evaluates every node inside a
+  turn (§8.2) - of the dense v1 network (§7) at the turn's board count N, by §9.1-9.2's
+  analytic model as N3's `python/t5d/net/cost.py` computes it: 4 T^2 d L + 40 T d^2 L,
+  T = 66N + 16, d = 256, L = 16 (`tools::dense_eval_flops`; 4.78 TFLOPs at 240 boards,
+  §9.2's figure). A constant cost per move is reported beside it as the sensitivity
+  reading. Arithmetic only: the measurement stays rules-engine-only.
+- **Tests** (`engine/tests/test_turnwidth.cpp`): the dense cost worked by hand in
+  integers at 0, 1, 10, 100 and 240 boards; the compute shares and their sums on six
+  constructed widths with known answers; the optional moves' share of the moves; and
+  the new fields end to end on the hand-written records (583 engine tests pass).
+- **Measured on t0database** (692 games; `docs/MEASUREMENTS.md`, "Turn width (M22)",
+  "The CHECKPOINT 8 figures"; recomputed independently from the per-turn lines, no
+  difference): < 50 / 50-99 / 100-199 boards - more than one mandatory board 5.8% /
+  27.1% / 64.0% of turns, three or more 0.7% / 6.7% / 16.0%; an optional move in 1.2% /
+  2.5% / 1.1% of turns (0.012 / 0.025 / 0.011 per turn; 1.1% / 2.0% / 0.6% of all
+  moves); the compute share of the turns with more than one mandatory board 18.0% /
+  43.4% / 81.9% (33.3% pooled; 9.9% / 41.7% / 79.7% and 14.7% at a constant cost per
+  move); of those with three or more 3.3% / 14.9% / 33.4% (10.3% pooled). Ten-board
+  buckets under 100 too.
+- **Found**: the 5.8% / 27.1% / 64.0% that the ruling, §8.2's CHECKPOINT 8 paragraph
+  and register M22 call playable shares - "these bound the mandatory share from above"
+  - are the mandatory shares; the playable ones are 15.1% / 65.2% / 99.4%. Part L's
+  "at most one playable board at 94.2%" is likewise one mandatory board (one playable
+  board: 84.9%). Spec issue 156, for the user.
+- `docs/BUILD_LOG.md`: step 5's M22 entry, register row M22, issue 142's Built note,
+  issue 156, proposed edits 127 and 128. `engine/README.md`: the new fields.
+
+Spec: §8.2 ("Measure first" and the "Measured (CHECKPOINT 8, human games)" paragraph),
+§15.1's Phase 1 row, §7, §9.1-9.2 (the cost model, read, not changed); register M22,
+part L. Proposed edit 127 (M4: the figures written back into §8.2's "Still to report"
+sentence and register M22, with issue 156's labels corrected) and 128 (part L's outcome
+note; issue 156).
+
 ### 2026-10-22 - ABI round 2 review fixes: an MCGS residual fires on a draw lag, a missing uncertainty signal refused where it is read, the side table and the noise's edge set tested
 
 Two reviews of engine ABI round 2 (7c650d3, 7828d0d, 9d919c2) found four medium faults
