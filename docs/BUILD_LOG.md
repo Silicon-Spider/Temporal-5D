@@ -841,6 +841,7 @@ threads reach at least one thread's sum (one retry on a shared machine).
 | 2026-10-22 | the stores' lock (`ShardLock`; completed) | lane/engine e8de15e + the stores' lock, the tree before the commit, inside its full `--werror --test` run | dev-r, 24 logical; other lanes running; load not recorded | 32 | 291 | 313 | none | pass |
 | 2026-10-22 | the stores' lock (`ShardLock`; completed) | the same tree, the test alone | dev-r, 24 logical; another lane's Python job running; load 94% before, 96% after | 32 | 292 / 292 / 293 | 308 / 311 / 309 | none | pass x3 |
 | 2026-10-22 | the stores' lock (`ShardLock`; reviewed, 9c3c8c8) | main f18761f + lane/engine 9c3c8c8, merged tree before the commit | dev-r, 24 logical; the network lane running; load 51-53% before and after | 32 | 293 | 308 / 309 / 309 | none | pass x3 |
+| 2026-10-23 | engine ABI round 2 (D3's values in the search, E1/I19, I15; reviewed, d30b6eb) | main 1ca8af7 + lane/engine d30b6eb, merged tree before the commit | dev-r, 24 logical; the network lane running; load 51-53% before and after | 32 | 293 / 292 / 293 | 309 / 303 / 302 | none | pass x3 |
 
 ## Environment
 
@@ -1637,14 +1638,14 @@ order the D2 work (issue 142).
 | C9 | to check | Reported built in `expand.cpp` by the 2026-10-04 audit; to verify against its row |
 | C11 | built behind a flag, tested | MCGS (E6a): identity is the state key with branch origins and the moves made in the action in progress (A6; since engine ABI round 1 - issue 302, proposed edit 200, and 119 for §11.3's full key), which subsumes whether an action is in progress (§8.5 and the register say only that: issue 87), compared exactly; one action's move orders still merge (tested); awaiting 6k |
 | C12, C13 | built, tested | Re-rooting with garbage collection, the persistence hook and pondering (E6a) |
-| C14 | built, tested | Fresh searches per decision in self-play; the evaluation cache shared across them, purged by board count (issue 89); the C API's `t5d_search_new_sharing`; from Python (N5) only between searches with the same network input, with the cached path's refresh epochs set on the search - as §8.7 now has it (the register's C14 names the shared, board-count-purged cache and one cache per evaluator in match play). Since engine ABI round 1 the cache's key holds A6's moves made in the action beside the state and the epoch (issue 302, proposed edit 200; edit 119 for §15.2's purity row, §7.9 and §8.5) |
+| C14 | built, tested | Fresh searches per decision in self-play; the evaluation cache shared across them, purged by board count (issue 89); the C API's `t5d_search_new_sharing`; from Python (N5) only between searches with the same network input, with the cached path's refresh epochs set on the search - as §8.7 now has it (the register's C14 names the shared, board-count-purged cache and one cache per evaluator in match play). Since engine ABI round 1 the cache's key holds A6's moves made in the action beside the state and the epoch (issue 302, proposed edit 200; edit 119 for §15.2's purity row, §7.9 and §8.5). Since round 2a an entry holds every D3 head (`Evaluation` 232 -> 256 bytes: the WDL, the error and moves-left outputs, the categorical made optional), returned bit for bit on a hit (tested) |
 | C23 | built, tested | The node key's default carries branch origins (lineage, `NodeKey::StateAndOrigins`); the network's causal past is the ruled ancestry (`causal_past="lineage"`, tested against ancestry computed from the branching record, N5) |
 | C15 | built in part | FP8 e4m3 frozen K/V (`frozen_kv_format = "fp8"`, applied by the forward itself); varlen/ragged kernels not built (none on CPU; GPU time, M19). The register: FP8 K/V obey G1 only with an FP8 trunk or FP8-frozen-K/V training (issue 34). **Known defect, not yet fixed:** `fake_quantise(x, "fp8")` (`kvformat.py`), which both the forward's FP8 rounding (`model._frozen_kv_rounding`) and the cached path use, casts to FP8 inside autograd with no straight-through estimator, so its backward casts the gradient to FP8 unscaled. Checked 2026-10-17 on CPU (torch 2.13.0+cpu; one 8 × 8 block, seed 0): with \|x\| about 0.1, 63 of 64 gradients were zero; with \|x\| about 1, they were 0.90-1.03 where 1 is expected. FP8-frozen-K/V training (the remedy above) and G8's hook need the net lane's STE fix, with a gradient test, before G2 and G8 |
 | C16 | not built (rule) | Deferred; last, only if node-starved |
 | C21 | not built (rule) | Refused; a mutant that snapshots is caught by the tests |
 | D1 | built, tested | Network N1's pointer policy over the moves the engine supplies - in search, legal or unknown, unknowns verified when first selected (E5a, E6a), as §8.1 now says; the game API's expansion stays pseudo-legal until ABI round 2's `legal_moves` option. The promotion offset (CHECKPOINT 6, M20) is the v1 (`lane/net` N-M20): a learned per-piece logit read from the destination token, always on in the policy - `policy_promotion` and its `none` arm removed (+3,341 parameters). The opponent-reply head has none, as built at N1: which other pointer heads carry it, and the offset's form, are issue 222 |
-| D3 | built in part (the pre-CHECKPOINT-7 head) | Network N1's 51-bin value head over the pooled global registers, smoke-trained on the outcome; the search backs up its mean. Its MLP is Mish (F6, CHECKPOINT 8). Pooling as M20 rules it (`lane/net` N-M20): the 51-bin head, WDL and the short-term value all read the mean of the global registers - WDL and the short-term value moved off the squares with `aux_global_pool` (issue 223); a test holds them invariant to permuting the registers' final states. Corrected at CHECKPOINT 7 (reversal 28): WDL on the result as the search's value, the categorical over the root search value (HL-Gauss), short-term values, the error head - engine ABI round 2 (WDL in the search, one new deliver call), then the net lane's heads |
-| D4 | built in part | Network N1's aux heads: WDL, moves-left, short value, effort, per-board, per-square (the label set stands as v1, M20; its colour-specific labels relabelled ours/theirs under A7, `lane/net` N-A7, issue 226) and the opponent reply, always built at weight 1.0. M20 in the code (`lane/net` N-M20): moves-left counts turns - one player's action each (issue 305) - in the head, its helper and the losses' docs (the record-to-target builder is M21's, and so is whether the action in progress counts: issue 224); moves-left and effort read the squares, WDL and the short value the global registers (D3; issue 223). To change (CHECKPOINT 7): the soft policy added (weight 8), the reply a prototype behind its flag at 0.15 with §15.2's mapping test - the net lane's heads, after engine round 2 (the reply head is left as built until then); the per-square label generator is step 2's |
+| D3 | engine side built, tested (engine ABI round 2a); network heads built in part (the pre-CHECKPOINT-7 head) | The search (round 2a): WDL is the search's value - W − L backed up, the draw probability D beside it on every node and edge (issue 148) - the categorical optional and read only as an uncertainty signal (6m's switch, issue 149), the error head's output and moves-left per leaf, all through one new deliver call (`t5d_search_deliver_evaluations` and its `t5d_evaluations` struct; the old `t5d_search_deliver`, which backed up the categorical's mean, retired); each root child's search (q, d) and network WDL, moves-left and error recorded, and the root's own; the built-in evaluators give a WDL. The Python evaluator delivers the network's WDL, categorical and moves-left, and its error output once the net lane names one `value_error` (NaN until then; the name pinned by a test, `evaluator.ERROR_HEAD_FIELD`); `Evaluation.value_mean` is now W − L. The network: N1's 51-bin value head over the pooled global registers, smoke-trained on the outcome. Its MLP is Mish (F6, CHECKPOINT 8). Pooling as M20 rules it (`lane/net` N-M20): the 51-bin head, WDL and the short-term value all read the mean of the global registers - WDL and the short-term value moved off the squares with `aux_global_pool` (issue 223); a test holds them invariant to permuting the registers' final states. Corrected at CHECKPOINT 7 (reversal 28): the categorical over the root search value (HL-Gauss), short-term values, the error head - the net lane's heads |
+| D4 | built in part | Network N1's aux heads: WDL, moves-left, short value, effort, per-board, per-square (the label set stands as v1, M20; its colour-specific labels relabelled ours/theirs under A7, `lane/net` N-A7, issue 226) and the opponent reply, always built at weight 1.0. M20 in the code (`lane/net` N-M20): moves-left counts turns - one player's action each (issue 305) - in the head, its helper and the losses' docs (the record-to-target builder is M21's, and so is whether the action in progress counts: issue 224); moves-left and effort read the squares, WDL and the short value the global registers (D3; issue 223). To change (CHECKPOINT 7): the soft policy added (weight 8), the reply a prototype behind its flag at 0.15 with §15.2's mapping test - the net lane's heads, after engine round 2 (the reply head is left as built until then); the per-square label generator is step 2's. The effort label's source is in the search (engine ABI round 2c: `root_best_since`, the root's visits when its most visited child last changed - issue 154) |
 | D5 | not started (rule) | A training principle |
 | D6 | built (flag) | `board_reduction`, awaiting 6j |
 | D7 | not built | 6p's aggregate initialisation (training-side) - parked with 6p's other arms. The tension with D8 is settled: the submit logit is read from the pooled global registers, so D7 holds (D8, M20) - in the code since `lane/net`'s N-M20, with the value-type heads pooled the same way |
@@ -1652,10 +1653,10 @@ order the D2 work (issue 142).
 | D8 | built, tested | Engine and search (E7, E6a): submit an explicit edge, legal only when C4 holds, never automatic. Network (N5): a global acting-player input on the global registers (the ruled place, M20 - the `all_tokens` arm and `acting_player_input` removed, `lane/net` N-M20; with no global registers, an ablation-3 arm, on the board tokens - the live boards' under the block-causal scope - a placeholder fixed in code, issue 225, tested to reach every output under every register arm), one distribution over moves + submit, values from the acting player's perspective; the submit logit read from the pooled global registers - their mean, as the value head reads them (M20, N-M20: `submit_register` and register 0 gone; tested invariant to permuting the registers, moved by any one). The readout's form (`submit_head`: linear, 257 parameters, or the policy's bilinear form) is still a placeholder (issue 109). Under the flat form the generator ends turns itself (issue 92). Under A7 the input is the acting colour, every board token being the acting player's view (`lane/net` N-A7; issue 228) |
 | D9 | not started | The optimistic policy - a prototype (6t), match play only; its use in self-play is held open (§14.4): the net lane's heads, behind its flag, after engine round 2 |
 | E4 | principle (weakened) | "Narrow hard, because the auditor is watching" - the register now says weakened: it holds where the settling scans (< 50 boards) and Hunt (< 100) run, neither wired into the search on main (E10 lost; step 2); above that, narrowing is a bet on the audit lane and the league |
-| E1 | built in part, tested | PUCT with entropy-adaptive top-k widening and FPU; root noise in self-play with a per-child α (0.3); the policy temperature applied at every node. CHECKPOINT 7 (with I19): the root noise's total concentration split across the legal moves (a field appended beside `dirichlet_alpha`), shaping behind a flag, a root policy temperature; the widening schedule may depend on the mandatory-board count - engine ABI round 2. Every constant a placeholder, named in §8.4's "Constants as built" (issue 82) |
-| E5, E9 | built, tested | LCB with a visit floor (E5); the solver behind H41's switch, the secure child, a visit cap on solved children (E9) - constants named as placeholders in §8.4 (issues 84-85) |
+| E1 | built, tested (the mandatory-count widening option not built) | PUCT with entropy-adaptive top-k widening and FPU; the policy temperature at every node. CHECKPOINT 7 (with I19), engine ABI round 2b: root noise in self-play with its total concentration (`dirichlet_concentration`, placeholder 0.03 x 361, appended beside the per-child `dirichlet_alpha`, which stays as its arm at 0) split across the root's open edges, per decision (issue 150); KataGo-style shaping a prototype behind `dirichlet_shaping`, off (its form a reading, issue 151); the root policy temperature (I19; issue 152), before the noise. "The widening schedule may depend on the mandatory-board count" - an option for 6g, not built (A6's count is in the expansion). Every constant a placeholder, named in §8.4's "Constants as built" (issue 82; edit 123) |
+| E5, E9 | built, tested | LCB with a visit floor (E5); the solver behind H41's switch, the secure child, a visit cap on solved children (E9) - constants named as placeholders in §8.4 (issues 84-85). E5's optional term (weight 0) reads the child's uncertainty signal - 6m's switch, since engine ABI round 2a (issue 149) |
 | E7 | not started | Time management, E11 in step 2 (engine lane): the moves-left integral allocator - moves-left counted in turns, converted to board-moves (issue 305) - and the stop/extend table, with 6o's arms (flat-evals and flat-wall-clock allocators, the signals on/off, the spiral guard at high N); the second volatility source is Hunt's and the settling scans' proofs (the register). The register keeps a "root-scan reserve" (§8.6); its one named consumer, Guard's re-search, is offline (adopted nowhere), so E11 holds none - a reading (issue 306) |
-| E2, E3 | built behind flags, tested | Off; awaiting 6m and 6t. They read the categorical variance; 6m's switch to the error head is engine ABI round 2 |
+| E2, E3 | built behind flags, tested | Off; awaiting 6m and 6t. They read a node's uncertainty signal: the categorical's variance by default, the error head's output under 6m's switch (`uncertainty_source`, engine ABI round 2a; issue 149); their constants placeholders twice over (issues 81, 149) |
 | E8 | not started | Behind its flag (6v), with E11 in step 2 |
 | E6 | not built (rule) | Refused |
 | F1, F2 | built, tested | 22,965,139 parameters (F1 after F5, B15 and M20: 21,338,634 after F5 - 20,736 fewer than N5's 21,359,370, gain-only norms, no Q/K/V biases, spec issue 203 - plus B15's 1,623,168, spec issue 210, plus M20's 3,337: the policy's promotion offset, 3,341, less the learned register coordinates, 4); the L24-ff12 preset, 46,894,547 (F2: 44,459,795 and B15's 2,434,752 over 24 layers). Unchanged by F6's Mish in the heads, by B11's fold (its flag is off; with it on, 40 scalars where there were 48) and by B16 (its 304 are in a network of the cached configuration only: 22,965,443 with `attn_scope = "block_causal"`) and B17 (off; with it on, 6,115,328 more - 29,080,467, or 23,729,555 with the vectors shared by the heads; spec issue 218) |
@@ -1670,23 +1671,23 @@ order the D2 work (issue 142).
 | G8 | not started | QAT prepared, not adopted: fake-quantisation hooks behind a flag in the training code, smoke-tested - the net lane, with G2's quantiser; the simulated format is pinned with the inference path. Written from papers: Monroe's `quantize` option (Lc0's training code) is an idea only (AGENTS.md, H29) |
 | G9 | built in part | PyTorch drives the C++ search through the C API (N5, eager, on CPU). FlexAttention runs eagerly through B14's score function (`attn_impl="flex"`, `lane/net`: forward only on CPU). Not built: torch.compile and compiled FlexAttention kernels (GPU time, M19); ONNX/TensorRT export - refused for now (M5). The bounded AMD attempt (AMD's PyTorch for Windows on the RX 9070 XT, figures AMD-labelled): any time, in `build/` only |
 | I1 | not started (rule) | Self-play training: no training runs in the untrained build (the brief); the pilot run (M18) comes after §15.5 |
-| I2 | not started | Targets from the pruned visits - since CHECKPOINT 7 the search-value targets too: M21's targets (net lane) from I15's records; the engine's forced and steered visit fields in ABI round 2 |
+| I2 | engine side built, tested (round 2c); targets not started | Targets from the pruned visits - since CHECKPOINT 7 the search-value targets too: M21's targets (net lane) from I15's records. The engine side (engine ABI round 2c, issue 153): what target-side pruning needs, per root child (visits, priors with and without the noise, q, value variance, E3's factor, `boost`, `steered_visits`, `forced_visits`) and the root's effective cPUCT; search-side forced playouts not built (§12.5's pruning is at target construction); the steering counts 0 until E10 wires the asset map and Hunt (no self-play data with E10's boosts before the pruning exists) |
 | I3 | built in part | Match play as I3 configures it: root noise off, the final rule (LCB), the tree carried (`t5d-play --match`, E6a; netplay's `mode="match"`, N5). The mature regime is training-time. In the untrained build: the curriculum hooks as interfaces only (H44, step 2) and I18's resignation rule (M21); MLH steering and early adjudication parked (issue 300; "Parked", below) |
 | I4 | principle | Confidence-family mechanisms never scale down the confidence-independent layer - followed: C24 is add-only; E8 (not started) to follow |
 | I5 | not started | PCR in the self-play drivers and the training loop, smoke-tested (M21, net lane) |
 | I6 | not started | A prototype: its epistemic triggers as sampler arms beside I12 (6u), in M21 |
 | I7, I8 | not built (rule) | M5 |
-| I10 | parked | Calibration monitoring measures nothing on random weights - the pilot run. The error head it watches is D3's (net lane); 6m's switch is engine ABI round 2 |
+| I10 | parked (monitoring); 6m's switch built, tested | Calibration monitoring measures nothing on random weights - the pilot run. The error head it watches is D3's (net lane). 6m's switch (`SearchParams::uncertainty_source`, categorical by default) built in engine ABI round 2a (issue 149); since the round's review fixes a delivery without the chosen signal is refused while E2, E3 or E5's term reads it (no arm runs silently on variance 0), counted where nothing does |
 | I9 | built, tested | The ruleset ID in every state and store key (H18): the Zobrist key, the solved and disproof stores, the evaluation cache |
 | I11 | built, tested | Self-play's turn cap from the state (and t5d-play's 300-board cap), scored as a draw, its frequency logged (issue 88) |
 | I12 | not started | Surprise-weighted sampling, the default sampler (6u): M21, with 6u's and I6's arms |
-| I13 | not started | Deblundering (6z): M21; it needs the best move's WDL and moves-left in the records - the draw/moves-left backup or a recorded substitute (engine ABI round 2) |
+| I13 | engine side built, tested; deblundering not started | Deblundering (6z): M21. What it needs from the search is built (engine ABI round 2a, issue 148): the draw probability backed up beside the value, so the best child's search WDL is its (q, d); moves-left not backed up - each root child's network moves-left (and WDL, error) recorded instead, the target builder adding the offset |
 | I14 | not started | Proof rescoring (6z): M21 builds the hook disabled - hard-off until the H23/H41 sign-off |
-| I15 | not started | Rich training records, fixed before the pilot run: first in M21 (net lane), with §15.2's round-trip row; the engine's per-root-child and summary fields and `t5d_game_expand`'s `legal_moves` option in ABI round 2 |
+| I15 | engine side built, tested (ABI round 2); the records not started | Rich training records, fixed before the pilot run: first in M21 (net lane), with §15.2's round-trip row. The engine side built: the root's raw outputs (round 2a: its WDL, moves-left, error; the categorical and the raw logits by the memo, keyed by `root_key`), the root children's search (q, d) and network outputs (2a), the root side table and summary fields (2c: `child_key`, `prior_noise_free`, `value_variance`, `boost`, `exploration_scale`, `forced_visits`, `steered_visits`; `root_key`, `root_cpuct`, `root_best_since` - issues 153, 154) and `t5d_game_expand`'s `legal_moves` with its budget, which rebuilds a decision's input (issue 155); proofs by reference wait on the sign-off (H23/H41) |
 | I16 | not started | The replay window growing sublinearly (6z): M21, a placeholder rule |
 | I17 | not started | SWA (6z): M21, smoke-tested |
 | I18 | not started | The false-resign check: M21 - resignation disabled in 10% of self-play games, false resignations measured per board-count range |
-| I19 | not started | Exploration placeholders: E1's root noise and root temperature in engine ABI round 2; the move-temperature schedule in M21 (today a step: temperature 1.0 for 16 decisions, then 0) |
+| I19 | engine side built, tested (round 2b); the schedules not started | Exploration placeholders. Built (engine ABI round 2b): the root noise scaled to the open-edge count (E1), the shaping a prototype behind its flag, the root policy temperature as a parameter (`root_policy_temperature`, 1 by default) - issues 150-152, edit 123. The training generator's (M21, Python): the move-temperature schedule (placeholders: Lc0's T60, 0.9 -> 0.45, cut at move 60; a "move" is issue 305's turn) and the root temperature's self-play value and decay (KataGo 1.25 -> 1.1), set per search; today netplay's and selfplay's step schedule (1.0 for 16 decisions, then 0) and a root temperature of 1 |
 | I20 | not started | KL-adaptive full searches - a prototype (6l): M21, behind a flag, with PCR |
 
 ### M - the plan itself
@@ -3387,6 +3388,142 @@ superseded or made moot says so; nothing is deleted.
     boards (50%; 7 of 20 truth mates found, 10 needed) is nearer. Whether to re-run 6b″ on a
     quiet machine (about a minute) is the main loop's call; no edit is proposed until a
     re-run says something.
+148. **The search's draw and moves-left: backed up, or recorded** (§8.3, §12.8; register
+    D3, D4, I13, I15; the plan critic's missing item 3). D3 makes the WDL "the value
+    search uses", D3's `q_ratio` blends the WDL target towards "search value", I13 has
+    earlier positions "take the best move's value and moves-left instead of the result",
+    and I15 records "root and best/played children's values" - in Lc0's sense (q, d, m).
+    No document says whether the search backs up a draw probability or a moves-left
+    count, or what stands in for them; before engine ABI round 2 it backed up a scalar
+    only. Done (engine ABI round 2a, an engineering reading, no committed-class choice):
+    the **draw probability D is backed up** beside the value on every node and edge, as
+    Lc0 backs up D - a leaf's D its WDL's (normalised), a mate's 0, a stalemate's and the
+    turn cap's 1 (I11 scores it a draw), a solved node's 1 for a proven draw and 0 for a
+    proven result; an MCGS residual corrects D as it corrects Q. D does not flip across
+    a change of acting player. A root child's search WDL is so `((1 - d + q) / 2, d,
+    (1 - d - q) / 2)` (`RootChild::d`, `t5d_root_child.d`). **Moves-left is not backed
+    up**: what one edge adds to a moves-left count needs the unit of a turn (issue 305's
+    reading: one player's action) and whether the action in progress counts (issue 224,
+    open), so the search records each node's network moves-left as given and exposes,
+    per root child, the child's own evaluation - its network WDL, moves-left and error
+    output, in the root player's view (`RootChild::evaluated`, `network_wdl`,
+    `network_moves_left`, `network_error`), and the root's own (`t5d_search_summary`'s
+    `root_evaluated`, `root_wdl`, `root_moves_left`, `root_error`). I13's best-move value
+    is the best child's backed-up (q, d), its moves-left the child's network output plus
+    the offset the target builder (M21) adds. If moves-left is ever to be backed up
+    (Lc0's M, e.g. for MLH's steering, issue 300), it is a later change to the backup
+    once issues 224 and 305 are settled. Proposed edit 121. Corrected by the round's
+    review fixes (2026-10-22): as first built only a Q lag fired an MCGS residual, so a
+    D lag under an unchanged Q was never corrected (the review's probe: Q 0 everywhere,
+    D 0.1 or 0.9 by node key, edges descended with their D 0.40 from their shared
+    child's); now a lag beyond `residual_epsilon` in Q **or** D fires the residual,
+    which corrects both - one epsilon for the two (a reading; a separate D epsilon
+    would be another placeholder, and nothing sizes either).
+149. **6m's switch: what the uncertainty signal is, and who reads it** (§8.3, §8.4, §13.1
+    6m; register D3, E2, E3, E5, I10). I10: "6m decides which uncertainty signal search
+    consumes"; §13.1 6m: "the categorical variance vs the error head - both trained from
+    the start (§8.3) - as the signal search consumes". Neither names the consumers, the
+    default, or how the error head's output becomes a variance. Done (engine ABI round
+    2a; placeholders): `SearchParams::uncertainty_source` (`t5d_search_params.
+    uncertainty_source`) - `Categorical` (the categorical's variance; the default, by
+    D3's own words "its variance and overlap feed search, commit and time") or
+    `ErrorHead` (the error head's output taken as the variance: it predicts a squared
+    gap, a variance by construction) - is each node's variance, and so what all three of
+    its readers take: E2's cPUCT scale and backup weight, E3's bonus and E5's optional
+    LCB term. A signal not given (no categorical delivered; the error NaN) **is refused
+    while a reader is on** (E2's scale or weight, E3, or E5's term under the LCB rule):
+    the delivery is refused as a malformed one, the batch released (a cached
+    evaluation without it too) - corrected by the round's review fixes (2026-10-22);
+    as first built it was read as 0, which halved E2's cPUCT (the scale's floor) and
+    gave the backup its largest weight, so a 6m arm on a network without the error head
+    (the Python evaluator's `error` is NaN until the network lane names
+    `NetOutput.value_error`, pinned by a test) ran silently as a different search.
+    Treating absence as "no prior" (weight 0 in the blend, a neutral backup weight) was
+    the alternative, refused: it too runs an arm other than the one asked for, mixed
+    node by node, and an ablation should fail loudly. Read by nothing, an absent signal
+    is 0 - unread - and counted (`SearchStats::uncertainty_missing`,
+    `t5d_search_summary.uncertainty_missing`). E2's and E3's constants (`variance_reference` 0.4, the prior weight, the
+    clamps; issue 81) were sized against a categorical over outcomes; the categorical is
+    now over root search values (reversal 28) or replaced by the error head, so they are
+    placeholders twice over - SPSA (G7) with 6m. Proposed edit 122.
+150. **The noise's "legal moves", and "root" under the ply split** (§8.4: "its total
+    concentration split across the legal moves"; §12.8; register E1, I19). Under budgeted
+    legality the root's moves include unknown ones; under the whole-turn split the root's
+    children are the listed actions (at most `max_actions`); a legal submit is an edge
+    beside the moves (D8). And under the ply split every decision is a fresh search (C14),
+    so a k-board action meets k roots. The documents say neither. Done (engine ABI round
+    2b; placeholders): the total splits across the root's **open edges** - the moves the
+    expansion kept (legal or unknown), a legal submit, or the listed actions; a move later
+    verified illegal is pruned with its noise, its siblings renormalised as ever. The noise
+    and the root temperature are drawn **per decision** (each decision's search is a
+    fresh root), as the noise was before. Proposed edit 123.
+151. **KataGo's shaping, in the spec's paraphrase** (§8.4: "half the concentration on moves
+    the prior ranks above most others, aimed at blind spots - a prototype (KataGo has not
+    validated it)"; register E1, I19). "Ranks above most others" is not pinned: no weight,
+    no reference prior, no cap. Done (a prototype behind `dirichlet_shaping`, off; every
+    constant a placeholder): the shaped share (`dirichlet_shaping_share`, 0.5 - the
+    paraphrase's "half") is spread in proportion to `max(0, ln min(P_i, cap) - mean_j ln
+    min(P_j, cap))` - how far an edge's log-prior lies above the open edges' mean - with
+    `cap` (`dirichlet_shaping_cap`) 0.01, so that the moves the prior already favours
+    strongly gain no more than those at the cap (the "blind spots" reading); the rest is
+    uniform, and the whole uniform where no edge lies above the mean. P is the root's
+    prior before the noise (after the temperatures). Written from the spec's words and
+    KataGo's published description of the idea, no code (H29). For 6g.
+152. **The root policy temperature** (§8.4: "KataGo uses 1.25 decaying to 1.1, Lc0's
+    training runs 1.2-1.45 (§12.8)"; register I19: "root policy temperature (KataGo 1.25 ->
+    1.1; Lc0 1.2-1.45)"; §12.3's match play: "temperature zero"). (a) Lc0's 1.2-1.45 is a
+    policy softmax temperature at every node, not a root one; the engine keeps both: the
+    every-node `policy_temperature` (1, the arm the Lc0 figures describe) and
+    `root_policy_temperature`, multiplied at the root. (b) No 5D decay schedule is given
+    (KataGo's decays with the game, scaled to board size; the unit of a turn is issue 305's
+    reading): `root_policy_temperature` defaults to 1 (off), and its self-play value and
+    decay belong to the training generator (M21), which sets it per search beside the
+    move-temperature schedule; the engine exposes the parameter and nothing more. (c) k0's
+    entropy reads the tempered prior (the prior the root's children are ranked by). (d) It
+    applies at a root's own expansion only: a root carried from an earlier search (match
+    play) keeps its prior; at match play it is 1 - read as self-play only, like I19's title
+    (§12.3's "temperature zero" is the move temperature). Proposed edit 123.
+153. **"Visits with I2's forced and steered flags", and forced playouts** (register I15,
+    I2; §12.2, §12.5, §12.8; the plan critic's contradiction 4). §12.5 adopts "KataGo's
+    forced-playout pruning with √(playouts) decay at target construction"; E1 lists no
+    forced playouts, and no document asks the search to force any; v3 has no
+    scanner-forced expansions (rung 3 retired). "Steered" is §12.2's CHECKPOINT 4 sources:
+    the asset map's boosts and Hunt's suggestions, neither wired (E10, step 2). Done
+    (engine ABI round 2c): **search-side forced playouts not built**; target-side pruning
+    is the training loop's (M21), and the search records what it needs - per root child
+    its visits, its prior with and without the root noise, q, the variance of its
+    backed-up values, E3's factor on its exploration term, the asset-map `boost` and
+    `steered_visits` (0 until E10 wires them; E10 decides what counts as a steered visit)
+    and `forced_visits` (0: not built) - and per root the effective cPUCT (E2's root scale
+    included), so that a replica of the root's PUCT can compute KataGo's n_forced(c) =
+    sqrt(k P(c) ΣN) and the pruning bound. Which prior the pruning compares with (noised
+    or noise-free) and the provenance arm are the training loop's (I2, 6e). Proposed edit
+    124.
+154. **The effort label: what "stabilises" means** (§8.6: "visits until the decision
+    stabilises"; §12.4: "Search effort to convergence - distributional over log-visit bins,
+    censored top bin ... full-search moves only"; register D4). Neither says which choice
+    stabilises (the most visited child, or the final rule's) or when. Done (engine ABI round
+    2c; a reading): `root_best_since` - the root's visits when its most visited child last
+    changed, a child taking over only with strictly more visits than the incumbent (a
+    pruned incumbent found again among the rest). The censored bin ("did not converge
+    within budget") and the bins are the target builder's (M21), reading `root_best_since`
+    against the search's playouts. For a root carried by `advance` it counts from the
+    re-root (its earlier history is not kept); self-play's fresh searches (C14) are exact.
+    Proposed edit 125.
+155. **A record's network input must be rebuildable, and the C API could not rebuild it**
+    (register I15: "so targets and weights can be re-derived and later architectures
+    retrained on the archive"; §12.8: "Data generated without these fields cannot get them
+    back"; the training brief's conflict 3). A search leaf's candidate moves - the
+    network's input and the policy's support - are the legal and unknown moves under the
+    search's legality budget; `t5d_game_expand` offered only the pseudo-legal ones. Done
+    (engine ABI round 2c): `t5d_expand_options` appends `legal_moves` and its budget
+    (`legality_checks`, `legality_nodes`), honoured by `t5d_game_expand` with the leaf's
+    own deterministic classification - the same moves in the same order, tested byte for
+    byte; a search's `expand` options refuse it (its own parameters decide its leaves).
+    The record must therefore keep the search's legality budget among its conditions
+    ("search configuration"). A root child verified illegal after the network scored it
+    leaves the record with the network's raw prior over the leaf's moves (the memo) and
+    the search's priors renormalised over the survivors. Proposed edit 126.
 
 ## Proposed spec edits
 
@@ -4256,6 +4393,54 @@ struck through, where nothing of it is left to apply); the others stand as writt
     TT - acceptable in production, banned while debugging; the stores of facts are never
     racy." Why: issue 146 - the spec's only word on the threads' races is "benign", which
     holds for the TT alone.
+121. **§8.3's WDL paragraph, §12.8's deblundering and register D3, I13 (the search's draw
+    and moves-left)**: now - WDL is "the value search uses"; I13's earlier positions "take
+    the best move's value and moves-left"; nothing says what the search backs up beside
+    the value. Proposed - in §8.3 after "the value search uses": "The search backs up W − L
+    as Q and the draw probability D beside it, per node and per edge (Lc0's way; a mate
+    has D 0, a stalemate and the turn cap D 1), so each root child carries a search WDL.
+    Moves-left is not backed up until its turn unit and the action in progress are
+    settled; the search records each node's network moves-left, WDL and error output,
+    and the records keep the root children's." In I13: "the best move's value (its
+    backed-up Q and D) and moves-left (its network output, offset by the target
+    builder)". Why: issue 148.
+122. **§13.1 6m, §8.4's E2/E3 paragraph and the constants list, register I10 and E2 (the
+    uncertainty switch)**: now - "6m decides which uncertainty signal search consumes";
+    E2 and E3 are described as reading "the categorical variance". Proposed - "6m's
+    switch (as built `uncertainty_source`, the categorical's variance by default, the
+    error head's output its arm; an absent signal refused while a reader is on, 0 and
+    unread otherwise) gives each node one variance, which
+    E2's scale and backup weight, E3's bonus and E5's optional LCB term all read"; and in
+    the constants list: "E2's and E3's constants, sized before CHECKPOINT 7 against an
+    outcome categorical, are placeholders for the search-value categorical and the error
+    head alike". Why: issue 149.
+123. **§8.4's noise and temperature sentences, its constants list, and register E1, I19**:
+    now - "Root Dirichlet noise during self-play, its total concentration split across the
+    legal moves ... A root policy softmax temperature slightly above 1 flattens the prior
+    before the noise: KataGo uses 1.25 decaying to 1.1, Lc0's training runs 1.2-1.45".
+    Proposed - "... split across the root's open edges - the moves the expansion keeps,
+    legal or unknown, and a legal submit (the listed actions under whole turns) - per
+    decision, each decision's search being a fresh root. ... KataGo's root temperature is
+    1.25 decaying to 1.1; Lc0's training runs use a policy softmax temperature of 1.2-1.45
+    at every node (as built, the every-node `policy_temperature`, 1, and the root's
+    `root_policy_temperature`, set per search by the training generator, multiply)"; in
+    the constants list: "the noise's total concentration (0.03 x 361), the shaping's share
+    (one half) and prior cap (0.01), the root policy temperature". Why: issues 150-152.
+124. **§12.8's record list, §12.2 and register I15, I2 (forced and steered visits)**: now -
+    "visit counts with §12.2's forced and steered flags". Proposed - "visit counts with the
+    steered counts (the asset map's boosts, Hunt's suggestions) - forced counts only if
+    forced playouts are ever built: as built the search forces none, and KataGo's
+    forced-playout pruning (§12.5) is computed at target construction from each root
+    child's prior (with and without the noise), visits, value and exploration factor and
+    the root's effective cPUCT, all in the record". Why: issue 153.
+125. **§8.6's effort paragraph and §12.4's effort row (register D4)**: now - "visits until
+    the decision stabilises". Proposed - "the root's visits when its most visited child
+    last changed (a child takes over with strictly more visits); the target builder bins it
+    by log-visits and censors it against the search's playouts". Why: issue 154.
+126. **§12.8's conditions and register I15**: now - "conditions (ruleset, board count,
+    network, search configuration, temperature, PCR flag)". Proposed - add "the legality
+    classification's budget, with which the engine's expansion rebuilds each decision's
+    candidate moves - the network's input - exactly". Why: issue 155.
 
 ## Session log
 
@@ -4291,3 +4476,16 @@ struck through, where nothing of it is left to apply); the others stand as writt
   local results equal the last green CI runs on the same code ("Recovery", above);
   the engine job's one failure on 3b33942 (g++-13) is the intermittent five-thread
   Guard test, queued for the engine lane.
+- **2026-10-22 - engine ABI round 2a** (`lane/engine`): D3's value outputs in the search -
+  WDL the search's value with its draw backed up beside it, moves-left recorded (issue
+  148), one deliver call for every head (`t5d_search_deliver_evaluations`; the old call
+  retired), 6m's switch (issue 149). Register D3, C14, E2/E3, E5, I10, I13; edits 121-122.
+- **2026-10-22 - engine ABI round 2b** (`lane/engine`): E1 and I19's exploration - the
+  root noise's total concentration split across the root's open edges (issue 150),
+  KataGo-style shaping behind a flag (issue 151), a root policy temperature (issue 152);
+  I19's schedules left to the training generator. Register E1, I19; edit 123.
+- **2026-10-22 - engine ABI round 2c** (`lane/engine`): I15's and I2's fields - the root
+  side table (`child_key`, `prior_noise_free`, `value_variance`, `boost`,
+  `exploration_scale`, `forced_visits`, `steered_visits`), the summary's `root_key`,
+  `root_cpuct` and `root_best_since`, `t5d_game_expand`'s `legal_moves` with its budget;
+  forced playouts not built (issues 153-155). Register I2, I15, D4; edits 124-126.

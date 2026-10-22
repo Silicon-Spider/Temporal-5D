@@ -64,8 +64,9 @@ promotion)                                     promotion)`` - row i is engine mo
   negated when Black acts, ``p -> -1 - p`` in a +-0 variant, hence ``even_start``). Nothing
   here is re-indexed for it: the boards and squares keep the engine's order, so policy logit
   ``i`` still scores engine move ``i`` whoever acts.
-* **Moves.** The engine's pseudo-legal moves of the player to move (the legal-moves
-  filter is not in the C API), one row per move in the engine's order, so policy logit
+* **Moves.** The expansion's moves of the player to move - pseudo-legal, or a search leaf's
+  legal and unknown moves with ``Game.expand(legal_moves=True)`` and the search's legality
+  budget (engine ABI round 2) - one row per move in the engine's order, so policy logit
   ``i`` scores engine move ``i`` (``t5d_game_apply_expanded(i)``). A branching move's
   destination token is the history board it targets, which exists (never the board it
   creates). Promotions: one row per promoted-to piece.

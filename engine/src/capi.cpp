@@ -243,6 +243,12 @@ t5d::ExpandOptions expand_options_from(const t5d_expand_options* o) {
   options.attack = (o->relations & T5D_RELATIONS_ATTACK) != 0;
   options.defence = (o->relations & T5D_RELATIONS_DEFENCE) != 0;
   options.xray = (o->relations & T5D_RELATIONS_XRAY) != 0;
+  // Engine ABI round 2 (I15): the search leaves' legal-moves filter.
+  if (o->legal_moves != 0 && o->legal_moves != 1) {
+    throw std::invalid_argument("legal_moves must be 0 or 1, not " + std::to_string(o->legal_moves));
+  }
+  options.legal_moves = o->legal_moves == 1;
+  if (options.legal_moves) options.legality = t5d::LegalityOptions::budgeted(o->legality_checks, o->legality_nodes);
   return options;
 }
 
@@ -357,6 +363,9 @@ constexpr LayoutEntry kLayout[] = {
     T5D_AT(t5d_expand_options, window_k),
     T5D_AT(t5d_expand_options, square_features),
     T5D_AT(t5d_expand_options, relations),
+    T5D_AT(t5d_expand_options, legal_moves),
+    T5D_AT(t5d_expand_options, legality_checks),
+    T5D_AT(t5d_expand_options, legality_nodes),
 
     T5D_SIZE(t5d_game_summary),
     T5D_AT(t5d_game_summary, boards),

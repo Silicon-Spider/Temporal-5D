@@ -28,10 +28,12 @@ from t5d.engine.capi import (
     MIRRORED_SEARCH_STRUCTS,
     T5D_EVALUATOR_RANDOM,
     T5D_EVALUATOR_UNIFORM,
+    T5D_LEGALITY_UNKNOWN,
     T5D_SPLIT_BOARD_MOVE,
     T5D_SPLIT_WHOLE_TURN,
     T5D_VALUE_PROBABILITIES,
     CLeaf,
+    ExpandOptions,
     Library,
     layout_mismatches,
     load_library,
@@ -107,6 +109,11 @@ def test_parameters_default_and_override():
         search_params(playouts=3)
     with pytest.raises(ValueError, match="H41"):
         search_params(proof_channel=1)
+    # E1, I19 (engine ABI round 2b): the placeholders, the library's own defaults.
+    assert p.dirichlet_concentration == pytest.approx(0.03 * 361) and p.dirichlet_shaping == 0
+    assert (p.dirichlet_shaping_share, p.dirichlet_shaping_cap, p.root_policy_temperature) == (0.5, 0.01, 1.0)
+    with Game.variant("Standard") as g, pytest.raises(EngineArgumentError, match="root_policy_temperature"):
+        Search(g, params=search_params(root_policy_temperature=0.0))
 
 
 # --- the driver is the engine's own loop ----------------------------------------------------------
@@ -114,8 +121,16 @@ def test_parameters_default_and_override():
 
 @pytest.mark.parametrize(
     "flags",
-    [{}, {"graph": 1}, {"split": T5D_SPLIT_WHOLE_TURN}, {"root_noise": 1}, {"batch_size": 1, "synchronous": 1}],
-    ids=["ply-tree", "ply-graph", "whole-turn", "noise", "synchronous"],
+    [
+        {},
+        {"graph": 1},
+        {"split": T5D_SPLIT_WHOLE_TURN},
+        {"root_noise": 1},
+        {"root_noise": 1, "dirichlet_shaping": 1, "root_policy_temperature": 1.3},
+        {"root_noise": 1, "dirichlet_concentration": 0.0},
+        {"batch_size": 1, "synchronous": 1},
+    ],
+    ids=["ply-tree", "ply-graph", "whole-turn", "noise", "noise-shaped-tempered", "noise-per-child", "synchronous"],
 )
 @pytest.mark.parametrize("variant", ["Standard", "Standard - Two Timelines"])
 def test_the_step_loop_is_the_engines_run(variant, flags):
@@ -149,7 +164,7 @@ def _unit(x: int) -> float:
 class PyRandom:
     """The engine's built-in ``random`` evaluator (``src/mcts_evaluators.cpp``) rewritten in
     Python - a function of the seed, each leaf's key and its epoch (``CStepDriver.batch``) - with
-    its value as exact probabilities (``T5D_VALUE_PROBABILITIES``)."""
+    its WDL and categorical as exact probabilities (``T5D_VALUE_PROBABILITIES``)."""
 
     def __init__(self, seed: int) -> None:
         self.seed = seed
@@ -175,7 +190,9 @@ class PyRandom:
             total = 0.0
             for b in bump:
                 total += b
-            out.append(Evaluation(logits, np.array([np.float32(b / total) for b in bump], np.float32)))
+            draw = 0.5 * _unit(_mix(base ^ 0xD4D4))
+            wdl = np.array([(1.0 - draw) * (1.0 + mean) * 0.5, draw, (1.0 - draw) * (1.0 - mean) * 0.5], np.float32)
+            out.append(Evaluation(logits, wdl, np.array([np.float32(b / total) for b in bump], np.float32)))
         return out
 
 
@@ -195,8 +212,16 @@ def _random_digests(game: Game, turn_start: bool, flags: dict, evaluator_seed: i
 
 @pytest.mark.parametrize(
     "flags",
-    [{}, {"graph": 1}, {"split": T5D_SPLIT_WHOLE_TURN}, {"root_noise": 1}, {"batch_size": 1, "synchronous": 1}],
-    ids=["ply-tree", "ply-graph", "whole-turn", "noise", "synchronous"],
+    [
+        {},
+        {"graph": 1},
+        {"split": T5D_SPLIT_WHOLE_TURN},
+        {"root_noise": 1},
+        {"root_noise": 1, "dirichlet_shaping": 1, "root_policy_temperature": 1.3},
+        {"root_noise": 1, "dirichlet_concentration": 0.0},
+        {"batch_size": 1, "synchronous": 1},
+    ],
+    ids=["ply-tree", "ply-graph", "whole-turn", "noise", "noise-shaped-tempered", "noise-per-child", "synchronous"],
 )
 @pytest.mark.parametrize("variant", ["Standard", "Standard - Two Timelines"])
 def test_the_engines_random_evaluator_through_the_step_api(variant, flags):
@@ -223,9 +248,10 @@ def test_the_random_evaluator_from_a_root_past_the_shift(game_seed, graph):
 
 class WhiteWins:
     """Value +1 for White, expressed from each leaf's acting player - the network's convention
-    and the search's: the top bin where White acts, the bottom bin where Black acts.
-    ``perspective="present"`` expresses it from the present's colour instead - the negative
-    control, wrong exactly at leaves past the shift."""
+    and the search's: the WDL's win where White acts, its loss where Black acts (and the
+    categorical, which the search does not back up, the other way round). ``perspective=
+    "present"`` expresses it from the present's colour instead - the negative control, wrong
+    exactly at leaves past the shift."""
 
     def __init__(self, perspective: str = "acting") -> None:
         self.perspective = perspective
@@ -239,9 +265,11 @@ class WhiteWins:
             who = s.acting_player if self.perspective == "acting" else s.player_to_move
             self.leaves += 1
             self.shifted += s.shifted
+            wdl = np.full(3, -1.0e4, np.float32)
+            wdl[0 if who == 0 else 2] = 0.0
             v = np.full(51, -1.0e4, np.float32)
-            v[50 if who == 0 else 0] = 0.0
-            out.append(Evaluation(np.zeros(p.move_count, np.float32), v))
+            v[0 if who == 0 else 50] = 0.0  # the opposite: D3's value is the WDL alone
+            out.append(Evaluation(np.zeros(p.move_count, np.float32), wdl, v))
         return out
 
 
@@ -296,6 +324,176 @@ def test_the_present_colour_is_not_the_acting_player():
     assert ev.shifted > 0 and _off_sign(s, root_player) != []
 
 
+class Heads:
+    """D3's heads at every leaf, from White's view: W - L = ``white`` with a draw probability
+    ``draw`` (as probabilities); a categorical whose mean is not the value; the error head's
+    output and moves-left."""
+
+    def __init__(self, white: float, draw: float, error: float = 0.25, moves_left: float = 7.5) -> None:
+        self.white, self.draw, self.error, self.moves_left = white, draw, error, moves_left
+
+    def __call__(self, positions):
+        out = []
+        for p in positions:
+            v = self.white if p.state.acting_player == 0 else -self.white
+            wdl = np.array([(1 - self.draw + v) / 2, self.draw, (1 - self.draw - v) / 2], np.float32)
+            cat = np.zeros(51, np.float32)
+            cat[3] = 1.0  # -0.88 (probabilities): never the value
+            out.append(Evaluation(np.zeros(p.move_count, np.float32), wdl, cat, error=self.error, moves_left=self.moves_left))
+        return out
+
+
+@pytest.mark.parametrize("graph", [0, 1], ids=["tree", "graph"])
+def test_d3_the_wdl_is_the_search_value_and_its_draw_is_backed_up(graph):
+    """D3 through the step API: the WDL's W - L is what the search backs up (the categorical
+    says otherwise), its draw probability is backed up beside it, and every root child reports
+    the search's (q, d) and the network's own WDL, error and moves-left, in the root player's view
+    - as does the root itself (I13's and I15's memo)."""
+    with Game.variant("Standard - Two Timelines") as g:
+        s = Search(g, params=search_params(seed=1, graph=graph))
+        driver = CStepDriver(s, playouts=200, value_kind=T5D_VALUE_PROBABILITIES)
+        serve(driver, Heads(0.4, 0.2), batch_size=8)
+    info = s.info()
+    assert info.checkmates == info.stalemates == info.turn_caps == 0
+    assert info.root_q == pytest.approx(0.4, abs=1e-5) and info.root_d == pytest.approx(0.2, abs=1e-5)
+    assert info.root_evaluated and info.root_wdl == pytest.approx((0.6, 0.2, 0.2), abs=1e-6)
+    assert (info.root_error, info.root_moves_left) == (0.25, 7.5)
+    visited = [c for c in s.children() if c.visits > 0]
+    assert len(visited) > 1
+    for c in visited:
+        assert c.q == pytest.approx(0.4, abs=1e-5) and c.d == pytest.approx(0.2, abs=1e-5)
+        assert c.evaluated and c.network_wdl == pytest.approx((0.6, 0.2, 0.2), abs=1e-6)
+        assert (c.network_error, c.network_moves_left) == (0.25, 7.5)
+    s.close()
+
+
+def test_d3_6m_the_uncertainty_source_is_a_parameter():
+    """6m (register I10): the categorical's variance by default, the error head's output on
+    request - a node's variance for E2: with E2 on the two signals grow different searches."""
+    from t5d.engine.capi import T5D_UNCERTAINTY_CATEGORICAL, T5D_UNCERTAINTY_ERROR_HEAD
+
+    assert search_params().uncertainty_source == T5D_UNCERTAINTY_CATEGORICAL
+    digests = []
+    for source in (T5D_UNCERTAINTY_CATEGORICAL, T5D_UNCERTAINTY_ERROR_HEAD):
+        with Game.variant("Standard") as g:
+            s = Search(g, params=search_params(seed=1, variance_scaled_cpuct=1, uncertainty_source=source))
+            serve(CStepDriver(s, playouts=120, value_kind=T5D_VALUE_PROBABILITIES), Heads(0.1, 0.3, error=0.9), batch_size=8)
+            digests.append(s.digest())
+            s.close()
+    assert digests[0] != digests[1]
+
+
+@pytest.mark.parametrize("fen", [None, "[r2k/4/4/K3:0:1:w]"], ids=["standard", "in-check"])
+def test_i15_a_records_input_is_rebuilt_from_the_game(fen):
+    """I15 (engine ABI round 2c): ``Game.expand(legal_moves=True)`` with the search's legality
+    budget gives a search leaf's candidate moves in its order - so a record's network input can be
+    rebuilt (with White's king in check down the a-file, one pseudo-legal move fewer); the
+    root's key is its leaf's (the memo's identity); the root's side table reads back."""
+    with Game.variant("Standard") if fen is None else Game.from_fen([fen]) as g:
+        p = search_params(seed=1, expand=(8, "none", 0))
+        s = Search(g, params=p)
+        assert s.gather(1) == 1
+        leaf = s.leaf_view(0)
+        s.abandon()
+        rebuilt = g.expand(square_features="none", legal_moves=True, legality_checks=p.legality_checks, legality_nodes=p.legality_nodes)
+        assert rebuilt.move_texts() == leaf.expansion.move_texts()
+        pseudo = g.expand(square_features="none")
+        assert pseudo.move_count == rebuilt.move_count + (0 if fen is None else 1)
+        s.run(T5D_EVALUATOR_RANDOM, 60, seed=2)
+        info = s.info()
+        assert info.root_key == leaf.key and info.root_cpuct == p.cpuct
+        assert 1 <= info.root_best_since <= info.root_visits
+        for c in s.children():
+            assert c.prior_noise_free == c.prior  # no root noise
+            assert (c.child_key != 0) or c.visits == 0
+            assert (c.boost, c.forced_visits, c.steered_visits, c.exploration_scale) == (0.0, 0, 0, 1.0)
+        s.close()
+        with pytest.raises(EngineArgumentError, match="legal_moves"):
+            Search(g, params=search_params(expand=ExpandOptions(8, 0, 0, 1, 64, 2000)))
+
+
+def test_i15_the_rebuilt_input_is_a_board_move_leafs_at_its_budget():
+    """I15's equivalence and its condition: ``Game.expand(legal_moves=True)`` gives a search
+    leaf's moves for a board-move search with ``legal_moves_only`` (the default) at the same
+    legality budget - here (0, 0), the fastest, at a turn start where it leaves moves unknown
+    (kept, in place); a whole-turn search's leaves are the pseudo-legal moves instead."""
+    rng = np.random.default_rng(7)
+    budget = {"legality_checks": 0, "legality_nodes": 0}
+    found = False
+    with Game.variant("Standard - Two Timelines") as g:
+        for _ in range(300):
+            info = g.info()
+            if info.turn_start:
+                s = Search(g, params=search_params(seed=1, expand=(8, "none", 0), **budget))
+                assert s.gather(1) == 1
+                leaf = s.leaf_view(0)
+                s.abandon()
+                s.close()
+                assert g.expand(square_features="none", legal_moves=True, **budget).move_texts() == leaf.expansion.move_texts()
+                if leaf.legality is not None and bool((leaf.legality == T5D_LEGALITY_UNKNOWN).any()):
+                    whole = Search(g, params=search_params(seed=1, expand=(8, "none", 0), split=T5D_SPLIT_WHOLE_TURN, **budget))
+                    assert whole.gather(1) == 1
+                    assert whole.leaf_view(0).expansion.move_texts() == g.expand(square_features="none").move_texts()
+                    whole.abandon()
+                    whole.close()
+                    found = True
+                    break
+            x = g.expand(square_features="none", legal_moves=True)
+            if info.may_submit and (x.move_count == 0 or rng.random() < 0.5):
+                g.submit()
+                continue
+            if x.move_count == 0:
+                break
+            g.apply(int(rng.integers(x.move_count)))
+    assert found, "no turn start with a move left unknown at budget (0, 0)"
+
+
+def test_i15_the_noise_free_prior_beside_the_noised_one():
+    """With root noise and a root temperature, each root child's noise-free prior is the
+    tempered softmax of its known logit (move i's logit i / 4: ``Ramp``) at T = 1.25, the noised
+    prior differing from it, and ``prior - (1 - eps) * prior_noise_free`` is the noise's share:
+    non-negative, summing to eps."""
+    t = 1.25
+    with Game.variant("Standard") as g:
+        texts = g.expand(square_features="none").move_texts()
+        s = Search(g, params=search_params(seed=4, widening=0, root_noise=1, root_policy_temperature=t))
+        run_search(s, Ramp(), playouts=30)
+        children = s.children()
+        assert len(children) == len(texts)
+        z = sum(math.exp(i / 4 / t) for i in range(len(texts)))
+        for c in children:
+            assert c.prior_noise_free == pytest.approx(math.exp(texts.index(c.moves[0].text()) / 4 / t) / z, rel=1e-9)
+        assert max(abs(c.prior - c.prior_noise_free) for c in children) > 1e-3  # the noise is there
+        eps = s.params.dirichlet_epsilon
+        share = [c.prior - (1 - eps) * c.prior_noise_free for c in children]
+        assert min(share) >= -1e-12 and sum(share) == pytest.approx(eps, abs=1e-9)
+        assert sum(c.prior_noise_free for c in children) == pytest.approx(1.0, abs=1e-9)
+        s.close()
+
+
+def test_6m_a_signal_that_is_read_must_be_given():
+    """Register I10 / 6m (build-log spec issue 149): with E2 on, a delivery without the
+    uncertainty signal ``uncertainty_source`` selects - here no categorical (``Ramp``), or no error
+    head's output (``Heads(error=nan)``) - is refused, the batch released; where nothing reads it,
+    it is 0 and counted (``uncertainty_missing``)."""
+    from t5d.engine.capi import T5D_UNCERTAINTY_CATEGORICAL, T5D_UNCERTAINTY_ERROR_HEAD
+
+    for source, lacking in ((T5D_UNCERTAINTY_CATEGORICAL, Ramp()), (T5D_UNCERTAINTY_ERROR_HEAD, Heads(0.1, 0.3, error=math.nan))):
+        with Game.variant("Standard") as g:
+            s = Search(g, params=search_params(seed=1, variance_scaled_cpuct=1, uncertainty_source=source))
+            with pytest.raises(EngineArgumentError, match="uncertainty signal"):
+                run_search(s, lacking, playouts=10)
+            assert s.gather(1) == 1  # released
+            s.abandon()
+            s.close()
+    with Game.variant("Standard") as g:
+        s = Search(g, params=search_params(seed=1, uncertainty_source=T5D_UNCERTAINTY_ERROR_HEAD))
+        run_search(s, Heads(0.1, 0.3, error=math.nan), playouts=20)
+        info = s.info()
+        assert info.playouts >= 20 and info.uncertainty_missing == info.evaluations
+        s.close()
+
+
 # --- what the evaluations mean --------------------------------------------------------------------
 
 
@@ -303,7 +501,7 @@ class Ramp:
     """Logit i = i / 4 for move i of every leaf, no submit logit, a flat value."""
 
     def __call__(self, positions):
-        return [Evaluation(np.arange(p.move_count, dtype=np.float32) / 4, np.zeros(51, np.float32)) for p in positions]
+        return [Evaluation(np.arange(p.move_count, dtype=np.float32) / 4, np.zeros(3, np.float32)) for p in positions]
 
 
 def test_logit_i_scores_move_i():
@@ -334,7 +532,7 @@ class Submitter:
         out = []
         for p in positions:
             s = self.submit if (p.state.submit_possible and p.state.submit_legal) else math.nan
-            out.append(Evaluation(np.zeros(p.move_count, np.float32), np.zeros(51, np.float32), submit_logit=s))
+            out.append(Evaluation(np.zeros(p.move_count, np.float32), np.zeros(3, np.float32), np.zeros(51, np.float32), submit_logit=s))
         return out
 
 
@@ -492,7 +690,7 @@ def test_errors_come_back_as_exceptions():
     with Game.variant("Standard") as g:
         s = Search(g)
         with pytest.raises(EngineArgumentError):
-            s.deliver(np.zeros(3, np.float32), np.zeros(51, np.float32))  # no batch waiting
+            s.deliver(np.zeros(3, np.float32), np.zeros(3, np.float32))  # no batch waiting
         n = s.gather(4)
         assert n == 1
         with pytest.raises(EngineArgumentError, match="batch is waiting"):
@@ -500,11 +698,21 @@ def test_errors_come_back_as_exceptions():
         with pytest.raises(EngineArgumentError):
             s.set_epoch(1)
         with pytest.raises(EngineArgumentError, match="logits"):
-            s.deliver(np.zeros(3, np.float32), np.zeros(51, np.float32))  # 20 candidate moves
+            s.deliver(np.zeros(3, np.float32), np.zeros(3, np.float32))  # 20 candidate moves
         assert s.gather(4) == 1  # the refused batch was abandoned
         m = s.leaf_view(0).expansion.move_count
         with pytest.raises(EngineArgumentError, match="infinite submit"):
-            s.deliver(np.zeros(m, np.float32), np.zeros(51, np.float32), submit_logits=[math.inf])
+            s.deliver(np.zeros(m, np.float32), np.zeros(3, np.float32), submit_logits=[math.inf])
+        assert s.gather(4) == 1
+        with pytest.raises(EngineArgumentError, match="WDL"):
+            s.deliver(np.zeros(m, np.float32), np.zeros(2, np.float32))  # D3: 3 per leaf
+        assert s.gather(4) == 1
+        with pytest.raises(EngineArgumentError, match="error head"):
+            s.deliver(np.zeros(m, np.float32), np.zeros(3, np.float32), errors=[-1.0])
+        assert s.gather(4) == 1
+        with pytest.raises(ValueError, match="wdl_kind"):
+            s.deliver(np.zeros(m, np.float32), np.zeros(3, np.float32), wdl_kind=9)
+        s.deliver(np.zeros(m, np.float32), np.zeros(3, np.float32))  # the optional heads absent
         s.close()
         with pytest.raises(EngineArgumentError, match="closed"):
             s.info()

@@ -922,7 +922,15 @@ A `t5d_game` is a state under the rules with its expansion buffers:
 `t5d_game_new_variant`; `t5d_game_apply` (a move given as its source, destination
 and promotion), `t5d_game_apply_expanded` (by index into the last expansion),
 `t5d_game_submit`; `t5d_game_expand` (`t5d_expand_options`; NULL for k = 8, every
-board's features, no relations), which fills a `t5d_expansion`: counts, and pointers
+board's features, no relations, the pseudo-legal moves - engine ABI round 2 appends
+`legal_moves` and the budget `legality_checks`, `legality_nodes`: with `legal_moves` 1 the
+moves are a search leaf's under the same budget, the legal and unknown ones in the same
+order, so that a training record's network input can be rebuilt - register I15; that is
+a leaf of a board-move search with `legal_moves_only` (both defaults; the search's default
+budget is (64, 2000), `T5D_NO_LIMIT` both here is exact), while a whole-turn search's
+leaves, and the pseudo-legal seam's, carry the pseudo-legal moves (`legal_moves` 0); a
+search's own `expand` options refuse it, its `legal_moves_only` and `legality_*`
+deciding its leaves), which fills a `t5d_expansion`: counts, and pointers
 to the flat arrays above (per board: timeline, half-turn, head, active, side,
 playable, window depth, band depth, origin, parent) - valid until the handle is next
 changed - and, appended at its end by stage E7 (every older field keeps its offset),
@@ -2166,9 +2174,35 @@ Single-threaded; no time management (E7, E8), scanner (rung 1) or Lazy SMP yet.
 shifted inside the action it is no longer the colour to move on the present. Values
 are in [-1, 1] from that player's view; backing up across an edge flips the sign only
 when the two nodes' acting players differ - under the ply split, only across a submit
-edge. The evaluator's value is a 51-bin categorical
-distribution (D3), bins centred on `(2k - 50) / 50`; its mean is the leaf's value and
-its variance feeds E2, E3 and LCB.
+edge. The evaluator's value heads are D3's as corrected at CHECKPOINT 7 (engine ABI
+round 2), each from the leaf's acting player:
+
+- **WDL - the value search uses.** A leaf's value is `W - L` (the three normalised;
+  `wdl_value`), and its draw probability `D` is backed up beside the value on every
+  node and edge (Lc0's way; a mate backs up D 0, a stalemate and the turn cap's
+  convention D 1; an MCGS residual corrects D as it corrects Q - a lag in either fires
+  one, since the ABI round 2 review fixes). A root child's search
+  WDL is so `((1 - d + q) / 2, d, (1 - d - q) / 2)` (`RootChild::d`), which is what
+  I13's deblundering and D3's `q_ratio` blend need from the search.
+- **The 51-bin categorical** over the root search value (optional; bins centred on
+  `(2k - 50) / 50`): its mean is never backed up (before round 2 it was the leaf's
+  value - the reading reversal 28 corrected). Its variance is one of the two
+  uncertainty signals.
+- **The error head** (optional; >= 0, the predicted squared value - short-term gap):
+  the other signal. `SearchParams::uncertainty_source` (6m; register I10: "6m decides
+  which uncertainty signal search consumes") picks one - `Categorical` by default,
+  `ErrorHead` - as each node's variance, the one E2, E3 and E5's optional term read.
+  While one of them is on (E5's term only under the LCB rule) an evaluation without the
+  chosen signal is refused, as a malformed one is (a 6m arm on a network without the
+  error head fails at once instead of running with variance 0: E2's cPUCT halved, the
+  backup's largest weight); read by nothing, an absent signal is 0 and counted
+  (`SearchStats::uncertainty_missing`, `t5d_search_summary.uncertainty_missing`).
+- **Moves-left** (optional; D4) is recorded per node and never backed up: what one
+  edge adds to a moves-left count waits on the unit of "turn" (build-log spec issue
+  305), so the search keeps each root child's network outputs instead
+  (`RootChild::evaluated`, `network_wdl`, `network_moves_left`, `network_error`, the
+  root player's view) and the targets add the offset - the record I13 needs beside the
+  backed-up `(q, d)`.
 
 **D2's two arms** (`SearchParams::split`; D2 is undecided, ablations 6g/6k):
 
@@ -2225,7 +2259,7 @@ spec issue 46; each part a parameter):
 | (c) | the first time selection picks an unknown edge it is verified: illegal - removed, siblings' priors renormalised, selection repeated, nothing backed up; legal - flag cleared; still unknown - kept, flagged | `verify_unknown` (on), `verify_legality` (`budgeted(4096, 200000)`) |
 | (d) | a node is terminal only on an exact verdict of E4's detectors | - (H37) |
 | (e) | a child through an unknown edge never raises its parent's lower bound (it still bounds it from above: a superset of the legal children is a sound upper bound), and is never a proven win for final selection | - |
-| (f) | training's policy target is the root's visits (`root_children` lists the instantiated children; the rest have none); the network's move mask is a leaf's legal and unknown moves - every candidate its expansion kept - not the root's children | `RootChild::visits`; `Expansion::move_legality` (`t5d_leaf.legality`) |
+| (f) | training's policy target is built from the root's visits (`root_children` lists the instantiated children; the rest have none) by I2's pruning at target construction - the training loop's, from each child's visits, priors with and without the noise, values and steering counts (round 2c's side table); the network's move mask is a leaf's legal and unknown moves - every candidate its expansion kept - not the root's children | `RootChild` (`visits`, `prior`, `prior_noise_free`, ...); `Expansion::move_legality` (`t5d_leaf.legality`) |
 
 Every pruning renormalises the siblings' priors. Before a move is played, an unknown
 one is classified exactly (`Search::verify`; self-play does this, and plays only moves
@@ -2242,11 +2276,32 @@ nothing; the rules' verdict comes first.
 children: the children sorted by prior, the first `ceil(k0 (N + 1)^alpha)` instantiated
 (progressive widening), with `k0 = max(widening_min, widening_scale * exp(H))` from the
 policy's entropy H - sharp policies narrow, flat ones widen. FPU: an unvisited child
-scores `Q(parent) - fpu_reduction * sqrt(visited prior mass)`. Root Dirichlet noise for
-self-play (`root_noise`, `dirichlet_alpha` per child, `dirichlet_epsilon`; seeded,
-deterministic). Behind flags: E2 - cPUCT scaled by `clamp(1 + lambda (sigma / sigma_ref
-- 1))`, sigma the node's value deviation (the categorical variance as a prior of
-weight `variance_prior_weight`, blended with the backed-up values'), and backups
+scores `Q(parent) - fpu_reduction * sqrt(visited prior mass)`. **The root's exploration**
+(E1 and I19 as corrected at CHECKPOINT 7; engine ABI round 2b), in this order at the
+root's own expansion: the softmax at `policy_temperature x root_policy_temperature` (I19's
+root policy temperature - "a root policy softmax temperature slightly above 1 flattens
+the prior before the noise", §8.4; 1, off, by default: the training generator sets its
+self-play value per search, with the move-temperature schedule, M21), the unknown-move
+scale and the submit share, k0 from that prior's entropy, then root Dirichlet noise for
+self-play (`root_noise`; `P = (1 - eps) P + eps Dir(alpha)`, seeded, deterministic, at a
+fresh root only) - its **total concentration** `dirichlet_concentration` (placeholder
+`kDirichletConcentration`, KataGo's 0.03 x 361 = 10.83) **split across the root's open
+edges** (`dirichlet_alphas`: the moves the expansion kept, legal or unknown, and a legal
+submit; under the whole-turn split the listed actions), so the noise's overall strength
+stays constant as the move count changes (§8.4; tested: the noise's relative spread
+`n^2 Var / (n - 1)` is `1/(C + 1)` at 20 moves and at 62). `dirichlet_concentration` 0
+is the arm before CHECKPOINT 7, `dirichlet_alpha` per edge (its draws exactly as before).
+KataGo-style **shaping** is a prototype behind `dirichlet_shaping` (off):
+`dirichlet_shaping_share` (one half, §8.4) of the total spread by how far each edge's
+log-prior, capped at `dirichlet_shaping_cap` (0.01), lies above the open edges' mean,
+the rest uniformly - a reading of §8.4's paraphrase (build-log spec issue 151), never
+below the uniform half's share. Then the edges are sorted and widened. Every constant a
+named placeholder (SPSA, G7; ablation 6g). Not built: E1's "the widening schedule may
+depend on the mandatory-board count" (a tuning option for 6g; A6's count is in the
+expansion). Behind flags: E2 - cPUCT scaled by `clamp(1 + lambda (sigma / sigma_ref
+- 1))`, sigma the node's value deviation (its uncertainty signal - the categorical's
+variance by default, `uncertainty_source` - as a prior of weight
+`variance_prior_weight`, blended with the backed-up values'), and backups
 weighted `sigma_ref^2 / (sigma_ref^2 + var)`; E3 - U multiplied by `clamp(1 + beta
 (sigma_child / sigma_ref - 1), 1, cap)`, never below 1, nothing for an unevaluated
 child.
@@ -2264,7 +2319,7 @@ evaluator throws, when an evaluation is malformed - and when anything fails insi
 `gather` or `deliver`, an allocation included: `gather` abandons its batch before the
 exception leaves, `deliver` keeps what it delivered and abandons the rest (the tests
 inject a `bad_alloc` at every allocation of both). `run` resets every field of the
-evaluation buffers it reuses, the submit logit included. The epoch cannot change while a
+evaluation buffers it reuses, the submit logit and D3's heads included. The epoch cannot change while a
 batch waits (its evaluations belong to the epoch they were asked under).
 
 **MCGS** (C11, prototype, `graph`). Nodes keyed by `node_key(state, keying)`: the 5D
@@ -2300,8 +2355,10 @@ and a batch's de-duplication match all three (§15.2's purity row). An exact com
 follows every key match (a collision gets an unshared node; `key_bits`, a test seam not
 in the C API, cuts the keys short so that the tests meet collisions). Statistics
 live on the edges (path statistics; in a tree they equal the child's). Reaching an
-expanded node through an edge whose Q lags the node's by more than `residual_epsilon`
-(or an edge never crossed) backs up the residual correction instead of descending.
+expanded node through an edge whose Q or draw probability D (D3) lags the node's by
+more than `residual_epsilon` (or an edge never crossed) backs up the residual
+correction of both instead of descending (before the ABI round 2 review fixes only a Q
+lag fired one, so a D lag under an unchanged Q was never corrected).
 5D has no repetition rule and every move adds a board, so the graph is acyclic.
 
 **The solver** (H2, E9; behind `proof_channel`, **off by rule**). Register H41
@@ -2328,8 +2385,9 @@ children proven lost are ineligible unless all are; if an eligible child is solv
 largest lower bound, exact for a solved child and `Q - A / sqrt(n)` otherwise; else
 `final_rule`: `Visits` (the baseline) or `Lcb` (default) - among children with at least
 `lcb_floor` (15%) of the most visits, the largest `Q - z sqrt(var / n)`, var plus
-`lcb_categorical_weight` times the child's categorical variance (the optional second
-term). Under MCGS the visits are the edges'. No depth factor (E6, refused).
+`lcb_categorical_weight` times the child's uncertainty signal (the optional second
+term; the categorical's variance unless `uncertainty_source` says the error head).
+Under MCGS the visits are the edges'. No depth factor (E6, refused).
 `select_final` is a pure function (`final_eligible` says who may be chosen).
 Self-play samples the root's visits at a temperature instead (`choose_by_visits`).
 
@@ -2369,10 +2427,15 @@ order); `synchronous` is the debug mode - batches of one leaf.
 expansion (everything the network takes: features, candidate moves, move graph,
 relations, W/E, D8's acting player and submit action, A6's turn state; `expand` sets k,
 the features and the relations), its key and epoch, and the moves made in its action -
-answered with one logit per candidate move and a 51-bin distribution. Built in:
-`uniform` (logits 0, value 0), `random` (a function of seed, key and epoch only - so
-still a function of the state), `material` (`tanh(balance / 10)` over every
-timeline's head board; captures' logits 0.5 x the captured value; P N B R Q 1 3 3 5 9,
+answered (`Evaluation`) with one logit per candidate move, a submit logit (optional)
+and D3's heads: the WDL (required), the categorical (`std::optional`), the error head's
+output and moves-left (NaN: none). The search refuses a malformed one: a WDL or
+categorical that is no distribution, a negative or infinite error or moves-left. Built
+in, each giving a WDL and a categorical: `uniform` (logits 0, WDL `{1, 1, 1}` - value
+exactly 0, draw 1/3 - the categorical's mass on 0), `random` (a function of seed, key
+and epoch only - so still a function of the state; a draw share up to one half),
+`material` (`v = tanh(balance / 10)` over every timeline's head board, as `wdl_of(v)` -
+no draw - and `two_hot(v)`; captures' logits 0.5 x the captured value; P N B R Q 1 3 3 5 9,
 the fairy pieces at the scanner's placeholders - unicorn 2.5, dragon 2, princess 7,
 brawn 1.25, common king 3 - build-log spec issue 56, one set for the engine).
 
@@ -2388,12 +2451,28 @@ A6's turn state: the leaf's mandatory and optional boards and the moves made in 
 action - and each move's legality; the key is the state's, so an evaluator that
 caches or de-duplicates leaves keys them as the search does, by (key,
 `expansion.moves_made`, epoch) with the state behind the key, never by the key, the
-state or `t5d_search_leaf_state`'s fingerprint alone), `t5d_search_deliver(search, logits, logit_count,
-submit_logits, submit_count, values, value_count, value_kind)` - one float32 logit per
-candidate move, logit i scoring `leaf.expansion.moves[i]`; one submit logit per leaf
-(NaN: none) or none at all (NULL, 0: the placeholder share); 51 float32 values per leaf
-as probabilities (`T5D_VALUE_PROBABILITIES`) or logits (`T5D_VALUE_LOGITS`), from the
-leaf's acting player - and `t5d_search_abandon`; then `t5d_search_info`, `_child`,
+state or `t5d_search_leaf_state`'s fingerprint alone),
+`t5d_search_deliver_evaluations(search, &batch)` - a `t5d_evaluations` (engine ABI
+round 2): one float32 logit per candidate move, logit i scoring
+`leaf.expansion.moves[i]`; one submit logit per leaf (NaN: none) or none at all (NULL,
+0: the placeholder share); D3's heads from the leaf's acting player - `T5D_WDL` (3)
+WDL numbers per leaf (required) and `T5D_VALUE_BINS` (51) categorical numbers per leaf
+or none, each as probabilities (`T5D_VALUE_PROBABILITIES`) or logits
+(`T5D_VALUE_LOGITS`, `wdl_kind` and `value_kind`), one error-head output and one
+moves-left per leaf or none (NaN at a leaf: none given); `board_logits` is reserved for
+D2's flat form (not built: anything but NULL is `T5D_ERR_UNSUPPORTED`). The struct is
+appended to like the others, so the flat form's per-board logits need no new entry
+point. It replaced `t5d_search_deliver`, which took the categorical alone and backed up
+its mean - the reading D3's correction retired; no shim was kept (a shim would have to
+invent a draw probability the documents do not give, and its one caller, the Python
+binding, moved in the same commit) - and `t5d_search_abandon`; then `t5d_search_info`
+(round 2 appends the root's backed-up `root_d` and its own evaluation: `root_evaluated`,
+`root_wdl`, `root_moves_left`, `root_error`; `root_q` and `root_d` are the backed-up
+averages, a solved root's too - `root_lo` and `root_hi` carry what is proven; the review
+fixes append `uncertainty_missing`, the nodes expanded without the chosen uncertainty
+signal where nothing reads it), `_child` (round 2 appends `d`,
+`evaluated`, `network_wdl`, `network_moves_left`, `network_error`; round 2c the root's
+side table - below),
 `_choose`, `_choose_by_visits`, `_verify`, `_advance`, `_advance_action`,
 `_root_game`, `_set_epoch`, `_run` (built-in evaluators) and `_run_limits` (within a
 `t5d_search_limits`: playouts, evaluations, nodes, bytes; it reports the
@@ -2401,7 +2480,10 @@ leaf's acting player - and `t5d_search_abandon`; then `t5d_search_info`, `_child
 C14 through the binding), `_digest` (H15's digest - the
 tests compare the step loop's graph with the C++ search's by it), and `t5d_search_layout`
 (this header's struct layouts, as `t5d_layout` gives `t5d/capi.h`'s).
-`t5d_search_params` mirrors `SearchParams` (fill it with `t5d_search_params_default`).
+`t5d_search_params` mirrors `SearchParams` (fill it with `t5d_search_params_default`;
+round 2 adds `uncertainty_source`, `T5D_UNCERTAINTY_CATEGORICAL` by default, then E1's
+and I19's `dirichlet_concentration`, `dirichlet_shaping`, `dirichlet_shaping_share`,
+`dirichlet_shaping_cap` and `root_policy_temperature`, in front of `expand`).
 The header's structs are appended to, never reordered; the one struct of `t5d/capi.h`
 each embeds (`t5d_leaf::expansion`, `t5d_search_params::expand`) - provisional, and
 growing as that header does (E7 appended D8's fields to `t5d_expansion`) - is its last
@@ -2414,6 +2496,30 @@ the C++ API throws `std::invalid_argument` for the caller's errors and nothing e
 the boundary can tell them apart. Solver bounds are search state, never to be persisted
 as proofs (H19, H23; the header says so).
 
+**The records' fields** (registers I15, I2, D4; engine ABI round 2c) - what §12.8's rich
+training records and I2's target-side pruning need from a search, beside D3's values
+(round 2a). Per root child (`RootChild`, `t5d_root_child`): `child_key` (the child
+node's key - with its moves made, the root's + 1 below a move and 0 below a submission,
+and the epoch, its evaluation's identity; 0 for no child node), `prior_noise_free` (the
+prior before the root noise - after the temperatures, the unknown-move scale and the
+submit share - kept in a root-only side table, so `Edge` does not grow; renormalised
+with `prior` when a sibling is pruned; a carried root's is its `prior`),
+`value_variance` (of the values backed up through it), `exploration_scale` (E3's factor
+on its exploration term, 1 with E3 off), `boost` and `steered_visits` (E10's asset-map
+boosts and Hunt's suggestions: 0, none wired until step 2's E10) and `forced_visits`
+(0: forced playouts are **not built** - §12.5 adopts KataGo's forced-playout pruning
+*at target construction*, the training loop's, and no document asks the search to force
+playouts; issue 153). Per search (`t5d_search_summary`): `root_key` (the root's node
+key, for the records' memo of raw root outputs, which C14's shared cache hides from
+Python when the root's evaluation is a hit), `root_cpuct` (the root's effective cPUCT,
+cpuct times E2's root scale - with each child's `exploration_scale`, a replica of the
+root's PUCT) and `root_best_since`, D4's effort label: the root's visits when its most
+visited child last changed (strictly more visits than the incumbent; §8.6's "visits until
+the decision stabilises"; issue 154; for a root carried by `advance`, counted from the
+re-root). And `t5d_game_expand`'s `legal_moves` (above) rebuilds a record's candidate
+moves (issue 155). The noise's alphas, child by child, are C++ only (`RootChild::noise_alpha`,
+the tests' check of E1's split; not in the C side table).
+
 **Validation.** Every real parameter must be finite (NaN or infinity in, say,
 `virtual_loss` or `cpuct_variance_scale` poisoned selection; each is refused by name),
 as must `choose_by_visits`'s temperature and random number and `two_hot`'s value.
@@ -2421,9 +2527,13 @@ as must `choose_by_visits`'s temperature and random number and `two_hot`'s value
 **Self-play** (`t5d/selfplay.hpp`, `play_game`). Self-play: a fresh search per decision
 (C14), sharing only the evaluation cache, the move sampled from the visits at
 `temperature` for `temperature_decisions` decisions, then the most visited, with root
-Dirichlet noise (E1, §8.4: `PlayParams::search` has `root_noise` on by default; a bare
-`SearchParams` has it off). Match play (`match_play`): one search carried across
-decisions, the final rule, noise off.
+Dirichlet noise (E1, §8.4: `PlayParams::search` has `root_noise` on by default, its
+total concentration split across the root's open edges; a bare `SearchParams` has it
+off). I19's move-temperature schedule (Lc0's T60: 0.9 decaying to 0.45, cut at move 60)
+and the root temperature's self-play value belong to the training generator (M21, in
+Python), which sets `root_policy_temperature` and the move temperature per decision; this
+tool's self-play keeps its step schedule and a root temperature of 1. Match play
+(`match_play`): one search carried across decisions, the final rule, noise off.
 Every turn start is judged first by E4's detector (checkmate, stalemate; unknown ends
 the game unjudged), then by the turn cap (scored a draw, counted:
 `GameRecord::cap_bound`, `search_turn_caps`). Every move is checked pseudo-legal and
@@ -2512,7 +2622,51 @@ states with different counts never one MCGS node while one action's orders merge
 batch asking once per (state, count), every node's count from its path; and, from its
 review, the C API's root count two moves into an action (where the old flag's 0 or 1
 cannot pass) and the tree carried at each count by `advance_moves` and
-`advance_action`, under tree and graph search.
+`advance_action`, under tree and graph search. After D3's correction (engine ABI round
+2): W - L backed up whatever the categorical says, and D beside it, on every node and
+edge, tree and graph, both splits; game ends' D (mate 0, stalemate and cap 1); the
+categorical changing nothing with E2, E3 and E5's term off, steering with E2 on, and
+unread under the error-head signal (6m), which the error head's output then steers;
+each signal absent read as 0 where nothing reads it, and counted - and refused, the
+batch released, where E2's scale or weight, E3 or E5's LCB term reads it, a shared
+cache's evaluation without it included (the round 2 review fixes); the cache returning every head bit for bit (a fresh
+search's root from a shared cache included); the built-in evaluators' WDL; every
+malformed head refused and released; `run`'s reused buffers reset head by head; the
+C step loop with WDLs, categoricals, errors and moves-left equal to the C++ search by
+digest under both signals with E2 on, the root children's `d` and network outputs
+included; the batch struct's every refusal. After E1/I19's correction (round 2b): the
+alphas summing to the total, split evenly, exactly `dirichlet_alpha` per edge in the old
+arm, shaped only behind the flag (uniform priors stay uniform; ranked edges never below
+the uniform half's share; capped priors alike); the noise's relative spread constant
+from 20 moves to 62 (600 seeds each, against `1/(C + 1)`); the root temperature on the
+root's priors only, before the noise, and 1 the default's search bit for bit; the new
+parameters' validation; the step loop equal to the C++ search with shaped, tempered and
+per-child noise. After I15/I2's fields (round 2c): each root child's noise-free prior the
+tempered prior with the noise's share `prior - (1 - eps) prior_noise_free` non-negative
+and summing to eps, equal to the prior without noise and at a carried root, both
+renormalised when verification removes illegal children; `child_key` its node's;
+`value_variance` its edge's; E3's factor within its bounds and above 1 somewhere; the
+steering and forcing counts 0; `root_cpuct` cpuct with E2 off and its scaled value with
+E2 on; the effort label replayed one playout at a time and from a re-root; and
+`t5d_game_expand`'s `legal_moves` giving a search leaf's moves byte for byte (Standard,
+and a king in check, where the pseudo-legal list has one more), a search refusing it.
+After the round's review fixes: under MCGS, with Q 0 everywhere and D 0.1 or 0.9 by node
+key, stepped one simulation at a time, every edge descended within `residual_epsilon` of
+its shared child's D and every residual setting the edge's D to the child's exactly (or
+as near as the clamp allows), some fired by D alone; every reader of the uncertainty
+signal (E2's scale, E2's weight, E3, E5's LCB term) refusing an evaluation without the
+chosen one under either source, the batch released, and the count of absent signals
+where nothing reads it, in C++ and through the C API and Python; a proven win's root
+child (q, d) = (1, 0), a proven draw's (0, 1), a solved drawn node's visits backing up
+D 1, a stuck node's (an Unknown verdict, or every child a dead end under the seam) its
+own D; the root noise's alphas, child by child, the open edges' split - a mid-action root
+with an illegal submit, unshaped and shaped; E3's factor recomputed from each child's
+own node and edge; the C step loop with root noise, a root temperature, E2 and E3 on,
+the side table, `root_cpuct` and `root_best_since` equal to the C++ search's field for
+field; both value kinds checked whether or not a categorical is given; and, in Python,
+the noise-free prior the tempered softmax of known logits, `Game.expand(legal_moves=True)`
+a board-move leaf's moves at budget (0, 0) with moves left unknown (a whole-turn leaf's
+the pseudo-legal ones), the error head read by its pinned `NetOutput` field name.
 
 ## Stage E8: the verification layer's redesign (M14, a prototype until 6b′)
 
@@ -3704,6 +3858,31 @@ Each is recorded where it is made (the header comments) and listed here:
   (Q4); "moves already made" counts moves since the action's turn start, a jump between
   two boards being one; and §15.4's turn structure holds the count (0 below a submit,
   the parent's + 1 below a move).
+- **Engine ABI round 2's readings** (build-log spec issues 148 and up):
+  - the draw probability D backed up beside the value on every node and edge (a mate D
+    0, a stalemate and the turn cap D 1); moves-left recorded per node, never backed up
+    (its turn unit and the action in progress are open: issues 224, 305), each root
+    child's network WDL, moves-left and error exposed instead - I13's inputs (issue 148);
+  - 6m's switch, `uncertainty_source`: the categorical's variance (default) or the error
+    head's output as each node's variance, read by E2, E3 and E5's optional term; a
+    signal not given is refused while one of them reads it, 0 and counted otherwise
+    (issue 149);
+  - the root noise's total concentration split across the root's open edges - the moves
+    the expansion kept, legal or unknown, and a legal submit; the listed actions under
+    the whole-turn split - drawn per decision (each decision's fresh search is a root;
+    the spec does not say per decision or per action) (issue 150);
+  - the shaping's form, a prototype: half the total by each edge's capped log-prior
+    above the mean (issue 151);
+  - the root policy temperature beside the every-node one (multiplied), 1 by default,
+    its self-play value and decay the training generator's; k0's entropy from the
+    tempered prior; a carried root never re-tempered (issue 152);
+  - forced playouts not built - KataGo's forced-playout pruning is the training loop's,
+    at target construction, from the records' per-child fields (issue 153); the
+    steering counts (E10's) exist and stay 0 until E10;
+  - D4's effort label as the root's visits when its most visited child last changed
+    (issue 154);
+  - a record's input rebuilt by `t5d_game_expand`'s `legal_moves` under the search's
+    legality budget, which the record keeps (issue 155).
 - **An ambiguous move is still unreadable** (stage E4): the notation's "Omission" lets
   a writer leave out a piece that a pin rules out, but legality is judged per action,
   at submission, so a "pin" is no per-move notion; the reader does not try each

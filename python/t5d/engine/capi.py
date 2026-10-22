@@ -153,7 +153,16 @@ MOVE_DTYPE = np.dtype(
 
 
 class ExpandOptions(ctypes.Structure):
-    _fields_ = [("window_k", c_int32), ("square_features", c_int32), ("relations", c_uint32)]
+    _fields_ = [
+        ("window_k", c_int32),
+        ("square_features", c_int32),
+        ("relations", c_uint32),
+        # appended in engine ABI round 2 (register I15): the search leaves' legal-moves filter for
+        # t5d_game_expand (a search refuses it in its own expand options)
+        ("legal_moves", c_int32),  # 1: the legal moves, classified under the budget below; 0: pseudo-legal
+        ("legality_checks", c_uint64),  # the budget, as t5d_search_params' (T5D_NO_LIMIT both: exact)
+        ("legality_nodes", c_uint64),
+    ]
 
 
 class GameSummary(ctypes.Structure):
@@ -237,6 +246,10 @@ class CExpansion(ctypes.Structure):
 # ---- the search's step API (t5d/capi_search.h; engine stage E6a) ------------------------------
 
 T5D_VALUE_BINS = 51
+#: D3: the WDL head's outputs per leaf - win, draw, loss.
+T5D_WDL = 3
+#: The uncertainty signal search consumes (register I10; ablation 6m).
+T5D_UNCERTAINTY_CATEGORICAL, T5D_UNCERTAINTY_ERROR_HEAD = 0, 1
 T5D_SPLIT_BOARD_MOVE, T5D_SPLIT_WHOLE_TURN = 0, 1
 T5D_ACTION_PRIOR_SUM, T5D_ACTION_PRIOR_MEAN = 0, 1
 T5D_NODE_KEY_STATE, T5D_NODE_KEY_STATE_AND_ORIGINS = 0, 1
@@ -308,6 +321,14 @@ class CSearchParams(ctypes.Structure):
         ("turn_cap_boards", c_int32),
         ("eval_cache_entries", c_uint64),
         ("eval_cache_bytes", c_uint64),
+        # engine ABI round 2 (register D3, I10), in front of the embedded struct
+        ("uncertainty_source", c_int32),  # T5D_UNCERTAINTY_*: a node's variance for E2, E3 and E5's term (6m)
+        # engine ABI round 2b (register E1, I19): placeholders
+        ("dirichlet_concentration", c_double),  # the root noise's total, split across the open edges; 0: dirichlet_alpha each
+        ("dirichlet_shaping", c_int32),  # KataGo-style shaping: a prototype, off
+        ("dirichlet_shaping_share", c_double),
+        ("dirichlet_shaping_cap", c_double),
+        ("root_policy_temperature", c_double),  # the root's softmax temperature, before the noise (1: off)
         ("expand", ExpandOptions),
     ]
 
@@ -357,6 +378,22 @@ class CSearchSummary(ctypes.Structure):
         ("cache_bytes", c_uint64),
         ("cache_purged", c_uint64),
         ("last_stop", c_int32),
+        # appended in engine ABI round 2 (register D3): the root's backed-up draw probability and
+        # its own evaluation - the network's raw outputs at the root (I15); NaN: not given
+        ("root_evaluated", c_int32),
+        ("root_d", c_double),
+        ("root_wdl", c_double * 3),  # win, draw, loss - the root player's view
+        ("root_moves_left", c_double),
+        ("root_error", c_double),
+        # appended in engine ABI round 2c (register I15, I2, D4): the root's node key, its effective
+        # cPUCT now (cpuct x E2's root scale), the effort label (the root's visits when its most
+        # visited child last changed)
+        ("root_key", c_uint64),
+        ("root_cpuct", c_double),
+        ("root_best_since", c_uint32),
+        # appended in the engine ABI round 2 review fixes (register I10, 6m): nodes expanded without
+        # the selected uncertainty signal - only while nothing reads it (else the delivery is refused)
+        ("uncertainty_missing", c_uint64),
     ]
 
 
@@ -376,8 +413,47 @@ class CRootChild(ctypes.Structure):
         ("lo", c_int32),
         ("hi", c_int32),
         ("prior", c_double),
-        ("q", c_double),
+        ("q", c_double),  # the backed-up value, W - L (D3)
         ("move_count", c_size_t),
+        # appended in engine ABI round 2 (register D3): the search's draw probability, and the
+        # child's own evaluation - the network's (I13's and I15's memo), the root player's view
+        ("d", c_double),  # backed up beside q: the search WDL is ((1 - d + q) / 2, d, (1 - d - q) / 2)
+        ("evaluated", c_int32),
+        ("network_wdl", c_double * 3),
+        ("network_moves_left", c_double),  # NaN: none given (or not evaluated)
+        ("network_error", c_double),
+        # appended in engine ABI round 2c (register I15, I2): the root's side table
+        ("child_key", c_uint64),  # the child node's key; 0: no child node yet
+        ("prior_noise_free", c_double),  # the prior before the root noise
+        ("value_variance", c_double),  # of the values backed up through it
+        ("boost", c_double),  # E10's asset-map boost: 0 (not wired)
+        ("exploration_scale", c_double),  # E3's factor on its exploration term (1: off)
+        ("forced_visits", c_uint32),  # forced playouts: 0 (not built - pruning is target-side)
+        ("steered_visits", c_uint32),  # visits a steering source decided: 0 (none wired, E10)
+    ]
+
+
+class CEvaluations(ctypes.Structure):
+    """``t5d_evaluations``: one batch's evaluations for ``t5d_search_deliver_evaluations``, leaf
+    by leaf - a NULL array with count 0 is "none given" where the field is optional."""
+
+    _fields_ = [
+        ("logits", POINTER(c_float)),
+        ("logit_count", c_size_t),
+        ("submit_logits", POINTER(c_float)),
+        ("submit_count", c_size_t),
+        ("wdl", POINTER(c_float)),  # T5D_WDL per leaf (required: D3's value)
+        ("wdl_count", c_size_t),
+        ("wdl_kind", c_int32),  # T5D_VALUE_PROBABILITIES or _LOGITS
+        ("value_kind", c_int32),
+        ("values", POINTER(c_float)),  # T5D_VALUE_BINS per leaf (the categorical), or NULL
+        ("value_count", c_size_t),
+        ("errors", POINTER(c_float)),  # one per leaf (>= 0; NaN: none), or NULL
+        ("error_count", c_size_t),
+        ("moves_left", POINTER(c_float)),  # one per leaf (>= 0; NaN: none), or NULL
+        ("moves_left_count", c_size_t),
+        ("board_logits", POINTER(c_float)),  # reserved for D2's flat form (not built): NULL
+        ("board_logit_count", c_size_t),
     ]
 
 
@@ -387,8 +463,8 @@ def _check_layouts() -> None:
     for name, _ in MoveRecord._fields_:
         if getattr(MoveRecord, name).offset != MOVE_DTYPE.fields[name][1]:
             raise ImportError(f"t5d_move.{name}: the ctypes and numpy layouts disagree")
-    if ctypes.sizeof(ExpandOptions) != 12:
-        raise ImportError("t5d_expand_options must be 12 bytes (three 32-bit fields)")
+    if ctypes.sizeof(ExpandOptions) != 32:
+        raise ImportError("t5d_expand_options must be 32 bytes (four 32-bit fields, two 64-bit)")
     for struct, last in ((CSearchParams, "expand"), (CLeaf, "expansion")):
         if struct._fields_[-1][0] != last:
             raise ImportError(f"{struct.__name__}: the embedded struct of t5d/capi.h must be the last member (t5d/capi_search.h)")
@@ -413,6 +489,7 @@ MIRRORED_SEARCH_STRUCTS: dict[str, type[ctypes.Structure]] = {
     "t5d_search_summary": CSearchSummary,
     "t5d_search_limits": CSearchLimits,
     "t5d_root_child": CRootChild,
+    "t5d_evaluations": CEvaluations,
 }
 
 
@@ -494,10 +571,7 @@ _SIGNATURES: dict[str, tuple[object, list[object]]] = {
     "t5d_search_gather": (c_int32, [_SEARCH, c_size_t, c_uint64, POINTER(c_size_t), _ERR]),
     "t5d_search_leaf": (c_int32, [_SEARCH, c_size_t, POINTER(CLeaf), _ERR]),
     "t5d_search_leaf_state": (c_int32, [_SEARCH, c_size_t, POINTER(_STATE), _ERR]),
-    "t5d_search_deliver": (
-        c_int32,
-        [_SEARCH, POINTER(c_float), c_size_t, POINTER(c_float), c_size_t, POINTER(c_float), c_size_t, c_int32, _ERR],
-    ),
+    "t5d_search_deliver_evaluations": (c_int32, [_SEARCH, POINTER(CEvaluations), _ERR]),
     "t5d_search_abandon": (c_int32, [_SEARCH]),
     "t5d_search_run": (c_int32, [_SEARCH, c_int32, c_uint64, c_uint64, _ERR]),
     "t5d_search_run_limits": (c_int32, [_SEARCH, c_int32, c_uint64, POINTER(CSearchLimits), POINTER(c_int32), _ERR]),
@@ -682,6 +756,7 @@ def char_array(strings: list[str]) -> ctypes.Array:
 
 __all__ = [
     "BUILT_RELATIONS",
+    "CEvaluations",
     "CExpansion",
     "CLeaf",
     "CRootChild",

@@ -6,9 +6,12 @@ legality policy, terminal detection, turn cap, evaluation cache and final select
 is its **evaluator**: ``gather`` selects a batch of leaves, ``leaf`` describes each (its
 expansion - the network's input - with D8's acting player and submit flags), ``deliver``
 hands back one logit per candidate move (logit ``i`` scores ``leaf.expansion.moves[i]``), one
-submit logit per leaf (NaN: none) and a 51-bin value per leaf, from the leaf's acting
-player. ``evaluator.CStepDriver`` runs that loop with the network; this module is the thin
-layer over the C functions, and nothing in it computes a rule or a search decision.
+submit logit per leaf (NaN: none) and D3's value heads per leaf, from the leaf's acting
+player: the WDL - the value search uses (W - L backed up, its draw probability beside it) -
+and, optionally, the 51-bin categorical, the error head's output and moves-left
+(``t5d_search_deliver_evaluations``). ``evaluator.CStepDriver`` runs that loop with the
+network; this module is the thin layer over the C functions, and nothing in it computes a
+rule or a search decision.
 
 * **Parameters.** ``search_params(**overrides)`` fills a ``t5d_search_params`` with the
   library's defaults (``t5d_search_params_default``) and the overrides by field name;
@@ -57,6 +60,7 @@ from .capi import (
     T5D_NO_LIMIT,
     T5D_VALUE_LOGITS,
     T5D_VALUE_PROBABILITIES,
+    CEvaluations,
     CLeaf,
     CRootChild,
     CSearchLimits,
@@ -138,6 +142,19 @@ class SearchInfo:
     cache_bytes: int
     cache_purged: int
     last_stop: int
+    # engine ABI round 2 (register D3): the root's backed-up draw probability and its own
+    # evaluation - the network's raw outputs at the root (I15), its player's view; NaN: not given
+    root_evaluated: bool
+    root_d: float
+    root_wdl: tuple[float, float, float]
+    root_moves_left: float
+    root_error: float
+    # engine ABI round 2c (register I15, I2, D4)
+    root_key: int  # the root's node key: with the moves made in its action and the epoch, its evaluation's identity
+    root_cpuct: float  # the root's effective cPUCT now (cpuct x E2's root scale): I2's pruning replica
+    root_best_since: int  # the effort label: the root's visits when its most visited child last changed
+    # engine ABI round 2 review fixes (register I10, 6m)
+    uncertainty_missing: int  # nodes expanded without the selected uncertainty signal (none read it)
 
     @property
     def root_finished(self) -> bool:
@@ -156,8 +173,23 @@ class RootChild:
     lo: int  # solver bounds: search state, never to be persisted as a proof (H19, H23)
     hi: int
     prior: float
-    q: float
+    q: float  # the backed-up value, W - L (D3)
     moves: tuple[Move, ...]  # 1 (a move), an action's (whole-turn), 0 (submit)
+    # engine ABI round 2 (register D3): the search's draw probability, and the child's own
+    # evaluation - the network's, the root player's view (NaN where not given)
+    d: float  # the search WDL: ((1 - d + q) / 2, d, (1 - d - q) / 2)
+    evaluated: bool
+    network_wdl: tuple[float, float, float]
+    network_moves_left: float
+    network_error: float
+    # engine ABI round 2c (register I15, I2): the root's side table
+    child_key: int  # the child node's key; 0: no child node yet
+    prior_noise_free: float  # the prior before the root noise (after the temperatures)
+    value_variance: float  # of the values backed up through it
+    boost: float  # E10's asset-map boost: 0 (not wired)
+    exploration_scale: float  # E3's factor (1: off)
+    forced_visits: int  # 0: forced playouts not built (pruning is target-side, §12.5)
+    steered_visits: int  # 0: no steering source wired (E10)
 
 
 @dataclass(frozen=True)
@@ -283,36 +315,43 @@ class Search:
     def deliver(
         self,
         logits: Sequence[float] | np.ndarray,
-        values: Sequence[float] | np.ndarray,
+        wdl: Sequence[float] | np.ndarray,
         *,
+        values: Sequence[float] | np.ndarray | None = None,
+        errors: Sequence[float] | np.ndarray | None = None,
+        moves_left: Sequence[float] | np.ndarray | None = None,
         submit_logits: Sequence[float] | np.ndarray | None = None,
+        wdl_kind: int = T5D_VALUE_LOGITS,
         value_kind: int = T5D_VALUE_LOGITS,
     ) -> None:
-        """The waiting batch's evaluations, leaf by leaf in order: ``logits`` - each leaf's move
-        logits concatenated; ``values`` - 51 per leaf (``value_kind``: logits or
-        probabilities); ``submit_logits`` - one per leaf (NaN: none given) or None (the search's
+        """The waiting batch's evaluations, leaf by leaf in order (``t5d_search_deliver_evaluations``):
+        ``logits`` - each leaf's move logits concatenated; ``wdl`` - D3's value, 3 per leaf (win,
+        draw, loss; ``wdl_kind``: logits or probabilities); ``values`` - the categorical, 51 per
+        leaf (``value_kind``), or None; ``errors`` and ``moves_left`` - one per leaf (NaN: none
+        given), or None; ``submit_logits`` - one per leaf (NaN: none given) or None (the search's
         placeholder share everywhere). On a refusal the engine abandons the batch."""
-        lg = np.ascontiguousarray(np.asarray(logits, dtype=np.float32).reshape(-1))
-        vl = np.ascontiguousarray(np.asarray(values, dtype=np.float32).reshape(-1))
-        if value_kind not in (T5D_VALUE_LOGITS, T5D_VALUE_PROBABILITIES):
-            raise ValueError("value_kind must be T5D_VALUE_LOGITS or T5D_VALUE_PROBABILITIES")
+        for name, kind in (("wdl_kind", wdl_kind), ("value_kind", value_kind)):
+            if kind not in (T5D_VALUE_LOGITS, T5D_VALUE_PROBABILITIES):
+                raise ValueError(f"{name} must be T5D_VALUE_LOGITS or T5D_VALUE_PROBABILITIES")
         fp = ctypes.POINTER(c_float)
-        sub_ptr, sub_n = None, 0
-        if submit_logits is not None:
-            sl = np.ascontiguousarray(np.asarray(submit_logits, dtype=np.float32).reshape(-1))
-            sub_ptr, sub_n = sl.ctypes.data_as(fp), sl.shape[0]
-        self._lib.call(
-            "t5d_search_deliver",
-            self._live(),
-            lg.ctypes.data_as(fp) if lg.size else None,
-            c_size_t(lg.shape[0]),
-            sub_ptr,
-            c_size_t(sub_n),
-            vl.ctypes.data_as(fp) if vl.size else None,
-            c_size_t(vl.shape[0]),
-            int(value_kind),
-            error=True,
-        )
+        keep: list[np.ndarray] = []  # the arrays the struct points into, alive through the call
+
+        def array(data) -> tuple[object, int]:
+            if data is None:
+                return None, 0
+            a = np.ascontiguousarray(np.asarray(data, dtype=np.float32).reshape(-1))
+            keep.append(a)
+            return (a.ctypes.data_as(fp) if a.size else None), int(a.shape[0])
+
+        b = CEvaluations()
+        b.logits, b.logit_count = array(logits)
+        b.submit_logits, b.submit_count = array(submit_logits)
+        b.wdl, b.wdl_count = array(wdl)
+        b.values, b.value_count = array(values)
+        b.errors, b.error_count = array(errors)
+        b.moves_left, b.moves_left_count = array(moves_left)
+        b.wdl_kind, b.value_kind = int(wdl_kind), int(value_kind)
+        self._lib.call("t5d_search_deliver_evaluations", self._live(), byref(b), error=True)
 
     def abandon(self) -> None:
         """Release the waiting batch's virtual loss without backing anything up."""
@@ -344,8 +383,15 @@ class Search:
     def info(self) -> SearchInfo:
         s = CSearchSummary()
         self._lib.call("t5d_search_info", self._live(), byref(s))
-        flags = {"root_turn_start", "root_terminal", "root_solved"}
-        return SearchInfo(**{name: bool(getattr(s, name)) if name in flags else getattr(s, name) for name, _ in CSearchSummary._fields_})
+        flags = {"root_turn_start", "root_terminal", "root_solved", "root_evaluated"}
+
+        def value(name: str):
+            v = getattr(s, name)
+            if name in flags:
+                return bool(v)
+            return tuple(float(x) for x in v) if isinstance(v, ctypes.Array) else v
+
+        return SearchInfo(**{name: value(name) for name, _ in CSearchSummary._fields_})
 
     def child(self, index: int) -> RootChild:
         c = CRootChild()
@@ -365,6 +411,18 @@ class Search:
             prior=float(c.prior),
             q=float(c.q),
             moves=moves,
+            d=float(c.d),
+            evaluated=bool(c.evaluated),
+            network_wdl=(float(c.network_wdl[0]), float(c.network_wdl[1]), float(c.network_wdl[2])),
+            network_moves_left=float(c.network_moves_left),
+            network_error=float(c.network_error),
+            child_key=int(c.child_key),
+            prior_noise_free=float(c.prior_noise_free),
+            value_variance=float(c.value_variance),
+            boost=float(c.boost),
+            exploration_scale=float(c.exploration_scale),
+            forced_visits=int(c.forced_visits),
+            steered_visits=int(c.steered_visits),
         )
 
     def children(self) -> list[RootChild]:
