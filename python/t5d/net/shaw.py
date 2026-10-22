@@ -41,7 +41,7 @@ the first is forced, the second a placeholder.
 
 **Per head and per layer** (``shaw_shared_heads=False``; placeholder, spec issue 218): a vector per
 class per head per layer, ``1,493 x 32 x 8 x 16 = 6,115,328`` parameters at the v1's dimensions -
-26.6% of the v1's 22,965,139, 21.0% of the network with it; Shaw et al. share theirs across heads
+26.6% of the v1's 22,973,907, 21.0% of the network with it; Shaw et al. share theirs across heads
 (``shaw_shared_heads=True``: 764,416). No document states the count. **Initialisation** (placeholder, spec issue 220): ``N(0,
 shaw_init_std = 0.1)`` from a generator of B17's own (``model.b17_seed``): at initialisation a
 query's entries have unit spread, so the term starts with the spread of B15's scalars, ~0.1; the

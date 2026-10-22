@@ -1,13 +1,16 @@
 """Parameter counts against spec section 9.2 (F1 ~21.5M with all heads; F2's L24-ff12 44.0M) and
 section 4.1 (B15's displacement table, "about 1.6M parameters - ~7% of the network").
 
-Exact v1 count (default config): 22,965,139 =
-    embeddings 20,096 + trunk attention 4,198,400 + trunk FFN 16,814,080
+Exact v1 count (default config): 22,973,907 =
+    embeddings 28,864 + trunk attention 4,198,400 + trunk FFN 16,814,080
     + trunk norms 8,448 + policy 134,925 (its promotion offset 3,341 among them)
     + value 78,899 + submit 257 + aux 86,866
     + B15's displacement table 1,623,168 (16 layers x 8 heads x 12,681 entries: 54
       board-distance classes x 225, 368 line entries, 162 register entries, 1 global - the
       unstated details at their placeholders, spec issues 205-208).
+Register A6 (the turn-state counts on the global registers) added 8,768 to 22,965,139, in the
+embeddings: the counts' MLP, Linear(9, 32) and Linear(32, 256) with biases (its form a
+placeholder, spec issue 230).
 M20's dispositions (CHECKPOINT 6) added 3,337 to 22,961,802: the policy's promotion offset (D1:
 a 256 -> 13 readout of the destination token, 3,341) and no learned register coordinates (B8:
 per-board registers position-free on file and rank - the learned_angle arm's 2 x 2 gone, -4);
@@ -26,8 +29,8 @@ registers (M20) - (256 + 1; ``submit_head="pointer"`` has none).
 Section 9.2's "~21.5M with all heads" also counts board-pair smolgen (<0.1M, B12,
 prototype): stage N2 builds it behind a flag, 47,136 parameters as relative cells
 (test_n2_model.py); its "base 256x16, ff8: 21.0M" is the trunk. B9's default masks add no
-parameter. F2's larger arm, L24-ff12, is 46,894,547 as built: 44,459,795 (section 9.2: 44.0M)
-and B15's 24 x 8 x 12,681 = 2,434,752.
+parameter. F2's larger arm, L24-ff12, is 46,903,315 as built: 44,468,563 (section 9.2: 44.0M)
+and B15's 24 x 8 x 12,681 = 2,434,752 (A6's 8,768 among the 44,468,563).
 B16's status table (committed with the cached configuration) adds 304 to a block-causal
 network and nothing to the v1, whose scope is dense.
 """
@@ -38,8 +41,8 @@ import pytest
 
 from t5d.net import NetConfig, build_model, parameter_breakdown
 
-V1_TOTAL = 22_965_139
-F2_TOTAL = 46_894_547
+V1_TOTAL = 22_973_907
+F2_TOTAL = 46_903_315
 #: B15's table in the v1 (16 layers) and in F2's arm (24 layers).
 V1_DISPLACEMENT = 16 * 8 * 12_681
 F2_DISPLACEMENT = 24 * 8 * 12_681
@@ -62,7 +65,7 @@ def test_v1_parameter_count():
     assert counts["head.policy"] == 2 * (256 * 256 + 256) + (256 * 13 + 13), "D1 (M20): f, g and the per-piece promotion offset"
     assert counts["aux.opp_reply"] == 2 * (256 * 128 + 128), "the reply head: f and g, no promotion offset (as built at N1)"
     assert counts["head.submit"] == 256 + 1, "D8: the submit logit's linear readout of the pooled global registers (placeholder form)"
-    assert counts["embeddings"] == 19_584 + 2 * 256, "D8: the acting-player embedding (stage N5)"
+    assert counts["embeddings"] == 19_584 + 2 * 256 + 8_768, "D8: the acting-player embedding (stage N5); A6: the counts' MLP"
 
 
 def test_f2_larger_arm_preset():

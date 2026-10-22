@@ -116,7 +116,7 @@ from dataclasses import dataclass
 
 #: Named capacity presets (section 9.2's ladder). "F1" is the committed v1 network;
 #: "L24-ff12" is F2's larger arm (provisional; section 9.2's ~44M with heads is the count
-#: without B15's table - 46,894,547 as built with it, spec issue 210).
+#: without B15's table - 46,903,315 as built with it, spec issue 210).
 PRESETS: dict[str, dict] = {
     "F1": {},
     "L24-ff12": {"n_layers": 24, "ffn_ratio": 12},
@@ -315,6 +315,15 @@ class NetConfig:
     dt_hidden: int = 32
     #: Delta-t is fed as (dt / dt_scale, sign(dt) log1p|dt|, [dt == 0]).
     dt_scale: float = 16.0
+    #: Register A6's global turn-state counts (section 2.3: mandatory boards still to move,
+    #: optional boards still playable, moves already made this turn; ``embed.py``): each count
+    #: ``n`` is fed as ``(n / turn_state_scale, log1p n, [n == 0])``, the nine features through
+    #: a small MLP of this hidden width (GELU, as Delta-t's) to ``d_model``, added to every global
+    #: register. The spec says only "embedded into the global registers": the features, the
+    #: scale and the width are a PLACEHOLDER of a committed-class silence, fixed in code (spec
+    #: issue 230).
+    turn_state_hidden: int = 32
+    turn_state_scale: float = 8.0
 
     # --- heads (sections 8.1, 8.3, 12.4) ---
     #: Width of the policy pointer projections f and g (D1). Promotions add a learned
@@ -791,6 +800,8 @@ class NetConfig:
             raise ValueError(f"attn_impl must be one of {ATTN_IMPLS}")
         if self.attn_chunk < 1 or self.attn_block_boards < 1:
             raise ValueError("attn_chunk and attn_block_boards must be positive")
+        if self.dt_hidden < 1 or self.turn_state_hidden < 1 or not self.dt_scale > 0 or not self.turn_state_scale > 0:
+            raise ValueError("dt_hidden, turn_state_hidden, dt_scale and turn_state_scale must be positive")
         if self.value_bins < 2 or self.effort_bins < 2:
             raise ValueError("categorical heads need at least two bins")
         if self.submit_head not in SUBMIT_HEADS:

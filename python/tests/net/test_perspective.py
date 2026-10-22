@@ -21,7 +21,8 @@ the mirror of move ``i`` - A7's "outputs mapped back".
 Section 15.2's protocol: random weights at realistic initialisation scale, several seeds, the
 adversarial constructions - many timelines, deep travel, duplicated boards, a +-0 variant,
 every variant's board size (7 x 7 to Global Warming's 1 x 1), fairy pieces, positions past the
-shift with submit legal, masked and absent, no global registers, far-apart boards - and the
+shift with submit legal, masked and absent, a mid-turn state's turn-state counts (A6: the acting
+player's, so the mirror keeps them), no global registers, far-apart boards - and the
 flagged attention structure (B5, B10, B11, B12, B17, B15 off), in the dense scope and the
 block-causal one, and through the cached path (section 15.2's first row must stay green: frozen
 K/V are keyed by perspective, spec issue 303). Tolerance: FP32 1e-5 (the mirror reorders each
@@ -33,6 +34,7 @@ mirror against ``mirror`` of the conversion: ``tests/engine/test_perspective_eng
 from __future__ import annotations
 
 import dataclasses
+from dataclasses import replace
 
 import numpy as np
 import pytest
@@ -70,6 +72,7 @@ CONSTRUCTIONS = {
     "shifted_submit_legal": lambda s: shifted(synthetic_state(s, 12, n_timelines=3), legal=True),
     "shifted_submit_masked": lambda s: shifted(synthetic_state(s, 12, n_timelines=4), legal=False),
     "shifted_submit_absent": lambda s: shifted(synthetic_state(s, 10, n_timelines=3, even_start=True), legal=None),
+    "mid_turn_counts": lambda s: replace(synthetic_state(s, 12, n_timelines=4), moves_made=3, optional_playable=0),
     "size_7": lambda s: synthetic_state(s, 8, n_timelines=3, width=7, height=7),
     "size_6": lambda s: synthetic_state(s, 8, n_timelines=3, width=6, height=6),
     "size_5": lambda s: synthetic_state(s, 10, n_timelines=4, width=5, height=5, deep_travel_prob=1.0),
@@ -173,6 +176,7 @@ DIRECT_FIELDS = (
     "has_creation",
     "submit_possible",
     "submit_legal",
+    "turn_state",
 )
 
 

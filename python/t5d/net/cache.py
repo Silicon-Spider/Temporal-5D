@@ -32,7 +32,8 @@ frozen board's K/V differ by perspective: spec issue 303) and of the digests of 
 it reads (so two boards that differ only in their branch origin get two entries). A frozen
 board has up to two entries per epoch, one per acting colour; the acting colour's own
 embedding sits on the live global registers (D8, M20) - with none, on the live boards' tokens
-(spec issue 225) - which no frozen board's input carries. Two nodes
+(spec issue 225) - which no frozen board's input carries; so do register A6's turn-state counts
+(``embed.py``), so a frozen entry never depends on them either. Two nodes
 whose board has the same digest share the entry; a node computes only boards with novel
 digests. The digest of a board covers its whole causal past, so the store is section
 7.2's radix structure with the board as the unit: under the lineage reading its entries
@@ -63,13 +64,18 @@ scope (the structure can share; nothing here frees an entry but ``drop_epoch``).
 Within a refreshed epoch, the history boards keep the refreshed K/V; every board frozen
 after the anchor is recomputed under the state-defined mask, reading its past's K/V from
 the epoch - "recomputing against the root epoch inside a refreshed subtree would silently
-undo the refresh". Evaluations are a function of (state, epoch) (section 7.9). A board
+undo the refresh". Evaluations are a function of (state, epoch) (section 7.9) - the state
+with its turn state (register A6): an anchor's digest (``state_digest``) carries the three
+counts, since a refresh's dense pass lets every board read the global registers that carry
+them, and a node with the anchor's boards but other counts is not the anchor. A board
 belongs to an epoch's history by its intrinsic identity (coordinates and contents), so
 under ``frozen_features="current"`` a history board stays one when the present moves, and it
 belongs whoever acts. Its refreshed K/V are per perspective (register A7; spec issue 303): a
 refresh runs the dense pass over the anchor once from each colour's side - the anchor as it
 is, and the same boards with the other colour acting and no moves or edges (``viewed_by``:
-the anchor's are its acting player's; a placeholder, spec issue 229) - so a node of either
+the anchor's are its acting player's; a placeholder, spec issue 229), and its turn state the
+boards' own for that colour (``PositionState.derived_turn_state``; the anchor's counts are its
+acting player's - spec issue 230) - so a node of either
 acting player reads history encoded in its own frame; about twice one refresh's compute and
 history memory, a cost of the deferred cached configuration (C2).
 
@@ -321,12 +327,15 @@ def board_ident(state: PositionState, board: int, frozen_features: str = "intrin
 
 def state_digest(state: PositionState) -> str:
     """A digest of a whole position (an epoch's anchor), as hex: every board with its flags,
-    and the acting player (D8)."""
+    the acting player (D8) and the turn state's three counts (register A6: network inputs that
+    no board carries - a turn start and a mid-turn state can share every board and the acting
+    player, section 8.5)."""
     h = hashlib.blake2b(digest_size=16)
     for b in range(state.n_boards):
         h.update(board_ident(state, b))
         h.update(struct.pack("<2q", int(state.is_head[b]), int(state.active[b])))
     h.update(struct.pack("<q", int(state.acting_player)))
+    h.update(struct.pack("<3q", *state.turn_state))
     return h.hexdigest()
 
 
@@ -707,8 +716,17 @@ def viewed_by(state: PositionState, acting: int) -> PositionState:
     """``state``'s boards with ``acting`` (0 white, 1 black) the acting player: ``state``
     itself when that is its own; otherwise the same boards read from the other colour's side
     (register A7), with no submit action offered (the submit flags reach no K/V), no moves and
-    no edges. The view a refresh's dense pass over its anchor takes for each acting colour
-    (spec issue 303).
+    no edges, and the turn state derived from the boards for that colour. The view a refresh's
+    dense pass over its anchor takes for each acting colour (spec issue 303).
+
+    The turn state (register A6): the anchor's counts are its acting player's, an input the other
+    colour's view cannot keep (a mandatory count of boards that colour is not to move on), and
+    no rules engine has the other colour's counts at these boards, for the same reason as its
+    moves. So each count is the boards' own under the default rules
+    (``PositionState.derived_turn_state``): from an anchor past the shift that is the opponent's
+    turn start on these boards, as the search meets it once the action is submitted; from an
+    anchor before the shift, the other colour past its own shift with nothing owed. A
+    PLACEHOLDER of the same silence, fixed in code (spec issue 230, with issue 229).
 
     The other colour's view drops ``moves``, ``opp_moves`` and every edge - the move graph
     and the typed relations - because all of them are the anchor's acting player's: the
@@ -734,6 +752,9 @@ def viewed_by(state: PositionState, acting: int) -> PositionState:
         acting_player=int(acting),
         submit_possible=False,
         submit_legal=False,
+        mandatory_remaining=None,
+        optional_playable=None,
+        moves_made=None,
         moves=none,
         opp_moves=none.copy(),
         edges=none.copy(),

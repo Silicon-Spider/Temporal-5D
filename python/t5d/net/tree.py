@@ -26,6 +26,13 @@ not legal: no rules engine stands behind the moves.
   half-turns and destination), never by the path: two move orders that make the same
   moves reach the same boards. Their creation orders differ - ``PositionState.creation``
   is a property of the path (spec issue 5).
+
+  Register A6's turn state: every fixture position is a turn start, its counts the boards' own
+  (``PositionState.derived_turn_state``, no move made). The fixture's moves are no actions - a
+  physical move is made by whoever is to move on that timeline - so a per-path count of the
+  moves made would split two move orders of one multiverse, which the fixture's transposition
+  tests read as one state, into two. A test that needs a mid-turn state takes a node's state
+  with its counts given (``replace(state, moves_made=k)``).
 * ``SearchTree`` - nodes over multiverses, each carrying its epoch (section 7.9: "each
   node carries its epoch"): the root's from ``CachedEvaluator.root_epoch`` (a root refresh
   or the causal epoch), a child's its parent's. ``visit`` counts visits and applies C3a
