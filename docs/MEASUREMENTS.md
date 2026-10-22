@@ -48,7 +48,7 @@ quiet-machine block).
 | Supersession recompute | +8-24% per node | counted, lineage: +5.9% / +12.0% (240, 8 TL; 1 / 2 boards), +0.3-2.8% elsewhere; creation reading cascades (spec issue 35) | N3 table below | within the bound under lineage | 2026-10-02, N3 |
 | Root refresh overhead (800 sims) | +3.6% / +6.1% full; +1.3% windowed | analytic only so far (3.64% / 6.13% at the spec's timelines; 1.24% / 3.10% at 24); CPU wall pending | N3 table below; one dense pass - two under A7 (note below) | - | 2026-10-02, N3 |
 | One refresh | ≈ 10 node-evaluations | not measured: the estimate is windowed and the window is not built (spec issue 39) | | | |
-| KV memory per state | ~260 MB (240) / ~649 MB (600); ~113 MB windowed | BF16 250.9 MB (240, 8 TL), 635.8 MB (600, 12 TL) - frozen boards only, exact; FP8 50.1% | N3 table below; one perspective - a store serving both colours holds twice under A7 (note below) | 0.97 / 0.98 | 2026-10-02, N3 |
+| KV memory per state | ~260 MB (240) / ~649 MB (600); ~113 MB windowed | BF16 250.9 MB (240, 8 TL), 635.8 MB (600, 12 TL) - frozen boards only, exact; FP8 50.1% | N3 table below; one perspective - under A7 every store holds two entries per root frozen board from the moment its epoch is made (note below) | 0.97 / 0.98 | 2026-10-02, N3 |
 | Local/global interleave | 0.067 TF per node | - | | | |
 | Leaf-batching gain | 1.2-1.5× | - | | | |
 | NNUE eval | ~10k MACs, sub-µs | - | | | |
@@ -93,9 +93,12 @@ acting player's side, so the cached path keys frozen K/V by the acting player (s
 303). Everything in this table is one perspective's. As built, a search root's history is
 computed from both colours' sides and a refresh runs its dense pass twice, so by
 construction the history build and the root-refresh overheads double (analytic at 800
-simulations: 7.28% / 2.48% / 12.26% / 6.20%), and a store that has served both colours'
-nodes holds two entries per frozen board - twice the KV bytes above, while one state's
-figure is unchanged. Arithmetic from the construction, not a measurement: the counts and
+simulations: 7.28% / 2.48% / 12.26% / 6.20%). The other side is computed eagerly
+(`root_epoch`, `_refresh`), so every store holds two entries per root (or refresh anchor)
+frozen board from the moment its epoch is made, whichever colours' nodes are then reached -
+twice the KV bytes above for those boards, while one state's figure is unchanged; a board
+frozen later (a superseded one) gets its second entry only when the other colour's nodes
+read it. Arithmetic from the construction, not a measurement: the counts and
 wall times are step 2's quiet-machine block's (`cache_bench`'s `analytic_both_perspectives`
 and `cache_bytes_per_perspective`). KV bytes are the cache's exact tensor bytes, frozen boards only; the trunk
 outputs the cache also holds add about 16 MB at 240 boards and 40 MB at 600. The

@@ -680,8 +680,8 @@ def mirror_tokens(layout: TokenLayout) -> np.ndarray:
 def mirror(state: PositionState) -> PositionState:
     """The colour-swapped mirror of a position (section 15.2's A7 row): the colours swapped,
     every board's ranks mirrored (``(x, y) -> (x, H-1-y)``; edges and moves remapped, their
-    list order kept), timelines negated by register A7's map (``canonical_timeline`` with
-    Black acting: ``p -> -p``, or ``-1 - p`` in a +-0 variant), and the acting player swapped.
+    list order kept), timelines negated (``p -> -p``, or ``-1 - p`` in a +-0 variant: the
+    labels ``+n <-> -n``, ``-0 <-> +0``), and the acting player swapped.
 
     Each board moves one half-turn later (``h -> h + 1``) so that its side to move is the
     other colour - White's T-th board becomes Black's T-th, Black's becomes White's T+1-th -
@@ -689,7 +689,13 @@ def mirror(state: PositionState) -> PositionState:
     time axis is unchanged"; the network sees time only relative to the present, section 4).
     Board order, lineage, the head and active flags, the submit flags and the variant's parity
     are kept. The mirror of the mirror is the position moved two half-turns later
-    (``translate(state, dh=2)``), to which the network is invariant."""
+    (``translate(state, dh=2)``), to which the network is invariant.
+
+    The timeline negation is written here independently of ``canonical_timeline``, as the
+    rank mirror is of ``canonical_rank``: both maps are self-inverse, so a wrong one shared by
+    the view and the mirror would cancel in the synthetic mirror test. The engine test
+    (``tests/engine/test_perspective_engine.py``) pins the map against the notation: the
+    engine's own mirror of a 5DFEN position, its timeline labels negated, converts to this."""
     lay = state.layout
     flip = square_mirror(state.width, state.height)
     tokens = mirror_tokens(lay)
@@ -704,7 +710,7 @@ def mirror(state: PositionState) -> PositionState:
 
     return replace(
         state,
-        timeline=canonical_timeline(state.timeline, 1, state.even_start),
+        timeline=(-1 - state.timeline) if state.even_start else -state.timeline,  # not canonical_timeline (docstring)
         half_turn=state.half_turn + 1,
         side_to_move=1 - state.side_to_move,
         piece=state.piece[:, flip],
