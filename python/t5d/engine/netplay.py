@@ -20,6 +20,9 @@ mirrors the engine's ``play_game`` (``src/selfplay.cpp``; ``t5d-play``) step for
   each side carries its own search across its decisions (C12: ``advance``) and re-roots it
   on the opponent's reply (``advance_action``); final selection by the search's rule (LCB),
   noise off. The two searches never share a cache - each holds one network's evaluations.
+  Only match play may search with D9's optimistic policy (section 8.1: "searched with for both
+  sides at match play only ... kept out of self-play"): ``PlayConfig.optimistic`` and evaluators
+  built with ``policy="optimistic"``; ``play_game`` refuses an optimistic evaluator in self-play.
 * **D2's two arms** (``split``): the board-move split - an action is its moves, each its
   own decision, then a submit decision (D8: never automatic); or whole turns - a decision is
   an action, submitted with its last move.
@@ -48,7 +51,7 @@ import subprocess
 import sys
 import time
 from collections.abc import Sequence
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 
 import numpy as np
@@ -69,7 +72,7 @@ from .capi import (
     find_library,
 )
 from .convert import relations_for
-from .evaluator import Evaluator, NetworkEvaluator, run_search
+from .evaluator import Evaluator, NetworkEvaluator, policy_source, run_search
 from .expansion import Move, board_label, square_name
 from .game import Game, relation_bits
 from .search import Search, search_params
@@ -121,12 +124,17 @@ class PlayConfig:
     #: A custom start instead of ``variant``'s: 5DFEN board strings (the player to move inferred
     #: from the present, Q9); the record then names the board "custom" and writes them.
     start_fen: tuple[str, ...] | None = None
+    #: D9 (a prototype): both sides search with the optimistic policy - match play only, so the
+    #: evaluators must deliver it (``policy="optimistic"``); self-play refuses it.
+    optimistic: bool = False
 
     def validate(self) -> None:
         if self.split not in SPLITS:
             raise ValueError(f"split must be one of {sorted(SPLITS)}")
         if self.mode not in MODES:
             raise ValueError(f"mode must be one of {MODES}")
+        if self.optimistic and self.mode != "match":
+            raise ValueError("the optimistic policy is searched with at match play only, never in self-play (register D9)")
         if self.playouts < 1 or self.batch_size < 1 or self.max_actions < 1:
             raise ValueError("playouts, batch_size and max_actions must be positive")
 
@@ -316,6 +324,11 @@ def play_game(evaluators: Evaluator | Sequence[Evaluator], cfg: PlayConfig, *, n
     evs = list(evaluators) if isinstance(evaluators, (list, tuple)) else [evaluators]
     if cfg.mode == "match" and len(evs) == 1:
         evs = evs * 2
+    sources = {policy_source(ev) for ev in evs}
+    if "optimistic" in sources and cfg.mode != "match":
+        raise ValueError("an optimistic evaluator searches at match play only, never in self-play (register D9, section 8.1)")
+    if cfg.mode == "match" and cfg.optimistic != (sources == {"optimistic"}):
+        raise ValueError("PlayConfig.optimistic: both sides' evaluators deliver the optimistic policy, or neither does (D9)")
     relations = relation_bits(relations_for(net_cfg))
     regs = dict(regs_per_board=net_cfg.regs_per_board, global_regs=net_cfg.global_regs)
     t0 = time.perf_counter()
@@ -624,11 +637,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--threads", type=int, default=4, help="torch CPU threads (the machine is shared)")
     parser.add_argument("--out", type=Path, help="write each record here (a directory)")
     parser.add_argument("--no-replay", action="store_true", help="do not replay the records through t5d-gate")
+    parser.add_argument("--optimistic", action="store_true", help="match play: both sides search with D9's optimistic policy")
     args = parser.parse_args(argv)
+    if args.optimistic and (args.mode or ["self", "match"]) != ["match"]:
+        parser.error("--optimistic is match play only (register D9): add --mode match alone")
     torch.set_num_threads(args.threads)
     net_cfg = network_config(args.net)
+    if args.optimistic:
+        net_cfg = replace(net_cfg, optimistic_policy=True)
     nets = [build_model(net_cfg, seed=args.seed + k).eval() for k in (0, 1)]
-    evaluators = [NetworkEvaluator(n, max_batch=args.batch) for n in nets]
+    policy = "optimistic" if args.optimistic else "normal"
+    evaluators = [NetworkEvaluator(n, max_batch=args.batch, policy=policy) for n in nets]
     if args.out:
         args.out.mkdir(parents=True, exist_ok=True)
     summaries = []
@@ -646,6 +665,7 @@ def main(argv: list[str] | None = None) -> int:
                         cap_turns=args.cap_turns,
                         cap_boards=args.cap_boards,
                         seed=args.seed + 101 * g,
+                        optimistic=args.optimistic,
                     )
                     with torch.no_grad():
                         res = play_game(evaluators if mode == "match" else evaluators[0], cfg, net_cfg=net_cfg)

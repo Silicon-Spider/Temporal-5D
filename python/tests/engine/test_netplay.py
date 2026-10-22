@@ -336,3 +336,45 @@ def test_turn_start_verdicts(fen, verdict):
         assert turn_start_verdict(g, PlayConfig(cap_turns=0, cap_boards=0)) == verdict
     with Game.from_fen([fen]) as g:  # the cap comes after the rules' verdict
         assert turn_start_verdict(g, PlayConfig(cap_turns=0, cap_boards=1)) == (verdict or "turn_cap")
+
+
+# --- register D9: the optimistic policy, match play only ---------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def optimistic_nets():
+    from dataclasses import replace as dc_replace
+
+    cfg = dc_replace(network_config("small"), optimistic_policy=True)
+    return cfg, [NetworkEvaluator(build_model(cfg, seed=s).eval(), max_batch=8, policy="optimistic") for s in (1, 2)]
+
+
+def test_the_optimistic_policy_is_kept_out_of_self_play(optimistic_nets, nets):
+    """Register D9 (section 8.1): the optimistic policy is "searched with for both sides at match
+    play only ... kept out of self-play" - a self-play game with an optimistic evaluator is
+    refused before any search, as is a self-play configuration asking for it, and a match whose
+    two sides disagree on it."""
+    cfg, optimistic = optimistic_nets
+    with pytest.raises(ValueError, match="never in self-play"):
+        play_game(optimistic[0], PlayConfig(mode="self", playouts=4, cap_turns=1), net_cfg=cfg)
+    with pytest.raises(ValueError, match="match play only"):
+        PlayConfig(mode="self", optimistic=True).validate()
+    with pytest.raises(ValueError, match="both sides"):
+        play_game([optimistic[0], nets[1][1]], PlayConfig(mode="match", optimistic=True, playouts=4, cap_turns=1), net_cfg=cfg)
+    with pytest.raises(ValueError, match="both sides"):
+        play_game(optimistic, PlayConfig(mode="match", playouts=4, cap_turns=1), net_cfg=cfg)
+
+
+@requires_gate
+def test_a_match_with_the_optimistic_policy_replays_legal(optimistic_nets):
+    """D9 at match play: both sides search with the optimistic prior to a legal end, and the
+    record replays through the engine's gate adapter."""
+    cfg, evaluators = optimistic_nets
+    play = PlayConfig(
+        variant="Standard", split="ply", mode="match", optimistic=True, playouts=6, batch_size=4, cap_turns=2, cap_boards=20, seed=4
+    )
+    with torch.no_grad():
+        res = play_game(evaluators, play, net_cfg=cfg)
+    assert res.end in ("checkmate", "stalemate", "turn_cap") and res.actions
+    replay = replay_with_gate(res.record, gate=GATE)
+    assert check_replay(res, replay) == [], replay.lines[-3:]

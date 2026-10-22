@@ -91,7 +91,7 @@ FLAG_SETS = {
     "b12": dict(board_pair_smolgen=True),
     "b17": dict(shaw_key_term=True, shaw_init_std=1.0),
     "no_table_pointer_submit": dict(displacement_bias=False, submit_head="pointer"),
-    "d4_reply": dict(opp_reply=True),
+    "d4_reply_d9": dict(opp_reply=True, optimistic_policy=True),
 }
 
 VALUE_HEADS = ("value_logits", "wdl_logits", "short_term", "value_error", "moves_left_log", "effort_logits", "submit_raw")
@@ -259,6 +259,8 @@ def assert_mirrored(a, b, perm: torch.Tensor, acting: tuple[int, int], atol: flo
     live = torch.isfinite(a.soft_submit_logits)
     assert torch.equal(live, torch.isfinite(b.soft_submit_logits))
     close(a.soft_submit_logits[live], b.soft_submit_logits[live], "soft submit")
+    if a.optimistic_logits is not None:  # D9
+        close(a.optimistic_logits[a.move_valid], b.optimistic_logits[b.move_valid], "optimistic policy")
     if a.opp_reply_logits is not None:
         close(a.opp_reply_logits[a.opp_move_valid], b.opp_reply_logits[b.opp_move_valid], "reply")
     close(a.action_log_probs()[a.action_valid()], b.action_log_probs()[b.action_valid()], "actions")

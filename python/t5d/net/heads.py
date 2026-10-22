@@ -73,6 +73,12 @@ D4's list, are the value group above (spec issue 223).
   over the opponent's next turn mapped onto this decision point's squares
   (``PositionState.opp_moves``, built by ``train.reply_map`` - ambiguous mappings masked),
   weight 0.15 - a training target's head (empty at inference).
+* Optimistic policy (D9, a prototype since CHECKPOINT 7; section 8.1; ``NetConfig.
+  optimistic_policy``, off): a second policy head on the normal target - an ``ActionHead`` like
+  the soft policy's, at the policy's width - each sample weighted by how far the mover beat the
+  network's expectation (``train.losses.optimistic_weights``); searched with at match play only
+  (``engine.evaluator``'s ``policy="optimistic"``), never in self-play. Not an auxiliary head:
+  the model holds it beside the policy (``T5DNet.optimistic``).
 * The pointer heads other than the policy carry D1's promotion offset too
   (``NetConfig.pointer_promotion_offset``, a placeholder - spec issue 222): the bilinear form
   ties their promotions as it ties the policy's.

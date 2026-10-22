@@ -49,6 +49,16 @@ I15), not this module's.
   ablation 6j): ``board_reduction="mean"`` (default) averages; ``"sum"`` sums them, so
   the auxiliary gradient grows with N. Positions are then averaged with equal weight.
 
+* **D9's optimistic policy** (a prototype behind ``NetConfig.optimistic_policy``; section 8.1):
+  its own actions against the normal policy target (full searches only), each sample weighted by
+  ``optimistic_weights`` - ``clamp(0, 1, sigmoid((z - 1.5) x 3))`` with ``z = (short-term target -
+  (W - L)) / sqrt(error + eps)``, the network's value and error head taken without gradient
+  (KataGo's z-score: how far the mover beat the network's expectation, in units of its predicted
+  error; no score term in 5D) - the loss the weighted sum over the full-search positions divided
+  by their number. The horizon is the error head's (``error_horizon``), so the error head's
+  prediction is the z-score's own variance; that, eps and the normalisation are placeholders
+  (spec issue 233).
+
 Every loss weight is a placeholder (6j) unless a document gives it.
 
 The source rule (D5, section 12.4) is the caller's to keep: every target here must come
@@ -110,6 +120,7 @@ class LossConfig:
             "value_error": 1.0,
             "soft_policy": 8.0,  # section 12.4: "at eight times the policy loss weight"
             "opp_reply": 0.15,  # section 12.4: "weight 0.15, KataGo's"
+            "optimistic": 1.0,  # D9 (a prototype): a placeholder
             "moves_left": 1.0,
             "board": 1.0,
             "square": 1.0,
@@ -130,6 +141,11 @@ class LossConfig:
     error_huber_delta: float = 1.0
     #: D4: the soft policy's power - "the policy target raised to the power 1/4" (section 12.4).
     soft_policy_power: float = 0.25
+    #: D9: each sample's weight ``clamp(0, 1, sigmoid((z - centre) x scale))`` (section 8.1: 1.5 and
+    #: 3, KataGo's), and the eps under the z-score's square root - PLACEHOLDER (issue 233).
+    optimistic_centre: float = 1.5
+    optimistic_scale: float = 3.0
+    optimistic_eps: float = 1e-4
 
 
 def categorical_ce(logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
@@ -209,6 +225,24 @@ def error_target(short_term: torch.Tensor, search_value: torch.Tensor, horizon: 
     return (short_term[:, horizon].float() - search_value.detach().float()) ** 2
 
 
+def optimistic_weights(
+    short_term: torch.Tensor,
+    search_value: torch.Tensor,
+    value_error: torch.Tensor,
+    *,
+    centre: float = 1.5,
+    scale: float = 3.0,
+    eps: float = 1e-4,
+) -> torch.Tensor:
+    """D9's per-sample weights ``(B,)``: ``clamp(0, 1, sigmoid((z - centre) x scale))``, ``z = (short_term
+    - search_value) / sqrt(value_error + eps)`` - how far the mover's short-term outcome beat the
+    network's value, in units of its predicted error (section 8.1; KataGo's, without the score
+    term). The network's outputs are taken without gradient, so the weight trains nothing; NaN
+    where the short-term target is missing."""
+    z = (short_term.float() - search_value.detach().float()) / torch.sqrt(value_error.detach().float().clamp(min=0.0) + eps)
+    return torch.sigmoid((z - centre) * scale).clamp(0.0, 1.0)
+
+
 def _masked_mean(per: torch.Tensor, keep: torch.Tensor) -> torch.Tensor:
     """The mean of ``per`` where ``keep``; 0 (still attached to the graph) where nothing is kept."""
     if bool(keep.any()):
@@ -250,6 +284,18 @@ def compute_losses(out: NetOutput, tgt: Targets, cfg: LossConfig | None = None) 
         losses["soft_policy"] = masked_ce(out.soft_action_logits()[full], out.action_valid()[full], soft[full])
     if out.opp_reply_logits is not None and tgt.opp_reply is not None:
         losses["opp_reply"] = distribution_ce(out.opp_reply_logits, out.opp_move_valid, tgt.opp_reply)
+
+    # D9 (section 8.1; a prototype behind its flag): the normal target, each sample weighted.
+    if out.optimistic_logits is not None:
+        st = tgt.short_term[:, cfg.error_horizon].float()
+        w = optimistic_weights(
+            st, out.search_value(), out.value_error, centre=cfg.optimistic_centre, scale=cfg.optimistic_scale, eps=cfg.optimistic_eps
+        )
+        logits = out.optimistic_action_logits().masked_fill(~out.action_valid(), float("-inf"))
+        logp = torch.log_softmax(logits.float(), dim=-1).masked_fill(~out.action_valid(), 0.0)
+        per = -(action_target * logp).sum(dim=-1)
+        keep = full & torch.isfinite(w) & out.action_valid().any(dim=-1)
+        losses["optimistic"] = _masked_mean(torch.where(keep, w, torch.zeros_like(w)) * per, keep)
 
     losses["moves_left"] = F.huber_loss(out.moves_left_log, torch.log1p(tgt.moves_left.float()), delta=cfg.huber_delta)
 
