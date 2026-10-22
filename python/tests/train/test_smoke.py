@@ -61,11 +61,12 @@ def test_every_loss_is_finite_and_reaches_its_head():
         assert all(torch.isfinite(v) and v > 0 for v in losses.values()), losses
     heads = {
         "policy": model.policy,
-        "value": model.value,
-        "wdl": model.aux.wdl,
+        "wdl": model.value.wdl,  # D3's four value heads, each its own output layer
+        "categorical": model.value.categorical,
+        "short_term": model.value.short_term,
+        "value_error": model.value.error,
         "moves_left": model.aux.moves_left,
         "opp_reply": model.aux.opp_reply,
-        "short_value": model.aux.short_value,
         "board": model.aux.board,
         "square": model.aux.square,
         "effort": model.aux.effort,
@@ -154,8 +155,8 @@ def test_smoke_covers_stage_n2_parameters(form, n_new):
 def test_the_policy_loss_covers_the_submit_action(form):
     """Register D8 (stage N5): the policy's target is one distribution over the moves and the
     submit action; its loss is the cross-entropy against the joint log-softmax - an illegal or
-    absent submit carries neither probability nor target - and it reaches the submit readout
-    and the acting-player embedding."""
+    absent submit carries neither probability nor target - averaged over the full searches
+    (section 12.5), and it reaches the submit readout and the acting-player embedding."""
     cfg = NetConfig(trunk_dtype="fp32", n_layers=2, submit_head=form)
     model = build_model(cfg, seed=4)
     batch = collate(with_actions(synthetic_states(4, [2, 4, 3, 5])))
@@ -169,7 +170,9 @@ def test_the_policy_loss_covers_the_submit_action(form):
     logp = out.action_log_probs()
     per = [-(target[i] * logp[i]).masked_fill(~out.action_valid()[i], 0.0).sum() for i in range(4)]
     losses = compute_losses(out, targets)
-    assert torch.allclose(losses["policy"], torch.stack(per).mean(), rtol=1e-5)
+    full = targets.full_search  # section 12.5: only full searches emit policy targets
+    assert full.tolist() == [True, True, False, True]
+    assert torch.allclose(losses["policy"], torch.stack(per)[full].mean(), rtol=1e-5)
     losses["policy"].backward()
     if form == "linear":
         assert model.submit.out.weight.grad.abs().sum() > 0

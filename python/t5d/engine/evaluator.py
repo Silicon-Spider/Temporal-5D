@@ -69,9 +69,10 @@ from .search import LeafView, Search
 PositionLike = Position | PositionState
 
 #: The ``NetOutput`` field the error head's output is read from (D3; 6m's other uncertainty
-#: signal) - absent until the network lane's heads add it, and the evaluations' ``error`` NaN till
-#: then. Pinned by ``tests/engine/test_evaluator.py``: a ``NetOutput`` field for the error head
-#: under any other name fails that test rather than going unread. With ``uncertainty_source``
+#: signal) - the network's ``value_error`` (``net/heads.py``'s ``ValueHeads``, the network lane's
+#: D3); an output without it gives NaN (none). Pinned by ``tests/engine/test_evaluator.py``: a
+#: ``NetOutput`` field for the error head under any other name fails that test rather than going
+#: unread. With ``uncertainty_source``
 #: ``T5D_UNCERTAINTY_ERROR_HEAD`` and E2, E3 or E5's term on, the search refuses a delivery
 #: without it (the engine's ``uncertainty_missing`` counts it where nothing reads it).
 ERROR_HEAD_FIELD = "value_error"
@@ -176,8 +177,9 @@ class Evaluator(Protocol):
 def _split(out: NetOutput, states: Sequence[PositionState]) -> list[Evaluation]:
     """Per-position evaluations of a batch's output (row ``i`` is ``states[i]``): the policy,
     the submit logit and D3's value heads - the WDL, the categorical, the error head's output
-    where the network has one (``ERROR_HEAD_FIELD``; NaN until the network lane's heads add it) and
-    moves-left in turns (``expm1`` of the head's ``log1p``, floored at 0)."""
+    (``ERROR_HEAD_FIELD``; NaN for an output without one) and moves-left in turns (``expm1`` of
+    the head's ``log1p``, floored at 0). The short-term values are training targets' heads the
+    search does not read (section 8.3: the error head and D9 learn from them)."""
     logits = out.policy_logits.detach().float().cpu()
     valid = out.move_valid.detach().cpu()
     values = out.value_logits.detach().float().cpu()

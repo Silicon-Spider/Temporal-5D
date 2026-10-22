@@ -69,7 +69,11 @@ def small_model():
 def _direct(model, state):
     out = model(collate([state]))
     m = int(state.moves.shape[0])
-    return out.policy_logits[0, :m].numpy(), out.value_logits[0].numpy(), out.wdl_logits[0].numpy(), out.moves_left_log[0].item()
+    return out.policy_logits[0, :m].numpy(), out.value_logits[0].numpy(), out.wdl_logits[0].numpy(), out.moves_left_log[0].item(), out
+
+
+def _error(out) -> float:
+    return float(getattr(out, ERROR_HEAD_FIELD)[0])
 
 
 # --- without the engine (synthetic states) --------------------------------------------------------
@@ -87,12 +91,12 @@ def test_serve_evaluates_every_leaf_in_batches(small_model):
     assert stats.leaves == len(states) and stats.batch_sizes == [3, 3, 1] and stats.rounds == 3
     for i, state in enumerate(states):
         ev = driver.delivered[i]
-        pol, val, wdl, moves_left_log = _direct(small_model, state)
+        pol, val, wdl, moves_left_log, out = _direct(small_model, state)
         np.testing.assert_allclose(ev.policy_logits, pol, atol=1e-4)
         np.testing.assert_allclose(ev.value_logits, val, atol=1e-4)
         np.testing.assert_allclose(ev.wdl_logits, wdl, atol=1e-4)  # D3: the WDL is the search's value
         assert ev.moves_left == pytest.approx(math.expm1(max(moves_left_log, 0.0)), rel=1e-4, abs=1e-5)
-        assert math.isnan(ev.error)  # no error head in this network yet (the network lane's D3)
+        assert ev.error == pytest.approx(_error(out), rel=1e-4, abs=1e-6) and ev.error >= 0  # D3's error head
         assert ev.policy_logits.dtype == np.float32 and ev.value_probs.shape == (51,)
         assert abs(float(ev.value_probs.sum()) - 1.0) < 1e-5 and -1.0 <= ev.value_mean <= 1.0
         p = ev.wdl_probs.astype(np.float64)
@@ -214,17 +218,19 @@ def test_the_error_head_is_read_by_its_pinned_name(small_model):
     """D3 / 6m: the evaluator reads the error head's output from ``NetOutput``'s
     ``ERROR_HEAD_FIELD`` - no other field of ``NetOutput`` may name an error head (one added under
     another name would go unread, every evaluation's ``error`` NaN, and a 6m arm on the error
-    head refused by the search); with the field present each evaluation carries its row."""
+    head refused by the search). The network's error head is that field (D3, the network lane's
+    heads): each evaluation carries its row; an output without the field gives NaN (none)."""
     assert ERROR_HEAD_FIELD == "value_error"
     names = [f.name for f in dataclasses.fields(NetOutput)]
-    assert [n for n in names if "error" in n] in ([], [ERROR_HEAD_FIELD])
+    assert [n for n in names if "error" in n] == [ERROR_HEAD_FIELD]
     s = synthetic_state(43, 4)
     (plain,) = NetworkEvaluator(small_model)([s])
-    assert math.isnan(plain.error)
     out = small_model(collate([s]))
-    fields = {n: getattr(out, n) for n in names}
-    with_error = types.SimpleNamespace(**fields, **{ERROR_HEAD_FIELD: torch.tensor([0.375])})
-    (read,) = _split(with_error, [s])
+    assert plain.error == pytest.approx(_error(out), rel=1e-5) and plain.error >= 0
+    fields = {n: getattr(out, n) for n in names if n != ERROR_HEAD_FIELD}
+    (without,) = _split(types.SimpleNamespace(**fields), [s])
+    assert math.isnan(without.error)
+    (read,) = _split(types.SimpleNamespace(**fields, **{ERROR_HEAD_FIELD: torch.tensor([0.375])}), [s])
     assert read.error == 0.375
 
 
@@ -323,3 +329,45 @@ def test_real_leaves_through_both_evaluators():
             np.testing.assert_allclose(ev.policy_logits, ref.policy_logits[0, :m].numpy(), atol=1e-4)
             np.testing.assert_allclose(ev.value_logits, ref.value_logits[0].numpy(), atol=1e-4)
     assert torch.is_tensor(ref.value_logits)
+
+
+class Recording:
+    """An evaluator that records every evaluation it returns, call by call."""
+
+    def __init__(self, inner) -> None:
+        self.inner = inner
+        self.calls: list[list[Evaluation]] = []
+
+    def __call__(self, positions):
+        evs = self.inner(positions)
+        self.calls.append(evs)
+        return evs
+
+
+@requires_engine
+def test_the_network_delivers_every_value_head_to_the_search(small_model):
+    """D3 through the C step API (engine ABI round 2): the network's WDL, categorical, error head
+    and moves-left reach the search - the search's record of its root's own evaluation (I15) is
+    the network's evaluation of the root leaf, the error head's output included - and the
+    search's default uncertainty signal (6m: the categorical's variance) gets its signal at every
+    leaf, as does the error head's under ``uncertainty_source``: with E2 reading it, no delivery is
+    refused and no node lacks it."""
+    from t5d.engine import Game
+    from t5d.engine.capi import T5D_UNCERTAINTY_CATEGORICAL, T5D_UNCERTAINTY_ERROR_HEAD
+    from t5d.engine.evaluator import run_search
+    from t5d.engine.search import Search, search_params
+
+    for source in (T5D_UNCERTAINTY_CATEGORICAL, T5D_UNCERTAINTY_ERROR_HEAD):
+        with Game.variant("Standard") as g:
+            s = Search(g, params=search_params(seed=1, variance_scaled_cpuct=1, uncertainty_source=source))
+            rec = Recording(NetworkEvaluator(small_model, max_batch=4))
+            run_search(s, rec, playouts=24, batch_size=4)
+            info = s.info()
+            s.close()
+        root = rec.calls[0][0]  # the first gather of a fresh search is its root
+        assert len(rec.calls[0]) == 1 and info.root_evaluated
+        np.testing.assert_allclose(info.root_wdl, root.wdl_probs, atol=1e-5)
+        assert info.root_error == pytest.approx(root.error, rel=1e-5) and root.error >= 0
+        assert info.root_moves_left == pytest.approx(root.moves_left, rel=1e-5)
+        assert all(ev.value_logits is not None and math.isfinite(ev.error) for evs in rec.calls for ev in evs)
+        assert info.evaluations == sum(len(evs) for evs in rec.calls) and info.uncertainty_missing == 0, source

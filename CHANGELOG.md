@@ -10,6 +10,52 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-23 - Network D3: the value heads as corrected at CHECKPOINT 7
+
+Register D3 (§8.3, corrected at CHECKPOINT 7, reversal 28) in the network: the 51 bins had been
+the only value and trained on the outcome; now four heads, as the engine's search (ABI round 2a)
+already consumes them.
+
+- **The heads** (`net/heads.py` `ValueHeads`, `net/model.py`): over the global registers' mean,
+  FP32, the acting player's perspective - one shared hidden layer with Mish (N1's value MLP), then
+  **WDL** (the value search uses: `NetOutput.search_value()` = W - L, `wdl_probs()`), **the
+  categorical** (51 bins, over the root search value; `categorical_mean()` and
+  `categorical_variance()` - the search's default uncertainty signal, 6m - replace
+  `value_mean()`/`value_variance()`), **short-term values** at `NetConfig.short_term_horizons`
+  (2, 5 and 16 turns, placeholders; `NetOutput.short_term`, tanh) and **the error head**
+  (`NetOutput.value_error`, softplus - the name the evaluator reads, `ERROR_HEAD_FIELD`). N1's
+  WDL head moved onto the shared layer; its 51-bin short value head is gone. `heads.hl_gauss`
+  (HL-Gauss targets) and `heads.wdl_value` added.
+- **Draws**: the categorical and WDL readouts are drawn where N1's value output and WDL head
+  were; the short-term and error outputs from a generator of their own (`model.d3_seed`); the
+  retired short value head's draws are kept in the global stream (`T5DNet._retired_draws`, and
+  its construction-time draw), so every parameter that existed before is unchanged, bit for bit
+  (checked against the previous commit's weights under three configurations).
+- **Losses** (`train/losses.py`): `Targets` takes the game result's WDL (class index or
+  distribution), `root_value` (the root search value of full searches, NaN where none),
+  `short_term` (per horizon, NaN where none), `full_search` (section 12.5's mask - the policy and
+  the categorical train on full searches only) and `root_wdl` (for `LossConfig.q_ratio`, 0). The
+  categorical's loss smooths the root value by HL-Gauss (sigma 0.75 bin widths); the error head's
+  target is `(short_term[h] - (W - L))^2` with the network's value taken without gradient
+  (`error_target`, `error_horizon` 0), Huber. Loss names `categorical`, `short_term`,
+  `value_error` (was `value`, `short_value`). Every unstated detail a placeholder (spec issue
+  231). `train/smoke.py`'s synthetic targets follow (every third position a cheap search).
+- **The evaluator** (`engine/evaluator.py`) now delivers the error head's output with the WDL,
+  the categorical and moves-left; docs updated.
+- **Parameters**: F1 22,961,828 (was 22,973,907: three short-term outputs +771 and the error head
+  +257, the short value head -13,107), F2's L24-ff12 46,891,236.
+- **Tests**: `tests/train/test_value_heads.py` (HL-Gauss, the WDL target and its blend, the
+  categorical on full searches only, no gradient from the error target into the WDL or
+  short-term heads, missing targets skipped, three optimiser steps reducing each loss alone);
+  `tests/net/test_model.py` (shapes, `search_value`, the heads FP32 under a BF16 autocast against
+  an FP64 recomputation, the horizons' validation; the register-pool and permutation tests cover
+  the four); `tests/engine/test_evaluator.py` (the error head read by its pinned name, and the
+  network's heads reaching the search through the C step API - the search's record of its root
+  equals the network's evaluation, the 6m signal at every leaf under either source); the A7
+  mirror, cached = dense, purity and turn-state tests extended to the new outputs.
+- Spec: §8.3, §8.4 (6m's signal), §9.2 (Params), §12.4 (value rows), §12.5; register D3, F1, I10,
+  D7 (pooling unchanged). Spec issue 231; proposed edit 172; edit 156's running figure updated.
+
 ### 2026-10-23 - N-A6 review fixes: the optional count in the digest pinned; the batch fallback documented
 
 - One reviewer, no high or medium findings (20 of 21 mutants caught; the survivor - a

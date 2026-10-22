@@ -93,7 +93,7 @@ FLAG_SETS = {
     "no_table_pointer_submit": dict(displacement_bias=False, submit_head="pointer"),
 }
 
-VALUE_HEADS = ("value_logits", "wdl_logits", "short_value_logits", "moves_left_log", "effort_logits", "submit_raw")
+VALUE_HEADS = ("value_logits", "wdl_logits", "short_term", "value_error", "moves_left_log", "effort_logits", "submit_raw")
 
 
 def tie(model):
@@ -339,7 +339,7 @@ def test_acting_colour_is_the_only_difference(construction, scope):
     s, m = _pair(construction, 0)
     model = _model(5, scope, tied=False, **_config_for(s))
     a, b = _outputs(model, s), _outputs(model, m)
-    for name in ("value_logits", "wdl_logits", "short_value_logits", "moves_left_log", "effort_logits", "submit_raw"):
+    for name in ("value_logits", "wdl_logits", "short_term", "value_error", "moves_left_log", "effort_logits", "submit_raw"):
         assert not torch.allclose(getattr(a, name), getattr(b, name), atol=1e-4), name
     assert not torch.allclose(a.policy_logits[a.move_valid], b.policy_logits[b.move_valid], atol=1e-4)
     tie(model)

@@ -66,12 +66,12 @@ nothing in its place. ``history`` gives each position's epoch history (C20's sec
 
 Heads (``T5DNet.heads``) read the final-normed trunk, each where M20's dispositions put it:
 the policy pointer at each move's source and destination tokens, with the promotion offset
-at the destination (D1); the value-type heads - the 51-bin value, WDL and the short-term
-value - the mean of the global registers (D3, sections 7.3 and 8.3: "each pooled by mean
-from the global registers"); the other global auxiliary heads - moves-left (in turns),
-search effort - the mean of every square token (M20: "aux pooling -> squares"; section 12.4,
-B8, D7); per-board heads each board's square mean and per-square heads every token
-(``heads.py``).
+at the destination (D1); D3's four value heads - WDL (the value search uses), the categorical
+over the root search value, the short-term values and the error head - the mean of the global
+registers (sections 7.3 and 8.3: "each pooled by mean from the global registers"); the global
+auxiliary heads - moves-left (in turns), search effort - the mean of every square token (M20:
+"aux pooling -> squares"; section 12.4, B8, D7); per-board heads each board's square mean and
+per-square heads every token (``heads.py``).
 
 Register A7: every input is read from the acting player's side - owners ours/theirs, side to
 move us/them, ranks mirrored and timelines negated when Black acts (``state.py``,
@@ -91,6 +91,13 @@ meant every parameter that existed before N5 was drawn as at N4; M20's promotion
 ordinary module that draws from the global stream while it is made, moved every parameter
 drawn from that stream - all but B15's, B16's, B17's and D8's, which have generators of their
 own.)
+
+Register D3 (CHECKPOINT 7): the value heads share N1's value MLP's hidden layer; the
+categorical and WDL readouts are drawn from the global stream where N1's value output and WDL
+head were, the short-term values and the error head (new) from a generator of their own
+(``d3_seed``), and N1's 51-bin short value head, gone, keeps its draws in the global stream
+(``_retired_draws``, and its construction-time draw in ``heads.AuxHeads``) - so D3's rebuild
+changed no parameter that existed before it, bit for bit.
 
 Register A6: the turn-state counts (mandatory boards still to move, optional boards still
 playable, moves made in the action) are inputs beside the acting colour, on the same tokens
@@ -115,13 +122,14 @@ from .heads import (
     AuxHeads,
     PointerHead,
     SubmitHead,
-    ValueHead,
+    ValueHeads,
     board_mean_pool,
     categorical_mean,
     categorical_probs,
     categorical_variance,
     global_register_pool,
     square_pool,
+    wdl_value,
 )
 from .kvformat import fake_quantise
 from .rope import rope_angles, rope_cos_sin, rope_tables, spatial_dims
@@ -139,11 +147,13 @@ class NetOutput:
     """Every head's output for a batch (all FP32)."""
 
     policy_logits: torch.Tensor  # (B, M), -inf at padding
-    value_logits: torch.Tensor  # (B, value_bins)
-    wdl_logits: torch.Tensor  # (B, 3)
+    # D3's value heads (section 8.3), the acting player's perspective, from the global registers' mean:
+    wdl_logits: torch.Tensor  # (B, 3): win, draw, loss on the game result - the value search uses (W - L)
+    value_logits: torch.Tensor  # (B, value_bins): the categorical over the root search value (HL-Gauss target)
+    short_term: torch.Tensor  # (B, K) on [-1, 1]: the short-term values at NetConfig.short_term_horizons
+    value_error: torch.Tensor  # (B,) >= 0: the error head - the predicted squared value - short-term gap
     moves_left_log: torch.Tensor  # (B,)  predicted log1p(turns left) - a turn is one player's action (D4, M20)
     opp_reply_logits: torch.Tensor  # (B, M2), -inf at padding
-    short_value_logits: torch.Tensor  # (B, value_bins)
     board_logits: torch.Tensor  # (B, Nmax, 3): heads.BOARD_HEADS
     square_logits: torch.Tensor  # (B, L, n_square_labels); meaningful where square_mask
     effort_logits: torch.Tensor  # (B, effort_bins)
@@ -159,13 +169,25 @@ class NetOutput:
     submit_valid: torch.Tensor  # bool: offered and legal (C4) - the entry carries probability
     trunk: torch.Tensor | None = None  # (B, L, d) final-normed trunk output, if requested
 
+    def wdl_probs(self) -> torch.Tensor:
+        """``(B, 3)``: win, draw, loss (softmax of the WDL logits)."""
+        return torch.softmax(self.wdl_logits.float(), dim=-1)
+
+    def search_value(self) -> torch.Tensor:
+        """``(B,)``: the value search uses (D3) - W - L of the WDL, on [-1, 1]."""
+        return wdl_value(self.wdl_probs())
+
     def value_probs(self) -> torch.Tensor:
+        """``(B, value_bins)``: the categorical's distribution (over the root search value - not the
+        value search backs up, which is ``search_value``)."""
         return categorical_probs(self.value_logits)
 
-    def value_mean(self) -> torch.Tensor:
+    def categorical_mean(self) -> torch.Tensor:
+        """``(B,)``: the categorical's mean - a prediction of the root search value, not the value."""
         return categorical_mean(self.value_probs())
 
-    def value_variance(self) -> torch.Tensor:
+    def categorical_variance(self) -> torch.Tensor:
+        """``(B,)``: the categorical's variance - the search's default uncertainty signal (6m)."""
         return categorical_variance(self.value_probs())
 
     def action_logits(self) -> torch.Tensor:
@@ -217,7 +239,7 @@ class T5DNet(nn.Module):
         self.status = StatusKeyBias(cfg) if cfg.status_bias_built else None
         self.shaw = ShawKeyTerm(cfg, self.displacement.geom) if cfg.shaw_key_term else None
         self.policy = PointerHead(cfg.d_model, cfg.policy_dim, promotion_offset=True)  # D1: the promotion offset (M20)
-        self.value = ValueHead(cfg)
+        self.value = ValueHeads(cfg)  # D3: WDL, the categorical, the short-term values, the error head
         self.aux = AuxHeads(cfg)
         self.submit = SubmitHead(cfg)
         self._init_weights()
@@ -229,6 +251,19 @@ class T5DNet(nn.Module):
     _D8_MODULES = ("embed.acting", "submit")
     #: Register A6's parameters (the turn-state MLP), drawn from their own generator.
     _A6_MODULES = ("embed.turn_in", "embed.turn_out")
+    #: Register D3's outputs that N1 did not have (the short-term values, the error head), drawn
+    #: from their own generator (``d3_seed``).
+    _D3_MODULES = ("value.short_term", "value.error")
+
+    def _retired_draws(self, name: str) -> tuple[tuple[int, int], ...]:
+        """The ``(out, in)`` shapes of retired Linear modules whose initialisation draws follow
+        module ``name``'s: a head removed from the global stream keeps its draws there (and its
+        construction-time draw, ``heads.AuxHeads``), so that removing it changes no other
+        parameter's draw. N1's 51-bin short value head (after moves-left; D3's rebuild)."""
+        cfg = self.cfg
+        if name == "aux.moves_left":
+            return ((cfg.value_bins, cfg.d_model),)
+        return ()
 
     #: The trunk projections that DeepNet's initialisation draws under post-norm (Wang et al.
     #: 2022, Figure 2): Xavier normal at gain beta ("ffn", "v_proj", "out_proj") and at gain
@@ -259,7 +294,7 @@ class T5DNet(nn.Module):
             for name, module in self.named_modules():
                 if name.split(".")[0] == "smolgen":
                     continue  # drawn last (reset_parameters)
-                if any(name == own or name.startswith(own + ".") for own in self._D8_MODULES + self._A6_MODULES):
+                if any(name == own or name.startswith(own + ".") for own in self._D8_MODULES + self._A6_MODULES + self._D3_MODULES):
                     continue  # drawn after the rest (below)
                 if isinstance(module, nn.Linear):
                     nn.init.normal_(module.weight, 0.0, self._linear_std(name, module))
@@ -269,6 +304,9 @@ class T5DNet(nn.Module):
                     nn.init.normal_(module.weight, 0.0, cfg.init_embed_std)
                 elif isinstance(module, RMSNorm):
                     nn.init.normal_(module.weight, 1.0, cfg.init_norm_std)
+                for out_features, in_features in self._retired_draws(name):
+                    torch.empty(out_features, in_features).normal_(0.0, in_features**-0.5)
+                    torch.empty(out_features).normal_(0.0, cfg.init_bias_std)
             nn.init.normal_(self.embed.not_square, 0.0, cfg.init_embed_std)
             # D8 (stage N5): from a generator of its own, seeded from the global one's seed
             # (``build_model``'s), never from the global stream - and D8's modules draw nothing
@@ -285,8 +323,12 @@ class T5DNet(nn.Module):
             # weights, biases at init_bias_std, as every Linear here).
             a6 = torch.Generator(device="cpu").manual_seed(a6_seed(torch.initial_seed()))
             for lin in (self.embed.turn_in, self.embed.turn_out):
-                lin.weight.copy_(torch.empty(lin.weight.shape).normal_(0.0, lin.in_features**-0.5, generator=a6))
-                lin.bias.copy_(torch.empty(lin.bias.shape).normal_(0.0, cfg.init_bias_std, generator=a6))
+                _draw_linear(lin, a6, cfg.init_bias_std)
+            # D3 (CHECKPOINT 7): the short-term values and the error head, from a generator of their
+            # own in the same way - D3's rebuild changed no parameter that existed before it.
+            d3 = torch.Generator(device="cpu").manual_seed(d3_seed(torch.initial_seed()))
+            for lin in (self.value.short_term, self.value.error):
+                _draw_linear(lin, d3, cfg.init_bias_std)
             if self.typed_edges is not None:
                 nn.init.normal_(self.typed_edges.table, 0.0, cfg.init_table_std)
             if self.smolgen is not None:
@@ -456,18 +498,20 @@ class T5DNet(nn.Module):
         with torch.autocast(device_type=h.device.type, enabled=False):
             h = h.float()
             sq = batch.square_mask
-            registers = global_register_pool(h, batch)  # the value-type heads' input (D3, M20)
-            squares = square_pool(h, batch)  # the other global aux heads' (M20: "aux pooling -> squares")
+            registers = global_register_pool(h, batch)  # D3's value heads' input (M20: "value pooling -> mean")
+            squares = square_pool(h, batch)  # the global aux heads' (M20: "aux pooling -> squares")
             boards = board_mean_pool(h, batch)
             possible, legal = batch.submit_mask()
             submit_raw = self.submit(h, batch, self.policy)  # D8: from the pooled global registers (M20)
+            wdl, categorical, short_term, value_error = self.value(registers)
             return NetOutput(
                 policy_logits=self.policy(h, batch.moves, batch.move_valid, sq),
-                value_logits=self.value(registers),
-                wdl_logits=self.aux.wdl(registers),
+                wdl_logits=wdl,
+                value_logits=categorical,
+                short_term=short_term,
+                value_error=value_error,
                 moves_left_log=self.aux.moves_left(squares).squeeze(-1),
                 opp_reply_logits=self.aux.opp_reply(h, batch.opp_moves, batch.opp_move_valid, sq),
-                short_value_logits=self.aux.short_value(registers),
                 board_logits=self.aux.board(boards),
                 square_logits=self.aux.square(h),
                 effort_logits=self.aux.effort(squares),
@@ -532,6 +576,14 @@ def _frozen_kv_rounding(batch: Batch, kv_format: str):
     return hook
 
 
+def _draw_linear(lin: nn.Linear, generator: torch.Generator, bias_std: float) -> None:
+    """A Linear's weights drawn LeCun normal (``N(0, 1/fan_in)``) and its bias ``N(0, bias_std)``
+    from ``generator`` - as every Linear of the global stream is, from a generator of its own."""
+    lin.weight.copy_(torch.empty(lin.weight.shape).normal_(0.0, lin.in_features**-0.5, generator=generator))
+    if lin.bias is not None:
+        lin.bias.copy_(torch.empty(lin.bias.shape).normal_(0.0, bias_std, generator=generator))
+
+
 def d8_seed(seed: int) -> int:
     """The seed of register D8's own generator (``T5DNet._init_weights``), from the model's."""
     return (int(seed) * 0x9E3779B97F4A7C15 + 0xD8) & 0xFFFFFFFFFFFFFFFF
@@ -541,6 +593,12 @@ def a6_seed(seed: int) -> int:
     """The seed of register A6's own generator (the turn-state MLP, ``T5DNet._init_weights``),
     from the model's."""
     return (int(seed) * 0x9E3779B97F4A7C15 + 0xA6) & 0xFFFFFFFFFFFFFFFF
+
+
+def d3_seed(seed: int) -> int:
+    """The seed of register D3's own generator (the short-term values and the error head,
+    ``T5DNet._init_weights``), from the model's."""
+    return (int(seed) * 0x9E3779B97F4A7C15 + 0xD3) & 0xFFFFFFFFFFFFFFFF
 
 
 def b15_seed(seed: int) -> int:
