@@ -8,11 +8,12 @@ out of the engine.
 
 **The engine is configured.** `gate.toml`'s `[engine] command` is the engine's
 gate adapter, `build/engine/t5d-gate` (built by `engine/build.py`), compared in
-full mode by every tier: the commit tier as a smoke test that gates nothing,
-nightly and release gating the rulesets their oracles can vouch for ("The engine
-contract", below). That is not yet a passed gate: the proof channel stays disabled
-until a complete run of the release tier says it may be enabled and the channel
-is signed off (H23, H41).
+full mode by every tier: the commit tier as a smoke test that gates nothing - and
+fails an engine that declines a record it read on the last green run, or reads
+none - nightly and release gating the rulesets two or more oracles vouch for ("The
+engine contract", below). That is not yet a passed gate: the proof channel stays
+disabled until a complete run of the release tier says it may be enabled and the
+channel is signed off (H23, H41).
 
 ## The rule
 
@@ -360,7 +361,7 @@ however the CLI's run ended.
 
 | Tier | When | Sources | Notes |
 |---|---|---|---|
-| `commit` | every push and pull request | `ftxi`, `notation` | three positions per record in the driver check (below); a **smoke test**: it gates no ruleset, and an engine with no finding against it passes it (H47, "The engine contract") |
+| `commit` | every push and pull request | `ftxi`, `notation` | three positions per record in the driver check (below); a **smoke test**: it gates no ruleset - with one rules oracle it could gate none, a ruleset needing two - and it fails an engine on a finding against it, on a record it read on the last green run and now declines, or on reading none (H47, "The engine contract") |
 | `nightly` | every night | all six | the naive searches get shorter budgets; they time out on wide positions by design; it **fails an engine with no finding against it that comes through no ruleset** |
 | `release` | before any generator release or proof-channel enablement | all six | the longest budgets - the golden files are recorded under them - and it **fails unless an engine was compared and came through at least one named variant** |
 
@@ -377,15 +378,18 @@ latter also runs the release tier, by hand or on a `generator-v*` tag). Each run
 
 Each tier run does, in order: it reads everything it compares against once, and
 verifies it (the golden, cost and calibration files against `golden/MANIFEST`,
-and `known-divergences.toml`), and hashes every harness file; the static checks;
+the engine's baseline against its pin in `gate.toml`, and
+`known-divergences.toml`), and hashes every harness file; the static checks;
 the calibration probe; the oracle runs; a self-consistency check of every report;
 a comparison of each fresh run with its tier's required set of recorded answers -
 and of every other recorded answer it gave, or failed to give where no budget
 explains it; a check of the ftxi driver against ftxi's stock CLI; when an engine
-is configured, the engine differential; and last, a check that no harness file
-changed while it ran. The last lines of the output say whether the engine was
-compared, whether the tier gates anything (a smoke test says that it gates
-nothing), and whether the proof channel may be enabled.
+is configured, the engine differential and the comparison with the engine's
+baseline; and last, a check that no harness file changed while it ran. The last
+lines of the output say whether the engine was compared, whether the tier gates
+anything (a smoke test says that it gates nothing), and whether the proof channel
+may be enabled - and of a run restricted with `--source` or `--record`, only that
+it is no tier result ("Other commands").
 
 A tier has no coverage floor: it requires **100% of its required set** - every
 recorded value its budgets can be shown to reach - and loses none of them without
@@ -633,8 +637,9 @@ they still count against it: the check gets harder, not easier. Otherwise a
 source could be listed in the tier and starved of time, and the tier would pass
 on answers nobody asked for. This replaces a 90% ratio of reproduced answers
 that used to be fixed in the code, and like it, it is about enabling the proof
-channel: `verify` prints it, and a run of that tier fails on it; a run of any
-other tier, which can enable nothing, does not. Its remedy is the tier's budget
+channel: `verify` prints it, and a complete run of that tier fails on it; a run
+restricted with `--source` or `--record`, and a run of any other tier, which can
+enable nothing, do not. Its remedy is the tier's budget
 for the source - which is also the recording budget, so changing it means
 re-recording.
 
@@ -678,14 +683,29 @@ cannot modify; harness changes require review (design spec §11.0).
   MANIFEST changes only with the files it covers, and that what each tier requires
   is the table in `DISAGREEMENTS.md`, which `verify` renders again from the golden
   and cost files: a cost file edited to shrink a required set changes a line of it.
-- A gate run reads the golden, cost and calibration files and
-  `known-divergences.toml` once, when it starts, verified, and hands that one
+- The engine's baseline, `engine-baseline.json` - what the engine read on the last
+  green run of the commit tier (H47; "The engine's baseline", below) - is a recorded
+  answer too, kept apart from `golden/`: `gate.toml` `[baseline]` pins it by its
+  SHA-256, as it pins the rulebook, so that re-recording the oracles never re-pins
+  it (every `golden --write` rewrites MANIFEST). It is written only by
+  `harness.py baseline --write`, after a green run - never by a gate run, and never
+  by the engine, which may not name anything in the harness - and every read
+  verifies it against its pin first (`engine-baseline-integrity`): a gate run's,
+  `verify`'s, and `baseline --write`'s own read of the baseline it replaces, which
+  it lists the new one's losses against - so it runs and writes nothing while the
+  file on disk is not the one pinned. The pin's limit is MANIFEST's: a file edited
+  together with its pin passes it, and only review catches that. What shows such an
+  edit in review is that the file and its pin change only together, one line per
+  record, and that `verify` fails a baseline that holds no line for a record of its
+  tier (`engine-baseline-stale`), so a line cannot simply be deleted.
+- A gate run reads the golden, cost and calibration files, the engine's baseline
+  and `known-divergences.toml` once, when it starts, verified, and hands that one
   snapshot to every consumer: nothing is read from them again while it runs, so the
   divergences that excuse the engine are the ones on record before it ran.
 - Every file under `oracles/` is hashed when a run starts and again when it ends -
   the harness's code and tests, its entry point, the drivers, `golden/`,
-  `known-divergences.toml`, `gate.toml`, the corpus, `DISAGREEMENTS.md`, the lock
-  file - but for the caches (`.cache/` and other dot-directories, `__pycache__/`)
+  `known-divergences.toml`, `gate.toml`, the engine's baseline, the corpus,
+  `DISAGREEMENTS.md`, the lock file - but for the caches (`.cache/` and other dot-directories, `__pycache__/`)
   and the pinned oracles under `third_party/`. Anything that changed, appeared or
   went while it ran fails it (`harness-modified`): a module planted beside the
   harness's code as surely as an edit to it.
@@ -848,13 +868,15 @@ over all of its records:
 
 1. the engine replayed each one - to its end, or to an action it holds illegal
    (not one it could not read) - and none holds an unexplained divergence;
-2. each one was followed as far as the engine went by at least one oracle - and
-   where the engine refuses an action, by an oracle that refuses the same action as
-   illegal (one that could not match the move's text confirms nothing). An oracle
-   that replayed the record differently - accepting an action the engine refuses,
-   or the other way round, reaching a different end, or setting up a different
-   position - does not count, even where a known divergence excuses the
-   difference;
+2. each one was followed as far as the engine went by at least **two** oracles
+   (H47, CHECKPOINT 8: a single oracle cannot tell its own bug from the engine's) -
+   two independent implementations, so two searches of one count once, and the
+   notation parser, which judges nothing, never counts - and where the engine
+   refuses an action, by oracles that refuse the same action as illegal (one that
+   could not match the move's text confirms nothing). An oracle that replayed the
+   record differently - accepting an action the engine refuses, or the other way
+   round, reaching a different end, or setting up a different position - does not
+   count, even where a known divergence excuses the difference;
 3. for each of check, count and mate, the oracles give a verdict that settles it,
    and agrees with the engine, at no less than `min_checked` (75%) of the
    positions the engine reports. An answer the engine contradicts confirms
@@ -864,13 +886,16 @@ over all of its records:
 
 The last two matter. Several variants in the corpus are read by a single oracle,
 some by none, and the single oracle is sometimes cwmtt, which has no check verdict
-to give: an engine must not "pass" a ruleset that nothing independent looked at.
-For each gated ruleset the gate prints how many positions had an independent
+to give: an engine must not "pass" a ruleset that nothing independent looked at -
+nor one that a single oracle vouches for, since where that oracle and the engine
+share a mistake nothing would show it. A ruleset with a record that only one
+oracle follows is `NOT gated`, the reason naming the record and its oracle. For
+each gated ruleset the gate prints how many positions had an independent
 answer for each observable; at how many of the engine's positions an oracle held
 the engine's boards and pieces, and at how many its exact state, unmoved markers
-included; and the fewest oracles that stood behind any record. Where a ruleset
-falls short of the floor and answers were set aside because the oracle's markers
-differed from the engine's, the reason says how many.
+included; and the fewest oracles that stood behind any record - two at the least.
+Where a ruleset falls short of the floor and answers were set aside because the
+oracle's markers differed from the engine's, the reason says how many.
 
 "Very Small - Open" is ungated in every tier first because the engine cannot read
 two of its records, cwmtt/ctp1 and ftxi/verysmall: each writes a jump without the
@@ -888,27 +913,89 @@ Only a tier that runs every oracle search over the whole corpus (`nightly`,
 `release`) gates a ruleset, and there an engine with no finding against it that
 comes through no ruleset has **failed** (`engine-nothing-gated`): agreeing with the
 oracles about nothing is not a pass. Any other tier - `commit`, which runs one
-rules oracle over the commit records - is a **smoke test** (H47): an engine with no
-finding against it passes its differential, whether or not a ruleset met the
-conditions above with that tier's oracles alone, and what it says of the rulesets
-is never a gating verdict. Its last lines say `engine differential: SMOKE TEST -
-PASSED` (or `FAILED`) and that the tier gates nothing; every ruleset is listed as
-`NOT gated`, one that met the conditions with the tier's oracles alone saying so;
-and the report holds no ruleset under `gated`, and the reason under `smoke_test`.
-An engine that declines every record has no finding against it, so it passes the
-smoke test - and fails the nightly tier. The gate tells the two kinds of tier
+rules oracle over the commit records, and so could gate no ruleset in any case -
+is a **smoke test** (H47): what it says of the rulesets is never a gating verdict,
+and it fails an engine only on a finding against it. Its last lines say
+`engine differential: SMOKE TEST - PASSED` (or `FAILED`) and that the tier gates
+nothing; every ruleset is listed as `NOT gated`, with its reason - in the commit
+tier, with one rules oracle, never that it met the gating conditions, which no
+ruleset can there; in a smoke test of a tier with two oracles (a tier cut to some
+of nightly's records, say), one that met them with that tier's oracles alone says
+so; and the report holds no ruleset under `gated`, and the reason under
+`smoke_test`. The gate tells the two kinds of tier
 apart by what a tier runs (`Tier.full_strength`), never by its name or by a count
-of oracles. H47 (CHECKPOINT 6, Q-A) gives the reason "gating needs two oracles";
-the conditions above ask for one oracle behind each record, not two - whether a
-ruleset should need two is put to the user (spec issue 122 in
-`docs/BUILD_LOG.md`).
+of oracles. A smoke test still fails an engine that declines a record it read on
+the last green run, or that reads none (H47, CHECKPOINT 8; below) - so an engine
+that declines every record fails every tier.
 
 In every tier the engine fails on an unexplained divergence - a disagreement with
 an oracle that `known-divergences.toml` does not record - on an answer a known
-divergence records as an oracle's error (a telltale, H34, above), and on a breach
-of the contract, an `error` or a time-out (above). A divergence on record fails no
+divergence records as an oracle's error (a telltale, H34, above), on a breach
+of the contract, an `error` or a time-out (above), on a record it read on the
+last green run and now declines (`engine-declined`), and on reading none of the
+tier's records (`engine-read-nothing`). A divergence on record fails no
 tier: there the oracle's answer confirms nothing, and only another oracle's answer
 can confirm the engine.
+
+### The engine's baseline (H47)
+
+"The commit tier still fails if the engine declines a record it read on the last
+green run, or reads none" (H47, CHECKPOINT 8). The last green run is on record in
+`engine-baseline.json`: for every record of the tier `gate.toml` `[baseline]`
+names (`commit`), how the engine's replay of it ended - `ok`,
+`rejected:<reason>`, `unsupported` - and how many positions it reported, on a
+complete run of that tier, the engine in full mode, that passed. One record per
+line, so that a re-recording is reviewed as a diff:
+
+```
+"cwmtt/ctp1": {"end": "rejected:unreadable", "positions": 10, "sha256": "0d7d5788..."},
+```
+
+- **Declines a record it read on the last green run.** The engine reads less of a
+  record than then: it reports fewer positions, or as many but without the
+  verdict it ended with then - other than `ok` where the baseline ended `ok`, or
+  other than a refusal as illegal (`illegal_move`, `cannot_submit`) where the
+  baseline ended in one (a refusal as unreadable is no verdict). A record the
+  baseline gives no position - a ruleset the engine declined, a set-up it could not
+  read - was not read, and cannot be declined; one the engine now reads further
+  is no decline (the summary says how many, and that a new baseline would hold
+  the engine to them); and a run that ended in an `error` or a time-out is
+  `engine-failed` already, and is not reported twice.
+- **Reads none.** In a complete run of a tier, the engine replays none of the
+  tier's records: none ends `ok`, or in a refusal as illegal.
+- **Where.** Every tier compares the engine with the baseline, over the records it
+  holds that the run runs - nightly and release run every record the commit tier
+  does, and a tier that runs every oracle checks at least everything the smoke test
+  checks (H47 names the commit tier; spec issue 132 in `docs/BUILD_LOG.md` says why
+  every tier). Not in parse mode: the baseline holds what the engine read in full
+  mode. A run restricted with `--source` or `--record` reports each record declined
+  (a finding about that record), but not reading none (a check of a tier as a
+  whole). With an engine compared in full mode, `verify` fails while no baseline
+  is pinned, or the file is not the one pinned (`engine-baseline-missing`,
+  `-integrity`, `-invalid`), or it is about record text the corpus no longer holds,
+  or holds no line for a record of its tier (`engine-baseline-stale`) - so a
+  commit-tier record added to the corpus, or one whose text a pin bump changed,
+  needs a new baseline (`CONTRIBUTING.md` says when, in its procedures for adding
+  records and changing a pin).
+
+```
+python oracles/harness.py baseline           # is engine-baseline.json the baseline gate.toml pins, and current?
+python oracles/harness.py baseline --write   # run the [baseline] tier in full; if it is green, record and pin it
+```
+
+`baseline --write` first reads the baseline it replaces, verified against its pin
+like every read of it: where the file on disk is not the one pinned - edited by
+hand, or gone - it runs and writes nothing (restore it: `git checkout --
+oracles/engine-baseline.json`). It then runs the tier in full with the engine -
+comparing it with no baseline, since one is being replaced - and records what the
+engine read only if the run is green on everything else, reading none included:
+never from a run that is not. Last, it lists what the new baseline holds otherwise
+than the pinned one, losses first: a record the engine now reads less of is one
+the commit tier no longer holds it to - a loss of checking, never churn, and never
+recorded to make a gate run pass. The pin, like MANIFEST, guards against
+accident, not against the file and its pin changed together - by hand, or by
+recording a loss: that is review's to catch (H33; "Recorded-answer integrity",
+above).
 
 The proof channel may be enabled only by a complete run of a tier that requires an
 engine and runs every oracle search over the whole corpus (the `release` tier),
@@ -960,9 +1047,15 @@ with, has failed. The release tier, which requires an engine, fails in parse mod
 
 When the engine and an oracle disagree, the rulebook decides. If the oracle is
 wrong, the disagreement goes into `known-divergences.toml` with the citation that
-settles it, and a link to the upstream report - or why it is unreported. None is
-reported yet; each entry says why, and spec issue 126 in `docs/BUILD_LOG.md` asks
-the user which of them must be.
+settles it, and a link to the upstream report - or why it is unreported. Upstream,
+a defect is reported as a bug and a disagreement with a documented rule as a
+question citing the source (register H27, CHECKPOINT 8); the agent drafts them in
+`docs/checkpoints/upstream/` and the project owner files them. None is filed yet,
+and each entry says why: the two defects ruling R7 recorded are drafted as bug
+reports, and ftxi's reading of the check test - the 147 entries R1 settles - as one
+question, `ftxi-check-test-passed-boards.md`, which asks whether the game passes
+the boards ftxi passes; if it does, the rulebook is wrong. Once a report is filed,
+its URL takes the place of `unreported: ...` in each entry it answers.
 
 The rulebook is `docs/rules/README.md` (decision H38), and it is pinned:
 `gate.toml` `[rulebook]` holds the SHA-256 of its text (CRLF folded to LF), and
@@ -1027,19 +1120,28 @@ python oracles/harness.py corpus             # list and verify the corpus
 python oracles/harness.py corpus --unlisted  # records in pinned sources that the manifest omits
 python oracles/harness.py boundary           # the boundary check alone
 python oracles/harness.py provenance --write # refresh the inventory in PROVENANCE.md
-python oracles/harness.py gate --tier nightly --source cwmtt --record cwmtt/standard   # a partial run
+python oracles/harness.py gate --tier nightly --source cwmtt --record cwmtt/standard   # a restricted run
 ```
 
-A gate run restricted with `--source` or `--record` is marked partial and can never
-enable the proof channel. It keeps its tier's rule (H47; a reading - spec issue
-124 in `docs/BUILD_LOG.md`): a restricted run of `nightly` or `release` names as
-gated the rulesets that met the gating conditions with only the sources and
-records it ran, so its verdicts are no stronger than those, and it fails an engine
-with no finding against it that came through no ruleset; a restricted run of
-`commit` is a smoke test, like the whole tier. So, with the engine configured, a
-run of sources that cannot gate a ruleset fails such an engine on
-`engine-nothing-gated` - the example above among them: cwmtt gives no check
-verdict.
+A gate run restricted with `--source` or `--record` - any use of either, even one
+that names every source of the tier - is a developer's convenience, and **never
+produces a tier verdict** (H47, CHECKPOINT 8). Its summary and its report say
+`restricted - not a tier result`; it prints no `oracle layer [tier]` line, states
+no ruleset gated or not gated, and its proof-channel line is `DISABLED -
+restricted - not a tier result`. It reports every finding it makes - a
+divergence, a telltale, a breach of the engine contract, a record the engine read
+on the last green run and now declines, a lost required value - and its exit code
+reflects those findings only: 1 if it made any, 0 if not. The checks that judge a
+tier as a whole are not made: that the engine came through some ruleset
+(`engine-nothing-gated`), read some record (`engine-read-nothing`), or was compared
+at all (parse mode's `engine-nothing-compared`); that a tier which requires an
+engine has one; and that a tier which can enable the proof channel requires enough
+of each source to enable it (`proof-channel-vacuous`, about enabling the proof
+channel, which a restricted run never does - `verify` still prints it). Its report
+is `gate-<tier>-restricted.json` in the harness cache, with `restricted` and
+`restricted_to` set, the verdicts of a tier - `ok`, `oracle_layer_ok` - null, its
+`findings` listed, and nothing under `gated` or `ungated`, so it never stands in
+for a complete run's.
 
 `observe` can also ask a source's driver for two diagnostics, which it prints after
 the report as one JSON object per line. They are never compared and never

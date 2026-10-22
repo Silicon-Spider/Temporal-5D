@@ -121,6 +121,24 @@ The oracles already disagree with **each other** in places: see
 `oracles/DISAGREEMENTS.md`. None of those has been adjudicated. They are where the
 first known divergences will come from.
 
+**The engine's baseline.** The commit tier is a smoke test that gates no ruleset,
+but it fails an engine that declines a record it read on the last green run, or
+that reads none (H47). What the engine read then is `oracles/engine-baseline.json`,
+pinned in `oracles/gate.toml` `[baseline]` and written only by `python
+oracles/harness.py baseline --write`, which records it from a green run of the
+commit tier - never by hand: neither the file nor its pin is ever edited, and the
+command records nothing while the file is not the one pinned (restore it with
+`git checkout -- oracles/engine-baseline.json`). The pin catches an accident, not
+the file and its pin changed together: that is the review's to catch. When the
+engine comes to read a record further, record a new baseline so that the commit
+tier holds it to that, and review the diff. A new baseline that lists a `LOSS` - a
+record the engine now reads less of - is a loss of checking: fix the engine, or
+raise the question; never record one to make a gate run pass. A change to the
+commit tier's records - one added, removed, or changed by a pin bump - needs a new
+baseline too ("Changing a pin" and "Adding game records", below). And a run
+restricted with `--source` or `--record` is never a tier's result (H47): it
+reports findings, nothing more.
+
 ## Changing a pin
 
 A pin is not updated routinely. When one has to move:
@@ -144,11 +162,17 @@ A pin is not updated routinely. When one has to move:
    outcomes or positions the new recording no longer holds - and any changed line
    of "What each tier requires" in `oracles/DISAGREEMENTS.md`: those are losses of
    checking, never routine churn.
-8. `python oracles/harness.py provenance --write`, and re-read the hand-written
+8. If a commit-tier record's blob changed, or one was added or removed, record the
+   engine's baseline again: build the engine (`py engine/build.py`), then `python
+   oracles/harness.py baseline --write`, and read its diff and any `LOSS` it lists
+   (above, "The engine's baseline"). Until then `verify` and every gate tier report
+   `engine-baseline-stale`.
+9. `python oracles/harness.py provenance --write`, and re-read the hand-written
    notes about that oracle in the lock file and in `oracles/README.md`.
-9. Record the bump in `CHANGELOG.md` - the answers that moved, and any line of
-   `oracles/DISAGREEMENTS.md` that appeared or went - and bring the spec in line
-   where it describes that oracle (§11.0, and decisions H23-H27).
+10. Record the bump in `CHANGELOG.md` - the answers that moved, any line of
+    `oracles/DISAGREEMENTS.md` that appeared or went, and any line of the engine's
+    baseline - and bring the spec in line where it describes that oracle (§11.0,
+    and decisions H23-H27).
 
 Never update submodules recursively (`git submodule update --init --recursive`):
 the oracles' own submodules are not needed, and one is declared with an SSH URL.
@@ -169,6 +193,11 @@ by pinned source, path, blob id and hash, and read in place.
 - A record that already sits in a pinned source: `python oracles/harness.py corpus
   --unlisted` prints its manifest entry; add the licence it is used under, a tier,
   and any notes, then record what the oracles say about it (`golden --write`).
+  If it is a commit-tier record, record the engine's baseline again too - build
+  the engine, then `python oracles/harness.py baseline --write`, and read its diff
+  (above, "The engine's baseline"): until then `verify` and every gate tier report
+  `engine-baseline-stale` for it, and `selftest` fails. The same holds for a
+  commit-tier record removed from the manifest.
 - A record of our own: put it under `oracles/corpus/records/` and list it with
   `source = "local"`. That directory is exempt from line-ending conversion, because
   a record is pinned by the hash of its bytes.
