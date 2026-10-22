@@ -74,14 +74,18 @@ B8, D7); per-board heads each board's square mean and per-square heads every tok
 (``heads.py``).
 
 Register D8 (stage N5): the acting player is an input on the global registers (``embed.py``;
-M20) and the submit action's logit is read from the pooled global registers
-(``heads.SubmitHead``; M20), offered where submitting is possible and masked unless it is
-legal; ``NetOutput.action_log_probs`` normalises the moves and submit together. Their
-parameters (the acting-player embedding, the submit readout) draw nothing while they are
-made and are drawn from a generator of their own, seeded from the model's seed
-(``d8_seed``), never from the global stream: for a seed, every parameter that existed before
-N5 is drawn exactly as it was - with any flags on and under either submit readout - and no
-flag changes D8's weights.
+M20 - with none, an ablation-3 arm, on the board tokens: a placeholder, spec issue 225) and
+the submit action's logit is read from the pooled global registers (``heads.SubmitHead``;
+M20), offered where submitting is possible and masked unless it is legal;
+``NetOutput.action_log_probs`` normalises the moves and submit together. Their parameters
+(the acting-player embedding, the submit readout) draw nothing while they are made and are
+drawn from a generator of their own, seeded from the model's seed (``d8_seed``), never from
+the global stream: D8's parameters, and the submit readout's form, change no other
+parameter's draw - with any flags on - and no flag changes D8's weights. (Until M20 that also
+meant every parameter that existed before N5 was drawn as at N4; M20's promotion offset, an
+ordinary module that draws from the global stream while it is made, moved every parameter
+drawn from that stream - all but B15's, B16's, B17's and D8's, which have generators of their
+own.)
 """
 
 from __future__ import annotations
@@ -255,8 +259,8 @@ class T5DNet(nn.Module):
             nn.init.normal_(self.embed.not_square, 0.0, cfg.init_embed_std)
             # D8 (stage N5): from a generator of its own, seeded from the global one's seed
             # (``build_model``'s), never from the global stream - and D8's modules draw nothing
-            # while they are made - so that every parameter that existed before N5 is drawn as
-            # it was, whatever the flags and D8's own arms, and no flag changes D8's weights.
+            # while they are made - so that D8's parameters and its own arms change no other
+            # parameter's draw, whatever the flags, and no flag changes D8's weights.
             d8 = torch.Generator(device="cpu").manual_seed(d8_seed(torch.initial_seed()))
             acting = torch.empty(self.embed.acting.weight.shape).normal_(0.0, cfg.init_embed_std, generator=d8)
             self.embed.acting.weight.copy_(acting)
@@ -312,9 +316,12 @@ class T5DNet(nn.Module):
 
     def embed_tokens(self, batch: Batch, scope: str | None = None) -> torch.Tensor:
         """Token embeddings under a scope: under the block-causal scope with
-        ``frozen_features="intrinsic"`` frozen boards get no state-dependent flags."""
-        intrinsic = self.scope_of(scope) == "block_causal" and self.cfg.frozen_features == "intrinsic"
-        return self.embed(batch, frozen_intrinsic=intrinsic)
+        ``frozen_features="intrinsic"`` frozen boards get no state-dependent flags, and under
+        that scope with no global registers no frozen board gets the acting player (D8; spec
+        issue 225 - ``embed.py``)."""
+        block_causal = self.scope_of(scope) == "block_causal"
+        intrinsic = block_causal and self.cfg.frozen_features == "intrinsic"
+        return self.embed(batch, frozen_intrinsic=intrinsic, block_causal=block_causal)
 
     def make_context(
         self,

@@ -189,7 +189,8 @@ def global_register_pool(h: torch.Tensor, batch: Batch) -> torch.Tensor:
     """Mean of the global registers, ``(B, d)`` - what the value-type heads (the 51-bin
     value, WDL, the short-term value; D3, section 8.3, M20: "value pooling -> mean") and D8's
     submit logit (section 8.2, M20) read. With no global registers (an ablation-3 arm),
-    ``square_pool`` instead."""
+    ``square_pool`` instead - as built since N1, a placeholder (no document says what these
+    heads read without them; spec issue 225)."""
     if batch.global_regs > 0:
         return h[:, batch.body_len : batch.body_len + batch.global_regs].mean(dim=1)
     return square_pool(h, batch)
@@ -257,7 +258,7 @@ class SubmitHead(nn.Module):
         super().__init__()
         self.form = cfg.submit_head
         # Made without drawing from the RNG; drawn from D8's own generator
-        # (``model._init_weights``), so that a seed draws every older parameter as before N5.
+        # (``model._init_weights``), so that it changes no other parameter's draw.
         self.out = nn.utils.skip_init(nn.Linear, cfg.d_model, 1) if self.form == "linear" else None
 
     def forward(self, h: torch.Tensor, batch: Batch, policy: PointerHead) -> torch.Tensor:

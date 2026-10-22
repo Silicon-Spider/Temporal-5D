@@ -41,10 +41,10 @@ quiet-machine block).
 
 | Figure | Estimate (§15.3) | Measured | Conditions | Ratio | Date, commit |
 |---|---|---|---|---|---|
-| Dense cost per eval at 240 boards | 4.78 TF → ~337 evals/s (FA4-class) | counted 4.11 TF (B14 block-sparse), 4.91 TF (every key); CPU wall pending | N3 table below | counted / estimate 0.86-1.03 | 2026-10-02, N3 |
+| Dense cost per eval at 240 boards | 4.78 TF → ~337 evals/s (FA4-class) | counted 4.11 TF (B14 block-sparse), 4.91 TF (every key); CPU wall pending | N3 table below; the network before M20's register positions - re-count pending | counted / estimate 0.86-1.03 | 2026-10-02, N3 |
 | Windowed throughput | ~2,370 evals/s; ~1,520/s at k = 8 | - | | | |
-| Cached cost per node | 0.16 TF; 15-20× realistic | counted 0.168 TF; 24.4× / 29.2× counted (vs block-sparse / every-key dense) at 8 timelines; **8.4× / 9.9× at 24 timelines**; CPU wall pending | N3 table below | 1.05 (FLOPs); ratio at 24 timelines below the 15-20× - spec issue 36 | 2026-10-02, N3 |
-| Live-set recompute | 3.7-5.6× changed-boards-only | counted 3.68× (240, 8 TL), 5.47× (600, 12), **10.84× at 24 timelines** | N3 table below | 1.0 at the spec's timelines; ~2-3× above it at 24 | 2026-10-02, N3 |
+| Cached cost per node | 0.16 TF; 15-20× realistic | counted 0.168 TF; 24.4× / 29.2× counted (vs block-sparse / every-key dense) at 8 timelines; **8.4× / 9.9× at 24 timelines**; CPU wall pending | N3 table below; the network before M20's register positions - re-count pending | 1.05 (FLOPs); ratio at 24 timelines below the 15-20× - spec issue 36 | 2026-10-02, N3 |
+| Live-set recompute | 3.7-5.6× changed-boards-only | counted 3.68× (240, 8 TL), 5.47× (600, 12), **10.84× at 24 timelines** | N3 table below; the network before M20's register positions - re-count pending | 1.0 at the spec's timelines; ~2-3× above it at 24 | 2026-10-02, N3 |
 | Supersession recompute | +8-24% per node | counted, lineage: +5.9% / +12.0% (240, 8 TL; 1 / 2 boards), +0.3-2.8% elsewhere; creation reading cascades (spec issue 35) | N3 table below | within the bound under lineage | 2026-10-02, N3 |
 | Root refresh overhead (800 sims) | +3.6% / +6.1% full; +1.3% windowed | analytic only so far (3.64% / 6.13% at the spec's timelines; 1.24% / 3.10% at 24); CPU wall pending | N3 table below | - | 2026-10-02, N3 |
 | One refresh | ≈ 10 node-evaluations | not measured: the estimate is windowed and the window is not built (spec issue 39) | | | |
@@ -67,6 +67,16 @@ FlopCounterMode, with a registered formula for the CPU fused-attention op).
 Timelines: the spec's assumption (8 at 240 boards, 12 at 600) and the corpus's
 real games (24 at 240-399 boards; 24 stands in at 600, which the corpus does not
 reach).
+
+*Conditions note (2026-10-17, `lane/net`):* these counts are of the network as built
+on 2026-10-02 - before F5, B15 and B16, and before M20's register positions (B8): its
+per-board registers then sat at a learned off-lattice angle and only the global
+registers' pairs were merged, where the v1 now widens every row's query and key
+features (44 dims instead of 32 at the B4 allocation) and recomputes the register rows
+on the CPU kernel path, dense and cached alike. They are no longer the v1's counted
+cost; no figure here replaces them. The counts do not depend on load, but counting runs
+the computations themselves (FlopCounterMode executes them - 28 TF for the 600-board
+dense pass), so the re-count is step 2's quiet-machine block's, with the wall times.
 
 | Setting | Dense: analytic / counted block-sparse / counted every-key | Node: analytic / counted | Dense ÷ node: analytic / counted vs block-sparse / vs every-key | Live set (2 changed): analytic / counted | Supersession, counted, 1 / 2 boards | KV per state BF16 / FP8 / FP32 |
 |---|---|---|---|---|---|---|
