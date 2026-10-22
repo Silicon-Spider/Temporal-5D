@@ -226,6 +226,9 @@ endif()
 # retired at CHECKPOINT 4, verification v3.)
 target_sources(t5d_core PRIVATE src/attacks.cpp src/prover.cpp)
 target_sources(t5d-tests PRIVATE tests/test_attacks.cpp tests/test_prover.cpp)
+# The stores the scanner's and the prover's threads share, taken by many
+# threads at once from their first use (register H17: the shards' lock).
+target_sources(t5d-tests PRIVATE tests/test_shared_stores.cpp)
 add_executable(t5d-scan6bp tools/t5d_scan6bp.cpp)
 target_link_libraries(t5d-scan6bp PRIVATE t5d_tools Threads::Threads)
 target_compile_definitions(t5d-scan6bp PRIVATE

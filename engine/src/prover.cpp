@@ -19,7 +19,6 @@
 #include <exception>
 #include <memory>
 #include <mutex>
-#include <shared_mutex>
 #include <stdexcept>
 #include <thread>
 #include <unordered_map>
@@ -83,6 +82,8 @@ bool decomposes(const RuleOptions& r) noexcept {
 
 // ---- the disproof store ------------------------------------------------------------------
 
+// The solved store's sharding (scanner.cpp): 64 shards by the key's top bits,
+// each behind its own ShardLock (exclusive: see t5d/scanner.hpp).
 struct DisproofStore::Shards {
   static constexpr std::size_t kCount = 64;
   struct Entry {
@@ -90,7 +91,7 @@ struct DisproofStore::Shards {
     std::vector<std::pair<DisproofClass, int>> depths;
   };
   struct Shard {
-    mutable std::shared_mutex mutex;
+    mutable ShardLock mutex;
     std::unordered_map<std::uint64_t, std::vector<std::size_t>> index;
     std::vector<Entry> entries;
   };
@@ -106,7 +107,7 @@ DisproofStore::~DisproofStore() = default;
 
 int DisproofStore::find(const GameState& position, const DisproofClass& cls) const {
   const Shards::Shard& s = shards_->of(position);
-  std::shared_lock<std::shared_mutex> lock(s.mutex);
+  const std::lock_guard<ShardLock> lock(s.mutex);
   const auto it = s.index.find(position.zobrist());
   if (it == s.index.end()) return -1;
   for (const std::size_t i : it->second) {
@@ -122,7 +123,7 @@ int DisproofStore::find(const GameState& position, const DisproofClass& cls) con
 
 void DisproofStore::put(const GameState& position, const DisproofClass& cls, int depth) {
   Shards::Shard& s = shards_->of(position);
-  std::unique_lock<std::shared_mutex> lock(s.mutex);
+  const std::lock_guard<ShardLock> lock(s.mutex);
   std::vector<std::size_t>& slot = s.index[position.zobrist()];
   for (const std::size_t i : slot) {
     Shards::Entry& e = s.entries[i];
@@ -143,7 +144,7 @@ void DisproofStore::put(const GameState& position, const DisproofClass& cls, int
 std::size_t DisproofStore::size() const {
   std::size_t n = 0;
   for (const Shards::Shard& s : shards_->shard) {
-    std::shared_lock<std::shared_mutex> lock(s.mutex);
+    const std::lock_guard<ShardLock> lock(s.mutex);
     n += s.entries.size();
   }
   return n;
@@ -177,7 +178,7 @@ const CertificateStep* ProofCertificate::find(const GameState& position) const {
 
 void DisproofStore::clear() {
   for (Shards::Shard& s : shards_->shard) {
-    std::unique_lock<std::shared_mutex> lock(s.mutex);
+    const std::lock_guard<ShardLock> lock(s.mutex);
     s.index.clear();
     s.entries.clear();
   }

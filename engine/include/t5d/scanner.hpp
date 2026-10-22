@@ -131,6 +131,7 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -321,13 +322,26 @@ class MemorySolvedStore final : public SolvedStore {
   std::vector<Entry> entries_;
 };
 
+/// The lock of each shard of the stores a search's threads share: the solved
+/// store below and the disproof store (t5d/prover.hpp). Exclusive - a probe
+/// waits on another probe of its shard, never on another shard's - and a
+/// std::mutex, whose lock() returns holding it or throws std::system_error:
+/// libstdc++ throws on any error the platform's mutex reports. Not
+/// std::shared_mutex: built with MinGW-w64's winpthreads (this project's
+/// Windows toolchain), a shared_mutex is a pthread_rwlock_t that its first
+/// call initialises; a thread that loses that race gets EINVAL, which
+/// libstdc++'s shared_mutex ignores - so the thread ran its critical section
+/// without the lock, then unlocked a lock it did not hold, and the stores were
+/// corrupted (2026-10-17, register H17; tests/test_shared_stores.cpp).
+using ShardLock = std::mutex;
+
 /// The solved store the threads of a scan share (Lazy SMP, H17, H19): the
 /// same contract as MemorySolvedStore - keyed by the Zobrist key with the
 /// ruleset ID (H18), same_position() on a key match (§11.3's hashing trap),
 /// proofs only, never lossy, a contradiction throws std::logic_error - and
-/// safe for concurrent use: the positions are spread over shards by key,
-/// each behind a reader-writer lock, so a probe never waits on a probe. A
-/// scanner's own store is one of these.
+/// safe for concurrent use: the positions are spread over 64 shards by key,
+/// each behind its own ShardLock, so threads wait on each other only within
+/// a shard. A scanner's own store is one of these.
 class ConcurrentSolvedStore final : public SolvedStore {
  public:
   ConcurrentSolvedStore();

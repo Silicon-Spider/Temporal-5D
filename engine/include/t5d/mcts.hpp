@@ -513,7 +513,9 @@ bool final_eligible(std::span<const FinalCandidate> children, std::size_t i,
 
 // ---------------------------------------------------------------------------
 // The evaluation cache: evaluations keyed by the state, the moves made in its
-// action (A6) and the refresh epoch (C11, C14, §8.7)
+// action (A6) and the refresh epoch (C11, C14, §8.7). It has no lock, like
+// the search (single-threaded, H15): the searches that share one (C14's
+// fresh search per move) are run one at a time.
 // ---------------------------------------------------------------------------
 
 class EvalCache {
