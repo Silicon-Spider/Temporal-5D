@@ -45,6 +45,7 @@ from t5d.net.state import (
     OWNER_NONE,
     OWNER_OURS,
     OWNER_THEIRS,
+    RELATION_IDS,
     TOKEN_BOARD_REGISTER,
     TOKEN_GLOBAL_REGISTER,
     TOKEN_SQUARE,
@@ -95,6 +96,11 @@ VALUE_HEADS = ("value_logits", "wdl_logits", "short_value_logits", "moves_left_l
 def tie(model):
     """The test hook that equalises A7's acting-colour input: the embedding's two rows made one
     (the white row), so the colour reaches nothing. Nothing else changes."""
+    # Tied, anything routed through the acting-colour embedding - not only the colour itself -
+    # is equalised too and could no longer differ between a position and its mirror. What
+    # guards that route is the untied carrier assertion in
+    # test_mirror_has_identical_canonical_inputs: untied, the embeddings differ exactly at the
+    # tokens the acting colour enters and nowhere else.
     with torch.no_grad():
         model.embed.acting.weight[1] = model.embed.acting.weight[0]
     return model
@@ -399,3 +405,73 @@ def test_the_cached_path_and_the_mirror(construction, refresh, supersession):
             assert_mirrored(a, b, perm, (acting_a, acting_b), atol=1e-4)
         n_frozen = int((~s.is_head).sum())
         assert len(cached.store.entries) == 2 * 2 * n_frozen  # two positions, two perspectives each
+
+
+# --- the other colour's anchor: no move of the anchor's acting player (spec issue 229) ------------------
+
+
+def dense_passes(model) -> tuple[list, object]:
+    """``(passes, handle)``: every dense-scope forward of ``model`` from now on appends its batch
+    to ``passes`` (a refresh's anchor passes, and ``reference_output``'s); ``handle.remove()``
+    stops it."""
+    passes: list = []
+
+    def hook(module, args, kwargs):
+        if kwargs.get("scope") == "dense":
+            passes.append(args[0])
+
+    return passes, model.register_forward_pre_hook(hook, with_kwargs=True)
+
+
+def foreign_sources(batch) -> tuple[int, int, int]:
+    """In a one-position batch: the move-graph edges, the moves and the edges of any relation
+    whose source square does not hold one of the batch's acting player's pieces ("ours")."""
+    owner = batch.owner[0]
+    edges = batch.edges[0][batch.edge_valid[0]]
+    moves = batch.moves[0][batch.move_valid[0]]
+    move_edges = edges[edges[:, 2] == RELATION_IDS["move"]]
+    return (
+        int((owner[move_edges[:, 0]] != OWNER_OURS).sum()),
+        int((owner[moves[:, 0]] != OWNER_OURS).sum()),
+        int((owner[edges[:, 0]] != OWNER_OURS).sum()),
+    )
+
+
+def assert_other_perspective_anchor(passes, anchor) -> None:
+    """The dense passes of one refresh over ``anchor``: its own view first, as it is (moves and
+    edges kept), then the other colour's, with no move, reply move or edge at all - in
+    particular none whose source is not that view's acting player's."""
+    assert len(passes) == 2
+    own, other = passes
+    assert int(own.acting_player[0]) == int(anchor.acting_player) and int(other.acting_player[0]) == 1 - int(anchor.acting_player)
+    whole = collate([anchor])
+    for name in ("edges", "edge_valid", "moves", "move_valid"):
+        assert torch.equal(getattr(own, name), getattr(whole, name)), name
+    assert foreign_sources(other) == (0, 0, 0)
+    assert not bool(other.edge_valid.any()) and not bool(other.move_valid.any()) and not bool(other.opp_move_valid.any())
+
+
+@pytest.mark.parametrize("construction", CACHED_CONSTRUCTIONS)
+def test_the_other_perspectives_anchor_has_no_moves_or_edges(construction):
+    """A refresh's dense pass from the other colour's side (``viewed_by``) reads the anchor's
+    boards with no moves and no edges: the anchor's are its acting player's, and kept they
+    would start on "their" pieces, an input no conversion produces (spec issue 229). The same
+    view in ``reference_output``'s anchor pass; and cached = reference for both perspectives."""
+    for seed in (0, 1):
+        s = CONSTRUCTIONS[construction](1000 * (seed + 1) + 17)
+        assert s.edges.size and s.moves.size
+        model = _model(seed, "block_causal", **_config_for(s))
+        cached = CachedEvaluator(model, CacheConfig(root_refresh=True))
+        passes, handle = dense_passes(model)
+        try:
+            epoch = cached.root_epoch(s)
+            assert_other_perspective_anchor(passes, s)
+            node = viewed_by(s, 1 - int(s.acting_player))
+            passes.clear()
+            want = reference_output(model, node, anchor=s)
+            assert len(passes) == 1 and torch.equal(passes[0].edge_valid, collate([node]).edge_valid)
+            assert foreign_sources(passes[0]) == (0, 0, 0) and not bool(passes[0].edge_valid.any())
+        finally:
+            handle.remove()
+        _close(cached.evaluate(node, epoch), want)
+        _close(cached.evaluate(s, epoch), reference_output(model, s, anchor=s))

@@ -12,8 +12,9 @@ so both carry the same lineage (5DFEN records no branch origins). The engine com
 mirror's moves, move graph and typed relations itself; they must be the mirror of the
 original's - the rules are colour-symmetric but for who moves first, which the mirror keeps as
 the acting colour - and the network's outputs on the two, with the acting-colour input
-equalised, must agree mapped back. Positions: every variant's start and random play (branched
-and inactive timelines, both acting colours), the records' positions, and positions past the
+equalised, must agree mapped back. Positions: the start of every named variant the engine sets
+up (its whole table, ``helpers.ENGINE_VARIANTS``) and random play in each (branched and inactive
+timelines, both acting colours), the records' positions, and positions past the
 shift inside an unsubmitted action (mirrored by ``state.mirror`` alone: 5DFEN sets up turn
 starts only).
 """
@@ -27,9 +28,18 @@ import torch
 from t5d.engine import Game, to_position_state
 from t5d.engine.play import random_game
 from t5d.net import NetConfig, build_model, collate, mirror, permute_boards
-from t5d.net.state import OWNER_OURS, mirror_tokens
-from tests.engine.helpers import RECORDS, VARIANTS, requires_engine
-from tests.net.test_perspective import VALUE_HEADS, assert_mirrored, tie
+from t5d.net.cache import CacheConfig, CachedEvaluator, reference_output, viewed_by
+from t5d.net.state import OWNER_OURS, RELATION_IDS, mirror_tokens
+from tests.engine.helpers import ENGINE_VARIANTS, RECORDS, requires_engine
+from tests.net.test_perspective import (
+    VALUE_HEADS,
+    _close,
+    assert_mirrored,
+    assert_other_perspective_anchor,
+    dense_passes,
+    foreign_sources,
+    tie,
+)
 
 pytestmark = requires_engine
 
@@ -48,7 +58,7 @@ def mirror_board_string(text: str) -> str:
 
 def _games() -> list[tuple[str, Game]]:
     out = []
-    for name in VARIANTS:
+    for name in ENGINE_VARIANTS:
         out.append((f"{name} start", Game.variant(name)))
         for i, game in enumerate(random_game(name, 3, target_boards=40, max_actions=24)):
             if i % 3 == 1:
@@ -185,3 +195,30 @@ def test_past_the_shift_on_real_positions():
                 assert_mirrored(a, b, perm, (int(s.acting_player), 1 - int(s.acting_player)))
             assert s.submit_possible
     assert count >= 6
+
+
+def test_the_other_perspectives_anchor_on_real_positions(pairs):
+    """Spec issue 229 on the engine's own positions, both acting colours: a refresh's dense pass
+    as the anchor is reads the engine's moves, move graph and typed relations, every one starting
+    on the acting player's pieces; the pass from the other colour's side reads none of them (each
+    would start on "their" pieces, which no conversion produces); cached = reference from both
+    sides."""
+    model = build_model(NetConfig(trunk_dtype="fp32", n_layers=1, attn_scope="block_causal", typed_edge_bias=True), seed=7).eval()
+    seen = set()
+    for label, s, _, _ in pairs[1::4]:
+        if s.is_head.all():
+            continue
+        seen.add(int(s.acting_player))
+        cached = CachedEvaluator(model, CacheConfig(root_refresh=True))
+        passes, handle = dense_passes(model)
+        try:
+            epoch = cached.root_epoch(s)
+        finally:
+            handle.remove()
+        assert_other_perspective_anchor(passes, s)
+        own = passes[0]
+        n_move_edges = int((own.edges[0][own.edge_valid[0]][:, 2] == RELATION_IDS["move"]).sum())
+        assert foreign_sources(own) == (0, 0, 0) and n_move_edges > 0 and bool(own.move_valid.any()), label
+        for node in (s, viewed_by(s, 1 - int(s.acting_player))):
+            _close(cached.evaluate(node, epoch), reference_output(model, node, anchor=s))
+    assert seen == {0, 1}

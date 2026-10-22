@@ -1304,7 +1304,7 @@ is lost, add them here.
 | A4 | built, tested | Engine: every board immutable once published; persistent multiverse sharing history in chunks |
 | A5 | not started | Piece-centric tokenisation - ruled at CHECKPOINT 6: build behind its flag; the window's provisional kill does not decide it, and the joint test with the window waits for the pilot run (M18). Last in the net lane, dense scope only (`piece_centric` raises today) |
 | A6 | engine side built, tested; network inputs not started | Global turn-state inputs on the global registers. The acting player is in (D8, N5); the acting colour is that same embedding since A7 (`lane/net` N-A7: under A7 the acting player is always "us", so the colour is what the input carries - one input, issue 228). Engine ABI round 1 (2026-10-17, `lane/engine`): the counts are in the expansion (`mandatory_remaining`, `optional_playable`, `moves_made`; the state's own mandatory count - A6's commit changed no truth source, while the component's first commit, H42's fix, changed the prover's report, so the truth's code signature differs from main's) and the C API (`t5d_expansion`'s three appended fields; `t5d_game_summary.moves_made`; the game handle counts the moves of its action - 0 at a set-up, +1 per move, 0 after a submission or a replayed action), with the Python mirror (`Expansion`, `GameInfo.moves_made`; `Search`'s `turn_start` from the handle). The count is in the evaluation identity (issue 302): `EvalRequest`, the evaluation cache's key, the batch's de-duplication and MCGS identity, where it subsumes the turn-start flag; `t5d_search_new` takes the handle's count and checks `turn_start` against it (tested two moves into an action, from C++ and Python, where a flag's 0 or 1 cannot pass); `advance_moves` and `advance_action` carry the tree at each count (tested, tree and graph). §15.2's A6 row: `test_turn_state.cpp` recounts the three from the rulebook at every state of random play under every ruleset (both Q4 readings), through the expansion and a `t5d_game`, and checks the spec's arithmetic move by move where no activity changes (issues 143-145). Next: the net lane's inputs - `PositionState`'s counts, the embedding, the converter's copy and cross-check, and `cache.state_digest` (an epoch's anchor), which takes the count when the network's input does |
-| A7 | built, tested | Perspective canonicalisation (`lane/net`, N-A7). The network reads every input from the acting player's side (`net/state.py`: `token_arrays` and `collate`; `PositionState` keeps the engine's absolute facts): owners ours/theirs (A2's colour table renamed `embed.owner` - no parameter changes, F1 as it was), each board's side to move us/them, ranks mirrored (`y -> H-1-y`) and timelines negated when Black acts (`p -> -p`, or `-1 - p` in a ±0 variant - §12.6's index mapping, so the state carries `even_start`, the engine's `Expansion.even`); file, time and Δt unchanged. Only features and coordinates change: the tokens keep their order, so every token-indexed output - policy and reply moves, per-board, per-square - maps back by the identity, the per-square labels by swapping ours and theirs (`heads.square_labels_by_colour`; the labels relabelled ours/theirs, issue 226); values are the acting player's (D8). The acting colour stays an input: D8's embedding on the global registers (issue 228). Cached path (C2): frozen K/V keyed by the acting player (`board_ident(..., acting=True)`), the search root's history built from both sides and a refresh's dense pass run from each (`cache.viewed_by`) - issue 303's cost, logged for C2. §15.2's row as issue 304 reads it: `state.mirror` (each board one half-turn later, issue 227); `tests/net/test_perspective.py` - canonical inputs bit-identical at the mirrored token but for the acting colour, outputs equal mapped back with the colour's rows tied (FP32 1e-5; BF16 no further than its own FP32 distance), different untied; 18 constructions (many timelines, deep travel, duplicated boards, ±0, fairy pieces, past the shift with submit legal/masked/absent, 7x7 to 1x1, far apart, no global registers), 3 seeds, both scopes, B5/B10/B11/B12/B17 and B15 off, the cached path under both supersession readings with and without a root refresh; `tests/engine/test_perspective_engine.py` - the engine's own 5DFEN mirror converts to `state.mirror` of the conversion, moves and relations included, both acting colours, every variant, and the network agrees on the two. Mutants run at test time (no file edited): no rank mirror, no timeline negation, absolute owners, absolute side to move, frozen keys without the perspective - each caught; `-p` for `-1 - p` in a ±0 variant is invisible to the outputs (recentring) and caught by the canonical-input test |
+| A7 | built, tested | Perspective canonicalisation (`lane/net`, N-A7). The network reads every input from the acting player's side (`net/state.py`: `token_arrays` and `collate`; `PositionState` keeps the engine's absolute facts): owners ours/theirs (A2's colour table renamed `embed.owner` - no parameter changes, F1 as it was), each board's side to move us/them, ranks mirrored (`y -> H-1-y`) and timelines negated when Black acts (`p -> -p`, or `-1 - p` in a ±0 variant - §12.6's index mapping, so the state carries `even_start`, the engine's `Expansion.even`); file, time and Δt unchanged. Only features and coordinates change: the tokens keep their order, so every token-indexed output - policy and reply moves, per-board, per-square - maps back by the identity, the per-square labels by swapping ours and theirs (`heads.square_labels_by_colour`; the labels relabelled ours/theirs, issue 226); values are the acting player's (D8). The acting colour stays an input: D8's embedding on the global registers (issue 228). Cached path (C2): frozen K/V keyed by the acting player (`board_ident(..., acting=True)`), the search root's history built from both sides and a refresh's dense pass run from each (`cache.viewed_by`) - issue 303's cost, logged for C2. §15.2's row as issue 304 reads it: `state.mirror` (each board one half-turn later, issue 227); `tests/net/test_perspective.py` - canonical inputs bit-identical at the mirrored token but for the acting colour, outputs equal mapped back with the colour's rows tied (FP32 1e-5; BF16 no further than its own FP32 distance), different untied; 18 constructions (many timelines, deep travel, duplicated boards, ±0, fairy pieces, past the shift with submit legal/masked/absent, 7x7 to 1x1, far apart, no global registers), 3 seeds, both scopes, B5/B10/B11/B12/B17 and B15 off, the cached path under both supersession readings with and without a root refresh; `tests/engine/test_perspective_engine.py` - the engine's own 5DFEN mirror converts to `state.mirror` of the conversion, moves and relations included, both acting colours, each of the 16 named variants the engine sets up (its whole table, `helpers.ENGINE_VARIANTS`), and the network agrees on the two. Review fixes: a refresh's other-colour view (`viewed_by`) carries no moves and no edges (issue 229; a placeholder fixed in code), tested on synthetic and engine positions; `state.mirror` negates timelines by its own arithmetic, not through `canonical_timeline` (a wrong self-inverse map would cancel), so the identity and `-p`-for-`-1 - p` mutants of `canonical_timeline` are caught. **For A8 (not built):** the board-layout embedding must flatten each board in canonical (x, y) order - ranks mirrored when Black acts - not storage order, or A7 breaks for Black. Mutants run at test time (no file edited): no rank mirror, no timeline negation, absolute owners, absolute side to move, frozen keys without the perspective - each caught; `-p` for `-1 - p` in a ±0 variant is invisible to the outputs (recentring) and caught by the canonical-input test |
 | A8 | not started | The board-layout embedding - a prototype (6p): net lane, behind its flag, with §15.3's cost row |
 | B1, B2, B4 | built, tested | Network N1: one weight set, unified attention, 4D RoPE (whose positional term factorises per axis - joint-axis geometry is B15's, register B4) |
 | B8 | built, tested | Network N1's 2 + 16 registers, at the ruled positions (CHECKPOINT 6, M20; `lane/net` N-M20): per-board registers rotated on timeline and time only, global registers position-free on every pair - no switch. The arms M20 disposed of are gone: `board_register_spatial` (`learned_angle`, the old default, with its 2 x 2 learned coordinates, and `zero_angle`), `global_register_pairs` (`anchored`) and the attention context's `global_free`. Aux heads pool the squares; the value-type heads and the submit logit pool the global registers by mean (D3, D8; issue 223). Cost: the CPU kernel path widens Q/K/V to 44 for every row and recomputes the register rows (indicatively +20% / +55% per attention call at 240 boards, BF16 / FP32, against one plain call - `attention.py`; not a measurement); N3's counted dense FLOPs (MEASUREMENTS, 2026-10-02) were taken with the old `learned_angle` registers - to re-count, with the wall times, in step 2's quiet-machine block |
@@ -2245,10 +2245,13 @@ superseded or made moot says so; nothing is deleted.
     intrinsic identity, which does not depend on who acts. Built eagerly: a search root's
     frozen boards are computed from both sides when its epoch is made, and a refresh runs
     the dense pass over its anchor twice - as it is, and with the other colour acting
-    (`cache.viewed_by`: the same boards, no submit offered) - so no node computes a root
-    board again whoever acts. The cost, by construction: a store holds two entries per
-    frozen board once both colours' nodes are reached (twice §15.3's "KV memory per
-    state", which is one perspective's - the per-state figure itself is unchanged); the
+    (`cache.viewed_by`: the same boards, no submit offered, and - review fix, issue 229 -
+    no moves and no edges, the anchor's being its acting player's) - so no node computes a
+    root board again whoever acts. The cost, by construction: the other side is computed
+    eagerly, so every store holds two entries per root (or refresh anchor) frozen board
+    from the moment its epoch is made (twice §15.3's "KV memory per state" for those
+    boards, which is one perspective's - the per-state figure itself is unchanged); a
+    board superseded later gets its second entry only when the other colour reads it; the
     history build and every refresh cost twice their one-perspective figures (the root
     refresh row's analytic 3.64% / 6.13% at 800 simulations become 7.3% / 12.3%); a
     supersession computes a board once per perspective that reaches it. Counted and timed
@@ -2706,6 +2709,31 @@ superseded or made moot says so; nothing is deleted.
     facts"). Built (`lane/net`, N-A7): one input, D8's embedding indexed by the acting
     colour, on the global registers (with none, issue 225's placeholder). Proposed edit
     169.
+229. **What a refresh's dense pass reads from the other colour's side** (§7.9, §7.7,
+    §2.2; register C2, C3, A7, B9). Under A7 a refresh conditions history per perspective
+    (issue 303): the dense pass over the anchor runs once as the anchor is and once with
+    the other colour acting (`cache.viewed_by`). The anchor's moves, move graph and typed
+    relations are its acting player's - the engine builds them "only for the player to
+    move's pieces" (`engine/convert.py`), and strict conversion refuses a state whose
+    moves are not the acting player's - so kept in the other colour's view every one of
+    them starts on "their" pieces, and under B9's mask (`move_graph_direction`
+    "symmetric") frozen squares attend along them: an input no conversion produces,
+    encoded into the history K/V of every node the other colour acts at (found in review:
+    a Standard position with Black acting, all 89 move-edge sources "ours" in the own
+    view, "theirs" in the other; 20 of the edges on frozen boards). The sound input would
+    be the other colour's own move graph on those boards, but no expansion supplies it -
+    the anchor's boards with the other colour acting are no game state (T5) and the
+    network computes no rule. §7.9 says only that the refresh pass "is the ordinary dense
+    model", which presumes the anchor's own view. Built (`lane/net`, N-A7 review fixes):
+    the other colour's view carries no moves, no reply moves and no edges (a position with
+    no move is one conversion produces) - COMMITTED-CLASS SILENCE under the deferred cached
+    configuration, a placeholder fixed in code (`viewed_by`), with no second arm until
+    something supplies the other colour's move graph. `reference_output`'s anchor pass
+    takes the same view; tested on synthetic states and on the engine's positions of both
+    acting colours (`test_the_other_perspectives_anchor_*`). Conditioning-offset training
+    (§7.9) must take the same view whenever the ancestor's acting player is not the
+    training position's, or train and deploy differ (§7.7). For the user with C2's
+    decision. Proposed edit 170.
 
 <!-- A new list, so that the numbers from 140 render as written. -->
 
@@ -3467,6 +3495,15 @@ struck through, where nothing of it is left to apply); the others stand as writt
 169. **Register A6 (with §2.3)**: now - "acting player and acting colour (D8; A7)".
     Proposed - "the acting colour (D8; under A7 the acting player is always 'us')". Why:
     one input serves both (issue 228).
+170. **§7.9's refresh pass (with the main loop's edit 201; register C3)**: now - "The
+    refresh pass itself is the ordinary dense model"; conditioning-offset training runs
+    "the refresh pass on the position k plies earlier". Proposed - add, under A7: "from
+    each acting colour's side; from the side of the colour not acting at the anchor, its
+    boards with that colour acting and no moves or relations (the anchor's are its acting
+    player's) - in search and in offset training alike". Why: otherwise the other colour's
+    history K/V are computed from the anchor's moves and relations starting on the
+    opponent's pieces, an input no position produces, and the two paths may disagree
+    (issue 229).
 
 <!-- A new list, so that the numbers from 110 render as written. -->
 

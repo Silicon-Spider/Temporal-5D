@@ -68,7 +68,8 @@ belongs to an epoch's history by its intrinsic identity (coordinates and content
 under ``frozen_features="current"`` a history board stays one when the present moves, and it
 belongs whoever acts. Its refreshed K/V are per perspective (register A7; spec issue 303): a
 refresh runs the dense pass over the anchor once from each colour's side - the anchor as it
-is, and the same boards with the other colour acting (``viewed_by``) - so a node of either
+is, and the same boards with the other colour acting and no moves or edges (``viewed_by``:
+the anchor's are its acting player's; a placeholder, spec issue 229) - so a node of either
 acting player reads history encoded in its own frame; about twice one refresh's compute and
 history memory, a cost of the deferred cached configuration (C2).
 
@@ -705,11 +706,38 @@ def _live_rows(fast: _FastPath, ctx: AttnContext, blocks: list[tuple[int, int]],
 def viewed_by(state: PositionState, acting: int) -> PositionState:
     """``state``'s boards with ``acting`` (0 white, 1 black) the acting player: ``state``
     itself when that is its own; otherwise the same boards read from the other colour's side
-    (register A7), with no submit action offered (the submit flags reach no K/V). The view a
-    refresh's dense pass over its anchor takes for each acting colour (spec issue 303)."""
+    (register A7), with no submit action offered (the submit flags reach no K/V), no moves and
+    no edges. The view a refresh's dense pass over its anchor takes for each acting colour
+    (spec issue 303).
+
+    The other colour's view drops ``moves``, ``opp_moves`` and every edge - the move graph
+    and the typed relations - because all of them are the anchor's acting player's: the
+    engine builds the move graph and the typed relations "only for the player to move's
+    pieces on the boards its moves start from" (``engine/convert.py``), and a strict
+    conversion refuses a state whose moves are not the acting player's. Kept, they would
+    make every move edge start on "their" pieces, and under the move-graph heads' mask (B9,
+    ``move_graph_direction``) frozen squares would attend along them in the dense pass -
+    an input no conversion produces, encoded into the history K/V of every node the other
+    colour acts at. The other colour's own move graph on these boards would be the sound
+    input, but no expansion supplies it: the anchor's boards with the other colour acting
+    are no game state (the action is the anchor's acting player's, T5), and the network
+    computes no rule. A position with no moves and no edges is one conversion does produce
+    (a player with no move). COMMITTED-CLASS SILENCE (C2, C3: what the dense pass over a
+    refresh's anchor reads from the other colour's side; spec issue 229) - a placeholder,
+    fixed in code: no second arm can be built until something supplies the other colour's
+    move graph."""
     if int(acting) == int(state.acting_player):
         return state
-    return replace(state, acting_player=int(acting), submit_possible=False, submit_legal=False)
+    none = np.zeros((0, 3), dtype=np.int64)
+    return replace(
+        state,
+        acting_player=int(acting),
+        submit_possible=False,
+        submit_legal=False,
+        moves=none,
+        opp_moves=none.copy(),
+        edges=none.copy(),
+    )
 
 
 def _capture_into(captured: list) -> object:
