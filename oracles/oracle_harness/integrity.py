@@ -27,8 +27,13 @@ cannot modify; harness changes require review. Here:
     recorded answer too, kept apart from golden/: oracles/engine-baseline.json,
     pinned by its SHA-256 in gate.toml [baseline] (as the rulebook is), so that
     re-recording the oracles never re-pins it; written only by
-    `baseline --write`, and verified against its pin before it is compared
-    (baseline.py);
+    `baseline --write`, and verified against its pin before every read - a
+    comparison, `verify`, and `baseline --write`'s own list of what a new
+    baseline no longer holds (baseline.py). The pin's limit is MANIFEST's: a
+    file edited together with its pin passes it, and only review catches that.
+    What shows such an edit in review is that the file and its pin change only
+    together, one line per record, and that `verify` fails a baseline missing a
+    line for a record of its tier;
   * a hash of every harness file, taken when a gate run starts and again when it
     ends - every file under oracles/ but its caches (.cache/ and the like, and
     __pycache__/, whose bytecode harness.py never runs) and the pinned oracles

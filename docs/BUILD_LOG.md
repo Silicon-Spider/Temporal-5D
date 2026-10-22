@@ -1521,7 +1521,7 @@ commits (F5 and F6 on `lane/net`, H47 and H48 on `lane/gate`, M22 on `lane/engin
 | H44 | built in part | The audit lane's tools: the certificate checker (E4 alone) and `t5d-hunt-truth` (E9); the decision sampler, the offline proof runner and the per-range report were E10's - lost, redone in step 2 (curriculum hooks as interfaces only) |
 | H45 | not built (rule) | The adversarial league (M5) |
 | H46 | built, tested | Q2 (provisional): initial timelines count as created by neither player - a variant's set-up reads every timeline as initial (rulebook R10) |
-| H47 | built, tested | Tiered CI reading (Q-A at CHECKPOINT 6, amended at CHECKPOINT 8; spec issues 122-124 ruled, built 2026-10-17). **Two oracles to gate a ruleset**: every record of a ruleset followed, as far as the engine went, by at least two independent implementations (`gate.GATING_ORACLES`; two searches of one count once, the notation parser never), in every tier - so the commit tier, with one rules oracle, can gate nothing at all. **The check that some ruleset is gated** (`engine-nothing-gated`, and `GateResult.ok`'s test of it) runs only in a tier that runs every oracle search over the whole corpus (`Tier.full_strength`: nightly, release) - keyed to what a tier runs, never its name; any other tier - commit - is a smoke test, and its summary (`engine differential: SMOKE TEST - ...`) and report (`smoke_test`; nothing under `gated`) say that it gates nothing. **The commit tier's last-green-run rule**: the engine's baseline, `oracles/engine-baseline.json` - written by `harness.py baseline --write` from a green run of the commit tier, pinned in `gate.toml` `[baseline]`, checked by `verify` and before every comparison; recorded 2026-10-17 from the engine as built on `lane/gate`, 35 of the 41 commit records replayed - and every tier fails an engine that declines a record it read then (`engine-declined`) or reads none (`engine-read-nothing`). **Restricted runs** (`--source`/`--record`) never produce a tier verdict: labelled "restricted - not a tier result", findings only, the exit code from them, no check of a tier as a whole - undoing issue 124's first reading. In every tier an unexplained divergence, a telltale or a contract breach fails the engine; `gate.toml` is refused if a tier that is not full strength sets `require_engine`; the release tier's named-variant rule, the proof-channel line and parse mode are unchanged. Run 2026-10-17 with the engine configured: commit SMOKE TEST - PASSED (baseline: 41 records compared, 0 declined); nightly PASSED, gating Standard - Half Reflected (2 oracles behind its record) and Standard - Reversed Royalty (3), and not Standard - Turn Zero (one oracle behind cwmtt/tesseractMageOChicken); a restricted run (`gate --tier nightly --source ftxi --record cwmtt/standard`) labelled "restricted - not a tier result", 0 findings. Spec issues 122-124, 131-133; proposed edits 103-104 |
+| H47 | built, tested | Tiered CI reading (Q-A at CHECKPOINT 6, amended at CHECKPOINT 8; spec issues 122-124 ruled, built 2026-10-17). **Two oracles to gate a ruleset**: every record of a ruleset followed, as far as the engine went, by at least two independent implementations (`gate.GATING_ORACLES`; two searches of one count once, the notation parser never), in every tier - so the commit tier, with one rules oracle, can gate nothing at all. **The check that some ruleset is gated** (`engine-nothing-gated`, and `GateResult.ok`'s test of it) runs only in a tier that runs every oracle search over the whole corpus (`Tier.full_strength`: nightly, release) - keyed to what a tier runs, never its name; any other tier - commit - is a smoke test, and its summary (`engine differential: SMOKE TEST - ...`) and report (`smoke_test`; nothing under `gated`) say that it gates nothing. **The commit tier's last-green-run rule**: the engine's baseline, `oracles/engine-baseline.json` - written by `harness.py baseline --write` from a green run of the commit tier, pinned in `gate.toml` `[baseline]`, checked by `verify` and before every comparison; recorded 2026-10-17 from the engine as built on `lane/gate`, 35 of the 41 commit records replayed - and every tier fails an engine that declines a record it read then (`engine-declined`) or reads none (`engine-read-nothing`). **Restricted runs** (`--source`/`--record`) never produce a tier verdict: labelled "restricted - not a tier result", findings only, the exit code from them, no check of a tier as a whole - undoing issue 124's first reading. In every tier an unexplained divergence, a telltale or a contract breach fails the engine; `gate.toml` is refused if a tier that is not full strength sets `require_engine`; the release tier's named-variant rule, the proof-channel line and parse mode are unchanged for a complete run - a restricted run's proof channel reads `DISABLED - restricted - not a tier result`, and it makes neither parse mode's `engine-nothing-compared` floor nor the release tier's proof-channel readiness check (`proof-channel-vacuous`; review fix 2026-10-22). The baseline (review fixes 2026-10-22): `baseline --write` reads the baseline it replaces verified against its pin and records nothing over one that is not the one pinned, so that a hand edit cannot empty its `LOSS` list; `verify` fails a baseline that holds no line for a record of its tier; like MANIFEST's, the pin catches an accident, not the file and its pin edited together - review's job (H33). `AGENTS.md` names neither the baseline nor its pin: its "Never make the gate pass by ..." list should add "editing `oracles/engine-baseline.json` or its `gate.toml` `[baseline]` pin by hand, or recording a `LOSS` with `baseline --write`", and "Things you must not touch" the file and its pin, written only by `baseline --write` - the instruction files are the user's to change, so the edit is put to the user (as H38's for `CLAUDE.md`). Run 2026-10-17 with the engine configured: commit SMOKE TEST - PASSED (baseline: 41 records compared, 0 declined); nightly PASSED, gating Standard - Half Reflected (2 oracles behind its record) and Standard - Reversed Royalty (3), and not Standard - Turn Zero (one oracle behind cwmtt/tesseractMageOChicken); a restricted run (`gate --tier nightly --source ftxi --record cwmtt/standard`) labelled "restricted - not a tier result", 0 findings. Spec issues 122-124, 131-133; proposed edits 103-104 |
 | H48 | not started | Before the proof-channel sign-off: the naive searches' release budgets raised and the golden files re-recorded twice, on a quiet machine, so that no proof-channel check is vacuous (`verify`'s 17 `proof-channel-vacuous` notes) |
 | H15 | built, tested | The scanner's deterministic single-thread mode; the search's synchronous mode and digest (E6a; the digest in the C API) |
 | H16, H25, H29 | not built (rule) | Refused |
@@ -2590,8 +2590,8 @@ superseded or made moot says so; nothing is deleted.
     the check test upstream - one report would answer all 147 entries - or read
     §11.0's clause as applying to defects (proposed edit 99)? Nothing is parked on
     it.
-    *Ruled at CHECKPOINT 8: report it too - as a question citing the source and a few representative positions, not as a bug, drafted in `docs/checkpoints/upstream/` and filed by the owner (H27) - gate step 3b.*
-    *Built 2026-10-17 (gate step 3b): `docs/checkpoints/upstream/ftxi-check-test-passed-boards.md` asks ftxi's author which boards the check test should pass - `state::phantom()` passes every timeline whose last board is the player's, R1 only the active boards in the present - citing the sources R1 rests on as the rulebook ranks them (the current Guide, silent on it; the older guide text and the developer's remark, "in the present"; Wikipedia's sentence, which R1 adopts) and the evidence the other way, with five positions, one from each of CHECKPOINT 1's rule questions RQ1-RQ4, re-observed through the pinned library. The 147 R1 entries' `upstream` says the question is drafted, to be filed by the project owner; no binding or citation changed. Proposed edit 99 (b) applies: no edit until it is filed.*
+    *Ruled at CHECKPOINT 8: report it too, as a question citing the source and a few representative positions, not as a bug (H27) - drafted in gate step 3b; the user files it.*
+    *Built 2026-10-17 (gate step 3b): `docs/checkpoints/upstream/ftxi-check-test-passed-boards.md` asks ftxi's author which boards the check test should pass - `state::phantom()` passes every timeline whose last board is the player's, R1 only the active boards in the present - citing the sources R1 and C7 rest on as the rulebook ranks them (the current Guide, silent on it; the older guide text and the developer's remark, "in the present"; Wikipedia's sentence, which R1 adopts, wiki.gg's Exiling page and TV Tropes, with C7's caveat; the forum statements C7 cites, on boards ahead of the present and on inactive timelines) and the evidence the other way, with five positions, one from each of CHECKPOINT 1's rule questions RQ1-RQ4, re-observed through the pinned library (the captures ftxi's royal-capture scanner lists on the phantom, `check_position::for_phantom(...).checks()`, the view behind `has_phantom_check()`). The 147 R1 entries' `upstream` says the question is drafted, to be filed by the project owner; no binding or citation changed. Proposed edit 99 (b) applies: no edit until it is filed.*
 127. **Issue 122 and proposed edit 98 (b), measured** (2026-10-17, the engine
     configured; step 2). Both are as put to the user; this is the measurement edit
     98 (b) waits on. In the commit tier no ruleset meets the gating conditions with
@@ -2703,9 +2703,13 @@ superseded or made moot says so; nothing is deleted.
     of every run, and nothing outside the harness may name it); pinned by its SHA-256
     in `gate.toml` `[baseline]`, as the rulebook is (H38) - not in `golden/MANIFEST`,
     which every `golden --write` rewrites; verified against its pin before every
-    comparison (the snapshot) and by `verify` (`engine-baseline-missing`,
-    `-integrity`, `-invalid`, `-stale`); one record per line, `baseline --write`
-    listing what the new file no longer holds (`LOSS`) first. So "the last green run"
+    read - every comparison (the snapshot), `verify` (`engine-baseline-missing`,
+    `-integrity`, `-invalid`, `-stale`, the last also for a record of the tier it
+    holds no line for), and `baseline --write`'s read of the baseline it replaces,
+    which records nothing over a file that is not the one pinned (review fix
+    2026-10-22); one record per line, `baseline --write` listing what the new file
+    no longer holds (`LOSS`) first. Like MANIFEST's (H33), the pin catches an
+    accident, not the file and its pin edited together: that is review's job. So "the last green run"
     is the last one recorded: a gate run never records itself (H33), and a later
     green run moves the baseline only when someone records it - which is also what
     keeps an engine that comes to read less from moving it unreviewed. Recorded
@@ -2752,10 +2756,14 @@ superseded or made moot says so; nothing is deleted.
     a tier result`. It reports every finding - of the oracle layer and against the
     engine, a decline from the baseline included - and exits 1 on any, 0 on none.
     Not made, as checks of a tier as a whole: `engine-nothing-gated`,
-    `engine-read-nothing`, parse mode's `engine-nothing-compared`, and a tier's
-    `require_engine`. Its report is `gate-<tier>-restricted.json` (`restricted`,
-    `restricted_to`; `oracle_layer_ok` null, `engine` "compared", nothing under
-    `gated`/`ungated`), so it never stands in for a complete run's. This undoes the
+    `engine-read-nothing`, parse mode's `engine-nothing-compared`, a tier's
+    `require_engine`, and the release tier's proof-channel readiness
+    (`proof-channel-vacuous`, which `verify` still prints; review fix 2026-10-22).
+    Its report is `gate-<tier>-restricted.json` (`restricted`, `restricted_to`; the
+    tier verdicts `ok` and `oracle_layer_ok` null - `ok` too since the review fix,
+    so that no script reads a restricted run as a tier pass - its `findings` listed,
+    `engine` "compared", nothing under `gated`/`ungated`), so it never stands in for
+    a complete run's. This undoes the
     reading of issue 124 (a restricted run kept its tier's rule). Proposed edit 103.
     Nothing is parked on it.
 
@@ -3509,10 +3517,13 @@ struck through, where nothing of it is left to apply); the others stand as writt
     baseline (H47) is a recorded answer too: written only by an explicit command
     from a green run, pinned by its hash in the gate's policy beside the rulebook's
     pin - not in the golden manifest, so that re-recording the oracles never re-pins
-    it - and verified before every comparison." H33, after "verified before every
-    comparison": "(the oracles' golden files, and the engine's baseline of what it
-    read on the last green run)". Why: H33 covers recorded answers, and the baseline
-    is one (issue 132).
+    it - and verified before every read, the command's own read of the baseline it
+    replaces included; like the manifest, its pin guards against accident, not a
+    deliberate edit of the file and its pin together - that is review's job." H33,
+    after "verified before every comparison": "(the oracles' golden files, and the
+    engine's baseline of what it read on the last green run)", and its sentence on
+    the manifest's limit extended to the baseline's pin. Why: H33 covers recorded
+    answers, and the baseline is one (issue 132).
 
 <!-- A new list, so that the numbers from 200 render as written. -->
 

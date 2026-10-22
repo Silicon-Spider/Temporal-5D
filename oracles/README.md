@@ -637,8 +637,9 @@ they still count against it: the check gets harder, not easier. Otherwise a
 source could be listed in the tier and starved of time, and the tier would pass
 on answers nobody asked for. This replaces a 90% ratio of reproduced answers
 that used to be fixed in the code, and like it, it is about enabling the proof
-channel: `verify` prints it, and a run of that tier fails on it; a run of any
-other tier, which can enable nothing, does not. Its remedy is the tier's budget
+channel: `verify` prints it, and a complete run of that tier fails on it; a run
+restricted with `--source` or `--record`, and a run of any other tier, which can
+enable nothing, do not. Its remedy is the tier's budget
 for the source - which is also the recording budget, so changing it means
 re-recording.
 
@@ -689,7 +690,14 @@ cannot modify; harness changes require review (design spec §11.0).
   it (every `golden --write` rewrites MANIFEST). It is written only by
   `harness.py baseline --write`, after a green run - never by a gate run, and never
   by the engine, which may not name anything in the harness - and every read
-  verifies it against its pin first (`engine-baseline-integrity`).
+  verifies it against its pin first (`engine-baseline-integrity`): a gate run's,
+  `verify`'s, and `baseline --write`'s own read of the baseline it replaces, which
+  it lists the new one's losses against - so it runs and writes nothing while the
+  file on disk is not the one pinned. The pin's limit is MANIFEST's: a file edited
+  together with its pin passes it, and only review catches that. What shows such an
+  edit in review is that the file and its pin change only together, one line per
+  record, and that `verify` fails a baseline that holds no line for a record of its
+  tier (`engine-baseline-stale`), so a line cannot simply be deleted.
 - A gate run reads the golden, cost and calibration files, the engine's baseline
   and `known-divergences.toml` once, when it starts, verified, and hands that one
   snapshot to every consumer: nothing is read from them again while it runs, so the
@@ -909,9 +917,12 @@ rules oracle over the commit records, and so could gate no ruleset in any case -
 is a **smoke test** (H47): what it says of the rulesets is never a gating verdict,
 and it fails an engine only on a finding against it. Its last lines say
 `engine differential: SMOKE TEST - PASSED` (or `FAILED`) and that the tier gates
-nothing; every ruleset is listed as `NOT gated`, one that met the conditions with
-the tier's oracles alone saying so; and the report holds no ruleset under
-`gated`, and the reason under `smoke_test`. The gate tells the two kinds of tier
+nothing; every ruleset is listed as `NOT gated`, with its reason - in the commit
+tier, with one rules oracle, never that it met the gating conditions, which no
+ruleset can there; in a smoke test of a tier with two oracles (a tier cut to some
+of nightly's records, say), one that met them with that tier's oracles alone says
+so; and the report holds no ruleset under `gated`, and the reason under
+`smoke_test`. The gate tells the two kinds of tier
 apart by what a tier runs (`Tier.full_strength`), never by its name or by a count
 of oracles. A smoke test still fails an engine that declines a record it read on
 the last green run, or that reads none (H47, CHECKPOINT 8; below) - so an engine
@@ -961,21 +972,30 @@ line, so that a re-recording is reviewed as a diff:
   (a finding about that record), but not reading none (a check of a tier as a
   whole). With an engine compared in full mode, `verify` fails while no baseline
   is pinned, or the file is not the one pinned (`engine-baseline-missing`,
-  `-integrity`, `-invalid`), or it is about record text the corpus no longer holds
-  (`engine-baseline-stale`).
+  `-integrity`, `-invalid`), or it is about record text the corpus no longer holds,
+  or holds no line for a record of its tier (`engine-baseline-stale`) - so a
+  commit-tier record added to the corpus, or one whose text a pin bump changed,
+  needs a new baseline (`CONTRIBUTING.md` says when, in its procedures for adding
+  records and changing a pin).
 
 ```
 python oracles/harness.py baseline           # is engine-baseline.json the baseline gate.toml pins, and current?
 python oracles/harness.py baseline --write   # run the [baseline] tier in full; if it is green, record and pin it
 ```
 
-`baseline --write` runs the tier in full with the engine - checking nothing of the
-old baseline and comparing nothing with it, since it is being replaced - and
-records what the engine read only if the run is green on everything else, reading
-none included: never from a run that is not. It then lists what the new baseline
-holds otherwise than the one it replaces, losses first: a record the engine now
-reads less of is one the commit tier no longer holds it to - a loss of checking,
-never churn, and never recorded to make a gate run pass.
+`baseline --write` first reads the baseline it replaces, verified against its pin
+like every read of it: where the file on disk is not the one pinned - edited by
+hand, or gone - it runs and writes nothing (restore it: `git checkout --
+oracles/engine-baseline.json`). It then runs the tier in full with the engine -
+comparing it with no baseline, since one is being replaced - and records what the
+engine read only if the run is green on everything else, reading none included:
+never from a run that is not. Last, it lists what the new baseline holds otherwise
+than the pinned one, losses first: a record the engine now reads less of is one
+the commit tier no longer holds it to - a loss of checking, never churn, and never
+recorded to make a gate run pass. The pin, like MANIFEST, guards against
+accident, not against the file and its pin changed together - by hand, or by
+recording a loss: that is review's to catch (H33; "Recorded-answer integrity",
+above).
 
 The proof channel may be enabled only by a complete run of a tier that requires an
 engine and runs every oracle search over the whole corpus (the `release` tier),
@@ -1114,10 +1134,14 @@ on the last green run and now declines, a lost required value - and its exit cod
 reflects those findings only: 1 if it made any, 0 if not. The checks that judge a
 tier as a whole are not made: that the engine came through some ruleset
 (`engine-nothing-gated`), read some record (`engine-read-nothing`), or was compared
-at all (parse mode's `engine-nothing-compared`), and that a tier which requires an
-engine has one. Its report is `gate-<tier>-restricted.json` in the harness cache,
-with `restricted` and `restricted_to` set, `oracle_layer_ok` null, and nothing
-under `gated` or `ungated`, so it never stands in for a complete run's.
+at all (parse mode's `engine-nothing-compared`); that a tier which requires an
+engine has one; and that a tier which can enable the proof channel requires enough
+of each source to enable it (`proof-channel-vacuous`, about enabling the proof
+channel, which a restricted run never does - `verify` still prints it). Its report
+is `gate-<tier>-restricted.json` in the harness cache, with `restricted` and
+`restricted_to` set, the verdicts of a tier - `ok`, `oracle_layer_ok` - null, its
+`findings` listed, and nothing under `gated` or `ungated`, so it never stands in
+for a complete run's.
 
 `observe` can also ask a source's driver for two diagnostics, which it prints after
 the report as one JSON object per line. They are never compared and never

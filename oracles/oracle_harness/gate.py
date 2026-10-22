@@ -26,8 +26,10 @@ other: it could gate nothing).
 A run restricted with --source or --record never produces a tier verdict (H47,
 CHECKPOINT 8): its summary and report say "restricted - not a tier result", it
 gates nothing, applies none of the checks that judge a tier as a whole (that the
-engine read some record, came through some ruleset, was compared at all), never
-enables the proof channel, and its exit code reflects its findings only.
+engine read some record, came through some ruleset, was compared at all; that a
+tier which requires an engine has one; that a tier which can enable the proof
+channel requires enough of each source to enable it), never enables the proof
+channel, and its exit code reflects its findings only.
 
 Each run reads what it compares against once, verified (snapshot.py, H33); then
 requires 100% of each tier's required set of recorded answers (stability.py,
@@ -492,8 +494,9 @@ def proof_channel_readiness(cfg: config.GateConfig, records: list[Record], froze
     It replaces a ratio of recorded answers fixed in the code (90%): such a tier
     must require every terminal verdict each source recorded and the reviewed
     share of its stable values ([stability] proof_share). Like that ratio, it
-    is about enabling the proof channel: `verify` prints it, and a run of such a
-    tier fails on it - a run of any other tier, which can enable nothing, does not.
+    is about enabling the proof channel: `verify` prints it, and a complete run of
+    such a tier fails on it - a restricted run of it, and a run of any other tier,
+    which can enable nothing, do not (H47, CHECKPOINT 8).
     """
     if any(frozen.problems.get(name) for name in ORACLE_SOURCES) or frozen.manifest_problems:
         return None  # the golden files say why
@@ -922,8 +925,9 @@ def run_tier(
                         engine_mode=cfg.engine_mode, margin=cfg.stability.margin, restricted_to=restricted_to)
     result.sections += static_checks(lock, cfg, all_records, frozen, include_untracked=include_untracked,
                                      baseline_checks=compare_baseline)
-    if tier.can_enable_proof_channel:
-        # H32: a tier that can enable the proof channel must not require next to nothing.
+    if tier.can_enable_proof_channel and not result.restricted:
+        # H32: a tier that can enable the proof channel must not require next to nothing. A check of the tier as a whole,
+        # about enabling the proof channel, which a restricted run never does: not made there (H47, CHECKPOINT 8).
         readiness = proof_channel_readiness(cfg, all_records, frozen)
         if readiness is not None:  # otherwise the golden files cannot be read, and their section says why
             result.sections.append((PROOF_SECTION, readiness))
@@ -1085,9 +1089,9 @@ def _write_report(result: GateResult, results: runner.Results, cfg: config.GateC
         # to; null for a complete run of the tier.
         "restricted": RESTRICTED if restricted else None,
         "restricted_to": result.restricted_to,
-        # For a restricted run, only whether it found nothing - all its exit code says; otherwise the tier's verdict.
-        "ok": result.ok,
-        # Verdicts of a tier: null in a restricted run.
+        # Verdicts of a tier: null in a restricted run, which states none - what it found is `findings`, and whether it
+        # found anything is all its exit code says.
+        "ok": None if restricted else result.ok,
         "oracle_layer_ok": None if restricted else result.oracle_layer_ok,
         "engine": ("compared" if result.engine != "not configured" else result.engine) if restricted else result.engine,
         "engine_mode": result.engine_mode,
@@ -1355,10 +1359,13 @@ def write_baseline(*, jobs: int | None = None, include_untracked: bool = True, l
     """Run the baseline's tier in full with the engine and, if the run is green, record what the engine read (H47).
 
     Returns (the run, what the new baseline holds differently from the one it replaces - losses first), with None in
-    place of the second where nothing was written. The run neither checks the old baseline nor compares the engine
-    with it - it is being replaced - and must be green on everything else, the rule that the engine reads some record
-    included: a complete run of gate.toml [baseline]'s tier (never restricted), the engine in full mode. The file is
-    written, then pinned in gate.toml (baseline.write). Never called by a gate run: only `baseline --write` (H33).
+    place of the second where nothing was written. What it holds differently is taken against the baseline gate.toml
+    pins, read verified like every read of a recorded answer (H33): where the file on disk is not the one pinned -
+    edited by hand, gone - nothing is run or written, so that an edit can never empty the list of losses. The run
+    compares the engine with no baseline - it is being replaced - and must be green on everything else, the rule that
+    the engine reads some record included: a complete run of gate.toml [baseline]'s tier (never restricted), the
+    engine in full mode. The file is written, then pinned in gate.toml (baseline.write). Never called by a gate run:
+    only `baseline --write` (H33).
     """
     cfg = config.load()
     spec = cfg.baseline
@@ -1370,11 +1377,17 @@ def write_baseline(*, jobs: int | None = None, include_untracked: bool = True, l
     if cfg.engine_mode != "full":
         raise HarnessError(f"the baseline records what the engine read in full mode, and [engine] mode is "
                            f"'{cfg.engine_mode}'")
+    previous = None  # no baseline pinned yet: every record is new
+    if spec.sha256:
+        try:
+            previous = baseline.load(spec.sha256)
+        except baseline.BaselineError as error:
+            raise HarnessError(f"{error}. Nothing was run or written: a new baseline is recorded only over the one "
+                               "gate.toml pins, against which it lists what it no longer holds (H33)") from None
     result = run_tier(spec.tier, jobs=jobs, include_untracked=include_untracked, log=log, compare_baseline=False)
     if not result.ok or result.engine != "passed" or result.restricted:
         return result, None
     records = corpus.select(corpus.load(), cfg.tier(spec.tier).record_tiers, None)
-    previous = baseline.read_previous()
     new = baseline.from_run(spec.tier, records, result.engine_reads, result.engine_run)
     old, pinned = baseline.write(new)
     log(f"wrote {_shown(paths.ENGINE_BASELINE_FILE)} ({new.read()} of {len(new.records)} records replayed); pinned it "

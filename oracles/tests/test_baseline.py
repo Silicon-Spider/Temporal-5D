@@ -164,11 +164,15 @@ class FileTests(unittest.TestCase):
         with self.assertRaises(baseline.BaselineError) as raised:
             baseline.load(pin)
         self.assertEqual(raised.exception.code, "engine-baseline-integrity")
-        self.assertIn("a recorded answer is never edited by hand", str(raised.exception))
+        # The remedy is the pinned file, never a new recording over the edit (baseline --write refuses one: test_gate).
+        self.assertIn("a recorded answer is never edited by hand; restore it (git checkout -- oracles/engine-baseline.json)",
+                      str(raised.exception))
+        self.assertNotIn(baseline.WRITE_COMMAND, str(raised.exception))
         paths.ENGINE_BASELINE_FILE.unlink()
         with self.assertRaises(baseline.BaselineError) as raised:
             baseline.load(pin)
         self.assertEqual(raised.exception.code, "engine-baseline-missing")
+        self.assertIn(f"restore it ({baseline.RESTORE_COMMAND})", str(raised.exception))
         # One that matches its pin and is no baseline: invalid.
         for bad in ('{"schema": 2}', '{"schema": 1, "tier": "commit", "recorded": "x", "engine": {}, "records": '
                                     '{"r/1": {"end": "error", "positions": 3, "sha256": "s"}}}',
@@ -204,9 +208,19 @@ class FileTests(unittest.TestCase):
         self.assertEqual(len(messages), 2)
         self.assertIn("holds r/declined, which is not in the corpus", messages[0])
         self.assertIn("r/ok was recorded for other record content", messages[1])
+        # And a record of its tier it holds no line for - added to the corpus since, or its line deleted (and the file
+        # re-pinned, which the pin cannot catch): no tier would hold the engine to it. A record of another tier is not
+        # the baseline's.
+        added = [*RECORDS, record("r/added"), dataclasses.replace(record("r/nightly"), tier="nightly")]
+        [missing] = baseline.static_findings(cfg, added, loaded, [])
+        self.assertEqual(missing, Finding(
+            "engine-baseline-stale",
+            "engine-baseline.json holds no line for r/added, a record of the commit tier, so no tier holds the engine to "
+            f"what it reads of it - record it again ({baseline.WRITE_COMMAND}) and review the diff"))
 
     def test_a_new_baseline_lists_what_it_holds_otherwise_losses_first(self):
-        self.assertEqual(baseline.changes(None, self.recorded), ["no earlier baseline could be read: all 5 record(s) are new"])
+        # Against the baseline gate.toml pinned, read verified (baseline --write: test_gate); none pinned, all is new.
+        self.assertEqual(baseline.changes(None, self.recorded), ["no baseline was pinned before: all 5 record(s) are new"])
         reads = {**READS, "r/ok": run("r/ok", "unsupported", 0, "variant"), "r/unread": run("r/unread", "ok", 12)}
         del reads["r/declined"]
         records = [item for item in RECORDS if item.id != "r/declined"] + [record("r/added")]
@@ -218,10 +232,8 @@ class FileTests(unittest.TestCase):
             "further: r/unread - the engine read it to its end (12 positions), where it could not read action 10 "
             "(10 positions)",
             "added: r/added - the engine read it to its end (2 positions)"])
-        # The previous file is read leniently - unpinned - for this list only.
-        self.assertIsNone(baseline.read_previous())
-        baseline.write(self.recorded)
-        self.assertEqual(baseline.read_previous().records, self.recorded.records)
+        # There is no lenient read of the file on disk: what a new baseline is compared with is what load() reads.
+        self.assertFalse(hasattr(baseline, "read_previous"))
 
     def test_the_pin_needs_its_table(self):
         self.gate_file.write_text(self.gate_file.read_text(encoding="utf-8").replace("[baseline]\n", "[baseline_]\n"),

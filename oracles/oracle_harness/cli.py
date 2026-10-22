@@ -70,11 +70,13 @@ def cmd_verify(args: argparse.Namespace) -> int:
     for line in stability.describe(cfg, records, frozen):
         print(line)
     # Whether the tier that can enable the proof channel requires enough to enable it. A
-    # run of that tier fails on these; verify, which every tier runs, reports them.
+    # complete run of that tier fails on these; verify, which every tier runs, reports them
+    # (and a restricted run, which can enable nothing, does not make the check - H47).
     readiness = gate.proof_channel_readiness(cfg, records, frozen)
     if readiness is not None:
         print()
-        print(format_findings(f"{gate.PROOF_SECTION} (a run of such a tier fails on these; verify does not)", readiness))
+        print(format_findings(f"{gate.PROOF_SECTION} (a complete run of such a tier fails on these; verify does not)",
+                              readiness))
     return code
 
 
@@ -209,7 +211,7 @@ def cmd_baseline(args: argparse.Namespace) -> int:
             return 1
         print("The engine's baseline is recorded and pinned. Review the diff before committing: every changed line of\n"
               f"{paths.HARNESS_REL}/{paths.ENGINE_BASELINE_FILE.name} is a record the engine now reads otherwise. A LOSS below is a\n"
-              "record the commit tier no longer holds the engine to - a loss of checking, never churn: never record\n"
+              "record the commit tier no longer holds the engine to - a loss of checking, never churn: never commit\n"
               "one to make a gate run pass.")
         for line in changed:
             print(f"  {line}")
