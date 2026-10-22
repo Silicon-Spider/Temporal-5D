@@ -90,6 +90,7 @@ struct Edge {
   double w = 0;               // sum of backup weights
   double wq = 0;              // weighted sum of values
   double wq2 = 0;             // weighted sum of squares
+  double wd = 0;              // weighted sum of draw probabilities (D3)
 };
 
 // A heap block's bookkeeping, about (malloc's header and alignment), and a
@@ -132,10 +133,15 @@ struct Node {
   double w = 0;
   double wq = 0;
   double wq2 = 0;
+  double wd = 0;              // weighted sum of draw probabilities (D3)
   double ends_w = 0;
   double ends_wq = 0;
-  double eval_mean = 0;
-  double eval_var = 0;
+  double ends_wd = 0;
+  double eval_mean = 0;       // D3: its evaluation's W - L
+  double eval_draw = 0;       // ... and D
+  double eval_var = 0;        // ... and uncertainty signal (SearchParams::uncertainty_source)
+  float eval_error = std::numeric_limits<float>::quiet_NaN();       // the error head's output
+  float eval_moves_left = std::numeric_limits<float>::quiet_NaN();  // moves-left (never backed up)
   double k0 = 1;
   std::size_t instantiated = 0;
   std::vector<Edge> edges;
@@ -180,6 +186,10 @@ std::pair<int, int> bounds_in_parent(const Node& parent, const Node& child) noex
 }
 
 double terminal_value(Terminal t) noexcept { return t == Terminal::Checkmate ? -1.0 : 0.0; }
+
+// D3: a game end's draw probability - 0 for a mate, 1 for a stalemate and the
+// turn cap's convention (I11: a draw).
+double terminal_draw(Terminal t) noexcept { return t == Terminal::Checkmate ? 0.0 : 1.0; }
 
 bool same_state(const GameState& a, const GameState& b, bool compare_origins) noexcept {
   return compare_origins ? a == b : same_position(a, b);
@@ -236,6 +246,25 @@ ValueMoments value_moments(const std::array<float, kValueBins>& value) {
     var += static_cast<double>(value[static_cast<std::size_t>(k)]) / sum * d * d;
   }
   return ValueMoments{mean, var};
+}
+
+WdlValue wdl_value(const std::array<float, kWdl>& wdl) {
+  double sum = 0;
+  for (const float p : wdl) {
+    if (!std::isfinite(p) || p < 0) {
+      throw std::invalid_argument("a WDL holds a negative or non-finite probability");
+    }
+    sum += static_cast<double>(p);
+  }
+  if (!(sum > 0)) throw std::invalid_argument("a WDL sums to zero");
+  return WdlValue{(static_cast<double>(wdl[0]) - static_cast<double>(wdl[2])) / sum,
+                  static_cast<double>(wdl[1]) / sum};
+}
+
+std::array<float, kWdl> wdl_of(double v) {
+  if (std::isnan(v)) throw std::invalid_argument("wdl_of: the value is NaN");
+  const double c = std::clamp(v, -1.0, 1.0);
+  return {static_cast<float>((1.0 + c) * 0.5), 0.0f, static_cast<float>((1.0 - c) * 0.5)};
 }
 
 std::array<float, kValueBins> two_hot(double v) {
@@ -669,6 +698,15 @@ struct Search::Impl {
     return n.has_eval ? n.eval_mean : 0.0;
   }
 
+  // D3: the node's draw probability, as node_q its value (a solved node's: 1
+  // for a proven draw, 0 for a proven result).
+  double node_d(const Node& n) const noexcept {
+    if (n.terminal != Terminal::None) return detail::terminal_draw(n.terminal);
+    if (solved(n)) return n.lo == 0 ? 1.0 : 0.0;
+    if (n.w > 0) return n.wd / n.w;
+    return n.has_eval ? n.eval_draw : 0.0;
+  }
+
   bool root_finished() const noexcept {
     const Node& r = nodes_[root_];
     return r.terminal != Terminal::None || solved(r) || r.stuck || r.dead_end;
@@ -859,16 +897,32 @@ struct Search::Impl {
     if (std::isinf(ev.submit_logit)) {
       throw std::invalid_argument("an evaluation holds an infinite submit logit");
     }
-    (void)value_moments(ev.value);
+    (void)wdl_value(ev.wdl);
+    if (ev.value) (void)value_moments(*ev.value);
+    if (!std::isnan(ev.error) && !(std::isfinite(ev.error) && ev.error >= 0)) {
+      throw std::invalid_argument("an evaluation's error head output is negative or infinite (NaN: none given)");
+    }
+    if (!std::isnan(ev.moves_left) && !(std::isfinite(ev.moves_left) && ev.moves_left >= 0)) {
+      throw std::invalid_argument("an evaluation's moves-left is negative or infinite (NaN: none given)");
+    }
   }
 
   void expand_node(NodeId id, const Evaluation& ev, const Expansion& x) {
     Node& n = nodes_[id];
     const MoveList& moves = x.moves();
     check_evaluation(ev, moves.size());
-    const ValueMoments m = value_moments(ev.value);
-    n.eval_mean = m.mean;
-    n.eval_var = m.variance;
+    // D3: the value search uses is the WDL's; the uncertainty signal is the
+    // categorical's variance or the error head's output (6m), 0 without one.
+    const WdlValue v = wdl_value(ev.wdl);
+    n.eval_mean = v.q;
+    n.eval_draw = v.d;
+    n.eval_error = ev.error;
+    n.eval_moves_left = ev.moves_left;
+    if (params_.uncertainty_source == UncertaintySource::ErrorHead) {
+      n.eval_var = std::isnan(ev.error) ? 0.0 : static_cast<double>(ev.error);
+    } else {
+      n.eval_var = ev.value ? value_moments(*ev.value).variance : 0.0;
+    }
     n.has_eval = true;
     n.edges.clear();
     std::vector<double> logits;
@@ -1161,19 +1215,22 @@ struct Search::Impl {
     }
   }
 
-  // Backs up `v` (the last node's view) along `path`, releasing its virtual
-  // loss; the visit ends at the last node if `ends_here`.
-  void backup(const std::vector<Step>& path, double v, double w, bool ends_here) {
+  // Backs up `v` (the last node's view) and the draw probability `d` (the
+  // same from either side, D3) along `path`, releasing its virtual loss; the
+  // visit ends at the last node if `ends_here`.
+  void backup(const std::vector<Step>& path, double v, double d, double w, bool ends_here) {
     for (std::size_t i = path.size(); i-- > 0;) {
       Node& n = nodes_[path[i].node];
       n.visits += 1;
       n.w += w;
       n.wq += w * v;
       n.wq2 += w * v * v;
+      n.wd += w * d;
       if (i + 1 == path.size() && ends_here) {
         n.ends += 1;
         n.ends_w += w;
         n.ends_wq += w * v;
+        n.ends_wd += w * d;
       }
       if (n.vl > 0) --n.vl;
       if (i > 0) {
@@ -1184,6 +1241,7 @@ struct Search::Impl {
         e.w += w;
         e.wq += w * v;
         e.wq2 += w * v * v;
+        e.wd += w * d;
         if (e.vl > 0) --e.vl;
       }
     }
@@ -1196,14 +1254,17 @@ struct Search::Impl {
   void complete_residual(const std::vector<Step>& path, std::size_t ei, NodeId cid) {
     const NodeId pid = path.back().node;
     const double vc = detail::sign_between(nodes_[pid], nodes_[cid]) * node_q(nodes_[cid]);
+    const double dc = node_d(nodes_[cid]);
     Edge& e = nodes_[pid].edges[ei];
     const double r = std::clamp(vc * (e.w + 1.0) - e.wq, -1.0, 1.0);
+    const double rd = std::clamp(dc * (e.w + 1.0) - e.wd, 0.0, 1.0);  // D3: the draw's correction
     e.visits += 1;
     e.w += 1.0;
     e.wq += r;
     e.wq2 += r * r;
+    e.wd += rd;
     ++stats_.residual_backups;
-    backup(path, r, 1.0, false);
+    backup(path, r, rd, 1.0, false);
   }
 
   // MCTS-Solver with draws: lo = the best child's lower bound; hi = the best
@@ -1262,16 +1323,16 @@ struct Search::Impl {
       Node& n = nodes_[cur];
       if (n.terminal != Terminal::None) {
         ++stats_.terminal_visits;
-        backup(path_, detail::terminal_value(n.terminal), 1.0, true);
+        backup(path_, detail::terminal_value(n.terminal), detail::terminal_draw(n.terminal), 1.0, true);
         return Selected::Done;
       }
       if (solved(n)) {
         ++stats_.terminal_visits;
-        backup(path_, n.lo, 1.0, true);
+        backup(path_, n.lo, n.lo == 0 ? 1.0 : 0.0, 1.0, true);
         return Selected::Done;
       }
       if (n.stuck) {
-        backup(path_, n.eval_mean, backup_weight(n.eval_var), true);
+        backup(path_, n.eval_mean, n.eval_draw, backup_weight(n.eval_var), true);
         return Selected::Done;
       }
       if (!n.expanded) {
@@ -1292,7 +1353,7 @@ struct Search::Impl {
         }
         n.stuck = true;
         ++stats_.stuck;
-        backup(path_, node_q(n), 1.0, true);
+        backup(path_, node_q(n), node_d(n), 1.0, true);
         return Selected::Done;
       }
       // (c) The first time an unknown edge is picked, it is verified under the
@@ -1358,7 +1419,7 @@ struct Search::Impl {
         expand_node(id, copy, x);
         ++stats_.cache_hits;
         const Node& done = nodes_[id];
-        backup(path_, done.eval_mean, backup_weight(done.eval_var), true);
+        backup(path_, done.eval_mean, done.eval_draw, backup_weight(done.eval_var), true);
         return Selected::Done;
       }
     }
@@ -1467,7 +1528,7 @@ struct Search::Impl {
         const Evaluation& ev = evaluations[pd.request];
         expand_node(pd.leaf, ev, *slots_[pd.slot]);
         const Node& n = nodes_[pd.leaf];
-        backup(pd.path, n.eval_mean, backup_weight(n.eval_var), true);
+        backup(pd.path, n.eval_mean, n.eval_draw, backup_weight(n.eval_var), true);
         ++delivered;
         // A duplicate is not stored twice.
         if (cache_) cache_->insert(n.key, n.moves_made, epoch_, n.state, ev, n.new_boards);
@@ -1506,6 +1567,12 @@ struct Search::Impl {
       return detail::sign_between(p, nodes_[e.child]) * nodes_[e.child].lo;
     }
     return e.w > 0 ? e.wq / e.w : 0.0;
+  }
+
+  // D3: an edge's backed-up draw probability (a solved child's exact one).
+  double edge_d(const Edge& e) const noexcept {
+    if (e.child != kNoNode && solved(nodes_[e.child])) return nodes_[e.child].lo == 0 ? 1.0 : 0.0;
+    return e.w > 0 ? e.wd / e.w : 0.0;
   }
 
   std::vector<FinalCandidate> root_candidates(const std::vector<std::size_t>& edges) const {
@@ -1621,11 +1688,13 @@ struct Search::Impl {
       std::uint64_t through = 0;
       double through_wq = 0;
       double through_w = 0;
+      double through_wd = 0;
       for (const Edge& e : n.edges) {
         if (e.vl != 0) fail("virtual loss not released on an edge", id);
         through += e.visits;
         through_w += e.w;
         through_wq += e.wq;
+        through_wd += e.wd;
         if (e.visits > 0 && e.child == kNoNode) fail("a visited edge without a child", id);
         if (!params_.graph && e.child != kNoNode && nodes_[e.child].visits != e.visits) {
           fail("a tree edge's visits differ from its child's", id);
@@ -1666,6 +1735,12 @@ struct Search::Impl {
       if (std::abs(n.w - (n.ends_w + through_w)) > 1e-9 * scale ||
           std::abs(n.wq - (n.ends_wq + through_wq)) > 1e-9 * scale) {
         fail("backed-up values inconsistent with the children's", id);
+      }
+      if (std::abs(n.wd - (n.ends_wd + through_wd)) > 1e-9 * scale) {
+        fail("backed-up draw probabilities inconsistent with the children's (D3)", id);
+      }
+      if (n.wd < -1e-9 * scale || n.wd > n.w + 1e-9 * scale) {
+        fail("a backed-up draw probability outside [0, 1] (D3)", id);
       }
       if (n.lo > n.hi) fail("solver bounds contradict", id);
       if (n.terminal == Terminal::Checkmate && (n.lo != -1 || n.hi != -1)) fail("a checkmate not proven lost", id);
@@ -1715,7 +1790,9 @@ struct Search::Impl {
       h = combine(h, bits_of(n.w));
       h = combine(h, bits_of(n.wq));
       h = combine(h, bits_of(n.wq2));
+      h = combine(h, bits_of(n.wd));
       h = combine(h, bits_of(n.eval_mean));
+      h = combine(h, bits_of(n.eval_draw));
       h = combine(h, bits_of(n.eval_var));
       h = combine(h, bits_of(n.k0));
       h = combine(h, static_cast<std::uint64_t>(n.lo + 2) | (static_cast<std::uint64_t>(n.hi + 2) << 8) |
@@ -1731,6 +1808,7 @@ struct Search::Impl {
         h = combine(h, bits_of(e.w));
         h = combine(h, bits_of(e.wq));
         h = combine(h, bits_of(e.wq2));
+        h = combine(h, bits_of(e.wd));
         h = combine(h, static_cast<std::uint64_t>(e.pruned) | (static_cast<std::uint64_t>(e.submit) << 1) |
                            (static_cast<std::uint64_t>(e.action) << 8));
       }
@@ -1791,7 +1869,10 @@ StopReason Search::run(Evaluator& evaluator, const Limits& limits) {
     for (Evaluation& e : out) {  // reused buffers: every field reset
       e.logits.clear();
       e.submit_logit = std::numeric_limits<float>::quiet_NaN();
-      e.value.fill(0.0f);
+      e.wdl.fill(0.0f);
+      e.value.reset();
+      e.error = std::numeric_limits<float>::quiet_NaN();
+      e.moves_left = std::numeric_limits<float>::quiet_NaN();
     }
     try {
       evaluator.evaluate(s.requests_, out);
@@ -1837,7 +1918,17 @@ std::vector<RootChild> Search::root_children() const {
     c.prior = e.prior;
     c.visits = e.visits;
     c.q = s.edge_q(r, e);
+    c.d = s.edge_d(e);
     c.child = e.child;
+    if (e.child != kNoNode && s.nodes_[e.child].has_eval) {
+      // The child's own evaluation, the network's, in the root player's view.
+      const Node& n = s.nodes_[e.child];
+      const double q = detail::sign_between(r, n) * n.eval_mean;
+      c.evaluated = true;
+      c.network_wdl = {(1.0 - n.eval_draw + q) * 0.5, n.eval_draw, (1.0 - n.eval_draw - q) * 0.5};
+      c.network_moves_left = n.eval_moves_left;
+      c.network_error = n.eval_error;
+    }
     if (e.child != kNoNode && s.params_.proof_channel) {
       const auto [lo, hi] = detail::bounds_in_parent(r, s.nodes_[e.child]);
       c.lo = e.unknown ? -1 : lo;  // (e) no proof through an unknown edge
@@ -2068,8 +2159,13 @@ NodeView Search::node(NodeId id) const {
   v.weight = n.w;
   v.value = n.wq;
   v.value_sq = n.wq2;
+  v.draw = n.wd;
   v.eval_mean = n.eval_mean;
+  v.eval_draw = n.eval_draw;
   v.eval_variance = n.eval_var;
+  v.eval_error = n.eval_error;
+  v.eval_moves_left = n.eval_moves_left;
+  v.evaluated = n.has_eval;
   v.k0 = n.k0;
   v.instantiated = n.instantiated;
   v.edge_count = n.edges.size();
@@ -2100,6 +2196,7 @@ EdgeView Search::edge(NodeId id, std::size_t index) const {
   v.weight = e.w;
   v.value = e.wq;
   v.value_sq = e.wq2;
+  v.draw = e.wd;
   return v;
 }
 

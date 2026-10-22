@@ -1,10 +1,11 @@
 // The search's C API (t5d/capi_search.h): the step API an external evaluator
-// drives - gather leaves, read each leaf's expansion, deliver logits and value
-// distributions - checked against the C++ search it wraps (the same
+// drives - gather leaves, read each leaf's expansion, deliver logits and the
+// value heads (D3) - checked against the C++ search it wraps (the same
 // evaluations give the same tree), its error handling (virtual loss released,
 // nothing backed up), and the results, choice and persistence calls.
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -57,8 +58,34 @@ SearchHandle new_search(const t5d_game* g, const t5d_search_params& p, int32_t t
   return SearchHandle(s);
 }
 
-// Drives a search through the step API with uniform logits and a value of
-// exactly 0 - the uniform evaluator's answers - as probabilities or logits.
+// One batch's evaluations through t5d_search_deliver_evaluations; an empty
+// vector is "none given" (NULL, count 0) - the WDL included, which is refused.
+t5d_status deliver(t5d_search* s, const std::vector<float>& logits, const std::vector<float>& submits,
+                   const std::vector<float>& wdl, const std::vector<float>& values, int32_t kind,
+                   const std::vector<float>& errors = {}, const std::vector<float>& moves_left = {},
+                   char** error = nullptr) {
+  const auto data = [](const std::vector<float>& v) { return v.empty() ? nullptr : v.data(); };
+  t5d_evaluations b{};
+  b.logits = data(logits);
+  b.logit_count = logits.size();
+  b.submit_logits = data(submits);
+  b.submit_count = submits.size();
+  b.wdl = data(wdl);
+  b.wdl_count = wdl.size();
+  b.wdl_kind = kind;
+  b.value_kind = kind;
+  b.values = data(values);
+  b.value_count = values.size();
+  b.errors = data(errors);
+  b.error_count = errors.size();
+  b.moves_left = data(moves_left);
+  b.moves_left_count = moves_left.size();
+  return t5d_search_deliver_evaluations(s, &b, error);
+}
+
+// Drives a search through the step API with uniform logits, a WDL of {1, 1, 1}
+// and a value of exactly 0 - the uniform evaluator's answers - as
+// probabilities or logits.
 std::uint64_t drive(t5d_search* s, std::uint64_t playouts, int32_t value_kind, std::size_t batch) {
   std::uint64_t leaves = 0;
   for (int round = 0; round < 100000; ++round) {
@@ -70,6 +97,7 @@ std::uint64_t drive(t5d_search* s, std::uint64_t playouts, int32_t value_kind, s
     if (n == 0) continue;
     std::vector<float> logits;
     std::vector<float> submits;
+    std::vector<float> wdl;
     std::vector<float> values;
     for (std::size_t i = 0; i < n; ++i) {
       t5d_leaf leaf;
@@ -79,21 +107,21 @@ std::uint64_t drive(t5d_search* s, std::uint64_t playouts, int32_t value_kind, s
       logits.insert(logits.end(), leaf.expansion.move_count, 0.0f);
       // The submit logit where submitting is possible (D8); NaN elsewhere.
       submits.push_back(leaf.submit_possible ? 0.0f : std::nanf(""));
+      wdl.insert(wdl.end(), T5D_WDL, value_kind == T5D_VALUE_LOGITS ? 0.0f : 1.0f);
       std::vector<float> v(T5D_VALUE_BINS, value_kind == T5D_VALUE_LOGITS ? -30.0f : 0.0f);
       v[25] = value_kind == T5D_VALUE_LOGITS ? 30.0f : 1.0f;  // all the mass at 0
       values.insert(values.end(), v.begin(), v.end());
     }
-    REQUIRE_EQ(t5d_search_deliver(s, logits.data(), logits.size(), submits.data(), submits.size(),
-                                  values.data(), values.size(), value_kind, nullptr),
-               T5D_OK);
+    REQUIRE_EQ(deliver(s, logits, submits, wdl, values, value_kind), T5D_OK);
     leaves += n;
   }
   return leaves;
 }
 
 // A deterministic, non-trivial answer for a leaf from its key alone: logits
-// in quarter steps, a finite submit logit where submitting is possible, and a
-// value of two bins off centre (0.75 and 0.25: exact in float32, summing to 1).
+// in quarter steps, a finite submit logit where submitting is possible, a WDL
+// in eighths, a categorical of two bins off centre (0.75 and 0.25: exact in
+// float32, summing to 1), an error and a moves-left in quarters.
 std::uint64_t mix_key(std::uint64_t x) {
   x ^= x >> 33;
   x *= 0xff51afd7ed558ccdull;
@@ -113,6 +141,13 @@ void value_of(std::uint64_t key, float* out) {
   out[mix_key(key ^ 0xA1ull) % T5D_VALUE_BINS] += 0.75f;
   out[mix_key(key ^ 0xB2ull) % T5D_VALUE_BINS] += 0.25f;
 }
+void wdl_of_key(std::uint64_t key, float* out) {
+  for (int k = 0; k < T5D_WDL; ++k) {
+    out[k] = static_cast<float>(1 + mix_key(key ^ (0xC3ull + static_cast<std::uint64_t>(k))) % 8) * 0.125f;
+  }
+}
+float error_of(std::uint64_t key) { return static_cast<float>(mix_key(key ^ 0xE5ull) % 5) * 0.25f; }
+float moves_left_of(std::uint64_t key) { return static_cast<float>(mix_key(key ^ 0xF6ull) % 400) * 0.25f; }
 
 // The same answers as a C++ evaluator.
 class Hashed final : public t5d::mcts::Evaluator {
@@ -123,7 +158,12 @@ class Hashed final : public t5d::mcts::Evaluator {
       out[i].logits.resize(moves);
       for (std::size_t m = 0; m < moves; ++m) out[i].logits[m] = logit_of(batch[i].key, m);
       out[i].submit_logit = batch[i].expansion->submit_possible() ? submit_of(batch[i].key) : std::nanf("");
-      value_of(batch[i].key, out[i].value.data());
+      wdl_of_key(batch[i].key, out[i].wdl.data());
+      std::array<float, T5D_VALUE_BINS> value{};
+      value_of(batch[i].key, value.data());
+      out[i].value = value;
+      out[i].error = error_of(batch[i].key);
+      out[i].moves_left = moves_left_of(batch[i].key);
     }
   }
 };
@@ -139,17 +179,21 @@ void drive_hashed(t5d_search* s, std::uint64_t playouts, std::size_t batch) {
     if (n == 0) continue;
     std::vector<float> logits;
     std::vector<float> submits;
+    std::vector<float> wdl(n * T5D_WDL);
     std::vector<float> values(n * T5D_VALUE_BINS);
+    std::vector<float> errors;
+    std::vector<float> moves_left;
     for (std::size_t i = 0; i < n; ++i) {
       t5d_leaf leaf;
       REQUIRE_EQ(t5d_search_leaf(s, i, &leaf, nullptr), T5D_OK);
       for (std::size_t m = 0; m < leaf.expansion.move_count; ++m) logits.push_back(logit_of(leaf.key, m));
       submits.push_back(leaf.submit_possible ? submit_of(leaf.key) : std::nanf(""));
+      wdl_of_key(leaf.key, wdl.data() + i * T5D_WDL);
       value_of(leaf.key, values.data() + i * T5D_VALUE_BINS);
+      errors.push_back(error_of(leaf.key));
+      moves_left.push_back(moves_left_of(leaf.key));
     }
-    REQUIRE_EQ(t5d_search_deliver(s, logits.data(), logits.size(), submits.data(), submits.size(),
-                                  values.data(), values.size(), T5D_VALUE_PROBABILITIES, nullptr),
-               T5D_OK);
+    REQUIRE_EQ(deliver(s, logits, submits, wdl, values, T5D_VALUE_PROBABILITIES, errors, moves_left), T5D_OK);
   }
 }
 
@@ -157,17 +201,22 @@ void drive_hashed(t5d_search* s, std::uint64_t playouts, std::size_t batch) {
 
 TEST(capi_search_step_api_reproduces_the_cpp_search) {
   // The C step loop with Hashed's answers - logits, finite submit logits (D8),
-  // values off centre - builds the graph the C++ search builds with the same
-  // answers, bit for bit (H15's digest: every node's and edge's statistics,
-  // priors included, so every submit prior below the root too).
+  // WDLs with draws, categoricals off centre, error and moves-left outputs
+  // (D3) - builds the graph the C++ search builds with the same answers, bit
+  // for bit (H15's digest: every node's and edge's statistics, priors and
+  // backed-up draws included, so every submit prior below the root too), under
+  // either uncertainty signal (6m).
   for (const int32_t split : {T5D_SPLIT_BOARD_MOVE, T5D_SPLIT_WHOLE_TURN}) {
     for (const int32_t graph : {0, 1}) {
+      const int32_t source = graph != 0 ? T5D_UNCERTAINTY_ERROR_HEAD : T5D_UNCERTAINTY_CATEGORICAL;
       const Game g = variant_game("Standard - Two Timelines");
       t5d_search_params p = quick_params();
       p.split = split;
       p.graph = graph;
       p.max_actions = 96;
       p.batch_size = 4;
+      p.uncertainty_source = source;
+      p.variance_scaled_cpuct = 1;  // E2 on: the signal steers selection
       const SearchHandle s = new_search(g.get(), p);
       drive_hashed(s.get(), 200, 4);
 
@@ -176,6 +225,8 @@ TEST(capi_search_step_api_reproduces_the_cpp_search) {
       q.graph = graph != 0;
       q.max_actions = 96;
       q.batch_size = 4;
+      q.uncertainty_source = static_cast<t5d::mcts::UncertaintySource>(source);
+      q.variance_scaled_cpuct = true;
       q.expand.square_features = t5d::SquareFeatures::None;
       t5d::mcts::Search reference(t5d::variant_start(*t5d::find_variant("Standard - Two Timelines")), q);
       Hashed ev;
@@ -196,6 +247,15 @@ TEST(capi_search_step_api_reproduces_the_cpp_search) {
         REQUIRE_EQ(t5d_search_child(s.get(), i, &c, moves.data(), moves.size(), nullptr), T5D_OK);
         CHECK_EQ(c.visits, children[i].visits);
         CHECK_EQ(c.prior, children[i].prior);
+        CHECK_EQ(c.q, children[i].q);
+        CHECK_EQ(c.d, children[i].d);
+        CHECK_EQ(c.evaluated != 0, children[i].evaluated);
+        if (c.evaluated != 0) {
+          for (int k = 0; k < T5D_WDL; ++k) CHECK_EQ(c.network_wdl[k], children[i].network_wdl[static_cast<std::size_t>(k)]);
+          CHECK_EQ(c.network_moves_left, children[i].network_moves_left);
+          CHECK_EQ(c.network_error, children[i].network_error);
+          CHECK(c.network_moves_left >= 0 && c.network_error >= 0);  // given at every leaf
+        }
         CHECK_EQ(c.move_count, children[i].moves.size());
         for (std::size_t m = 0; m < c.move_count && m < moves.size(); ++m) {
           CHECK_EQ(moves[m].from_timeline, children[i].moves[m].from_timeline);
@@ -214,21 +274,31 @@ TEST(capi_search_step_api_reproduces_the_cpp_search) {
 TEST(capi_search_takes_value_logits_or_probabilities) {
   const Game g = variant_game("Standard");
   const t5d_search_params p = quick_params();
-  // The root alone, valued +0.6 (bin 40) from its player's view - as
-  // probabilities and as logits: the bins in their order, not mirrored.
+  // The root alone, its WDL (0.7, 0.2, 0.1) - value 0.6, draw 0.2 from its
+  // player's view - as probabilities and as logits: win, draw, loss in that
+  // order, not mirrored. The categorical (bin 10, -0.6) is not the value: D3.
   for (const int32_t kind : {T5D_VALUE_PROBABILITIES, T5D_VALUE_LOGITS}) {
     const SearchHandle s = new_search(g.get(), p);
     std::size_t n = 0;
     REQUIRE_EQ(t5d_search_gather(s.get(), 1, T5D_NO_LIMIT, &n, nullptr), T5D_OK);
     REQUIRE_EQ(n, std::size_t{1});
     std::vector<float> logits(20, 0.0f);
+    std::vector<float> wdl{0.7f, 0.2f, 0.1f};
+    if (kind == T5D_VALUE_LOGITS) {
+      for (float& x : wdl) x = std::log(x);
+    }
     std::vector<float> v(T5D_VALUE_BINS, kind == T5D_VALUE_LOGITS ? -30.0f : 0.0f);
-    v[40] = kind == T5D_VALUE_LOGITS ? 30.0f : 1.0f;
-    REQUIRE_EQ(t5d_search_deliver(s.get(), logits.data(), logits.size(), nullptr, 0, v.data(), v.size(), kind, nullptr),
-               T5D_OK);
+    v[10] = kind == T5D_VALUE_LOGITS ? 30.0f : 1.0f;
+    REQUIRE_EQ(deliver(s.get(), logits, {}, wdl, v, kind, {1.5f}, {12.0f}), T5D_OK);
     t5d_search_summary info;
     REQUIRE_EQ(t5d_search_info(s.get(), &info), T5D_OK);
-    CHECK(std::abs(info.root_q - 0.6) < 1e-4);
+    CHECK(std::abs(info.root_q - 0.6) < 1e-6);
+    CHECK(std::abs(info.root_d - 0.2) < 1e-6);
+    CHECK_EQ(info.root_evaluated, 1);
+    CHECK(std::abs(info.root_wdl[0] - 0.7) < 1e-6 && std::abs(info.root_wdl[1] - 0.2) < 1e-6 &&
+          std::abs(info.root_wdl[2] - 0.1) < 1e-6);
+    CHECK_EQ(info.root_error, 1.5);
+    CHECK_EQ(info.root_moves_left, 12.0);
   }
   const SearchHandle a = new_search(g.get(), p);
   const SearchHandle b = new_search(g.get(), p);
@@ -289,48 +359,61 @@ TEST(capi_search_errors_release_the_batch) {
   t5d_free(error);
   // A new epoch while a batch waits (its evaluations belong to the old one).
   CHECK_EQ(t5d_search_set_epoch(s.get(), 3, nullptr), T5D_ERR_ARGUMENT);
-  // Submit logits: one per leaf or none; never infinite.
-  {
-    std::vector<float> l(20, 0.0f);
-    std::vector<float> v(T5D_VALUE_BINS, 0.0f);
-    v[25] = 1.0f;
-    const float two[] = {0.0f, 0.0f};
-    CHECK_EQ(t5d_search_deliver(s.get(), l.data(), l.size(), two, 2, v.data(), v.size(),
-                                T5D_VALUE_PROBABILITIES, nullptr),
-             T5D_ERR_ARGUMENT);
-    REQUIRE_EQ(t5d_search_gather(s.get(), 4, T5D_NO_LIMIT, &n, nullptr), T5D_OK);
-    const float inf[] = {std::numeric_limits<float>::infinity()};
-    CHECK_EQ(t5d_search_deliver(s.get(), l.data(), l.size(), inf, 1, v.data(), v.size(),
-                                T5D_VALUE_PROBABILITIES, nullptr),
-             T5D_ERR_ARGUMENT);
-    REQUIRE_EQ(t5d_search_gather(s.get(), 4, T5D_NO_LIMIT, &n, nullptr), T5D_OK);
-  }
-  // Too few logits: refused, the batch abandoned.
-  std::vector<float> logits(3, 0.0f);
+  const std::vector<float> wdl{1.0f, 1.0f, 1.0f};
   std::vector<float> values(T5D_VALUE_BINS, 0.0f);
   values[25] = 1.0f;
-  CHECK_EQ(t5d_search_deliver(s.get(), logits.data(), logits.size(), nullptr, 0, values.data(), values.size(),
-                              T5D_VALUE_PROBABILITIES, nullptr),
-           T5D_ERR_ARGUMENT);
-  REQUIRE_EQ(t5d_search_gather(s.get(), 4, T5D_NO_LIMIT, &n, nullptr), T5D_OK);  // released
-  REQUIRE_EQ(n, std::size_t{1});
-  // A value kind that does not exist; a value that is no distribution.
-  logits.assign(20, 0.0f);
-  CHECK_EQ(t5d_search_deliver(s.get(), logits.data(), logits.size(), nullptr, 0, values.data(), values.size(), 7, nullptr),
-           T5D_ERR_ARGUMENT);
+  const std::vector<float> l(20, 0.0f);
+  // Each malformed batch: refused (T5D_ERR_ARGUMENT, or _UNSUPPORTED), the batch abandoned.
+  const auto refused = [&](t5d_status want, const auto& call) {
+    CHECK_EQ(call(), want);
+    REQUIRE_EQ(t5d_search_gather(s.get(), 4, T5D_NO_LIMIT, &n, nullptr), T5D_OK);  // released
+    REQUIRE_EQ(n, std::size_t{1});
+  };
+  // Submit logits: one per leaf or none; never infinite.
+  refused(T5D_ERR_ARGUMENT, [&] { return deliver(s.get(), l, {0.0f, 0.0f}, wdl, values, T5D_VALUE_PROBABILITIES); });
+  refused(T5D_ERR_ARGUMENT, [&] {
+    return deliver(s.get(), l, {std::numeric_limits<float>::infinity()}, wdl, values, T5D_VALUE_PROBABILITIES);
+  });
+  // Too few logits.
+  refused(T5D_ERR_ARGUMENT, [&] { return deliver(s.get(), {0.0f, 0.0f, 0.0f}, {}, wdl, values, T5D_VALUE_PROBABILITIES); });
+  // D3's WDL: required, 3 per leaf, a distribution (as probabilities: finite, non-negative, not all zero).
+  refused(T5D_ERR_ARGUMENT, [&] { return deliver(s.get(), l, {}, {}, values, T5D_VALUE_PROBABILITIES); });
+  refused(T5D_ERR_ARGUMENT, [&] { return deliver(s.get(), l, {}, {1.0f, 1.0f}, values, T5D_VALUE_PROBABILITIES); });
+  refused(T5D_ERR_ARGUMENT, [&] { return deliver(s.get(), l, {}, {0.0f, 0.0f, 0.0f}, values, T5D_VALUE_PROBABILITIES); });
+  refused(T5D_ERR_ARGUMENT, [&] { return deliver(s.get(), l, {}, {1.0f, -1.0f, 1.0f}, values, T5D_VALUE_PROBABILITIES); });
+  refused(T5D_ERR_ARGUMENT, [&] {
+    return deliver(s.get(), l, {}, {0.0f, std::numeric_limits<float>::infinity(), 0.0f}, {}, T5D_VALUE_LOGITS);
+  });
+  // A kind that does not exist; a categorical that is no distribution, or the wrong count.
+  refused(T5D_ERR_ARGUMENT, [&] { return deliver(s.get(), l, {}, wdl, values, 7); });
+  refused(T5D_ERR_ARGUMENT, [&] {
+    return deliver(s.get(), l, {}, wdl, std::vector<float>(T5D_VALUE_BINS, 0.0f), T5D_VALUE_PROBABILITIES);
+  });
+  refused(T5D_ERR_ARGUMENT, [&] { return deliver(s.get(), l, {}, wdl, {1.0f}, T5D_VALUE_PROBABILITIES); });
+  // The error head and moves-left: one per leaf or none; >= 0 or NaN.
+  refused(T5D_ERR_ARGUMENT, [&] { return deliver(s.get(), l, {}, wdl, values, T5D_VALUE_PROBABILITIES, {-0.5f}); });
+  refused(T5D_ERR_ARGUMENT, [&] { return deliver(s.get(), l, {}, wdl, values, T5D_VALUE_PROBABILITIES, {0.5f, 0.5f}); });
+  refused(T5D_ERR_ARGUMENT, [&] {
+    return deliver(s.get(), l, {}, wdl, values, T5D_VALUE_PROBABILITIES, {}, {std::numeric_limits<float>::infinity()});
+  });
+  // Per-board logits: reserved for D2's flat form, not built.
+  refused(T5D_ERR_UNSUPPORTED, [&] {
+    t5d_evaluations b{};
+    b.logits = l.data();
+    b.logit_count = l.size();
+    b.wdl = wdl.data();
+    b.wdl_count = wdl.size();
+    const float board[] = {0.0f};
+    b.board_logits = board;
+    b.board_logit_count = 1;
+    return t5d_search_deliver_evaluations(s.get(), &b, nullptr);
+  });
+  CHECK_EQ(t5d_search_deliver_evaluations(s.get(), nullptr, nullptr), T5D_ERR_ARGUMENT);  // no batch given
   REQUIRE_EQ(t5d_search_gather(s.get(), 4, T5D_NO_LIMIT, &n, nullptr), T5D_OK);
-  std::vector<float> zero(T5D_VALUE_BINS, 0.0f);
-  CHECK_EQ(t5d_search_deliver(s.get(), logits.data(), logits.size(), nullptr, 0, zero.data(), zero.size(),
-                              T5D_VALUE_PROBABILITIES, nullptr),
-           T5D_ERR_ARGUMENT);
-  REQUIRE_EQ(t5d_search_gather(s.get(), 4, T5D_NO_LIMIT, &n, nullptr), T5D_OK);
-  CHECK_EQ(t5d_search_deliver(s.get(), logits.data(), logits.size(), nullptr, 0, values.data(), values.size(),
-                              T5D_VALUE_PROBABILITIES, nullptr),
-           T5D_OK);
+  // The optional heads absent (NULL, 0); NaN for "none given" at a leaf.
+  CHECK_EQ(deliver(s.get(), l, {}, wdl, {}, T5D_VALUE_PROBABILITIES, {std::nanf("")}, {std::nanf("")}), T5D_OK);
   // No batch waiting: delivering is an error, and nothing changes.
-  CHECK_EQ(t5d_search_deliver(s.get(), logits.data(), logits.size(), nullptr, 0, values.data(), values.size(),
-                              T5D_VALUE_PROBABILITIES, nullptr),
-           T5D_ERR_ARGUMENT);
+  CHECK_EQ(deliver(s.get(), l, {}, wdl, values, T5D_VALUE_PROBABILITIES), T5D_ERR_ARGUMENT);
   // Zero leaves asked for: an error; any number at all: bounded, never overflowed.
   CHECK_EQ(t5d_search_gather(s.get(), 0, T5D_NO_LIMIT, &n, nullptr), T5D_ERR_ARGUMENT);
   REQUIRE_EQ(t5d_search_gather(s.get(), SIZE_MAX, 4, &n, nullptr), T5D_OK);
@@ -346,6 +429,9 @@ TEST(capi_search_errors_release_the_batch) {
   t5d_search* bad = nullptr;
   CHECK_EQ(t5d_search_new(g.get(), 1, &p, &bad, nullptr), T5D_ERR_ARGUMENT);
   CHECK(bad == nullptr);
+  p = quick_params();
+  p.uncertainty_source = 2;  // 6m: the categorical or the error head
+  CHECK_EQ(t5d_search_new(g.get(), 1, &p, &bad, nullptr), T5D_ERR_ARGUMENT);
   p = quick_params();
   p.expand.relations = 1u << T5D_RELATION_PIN;
   CHECK_EQ(t5d_search_new(g.get(), 1, &p, &bad, nullptr), T5D_ERR_UNSUPPORTED);
@@ -565,7 +651,7 @@ TEST(capi_search_reports_its_layouts) {
   // structs moves none of this header's fields).
   CHECK(offsetof(t5d_leaf, expansion) > offsetof(t5d_leaf, legality));
   CHECK(sizeof(t5d_leaf) - offsetof(t5d_leaf, expansion) < sizeof(t5d_expansion) + alignof(t5d_leaf));
-  CHECK(offsetof(t5d_search_params, expand) > offsetof(t5d_search_params, eval_cache_bytes));
+  CHECK(offsetof(t5d_search_params, expand) > offsetof(t5d_search_params, uncertainty_source));
   CHECK(sizeof(t5d_search_params) - offsetof(t5d_search_params, expand) <
         sizeof(t5d_expand_options) + alignof(t5d_search_params));
   REQUIRE_EQ(t5d_search_layout("t5d_search_params", "expand", &v), T5D_OK);
@@ -578,6 +664,22 @@ TEST(capi_search_reports_its_layouts) {
   CHECK_EQ(v, offsetof(t5d_search_summary, epoch));
   REQUIRE_EQ(t5d_search_layout("t5d_root_child", nullptr, &v), T5D_OK);
   CHECK_EQ(v, sizeof(t5d_root_child));
+  // Engine ABI round 2 (D3): appended, or (t5d_search_params) in front of `expand`.
+  REQUIRE_EQ(t5d_search_layout("t5d_search_params", "uncertainty_source", &v), T5D_OK);
+  CHECK_EQ(v, offsetof(t5d_search_params, uncertainty_source));
+  REQUIRE_EQ(t5d_search_layout("t5d_search_summary", "root_wdl", &v), T5D_OK);
+  CHECK_EQ(v, offsetof(t5d_search_summary, root_wdl));
+  CHECK(offsetof(t5d_search_summary, root_evaluated) > offsetof(t5d_search_summary, last_stop));
+  REQUIRE_EQ(t5d_search_layout("t5d_root_child", "network_error", &v), T5D_OK);
+  CHECK_EQ(v, offsetof(t5d_root_child, network_error));
+  CHECK(offsetof(t5d_root_child, d) > offsetof(t5d_root_child, move_count));
+  REQUIRE_EQ(t5d_search_layout("t5d_evaluations", nullptr, &v), T5D_OK);
+  CHECK_EQ(v, sizeof(t5d_evaluations));
+  REQUIRE_EQ(t5d_search_layout("t5d_evaluations", "board_logit_count", &v), T5D_OK);
+  CHECK_EQ(v, offsetof(t5d_evaluations, board_logit_count));
+  t5d_search_params defaults;
+  t5d_search_params_default(&defaults);
+  CHECK_EQ(defaults.uncertainty_source, T5D_UNCERTAINTY_CATEGORICAL);  // 6m: the register's default reading
   CHECK_EQ(t5d_search_layout("t5d_leaf", "to_move", &v), T5D_ERR_ARGUMENT);
   CHECK_EQ(t5d_search_layout("t5d_no_such", nullptr, &v), T5D_ERR_ARGUMENT);
   CHECK_EQ(t5d_search_layout(nullptr, nullptr, &v), T5D_ERR_ARGUMENT);

@@ -20,6 +20,7 @@
 #include <limits>
 #include <cstdint>
 #include <cstdio>
+#include <functional>
 #include <map>
 #include <memory>
 #include <optional>
@@ -94,6 +95,7 @@ class Failing final : public Evaluator {
     if (++calls_ == fail_on_) throw std::runtime_error("the evaluator failed");
     for (std::size_t i = 0; i < batch.size(); ++i) {
       out[i].logits.assign(batch[i].expansion->moves().size(), 0.0f);
+      out[i].wdl = wdl_of(0.0);
       out[i].value = two_hot(0.0);
     }
   }
@@ -110,6 +112,7 @@ class Sharp final : public Evaluator {
     for (std::size_t i = 0; i < batch.size(); ++i) {
       out[i].logits.assign(batch[i].expansion->moves().size(), 0.0f);
       if (!out[i].logits.empty()) out[i].logits[0] = 30.0f;
+      out[i].wdl = wdl_of(0.0);
       out[i].value = two_hot(0.0);
     }
   }
@@ -268,23 +271,38 @@ TEST(mcts_a_malformed_evaluation_is_refused_and_released) {
   REQUIRE(n == 1);  // the root is the only leaf
   std::vector<Evaluation> out(1);
   out[0].logits.assign(3, 0.0f);  // the Standard start has 20 moves
+  out[0].wdl = wdl_of(0.0);
   out[0].value = two_hot(0.0);
   CHECK_THROWS_AS(search.deliver(out), std::invalid_argument);
   CHECK_NOTHROW(search.check_invariants());
+  // Each malformed field, alone, is refused and the batch released.
+  const auto refused = [&](const std::function<void(Evaluation&)>& spoil) {
+    CHECK_EQ(search.gather(4), std::size_t{1});
+    std::vector<Evaluation> bad(1);
+    bad[0].logits.assign(20, 0.0f);
+    bad[0].wdl = wdl_of(0.25);
+    spoil(bad[0]);
+    CHECK_THROWS_AS(search.deliver(bad), std::invalid_argument);
+    CHECK_NOTHROW(search.check_invariants());
+  };
+  refused([](Evaluation& e) { e.wdl.fill(0.0f); });                     // D3: the WDL is required
+  refused([](Evaluation& e) { e.wdl[1] = -0.1f; });                     // ... a distribution
+  refused([](Evaluation& e) { e.wdl[2] = std::nanf(""); });
+  refused([](Evaluation& e) { e.value = std::array<float, kValueBins>{}; });  // a categorical given: not all zero
+  refused([](Evaluation& e) { e.error = -1.0f; });                      // the error head: >= 0
+  refused([](Evaluation& e) { e.error = std::numeric_limits<float>::infinity(); });
+  refused([](Evaluation& e) { e.moves_left = -0.5f; });                 // moves-left: >= 0
+  refused([](Evaluation& e) { e.logits[2] = std::nanf(""); });
   CHECK_EQ(search.gather(4), std::size_t{1});
   out[0].logits.assign(20, 0.0f);
-  out[0].value.fill(0.0f);  // all zero: no distribution
-  CHECK_THROWS_AS(search.deliver(out), std::invalid_argument);
-  CHECK_NOTHROW(search.check_invariants());
-  CHECK_EQ(search.gather(4), std::size_t{1});
-  out[0].value = two_hot(0.25);
-  out[0].logits[2] = std::nanf("");
-  CHECK_THROWS_AS(search.deliver(out), std::invalid_argument);
-  CHECK_NOTHROW(search.check_invariants());
-  CHECK_EQ(search.gather(4), std::size_t{1});
-  out[0].logits[2] = 0.0f;
+  out[0].wdl = {0.5f, 0.25f, 0.25f};  // W - L = 0.25, D = 0.25
+  out[0].value.reset();                // the categorical, the error head, moves-left: optional
   CHECK_NOTHROW(search.deliver(out));
-  CHECK(std::abs(search.node(search.root()).eval_mean - 0.25) < 1e-9);
+  const NodeView root = search.node(search.root());
+  CHECK(std::abs(root.eval_mean - 0.25) < 1e-12);
+  CHECK(std::abs(root.eval_draw - 0.25) < 1e-12);
+  CHECK_EQ(root.eval_variance, 0.0);  // no categorical: no uncertainty signal
+  CHECK(std::isnan(root.eval_error) && std::isnan(root.eval_moves_left));
 }
 
 // ---- §15.4: solved bounds propagating and never contradicting ---------------------------
@@ -668,6 +686,7 @@ TEST(mcts_the_turn_cap_scores_a_draw_and_proves_nothing) {
       ++capped;
       CHECK(n.lo != n.hi);                       // never a proof
       CHECK_EQ(n.value, 0.0);                    // scored as a draw
+      CHECK_EQ(n.draw, n.weight);                // ... D 1 (D3)
     }
     CHECK(capped > 0);
     CHECK(!search.root_solved());
@@ -1736,6 +1755,7 @@ class Steer final : public Evaluator {
         out[i].logits[m] = logit;
       }
       out[i].submit_logit = batch[i].expansion->submit_possible() ? other : std::nanf("");
+      out[i].wdl = wdl_of(0.0);
       out[i].value = two_hot(0.0);
     }
   }
@@ -1958,6 +1978,7 @@ class CountAware final : public Evaluator {
         out[i].logits[m] = preferred ? 8.0f : -8.0f;
       }
       out[i].submit_logit = r.expansion->submit_possible() ? 8.0f : std::nanf("");
+      out[i].wdl = wdl_of(value_of(r.moves_made));
       out[i].value = two_hot(value_of(r.moves_made));
     }
   }
@@ -2075,8 +2096,8 @@ TEST(mcts_the_evaluation_cache_keeps_a_turn_start_apart_from_the_same_state_duri
       const Evaluation* b = cache->find(key, 1, 0, m.during_action, true);
       REQUIRE(a != nullptr);
       REQUIRE(b != nullptr);
-      CHECK(std::abs(value_moments(a->value).mean - CountAware::value_of(0)) < 1e-6);
-      CHECK(std::abs(value_moments(b->value).mean - CountAware::value_of(1)) < 1e-6);
+      CHECK(std::abs(wdl_value(a->wdl).q - CountAware::value_of(0)) < 1e-6);
+      CHECK(std::abs(wdl_value(b->wdl).q - CountAware::value_of(1)) < 1e-6);
       // The evaluator was asked for both inputs.
       std::set<int> asked;
       for (const std::vector<CountAware::Asked>& batch : ev.batches) {
@@ -2137,8 +2158,8 @@ TEST(mcts_graph_keeps_equal_states_with_different_move_counts_apart) {
       const Evaluation* two = cache->find(key, 2, 0, c.two, true);
       REQUIRE(one != nullptr);
       REQUIRE(two != nullptr);
-      CHECK(std::abs(value_moments(one->value).mean - CountAware::value_of(1)) < 1e-6);
-      CHECK(std::abs(value_moments(two->value).mean - CountAware::value_of(2)) < 1e-6);
+      CHECK(std::abs(wdl_value(one->wdl).q - CountAware::value_of(1)) < 1e-6);
+      CHECK(std::abs(wdl_value(two->wdl).q - CountAware::value_of(2)) < 1e-6);
     }
   }
 }
@@ -2338,6 +2359,7 @@ class ByColour final : public Evaluator {
     for (std::size_t i = 0; i < batch.size(); ++i) {
       out[i].logits.assign(batch[i].expansion->moves().size(), 0.0f);
       const bool white = batch[i].expansion->acting_player() == Colour::White;
+      out[i].wdl = wdl_of(white ? white_ : -white_);
       out[i].value = two_hot(white ? white_ : -white_);
     }
   }
@@ -2353,6 +2375,7 @@ class Fixed final : public Evaluator {
   void evaluate(std::span<const EvalRequest> batch, std::span<Evaluation> out) override {
     for (std::size_t i = 0; i < batch.size(); ++i) {
       out[i].logits.assign(batch[i].expansion->moves().size(), 0.0f);
+      out[i].wdl = {1.0f, 0.0f, 1.0f};  // value 0
       out[i].value = value_;
     }
   }
@@ -2396,6 +2419,298 @@ TEST(mcts_values_are_backed_up_from_the_acting_players_view) {
       CHECK(flips > 0);
     }
   }
+}
+
+namespace {
+
+// D3's heads at every leaf, from White's view: value `white` (W - L) with a
+// draw probability `draw`; a categorical whose mean is NOT the value (all its
+// mass at `categorical`, from the acting player) and whose variance is
+// `spread`'s; an error head `error` (NaN: none) and moves-left `moves_left`.
+class Heads final : public Evaluator {
+ public:
+  Heads(double white, double draw, double categorical, bool spread, float error, float moves_left)
+      : white_(white), draw_(draw), categorical_(categorical), spread_(spread), error_(error), moves_left_(moves_left) {}
+  void evaluate(std::span<const EvalRequest> batch, std::span<Evaluation> out) override {
+    for (std::size_t i = 0; i < batch.size(); ++i) {
+      out[i].logits.assign(batch[i].expansion->moves().size(), 0.0f);
+      const double v = batch[i].expansion->acting_player() == Colour::White ? white_ : -white_;
+      out[i].wdl = {static_cast<float>((1.0 - draw_ + v) * 0.5), static_cast<float>(draw_),
+                    static_cast<float>((1.0 - draw_ - v) * 0.5)};
+      std::array<float, kValueBins> c = two_hot(categorical_);
+      if (spread_) {  // half the mass at each end: variance about 1, the mean unchanged
+        c = std::array<float, kValueBins>{};
+        c[0] = c[kValueBins - 1] = 0.5f;
+      }
+      out[i].value = c;
+      out[i].error = error_;
+      out[i].moves_left = moves_left_;
+    }
+  }
+
+ private:
+  double white_;
+  double draw_;
+  double categorical_;
+  bool spread_;
+  float error_;
+  float moves_left_;
+};
+
+// Every node's and edge's backed-up statistics, without the evaluations' own
+// (what selection and the backups made): the trees two runs grew.
+std::vector<double> tree_statistics(const Search& search) {
+  std::vector<double> out;
+  for (NodeId id = 0; id < search.node_count(); ++id) {
+    const NodeView n = search.node(id);
+    out.insert(out.end(), {static_cast<double>(n.visits), n.weight, n.value, n.value_sq, n.draw});
+    for (std::size_t i = 0; i < n.edge_count; ++i) {
+      const EdgeView e = search.edge(id, i);
+      out.insert(out.end(), {e.prior, static_cast<double>(e.visits), e.value, e.draw});
+    }
+  }
+  return out;
+}
+
+}  // namespace
+
+TEST(mcts_d3_the_wdl_is_the_value_and_its_draw_is_backed_up) {
+  // D3 (corrected at CHECKPOINT 7): WDL is "the value search uses". Every
+  // leaf's W - L is +0.4 to White and its draw probability 0.2, while its
+  // categorical says -0.9 from the acting player: every node and edge backs up
+  // +-0.4 (the acting player's view, as before) and a draw probability of 0.2
+  // (the same from either side), whatever the categorical says - in a tree and
+  // a graph (the residual corrections carry the draw too).
+  for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::WholeTurn}) {
+    for (const bool graph : {false, true}) {
+      SearchParams p = fast();
+      p.split = split;
+      p.graph = graph;
+      p.max_actions = 96;
+      Heads ev(0.4, 0.2, -0.9, false, std::nanf(""), std::nanf(""));
+      Search search(variant("Standard - Two Timelines"), p);
+      search.run(ev, Limits{400});
+      REQUIRE_EQ(search.stats().terminal_visits, std::uint64_t{0});
+      CHECK_NOTHROW(search.check_invariants());
+      if (graph && split == TurnSplit::BoardMove) CHECK(search.stats().residual_backups > 0);
+      for (NodeId id = 0; id < search.node_count(); ++id) {
+        const NodeView n = search.node(id);
+        const double mine = n.mover == Colour::White ? 0.4 : -0.4;
+        if (n.evaluated) {
+          CHECK(std::abs(n.eval_mean - mine) < 1e-6);
+          CHECK(std::abs(n.eval_draw - 0.2) < 1e-6);
+        }
+        if (n.weight > 0) {
+          CHECK(std::abs(n.value / n.weight - mine) < 1e-5);
+          CHECK(std::abs(n.draw / n.weight - 0.2) < 1e-5);
+        }
+        for (std::size_t i = 0; i < n.edge_count; ++i) {
+          const EdgeView e = search.edge(id, i);
+          if (e.visits == 0) continue;
+          CHECK(std::abs(e.value / e.weight - mine) < 1e-5);
+          CHECK(std::abs(e.draw / e.weight - 0.2) < 1e-5);
+        }
+      }
+      // The root children: the search's (q, d) and the network's own WDL, in
+      // the root player's (White's) view.
+      for (const RootChild& c : search.root_children()) {
+        if (c.visits == 0) continue;
+        CHECK(std::abs(c.q - 0.4) < 1e-5);
+        CHECK(std::abs(c.d - 0.2) < 1e-5);
+        REQUIRE(c.evaluated);
+        CHECK(std::abs(c.network_wdl[0] - 0.6) < 1e-6);
+        CHECK(std::abs(c.network_wdl[1] - 0.2) < 1e-6);
+        CHECK(std::abs(c.network_wdl[2] - 0.2) < 1e-6);
+        CHECK(std::isnan(c.network_moves_left) && std::isnan(c.network_error));
+      }
+    }
+  }
+}
+
+TEST(mcts_d3_the_categorical_changes_only_the_uncertainty) {
+  // With E2, E3 and E5's term off, the categorical changes nothing the search
+  // does: two runs whose categoricals differ in mean and in variance grow the
+  // same tree, value for value. With E2 on, its variance steers (the trees
+  // differ) - and under the error-head signal (6m) the categorical is not read
+  // at all, while the error head's output is.
+  const GameState s = variant("Standard");
+  const auto statistics = [&](const SearchParams& p, Heads ev) {
+    Search search(s, p);
+    search.run(ev, Limits{300});
+    CHECK_NOTHROW(search.check_invariants());
+    return tree_statistics(search);
+  };
+  SearchParams off = fast();
+  const Heads narrow(0.1, 0.3, 0.7, false, 0.05f, 9.0f);
+  const Heads wide(0.1, 0.3, -0.7, true, 0.05f, 9.0f);
+  CHECK(statistics(off, narrow) == statistics(off, wide));
+  SearchParams e2 = fast();
+  e2.variance_scaled_cpuct = true;
+  e2.uncertainty_weighted_backup = true;
+  CHECK(statistics(e2, narrow) != statistics(e2, wide));
+  e2.uncertainty_source = UncertaintySource::ErrorHead;
+  CHECK(statistics(e2, narrow) == statistics(e2, wide));
+  const Heads unsure(0.1, 0.3, 0.7, false, 0.8f, 9.0f);
+  CHECK(statistics(e2, narrow) != statistics(e2, unsure));
+}
+
+TEST(mcts_d3_6m_chooses_the_nodes_uncertainty_signal) {
+  // Register I10 / ablation 6m: a node's variance is the categorical's
+  // (the default) or the error head's output; either absent, 0.
+  CHECK(SearchParams{}.uncertainty_source == UncertaintySource::Categorical);
+  const GameState s = variant("Standard");
+  const double spread = value_moments([] {
+    std::array<float, kValueBins> c{};
+    c[0] = c[kValueBins - 1] = 0.5f;
+    return c;
+  }()).variance;
+  struct Case {
+    UncertaintySource source;
+    float error;
+    double want;
+  };
+  for (const Case& c : {Case{UncertaintySource::Categorical, 0.3f, spread},
+                        Case{UncertaintySource::ErrorHead, 0.3f, static_cast<double>(0.3f)},
+                        Case{UncertaintySource::ErrorHead, std::nanf(""), 0.0}}) {
+    SearchParams p = fast();
+    p.uncertainty_source = c.source;
+    Heads ev(0.0, 0.5, 0.0, true, c.error, 4.0f);
+    Search search(s, p);
+    search.run(ev, Limits{40});
+    for (NodeId id = 0; id < search.node_count(); ++id) {
+      const NodeView n = search.node(id);
+      if (!n.evaluated) continue;
+      CHECK(std::abs(n.eval_variance - c.want) < 1e-12);
+      CHECK_EQ(n.eval_moves_left, 4.0f);  // recorded, never backed up
+      if (std::isnan(c.error)) CHECK(std::isnan(n.eval_error));
+      else CHECK_EQ(n.eval_error, c.error);
+    }
+  }
+  // No categorical under the default: no signal (0).
+  class WdlOnly final : public Evaluator {
+   public:
+    void evaluate(std::span<const EvalRequest> batch, std::span<Evaluation> out) override {
+      for (std::size_t i = 0; i < batch.size(); ++i) {
+        out[i].logits.assign(batch[i].expansion->moves().size(), 0.0f);
+        out[i].wdl = {2.0f, 1.0f, 1.0f};  // unnormalised: the search normalises it
+      }
+    }
+  } wdl_only;
+  Search search(s, fast());
+  search.run(wdl_only, Limits{40});
+  const NodeView root = search.node(search.root());
+  CHECK_EQ(root.eval_variance, 0.0);
+  CHECK(std::abs(root.eval_mean - 0.25) < 1e-12 && std::abs(root.eval_draw - 0.25) < 1e-12);
+}
+
+TEST(mcts_d3_game_ends_back_up_their_draw_probability) {
+  // A mate backs up D 0, a stalemate D 1 (C10) and the turn cap's convention
+  // D 1 (I11: a draw) - as their values -1 and 0.
+  for (const bool graph : {false, true}) {
+    for (int which = 0; which < 2; ++which) {
+      SearchParams p = fast();
+      p.graph = graph;
+      const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Uniform);
+      Search search(which == 0 ? mate_in_one() : forced_draw(), p);
+      search.run(*ev, Limits{600});
+      CHECK_NOTHROW(search.check_invariants());
+      std::size_t ends = 0;
+      for (NodeId id = 0; id < search.node_count(); ++id) {
+        const NodeView n = search.node(id);
+        if (n.terminal == Terminal::None || n.weight == 0) continue;
+        ++ends;
+        CHECK_EQ(n.draw, n.terminal == Terminal::Checkmate ? 0.0 : n.weight);
+      }
+      CHECK(ends > 0);
+    }
+  }
+  SearchParams p = fast();
+  p.turn_cap.turns = 1;
+  const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Material);
+  GameState s = variant("Standard");
+  s = list_legal_actions(s, 1, Detector::Hypercuboid).actions.front().result;
+  Search search(s, p);
+  search.run(*ev, Limits{100});
+  std::size_t capped = 0;
+  for (NodeId id = 0; id < search.node_count(); ++id) {
+    const NodeView n = search.node(id);
+    if (n.terminal != Terminal::TurnCap || n.weight == 0) continue;
+    ++capped;
+    CHECK_EQ(n.draw, n.weight);
+  }
+  CHECK(capped > 0);
+}
+
+TEST(mcts_d3_the_evaluation_cache_returns_every_head) {
+  // §15.2's purity row (C19-C21): a cache hit is the evaluation delivered -
+  // the WDL, the categorical, the error and moves-left outputs, bit for bit.
+  const GameState a = variant("Standard");
+  Evaluation ev;
+  ev.logits.assign(20, 0.25f);
+  ev.wdl = {0.5f, 0.125f, 0.375f};
+  ev.value = two_hot(0.5);
+  ev.error = 0.0625f;
+  ev.moves_left = 31.5f;
+  EvalCache cache(16, std::size_t{1} << 20);
+  cache.insert(7, 0, 0, a, ev);
+  const Evaluation* hit = cache.find(7, 0, 0, a, true);
+  REQUIRE(hit != nullptr);
+  CHECK(hit->wdl == ev.wdl);
+  CHECK(hit->value.has_value() && *hit->value == *ev.value);
+  CHECK_EQ(hit->error, ev.error);
+  CHECK_EQ(hit->moves_left, ev.moves_left);
+  // A fresh search sharing the cache (C14): its root's evaluation comes from
+  // the cache, every head as the first search's root had it.
+  const auto shared = std::make_shared<EvalCache>();
+  Heads heads(0.3, 0.1, 0.2, false, 0.25f, 17.0f);
+  NodeView first;
+  {
+    Search one(a, fast(), 0, shared);
+    one.run(heads, Limits{1});
+    first = one.node(one.root());
+  }
+  Search two(a, fast(), 0, shared);
+  two.run(heads, Limits{1});
+  CHECK_EQ(two.stats().cache_hits, std::uint64_t{1});
+  const NodeView again = two.node(two.root());
+  CHECK_EQ(again.eval_mean, first.eval_mean);
+  CHECK_EQ(again.eval_draw, first.eval_draw);
+  CHECK_EQ(again.eval_variance, first.eval_variance);
+  CHECK_EQ(again.eval_error, first.eval_error);
+  CHECK_EQ(again.eval_moves_left, first.eval_moves_left);
+}
+
+TEST(mcts_d3_the_builtin_evaluators_give_a_wdl) {
+  // uniform: W = D = L (value exactly 0, draw 1/3); material: no draw, value
+  // tanh(balance / 10) as before; random: a function of the state, a draw
+  // share in [0, 0.5].
+  const GameState s = variant("Standard");
+  for (const BuiltinEvaluator kind : {BuiltinEvaluator::Uniform, BuiltinEvaluator::Random, BuiltinEvaluator::Material}) {
+    const std::unique_ptr<Evaluator> ev = make_evaluator(kind, 5);
+    Search search(s, fast());
+    search.run(*ev, Limits{60});
+    CHECK_NOTHROW(search.check_invariants());
+    for (NodeId id = 0; id < search.node_count(); ++id) {
+      const NodeView n = search.node(id);
+      if (!n.evaluated) continue;
+      switch (kind) {
+        case BuiltinEvaluator::Uniform:
+          CHECK_EQ(n.eval_mean, 0.0);
+          CHECK_EQ(n.eval_draw, 1.0 / 3.0);
+          break;
+        case BuiltinEvaluator::Material: CHECK_EQ(n.eval_draw, 0.0); break;
+        case BuiltinEvaluator::Random: CHECK(n.eval_draw >= 0.0 && n.eval_draw <= 0.5); break;
+      }
+      CHECK(std::isnan(n.eval_error) && std::isnan(n.eval_moves_left));
+    }
+  }
+  CHECK(wdl_of(0.5) == (std::array<float, kWdl>{0.75f, 0.0f, 0.25f}));
+  CHECK(wdl_of(3.0) == (std::array<float, kWdl>{1.0f, 0.0f, 0.0f}));  // clamped
+  CHECK_THROWS_AS((void)wdl_of(std::nan("")), std::invalid_argument);
+  const WdlValue w = wdl_value({3.0f, 2.0f, 1.0f});
+  CHECK(std::abs(w.q - 2.0 / 6.0) < 1e-15 && std::abs(w.d - 2.0 / 6.0) < 1e-15);
+  CHECK_THROWS_AS((void)wdl_value({0.0f, 0.0f, 0.0f}), std::invalid_argument);
+  CHECK_THROWS_AS((void)wdl_value({1.0f, -0.5f, 1.0f}), std::invalid_argument);
 }
 
 TEST(mcts_the_submit_share_is_the_prior_without_a_submit_logit) {
@@ -2685,6 +3000,7 @@ class StaleSubmit final : public Evaluator {
   void evaluate(std::span<const EvalRequest> batch, std::span<Evaluation> out) override {
     for (std::size_t i = 0; i < batch.size(); ++i) {
       out[i].logits.assign(batch[i].expansion->moves().size(), 0.0f);
+      out[i].wdl = wdl_of(0.0);
       out[i].value = two_hot(0.0);
       if (stale_ && calls_ == 0 && !batch[i].expansion->submit_possible()) out[i].submit_logit = 25.0f;
     }
@@ -2697,6 +3013,36 @@ class StaleSubmit final : public Evaluator {
 };
 
 }  // namespace
+
+TEST(mcts_run_hands_the_evaluator_reset_buffers) {
+  // Every field of a reused Evaluation buffer is reset before the evaluator
+  // sees it - D3's heads included: a WDL, categorical, error or moves-left
+  // left from an earlier leaf would otherwise reach a later one that gives none.
+  class Checking final : public Evaluator {
+   public:
+    void evaluate(std::span<const EvalRequest> batch, std::span<Evaluation> out) override {
+      for (std::size_t i = 0; i < batch.size(); ++i) {
+        const Evaluation& e = out[i];
+        const bool reset = e.logits.empty() && std::isnan(e.submit_logit) && e.wdl == std::array<float, kWdl>{} &&
+                           !e.value.has_value() && std::isnan(e.error) && std::isnan(e.moves_left);
+        if (!reset) ++stale;
+        out[i].logits.assign(batch[i].expansion->moves().size(), 0.0f);
+        out[i].submit_logit = 0.5f;
+        out[i].wdl = {1.0f, 2.0f, 3.0f};
+        out[i].value = two_hot(0.25);
+        out[i].error = 0.5f;
+        out[i].moves_left = 3.0f;
+      }
+    }
+    int stale = 0;
+  } ev;
+  SearchParams p = fast();
+  p.synchronous = true;  // batches of one: the same buffer every time
+  Search search(variant("Standard"), p);
+  search.run(ev, Limits{50});
+  CHECK(search.stats().evaluations > 10);
+  CHECK_EQ(ev.stale, 0);
+}
 
 TEST(mcts_run_resets_every_field_of_its_evaluation_buffers) {
   // run() reuses its Evaluation buffers between batches: a submit logit left
