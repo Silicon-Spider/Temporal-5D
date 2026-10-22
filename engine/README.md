@@ -1957,10 +1957,10 @@ They share two things:
   in a third word, where a torn write only reorders moves.
 - **The solved store.** Proofs go there the moment they are found (H19).
   `ConcurrentSolvedStore` (a scanner's own) spreads positions over 64 shards by key,
-  each behind a reader-writer lock, and keeps `MemorySolvedStore`'s contract: it
-  compares positions in full on a key match (`same_position`, §11.3's hashing trap) and
-  refuses two kinds of proof for one position. A store that is not safe for threads
-  has its calls serialised.
+  each behind its own exclusive lock (`ShardLock`, a `std::mutex`: "The stores' lock",
+  below), and keeps `MemorySolvedStore`'s contract: it compares positions in full on a
+  key match (`same_position`, §11.3's hashing trap) and refuses two kinds of proof for
+  one position. A store that is not safe for threads has its calls serialised.
 
 Everything else is per thread: killers, history and continuation history (§11.3).
 They carry over from scan to scan until `clear()`, which is meant for between games.
@@ -1990,11 +1990,92 @@ searches from its own copy of the root, rebuilt board by board (`isolated_copy`;
 the state cannot be rebuilt from its boards alone, because play decided its activity
 under Q1's consecutive rule, Q3 or Q6, it shares the root).
 
+**The stores' lock (H17; fixed 2026-10-22).** Each shard of the solved store and of the
+prover's disproof store is behind a `ShardLock` (`t5d/scanner.hpp`): a `std::mutex`, so a
+probe waits on another probe of its own shard (one of 64), never on another shard's.
+- **Why not a reader-writer lock.** The shards were behind a `std::shared_mutex` until
+  2026-10-22, which with this project's Windows toolchain (MSYS2 ucrt64 g++, winpthreads)
+  did not exclude. libstdc++ builds it on a `pthread_rwlock_t` with the static
+  initialiser; winpthreads initialises that on its first call and returns `EINVAL` to the
+  threads that lose the race to do so (8 threads on 64 fresh locks: 149,878 and 156,542 of
+  1,024,000 `pthread_rwlock_wrlock` calls, in two runs); and libstdc++ ignores that error.
+  So a losing thread ran its critical section without the lock, then unlocked a lock it did
+  not hold. Every store these threads share is first taken by all of them at once: a
+  scanner's own, and Guard's and Hunt's, which are built for each call.
+  `scanner_lazy_smp_store_refuses_contradictions` failed in 14 of 600 runs on 2026-10-17
+  (10 crashes, 3 stores holding one position twice, 1 lost distance) and in 85 of 600 on
+  2026-10-22, a busier machine (58 crashes; the rest a position held twice or a shorter
+  distance lost). A position held twice can hold two kinds of proof, which is what the
+  store exists to refuse.
+- **It also leaked.** libstdc++ never destroys a statically initialised rwlock, so each
+  `std::shared_mutex` that winpthreads initialised kept its objects: a review's probe (200
+  rounds of 64 fresh locks, 8 threads) took the process from 71 to 35,213 handles, about 2.75
+  a lock; with `std::mutex` the count stayed at 71. Guard and Hunt built up to three 64-shard
+  stores a call, so long runs on the old lock (6b'' among them) accumulated handles and memory.
+- **Why a `std::mutex` is correct by construction.** libstdc++'s `std::mutex::lock()`
+  throws `std::system_error` on any error the platform reports, so it never returns without
+  the lock (its `shared_mutex` ignores `EINVAL`). The correctness rests on that contract,
+  not on how a threads library initialises a lock. In practice the error does not come:
+  in the same experiment `pthread_mutex_lock` never failed (8 threads on 64 fresh,
+  statically initialised mutexes, 2,000 rounds), and glibc's mutex needs no first-use
+  initialisation at all.
+- **Why not a warm-up.** Taking each shard's reader-writer lock once at construction, before
+  any thread shares it, also stopped the crash (0 of 600 runs, an experiment at E-A6's
+  review), but only because of how winpthreads initialises a lock - not by `shared_mutex`'s
+  contract - and it keeps the slow lock (below).
+- **The audit.** No other `std::shared_mutex`, `shared_lock` or `shared_timed_mutex` is left
+  in `engine/`. The TTs are lockless (atomics). The other locks are `std::mutex`: the
+  serialisation of a caller's store that is not safe for threads (`scanner.cpp`,
+  `prover.cpp`), the prover's certificate, and the tools' output; `t5d-bench`'s pool waits
+  on a `std::barrier`. MCGS and the evaluation cache have no lock: the search is single-threaded
+  (H15), and the searches that share a cache are used one at a time
+  (`t5d_search_new_sharing` says so).
+- **The cost, indicative** (the shared development machine, so not a measurement).
+  winpthreads' reader-writer lock costs 1.4-1.8 µs for a lock and its unlock, uncontended
+  (9 ns for the mutex), and each of those calls takes one process-wide spinlock for its
+  bookkeeping, so its throughput falls as threads are added, even spread over 64 locks. So
+  the mutex is faster here, by far. Store operations per second, every thread together, on
+  509 positions from random play, over three find/put mixes (99/1, 90/10 and 50/50), the
+  median of three half-second runs (2026-10-22; load 56% before):
+
+  | Store | 1 thread | 5 threads | 12 threads |
+  |---|---|---|---|
+  | The old store (a replica: `std::shared_mutex`, probes under a shared lock, each shard's lock warmed first) | 0.50-0.54 M | 0.07 M | 0.05 M |
+  | `ConcurrentSolvedStore` (`ShardLock`) | 12.5-13.9 M | 39-43 M | 44-51 M |
+  | `DisproofStore` (`ShardLock`) | 13.0-13.5 M | 22-31 M | 31-46 M |
+
+  On 2026-10-17 the same benchmark gave 0.55-0.69 / 0.07 / 0.06-0.07 M for the old store and
+  13.7-16.5 / 36-38 / 55-58 M for `ConcurrentSolvedStore`. In the searches (a 20,000-node
+  budget on each of 184 positions from random play; the old and new builds alternated, the
+  median of three runs), at 5 threads Hunt ran 1.45× (2026-10-17) and 1.69× (2026-10-22,
+  load 91-96%), Guard 2.71× and 2.90×, and the scanner 1.22× and 1.34× as many nodes per
+  second as before; at 1 thread 0.94-1.07×, noise. At 1 thread the old and new builds
+  searched the same nodes and found the same proofs (Hunt 1,252,177 nodes, 39 mates; Guard
+  2,786,845, 30 refutations; the scanner 1,510,209, 49 proofs). On Linux (glibc) the old lock
+  was correct - its static initialiser needs no first-use initialisation - and the change
+  there gives up readers' sharing of a shard (one of 64) for a plain mutex; that is not
+  measured here.
+- **The tests** (`tests/test_shared_stores.cpp`) release 8 threads at once on fresh locks,
+  round after round, so that they meet at each lock's first use.
+  `shared_store_lock_excludes_at_first_concurrent_use` takes the lock itself: 400 rounds of
+  64 locks, each held a few microseconds, and no thread may find another inside or lose an
+  increment. `shared_stores_hold_at_first_concurrent_use` takes the stores: 150 rounds of a
+  fresh `ConcurrentSolvedStore` and `DisproofStore` written by 8 threads, and every
+  shortest proof, every deepest disproof and exactly one entry per position must be kept.
+  Built with the old lock (`e8de15e` with this file, `ShardLock` named
+  `std::shared_mutex`), the lock test failed in 50 of 50 runs (136-876 overlaps a run) and
+  the store test crashed in 50 of 50 (120 of 120 each on 2026-10-17). With `ShardLock`
+  neither failed in 300 runs (500 on 2026-10-17), and
+  `scanner_lazy_smp_store_refuses_contradictions` passed 1,000 of 1,000 (and 1,000 of 1,000
+  on 2026-10-17).
+
 `threads = 1` is the deterministic mode (H15). On the corpus (805 roots and 780
 leaves, 100,000-node scans) it searched the same trees as the scanner before Lazy SMP,
 node for node.
 
-**Scaling on the dev machine.** This machine was shared with other work.
+**Scaling on the dev machine.** This machine was shared with other work, and these
+figures were taken with the stores' old lock (before 2026-10-22: "The stores' lock",
+above).
 - **Long scans.** On 1-second scans of 68-105-board positions each thread ran at 94%
   of a lone thread's speed with 2 threads, and at 82% with 5.
 - **The corpus's 50 ms root scans.** With 5 threads each ran at 61% of one thread's
@@ -2024,6 +2105,9 @@ under Q4's ruled reading. The shares of roots reaching 5 forcing half-turns were
   Eight threads put proofs at once and then contradictions: every contradiction is
   refused, and the shortest distance is kept. A plain `MemorySolvedStore` shared by
   four threads gets every proof, each checked against the game tree.
+- `shared_store_lock_excludes_at_first_concurrent_use` and
+  `shared_stores_hold_at_first_concurrent_use` take the stores' lock and the stores
+  themselves at their first use by 8 threads at once ("The stores' lock", above).
 - `scanner_lazy_smp_reaches_the_single_threads_depth` gives 5 threads and 1 thread the
   same 40 ms on a sample of positions from Standard and Two Timelines play. Summed
   over the sample, 5 threads must resolve at least one thread's depth (one retry, for
@@ -3258,6 +3342,23 @@ The figures before the review (2026-10-03: Guard 64.9 / 15.1 / 5.2 / 0.0%, Hunt 
 default then, not Guard's - while the filter was unsound (J6's twins), and counted
 proofs whether E4 confirmed them or not (Guard's 48 refutations were, 1 was
 incomplete). They gave the same verdicts.
+
+**The truth's sources since M17.** M17 was measured at `d96d6d9`. The truth's sources
+(`T5D_TRUTH_SOURCES`) have changed three times since, so a build of today's tree has
+another code signature than M17's:
+- `9be6f04` typed the prover's hash constants (for g++ 13/14);
+- A6's first commit (`e554da0`) changed which thread's line the prover reports;
+- on 2026-10-22 the shared stores' lock became a `std::mutex` per shard (`ShardLock`:
+  "The stores' lock", under Lazy SMP).
+
+None of them changes verdict logic. No proof, disproof, distance or verdict is decided
+differently, and the committed truth's provenance records no signature ("unrecorded").
+M17's verdicts stand on what they were read from: every refutation and mate counted was
+confirmed against E4 alone. What the lock does change is speed. 6b″ ran Guard and Hunt at
+5 threads, 50 ms per root, on Windows, where the old lock both raced and cost them
+throughput (indicatively, at 5 threads Guard now runs 2.7-2.9× and Hunt 1.45-1.7× as many
+nodes per second). So its rates may understate what 50 ms reaches. Whether a quiet-machine
+re-run (about a minute) moves a verdict is the main loop's question (build-log issue 147).
 
 What the verdicts rest on (information, the same run):
 - **Guard's cost is the opponent's action product.** Depth 1 must refute every

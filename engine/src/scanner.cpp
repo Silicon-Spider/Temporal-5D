@@ -15,7 +15,6 @@
 #include <cstdint>
 #include <exception>
 #include <mutex>
-#include <shared_mutex>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -74,11 +73,12 @@ void MemorySolvedStore::clear() noexcept {
 }
 
 // The shards: a power of two, chosen by the key's top bits (the low bits
-// pick a TT slot - any bits would do, the key is mixed).
+// pick a TT slot - any bits would do, the key is mixed). Each behind its own
+// ShardLock (exclusive: see t5d/scanner.hpp for why not a reader-writer lock).
 struct ConcurrentSolvedStore::Shards {
   static constexpr std::size_t kCount = 64;
   struct Shard {
-    mutable std::shared_mutex mutex;
+    mutable ShardLock mutex;
     MemorySolvedStore store;
   };
   std::array<Shard, kCount> shard;
@@ -93,20 +93,20 @@ ConcurrentSolvedStore::~ConcurrentSolvedStore() = default;
 
 std::optional<Proof> ConcurrentSolvedStore::find(const GameState& position) const {
   const Shards::Shard& s = shards_->of(position);
-  std::shared_lock<std::shared_mutex> lock(s.mutex);
+  const std::lock_guard<ShardLock> lock(s.mutex);
   return s.store.find(position);
 }
 
 void ConcurrentSolvedStore::put(const GameState& position, const Proof& proof) {
   Shards::Shard& s = shards_->of(position);
-  std::unique_lock<std::shared_mutex> lock(s.mutex);
+  const std::lock_guard<ShardLock> lock(s.mutex);
   s.store.put(position, proof);  // a contradiction throws, the lock released
 }
 
 std::size_t ConcurrentSolvedStore::size() const {
   std::size_t n = 0;
   for (const Shards::Shard& s : shards_->shard) {
-    std::shared_lock<std::shared_mutex> lock(s.mutex);
+    const std::lock_guard<ShardLock> lock(s.mutex);
     n += s.store.size();
   }
   return n;
@@ -114,7 +114,7 @@ std::size_t ConcurrentSolvedStore::size() const {
 
 void ConcurrentSolvedStore::clear() {
   for (Shards::Shard& s : shards_->shard) {
-    std::unique_lock<std::shared_mutex> lock(s.mutex);
+    const std::lock_guard<ShardLock> lock(s.mutex);
     s.store.clear();
   }
 }
