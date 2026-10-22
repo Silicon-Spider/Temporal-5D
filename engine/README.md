@@ -60,6 +60,7 @@ rules reference, `docs/rules/README.md`, which the code cites throughout.
 | **E3:** the measurement tools, and SYNTHETIC positions by random play | `tools/t5d_measure.cpp`, `tools/t5d_bench.cpp`, `tools/synthetic.hpp` | §15.6, M7, M9 |
 | **E4:** check status and submission legality; the engine's check ruling | `include/t5d/check.hpp` | §11.0 items 1-2, H36 |
 | **E4:** legal actions, their count and listing, the legal moves; the naive and hypercuboid mate detectors | `include/t5d/search.hpp`, `src/search.cpp`, `src/hypercuboid.cpp` | §11.0 item 3, H37 |
+| **D2's flat form:** the turn generator - the hypercuboid search best first, legal turns in non-increasing summed score | `include/t5d/turngen.hpp`, `src/hypercuboid.cpp` | §8.2, §11.0 item 3, §15.2; D2 |
 | **E4:** the gate adapter's full mode and its diagnostics | `include/t5d/gate.hpp`, `tools/t5d_gate.cpp` | H23, H36, H37 |
 | **E5a:** the legal moves in tiers: exact, budgeted, fast | `include/t5d/legal.hpp`, `src/legal.cpp` | C4, R1; build-log spec issues 28, 46 |
 | **E5b:** the tactical scanner: forcing actions, proofs and estimates, the solved store; experiment 6b's tool | `include/t5d/scanner.hpp`, `tools/t5d_scan6b.cpp` | §11.1-§11.3, §15.6, H1-H6, H15, H19, M8 |
@@ -1560,6 +1561,61 @@ finish the action and the legal moves (`detectors_agree_with_the_brute_force_ref
 400 positions and their children; `long_`: 4,000). Hand-built node bounds guard the
 cases that once stalled the search (`search_the_hypercuboid_stays_small_when_every_branch_rewinds`,
 `search_the_hypercuboid_finds_actions_past_reactivations`).
+
+### The turn generator: the hypercuboid best first (D2's flat form; `t5d/turngen.hpp`)
+
+§8.2's flat form: "A generator assembles complete legal turns best-first by summed
+logits, through the rules engine ... The hypercuboid search already walks this product
+space for mate detection; ordered by prior, it becomes the turn generator."
+`TurnGenerator` is that search, in `src/hypercuboid.cpp` beside the detector and
+sharing its code - `build`, `propagate`, `feasible`, `judge`, `subtract` - unchanged.
+Written from the spec, the rulebook and this design note; ftxi's fine tree and cwmtt
+are prior art to read about, not code to port (AGENTS.md).
+
+- **Scores.** A `TurnScorer` gives each value of each axis a score: leaving the board
+  (the detector's Pass - §8.2's "leave it" option), and each move as the option of
+  the board it is scored on - its source board (a move within it, a jump's departure,
+  a branching move; J6's branching twin of a jump scores as the jump), or, for a
+  non-branching jump between two playable boards, the destination too (the arrival):
+  "a move between two present boards resolves both". A turn is a point; its score is
+  the sum of its values' scores over the axes in order (ascending timeline) - one term
+  per playable board.
+- **Order.** The detector's stack of boxes becomes a priority queue keyed by each
+  box's bound, the sum of its axes' best remaining scores. The best box is taken,
+  narrowed (propagation; outside the general regime, the abstract check, which removes
+  a box no skeleton of which is realisable), re-queued if narrowing lowered its bound
+  below another's, and its best point - each axis's best value, the lowest index of
+  equals - judged by the detector's `judge`: a legal point's actions are recorded, and
+  every other point is removed with a region holding no legal action. The best point
+  scores exactly the box's bound, and every point not yet judged lies in a queued box
+  bounded by at most that, so points are judged - and turns emitted - in non-increasing
+  score. Completeness is the detector's argument: the boxes partition what is left.
+- **Unit.** `TurnUnit::Actions` (count_legal_actions' unit: two creation orders of one
+  point are two actions, of equal score) or `Successors` (distinct states; each
+  state's first action - its best - stands for it). Ties are deterministic: the order
+  boxes were queued, then a point's realisations.
+- **Budget.** One `SearchBudget` over the generator's life (nodes, positions, the
+  memory ceiling). A stopped generator is `stopped()`, never `exhausted()`: never a
+  proof that no further turn exists (H37).
+- **Not a detector.** `detect_mate`, the counts, the listings and the legal-move tiers
+  run the depth-first search exactly as before: `detectors_the_hypercuboid_search_is_pinned`
+  hashes every answer and statistic of theirs (nodes, points, regions, boxes removed,
+  the most positions held) on 571 positions - tiny multiverses, the sparse starts
+  under five rulesets, every variant, unlimited and under budgets that stop them -
+  pinned at 2f07079, before the generator was written.
+
+**§15.2's row** (`tests/test_turngen.cpp`): on 300 tiny multiverses (the brute-force
+reference's; 265 with two playable boards or more, all three regimes), five
+constructed multi-board presents (rooks and knights jumping between present boards, a
+rewinding branch) and random games from every named variant's start, under continuous
+scores and small integer ones that tie, the generator's whole output is the legal
+turns exactly, each once - as actions against the reference's keys and the engine's
+exhaustive listing (E4), as successors against the reference's states - in
+non-increasing score, each score recomputed from the turn's moves alone bit for bit,
+the sorted scores of every legal action (so equal runs match as multisets), each
+successor's score its best action's, the same on a second run, and, under a budget
+that stops it half-way, stopped and a prefix of the full run. `long_` runs 3,000 tiny
+multiverses and longer games.
 
 ### The two detectors compared
 
