@@ -534,6 +534,15 @@ struct Search::Impl {
   std::uint64_t root_generation_ = 1;
   std::uint64_t notified_generation_ = 0;
   bool noise_applied_ = false;
+  // I15's root side table: each root edge's prior before the noise (after the
+  // temperatures, the unknown-move scale and the submit share), in the root's
+  // edge order - filled by the root's own expansion; empty for a carried root
+  // (expanded as a child: its prior is that already).
+  std::vector<double> root_prior_noise_free_;
+  // D4's effort label (I15): the root edge with the most visits, and the root's
+  // visits when it became so ("visits until the decision stabilises", §8.6).
+  std::size_t best_edge_ = kNoEdge;
+  std::uint32_t best_since_ = 0;
   std::vector<Step> path_;
   std::size_t tree_bytes_ = 0;  // the nodes' counts (Node::bytes), summed
 
@@ -858,7 +867,9 @@ struct Search::Impl {
     return out.at(0);
   }
 
-  // Removes an edge from selection, renormalising its siblings' priors.
+  // Removes an edge from selection, renormalising its siblings' priors (at the
+  // root the side table's noise-free priors too, and the effort label's most
+  // visited edge found again if it was this one).
   void prune(NodeId pid, std::size_t ei) {
     Node& p = nodes_[pid];
     if (p.edges[ei].pruned) return;
@@ -872,6 +883,41 @@ struct Search::Impl {
         if (!e.pruned) e.prior /= sum;
       }
     }
+    if (pid != root_) return;
+    if (root_prior_noise_free_.size() == p.edges.size()) {
+      double total = 0;
+      for (std::size_t i = 0; i < p.edges.size(); ++i) total += p.edges[i].pruned ? 0.0 : root_prior_noise_free_[i];
+      if (total > 0) {
+        for (std::size_t i = 0; i < p.edges.size(); ++i) {
+          if (!p.edges[i].pruned) root_prior_noise_free_[i] /= total;
+        }
+      }
+    }
+    if (best_edge_ == ei) reset_best();
+  }
+
+  // D4's effort label: a root edge's visit counted - it becomes the most
+  // visited when it has strictly more visits than the incumbent.
+  void note_root_visit(std::size_t ei) {
+    const Node& r = nodes_[root_];
+    if (best_edge_ == kNoEdge || (ei != best_edge_ && r.edges[ei].visits > r.edges[best_edge_].visits)) {
+      best_edge_ = ei;
+      best_since_ = r.visits;
+    }
+  }
+
+  // The most visited unpruned root edge now (the lowest index of a tie), as of
+  // the root's visits now; none without a visited edge.
+  void reset_best() {
+    const Node& r = nodes_[root_];
+    best_edge_ = kNoEdge;
+    best_since_ = r.visits;
+    for (std::size_t i = 0; i < r.edges.size(); ++i) {
+      const Edge& e = r.edges[i];
+      if (e.pruned || e.visits == 0) continue;
+      if (best_edge_ == kNoEdge || e.visits > r.edges[best_edge_].visits) best_edge_ = i;
+    }
+    if (best_edge_ == kNoEdge) best_since_ = 0;
   }
 
   // (c) Verifies an unknown edge once: Illegal prunes it.
@@ -1075,12 +1121,34 @@ struct Search::Impl {
       if (e.prior > 0) entropy -= e.prior * std::log(e.prior);
     }
     n.k0 = std::max(params_.widening_min, params_.widening_scale * std::exp(entropy));
-    if (id == root_ && params_.root_noise && !noise_applied_ && n.edges.size() > 1) {
-      apply_noise(n);
-      noise_applied_ = true;
+    if (id == root_) {
+      std::vector<double> before;
+      before.reserve(n.edges.size());
+      for (const Edge& e : n.edges) before.push_back(e.prior);
+      if (params_.root_noise && !noise_applied_ && n.edges.size() > 1) {
+        apply_noise(n);
+        noise_applied_ = true;
+      }
+      // The edges sorted as below, the side table with them (a stable sort of
+      // the indices orders them exactly as one of the edges).
+      std::vector<std::size_t> order(n.edges.size());
+      for (std::size_t i = 0; i < order.size(); ++i) order[i] = i;
+      std::stable_sort(order.begin(), order.end(),
+                       [&n](std::size_t a, std::size_t b) { return n.edges[a].prior > n.edges[b].prior; });
+      std::vector<Edge> sorted;
+      sorted.reserve(n.edges.size());
+      root_prior_noise_free_.clear();
+      for (const std::size_t i : order) {
+        sorted.push_back(n.edges[i]);
+        root_prior_noise_free_.push_back(before[i]);
+      }
+      n.edges = std::move(sorted);
+      best_edge_ = kNoEdge;
+      best_since_ = 0;
+    } else {
+      std::stable_sort(n.edges.begin(), n.edges.end(),
+                       [](const Edge& a, const Edge& b) { return a.prior > b.prior; });
     }
-    std::stable_sort(n.edges.begin(), n.edges.end(),
-                     [](const Edge& a, const Edge& b) { return a.prior > b.prior; });
     n.expanded = true;
     n.pending = false;
     n.instantiated = 0;
@@ -1306,6 +1374,7 @@ struct Search::Impl {
     if (params_.proof_channel) {
       for (std::size_t i = path.size(); i-- > 0;) update_bounds(path[i].node);
     }
+    if (path.size() >= 2 && path[0].node == root_) note_root_visit(path[1].edge);
     ++stats_.playouts;
   }
 
@@ -1323,6 +1392,7 @@ struct Search::Impl {
     e.wd += rd;
     ++stats_.residual_backups;
     backup(path, r, rd, 1.0, false);
+    if (pid == root_) note_root_visit(ei);  // the edge crossed is the root's own
   }
 
   // MCTS-Solver with draws: lo = the best child's lower bound; hi = the best
@@ -1696,8 +1766,11 @@ struct Search::Impl {
     table_.clear();
     for (NodeId id = 0; id < nodes_.size(); ++id) register_node(id);
     // Root noise belongs to a fresh root's expansion (self-play); a carried
-    // root (match play, where noise is off) gets none.
+    // root (match play, where noise is off) gets none - nor a side table, and
+    // its effort label starts here (the history above it is not kept).
     noise_applied_ = nodes_[0].expanded;
+    root_prior_noise_free_.clear();
+    reset_best();
     ++stats_.reroots;
     notify_root();
   }
@@ -1978,6 +2051,17 @@ std::vector<RootChild> Search::root_children() const {
     c.q = s.edge_q(r, e);
     c.d = s.edge_d(e);
     c.child = e.child;
+    // I15's side table.
+    c.prior_noise_free = s.root_prior_noise_free_.size() == r.edges.size() ? s.root_prior_noise_free_[i] : e.prior;
+    if (e.w > 0) {
+      const double mean = e.wq / e.w;
+      c.value_variance = std::max(0.0, e.wq2 / e.w - mean * mean);
+    }
+    if (e.child != kNoNode) {
+      const Node& n = s.nodes_[e.child];
+      c.child_key = n.key;
+      if (s.params_.variance_bonus && n.has_eval) c.exploration_scale = s.variance_bonus(n, e);
+    }
     if (e.child != kNoNode && s.nodes_[e.child].has_eval) {
       // The child's own evaluation, the network's, in the root player's view.
       const Node& n = s.nodes_[e.child];
@@ -2257,6 +2341,13 @@ EdgeView Search::edge(NodeId id, std::size_t index) const {
   v.draw = e.wd;
   return v;
 }
+
+double Search::root_cpuct() const noexcept {
+  const Impl& s = *impl_;
+  return s.params_.cpuct * s.cpuct_scale(s.nodes_[s.root_]);
+}
+
+std::uint32_t Search::root_best_since() const noexcept { return impl_->best_since_; }
 
 std::uint64_t Search::digest() const { return impl_->digest(); }
 void Search::check_invariants() const { impl_->check_invariants(); }

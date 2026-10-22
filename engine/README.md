@@ -922,7 +922,12 @@ A `t5d_game` is a state under the rules with its expansion buffers:
 `t5d_game_new_variant`; `t5d_game_apply` (a move given as its source, destination
 and promotion), `t5d_game_apply_expanded` (by index into the last expansion),
 `t5d_game_submit`; `t5d_game_expand` (`t5d_expand_options`; NULL for k = 8, every
-board's features, no relations), which fills a `t5d_expansion`: counts, and pointers
+board's features, no relations, the pseudo-legal moves - engine ABI round 2 appends
+`legal_moves` and the budget `legality_checks`, `legality_nodes`: with `legal_moves` 1 the
+moves are a search leaf's under the same budget, the legal and unknown ones in the same
+order, so that a training record's network input can be rebuilt - register I15; a
+search's own `expand` options refuse it, its `legal_moves_only` and `legality_*`
+deciding its leaves), which fills a `t5d_expansion`: counts, and pointers
 to the flat arrays above (per board: timeline, half-turn, head, active, side,
 playable, window depth, band depth, origin, parent) - valid until the handle is next
 changed - and, appended at its end by stage E7 (every older field keeps its offset),
@@ -2246,7 +2251,7 @@ spec issue 46; each part a parameter):
 | (c) | the first time selection picks an unknown edge it is verified: illegal - removed, siblings' priors renormalised, selection repeated, nothing backed up; legal - flag cleared; still unknown - kept, flagged | `verify_unknown` (on), `verify_legality` (`budgeted(4096, 200000)`) |
 | (d) | a node is terminal only on an exact verdict of E4's detectors | - (H37) |
 | (e) | a child through an unknown edge never raises its parent's lower bound (it still bounds it from above: a superset of the legal children is a sound upper bound), and is never a proven win for final selection | - |
-| (f) | training's policy target is the root's visits (`root_children` lists the instantiated children; the rest have none); the network's move mask is a leaf's legal and unknown moves - every candidate its expansion kept - not the root's children | `RootChild::visits`; `Expansion::move_legality` (`t5d_leaf.legality`) |
+| (f) | training's policy target is built from the root's visits (`root_children` lists the instantiated children; the rest have none) by I2's pruning at target construction - the training loop's, from each child's visits, priors with and without the noise, values and steering counts (round 2c's side table); the network's move mask is a leaf's legal and unknown moves - every candidate its expansion kept - not the root's children | `RootChild` (`visits`, `prior`, `prior_noise_free`, ...); `Expansion::move_legality` (`t5d_leaf.legality`) |
 
 Every pruning renormalises the siblings' priors. Before a move is played, an unknown
 one is classified exactly (`Search::verify`; self-play does this, and plays only moves
@@ -2453,7 +2458,8 @@ invent a draw probability the documents do not give, and its one caller, the Pyt
 binding, moved in the same commit) - and `t5d_search_abandon`; then `t5d_search_info`
 (round 2 appends the root's backed-up `root_d` and its own evaluation: `root_evaluated`,
 `root_wdl`, `root_moves_left`, `root_error`), `_child` (round 2 appends `d`,
-`evaluated`, `network_wdl`, `network_moves_left`, `network_error`),
+`evaluated`, `network_wdl`, `network_moves_left`, `network_error`; round 2c the root's
+side table - below),
 `_choose`, `_choose_by_visits`, `_verify`, `_advance`, `_advance_action`,
 `_root_game`, `_set_epoch`, `_run` (built-in evaluators) and `_run_limits` (within a
 `t5d_search_limits`: playouts, evaluations, nodes, bytes; it reports the
@@ -2476,6 +2482,29 @@ waiting, `max_leaves` 0, a new epoch under a waiting batch); `T5D_ERR_MEMORY`;
 the C++ API throws `std::invalid_argument` for the caller's errors and nothing else, so
 the boundary can tell them apart. Solver bounds are search state, never to be persisted
 as proofs (H19, H23; the header says so).
+
+**The records' fields** (registers I15, I2, D4; engine ABI round 2c) - what §12.8's rich
+training records and I2's target-side pruning need from a search, beside D3's values
+(round 2a). Per root child (`RootChild`, `t5d_root_child`): `child_key` (the child
+node's key - with its moves made, the root's + 1 below a move and 0 below a submission,
+and the epoch, its evaluation's identity; 0 for no child node), `prior_noise_free` (the
+prior before the root noise - after the temperatures, the unknown-move scale and the
+submit share - kept in a root-only side table, so `Edge` does not grow; renormalised
+with `prior` when a sibling is pruned; a carried root's is its `prior`),
+`value_variance` (of the values backed up through it), `exploration_scale` (E3's factor
+on its exploration term, 1 with E3 off), `boost` and `steered_visits` (E10's asset-map
+boosts and Hunt's suggestions: 0, none wired until step 2's E10) and `forced_visits`
+(0: forced playouts are **not built** - §12.5 adopts KataGo's forced-playout pruning
+*at target construction*, the training loop's, and no document asks the search to force
+playouts; issue 153). Per search (`t5d_search_summary`): `root_key` (the root's node
+key, for the records' memo of raw root outputs, which C14's shared cache hides from
+Python when the root's evaluation is a hit), `root_cpuct` (the root's effective cPUCT,
+cpuct times E2's root scale - with each child's `exploration_scale`, a replica of the
+root's PUCT) and `root_best_since`, D4's effort label: the root's visits when its most
+visited child last changed (strictly more visits than the incumbent; §8.6's "visits until
+the decision stabilises"; issue 154; for a root carried by `advance`, counted from the
+re-root). And `t5d_game_expand`'s `legal_moves` (above) rebuilds a record's candidate
+moves (issue 155).
 
 **Validation.** Every real parameter must be finite (NaN or infinity in, say,
 `virtual_loss` or `cpuct_variance_scale` poisoned selection; each is refused by name),
@@ -2596,7 +2625,15 @@ the uniform half's share; capped priors alike); the noise's relative spread cons
 from 20 moves to 62 (600 seeds each, against `1/(C + 1)`); the root temperature on the
 root's priors only, before the noise, and 1 the default's search bit for bit; the new
 parameters' validation; the step loop equal to the C++ search with shaped, tempered and
-per-child noise.
+per-child noise. After I15/I2's fields (round 2c): each root child's noise-free prior the
+tempered prior with the noise's share `prior - (1 - eps) prior_noise_free` non-negative
+and summing to eps, equal to the prior without noise and at a carried root, both
+renormalised when verification removes illegal children; `child_key` its node's;
+`value_variance` its edge's; E3's factor within its bounds and above 1 somewhere; the
+steering and forcing counts 0; `root_cpuct` cpuct with E2 off and its scaled value with
+E2 on; the effort label replayed one playout at a time and from a re-root; and
+`t5d_game_expand`'s `legal_moves` giving a search leaf's moves byte for byte (Standard,
+and a king in check, where the pseudo-legal list has one more), a search refusing it.
 
 ## Stage E8: the verification layer's redesign (M14, a prototype until 6b′)
 
@@ -3804,7 +3841,14 @@ Each is recorded where it is made (the header comments) and listed here:
     above the mean (issue 151);
   - the root policy temperature beside the every-node one (multiplied), 1 by default,
     its self-play value and decay the training generator's; k0's entropy from the
-    tempered prior; a carried root never re-tempered (issue 152).
+    tempered prior; a carried root never re-tempered (issue 152);
+  - forced playouts not built - KataGo's forced-playout pruning is the training loop's,
+    at target construction, from the records' per-child fields (issue 153); the
+    steering counts (E10's) exist and stay 0 until E10;
+  - D4's effort label as the root's visits when its most visited child last changed
+    (issue 154);
+  - a record's input rebuilt by `t5d_game_expand`'s `legal_moves` under the search's
+    legality budget, which the record keeps (issue 155).
 - **An ambiguous move is still unreadable** (stage E4): the notation's "Omission" lets
   a writer leave out a piece that a pin rules out, but legality is judged per action,
   at submission, so a "pin" is no per-move notion; the reader does not try each

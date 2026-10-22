@@ -10,6 +10,82 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-22 - Engine ABI round 2c: I15's record fields - the root side table, the root's key, cPUCT and effort label, `t5d_game_expand`'s legal moves; forced playouts not built
+
+- Register I15 (Committed, process; §12.8: "raw root outputs ..., root and best/played
+  children's values, visits with I2's forced and steered flags, prior-to-target divergence,
+  proofs by reference, and conditions") and I2 (Committed; §12.2, §12.5: search-value and
+  policy targets from the pruned visits) - the engine side, the plan critic's missing
+  item 12, in round 2's last commit. `engine/include/t5d/mcts.hpp`, `src/mcts.cpp`: each
+  `RootChild` gains **the root side table** - `child_key` (the child node's key; 0 for no
+  node), `prior_noise_free` (the prior before the root noise: after the temperatures, the
+  unknown-move scale and the submit share; held in a root-only vector filled by the root's
+  own expansion and sorted with its edges, so `Edge` does not grow; renormalised with
+  `prior` when a sibling is pruned; a carried root's is its prior), `value_variance` (of
+  its backed-up values), `exploration_scale` (E3's factor on its exploration term, 1 with
+  E3 off), `boost` and `steered_visits` (E10's asset-map boosts and Hunt's suggestions: 0,
+  none wired until step 2's E10), `forced_visits` (0). `Search::root_cpuct()` (cpuct times
+  E2's scale at the root) and `Search::root_best_since()`, D4's effort label: the root's
+  visits when its most visited child last changed (strictly more visits to take over; a
+  pruned incumbent found again; from the re-root for a carried root) - "visits until the
+  decision stabilises" (§8.6; issue 154).
+- **Forced playouts: not built** (the critic's contradiction 4; issue 153). §12.5 adopts
+  KataGo's forced-playout *pruning* at target construction - the training loop's (M21) - and
+  no document asks the search to force playouts; the record carries what that pruning and
+  a replica of the root's PUCT need (each child's visits, both priors, q, value variance,
+  E3's factor; the root's effective cPUCT). `forced_visits` exists, appended once, and stays
+  0 unless forcing is ever built.
+- `t5d_game_expand`'s **legal-moves option** (issue 155; the training brief's conflict 3):
+  `engine/include/t5d/capi.h`, `src/capi.cpp` - `t5d_expand_options` appends
+  `legal_moves`, `legality_checks`, `legality_nodes`; with `legal_moves` 1 the game's
+  expansion is a search leaf's under the same budget (the legal and unknown moves, in the
+  same order: the classification is deterministic), so a record's network input can be
+  rebuilt. `t5d_search_params.expand` grows with it (the embedded struct stays last); a
+  search refuses `expand.legal_moves` (its `legal_moves_only` and `legality_*` decide its
+  leaves).
+- C API (`capi_search.h`, `capi_search.cpp`): `t5d_root_child` appends the side table's
+  seven fields; `t5d_search_summary` appends `root_key` (the memo's key for the root's raw
+  outputs, which C14's shared cache hides from Python on a hit), `root_cpuct` and
+  `root_best_since`; `t5d_search_layout` and `t5d_layout` report them. Python mirror in
+  the same commit: `capi.py` (`ExpandOptions` 12 -> 32 bytes, `CSearchSummary`,
+  `CRootChild`), `search.py` (`SearchInfo`, `RootChild`), `game.py` (`Game.expand` and
+  `Game.position` take `legal_moves`, `legality_checks`, `legality_nodes`); the docstrings
+  of `game.py` and `convert.py` that said the filter was not in the C API corrected.
+  `mcts.hpp`'s and the README's (f): the policy target is built from the visits by I2's
+  pruning at target construction, not taken raw.
+- Search results do not change: the side table, the summary fields and the effort label
+  are read, never steer (the root's edges are sorted by a stable sort of their indices,
+  which orders them exactly as the stable sort of the edges did).
+- Tests. `test_mcts.cpp`: `mcts_i15_the_root_side_table` (with root noise and a root
+  temperature of 1.25: the noise-free prior is the tempered softmax, `prior - (1 - eps)
+  prior_noise_free` non-negative and summing to eps; the noise-free prior equal to the
+  prior without noise and at a carried root; `child_key` the node's; `value_variance` the
+  edge's; E3's factor within [1, cap] and above 1 somewhere; the steering and forcing
+  counts 0; both priors summing to 1 after verification removes illegal children);
+  `mcts_i15_root_cpuct_and_the_effort_label` (cpuct with E2 off, its scaled value with
+  E2 on; the effort label replayed one synchronous playout at a time over 400 playouts,
+  and from a re-root). `test_capi_search.cpp`:
+  `capi_search_game_expand_gives_a_leafs_legal_moves_i15` (byte for byte at the Standard
+  start and with a king in check, where the pseudo-legal list has one move more; a bad
+  flag refused; `root_key` the root leaf's key; the side table through the C API; a
+  search refusing `expand.legal_moves`); the layouts. Python (`tests/engine`): the record's
+  input rebuilt by `Game.expand(legal_moves=True)` (both positions), `root_key`,
+  `root_cpuct`, the effort label, the side table, the refusal; the noise-free prior beside
+  the noised one. Checks: engine 577 of 577 (`--werror`); Python, the whole suite, 1083 passed, 1 skipped
+  (`T5D_REQUIRE_ENGINE=1`; 19 min on a shared machine);
+  ruff check and format clean; `harness verify` ok; `gate --tier commit`: the oracle layer ok, the
+  engine differential "SMOKE TEST - PASSED" (41 records compared with the last green run, 0
+  declined), the proof channel DISABLED.
+- `engine/README.md`: "The records' fields", (f), the game C API's `legal_moves`, the
+  readings (issues 153-155), the tests. `docs/BUILD_LOG.md`: register I2, I15 (their
+  engine sides built), D4 (the effort label's source); spec issues 153-155; proposed edits
+  124-126.
+- Spec: §12.8's record list and §12.2/§12.5 (register I15, I2) - forced playouts not built,
+  the pruning target-side, what the record carries for it (edit 124, issue 153); §8.6's and
+  §12.4's effort label (register D4; edit 125, issue 154); §12.8's conditions - the
+  legality budget, with which the input is rebuilt (edit 126, issue 155). No truth source
+  changed (`capi.cpp` and `capi.h` are not among them).
+
 ### 2026-10-22 - Engine ABI round 2b: E1 and I19's exploration - the root noise's total concentration split across the open edges, shaping behind a flag, a root policy temperature
 
 - Register E1 (Committed, class R; §8.4): "root Dirichlet with its total concentration

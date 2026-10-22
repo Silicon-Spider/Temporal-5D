@@ -32,6 +32,7 @@ from t5d.engine.capi import (
     T5D_SPLIT_WHOLE_TURN,
     T5D_VALUE_PROBABILITIES,
     CLeaf,
+    ExpandOptions,
     Library,
     layout_mismatches,
     load_library,
@@ -379,6 +380,50 @@ def test_d3_6m_the_uncertainty_source_is_a_parameter():
             digests.append(s.digest())
             s.close()
     assert digests[0] != digests[1]
+
+
+@pytest.mark.parametrize("fen", [None, "[r2k/4/4/K3:0:1:w]"], ids=["standard", "in-check"])
+def test_i15_a_records_input_is_rebuilt_from_the_game(fen):
+    """I15 (engine ABI round 2c): ``Game.expand(legal_moves=True)`` with the search's legality
+    budget gives a search leaf's candidate moves in its order - so a record's network input can be
+    rebuilt (with White's king in check down the a-file, one pseudo-legal move fewer); the
+    root's key is its leaf's (the memo's identity); the root's side table reads back."""
+    with Game.variant("Standard") if fen is None else Game.from_fen([fen]) as g:
+        p = search_params(seed=1, expand=(8, "none", 0))
+        s = Search(g, params=p)
+        assert s.gather(1) == 1
+        leaf = s.leaf_view(0)
+        s.abandon()
+        rebuilt = g.expand(square_features="none", legal_moves=True, legality_checks=p.legality_checks, legality_nodes=p.legality_nodes)
+        assert rebuilt.move_texts() == leaf.expansion.move_texts()
+        pseudo = g.expand(square_features="none")
+        assert pseudo.move_count == rebuilt.move_count + (0 if fen is None else 1)
+        s.run(T5D_EVALUATOR_RANDOM, 60, seed=2)
+        info = s.info()
+        assert info.root_key == leaf.key and info.root_cpuct == p.cpuct
+        assert 1 <= info.root_best_since <= info.root_visits
+        for c in s.children():
+            assert c.prior_noise_free == c.prior  # no root noise
+            assert (c.child_key != 0) or c.visits == 0
+            assert (c.boost, c.forced_visits, c.steered_visits, c.exploration_scale) == (0.0, 0, 0, 1.0)
+        s.close()
+        with pytest.raises(EngineArgumentError, match="legal_moves"):
+            Search(g, params=search_params(expand=ExpandOptions(8, 0, 0, 1, 64, 2000)))
+
+
+def test_i15_the_noise_free_prior_beside_the_noised_one():
+    """With root noise and a root temperature, each root child's noise-free prior is the tempered
+    prior and ``prior - (1 - eps) * prior_noise_free`` is the noise's share: non-negative, summing
+    to eps."""
+    with Game.variant("Standard") as g:
+        s = Search(g, params=search_params(seed=4, widening=0, root_noise=1, root_policy_temperature=1.25))
+        s.run(T5D_EVALUATOR_RANDOM, 30, seed=5)
+        children = s.children()
+        eps = s.params.dirichlet_epsilon
+        share = [c.prior - (1 - eps) * c.prior_noise_free for c in children]
+        assert min(share) >= -1e-12 and sum(share) == pytest.approx(eps, abs=1e-9)
+        assert sum(c.prior_noise_free for c in children) == pytest.approx(1.0, abs=1e-9)
+        s.close()
 
 
 # --- what the evaluations mean --------------------------------------------------------------------

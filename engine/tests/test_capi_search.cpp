@@ -645,6 +645,71 @@ TEST(capi_search_takes_the_moves_made_from_the_game_a6) {
   t5d_game_destroy(root);
 }
 
+TEST(capi_search_game_expand_gives_a_leafs_legal_moves_i15) {
+  // I15: a record's network input must be rebuildable - t5d_game_expand with
+  // legal_moves and the search's legality budget gives a search leaf's moves,
+  // in its order. At the Standard start every move is legal; with White's king
+  // in check down the a-file one of its three moves is not.
+  const char* checked[] = {"[r2k/4/4/K3:0:1:w]"};
+  t5d_game* raw = nullptr;
+  REQUIRE_EQ(t5d_game_new_from_fen(checked, 1, 4, 4, T5D_PARITY_INFER, T5D_TO_MOVE_WHITE, T5D_RULES_STANDARD, &raw,
+                                   nullptr),
+             T5D_OK);
+  const Game check(raw);
+  const Game standard = variant_game("Standard");
+  for (t5d_game* g : {standard.get(), check.get()}) {
+    const t5d_search_params p = quick_params();
+    const SearchHandle s = new_search(g, p);
+    std::size_t n = 0;
+    REQUIRE_EQ(t5d_search_gather(s.get(), 1, T5D_NO_LIMIT, &n, nullptr), T5D_OK);
+    REQUIRE_EQ(n, std::size_t{1});
+    t5d_leaf leaf;
+    REQUIRE_EQ(t5d_search_leaf(s.get(), 0, &leaf, nullptr), T5D_OK);
+    const std::vector<t5d_move> want(leaf.expansion.moves, leaf.expansion.moves + leaf.expansion.move_count);
+    const std::uint64_t root_leaf_key = leaf.key;
+    t5d_expand_options o{};
+    o.window_k = p.expand.window_k;
+    o.square_features = p.expand.square_features;
+    o.legal_moves = 1;
+    o.legality_checks = p.legality_checks;
+    o.legality_nodes = p.legality_nodes;
+    t5d_expansion x;
+    REQUIRE_EQ(t5d_game_expand(g, &o, &x, nullptr), T5D_OK);
+    REQUIRE_EQ(x.move_count, want.size());
+    for (std::size_t i = 0; i < want.size(); ++i) {
+      CHECK(std::memcmp(&x.moves[i], &want[i], sizeof(t5d_move)) == 0);
+    }
+    o.legal_moves = 0;  // the pseudo-legal moves: one more where the king is in check
+    REQUIRE_EQ(t5d_game_expand(g, &o, &x, nullptr), T5D_OK);
+    CHECK_EQ(x.move_count, want.size() + (g == check.get() ? 1u : 0u));
+    o.legal_moves = 2;
+    CHECK_EQ(t5d_game_expand(g, &o, &x, nullptr), T5D_ERR_ARGUMENT);
+    // The root's key is its leaf's (the memo's identity, with the count and the epoch).
+    REQUIRE_EQ(t5d_search_abandon(s.get()), T5D_OK);
+    REQUIRE_EQ(t5d_search_run(s.get(), T5D_EVALUATOR_RANDOM, 2, 40, nullptr), T5D_OK);
+    t5d_search_summary info;
+    REQUIRE_EQ(t5d_search_info(s.get(), &info), T5D_OK);
+    CHECK_EQ(info.root_key, root_leaf_key);
+    CHECK_EQ(info.root_cpuct, p.cpuct);  // E2 off
+    CHECK(info.root_best_since >= 1 && info.root_best_since <= info.root_visits);
+    for (std::size_t i = 0; i < info.root_children; ++i) {
+      t5d_root_child c;
+      REQUIRE_EQ(t5d_search_child(s.get(), i, &c, nullptr, 0, nullptr), T5D_OK);
+      CHECK_EQ(c.prior_noise_free, c.prior);  // no root noise
+      CHECK(c.visits == 0 || c.child_key != 0);
+      CHECK_EQ(c.exploration_scale, 1.0);
+      CHECK(c.boost == 0.0 && c.forced_visits == 0 && c.steered_visits == 0);
+      CHECK(c.value_variance >= 0.0);
+    }
+  }
+  // A search's expand options never take the filter: its own parameters decide its leaves.
+  t5d_search_params p = quick_params();
+  p.expand.legal_moves = 1;
+  t5d_search* bad = nullptr;
+  CHECK_EQ(t5d_search_new(standard.get(), 1, &p, &bad, nullptr), T5D_ERR_ARGUMENT);
+  CHECK(bad == nullptr);
+}
+
 TEST(capi_search_reports_its_layouts) {
   size_t v = 0;
   REQUIRE_EQ(t5d_search_layout("t5d_leaf", nullptr, &v), T5D_OK);
@@ -684,8 +749,21 @@ TEST(capi_search_reports_its_layouts) {
   CHECK_EQ(v, sizeof(t5d_evaluations));
   REQUIRE_EQ(t5d_search_layout("t5d_evaluations", "board_logit_count", &v), T5D_OK);
   CHECK_EQ(v, offsetof(t5d_evaluations, board_logit_count));
+  // Round 2c (I15, I2): appended.
+  CHECK(offsetof(t5d_search_summary, root_key) > offsetof(t5d_search_summary, root_error));
+  CHECK(offsetof(t5d_root_child, child_key) > offsetof(t5d_root_child, network_error));
+  for (const char* field : {"root_key", "root_cpuct", "root_best_since"}) {
+    CHECK_EQ(t5d_search_layout("t5d_search_summary", field, &v), T5D_OK);
+  }
+  for (const char* field : {"child_key", "prior_noise_free", "value_variance", "boost", "exploration_scale",
+                            "forced_visits", "steered_visits"}) {
+    CHECK_EQ(t5d_search_layout("t5d_root_child", field, &v), T5D_OK);
+  }
+  REQUIRE_EQ(t5d_layout("t5d_expand_options", "legality_nodes", &v), T5D_OK);
+  CHECK_EQ(v, offsetof(t5d_expand_options, legality_nodes));
   t5d_search_params defaults;
   t5d_search_params_default(&defaults);
+  CHECK_EQ(defaults.expand.legal_moves, 0);
   CHECK_EQ(defaults.uncertainty_source, T5D_UNCERTAINTY_CATEGORICAL);  // 6m: the register's default reading
   // E1, I19 (round 2b): the placeholders, through the C defaults.
   const t5d::mcts::SearchParams cpp;

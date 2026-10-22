@@ -65,8 +65,11 @@
 // the solver takes only exact verdicts: a child reached through an unknown edge
 // never raises its parent's lower bound (it may still bound it from above - a
 // superset of the legal children is a sound upper bound); (f) for training,
-// the policy target is the root's visit counts (RootChild::visits:
-// root_children() lists the instantiated children, the others have none), and
+// the policy target is built from the root's visit counts (RootChild::visits:
+// root_children() lists the instantiated children, the others have none) by
+// I2's pruning at target construction - the training loop's (§12.2, §12.5),
+// from each child's visits, priors with and without the noise, values and
+// forced and steered visits (RootChild; engine ABI round 2c) - and
 // the network's move mask is a leaf's legal and unknown moves - every
 // candidate the expansion kept, Expansion::move_legality (the C API's
 // t5d_leaf.legality), not the root's children. Under the whole-turn
@@ -800,6 +803,31 @@ struct RootChild {
   std::array<double, kWdl> network_wdl{};
   double network_moves_left = std::numeric_limits<double>::quiet_NaN();
   double network_error = std::numeric_limits<double>::quiet_NaN();
+  // I15's root side table (engine ABI round 2c): what I2's target-side
+  // pruning and the records need, per root child.
+  /// The child node's key (its evaluation's identity with the moves made in
+  /// its action - the root's + 1 below a move, 0 below a submission or an
+  /// action - and the epoch); 0: no child node yet.
+  std::uint64_t child_key = 0;
+  /// The prior before the root noise: after the temperatures (the root policy
+  /// temperature included), the unknown-move scale and the submit share -
+  /// `prior` is it with the noise. Renormalised with `prior` when a sibling is
+  /// pruned. A carried root's (never noised): `prior`.
+  double prior_noise_free = 0;
+  /// The variance of the values backed up through the edge (0 before a visit).
+  double value_variance = 0;
+  /// E10's asset-map boost on the prior: 0 - not wired (E10, step 2).
+  double boost = 0;
+  /// E3's factor on the child's exploration term at the end of the search (1:
+  /// E3 off, or the child unevaluated) - with Search::root_cpuct, what a
+  /// replica of the root's PUCT needs (I2's pruning).
+  double exploration_scale = 1;
+  /// Visits forced by forced playouts: 0 - not built (§12.5's pruning is
+  /// target-side, the training loop's; no document asks the search to force).
+  std::uint32_t forced_visits = 0;
+  /// Visits a steering source (the asset map's boosts, Hunt's suggestions)
+  /// decided: 0 - none is wired (E10, step 2).
+  std::uint32_t steered_visits = 0;
 };
 
 class Search {
@@ -878,6 +906,14 @@ class Search {
   bool root_solved() const noexcept;
   /// The root's instantiated children (in prior order).
   std::vector<RootChild> root_children() const;
+  /// I2's pruning replica: the root's effective cPUCT now - cpuct times E2's
+  /// scale at the root (1 with E2 off).
+  double root_cpuct() const noexcept;
+  /// D4's effort label (I15): the root's visits when its most visited child
+  /// last changed (strictly more visits than the incumbent; "visits until the
+  /// decision stabilises", §8.6). For a root carried by advance, counted from
+  /// the re-root. 0 before any child is visited.
+  std::uint32_t root_best_since() const noexcept;
   /// E5/E9: the child to play, by index into root_children(). Throws
   /// std::invalid_argument if the root has no visited child.
   Choice choose() const;

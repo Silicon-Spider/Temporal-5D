@@ -149,6 +149,10 @@ class SearchInfo:
     root_wdl: tuple[float, float, float]
     root_moves_left: float
     root_error: float
+    # engine ABI round 2c (register I15, I2, D4)
+    root_key: int  # the root's node key: with the moves made in its action and the epoch, its evaluation's identity
+    root_cpuct: float  # the root's effective cPUCT now (cpuct x E2's root scale): I2's pruning replica
+    root_best_since: int  # the effort label: the root's visits when its most visited child last changed
 
     @property
     def root_finished(self) -> bool:
@@ -176,6 +180,14 @@ class RootChild:
     network_wdl: tuple[float, float, float]
     network_moves_left: float
     network_error: float
+    # engine ABI round 2c (register I15, I2): the root's side table
+    child_key: int  # the child node's key; 0: no child node yet
+    prior_noise_free: float  # the prior before the root noise (after the temperatures)
+    value_variance: float  # of the values backed up through it
+    boost: float  # E10's asset-map boost: 0 (not wired)
+    exploration_scale: float  # E3's factor (1: off)
+    forced_visits: int  # 0: forced playouts not built (pruning is target-side, §12.5)
+    steered_visits: int  # 0: no steering source wired (E10)
 
 
 @dataclass(frozen=True)
@@ -402,6 +414,13 @@ class Search:
             network_wdl=(float(c.network_wdl[0]), float(c.network_wdl[1]), float(c.network_wdl[2])),
             network_moves_left=float(c.network_moves_left),
             network_error=float(c.network_error),
+            child_key=int(c.child_key),
+            prior_noise_free=float(c.prior_noise_free),
+            value_variance=float(c.value_variance),
+            boost=float(c.boost),
+            exploration_scale=float(c.exploration_scale),
+            forced_visits=int(c.forced_visits),
+            steered_visits=int(c.steered_visits),
         )
 
     def children(self) -> list[RootChild]:

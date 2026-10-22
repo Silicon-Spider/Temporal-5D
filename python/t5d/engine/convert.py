@@ -57,8 +57,9 @@ promotion)                                     promotion)`` - row i is engine mo
   where no move may be made. An acting player that is no colour is refused even then. Under
   Q4's Guide-literal reading (``T5D_RULES_NO_MOVES_AFTER_SHIFT``) a state past the shift has
   no move and offers submit alone.
-* **Moves.** The engine's pseudo-legal moves of the player to move (the legal-moves
-  filter is not in the C API), one row per move in the engine's order, so policy logit
+* **Moves.** The expansion's moves of the player to move - pseudo-legal, or a search leaf's
+  legal and unknown moves with ``Game.expand(legal_moves=True)`` and the search's legality
+  budget (engine ABI round 2) - one row per move in the engine's order, so policy logit
   ``i`` scores engine move ``i`` (``t5d_game_apply_expanded(i)``). A branching move's
   destination token is the history board it targets, which exists (never the board it
   creates). Promotions: one row per promoted-to piece.
