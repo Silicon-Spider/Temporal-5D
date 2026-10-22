@@ -290,7 +290,8 @@ T5D_API t5d_status t5d_search_new(const t5d_game* game, int32_t turn_start,
 /* A search like t5d_search_new's that shares `donor`'s evaluation cache (C14:
  * a fresh search per move, the cache carried - the step API's self-play), its
  * own parameters' cache sizes ignored. The donor may be destroyed afterwards;
- * the cache lives while a search holds it. */
+ * the cache lives while a search holds it. The cache has no lock: the searches
+ * sharing it are used one at a time, never from two threads at once. */
 T5D_API t5d_status t5d_search_new_sharing(const t5d_search* donor, const t5d_game* game,
                                           int32_t turn_start, const t5d_search_params* params,
                                           t5d_search** out, char** error);

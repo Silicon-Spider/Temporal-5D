@@ -28,7 +28,8 @@ layer over the C functions, and nothing in it computes a rule or a search decisi
   only evaluations of one input: sharing is refused unless the donor's split, expansion
   options and legality classification match (``cache_mismatches``). An evaluator whose
   evaluations depend on the search's root (the cached path's refresh epochs) sets the search's
-  epoch, so that the cache keeps them apart (``evaluator.start_epoch``).
+  epoch, so that the cache keeps them apart (``evaluator.start_epoch``). The cache has no lock:
+  the searches sharing it are used one at a time, never from two threads at once.
 * **Lifetimes.** A leaf's pointers live until the next ``gather``, ``deliver``, ``abandon``
   or ``close``: ``leaf_expansion`` copies at once (``Expansion.from_c``). ``close`` (or the
   context manager, or garbage collection) releases the handle.

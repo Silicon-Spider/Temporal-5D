@@ -310,7 +310,8 @@ struct DisproofClass {
 
 /// Where disproofs go the moment they are found: keyed by position - the
 /// Zobrist key with the ruleset ID (H18) and a full comparison on a match -
-/// and class, holding the greatest depth disproven. Safe for concurrent use.
+/// and class, holding the greatest depth disproven. Safe for concurrent use:
+/// 64 shards by key, each behind its own ShardLock (t5d/scanner.hpp).
 class DisproofStore {
  public:
   DisproofStore();
