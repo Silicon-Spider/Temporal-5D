@@ -69,12 +69,19 @@ from .search import LeafView, Search
 PositionLike = Position | PositionState
 
 #: The ``NetOutput`` field the error head's output is read from (D3; 6m's other uncertainty
-#: signal) - absent until the network lane's heads add it, and the evaluations' ``error`` NaN till
-#: then. Pinned by ``tests/engine/test_evaluator.py``: a ``NetOutput`` field for the error head
-#: under any other name fails that test rather than going unread. With ``uncertainty_source``
+#: signal) - the network's ``value_error`` (``net/heads.py``'s ``ValueHeads``, the network lane's
+#: D3); an output without it gives NaN (none). Pinned by ``tests/engine/test_evaluator.py``: a
+#: ``NetOutput`` field for the error head under any other name fails that test rather than going
+#: unread. With ``uncertainty_source``
 #: ``T5D_UNCERTAINTY_ERROR_HEAD`` and E2, E3 or E5's term on, the search refuses a delivery
 #: without it (the engine's ``uncertainty_missing`` counts it where nothing reads it).
 ERROR_HEAD_FIELD = "value_error"
+
+#: Which policy head an evaluator delivers as the prior (register D9): the policy (``"normal"``), or
+#: the optimistic policy (``"optimistic"``) - match play only, "kept out of self-play" (section
+#: 8.1): ``netplay.play_game`` refuses an optimistic evaluator in self-play. The values are the
+#: same heads' either way.
+POLICY_SOURCES: tuple[str, ...] = ("normal", "optimistic")
 
 
 def state_of(position: PositionLike) -> PositionState:
@@ -105,10 +112,14 @@ class Evaluation:
     #: offers a legal submit, NaN otherwise (not offered, or masked as illegal; NaN where it is
     #: legal stands for "none given": the search's placeholder share).
     submit_logit: float = math.nan
-    #: D3: the error head's output (the predicted squared value - short-term gap), >= 0; NaN: none.
+    #: D3: the error head's output (its predicted squared short-term error), >= 0; NaN: none.
     error: float = math.nan
     #: D4: moves-left, in the network's unit (turns, M20), >= 0; NaN: none.
     moves_left: float = math.nan
+    #: The prior the policy logits are (``POLICY_SOURCES``): the normal policy's, or D9's optimistic
+    #: policy's - carried by the evaluation itself, so that a wrapper around an evaluator cannot hide
+    #: it from the self-play guard (``serve``'s ``self_play``).
+    policy: str = "normal"
 
     @property
     def wdl_probs(self) -> np.ndarray:
@@ -173,19 +184,28 @@ class Evaluator(Protocol):
     def __call__(self, positions: Sequence[PositionLike]) -> list[Evaluation]: ...
 
 
-def _split(out: NetOutput, states: Sequence[PositionState]) -> list[Evaluation]:
-    """Per-position evaluations of a batch's output (row ``i`` is ``states[i]``): the policy,
+def _split(out: NetOutput, states: Sequence[PositionState], policy: str = "normal") -> list[Evaluation]:
+    """Per-position evaluations of a batch's output (row ``i`` is ``states[i]``): the policy
+    (``policy``: the normal policy's logits and submit logit, or D9's optimistic policy's),
     the submit logit and D3's value heads - the WDL, the categorical, the error head's output
-    where the network has one (``ERROR_HEAD_FIELD``; NaN until the network lane's heads add it) and
-    moves-left in turns (``expm1`` of the head's ``log1p``, floored at 0)."""
-    logits = out.policy_logits.detach().float().cpu()
+    (``ERROR_HEAD_FIELD``; NaN for an output without one) and moves-left in turns (``expm1`` of
+    the head's ``log1p``, floored at 0). The short-term values are training targets' heads the
+    search does not read (section 8.3: the error head and D9 learn from them)."""
+    if policy not in POLICY_SOURCES:
+        raise ValueError(f"policy must be one of {POLICY_SOURCES}")
+    moves_out, submit_out = out.policy_logits, out.submit_logits
+    if policy == "optimistic":
+        if out.optimistic_logits is None or out.optimistic_submit_logits is None:
+            raise ValueError("an optimistic evaluator needs a network with D9's head (NetConfig.optimistic_policy)")
+        moves_out, submit_out = out.optimistic_logits, out.optimistic_submit_logits
+    logits = moves_out.detach().float().cpu()
     valid = out.move_valid.detach().cpu()
     values = out.value_logits.detach().float().cpu()
     wdl = out.wdl_logits.detach().float().cpu()
     error_out = getattr(out, ERROR_HEAD_FIELD, None)
     errors = None if error_out is None else error_out.detach().float().cpu().reshape(-1)
     moves_left = torch.expm1(out.moves_left_log.detach().double().cpu().clamp(min=0.0))
-    submit = out.submit_logits.detach().float().cpu()
+    submit = submit_out.detach().float().cpu()
     submit_valid = out.submit_valid.detach().cpu()
     results = []
     for i, state in enumerate(states):
@@ -206,9 +226,23 @@ def _split(out: NetOutput, states: Sequence[PositionState]) -> list[Evaluation]:
                 submit_logit=s if legal else math.nan,  # masked (-inf) or absent: no logit
                 error=math.nan if errors is None else float(errors[i]),
                 moves_left=float(moves_left[i]),
+                policy=policy,
             )
         )
     return results
+
+
+def _check_policy(model: T5DNet, policy: str) -> None:
+    if policy not in POLICY_SOURCES:
+        raise ValueError(f"policy must be one of {POLICY_SOURCES}")
+    if policy == "optimistic" and getattr(model, "optimistic", None) is None:
+        raise ValueError("an optimistic evaluator needs a network with D9's head (NetConfig.optimistic_policy)")
+
+
+def policy_source(evaluator) -> str:
+    """The prior an evaluator delivers (``POLICY_SOURCES``): its ``policy``, or ``"normal"`` for
+    one that names none."""
+    return getattr(evaluator, "policy", "normal")
 
 
 class NetworkEvaluator:
@@ -217,11 +251,23 @@ class NetworkEvaluator:
     block-causal override of a dense-scope network while its B16 is switched on
     (``T5DNet.make_context``: its frozen boards would lose their status with no B16 table to
     give it back). The model is used as given (put it in ``eval()`` mode); positions converted
-    with other register counts than the network's are re-laid out (``state.relayout``, exact)."""
+    with other register counts than the network's are re-laid out (``state.relayout``, exact).
+    ``policy``: the prior delivered (``POLICY_SOURCES``) - ``"optimistic"`` (D9) for match play
+    only, on a network with the optimistic head."""
 
-    def __init__(self, model: T5DNet, *, max_batch: int = 32, device: torch.device | str | None = None, scope: str | None = None) -> None:
+    def __init__(
+        self,
+        model: T5DNet,
+        *,
+        max_batch: int = 32,
+        device: torch.device | str | None = None,
+        scope: str | None = None,
+        policy: str = "normal",
+    ) -> None:
         if max_batch < 1:
             raise ValueError("max_batch must be positive")
+        _check_policy(model, policy)
+        self.policy = policy
         self.model = model
         self.max_batch = int(max_batch)
         self.device = torch.device(device) if device is not None else next(model.parameters()).device
@@ -242,7 +288,7 @@ class NetworkEvaluator:
             batch = collate(states).to(self.device)
             with torch.no_grad():
                 out = self.model(batch, scope=self.scope)
-            results.extend(_split(out, states))
+            results.extend(_split(out, states, self.policy))
             self.batches += 1
             self.positions += len(states)
         return results
@@ -252,9 +298,12 @@ class CachedNetworkEvaluator:
     """The cached path (C2; ``net/cache.py``): each position evaluated incrementally - its
     frozen boards' K/V from the store, computed once per digest - in the epoch of the
     current search. ``start(root)`` opens a search (``CachedEvaluator.root_epoch``: a root
-    refresh under ``CacheConfig.root_refresh``, else the causal epoch)."""
+    refresh under ``CacheConfig.root_refresh``, else the causal epoch). ``policy``: as
+    ``NetworkEvaluator``'s."""
 
-    def __init__(self, cached: CachedEvaluator) -> None:
+    def __init__(self, cached: CachedEvaluator, *, policy: str = "normal") -> None:
+        _check_policy(cached.model, policy)
+        self.policy = policy
         self.cached = cached
         self.epoch: Epoch | None = None
 
@@ -286,7 +335,7 @@ class CachedNetworkEvaluator:
             for p in positions:
                 state = self._fit(state_of(p))
                 out = self.cached.evaluate(state, self.epoch)
-                results.extend(_split(out, [state]))
+                results.extend(_split(out, [state], self.policy))
         return results
 
 
@@ -320,7 +369,10 @@ def check_evaluation(leaf: Leaf, evaluation: Evaluation, value_bins: int | None 
     """Raise ``ValueError`` unless ``evaluation`` keeps the contract for ``leaf``: the move
     logits as before; D3's heads - 3 finite WDL logits, the categorical None or ``value_bins``
     finite logits, the error and moves-left NaN or finite and >= 0; the submit logit (D8) never
-    infinite, and NaN unless the leaf offers a legal submit (where NaN means "none given")."""
+    infinite, and NaN unless the leaf offers a legal submit (where NaN means "none given"); the
+    prior one of ``POLICY_SOURCES``."""
+    if evaluation.policy not in POLICY_SOURCES:
+        raise ValueError(f"leaf {leaf.id}: the prior {evaluation.policy!r} is not one of {POLICY_SOURCES}")
     m = move_count(leaf.position)
     pl, wl, vl = evaluation.policy_logits, evaluation.wdl_logits, evaluation.value_logits
     if pl.shape != (m,):
@@ -363,13 +415,21 @@ class ServeStats:
 
 
 def serve(
-    driver: SearchDriver, evaluator: Evaluator, *, batch_size: int = 32, value_bins: int | None = 51, max_rounds: int | None = None
+    driver: SearchDriver,
+    evaluator: Evaluator,
+    *,
+    batch_size: int = 32,
+    value_bins: int | None = 51,
+    max_rounds: int | None = None,
+    self_play: bool = False,
 ) -> ServeStats:
     """Run one search's evaluation loop: collect up to ``batch_size`` leaves, evaluate them
     in one call, check each evaluation against its leaf (``check_evaluation``), deliver;
     until the driver is finished (or ``max_rounds``). If evaluating or checking a batch fails,
     a driver with an ``abandon`` method is told before the exception leaves (the step API's
-    virtual loss is released)."""
+    virtual loss is released). ``self_play``: the search is self-play's, so an evaluation that
+    carries D9's optimistic prior is refused before it is delivered (section 8.1: "kept out of
+    self-play") - whatever wraps the evaluator, since each evaluation names its prior."""
     if batch_size < 1:
         raise ValueError("batch_size must be positive")
     stats = ServeStats()
@@ -391,6 +451,8 @@ def serve(
                 raise RuntimeError(f"the evaluator returned {len(evaluations)} evaluations for {len(leaves)} leaves")
             for leaf, ev in zip(leaves, evaluations, strict=True):
                 check_evaluation(leaf, ev, value_bins)
+                if self_play and ev.policy != "normal":
+                    raise ValueError(f"leaf {leaf.id}: the {ev.policy} prior in self-play (register D9, section 8.1: match play only)")
         except BaseException:
             abandon = getattr(driver, "abandon", None)
             if abandon is not None:
@@ -593,14 +655,18 @@ def run_search(
     regs_per_board: int = 2,
     global_regs: int = 16,
     value_kind: int = T5D_VALUE_LOGITS,
+    self_play: bool = False,
 ) -> tuple[ServeStats, CStepDriver]:
     """Run ``playouts`` simulations of ``search`` with ``evaluator`` through the step API
     (``CStepDriver`` and ``serve``, at most ``batch_size`` leaves per evaluation): the loop's
     statistics and the driver (its ``stop`` says why it ended). An evaluator whose evaluations
-    depend on the search's root gets its epoch first (``start_epoch``)."""
+    depend on the search's root gets its epoch first (``start_epoch``). ``self_play``: refuse
+    D9's optimistic prior (``serve``) - a self-play search, including M21's generator, sets it."""
+    if self_play and policy_source(evaluator) != "normal":
+        raise ValueError("an optimistic evaluator searches at match play only, never in self-play (register D9, section 8.1)")
     start_epoch(search, evaluator, regs_per_board=regs_per_board, global_regs=global_regs)
     driver = CStepDriver(search, playouts=playouts, regs_per_board=regs_per_board, global_regs=global_regs, value_kind=value_kind)
-    stats = serve(driver, evaluator, batch_size=batch_size)
+    stats = serve(driver, evaluator, batch_size=batch_size, self_play=self_play)
     return stats, driver
 
 
@@ -629,11 +695,13 @@ __all__ = [
     "Evaluator",
     "Leaf",
     "NetworkEvaluator",
+    "POLICY_SOURCES",
     "SearchDriver",
     "ServeStats",
     "UniformEvaluator",
     "check_evaluation",
     "engine_epoch",
+    "policy_source",
     "run_search",
     "start_epoch",
     "serve",

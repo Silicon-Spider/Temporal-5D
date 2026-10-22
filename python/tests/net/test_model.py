@@ -37,8 +37,9 @@ def test_output_shapes_default_config(model_default, n):
     assert batch.n_tokens == t
     assert out.trunk.shape == (1, t, 256)
     assert out.policy_logits.shape == (1, len(state.moves))
-    assert out.opp_reply_logits.shape == (1, len(state.opp_moves))
-    assert out.value_logits.shape == (1, 51) and out.short_value_logits.shape == (1, 51)
+    assert out.soft_policy_logits.shape == (1, len(state.moves)) and out.soft_submit_logits.shape == (1,)  # D4
+    assert out.opp_reply_logits is None, "the reply is a prototype, off (D4)"
+    assert out.value_logits.shape == (1, 51) and out.short_term.shape == (1, 3) and out.value_error.shape == (1,)
     assert out.wdl_logits.shape == (1, 3) and out.moves_left_log.shape == (1,)
     assert out.effort_logits.shape == (1, 16)
     assert out.board_logits.shape == (1, n, len(BOARD_HEADS))
@@ -48,8 +49,9 @@ def test_output_shapes_default_config(model_default, n):
         "value_logits",
         "wdl_logits",
         "moves_left_log",
-        "opp_reply_logits",
-        "short_value_logits",
+        "soft_policy_logits",
+        "short_term",
+        "value_error",
         "board_logits",
         "square_logits",
         "effort_logits",
@@ -79,7 +81,7 @@ def test_determinism():
     for (na, pa), (nb, pb) in zip(a.named_parameters(), b.named_parameters(), strict=True):
         assert na == nb and torch.equal(pa, pb), na
     oa, ob = a(batch), b(batch)
-    for name in ("value_logits", "policy_logits", "board_logits", "square_logits", "opp_reply_logits", "wdl_logits"):
+    for name in ("value_logits", "policy_logits", "board_logits", "square_logits", "soft_policy_logits", "wdl_logits"):
         assert torch.equal(getattr(oa, name), getattr(ob, name)), name
     c = build_model(cfg, seed=43)
     assert not torch.equal(c(batch).value_logits, oa.value_logits)
@@ -130,16 +132,25 @@ def test_random_init_is_nontrivial(model_fp32):
     assert ratio.median() > 3.0
 
 
-def test_value_distribution_and_helpers(model_fp32):
+def test_value_heads_and_helpers(model_fp32):
+    """D3: the value search uses is W - L of the WDL (``search_value``); the categorical's mean
+    and variance are its own (the variance the search's default uncertainty signal, 6m); the
+    short-term values lie on [-1, 1], one per horizon, and the error head's output is >= 0."""
     out = model_fp32(collate([synthetic_state(9, 4), synthetic_state(10, 7)]))
+    wdl = torch.softmax(out.wdl_logits, -1)
+    assert torch.allclose(out.wdl_probs(), wdl) and torch.allclose(out.search_value(), wdl[:, 0] - wdl[:, 2])
+    assert torch.all(out.search_value().abs() <= 1)
     probs = out.value_probs()
     assert torch.allclose(probs.sum(-1), torch.ones(2), atol=1e-6)
     centres = value_bin_centres(51)
     assert centres[0] == -1 and centres[25] == 0 and centres[50] == 1
     mean = (probs * centres).sum(-1)
-    assert torch.allclose(out.value_mean(), mean)
-    assert torch.allclose(out.value_variance(), (probs * centres**2).sum(-1) - mean**2, atol=1e-6)
-    assert torch.all(out.value_variance() >= 0)
+    assert torch.allclose(out.categorical_mean(), mean)
+    assert torch.allclose(out.categorical_variance(), (probs * centres**2).sum(-1) - mean**2, atol=1e-6)
+    assert torch.all(out.categorical_variance() >= 0)
+    assert not torch.allclose(out.categorical_mean(), out.search_value(), atol=1e-3), "the categorical is not the value"
+    assert out.short_term.shape == (2, len(model_fp32.cfg.short_term_horizons)) and torch.all(out.short_term.abs() <= 1)
+    assert torch.all(out.value_error >= 0) and out.short_term.std() > 1e-3
     # Two-hot targets have the value as their mean, and sum to one.
     v = torch.tensor([-1.0, -0.37, 0.0, 0.5, 0.999, 1.0])
     target = value_to_twohot(v, 51)
@@ -148,18 +159,47 @@ def test_value_distribution_and_helpers(model_fp32):
     assert torch.all(categorical_variance(target) < (2 / 50) ** 2)
 
 
+def test_the_value_heads_run_in_fp32_under_bf16_autocast(model_default):
+    """D3 and G1: "FP32" - the value heads run at FP32 behind the default BF16 trunk, even inside
+    a caller's BF16 autocast: each output is float32 and equals an FP64 recomputation from the
+    trunk's (FP32) output to FP32 rounding, which a BF16 head (~3 significant digits) would not."""
+    batch = collate([synthetic_state(21, 3), synthetic_state(22, 5)])
+    out = model_default(batch, return_trunk=True)
+    with torch.autocast("cpu", dtype=torch.bfloat16):
+        inside = model_default.heads(out.trunk, batch)
+    v = model_default.value
+    r = out.trunk[:, batch.body_len : batch.body_len + batch.global_regs].double().mean(1)
+    x = torch.nn.functional.mish(r @ v.hidden.weight.double().T + v.hidden.bias.double())
+
+    def lin(m):
+        return x @ m.weight.double().T + m.bias.double()
+
+    expected = {
+        "wdl_logits": lin(v.wdl),
+        "value_logits": lin(v.categorical),
+        "short_term": torch.tanh(lin(v.short_term)),
+        "value_error": torch.nn.functional.softplus(lin(v.error)).squeeze(-1),
+    }
+    for name, ref in expected.items():
+        for o in (out, inside):
+            got = getattr(o, name)
+            assert got.dtype == torch.float32, name
+            assert torch.allclose(got.double(), ref, atol=1e-5), (name, float((got.double() - ref).abs().max()))
+
+
 #: The heads M20's dispositions route (``T5DNet.heads``): the value-type heads and D8's submit
 #: logit read the mean of the global registers (D3, section 8.3; "submit logit -> pooled global
 #: registers"), the other global auxiliary heads the mean of every square ("aux pooling ->
 #: squares"; section 12.4, B8, D7).
-REGISTER_POOLED = ("value_logits", "wdl_logits", "short_value_logits", "submit_raw")
+REGISTER_POOLED = ("value_logits", "wdl_logits", "short_term", "value_error", "submit_raw")
 SQUARE_POOLED = ("moves_left_log", "effort_logits")
 
 
 def test_each_global_head_reads_its_pool():
-    """M20 and D3: the 51-bin value, WDL and the short-term value read the mean of the global
-    registers, as the submit logit does (D8); moves-left and search effort the mean of every
-    square token. Per-board registers feed none of them, nor the per-board heads."""
+    """M20 and D3: the four value heads - WDL, the categorical, the short-term values, the error
+    head - read the mean of the global registers, as the submit logit does (D8); moves-left and
+    search effort the mean of every square token. Per-board registers feed none of them, nor
+    the per-board heads."""
     model = build_model(NetConfig(trunk_dtype="fp32"), seed=0).eval()
     batch = collate([synthetic_state(16, 4), synthetic_state(17, 2)])
     out = model(batch, return_trunk=True)
@@ -167,9 +207,9 @@ def test_each_global_head_reads_its_pool():
     sq = batch.square_mask
     registers = h[:, batch.body_len : batch.body_len + batch.global_regs].mean(1)
     squares = (h * sq[..., None]).sum(1) / sq.sum(1, keepdim=True)
-    assert torch.allclose(out.value_logits, model.value(registers), atol=1e-5)
-    assert torch.allclose(out.wdl_logits, model.aux.wdl(registers), atol=1e-5)
-    assert torch.allclose(out.short_value_logits, model.aux.short_value(registers), atol=1e-5)
+    wdl, categorical, short_term, value_error = model.value(registers)
+    assert torch.allclose(out.wdl_logits, wdl, atol=1e-5) and torch.allclose(out.value_logits, categorical, atol=1e-5)
+    assert torch.allclose(out.short_term, short_term, atol=1e-5) and torch.allclose(out.value_error, value_error, atol=1e-5)
     assert torch.allclose(out.submit_raw, model.submit.out(registers).squeeze(-1), atol=1e-5)
     assert torch.allclose(out.moves_left_log, model.aux.moves_left(squares).squeeze(-1), atol=1e-5)
     assert torch.allclose(out.effort_logits, model.aux.effort(squares), atol=1e-5)
@@ -208,7 +248,7 @@ def test_the_register_pooled_heads_are_invariant_to_permuting_the_global_registe
     shuffled = h.clone()
     shuffled[:, g] = h[:, g[torch.randperm(g.numel(), generator=torch.Generator().manual_seed(19))]]
     out = model.heads(shuffled, batch)
-    for name in (*REGISTER_POOLED, *SQUARE_POOLED, "policy_logits", "opp_reply_logits", "board_logits"):
+    for name in (*REGISTER_POOLED, *SQUARE_POOLED, "policy_logits", "soft_policy_logits", "soft_submit_logits", "board_logits"):
         assert torch.allclose(getattr(out, name), getattr(base, name), atol=1e-5), name
     for register in (0, 15):
         one = h.clone()
@@ -227,17 +267,29 @@ def _with_promotions(state: PositionState) -> PositionState:
 
 def test_pointer_heads_score_each_moves_own_endpoints():
     """D1, section 8.1: score(move) = f(h_src)^T g(h_dst) / sqrt(dim), read at the move's
-    own source and destination tokens - for the policy, plus its per-piece promotion offset
-    read at the destination (M20), and for the opponent-reply head, which has none."""
-    model = build_model(NetConfig(trunk_dtype="fp32"), seed=0).eval()
-    assert model.policy.promo is not None and model.aux.opp_reply.promo is None
-    batch = collate([_with_promotions(synthetic_state(13, 5)), synthetic_state(14, 2)])
-    out = model(batch, return_trunk=True)
-    h = out.trunk
-    heads = (
-        (model.policy, batch.moves, batch.move_valid, out.policy_logits),
-        (model.aux.opp_reply, batch.opp_moves, batch.opp_move_valid, out.opp_reply_logits),
-    )
+    own source and destination tokens, plus the per-piece promotion offset read at the
+    destination (M20) - for the policy, D4's soft policy (its own f and g, section 12.4) and the
+    reply prototype (its flag on), the latter two carrying the offset under
+    ``pointer_promotion_offset`` (a placeholder, issue 222) - and without it when it is off."""
+    for offset in (True, False):
+        model = build_model(NetConfig(trunk_dtype="fp32", n_layers=2, opp_reply=True, pointer_promotion_offset=offset), seed=0).eval()
+        soft, reply = model.aux.soft_policy.pointer, model.aux.opp_reply
+        assert model.policy.promo is not None and (soft.promo is not None) == offset == (reply.promo is not None)
+        assert soft.src is not model.policy.src and not torch.equal(soft.src.weight[:4], model.policy.src.weight[:4, :])
+        batch = collate([_with_promotions(synthetic_state(13, 5)), synthetic_state(14, 2)])
+        out = model(batch, return_trunk=True)
+        _check_pointer_heads(
+            out.trunk,
+            batch,
+            (
+                (model.policy, batch.moves, batch.move_valid, out.policy_logits),
+                (soft, batch.moves, batch.move_valid, out.soft_policy_logits),
+                (reply, batch.opp_moves, batch.opp_move_valid, out.opp_reply_logits),
+            ),
+        )
+
+
+def _check_pointer_heads(h, batch, heads):
     for head, moves, valid, logits in heads:
         for b in range(batch.batch_size):
             src, dst, promo = moves[b][valid[b]].unbind(-1)
@@ -399,3 +451,92 @@ def _fields(state: PositionState) -> dict:
         "global_regs",
     )
     return {n: getattr(state, n) for n in names}
+
+
+def test_the_short_term_horizons_are_a_parameter():
+    """D3's "two or three horizons" (placeholders in turns, spec issue 231): one output per
+    horizon; the horizons must be positive and increasing."""
+    assert NetConfig().short_term_horizons == (2.0, 5.0, 16.0)
+    two = build_model(NetConfig(trunk_dtype="fp32", n_layers=1, short_term_horizons=(3.0, 12.0)), seed=0).eval()
+    assert two(collate([synthetic_state(23, 2)])).short_term.shape == (1, 2)
+    for bad in ((), (0.0, 4.0), (5.0, 2.0), (2.0, math.inf)):
+        with pytest.raises(ValueError, match="short_term_horizons"):
+            NetConfig(short_term_horizons=bad).validate()
+
+
+def test_the_soft_policy_has_its_own_submit_logit_masked_like_the_policys():
+    """D4 (section 12.4): the soft policy is "a second pointer head - its own source and
+    destination projections and its own submit logit": read from the pooled global registers like
+    the policy's (D8), offered and masked exactly where the policy's is (absent, masked, live), and
+    not the policy's - in either readout form (``submit_head``; the pointer form uses the soft
+    head's own f and g)."""
+    from t5d.train.smoke import with_actions
+
+    for form in ("linear", "pointer"):
+        model = build_model(NetConfig(trunk_dtype="fp32", n_layers=2, submit_head=form), seed=2).eval()
+        batch = collate(with_actions([synthetic_state(30 + i, n) for i, n in enumerate((2, 3, 2, 4))]))
+        out = model(batch, return_trunk=True)
+        live = out.submit_valid
+        assert live.tolist() == [False, True, False, False]
+        assert torch.equal(torch.isfinite(out.soft_submit_logits), live) and torch.isinf(out.soft_submit_logits[~live]).all()
+        assert not torch.allclose(out.soft_submit_logits[live], out.submit_logits[live], atol=1e-4)
+        assert out.soft_action_logits().shape == out.action_logits().shape
+        r = out.trunk[:, batch.body_len : batch.body_len + batch.global_regs].mean(1)
+        head = model.aux.soft_policy
+        if form == "linear":
+            expected = head.submit.out(r).squeeze(-1)
+        else:
+            expected = (head.pointer.src(r) * head.pointer.dst(r)).sum(-1) / math.sqrt(head.pointer.dim)
+        assert torch.allclose(out.soft_submit_logits[live], expected[live], atol=1e-5), form
+
+
+def test_d4s_heads_are_switched_by_their_flags_and_change_no_other_parameter():
+    """The soft policy (6j's on/off arm) and the reply prototype (off) are built only under their
+    flags, each drawn from a generator of its own: switching either leaves every other parameter
+    as it was, bit for bit, and its own weights the same whatever the other flag."""
+    base = dict(trunk_dtype="fp32", n_layers=1)
+    models = {
+        (soft, reply): build_model(NetConfig(**base, soft_policy=soft, opp_reply=reply), seed=4)
+        for soft in (True, False)
+        for reply in (True, False)
+    }
+    assert models[(True, False)].aux.opp_reply is None and models[(False, False)].aux.soft_policy is None
+    params = {k: dict(m.named_parameters()) for k, m in models.items()}
+    ref = params[(True, True)]
+    for key, p in params.items():
+        for name, t in p.items():
+            assert torch.equal(t, ref[name]), (key, name)
+    out = models[(False, False)](collate([synthetic_state(31, 2)]))
+    assert out.soft_policy_logits is None and out.soft_submit_logits is None and out.opp_reply_logits is None
+    with pytest.raises(ValueError, match="soft policy"):
+        out.soft_action_logits()
+
+
+def test_d9s_optimistic_policy_is_its_own_head_behind_its_flag():
+    """D9 (a prototype, behind its flag, off): "a second policy head on the normal target" - its
+    own f, g, promotion offset and submit logit (masked as the policy's), drawn from a generator of
+    its own, so switching it on changes no other parameter."""
+    from t5d.net import parameter_breakdown
+    from t5d.train.smoke import with_actions
+
+    off = build_model(NetConfig(trunk_dtype="fp32", n_layers=2), seed=5).eval()
+    on = build_model(NetConfig(trunk_dtype="fp32", n_layers=2, optimistic_policy=True), seed=5).eval()
+    assert off.optimistic is None and parameter_breakdown(off)["head.optimistic"] == 0
+    p_off, p_on = dict(off.named_parameters()), dict(on.named_parameters())
+    assert set(p_on) - set(p_off) == {n for n in p_on if n.startswith("optimistic.")}
+    assert all(torch.equal(t, p_on[n]) for n, t in p_off.items())
+    assert parameter_breakdown(on)["head.optimistic"] == 2 * (256 * 256 + 256) + (256 * 13 + 13) + (256 + 1)
+    batch = collate(with_actions([_with_promotions(synthetic_state(40, 3)), synthetic_state(41, 2)]))
+    out, base = on(batch, return_trunk=True), off(batch)
+    assert base.optimistic_logits is None and base.optimistic_submit_logits is None
+    assert out.optimistic_logits.shape == out.policy_logits.shape and out.optimistic_action_logits().shape == out.action_logits().shape
+    assert torch.equal(torch.isfinite(out.optimistic_submit_logits), out.submit_valid)
+    assert not torch.allclose(out.optimistic_logits[out.move_valid], out.policy_logits[out.move_valid], atol=1e-3)
+    _check_pointer_heads(out.trunk, batch, ((on.optimistic.pointer, batch.moves, batch.move_valid, out.optimistic_logits),))
+    # Submit absent, offered but illegal (masked, C4) and live - as the soft policy's test has it.
+    four = on(collate(with_actions([synthetic_state(30 + i, n) for i, n in enumerate((2, 3, 2, 4))])))
+    assert (four.submit_possible & ~four.submit_valid).any() and four.submit_valid.any() and (~four.submit_possible).any()
+    assert torch.equal(torch.isfinite(four.optimistic_submit_logits), four.submit_valid)
+    assert torch.isinf(four.optimistic_submit_logits[~four.submit_valid]).all()
+    with pytest.raises(ValueError, match="optimistic"):
+        base.optimistic_action_logits()

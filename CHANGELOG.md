@@ -10,6 +10,178 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-23 - Network heads review fixes: the error target and D9's z as the register and KataGo have them; the losses' masks, moves-left's unit and the old parameters pinned
+
+Two reviewers of N-D3, N-D4 and N-D9 (spec fidelity; 46 mutants). One high finding, three medium,
+nine low; all fixed.
+
+- **HIGH - the error head's target and D9's z** (`train/losses.py`): both had compared the
+  short-term target with the network's W - L and called that KataGo's; it is not. KataGo's
+  short-term error loss compares the detached short-term value prediction with the short-term
+  target (Huber delta 0.4), and its optimistic z_value is (short-term target - short-term
+  prediction) / sqrt(predicted short-term error + 1e-4) - which is also register D9's literal
+  "how far the mover beat the predicted short-term value". Rebuilt that way:
+  `error_target(predicted, short_term, horizon)` = (short-term output[h], without gradient -
+  target[h])^2, and `optimistic_weights(short_term, predicted, value_error)`'s z over the
+  short-term output at the error head's horizon. The Huber delta stays a named placeholder (1.0;
+  KataGo's 0.4 noted). Section 8.3's "the value and the short-term value" is ambiguous: the W - L
+  reading is recorded as the alternative for the user (issues 231(c), 233(a) and edits 172, 174
+  rewritten); every false "KataGo's" removed (`losses.py`, `heads.py`, the tests' docstrings).
+- **MEDIUM**: the error loss pinned to the Huber loss against the built target over the finite
+  rows, at two horizons; the short-term loss pinned to the mean over the finite entries only, a
+  row with no target getting no gradient (`tests/train/test_value_heads.py`); moves-left's unit
+  across the network -> evaluator -> search boundary shown with a head biased to log1p(37) - the
+  evaluation and the search's record of its root read 37 turns (`tests/engine/test_evaluator.py`;
+  the random head's outputs clamp to 0, so the old checks could not tell turns from log1p).
+- **LOW**: the pre-D3 parameters pinned - a fingerprint of the 64 parameters a small network had
+  at 47bc857 (seed 7), recorded there, under the default flags and with every prototype on
+  (`tests/net/test_params.py`; three float64 sums, not a hash of the bytes, so as not to depend
+  on float32 libm across platforms); D9's submit mask tested on an offered but illegal submit
+  (`tests/net/test_model.py`); the reply map's `ambiguous="turn"` arm on a reply with one masked
+  and one clean played move, and each mapped move's piece checked against the decision board's
+  same cell (`tests/train/test_reply_map.py`); the cache's equivalence test compares the submit
+  readout and the masked submit logits (`tests/net/test_cache.py`); each `Evaluation` names its
+  prior (`policy`), `check_evaluation` refuses an unknown one, and `serve` / `run_search` take
+  `self_play` and refuse an optimistic evaluation there, however the evaluator is wrapped -
+  `play_game` sets it, M21's generator must (`engine/evaluator.py`, `engine/netplay.py`); the
+  match record's Engine header names the optimistic prior; issue 233(e) says "no I15 training
+  record"; the effort loss reads full searches only (§12.4's "full-search moves only"); stale
+  `heads.ValueHead` references (`net/config.py`, `net/trunk.py`).
+- **The mutants re-run** (the reviewer's import-hook set; those whose code the high fix rewrote
+  retargeted at the new code): every one tied to a finding is caught (err_catmean, st_no_nanmask,
+  ev_ml_log, no_retired_draws, d9_submit_possible, reply_turn_arm), as are d3_global_stream by the
+  new pin and two new ones (the `serve` guard, the effort mask). `play_game`'s own optimistic
+  check, disabled, now goes unnoticed: `run_search` refuses the same evaluator with the same
+  message - a second layer, kept because it refuses before the game is opened.
+- F1 unchanged (22,965,426): no parameter added or moved.
+- The three heads' entries below corrected where they said what was not so.
+- Spec: §8.1 (D9's z), §8.3 (the error head), §12.4 (the effort row), §15.2's D4 row; register
+  D3, D4, D9. Issues 231(c), 233(a), 233(e) rewritten; proposed edits 172 and 174 rewritten.
+
+### 2026-10-23 - Network D9: the optimistic policy head behind its flag
+
+Register D9 (§8.1, CHECKPOINT 7) - a prototype, behind its flag, off; match play only.
+
+- **The head** (`net/model.py` `T5DNet.optimistic`, a `heads.ActionHead`;
+  `NetConfig.optimistic_policy`, off; `optimistic_policy_dim` 256): its own f and g, D1's
+  promotion offset and its own submit logit, masked as the policy's (`NetOutput.optimistic_logits`,
+  `optimistic_submit_logits`, `optimistic_action_logits()`); drawn from a generator of its own
+  (`model.d9_seed`) - switching it on changes no other parameter (tested). 135,182 parameters when
+  on (F1 23,100,608); the v1 is unchanged at 22,965,426.
+- **The loss** (`train/losses.py`): its actions against the normal policy target over the full
+  searches, each sample weighted by `optimistic_weights` - clamp(0, 1, sigmoid((z - 1.5) x 3)),
+  z = (short-term target - (W - L)) / sqrt(error head + eps) at the error head's horizon, the
+  network's outputs without gradient (*corrected by the review fixes above: the baseline is the
+  network's short-term output, D9's and KataGo's; W - L is the alternative*); `LossConfig.optimistic_centre`, `_scale`, `_eps`; weight 1.0.
+  Placeholders: spec issue 233.
+- **Match play only** (`engine/evaluator.py`, `engine/netplay.py`): `NetworkEvaluator` and
+  `CachedNetworkEvaluator` take `policy="normal" | "optimistic"` (`POLICY_SOURCES`,
+  `policy_source`) - the optimistic one delivers the optimistic head's logits as the prior with the
+  same value heads, and is refused on a network without the head. `play_game` refuses an
+  optimistic evaluator in self-play; `PlayConfig.optimistic` is match-only and both sides must
+  deliver it; the CLI's `--optimistic` needs `--mode match` alone.
+- **Tests**: the weight (0.5 at z = 1.5, towards 1 and 0, no gradient), the loss only under the
+  flag and reaching only its own head, three optimiser steps reducing it
+  (`tests/train/test_policy_heads.py`); the head, its own draws and endpoints
+  (`tests/net/test_model.py`); cached = dense and the A7 mirror with it on; the optimistic evaluator,
+  dense and cached (`tests/engine/test_evaluator.py`); self-play refusing it and a match with it
+  replaying legal through `t5d-gate` (`tests/engine/test_netplay.py`).
+- Spec: §8.1, §12.4 (the optimistic row), §14.4 (held open in self-play), §13.1 6t; register D9,
+  D1, C14. Spec issue 233; proposed edit 174.
+
+### 2026-10-23 - Network D4: the soft-policy head and the opponent-reply prototype
+
+Register D4 (§12.4, CHECKPOINT 7, reversal 29) in the network.
+
+- **The soft policy** (`net/heads.py` `ActionHead`, `AuxHeads.soft_policy`; `NetConfig.soft_policy`,
+  on - 6j's on/off arm): "a second pointer head - its own source and destination projections and
+  its own submit logit": f and g at width 128 (`soft_policy_dim`, a placeholder), D1's promotion
+  offset, and a submit readout of the pooled global registers in `submit_head`'s form, masked
+  exactly as the policy's (`NetOutput.soft_policy_logits`, `soft_submit_logits`,
+  `soft_action_logits()`). Loss (`train/losses.py`): its own actions against the policy target to
+  the power 1/4, renormalised (`soft_policy_target`, `LossConfig.soft_policy_power`), full searches
+  only, weight 8 (the policy's 1).
+- **The opponent-reply prototype** (`NetConfig.opp_reply`, off): its pointer head scores
+  `PositionState.opp_moves`; loss `distribution_ce` against `Targets.opp_reply`, now the turn's
+  distribution `(B, M2)` (positions without one skipped), weight 0.15. `train/reply_map.py`
+  (`map_reply`) builds the move space: the opponent's next turn mapped onto one of our decision
+  points - each reply board to its nearest ancestor there through the engine's lineage, the same
+  square; every move touching a board two distinct reply boards map onto masked; candidates the
+  mapped moves of every reply decision point; the target uniform over the played moves.
+  `opp_moves` docs updated (`net/state.py`, `engine/convert.py`); inference supplies none.
+- **The other pointer heads' offset**: `NetConfig.pointer_promotion_offset` (on, a placeholder,
+  issue 222).
+- **Draws**: each head from a generator of its own (`model.d4_soft_seed`, `d4_reply_seed`); N1's
+  always-built reply head's draws kept in the global stream - every existing parameter unchanged
+  (checked against the previous commit under three configurations), and switching either flag
+  changes no other parameter (tested).
+- **Parameters**: F1 22,965,426 (+69,390 the soft policy, -65,792 the reply now off; 23,034,559
+  with the reply on), F2's L24-ff12 46,894,834; §9.2's aux budget 76,586. `netplay.SMALL` gives the
+  soft head width 32.
+- **Tests**: `tests/train/test_reply_map.py` - §15.2's D4 row on turns played through the engine
+  from handwritten 5dpgn (a branching jump with White and with Black acting; two branches into one
+  past board in Two Timelines, ambiguous and masked at the turn's start, mapped at the decision
+  point between the jumps), each mapped square checked against the test's own lineage walk (the same algorithm, so not
+  independent: *the review fixes above add a content check*), and the
+  mapped space fed to the reply head; `tests/train/test_policy_heads.py` (the quarter-power target,
+  the soft loss at weight 8 reaching only its own head, full searches only, the reply loss only
+  under its flag at 0.15, a few optimiser steps reducing each); `tests/net/test_model.py` (each
+  pointer head's own endpoints and offset, the soft submit logit masked like the policy's in both
+  readout forms, the flags changing no other parameter); the A7 mirror (a reply arm added), cached =
+  dense (a reply and pointer-submit arm), invariance and smoke tests over the new outputs;
+  `tests/net/test_params.py`.
+- Spec: §8.1 (promotions), §9.2 (Params; Aux heads), §12.4 (soft policy, reply), §12.5, §15.2's D4
+  row; register D1, D4, D7, F1. Spec issue 232 (new) and 222 (built note); proposed edit 173; edit
+  156's running figure updated.
+
+### 2026-10-23 - Network D3: the value heads as corrected at CHECKPOINT 7
+
+Register D3 (§8.3, corrected at CHECKPOINT 7, reversal 28) in the network: the 51 bins had been
+the only value and trained on the outcome; now four heads, as the engine's search (ABI round 2a)
+already consumes them.
+
+- **The heads** (`net/heads.py` `ValueHeads`, `net/model.py`): over the global registers' mean,
+  FP32, the acting player's perspective - one shared hidden layer with Mish (N1's value MLP), then
+  **WDL** (the value search uses: `NetOutput.search_value()` = W - L, `wdl_probs()`), **the
+  categorical** (51 bins, over the root search value; `categorical_mean()` and
+  `categorical_variance()` - the search's default uncertainty signal, 6m - replace
+  `value_mean()`/`value_variance()`), **short-term values** at `NetConfig.short_term_horizons`
+  (2, 5 and 16 turns, placeholders; `NetOutput.short_term`, tanh) and **the error head**
+  (`NetOutput.value_error`, softplus - the name the evaluator reads, `ERROR_HEAD_FIELD`). N1's
+  WDL head moved onto the shared layer; its 51-bin short value head is gone. `heads.hl_gauss`
+  (HL-Gauss targets) and `heads.wdl_value` added.
+- **Draws**: the categorical and WDL readouts are drawn where N1's value output and WDL head
+  were; the short-term and error outputs from a generator of their own (`model.d3_seed`); the
+  retired short value head's draws are kept in the global stream (`T5DNet._retired_draws`, and
+  its construction-time draw), so every parameter that existed before is unchanged, bit for bit
+  (checked against the previous commit's weights under three configurations).
+- **Losses** (`train/losses.py`): `Targets` takes the game result's WDL (class index or
+  distribution), `root_value` (the root search value of full searches, NaN where none),
+  `short_term` (per horizon, NaN where none), `full_search` (section 12.5's mask - the policy and
+  the categorical train on full searches only) and `root_wdl` (for `LossConfig.q_ratio`, 0). The
+  categorical's loss smooths the root value by HL-Gauss (sigma 0.75 bin widths); the error head's
+  target is `(short_term[h] - (W - L))^2` with the network's value taken without gradient
+  (`error_target`, `error_horizon` 0), Huber (*corrected by the review fixes above: the
+  short-term output against its target, register D9's and KataGo's form*). Loss names `categorical`, `short_term`,
+  `value_error` (was `value`, `short_value`). Every unstated detail a placeholder (spec issue
+  231). `train/smoke.py`'s synthetic targets follow (every third position a cheap search).
+- **The evaluator** (`engine/evaluator.py`) now delivers the error head's output with the WDL,
+  the categorical and moves-left; docs updated.
+- **Parameters**: F1 22,961,828 (was 22,973,907: three short-term outputs +771 and the error head
+  +257, the short value head -13,107), F2's L24-ff12 46,891,236.
+- **Tests**: `tests/train/test_value_heads.py` (HL-Gauss, the WDL target and its blend, the
+  categorical on full searches only, no gradient from the error target into the WDL or
+  short-term heads, missing targets skipped (only shown finite: *pinned by the review fixes*),
+  three optimiser steps reducing each loss alone);
+  `tests/net/test_model.py` (shapes, `search_value`, the heads FP32 under a BF16 autocast against
+  an FP64 recomputation, the horizons' validation; the register-pool and permutation tests cover
+  the four); `tests/engine/test_evaluator.py` (the error head read by its pinned name, and the
+  network's heads reaching the search through the C step API - the search's record of its root
+  equals the network's evaluation, the 6m signal at every leaf under either source); the A7
+  mirror, cached = dense, purity and turn-state tests extended to the new outputs.
+- Spec: §8.3, §8.4 (6m's signal), §9.2 (Params), §12.4 (value rows), §12.5; register D3, F1, I10,
+  D7 (pooling unchanged). Spec issue 231; proposed edit 172; edit 156's running figure updated.
+
 ### 2026-10-23 - D2 tree form review fixes: a carried inherited root is evaluated; the inherited value's refusal; the untested readings tested; the counts committed
 
 Two reviews of the tree form (f2b4679) - one finding HIGH, six MEDIUM, nine LOW, and a

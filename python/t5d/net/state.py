@@ -324,8 +324,10 @@ class PositionState:
     Per-board arrays have length ``N`` (boards in storage order); per-square arrays
     have shape ``(N, W*H)`` in a1..h8 order (see the module docstring). ``edges``,
     ``moves`` and ``opp_moves`` hold token indices in this position's own layout
-    (``layout``). ``opp_moves`` are the opponent's candidate moves, scored by the
-    opponent-reply auxiliary head (D4, section 12.4).
+    (``layout``). ``opp_moves`` are the moves the opponent-reply prototype scores (D4,
+    section 12.4; ``NetConfig.opp_reply``, off): the opponent's next turn mapped onto this
+    decision point's squares (``train.reply_map``) - a training target's move space, empty at
+    inference (synthetic states carry the opponent's candidate moves here).
 
     ``side_to_move`` is per board (section 2.3): the colour to move *on that board*,
     0 white / 1 black. By the definition of ``h`` it equals ``h & 1``, which validation
