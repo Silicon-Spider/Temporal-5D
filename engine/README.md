@@ -1983,6 +1983,11 @@ probe waits on another probe of its own shard (one of 64), never on another shar
   2026-10-22, a busier machine (58 crashes; the rest a position held twice or a shorter
   distance lost). A position held twice can hold two kinds of proof, which is what the
   store exists to refuse.
+- **It also leaked.** libstdc++ never destroys a statically initialised rwlock, so each
+  `std::shared_mutex` that winpthreads initialised kept its objects: a review's probe (200
+  rounds of 64 fresh locks, 8 threads) took the process from 71 to 35,213 handles, about 2.75
+  a lock; with `std::mutex` the count stayed at 71. Guard and Hunt built up to three 64-shard
+  stores a call, so long runs on the old lock (6b'' among them) accumulated handles and memory.
 - **Why a `std::mutex` is correct by construction.** libstdc++'s `std::mutex::lock()`
   throws `std::system_error` on any error the platform reports, so it never returns without
   the lock (its `shared_mutex` ignores `EINVAL`). The correctness rests on that contract,
