@@ -127,6 +127,10 @@ the spec describes the change.
     14 on every push, but no GitHub Actions job has started on any branch since 2026-10-17
     09:56 UTC, the nightly of 2026-10-22 included (the account's billing), so it waits for
     a re-run.
+- Review fixes (one reviewer, three low findings): the evaluation cache's no-two-threads
+  rule worded as the caller's duty in `capi_search.h`, `mcts.hpp` and `search.py`; the old
+  lock's handle leak recorded (README "The stores' lock", the H17 row); the H17 row's
+  overlap range dated.
 - Spec: §11.3 (Lazy SMP, the shared stores; register H17, H19) - issue 146, proposed edit 120
   (the stores exact under concurrency, their races never benign). Register H41: the stores
   hold what the proof channel would export; it stays off, and this removes a soundness
