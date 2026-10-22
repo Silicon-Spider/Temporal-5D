@@ -219,6 +219,14 @@ typedef struct t5d_search_params {
   /* engine ABI round 2 (register D3, I10) */
   int32_t uncertainty_source;  /* T5D_UNCERTAINTY_*: a node's variance for E2, E3 and E5's
                                   optional term (6m) */
+  /* engine ABI round 2b (register E1, I19): the root noise's total concentration and its
+     shaping, the root policy temperature - placeholders */
+  double dirichlet_concentration; /* split across the root's open edges (default 0.03 x 361);
+                                     0: dirichlet_alpha per edge */
+  int32_t dirichlet_shaping;      /* KataGo-style shaping: a prototype, 0 (off) */
+  double dirichlet_shaping_share; /* the shaped share of the total (0.5) */
+  double dirichlet_shaping_cap;   /* the shaping's prior cap (0.01) */
+  double root_policy_temperature; /* the root's softmax temperature, before the noise (1: off) */
   t5d_expand_options expand;   /* the leaves' network input (k, features, relations); last */
 } t5d_search_params;
 

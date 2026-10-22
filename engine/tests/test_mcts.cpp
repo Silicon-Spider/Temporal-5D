@@ -1658,6 +1658,213 @@ TEST(mcts_root_noise_is_seeded_and_only_at_the_root) {
   CHECK(a.front() > a.back());  // sorted by the noised prior
 }
 
+TEST(mcts_e1_dirichlet_alphas_split_the_total_concentration) {
+  // E1 / I19 (§8.4): the root noise's total concentration split across the
+  // open edges - "KataGo's alpha = 0.03 x 361 / legal moves".
+  SearchParams p;
+  CHECK_EQ(p.dirichlet_concentration, 0.03 * 361);  // the placeholder default
+  CHECK(!p.dirichlet_shaping);                       // a prototype, off
+  CHECK_EQ(p.root_policy_temperature, 1.0);          // off unless the generator sets it
+  const auto sum = [](const std::vector<double>& v) {
+    double s = 0;
+    for (const double x : v) s += x;
+    return s;
+  };
+  for (const std::size_t n : {std::size_t{1}, std::size_t{20}, std::size_t{1000}}) {
+    const std::vector<double> priors(n, 1.0 / static_cast<double>(n));
+    const std::vector<double> a = dirichlet_alphas(priors, p);
+    REQUIRE_EQ(a.size(), n);
+    CHECK(std::abs(sum(a) - p.dirichlet_concentration) < 1e-9);
+    for (const double x : a) CHECK_EQ(x, p.dirichlet_concentration / static_cast<double>(n));
+  }
+  // The arm before CHECKPOINT 7: dirichlet_alpha per edge, exactly.
+  SearchParams legacy;
+  legacy.dirichlet_concentration = 0;
+  for (const double x : dirichlet_alphas(std::vector<double>(7, 1.0 / 7), legacy)) CHECK_EQ(x, legacy.dirichlet_alpha);
+  CHECK_THROWS_AS((void)dirichlet_alphas({}, p), std::invalid_argument);
+  // Shaping (the prototype): a uniform prior stays uniform; otherwise the
+  // edges the prior ranks above the mean (log-prior, capped) take the shaped
+  // half, never less than the uniform half's share, and the total holds.
+  SearchParams shaped;
+  shaped.dirichlet_shaping = true;
+  for (const double x : dirichlet_alphas(std::vector<double>(40, 1.0 / 40), shaped)) {
+    CHECK(std::abs(x - shaped.dirichlet_concentration / 40) < 1e-12);
+  }
+  std::vector<double> priors;
+  double z = 0;
+  for (int i = 0; i < 200; ++i) {
+    priors.push_back(std::exp(-0.05 * i));
+    z += priors.back();
+  }
+  for (double& x : priors) x /= z;
+  const std::vector<double> a = dirichlet_alphas(priors, shaped);
+  CHECK(std::abs(sum(a) - shaped.dirichlet_concentration) < 1e-9);
+  const double floor = (1.0 - shaped.dirichlet_shaping_share) * shaped.dirichlet_concentration / 200.0;
+  for (std::size_t i = 0; i < a.size(); ++i) {
+    CHECK(a[i] >= floor - 1e-12);
+    if (i > 0) CHECK(a[i] <= a[i - 1] + 1e-12);  // ranked higher: never less
+    if (priors[i] >= shaped.dirichlet_shaping_cap && i > 0) CHECK_EQ(a[i], a[i - 1]);  // capped alike
+  }
+  CHECK(a.front() > 2 * floor);
+  CHECK(std::abs(a.back() - floor) < 1e-12);  // below the mean: the uniform half's share only
+}
+
+namespace {
+
+// The roots' priors after noise at epsilon 1 (the noise alone), over seeds.
+std::vector<std::vector<double>> noise_samples(const GameState& root, double concentration, int seeds) {
+  std::vector<std::vector<double>> out;
+  for (int seed = 1; seed <= seeds; ++seed) {
+    SearchParams p = fast();
+    p.root_noise = true;
+    p.dirichlet_epsilon = 1.0;
+    p.dirichlet_concentration = concentration;
+    p.seed = static_cast<std::uint64_t>(seed) * 0x9E3779B97F4A7C15ull;
+    const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Uniform);
+    Search search(root, p);
+    search.run(*ev, Limits{1});
+    std::vector<double> priors;
+    for (std::size_t i = 0; i < search.node(search.root()).edge_count; ++i) {
+      priors.push_back(search.edge(search.root(), i).prior);
+    }
+    out.push_back(std::move(priors));
+  }
+  return out;
+}
+
+}  // namespace
+
+TEST(mcts_e1_the_noise_keeps_its_strength_as_the_move_count_changes) {
+  // §8.4: the total split across the legal moves "keeps the noise's overall
+  // strength constant as the move count changes". A Dirichlet of total C over
+  // n moves has Var(x_i) = (1/n)(1 - 1/n)/(C + 1): its relative spread
+  // n^2 Var / (n - 1) = 1/(C + 1) whatever n - measured at 20 moves (the
+  // Standard start) and at a position with several times as many.
+  SearchParams defaults;
+  const double c = defaults.dirichlet_concentration;
+  GameState wide = two_timelines_after(0);
+  {
+    // A position with many root moves: Two Timelines a few actions in.
+    for (int actions = 2; actions <= 12; actions += 2) {
+      const GameState s = two_timelines_after(actions);
+      Expansion x;
+      ExpandOptions o;
+      o.legal_moves = true;
+      expand(s, o, x, 0);
+      if (x.moves().size() >= 60) {
+        wide = s;
+        break;
+      }
+    }
+  }
+  for (const GameState& root : {variant("Standard"), wide}) {
+    const std::vector<std::vector<double>> samples = noise_samples(root, c, 600);
+    const std::size_t n = samples.front().size();
+    REQUIRE(n >= 20);
+    double sq = 0;
+    std::size_t count = 0;
+    for (const std::vector<double>& s : samples) {
+      REQUIRE_EQ(s.size(), n);
+      for (const double x : s) {
+        const double d = x - 1.0 / static_cast<double>(n);
+        sq += d * d;
+        ++count;
+      }
+    }
+    const double var = sq / static_cast<double>(count);
+    const double relative = var * static_cast<double>(n * n) / static_cast<double>(n - 1);
+    std::printf("  root noise over %zu moves: relative spread %.5f, 1/(C + 1) = %.5f\n", n, relative, 1.0 / (c + 1.0));
+    CHECK(std::abs(relative * (c + 1.0) - 1.0) < 0.15);
+  }
+}
+
+namespace {
+
+// A logit from the move alone (so a prior can be checked from the edge's move):
+// a quarter per step of (from x 7 + to x 3) mod 11.
+float move_logit(const Move& m) {
+  return 0.25f * static_cast<float>((m.from_square * 7 + m.to_square * 3 + m.to_timeline * 5) % 11);
+}
+
+class ByMove final : public Evaluator {
+ public:
+  void evaluate(std::span<const EvalRequest> batch, std::span<Evaluation> out) override {
+    for (std::size_t i = 0; i < batch.size(); ++i) {
+      const MoveList& moves = batch[i].expansion->moves();
+      out[i].logits.resize(moves.size());
+      for (std::size_t m = 0; m < moves.size(); ++m) out[i].logits[m] = move_logit(moves[m]);
+      out[i].wdl = wdl_of(0.0);
+    }
+  }
+};
+
+// Edge i's prior at temperature t: the softmax of the moves' logits (no submit).
+std::vector<double> softmax_priors(const Search& search, NodeId id, double t) {
+  const NodeView n = search.node(id);
+  std::vector<double> z;
+  double top = -1e300;
+  for (std::size_t i = 0; i < n.edge_count; ++i) {
+    z.push_back(static_cast<double>(move_logit(*search.edge(id, i).move)) / t);
+    top = std::max(top, z.back());
+  }
+  double sum = 0;
+  for (double& x : z) {
+    x = std::exp(x - top);
+    sum += x;
+  }
+  for (double& x : z) x /= sum;
+  return z;
+}
+
+}  // namespace
+
+TEST(mcts_i19_the_root_policy_temperature_flattens_the_root_only_before_the_noise) {
+  // I19 / §8.4: "a root policy softmax temperature slightly above 1 flattens
+  // the prior before the noise". At T = 1.25 the root's priors are the softmax
+  // of logits / 1.25 and every other node's of the logits; with the noise on,
+  // the noise is added to the tempered prior: P' - (1 - eps) P_T is the noise
+  // share, non-negative, summing to eps.
+  SearchParams p = fast();
+  p.widening = false;
+  p.root_policy_temperature = 1.25;
+  ByMove ev;
+  Search search(variant("Standard"), p);
+  search.run(ev, Limits{200});
+  const std::vector<double> want = softmax_priors(search, search.root(), 1.25);
+  for (std::size_t i = 0; i < want.size(); ++i) {
+    CHECK(std::abs(search.edge(search.root(), i).prior - want[i]) < 1e-12);
+  }
+  std::size_t below = 0;
+  for (NodeId id = 0; id < search.node_count(); ++id) {
+    const NodeView n = search.node(id);
+    if (id == search.root() || !n.expanded || n.edge_count == 0 || n.submit_possible) continue;
+    const std::vector<double> plain = softmax_priors(search, id, 1.0);
+    for (std::size_t i = 0; i < plain.size(); ++i) CHECK(std::abs(search.edge(id, i).prior - plain[i]) < 1e-12);
+    ++below;
+  }
+  CHECK(below > 0);
+  // T = 1 is no temperature: the same search as the default's, bit for bit.
+  SearchParams one = fast();
+  one.root_policy_temperature = 1.0;
+  Search a(variant("Standard"), one);
+  Search b(variant("Standard"), fast());
+  a.run(ev, Limits{60});
+  b.run(ev, Limits{60});
+  CHECK_EQ(a.digest(), b.digest());
+  // With the noise: the tempered prior, then the noise.
+  p.root_noise = true;
+  Search noised(variant("Standard"), p);
+  noised.run(ev, Limits{1});
+  const std::vector<double> tempered = softmax_priors(noised, noised.root(), 1.25);
+  double share = 0;
+  for (std::size_t i = 0; i < tempered.size(); ++i) {
+    const double x = noised.edge(noised.root(), i).prior - (1.0 - p.dirichlet_epsilon) * tempered[i];
+    CHECK(x >= -1e-12);
+    share += x;
+  }
+  CHECK(std::abs(share - p.dirichlet_epsilon) < 1e-9);
+}
+
 TEST(mcts_value_distribution_helpers) {
   for (const double v : {-1.0, -0.63, 0.0, 0.25, 0.999, 1.0}) {
     const ValueMoments m = value_moments(two_hot(v));
@@ -3087,6 +3294,14 @@ TEST(mcts_every_real_parameter_must_be_finite) {
       {"cpuct", [](SearchParams& p, double v) { p.cpuct = v; }, nan},
       {"submit_share", [](SearchParams& p, double v) { p.submit_share = v; }, nan},
       {"lcb_floor", [](SearchParams& p, double v) { p.lcb_floor = v; }, nan},
+      // E1, I19 (engine ABI round 2b)
+      {"dirichlet_concentration", [](SearchParams& p, double v) { p.dirichlet_concentration = v; }, inf},
+      {"dirichlet_concentration", [](SearchParams& p, double v) { p.dirichlet_concentration = v; }, -1.0},
+      {"dirichlet_shaping_share", [](SearchParams& p, double v) { p.dirichlet_shaping_share = v; }, 1.5},
+      {"dirichlet_shaping_cap", [](SearchParams& p, double v) { p.dirichlet_shaping_cap = v; }, 0.0},
+      {"dirichlet_shaping_cap", [](SearchParams& p, double v) { p.dirichlet_shaping_cap = v; }, nan},
+      {"root_policy_temperature", [](SearchParams& p, double v) { p.root_policy_temperature = v; }, 0.0},
+      {"root_policy_temperature", [](SearchParams& p, double v) { p.root_policy_temperature = v; }, inf},
   };
   for (const Bad& b : bad) {
     SearchParams p = fast();

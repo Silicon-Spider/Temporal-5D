@@ -2263,9 +2263,29 @@ nothing; the rules' verdict comes first.
 children: the children sorted by prior, the first `ceil(k0 (N + 1)^alpha)` instantiated
 (progressive widening), with `k0 = max(widening_min, widening_scale * exp(H))` from the
 policy's entropy H - sharp policies narrow, flat ones widen. FPU: an unvisited child
-scores `Q(parent) - fpu_reduction * sqrt(visited prior mass)`. Root Dirichlet noise for
-self-play (`root_noise`, `dirichlet_alpha` per child, `dirichlet_epsilon`; seeded,
-deterministic). Behind flags: E2 - cPUCT scaled by `clamp(1 + lambda (sigma / sigma_ref
+scores `Q(parent) - fpu_reduction * sqrt(visited prior mass)`. **The root's exploration**
+(E1 and I19 as corrected at CHECKPOINT 7; engine ABI round 2b), in this order at the
+root's own expansion: the softmax at `policy_temperature x root_policy_temperature` (I19's
+root policy temperature - "a root policy softmax temperature slightly above 1 flattens
+the prior before the noise", §8.4; 1, off, by default: the training generator sets its
+self-play value per search, with the move-temperature schedule, M21), the unknown-move
+scale and the submit share, k0 from that prior's entropy, then root Dirichlet noise for
+self-play (`root_noise`; `P = (1 - eps) P + eps Dir(alpha)`, seeded, deterministic, at a
+fresh root only) - its **total concentration** `dirichlet_concentration` (placeholder
+`kDirichletConcentration`, KataGo's 0.03 x 361 = 10.83) **split across the root's open
+edges** (`dirichlet_alphas`: the moves the expansion kept, legal or unknown, and a legal
+submit; under the whole-turn split the listed actions), so the noise's overall strength
+stays constant as the move count changes (§8.4; tested: the noise's relative spread
+`n^2 Var / (n - 1)` is `1/(C + 1)` at 20 moves and at 62). `dirichlet_concentration` 0
+is the arm before CHECKPOINT 7, `dirichlet_alpha` per edge (its draws exactly as before).
+KataGo-style **shaping** is a prototype behind `dirichlet_shaping` (off):
+`dirichlet_shaping_share` (one half, §8.4) of the total spread by how far each edge's
+log-prior, capped at `dirichlet_shaping_cap` (0.01), lies above the open edges' mean,
+the rest uniformly - a reading of §8.4's paraphrase (build-log spec issue 151), never
+below the uniform half's share. Then the edges are sorted and widened. Every constant a
+named placeholder (SPSA, G7; ablation 6g). Not built: E1's "the widening schedule may
+depend on the mandatory-board count" (a tuning option for 6g; A6's count is in the
+expansion). Behind flags: E2 - cPUCT scaled by `clamp(1 + lambda (sigma / sigma_ref
 - 1))`, sigma the node's value deviation (its uncertainty signal - the categorical's
 variance by default, `uncertainty_source` - as a prior of weight
 `variance_prior_weight`, blended with the backed-up values'), and backups
@@ -2442,8 +2462,9 @@ C14 through the binding), `_digest` (H15's digest - the
 tests compare the step loop's graph with the C++ search's by it), and `t5d_search_layout`
 (this header's struct layouts, as `t5d_layout` gives `t5d/capi.h`'s).
 `t5d_search_params` mirrors `SearchParams` (fill it with `t5d_search_params_default`;
-round 2 adds `uncertainty_source`, `T5D_UNCERTAINTY_CATEGORICAL` by default, in front
-of `expand`).
+round 2 adds `uncertainty_source`, `T5D_UNCERTAINTY_CATEGORICAL` by default, then E1's
+and I19's `dirichlet_concentration`, `dirichlet_shaping`, `dirichlet_shaping_share`,
+`dirichlet_shaping_cap` and `root_policy_temperature`, in front of `expand`).
 The header's structs are appended to, never reordered; the one struct of `t5d/capi.h`
 each embeds (`t5d_leaf::expansion`, `t5d_search_params::expand`) - provisional, and
 growing as that header does (E7 appended D8's fields to `t5d_expansion`) - is its last
@@ -2463,9 +2484,13 @@ as must `choose_by_visits`'s temperature and random number and `two_hot`'s value
 **Self-play** (`t5d/selfplay.hpp`, `play_game`). Self-play: a fresh search per decision
 (C14), sharing only the evaluation cache, the move sampled from the visits at
 `temperature` for `temperature_decisions` decisions, then the most visited, with root
-Dirichlet noise (E1, §8.4: `PlayParams::search` has `root_noise` on by default; a bare
-`SearchParams` has it off). Match play (`match_play`): one search carried across
-decisions, the final rule, noise off.
+Dirichlet noise (E1, §8.4: `PlayParams::search` has `root_noise` on by default, its
+total concentration split across the root's open edges; a bare `SearchParams` has it
+off). I19's move-temperature schedule (Lc0's T60: 0.9 decaying to 0.45, cut at move 60)
+and the root temperature's self-play value belong to the training generator (M21, in
+Python), which sets `root_policy_temperature` and the move temperature per decision; this
+tool's self-play keeps its step schedule and a root temperature of 1. Match play
+(`match_play`): one search carried across decisions, the final rule, noise off.
 Every turn start is judged first by E4's detector (checkmate, stalemate; unknown ends
 the game unjudged), then by the turn cap (scored a draw, counted:
 `GameRecord::cap_bound`, `search_turn_caps`). Every move is checked pseudo-legal and
@@ -2564,7 +2589,14 @@ search's root from a shared cache included); the built-in evaluators' WDL; every
 malformed head refused and released; `run`'s reused buffers reset head by head; the
 C step loop with WDLs, categoricals, errors and moves-left equal to the C++ search by
 digest under both signals with E2 on, the root children's `d` and network outputs
-included; the batch struct's every refusal.
+included; the batch struct's every refusal. After E1/I19's correction (round 2b): the
+alphas summing to the total, split evenly, exactly `dirichlet_alpha` per edge in the old
+arm, shaped only behind the flag (uniform priors stay uniform; ranked edges never below
+the uniform half's share; capped priors alike); the noise's relative spread constant
+from 20 moves to 62 (600 seeds each, against `1/(C + 1)`); the root temperature on the
+root's priors only, before the noise, and 1 the default's search bit for bit; the new
+parameters' validation; the step loop equal to the C++ search with shaped, tempered and
+per-child noise.
 
 ## Stage E8: the verification layer's redesign (M14, a prototype until 6b′)
 
@@ -3763,7 +3795,16 @@ Each is recorded where it is made (the header comments) and listed here:
     child's network WDL, moves-left and error exposed instead - I13's inputs (issue 148);
   - 6m's switch, `uncertainty_source`: the categorical's variance (default) or the error
     head's output as each node's variance, read by E2, E3 and E5's optional term; a
-    signal not given is 0 (issue 149).
+    signal not given is 0 (issue 149);
+  - the root noise's total concentration split across the root's open edges - the moves
+    the expansion kept, legal or unknown, and a legal submit; the listed actions under
+    the whole-turn split - drawn per decision (each decision's fresh search is a root;
+    the spec does not say per decision or per action) (issue 150);
+  - the shaping's form, a prototype: half the total by each edge's capped log-prior
+    above the mean (issue 151);
+  - the root policy temperature beside the every-node one (multiplied), 1 by default,
+    its self-play value and decay the training generator's; k0's entropy from the
+    tempered prior; a carried root never re-tempered (issue 152).
 - **An ambiguous move is still unreadable** (stage E4): the notation's "Omission" lets
   a writer leave out a piece that a pin rules out, but legality is judged per action,
   at submission, so a "pin" is no per-move notion; the reader does not try each

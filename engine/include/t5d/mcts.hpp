@@ -107,7 +107,10 @@
 // per node from the policy entropy, k0 = max(k_min, scale * exp(H)) - sharp
 // policies narrow, flat ones widen. FPU reduction for unvisited children
 // (Q_parent - fpu * sqrt(visited prior mass)). Root Dirichlet noise for
-// self-play. E2 (provisional, flags): cPUCT scaled by the node's value
+// self-play, its total concentration split across the root's open edges (E1,
+// I19: KataGo's 0.03 x 361 / legal moves; a per-child alpha its legacy arm;
+// KataGo-style shaping a prototype behind a flag), after a root policy
+// temperature (I19) flattens the root's prior. E2 (provisional, flags): cPUCT scaled by the node's value
 // standard deviation (the uncertainty signal - the categorical variance by
 // default - as a prior, blended with the backed-up values'), and
 // uncertainty-weighted backups. E3 (prototype, flag):
@@ -218,6 +221,10 @@ constexpr double value_bin_centre(int k) noexcept {
 /// D3: the WDL head's outputs - win, draw, loss, in that order.
 inline constexpr int kWdl = 3;
 
+/// E1/I19's placeholder total concentration for the root noise: KataGo's
+/// 0.03 x 361 (§8.4) - SearchParams::dirichlet_concentration's default.
+inline constexpr double kDirichletConcentration = 0.03 * 361;
+
 using NodeId = std::uint32_t;
 inline constexpr NodeId kNoNode = std::numeric_limits<NodeId>::max();
 
@@ -316,9 +323,35 @@ struct SearchParams {
   double widening_min = 2.0;          ///< placeholder
   double fpu_reduction = 0.25;        ///< placeholder
   bool root_noise = false;            ///< root Dirichlet noise (self-play only)
-  double dirichlet_alpha = 0.3;       ///< per child; placeholder
+  /// Each open root edge's alpha - used only when dirichlet_concentration is 0
+  /// (the arm before CHECKPOINT 7). Placeholder.
+  double dirichlet_alpha = 0.3;
   double dirichlet_epsilon = 0.25;    ///< placeholder
-  double policy_temperature = 1.0;    ///< softmax temperature on the logits
+  /// Softmax temperature on the logits at every node (Lc0's form; 1: off).
+  double policy_temperature = 1.0;
+  // E1 and I19 as corrected at CHECKPOINT 7 (engine ABI round 2b):
+  /// The root noise's TOTAL concentration, split across the root's open edges
+  /// (dirichlet_alphas) - "KataGo's alpha = 0.03 x 361 / legal moves keeps the
+  /// noise's overall strength constant as the move count changes" (§8.4). 0:
+  /// the per-child dirichlet_alpha instead. Placeholder (SPSA, 6g): KataGo's
+  /// 0.03 x 361 = kDirichletConcentration.
+  double dirichlet_concentration = kDirichletConcentration;
+  /// KataGo-style shaping (§8.4: "half the concentration on moves the prior
+  /// ranks above most others, aimed at blind spots") - a PROTOTYPE, off.
+  bool dirichlet_shaping = false;
+  /// The shaped share of the total ("half"). Placeholder.
+  double dirichlet_shaping_share = 0.5;
+  /// The shaping's prior cap: an edge's weight is how far its log-prior, capped
+  /// here, lies above the open edges' mean log-prior. Placeholder (a reading of
+  /// the paraphrase; build-log spec issue 151).
+  double dirichlet_shaping_cap = 0.01;
+  /// I19's root policy temperature: the root expansion's softmax is taken at
+  /// policy_temperature x root_policy_temperature, before the noise (§8.4: "a
+  /// root policy softmax temperature slightly above 1 flattens the prior before
+  /// the noise"). 1: off - the default here, as root_noise's is off; its
+  /// self-play value and schedule (KataGo 1.25 -> 1.1; Lc0 1.2-1.45) are the
+  /// training generator's, which sets this per search (build-log spec issue 152).
+  double root_policy_temperature = 1.0;
 
   // ---- E2 (provisional): variance-scaled cPUCT, uncertainty-weighted backups ---
   bool variance_scaled_cpuct = false;
@@ -518,6 +551,16 @@ class Evaluator {
   /// cached K/V for the old root's conditioning invalidates it here.
   virtual void on_new_root(const GameState& /*root*/, std::uint64_t /*epoch*/) {}
 };
+
+/// E1, I19: each open root edge's Dirichlet alpha, given the open edges' priors
+/// (as the root's expansion has them before the noise: after the temperatures,
+/// the unknown-move scale and the submit share). The total C is
+/// dirichlet_concentration (or, at 0, dirichlet_alpha per edge: every alpha
+/// exactly dirichlet_alpha, the arm before CHECKPOINT 7); unshaped, C / n each;
+/// shaped (dirichlet_shaping), C ((1 - s) / n + s r_i / sum r), s the shaping
+/// share and r_i = max(0, ln min(P_i, cap) - mean_j ln min(P_j, cap)) - uniform
+/// where every r is 0. Throws std::invalid_argument for an empty span.
+std::vector<double> dirichlet_alphas(std::span<const double> priors, const SearchParams& params);
 
 /// Built-in evaluators, for tests, invariants and the tools. Each gives the
 /// WDL and the categorical (no error head, no moves-left):

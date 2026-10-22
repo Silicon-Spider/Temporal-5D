@@ -107,6 +107,11 @@ def test_parameters_default_and_override():
         search_params(playouts=3)
     with pytest.raises(ValueError, match="H41"):
         search_params(proof_channel=1)
+    # E1, I19 (engine ABI round 2b): the placeholders, the library's own defaults.
+    assert p.dirichlet_concentration == pytest.approx(0.03 * 361) and p.dirichlet_shaping == 0
+    assert (p.dirichlet_shaping_share, p.dirichlet_shaping_cap, p.root_policy_temperature) == (0.5, 0.01, 1.0)
+    with Game.variant("Standard") as g, pytest.raises(EngineArgumentError, match="root_policy_temperature"):
+        Search(g, params=search_params(root_policy_temperature=0.0))
 
 
 # --- the driver is the engine's own loop ----------------------------------------------------------
@@ -114,8 +119,16 @@ def test_parameters_default_and_override():
 
 @pytest.mark.parametrize(
     "flags",
-    [{}, {"graph": 1}, {"split": T5D_SPLIT_WHOLE_TURN}, {"root_noise": 1}, {"batch_size": 1, "synchronous": 1}],
-    ids=["ply-tree", "ply-graph", "whole-turn", "noise", "synchronous"],
+    [
+        {},
+        {"graph": 1},
+        {"split": T5D_SPLIT_WHOLE_TURN},
+        {"root_noise": 1},
+        {"root_noise": 1, "dirichlet_shaping": 1, "root_policy_temperature": 1.3},
+        {"root_noise": 1, "dirichlet_concentration": 0.0},
+        {"batch_size": 1, "synchronous": 1},
+    ],
+    ids=["ply-tree", "ply-graph", "whole-turn", "noise", "noise-shaped-tempered", "noise-per-child", "synchronous"],
 )
 @pytest.mark.parametrize("variant", ["Standard", "Standard - Two Timelines"])
 def test_the_step_loop_is_the_engines_run(variant, flags):
@@ -197,8 +210,16 @@ def _random_digests(game: Game, turn_start: bool, flags: dict, evaluator_seed: i
 
 @pytest.mark.parametrize(
     "flags",
-    [{}, {"graph": 1}, {"split": T5D_SPLIT_WHOLE_TURN}, {"root_noise": 1}, {"batch_size": 1, "synchronous": 1}],
-    ids=["ply-tree", "ply-graph", "whole-turn", "noise", "synchronous"],
+    [
+        {},
+        {"graph": 1},
+        {"split": T5D_SPLIT_WHOLE_TURN},
+        {"root_noise": 1},
+        {"root_noise": 1, "dirichlet_shaping": 1, "root_policy_temperature": 1.3},
+        {"root_noise": 1, "dirichlet_concentration": 0.0},
+        {"batch_size": 1, "synchronous": 1},
+    ],
+    ids=["ply-tree", "ply-graph", "whole-turn", "noise", "noise-shaped-tempered", "noise-per-child", "synchronous"],
 )
 @pytest.mark.parametrize("variant", ["Standard", "Standard - Two Timelines"])
 def test_the_engines_random_evaluator_through_the_step_api(variant, flags):

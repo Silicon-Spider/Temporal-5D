@@ -10,6 +10,70 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-22 - Engine ABI round 2b: E1 and I19's exploration - the root noise's total concentration split across the open edges, shaping behind a flag, a root policy temperature
+
+- Register E1 (Committed, class R; §8.4): "root Dirichlet with its total concentration
+  split across the legal moves (KataGo; shaping a prototype) and a root policy temperature
+  (I19); constants are named placeholders"; I19 (Committed placeholders; §8.4, §12.8).
+  `engine/include/t5d/mcts.hpp`, `src/mcts.cpp`: `SearchParams::dirichlet_concentration`,
+  the root noise's **total** (placeholder `kDirichletConcentration`, KataGo's 0.03 x 361 =
+  10.83), split across the root's open edges by `dirichlet_alphas` - the moves the
+  expansion kept (legal or unknown), a legal submit, or under whole turns the listed
+  actions (issue 150) - so the noise's overall strength holds as the move count changes.
+  `dirichlet_alpha` keeps its per-child meaning, as the arm at `dirichlet_concentration`
+  0, its draws exactly those before this commit. KataGo-style **shaping**, a prototype
+  behind `dirichlet_shaping` (off): `dirichlet_shaping_share` (0.5, the paraphrase's
+  "half") spread by how far each edge's log-prior, capped at `dirichlet_shaping_cap`
+  (0.01), lies above the mean, the rest uniform - a reading of §8.4's paraphrase, from the
+  spec's words and KataGo's published description, no code (issue 151, H29). The **root
+  policy temperature** `root_policy_temperature` (1, off, by default): the root's own
+  expansion takes its softmax at `policy_temperature x root_policy_temperature`, before
+  the noise; k0 reads the tempered prior; a carried root is never re-tempered (issue
+  152). Validation: the concentration finite and >= 0, the share in [0, 1], the cap in
+  (0, 1], the temperature finite and > 0.
+- I19's schedules are the training generator's (the plan critic's contradiction 9): the
+  move-temperature schedule (Lc0's T60, 0.9 -> 0.45, cut at move 60) and the root
+  temperature's self-play value and decay (KataGo 1.25 -> 1.1) are set per search by M21's
+  generator, in Python; the engine exposes `root_policy_temperature` beside the move
+  temperature `choose_by_visits` already takes, and no more. `selfplay.cpp`'s and
+  `netplay.py`'s step schedules and a root temperature of 1 stand until then.
+- Search results change only where the new semantics require: a search with root noise
+  on now splits the total (self-play's default; `t5d-play`'s, `selfplay.cpp`'s and
+  `netplay.py`'s noisy searches draw other noise); a search without noise is unchanged,
+  and so is one with `dirichlet_concentration` 0.
+- C API (`capi_search.h`, `capi_search.cpp`): `t5d_search_params` gains
+  `dirichlet_concentration`, `dirichlet_shaping`, `dirichlet_shaping_share`,
+  `dirichlet_shaping_cap`, `root_policy_temperature` in front of the embedded `expand`
+  (reported by `t5d_search_layout`; `dirichlet_shaping` a 0/1 flag). Python mirror
+  (`capi.py`'s `CSearchParams`) in the same commit; the layout check passes.
+- Tests. `test_mcts.cpp`: `mcts_e1_dirichlet_alphas_split_the_total_concentration` (the
+  total, an even split, exactly `dirichlet_alpha` per edge in the old arm; shaping: a
+  uniform prior uniform, ranked edges never fewer, never below the uniform half's share,
+  capped priors alike); `mcts_e1_the_noise_keeps_its_strength_as_the_move_count_changes`
+  (600 seeds each: the noise's relative spread `n^2 Var / (n - 1)` 0.0852 at 20 moves and
+  0.0856 at 62, against `1/(C + 1)` = 0.0845); `mcts_i19_the_root_policy_temperature_
+  flattens_the_root_only_before_the_noise` (the root's priors the softmax at 1.25, every
+  other node's at 1; with the noise, `P' - (1 - eps) P_T` non-negative and summing to eps;
+  temperature 1 the default's search bit for bit); the new parameters' validation.
+  `test_capi_search.cpp`: the defaults through the C API, the fields' layout in front of
+  `expand`, a bad flag and a zero temperature refused. Python: the step loop equal to the
+  engine's own run by digest with shaped and tempered noise and with the per-child arm
+  (the uniform and the random evaluator); the defaults and the refusal by name.
+  Checks: engine 574 of 574 (`--werror`); Python `tests/engine` 185 passed, 1 skipped
+  (`T5D_REQUIRE_ENGINE=1`); ruff check and format clean; `harness verify` ok; `gate
+  --tier commit`: the oracle layer ok, the engine differential "SMOKE TEST - PASSED" (41
+  records compared with the last green run, 0 declined), the proof channel DISABLED.
+- `engine/README.md`: the root's exploration under "Selection", the C API's new fields,
+  self-play's schedules (the generator's), the tests, the readings (issues 150-152).
+  `docs/BUILD_LOG.md`: register E1 (built; the mandatory-count widening option, a "may",
+  not built), I19 (the engine side built; the schedules the generator's); spec issues
+  150-152; proposed edit 123.
+- Spec: §8.4's noise and temperature text and its constants list, register E1, I19 -
+  the open edges, per decision, the shaping's form, Lc0's every-node temperature against
+  KataGo's root one (edit 123; issues 150-152); §12.8's exploration and §12.3's match play
+  - the root temperature self-play only, its schedule the generator's (issue 152). No
+  truth source changed.
+
 ### 2026-10-22 - Engine ABI round 2a: D3's value outputs in the search - the WDL backed up with its draw, one deliver call for every head, 6m's switch
 
 - Register D3 (Committed, class C; §8.3, corrected at CHECKPOINT 7, reversal 28): "WDL on

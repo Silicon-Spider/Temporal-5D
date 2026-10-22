@@ -321,6 +321,39 @@ const char* choice_reason_name(ChoiceReason reason) noexcept {
   return "?";
 }
 
+std::vector<double> dirichlet_alphas(std::span<const double> priors, const SearchParams& params) {
+  if (priors.empty()) throw std::invalid_argument("dirichlet_alphas: no open edge");
+  const std::size_t n = priors.size();
+  const double count = static_cast<double>(n);
+  if (!(params.dirichlet_concentration > 0)) {
+    // The per-edge alpha (the arm before CHECKPOINT 7), exactly.
+    if (!params.dirichlet_shaping) return std::vector<double>(n, params.dirichlet_alpha);
+  }
+  const double total =
+      params.dirichlet_concentration > 0 ? params.dirichlet_concentration : params.dirichlet_alpha * count;
+  std::vector<double> out(n, total / count);
+  if (!params.dirichlet_shaping) return out;
+  // The shaping (a prototype): the share s spread by how far each edge's
+  // capped log-prior lies above the mean - "moves the prior ranks above most
+  // others" - the rest uniformly; uniform where nothing lies above the mean.
+  std::vector<double> r(n);
+  double mean = 0;
+  for (std::size_t i = 0; i < n; ++i) {
+    r[i] = std::log(std::max(std::min(priors[i], params.dirichlet_shaping_cap), 1e-300));
+    mean += r[i];
+  }
+  mean /= count;
+  double sum = 0;
+  for (double& x : r) {
+    x = std::max(0.0, x - mean);
+    sum += x;
+  }
+  if (!(sum > 0)) return out;
+  const double s = params.dirichlet_shaping_share;
+  for (std::size_t i = 0; i < n; ++i) out[i] = total * ((1.0 - s) / count + s * r[i] / sum);
+  return out;
+}
+
 // ---------------------------------------------------------------------------
 // Final selection (E5, E9)
 // ---------------------------------------------------------------------------
@@ -585,6 +618,10 @@ struct Search::Impl {
     require(positive(p.dirichlet_alpha), "dirichlet_alpha", "finite, > 0");
     require(unit(p.dirichlet_epsilon), "dirichlet_epsilon", "0 to 1");
     require(positive(p.policy_temperature), "policy_temperature", "finite, > 0");
+    require(nonneg(p.dirichlet_concentration), "dirichlet_concentration", "finite, >= 0 (0: dirichlet_alpha per edge)");
+    require(unit(p.dirichlet_shaping_share), "dirichlet_shaping_share", "0 to 1");
+    require(p.dirichlet_shaping_cap > 0 && p.dirichlet_shaping_cap <= 1, "dirichlet_shaping_cap", "in (0, 1]");
+    require(positive(p.root_policy_temperature), "root_policy_temperature", "finite, > 0");
     require(nonneg(p.cpuct_variance_scale), "cpuct_variance_scale", "finite, >= 0");
     require(positive(p.variance_reference), "variance_reference", "finite, > 0");
     require(nonneg(p.variance_prior_weight), "variance_prior_weight", "finite, >= 0");
@@ -999,7 +1036,10 @@ struct Search::Impl {
     std::size_t open = 0;
     for (std::size_t i = 0; i < n.edges.size(); ++i) open += in_softmax(i) ? 1u : 0u;
     if (open > 0) {
-      const double t = params_.policy_temperature;
+      // I19: the root's own expansion takes the root policy temperature too,
+      // before the noise (§8.4); every node takes policy_temperature.
+      const double t = id == root_ ? params_.policy_temperature * params_.root_policy_temperature
+                                   : params_.policy_temperature;
       double top = -std::numeric_limits<double>::infinity();
       for (std::size_t i = 0; i < n.edges.size(); ++i) {
         if (in_softmax(i)) top = std::max(top, logits[i] / t);
@@ -1052,14 +1092,32 @@ struct Search::Impl {
     }
   }
 
-  // Root Dirichlet noise (§8.4, self-play): P = (1 - eps) P + eps Dir(alpha).
+  // Root Dirichlet noise (§8.4, self-play): P = (1 - eps) P + eps Dir(alpha),
+  // alpha_i from dirichlet_alphas over the open edges (E1, I19: the total
+  // concentration split across them). A pruned edge draws a gamma variate too,
+  // unused (the open edges' mean alpha; dirichlet_alpha in the arm before
+  // CHECKPOINT 7, whose draws are so exactly what they were).
   void apply_noise(Node& n) {
+    std::vector<double> open_priors;
+    for (const Edge& e : n.edges) {
+      if (!e.pruned) open_priors.push_back(e.prior);
+    }
+    if (open_priors.empty()) return;
+    const std::vector<double> alphas = dirichlet_alphas(open_priors, params_);
+    double total = 0;
+    for (const double a : alphas) total += a;
+    // The arm before CHECKPOINT 7 draws dirichlet_alpha for every edge, exactly.
+    const double pruned_alpha = params_.dirichlet_concentration > 0 || params_.dirichlet_shaping
+                                    ? total / static_cast<double>(alphas.size())
+                                    : params_.dirichlet_alpha;
     detail::SplitMix rng{params_.seed ^ detail::mix64(n.key)};
     std::vector<double> eta(n.edges.size());
     double sum = 0;
-    for (double& x : eta) {
-      x = detail::gamma_sample(params_.dirichlet_alpha, rng);
-      sum += x;
+    std::size_t k = 0;
+    for (std::size_t i = 0; i < n.edges.size(); ++i) {
+      const double alpha = n.edges[i].pruned ? pruned_alpha : alphas[k++];
+      eta[i] = detail::gamma_sample(alpha, rng);
+      sum += eta[i];
     }
     if (!(sum > 0)) return;
     double open = 0;  // the noise goes to the edges that may be taken
