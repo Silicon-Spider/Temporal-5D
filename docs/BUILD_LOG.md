@@ -1643,7 +1643,7 @@ order the D2 work (issue 142).
 | C16 | not built (rule) | Deferred; last, only if node-starved |
 | C21 | not built (rule) | Refused; a mutant that snapshots is caught by the tests |
 | D1 | built, tested | Network N1's pointer policy over the moves the engine supplies - in search, legal or unknown, unknowns verified when first selected (E5a, E6a), as §8.1 now says; the game API's expansion stays pseudo-legal until ABI round 2's `legal_moves` option. The promotion offset (CHECKPOINT 6, M20) is the v1 (`lane/net` N-M20): a learned per-piece logit read from the destination token, always on in the policy - `policy_promotion` and its `none` arm removed (+3,341 parameters). The opponent-reply head has none, as built at N1: which other pointer heads carry it, and the offset's form, are issue 222 |
-| D3 | engine side built, tested (engine ABI round 2a); network heads built in part (the pre-CHECKPOINT-7 head) | The search (round 2a): WDL is the search's value - W − L backed up, the draw probability D beside it on every node and edge (issue 148) - the categorical optional and read only as an uncertainty signal (6m's switch, issue 149), the error head's output and moves-left per leaf, all through one new deliver call (`t5d_search_deliver_evaluations` and its `t5d_evaluations` struct; the old `t5d_search_deliver`, which backed up the categorical's mean, retired); each root child's search (q, d) and network WDL, moves-left and error recorded, and the root's own; the built-in evaluators give a WDL. The Python evaluator delivers the network's WDL, categorical and moves-left, and its error output once the net lane names one `value_error` (NaN until then); `Evaluation.value_mean` is now W − L. The network: N1's 51-bin value head over the pooled global registers, smoke-trained on the outcome. Its MLP is Mish (F6, CHECKPOINT 8). Pooling as M20 rules it (`lane/net` N-M20): the 51-bin head, WDL and the short-term value all read the mean of the global registers - WDL and the short-term value moved off the squares with `aux_global_pool` (issue 223); a test holds them invariant to permuting the registers' final states. Corrected at CHECKPOINT 7 (reversal 28): the categorical over the root search value (HL-Gauss), short-term values, the error head - the net lane's heads |
+| D3 | engine side built, tested (engine ABI round 2a); network heads built in part (the pre-CHECKPOINT-7 head) | The search (round 2a): WDL is the search's value - W − L backed up, the draw probability D beside it on every node and edge (issue 148) - the categorical optional and read only as an uncertainty signal (6m's switch, issue 149), the error head's output and moves-left per leaf, all through one new deliver call (`t5d_search_deliver_evaluations` and its `t5d_evaluations` struct; the old `t5d_search_deliver`, which backed up the categorical's mean, retired); each root child's search (q, d) and network WDL, moves-left and error recorded, and the root's own; the built-in evaluators give a WDL. The Python evaluator delivers the network's WDL, categorical and moves-left, and its error output once the net lane names one `value_error` (NaN until then; the name pinned by a test, `evaluator.ERROR_HEAD_FIELD`); `Evaluation.value_mean` is now W − L. The network: N1's 51-bin value head over the pooled global registers, smoke-trained on the outcome. Its MLP is Mish (F6, CHECKPOINT 8). Pooling as M20 rules it (`lane/net` N-M20): the 51-bin head, WDL and the short-term value all read the mean of the global registers - WDL and the short-term value moved off the squares with `aux_global_pool` (issue 223); a test holds them invariant to permuting the registers' final states. Corrected at CHECKPOINT 7 (reversal 28): the categorical over the root search value (HL-Gauss), short-term values, the error head - the net lane's heads |
 | D4 | built in part | Network N1's aux heads: WDL, moves-left, short value, effort, per-board, per-square (the label set stands as v1, M20) and the opponent reply, always built at weight 1.0. M20 in the code (`lane/net` N-M20): moves-left counts turns - one player's action each (issue 305) - in the head, its helper and the losses' docs (the record-to-target builder is M21's, and so is whether the action in progress counts: issue 224); moves-left and effort read the squares, WDL and the short value the global registers (D3; issue 223). To change (CHECKPOINT 7): the soft policy added (weight 8), the reply a prototype behind its flag at 0.15 with §15.2's mapping test - the net lane's heads, after engine round 2 (the reply head is left as built until then); the per-square label generator is step 2's. The effort label's source is in the search (engine ABI round 2c: `root_best_since`, the root's visits when its most visited child last changed - issue 154) |
 | D5 | not started (rule) | A training principle |
 | D6 | built (flag) | `board_reduction`, awaiting 6j |
@@ -1676,7 +1676,7 @@ order the D2 work (issue 142).
 | I5 | not started | PCR in the self-play drivers and the training loop, smoke-tested (M21, net lane) |
 | I6 | not started | A prototype: its epistemic triggers as sampler arms beside I12 (6u), in M21 |
 | I7, I8 | not built (rule) | M5 |
-| I10 | parked (monitoring); 6m's switch built, tested | Calibration monitoring measures nothing on random weights - the pilot run. The error head it watches is D3's (net lane). 6m's switch (`SearchParams::uncertainty_source`, categorical by default) built in engine ABI round 2a (issue 149) |
+| I10 | parked (monitoring); 6m's switch built, tested | Calibration monitoring measures nothing on random weights - the pilot run. The error head it watches is D3's (net lane). 6m's switch (`SearchParams::uncertainty_source`, categorical by default) built in engine ABI round 2a (issue 149); since the round's review fixes a delivery without the chosen signal is refused while E2, E3 or E5's term reads it (no arm runs silently on variance 0), counted where nothing does |
 | I9 | built, tested | The ruleset ID in every state and store key (H18): the Zobrist key, the solved and disproof stores, the evaluation cache |
 | I11 | built, tested | Self-play's turn cap from the state (and t5d-play's 300-board cap), scored as a draw, its frequency logged (issue 88) |
 | I12 | not started | Surprise-weighted sampling, the default sampler (6u): M21, with 6u's and I6's arms |
@@ -3334,7 +3334,13 @@ superseded or made moot says so; nothing is deleted.
     is the best child's backed-up (q, d), its moves-left the child's network output plus
     the offset the target builder (M21) adds. If moves-left is ever to be backed up
     (Lc0's M, e.g. for MLH's steering, issue 300), it is a later change to the backup
-    once issues 224 and 305 are settled. Proposed edit 121.
+    once issues 224 and 305 are settled. Proposed edit 121. Corrected by the round's
+    review fixes (2026-10-22): as first built only a Q lag fired an MCGS residual, so a
+    D lag under an unchanged Q was never corrected (the review's probe: Q 0 everywhere,
+    D 0.1 or 0.9 by node key, edges descended with their D 0.40 from their shared
+    child's); now a lag beyond `residual_epsilon` in Q **or** D fires the residual,
+    which corrects both - one epsilon for the two (a reading; a separate D epsilon
+    would be another placeholder, and nothing sizes either).
 149. **6m's switch: what the uncertainty signal is, and who reads it** (§8.3, §8.4, §13.1
     6m; register D3, E2, E3, E5, I10). I10: "6m decides which uncertainty signal search
     consumes"; §13.1 6m: "the categorical variance vs the error head - both trained from
@@ -3346,8 +3352,19 @@ superseded or made moot says so; nothing is deleted.
     `ErrorHead` (the error head's output taken as the variance: it predicts a squared
     gap, a variance by construction) - is each node's variance, and so what all three of
     its readers take: E2's cPUCT scale and backup weight, E3's bonus and E5's optional
-    LCB term. A signal not given (no categorical delivered; the error NaN) is 0 - no
-    uncertainty. E2's and E3's constants (`variance_reference` 0.4, the prior weight, the
+    LCB term. A signal not given (no categorical delivered; the error NaN) **is refused
+    while a reader is on** (E2's scale or weight, E3, or E5's term under the LCB rule):
+    the delivery is refused as a malformed one, the batch released (a cached
+    evaluation without it too) - corrected by the round's review fixes (2026-10-22);
+    as first built it was read as 0, which halved E2's cPUCT (the scale's floor) and
+    gave the backup its largest weight, so a 6m arm on a network without the error head
+    (the Python evaluator's `error` is NaN until the network lane names
+    `NetOutput.value_error`, pinned by a test) ran silently as a different search.
+    Treating absence as "no prior" (weight 0 in the blend, a neutral backup weight) was
+    the alternative, refused: it too runs an arm other than the one asked for, mixed
+    node by node, and an ablation should fail loudly. Read by nothing, an absent signal
+    is 0 - unread - and counted (`SearchStats::uncertainty_missing`,
+    `t5d_search_summary.uncertainty_missing`). E2's and E3's constants (`variance_reference` 0.4, the prior weight, the
     clamps; issue 81) were sized against a categorical over outcomes; the categorical is
     now over root search values (reversal 28) or replaced by the error head, so they are
     placeholders twice over - SPSA (G7) with 6m. Proposed edit 122.
@@ -4288,7 +4305,8 @@ struck through, where nothing of it is left to apply); the others stand as writt
     uncertainty switch)**: now - "6m decides which uncertainty signal search consumes";
     E2 and E3 are described as reading "the categorical variance". Proposed - "6m's
     switch (as built `uncertainty_source`, the categorical's variance by default, the
-    error head's output its arm, an absent signal 0) gives each node one variance, which
+    error head's output its arm; an absent signal refused while a reader is on, 0 and
+    unread otherwise) gives each node one variance, which
     E2's scale and backup weight, E3's bonus and E5's optional LCB term all read"; and in
     the constants list: "E2's and E3's constants, sized before CHECKPOINT 7 against an
     outcome categorical, are placeholders for the search-value categorical and the error

@@ -28,6 +28,7 @@ from t5d.engine.capi import (
     MIRRORED_SEARCH_STRUCTS,
     T5D_EVALUATOR_RANDOM,
     T5D_EVALUATOR_UNIFORM,
+    T5D_LEGALITY_UNKNOWN,
     T5D_SPLIT_BOARD_MOVE,
     T5D_SPLIT_WHOLE_TURN,
     T5D_VALUE_PROBABILITIES,
@@ -411,18 +412,85 @@ def test_i15_a_records_input_is_rebuilt_from_the_game(fen):
             Search(g, params=search_params(expand=ExpandOptions(8, 0, 0, 1, 64, 2000)))
 
 
+def test_i15_the_rebuilt_input_is_a_board_move_leafs_at_its_budget():
+    """I15's equivalence and its condition: ``Game.expand(legal_moves=True)`` gives a search
+    leaf's moves for a board-move search with ``legal_moves_only`` (the default) at the same
+    legality budget - here (0, 0), the fastest, at a turn start where it leaves moves unknown
+    (kept, in place); a whole-turn search's leaves are the pseudo-legal moves instead."""
+    rng = np.random.default_rng(7)
+    budget = {"legality_checks": 0, "legality_nodes": 0}
+    found = False
+    with Game.variant("Standard - Two Timelines") as g:
+        for _ in range(300):
+            info = g.info()
+            if info.turn_start:
+                s = Search(g, params=search_params(seed=1, expand=(8, "none", 0), **budget))
+                assert s.gather(1) == 1
+                leaf = s.leaf_view(0)
+                s.abandon()
+                s.close()
+                assert g.expand(square_features="none", legal_moves=True, **budget).move_texts() == leaf.expansion.move_texts()
+                if leaf.legality is not None and bool((leaf.legality == T5D_LEGALITY_UNKNOWN).any()):
+                    whole = Search(g, params=search_params(seed=1, expand=(8, "none", 0), split=T5D_SPLIT_WHOLE_TURN, **budget))
+                    assert whole.gather(1) == 1
+                    assert whole.leaf_view(0).expansion.move_texts() == g.expand(square_features="none").move_texts()
+                    whole.abandon()
+                    whole.close()
+                    found = True
+                    break
+            x = g.expand(square_features="none", legal_moves=True)
+            if info.may_submit and (x.move_count == 0 or rng.random() < 0.5):
+                g.submit()
+                continue
+            if x.move_count == 0:
+                break
+            g.apply(int(rng.integers(x.move_count)))
+    assert found, "no turn start with a move left unknown at budget (0, 0)"
+
+
 def test_i15_the_noise_free_prior_beside_the_noised_one():
-    """With root noise and a root temperature, each root child's noise-free prior is the tempered
-    prior and ``prior - (1 - eps) * prior_noise_free`` is the noise's share: non-negative, summing
-    to eps."""
+    """With root noise and a root temperature, each root child's noise-free prior is the
+    tempered softmax of its known logit (move i's logit i / 4: ``Ramp``) at T = 1.25, the noised
+    prior differing from it, and ``prior - (1 - eps) * prior_noise_free`` is the noise's share:
+    non-negative, summing to eps."""
+    t = 1.25
     with Game.variant("Standard") as g:
-        s = Search(g, params=search_params(seed=4, widening=0, root_noise=1, root_policy_temperature=1.25))
-        s.run(T5D_EVALUATOR_RANDOM, 30, seed=5)
+        texts = g.expand(square_features="none").move_texts()
+        s = Search(g, params=search_params(seed=4, widening=0, root_noise=1, root_policy_temperature=t))
+        run_search(s, Ramp(), playouts=30)
         children = s.children()
+        assert len(children) == len(texts)
+        z = sum(math.exp(i / 4 / t) for i in range(len(texts)))
+        for c in children:
+            assert c.prior_noise_free == pytest.approx(math.exp(texts.index(c.moves[0].text()) / 4 / t) / z, rel=1e-9)
+        assert max(abs(c.prior - c.prior_noise_free) for c in children) > 1e-3  # the noise is there
         eps = s.params.dirichlet_epsilon
         share = [c.prior - (1 - eps) * c.prior_noise_free for c in children]
         assert min(share) >= -1e-12 and sum(share) == pytest.approx(eps, abs=1e-9)
         assert sum(c.prior_noise_free for c in children) == pytest.approx(1.0, abs=1e-9)
+        s.close()
+
+
+def test_6m_a_signal_that_is_read_must_be_given():
+    """Register I10 / 6m (build-log spec issue 149): with E2 on, a delivery without the
+    uncertainty signal ``uncertainty_source`` selects - here no categorical (``Ramp``), or no error
+    head's output (``Heads(error=nan)``) - is refused, the batch released; where nothing reads it,
+    it is 0 and counted (``uncertainty_missing``)."""
+    from t5d.engine.capi import T5D_UNCERTAINTY_CATEGORICAL, T5D_UNCERTAINTY_ERROR_HEAD
+
+    for source, lacking in ((T5D_UNCERTAINTY_CATEGORICAL, Ramp()), (T5D_UNCERTAINTY_ERROR_HEAD, Heads(0.1, 0.3, error=math.nan))):
+        with Game.variant("Standard") as g:
+            s = Search(g, params=search_params(seed=1, variance_scaled_cpuct=1, uncertainty_source=source))
+            with pytest.raises(EngineArgumentError, match="uncertainty signal"):
+                run_search(s, lacking, playouts=10)
+            assert s.gather(1) == 1  # released
+            s.abandon()
+            s.close()
+    with Game.variant("Standard") as g:
+        s = Search(g, params=search_params(seed=1, uncertainty_source=T5D_UNCERTAINTY_ERROR_HEAD))
+        run_search(s, Heads(0.1, 0.3, error=math.nan), playouts=20)
+        info = s.info()
+        assert info.playouts >= 20 and info.uncertainty_missing == info.evaluations
         s.close()
 
 

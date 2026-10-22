@@ -48,7 +48,13 @@
  *      the default uncertainty signal (t5d_search_params.uncertainty_source),
  *      its mean is never backed up;
  *    - the ERROR head (optional): 1 float32 >= 0 - the predicted squared gap
- *      between the value and the short-term value; the other uncertainty signal;
+ *      between the value and the short-term value; the other uncertainty signal.
+ *      The signal uncertainty_source selects is REQUIRED of every leaf while E2,
+ *      E3 or E5's term reads it (variance_scaled_cpuct, uncertainty_weighted_backup,
+ *      variance_bonus, or final_rule T5D_FINAL_LCB with lcb_categorical_weight
+ *      > 0): a delivery without it is refused (T5D_ERR_ARGUMENT, the batch
+ *      abandoned). Read by nothing, a missing one is 0 and counted
+ *      (t5d_search_summary.uncertainty_missing);
  *    - MOVES-LEFT (optional; register D4): 1 float32 >= 0, in the network's
  *      unit - recorded per node (t5d_root_child.network_moves_left), never
  *      backed up.
@@ -175,7 +181,8 @@ typedef struct t5d_search_params {
   double widening_min;
   double fpu_reduction;
   int32_t root_noise;
-  double dirichlet_alpha;
+  double dirichlet_alpha;       /* per edge - read only when dirichlet_concentration is 0
+                                  (the arm before CHECKPOINT 7); unused by default */
   double dirichlet_epsilon;
   double policy_temperature;
   /* E2 */
@@ -269,7 +276,9 @@ typedef struct t5d_search_summary {
                              state, never to be persisted as a proof (H19, H23) */
   int32_t root_hi;
   uint32_t root_visits;
-  double root_q;
+  double root_q;          /* the root's backed-up mean value, its player's view (0 before a
+                             visit) - a solved root's too, not its proven value: root_lo and
+                             root_hi carry what is proven */
   uint64_t root_children;
   uint64_t epoch;
   uint64_t memory_bytes;  /* the graph's memory, estimated (the evaluation cache apart) */
@@ -281,7 +290,7 @@ typedef struct t5d_search_summary {
      (root_q's companion) and its own evaluation - the network's raw outputs at
      the root (I15), its player's view; NaN: not given (or not evaluated) */
   int32_t root_evaluated;    /* 1: the root has an evaluation */
-  double root_d;
+  double root_d;             /* backed-up average, as root_q (a solved root's too) */
   double root_wdl[T5D_WDL];  /* the root's network WDL, normalised */
   double root_moves_left;
   double root_error;
@@ -293,6 +302,10 @@ typedef struct t5d_search_summary {
                              epoch, its evaluation's identity */
   double root_cpuct;
   uint32_t root_best_since;
+  /* engine ABI round 2 review fixes (register I10, 6m): nodes expanded from an evaluation
+     without the uncertainty signal uncertainty_source selects - only while nothing reads it
+     (with E2, E3 or E5's term on such a delivery is refused) */
+  uint64_t uncertainty_missing;
 } t5d_search_summary;
 
 /* A run's budgets (t5d/mcts.hpp, Limits): T5D_NO_LIMIT for none (seconds: 0). playouts and
@@ -349,7 +362,7 @@ typedef struct t5d_evaluations {
   const float* wdl;             /* T5D_WDL per leaf (required) */
   size_t wdl_count;             /* = leaves x 3 */
   int32_t wdl_kind;             /* T5D_VALUE_PROBABILITIES or _LOGITS */
-  int32_t value_kind;           /* ... for `values` */
+  int32_t value_kind;           /* ... for `values` - checked even when `values` is NULL */
   const float* values;          /* T5D_VALUE_BINS per leaf (the categorical), or NULL */
   size_t value_count;           /* = leaves x 51, or 0 */
   const float* errors;          /* one per leaf (>= 0; NaN: none given), or NULL */

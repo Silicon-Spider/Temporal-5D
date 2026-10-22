@@ -98,7 +98,9 @@
 //    (2k - 50) / 50 - optional; with the error head's output (optional) it is
 //    one of the two uncertainty signals 6m chooses between
 //    (SearchParams::uncertainty_source; register I10): the chosen one is the
-//    node's variance that E2, E3 and E5's optional term read;
+//    node's variance that E2, E3 and E5's optional term read - required of
+//    every evaluation while one of them is on (refused without it), 0 and
+//    counted (SearchStats::uncertainty_missing) where none is;
 //  * moves-left (D4; optional) - recorded per node, never backed up: what a
 //    moves-left count adds per edge waits on the unit of "turn" (build-log
 //    spec issue 305), so the records keep each root child's network output
@@ -141,8 +143,9 @@
 // MCGS still merges them; only states reached across turns with different
 // counts stay apart.
 // Statistics live on the edges (path statistics); a transposition reached
-// through an edge whose Q lags the node's by more than epsilon backs up the
-// residual correction instead of descending (Czech, Korus and Kersting 2021).
+// through an edge whose Q - or draw probability D (D3) - lags the node's by
+// more than epsilon backs up the residual correction of both instead of
+// descending (Czech, Korus and Kersting 2021).
 // Evaluations are a function of the state, the moves made in its action and
 // the refresh epoch (EvalCache: §15.2's "same state + epoch -> same
 // evaluation", the count part of what the state means to the network), so a
@@ -258,10 +261,14 @@ enum class NodeKey : std::uint8_t {
 /// The uncertainty signal search consumes (register I10; ablation 6m): "the
 /// categorical variance vs the error head - both trained from the start
 /// (§8.3)". The chosen one is each node's variance - what E2, E3 and E5's
-/// optional term read.
+/// optional term read. While one of them is on (variance_scaled_cpuct,
+/// uncertainty_weighted_backup, variance_bonus, or final_rule Lcb with
+/// lcb_categorical_weight > 0) an evaluation without the chosen signal is
+/// refused (std::invalid_argument, as a malformed one); otherwise it is 0,
+/// unread, and counted (SearchStats::uncertainty_missing).
 enum class UncertaintySource : std::uint8_t {
-  Categorical = 0,  ///< the 51-bin categorical's variance (0 where none was given)
-  ErrorHead = 1,    ///< the error head's output (0 where none was given)
+  Categorical = 0,  ///< the 51-bin categorical's variance (Evaluation::value)
+  ErrorHead = 1,    ///< the error head's output (Evaluation::error)
 };
 
 /// The final-selection rule outside solved positions (E5).
@@ -378,7 +385,7 @@ struct SearchParams {
   /// The lineage reading (C23, ruled): states that differ in a branch origin
   /// are different positions for the network, so different nodes.
   NodeKey node_key = NodeKey::StateAndOrigins;
-  double residual_epsilon = 0.05;     ///< placeholder
+  double residual_epsilon = 0.05;     ///< placeholder; the lag in Q or in D (D3) that fires a residual
   /// A test seam, not mirrored in the C API: node keys cut to their low
   /// `key_bits` bits (1-64), so that keys collide and the exact comparison
   /// behind every key match - the graph's and the evaluation cache's - is
@@ -507,11 +514,12 @@ struct Evaluation {
   /// D3: the 51-bin categorical over the root search value - probabilities over
   /// kValueBins bins (normalised by the search), from the leaf's acting player;
   /// empty: none given. Its variance is the node's uncertainty signal under
-  /// UncertaintySource::Categorical (0 without one); its mean is never backed up.
+  /// UncertaintySource::Categorical (see there for one not given); its mean is
+  /// never backed up.
   std::optional<std::array<float, kValueBins>> value;
   /// D3: the error head's output - the predicted squared gap between the value
   /// and the short-term value, >= 0; NaN: none given. The node's uncertainty
-  /// signal under UncertaintySource::ErrorHead (0 without one).
+  /// signal under UncertaintySource::ErrorHead (see there for one not given).
   float error = std::numeric_limits<float>::quiet_NaN();
   /// D4: the moves-left head's output, in the network's unit, >= 0; NaN: none
   /// given. Recorded on the node, never backed up (see VALUES above).
@@ -714,6 +722,10 @@ struct SearchStats {
   std::uint64_t nodes_collected = 0;   ///< deleted by re-rooting
   std::uint64_t reroots = 0;
   std::uint64_t cache_purged = 0;      ///< cache entries behind the root, purged (EvalCache)
+  /// 6m: nodes expanded from an evaluation without the uncertainty signal
+  /// uncertainty_source selects (their variance 0) - only where nothing reads
+  /// it: with E2, E3 or E5's term on, such an evaluation is refused.
+  std::uint64_t uncertainty_missing = 0;
   StopReason last_stop = StopReason::Playouts;  ///< why the last run() stopped
   // Wall-clock seconds in the rules engine's calls (not part of digest()):
   double seconds_mate = 0;     ///< turn starts' terminal checks (detect_mate)
@@ -814,6 +826,11 @@ struct RootChild {
   /// `prior` is it with the noise. Renormalised with `prior` when a sibling is
   /// pruned. A carried root's (never noised): `prior`.
   double prior_noise_free = 0;
+  /// The Dirichlet concentration the root noise drew this child's variate with
+  /// (E1: dirichlet_alphas over the root's open edges, a pruned edge not one of
+  /// them); 0 where no noise was drawn (noise off, a carried root). C++ only - the
+  /// tests' check of the split; not in the C API's side table.
+  double noise_alpha = 0;
   /// The variance of the values backed up through the edge (0 before a visit).
   double value_variance = 0;
   /// E10's asset-map boost on the prior: 0 - not wired (E10, step 2).

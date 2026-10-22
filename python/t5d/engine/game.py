@@ -422,8 +422,11 @@ class Game:
         B11); "pin", "check" and "travel_threat" are refused by the engine. ``legal_moves``:
         the moves a search leaf has - the legal ones, those proved illegal under the budget
         (``legality_checks``, ``legality_nodes``: a search's ``legality_checks`` and
-        ``legality_nodes``; ``T5D_NO_LIMIT`` both: exact) dropped, unknown ones kept, in the
-        same order (I15: a record's input rebuilt); else the pseudo-legal moves."""
+        ``legality_nodes``; ``T5D_NO_LIMIT`` both, the default here: exact - the search's own
+        default is (64, 2000), so pass its budget) dropped, unknown ones kept, in the same
+        order (I15: a record's input rebuilt) - a leaf of a board-move search with
+        ``legal_moves_only`` (the defaults); a whole-turn search's leaves (and the pseudo-legal
+        seam's) are the pseudo-legal moves, ``legal_moves`` False, the default."""
         features = _choice(square_features, SQUARE_FEATURES, "square_features")
         names = {v: k for k, v in SQUARE_FEATURES.items()}
         bits = relation_bits(relations)

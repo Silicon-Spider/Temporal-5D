@@ -391,6 +391,9 @@ class CSearchSummary(ctypes.Structure):
         ("root_key", c_uint64),
         ("root_cpuct", c_double),
         ("root_best_since", c_uint32),
+        # appended in the engine ABI round 2 review fixes (register I10, 6m): nodes expanded without
+        # the selected uncertainty signal - only while nothing reads it (else the delivery is refused)
+        ("uncertainty_missing", c_uint64),
     ]
 
 

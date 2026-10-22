@@ -153,6 +153,8 @@ class SearchInfo:
     root_key: int  # the root's node key: with the moves made in its action and the epoch, its evaluation's identity
     root_cpuct: float  # the root's effective cPUCT now (cpuct x E2's root scale): I2's pruning replica
     root_best_since: int  # the effort label: the root's visits when its most visited child last changed
+    # engine ABI round 2 review fixes (register I10, 6m)
+    uncertainty_missing: int  # nodes expanded without the selected uncertainty signal (none read it)
 
     @property
     def root_finished(self) -> bool:

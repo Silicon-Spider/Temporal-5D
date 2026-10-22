@@ -1865,6 +1865,77 @@ TEST(mcts_i19_the_root_policy_temperature_flattens_the_root_only_before_the_nois
   CHECK(std::abs(share - p.dirichlet_epsilon) < 1e-9);
 }
 
+TEST(mcts_e1_the_noise_splits_its_concentration_over_the_open_edges_only) {
+  // E1 / I19 (§8.4): the root noise's total concentration is split across the
+  // edges that may be taken - an illegal submit, kept pruned (D8), is not one
+  // of them. The root: a mid-action state whose submission is illegal (the
+  // pseudo-legal test seam: the move made left a royal capturable) and that
+  // still has a few moves; each child's alpha is checked as drawn, unshaped
+  // and shaped.
+  SearchParams find = fast();
+  find.widening = false;
+  find.legal_moves_only = false;
+  std::optional<GameState> root;
+  int root_moves = 0;
+  for (std::uint64_t seed = 1; seed <= 12 && !root; ++seed) {
+    for (int actions = 1; actions <= 5 && !root; ++actions) {
+      const std::unique_ptr<Evaluator> random = make_evaluator(BuiltinEvaluator::Random, 3);
+      Search search(played("Very Small - Open", RuleOptions{}, actions, seed), find);
+      search.run(*random, Limits{300});
+      for (NodeId id = 0; id < search.node_count() && !root; ++id) {
+        const NodeView n = search.node(id);
+        if (!n.expanded || n.terminal != Terminal::None || !n.submit_possible || n.submit_legal) continue;
+        std::size_t open = 0;
+        for (std::size_t i = 0; i < n.edge_count; ++i) open += search.edge(id, i).pruned ? 0u : 1u;
+        if (open >= 2 && open <= 8) {
+          root = *n.state;
+          root_moves = n.moves_made;
+        }
+      }
+    }
+  }
+  REQUIRE(root.has_value());
+  REQUIRE(root_moves > 0);
+  ByMove ev;
+  for (const bool shaped : {false, true}) {
+    SearchParams p = find;
+    p.root_noise = true;
+    p.dirichlet_shaping = shaped;
+    Search search(*root, p, root_moves);
+    search.run(ev, Limits{1});
+    const NodeView r = search.node(search.root());
+    std::size_t pruned = 0;
+    for (std::size_t i = 0; i < r.edge_count; ++i) {
+      const EdgeView e = search.edge(search.root(), i);
+      if (e.pruned) {
+        ++pruned;
+        CHECK(e.submit);
+      }
+    }
+    REQUIRE_EQ(pruned, std::size_t{1});
+    const std::vector<RootChild> children = search.root_children();
+    REQUIRE_EQ(children.size(), r.edge_count - 1);
+    std::vector<double> priors;
+    for (const RootChild& c : children) priors.push_back(c.prior_noise_free);
+    const std::vector<double> want = dirichlet_alphas(priors, p);
+    double total = 0;
+    for (std::size_t i = 0; i < children.size(); ++i) {
+      CHECK(std::abs(children[i].noise_alpha - want[i]) < 1e-12);
+      total += children[i].noise_alpha;
+    }
+    CHECK(std::abs(total - p.dirichlet_concentration) < 1e-9);
+    if (!shaped) {
+      for (const RootChild& c : children) {
+        CHECK(std::abs(c.noise_alpha - p.dirichlet_concentration / static_cast<double>(children.size())) < 1e-12);
+      }
+    }
+  }
+  // No noise drawn: no alpha.
+  Search quiet(*root, find, root_moves);
+  quiet.run(ev, Limits{1});
+  for (const RootChild& c : quiet.root_children()) CHECK_EQ(c.noise_alpha, 0.0);
+}
+
 TEST(mcts_i15_the_root_side_table) {
   // I15 / I2 (engine ABI round 2c): each root child's prior before the noise,
   // its node's key, the variance of its backed-up values, and the steering
@@ -1929,9 +2000,29 @@ TEST(mcts_i15_the_root_side_table) {
   Search bonus(variant("Standard"), e3);
   bonus.run(spread, Limits{200});
   std::size_t scaled = 0;
+  const NodeView broot = bonus.node(bonus.root());
   for (const RootChild& c : bonus.root_children()) {
     CHECK(c.exploration_scale >= 1.0 && c.exploration_scale <= e3.variance_bonus_cap);
     scaled += c.exploration_scale > 1.0 ? 1u : 0u;
+    // Recomputed from this child's own node and edge: clamp(1 + beta (sigma /
+    // sigma_ref - 1), 1, cap), sigma^2 the child's signal (weight w0) blended
+    // with its edge's backed-up variance (weight n).
+    if (c.child == kNoNode || !bonus.node(c.child).evaluated) {
+      CHECK_EQ(c.exploration_scale, 1.0);
+      continue;
+    }
+    for (std::size_t i = 0; i < broot.edge_count; ++i) {
+      const EdgeView e = bonus.edge(bonus.root(), i);
+      if (e.child != c.child) continue;
+      double emp = 0;
+      if (e.weight > 0) emp = std::max(0.0, e.value_sq / e.weight - (e.value / e.weight) * (e.value / e.weight));
+      const double w0 = e3.variance_prior_weight;
+      const double n = static_cast<double>(e.visits);
+      const double var = (w0 * bonus.node(c.child).eval_variance + n * emp) / (w0 + n);
+      const double f = std::clamp(1.0 + e3.variance_bonus_scale * (std::sqrt(var) / e3.variance_reference - 1.0), 1.0,
+                                  e3.variance_bonus_cap);
+      CHECK(std::abs(c.exploration_scale - f) < 1e-12);
+    }
   }
   CHECK(scaled > 0);
   // Pruning renormalises both priors: a root whose fastest classification
@@ -2882,6 +2973,97 @@ TEST(mcts_d3_the_wdl_is_the_value_and_its_draw_is_backed_up) {
   }
 }
 
+namespace {
+
+// D3: every leaf's value exactly 0 (W = L) and its draw probability 0.1 or 0.9
+// by its node key - Q never lags anywhere, only D does.
+class KeyedDraw final : public Evaluator {
+ public:
+  void evaluate(std::span<const EvalRequest> batch, std::span<Evaluation> out) override {
+    for (std::size_t i = 0; i < batch.size(); ++i) {
+      out[i].logits.assign(batch[i].expansion->moves().size(), 0.0f);
+      std::uint64_t x = batch[i].key;
+      x ^= x >> 33;
+      x *= 0xff51afd7ed558ccdull;
+      x ^= x >> 33;
+      const float d = (x & 1) != 0 ? 0.9f : 0.1f;
+      out[i].wdl = {(1.0f - d) * 0.5f, d, (1.0f - d) * 0.5f};
+    }
+  }
+};
+
+}  // namespace
+
+TEST(mcts_d3_an_mcgs_residual_corrects_a_draw_lag) {
+  // D3 under MCGS (C11): the draw probability is part of the value, so an edge
+  // whose D lags its shared child's by more than residual_epsilon is corrected
+  // as one whose Q lags - here with Q 0 everywhere, so only D can lag. After a
+  // warm-up (transpositions are met deeper in), stepped one simulation at a
+  // time: every edge descended had no D lag beyond epsilon
+  // when it was crossed (else the residual would have fired), and every
+  // residual set its edge's D to the child's exactly (or as near as the
+  // correction's clamp to [0, 1] allows) - some fired by D alone.
+  SearchParams p = fast();
+  p.graph = true;
+  p.max_actions = 96;
+  KeyedDraw ev;
+  Search search(variant("Standard - Two Timelines"), p);
+  std::size_t descents = 0;
+  std::size_t residuals = 0;
+  std::size_t by_draw = 0;
+  search.run(ev, Limits{2500});
+  for (int step = 0; step < 300; ++step) {
+    std::vector<NodeView> nodes;
+    std::vector<std::vector<EdgeView>> edges;
+    for (NodeId id = 0; id < search.node_count(); ++id) {
+      nodes.push_back(search.node(id));
+      edges.emplace_back();
+      for (std::size_t i = 0; i < nodes.back().edge_count; ++i) edges.back().push_back(search.edge(id, i));
+    }
+    const std::size_t wanted = search.gather(1, 1);
+    if (wanted > 0) {
+      std::vector<Evaluation> out(wanted);
+      ev.evaluate(search.requests(), out);
+      search.deliver(out);
+    }
+    for (NodeId id = 0; id < nodes.size(); ++id) {
+      for (std::size_t i = 0; i < edges[id].size(); ++i) {
+        const EdgeView& a = edges[id][i];
+        const EdgeView b = search.edge(id, i);
+        if (b.visits != a.visits + 1 || a.child == kNoNode || a.child != b.child) continue;
+        const NodeView& c0 = nodes[a.child];
+        if (!c0.expanded || c0.terminal != Terminal::None || c0.stuck || !(c0.weight > 0)) continue;
+        const double child_d = c0.draw / c0.weight;
+        const double sign = c0.mover == nodes[id].mover ? 1.0 : -1.0;
+        if (search.node(a.child).visits == c0.visits) {
+          // A residual through this edge: the child untouched, the edge corrected.
+          ++residuals;
+          if (a.weight > 0 && std::abs(a.value / a.weight - sign * c0.value / c0.weight) <= p.residual_epsilon) {
+            ++by_draw;
+          }
+          const double rd = b.draw - a.draw;
+          if (rd > 1e-12 && rd < 1.0 - 1e-12) {
+            CHECK(std::abs(b.draw / b.weight - child_d) < 1e-9);
+          } else if (a.weight > 0) {
+            CHECK(std::abs(b.draw / b.weight - child_d) <= std::abs(a.draw / a.weight - child_d) + 1e-12);
+          }
+        } else if (a.weight > 0) {
+          // Descended: its D (and Q) were within epsilon of the child's.
+          ++descents;
+          CHECK(std::abs(a.draw / a.weight - child_d) <= p.residual_epsilon + 1e-12);
+          CHECK(std::abs(a.value / a.weight - sign * c0.value / c0.weight) <= p.residual_epsilon + 1e-12);
+        }
+      }
+    }
+  }
+  CHECK_NOTHROW(search.check_invariants());
+  REQUIRE_EQ(search.stats().terminal_visits, std::uint64_t{0});
+  std::printf("  residual draw lag: %zu residuals (%zu by D alone), %zu checked descents\n", residuals, by_draw,
+              descents);
+  CHECK(by_draw > 0);
+  CHECK(descents > 0);
+}
+
 TEST(mcts_d3_the_categorical_changes_only_the_uncertainty) {
   // With E2, E3 and E5's term off, the categorical changes nothing the search
   // does: two runs whose categoricals differ in mean and in variance grow the
@@ -2911,7 +3093,8 @@ TEST(mcts_d3_the_categorical_changes_only_the_uncertainty) {
 
 TEST(mcts_d3_6m_chooses_the_nodes_uncertainty_signal) {
   // Register I10 / ablation 6m: a node's variance is the categorical's
-  // (the default) or the error head's output; either absent, 0.
+  // (the default) or the error head's output; either absent, 0 - where
+  // nothing reads it (mcts_6m_a_signal_that_is_read_must_be_given).
   CHECK(SearchParams{}.uncertainty_source == UncertaintySource::Categorical);
   const GameState s = variant("Standard");
   const double spread = value_moments([] {
@@ -2956,6 +3139,91 @@ TEST(mcts_d3_6m_chooses_the_nodes_uncertainty_signal) {
   const NodeView root = search.node(search.root());
   CHECK_EQ(root.eval_variance, 0.0);
   CHECK(std::abs(root.eval_mean - 0.25) < 1e-12 && std::abs(root.eval_draw - 0.25) < 1e-12);
+}
+
+TEST(mcts_6m_a_signal_that_is_read_must_be_given) {
+  // Register I10 / ablation 6m (build-log spec issue 149): while E2, E3 or E5's
+  // term reads a node's uncertainty signal, an evaluation without the one
+  // uncertainty_source selects is refused (as a malformed one: the batch
+  // released, nothing backed up) - never read as variance 0, which would halve
+  // E2's cPUCT and give the backup its largest weight. Read by nothing, a
+  // missing signal is 0 and counted; E5's term counts as a reader only under
+  // the LCB rule.
+  class Heads6m final : public Evaluator {
+   public:
+    Heads6m(bool categorical, float error) : categorical_(categorical), error_(error) {}
+    void evaluate(std::span<const EvalRequest> batch, std::span<Evaluation> out) override {
+      for (std::size_t i = 0; i < batch.size(); ++i) {
+        out[i].logits.assign(batch[i].expansion->moves().size(), 0.0f);
+        out[i].wdl = {1.0f, 1.0f, 1.0f};
+        if (categorical_) out[i].value = two_hot(0.25);
+        out[i].error = error_;
+      }
+    }
+
+   private:
+    bool categorical_;
+    float error_;
+  };
+  Heads6m both(true, 0.25f);
+  Heads6m categorical_only(true, std::nanf(""));
+  Heads6m error_only(false, 0.25f);
+  Heads6m wdl_only(false, std::nanf(""));
+  const GameState s = variant("Standard");
+  const std::vector<std::function<void(SearchParams&)>> readers = {
+      [](SearchParams& p) { p.variance_scaled_cpuct = true; },
+      [](SearchParams& p) { p.uncertainty_weighted_backup = true; },
+      [](SearchParams& p) { p.variance_bonus = true; },
+      [](SearchParams& p) {
+        p.final_rule = FinalRule::Lcb;
+        p.lcb_categorical_weight = 0.5;
+      }};
+  for (const UncertaintySource source : {UncertaintySource::Categorical, UncertaintySource::ErrorHead}) {
+    Heads6m& lacking = source == UncertaintySource::Categorical ? error_only : categorical_only;
+    for (const auto& reader : readers) {
+      SearchParams p = fast();
+      p.uncertainty_source = source;
+      reader(p);
+      for (Evaluator* ev : {static_cast<Evaluator*>(&lacking), static_cast<Evaluator*>(&wdl_only)}) {
+        Search refused(s, p);
+        CHECK_THROWS_AS(refused.run(*ev, Limits{20}), std::invalid_argument);
+        CHECK_NOTHROW(refused.check_invariants());  // the batch released
+        CHECK_EQ(refused.stats().playouts, std::uint64_t{0});
+        CHECK(!refused.node(refused.root()).evaluated);
+      }
+      Search given(s, p);
+      CHECK_NOTHROW(given.run(both, Limits{60}));
+      CHECK_EQ(given.stats().uncertainty_missing, std::uint64_t{0});
+    }
+  }
+  // Read by nothing (the LCB term's weight under the visits rule reads
+  // nothing either): 0, counted - one per node evaluated.
+  SearchParams quiet = fast();
+  quiet.uncertainty_source = UncertaintySource::ErrorHead;
+  quiet.final_rule = FinalRule::Visits;
+  quiet.lcb_categorical_weight = 0.5;
+  Search unread(s, quiet);
+  unread.run(categorical_only, Limits{60});
+  std::uint64_t evaluated = 0;
+  for (NodeId id = 0; id < unread.node_count(); ++id) {
+    const NodeView n = unread.node(id);
+    if (!n.evaluated) continue;
+    ++evaluated;
+    CHECK_EQ(n.eval_variance, 0.0);
+  }
+  CHECK(evaluated > 0);
+  CHECK_EQ(unread.stats().uncertainty_missing, evaluated);
+  // A cache filled by a search that read nothing: a reader's search refuses
+  // its cached evaluation too (its evaluator gives the signal, the cache not).
+  const auto cache = std::make_shared<EvalCache>();
+  Search filler(s, fast(), 0, cache);
+  filler.run(wdl_only, Limits{30});
+  REQUIRE(cache->size() > 0);
+  SearchParams e2 = fast();
+  e2.variance_scaled_cpuct = true;
+  Search sharing(s, e2, 0, cache);
+  CHECK_THROWS_AS(sharing.run(both, Limits{10}), std::invalid_argument);
+  CHECK_NOTHROW(sharing.check_invariants());
 }
 
 TEST(mcts_d3_game_ends_back_up_their_draw_probability) {
@@ -3280,6 +3548,94 @@ TEST(mcts_a_solved_child_is_visited_only_up_to_the_threshold) {
     CHECK(c.visits <= p.solved_visit_cap);
   }
   CHECK(found);
+}
+
+TEST(mcts_d3_proven_stuck_and_dead_end_visits_back_up_their_draw) {
+  // D3's draw probability where a visit backs up no evaluation: a root child
+  // proven won is (q, d) = (1, 0) and one proven drawn (0, 1) (the solved
+  // edge's exact values); a visit ending on a solved drawn node backs up D 1;
+  // a stuck node's visits (no child: an Unknown verdict, or every child a dead
+  // end under the pseudo-legal seam) back up its own D - the uniform
+  // evaluator's 1/3.
+  for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::WholeTurn}) {
+    SearchParams p = fast();
+    p.proof_channel = true;  // the in-tree solver under test (off by rule, H41)
+    p.split = split;
+    const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
+    Search won(mate_in_one(), p);
+    won.run(*uniform, Limits{2000});
+    REQUIRE(won.root_solved());
+    const std::vector<RootChild> children = won.root_children();
+    const RootChild& mate = children.at(won.choose().index);
+    REQUIRE(mate.lo == 1 && mate.hi == 1);
+    CHECK_EQ(mate.q, 1.0);
+    CHECK_EQ(mate.d, 0.0);
+    Search drawn(forced_draw(), p);
+    drawn.run(*uniform, Limits{200});
+    REQUIRE(drawn.root_solved());
+    std::size_t proven = 0;
+    for (const RootChild& c : drawn.root_children()) {
+      if (c.lo != 0 || c.hi != 0) continue;
+      ++proven;
+      CHECK_EQ(c.q, 0.0);
+      CHECK_EQ(c.d, 1.0);
+    }
+    CHECK(proven > 0);
+  }
+  {
+    // Qd1-b3 stalemates (mcts_a_solved_child_is_visited_only_up_to_the_threshold):
+    // its node's first visit is its evaluation (D 1/3), its second the
+    // stalemate's (D 1) - after which it is solved, and every visit ending on
+    // it backs up D 1.
+    const GameState s = game({"[k4/5/5/5/3QK:0:1:w]"}, BoardSize{5, 5});
+    GameState t = s;
+    const Move qb3 = t5d_test::play(t, "(0T1)Qd1(0T1)b3");
+    SearchParams p = fast();
+    p.proof_channel = true;
+    p.synchronous = true;
+    p.widening = false;
+    p.turn_cap.turns = 1;
+    const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
+    Search search(s, p);
+    search.run(*uniform, Limits{3000});
+    bool found = false;
+    const NodeView r = search.node(search.root());
+    for (std::size_t i = 0; i < r.edge_count; ++i) {
+      const EdgeView e = search.edge(search.root(), i);
+      if (e.move == nullptr || !(*e.move == qb3)) continue;
+      found = true;
+      REQUIRE(e.visits >= 3);
+      REQUIRE(search.node(e.child).lo == 0 && search.node(e.child).hi == 0);
+      CHECK(std::abs(e.draw - (1.0 / 3.0 + static_cast<double>(e.visits - 1))) < 1e-9);
+      CHECK(std::abs(e.value) < 1e-12);
+    }
+    CHECK(found);
+    for (const RootChild& c : search.root_children()) {
+      if (c.moves.size() == 1 && c.moves[0] == qb3) CHECK(c.q == 0.0 && c.d == 1.0);
+    }
+  }
+  // Stuck nodes: White's mates in one with a detector that answers Unknown -
+  // Black's mated turn start has no legal move (stuck when expanded), or under
+  // the seam only moves that are dead ends (stuck once the last is pruned).
+  for (const bool seam : {false, true}) {
+    SearchParams p = fast();
+    p.mate_nodes = 0;
+    p.legal_moves_only = !seam;
+    const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
+    Search search(mate_in_one(), p);
+    search.run(*uniform, Limits{300});
+    std::size_t stuck = 0;
+    for (NodeId id = 0; id < search.node_count(); ++id) {
+      const NodeView n = search.node(id);
+      if (!n.stuck || n.visits < 2) continue;
+      ++stuck;
+      CHECK_EQ(n.edge_count > 0, seam);  // the seam's: every child pruned as a dead end
+      CHECK(std::abs(n.draw - n.weight / 3.0) < 1e-9);
+      CHECK(std::abs(n.value) < 1e-9);
+    }
+    CHECK(stuck > 0);
+    CHECK_NOTHROW(search.check_invariants());
+  }
 }
 
 // ---- Call sequences (review B) ------------------------------------------------------------
