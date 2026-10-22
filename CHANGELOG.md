@@ -10,6 +10,43 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-23 - G2's FP8 E4M3 emulation behind its flag (off), and C15's straight-through fix
+
+The precision component, step 1 of 2 (`lane/net`).
+
+- **One FP8 definition** (`python/t5d/net/quant.py`): E4M3 (OCP's OFP8; PyTorch's
+  `float8_e4m3fn`) - round to nearest even, saturating at +-448 (infinities too, clamped before the
+  cast), NaN kept; scales absmax / 448, rounded up to a power of two by default (`"pow2"`, exact in
+  BF16) or not (`"absmax"`); fake quantisation with a straight-through gradient. Tested against a
+  decode of all 256 codes written from the OCP definition, at every midpoint between neighbours and
+  either side of it, beyond the range and on 20,000 random values.
+- **G2's 8-bit trunk, behind its flag** (`NetConfig.trunk_quant = "fp8_e4m3"`, off; it replaces
+  `fp8_attention`, which raised): the six projections of every block are `quant.QuantLinear` -
+  `nn.Linear` bit for bit when off, the same `state_dict` - quantising weights per output channel
+  and inputs per token, FP32 accumulation; with `trunk_quant_attention` (default) attention's Q, K
+  (after FP32 RoPE) and V per token and head, once per layer at every attention path's entry
+  (`attention.quantised_operands`; the cache's paths and FlexAttention's included). Never the
+  heads, RoPE, embeddings or norms (tested bit for bit). `T5DNet.set_trunk_quant` /
+  `with_trunk_quant` switch a network (or a copy - its FP8 twin) without touching its weights.
+  The cache takes the projections-only network and refuses FP8 attention: post-RoPE rounding
+  depends on the frame, and the cache computes a frozen board in its own (measured). With the flag
+  off the network is unchanged: the outputs of ten configurations (F1 in BF16 and FP32, FFN ratios
+  2 and 12, the block-causal scope with FP8 frozen K/V, four attention paths) and the gradients of
+  two checked bit for bit against the tree before the change (B15's table gradient aside: it
+  varies from run to run by itself, a multithreaded scatter), and a test pins it.
+- **C15's estimator defect fixed** (`kvformat.fake_quantise`): the FP8 frozen-K/V rounding cast
+  inside autograd, which rounded the gradient onto the unscaled E4M3 grid (63 of 64 gradients zero
+  at |x| about 0.1); it now rounds through `quant.py` with a straight-through gradient, its forward
+  unchanged bit for bit - so FP8-frozen-K/V training, C15's second route, works.
+- `NetConfig.validate` refuses `ffn_ratio < 1` (F1's 8x is a parameter: ablation 5 tests 2x).
+- Measured on random weights (MEASUREMENTS, "G2's FP8 emulation"): the FP8 trunk sits at trunk RMS
+  2.7-3.2e-2 from the same weights unquantised, about 12x the BF16-vs-FP32 gap.
+
+Spec: §10.2, §8.3, §10.3, §15.2, §15.3; register G2 (built behind its flag), C15 (the defect
+fixed), G1, G8, C2, C17, C19-C21, M19. Proposed: edit 183 (§10.2 and G2: the emulated format's
+placeholders) and edit 184 (§15.2's protocol and G1 row: FP8 tolerances are rounding flips; the
+cache refuses FP8 attention while C2 is deferred). Spec issue 238.
+
 ### 2026-10-23 - M21 review fixes: inputs rebuilt under the trainer's configuration, steps on synthetic rows only and capped per model, I19's cutoff as Lc0's, I13 whole in the tree form, the untested claims tested
 
 Two reviews of M21 (spec fidelity; a 46-mutant pass that left 19 mutants alive).

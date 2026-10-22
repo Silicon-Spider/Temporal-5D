@@ -143,6 +143,7 @@ from torch import nn
 from torch.utils.checkpoint import checkpoint
 
 from .config import NetConfig
+from .quant import AttnQuant, QuantLinear
 from .rope import apply_rope
 
 if TYPE_CHECKING:
@@ -189,6 +190,10 @@ class AttnContext:
     #: B17's key-side Shaw term (``shaw.py``; None: off) - a function of each block's own
     #: (unrotated) queries, added to the scores beside the structure's biases.
     shaw: ShawRows | None = None
+    #: G2's attention operands (``quant.AttnQuant``; None: not quantised): Q, K, their rotations
+    #: and V fake-quantised per token and head at the entry of every implementation
+    #: (``quantised_operands``), so that each selects from the same quantised values.
+    quant: AttnQuant | None = None
 
     @property
     def layer_dependent(self) -> bool:
@@ -381,6 +386,17 @@ def _maybe_recompute(fn: Callable[[], torch.Tensor], recompute: bool) -> torch.T
 # --- reference ------------------------------------------------------------------------------
 
 
+def quantised_operands(q, k, v, ctx: AttnContext):
+    """``(q, k, v, qr, kr)``: the unrotated Q and K, V, and Q and K rotated by FP32 RoPE (G1) -
+    each fake-quantised per token and head under G2's attention format (``ctx.quant``), else as
+    they are. Every implementation takes its operands from here, once per layer."""
+    qr = apply_rope(q, ctx.cos, ctx.sin)
+    kr = apply_rope(k, ctx.cos, ctx.sin)
+    if ctx.quant is None:
+        return q, k, v, qr, kr
+    return ctx.quant.operands(q, k, v, qr, kr)
+
+
 def attention_explicit(
     q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, ctx: AttnContext, return_probs: bool = False
 ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
@@ -392,8 +408,7 @@ def attention_explicit(
     length, dh = q.shape[-2:]
     lb, cd = ctx.body_len, ctx.compute_dtype
     scale = dh**-0.5
-    qr = apply_rope(q, ctx.cos, ctx.sin)
-    kr = apply_rope(k, ctx.cos, ctx.sin)
+    q, k, v, qr, kr = quantised_operands(q, k, v, ctx)
     sf = _spatial_free(ctx)
     if sf is not None:
         qt, kt = _time_rotated(ctx, q, k, qr, kr)
@@ -675,11 +690,11 @@ class _FastPath:
 
     def __init__(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, ctx: AttnContext) -> None:
         length, dh = q.shape[-2:]
-        self.ctx, self.q, self.length = ctx, q, length
+        q, k, v, self.qr, kr = quantised_operands(q, k, v, ctx)
+        #: The operands as every block reads them (G2's quantised ones under ``ctx.quant``).
+        self.ctx, self.q, self.k, self.v, self.length = ctx, q, k, v, length
         self.cd = ctx.compute_dtype
         self.scale = dh**-0.5
-        self.qr = apply_rope(q, ctx.cos, ctx.sin)
-        kr = apply_rope(k, ctx.cos, ctx.sin)
         self.sf = sf = _spatial_free(ctx)
         self.kl = kl = ctx.body_len  # the kernel keys; the position-free global registers are merged
         self.kern, self.rest = slice(0, kl), slice(kl, length)
@@ -865,13 +880,13 @@ def attention_sdpa(
         out = torch.cat(outs, dim=2)
     if kl == length:
         return out
-    # Position-free global queries: every key, unrotated.
+    # Position-free global queries: every key, unrotated (the fast path's operands).
     allowed_g, bias_g = _block_rows(ctx, kl, length)
-    s_g = _scores(q[:, :, fast.rest], k, scale, cd)
+    s_g = _scores(fast.q[:, :, fast.rest], fast.k, scale, cd)
     if bias_g is not None:
         s_g = s_g + bias_g.float()
     s_g = s_g.masked_fill(~allowed_g, NEG_INF)
-    o_glob = torch.matmul(_softmax_rows(s_g).to(cd), v.to(cd))
+    o_glob = torch.matmul(_softmax_rows(s_g).to(cd), fast.v.to(cd))
     return torch.cat([out.to(o_glob.dtype), o_glob], dim=2)
 
 
@@ -908,16 +923,21 @@ ATTENTION = {
 class SelfAttention(nn.Module):
     """Q/K/V/output projections around the attention implementations (``ATTENTION``). F5
     (section 9.3): no biases in the Q, K and V projections; the output projection keeps its
-    bias (``NetConfig.qkv_bias``, ``NetConfig.out_ffn_bias``)."""
+    bias (``NetConfig.qkv_bias``, ``NetConfig.out_ffn_bias``). The four are trunk matrix
+    multiplications, so they carry G2's format (``quant.QuantLinear``; off: ``nn.Linear``)."""
 
     def __init__(self, cfg: NetConfig) -> None:
         super().__init__()
         self.n_heads, self.d_head = cfg.n_heads, cfg.d_head
         d = cfg.d_model
-        self.q_proj = nn.Linear(d, d, bias=cfg.qkv_bias)
-        self.k_proj = nn.Linear(d, d, bias=cfg.qkv_bias)
-        self.v_proj = nn.Linear(d, d, bias=cfg.qkv_bias)
-        self.out_proj = nn.Linear(d, d, bias=cfg.out_ffn_bias)
+
+        def linear(bias: bool) -> QuantLinear:
+            return QuantLinear(d, d, bias=bias, fmt=cfg.trunk_quant, rule=cfg.trunk_quant_scale, weight_scale=cfg.trunk_quant_weight_scale)
+
+        self.q_proj = linear(cfg.qkv_bias)
+        self.k_proj = linear(cfg.qkv_bias)
+        self.v_proj = linear(cfg.qkv_bias)
+        self.out_proj = linear(cfg.out_ffn_bias)
 
     def _split(self, x: torch.Tensor) -> torch.Tensor:
         bsz, length, _ = x.shape

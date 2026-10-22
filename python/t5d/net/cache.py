@@ -411,6 +411,12 @@ class CachedEvaluator:
                 "B12's board_bilinear form (and smolgen without global registers) reads frozen boards' hidden states, "
                 "which the cache does not keep"
             )
+        if cfg.trunk_quant != "none" and cfg.trunk_quant_attention:
+            raise NotImplementedError(
+                "G2's quantised attention operands round Q and K after RoPE, and the cache computes a frozen board in a "
+                "frame centred on itself: post-RoPE rounding differs between the frames, so the cache could not equal the "
+                "full pass (C2, C17) - only trunk_quant_attention=False (the projections alone) is cached (spec issue 238)"
+            )
         self.model = model
         self.config = CacheConfig() if config is None else config
         self.config.validate()
@@ -566,6 +572,7 @@ class CachedEvaluator:
             compute_dtype=ctx.compute_dtype,
             spatial_free=spatial_free,
             spatial_dims=model.rope_spatial,
+            quant=ctx.quant,
         )
         x = emb[:, b * tpb : (b + 1) * tpb]
         layers: list[torch.Tensor] = []
@@ -676,11 +683,11 @@ class CachedEvaluator:
                 outs = [_live_rows(fast, ctx_l, blocks, kernel_rows)] if blocks else []
                 if global_free:
                     allowed_g, bias_g = _block_rows(ctx_l, lb, length)
-                    s_g = _scores(q_full[:, :, lb:], k_full, fast.scale, fast.cd)
+                    s_g = _scores(fast.q[:, :, lb:], fast.k, fast.scale, fast.cd)
                     if bias_g is not None:
                         s_g = s_g + bias_g.float()
                     s_g = s_g.masked_fill(~allowed_g, float("-inf"))
-                    outs.append(torch.matmul(_softmax_rows(s_g).to(fast.cd), v_full.to(fast.cd)))
+                    outs.append(torch.matmul(_softmax_rows(s_g).to(fast.cd), fast.v.to(fast.cd)))
                 o = torch.cat([t.to(fast.cd) for t in outs], dim=2)
                 x = block.after_ffn(block.after_attn(x, block.attn.output(o)))
             out_live = model.trunk.output(x)

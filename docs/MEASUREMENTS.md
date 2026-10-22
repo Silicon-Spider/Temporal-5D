@@ -991,3 +991,23 @@ because the present's advance at every action's last mandatory move (T5) is itse
 gate: a turn costs at least two evaluations. Read as rewinds only, 43-73%; with no
 gate every evaluation is a turn start's. The reading of "a shift of the present"
 decides most of what the tree form buys (issue 160, for the user before 6x).
+
+### G2's FP8 emulation on random weights - numerics only (no threshold, no verdict; not 6w)
+
+**What it is.** How far G2's FP8 E4M3 trunk (`NetConfig.trunk_quant = "fp8_e4m3"`, emulated -
+`python/t5d/net/quant.py`, spec issue 238) moves the network's outputs from the same weights
+unquantised: a plumbing figure for the emulation, not ablation 6w's (trained networks, a GPU,
+match play) and not a speed (none is possible on this CPU, M19). Machine `dev-r`; PyTorch 2.13.0+cpu;
+2026-10-23; one position per batch; random weights at initialisation scale; window none.
+
+| Network | Precision | Positions | Trunk RMS (max) | Value logits (max) | Policy logits (max) | WDL's W - L (max) |
+|---|---|---|---|---|---|---|
+| F1 (16 layers), seeds 0, 5, 11 | BF16 trunk, FP8 attention included | `synthetic_state(30 + N, N)`, N = 2, 17 | 2.8-3.2e-2 (0.145) | 4.9e-2 | 0.120 | 6.4e-3 |
+| the same | BF16, projections only | the same | 2.8-3.1e-2 (0.157) | 5.0e-2 | 0.129 | 4.7e-3 |
+| the same | FP32 trunk, FP8 attention included | the same | 2.8-3.1e-2 (0.162) | 4.3e-2 | 0.143 | 6.0e-3 |
+| the same | FP32, projections only | the same | 2.7-3.1e-2 (0.152) | 4.8e-2 | 0.125 | 6.3e-3 |
+
+About 12x the BF16-vs-FP32 gap of the same network (2.4e-3, `tests/net/test_precision.py`); the
+attention operands add little to the projections' share. The test bounds
+(`tests/net/test_quant.py`) sit 3-4x above. The paths' agreement under FP8, the cache's and the
+batch independence are in issue 238(b), (h), (i).
