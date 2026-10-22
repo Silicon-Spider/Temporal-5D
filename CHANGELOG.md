@@ -10,6 +10,32 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-23 - D2's flat form, part 3: the turn generator's successors under Q3's play activation (found by the long run of spec 15.2's row)
+
+`long_turngen_equals_the_brute_force_reference_on_tiny_positions` (3,000 tiny multiverses,
+`t5d-tests --long`) failed in 10 positions, every one under Q3's play activation (the general
+realisation): as successors, the generator emitted fewer states than the brute-force reference
+(4 of 5 ... 1,056 of 1,064). Under Q3 two orders of one set of moves can reach two states with
+one action key; the generator's run counted actions, so `record()` kept the first order's
+action and dropped the second state's (inserted, with no action kept). The default run's 300
+positions had not met the case.
+
+- **`engine/src/hypercuboid.cpp`** (the generator only; the detector's pin holds): under
+  `TurnUnit::Successors` the generator's run now counts successors - each state kept with an
+  action reaching it - and the turns are collected from that listing; a point the budget stopped
+  part-way emits none of its states under Successors (their kept actions are not final), so a
+  stopped generator's output stays a prefix of the unstopped one's.
+- **`engine/tests/test_turngen.cpp`**: the best-action-per-state check reads the listing's
+  actions where they reach the state (the listing keeps one order per action, and under Q3
+  another order can reach another state).
+- Re-run: the long tiny-multiverse row (3,000 positions, 721,906 turns) and the long variants
+  row (652 positions) pass, the default rows and the flat search's tests too; the pin is
+  unchanged.
+- Docs: docs/BUILD_LOG.md (issue 163's note; the D2 row).
+
+Spec: §15.2 (the flat generator's row - a defect its long run found, fixed); §8.2; register D2.
+Spec issue 163 (the unit, as built).
+
 ### 2026-10-23 - D2's flat form, part 2: the search arm; the enumerating whole-turn arm and its 256 cap retired
 
 The flat form's search arm, on part 1's turn generator (§8.2: "PUCT runs over the generated

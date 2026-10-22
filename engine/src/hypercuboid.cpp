@@ -1995,7 +1995,7 @@ struct TurnGenerator::Impl {
   std::vector<GeneratedTurn> ready;
   std::size_t next_ready = 0;
   std::size_t emitted = 0;
-  // The successor states emitted so far are run.successors[0, next_successor).
+  // The successor states collected so far are run.successors[0, next_successor).
   std::size_t next_successor = 0;
   // The successor states' own heap, estimated: each its timeline table and the
   // boards (with their timelines) its action made - the rest is shared.
@@ -2004,29 +2004,49 @@ struct TurnGenerator::Impl {
 
   Impl(const GameState& turn_start, TurnUnit u, const SearchBudget& budget)
       : start(turn_start),
-        run(start, budget, std::numeric_limits<std::size_t>::max(), detail::Unit::Actions, true),
+        // The run counts the generator's unit: as actions (record() keeps each
+        // action key once) or as successors (each state once, with an action
+        // reaching it - under Q3's play activation two orders of one set of moves
+        // can reach two states, one action key: counted as actions, the second
+        // state would have no action kept).
+        run(start, budget, std::numeric_limits<std::size_t>::max(),
+            u == TurnUnit::Actions ? detail::Unit::Actions : detail::Unit::Successors, true),
         hyper(run),
         unit(u) {}
 
-  // The actions the last judged point recorded, as turns (under
-  // Successors, only those reaching a state not reached before); the run's
-  // kept listing then emptied, its bytes returned.
+  // The successor's own heap, estimated: its timeline table and the boards
+  // (with their timelines) its action made - the rest is shared.
+  std::size_t successor_cost(const GameState& successor) const {
+    const Multiverse& mv = successor.multiverse();
+    const std::size_t made = mv.board_count() - start.multiverse().board_count();
+    return sizeof(GameState) + mv.timelines().size() * sizeof(TimelineRef) + 32 +
+           made * (sizeof(Timeline) + sizeof(Board) + 4 * 32) + 128;
+  }
+
+  // What the last judged point recorded, as turns. Successors: the run keeps
+  // one action per state, parallel to its states (record() may later swap a
+  // kept action for another reaching the same state - one already collected,
+  // so nothing changes here); the new states' actions are collected. Actions:
+  // the actions recorded, then the run's kept listing emptied, its bytes
+  // returned.
   void collect() {
+    if (unit == TurnUnit::Successors) {
+      for (; next_successor < run.actions.size(); ++next_successor) {
+        const GameState& result = run.successors[run.results[next_successor]];
+        successor_bytes += successor_cost(result);
+        ready.push_back(GeneratedTurn{run.actions[next_successor], result, hyper.scored()});
+      }
+      return;
+    }
     for (std::size_t i = 0; i < run.actions.size(); ++i) {
       // What record() counted for the kept action (its key stays counted).
       run.kept_bytes -= std::min(run.kept_bytes, run.actions[i].size() * sizeof(Move) + run.texts[i].size() + 96);
       const std::size_t result = run.results[i];
-      const bool fresh = result >= next_successor;
-      if (fresh) {
+      if (result >= next_successor) {
         next_successor = result + 1;
-        const Multiverse& mv = run.successors[result].multiverse();
-        const std::size_t made = mv.board_count() - start.multiverse().board_count();
-        successor_bytes += sizeof(GameState) + mv.timelines().size() * sizeof(TimelineRef) + 32 +
-                           made * (sizeof(Timeline) + sizeof(Board) + 4 * 32) + 128;
+        successor_bytes += successor_cost(run.successors[result]);
       }
-      if (unit == TurnUnit::Actions || fresh) {
-        ready.push_back(GeneratedTurn{std::move(run.actions[i]), run.successors[result], hyper.scored()});
-      }
+      ready.push_back(GeneratedTurn{std::move(run.actions[i]), run.successors[result], hyper.scored()});
     }
     run.actions.clear();
     run.texts.clear();
@@ -2044,6 +2064,11 @@ struct TurnGenerator::Impl {
         exhausted = true;
         run.stats.exhaustive = true;
       }
+      // A point the budget stopped part-way: under Successors its states' kept
+      // actions are not final (record() keeps the least text among the
+      // realisations seen), so none of them is emitted - what was emitted is
+      // then a prefix of the unstopped generator's turns.
+      if (s == Step::Stopped && unit == TurnUnit::Successors) return std::nullopt;
       collect();
     }
     ++emitted;

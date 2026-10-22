@@ -224,10 +224,17 @@ void check_position(const GameState& s, const std::set<std::string>& expected_ke
         const auto [it, fresh] = best.try_emplace(r.zobrist(), score);
         if (!fresh) it->second = std::max(it->second, score);
       }
+      // (The listing keeps one order of each action's moves: under Q3's play
+      // activation another order can reach another state - one the
+      // generator emits and the listing's actions do not reach.)
+      std::size_t found = 0;
       for (const GeneratedTurn& t : d.turns) {
         const auto it = best.find(t.result.zobrist());
-        CHECK(it != best.end() && it->second == t.score);
+        if (it == best.end()) continue;
+        ++found;
+        CHECK(it->second == t.score);
       }
+      CHECK_EQ(found, best.size());
     }
     // (v) the same again.
     const Drained again = drain(s, scorer, unit);
