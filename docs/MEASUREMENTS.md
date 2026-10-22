@@ -991,3 +991,38 @@ because the present's advance at every action's last mandatory move (T5) is itse
 gate: a turn costs at least two evaluations. Read as rewinds only, 43-73%; with no
 gate every evaluation is a turn start's. The reading of "a shift of the present"
 decides most of what the tree form buys (issue 160, for the user before 6x).
+
+### D2's flat form beside them - the same seven turn starts (indicative; no threshold, no verdict)
+
+**What it is.** The same counts for D2's flat form (whole legal turns generated best
+first, build-log spec issues 163-171): every node is a turn start, so every evaluation
+is one; what it shows is how deep a fixed evaluation budget reaches, and what the
+generator does - turns generated, generators stopped by their budget, fallbacks to E4's
+listing. Indicative, as above: the built-in random evaluator (whose leave logits are
+random too), not a trained network.
+
+**Conditions.** As above (2026-10-23, `dev-r`, counts, deterministic): lane/engine with
+the flat form's search arm (the commit that retires the whole-turn arm), the same
+`t5d-tree-count build/t0db/*.5dpgn`, its fifth arm `flat form` (`TurnSplit::Flat`, every
+flat parameter at its placeholder: successors, the generated-turn softmax, jumps on both
+boards, leave share 0.5, k0 cap 16, 200,000 generator nodes, fallback 64); the four
+earlier arms' counts are unchanged, value for value.
+
+| Record, action | boards | mandatory | turn starts evaluated (400 evals) | deepest evaluated turn start | turns generated | generators stopped (all fell back) |
+|---|---|---|---|---|---|---|
+| t0db-0001, 28 | 30 | 1 | 400 | 11 | 10,699 | 2 |
+| t0db-0003, 57 | 60 | 2 | 400 | 10 | 10,852 | 0 |
+| t0db-0005, 26 | 34 | 4 | 400 | 12 | 11,812 | 8 |
+| t0db-0007, 32 | 40 | 2 | 400 | 11 | 10,819 | 0 |
+| t0db-0013, 50 | 60 | 2 | 400 | 10 | 11,329 | 0 |
+| t0db-0017, 26 | 33 | 3 | 400 | 10 | 11,508 | 5 |
+| t0db-0032, 29 | 37 | 4 | 400 | 12 | 11,357 | 2 |
+
+400-407 playouts per 400 evaluations; about 27 turns generated per node (k0's cap 16,
+then widening). *Read against the table above:* the flat form's deepest evaluated turn
+start lies 10-12 turns down where the ply split's lies 3-7 and the tree form's 3-8 - at
+equal evaluations it searches far deeper in turns, and correspondingly narrower in each
+(widening instantiates ceil(16 sqrt(N + 1)) turns of hundreds); 0-8 of the ~400
+generators were stopped by their budget before their first turn and took E4's listing
+(issue 171). No timings here: the generator's cost per node is not measured on a quiet
+machine (proposed edit 131).

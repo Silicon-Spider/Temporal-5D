@@ -29,9 +29,16 @@
  *    the states between are expanded on inherited logits and never reach the caller -
  *    unless a re-root (t5d_search_advance*) makes one the root: it is then the first
  *    leaf gathered after it, its statistics kept.
- *    Under the whole-turn
- *    split (D2's other arm) the candidates are the turn start's pseudo-legal
- *    moves, and the search derives each legal action's prior from them itself.
+ *    Under D2's FLAT FORM (T5D_SPLIT_FLAT) every leaf is a turn start, its
+ *    candidates classified as the ply split's are (D1), and the search derives
+ *    each board's distribution over its options from them and from the leaf's
+ *    BOARD LOGITS - optional: one float32 per expansion board
+ *    (leaf.expansion.board_count, in its order), the board's "leave it" logit,
+ *    read at the acting player's playable boards (NaN: none given for that
+ *    board - t5d_search_params.leave_share; NULL: none at all) - then generates
+ *    whole legal turns best first by their summed log-probabilities (register
+ *    D2; t5d/turngen.hpp). It replaced the enumerating whole-turn arm and its
+ *    256-action listing cap (retired).
  *  - SUBMIT (register D8; rulebook R8): turns have variable length, so under
  *    the board-move split submitting is an action of its own wherever it is
  *    possible (leaf.submit_possible: the obligations met, T5), legal only where
@@ -106,11 +113,13 @@ typedef struct t5d_search t5d_search;
 /* D3: the WDL head's outputs per leaf - win, draw, loss. */
 #define T5D_WDL 3
 
-/* D2 (undecided): the board-move split, whole turns, or the tree form (the board-move
+/* D2 (undecided): the board-move split, the flat form (whole legal turns generated best first
+ * by summed per-board log-probabilities, instantiated by progressive widening - in the slot
+ * of the enumerating whole-turn arm it replaced, retired), or the tree form (the board-move
  * split's tree with turn-start priors inherited inside a turn; re-evaluation only where an
  * interaction gate fires and at complete turns - t5d/mcts.hpp). */
 #define T5D_SPLIT_BOARD_MOVE 0
-#define T5D_SPLIT_WHOLE_TURN 1
+#define T5D_SPLIT_FLAT 1
 #define T5D_SPLIT_TREE 2
 /* The tree form's interaction gates (t5d_search_params.tree_gates, a mask; spec 8.2): a move
  * between boards still to move, a capture of a piece that could reach them, a change in
@@ -137,9 +146,17 @@ typedef struct t5d_search t5d_search;
  * T5, on every action; a rewind) or a rewind only. */
 #define T5D_PRESENT_ANY 0
 #define T5D_PRESENT_REWIND 1
-/* The whole-turn split's action prior from its moves' logits: their sum or mean. */
-#define T5D_ACTION_PRIOR_SUM 0
-#define T5D_ACTION_PRIOR_MEAN 1
+/* The flat form's readings (placeholders; t5d/mcts.hpp): a generated turn's prior - the
+ * softmax of the generated turns' scores (renormalised as more are generated) or exp(score);
+ * what a child is - a distinct successor state or an action (t5d/turngen.hpp); and which
+ * boards' distributions a non-branching jump between two playable boards belongs to - both
+ * (its source's and, as an arrival, its destination's) or its source's alone. */
+#define T5D_FLAT_PRIOR_GENERATED 0
+#define T5D_FLAT_PRIOR_PRODUCT 1
+#define T5D_FLAT_UNIT_ACTIONS 0
+#define T5D_FLAT_UNIT_SUCCESSORS 1
+#define T5D_FLAT_JUMPS_BOTH 0
+#define T5D_FLAT_JUMPS_SOURCE 1
 /* The MCGS node key (spec issue 30): the 5D Zobrist key, or with branch origins. */
 #define T5D_NODE_KEY_STATE 0
 #define T5D_NODE_KEY_STATE_AND_ORIGINS 1
@@ -193,9 +210,12 @@ typedef struct t5d_search t5d_search;
 typedef struct t5d_search_params {
   /* D2 */
   int32_t split;               /* T5D_SPLIT_* */
-  int32_t action_prior;        /* T5D_ACTION_PRIOR_* (whole-turn) */
-  uint64_t max_actions;        /* whole-turn: actions listed per node */
-  uint64_t listing_nodes;      /* whole-turn: the listing's node budget */
+  int32_t flat_prior;          /* flat form: T5D_FLAT_PRIOR_* (this slot held the retired
+                                  whole-turn arm's action prior, whose sum - 0 - it reads alike) */
+  uint64_t retired_max_actions; /* the retired whole-turn arm's listing cap: 0 or T5D_NO_LIMIT
+                                  (anything else is refused) - the flat form has no cap */
+  uint64_t generator_nodes;    /* flat form: each node's generator's node budget, over its life
+                                  (the retired listing's budget's slot) */
   double submit_share;         /* board-move: submit's prior share when the evaluator gives no
                                   submit logit (D8; placeholder 0.5) */
   int32_t legal_moves_only;    /* board-move: 1 (0 is a test seam: pseudo-legal children) */
@@ -278,6 +298,14 @@ typedef struct t5d_search_params {
                                      base) and uncertainty signal are its parent's evaluation's;
                                      0 is refused with a term that reads the signal (6m) */
   int32_t tree_present;           /* T5D_PRESENT_* */
+  /* D2's flat form (split T5D_SPLIT_FLAT; read by no other split), placeholders */
+  int32_t flat_unit;              /* T5D_FLAT_UNIT_*: a child a distinct successor or an action */
+  int32_t flat_jumps;             /* T5D_FLAT_JUMPS_* */
+  double leave_share;             /* a board's "leave it" probability where no board logit is given
+                                     for it (in (0, 1); 0.5) */
+  double flat_k0_max;             /* the cap on k0 from the turn distribution's entropy (>= 1; 16) */
+  uint64_t flat_fallback;         /* a node whose generator stopped before its first turn: up to this
+                                     many turns from E4's listing instead (0: none - stuck; 64) */
   t5d_expand_options expand;   /* the leaves' network input (k, features, relations); last */
 } t5d_search_params;
 
@@ -292,7 +320,8 @@ typedef struct t5d_leaf {
   int32_t acting_player;   /* D8: whose action is in progress, until it submits: 0 white,
                               1 black - the value's perspective */
   int32_t submit_possible; /* D8: submitting is an action here (the obligations met, T5) -
-                              board-move split and tree form; 0 under whole turns */
+                              board-move split and tree form; 0 under the flat form (a turn
+                              start: the generator ends turns itself) */
   int32_t submit_legal;    /* ... and legal (C4, exact) */
   const uint8_t* legality; /* per move, T5D_LEGALITY_LEGAL or _UNKNOWN (the board-move
                               split's classification); NULL when none was made */
@@ -359,6 +388,11 @@ typedef struct t5d_search_summary {
   uint64_t gate_check;
   uint64_t gate_present;
   uint64_t gate_always;
+  /* D2's flat form: turns generated (children made), and generators a budget stopped (their
+     nodes' children incomplete, never proven lost - H37) */
+  uint64_t generated_turns;
+  uint64_t stopped_generators;
+  uint64_t fallback_listings;  /* ... of which before their first turn: E4's listing instead */
 } t5d_search_summary;
 
 /* A run's budgets (t5d/mcts.hpp, Limits): T5D_NO_LIMIT for none (seconds: 0). playouts and
@@ -382,7 +416,7 @@ typedef struct t5d_root_child {
   int32_t hi;
   double prior;
   double q;            /* the backed-up value, W - L (D3) */
-  size_t move_count;   /* its moves: 1 (board-move), an action's (whole-turn), 0 (submit) */
+  size_t move_count;   /* its moves: 1 (board-move), a turn's (flat form), 0 (submit) */
   /* engine ABI round 2 (register D3): the search's draw probability, and the
      child's own evaluation - the network's (I13's and I15's memo) */
   double d;            /* backed up beside q: the child's search WDL is
@@ -422,11 +456,12 @@ typedef struct t5d_evaluations {
   size_t error_count;           /* the leaf count, or 0 */
   const float* moves_left;      /* one per leaf (>= 0; NaN: none given), or NULL */
   size_t moves_left_count;      /* the leaf count, or 0 */
-  /* Reserved for D2's flat form (per-board logits; not built): NULL and 0 -
-     anything else is T5D_ERR_UNSUPPORTED. Its per-leaf layout is fixed when
-     the flat form is built. */
+  /* D2's flat form: each leaf's board logits - leaf.expansion.board_count float32 per leaf,
+     concatenated in the batch's order: each board's "leave it" logit, read at the acting
+     player's playable boards under the flat form (NaN: none for that board - leave_share),
+     checked (no infinity) and not read under the other splits - or NULL with count 0: none */
   const float* board_logits;
-  size_t board_logit_count;
+  size_t board_logit_count;    /* = the leaves' board counts summed, or 0 */
 } t5d_evaluations;
 
 /* The defaults (t5d/mcts.hpp). Cannot fail; NULL is ignored. */
@@ -434,8 +469,8 @@ T5D_API void t5d_search_params_default(t5d_search_params* out);
 
 /* A search from the game's current state, with the game handle's count of moves
  * made in the action under way (t5d_game_summary.moves_made; register A6).
- * turn_start: 1 if no move has been made yet in that action (the whole-turn
- * split requires it) - it must agree with the handle's count (1 exactly where
+ * turn_start: 1 if no move has been made yet in that action (the flat form
+ * requires it) - it must agree with the handle's count (1 exactly where
  * it is 0; T5D_ERR_ARGUMENT otherwise). `params` NULL: the defaults. The game
  * handle is not kept. On failure *out is NULL. */
 T5D_API t5d_status t5d_search_new(const t5d_game* game, int32_t turn_start,
@@ -479,10 +514,10 @@ T5D_API t5d_status t5d_search_leaf_state(const t5d_search* search, size_t index,
 
 /* The batch's evaluations (t5d_evaluations, above): expands the leaves, backs up
  * W - L and D, releases the virtual loss. On T5D_ERR_ARGUMENT (counts that do
- * not match, a non-finite logit, an infinite submit logit, a WDL or categorical
- * that is no distribution, a negative or infinite error or moves-left, an
- * unknown kind) or T5D_ERR_UNSUPPORTED (per-board logits) the batch is
- * abandoned: virtual loss released, nothing backed up. (It replaced
+ * not match, a non-finite logit, an infinite submit or board logit, a WDL or
+ * categorical that is no distribution, a negative or infinite error or
+ * moves-left, an unknown kind) the batch is abandoned: virtual loss released,
+ * nothing backed up. (It replaced
  * t5d_search_deliver, which took the categorical alone and backed up its mean -
  * the reading D3 corrected at CHECKPOINT 7.) */
 T5D_API t5d_status t5d_search_deliver_evaluations(t5d_search* search, const t5d_evaluations* batch,

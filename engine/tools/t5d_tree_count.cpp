@@ -1,4 +1,4 @@
-// t5d-tree-count: D2's tree form against the ply split on turn starts of
+// t5d-tree-count: D2's tree and flat forms against the ply split on turn starts of
 // recorded games - evaluation COUNTS, never timings (design spec §8.2,
 // "Evaluating at turn boundaries"; register D2; docs/MEASUREMENTS.md). What
 // the tree form buys is turns per evaluation: the ply split spends evaluations
@@ -26,6 +26,10 @@
 //   tree form, natural gates     TurnSplit::Tree, §8.2's four gates (the defaults)
 //   tree form, no gates          TurnSplit::Tree, tree_gates 0
 //   tree, natural, rewind only   TurnSplit::Tree, tree_present Rewind
+//   flat form                    TurnSplit::Flat (whole turns generated best first; its
+//                                every edge a turn - the depth counts them; and its
+//                                turns generated, generators a budget stopped, and
+//                                fallbacks to E4's listing)
 //
 // Each arm runs twice: to 400 EVALUATIONS (playouts unbounded) - the turn
 // starts and mid-turn nodes the network evaluated, the nodes inherited, and
@@ -77,18 +81,21 @@ struct Row {
   std::uint64_t inherited = 0;
   std::uint64_t deepest = 0;
   std::array<std::uint64_t, 5> gates{};
+  std::uint64_t generated = 0;
+  std::uint64_t stopped = 0;
+  std::uint64_t fallbacks = 0;
 };
 
-constexpr int kArms = 4;
+constexpr int kArms = 5;
 const char* const kArmNames[kArms] = {"ply split", "tree form, natural gates", "tree form, no gates",
-                                      "tree, natural, rewind only"};
+                                      "tree, natural, rewind only", "flat form"};
 
 Row count(const GameState& s, int arm, const Limits& limits) {
   SearchParams p;
   p.expand.square_features = SquareFeatures::None;
   p.eval_cache_entries = 0;
   p.synchronous = true;
-  if (arm > 0) p.split = TurnSplit::Tree;
+  if (arm > 0) p.split = arm == 4 ? TurnSplit::Flat : TurnSplit::Tree;
   if (arm == 2) p.tree_gates = 0;
   if (arm == 3) p.tree_present = PresentShift::Rewind;
   const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Random, 1);
@@ -99,6 +106,9 @@ Row count(const GameState& s, int arm, const Limits& limits) {
   r.playouts = search.stats().playouts;
   r.inherited = search.stats().inherited_nodes;
   r.gates = search.stats().gate_fired;
+  r.generated = search.stats().generated_turns;
+  r.stopped = search.stats().stopped_generators;
+  r.fallbacks = search.stats().fallback_listings;
   // Breadth-first over the tree: the evaluated nodes, and how many turns deep
   // (submit edges from the root) the deepest evaluated turn start lies.
   std::vector<std::pair<NodeId, std::uint64_t>> queue{{search.root(), 0}};
@@ -109,7 +119,7 @@ Row count(const GameState& s, int arm, const Limits& limits) {
     if (n.turn_start && n.evaluated && depth > r.deepest) r.deepest = depth;
     for (std::size_t e = 0; e < n.edge_count; ++e) {
       const EdgeView edge = search.edge(id, e);
-      if (edge.child != kNoNode) queue.emplace_back(edge.child, depth + (edge.submit ? 1 : 0));
+      if (edge.child != kNoNode) queue.emplace_back(edge.child, depth + (edge.submit || arm == 4 ? 1 : 0));
     }
   }
   return r;
@@ -121,7 +131,7 @@ unsigned long long u(std::uint64_t v) { return static_cast<unsigned long long>(v
 
 int main(int argc, char** argv) {
   if (argc < 2 || std::strcmp(argv[1], "--help") == 0 || std::strcmp(argv[1], "-h") == 0) {
-    std::fputs("usage: t5d-tree-count RECORD ...   (D2's tree form against the ply split: evaluation counts)\n",
+    std::fputs("usage: t5d-tree-count RECORD ...   (D2's tree and flat forms against the ply split: evaluation counts)\n",
                argc < 2 ? stderr : stdout);
     return argc < 2 ? 2 : 0;
   }
@@ -179,10 +189,15 @@ int main(int argc, char** argv) {
       std::printf(
           "  %-26s 400 evals: %4llu playouts, turn starts evaluated %4llu, mid-turn evaluated %4llu, inherited %4llu, "
           "deepest evaluated turn start %llu turns | 400 playouts: %4llu evals, %4llu inherited, gates b/c/k/p "
-          "%llu/%llu/%llu/%llu\n",
+          "%llu/%llu/%llu/%llu",
           kArmNames[arm], u(a.playouts), u(a.turn_starts_evaluated), u(a.mid_turn_evaluated), u(a.inherited),
           u(a.deepest), u(b.evaluations), u(b.inherited), u(b.gates[0]), u(b.gates[1]), u(b.gates[2]),
           u(b.gates[3]));
+      if (arm == 4) {
+        std::printf(" | turns generated %llu, generators stopped %llu, fallbacks %llu (400 evals)", u(a.generated),
+                    u(a.stopped), u(a.fallbacks));
+      }
+      std::printf("\n");
     }
   }
   return 0;

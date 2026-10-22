@@ -28,7 +28,8 @@
 // then submit, a decision of its own (register D8, rulebook R8): nothing is
 // submitted automatically, and the action ends only when submit is chosen. A
 // game's actions are counted at submissions (GameRecord::actions); the turn
-// cap reads the state at each turn start, after the submission.
+// cap reads the state at each turn start, after the submission. Under D2's
+// flat form a decision is a whole turn, played and submitted.
 
 #ifndef T5D_SELFPLAY_HPP
 #define T5D_SELFPLAY_HPP
@@ -94,7 +95,7 @@ struct GameRecord {
   /// 0 white, 1 black, -1 none (no optional: g++ 13/14 warn on copying one).
   int winner = -1;
   /// Searches run: under the board-move split one per move and one per
-  /// submission; under whole turns one per action.
+  /// submission (the tree form too); under the flat form one per turn.
   std::uint64_t decisions = 0;
   std::uint64_t playouts = 0;
   std::uint64_t evaluations = 0;
@@ -112,7 +113,7 @@ struct GameRecord {
   // turn-start verdicts and exact verifications of chosen moves).
   double seconds_search_mate = 0;
   double seconds_search_expand = 0;
-  double seconds_search_listing = 0;
+  double seconds_search_generate = 0;  ///< D2's flat form: turns generated
   double seconds_search_verify = 0;
   double seconds_verdicts = 0;
 

@@ -136,8 +136,10 @@ const std::vector<Config> kConfigs = {
     {"ply graph", TurnSplit::BoardMove, true, true, false, false, NodeKey::State, false},
     {"ply graph origins, solver", TurnSplit::BoardMove, true, true, true, true, NodeKey::StateAndOrigins, true},
     {"ply tree, no widening, E2+E3", TurnSplit::BoardMove, false, false, true, true, NodeKey::State, false},
-    {"turn tree, solver", TurnSplit::WholeTurn, false, true, false, false, NodeKey::State, true},
-    {"turn graph, E2+E3", TurnSplit::WholeTurn, true, true, true, true, NodeKey::State, false},
+    // D2's flat form: whole turns generated best first (it replaced the
+    // enumerating whole-turn arm's two configurations).
+    {"flat tree, solver", TurnSplit::Flat, false, true, false, false, NodeKey::State, true},
+    {"flat graph, E2+E3", TurnSplit::Flat, true, true, true, true, NodeKey::State, false},
     // D2's tree form (§8.2's interaction gates, the default readings): a tree
     // only - refused under MCGS (build-log spec issue 301).
     {"tree form, solver", TurnSplit::Tree, false, true, false, false, NodeKey::State, true},
@@ -154,9 +156,6 @@ SearchParams params_of(const Config& c) {
   p.variance_bonus = c.e3;
   p.node_key = c.key;
   p.proof_channel = c.proof_channel;
-  // The whole-turn listings of a two-board turn run to hundreds of actions;
-  // the invariants hold for a truncated list too (it is never proven lost).
-  p.max_actions = 96;
   return p;
 }
 
@@ -360,7 +359,7 @@ TEST(mcts_solver_proves_a_mate_in_one_and_plays_it) {
     RuleOptions rules;
     rules.moves_after_shift = after_shift;
     const GameState start = game({"[k4/4Q/1K3/5/5:0:1:w]"}, BoardSize{5, 5}, rules);
-    for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::WholeTurn}) {
+    for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::Flat}) {
       for (const bool graph : {false, true}) {
         const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Uniform);
         SearchParams p = fast();
@@ -412,7 +411,7 @@ TEST(mcts_solver_proves_a_draw_when_every_child_is_drawn) {
   REQUIRE(acts.stats.exhaustive);
   REQUIRE(!acts.actions.empty());
   for (const LegalAction& a : acts.actions) REQUIRE(verdict_of(a.result) == Outcome::Stalemate);
-  for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::WholeTurn}) {
+  for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::Flat}) {
     const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Random, 5);
     SearchParams p = fast();
     p.proof_channel = true;  // the in-tree solver under test (off by rule, H41)
@@ -431,7 +430,7 @@ TEST(mcts_solver_proves_a_draw_when_every_child_is_drawn) {
 TEST(mcts_solver_proves_a_loss_when_every_child_is_lost) {
   const GameState s = forced_loss();
   REQUIRE(every_action_allows_mate(s));
-  for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::WholeTurn}) {
+  for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::Flat}) {
     for (const bool graph : {false, true}) {
       const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Uniform);
       SearchParams p = fast();
@@ -517,7 +516,7 @@ TEST(mcts_with_the_solver_off_terminals_are_valued_and_nothing_else_is_proven) {
   // proof (no ProvenWin, SecureChild or AllLost). The mate in one is still
   // found, by its value.
   CHECK(!SearchParams{}.proof_channel);
-  for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::WholeTurn}) {
+  for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::Flat}) {
     for (const bool graph : {false, true}) {
       for (int which = 0; which < 3; ++which) {
         const GameState s = which == 0 ? mate_in_one() : which == 1 ? forced_draw() : forced_loss();
@@ -547,7 +546,7 @@ TEST(mcts_with_the_solver_off_terminals_are_valued_and_nothing_else_is_proven) {
           // The chosen line mates: its moves, then the submission.
           GameState t = s;
           for (const Move& m : search.root_children().at(index).moves) t.apply(m);
-          if (split == TurnSplit::WholeTurn || t.obligations_met()) {
+          if (split == TurnSplit::Flat || t.obligations_met()) {
             REQUIRE(t.submission_status() == SubmitStatus::Safe);
             t.submit();
             CHECK(verdict_of(t) == Outcome::Checkmate);
@@ -579,7 +578,7 @@ TEST(mcts_solver_agrees_with_the_brute_force_game_tree_under_both_q4_readings) {
       t5d_test::GameTree tree;
       const t5d_test::GameValue truth = tree.solve(s, 2);
       if (truth.kind == t5d_test::GameValue::Kind::Unknown) continue;
-      for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::WholeTurn}) {
+      for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::Flat}) {
         SearchParams p = fast();
         p.proof_channel = true;  // the in-tree solver under test (off by rule, H41)
         p.split = split;
@@ -675,7 +674,7 @@ TEST(mcts_the_turn_cap_scores_a_draw_and_proves_nothing) {
   SearchParams p = fast();
   p.turn_cap.turns = 1;  // every turn start after the first turn is capped
   const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Material);
-  for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::WholeTurn}) {
+  for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::Flat}) {
     p.split = split;
     // From Black's first turn: every reply reaches turn 2's start - capped.
     GameState s = variant("Standard");
@@ -864,18 +863,21 @@ TEST(mcts_rerooting_keeps_only_reachable_nodes_and_cached_evaluations) {
       }
     }
     const std::uint32_t kept_visits = search.node(kept).visits;
-    // A sibling that will be deleted: its state's evaluation is a state-keyed fact.
+    // A sibling that will be deleted: its state's evaluation is a state-keyed fact
+    // - one with as many boards as the new root (the purge takes fewer: under the
+    // flat form a turn that branches makes more boards than one that does not).
+    const std::size_t kept_boards = search.node(kept).state->multiverse().board_count();
     NodeId sibling = kNoNode;
     for (std::size_t i = 0; i < children.size(); ++i) {
       if (i != ch.index && children[i].child != kNoNode && search.node(children[i].child).evaluated &&
-          !seen.count(children[i].child)) {
+          !seen.count(children[i].child) &&
+          search.node(children[i].child).state->multiverse().board_count() >= kept_boards) {
         sibling = children[i].child;
       }
     }
     // The tree form evaluates a root child only where a gate fires (the rest
     // inherit, and hold no evaluation to keep): then any evaluated node the new
     // root will not reach, and the purge will not take (as many boards).
-    const std::size_t kept_boards = search.node(kept).state->multiverse().board_count();
     for (NodeId id = 0; sibling == kNoNode && id < search.node_count(); ++id) {
       if (id != search.root() && !seen.count(id) && search.node(id).evaluated &&
           search.node(id).state->multiverse().board_count() >= kept_boards) {
@@ -915,11 +917,10 @@ TEST(mcts_rerooting_keeps_only_reachable_nodes_and_cached_evaluations) {
 TEST(mcts_pondering_searches_the_reply_and_reroots_on_it) {
   // Match play: our action, then the opponent's position searched (ponder),
   // then the opponent's actual reply - the tree re-rooted each time.
-  for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::WholeTurn}) {
+  for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::Flat}) {
     SearchParams p = fast();
     p.split = split;
     p.graph = split == TurnSplit::BoardMove;
-    p.max_actions = 96;
     const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Random, 8);
     const GameState start = two_timelines_after(2);
     Search search(start, p);
@@ -1393,44 +1394,126 @@ TEST(mcts_verify_settles_a_root_child_before_it_is_played) {
   CHECK_NOTHROW(search.check_invariants());
 }
 
-TEST(mcts_whole_turn_children_are_the_legal_actions) {
-  SearchParams p = fast();
-  p.split = TurnSplit::WholeTurn;
-  p.widening = false;
-  p.max_actions = 4096;  // every action listed (the placeholder default is 256)
-  const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Random, 2);
+TEST(mcts_flat_children_are_the_legal_turns_best_first) {
+  // D2's flat form with widening off: the root's children are every legal
+  // turn - as distinct successors (the placeholder unit) and as actions - each
+  // a legal action, in non-increasing score (the generator's order), the
+  // priors the softmax of the scores (FlatPrior::Generated) or exp(score)
+  // (Product), each child's score its moves' per-board log-probabilities.
   const GameState s = two_timelines_after(2);
-  Search search(s, p);
-  search.run(*ev, Limits{60});
-  const ActionList acts = list_legal_actions(s, 4096, Detector::Hypercuboid);
+  const ActionList acts = list_legal_actions(s, 100000, Detector::Hypercuboid);
   REQUIRE(acts.stats.exhaustive);
-  const std::vector<RootChild> children = search.root_children();
-  CHECK_EQ(children.size(), acts.actions.size());
-  for (const RootChild& c : children) {
-    GameState t = s;
-    for (const Move& m : c.moves) {
-      REQUIRE(is_pseudo_legal(t, m));
-      t.apply(m);
+  const ActionCount successors = count_legal_successors(s, 100000, Detector::Hypercuboid);
+  REQUIRE(successors.stats.exhaustive);
+  for (const TurnUnit unit : {TurnUnit::Successors, TurnUnit::Actions}) {
+    for (const FlatPrior prior : {FlatPrior::Generated, FlatPrior::Product}) {
+      SearchParams p = fast();
+      p.split = TurnSplit::Flat;
+      p.widening = false;
+      p.flat_unit = unit;
+      p.flat_prior = prior;
+      const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Random, 2);
+      Search search(s, p);
+      // A few playouts: without widening every node generates all its turns -
+      // hundreds here, tens of thousands a move or two deeper.
+      search.run(*ev, Limits{4});
+      const std::vector<RootChild> children = search.root_children();
+      CHECK_EQ(children.size(), unit == TurnUnit::Actions ? acts.actions.size() : successors.count);
+      CHECK(search.node(search.root()).children_complete);
+      std::set<std::string> texts;
+      double sum = 0;
+      for (std::size_t i = 0; i < children.size(); ++i) {
+        const RootChild& c = children[i];
+        GameState t = s;
+        for (const Move& m : c.moves) {
+          REQUIRE(is_pseudo_legal(t, m));
+          t.apply(m);
+        }
+        CHECK(t.submission_status() == SubmitStatus::Safe);
+        CHECK(c.legality == MoveLegality::Legal);
+        texts.insert(action_text(c.moves, s.multiverse().even()));
+        const EdgeView e = search.edge(search.root(), i);
+        if (i > 0) CHECK(e.logit <= search.edge(search.root(), i - 1).logit);
+        if (prior == FlatPrior::Product) CHECK(std::abs(c.prior - std::exp(e.logit)) < 1e-6 * std::max(c.prior, 1e-30));
+        sum += c.prior;
+      }
+      CHECK_EQ(texts.size(), children.size());  // each once
+      if (prior == FlatPrior::Generated) CHECK(std::abs(sum - 1.0) < 1e-9);
+      if (prior == FlatPrior::Product) CHECK(sum <= 1.0 + 1e-9);  // the mass on illegal combinations is lost
+      CHECK_EQ(search.stats().stopped_generators, std::uint64_t{0});
+      CHECK_NOTHROW(search.check_invariants());
     }
-    CHECK(t.submission_status() == SubmitStatus::Safe);
   }
-  // Priors sum to one.
-  double sum = 0;
-  for (const RootChild& c : children) sum += c.prior;
-  CHECK(std::abs(sum - 1.0) < 1e-9);
-  CHECK_NOTHROW(search.check_invariants());
 }
 
-TEST(mcts_whole_turn_listing_stopped_early_is_never_proven_lost) {
+TEST(mcts_flat_a_stopped_generator_is_never_proven_lost) {
+  // H37: a node whose generator a budget stopped has incomplete children, so
+  // the solver never proves it lost - the whole-turn arm's truncated listing,
+  // now the generator's budget. forced_loss's root generator needs more than
+  // this budget to finish; every node's generator stops.
   SearchParams p = fast();
-  p.split = TurnSplit::WholeTurn;
-  p.max_actions = 1;  // every listing stops at its first action
+  p.split = TurnSplit::Flat;
+  p.proof_channel = true;  // the in-tree solver under test (off by rule, H41)
+  p.flat_fallback = 0;     // the generator alone (the fallback's listing is tested below)
+  {
+    struct Flat : TurnScorer {
+      double leave(int) const override { return 0; }
+      double move(const Move&, int) const override { return 0; }
+    };
+    TurnGenerator g(forced_loss(), Flat{});
+    while (g.next()) {
+    }
+    REQUIRE(g.exhausted());
+    REQUIRE(g.stats().nodes > 8);
+    p.generator_nodes = g.stats().nodes / 2;
+  }
   const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Uniform);
   Search search(forced_loss(), p);
   search.run(*ev, Limits{3000});
-  CHECK(search.stats().truncated_listings > 0);
-  CHECK(search.node(search.root()).hi == 1);  // an incomplete list proves no loss
+  CHECK(search.stats().stopped_generators > 0);
+  CHECK(!search.node(search.root()).children_complete);
+  CHECK(search.node(search.root()).hi == 1);  // incomplete children prove no loss
   CHECK_NOTHROW(search.check_invariants());
+  // With the budget the generator needs, the loss is proven.
+  SearchParams q = p;
+  q.generator_nodes = SearchParams{}.generator_nodes;
+  Search complete(forced_loss(), q);
+  complete.run(*ev, Limits{20000});
+  CHECK(complete.node(complete.root()).children_complete);
+  CHECK_EQ(complete.node(complete.root()).hi, -1);
+}
+
+TEST(mcts_flat_a_generator_stopped_before_its_first_turn_falls_back_to_the_listing) {
+  // A budget too small for any generator to reach its first turn: with the
+  // fallback, each node's turns are E4's listing's - legal, scored by the
+  // node's policy and ordered by score (each successor once), complete only
+  // where the listing was; without it (0), the root is stuck.
+  SearchParams p = fast();
+  p.split = TurnSplit::Flat;
+  p.generator_nodes = 3;  // the generator's set-up alone spends more
+  const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Random, 6);
+  const GameState s = two_timelines_after(2);
+  Search search(s, p);
+  search.run(*ev, Limits{60});
+  CHECK(search.stats().fallback_listings > 0);
+  CHECK_EQ(search.stats().fallback_listings, search.stats().stopped_generators);
+  const std::vector<RootChild> children = search.root_children();
+  REQUIRE(!children.empty());
+  CHECK(children.size() <= p.flat_fallback);
+  for (std::size_t i = 0; i < children.size(); ++i) {
+    GameState t = s;
+    for (const Move& m : children[i].moves) t.apply(m);
+    CHECK(t.submission_status() == SubmitStatus::Safe);
+    if (i > 0) CHECK(search.edge(search.root(), i).logit <= search.edge(search.root(), i - 1).logit);
+  }
+  CHECK(!search.node(search.root()).children_complete);  // hundreds of actions, 64 listed
+  CHECK_NOTHROW(search.check_invariants());
+  p.flat_fallback = 0;
+  Search stuck(s, p);
+  stuck.run(*ev, Limits{10});
+  CHECK(stuck.node(stuck.root()).stuck);
+  CHECK(stuck.root_children().empty());
+  CHECK_EQ(stuck.stats().fallback_listings, std::uint64_t{0});
 }
 
 TEST(mcts_board_move_dead_ends_are_pruned_not_scored) {
@@ -2172,8 +2255,18 @@ TEST(mcts_parameters_are_validated) {
   p.cpuct = -1;
   CHECK_THROWS_AS(Search(variant("Standard"), p), std::invalid_argument);
   p = fast();
-  p.split = TurnSplit::WholeTurn;
-  CHECK_THROWS_AS(Search(variant("Standard"), p, 1), std::invalid_argument);  // whole turns: from turn starts
+  p.split = TurnSplit::Flat;
+  CHECK_THROWS_AS(Search(variant("Standard"), p, 1), std::invalid_argument);  // the flat form: from turn starts
+  for (const double share : {0.0, 1.0, -0.5, std::nan("")}) {
+    p = fast();
+    p.leave_share = share;
+    CHECK_THROWS_WITH(Search(variant("Standard"), p), std::invalid_argument, "leave_share");
+  }
+  for (const double cap : {0.5, std::numeric_limits<double>::infinity(), std::nan("")}) {
+    p = fast();
+    p.flat_k0_max = cap;
+    CHECK_THROWS_WITH(Search(variant("Standard"), p), std::invalid_argument, "flat_k0_max");
+  }
   p = fast();
   p.expand.pin = true;
   CHECK_THROWS_AS(Search(variant("Standard"), p), std::invalid_argument);
@@ -2659,20 +2752,19 @@ TEST(mcts_a_batch_asks_once_per_state_and_count) {
 
 TEST(mcts_every_node_counts_the_moves_made_since_its_turn_start) {
   // §15.4's turn structure with A6's count, read from outside the search: from
-  // the root's count, 0 below every submit edge (or whole action), the parent's
+  // the root's count, 0 below every submit edge (or whole turn), the parent's
   // + 1 below every move - in a tree and in a graph (where every parent agrees),
   // from a turn start and from a root during an action; every request the
   // evaluator gets carries its node's count.
   GameState mid = two_timelines_after(2);
   t5d_test::play(mid, t5d_test::texts(mid).front());
-  for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::WholeTurn}) {
+  for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::Flat}) {
     for (const bool graph : {false, true}) {
       for (const bool from_mid : {false, true}) {
-        if (split == TurnSplit::WholeTurn && from_mid) continue;  // whole turns: from turn starts only
+        if (split == TurnSplit::Flat && from_mid) continue;  // the flat form: from turn starts only
         SearchParams p = fast();
         p.split = split;
         p.graph = graph;
-        p.max_actions = 64;
         const GameState root = from_mid ? mid : two_timelines_after(2);
         Search search(root, p, from_mid ? 1 : 0);
         CHECK_EQ(search.root_moves_made(), from_mid ? 1 : 0);
@@ -2689,7 +2781,7 @@ TEST(mcts_every_node_counts_the_moves_made_since_its_turn_start) {
           for (std::size_t i = 0; i < n.edge_count; ++i) {
             const EdgeView e = search.edge(id, i);
             if (e.child == kNoNode) continue;
-            const int want = split == TurnSplit::WholeTurn || e.submit ? 0 : n.moves_made + 1;
+            const int want = split == TurnSplit::Flat || e.submit ? 0 : n.moves_made + 1;
             CHECK_EQ(search.node(e.child).moves_made, want);
             ++checked;
             above_one += want > 1 ? 1u : 0u;
@@ -2705,7 +2797,7 @@ TEST(mcts_every_node_counts_the_moves_made_since_its_turn_start) {
 TEST(mcts_a_root_with_no_move_made_must_be_a_turn_start) {
   // A root's count is the caller's: 0 - a turn start - where the obligations are
   // met is refused (every turn starts with a board owed, T5), and so is a count
-  // below 0 or, under whole turns, above 0; a state's count is not guessed.
+  // below 0 or, under the flat form, above 0; a state's count is not guessed.
   GameState s = variant("Standard");
   t5d_test::play(s, "(0T1)Pe2(0T1)e3");
   REQUIRE(s.obligations_met());
@@ -2713,7 +2805,7 @@ TEST(mcts_a_root_with_no_move_made_must_be_a_turn_start) {
   CHECK_THROWS_AS(Search(s, fast(), -1), std::invalid_argument);
   CHECK_NOTHROW(Search(s, fast(), 1));
   SearchParams whole = fast();
-  whole.split = TurnSplit::WholeTurn;
+  whole.split = TurnSplit::Flat;
   CHECK_THROWS_AS(Search(variant("Standard"), whole, 1), std::invalid_argument);
   // advance_to keeps the rule.
   Search search(variant("Standard"), fast());
@@ -2849,15 +2941,14 @@ class Fixed final : public Evaluator {
 TEST(mcts_values_are_backed_up_from_the_acting_players_view) {
   // Every leaf worth +0.5 to White: every edge's mean, seen from its parent's
   // acting player, is +0.5 out of White's nodes and -0.5 out of Black's - the
-  // sign flipping across a submit edge (or a whole-turn action) and nowhere
+  // sign flipping across a submit edge (or a flat-form turn) and nowhere
   // else. Under MCGS the residual corrections (Two Timelines' intra-turn
   // transpositions) must agree too.
-  for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::WholeTurn}) {
+  for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::Flat}) {
     for (const bool graph : {false, true}) {
       SearchParams p = fast();
       p.split = split;
       p.graph = graph;
-      p.max_actions = 96;
       ByColour ev(0.5);
       Search search(variant("Standard - Two Timelines"), p);
       search.run(ev, Limits{400});
@@ -2941,12 +3032,11 @@ TEST(mcts_d3_the_wdl_is_the_value_and_its_draw_is_backed_up) {
   // +-0.4 (the acting player's view, as before) and a draw probability of 0.2
   // (the same from either side), whatever the categorical says - in a tree and
   // a graph (the residual corrections carry the draw too).
-  for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::WholeTurn}) {
+  for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::Flat}) {
     for (const bool graph : {false, true}) {
       SearchParams p = fast();
       p.split = split;
       p.graph = graph;
-      p.max_actions = 96;
       Heads ev(0.4, 0.2, -0.9, false, std::nanf(""), std::nanf(""));
       Search search(variant("Standard - Two Timelines"), p);
       search.run(ev, Limits{400});
@@ -3019,7 +3109,6 @@ TEST(mcts_d3_an_mcgs_residual_corrects_a_draw_lag) {
   // correction's clamp to [0, 1] allows) - some fired by D alone.
   SearchParams p = fast();
   p.graph = true;
-  p.max_actions = 96;
   KeyedDraw ev;
   Search search(variant("Standard - Two Timelines"), p);
   std::size_t descents = 0;
@@ -3438,12 +3527,11 @@ TEST(mcts_the_evaluation_cache_is_per_epoch_and_exact) {
 TEST(mcts_graph_keys_that_collide_are_compared_exactly) {
   // Keys cut to 3 bits (the key_bits test seam): collisions everywhere. Every
   // edge still leads to the state its move (or submission) makes.
-  for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::WholeTurn}) {
+  for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::Flat}) {
     SearchParams p = fast();
     p.split = split;
     p.graph = true;
     p.key_bits = 3;
-    p.max_actions = 64;
     const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Random, 9);
     Search search(two_timelines_after(1), p);
     search.run(*ev, Limits{300});
@@ -3456,7 +3544,7 @@ TEST(mcts_graph_keys_that_collide_are_compared_exactly) {
         const EdgeView e = search.edge(id, i);
         if (e.child == kNoNode) continue;
         GameState t = *n.state;
-        if (split == TurnSplit::WholeTurn) {
+        if (split == TurnSplit::Flat) {
           for (const Move& m : e.action) t.apply(m);
           t.submit();
         } else if (e.submit) {
@@ -3571,7 +3659,7 @@ TEST(mcts_d3_proven_stuck_and_dead_end_visits_back_up_their_draw) {
   // a stuck node's visits (no child: an Unknown verdict, or every child a dead
   // end under the pseudo-legal seam) back up its own D - the uniform
   // evaluator's 1/3.
-  for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::WholeTurn}) {
+  for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::Flat}) {
     SearchParams p = fast();
     p.proof_channel = true;  // the in-tree solver under test (off by rule, H41)
     p.split = split;
@@ -3658,10 +3746,9 @@ TEST(mcts_advance_action_is_atomic) {
   // A failed advance_action changes nothing: a move that is not one, a
   // submission that is illegal, or an empty action at a turn start - the tree,
   // its statistics and its root are as they were.
-  for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::WholeTurn}) {
+  for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::Flat}) {
     SearchParams p = fast();
     p.split = split;
-    p.max_actions = 64;
     const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Random, 4);
     Search search(variant("Standard - Two Timelines"), p);
     search.run(*ev, Limits{100});

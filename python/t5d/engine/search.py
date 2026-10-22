@@ -9,7 +9,9 @@ expansion - the network's input - with D8's acting player and submit flags), ``d
 hands back one logit per candidate move (logit ``i`` scores ``leaf.expansion.moves[i]``), one
 submit logit per leaf (NaN: none) and D3's value heads per leaf, from the leaf's acting
 player: the WDL - the value search uses (W - L backed up, its draw probability beside it) -
-and, optionally, the 51-bin categorical, the error head's output and moves-left
+and, optionally, the 51-bin categorical, the error head's output and moves-left, and - read
+by D2's flat form (``T5D_SPLIT_FLAT``: whole legal turns generated best first) - one "leave
+it" logit per expansion board (NaN: none for that board, the search's ``leave_share``)
 (``t5d_search_deliver_evaluations``). ``evaluator.CStepDriver`` runs that loop with the
 network; this module is the thin layer over the C functions, and nothing in it computes a
 rule or a search decision.
@@ -164,6 +166,11 @@ class SearchInfo:
     gate_check: int
     gate_present: int
     gate_always: int
+    # D2's flat form: turns generated (children made), and generators a budget stopped (their
+    # nodes' children incomplete - never proven lost, H37)
+    generated_turns: int
+    stopped_generators: int
+    fallback_listings: int  # ... of which before their first turn: E4's listing's turns instead
 
     @property
     def root_finished(self) -> bool:
@@ -183,7 +190,7 @@ class RootChild:
     hi: int
     prior: float
     q: float  # the backed-up value, W - L (D3)
-    moves: tuple[Move, ...]  # 1 (a move), an action's (whole-turn), 0 (submit)
+    moves: tuple[Move, ...]  # 1 (a move), a turn's (flat form), 0 (submit)
     # engine ABI round 2 (register D3): the search's draw probability, and the child's own
     # evaluation - the network's, the root player's view (NaN where not given)
     d: float  # the search WDL: ((1 - d + q) / 2, d, (1 - d - q) / 2)
@@ -330,6 +337,7 @@ class Search:
         errors: Sequence[float] | np.ndarray | None = None,
         moves_left: Sequence[float] | np.ndarray | None = None,
         submit_logits: Sequence[float] | np.ndarray | None = None,
+        board_logits: Sequence[float] | np.ndarray | None = None,
         wdl_kind: int = T5D_VALUE_LOGITS,
         value_kind: int = T5D_VALUE_LOGITS,
     ) -> None:
@@ -338,7 +346,9 @@ class Search:
         draw, loss; ``wdl_kind``: logits or probabilities); ``values`` - the categorical, 51 per
         leaf (``value_kind``), or None; ``errors`` and ``moves_left`` - one per leaf (NaN: none
         given), or None; ``submit_logits`` - one per leaf (NaN: none given) or None (the search's
-        placeholder share everywhere). On a refusal the engine abandons the batch."""
+        placeholder share everywhere); ``board_logits`` - each leaf's ``expansion.board_count``
+        "leave it" logits concatenated (D2's flat form reads them at the acting player's playable
+        boards; NaN: none for that board), or None. On a refusal the engine abandons the batch."""
         for name, kind in (("wdl_kind", wdl_kind), ("value_kind", value_kind)):
             if kind not in (T5D_VALUE_LOGITS, T5D_VALUE_PROBABILITIES):
                 raise ValueError(f"{name} must be T5D_VALUE_LOGITS or T5D_VALUE_PROBABILITIES")
@@ -359,6 +369,7 @@ class Search:
         b.values, b.value_count = array(values)
         b.errors, b.error_count = array(errors)
         b.moves_left, b.moves_left_count = array(moves_left)
+        b.board_logits, b.board_logit_count = array(board_logits)
         b.wdl_kind, b.value_kind = int(wdl_kind), int(value_kind)
         self._lib.call("t5d_search_deliver_evaluations", self._live(), byref(b), error=True)
 
