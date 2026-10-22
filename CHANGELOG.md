@@ -10,6 +10,15 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-23 - N-A6 review fixes: the optional count in the digest pinned; the batch fallback documented
+
+- One reviewer, no high or medium findings (20 of 21 mutants caught; the survivor - a
+  digest without the optional count - is now caught): `tests/net/test_turn_state.py`'s
+  equal-boards cases vary the optional count alone; `Batch.turn_counts`' all-zero fallback
+  documented as invalid before the shift and never reached through `collate`; issue 302's
+  Built note.
+- Spec: §2.3, §15.2's A6 and purity rows; register A6.
+
 ### 2026-10-23 - Network A6: the turn-state inputs embedded into the global registers
 
 Register A6's network side (the engine side, ABI round 1, merged at e8de15e): the three exact

@@ -2530,6 +2530,7 @@ superseded or made moot says so; nothing is deleted.
     digest and MCGS identity, where it subsumes the turn-in-progress bit; every
     ordering of one action's moves from one turn start has the same count, so MCGS
     keeps its intra-turn merges. Proposed edit 200.
+    *Built on the network side (`lane/net`, N-A6): `state_digest` carries all three counts - mandatory, optional and moves made; a test varies each alone.*
 303. **A7 under the cached configuration: frozen boards' K/V depend on the acting
     colour** (§2.2, §7.1, §10.3, §15.2's first row; register A7, C2, C17). A7 encodes
     every input from the acting player's side - ranks mirrored and timelines negated

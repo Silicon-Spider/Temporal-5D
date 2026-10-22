@@ -911,7 +911,9 @@ class Batch:
 
     def turn_counts(self) -> torch.Tensor:
         """``(B, 3)`` long: each position's turn-state counts (register A6;
-        ``TURN_STATE_FIELDS``) - all 0 for a batch made without them."""
+        ``TURN_STATE_FIELDS``) - all 0 for a batch made without them, which is not a valid turn
+        state before the shift (T5 owes a board): a batch fed to the network comes from
+        ``collate``, which always fills them."""
         if self.turn_state is not None:
             return self.turn_state
         return torch.zeros((self.piece.shape[0], len(TURN_STATE_FIELDS)), dtype=torch.long, device=self.piece.device)
