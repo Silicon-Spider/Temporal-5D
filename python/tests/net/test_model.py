@@ -510,3 +510,28 @@ def test_d4s_heads_are_switched_by_their_flags_and_change_no_other_parameter():
     assert out.soft_policy_logits is None and out.soft_submit_logits is None and out.opp_reply_logits is None
     with pytest.raises(ValueError, match="soft policy"):
         out.soft_action_logits()
+
+
+def test_d9s_optimistic_policy_is_its_own_head_behind_its_flag():
+    """D9 (a prototype, behind its flag, off): "a second policy head on the normal target" - its
+    own f, g, promotion offset and submit logit (masked as the policy's), drawn from a generator of
+    its own, so switching it on changes no other parameter."""
+    from t5d.net import parameter_breakdown
+    from t5d.train.smoke import with_actions
+
+    off = build_model(NetConfig(trunk_dtype="fp32", n_layers=2), seed=5).eval()
+    on = build_model(NetConfig(trunk_dtype="fp32", n_layers=2, optimistic_policy=True), seed=5).eval()
+    assert off.optimistic is None and parameter_breakdown(off)["head.optimistic"] == 0
+    p_off, p_on = dict(off.named_parameters()), dict(on.named_parameters())
+    assert set(p_on) - set(p_off) == {n for n in p_on if n.startswith("optimistic.")}
+    assert all(torch.equal(t, p_on[n]) for n, t in p_off.items())
+    assert parameter_breakdown(on)["head.optimistic"] == 2 * (256 * 256 + 256) + (256 * 13 + 13) + (256 + 1)
+    batch = collate(with_actions([_with_promotions(synthetic_state(40, 3)), synthetic_state(41, 2)]))
+    out, base = on(batch, return_trunk=True), off(batch)
+    assert base.optimistic_logits is None and base.optimistic_submit_logits is None
+    assert out.optimistic_logits.shape == out.policy_logits.shape and out.optimistic_action_logits().shape == out.action_logits().shape
+    assert torch.equal(torch.isfinite(out.optimistic_submit_logits), out.submit_valid)
+    assert not torch.allclose(out.optimistic_logits[out.move_valid], out.policy_logits[out.move_valid], atol=1e-3)
+    _check_pointer_heads(out.trunk, batch, ((on.optimistic.pointer, batch.moves, batch.move_valid, out.optimistic_logits),))
+    with pytest.raises(ValueError, match="optimistic"):
+        base.optimistic_action_logits()

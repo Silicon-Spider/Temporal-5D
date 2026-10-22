@@ -10,6 +10,36 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-23 - Network D9: the optimistic policy head behind its flag
+
+Register D9 (§8.1, CHECKPOINT 7) - a prototype, behind its flag, off; match play only.
+
+- **The head** (`net/model.py` `T5DNet.optimistic`, a `heads.ActionHead`;
+  `NetConfig.optimistic_policy`, off; `optimistic_policy_dim` 256): its own f and g, D1's
+  promotion offset and its own submit logit, masked as the policy's (`NetOutput.optimistic_logits`,
+  `optimistic_submit_logits`, `optimistic_action_logits()`); drawn from a generator of its own
+  (`model.d9_seed`) - switching it on changes no other parameter (tested). 135,182 parameters when
+  on (F1 23,100,608); the v1 is unchanged at 22,965,426.
+- **The loss** (`train/losses.py`): its actions against the normal policy target over the full
+  searches, each sample weighted by `optimistic_weights` - clamp(0, 1, sigmoid((z - 1.5) x 3)),
+  z = (short-term target - (W - L)) / sqrt(error head + eps) at the error head's horizon, the
+  network's outputs without gradient; `LossConfig.optimistic_centre`, `_scale`, `_eps`; weight 1.0.
+  Placeholders: spec issue 233.
+- **Match play only** (`engine/evaluator.py`, `engine/netplay.py`): `NetworkEvaluator` and
+  `CachedNetworkEvaluator` take `policy="normal" | "optimistic"` (`POLICY_SOURCES`,
+  `policy_source`) - the optimistic one delivers the optimistic head's logits as the prior with the
+  same value heads, and is refused on a network without the head. `play_game` refuses an
+  optimistic evaluator in self-play; `PlayConfig.optimistic` is match-only and both sides must
+  deliver it; the CLI's `--optimistic` needs `--mode match` alone.
+- **Tests**: the weight (0.5 at z = 1.5, towards 1 and 0, no gradient), the loss only under the
+  flag and reaching only its own head, three optimiser steps reducing it
+  (`tests/train/test_policy_heads.py`); the head, its own draws and endpoints
+  (`tests/net/test_model.py`); cached = dense and the A7 mirror with it on; the optimistic evaluator,
+  dense and cached (`tests/engine/test_evaluator.py`); self-play refusing it and a match with it
+  replaying legal through `t5d-gate` (`tests/engine/test_netplay.py`).
+- Spec: §8.1, §12.4 (the optimistic row), §14.4 (held open in self-play), §13.1 6t; register D9,
+  D1, C14. Spec issue 233; proposed edit 174.
+
 ### 2026-10-23 - Network D4: the soft-policy head and the opponent-reply prototype
 
 Register D4 (§12.4, CHECKPOINT 7, reversal 29) in the network.

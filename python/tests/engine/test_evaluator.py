@@ -371,3 +371,39 @@ def test_the_network_delivers_every_value_head_to_the_search(small_model):
         assert info.root_moves_left == pytest.approx(root.moves_left, rel=1e-5)
         assert all(ev.value_logits is not None and math.isfinite(ev.error) for evs in rec.calls for ev in evs)
         assert info.evaluations == sum(len(evs) for evs in rec.calls) and info.uncertainty_missing == 0, source
+
+
+def test_an_optimistic_evaluator_delivers_the_optimistic_prior_with_the_same_values():
+    """D9 (match play only): an evaluator built with ``policy="optimistic"`` delivers the optimistic
+    head's move and submit logits as the prior, and the same value heads as the normal evaluator -
+    on the dense path and the cached one; a network without the head, or an unknown source, is
+    refused."""
+    from t5d.engine.evaluator import POLICY_SOURCES, policy_source
+    from t5d.train.smoke import with_actions
+
+    assert POLICY_SOURCES == ("normal", "optimistic")
+    model = build_model(NetConfig(trunk_dtype="fp32", n_layers=2, optimistic_policy=True, attn_scope="block_causal"), seed=8).eval()
+    states = with_actions([synthetic_state(50 + i, n) for i, n in enumerate((2, 3, 1, 4))])
+    normal = NetworkEvaluator(model, scope="block_causal")
+    optimistic = NetworkEvaluator(model, scope="block_causal", policy="optimistic")
+    assert policy_source(normal) == "normal" and policy_source(optimistic) == "optimistic"
+    out = model(collate(states), scope="block_causal")
+    cached = CachedNetworkEvaluator(CachedEvaluator(model), policy="optimistic")
+    cached.start(states[0])
+    for i, (a, b) in enumerate(zip(normal(states), optimistic(states), strict=True)):
+        m = int(states[i].moves.shape[0])
+        np.testing.assert_allclose(b.policy_logits, out.optimistic_logits[i, :m].numpy(), atol=1e-5)
+        assert not np.allclose(a.policy_logits, b.policy_logits, atol=1e-3)
+        if bool(out.submit_valid[i]):
+            assert b.submit_logit == pytest.approx(float(out.optimistic_submit_logits[i]), abs=1e-5) and b.submit_logit != a.submit_logit
+        else:
+            assert math.isnan(b.submit_logit)
+        np.testing.assert_array_equal(a.wdl_logits, b.wdl_logits)
+        np.testing.assert_array_equal(a.value_logits, b.value_logits)
+        assert (a.error, a.moves_left) == (b.error, b.moves_left)
+    (c,) = cached([states[0]])
+    np.testing.assert_allclose(c.policy_logits, out.optimistic_logits[0, : int(states[0].moves.shape[0])].numpy(), atol=1e-4)
+    with pytest.raises(ValueError, match="D9"):
+        NetworkEvaluator(build_model(NetConfig(trunk_dtype="fp32", n_layers=1), seed=0), policy="optimistic")
+    with pytest.raises(ValueError, match="policy must be"):
+        NetworkEvaluator(model, policy="greedy")

@@ -4,13 +4,14 @@ behind its flag, D9's optimistic policy (section 8.1) - and their losses on synt
 
 from __future__ import annotations
 
+import math
 from dataclasses import replace
 
 import pytest
 import torch
 
 from t5d.net import NetConfig, build_model, collate, synthetic_states
-from t5d.train.losses import LossConfig, compute_losses, soft_policy_target
+from t5d.train.losses import LossConfig, compute_losses, optimistic_weights, soft_policy_target
 from t5d.train.smoke import smoke_train, synthetic_targets, with_actions
 
 pytestmark = pytest.mark.grad
@@ -90,3 +91,53 @@ def test_a_few_optimiser_steps_reduce_the_soft_and_reply_losses():
         report = smoke_train(cfg, steps=3, seed=6, loss_cfg=LossConfig(weights={name: 1.0}))
         first, last = report.losses[0][name], report.losses[-1][name]
         assert last < first, (name, first, last)
+
+
+# --- register D9: the optimistic policy (a prototype, behind its flag) ---------------------------------
+
+
+def test_the_optimistic_weight():
+    """Section 8.1 / D9: each sample weighted clamp(0, 1, sigmoid((z - 1.5) x 3)), z how far the
+    mover's short-term outcome beat the network's value in units of its predicted error: 0.5 at
+    z = 1.5, towards 1 above, towards 0 below; NaN without a short-term target; no gradient."""
+    v = torch.zeros(5, requires_grad=True)
+    err = torch.full((5,), 0.25, requires_grad=True)  # sqrt = 0.5
+    st = torch.tensor([0.75, 3.0, -1.0, 0.0, math.nan])  # z = 1.5, 6, -2, 0, nan
+    w = optimistic_weights(st, v, err, eps=0.0)
+    assert float(w[0]) == pytest.approx(0.5) and float(w[1]) > 0.999 and float(w[2]) < 1e-4
+    assert 0.0 <= float(w[3]) <= 0.02 and math.isnan(float(w[4]))
+    assert not w.requires_grad
+
+
+def test_the_optimistic_loss_exists_only_under_its_flag_and_trains_only_its_head():
+    """D9: off, there is no optimistic head and no loss; on, the loss is the weighted cross-entropy
+    of its own actions against the normal policy target over the full searches (the weighted sum
+    over their number), reaching its own projections and submit readout - never the value, the
+    short-term or the error heads through the weight."""
+    _, model, batch, tgt = _setup()
+    assert model.optimistic is None and "optimistic" not in compute_losses(model(batch), tgt)
+    cfg, model, batch, tgt = _setup(optimistic_policy=True)
+    out = model(batch)
+    losses = compute_losses(out, tgt)
+    lc = LossConfig()
+    w = optimistic_weights(tgt.short_term[:, lc.error_horizon], out.search_value(), out.value_error)
+    target = torch.cat([tgt.policy, tgt.submit[:, None]], -1)
+    valid = out.action_valid()
+    logp = torch.log_softmax(out.optimistic_action_logits().masked_fill(~valid, float("-inf")), -1).masked_fill(~valid, 0.0)
+    per = -(target * logp).sum(-1)
+    keep = tgt.full_search & torch.isfinite(w)
+    assert torch.allclose(losses["optimistic"], (w[keep] * per[keep]).sum() / keep.sum(), rtol=1e-5)
+    losses["optimistic"].backward()
+    head = model.optimistic
+    assert float(head.pointer.src.weight.grad.abs().sum()) > 0 and float(head.submit.out.weight.grad.abs().sum()) > 0
+    for m in (model.value.wdl, model.value.short_term, model.value.error, model.value.categorical, model.policy):
+        assert all(p.grad is None or float(p.grad.abs().sum()) == 0.0 for p in m.parameters()), m
+
+
+def test_a_few_optimiser_steps_reduce_the_optimistic_loss():
+    """At most three optimiser steps on synthetic targets (short-term targets above the network's
+    value, so the samples weigh): the loss, optimised alone, falls. Not training."""
+    cfg = NetConfig(trunk_dtype="fp32", n_layers=2, optimistic_policy=True)
+    report = smoke_train(cfg, steps=3, seed=6, loss_cfg=LossConfig(weights={"optimistic": 1.0}, optimistic_centre=-10.0))
+    first, last = report.losses[0]["optimistic"], report.losses[-1]["optimistic"]
+    assert last < first, (first, last)

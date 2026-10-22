@@ -121,6 +121,7 @@ from .config import NetConfig
 from .displacement import DisplacementBias
 from .embed import InputEmbedding
 from .heads import (
+    ActionHead,
     AuxHeads,
     PointerHead,
     SubmitHead,
@@ -174,6 +175,10 @@ class NetOutput:
     soft_policy_logits: torch.Tensor | None = None
     soft_submit_logits: torch.Tensor | None = None
     opp_reply_logits: torch.Tensor | None = None
+    # D9 (a prototype), None where it is not built: the optimistic policy's move logits (B, M) and
+    # its own submit logit (B,), masked as ``submit_logits`` is - match play's prior (section 8.1).
+    optimistic_logits: torch.Tensor | None = None
+    optimistic_submit_logits: torch.Tensor | None = None
     trunk: torch.Tensor | None = None  # (B, L, d) final-normed trunk output, if requested
 
     def wdl_probs(self) -> torch.Tensor:
@@ -208,6 +213,13 @@ class NetOutput:
         if self.soft_policy_logits is None or self.soft_submit_logits is None:
             raise ValueError("this network has no soft policy head (NetConfig.soft_policy)")
         return torch.cat([self.soft_policy_logits, self.soft_submit_logits[:, None]], dim=-1)
+
+    def optimistic_action_logits(self) -> torch.Tensor:
+        """``(B, M + 1)``: D9's optimistic policy's move logits, then its submit logit - over the
+        same actions as ``action_logits``, masked the same way; ``ValueError`` if it is not built."""
+        if self.optimistic_logits is None or self.optimistic_submit_logits is None:
+            raise ValueError("this network has no optimistic policy head (NetConfig.optimistic_policy)")
+        return torch.cat([self.optimistic_logits, self.optimistic_submit_logits[:, None]], dim=-1)
 
     def action_valid(self) -> torch.Tensor:
         """``(B, M + 1)`` bool: the candidate moves, then whether submit is a legal candidate."""
@@ -256,6 +268,9 @@ class T5DNet(nn.Module):
         self.value = ValueHeads(cfg)  # D3: WDL, the categorical, the short-term values, the error head
         self.aux = AuxHeads(cfg)
         self.submit = SubmitHead(cfg)
+        # D9 (a prototype, behind its flag): the optimistic policy - its own projections, offset and
+        # submit logit; made without drawing and drawn from a generator of its own (``d9_seed``).
+        self.optimistic = ActionHead(cfg, cfg.optimistic_policy_dim, cfg.pointer_promotion_offset) if cfg.optimistic_policy else None
         self._init_weights()
 
     # -- initialisation --
@@ -271,6 +286,8 @@ class T5DNet(nn.Module):
     #: Register D4's soft policy and opponent-reply prototype (CHECKPOINT 7), each drawn from a
     #: generator of its own (``d4_soft_seed``, ``d4_reply_seed``).
     _D4_MODULES = ("aux.soft_policy", "aux.opp_reply")
+    #: Register D9's optimistic policy (a prototype), drawn from its own generator (``d9_seed``).
+    _D9_MODULES = ("optimistic",)
 
     def _retired_draws(self, name: str) -> tuple[tuple[int, int], ...]:
         """The ``(out, in)`` shapes of retired Linear modules whose initialisation draws follow
@@ -316,7 +333,7 @@ class T5DNet(nn.Module):
                     continue  # drawn last (reset_parameters)
                 if any(
                     name == own or name.startswith(own + ".")
-                    for own in self._D8_MODULES + self._A6_MODULES + self._D3_MODULES + self._D4_MODULES
+                    for own in self._D8_MODULES + self._A6_MODULES + self._D3_MODULES + self._D4_MODULES + self._D9_MODULES
                 ):
                     continue  # drawn after the rest (below)
                 if isinstance(module, nn.Linear):
@@ -354,7 +371,8 @@ class T5DNet(nn.Module):
                 _draw_linear(lin, d3, cfg.init_bias_std)
             # D4 (CHECKPOINT 7): the soft policy and the reply prototype, each from its own generator,
             # so that switching either changes no other parameter (and no flag changes theirs).
-            for head, seed_of in ((self.aux.soft_policy, d4_soft_seed), (self.aux.opp_reply, d4_reply_seed)):
+            # D9 (a prototype) likewise.
+            for head, seed_of in ((self.aux.soft_policy, d4_soft_seed), (self.aux.opp_reply, d4_reply_seed), (self.optimistic, d9_seed)):
                 if head is not None:
                     gen = torch.Generator(device="cpu").manual_seed(seed_of(torch.initial_seed()))
                     for lin in head.modules():
@@ -539,6 +557,10 @@ class T5DNet(nn.Module):
             if self.aux.soft_policy is not None:  # D4: its own projections and submit logit
                 soft_moves, soft_raw = self.aux.soft_policy(h, batch)
                 soft_submit = soft_raw.masked_fill(~legal.to(soft_raw.device), float("-inf"))
+            optimistic_moves = optimistic_submit = None
+            if self.optimistic is not None:  # D9's prototype, behind its flag
+                optimistic_moves, optimistic_raw = self.optimistic(h, batch)
+                optimistic_submit = optimistic_raw.masked_fill(~legal.to(optimistic_raw.device), float("-inf"))
             reply = None
             if self.aux.opp_reply is not None:  # D4's prototype, behind its flag
                 reply = self.aux.opp_reply(h, batch.opp_moves, batch.opp_move_valid, sq)
@@ -564,6 +586,8 @@ class T5DNet(nn.Module):
                 soft_policy_logits=soft_moves,
                 soft_submit_logits=soft_submit,
                 opp_reply_logits=reply,
+                optimistic_logits=optimistic_moves,
+                optimistic_submit_logits=optimistic_submit,
                 trunk=h if return_trunk else None,
             )
 
@@ -652,6 +676,12 @@ def d4_reply_seed(seed: int) -> int:
     return (int(seed) * 0x9E3779B97F4A7C15 + 0xD4E) & 0xFFFFFFFFFFFFFFFF
 
 
+def d9_seed(seed: int) -> int:
+    """The seed of D9's optimistic policy's own generator (``T5DNet._init_weights``), from the
+    model's."""
+    return (int(seed) * 0x9E3779B97F4A7C15 + 0xD9) & 0xFFFFFFFFFFFFFFFF
+
+
 def b15_seed(seed: int) -> int:
     """The seed of B15's own generator (its displacement table, ``T5DNet._init_weights``),
     from the model's."""
@@ -696,6 +726,7 @@ def parameter_breakdown(model: T5DNet) -> dict[str, int]:
         "head.policy": count(model.policy),
         "head.value": count(model.value),
         "head.submit": count(model.submit),
+        "head.optimistic": count(model.optimistic),
     }
     for name, mod in model.aux.named_children():
         out[f"aux.{name}"] = count(mod)

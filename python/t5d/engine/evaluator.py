@@ -77,6 +77,12 @@ PositionLike = Position | PositionState
 #: without it (the engine's ``uncertainty_missing`` counts it where nothing reads it).
 ERROR_HEAD_FIELD = "value_error"
 
+#: Which policy head an evaluator delivers as the prior (register D9): the policy (``"normal"``), or
+#: the optimistic policy (``"optimistic"``) - match play only, "kept out of self-play" (section
+#: 8.1): ``netplay.play_game`` refuses an optimistic evaluator in self-play. The values are the
+#: same heads' either way.
+POLICY_SOURCES: tuple[str, ...] = ("normal", "optimistic")
+
 
 def state_of(position: PositionLike) -> PositionState:
     """The ``PositionState`` of a converted position (or the state itself)."""
@@ -174,20 +180,28 @@ class Evaluator(Protocol):
     def __call__(self, positions: Sequence[PositionLike]) -> list[Evaluation]: ...
 
 
-def _split(out: NetOutput, states: Sequence[PositionState]) -> list[Evaluation]:
-    """Per-position evaluations of a batch's output (row ``i`` is ``states[i]``): the policy,
+def _split(out: NetOutput, states: Sequence[PositionState], policy: str = "normal") -> list[Evaluation]:
+    """Per-position evaluations of a batch's output (row ``i`` is ``states[i]``): the policy
+    (``policy``: the normal policy's logits and submit logit, or D9's optimistic policy's),
     the submit logit and D3's value heads - the WDL, the categorical, the error head's output
     (``ERROR_HEAD_FIELD``; NaN for an output without one) and moves-left in turns (``expm1`` of
     the head's ``log1p``, floored at 0). The short-term values are training targets' heads the
     search does not read (section 8.3: the error head and D9 learn from them)."""
-    logits = out.policy_logits.detach().float().cpu()
+    if policy not in POLICY_SOURCES:
+        raise ValueError(f"policy must be one of {POLICY_SOURCES}")
+    moves_out, submit_out = out.policy_logits, out.submit_logits
+    if policy == "optimistic":
+        if out.optimistic_logits is None or out.optimistic_submit_logits is None:
+            raise ValueError("an optimistic evaluator needs a network with D9's head (NetConfig.optimistic_policy)")
+        moves_out, submit_out = out.optimistic_logits, out.optimistic_submit_logits
+    logits = moves_out.detach().float().cpu()
     valid = out.move_valid.detach().cpu()
     values = out.value_logits.detach().float().cpu()
     wdl = out.wdl_logits.detach().float().cpu()
     error_out = getattr(out, ERROR_HEAD_FIELD, None)
     errors = None if error_out is None else error_out.detach().float().cpu().reshape(-1)
     moves_left = torch.expm1(out.moves_left_log.detach().double().cpu().clamp(min=0.0))
-    submit = out.submit_logits.detach().float().cpu()
+    submit = submit_out.detach().float().cpu()
     submit_valid = out.submit_valid.detach().cpu()
     results = []
     for i, state in enumerate(states):
@@ -213,17 +227,42 @@ def _split(out: NetOutput, states: Sequence[PositionState]) -> list[Evaluation]:
     return results
 
 
+def _check_policy(model: T5DNet, policy: str) -> None:
+    if policy not in POLICY_SOURCES:
+        raise ValueError(f"policy must be one of {POLICY_SOURCES}")
+    if policy == "optimistic" and getattr(model, "optimistic", None) is None:
+        raise ValueError("an optimistic evaluator needs a network with D9's head (NetConfig.optimistic_policy)")
+
+
+def policy_source(evaluator) -> str:
+    """The prior an evaluator delivers (``POLICY_SOURCES``): its ``policy``, or ``"normal"`` for
+    one that names none."""
+    return getattr(evaluator, "policy", "normal")
+
+
 class NetworkEvaluator:
     """The dense path: ``collate`` and one forward per ``max_batch`` positions. ``scope``
     overrides the network's attention scope (None: its own); the network refuses a
     block-causal override of a dense-scope network while its B16 is switched on
     (``T5DNet.make_context``: its frozen boards would lose their status with no B16 table to
     give it back). The model is used as given (put it in ``eval()`` mode); positions converted
-    with other register counts than the network's are re-laid out (``state.relayout``, exact)."""
+    with other register counts than the network's are re-laid out (``state.relayout``, exact).
+    ``policy``: the prior delivered (``POLICY_SOURCES``) - ``"optimistic"`` (D9) for match play
+    only, on a network with the optimistic head."""
 
-    def __init__(self, model: T5DNet, *, max_batch: int = 32, device: torch.device | str | None = None, scope: str | None = None) -> None:
+    def __init__(
+        self,
+        model: T5DNet,
+        *,
+        max_batch: int = 32,
+        device: torch.device | str | None = None,
+        scope: str | None = None,
+        policy: str = "normal",
+    ) -> None:
         if max_batch < 1:
             raise ValueError("max_batch must be positive")
+        _check_policy(model, policy)
+        self.policy = policy
         self.model = model
         self.max_batch = int(max_batch)
         self.device = torch.device(device) if device is not None else next(model.parameters()).device
@@ -244,7 +283,7 @@ class NetworkEvaluator:
             batch = collate(states).to(self.device)
             with torch.no_grad():
                 out = self.model(batch, scope=self.scope)
-            results.extend(_split(out, states))
+            results.extend(_split(out, states, self.policy))
             self.batches += 1
             self.positions += len(states)
         return results
@@ -254,9 +293,12 @@ class CachedNetworkEvaluator:
     """The cached path (C2; ``net/cache.py``): each position evaluated incrementally - its
     frozen boards' K/V from the store, computed once per digest - in the epoch of the
     current search. ``start(root)`` opens a search (``CachedEvaluator.root_epoch``: a root
-    refresh under ``CacheConfig.root_refresh``, else the causal epoch)."""
+    refresh under ``CacheConfig.root_refresh``, else the causal epoch). ``policy``: as
+    ``NetworkEvaluator``'s."""
 
-    def __init__(self, cached: CachedEvaluator) -> None:
+    def __init__(self, cached: CachedEvaluator, *, policy: str = "normal") -> None:
+        _check_policy(cached.model, policy)
+        self.policy = policy
         self.cached = cached
         self.epoch: Epoch | None = None
 
@@ -288,7 +330,7 @@ class CachedNetworkEvaluator:
             for p in positions:
                 state = self._fit(state_of(p))
                 out = self.cached.evaluate(state, self.epoch)
-                results.extend(_split(out, [state]))
+                results.extend(_split(out, [state], self.policy))
         return results
 
 
@@ -631,11 +673,13 @@ __all__ = [
     "Evaluator",
     "Leaf",
     "NetworkEvaluator",
+    "POLICY_SOURCES",
     "SearchDriver",
     "ServeStats",
     "UniformEvaluator",
     "check_evaluation",
     "engine_epoch",
+    "policy_source",
     "run_search",
     "start_epoch",
     "serve",

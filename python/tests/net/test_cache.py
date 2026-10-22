@@ -90,7 +90,12 @@ def _close(a, b, atol_trunk=2e-5, atol=1e-4, what=""):
     assert torch.allclose(a.trunk, b.trunk, atol=atol_trunk), (what, float((a.trunk - b.trunk).abs().max()))
     for name in ("value_logits", "wdl_logits", "moves_left_log", "short_term", "value_error", "effort_logits", "board_logits"):
         assert torch.allclose(getattr(a, name), getattr(b, name), atol=atol), (what, name)
-    for name, valid in (("policy_logits", a.move_valid), ("soft_policy_logits", a.move_valid), ("opp_reply_logits", a.opp_move_valid)):
+    for name, valid in (
+        ("policy_logits", a.move_valid),
+        ("soft_policy_logits", a.move_valid),
+        ("optimistic_logits", a.move_valid),
+        ("opp_reply_logits", a.opp_move_valid),
+    ):
         if getattr(a, name) is None:
             assert getattr(b, name) is None, name
             continue
@@ -152,7 +157,7 @@ def test_cached_equals_one_full_pass(geometry, reading, supersession):
         dict(disp_register_pairs="shared", disp_far_edges=(3, 4, 6), disp_line_max=4, disp_init_std=1.0),
         dict(shaw_key_term=True, shaw_init_std=1.0, routing_table=True, typed_edge_bias=True, board_pair_smolgen=True),
         dict(shaw_key_term=True, shaw_shared_heads=True, status_bias_per_layer=True, status_bias_init_std=1.0),
-        dict(opp_reply=True, submit_head="pointer"),
+        dict(opp_reply=True, submit_head="pointer", optimistic_policy=True),
     ],
     ids=[
         "n2-all",
@@ -164,7 +169,7 @@ def test_cached_equals_one_full_pass(geometry, reading, supersession):
         "b15-placeholders",
         "b17-n2-all",
         "b17-shared-b16-per-layer",
-        "d4-reply-pointer-submit",
+        "d4-reply-d9-pointer-submit",
     ],
 )
 def test_cached_equals_one_full_pass_with_every_switch(flags):
@@ -176,7 +181,7 @@ def test_cached_equals_one_full_pass_with_every_switch(flags):
     board's rows get it from its own queries) and B16's placeholders moved. B15 - the v1 default -
     is on in every other test here: a frozen board's rows carry it, layer by layer
     (``compute_board``). D4's heads - the soft policy (on), the reply prototype (on here) - read
-    the cached trunk as the dense pass's (C2, C17)."""
+    the cached trunk as the dense pass's (C2, C17), as does D9's optimistic policy (on here)."""
     model = _model(3, **flags)
     root = _root("standard", 3)
     tree = SearchTree(CachedEvaluator(model), root)
