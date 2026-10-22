@@ -587,13 +587,14 @@ class EngineParseModeTests(DifferentialCase):
     def stated(self, name, record_id, rows, placements, **options):
         return described(obs(name, record_id, rows, **options), placements, [placement + 10 for placement in placements])
 
-    def run_parse(self, engine_rows=None, oracle_reports=None, entries=()):
+    def run_parse(self, engine_rows=None, oracle_reports=None, entries=(), floor=True):
         engine_rows = engine_rows or {item.id: self.parsed(item.id, [1, 2]) for item in self.records}
         oracle_reports = oracle_reports if oracle_reports is not None else {
             (oracle.name, item.id): self.stated(oracle.name, item.id, [W, B], [1, 2])
             for oracle in self.oracles for item in self.records}
         results, engine_results = self.reports(engine_rows, oracle_reports)
-        return gate.parse_differential(self.engine, self.oracles, self.records, results, engine_results, list(entries))
+        return gate.parse_differential(self.engine, self.oracles, self.records, results, engine_results, list(entries),
+                                       floor=floor)
 
     def test_an_engine_that_reads_every_record_as_the_oracles_do_agrees_and_gates_nothing(self):
         findings, agreement = self.run_parse()
@@ -654,6 +655,10 @@ class EngineParseModeTests(DifferentialCase):
         findings, agreement = self.run_parse(declined)
         self.assertEqual([item.code for item in findings], ["engine-nothing-compared"])
         self.assertEqual(agreement.read, 0)
+        # The floor judges a tier as a whole: without it - a restricted run's comparison (H47, CHECKPOINT 8) - the same
+        # reading is no finding.
+        findings, agreement = self.run_parse(declined, floor=False)
+        self.assertEqual((findings, agreement.read), ([], 0))
 
     def test_a_telltale_is_a_telltale_in_parse_mode_too(self):
         # The entry says ftxi sets up position 1 wrongly; the engine sets up exactly what ftxi does.
@@ -752,6 +757,7 @@ class EngineParseModeTests(DifferentialCase):
         findings, agreement = self.run_parse(oracle_reports=reports)
         self.assertEqual([item.code for item in findings], ["engine-nothing-compared"])
         self.assertEqual((agreement.read, agreement.described, agreement.replays), (2, 0, 0))
+        self.assertEqual(self.run_parse(oracle_reports=reports, floor=False)[0], [])  # no floor: a restricted run's
 
 
 class WriteGoldenTests(unittest.TestCase):
@@ -1057,22 +1063,29 @@ class ResultTests(unittest.TestCase):
             self.assertNotIn("oracle layer [", text)
         self.assertIn(f"engine differential ({gate.RESTRICTED}): 1 finding against the engine; a restricted run gates no "
                       "ruleset", text)
-        # Its report says so, holds no verdict of a tier, and never stands in for a complete run's in the cache.
+        # Its report says so, holds no verdict of a tier - not even `ok`, a complete run's verdict: what it found is its
+        # `findings` - and never stands in for a complete run's in the cache.
         with tempfile.TemporaryDirectory() as folder, mock.patch.object(paths, "cache_dir", return_value=Path(folder)):
             restricted = self.release(engine="passed", gated={"Standard": self.THREE}, restricted_to=self.ONLY_FTXI)
+            self.assertTrue(restricted.ok)  # its exit code: it found nothing
             path = gate._write_report(restricted, {})
             report = json.loads(path.read_text(encoding="utf-8"))
             self.assertEqual(path.name, "gate-release-restricted.json")
             self.assertEqual((report["restricted"], report["restricted_to"], report["ok"], report["oracle_layer_ok"],
-                              report["engine"], report["gated"], report["ungated"], report["smoke_test"]),
-                             (gate.RESTRICTED, self.ONLY_FTXI, True, None, "compared", {}, {}, None))
+                              report["engine"], report["gated"], report["ungated"], report["smoke_test"],
+                              report["findings"]),
+                             (gate.RESTRICTED, self.ONLY_FTXI, None, None, "compared", {}, {}, None, []))
             self.assertEqual(report["proof_channel"], f"DISABLED - {gate.RESTRICTED}")
+            dirty = self.result(restricted_to=self.ONLY_FTXI, findings=[Finding("golden-unreproduced", "ftxi on r/1")])
+            found = json.loads(gate._write_report(dirty, {}).read_text(encoding="utf-8"))
+            self.assertEqual((found["ok"], [item["code"] for item in found["findings"]]), (None, ["golden-unreproduced"]))
             complete = json.loads(gate._write_report(self.release(engine="passed", gated={"Standard": self.THREE}), {})
                                   .read_text(encoding="utf-8"))
-            self.assertEqual((complete["restricted"], complete["restricted_to"], complete["engine"]),
-                             (None, None, "passed"))
+            self.assertEqual((complete["restricted"], complete["restricted_to"], complete["engine"], complete["ok"]),
+                             (None, None, "passed", True))
             self.assertEqual(sorted(Path(folder, "reports").iterdir()),
-                             [Path(folder, "reports", "gate-release-restricted.json"),
+                             [Path(folder, "reports", "gate-commit-restricted.json"),
+                              Path(folder, "reports", "gate-release-restricted.json"),
                               Path(folder, "reports", "gate-release.json")])
 
     def test_only_a_complete_run_of_a_full_strength_tier_that_requires_an_engine_enables_the_proof_channel(self):
@@ -1619,6 +1632,21 @@ class GateRunTests(unittest.TestCase):
         quiet = self.run_gate("nightly", only_sources=["ftxi", "cwmtt", "chessin5d"])
         self.assertEqual((quiet.findings(), quiet.ok), ([], True))
 
+    def test_a_restricted_run_does_not_hold_an_engine_in_parse_mode_to_the_tiers_floor(self):
+        # Parse mode's floor - the engine replayed some record, and something was compared with it - judges a tier as a
+        # whole (engine-nothing-compared): a complete run fails an engine that declines every record. A restricted run
+        # is no tier result (H47, CHECKPOINT 8; spec issue 133): it reports the findings it makes, and here there are
+        # none.
+        self.engine(mode="parse", declines=True)
+        complete = self.run_gate("commit")
+        self.assertEqual((self.codes(complete), complete.ok), (["engine-nothing-compared"], False))
+        for restriction in (dict(only_records=["r/std"]), dict(only_sources=["ftxi"])):
+            restricted = self.run_gate("commit", **restriction)
+            self.assertEqual((restricted.findings(), restricted.ok, restricted.restricted), ([], True, True), restriction)
+            self.assertEqual((restricted.engine, restricted.parse.read), ("passed", 0), restriction)
+            self.assertIn(f"engine differential (parse mode, {gate.RESTRICTED}): 0 findings against the engine",
+                          gate.summarise(restricted), restriction)
+
     def test_an_unexplained_divergence_fails_every_tier_the_smoke_test_included(self):
         # No known divergence records the flip. (A recorded one fails no tier - test_gate_live; a telltale fails the
         # commit tier too - test_an_engine_that_reproduces_a_recorded_oracle_error_is_caught_where_that_oracle_does_not_run.)
@@ -1718,6 +1746,23 @@ class GateRunTests(unittest.TestCase):
         self.assertEqual(result.baseline_note, "1 record(s) compared with what the engine read on the last green run "
                                                "(commit tier, recorded 2026-10-17): 0 declined")
 
+    def test_a_baseline_must_hold_every_record_of_its_tier(self):
+        # The pin catches an edit that does not re-pin; a line deleted and the file re-pinned with it passes the pin
+        # (H33: a deliberate double edit is review's job). Every tier's static checks - verify's - still fail a baseline
+        # that holds no line for a record of its tier, which no tier would hold the engine to: here r/tz, which the
+        # engine now declines, and which the comparison - over the records the baseline holds - would never name.
+        self.engine(declines={"r/tz"})
+        recorded = baseline.load(config.load().baseline.sha256)
+        del recorded.records["r/tz"]
+        baseline.write(recorded)  # the file and its pin, as a hand edit of both would leave them
+        for tier in ("commit", "nightly"):
+            result = self.run_gate(tier)
+            self.assertEqual(self.codes(result), ["engine-baseline-stale"], tier)
+            self.assertIn("engine-baseline.json holds no line for r/tz, a record of the commit tier, so no tier holds "
+                          "the engine to what it reads of it", result.findings()[0].message, tier)
+            self.assertEqual(result.baseline_note, "1 record(s) compared with what the engine read on the last green "
+                                                   "run (commit tier, recorded 2026-10-17): 0 declined", tier)
+
     def test_baseline_write_records_what_the_engine_read_on_a_green_run_and_pins_it(self):
         # H47, H33: written only by an explicit command, from a green run of the [baseline] tier, then pinned.
         paths.ENGINE_BASELINE_FILE.unlink()
@@ -1725,7 +1770,7 @@ class GateRunTests(unittest.TestCase):
         self.assertEqual(self.codes(self.run_gate()), ["engine-baseline-missing"])
         result, changed = gate.write_baseline(include_untracked=False, log=lambda _: None)
         self.assertEqual((result.ok, result.restricted, result.tier), (True, False, "commit"))
-        self.assertEqual(changed, ["no earlier baseline could be read: all 2 record(s) are new"])
+        self.assertEqual(changed, ["no baseline was pinned before: all 2 record(s) are new"])
         written = paths.ENGINE_BASELINE_FILE.read_bytes()
         self.assertEqual(config.load().baseline.sha256, util.sha256_text(written))
         recorded = baseline.parse(written)
@@ -1762,6 +1807,33 @@ class GateRunTests(unittest.TestCase):
         self.assertIsNone(config.load().baseline)
         with self.assertRaisesRegex(HarnessError, "no \\[baseline\\] table"):
             gate.write_baseline(include_untracked=False, log=lambda _: None)
+
+    def test_baseline_write_replaces_only_the_baseline_its_pin_vouches_for(self):
+        # H33: every read of a recorded answer verifies it first - the read of the baseline `baseline --write` replaces
+        # included, against which it lists what the new one no longer holds. Edited by hand - here to hold the engine to
+        # nothing on r/tz, which it now declines - that list would show no loss; gone, it could show none. So nothing is
+        # run or written until the pinned baseline is restored.
+        self.engine(declines={"r/tz"})
+        pinned, pin = paths.ENGINE_BASELINE_FILE.read_bytes(), config.load().baseline.sha256
+        edited = pinned.replace(b'"r/tz": {"end": "ok", "positions": 2', b'"r/tz": {"end": "unsupported", "positions": 0')
+        self.assertNotEqual(edited, pinned)
+        for broken, problem in ((edited, "does not match its pin"), (None, "not there, though gate.toml")):
+            if broken is None:
+                paths.ENGINE_BASELINE_FILE.unlink()
+            else:
+                paths.ENGINE_BASELINE_FILE.write_bytes(broken)
+            with mock.patch.object(gate, "run_tier") as run, self.assertRaisesRegex(
+                    HarnessError, f"{problem}.*restore it \\(git checkout -- oracles/engine-baseline.json\\)\\. Nothing "
+                                  "was run or written: a new baseline is recorded only over the one gate.toml pins"):
+                gate.write_baseline(include_untracked=False, log=lambda _: None)
+            run.assert_not_called()
+            self.assertEqual(config.load().baseline.sha256, pin)
+            self.assertEqual(paths.ENGINE_BASELINE_FILE.read_bytes() if broken else None, broken)
+        # Restored, it is replaced - and the record the engine now declines is listed as the loss it is.
+        paths.ENGINE_BASELINE_FILE.write_bytes(pinned)
+        _, changed = gate.write_baseline(include_untracked=False, log=lambda _: None)
+        self.assertEqual(changed, ["LOSS: r/tz - the engine declined its ruleset (no position), where it read it to its "
+                                   "end (2 positions)"])
 
     def test_a_golden_file_edited_before_the_run_is_never_compared(self):
         path = golden.golden_path("ftxi")
@@ -1824,6 +1896,12 @@ class GateRunTests(unittest.TestCase):
         self.assertTrue(release.proof_channel.startswith("DISABLED"))
         # A tier that can enable nothing is not failed for it; verify only reports it.
         self.assertEqual(self.run_gate("commit").findings(), [])
+        # Nor is a restricted run of the tier that can: no tier result, it never enables the proof channel, and the
+        # check - of the tier's required sets as a whole - is not made (H47, CHECKPOINT 8).
+        for restriction in (dict(only_records=["r/std"]), dict(only_sources=["ftxi", "ftxi:naive"])):
+            restricted = self.run_gate("release", **restriction)
+            self.assertEqual((restricted.findings(), restricted.ok), ([], True), restriction)
+            self.assertNotIn(gate.PROOF_SECTION, [title for title, _ in restricted.sections], restriction)
         found = gate.proof_channel_readiness(self.cfg, self.RECORDS, snapshot.take())
         self.assertEqual([item.code for item in found], ["proof-channel-vacuous"])
 

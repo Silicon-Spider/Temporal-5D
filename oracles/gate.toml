@@ -192,10 +192,13 @@ sha256 = "ab01119ebdfa2612e38df10860a916e15b4227c9966f3c4018aac552049c2261"
 # records the engine's reads only if the run is green - never by a gate run, never
 # by hand - and pinned here, as the rulebook is: `sha256` is the SHA-256 of its
 # text (CRLF folded to LF), written by the same command, and every read of the
-# file verifies it first. Here and not in golden/MANIFEST, which every
-# `golden --write` rewrites: re-recording the oracles must never re-pin it. A
-# re-recording is reviewed as a diff, one line per record; the command lists what
-# the new baseline no longer holds - a loss of checking, never churn.
+# file verifies it first, `baseline --write`'s read of the one it replaces
+# included. Here and not in golden/MANIFEST, which every `golden --write`
+# rewrites: re-recording the oracles must never re-pin it. A re-recording is
+# reviewed as a diff, one line per record; the command lists what the new
+# baseline no longer holds - a loss of checking, never churn, and never recorded
+# to make a gate run pass. Like MANIFEST, the pin guards against accident, not a
+# deliberate edit of the file and its pin together: that is review's job.
 [baseline]
 tier = "commit"
 sha256 = "ad689cf3be80b7cddf9b0e1b5b264edbd6cae875823db55120eebaaf9b3f06e0"

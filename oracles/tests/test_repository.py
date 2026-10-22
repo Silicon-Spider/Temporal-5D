@@ -56,7 +56,10 @@ class ConfigurationTests(unittest.TestCase):
         self.assertEqual(baseline.static_findings(self.cfg, records, frozen.baseline, frozen.baseline_problems), [])
         loaded = frozen.baseline
         tier = self.cfg.tier(spec.tier)
-        self.assertEqual(set(loaded.records), {record.id for record in corpus.select(records, tier.record_tiers, None)})
+        self.assertEqual(set(loaded.records), {record.id for record in corpus.select(records, tier.record_tiers, None)},
+                         f"the baseline holds a line for every record of the {spec.tier} tier, and no other: after a "
+                         f"change to its records, build the engine and record it again ({baseline.WRITE_COMMAND}), "
+                         "and review the diff (CONTRIBUTING.md)")
         self.assertGreater(loaded.read(), 0)
         # Recorded from the engine as gate.toml configures it, in full mode: a relative command, no machine's path.
         self.assertEqual((loaded.engine["command"], loaded.engine["mode"]), (list(self.cfg.engine_command), "full"))

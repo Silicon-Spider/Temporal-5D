@@ -19,11 +19,23 @@ It is a recorded answer, and is kept like one (H33):
     folded to LF), written by the same command - beside the rulebook's pin, and
     for the same reason: golden/MANIFEST is rewritten by every `golden --write`,
     and re-recording the oracles must never re-pin the engine's baseline. Every
-    gate run reads it once, verified against the pin, before anything is
-    compared (snapshot.take), and `verify` checks it;
+    read verifies it against the pin first: a gate run reads it once, before
+    anything is compared (snapshot.take), `verify` checks it, and
+    `baseline --write` reads the baseline it replaces only once it is shown to be
+    the one pinned - otherwise it runs and writes nothing;
   * one record per line, so that a re-recording is reviewed as a diff - and
     `baseline --write` lists what the new file no longer holds: a record the
     engine now reads less of is a loss of checking, never churn.
+
+What the pin catches is an edit that does not re-pin as well: an accident, a
+partial edit, a bad merge, a file changed while a run lasts. A file edited
+together with its pin - one SHA-256 away - passes every check; as for MANIFEST
+(H33), only review catches that. What makes such an edit show in review: the
+file and its pin change only together, one line per record, so a hand edit is a
+diff of a record's line and of the pin with no `baseline --write` run behind it;
+and `verify` fails a baseline that holds no line for a record of its tier, so a
+line cannot simply be deleted. Recording a LOSS with `baseline --write` to make a
+gate run pass is the same edit by other means, and is never done.
 
 What a gate run compares - in every tier that runs the engine in full mode, a
 restricted run included, over the records the baseline holds that the run ran:
@@ -53,12 +65,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import config, paths
-from .corpus import Record
+from .corpus import Record, select
 from .observations import HARD_REJECTIONS, UNREADABLE, Observation
 from .util import Finding, HarnessError, platform_key, sha256_text
 
 SCHEMA = 1
 WRITE_COMMAND = f"python {paths.HARNESS_REL}/harness.py baseline --write"
+RESTORE_COMMAND = f"git checkout -- {paths.HARNESS_REL}/{paths.ENGINE_BASELINE_FILE.name}"
 # How a run that read the record ended with a verdict on its last action: every action replayed, or one refused as
 # illegal. A refusal as unreadable is no verdict (the gate's own rule: oracles/README.md, "The engine contract").
 _REFUSED = tuple(f"rejected:{reason}" for reason in HARD_REJECTIONS)
@@ -228,36 +241,28 @@ def parse(raw: bytes, digest: str = "") -> Baseline:
 
 
 def load(pin_digest: str, path: Path | None = None) -> Baseline:
-    """The baseline, read only once its bytes are shown to be the ones gate.toml pins (H33)."""
+    """The baseline, read only once its bytes are shown to be the ones gate.toml pins (H33).
+
+    The only way the baseline is read - by a gate run, `verify`, and `baseline --write`, which lists what a new
+    baseline no longer holds against this one: never against a file edited by hand.
+    """
     path = path or paths.ENGINE_BASELINE_FILE
     try:
         raw = path.read_bytes()
     except (FileNotFoundError, IsADirectoryError, NotADirectoryError):
         raise BaselineError("engine-baseline-missing",
-                            f"{path.name}: not there, though gate.toml [baseline] pins it - record it: "
-                            f"{WRITE_COMMAND}") from None
+                            f"{path.name}: not there, though gate.toml [baseline] pins it - restore it "
+                            f"({RESTORE_COMMAND})") from None
     digest = sha256_text(raw)
     if digest != pin_digest:
         raise BaselineError("engine-baseline-integrity",
                             f"{path.name} does not match its pin in gate.toml [baseline] ({pin_digest[:12]}; it is "
                             f"now {digest[:12]}): it was changed after `baseline --write` wrote it - a recorded answer "
-                            f"is never edited by hand; restore it, or record it again: {WRITE_COMMAND}")
+                            f"is never edited by hand; restore it ({RESTORE_COMMAND})")
     try:
         return parse(raw, digest)
     except HarnessError as error:
         raise BaselineError("engine-baseline-invalid", f"{path.name}: {error}") from None
-
-
-def read_previous(path: Path | None = None) -> Baseline | None:
-    """The baseline on disk, read leniently - no pin, None where it cannot be read.
-
-    Only for `baseline --write`, to say what a new baseline no longer holds that the one it replaces did; never for a
-    comparison.
-    """
-    try:
-        return parse((path or paths.ENGINE_BASELINE_FILE).read_bytes())
-    except (OSError, HarnessError):
-        return None
 
 
 # --- checking -----------------------------------------------------------------------
@@ -265,11 +270,13 @@ def read_previous(path: Path | None = None) -> Baseline | None:
 
 def static_findings(cfg: config.GateConfig, records: list[Record], loaded: Baseline | None,
                     problems: list[Finding]) -> list[Finding]:
-    """Is the baseline there, the file its pin names, and about the corpus as it is?
+    """Is the baseline there, the file its pin names, and about the corpus as it is - every record of its tier?
 
     Required wherever an engine is compared in full mode: without it the commit
     tier could not tell a record the engine declines from one it never read
     (H47). ``loaded`` and ``problems`` are what the snapshot read (snapshot.take).
+    A record of the tier it holds no line for is one no tier holds the engine to:
+    added to the corpus since the baseline was recorded, or its line deleted.
     """
     spec = cfg.baseline
     if spec is None or not spec.sha256:
@@ -300,6 +307,13 @@ def static_findings(cfg: config.GateConfig, records: list[Record], loaded: Basel
             findings.append(Finding("engine-baseline-stale",
                                     f"{paths.ENGINE_BASELINE_FILE.name}: {record_id} was recorded for other record "
                                     f"content - record it again ({WRITE_COMMAND}) and review the diff"))
+    tier = cfg.tiers.get(spec.tier)
+    for record in select(records, tier.record_tiers) if tier is not None else []:
+        if record.id not in loaded.records:
+            findings.append(Finding("engine-baseline-stale",
+                                    f"{paths.ENGINE_BASELINE_FILE.name} holds no line for {record.id}, a record of the "
+                                    f"{spec.tier} tier, so no tier holds the engine to what it reads of it - record it "
+                                    f"again ({WRITE_COMMAND}) and review the diff"))
     return findings
 
 
@@ -348,9 +362,12 @@ def read_nothing(records: list[Record], reads: dict[str, Observation]) -> Findin
 
 
 def changes(previous: Baseline | None, new: Baseline) -> list[str]:
-    """What a new baseline holds differently from the one it replaces, for review - a loss first of all."""
+    """What a new baseline holds differently from the one it replaces, for review - a loss first of all.
+
+    ``previous``: the baseline gate.toml pinned, read verified (load); None where none was pinned.
+    """
     if previous is None:
-        return [f"no earlier baseline could be read: all {len(new.records)} record(s) are new"]
+        return [f"no baseline was pinned before: all {len(new.records)} record(s) are new"]
     lost, gained, other = [], [], []
     for record_id in sorted(previous.records.keys() | new.records.keys()):
         old, fresh = previous.records.get(record_id), new.records.get(record_id)

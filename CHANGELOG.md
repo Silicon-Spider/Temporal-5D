@@ -10,6 +10,68 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-22 - G3b-H47-CP8 review fixes: the baseline read verified before it is replaced; restricted runs skip the proof-channel readiness check; the ftxi question cites C7's sources
+
+Thirteen review findings on the two entries below (none refuted).
+
+- **`baseline --write` replaces only the pinned baseline** (`oracles/oracle_harness/gate.py`
+  `write_baseline`, `baseline.py`). It read the file it replaces leniently
+  (`read_previous`, removed), so a hand edit of the file could empty the `LOSS` list it
+  prints. It now reads it with `baseline.load` against the `[baseline]` pin and, where the
+  file is not the one pinned (edited, or gone), runs and writes nothing; the integrity and
+  missing findings now say to restore the file (`git checkout -- oracles/engine-baseline.json`),
+  never to record over it. `baseline.static_findings` also fails a baseline that holds no
+  line for a record of its tier (`engine-baseline-stale`), so `verify` - not only
+  `selftest` - catches a record added to the commit tier, or a line deleted. The docs
+  (`baseline.py`, `integrity.py`, `gate.toml`'s comment, the README's integrity bullet and
+  "The engine's baseline", `CONTRIBUTING.md`) now say that every read is verified and state
+  the pin's limit as MANIFEST's: a file edited together with its pin passes it - review's
+  job (H33). `CONTRIBUTING.md`'s "Changing a pin" (a new step 8) and "Adding game records"
+  say to record the baseline again after a change to the commit tier's records;
+  `test_repository`'s assertion names the command.
+- **Restricted runs** (`gate.py`): a restricted run of the release tier no longer makes the
+  proof-channel readiness check (`proof-channel-vacuous`, a check of the tier as a whole
+  that only a complete run can act on; `verify` still prints it) - it failed every
+  restricted release run on H48's 17 notes. A restricted report's `ok` is now null, like
+  `oracle_layer_ok`, so that no script reads it as a tier pass; its `findings` say what it
+  found. Tests: parse mode's floor with `floor=False`, a whole restricted parse-mode run
+  of an engine that declines everything (no finding; the complete run fails on
+  `engine-nothing-compared`), a restricted release run with no readiness section, the
+  report's `ok`, and `baseline --write` refusing an edited or missing baseline.
+- **Documents**: `oracles/README.md`'s smoke-test paragraph no longer says a commit-tier
+  ruleset can meet the gating conditions with that tier's oracles alone. `docs/BUILD_LOG.md`:
+  the H47 row (what changed for a restricted run; the `AGENTS.md` lines put to the user -
+  never edit the baseline or its pin by hand, never record a `LOSS` to make a gate run
+  pass); issue 126's ruling line in main's exact wording (a8a5920) and its built note;
+  issues 132 (a) and 133; proposed edit 104 carries H33's double-edit limit to the
+  baseline's pin.
+- **The ftxi question** (`docs/checkpoints/upstream/ftxi-check-test-passed-boards.md`): the
+  sources C7 cites added in the rulebook's rank order (wiki.gg's Exiling page, TV Tropes
+  with C7's caveat, and the forum statements on boards ahead of the present - Asp,
+  Patashu, Dark MAvL - and on inactive timelines - Perseus, Rayalot72); "92 positions in 12
+  game records (91 distinct in 11 games: cwmtt/NP and NP0 are one game)"; the copy the
+  attacker moves from is the next half-turn's board, distances counted from it; the
+  captures named as those `check_position::for_phantom(...).checks()` lists (what the
+  driver observed), not `phantom().find_checks()`; R1 quoted in full, no paraphrase in
+  quotation marks, "cwmtt has no check verdict", and the inactive-timeline proviso for
+  positions 3 and 5. `docs/checkpoints/upstream/README.md` and the entry below corrected
+  to match.
+- Checks (2026-10-22, MSYS2 g++; timings on a shared machine are not measurements): `py
+  engine/build.py --werror` - nothing to rebuild; `harness.py verify` - every section ok,
+  `engine baseline` among them, H48's 17 `proof-channel-vacuous` notes as before;
+  `harness.py baseline` - the pinned baseline (ad689cf3be80), unchanged; `selftest` - 663
+  tests OK, 1 skipped; `gate --tier commit` - ok, `SMOKE TEST - PASSED`, the baseline 41
+  compared and 0 declined; `gate --tier nightly` - ok, `PASSED`, every source's required
+  set reproduced, gating Standard - Half Reflected (2 oracles) and Standard - Reversed
+  Royalty (3), as before; `gate --tier release --source notation --record notation/1.1
+  --tracked-only` - `restricted - not a tier result: ... - 0 findings`, exit 0 (it exited
+  1 on the 17 readiness findings before); `ruff check oracles` - clean.
+- Spec: §11.0 "Tiered CI", "Recorded-answer integrity" and "A known-divergences file";
+  register H47, H33, H27, H36 (R1, C7). Spec issues 126, 132, 133 (built notes corrected);
+  proposed edit 104 (extended: the pin's limit). No golden file, budget, `min_checked`,
+  margin, `proof_share`, waiver, adapter or driver changed; the baseline and its pin are
+  unchanged.
+
 ### 2026-10-17 - Gate H27 (CHECKPOINT 8): the ftxi check-reading question drafted for upstream
 
 The user's ruling on spec issue 126: "report it too, as a question citing the source and a
@@ -32,7 +94,9 @@ docs/checkpoints/upstream/; I'll file it."
   `--at` turn, the boards the player must and may play, the capture ftxi finds and why R1
   does not count it. Each capture re-observed 2026-10-17 through the pinned library (the
   harness's ftxi driver, `observe --explain`: `has_phantom_check()` and the captures
-  `find_checks()` lists on the phantom) and each position's timeline counts with the stock
+  ftxi's royal-capture scanner lists on the phantom, `check_position::for_phantom(...)
+  .checks()` - not `phantom().find_checks()`, as first written here; corrected in the
+  review fixes above) and each position's timeline counts with the stock
   `5dtools stats`. `docs/checkpoints/upstream/README.md` lists it, with what to check
   before filing.
 - `oracles/known-divergences.toml`: the 147 entries R1 settles (ftxi's and ftxi:naive's
