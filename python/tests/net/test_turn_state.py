@@ -207,12 +207,16 @@ def test_the_features_of_a_count():
 def _same_boards(seed: int, global_regs: int = 16):
     """A turn start and three states with every board and the acting player equal: mid-turn after
     one and after two moves (section 2.3's case: "tells a turn start from a mid-turn state with the
-    same boards"), and one with a board fewer owed."""
+    same boards"), one with a board fewer owed, and one with an optional board fewer (which only
+    another ruleset could give equal boards - it pins the optional count in the digest)."""
     s = synthetic_state(seed, 14, n_timelines=4, duplicate_prob=0.3, global_regs=global_regs)
     m = s.turn_state.mandatory_remaining
     others = [replace(s, moves_made=1), replace(s, moves_made=2)]
     if m > 1:
         others.append(replace(s, mandatory_remaining=m - 1, moves_made=1))
+    o = s.turn_state.optional_playable
+    if o >= 1:
+        others.append(replace(s, optional_playable=o - 1))
     return s, others
 
 
