@@ -3,7 +3,8 @@
 Every figure measured during the untrained build, with the conditions it was
 measured under, beside the estimate it replaces (spec §15.3) and the verdict of
 any pre-registered threshold it decides (spec §15.6, register M7-M9). Phase 1 counts
-that decide no threshold (the turn width, M22) are at the end.
+that decide no threshold (the turn width, M22; D2's tree form's evaluation counts) are
+at the end.
 
 The spec and the register are not edited in this repository: a measured figure is
 recorded here, and the edit that writes it back over its estimate (M4) is proposed
@@ -926,3 +927,67 @@ than one mandatory board 27.1% -> 27.7%).
 - Optional moves actually played: 1.2%, 2.5% and 1.1% of turns, 1.1%, 2.0% and 0.6% of
   moves (362 of 29,073 in all), never more than two in a turn - against optional boards
   at 10.5%, 44.5% and 65.7% of turn starts.
+
+### D2's tree form against the ply split - evaluation counts on seven human-game turn starts (indicative; no threshold, no verdict)
+
+**What it is.** What the tree form (register D2; spec §8.2, "Evaluating at turn
+boundaries") buys at equal evaluations: the ply split evaluates the states between a
+turn's moves, the tree form only where an interaction gate fires (build-log spec
+issues 157-161), so more of a fixed evaluation budget reaches complete turns. Counts
+from a handful of positions with the built-in random evaluator - **indicative**: they
+show how much the gates' readings decide (issue 160), not what a trained network's
+search would do. No §15.6 threshold; 6x (with 6g, 6k) compares the arms at equal
+wall-clock, which these counts do not measure (proposed edit 130).
+
+**Conditions.** 2026-10-23, machine `dev-r` - counts, not timings: deterministic, so
+the shared machine's load does not matter. The search is lane/engine's at the D2
+tree form's review fixes (the tree form, f2b4679, and the fixes; a fresh root's
+search is unchanged by them - the counts below are, value for value, those the tree
+form's commit message quoted from an uncommitted scratch harness). The counting is
+`build/engine/t5d-tree-count build/t0db/*.5dpgn` (`engine/tools/t5d_tree_count.cpp`;
+its header defines every count), Release, MSYS2 g++ 16.2.0 (Rev3), `--werror`. Data:
+t0database (`data/t0database/`), converted by `py data/t0database/to_5dpgn.py
+build/t0db` (761 records), read in the glob's order. **Positions**: the first turn
+start at action 6 or later, not a game end, of each record that fills a class still
+wanting one - three with two mandatory boards (the k-th with at least 20k boards),
+three with three or more, one with one board and 30 boards or more; one per record;
+seven found in the first 32 records, none refused. **Arms**: the ply split; the tree
+form with §8.2's four gates at their placeholder readings; the tree form with no
+gate; the tree form with the present gate read as rewinds only (`tree_present`
+`Rewind`). Each a fresh search: the random evaluator (seed 1), synchronous (one leaf
+per evaluation), no evaluation cache, square features off, every other parameter the
+search's default (budgeted legality, widening on). Two runs per arm: to 400
+evaluations (playouts unbounded), and to 400 playouts.
+
+**At 400 evaluations - the turn starts the network evaluated** (the rest are mid-turn
+leaves; the root counts as a turn start), and the deepest evaluated turn start (turns
+below the root):
+
+| Record, action | boards | mandatory | ply split | tree form, §8.2's gates | tree form, present = rewind | tree form, no gate |
+|---|---|---|---|---|---|---|
+| t0db-0001, 28 | 30 | 1 | 122 (7 deep) | 142 (6) | 290 (8) | 400 (8) |
+| t0db-0003, 57 | 60 | 2 | 93 (3) | 123 (4) | 249 (5) | 400 (6) |
+| t0db-0005, 26 | 34 | 4 | 74 (4) | 111 (4) | 218 (4) | 400 (7) |
+| t0db-0007, 32 | 40 | 2 | 89 (4) | 128 (5) | 203 (6) | 400 (7) |
+| t0db-0013, 50 | 60 | 2 | 91 (3) | 115 (3) | 276 (5) | 400 (5) |
+| t0db-0017, 26 | 33 | 3 | 87 (4) | 121 (4) | 173 (5) | 400 (6) |
+| t0db-0032, 29 | 37 | 4 | 81 (4) | 114 (4) | 227 (6) | 400 (6) |
+| **range** | | | **74-122 (18-31%)** | **111-142 (28-36%)** | **173-290 (43-73%)** | **400 (100%)** |
+
+**At 400 playouts - the mid-turn leaves by the gate that fired first** (between /
+capture / check / present) under §8.2's gates: 3/2/2/251, 14/6/5/252, 4/2/2/264,
+37/1/0/247, 24/13/13/229, 36/0/9/244, 28/1/1/251 (the rows' order above) - **the
+literal present gate is 229-264 of each 400**, the other three together 7-50. Read as
+rewinds only, the present gate fires 58-129 times and the check gate up to 92. The
+nodes inherited (expanded without the network) at 400 playouts: 87-204 under §8.2's
+gates, 269-501 with the present gate as rewinds, 571-840 with no gate; at 400
+evaluations the arms made 400-425 playouts (a simulation that ends at a game end
+needs no evaluation).
+
+*Read against §8.2 and issue 160.* With the literal present gate the tree form
+spends 28-36% of its evaluations on turn starts against the ply split's 18-31% - at
+one mandatory board its shift is the turn's last move, so the two nearly coincide -
+because the present's advance at every action's last mandatory move (T5) is itself a
+gate: a turn costs at least two evaluations. Read as rewinds only, 43-73%; with no
+gate every evaluation is a turn start's. The reading of "a shift of the present"
+decides most of what the tree form buys (issue 160, for the user before 6x).

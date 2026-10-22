@@ -26,7 +26,9 @@
  *  - POLICY: one float32 logit per candidate move, logit i scoring
  *    leaf.expansion.moves[i] (the expansion's own order). Under the tree form a leaf
  *    is the root, a turn start or a mid-turn state where an interaction gate fired;
- *    the states between are expanded on inherited logits and never reach the caller.
+ *    the states between are expanded on inherited logits and never reach the caller -
+ *    unless a re-root (t5d_search_advance*) makes one the root: it is then the first
+ *    leaf gathered after it, its statistics kept.
  *    Under the whole-turn
  *    split (D2's other arm) the candidates are the turn start's pseudo-legal
  *    moves, and the search derives each legal action's prior from them itself.
@@ -273,7 +275,8 @@ typedef struct t5d_search_params {
   int32_t tree_capture;           /* T5D_CAPTURE_* */
   int32_t tree_check;             /* T5D_CHECK_* */
   int32_t tree_inherit_value;     /* 1: an inherited node's value before any backup (its FPU
-                                     base) and uncertainty signal are its parent's evaluation's */
+                                     base) and uncertainty signal are its parent's evaluation's;
+                                     0 is refused with a term that reads the signal (6m) */
   int32_t tree_present;           /* T5D_PRESENT_* */
   t5d_expand_options expand;   /* the leaves' network input (k, features, relations); last */
 } t5d_search_params;

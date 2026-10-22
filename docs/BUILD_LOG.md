@@ -1675,7 +1675,7 @@ width (M22)", "The CHECKPOINT 8 figures"). Found on the way: the ruling's premis
 | D5 | not started (rule) | A training principle |
 | D6 | built (flag) | `board_reduction`, awaiting 6j |
 | D7 | not built | 6p's aggregate initialisation (training-side) - parked with 6p's other arms. The tension with D8 is settled: the submit logit is read from the pooled global registers, so D7 holds (D8, M20) - in the code since `lane/net`'s N-M20, with the value-type heads pooled the same way |
-| D2 | built in part | Three arms of `SearchParams::split`: the ply split (`BoardMove`, the default), the whole-turn arm (superseded by the flat form at CHECKPOINT 6, retired with it) and, since 2026-10-23, **the tree form** (`Tree`; CHECKPOINT 8's build order: tree form first) - the ply split's tree with the turn-start priors inherited inside a turn: a mid-turn node whose incoming move fires no interaction gate is expanded without the network (its legal children as a leaf's, their priors its parent's logits matched by coordinates) and the simulation runs on; the network is called at the root, at turn starts (complete turns) and where a gate fires (an ordinary leaf). The gates are §8.2's four - a move between boards still to move, a capture of a piece that could reach them, a change in check, a shift of the present - each reading a parameter with a placeholder default (issues 157-161), plus `kGateAlways`, the test seam for §15.2's row. Values: an inherited node backs up nothing of its own; the leaf's value passes through it (its visits = its children's). Refused under MCGS (issue 301). §15.2's row holds bit for bit (digest, statistics, root children) on every named variant, random-play and mid-turn roots, every tree configuration, both legality settings and the pseudo-legal seam, batched and synchronous, across a re-root, and through the C step API with the network (Python); §15.4's turn-structure invariants under it in every test configuration. C API and Python mirror (`T5D_SPLIT_TREE`, `tree_*`, the summary's `inherited_nodes` and `gate_*`); `t5d-play --split tree --tree-gates`; netplay's `split="tree"`. Indicative counts on seven t0database turn starts (1-4 mandatory boards, 30-60 boards; random evaluator, 400 evaluations): turn starts evaluated - ply split 74-122, tree form with §8.2's gates 111-142, with the present gate read as rewinds only 173-290, with no gate 400 - the literal present gate fires at every action's last mandatory move (issue 160). Next: the flat form, then the whole-turn arm retired; the flat form's head in the net lane. The Lazy SMP timing test before the merge (the main loop). Gate 6x (with 6g, 6k) |
+| D2 | built in part | Three arms of `SearchParams::split`: the ply split (`BoardMove`, the default), the whole-turn arm (superseded by the flat form at CHECKPOINT 6, retired with it) and, since 2026-10-23, **the tree form** (`Tree`; CHECKPOINT 8's build order: tree form first) - the ply split's tree with the turn-start priors inherited inside a turn: a mid-turn node whose incoming move fires no interaction gate is expanded without the network (its legal children as a leaf's, their priors its parent's logits matched by coordinates) and the simulation runs on; the network is called at the root, at turn starts (complete turns) and where a gate fires (an ordinary leaf) - the root always (since the review fixes, 2026-10-23: a re-root onto an inherited node, match play's carried tree, makes it a leaf to the next simulation, evaluated with its statistics kept; before them it stayed inherited and was never evaluated). The gates are §8.2's four - a move between boards still to move, a capture of a piece that could reach them, a change in check, a shift of the present - each reading a parameter with a placeholder default (issues 157-161), plus `kGateAlways`, the test seam for §15.2's row. Values: an inherited node backs up nothing of its own; the leaf's value passes through it (its visits = its children's); its FPU base and uncertainty signal are its parent's evaluation's (`tree_inherit_value`; off, with a term that reads the signal, refused - 6m). Refused under MCGS (issue 301). §15.2's row holds bit for bit (digest, statistics, root children) on every named variant, random-play and mid-turn roots, every tree configuration, both legality settings and the pseudo-legal seam, batched and synchronous, across a re-root, and through the C step API with the network (Python); §15.4's turn-structure invariants under it in every test configuration. Review fixes (2026-10-23): the carried root above; tested besides - the inherited value on and off, the inherited submit logit (through the step API), an inherited node's legality classification (no budget, the pseudo-legal seam), promotions matched, the gates under the Mandatory reading. C API and Python mirror (`T5D_SPLIT_TREE`, `tree_*`, the summary's `inherited_nodes` and `gate_*`); `t5d-play --split tree --tree-gates` (refused with another split); netplay's `split="tree"`. Indicative counts on seven t0database turn starts (1-4 mandatory boards, 30-60 boards; random evaluator, 400 evaluations; `t5d-tree-count`, docs/MEASUREMENTS.md): turn starts evaluated - ply split 74-122, tree form with §8.2's gates 111-142, with the present gate read as rewinds only 173-290, with no gate 400 - the literal present gate fires at every action's last mandatory move (issue 160). Next: the flat form, then the whole-turn arm retired; the flat form's head in the net lane. The Lazy SMP timing test before the merge (the main loop). Gate 6x (with 6g, 6k) |
 | D8 | built, tested | Engine and search (E7, E6a): submit an explicit edge, legal only when C4 holds, never automatic. Network (N5): a global acting-player input on the global registers (the ruled place, M20 - the `all_tokens` arm and `acting_player_input` removed, `lane/net` N-M20; with no global registers, an ablation-3 arm, on the board tokens - the live boards' under the block-causal scope - a placeholder fixed in code, issue 225, tested to reach every output under every register arm), one distribution over moves + submit, values from the acting player's perspective; the submit logit read from the pooled global registers - their mean, as the value head reads them (M20, N-M20: `submit_register` and register 0 gone; tested invariant to permuting the registers, moved by any one). The readout's form (`submit_head`: linear, 257 parameters, or the policy's bilinear form) is still a placeholder (issue 109). Under the flat form the generator ends turns itself (issue 92). Under A7 the input is the acting colour, every board token being the acting player's view (`lane/net` N-A7; issue 228) |
 | D9 | not started | The optimistic policy - a prototype (6t), match play only; its use in self-play is held open (§14.4): the net lane's heads, behind its flag, after engine round 2 |
 | E4 | principle (weakened) | "Narrow hard, because the auditor is watching" - the register now says weakened: it holds where the settling scans (< 50 boards) and Hunt (< 100) run, neither wired into the search on main (E10 lost; step 2); above that, narrowing is a bet on the audit lane and the league |
@@ -3592,8 +3592,12 @@ superseded or made moot says so; nothing is deleted.
     before it and after it. Gate (i) as built: a non-branching jump (J4) - its
     destination is a playable board of the mover's colour (J2) not yet played (a played
     board's successor has the opponent to move, and a jump onto it branches, J6), so a
-    board still to move under the Playable reading; under Mandatory, a mandatory one.
-    Proposed edit 129.
+    board still to move under the Playable reading; under Mandatory, a mandatory one -
+    the destination alone is read (the source is the board being played, a board still
+    to move under either reading but for an optional one under Mandatory: a jump from an
+    optional board onto a mandatory one fires, one from a mandatory board onto an
+    optional one does not). Tested under both readings, on positions with an optional
+    board (an inactive timeline's) where they differ. Proposed edit 129.
 158. **"A capture of a piece that could reach them"** (§8.2; register D2). Silent on what
     "reach" is (a move, an attack, through blocking pieces or not, in one move or more)
     and from where. Built (`tree_capture`): `Reach` (placeholder) - in the multiverse
@@ -3617,7 +3621,9 @@ superseded or made moot says so; nothing is deleted.
     fires essentially only under the pseudo-legal seam or on moves the budget left
     unknown - one reason for the placeholder. The opponent's check (a move that gives
     check) is not built as a reading: it bears on the opponent's next turn, not on the
-    boards still to move. Proposed edit 129.
+    boards still to move. Tested under both readings of the boards still to move (an
+    optional board's king in check with the board passed, not with it left). Proposed
+    edit 129.
 160. **"A shift of the present" fires on every action** (§8.2; the rulebook's T5: the
     present shifts as the obligations are met; register D2, D8). Read literally - any
     move of the present, its advance (T5) or a rewind (T8, T12) - the gate fires at the
@@ -3627,7 +3633,7 @@ superseded or made moot says so; nothing is deleted.
     optional move, and with one mandatory board the two coincide but for the optional
     moves after the shift. Measured (indicative counts; seven t0database turn starts of
     1-4 mandatory boards and 30-60 boards, the built-in random evaluator, synchronous,
-    no cache, 400 evaluations; a scratch harness, not committed): the share of
+    no cache, 400 evaluations; `t5d-tree-count`, conditions in docs/MEASUREMENTS.md): the share of
     evaluations spent at turn starts - ply split 18-31%, the tree form with the literal
     gates 28-36%, with the present gate read as rewinds only 43-73%, with no gate 100%;
     the literal present gate was 229-264 of each 400 playouts' first-fired gates. There
@@ -3646,15 +3652,29 @@ superseded or made moot says so; nothing is deleted.
     by source, destination and promotion (a J6 branch onto a board played since takes
     the coordinates, so the logit, of the non-branching jump it was), so a gated
     re-evaluation's logits replace the turn start's below it; (b) a move its parent did
-    not have takes the parent's lowest logit (the whole-turn arm's rule); (c) submit's
+    not have takes the parent's lowest logit (the whole-turn arm's rule) - such moves
+    arise: legality is judged for a move as the action's NEXT one, so a move with no
+    legal completion beginning with it at the parent can have one once another board
+    has been played (found by the review fixes on a two-board 4x4 position: 21 such
+    edges in a 500-playout search, each pseudo-legal and proved illegal at the parent;
+    tested); (c) submit's
     logit is carried down with the rest (NaN: `submit_share`, as at a leaf); (d) the
     priors are the leaf's softmax at the policy temperature over the node's own legal
     children (the same legality classification, the same unknown-move scale), k0 from
     their entropy; (e) `tree_inherit_value` (placeholder on): an inherited node's FPU base
-    and its uncertainty signal (E2's prior variance, E3's) are its parent's evaluation's,
-    not an unevaluated node's 0; (f) the root is always evaluated, so self-play's fresh
+    and its uncertainty signal (E2's cPUCT scale, E5's variance bonus and LCB term) are
+    its parent's evaluation's, not an unevaluated node's 0 - off, a term that reads the
+    signal is refused (6m); (f) the root is always evaluated, so self-play's fresh
     search per decision (C14) evaluates every mid-turn decision's root - inheritance
-    never crosses decisions; (g) a gated node is an ordinary leaf - evaluated, its value
+    never crosses decisions - and so does match play's carried tree (C12; since the
+    review fixes): a re-root onto an inherited node makes it a leaf to the next
+    simulation, the network evaluates it, its edges keep their children and statistics
+    ("carry statistics"), its value and its edges' logits and priors become the
+    evaluation's (as a fresh root's: the root temperature, no noise), and its children
+    keep what they inherited - the alternative, keeping an inherited carried root, would
+    leave a whole decision's search on priors the network never gave for that state and
+    a root with no value of its own (before the fixes, the build did that while the
+    documents said otherwise); (g) a gated node is an ordinary leaf - evaluated, its value
     backed up, the simulation ended (§8.2's "a simulation runs through the turn to a
     complete one and evaluates that" reads both ways; §15.2's row forces this one); (h)
     an inherited node backs up nothing of its own: the value of the leaf below passes
@@ -4646,8 +4666,10 @@ struck through, where nothing of it is left to apply); the others stand as writt
     check: R1's construction with the boards still to move passed; the present: any
     move of it, the advance at every action's shift included). Inner nodes inherit the
     logits of the nearest evaluated node above them, matched move by move; a gated node
-    is an ordinary leaf; an inherited node backs up only what passes through it. Not
-    under MCGS until issue 301 is ruled." And register D2's row: "tree form built behind
+    is an ordinary leaf; an inherited node backs up only what passes through it; the
+    root is always evaluated - a carried root that was inherited is evaluated when it
+    becomes the root, its statistics kept. Not under MCGS until issue 301 is ruled." And
+    register D2's row: "tree form built behind
     a flag (2026-10-23); §15.2's row passes". Why: issues 157-161, 301 - the documents
     name the gates without defining them, and 6x measures whatever the build reads them
     as.

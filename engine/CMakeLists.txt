@@ -317,6 +317,14 @@ if(MINGW)
   target_link_options(t5d-play PRIVATE -static)
 endif()
 
+# D2's tree form against the ply split on recorded games' turn starts:
+# evaluation counts (docs/MEASUREMENTS.md). Not one of the truth's sources.
+add_executable(t5d-tree-count tools/t5d_tree_count.cpp)
+target_link_libraries(t5d-tree-count PRIVATE t5d_tools)
+if(MINGW)
+  target_link_options(t5d-tree-count PRIVATE -static)
+endif()
+
 # ---- MinGW: no dependence on the toolchain's runtime DLLs --------------------------
 #
 # With MSYS2's MinGW-w64 g++, the C++ runtime (libstdc++, libgcc) and winpthreads

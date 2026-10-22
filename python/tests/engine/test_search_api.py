@@ -563,24 +563,42 @@ class Submitter:
         return out
 
 
+def _submit_prior(submit: float, moves: int) -> float:
+    """Submit's prior beside ``moves`` moves of logit 0: the softmax, or (NaN) the share 0.5."""
+    return 0.5 if math.isnan(submit) else math.exp(submit) / (math.exp(submit) + moves)
+
+
+@pytest.mark.parametrize("split", [T5D_SPLIT_BOARD_MOVE, T5D_SPLIT_TREE], ids=["ply", "tree-form"])
 @pytest.mark.parametrize("submit", [6.0, -6.0, math.nan])
-def test_the_submit_logit_reaches_the_submit_child(submit):
+def test_the_submit_logit_reaches_the_submit_child(submit, split):
     """D8 under the board-move split: at a state past the shift with moves left, the root offers
     the moves and submit; the network's submit logit sets submit's prior beside the moves'; NaN
-    (none given) leaves the search's placeholder share (0.5)."""
+    (none given) leaves the search's placeholder share (0.5). Under D2's tree form with no gate
+    the same holds one move further in, at a node the network never saw: it inherits the root's
+    submit logit beside its moves' inherited logits (read through a re-root onto it, before the
+    search evaluates it)."""
     g = _shifted_game_with_moves(seed=2)
+    flags = {"split": split} | ({"tree_gates": 0} if split == T5D_SPLIT_TREE else {})
     with g:
-        s = Search(g, turn_start=False, params=search_params(seed=1, widening=0))
+        s = Search(g, turn_start=False, params=search_params(seed=1, widening=0, **flags))
         ev = Submitter(submit)
-        run_search(s, ev, playouts=1)
+        run_search(s, ev, playouts=1 if split == T5D_SPLIT_BOARD_MOVE else 400)
     root = ev.seen[0]
     assert root.state.shifted and root.state.submit_possible and root.state.submit_legal and root.move_count > 0
     children = s.children()
     sub = [c for c in children if c.submit]
     assert len(sub) == 1
-    m = root.move_count
-    expected = 0.5 if math.isnan(submit) else math.exp(submit) / (math.exp(submit) + m)
-    assert sub[0].prior == pytest.approx(expected, rel=1e-5)
+    if split == T5D_SPLIT_BOARD_MOVE:
+        assert sub[0].prior == pytest.approx(_submit_prior(submit, root.move_count), rel=1e-5)
+        return
+    inherited = [c for c in children if not c.submit and c.visits > 0 and not c.evaluated]
+    assert inherited
+    s.advance(inherited[0].index)
+    assert not s.info().root_evaluated  # the inherited node, as it was
+    below = s.children()
+    sub = [c for c in below if c.submit]
+    assert len(sub) == 1
+    assert sub[0].prior == pytest.approx(_submit_prior(submit, len(below) - 1), rel=1e-5)
 
 
 def test_whole_turn_leaves_offer_no_submit():
@@ -672,6 +690,54 @@ def test_d2_the_tree_form_without_gates_asks_the_network_only_at_turn_starts():
         assert any(ev.moves_made) == mid_turn
         gated = info.gate_between + info.gate_capture + info.gate_check + info.gate_present
         assert info.gate_always == 0 and (gated > 0) == mid_turn
+
+
+class _Leaves:
+    """Wraps an evaluator, noting each leaf's evaluation identity (key, moves made: A6)."""
+
+    def __init__(self, inner) -> None:
+        self.inner = inner
+        self.driver: CStepDriver | None = None
+        self.leaves: list[tuple[int, int]] = []
+
+    def __call__(self, positions):
+        self.leaves.extend((v.key, v.expansion.moves_made) for v in self.driver.batch)
+        return self.inner(positions)
+
+
+@pytest.mark.parametrize("gates", [0, None], ids=["no-gates", "natural-gates"])
+def test_d2_a_carried_root_the_tree_form_inherited_is_evaluated(gates):
+    """Match play carries the tree (C12). Advanced onto a child the tree form inherited - a
+    mid-turn state the network never saw - the root is evaluated by the network (through the step
+    API) as the first leaf after the re-root, and only then: its WDL defined, its children's visits
+    kept, never asked about again."""
+    net = NetworkEvaluator(_small_net(4), max_batch=8)
+    flags = {"split": T5D_SPLIT_TREE} | ({} if gates is None else {"tree_gates": gates})
+    with Game.variant("Standard - Two Timelines") as g:
+        s = Search(g, params=search_params(seed=3, **flags))
+        run_search(s, net, playouts=200, batch_size=8)
+        inherited = [c for c in s.children() if not c.submit and c.visits > 3 and not c.evaluated]
+        assert inherited
+        s.advance(inherited[0].index)
+        before = s.info()
+        assert not before.root_evaluated and not before.root_turn_start
+        assert all(math.isnan(x) for x in before.root_wdl)
+        visits = {(c.moves[0].text() if c.moves else "submit"): c.visits for c in s.children()}
+        ev = _Leaves(net)
+        ev.driver = CStepDriver(s, playouts=1)
+        serve(ev.driver, ev, batch_size=8)
+        after = s.info()
+        assert len(ev.leaves) == 1 and ev.leaves[0][0] == before.root_key
+        assert after.root_evaluated and after.evaluations == before.evaluations + 1
+        assert after.root_visits == before.root_visits + 1
+        assert all(math.isfinite(x) for x in after.root_wdl) and sum(after.root_wdl) == pytest.approx(1.0, abs=1e-6)
+        assert {(c.moves[0].text() if c.moves else "submit"): c.visits for c in s.children()} == visits
+        ev = _Leaves(net)
+        ev.driver = CStepDriver(s, playouts=60)
+        serve(ev.driver, ev, batch_size=8)
+        assert ev.leaves and before.root_key not in {k for k, _ in ev.leaves}
+        assert s.info().root_evaluated
+        s.close()
 
 
 def test_d2_the_tree_form_is_refused_under_graph_search():
