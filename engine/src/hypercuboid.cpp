@@ -287,6 +287,12 @@ class Hyper {
 
   enum class Step : std::uint8_t { Progress, Done, Stopped };
 
+  // How many of one point's realisations a judgement records at most (see
+  // step_best_first): it bounds what one step holds. The order stays exact
+  // (non-increasing, deterministic); only which of several equal scores
+  // comes first can depend on it.
+  static constexpr std::size_t kRealisationsPerJudgement = 32;
+
   // Builds the axes and every value's score (TurnScorer's), and queues the
   // whole space. False if the budget stopped it. Throws std::invalid_argument
   // for a non-finite score.
@@ -341,7 +347,19 @@ class Hyper {
     const std::vector<int> x = best_point(top.box);
     scored_ = score_of(x);
     Region region;
-    if (!judge(x, top.box, region)) return Step::Stopped;  // the budget: no cap stops it
+    // A point's realisations are recorded a few at a time: one creating k
+    // timelines has up to k! of them (J9) - 40,320 at k = 8 - every one legal
+    // alike, and recording them all at once held them all. Stopped at the cap,
+    // the box goes back as it was, with its bound; its best point is judged
+    // again next, and the actions recorded already are not recorded again.
+    run_.cap = run_.found() + kRealisationsPerJudgement;
+    run_.reached_cap = false;
+    if (!judge(x, top.box, region)) {
+      if (budget_.stopped()) return Step::Stopped;
+      run_.reached_cap = false;
+      queue(std::move(top.box), bound);
+      return Step::Progress;
+    }
     for (std::size_t i = 0; i < region.axes.size(); ++i) {
       if (!bit(region.allowed[i], x[static_cast<std::size_t>(region.axes[i])])) {
         throw std::logic_error("hypercuboid: a region that does not hold its own point");
@@ -377,15 +395,18 @@ class Hyper {
  private:
   struct Queued {
     double bound = 0;
-    std::uint64_t order = 0;  // the queueing order: ties go to the box queued first
+    std::uint64_t order = 0;  // the queueing order: ties go to the box queued last
     Box box;
   };
 
   // The heap's order: a box is worse than another with a higher bound, or an
-  // equal bound queued earlier.
+  // equal bound queued EARLIER - among equal bounds the newest box first, so
+  // that ties are searched depth-first as the detector searches (taken
+  // breadth-first, a position whose best scores tie across many boards split
+  // into exponentially many equal boxes before any was finished).
   static bool worse(const Queued& a, const Queued& b) noexcept {
     if (a.bound != b.bound) return a.bound < b.bound;
-    return a.order > b.order;
+    return a.order < b.order;
   }
 
   void queue(Box box, double bound) {
@@ -1976,6 +1997,9 @@ struct TurnGenerator::Impl {
   std::size_t emitted = 0;
   // The successor states emitted so far are run.successors[0, next_successor).
   std::size_t next_successor = 0;
+  // The successor states' own heap, estimated: each its timeline table and the
+  // boards (with their timelines) its action made - the rest is shared.
+  std::size_t successor_bytes = 0;
   bool exhausted = false;
 
   Impl(const GameState& turn_start, TurnUnit u, const SearchBudget& budget)
@@ -1993,7 +2017,13 @@ struct TurnGenerator::Impl {
       run.kept_bytes -= std::min(run.kept_bytes, run.actions[i].size() * sizeof(Move) + run.texts[i].size() + 96);
       const std::size_t result = run.results[i];
       const bool fresh = result >= next_successor;
-      if (fresh) next_successor = result + 1;
+      if (fresh) {
+        next_successor = result + 1;
+        const Multiverse& mv = run.successors[result].multiverse();
+        const std::size_t made = mv.board_count() - start.multiverse().board_count();
+        successor_bytes += sizeof(GameState) + mv.timelines().size() * sizeof(TimelineRef) + 32 +
+                           made * (sizeof(Timeline) + sizeof(Board) + 4 * 32) + 128;
+      }
       if (unit == TurnUnit::Actions || fresh) {
         ready.push_back(GeneratedTurn{std::move(run.actions[i]), run.successors[result], hyper.scored()});
       }
@@ -2046,7 +2076,7 @@ std::size_t TurnGenerator::memory_bytes() const noexcept {
   std::size_t ready_bytes = 0;
   for (const GeneratedTurn& t : g.ready) ready_bytes += sizeof(GeneratedTurn) + t.moves.capacity() * sizeof(Move);
   return sizeof(Impl) + g.hyper.queue_bytes() + g.hyper.table_bytes() + g.run.held_bytes() + ready_bytes +
-         g.run.successors.size() * detail::position_bytes(g.start);
+         g.successor_bytes;
 }
 
 }  // namespace t5d

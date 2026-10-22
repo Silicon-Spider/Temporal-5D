@@ -28,8 +28,9 @@ E7, after the CHECKPOINT 2 rulings, makes moves after the present has shifted - 
 submission - the default rules (Q4, ruled R8; register D8), the Guide-literal reading
 a diagnostic, and gives the expansion and its C API the acting player and the submit
 action, possible and legal (D8); stage E6a adds the main search - PUCT over a tree or,
-behind a flag, a graph, D2's arms (the ply split, whole turns and, since 2026-10-23,
-the tree form), the in-tree solver behind the proof channel's
+behind a flag, a graph, D2's arms (the ply split and, since 2026-10-23, the tree form
+and the flat form - which replaced the enumerating whole-turn arm, retired), the in-tree
+solver behind the proof channel's
 switch - off by rule (H41) - final selection, persistence, self-play
 and match play, the step C API an external evaluator drives, and t5d-play - revised
 after three adversarial reviews (MCGS identity, the solver's default, test strength,
@@ -67,7 +68,7 @@ rules reference, `docs/rules/README.md`, which the code cites throughout.
 | **E5c:** the scanner's in-check stage (M12's optimisation pass), Lazy SMP and the shared solved store; 6b per board-count range at the design thread budget | `include/t5d/scanner.hpp`, `tools/t5d_scan6b.cpp` | §11.3, §15.6, H17, H19, M12, M13 |
 | **E7:** Q4 as ruled (R8) by default; the acting player and the submit action in the expansion and the C API | `include/t5d/rules.hpp`, `include/t5d/expand.hpp`, `include/t5d/capi.h` | §8.2, §11.0 item 2, D8 |
 | **ABI round 1:** the turn state in the expansion and the C API - mandatory and optional boards, moves made in the action (the game handle's count); the count in the search's identity, evaluation requests, evaluation cache and batches | `include/t5d/expand.hpp`, `include/t5d/capi.h`, `include/t5d/mcts.hpp` | §2.3, §8.5, §15.2; A6, C11, C14 |
-| **E6a:** the main search: PUCT, widening, both D2 arms, MCGS, the solver, final selection, persistence; built-in evaluators | `include/t5d/mcts.hpp`, `src/mcts.cpp`, `src/mcts_evaluators.cpp` | §8.1-8.7, §11.1, §15.4; D2, E1-E9, C11-C14, H2, H15 |
+| **E6a:** the main search: PUCT, widening, D2's arms (ply split, tree form, flat form), MCGS, the solver, final selection, persistence; built-in evaluators | `include/t5d/mcts.hpp`, `src/mcts.cpp`, `src/mcts_evaluators.cpp` | §8.1-8.7, §11.1, §15.4; D2, E1-E9, C11-C14, H2, H15 |
 | **E6a:** self-play and match play; the turn cap | `include/t5d/selfplay.hpp`, `src/selfplay.cpp` | §8.7, §12.3; C12-C14, I11 |
 | **E6a:** the search's C API: the step API for an external evaluator | `include/t5d/capi_search.h`, `src/capi_search.cpp` | §8.1, §8.3; D1, D3 |
 | **E6a:** t5d-play, the engine against itself, and its 5dpgn record | `tools/t5d_play.cpp`, `tools/play_record.hpp` | §15.5 |
@@ -854,8 +855,9 @@ record carries both.
   beside the moves of (a), with its own policy logit; and `submit_legal()`, possible
   and no royal of the acting player's capturable (C4, R1) - the submission test
   itself, exact, one scan of the opponent's playable boards and no allocation, run
-  only once the obligations are met (never at a turn's start). Under whole-turn
-  generation submitting ends every enumerated action, and nothing more is needed.
+  only once the obligations are met (never at a turn's start). Under D2's flat form
+  the generator ends turns itself - every generated turn is submitted - and nothing
+  more is needed.
 - **(h) the turn state** (engine ABI round 1; register A6, spec §2.3: "exact counts,
   never predicted ones: the rules engine knows them") - global like (g), the network's
   inputs on its global registers: `mandatory_remaining()`, the boards the acting player
@@ -930,8 +932,8 @@ board's features, no relations, the pseudo-legal moves - engine ABI round 2 appe
 moves are a search leaf's under the same budget, the legal and unknown ones in the same
 order, so that a training record's network input can be rebuilt - register I15; that is
 a leaf of a board-move search with `legal_moves_only` (both defaults; the search's default
-budget is (64, 2000), `T5D_NO_LIMIT` both here is exact), while a whole-turn search's
-leaves, and the pseudo-legal seam's, carry the pseudo-legal moves (`legal_moves` 0); a
+budget is (64, 2000), `T5D_NO_LIMIT` both here is exact) - a flat-form search's leaves
+too (D1) - while the pseudo-legal seam's leaves carry the pseudo-legal moves (`legal_moves` 0); a
 search's own `expand` options refuse it, its `legal_moves_only` and `legality_*`
 deciding its leaves), which fills a `t5d_expansion`: counts, and pointers
 to the flat arrays above (per board: timeline, half-turn, head, active, side,
@@ -1592,8 +1594,14 @@ are prior art to read about, not code to port (AGENTS.md).
   score. Completeness is the detector's argument: the boxes partition what is left.
 - **Unit.** `TurnUnit::Actions` (count_legal_actions' unit: two creation orders of one
   point are two actions, of equal score) or `Successors` (distinct states; each
-  state's first action - its best - stands for it). Ties are deterministic: the order
-  boxes were queued, then a point's realisations.
+  state's first action - its best - stands for it). Ties are deterministic: among equal
+  bounds the box queued last first - depth-first, as the detector searches (taken
+  first-queued-first, a position whose best scores tie across many boards split into
+  exponentially many equal boxes before one was finished) - then a point's
+  realisations, at most 32 per judgement: a point creating k timelines has up to k! of
+  them (J9; 40,320 at k = 8), all legal alike, so its box goes back as it was and its
+  best point is judged again for the next ones (the ones recorded are not recorded
+  again).
 - **Budget.** One `SearchBudget` over the generator's life (nodes, positions, the
   memory ceiling). A stopped generator is `stopped()`, never `exhausted()`: never a
   proof that no further turn exists (H37).
@@ -2219,7 +2227,7 @@ Built after the user's CHECKPOINT 2 rulings (rulebook R8 and R9; register D8).
   `submit_legal` (three `int32_t` after `src_extra`; every older field keeps its
   offset). No per-board or per-square feature changed. Under the ply split the submit
   action has its own policy logit (§8.2), read from the pooled global registers (M20); under
-  whole-turn generation submitting ends every enumerated action.
+  D2's flat form the generator ends turns itself.
 - **The Python binding** follows in the same change: `python/t5d/engine/capi.py`'s
   `CExpansion` mirrors the three fields, `T5D_RULES_NO_MOVES_AFTER_SHIFT` is bit 3 and
   `T5D_RULES_MOVES_AFTER_SHIFT` 0, `Expansion` copies `acting_player`,
@@ -2275,7 +2283,8 @@ round 2), each from the leaf's acting player:
   backed-up `(q, d)`.
 
 **D2's arms** (`SearchParams::split`; D2 is undecided, ablation 6x with 6g and 6k; the
-whole-turn arm is superseded by the flat form, CHECKPOINT 6, and retires with it):
+enumerating whole-turn arm, superseded by the flat form at CHECKPOINT 6, was retired when
+the flat form was built, 2026-10-23, the flat form taking its slot, 1):
 
 - *Board-move as ply* (`BoardMove`, the placeholder default): a node is a turn's start
   or a state during an action; its children are the legal moves and - turns have
@@ -2304,19 +2313,37 @@ whole-turn arm is superseded by the flat form, CHECKPOINT 6, and retires with it
   test seam may, and it is found when the node is expanded. After the shift a legal
   submission finishes the action at once - but a further optional move (R8) can still
   expose a royal, and such a move may lead to a dead end like any other.
-- *Whole turn* (`WholeTurn`): a node is always a turn's start; its children are the
-  legal actions (`list_legal_actions`, E4), at most `max_actions` of them (a listing
-  stopped there, or by `listing_nodes`, is incomplete and never proves a loss). Every
-  listed action is stored with its node (its moves and an edge), so `max_actions`
-  bounds a node's memory: at the old default of 4,096 a node of a 100-board position
-  held about 1.5 MB (review B); the placeholder default is now 256. D8's submit is no
-  decision of its own here (an action is listed submitted), so the evaluator's submit
-  logit is not read and the C API reports `submit_possible` 0: this arm has no
-  end-of-turn token (a spec issue; not built). The
-  network's policy is over single moves (D1), so an action's prior comes from its
-  moves' logits - their sum (a product of per-move factors; default) or their mean
-  (`action_prior`) - each move matched to the turn start's pseudo-legal candidate with
-  its squares and promotion (a J6 branch has the non-branching jump's coordinates).
+- *The flat form* (`Flat`; §8.2, "Evaluating at turn boundaries", built second at
+  CHECKPOINT 8): a node is always a turn's start; its children are whole legal **turns**,
+  each submitted, **generated best first** by the turn generator (`t5d/turngen.hpp`,
+  above: the hypercuboid search ordered by score) and instantiated by progressive
+  widening - a node expanded generates its first ceil(k0) turns, and `widen` pulls the
+  next-best as k(N) grows (with widening off, every turn; the "widen by one" when no
+  ordinary child is left generates one more). The network evaluates each turn start once:
+  its move logits (the leaf's candidates, classified as the ply split's are: D1) and its
+  per-board **"leave it" logits** (`Evaluation::board_logits`, one per expansion board;
+  the C API's `t5d_evaluations.board_logits`) give each playable board of the mover's a
+  distribution - a log-softmax at the policy temperature (the root's I19 temperature too)
+  over its own moves, the non-branching jumps arriving on it (`flat_jumps`: both boards, or
+  the source's only) and leaving it; a board given no leave logit (none, or NaN) leaves at
+  `leave_share` (0.5) and shares the rest among its moves. A turn's **score** is its options'
+  log-probabilities summed over the boards (a move the expansion did not offer scores its
+  board's lowest option); its **prior** the softmax of the generated turns' scores,
+  renormalised as more are generated (`flat_prior` Generated), or exp(score) (Product).
+  k0 is E1's form over the turn distribution's entropy - the boards' entropies summed -
+  capped at `flat_k0_max` (16). Root noise is drawn per board, over its options, before
+  generation; the side table's noise-free priors come from the noise-free scores. A child
+  is a distinct successor state (`flat_unit` Successors; Actions the alternative). The
+  generator ends turns itself (D8): the submit logit is not read, `t5d_leaf.submit_possible`
+  is 0. Each node's generator spends `generator_nodes` (200,000) over its life and the
+  memory ceiling `mate_bytes`; a stopped generator leaves the node's children incomplete -
+  never proven lost (H37) - and one stopped before its first turn takes up to
+  `flat_fallback` (64) turns from E4's listing instead (scored and ordered alike; stats
+  `fallback_listings`): in a position of many boards whose best-scoring turns are illegal
+  en masse - every optional board played - best first can spend its whole budget without a
+  legal turn (build-log spec issue 171). Terminal verdicts stay `detect_mate`'s. Every edge
+  leads to a turn start (§15.4); a flat node's edges are its turns in non-increasing score,
+  its children complete only once its generator is done (`check_invariants`).
 - *The tree form* (`Tree`; §8.2, "Evaluating at turn boundaries", built first at
   CHECKPOINT 8): the ply split's nodes, edges, submit, dead ends and turn structure, with
   the turn-start priors inherited inside a turn. A node during an action whose incoming
@@ -2423,7 +2450,8 @@ self-play (`root_noise`; `P = (1 - eps) P + eps Dir(alpha)`, seeded, determinist
 fresh root only) - its **total concentration** `dirichlet_concentration` (placeholder
 `kDirichletConcentration`, KataGo's 0.03 x 361 = 10.83) **split across the root's open
 edges** (`dirichlet_alphas`: the moves the expansion kept, legal or unknown, and a legal
-submit; under the whole-turn split the listed actions), so the noise's overall strength
+submit; under the flat form, per board, each board's options - its moves, arrivals and
+leaving it - before the turns are generated), so the noise's overall strength
 stays constant as the move count changes (§8.4; tested: the noise's relative spread
 `n^2 Var / (n - 1)` is `1/(C + 1)` at 20 moves and at 62). `dirichlet_concentration` 0
 is the arm before CHECKPOINT 7, `dirichlet_alpha` per edge (its draws exactly as before).
@@ -2686,12 +2714,12 @@ the reader and `t5d-gate` replay; a summary goes to standard error:
 
 ```
 t5d-play [--variant NAME] [--evaluator uniform|random|material] [--playouts N]
-         [--split ply|turn|tree] [--tree-gates all|none|always|LIST] [--graph]
+         [--split ply|flat|tree] [--tree-gates all|none|always|LIST] [--graph]
          [--node-key state|origins] [--no-widening]
          [--e2] [--e3] [--proof-channel] [--batch N] [--synchronous] [--match]
          [--final visits|lcb]
          [--temperature T] [--temperature-decisions N] [--noise | --no-noise] [--cap-turns N]
-         [--cap-boards N] [--max-actions N] [--listing-cap N] [--mate-nodes N]
+         [--cap-boards N] [--max-actions N] [--mate-nodes N]
          [--max-seconds S] [--seed S] [--no-moves-after-shift] [--rules ENCODING]
 ```
 
@@ -2805,8 +2833,8 @@ own node and edge; the C step loop with root noise, a root temperature, E2 and E
 the side table, `root_cpuct` and `root_best_since` equal to the C++ search's field for
 field; both value kinds checked whether or not a categorical is given; and, in Python,
 the noise-free prior the tempered softmax of known logits, `Game.expand(legal_moves=True)`
-a board-move leaf's moves at budget (0, 0) with moves left unknown (a whole-turn leaf's
-the pseudo-legal ones), the error head read by its pinned `NetOutput` field name.
+a board-move leaf's moves at budget (0, 0) with moves left unknown (a flat-form leaf's
+the same), the error head read by its pinned `NetOutput` field name.
 
 ## Stage E8: the verification layer's redesign (M14, a prototype until 6b′)
 
@@ -3967,7 +3995,7 @@ Each is recorded where it is made (the header comments) and listed here:
   75. submit's prior share when the evaluator gives no submit logit
       (`submit_share` 0.5; D8's network logit is stage N5);
   76. the whole-turn action prior from its moves' logits - their sum (default) or mean
-      (`action_prior`; §8.2 does not say);
+      (`action_prior`; §8.2 does not say) - retired with the whole-turn arm (2026-10-23);
   77. the secure child's lower bound `Q - A / sqrt(n)`, A = 1 (`secure_child_a`);
   78. "the visit threshold for solved-node selection" read as a per-child visit cap,
       8 (`solved_visit_cap`);
@@ -3981,8 +4009,10 @@ Each is recorded where it is made (the header comments) and listed here:
   83. the evaluation cache shared across self-play's fresh searches (C14 says a fresh
       tree; the cache is state-keyed) and purged of states behind the root;
   84. the material evaluator's piece values, now the scanner's placeholders (issue 56);
-  85. the whole-turn arm's missing end-of-turn token (D8; not built);
-  86. the whole-turn listing's cap, now 256 for memory (`max_actions`);
+  85. the whole-turn arm's missing end-of-turn token (D8; not built) - answered at
+      CHECKPOINT 6: the flat form's generator ends turns itself;
+  86. the whole-turn listing's cap, 256 for memory (`max_actions`) - retired with the
+      arm (2026-10-23; the flat form has none);
   87. (settled: H41 rules the in-tree solver part of the proof channel - its
       propagation off by rule; no spec issue);
   88. MCGS identity: the state AND whether an action is in progress (§8.5's "values
@@ -4020,8 +4050,8 @@ Each is recorded where it is made (the header comments) and listed here:
     signal not given is refused while one of them reads it, 0 and counted otherwise
     (issue 149);
   - the root noise's total concentration split across the root's open edges - the moves
-    the expansion kept, legal or unknown, and a legal submit; the listed actions under
-    the whole-turn split - drawn per decision (each decision's fresh search is a root;
+    the expansion kept, legal or unknown, and a legal submit; per board, over each board's
+    options, under the flat form - drawn per decision (each decision's fresh search is a root;
     the spec does not say per decision or per action) (issue 150);
   - the shaping's form, a prototype: half the total by each edge's capped log-prior
     above the mean (issue 151);

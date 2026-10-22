@@ -4,17 +4,19 @@
 // error.
 //
 //   t5d-play [--variant NAME] [--evaluator uniform|random|material]
-//            [--playouts N] [--split ply|turn|tree] [--tree-gates all|none|always|LIST]
+//            [--playouts N] [--split ply|flat|tree] [--tree-gates all|none|always|LIST]
 //            [--graph] [--node-key state|origins]
 //            [--no-widening] [--e2] [--e3] [--proof-channel] [--batch N] [--synchronous]
 //            [--match] [--final visits|lcb] [--temperature T] [--temperature-decisions N]
 //            [--noise | --no-noise] [--cap-turns N] [--cap-boards N] [--max-actions N]
-//            [--listing-cap N] [--mate-nodes N] [--max-seconds S] [--seed S]
+//            [--mate-nodes N] [--max-seconds S] [--seed S]
 //            [--no-moves-after-shift] [--rules ENCODING]
 //
 // Defaults: Standard, the uniform evaluator, 64 playouts per decision, the
-// board-move split (D2 is undecided: --split turn and --split tree are the
-// other arms; the tree form's gates, --tree-gates, are §8.2's four by default -
+// board-move split (D2 is undecided: --split flat and --split tree are the
+// other arms - the flat form generates whole turns best first, and replaced
+// the enumerating whole-turn arm, retired with its --split turn and its
+// --listing-cap; the tree form's gates, --tree-gates, are §8.2's four by default -
 // a comma-separated list of between, capture, check and present, or always:
 // every mid-turn node evaluated, the ply split's search; refused with another
 // split, which reads no gate; the Engine header names them), a tree
@@ -62,14 +64,14 @@ using namespace t5d::mcts;
 void usage(std::FILE* to) {
   std::fputs(
       "usage: t5d-play [--variant NAME] [--evaluator uniform|random|material]\n"
-      "                [--playouts N] [--split ply|turn|tree]\n"
+      "                [--playouts N] [--split ply|flat|tree]\n"
       "                [--tree-gates all|none|always|LIST] [--graph] [--node-key state|origins]\n"
       "                [--no-widening] [--e2] [--e3] [--proof-channel] [--batch N]\n"
       "                [--synchronous]\n"
       "                [--match] [--final visits|lcb] [--temperature T]\n"
       "                [--temperature-decisions N] [--noise | --no-noise] [--cap-turns N]\n"
       "                [--cap-boards N]\n"
-      "                [--max-actions N] [--listing-cap N] [--mate-nodes N]\n"
+      "                [--max-actions N] [--mate-nodes N]\n"
       "                [--max-seconds S] [--seed S]\n"
       "                [--no-moves-after-shift] [--rules ENCODING]\n",
       to);
@@ -159,12 +161,16 @@ int main(int argc, char** argv) {
         const std::string v = value();
         if (v == "ply") {
           params.search.split = TurnSplit::BoardMove;
-        } else if (v == "turn") {
-          params.search.split = TurnSplit::WholeTurn;
+        } else if (v == "flat") {
+          params.search.split = TurnSplit::Flat;
         } else if (v == "tree") {
           params.search.split = TurnSplit::Tree;
+        } else if (v == "turn") {
+          throw std::invalid_argument(
+              "--split turn: the enumerating whole-turn arm was retired - D2's flat form (--split flat) "
+              "replaced it");
         } else {
-          throw std::invalid_argument("--split: ply, turn or tree, not " + v);
+          throw std::invalid_argument("--split: ply, flat or tree, not " + v);
         }
       } else if (std::strcmp(a, "--tree-gates") == 0) {
         const std::string v = value();
@@ -244,8 +250,6 @@ int main(int argc, char** argv) {
         params.turn_cap.boards = static_cast<int>(number_in(a, value(), 0, kInt));
       } else if (std::strcmp(a, "--max-actions") == 0) {
         params.max_actions = static_cast<std::uint32_t>(number_in(a, value(), 1, kU32));
-      } else if (std::strcmp(a, "--listing-cap") == 0) {
-        params.search.max_actions = static_cast<std::size_t>(number_in(a, value(), 1, kU32));
       } else if (std::strcmp(a, "--mate-nodes") == 0) {
         params.search.mate_nodes = number_in(a, value(), 1, kAny);
       } else if (std::strcmp(a, "--max-seconds") == 0) {
@@ -284,10 +288,10 @@ int main(int argc, char** argv) {
     extra.emplace_back("Black", "t5d-play");
     std::string engine = std::string("t5d search: ") + evaluator_name(evaluator) + " evaluator, " +
                          std::to_string(params.playouts) + " playouts per decision, " +
-                         (params.search.split == TurnSplit::BoardMove   ? "board-move split"
-                          : params.search.split == TurnSplit::WholeTurn ? "whole-turn split"
-                                                                         : "tree form, gates " +
-                                                                               gate_names(params.search.tree_gates)) +
+                         (params.search.split == TurnSplit::BoardMove ? "board-move split"
+                          : params.search.split == TurnSplit::Flat    ? "flat form"
+                                                                       : "tree form, gates " +
+                                                                             gate_names(params.search.tree_gates)) +
                          (params.search.graph ? ", graph" : ", tree") +
                          (params.search.proof_channel ? ", proof channel ON (H41: experiments only)" : "") +
                          (params.search.root_noise && !params.match_play ? ", root noise" : "") +
@@ -313,9 +317,9 @@ int main(int argc, char** argv) {
                  static_cast<unsigned long long>(g.search_turn_caps));
     std::fprintf(stderr,
                  "t5d-play: seconds in the rules engine - search's terminal checks %.2f, leaf "
-                 "expansions %.2f, action listings %.2f, verifications %.2f; the game's turn-start "
+                 "expansions %.2f, turn generation %.2f, verifications %.2f; the game's turn-start "
                  "verdicts %.2f; final position %zu boards, %d timelines\n",
-                 g.seconds_search_mate, g.seconds_search_expand, g.seconds_search_listing,
+                 g.seconds_search_mate, g.seconds_search_expand, g.seconds_search_generate,
                  g.seconds_search_verify, g.seconds_verdicts, g.final_state.multiverse().board_count(),
                  g.final_state.multiverse().timeline_count());
     return 0;

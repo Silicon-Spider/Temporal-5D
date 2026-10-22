@@ -10,6 +10,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <span>
@@ -148,6 +149,12 @@ void wdl_of_key(std::uint64_t key, float* out) {
   }
 }
 float error_of(std::uint64_t key) { return static_cast<float>(mix_key(key ^ 0xE5ull) % 5) * 0.25f; }
+// D2's flat form: a board's "leave it" logit in quarter steps - NaN for every
+// third board (none given there: the search's leave_share).
+float board_of(std::uint64_t key, std::size_t b) {
+  const std::uint64_t h = mix_key(key ^ (0xD7ull + 0x9E3779B9ull * (b + 1)));
+  return h % 3 == 0 ? std::nanf("") : static_cast<float>(static_cast<int>(h % 13) - 8) * 0.25f;
+}
 float moves_left_of(std::uint64_t key) { return static_cast<float>(mix_key(key ^ 0xF6ull) % 400) * 0.25f; }
 
 // The same answers as a C++ evaluator.
@@ -165,6 +172,8 @@ class Hashed final : public t5d::mcts::Evaluator {
       out[i].value = value;
       out[i].error = error_of(batch[i].key);
       out[i].moves_left = moves_left_of(batch[i].key);
+      out[i].board_logits.resize(batch[i].expansion->board_count());
+      for (std::size_t b = 0; b < out[i].board_logits.size(); ++b) out[i].board_logits[b] = board_of(batch[i].key, b);
     }
   }
 };
@@ -184,6 +193,7 @@ void drive_hashed(t5d_search* s, std::uint64_t playouts, std::size_t batch) {
     std::vector<float> values(n * T5D_VALUE_BINS);
     std::vector<float> errors;
     std::vector<float> moves_left;
+    std::vector<float> boards;
     for (std::size_t i = 0; i < n; ++i) {
       t5d_leaf leaf;
       REQUIRE_EQ(t5d_search_leaf(s, i, &leaf, nullptr), T5D_OK);
@@ -193,8 +203,26 @@ void drive_hashed(t5d_search* s, std::uint64_t playouts, std::size_t batch) {
       value_of(leaf.key, values.data() + i * T5D_VALUE_BINS);
       errors.push_back(error_of(leaf.key));
       moves_left.push_back(moves_left_of(leaf.key));
+      for (std::size_t b = 0; b < leaf.expansion.board_count; ++b) boards.push_back(board_of(leaf.key, b));
     }
-    REQUIRE_EQ(deliver(s, logits, submits, wdl, values, T5D_VALUE_PROBABILITIES, errors, moves_left), T5D_OK);
+    t5d_evaluations ev{};
+    ev.logits = logits.empty() ? nullptr : logits.data();
+    ev.logit_count = logits.size();
+    ev.submit_logits = submits.data();
+    ev.submit_count = submits.size();
+    ev.wdl = wdl.data();
+    ev.wdl_count = wdl.size();
+    ev.wdl_kind = T5D_VALUE_PROBABILITIES;
+    ev.value_kind = T5D_VALUE_PROBABILITIES;
+    ev.values = values.data();
+    ev.value_count = values.size();
+    ev.errors = errors.data();
+    ev.error_count = errors.size();
+    ev.moves_left = moves_left.data();
+    ev.moves_left_count = moves_left.size();
+    ev.board_logits = boards.data();  // D2's flat form reads them; the other splits check them only
+    ev.board_logit_count = boards.size();
+    REQUIRE_EQ(t5d_search_deliver_evaluations(s, &ev, nullptr), T5D_OK);
   }
 }
 
@@ -210,7 +238,7 @@ TEST(capi_search_step_api_reproduces_the_cpp_search) {
   // E2 and E3 on, so that the root's side table (each child's noise-free prior,
   // value variance, E3 factor and key) and the root's cPUCT and effort label
   // read back through the C API field for field.
-  for (const int32_t split : {T5D_SPLIT_BOARD_MOVE, T5D_SPLIT_WHOLE_TURN, T5D_SPLIT_TREE}) {
+  for (const int32_t split : {T5D_SPLIT_BOARD_MOVE, T5D_SPLIT_FLAT, T5D_SPLIT_TREE}) {
     for (const int32_t graph : {0, 1}) {
       if (split == T5D_SPLIT_TREE && graph != 0) continue;  // refused (spec issue 301)
       const int32_t source = graph != 0 ? T5D_UNCERTAINTY_ERROR_HEAD : T5D_UNCERTAINTY_CATEGORICAL;
@@ -218,7 +246,6 @@ TEST(capi_search_step_api_reproduces_the_cpp_search) {
       t5d_search_params p = quick_params();
       p.split = split;
       p.graph = graph;
-      p.max_actions = 96;
       p.batch_size = 4;
       p.uncertainty_source = source;
       p.variance_scaled_cpuct = 1;  // E2 on: the signal steers selection
@@ -230,10 +257,9 @@ TEST(capi_search_step_api_reproduces_the_cpp_search) {
 
       t5d::mcts::SearchParams q;
       q.split = split == T5D_SPLIT_BOARD_MOVE   ? t5d::mcts::TurnSplit::BoardMove
-                : split == T5D_SPLIT_WHOLE_TURN ? t5d::mcts::TurnSplit::WholeTurn
+                : split == T5D_SPLIT_FLAT ? t5d::mcts::TurnSplit::Flat
                                                 : t5d::mcts::TurnSplit::Tree;
       q.graph = graph != 0;
-      q.max_actions = 96;
       q.batch_size = 4;
       q.uncertainty_source = static_cast<t5d::mcts::UncertaintySource>(source);
       q.variance_scaled_cpuct = true;
@@ -399,7 +425,7 @@ TEST(capi_search_errors_release_the_batch) {
   std::vector<float> values(T5D_VALUE_BINS, 0.0f);
   values[25] = 1.0f;
   const std::vector<float> l(20, 0.0f);
-  // Each malformed batch: refused (T5D_ERR_ARGUMENT, or _UNSUPPORTED), the batch abandoned.
+  // Each malformed batch: refused (T5D_ERR_ARGUMENT), the batch abandoned.
   const auto refused = [&](t5d_status want, const auto& call) {
     CHECK_EQ(call(), want);
     REQUIRE_EQ(t5d_search_gather(s.get(), 4, T5D_NO_LIMIT, &n, nullptr), T5D_OK);  // released
@@ -449,22 +475,47 @@ TEST(capi_search_errors_release_the_batch) {
   refused(T5D_ERR_ARGUMENT, [&] {
     return deliver(s.get(), l, {}, wdl, values, T5D_VALUE_PROBABILITIES, {}, {std::numeric_limits<float>::infinity()});
   });
-  // Per-board logits: reserved for D2's flat form, not built.
-  refused(T5D_ERR_UNSUPPORTED, [&] {
+  // D2's flat form's board logits: one per expansion board of each leaf (the
+  // Standard start has one), or NULL and 0; never infinite (NaN: none for a board).
+  const auto with_boards = [&](const float* boards, std::size_t count) {
     t5d_evaluations b{};
     b.logits = l.data();
     b.logit_count = l.size();
     b.wdl = wdl.data();
     b.wdl_count = wdl.size();
-    const float board[] = {0.0f};
-    b.board_logits = board;
-    b.board_logit_count = 1;
+    b.board_logits = boards;
+    b.board_logit_count = count;
     return t5d_search_deliver_evaluations(s.get(), &b, nullptr);
-  });
+  };
+  const float two[] = {0.0f, 0.0f};
+  const float inf[] = {std::numeric_limits<float>::infinity()};
+  refused(T5D_ERR_ARGUMENT, [&] { return with_boards(two, 2); });
+  refused(T5D_ERR_ARGUMENT, [&] { return with_boards(nullptr, 1); });
+  refused(T5D_ERR_ARGUMENT, [&] { return with_boards(inf, 1); });
   CHECK_EQ(t5d_search_deliver_evaluations(s.get(), nullptr, nullptr), T5D_ERR_ARGUMENT);  // no batch given
   REQUIRE_EQ(t5d_search_gather(s.get(), 4, T5D_NO_LIMIT, &n, nullptr), T5D_OK);
   // The optional heads absent (NULL, 0); NaN for "none given" at a leaf.
   CHECK_EQ(deliver(s.get(), l, {}, wdl, {}, T5D_VALUE_PROBABILITIES, {std::nanf("")}, {std::nanf("")}), T5D_OK);
+  for (const int32_t split : {T5D_SPLIT_BOARD_MOVE, T5D_SPLIT_FLAT}) {
+    // One board logit per board, accepted under either split (read by the flat
+    // form only; NaN: none for that board), a number or NaN.
+    for (const float leave : {0.5f, std::nanf("")}) {
+      t5d_search_params fp = quick_params();
+      fp.split = split;
+      const SearchHandle fresh = new_search(g.get(), fp);
+      std::size_t one = 0;
+      REQUIRE_EQ(t5d_search_gather(fresh.get(), 4, T5D_NO_LIMIT, &one, nullptr), T5D_OK);
+      REQUIRE_EQ(one, std::size_t{1});
+      t5d_evaluations b{};
+      b.logits = l.data();
+      b.logit_count = l.size();
+      b.wdl = wdl.data();
+      b.wdl_count = wdl.size();
+      b.board_logits = &leave;
+      b.board_logit_count = 1;
+      CHECK_EQ(t5d_search_deliver_evaluations(fresh.get(), &b, nullptr), T5D_OK);
+    }
+  }
   {
     // 6m: nothing reads the uncertainty signal here - its absence is counted.
     t5d_search_summary counted;
@@ -526,8 +577,34 @@ TEST(capi_search_errors_release_the_batch) {
   p.expand.relations = 1u << T5D_RELATION_PIN;
   CHECK_EQ(t5d_search_new(g.get(), 1, &p, &bad, nullptr), T5D_ERR_UNSUPPORTED);
   p = quick_params();
-  p.split = T5D_SPLIT_WHOLE_TURN;
-  CHECK_EQ(t5d_search_new(g.get(), 0, &p, &bad, nullptr), T5D_ERR_ARGUMENT);
+  p.split = T5D_SPLIT_FLAT;
+  CHECK_EQ(t5d_search_new(g.get(), 0, &p, &bad, nullptr), T5D_ERR_ARGUMENT);  // the flat form: turn starts only
+  // The flat form's readings named constants; its share and cap in range; the
+  // retired whole-turn listing cap 0 or T5D_NO_LIMIT only (its slot kept: the
+  // ABI is appended to, never reordered).
+  for (const auto& set : std::vector<std::function<void(t5d_search_params&)>>{
+           [](t5d_search_params& q) { q.flat_prior = 2; }, [](t5d_search_params& q) { q.flat_unit = 2; },
+           [](t5d_search_params& q) { q.flat_jumps = 2; }, [](t5d_search_params& q) { q.leave_share = 1.0; },
+           [](t5d_search_params& q) { q.leave_share = 0.0; }, [](t5d_search_params& q) { q.flat_k0_max = 0.5; },
+           [](t5d_search_params& q) { q.retired_max_actions = 256; }}) {
+    p = quick_params();
+    p.split = T5D_SPLIT_FLAT;
+    set(p);
+    char* message = nullptr;
+    CHECK_EQ(t5d_search_new(g.get(), 1, &p, &bad, &message), T5D_ERR_ARGUMENT);
+    t5d_free(message);
+  }
+  for (const uint64_t retired : {uint64_t{0}, T5D_NO_LIMIT}) {
+    p = quick_params();
+    p.split = T5D_SPLIT_FLAT;
+    p.retired_max_actions = retired;
+    p.flat_prior = T5D_FLAT_PRIOR_PRODUCT;
+    p.flat_unit = T5D_FLAT_UNIT_ACTIONS;
+    p.flat_jumps = T5D_FLAT_JUMPS_SOURCE;
+    CHECK_EQ(t5d_search_new(g.get(), 1, &p, &bad, nullptr), T5D_OK);
+    t5d_search_destroy(bad);
+    bad = nullptr;
+  }
   // D2's tree form: refused under graph search (spec issue 301); its gates a
   // mask of the five bits; its readings named constants.
   p = quick_params();
@@ -891,6 +968,27 @@ TEST(capi_search_reports_its_layouts) {
                             "dirichlet_shaping_cap", "root_policy_temperature"}) {
     CHECK_EQ(t5d_search_layout("t5d_search_params", field, &v), T5D_OK);
   }
+  // D2's flat form: its placeholders through the C defaults, and the retired
+  // whole-turn arm's fields gone by name (their slots renamed, not reused for
+  // another type: flat_prior's 0 is the old sum's softmax over the listing).
+  CHECK_EQ(defaults.flat_prior, T5D_FLAT_PRIOR_GENERATED);
+  CHECK_EQ(defaults.flat_unit, T5D_FLAT_UNIT_SUCCESSORS);
+  CHECK_EQ(defaults.flat_jumps, T5D_FLAT_JUMPS_BOTH);
+  CHECK_EQ(defaults.leave_share, cpp.leave_share);
+  CHECK_EQ(defaults.flat_k0_max, cpp.flat_k0_max);
+  CHECK_EQ(defaults.generator_nodes, cpp.generator_nodes);
+  CHECK_EQ(defaults.retired_max_actions, std::uint64_t{0});
+  CHECK_EQ(defaults.flat_fallback, std::uint64_t{cpp.flat_fallback});
+  for (const char* field : {"flat_prior", "retired_max_actions", "generator_nodes", "flat_unit", "flat_jumps",
+                            "leave_share", "flat_k0_max", "flat_fallback"}) {
+    CHECK_EQ(t5d_search_layout("t5d_search_params", field, &v), T5D_OK);
+  }
+  CHECK_EQ(v, offsetof(t5d_search_params, flat_fallback));
+  for (const char* gone : {"action_prior", "max_actions", "listing_nodes"}) {
+    CHECK_EQ(t5d_search_layout("t5d_search_params", gone, &v), T5D_ERR_ARGUMENT);
+  }
+  REQUIRE_EQ(t5d_search_layout("t5d_search_summary", "fallback_listings", &v), T5D_OK);
+  CHECK_EQ(v, offsetof(t5d_search_summary, fallback_listings));
   CHECK_EQ(t5d_search_layout("t5d_leaf", "to_move", &v), T5D_ERR_ARGUMENT);
   CHECK_EQ(t5d_search_layout("t5d_no_such", nullptr, &v), T5D_ERR_ARGUMENT);
   CHECK_EQ(t5d_search_layout(nullptr, nullptr, &v), T5D_ERR_ARGUMENT);

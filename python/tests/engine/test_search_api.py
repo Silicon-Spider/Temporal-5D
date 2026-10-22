@@ -28,11 +28,12 @@ from t5d.engine.capi import (
     MIRRORED_SEARCH_STRUCTS,
     T5D_EVALUATOR_RANDOM,
     T5D_EVALUATOR_UNIFORM,
+    T5D_FLAT_PRIOR_PRODUCT,
     T5D_LEGALITY_UNKNOWN,
     T5D_NO_LIMIT,
     T5D_SPLIT_BOARD_MOVE,
+    T5D_SPLIT_FLAT,
     T5D_SPLIT_TREE,
-    T5D_SPLIT_WHOLE_TURN,
     T5D_TREE_GATE_ALWAYS,
     T5D_VALUE_PROBABILITIES,
     CLeaf,
@@ -106,8 +107,8 @@ def test_a_library_laid_out_otherwise_is_refused(monkeypatch):
 def test_parameters_default_and_override():
     p = search_params()
     assert (p.split, p.proof_channel, p.batch_size, p.expand.square_features, p.expand.window_k) == (T5D_SPLIT_BOARD_MOVE, 0, 8, 0, 8)
-    q = search_params(split=T5D_SPLIT_WHOLE_TURN, seed=9, expand=(4, "all", 0))
-    assert (q.split, q.seed, q.expand.window_k) == (T5D_SPLIT_WHOLE_TURN, 9, 4)
+    q = search_params(split=T5D_SPLIT_FLAT, seed=9, expand=(4, "all", 0))
+    assert (q.split, q.seed, q.expand.window_k) == (T5D_SPLIT_FLAT, 9, 4)
     with pytest.raises(ValueError, match="no field"):
         search_params(playouts=3)
     with pytest.raises(ValueError, match="H41"):
@@ -127,7 +128,7 @@ def test_parameters_default_and_override():
     [
         {},
         {"graph": 1},
-        {"split": T5D_SPLIT_WHOLE_TURN},
+        {"split": T5D_SPLIT_FLAT},
         {"split": T5D_SPLIT_TREE},
         {"split": T5D_SPLIT_TREE, "tree_gates": 0, "root_noise": 1},
         {"root_noise": 1},
@@ -138,7 +139,7 @@ def test_parameters_default_and_override():
     ids=[
         "ply-tree",
         "ply-graph",
-        "whole-turn",
+        "flat",
         "tree-form",
         "tree-form-no-gates",
         "noise",
@@ -207,7 +208,13 @@ class PyRandom:
                 total += b
             draw = 0.5 * _unit(_mix(base ^ 0xD4D4))
             wdl = np.array([(1.0 - draw) * (1.0 + mean) * 0.5, draw, (1.0 - draw) * (1.0 - mean) * 0.5], np.float32)
-            out.append(Evaluation(logits, wdl, np.array([np.float32(b / total) for b in bump], np.float32)))
+            # D2's flat form: a leave logit per board (the engine gives them where the flat form asks;
+            # the other splits read none, so giving them everywhere changes nothing there).
+            boards = np.zeros(v.expansion.board_count, np.float32)
+            for k in range(boards.size):
+                r = _mix(base ^ (0xB0A4D + 0x9E3779B97F4A7C15 * (k + 1)))
+                boards[k] = np.float32(2.0 * (_unit(r) + _unit(_mix(r)) + _unit(_mix(r + 1)) - 1.5) - 1.0)
+            out.append(Evaluation(logits, wdl, np.array([np.float32(b / total) for b in bump], np.float32), board_logits=boards))
         return out
 
 
@@ -230,7 +237,7 @@ def _random_digests(game: Game, turn_start: bool, flags: dict, evaluator_seed: i
     [
         {},
         {"graph": 1},
-        {"split": T5D_SPLIT_WHOLE_TURN},
+        {"split": T5D_SPLIT_FLAT},
         {"split": T5D_SPLIT_TREE},
         {"split": T5D_SPLIT_TREE, "tree_gates": 0, "root_noise": 1},
         {"root_noise": 1},
@@ -241,7 +248,7 @@ def _random_digests(game: Game, turn_start: bool, flags: dict, evaluator_seed: i
     ids=[
         "ply-tree",
         "ply-graph",
-        "whole-turn",
+        "flat",
         "tree-form",
         "tree-form-no-gates",
         "noise",
@@ -260,7 +267,7 @@ def test_the_engines_random_evaluator_through_the_step_api(variant, flags):
         with Game.variant(variant) as g:
             mine, engine, shifted = _random_digests(g, True, dict(flags, seed=seed), seed * 31 + 5)
         assert mine == engine, seed
-        if flags.get("split") != T5D_SPLIT_WHOLE_TURN and flags.get("tree_gates") != 0:
+        if flags.get("split") != T5D_SPLIT_FLAT and flags.get("tree_gates") != 0:
             assert shifted > 0  # leaves past the shift were evaluated
 
 
@@ -307,7 +314,7 @@ def _off_sign(search: Search, root_player: int) -> list[float]:
 
 
 @pytest.mark.parametrize("graph", [0, 1], ids=["tree", "graph"])
-@pytest.mark.parametrize("split", [T5D_SPLIT_BOARD_MOVE, T5D_SPLIT_WHOLE_TURN], ids=["ply", "whole-turn"])
+@pytest.mark.parametrize("split", [T5D_SPLIT_BOARD_MOVE, T5D_SPLIT_FLAT], ids=["ply", "flat"])
 @pytest.mark.parametrize("variant", ["Standard", "Standard - Two Timelines"])
 def test_the_value_is_the_acting_players(variant, split, graph):
     """A value that says White wins, given from each leaf's acting player, backs up through the
@@ -443,7 +450,7 @@ def test_i15_the_rebuilt_input_is_a_board_move_leafs_at_its_budget():
     """I15's equivalence and its condition: ``Game.expand(legal_moves=True)`` gives a search
     leaf's moves for a board-move search with ``legal_moves_only`` (the default) at the same
     legality budget - here (0, 0), the fastest, at a turn start where it leaves moves unknown
-    (kept, in place); a whole-turn search's leaves are the pseudo-legal moves instead."""
+    (kept, in place) - and a flat-form search's turn-start leaves the same (D1)."""
     rng = np.random.default_rng(7)
     budget = {"legality_checks": 0, "legality_nodes": 0}
     found = False
@@ -458,9 +465,9 @@ def test_i15_the_rebuilt_input_is_a_board_move_leafs_at_its_budget():
                 s.close()
                 assert g.expand(square_features="none", legal_moves=True, **budget).move_texts() == leaf.expansion.move_texts()
                 if leaf.legality is not None and bool((leaf.legality == T5D_LEGALITY_UNKNOWN).any()):
-                    whole = Search(g, params=search_params(seed=1, expand=(8, "none", 0), split=T5D_SPLIT_WHOLE_TURN, **budget))
+                    whole = Search(g, params=search_params(seed=1, expand=(8, "none", 0), split=T5D_SPLIT_FLAT, **budget))
                     assert whole.gather(1) == 1
-                    assert whole.leaf_view(0).expansion.move_texts() == g.expand(square_features="none").move_texts()
+                    assert whole.leaf_view(0).expansion.move_texts() == leaf.expansion.move_texts()
                     whole.abandon()
                     whole.close()
                     found = True
@@ -601,11 +608,50 @@ def test_the_submit_logit_reaches_the_submit_child(submit, split):
     assert sub[0].prior == pytest.approx(_submit_prior(submit, len(below) - 1), rel=1e-5)
 
 
-def test_whole_turn_leaves_offer_no_submit():
-    """Under the whole-turn split every node is a turn start and the submit action is not a
-    decision of its own (no end-of-turn token: spec issue 92)."""
+class Leaves:
+    """Zero logits and value, and every board's "leave it" logit ``value`` (None: none given)."""
+
+    def __init__(self, value: float | None) -> None:
+        self.value = value
+        self.driver: CStepDriver | None = None
+
+    def __call__(self, positions):
+        out = []
+        for v, p in zip(self.driver.batch, positions, strict=True):
+            boards = None if self.value is None else np.full(v.expansion.board_count, self.value, np.float32)
+            out.append(Evaluation(np.zeros(p.move_count, np.float32), np.zeros(3, np.float32), board_logits=boards))
+        return out
+
+
+def _leave_digest(split: int, value: float | None) -> int:
     with Game.variant("Standard - Two Timelines") as g:
-        s = Search(g, params=search_params(split=T5D_SPLIT_WHOLE_TURN, seed=2))
+        s = Search(g, params=search_params(split=split, seed=3, flat_prior=T5D_FLAT_PRIOR_PRODUCT))
+        ev = Leaves(value)
+        ev.driver = CStepDriver(s, playouts=40)
+        serve(ev.driver, ev, batch_size=8)
+        assert s.info().playouts == 40
+        out = s.digest()
+        s.close()
+    return out
+
+
+def test_the_flat_form_reads_board_logits_through_the_step_api():
+    """D2's flat form's per-board "leave it" logits through ``deliver`` (``Evaluation.board_logits``):
+    given, they change the search (each board's distribution, so the turns' scores - the product
+    prior shows it); NaN on every board is none given (the search's ``leave_share``), the search
+    with none bit for bit; the board-move split reads none."""
+    none = _leave_digest(T5D_SPLIT_FLAT, None)
+    assert _leave_digest(T5D_SPLIT_FLAT, math.nan) == none
+    assert _leave_digest(T5D_SPLIT_FLAT, 3.0) != none
+    ply = _leave_digest(T5D_SPLIT_BOARD_MOVE, None)
+    assert _leave_digest(T5D_SPLIT_BOARD_MOVE, 3.0) == ply
+
+
+def test_flat_leaves_offer_no_submit():
+    """Under D2's flat form every node is a turn start and the submit action is not a decision
+    of its own: the generator ends turns itself (D8)."""
+    with Game.variant("Standard - Two Timelines") as g:
+        s = Search(g, params=search_params(split=T5D_SPLIT_FLAT, seed=2))
         ev = Submitter(5.0)
         run_search(s, ev, playouts=24)
     assert ev.seen and not any(p.state.submit_possible or p.state.shifted for p in ev.seen)
@@ -614,7 +660,7 @@ def test_whole_turn_leaves_offer_no_submit():
 # --- the network as the evaluator ------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("split", [T5D_SPLIT_BOARD_MOVE, T5D_SPLIT_WHOLE_TURN], ids=["ply", "whole-turn"])
+@pytest.mark.parametrize("split", [T5D_SPLIT_BOARD_MOVE, T5D_SPLIT_FLAT], ids=["ply", "flat"])
 def test_the_network_drives_a_search_deterministically(split):
     """Random weights, root noise on: the same seeds give the same search (H15's digest), and the
     evaluations reach the search - another network's seed gives another search."""
@@ -791,7 +837,7 @@ def test_fresh_searches_share_the_evaluation_cache():
 @pytest.mark.parametrize(
     "change,named",
     [
-        ({"split": T5D_SPLIT_WHOLE_TURN}, "split"),
+        ({"split": T5D_SPLIT_FLAT}, "split"),
         ({"expand": (4, "all", 0)}, "expand.window_k"),
         ({"expand": (8, "all", 1 << 1)}, "expand.relations"),
         ({"legal_moves_only": 0}, "legal_moves_only"),

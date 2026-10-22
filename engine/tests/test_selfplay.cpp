@@ -44,7 +44,6 @@ PlayParams quick(TurnSplit split, std::uint64_t seed) {
   PlayParams p;
   p.search.expand.square_features = SquareFeatures::None;
   p.search.split = split;
-  p.search.max_actions = 128;
   p.playouts = 12;
   p.turn_cap.turns = 8;
   p.turn_cap.boards = 300;  // branching can hold the present back
@@ -121,7 +120,7 @@ TEST(selfplay_games_are_legal_end_to_end_under_both_splits) {
   // ... and D2's tree form, whose decisions are the board-move split's.
   const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
   int games = 0;
-  for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::WholeTurn, TurnSplit::Tree}) {
+  for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::Flat, TurnSplit::Tree}) {
     for (const char* name : {"Standard", "Standard - Two Timelines", "Very Small - Open",
                              "Misc - Timeline Tactician"}) {
       const PlayParams p = quick(split, 17 + static_cast<std::uint64_t>(games));
@@ -130,10 +129,10 @@ TEST(selfplay_games_are_legal_end_to_end_under_both_splits) {
       check_game(g, p.turn_cap);
       check_record(g, name);
       // Decisions: under the board-move split one per move and one per
-      // submission (D8: never automatic); under whole turns one per action.
+      // submission (D8: never automatic); under the flat form one per turn.
       std::size_t moves = 0;
       for (const std::vector<Move>& a : g.actions) moves += a.size();
-      CHECK_EQ(g.decisions, split != TurnSplit::WholeTurn ? moves + g.actions.size() : g.actions.size());
+      CHECK_EQ(g.decisions, split != TurnSplit::Flat ? moves + g.actions.size() : g.actions.size());
       CHECK(g.playouts > 0);
     }
   }
@@ -153,7 +152,7 @@ TEST(selfplay_games_end_by_checkmate_stalemate_or_the_cap) {
   };
   const std::unique_ptr<Evaluator> material = make_evaluator(BuiltinEvaluator::Material);
   const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
-  for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::WholeTurn}) {
+  for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::Flat}) {
     for (std::uint64_t seed = 1; seed <= 3; ++seed) {
       PlayParams p = quick(split, seed);
       p.turn_cap.turns = 12;
@@ -192,7 +191,7 @@ TEST(selfplay_games_end_by_checkmate_stalemate_or_the_cap) {
 
 TEST(selfplay_match_play_carries_the_tree) {
   const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Random, 4);
-  for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::WholeTurn, TurnSplit::Tree}) {
+  for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::Flat, TurnSplit::Tree}) {
     for (const bool graph : {false, true}) {
       if (split == TurnSplit::Tree && graph) continue;  // refused (build-log spec issue 301)
       PlayParams p = quick(split, 9);
@@ -215,7 +214,7 @@ TEST(selfplay_under_q4s_guide_literal_reading) {
   RuleOptions rules;
   rules.moves_after_shift = false;
   const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
-  for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::WholeTurn}) {
+  for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::Flat}) {
     PlayParams p = quick(split, 3);
     p.turn_cap.turns = 4;
     const GameRecord g = play_game(variant("Standard - Two Timelines", rules), *uniform, p);

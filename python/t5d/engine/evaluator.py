@@ -109,6 +109,11 @@ class Evaluation:
     error: float = math.nan
     #: D4: moves-left, in the network's unit (turns, M20), >= 0; NaN: none.
     moves_left: float = math.nan
+    #: D2's flat form: one "leave it" logit per board of the leaf's expansion (``board_count``,
+    #: its order; NaN: none for that board - the search's ``leave_share``), read at the acting
+    #: player's playable boards by the flat form only - or None: none given. The network has no
+    #: per-board head yet (the net lane's head change), so it gives None.
+    board_logits: np.ndarray | None = None
 
     @property
     def wdl_probs(self) -> np.ndarray:
@@ -425,14 +430,17 @@ class CStepDriver:
     (``Expansion.from_c``) and converted (``convert.to_position``) with the network's register
     counts: its candidate moves are the leaf's, in the leaf's order, so logit ``i`` scores
     ``leaf.expansion.moves[i]``; its acting player and submit flags are the leaf's (D8 - under
-    the whole-turn split no leaf offers submit: no end-of-turn token, spec issue 92).
+    D2's flat form no leaf offers submit: the generator ends turns itself).
 
     ``deliver(results)``: every leaf of the batch, by leaf id: the move logits concatenated
     in leaf order, one submit logit per leaf - the evaluation's where the leaf offers a legal
     submit, NaN elsewhere (not offered; or illegal, which the search prunes) - and D3's heads,
     from the leaf's acting player: the 3 WDL logits, the 51 categorical logits (given for every
-    leaf of the batch or for none), the error head's output and moves-left (NaN: none). A
-    refused delivery raises the engine's error; the engine has abandoned the batch.
+    leaf of the batch or for none), the error head's output and moves-left (NaN: none). No
+    per-board "leave it" logits: the network has no per-board head yet (D2's flat form's head
+    change, the net lane's), so under the flat form the search gives leaving a board its
+    placeholder share (``leave_share``). A refused delivery raises the engine's error; the engine
+    has abandoned the batch.
 
     The search's ``expand`` options must give every board's features (``"all"``): the
     network's input is the full history. Errors from the engine raise as exceptions
@@ -509,7 +517,7 @@ class CStepDriver:
         if v.acting_player != x.acting_player:
             raise EngineInternalError(f"leaf {v.index}: its acting player {v.acting_player} is not its expansion's {x.acting_player}")
         if (v.submit_possible, v.submit_legal) != (x.submit_possible, x.submit_legal):
-            # The whole-turn split offers no submit action (the leaf says so; spec issue 92).
+            # The flat form offers no submit action (the leaf says so: the generator ends turns).
             x = replace(x, submit_possible=v.submit_possible, submit_legal=v.submit_legal)
         return to_position(x, regs_per_board=self.regs_per_board, global_regs=self.global_regs, scope=False)
 
@@ -531,6 +539,17 @@ class CStepDriver:
         values = np.stack([np.asarray(ev.value_logits, dtype=np.float32) for ev in evs]) if all(given) else None
         errors = np.array([ev.error for ev in evs], dtype=np.float32)
         moves_left = np.array([ev.moves_left for ev in evs], dtype=np.float32)
+        boards = None
+        if any(ev.board_logits is not None for ev in evs):
+            # D2's flat form: each leaf's board logits, NaN for a leaf that gives none.
+            boards = np.concatenate(
+                [
+                    np.full(v.expansion.board_count, np.nan, np.float32)
+                    if ev.board_logits is None
+                    else np.asarray(ev.board_logits, dtype=np.float32).reshape(-1)
+                    for v, ev in zip(views, evs, strict=True)
+                ]
+            )
         offered = [v.submit_possible and v.submit_legal for v in views]
         submit = np.array([ev.submit_logit if ok else math.nan for ev, ok in zip(evs, offered, strict=True)], dtype=np.float32)
         self._waiting = None  # delivered or refused, the engine no longer holds the batch
@@ -541,6 +560,7 @@ class CStepDriver:
             errors=errors,
             moves_left=moves_left,
             submit_logits=submit,
+            board_logits=boards,
             wdl_kind=self.value_kind,
             value_kind=self.value_kind,
         )
@@ -607,8 +627,9 @@ def run_search(
 class UniformEvaluator:
     """Logits 0 for every move, no submit logit (the search's placeholder share), WDL logits
     (0, 0, 0) - the value exactly 0, the draw probability 1/3 - and the categorical's mass on
-    its centre bin - the engine's built-in ``uniform`` evaluator, in Python: a search driven by
-    it through the step API is the engine's own run, bit for bit."""
+    its centre bin, and every board's "leave it" logit 0 (D2's flat form reads them; the other
+    splits read none) - the engine's built-in ``uniform`` evaluator, in Python: a search driven
+    by it through the step API is the engine's own run, bit for bit."""
 
     def __init__(self, value_bins: int = 51) -> None:
         self.value_logits = np.full(value_bins, -1.0e4, dtype=np.float32)
@@ -616,7 +637,12 @@ class UniformEvaluator:
 
     def __call__(self, positions: Sequence[PositionLike]) -> list[Evaluation]:
         return [
-            Evaluation(np.zeros(move_count(p), dtype=np.float32), np.zeros(3, dtype=np.float32), self.value_logits.copy())
+            Evaluation(
+                np.zeros(move_count(p), dtype=np.float32),
+                np.zeros(3, dtype=np.float32),
+                self.value_logits.copy(),
+                board_logits=np.zeros(state_of(p).n_boards, dtype=np.float32),
+            )
             for p in positions
         ]
 

@@ -15,6 +15,7 @@
 #include <cmath>
 #include <cstring>
 #include <map>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <tuple>
@@ -79,7 +80,7 @@ double gamma_sample(double shape, SplitMix& rng) {
 // equal the child's own).
 struct Edge {
   Move move{};                // board-move: the move
-  std::uint32_t action = 0;   // whole-turn: the action's index in the node's list
+  std::uint32_t action = 0;   // flat form: the turn's index in the node's list
   bool submit = false;        // board-move, Q4's other reading: submit the action
   bool pruned = false;        // a dead end (no legal completion), or verified illegal
   bool unknown = false;       // (a) the expansion's budget left the move's legality open
@@ -89,8 +90,8 @@ struct Edge {
   std::uint32_t visits = 0;
   std::uint32_t vl = 0;       // virtual visits of paths waiting in the batch
   // The logit its prior was taken from, before the temperature: a move's the
-  // evaluator's (tree form: inherited - what its children inherit), an
-  // action's the action prior's, submit's the submit logit (NaN: none given).
+  // evaluator's (tree form: inherited - what its children inherit), a turn's
+  // its score (flat form), submit's the submit logit (NaN: none given).
   float logit = 0;
   double w = 0;               // sum of backup weights
   double wq = 0;              // weighted sum of values
@@ -112,6 +113,199 @@ inline std::size_t state_heap_bytes(const GameState& state, std::size_t new_boar
          std::max<std::size_t>(new_boards, 1) *
              (sizeof(Timeline) + kControlBlock + kHeapBlock + sizeof(Board) + kControlBlock + kHeapBlock);
 }
+
+// A move's coordinates: source, destination, promotion - its flags left out,
+// so a J6 branch has the coordinates of the non-branching jump it was.
+using Coord = std::tuple<int, int, int, int, int, int, int>;
+inline Coord coord_of(const Move& m) noexcept {
+  return Coord{m.from_timeline, m.from_half_turn, m.from_square, m.to_timeline,
+               m.to_half_turn,  m.to_square,      m.promotes() ? index_of(m.promotion) + 1 : 0};
+}
+
+// D2's flat form: the per-board policy a turn start's evaluation gives - for
+// each playable board of the mover's, the log-probabilities of its options:
+// its moves (the expansion's candidates leaving it), the non-branching jumps
+// arriving on it (FlatJumps::BothBoards), and leaving it - and, as the turn
+// generator's scorer (t5d/turngen.hpp), each option's score its
+// log-probability: a turn's score is then the log of its probability under
+// the boards' independent distributions.
+class FlatPolicy final : public TurnScorer {
+ public:
+  struct Board {
+    int timeline = 0;
+    double leave = 0;   // leaving it
+    double lowest = 0;  // its lowest option's: a move the expansion did not offer scores this
+    std::vector<std::pair<Coord, double>> moves;     // sorted by coordinates
+    std::vector<std::pair<Coord, double>> arrivals;  // sorted by coordinates
+  };
+
+  // From an evaluation: each board's options at temperature t, softmaxed
+  // together with its leave logit (board_logits), or - none given for the
+  // board - leaving it at leave_share and its moves sharing the rest.
+  FlatPolicy(const GameState& s, const Expansion& x, const Evaluation& ev, double t, const SearchParams& p)
+      : arrivals_(p.flat_jumps == FlatJumps::BothBoards) {
+    const MoveList& moves = x.moves();
+    for (const int tb : s.playable_timelines()) {
+      Board b;
+      b.timeline = tb;
+      std::vector<std::pair<Coord, double>> raw;
+      std::size_t own = 0;
+      for (std::size_t i = 0; i < moves.size(); ++i) {
+        if (moves[i].from_timeline != tb) continue;
+        raw.emplace_back(coord_of(moves[i]), static_cast<double>(ev.logits[i]) / t);
+        ++own;
+      }
+      if (arrivals_) {
+        for (std::size_t i = 0; i < moves.size(); ++i) {
+          const Move& m = moves[i];
+          if (m.jump() && !m.branching() && m.to_timeline == tb) {
+            raw.emplace_back(coord_of(m), static_cast<double>(ev.logits[i]) / t);
+          }
+        }
+      }
+      const int board = x.board_index(tb, s.multiverse().timeline(tb)->last_half_turn());
+      const bool given = !ev.board_logits.empty() && board >= 0 &&
+                         !std::isnan(ev.board_logits[static_cast<std::size_t>(board)]);
+      double top = given ? static_cast<double>(ev.board_logits[static_cast<std::size_t>(board)]) / t
+                         : -std::numeric_limits<double>::infinity();
+      for (const auto& r : raw) top = std::max(top, r.second);
+      double sum = given ? std::exp(static_cast<double>(ev.board_logits[static_cast<std::size_t>(board)]) / t - top) : 0.0;
+      for (const auto& r : raw) sum += std::exp(r.second - top);
+      // Log-probabilities: log softmax, then (no leave logit) the moves' share.
+      const double moves_share = given || raw.empty() ? 0.0 : std::log1p(-p.leave_share);
+      const double norm = raw.empty() && !given ? 0.0 : top + std::log(sum);
+      if (given) {
+        b.leave = static_cast<double>(ev.board_logits[static_cast<std::size_t>(board)]) / t - norm;
+      } else {
+        b.leave = raw.empty() ? 0.0 : std::log(p.leave_share);
+      }
+      b.lowest = b.leave;
+      for (std::size_t i = 0; i < raw.size(); ++i) {
+        const double lp = raw[i].second - norm + moves_share;
+        b.lowest = std::min(b.lowest, lp);
+        (i < own ? b.moves : b.arrivals).emplace_back(raw[i].first, lp);
+      }
+      std::sort(b.moves.begin(), b.moves.end());
+      std::sort(b.arrivals.begin(), b.arrivals.end());
+      boards_.push_back(std::move(b));
+    }
+  }
+
+  double leave(int timeline) const override {
+    const Board* b = board(timeline);
+    return b == nullptr ? 0.0 : b->leave;
+  }
+  double move(const Move& m, int timeline) const override {
+    const Board* b = board(timeline);
+    if (b == nullptr) return 0.0;
+    const bool arrival = timeline != m.from_timeline;
+    if (arrival && !arrivals_) return 0.0;  // SourceOnly: the destination adds nothing
+    const std::vector<std::pair<Coord, double>>& list = arrival ? b->arrivals : b->moves;
+    const Coord c = coord_of(m);
+    const auto it = std::lower_bound(list.begin(), list.end(), c,
+                                     [](const std::pair<Coord, double>& e, const Coord& k) { return e.first < k; });
+    return it != list.end() && it->first == c ? it->second : b->lowest;
+  }
+
+  // The joint entropy of the turn distribution: the boards' entropies summed.
+  double entropy() const {
+    double h = 0;
+    for (const Board& b : boards_) {
+      const auto add = [&h](double lp) {
+        if (lp > -700) h -= std::exp(lp) * lp;
+      };
+      add(b.leave);
+      for (const auto& e : b.moves) add(e.second);
+      for (const auto& e : b.arrivals) add(e.second);
+    }
+    return h;
+  }
+
+  // E1's root noise per board (self-play): each board's options (its moves,
+  // arrivals and leaving it) P = (1 - eps) P + eps Dir(alpha), alpha from
+  // dirichlet_alphas over them - the total concentration split across the
+  // board's options. Boards in ascending timeline, one generator.
+  void add_noise(const SearchParams& p, std::uint64_t key) {
+    SplitMix rng{p.seed ^ mix64(key)};
+    for (Board& b : boards_) {
+      std::vector<double*> lp{&b.leave};
+      for (auto& e : b.moves) lp.push_back(&e.second);
+      for (auto& e : b.arrivals) lp.push_back(&e.second);
+      if (lp.size() < 2) continue;
+      std::vector<double> prob;
+      for (const double* q : lp) prob.push_back(std::exp(*q));
+      const std::vector<double> alphas = dirichlet_alphas(prob, p);
+      std::vector<double> eta(prob.size());
+      double sum = 0;
+      for (std::size_t i = 0; i < prob.size(); ++i) {
+        eta[i] = gamma_sample(alphas[i], rng);
+        sum += eta[i];
+      }
+      if (!(sum > 0)) continue;
+      const double eps = p.dirichlet_epsilon;
+      b.lowest = std::numeric_limits<double>::infinity();
+      for (std::size_t i = 0; i < prob.size(); ++i) {
+        *lp[i] = std::log((1 - eps) * prob[i] + eps * eta[i] / sum);
+        b.lowest = std::min(b.lowest, *lp[i]);
+      }
+    }
+  }
+
+  // A turn's score from its moves, as the generator sums it: over the playable
+  // boards in ascending timeline, the option taken there - the move leaving the
+  // board, else a non-branching jump arriving on it, else leaving it.
+  double score_of(std::span<const Move> moves) const {
+    double sum = 0;
+    for (const Board& b : boards_) {
+      const Move* option = nullptr;
+      for (const Move& m : moves) {
+        if (m.from_timeline == b.timeline) option = &m;
+      }
+      if (option == nullptr) {
+        for (const Move& m : moves) {
+          if (m.jump() && !m.branching() && m.to_timeline == b.timeline) option = &m;
+        }
+      }
+      sum += option == nullptr ? b.leave : move(*option, b.timeline);
+    }
+    return sum;
+  }
+
+  std::size_t bytes() const noexcept {
+    std::size_t n = sizeof(FlatPolicy) + boards_.capacity() * sizeof(Board) + 16;
+    for (const Board& b : boards_) {
+      n += (b.moves.capacity() + b.arrivals.capacity()) * sizeof(std::pair<Coord, double>) + 32;
+    }
+    return n;
+  }
+
+ private:
+  const Board* board(int timeline) const noexcept {
+    for (const Board& b : boards_) {
+      if (b.timeline == timeline) return &b;
+    }
+    return nullptr;
+  }
+
+  std::vector<Board> boards_;  // ascending timeline
+  bool arrivals_ = true;
+};
+
+// D2's flat form: a node's generator and its turns' scores. The turns'
+// moves are the node's action list; edge i is turn i, in the order generated.
+struct FlatNode {
+  std::unique_ptr<TurnGenerator> generator;  // null once exhausted or stopped
+  std::unique_ptr<FlatPolicy> policy;        // the scores' policy (the fallback's scorer)
+  std::unique_ptr<FlatPolicy> clean;         // the root's policy before its noise (none drawn: null)
+  std::vector<double> scores;                // each turn's, in order
+  std::vector<double> clean_scores;          // ... under `clean`
+
+  std::size_t bytes() const noexcept {
+    return sizeof(FlatNode) + 16 + (scores.capacity() + clean_scores.capacity()) * sizeof(double) +
+           (generator ? sizeof(TurnGenerator) + 16 + generator->memory_bytes() : 0) + (clean ? clean->bytes() : 0) +
+           (policy ? policy->bytes() : 0);
+  }
+};
 
 struct Node {
   explicit Node(GameState s) : state(std::move(s)) {}
@@ -154,10 +348,11 @@ struct Node {
   double k0 = 1;
   std::size_t instantiated = 0;
   std::vector<Edge> edges;
-  // Whole-turn: the actions, their moves concatenated; offsets.size() = actions + 1
-  // once listed (empty: not listed yet).
+  // Flat form: the turns generated, their moves concatenated; offsets.size() =
+  // turns + 1 once expanded (empty: not yet); and the generator with the scores.
   std::vector<Move> action_moves;
   std::vector<std::uint32_t> action_offsets;
+  std::unique_ptr<FlatNode> flat;
   std::size_t bytes = 0;      // memory_bytes' count for this node (account)
   std::size_t new_boards = 1; // the boards the edge into it made (its state's own)
 
@@ -493,6 +688,7 @@ std::size_t EvalCache::entry_bytes(const GameState& state, const Evaluation& eva
   // heap - what the entry keeps alive once its search is gone.
   return sizeof(std::uint64_t) + sizeof(Entry) + sizeof(void*) + detail::kHeapBlock +
          evaluation.logits.capacity() * sizeof(float) + detail::kHeapBlock +
+         (evaluation.board_logits.empty() ? 0 : evaluation.board_logits.capacity() * sizeof(float) + detail::kHeapBlock) +
          detail::state_heap_bytes(state, new_boards);
 }
 
@@ -578,14 +774,14 @@ struct Search::Impl {
   // A root's count of moves made in its action (A6): 0 or more; 0 - a turn
   // start - only where the obligations are not met (every turn begins with the
   // present on the mover's colour, T5, so with a mandatory board); under the
-  // whole-turn split, 0 only.
+  // flat form, 0 only.
   void check_moves_made(const GameState& root, int moves_made) const {
     if (moves_made < 0) {
       throw std::invalid_argument("search: moves_made (the moves made in the root's action, A6) must be 0 or more, "
                                   "not " + std::to_string(moves_made));
     }
-    if (params_.split == TurnSplit::WholeTurn && moves_made != 0) {
-      throw std::invalid_argument("the whole-turn split searches from turn starts only (moves_made 0)");
+    if (params_.split == TurnSplit::Flat && moves_made != 0) {
+      throw std::invalid_argument("the flat form searches from turn starts only (moves_made 0)");
     }
     if (moves_made == 0 && root.obligations_met()) {
       throw std::invalid_argument(
@@ -599,11 +795,12 @@ struct Search::Impl {
     if (cache_) stats_.cache_purged += cache_->purge_fewer_boards(nodes_[root_].state.multiverse().board_count());
   }
 
-  // A node's memory: itself, its edges, its actions' moves, its state's own heap.
+  // A node's memory: itself, its edges, its turns' moves, its state's own heap
+  // (flat form: and its generator, by its own estimate).
   static std::size_t node_bytes(const Node& n) noexcept {
     return sizeof(Node) + n.edges.capacity() * sizeof(Edge) + n.action_moves.capacity() * sizeof(Move) +
            n.action_offsets.capacity() * sizeof(std::uint32_t) + 3 * detail::kHeapBlock +
-           detail::state_heap_bytes(n.state, n.new_boards);
+           detail::state_heap_bytes(n.state, n.new_boards) + (n.flat ? n.flat->bytes() : 0);
   }
 
   void account(Node& n) noexcept {
@@ -660,6 +857,8 @@ struct Search::Impl {
     require(nonneg(p.secure_child_a), "secure_child_a", "finite, >= 0");
     require(positive(p.virtual_loss), "virtual_loss", "finite, > 0");
     require(unit(p.submit_share), "submit_share", "0 to 1");
+    require(p.leave_share > 0 && p.leave_share < 1, "leave_share", "strictly between 0 and 1");
+    require(std::isfinite(p.flat_k0_max) && p.flat_k0_max >= 1.0, "flat_k0_max", "finite, >= 1");
     require(nonneg(p.unknown_prior_scale), "unknown_prior_scale", "finite, >= 0");
     require(p.turn_cap.turns >= 0 && p.turn_cap.boards >= 0, "turn_cap", "0 (none) or more");
     if (p.key_bits < 1 || p.key_bits > 64) throw std::invalid_argument("SearchParams::key_bits: 1 to 64");
@@ -701,7 +900,9 @@ struct Search::Impl {
 
   // The ply split's tree: the board-move split and the tree form (D2), whose
   // nodes, edges and turn structure are the same.
-  bool ply() const noexcept { return params_.split != TurnSplit::WholeTurn; }
+  bool ply() const noexcept { return params_.split != TurnSplit::Flat; }
+  // D2's flat form: turn starts only, whole turns generated best first.
+  bool flat() const noexcept { return params_.split == TurnSplit::Flat; }
 
   // The node key, cut to key_bits bits (a test seam: collisions on purpose).
   std::uint64_t key_of(const GameState& s) const noexcept {
@@ -810,7 +1011,7 @@ struct Search::Impl {
 
   // The state an edge leads to, and the moves made in its action (A6, §15.4's
   // turn structure): 0 - the opponent's turn start - after a submit edge or a
-  // whole action; the parent's count + 1 after a move (D8: nothing is submitted
+  // whole turn (flat form); the parent's count + 1 after a move (D8: nothing is submitted
   // automatically). `illegal` is set for an edge whose action can no longer be
   // legal (kept for a caller's checks; no edge made by the search is such).
   GameState child_state(NodeId pid, std::size_t ei, int& moves_made, bool& illegal) const {
@@ -818,10 +1019,10 @@ struct Search::Impl {
     const Edge& e = p.edges[ei];
     GameState s = p.state;
     illegal = false;
-    if (params_.split == TurnSplit::WholeTurn) {
+    if (flat()) {
       for (const Move& m : p.action(e.action)) s.apply(m);
       if (s.submission_status() != SubmitStatus::Safe) {
-        throw std::logic_error("search: a listed legal action cannot be submitted");
+        throw std::logic_error("search: a generated legal turn cannot be submitted");
       }
       s.submit();
       moves_made = 0;
@@ -892,16 +1093,18 @@ struct Search::Impl {
 
   // -- the leaves' expansion: THE ONE CALL SITE OF THE LEGAL-MOVES FILTER -----------
 
-  // The network's input for a leaf, and (board-move split) its children. Under
-  // the board-move split the moves are the LEGAL moves - E5a's tiered
-  // classification through ExpandOptions::legal_moves (t5d/legal.hpp), under
-  // the budget SearchParams::legality: proved-illegal moves dropped, legal and
-  // unknown ones kept (Expansion::move_legality says which); under the
-  // whole-turn split, the pseudo-legal moves the action prior is read from.
+  // The network's input for a leaf, and (board-move split) its children. The
+  // moves are the LEGAL moves - E5a's tiered classification through
+  // ExpandOptions::legal_moves (t5d/legal.hpp), under the budget
+  // SearchParams::legality: proved-illegal moves dropped, legal and unknown
+  // ones kept (Expansion::move_legality says which) - under the ply split the
+  // children, under the flat form the candidates its per-board policy is over
+  // (D1: the moves the rules engine has not proved illegal; the turns
+  // themselves the generator judges exactly).
   void leaf_expansion(const Node& n, Expansion& out) {
     const auto t0 = std::chrono::steady_clock::now();
     ExpandOptions o = params_.expand;
-    o.legal_moves = ply() && params_.legal_moves_only;
+    o.legal_moves = params_.legal_moves_only;
     o.legality = params_.legality;
     expand(n.state, o, out, n.moves_made);  // A6: the node's count, from its path
     stats_.seconds_expand += detail::seconds_since(t0);
@@ -911,7 +1114,7 @@ struct Search::Impl {
   MoveLegality classify_edge(NodeId pid, std::size_t ei, const LegalityOptions& options) const {
     const Node& p = nodes_[pid];
     const Edge& e = p.edges[ei];
-    if (e.submit || params_.split == TurnSplit::WholeTurn) return MoveLegality::Legal;
+    if (e.submit || flat()) return MoveLegality::Legal;
     std::vector<MoveLegality> out;
     classify_moves(p.state, std::span<const Move>(&e.move, 1), out, options);
     return out.at(0);
@@ -991,27 +1194,6 @@ struct Search::Impl {
     return v;
   }
 
-  void list_actions(Node& n) {
-    SearchBudget budget;
-    budget.max_nodes = params_.listing_nodes;
-    budget.max_bytes = params_.mate_bytes;
-    const auto t0 = std::chrono::steady_clock::now();
-    const ActionList list =
-        list_legal_actions(n.state, params_.max_actions, params_.detector, budget);
-    stats_.seconds_listing += detail::seconds_since(t0);
-    n.action_moves.clear();
-    n.action_offsets.assign(1, 0);
-    for (const LegalAction& a : list.actions) {
-      n.action_moves.insert(n.action_moves.end(), a.moves.begin(), a.moves.end());
-      n.action_offsets.push_back(static_cast<std::uint32_t>(n.action_moves.size()));
-    }
-    n.action_moves.shrink_to_fit();
-    n.action_offsets.shrink_to_fit();
-    n.children_complete = list.stats.exhaustive;
-    if (!n.children_complete) ++stats_.truncated_listings;
-    account(n);
-  }
-
   Expansion& slot(std::size_t i) {
     while (slots_.size() <= i) slots_.push_back(std::make_unique<Expansion>());
     return *slots_[i];
@@ -1030,10 +1212,19 @@ struct Search::Impl {
     return params_.uncertainty_source == UncertaintySource::ErrorHead ? std::isnan(ev.error) : !ev.value;
   }
 
-  void check_evaluation(const Evaluation& ev, std::size_t moves) const {
+  void check_evaluation(const Evaluation& ev, std::size_t moves, std::size_t boards) const {
     if (ev.logits.size() != moves) {
       throw std::invalid_argument("an evaluation has " + std::to_string(ev.logits.size()) +
                                   " logits for " + std::to_string(moves) + " candidate moves");
+    }
+    // D2's flat form: one leave logit per expansion board, or none (NaN: none
+    // for that board) - checked under every arm, read under the flat form.
+    if (!ev.board_logits.empty() && ev.board_logits.size() != boards) {
+      throw std::invalid_argument("an evaluation has " + std::to_string(ev.board_logits.size()) +
+                                  " board logits for " + std::to_string(boards) + " boards (one per board, or none)");
+    }
+    for (const float l : ev.board_logits) {
+      if (std::isinf(l)) throw std::invalid_argument("an evaluation holds an infinite board logit (NaN: none given)");
     }
     for (const float l : ev.logits) {
       if (!std::isfinite(l)) throw std::invalid_argument("an evaluation holds a non-finite logit");
@@ -1097,72 +1288,39 @@ struct Search::Impl {
   void expand_node(NodeId id, const Evaluation& ev, const Expansion& x) {
     Node& n = nodes_[id];
     const MoveList& moves = x.moves();
-    check_evaluation(ev, moves.size());
+    check_evaluation(ev, moves.size(), x.board_count());
     take_value(n, ev);
     n.edges.clear();
+    if (flat()) {
+      expand_flat(id, ev, x);
+      return;
+    }
     std::vector<double> logits;
     n.submit_logit = ev.submit_logit;
-    if (ply()) {
-      n.edges.reserve(moves.size() + (n.submit_possible ? std::size_t{1} : std::size_t{0}));
-      const std::span<const MoveLegality> legality = x.move_legality();
-      for (std::size_t i = 0; i < moves.size(); ++i) {
-        Edge e;
-        e.move = moves[i];
-        // (a) Kept unknown moves are flagged (proved-illegal ones were dropped).
-        e.unknown = i < legality.size() && legality[i] == MoveLegality::Unknown;
-        if (e.unknown) ++stats_.unknown_edges;
-        e.logit = ev.logits[i];
-        n.edges.push_back(e);
-        logits.push_back(static_cast<double>(ev.logits[i]));
-      }
-      // D8: submitting is an action wherever it is possible (T5), legal only
-      // where C4 holds - an illegal submit is kept, pruned, with no prior.
-      if (n.submit_possible) {
-        Edge e;
-        e.submit = true;
-        e.pruned = !n.submit_legal;
-        e.logit = ev.submit_logit;
-        n.edges.push_back(e);
-        ++stats_.submit_edges;
-        if (e.pruned) ++stats_.illegal_submits;
-        // The evaluator's submit logit; none given (NaN): submit_share, below.
-        logits.push_back(std::isnan(ev.submit_logit) ? 0.0 : static_cast<double>(ev.submit_logit));
-      }
-    } else {
-      // The action prior from the moves' logits (ActionPrior). A move of an
-      // action is matched to the candidate with its source, destination and
-      // promotion: a J6 branch onto a board played earlier in the action has
-      // the coordinates of the non-branching jump generated at the turn start.
-      using Coord = std::tuple<int, int, int, int, int, int, int>;
-      std::map<Coord, std::size_t> index;
-      const auto coord = [](const Move& mv) {
-        return Coord{mv.from_timeline, mv.from_half_turn, mv.from_square, mv.to_timeline,
-                     mv.to_half_turn, mv.to_square, mv.promotes() ? index_of(mv.promotion) + 1 : 0};
-      };
-      double lowest = 0;
-      for (std::size_t i = 0; i < moves.size(); ++i) {
-        index.emplace(coord(moves[i]), i);
-        lowest = i == 0 ? static_cast<double>(ev.logits[i])
-                        : std::min(lowest, static_cast<double>(ev.logits[i]));
-      }
-      const std::size_t count = n.action_count();
-      n.edges.reserve(count);
-      for (std::size_t a = 0; a < count; ++a) {
-        double sum = 0;
-        const std::span<const Move> action = n.action(a);
-        for (const Move& mv : action) {
-          const auto it = index.find(coord(mv));
-          sum += it != index.end() ? static_cast<double>(ev.logits[it->second]) : lowest;
-        }
-        const double logit = params_.action_prior == ActionPrior::SumLogits || action.empty()
-                                 ? sum
-                                 : sum / static_cast<double>(action.size());
-        Edge e;
-        e.action = static_cast<std::uint32_t>(a);
-        e.logit = static_cast<float>(logit);
-        n.edges.push_back(e);
-        logits.push_back(logit);
-      }
+    n.edges.reserve(moves.size() + (n.submit_possible ? std::size_t{1} : std::size_t{0}));
+    const std::span<const MoveLegality> legality = x.move_legality();
+    for (std::size_t i = 0; i < moves.size(); ++i) {
+      Edge e;
+      e.move = moves[i];
+      // (a) Kept unknown moves are flagged (proved-illegal ones were dropped).
+      e.unknown = i < legality.size() && legality[i] == MoveLegality::Unknown;
+      if (e.unknown) ++stats_.unknown_edges;
+      e.logit = ev.logits[i];
+      n.edges.push_back(e);
+      logits.push_back(static_cast<double>(ev.logits[i]));
+    }
+    // D8: submitting is an action wherever it is possible (T5), legal only
+    // where C4 holds - an illegal submit is kept, pruned, with no prior.
+    if (n.submit_possible) {
+      Edge e;
+      e.submit = true;
+      e.pruned = !n.submit_legal;
+      e.logit = ev.submit_logit;
+      n.edges.push_back(e);
+      ++stats_.submit_edges;
+      if (e.pruned) ++stats_.illegal_submits;
+      // The evaluator's submit logit; none given (NaN): submit_share, below.
+      logits.push_back(std::isnan(ev.submit_logit) ? 0.0 : static_cast<double>(ev.submit_logit));
     }
     set_priors(id, logits, std::isnan(ev.submit_logit));
   }
@@ -1184,7 +1342,7 @@ struct Search::Impl {
   // (inherited from the logits above it), A6's count.
   void reevaluate(NodeId id, const Evaluation& ev, const Expansion& x) {
     const MoveList& moves = x.moves();
-    check_evaluation(ev, moves.size());
+    check_evaluation(ev, moves.size(), x.board_count());
     using Coord = std::tuple<int, int, int, int, int, int, int>;
     const auto coord = [](const Move& mv) {
       return Coord{mv.from_timeline, mv.from_half_turn, mv.from_square, mv.to_timeline,
@@ -1218,6 +1376,166 @@ struct Search::Impl {
       if (r.edges[i].child != kNoNode || r.edges[i].visits > 0) r.instantiated = i + 1;
     }
     if (id == root_) reset_best();  // the effort label's edge, in the new order
+  }
+
+  // D2's flat form: a turn start expanded with its evaluation - the per-board
+  // policy (FlatPolicy: the moves' logits and the boards' leave logits at the
+  // policy temperature, the root's I19 temperature too; at a fresh root in
+  // self-play, E1's noise per board), its generator (t5d/turngen.hpp) built
+  // over it, k0 from the turn distribution's entropy (E1's form, capped:
+  // flat_k0_max), and the first turns generated by widening.
+  void expand_flat(NodeId id, const Evaluation& ev, const Expansion& x) {
+    const auto t0 = std::chrono::steady_clock::now();
+    Node& n = nodes_[id];
+    const bool root = id == root_;
+    const double t = root ? params_.policy_temperature * params_.root_policy_temperature : params_.policy_temperature;
+    detail::FlatPolicy policy(n.state, x, ev, t, params_);
+    const double entropy = policy.entropy();
+    auto f = std::make_unique<detail::FlatNode>();
+    if (root && params_.root_noise && !noise_applied_) {
+      f->clean = std::make_unique<detail::FlatPolicy>(policy);
+      policy.add_noise(params_, n.key);
+      noise_applied_ = true;
+    }
+    SearchBudget budget;
+    budget.max_nodes = params_.generator_nodes;
+    budget.max_bytes = params_.mate_bytes;
+    f->generator = std::make_unique<TurnGenerator>(n.state, policy, params_.flat_unit, budget);
+    f->policy = std::make_unique<detail::FlatPolicy>(std::move(policy));
+    stats_.seconds_generate += detail::seconds_since(t0);
+    n.flat = std::move(f);
+    n.submit_logit = std::numeric_limits<float>::quiet_NaN();  // D8: the generator ends turns itself
+    n.action_moves.clear();
+    n.action_offsets.assign(1, 0);
+    n.children_complete = false;  // until the generator is exhausted
+    n.k0 = std::max(params_.widening_min, std::min(params_.flat_k0_max, params_.widening_scale * std::exp(entropy)));
+    if (root) {
+      root_prior_noise_free_.clear();
+      root_noise_alpha_.clear();  // the noise is per board, not per edge
+      best_edge_ = kNoEdge;
+      best_since_ = 0;
+    }
+    n.expanded = true;
+    n.pending = false;
+    n.instantiated = 0;
+    widen(n);  // the first turns: generated, their priors set
+    account(n);
+    if (n.edges.empty()) {
+      n.stuck = true;
+      ++stats_.stuck;
+    }
+  }
+
+  // Generates turns until node `n` has `want` (or its generator is done): each
+  // a new edge, in the generator's order (non-increasing score), its prior
+  // from the scores (flat_priors). Returns how many were added.
+  std::size_t pull_turns(Node& n, std::size_t want) {
+    detail::FlatNode& f = *n.flat;
+    if (!f.generator || n.edges.size() >= want) return 0;
+    const auto t0 = std::chrono::steady_clock::now();
+    std::size_t added = 0;
+    while (n.edges.size() < want) {
+      std::optional<GeneratedTurn> turn = f.generator->next();
+      if (!turn) {
+        // Done: every turn generated (the children complete), or a budget
+        // stopped it - incomplete, never a proof (H37).
+        n.children_complete = f.generator->exhausted();
+        const bool stopped = f.generator->stopped();
+        if (stopped) ++stats_.stopped_generators;
+        f.generator.reset();
+        if (stopped && n.edges.empty()) added += fallback_turns(n);
+        break;
+      }
+      Edge e;
+      e.action = static_cast<std::uint32_t>(n.action_count());
+      e.logit = static_cast<float>(turn->score);
+      n.action_moves.insert(n.action_moves.end(), turn->moves.begin(), turn->moves.end());
+      n.action_offsets.push_back(static_cast<std::uint32_t>(n.action_moves.size()));
+      f.scores.push_back(turn->score);
+      if (f.clean) f.clean_scores.push_back(f.clean->score_of(turn->moves));
+      n.edges.push_back(e);
+      ++added;
+      ++stats_.generated_turns;
+    }
+    stats_.seconds_generate += detail::seconds_since(t0);
+    if (added > 0) flat_priors(n);
+    account(n);
+    return added;
+  }
+
+  // A node whose generator a budget stopped before its first turn: the
+  // detector's listing (E4: list_legal_actions, under the mate check's budget)
+  // supplies up to flat_fallback turns instead - scored by the node's policy
+  // and ordered by score (each successor once under TurnUnit::Successors, its
+  // best action standing for it), the children complete only if the listing
+  // was. Not best first over the whole turn set: the order the generator
+  // gives, among the turns the listing found. Placeholder (build-log spec
+  // issue 171); 0: none - such a node is stuck. Returns the turns added.
+  std::size_t fallback_turns(Node& n) {
+    detail::FlatNode& f = *n.flat;
+    if (params_.flat_fallback == 0 || !f.policy) return 0;
+    SearchBudget budget;
+    budget.max_nodes = params_.mate_nodes;
+    budget.max_bytes = params_.mate_bytes;
+    const ActionList list = list_legal_actions(n.state, params_.flat_fallback, params_.detector, budget);
+    std::vector<std::pair<double, std::size_t>> order;
+    for (std::size_t i = 0; i < list.actions.size(); ++i) order.emplace_back(f.policy->score_of(list.actions[i].moves), i);
+    std::stable_sort(order.begin(), order.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+    std::vector<const GameState*> kept;
+    std::size_t added = 0;
+    for (const auto& [score, i] : order) {
+      const LegalAction& a = list.actions[i];
+      if (params_.flat_unit == TurnUnit::Successors &&
+          std::any_of(kept.begin(), kept.end(), [&](const GameState* k) { return same_position(*k, a.result); })) {
+        continue;
+      }
+      kept.push_back(&a.result);
+      Edge e;
+      e.action = static_cast<std::uint32_t>(n.action_count());
+      e.logit = static_cast<float>(score);
+      n.action_moves.insert(n.action_moves.end(), a.moves.begin(), a.moves.end());
+      n.action_offsets.push_back(static_cast<std::uint32_t>(n.action_moves.size()));
+      f.scores.push_back(score);
+      if (f.clean) f.clean_scores.push_back(f.clean->score_of(a.moves));
+      n.edges.push_back(e);
+      ++added;
+    }
+    n.children_complete = list.stats.exhaustive && !list.reached_cap;
+    ++stats_.fallback_listings;
+    stats_.generated_turns += added;
+    return added;
+  }
+
+  // The flat form's priors from the turns' scores (FlatPrior): the softmax over
+  // the turns generated (renormalised as more are), or exp(score). At the
+  // root, I15's side table too: the priors from the noise-free scores.
+  void flat_priors(Node& n) {
+    const detail::FlatNode& f = *n.flat;
+    const auto priors = [this](const std::vector<double>& scores, std::vector<double>& out) {
+      out.resize(scores.size());
+      if (params_.flat_prior == FlatPrior::Product) {
+        for (std::size_t i = 0; i < scores.size(); ++i) out[i] = std::exp(scores[i]);
+        return;
+      }
+      double top = -std::numeric_limits<double>::infinity();
+      for (const double v : scores) top = std::max(top, v);
+      double sum = 0;
+      for (std::size_t i = 0; i < scores.size(); ++i) {
+        out[i] = std::exp(scores[i] - top);
+        sum += out[i];
+      }
+      for (double& v : out) v /= sum;
+    };
+    std::vector<double> p;
+    priors(f.scores, p);
+    for (std::size_t i = 0; i < n.edges.size(); ++i) n.edges[i].prior = p[i];
+    if (&n == &nodes_[root_]) {
+      if (f.clean) {
+        priors(f.clean_scores, root_prior_noise_free_);
+      } else {
+        root_prior_noise_free_ = std::move(p);
+      }
+    }
   }
 
   // The prior of node `id`'s edges from their logits (`logits[i]` edge i's; a
@@ -1362,13 +1680,17 @@ struct Search::Impl {
     }
   }
 
-  // Progressive widening: k(N) = ceil(k0 (N + 1)^alpha) children instantiated.
-  void widen(Node& n) const {
+  // Progressive widening: k(N) = ceil(k0 (N + 1)^alpha) children instantiated
+  // (D2's flat form: generated first - "progressive widening pulls in the
+  // next-best legal turn as visits grow"; with widening off, every turn).
+  void widen(Node& n) {
     if (!params_.widening) {
+      if (n.flat) pull_turns(n, std::numeric_limits<std::size_t>::max());
       n.instantiated = n.edges.size();
       return;
     }
     const double k = std::ceil(n.k0 * std::pow(static_cast<double>(n.visits) + 1.0, params_.widening_alpha));
+    if (n.flat) pull_turns(n, k >= 1e18 ? std::numeric_limits<std::size_t>::max() : static_cast<std::size_t>(k));
     const double capped = std::min(k, static_cast<double>(n.edges.size()));
     n.instantiated = std::max(n.instantiated, static_cast<std::size_t>(capped));
   }
@@ -1664,6 +1986,10 @@ struct Search::Impl {
         ++p.instantiated;  // no ordinary child left: widen (the solver needs every child)
         continue;
       }
+      if (p.flat && pull_turns(p, p.edges.size() + 1) > 0) {  // flat form: the next turn generated
+        p.instantiated = p.edges.size();
+        continue;
+      }
       if (best[1] != kNoEdge) return best[1];
       return best[2];
     }
@@ -1904,8 +2230,9 @@ struct Search::Impl {
     {
       Node& n = nodes_[id];
       leaf_expansion(n, x);
-      if (params_.split == TurnSplit::WholeTurn) {
-        if (n.action_offsets.empty()) list_actions(n);
+      if (flat()) {
+        n.submit_possible = false;  // a turn start (T5); the generator ends turns itself (D8)
+        n.submit_legal = false;
       } else {
         // D8: submitting is possible once the obligations are met (T5) and
         // legal when C4 holds - the expansion's own answers (exact).
@@ -1915,9 +2242,8 @@ struct Search::Impl {
     }
     Node& n = nodes_[id];
     // The children that may be taken: the kept moves, and a legal submit.
-    const std::size_t children = params_.split == TurnSplit::WholeTurn
-                                     ? n.action_count()
-                                     : x.moves().size() + (n.submit_legal ? std::size_t{1} : std::size_t{0});
+    // (The flat form's nodes are turn starts: never dead ends.)
+    const std::size_t children = x.moves().size() + (n.submit_legal ? std::size_t{1} : std::size_t{0});
     if (children == 0 && !n.turn_start && id != root_) {
       // A partial action whose remaining moves and submission are all illegal:
       // no legal completion, so no game end either (C5 judges turn starts) - a
@@ -1996,7 +2322,7 @@ struct Search::Impl {
     for (const Pending& pd : pending_) {
       if (pd.request != requests_.size()) continue;  // a duplicate: its first leaf asks
       const Node& n = nodes_[pd.leaf];
-      requests_.push_back(EvalRequest{&n.state, slots_[pd.slot].get(), n.key, epoch_, n.moves_made});
+      requests_.push_back(EvalRequest{&n.state, slots_[pd.slot].get(), n.key, epoch_, n.moves_made, flat()});
     }
     return requests_.size();
   }
@@ -2031,7 +2357,7 @@ struct Search::Impl {
     }
     try {
       for (const Pending& pd : pending_) {
-        check_evaluation(evaluations[pd.request], slots_[pd.slot]->moves().size());
+        check_evaluation(evaluations[pd.request], slots_[pd.slot]->moves().size(), slots_[pd.slot]->board_count());
       }
     } catch (...) {
       abandon();
@@ -2227,18 +2553,34 @@ struct Search::Impl {
         if (e.child != kNoNode && ply() && nodes_[e.child].turn_start != e.submit) {
           fail(e.submit ? "a submit edge into a node during an action" : "a move edge into a turn start", id);
         }
-        if (e.child != kNoNode && params_.split == TurnSplit::WholeTurn && !nodes_[e.child].turn_start) {
-          fail("a whole-turn action into a node during an action", id);
+        if (e.child != kNoNode && flat() && !nodes_[e.child].turn_start) {
+          fail("a flat-form turn into a node during an action", id);
         }
         if (e.child != kNoNode) {
-          const int want = params_.split == TurnSplit::WholeTurn || e.submit ? 0 : n.moves_made + 1;
+          const int want = flat() || e.submit ? 0 : n.moves_made + 1;
           if (nodes_[e.child].moves_made != want) {
-            const char* edge = params_.split == TurnSplit::WholeTurn ? "action" : e.submit ? "submit" : "move";
+            const char* edge = flat() ? "turn" : e.submit ? "submit" : "move";
             fail("a child with " + std::to_string(nodes_[e.child].moves_made) + " moves made in its action where its " +
                      edge + " edge gives " + std::to_string(want),
                  id);
           }
         }
+      }
+      // D2's flat form: a turn start whose edges are its generated turns, one
+      // each, in non-increasing score; its children complete only once its
+      // generator is done (never while it could generate more).
+      if (n.flat) {
+        const detail::FlatNode& f = *n.flat;
+        if (!flat() || !n.turn_start) fail("a flat-form node outside the flat form, or during an action", id);
+        if (f.scores.size() != n.edges.size() || n.action_count() != n.edges.size()) {
+          fail("a flat-form node's turns, scores and edges disagree", id);
+        }
+        for (std::size_t i = 0; i < n.edges.size(); ++i) {
+          if (n.edges[i].action != i || n.edges[i].submit) fail("a flat-form edge out of its turn's place", id);
+          if (i > 0 && f.scores[i] > f.scores[i - 1]) fail("flat-form turns out of score order", id);
+        }
+        if (f.generator && n.children_complete) fail("children complete while the generator can generate more", id);
+        if (n.instantiated > n.edges.size()) fail("more children instantiated than generated", id);
       }
       if (n.moves_made < 0 || n.turn_start != (n.moves_made == 0)) {
         fail("a turn start's count of moves made is not 0, or a partial action's is", id);
@@ -2402,6 +2744,7 @@ StopReason Search::run(Evaluator& evaluator, const Limits& limits) {
       e.value.reset();
       e.error = std::numeric_limits<float>::quiet_NaN();
       e.moves_left = std::numeric_limits<float>::quiet_NaN();
+      e.board_logits.clear();
     }
     try {
       evaluator.evaluate(s.requests_, out);
@@ -2436,7 +2779,7 @@ std::vector<RootChild> Search::root_children() const {
   for (const std::size_t i : s.root_edges()) {
     const Edge& e = r.edges[i];
     RootChild c;
-    if (s.params_.split == TurnSplit::WholeTurn) {
+    if (s.flat()) {
       const std::span<const Move> a = r.action(e.action);
       c.moves.assign(a.begin(), a.end());
     } else if (!e.submit) {
@@ -2616,7 +2959,7 @@ void Search::advance_moves(std::span<const Move> moves) {
     target.submit();
   };
   int moves_made = 0;  // A6: 0 after a submission, the root's + 1 after a move
-  if (s.params_.split == TurnSplit::WholeTurn) {
+  if (s.flat()) {
     for (const Move& m : moves) play(m);
     submit();
   } else if (moves.empty()) {
@@ -2650,7 +2993,7 @@ void Search::advance_action(std::span<const Move> moves) {
   if (t.submission_status() != SubmitStatus::Safe) {
     throw std::invalid_argument("advance_action: the action cannot be submitted legally (T5, C4)");
   }
-  if (s.params_.split == TurnSplit::WholeTurn) {
+  if (s.flat()) {
     advance_moves(moves);
     return;
   }
@@ -2722,7 +3065,7 @@ EdgeView Search::edge(NodeId id, std::size_t index) const {
   const Node& n = s.nodes_[id];
   const Edge& e = n.edges[index];
   EdgeView v;
-  if (s.params_.split == TurnSplit::WholeTurn) {
+  if (s.flat()) {
     v.action = n.action(e.action);
   } else if (!e.submit) {
     v.move = &e.move;

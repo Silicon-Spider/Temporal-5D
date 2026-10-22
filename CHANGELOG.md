@@ -10,6 +10,85 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-23 - D2's flat form, part 2: the search arm; the enumerating whole-turn arm and its 256 cap retired
+
+The flat form's search arm, on part 1's turn generator (§8.2: "PUCT runs over the generated
+turns, and progressive widening pulls in the next-best legal turn as visits grow. This
+replaces the enumerating whole-turn arm and its cap, and ends turns itself"), and the
+retirement of the arm it supersedes (register D2, CHECKPOINT 6).
+
+- **The arm** (`engine/include/t5d/mcts.hpp`, `engine/src/mcts.cpp`): `TurnSplit::Flat`, in
+  slot 1 of the retired `WholeTurn`. A node is a turn start; its children whole legal turns
+  generated best first, instantiated by widening (ceil(k0) at expansion; `widen` pulls the
+  next-best as k(N) grows; with widening off, all). One evaluation per turn start: the move
+  logits (the leaf's candidates classified as the ply split's - D1) and the new per-board
+  "leave it" logits (`Evaluation::board_logits`, one per expansion board) give each playable
+  board a log-softmax distribution over its moves, the non-branching jumps arriving on it and
+  leaving it, at the policy temperature (the root's too); a turn's score is its options'
+  log-probabilities summed, its prior their softmax over the generated turns. Every unstated
+  reading is a parameter with a placeholder default, logged: `flat_unit` (successors),
+  `flat_prior` (Generated; Product), `flat_jumps` (both boards; source only), `leave_share`
+  (0.5 where no leave logit is given - the network has none yet: a documented fallback, not a
+  refusal), `flat_k0_max` (16, on k0 from the boards' summed entropy), `generator_nodes`
+  (200,000 a node), `flat_fallback` (64: a node whose generator stopped before its first turn
+  takes E4's listing's turns, scored and ordered alike). Root noise per board before
+  generation; the side table's noise-free priors from the noise-free scores. The generator
+  ends turns itself (D8): no submit logit read. Terminal verdicts stay `detect_mate`'s; a
+  stopped generator's node is incomplete, never proven lost (H37). Memory: each node counts
+  its generator (`memory_bytes`, within x1.23 of the heap). A flat invariant in
+  `check_invariants` (edges its turns in non-increasing score, complete only when the
+  generator is done). Stats: `generated_turns`, `stopped_generators`, `fallback_listings`,
+  `seconds_generate`.
+- **The generator** (`engine/src/hypercuboid.cpp`, new code only - the detector's pin holds):
+  ties now newest-first (depth-first; first-queued-first split a tying 66-board position into
+  2^18 equal boxes), a point's realisations at most 32 per judgement (a point creating k
+  timelines has up to k! - 20,160 successors at one 90-board node), its memory estimate per
+  successor from the boards its action made.
+- **The C API and its mirror** (`capi_search.h`, `capi_search.cpp`; `python/t5d/engine/capi.py`,
+  `search.py`, `evaluator.py`): `T5D_SPLIT_FLAT` (1); `t5d_evaluations.board_logits`, the
+  channel reserved in ABI round 2, now read - each leaf's `board_count` floats, NaN for none,
+  checked under every split, read under the flat form; params appended (`flat_unit`,
+  `flat_jumps`, `leave_share`, `flat_k0_max`, `flat_fallback`), and the whole-turn arm's slots
+  kept and renamed (`flat_prior` - 0 is the old sum's softmax over the listing -,
+  `retired_max_actions` - 0 or `T5D_NO_LIMIT` only -, `generator_nodes`); the summary's
+  `generated_turns`, `stopped_generators`, `fallback_listings`. Python: `Search.deliver(...,
+  board_logits=)`, `Evaluation.board_logits` (the network gives none; `UniformEvaluator`
+  zeros, as the engine's), `CStepDriver` sends them, NaN for a leaf that gives none.
+- **The built-in evaluators** give leave logits where the flat form asks (`EvalRequest::
+  board_logits`): uniform and material 0, random random.
+- **Retired** (the whole-turn arm): `TurnSplit::WholeTurn`, `ActionPrior`,
+  `SearchParams::max_actions` and `listing_nodes`, `list_actions`, `SearchStats::
+  truncated_listings` and `seconds_listing` (now `seconds_generate`; `GameRecord::
+  seconds_search_listing` now `seconds_search_generate`), `T5D_SPLIT_WHOLE_TURN`,
+  `T5D_ACTION_PRIOR_*`, `t5d-play --split turn` (refused, naming `--split flat`) and
+  `--listing-cap`, netplay's `"turn"` split and `max_listing` (`"flat"` instead; its CLI's
+  default arms ply and flat). `list_legal_actions` and its cap stay (E4, the gate adapter,
+  certificates, the prover, the scanner, and the flat form's fallback).
+- **Tests**: every whole-turn test moved to the flat form - two flat configurations in
+  `kConfigs` (the invariants, re-rooting, the solver's proofs, MCGS keys, values, D3), the
+  root's children with widening off the exact legal turns (successors and actions, both
+  priors), a stopped generator never proven lost, the fallback (and stuck without it),
+  parameter refusals (C++ and C), self-play and match play under the flat form, `t5d-play
+  --split flat` records replayed through `t5d-gate`, the C step loop equal to the C++ search
+  by digest with board logits delivered (NaN on a third of the boards), memory within
+  0.75-1.33 of the heap; in Python the engine's random evaluator through the step API bit for
+  bit (leave logits included), NaN leave logits the search with none, the ply split reading
+  none, the network driving a flat search deterministically, netplay's flat games replayed.
+  `engine/tests/test_mcts.cpp`'s re-rooting test now picks a sibling with as many boards as
+  the new root (a flat turn that branches makes more).
+- **`t5d-tree-count`** gains the flat form as a fifth arm; its counts on the seven
+  t0database turn starts in docs/MEASUREMENTS.md (deepest evaluated turn start 10-12 turns
+  against the ply split's 3-7; 0-8 of ~400 generators fell back).
+- Docs: engine/README.md (the arm, the retirement, the C API, t5d-play); docs/BUILD_LOG.md
+  (rows D2, D8, E1; spec issues 164-171; issues 81, 92, 93 and edit 69 closed or overtaken;
+  proposed edits 132-134); docs/MEASUREMENTS.md.
+
+Spec: §8.2 (the flat form - built; proposed edit 132), §8.4 (constants list and coupling -
+proposed edit 133), §11.0 item 3, §15.2 (the flat row's arm tested), §15.3 (proposed edit
+131, part 1), §15.4 (turn edges - proposed edit 134); register D2 (flat form built, the
+whole-turn arm retired), D1, D8 (the generator ends turns - built), E1 (the flat form's k0,
+noise and temperature). Spec issues 164-171 (placeholders and the generator's worst case).
+
 ### 2026-10-23 - D2's flat form, part 1: the turn generator - the hypercuboid search best first (spec 15.2's row)
 
 The flat form's generator (§8.2: "A generator assembles complete legal turns best-first by
