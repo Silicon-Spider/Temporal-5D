@@ -210,8 +210,9 @@ TEST(capi_search_step_api_reproduces_the_cpp_search) {
   // E2 and E3 on, so that the root's side table (each child's noise-free prior,
   // value variance, E3 factor and key) and the root's cPUCT and effort label
   // read back through the C API field for field.
-  for (const int32_t split : {T5D_SPLIT_BOARD_MOVE, T5D_SPLIT_WHOLE_TURN}) {
+  for (const int32_t split : {T5D_SPLIT_BOARD_MOVE, T5D_SPLIT_WHOLE_TURN, T5D_SPLIT_TREE}) {
     for (const int32_t graph : {0, 1}) {
+      if (split == T5D_SPLIT_TREE && graph != 0) continue;  // refused (spec issue 301)
       const int32_t source = graph != 0 ? T5D_UNCERTAINTY_ERROR_HEAD : T5D_UNCERTAINTY_CATEGORICAL;
       const Game g = variant_game("Standard - Two Timelines");
       t5d_search_params p = quick_params();
@@ -228,7 +229,9 @@ TEST(capi_search_step_api_reproduces_the_cpp_search) {
       drive_hashed(s.get(), 200, 4);
 
       t5d::mcts::SearchParams q;
-      q.split = split == T5D_SPLIT_BOARD_MOVE ? t5d::mcts::TurnSplit::BoardMove : t5d::mcts::TurnSplit::WholeTurn;
+      q.split = split == T5D_SPLIT_BOARD_MOVE   ? t5d::mcts::TurnSplit::BoardMove
+                : split == T5D_SPLIT_WHOLE_TURN ? t5d::mcts::TurnSplit::WholeTurn
+                                                : t5d::mcts::TurnSplit::Tree;
       q.graph = graph != 0;
       q.max_actions = 96;
       q.batch_size = 4;
@@ -293,7 +296,9 @@ TEST(capi_search_step_api_reproduces_the_cpp_search) {
       // Not vacuous: the noise moved priors, E3 scaled children, and values
       // varied (a variance that is not the draw probability).
       CHECK(noised > 0);
-      CHECK(scaled > 0);
+      // (The tree form's root children mostly inherit the root's variance:
+      // E3's factor may stay 1 on every one.)
+      if (split != T5D_SPLIT_TREE) CHECK(scaled > 0);
       CHECK(spread > 0);
     }
   }
@@ -523,6 +528,34 @@ TEST(capi_search_errors_release_the_batch) {
   p = quick_params();
   p.split = T5D_SPLIT_WHOLE_TURN;
   CHECK_EQ(t5d_search_new(g.get(), 0, &p, &bad, nullptr), T5D_ERR_ARGUMENT);
+  // D2's tree form: refused under graph search (spec issue 301); its gates a
+  // mask of the five bits; its readings named constants.
+  p = quick_params();
+  p.split = T5D_SPLIT_TREE;
+  p.graph = 1;
+  CHECK_EQ(t5d_search_new(g.get(), 1, &p, &bad, nullptr), T5D_ERR_ARGUMENT);
+  p.graph = 0;
+  p.tree_gates = 32;
+  CHECK_EQ(t5d_search_new(g.get(), 1, &p, &bad, nullptr), T5D_ERR_ARGUMENT);
+  p.tree_gates = T5D_TREE_GATES_INTERACTION;
+  p.tree_still_to_move = 2;
+  CHECK_EQ(t5d_search_new(g.get(), 1, &p, &bad, nullptr), T5D_ERR_ARGUMENT);
+  p.tree_still_to_move = T5D_STILL_TO_MOVE_MANDATORY;
+  p.tree_capture = 2;
+  CHECK_EQ(t5d_search_new(g.get(), 1, &p, &bad, nullptr), T5D_ERR_ARGUMENT);
+  p.tree_capture = T5D_CAPTURE_ANY;
+  p.tree_check = 2;
+  CHECK_EQ(t5d_search_new(g.get(), 1, &p, &bad, nullptr), T5D_ERR_ARGUMENT);
+  p.tree_check = T5D_CHECK_SUBMISSION;
+  p.tree_inherit_value = 2;
+  CHECK_EQ(t5d_search_new(g.get(), 1, &p, &bad, nullptr), T5D_ERR_ARGUMENT);
+  p.tree_inherit_value = 0;
+  p.tree_present = 2;
+  CHECK_EQ(t5d_search_new(g.get(), 1, &p, &bad, nullptr), T5D_ERR_ARGUMENT);
+  p.tree_present = T5D_PRESENT_REWIND;
+  CHECK_EQ(t5d_search_new(g.get(), 1, &p, &bad, nullptr), T5D_OK);
+  t5d_search_destroy(bad);
+  bad = nullptr;
   CHECK_EQ(t5d_search_new(nullptr, 1, nullptr, &bad, nullptr), T5D_ERR_ARGUMENT);
   CHECK_EQ(t5d_search_info(nullptr, &info), T5D_ERR_ARGUMENT);
   CHECK_EQ(t5d_search_abandon(nullptr), T5D_ERR_ARGUMENT);

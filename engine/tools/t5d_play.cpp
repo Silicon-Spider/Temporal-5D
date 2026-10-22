@@ -4,7 +4,8 @@
 // error.
 //
 //   t5d-play [--variant NAME] [--evaluator uniform|random|material]
-//            [--playouts N] [--split ply|turn] [--graph] [--node-key state|origins]
+//            [--playouts N] [--split ply|turn|tree] [--tree-gates all|none|always|LIST]
+//            [--graph] [--node-key state|origins]
 //            [--no-widening] [--e2] [--e3] [--proof-channel] [--batch N] [--synchronous]
 //            [--match] [--final visits|lcb] [--temperature T] [--temperature-decisions N]
 //            [--noise | --no-noise] [--cap-turns N] [--cap-boards N] [--max-actions N]
@@ -12,7 +13,10 @@
 //            [--no-moves-after-shift] [--rules ENCODING]
 //
 // Defaults: Standard, the uniform evaluator, 64 playouts per decision, the
-// board-move split (D2 is undecided: --split turn is the other arm), a tree
+// board-move split (D2 is undecided: --split turn and --split tree are the
+// other arms; the tree form's gates, --tree-gates, are §8.2's four by default -
+// a comma-separated list of between, capture, check and present, or always:
+// every mid-turn node evaluated, the ply split's search), a tree
 // (--graph: MCGS, C11), self-play (a fresh search per decision, C14; visits
 // sampled at temperature 1 for the first 16 decisions, Dirichlet noise at the
 // root: --no-noise for none) - --match plays the
@@ -29,6 +33,7 @@
 // Exit status: 0 for a game played, 2 for a bad command line (a number out of
 // range included), 1 for an error.
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -56,7 +61,8 @@ using namespace t5d::mcts;
 void usage(std::FILE* to) {
   std::fputs(
       "usage: t5d-play [--variant NAME] [--evaluator uniform|random|material]\n"
-      "                [--playouts N] [--split ply|turn] [--graph] [--node-key state|origins]\n"
+      "                [--playouts N] [--split ply|turn|tree]\n"
+      "                [--tree-gates all|none|always|LIST] [--graph] [--node-key state|origins]\n"
       "                [--no-widening] [--e2] [--e3] [--proof-channel] [--batch N]\n"
       "                [--synchronous]\n"
       "                [--match] [--final visits|lcb] [--temperature T]\n"
@@ -139,9 +145,39 @@ int main(int argc, char** argv) {
           params.search.split = TurnSplit::BoardMove;
         } else if (v == "turn") {
           params.search.split = TurnSplit::WholeTurn;
+        } else if (v == "tree") {
+          params.search.split = TurnSplit::Tree;
         } else {
-          throw std::invalid_argument("--split: ply or turn, not " + v);
+          throw std::invalid_argument("--split: ply, turn or tree, not " + v);
         }
+      } else if (std::strcmp(a, "--tree-gates") == 0) {
+        const std::string v = value();
+        std::uint32_t gates = 0;
+        if (v == "all") {
+          gates = kGatesInteraction;
+        } else if (v == "always") {
+          gates = kGateAlways;
+        } else if (v != "none") {
+          std::size_t at = 0;
+          while (at <= v.size()) {
+            const std::size_t comma = std::min(v.find(',', at), v.size());
+            const std::string g = v.substr(at, comma - at);
+            if (g == "between") {
+              gates |= kGateBetween;
+            } else if (g == "capture") {
+              gates |= kGateCapture;
+            } else if (g == "check") {
+              gates |= kGateCheck;
+            } else if (g == "present") {
+              gates |= kGatePresent;
+            } else {
+              throw std::invalid_argument("--tree-gates: all, none, always or a list of between, capture, check "
+                                          "and present, not " + v);
+            }
+            at = comma + 1;
+          }
+        }
+        params.search.tree_gates = gates;
       } else if (std::strcmp(a, "--graph") == 0) {
         params.search.graph = true;
       } else if (std::strcmp(a, "--node-key") == 0) {
@@ -226,7 +262,10 @@ int main(int argc, char** argv) {
     extra.emplace_back("Black", "t5d-play");
     std::string engine = std::string("t5d search: ") + evaluator_name(evaluator) + " evaluator, " +
                          std::to_string(params.playouts) + " playouts per decision, " +
-                         (params.search.split == TurnSplit::BoardMove ? "board-move split" : "whole-turn split") +
+                         (params.search.split == TurnSplit::BoardMove   ? "board-move split"
+                          : params.search.split == TurnSplit::WholeTurn ? "whole-turn split"
+                                                                         : "tree form, gates " +
+                                                                               std::to_string(params.search.tree_gates)) +
                          (params.search.graph ? ", graph" : ", tree") +
                          (params.search.proof_channel ? ", proof channel ON (H41: experiments only)" : "") +
                          (params.search.root_noise && !params.match_play ? ", root noise" : "") +

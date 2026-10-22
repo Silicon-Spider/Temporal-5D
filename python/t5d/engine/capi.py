@@ -250,7 +250,17 @@ T5D_VALUE_BINS = 51
 T5D_WDL = 3
 #: The uncertainty signal search consumes (register I10; ablation 6m).
 T5D_UNCERTAINTY_CATEGORICAL, T5D_UNCERTAINTY_ERROR_HEAD = 0, 1
-T5D_SPLIT_BOARD_MOVE, T5D_SPLIT_WHOLE_TURN = 0, 1
+T5D_SPLIT_BOARD_MOVE, T5D_SPLIT_WHOLE_TURN, T5D_SPLIT_TREE = 0, 1, 2
+#: D2's tree form: its interaction gates (spec 8.2), a mask - ALWAYS is a test seam (every
+#: mid-turn node evaluated: spec 15.2's "every interaction gate firing", the ply split exactly).
+T5D_TREE_GATE_BETWEEN, T5D_TREE_GATE_CAPTURE, T5D_TREE_GATE_CHECK, T5D_TREE_GATE_PRESENT = 1, 2, 4, 8
+T5D_TREE_GATES_INTERACTION, T5D_TREE_GATE_ALWAYS = 15, 16
+#: ... and its readings (placeholders): the boards still to move; a piece that could reach them;
+#: a change in check; a shift of the present.
+T5D_STILL_TO_MOVE_PLAYABLE, T5D_STILL_TO_MOVE_MANDATORY = 0, 1
+T5D_CAPTURE_REACH, T5D_CAPTURE_ANY = 0, 1
+T5D_CHECK_PASSED, T5D_CHECK_SUBMISSION = 0, 1
+T5D_PRESENT_ANY, T5D_PRESENT_REWIND = 0, 1
 T5D_ACTION_PRIOR_SUM, T5D_ACTION_PRIOR_MEAN = 0, 1
 T5D_NODE_KEY_STATE, T5D_NODE_KEY_STATE_AND_ORIGINS = 0, 1
 T5D_FINAL_VISITS, T5D_FINAL_LCB = 0, 1
@@ -329,6 +339,13 @@ class CSearchParams(ctypes.Structure):
         ("dirichlet_shaping_share", c_double),
         ("dirichlet_shaping_cap", c_double),
         ("root_policy_temperature", c_double),  # the root's softmax temperature, before the noise (1: off)
+        # D2's tree form (split T5D_SPLIT_TREE only; refused with graph - spec issue 301): placeholders
+        ("tree_gates", c_uint32),  # T5D_TREE_GATE_* mask; 0: the network only at turn starts and the root
+        ("tree_still_to_move", c_int32),  # T5D_STILL_TO_MOVE_*
+        ("tree_capture", c_int32),  # T5D_CAPTURE_*
+        ("tree_check", c_int32),  # T5D_CHECK_*
+        ("tree_inherit_value", c_int32),  # 1: an inherited node's FPU base and variance are its parent's evaluation's
+        ("tree_present", c_int32),  # T5D_PRESENT_*: a shift of the present - any move of it, or a rewind only
         ("expand", ExpandOptions),
     ]
 
@@ -394,6 +411,14 @@ class CSearchSummary(ctypes.Structure):
         # appended in the engine ABI round 2 review fixes (register I10, 6m): nodes expanded without
         # the selected uncertainty signal - only while nothing reads it (else the delivery is refused)
         ("uncertainty_missing", c_uint64),
+        # appended for D2's tree form: mid-turn nodes expanded on inherited priors (no evaluation),
+        # and those sent to the network instead, by the first gate found to fire
+        ("inherited_nodes", c_uint64),
+        ("gate_between", c_uint64),
+        ("gate_capture", c_uint64),
+        ("gate_check", c_uint64),
+        ("gate_present", c_uint64),
+        ("gate_always", c_uint64),
     ]
 
 

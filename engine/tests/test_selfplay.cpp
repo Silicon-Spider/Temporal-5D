@@ -118,9 +118,10 @@ void check_record(const GameRecord& g, const char* board, const RuleOptions& rul
 }  // namespace
 
 TEST(selfplay_games_are_legal_end_to_end_under_both_splits) {
+  // ... and D2's tree form, whose decisions are the board-move split's.
   const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
   int games = 0;
-  for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::WholeTurn}) {
+  for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::WholeTurn, TurnSplit::Tree}) {
     for (const char* name : {"Standard", "Standard - Two Timelines", "Very Small - Open",
                              "Misc - Timeline Tactician"}) {
       const PlayParams p = quick(split, 17 + static_cast<std::uint64_t>(games));
@@ -132,11 +133,11 @@ TEST(selfplay_games_are_legal_end_to_end_under_both_splits) {
       // submission (D8: never automatic); under whole turns one per action.
       std::size_t moves = 0;
       for (const std::vector<Move>& a : g.actions) moves += a.size();
-      CHECK_EQ(g.decisions, split == TurnSplit::BoardMove ? moves + g.actions.size() : g.actions.size());
+      CHECK_EQ(g.decisions, split != TurnSplit::WholeTurn ? moves + g.actions.size() : g.actions.size());
       CHECK(g.playouts > 0);
     }
   }
-  CHECK_EQ(games, 8);
+  CHECK_EQ(games, 12);
 }
 
 TEST(selfplay_games_end_by_checkmate_stalemate_or_the_cap) {
@@ -191,8 +192,9 @@ TEST(selfplay_games_end_by_checkmate_stalemate_or_the_cap) {
 
 TEST(selfplay_match_play_carries_the_tree) {
   const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Random, 4);
-  for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::WholeTurn}) {
+  for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::WholeTurn, TurnSplit::Tree}) {
     for (const bool graph : {false, true}) {
+      if (split == TurnSplit::Tree && graph) continue;  // refused (build-log spec issue 301)
       PlayParams p = quick(split, 9);
       p.match_play = true;
       p.search.graph = graph;

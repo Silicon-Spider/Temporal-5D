@@ -29,8 +29,11 @@ from t5d.engine.capi import (
     T5D_EVALUATOR_RANDOM,
     T5D_EVALUATOR_UNIFORM,
     T5D_LEGALITY_UNKNOWN,
+    T5D_NO_LIMIT,
     T5D_SPLIT_BOARD_MOVE,
+    T5D_SPLIT_TREE,
     T5D_SPLIT_WHOLE_TURN,
+    T5D_TREE_GATE_ALWAYS,
     T5D_VALUE_PROBABILITIES,
     CLeaf,
     ExpandOptions,
@@ -125,12 +128,24 @@ def test_parameters_default_and_override():
         {},
         {"graph": 1},
         {"split": T5D_SPLIT_WHOLE_TURN},
+        {"split": T5D_SPLIT_TREE},
+        {"split": T5D_SPLIT_TREE, "tree_gates": 0, "root_noise": 1},
         {"root_noise": 1},
         {"root_noise": 1, "dirichlet_shaping": 1, "root_policy_temperature": 1.3},
         {"root_noise": 1, "dirichlet_concentration": 0.0},
         {"batch_size": 1, "synchronous": 1},
     ],
-    ids=["ply-tree", "ply-graph", "whole-turn", "noise", "noise-shaped-tempered", "noise-per-child", "synchronous"],
+    ids=[
+        "ply-tree",
+        "ply-graph",
+        "whole-turn",
+        "tree-form",
+        "tree-form-no-gates",
+        "noise",
+        "noise-shaped-tempered",
+        "noise-per-child",
+        "synchronous",
+    ],
 )
 @pytest.mark.parametrize("variant", ["Standard", "Standard - Two Timelines"])
 def test_the_step_loop_is_the_engines_run(variant, flags):
@@ -216,12 +231,24 @@ def _random_digests(game: Game, turn_start: bool, flags: dict, evaluator_seed: i
         {},
         {"graph": 1},
         {"split": T5D_SPLIT_WHOLE_TURN},
+        {"split": T5D_SPLIT_TREE},
+        {"split": T5D_SPLIT_TREE, "tree_gates": 0, "root_noise": 1},
         {"root_noise": 1},
         {"root_noise": 1, "dirichlet_shaping": 1, "root_policy_temperature": 1.3},
         {"root_noise": 1, "dirichlet_concentration": 0.0},
         {"batch_size": 1, "synchronous": 1},
     ],
-    ids=["ply-tree", "ply-graph", "whole-turn", "noise", "noise-shaped-tempered", "noise-per-child", "synchronous"],
+    ids=[
+        "ply-tree",
+        "ply-graph",
+        "whole-turn",
+        "tree-form",
+        "tree-form-no-gates",
+        "noise",
+        "noise-shaped-tempered",
+        "noise-per-child",
+        "synchronous",
+    ],
 )
 @pytest.mark.parametrize("variant", ["Standard", "Standard - Two Timelines"])
 def test_the_engines_random_evaluator_through_the_step_api(variant, flags):
@@ -233,7 +260,7 @@ def test_the_engines_random_evaluator_through_the_step_api(variant, flags):
         with Game.variant(variant) as g:
             mine, engine, shifted = _random_digests(g, True, dict(flags, seed=seed), seed * 31 + 5)
         assert mine == engine, seed
-        if flags.get("split") != T5D_SPLIT_WHOLE_TURN:
+        if flags.get("split") != T5D_SPLIT_WHOLE_TURN and flags.get("tree_gates") != 0:
             assert shifted > 0  # leaves past the shift were evaluated
 
 
@@ -583,6 +610,74 @@ def test_the_network_drives_a_search_deterministically(split):
         assert driver.stop == "playouts" and s.info().playouts == 48 and stats.leaves == s.info().evaluations
         digests.append(s.digest())
     assert digests[0] == digests[1] != digests[2]
+
+
+@pytest.mark.parametrize(
+    "legality",
+    [{}, {"legality_checks": T5D_NO_LIMIT, "legality_nodes": T5D_NO_LIMIT}, {"legal_moves_only": 0}],
+    ids=["budgeted", "exact", "pseudo-legal-seam"],
+)
+@pytest.mark.parametrize("synchronous", [0, 1], ids=["batched", "synchronous"])
+@pytest.mark.parametrize("root", ["Standard - Two Timelines", "Misc - Timeline Battleground", "past-the-shift"])
+def test_d2_the_tree_form_with_every_gate_firing_is_the_ply_split_with_the_network(root, synchronous, legality):
+    """Spec 15.2's row through the C step API with the network at random weights: the tree form
+    with every interaction gate firing (the ``ALWAYS`` seam) builds the ply split's search bit for
+    bit (H15's digest) - inheritance is its only difference - with the same evaluations; every
+    mid-turn leaf a gate's, nothing inherited."""
+    net = NetworkEvaluator(_small_net(5), max_batch=8)
+    digests, infos = [], []
+    for flags in ({"split": T5D_SPLIT_BOARD_MOVE}, {"split": T5D_SPLIT_TREE, "tree_gates": T5D_TREE_GATE_ALWAYS}):
+        g = _shifted_game_with_moves(seed=3) if root == "past-the-shift" else Game.variant(root)
+        with g:
+            s = Search(g, turn_start=root != "past-the-shift", params=search_params(seed=7, synchronous=synchronous, **flags, **legality))
+            run_search(s, net, playouts=40, batch_size=8)
+            digests.append(s.digest())
+            infos.append(s.info())
+            s.close()
+    assert digests[0] == digests[1]
+    ply, tree = infos
+    assert ply.evaluations == tree.evaluations and ply.playouts == tree.playouts == 40
+    assert tree.inherited_nodes == 0 and tree.gate_always > 0
+    assert (tree.gate_between, tree.gate_capture, tree.gate_check, tree.gate_present) == (0, 0, 0, 0)
+
+
+class _Counts:
+    """An evaluator that notes the moves made in each leaf's action (A6) and answers uniformly."""
+
+    def __init__(self) -> None:
+        self.driver: CStepDriver | None = None
+        self.moves_made: list[int] = []
+        self.inner = UniformEvaluator()
+
+    def __call__(self, positions):
+        self.moves_made.extend(v.expansion.moves_made for v in self.driver.batch)
+        return self.inner(positions)
+
+
+def test_d2_the_tree_form_without_gates_asks_the_network_only_at_turn_starts():
+    """With no gate the network is asked about turn starts only (the root here is one): the
+    states inside a turn inherit the turn start's priors and never reach the evaluator, and the
+    summary counts them. With the default gates it is asked about some mid-turn states too, each
+    counted by its gate."""
+    for gates, mid_turn in ((0, False), (None, True)):
+        with Game.variant("Misc - Timeline Battleground") as g:
+            flags = {"split": T5D_SPLIT_TREE} | ({} if gates is None else {"tree_gates": gates})
+            s = Search(g, params=search_params(seed=2, **flags))
+            ev = _Counts()
+            ev.driver = CStepDriver(s, playouts=120)
+            serve(ev.driver, ev, batch_size=8)
+            info = s.info()
+            s.close()
+        assert ev.moves_made and info.inherited_nodes > 0
+        assert any(ev.moves_made) == mid_turn
+        gated = info.gate_between + info.gate_capture + info.gate_check + info.gate_present
+        assert info.gate_always == 0 and (gated > 0) == mid_turn
+
+
+def test_d2_the_tree_form_is_refused_under_graph_search():
+    """Spec issue 301: under MCGS an inherited node's priors would depend on the path that made it."""
+    with Game.variant("Standard") as g, pytest.raises(EngineArgumentError, match="301"):
+        Search(g, params=search_params(split=T5D_SPLIT_TREE, graph=1))
 
 
 def test_the_network_past_the_shift():

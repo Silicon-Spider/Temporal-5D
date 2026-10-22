@@ -49,6 +49,29 @@
 //    here (an action is listed submitted), so the evaluator's submit logit is
 //    not read and the C API reports submit_possible 0: the whole-turn arm has
 //    no end-of-turn token (a spec issue, not built).
+//  * TurnSplit::Tree, D2's TREE FORM (§8.2, "Evaluating at turn boundaries";
+//    CHECKPOINT 6, built first at CHECKPOINT 8): the ply split's nodes, edges,
+//    submit, dead ends and turn structure, with one difference - "inner nodes
+//    inherit the turn-start priors for the boards still to move; a simulation
+//    runs through the turn to a complete one and evaluates that. The network
+//    re-evaluates mid-turn only where a move interacts with the boards still
+//    to move". A node during an action whose incoming move fires no enabled
+//    INTERACTION GATE (SearchParams::tree_gates; kGate*) is not a leaf: it is
+//    expanded at once without the network - its children the legal moves and
+//    submit, exactly as a leaf's (the same legality classification), their
+//    priors its parent's logits matched by coordinates (the turn start's, or
+//    those of the last node the network evaluated on the way - each node keeps
+//    them) - and the simulation goes on through it. The network is called at
+//    the root, at every turn start (a submit edge: the turn complete), and at
+//    a mid-turn node whose gate fired; that node is an ordinary leaf - its
+//    evaluation backed up, the simulation ended. An inherited node takes no
+//    evaluation and backs up nothing of its own: the value of the leaf below
+//    it passes through it as through any inner node (its visits = its
+//    children's, ends 0 unless it is solved). With kGateAlways (§15.2's "every
+//    interaction gate firing") every mid-turn node is a leaf and the search is
+//    the ply split's, bit for bit. Refused with graph search (C11): under MCGS
+//    an inherited node's priors, and whether it was evaluated, would depend on
+//    the path that created it (build-log spec issue 301).
 //
 // HOW LEGALITY ENTERS. Through one call site (mcts.cpp, leaf_expansion): the
 // expansion of a leaf (t5d/expand.hpp) with ExpandOptions::legal_moves under
@@ -238,10 +261,91 @@ inline constexpr NodeId kNoNode = std::numeric_limits<NodeId>::max();
 // Parameters
 // ---------------------------------------------------------------------------
 
-/// D2 - undecided; both arms (ablations 6g, 6k).
+/// D2 - undecided; its arms (ablation 6x, with 6g and 6k).
 enum class TurnSplit : std::uint8_t {
-  BoardMove = 0,  ///< (a) each board-move its own ply
-  WholeTurn = 1,  ///< (b) children are whole legal actions
+  BoardMove = 0,  ///< (a) each board-move its own ply, every node evaluated
+  WholeTurn = 1,  ///< (b) children are whole legal actions (superseded by the flat form)
+  Tree = 2,       ///< (c) the tree form: the ply split with inherited priors inside a turn
+};
+
+/// D2's tree form: the interaction gates (§8.2: "The network re-evaluates
+/// mid-turn only where a move interacts with the boards still to move - a
+/// move between them, a capture of a piece that could reach them, a change in
+/// check, a shift of the present"), a bit mask (SearchParams::tree_gates).
+/// A gate is judged on the move into a mid-turn node, from the state before
+/// it and the state after. "The boards still to move" are those the mover has
+/// still to play after the move (SearchParams::tree_still_to_move).
+/// (i) A non-branching jump (J4): its destination is a playable board of the
+/// mover's, not yet played (a played one has the opponent to move and a jump
+/// onto it branches, J6) - so one still to move (under the Mandatory reading,
+/// a mandatory one).
+inline constexpr std::uint32_t kGateBetween = 1;
+/// (ii) A capture whose captured piece could reach a board still to move
+/// (SearchParams::tree_capture).
+inline constexpr std::uint32_t kGateCapture = 2;
+/// (iii) A change in check (SearchParams::tree_check).
+inline constexpr std::uint32_t kGateCheck = 4;
+/// (iv) The present moves (T4; SearchParams::tree_present): GameState::
+/// present() differs - an advance as the obligations are met (T5), or a
+/// rewind by a branch (T8) or a reactivation (T12).
+inline constexpr std::uint32_t kGatePresent = 8;
+/// §8.2's four.
+inline constexpr std::uint32_t kGatesInteraction = kGateBetween | kGateCapture | kGateCheck | kGatePresent;
+/// A TEST SEAM, not a reading: fires on every move, so every mid-turn node is
+/// evaluated - §15.2's "tree form with every interaction gate firing", which
+/// must equal the ply split.
+inline constexpr std::uint32_t kGateAlways = 16;
+/// Every bit a gate mask may hold.
+inline constexpr std::uint32_t kGatesAll = kGatesInteraction | kGateAlways;
+
+/// "The boards still to move" (§8.2 does not say which; A6 speaks of
+/// "mandatory boards still to move").
+enum class StillToMove : std::uint8_t {
+  Playable = 0,   ///< every playable board of the mover's not yet played (L5), optional ones too
+  Mandatory = 1,  ///< the mandatory boards left (T6)
+};
+
+/// What "a piece that could reach them" means (§8.2 is silent).
+enum class CaptureReach : std::uint8_t {
+  /// The captured piece, on the board it is taken from, has a pseudo-legal
+  /// move onto a board still to move, in the multiverse where that board and
+  /// its own are passed - advanced unchanged with its owner to move, as R1's
+  /// check status passes boards (C6) - by the move generator's rules (paths,
+  /// blocking, landing). A piece taken on a history board (a branching
+  /// capture) moves no more and reaches nothing.
+  Reach = 0,
+  Any = 1,  ///< every capture
+};
+
+/// What "a change in check" means mid-action (§8.2 is silent; R1's check
+/// status is a turn start's): the gate fires where the acting player's being
+/// "in check" differs before the move and after it.
+enum class CheckChange : std::uint8_t {
+  /// R1's construction carried into the action: with every board still to
+  /// move passed (advanced unchanged, the opponent to move, as R1 passes the
+  /// boards in the present), a piece of the opponent's can capture one of the
+  /// acting player's royals - so a move that gives the opponent a capture of
+  /// a royal on a board still to move, or takes it away, fires. (At a turn
+  /// start, under the Mandatory reading and the default T6, this is R1's own
+  /// check status.)
+  Passed = 0,
+  /// C4's submission test on the state as it stands (royals_safe), nothing
+  /// passed: a move after which the action could not be submitted as it is,
+  /// or could again.
+  Submission = 1,
+};
+
+/// What "a shift of the present" means (§8.2; the rulebook's "shift" is T5's,
+/// the present's advance as the obligations are met).
+enum class PresentShift : std::uint8_t {
+  /// Any move of the present: its advance as the obligations are met (T5) -
+  /// the last mandatory move of EVERY action, so each complete turn has an
+  /// evaluated node there (where submitting becomes possible, D8) - and a
+  /// rewind (T8, T12).
+  Any = 0,
+  /// A rewind only: the present moving back, mandatory boards released or
+  /// gained.
+  Rewind = 1,
 };
 
 /// How an action's prior is derived from its moves' logits (whole-turn split;
@@ -324,6 +428,21 @@ struct SearchParams {
   bool verify_unknown = true;
   /// (c) ... under this budget. Placeholder.
   LegalityOptions verify_legality = LegalityOptions::budgeted(4096, 200'000);
+  // D2's tree form (split Tree; read by no other arm). Each reading §8.2
+  // leaves open is a parameter, its default a placeholder (build-log spec
+  // issues 157-161).
+  /// The interaction gates (kGate*): §8.2's four by default; kGateAlways is
+  /// §15.2's test seam; 0 - the network only at turn starts and the root.
+  std::uint32_t tree_gates = kGatesInteraction;
+  StillToMove tree_still_to_move = StillToMove::Playable;  ///< placeholder
+  CaptureReach tree_capture = CaptureReach::Reach;         ///< placeholder
+  CheckChange tree_check = CheckChange::Passed;            ///< placeholder
+  PresentShift tree_present = PresentShift::Any;           ///< placeholder
+  /// An inherited node's value before any backup (its FPU base: Q(parent) for
+  /// its unvisited children) and its uncertainty signal (E2's prior variance)
+  /// are its parent's evaluation - the one its priors came from - rather than
+  /// an unevaluated node's 0. Placeholder (§8.2 is silent).
+  bool tree_inherit_value = true;
 
   // ---- E1: PUCT, top-k instantiation, entropy-adaptive widening, FPU, noise -----
   double cpuct = 1.5;                 ///< placeholder
@@ -381,6 +500,7 @@ struct SearchParams {
   double variance_bonus_cap = 2.0;
 
   // ---- C11 (prototype): MCGS --------------------------------------------------------
+  /// Refused with split Tree (build-log spec issue 301).
   bool graph = false;
   /// The lineage reading (C23, ruled): states that differ in a branch origin
   /// are different positions for the network, so different nodes.
@@ -726,12 +846,22 @@ struct SearchStats {
   /// uncertainty_source selects (their variance 0) - only where nothing reads
   /// it: with E2, E3 or E5's term on, such an evaluation is refused.
   std::uint64_t uncertainty_missing = 0;
+  /// D2's tree form: mid-turn nodes expanded on inherited priors - no evaluation.
+  std::uint64_t inherited_nodes = 0;
+  /// ... and mid-turn nodes sent to the network (or the cache) instead, by the
+  /// first gate found to fire - indexed by the gate's bit (between, capture,
+  /// check, present, always); tested in the order always, present, between,
+  /// capture, check (the cheapest first).
+  std::array<std::uint64_t, 5> gate_fired{};
   StopReason last_stop = StopReason::Playouts;  ///< why the last run() stopped
   // Wall-clock seconds in the rules engine's calls (not part of digest()):
   double seconds_mate = 0;     ///< turn starts' terminal checks (detect_mate)
   double seconds_expand = 0;   ///< leaves' expansions (legality classification included)
   double seconds_listing = 0;  ///< whole-turn: the actions listed
   double seconds_verify = 0;   ///< (c) verifications of unknown edges
+  /// Tree form: the interaction gates judged (inherited nodes' expansions are
+  /// in seconds_expand).
+  double seconds_gates = 0;
 };
 
 /// A node as the tests and tools read it.
@@ -749,6 +879,10 @@ struct EdgeView {
   bool pruned = false;
   bool unknown = false;   ///< the move's legality is unknown (a budget left it undecided)
   bool verified = false;  ///< verification has run on it (c)
+  /// The logit its prior was taken from, before the temperature: a move's the
+  /// evaluator's (tree form: inherited), an action's the action prior's, a
+  /// submit edge's the submit logit (NaN: none given - submit_share).
+  double logit = 0;
   double prior = 0;
   NodeId child = kNoNode;
   std::uint32_t visits = 0;
@@ -787,6 +921,9 @@ struct NodeView {
   float eval_error = std::numeric_limits<float>::quiet_NaN();       ///< the error head's output (NaN: none)
   float eval_moves_left = std::numeric_limits<float>::quiet_NaN();  ///< moves-left (NaN: none)
   bool evaluated = false;    ///< it has an evaluation (eval_*)
+  /// D2's tree form: expanded on inherited priors, never evaluated (eval_*
+  /// are its parent's with tree_inherit_value, 0 without).
+  bool inherited = false;
   double k0 = 0;
   std::size_t instantiated = 0;
   std::size_t edge_count = 0;
