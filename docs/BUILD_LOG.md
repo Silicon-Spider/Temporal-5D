@@ -3716,6 +3716,12 @@ superseded or made moot says so; nothing is deleted.
     best scores), the best point of the best box judged - the detector's own functions
     unchanged and its depth-first search pinned bit for bit
     (`detectors_the_hypercuboid_search_is_pinned`). Proposed edit 131.
+    *Fixed 2026-10-23 (found by the long run of §15.2's row): under Q3's play activation two
+    orders of one set of moves can reach two states with one action key - as successors the
+    generator now counts successors (each state kept with an action reaching it), so no state
+    is lost; a budget-stopped point emits none of its states, so a stopped generator's output
+    is a prefix of the unstopped one's. Ties are now newest-first and a point's realisations
+    recorded 32 at a time (issue 171).*
 
 164. **What the flat form's "summed logits" sum** (§8.2: "best-first by summed logits";
     register D2: "per-board policy marginals"). Silent on the terms. Built: a turn's score
