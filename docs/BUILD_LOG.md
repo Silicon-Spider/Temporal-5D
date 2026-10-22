@@ -1708,13 +1708,13 @@ width (M22)", "The CHECKPOINT 8 figures"). Found on the way: the ruling's premis
 | I9 | built, tested | The ruleset ID in every state and store key (H18): the Zobrist key, the solved and disproof stores, the evaluation cache |
 | I11 | built, tested | Self-play's turn cap from the state (and t5d-play's 300-board cap), scored as a draw, its frequency logged (issue 88) |
 | I12 | built, tested (M21 commit 3, `lane/net`) | Surprise-weighted sampling, the default sampler (`train/sampler.py`): per game over its full-search rows half uniform, half in proportion to KL(pruned target || raw prior) (I2), a small value-surprise share (0.05, a placeholder: KL(WDL target || raw root WDL)); rows written floor(w) times plus one with probability frac(w), seeded - full weight, no importance scaling; re-derivable from the records. 6u's arms: uniform, I6's two triggers. Placeholders: issue 236 |
-| I13 | built, tested (M21 commit 2, `lane/net`) | Deblundering (6z) in the target builder: walking back from the end, a played child not the best by pruned visits whose q falls more than the threshold (0.1, Lc0's) below the best's blends the WDL and moves-left targets of its decision and every earlier one towards the best child's backed-up (q, d) and its network moves-left plus the turn its move ends (issue 148), linearly across the band (0.05, a placeholder); per-board labels untouched. Placeholders: issue 235(g) |
+| I13 | built, tested (M21 commit 2, `lane/net`) | Deblundering (6z) in the target builder: walking back from the end, a played child not the best by pruned visits whose q falls more than the threshold (0.1, Lc0's) below the best's blends the WDL and moves-left targets of its decision and every earlier one towards the best child's backed-up (q, d) and its network moves-left plus the turn its move ends (issue 148), linearly across the band (0.05, a placeholder); per-board labels untouched. M21 review fixes: a best move-child the search never evaluated (D2's tree form, inherited priors) takes the decision's own raw moves-left, and where there is no estimate at all moves-left is masked from that decision back - before, the tree form blended the WDL alone there (`targets.best_child_moves_left`; tested on constructed records and a tree-form game). Placeholders: issue 235(g) |
 | I14 | hook built, refused (M21 commit 2, `lane/net`) | Proof rescoring (6z): `TargetConfig.proof_rescoring` and `build_targets(proofs=...)` are refused while `targets.PROOF_CHANNEL_SIGNED_OFF` is False - no proof enters a target before the H23/H41 sign-off; records carry no proof reference. The rescoring itself is written at the sign-off |
-| I15 | built, tested (M21 commit 1, `lane/net`) | Rich training records, fixed before the pilot run. The engine side (ABI round 2): the root's raw outputs, the root children's search (q, d) and network outputs, the root side table (`child_key`, `prior_noise_free`, `value_variance`, `boost`, `exploration_scale`, `forced_visits`, `steered_visits`; `root_key`, `root_cpuct`, `root_best_since` - issues 153, 154) and `t5d_game_expand`'s `legal_moves` with its budget (issue 155). The records (`python/t5d/train/records.py`, format version 1, one `.npz` per game, read with `allow_pickle=False`): per decision the raw root outputs (WDL and categorical logits, the raw logit of every candidate move and of submit, error, moves-left), the root search value (q, d), visits, cPUCT and effort change point, the best and played children, every root child's statistics with its forced and steered counts and its own network evaluation, the decision's boards, the move and root temperatures, the PCR flag, cap and playouts, the seed; per game the conditions (engine version, ruleset, variant or 5DFEN start, the network's weight hash and configuration, every `t5d_search_params` field, the input's window and relations, the generator's configuration), the result and the 5dpgn. Proofs by reference: none while the proof channel is off (H23/H41). Written by the generator (`train/selfplay.py`); each decision's input rebuilt from the record alone (`replay_positions`, digest-equal to the generation's). The raw root outputs are the network's evaluation of the decision's own input, not a memo of the search's (issue 234). Section 15.2's round trip: the record bit for bit here; the targets with M21's target builder |
+| I15 | built, tested (M21 commit 1, `lane/net`) | Rich training records, fixed before the pilot run. The engine side (ABI round 2): the root's raw outputs, the root children's search (q, d) and network outputs, the root side table (`child_key`, `prior_noise_free`, `value_variance`, `boost`, `exploration_scale`, `forced_visits`, `steered_visits`; `root_key`, `root_cpuct`, `root_best_since` - issues 153, 154) and `t5d_game_expand`'s `legal_moves` with its budget (issue 155). The records (`python/t5d/train/records.py`, format version 1, one `.npz` per game, read with `allow_pickle=False`): per decision the raw root outputs (WDL and categorical logits, the raw logit of every candidate move and of submit, error, moves-left), the root search value (q, d), visits, cPUCT and effort change point, the best and played children, every root child's statistics with its forced and steered counts and its own network evaluation, the decision's boards, the move and root temperatures, the PCR flag, cap and playouts, the seed; per game the conditions (engine version, ruleset, variant or 5DFEN start, the network's weight hash and configuration, every `t5d_search_params` field, the input's window and relations, the generator's configuration), the result and the 5dpgn. Proofs by reference: none while the proof channel is off (H23/H41). Written by the generator (`train/selfplay.py`); each decision's input rebuilt from the record alone (`replay_positions`, digest-equal to the generation's). The raw root outputs are the network's evaluation of the decision's own input, not a memo of the search's (issue 234). Section 15.2's round trip: the record bit for bit here; the targets with M21's target builder. M21 review fixes: the round trip cannot see a value recorded wrongly at generation, so the tests now hold each decision's record to the live search (`generate_game(on_decision=...)`: the root's cPUCT with E2 off and on, the best child, the place in the action, the pruned and unpruned policy target and root value from the live children); a record with non-zero forced and steered counts round-trips; older, newer and missing versions are refused; replay refuses another ruleset or rules encoding and rebuilds under a caller's register counts, relations and window; the prior-to-target divergence is recorded under the builder's defaults when no configuration is given (issue 234(f), (g)) |
 | I16 | built, tested (M21 commit 3, `lane/net`) | The replay window (`train/window.py`): KataGo's sublinear shape `c (1 + b ((N / c)^a - 1) / a)` with its constants (250k, 0.75, 0.4) as placeholders until the pilot run; copies counted as rows; the most recent rows kept, batches drawn uniformly (issue 236) |
 | I17 | built, tested (M21 commit 3, `lane/net`) | SWA (`train/swa.py`): a running average of the parameters every `every_steps` steps capped at `max_snapshots` (placeholders, issue 236); `publish` gives the averaged network self-play receives (its hash named by the records); no batch statistics to recompute (checked). Written from Izmailov et al., not Lc0's code |
 | I18 | built, tested (M21 commit 3, `lane/net`) | The generator resigns at a turn start once the mover's search value was below `-threshold` at `consecutive` of its turn starts in a row; resignation off in 10% of games by the seed, every would-resign event recorded; `false_resign_report` gives the false-resign rate per board-count range. The threshold None (no resignation) until the value head is calibrated; the rest placeholders (issue 236) |
-| I19 | built, tested (engine round 2b; the schedules M21 commit 3, `lane/net`) | Exploration placeholders. Built (engine ABI round 2b): the root noise scaled to the open-edge count (E1), the shaping a prototype behind its flag, the root policy temperature as a parameter (`root_policy_temperature`, 1 by default) - issues 150-152, edit 123. The training generator's (M21, Python): the move-temperature schedule (placeholders: Lc0's T60, 0.9 -> 0.45, cut at move 60; a "move" is issue 305's turn) and the root temperature's self-play value and decay (KataGo 1.25 -> 1.1), set per search; today netplay's and selfplay's step schedule (1.0 for 16 decisions, then 0) and a root temperature of 1 (netplay and t5d-play keep it). Since M21 commit 3 the generator's `TemperatureSchedule`: the move temperature 0.9 -> 0.45 linearly over 60 turns, 0 from turn 60; the root policy temperature 1.25 -> 1.1 over 60 turns; both recorded per decision (issue 236) |
+| I19 | built, tested (engine round 2b; the schedules M21 commit 3, `lane/net`) | Exploration placeholders. Built (engine ABI round 2b): the root noise scaled to the open-edge count (E1), the shaping a prototype behind its flag, the root policy temperature as a parameter (`root_policy_temperature`, 1 by default) - issues 150-152, edit 123. The training generator's (M21, Python): the move-temperature schedule (placeholders: Lc0's T60, 0.9 -> 0.45, cut at move 60; a "move" is issue 305's turn) and the root temperature's self-play value and decay (KataGo 1.25 -> 1.1), set per search; today netplay's and selfplay's step schedule (1.0 for 16 decisions, then 0) and a root temperature of 1 (netplay and t5d-play keep it). Since M21 commit 3 the generator's `TemperatureSchedule`; since the M21 review fixes with Lc0's semantics (the main loop's ruling): the move temperature 0.9 before turn 60 (`temp-cutoff-move`) and a constant endgame temperature 0.45 from it (`temp-endgame`, which "doesn't decay"), a decay before the cutoff an option (`decay_to`, off) - commit 3 had read T60 as a decay to 0.45 and temperature 0 from turn 60; the root policy temperature 1.25 -> 1.1 over 60 turns; both recorded per decision (issue 236(d)) |
 | I20 | built behind its flag, tested (M21 commit 3, `lane/net`) | KL-adaptive full searches - a prototype (6l), `KLAdaptiveConfig.enabled` off: a full search in chunks stops once the root's visit distribution moved less than `min_gain` KL per playout past `min_playouts`, bounded by the full cap; the stop recorded and read as the effort label's convergence. Placeholders: issue 236 |
 
 ### M - the plan itself
@@ -1727,7 +1727,7 @@ width (M22)", "The CHECKPOINT 8 figures"). Found on the way: the ruling's premis
 | M18 | not started (rule) | A pilot self-play run before serious self-play re-checks the window and the other compute-weighted decisions - after §15.5, not in the untrained build |
 | M19 | applied | No GPU: counted FLOPs and CPU-labelled wall times (`dev-r`) are the untrained build's write-back; the GPU figures - FA4-class evaluations/s, the leaf-batching gain, FP8, the block-sparse and varlen kernels, the Phase-3 movegen re-check - named as deferred, measured on rented NVIDIA time before the pilot run; the bounded AMD attempt is G9's |
 | M20 | built, tested; the reply prototype parked with the heads (after engine round 2) | The placeholder dispositions (issue 121), each the code's default and its disposed-of arms removed where no named ablation needs them (`lane/net`; A7 is a component of its own). N-M20: the promotion offset in the policy (D1; `policy_promotion` gone); position-free per-board registers and global registers on every pair (B8; `board_register_spatial`, `global_register_pairs` and the learned coordinates gone); aux pooling from squares - moves-left, effort - with D3's value-type heads (WDL and the short value too) pooled from the global registers by mean (`aux_global_pool` gone; issue 223); moves-left in turns (issue 224); the acting player on the global registers (`acting_player_input` and `all_tokens` gone; with no global registers on the board tokens, issue 225; `cache.board_ident`'s `acting` keying kept for A7, issue 303); the submit logit from the pooled registers (D8; `submit_register` gone). Earlier: B6 removed (B15); B16's status biases with intrinsic frozen features (N-B16 - its `frozen_features = "current"` test arm stays, as N-B16 left it: no named ablation needs it, and whether to remove it is the main loop's call - the N-F6heads-M20 review); both supersession readings (C20; docs relabelled). Relabelled, not changed: B5's details (ablation 2), 16a-g (B9's "v1 as built", ablation 6a), the per-square labels (6j) - now v1 values, not placeholders; B7 has no code. Not here: the reply head's reinstatement as a prototype (D4) - the heads' rebuild after engine round 2; until then it is always built, as at N1. Not on M20's list: D8's readout form (`submit_head`, issue 109) |
-| M21 | built, smoke-tested (`lane/net`, commits 1-4); the QAT hook a seam | The training loop, written and smoke-tested, no training (§15.5 does not require it; the pilot run does). Built: I15's records and the generator (commit 1, issue 234); the target builder - I2's pruning with exclusion and provenance, D3's and D4's targets, I13, I14's refused hook, the losses' masks - with §15.2's I15 round trip (commit 2, issue 235); PCR (I5) with I20 behind its flag, I18, I19's schedules, I12's sampler with 6u's and I6's arms, I16's window, I17's SWA (commit 3, issue 236); the loop (`train/trainer.py`, commit 4, issue 237): records -> sampler -> window -> targets -> losses -> at most three optimiser steps -> SWA's published network, smoke-tested on self-play records from a random network and on synthetic records, the losses falling on a fixed synthetic batch. Not built: G8's QAT hook - a named seam (`apply_qat` raises) until the precision component's quantiser and the pinned format exist (edit 182); C3's conditioning-offset training - parked with the cached configuration; the per-square label generator (D4, step 2) - its labels masked |
+| M21 | built, smoke-tested (`lane/net`, commits 1-4 and the review fixes); the QAT hook a seam until G8 - the user rules on edit 182 | The training loop, written and smoke-tested, no training (§15.5 does not require it; the pilot run does). Built: I15's records and the generator (commit 1, issue 234); the target builder - I2's pruning with exclusion and provenance, D3's and D4's targets, I13, I14's refused hook, the losses' masks - with §15.2's I15 round trip (commit 2, issue 235); PCR (I5) with I20 behind its flag, I18, I19's schedules, I12's sampler with 6u's and I6's arms, I16's window, I17's SWA (commit 3, issue 236); the loop (`train/trainer.py`, commit 4, issue 237): records -> sampler -> window -> targets -> losses -> at most three optimiser steps -> SWA's published network. Since the review fixes (issue 237(a), the user's rule to the letter): optimiser steps on synthetic rows only, at most three per model whatever the trainer (the count travels with the model and its published copy); self-play records' rows - their inputs rebuilt under the trainer's own register counts, relations and window - go through the loop forward only (losses computed, no step); the miniature generate -> rows -> publish -> generate loop takes its steps on synthetic rows, the published network's SWA snapshot count reaching the next records; the losses falling on a fixed synthetic batch. Not built: G8's QAT hook - a named seam (`apply_qat` raises) until the precision component's quantiser and the pinned format exist (edit 182); C3's conditioning-offset training - parked with the cached configuration; the per-square label generator (D4, step 2) - its labels masked |
 | M23 | applied | Every working branch is pushed after each commit and takes main by merge, never rebase. The three lanes and their number blocks are the main loop's plan under this rule ("Current state (2026-10-17)") |
 | M24 | not started (rule) | Ablations on a shared dataset - after the pilot run; what the untrained build owes it is I15's record completeness |
 | M1-M6, M10 | applied | The plan's process rows: the build follows them (this log) |
@@ -3443,7 +3443,15 @@ superseded or made moot says so; nothing is deleted.
     on reading; the network's identity a BLAKE2b-128 hash of its state dict in order; the search
     configuration every `t5d_search_params` field of the full (and, with PCR, the cheap) search, each
     decision's seed and root temperature its own. (e) **A decision with nothing played** (a
-    resignation, I18) keeps its search and has played child -1. Proposed edit 175.
+    resignation, I18) keeps its search and has played child -1. (f) **Replay's conditions** (M21
+    review fixes): `replay_positions` refuses a record whose ruleset or rules encoding is not the
+    replayed game's; the engine version is recorded but not compared - a rebuild that differs shows
+    in the candidate moves and the final state, both checked - a reading the user may tighten; it
+    rebuilds under the caller's register counts, relations and history window (a trainer's own,
+    `TrainerConfig.window_k` or the record's), the record's being only the default. (g) **The
+    prior-to-target divergence** is recorded under the target builder's defaults (at the network's
+    short-term horizons) when the generator is given no configuration - before the review fixes it
+    was NaN then; the configuration is always named in the header. Proposed edit 175.
 235. **The targets from I15's records: what the documents leave unstated** (§8.3, §8.6, §12.2,
     §12.4, §12.5, §12.8, §15.2's I15 row; register I2, I5, I13, I14, D3, D4, D5, D9; issues 148,
     153, 154, 224, 231, 305). M21 commit 2 (`lane/net`, `python/t5d/train/targets.py`). Each a
@@ -3453,7 +3461,10 @@ superseded or made moot says so; nothing is deleted.
     reads them, c the recorded effective cPUCT, E3's factor on the exploration term); the prior is
     the search's, after the noise (KataGo's - `prune_prior`, the noise-free one the arm), less the
     recorded boost; a child reduced to one visit is pruned; recorded forced visits (none) are pruned
-    like any other. **Exclusion** (steered visits removed) is the default and **provenance** (kept at
+    like any other. The replica holds E2's root scale (inside the recorded effective cPUCT) and E3's
+    factor at their **final** values, the search's end - the selection saw them change as the
+    variances did: exact under the defaults, where both are off, an approximation with either on
+    (recording each child's prior-time variance instead is the alternative). **Exclusion** (steered visits removed) is the default and **provenance** (kept at
     `provenance_weight` 0.5) the arm - §12.2 calls the choice open (6e). (b) **The pruned root value**
     is the pruned-visit average of the children's q **and** d; with no visit surviving, the recorded
     root's (q, d). The q_ratio blend's search WDL is that pruned (q, d) - I2's rule read as covering
@@ -3469,7 +3480,16 @@ superseded or made moot says so; nothing is deleted.
     child by pruned visits (I2); "positions before it" read as including the blunder's own decision;
     a played child with no visits never a blunder; cheap searches' choices count; the best child's
     moves-left its network output plus one turn if it is the submit (issue 148's offset); an
-    unscored game's outcome targets taken from the best child where the blend is whole. (h) **Per
+    unscored game's outcome targets taken from the best child where the blend is whole. **The tree
+    form** (M21 review fixes): D2's tree form expands mid-turn children on inherited priors, so a
+    best move-child can carry no network moves-left (a probe found 103 of 184 visited tree-form
+    move-children with one) - commit 2 then skipped the moves-left blend while the WDL blend ran
+    (29 WDL rows rewritten against 16 moves-left). Reading chosen: such a child takes the
+    decision's own raw moves-left - the child is a state of the same action, so its turns left are
+    the root's estimate - and where there is no estimate at all (an unevaluated submit child, or
+    an evaluator without the head) moves-left is masked from that decision back until a whole
+    blend restores it; never the WDL blended alone. The other readings were masking moves-left
+    for every affected decision, or skipping the whole blend. (h) **Per
     board**: travelled-into within `travel_horizon` 2 turns, the decision's own move included, a
     travel's destination board (for a branching move the history board it targets);
     timeline-active-at-end from the final state; tactical volatility masked (proofs, gated). (i)
@@ -3499,9 +3519,14 @@ superseded or made moot says so; nothing is deleted.
     player counted, false when that player did not lose (a draw counts as false); reported per
     board-count range (6b's 50/100/200) by the board count at the event; a resigned game is the other
     side's win, its moves-left censored. Early adjudication (§12.3) is not built (issue 300). (d)
-    **I19**: Lc0's T60 read as a linear decay 0.9 -> 0.45 over 60 turns and temperature 0 from turn 60
-    (a turn one player's action, issue 305); the root policy temperature KataGo's 1.25 -> 1.1, linear
-    over the same 60 turns. (e) **I12**: the value-surprise term KL(WDL target || raw root WDL) at
+    **I19**: commit 3 read Lc0's T60 as a linear decay 0.9 -> 0.45 over 60 turns and temperature 0
+    from turn 60 - which contradicts the Lc0 semantics it cited. Lc0's options: `temp-cutoff-move`,
+    "Move number, starting from which endgame temperature is used rather than initial temperature";
+    `temp-endgame`, "Temperature used during endgame (starting from cutoff move). Endgame temperature
+    doesn't decay." **The main loop's ruling (M21 review fixes): follow Lc0** - 0.9 before the cutoff
+    turn 60, a constant endgame temperature 0.45 (a named parameter, `endgame`) from it; a decay
+    before the cutoff is optional (`decay_to`, off). A turn is one player's action (issue 305). The
+    root policy temperature KataGo's 1.25 -> 1.1, linear over 60 turns. (e) **I12**: the value-surprise term KL(WDL target || raw root WDL) at
     share 0.05 out of the uniform half; per-game normalisation (mean weight 1 over its rows); cheap rows
     weight 1; a KL that is infinite (no prior mass on a target entry) taken as the game's largest. (f)
     **6u's I6 arms**: raw variance half uniform, half in proportion to the raw categorical's variance;
@@ -3510,19 +3535,34 @@ superseded or made moot says so; nothing is deleted.
     2x and renormalised. (g) **I16**: KataGo's window shape and constants, copies counted as rows. (h)
     **I17**: every 100 steps, at most 10 snapshots in the running average. Proposed edits 179-181.
 237. **M21's loop, as built** (§15.1's M21 sentence, §10.2, §12.8; register M21, G8, C3, I17).
-    M21 commit 4 (`lane/net`, `python/t5d/train/trainer.py`). (a) **No training runs**: the loop
-    refuses more than `MAX_STEPS` (3) optimiser steps. The smoke test steps on batches from self-play
-    records of a random network as well as on synthetic records - the main loop's instruction for this
-    build; the brief's "a few optimiser steps on synthetic data" read as covering random-weight
-    self-play data (the training brief's ambiguity (1)): the user may rule it back to synthetic batches
-    only. (b) **Placeholders**: AdamW (the smoke test's) with NAdam (Chessformer's, I17's provenance) as
+    M21 commit 4 (`lane/net`, `python/t5d/train/trainer.py`). (a) **No training runs**: commit 4's
+    loop refused more than `MAX_STEPS` (3) optimiser steps per `Trainer` and stepped on batches from
+    self-play records of a random network as well as on synthetic records, reading the brief's "a
+    few optimiser steps on synthetic data" as covering random-weight self-play data. **The main
+    loop's reading since the review fixes** - the user's rule, "Training code may be written and
+    smoke-tested with a few optimiser steps on synthetic data - nothing more", kept to the letter:
+    optimiser steps only on synthetic rows (`synthetic_record`'s header says so, and `step_on`
+    refuses any other row); the record -> batch path tested forward only (`Trainer.losses_on`:
+    losses computed, no step); the generate -> rows -> publish -> generate miniature loop takes its
+    steps on synthetic rows alone; and the `MAX_STEPS` cap enforced per model, not per `Trainer`
+    instance - the count is an attribute of the model that its copies (SWA's published network
+    among them) carry, so a second `Trainer` or a smoke run cannot add steps. The user is free to
+    relax it. (b) **Placeholders**: AdamW (the smoke test's) with NAdam (Chessformer's, I17's provenance) as
     the other choice, lr 1e-4, weight decay 0, batch 64; a batch drawn uniformly from the window, each
     frequency copy a row. (c) **G8's QAT hook is a named seam, not built**: register M21 lists "the QAT
     hook" among what is smoke-tested, but G8 pins the simulated format "with the inference path, K/V
     cache included", and the precision component (G2's quantiser) is not built; `TrainerConfig.qat` and
     `apply_qat` mark where it plugs in and refuse until then - for the user: build the hook now on a
     provisional format, or keep the seam until G2 (edit 182). (d) **C3's conditioning-offset
-    training** stays parked with the deferred cached configuration: no hook. Proposed edit 182.
+    training** stays parked with the deferred cached configuration: no hook. (e) **The trainer's
+    inputs** (M21 review fixes): a record's inputs are rebuilt under the trainer's own register
+    counts, relations and (`TrainerConfig.window_k`, None: the record's) window - commit 4 rebuilt
+    them under the record's, so a trainer of another configuration got inputs its network did not
+    take. The window sets only the rebuilt positions' W/E scope (the cached configuration's, C2);
+    a row keeps the state alone, so today the override reaches no row - it matters once the cached
+    configuration trains. (f) **The published network's condition**: `Trainer.publish` sets the network's
+    `swa_snapshots`, which `network_info` records (0 where the raw weights are published) - commit 4
+    recorded 0 for an averaged network. Proposed edit 182.
 
 <!-- A new list, so that the numbers from 140 render as written. -->
 
@@ -4723,15 +4763,19 @@ struck through, where nothing of it is left to apply); the others stand as writt
     ruled: "the raw outputs are the network's evaluation of the decision's own input, rebuilt as the
     search's leaves are (the legal-moves filter under the legality budget, recorded), with the
     network's weight hash; the record keeps the candidate moves, so the input can be rebuilt by
-    replay; a whole-turn decision writes no policy record". Why: which evaluation counts as "raw"
-    when the search's root is a cache hit, and how an archive's input is rebuilt, are unstated
-    (issue 234).
+    replay - under the reader's own register counts, relations and window, the record's ruleset and
+    rules encoding checked; a whole-turn decision writes no policy record; the prior-to-target
+    divergence is recorded under a named target configuration, the builder's defaults when none is
+    given". Why: which evaluation counts as "raw" when the search's root is a cache hit, how an
+    archive's input is rebuilt and under which conditions, and under which configuration the
+    divergence is measured, are unstated (issue 234, (f), (g)).
 176. **§12.2 and §12.5 (forced-playout pruning) and register I2**: now - "adopt KataGo's
     forced-playout pruning with √(playouts) decay at target construction"; "each root's value
     recomputed as the pruned-visit-weighted average of its children's values". Proposed - add as
     built or as ruled: "the pruning compares each child's PUCT score, recomputed with the reduced
     count, with the most visited child's - the root's own selection rule with the recorded cPUCT and
-    the search's prior less any boost; KataGo's k = 2; a child left with one visit is pruned; the
+    the search's prior less any boost, E2's root scale and E3's factor at their values at the
+    search's end (exact while both are off); KataGo's k = 2; a child left with one visit is pruned; the
     root's draw probability is averaged the same way as its value, and the WDL target's q_ratio blend
     reads the pruned (q, d)". Why: the replica's terms, which prior, and whether D and the blend fall
     under I2's rule are unstated (issue 235(a), (b)).
@@ -4747,7 +4791,9 @@ struck through, where nothing of it is left to apply); the others stand as writt
     move's value and moves-left instead of the result, interpolated across a transition band".
     Proposed - add: "the blunder's own position included; the best move by pruned visits; the band a
     width in value (Lc0's), its placeholder 0.05; the best move's moves-left its network estimate
-    plus the turn its move ends". Why: unstated (issue 235(g)).
+    plus the turn its move ends - for a move the search never evaluated (the tree form's inherited
+    priors) the position's own estimate, and with none, moves-left masked rather than the value
+    blended alone". Why: unstated (issue 235(g)).
 179. **§12.5's PCR paragraph and register I5, I20**: now - "most self-play moves run at a small
     playout cap, a minority at full search"; "biasing ... if used at all, a mixture with a random
     component"; KL-adaptive "composes with the cap randomisation". Proposed - add as built or as ruled:
@@ -4763,7 +4809,14 @@ struck through, where nothing of it is left to apply); the others stand as writt
     "a small, explicitly experimental weight for value surprise"; "a sublinear growth rule"; "0.9
     decaying to 0.45, cut off at move 60"; "a stochastic weight average of recent snapshots". Proposed -
     add the as-built forms of issue 236(d)-(h) as placeholders, and name the turn (one player's action)
-    as the schedule's unit. Why: each is unstated (issue 236).
+    as the schedule's unit. For the exploration bullet, as Lc0 defines its options (the main loop's
+    ruling on the M21 review): `temp-cutoff-move`, "Move number, starting from which endgame
+    temperature is used rather than initial temperature", and `temp-endgame`, "Temperature used during
+    endgame (starting from cutoff move). Endgame temperature doesn't decay" - so "0.9 before turn 60,
+    a constant endgame temperature 0.45 from turn 60 (no decay after the cutoff; any decay before it
+    optional)", replacing "decaying to 0.45, cut off at move 60", which reads as a decay ending in a
+    cut to temperature 0. Why: each is unstated, and the cutoff's wording is ambiguous (issue 236,
+    236(d)).
 182. **§15.1's M21 sentence and register M21, G8**: now - "the training loop is written and
     smoke-tested ... the QAT hook". Proposed, as ruled: either "the QAT hook's seam (the hooks follow the
     precision component's quantiser and the pinned format, G2/G8)", or the hook built now on a

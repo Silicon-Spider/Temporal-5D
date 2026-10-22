@@ -28,11 +28,13 @@ from t5d.train.selfplay import (
     generate_game,
     is_full_search,
     move_temperature,
+    replay_positions,
     resign_enabled,
     root_temperature,
 )
 from t5d.train.swa import SWA, SWAConfig
 from t5d.train.targets import TargetConfig, build_targets
+from t5d.train.trainer import Trainer, TrainerConfig
 from t5d.train.window import ReplayWindow, WindowConfig, window_rows
 from tests.engine.helpers import requires_engine
 from tests.train.test_targets import _children, _decision, _game, _line
@@ -181,9 +183,21 @@ def test_swa_first_three_is_the_plain_mean():
 
 
 def test_the_temperature_schedules():
+    """I19's move temperature as Lc0 defines T60's options (the main loop's ruling, issue 236(d)):
+    ``temp-cutoff-move`` - "Move number, starting from which endgame temperature is used rather than
+    initial temperature" - and ``temp-endgame`` - "Temperature used during endgame (starting from
+    cutoff move). Endgame temperature doesn't decay": 0.9 before turn 60, a constant 0.45 from it;
+    a decay before the cutoff only as an option."""
     cfg = GeneratorConfig()
-    assert move_temperature(cfg, 0) == 0.9 and move_temperature(cfg, 30) == pytest.approx(0.675)
-    assert move_temperature(cfg, 59) == pytest.approx(0.9 - 0.45 * 59 / 60) and move_temperature(cfg, 60) == 0.0
+    assert [move_temperature(cfg, a) for a in (0, 30, 59)] == [0.9, 0.9, 0.9]
+    assert [move_temperature(cfg, a) for a in (60, 61, 600)] == [0.45, 0.45, 0.45]  # the endgame's, never 0, never decaying
+    decay = replace(cfg, schedule=replace(cfg.schedule, decay_to=0.6, decay_turns=60))
+    assert move_temperature(decay, 0) == 0.9 and move_temperature(decay, 30) == pytest.approx(0.75)
+    assert move_temperature(decay, 59) == pytest.approx(0.9 - 0.3 * 59 / 60) and move_temperature(decay, 60) == 0.45
+    early = replace(cfg, schedule=replace(cfg.schedule, cutoff_turn=10, endgame=0.2))
+    assert move_temperature(early, 9) == 0.9 and move_temperature(early, 10) == 0.2
+    with pytest.raises(ValueError, match="I19"):
+        replace(cfg, schedule=replace(cfg.schedule, endgame=-0.1)).validate()
     assert (
         root_temperature(cfg, 0) == 1.25
         and root_temperature(cfg, 60) == pytest.approx(1.1)
@@ -248,6 +262,12 @@ def test_kl_adaptive_full_searches_stop_on_a_quiet_root():
     assert all(t.effort[d.decision] < 15 for d in full)  # I20's stop is convergence (D4's effort label)
     g0 = generate_game(ev, base, net_cfg=NET)
     assert all(d.stop != "kl" and d.playouts == d.playout_cap for d in g0.record.decisions if d.full_search and d.move_count > 1)
+    # A root still moving runs to the cap: with no gain small enough (min_gain 0 - a KL per playout
+    # is never below it) the same full searches spend every playout, in chunks.
+    moving = replace(base, kl=KLAdaptiveConfig(enabled=True, interval=16, min_playouts=32, min_gain=0.0))
+    g1 = generate_game(ev, moving, net_cfg=NET)
+    still = [d for d in g1.record.decisions if d.full_search and d.move_count > 1]
+    assert still and all(d.stop == "playouts" and d.playouts == 400 for d in still)
 
 
 class _Doomed:
@@ -283,6 +303,35 @@ def test_resignation_and_its_check():
     h = g2.record.header
     assert g2.record.end != "resign" and not h["resign"]["enabled"] and h["resign"]["events"]
     assert all(g2.record.decisions[e["decision"]].moves_made == 0 for e in h["resign"]["events"])  # only at turn starts
+    assert {e["player"] for e in h["resign"]["events"]} == {0}  # only the losing side: Black's value is above +threshold
+    # The resigned record replays (its last decision plays nothing) and its rows reach the losses.
+    positions = replay_positions(rec)
+    assert len(positions) == len(rec.decisions)
+    trainer = Trainer(build_model(NET, seed=0), NET, TrainerConfig(batch_size=4, window=WindowConfig(min_rows=1000)))
+    assert trainer.add_game(rec) > 0
+    losses = trainer.losses_on(trainer.window.rows())
+    assert all(math.isfinite(v) for v in losses.values()) and trainer.steps == 0
+
+
+@requires_engine
+def test_a_value_inside_the_threshold_never_resigns():
+    """I18's sign: a mover resigns only below -threshold - the uniform evaluator's value 0 lies
+    between -threshold and +threshold, so no turn start resigns or would resign."""
+    resign = ResignConfig(threshold=0.5, consecutive=1, disabled_fraction=0.0)
+    cfg = GeneratorConfig(playouts=8, batch_size=4, cap_turns=3, cap_boards=30, seed=2, pcr=PCRConfig(enabled=False), resign=resign)
+    g = generate_game(UniformEvaluator(), cfg, net_cfg=NET)
+    assert g.record.end != "resign" and g.record.header["resign"]["enabled"] and g.record.header["resign"]["events"] == []
+    off = replace(cfg, resign=replace(resign, disabled_fraction=1.0))
+    assert generate_game(UniformEvaluator(), off, net_cfg=NET).record.header["resign"]["events"] == []
+
+
+def test_resignation_is_off_in_a_tenth_of_games():
+    """I18: AlphaGo Zero's protocol - resignation disabled in 10% of games, by the seed."""
+    assert ResignConfig().disabled_fraction == 0.1
+    resign = ResignConfig(threshold=0.5)
+    off = [not resign_enabled(GeneratorConfig(seed=s, resign=resign)) for s in range(4000)]
+    assert abs(sum(off) / 4000 - 0.1) < 0.02
+    assert not any(resign_enabled(GeneratorConfig(seed=s)) for s in range(50))  # no threshold: never
 
 
 def test_false_resign_report_per_range():

@@ -3,18 +3,27 @@
 
 "The training loop is written and smoke-tested in the untrained build - targets with provenance
 exclusions, losses, aux heads, PCR, the QAT hook - as the pilot run's prerequisite" (register M21).
-**No training runs**: a ``Trainer`` refuses more than ``MAX_STEPS`` optimiser steps (the build
-brief: "a few optimiser steps on synthetic data, nothing more"); the pilot run lifts the cap, not
+**No training runs** - the user's rule, "Training code may be written and smoke-tested with a few
+optimiser steps on synthetic data - nothing more", kept to the letter (the main loop's reading,
+BUILD_LOG issue 237(a)): at most ``MAX_STEPS`` optimiser steps **per model** (``smoke.check_step``:
+the count travels with the model and its copies, so a second ``Trainer`` cannot add steps), and
+steps only on **synthetic rows** (``synthetic_record``'s); rows from self-play records go through
+the same path forward only (``losses_on``: losses computed, no step). The pilot run lifts both, not
 this build.
 
-* ``Trainer.add_game(record)`` - one game's I15 record: its targets built (``train.targets``, the
-  reply prototype's from the inputs when the network has the head), its inputs rebuilt from the
-  record (``selfplay.replay_positions``), its rows weighted by the sampler (I12, 6u's arms) and
-  written into the replay window (I16) as frequency copies.
+* ``Trainer.add_game(record)`` - one game's I15 record: its inputs rebuilt from the record under
+  **the trainer's** network configuration - its register counts and relations, and
+  ``TrainerConfig.window_k`` or the record's window, which sets the rebuilt positions' W/E scope
+  - the cached configuration's; a row keeps the state alone (``selfplay.replay_positions``) - its targets
+  built (``train.targets``, the reply prototype's from those inputs when the network has the head),
+  its rows weighted by the sampler (I12, 6u's arms) and written into the replay window (I16) as
+  frequency copies.
 * ``Trainer.step()`` - a batch drawn uniformly from the window, collated (``targets.collate_rows``),
   forward, every head's loss (``losses.compute_losses``), backward, a finite check, one optimiser
-  step, then SWA's update (I17). ``step_on(rows)`` does the same on given rows (a fixed batch).
-* ``Trainer.publish()`` - the network self-play receives: SWA's average (I17).
+  step, then SWA's update (I17). ``step_on(rows)`` does the same on given rows (a fixed batch);
+  ``losses_on(rows)`` the forward half alone.
+* ``Trainer.publish()`` - the network self-play receives: SWA's average (I17), carrying its
+  snapshot count (``swa_snapshots``) into the records' network condition.
 * **G8's QAT hook is a seam, not built**: ``TrainerConfig.qat`` names it and ``apply_qat`` raises -
   the fake-quantisation hooks plug in there once the precision component's quantiser (G2) and the
   pinned format exist (register G8: "prepared, not adopted ... the simulated format is pinned with
@@ -45,7 +54,7 @@ from .losses import LossConfig, compute_losses
 from .records import Children, DecisionRecord, GameRecord
 from .sampler import BucketTracker, SamplerConfig, copies, row_weights
 from .selfplay import replay_positions
-from .smoke import MAX_STEPS
+from .smoke import MAX_STEPS, check_step, record_step
 from .swa import SWA, SWAConfig
 from .targets import Row, TargetConfig, build_targets, collate_rows
 from .window import ReplayWindow, WindowConfig
@@ -62,7 +71,8 @@ class TrainerConfig:
     lr: float = 1e-4
     weight_decay: float = 0.0
     seed: int = 0
-    max_steps: int = MAX_STEPS  # no training runs: at most MAX_STEPS
+    max_steps: int = MAX_STEPS  # no training runs: at most MAX_STEPS (and MAX_STEPS per model, whatever the trainer)
+    window_k: int | None = None  # the inputs' history window when rebuilding a record's (None: the record's)
     qat: bool = False  # G8's seam (``apply_qat``): not built
     target: TargetConfig | None = None  # None: the network's horizons, the rest the defaults
     sampler: SamplerConfig = field(default_factory=SamplerConfig)
@@ -77,6 +87,8 @@ class TrainerConfig:
             raise ValueError("batch_size >= 1, lr > 0, weight_decay >= 0")
         if not 1 <= self.max_steps <= MAX_STEPS:
             raise ValueError(f"the untrained build runs 1..{MAX_STEPS} optimiser steps, never a training run")
+        if self.window_k is not None and self.window_k < 1:
+            raise ValueError("window_k >= 1 (or None: the record's)")
 
 
 def apply_qat(model: T5DNet, cfg: TrainerConfig) -> T5DNet:
@@ -118,25 +130,45 @@ class Trainer:
     # -- data --
 
     def add_game(self, record: GameRecord, positions: Sequence | None = None) -> int:
-        """One game's rows into the window (module docstring); the rows written, copies counted."""
-        positions = replay_positions(record) if positions is None else list(positions)
+        """One game's rows into the window (module docstring); the rows written, copies counted.
+        ``positions``: the inputs, given (a synthetic record's states); None: rebuilt from the
+        record under the trainer's network configuration."""
+        given = positions is not None
+        positions = list(positions) if given else replay_positions(record, self.net_cfg, window_k=self.cfg.window_k)
         targets = build_targets(record, self.target_cfg, positions=positions if self.net_cfg.opp_reply else None)
         weights = row_weights(record, targets, self.cfg.sampler, self.tracker)
         n = copies(weights, int(record.header.get("seed", 0) or 0))
+        synthetic = bool(record.header.get("synthetic", False))
         for i, p in enumerate(positions):
-            self.window.add(Row(getattr(p, "state", p), targets, i), int(n[i]))
+            self.window.add(Row(getattr(p, "state", p), targets, i, synthetic), int(n[i]))
         return int(n.sum())
 
     # -- steps --
+
+    def losses_on(self, rows: Sequence[Row]) -> dict[str, float]:
+        """Every head's loss on ``rows``, forward only - no gradient, no step (how record rows are
+        tested in this build, issue 237(a))."""
+        self.model.eval()
+        batch, tgt = collate_rows(rows, self.net_cfg)
+        with torch.no_grad():
+            losses = compute_losses(self.model(batch), tgt, self.cfg.loss)
+        return {k: float(v) for k, v in losses.items()}
 
     def step(self) -> dict[str, float]:
         """One optimiser step on a batch drawn from the window."""
         return self.step_on(self.window.sample(self.cfg.batch_size, self.rng))
 
     def step_on(self, rows: Sequence[Row]) -> dict[str, float]:
-        """One optimiser step on ``rows`` (refused past ``max_steps``: no training runs)."""
+        """One optimiser step on ``rows`` - refused past ``max_steps`` of this trainer or
+        ``MAX_STEPS`` of the model, and on any row not synthetic: no training runs (issue 237(a))."""
         if self.steps >= self.cfg.max_steps:
             raise RuntimeError(f"the untrained build runs at most {self.cfg.max_steps} optimiser steps (no training runs)")
+        check_step(self.model)
+        if not all(getattr(r, "synthetic", False) for r in rows):
+            raise RuntimeError(
+                "the untrained build steps on synthetic rows only (no training runs; issue 237(a)) - "
+                "record rows are tested forward only (losses_on)"
+            )
         self.model.train()
         batch, tgt = collate_rows(rows, self.net_cfg)
         self.opt.zero_grad(set_to_none=True)
@@ -150,14 +182,19 @@ class Trainer:
             if p.grad is not None and not torch.isfinite(p.grad).all():
                 raise FloatingPointError(f"non-finite gradient in {name}")
         self.opt.step()
+        record_step(self.model)
         self.steps += 1
         self.swa.update(self.model, self.steps)
         self.history.append(values)
         return values
 
     def publish(self) -> T5DNet:
-        """The network published to self-play (I17: the weight average)."""
+        """The network published to self-play (I17: the weight average), carrying the number of
+        snapshots averaged (``swa_snapshots``: 0 where the raw weights are published) for the
+        records' network condition (``selfplay.network_info``)."""
         net = self.swa.publish(self.model)
+        averaged = net is not self.model
+        net.swa_snapshots = int(self.swa.snapshots) if averaged else 0
         return net.eval()
 
 
@@ -167,7 +204,8 @@ class Trainer:
 def synthetic_record(seed: int, states: Sequence[PositionState], *, full_every: int = 2) -> GameRecord:
     """A well-formed I15 record over synthetic inputs (smoke testing only): one decision per state,
     each its own turn, its candidates the state's moves (and submit where legal), random search
-    statistics; every ``full_every``-th decision a cheap search; White wins."""
+    statistics; every ``full_every``-th decision a cheap search; White wins. Its header says
+    ``synthetic``: its rows are the only ones the untrained build takes optimiser steps on."""
     rng = np.random.default_rng(seed)
     decisions = []
     for i, st in enumerate(states):
@@ -228,9 +266,9 @@ def synthetic_record(seed: int, states: Sequence[PositionState], *, full_every: 
                 search_seed=i,
                 root_key=i + 1,
                 epoch=0,
-                raw_error=0.1,
+                raw_error=float(np.float32(0.1)),  # float32-exact, as the file keeps it
                 raw_moves_left=10.0,
-                raw_submit_logit=float(rng.normal()) if offered else math.nan,
+                raw_submit_logit=float(np.float32(rng.normal())) if offered else math.nan,
                 root_evaluated=True,
                 root_visits=int(visits.sum()) + 1,
                 root_q=float((visits * q).sum() / visits.sum()),
@@ -252,6 +290,7 @@ def synthetic_record(seed: int, states: Sequence[PositionState], *, full_every: 
         )
     header = {
         "record_version": 1,
+        "synthetic": True,  # the only rows the untrained build steps on (issue 237(a))
         "seed": seed,
         "search": {},
         "result": {"end": "checkmate", "winner": 0, "actions": len(states), "final_active_timelines": [0]},
