@@ -1652,7 +1652,7 @@ order the D2 work (issue 142).
 | D8 | built, tested | Engine and search (E7, E6a): submit an explicit edge, legal only when C4 holds, never automatic. Network (N5): a global acting-player input on the global registers (the ruled place, M20 - the `all_tokens` arm and `acting_player_input` removed, `lane/net` N-M20; with no global registers, an ablation-3 arm, on the board tokens - the live boards' under the block-causal scope - a placeholder fixed in code, issue 225, tested to reach every output under every register arm), one distribution over moves + submit, values from the acting player's perspective; the submit logit read from the pooled global registers - their mean, as the value head reads them (M20, N-M20: `submit_register` and register 0 gone; tested invariant to permuting the registers, moved by any one). The readout's form (`submit_head`: linear, 257 parameters, or the policy's bilinear form) is still a placeholder (issue 109). Under the flat form the generator ends turns itself (issue 92) |
 | D9 | not started | The optimistic policy - a prototype (6t), match play only; its use in self-play is held open (§14.4): the net lane's heads, behind its flag, after engine round 2 |
 | E4 | principle (weakened) | "Narrow hard, because the auditor is watching" - the register now says weakened: it holds where the settling scans (< 50 boards) and Hunt (< 100) run, neither wired into the search on main (E10 lost; step 2); above that, narrowing is a bet on the audit lane and the league |
-| E1 | built in part, tested | PUCT with entropy-adaptive top-k widening and FPU; root noise in self-play with a per-child α (0.3); the policy temperature applied at every node. CHECKPOINT 7 (with I19): the root noise's total concentration split across the legal moves (a field appended beside `dirichlet_alpha`), shaping behind a flag, a root policy temperature; the widening schedule may depend on the mandatory-board count - engine ABI round 2. Every constant a placeholder, named in §8.4's "Constants as built" (issue 82) |
+| E1 | built, tested (the mandatory-count widening option not built) | PUCT with entropy-adaptive top-k widening and FPU; the policy temperature at every node. CHECKPOINT 7 (with I19), engine ABI round 2b: root noise in self-play with its total concentration (`dirichlet_concentration`, placeholder 0.03 x 361, appended beside the per-child `dirichlet_alpha`, which stays as its arm at 0) split across the root's open edges, per decision (issue 150); KataGo-style shaping a prototype behind `dirichlet_shaping`, off (its form a reading, issue 151); the root policy temperature (I19; issue 152), before the noise. "The widening schedule may depend on the mandatory-board count" - an option for 6g, not built (A6's count is in the expansion). Every constant a placeholder, named in §8.4's "Constants as built" (issue 82; edit 123) |
 | E5, E9 | built, tested | LCB with a visit floor (E5); the solver behind H41's switch, the secure child, a visit cap on solved children (E9) - constants named as placeholders in §8.4 (issues 84-85). E5's optional term (weight 0) reads the child's uncertainty signal - 6m's switch, since engine ABI round 2a (issue 149) |
 | E7 | not started | Time management, E11 in step 2 (engine lane): the moves-left integral allocator - moves-left counted in turns, converted to board-moves (issue 305) - and the stop/extend table, with 6o's arms (flat-evals and flat-wall-clock allocators, the signals on/off, the spiral guard at high N); the second volatility source is Hunt's and the settling scans' proofs (the register). The register keeps a "root-scan reserve" (§8.6); its one named consumer, Guard's re-search, is offline (adopted nowhere), so E11 holds none - a reading (issue 306) |
 | E2, E3 | built behind flags, tested | Off; awaiting 6m and 6t. They read a node's uncertainty signal: the categorical's variance by default, the error head's output under 6m's switch (`uncertainty_source`, engine ABI round 2a; issue 149); their constants placeholders twice over (issues 81, 149) |
@@ -1686,7 +1686,7 @@ order the D2 work (issue 142).
 | I16 | not started | The replay window growing sublinearly (6z): M21, a placeholder rule |
 | I17 | not started | SWA (6z): M21, smoke-tested |
 | I18 | not started | The false-resign check: M21 - resignation disabled in 10% of self-play games, false resignations measured per board-count range |
-| I19 | not started | Exploration placeholders: E1's root noise and root temperature in engine ABI round 2; the move-temperature schedule in M21 (today a step: temperature 1.0 for 16 decisions, then 0) |
+| I19 | engine side built, tested (round 2b); the schedules not started | Exploration placeholders. Built (engine ABI round 2b): the root noise scaled to the open-edge count (E1), the shaping a prototype behind its flag, the root policy temperature as a parameter (`root_policy_temperature`, 1 by default) - issues 150-152, edit 123. The training generator's (M21, Python): the move-temperature schedule (placeholders: Lc0's T60, 0.9 -> 0.45, cut at move 60; a "move" is issue 305's turn) and the root temperature's self-play value and decay (KataGo 1.25 -> 1.1), set per search; today netplay's and selfplay's step schedule (1.0 for 16 decisions, then 0) and a root temperature of 1 |
 | I20 | not started | KL-adaptive full searches - a prototype (6l): M21, behind a flag, with PCR |
 
 ### M - the plan itself
@@ -3351,6 +3351,43 @@ superseded or made moot says so; nothing is deleted.
     clamps; issue 81) were sized against a categorical over outcomes; the categorical is
     now over root search values (reversal 28) or replaced by the error head, so they are
     placeholders twice over - SPSA (G7) with 6m. Proposed edit 122.
+150. **The noise's "legal moves", and "root" under the ply split** (§8.4: "its total
+    concentration split across the legal moves"; §12.8; register E1, I19). Under budgeted
+    legality the root's moves include unknown ones; under the whole-turn split the root's
+    children are the listed actions (at most `max_actions`); a legal submit is an edge
+    beside the moves (D8). And under the ply split every decision is a fresh search (C14),
+    so a k-board action meets k roots. The documents say neither. Done (engine ABI round
+    2b; placeholders): the total splits across the root's **open edges** - the moves the
+    expansion kept (legal or unknown), a legal submit, or the listed actions; a move later
+    verified illegal is pruned with its noise, its siblings renormalised as ever. The noise
+    and the root temperature are drawn **per decision** (each decision's search is a
+    fresh root), as the noise was before. Proposed edit 123.
+151. **KataGo's shaping, in the spec's paraphrase** (§8.4: "half the concentration on moves
+    the prior ranks above most others, aimed at blind spots - a prototype (KataGo has not
+    validated it)"; register E1, I19). "Ranks above most others" is not pinned: no weight,
+    no reference prior, no cap. Done (a prototype behind `dirichlet_shaping`, off; every
+    constant a placeholder): the shaped share (`dirichlet_shaping_share`, 0.5 - the
+    paraphrase's "half") is spread in proportion to `max(0, ln min(P_i, cap) - mean_j ln
+    min(P_j, cap))` - how far an edge's log-prior lies above the open edges' mean - with
+    `cap` (`dirichlet_shaping_cap`) 0.01, so that the moves the prior already favours
+    strongly gain no more than those at the cap (the "blind spots" reading); the rest is
+    uniform, and the whole uniform where no edge lies above the mean. P is the root's
+    prior before the noise (after the temperatures). Written from the spec's words and
+    KataGo's published description of the idea, no code (H29). For 6g.
+152. **The root policy temperature** (§8.4: "KataGo uses 1.25 decaying to 1.1, Lc0's
+    training runs 1.2-1.45 (§12.8)"; register I19: "root policy temperature (KataGo 1.25 ->
+    1.1; Lc0 1.2-1.45)"; §12.3's match play: "temperature zero"). (a) Lc0's 1.2-1.45 is a
+    policy softmax temperature at every node, not a root one; the engine keeps both: the
+    every-node `policy_temperature` (1, the arm the Lc0 figures describe) and
+    `root_policy_temperature`, multiplied at the root. (b) No 5D decay schedule is given
+    (KataGo's decays with the game, scaled to board size; the unit of a turn is issue 305's
+    reading): `root_policy_temperature` defaults to 1 (off), and its self-play value and
+    decay belong to the training generator (M21), which sets it per search beside the
+    move-temperature schedule; the engine exposes the parameter and nothing more. (c) k0's
+    entropy reads the tempered prior (the prior the root's children are ranked by). (d) It
+    applies at a root's own expansion only: a root carried from an earlier search (match
+    play) keeps its prior; at match play it is 1 - read as self-play only, like I19's title
+    (§12.3's "temperature zero" is the move temperature). Proposed edit 123.
 
 ## Proposed spec edits
 
@@ -4215,6 +4252,18 @@ struck through, where nothing of it is left to apply); the others stand as writt
     the constants list: "E2's and E3's constants, sized before CHECKPOINT 7 against an
     outcome categorical, are placeholders for the search-value categorical and the error
     head alike". Why: issue 149.
+123. **§8.4's noise and temperature sentences, its constants list, and register E1, I19**:
+    now - "Root Dirichlet noise during self-play, its total concentration split across the
+    legal moves ... A root policy softmax temperature slightly above 1 flattens the prior
+    before the noise: KataGo uses 1.25 decaying to 1.1, Lc0's training runs 1.2-1.45".
+    Proposed - "... split across the root's open edges - the moves the expansion keeps,
+    legal or unknown, and a legal submit (the listed actions under whole turns) - per
+    decision, each decision's search being a fresh root. ... KataGo's root temperature is
+    1.25 decaying to 1.1; Lc0's training runs use a policy softmax temperature of 1.2-1.45
+    at every node (as built, the every-node `policy_temperature`, 1, and the root's
+    `root_policy_temperature`, set per search by the training generator, multiply)"; in
+    the constants list: "the noise's total concentration (0.03 x 361), the shaping's share
+    (one half) and prior cap (0.01), the root policy temperature". Why: issues 150-152.
 
 ## Session log
 
@@ -4254,3 +4303,7 @@ struck through, where nothing of it is left to apply); the others stand as writt
   WDL the search's value with its draw backed up beside it, moves-left recorded (issue
   148), one deliver call for every head (`t5d_search_deliver_evaluations`; the old call
   retired), 6m's switch (issue 149). Register D3, C14, E2/E3, E5, I10, I13; edits 121-122.
+- **2026-10-22 - engine ABI round 2b** (`lane/engine`): E1 and I19's exploration - the
+  root noise's total concentration split across the root's open edges (issue 150),
+  KataGo-style shaping behind a flag (issue 151), a root policy temperature (issue 152);
+  I19's schedules left to the training generator. Register E1, I19; edit 123.

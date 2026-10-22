@@ -179,6 +179,11 @@ SearchParams params_from(const t5d_search_params* c) {
     default:
       throw std::invalid_argument("uncertainty_source must be T5D_UNCERTAINTY_CATEGORICAL or _ERROR_HEAD");
   }
+  p.dirichlet_concentration = c->dirichlet_concentration;
+  p.dirichlet_shaping = boolean(c->dirichlet_shaping, "dirichlet_shaping");
+  p.dirichlet_shaping_share = c->dirichlet_shaping_share;
+  p.dirichlet_shaping_cap = c->dirichlet_shaping_cap;
+  p.root_policy_temperature = c->root_policy_temperature;
   return p;
 }
 
@@ -351,6 +356,11 @@ constexpr LayoutEntry kLayout[] = {
     T5D_SEARCH_AT(t5d_search_params, eval_cache_entries),
     T5D_SEARCH_AT(t5d_search_params, eval_cache_bytes),
     T5D_SEARCH_AT(t5d_search_params, uncertainty_source),
+    T5D_SEARCH_AT(t5d_search_params, dirichlet_concentration),
+    T5D_SEARCH_AT(t5d_search_params, dirichlet_shaping),
+    T5D_SEARCH_AT(t5d_search_params, dirichlet_shaping_share),
+    T5D_SEARCH_AT(t5d_search_params, dirichlet_shaping_cap),
+    T5D_SEARCH_AT(t5d_search_params, root_policy_temperature),
     T5D_SEARCH_AT(t5d_search_params, expand),
 
     T5D_SEARCH_SIZE(t5d_leaf),
@@ -532,6 +542,11 @@ void t5d_search_params_default(t5d_search_params* out) {
   out->eval_cache_entries = p.eval_cache_entries;
   out->eval_cache_bytes = p.eval_cache_bytes;
   out->uncertainty_source = static_cast<int32_t>(p.uncertainty_source);
+  out->dirichlet_concentration = p.dirichlet_concentration;
+  out->dirichlet_shaping = flag(p.dirichlet_shaping);
+  out->dirichlet_shaping_share = p.dirichlet_shaping_share;
+  out->dirichlet_shaping_cap = p.dirichlet_shaping_cap;
+  out->root_policy_temperature = p.root_policy_temperature;
 }
 
 t5d_status t5d_search_new(const t5d_game* game, int32_t turn_start, const t5d_search_params* params,

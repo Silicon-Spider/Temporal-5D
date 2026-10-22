@@ -314,6 +314,12 @@ class CSearchParams(ctypes.Structure):
         ("eval_cache_bytes", c_uint64),
         # engine ABI round 2 (register D3, I10), in front of the embedded struct
         ("uncertainty_source", c_int32),  # T5D_UNCERTAINTY_*: a node's variance for E2, E3 and E5's term (6m)
+        # engine ABI round 2b (register E1, I19): placeholders
+        ("dirichlet_concentration", c_double),  # the root noise's total, split across the open edges; 0: dirichlet_alpha each
+        ("dirichlet_shaping", c_int32),  # KataGo-style shaping: a prototype, off
+        ("dirichlet_shaping_share", c_double),
+        ("dirichlet_shaping_cap", c_double),
+        ("root_policy_temperature", c_double),  # the root's softmax temperature, before the noise (1: off)
         ("expand", ExpandOptions),
     ]
 

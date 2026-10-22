@@ -433,6 +433,12 @@ TEST(capi_search_errors_release_the_batch) {
   p.uncertainty_source = 2;  // 6m: the categorical or the error head
   CHECK_EQ(t5d_search_new(g.get(), 1, &p, &bad, nullptr), T5D_ERR_ARGUMENT);
   p = quick_params();
+  p.dirichlet_shaping = 2;  // a flag: 0 or 1
+  CHECK_EQ(t5d_search_new(g.get(), 1, &p, &bad, nullptr), T5D_ERR_ARGUMENT);
+  p = quick_params();
+  p.root_policy_temperature = 0;
+  CHECK_EQ(t5d_search_new(g.get(), 1, &p, &bad, nullptr), T5D_ERR_ARGUMENT);
+  p = quick_params();
   p.expand.relations = 1u << T5D_RELATION_PIN;
   CHECK_EQ(t5d_search_new(g.get(), 1, &p, &bad, nullptr), T5D_ERR_UNSUPPORTED);
   p = quick_params();
@@ -651,7 +657,8 @@ TEST(capi_search_reports_its_layouts) {
   // structs moves none of this header's fields).
   CHECK(offsetof(t5d_leaf, expansion) > offsetof(t5d_leaf, legality));
   CHECK(sizeof(t5d_leaf) - offsetof(t5d_leaf, expansion) < sizeof(t5d_expansion) + alignof(t5d_leaf));
-  CHECK(offsetof(t5d_search_params, expand) > offsetof(t5d_search_params, uncertainty_source));
+  CHECK(offsetof(t5d_search_params, expand) > offsetof(t5d_search_params, root_policy_temperature));
+  CHECK(offsetof(t5d_search_params, dirichlet_concentration) > offsetof(t5d_search_params, uncertainty_source));
   CHECK(sizeof(t5d_search_params) - offsetof(t5d_search_params, expand) <
         sizeof(t5d_expand_options) + alignof(t5d_search_params));
   REQUIRE_EQ(t5d_search_layout("t5d_search_params", "expand", &v), T5D_OK);
@@ -680,6 +687,18 @@ TEST(capi_search_reports_its_layouts) {
   t5d_search_params defaults;
   t5d_search_params_default(&defaults);
   CHECK_EQ(defaults.uncertainty_source, T5D_UNCERTAINTY_CATEGORICAL);  // 6m: the register's default reading
+  // E1, I19 (round 2b): the placeholders, through the C defaults.
+  const t5d::mcts::SearchParams cpp;
+  CHECK_EQ(defaults.dirichlet_concentration, 0.03 * 361);
+  CHECK_EQ(defaults.dirichlet_concentration, cpp.dirichlet_concentration);
+  CHECK_EQ(defaults.dirichlet_shaping, 0);
+  CHECK_EQ(defaults.dirichlet_shaping_share, cpp.dirichlet_shaping_share);
+  CHECK_EQ(defaults.dirichlet_shaping_cap, cpp.dirichlet_shaping_cap);
+  CHECK_EQ(defaults.root_policy_temperature, 1.0);
+  for (const char* field : {"dirichlet_concentration", "dirichlet_shaping", "dirichlet_shaping_share",
+                            "dirichlet_shaping_cap", "root_policy_temperature"}) {
+    CHECK_EQ(t5d_search_layout("t5d_search_params", field, &v), T5D_OK);
+  }
   CHECK_EQ(t5d_search_layout("t5d_leaf", "to_move", &v), T5D_ERR_ARGUMENT);
   CHECK_EQ(t5d_search_layout("t5d_no_such", nullptr, &v), T5D_ERR_ARGUMENT);
   CHECK_EQ(t5d_search_layout(nullptr, nullptr, &v), T5D_ERR_ARGUMENT);
