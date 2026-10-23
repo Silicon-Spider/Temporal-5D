@@ -10,6 +10,54 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-23 - A5.5: piece-centric token counts on the human games, counted FLOPs, the missing §15.3 row
+
+Section 14.4's A5 figures measured where M18 says compute goes - the human games - through the engine
+binding only; no training run.
+
+- **The cost model** (`net/cost.py`): `token_counts` - one position's tokens under A1 and A5 (pieces,
+  D, the cached configuration's live and frozen sets, A5's destination tokens live) from a
+  square-centric or a piece-centric state - and `piece_centric_costs`, section 9.1's model at them
+  (the dense pass, the analytic cached node, the frozen K/V; A1 against A5).
+- **The token-count tool** (`engine/token_counts.py`, `py -m t5d.engine.token_counts`): every action
+  start of 5dpgn records replayed as the gate's parse mode replays, the legal (exact) and pseudo-legal
+  moves' counts through the network's own construction, positions distinct by fingerprint and side to
+  move, per M7's board-count buckets and pooled by decisions (dense, cached, M16's blend); `--flops`
+  counts one dense forward, A1 against A5, on the block-sparse and every-key paths (at 1 and 2 layers,
+  extrapolated to 16 - exact: checked at the full depth). The brief's `t5d-measure --tokens` was not
+  needed: the binding's expansion takes the legal-moves filter since engine ABI round 2, so no engine
+  code changed.
+- **The measurements** (`docs/MEASUREMENTS.md`, "A5" and a §15.3 row): over t0database's 716
+  replaying games (22,761 distinct positions, M7's per-bucket counts), legal moves: tokens 1.94 / 2.19
+  / 2.43 / 2.35x fewer at 1-49 / 50-99 / 100-159 / 160-186 boards; the dense evaluation 2.49 / 3.34 /
+  4.35 / 4.37x cheaper, 2.79x pooled by decisions; the cached node (analytic) 1.42 / 2.05 / 2.63 /
+  2.55x, 1.56x pooled; counted at 44 boards 2.66x (block-sparse) and 2.79x (every key); synthetic 240-
+  and 600-board positions 4.8-9.9x; CPU wall at 44 boards 3.0x (indicative: a loaded machine).
+  **Flagged under the 2x rule**: the cached per-node term with pseudo-legal moves (1.30x against
+  "~2.7x", 2.1x off; 1.9x with legal moves), and the dense range's top (6.5x, a 600-board figure) 2.6x
+  above the saving under 50 boards.
+- **Tests**: `cost.token_counts` equals the layouts on every construction and the engine's own recount
+  on real positions; the analytic figures section 14.4 rests on (4.78 TF at 240 boards; the brief's
+  4.5x and 6.6x; about 3.3x at 44 boards); a piece-centric forward counted; the tool on records (one
+  entry per action start, legal within pseudo-legal, a refused record reported); the engine tests'
+  positions gain two search leaves' candidate moves (the legal-moves filter, exact). A fix to the A5
+  commit's tests: A7's canonical-input census (`test_perspective.py`) enumerates every `Batch` field
+  and now compares the new `piece_centric` too (the first A5 commit left its 19 cases failing - the
+  whole suite was first run here).
+- **The default path is unchanged, bit for bit** (the lane's evidence for A5 as a whole): 436 of 437
+  digests of A1's inputs and outputs - every `token_arrays` and `Batch` field, every `NetOutput` tensor
+  (trunk included) under eight configurations (F1 as shipped; FP32; chunked; dense; B10/B11/B12/B17
+  together; A8; the block-causal scope; no registers) on synthetic and engine positions, the training
+  rows' batch and targets (an engine game's, square labels included, and synthetic ones), the board
+  permutation, mirror and relayout outputs, `mirror_tokens`, the engine scope's tokens and the
+  evaluator's evaluations - identical between `0e37093` (main) and this commit; the 437th, the smoke
+  run's losses, differs between two runs at `0e37093` too (autograd's CPU
+  reductions are not deterministic). The parameter fingerprints (`tests/net/test_params.py`) pass.
+
+Spec: §9.1, §13.1, §14.4, §15.3; register A5, M4, M16, M18, M19, M24. BUILD_LOG: register row A5;
+spec issues 255-257; proposed edits 197 (a §15.3 row), 198 (§14.4's figures written back, objections
+(2) and (3)). MEASUREMENTS: the §15.3 table's A5 row and the "A5" section.
+
 ### 2026-10-23 - A5's plumbing: the evaluator and the training rows convert at the network's edge; games end to end; purity
 
 Register A5's engine and training plumbing (A5.4), behind the flag - no engine or C API change; no

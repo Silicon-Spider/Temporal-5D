@@ -27,6 +27,8 @@ order within a board, destinations from the candidate moves - are placeholders (
   mirror (A7) hold under A5; block-sparse attention stays lossless, sparse and one block at a time.
 * **The refusals (A5.3)**: the block-causal scope (config and forward), the cached path, the cache
   bench, D4's reply prototype, a batch of the other tokenisation, a mixed batch (issues 251, 252).
+* **The cost model (A5.5)**: ``cost.token_counts`` against the layouts, and the analytic figures
+  section 14.4's arithmetic rests on.
 """
 
 from __future__ import annotations
@@ -873,3 +875,52 @@ def test_relayout_keeps_the_a5_tokens_and_the_evaluator_style_conversion():
         x = relayout(a5(s), regs, glob)
         assert x.n_tokens == int(x.token_cells.sum()) + regs * s.n_boards + glob
         assert np.array_equal(x.moves, a5(relayout(s, regs, glob)).moves)
+
+
+# --- the cost model (A5.5) ---------------------------------------------------------------------------------------------
+
+
+def test_the_analytic_figures_section_14_4_rests_on():
+    """Section 9.2's 4.78 TF at 240 boards (A1), and the brief's reconstruction of section 14.4's
+    "~4.4-6.5x on dense attention" as the dense evaluation's total: 2.3x fewer tokens at 240 boards
+    (15,856 -> 6,894) gives 1.07 TF, 4.5x; 2.7x at 600 (39,616 -> 14,673) 4.1 TF, 6.6x; at the human
+    median of 44 boards (2,920 tokens) a 2.3x cut gives only about 3.3x - the linear terms are half the
+    cost there."""
+    from t5d.net.cost import dense_flops
+
+    cfg = NetConfig()
+    assert round(dense_flops(66 * 240 + 16, cfg)["total"] / 1e12, 2) == 4.78
+    a240, b240 = dense_flops(15_856, cfg)["total"], dense_flops(6_894, cfg)["total"]
+    a600, b600 = dense_flops(39_616, cfg)["total"], dense_flops(14_673, cfg)["total"]
+    assert round(b240 / 1e12, 2) == 1.07 and round(a240 / b240, 1) == 4.5
+    assert round(b600 / 1e12, 1) == 4.1 and round(a600 / b600, 1) == 6.6
+    a44, b44 = dense_flops(2_920, cfg)["total"], dense_flops(round(2_920 / 2.3), cfg)["total"]
+    assert 3.2 < a44 / b44 < 3.4
+
+
+@pytest.mark.parametrize("construction", list(A5_CONSTRUCTIONS))
+def test_token_counts_are_the_layouts(construction):
+    """``cost.token_counts`` - from a square-centric or a piece-centric state - is the layouts' count
+    on both arms, D the independent recount, and its cached sets add up to the whole."""
+    from t5d.net.cost import token_counts
+
+    s = A5_CONSTRUCTIONS[construction](300)
+    p = a5(s)
+    for c in (token_counts(s), token_counts(p)):
+        assert c["a1"] == s.n_tokens and c["a5"] == p.n_tokens and c["destinations"] == len(_empty_destinations(s))
+        assert c["cached_live_a1"] + c["cached_frozen_a1"] == c["a1"] and c["cached_live_a5"] + c["cached_frozen_a5"] == c["a5"]
+
+
+def test_the_analytic_costs_and_the_counted_forward():
+    """``cost.piece_centric_costs`` at ``token_counts``' figures, and a piece-centric forward counted."""
+    from t5d.net.cost import count_flops, dense_flops, piece_centric_costs, token_counts
+
+    s = synthetic_state(17, 12, n_timelines=4)
+    c = token_counts(s)
+    costs = piece_centric_costs(c, NetConfig())
+    assert costs["dense_a5"] == dense_flops(c["a5"], NetConfig())["total"] and costs["token_ratio"] == c["a1"] / c["a5"]
+    assert costs["dense_ratio"] > costs["token_ratio"] > 1, "attention is quadratic in T"
+    model = build_model(NetConfig(trunk_dtype="fp32", n_layers=1, piece_centric=True), seed=0).eval()
+    with torch.no_grad():
+        _, flops = count_flops(lambda: model(collate([a5(s)])))
+    assert flops > 0

@@ -1,5 +1,6 @@
 """Register A5 (piece-centric tokens, a prototype behind ``NetConfig.piece_centric``) on real engine
-positions: the conversion at the network's edge, the evaluator, games end to end and purity.
+positions: the conversion at the network's edge, the evaluator, games end to end, purity, and the
+token-count tool (``t5d.engine.token_counts``).
 
 * The conversion (``state.to_piece_centric``, strict): engine data drops nothing - its edges are its
   moves' own pairs and its relations end on pieces - and the token set is the occupied cells and the
@@ -58,7 +59,8 @@ def _final(text: str, **kw):
 
 def _positions(relations=ALL_RELATIONS) -> list:
     """Real positions: variant starts, the records' and the special positions, random play with
-    branched timelines - every typed relation built."""
+    branched timelines - every typed relation built; the last two random positions also with a
+    search leaf's candidate moves (the legal ones, exact - the destinations then the legal moves')."""
     out = []
     for name in VARIANTS:
         with Game.variant(name) as g:
@@ -68,6 +70,8 @@ def _positions(relations=ALL_RELATIONS) -> list:
     for variant, boards, seed in (("Standard", 12, 3), ("Standard - Two Timelines", 16, 5), ("Very Small - Open", 20, 3)):
         with random_position_game(variant, seed=seed, boards=boards, travel_prob=0.3) as g:
             out.append((g.position(relations=relations), g.snapshot()))
+            if variant != "Standard":
+                out.append((g.position(relations=relations, legal_moves=True), g.snapshot()))
     return out
 
 
@@ -224,3 +228,51 @@ def test_the_engines_cached_evaluator_refuses_a5():
     model = build_model(NetConfig(trunk_dtype="fp32", n_layers=1, piece_centric=True), seed=0)
     with pytest.raises(NotImplementedError, match="issue 252"):
         CachedNetworkEvaluator(SimpleNamespace(model=model))
+
+
+# --- the token-count tool (A5.5) -----------------------------------------------------------------------------------
+
+
+def test_the_cost_models_count_is_the_engines(positions):
+    from t5d.net.cost import token_counts
+
+    for pos, snap in positions:
+        assert token_counts(pos.state)["a5"] == _independent_count(pos, snap) == to_piece_centric(pos.state).n_tokens
+
+
+def test_the_token_tool_counts_a_record():
+    """``token_counts.record_positions`` on a record: one entry per action start, each the network's
+    own construction and the independent recount, the legal moves a subset of the pseudo-legal."""
+    found, fate = record_positions_from_text(RECORDS["branching"])
+    assert fate == "ok" and len(found) == 7, "the start and one per action (three turns of two)"
+    for entry, (pos, snap) in found:
+        assert entry["pseudo"]["a5"] == _independent_count(pos, snap)
+        assert entry["legal"]["a5"] <= entry["pseudo"]["a5"] and entry["legal"]["moves"] <= entry["pseudo"]["moves"]
+        assert entry["pseudo"]["a1"] == 66 * pos.state.n_boards + 16
+
+
+def record_positions_from_text(text: str):
+    """``position_counts`` at every action start of a record held as text, beside each position."""
+    from t5d.engine.token_counts import position_counts
+
+    out = []
+    with Game.from_pgn(text, legal=False) as g:
+        out.append((position_counts(g), (g.position(), g.snapshot())))
+        for _ in g.replay():
+            out.append((position_counts(g), (g.position(), g.snapshot())))
+    return out, "ok"
+
+
+def test_the_token_tool_reads_files(tmp_path):
+    from t5d.engine.token_counts import record_positions
+
+    path = tmp_path / "game.5dpgn"
+    path.write_text(RECORDS["cross_timeline"], encoding="utf-8")
+    found, fate = record_positions(path)
+    with Game.from_pgn(RECORDS["cross_timeline"], legal=False) as g:
+        g.replay_all()
+        boards = g.info().boards
+    assert fate == "ok" and len(found) == 5 and found[-1]["boards"] == boards
+    bad = tmp_path / "bad.5dpgn"
+    bad.write_text('[Mode "5D"]\n[Board "Standard"]\n\n1. e5 / e4\n', encoding="utf-8")
+    assert record_positions(bad)[1].startswith("refused")
