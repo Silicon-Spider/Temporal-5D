@@ -79,33 +79,10 @@ is ~15,800 tokens.
 | Feature | Encoding | Notes |
 |---|---|---|
 | Piece type | Learned embedding | ~13 states incl. empty |
-| Owner — ours or theirs, relative to the acting player | Learned embedding | Perspective-canonical (below) |
+| Colour | Learned embedding | |
 | Has-moved flag | Learned embedding | Pawns, rooks, kings and brawns only (5DFEN's `*` marker) — castling, the double step |
 | File, rank | Positional (§4) | |
 | Timeline, time | Positional (§4) | |
-
-**Perspective canonicalisation** (CHECKPOINT 7). The input is encoded from the acting
-player's side, as AlphaZero, Lc0 and KataGo all do (Chessformer flips its tokens with the
-side to move). Pieces are ours or theirs; when Black acts, ranks are mirrored
-(r ↦ size + 1 − r) and timeline labels negated (+n ↔ −n, and in ±0 variants +0 ↔ −0 —
-i ↦ −1 − i in §12.6's index mapping), so our pawns always advance up the rank axis and
-towards the opponent's timelines, and our created timelines are always the positive ones.
-The time axis is unchanged. Policy outputs map back through the inverse; value targets are
-already the acting player's (D8); identity is unaffected, since state keys hash the state
-and carry the acting player (H18). The acting colour stays a global input, as in
-AlphaZero's input planes, for the few colour-asymmetric facts (White moves first). It
-halves what the network must learn about the two colours. Committed-class — it is the
-input encoding.
-
-**Board-layout embedding — a prototype** (CHECKPOINT 7). Lc0 found its first attention
-layer doing little and fixed it by giving every square its whole board's piece layout at
-layer 0: the board's one-hot piece map, flattened and projected per square to a few
-channels, concatenated to the token input, with an FFN after the embedding — "as if 15%
-larger" for a 5% latency increase. Here it is per board: one projection from the board's
-flattened piece map (64 squares × 24 owner-and-piece states) to each of its squares. At 16
-channels per square that is about 1.6M parameters, and its compute is about 0.1% of
-attention at 44 boards. Boards smaller than 8 × 8 are padded. An arm of 6p, committed-class
-like any input.
 
 ### 2.3 Per-board categorical flags
 
@@ -121,7 +98,7 @@ board:
   activation. Free; keeps the binary flag as its zero. Under the cached configuration this
   and the active/inactive flag would go stale on frozen boards, so there they enter as
   score-time key biases instead (§4.1), and frozen tokens keep only intrinsic features.
-- **Side to move** — us or them, relative to the acting player (§2.2)
+- **Side to move**
 
 **Global turn-state inputs** — embedded into the global registers, because they belong to
 no board (§5.2):
@@ -962,18 +939,6 @@ each marked legal or unknown by its sound tiers under a budget. Search verifies 
 move the first time it selects it, never lets one feed a proof, and scores a node terminal
 only on an exact verdict (BUILD_LOG issues 46, 90).
 
-**Optimistic policy — a prototype for match play** (CHECKPOINT 7). KataGo trains a second
-policy head on the normal policy target with each sample weighted by how much better the
-mover did than the network expected — clamp(0, 1, sigmoid((z_value − 1.5) × 3) +
-sigmoid((z_score − 1.5) × 3)), the z-scores comparing short-term outcomes with the
-predicted error (§8.3) — here without the score term, which 5D lacks; Lc0's training
-configuration carries the same head. At match time KataGo searches with it for both sides,
-worth "something like 40 to 90 Elo", and keeps it out of self-play because it is "not
-clear what happens if this pretty substantial way of biasing the policy is fed back on
-itself". Same here: match play only (D9). It leans the prior towards moves that beat the
-network's expectation — tactics the raw policy undervalues — which matters most where Hunt
-does not run, above 100 boards (§11.4).
-
 ### 8.2 Multi-move turns
 
 A turn may require moves on several boards. Two options:
@@ -1056,54 +1021,20 @@ Under 50 boards the human games' median position has one active timeline, so mos
 there are single moves, where every arm is identical; the arms differ only where turns are
 wide.
 
-**Measured (CHECKPOINT 8, human games):** more than one playable board at the turn's start in
-5.8%, 27.1% and 64.0% of turns under 50, 50–99 and 100–199 boards. Playable boards include
-optional ones, so these bound the mandatory share from above: under 50 boards, where the
-human games spend 88% of their moves, at least 94% of turns are single-board and the arms
-nearly coincide; the difference concentrates where the compute is. Still to report: the
-same counts for mandatory boards, the share with three or more, the optional moves actually
-played, and the compute share of multi-board turns. **Build order:** the tree form first — it
-modifies the existing tree and is anchored by its equivalence to the ply split — then the
-flat form. Both are built either way, since D2 is committed-class; the figures set 6x's
-priority, not whether the arms exist.
-
 **Prediction on record:** both turn-start-only forms beat the evaluate-every-node ply split
 at equal wall-clock once turns have three or more mandatory boards, and the tree form beats
 the flat form where boards interact.
 
-### 8.3 Value heads
+### 8.3 Value head
 
-Four heads, each pooled by mean from the global registers, FP32, from the acting player's
-perspective (D8) — corrected at CHECKPOINT 7:
-
-- **WDL on the game result** — the value search uses. Lc0 blends its value target towards
-  the search's own value (`q_ratio`, from its T52 run); here the blend is a tuned knob,
-  default zero (6z).
-- **A 51-bin categorical head over the root search value** of full searches — recomputed
-  from the pruned visit counts so verification steering cannot enter (§12.2) — each scalar
-  target smoothed into neighbouring bins by a Gaussian (HL-Gauss; Farebrother et al.
-  found value functions trained by classification beat regression). Its variance and
-  distributional overlap are what §8.4's variance-scaled cPUCT and per-child bonus and
-  §8.6's overlap signal and LCB term consume.
-- **Short-term value at two or three horizons** — exponentially averaged future search
-  values. KataGo uses mean horizons of about 6, 16 and 50 turns in Go, scaled by board
-  area; Chessformer one, expected depth 6. Here the horizons are placeholders scaled to 5D
-  game length until the pilot run measures it. Lower-variance than the outcome, and the
-  target the next head and the optimistic policy (§8.1) learn from.
-- **An error head**, predicting the squared gap between the value and the short-term value
-  (KataGo's uncertainty target; Chessformer trains one at full weight) — trained from the
-  start rather than kept as a fallback; 6m decides whether it or the categorical variance
-  feeds uncertainty weighting.
-
-**Why the correction.** An earlier revision trained the 51 bins on the game outcome and
-called them BT4-style. Lc0's categorical heads are trained on search values and short-term
-values; its game result goes to the WDL head. A three-valued outcome gives targets to 3 of
-51 bins, and the "variance" it yields is the spread of results — how unclear the winner
-is — not how uncertain the evaluation is, which is what every consumer of the variance
-assumes.
-
-Keep all four at higher precision than the trunk if quantising (§10) — evaluation
-discrimination between +0.3 and +0.5 is exactly what quantisation error eats.
+Pooled from global registers, and **categorical (distributional) rather than scalar** —
+BT4-style bins over the outcome. Still exact-source (the target is the game outcome), and
+the distribution's variance reads off directly — which is what §8.4's variance-scaled
+cPUCT consumes, so no separate uncertainty head is needed. Keep at higher precision than
+the trunk if quantising (§10)
+— evaluation discrimination between +0.3 and +0.5 is exactly what quantisation error eats.
+Value and WDL are from the acting player's perspective (D8); pooling over the global
+registers is a mean.
 
 ### 8.4 Selection at high branching
 
@@ -1125,14 +1056,7 @@ this section is what makes that true.
   self-adjusts at match play when the engine leaves familiar territory.
 - FPU reduction on uninstantiated moves, so the widening frontier is explored
   pessimistically rather than optimistically.
-- Root Dirichlet noise during self-play, its **total concentration split across the legal
-  moves** — KataGo's α = 0.03 × 361 ÷ legal moves keeps the noise's overall strength
-  constant as the move count changes. 5D legal counts run from ~20 on a single opening
-  board to over 1,000, so a fixed per-move α is wrong at one end or the other. KataGo's
-  shaping — half the concentration on moves the prior ranks above most others, aimed at
-  blind spots — is a prototype (KataGo has not validated it). A root policy softmax
-  temperature slightly above 1 flattens the prior before the noise: KataGo uses 1.25
-  decaying to 1.1, Lc0's training runs 1.2–1.45 (§12.8).
+- Root Dirichlet noise during self-play, as standard.
 
 **Complements, not substitutes: variance-scaled cPUCT and uncertainty-weighted backups**
 (KataGo, ~+75 Elo combined in Go). These act on the exploration constant and backup
@@ -1195,8 +1119,7 @@ statistically, by widening and root noise, and offline by the audit lane. Stated
 honest limitation in §13.
 
 **Constants as built — placeholders, tuned by SPSA (G7):** E1's top-k, widening exponent,
-FPU (applied to unvisited instantiated children), the root noise's total concentration and
-shaping, and the root policy temperature; E2's and E3's
+FPU (applied to unvisited instantiated children) and root Dirichlet α; E2's and E3's
 formulas; E5's LCB at z = 3 with a 15% visit floor and categorical weight 0; E9's visit cap
 of 8 on solved children and secure child as Q − A/√n with A = 1; the whole-turn prior as the
 sum of single-move logits (the mean behind a flag). Each is a named parameter (BUILD_LOG
@@ -1392,8 +1315,8 @@ depend on how the position was reached.
 
 After our move commits, keep searching the resulting position (opponent to move). No
 single-move ponder guess is needed — PUCT spreads effort across replies by prior — and
-§12.4's opponent-reply head (a prototype) sharpens exactly the prior that allocates that
-effort, so ponder-hit rates should improve as a side effect if it is adopted. On the opponent's
+§12.4's opponent-reply head sharpens exactly the prior that allocates that effort, so
+ponder-hit rates improve as a side effect of a target already adopted. On the opponent's
 reply: re-root into their move's subtree, GC the rest.
 
 #### Self-play is different — do not carry by default
@@ -1438,7 +1361,7 @@ dimensions.
 | Registers/board | 2 | Multiplies by N |
 | Global registers | 16 | Free |
 | KV heads | 8 — full MHA | GQA saves 1.2% of dense cost and is retrofittable. See §10.2 |
-| Value heads | WDL (the search's value), 51-bin categorical over search values, short-term values, error — FP32 | §8.3 — the categorical variance feeds §8.4 and §8.6 |
+| Value head | 51-bin categorical, FP32 | §8.3 — its variance feeds §8.4 and §8.6 |
 | Aux heads | Mean-pool board squares, per-board and global — registers stay free scratch (B8, D7) | §12.4; ~0.1M total |
 | Smolgen latent | 32, bilinear per head | §14.4 board-level variant; <0.1M |
 | Params | ~21.5M with all heads (21,359,370 as built at N5, before CHECKPOINT 6's normalisation and displacement-bias changes) | Deliberately below AlphaZero's ~46M |
@@ -1493,7 +1416,7 @@ ratio changes before serious self-play — it is committed-class. Lc0 measured a
 768–1024 with 64 tokens; this network is far narrower and reasons across thousands of
 tokens and many boards, so the finding is evidence, not proof.
 
-### 9.3 Normalisation, biases and activation (CHECKPOINTS 6–7)
+### 9.3 Normalisation and biases (CHECKPOINT 6)
 
 The spec never named the trunk's normalisation. It does now, because the choice is
 committed-class: set before training, fixed after.
@@ -1507,11 +1430,6 @@ committed-class: set before training, fixed after.
 - **Pre-norm for v1.** Lc0 uses post-norm with DeepNet initialisation. Pre-norm is the more
   forgiving choice for a self-play pipeline trained from scratch, where a stalled early run
   costs more than the last fraction of quality; Lc0's arrangement is ablation 6y's arm.
-- **Mish activation in the FFN** — the spec never named one. Lc0's networks use it from its
-  T79 run, and Chessformer uses it in the feed-forward sublayer and the output heads, which
-  also keep their FFN and attention-output biases, as here. Mish applies in every head's
-  hidden layers too (CHECKPOINT 8). Squared ReLU is 6y's arm, in the trunk only: Monroe's
-  training notes report +0.6% policy accuracy for about 10% more latency.
 
 ---
 
@@ -1643,10 +1561,7 @@ PyTorch with torch.compile and FlexAttention is the inference path, and TensorRT
 revisited at 6w on NVIDIA hardware only if FP8 there leaves a gap worth a plugin. The
 development machine's AMD RX 9070 XT is listed in AMD's PyTorch-for-Windows release notes;
 whether torch.compile — which FlexAttention needs — works there is unstated, so it gets
-one bounded attempt, with any figures labelled AMD. AMD's equivalent of TensorRT, MIGraphX
-(which Lc0 also supports), meets the same export barrier, so it is no route for the
-development machine either. On NVIDIA hardware the middle path to measure at 6w is TensorRT
-for the matrix multiplications alone, with attention left in PyTorch (CHECKPOINT 7).
+one bounded attempt, with any figures labelled AMD.
 
 ### 10.3 The serving stack, consolidated *(deferred configuration only)*
 
@@ -2060,15 +1975,10 @@ first commit:
   before any generator release or proof-channel enablement. The game-record corpus is
   pinned too. The commit tier is a smoke test: a ruleset is gated only when two or more
   oracles answer for it, so the check that *some* ruleset is gated runs only in the tiers
-  that run every oracle — nightly and release (CHECKPOINT 6). The commit tier still fails if
-  the engine declines a record it read on the last green run, or reads none; a run
-  restricted to chosen sources or records is a developer convenience and never produces a
-  tier verdict (CHECKPOINT 8).
+  that run every oracle — nightly and release (CHECKPOINT 6).
 - **A known-divergences file.** When the engine and an oracle disagree, the rulebook
   decides; if the oracle is wrong, the divergence is recorded with its rulebook citation
-  (and reported upstream — defects as bug reports, disagreements with a documented rule as
-  questions citing the source, which also tests our own reading; the owner files them), so
-  it stays expected without masking future regressions. Any
+  (and reported upstream), so it stays expected without masking future regressions. Any
   new divergence fails the gate. Oracles can be wrong — the official client is.
 - **Provenance and instructions.** A provenance file records what came from where, under
   which licence, in which role; contributor instructions — for human developers and coding
@@ -2094,13 +2004,7 @@ first commit:
   (CHECKPOINT 3): a corpus record in the official client's export form is converted by the
   harness to the specification's 5dpgn, as notation only, and every source — the engine
   included — reads the converted text; a record the specification cannot express goes to
-  no source. **Capture markers are read leniently** (CHECKPOINT 8, a project decision): the
-  specification says when to write `x` — "if a piece is being taken" — not how to read a
-  superfluous or missing one. The marker never changes a move's meaning: a move is read as
-  its squares define it, a mismatch is logged as a warning, and the engine writes the marker
-  strictly. The marker carries nothing the squares do not, and refusing such records costs
-  gate coverage for no rules information. A source that refuses one gets a known-divergence
-  entry citing this decision.
+  no source.
 - **Triage by cluster; settle by rulebook, never by vote.** Disagreements that survive
   fingerprinting are grouped by the attacker's situation — whose turn it is on the
   attacking board, active or inactive timeline, head or earlier board, ordinary or
@@ -2596,7 +2500,7 @@ shape as §10.4.3's scope rule.
 Running the whole stack on the opponent's clock is standard and orthogonal; it applies
 identically to every rung. Mechanics in §8.7: search the post-move position with no
 single-reply guess — PUCT allocates across replies by prior, sharpened by §12.4's
-opponent-reply head if the prototype is adopted — then re-root on the actual reply.
+opponent-reply head — then re-root on the actual reply.
 
 #### Determinism debt
 
@@ -2795,12 +2699,7 @@ steer visits — prior boosts, forced expansions. Fed to policy training unfilte
 steered visits train the net toward the scanner's material-greedy bias, violating the
 differently-wrong property (§11.1) through the training loop rather than at inference.
 
-Outcome targets are safe — game results do not inherit steering. Search-value targets
-(§8.3's categorical and short-term heads, deblundering's best-move values, §12.8) can, so
-they are computed from the pruned visit counts: each root's value recomputed as the
-pruned-visit-weighted average of its children's values. Steering deeper in the tree still
-shapes the children's values; that residual is measured with 6e's arms (CHECKPOINT 7).
-Policy targets need one of:
+Value targets are safe — game outcomes do not inherit steering. Policy targets need one of:
 
 - **Exclusion**: scanner-forced visits removed from the target distribution (cleanest;
   loses some signal), or
@@ -2878,8 +2777,7 @@ against held-out adversaries.)
 moves-left steering active — prefer faster wins and slower losses once the outcome is
 settled (Lc0's MLH pattern). The
 now-calibrated value head earns resign thresholds and early adjudication in self-play,
-buying back a meaningful slice of generation compute, checked for false resignations
-(§12.8). Self-play also carries a **turn
+buying back a meaningful slice of generation compute. Self-play also carries a **turn
 cap defined from the state**, scored as a draw — a convention for ending runaway games,
 not a game rule (5D has no repetition rule to end them, §11.0 item 5); log how often it
 binds. As built: t5d-play's default cap is 300 boards, and a capped record carries the
@@ -2921,14 +2819,10 @@ adding a constant.
 
 | Target | Granularity | Source |
 |---|---|---|
-| WDL value — the search's value (§8.3) | Global | Game record |
-| Value distribution over the root search value — 51-bin categorical, HL-Gauss (§8.3) | Global | Search record — full searches |
+| WDL value (replaces scalar) | Global | Game record |
 | Moves-left — counted in turns, so both D2 arms share it | Global | Game record |
-| Opponent reply — the opponent's next turn as a distribution over its moves, mapped onto current squares (below); weight 0.15, KataGo's; prototype | Per move | Game record |
-| Short-term value — exponentially averaged future search values at two or three horizons (§8.3) | Global | Search record |
-| Value error — squared gap between the value and the short-term value (§8.3) | Global | Search record |
-| Soft policy — the policy target raised to the power 1/4 and renormalised, weight 8 (below) | Per move | Search record — full searches |
-| Optimistic policy — the policy target, each sample weighted by how much the mover beat the prediction (§8.1); match play only | Per move | Search record — full searches |
+| ~~Opponent reply prediction~~ — dropped from v1 (CHECKPOINT 6): Lc0's own training config weights such "future heads" zero as unstable, and here the reply's move space is undefined | Per move | Game record |
+| Short-horizon value (t+k bootstrap) | Global | Search record |
 | **Travelled-into within k plies** | **Per board** | Game record |
 | **Timeline still active at game end** | **Per board** | Game record |
 | Tactical volatility (forced swing within horizon) | Per board | **Proofs** — the solver, Hunt, the settling scans, the audit lane — exact |
@@ -2942,29 +2836,11 @@ outcome — **which boards come to matter**.
 Value and WDL targets are from the acting player's perspective (D8), and the policy target
 covers moves and submit alike (§12.2).
 
-**Soft policy** (CHECKPOINT 7). A second pointer head — its own source and destination
-projections and its own submit logit — predicts the policy target flattened towards
-uniform (raised to the power 1/4 and renormalised), at eight times the policy loss weight
-because its gradients are small once it is well optimised. KataGo reports that it "greatly
-improves the speed of learning of the policy"; Lc0 and Chessformer train it too. It matters
-more here: progressive widening and first-play urgency (§8.4) depend on how the prior ranks
-the tail of a ~1,000-move distribution, and that ranking is what this head trains.
-
-**Opponent reply, reinstated as a prototype** (CHECKPOINT 7). KataGo's paper measured it at
-1.30× learning efficiency at weight 0.15 in a controlled ablation; Lc0 shelved its version
-as unstable. The move space is defined after all: every board the opponent can move on next
-turn either exists now or descends from one that does, so each square of a reply maps to
-the same square on that board, and the target — attached to each of our decision points in
-the turn — is the opponent's next turn as a distribution over its mapped moves. Two new
-boards descending from one board (two branches into the same past board in one turn) make
-the mapping ambiguous, and those replies are masked. Dropped if it destabilises training
-as Lc0 found. Lc0's other future-move head, our own next move, is not adopted (§14.4).
-
 #### The source rule — §12.2's third channel
 
 An earlier revision said "exact sources only: game record, generator, scanner proofs."
 As written that prohibits AlphaZero itself — the policy target is a visit distribution,
-search-derived by definition, and the menu's short-term rows are search-sourced. The
+search-derived by definition, and the menu's short-horizon row is search-sourced. The
 actual rule:
 
 > **Own-search-derived targets are the AlphaZero norm. The prohibition is specific: the
@@ -3032,11 +2908,6 @@ get full searches by predicted difficulty (§8.6's effort head). Full searches a
 only source of policy targets, so pure difficulty-biasing starves easy positions of clean
 targets and play in simple positions can rot; if used at all, a mixture with a random
 component.
-
-Lc0's alternative, since its T50 run, varies full-search length by KL-divergence gain —
-stopping when the root distribution stops changing, to "spend less time on obvious moves,
-more on surprising ones". It composes with the cap randomisation rather than replacing it:
-an arm of 6l (CHECKPOINT 7).
 
 ### 12.6 Variant generality
 
@@ -3250,75 +3121,6 @@ narrows the gap; whether it closes is open — with the equal-wall-clock node ad
 possibly letting the windowed net search its way out of traps the unwindowed net walks
 into.
 
-### 12.8 Learning from mistakes, and the training-data mechanics (CHECKPOINT 7)
-
-Lc0 and KataGo converged on three ways of training harder on the engine's own mistakes, and
-on a handful of supporting mechanics. All carry over, and each is a function of stored
-self-play records, so most can be tuned after the fact on a fixed dataset (§13.1).
-
-**Surprise-weighted sampling — the default sampler.** KataGo writes each full-search
-position into the training data with a frequency weight that is half uniform and half
-proportional to the KL divergence from the network's prior to the search's policy target,
-so positions where search corrected the network are seen more often, at full weight rather
-than importance-scaled; it calls this one of its larger improvements, and adds a small,
-explicitly experimental weight for value surprise. Lc0's "value focus" (from its T60 run)
-similarly favours positions where the value was off. It changes only which positions are
-trained on, so it is §12.2-safe, and it replaces I6's realised-error arm as the default;
-I6's epistemic triggers stay as arms (6u). Two rules here: the divergence is measured
-against the *pruned* target (§12.2), or verification steering would read as surprise; and
-it is additive like every generator in this design — a confident mistake the search shares
-produces no surprise, so the audit lane and the league (§11.4, §12.7) still carry that
-class.
-
-**Deblundering — fix the targets, keep the positions.** Exploration temperature makes
-self-play pick bad moves, and the final result then trains every earlier position on a game
-the engine threw away. Lc0's fix, running since its T60 run with threshold 0.1: a move is a
-blunder if it was not the search's choice and its value falls more than the threshold
-below the best move's; positions before it take the best move's value and moves-left
-instead of the result, interpolated across a transition band. Lc0 found that simply
-avoiding blunders hurt, because the value head needs to see bad positions. It matters more
-here: wider branching makes temperature picks blunders more often, and long games spread
-one blunder's result over more positions. It applies to outcome-derived targets (WDL,
-moves-left); game-record facts — which boards were travelled into, which timelines
-survived — stay as recorded. Threshold and band are placeholders (6z).
-
-**Proof rescoring — exact targets where they exist.** Lc0 rescores its training data with
-endgame tablebases. Our tablebase is the solved store (§11.3): positions in self-play
-records that Hunt, the settling scans, the search's solver or the audit lane have proved
-take the proven value as their value-type targets, and deblundering then treats a proven
-loss reached by a bad move like any other blunder. Proofs are exact, so this is within the
-source rule (§12.4). Gated on the proof-channel sign-off (H23, H41). Value targets only for
-now: Lc0 disabled a tablebase-based policy boost after it interacted badly with its
-adaptive visit counts.
-
-**Rich training records — fixed before the pilot run.** Each record keeps what later
-choices need: the network's raw outputs at the root (WDL, value distribution, prior over
-the legal moves and submit, error head), the root search value, the best and played
-children's values, visit counts with §12.2's forced and steered flags, the prior-to-target
-divergence, proofs by solved-store reference, and the conditions — ruleset, board count,
-network, search configuration, temperature applied, playout-cap flag. Lc0's data format
-keeps raw, best and played values for exactly this. Deblunder thresholds, value blends,
-surprise weights and proof rescoring can then be re-applied without regenerating games, and
-a later architecture can be retrained on the archive (§13.1). Data generated without these
-fields cannot get them back.
-
-**Supporting mechanics, adopted as tuned placeholders:**
-
-- **SWA weights.** The network published to self-play is a stochastic weight average of
-  recent snapshots (Lc0's training configurations; Chessformer's Leela-CF, with Nadam).
-- **A replay window that grows with the data.** KataGo sampled uniformly from a window that
-  grew from 250,000 to about 22 million samples over its main run; here a sublinear growth
-  rule, with surprise weighting applied within the window.
-- **Exploration.** §8.4's noise scaled to the legal-move count, its shaping a prototype, the
-  root policy temperature, and a self-play move-temperature schedule with a cutoff (Lc0's
-  T60: 0.9 decaying to 0.45, cut off at move 60) — affordable because deblundering repairs
-  the targets temperature damages.
-- **A false-resign check.** AlphaGo Zero disabled resignation in 10% of self-play games and
-  set its threshold to keep false resignations under 5%. Here it is measured per
-  board-count range: resignation saves the most expensive positions, so a range where it
-  misfires costs both strength and large-board data.
-- **KL-adaptive full searches** — Lc0's alternative to fixed caps (§12.5), an arm of 6l.
-
 ---
 
 ## 13. Where this is most likely wrong
@@ -3422,20 +3224,6 @@ None of these are measurements.
 
 ### 13.1 Ablation order
 
-**How they run** (CHECKPOINT 7). Chessformer's ablations were trained supervised on "a static
-dataset of self-play games from an older reinforcement learning run" — no fresh self-play
-per arm. Do the same once the pilot run has produced data: network-only ablations —
-positional encoding (2), registers (3), move-graph heads (4), capacity and FFN width (5),
-routing (6a), input features (6p), normalisation and activation (6y), the Shaw term and
-piece-centric tokens — run as supervised trainings on one shared dataset carrying §12.8's
-records, ranked by policy and value loss and accuracy, then searchless and search Elo for
-the finalists. Target and sampling choices (6j's weights, 6u, 6z) re-derive targets and
-weights from the same records first. Fresh self-play only where the search is what is
-tested — 6c, 6g, 6k, 6l, 6m, 6n, 6o, 6s, 6t, 6v, 6w, 6x — and to confirm what the fixed data
-favoured. The caveat: the shared data comes from one network's search, so on-policy effects
-are invisible to the supervised arms, and finalists are confirmed in self-play before a
-committed-class choice is adopted.
-
 1. **The |E| phase curve (§10.4.2)** — before anything else, including network
    dimensions; pure movegen analysis, no training. Then the §10.4.2 cascade: the two-arm
    head-to-head (equal wall-clock and equal sims) or scope randomisation, gated before
@@ -3471,16 +3259,14 @@ committed-class choice is adopted.
     variant: the conditioning audit on value-surprise promotions
 6d. ~~Scanner eval: material count vs 5D-NNUE~~ — void while the NNUE is held open (§11.4)
 6e. ~~Async ladder: rung-1-only vs full ladder~~ — void, rung 1 retired (6b). Live
-    remainder: exclusion vs provenance for policy targets, and the residual steering in
-    search-value targets (§12.2)
+    remainder: exclusion vs provenance for policy targets (§12.2)
 6f. Prover SMP scaling: measured for the retired scanner, and of no help to exhaustive
     refutations (§11.4); verify the proof-export invariant under TT churn for Hunt and the
     settling scans (§11.3)
 6g. Selection knobs (§8.4): entropy-adaptive k₀ and widening exponent vs fixed top-k; FPU
     reduction — measured jointly with the §8.2 ply-split decision (branching differs ~5×);
     ftxi's semimove fine tree is the reference implementation for the ply-split arm; the
-    widening schedule may depend on the mandatory-board count (§8.2); root noise shaping and
-    the root policy temperature (§8.4)
+    widening schedule may depend on the mandatory-board count (§8.2)
 6h. ~~Rung-3 quiet screen~~ — void (retired). Live remainder: held-out adversarial suite for the
     confident-quiet residual (§12.3, §13) — generated by §12.7's held-out adversaries
     rather than hand-constructed, with scope-targeting exploiters supplying the
@@ -3488,17 +3274,13 @@ committed-class choice is adopted.
 6i. Demotion audit, moved from rung 2 to the offline audit lane (§11.4): the rate of
     demotion-refutations found — a direct probe of value-head reliability on deep lines
 6j. Auxiliary targets (§12.4): target-set ablation (global-only vs +per-board vs full);
-    loss weightings; sum-vs-mean reduction over boards, checked across the N curriculum;
-    soft policy on/off and its weight; the opponent-reply prototype on/off; short-term
-    horizons; the categorical head on root search value vs short-term value
+    loss weightings; sum-vs-mean reduction over boards, checked across the N curriculum
 6k. MCGS vs tree main search (§8.5) — measured jointly with 6g's ply-split decision;
     verify residual-backup stability and repetition handling at 240-board midgames
-6l. Playout cap randomisation (§12.5): cap ratio and full-search fraction — after 6g; Lc0's
-    KL-adaptive full searches as an arm
+6l. Playout cap randomisation (§12.5): cap ratio and full-search fraction — after 6g
 6m. Variance-scaled cPUCT + uncertainty-weighted backups (§8.4), fed by the categorical
-    head (§8.3); log the expected 6i catch-rate drop; the categorical variance vs the
-    error head — both trained from the start (§8.3) — as the signal search consumes, judged
-    on reliability curves by N-bucket (§14.4)
+    head (§8.3); log the expected 6i catch-rate drop; derived variance vs a trained
+    error head, judged on reliability curves by N-bucket (§14.4)
 6n. Tree persistence (§8.7): reuse on/off at match play; lazy-recompute fraction under the
     §7.9 refresh; ponder-hit rate
 6o. Time management (§8.6): integral allocator vs flat-evals vs flat-wall-clock; the
@@ -3510,7 +3292,7 @@ committed-class choice is adopted.
     registers initialised with material and timeline counts. Low priority; redundancy
     risk with heads 1 and 4 (§6), which inject the same relations structurally — but at
     zero cost, worth the arm. Initialisation does not conscript the registers (§12.4):
-    they may overwrite it. Also Lc0's board-layout embedding (§2.2)
+    they may overwrite it
 6q. ~~NNUE same-board threat features~~ — void while the NNUE is held open (§11.4)
 6r. Variant models (§12.6): Princess in the conditioned main net vs warm-started
     specialist — the generalist tax, measured; Reversed Royalty warm-start vs
@@ -3522,10 +3304,10 @@ committed-class choice is adopted.
     adversary scored for specificity
 6t. Final selection (§8.6): max-visits vs LCB with visit floor vs LCB + categorical
     variance, at match play — each LCB arm with and without §8.4's per-child variance
-    bonus, since resolve-then-decide is one design; the optimistic policy (D9) on/off
-6u. Sampling (§12.3, §12.8): KataGo's surprise weighting (the default) vs uniform vs I6's
-    epistemic triggers — persistent bucket, realised error, raw variance, the last expected
-    to overfit aleatoric positions — at matched data, on the fixed dataset first
+    bonus, since resolve-then-decide is one design
+6u. Uncertainty-prioritised sampling (§12.3) vs uniform at matched data: persistent-bucket
+    trigger vs realised error vs raw variance — the last expected to overfit aleatoric
+    positions
 6v. Difficulty-weighted allocation (§8.6): effort-quantile-weighted integral vs equal-sims;
     quantile choice; judged on late-game move quality where the gain should concentrate.
     Difficulty-prioritised curriculum overlaps 6u with the same aleatoric caveat — test as
@@ -3538,11 +3320,8 @@ committed-class choice is adopted.
     form (best-first legal turns by summed logits, progressive widening); measured jointly
     with 6g and 6k and reported by mandatory-board count — after the turn-width
     measurement (§15.1)
-6y. Normalisation and activation (§9.3): pre-norm vs Lc0's post-norm with DeepNet
-    initialisation, both RMSNorm-style without biases; Mish vs squared ReLU
-6z. Training-data mechanics (§12.8): deblunder threshold and band; the WDL target's blend
-    towards search value (Lc0's q_ratio); proof rescoring on/off once proofs are signed off;
-    replay-window growth; SWA on/off — target-side arms re-derived from stored records
+6y. Normalisation placement (§9.3): pre-norm vs Lc0's post-norm with DeepNet
+    initialisation, both RMSNorm-style without biases
 7. Tied vs separate weight sets — only under the §3.3 contingency
 8. **Dense vs 14+2 hybrid (§7.6)** — last, and only if the dense engine is node-starved.
    Requires the dense baseline from steps 1–6 to price it against.
@@ -3630,11 +3409,7 @@ self-play compute argument.
 A systematic comparison against Lc0, Stockfish, KataGo, dlshogi and YaneuraOu/Suisho —
 independently re-analysed — produced the adoptions recorded in their home sections
 (node-capped scanning, secure-child selection, the categorical value head, variance-cPUCT,
-MCGS, time management, PCR, continuation-history ordering, quiet-only NNUE training). A
-second pass at CHECKPOINT 7 added Lc0's and KataGo's training methods — soft policy,
-short-term value and error heads, surprise-weighted sampling, deblundering, proof
-rescoring, perspective canonicalisation and the rest of §12.8 — and corrected the
-categorical head's target (§8.3).
+MCGS, time management, PCR, continuation-history ordering, quiet-only NNUE training).
 This registry holds what stays open or refused, and the boundary clarification the
 analysis forced.
 
@@ -3660,9 +3435,9 @@ learned-verifier estimates entering any loss.
   variance, by N and phase — every confidence consumer (§8.4, §8.6, §11.2's escalation)
   assumes the variance means what it says, and §12.3's failure mode migrates exactly
   where calibration degrades. Persistent miscalibration in a bucket is the same drift
-  signal as a persistent correction. The error head (KataGo's solution, legitimate
-  under §12.4's own-search rule) is now trained from the start (§8.3); 6m decides which
-  signal search consumes.
+  signal as a persistent correction. Fallback if derived variance calibrates poorly: a
+  trained error head predicting |value − later-search value| (KataGo's solution;
+  legitimate under §12.4's own-search rule) — the 6m ablation arm.
 - **Within-scanner correction history** — Stockfish's own pattern (own-search residuals
   correcting own static eval) transplanted whole into the scanner; held open with the
   NNUE (§11.4). Within-system, legitimate.
@@ -3683,12 +3458,10 @@ learned-verifier estimates entering any loss.
 - **The scanner NNUE** (§11.1) — moved from the build plan to held open at CHECKPOINT 4. Its
   main job, evaluating the scanner's leaves, went with the leaf scans, and quiet-leaf reach
   failed every range. Revisit only if a leaf-level role returns.
-- **Our own next move as an auxiliary head** (Lc0's `policy_next`) — Lc0 found its future-move
-  heads unstable; only the opponent reply is reinstated, as a prototype with a defined move
-  space (§12.4, CHECKPOINT 7).
-- **The optimistic policy in self-play** — KataGo keeps it out; match play only (§8.1, D9).
-- **Contempt** (Lc0's WDL rescaling) — draws are rare here (stalemate and the self-play turn
-  cap), so there is little to steer; revisit if match draws become common.
+- **The opponent-reply auxiliary head** (§12.4) — dropped from v1 at CHECKPOINT 6. Lc0's own
+  training config weights such "future heads" zero as unstable, and here the reply's move
+  space is undefined — replies on boards our move creates have no token yet. Revisit with a
+  defined move space.
 - **Hunt with a lazily expanded root** (§11.4) — the likely remedy for its failure above 100
   boards; adopted only through a fresh pre-registered test.
 - **Value-side Shaw vectors** (§4.1) — per-pair aggregation of learned vectors into the
@@ -3803,14 +3576,7 @@ learned-verifier estimates entering any loss.
 - **ONNX/TensorRT export of the main network** (§10.2) — for now. TensorRT is NVIDIA-only;
   ONNX cannot express score-function attention biases except by materialising them or
   through a custom plugin; and nothing needs exporting while PyTorch drives the C++ search
-  through the C API. Revisit at 6w only if FP8 leaves a gap worth a plugin. AMD's MIGraphX
-  meets the same barrier.
-- **KataGo's convolution-era methods** — global pooling (the registers do it), fixup and
-  fixed-variance initialisation with one batch norm (§9.3's RMSNorm-style layers replace
-  them), nested bottleneck blocks, board-size masking (variable-length kernels do it):
-  inapplicable to a transformer rather than refused on principle.
-- **Symmetry augmentation beyond colour** — 5D has no exact board symmetry once castling
-  rights exist anywhere; the colour symmetry is what canonicalisation uses (§2.2).
+  through the C API. Revisit at 6w only if FP8 leaves a gap worth a plugin.
 
 **Registry note on process.** One refusal in this design's history was made against
 evidence already in this section: NNUE threat features were refused outright while the
@@ -3843,7 +3609,7 @@ idea improves play), needs training: that is the ablation programme (§13.1).
 | 1 | Scanner with the material-count eval: horizon per node budget, stand-pat/zugzwang | 6b — failed above 50 boards; verification v3 (§11.4) |
 | 1 | Movegen throughput at 100–600 boards | §11's bottleneck projection |
 | 1 | Turn width: mandatory boards per turn and optional moves played, per board-count range, on the human games | How much the D2 arms matter (§8.2) |
-| 2 | Network stack and search with random weights: dense v1 with CHECKPOINT 6's network items (RMSNorm-style normalisation without biases, the 4D displacement bias, the turn-state inputs, score-time status biases for frozen boards; the key-side Shaw term behind a flag), then committed-class alternatives behind flags (cached, piece-centric; the window only if the pilot run revives it); PUCT, widening, MCGS behind a flag, the D2 turn-construction arms, persistence, time management, LCB; verification v3's components and the audit lane's tooling; the training loop, smoke-tested on synthetic data, with CHECKPOINT 7's items (§8.3's value heads, the soft-policy, reply and optimistic heads, perspective canonicalisation, Mish, the board-layout embedding behind a flag, §12.8's record format, sampler, deblundering, SWA, replay window and the proof-rescoring hook behind the sign-off) | — |
+| 2 | Network stack and search with random weights: dense v1 with CHECKPOINT 6's network items (RMSNorm-style normalisation without biases, the 4D displacement bias, the turn-state inputs, score-time status biases for frozen boards; the key-side Shaw term behind a flag), then committed-class alternatives behind flags (cached, piece-centric; the window only if the pilot run revives it); PUCT, widening, MCGS behind a flag, the D2 turn-construction arms, persistence, time management, LCB; verification v3's components and the audit lane's tooling; the training loop, smoke-tested on synthetic data | — |
 | 3 | Equivalence suite green (§15.2); every cost figure measured and written back (§15.3) | Training may begin |
 
 Three rules govern the order:
@@ -3872,12 +3638,12 @@ writing.
 Not built in the untrained phase: the adversarial league (training infrastructure,
 trigger-gated, §12.7), the variant specialists (§12.6), refresh-ladder rungs 2–3 (gated on
 rung 1 showing a trained signal, §7.9), the retired scanner rungs and the NNUE, now held
-open (§11.4). No ONNX/TensorRT export (§10.2).
+open (§11.4), and the opponent-reply head (dropped, §12.4). No ONNX/TensorRT export (§10.2).
 The window is killed, provisionally (§15.6); the pilot self-play run re-checks it.
 
 **The training loop is written and smoke-tested** (CHECKPOINT 6) — targets with §12.2's
 provenance exclusions, losses and auxiliary heads, playout-cap randomisation, the QAT
-hook, and CHECKPOINT 7's training mechanics (§12.8) — with a few optimiser steps on synthetic data and no training. §15.5 does not
+hook — with a few optimiser steps on synthetic data and no training. §15.5 does not
 require it; the pilot self-play run does, and a plumbing bug found there costs GPU time.
 
 ### 15.2 The equivalence suite — correctness without training
@@ -3897,9 +3663,6 @@ Two computation paths that must agree, compared directly:
 | FP8/BF16 cache precision = live precision | §10.2's matching rule | G1 |
 | Displacement bias through the score function = the same bias materialised, on small positions | The score-function implementation is exact | B15 |
 | Key-side Shaw term via precomputed query–class products = direct per-pair computation, on small positions | The gather implementation is exact | B17 |
-| A position and its colour-swapped mirror (ranks mirrored, timelines negated, owners and acting player swapped) give identical canonical inputs and outputs | Perspective canonicalisation is exact | A7 |
-| Targets re-derived from stored records = the targets written at generation | The records carry what later choices need | I15 |
-| Each mapped reply square's descendant is the reply's square, on constructed turns with travel; ambiguous mappings masked | The reply head's move space is exact | D4 |
 | Tree form with every interaction gate firing = the evaluate-every-node ply split | Inheritance is the tree form's only difference | D2 |
 | Flat form's generator = an exhaustive listing of legal turns, in non-increasing summed-logit order, on small positions | Best-first generation is complete and ordered | D2 |
 | Turn-state counts = a brute-force recount from the rules engine's obligations | The new inputs are exact | A6 |
@@ -3930,7 +3693,6 @@ Every economic argument in this document rests on these, and today they are arit
 | FFN ratio 2× and 4× | 1.39× and 1.23× evals/s at 44 boards | 9.2 | estimated → to measure |
 | Displacement bias and normalisation changes | Negligible: a table lookup per pair; fewer operations | 4.1, 9.3 | estimated → to measure |
 | Key-side Shaw term (B17) | ~0.5× the QK^T product at 44 boards, ~9% at 240, with ~1,400 classes | 4.1 | estimated → to measure |
-| Board-layout embedding (A8) | ~0.1% of attention at 44 boards; ~1.6M parameters at 16 channels | 2.2 | estimated → to measure |
 | NNUE eval | ~10k MACs, sub-microsecond | 11.1 | void while held open |
 | Movegen throughput | Pseudo-legal: 44,047 actions/s at 240 boards and 24,951 at 600 on one thread. With fast legality: 20,249/s at 240 boards on one thread (1.01× the target), 37,316/s on M13's two expansion cores (1.87×), 12,133/s at 600 | 11, 15.6 | **measured (CPU)** — passes M9 on two cores |
 | Prover nodes/s | Brute-force scanner 787k nodes/s on one thread, 566k per thread at five; df-pn 239k; Guard ~18–24k and Hunt 0.7–61k nodes per root at 50 ms. Rung 1 retired, so its latency row is void | 11, 15.6 | **measured (CPU)** |
@@ -4199,8 +3961,3 @@ adversarial league and the offline audit lane carry robustness.
 **Multi-board turns are evaluated at turn boundaries (§8.2).** One evaluation scores every
 board's moves; the combination is assembled from those priors, in the tree or flat form;
 and the network sees exact turn-state counts (§2.3).
-
-**Train the way Lc0 and KataGo do (§8.3, §12.4, §12.8).** WDL on results and a categorical
-head on search values; soft-policy, short-term-value and error heads; surprise-weighted
-sampling, deblundered targets and proof rescoring; the input encoded from the mover's side;
-network ablations run supervised on a shared dataset (§13.1).
