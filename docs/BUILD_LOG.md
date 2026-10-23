@@ -67,6 +67,33 @@ deciding thread's tree holds no continuation"), yet the five-thread test asserts
 Queued for the engine lane (make the line complete from the certificate, or test
 the documented contract).
 
+### CHECKPOINT 9 - ruled upstream 2026-10-23 (design documents 74c1ab9)
+
+The user updated the design spec, the register and the architecture document upstream on
+2026-10-23; main took them by merge (765c5b6). The rulings, and what the build does with each:
+- **H52 - Kairos (FirePlank/5d-chess-engine; Rust, GPL-3.0), the fourth oracle and fifth
+  submodule** (Committed; H23, H26, H27 amended): built in `lane/gate` - pinned under
+  `oracles/third_party/`, harness only, nightly and release tiers; its query surface (perft
+  and what it counts, check and mate verdicts, a state export to fingerprint) confirmed at
+  the pinned commit and recorded in PROVENANCE.md before its driver is written; its Rust
+  toolchain fetched by `build --bootstrap` into `oracles/.cache/` like GHC. Its golden files
+  are recorded, and its divergences triaged by cluster, in the quiet-machine block (a
+  recording on a loaded machine is refused, AGENTS.md). The instruction files (CLAUDE.md,
+  AGENTS.md, CONTRIBUTING.md) still speak of three oracles - the user's to edit. Kairos as
+  an external opponent over 5DUCI (I7, M18) belongs to the pilot run and the league, after
+  section 15.5: not built now.
+- **C26 - the phase form** (dense below N\*, cached at or above it, the root deciding for
+  the whole search; N\* a placeholder, 50) and **C27 - refresh and supersession inside a
+  turn** (the ladder's triggers checked only at evaluated nodes; boards superseded mid-turn
+  recomputed when the network next runs) - Committed if C2 adopts the cache, and each a new
+  section 15.2 row: built in the cached path behind the cached configuration, with the rows'
+  tests (`lane/net` after A5, the engine side if the tree form needs it).
+- **H6-H9, H20, F4 - the NNUE retired**: nothing was built; section 15.2's F4 row and section
+  15.3's NNUE row are void; the register rows here relabelled.
+- **G6 - neither GQA nor MLA; full MHA stays. G10 - mixture-of-depths held open**, its
+  trigger A5's verdict (a trained ablation): nothing to build.
+Which of the proposed spec edits the update applied is checked with the write-backs (M4).
+
 ### CHECKPOINT 8 - ruled 2026-10-17 (design documents d5cc8d1)
 
 **The instruction files: the one edit the user allowed in each.** The user's words:

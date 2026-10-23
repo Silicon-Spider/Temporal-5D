@@ -10,6 +10,21 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-23 - CHECKPOINT 9 taken in: the design documents updated upstream, the build's plan for each ruling in the build log
+
+The user updated the design spec, the decision register and the architecture document
+upstream (74c1ab9; main took them by merge). `docs/BUILD_LOG.md` gains a "CHECKPOINT 9"
+section saying what the untrained build does with each ruling: Kairos as the fourth
+oracle (H52) built in the gate lane, its golden files and triage in the quiet-machine
+block; the phase form (C26) and refresh inside a turn (C27) built in the cached path for
+their new section 15.2 rows; the NNUE's retirement (H6-H9, H20, F4), G6 and G10 needing
+nothing built. No code changed.
+
+Spec: none edited here. CHECKPOINT 9's rulings as written upstream - §7.9, §7.10, §11.0,
+§11.1, §12.6, §12.7, §13, §14.3, §14.4, §15.1, §15.2, §15.3; register C2, C3a, C20, C26,
+C27, F4, G5, G6, G10, H6-H9, H13, H20, H23, H26, H27, H52, I7, M5, M18 - are the plan's;
+nothing is proposed.
+
 ### 2026-10-23 - G9's bounded AMD attempt: eager works on the RX 9070 XT, torch.compile does not (no Triton on Windows)
 
 Register G9's "one bounded attempt on the AMD RX 9070 XT via AMD's PyTorch for Windows,
