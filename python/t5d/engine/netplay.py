@@ -30,7 +30,8 @@ mirrors the engine's ``play_game`` (``src/selfplay.cpp``; ``t5d-play``) step for
   decision, then a submit decision (D8: never automatic); the tree form (``"tree"``) - the
   same decisions, each search inheriting the turn-start priors inside the turn and calling
   the network again only where an interaction gate fires (the engine's default gates); or
-  whole turns - a decision is an action, submitted with its last move.
+  the flat form (``"flat"``) - a decision is a whole turn, generated best first by the engine and
+  submitted with its last move (it replaced the enumerating whole-turn arm, ``"turn"``, retired).
 * **A move is played only once known legal**: a chosen child the legality budget left
   unknown is classified exactly first (``Search.verify``) - illegal, it is removed and the
   choice made again; still unknown, the most visited child known legal is played. Every
@@ -73,8 +74,8 @@ from .capi import (
     T5D_MOVE_TRAVEL,
     T5D_NO_LIMIT,
     T5D_SPLIT_BOARD_MOVE,
+    T5D_SPLIT_FLAT,
     T5D_SPLIT_TREE,
-    T5D_SPLIT_WHOLE_TURN,
     find_library,
 )
 from .convert import relations_for
@@ -83,8 +84,8 @@ from .expansion import Move, board_label, square_name
 from .game import Game, relation_bits
 from .search import Search, search_params
 
-SPLITS = {"ply": T5D_SPLIT_BOARD_MOVE, "turn": T5D_SPLIT_WHOLE_TURN, "tree": T5D_SPLIT_TREE}
-SPLIT_NAMES = {"ply": "board-move split", "turn": "whole turns", "tree": "tree form"}
+SPLITS = {"ply": T5D_SPLIT_BOARD_MOVE, "flat": T5D_SPLIT_FLAT, "tree": T5D_SPLIT_TREE}
+SPLIT_NAMES = {"ply": "board-move split", "flat": "flat form", "tree": "tree form"}
 MODES = ("self", "match")
 
 #: A small network for end-to-end play on a CPU (random weights; nothing is trained): two
@@ -117,7 +118,7 @@ class PlayConfig:
     the engine's default (``t5d_search_params_default``); the proof channel is off (H41)."""
 
     variant: str = "Standard"
-    split: str = "ply"  # D2: "ply" (board-move split), "tree" (the tree form) or "turn" (whole turns)
+    split: str = "ply"  # D2: "ply" (board-move split), "tree" (the tree form) or "flat" (the flat form)
     mode: str = "self"  # "self" or "match"
     playouts: int = 16  # per decision
     batch_size: int = 8  # leaves per network call
@@ -127,7 +128,6 @@ class PlayConfig:
     temperature_decisions: int = 16
     seed: int = 1
     max_actions: int = 200  # a safety stop, not a rule
-    max_listing: int = 256  # whole turns: actions listed per node (the engine's default)
     #: A custom start instead of ``variant``'s: 5DFEN board strings (the player to move inferred
     #: from the present, Q9); the record then names the board "custom" and writes them.
     start_fen: tuple[str, ...] | None = None
@@ -310,7 +310,6 @@ def _decision_params(game: Game, cfg: PlayConfig, relations: int, *, seed: int, 
         batch_size=cfg.batch_size,
         turn_cap_turns=cfg.cap_turns,
         turn_cap_boards=cfg.cap_boards,
-        max_actions=cfg.max_listing,
         expand=(8, "all", relations),
     )
 
@@ -393,7 +392,7 @@ def play_game(evaluators: Evaluator | Sequence[Evaluator], cfg: PlayConfig, *, n
                 res.deliver_seconds += stats.deliver_seconds
                 child = search.child(pick)
                 submitted = False
-                if cfg.split == "turn":
+                if cfg.split == "flat":
                     for m in child.moves:
                         game.apply(m)
                         action.append(m)
@@ -635,7 +634,7 @@ def check_replay(res: GameResult, replay: Replay) -> list[str]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Games through the C step API with the network (random weights) as the evaluator.")
     parser.add_argument("--variant", action="append", help="a named variant (repeatable; default Standard and Two Timelines)")
-    parser.add_argument("--split", action="append", choices=sorted(SPLITS), help="D2's arm (repeatable; default ply and turn)")
+    parser.add_argument("--split", action="append", choices=sorted(SPLITS), help="D2's arm (repeatable; default ply and flat)")
     parser.add_argument("--mode", action="append", choices=MODES, help="self-play or match play (repeatable; default both)")
     parser.add_argument("--games", type=int, default=1, help="games per (variant, split, mode)")
     parser.add_argument("--net", default="small", choices=["small", "F1"])
@@ -663,7 +662,7 @@ def main(argv: list[str] | None = None) -> int:
     summaries = []
     failed = 0
     for variant in args.variant or ["Standard", "Standard - Two Timelines"]:
-        for split in args.split or ["ply", "turn"]:
+        for split in args.split or ["ply", "flat"]:
             for mode in args.mode or ["self", "match"]:
                 for g in range(args.games):
                     cfg = PlayConfig(
