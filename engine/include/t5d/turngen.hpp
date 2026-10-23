@@ -44,10 +44,19 @@
 // THE UNIT (TurnUnit). Actions, as count_legal_actions counts them (a set of
 // moves, its branching moves in creation order: two creation orders of one
 // point are two actions, with equal scores); or distinct successor states, as
-// count_legal_successors counts them - the first action reaching each state
-// (so its best score) stands for it. Ties are broken deterministically: by
+// count_legal_successors counts them - an action of the first point reaching
+// each state (so its best score) stands for it (where two of that point's
+// realisations reach the state, which one depends on when the step that
+// records them is collected). Ties are broken deterministically: by
 // the order the boxes were queued, and within a point by its realisations'
 // order.
+//
+// A point creating k timelines has up to k! realisations (J9), every one a
+// turn of the same score. They are recorded at most 32 per step (what a step
+// holds), and a point the cap stopped is resumed where it stopped - a cursor
+// in the realisation's depth-first walk - so each realisation is walked once:
+// a point of n realisations costs O(n) of them, not the O(n^2) of judging it
+// again from its first (as before 2026-10-23's review fixes).
 //
 // BUDGET. The generator spends one SearchBudget over its whole life (its node
 // count, memory ceiling and position count; a time limit is measured from its
@@ -136,7 +145,9 @@ class TurnGenerator {
   std::size_t generated() const noexcept;
   /// An upper bound on the score of every turn not yet emitted (-infinity
   /// once exhausted): the best bound among the queued boxes and the turns
-  /// found but not yet emitted.
+  /// found but not yet emitted. Still one once the budget stopped the
+  /// generator (the box it was judging is queued again; +infinity if it
+  /// stopped before its boxes were queued).
   double bound() const noexcept;
   /// What the search has done (SearchStats: its nodes, points judged, regions
   /// removed, the most positions held; exhaustive and stopped_by_budget as
@@ -150,6 +161,15 @@ class TurnGenerator {
   struct Impl;
   std::unique_ptr<Impl> impl_;
 };
+
+namespace detail {
+/// TEST SEAM: how many of one point's realisations a step of a turn generator
+/// records at most - 32, as shipped. The tests lower it (to 1) so that every
+/// point of two realisations or more is stopped and resumed (the realisation
+/// cursor): the order emitted must not change. Process-wide, read at each
+/// step; never set outside the tests. Throws std::invalid_argument for 0.
+void set_realisations_per_step(std::size_t n);
+}  // namespace detail
 
 }  // namespace t5d
 

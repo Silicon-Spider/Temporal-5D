@@ -42,6 +42,7 @@
 #include "test_game_tree.hpp"
 #include "test_positions.hpp"
 #include "test_support.hpp"
+#include "test_tiny.hpp"
 
 using namespace t5d;
 using namespace t5d::mcts;
@@ -1398,8 +1399,9 @@ TEST(mcts_flat_children_are_the_legal_turns_best_first) {
   // D2's flat form with widening off: the root's children are every legal
   // turn - as distinct successors (the placeholder unit) and as actions - each
   // a legal action, in non-increasing score (the generator's order), the
-  // priors the softmax of the scores (FlatPrior::Generated) or exp(score)
-  // (Product), each child's score its moves' per-board log-probabilities.
+  // priors summing to 1 (FlatPrior::Generated) or each exp(score) (Product).
+  // (Each score against an independent reference: mcts_flat_scores_are_the_
+  // per_board_log_probabilities.)
   const GameState s = two_timelines_after(2);
   const ActionList acts = list_legal_actions(s, 100000, Detector::Hypercuboid);
   REQUIRE(acts.stats.exhaustive);
@@ -1514,6 +1516,562 @@ TEST(mcts_flat_a_generator_stopped_before_its_first_turn_falls_back_to_the_listi
   CHECK(stuck.node(stuck.root()).stuck);
   CHECK(stuck.root_children().empty());
   CHECK_EQ(stuck.stats().fallback_listings, std::uint64_t{0});
+}
+
+// ---- D2's flat form: the review fixes' tests (2026-10-23) ----------------------------------
+
+namespace {
+
+std::uint64_t mixer(std::uint64_t z) {
+  z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
+  z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
+  return z ^ (z >> 31);
+}
+double unit_of(std::uint64_t h) { return static_cast<double>(h >> 11) * 0x1.0p-53; }
+
+// A flat-form evaluator: each move's logit and each board's "leave it" logit a
+// hash of (the state's key, its index) - continuous, distinct board by board -
+// with the board logits all given (All), NaN on the mover's first playable
+// board (SomeNaN), or none at all (None). It keeps what it gave each state, for
+// the reference below.
+class PerBoard final : public Evaluator {
+ public:
+  enum class Boards { All, SomeNaN, None };
+  struct Given {
+    std::vector<Move> moves;  // the expansion's candidates, in its order
+    std::vector<float> logits;
+    std::vector<float> board_logits;
+    std::map<int, int> board_of;  // a playable timeline's board index in the expansion
+  };
+  explicit PerBoard(Boards boards, double low_logit = 0.0) : boards_(boards), low_logit_(low_logit) {}
+  void evaluate(std::span<const EvalRequest> batch, std::span<Evaluation> out) override {
+    for (std::size_t i = 0; i < batch.size(); ++i) {
+      const EvalRequest& r = batch[i];
+      const Expansion& x = *r.expansion;
+      Given g;
+      g.moves.assign(x.moves().begin(), x.moves().end());
+      g.logits.resize(g.moves.size());
+      for (std::size_t j = 0; j < g.moves.size(); ++j) {
+        g.logits[j] = static_cast<float>(unit_of(mixer(r.key ^ (j + 1) * 0x9E3779B97F4A7C15ull)) * 6.0 - 3.0);
+      }
+      // An extremely unlikely move (A-L2): its probability underflows.
+      if (low_logit_ != 0.0 && !g.logits.empty()) g.logits[0] = static_cast<float>(low_logit_);
+      const std::vector<int> playable = r.state->playable_timelines();
+      for (const int t : playable) {
+        g.board_of[t] = x.board_index(t, r.state->multiverse().timeline(t)->last_half_turn());
+      }
+      if (r.board_logits && boards_ != Boards::None) {
+        g.board_logits.resize(x.board_count());
+        for (std::size_t b = 0; b < g.board_logits.size(); ++b) {
+          g.board_logits[b] = static_cast<float>(unit_of(mixer(r.key * 31 + b + 7)) * 4.0 - 2.0);
+        }
+        if (boards_ == Boards::SomeNaN && !playable.empty()) {
+          g.board_logits[static_cast<std::size_t>(g.board_of[playable.front()])] =
+              std::numeric_limits<float>::quiet_NaN();
+        }
+      }
+      out[i].logits = g.logits;
+      out[i].board_logits = g.board_logits;
+      out[i].wdl = {1.0f, 1.0f, 1.0f};
+      given_[r.key] = std::move(g);
+    }
+  }
+  const Given& at(std::uint64_t key) const { return given_.at(key); }
+
+ private:
+  Boards boards_;
+  double low_logit_;
+  std::map<std::uint64_t, Given> given_;
+};
+
+bool same_coordinates(const Move& a, const Move& b) {
+  return a.from_timeline == b.from_timeline && a.from_half_turn == b.from_half_turn && a.from_square == b.from_square &&
+         a.to_timeline == b.to_timeline && a.to_half_turn == b.to_half_turn && a.to_square == b.to_square &&
+         a.promotes() == b.promotes() && (!a.promotes() || a.promotion == b.promotion);
+}
+
+// One playable board's options as §8.2's flat form reads them: its moves (the
+// candidates leaving it), the non-branching jumps arriving on it (BothBoards)
+// and leaving it, at temperature t - softmaxed together with its leave logit
+// where one is given, else leaving it at leave_share and its moves sharing the
+// rest. Written from the spec and SearchParams' documentation.
+struct BoardOptions {
+  std::vector<std::pair<const Move*, double>> own, arriving;  // log-probabilities
+  double leave = 0;
+  double lowest = 0;
+};
+
+BoardOptions board_options(const PerBoard::Given& g, int timeline, double t, const SearchParams& p) {
+  BoardOptions b;
+  std::vector<double> own_logits, arriving_logits;
+  for (std::size_t j = 0; j < g.moves.size(); ++j) {
+    if (g.moves[j].from_timeline != timeline) continue;
+    b.own.emplace_back(&g.moves[j], 0.0);
+    own_logits.push_back(static_cast<double>(g.logits[j]) / t);
+  }
+  if (p.flat_jumps == FlatJumps::BothBoards) {
+    for (std::size_t j = 0; j < g.moves.size(); ++j) {
+      const Move& m = g.moves[j];
+      if (!m.jump() || m.branching() || m.to_timeline != timeline) continue;
+      b.arriving.emplace_back(&m, 0.0);
+      arriving_logits.push_back(static_cast<double>(g.logits[j]) / t);
+    }
+  }
+  const int board = g.board_of.at(timeline);
+  const bool given = !g.board_logits.empty() && !std::isnan(g.board_logits[static_cast<std::size_t>(board)]);
+  const double leave_logit = given ? static_cast<double>(g.board_logits[static_cast<std::size_t>(board)]) / t : 0.0;
+  const bool none = own_logits.empty() && arriving_logits.empty();
+  // log softmax, the maximum subtracted first
+  double top = given ? leave_logit : -std::numeric_limits<double>::infinity();
+  for (const double l : own_logits) top = std::max(top, l);
+  for (const double l : arriving_logits) top = std::max(top, l);
+  double sum = given ? std::exp(leave_logit - top) : 0.0;
+  for (const double l : own_logits) sum += std::exp(l - top);
+  for (const double l : arriving_logits) sum += std::exp(l - top);
+  const double norm = none && !given ? 0.0 : top + std::log(sum);
+  const double share = given || none ? 0.0 : std::log1p(-p.leave_share);
+  b.leave = given ? leave_logit - norm : none ? 0.0 : std::log(p.leave_share);
+  b.lowest = b.leave;
+  for (std::size_t i = 0; i < b.own.size(); ++i) {
+    b.own[i].second = own_logits[i] - norm + share;
+    b.lowest = std::min(b.lowest, b.own[i].second);
+  }
+  for (std::size_t i = 0; i < b.arriving.size(); ++i) {
+    b.arriving[i].second = arriving_logits[i] - norm + share;
+    b.lowest = std::min(b.lowest, b.arriving[i].second);
+  }
+  return b;
+}
+
+// A turn's score: over the mover's playable boards in ascending timeline, the
+// log-probability of the option it takes there - the move leaving the board,
+// else a non-branching jump arriving on it (0 under SourceOnly: the
+// destination adds nothing), else leaving it; a move the evaluation did not
+// offer scores the board's lowest option's.
+double reference_score(const PerBoard::Given& g, const GameState& s, std::span<const Move> turn, double t,
+                       const SearchParams& p, int* arrivals = nullptr) {
+  double total = 0;
+  for (const int tb : s.playable_timelines()) {
+    const BoardOptions b = board_options(g, tb, t, p);
+    const Move* option = nullptr;
+    bool arrival = false;
+    for (const Move& m : turn) {
+      if (m.from_timeline == tb) option = &m;
+    }
+    if (option == nullptr) {
+      for (const Move& m : turn) {
+        if (m.jump() && !m.branching() && m.to_timeline == tb) {
+          option = &m;
+          arrival = true;
+        }
+      }
+    }
+    double v = b.leave;
+    if (option != nullptr) {
+      if (arrival && arrivals != nullptr) ++*arrivals;
+      if (arrival && p.flat_jumps == FlatJumps::SourceOnly) {
+        v = 0.0;
+      } else {
+        v = b.lowest;
+        for (const auto& [m, lp] : arrival ? b.arriving : b.own) {
+          if (same_coordinates(*m, *option)) {
+            v = lp;
+            break;
+          }
+        }
+      }
+    }
+    total += v;
+  }
+  return total;
+}
+
+// The turn distribution's entropy: the boards' entropies summed.
+double reference_entropy(const PerBoard::Given& g, const GameState& s, double t, const SearchParams& p) {
+  double h = 0;
+  const auto add = [&h](double lp) {
+    if (lp > -700) h -= std::exp(lp) * lp;
+  };
+  for (const int tb : s.playable_timelines()) {
+    const BoardOptions b = board_options(g, tb, t, p);
+    add(b.leave);
+    for (const auto& e : b.own) add(e.second);
+    for (const auto& e : b.arriving) add(e.second);
+  }
+  return h;
+}
+
+std::vector<double> softmax_of(const std::vector<double>& scores) {
+  double top = -std::numeric_limits<double>::infinity();
+  for (const double v : scores) top = std::max(top, v);
+  std::vector<double> out(scores.size());
+  double sum = 0;
+  for (std::size_t i = 0; i < scores.size(); ++i) {
+    out[i] = std::exp(scores[i] - top);
+    sum += out[i];
+  }
+  for (double& v : out) v /= sum;
+  return out;
+}
+
+// Two present boards whose rooks can jump between them (a move between two
+// present boards resolves both).
+GameState rooks_across() { return game({"[k4/5/5/5/K3R:-0:1:w]", "[k4/5/5/5/K3R:+0:1:w]"}, BoardSize{5, 5}); }
+
+// Checks node `id`'s edges against the reference at temperature t: each
+// logit (the score, stored as a float) and each prior (FlatPrior::Generated:
+// the softmax over the generated turns) exactly. Returns the edges checked.
+std::size_t check_flat_node(const Search& search, NodeId id, const PerBoard& ev, double t, const SearchParams& p,
+                            bool& exact, int& arrivals) {
+  const NodeView n = search.node(id);
+  const PerBoard::Given& g = ev.at(n.key);
+  std::vector<double> want;
+  for (std::size_t i = 0; i < n.edge_count; ++i) {
+    want.push_back(reference_score(g, *n.state, search.edge(id, i).action, t, p, &arrivals));
+  }
+  const std::vector<double> priors = softmax_of(want);
+  for (std::size_t i = 0; i < n.edge_count; ++i) {
+    const EdgeView e = search.edge(id, i);
+    if (static_cast<float>(want[i]) != static_cast<float>(e.logit) || priors[i] != e.prior) {
+      if (exact) {
+        std::fprintf(stderr, "  edge %zu: logit %.9g, reference %.9g; prior %.17g, reference %.17g\n", i, e.logit,
+                     want[i], e.prior, priors[i]);
+      }
+      exact = false;
+    }
+  }
+  return n.edge_count;
+}
+
+// The Q3 position of review finding A-H1 (2026-10-23): reviewer A's probe's,
+// test_tiny's seed 6202 at attempt 1482 - two orders of one set of moves reach
+// two states under one action key.
+GameState q3_two_states_one_key() {
+  t5d_test::Rng rng(6202);
+  std::vector<std::string> boards;
+  std::optional<GameState> s;
+  for (int attempt = 0; attempt <= 1482; ++attempt) {
+    const int width = attempt % 3 == 1 ? 2 : 1;
+    s = t5d_test::tiny_position(rng, width == 1 ? 7 : 4, attempt % 3 == 2, width, boards);
+  }
+  REQUIRE(s.has_value());
+  const std::vector<std::string> want = {"[b:-3:1:w]", "[n:-3:1:b]", "[k:-2:1:b]", "[Q:-2:2:w]", "[1:-1:1:w]",
+                                         "[r:-1:1:b]", "[1:-1:2:w]", "[1:0:1:w]",  "[R:0:1:b]",  "[Q:0:2:w]"};
+  REQUIRE(boards == want);
+  REQUIRE(s->rules().play_activates);
+  return *s;
+}
+
+}  // namespace
+
+TEST(mcts_flat_scores_are_the_per_board_log_probabilities) {
+  // B-H1 (review, 2026-10-23): each turn's score - its edge's logit - is the
+  // sum of its options' per-board log-probabilities, recomputed here from its
+  // moves and the evaluation alone, and its prior the softmax of the scores:
+  // exactly, at the root (the policy temperature times I19's root temperature)
+  // and at an evaluated child (the policy temperature), with the board logits
+  // distinct board by board, NaN on one board (leave_share there) and none at
+  // all, leave_share != 0.5, both FlatJumps readings; and the root's
+  // noise-free priors (I15's side table) the reference's softmax without the
+  // noise.
+  int arrivals = 0;
+  int children_checked = 0;
+  for (const GameState& s : {rooks_across(), two_timelines_after(2)}) {
+    for (const PerBoard::Boards boards : {PerBoard::Boards::All, PerBoard::Boards::SomeNaN, PerBoard::Boards::None}) {
+      for (const FlatJumps jumps : {FlatJumps::BothBoards, FlatJumps::SourceOnly}) {
+        for (const bool noise : {false, true}) {
+          SearchParams p = fast();
+          p.split = TurnSplit::Flat;
+          p.widening = false;  // every turn generated: all of them checked
+          p.flat_jumps = jumps;
+          p.policy_temperature = 1.3;
+          p.root_policy_temperature = 1.7;
+          p.leave_share = 0.3;
+          p.root_noise = noise;
+          PerBoard ev(boards);
+          Search search(s, p);
+          search.run(ev, Limits{6});
+          bool exact = true;
+          const NodeId root = search.root();
+          const double t_root = p.policy_temperature * p.root_policy_temperature;
+          if (!noise) {
+            CHECK(check_flat_node(search, root, ev, t_root, p, exact, arrivals) > 0);
+          } else {
+            // The noise moves the scores; the side table's priors are the
+            // noise-free ones.
+            const NodeView n = search.node(root);
+            std::vector<double> clean;
+            for (std::size_t i = 0; i < n.edge_count; ++i) {
+              clean.push_back(reference_score(ev.at(n.key), s, search.edge(root, i).action, t_root, p));
+            }
+            const std::vector<double> want = softmax_of(clean);
+            const std::vector<RootChild> children = search.root_children();
+            REQUIRE_EQ(children.size(), want.size());
+            for (std::size_t i = 0; i < want.size(); ++i) exact = exact && children[i].prior_noise_free == want[i];
+          }
+          // An evaluated child: the policy temperature alone.
+          for (std::size_t i = 0; i < search.node(root).edge_count; ++i) {
+            const NodeId c = search.edge(root, i).child;
+            if (c == kNoNode || !search.node(c).evaluated || search.node(c).edge_count == 0) continue;
+            check_flat_node(search, c, ev, p.policy_temperature, p, exact, arrivals);
+            ++children_checked;
+            break;
+          }
+          CHECK(exact);
+          CHECK_NOTHROW(search.check_invariants());
+        }
+      }
+    }
+  }
+  CHECK(arrivals > 0);  // turns with a jump between two playable boards were scored
+  CHECK(children_checked > 0);
+}
+
+TEST(mcts_flat_widening_generates_what_it_instantiates) {
+  // B-M3 (review, 2026-10-23): k0 is E1's from the turn distribution's entropy
+  // (the boards' entropies summed, at the node's temperature) capped at
+  // flat_k0_max, and a node visited N times has generated at least
+  // ceil(k0 N^alpha) turns while its generator is live (selection widens with
+  // the visits before its own: N - 1 + 1).
+  int nodes_checked = 0;
+  for (const double cap : {16.0, 2.5}) {
+    SearchParams p = fast();
+    p.split = TurnSplit::Flat;
+    p.flat_k0_max = cap;
+    p.batch_size = 1;  // selection widens before each visit
+    p.policy_temperature = 1.2;
+    p.root_policy_temperature = 1.5;
+    PerBoard ev(PerBoard::Boards::SomeNaN);
+    const GameState s = rooks_across();
+    Search search(s, p);
+    search.run(ev, Limits{300});
+    CHECK_EQ(search.stats().stopped_generators, std::uint64_t{0});
+    std::vector<NodeId> todo{search.root()};
+    while (!todo.empty()) {
+      const NodeId id = todo.back();
+      todo.pop_back();
+      const NodeView n = search.node(id);
+      if (!n.expanded || !n.evaluated || n.terminal != Terminal::None) continue;
+      const double t = id == search.root() ? p.policy_temperature * p.root_policy_temperature : p.policy_temperature;
+      const double h = reference_entropy(ev.at(n.key), *n.state, t, p);
+      const double k0 = std::max(p.widening_min, std::min(p.flat_k0_max, p.widening_scale * std::exp(h)));
+      CHECK(std::abs(n.k0 - k0) <= 1e-9 * k0);
+      if (cap < 3.0 && id == search.root()) CHECK(n.k0 == cap);  // the cap binds here
+      if (!n.children_complete && n.visits > 0) {
+        const double want = std::ceil(n.k0 * std::pow(static_cast<double>(n.visits), p.widening_alpha));
+        CHECK(static_cast<double>(n.edge_count) >= want);
+      }
+      CHECK(n.instantiated <= n.edge_count);
+      ++nodes_checked;
+      for (std::size_t i = 0; i < n.edge_count; ++i) {
+        const NodeId c = search.edge(id, i).child;
+        if (c != kNoNode && search.node(c).visits > 1) todo.push_back(c);
+      }
+    }
+    CHECK(search.node(search.root()).edge_count >= 30);  // widened well past k0
+    CHECK_NOTHROW(search.check_invariants());
+  }
+  CHECK(nodes_checked > 10);
+}
+
+TEST(mcts_flat_the_fallback_scores_and_dedupes_its_turns) {
+  // B-M4 (review, 2026-10-23): a node whose generator stopped before its first
+  // turn takes E4's listing's turns - each scored as a generated turn would be
+  // (the reference: arrivals included), in non-increasing score, each
+  // successor once under TurnUnit::Successors - on a position with jumps
+  // between two present boards.
+  int arrivals = 0;
+  for (const GameState& s : {rooks_across(), two_timelines_after(2)}) {
+    const ActionList acts = list_legal_actions(s, 100000, Detector::Hypercuboid);
+    REQUIRE(acts.stats.exhaustive);
+    const ActionCount successors = count_legal_successors(s, 100000, Detector::Hypercuboid);
+    REQUIRE(successors.stats.exhaustive);
+    for (const TurnUnit unit : {TurnUnit::Successors, TurnUnit::Actions}) {
+      SearchParams p = fast();
+      p.split = TurnSplit::Flat;
+      p.flat_unit = unit;
+      p.generator_nodes = 3;          // the generator's set-up alone spends more
+      p.flat_fallback = 100000;       // the whole listing
+      p.widening = false;
+      p.root_policy_temperature = 1.4;
+      p.leave_share = 0.35;
+      PerBoard ev(PerBoard::Boards::SomeNaN);
+      Search search(s, p);
+      search.run(ev, Limits{3});
+      REQUIRE(search.stats().fallback_listings > 0);
+      const NodeId root = search.root();
+      const NodeView n = search.node(root);
+      CHECK_EQ(n.edge_count, unit == TurnUnit::Successors ? successors.count : acts.actions.size());
+      CHECK(n.children_complete);
+      std::vector<GameState> states;
+      bool exact = true;
+      for (std::size_t i = 0; i < n.edge_count; ++i) {
+        const EdgeView e = search.edge(root, i);
+        const double want =
+            reference_score(ev.at(n.key), s, e.action, p.policy_temperature * p.root_policy_temperature, p, &arrivals);
+        exact = exact && static_cast<float>(want) == static_cast<float>(e.logit);
+        if (i > 0) CHECK(e.logit <= search.edge(root, i - 1).logit);
+        GameState t = s;
+        for (const Move& m : e.action) t.apply(m);
+        t.submit();
+        if (unit == TurnUnit::Successors) {
+          CHECK(std::none_of(states.begin(), states.end(), [&](const GameState& u) { return same_position(u, t); }));
+        }
+        states.push_back(t);
+      }
+      CHECK(exact);
+      CHECK_NOTHROW(search.check_invariants());
+    }
+  }
+  CHECK(arrivals > 0);
+}
+
+TEST(mcts_flat_under_q3_children_are_complete_only_when_every_successor_is_there) {
+  // A-H1 (review, 2026-10-23): under Q3's play activation two orders of one
+  // set of moves can reach two states under one action key, and both the
+  // generator's Actions unit and E4's listing keep one of them. With the
+  // proof channel on (the in-tree solver under test; off by rule, H41), a
+  // node's children are complete only when they cover every successor - the
+  // generator exhausted under TurnUnit::Successors - and never from the
+  // Actions unit or the fallback's listing there. (Before the fix all three
+  // were marked complete: 7 successors, 6 reached.)
+  const GameState s = q3_two_states_one_key();
+  const ActionCount successors = count_legal_successors(s, SIZE_MAX, Detector::Naive);
+  REQUIRE(successors.stats.exhaustive);
+  CHECK_EQ(successors.count, std::size_t{7});
+  struct Arm {
+    const char* name;
+    TurnUnit unit;
+    bool fallback;
+    bool complete;
+  };
+  for (const Arm& arm : {Arm{"successors", TurnUnit::Successors, false, true},
+                         Arm{"successors, the fallback", TurnUnit::Successors, true, false},
+                         Arm{"actions", TurnUnit::Actions, false, false}}) {
+    SearchParams p = fast();
+    p.split = TurnSplit::Flat;
+    p.flat_unit = arm.unit;
+    p.widening = false;
+    p.proof_channel = true;
+    if (arm.fallback) p.generator_nodes = 3;
+    const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Uniform);
+    Search search(s, p);
+    search.run(*ev, Limits{50});
+    std::vector<GameState> states;
+    for (const RootChild& c : search.root_children()) {
+      GameState t = s;
+      for (const Move& m : c.moves) t.apply(m);
+      t.submit();
+      if (std::none_of(states.begin(), states.end(), [&](const GameState& u) { return same_position(u, t); })) {
+        states.push_back(t);
+      }
+    }
+    std::printf("  [%s] %zu children, %zu states, complete %d\n", arm.name, search.root_children().size(),
+                states.size(), static_cast<int>(search.node(search.root()).children_complete));
+    CHECK_EQ(search.node(search.root()).children_complete, arm.complete);
+    if (arm.complete) CHECK_EQ(states.size(), successors.count);
+    CHECK_EQ(search.stats().fallback_listings > 0, arm.fallback);
+    CHECK_NOTHROW(search.check_invariants());
+  }
+}
+
+TEST(mcts_flat_root_noise_never_gives_a_non_finite_score) {
+  // A-L2 (review, 2026-10-23): an option whose noised probability underflows
+  // to 0 - a logit far below the rest with no noise on it (epsilon 0), or
+  // every draw of a tiny concentration 0 with epsilon 1 - keeps a finite
+  // score; it threw "a non-finite score" from the generator before the fix.
+  struct Case {
+    double epsilon;
+    double concentration;
+    double low_logit;
+  };
+  for (const Case c : {Case{0.0, 10.83, -4000.0}, Case{1.0, 1e-300, 0.0}, Case{0.5, 1e-300, -4000.0}}) {
+    SearchParams p = fast();
+    p.split = TurnSplit::Flat;
+    p.root_noise = true;
+    p.dirichlet_epsilon = c.epsilon;
+    p.dirichlet_concentration = c.concentration;
+    PerBoard ev(PerBoard::Boards::All, c.low_logit);
+    Search search(rooks_across(), p);
+    CHECK_NOTHROW(search.run(ev, Limits{20}));
+    CHECK(!search.root_children().empty());
+    for (std::size_t i = 0; i < search.node(search.root()).edge_count; ++i) {
+      CHECK(std::isfinite(search.edge(search.root(), i).logit));
+    }
+    CHECK_NOTHROW(search.check_invariants());
+  }
+}
+
+TEST(mcts_flat_a_shared_cache_gives_board_logits_only_where_they_were_asked_for) {
+  // A-L3 (review, 2026-10-23): a cache shared by a board-move search (whose
+  // requests ask for no board logits) and a flat search: the flat search is
+  // never served an evaluation stored without them - so it searches as with a
+  // cache of its own.
+  const GameState s = rooks_across();
+  SearchParams flat = fast();
+  flat.split = TurnSplit::Flat;
+  flat.leave_share = 0.2;
+  const auto run_flat = [&](std::shared_ptr<EvalCache> cache) {
+    PerBoard ev(PerBoard::Boards::All);
+    Search search(s, flat, 0, std::move(cache));
+    search.run(ev, Limits{40});
+    std::vector<double> priors;
+    for (const RootChild& c : search.root_children()) priors.push_back(c.prior);
+    return std::make_pair(priors, search.stats().evaluations);
+  };
+  const auto alone = run_flat(nullptr);
+  const auto shared = std::make_shared<EvalCache>();
+  {
+    PerBoard ev(PerBoard::Boards::All);
+    Search ply(s, fast(), 0, shared);
+    ply.run(ev, Limits{200});
+    REQUIRE(shared->size() > 0);
+  }
+  const auto after = run_flat(shared);
+  CHECK(after.first == alone.first);
+  CHECK_EQ(after.second, alone.second);  // the root evaluated again, with its board logits
+}
+
+TEST(mcts_flat_a_tying_position_costs_its_generators_little) {
+  // B-M5 (review, 2026-10-23): the uniform evaluator gives every option of a
+  // board the same probability (every board ties), so the generators' cost
+  // depends on how ties are broken and on what an option the evaluation did
+  // not offer scores (the board's lowest). Under a ceiling of 3,000 nodes per
+  // generator no generator of a 40-playout search stops, on multi-board
+  // positions (measured at the review fixes: every generator here within
+  // 3,000; scoring an unoffered option 0 - log 1 - or taking the highest of
+  // equal values first stopped some at 3,000 and beyond).
+  std::vector<std::pair<std::string, GameState>> positions;
+  for (const int half : {2, 3}) {
+    static const char* const kKings[8] = {"k3/4", "1k2/4", "2k1/4", "3k/4", "4/k3", "4/1k2", "4/2k1", "4/3k"};
+    std::vector<std::string> boards;
+    for (int p = -half; p <= half; ++p) {
+      const std::string label = p == 0 ? "0" : (p > 0 ? "+" : "") + std::to_string(p);
+      const std::string black = kKings[(p + 12) % 8];
+      boards.push_back("[" + black + "/4/K3:" + label + ":1:w]");
+      boards.push_back("[" + black + "/4/K3:" + label + ":1:b]");
+      boards.push_back("[" + black + "/4/KR2:" + label + ":2:w]");
+    }
+    positions.emplace_back(std::to_string(2 * half + 1) + " kings", game(boards, BoardSize{4, 4}));
+  }
+  positions.emplace_back("three boards",
+                         game({"[3k/4/4/KR2:-1:1:w]", "[4/1p2/2P1/4:0:1:w]", "[k3/4/4/2RK:+1:1:w]"}, BoardSize{4, 4}));
+  positions.emplace_back("rooks across", rooks_across());
+  for (const auto& [name, s] : positions) {
+    SearchParams p = fast();
+    p.split = TurnSplit::Flat;
+    p.generator_nodes = 3000;
+    p.flat_fallback = 0;
+    const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Uniform);
+    Search search(s, p);
+    search.run(*ev, Limits{40});
+    std::printf("  [%s] %llu evaluations, %llu turns generated, %llu generators stopped\n", name.c_str(),
+                static_cast<unsigned long long>(search.stats().evaluations),
+                static_cast<unsigned long long>(search.stats().generated_turns),
+                static_cast<unsigned long long>(search.stats().stopped_generators));
+    CHECK_EQ(search.stats().stopped_generators, std::uint64_t{0});
+    CHECK(search.node(search.root()).edge_count > 0);
+  }
 }
 
 TEST(mcts_board_move_dead_ends_are_pruned_not_scored) {

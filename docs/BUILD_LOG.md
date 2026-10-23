@@ -1676,7 +1676,7 @@ width (M22)", "The CHECKPOINT 8 figures"). Found on the way: the ruling's premis
 | D5 | not started (rule) | A training principle |
 | D6 | built (flag) | `board_reduction`, awaiting 6j |
 | D7 | built in part (6p's initialisation not) | 6p's aggregate initialisation (training-side) - parked with 6p's other arms. No register is assigned an auxiliary target: D3's value heads and every submit logit (the policy's, the soft policy's, D9's) read the global registers' mean only - tested invariant to permuting them - and every auxiliary head reads squares (`lane/net` N-M20, N-D3, N-D4). B8/§12.4's "registers stay free" against D3's pooled value heads is read through D8's argument (issue 223) |
-| D2 | built (every arm; undecided) | Three arms of `SearchParams::split`: the ply split (`BoardMove`, the default), **the flat form** (`Flat`, since 2026-10-23, in slot 1 of the enumerating whole-turn arm it superseded at CHECKPOINT 6 - that arm and its 256 cap are retired, below) and, since 2026-10-23, **the tree form** (`Tree`; CHECKPOINT 8's build order: tree form first) - the ply split's tree with the turn-start priors inherited inside a turn: a mid-turn node whose incoming move fires no interaction gate is expanded without the network (its legal children as a leaf's, their priors its parent's logits matched by coordinates) and the simulation runs on; the network is called at the root, at turn starts (complete turns) and where a gate fires (an ordinary leaf) - the root always (since the review fixes, 2026-10-23: a re-root onto an inherited node, match play's carried tree, makes it a leaf to the next simulation, evaluated with its statistics kept; before them it stayed inherited and was never evaluated). The gates are §8.2's four - a move between boards still to move, a capture of a piece that could reach them, a change in check, a shift of the present - each reading a parameter with a placeholder default (issues 157-161), plus `kGateAlways`, the test seam for §15.2's row. Values: an inherited node backs up nothing of its own; the leaf's value passes through it (its visits = its children's); its FPU base and uncertainty signal are its parent's evaluation's (`tree_inherit_value`; off, with a term that reads the signal, refused - 6m). Refused under MCGS (issue 301). §15.2's row holds bit for bit (digest, statistics, root children) on every named variant, random-play and mid-turn roots, every tree configuration, both legality settings and the pseudo-legal seam, batched and synchronous, across a re-root, and through the C step API with the network (Python); §15.4's turn-structure invariants under it in every test configuration. Review fixes (2026-10-23): the carried root above; tested besides - the inherited value on and off, the inherited submit logit (through the step API), an inherited node's legality classification (no budget, the pseudo-legal seam), promotions matched, the gates under the Mandatory reading. C API and Python mirror (`T5D_SPLIT_TREE`, `tree_*`, the summary's `inherited_nodes` and `gate_*`); `t5d-play --split tree --tree-gates` (refused with another split); netplay's `split="tree"`. Indicative counts on seven t0database turn starts (1-4 mandatory boards, 30-60 boards; random evaluator, 400 evaluations; `t5d-tree-count`, docs/MEASUREMENTS.md): turn starts evaluated - ply split 74-122, tree form with §8.2's gates 111-142, with the present gate read as rewinds only 173-290, with no gate 400 - the literal present gate fires at every action's last mandatory move (issue 160). **The flat form's turn generator** (2026-10-23, `t5d/turngen.hpp`, in `src/hypercuboid.cpp`): the hypercuboid search best first - legal turns emitted in non-increasing summed score, as actions or distinct successors (issue 163); §15.2's row holds on 300 tiny multiverses against the brute-force reference, constructed multi-board presents and random games from every variant, under continuous and tying scores; the detectors' depth-first search pinned bit for bit (571 positions, every answer and statistic). **The flat form's search arm** (2026-10-23): a node is a turn start; its children whole legal turns generated best first and instantiated by widening (ceil(k0) at expansion, the next-best as k(N) grows); one evaluation per turn start - the move logits and per-board "leave it" logits (`Evaluation::board_logits`; C API `t5d_evaluations.board_logits`, the reserved channel enabled) give each playable board a distribution, a turn's score its options' log-probabilities summed, its prior their softmax over the generated turns; a board given no leave logit leaves at `leave_share` 0.5 (the network has no per-board head yet: a documented fallback, not a refusal); root noise per board before generation; k0 from the boards' summed entropy, capped at 16; a child a distinct successor; each node's generator budgeted (200,000 nodes; stopped: incomplete, never proven lost; stopped before its first turn: up to 64 turns from E4's listing) - every reading a parameter with a placeholder (issues 164-171). §15.4's invariants under it in every test configuration (two flat configurations in `kConfigs`, a flat invariant: edges its turns in non-increasing score, complete only when the generator is done); with widening off the root's children are exactly the legal turns (as successors and as actions; both priors); a stopped generator never proven lost; the fallback; self-play and match play from four variants, flat games through `t5d-play` replayed by `t5d-gate`; the C step loop equal to the C++ search by digest with board logits delivered (NaN on a third of the boards); in Python the engine's random evaluator through the step API bit for bit, board logits included, NaN board logits the search with none, the network driving a flat search deterministically, netplay's `split="flat"`. Indicative counts (`t5d-tree-count`, docs/MEASUREMENTS.md): on the seven t0database turn starts every evaluation is a turn start's and the deepest evaluated turn start lies 10-12 turns down (ply split 3-7, tree form 3-6), ~27 turns generated per node, 0-8 of ~400 generators stopped and fell back. **The whole-turn arm retired** (2026-10-23): `TurnSplit::WholeTurn`, `ActionPrior`, `max_actions`, `listing_nodes`, `truncated_listings`, `seconds_listing`, `T5D_SPLIT_WHOLE_TURN`, `T5D_ACTION_PRIOR_*`, `t5d-play --split turn` (refused, naming the flat form) and `--listing-cap`, netplay's `"turn"` and `max_listing` - removed; the C ABI's slots kept and renamed (`flat_prior`, `retired_max_actions` - 0 or `T5D_NO_LIMIT` only - and `generator_nodes`). The training generator (`train/selfplay.py`, M21) refuses the flat form until the flat form's policy target - the per-board marginals - exists (issue 234(b)). Next: the flat form's head (per-board marginals, leave logits) in the net lane; the Lazy SMP timing test before the merge (the main loop). Gate 6x (with 6g, 6k) |
+| D2 | built (every arm; undecided) | Three arms of `SearchParams::split`: the ply split (`BoardMove`, the default), **the flat form** (`Flat`, since 2026-10-23, in slot 1 of the enumerating whole-turn arm it superseded at CHECKPOINT 6 - that arm and its 256 cap are retired, below) and, since 2026-10-23, **the tree form** (`Tree`; CHECKPOINT 8's build order: tree form first) - the ply split's tree with the turn-start priors inherited inside a turn: a mid-turn node whose incoming move fires no interaction gate is expanded without the network (its legal children as a leaf's, their priors its parent's logits matched by coordinates) and the simulation runs on; the network is called at the root, at turn starts (complete turns) and where a gate fires (an ordinary leaf) - the root always (since the review fixes, 2026-10-23: a re-root onto an inherited node, match play's carried tree, makes it a leaf to the next simulation, evaluated with its statistics kept; before them it stayed inherited and was never evaluated). The gates are §8.2's four - a move between boards still to move, a capture of a piece that could reach them, a change in check, a shift of the present - each reading a parameter with a placeholder default (issues 157-161), plus `kGateAlways`, the test seam for §15.2's row. Values: an inherited node backs up nothing of its own; the leaf's value passes through it (its visits = its children's); its FPU base and uncertainty signal are its parent's evaluation's (`tree_inherit_value`; off, with a term that reads the signal, refused - 6m). Refused under MCGS (issue 301). §15.2's row holds bit for bit (digest, statistics, root children) on every named variant, random-play and mid-turn roots, every tree configuration, both legality settings and the pseudo-legal seam, batched and synchronous, across a re-root, and through the C step API with the network (Python); §15.4's turn-structure invariants under it in every test configuration. Review fixes (2026-10-23): the carried root above; tested besides - the inherited value on and off, the inherited submit logit (through the step API), an inherited node's legality classification (no budget, the pseudo-legal seam), promotions matched, the gates under the Mandatory reading. C API and Python mirror (`T5D_SPLIT_TREE`, `tree_*`, the summary's `inherited_nodes` and `gate_*`); `t5d-play --split tree --tree-gates` (refused with another split); netplay's `split="tree"`. Indicative counts on seven t0database turn starts (1-4 mandatory boards, 30-60 boards; random evaluator, 400 evaluations; `t5d-tree-count`, docs/MEASUREMENTS.md): turn starts evaluated - ply split 74-122, tree form with §8.2's gates 111-142, with the present gate read as rewinds only 173-290, with no gate 400 - the literal present gate fires at every action's last mandatory move (issue 160). **The flat form's turn generator** (2026-10-23, `t5d/turngen.hpp`, in `src/hypercuboid.cpp`): the hypercuboid search best first - legal turns emitted in non-increasing summed score, as actions or distinct successors (issue 163); §15.2's row holds on 300 tiny multiverses against the brute-force reference, constructed multi-board presents and random games from every variant, under continuous and tying scores; the detectors' depth-first search pinned bit for bit (571 positions, every answer and statistic). **The flat form's search arm** (2026-10-23): a node is a turn start; its children whole legal turns generated best first and instantiated by widening (ceil(k0) at expansion, the next-best as k(N) grows); one evaluation per turn start - the move logits and per-board "leave it" logits (`Evaluation::board_logits`; C API `t5d_evaluations.board_logits`, the reserved channel enabled) give each playable board a distribution, a turn's score its options' log-probabilities summed, its prior their softmax over the generated turns; a board given no leave logit leaves at `leave_share` 0.5 (the network has no per-board head yet: a documented fallback, not a refusal); root noise per board before generation; k0 from the boards' summed entropy, capped at 16; a child a distinct successor; each node's generator budgeted (200,000 nodes; stopped: incomplete, never proven lost; stopped before its first turn: up to 64 turns from E4's listing) - every reading a parameter with a placeholder (issues 164-171). §15.4's invariants under it in every test configuration (two flat configurations in `kConfigs`, a flat invariant: edges its turns in non-increasing score, complete only when the generator is done); with widening off the root's children are exactly the legal turns (as successors and as actions; both priors); a stopped generator never proven lost; the fallback; self-play and match play from four variants, flat games through `t5d-play` replayed by `t5d-gate`; the C step loop equal to the C++ search by digest with board logits delivered (NaN on a third of the boards); in Python the engine's random evaluator through the step API bit for bit, board logits included, NaN board logits the search with none, the network driving a flat search deterministically, netplay's `split="flat"`. Indicative counts (`t5d-tree-count`, docs/MEASUREMENTS.md): on the seven t0database turn starts every evaluation is a turn start's and the deepest evaluated turn start lies 10-12 turns down (ply split 3-7, tree form 3-6 with §8.2's gates - 3-8 across its three gate readings), ~27 turns generated per node, 0-8 of ~400 generators stopped and fell back. **Review fixes** (2026-10-23): children complete only when the turns reach every successor - under Q3's play activation only as successors, never from the Actions unit or the fallback's listing (issue 169; tested with the proof channel on; `check_invariants` refuses it); a point's realisations resumed where the 32-per-step cap stopped them, each walked once (issue 171: 5,040 realisations 401,936 tested before, 5,040 now); `bound()` an upper bound after a budget stop; the root noise never a non-finite score (issue 167); a shared evaluation cache never serving a flat search an evaluation without board logits (issue 165); tested besides - each turn's score and prior against a reference written from issues 164-166 to the bit (both temperatures, distinct/NaN/no leave logits, `leave_share`, both `flat_jumps`, the noise-free side table), widening's count and k0, the fallback's scores and de-duplication, the generators' cost on tying positions, castling and en passant through the generator under three rulings; Python's `CStepDriver` refuses a leaf whose logits miscount. **The whole-turn arm retired** (2026-10-23): `TurnSplit::WholeTurn`, `ActionPrior`, `max_actions`, `listing_nodes`, `truncated_listings`, `seconds_listing`, `T5D_SPLIT_WHOLE_TURN`, `T5D_ACTION_PRIOR_*`, `t5d-play --split turn` (refused, naming the flat form) and `--listing-cap`, netplay's `"turn"` and `max_listing` - removed; the C ABI's slots kept and renamed (`flat_prior`, `retired_max_actions` - 0 or `T5D_NO_LIMIT` only - and `generator_nodes`). The training generator (`train/selfplay.py`, M21) refuses the flat form until the flat form's policy target - the per-board marginals - exists (issue 234(b)). Next: the flat form's head (per-board marginals, leave logits) in the net lane; the Lazy SMP timing test before the merge (the main loop). Gate 6x (with 6g, 6k) |
 | D8 | built, tested | Engine and search (E7, E6a): submit an explicit edge, legal only when C4 holds, never automatic. Network (N5): a global acting-player input on the global registers (the ruled place, M20 - the `all_tokens` arm and `acting_player_input` removed, `lane/net` N-M20; with no global registers, an ablation-3 arm, on the board tokens - the live boards' under the block-causal scope - a placeholder fixed in code, issue 225, tested to reach every output under every register arm), one distribution over moves + submit, values from the acting player's perspective; the submit logit read from the pooled global registers - their mean, as the value head reads them (M20, N-M20: `submit_register` and register 0 gone; tested invariant to permuting the registers, moved by any one). The readout's form (`submit_head`: linear, 257 parameters, or the policy's bilinear form) is still a placeholder (issue 109). Under the flat form the generator ends turns itself (issue 92) - built (2026-10-23): the flat form reads no submit logit, its leaves report `submit_possible` 0. Under A7 the input is the acting colour, every board token being the acting player's view (`lane/net` N-A7; issue 228) |
 | D9 | built, tested (behind its flag, off) | The optimistic policy - a prototype (6t), match play only (`lane/net` N-D9): its own f and g at the policy's width, D1's offset and its own submit logit (`T5DNet.optimistic`, `heads.ActionHead`; `NetConfig.optimistic_policy`, off; 135,182 parameters when on, drawn from a generator of its own); trained on the normal policy target of full searches, each sample weighted clamp(0, 1, sigmoid((z - 1.5) x 3)), z the short-term target's gap above the network's short-term output - D9's "predicted short-term value", KataGo's z_value (review fixes; the W - L baseline first built is the alternative for the user, issue 233(a)) - in units of the error head's predicted error, both without gradient (`losses.optimistic_weights`). Searched with by an evaluator built with `policy="optimistic"` (dense or cached), the values unchanged; `netplay.play_game` refuses one in self-play, and each evaluation names its prior (`Evaluation.policy`), so a self-play search (`run_search(..., self_play=True)`; M21's generator must set it) refuses an optimistic evaluation however the evaluator is wrapped; `PlayConfig.optimistic` is match-only and both sides must deliver it - tested, and a match with it replays legal through `t5d-gate`. Its use in self-play stays held open (§14.4). Placeholders: issue 233 |
 | E4 | principle (weakened) | "Narrow hard, because the auditor is watching" - the register now says weakened: it holds where the settling scans (< 50 boards) and Hunt (< 100) run, neither wired into the search on main (E10 lost; step 2); above that, narrowing is a bet on the audit lane and the league |
@@ -3989,7 +3989,17 @@ superseded or made moot says so; nothing is deleted.
     generator now counts successors (each state kept with an action reaching it), so no state
     is lost; a budget-stopped point emits none of its states, so a stopped generator's output
     is a prefix of the unstopped one's. Ties are now newest-first and a point's realisations
-    recorded 32 at a time (issue 171).*
+    recorded 32 at a time (issue 171).* *Review fixes (2026-10-23): (a) as actions under Q3 the
+    generator, like E4's listing, keeps one of the states an action key can reach, so the search
+    arm marks a node's children complete only when they cover every successor - as successors,
+    or where play does not activate (issue 169); as successors the action standing for a state
+    is one of the first point reaching it (its best score), which of that point's realisations
+    depending on when the step that records it is collected; (b) the order no longer depends on
+    the 32-per-step cap - a point the cap stopped is resumed where it stopped (issue 171) - tested
+    with the cap lowered to 1 and 2 on 400 tiny multiverses under every regime (the turns, their
+    scores and states the shipped cap's), and the tie order's cost bounded by a test (ties on
+    every board, 7-11 boards); (c) `bound()` stays an upper bound after a budget stop (the box
+    being judged is queued again; +infinity if the generator stopped before queuing any).*
 
 164. **What the flat form's "summed logits" sum** (§8.2: "best-first by summed logits";
     register D2: "per-board policy marginals"). Silent on the terms. Built: a turn's score
@@ -4017,7 +4027,13 @@ superseded or made moot says so; nothing is deleted.
     `submit_share` stands in for D8's logit - chosen over refusing a network with no
     per-board head (the net lane's head change, not built): the flat form runs with
     today's network, its leaves at the placeholder. The built-in evaluators give leave
-    logits (uniform 0, random random, material 0). Proposed edit 132.
+    logits (uniform 0, random random, material 0). Proposed edit 132. *Review fixes
+    (2026-10-23): an evaluation cache shared by a flat search and another arm's no longer
+    serves the flat search an evaluation stored from a request that asked for no board logits
+    (`EvalCache` keys on the request's `board_logits` flag); the per-board reading is tested
+    against a reference written from this issue and issue 164 - distinct leave logits board by
+    board, NaN on one board, none at all, `leave_share` 0.3, both `flat_jumps` readings, both
+    temperatures - to the bit.*
 166. **A generated turn's PUCT prior** (§8.2 silent). Built (`flat_prior`): Generated
     (placeholder) - the softmax of the generated turns' scores, renormalised whenever
     widening generates more (with one board, once every turn is generated, exactly the
@@ -4035,7 +4051,12 @@ superseded or made moot says so; nothing is deleted.
     before generation, so the turns are generated in the noised order and the side
     table's noise-free priors come from the noise-free scores; the policy temperature
     (and at the root I19's) per board. The mandatory-count dependence of the schedule
-    stays unbuilt (6g). Proposed edit 133.
+    stays unbuilt (6g). Proposed edit 133. *Review fixes (2026-10-23): an option whose noised
+    probability underflows to 0 (epsilon 0 under a far lower logit, or epsilon 1 with a draw of
+    0) keeps a finite score - its own plus log(1 - epsilon), or -10,000 at epsilon 1 - where it
+    stopped the generator with "a non-finite score"; k0 against the entropy and the cap, and
+    the count widening generates (at least ceil(k0 N^alpha) after N visits while the generator
+    is live), are tested.*
 168. **The flat form's candidates, and moves of unknown legality** (D1: the network scores
     the moves "not proved illegal"). Built: a flat leaf's moves are classified as the
     ply split's (`legality`, D1), so the network sees legal and unknown candidates; an
@@ -4043,19 +4064,30 @@ superseded or made moot says so; nothing is deleted.
     the turns themselves are judged exactly by the generator, so no flat edge is ever
     unknown and none is verified; a hypercuboid value whose move the expansion did not
     offer (relaxed castling, a move the budget dropped) scores its board's lowest option.
-    No spec edit needed beyond 132.
+    No spec edit needed beyond 132. *Review fixes (2026-10-23): the lowest option's reading is
+    held by a cost test - scored log 1 instead, such values outrank every real option and a
+    40-playout search's generators overrun 3,000 nodes on tying multi-board positions.*
 169. **Terminal detection at a flat node** (§11.0 item 3; H37). The generator's
     exhaustion with no turn is itself an exhaustive verdict, but it is not used: E4's
     `detect_mate` stays the terminal authority at every turn start (one code path for
     every arm, and the gate cross-checks it); a generator stopped by its budget leaves
     the node's children incomplete and never proves a loss. To decide when the generator
     is shown equal to the detector (the pinned DFS and §15.2's row are the evidence so
-    far).
+    far). *Review fixes (2026-10-23, finding A-H1): an exhausted generator is not enough
+    under Q3's play activation - two orders of one set of moves can reach two states under
+    one action key, and as actions (`flat_unit` Actions) the generator keeps one, as E4's
+    listing does - so a node's children are complete only when its turns cover every
+    successor: the generator exhausted as successors, or play not activating; the fallback's
+    listing never under Q3. Before the fix both were marked complete (reviewer A's Q3
+    position: 7 successors, 6 reached), and with the proof channel on the solver could have
+    proven such a node lost. Tested on that position with the proof channel on, and
+    `check_invariants` refuses it.*
 170. **§15.4's turn structure names submit and move edges only** (§15.4: "a submit edge
     leads to a turn start and a move edge to a mid-turn state"). The flat form has turn
     edges: each leads to a turn start, its moves made 0 (A6). Built: `check_invariants`
     checks it, and a flat node's edges are its turns, one each, in non-increasing score,
-    complete only when its generator is done. Wording. Proposed edit 134.
+    complete only when its generator is done (and, under Q3's play activation, only as
+    successors - issue 169). Wording. Proposed edit 134.
 171. **The generator's cost, its worst case, and the fallback** (§8.2; register D2; no
     §15.3 row - proposed edit 131). Measured while building (a shared machine; scratch
     probes, not in the tree): on human-game turn starts of 3-5 playable boards the first
@@ -4065,7 +4097,15 @@ superseded or made moot says so; nothing is deleted.
     tying position into exponentially many equal boxes (2^18 at 66 playable boards) -
     now newest-first, depth-first as the detector; (b) a point creating k timelines has
     up to k! realisations, all recorded at once (20,160 successors, 310 MB estimated, at
-    one 90-board node) - now at most 32 per judgement, the box re-queued. A third
+    one 90-board node) - now at most 32 per step. *As first built the box was re-queued
+    and the point judged again from its first realisation, so a point of n realisations
+    cost about n^2 / 64 of them (finding A-M1: a 7-creation point's 5,040 tested 401,936
+    times in 1,495,064 nodes, and under the default 200,000-node budget only 1,824 of its
+    5,040 turns were emitted). Since the review fixes (2026-10-23) the point is kept and
+    resumed where the cap stopped it - a cursor in the realisation's depth-first walk,
+    replaying the stopped walk's path - so each realisation is walked once: 5,040 tested,
+    19,912 nodes, all 5,040 within the default budget (tested; the general regime's 5! in
+    510 nodes), at most 32 recorded per step.* A third
     remains, inherent to best first: in a 249-board self-play position (66 playable
     boards, 3 mandatory) where every move outscores leaving, the best-scoring turns play
     every optional board and are illegal en masse; best first spent 2,000,000 nodes
@@ -4074,12 +4114,15 @@ superseded or made moot says so; nothing is deleted.
     stopped before its first turn takes up to `flat_fallback` (placeholder 64) turns from
     E4's listing (`list_legal_actions` under `mate_nodes`), scored by the node's policy
     and ordered by score - not best first over the whole set, a documented fallback
-    (`fallback_listings`, counted). On the seven t0database turn starts 0-8 of about 400
+    (`fallback_listings`, counted); its children complete only where the listing was
+    exhaustive and play does not activate (issue 169); its scores (arrivals included) and,
+    as successors, its de-duplication tested since the review fixes. On the seven t0database turn starts 0-8 of about 400
     generators stopped and fell back (`t5d-tree-count`). Memory: a flat node holds its
     generator (queued boxes, successor states for de-duplication, tables) - about 137 KB
     a node on average in a 400-node search six actions into Two Timelines (heap measured,
-    the estimate x1.23), against the ply split's ~3.8 KB. For 6x: the fallback's share,
-    the budget and the memory per node by board-count range.
+    the estimate x1.23), against the ply split's ~3.8 KB (docs/MEASUREMENTS.md, with its
+    conditions). For 6x: the fallback's share, the budget and the memory per node by
+    board-count range.
 
 ## Proposed spec edits
 
@@ -5199,10 +5242,13 @@ struck through, where nothing of it is left to apply); the others stand as writt
     until that head exists, a placeholder share); its prior the softmax of the generated
     turns' scores; the generator is the hypercuboid search with a priority queue of boxes
     bounded by their best scores, exact and complete (§15.2's row passes); a node's
-    generator is budgeted, and one stopped before its first turn takes E4's listing."
+    generator is budgeted, and one stopped before its first turn takes E4's listing; a
+    node's children are complete only when they reach every successor (under Q3's play
+    activation, only when generated as successors)."
     And register D2's row: "flat form built behind a flag (2026-10-23); §15.2's row
-    passes; the enumerating whole-turn arm retired". Why: issues 163-166, 168, 171 - 6x
-    measures whatever the build reads the bullet as.
+    passes; the enumerating whole-turn arm retired". Why: issues 163-166, 168, 169, 171 -
+    6x measures whatever the build reads the bullet as (the completeness clause: issue 169,
+    the review fixes of 2026-10-23).
 133. **§8.4's "Constants as built" and its coupling sentence; register E1**: now - "... the
     whole-turn prior as the sum of single-move logits (the mean behind a flag)" and "the
     §8.2 decision (board-move-as-ply vs whole turns)". Proposed - replace the first with
@@ -5214,7 +5260,8 @@ struck through, where nothing of it is left to apply); the others stand as writt
     board, before generation". Why: issues 81 (closed), 164-167, 171.
 134. **§15.4's turn structure**: now - "a submit edge leads to a turn start and a move edge
     to a mid-turn state". Proposed - "a submit edge or a turn edge (the flat form) leads to
-    a turn start, a move edge to a mid-turn state". Why: issue 170.
+    a turn start, a move edge to a mid-turn state; a flat node's turn edges are complete only
+    when they reach every successor". Why: issues 169, 170.
 
 ## Session log
 

@@ -119,6 +119,9 @@ struct SearchStats {
   /// Hypercuboid only: regions of royal captures taken order by order (a
   /// point creating several timelines, its branches kept).
   std::uint64_t order_regions = 0;
+  /// Best-first generation only (t5d/turngen.hpp): judgements of a point
+  /// resumed after its realisations reached a step's cap.
+  std::uint64_t resumed = 0;
   /// The search examined every action - it terminated without a budget
   /// stopping it, and without stopping early at a legal action or a cap.
   bool exhaustive = false;

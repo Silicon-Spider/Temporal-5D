@@ -486,7 +486,10 @@ struct SearchParams {
   // issues 163-171).
   /// What a node's children are: distinct successor states (each reached by
   /// its best action) or actions (two creation orders of one set of moves are
-  /// two). Placeholder: successors (§8.5: what search needs).
+  /// two). Placeholder: successors (§8.5: what search needs). As actions,
+  /// under Q3's play activation (RuleOptions::play_activates) a node's
+  /// children are never complete: two orders of one action can reach two
+  /// states, and the generator keeps one per action key.
   TurnUnit flat_unit = TurnUnit::Successors;
   FlatPrior flat_prior = FlatPrior::Generated;   ///< placeholder
   FlatJumps flat_jumps = FlatJumps::BothBoards;  ///< placeholder
@@ -511,7 +514,9 @@ struct SearchParams {
   /// A node whose generator stopped before its first turn takes up to this many
   /// turns from E4's listing instead (list_legal_actions, under the mate
   /// check's budget, mate_nodes), scored and ordered as generated turns; 0: none - the node is
-  /// stuck. Placeholder 64 (build-log spec issue 171).
+  /// stuck. Its children are complete only where the listing was exhaustive
+  /// and play does not activate (Q3: the listing keeps one state per action).
+  /// Placeholder 64 (build-log spec issue 171).
   std::size_t flat_fallback = 64;
 
   // ---- E1: PUCT, top-k instantiation, entropy-adaptive widening, FPU, noise -----
@@ -851,13 +856,17 @@ class EvalCache {
       : capacity_(capacity), max_bytes_(max_bytes) {}
   /// The cached evaluation of `state`, with `moves_made` moves made in its
   /// action (A6: the network sees the count), at `epoch` - every part compared
-  /// exactly (keys may collide) - or nullptr.
+  /// exactly (keys may collide) - or nullptr. `board_logits`: the request asks
+  /// for D2's per-board leave logits (EvalRequest::board_logits) - an entry
+  /// stored from a request that did not ask for them is not served to one
+  /// that does (a cache shared by a flat search and another arm's).
   const Evaluation* find(std::uint64_t key, int moves_made, std::uint64_t epoch, const GameState& state,
-                         bool compare_origins) const;
+                         bool compare_origins, bool board_logits = false) const;
   /// Stores it (unless full); `new_boards`: the boards the step into the
-  /// state made - its own, the rest shared with its predecessors.
+  /// state made - its own, the rest shared with its predecessors;
+  /// `board_logits`: whether its request asked for them (find).
   void insert(std::uint64_t key, int moves_made, std::uint64_t epoch, const GameState& state,
-              const Evaluation& evaluation, std::size_t new_boards = 1);
+              const Evaluation& evaluation, std::size_t new_boards = 1, bool board_logits = false);
   /// Removes every entry whose state has fewer than `boards` boards, and
   /// returns how many. Every move adds a board and none is ever removed, so
   /// such a state is behind a root of `boards` boards for good: no search
@@ -882,6 +891,7 @@ class EvalCache {
     GameState state;
     int moves_made;  // A6: the moves made in the state's action
     std::uint64_t epoch;
+    bool board_logits;  // its request asked for D2's per-board leave logits
     Evaluation evaluation;
     std::size_t bytes;  // entry_bytes, as counted on insertion
   };

@@ -131,6 +131,10 @@ inline Coord coord_of(const Move& m) noexcept {
 // the boards' independent distributions.
 class FlatPolicy final : public TurnScorer {
  public:
+  // The log-probability an option whose noised probability underflows to 0
+  // at epsilon 1 takes (add_noise): finite, and below any a softmax gives.
+  static constexpr double kNoiseFloor = -1.0e4;
+
   struct Board {
     int timeline = 0;
     double leave = 0;   // leaving it
@@ -245,7 +249,13 @@ class FlatPolicy final : public TurnScorer {
       const double eps = p.dirichlet_epsilon;
       b.lowest = std::numeric_limits<double>::infinity();
       for (std::size_t i = 0; i < prob.size(); ++i) {
-        *lp[i] = std::log((1 - eps) * prob[i] + eps * eta[i] / sum);
+        const double mixed = (1 - eps) * prob[i] + eps * eta[i] / sum;
+        // An option whose mixture underflows (its probability below the
+        // smallest double, and no noise on it - epsilon 0, or its draw 0)
+        // keeps a finite score: its own, scaled by 1 - epsilon - the limit
+        // the mixture tends to - or, at epsilon 1, kNoiseFloor. A score of
+        // -infinity would stop the generator ("a non-finite score").
+        *lp[i] = mixed > 0 ? std::log(mixed) : eps < 1 ? std::log1p(-eps) + *lp[i] : kNoiseFloor;
         b.lowest = std::min(b.lowest, *lp[i]);
       }
     }
@@ -299,6 +309,7 @@ struct FlatNode {
   std::unique_ptr<FlatPolicy> clean;         // the root's policy before its noise (none drawn: null)
   std::vector<double> scores;                // each turn's, in order
   std::vector<double> clean_scores;          // ... under `clean`
+  bool listed = false;                       // its turns are the fallback's listing's
 
   std::size_t bytes() const noexcept {
     return sizeof(FlatNode) + 16 + (scores.capacity() + clean_scores.capacity()) * sizeof(double) +
@@ -671,11 +682,11 @@ Choice select_final(std::span<const FinalCandidate> children, const SearchParams
 // ---------------------------------------------------------------------------
 
 const Evaluation* EvalCache::find(std::uint64_t key, int moves_made, std::uint64_t epoch, const GameState& state,
-                                  bool compare_origins) const {
+                                  bool compare_origins, bool board_logits) const {
   const auto [first, last] = entries_.equal_range(key);
   for (auto it = first; it != last; ++it) {
     if (it->second.epoch == epoch && it->second.moves_made == moves_made &&
-        detail::same_state(it->second.state, state, compare_origins)) {
+        (it->second.board_logits || !board_logits) && detail::same_state(it->second.state, state, compare_origins)) {
       return &it->second.evaluation;
     }
   }
@@ -693,10 +704,10 @@ std::size_t EvalCache::entry_bytes(const GameState& state, const Evaluation& eva
 }
 
 void EvalCache::insert(std::uint64_t key, int moves_made, std::uint64_t epoch, const GameState& state,
-                       const Evaluation& evaluation, std::size_t new_boards) {
+                       const Evaluation& evaluation, std::size_t new_boards, bool board_logits) {
   if (entries_.size() >= capacity_) return;
-  if (find(key, moves_made, epoch, state, true) != nullptr) return;
-  Entry e{state, moves_made, epoch, evaluation, 0};
+  if (find(key, moves_made, epoch, state, true, board_logits) != nullptr) return;
+  Entry e{state, moves_made, epoch, board_logits, evaluation, 0};
   e.evaluation.logits.shrink_to_fit();
   e.bytes = entry_bytes(e.state, e.evaluation, new_boards);
   if (bytes_ + e.bytes > max_bytes_) return;
@@ -1437,9 +1448,10 @@ struct Search::Impl {
     while (n.edges.size() < want) {
       std::optional<GeneratedTurn> turn = f.generator->next();
       if (!turn) {
-        // Done: every turn generated (the children complete), or a budget
-        // stopped it - incomplete, never a proof (H37).
-        n.children_complete = f.generator->exhausted();
+        // Done: every turn generated (the children complete, if the turns
+        // cover every successor), or a budget stopped it - incomplete, never a
+        // proof (H37).
+        n.children_complete = f.generator->exhausted() && turns_cover_successors(n.state);
         const bool stopped = f.generator->stopped();
         if (stopped) ++stats_.stopped_generators;
         f.generator.reset();
@@ -1461,6 +1473,15 @@ struct Search::Impl {
     if (added > 0) flat_priors(n);
     account(n);
     return added;
+  }
+
+  // Whether a node's turns, once all are generated, reach every successor
+  // state (the solver's completeness, H37): as distinct successors they do; as
+  // actions they do unless Q3's play activation lets two orders of one set of
+  // moves reach two states under one action key (t5d/search.hpp's COUNTING),
+  // of which the generator, like E4's listing, keeps one.
+  bool turns_cover_successors(const GameState& s) const noexcept {
+    return params_.flat_unit == TurnUnit::Successors || !s.rules().play_activates;
   }
 
   // A node whose generator a budget stopped before its first turn: the
@@ -1500,7 +1521,11 @@ struct Search::Impl {
       n.edges.push_back(e);
       ++added;
     }
-    n.children_complete = list.stats.exhaustive && !list.reached_cap;
+    // E4's listing is of actions - under Q3's play activation it keeps one of
+    // the states an action key can reach - so the children are complete only
+    // where it was exhaustive and play does not activate.
+    n.children_complete = list.stats.exhaustive && !list.reached_cap && !n.state.rules().play_activates;
+    f.listed = true;
     ++stats_.fallback_listings;
     stats_.generated_turns += added;
     return added;
@@ -2255,7 +2280,7 @@ struct Search::Impl {
     // The cache and the batch match the whole network input: the state and the
     // moves made in its action (A6), at the epoch.
     if (cache_) {
-      if (const Evaluation* ev = cache_->find(n.key, n.moves_made, epoch_, n.state, compare_origins())) {
+      if (const Evaluation* ev = cache_->find(n.key, n.moves_made, epoch_, n.state, compare_origins(), flat())) {
         const Evaluation copy = *ev;
         take_evaluation(id, copy, x);
         ++stats_.cache_hits;
@@ -2372,7 +2397,7 @@ struct Search::Impl {
         backup(pd.path, n.eval_mean, n.eval_draw, backup_weight(n.eval_var), true);
         ++delivered;
         // A duplicate is not stored twice.
-        if (cache_) cache_->insert(n.key, n.moves_made, epoch_, n.state, ev, n.new_boards);
+        if (cache_) cache_->insert(n.key, n.moves_made, epoch_, n.state, ev, n.new_boards, flat());
       }
     } catch (...) {
       // What was delivered stays; the rest of the batch is abandoned.
@@ -2580,6 +2605,10 @@ struct Search::Impl {
           if (i > 0 && f.scores[i] > f.scores[i - 1]) fail("flat-form turns out of score order", id);
         }
         if (f.generator && n.children_complete) fail("children complete while the generator can generate more", id);
+        if (n.children_complete && n.state.rules().play_activates &&
+            (params_.flat_unit == TurnUnit::Actions || f.listed)) {
+          fail("children complete under Q3's play activation from a listing of actions (a successor can be missing)", id);
+        }
         if (n.instantiated > n.edges.size()) fail("more children instantiated than generated", id);
       }
       if (n.moves_made < 0 || n.turn_start != (n.moves_made == 0)) {

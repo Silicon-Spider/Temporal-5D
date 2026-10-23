@@ -1020,9 +1020,59 @@ earlier arms' counts are unchanged, value for value.
 
 400-407 playouts per 400 evaluations; about 27 turns generated per node (k0's cap 16,
 then widening). *Read against the table above:* the flat form's deepest evaluated turn
-start lies 10-12 turns down where the ply split's lies 3-7 and the tree form's 3-8 - at
+start lies 10-12 turns down where the ply split's lies 3-7 and the tree form's 3-6 with
+§8.2's gates (3-8 across its three gate readings; the D2 row in docs/BUILD_LOG.md quotes
+the first) - at
 equal evaluations it searches far deeper in turns, and correspondingly narrower in each
 (widening instantiates ceil(16 sqrt(N + 1)) turns of hundreds); 0-8 of the ~400
 generators were stopped by their budget before their first turn and took E4's listing
 (issue 171). No timings here: the generator's cost per node is not measured on a quiet
 machine (proposed edit 131).
+
+### D2's flat form: a point's realisations, and the memory a flat node holds (counts and heap; no threshold, no verdict)
+
+**What it is.** (a) The turn generator's cost on one point of many realisations: k kings,
+each able to step back one turn on its own timeline (a branch), the move scored 0 and every
+other option -10, so the turn making all k branches is one point whose k! creation orders
+are k! legal turns of the top score (J9). The generator records at most 32 realisations per
+step; this counts what generating all k! costs. (b) The memory a flat-form node holds - its
+generator's queued boxes, successor states and tables - against the ply split's: the
+search's estimate (`memory_bytes`) and the heap it holds.
+
+**Conditions.** Counts and heap bytes - deterministic, so the shared machine's load does not
+matter. 2026-10-23, machine `dev-r`, Release, MSYS2 g++ 16.2.0 (Rev3), `--werror`.
+(a) The position of `turngen_a_point_of_many_realisations_walks_each_once`
+(`engine/tests/test_turngen.cpp`; 4x4 boards, timelines -3..+3, the default rules - the
+FreeOrder realisation - and, at k = 5, Q3's play activation - the general realisation), the
+generator unbudgeted, both units; *before*: reviewer A's probe of the review (a scratch
+`rewalk3.cpp` against lane/engine 95d23cc, the same position and scorer); *after*: the test
+at the review fixes. (b) `mcts_the_memory_estimate_follows_the_heap`
+(`engine/tests/test_mcts_memory.cpp`): Standard - Two Timelines after six actions (each the
+hypercuboid listing's first), the random evaluator (seed 7), batch 8, square features off,
+no evaluation cache, every other parameter the default; 400 playouts under the flat form,
+2,000 under the ply split; the heap counted by the tests' allocation hook. *Before*: as the
+flat form's search arm (3251857) recorded it in build-log issue 171; *after*: the test's
+printout at the review fixes.
+
+| (a) k = 7, default rules | realisations tested | nodes | of 5,040 emitted under 200,000 nodes |
+|---|---|---|---|
+| before (each step judged the point again from its first realisation) | 401,936 | 1,495,064 | 1,824 |
+| after (the point resumed where the cap stopped it; 157 resumptions) | 5,040 | 19,912 | 5,040 |
+
+At k = 5 under Q3 (general realisation), after: 120 realisations, 120 tested, 510 nodes, 3
+resumptions - as actions and as successors alike. Before, the cost grew about as n^2 / 64
+for n realisations (each of the n / 32 steps walking up to n); after, linearly (each
+realisation walked once, a resumption replaying one path of k moves).
+
+| (b) Two Timelines + 6, tree (not graph) | nodes | estimate | heap | per node (heap) | estimate / heap |
+|---|---|---|---|---|---|
+| flat form, before (3251857, issue 171) | 400 | - | - | about 137 KB | x1.23 |
+| flat form, after | 400 | 65,164,477 | 54,512,986 | 136 KB | x1.20 |
+| ply split, after | 2,000 | 7,916,856 | 7,603,136 | 3.8 KB | x1.04 |
+
+*Read against issue 171.* The quadratic cost of a many-realisation point was the review's
+finding A-M1: under the search arm's default budget most of such a point's turns were never
+emitted; resumed, all are, at about four nodes a realisation. A flat node holds about 36
+times a ply node's memory (its generator lives as long as the node can widen); the estimate
+stays within the test's 0.75-1.33 of the heap. For 6x: the memory per node by board-count
+range (proposed edit 131).

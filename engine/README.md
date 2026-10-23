@@ -2623,10 +2623,14 @@ round 2): one float32 logit per candidate move, logit i scoring
 WDL numbers per leaf (required) and `T5D_VALUE_BINS` (51) categorical numbers per leaf
 or none, each as probabilities (`T5D_VALUE_PROBABILITIES`) or logits
 (`T5D_VALUE_LOGITS`, `wdl_kind` and `value_kind`), one error-head output and one
-moves-left per leaf or none (NaN at a leaf: none given); `board_logits` is reserved for
-D2's flat form (not built: anything but NULL is `T5D_ERR_UNSUPPORTED`). The struct is
-appended to like the others, so the flat form's per-board logits need no new entry
-point. It replaced `t5d_search_deliver`, which took the categorical alone and backed up
+moves-left per leaf or none (NaN at a leaf: none given); and D2's flat form's
+`board_logits` - each leaf's `expansion.board_count` float32, concatenated in the
+batch's order: each board's "leave it" logit, read at the acting player's playable
+boards under the flat form (NaN: none for that board - `leave_share`), checked (no
+infinity) and not read under the other splits - or NULL with `board_logit_count` 0:
+none. A count that is not the leaves' board counts summed (or NULL with a count) is
+`T5D_ERR_ARGUMENT`. The struct is appended to like the others: the flat form's
+per-board logits took the slot reserved for them, with no new entry point. It replaced `t5d_search_deliver`, which took the categorical alone and backed up
 its mean - the reading D3's correction retired; no shim was kept (a shim would have to
 invent a draw probability the documents do not give, and its one caller, the Python
 binding, moved in the same commit) - and `t5d_search_abandon`; then `t5d_search_info`
