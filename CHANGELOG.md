@@ -10,6 +10,45 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-23 - MT-01: the search's solver against df-pn (H41), in tests and an offline tool
+
+Register H41 has the search's solver "cross-checked against df-pn and oracle mate verdicts"
+(spec §11.1, §15.4); nothing compared it with the prover. Now:
+
+- **`engine/tools/solver_proofs.{hpp,cpp}`** (the `t5d_tools` library): `solver_claims`
+  derives each solved node's claim from the solved subtree - the search keeps bounds, not
+  distances: Win(k) the least over the children proven lost for it, Loss(k) the greatest
+  over its children (all proven lost), a submission or a whole turn adding a half-turn, a
+  mid-action child none; a solved node its children do not support throws. `DfpnChecker`
+  holds every solved turn start to df-pn in the literal class (seeds All, completion Every),
+  one thread, a node budget, its own stores: a Win(k) never disproven at k; a Loss(k)'s every
+  successor (E4's listing) never disproven at k - 1, and no df-pn proof at the node; a Draw
+  with no df-pn proof at the node and not every successor proven lost (depth 3, a
+  placeholder); every df-pn proof certified by `check_certificate` (E4 alone); Unknown
+  counted, never a verdict.
+- **Tests** (`engine/tests/test_mcts.cpp`; positions and arms in the new
+  `engine/tests/test_solver_refs.hpp`), the proof channel on in the tests only, no store:
+  `mcts_solver_agrees_with_df_pn_on_constructed_mates` (the seven constructed positions,
+  both Q4 readings, five arms: 170 comparisons decided, all agreeing; 18 df-pn proofs, all
+  certified), `mcts_solver_agrees_with_df_pn_under_every_ruleset` (two-board positions under
+  both Q4 readings and sparse positions under all 27 rulesets, the ply split, the tree form
+  and the flat form: 3,662 comparisons decided, all agreeing, 21 unknown; 1,477 df-pn
+  proofs, all certified; about 75 s) and `long_mcts_solver_agrees_with_df_pn`
+  (five arms, the search's legality exact within a node budget - issue 406: 29,219
+  comparisons decided, all agreeing; 7,234 df-pn proofs, all certified; 48 minutes). No contradiction found.
+- **`t5d-solver-check`** (`engine/tools/t5d_solver_check.cpp`), the offline mode: 6b's roots
+  construction over the records given, a search per arm, the comparison per board-count
+  range; tested on records of random play the test writes (`engine/tests/
+  test_proof_tools.cpp`). Not run over 6b's 805 roots: their records are only under
+  `oracles/` (build-log issue 401, put to the main loop).
+- `engine/README.md` ("Step 2: H41's cross-checks and 6f's TT churn"; the targets table);
+  `docs/BUILD_LOG.md` (H41's row, issues 400-401, edit 300; the block 400-449 / 300-329
+  assigned by the main loop).
+
+Spec: §15.4 (the solver's cross-check against df-pn), §11.1 item 2 and register H41 -
+proposed edit 300 (the cross-check's terms as built); §11.4 (above 100 boards) - issue 401
+(the offline run over 6b's roots not made). The proof channel stays off (H23, H41).
+
 ### 2026-10-23 - Engine ABI round 3 review fixes: the exchange label's recaptures read where they are made; the Q6 fallback, mid-action placement, the pin's royal half, the C API's bits and labels and every label reading tested; the labels' cost measured
 
 Two reviews of engine ABI round 3 (5d8b12b, 0986472): one of the rules (probes on hand-built

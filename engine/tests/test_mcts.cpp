@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <limits>
 #include <cstdint>
@@ -35,12 +36,17 @@
 #include "t5d/fingerprint.hpp"
 #include "t5d/mcts.hpp"
 #include "t5d/movegen.hpp"
+#include "t5d/prover.hpp"
 #include "t5d/search.hpp"
 #include "t5d/state.hpp"
 #include "t5d/variants.hpp"
 #include "test_framework.hpp"
 #include "test_game_tree.hpp"
+#include "test_mate_refs.hpp"
+#include "test_play.hpp"
 #include "test_positions.hpp"
+#include "test_rulesets.hpp"
+#include "test_solver_refs.hpp"
 #include "test_support.hpp"
 #include "test_tiny.hpp"
 
@@ -639,6 +645,172 @@ TEST(mcts_solver_bounds_never_contradict_in_play) {
     }
   }
   CHECK(solved_nodes > 0);
+}
+
+// ---- H41: the solver's proofs against df-pn (§15.4, §11.1) ---------------------------------
+//
+// At every solved turn start of a finished search (the proof channel on -
+// test-only, as every solver test here; no store), the claim derived from the
+// solved subtree (Win(k), Loss(k), Draw: tools/solver_proofs.hpp) against
+// df-pn in its literal class at depth k - one thread, a node budget,
+// deterministic: a Win(k) never disproven, a Loss(k)'s every successor never
+// disproven at k - 1, no df-pn proof at a Loss or a Draw, and a Draw's
+// successors not all proven lost. Every df-pn proof is certified by E4 alone
+// (check_certificate). Zero contradictions; at least a count of decided
+// comparisons; under every D2 arm the search has.
+
+namespace {
+
+using t5d::tools::DfpnChecker;
+using t5d::tools::DfpnCheckOptions;
+using t5d::tools::DfpnTally;
+using t5d::tools::SolverClaim;
+
+struct SolverRuns {
+  std::size_t searches = 0;
+  std::size_t roots_solved = 0;
+};
+
+// Searches `s` under `arm` and compares every solved turn start with df-pn;
+// returns the root's claim when the root is solved.
+std::optional<SolverClaim> solver_against_dfpn(const GameState& s, const t5d_test::solver::Arm& arm,
+                                               std::uint64_t playouts, DfpnChecker& checker, DfpnTally& tally,
+                                               SolverRuns& runs,
+                                               const LegalityOptions& legality = LegalityOptions::exact()) {
+  SearchParams p = fast();
+  p.proof_channel = true;  // the in-tree solver under test (off by rule, H41)
+  p.split = arm.split;
+  p.graph = arm.graph;
+  p.legality = legality;
+  p.verify_legality = legality;
+  const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Uniform);
+  Search search(s, p);
+  search.run(*ev, Limits{playouts});
+  CHECK_NOTHROW(search.check_invariants());
+  ++runs.searches;
+  const std::size_t before = tally.contradictions.size() + tally.certificate_failures.size();
+  checker.check_search(search, tally);
+  if (tally.contradictions.size() + tally.certificate_failures.size() != before) {
+    std::fprintf(stderr, "  (under the %s)\n", arm.name);
+  }
+  if (!search.root_solved()) return std::nullopt;
+  ++runs.roots_solved;
+  return t5d::tools::solver_claim(search, search.root());
+}
+
+void report(const char* what, const DfpnTally& t, const SolverRuns& runs) {
+  std::fprintf(stderr, "  %s: %zu searches, %zu roots solved; %s\n", what, runs.searches, runs.roots_solved,
+               t.summary().c_str());
+  for (const std::string& c : t.contradictions) std::fprintf(stderr, "  CONTRADICTION: %s\n", c.c_str());
+  for (const std::string& c : t.certificate_failures) std::fprintf(stderr, "  CERTIFICATE: %s\n", c.c_str());
+}
+
+// Random positions under every ruleset: two_board_positions under both Q4
+// readings, and sparse_positions (test_play.hpp) under every ruleset.
+void every_ruleset_against_dfpn(int two_board, int turns, int games, std::uint64_t playouts,
+                                const DfpnCheckOptions& options, bool graphs, DfpnTally& tally, SolverRuns& runs,
+                                bool progress = false,
+                                const LegalityOptions& legality = LegalityOptions::exact()) {
+  std::uint64_t seed = 5100;
+  for (const bool after_shift : {true, false}) {
+    RuleOptions rules;
+    rules.moves_after_shift = after_shift;
+    DfpnChecker checker(options);
+    for (const GameState& s : two_board_positions(rules, two_board, seed++)) {
+      for (const t5d_test::solver::Arm& arm : t5d_test::solver::arms(graphs)) {
+        solver_against_dfpn(s, arm, playouts, checker, tally, runs, legality);
+      }
+    }
+  }
+  const auto start = std::chrono::steady_clock::now();
+  for (const RuleOptions& rules : t5d_test::every_ruleset()) {
+    DfpnChecker checker(options);
+    for (const GameState& s : t5d_test::playable(t5d_test::sparse_positions(rules, games, turns, seed++))) {
+      for (const t5d_test::solver::Arm& arm : t5d_test::solver::arms(graphs)) {
+        solver_against_dfpn(s, arm, playouts, checker, tally, runs, legality);
+      }
+    }
+    if (progress) {  // a long test, so that a run can be followed
+      std::fprintf(stderr, "  %s done at %.0f s: %zu searches, %zu decided\n", describe(rules).c_str(),
+                   std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count(), runs.searches,
+                   tally.decided);
+    }
+  }
+}
+
+}  // namespace
+
+TEST(mcts_solver_agrees_with_df_pn_on_constructed_mates) {
+  // The seven constructed positions under both Q4 readings, under every arm
+  // (the ply split and the flat form as MCGS graphs too). The roots of the
+  // three positions the search's own solver tests solve are held to their
+  // claims as well: the mate in one Win(1), the forced draw a Draw, the
+  // forced loss Loss(2).
+  DfpnTally tally;
+  SolverRuns runs;
+  DfpnCheckOptions options;
+  options.nodes = 500'000;
+  for (const bool after_shift : {true, false}) {
+    RuleOptions rules;
+    rules.moves_after_shift = after_shift;
+    DfpnChecker checker(options);
+    for (const t5d_test::solver::Named& n : t5d_test::solver::constructed(rules)) {
+      for (const t5d_test::solver::Arm& arm : t5d_test::solver::arms(true)) {
+        const std::optional<SolverClaim> root = solver_against_dfpn(n.state, arm, 20000, checker, tally, runs);
+        const std::string name = n.name;
+        if (name == "mate_in_one" || name == "forced_draw" || name == "forced_loss") {
+          REQUIRE(root.has_value());
+          SolverClaim want;
+          want.kind = name == "mate_in_one"   ? SolverClaim::Kind::Win
+                      : name == "forced_draw" ? SolverClaim::Kind::Draw
+                                              : SolverClaim::Kind::Loss;
+          want.distance = name == "mate_in_one" ? 1 : name == "forced_draw" ? 0 : 2;
+          if (root->kind != want.kind || root->distance != want.distance) {
+            std::fprintf(stderr, "  %s under the %s: the root's claim %s, not %s\n", n.name, arm.name,
+                         t5d::tools::to_string(*root).c_str(), t5d::tools::to_string(want).c_str());
+            CHECK(false);
+          }
+        }
+      }
+    }
+  }
+  report("constructed", tally, runs);
+  CHECK(tally.contradictions.empty());
+  CHECK(tally.certificate_failures.empty());
+  CHECK(tally.decided >= 100);
+  CHECK(tally.wins > 0 && tally.losses > 0 && tally.draws > 0);
+  CHECK(tally.certified > 10);
+}
+
+TEST(mcts_solver_agrees_with_df_pn_under_every_ruleset) {
+  DfpnTally tally;
+  SolverRuns runs;
+  DfpnCheckOptions options;
+  options.nodes = 50'000;
+  every_ruleset_against_dfpn(6, 2, 1, 250, options, false, tally, runs);
+  report("every ruleset", tally, runs);
+  CHECK(tally.contradictions.empty());
+  CHECK(tally.certificate_failures.empty());
+  CHECK(tally.decided >= 200);
+  CHECK(tally.certified > 10);
+}
+
+TEST(long_mcts_solver_agrees_with_df_pn) {
+  DfpnTally tally;
+  SolverRuns runs;
+  DfpnCheckOptions options;
+  options.nodes = 200'000;
+  options.certificate.max_positions = 20000;
+  // Exact legality within a node budget: under Q3's play activation one exact
+  // classification can run for many minutes (the flat form on a 5-board 4x4
+  // position: over 10 minutes for one search; build-log issue 406). A move the
+  // budget leaves unknown proves nothing (the solver's rule (e)).
+  every_ruleset_against_dfpn(12, 3, 1, 800, options, true, tally, runs, true, LegalityOptions::nodes(2'000'000));
+  report("every ruleset (long)", tally, runs);
+  CHECK(tally.contradictions.empty());
+  CHECK(tally.certificate_failures.empty());
+  CHECK(tally.decided >= 1000);
+  CHECK(tally.certified > 100);
 }
 
 // ---- H37: an unknown verdict is never a terminal ------------------------------------------

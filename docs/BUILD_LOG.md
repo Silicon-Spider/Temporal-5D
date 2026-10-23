@@ -845,6 +845,7 @@ threads reach at least one thread's sum (one retry on a shared machine).
 | 2026-10-23 | D2's tree form (reviewed, 2f07079) | main 47bc857 + lane/engine 2f07079, merged tree before the commit | dev-r, 24 logical; the engine and network lanes running; load 51-56% | 32 | 293 / 292 / 293 | 311 / 313 / 310 | none | pass x3 |
 | 2026-10-23 | D2's flat form (reviewed, a05ab6a) | main a937370 + lane/engine a05ab6a, merged tree before the commit | dev-r, 24 logical; the engine and network lanes running; load 10-33% | 32 | 293 / 293 / 293 | 316 / 317 / 315 | none | pass x3; the nightly gate passed on the same tree (480 s; Half Reflected and Reversed Royalty gated) |
 | 2026-10-23 | engine ABI round 3 (B11's pin and check relations, D4's per-square labels; reviewed, 2ed1bc9) | main 9c59cb0 + lane/engine 2ed1bc9, merged tree before the commit | dev-r, 24 logical; the network lane's flat head finishing and the search lane's E10 reviews starting; load 80-88% before, 85-91% after | 32 | 292 / 293 / 293 | 309 / 313 / 307 | none | pass x3; the nightly gate passed in 570 s (Half Reflected and Reversed Royalty gated, as before) |
+| 2026-10-23 | MT-01 (the solver against df-pn; tests and tools only, no scanner or search code changed) | lane/engine 710921a + MT-01, the tree before the commit | dev-r, 24 logical; other lanes and this lane's long twin running; load 99% before, 96% after | 32 | 292 / 292 / 292 | 304 / 303 / 306 | none | pass x3 |
 
 ## Environment
 
@@ -1598,7 +1599,7 @@ width (M22)", "The CHECKPOINT 8 figures"). Found on the way: the ruling's premis
 | H12 | retired | With the NNUE and the per-node scans |
 | H13 | built (component), not wired | The asset map (E9) as the register now records it: the material estimate, 4 plies and 128 nodes per board, flagged at 300, boost 0.25 × min(1, value/900), every number a placeholder (issue 106). Wiring its boosts into the search's priors was E10's - lost, redone in step 2 (with the steered visits flagged for I2) |
 | H14 | not started (lost with E10) | Restated at CHECKPOINT 6: budgets for the reduced ladder - Hunt, the asset map, the settling scans under 50 boards (Guard offline) - against shared movegen, on M13's five cores. E10's scheduler, redone in step 2 |
-| H41 | built, tested | `SearchParams::proof_channel` (C `proof_channel`, `t5d-play --proof-channel`) - the switch the register now names: propagation of solved status (marking nodes solved, pruning siblings, secure-child selection) and export, off by rule; game ends are scored as results. Not yet: the cross-checks of the solver's proofs against df-pn and the oracles' mate verdicts (§15.4) - step 2's missing tests |
+| H41 | built, tested | `SearchParams::proof_channel` (C `proof_channel`, `t5d-play --proof-channel`) - the switch the register now names: propagation of solved status (marking nodes solved, pruning siblings, secure-child selection) and export, off by rule; game ends are scored as results. **The cross-check against df-pn (§15.4, MT-01) - built 2026-10-23 (`lane/engine`)**: `tools/solver_proofs.hpp` derives each solved node's claim (Win(k), Loss(k), Draw) from the solved subtree and holds every solved turn start to df-pn's literal class (1 thread, node budget), every df-pn proof certified by E4 alone; `mcts_solver_agrees_with_df_pn_on_constructed_mates`, `..._under_every_ruleset` and a `long_` twin, under the ply split, the tree form and the flat form (the ply split and flat form as graphs too): no contradiction (issue 400); `t5d-solver-check`, the offline mode, built and tested on engine-written records - not run over 6b's 805 roots, whose records are only under `oracles/` (issue 401). Not yet: the cross-check against the oracles' mate verdicts (MT-02: the engine-side tool, then the harness side) |
 | H42 | built, tested; not adopted | Guard (E9): depth 1 completes in 65.1 / 15.8 / 5.2 / 0.0% of roots against 95% (6b″) - adopted in no range; §13: the chosen move goes unguarded. Built and kept (the audit lane's shallow-mate report uses its question offline; the search's re-search hook stays unwired-by-adoption). Its five-thread depth-1 test failed once in CI (run 37146667584): a thread that read the root's proof from a helper's export - its tree empty - was the one reported, so the refutation's line was empty. Fixed in the prover's report (2026-10-17, `lane/engine`): the line of a thread that searched, complete at depth 1; the test pins the race and checks the line's contract at depth 2. What Guard decides is unchanged. Beyond depth 1 the line keeps its contract (it can stop where a node was solved from the store): a certificate holds the attacker's proving actions only, so the line could take the attacker's step past such a node from one but not the defender's longest defence, which needs an enumeration of the defender's actions (the first record of this fix gave another reason - that 6b″ ran Guard without certificates; it ran with them, for its cross-check against E4) |
 | H43 | built, tested; adopted under 100 boards; not wired | Hunt (E9): 69.0% / 63.6% of the truth's mates under 50 / 50-99 boards (6b″) - adopted there; 35.0% at 100-199 and 0 of 1 at 200+ - not adopted; §13: proofs there come only from the search's solver. Export refused until H41/H23. Not wired into the search on main: E10 was lost; redone in step 2 (Hunt at the root under 100 boards, the measured configuration) |
 | H44 | built in part | The audit lane's tools: the certificate checker (E4 alone) and `t5d-hunt-truth` (E9); the decision sampler, the offline proof runner and the per-range report were E10's - lost, redone in step 2 (curriculum hooks as interfaces only) |
@@ -4468,6 +4469,70 @@ superseded or made moot says so; nothing is deleted.
     recapturer; the arrival check's moved-piece rule (a discovered attack not counted); the
     royal zone's whole-turn step through time. Edit 136.
 
+
+**Issues 400-449 are the engine lane's block for the step-2 test work (MT-01 to MT-03),
+assigned by the main loop on 2026-10-23 (the engine lane's earlier block, 140-199, is used
+up); its proposed edits take 300-329.**
+
+400. **The solver-against-df-pn cross-check: the readings it needed** (§15.4 "the solver's
+    against df-pn and the oracles' mate verdicts (H41)"; §11.1 "cross-checked against df-pn
+    offline where df-pn decides"; register H41). The documents name the cross-check but not
+    its terms, and the search records no proof distance. Built (MT-01, 2026-10-23) under these
+    readings, each from the brief and none a committed-class choice: (a) **the claim** is
+    derived from the solved subtree - Win(k) the least over the children proven lost for the
+    node, Loss(k) the greatest over its children, all proven lost, a same-mover (mid-action)
+    child adding no half-turn, a submission or a whole turn one - so a solver Win(k) is the
+    distance of the solver's own proof, not necessarily the shortest mate; (b) **the class**
+    is df-pn's literal one (seeds All, completion Every: exactly "mate within d"): only its
+    disproofs mean "no mate within d" - the default class's are class-relative (H19) and could
+    not contradict a solver win; (c) **the rules**: a Win(k) is never disproven at depth k; a
+    Loss(k)'s every successor (E4's exhaustive listing) is never disproven at k - 1 and df-pn
+    proves nothing at the node; a Draw has no df-pn proof at the node and not every successor
+    proven lost - both at a depth of 3 (`draw_depth`, a placeholder: a draw the solver proves
+    holds at every depth, and 3 keeps the questions cheap); every df-pn proof is certified by
+    `check_certificate`; (d) **"where df-pn decides"**: Unknown is no verdict and is counted
+    (as 6b'' counted it); game ends (E4's verdicts, which the search scores itself) are
+    counted, not asked; (e) **the arms**: the ply split, the tree form and the flat form, the
+    ply split and the flat form also as MCGS graphs (the tree form is refused under graph
+    search, issue 301). The derivation lives in `tools/solver_proofs.{hpp,cpp}` (the
+    `t5d_tools` library), shared by the tests, `t5d-solver-check` and MT-02's
+    `t5d-proof-records`; `tests/test_solver_refs.hpp` holds the positions and arms. Found: no
+    contradiction and no certificate failure (counts in `engine/README.md`, "Step 2: H41's
+    cross-checks"). Edit 300.
+401. **The offline cross-check over 6b's 805 roots is not run: their records are only under
+    `oracles/`** (§11.4's "above 100 boards, proofs come only from the search's solver";
+    the brief's MT-01 item 4). `t5d-solver-check` reads records from its command line, as
+    `t5d-scan6bpp` does, and names no corpus. 6b's 805 roots are the turn starts of the 41
+    gate-corpus records, listed in `oracles/corpus/manifest.toml` and held at
+    `oracles/third_party/<source>/...`; 6b, 6b' and 6b'' were run over them through an
+    untracked list (`build/corpus.txt`), which does not exist on the rebuilt machine. Making
+    that list means reading the oracle tree's manifest and pointing the engine's tool into
+    the submodules - the 6b tools' precedent, but not one this lane extends on its own (the
+    main loop's instruction: say so and log it rather than work around the rule). The tool
+    is built and tested on records the engine writes itself. **For the main loop or the
+    user**: whether the 6b precedent (a measurement tool reading the corpus's record text
+    through a runtime list) covers this run; if it does, `t5d-solver-check --record-list
+    build/corpus.txt --per-position` gives the per-range figures (expect the exact-legality
+    searches to be slow above 100 boards: `--max-boards`, `--playouts` bound it).
+
+406. **The search's exact legality can run for many minutes on small positions under Q3 and
+    Q20's alternatives** (register E5a's tiers, H37; §15.3's legality row). Found by MT-01's
+    long twin (2026-10-23), not a soundness issue: one search - the flat form, 800 playouts,
+    `LegalityOptions::exact()` - at black to move `[1k2/4/4/1KN1:-0:1:w]
+    [1k2/4/1K2/2N1:-0:1:b] [2k1/4/4/B1K1:+0:1:w] [2k1/4/4/B3:+0:1:b] [1k2/4/4/1KNK:+1:1:b]`
+    (4x4, `play_activates`, Q3) ran over 17 minutes before it was stopped, nearly all of it
+    in `expand`'s `classify_moves` -> `search_finish` -> the hypercuboid's general
+    realisation (`TaggedPositionSet::insert`), sampled with gdb; under
+    `inactive_history_is_destination = false` (Q20) the same test's searches took 20
+    minutes for 150 searches (turn-start mate checks and expansions). Exact means no
+    budget, so H37 is kept - the cost is the issue. The long twin now classifies within
+    2,000,000 nodes per classification (`LegalityOptions::nodes`; a move left unknown proves
+    nothing, the solver's rule (e)); the default tests keep exact legality. For the search
+    lane / E5a: whether the flat form needs the per-move classification at all at its
+    leaves (its children are whole turns from the generator), and the realisation's cost
+    under Q3 - information for §15.3's legality row (measured under the default rules
+    only).
+
 ## Proposed spec edits
 
 Edits the spec or the register needs, for applying upstream. Each: where, what it
@@ -5690,6 +5755,18 @@ struck through, where nothing of it is left to apply); the others stand as writt
     named, and the targets are re-derived rather than recorded (I15 keeps no per-square
     label).
 
+300. **§15.4's solver clause and register H41 (the cross-check against df-pn as built)**:
+    now - §15.4: "the solver's against df-pn and the oracles' mate verdicts (H41)"; §11.1:
+    "its proofs are cross-checked against df-pn offline where df-pn decides". Proposed - add
+    to §15.4 (or §11.1): "Against df-pn: at every solved turn start of a search, the claim
+    derived from its solved subtree - Win(k), Loss(k), Draw - against df-pn's literal class
+    (exactly mate within d): a Win(k) never disproven at k; a Loss(k)'s every successor never
+    disproven at k - 1; no df-pn proof at a Loss or a Draw, and a Draw's successors not all
+    proven lost; df-pn's proofs certified by E4 alone; Unknown counted, never a verdict;
+    under every D2 arm." H41's note: "cross-checked against df-pn (tests and t5d-solver-check:
+    no contradiction); against the oracles' mate verdicts through the gate (pending)". Why:
+    issue 400 - the readings the clause needed, now built and holding.
+
 ## Session log
 
 - **2026-10-01** - Pre-flight passed. Design documents moved into `docs/design/`
@@ -5790,3 +5867,10 @@ struck through, where nothing of it is left to apply); the others stand as writt
   the review named tested; A7's mirror test requires every label decided and seen; the
   labels' and the pin and check relations' cost in `docs/MEASUREMENTS.md`. Register B11, D4;
   issues 172-176; edit 136.
+- **2026-10-23 - MT-01, the solver against df-pn** (`lane/engine`; the main loop assigned
+  this work issues 400-449 and proposed edits 300-329): every solved turn start's claim,
+  derived from the solved subtree, held to df-pn's literal class with E4-certified proofs,
+  under the ply split, the tree form and the flat form (`tools/solver_proofs.*`,
+  `t5d-solver-check`, three tests): no contradiction. 6b's 805 roots not run - their
+  records are only under `oracles/` (issue 401). The long twin found exact legality slow
+  under Q3 and Q20 (issue 406). Register H41; issues 400, 401, 406; edit 300.
