@@ -6418,4 +6418,7 @@ struck through, where nothing of it is left to apply); the others stand as writt
   quiet-machine block records them (issue 530). The smoke run over the corpus (issue 533): the
   same boards as every oracle everywhere; check with Chess in 5D, terminal with ftxi and cwmtt,
   the count with cwmtt; 9 records its reader cannot read. No golden file written (the machine is
-  loaded).
+  loaded). Checks on the final state: `verify` ok (the 17 notes of H48), `selftest` 684 tests OK
+  (1 skipped), `gate --tier commit` - oracle layer ok, ftxi 8256 of 8256 and notation 3012 of
+  3012 required values reproduced, calibration 1.45x, engine SMOKE TEST - PASSED, 0 declined:
+  the commit tier unchanged.
