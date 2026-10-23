@@ -216,6 +216,39 @@
 // proof channel"), so SearchParams::proof_store must stay false - the search
 // refuses to start otherwise.
 //
+// THE VERIFICATION LADDER, WIRED (stage E10; t5d/ladder.hpp; register H1, H10,
+// H13, H14, H41-H43; 6b''s adoption table), its parts in SearchParams' E10
+// block, each ON by default in its range:
+//  * at a decision's turn-start root, HUNT under 100 boards and the root's
+//    full SETTLING scan under 50; at each PV CHANGE (the root's most visited
+//    child changes, once the root has settling_debounce visits) the settling
+//    scan at the opponent's turn start after the principal line, if THAT
+//    position is under 50 boards. They run on the ladder's worker, and their
+//    verdicts reach the search between batches (the start of gather, the end
+//    of deliver) - the synchronous mode answers each where it is asked. A
+//    decision's end (the search destroyed or re-rooted) cancels its jobs.
+//  * THEIR PROOFS reach the tree only through inject_proof, behind the proof
+//    channel: OFF (by rule, H41) a proof is WITHHELD - counted, kept in
+//    verdicts(), the tree untouched (its digest is the search's without the
+//    ladder). On (experiments, tests), only a proof whose certificate E4
+//    confirms (ladder_certify) sets bounds: our mate solves the root and E9
+//    plays it (under the ply split the action's mate is carried through its
+//    decisions by the game's ladder); a PV scan's refutation makes our line
+//    proven lost - ineligible. Nothing is exported (proof_store is refused).
+//  * THE ASSET MAP's boosts enter the priors (set_priors: after the softmax,
+//    the temperatures, the unknown-move scale and the submit share; before k0
+//    and the root noise), never the cached evaluation (§15.2's C19-C21 row),
+//    by boost_rule. At the root the side table keeps each edge's unsteered
+//    noise-free prior and what steering added (RootChild::prior_unsteered,
+//    boost), and counts its STEERED VISITS (steered_rule; I2's flag): a root
+//    visit whose child PUCT would not have chosen with the unsteered priors
+//    (the same noise, visits, values and virtual loss). A carried root's
+//    steering is not recorded (match play emits no targets, 12.2).
+//  * PV changes are recorded as events (pv_changes(), RootChild::was_pv and
+//    peak_share) for E7's instability signal and H44's audit lane.
+// Guard (H42) is adopted in no range: its hook is the driver's, off
+// (t5d/selfplay.hpp, PlayParams::guard_final).
+//
 // FINAL SELECTION (E5, E9): with the proof channel on, a proven win is played at
 // once; children proven lost are ineligible unless all are; when an eligible
 // child is solved, the
@@ -254,9 +287,11 @@
 #include <unordered_map>
 #include <vector>
 
+#include "t5d/assets.hpp"
 #include "t5d/expand.hpp"
 #include "t5d/legal.hpp"
 #include "t5d/move.hpp"
+#include "t5d/prover.hpp"
 #include "t5d/search.hpp"
 #include "t5d/state.hpp"
 #include "t5d/turngen.hpp"
@@ -414,6 +449,34 @@ enum class NodeKey : std::uint8_t {
 enum class UncertaintySource : std::uint8_t {
   Categorical = 0,  ///< the 51-bin categorical's variance (Evaluation::value)
   ErrorHead = 1,    ///< the error head's output (Evaluation::error)
+};
+
+/// Stage E10: how a steering source's boost b enters an edge's prior P - the
+/// asset map's (spec 11.2 rung 4: "a standing prior boost on travel moves
+/// into flagged boards") and Hunt's suggestions' (H43, behind its flag). The
+/// combination is not stated (build-log spec issues 106, 178).
+enum class BoostRule : std::uint8_t {
+  /// P' = (P + b) / (1 + sum of b) over the edges that may be taken - the
+  /// boost a share of the prior, the whole renormalised (placeholder).
+  Additive = 0,
+  /// P' proportional to P (1 + b): a boost scales the network's own prior.
+  Multiplicative = 1,
+};
+
+/// Stage E10, register I2: which of a root child's visits are STEERED - the
+/// counts the training records carry (RootChild::steered_visits) and the
+/// targets exclude or down-weight (spec 12.2: "scanner-forced visits removed"
+/// or "scanner-injected visits recorded and down-weighted"). Not defined by
+/// the documents (build-log spec issue 153: "E10 decides"; issue 179).
+enum class SteeredRule : std::uint8_t {
+  /// A root visit is steered when PUCT's choice at the root, its scores
+  /// recomputed with every edge's UNSTEERED prior (the same noise, visits,
+  /// values and virtual loss), would have been another child: the visit the
+  /// steering decided (placeholder).
+  Counterfactual = 0,
+  /// Every visit to a root child whose prior a steering source changed - the
+  /// cautious reading: exclusion then drops the boosted children's visits.
+  BoostedChild = 1,
 };
 
 /// The final-selection rule outside solved positions (E5).
@@ -637,6 +700,67 @@ struct SearchParams {
   // ---- state-keyed evaluations ---------------------------------------------------------
   std::size_t eval_cache_entries = std::size_t{1} << 16;  ///< 0: no cache
   std::size_t eval_cache_bytes = std::size_t{256} << 20;  ///< its memory ceiling (estimated)
+
+  // ---- E10: the reduced verification ladder wired (register H1, H10, H13, H14,
+  // H41-H43; 6b''s adoption table; t5d/ladder.hpp). Every number a named
+  // placeholder unless 6b'' measured it (build-log spec issues 177-190).
+  /// Hunt (H43): at a decision's root, a turn start, do WE have a forced mate?
+  /// Adopted under 100 boards (6b''): asked where the root has fewer than
+  /// hunt_max_boards boards. ON by default in its range.
+  bool hunt = true;
+  int hunt_max_boards = 100;  ///< exclusive (6b'': "under 100 boards")
+  /// Its budget per question: 6b''s measured 50 ms on verification_threads
+  /// threads; hunt_nodes a node cap beside it (0: none). Placeholders.
+  double hunt_ms = 50;
+  std::uint64_t hunt_nodes = 0;
+  int hunt_depth = 5;  ///< half-turns (6b''s and M15's 5)
+  /// The full settling scans (spec 11.4: "df-pn at the root and on PV
+  /// changes", "under 50 boards, where it passed" - 6b' (A)): ON by default in
+  /// their range. Asked at a turn-start root under settling_max_boards boards
+  /// (our mate), and - the refutation question - at the opponent's turn start
+  /// after the root's principal line whenever the root's most visited child
+  /// changes, where THAT position has fewer than settling_max_boards boards
+  /// (readings: build-log spec issue 181).
+  bool settling = true;
+  int settling_max_boards = 50;      ///< exclusive
+  double settling_ms = 50;           ///< 6b' (A)'s 50 ms (placeholder: per scan)
+  std::uint64_t settling_nodes = 0;  ///< 0: none
+  int settling_depth = 5;
+  /// The root's own scan (under 50 boards it asks Hunt's question, our mate,
+  /// beside Hunt - both run: the literal reading of 6b''s table; off, the PV
+  /// changes' scans alone). Placeholder (issue 181).
+  bool settling_root = true;
+  /// PV-change scans per decision, at most (placeholder).
+  std::uint32_t settling_max_scans = 4;
+  /// A PV change is scanned only once the root has this many visits - the
+  /// principal line is first scanned then (placeholder).
+  std::uint32_t settling_debounce = 16;
+  /// The asset map (H13, rung 4): a standing prior boost on travel moves into
+  /// flagged superseded boards, at every node (asset_root_only: the root's
+  /// only). ON by default. Its numbers are H13's placeholders (AssetOptions).
+  bool asset_map = true;
+  BoostRule boost_rule = BoostRule::Additive;  ///< placeholder (issue 178)
+  bool asset_root_only = false;                ///< placeholder: "standing" read as every node
+  AssetOptions assets{};
+  /// Which root visits are steered (I2; placeholder, issue 179).
+  SteeredRule steered_rule = SteeredRule::Counterfactual;
+  /// The provers' threads (M13: "its five cores serve Hunt, the settling scans
+  /// and the audit lane"); 1 in the synchronous mode.
+  int verification_threads = 5;
+  /// The synchronous mode's budget per job, in prover nodes - no clock, one
+  /// thread, each job run to its end where it is asked (H15; placeholder).
+  std::uint64_t sync_job_nodes = 25'000;
+  /// Hunt's soft priors (H43: "partial attacking lines may be suggested to the
+  /// search as soft priors, behind a flag, with 12.2's exclusions") - OFF. On,
+  /// a turn-start root's Hunt runs to its end before the root is expanded and
+  /// each suggested action's first move (flat form: the turn) gets
+  /// hunt_suggest_boost x its weight, by boost_rule, counted as steering.
+  bool hunt_suggest = false;
+  double hunt_suggest_boost = 0.25;  ///< placeholder
+  /// A proof enters the tree (proof channel on) only once its certificate is
+  /// CONFIRMED by E4 alone (t5d/certificate.hpp) - 6b''s rule that only
+  /// confirmed proofs count. Placeholder: on.
+  bool ladder_certify = true;
 };
 
 /// What a search may spend in one run().
@@ -952,6 +1076,25 @@ struct SearchStats {
   /// check, present, always); tested in the order always, present, between,
   /// capture, check (the cheapest first).
   std::array<std::uint64_t, 5> gate_fired{};
+  // Stage E10, the verification ladder - counted as its verdicts reach the
+  // search (not part of digest()):
+  std::uint64_t hunt_runs = 0;           ///< Hunt's questions answered (cancelled ones not)
+  std::uint64_t hunt_mates = 0;          ///< ... a mate proven
+  std::uint64_t settling_runs = 0;       ///< settling scans answered (the root's and PV changes')
+  std::uint64_t settling_proven = 0;     ///< ... the scanned position's mover mates
+  std::uint64_t settling_disproven = 0;  ///< ... no mate in the class (class-relative, H19)
+  std::uint64_t refutations = 0;         ///< PV-change scans that proved the opponent's mate
+  std::uint64_t ladder_cancelled = 0;    ///< jobs a decision's end cancelled
+  std::uint64_t proofs_withheld = 0;     ///< proofs offered with the proof channel off (H41)
+  std::uint64_t proofs_injected = 0;     ///< ... set in the tree (the channel on)
+  std::uint64_t proofs_unplaced = 0;
+  std::uint64_t proofs_unconfirmed = 0;  ///< certificates not confirmed (ladder_certify)
+  std::uint64_t pv_changes = 0;          ///< the root's most visited child changed (first included)
+  std::uint64_t pv_unscanned = 0;        ///< ... not scanned: the cap, the range, a game end
+  std::uint64_t asset_boosted_edges = 0; ///< edges whose prior the asset map raised
+  std::uint64_t suggestion_edges = 0;    ///< root edges Hunt's suggestions raised (its flag)
+  std::uint64_t steered_visits = 0;      ///< root visits counted steered (SteeredRule)
+  double seconds_assets = 0;             ///< the asset map's assessments and lookups
   StopReason last_stop = StopReason::Playouts;  ///< why the last run() stopped
   // Wall-clock seconds in the rules engine's calls (not part of digest()):
   double seconds_mate = 0;     ///< turn starts' terminal checks (detect_mate)
@@ -1071,8 +1214,13 @@ struct RootChild {
   double noise_alpha = 0;
   /// The variance of the values backed up through the edge (0 before a visit).
   double value_variance = 0;
-  /// E10's asset-map boost on the prior: 0 - not wired (E10, step 2).
+  /// Stage E10: what steering added to the child's noise-free prior -
+  /// prior_noise_free - prior_unsteered (the asset map's boost, and Hunt's
+  /// suggestion behind its flag, by SearchParams::boost_rule); 0 unsteered.
   double boost = 0;
+  /// Stage E10: the noise-free prior without any steering (I2's provenance:
+  /// the PUCT replica's prior, 12.2).
+  double prior_unsteered = 0;
   /// E3's factor on the child's exploration term at the end of the search (1:
   /// E3 off, or the child unevaluated) - with Search::root_cpuct, what a
   /// replica of the root's PUCT needs (I2's pruning).
@@ -1081,9 +1229,49 @@ struct RootChild {
   /// target-side, the training loop's; no document asks the search to force).
   std::uint32_t forced_visits = 0;
   /// Visits a steering source (the asset map's boosts, Hunt's suggestions)
-  /// decided: 0 - none is wired (E10, step 2).
+  /// decided (stage E10; SearchParams::steered_rule) - I2's flag, which the
+  /// targets exclude or down-weight (12.2). A carried root's are not counted
+  /// (match play emits no targets): 0.
   std::uint32_t steered_visits = 0;
+  /// Stage E10, H44's events: whether the child has been the root's most
+  /// visited child this decision, and the largest share of the root's visits
+  /// it held (taken at each of its own visits).
+  bool was_pv = false;
+  double peak_share = 0;
 };
+
+/// Stage E10: one step of a path from a decision's root - one decision of the
+/// search's split: a move (board-move split, tree form), submitting
+/// (board-move split, tree form), or a whole turn, submitted (flat form).
+struct PathStep {
+  std::vector<Move> moves;  ///< one move, or a turn's; none for submit
+  bool submit = false;
+};
+
+/// Stage E10, H44: a change of the root's most visited child (its first
+/// establishment included: `from` kNoChild).
+struct PvChange {
+  static constexpr std::size_t kNoChild = static_cast<std::size_t>(-1);
+  std::uint32_t root_visits = 0;  ///< the root's visits when it changed
+  std::size_t from = kNoChild;    ///< root edge indices
+  std::size_t to = kNoChild;
+  PathStep from_step, to_step;    ///< their decisions
+  std::uint32_t from_visits = 0, to_visits = 0;
+  double from_q = 0, to_q = 0;    ///< the root player's view
+};
+
+/// Stage E10: what became of a proof offered to the search (inject_proof).
+enum class ProofUse : std::uint8_t {
+  Injected = 0,  ///< bounds set in the tree (the proof channel on)
+  Withheld,      ///< the proof channel is off (H41): nothing entered the tree
+  Deferred,      ///< the root is not expanded yet (a ladder's proof is offered again between batches)
+  Unplaced,      ///< its path is not in the tree (a pruned edge, a turn not generated)
+  Unconfirmed,   ///< its certificate was not confirmed by E4 (ladder_certify)
+};
+const char* proof_use_name(ProofUse use) noexcept;
+
+class VerificationLadder;  // t5d/ladder.hpp
+struct LadderVerdict;      // t5d/ladder.hpp
 
 class Search {
  public:
@@ -1093,8 +1281,14 @@ class Search {
   /// among them), a negative count, or a count of 0 where the root's
   /// obligations are met (a turn start's present lies on the mover's colour,
   /// T5 - such a root's action has moves).
+  /// Stage E10: `ladder` - the game's verification ladder (t5d/ladder.hpp:
+  /// the asset map and the settling prover, whose lifetime is the game's -
+  /// §8.7, H17), shared by a game's searches as the cache is; none given, the
+  /// search makes its own where SearchParams turns any part on (hunt,
+  /// settling, asset_map). A ladder of another ruleset, or made for other
+  /// ladder parameters (ladder_options), is refused.
   explicit Search(GameState root, SearchParams params = {}, int moves_made = 0,
-                  std::shared_ptr<EvalCache> cache = nullptr);
+                  std::shared_ptr<EvalCache> cache = nullptr, std::shared_ptr<VerificationLadder> ladder = nullptr);
   /// Before A6 the third argument was a flag, "turn start"; a bool is no
   /// count, so passing one is a compile error rather than a count of 0 or 1.
   Search(GameState root, SearchParams params, bool turn_start, std::shared_ptr<EvalCache> cache = nullptr) = delete;
@@ -1123,6 +1317,9 @@ class Search {
   /// The evaluation cache, for another search to share (C14's self-play: a
   /// fresh search per move, the cache carried); null if none.
   std::shared_ptr<EvalCache> shared_cache() const noexcept;
+  /// Stage E10: the verification ladder, for the game's next search (null if
+  /// none).
+  std::shared_ptr<VerificationLadder> shared_ladder() const noexcept;
 
   // -- the step API (the C API's external evaluator) ----------------------------
 
@@ -1182,6 +1379,36 @@ class Search {
   /// priors renormalised; indices of root_children() change), Legal clears its
   /// flag. Actions and submit are Legal. Precondition: nothing waiting.
   MoveLegality verify(std::size_t index, const LegalityOptions& options = LegalityOptions::exact());
+
+  // -- stage E10: the verification ladder's verdicts, proofs and events --------------
+
+  /// The ladder's verdicts this decision (since the search began or last
+  /// re-rooted), in the order they reached the search, each with what became
+  /// of its proof. Verdicts reach the search between batches.
+  const std::vector<LadderVerdict>& verdicts() const noexcept;
+  /// Waits for the decision's ladder jobs, queued and running, to finish and
+  /// takes their verdicts (tests and drivers; the search itself never waits).
+  /// Precondition: nothing waiting.
+  void await_ladder();
+  /// Offers the search a proof about the state `path` leads to from the root:
+  /// `proof` is the mover's there (Win: +1, Loss: -1, Draw: 0). THE PROOF
+  /// CHANNEL: with SearchParams::proof_channel off (H41, by rule) the tree is
+  /// not touched - Withheld, counted. On, the path is followed (an
+  /// unknown-legality edge on it verified exactly; illegal is a contradiction,
+  /// std::logic_error), and the bounds are set at the path's end - or, where
+  /// the path's chooser wins, at its first node not yet expanded (whose mover
+  /// wins by following it) - and propagated up (MCTS-Solver; a contradiction
+  /// throws), a win given one exact visit so that final selection plays it
+  /// (E9). Nothing goes to a persistent store (H19, H23). Precondition:
+  /// nothing waiting.
+  ProofUse inject_proof(std::span<const PathStep> path, const Proof& proof);
+  /// H44's events this decision: the root's most visited child's changes.
+  const std::vector<PvChange>& pv_changes() const noexcept;
+  /// The root's principal line: the most visited child at each node (ties: the
+  /// lower index), to the first turn start (after a submit edge, or a flat
+  /// form's turn) or as far as it is visited. Empty if the root has no
+  /// visited child.
+  std::vector<PathStep> principal_line() const;
 
   // -- persistence (C12, C13) --------------------------------------------------------
 

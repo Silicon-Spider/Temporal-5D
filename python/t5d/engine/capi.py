@@ -276,6 +276,9 @@ T5D_LEGALITY_LEGAL, T5D_LEGALITY_ILLEGAL, T5D_LEGALITY_UNKNOWN = 0, 1, 2
 T5D_CHOICE_PROVEN_WIN, T5D_CHOICE_SECURE_CHILD, T5D_CHOICE_LCB, T5D_CHOICE_VISITS, T5D_CHOICE_ALL_LOST = 0, 1, 2, 3, 4
 T5D_STOP_PLAYOUTS, T5D_STOP_EVALUATIONS, T5D_STOP_FINISHED, T5D_STOP_EXHAUSTED = 0, 1, 2, 3
 T5D_STOP_NODES, T5D_STOP_MEMORY, T5D_STOP_DEADLINE = 4, 5, 6
+#: Stage E10: a steering boost's rule, and what counts as a steered root visit (I2).
+T5D_BOOST_ADDITIVE, T5D_BOOST_MULTIPLICATIVE = 0, 1
+T5D_STEERED_COUNTERFACTUAL, T5D_STEERED_BOOSTED_CHILD = 0, 1
 #: No limit, for the search's budgets (UINT64_MAX).
 T5D_NO_LIMIT = 2**64 - 1
 
@@ -358,6 +361,35 @@ class CSearchParams(ctypes.Structure):
         ("leave_share", c_double),  # a board's "leave it" probability where no board logit is given for it
         ("flat_k0_max", c_double),  # the cap on k0 from the turn distribution's entropy
         ("flat_fallback", c_uint64),  # a node whose generator stopped before its first turn: E4's listing's turns
+        # stage E10: the reduced verification ladder wired (6b''s table; each part on in its range); its
+        # proofs reach the tree only with the proof channel on - never from Python (proof_channel stays 0)
+        ("hunt", c_int32),  # Hunt (H43): our forced mate at a turn-start root ...
+        ("hunt_max_boards", c_int32),  # ... under this many boards (100)
+        ("hunt_ms", c_double),  # its budget (50 ms) ...
+        ("hunt_nodes", c_uint64),  # ... and node cap (0: none)
+        ("hunt_depth", c_int32),
+        ("settling", c_int32),  # the df-pn settling scans: the root's, and at PV changes ...
+        ("settling_max_boards", c_int32),  # ... under this many boards (50)
+        ("settling_ms", c_double),
+        ("settling_nodes", c_uint64),
+        ("settling_depth", c_int32),
+        ("settling_root", c_int32),  # 1: the root's own scan too, beside Hunt; 0: PV changes' only
+        ("settling_max_scans", c_uint32),  # PV-change scans per decision
+        ("settling_debounce", c_uint32),  # root visits before a PV change is scanned
+        ("asset_map", c_int32),  # the asset map's boosts on travel moves into flagged boards (H13)
+        ("boost_rule", c_int32),  # T5D_BOOST_*
+        ("asset_root_only", c_int32),
+        ("asset_flag_margin", c_int32),
+        ("asset_boost_scale", c_int32),
+        ("asset_max_boost", c_double),
+        ("asset_qsearch_plies", c_int32),
+        ("asset_qsearch_nodes", c_uint64),
+        ("steered_rule", c_int32),  # T5D_STEERED_* (I2)
+        ("verification_threads", c_int32),  # M13: 5
+        ("sync_job_nodes", c_uint64),  # the synchronous mode's node budget per job
+        ("hunt_suggest", c_int32),  # Hunt's soft priors (H43's flag): 0
+        ("hunt_suggest_boost", c_double),
+        ("ladder_certify", c_int32),  # only proofs E4 confirms enter the tree
         ("expand", ExpandOptions),
     ]
 
@@ -435,6 +467,20 @@ class CSearchSummary(ctypes.Structure):
         ("generated_turns", c_uint64),
         ("stopped_generators", c_uint64),
         ("fallback_listings", c_uint64),
+        # appended for stage E10: the verification ladder's verdicts as they reached the search -
+        # with the proof channel off every proof is withheld (H41)
+        ("hunt_runs", c_uint64),
+        ("hunt_mates", c_uint64),
+        ("settling_runs", c_uint64),
+        ("settling_proven", c_uint64),
+        ("settling_disproven", c_uint64),
+        ("refutations", c_uint64),
+        ("ladder_cancelled", c_uint64),
+        ("proofs_withheld", c_uint64),
+        ("proofs_injected", c_uint64),
+        ("pv_changes", c_uint64),
+        ("asset_boosted_edges", c_uint64),
+        ("steered_visits", c_uint64),
     ]
 
 
@@ -467,10 +513,14 @@ class CRootChild(ctypes.Structure):
         ("child_key", c_uint64),  # the child node's key; 0: no child node yet
         ("prior_noise_free", c_double),  # the prior before the root noise
         ("value_variance", c_double),  # of the values backed up through it
-        ("boost", c_double),  # E10's asset-map boost: 0 (not wired)
+        ("boost", c_double),  # stage E10: steering's share of prior_noise_free (the asset map's boost)
         ("exploration_scale", c_double),  # E3's factor on its exploration term (1: off)
         ("forced_visits", c_uint32),  # forced playouts: 0 (not built - pruning is target-side)
-        ("steered_visits", c_uint32),  # visits a steering source decided: 0 (none wired, E10)
+        ("steered_visits", c_uint32),  # visits a steering source decided (stage E10; steered_rule, I2)
+        # appended for stage E10: the noise-free prior without steering, and H44's events
+        ("prior_unsteered", c_double),
+        ("was_pv", c_int32),  # the child was the root's most visited this decision
+        ("peak_share", c_double),  # its largest share of the root's visits
     ]
 
 

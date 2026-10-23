@@ -48,6 +48,10 @@ PlayParams quick(TurnSplit split, std::uint64_t seed) {
   p.turn_cap.turns = 8;
   p.turn_cap.boards = 300;  // branching can hold the present back
   p.seed = seed;
+  // Stage E10's asset map steers a uniform evaluator's games into time travel
+  // (its boosts dominate flat priors), and their boards multiply: these tests
+  // are of the games' mechanics; the ladder's are test_ladder.cpp's.
+  p.search.asset_map = false;
   return p;
 }
 

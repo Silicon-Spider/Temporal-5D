@@ -523,6 +523,11 @@ struct Worker {
       halt();
       return false;
     }
+    if (sh.budget->cancel != nullptr && sh.budget->cancel->load(std::memory_order_relaxed)) {
+      st.stopped_by_cancel = true;  // the caller's stop (stage E10): a budget stop
+      halt();
+      return false;
+    }
     return true;
   }
   SearchBudget detector_budget() const {
@@ -2003,6 +2008,7 @@ void accumulate(ProverStats& into, const ProverStats& x) {
   into.attacker_tests += x.attacker_tests;
   into.stopped_by_nodes = into.stopped_by_nodes || x.stopped_by_nodes;
   into.stopped_by_time = into.stopped_by_time || x.stopped_by_time;
+  into.stopped_by_cancel = into.stopped_by_cancel || x.stopped_by_cancel;
   into.stopped_by_memory = into.stopped_by_memory || x.stopped_by_memory;
 }
 

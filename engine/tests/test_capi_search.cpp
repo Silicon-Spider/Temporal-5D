@@ -994,6 +994,82 @@ TEST(capi_search_reports_its_layouts) {
   CHECK_EQ(t5d_search_layout(nullptr, nullptr, &v), T5D_ERR_ARGUMENT);
 }
 
+TEST(capi_search_e10_layout_defaults_and_the_ladder_shared) {
+  // Stage E10: the ladder's fields in front of `expand` (still last), the
+  // summary's and the root child's appended; the defaults the C++ ones (6b''s
+  // ranges, the asset map on, Guard nowhere here - its hook is the driver's).
+  size_t v = 0;
+  CHECK(offsetof(t5d_search_params, hunt) > offsetof(t5d_search_params, flat_fallback));
+  CHECK(offsetof(t5d_search_params, expand) > offsetof(t5d_search_params, ladder_certify));
+  CHECK(sizeof(t5d_search_params) - offsetof(t5d_search_params, expand) <
+        sizeof(t5d_expand_options) + alignof(t5d_search_params));
+  for (const char* field :
+       {"hunt", "hunt_max_boards", "hunt_ms", "hunt_nodes", "hunt_depth", "settling", "settling_max_boards",
+        "settling_ms", "settling_nodes", "settling_depth", "settling_root", "settling_max_scans", "settling_debounce",
+        "asset_map", "boost_rule", "asset_root_only", "asset_flag_margin", "asset_boost_scale", "asset_max_boost",
+        "asset_qsearch_plies", "asset_qsearch_nodes", "steered_rule", "verification_threads", "sync_job_nodes",
+        "hunt_suggest", "hunt_suggest_boost", "ladder_certify"}) {
+    CHECK_EQ(t5d_search_layout("t5d_search_params", field, &v), T5D_OK);
+  }
+  CHECK(offsetof(t5d_search_summary, hunt_runs) > offsetof(t5d_search_summary, fallback_listings));
+  for (const char* field : {"hunt_runs", "hunt_mates", "settling_runs", "settling_proven", "settling_disproven",
+                            "refutations", "ladder_cancelled", "proofs_withheld", "proofs_injected", "pv_changes",
+                            "asset_boosted_edges", "steered_visits"}) {
+    CHECK_EQ(t5d_search_layout("t5d_search_summary", field, &v), T5D_OK);
+  }
+  CHECK(offsetof(t5d_root_child, prior_unsteered) > offsetof(t5d_root_child, steered_visits));
+  for (const char* field : {"prior_unsteered", "was_pv", "peak_share"}) {
+    CHECK_EQ(t5d_search_layout("t5d_root_child", field, &v), T5D_OK);
+  }
+  t5d_search_params d;
+  t5d_search_params_default(&d);
+  const t5d::mcts::SearchParams cpp;
+  CHECK_EQ(d.hunt, 1);
+  CHECK_EQ(d.hunt_max_boards, 100);
+  CHECK_EQ(d.settling, 1);
+  CHECK_EQ(d.settling_max_boards, 50);
+  CHECK_EQ(d.asset_map, 1);
+  CHECK_EQ(d.hunt_ms, cpp.hunt_ms);
+  CHECK_EQ(d.settling_ms, cpp.settling_ms);
+  CHECK_EQ(d.verification_threads, 5);
+  CHECK_EQ(d.boost_rule, T5D_BOOST_ADDITIVE);
+  CHECK_EQ(d.steered_rule, T5D_STEERED_COUNTERFACTUAL);
+  CHECK_EQ(d.asset_flag_margin, cpp.assets.flag_margin);
+  CHECK_EQ(d.asset_boost_scale, cpp.assets.boost_scale);
+  CHECK_EQ(d.asset_max_boost, cpp.assets.max_boost);
+  CHECK_EQ(d.hunt_suggest, 0);
+  CHECK_EQ(d.ladder_certify, 1);
+  CHECK_EQ(d.proof_channel, 0);
+  // A fresh search per decision shares the donor's ladder as it shares its
+  // cache; a mate the ladder proves is withheld (the channel off).
+  const char* boards[] = {"[k4/4Q/1K3/5/5:0:1:w]"};
+  t5d_game* g = nullptr;
+  REQUIRE_EQ(t5d_game_new_from_fen(boards, 1, 5, 5, T5D_PARITY_INFER, T5D_TO_MOVE_INFER, T5D_RULES_STANDARD, &g,
+                                   nullptr),
+             T5D_OK);
+  d.synchronous = 1;
+  d.expand.square_features = T5D_FEATURES_NONE;
+  t5d_search* a = nullptr;
+  REQUIRE_EQ(t5d_search_new(g, 1, &d, &a, nullptr), T5D_OK);
+  REQUIRE_EQ(t5d_search_run(a, T5D_EVALUATOR_UNIFORM, 0, 40, nullptr), T5D_OK);
+  t5d_search_summary info{};
+  REQUIRE_EQ(t5d_search_info(a, &info), T5D_OK);
+  CHECK_EQ(info.hunt_mates, std::uint64_t{1});
+  CHECK(info.proofs_withheld >= 1);
+  CHECK_EQ(info.proofs_injected, std::uint64_t{0});
+  CHECK_EQ(info.root_solved, 0);
+  t5d_search* b = nullptr;
+  REQUIRE_EQ(t5d_search_new_sharing(a, g, 1, &d, &b, nullptr), T5D_OK);
+  t5d_search_params deeper = d;
+  deeper.hunt_depth = 7;  // another ladder's parameters: refused
+  t5d_search* c = nullptr;
+  CHECK_EQ(t5d_search_new_sharing(a, g, 1, &deeper, &c, nullptr), T5D_ERR_ARGUMENT);
+  CHECK(c == nullptr);
+  t5d_search_destroy(b);
+  t5d_search_destroy(a);
+  t5d_game_destroy(g);
+}
+
 TEST(capi_search_proves_a_mate_in_one) {
   const char* boards[] = {"[k4/4Q/1K3/5/5:0:1:w]"};
   t5d_game* g = nullptr;

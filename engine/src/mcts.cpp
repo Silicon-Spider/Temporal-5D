@@ -22,7 +22,9 @@
 #include <utility>
 
 #include "t5d/board.hpp"
+#include "t5d/certificate.hpp"
 #include "t5d/check.hpp"
+#include "t5d/ladder.hpp"
 #include "t5d/movegen.hpp"
 #include "t5d/multiverse.hpp"
 #include "t5d/types.hpp"
@@ -309,10 +311,11 @@ struct FlatNode {
   std::unique_ptr<FlatPolicy> clean;         // the root's policy before its noise (none drawn: null)
   std::vector<double> scores;                // each turn's, in order
   std::vector<double> clean_scores;          // ... under `clean`
+  std::vector<double> boosts;                // stage E10: each turn's steering boost (0: none)
   bool listed = false;                       // its turns are the fallback's listing's
 
   std::size_t bytes() const noexcept {
-    return sizeof(FlatNode) + 16 + (scores.capacity() + clean_scores.capacity()) * sizeof(double) +
+    return sizeof(FlatNode) + 16 + (scores.capacity() + clean_scores.capacity() + boosts.capacity()) * sizeof(double) +
            (generator ? sizeof(TurnGenerator) + 16 + generator->memory_bytes() : 0) + (clean ? clean->bytes() : 0) +
            (policy ? policy->bytes() : 0);
   }
@@ -386,6 +389,7 @@ struct Pending {
   std::size_t slot = 0;
   NodeId leaf = kNoNode;
   std::size_t request = 0;  // its evaluation: one per distinct (state, count) in the batch (A6)
+  bool steered = false;     // stage E10: the root's choice on its path was steered (SteeredRule)
 };
 
 enum class Selected : std::uint8_t { Pending, Done, Collision, DeadEnd };
@@ -768,7 +772,40 @@ struct Search::Impl {
   std::vector<Step> path_;
   std::size_t tree_bytes_ = 0;  // the nodes' counts (Node::bytes), summed
 
-  Impl(GameState root, const SearchParams& params, int moves_made, std::shared_ptr<EvalCache> cache)
+  // ---- stage E10: the verification ladder (t5d/ladder.hpp) ------------------------
+  std::shared_ptr<VerificationLadder> ladder_;
+  bool decision_open_ = false;           // a decision of the ladder's is this search's
+  std::uint64_t ladder_decision_ = 0;    // ... its number
+  std::uint64_t decision_generation_ = 0;  // the root generation it began at
+  std::vector<LadderVerdict> verdicts_;  // this decision's, as they reached the search
+  struct Offer {
+    std::size_t verdict;              // into verdicts_
+    std::vector<PathStep> path;       // from the root
+    Proof proof;                      // the mover's at the path's end
+  };
+  std::vector<Offer> deferred_;          // proofs waiting for the root's expansion
+  std::vector<PvChange> pv_changes_;
+  bool pv_dirty_ = false;                // the principal line changed since it was last judged
+  std::uint32_t pv_scans_ = 0;           // PV-change scans asked this decision
+  std::vector<GameState> scanned_;       // positions scanned this decision (deduplicated)
+  std::vector<HuntSuggestion> root_suggestions_;  // Hunt's (hunt_suggest), for the root's expansion
+  // The root's E10 side table, in its edge order (as root_prior_noise_free_):
+  // each edge's noise-free prior without steering; with the root's noise and
+  // without steering (the counterfactual SteeredRule's replica); the raw boost
+  // steering gave it; its steered visits; whether it was the most visited
+  // child; its largest share of the root's visits.
+  std::vector<double> root_prior_unsteered_;
+  std::vector<double> root_prior_counterfactual_;
+  std::vector<double> root_boost_raw_;
+  std::vector<std::uint32_t> root_steered_;
+  std::vector<std::uint8_t> root_was_pv_;
+  std::vector<double> root_peak_share_;
+  bool root_steering_ = false;           // some root edge's prior was steered
+  bool last_root_steered_ = false;       // select_child's last root choice was steered
+  bool path_steered_ = false;            // ... for the path being selected
+
+  Impl(GameState root, const SearchParams& params, int moves_made, std::shared_ptr<EvalCache> cache,
+       std::shared_ptr<VerificationLadder> ladder)
       : params_(params) {
     validate();
     check_moves_made(root, moves_made);
@@ -777,9 +814,40 @@ struct Search::Impl {
     } else if (params_.eval_cache_entries > 0) {
       cache_ = std::make_shared<EvalCache>(params_.eval_cache_entries, params_.eval_cache_bytes);
     }
+    // E10: the game's ladder - given (a game's searches share it, as the
+    // cache), or made where any part is on.
+    const LadderOptions lo = ladder_options(params_);
+    if (ladder) {
+      if (ladder->ruleset() != root.multiverse().ruleset()) {
+        throw std::invalid_argument("search: the verification ladder given is another ruleset's (its asset map and "
+                                    "settling prover hold facts of the ruleset they were made for, 11.3)");
+      }
+      if (!same_ladder_options(ladder->options(), lo)) {
+        throw std::invalid_argument(
+            "search: the verification ladder given was made for other ladder parameters (assets, the provers' "
+            "depths and threads, the synchronous mode, ladder_certify) than this search's");
+      }
+      ladder_ = std::move(ladder);
+    } else if (ladder_wanted(params_)) {
+      ladder_ = std::make_shared<VerificationLadder>(lo, root.rules(), root.multiverse().ruleset());
+    }
     root_ = make_node(std::move(root), moves_made);
     register_node(root_);
     purge_cache();
+  }
+
+  Impl(const Impl&) = delete;
+  Impl& operator=(const Impl&) = delete;
+
+  ~Impl() {
+    // No job outlives its decision (t5d/ladder.hpp).
+    if (ladder_ && decision_open_) {
+      try {
+        take_verdicts(false);
+      } catch (...) {
+      }
+      ladder_->end_decision(ladder_decision_);
+    }
   }
 
   // A root's count of moves made in its action (A6): 0 or more; 0 - a turn
@@ -902,6 +970,28 @@ struct Search::Impl {
     }
     if (p.expand.pin || p.expand.check || p.expand.travel_threat) {
       throw std::invalid_argument("SearchParams::expand: pin, check and travel-threat are not built");
+    }
+    // E10: the ladder's parameters. Every job is bounded (a whole-search
+    // background solver is held open, H21).
+    require(p.hunt_max_boards >= 0, "hunt_max_boards", "0 (never) or more");
+    require(p.settling_max_boards >= 0, "settling_max_boards", "0 (never) or more");
+    require(nonneg(p.hunt_ms), "hunt_ms", "finite, >= 0 (0: no clock)");
+    require(nonneg(p.settling_ms), "settling_ms", "finite, >= 0 (0: no clock)");
+    require(p.hunt_depth >= 1 && p.hunt_depth <= 99, "hunt_depth", "1 to 99 half-turns");
+    require(p.settling_depth >= 1 && p.settling_depth <= 99, "settling_depth", "1 to 99 half-turns");
+    require(p.verification_threads >= 1 && p.verification_threads <= 256, "verification_threads", "1 to 256");
+    require(nonneg(p.hunt_suggest_boost), "hunt_suggest_boost", "finite, >= 0");
+    require(p.assets.qsearch_plies >= 0 && p.assets.boost_scale > 0 && std::isfinite(p.assets.max_boost) &&
+                p.assets.max_boost >= 0,
+            "assets", "qsearch_plies >= 0, boost_scale > 0, max_boost finite and >= 0");
+    if (p.synchronous) {
+      require(!(p.hunt || p.settling || p.hunt_suggest) || p.sync_job_nodes > 0, "sync_job_nodes",
+              "1 or more: the synchronous mode bounds each ladder job by nodes alone (H15)");
+    } else {
+      require(!(p.hunt || p.hunt_suggest) || p.hunt_ms > 0 || p.hunt_nodes > 0, "hunt_ms/hunt_nodes",
+              "a budget: every ladder job is bounded (a whole-search solver is held open, H21)");
+      require(!p.settling || p.settling_ms > 0 || p.settling_nodes > 0, "settling_ms/settling_nodes",
+              "a budget: every ladder job is bounded (a whole-search solver is held open, H21)");
     }
   }
 
@@ -1148,15 +1238,20 @@ struct Search::Impl {
       }
     }
     if (pid != root_) return;
-    if (root_prior_noise_free_.size() == p.edges.size()) {
+    // The side tables renormalised with the priors (E10's too).
+    const auto renormalise = [&p](std::vector<double>& table) {
+      if (table.size() != p.edges.size()) return;
       double total = 0;
-      for (std::size_t i = 0; i < p.edges.size(); ++i) total += p.edges[i].pruned ? 0.0 : root_prior_noise_free_[i];
+      for (std::size_t i = 0; i < p.edges.size(); ++i) total += p.edges[i].pruned ? 0.0 : table[i];
       if (total > 0) {
         for (std::size_t i = 0; i < p.edges.size(); ++i) {
-          if (!p.edges[i].pruned) root_prior_noise_free_[i] /= total;
+          if (!p.edges[i].pruned) table[i] /= total;
         }
       }
-    }
+    };
+    renormalise(root_prior_noise_free_);
+    renormalise(root_prior_unsteered_);
+    renormalise(root_prior_counterfactual_);
     if (best_edge_ == ei) reset_best();
   }
 
@@ -1165,9 +1260,47 @@ struct Search::Impl {
   void note_root_visit(std::size_t ei) {
     const Node& r = nodes_[root_];
     if (best_edge_ == kNoEdge || (ei != best_edge_ && r.edges[ei].visits > r.edges[best_edge_].visits)) {
+      // E10, H44: a PV change - the settling scans' trigger and the audit
+      // lane's event.
+      PvChange c;
+      c.root_visits = r.visits;
+      if (best_edge_ != kNoEdge) {
+        c.from = best_edge_;
+        c.from_step = step_of(root_, best_edge_);
+        c.from_visits = r.edges[best_edge_].visits;
+        c.from_q = edge_q(r, r.edges[best_edge_]);
+      }
+      c.to = ei;
+      c.to_step = step_of(root_, ei);
+      c.to_visits = r.edges[ei].visits;
+      c.to_q = edge_q(r, r.edges[ei]);
+      pv_changes_.push_back(std::move(c));
+      ++stats_.pv_changes;
+      pv_dirty_ = true;
       best_edge_ = ei;
       best_since_ = r.visits;
+      if (ei < root_was_pv_.size()) root_was_pv_[ei] = 1;
     }
+    if (ei < root_peak_share_.size() && r.visits > 0) {
+      root_peak_share_[ei] =
+          std::max(root_peak_share_[ei], static_cast<double>(r.edges[ei].visits) / static_cast<double>(r.visits));
+    }
+  }
+
+  // A node's edge as a decision (E10's paths).
+  PathStep step_of(NodeId id, std::size_t ei) const {
+    const Node& n = nodes_[id];
+    const Edge& e = n.edges[ei];
+    PathStep s;
+    if (flat()) {
+      const std::span<const Move> a = n.action(e.action);
+      s.moves.assign(a.begin(), a.end());
+    } else if (e.submit) {
+      s.submit = true;
+    } else {
+      s.moves.push_back(e.move);
+    }
+    return s;
   }
 
   // The most visited unpruned root edge now (the lowest index of a tie), as of
@@ -1423,6 +1556,7 @@ struct Search::Impl {
     if (root) {
       root_prior_noise_free_.clear();
       root_noise_alpha_.clear();  // the noise is per board, not per edge
+      clear_root_steering();
       best_edge_ = kNoEdge;
       best_since_ = 0;
     }
@@ -1465,6 +1599,7 @@ struct Search::Impl {
       n.action_offsets.push_back(static_cast<std::uint32_t>(n.action_moves.size()));
       f.scores.push_back(turn->score);
       if (f.clean) f.clean_scores.push_back(f.clean->score_of(turn->moves));
+      f.boosts.push_back(turn_boost(n, turn->moves));
       n.edges.push_back(e);
       ++added;
       ++stats_.generated_turns;
@@ -1518,6 +1653,7 @@ struct Search::Impl {
       n.action_offsets.push_back(static_cast<std::uint32_t>(n.action_moves.size()));
       f.scores.push_back(score);
       if (f.clean) f.clean_scores.push_back(f.clean->score_of(a.moves));
+      f.boosts.push_back(turn_boost(n, a.moves));
       n.edges.push_back(e);
       ++added;
     }
@@ -1553,14 +1689,96 @@ struct Search::Impl {
     };
     std::vector<double> p;
     priors(f.scores, p);
+    const bool root = &n == &nodes_[root_];
+    const bool steered = std::any_of(f.boosts.begin(), f.boosts.end(), [](double b) { return b > 0; });
+    std::vector<double> unsteered;
+    if (root) unsteered = p;  // with the noise, without steering: the counterfactual replica's
+    if (steered) steer(p, f.boosts, nullptr);
     for (std::size_t i = 0; i < n.edges.size(); ++i) n.edges[i].prior = p[i];
-    if (&n == &nodes_[root_]) {
+    if (root) {
+      std::vector<double> clean;
       if (f.clean) {
-        priors(f.clean_scores, root_prior_noise_free_);
+        priors(f.clean_scores, clean);
       } else {
-        root_prior_noise_free_ = std::move(p);
+        clean = unsteered;
+      }
+      root_prior_unsteered_ = clean;
+      if (steered) steer(clean, f.boosts, nullptr);
+      root_prior_noise_free_ = std::move(clean);
+      root_prior_counterfactual_ = std::move(unsteered);
+      root_boost_raw_ = f.boosts;
+      root_steering_ = steered;
+      const std::size_t m = n.edges.size();
+      root_steered_.resize(m, 0);
+      root_was_pv_.resize(m, 0);
+      root_peak_share_.resize(m, 0.0);
+    }
+  }
+
+  // E10: a steering boost applied to priors `p` (`b[i]` edge i's; `open` - may
+  // be null - says which edges may be taken), by SearchParams::boost_rule:
+  // Additive (P + b) / (1 + sum b) over the open edges; Multiplicative P (1 + b)
+  // renormalised to the open edges' mass before.
+  void steer(std::vector<double>& p, const std::vector<double>& b, const std::vector<std::uint8_t>* open) const {
+    const auto is_open = [&](std::size_t i) { return open == nullptr || (*open)[i] != 0; };
+    if (params_.boost_rule == BoostRule::Additive) {
+      double total = 0;
+      for (std::size_t i = 0; i < p.size(); ++i) {
+        if (is_open(i)) total += b[i];
+      }
+      for (std::size_t i = 0; i < p.size(); ++i) {
+        if (is_open(i)) p[i] = (p[i] + b[i]) / (1.0 + total);
+      }
+      return;
+    }
+    double before = 0;
+    double after = 0;
+    for (std::size_t i = 0; i < p.size(); ++i) {
+      if (!is_open(i)) continue;
+      before += p[i];
+      p[i] *= 1.0 + b[i];
+      after += p[i];
+    }
+    if (after > 0) {
+      for (std::size_t i = 0; i < p.size(); ++i) {
+        if (is_open(i)) p[i] *= before / after;
       }
     }
+  }
+
+  // E10: a move's asset-map boost (rung 4, H13) - at node `n`, if the map is on
+  // there (asset_map; asset_root_only: the root's only).
+  double asset_boost(const Node& n, const Move& m) {
+    if (!ladder_ || !params_.asset_map || m.physical()) return 0;
+    if (params_.asset_root_only && &n != &nodes_[root_]) return 0;
+    const auto t0 = std::chrono::steady_clock::now();
+    const double b = ladder_->assets().boost(n.state, m);
+    stats_.seconds_assets += detail::seconds_since(t0);
+    return b;
+  }
+
+  // E10: a turn's steering boost (flat form): its moves' largest asset boost
+  // (placeholder - build-log spec issue 178), plus at the root a Hunt
+  // suggestion's for the same moves (hunt_suggest).
+  double turn_boost(Node& n, std::span<const Move> moves) {
+    double b = 0;
+    for (const Move& m : moves) b = std::max(b, asset_boost(n, m));
+    if (b > 0) ++stats_.asset_boosted_edges;
+    if (&n == &nodes_[root_] && params_.hunt_suggest && !root_suggestions_.empty()) {
+      std::vector<detail::Coord> mine;
+      for (const Move& m : moves) mine.push_back(detail::coord_of(m));
+      std::sort(mine.begin(), mine.end());
+      for (const HuntSuggestion& s : root_suggestions_) {
+        std::vector<detail::Coord> theirs;
+        for (const Move& m : s.action) theirs.push_back(detail::coord_of(m));
+        std::sort(theirs.begin(), theirs.end());
+        if (theirs == mine) {
+          b += params_.hunt_suggest_boost * s.weight;
+          ++stats_.suggestion_edges;
+        }
+      }
+    }
+    return b;
   }
 
   // The prior of node `id`'s edges from their logits (`logits[i]` edge i's; a
@@ -1573,8 +1791,11 @@ struct Search::Impl {
     // be taken (an illegal submit gets none); its entropy sets k0. A legal
     // submit without the evaluator's logit takes submit_share and leaves the
     // rest to the moves (D8's logit is the network's; this is the placeholder).
-    const bool shared_submit = ply() && n.submit_legal && no_submit_logit && !n.edges.empty() &&
-                               n.edges.back().submit;
+    // The submit edge anywhere: a carried root the tree form inherited is
+    // re-evaluated with its edges in their inherited order (reevaluate), where
+    // submit is no longer last (stage E10's review of the wiring found it).
+    const bool shared_submit = ply() && n.submit_legal && no_submit_logit &&
+                               std::any_of(n.edges.begin(), n.edges.end(), [](const Edge& e) { return e.submit; });
     const auto in_softmax = [&](std::size_t i) {
       return !n.edges[i].pruned && !(shared_submit && n.edges[i].submit);
     };
@@ -1617,6 +1838,29 @@ struct Search::Impl {
         }
       }
     }
+    // E10: steering - the asset map's boosts on travel moves into flagged
+    // boards (every node, or the root only) and, at the root, Hunt's
+    // suggestions behind their flag - after the softmax (the temperatures, the
+    // unknown-move scale and the submit share) and before k0 and the noise;
+    // never on the cached evaluation (§15.2's C19-C21 row).
+    std::vector<double> unsteered;
+    if (id == root_) {
+      unsteered.reserve(n.edges.size());
+      for (const Edge& e : n.edges) unsteered.push_back(e.prior);
+    }
+    const std::vector<double> boost = steering(id);
+    if (!boost.empty()) {
+      std::vector<double> p;
+      std::vector<std::uint8_t> takeable;
+      p.reserve(n.edges.size());
+      takeable.reserve(n.edges.size());
+      for (const Edge& e : n.edges) {
+        p.push_back(e.prior);
+        takeable.push_back(e.pruned ? 0 : 1);
+      }
+      steer(p, boost, &takeable);
+      for (std::size_t i = 0; i < n.edges.size(); ++i) n.edges[i].prior = p[i];
+    }
     for (const Edge& e : n.edges) {
       if (e.prior > 0) entropy -= e.prior * std::log(e.prior);
     }
@@ -1626,11 +1870,21 @@ struct Search::Impl {
       before.reserve(n.edges.size());
       for (const Edge& e : n.edges) before.push_back(e.prior);
       root_noise_alpha_.clear();
+      std::vector<double> mix;  // the noise's own part of each edge's prior (none drawn: empty)
       if (params_.root_noise && !noise_applied_ && n.edges.size() > 1) {
-        apply_noise(n);
+        mix = apply_noise(n);
         noise_applied_ = true;
       }
-      // The edges sorted as below, the side table with them (a stable sort of
+      // The counterfactual replica's priors (SteeredRule): the same noise on
+      // the unsteered priors.
+      std::vector<double> counterfactual = unsteered;
+      if (!mix.empty()) {
+        const double keep = 1.0 - params_.dirichlet_epsilon;
+        for (std::size_t i = 0; i < n.edges.size(); ++i) {
+          if (!n.edges[i].pruned) counterfactual[i] = keep * unsteered[i] + mix[i];
+        }
+      }
+      // The edges sorted as below, the side tables with them (a stable sort of
       // the indices orders them exactly as one of the edges).
       std::vector<std::size_t> order(n.edges.size());
       for (std::size_t i = 0; i < order.size(); ++i) order[i] = i;
@@ -1639,12 +1893,20 @@ struct Search::Impl {
       std::vector<Edge> sorted;
       sorted.reserve(n.edges.size());
       root_prior_noise_free_.clear();
+      clear_root_steering();
       std::vector<double> alphas;
       for (const std::size_t i : order) {
         sorted.push_back(n.edges[i]);
         root_prior_noise_free_.push_back(before[i]);
+        root_prior_unsteered_.push_back(unsteered[i]);
+        root_prior_counterfactual_.push_back(counterfactual[i]);
+        root_boost_raw_.push_back(boost.empty() ? 0.0 : boost[i]);
         if (root_noise_alpha_.size() == order.size()) alphas.push_back(root_noise_alpha_[i]);
       }
+      root_steering_ = !boost.empty();
+      root_steered_.assign(order.size(), 0);
+      root_was_pv_.assign(order.size(), 0);
+      root_peak_share_.assign(order.size(), 0.0);
       root_noise_alpha_ = std::move(alphas);
       n.edges = std::move(sorted);
       best_edge_ = kNoEdge;
@@ -1664,17 +1926,67 @@ struct Search::Impl {
     }
   }
 
+  void clear_root_steering() {
+    root_prior_unsteered_.clear();
+    root_prior_counterfactual_.clear();
+    root_boost_raw_.clear();
+    root_steered_.clear();
+    root_was_pv_.clear();
+    root_peak_share_.clear();
+    root_steering_ = false;
+  }
+
+  // E10: the steering boosts of node `id`'s edges (empty: none) - the asset
+  // map's on travel moves (every node, or the root only), and at the root Hunt's
+  // suggestions behind their flag (an action's first move).
+  std::vector<double> steering(NodeId id) {
+    std::vector<double> b;
+    if (!ladder_) return b;
+    Node& n = nodes_[id];
+    bool any = false;
+    b.assign(n.edges.size(), 0.0);
+    for (std::size_t i = 0; i < n.edges.size(); ++i) {
+      const Edge& e = n.edges[i];
+      if (e.submit || e.pruned || !(e.prior > 0)) continue;
+      const double x = asset_boost(n, e.move);
+      if (x > 0) {
+        b[i] += x;
+        any = true;
+        ++stats_.asset_boosted_edges;
+      }
+    }
+    if (id == root_ && params_.hunt_suggest) {
+      for (const HuntSuggestion& s : root_suggestions_) {
+        if (s.action.empty()) continue;
+        const detail::Coord c = detail::coord_of(s.action.front());
+        for (std::size_t i = 0; i < n.edges.size(); ++i) {
+          const Edge& e = n.edges[i];
+          if (e.submit || e.pruned || detail::coord_of(e.move) != c) continue;
+          b[i] += params_.hunt_suggest_boost * s.weight;
+          any = any || params_.hunt_suggest_boost * s.weight > 0;
+          ++stats_.suggestion_edges;
+          break;
+        }
+      }
+    }
+    if (!any) b.clear();
+    return b;
+  }
+
   // Root Dirichlet noise (§8.4, self-play): P = (1 - eps) P + eps Dir(alpha),
   // alpha_i from dirichlet_alphas over the open edges (E1, I19: the total
   // concentration split across them). A pruned edge draws a gamma variate too,
   // unused (the open edges' mean alpha; dirichlet_alpha in the arm before
   // CHECKPOINT 7, whose draws are so exactly what they were).
-  void apply_noise(Node& n) {
+  // Returns each edge's noise part, eps x its share of the variates (E10's
+  // counterfactual replica: the same noise on unsteered priors); empty when no
+  // noise was mixed in.
+  std::vector<double> apply_noise(Node& n) {
     std::vector<double> open_priors;
     for (const Edge& e : n.edges) {
       if (!e.pruned) open_priors.push_back(e.prior);
     }
-    if (open_priors.empty()) return;
+    if (open_priors.empty()) return {};
     const std::vector<double> alphas = dirichlet_alphas(open_priors, params_);
     double total = 0;
     for (const double a : alphas) total += a;
@@ -1694,15 +2006,18 @@ struct Search::Impl {
       sum += eta[i];
     }
     root_noise_alpha_ = std::move(drawn);
-    if (!(sum > 0)) return;
+    if (!(sum > 0)) return {};
     double open = 0;  // the noise goes to the edges that may be taken
     for (std::size_t i = 0; i < n.edges.size(); ++i) open += n.edges[i].pruned ? 0.0 : eta[i];
-    if (!(open > 0)) return;
+    if (!(open > 0)) return {};
     const double eps = params_.dirichlet_epsilon;
+    std::vector<double> mix(n.edges.size(), 0.0);
     for (std::size_t i = 0; i < n.edges.size(); ++i) {
       if (n.edges[i].pruned) continue;
-      n.edges[i].prior = (1 - eps) * n.edges[i].prior + eps * eta[i] / open;
+      mix[i] = eps * eta[i] / open;
+      n.edges[i].prior = (1 - eps) * n.edges[i].prior + mix[i];
     }
+    return mix;
   }
 
   // Progressive widening: k(N) = ceil(k0 (N + 1)^alpha) children instantiated
@@ -1975,6 +2290,20 @@ struct Search::Impl {
       const double fpu = node_q(p) - params_.fpu_reduction * std::sqrt(visited_mass);
       std::array<std::size_t, 3> best{kNoEdge, kNoEdge, kNoEdge};
       std::array<double, 3> best_score{};
+      // E10: at a steered root, the same choice with the unsteered priors (the
+      // counterfactual SteeredRule) - its FPU from their visited mass.
+      const bool replica = pid == root_ && root_steering_ && params_.steered_rule == SteeredRule::Counterfactual &&
+                           root_prior_counterfactual_.size() == p.edges.size();
+      std::array<std::size_t, 3> cf_best{kNoEdge, kNoEdge, kNoEdge};
+      std::array<double, 3> cf_score{};
+      double cf_fpu = fpu;
+      if (replica) {
+        double mass = 0;
+        for (std::size_t i = 0; i < p.instantiated; ++i) {
+          if (p.edges[i].visits + p.edges[i].vl > 0) mass += root_prior_counterfactual_[i];
+        }
+        cf_fpu = node_q(p) - params_.fpu_reduction * std::sqrt(mass);
+      }
       for (std::size_t i = 0; i < p.instantiated; ++i) {
         const Edge& e = p.edges[i];
         if (e.pruned) continue;
@@ -1996,17 +2325,37 @@ struct Search::Impl {
             q = std::clamp(q, static_cast<double>(lo), static_cast<double>(hi));
           }
         }
-        double u = c * e.prior * sqrt_n / (1.0 + static_cast<double>(e.visits) + vlw);
-        if (params_.variance_bonus && child != nullptr && valued(*child)) {
-          u *= variance_bonus(*child, e);
-        }
+        const double bonus =
+            params_.variance_bonus && child != nullptr && valued(*child) ? variance_bonus(*child, e) : 1.0;
+        const double u = c * e.prior * sqrt_n / (1.0 + static_cast<double>(e.visits) + vlw) * bonus;
         const double score = q + u;
         if (best[cls] == kNoEdge || score > best_score[cls]) {
           best[cls] = i;
           best_score[cls] = score;
         }
+        if (replica) {
+          const double q_cf = e.w + vlw > 0 || (child != nullptr && solved(*child)) ? q : cf_fpu;
+          const double u_cf =
+              c * root_prior_counterfactual_[i] * sqrt_n / (1.0 + static_cast<double>(e.visits) + vlw) * bonus;
+          if (cf_best[cls] == kNoEdge || q_cf + u_cf > cf_score[cls]) {
+            cf_best[cls] = i;
+            cf_score[cls] = q_cf + u_cf;
+          }
+        }
       }
-      if (best[0] != kNoEdge) return best[0];
+      // E10's steered visit: the root's choice differs from the replica's.
+      const auto chosen = [&](std::size_t cls) {
+        if (pid == root_) {
+          if (replica) {
+            last_root_steered_ = cf_best[cls] != best[cls];
+          } else {
+            last_root_steered_ = params_.steered_rule == SteeredRule::BoostedChild && root_steering_ &&
+                                 best[cls] < root_boost_raw_.size() && root_boost_raw_[best[cls]] > 0;
+          }
+        }
+        return best[cls];
+      };
+      if (best[0] != kNoEdge) return chosen(0);
       if (p.instantiated < p.edges.size()) {
         ++p.instantiated;  // no ordinary child left: widen (the solver needs every child)
         continue;
@@ -2015,8 +2364,8 @@ struct Search::Impl {
         p.instantiated = p.edges.size();
         continue;
       }
-      if (best[1] != kNoEdge) return best[1];
-      return best[2];
+      if (best[1] != kNoEdge) return chosen(1);
+      return chosen(2);
     }
   }
 
@@ -2053,7 +2402,12 @@ struct Search::Impl {
   // Backs up `v` (the last node's view) and the draw probability `d` (the
   // same from either side, D3) along `path`, releasing its virtual loss; the
   // visit ends at the last node if `ends_here`.
-  void backup(const std::vector<Step>& path, double v, double d, double w, bool ends_here) {
+  void backup(const std::vector<Step>& path, double v, double d, double w, bool ends_here, bool steered = false) {
+    // E10, I2: the root's choice on this path steered - its child's steered visit.
+    if (steered && path.size() >= 2 && path[0].node == root_ && path[1].edge < root_steered_.size()) {
+      ++root_steered_[path[1].edge];
+      ++stats_.steered_visits;
+    }
     for (std::size_t i = path.size(); i-- > 0;) {
       Node& n = nodes_[path[i].node];
       n.visits += 1;
@@ -2100,8 +2454,14 @@ struct Search::Impl {
     e.wq2 += r * r;
     e.wd += rd;
     ++stats_.residual_backups;
-    backup(path, r, rd, 1.0, false);
-    if (pid == root_) note_root_visit(ei);  // the edge crossed is the root's own
+    backup(path, r, rd, 1.0, false, path_steered_);
+    if (pid == root_) {
+      note_root_visit(ei);  // the edge crossed is the root's own
+      if (path_steered_ && ei < root_steered_.size()) {  // E10: and so is the steered choice
+        ++root_steered_[ei];
+        ++stats_.steered_visits;
+      }
+    }
   }
 
   // MCTS-Solver with draws: lo = the best child's lower bound; hi = the best
@@ -2154,22 +2514,23 @@ struct Search::Impl {
   Selected select_once() {
     path_.clear();
     path_.push_back(Step{root_, kNoEdge});
+    path_steered_ = false;
     nodes_[root_].vl += 1;
     NodeId cur = root_;
     for (;;) {
       Node& n = nodes_[cur];
       if (n.terminal != Terminal::None) {
         ++stats_.terminal_visits;
-        backup(path_, detail::terminal_value(n.terminal), detail::terminal_draw(n.terminal), 1.0, true);
+        backup(path_, detail::terminal_value(n.terminal), detail::terminal_draw(n.terminal), 1.0, true, path_steered_);
         return Selected::Done;
       }
       if (solved(n)) {
         ++stats_.terminal_visits;
-        backup(path_, n.lo, n.lo == 0 ? 1.0 : 0.0, 1.0, true);
+        backup(path_, n.lo, n.lo == 0 ? 1.0 : 0.0, 1.0, true, path_steered_);
         return Selected::Done;
       }
       if (n.stuck) {
-        backup(path_, n.eval_mean, n.eval_draw, backup_weight(n.eval_var), true);
+        backup(path_, n.eval_mean, n.eval_draw, backup_weight(n.eval_var), true, path_steered_);
         return Selected::Done;
       }
       // D2's tree form: a root the network never saw - an inherited node
@@ -2210,6 +2571,7 @@ struct Search::Impl {
         return leaf(cur);
       }
       const std::size_t ei = select_child(cur);
+      if (cur == root_) path_steered_ = ei != kNoEdge && last_root_steered_;
       if (ei == kNoEdge) {
         // No child left: every one is a dead end.
         if (!n.turn_start && cur != root_) {
@@ -2285,7 +2647,7 @@ struct Search::Impl {
         take_evaluation(id, copy, x);
         ++stats_.cache_hits;
         const Node& done = nodes_[id];
-        backup(path_, done.eval_mean, done.eval_draw, backup_weight(done.eval_var), true);
+        backup(path_, done.eval_mean, done.eval_draw, backup_weight(done.eval_var), true, path_steered_);
         return Selected::Done;
       }
     }
@@ -2300,7 +2662,7 @@ struct Search::Impl {
         break;
       }
     }
-    pending_.push_back(Pending{path_, pending_.size(), id, request});  // first: it may throw
+    pending_.push_back(Pending{path_, pending_.size(), id, request, path_steered_});  // first: it may throw
     if (request == unique_requests_) ++unique_requests_;
     n.pending = true;
     return Selected::Pending;
@@ -2311,6 +2673,7 @@ struct Search::Impl {
       throw std::invalid_argument("search: a batch is waiting for its evaluations");
     }
     if (max_leaves == 0) throw std::invalid_argument("gather: max_leaves must be 1 or more");
+    between_batches();  // E10: the ladder's questions and verdicts
     requests_.clear();
     unique_requests_ = 0;
     if (params_.synchronous) max_leaves = 1;
@@ -2394,7 +2757,7 @@ struct Search::Impl {
         const Evaluation& ev = evaluations[pd.request];
         take_evaluation(pd.leaf, ev, *slots_[pd.slot]);
         const Node& n = nodes_[pd.leaf];
-        backup(pd.path, n.eval_mean, n.eval_draw, backup_weight(n.eval_var), true);
+        backup(pd.path, n.eval_mean, n.eval_draw, backup_weight(n.eval_var), true, pd.steered);
         ++delivered;
         // A duplicate is not stored twice.
         if (cache_) cache_->insert(n.key, n.moves_made, epoch_, n.state, ev, n.new_boards, flat());
@@ -2413,6 +2776,341 @@ struct Search::Impl {
     collided_.clear();
     requests_.clear();
     unique_requests_ = 0;
+    between_batches();  // E10: the verdicts that arrived, the principal line judged
+  }
+
+  // -- stage E10: the verification ladder's decisions, verdicts and proofs ---------------
+
+  // Between batches (the start of gather, the end of deliver; nothing
+  // waiting): a new decision's questions asked, the verdicts that arrived
+  // taken, deferred proofs offered again, the principal line judged.
+  void between_batches() {
+    if (!ladder_) return;
+    if (!decision_open_ || decision_generation_ != root_generation_) begin_decision();
+    take_verdicts(true);
+    retry_deferred();
+    maybe_scan_pv();
+    take_verdicts(true);  // the synchronous mode answers at once
+  }
+
+  // A decision begins: the root's questions (6b''s table), and the mate an
+  // action carries (the board-move split and the tree form).
+  void begin_decision() {
+    if (decision_open_) ladder_->end_decision(ladder_decision_);
+    ladder_decision_ = ladder_->begin_decision();
+    decision_open_ = true;
+    decision_generation_ = root_generation_;
+    verdicts_.clear();
+    deferred_.clear();
+    scanned_.clear();
+    pv_scans_ = 0;
+    root_suggestions_.clear();
+    const Node& r = nodes_[root_];
+    if (r.terminal != Terminal::None || r.dead_end) return;
+    const int boards = static_cast<int>(r.state.multiverse().board_count());
+    if (r.turn_start) {
+      const bool hunt = (params_.hunt || params_.hunt_suggest) && boards < params_.hunt_max_boards;
+      if (hunt) {
+        ladder_->ask(LadderJob::Hunt, r.state, {}, params_.hunt_depth, params_.hunt_ms,
+                     params_.synchronous ? params_.sync_job_nodes : params_.hunt_nodes, params_.hunt_suggest);
+        if (params_.hunt_suggest && !r.expanded) {
+          // Its suggestions are priors: Hunt answers before the root's expansion.
+          ladder_->wait_idle();
+          take_verdicts(true);
+        }
+      }
+      if (params_.settling && params_.settling_root && boards < params_.settling_max_boards) {
+        ladder_->ask(LadderJob::RootSettling, r.state, {}, params_.settling_depth, params_.settling_ms,
+                     params_.synchronous ? params_.sync_job_nodes : params_.settling_nodes);
+      }
+      return;
+    }
+    offer_carried();
+  }
+
+  // The mate an action carries (VerificationLadder::Carried): from a root
+  // during the action, if the moves made so far are its first moves, the rest
+  // of it and the submission lead to the opponent's mate.
+  void offer_carried() {
+    const std::optional<VerificationLadder::Carried>& c = ladder_->carried();
+    const Node& r = nodes_[root_];
+    if (!c || flat()) return;
+    const auto m = static_cast<std::size_t>(r.moves_made);
+    if (m > c->action.size()) return;
+    GameState s = c->turn_start;
+    for (std::size_t i = 0; i < m; ++i) s.apply(c->action[i]);
+    if (!(s == r.state)) return;
+    if (params_.proof_channel && params_.ladder_certify && !c->certificate_checked) {
+      // Its certificate is the turn start's: checked there, once.
+      VerificationLadder::Carried checked = *c;
+      checked.certificate_checked = true;
+      checked.certificate_verdict = checked.certificate
+                                        ? check_certificate(*checked.certificate, checked.turn_start,
+                                                            checked.proof.distance)
+                                              .verdict
+                                        : CertificateVerdict::Incomplete;
+      ladder_->carry(std::move(checked));
+    }
+    const VerificationLadder::Carried& cc = *ladder_->carried();
+    LadderVerdict v(r.state);
+    v.job = LadderJob::Hunt;
+    v.carried = true;
+    v.boards = static_cast<int>(r.state.multiverse().board_count());
+    v.status = ProofStatus::Proven;
+    v.proof = Proof::win(std::max(1, cc.proof.distance));
+    v.first_action.assign(cc.action.begin() + static_cast<std::ptrdiff_t>(m), cc.action.end());
+    v.certificate = cc.certificate;
+    v.certificate_checked = true;  // the turn start's check stands (or none was asked)
+    v.certificate_verdict = cc.certificate_checked ? cc.certificate_verdict : CertificateVerdict::Undecided;
+    verdicts_.push_back(std::move(v));
+    offer(verdicts_.size() - 1);
+  }
+
+  // The verdicts that arrived: counted, recorded, their proofs offered
+  // (`live`: the tree is this decision's - not at its end).
+  void take_verdicts(bool live) {
+    if (!ladder_ || !decision_open_) return;
+    std::vector<LadderVerdict> got = ladder_->take();
+    for (LadderVerdict& v : got) {
+      const bool proven = v.status == ProofStatus::Proven;
+      switch (v.job) {
+        case LadderJob::Hunt:
+          ++stats_.hunt_runs;
+          if (proven) ++stats_.hunt_mates;
+          if (!v.suggestions.empty()) root_suggestions_ = v.suggestions;
+          break;
+        case LadderJob::RootSettling:
+        case LadderJob::PvSettling:
+          ++stats_.settling_runs;
+          if (proven) ++stats_.settling_proven;
+          if (v.status == ProofStatus::Disproven) ++stats_.settling_disproven;
+          if (proven && v.job == LadderJob::PvSettling) ++stats_.refutations;
+          break;
+      }
+      if (v.stats.stopped_by_cancel) ++stats_.ladder_cancelled;
+      verdicts_.push_back(std::move(v));
+      const std::size_t k = verdicts_.size() - 1;
+      if (!proven) continue;
+      const LadderVerdict& p = verdicts_[k];
+      // Our mate at a turn start: carried through the action's decisions.
+      if (p.job != LadderJob::PvSettling && p.path.empty() && !p.first_action.empty() && ply()) {
+        VerificationLadder::Carried c(p.position);
+        c.action = p.first_action;
+        c.proof = p.proof;
+        c.certificate = p.certificate;
+        ladder_->carry(std::move(c));
+      }
+      if (live) offer(k);
+    }
+  }
+
+  // The proof of verdict k offered to the tree (inject_proof's rules).
+  void offer(std::size_t k) {
+    LadderVerdict& v = verdicts_[k];
+    std::vector<PathStep> path = v.path;
+    Proof proof = v.proof;
+    if (v.job != LadderJob::PvSettling) {
+      // Our mate: the first action played and submitted; the opponent, to
+      // move there, is mated.
+      if (flat()) {
+        path.push_back(PathStep{v.first_action, false});
+      } else {
+        for (const Move& m : v.first_action) path.push_back(PathStep{{m}, false});
+        path.push_back(PathStep{{}, true});
+      }
+      proof = Proof::loss(std::max(0, v.proof.distance - 1));
+    }
+    if (!params_.proof_channel) {
+      v.use = ProofUse::Withheld;  // H41: nothing enters the tree
+      ++stats_.proofs_withheld;
+      return;
+    }
+    if (params_.ladder_certify && !v.certificate_checked) {
+      v.certificate_checked = true;
+      v.certificate_verdict = v.certificate ? check_certificate(*v.certificate, v.position, v.proof.distance).verdict
+                                            : CertificateVerdict::Incomplete;
+      // A mate carried through its action keeps its check.
+      if (v.job != LadderJob::PvSettling && v.path.empty() && ladder_->carried() &&
+          ladder_->carried()->turn_start == v.position) {
+        VerificationLadder::Carried c = *ladder_->carried();
+        c.certificate_checked = true;
+        c.certificate_verdict = v.certificate_verdict;
+        ladder_->carry(std::move(c));
+      }
+    }
+    if (params_.ladder_certify && v.certificate_verdict != CertificateVerdict::Confirmed) {
+      v.use = ProofUse::Unconfirmed;
+      ++stats_.proofs_unconfirmed;
+      return;
+    }
+    v.use = place(path, proof);
+    if (v.use == ProofUse::Deferred) deferred_.push_back(Offer{k, std::move(path), proof});
+  }
+
+  void retry_deferred() {
+    if (deferred_.empty() || !nodes_[root_].expanded) return;
+    std::vector<Offer> again = std::move(deferred_);
+    deferred_.clear();
+    for (Offer& o : again) {
+      verdicts_[o.verdict].use = place(o.path, o.proof);
+      if (verdicts_[o.verdict].use == ProofUse::Deferred) deferred_.push_back(std::move(o));
+    }
+  }
+
+  // The edge of node `id` a path step takes, or kNoEdge. Under the flat form a
+  // turn not yet generated is pulled in (up to kInjectPull turns).
+  static constexpr std::size_t kInjectPull = 256;  // placeholder (build-log spec issue 184)
+  std::size_t edge_for(NodeId id, const PathStep& step) {
+    Node& n = nodes_[id];
+    if (flat()) {
+      GameState target = n.state;
+      for (const Move& m : step.moves) target.apply(m);
+      if (target.submission_status() != SubmitStatus::Safe) return kNoEdge;
+      target.submit();
+      std::size_t pulled = 0;
+      for (std::size_t i = 0;; ++i) {
+        if (i == nodes_[id].edges.size()) {
+          if (pulled >= kInjectPull || pull_turns(nodes_[id], nodes_[id].edges.size() + 1) == 0) return kNoEdge;
+          ++pulled;
+        }
+        const Node& p = nodes_[id];
+        const std::span<const Move> a = p.action(p.edges[i].action);
+        if (a.size() != step.moves.size()) continue;
+        GameState s = p.state;
+        for (const Move& m : a) s.apply(m);
+        s.submit();
+        if (s == target) return i;
+      }
+    }
+    for (std::size_t i = 0; i < n.edges.size(); ++i) {
+      const Edge& e = n.edges[i];
+      if (step.submit) {
+        if (e.submit) return i;
+        continue;
+      }
+      if (!e.submit && step.moves.size() == 1 && detail::coord_of(e.move) == detail::coord_of(step.moves[0])) return i;
+    }
+    return kNoEdge;
+  }
+
+  // Sets a proof's bounds in the tree (the channel on): see inject_proof.
+  ProofUse place(std::span<const PathStep> path, const Proof& proof) {
+    if (proof.kind == Proof::Kind::None) throw std::invalid_argument("inject_proof: no proof");
+    const int v_end = proof.kind == Proof::Kind::Win ? 1 : proof.kind == Proof::Kind::Loss ? -1 : 0;
+    // The mover at path step k's node is the end's (+1) or the other (-1):
+    // flips counted from k on (a submission or a turn changes the mover).
+    const auto sign_from = [&](std::size_t k) {
+      int s = 1;
+      for (std::size_t j = k; j < path.size(); ++j) {
+        if (flat() || path[j].submit) s = -s;
+      }
+      return s;
+    };
+    std::vector<Step> steps{Step{root_, kNoEdge}};
+    NodeId cur = root_;
+    int value = v_end;
+    for (std::size_t k = 0; k < path.size(); ++k) {
+      if (!nodes_[cur].expanded) {
+        // The path goes on below a node not yet expanded: only a win of that
+        // node's mover - who reaches it by following the path - is placed there.
+        if (cur == root_) return ProofUse::Deferred;
+        value = sign_from(k) * v_end;
+        if (value != 1) return ProofUse::Unplaced;
+        break;
+      }
+      const std::size_t ei = edge_for(cur, path[k]);
+      if (ei == kNoEdge || nodes_[cur].edges[ei].pruned) return ProofUse::Unplaced;
+      if (nodes_[cur].edges[ei].unknown) {
+        LegalityOptions exact = LegalityOptions::exact();
+        exact.max_bytes = params_.mate_bytes;
+        const MoveLegality l = verify_edge(cur, ei, exact);
+        if (l == MoveLegality::Illegal) {
+          throw std::logic_error("search: a proof's move is illegal by the exact classification - a contradiction");
+        }
+        if (l == MoveLegality::Unknown) return ProofUse::Unplaced;
+      }
+      Node& n = nodes_[cur];
+      if (ei >= n.instantiated) n.instantiated = ei + 1;  // a proven child is instantiated
+      const NodeId child = ensure_child(cur, ei);
+      if (child == kNoNode) return ProofUse::Unplaced;
+      steps.push_back(Step{child, ei});
+      cur = child;
+    }
+    {
+      Node& t = nodes_[cur];
+      if (std::max<int>(t.lo, value) > std::min<int>(t.hi, value)) {
+        throw std::logic_error("search: an offered proof contradicts the tree's bounds ([" + std::to_string(t.lo) +
+                               ", " + std::to_string(t.hi) + "] against " + std::to_string(value) + ")");
+      }
+      t.lo = static_cast<std::int8_t>(value);
+      t.hi = static_cast<std::int8_t>(value);
+    }
+    for (std::size_t i = steps.size(); i-- > 0;) update_bounds(steps[i].node);
+    if (steps.size() >= 2) {
+      // One exact visit, as select_once gives a solved node: final selection
+      // plays a proven win only once it has a visit (E9).
+      backup(steps, value, value == 0 ? 1.0 : 0.0, 1.0, true);
+    }
+    ++stats_.proofs_injected;
+    return ProofUse::Injected;
+  }
+
+  // The principal line from the root (Search::principal_line), and the node
+  // it ends at.
+  std::vector<PathStep> principal(NodeId& end) const {
+    std::vector<PathStep> line;
+    NodeId cur = root_;
+    end = root_;
+    for (;;) {
+      const Node& n = nodes_[cur];
+      std::size_t best = kNoEdge;
+      for (std::size_t i = 0; i < n.edges.size(); ++i) {
+        const Edge& e = n.edges[i];
+        if (e.pruned || e.child == kNoNode || e.visits == 0) continue;
+        if (best == kNoEdge || e.visits > n.edges[best].visits) best = i;
+      }
+      if (best == kNoEdge) return line;
+      line.push_back(step_of(cur, best));
+      cur = n.edges[best].child;
+      end = cur;
+      if (flat() || n.edges[best].submit) return line;
+    }
+  }
+
+  // A PV change judged: the settling scan at the opponent's turn start after
+  // the principal line, if it is under settling_max_boards (issue 181).
+  void maybe_scan_pv() {
+    if (!params_.settling || !pv_dirty_) return;
+    if (nodes_[root_].visits < params_.settling_debounce) return;
+    NodeId end = kNoNode;
+    std::vector<PathStep> line = principal(end);
+    // Not yet at a turn start (the line still growing below the root): judged
+    // again after the next batch.
+    if (line.empty() || end == root_ || !nodes_[end].turn_start) return;
+    pv_dirty_ = false;
+    const Node& t = nodes_[end];
+    if (pv_scans_ >= params_.settling_max_scans || t.terminal != Terminal::None ||
+        t.state.multiverse().board_count() >= static_cast<std::size_t>(params_.settling_max_boards)) {
+      ++stats_.pv_unscanned;
+      return;
+    }
+    for (const GameState& s : scanned_) {
+      if (s == t.state) return;  // this decision has asked it already
+    }
+    scanned_.push_back(t.state);
+    ++pv_scans_;
+    ladder_->ask(LadderJob::PvSettling, t.state, std::move(line), params_.settling_depth, params_.settling_ms,
+                 params_.synchronous ? params_.sync_job_nodes : params_.settling_nodes);
+  }
+
+  // A decision's end (a re-root): its verdicts taken (an action's mate
+  // carried), its jobs cancelled.
+  void end_decision() {
+    if (!ladder_ || !decision_open_) return;
+    take_verdicts(false);
+    ladder_->end_decision(ladder_decision_);
+    decision_open_ = false;
+    deferred_.clear();
   }
 
   // -- the root's children ------------------------------------------------------------
@@ -2475,6 +3173,7 @@ struct Search::Impl {
     if (!pending_.empty() || !collided_.empty()) {
       throw std::invalid_argument("search: cannot re-root while a batch is waiting");
     }
+    end_decision();  // E10: the old root's decision ends - its jobs cancelled
     std::vector<NodeId> order;
     std::vector<NodeId> remap(nodes_.size(), kNoNode);
     order.push_back(new_root);
@@ -2510,6 +3209,9 @@ struct Search::Impl {
     noise_applied_ = nodes_[0].expanded;
     root_prior_noise_free_.clear();
     root_noise_alpha_.clear();
+    clear_root_steering();  // E10: a carried root's steering counts from here
+    pv_changes_.clear();
+    pv_dirty_ = false;
     reset_best();
     ++stats_.reroots;
     notify_root();
@@ -2721,8 +3423,9 @@ struct Search::Impl {
 // Search: the public face
 // ---------------------------------------------------------------------------
 
-Search::Search(GameState root, SearchParams params, int moves_made, std::shared_ptr<EvalCache> cache)
-    : impl_(std::make_unique<Impl>(std::move(root), params, moves_made, std::move(cache))) {}
+Search::Search(GameState root, SearchParams params, int moves_made, std::shared_ptr<EvalCache> cache,
+               std::shared_ptr<VerificationLadder> ladder)
+    : impl_(std::make_unique<Impl>(std::move(root), params, moves_made, std::move(cache), std::move(ladder))) {}
 Search::~Search() = default;
 Search::Search(Search&&) noexcept = default;
 Search& Search::operator=(Search&&) noexcept = default;
@@ -2731,6 +3434,37 @@ const SearchParams& Search::params() const noexcept { return impl_->params_; }
 const SearchStats& Search::stats() const noexcept { return impl_->stats_; }
 const EvalCache* Search::cache() const noexcept { return impl_->cache_.get(); }
 std::shared_ptr<EvalCache> Search::shared_cache() const noexcept { return impl_->cache_; }
+std::shared_ptr<VerificationLadder> Search::shared_ladder() const noexcept { return impl_->ladder_; }
+
+const std::vector<LadderVerdict>& Search::verdicts() const noexcept { return impl_->verdicts_; }
+const std::vector<PvChange>& Search::pv_changes() const noexcept { return impl_->pv_changes_; }
+
+void Search::await_ladder() {
+  Impl& s = *impl_;
+  if (!s.pending_.empty()) throw std::invalid_argument("search: cannot wait for the ladder while a batch is waiting");
+  if (!s.ladder_) return;
+  do {
+    s.ladder_->wait_idle();
+    s.between_batches();
+  } while (s.ladder_->pending() > 0);
+}
+
+ProofUse Search::inject_proof(std::span<const PathStep> path, const Proof& proof) {
+  Impl& s = *impl_;
+  if (!s.pending_.empty()) throw std::invalid_argument("inject_proof: a batch is waiting");
+  if (!s.params_.proof_channel) {
+    // H41: solved-status propagation is off until the gate passes and the
+    // proof channel is signed off - the tree is not touched.
+    ++s.stats_.proofs_withheld;
+    return ProofUse::Withheld;
+  }
+  return s.place(path, proof);
+}
+
+std::vector<PathStep> Search::principal_line() const {
+  NodeId end = kNoNode;
+  return impl_->principal(end);
+}
 std::size_t Search::memory_bytes() const noexcept { return impl_->memory_bytes(); }
 
 StopReason Search::run(Evaluator& evaluator, const Limits& limits) {
@@ -2824,6 +3558,14 @@ std::vector<RootChild> Search::root_children() const {
     // I15's side table.
     c.prior_noise_free = s.root_prior_noise_free_.size() == r.edges.size() ? s.root_prior_noise_free_[i] : e.prior;
     c.noise_alpha = s.root_noise_alpha_.size() == r.edges.size() ? s.root_noise_alpha_[i] : 0.0;
+    // E10: steering's side table (a carried root has none: its steering is
+    // not recorded - match play emits no targets, 12.2).
+    const bool steering = s.root_prior_unsteered_.size() == r.edges.size();
+    c.prior_unsteered = steering ? s.root_prior_unsteered_[i] : c.prior_noise_free;
+    c.boost = c.prior_noise_free - c.prior_unsteered;
+    c.steered_visits = i < s.root_steered_.size() ? s.root_steered_[i] : 0;
+    c.was_pv = i < s.root_was_pv_.size() && s.root_was_pv_[i] != 0;
+    c.peak_share = i < s.root_peak_share_.size() ? s.root_peak_share_[i] : 0.0;
     if (e.w > 0) {
       const double mean = e.wq / e.w;
       c.value_variance = std::max(0.0, e.wq2 / e.w - mean * mean);

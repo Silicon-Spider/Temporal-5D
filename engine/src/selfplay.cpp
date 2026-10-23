@@ -9,6 +9,8 @@
 #include <string>
 #include <utility>
 
+#include "t5d/certificate.hpp"
+#include "t5d/ladder.hpp"
 #include "t5d/legal.hpp"
 #include "t5d/movegen.hpp"
 #include "t5d/search.hpp"
@@ -78,8 +80,19 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
   SearchParams sp = params.search;
   sp.turn_cap = params.turn_cap;
   if (params.match_play) sp.root_noise = false;  // §12.3: noise off at match play
+  if (params.guard_final && !sp.proof_channel) {
+    throw std::invalid_argument(
+        "PlayParams::guard_final: Guard's refutation is a proof, and no proof may change play until the proof "
+        "channel is signed off (H41) - Guard is adopted in no range (H42); experiments set search.proof_channel");
+  }
   std::shared_ptr<EvalCache> cache;
   if (sp.eval_cache_entries > 0) cache = std::make_shared<EvalCache>(sp.eval_cache_entries, sp.eval_cache_bytes);
+  // E10: the game's verification ladder (its asset map and settling prover live
+  // as long as the game), shared by its searches.
+  std::shared_ptr<VerificationLadder> ladder;
+  if (ladder_wanted(sp)) {
+    ladder = std::make_shared<VerificationLadder>(ladder_options(sp), start.rules(), start.multiverse().ruleset());
+  }
   std::uint64_t rng = mix(params.seed ^ 0x73656C66706C6179ull);
   const auto uniform = [&rng] {
     rng += 0x9E3779B97F4A7C15ull;
@@ -140,7 +153,7 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
       std::unique_ptr<Search> fresh;
       Search* search = nullptr;
       if (params.match_play) {
-        if (!carried) carried = std::make_unique<Search>(s, sp, moves_made, cache);
+        if (!carried) carried = std::make_unique<Search>(s, sp, moves_made, cache, ladder);
         search = carried.get();
         if (!(search->root_state() == s) || search->root_moves_made() != moves_made) {
           throw std::logic_error("play: the carried search's root is not the game's position (with its moves made, A6)");
@@ -148,7 +161,7 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
       } else {
         SearchParams dp = sp;
         dp.seed = mix(sp.seed + 0x9E3779B97F4A7C15ull * (g.decisions + 1));
-        fresh = std::make_unique<Search>(s, dp, moves_made, cache);  // C14: fresh per move
+        fresh = std::make_unique<Search>(s, dp, moves_made, cache, ladder);  // C14: fresh per move
         search = fresh.get();
       }
       const SearchStats before = search->stats();
@@ -180,27 +193,72 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
       LegalityOptions exact = LegalityOptions::exact();
       exact.max_bytes = sp.mate_bytes;
       std::vector<RootChild> children = search->root_children();
-      while (children.at(pick).legality != MoveLegality::Legal) {
-        const MoveLegality v = search->verify(pick, exact);
-        ++g.verified_choices;
-        children = search->root_children();
-        if (v == MoveLegality::Legal) break;
-        if (v == MoveLegality::Illegal) {
-          pick = choose_now();
+      const auto make_legal = [&] {
+        while (children.at(pick).legality != MoveLegality::Legal) {
+          const MoveLegality v = search->verify(pick, exact);
+          ++g.verified_choices;
           children = search->root_children();
-          continue;
-        }
-        std::size_t best = children.size();
-        for (std::size_t i = 0; i < children.size(); ++i) {
-          if (children[i].legality == MoveLegality::Legal &&
-              (best == children.size() || children[i].visits > children[best].visits)) {
-            best = i;
+          if (v == MoveLegality::Legal) break;
+          if (v == MoveLegality::Illegal) {
+            pick = choose_now();
+            children = search->root_children();
+            continue;
           }
+          std::size_t best = children.size();
+          for (std::size_t i = 0; i < children.size(); ++i) {
+            if (children[i].legality == MoveLegality::Legal &&
+                (best == children.size() || children[i].visits > children[best].visits)) {
+              best = i;
+            }
+          }
+          if (best == children.size()) {
+            throw std::logic_error("play: no root child could be shown legal (the memory ceiling)");
+          }
+          pick = best;
         }
-        if (best == children.size()) {
-          throw std::logic_error("play: no root child could be shown legal (the memory ceiling)");
+      };
+      make_legal();
+      // E10: Guard at submission (H42 - adopted in no range: guard_final off).
+      for (std::uint32_t tries = 0; params.guard_final && tries < params.guard_max_rejections; ++tries) {
+        const RootChild& cc = children.at(pick);
+        const bool flat = sp.split == TurnSplit::Flat;
+        if (!flat && !cc.submit) break;  // the action is not complete yet
+        std::vector<Move> full = action;
+        if (flat) full.insert(full.end(), cc.moves.begin(), cc.moves.end());
+        ProveBudget budget;
+        GuardOptions go = params.guard;
+        go.prover.record_certificate = true;
+        if (sp.synchronous) {
+          budget.max_nodes = params.guard_nodes > 0 ? params.guard_nodes : sp.sync_job_nodes;
+          go.threads = 1;
+        } else {
+          if (params.guard_nodes > 0) budget.max_nodes = params.guard_nodes;
+          budget.max_time = std::chrono::nanoseconds(static_cast<std::int64_t>(params.guard_ms * 1e6));
         }
-        pick = best;
+        ++g.guard_runs;
+        const GuardResult gr = guard(action_start, full, budget, go);
+        if (!gr.refuted) break;
+        ++g.guard_refutations;
+        // Only a refutation E4 confirms counts (6b'' rule).
+        GameState refuted = action_start;
+        for (const Move& m : full) refuted.apply(m);
+        refuted.submit();
+        const int distance = 2 * gr.refutation_depth - 1;
+        if (!gr.certificate ||
+            check_certificate(*gr.certificate, refuted, distance).verdict != CertificateVerdict::Confirmed) {
+          break;
+        }
+        const PathStep step = flat ? PathStep{cc.moves, false} : PathStep{{}, true};
+        if (search->inject_proof(std::span<const PathStep>(&step, 1), Proof::win(distance)) != ProofUse::Injected) {
+          break;
+        }
+        ++g.guard_rejections;
+        Limits again{params.guard_research_playouts > 0 ? params.guard_research_playouts : params.playouts};
+        if (params.max_seconds > 0) again.seconds = std::max(params.max_seconds - elapsed(), 1e-6);
+        search->run(evaluator, again);
+        pick = choose_now();
+        children = search->root_children();
+        make_legal();
       }
       const SearchStats& after = search->stats();
       g.playouts += after.playouts - before.playouts;
@@ -211,6 +269,17 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
       g.seconds_search_expand += after.seconds_expand - before.seconds_expand;
       g.seconds_search_generate += after.seconds_generate - before.seconds_generate;
       g.seconds_search_verify += after.seconds_verify - before.seconds_verify;
+      g.hunt_runs += after.hunt_runs - before.hunt_runs;
+      g.hunt_mates += after.hunt_mates - before.hunt_mates;
+      g.settling_runs += after.settling_runs - before.settling_runs;
+      g.settling_proven += after.settling_proven - before.settling_proven;
+      g.settling_disproven += after.settling_disproven - before.settling_disproven;
+      g.refutations += after.refutations - before.refutations;
+      g.proofs_withheld += after.proofs_withheld - before.proofs_withheld;
+      g.proofs_injected += after.proofs_injected - before.proofs_injected;
+      g.pv_changes += after.pv_changes - before.pv_changes;
+      g.asset_boosted_edges += after.asset_boosted_edges - before.asset_boosted_edges;
+      g.steered_visits += after.steered_visits - before.steered_visits;
       ++g.decisions;
       const RootChild& c = children.at(pick);
       if (sp.split == TurnSplit::Flat) {

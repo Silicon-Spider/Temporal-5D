@@ -10,6 +10,79 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-23 - E10 redone, commit 1: verification v3 wired into the search per 6b″'s table - Hunt under 100 boards, the settling scans under 50, the asset map's boosts and I2's steered visits, Guard's hook off; every proof withheld while the proof channel is off
+
+E10 was lost with the machine; redone from the documents (`lane/search`, from main 88d2007).
+
+- **The verification ladder** (`engine/include/t5d/ladder.hpp`, `src/ladder.cpp`; register H1,
+  H10, H14): at a decision's turn-start root, **Hunt** under 100 boards (H43) and the root's
+  **full settling scan** (df-pn, the default class) under 50; at each **PV change**, the
+  settling scan at the opponent's turn start after the principal line, judged on that
+  position's board count (issue 181). All on by default in their ranges, each a named
+  parameter in `SearchParams`' E10 block (6b″'s 50 ms on M13's 5 threads, depth 5; the rest
+  placeholders). One worker thread per game's ladder runs the jobs in the order asked; the
+  search never waits - verdicts reach it between batches (the start of `gather`, the end of
+  `deliver`), so `run()` and the C step API alike; a decision's end cancels its jobs
+  (`ProveBudget::cancel`, new: a budget stop) - no job outlives its decision. The synchronous
+  mode runs each job where it is asked, by nodes, one thread: still bit-reproducible. The
+  ladder lives for the game and is shared by its fresh searches like the evaluation cache
+  (`Search(..., cache, ladder)`, `shared_ladder()`; `t5d_search_new_sharing` shares it):
+  the asset map assesses each board once in the game, the settling prover keeps its table
+  across the game's scans (H17), and a mate proven at an action's turn start is carried
+  through the action's decisions.
+- **The proof channel** (H23, H41; AGENTS.md "The proof channel"): a proof reaches the tree
+  only through `Search::inject_proof`. With `proof_channel` off - the rule - it is withheld:
+  counted (`proofs_withheld`), kept in `verdicts()`, the tree untouched (tested: the digest
+  equals the search's without the ladder; a direct offer, a solved store, Hunt's export
+  through the ladder and a mismatched ladder all withheld or refused; self-play withholds
+  every proof). With it on (tests only; the Python binding still refuses it), a proof whose
+  certificate E4 confirms sets bounds - at the path's end, or for the path's chooser's win
+  at its first node not yet expanded - propagated MCTS-Solver style, a contradiction
+  throwing: Hunt's mate is played (both splits; through fresh decisions under the ply
+  split), a PV scan's refutation makes the line proven lost and the search moves away; over
+  many small positions 500+ injected proofs were all confirmed and none contradicted the
+  solver. Nothing is exported.
+- **The asset map in the priors and I2's steered visits** (H13, I2, I15): its boost enters
+  `set_priors` after the softmax and before k0 and the root noise, never the cached
+  evaluation - (P + b) / (1 + Σb), a multiplicative arm, every node or the root only (issue
+  178); the flat form's turn takes its moves' largest boost. The root records each child's
+  unsteered noise-free prior (`RootChild::prior_unsteered`; `boost` = what steering added)
+  and its **steered visits** - root visits PUCT would have given another child with the
+  unsteered priors (`steered_rule`; a "boosted child" arm; issue 179) - real now where they
+  were 0. Hunt's soft priors are built behind `hunt_suggest` (off), counted as steering.
+- **Guard's hook** (H42, adopted in no range): `PlayParams::guard_final`, off; refused without
+  the proof channel; on, a refutation E4 confirms rejects the completed action and the
+  decision is searched again (issue 185). No reserve (issue 306). `guard.hpp`'s and
+  `hunt.hpp`'s comments say so; `HuntResult` gains `first_action`.
+- **Events for H44** (`Search::pv_changes()`, `principal_line()`, `RootChild::was_pv`,
+  `peak_share`).
+- **Drivers and the C API**: `play_game` makes one ladder per game and sums its counts into
+  the record; `t5d-play` takes `--no-hunt`, `--no-settling`, `--no-assets`, `--hunt-ms`,
+  `--settling-ms`, `--verification-threads` and `--guard-final` (with `--proof-channel`),
+  names the ladder in its Engine header and prints its counts. `t5d_search_params` gains the
+  ladder's fields in front of `expand` (still last), `t5d_search_summary` and
+  `t5d_root_child` are appended (the layout table and Python's mirror in the same commit);
+  `netplay` mirrors the switches (`--no-hunt` ...).
+- **A latent tree-form defect fixed** (issue 190): a carried inherited root's re-evaluation
+  lost `submit_share` (the submit edge sought last in sorted edges); the asset map exposed it.
+- **Tests**: `engine/tests/test_ladder.cpp` (range gating with the 49/50 and 99/100 edges; the
+  channel off and on; certificates; the asset map's boosts and steered visits under both
+  rules, tree and graph; each board assessed once per game; the synchronous mode's
+  digests; §15.4's invariants with asynchronous verdicts; budgets and cancellation; 6f's TT
+  churn for the settling prover; Guard's hook), the C API's layout, defaults and ladder
+  sharing (`test_capi_search.cpp`), and Python end to end
+  (`python/tests/train/test_steering.py`: a steered self-play game's records carry the live
+  search's steered visits and unsteered priors, and the targets exclude them). Existing tests
+  that isolate the in-tree solver, exact prior formulas or self-play's mechanics turn the
+  ladder's provers or the asset map off, each with its reason in a comment.
+
+Spec: §11.2 (rung 4, the scheduler), §11.3, §11.4 (the Guard, Hunt and settling rows; the
+knock-ons), §12.2, §8.6 (Guard's reserve), §8.7, §15.4; register H1, H10, H13, H14, H17, H19,
+H23, H41, H42, H43, H44 (events only - its tools are the next commit), I2, I15, E4, M13.
+Proposed: edits 137-145 (§11.4's settling and Hunt rows, §11.2 rung 4 and its tables, §12.2's
+steered visits, H14's budgets, Guard's hook, §15.4's synchronous invariant, §8.7's game
+lifetime, §11.3's proof stores); issues 177-190 logged, 180 put to the user.
+
 ### 2026-10-23 - Precision review fixes: QAT records name the format, the attention operands tested operand by operand, the cache checks the format at every evaluation, non-finite scales kept non-finite
 
 Two reviews of the precision component (G2's FP8 emulation and C15's estimator; G8's QAT hook):
