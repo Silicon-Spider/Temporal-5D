@@ -172,3 +172,117 @@ TEST(hunt_at_five_threads_claims_only_confirmed_mates) {
   std::fprintf(stderr, "  %d searches at 5 threads, %d mates\n", searches, mates);
   CHECK(mates > 5);
 }
+
+// ---- H19 under TT churn for Hunt (6f; §11.3) --------------------------------------------------
+//
+// Hunt's prover with a 1-entry TT: its mates are still found, with complete
+// lines and certificates E4 confirms - its proofs live in its working store
+// and its result, never only in the TT. Hunt exposes no store, so what its
+// prover touches is observed by driving Prover with hunt_prover_options and
+// test stores (build-log issue 403): the proofs reach the solved store, the
+// disproof store is never touched (prove-only, H43), and the export to a
+// permanent store stays refused (H23, H41).
+
+namespace {
+
+void hunt_churn(int turns, std::uint64_t seed, std::uint64_t nodes, int& mates, int& searched, int& certified) {
+  struct Want {
+    GameState s;
+    int distance;
+  };
+  const std::vector<Want> wants{{mate_in_one(), 1}, {mate_in_two(), 3}, {cross_board_mate(), 1}};
+  for (const int threads : {1, 5}) {
+    HuntOptions o;
+    o.threads = threads;
+    o.prover.tt_entries = 1;  // the TT keeps nothing
+    o.prover.record_certificate = true;
+    for (const Want& w : wants) {
+      Hunt h(o);
+      const HuntResult r = h.hunt(w.s, ProveBudget::nodes(2'000'000));
+      ++searched;
+      CHECK(r.mate);
+      if (!r.mate) continue;
+      ++mates;
+      CHECK_EQ(r.proof.distance, w.distance);
+      CHECK(r.line_complete);
+      GameState t = w.s;
+      CHECK(replay(t, r.line));
+      CHECK(mated(t));
+      REQUIRE(r.certificate != nullptr);
+      const CertificateCheck c = check_certificate(*r.certificate, w.s, r.proof.distance);
+      CHECK(c.verdict == CertificateVerdict::Confirmed);
+      if (c.verdict == CertificateVerdict::Confirmed) ++certified;
+      // The same prover over test stores: the proof in the solved store, the
+      // disproof store untouched.
+      MemorySolvedStore proofs;
+      DisproofStore disproofs;
+      Prover p(hunt_prover_options(o), &proofs, &disproofs);
+      const ProveResult pr = p.prove(w.s, ProveBudget::nodes(2'000'000));
+      CHECK(pr.status == ProofStatus::Proven);
+      const std::optional<Proof> stored = proofs.find(w.s);
+      REQUIRE(stored.has_value());
+      CHECK(*stored == Proof::win(w.distance));
+      CHECK_EQ(disproofs.size(), std::size_t{0});
+    }
+  }
+  // Random play: no mate the references deny, the disproof store never
+  // touched, every mate's certificate confirmed or undecided by E4.
+  for (const GameState& s : playable(t5d_test::sparse_positions(RuleOptions{}, 1, turns, seed))) {
+    HuntOptions o;
+    o.prover.depth = 3;
+    o.prover.tt_entries = 1;
+    o.prover.record_certificate = true;
+    Hunt h(o);
+    const HuntResult r = h.hunt(s, ProveBudget::nodes(nodes));
+    ++searched;
+    MemorySolvedStore proofs;
+    DisproofStore disproofs;
+    Prover p(hunt_prover_options(o), &proofs, &disproofs);
+    const ProveResult pr = p.prove(s, ProveBudget::nodes(nodes));
+    CHECK(pr.status != ProofStatus::Disproven);  // prove-only claims no disproof
+    CHECK_EQ(disproofs.size(), std::size_t{0});
+    CHECK_EQ(r.mate, pr.status == ProofStatus::Proven);  // one thread, one budget: deterministic
+    if (!r.mate) continue;
+    ++mates;
+    ProveResult as;
+    as.status = ProofStatus::Proven;
+    as.proof = r.proof;
+    CHECK(t5d_test::verify(as, s, o.prover, 200'000) >= 0);
+    CHECK(proofs.find(s).has_value());
+    REQUIRE(r.certificate != nullptr);
+    CertificateCheckOptions co;
+    co.max_positions = 20000;
+    const CertificateCheck c = check_certificate(*r.certificate, s, r.proof.distance, co);
+    CHECK(c.verdict == CertificateVerdict::Confirmed || c.verdict == CertificateVerdict::Undecided);
+    if (c.verdict == CertificateVerdict::Confirmed) ++certified;
+  }
+  // The export stays refused, churn or not.
+  HuntOptions open;
+  open.prover.tt_entries = 1;
+  open.export_proofs = true;
+  CHECK_THROWS_WITH(Hunt{open}, std::invalid_argument, "H23");
+}
+
+}  // namespace
+
+TEST(hunt_finds_its_mates_under_tt_churn) {
+  int mates = 0;
+  int searched = 0;
+  int certified = 0;
+  hunt_churn(3, 7600, 100'000, mates, searched, certified);
+  std::fprintf(stderr, "  %d hunts under a 1-entry TT, %d mates, %d certificates confirmed by E4\n", searched, mates,
+               certified);
+  CHECK(mates > 8);
+  CHECK(certified > 8);
+}
+
+TEST(long_hunt_finds_its_mates_under_tt_churn) {
+  int mates = 0;
+  int searched = 0;
+  int certified = 0;
+  hunt_churn(6, 7700, 400'000, mates, searched, certified);
+  std::fprintf(stderr, "  %d hunts under a 1-entry TT, %d mates, %d certificates confirmed by E4\n", searched, mates,
+               certified);
+  CHECK(mates > 15);
+  CHECK(certified > 15);
+}

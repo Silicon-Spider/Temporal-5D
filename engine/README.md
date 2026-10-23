@@ -3997,6 +3997,47 @@ search's solver"), but those roots' records are the gate corpus's - under
 outside the oracle tree exists on this machine: that run is not made here (build-log
 issue 401).
 
+### H19 under TT churn (6f; `tests/test_prover.cpp`, `tests/test_hunt.cpp`)
+
+§13.1 6f: "verify the proof-export invariant under TT churn for Hunt and the settling scans
+(§11.3)". With `tt_entries` 1 or 2 the transposition table keeps nothing, so every fact a
+search relies on must be in the stores.
+- `prover_proofs_survive_tt_churn_h19` - settling as the scans run it (full df-pn,
+  `prove_only` off, external `MemorySolvedStore` and `DisproofStore`, one thread, by nodes):
+  the constructed mates (both Q4 readings, both classes, depth 3) and `sparse_positions`
+  under every ruleset with both Q4 readings (the default class at depth 3, the literal at
+  depth 1), each at `tt_entries` 1 and 2 against the default TT: the same answer wherever
+  both decide (3,966 roots, no difference); every result held to the references
+  (`Tally`: 4,907 confirmed, 10 beyond them); every proven root's Win in the solved store at
+  return; every disproven root's disproof in the disproof store with its class and depth -
+  or, where the search found the side to move lost or stalemated outright (7 roots, each a
+  Loss(2) the game tree confirms), that game fact in the solved store - and never a Win for
+  it; stored entries against the game tree (Win, Loss, and Draw - a stalemate now: 4,278 of
+  4,290 confirmed, 12 beyond its budget); a fresh prover over the same stores answers each
+  decided root with `store_hits >= 1` and `expansions == 0` (3,966); a proof's continuation
+  - the attacker to move again after its action and the longest defence - answered from the
+  stores alone (424, "on PV changes"); and a sequence of related roots (consecutive turn
+  starts of random games) sharing one pair of stores under a 1-entry TT, every root it
+  decided re-asked and answered with no expansion (951). About 50 s.
+- `prover_threads_survive_tt_churn` - M13's 5 threads sharing a 1-entry TT, by nodes and by
+  the clock (20 ms), both classes, depth 3, fresh stores per search: no proof or disproof
+  the references deny (74 confirmed), the stores as above, and every proof's certificate
+  confirmed by E4 alone (36 of 36).
+- `hunt_finds_its_mates_under_tt_churn` - Hunt with `prover.tt_entries = 1`, at 1 and 5
+  threads: the constructed mates found at their distances, lines complete and replaying to
+  E4's checkmate, certificates confirmed; Hunt exposes no store, so its prover is driven
+  through `hunt_prover_options` over test stores (build-log issue 403): the proof in the
+  solved store, the disproof store untouched (prove-only, H43); random play at depth 3
+  (Hunt and its prover agree, deterministic at one thread; no disproof; every mate verified
+  and its certificate confirmed or undecided); the export switch still refused (H23). 34
+  hunts, 15 mates, 15 certificates confirmed.
+- `long_` twins of all three (5 turns at 60,000 nodes; 4 turns at 100,000; 6 turns at
+  400,000): 9,228 roots compared, no difference, 8,952 stored entries confirmed, 610
+  continuations and 2,296 sequence roots answered from the stores; 68 certificates at 5
+  threads; 22 Hunt mates, all certified. About 12 minutes on a loaded machine.
+Not yet: the same through E10's settling wrapper (the brief's part 5) - E10 is on
+`lane/search`, not on main; it follows E10's merge (issue 402).
+
 ## 5DFEN
 
 `parse_fen_board` reads one board string, `[pieces:timeline:turn:colour]`, for a

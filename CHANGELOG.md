@@ -10,6 +10,39 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-23 - MT-03: the proof-export invariant under TT churn (6f, H19) for the prover, its threads and Hunt
+
+§13.1's 6f asks for H19's invariant - proofs export at once, the TT never holds the sole copy
+(§11.3) - verified under TT churn for Hunt and the settling scans; only the retired scanner had
+such a test. New tests, each with a `long_` twin:
+
+- `prover_proofs_survive_tt_churn_h19` (`engine/tests/test_prover.cpp`): settling as the scans
+  run it - full df-pn over external stores, one thread, by nodes - with `tt_entries` 1 and 2
+  against the default, on the constructed mates and random play under every ruleset (both Q4
+  readings, both classes): 3,966 roots decided both ways, no difference; every proven root's
+  Win in the solved store, every disproof in the disproof store with class and depth (or the
+  root's loss or stalemate in the solved store - 7 roots, each a Loss(2) the game tree
+  confirms); 4,278 stored entries confirmed by the game tree (12 beyond its budget); a fresh
+  prover over the stores answers 3,966 roots with no expansion; 424 proof continuations and
+  951 roots of shared-store sequences answered from the stores alone.
+- `prover_threads_survive_tt_churn`: five threads sharing a 1-entry TT, by nodes and by the
+  clock: no false proof (74 confirmed), 36 certificates confirmed by E4 alone.
+- `hunt_finds_its_mates_under_tt_churn` (`engine/tests/test_hunt.cpp`): Hunt with a 1-entry
+  TT at 1 and 5 threads finds the constructed mates at their distances, lines complete and
+  certified; driven through `hunt_prover_options` over test stores its prover exports the
+  proof and never writes a disproof; random play: 15 mates, all verified and certified; the
+  export switch still refused.
+- Long twins: 9,228 roots compared, 68 certificates at five threads, 22 Hunt mates - all
+  clean.
+- No settling wrapper is on main (E10, `lane/search`): its run follows E10's merge (build-log
+  issue 402). Hunt exposes no store: observed through `hunt_prover_options` (issue 403).
+- `engine/README.md` ("H19 under TT churn"); `docs/BUILD_LOG.md` (H19, H17, H43; issues 402,
+  403; edit 301; the Lazy SMP timing test log).
+
+Spec: §13.1 6f and §11.3 (the proof-export invariant), register H19, H17, H43 - proposed edit
+301; §11.4's settling scans - issue 402 (after E10); H43's store - issue 403. No proof enters a
+permanent store; the proof channel stays off (H23, H41).
+
 ### 2026-10-23 - MT-01: the search's solver against df-pn (H41), in tests and an offline tool
 
 Register H41 has the search's solver "cross-checked against df-pn and oracle mate verdicts"
