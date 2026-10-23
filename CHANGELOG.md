@@ -10,6 +10,87 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-23 - D2 flat form review fixes: children complete only when every successor is there; a point's realisations walked once; the per-board scores, widening, fallback and cost tested
+
+Two reviews of D2's flat form (42f3590, 3251857, 95d23cc): one of soundness (probes against
+E4's listing over 1,171 positions under seven rulesets) and a pass of 31 mutants of the flat
+code, 12 of which survived every test tier - three findings HIGH, four MEDIUM, eight LOW.
+Merged first: main (the network heads, M21's training loop) into `lane/engine` (22a7337,
+M23's merge); there the training generator (`python/t5d/train/selfplay.py`) now refuses the
+flat form by name until its policy target - D2's per-board marginals, the net lane's flat
+head - exists (it named the retired whole-turn arm), issue 234(b) and the D2 row say so, and
+its legal-moves flag no longer reads split 1 as the whole-turn arm.
+
+- **Children complete only when they reach every successor** (HIGH, A-H1;
+  `engine/src/mcts.cpp`, `mcts.hpp`): under Q3's play activation two orders of one set of
+  moves can reach two states under one action key, and the generator's Actions unit, like
+  E4's listing, keeps one - yet the node was marked complete once the generator was
+  exhausted, or from an exhaustive fallback listing, and with the proof channel on the solver
+  could have proven it lost (H37). Now complete only as successors or where play does not
+  activate; the fallback's listing never under Q3; `check_invariants` refuses the rest.
+  Tested on reviewer A's position (seed 6202, attempt 1482: 7 successors, 6 reached) with the
+  proof channel on, all three arms.
+- **A point's realisations walked once** (MEDIUM, A-M1, the main loop's decision;
+  `engine/src/hypercuboid.cpp`, `t5d/turngen.hpp`): a point the 32-per-step cap stopped was
+  re-queued and judged again from its first realisation - about n^2 / 64 realisations for n
+  (5,040 cost 401,936 tested and 1,495,064 nodes; under the default budget 1,824 of 5,040
+  emitted). It is now kept and resumed where the cap stopped it - a cursor in the
+  realisation's depth-first walk (each choice point's option on the way down; a resumed walk
+  replays that path, passes over the visit it stopped at, and goes on), under all three
+  realisation regimes, the general one's tables kept for the point: 5,040 tested, 19,912 nodes,
+  all 5,040 within 200,000 (`SearchStats::resumed` counts the resumptions). The detectors'
+  depth-first walks never resume and are unchanged (the pin holds). A test seam
+  (`detail::set_realisations_per_step`) lowers the cap: at 1 and 2, on 400 tiny multiverses
+  (244 resumed - 45 under Q3, 43 under Q4's Guide-literal reading), the turns, scores and
+  states are the shipped cap's (as successors the action standing for a state may differ:
+  which of a point's realisations reaching it is collected first, documented).
+- **`bound()` after a budget stop** (LOW, A-L1): the box being judged is queued again, so the
+  bound still holds every unemitted turn (checked on every budget cut of §15.2's row); a
+  generator stopped before queuing any box bounds nothing (+infinity, not -infinity).
+- **Root noise never a non-finite score** (LOW, A-L2; `FlatPolicy::add_noise`): an option
+  whose noised probability underflows keeps its own score plus log(1 - epsilon), or -10,000
+  at epsilon 1; it threw "a non-finite score" from the generator.
+- **The evaluation cache keys on board logits** (LOW, A-L3; `EvalCache::find`/`insert`, a
+  defaulted `board_logits` argument): an entry stored from a request that asked for none is
+  not served to a flat search's request; tested with a cache shared by a ply and a flat search.
+- **Tests** (HIGH B-H1, MEDIUM B-M3-B-M5, LOW A-L4, B-L6; `engine/tests/test_mcts.cpp`,
+  `test_turngen.cpp`): each root and evaluated child's edge - its score and prior - against a
+  reference written from issues 164-166 (`PerBoard`, `reference_score`), to the bit, with
+  distinct leave logits board by board, NaN on one board and none at all, both temperatures
+  != 1, `leave_share` 0.3, both `flat_jumps`, and the root's noise-free priors under noise;
+  k0 against the entropy and its cap, and at least ceil(k0 N^alpha) turns generated after N
+  visits while the generator is live; the fallback's scores (arrivals included) and its
+  de-duplication as successors, on a position with jumps between two present boards; the
+  generators' cost under ties - 16 turns within 600-2,000 nodes at 7-11 tying boards, a
+  40-playout uniform search's generators within 3,000 nodes each; a many-realisation point
+  tested once each, tested - emitted <= 31 throughout; castling and en passant through the
+  generator under the default rules, Q21's alternative and Q3 (the double step played, 5DFEN
+  carrying no en passant right). The first flat test's comment claimed the scores were
+  checked; it now points at the new test.
+- **Mutants** (reviewer B's tooling, a scratch copy of this tree, tier A - `turngen`,
+  `mcts_flat` - alone): all 12 survivors (M02, M07, M09, M16, M17, M18, M24, M25, M26, M27,
+  M29, M30) are now caught by an assertion in 13-20 s, none by a timeout, none adjusted; and
+  six reverts of these fixes (X1-X6) are caught alike.
+- **Python** (LOW A-L5, B-L8; `python/t5d/engine/evaluator.py`): `CStepDriver`'s docstring
+  says board logits are passed when an evaluation gives them (the network gives none yet);
+  `deliver` checks each leaf's move and board logit counts against that leaf's and refuses a
+  miscount (`ValueError`, the batch abandoned) - the batch total alone let one leaf's excess
+  cancel another's shortfall; tested (`test_search_api.py`).
+- **engine/README.md** (HIGH, B-H2): the C API paragraph describes `board_logits` as built (a
+  wrong count `T5D_ERR_ARGUMENT`), not reserved and unsupported.
+- Docs: the three flat-form entries below corrected where they claimed what was untrue or
+  untested; docs/BUILD_LOG.md (the D2 row; issues 163, 165, 167-171; edits 132, 134);
+  docs/MEASUREMENTS.md (the many-realisation point's cost before and after; the memory per
+  flat node - 136 KB, the estimate x1.20 of the heap, about 137 KB and x1.23 at 3251857 -
+  with their conditions; the tree form's deepest turn start, 3-6 with §8.2's gates and 3-8
+  across its gate readings, reconciled with the D2 row - B-L9).
+
+Spec: §8.2 (the flat form - completeness under Q3; proposed edit 132 extended), §8.4 (E1's
+noise under the flat form), §11.0 item 3 (H37: a node's children complete), §15.2 (the flat
+generator's row - the cursor and castling/en passant tested), §15.3 (proposed edit 131 -
+the cost figures), §15.4 (proposed edit 134 extended); register D2, E1, H37, I15 (the
+training generator's refusal, issue 234(b)). Spec issues 163, 165, 167-171 and 234(b).
+
 ### 2026-10-23 - M21 review fixes: inputs rebuilt under the trainer's configuration, steps on synthetic rows only and capped per model, I19's cutoff as Lc0's, I13 whole in the tree form, the untested claims tested
 
 Two reviews of M21 (spec fidelity; a 46-mutant pass that left 19 mutants alive).
@@ -60,6 +141,34 @@ Two reviews of M21 (spec fidelity; a 46-mutant pass that left 19 mutants alive).
   236(d), 237(a), (e), (f); proposed edits 175, 176, 178 and 181 extended (181 now quotes Lc0's
   options). BUILD_LOG's I13, I15, I19 and M21 rows updated (M21 kept qualified: the QAT hook a seam
   until G8, the user ruling on edit 182).
+
+### 2026-10-23 - D2's flat form, part 3: the turn generator's successors under Q3's play activation (found by the long run of spec 15.2's row)
+
+`long_turngen_equals_the_brute_force_reference_on_tiny_positions` (3,000 tiny multiverses,
+`t5d-tests --long`) failed in 10 positions, every one under Q3's play activation (the general
+realisation): as successors, the generator emitted fewer states than the brute-force reference
+(4 of 5 ... 1,056 of 1,064). Under Q3 two orders of one set of moves can reach two states with
+one action key; the generator's run counted actions, so `record()` kept the first order's
+action and dropped the second state's (inserted, with no action kept). The default run's 300
+positions had not met the case.
+
+- **`engine/src/hypercuboid.cpp`** (the generator only; the detector's pin holds): under
+  `TurnUnit::Successors` the generator's run now counts successors - each state kept with an
+  action reaching it - and the turns are collected from that listing; a point the budget stopped
+  part-way emits none of its states under Successors (their kept actions are not final), so a
+  stopped generator's output stays a prefix of the unstopped one's.
+- **`engine/tests/test_turngen.cpp`**: the best-action-per-state check reads the listing's
+  actions where they reach the state (the listing keeps one order per action, and under Q3
+  another order can reach another state).
+- Re-run: the long tiny-multiverse row (3,000 positions, 721,906 turns) and the long variants
+  row (652 positions) pass, the default rows and the flat search's tests too; the pin is
+  unchanged. *(Review correction, 2026-10-23: the generator's fix left the search arm
+  marking a Q3 node complete from the Actions unit or the fallback's listing, which keep one
+  state per action key - fixed by the review fixes.)*
+- Docs: docs/BUILD_LOG.md (issue 163's note; the D2 row).
+
+Spec: §15.2 (the flat generator's row - a defect its long run found, fixed); §8.2; register D2.
+Spec issue 163 (the unit, as built).
 
 ### 2026-10-23 - M21 (4/4): the training loop end to end, smoke-tested - records, sampler, window, targets, losses, optimiser steps, SWA
 
@@ -113,6 +222,99 @@ Two reviews of M21 (spec fidelity; a 46-mutant pass that left 19 mutants alive).
   could not tell a quiet root from a moving one; I18's sign and its 10% default were untested.
 - Spec: §12.3, §12.5, §12.8, §13.1 6l, 6u, 6z; register I3, I5, I6, I12, I16, I17, I18, I19, I20, M21.
   Issue 236; proposed edits 179-181. BUILD_LOG's rows for these and M21 updated.
+
+### 2026-10-23 - D2's flat form, part 2: the search arm; the enumerating whole-turn arm and its 256 cap retired
+
+The flat form's search arm, on part 1's turn generator (§8.2: "PUCT runs over the generated
+turns, and progressive widening pulls in the next-best legal turn as visits grow. This
+replaces the enumerating whole-turn arm and its cap, and ends turns itself"), and the
+retirement of the arm it supersedes (register D2, CHECKPOINT 6).
+
+- **The arm** (`engine/include/t5d/mcts.hpp`, `engine/src/mcts.cpp`): `TurnSplit::Flat`, in
+  slot 1 of the retired `WholeTurn`. A node is a turn start; its children whole legal turns
+  generated best first, instantiated by widening (ceil(k0) at expansion; `widen` pulls the
+  next-best as k(N) grows; with widening off, all). One evaluation per turn start: the move
+  logits (the leaf's candidates classified as the ply split's - D1) and the new per-board
+  "leave it" logits (`Evaluation::board_logits`, one per expansion board) give each playable
+  board a log-softmax distribution over its moves, the non-branching jumps arriving on it and
+  leaving it, at the policy temperature (the root's too); a turn's score is its options'
+  log-probabilities summed, its prior their softmax over the generated turns. Every unstated
+  reading is a parameter with a placeholder default, logged: `flat_unit` (successors),
+  `flat_prior` (Generated; Product), `flat_jumps` (both boards; source only), `leave_share`
+  (0.5 where no leave logit is given - the network has none yet: a documented fallback, not a
+  refusal), `flat_k0_max` (16, on k0 from the boards' summed entropy), `generator_nodes`
+  (200,000 a node), `flat_fallback` (64: a node whose generator stopped before its first turn
+  takes E4's listing's turns, scored and ordered alike). Root noise per board before
+  generation; the side table's noise-free priors from the noise-free scores. The generator
+  ends turns itself (D8): no submit logit read. Terminal verdicts stay `detect_mate`'s; a
+  stopped generator's node is incomplete, never proven lost (H37). Memory: each node counts
+  its generator (`memory_bytes`, within x1.23 of the heap). A flat invariant in
+  `check_invariants` (edges its turns in non-increasing score, complete only when the
+  generator is done). *(Review correction, 2026-10-23: under Q3's play activation a node was
+  marked complete with a successor missing - as actions, or from the fallback's listing -
+  so "never proven lost" did not hold there with the proof channel on; fixed.)* Stats: `generated_turns`, `stopped_generators`, `fallback_listings`,
+  `seconds_generate`.
+- **The generator** (`engine/src/hypercuboid.cpp`, new code only - the detector's pin holds):
+  ties now newest-first (depth-first; first-queued-first split a tying 66-board position into
+  2^18 equal boxes), a point's realisations at most 32 per judgement (a point creating k
+  timelines has up to k! - 20,160 successors at one 90-board node), its memory estimate per
+  successor from the boards its action made. *(Review correction, 2026-10-23: each judgement
+  walked the point again from its first realisation - about n^2 / 64 realisations for a
+  point of n, 401,936 for 5,040 - so the default budget emitted only 1,824 of them; the
+  point is now resumed where the cap stopped it.)*
+- **The C API and its mirror** (`capi_search.h`, `capi_search.cpp`; `python/t5d/engine/capi.py`,
+  `search.py`, `evaluator.py`): `T5D_SPLIT_FLAT` (1); `t5d_evaluations.board_logits`, the
+  channel reserved in ABI round 2, now read - each leaf's `board_count` floats, NaN for none,
+  checked under every split, read under the flat form; params appended (`flat_unit`,
+  `flat_jumps`, `leave_share`, `flat_k0_max`, `flat_fallback`), and the whole-turn arm's slots
+  kept and renamed (`flat_prior` - 0 is the old sum's softmax over the listing -,
+  `retired_max_actions` - 0 or `T5D_NO_LIMIT` only -, `generator_nodes`); the summary's
+  `generated_turns`, `stopped_generators`, `fallback_listings`. Python: `Search.deliver(...,
+  board_logits=)`, `Evaluation.board_logits` (the network gives none; `UniformEvaluator`
+  zeros, as the engine's), `CStepDriver` sends them, NaN for a leaf that gives none.
+  *(Review correction, 2026-10-23: `CStepDriver`'s docstring still said it passed no board
+  logits, and it checked only the batch's totals, not each leaf's counts; both fixed.)*
+- **The built-in evaluators** give leave logits where the flat form asks (`EvalRequest::
+  board_logits`): uniform and material 0, random random.
+- **Retired** (the whole-turn arm): `TurnSplit::WholeTurn`, `ActionPrior`,
+  `SearchParams::max_actions` and `listing_nodes`, `list_actions`, `SearchStats::
+  truncated_listings` and `seconds_listing` (now `seconds_generate`; `GameRecord::
+  seconds_search_listing` now `seconds_search_generate`), `T5D_SPLIT_WHOLE_TURN`,
+  `T5D_ACTION_PRIOR_*`, `t5d-play --split turn` (refused, naming `--split flat`) and
+  `--listing-cap`, netplay's `"turn"` split and `max_listing` (`"flat"` instead; its CLI's
+  default arms ply and flat). `list_legal_actions` and its cap stay (E4, the gate adapter,
+  certificates, the prover, the scanner, and the flat form's fallback).
+- **Tests**: every whole-turn test moved to the flat form - two flat configurations in
+  `kConfigs` (the invariants, re-rooting, the solver's proofs, MCGS keys, values, D3), the
+  root's children with widening off the exact legal turns (successors and actions, both
+  priors), a stopped generator never proven lost, the fallback (and stuck without it),
+  *(review correction, 2026-10-23: that test's comment said each child's score was checked
+  as its moves' per-board log-probabilities, but only the order, the prior sums and
+  Product's exp(score) were; the scores, widening's count, the fallback's scores and
+  de-duplication and the generators' cost on ties were untested - six of reviewer B's 31
+  mutants of the per-board policy survived; tested since)*
+  parameter refusals (C++ and C), self-play and match play under the flat form, `t5d-play
+  --split flat` records replayed through `t5d-gate`, the C step loop equal to the C++ search
+  by digest with board logits delivered (NaN on a third of the boards), memory within
+  0.75-1.33 of the heap; in Python the engine's random evaluator through the step API bit for
+  bit (leave logits included), NaN leave logits the search with none, the ply split reading
+  none, the network driving a flat search deterministically, netplay's flat games replayed.
+  `engine/tests/test_mcts.cpp`'s re-rooting test now picks a sibling with as many boards as
+  the new root (a flat turn that branches makes more).
+- **`t5d-tree-count`** gains the flat form as a fifth arm; its counts on the seven
+  t0database turn starts in docs/MEASUREMENTS.md (deepest evaluated turn start 10-12 turns
+  against the ply split's 3-7; 0-8 of ~400 generators fell back).
+- Docs: engine/README.md (the arm, the retirement, the C API, t5d-play); docs/BUILD_LOG.md
+  (rows D2, D8, E1; spec issues 164-171; issues 81, 92, 93 and edit 69 closed or overtaken;
+  proposed edits 132-134); docs/MEASUREMENTS.md. *(Review correction, 2026-10-23: the
+  README's C API paragraph still called `board_logits` reserved and `T5D_ERR_UNSUPPORTED`;
+  rewritten.)*
+
+Spec: §8.2 (the flat form - built; proposed edit 132), §8.4 (constants list and coupling -
+proposed edit 133), §11.0 item 3, §15.2 (the flat row's arm tested), §15.3 (proposed edit
+131, part 1), §15.4 (turn edges - proposed edit 134); register D2 (flat form built, the
+whole-turn arm retired), D1, D8 (the generator ends turns - built), E1 (the flat form's k0,
+noise and temperature). Spec issues 164-171 (placeholders and the generator's worst case).
 
 ### 2026-10-23 - M21 (2/4): the targets from I15's records - I2's pruning, D3's and D4's targets, I13, I14's refusal; section 15.2's round trip
 
@@ -191,6 +393,57 @@ Register M21's first part, in the net lane: the record format before anything th
 - Spec: §12.8 "Rich training records", §15.2's I15 row (the targets' half lands with the target
   builder); register I15, M21, D2, D8, D9, H23/H41. Issue 234; proposed edit 175. BUILD_LOG's I15
   and M21 rows updated.
+
+### 2026-10-23 - D2's flat form, part 1: the turn generator - the hypercuboid search best first (spec 15.2's row)
+
+The flat form's generator (§8.2: "A generator assembles complete legal turns best-first by
+summed logits, through the rules engine ... The hypercuboid search already walks this
+product space for mate detection; ordered by prior, it becomes the turn generator"), the
+first half of D2's flat form; its search arm, which retires the enumerating whole-turn arm,
+follows.
+
+- **`t5d/turngen.hpp`, `src/hypercuboid.cpp`**: `TurnGenerator` - the legal turns of a turn
+  start, one at a time, in non-increasing score. A `TurnScorer` scores each option of each
+  playable board (leaving it - the detector's Pass, §8.2's "leave it"; a move as its source
+  board's option, a non-branching jump also as its destination's - "a move between two present
+  boards resolves both"; J6's twin as its jump); a turn's score is the sum of its options'
+  over the boards in ascending timeline. The generator is the hypercuboid detector's search
+  with its stack replaced by a priority queue of boxes keyed by their bound (the sum of their
+  axes' best remaining scores), each box narrowed as the detector narrows it and its best point
+  judged by the detector's own `judge` - so the points are judged, and the turns emitted, in
+  non-increasing score, and the search is complete by the detector's argument. Units: actions
+  or distinct successor states (`TurnUnit`); ties deterministic; one budget over the
+  generator's life, a stopped generator never exhausted (H37). New methods only in the
+  detector's class: its depth-first search (`detect_mate`, the counts, the listings, the
+  legal-move tiers) is unchanged.
+- **The depth-first search pinned** (`engine/tests/test_detectors.cpp`,
+  `detectors_the_hypercuboid_search_is_pinned`): every answer and statistic of the
+  hypercuboid detector's (verdicts, witnesses, counts, listings, legal moves, the ways to
+  finish after each first move; nodes, points, regions, boxes removed, the most positions
+  held) on 571 positions - 300 tiny multiverses under random rulesets, random games from the
+  sparse starts under five rulesets and from every named variant - unlimited and under node
+  budgets that stop it, hashed; the hash recorded at 2f07079, before the generator, and equal
+  after it. `tiny_position` moved, unchanged, from test_detectors.cpp to
+  `engine/tests/test_tiny.hpp` to be shared.
+- **Spec 15.2's row** (`engine/tests/test_turngen.cpp`): on 300 tiny multiverses (265 with
+  two playable boards or more; all three regimes), five constructed multi-board presents
+  (jumps between present boards, a rewinding branch) and random games from every variant's
+  start, under continuous scores and small integer ones that tie, the whole output is the
+  legal turns exactly, each once (against the brute-force reference and the engine's
+  exhaustive listing, as actions and as successors), in non-increasing score, each score
+  recomputed from the turn's moves alone bit for bit, equal to the sorted scores of every
+  legal action, each successor's its best action's, deterministic, and a budget-stopped run a
+  stopped prefix of the full one; `long_` runs ten times as many. *(Review correction,
+  2026-10-23: no position of the row was shown to hold a castling or an en passant turn -
+  tested since the review fixes, under three rulings; and a stopped generator's `bound()`
+  could understate the turns it had not emitted - fixed.)*
+- Docs: engine/README.md (the generator's design beside the hypercuboid's); docs/BUILD_LOG.md
+  (the D2 row; spec issue 163; proposed edit 131).
+
+Spec: §8.2 ("Flat form"), §11.0 item 3, §15.2 (the flat generator's row - built and passing),
+§15.3 (a new row proposed: proposed edit 131); register D2 (its row in the build log; the
+register's own row unchanged until the flat arm is built). Spec issue 163 (the generator's
+unit, ties and budget - placeholders).
 
 ### 2026-10-23 - Network heads review fixes: the error target and D9's z as the register and KataGo have them; the losses' masks, moves-left's unit and the old parameters pinned
 

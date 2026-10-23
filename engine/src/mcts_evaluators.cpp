@@ -2,7 +2,9 @@
 // count - for tests, the §15.4 invariants and the tools. None is a network;
 // each is a pure function of the state it is asked about (and, for the random
 // one, its seed and the refresh epoch), as the network's evaluations must be
-// (§8.5, C19-C21).
+// (§8.5, C19-C21). Where the request asks for them (D2's flat form), each also
+// gives every board a "leave it" logit (Evaluation::board_logits): until the
+// network's per-board head exists (the net lane), these stand in for it.
 
 #include <algorithm>
 #include <array>
@@ -36,6 +38,7 @@ class UniformEvaluator final : public Evaluator {
       out[i].logits.assign(batch[i].expansion->moves().size(), 0.0f);
       out[i].wdl = {1.0f, 1.0f, 1.0f};  // value exactly 0, draw 1/3
       out[i].value = two_hot(0.0);
+      if (batch[i].board_logits) out[i].board_logits.assign(batch[i].expansion->board_count(), 0.0f);
     }
   }
 };
@@ -72,6 +75,15 @@ class RandomEvaluator final : public Evaluator {
       const double draw = 0.5 * unit(mix(base ^ 0xD4D4ull));
       out[i].wdl = {static_cast<float>((1.0 - draw) * (1.0 + mean) * 0.5), static_cast<float>(draw),
                     static_cast<float>((1.0 - draw) * (1.0 - mean) * 0.5)};
+      if (batch[i].board_logits) {
+        // Leave logits on the moves' scale, a little below their mean.
+        const std::size_t boards = batch[i].expansion->board_count();
+        out[i].board_logits.resize(boards);
+        for (std::size_t b = 0; b < boards; ++b) {
+          const std::uint64_t r = mix(base ^ (0xB0A4Dull + 0x9E3779B97F4A7C15ull * (b + 1)));
+          out[i].board_logits[b] = static_cast<float>(2.0 * (unit(r) + unit(mix(r)) + unit(mix(r + 1)) - 1.5) - 1.0);
+        }
+      }
     }
   }
 
@@ -105,6 +117,8 @@ class MaterialEvaluator final : public Evaluator {
         const Piece taken = moves[m].captured;
         out[i].logits[m] = static_cast<float>(taken.empty() ? 0.0 : 0.5 * material_value(taken.kind()));
       }
+      // Leaving a board scores as a quiet move.
+      if (batch[i].board_logits) out[i].board_logits.assign(batch[i].expansion->board_count(), 0.0f);
     }
   }
 };

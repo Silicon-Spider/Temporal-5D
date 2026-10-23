@@ -20,6 +20,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <bit>
 #include <cmath>
 #include <cstddef>
@@ -38,6 +39,7 @@
 #include "t5d/check.hpp"
 #include "t5d/movegen.hpp"
 #include "t5d/multiverse.hpp"
+#include "t5d/turngen.hpp"
 
 namespace t5d::detail {
 
@@ -201,6 +203,13 @@ enum class Regime : std::uint8_t {
   General,
 };
 
+// How many of one point's realisations a step of best-first generation records
+// at most (Hyper::step_best_first): it bounds what one step holds. The order
+// stays exact (non-increasing, deterministic) and does not depend on it: a
+// point the cap stopped is resumed where it stopped (the realisation cursor).
+// 32; set_realisations_per_step (t5d/turngen.hpp) lowers it in the tests.
+std::atomic<std::size_t> realisations_per_step{32};
+
 // ---- the search -------------------------------------------------------------------------------
 
 class Hyper {
@@ -274,6 +283,221 @@ class Hyper {
     // a legal action (a search for one) or at the cap.
     run_.stats.exhaustive = !stopped && stack.empty();
     run_.stats.seconds = budget_.seconds();
+  }
+
+  // -- best-first generation (D2's flat form; t5d/turngen.hpp) --------------------------------
+  //
+  // The search above with its stack replaced by a queue ordered by each box's
+  // bound (the sum of its axes' best scores), and each box's best point judged:
+  // the points are judged in non-increasing score. The functions below are
+  // new; the depth-first search's own (build, propagate, feasible, judge,
+  // subtract) are shared unchanged.
+
+  enum class Step : std::uint8_t { Progress, Done, Stopped };
+
+  // Builds the axes and every value's score (TurnScorer's), and queues the
+  // whole space. False if the budget stopped it. Throws std::invalid_argument
+  // for a non-finite score.
+  bool start_best_first(const TurnScorer& scorer) {
+    if (!build()) return false;
+    scores_.assign(axes_.size(), {});
+    for (std::size_t i = 0; i < axes_.size(); ++i) {
+      const Axis& a = axes_[i];
+      std::vector<double>& s = scores_[i];
+      s.reserve(a.values.size());
+      for (const Value& v : a.values) {
+        // A Pass leaves the board; any other value is its move, scored on this
+        // axis's board (the source's, or - an arrival - the destination's).
+        const double score = v.kind == Kind::Pass
+                                 ? scorer.leave(a.timeline)
+                                 : scorer.move(moves_[static_cast<std::size_t>(v.move)], a.timeline);
+        if (!std::isfinite(score)) throw std::invalid_argument("turn generator: a non-finite score");
+        s.push_back(score);
+      }
+    }
+    queue(full_box());
+    return true;
+  }
+
+  // One step: the best box taken, narrowed, and its best point judged (its
+  // legal actions recorded in run_ - with scored() their score). Done: nothing
+  // is left. Stopped: the budget stopped the search (the box under way queued
+  // again, so best_bound() stays an upper bound on what was not emitted).
+  Step step_best_first() {
+    if (budget_.stopped()) return Step::Stopped;
+    if (!pending_ && queue_.empty()) return Step::Done;
+    if (!budget_.hold(run_.held() + general_seen_.size() + general_finals_.size(),
+                      run_.held_bytes() + queue_bytes())) {
+      return Step::Stopped;
+    }
+    Box box;
+    double bound = 0;
+    std::vector<int> x;
+    const bool resume = pending_.has_value();
+    if (resume) {
+      // A point the cap stopped part-way: its bound is still the best (nothing
+      // was queued since it was taken), so its judgement goes on at once, from
+      // the realisation after the last one visited (the cursor).
+      box = std::move(pending_->box);
+      bound = pending_->bound;
+      x = std::move(pending_->x);
+      pending_.reset();
+      ++run_.stats.resumed;
+    } else {
+      std::pop_heap(queue_.begin(), queue_.end(), worse);
+      Queued top = std::move(queue_.back());
+      queue_.pop_back();
+      if (!propagate(top.box)) return Step::Progress;  // no point of it can be an action
+      bound = bound_of(top.box);
+      // Narrowing lowered the bound below another box's: that one first.
+      if (bound < top.bound && !queue_.empty() && bound < queue_.front().bound) {
+        queue(std::move(top.box), bound);
+        return Step::Progress;
+      }
+      box = std::move(top.box);
+      if (regime_ != Regime::General) {
+        const Feasibility f = feasible(box, abstract_);
+        if (!budget_.spend_many(1 + abstract_.steps)) {
+          queue(std::move(box), bound);
+          return Step::Stopped;
+        }
+        if (f == Feasibility::No) {
+          ++run_.stats.regions;  // the whole box: no skeleton of it is realisable
+          ++run_.stats.unrealisable_boxes;
+          return Step::Progress;
+        }
+        if (f == Feasibility::Unknown) ++run_.stats.abstract_gave_up;
+      }
+      x = best_point(box);
+    }
+    scored_ = score_of(x);
+    Region region;
+    // A point's realisations are recorded a few at a time: one creating k
+    // timelines has up to k! of them (J9) - 40,320 at k = 8 - every one legal
+    // alike, and recording them all at once held them all. Stopped at the cap,
+    // the point is kept with its box and bound, and the next step resumes its
+    // realisations after the last one visited (realise_*'s cursor): each
+    // realisation is walked once, whatever the cap. (Before 2026-10-23's review
+    // fixes the point was judged again from its first realisation, so a point
+    // of n realisations cost about n^2 / 64 of them.)
+    run_.cap = run_.found() + realisations_per_step.load(std::memory_order_relaxed);
+    run_.reached_cap = false;
+    if (!judge(x, box, region, resume)) {
+      if (budget_.stopped()) {
+        queue(std::move(box), bound);
+        return Step::Stopped;
+      }
+      if (!run_.reached_cap) throw std::logic_error("hypercuboid: a judgement stopped by neither the cap nor the budget");
+      run_.reached_cap = false;
+      pending_ = Pending{bound, std::move(box), std::move(x)};
+      return Step::Progress;
+    }
+    for (std::size_t i = 0; i < region.axes.size(); ++i) {
+      if (!bit(region.allowed[i], x[static_cast<std::size_t>(region.axes[i])])) {
+        throw std::logic_error("hypercuboid: a region that does not hold its own point");
+      }
+    }
+    ++run_.stats.regions;
+    std::vector<Box> rest;
+    subtract(box, region, axes_, rest);
+    for (Box& r : rest) {
+      const double bb = bound_of(r);
+      queue(std::move(r), bb);
+    }
+    return Step::Progress;
+  }
+
+  // The score of the point judged last.
+  double scored() const noexcept { return scored_; }
+  // The best bound queued or pending (-infinity: none; +infinity: the budget
+  // stopped the search before its boxes were queued - nothing is known).
+  double best_bound() const noexcept {
+    if (queue_.empty() && !pending_) {
+      return budget_.stopped() ? std::numeric_limits<double>::infinity() : -std::numeric_limits<double>::infinity();
+    }
+    double b = queue_.empty() ? -std::numeric_limits<double>::infinity() : queue_.front().bound;
+    if (pending_) b = std::max(b, pending_->bound);
+    return b;
+  }
+  bool stopped() const noexcept { return budget_.stopped(); }
+  std::size_t queued() const noexcept { return queue_.size(); }
+  // The queue's memory, and the tables', estimated.
+  std::size_t queue_bytes() const noexcept {
+    return queue_.capacity() * (sizeof(Queued) + words_ * 8 + 32) +
+           (pending_ ? sizeof(Pending) + words_ * 8 + axes_.size() * sizeof(int) + resume_.capacity() * 4 : 0);
+  }
+  std::size_t table_bytes() const noexcept {
+    std::size_t b = moves_.capacity() * sizeof(Move);
+    for (const Axis& a : axes_) b += a.values.capacity() * sizeof(Value) + sizeof(Axis);
+    for (const std::vector<double>& s : scores_) b += s.capacity() * sizeof(double) + 32;
+    return b;
+  }
+
+ private:
+  struct Queued {
+    double bound = 0;
+    std::uint64_t order = 0;  // the queueing order: ties go to the box queued last
+    Box box;
+  };
+  // A point whose judgement the cap stopped, with its box and bound.
+  struct Pending {
+    double bound = 0;
+    Box box;
+    std::vector<int> x;
+  };
+
+  // The heap's order: a box is worse than another with a higher bound, or an
+  // equal bound queued EARLIER - among equal bounds the newest box first, so
+  // that ties are searched depth-first as the detector searches (taken
+  // breadth-first, a position whose best scores tie across many boards split
+  // into exponentially many equal boxes before any was finished).
+  static bool worse(const Queued& a, const Queued& b) noexcept {
+    if (a.bound != b.bound) return a.bound < b.bound;
+    return a.order < b.order;
+  }
+
+  void queue(Box box, double bound) {
+    queue_.push_back(Queued{bound, next_order_++, std::move(box)});
+    std::push_heap(queue_.begin(), queue_.end(), worse);
+  }
+  void queue(Box box) {
+    const double b = bound_of(box);
+    queue(std::move(box), b);
+  }
+
+  // The sum, axis by axis in order, of the best score each axis has left in
+  // the box: no point of the box scores more.
+  double bound_of(const Box& box) const {
+    double sum = 0;
+    for (std::size_t i = 0; i < axes_.size(); ++i) {
+      const Axis& a = axes_[i];
+      double best = -std::numeric_limits<double>::infinity();
+      for (std::size_t v = 0; v < a.values.size(); ++v) {
+        if (has(box, a, static_cast<int>(v))) best = std::max(best, scores_[i][v]);
+      }
+      sum += best;
+    }
+    return sum;
+  }
+
+  // Each axis's best value in the box (the lowest of equal ones): its score is
+  // bound_of(box).
+  std::vector<int> best_point(const Box& box) const {
+    std::vector<int> x(axes_.size(), -1);
+    for (std::size_t i = 0; i < axes_.size(); ++i) {
+      const Axis& a = axes_[i];
+      for (std::size_t v = 0; v < a.values.size(); ++v) {
+        if (!has(box, a, static_cast<int>(v))) continue;
+        if (x[i] < 0 || scores_[i][v] > scores_[i][static_cast<std::size_t>(x[i])]) x[i] = static_cast<int>(v);
+      }
+    }
+    return x;
+  }
+
+  double score_of(const std::vector<int>& x) const {
+    double sum = 0;
+    for (std::size_t i = 0; i < axes_.size(); ++i) sum += scores_[i][static_cast<std::size_t>(x[i])];
+    return sum;
   }
 
  private:
@@ -963,8 +1187,12 @@ class Hyper {
   // Judges x and sets `region` (it holds x and no legal action). False: stop
   // the search (the budget, or the cap reached - a search for one stops at
   // its first legal action).
-  bool judge(const std::vector<int>& x, const Box& box, Region& region) {
-    ++run_.stats.points;
+  //
+  // `resume` (best-first generation only): x's judgement was stopped by the
+  // cap after recording a legal action; it goes on from the realisation after
+  // the last one visited (resume_), x's legality known.
+  bool judge(const std::vector<int>& x, const Box& box, Region& region, bool resume = false) {
+    if (!resume) ++run_.stats.points;
     const std::size_t k = axes_.size();
     // (1) Consistency: a jump's halves together.
     for (std::size_t i = 0; i < k; ++i) {
@@ -993,10 +1221,10 @@ class Hyper {
     // the same cycle of boards fails alike.
     if (j6_cycle_region(x, region)) return true;
     // (3) Realisation and royal safety (C4).
-    bool legal = false;
+    bool legal = resume;  // a resumed point recorded a legal action before its cap
     bool stop = false;
     bool eliminated = false;
-    bool realised = false;
+    bool realised = resume;
     // Where no capture's region holds for every creation order (a capture
     // touching the timelines x creates, when it creates two or more), each
     // order's capture constrains the axes x plays with moves that create no
@@ -1030,12 +1258,20 @@ class Hyper {
       return true;
     };
     bool stopped = false;
+    trail_.clear();
+    seeking_ = resume;
     switch (regime_) {
       case Regime::Ordered: realise_ordered(x, visit, stopped); break;
       case Regime::FreeOrder: realise_free(x, visit, stopped); break;
       case Regime::General: realise_general(x, visit, stopped); break;
     }
+    const bool lost = seeking_;
+    seeking_ = false;
     if (stop || stopped || budget_.stopped()) return false;
+    if (lost) throw std::logic_error("hypercuboid: a resumed realisation never reached its cursor");
+    // The general regime's tables are the point's: released once it is judged.
+    general_seen_ = TaggedPositionSet{};
+    general_finals_ = TaggedPositionSet{};
     if (legal) {
       single_point(x, region);
     } else if (realised && !eliminated) {
@@ -1051,7 +1287,7 @@ class Hyper {
       ++run_.stats.unrealised;
       unrealised_region(x, box, region);
     }
-    if (region.axes.size() == k &&
+    if (!resume && region.axes.size() == k &&
         std::all_of(region.allowed.begin(), region.allowed.end(), [](const Bits& b) {
           std::size_t n = 0;
           for (const std::uint64_t w : b) n += static_cast<std::size_t>(std::popcount(w));
@@ -1306,6 +1542,40 @@ class Hyper {
 
   using Visit = std::function<bool(const GameState&, const std::vector<Move>&)>;
 
+  // THE REALISATION CURSOR (best-first generation). Each realise_* below is a
+  // depth-first walk whose choice points loop over their options; trail_
+  // holds the option taken at each choice point on the way down. When a visit
+  // ends the walk (the cap reached), resume_ keeps the trail at that visit.
+  // A resumed walk (seeking_) replays resume_ - each choice point starts its
+  // loop at resume_'s option, so the walk goes straight down that path (its
+  // moves played again: as many as the realisation has) - passes over the
+  // visit at its end, and goes on from there as the stopped walk would have:
+  // every realisation is visited once, however often the cap stops the walk.
+  // The depth-first detector never resumes (seeking_ stays false): its walks
+  // are unchanged.
+
+  // The option a choice point starts its loop at: 0, or on a resumed walk the
+  // stopped walk's.
+  std::size_t first_choice() const {
+    if (!seeking_) return 0;
+    if (trail_.size() >= resume_.size()) throw std::logic_error("hypercuboid: a resumed realisation passed its cursor");
+    return resume_[trail_.size()];
+  }
+
+  // A realisation reached: visited - or, on a resumed walk, the one the
+  // stopped walk visited last, passed over (the walk goes on after it).
+  // False: the visit ended the walk (its trail kept for a resume).
+  bool reach(const GameState& s, const std::vector<Move>& seq, const Visit& visit) {
+    if (seeking_) {
+      if (trail_ != resume_) throw std::logic_error("hypercuboid: a resumed realisation left its cursor");
+      seeking_ = false;
+      return true;
+    }
+    if (visit(s, seq)) return true;
+    resume_ = trail_;
+    return false;
+  }
+
   // Plays move `m` on `s` if the turn rules allow a move now and it is
   // pseudo-legal there, appending it to `seq`. False if not; `stopped` if the
   // budget ran out.
@@ -1389,7 +1659,7 @@ class Hyper {
     }
     if (ok && last >= 0) ok = play(t, moves_[static_cast<std::size_t>(p.plain[static_cast<std::size_t>(last)])], seq, stopped);
     if (ok && !stopped && t.obligations_met()) {
-      if (!visit(t, seq)) go_on = false;
+      if (!reach(t, seq, visit)) go_on = false;
       seq.resize(mark);
       return true;
     }
@@ -1416,8 +1686,11 @@ class Hyper {
       };
       return must(a) < must(b);
     });
-    for (const int last : left) {
-      if (finish(p, s, plain_done, seq, last, visit, stopped, go_on)) return true;
+    for (std::size_t i = first_choice(); i < left.size(); ++i) {
+      trail_.push_back(static_cast<std::uint32_t>(i));
+      const bool done = finish(p, s, plain_done, seq, left[i], visit, stopped, go_on);
+      trail_.pop_back();
+      if (done) return true;
       if (stopped || !go_on) return false;
     }
     return false;
@@ -1431,7 +1704,7 @@ class Hyper {
       finish_with_last(p, s, plain_done, seq, visit, stopped, go_on);
       return;
     }
-    for (std::size_t b = 0; b < p.branch_axes.size() && go_on && !stopped; ++b) {
+    for (std::size_t b = first_choice(); b < p.branch_axes.size() && go_on && !stopped; ++b) {
       if (branch_done[b] != 0) continue;
       const Value& bv = value_of(x, p.branch_axes[b]);
       // J6: the board it lands on played first - by a branch made before it,
@@ -1447,6 +1720,7 @@ class Hyper {
           needed = plain_playing(p, bv.partner);
         }
       }
+      trail_.push_back(static_cast<std::uint32_t>(b));
       GameState t = s;
       const std::size_t mark = seq.size();
       bool ok = true;
@@ -1459,26 +1733,38 @@ class Hyper {
       }
       const Move& branch = moves_[static_cast<std::size_t>(bv.move)];
       if (ok && left == 1) {
-        // Shape A: every plain move left, then this branch last.
-        GameState a = t;
-        const std::size_t mark_a = seq.size();
-        bool ok_a = true;
-        for (std::size_t q = 0; q < p.plain.size() && ok_a; ++q) {
-          if (plain_done[q] != 0) continue;
-          ok_a = play(a, moves_[static_cast<std::size_t>(p.plain[q])], seq, stopped);
-        }
-        if (ok_a) ok_a = play(a, branch, seq, stopped);
+        // The two shapes are a choice point of the cursor's: 0 tries shape A,
+        // then B; a resumed walk whose cursor lies in shape B (1) skips shape
+        // A, which realised nothing there.
+        const std::size_t shape = first_choice();
         bool done = false;
-        if (ok_a && !stopped && a.obligations_met()) {
-          if (!visit(a, seq)) go_on = false;
-          done = true;
+        if (shape == 0) {
+          // Shape A: every plain move left, then this branch last.
+          trail_.push_back(0);
+          GameState a = t;
+          const std::size_t mark_a = seq.size();
+          bool ok_a = true;
+          for (std::size_t q = 0; q < p.plain.size() && ok_a; ++q) {
+            if (plain_done[q] != 0) continue;
+            ok_a = play(a, moves_[static_cast<std::size_t>(p.plain[q])], seq, stopped);
+          }
+          if (ok_a) ok_a = play(a, branch, seq, stopped);
+          if (ok_a && !stopped && a.obligations_met()) {
+            if (!reach(a, seq, visit)) go_on = false;
+            done = true;
+          }
+          seq.resize(mark_a);
+          trail_.pop_back();
         }
-        seq.resize(mark_a);
         // Shape B: this branch, then the plain moves left, one of them last.
-        if (!done && go_on && !stopped && play(t, branch, seq, stopped)) {
-          branch_done[b] = 1;
-          finish_with_last(p, t, plain_done, seq, visit, stopped, go_on);
-          branch_done[b] = 0;
+        if (!done && go_on && !stopped) {
+          trail_.push_back(1);
+          if (play(t, branch, seq, stopped)) {
+            branch_done[b] = 1;
+            finish_with_last(p, t, plain_done, seq, visit, stopped, go_on);
+            branch_done[b] = 0;
+          }
+          trail_.pop_back();
         }
       } else if (ok && play(t, branch, seq, stopped) && t.may_move()) {
         branch_done[b] = 1;
@@ -1487,6 +1773,7 @@ class Hyper {
       }
       if (played_needed) plain_done[static_cast<std::size_t>(needed)] = 0;
       seq.resize(mark);
+      trail_.pop_back();
     }
   }
 
@@ -1509,17 +1796,19 @@ class Hyper {
                  std::vector<char>& done, std::size_t left, std::vector<Move>& seq,
                  const Visit& visit, bool& stopped, bool& go_on) {
     if (left == 0) {
-      if (s.obligations_met() && !visit(s, seq)) go_on = false;
+      if (s.obligations_met() && !reach(s, seq, visit)) go_on = false;
       return;
     }
-    for (std::size_t b = 0; b < p.branch_axes.size() && go_on && !stopped; ++b) {
+    for (std::size_t b = first_choice(); b < p.branch_axes.size() && go_on && !stopped; ++b) {
       if (done[b] != 0) continue;
       GameState t = s;
       const std::size_t mark = seq.size();
       if (play(t, moves_[static_cast<std::size_t>(value_of(x, p.branch_axes[b]).move)], seq,
                stopped)) {
         done[b] = 1;
+        trail_.push_back(static_cast<std::uint32_t>(b));
         free_step(x, p, t, done, left - 1, seq, visit, stopped, go_on);
+        trail_.pop_back();
         done[b] = 0;
       }
       seq.resize(mark);
@@ -1547,8 +1836,14 @@ class Hyper {
         plain.push_back(v.kind == Kind::Branch ? 0 : 1);
       }
     }
-    TaggedPositionSet seen;
-    TaggedPositionSet finals;
+    // The tables of the states reached: the point's, kept across a resume (a
+    // resumed walk finds its own path's states there already).
+    if (!seeking_) {
+      general_seen_ = TaggedPositionSet{};
+      general_finals_ = TaggedPositionSet{};
+    }
+    TaggedPositionSet& seen = general_seen_;
+    TaggedPositionSet& finals = general_finals_;
     std::vector<char> used(moves.size(), 0);
     std::vector<Move> path;
     std::string tag;
@@ -1557,11 +1852,13 @@ class Hyper {
                                                                      std::size_t made,
                                                                      int last_plain) {
       if (made == moves.size()) {
-        if (s.obligations_met() && finals.insert(s, tag).second && !visit(s, path)) go_on = false;
+        if ((seeking_ || (s.obligations_met() && finals.insert(s, tag).second)) && !reach(s, path, visit)) {
+          go_on = false;
+        }
         return;
       }
       if (!s.may_move()) return;
-      for (std::size_t m = 0; m < moves.size() && go_on && !stopped; ++m) {
+      for (std::size_t m = first_choice(); m < moves.size() && go_on && !stopped; ++m) {
         if (used[m] != 0) continue;
         const bool final_move = made + 1 == moves.size();
         const bool castle = moves[m].castle();
@@ -1578,15 +1875,20 @@ class Hyper {
           tag += to_string(moves[m], false);
           tag += '|';
         }
-        if (seen.insert(child, tag).second) {
+        // On a resumed walk's path the state is in the table already (the
+        // stopped walk's): it is followed all the same.
+        const bool on_cursor = seeking_;
+        if (seen.insert(child, tag).second || on_cursor) {
           if (!budget_.hold(run_.held() + seen.size() + finals.size(), run_.held_bytes())) {
             stopped = true;
             return;
           }
           used[m] = 1;
           path.push_back(moves[m]);
+          trail_.push_back(static_cast<std::uint32_t>(m));
           // A castling leaves the ascending order where it was.
           dfs(child, made + 1, plain[m] == 0 ? -1 : (castle ? last_plain : static_cast<int>(m)));
+          trail_.pop_back();
           path.pop_back();
           used[m] = 0;
         }
@@ -1789,10 +2091,157 @@ class Hyper {
   std::size_t words_ = 0;
   MoveList scratch_;
   Abstract abstract_;
+  // Best-first generation only (t5d/turngen.hpp): each value's score, the
+  // queue of boxes, and the score of the point judged last.
+  std::vector<std::vector<double>> scores_;
+  std::vector<Queued> queue_;
+  std::uint64_t next_order_ = 0;
+  double scored_ = 0;
+  // The point the cap stopped part-way (step_best_first), and the realisation
+  // cursor (see "THE REALISATION CURSOR"): the walk's trail, the stopped
+  // walk's, whether a resumed walk is still replaying it, and the general
+  // regime's tables of the states reached, kept for the point's resume.
+  std::optional<Pending> pending_;
+  std::vector<std::uint32_t> trail_;
+  std::vector<std::uint32_t> resume_;
+  bool seeking_ = false;
+  TaggedPositionSet general_seen_;
+  TaggedPositionSet general_finals_;
 };
 
 }  // namespace
 
 void run_hypercuboid(SearchRun& run) { Hyper(run).search(); }
 
+void set_realisations_per_step(std::size_t n) {
+  if (n == 0) throw std::invalid_argument("realisations per step: at least 1");
+  realisations_per_step.store(n, std::memory_order_relaxed);
+}
+
 }  // namespace t5d::detail
+
+// ---- the flat form's turn generator (t5d/turngen.hpp) ---------------------------------------
+
+namespace t5d {
+
+struct TurnGenerator::Impl {
+  // The state, then the run reading it, then the search reading both: the
+  // generator owns its copy, and never moves (it lives behind a pointer).
+  GameState start;
+  detail::SearchRun run;
+  detail::Hyper hyper;
+  TurnUnit unit;
+  // Turns found and not yet emitted (one point's actions: equal scores).
+  std::vector<GeneratedTurn> ready;
+  std::size_t next_ready = 0;
+  std::size_t emitted = 0;
+  // The successor states collected so far are run.successors[0, next_successor).
+  std::size_t next_successor = 0;
+  // The successor states' own heap, estimated: each its timeline table and the
+  // boards (with their timelines) its action made - the rest is shared.
+  std::size_t successor_bytes = 0;
+  bool exhausted = false;
+
+  Impl(const GameState& turn_start, TurnUnit u, const SearchBudget& budget)
+      : start(turn_start),
+        // The run counts the generator's unit: as actions (record() keeps each
+        // action key once) or as successors (each state once, with an action
+        // reaching it - under Q3's play activation two orders of one set of moves
+        // can reach two states, one action key: counted as actions, the second
+        // state would have no action kept).
+        run(start, budget, std::numeric_limits<std::size_t>::max(),
+            u == TurnUnit::Actions ? detail::Unit::Actions : detail::Unit::Successors, true),
+        hyper(run),
+        unit(u) {}
+
+  // The successor's own heap, estimated: its timeline table and the boards
+  // (with their timelines) its action made - the rest is shared.
+  std::size_t successor_cost(const GameState& successor) const {
+    const Multiverse& mv = successor.multiverse();
+    const std::size_t made = mv.board_count() - start.multiverse().board_count();
+    return sizeof(GameState) + mv.timelines().size() * sizeof(TimelineRef) + 32 +
+           made * (sizeof(Timeline) + sizeof(Board) + 4 * 32) + 128;
+  }
+
+  // What the last judged point recorded, as turns. Successors: the run keeps
+  // one action per state, parallel to its states (record() may later swap a
+  // kept action for another reaching the same state - one already collected,
+  // so nothing changes here); the new states' actions are collected. Actions:
+  // the actions recorded, then the run's kept listing emptied, its bytes
+  // returned.
+  void collect() {
+    if (unit == TurnUnit::Successors) {
+      for (; next_successor < run.actions.size(); ++next_successor) {
+        const GameState& result = run.successors[run.results[next_successor]];
+        successor_bytes += successor_cost(result);
+        ready.push_back(GeneratedTurn{run.actions[next_successor], result, hyper.scored()});
+      }
+      return;
+    }
+    for (std::size_t i = 0; i < run.actions.size(); ++i) {
+      // What record() counted for the kept action (its key stays counted).
+      run.kept_bytes -= std::min(run.kept_bytes, run.actions[i].size() * sizeof(Move) + run.texts[i].size() + 96);
+      const std::size_t result = run.results[i];
+      if (result >= next_successor) {
+        next_successor = result + 1;
+        successor_bytes += successor_cost(run.successors[result]);
+      }
+      ready.push_back(GeneratedTurn{std::move(run.actions[i]), run.successors[result], hyper.scored()});
+    }
+    run.actions.clear();
+    run.texts.clear();
+    run.results.clear();
+  }
+
+  std::optional<GeneratedTurn> next() {
+    while (next_ready == ready.size()) {
+      ready.clear();
+      next_ready = 0;
+      if (exhausted || hyper.stopped()) return std::nullopt;
+      using Step = decltype(hyper.step_best_first());
+      const Step s = hyper.step_best_first();
+      if (s == Step::Done) {
+        exhausted = true;
+        run.stats.exhaustive = true;
+      }
+      // A point the budget stopped part-way: under Successors its states' kept
+      // actions are not final (record() keeps the least text among the
+      // realisations seen), so none of them is emitted - what was emitted is
+      // then a prefix of the unstopped generator's turns.
+      if (s == Step::Stopped && unit == TurnUnit::Successors) return std::nullopt;
+      collect();
+    }
+    ++emitted;
+    return std::move(ready[next_ready++]);
+  }
+};
+
+TurnGenerator::TurnGenerator(const GameState& turn_start, const TurnScorer& scorer, TurnUnit unit,
+                             const SearchBudget& budget) {
+  if (turn_start.obligations_met()) {
+    throw std::invalid_argument("turn generator: not a turn start (its obligations are met, T5)");
+  }
+  impl_ = std::make_unique<Impl>(turn_start, unit, budget);
+  if (!impl_->hyper.start_best_first(scorer)) return;  // stopped by the budget
+}
+
+TurnGenerator::~TurnGenerator() = default;
+
+std::optional<GeneratedTurn> TurnGenerator::next() { return impl_->next(); }
+bool TurnGenerator::exhausted() const noexcept { return impl_->exhausted && impl_->next_ready == impl_->ready.size(); }
+bool TurnGenerator::stopped() const noexcept { return impl_->hyper.stopped(); }
+std::size_t TurnGenerator::generated() const noexcept { return impl_->emitted; }
+double TurnGenerator::bound() const noexcept {
+  if (impl_->next_ready < impl_->ready.size()) return impl_->ready[impl_->next_ready].score;
+  return impl_->hyper.best_bound();
+}
+const SearchStats& TurnGenerator::stats() const noexcept { return impl_->run.stats; }
+std::size_t TurnGenerator::memory_bytes() const noexcept {
+  const Impl& g = *impl_;
+  std::size_t ready_bytes = 0;
+  for (const GeneratedTurn& t : g.ready) ready_bytes += sizeof(GeneratedTurn) + t.moves.capacity() * sizeof(Move);
+  return sizeof(Impl) + g.hyper.queue_bytes() + g.hyper.table_bytes() + g.run.held_bytes() + ready_bytes +
+         g.successor_bytes;
+}
+
+}  // namespace t5d

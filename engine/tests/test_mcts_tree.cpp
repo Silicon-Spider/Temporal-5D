@@ -136,7 +136,8 @@ bool same_stats(const mcts::SearchStats& a, const mcts::SearchStats& b) {
          a.verified_illegal == b.verified_illegal && a.verified_unknown == b.verified_unknown &&
          a.mate_checks == b.mate_checks && a.unknown_verdicts == b.unknown_verdicts &&
          a.checkmates == b.checkmates && a.stalemates == b.stalemates && a.turn_caps == b.turn_caps &&
-         a.stuck == b.stuck && a.truncated_listings == b.truncated_listings &&
+         a.stuck == b.stuck && a.generated_turns == b.generated_turns &&
+         a.stopped_generators == b.stopped_generators &&
          a.nodes_created == b.nodes_created && a.nodes_collected == b.nodes_collected && a.reroots == b.reroots &&
          a.cache_purged == b.cache_purged && a.uncertainty_missing == b.uncertainty_missing &&
          a.last_stop == b.last_stop;
@@ -298,7 +299,6 @@ TEST(mcts_tree_form_with_every_gate_firing_equals_the_ply_split) {
     for (int k = 0; k < 2; ++k) {
       const Variation& v = kVariations[(i + static_cast<std::size_t>(k) * 3) % kVariations.size()];
       SearchParams p = fast();
-      p.max_actions = 64;
       v.apply(p);
       Evaluator& ev = k == 0 ? *random : *material;
       gated += compare(r, p, ev, 48, r.name + ", " + v.name + (k == 0 ? ", random" : ", material"));

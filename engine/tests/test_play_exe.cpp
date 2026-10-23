@@ -108,8 +108,10 @@ t5d::PgnRecord play_and_gate(const std::vector<std::string>& play_args,
 
 TEST(play_exe_records_replay_through_the_gate_adapter) {
   play_and_gate({"--playouts", "8", "--cap-turns", "6", "--seed", "3"}, {});
-  play_and_gate({"--split", "turn", "--playouts", "8", "--cap-turns", "5", "--seed", "4",
-                 "--listing-cap", "128"},
+  // D2's flat form: whole turns generated best first, on one board and two.
+  play_and_gate({"--split", "flat", "--playouts", "8", "--cap-turns", "5", "--seed", "4"}, {});
+  play_and_gate({"--variant", "Standard - Two Timelines", "--split", "flat", "--playouts", "16", "--cap-turns", "4",
+                 "--cap-boards", "60", "--seed", "7", "--evaluator", "random", "--match"},
                 {});
   // D2's tree form, with its gates by name and with none.
   play_and_gate({"--variant", "Standard - Two Timelines", "--split", "tree", "--playouts", "16", "--cap-turns", "4",
@@ -192,7 +194,7 @@ TEST(play_exe_command_line) {
                dir / "e.txt"),
            2);
   // The gates are read by the tree form alone: refused with another split.
-  for (const char* split : {"ply", "turn"}) {
+  for (const char* split : {"ply", "flat"}) {
     CHECK_EQ(run(T5D_PLAY_EXE, {"--split", split, "--tree-gates", "none"}, {}, dir / "o.txt", dir / "e.txt"), 2);
     CHECK(read_all(dir / "e.txt").find("--split tree") != std::string::npos);
   }
@@ -203,12 +205,15 @@ TEST(play_exe_command_line) {
        {std::vector<std::string>{"--max-actions", "4294967296"}, std::vector<std::string>{"--cap-turns", "2147483648"},
         std::vector<std::string>{"--cap-boards", "18446744073709551615"}, std::vector<std::string>{"--max-seconds", "nan"},
         std::vector<std::string>{"--max-seconds", "-1"}, std::vector<std::string>{"--playouts", "0"},
-        std::vector<std::string>{"--temperature", "inf"}, std::vector<std::string>{"--batch", "0"},
-        std::vector<std::string>{"--listing-cap", "0"}}) {
+        std::vector<std::string>{"--temperature", "inf"}, std::vector<std::string>{"--batch", "0"}}) {
     CHECK_EQ(run(T5D_PLAY_EXE, bad, {}, dir / "o.txt", dir / "e.txt"), 2);
     CHECK(read_all(dir / "e.txt").find("range") != std::string::npos ||
           read_all(dir / "e.txt").find("finite") != std::string::npos);
   }
+  // The retired whole-turn arm: --split turn names its successor; --listing-cap is gone.
+  CHECK_EQ(run(T5D_PLAY_EXE, {"--split", "turn"}, {}, dir / "o.txt", dir / "e.txt"), 2);
+  CHECK(read_all(dir / "e.txt").find("--split flat") != std::string::npos);
+  CHECK_EQ(run(T5D_PLAY_EXE, {"--listing-cap", "128"}, {}, dir / "o.txt", dir / "e.txt"), 2);
   CHECK_EQ(run(T5D_PLAY_EXE, {"--help"}, {}, dir / "o.txt", dir / "e.txt"), 0);
   CHECK(read_all(dir / "o.txt").find("usage") != std::string::npos);
 }

@@ -105,17 +105,34 @@ SearchParams params_from(const t5d_search_params* c) {
   if (c == nullptr) return p;
   switch (c->split) {
     case T5D_SPLIT_BOARD_MOVE: p.split = t5d::mcts::TurnSplit::BoardMove; break;
-    case T5D_SPLIT_WHOLE_TURN: p.split = t5d::mcts::TurnSplit::WholeTurn; break;
+    case T5D_SPLIT_FLAT: p.split = t5d::mcts::TurnSplit::Flat; break;
     case T5D_SPLIT_TREE: p.split = t5d::mcts::TurnSplit::Tree; break;
-    default: throw std::invalid_argument("split must be T5D_SPLIT_BOARD_MOVE, _WHOLE_TURN or _TREE");
+    default: throw std::invalid_argument("split must be T5D_SPLIT_BOARD_MOVE, _FLAT or _TREE");
   }
-  switch (c->action_prior) {
-    case T5D_ACTION_PRIOR_SUM: p.action_prior = t5d::mcts::ActionPrior::SumLogits; break;
-    case T5D_ACTION_PRIOR_MEAN: p.action_prior = t5d::mcts::ActionPrior::MeanLogits; break;
-    default: throw std::invalid_argument("action_prior must be T5D_ACTION_PRIOR_SUM or _MEAN");
+  switch (c->flat_prior) {
+    case T5D_FLAT_PRIOR_GENERATED: p.flat_prior = t5d::mcts::FlatPrior::Generated; break;
+    case T5D_FLAT_PRIOR_PRODUCT: p.flat_prior = t5d::mcts::FlatPrior::Product; break;
+    default: throw std::invalid_argument("flat_prior must be T5D_FLAT_PRIOR_GENERATED or _PRODUCT");
   }
-  p.max_actions = static_cast<std::size_t>(c->max_actions);
-  p.listing_nodes = c->listing_nodes;
+  if (c->retired_max_actions != 0 && c->retired_max_actions != T5D_NO_LIMIT) {
+    throw std::invalid_argument(
+        "retired_max_actions: the enumerating whole-turn arm and its listing cap were retired (D2's flat form "
+        "replaced them, and has no cap) - 0 or T5D_NO_LIMIT");
+  }
+  p.generator_nodes = c->generator_nodes;
+  switch (c->flat_unit) {
+    case T5D_FLAT_UNIT_ACTIONS: p.flat_unit = t5d::TurnUnit::Actions; break;
+    case T5D_FLAT_UNIT_SUCCESSORS: p.flat_unit = t5d::TurnUnit::Successors; break;
+    default: throw std::invalid_argument("flat_unit must be T5D_FLAT_UNIT_ACTIONS or _SUCCESSORS");
+  }
+  switch (c->flat_jumps) {
+    case T5D_FLAT_JUMPS_BOTH: p.flat_jumps = t5d::mcts::FlatJumps::BothBoards; break;
+    case T5D_FLAT_JUMPS_SOURCE: p.flat_jumps = t5d::mcts::FlatJumps::SourceOnly; break;
+    default: throw std::invalid_argument("flat_jumps must be T5D_FLAT_JUMPS_BOTH or _SOURCE");
+  }
+  p.leave_share = c->leave_share;
+  p.flat_k0_max = c->flat_k0_max;
+  p.flat_fallback = static_cast<std::size_t>(c->flat_fallback);
   p.submit_share = c->submit_share;
   p.legal_moves_only = boolean(c->legal_moves_only, "legal_moves_only");
   p.legality = legality_of(c->legality_checks, c->legality_nodes);
@@ -332,9 +349,9 @@ struct LayoutEntry {
 constexpr LayoutEntry kLayout[] = {
     T5D_SEARCH_SIZE(t5d_search_params),
     T5D_SEARCH_AT(t5d_search_params, split),
-    T5D_SEARCH_AT(t5d_search_params, action_prior),
-    T5D_SEARCH_AT(t5d_search_params, max_actions),
-    T5D_SEARCH_AT(t5d_search_params, listing_nodes),
+    T5D_SEARCH_AT(t5d_search_params, flat_prior),
+    T5D_SEARCH_AT(t5d_search_params, retired_max_actions),
+    T5D_SEARCH_AT(t5d_search_params, generator_nodes),
     T5D_SEARCH_AT(t5d_search_params, submit_share),
     T5D_SEARCH_AT(t5d_search_params, legal_moves_only),
     T5D_SEARCH_AT(t5d_search_params, legality_checks),
@@ -395,6 +412,11 @@ constexpr LayoutEntry kLayout[] = {
     T5D_SEARCH_AT(t5d_search_params, tree_check),
     T5D_SEARCH_AT(t5d_search_params, tree_inherit_value),
     T5D_SEARCH_AT(t5d_search_params, tree_present),
+    T5D_SEARCH_AT(t5d_search_params, flat_unit),
+    T5D_SEARCH_AT(t5d_search_params, flat_jumps),
+    T5D_SEARCH_AT(t5d_search_params, leave_share),
+    T5D_SEARCH_AT(t5d_search_params, flat_k0_max),
+    T5D_SEARCH_AT(t5d_search_params, flat_fallback),
     T5D_SEARCH_AT(t5d_search_params, expand),
 
     T5D_SEARCH_SIZE(t5d_leaf),
@@ -448,6 +470,9 @@ constexpr LayoutEntry kLayout[] = {
     T5D_SEARCH_AT(t5d_search_summary, gate_check),
     T5D_SEARCH_AT(t5d_search_summary, gate_present),
     T5D_SEARCH_AT(t5d_search_summary, gate_always),
+    T5D_SEARCH_AT(t5d_search_summary, generated_turns),
+    T5D_SEARCH_AT(t5d_search_summary, stopped_generators),
+    T5D_SEARCH_AT(t5d_search_summary, fallback_listings),
 
     T5D_SEARCH_SIZE(t5d_search_limits),
     T5D_SEARCH_AT(t5d_search_limits, playouts),
@@ -536,13 +561,18 @@ void t5d_search_params_default(t5d_search_params* out) {
   if (out == nullptr) return;
   const SearchParams p;
   *out = t5d_search_params{};
-  out->split = p.split == t5d::mcts::TurnSplit::BoardMove   ? T5D_SPLIT_BOARD_MOVE
-               : p.split == t5d::mcts::TurnSplit::WholeTurn ? T5D_SPLIT_WHOLE_TURN
-                                                             : T5D_SPLIT_TREE;
-  out->action_prior = p.action_prior == t5d::mcts::ActionPrior::SumLogits ? T5D_ACTION_PRIOR_SUM
-                                                                           : T5D_ACTION_PRIOR_MEAN;
-  out->max_actions = p.max_actions;
-  out->listing_nodes = p.listing_nodes;
+  out->split = p.split == t5d::mcts::TurnSplit::BoardMove ? T5D_SPLIT_BOARD_MOVE
+               : p.split == t5d::mcts::TurnSplit::Flat    ? T5D_SPLIT_FLAT
+                                                           : T5D_SPLIT_TREE;
+  out->flat_prior = p.flat_prior == t5d::mcts::FlatPrior::Generated ? T5D_FLAT_PRIOR_GENERATED
+                                                                     : T5D_FLAT_PRIOR_PRODUCT;
+  out->retired_max_actions = 0;
+  out->generator_nodes = p.generator_nodes;
+  out->flat_unit = p.flat_unit == t5d::TurnUnit::Actions ? T5D_FLAT_UNIT_ACTIONS : T5D_FLAT_UNIT_SUCCESSORS;
+  out->flat_jumps = p.flat_jumps == t5d::mcts::FlatJumps::BothBoards ? T5D_FLAT_JUMPS_BOTH : T5D_FLAT_JUMPS_SOURCE;
+  out->leave_share = p.leave_share;
+  out->flat_k0_max = p.flat_k0_max;
+  out->flat_fallback = p.flat_fallback;
   out->submit_share = p.submit_share;
   out->legal_moves_only = flag(p.legal_moves_only);
   out->legality_checks = p.legality.checks;
@@ -659,7 +689,7 @@ t5d_status t5d_search_leaf(t5d_search* search, size_t index, t5d_leaf* out, char
     out->key = r.key;
     out->epoch = r.epoch;
     out->acting_player = t5d::index_of(r.expansion->acting_player());
-    const bool ply = search->search.params().split != t5d::mcts::TurnSplit::WholeTurn;
+    const bool ply = search->search.params().split != t5d::mcts::TurnSplit::Flat;
     out->submit_possible = flag(ply && r.expansion->submit_possible());
     out->submit_legal = flag(ply && r.expansion->submit_legal());
     t5d::capi_internal::describe_expansion(*r.expansion, out->expansion);
@@ -718,12 +748,17 @@ t5d_status t5d_search_deliver_evaluations(t5d_search* search, const t5d_evaluati
       const bool values = per_leaf(b.values, b.value_count, leaves, T5D_VALUE_BINS, "categorical values");
       const bool errors = per_leaf(b.errors, b.error_count, leaves, 1, "error-head outputs");
       const bool moves_left = per_leaf(b.moves_left, b.moves_left_count, leaves, 1, "moves-left outputs");
-      if (b.board_logits != nullptr || b.board_logit_count != 0) {
-        throw t5d::capi_internal::Unsupported(
-            "deliver: per-board logits are read only by D2's flat form, which is not built");
+      // D2's flat form: each leaf's board logits, one per expansion board, or none.
+      std::size_t boards = 0;
+      for (const t5d::mcts::EvalRequest& r : requests) boards += r.expansion->board_count();
+      if (b.board_logits == nullptr ? b.board_logit_count != 0 : b.board_logit_count != boards) {
+        throw std::invalid_argument("deliver: " + std::to_string(b.board_logit_count) + " board logits for " +
+                                    std::to_string(boards) + " boards (one per expansion board of each leaf, or "
+                                    "NULL and 0: none)");
       }
       std::vector<t5d::mcts::Evaluation> evs(leaves);
       std::size_t at = 0;
+      std::size_t board_at = 0;
       for (std::size_t i = 0; i < leaves; ++i) {
         const std::size_t m = requests[i].expansion->moves().size();
         evs[i].logits.assign(b.logits + at, b.logits + at + m);
@@ -735,6 +770,11 @@ t5d_status t5d_search_deliver_evaluations(t5d_search* search, const t5d_evaluati
         }
         if (errors) evs[i].error = b.errors[i];  // NaN: none
         if (moves_left) evs[i].moves_left = b.moves_left[i];
+        if (b.board_logits != nullptr) {
+          const std::size_t n = requests[i].expansion->board_count();
+          evs[i].board_logits.assign(b.board_logits + board_at, b.board_logits + board_at + n);
+          board_at += n;
+        }
       }
       s.deliver(evs);
     } catch (...) {
@@ -836,6 +876,9 @@ t5d_status t5d_search_info(const t5d_search* search, t5d_search_summary* out) {
     out->gate_check = st.gate_fired[2];
     out->gate_present = st.gate_fired[3];
     out->gate_always = st.gate_fired[4];
+    out->generated_turns = st.generated_turns;
+    out->stopped_generators = st.stopped_generators;
+    out->fallback_listings = st.fallback_listings;
     return T5D_OK;
   });
 }

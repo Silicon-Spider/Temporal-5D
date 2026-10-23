@@ -98,7 +98,7 @@ TEST(mcts_the_evaluation_cache_counts_the_heap_it_holds) {
   // against the heap its entries free when cleared (review B measured the old
   // estimate 1.4 to 2.2 times too low).
   const std::unique_ptr<Evaluator> random = make_evaluator(BuiltinEvaluator::Random, 7);
-  for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::WholeTurn}) {
+  for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::Flat}) {
     for (const int actions : {2, 12}) {
       SearchParams p = quick();
       p.split = split;
@@ -122,7 +122,7 @@ TEST(mcts_the_evaluation_cache_counts_the_heap_it_holds) {
       REQUIRE(held > 0);
       const double ratio = static_cast<double>(counted) / static_cast<double>(held);
       std::printf("  cache, %s split, %zu boards: %zu entries, counted %zu bytes, held %lld: x%.2f\n",
-                  split == TurnSplit::BoardMove ? "ply" : "turn", root.multiverse().board_count(), entries,
+                  split == TurnSplit::BoardMove ? "ply" : "flat", root.multiverse().board_count(), entries,
                   counted, held, ratio);
       CHECK(ratio > 0.75);
       CHECK(ratio < 1.33);
@@ -131,11 +131,11 @@ TEST(mcts_the_evaluation_cache_counts_the_heap_it_holds) {
 }
 
 TEST(mcts_the_memory_estimate_follows_the_heap) {
-  // The graph's estimate (memory_bytes: nodes, edges, actions, states' own
-  // heap, the MCGS table) against the heap the search holds, its evaluation
-  // cache off.
+  // The graph's estimate (memory_bytes: nodes, edges, turns, states' own
+  // heap, the flat form's generators, the MCGS table) against the heap the
+  // search holds, its evaluation cache off.
   const std::unique_ptr<Evaluator> random = make_evaluator(BuiltinEvaluator::Random, 7);
-  for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::WholeTurn, TurnSplit::Tree}) {
+  for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::Flat, TurnSplit::Tree}) {
     for (const bool graph : {false, true}) {
       if (split == TurnSplit::Tree && graph) continue;  // refused (build-log spec issue 301)
       SearchParams p = quick();
@@ -145,13 +145,13 @@ TEST(mcts_the_memory_estimate_follows_the_heap) {
       const GameState root = after("Standard - Two Timelines", 6);
       const t5d_test::alloc::Counting on;
       Search s(root, p);
-      s.run(*random, Limits{split != TurnSplit::WholeTurn ? 2000u : 400u});
+      s.run(*random, Limits{split != TurnSplit::Flat ? 2000u : 400u});
       const long long live = t5d_test::alloc::live_bytes;
       const double ratio = static_cast<double>(s.memory_bytes()) / static_cast<double>(live);
       std::printf("  graph memory, %s split, %s: %zu nodes, estimate %zu bytes, heap %lld: x%.2f\n",
-                  split == TurnSplit::BoardMove   ? "ply"
-                  : split == TurnSplit::WholeTurn ? "turn"
-                                                  : "tree-form",
+                  split == TurnSplit::BoardMove ? "ply"
+                  : split == TurnSplit::Flat    ? "flat"
+                                                : "tree-form",
                   graph ? "graph" : "tree", s.node_count(),
                   s.memory_bytes(), live, ratio);
       CHECK(ratio > 0.75);
@@ -188,7 +188,7 @@ TEST(mcts_the_cache_is_purged_of_states_behind_the_root) {
     } else {
       for (const Move& m : c.moves) s.apply(m);
       moves_made += static_cast<int>(c.moves.size());
-      if (p.split == TurnSplit::WholeTurn) {
+      if (p.split == TurnSplit::Flat) {
         s.submit();
         moves_made = 0;
       }
@@ -206,7 +206,7 @@ TEST(mcts_the_cache_is_purged_of_states_behind_the_root) {
 
 TEST(mcts_the_node_and_memory_budgets_stop_a_run) {
   const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
-  for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::WholeTurn}) {
+  for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::Flat}) {
     SearchParams p = quick();
     p.split = split;
     {
