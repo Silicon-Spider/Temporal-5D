@@ -36,8 +36,16 @@ from t5d.train.records import (
     to_arrays,
     write_game,
 )
-from t5d.train.selfplay import GeneratorConfig, generate_game, is_full_search, move_temperature, replay_positions, root_temperature
-from t5d.train.targets import TargetConfig, build_targets
+from t5d.train.selfplay import (
+    GeneratorConfig,
+    generate_game,
+    is_full_search,
+    move_temperature,
+    replay_positions,
+    root_temperature,
+    turn_moves,
+)
+from t5d.train.targets import TargetConfig, build_targets, flat_boards, turn_option
 from tests.engine.helpers import requires_engine
 from tests.train.test_targets import _kata_go
 
@@ -56,13 +64,17 @@ def _travel_start(seed: int) -> tuple[str, ...]:
         return tuple(fen for _, _, fen in g.snapshot().boards)
 
 
-#: Section 15.2's configurations: both of D2's generator arms, two variants, a custom start with
+#: Section 15.2's configurations: D2's three generator arms (the flat form's from Two Timelines' two
+#: playable boards), two variants, a custom start with
 #: branched timelines, a tight legality budget (unknown moves among the candidates) with another
 #: history window than the default's, the root temperature and noise off.
 CONFIGS = {
     "ply": GeneratorConfig(playouts=8, batch_size=4, cap_turns=2, cap_boards=20, seed=3),
     "tree": GeneratorConfig(split="tree", playouts=8, batch_size=4, cap_turns=2, cap_boards=20, seed=4),
     "two_timelines": GeneratorConfig(variant="Standard - Two Timelines", playouts=6, batch_size=3, cap_turns=2, cap_boards=20, seed=5),
+    "flat": GeneratorConfig(
+        variant="Standard - Two Timelines", split="flat", playouts=10, batch_size=4, cap_turns=3, cap_boards=24, seed=9
+    ),
     "budget": GeneratorConfig(
         playouts=8,
         batch_size=4,
@@ -325,13 +337,135 @@ def test_the_network_id_follows_the_weights():
 
 
 @requires_engine
-def test_the_generator_refuses_the_flat_form_and_the_optimistic_policy():
-    for split in ("flat", "turn"):  # the flat form until its policy target exists; the retired arm's name
-        with pytest.raises(ValueError, match=r"234\(b\)"):
-            GeneratorConfig(split=split).validate()
+def test_the_generator_refuses_the_retired_arm_and_the_optimistic_policy():
+    """The retired whole-turn arm's name is refused; the flat form is not (its policy target exists
+    since issue 242 - issue 234(b)'s refusal lifted)."""
+    GeneratorConfig(split="flat").validate()
+    with pytest.raises(ValueError, match="retired"):
+        GeneratorConfig(split="turn").validate()
     cfg = NetConfig(**{**SMALL, "optimistic_policy": True})
     ev = NetworkEvaluator(build_model(cfg, seed=0).eval(), policy="optimistic")
     with pytest.raises(ValueError, match="D9"):
         generate_game(ev, CONFIGS["ply"], net_cfg=cfg)
     with Game.variant("Standard") as g:
         assert g.info().boards == 1
+
+
+@requires_engine
+def test_a_flat_self_play_game_reads_the_networks_leave_logits():
+    """D2's flat form in self-play with the network (issues 241, 242): every evaluation the searches
+    were delivered carries a finite leave logit for every board - no board falls back on
+    ``leave_share`` - and at each decision, against the live search, the recorded raw leave logits
+    are the network's at the root, the playable boards the expansion's, every child a whole turn
+    whose moves the record keeps, its noise-free prior the softmax of the turns' scores from the
+    recorded raw logits (the engine read the leave logits), and the record-derived flat target the
+    marginal of the live children's visits; the game then rebuilds from its record and its rows feed
+    the flat loss (forward only)."""
+    from tests.engine.test_flat_head import Recorder, _scores, _softmax
+
+    ev = Recorder(NetworkEvaluator(build_model(NET, seed=0).eval(), max_batch=8))
+    cfg = GeneratorConfig(variant="Standard - Two Timelines", split="flat", playouts=16, batch_size=4, cap_turns=4, cap_boards=30, seed=21)
+    exact = TargetConfig(forced_k=0.0, prune_single_visit=False, deblunder=False, short_term_horizons=NET.short_term_horizons)
+    seen = {"decisions": 0, "multi_board": 0, "target_multi": 0}
+
+    def check(search, d, position):
+        live = search.children()
+        assert d.flat and len(d.children) == len(live) and bool(d.children.turn.all())
+        for k, c in enumerate(live):
+            assert d.turn(k).tobytes() == turn_moves([c]).tobytes()
+        raw = ev.inner([position])[0]
+        assert np.array_equal(d.raw_leave_logits, raw.board_logits) and np.isfinite(d.raw_leave_logits).all()
+        assert np.array_equal(d.playable, playable_boards_of(position))
+        t = d.root_policy_temperature * float(search.params.policy_temperature)
+        want = _softmax(_scores(raw, position, d.playable, live, t, arrivals=True, leave_share=None))
+        assert np.allclose(d.children.prior_noise_free, want, rtol=0, atol=2e-6)
+        seen["decisions"] += 1
+        seen["multi_board"] += int(d.playable.sum() >= 2)
+        rec = GameRecord(header={"result": {"end": "unknown", "winner": None, "actions": 1}, "search": {}}, decisions=[d])
+        tg = build_targets(rec, exact)
+        if d.full_search and sum(c.visits for c in live) > 0:
+            got = {(int(b), int(k)): p for b, k, p in tg.flat[0]}
+            total = sum(c.visits for c in live)
+            seen["target_multi"] += int(d.playable.sum() >= 2)
+            for fb in flat_boards(d):
+                for opt in fb.options:
+                    want_p = sum(c.visits for c in live if turn_option(turn_moves([c]), fb, d.candidates) == opt) / total
+                    assert got[(fb.board, opt)] == pytest.approx(want_p, abs=1e-12)
+
+    with torch.no_grad():
+        g = generate_game(ev, cfg, net_cfg=NET, keep_positions=True, on_decision=check)
+    assert seen["decisions"] == len(g.record.decisions) >= 2 and seen["target_multi"] >= 1, seen
+    assert ev.seen and all(e.board_logits is not None and np.isfinite(e.board_logits).all() for _, e in ev.seen)
+    assert all(e.board_logits.shape == (p.state.n_boards,) for p, e in ev.seen)
+    rebuilt = replay_positions(g.record)
+    assert [state_digest(p.state) for p in rebuilt] == [state_digest(p.state) for p in g.positions]
+    from t5d.train.losses import compute_losses
+    from t5d.train.targets import Row, collate_rows
+
+    rows = [Row(p.state, g.targets, i) for i, p in enumerate(g.positions)]
+    batch, tgt = collate_rows(rows, NET)
+    with torch.no_grad():
+        losses = compute_losses(build_model(NET, seed=1).eval()(batch), tgt)
+    assert all(torch.isfinite(v) for v in losses.values()) and "flat_policy" in losses
+
+
+def playable_boards_of(position) -> np.ndarray:
+    """The acting player's playable heads from the input itself (L5: the heads with the acting player
+    to move) - the expansion's flag at a turn start."""
+    s = position.state
+    return s.is_head & (s.side_to_move == s.acting_player)
+
+
+class _ArrivalBoost:
+    """The network, with every non-branching jump's move logit raised by ``boost``: turns that take an
+    arrival (the jump's option on the board it lands on, under ``flat_jumps`` BothBoards) lead the
+    turn generator, so the search visits them."""
+
+    def __init__(self, inner, boost: float = 6.0):
+        self.inner, self.boost = inner, boost
+
+    def __call__(self, positions):
+        from dataclasses import replace as dc_replace
+
+        from t5d.train.targets import is_arrival
+
+        out = []
+        for p, e in zip(positions, self.inner(positions), strict=True):
+            up = np.array([self.boost if is_arrival(m) else 0.0 for m in p.moves], dtype=np.float32)
+            out.append(dc_replace(e, policy_logits=(e.policy_logits + up).astype(np.float32)))
+        return out
+
+
+@requires_engine
+def test_a_visited_arrival_is_marginalised_as_the_live_search_took_it():
+    """Issue 242(a): a non-branching jump landing on a playable board is an option of that board too
+    (BothBoards). With arrivals favoured, flat searches from Two Timelines' start (whose knights jump
+    between the two present boards without branching) visit turns that take one; at each decision the
+    record-derived target is the live children's visits marginalised - the arrival's included - under
+    the unpruned configuration, and the default's per-board pruning keeps the visited arrival."""
+    ev = _ArrivalBoost(NetworkEvaluator(build_model(NET, seed=0).eval(), max_batch=8))
+    cfg = GeneratorConfig(
+        variant="Standard - Two Timelines", split="flat", playouts=24, batch_size=4, cap_turns=2, cap_boards=30, seed=23, root_noise=False
+    )
+    exact = TargetConfig(forced_k=0.0, prune_single_visit=False, deblunder=False, short_term_horizons=NET.short_term_horizons)
+    seen = {"arrival_visits": 0, "kept": 0}
+
+    def check(search, d, position):
+        if not d.full_search:
+            return
+        live = search.children()
+        total = sum(c.visits for c in live)
+        rec = GameRecord(header={"result": {"end": "unknown", "winner": None, "actions": 1}, "search": {}}, decisions=[d])
+        got = {(int(b), int(k)): p for b, k, p in build_targets(rec, exact).flat[0]}
+        dflt = {(int(b), int(k)): p for b, k, p in build_targets(rec, replace(exact, forced_k=2.0, prune_single_visit=True)).flat[0]}
+        for fb in flat_boards(d):
+            for opt in fb.options:
+                takes = [c for c in live if turn_option(turn_moves([c]), fb, d.candidates) == opt]
+                assert got[(fb.board, opt)] == pytest.approx(sum(c.visits for c in takes) / total, abs=1e-12)
+                if opt in fb.arrivals and sum(c.visits for c in takes) > 0:
+                    seen["arrival_visits"] += sum(c.visits for c in takes)
+                    seen["kept"] += int(dflt[(fb.board, opt)] > 0)
+
+    with torch.no_grad():
+        generate_game(ev, cfg, net_cfg=NET, keep_positions=False, on_decision=check)
+    assert seen["arrival_visits"] > 0 and seen["kept"] > 0, seen

@@ -10,6 +10,149 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-23 - D2 flat head review fixes: the flat target pruned per board after marginalising, the optimistic prior refused under the flat form, the loss's claim corrected, the survivors killed
+
+Two reviews of D2's flat head (`cd310be`) and the flat form's policy target (`c3f9038`): one of spec
+fidelity and correctness, one a mutation pass (66 mutants, 17 survivors, no bug found). In the
+network lane - no training run: optimiser steps only the smoke steps on synthetic rows.
+
+- **The flat target's pruning moved after the marginals** (`train/targets.py`; issue 242(b)). The
+  first build pruned each turn child (`pruned_visits`) and then marginalised, which wipes out an
+  option whose visits are spread over many one-visit turns - and the flat form's widening makes many
+  turns of 0-2 visits. The review's case (the best turn, 10 visits, leaves board 1; five one-visit
+  turns each play B there) has the marginal leave 0.667 / B 0.333; the target was 1.000 / 0.000. Now
+  steered visits are excluded or weighted per turn (I2, as before), the turns' visits marginalised
+  onto each board's options, and each board's option counts pruned as root children are
+  (`prune_counts`, the ply split's pruning factored out of `pruned_visits`: KataGo's forced-playout
+  pruning against the board's most visited option, then the single-visit rule) - an option read as
+  the turns that take it: its prior their priors summed, its value and exploration scale their
+  visit-weighted means. `TargetConfig.flat_pruning`: `"board"` (the default, a placeholder) or
+  `"turn"` (the first build's, kept as the arm). The review's case now gives 0.667 / 0.333; the root
+  value, I13 and `GameTargets.pruned` still read the turns' pruned visits.
+- **D9's optimistic prior refused under the flat form** (`engine/evaluator.py`, `engine/netplay.py`;
+  issue 242(h)). D9's head has no leave logit, so an optimistic evaluator paired its move logits with
+  the normal head's leave logits and the leave option's probability was arbitrary. `run_search`
+  refuses an optimistic evaluator on a flat search, `CStepDriver.deliver` refuses every optimistic
+  evaluation under the flat form (whatever wraps the evaluator; the batch released), and netplay's
+  `PlayConfig` refuses `optimistic` with `split="flat"` (`--optimistic` now defaults to the ply split
+  alone). Listed in 242(h) for the user: NaN board logits under the optimistic prior (the engine's
+  `leave_share`) is the alternative.
+- **The flat loss's claim corrected** (`train/losses.py`; issue 242(e)): the boards' summed
+  cross-entropy fits each board's marginal - the factorised target - and is not the cross-entropy of
+  the engine's turn prior, which normalises the boards' product over the generated turns only. A batch
+  with flat rows is refused when `LossConfig.weights` lacks `"flat_policy"` (it was silently dropped
+  from the total); the three tests that optimise one loss alone on the smoke batch, which has a flat
+  row, now name it at 0 (`test_policy_heads.py`, `test_value_heads.py`). The loss and divergence scales are noted beside the placeholders (242(e)).
+- **Smaller fixes.** `read_targets` refuses a targets file written before the flat target, naming
+  the cause (it raised a bare `KeyError`; issue 243(d)); I13's moves-left comment names the whole
+  turn beside the submit; the cache tests' output comparison reads the leave logits.
+- **Tests** (`tests/train/test_flat_targets.py`, `tests/engine/test_flat_head.py`,
+  `tests/train/test_records.py`, `tests/net/test_leave.py`): the per-board pruning by hand and the
+  per-turn arm; the review's one-visit case under both arms; an option read as the turns taking it
+  (an unvisited turn's prior, the visit-weighted value); a visited arrival against the live search,
+  with arrivals favoured (none is visited unforced); the optimistic refusals; the cached evaluator's
+  board logits; a flat best child's moves-left and its unevaluated case; the old targets file. And
+  the mutation run's 15 proposed tests, adapted: the default reduction the sum, the mean's last board,
+  a mixed batch's policy, soft and optimistic losses its ply rows' alone, the recorded `leave_share`
+  in I12's fallback prior, collation's range checks, the reply masked at flat decisions, a travel
+  later in a flat turn a landing, the record's turn checks, I20's whole-turn shares, record rows with
+  flat targets refused a step, synthetic flat records with arrivals, an unknown `leave_pool` refused.
+- **Mutants re-run** (the reviewer's runner on a copy of the fixed tree): each of the 17 survivors is
+  killed by the test written for it; no survivor's text moved. Three killed mutants whose text the per-board pruning moved
+  (renormalisation, out-of-distribution mass, the steered-visit rule) re-anchored and killed, with
+  six new ones on the fixed code (the default arm, no pruning, the option's prior and value, the
+  driver's refusal, the missing weight).
+- **The two entries below, corrected**: the flat target's pruned the turns before marginalising; the
+  flat head's let D9's optimistic prior through under the flat form.
+
+Spec: §8.2 ("Flat form"), §8.1 (D9's optimistic policy), §12.2, §12.4, §12.5; register D2, D9, I2,
+I12, I13, I15, M21. Issues 241(f), (g), 242(a)-(i), 243(d); proposed edit 188 rewritten.
+
+### 2026-10-23 - D2's flat form's policy target: per-board visit marginals, records version 2, flat self-play
+
+The flat form's policy target - "per-board visit marginals" (spec §8.2) - so self-play and the
+training loop can use the flat form, which the generator refused until it existed (BUILD_LOG issue
+234(b)). In the network lane - no training run: optimiser steps only on synthetic rows.
+
+- **The target** (`train/targets.py`; issue 242): at a flat decision the root's turn visits - pruned,
+  and with steered visits excluded or weighted, exactly as at the ply split (I2) - marginalised onto
+  each of the acting player's playable boards, over that board's options as the engine's per-board
+  policy defines them (issues 164, 165): its moves, the non-branching jumps arriving on it (under
+  `flat_jumps` BothBoards), leaving it. A turn's option on a board is the one the engine scores it
+  by; moves are matched by coordinates (a J6 branch is the jump it was); mass outside a board's
+  distribution (an arrival under SourceOnly, a move no candidate holds) is left out of that board.
+  Full searches only (I5). I12's divergence at a flat decision is the boards' KLs summed.
+  *(Review correction, 2026-10-23: pruning each turn before marginalising wiped out an option
+  spread over many one-visit turns - the review's case gave leaving 1 / B 0 where the marginal is
+  0.667 / 0.333; the turns are now marginalised first and each board's option counts pruned, the
+  per-turn pruning kept as an arm, `TargetConfig.flat_pruning` - see the review fixes' entry.)*
+- **Into the loss**: `collate_rows` turns a flat row's target into `Targets.flat_*`, which the
+  previous commit's `flat_policy` loss reads (per board, summed; it trains D2's leave head). The
+  soft policy, D9's optimistic policy and the reply prototype have no flat target and skip flat
+  rows (issue 242(h), for the user).
+- **Records, format version 2** (`train/records.py`; issue 243): every decision records the acting
+  player's playable boards and the network's raw per-board leave logits; a flat decision its root
+  children as whole turns (candidate -2) with their moves. Version 1 is refused, not read.
+- **Self-play** (`train/selfplay.py`): `GeneratorConfig.split="flat"` - a decision is a whole turn,
+  applied move by move and submitted; replay rebuilds flat games from their records. The retired
+  arm's name, `"turn"`, is still refused. `synthetic_record(flat=True)` gives synthetic flat rows.
+- **Tests** (`tests/train/test_flat_targets.py`, `tests/engine/test_flat_head.py`,
+  `tests/train/test_records.py`, `tests/train/test_targets.py`): the marginals by hand on a
+  constructed root (two playable boards, an arrival, a J6 twin, an unmatched move, both
+  `flat_jumps`), steered visits, the pruning, the divergence and the loss by hand; a flat search
+  with the network reads its leave logits - every delivered evaluation finite at every board and the
+  root's turn priors the softmax of the scores from the network's logits (to 2e-6), not the
+  fallback's; a flat self-play game held to its live search (raw leave logits, playable boards,
+  priors, the record-derived marginals); §15.2's I15 round trip on flat games (the record bit for
+  bit, targets re-derived under three configurations, inputs rebuilt); three smoke steps on
+  synthetic flat rows (the leave head moved), record rows forward only.
+
+Spec: §8.2 ("Flat form"), §12.2, §12.4, §12.5, §12.8 ("Rich training records"), §15.2 (the I15 row);
+register D2, I2, I5, I12, I15, D4, D9, M21. Issues 234(b) (lifted), 242, 243; proposed edits 188, 189.
+
+### 2026-10-23 - D2's flat head: one "leave it" logit per board, always built, delivered to the engine
+
+Register D2's flat form "normalises per board rather than across all moves - a head change" (spec
+§8.2), and its "optional boards carry a 'leave it' option with its own prior": until now the engine
+gave every board's leave option its `leave_share` placeholder (0.5) because the network had no such
+head (BUILD_LOG issue 165). In the network lane - no training run.
+
+- **The head** (`heads.LeaveHead`, `T5DNet.leave`, `NetOutput.leave_logits` `(B, Nmax)`): a linear
+  readout of each board's pooled state - its square tokens' mean by default, its per-board
+  registers' mean the arm (`NetConfig.leave_pool`, a placeholder: §8.2 does not say what the logit
+  reads; issue 241). Always built, no flag: D2 is committed-class and Undecided between arms that
+  are all built, not a prototype; only the flat form reads it.
+- **Parameters**: +257 (256 + 1) - the v1 is 22,965,683 (was 22,965,426), F2's arm 46,895,091, A8
+  on 25,594,803. The head draws from a generator of its own (`model.d2_seed`), so every parameter
+  that existed before it is drawn as before, bit for bit - pinned by fingerprints recorded at
+  `9c59cb0` (the small network at seed 7 under the default and the prototype flags, the v1 at seed
+  0) and by the head's own draw (`test_params.py`).
+- **Delivered**: `NetworkEvaluator` and `CachedNetworkEvaluator` give every board's leave logit
+  (`Evaluation.board_logits`, the input's board order), and `check_evaluation` checks them (one per
+  board, never infinite) - so a flat search the network evaluates no longer falls back on
+  `leave_share`. *(Review correction, 2026-10-23: with D9's optimistic prior the evaluator paired
+  the optimistic head's move logits with the normal head's leave logits, the leave option's
+  probability then arbitrary; the flat form now refuses the optimistic prior - see the review
+  fixes' entry.)*
+- **The loss that trains it** (`train/losses.py`, `flat_policy`; issue 242(e)): at a flat decision
+  (`Targets.flat_*`: each entry an option - a move, or leaving board b - its board and its target
+  probability) each board's cross-entropy against the log-softmax over its options' logits - the
+  policy's move logits and the leave head's - summed over the boards, averaged over the positions,
+  full searches only, weight 1 (`flat_board_reduction` "sum" and the weight placeholders). A flat row
+  has no ply-split policy target: the policy loss, the soft policy and D9's optimistic policy skip
+  it. The smoke test (`smoke_train`) adds one flat position (`synthetic_targets(flat_row=...)`), so
+  every parameter, the leave head's included, still moves in its three steps. The target itself
+  (from records) is the next commit's.
+- **Tests** (`tests/net/test_leave.py`; `test_perspective.py`, `test_params.py`): the logit equal to
+  the readout of a pool computed by hand, under both pools and with 4 and 0 per-board registers;
+  only a board's own pool reaches its logit; its spread at initialisation on the move logits' scale;
+  §15.2's A7 mirror with the head (every existing mirror test now compares the leave logits, and the
+  register pool has its own); the cached path's leave logits the dense pass's; the evaluator's
+  delivery and its checks.
+
+Spec: §8.2 ("Flat form", "What is lost"), §9.2 (the heads, the parameter count), §15.2 (the A7 row);
+register D2, F1, M21 (D7, D8, B8 read). Issues 241, 242(e); proposed edit 187.
+
 ### 2026-10-23 - Engine ABI round 3 review fixes: the exchange label's recaptures read where they are made; the Q6 fallback, mid-action placement, the pin's royal half, the C API's bits and labels and every label reading tested; the labels' cost measured
 
 Two reviews of engine ABI round 3 (5d8b12b, 0986472): one of the rules (probes on hand-built

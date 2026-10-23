@@ -88,7 +88,7 @@ def test_a_few_optimiser_steps_reduce_the_soft_and_reply_losses():
     falls. Not training."""
     for name in ("soft_policy", "opp_reply"):
         cfg = NetConfig(trunk_dtype="fp32", n_layers=2, opp_reply=True)
-        report = smoke_train(cfg, steps=3, seed=6, loss_cfg=LossConfig(weights={name: 1.0}))
+        report = smoke_train(cfg, steps=3, seed=6, loss_cfg=LossConfig(weights={name: 1.0, "flat_policy": 0.0}))
         first, last = report.losses[0][name], report.losses[-1][name]
         assert last < first, (name, first, last)
 
@@ -142,6 +142,8 @@ def test_a_few_optimiser_steps_reduce_the_optimistic_loss():
     """At most three optimiser steps on synthetic targets (the weight's centre moved to -10, so
     every sample weighs): the loss, optimised alone, falls. Not training."""
     cfg = NetConfig(trunk_dtype="fp32", n_layers=2, optimistic_policy=True)
-    report = smoke_train(cfg, steps=3, seed=6, loss_cfg=LossConfig(weights={"optimistic": 1.0}, optimistic_centre=-10.0))
+    report = smoke_train(
+        cfg, steps=3, seed=6, loss_cfg=LossConfig(weights={"optimistic": 1.0, "flat_policy": 0.0}, optimistic_centre=-10.0)
+    )
     first, last = report.losses[0]["optimistic"], report.losses[-1]["optimistic"]
     assert last < first, (first, last)

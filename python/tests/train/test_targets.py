@@ -512,6 +512,10 @@ GAMES = {
     "ply": GeneratorConfig(playouts=8, batch_size=4, cap_turns=3, cap_boards=20, seed=11),
     "tree": GeneratorConfig(split="tree", playouts=8, batch_size=4, cap_turns=3, cap_boards=20, seed=12),
     "two_timelines": GeneratorConfig(variant="Standard - Two Timelines", playouts=6, batch_size=3, cap_turns=2, cap_boards=20, seed=13),
+    # D2's flat form (issue 242): its per-board targets through the record and back
+    "flat": GeneratorConfig(
+        variant="Standard - Two Timelines", split="flat", playouts=10, batch_size=4, cap_turns=3, cap_boards=24, seed=14
+    ),
 }
 TARGET_CONFIGS = {
     "default": TargetConfig(short_term_horizons=NET.short_term_horizons),

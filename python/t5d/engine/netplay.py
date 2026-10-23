@@ -26,6 +26,8 @@ mirrors the engine's ``play_game`` (``src/selfplay.cpp``; ``t5d-play``) step for
   and its self-play searches refuse every evaluation that carries the optimistic prior
   (``run_search``'s ``self_play``), however the evaluator is wrapped. The record's Engine header
   names the optimistic prior where it was searched with; no I15 training record is written here.
+  The flat form refuses the optimistic prior (``PlayConfig.validate``, and ``run_search`` and the
+  step driver whatever the config): D9's head has no leave logit (issue 242(h)).
 * **D2's arms** (``split``): the board-move split - an action is its moves, each its own
   decision, then a submit decision (D8: never automatic); the tree form (``"tree"``) - the
   same decisions, each search inheriting the turn-start priors inside the turn and calling
@@ -79,7 +81,7 @@ from .capi import (
     find_library,
 )
 from .convert import relations_for
-from .evaluator import Evaluator, NetworkEvaluator, policy_source, run_search
+from .evaluator import FLAT_OPTIMISTIC, Evaluator, NetworkEvaluator, policy_source, run_search
 from .expansion import Move, board_label, square_name
 from .game import Game, relation_bits
 from .search import Search, search_params
@@ -132,7 +134,8 @@ class PlayConfig:
     #: from the present, Q9); the record then names the board "custom" and writes them.
     start_fen: tuple[str, ...] | None = None
     #: D9 (a prototype): both sides search with the optimistic policy - match play only, so the
-    #: evaluators must deliver it (``policy="optimistic"``); self-play refuses it.
+    #: evaluators must deliver it (``policy="optimistic"``); self-play refuses it, and so does the
+    #: flat form (D9's head has no leave logit; issue 242(h)).
     optimistic: bool = False
 
     def validate(self) -> None:
@@ -142,6 +145,8 @@ class PlayConfig:
             raise ValueError(f"mode must be one of {MODES}")
         if self.optimistic and self.mode != "match":
             raise ValueError("the optimistic policy is searched with at match play only, never in self-play (register D9)")
+        if self.optimistic and self.split == "flat":
+            raise ValueError(FLAT_OPTIMISTIC)
         if self.playouts < 1 or self.batch_size < 1 or self.max_actions < 1:
             raise ValueError("playouts, batch_size and max_actions must be positive")
 
@@ -634,7 +639,9 @@ def check_replay(res: GameResult, replay: Replay) -> list[str]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Games through the C step API with the network (random weights) as the evaluator.")
     parser.add_argument("--variant", action="append", help="a named variant (repeatable; default Standard and Two Timelines)")
-    parser.add_argument("--split", action="append", choices=sorted(SPLITS), help="D2's arm (repeatable; default ply and flat)")
+    parser.add_argument(
+        "--split", action="append", choices=sorted(SPLITS), help="D2's arm (repeatable; default ply and flat - ply alone with --optimistic)"
+    )
     parser.add_argument("--mode", action="append", choices=MODES, help="self-play or match play (repeatable; default both)")
     parser.add_argument("--games", type=int, default=1, help="games per (variant, split, mode)")
     parser.add_argument("--net", default="small", choices=["small", "F1"])
@@ -650,6 +657,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.optimistic and (args.mode or ["self", "match"]) != ["match"]:
         parser.error("--optimistic is match play only (register D9): add --mode match alone")
+    splits = args.split or (["ply"] if args.optimistic else ["ply", "flat"])
+    if args.optimistic and "flat" in splits:
+        parser.error("--optimistic is refused under the flat form (D9's head has no leave logit; issue 242(h))")
     torch.set_num_threads(args.threads)
     net_cfg = network_config(args.net)
     if args.optimistic:
@@ -662,7 +672,7 @@ def main(argv: list[str] | None = None) -> int:
     summaries = []
     failed = 0
     for variant in args.variant or ["Standard", "Standard - Two Timelines"]:
-        for split in args.split or ["ply", "flat"]:
+        for split in splits:
             for mode in args.mode or ["self", "match"]:
                 for g in range(args.games):
                     cfg = PlayConfig(

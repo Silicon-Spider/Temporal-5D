@@ -7,11 +7,13 @@ one's evaluation cache (C14), root noise on, a chosen child made known legal bef
 - and writes, per decision, the record ``train.records`` defines (register I15, spec section
 12.8). ``netplay.play_game`` is unchanged: it plays and writes a 5dpgn, and writes no record.
 
-* **D2's arms**: the board-move split (``"ply"``) and the tree form (``"tree"``). The flat form
-  (``"flat"``) is refused until its policy target exists: its root children are whole turns while
-  the policy scores single moves, and the flat form's target - D2's per-board policy marginals,
-  read by the flat form's per-board head (the network lane's, not yet built) - is not defined, so
-  its records would carry no policy target (spec issue 234(b)).
+* **D2's arms**: the board-move split (``"ply"``), the tree form (``"tree"``) and the flat form
+  (``"flat"``). Under the flat form a decision is a whole turn: its root children are turns (record
+  version 2: ``DecisionRecord.flat``, each child's moves in ``turn_moves``), the turn played is
+  applied move by move and submitted, and its policy target is the per-board visit marginals that
+  D2's flat head trains on (``train.targets``; spec issue 242 - the refusal of issue 234(b) lifted
+  once that target existed). Every decision records the acting player's playable boards (the
+  expansion's ``playable``) and the network's raw per-board leave logits.
 * **D9's optimistic policy is refused** (section 8.1: "kept out of self-play"): every search runs
   with ``run_search``'s ``self_play``.
 * **The raw root outputs** (I15) are the network's evaluation of the decision's own input - the
@@ -63,7 +65,15 @@ from dataclasses import asdict, dataclass, field, replace
 
 import numpy as np
 
-from ..engine.capi import DEFAULT_MATE_NODES, MOVE_DTYPE, T5D_LEGALITY_ILLEGAL, T5D_LEGALITY_LEGAL, T5D_SPLIT_BOARD_MOVE, T5D_SPLIT_TREE
+from ..engine.capi import (
+    DEFAULT_MATE_NODES,
+    MOVE_DTYPE,
+    T5D_LEGALITY_ILLEGAL,
+    T5D_LEGALITY_LEGAL,
+    T5D_SPLIT_BOARD_MOVE,
+    T5D_SPLIT_FLAT,
+    T5D_SPLIT_TREE,
+)
 from ..engine.convert import Position, relations_for
 from ..engine.evaluator import Evaluation, Evaluator, policy_source, run_search
 from ..engine.expansion import Move
@@ -72,11 +82,11 @@ from ..engine.netplay import turn_start_verdict, write_record
 from ..engine.search import RootChild, Search, search_params
 from ..net.config import NetConfig
 from ..net.quant import TRUNK_QUANT_FIELDS, trunk_format
-from .records import RECORD_VERSION, Children, DecisionRecord, GameRecord, network_id, params_dict
+from .records import CANDIDATE_SUBMIT, CANDIDATE_TURN, RECORD_VERSION, Children, DecisionRecord, GameRecord, network_id, params_dict
 from .targets import GameTargets, TargetConfig, build_targets
 
 #: D2's arms the generator plays (module docstring).
-SPLITS = {"ply": T5D_SPLIT_BOARD_MOVE, "tree": T5D_SPLIT_TREE}
+SPLITS = {"ply": T5D_SPLIT_BOARD_MOVE, "tree": T5D_SPLIT_TREE, "flat": T5D_SPLIT_FLAT}
 
 _GOLDEN = 0x9E3779B97F4A7C15
 _MASK = 0xFFFFFFFFFFFFFFFF
@@ -161,7 +171,7 @@ class GeneratorConfig:
 
     variant: str = "Standard"
     start_fen: tuple[str, ...] | None = None  # a custom start (5DFEN boards) instead of ``variant``'s
-    split: str = "ply"  # D2: "ply" or "tree" (module docstring)
+    split: str = "ply"  # D2: "ply", "tree" or "flat" (module docstring)
     playouts: int = 800  # the full search's cap (a PLACEHOLDER)
     batch_size: int = 8
     cap_turns: int = 6  # I11 (0: none)
@@ -180,8 +190,7 @@ class GeneratorConfig:
     def validate(self) -> None:
         if self.split not in SPLITS:
             raise ValueError(
-                f"split must be one of {sorted(SPLITS)}: the flat form writes no policy target until its per-board "
-                "head and target exist (spec issue 234(b))"
+                f"split must be one of {sorted(SPLITS)} (the enumerating whole-turn arm, 'turn', is retired: D2's flat form replaced it)"
             )
         if self.playouts < 1 or self.batch_size < 1 or self.max_actions < 1:
             raise ValueError("playouts, batch_size and max_actions must be positive")
@@ -264,12 +273,23 @@ def candidate_index(position: Position) -> dict[tuple[int, ...], int]:
     return {tuple(int(x) for x in row.tolist()): i for i, row in enumerate(position.moves)}
 
 
-def children_record(children: list[RootChild], index: dict[tuple[int, ...], int]) -> Children:
-    """The root children as I15's columns; each child's candidate index (-1: submit)."""
+def turn_moves(children: list[RootChild]) -> np.ndarray:
+    """D2's flat form: the root children's turns, their moves concatenated in child order
+    (``MOVE_DTYPE``; record version 2's ``turn_moves``)."""
+    rows = [_move_key(m) for c in children for m in c.moves]
+    return np.array(rows, dtype=MOVE_DTYPE) if rows else np.zeros(0, dtype=MOVE_DTYPE)
+
+
+def children_record(children: list[RootChild], index: dict[tuple[int, ...], int], *, flat: bool = False) -> Children:
+    """The root children as I15's columns; each child's candidate index (-1: submit; -2: a whole turn,
+    D2's flat form - its moves in ``turn_moves``, ``turn_length`` each)."""
     cand = []
     for c in children:
+        if flat:
+            cand.append(CANDIDATE_TURN)
+            continue
         if c.submit:
-            cand.append(-1)
+            cand.append(CANDIDATE_SUBMIT)
             continue
         if len(c.moves) != 1:
             raise ValueError("a root child of the board-move split plays one move")
@@ -297,6 +317,7 @@ def children_record(children: list[RootChild], index: dict[tuple[int, ...], int]
         network_error=[c.network_error for c in children],
         lo=[c.lo for c in children],
         hi=[c.hi for c in children],
+        turn_length=[len(c.moves) if flat else 0 for c in children],
     )
 
 
@@ -392,7 +413,11 @@ def _visit_shares(search: Search) -> dict[tuple, float]:
     total = float(sum(c.visits for c in children))
     if total <= 0:
         return {}
-    return {(("submit",) if c.submit else _move_key(c.moves[0])): c.visits / total for c in children if c.visits > 0}
+
+    def key(c: RootChild) -> tuple:
+        return ("submit",) if c.submit else tuple(_move_key(m) for m in c.moves)  # a whole turn under the flat form
+
+    return {key(c): c.visits / total for c in children if c.visits > 0}
 
 
 def _kl_shares(now: dict, before: dict) -> float:
@@ -454,6 +479,7 @@ def generate_game(
     t0 = time.perf_counter()
     relations = relation_bits(relations_for(net_cfg))
     regs = dict(regs_per_board=net_cfg.regs_per_board, global_regs=net_cfg.global_regs)
+    flat = cfg.split == "flat"
     game = Game.variant(cfg.variant) if cfg.start_fen is None else Game.from_fen(list(cfg.start_fen))
     start = game.info()
     start_boards = [fen for _, _, fen in game.snapshot().boards] if cfg.start_fen is not None else []
@@ -521,6 +547,7 @@ def generate_game(
                 children = search.children()
                 best = search.choose_by_visits(0.0, 0.5)
                 index = candidate_index(position)
+                playable = playable_boards(game, position)
                 decisions.append(
                     DecisionRecord(
                         decision=d,
@@ -561,7 +588,11 @@ def generate_game(
                         boards=np.stack([position.state.timeline, position.state.half_turn], axis=1),
                         candidates=position.moves,
                         raw_logits=raw.policy_logits,
-                        children=children_record(children, index),
+                        children=children_record(children, index, flat=flat),
+                        flat=flat,
+                        playable=playable,
+                        raw_leave_logits=raw.board_logits,
+                        turn_moves=turn_moves(children) if flat else None,
                     )
                 )
                 if keep_positions:
@@ -573,6 +604,12 @@ def generate_game(
                     end, winner = "resign", 1 - position.acting_player
                     break
                 child = children[pick]
+                if flat:  # D2's flat form: the whole turn, then its submission
+                    for m in child.moves:
+                        game.apply(m)
+                        action.append(m)
+                    game.submit()
+                    break
                 if child.submit:
                     game.submit()
                     break
@@ -647,6 +684,16 @@ def generate_game(
         d.prior_to_target_kl = kl
     header["target_config"] = target_config.to_dict()
     return GeneratedGame(record=record, actions=actions, positions=positions, targets=targets, seconds=time.perf_counter() - t0)
+
+
+def playable_boards(game: Game, position: Position) -> np.ndarray:
+    """The acting player's playable boards at the game's state (L5; the expansion's ``playable``), in
+    the network input's board order - the boards D2's flat form gives a distribution."""
+    x = game.expand(square_features="none")
+    keys = np.stack([position.state.timeline, position.state.half_turn], axis=1)
+    if not np.array_equal(np.stack([x.timeline, x.half_turn], axis=1), keys):
+        raise RuntimeError("the expansion's boards are not the network input's")
+    return np.asarray(x.playable, dtype=bool).copy()
 
 
 def board_range(n_boards: int, ranges: tuple[int, ...]) -> str:
@@ -738,6 +785,11 @@ def replay_positions(
             out.append(pos)
             if d.played_child < 0:
                 break
+            if d.flat:  # D2's flat form: the turn's moves, then its submission
+                for m in d.turn(d.played_child):
+                    game.apply(Move.from_record(m))
+                game.submit()
+                continue
             k = int(d.children.candidate[d.played_child])
             if k < 0:
                 game.submit()
@@ -769,9 +821,11 @@ __all__ = [
     "mix",
     "move_temperature",
     "network_info",
+    "playable_boards",
     "replay_positions",
     "resign_enabled",
     "root_temperature",
     "root_position",
     "search_parameters",
+    "turn_moves",
 ]
