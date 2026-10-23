@@ -57,9 +57,8 @@ from dataclasses import dataclass
 import torch
 from torch.nn.attention.flex_attention import BlockMask, flex_attention
 
-from .attention import AttnContext, _as4d, _spatial_free, _time_rotated, _widened_k, _widened_q
+from .attention import AttnContext, _as4d, _spatial_free, _time_rotated, _widened_k, _widened_q, quantised_operands
 from .displacement import pair_entry
-from .rope import apply_rope
 from .state import TOKEN_BOARD_REGISTER, TOKEN_GLOBAL_REGISTER, TOKEN_PAD, TOKEN_SQUARE
 from .structure import MASK_ROLES
 
@@ -353,10 +352,10 @@ def attention_flex(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, ctx: AttnC
         )
     bsz, n_heads, length, dh = q.shape
     cd = ctx.compute_dtype
+    q, k, v, qr, kr = quantised_operands(q, k, v, ctx)  # G2's operands under ctx.quant, as every path takes them
     inp = ScoreInputs.from_context(ctx, n_heads, q)
     score_mod, mask_mod = make_score_mod(inp), make_mask_mod(inp)
     block_mask = board_block_mask(ctx, n_heads, block_size, mask_mod)
-    qr, kr = apply_rope(q, ctx.cos, ctx.sin), apply_rope(k, ctx.cos, ctx.sin)
     sf = _spatial_free(ctx)
     lb = ctx.body_len
     global_free = lb < length  # position-free global registers (B8)

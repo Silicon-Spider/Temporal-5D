@@ -27,8 +27,18 @@ The build rules (spec section 15.1) decide what else appears here:
   capacity arm L24-ff12 (F2, provisional) as the named preset ``"L24-ff12"``.
 * **Items of later stages** have their flag here so the config names every switch, but
   enabling one raises ``NotImplementedError`` until its stage lands: piece-centric
-  tokenisation (A5), the history window (C5/C7, provisional; its code waits on the |E|
-  verdict, M7) and FP8 attention (G2, provisional; no FP8 kernels on CPU).
+  tokenisation (A5) and the history window (C5/C7, provisional; its code waits on the |E|
+  verdict, M7).
+* **G2's 8-bit trunk** (provisional, decided by 6w; section 10.2) is behind its flag, off:
+  ``trunk_quant="fp8_e4m3"`` fake-quantises the trunk's matrix multiplications - the six
+  projections of every block (weights per output channel, inputs per token) and, with
+  ``trunk_quant_attention``, the attention's Q, K (after RoPE) and V per token and head - in
+  FP8 E4M3 emulated on CPU (``quant.py``: numerics, never speed - M19); the heads, RoPE, the
+  embeddings, the norms, smolgen and the score biases are never quantised. Its gradient is
+  straight-through, so G8's QAT hook (``train.trainer.apply_qat``) trains the same function.
+  ``"none"`` is the network bit for bit as before the flag existed. The format's unstated
+  details - the scale rule, weight scale granularity, whether attention is included, P's
+  precision - are placeholders (spec issue 238).
 * **Stage N3** adds the attention scope (``attn_scope``): ``"dense"`` (C1, the default -
   build dense first) or ``"block_causal"`` (C17 and C19, committed rows of a deferred
   configuration, C2 - built because section 15.2's equivalence suite and section 15.3's
@@ -125,6 +135,8 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+
+from .quant import SCALE_RULES, TRUNK_QUANT_FORMATS, WEIGHT_SCALES
 
 #: Named capacity presets (section 9.2's ladder). "F1" is the committed v1 network;
 #: "L24-ff12" is F2's larger arm (provisional; section 9.2's ~44M with heads is the count
@@ -756,11 +768,29 @@ class NetConfig:
     #: C15 adopts FP8 K/V as "obeying section 10.2", which holds for an FP8 trunk (G2, not
     #: built), not for a BF16 trunk read through an FP8 cache it was not trained on.
     frozen_kv_format: str = "match"
+    #: G2's 8-bit trunk (provisional, gate 6w; ``quant.py``): "none" (default - G1's BF16 or FP32
+    #: trunk, bit for bit) or "fp8_e4m3": the trunk's matrix multiplications through FP8 E4M3,
+    #: emulated (fake quantisation, straight-through gradients - G8's QAT trains it). The
+    #: heads, RoPE, embeddings and norms never are (section 10.2, section 8.3).
+    trunk_quant: str = "none"
+    #: Under ``trunk_quant``: whether attention's matmuls are quantised too - their Q, K (after
+    #: FP32 RoPE) and V operands per token and head (``quant.AttnQuant``); False quantises the six
+    #: projections only. PLACEHOLDER (issue 238): section 10.2 says "attention included", but no
+    #: inference path is pinned; the cached path refuses True (``cache.CachedEvaluator``: its
+    #: frozen boards rotate in their own frame, so post-RoPE rounding differs from the full pass).
+    trunk_quant_attention: bool = True
+    #: Under ``trunk_quant``: how a slice's scale is chosen (``quant.SCALE_RULES``): "pow2" - absmax
+    #: / 448 rounded up to a power of two, exact in BF16 - or "absmax". PLACEHOLDER (issue 238).
+    trunk_quant_scale: str = "pow2"
+    #: Under ``trunk_quant``: the weights' scale granularity (``quant.WEIGHT_SCALES``): one per
+    #: output channel or one per tensor. Activations always take one per token (per token and head
+    #: in attention): per-tensor or per-batch dynamic scales would make an evaluation depend on the
+    #: rest of its batch (C19-C21). PLACEHOLDER (issue 238).
+    trunk_quant_weight_scale: str = "channel"
 
     # --- later stages: named here, built there (enabling raises NotImplementedError) ---
     piece_centric: bool = False  # A5 (prototype, committed-class): not built in N1-N3
     history_window: bool = False  # C5/C7 (provisional): parked until the |E| verdict (M7)
-    fp8_attention: bool = False  # G2 (provisional): no FP8 kernels on CPU
 
     # -- construction --
 
@@ -839,6 +869,8 @@ class NetConfig:
             raise ValueError("rope_ranges must be 4 positive numbers")
         if self.trunk_dtype not in ("bf16", "fp32"):
             raise ValueError("trunk_dtype must be 'bf16' or 'fp32'")
+        if self.ffn_ratio < 1:
+            raise ValueError("ffn_ratio must be a positive integer (F1's 8x is a parameter: ablation 5 tests 2x)")
         if not self.norm_eps > 0:
             raise ValueError("norm_eps must be positive")
         if self.attn_impl not in ATTN_IMPLS:
@@ -932,13 +964,15 @@ class NetConfig:
             ("frozen_features", FROZEN_FEATURES),
             ("supersession_scope", SUPERSESSION_SCOPES),
             ("frozen_kv_format", FROZEN_KV_FORMATS),
+            ("trunk_quant", TRUNK_QUANT_FORMATS),
+            ("trunk_quant_scale", SCALE_RULES),
+            ("trunk_quant_weight_scale", WEIGHT_SCALES),
         ):
             if getattr(self, name) not in options:
                 raise ValueError(f"{name} must be one of {options}")
         for name, stage in (
             ("piece_centric", "a later stage (A5)"),
             ("history_window", "a later stage, after the |E| verdict (C5, C7, M7)"),
-            ("fp8_attention", "a later stage (G2)"),
         ):
             if getattr(self, name):
                 raise NotImplementedError(f"{name} is built in stage {stage}, not in N1-N3")

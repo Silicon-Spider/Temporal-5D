@@ -71,6 +71,7 @@ from ..engine.game import Game, relation_bits
 from ..engine.netplay import turn_start_verdict, write_record
 from ..engine.search import RootChild, Search, search_params
 from ..net.config import NetConfig
+from ..net.quant import TRUNK_QUANT_FIELDS, trunk_format
 from .records import RECORD_VERSION, Children, DecisionRecord, GameRecord, network_id, params_dict
 from .targets import GameTargets, TargetConfig, build_targets
 
@@ -300,15 +301,27 @@ def children_record(children: list[RootChild], index: dict[tuple[int, ...], int]
 
 
 def network_info(evaluator, net_cfg: NetConfig, *, seed: int | None = None, swa_snapshots: int | None = None) -> dict:
-    """The record's ``network`` condition for an evaluator with a ``model`` (its weights' hash);
-    ``swa_snapshots`` None: the count a published network carries (``Trainer.publish`` sets
-    ``model.swa_snapshots``), else 0."""
+    """The record's ``network`` condition for an evaluator with a ``model`` (its weights' hash,
+    its trunk format folded in when it has one - ``records.network_id``); ``swa_snapshots`` None:
+    the count a published network carries (``Trainer.publish`` sets ``model.swa_snapshots``), else
+    0. The trunk format (G2's ``trunk_quant*``) is the evaluated network's own, never the caller's:
+    a ``net_cfg`` whose format disagrees with the network's is refused (QAT switches a network's
+    format in place - ``train.trainer.apply_qat`` - so a caller's configuration can lag it)."""
     model = getattr(evaluator, "model", None)
     if swa_snapshots is None:
         swa_snapshots = getattr(model, "swa_snapshots", 0) if model is not None else 0
+    config = asdict(net_cfg)
+    own = getattr(model, "cfg", None)
+    if isinstance(own, NetConfig):
+        if trunk_format(own) != trunk_format(net_cfg):
+            raise ValueError(
+                f"the record's network condition: the evaluated network's trunk format is {trunk_format(own)}, the "
+                f"configuration given says {trunk_format(net_cfg)} (register G2, G8; I15)"
+            )
+        config.update({f: getattr(own, f) for f in TRUNK_QUANT_FIELDS})
     return {
         "id": None if model is None else network_id(model),
-        "config": asdict(net_cfg),
+        "config": config,
         "seed": seed,
         "swa_snapshots": int(swa_snapshots),
     }
