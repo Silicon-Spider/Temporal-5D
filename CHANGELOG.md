@@ -10,6 +10,53 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-23 - MT-04: cached = dense on every named variant the engine sets up
+
+`python/tests/engine/test_cached_variants.py` (new; tests only - no code changed): section
+15.2's protocol names "every variant" among its adversarial constructions, and cached = dense
+had run on real positions of only three games. Now every variant of the engine's table (all 16,
+`engine/src/variants.cpp`) is played at random from its start - two seeds, travel favoured for
+White so that timelines branch and some go inactive, a move after which the action could neither
+go on nor be submitted passed over (Timeline Tactician's first action, T13) - and every state is
+evaluated: turn starts, mid-action, shifted (some with optional moves made after the shift) and
+submitted. Boards 3x3 to 8x8, odd and even starts, the T0 board, the royal queen and princess,
+brawns and unicorns (no variant holds a dragon); lineage only (C23).
+
+- `test_cached_equals_full_pass_on_every_variant` (16 variants x 2 configurations): the
+  positions of a game evaluated incrementally in one epoch opened at a mid-game root, the store
+  shared, against `reference_output` - under both of C20's readings (`causal_past` over the whole
+  game; `past_and_epoch_history` with the root's frozen boards as the epoch's history). The
+  configurations: the v1's (B15's table, B16's status key biases, A6's turn-state counts and A7's
+  frame - all defaults; A7 cached per perspective, issue 303), and the step-1 one with A8's
+  board-layout embedding, D4's reply head and D9's optimistic policy on (D3's heads and D4's soft
+  policy are on in both). FP32, 2 layers, `test_cache.py`'s `_close` (2e-5 trunk, 1e-4 heads).
+- `test_step_api_cached_equals_dense_on_every_variant` (16): the C step API's own leaves
+  (`run_search`), tree and graph mode (C11), the search's evaluation cache off, through
+  `CachedNetworkEvaluator` against `NetworkEvaluator(scope="block_causal")` - and with C3's root
+  refresh against the two-level reference; every leaf met twice is bitwise identical.
+  `test_two_orders_of_one_action_through_the_step_api` (2): at roots with several boards to move,
+  the tree search reaches states by two orders of moves (each a leaf of its own) and the graph
+  search meets them as transposition hits - bitwise identical, in both epochs (EQ-04's
+  engine-side case).
+- `test_every_n2_switch_with_relations_on_three_variants` (7 flag sets x 3 variants): B5,
+  B9-B12, B15's no-table arm, B17 and A8 with the structure, each network's positions converted
+  with `relations_for` - attack, defence, pin, x-ray and check edges all present (engine ABI
+  round 3).
+- `test_f1_bf16_cached_on_three_variants` (slow, 3): F1 block-causal in BF16 on Turn Zero,
+  Reversed Royalty and Timeline Strategos, at `test_network.py`'s BF16 bounds.
+
+All 60 green: no variant breaks cached = dense. Largest gaps (the module prints them under
+`-s`; in `docs/MEASUREMENTS.md`): FP32 trunk 1.9e-6, heads 1.7e-6, step-API evaluations
+1.4e-6; BF16 trunk RMS 2.0e-3 / max 1.2e-2, policy 7.2e-3, value 1.3e-3 - the gaps
+`test_network.py` and `test_cache.py` record. Wall time of the file: 603 s serial on the shared
+machine at 100% CPU (other lanes' engine tests); the same cases ran 3-6x faster earlier in the
+session on a less loaded machine. Spec issues 520-539 and edits 360-379 (this session's
+block): none used.
+
+Spec: §15.2 rows 1, 4, 5 and 6 and its protocol ("every variant"); register C2, C17, C19, C20,
+C23, C3, C11, B15, B16, A6, A7, A8 - tested as built, no decision changed; no part of the spec
+describes the test file, and no edit is proposed.
+
 ### 2026-10-23 - Engine ABI round 3 review fixes: the exchange label's recaptures read where they are made; the Q6 fallback, mid-action placement, the pin's royal half, the C API's bits and labels and every label reading tested; the labels' cost measured
 
 Two reviews of engine ABI round 3 (5d8b12b, 0986472): one of the rules (probes on hand-built

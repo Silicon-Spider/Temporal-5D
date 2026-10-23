@@ -1263,3 +1263,39 @@ generation of the occupant's side's moves per replayed square) and halves the sq
 1 (the label no longer means "attacked" there). Pin and check add 0.0-0.2 ms to an expansion
 of 0.04-0.2 ms - up to about double, small against the labels. A training replay labelling
 every decision pays the labels' cost once per decision.
+
+### Cached = dense on every engine variant (MT-04) - the gaps met (numerics; no threshold, no verdict)
+
+**What it is.** The largest differences between the cached path (`python/t5d/net/cache.py`) and
+the dense block-causal pass it must equal (`reference_output`; through the C step API,
+`NetworkEvaluator(scope="block_causal")`, or with a root refresh the two-level reference) on real
+engine positions of every named variant - what `python/tests/engine/test_cached_variants.py`
+asserts against, recorded so that the next re-measurement of §15.2's tolerances (EQ-01) has the
+real-variant figures beside the synthetic ones. No threshold applies: the bounds are
+`tests/net/test_cache.py`'s and `tests/engine/test_network.py`'s.
+
+**Conditions.** 2026-10-23, machine `dev-r`, PyTorch 2.13.0+cpu, Python 3.14.7, the engine library
+built Release in `lane/gate` (main 710921a); one position per evaluation; random weights at
+initialisation scale; window none; lineage reading (C23). Positions: seeded pseudo-legal random
+play from each of the engine's 16 variants (`_walk`: seeds 0 and 1, to the first turn start with
+16 boards, every state of every action), the store shared along each game in one epoch opened a
+third of the way in; the step API's leaves from a random-play root with 8 or more boards, 16
+playouts per search (64 in the transposition test), tree and graph mode, evaluation cache off.
+FP32: 2 layers; the v1 configuration and the step-1 one (A8, D4's reply head, D9 on), both C20
+readings; seven N2 flag sets with `relations_for`'s relations on three variants. BF16: F1 (16
+layers, block-causal), model seed 0, every second state of seed 3's play on Turn Zero, Reversed
+Royalty and Timeline Strategos.
+
+| Class | Cases | Largest gap | Bound |
+|---|---|---|---|
+| FP32 trunk, cached vs one full pass | 32 variant-configurations x 2 seeds x 2 readings; 7 N2 sets x 3 variants | 1.91e-6 (max abs) | 2e-5 |
+| FP32 heads (value, WDL, submit readout, policy, per-board) | the same | 1.67e-6 (the N2 sets alone 1.37e-6) | 1e-4 |
+| FP32 evaluations through the step API (policy, WDL, categorical logits) | 16 variants + 2, x causal / root refresh x tree / graph | 1.43e-6 | 1e-4 |
+| Leaves met twice (transpositions; the second search's shared leaves) | the same | 0 (bitwise) | bitwise |
+| BF16 trunk, cached vs the BF16 full pass | 3 variants | RMS 1.97e-3, max 1.15e-2 | RMS 8e-3, max 5e-2 |
+| BF16 policy logits / value logits | 3 variants | 7.18e-3 / 1.32e-3 | 3e-2 / 5e-3 |
+
+*Read.* The real variants' FP32 gaps are the summation-order flips `test_cache.py` records on
+synthetic trees (under 2.4e-6 after 16 layers); the BF16 gaps match `test_network.py`'s on the
+'cross_timeline' record (RMS 2.0e-3 / max 1.4e-2, policy 8.0e-3, value 1.1e-3) - the value's
+1.32e-3 a little above that figure, 3.8x under its bound.
