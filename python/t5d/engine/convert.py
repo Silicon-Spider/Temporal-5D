@@ -231,6 +231,9 @@ class Position:
     relations: tuple[str, ...]  # the typed relations ``state.edges`` holds besides the move graph
     scope: EngineScope | None
     present_matches: bool = True  # False only under strict=False (see PresentMismatch)
+    #: The per-square labels' targets (``Game.square_labels().targets()``: boards x cells x 8,
+    #: NaN undecided), when asked for (``train.selfplay.replay_positions``); None otherwise.
+    square_labels: np.ndarray | None = None
 
     @property
     def move_count(self) -> int:

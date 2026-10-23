@@ -54,7 +54,8 @@ I15), not this module's.
   the auxiliary gradient grows with N. Positions are then averaged with equal weight.
 * **Missing targets** (M21's record-derived targets, ``train.targets``): a NaN WDL row (an unscored
   game), a NaN moves-left (a censored game) and a NaN per-board or per-square label (tactical
-  volatility until proofs exist; the per-square labels until their generator) are no target - each
+  volatility until proofs exist; a per-square label a mate search left undecided, or every one of a
+  row whose position carries none) are no target - each
   loss averages over the targets present.
 
 * **D9's optimistic policy** (a prototype behind ``NetConfig.optimistic_policy``; section 8.1):
@@ -101,7 +102,7 @@ class Targets:
     short_term: torch.Tensor
     moves_left: torch.Tensor  # (B,) turns left (one player's action each, D4), >= 0; NaN: no target (a censored game)
     board: torch.Tensor  # (B, Nmax, 3) in {0, 1}; NaN: no label (tactical volatility until proofs exist)
-    square: torch.Tensor  # (B, L, n_square_labels) in {0, 1}; NaN: no label (no generator yet)
+    square: torch.Tensor  # (B, L, n_square_labels) in {0, 1}; NaN: no label (the engine's generator, train.targets)
     effort: torch.Tensor  # (B,) bin index, -1 where there is no target (skipped too where not ``full_search``)
     #: (B,) the policy target's mass on the submit action (D8; ``policy`` and ``submit``
     #: together are one distribution over the decision's actions); None: none anywhere.

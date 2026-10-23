@@ -59,11 +59,11 @@ from __future__ import annotations
 import math
 import time
 from collections.abc import Callable
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 
 import numpy as np
 
-from ..engine.capi import MOVE_DTYPE, T5D_LEGALITY_ILLEGAL, T5D_LEGALITY_LEGAL, T5D_SPLIT_BOARD_MOVE, T5D_SPLIT_TREE
+from ..engine.capi import DEFAULT_MATE_NODES, MOVE_DTYPE, T5D_LEGALITY_ILLEGAL, T5D_LEGALITY_LEGAL, T5D_SPLIT_BOARD_MOVE, T5D_SPLIT_TREE
 from ..engine.convert import Position, relations_for
 from ..engine.evaluator import Evaluation, Evaluator, policy_source, run_search
 from ..engine.expansion import Move
@@ -671,13 +671,24 @@ def false_resign_report(records, ranges: tuple[int, ...] = ResignConfig().ranges
     return out
 
 
-def replay_positions(record: GameRecord, net_cfg: NetConfig | None = None, *, window_k: int | None = None) -> list[Position]:
+def replay_positions(
+    record: GameRecord,
+    net_cfg: NetConfig | None = None,
+    *,
+    window_k: int | None = None,
+    square_labels: bool = False,
+    mate_nodes: int = DEFAULT_MATE_NODES,
+) -> list[Position]:
     """Each decision's network input rebuilt from the record alone (I15: "later architectures
     retrained on the archive"): the start replayed through the engine, every decision's state
     expanded with the recorded window, relations and legal-moves filter under the recorded
     legality budget, its candidate moves checked against the record's, then the recorded child
     played. ``net_cfg``: the register counts and relations to build (None: the record's) - a
     trainer passes its own network's; ``window_k``: the history window (None: the record's).
+    ``square_labels``: each position also carries its per-square labels' targets
+    (``Position.square_labels``; D4), re-derived from the replayed state by the engine's
+    generator (``Game.square_labels``, each mate search under ``mate_nodes``) - never stored in
+    the record.
     Raises ``ValueError`` where the record and the engine disagree, the ruleset and the rules
     encoding included (the engine version is not compared: a rebuild that differs shows in the
     candidate moves and the final state, both checked - issue 234(f))."""
@@ -709,6 +720,8 @@ def replay_positions(record: GameRecord, net_cfg: NetConfig | None = None, *, wi
             )
             if pos.moves.tobytes() != d.candidates.tobytes():
                 raise ValueError(f"decision {d.decision}: the rebuilt input's candidate moves are not the record's")
+            if square_labels:
+                pos = replace(pos, square_labels=game.square_labels(mate_nodes=mate_nodes).targets())
             out.append(pos)
             if d.played_child < 0:
                 break

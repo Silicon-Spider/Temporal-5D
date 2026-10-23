@@ -443,6 +443,53 @@ T5D_API t5d_status t5d_game_expand(t5d_game* game, const t5d_expand_options* opt
 /* The game's multiverse as a t5d_state (fingerprint, canonical string, boards). */
 T5D_API t5d_status t5d_game_state(const t5d_game* game, t5d_state** out);
 
+/* ---- the per-square labels (engine ABI round 3; register D4, M20, A7) ----------
+ * The auxiliary targets of section 12.4's per-square row ("deep attack facts
+ * beyond the section 6 input bias"), exact from the rules engine: for every
+ * square of every board (the canonical order, cells rank * width + file), the
+ * eight labels of python/t5d/net/heads.py SQUARE_LABELS, in its order, relative
+ * to the ACTING player (A7: "ours" its, "theirs" the opponent's). Each is 0 or
+ * 1, or T5D_LABEL_UNKNOWN where a mate search stopped on its budget. What each
+ * means - each a placeholder reading - is t5d/labels.hpp's and the engine
+ * README's ("Per-square labels"). */
+
+#define T5D_SQUARE_LABEL_COUNT 8
+#define T5D_LABEL_EXCHANGE_LOSES_OCCUPANT 0
+#define T5D_LABEL_REACHABLE_IN_TWO_OURS 1
+#define T5D_LABEL_REACHABLE_IN_TWO_THEIRS 2
+#define T5D_LABEL_ARRIVAL_GIVES_CHECK_OURS 3
+#define T5D_LABEL_ARRIVAL_GIVES_CHECK_THEIRS 4
+#define T5D_LABEL_ROYAL_ZONE_OURS 5
+#define T5D_LABEL_ROYAL_ZONE_THEIRS 6
+#define T5D_LABEL_ARRIVAL_GIVES_MATE 7
+#define T5D_LABEL_UNKNOWN 255
+
+typedef struct t5d_label_options {
+  uint64_t mate_nodes; /* each mate search's node budget (arrival_gives_mate); UINT64_MAX
+                          (T5D_NO_LIMIT): exact. NULL options: 200000 (a placeholder) */
+} t5d_label_options;
+
+typedef struct t5d_square_labels {
+  size_t board_count;
+  int32_t width;
+  int32_t height;
+  int32_t label_count;   /* T5D_SQUARE_LABEL_COUNT */
+  int32_t acting_player; /* 0 white, 1 black: whose "ours" */
+  const uint8_t* labels; /* board_count x (width * height) x label_count */
+  uint64_t mate_candidates;     /* the moves whose mate was searched (submission legal, check) */
+  uint64_t mate_unknown;        /* ... and those the budget left undecided */
+  uint64_t first_moves_ours;    /* the moves each view read (see t5d/labels.hpp) */
+  uint64_t first_moves_theirs;
+  uint64_t second_moves_ours;
+  uint64_t second_moves_theirs;
+} t5d_square_labels;
+
+/* The per-square labels of the game's current state into the handle's buffer:
+ * `out->labels` stays valid until the next t5d_game_square_labels or
+ * t5d_game_destroy on the same handle. `options` may be NULL. */
+T5D_API t5d_status t5d_game_square_labels(t5d_game* game, const t5d_label_options* options,
+                                          t5d_square_labels* out, char** error);
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif

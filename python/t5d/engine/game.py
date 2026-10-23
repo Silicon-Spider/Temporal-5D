@@ -33,9 +33,13 @@ from collections.abc import Iterable, Iterator, Sequence
 from ctypes import byref, c_char_p, c_int32, c_size_t, c_uint64, c_void_p
 from dataclasses import dataclass
 
+import numpy as np
+
 from .capi import (
     BUILT_RELATIONS,
+    DEFAULT_MATE_NODES,
     RESERVED_RELATIONS,
+    T5D_LABEL_UNKNOWN,
     T5D_LEGAL,
     T5D_NO_LIMIT,
     T5D_PARITY_EVEN,
@@ -46,9 +50,11 @@ from .capi import (
     T5D_TO_MOVE_INFER,
     T5D_TO_MOVE_WHITE,
     CExpansion,
+    CSquareLabels,
     ExpandOptions,
     Fingerprint,
     GameSummary,
+    LabelOptions,
     Library,
     StateInfo,
     char_array,
@@ -471,5 +477,55 @@ class Game:
         created = self.created_timelines()
         return to_position(x, regs_per_board=regs_per_board, global_regs=global_regs, created_timelines=created, strict=strict)
 
+    # -- the per-square labels --
 
-__all__ = ["Game", "GameInfo", "RecordProgress", "StateSnapshot", "relation_bits"]
+    def square_labels(self, *, mate_nodes: int = DEFAULT_MATE_NODES) -> SquareLabels:
+        """The per-square labels of the current state (``t5d_game_square_labels``; register D4,
+        M20, A7): every square of every board, the eight labels of ``heads.SQUARE_LABELS`` in its
+        order, relative to the acting player. ``mate_nodes``: each mate search's node budget
+        (``T5D_NO_LIMIT``: exact) - a square the budget left undecided is ``T5D_LABEL_UNKNOWN``.
+        Copied out at once."""
+        options = LabelOptions(int(mate_nodes))
+        out = CSquareLabels()
+        with self._lock:
+            self._lib.call("t5d_game_square_labels", self._live(), byref(options), byref(out), error=True)
+            cells = int(out.width) * int(out.height)
+            n = int(out.board_count) * cells * int(out.label_count)
+            flat = np.ctypeslib.as_array(out.labels, shape=(n,)).copy() if n else np.zeros(0, dtype=np.uint8)
+            return SquareLabels(
+                labels=flat.reshape(int(out.board_count), cells, int(out.label_count)),
+                width=int(out.width),
+                height=int(out.height),
+                acting_player=int(out.acting_player),
+                mate_candidates=int(out.mate_candidates),
+                mate_unknown=int(out.mate_unknown),
+                first_moves=(int(out.first_moves_ours), int(out.first_moves_theirs)),
+                second_moves=(int(out.second_moves_ours), int(out.second_moves_theirs)),
+            )
+
+
+@dataclass(frozen=True, eq=False)
+class SquareLabels:
+    """``t5d_square_labels``, copied out: ``labels`` ``(boards, width * height, 8)`` uint8 - 0, 1 or
+    ``T5D_LABEL_UNKNOWN`` - boards in the engine's canonical order (the network's storage order,
+    ``convert``), cells ``y * W + x``, labels in ``heads.SQUARE_LABELS``' order, "ours" the acting
+    player's (A7)."""
+
+    labels: np.ndarray
+    width: int
+    height: int
+    acting_player: int
+    mate_candidates: int
+    mate_unknown: int
+    first_moves: tuple[int, int]
+    second_moves: tuple[int, int]
+
+    def targets(self) -> np.ndarray:
+        """The labels as training targets: float64, NaN where undecided (no target - the losses'
+        mask)."""
+        out = self.labels.astype(np.float64)
+        out[self.labels == T5D_LABEL_UNKNOWN] = np.nan
+        return out
+
+
+__all__ = ["Game", "GameInfo", "RecordProgress", "SquareLabels", "StateSnapshot", "relation_bits"]

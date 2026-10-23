@@ -1,11 +1,12 @@
 // The two views of a decision state (t5d/views.hpp): the pin and check
-// relations of the expansion (t5d/expand.hpp, (e); register B11), on positions
-// built by hand. Every
+// relations of the expansion (t5d/expand.hpp, (e); register B11) and the
+// per-square labels (register D4, M20, A7), on positions built by hand. Every
 // expectation is worked out here from the rules reference (docs/rules/README.md)
-// and the readings t5d/views.hpp and t5d/expand.hpp name (build-log spec issues
-// 172-174) - board by board, square by square - never recorded from a run. Then, on random play,
+// and the readings t5d/labels.hpp names (build-log spec issues 172-176) - board
+// by board, square by square - never recorded from a run. Then, on random play,
 // the check relation against check detection itself (R1, H36: check edges from
-// the opponent exactly when in_check at a turn start).
+// the opponent exactly when in_check at a turn start) and the labels' own
+// invariants.
 
 #include <algorithm>
 #include <array>
@@ -24,8 +25,10 @@
 #include <vector>
 
 #include "t5d/board.hpp"
+#include "t5d/capi.h"
 #include "t5d/check.hpp"
 #include "t5d/expand.hpp"
+#include "t5d/labels.hpp"
 #include "t5d/views.hpp"
 #include "t5d/movegen.hpp"
 #include "t5d/multiverse.hpp"
@@ -98,6 +101,27 @@ Expansion expanded(const GameState& s, int moves_made = 0) {
   Expansion x;
   expand(s, o, x, moves_made);
   return x;
+}
+
+// The squares (board, name) on which a label is set.
+using Square = std::pair<int, std::string>;
+
+std::set<Square> labelled(const SquareLabels& l, int label, std::uint8_t value = 1) {
+  std::set<Square> out;
+  for (std::size_t b = 0; b < l.board_count; ++b) {
+    for (int c = 0; c < l.cells(); ++c) {
+      if (l.at(static_cast<int>(b), c, label) == value) out.insert({static_cast<int>(b), name_of(c)});
+    }
+  }
+  return out;
+}
+
+SquareLabels labels_of(const GameState& s) {
+  SquareLabels l;
+  SquareLabelOptions o;
+  o.mate_budget = SearchBudget::unlimited();
+  square_labels(s, o, l);
+  return l;
 }
 
 }  // namespace
@@ -294,4 +318,149 @@ TEST(views_check_edges_are_check_status_on_random_turn_starts) {
   std::printf("  [check] %d turn starts, %d in check\n", starts, checks);
   CHECK(starts > 100);
   CHECK(checks > 0);
+}
+
+// ---- the per-square labels -----------------------------------------------------------------
+
+TEST(labels_royal_zones_are_one_king_step_across_boards) {
+  // White to move; kings on e1 (White) and e8 (Black) of L0, and an empty L+1:
+  // the zone reaches the neighbouring timeline's board (one step along the
+  // timeline axis), not void.
+  const GameState s = state_of({timeline(0, 2, {board({"Ke1", "ke8"})}),
+                                timeline(1, 2, {empty_board()}, Colour::White, 1)});
+  const SquareLabels l = labels_of(s);
+  CHECK_EQ(l.acting_player, Colour::White);
+  const std::set<Square> ours = labelled(l, kRoyalZoneOurs);
+  const std::set<Square> expect_ours = {{0, "d1"}, {0, "e1"}, {0, "f1"}, {0, "d2"}, {0, "e2"},
+                                        {0, "f2"}, {1, "d1"}, {1, "e1"}, {1, "f1"}, {1, "d2"},
+                                        {1, "e2"}, {1, "f2"}};
+  CHECK(ours == expect_ours);
+  const std::set<Square> expect_theirs = {{0, "d8"}, {0, "e8"}, {0, "f8"}, {0, "d7"}, {0, "e7"},
+                                          {0, "f7"}, {1, "d8"}, {1, "e8"}, {1, "f8"}, {1, "d7"},
+                                          {1, "e7"}, {1, "f7"}};
+  CHECK(labelled(l, kRoyalZoneTheirs) == expect_theirs);
+}
+
+TEST(labels_reachable_in_two_on_one_board) {
+  // A lone white knight on a1: one move to b3 or c2; two (not one, not a1):
+  // from b3 c1 d2 d4 c5 a5, from c2 a3 b4 d4 e3 e1.
+  const GameState s = state_of({timeline(0, 2, {board({"Na1"})})});
+  const SquareLabels l = labels_of(s);
+  const std::set<Square> expect = {{0, "c1"}, {0, "d2"}, {0, "d4"}, {0, "c5"}, {0, "a5"},
+                                   {0, "a3"}, {0, "b4"}, {0, "e3"}, {0, "e1"}};
+  CHECK(labelled(l, kReachableInTwoOurs) == expect);
+  CHECK(labelled(l, kReachableInTwoTheirs).empty());
+  CHECK_EQ(l.stats.first_moves[0], std::uint64_t{2});
+}
+
+TEST(labels_reachable_in_two_through_time) {
+  // A white rook on (0, h2) a1 over an empty (0, h0): one move to a2-a8, b1-h1
+  // and back in time to (0, h0) a1; from (0, h0) a1 on along that board's file
+  // and rank; from (0, h2) b1 back in time to (0, h0) b1.
+  const GameState s = state_of({timeline(0, 0, {empty_board(), empty_board(), board({"Ra1"})})});
+  const SquareLabels l = labels_of(s);
+  const std::set<Square> two = labelled(l, kReachableInTwoOurs);
+  CHECK(two.count({0, "a5"}) == 1);   // (h0) a1 -> a5
+  CHECK(two.count({0, "b1"}) == 1);   // (h2) b1 -> (h0) b1
+  CHECK(two.count({0, "b5"}) == 0);   // three moves
+  CHECK(two.count({0, "a1"}) == 0);   // one move
+  CHECK(two.count({2, "b5"}) == 1);   // a1 -> b1 -> b5
+  CHECK(two.count({2, "a5"}) == 0);   // one move
+  CHECK(two.count({2, "a1"}) == 0);   // its own square
+  CHECK(two.count({1, "a1"}) == 0);   // Black's board: never a rook's destination
+}
+
+TEST(labels_arrival_gives_check_on_the_board_and_through_time) {
+  {
+    // The rook from a1 checks the king on h8 from a8 and from h1.
+    const GameState s = state_of({timeline(0, 2, {board({"Ra1", "kh8"})})});
+    const SquareLabels l = labels_of(s);
+    CHECK(labelled(l, kArrivalGivesCheckOurs) == std::set<Square>({{0, "a8"}, {0, "h1"}}));
+    CHECK(labelled(l, kArrivalGivesCheckTheirs).empty());
+  }
+  {
+    // The black king on White's history board (0, h0) e8: the rook from (0, h2)
+    // e1 checks it from (0, h2) e8 (back along the time axis) and from (0, h0)
+    // e1 (up the file).
+    const GameState s =
+        state_of({timeline(0, 0, {board({"ke8"}), empty_board(), board({"Re1"})})});
+    const SquareLabels l = labels_of(s);
+    CHECK(labelled(l, kArrivalGivesCheckOurs) == std::set<Square>({{2, "e8"}, {0, "e1"}}));
+  }
+  {
+    // The opponent's view: Black's rook on a8, read on the passed copy, checks
+    // the white king on h1 from h8 and from a1. Reported on the board passed.
+    const GameState s = state_of({timeline(0, 2, {board({"Kh1", "ra8"})})});
+    const SquareLabels l = labels_of(s);
+    CHECK(labelled(l, kArrivalGivesCheckTheirs) == std::set<Square>({{0, "h8"}, {0, "a1"}}));
+    CHECK(labelled(l, kArrivalGivesCheckOurs).empty());  // the king's moves check nothing
+  }
+}
+
+TEST(labels_exchange_loses_occupant) {
+  // White to move. The black knight on a5 is attacked by the rook on a1:
+  // undefended it is lost; defended by the pawn on b6 (in Black's view, the
+  // pawn on the board passed) the exchange loses the rook (500 for 300).
+  {
+    const GameState s = state_of({timeline(0, 2, {board({"Ra1", "na5"})})});
+    CHECK(labelled(labels_of(s), kExchangeLosesOccupant) == std::set<Square>({{0, "a5"}}));
+  }
+  {
+    const GameState s = state_of({timeline(0, 2, {board({"Ra1", "na5", "pb6"})})});
+    CHECK(labelled(labels_of(s), kExchangeLosesOccupant).empty());
+  }
+  {
+    // The white bishop on c3, attacked by the black knight on b5 (Black's view)
+    // and undefended, is lost; defended by the pawn on b2 it is not (300 for
+    // 300: nothing won).
+    const GameState s = state_of({timeline(0, 2, {board({"Bc3", "nb5"})})});
+    CHECK(labelled(labels_of(s), kExchangeLosesOccupant) == std::set<Square>({{0, "c3"}}));
+    const GameState t = state_of({timeline(0, 2, {board({"Bc3", "nb5", "Pb2"})})});
+    CHECK(labelled(labels_of(t), kExchangeLosesOccupant).empty());
+  }
+}
+
+TEST(labels_arrival_gives_mate_is_e4s_checkmate) {
+  // The back-rank mate: Ra8 mates the king on h8 behind its pawns (no board
+  // before h2: no escape through time). Rb8, Rc8, ... do not reach h8 - only
+  // a8 is a legal arrival that mates, and h1 checks nothing (h7 blocks).
+  const GameState s = state_of({timeline(0, 2, {board({"Ra1", "kh8", "pg7", "ph7"})})});
+  const SquareLabels l = labels_of(s);
+  CHECK(labelled(l, kArrivalGivesMate) == std::set<Square>({{0, "a8"}}));
+  CHECK_EQ(l.stats.mate_unknown, std::uint64_t{0});
+  CHECK_EQ(l.stats.mate_candidates, std::uint64_t{1});
+  // Without the g7 pawn the king escapes to g7: check, no mate.
+  const GameState t = state_of({timeline(0, 2, {board({"Ra1", "kh8", "ph7"})})});
+  CHECK(labelled(labels_of(t), kArrivalGivesMate).empty());
+}
+
+TEST(labels_arrival_gives_mate_left_unknown_by_a_spent_budget) {
+  const GameState s = state_of({timeline(0, 2, {board({"Ra1", "kh8", "pg7", "ph7"})})});
+  SquareLabels l;
+  SquareLabelOptions o;
+  o.mate_budget = SearchBudget::nodes(1);
+  square_labels(s, o, l);
+  CHECK(labelled(l, kArrivalGivesMate, kLabelUnknown) == std::set<Square>({{0, "a8"}}));
+  CHECK_EQ(l.stats.mate_unknown, std::uint64_t{1});
+}
+
+TEST(labels_names_are_the_networks_in_order) {
+  const std::array<std::string_view, kSquareLabelCount> names = {
+      "exchange_loses_occupant", "reachable_in_two_ours",      "reachable_in_two_theirs",
+      "arrival_gives_check_ours", "arrival_gives_check_theirs", "royal_zone_ours",
+      "royal_zone_theirs",        "arrival_gives_mate"};
+  for (int i = 0; i < kSquareLabelCount; ++i) {
+    CHECK_EQ(std::string_view(square_label_name(i)), names[static_cast<std::size_t>(i)]);
+  }
+  // The C API's ids are these.
+  CHECK_EQ(T5D_SQUARE_LABEL_COUNT, kSquareLabelCount);
+  CHECK_EQ(T5D_LABEL_EXCHANGE_LOSES_OCCUPANT, int{kExchangeLosesOccupant});
+  CHECK_EQ(T5D_LABEL_REACHABLE_IN_TWO_OURS, int{kReachableInTwoOurs});
+  CHECK_EQ(T5D_LABEL_REACHABLE_IN_TWO_THEIRS, int{kReachableInTwoTheirs});
+  CHECK_EQ(T5D_LABEL_ARRIVAL_GIVES_CHECK_OURS, int{kArrivalGivesCheckOurs});
+  CHECK_EQ(T5D_LABEL_ARRIVAL_GIVES_CHECK_THEIRS, int{kArrivalGivesCheckTheirs});
+  CHECK_EQ(T5D_LABEL_ROYAL_ZONE_OURS, int{kRoyalZoneOurs});
+  CHECK_EQ(T5D_LABEL_ROYAL_ZONE_THEIRS, int{kRoyalZoneTheirs});
+  CHECK_EQ(T5D_LABEL_ARRIVAL_GIVES_MATE, int{kArrivalGivesMate});
+  CHECK_EQ(int{T5D_LABEL_UNKNOWN}, int{kLabelUnknown});
 }
