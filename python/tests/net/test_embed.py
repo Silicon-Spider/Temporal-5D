@@ -63,11 +63,13 @@ def test_registers_get_type_and_not_a_square_embeddings():
     glob = x[kinds == TOKEN_GLOBAL_REGISTER]
     assert glob.shape[0] == 16 and torch.pdist(glob).min() > 1e-3, "each global register is distinct"
     # Global registers hold no board: identical whatever the boards carry - given the acting
-    # player (register D8, stage N5: its embedding is added to every global register - M20).
+    # player (register D8, stage N5: its embedding is added to every global register - M20) and
+    # the turn-state counts (register A6, likewise).
     other = collate([synthetic_state(77, 9)])
     acting = int(batch.acting_player[0])
     if int(other.acting_player[0]) != acting:
         other.acting_player = torch.tensor([acting])
+    other.turn_state = batch.turn_state.clone()
     assert torch.allclose(embed(other)[0][other.kind[0] == TOKEN_GLOBAL_REGISTER], glob)
     flipped = collate([synthetic_state(31, 4)])
     flipped.acting_player = 1 - flipped.acting_player

@@ -16,13 +16,34 @@ from dataclasses import dataclass, field, replace
 import torch
 
 from ..net.config import NetConfig
-from ..net.heads import effort_bin, value_to_twohot
+from ..net.heads import effort_bin
 from ..net.model import T5DNet, build_model
 from ..net.state import Batch, PositionState, collate
 from ..net.synthetic import synthetic_states
 from .losses import LossConfig, Targets, compute_losses
 
 MAX_STEPS = 3
+
+#: The optimiser steps a model has taken (an attribute of the model, so copies of it - the
+#: SWA-published network among them - carry the count): the cap is per model, never per trainer
+#: or per call, so a second trainer or another smoke run cannot add steps (BUILD_LOG issue 237(a)).
+STEPS_ATTR = "t5d_optimiser_steps"
+
+
+def optimiser_steps(model: torch.nn.Module) -> int:
+    """The optimiser steps ``model`` has taken in this build (``STEPS_ATTR``)."""
+    return int(getattr(model, STEPS_ATTR, 0))
+
+
+def check_step(model: torch.nn.Module) -> None:
+    """Refuse an optimiser step past ``MAX_STEPS`` on ``model`` - no training runs."""
+    if optimiser_steps(model) >= MAX_STEPS:
+        raise RuntimeError(f"the untrained build runs at most {MAX_STEPS} optimiser steps on a model (no training runs)")
+
+
+def record_step(model: torch.nn.Module) -> None:
+    """Count one optimiser step taken on ``model``."""
+    setattr(model, STEPS_ATTR, optimiser_steps(model) + 1)
 
 
 @dataclass
@@ -35,7 +56,9 @@ class SmokeReport:
 
 
 def synthetic_targets(batch: Batch, cfg: NetConfig, generator: torch.Generator) -> Targets:
-    """Random but well-formed targets for a batch (smoke testing only)."""
+    """Random but well-formed targets for a batch (smoke testing only). Every third position is a
+    cheap search (no policy or categorical target, section 12.5); one short-term horizon of the
+    last position has no target (NaN)."""
     bsz, length = batch.piece.shape
     g = generator
 
@@ -48,21 +71,30 @@ def synthetic_targets(batch: Batch, cfg: NetConfig, generator: torch.Generator) 
     submit_visits = rand(bsz) * submit_legal  # D8: the submit child's visits, where it is a legal candidate
     total = (visits.sum(dim=-1) + submit_visits).clamp(min=1e-9)
     policy = visits / total[:, None]
-    n_opp = batch.opp_move_valid.sum(dim=-1)
-    opp = torch.where(n_opp > 0, (rand(bsz) * n_opp.clamp(min=1)).long(), torch.full((bsz,), -1))
+    # D4's reply prototype: a distribution over each position's ``opp_moves`` (synthetic, not mapped).
+    opp = rand(*batch.opp_move_valid.shape) * batch.opp_move_valid
+    opp = opp / opp.sum(dim=-1, keepdim=True).clamp(min=1e-9)
     effort_visits = torch.randint(1, 4096, (bsz,), generator=g)
     converged = rand(bsz) < 0.8
+    full = torch.arange(bsz) % 3 != 2
+    root_value = torch.where(full, rand(bsz) * 2 - 1, torch.full((bsz,), math.nan))  # D3: full searches only
+    short_term = rand(bsz, len(cfg.short_term_horizons)) * 2 - 1
+    short_term[-1, -1] = math.nan
+    q, d = rand(bsz) * 2 - 1, rand(bsz) * 0.5
+    d = torch.minimum(d, 1 - q.abs())
     return Targets(
-        value=value_to_twohot(outcome, cfg.value_bins),
         policy=policy,
         wdl=(1 - outcome).long(),  # +1 -> 0 win, 0 -> 1 draw, -1 -> 2 loss
+        root_value=root_value,
+        short_term=short_term,
         moves_left=torch.randint(0, 200, (bsz,), generator=g).float(),
-        opp_reply=opp,
-        short_value=value_to_twohot(rand(bsz) * 2 - 1, cfg.value_bins),
         board=(rand(bsz, batch.board_valid.shape[1], 3) < 0.3).float(),
         square=(rand(bsz, length, cfg.n_square_labels) < 0.2).float(),
         effort=effort_bin(effort_visits, converged, cfg.effort_bins),
         submit=submit_visits / total,
+        full_search=full,
+        root_wdl=torch.stack([(1 - d + q) / 2, d, (1 - d - q) / 2], dim=-1),  # the search's (q, d) as a WDL
+        opp_reply=opp,
     )
 
 
@@ -99,6 +131,7 @@ def smoke_train(
     opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=0.0)
     history: list[dict[str, float]] = []
     for _ in range(steps):
+        check_step(model)
         opt.zero_grad(set_to_none=True)
         losses = compute_losses(model(batch), targets, loss_cfg)
         values = {name: float(value.detach()) for name, value in losses.items()}
@@ -110,6 +143,7 @@ def smoke_train(
             if p.grad is not None and not torch.isfinite(p.grad).all():
                 raise FloatingPointError(f"non-finite gradient in {name}")
         opt.step()
+        record_step(model)
         history.append(values)
     deltas = [(p.detach() - b) for p, b in zip(model.parameters(), before, strict=True)]
     change = math.sqrt(sum(float(d.pow(2).sum()) for d in deltas))

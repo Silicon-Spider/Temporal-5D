@@ -1,23 +1,73 @@
 """Losses for the network's heads (spec sections 8.1, 8.3, 12.4).
 
-* Value and short-horizon value: cross-entropy against a categorical target over the
-  51 bins (a one-hot or two-hot distribution, ``heads.value_to_twohot``).
-* Policy and opponent reply: cross-entropy over each position's supplied candidate
-  moves against a target distribution (visit counts for the policy; a one-hot reply for
-  the opponent-reply head). Padding entries carry no mass. The policy's distribution is
-  over the decision's actions - the candidate moves and, where it is offered and legal,
-  the submit action (register D8, stage N5: ``NetOutput.action_logits``); its target is
-  the root's visits to each move and to the submit child (``Targets.submit``).
-* WDL: 3-class cross-entropy. Effort: cross-entropy over its bins (censored bin
-  included). Moves-left: Huber loss on ``log1p(turns left)`` - a turn one player's action
-  (D4, M20; spec issue 305); building the target from a game record is the training loop's
-  (M21).
+Each head's loss reads a target whose interface is fixed here (``Targets``); building the
+targets from records - the pruned root value (section 12.2), the short-term averages, the
+game result's WDL, deblundering (I13) - is the training loop's record-to-target builder (M21,
+I15), not this module's.
+
+* **D3's value heads** (section 8.3, as corrected at CHECKPOINT 7), every target from the
+  acting player's perspective (D8):
+
+  - WDL: cross-entropy against the game result (a class index, or a distribution - I13's
+    deblundered targets are), blended towards the search's own WDL at the root by
+    ``LossConfig.q_ratio`` (Lc0's ``q_ratio``; "a tuned knob, default zero", 6z).
+  - The categorical: cross-entropy against ``heads.hl_gauss`` of the root search value
+    (``Targets.root_value``) - of full searches only (``Targets.full_search``; section 12.5),
+    the value "recomputed from the pruned visit counts" (section 12.2) by the builder. HL-Gauss'
+    sigma is a placeholder (``hl_gauss_sigma``, in bin widths: Farebrother et al.'s 0.75; spec
+    issue 231).
+  - Short-term values: squared error against each horizon's exponentially averaged future
+    search values (``Targets.short_term``, NaN where a horizon has none) - the form a
+    placeholder (issue 231).
+  - The error head: Huber loss against ``(predicted short-term value - short-term target)^2`` at
+    ``error_horizon`` - the network's own short-term output taken with no gradient (``error_target``),
+    so no gradient flows from the error target into the short-term or WDL heads. Section 8.3's
+    "the squared gap between the value and the short-term value" reads two ways; this is the
+    reading of register D9's "the predicted short-term value" and KataGo's form (its short-term
+    error loss: the detached short-term prediction against the short-term target, Huber delta
+    0.4). The other reading - the network's value W - L against the short-term target - is
+    recorded for the user (spec issue 231). Which horizon and the Huber delta are placeholders.
+
+* Policy: cross-entropy over each position's supplied candidate moves against a target
+  distribution (the root's visits). Padding entries carry no mass. The policy's distribution is
+  over the decision's actions - the candidate moves and, where it is offered and legal, the
+  submit action (register D8, stage N5: ``NetOutput.action_logits``); its target is the root's
+  visits to each move and to the submit child (``Targets.submit``) - of full searches only
+  (section 12.5: "only full-search moves emit policy targets").
+* **D4's soft policy** (section 12.4, CHECKPOINT 7): its own head's actions
+  (``NetOutput.soft_action_logits``) against the policy target "raised to the power 1/4 and
+  renormalised" (``soft_policy_target``; the power ``LossConfig.soft_policy_power``), "at eight
+  times the policy loss weight" (``weights["soft_policy"]`` 8, the policy's 1), full searches
+  only - the order (the pruned target first, section 12.2, then the power) the builder's.
+* **D4's opponent-reply prototype** (behind ``NetConfig.opp_reply``): cross-entropy against
+  ``Targets.opp_reply``, the opponent's next turn as a distribution over its mapped moves
+  (``train.reply_map``), weight 0.15 (KataGo's); a position with no target (an ambiguous or
+  absent reply) is skipped.
+* Effort: cross-entropy over its bins (censored bin included), full searches only (section 12.4:
+  "full-search moves only"; a cheap search's row is skipped whatever its target). Moves-left:
+  Huber loss on ``log1p(turns left)`` - a turn one player's action (D4, M20; spec issue 305).
 * Per-board and per-square heads: binary cross-entropy with logits, masked to real
   boards and squares; a per-board loss sums its three targets, a per-square loss
   averages its labels and then the board's squares, so both are one number per board.
   Their reduction over a position's boards is register D6's open knob ("sum-vs-mean",
   ablation 6j): ``board_reduction="mean"`` (default) averages; ``"sum"`` sums them, so
   the auxiliary gradient grows with N. Positions are then averaged with equal weight.
+* **Missing targets** (M21's record-derived targets, ``train.targets``): a NaN WDL row (an unscored
+  game), a NaN moves-left (a censored game) and a NaN per-board or per-square label (tactical
+  volatility until proofs exist; the per-square labels until their generator) are no target - each
+  loss averages over the targets present.
+
+* **D9's optimistic policy** (a prototype behind ``NetConfig.optimistic_policy``; section 8.1):
+  its own actions against the normal policy target (full searches only), each sample weighted by
+  ``optimistic_weights`` - ``clamp(0, 1, sigmoid((z - 1.5) x 3))`` with ``z = (short-term target -
+  predicted short-term value) / sqrt(error + eps)``, the network's short-term output and error
+  head taken without gradient - register D9's "how far the mover beat the predicted short-term
+  value", in units of the predicted error, and KataGo's z_value (no score term in 5D) - the loss
+  the weighted sum over the full-search positions divided by their number. The horizon is the
+  error head's (``error_horizon``), so the error head predicts the numerator's square; that, eps
+  (KataGo's 1e-4) and the normalisation are placeholders (spec issue 233).
+
+Every loss weight is a placeholder (6j) unless a document gives it.
 
 The source rule (D5, section 12.4) is the caller's to keep: every target here must come
 from the game record, the generator, scanner proofs or the engine's own search - never
@@ -31,42 +81,81 @@ from dataclasses import dataclass, field
 import torch
 import torch.nn.functional as F
 
+from ..net.heads import hl_gauss
 from ..net.model import NetOutput
 
 
 @dataclass
 class Targets:
-    value: torch.Tensor  # (B, value_bins) distribution
-    policy: torch.Tensor  # (B, M) distribution over supplied moves
-    wdl: torch.Tensor  # (B,) class index: 0 win, 1 draw, 2 loss (the acting player's, D8)
-    moves_left: torch.Tensor  # (B,) turns left (one player's action each, D4), >= 0
-    opp_reply: torch.Tensor  # (B,) index into opp_moves, -1 where there is no target
-    short_value: torch.Tensor  # (B, value_bins) distribution
-    board: torch.Tensor  # (B, Nmax, 3) in {0, 1}
-    square: torch.Tensor  # (B, L, n_square_labels) in {0, 1}
-    effort: torch.Tensor  # (B,) bin index, -1 where there is no target (PCR cheap searches)
+    policy: torch.Tensor  # (B, M) distribution over supplied moves (with ``submit``: over the actions)
+    #: D3's WDL target - the game result, the acting player's (D8): ``(B,)`` class index (0 win,
+    #: 1 draw, 2 loss) or ``(B, 3)`` distribution (I13's deblundered targets are) - a NaN row: no
+    #: target (an unscored game; ``train.targets``).
+    wdl: torch.Tensor
+    #: D3's categorical target: ``(B,)`` the root search value of a full search, recomputed from
+    #: the pruned visits (section 12.2), on [-1, 1]; NaN where there is none (the loss smooths it,
+    #: ``heads.hl_gauss``).
+    root_value: torch.Tensor
+    #: D3's short-term targets: ``(B, K)`` on [-1, 1], one per ``NetConfig.short_term_horizons``;
+    #: NaN where a horizon has none.
+    short_term: torch.Tensor
+    moves_left: torch.Tensor  # (B,) turns left (one player's action each, D4), >= 0; NaN: no target (a censored game)
+    board: torch.Tensor  # (B, Nmax, 3) in {0, 1}; NaN: no label (tactical volatility until proofs exist)
+    square: torch.Tensor  # (B, L, n_square_labels) in {0, 1}; NaN: no label (no generator yet)
+    effort: torch.Tensor  # (B,) bin index, -1 where there is no target (skipped too where not ``full_search``)
     #: (B,) the policy target's mass on the submit action (D8; ``policy`` and ``submit``
     #: together are one distribution over the decision's actions); None: none anywhere.
     submit: torch.Tensor | None = None
+    #: (B,) bool: the position's search was a full one (section 12.5, I5) - only those emit
+    #: policy and categorical targets; None: every one was.
+    full_search: torch.Tensor | None = None
+    #: (B, 3): the search's WDL at the root - ``((1 - d + q) / 2, d, (1 - d - q) / 2)`` from the
+    #: backed-up (q, d) (spec issue 148) - for ``LossConfig.q_ratio``'s blend; None: not given.
+    root_wdl: torch.Tensor | None = None
+    #: D4's reply prototype: ``(B, M2)``, the opponent's next turn as a distribution over the mapped
+    #: moves (``PositionState.opp_moves``; ``train.reply_map``), all zero where there is no target;
+    #: None: none anywhere.
+    opp_reply: torch.Tensor | None = None
 
 
 @dataclass
 class LossConfig:
     weights: dict[str, float] = field(
         default_factory=lambda: {
-            "value": 1.0,
             "policy": 1.0,
             "wdl": 1.0,
+            "categorical": 1.0,
+            "short_term": 1.0,
+            "value_error": 1.0,
+            "soft_policy": 8.0,  # section 12.4: "at eight times the policy loss weight"
+            "opp_reply": 0.15,  # section 12.4: "weight 0.15, KataGo's"
+            "optimistic": 1.0,  # D9 (a prototype): a placeholder
             "moves_left": 1.0,
-            "opp_reply": 1.0,
-            "short_value": 1.0,
             "board": 1.0,
             "square": 1.0,
             "effort": 1.0,
         }
     )
     board_reduction: str = "mean"  # D6: "mean" or "sum" over a position's boards
-    huber_delta: float = 1.0
+    huber_delta: float = 1.0  # moves-left's Huber loss
+    #: D3: the WDL target's blend towards the search's own WDL at the root (Lc0's ``q_ratio``):
+    #: "a tuned knob, default zero" (section 8.3, 6z) - 0 is exactly the game result.
+    q_ratio: float = 0.0
+    #: D3: HL-Gauss' sigma, in bin widths (Farebrother et al.: 0.75) - PLACEHOLDER (issue 231).
+    hl_gauss_sigma: float = 0.75
+    #: D3: the short-term horizon the error head's target reads (an index into
+    #: ``NetConfig.short_term_horizons``; KataGo's uses its shortest) - PLACEHOLDER (issue 231).
+    error_horizon: int = 0
+    #: D3: the error head's Huber delta - PLACEHOLDER (issue 231; KataGo's is 0.4).
+    error_huber_delta: float = 1.0
+    #: D4: the soft policy's power - "the policy target raised to the power 1/4" (section 12.4).
+    soft_policy_power: float = 0.25
+    #: D9: each sample's weight ``clamp(0, 1, sigmoid((z - centre) x scale))`` (section 8.1: 1.5 and
+    #: 3, KataGo's), and the eps under the z-score's square root (KataGo's 1e-4) - PLACEHOLDER
+    #: (issue 233).
+    optimistic_centre: float = 1.5
+    optimistic_scale: float = 3.0
+    optimistic_eps: float = 1e-4
 
 
 def categorical_ce(logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
@@ -83,14 +172,23 @@ def masked_ce(logits: torch.Tensor, valid: torch.Tensor, target: torch.Tensor) -
     return per[has].mean() if bool(has.any()) else logits.new_zeros(())
 
 
-def index_ce(logits: torch.Tensor, valid: torch.Tensor, index: torch.Tensor) -> torch.Tensor:
+def distribution_ce(logits: torch.Tensor, valid: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    """Cross-entropy over variable-length candidate lists, averaged over the positions whose
+    target has mass (a position with none - no target - is skipped)."""
     if logits.shape[-1] == 0:
         return logits.new_zeros(())
-    keep = index >= 0
-    if not bool(keep.any()):
-        return logits.new_zeros(())
-    logp = torch.log_softmax(logits.float(), dim=-1).masked_fill(~valid, 0.0)
-    return -logp[keep].gather(-1, index[keep][:, None]).mean()
+    logp = torch.log_softmax(logits.float().masked_fill(~valid, float("-inf")), dim=-1).masked_fill(~valid, 0.0)
+    per = -(target.float() * logp).sum(dim=-1)
+    keep = (target.float().sum(dim=-1) > 0) & valid.any(dim=-1)
+    return _masked_mean(per, keep)
+
+
+def soft_policy_target(target: torch.Tensor, power: float = 0.25) -> torch.Tensor:
+    """D4's soft policy target: each row raised to ``power`` and renormalised (section 12.4:
+    "the policy target raised to the power 1/4 and renormalised"); a row with no mass stays zero."""
+    t = target.float().clamp(min=0.0) ** power
+    total = t.sum(dim=-1, keepdim=True)
+    return torch.where(total > 0, t / total.clamp(min=1e-30), torch.zeros_like(t))
 
 
 def _board_square_mean(per_token: torch.Tensor, token_board: torch.Tensor, square_mask: torch.Tensor, n_boards: int) -> torch.Tensor:
@@ -113,25 +211,136 @@ def _reduce_boards(per_board: torch.Tensor, board_valid: torch.Tensor, reduction
     return per_position.mean()
 
 
+def wdl_target(tgt: Targets, q_ratio: float) -> torch.Tensor:
+    """D3's WDL target ``(B, 3)``: the game result (a class index made one-hot, or a
+    distribution), blended towards the search's WDL at the root by ``q_ratio`` (0: the result)."""
+    result = tgt.wdl
+    if result.dim() == 1:
+        result = F.one_hot(result.long(), 3).float()
+    result = result.float()
+    if q_ratio == 0.0:
+        return result
+    if not 0.0 <= q_ratio <= 1.0:
+        raise ValueError("q_ratio must be in [0, 1] (D3, 6z)")
+    if tgt.root_wdl is None:
+        raise ValueError("q_ratio > 0 blends towards the search's WDL: Targets.root_wdl is needed")
+    return (1.0 - q_ratio) * result + q_ratio * tgt.root_wdl.float()
+
+
+def error_target(predicted: torch.Tensor, short_term: torch.Tensor, horizon: int) -> torch.Tensor:
+    """D3's error head target ``(B,)``: the squared gap between the network's short-term value
+    output at ``horizon`` (``predicted``, ``(B, K)``, taken with no gradient) and the short-term
+    value target there (``short_term``, ``(B, K)``); NaN where the horizon has no target.
+    Register D9's "predicted short-term value" and KataGo's form (spec issue 231; the reading
+    with the network's W - L in place of the short-term output is the alternative recorded)."""
+    if not 0 <= horizon < short_term.shape[-1]:
+        raise ValueError(f"error_horizon {horizon} is not one of the {short_term.shape[-1]} short-term horizons")
+    return (predicted[:, horizon].detach().float() - short_term[:, horizon].float()) ** 2
+
+
+def optimistic_weights(
+    short_term: torch.Tensor,
+    predicted: torch.Tensor,
+    value_error: torch.Tensor,
+    *,
+    centre: float = 1.5,
+    scale: float = 3.0,
+    eps: float = 1e-4,
+) -> torch.Tensor:
+    """D9's per-sample weights ``(B,)``: ``clamp(0, 1, sigmoid((z - centre) x scale))``, ``z =
+    (short_term - predicted) / sqrt(value_error + eps)`` - ``short_term`` the short-term value
+    target, ``predicted`` the network's short-term output at the same horizon - how far the mover
+    beat the predicted short-term value (register D9), in units of the error head's predicted
+    error (section 8.1; KataGo's z_value, without the score term). The network's outputs are
+    taken without gradient, so the weight trains nothing; NaN where the short-term target is
+    missing."""
+    z = (short_term.float() - predicted.detach().float()) / torch.sqrt(value_error.detach().float().clamp(min=0.0) + eps)
+    return torch.sigmoid((z - centre) * scale).clamp(0.0, 1.0)
+
+
+def _masked_mean(per: torch.Tensor, keep: torch.Tensor) -> torch.Tensor:
+    """The mean of ``per`` where ``keep``; 0 (still attached to the graph) where nothing is kept."""
+    if bool(keep.any()):
+        return per[keep].mean()
+    return (per * 0.0).nan_to_num().sum()
+
+
 def compute_losses(out: NetOutput, tgt: Targets, cfg: LossConfig | None = None) -> dict[str, torch.Tensor]:
     """Per-head losses and their weighted sum under ``"total"``."""
     cfg = LossConfig() if cfg is None else cfg
     losses: dict[str, torch.Tensor] = {}
-    losses["value"] = categorical_ce(out.value_logits, tgt.value)
-    submit = tgt.policy.new_zeros(tgt.policy.shape[0]) if tgt.submit is None else tgt.submit.to(tgt.policy.dtype)
-    losses["policy"] = masked_ce(out.action_logits(), out.action_valid(), torch.cat([tgt.policy, submit[:, None]], dim=-1))
-    losses["wdl"] = F.cross_entropy(out.wdl_logits.float(), tgt.wdl)
-    losses["moves_left"] = F.huber_loss(out.moves_left_log, torch.log1p(tgt.moves_left.float()), delta=cfg.huber_delta)
-    losses["opp_reply"] = index_ce(out.opp_reply_logits, out.opp_move_valid, tgt.opp_reply)
-    losses["short_value"] = categorical_ce(out.short_value_logits, tgt.short_value)
+    bsz = tgt.policy.shape[0]
+    full = torch.ones(bsz, dtype=torch.bool) if tgt.full_search is None else tgt.full_search.bool()
+    full = full.to(out.wdl_logits.device)
+    submit = tgt.policy.new_zeros(bsz) if tgt.submit is None else tgt.submit.to(tgt.policy.dtype)
+    action_target = torch.cat([tgt.policy, submit[:, None]], dim=-1)
+    losses["policy"] = masked_ce(out.action_logits()[full], out.action_valid()[full], action_target[full])
 
-    bce_b = F.binary_cross_entropy_with_logits(out.board_logits, tgt.board.float(), reduction="none").sum(-1)
+    # D3 (section 8.3).
+    wt = wdl_target(tgt, cfg.q_ratio).to(out.wdl_logits.device)
+    has_wdl = torch.isfinite(wt).all(dim=-1)  # a NaN row: no target (an unscored game)
+    per = -(torch.where(has_wdl[:, None], wt, torch.zeros_like(wt)) * torch.log_softmax(out.wdl_logits.float(), dim=-1)).sum(dim=-1)
+    losses["wdl"] = _masked_mean(per, has_wdl)
+    n_bins = out.value_logits.shape[-1]
+    root = tgt.root_value.float()
+    has_root = full & torch.isfinite(root)
+    sigma = cfg.hl_gauss_sigma * 2.0 / (n_bins - 1)
+    target = hl_gauss(torch.where(has_root, root, torch.zeros_like(root)), n_bins, sigma)
+    per = -(target * torch.log_softmax(out.value_logits.float(), dim=-1)).sum(dim=-1)
+    losses["categorical"] = _masked_mean(per, has_root)
+    st = tgt.short_term.float()
+    has_st = torch.isfinite(st)
+    losses["short_term"] = _masked_mean((out.short_term - torch.where(has_st, st, torch.zeros_like(st))) ** 2, has_st)
+    err = error_target(out.short_term, st, cfg.error_horizon)
+    has_err = torch.isfinite(err)
+    per = F.huber_loss(out.value_error, torch.where(has_err, err, torch.zeros_like(err)), delta=cfg.error_huber_delta, reduction="none")
+    losses["value_error"] = _masked_mean(per, has_err)
+
+    # D4 (section 12.4): the soft policy (full searches only) and the reply prototype (behind its flag).
+    if out.soft_policy_logits is not None:
+        soft = soft_policy_target(action_target, cfg.soft_policy_power)
+        losses["soft_policy"] = masked_ce(out.soft_action_logits()[full], out.action_valid()[full], soft[full])
+    if out.opp_reply_logits is not None and tgt.opp_reply is not None:
+        losses["opp_reply"] = distribution_ce(out.opp_reply_logits, out.opp_move_valid, tgt.opp_reply)
+
+    # D9 (section 8.1; a prototype behind its flag): the normal target, each sample weighted.
+    if out.optimistic_logits is not None:
+        h = cfg.error_horizon
+        w = optimistic_weights(
+            tgt.short_term[:, h].float(),
+            out.short_term[:, h],
+            out.value_error,
+            centre=cfg.optimistic_centre,
+            scale=cfg.optimistic_scale,
+            eps=cfg.optimistic_eps,
+        )
+        logits = out.optimistic_action_logits().masked_fill(~out.action_valid(), float("-inf"))
+        logp = torch.log_softmax(logits.float(), dim=-1).masked_fill(~out.action_valid(), 0.0)
+        per = -(action_target * logp).sum(dim=-1)
+        keep = full & torch.isfinite(w) & out.action_valid().any(dim=-1)
+        losses["optimistic"] = _masked_mean(torch.where(keep, w, torch.zeros_like(w)) * per, keep)
+
+    ml = tgt.moves_left.float()
+    has_ml = torch.isfinite(ml)  # NaN: no target (a censored game)
+    log_ml = torch.log1p(torch.where(has_ml, ml, torch.zeros_like(ml)))
+    per = F.huber_loss(out.moves_left_log, log_ml, delta=cfg.huber_delta, reduction="none")
+    losses["moves_left"] = _masked_mean(per, has_ml)
+
+    # Per-board and per-square labels: a NaN label is none (masked) - each board sums its labels
+    # present, each square averages its labels present (a square with none is left out).
+    bt = tgt.board.float()
+    has_b = torch.isfinite(bt)
+    bce_b = F.binary_cross_entropy_with_logits(out.board_logits, torch.where(has_b, bt, torch.zeros_like(bt)), reduction="none")
+    bce_b = (bce_b * has_b).sum(-1)
     losses["board"] = _reduce_boards(bce_b, out.board_valid, cfg.board_reduction)
-    bce_s = F.binary_cross_entropy_with_logits(out.square_logits, tgt.square.float(), reduction="none").mean(-1)
-    per_board = _board_square_mean(bce_s, out.token_board, out.square_mask, out.board_valid.shape[1])
+    sq = tgt.square.float()
+    has_s = torch.isfinite(sq)
+    bce_s = F.binary_cross_entropy_with_logits(out.square_logits, torch.where(has_s, sq, torch.zeros_like(sq)), reduction="none")
+    bce_s = (bce_s * has_s).sum(-1) / has_s.sum(-1).clamp(min=1)
+    per_board = _board_square_mean(bce_s, out.token_board, out.square_mask & has_s.any(-1), out.board_valid.shape[1])
     losses["square"] = _reduce_boards(per_board, out.board_valid, cfg.board_reduction)
 
-    keep = tgt.effort >= 0
+    keep = (tgt.effort >= 0) & full.to(tgt.effort.device)  # section 12.4: "full-search moves only"
     losses["effort"] = (
         F.cross_entropy(out.effort_logits[keep].float(), tgt.effort[keep]) if bool(keep.any()) else out.effort_logits.new_zeros(())
     )
