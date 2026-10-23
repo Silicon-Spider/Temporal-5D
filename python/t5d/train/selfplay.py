@@ -7,10 +7,11 @@ one's evaluation cache (C14), root noise on, a chosen child made known legal bef
 - and writes, per decision, the record ``train.records`` defines (register I15, spec section
 12.8). ``netplay.play_game`` is unchanged: it plays and writes a 5dpgn, and writes no record.
 
-* **D2's arms**: the board-move split (``"ply"``) and the tree form (``"tree"``). The whole-turn
-  arm is refused: its root children are actions while the policy scores single moves, so its
-  records would carry no defined policy target (the arm is superseded by the flat form at
-  CHECKPOINT 6 - spec issue 234).
+* **D2's arms**: the board-move split (``"ply"``) and the tree form (``"tree"``). The flat form
+  (``"flat"``) is refused until its policy target exists: its root children are whole turns while
+  the policy scores single moves, and the flat form's target - D2's per-board policy marginals,
+  read by the flat form's per-board head (the network lane's, not yet built) - is not defined, so
+  its records would carry no policy target (spec issue 234(b)).
 * **D9's optimistic policy is refused** (section 8.1: "kept out of self-play"): every search runs
   with ``run_search``'s ``self_play``.
 * **The raw root outputs** (I15) are the network's evaluation of the decision's own input - the
@@ -177,7 +178,10 @@ class GeneratorConfig:
 
     def validate(self) -> None:
         if self.split not in SPLITS:
-            raise ValueError(f"split must be one of {sorted(SPLITS)} (the whole-turn arm writes no policy target - spec issue 234)")
+            raise ValueError(
+                f"split must be one of {sorted(SPLITS)}: the flat form writes no policy target until its per-board "
+                "head and target exist (spec issue 234(b))"
+            )
         if self.playouts < 1 or self.batch_size < 1 or self.max_actions < 1:
             raise ValueError("playouts, batch_size and max_actions must be positive")
         pcr = self.pcr
@@ -244,7 +248,7 @@ def root_position(game: Game, params, net_cfg: NetConfig, window_k: int) -> Posi
         global_regs=net_cfg.global_regs,
         relations=relations_for(net_cfg),
         window_k=window_k,
-        legal_moves=bool(params.legal_moves_only) and params.split != 1,
+        legal_moves=bool(params.legal_moves_only),
         legality_checks=int(params.legality_checks),
         legality_nodes=int(params.legality_nodes),
     )
@@ -690,7 +694,7 @@ def replay_positions(record: GameRecord, net_cfg: NetConfig | None = None, *, wi
     for kind in ("full", "cheap"):
         if kind in h["search"]:
             s = h["search"][kind]
-            budget[kind] = (bool(s["legal_moves_only"]) and s["split"] != 1, int(s["legality_checks"]), int(s["legality_nodes"]))
+            budget[kind] = (bool(s["legal_moves_only"]), int(s["legality_checks"]), int(s["legality_nodes"]))
     game = Game.variant(h["variant"]) if h["start_fen"] is None else Game.from_fen(list(h["start_fen"]))
     out: list[Position] = []
     try:

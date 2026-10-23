@@ -33,6 +33,7 @@
 #include "test_positions.hpp"
 #include "test_reference.hpp"
 #include "test_support.hpp"
+#include "test_tiny.hpp"
 
 using namespace t5d;
 
@@ -257,98 +258,6 @@ struct ReferenceTally {
   LegalityStats tiers;     // the classifications' tiers, summed
 };
 
-std::optional<GameState> tiny_position(t5d_test::Rng& rng, int max_axes, bool kings, int width,
-                                       std::vector<std::string>& boards) {
-  const BoardSize size{width, 1};
-  const bool even = rng.chance(50);
-  const int white_side = rng.below(5);
-  const int black_side = rng.below(5);
-  const auto label = [&](int p) {
-    if (even) return p >= 0 ? "+" + std::to_string(p) : "-" + std::to_string(-p - 1);
-    return p == 0 ? std::string("0") : (p > 0 ? "+" : "") + std::to_string(p);
-  };
-  std::vector<std::pair<int, int>> places;  // (timeline, half-turns from T1 White)
-  for (int p = even ? -1 - black_side : -black_side; p <= white_side; ++p) {
-    const bool central = even ? (p == -1 || p == 0) : p == 0;
-    const int start = central ? 0 : rng.below(3);
-    const int head = start + 1 + rng.below(4);
-    for (int j = start; j <= head; ++j) places.emplace_back(p, j);
-  }
-  const auto make = [&](const std::vector<std::string>& contents) {
-    std::vector<std::string> out;
-    for (std::size_t i = 0; i < places.size(); ++i) {
-      const int j = places[i].second;
-      out.push_back("[" + contents[i] + ":" + label(places[i].first) + ":" + std::to_string(j / 2 + 1) +
-                    ":" + (j % 2 == 0 ? "w" : "b") + "]");
-    }
-    return out;
-  };
-  RuleOptions r;
-  r.activation = rng.chance(30) ? ActivationRule::Consecutive : ActivationRule::Count;
-  r.initial_credit = rng.chance(25) ? InitialTimelineCredit::MinusZeroToBlack : InitialTimelineCredit::None;
-  r.play_activates = rng.chance(20);
-  r.moves_after_shift = !rng.chance(25);  // Q4: R8 (the default), or the Guide-literal reading
-  r.mandatory = rng.chance(25) ? MandatoryBoards::AllActive : MandatoryBoards::InPresent;
-  r.reactivation = rng.chance(20) ? Reactivation::Deferred : Reactivation::Rewinds;
-  r.earlier_playable_jump_branches = rng.chance(20);
-  r.inactive_history_is_destination = !rng.chance(25);
-  r.turn_zero_reachable = !rng.chance(20);
-  const Parity parity = even ? Parity::Even : Parity::Odd;
-  Colour mover = Colour::White;
-  try {
-    mover = game_from_fen(make(std::vector<std::string>(places.size(), std::to_string(width))), size,
-                          parity, r)
-                .to_move();
-  } catch (const std::exception&) {
-    return std::nullopt;  // not a position (no present on the colour to move, ...)
-  }
-  const auto piece = [&](bool mine) {
-    // Every third position king-heavy: royal captures across created timelines.
-    const char* kinds = kings ? "QKRKBK" : "QQRBNK";
-    const char c = kinds[rng.below(6)];
-    const bool white = mine == (mover == Colour::White);
-    return std::string(1, white ? c : static_cast<char>(c - 'A' + 'a'));
-  };
-  // One square's content ("" for empty): on the mover's playable boards
-  // mostly the mover's pieces (the first square), on the others mostly empty.
-  const auto square = [&](bool head, bool movers, bool first) {
-    const int roll = rng.below(100);
-    if (head && movers) {
-      if (first) return roll < 15 ? std::string() : roll < 85 ? piece(true) : piece(false);
-      return roll < 60 ? std::string() : roll < 80 ? piece(false) : piece(true);
-    }
-    if (movers) return roll < 60 ? std::string() : roll < 90 ? piece(false) : piece(true);
-    return roll < 50 ? std::string() : roll < 80 ? piece(false) : piece(true);
-  };
-  std::vector<std::string> contents;
-  for (std::size_t i = 0; i < places.size(); ++i) {
-    const bool head = i + 1 == places.size() || places[i + 1].first != places[i].first;
-    const bool movers = (places[i].second % 2 == 0) == (mover == Colour::White);
-    std::string row;
-    int empty = 0;
-    for (int f = 0; f < width; ++f) {
-      const std::string q = square(head, movers, f == 0);
-      if (q.empty()) {
-        ++empty;
-        continue;
-      }
-      if (empty > 0) row += std::to_string(empty);
-      empty = 0;
-      row += q;
-    }
-    if (empty > 0) row += std::to_string(empty);
-    contents.push_back(row);
-  }
-  boards = make(contents);
-  try {
-    GameState s = game_from_fen(boards, size, parity, r);
-    if (static_cast<int>(s.playable_timelines().size()) > max_axes) return std::nullopt;
-    return s;
-  } catch (const std::exception&) {
-    return std::nullopt;
-  }
-}
-
 void against_reference(int positions, int max_axes, std::uint64_t seed, ReferenceTally& t) {
   t5d_test::Rng rng(seed);
   std::vector<std::string> boards;
@@ -359,7 +268,7 @@ void against_reference(int positions, int max_axes, std::uint64_t seed, Referenc
     // Two squares a board multiply the sequences: fewer boards, a lower limit.
     const std::uint64_t limit = width == 1 ? 2000000 : 100000;
     const std::optional<GameState> s =
-        tiny_position(rng, width == 1 ? max_axes : std::min(max_axes, 4), attempt % 3 == 2, width, boards);
+        t5d_test::tiny_position(rng, width == 1 ? max_axes : std::min(max_axes, 4), attempt % 3 == 2, width, boards);
     if (!s) continue;
     const t5d_test::Reference ref = t5d_test::reference_actions(*s, limit);
     if (ref.overflow) continue;
@@ -773,4 +682,127 @@ TEST(legal_an_en_passant_that_uncovers_a_capture_is_not_quiet) {
     REQUIRE(fast.has_value());
     CHECK(*fast != MoveLegality::Legal);
   }
+}
+
+// ---- the hypercuboid search, pinned ---------------------------------------------------
+//
+// D2's flat form generates turns best-first on the hypercuboid's own code
+// (t5d/turngen.hpp, in src/hypercuboid.cpp). The detectors themselves - the
+// depth-first search behind detect_mate, the counts, the listings and the
+// legal-move tiers' searches - must stay what they were, bit for bit: they are
+// the truth's sources (T5D_TRUTH_SOURCES; M17 assumes the shipped
+// configuration is the measured one). So every answer AND every statistic of
+// theirs (nodes, points, regions, the boxes removed, the most positions held)
+// on a fixed set of positions - random tiny multiverses under random rulesets,
+// random games from the sparse starts and every named variant, unlimited and
+// under small node budgets that stop them part-way - is hashed, and the hash
+// pinned: it was recorded at 2f07079, before the generator was written, and a
+// change to the search that changes any of them changes it.
+
+namespace {
+
+struct Pin {
+  std::uint64_t h = 0xCBF29CE484222325ull;
+  void add(std::uint64_t v) {
+    for (int i = 0; i < 8; ++i) {
+      h ^= (v >> (8 * i)) & 0xFF;
+      h *= 0x100000001B3ull;
+    }
+  }
+  void add(const std::string& text) {
+    add(text.size());
+    for (const char c : text) {
+      h ^= static_cast<unsigned char>(c);
+      h *= 0x100000001B3ull;
+    }
+  }
+  void add(const SearchStats& s) {
+    for (const std::uint64_t v : {s.nodes, s.actions_tested, static_cast<std::uint64_t>(s.stored), s.points,
+                                  s.regions, s.unrealised, s.single_points, s.unrealisable_boxes,
+                                  s.abstract_gave_up, s.order_regions}) {
+      add(v);
+    }
+    add((s.exhaustive ? 1u : 0u) | (s.stopped_by_budget ? 2u : 0u) | (s.stopped_by_memory ? 4u : 0u));
+  }
+};
+
+void pin_position(const GameState& s, Pin& pin) {
+  const bool even = s.multiverse().even();
+  for (const SearchBudget& b : {SearchBudget::unlimited(), SearchBudget::nodes(40), SearchBudget::nodes(400)}) {
+    const MateResult m = detect_mate(s, Detector::Hypercuboid, b);
+    pin.add(static_cast<std::uint64_t>(m.verdict));
+    pin.add(m.in_check ? 1u : 0u);
+    pin.add(action_text(m.witness, even));
+    pin.add(m.stats);
+    for (const ActionCount& c : {count_legal_actions(s, 1000, Detector::Hypercuboid, b),
+                                 count_legal_successors(s, 1000, Detector::Hypercuboid, b)}) {
+      pin.add(c.count);
+      pin.add(c.reached_cap ? 1u : 0u);
+      pin.add(c.stats);
+    }
+    const ActionList l = list_legal_actions(s, 1000, Detector::Hypercuboid, b);
+    pin.add(l.actions.size());
+    for (const LegalAction& a : l.actions) {
+      pin.add(action_text(a.moves, even));
+      pin.add(a.result.zobrist());
+    }
+    pin.add(l.reached_cap ? 1u : 0u);
+    pin.add(l.stats);
+  }
+  MoveList legal;
+  legal_moves(s, legal, Detector::Hypercuboid);
+  for (const Move& m : legal) pin.add(to_string(m, even));
+  // During the action: whether each first move can be finished, and how many ways.
+  MoveList first;
+  generate_moves(s, first);
+  for (std::size_t i = 0; i < first.size() && i < 12; ++i) {
+    GameState child = s;
+    child.apply(first[i]);
+    const std::optional<bool> finish = can_finish_legally(child, Detector::Hypercuboid, SearchBudget::nodes(2000));
+    pin.add(finish ? (*finish ? 1u : 2u) : 3u);
+    const ActionCount c = count_legal_actions(child, 1000, Detector::Hypercuboid, SearchBudget::nodes(2000));
+    pin.add(c.count);
+    pin.add(c.stats);
+  }
+}
+
+}  // namespace
+
+TEST(detectors_the_hypercuboid_search_is_pinned) {
+  Pin pin;
+  int positions = 0;
+  t5d_test::Rng rng(8128);
+  std::vector<std::string> boards;
+  for (int attempt = 0; positions < 300 && attempt < 6000; ++attempt) {
+    const int width = attempt % 3 == 1 ? 2 : 1;
+    const std::optional<GameState> s =
+        t5d_test::tiny_position(rng, width == 1 ? 5 : 4, attempt % 3 == 2, width, boards);
+    if (!s) continue;
+    ++positions;
+    pin_position(*s, pin);
+  }
+  // Random games: the sparse starts under the default and the alternative
+  // rules (the general realisation), and every named variant.
+  std::vector<GameState> starts;
+  for (const Sparse& start : sparse_starts()) starts.push_back(t5d_test::game(start.boards, start.size));
+  for (const RuleOptions& r : alternative_rulesets()) {
+    for (const Sparse& start : sparse_starts()) starts.push_back(t5d_test::game(start.boards, start.size, r));
+  }
+  for (const Variant& v : variants()) starts.push_back(variant_start(v));
+  std::uint64_t seed = 31;
+  for (const GameState& start : starts) {
+    t5d_test::Rng game_rng(seed++);
+    GameState s = start;
+    for (int turn = 0; turn < 5; ++turn) {
+      ++positions;
+      pin_position(s, pin);
+      const std::optional<std::vector<Move>> action = random_legal_action(s, game_rng);
+      if (!action) break;
+      for (const Move& m : *action) s.apply(m);
+      s.submit();
+    }
+  }
+  std::printf("  [pin] %d positions: %016llx\n", positions, static_cast<unsigned long long>(pin.h));
+  CHECK(positions > 400);
+  CHECK_EQ(pin.h, std::uint64_t{0x5366691BCAF734ABull});
 }

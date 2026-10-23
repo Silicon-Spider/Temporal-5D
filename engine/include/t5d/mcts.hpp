@@ -5,7 +5,7 @@
 //
 // WHAT A NODE IS. A node holds a GameState (t5d/state.hpp) and its player to
 // move - the player whose ACTION is in progress. D2 (multi-move turns) is
-// undecided, so both of its arms are built (SearchParams::split):
+// undecided, so its arms are built (SearchParams::split):
 //
 //  * TurnSplit::BoardMove, "each board-move as its own ply" (§8.2). A node is
 //    a state at a turn's start or during an action; its children are the
@@ -39,16 +39,31 @@
 //    submission finishes the action at once - but a further optional move
 //    (R8) can still expose a royal, and such a move may lead to a dead end
 //    like any other.
-//  * TurnSplit::WholeTurn: a node is always a turn's start, and its children
-//    are the legal ACTIONS (t5d/search.hpp: list_legal_actions, E4's
-//    enumeration). The network's policy is over single moves (D1), so an
-//    action's prior is derived from the logits of its moves
-//    (SearchParams::action_prior; §8.2 does not say how). The listing stops at
-//    SearchParams::max_actions; a node whose listing stopped has incomplete
-//    children and is never proven lost. D8's submit is no separate decision
-//    here (an action is listed submitted), so the evaluator's submit logit is
-//    not read and the C API reports submit_possible 0: the whole-turn arm has
-//    no end-of-turn token (a spec issue, not built).
+//  * TurnSplit::Flat, D2's FLAT FORM (§8.2, "Evaluating at turn boundaries";
+//    CHECKPOINT 6, built second at CHECKPOINT 8; it replaces the enumerating
+//    whole-turn arm and its 256-action cap, retired): a node is always a turn's
+//    start, and its children are whole legal TURNS - each a legal action,
+//    submitted - GENERATED BEST FIRST (t5d/turngen.hpp: the hypercuboid search
+//    ordered by score; "a generator assembles complete legal turns best-first
+//    by summed logits, through the rules engine") and instantiated by
+//    progressive widening: a node expanded generates the first ceil(k0)
+//    turns, and widening "pulls in the next-best legal turn as visits grow"
+//    (E1's k(N); a turn is generated only when widening asks for it). The
+//    network evaluates once per turn start: its move logits and its per-board
+//    "leave it" logits (Evaluation::board_logits; register D2's head change)
+//    give each playable board of the mover's a distribution over its options
+//    - its moves, the non-branching jumps arriving on it (FlatJumps), and
+//    leaving it - at the policy temperature (the root's I19 temperature too);
+//    a turn's score is the sum over the boards of its options'
+//    log-probabilities, and its prior follows from the scores (FlatPrior). A
+//    board with no leave logit (none given, or NaN) gives leaving it
+//    SearchParams::leave_share. Root noise is drawn per board, over its
+//    options, before generation. The generator ends turns itself (D8): the
+//    evaluator's submit logit is not read and the C API reports
+//    submit_possible 0. A node whose generator a budget stopped
+//    (generator_nodes, the memory ceiling) has incomplete children and is
+//    never proven lost (H37); one with no turn generated and no verdict is
+//    stuck. Terminal verdicts stay E4's detector's (detect_mate), as below.
 //  * TurnSplit::Tree, D2's TREE FORM (§8.2, "Evaluating at turn boundaries";
 //    CHECKPOINT 6, built first at CHECKPOINT 8): the ply split's nodes, edges,
 //    submit, dead ends and turn structure, with one difference - "inner nodes
@@ -103,10 +118,10 @@
 // forced and steered visits (RootChild; engine ABI round 2c) - and
 // the network's move mask is a leaf's legal and unknown moves - every
 // candidate the expansion kept, Expansion::move_legality (the C API's
-// t5d_leaf.legality), not the root's children. Under the whole-turn
-// split the expansion offers the pseudo-legal moves (the network's
-// candidates, over which every legal action's moves are found) and
-// list_legal_actions the children, which are legal.
+// t5d_leaf.legality), not the root's children. Under the flat form the
+// expansion's moves are classified the same way (D1: the network scores the
+// moves the rules engine has not proved illegal) and the children are whole
+// turns the generator judged exactly - never unknown.
 //
 // TERMINAL VERDICTS come ONLY from E4's exhaustive detectors (detect_mate,
 // H37), at turn starts: checkmate (the mover loses, -1) and stalemate (a draw,
@@ -244,6 +259,7 @@
 #include "t5d/move.hpp"
 #include "t5d/search.hpp"
 #include "t5d/state.hpp"
+#include "t5d/turngen.hpp"
 
 namespace t5d::mcts {
 
@@ -272,7 +288,8 @@ inline constexpr NodeId kNoNode = std::numeric_limits<NodeId>::max();
 /// D2 - undecided; its arms (ablation 6x, with 6g and 6k).
 enum class TurnSplit : std::uint8_t {
   BoardMove = 0,  ///< (a) each board-move its own ply, every node evaluated
-  WholeTurn = 1,  ///< (b) children are whole legal actions (superseded by the flat form)
+  Flat = 1,       ///< (b) the flat form: children are whole legal turns, generated best first
+                  ///<     (it replaced the enumerating whole-turn arm, retired, in this slot)
   Tree = 2,       ///< (c) the tree form: the ply split with inherited priors inside a turn
 };
 
@@ -356,12 +373,28 @@ enum class PresentShift : std::uint8_t {
   Rewind = 1,
 };
 
-/// How an action's prior is derived from its moves' logits (whole-turn split;
-/// §8.2 is silent). The softmax is then taken over the listed actions.
-enum class ActionPrior : std::uint8_t {
-  SumLogits = 0,   ///< logit(action) = sum of its moves' logits: the product of
-                   ///< independent per-move factors
-  MeanLogits = 1,  ///< the mean: no penalty on actions of more moves
+/// D2's flat form: a generated turn's PUCT prior from its score - the sum of
+/// its options' per-board log-probabilities (§8.2 is silent).
+enum class FlatPrior : std::uint8_t {
+  /// The softmax of the generated turns' scores: the priors sum to 1 over the
+  /// turns generated so far and are renormalised as widening generates more
+  /// (on one board, once every turn is generated, the ply split's priors).
+  Generated = 0,
+  /// exp(score): the turn's probability under the boards' independent
+  /// distributions - fixed as turns are added; the mass on illegal
+  /// combinations is lost.
+  Product = 1,
+};
+
+/// D2's flat form: "a move between two present boards resolves both" - which
+/// boards' distributions a non-branching jump (J4) between two playable
+/// boards belongs to (§8.2 is silent).
+enum class FlatJumps : std::uint8_t {
+  /// Its source board's and its destination's (an arrival option there): two
+  /// terms of the turn's score, one per board it resolves.
+  BothBoards = 0,
+  /// Its source board's only; the destination contributes nothing (log 1).
+  SourceOnly = 1,
 };
 
 /// The MCGS node key (C11, H18; build-log spec issue 30).
@@ -405,14 +438,6 @@ struct TurnCap {
 struct SearchParams {
   // ---- D2: multi-move turns (undecided) --------------------------------------
   TurnSplit split = TurnSplit::BoardMove;  ///< placeholder: D2 is undecided
-  ActionPrior action_prior = ActionPrior::SumLogits;  ///< whole-turn: placeholder
-  /// Whole-turn: the most actions listed per node (list_legal_actions' cap).
-  /// Every listed action is stored with its node (its moves and an edge), so
-  /// this bounds a node's memory: at 4,096 a node of a 100-board position held
-  /// about 1.5 MB (review B). Placeholder 256 (build-log spec issue).
-  std::size_t max_actions = 256;
-  /// Whole-turn: the listing's node budget; a stopped listing is incomplete.
-  std::uint64_t listing_nodes = 2'000'000;
   /// Board-move: when the evaluator gives no submit logit (Evaluation::
   /// submit_logit NaN), submit's share of the prior where further moves are
   /// open too (the moves share the rest, in their own proportions). D8 gives
@@ -456,6 +481,43 @@ struct SearchParams {
   /// refused (6m: a signal that is read must be given). Placeholder (§8.2 is
   /// silent).
   bool tree_inherit_value = true;
+  // D2's flat form (split Flat; read by no other arm). Each reading §8.2
+  // leaves open is a parameter, its default a placeholder (build-log spec
+  // issues 163-171).
+  /// What a node's children are: distinct successor states (each reached by
+  /// its best action) or actions (two creation orders of one set of moves are
+  /// two). Placeholder: successors (§8.5: what search needs). As actions,
+  /// under Q3's play activation (RuleOptions::play_activates) a node's
+  /// children are never complete: two orders of one action can reach two
+  /// states, and the generator keeps one per action key.
+  TurnUnit flat_unit = TurnUnit::Successors;
+  FlatPrior flat_prior = FlatPrior::Generated;   ///< placeholder
+  FlatJumps flat_jumps = FlatJumps::BothBoards;  ///< placeholder
+  /// A playable board's "leave it" probability where the evaluator gives no
+  /// leave logit for it (Evaluation::board_logits empty, or NaN there): its
+  /// moves share the rest in their own proportions (as submit_share stands in
+  /// for D8's submit logit). In (0, 1). Placeholder 0.5.
+  double leave_share = 0.5;
+  /// The flat form's k0 is E1's, from the entropy of the turn distribution -
+  /// the boards' entropies summed (the boards are independent) - capped here:
+  /// the effective number of turns grows as a product over the boards.
+  /// Placeholder 16 (>= 1).
+  double flat_k0_max = 16.0;
+  /// Each node's generator's node budget, over its life (t5d/turngen.hpp's
+  /// SearchBudget; its memory ceiling is mate_bytes): a node whose generator
+  /// stopped has incomplete children, never proven lost. Placeholder 200,000
+  /// (the retired listing's was 2,000,000) - in a position of
+  /// many boards whose best-scoring turns are illegal en masse (every optional
+  /// board played, the royals left capturable) best first can spend that
+  /// many without one legal turn (build-log spec issue 171).
+  std::uint64_t generator_nodes = 200'000;
+  /// A node whose generator stopped before its first turn takes up to this many
+  /// turns from E4's listing instead (list_legal_actions, under the mate
+  /// check's budget, mate_nodes), scored and ordered as generated turns; 0: none - the node is
+  /// stuck. Its children are complete only where the listing was exhaustive
+  /// and play does not activate (Q3: the listing keeps one state per action).
+  /// Placeholder 64 (build-log spec issue 171).
+  std::size_t flat_fallback = 64;
 
   // ---- E1: PUCT, top-k instantiation, entropy-adaptive widening, FPU, noise -----
   double cpuct = 1.5;                 ///< placeholder
@@ -631,6 +693,10 @@ struct EvalRequest {
   /// turn start) - an input of the network's that no state records, so leaves
   /// with equal states and different counts are evaluated, and cached, apart.
   int moves_made = 0;
+  /// D2's flat form reads per-board "leave it" logits (Evaluation::
+  /// board_logits): the evaluator may give them. False under the other arms,
+  /// which read none.
+  bool board_logits = false;
 };
 
 /// The network's answer for one leaf.
@@ -659,6 +725,13 @@ struct Evaluation {
   /// D4: the moves-left head's output, in the network's unit, >= 0; NaN: none
   /// given. Recorded on the node, never backed up (see VALUES above).
   float moves_left = std::numeric_limits<float>::quiet_NaN();
+  /// D2's flat form (register D2's head change): one logit per expansion board
+  /// (expansion->board_count(), in its order) - the board's "leave it" logit,
+  /// read at the mover's playable boards beside its moves' logits (NaN there:
+  /// none given for that board - SearchParams::leave_share); empty: none at
+  /// all. Read under the flat form only; checked (its size, no infinity)
+  /// under every arm.
+  std::vector<float> board_logits;
 };
 
 /// The mean and variance of a value distribution (normalised first). Throws
@@ -783,13 +856,17 @@ class EvalCache {
       : capacity_(capacity), max_bytes_(max_bytes) {}
   /// The cached evaluation of `state`, with `moves_made` moves made in its
   /// action (A6: the network sees the count), at `epoch` - every part compared
-  /// exactly (keys may collide) - or nullptr.
+  /// exactly (keys may collide) - or nullptr. `board_logits`: the request asks
+  /// for D2's per-board leave logits (EvalRequest::board_logits) - an entry
+  /// stored from a request that did not ask for them is not served to one
+  /// that does (a cache shared by a flat search and another arm's).
   const Evaluation* find(std::uint64_t key, int moves_made, std::uint64_t epoch, const GameState& state,
-                         bool compare_origins) const;
+                         bool compare_origins, bool board_logits = false) const;
   /// Stores it (unless full); `new_boards`: the boards the step into the
-  /// state made - its own, the rest shared with its predecessors.
+  /// state made - its own, the rest shared with its predecessors;
+  /// `board_logits`: whether its request asked for them (find).
   void insert(std::uint64_t key, int moves_made, std::uint64_t epoch, const GameState& state,
-              const Evaluation& evaluation, std::size_t new_boards = 1);
+              const Evaluation& evaluation, std::size_t new_boards = 1, bool board_logits = false);
   /// Removes every entry whose state has fewer than `boards` boards, and
   /// returns how many. Every move adds a board and none is ever removed, so
   /// such a state is behind a root of `boards` boards for good: no search
@@ -814,6 +891,7 @@ class EvalCache {
     GameState state;
     int moves_made;  // A6: the moves made in the state's action
     std::uint64_t epoch;
+    bool board_logits;  // its request asked for D2's per-board leave logits
     Evaluation evaluation;
     std::size_t bytes;  // entry_bytes, as counted on insertion
   };
@@ -852,7 +930,13 @@ struct SearchStats {
   std::uint64_t stalemates = 0;
   std::uint64_t turn_caps = 0;         ///< nodes the turn cap ended (I11)
   std::uint64_t stuck = 0;             ///< turn starts with no child and no verdict
-  std::uint64_t truncated_listings = 0;  ///< whole-turn: the listing stopped early
+  /// D2's flat form: turns generated (the children made), and generators a
+  /// budget stopped (their nodes' children incomplete).
+  std::uint64_t generated_turns = 0;
+  std::uint64_t stopped_generators = 0;
+  /// ... of which stopped before their first turn, their nodes' turns E4's
+  /// listing's instead (SearchParams::flat_fallback).
+  std::uint64_t fallback_listings = 0;
   std::uint64_t nodes_created = 0;
   std::uint64_t nodes_collected = 0;   ///< deleted by re-rooting
   std::uint64_t reroots = 0;
@@ -872,7 +956,7 @@ struct SearchStats {
   // Wall-clock seconds in the rules engine's calls (not part of digest()):
   double seconds_mate = 0;     ///< turn starts' terminal checks (detect_mate)
   double seconds_expand = 0;   ///< leaves' expansions (legality classification included)
-  double seconds_listing = 0;  ///< whole-turn: the actions listed
+  double seconds_generate = 0;  ///< flat form: turns generated (the generators built and pulled)
   double seconds_verify = 0;   ///< (c) verifications of unknown edges
   /// Tree form: the interaction gates judged (inherited nodes' expansions are
   /// in seconds_expand).
@@ -889,14 +973,15 @@ enum class Terminal : std::uint8_t {
 
 struct EdgeView {
   const Move* move = nullptr;  ///< board-move: the move (nullptr for submit)
-  std::span<const Move> action;  ///< whole-turn: the action's moves (playable order)
+  std::span<const Move> action;  ///< flat form: the turn's moves (playable order)
   bool submit = false;
   bool pruned = false;
   bool unknown = false;   ///< the move's legality is unknown (a budget left it undecided)
   bool verified = false;  ///< verification has run on it (c)
   /// The logit its prior was taken from, before the temperature: a move's the
-  /// evaluator's (tree form: inherited), an action's the action prior's, a
-  /// submit edge's the submit logit (NaN: none given - submit_share).
+  /// evaluator's (tree form: inherited), a turn's (flat form) its score - its
+  /// options' per-board log-probabilities summed - a submit edge's the submit
+  /// logit (NaN: none given - submit_share).
   double logit = 0;
   double prior = 0;
   NodeId child = kNoNode;
@@ -947,10 +1032,10 @@ struct NodeView {
 
 /// One root child for the caller: its moves and statistics (root player's view).
 struct RootChild {
-  std::vector<Move> moves;  ///< one move (board-move), an action, or none (submit)
+  std::vector<Move> moves;  ///< one move (board-move), a turn (flat form), or none (submit)
   bool submit = false;
   /// Legal, or Unknown (the move's legality undecided by the expansion's
-  /// budget): never Illegal - those are removed. Actions and submit: Legal.
+  /// budget): never Illegal - those are removed. Turns and submit: Legal.
   MoveLegality legality = MoveLegality::Legal;
   double prior = 0;
   std::uint32_t visits = 0;  ///< (f) the policy target
@@ -1003,7 +1088,7 @@ struct RootChild {
 class Search {
  public:
   /// A search from `root`, with `moves_made` moves already made in the root's
-  /// action (register A6; 0: a turn start - the whole-turn split requires it).
+  /// action (register A6; 0: a turn start - the flat form requires it).
   /// Throws std::invalid_argument for inconsistent parameters (proof_store
   /// among them), a negative count, or a count of 0 where the root's
   /// obligations are met (a turn start's present lies on the mover's colour,
@@ -1106,13 +1191,13 @@ class Search {
   void advance(std::size_t index);
   /// Re-roots on the state reached by `moves` - one decision: under the
   /// board-move split one move (never submitted with it, D8) or none (submit),
-  /// under the whole-turn split one action, submitted - whether or not the
+  /// under the flat form one turn, submitted - whether or not the
   /// tree holds it.
   void advance_moves(std::span<const Move> moves);
   /// Re-roots on the turn start a whole action reaches - its moves in a
   /// playable order (the opponent's reply, at match play): under the
   /// board-move split one decision per move, then the submit decision; under
-  /// the whole-turn split advance_moves(moves). Atomic: the whole action is
+  /// the flat form advance_moves(moves). Atomic: the whole action is
   /// checked first (every move pseudo-legal where it is made, the submission
   /// legal: T5, C4) and std::invalid_argument thrown with nothing changed if
   /// it fails. From a turn start an action has at least one move; from a

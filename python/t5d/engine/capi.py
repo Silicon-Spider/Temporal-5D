@@ -250,7 +250,9 @@ T5D_VALUE_BINS = 51
 T5D_WDL = 3
 #: The uncertainty signal search consumes (register I10; ablation 6m).
 T5D_UNCERTAINTY_CATEGORICAL, T5D_UNCERTAINTY_ERROR_HEAD = 0, 1
-T5D_SPLIT_BOARD_MOVE, T5D_SPLIT_WHOLE_TURN, T5D_SPLIT_TREE = 0, 1, 2
+#: D2's arms: the board-move split, the flat form (whole legal turns generated best first - in
+#: the slot of the enumerating whole-turn arm it replaced, retired) and the tree form.
+T5D_SPLIT_BOARD_MOVE, T5D_SPLIT_FLAT, T5D_SPLIT_TREE = 0, 1, 2
 #: D2's tree form: its interaction gates (spec 8.2), a mask - ALWAYS is a test seam (every
 #: mid-turn node evaluated: spec 15.2's "every interaction gate firing", the ply split exactly).
 T5D_TREE_GATE_BETWEEN, T5D_TREE_GATE_CAPTURE, T5D_TREE_GATE_CHECK, T5D_TREE_GATE_PRESENT = 1, 2, 4, 8
@@ -261,7 +263,11 @@ T5D_STILL_TO_MOVE_PLAYABLE, T5D_STILL_TO_MOVE_MANDATORY = 0, 1
 T5D_CAPTURE_REACH, T5D_CAPTURE_ANY = 0, 1
 T5D_CHECK_PASSED, T5D_CHECK_SUBMISSION = 0, 1
 T5D_PRESENT_ANY, T5D_PRESENT_REWIND = 0, 1
-T5D_ACTION_PRIOR_SUM, T5D_ACTION_PRIOR_MEAN = 0, 1
+#: D2's flat form's readings (placeholders): a generated turn's prior; what a child is; which
+#: boards' distributions a jump between two playable boards belongs to.
+T5D_FLAT_PRIOR_GENERATED, T5D_FLAT_PRIOR_PRODUCT = 0, 1
+T5D_FLAT_UNIT_ACTIONS, T5D_FLAT_UNIT_SUCCESSORS = 0, 1
+T5D_FLAT_JUMPS_BOTH, T5D_FLAT_JUMPS_SOURCE = 0, 1
 T5D_NODE_KEY_STATE, T5D_NODE_KEY_STATE_AND_ORIGINS = 0, 1
 T5D_FINAL_VISITS, T5D_FINAL_LCB = 0, 1
 T5D_VALUE_PROBABILITIES, T5D_VALUE_LOGITS = 0, 1
@@ -280,9 +286,9 @@ class CSearchParams(ctypes.Structure):
 
     _fields_ = [
         ("split", c_int32),
-        ("action_prior", c_int32),
-        ("max_actions", c_uint64),
-        ("listing_nodes", c_uint64),
+        ("flat_prior", c_int32),  # flat form: T5D_FLAT_PRIOR_* (the retired whole-turn arm's action prior's slot)
+        ("retired_max_actions", c_uint64),  # the retired whole-turn listing cap: 0 or T5D_NO_LIMIT only
+        ("generator_nodes", c_uint64),  # flat form: each node's generator's node budget, over its life
         ("submit_share", c_double),
         ("legal_moves_only", c_int32),
         ("legality_checks", c_uint64),
@@ -346,6 +352,12 @@ class CSearchParams(ctypes.Structure):
         ("tree_check", c_int32),  # T5D_CHECK_*
         ("tree_inherit_value", c_int32),  # 1: an inherited node's FPU base and variance are its parent's evaluation's
         ("tree_present", c_int32),  # T5D_PRESENT_*: a shift of the present - any move of it, or a rewind only
+        # D2's flat form (split T5D_SPLIT_FLAT only): placeholders
+        ("flat_unit", c_int32),  # T5D_FLAT_UNIT_*: a child a distinct successor state or an action
+        ("flat_jumps", c_int32),  # T5D_FLAT_JUMPS_*
+        ("leave_share", c_double),  # a board's "leave it" probability where no board logit is given for it
+        ("flat_k0_max", c_double),  # the cap on k0 from the turn distribution's entropy
+        ("flat_fallback", c_uint64),  # a node whose generator stopped before its first turn: E4's listing's turns
         ("expand", ExpandOptions),
     ]
 
@@ -358,7 +370,7 @@ class CLeaf(ctypes.Structure):
         ("key", c_uint64),
         ("epoch", c_uint64),
         ("acting_player", c_int32),  # D8: whose action, until it submits - the value's perspective
-        ("submit_possible", c_int32),  # D8: submitting is an action here (board-move split)
+        ("submit_possible", c_int32),  # D8: submitting is an action here (board-move split, tree form; 0 flat)
         ("submit_legal", c_int32),  # ... and legal (C4, exact)
         ("legality", POINTER(c_uint8)),  # per move: T5D_LEGALITY_LEGAL or _UNKNOWN; NULL: none made
         ("expansion", CExpansion),  # logit i scores expansion.moves[i]; last
@@ -419,6 +431,10 @@ class CSearchSummary(ctypes.Structure):
         ("gate_check", c_uint64),
         ("gate_present", c_uint64),
         ("gate_always", c_uint64),
+        # appended for D2's flat form: turns generated, and generators a budget stopped
+        ("generated_turns", c_uint64),
+        ("stopped_generators", c_uint64),
+        ("fallback_listings", c_uint64),
     ]
 
 
@@ -477,7 +493,7 @@ class CEvaluations(ctypes.Structure):
         ("error_count", c_size_t),
         ("moves_left", POINTER(c_float)),  # one per leaf (>= 0; NaN: none), or NULL
         ("moves_left_count", c_size_t),
-        ("board_logits", POINTER(c_float)),  # reserved for D2's flat form (not built): NULL
+        ("board_logits", POINTER(c_float)),  # flat form: each leaf's board_count "leave it" logits (NaN: none), or NULL
         ("board_logit_count", c_size_t),
     ]
 

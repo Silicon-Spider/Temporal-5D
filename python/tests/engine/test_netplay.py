@@ -69,8 +69,8 @@ def nets():
     [
         ("Standard", "ply", "self"),
         ("Standard - Two Timelines", "ply", "match"),
-        ("Standard", "turn", "match"),
-        ("Standard - Two Timelines", "turn", "self"),
+        ("Standard", "flat", "match"),
+        ("Standard - Two Timelines", "flat", "self"),
         ("Standard - Two Timelines", "tree", "self"),
         ("Misc - Timeline Tactician", "tree", "match"),
     ],
@@ -83,8 +83,8 @@ def test_a_game_replays_legal(nets, variant, split, mode):
     assert res.end in ("checkmate", "stalemate", "turn_cap")
     assert res.actions and all(res.actions)  # every action holds a move
     assert res.decisions >= len(res.actions) and res.evaluations > 0 and res.playouts >= 8 * res.decisions - 8
-    if split == "turn":
-        assert res.decisions == len(res.actions)  # whole turns: one decision per action
+    if split == "flat":
+        assert res.decisions == len(res.actions)  # the flat form: one decision per turn
     else:
         assert res.decisions == sum(len(a) for a in res.actions) + len(res.actions)  # moves, then a submit
     replay = replay_with_gate(res.record, gate=GATE)
@@ -128,11 +128,11 @@ def test_the_result_is_the_final_positions(nets, fen, end, winner, result):
 
 @requires_gate
 def test_a_game_that_ends_in_checkmate_replays_with_its_result(nets):
-    """Focused - Just Kings under whole turns: with these seeds the game ends in checkmate on the
-    development machine (the review's case); whatever it ends in, its result is the final
+    """Focused - Just Kings under the flat form (the review's case, first played under the retired
+    whole-turn arm, where it ended in checkmate): whatever it ends in, its result is the final
     position's."""
     cfg, evaluators = nets
-    play = PlayConfig(variant="Focused - Just Kings", split="turn", playouts=8, batch_size=4, cap_turns=4, cap_boards=40, seed=1)
+    play = PlayConfig(variant="Focused - Just Kings", split="flat", playouts=8, batch_size=4, cap_turns=4, cap_boards=40, seed=1)
     with torch.no_grad():
         res = play_game(evaluators[0], play, net_cfg=cfg)
     replay = replay_with_gate(res.record, gate=GATE)

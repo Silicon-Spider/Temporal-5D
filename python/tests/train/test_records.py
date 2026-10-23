@@ -325,9 +325,10 @@ def test_the_network_id_follows_the_weights():
 
 
 @requires_engine
-def test_the_generator_refuses_whole_turns_and_the_optimistic_policy():
-    with pytest.raises(ValueError, match="234"):
-        GeneratorConfig(split="turn").validate()
+def test_the_generator_refuses_the_flat_form_and_the_optimistic_policy():
+    for split in ("flat", "turn"):  # the flat form until its policy target exists; the retired arm's name
+        with pytest.raises(ValueError, match=r"234\(b\)"):
+            GeneratorConfig(split=split).validate()
     cfg = NetConfig(**{**SMALL, "optimistic_policy": True})
     ev = NetworkEvaluator(build_model(cfg, seed=0).eval(), policy="optimistic")
     with pytest.raises(ValueError, match="D9"):

@@ -209,11 +209,11 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
       g.search_turn_caps += after.turn_caps - before.turn_caps;
       g.seconds_search_mate += after.seconds_mate - before.seconds_mate;
       g.seconds_search_expand += after.seconds_expand - before.seconds_expand;
-      g.seconds_search_listing += after.seconds_listing - before.seconds_listing;
+      g.seconds_search_generate += after.seconds_generate - before.seconds_generate;
       g.seconds_search_verify += after.seconds_verify - before.seconds_verify;
       ++g.decisions;
       const RootChild& c = children.at(pick);
-      if (sp.split == TurnSplit::WholeTurn) {
+      if (sp.split == TurnSplit::Flat) {
         for (const Move& m : c.moves) {
           play_checked(s, m, scratch);
           action.push_back(m);
