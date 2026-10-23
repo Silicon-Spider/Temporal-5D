@@ -31,11 +31,13 @@ from t5d.train.targets import (
     collate_rows,
     effort_bin,
     kl_divergence,
+    noise_keep_of,
     policy_target,
     pruned_value,
     pruned_visits,
     raw_prior,
     read_targets,
+    replica_prior,
     soft_policy,
     target_differences,
     write_targets,
@@ -209,6 +211,36 @@ def test_the_boost_is_taken_out_of_the_replica():
     boosted = _children([60, 30], [0.2, 0.0], [0.5, 0.75], boost=[0.0, 0.25])
     cfg = TargetConfig()
     assert pruned_visits(_decision(0, boosted), cfg).tolist() == pruned_visits(_decision(0, base), cfg).tolist()
+
+
+def test_the_replica_unsteers_the_noised_prior_by_the_noise_share():
+    """The E10 review (A's L3): the search's prior after the root noise is (1 - eps) x the steered
+    noise-free prior plus the noise's part, so the unsteered prior with the same noise is that less
+    (1 - eps) x the boost - not the whole boost. The builder reads eps from the record."""
+    eps = 0.25
+    unsteered = np.array([0.4, 0.3, 0.2, 0.1])
+    boost = np.array([-0.05, 0.15, -0.04, -0.06])  # signed: the unboosted drained
+    nf = unsteered + boost
+    mix = eps * np.array([0.1, 0.5, 0.3, 0.1])
+    prior = (1 - eps) * nf + mix
+    n, q = [60, 30, 20, 12], [0.30, 0.10, 0.05, 0.0]
+    d = _decision(0, _children(n, q, prior.tolist(), noise_free=nf.tolist(), boost=boost.tolist()), root_visits=400)
+    cfg = TargetConfig()
+    np.testing.assert_allclose(replica_prior(d, cfg, noise_keep=1 - eps), (1 - eps) * unsteered + mix)
+    np.testing.assert_allclose(replica_prior(d, replace(cfg, prune_prior="noise_free")), unsteered)
+    no_noise = replace(d, root_noise=False)
+    np.testing.assert_allclose(replica_prior(no_noise, cfg, noise_keep=1 - eps), prior - boost)  # no noise: the whole boost
+    # The builder reads eps from the header (the full search's parameters) ...
+    game = _game([d])
+    game.header["search"] = {"full": {"dirichlet_epsilon": eps}}
+    assert noise_keep_of(game.header, d) == 1 - eps
+    assert noise_keep_of(game.header, no_noise) == 1.0
+    built = build_targets(game, NO_DEBLUNDER)
+    np.testing.assert_allclose(built.pruned[0], pruned_visits(d, NO_DEBLUNDER, noise_keep=1 - eps))
+    # ... and refuses a noised, steered decision whose header names no eps.
+    with pytest.raises(ValueError, match="dirichlet_epsilon"):
+        noise_keep_of({"search": {}}, d)
+    assert noise_keep_of({"search": {}}, replace(d, children=_children(n, q, prior.tolist()))) == 1.0
 
 
 def test_the_replica_reads_its_recorded_inputs():

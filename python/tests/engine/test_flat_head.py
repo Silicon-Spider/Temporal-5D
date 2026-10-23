@@ -122,9 +122,13 @@ def test_a_flat_search_reads_the_networks_leave_logits(jumps, boards):
     t = float(params.root_policy_temperature) * float(params.policy_temperature)
     arrivals = jumps == T5D_FLAT_JUMPS_BOTH
     want = _softmax(_scores(raw, position, playable, children, t, arrivals=arrivals, leave_share=None))
-    got = np.array([c.prior_noise_free for c in children])
+    # E10 (merged with main 62ff24d): the search's default steers the root - the asset map's boosts
+    # (I2) - so the network's own prior is the unsteered one; the noise-free prior is it plus the boost.
+    got = np.array([c.prior_unsteered for c in children])
+    steered = np.array([c.prior_noise_free for c in children])
     assert np.allclose(got, want, rtol=0, atol=2e-6), np.abs(got - want).max()
-    assert np.allclose([c.prior for c in children], got, rtol=0, atol=1e-12)  # no root noise
+    assert np.allclose(steered - np.array([c.boost for c in children]), got, rtol=0, atol=1e-6)
+    assert np.allclose([c.prior for c in children], steered, rtol=0, atol=1e-12)  # no root noise
     # Where some turns leave a board and others play it, the leave logit moves the priors: the
     # fallback's would differ. (Where every turn plays every board - all mandatory - each board's
     # normaliser is common to every turn and the priors cannot tell the two apart.)
