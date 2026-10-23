@@ -43,7 +43,7 @@ from tests.net.test_perspective import (
 
 pytestmark = requires_engine
 
-RELATIONS = ("attack", "defence", "xray")
+RELATIONS = ("attack", "defence", "pin", "xray", "check")
 
 
 def mirror_board_string(text: str) -> str:
@@ -71,24 +71,35 @@ def _games() -> list[tuple[str, Game]]:
 
 
 @pytest.fixture(scope="module")
-def pairs():
-    """``(label, original, the engine's mirror, order)``: ``order[i]`` is the engine's index of
-    ``state.mirror``'s board ``i`` (the engine stores boards by (timeline, half-turn), and
-    negated timelines reverse that order)."""
+def fens():
+    """``(label, parity, 5DFEN board strings)`` of every position (``_games``)."""
     out = []
     for label, game in _games():
         with game:
             snap = game.snapshot()
-            parity = "even" if snap.even else "odd"
-            strings = [fen for _, _, fen in snap.boards]
+            out.append((label, "even" if snap.even else "odd", [fen for _, _, fen in snap.boards]))
+    return out
+
+
+def _mirror_order(s, e) -> list[int]:
+    """The engine's index of ``state.mirror(s)``'s board ``i`` in ``e``, the engine's mirror."""
+    key = {(int(p), int(h)): i for i, (p, h) in enumerate(zip(e.timeline, e.half_turn, strict=True))}
+    m = mirror(s)
+    return [key[(int(p), int(h))] for p, h in zip(m.timeline, m.half_turn, strict=True)]
+
+
+@pytest.fixture(scope="module")
+def pairs(fens):
+    """``(label, original, the engine's mirror, order)``: ``order[i]`` is the engine's index of
+    ``state.mirror``'s board ``i`` (the engine stores boards by (timeline, half-turn), and
+    negated timelines reverse that order)."""
+    out = []
+    for label, parity, strings in fens:
         with Game.from_fen(strings, parity=parity) as g:
             s = to_position_state(g.expand(relations=RELATIONS))
         with Game.from_fen([mirror_board_string(t) for t in strings], parity=parity) as g:
             e = to_position_state(g.expand(relations=RELATIONS))
-        key = {(int(p), int(h)): i for i, (p, h) in enumerate(zip(e.timeline, e.half_turn, strict=True))}
-        m = mirror(s)
-        order = [key[(int(p), int(h))] for p, h in zip(m.timeline, m.half_turn, strict=True)]
-        out.append((label, s, e, order))
+        out.append((label, s, e, _mirror_order(s, e)))
     return out
 
 
@@ -112,6 +123,9 @@ def test_the_engines_mirror_is_the_mirror(pairs):
         for name in ("moves", "edges"):
             assert _rows(getattr(m, name)) == _rows(getattr(e, name)), (label, name)  # the engine's order is its own
         assert e.moves.shape[0] == s.moves.shape[0] and e.moves.shape[0] > 0, label
+    # B11's five types are all exercised (pin and check since engine ABI round 3), the mirror's included.
+    for rel in RELATIONS:
+        assert any((s.edges[:, 2] == RELATION_IDS[rel]).any() for _, s, _, _ in pairs), rel
 
 
 def test_the_canonical_view_of_a_real_position(pairs):
@@ -200,10 +214,11 @@ def test_past_the_shift_on_real_positions():
 
 def test_the_other_perspectives_anchor_on_real_positions(pairs):
     """Spec issue 229 on the engine's own positions, both acting colours: a refresh's dense pass
-    as the anchor is reads the engine's moves, move graph and typed relations, every one starting
-    on the acting player's pieces; the pass from the other colour's side reads none of them (each
-    would start on "their" pieces, which no conversion produces); cached = reference from both
-    sides."""
+    as the anchor is reads the engine's moves, move graph and typed relations - the moves, the
+    move graph and attack, defence and x-ray starting on the acting player's pieces, and only pin
+    and check also on the opponent's (each side read from its own view since engine ABI round 3,
+    build-log spec issue 172); the pass from the other colour's side reads none of them; cached =
+    reference from both sides."""
     model = build_model(NetConfig(trunk_dtype="fp32", n_layers=1, attn_scope="block_causal", typed_edge_bias=True), seed=7).eval()
     seen = set()
     for label, s, _, _ in pairs[1::4]:
@@ -219,7 +234,10 @@ def test_the_other_perspectives_anchor_on_real_positions(pairs):
         assert_other_perspective_anchor(passes, s)
         own = passes[0]
         n_move_edges = int((own.edges[0][own.edge_valid[0]][:, 2] == RELATION_IDS["move"]).sum())
-        assert foreign_sources(own) == (0, 0, 0) and n_move_edges > 0 and bool(own.move_valid.any()), label
+        assert foreign_sources(own)[:2] == (0, 0) and n_move_edges > 0 and bool(own.move_valid.any()), label
+        edges = own.edges[0][own.edge_valid[0]]
+        theirs = edges[own.owner[0][edges[:, 0]] != OWNER_OURS]
+        assert set(theirs[:, 2].tolist()) <= {RELATION_IDS["pin"], RELATION_IDS["check"]}, label
         for node in (s, viewed_by(s, 1 - int(s.acting_player))):
             _close(cached.evaluate(node, epoch), reference_output(model, node, anchor=s))
     assert seen == {0, 1}

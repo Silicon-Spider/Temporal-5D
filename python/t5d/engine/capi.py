@@ -75,16 +75,24 @@ T5D_MOVE_TRAVEL = 64
 T5D_RELATION_MOVE = 0
 T5D_RELATION_ATTACK = 1
 T5D_RELATION_DEFENCE = 2
-T5D_RELATION_PIN = 3  # reserved, not built
+T5D_RELATION_PIN = 3
 T5D_RELATION_XRAY = 4
-T5D_RELATION_CHECK = 5  # reserved, not built
-T5D_RELATION_TRAVEL_THREAT = 6  # reserved, not built
+T5D_RELATION_CHECK = 5
+T5D_RELATION_RESERVED = 6  # never emitted, refused if asked for (register B11's five types are 1-5)
 
-#: The relations the engine builds, by the network's names (``t5d_expand_options.relations``).
-BUILT_RELATIONS: dict[str, int] = {"attack": T5D_RELATION_ATTACK, "defence": T5D_RELATION_DEFENCE, "xray": T5D_RELATION_XRAY}
-#: Named by the network's contract but refused by the engine (T5D_ERR_UNSUPPORTED): pin
-#: and check would read check detection; travel-threat has no edge defined by the spec.
-RESERVED_RELATIONS: dict[str, int] = {"pin": T5D_RELATION_PIN, "check": T5D_RELATION_CHECK, "travel_threat": T5D_RELATION_TRAVEL_THREAT}
+#: The relations the engine builds, by the network's names (``t5d_expand_options.relations``):
+#: register B11's five types, in ``RELATION_TYPES``' order (pin and check since engine ABI round
+#: 3, each side read from its own view - the engine README's "Expansion", (e)).
+BUILT_RELATIONS: dict[str, int] = {
+    "attack": T5D_RELATION_ATTACK,
+    "defence": T5D_RELATION_DEFENCE,
+    "pin": T5D_RELATION_PIN,
+    "xray": T5D_RELATION_XRAY,
+    "check": T5D_RELATION_CHECK,
+}
+#: Ids the C ABI keeps but the engine refuses (T5D_ERR_UNSUPPORTED): none is named any more -
+#: id 6 is reserved (append-only ids) and passed only as a number.
+RESERVED_RELATIONS: dict[str, int] = {}
 
 
 # ---- structures -----------------------------------------------------------------------------

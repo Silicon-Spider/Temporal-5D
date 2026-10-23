@@ -225,24 +225,25 @@ t5d::ExpandOptions expand_options_from(const t5d_expand_options* o) {
       throw std::invalid_argument("square_features must be T5D_FEATURES_ALL, _SCOPE or _NONE, "
                                   "not " + std::to_string(o->square_features));
   }
-  constexpr uint32_t kReserved = (1u << T5D_RELATION_PIN) | (1u << T5D_RELATION_CHECK) |
-                                 (1u << T5D_RELATION_TRAVEL_THREAT);
+  constexpr uint32_t kReserved = 1u << T5D_RELATION_RESERVED;
   constexpr uint32_t kKnown = (1u << T5D_RELATION_MOVE) | T5D_RELATIONS_ATTACK |
-                              T5D_RELATIONS_DEFENCE | T5D_RELATIONS_XRAY | kReserved;
+                              T5D_RELATIONS_DEFENCE | T5D_RELATIONS_PIN | T5D_RELATIONS_XRAY |
+                              T5D_RELATIONS_CHECK | kReserved;
   if ((o->relations & ~kKnown) != 0) {
     throw std::invalid_argument("relations: unknown bits " +
                                 std::to_string(o->relations & ~kKnown));
   }
   if ((o->relations & kReserved) != 0) {
     throw NotImplemented(
-        "relations: pin and check are not built (they would read check detection: rules "
-        "reference R1, register H36), and travel-threat has no edge defined by "
-        "the design spec (§6, B11; §11.1 uses travel threats only as a class of forcing "
-        "moves) - none is built");
+        "relations: id 6 is reserved and never built (register B11: travel-threat, once a "
+        "sixth type, was folded into attack at CHECKPOINT 6 - a travel threat is a "
+        "cross-board attack)");
   }
   options.attack = (o->relations & T5D_RELATIONS_ATTACK) != 0;
   options.defence = (o->relations & T5D_RELATIONS_DEFENCE) != 0;
+  options.pin = (o->relations & T5D_RELATIONS_PIN) != 0;
   options.xray = (o->relations & T5D_RELATIONS_XRAY) != 0;
+  options.check = (o->relations & T5D_RELATIONS_CHECK) != 0;
   // Engine ABI round 2 (I15): the search leaves' legal-moves filter.
   if (o->legal_moves != 0 && o->legal_moves != 1) {
     throw std::invalid_argument("legal_moves must be 0 or 1, not " + std::to_string(o->legal_moves));

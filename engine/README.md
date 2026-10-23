@@ -68,6 +68,7 @@ rules reference, `docs/rules/README.md`, which the code cites throughout.
 | **E5c:** the scanner's in-check stage (M12's optimisation pass), Lazy SMP and the shared solved store; 6b per board-count range at the design thread budget | `include/t5d/scanner.hpp`, `tools/t5d_scan6b.cpp` | §11.3, §15.6, H17, H19, M12, M13 |
 | **E7:** Q4 as ruled (R8) by default; the acting player and the submit action in the expansion and the C API | `include/t5d/rules.hpp`, `include/t5d/expand.hpp`, `include/t5d/capi.h` | §8.2, §11.0 item 2, D8 |
 | **ABI round 1:** the turn state in the expansion and the C API - mandatory and optional boards, moves made in the action (the game handle's count); the count in the search's identity, evaluation requests, evaluation cache and batches | `include/t5d/expand.hpp`, `include/t5d/capi.h`, `include/t5d/mcts.hpp` | §2.3, §8.5, §15.2; A6, C11, C14 |
+| **ABI round 3:** B11's pin and check relations in the expansion, each side read from its own view (the opponent's: check status's pass) | `include/t5d/views.hpp`, `include/t5d/expand.hpp`, `include/t5d/capi.h` | §6; B11 |
 | **E6a:** the main search: PUCT, widening, D2's arms (ply split, tree form, flat form), MCGS, the solver, final selection, persistence; built-in evaluators | `include/t5d/mcts.hpp`, `src/mcts.cpp`, `src/mcts_evaluators.cpp` | §8.1-8.7, §11.1, §15.4; D2, E1-E9, C11-C14, H2, H15 |
 | **E6a:** self-play and match play; the turn cap | `include/t5d/selfplay.hpp`, `src/selfplay.cpp` | §8.7, §12.3; C12-C14, I11 |
 | **E6a:** the search's C API: the step API for an external evaluator | `include/t5d/capi_search.h`, `src/capi_search.cpp` | §8.1, §8.3; D1, D3 |
@@ -799,11 +800,24 @@ record carries both.
   policy pointer's source squares. `travel_destinations()` and `source_boards()`
   list them whatever the window.
 - **(e) typed relations** (§6 "Typed edge biases", B11 - **provisional**, each off by
-  default: `ExpandOptions::attack`, `defence`, `xray`). Rows of (source board, source
-  cell, target board, target cell, relation id), the ids those of
+  default: `ExpandOptions::attack`, `defence`, `pin`, `xray`, `check`). Rows of (source
+  board, source cell, target board, target cell, relation id), the ids those of
   `python/t5d/net/state.py` (`RELATION_TYPES`: move 0, attack 1, defence 2, pin 3,
-  x-ray 4, check 5, travel-threat 6). Only the subset that check detection cannot
-  change, for the player to move's pieces on the boards (a)'s moves start from:
+  x-ray 4, check 5) - B11's five types. Id 6 is reserved (append-only ids): never
+  emitted, refused if asked for (the C API: `T5D_ERR_UNSUPPORTED`); it was
+  travel-threat's until CHECKPOINT 6 folded travel threats into attack (a travel
+  threat is a cross-board attack). Attack, defence and x-ray are the player to move's
+  pieces' on the boards (a)'s moves start from; pin and check (engine ABI round 3) are
+  read from **both sides, each from its own view** (`t5d/views.hpp`; build-log spec
+  issue 172): the acting player's view is the state itself; the opponent's is the
+  multiverse **check status passes** (R1, C6: `passed_multiverse` - the acting
+  player's active boards in the present that it has not played are advanced unchanged,
+  and the opponent's pieces on all its playable boards are read), a passed copy's
+  places reported at the board it copies (p, present). At a turn start that is R1's
+  check status exactly; mid-action the same pass of the boards still to play (none once
+  the present has shifted: then the state itself, C4's position); where the pass is
+  undefined (Q6's alternative, a deferred timeline of the mover's in the present
+  mid-action) the state itself:
   - **attack**: source square → the square of the enemy piece a capture of (a)
     takes (en passant: the pawn taken, not the square moved to); once per pair;
   - **defence**: source square → a piece of the mover's that the source piece's
@@ -814,17 +828,39 @@ record carries both.
     if empty; the ray goes on under the same rules and stops at the next piece, of
     either colour, which is the target (recorded where a capture or defence of it
     would be, its board a destination under the ruleset);
-  - **not built, reserved**: *pin* and *check*, which would read check detection
-    (`t5d/check.hpp`, stage E4; R1, H36) - E4 built that, not these relations;
-    *travel-threat* is named by §6 and register B11 and used by
-    §11.1 as a class of forcing moves ("branching moves that create a timeline with
-    an immediate threat"), but no edge - source and target squares - is defined
-    anywhere. Asking for any of the three throws (the C API:
-    `T5D_ERR_UNSUPPORTED`).
+  - **pin** (sliders; spec issue 173): the x-ray's walk, when the first piece is an
+    **enemy that is not royal** and the next an **enemy royal piece** (a king or a royal
+    queen, never a common king: 4.13, C1) that the slider would capture were the first
+    absent - its board a destination under the ruleset (`GeometricRelation::Kind::Pin`,
+    `t5d/movegen.hpp`). Source the slider's square, target the **pinned** piece's. Each
+    side's sliders in its own view: the acting player's on its playable boards, the
+    opponent's on the passed multiverse - so a pin of the acting player's piece is one
+    the opponent's next turn would hold, as R1's pass reads it. Across boards and through
+    time like any slide (J7, J8): along the timeline axis, back in time onto history
+    boards (a capture that would branch counts, C2). The pinned piece may stand on a
+    board its owner cannot move from (a history board): it is still the only piece
+    between, and the relation says so. Whether a pinned piece may move is not asked -
+    the rules have no pins (C3: check detection ignores them);
+  - **check** (spec issue 174): a piece → an **enemy royal piece** it can capture, by
+    **check detection's own scan** (`for_each_royal_capture`, `t5d/check.hpp`; H36):
+    the opponent's captures of the acting player's royals in its view - at a turn start
+    exactly what R1 asks (`in_check` holds iff such an edge exists; the tests hold it on
+    random play) - then the acting player's captures of the opponent's royals in the
+    state (C4's scan from the other side - empty after any legal submission, kept for
+    positions set up from 5DFEN). Captures through time and across timelines are the
+    scan's (C2: royals on history boards count; a capture that would branch into an
+    inactive timeline counts, R1).
 
-  Defence and x-ray come from the move generator's own geometry, in the same pass as
-  the moves (`generate_moves(state, moves, relations, kinds)` in `t5d/movegen.hpp`),
-  so a relation and a move never disagree about what a piece reaches.
+  Defence, x-ray and the acting player's pins come from the move generator's own
+  geometry, in the same pass as the moves (`generate_moves(state, moves, relations,
+  kinds)` in `t5d/movegen.hpp`), so a relation and a move never disagree about what a
+  piece reaches; the opponent's pins from the same code on the passed multiverse
+  (`append_moves_of` with relations), and checks from check detection, whose behaviour
+  nothing here changes (its predicates are only called). Order: attacks, then the
+  generator's relations in generation order, then the opponent's pins, then the
+  opponent's checks, then the acting player's. Pin and check **allocate** (the passed
+  multiverse is a multiverse of its own); the other three keep the expansion
+  allocation-free.
 - **(f) features**: per board (every board) - timeline position p (the engine's
   mapping, "-0" → -1), half-turn h = 2T + (black to move), head, active timeline,
   side to move (h & 1), **playable now** (the head of its timeline with the mover to
@@ -917,7 +953,9 @@ travel into a longer past grows with history, by the rules - not with the boards
 read; the square features of every board under `SquareFeatures::All` are
 O(boards × squares) - the network's full-history input itself - decoded from each
 board's mailbox (`Board::codes()`) sixteen cells at a time (the GCC/Clang vector
-extension; scalar elsewhere). Under `Scope` the features are O(scope).
+extension; scalar elsewhere). Under `Scope` the features are O(scope). The pin and
+check relations (engine ABI round 3) allocate: they read the opponent's view, a
+multiverse of its own, and check detection's scans; the other three relations do not.
 
 ### The C API for games (`t5d/capi.h`)
 
@@ -956,7 +994,7 @@ stage E7 bit 3 meant the opposite and was named `T5D_RULES_MOVES_AFTER_SHIFT`; t
 name is now 0 (the default), so a caller that asked for moves after the shift still
 gets them, but a caller that wrote the value 8 itself now gets the Guide-literal
 reading. New statuses:
-`T5D_ERR_UNSUPPORTED` (a variant or a relation not built) and `T5D_ERR_ILLEGAL` (a
+`T5D_ERR_UNSUPPORTED` (a variant not built, or the reserved relation id 6) and `T5D_ERR_ILLEGAL` (a
 move or a submission the rules refuse - a submission that leaves a royal of the
 mover's capturable included, C4, R1, unless `t5d_game_set_legality` set the game to
 `T5D_PSEUDO_LEGAL`). The legal-moves switch is not in the C API yet
@@ -4044,6 +4082,13 @@ Each is recorded where it is made (the header comments) and listed here:
   (Q4); "moves already made" counts moves since the action's turn start, a jump between
   two boards being one; and §15.4's turn structure holds the count (0 below a submit,
   the parent's + 1 below a move).
+- **Engine ABI round 3's readings** (build-log spec issues 172-174): the two views a
+  decision state is read from - the acting player's (the state) and the opponent's (the
+  multiverse check status passes, R1; mid-action the pass of the boards still to play)
+  (issue 172); the pin relation - a slider through one enemy that is not royal onto an
+  enemy royal it would capture, the pinned piece the target, each side's sliders in its
+  own view (issue 173); the check relation - check detection's own royal captures, the
+  opponent's in its view and the acting player's in the state (issue 174).
 - **Engine ABI round 2's readings** (build-log spec issues 148 and up):
   - the draw probability D backed up beside the value on every node and edge (a mate D
     0, a stalemate and the turn cap D 1); moves-left recorded per node, never backed up

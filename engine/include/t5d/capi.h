@@ -216,12 +216,17 @@ typedef struct t5d_game t5d_game;
 #define T5D_FEATURES_SCOPE 1 /* W(k), E(k) and src_extra(k): the windowed input */
 #define T5D_FEATURES_NONE 2
 
-/* Bits of t5d_expand_options.relations: 1 << relation id (t5d/records.h). The
- * move graph is always made; T5D_RELATION_PIN, _CHECK and _TRAVEL_THREAT are
- * reserved and refused (T5D_ERR_UNSUPPORTED). */
+/* Bits of t5d_expand_options.relations: 1 << relation id (t5d/records.h) -
+ * register B11's five types (t5d/expand.hpp, (e)). The move graph is always
+ * made; T5D_RELATION_RESERVED (6) is refused (T5D_ERR_UNSUPPORTED). Pin and
+ * check (engine ABI round 3) read both sides, each from its own view - the
+ * opponent's the multiverse check status passes (R1) - and make the expansion
+ * allocate. */
 #define T5D_RELATIONS_ATTACK (1u << T5D_RELATION_ATTACK)
 #define T5D_RELATIONS_DEFENCE (1u << T5D_RELATION_DEFENCE)
+#define T5D_RELATIONS_PIN (1u << T5D_RELATION_PIN)
 #define T5D_RELATIONS_XRAY (1u << T5D_RELATION_XRAY)
+#define T5D_RELATIONS_CHECK (1u << T5D_RELATION_CHECK)
 
 /* window_depth and band_depth of a board in no window. */
 #define T5D_NO_WINDOW INT32_MAX
