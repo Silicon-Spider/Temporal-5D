@@ -43,6 +43,8 @@ def _driver_inputs(oracle: str) -> list[Path]:
         return [paths.DRIVERS / "ftxi" / "CMakeLists.txt", paths.DRIVERS / "ftxi" / "ftxi_driver.cpp"]
     if oracle == "cwmtt":
         return [paths.DRIVERS / "cwmtt" / "Driver.hs"]
+    if oracle == "kairos":
+        return [paths.DRIVERS / "kairos" / name for name in KAIROS_DRIVER_FILES]
     return []
 
 
@@ -218,12 +220,44 @@ def _build_notation(pin: Pin, lock: Lock, root: Path, bootstrap: bool, log: Log)
     return _finish(pin, root, {"root": "src", "parser": "src/parsers/pgn.js"}, {"node": node.version, "boards": boards})
 
 
-_RECIPES = {"ftxi": _build_ftxi, "cwmtt": _build_cwmtt, "chessin5d": _build_chessin5d, "notation": _build_notation}
+# The harness's Kairos driver: a cargo package of its own, copied beside the export.
+KAIROS_DRIVER_FILES = ("Cargo.toml", "Cargo.lock", "src/main.rs")
+
+
+def _build_kairos(pin: Pin, lock: Lock, root: Path, bootstrap: bool, log: Log) -> Build:
+    cargo, rustc = toolchain.find_rust(lock, bootstrap)
+    _export(pin, root, log)  # root/src: the pinned crate, which the driver's Cargo.toml names as ../src
+    driver = root / "driver"
+    for name in KAIROS_DRIVER_FILES:
+        target = driver / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(paths.DRIVERS / "kairos" / name, target)
+    # Run from the build root, outside the export, so that the crate's .cargo/config.toml
+    # (-C target-cpu=native) is not read: the same build on every x86-64 machine. Offline and
+    # locked: the crate has no dependencies, and the driver's lock file says so.
+    env = toolchain.rust_env(cargo, rustc, ceiling=root)
+    env["CARGO_TARGET_DIR"] = os.fspath(root / "target")
+    found = re.search(r"^host: (\S+)$", check_run([rustc.path, "-vV"], env=env, timeout=120), re.M)
+    host = found.group(1) if found else None
+    if host and host.endswith("-windows-gnu"):
+        # Link with the MinGW linker the toolchain ships (rust-mingw), never a gcc that happens to be
+        # on PATH: one built for another C runtime would link the driver against that runtime instead.
+        env["RUSTFLAGS"] = "-C link-self-contained=yes"
+    log(f"  building the harness driver against the pinned crate with Rust {rustc.version}")
+    check_run([cargo.path, "build", "--release", "--locked", "--offline", "--manifest-path", driver / "Cargo.toml"],
+              cwd=root, env=env, timeout=3600)
+    artifacts = {"driver": f"target/release/{exe('kairos_oracle_driver')}"}
+    return _finish(pin, root, artifacts, {"rustc": rustc.version, "cargo": cargo.version, "host": host})
+
+
+_RECIPES = {"ftxi": _build_ftxi, "cwmtt": _build_cwmtt, "chessin5d": _build_chessin5d, "notation": _build_notation,
+            "kairos": _build_kairos}
 
 
 def recipe_tools(oracle: str) -> tuple[str, ...]:
     """The build tools a recipe uses, by the names `doctor` prints them under."""
-    tools = {"ftxi": ("c++", "cmake"), "cwmtt": ("ghc",), "chessin5d": ("node", "npm"), "notation": ("node",)}[oracle]
+    tools = {"ftxi": ("c++", "cmake"), "cwmtt": ("ghc",), "chessin5d": ("node", "npm"), "notation": ("node",),
+             "kairos": ("rust",)}[oracle]
     return (*tools, "ninja") if oracle == "ftxi" and is_windows() else tools
 
 

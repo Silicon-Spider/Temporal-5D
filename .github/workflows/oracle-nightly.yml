@@ -1,6 +1,8 @@
 # Nightly and release tiers of the oracle gate (design spec 11.0, decision H27):
 # all three rules oracles - ftxi/5dchess_engine, penteract/cwmtt and Chess in 5D -
 # and the notation repository's parser (parse-only), over the whole pinned corpus.
+# The fourth rules oracle (decision H52, Kairos) is built here too, and joins the
+# tiers once its golden files are recorded (oracles/README.md, "What is pinned").
 #
 #   nightly  every night, and on demand
 #   release  before any generator release or proof-channel enablement: run it by
@@ -82,6 +84,14 @@ jobs:
           ghc-version: "9.10.3"
           enable-stack: false
           cabal-update: false
+
+      # Exactly the release pinned in oracles/oracles.lock.toml ([toolchain.rust]),
+      # which the harness fetches into its cache from checksum-pinned archives: the
+      # runner's own Rust is another release, and the harness refuses it.
+      # (`--bootstrap` fetches only what a stale build lacks; GHC is installed above.)
+      - name: Fetch the pinned Rust toolchain (only when a stale build needs it)
+        if: contains(format(',{0},', steps.plan.outputs.tools), ',rust,')
+        run: python oracles/harness.py build --bootstrap
 
       - name: Build every oracle
         run: |
