@@ -116,7 +116,7 @@ import numpy as np
 import torch
 
 from ..engine.capi import T5D_FLAT_JUMPS_BOTH, T5D_MOVE_BRANCHING, T5D_MOVE_PROMOTION, T5D_MOVE_TRAVEL
-from ..net.state import collate
+from ..net.state import collate, to_piece_centric
 from .losses import Targets
 from .records import DecisionRecord, GameRecord
 from .reply_map import AMBIGUOUS_MODES, ReplyMap, map_reply
@@ -898,7 +898,12 @@ class Row:
 def collate_rows(rows: Sequence[Row], net_cfg) -> tuple:
     """The network's batch and the losses' ``Targets`` for ``rows`` (``losses.Targets``; padding
     carries no target). With the reply prototype on (``NetConfig.opp_reply``) each row's input
-    carries its mapped reply moves (``PositionState.opp_moves``) and its target; otherwise none."""
+    carries its mapped reply moves (``PositionState.opp_moves``) and its target; otherwise none.
+    For a piece-centric network (register A5, ``NetConfig.piece_centric``) each input is converted
+    at the network's edge (``state.to_piece_centric``: strict for engine records, not for synthetic
+    ones, whose move graph reaches empty cells) - the records stay square-centric - and the
+    per-square labels go onto the square tokens there are: a label of a cell that is no token is
+    dropped (BUILD_LOG issue 250)."""
     if not rows:
         raise ValueError("no rows")
     states = []
@@ -907,6 +912,8 @@ def collate_rows(rows: Sequence[Row], net_cfg) -> tuple:
         st = _state(r.state)
         rep = r.targets.reply[r.index] if (net_cfg.opp_reply and r.targets.reply) else None
         st = replace(st, opp_moves=rep.moves if rep is not None else np.zeros((0, 3), dtype=np.int64))
+        if getattr(net_cfg, "piece_centric", False):
+            st = to_piece_centric(st, strict=not r.synthetic)  # A5, at the network's edge
         states.append(st)
         replies.append(rep)
     batch = collate(states)
@@ -954,8 +961,8 @@ def collate_rows(rows: Sequence[Row], net_cfg) -> tuple:
             flat_target[i, :k] = torch.from_numpy(e[:, 2]).float()
 
     # D4's per-square labels onto the square tokens (board-major: board b's cell c is token
-    # b * (W*H + R) + c, the tokens' storage order - A7 moves none); NaN elsewhere and where a row
-    # has none.
+    # b * (W*H + R) + c, the tokens' storage order - A7 moves none; under A5 the cells that are
+    # tokens, through the layout); NaN elsewhere and where a row has none.
     square = torch.full((bsz, length, net_cfg.n_square_labels), math.nan)
     for i, (r, st) in enumerate(zip(rows, states, strict=True)):
         if not r.targets.square:
@@ -964,9 +971,9 @@ def collate_rows(rows: Sequence[Row], net_cfg) -> tuple:
         cells = int(st.width) * int(st.height)
         if lab.shape != (st.n_boards, cells, net_cfg.n_square_labels):
             raise ValueError(f"row {i}: per-square labels of shape {lab.shape} for {st.n_boards} boards of {cells} cells")
-        tpb = st.layout.tokens_per_board
-        tokens = (np.arange(st.n_boards)[:, None] * tpb + np.arange(cells)[None, :]).reshape(-1)
-        square[i, torch.from_numpy(tokens)] = torch.from_numpy(lab.reshape(-1, net_cfg.n_square_labels)).float()
+        on_board, on_cell = np.nonzero(np.ones((st.n_boards, cells), dtype=bool) if st.token_cells is None else st.token_cells)
+        tokens = st.layout.square_tokens(on_board, on_cell)
+        square[i, torch.from_numpy(tokens)] = torch.from_numpy(lab[on_board, on_cell].reshape(-1, net_cfg.n_square_labels)).float()
 
     def col(name, dtype=torch.float32):
         return torch.from_numpy(np.stack([np.asarray(getattr(r.targets, name)[r.index]) for r in rows])).to(dtype)
