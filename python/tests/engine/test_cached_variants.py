@@ -9,20 +9,27 @@ seeds, travel favoured for White, so that timelines branch and some go inactive 
 of the play is evaluated: each turn start, each state inside an action (mid-action, D8), each
 state whose present has shifted (with the shift reached, the action sometimes goes on with optional
 moves before it is submitted), and the submitted state after it. The variants cover boards of 3x3
-to 8x8, odd and even (+-0) starts, the T0 board, the royal queen and the princess (Reversed
+to 8x8, odd and even (+-0) starts, the T0 board, the royal queen and the common king (Reversed
 Royalty), brawns (Just Brawns) and unicorns (Timeline Strategos); no variant of the table holds a
-dragon. Engine positions use the lineage reading only (C23; spec issue 50).
+dragon or a princess. Engine positions use the lineage reading only (C23; spec issue 50).
 
 * ``test_cached_equals_full_pass_on_every_variant``: the positions of a game evaluated
   incrementally - one epoch, one store shared along the game - against ``reference_output``,
   under both of C20's readings, with the v1 configuration (B15's table, B16's status key biases,
   A6's turn-state counts and A7's acting-player frame - each the default, A7 cached per
-  perspective, spec issue 303) and with the step-1 heads and A8's board-layout embedding on.
+  perspective, spec issue 303) and with the step-1 heads and A8's board-layout embedding on. D4's
+  reply head is compared on each state's opponent-move space as training builds it
+  (``train.reply_map.map_reply``, from the opponent's next action in the same play): the engine's
+  conversion supplies none (``convert.py``: a training target's, never needed at inference).
 * ``test_step_api_cached_equals_dense_on_every_variant``: the C step API's leaves (the engine's
   search, tree and graph mode, its evaluation cache off so that a transposition reaches the
   evaluator again), through ``CachedNetworkEvaluator`` and ``NetworkEvaluator(scope=
   "block_causal")`` - or, with C3's root refresh, against the two-level reference - and every
   leaf met twice (two move orders of one action, or two searches) evaluated bit for bit alike.
+* One store across games, epochs and searches (on two variants and hand-built positions): two
+  diverging games through one store and epoch, two refresh epochs sharing one store, one
+  ``CachedNetworkEvaluator`` following its search to a new root; boards alike but for a has-moved
+  marker, or alike but for their past, keep their own entries.
 * ``test_every_n2_switch_with_relations_on_three_variants``: section 6's switches, with the
   typed relations the engine builds (``relations_for``: attack, defence, pin, x-ray, check).
 * ``test_f1_bf16_cached_on_three_variants`` (slow): F1 as shipped but block-causal, BF16.
@@ -35,6 +42,7 @@ Random play is for exercising shapes, never evidence about real games (``play.py
 from __future__ import annotations
 
 import hashlib
+from dataclasses import replace
 
 import numpy as np
 import pytest
@@ -168,12 +176,40 @@ def _coverage(positions) -> dict[str, bool]:
     }
 
 
+def _with_replies(positions) -> list:
+    """Each position's state with D4's reply move space (``opp_moves``) as training builds it
+    (``train.targets.reply_targets``): the opponent's next action in the same play - the run of
+    states after this action whose acting player is the other - mapped onto this state
+    (``map_reply``; no played move is needed for the move space). The engine's conversion
+    supplies none (``convert.py``); the last action's states have no next action and keep none."""
+    from t5d.train.reply_map import map_reply
+
+    states = [p.state for p in positions]
+    acting = [int(s.acting_player) for s in states]
+    out = []
+    for i, s in enumerate(states):
+        j = i
+        while j < len(states) and acting[j] == acting[i]:
+            j += 1
+        k = j
+        while k < len(states) and acting[k] != acting[i]:
+            k += 1
+        points = states[j:k]
+        if not points:
+            out.append(s)
+            continue
+        out.append(replace(s, opp_moves=map_reply(s, points, [-1] * len(points)).moves))
+    return out
+
+
 def _check(out, ref, what) -> None:
     """``test_cache.py``'s FP32 comparison of every output, the gaps recorded."""
     GAPS["fp32 trunk"] = max(GAPS["fp32 trunk"], float((out.trunk - ref.trunk).abs().max()))
     v = out.move_valid
     heads = [(out.value_logits, ref.value_logits), (out.wdl_logits, ref.wdl_logits), (out.submit_raw, ref.submit_raw)]
     heads += [(out.policy_logits[v], ref.policy_logits[v]), (out.board_logits, ref.board_logits)]
+    if out.opp_reply_logits is not None:
+        heads.append((out.opp_reply_logits[out.opp_move_valid], ref.opp_reply_logits[out.opp_move_valid]))
     GAPS["fp32 heads"] = max(GAPS["fp32 heads"], *(float((a - b).abs().max()) if a.numel() else 0.0 for a, b in heads))
     _close(out, ref, what=what)
 
@@ -193,22 +229,29 @@ def test_cached_equals_full_pass_on_every_variant(variant, config):
     history. Two seeds per variant; together they branch, leave a timeline inactive, and reach
     every kind of state."""
     seen = dict.fromkeys(("branched", "inactive", "mid-action", "shifted", "black acting"), False)
+    replies = 0
     for seed in SEEDS:
         positions = _positions(variant, seed)
         seen = {k: seen[k] or v for k, v in _coverage(positions).items()}
-        r = len(positions) // 3
+        states = _with_replies(positions)
+        r = len(states) // 3
         for supersession in (R2, R1):
             model = _model(10 * seed + (supersession == R1), supersession_scope=supersession, **CONFIGS[config])
             cached = CachedEvaluator(model)
-            root = positions[r].state
+            root = states[r]
             assert (~root.is_head).any(), "the root has a history"
             epoch = cached.root_epoch(root)
             history_from = root if supersession == R1 else None
-            for i, pos in enumerate(positions if supersession == R2 else positions[r:]):
-                ref = reference_output(model, pos.state, history_from=history_from)
-                _check(cached.evaluate(pos.state, epoch), ref, what=(variant, config, seed, supersession, i))
+            for i, state in enumerate(states if supersession == R2 else states[r:]):
+                ref = reference_output(model, state, history_from=history_from)
+                out = cached.evaluate(state, epoch)
+                _check(out, ref, what=(variant, config, seed, supersession, i))
+                if model.cfg.opp_reply:
+                    replies += int(out.opp_move_valid.sum())
+                    assert torch.isfinite(out.opp_reply_logits[out.opp_move_valid]).all()
             assert cached.store.hits > 0, "later states reuse earlier states' frozen boards"
     assert all(seen.values()), (variant, seen)
+    assert replies > 0 or not CONFIGS[config].get("opp_reply"), "D4's reply head compared on some moves"
 
 
 # --- (d): the C step API, cached against dense on the search's own leaves -----------------------
@@ -295,25 +338,29 @@ def _search_root(variant: str, boards: int = 8) -> Game:
     raise AssertionError(f"random play from {variant!r} reached no live turn start with {boards} boards")
 
 
-def _search(model, root: Game, refresh: bool, graph: int, seen: dict, playouts: int = PLAYOUTS):
+def _search(model, root: Game, refresh: bool, graph: int, seen: dict, playouts: int = PLAYOUTS, ev=None):
     """One search from ``root`` through the C step API with the cached path checked leaf by leaf
-    (``_CachedAgainstDense``); its evaluation cache off. The evaluator and the search's summary."""
+    (``_CachedAgainstDense``: a new one, or ``ev`` carried over from an earlier search); its
+    evaluation cache off. The evaluator and the search's summary."""
     from t5d.engine.search import Search, search_params
 
     params = search_params(seed=1 + graph, graph=graph, eval_cache_entries=0, batch_size=4)
     with Search(root, params=params) as search:
-        ev = _CachedAgainstDense(model, refresh, seen)
+        ev = _CachedAgainstDense(model, refresh, seen) if ev is None else ev
+        before = ev.leaves
         stats, _ = run_search(search, ev, playouts=playouts, batch_size=4)
         info = search.info()
-    assert stats.leaves == ev.leaves > 0
+    assert stats.leaves == ev.leaves - before > 0
     return ev, info
 
 
 @pytest.mark.parametrize("variant", ENGINE_VARIANTS)
 def test_step_api_cached_equals_dense_on_every_variant(variant):
     """Section 15.2 rows 1, 5 and 6 through the engine's search (the C step API, ``run_search``):
-    from a random-play root with branched timelines, the search's leaves - mid-action, shifted and
-    turn-start states, in the leaf's own move order - evaluated by the cached path equal the dense
+    from a random-play root with branched timelines, the search's leaves - the root (a turn start),
+    then mostly the states inside its action: mid-action and, where the search gets that far,
+    shifted (Turn Zero's searches reach none), a few beyond the root's submit - in the leaf's own
+    move order, evaluated by the cached path equal the dense
     block-causal path's (with C3's root refresh, the two-level reference), in tree and in graph
     mode (C11). The search's evaluation cache is off, so a state the search reaches twice - two
     orders of one action's moves on two boards (an intra-turn transposition: the tree search meets
@@ -345,6 +392,103 @@ def test_two_orders_of_one_action_through_the_step_api(variant):
             graph, info = _search(model, root, refresh, 1, seen, playouts=64)
             assert tree.leaves > len(set(tree.keys)), (variant, refresh, "no state reached twice")
             assert info.transposition_hits > 0 and graph.repeats > 0, (variant, refresh)
+
+
+# --- one store across games, epochs and searches --------------------------------------------------
+
+TWO_VARIANTS = ("Standard", "Misc - Timeline Strategos")
+
+
+@pytest.mark.parametrize("variant", TWO_VARIANTS)
+def test_one_store_across_two_games_and_two_epochs(variant):
+    """Row 1 with the store shared beyond one game and one epoch (section 7.2's content-addressed
+    entries; C3's epochs): two games diverging from one start (random play's two seeds) through one
+    store and one causal epoch, every state of both equal to its full pass - the second game reuses
+    the first's entries only where a board and its whole past agree; then two root refreshes at
+    two points of one game sharing one store - every board frozen at the first anchor is history
+    of both, each epoch's entries its own refresh's - each later state equal to the two-level
+    reference of its own anchor."""
+    model = _model(41)
+    games = [[p.state for p in _positions(variant, seed)] for seed in SEEDS]
+    cached = CachedEvaluator(model)
+    epoch = cached.root_epoch(games[0][0])
+    for seed, states in zip(SEEDS, games, strict=True):
+        for i, state in enumerate(states):
+            _check(cached.evaluate(state, epoch), reference_output(model, state), what=(variant, "causal", seed, i))
+    assert cached.store.hits > 0
+    states = games[0]
+    refreshed = CachedEvaluator(model, CacheConfig(root_refresh=True))
+    anchors = (len(states) // 3, 2 * len(states) // 3)
+    assert (~states[anchors[0]].is_head).any()
+    for a in anchors:
+        epoch = refreshed.root_epoch(states[a])
+        for i in range(a, len(states), 2):
+            ref = reference_output(model, states[i], anchor=states[a])
+            _check(refreshed.evaluate(states[i], epoch), ref, what=(variant, "refresh", a, i))
+
+
+@pytest.mark.parametrize("variant", TWO_VARIANTS)
+def test_one_cached_evaluator_follows_its_search_to_a_new_root(variant):
+    """C3 through the step API: one ``CachedNetworkEvaluator`` (root refresh on) serves a search
+    at a root, then a search at the state after one more action - as self-play's fresh search per
+    move does (C14) - and the second search's leaves equal the two-level reference anchored at
+    the new root: ``start`` opens a new epoch when the root changes."""
+    from t5d.engine.play import random_action
+    from t5d.engine.search import Search
+
+    model = _model(43)
+    with _search_root(variant) as root:
+        ev, _ = _search(model, root, True, 0, {})
+        rng = np.random.default_rng(0)
+        for _ in range(20):
+            child = root.copy()
+            child.set_legality(False)
+            assert random_action(child, rng) > 0
+            with Search(child) as probe:
+                if not probe.info().root_finished:
+                    break
+            child.close()
+        else:
+            raise AssertionError("no live child")
+        with child:
+            first = ev.cached.epoch
+            ev.seen = {}  # another root, another epoch: a leaf's evaluation may differ
+            _search(model, child, True, 0, ev.seen, ev=ev)
+            assert ev.cached.epoch is not first and ev.cached.epoch.anchor == state_digest(ev.root)
+
+
+def test_boards_alike_but_for_a_marker_or_a_past_keep_their_own_entries():
+    """Section 7.2's entry key on engine positions, through one store and one causal epoch: a
+    board's identity holds its has-moved markers - two games from 5DFEN starts that differ only in
+    a rook's marker, each played one move so that the start board is frozen - and a board's digest
+    holds its past - Standard after 1. Nf3 Nf6 2. Ng1 Ng8 and after 1. Nc3 Nc6 2. Nb1 Nb8 (knights
+    carry no marker), whose third-turn boards are alike with different pasts, frozen by 3. e4. Each
+    state equals its full pass."""
+    model = _model(47)
+    cached = CachedEvaluator(model)
+    epoch = None
+    games = []
+    for board in ("[1k2/4/4/R2K*:0:1:w]", "[1k2/4/4/R*2K*:0:1:w]"):
+        with Game.from_fen([board]) as g:
+            g.set_legality(False)
+            g.expand(square_features="none")
+            states = [g.position().state]
+            g.apply(0)
+            states.append(g.position().state)
+            games.append(states)
+    for pgn in ("1. Nf3 / Nf6\n2. Ng1 / Ng8\n3. e4 / e5\n", "1. Nc3 / Nc6\n2. Nb1 / Nb8\n3. e4 / e5\n"):
+        with Game.from_pgn(f'[Board "Standard"]\n[Mode "5D"]\n\n{pgn}') as g:
+            games.append([g.position().state] + [g.position().state for _ in g.replay()])
+    x, y = games[0][0], games[1][0]
+    assert np.array_equal(x.piece, y.piece) and int((x.moved != y.moved).sum()) == 1, "alike but for one marker"
+    a, b = games[2][5], games[3][5]  # after 3. e4: the third turn's first board is frozen in both
+    alike = [i for i in range(a.n_boards) if np.array_equal(a.piece[i], b.piece[i]) and a.half_turn[i] == b.half_turn[i] == 6]
+    assert alike and not a.is_head[alike[0]], "a frozen board alike in both games, with different pasts"
+    for g, states in enumerate(games):
+        for i, state in enumerate(states):
+            if epoch is None:
+                epoch = cached.root_epoch(state)
+            _check(cached.evaluate(state, epoch), reference_output(model, state), what=(g, i))
 
 
 # --- every N2 switch, with the relations the engine builds ---------------------------------------
@@ -380,14 +524,14 @@ def test_every_n2_switch_with_relations_on_three_variants(flags):
 def test_f1_bf16_cached_on_three_variants(variant):
     """F1 as shipped but block-causal (BF16 trunk, 16 layers): cached against the BF16 full pass
     on random play, at ``test_network.py``'s BF16 bounds (``test_f1_cached_on_a_real_position``) -
-    the T0 board, the royal queen and princess, the unicorn."""
+    the T0 board, the royal queen beside a common king, the unicorn."""
     model = build_model(NetConfig(attn_scope="block_causal"), seed=0).eval()
     positions = _positions(variant, seed=3)[::2]
     special = {"Standard - Turn Zero": "the T0 board", "Standard - Reversed Royalty": "Y", "Misc - Timeline Strategos": "U"}[variant]
     if special in PIECE_IDS:
         assert any((p.state.piece == PIECE_IDS[special]).any() for p in positions), special
     else:
-        assert any((p.state.half_turn < 2).any() for p in positions), special  # turn 0: half-turns 0 and 1
+        assert any((p.state.half_turn < 2).any() for p in positions), special  # the T0 board: Black's turn 0, half-turn 1
     cached = CachedEvaluator(model)
     epoch = cached.root_epoch(positions[len(positions) // 3].state)
     for i, pos in enumerate(positions):
