@@ -28,7 +28,9 @@ switch.
 Precision (G1): under ``trunk_dtype="bf16"`` the trunk runs inside autocast, so its
 matmuls and the attention kernel run in BF16 while the residual stream, the norms and
 the master weights stay FP32 (``RMSNorm`` turns autocast off and computes in FP32); RoPE
-is FP32 regardless (``rope.py``).
+is FP32 regardless (``rope.py``). G2's 8-bit trunk (``NetConfig.trunk_quant``, off) rounds the
+six projections of every block - and, with ``trunk_quant_attention``, attention's operands -
+through FP8 E4M3 (``quant.py``); nothing else in the trunk is quantised.
 
 Each block hands its attention the context of its own layer (``AttnContext.for_layer``,
 with the block's index ``Block.layer``): B15's displacement table of that layer, and
@@ -55,6 +57,7 @@ from torch import nn
 
 from .attention import AttnContext, SelfAttention
 from .config import NetConfig
+from .quant import QuantLinear
 
 
 class RMSNorm(nn.Module):
@@ -89,13 +92,20 @@ FFN_ACTIVATION_FNS: dict[str, Callable[[torch.Tensor], torch.Tensor]] = {
 }
 
 
+def trunk_linear(cfg: NetConfig, d_in: int, d_out: int, bias: bool) -> QuantLinear:
+    """One of the trunk's matrix multiplications: an ``nn.Linear`` carrying G2's format
+    (``NetConfig.trunk_quant``; ``quant.QuantLinear`` - under "none", ``nn.Linear`` bit for bit)."""
+    return QuantLinear(d_in, d_out, bias=bias, fmt=cfg.trunk_quant, rule=cfg.trunk_quant_scale, weight_scale=cfg.trunk_quant_weight_scale)
+
+
 class FeedForward(nn.Module):
-    """``lin_out(act(lin_in(x)))`` with F6's activation (``NetConfig.ffn_activation``)."""
+    """``lin_out(act(lin_in(x)))`` with F6's activation (``NetConfig.ffn_activation``), its width
+    ``ffn_ratio * d`` (F1's 8x is a parameter: ablation 5 tests 2x)."""
 
     def __init__(self, cfg: NetConfig) -> None:
         super().__init__()
-        self.lin_in = nn.Linear(cfg.d_model, cfg.d_ffn, bias=cfg.out_ffn_bias)
-        self.lin_out = nn.Linear(cfg.d_ffn, cfg.d_model, bias=cfg.out_ffn_bias)
+        self.lin_in = trunk_linear(cfg, cfg.d_model, cfg.d_ffn, cfg.out_ffn_bias)
+        self.lin_out = trunk_linear(cfg, cfg.d_ffn, cfg.d_model, cfg.out_ffn_bias)
         self.activation = FFN_ACTIVATION_FNS[cfg.ffn_activation]
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:

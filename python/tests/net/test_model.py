@@ -417,7 +417,6 @@ def test_later_stage_flags_raise():
     flags = (
         dict(piece_centric=True),
         dict(history_window=True),
-        dict(fp8_attention=True),
     )
     for flag in flags:
         with pytest.raises(NotImplementedError):
@@ -426,7 +425,7 @@ def test_later_stage_flags_raise():
 
 
 def test_open_choices_reject_unknown_values():
-    fields = ("submit_head", "attn_scope", "causal_past", "frozen_features", "supersession_scope")
+    fields = ("submit_head", "attn_scope", "causal_past", "frozen_features", "supersession_scope", "trunk_quant", "trunk_quant_scale")
     for field in fields:
         with pytest.raises(ValueError, match=field):
             NetConfig(**{field: "nonsense"}).validate()

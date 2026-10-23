@@ -1076,3 +1076,55 @@ emitted; resumed, all are, at about four nodes a realisation. A flat node holds 
 times a ply node's memory (its generator lives as long as the node can widen); the estimate
 stays within the test's 0.75-1.33 of the heap. For 6x: the memory per node by board-count
 range (proposed edit 131).
+
+### G2's FP8 emulation on random weights - numerics only (no threshold, no verdict; not 6w)
+
+**What it is.** How far G2's FP8 E4M3 trunk (`NetConfig.trunk_quant = "fp8_e4m3"`, emulated -
+`python/t5d/net/quant.py`, spec issue 238) moves the network's outputs from the same weights
+unquantised: a plumbing figure for the emulation, not ablation 6w's (trained networks, a GPU,
+match play) and not a speed (none is possible on this CPU, M19). Machine `dev-r`; PyTorch 2.13.0+cpu;
+2026-10-23; one position per batch; random weights at initialisation scale; window none.
+
+| Network | Precision | Positions | Trunk RMS (max) | Value logits (max) | Policy logits (max) | WDL's W - L (max) |
+|---|---|---|---|---|---|---|
+| F1 (16 layers), seeds 0, 5, 11 | BF16 trunk, FP8 attention included | `synthetic_state(30 + N, N)`, N = 2, 17 | 2.8-3.2e-2 (0.145) | 4.9e-2 | 0.120 | 6.4e-3 |
+| the same | BF16, projections only | the same | 2.8-3.1e-2 (0.157) | 5.0e-2 | 0.129 | 4.7e-3 |
+| the same | FP32 trunk, FP8 attention included | the same | 2.8-3.1e-2 (0.162) | 4.3e-2 | 0.143 | 6.0e-3 |
+| the same | FP32, projections only | the same | 2.7-3.1e-2 (0.152) | 4.8e-2 | 0.125 | 6.3e-3 |
+
+About 12x the BF16-vs-FP32 gap of the same network (2.4e-3, `tests/net/test_precision.py`); the
+attention operands add little to the projections' share. The test bounds
+(`tests/net/test_quant.py`) sit 3-4x above. The paths' agreement under FP8, the cache's and the
+batch independence are in issue 238(b), (h), (i).
+
+**The cache with FP8 frozen K/V** (the precision review fixes, 2026-10-23; same machine and
+build): the cached path against the full pass, the projections alone in FP8 (`trunk_quant_attention
+= False`), FP32 trunk, 2 layers, block-causal scope, model seeds 0-2, `test_cache.py`'s standard
+trees, seeds 0-3, five moves each; worst over the 12 paths:
+
+| Frozen K/V | Trunk RMS (max) | Value logits (max) | Policy logits (max) |
+|---|---|---|---|
+| FP8 (C15) | 2.81e-3 (5.52e-2) | 1.42e-3 | 1.50e-2 |
+| exact ("match") | 2.85e-3 (5.33e-2) | 2.21e-3 | 2.51e-2 |
+
+Rounding flips of a different FP32 summation order, as in issue 238(i); the test bounds (6e-3,
+8e-3, 6e-2) hold for both. (The "match" row is above issue 238(h)'s 1.9e-3 / 1.8e-2 under what
+were described as the same conditions - the worst case over a sample of flips; the bounds stand.)
+
+**QAT's gradients against the unquantised network's** (G8, `tests/train/test_qat.py`; 2026-10-23,
+same machine and build): SMALL network (`netplay.SMALL`), FP32 trunk, model seeds 0-2, one batch of
+`_synthetic_rows(0)`, the total loss's gradient on each trunk projection weight with QAT on
+against off, the same weights. Relative L2 distance at most 0.1162 (dense scope) and 0.1171
+(block-causal scope, FP8 frozen K/V); norm ratios 0.968-1.029. The test's bounds: distance < 0.5,
+ratio 0.5-2. With the estimator the STE replaced (autograd through the cast) every one of those
+gradients is zero.
+
+**Batch independence under FP8, per seed** (`test_an_evaluation_does_not_depend_on_its_batch`;
+2026-10-23, same machine and build): FP32 trunk, 2 layers, model seeds 0-5, a position alone
+against the same position second in a padded batch of two; trunk RMS over its tokens, per seed.
+"pow2": 1.8e-8, 0, 0, 0, 0, 5.2e-7. "absmax": 5.2e-4, 2.0e-3, 1.9e-3, 3.1e-3, 4.8e-4, 2.6e-4.
+Mutants (the review's plugin): one input scale per batch in the projections - "pow2" 1.2e-6, 0, 0,
+5.6e-8, 2.1e-4, 5.2e-7, "absmax" 2.2-2.6e-2; one attention-operand scale per head over the batch -
+"pow2" as unmutated, "absmax" 1.9-2.2e-2. So under "pow2" the granularity shows at one seed in
+six; the test's bounds are 1e-5 ("pow2", over all six seeds) and 1e-2 ("absmax"), and the
+granularity is checked directly elsewhere (issue 238(b)).

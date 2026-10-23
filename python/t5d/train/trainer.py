@@ -24,10 +24,19 @@ this build.
   ``losses_on(rows)`` the forward half alone.
 * ``Trainer.publish()`` - the network self-play receives: SWA's average (I17), carrying its
   snapshot count (``swa_snapshots``) into the records' network condition.
-* **G8's QAT hook is a seam, not built**: ``TrainerConfig.qat`` names it and ``apply_qat`` raises -
-  the fake-quantisation hooks plug in there once the precision component's quantiser (G2) and the
-  pinned format exist (register G8: "prepared, not adopted ... the simulated format is pinned with
-  the inference path, K/V cache included").
+* **G8's QAT hook, behind its flag, off** (register G8: "QAT prepared, not adopted: fake-quantisation
+  hooks behind a flag in the training code ... smoke-tested in the untrained build; the simulated
+  format is pinned with the inference path, K/V cache included"): with ``TrainerConfig.qat`` the
+  trainer's network is switched to G2's FP8 trunk (``apply_qat``; ``net/quant.py``) before its
+  optimiser is built - the trunk's six projections per block and attention's operands
+  fake-quantised in FP8 E4M3, straight-through gradients, the heads and RoPE untouched - and its
+  frozen-K/V format (C15, the cache's) kept as the network has it. The format is
+  ``TrainerConfig.qat_format``, PROVISIONAL until the inference path pins one (issue 239); QAT's
+  forward is the full pass of G2's served format bit for bit, which is the matching rule (section
+  10.2; the cache serves only the projections-only format - issue 239(a)); the trainer's
+  ``net_cfg`` follows the network's new format, so the records it feeds name it. When
+  to switch it on - "a fine-tuning stage at the end of a training phase", only if 6w's arms say so
+  - is the pilot run's to schedule, not this build's.
 * **C3's conditioning-offset training is parked** with the deferred cached configuration (C2;
   BUILD_LOG "Parked"): no hook here - the dense configuration trains no refresh offsets.
 * The optimiser is AdamW (the smoke test's) or NAdam (Chessformer's, beside SWA in I17's
@@ -41,7 +50,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 import torch
@@ -49,6 +58,7 @@ import torch
 from ..engine.capi import MOVE_DTYPE
 from ..net.config import NetConfig
 from ..net.model import T5DNet
+from ..net.quant import TRUNK_QUANT_FIELDS, TRUNK_QUANT_FORMATS
 from ..net.state import PositionState
 from .losses import LossConfig, compute_losses
 from .records import Children, DecisionRecord, GameRecord
@@ -73,7 +83,8 @@ class TrainerConfig:
     seed: int = 0
     max_steps: int = MAX_STEPS  # no training runs: at most MAX_STEPS (and MAX_STEPS per model, whatever the trainer)
     window_k: int | None = None  # the inputs' history window when rebuilding a record's (None: the record's)
-    qat: bool = False  # G8's seam (``apply_qat``): not built
+    qat: bool = False  # G8's QAT hook (``apply_qat``): off - QAT is prepared, not adopted
+    qat_format: str = "fp8_e4m3"  # the format QAT simulates: PROVISIONAL, pinned with the inference path (G8, issue 239)
     target: TargetConfig | None = None  # None: the network's horizons, the rest the defaults
     sampler: SamplerConfig = field(default_factory=SamplerConfig)
     window: WindowConfig = field(default_factory=WindowConfig)
@@ -89,17 +100,33 @@ class TrainerConfig:
             raise ValueError(f"the untrained build runs 1..{MAX_STEPS} optimiser steps, never a training run")
         if self.window_k is not None and self.window_k < 1:
             raise ValueError("window_k >= 1 (or None: the record's)")
+        if self.qat_format not in TRUNK_QUANT_FORMATS or self.qat_format == "none":
+            raise ValueError(f"qat_format must be one of {TRUNK_QUANT_FORMATS[1:]} (G2's 8-bit formats)")
 
 
 def apply_qat(model: T5DNet, cfg: TrainerConfig) -> T5DNet:
-    """G8's fake-quantisation hook - the seam where it plugs in (straight-through fake quantisation
-    of the trunk's matrix multiplications, attention and the K/V cache, in the deployed format;
-    heads and RoPE at FP32 - section 10.2). Not built: the precision component's quantiser and the
-    pinned format come first (register G2, G8)."""
-    raise NotImplementedError(
-        "G8's QAT hook is not built: the fake-quantisation hooks plug in here once the precision component's quantiser and "
-        "the pinned inference format exist (register G8, G2; section 10.2)"
-    )
+    """G8's QAT hook: ``model`` switched, in place, to G2's trunk format ``cfg.qat_format``
+    (``T5DNet.set_trunk_quant``) - fake quantisation of the trunk's matrix multiplications with
+    straight-through gradients (``net/quant.py``); the heads, RoPE, embeddings and norms untouched;
+    the network's frozen-K/V format (C15) and its quantisation settings (``trunk_quant_*``) kept,
+    so that QAT's forward is the full pass of the format the network is served in (section 10.2:
+    "K/V cache included" - the frozen K/V as the full pass rounds them; the cache itself refuses a
+    network with FP8 attention, issue 239(a)). In place, as the trainer trains its network's
+    weights in place: the network's optimiser-step count stays with it (issue 237(a)) - and so any
+    evaluator already holding the network evaluates it in the new format from then on (a
+    ``NetworkEvaluator`` silently; a ``cache.CachedEvaluator`` refuses at its next evaluation;
+    issue 239(b)). ``cfg`` is validated first. A network already in another 8-bit format is
+    refused - QAT would then simulate a format it is not served in. Written from the papers
+    (straight-through fake quantisation: Bengio, Leonard & Courville 2013; Jacob et al. 2018),
+    never from Lc0's training code (Monroe's ``quantize`` option is the idea only - AGENTS.md, H29)."""
+    cfg.validate()
+    current = model.cfg.trunk_quant
+    if current not in ("none", cfg.qat_format):
+        raise ValueError(
+            f"QAT simulates exactly the deployed format: the network is in {current!r}, the hook's format is "
+            f"{cfg.qat_format!r} (register G8, section 10.2)"
+        )
+    return model.set_trunk_quant(cfg.qat_format)
 
 
 class Trainer:
@@ -115,6 +142,10 @@ class Trainer:
         if tuple(self.target_cfg.short_term_horizons) != tuple(net_cfg.short_term_horizons):
             raise ValueError("the targets' short-term horizons are the network's (D3)")
         self.model = apply_qat(model, self.cfg) if self.cfg.qat else model
+        if self.cfg.qat:
+            # The network's format is now QAT's: the configuration the trainer hands on (the
+            # records' network condition, ``selfplay.network_info``) says so too.
+            self.net_cfg = replace(net_cfg, **{f: getattr(self.model.cfg, f) for f in TRUNK_QUANT_FIELDS})
         params = [p for p in self.model.parameters() if p.requires_grad]
         if self.cfg.optimiser == "adamw":
             self.opt = torch.optim.AdamW(params, lr=self.cfg.lr, weight_decay=self.cfg.weight_decay)

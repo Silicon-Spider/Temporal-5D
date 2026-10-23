@@ -110,8 +110,9 @@ their own (``a6_seed``): adding them changed no other parameter's draw.
 
 from __future__ import annotations
 
+import copy
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import torch
 from torch import nn
@@ -135,6 +136,7 @@ from .heads import (
     wdl_value,
 )
 from .kvformat import fake_quantise
+from .quant import AttnQuant, QuantLinear
 from .rope import rope_angles, rope_cos_sin, rope_tables, spatial_dims
 from .scope import BlockCausalScope
 from .shaw import ShawKeyTerm, ShawRows
@@ -505,7 +507,34 @@ class T5DNet(nn.Module):
             sparse_max_fraction=cfg.attn_sparse_max_fraction,
             scope=block_scope,
             shaw=shaw,
+            quant=AttnQuant(cfg.trunk_quant_scale) if cfg.trunk_quant != "none" and cfg.trunk_quant_attention else None,
         )
+
+    # -- G2's format --
+
+    def set_trunk_quant(self, fmt: str, **settings) -> T5DNet:
+        """Switch this network, in place, to G2's trunk format ``fmt`` (``NetConfig.trunk_quant``;
+        and any of ``trunk_quant_attention``, ``trunk_quant_scale``, ``trunk_quant_weight_scale``
+        given, the rest kept): its configuration and every trunk projection (``quant.QuantLinear``).
+        The parameters are untouched - the format holds no state - and so is everything else the
+        network carries (its optimiser-step count among them). Returns the network. G8's QAT hook
+        switches its training network this way (``train.trainer.apply_qat``); ``"none"`` gives it
+        back as G1 has it."""
+        if set(settings) - {"trunk_quant_attention", "trunk_quant_scale", "trunk_quant_weight_scale"}:
+            raise ValueError(f"not a trunk_quant setting: {sorted(settings)}")
+        cfg = replace(self.cfg, trunk_quant=fmt, **settings)
+        cfg.validate()
+        for module in self.modules():
+            if isinstance(module, QuantLinear):
+                module.set_format(cfg.trunk_quant, cfg.trunk_quant_scale, cfg.trunk_quant_weight_scale)
+            if isinstance(getattr(module, "cfg", None), NetConfig):
+                module.cfg = cfg
+        return self
+
+    def with_trunk_quant(self, fmt: str, **settings) -> T5DNet:
+        """A copy of this network in G2's format ``fmt`` (``set_trunk_quant``), the original
+        unchanged: the same ``state_dict`` - the network loaded into its FP8 twin."""
+        return copy.deepcopy(self).set_trunk_quant(fmt, **settings)
 
     # -- forward --
 
