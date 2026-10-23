@@ -26,17 +26,22 @@
 // already answered; the state event of a position comes before anything is searched there.
 //
 // Reading the record. `web::pgn::parse_5dpgn` resolves every action of the record -
-// variations included - against the legal moves before it returns, and fails the whole
-// record on the first one it cannot match or submit. Then nothing is known about any
-// position, and the run ends `unsupported` (reason `parse_failed`, the reader's message as
-// the detail) before position 0: never a refusal, which would claim a position was read.
+// variations included - before it returns: each written move only against the moves the
+// oracle generates from a playable board (`resolve_move`), each action applied and
+// submitted (`State::can_apply_action`, `submit::<false>()`, which fails an action that
+// does not move the present). It fails the whole record on the first move or action that
+// does not pass. Then nothing is known about any position, and the run ends `unsupported`
+// (reason `parse_failed`, the reader's message as the detail) before position 0: never a
+// refusal, which would claim a position was read. So a move the oracle cannot play and an
+// action that does not move the present never reach the replay below - they are
+// `parse_failed`, and Kairos gives no `illegal_move` and no present-not-moved refusal.
 // The reader does not test royal safety. Kairos's game loader (`web::record::load_pgn`)
-// replays the main line it read through `web::tree::play_action` - every move from a
-// playable board, the present moved, and no royal of the mover's capturable after it -
-// and fails the record on the first action that breaks it; this driver replays the same
-// actions through the same function and stops there instead, refusing that action
-// (`cannot_submit` for a royal left capturable or the present not moved, `illegal_move`
-// for a move it cannot play), so the positions before it are reported.
+// replays the main line it read through `web::tree::play_action`, which does - no royal of
+// the mover's capturable after the action - and fails the record on the first action that
+// breaks it; this driver replays the same actions through the same function and stops
+// there instead, refusing that action as `cannot_submit` (submission legality, as the
+// other oracles report it), so the positions before it are reported. That is the one
+// refusal Kairos can give.
 //
 // The state event (decision H30) is every board the oracle holds - superseded and head,
 // every timeline, both colours - from `Multiverse::get_boards(true)`: the oracle's own
@@ -300,10 +305,13 @@ fn report(state: &State, index: usize, options: &Options) {
     }
 }
 
-/// Why `play_action` refused an action, in the protocol's words: a move it cannot play is
-/// `illegal_move`; an action whose moves it played but may not submit - the present not
-/// moved, or a royal of the mover's left capturable (submission legality, as the other
-/// oracles and the rulebook's R1 put it) - is `cannot_submit`.
+/// Why `play_action` refused an action, in the protocol's words. Only "leaves a royal piece in
+/// check" can reach here (`cannot_submit`): the reader has already played every move of a
+/// main-line action and submitted it, so `play_action`'s other refusals - a move from a board
+/// that is not playable, a move it cannot play, a promotion it refuses (`illegal_move`), an
+/// action that does not move the present (`cannot_submit`) - are unreachable from a record
+/// that parsed. They are mapped all the same, as a defence should the reader change at a pin
+/// bump; anything else is `unrecognised`.
 fn refusal(message: &str) -> &'static str {
     if message.contains("does not move the present") || message.contains("leaves a royal piece in check") {
         "cannot_submit"

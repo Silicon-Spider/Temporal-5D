@@ -5070,6 +5070,30 @@ superseded or made moot says so; nothing is deleted.
     tier until the quiet-machine block records its golden files (issue 530), and the gate's
     counting of implementations is unchanged. Edit 362.
 
+    **The review's facts (2026-10-24), with citations at the pin, for the ruling.** Derived:
+    `NOTICE` line 1, present since Kairos's first commit (`ca828ce`, 2026-10-15): "Parts of
+    the rules and legal-action code are derived from 5dchess_engine, Copyright (c)
+    2024-2026, ftxi, used under the BSD 2-Clause License". `src/web/pgn.rs` line 1:
+    "ported from the C++ engine's `pgnparser`" - its function names and error strings
+    match ftxi's `pgnparser.cpp`, and Kairos's reader test defaults to ftxi's `test/pgn`
+    corpus. **Its mate test is ftxi's, translated**: `State::get_mate_type_impl`
+    (`state.rs` 551-594) follows ftxi's `state::get_mate_type_impl` (`state.cpp` 840-915)
+    line by line - the non-branching subspace first, then the restricted branch axes, then
+    the full space, and the same Softmate. A verbatim string: `multiverse.rs` 212,
+    "multiverse::insert_board_impl(): Negative time is not supported." (ftxi
+    `multiverse_base.cpp` 166). Shared identifiers: `state.rs` 66/170, `multiverse.rs`
+    63/110, `check_position.rs` 39/56, `hypercuboid.rs` 45/149, `geometry.rs` 14/39,
+    `graph.rs` 6/24; `vec4.rs` 28-31 is ftxi's `vec4.h` 28-31 (the coordinate limits).
+    Its own: the R1 check pass set (`CheckPosition::for_present`), the wasted-move pruning,
+    `core/naive.rs` (the exhaustive enumerator the count comes from) and its playing engine.
+    **Its legality answer covers royal safety only** (issue 528): it can never stand behind
+    another oracle's `illegal_move` refusal or a refusal for not moving the present - Kairos
+    reports such a record `parse_failed`. **Reading:** its terminal verdict agreed with
+    ftxi's at all 986 shared positions in the smoke run (issue 533) - what a shared mate test
+    would give - so its mate verdicts are not independent evidence beside ftxi's; its check
+    verdicts (R1's pass set, not ftxi's) and its exhaustive counts are its own. Options (b)
+    or (c) are the cautious readings. Its tier entries stay disabled until the user rules.
+
 527. **How Kairos is asked: neither 5DUCI nor the JSON interface** (§11.0 Kairos paragraph:
     "check and mate verdicts through its JSON interface or 5DUCI"; register H52). At the pin
     the `kairos` binary speaks 5DUCI as a playing protocol - `position`, `go`, `bestmove`,
@@ -5094,14 +5118,23 @@ superseded or made moot says so; nothing is deleted.
     0, which would claim the set-up was read and refused, and never a refusal at the
     failing action, whose position it cannot show. What that gives up: Kairos's verdict
     on that record's actions (a soft or hard refusal included) and every answer on it.
-    The reader does not test royal safety; Kairos's game loader replays the main line
-    through `web::tree::play_action`, which does, and fails the record there. The driver
-    replays through the same function and stops at the first action it refuses
-    (`cannot_submit` for a royal left capturable or an action that does not move the
-    present - submission legality, as the other oracles report it; `illegal_move` for a
-    move it cannot play), so those refusals are reported with every position before
-    them. A partial reader (an upstream feature, or a per-action API) would recover the
-    rest; not asked for. Not put to the user.
+    **What fails in the reader** (corrected at review, 2026-10-24): `resolve_action`
+    (`src/web/pgn.rs` 913-930) matches each written move only against the moves Kairos
+    generates from a playable board and then calls `State::can_apply_action` (`state.rs`
+    241-252), which applies the moves and submits (`submit::<false>()`). So a move it
+    cannot play, and an action that does not move the present, fail the whole record in
+    the reader - `parse_failed`, never `illegal_move` or a present-not-moved
+    `cannot_submit`. The reader does not test royal safety; Kairos's game loader replays
+    the main line through `web::tree::play_action`, which does, and fails the record
+    there. The driver replays through the same function and stops at the first action it
+    refuses: the only refusal that can reach it is a royal left capturable, reported
+    `cannot_submit` (submission legality, as the other oracles report it), with every
+    position before it. The driver's mapping of `play_action`'s other messages
+    (`illegal_move`, present not moved) stays as a defence against a reader that changes at
+    a pin bump, and is documented as unreachable. **So Kairos's legality answer covers royal
+    safety alone**: it can never stand behind another oracle's `illegal_move` refusal or a
+    refusal for not moving the present (issue 526). A partial reader (an upstream feature,
+    or a per-action API) would recover the rest; not asked for. Not put to the user.
 
 529. **The Rust toolchain: which release, which target, how fetched** (§11.0 "Tiered
     CI": "Kairos (Rust toolchain, from CHECKPOINT 9)"; register H27, H52). Pinned:
@@ -5123,7 +5156,19 @@ superseded or made moot says so; nothing is deleted.
     (`-C target-cpu=native`) does not apply and the build is the same on every x86-64
     machine; it is fat-LTO with Kairos's own release settings (26 s on `dev-r`). The
     toolchain's release is not part of the build key (as GHC's is not): a release bump is
-    a lock-file change, after which `build --force` rebuilds. Not put to the user.
+    a lock-file change, after which `build --force` rebuilds. **Review fixes
+    (2026-10-24):** cargo reads `.cargo/config(.toml)` from the directory it runs in and every
+    parent, and from its home - and the build runs inside the repository, so the walk reaches
+    the user's home: moving `CARGO_HOME` did not stop a `[build] target`, `rustc-wrapper`,
+    `[target.*] linker` or rustflags there from applying. Now `CARGO_ENCODED_RUSTFLAGS` is
+    always set (empty on Linux, the self-contained-linker flag on Windows), which overrides
+    every other source of flags, and the recipe refuses to build while any such file sits
+    above the build root or in cargo's home (`toolchain.cargo_configs`, with a selftest).
+    `find_rust` takes a cargo and rustc of the pinned release only for the target the lock
+    pins for the platform (`rustc -vV`'s host), so a rustup MSVC toolchain of 1.99.0 is not
+    taken for the pin. The downloads (Rust's, and GHC's) time out after 120 s. Rust's archives
+    are checked by SHA-256 only, pinned in the lock file; their `.asc` signatures are not
+    verified (no GPG in the harness).
 
 530. **How Kairos is wired before its recording, and what the quiet-machine block does to
     enable it** (§11.0 "Tiered CI"; register H27, H32, H52; `oracles/README.md`). Every
@@ -5156,7 +5201,10 @@ superseded or made moot says so; nothing is deleted.
     finds against the engine by cluster (H52: "a new triage round by cluster"), each
     excused only with a rulebook (or notation-specification) citation in
     `known-divergences.toml`; (7) CHANGELOG, this log. Not put to the user beyond issue
-    526.
+    526. (`oracle_harness/adapters/__init__.py`, where `PENDING_SOURCES` lives, was edited in
+    `adapters/` - but no golden file's signature hashes it: each source's signature hashes
+    its own adapter, `base.py`, `fingerprint.py` and, for some, `headers.py`; `verify`'s
+    golden check passes unchanged.)
 
 531. **No driver check holds the Kairos driver to a stock tool** (§11.0 "Tiered CI": "a C++
     driver over its core library, held to its stock CLI" - ftxi's; register H33, H52).

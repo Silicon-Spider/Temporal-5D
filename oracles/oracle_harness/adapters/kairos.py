@@ -18,11 +18,15 @@ written (PROVENANCE.md, "Kairos, the fourth oracle"):
 
 Kairos's 5dpgn reader resolves the whole record before it returns and fails all of
 it on one action it cannot match or submit, variations included: such a record is
-reported unsupported from position 0 (reason "parse_failed"), never as a refusal.
-Its reader does not test royal safety; the driver replays the main line through
-Kairos's own referee (the one its game loader uses), so an action that leaves a
-royal capturable is refused there - it cannot be submitted (cannot_submit, as the
-other oracles report it) - and the positions before it stand.
+reported unsupported from position 0 (reason "parse_failed"), never as a refusal. A
+move it cannot play and an action that does not move the present fail there, so
+Kairos never gives an illegal_move refusal or a present-not-moved one. Its reader
+does not test royal safety; the driver replays the main line through Kairos's own
+referee (the one its game loader uses), so an action that leaves a royal capturable
+is refused there - it cannot be submitted (cannot_submit, as the other oracles
+report it) - and the positions before it stand. That is its only refusal: its
+legality answer covers royal safety alone, and never stands behind another
+oracle's illegal_move or present-not-moved refusal.
 A line that ends in variations is replayed with its last variation as the main
 line - its reader is a port of ftxi's - so ftxi's guard refuses such a record here
 too, before it runs.

@@ -242,7 +242,11 @@ def _build_kairos(pin: Pin, lock: Lock, root: Path, bootstrap: bool, log: Log) -
     if host and host.endswith("-windows-gnu"):
         # Link with the MinGW linker the toolchain ships (rust-mingw), never a gcc that happens to be
         # on PATH: one built for another C runtime would link the driver against that runtime instead.
-        env["RUSTFLAGS"] = "-C link-self-contained=yes"
+        # (Cargo's encoded form: arguments separated by 0x1f; it overrides every other source of flags.)
+        env["CARGO_ENCODED_RUSTFLAGS"] = "\x1f".join(["-C", "link-self-contained=yes"])
+    # No cargo configuration file of the machine's may reach the build: cargo reads one from the build
+    # directory and each of its parents, and from its home (a target, a wrapper, a linker).
+    toolchain.refuse_cargo_configs(root, Path(env["CARGO_HOME"]))
     log(f"  building the harness driver against the pinned crate with Rust {rustc.version}")
     check_run([cargo.path, "build", "--release", "--locked", "--offline", "--manifest-path", driver / "Cargo.toml"],
               cwd=root, env=env, timeout=3600)

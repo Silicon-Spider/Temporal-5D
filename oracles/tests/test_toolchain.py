@@ -10,7 +10,7 @@ from pathlib import Path
 from unittest import mock
 
 from oracle_harness import build, lockfile, paths, toolchain
-from oracle_harness.util import HarnessError
+from oracle_harness.util import HarnessError, exe, platform_key
 
 
 def _dist_archive(folder: Path, top: str, components: dict[str, dict[str, bytes]], listed: list[str] | None = None) -> Path:
@@ -109,7 +109,57 @@ class RustEnvironmentTests(unittest.TestCase):
             self.assertEqual(Path(env["CARGO_HOME"]), paths.cache_dir() / "toolchains" / "cargo-home")
             self.assertEqual(env["RUSTC"], os.fspath(rustc.path))
             self.assertEqual(env["CARGO_NET_OFFLINE"], "true")
+            # Set, and empty: it overrides RUSTFLAGS and every configuration file's rustflags.
+            self.assertEqual(env["CARGO_ENCODED_RUSTFLAGS"], "")
             self.assertTrue(env["PATH"].startswith(os.fspath(cargo.path.parent)))
+
+
+class CargoConfigTests(unittest.TestCase):
+    """Cargo reads .cargo/config(.toml) from where it runs, every parent, and its home: none may reach the build."""
+
+    def test_a_configuration_file_above_the_build_or_in_cargos_home_is_found_and_refused(self):
+        with tempfile.TemporaryDirectory() as name:
+            top = Path(name)
+            root = top / "cache" / "build" / "kairos" / "key"
+            home = top / "cargo-home"
+            root.mkdir(parents=True)
+            home.mkdir()
+            self.assertEqual(toolchain.cargo_configs(root, home), [])
+            toolchain.refuse_cargo_configs(root, home)  # nothing to refuse
+            planted = top / ".cargo" / "config.toml"
+            planted.parent.mkdir()
+            planted.write_text('[build]\ntarget = "x86_64-pc-windows-msvc"\n', encoding="utf-8")
+            (home / "config").write_text('[build]\nrustc-wrapper = "sccache"\n', encoding="utf-8")
+            self.assertEqual(toolchain.cargo_configs(root, home), [planted, home / "config"])
+            with self.assertRaises(HarnessError) as raised:
+                toolchain.refuse_cargo_configs(root, home)
+            self.assertIn(str(planted), str(raised.exception))
+
+
+class RustHostTests(unittest.TestCase):
+    """A cargo and rustc of the pinned release built for another target - a rustup MSVC toolchain - are not the pin."""
+
+    def test_only_the_pinned_target_is_accepted(self):
+        lock = lockfile.load()
+        target = lock.toolchains["rust"]["dist"].get(platform_key(), {}).get("target")
+        if target is None:
+            self.skipTest(f"no Rust target pinned for {platform_key()}")
+        version = lock.toolchains["rust"]["version"]
+        with tempfile.TemporaryDirectory() as name, mock.patch.dict(os.environ, {"ORACLE_HARNESS_CACHE": name}):
+            folder = paths.cache_dir() / "toolchains" / f"rust-{version}" / "bin"
+            folder.mkdir(parents=True)
+            for tool in ("cargo", "rustc"):
+                (folder / exe(tool)).write_bytes(b"")
+            with mock.patch.object(toolchain.shutil, "which", return_value=None), \
+                    mock.patch.object(toolchain, "_rust_version", return_value=version), \
+                    mock.patch.object(toolchain, "_first_line", return_value=f"cargo {version} (pinned)"):
+                with mock.patch.object(toolchain, "rust_host", return_value=target):
+                    cargo, rustc = toolchain.find_rust(lock)
+                    self.assertEqual((cargo.version, rustc.path), (version, folder / exe("rustc")))
+                with mock.patch.object(toolchain, "rust_host", return_value="x86_64-pc-windows-msvc-or-other"), \
+                        self.assertRaises(HarnessError) as raised:
+                    toolchain.find_rust(lock)
+                self.assertIn(target, str(raised.exception))
 
 
 class KairosRecipeTests(unittest.TestCase):
