@@ -1,8 +1,9 @@
 # Oracle harness
 
 The differential-testing gate for the rules engine (design spec §11.0; decisions
-H23–H34 and H36–H38), and everything it needs: three independent implementations of the rules
-and an independent reader of the notation, pinned; a pinned corpus of game records;
+H23–H34 and H36–H38, H52), and everything it needs: three independent implementations of the rules
+and an independent reader of the notation, pinned, and a fourth implementation pinned and wired
+but not yet in a tier (Kairos, below); a pinned corpus of game records;
 the machinery that runs the one over the other; and the check that keeps all of it
 out of the engine.
 
@@ -63,6 +64,7 @@ another language. Those are the same offence, and `CONTRIBUTING.md` and
 | `cwmtt` | penteract/cwmtt (Haskell) | nightly, release | action counts, "no action exists", legality |
 | `chessin5d` | 5d-chess-js, the rules library of Chess in 5D (JavaScript) | nightly, release | check, mate / stalemate, legality |
 | `notation` | adri326/5dchess-notation: the notation spec, sample records, and the parser written beside it (JavaScript) | every commit | parse-only: the position it read at every ply, the side it reads as moving next, how many actions it read - no rules verdict |
+| `kairos` | FirePlank/5d-chess-engine, Kairos (Rust; decision H52) | no tier yet - nightly and release once recorded | check, mate / stalemate, counts (its exhaustive search only), legality |
 
 Exact commits, licences and caveats are in `oracles.lock.toml` and `PROVENANCE.md`.
 ftxi and cwmtt each have two action searches, a hypercuboid one and an exhaustive
@@ -74,6 +76,33 @@ searches and Chess in 5D are for.
 
 No oracle answers everything, and none reads every board variant. What that leaves
 checked is tabulated, per variant, at the top of `DISAGREEMENTS.md`.
+
+### Kairos, wired and not yet enabled (H52)
+
+Kairos (`kairos`, FirePlank/5d-chess-engine, Rust) is the fourth rules oracle
+(decision H52, CHECKPOINT 9): pinned, built by `build --oracle kairos`, and asked
+by `observe` as two sources - `kairos`, its hypercuboid search (the check and the
+mate verdict, and no count: that search leaves out actions that waste a move), and
+`kairos:naive`, its exhaustive enumerator (the check, the count, and the verdict
+where it finds no action). Both say what Kairos set up at every position. Its
+5dpgn reader fails a whole record on one move it cannot read, so such a record is
+`unsupported` (`parse_failed`) from position 0. What it answers, and why, is in
+`PROVENANCE.md` ("Kairos, the fourth oracle"); parts of it derive from ftxi's
+code, which bears on how far it counts as a second oracle (`docs/BUILD_LOG.md`,
+issue 526).
+
+It is in no tier yet. Every source a tier lists is held to its golden files -
+`verify` and every tier fail with `golden-missing` for a source with none - and
+the recording tier must run every source the gate compares. So its two sources
+wait in `adapters.PENDING_SOURCES`, which no tier may list, nothing records, and
+`verify` asks nothing of, until they are recorded on a quiet machine, whose costs
+decide what each tier requires of them (H32), and the user has ruled issue 526.
+Enabling them is one reviewed commit: move them into `ORACLE_SOURCES` (and
+`kairos` into `PRIMARY_SOURCES`), list them in `gate.toml`'s nightly and release
+tiers with their budgets, record them (`golden --write --repeat 2 --source kairos
+--source kairos:naive`), read the new lines of `DISAGREEMENTS.md`, and run the
+nightly tier with the engine to triage what Kairos finds (`docs/BUILD_LOG.md`,
+issue 530, has the steps).
 
 ## Layout
 

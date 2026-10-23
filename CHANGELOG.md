@@ -10,6 +10,20 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-23 - The harness's manual and CONTRIBUTING.md say that Kairos is wired and not yet in a tier
+
+`oracles/README.md` names Kairos in its opening and in "What is pinned" (no tier yet; what
+its two searches answer), and a new section, "Kairos, wired and not yet enabled (H52)",
+says why its sources wait in `adapters.PENDING_SOURCES` (a source a tier lists is held
+to golden files it does not have yet) and what enabling them takes. `CONTRIBUTING.md`'s
+"The proof channel" says the nightly and release tiers run three rules oracles and that a
+fourth is wired. The instruction files' "three oracles" (`CLAUDE.md`, `AGENTS.md`) are
+the user's to edit, and are still true of what the tiers run (issue 534). No code
+changed.
+
+Spec: §11.0 ("Tiered CI", "Kairos, the fourth oracle"), register H27, H52 - nothing new
+proposed (edit 362 covers the query surface); issues 530, 534.
+
 ### 2026-10-23 - Kairos pinned as the fourth oracle (H52): its query surface confirmed at the pin, its toolchain, driver and two sources built - wired, enabled in no tier yet
 
 Register H52 (CHECKPOINT 9): Kairos (FirePlank/5d-chess-engine; Rust, GPL-3.0) is the
