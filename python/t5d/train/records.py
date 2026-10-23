@@ -68,6 +68,7 @@ import numpy as np
 import torch
 
 from ..engine.capi import MOVE_DTYPE, CSearchParams, ExpandOptions
+from ..net.quant import trunk_format
 
 #: The record format's version: bumped on any change to a field's presence or meaning.
 RECORD_VERSION = 1
@@ -301,8 +302,15 @@ class GameRecord:
 
 def network_id(model) -> str:
     """The network's identity: BLAKE2b-128 over its state dict in order - each tensor's name,
-    dtype, shape and bytes (I15's "network" condition; an SWA-published network has its own)."""
+    dtype, shape and bytes (I15's "network" condition; an SWA-published network has its own) -
+    and, for a network in an 8-bit trunk format (G2, ``NetConfig.trunk_quant``), that format
+    (``quant.trunk_format``): the same weights in FP8 compute another function, so they are
+    another network. A network in "none" hashes its weights alone, as before the format existed."""
     h = hashlib.blake2b(digest_size=16)
+    cfg = getattr(model, "cfg", None)
+    if cfg is not None and getattr(cfg, "trunk_quant", "none") != "none":
+        h.update(b"trunk_format")
+        h.update(repr(trunk_format(cfg)).encode("ascii"))
     for name, tensor in model.state_dict().items():
         t = tensor.detach().cpu().contiguous()
         h.update(name.encode("utf-8"))

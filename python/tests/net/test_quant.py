@@ -25,7 +25,13 @@ Network tolerances, measured (CPU, torch 2.13, 2026-10-23) and the bounds set 3-
   5.6e-2), value 2.2e-3, policy 1.8e-2 - flips again (unquantised, 1.8e-7). With attention
   quantised too (the combination the cache refuses, forced through) the gap is RMS 1.6e-2, value
   6.0e-3, policy 5.3e-2: post-RoPE rounding in the frozen board's own frame. Bounds 6e-3, 8e-3,
-  6e-2.
+  6e-2. Re-measured with C15's FP8 frozen K/V as well (2026-10-23, the same conditions, worst over
+  3 x 4 trees): FP8 K/V trunk RMS 2.8e-3 (max 5.5e-2), value 1.4e-3, policy 1.5e-2; exact K/V
+  2.9e-3 (max 5.3e-2), value 2.2e-3, policy 2.5e-2. The same bounds.
+
+The clamp before the cast (``round_e4m3``, ``quantise``) cannot be observed on this backend: torch
+2.13's CPU conversion to ``float8_e4m3fn`` saturates by itself, so removing the clamp changes no
+result here (a mutant without it survived every test). It stays for backends that do not.
 """
 
 from __future__ import annotations
@@ -39,6 +45,8 @@ import torch
 from torch import nn
 
 from t5d.net import NetConfig, build_model, collate, synthetic_state
+from t5d.net import attention as attention_module
+from t5d.net import flex as flex_module
 from t5d.net.attention import AttnContext
 from t5d.net.cache import CachedEvaluator, reference_output
 from t5d.net.kvformat import dequantise_fp8, fake_quantise, quantise_fp8
@@ -48,11 +56,13 @@ from t5d.net.quant import (
     AttnQuant,
     QuantLinear,
     fake_quant,
+    fake_quant_scaled,
     quant_linear,
     quantise,
     round_e4m3,
     scale_of,
 )
+from t5d.net.rope import apply_rope
 from t5d.net.tree import SearchTree
 from tests.net.test_cache import _random_moves, _root
 
@@ -148,13 +158,30 @@ def test_saturation_and_nan():
     assert torch.isnan(round_e4m3(torch.tensor([math.nan])))[0]
 
 
-def test_random_values_round_as_the_reference():
+#: The devices the element format is checked on: the CPU; a GPU's conversion too when one is
+#: present (M19 - until then the emulation's numerics are the CPU's).
+DEVICES = ["cpu"] + (["cuda"] if torch.cuda.is_available() else [])
+
+
+@pytest.mark.parametrize("device", DEVICES)
+def test_random_values_round_as_the_reference(device):
     gen = np.random.default_rng(0)
     n = 20_000
     mag = np.exp2(gen.uniform(-14, 10, size=n))
     x = (mag * gen.choice([-1.0, 1.0], size=n)).astype(np.float32)
-    got = round_e4m3(torch.from_numpy(x)).double().numpy()
+    got = round_e4m3(torch.from_numpy(x).to(device)).cpu().double().numpy()
     assert np.array_equal(got, ref_round(x.astype(np.float64)))
+
+
+def test_float64_is_refused():
+    """FP32 is the input precision: float64 would be rounded twice (to FP32, then to E4M3)."""
+    x = torch.tensor([1.0, 2.0], dtype=torch.float64)
+    one = torch.tensor(1.0)
+    for f in (round_e4m3, lambda t: scale_of(t, -1), lambda t: quantise(t, one), fake_quant, lambda t: fake_quant_scaled(t, one)):
+        with pytest.raises(ValueError, match="float64"):
+            f(x)
+    with pytest.raises(ValueError, match="float64"):
+        quant_linear(x[None], torch.ones(3, 2, dtype=torch.float64), None)
 
 
 # --- scales and the straight-through estimator -------------------------------------------------
@@ -181,6 +208,34 @@ def test_scales():
     assert torch.equal(fake_quant(torch.zeros(3, 4)), torch.zeros(3, 4)), "a zero slice gives zeros"
     with pytest.raises(ValueError, match="scale rule"):
         scale_of(x, -1, "per_batch")
+
+
+def test_a_power_of_two_scale_is_not_rounded_up():
+    """Under "pow2" a scale is the least power of two not below absmax / 448: a slice whose
+    absmax / 448 is a power of two keeps it (not the next one up), and its values come back
+    exactly."""
+    for e in (-5, 0, 3):
+        x = torch.tensor([[E4M3_MAX * 2.0**e, 1.0 * 2.0**e, -3.0 * 2.0**e]])
+        assert scale_of(x, -1, "pow2").item() == 2.0**e
+        assert torch.equal(fake_quant(x, -1, "pow2"), x), "448, 1 and 3 times the scale are codes"
+    # Just above a power of two: the next one up.
+    assert scale_of(torch.tensor([[E4M3_MAX * 2.0**-5 * (1 + 2**-20)]]), -1, "pow2").item() == 2.0**-4
+
+
+@pytest.mark.parametrize("rule", ["pow2", "absmax"])
+def test_a_non_finite_slice_stays_non_finite(rule):
+    """A slice holding inf or NaN gets a non-finite scale under either rule, so the slice comes out
+    NaN and the trainer's non-finite guards fire; the other slices are untouched. (Rounding inf or
+    NaN "up to a power of two" gave a finite, platform-dependent scale - ``frexp`` of it is
+    unspecified - and [1, inf, 2, 3] came back finite under "pow2".)"""
+    x = torch.tensor([[1.0, math.inf, 2.0, 3.0], [1.0, math.nan, 2.0, 3.0], [-math.inf, 0.5, 0.25, 1.0], [1.0, 2.0, 3.0, 4.0]])
+    s = scale_of(x, -1, rule)
+    assert not torch.isfinite(s[:3]).any() and torch.isfinite(s[3]).all()
+    y = fake_quant(x, -1, rule)
+    assert torch.isnan(y[:3]).all(), y
+    assert torch.equal(y[3], fake_quant(x[3:], -1, rule)[0])
+    out = QuantLinear(4, 5, fmt="fp8_e4m3", rule=rule)(x)
+    assert torch.isnan(out[:3]).all() and torch.isfinite(out[3]).all()
 
 
 def test_pow2_values_are_exact_in_bf16():
@@ -254,6 +309,32 @@ def test_quant_linear():
     assert nobias(x).shape == (2, 5, 24)
     with pytest.raises(ValueError):
         QuantLinear(4, 4, fmt="int8")
+
+
+@pytest.mark.parametrize("rule", ["pow2", "absmax"])
+def test_quant_linear_scale_granularity(rule):
+    """Which slices share a scale, made visible: weight rows (output channels) spread over 2^-15..1
+    and tokens over 2^-12..1 - so that under "pow2", where a scale's binade alone moves only the
+    subnormal floor, a shared scale (per tensor, per input channel, per batch) puts the small rows
+    into the subnormals, and under "absmax" any shared scale moves every value. The layer takes one
+    scale per output channel and one per token; each other choice gives another result."""
+    gen = torch.Generator().manual_seed(5)
+    lin = QuantLinear(32, 16, fmt="fp8_e4m3", rule=rule)
+    with torch.no_grad():
+        lin.weight.mul_(torch.exp2(-torch.arange(16.0))[:, None])
+    x = torch.randn(3, 4, 32, generator=gen) * torch.exp2(-4.0 * torch.arange(4.0))[None, :, None]
+    xq, w = fake_quant(x, -1, rule), lin.weight
+    expected = torch.nn.functional.linear(xq, fake_quant(w, -1, rule), lin.bias)
+    assert torch.equal(lin(x), expected)
+    others = {
+        "weight per tensor": torch.nn.functional.linear(xq, fake_quant(w, (0, 1), rule), lin.bias),
+        "weight per input channel": torch.nn.functional.linear(xq, fake_quant(w, 0, rule), lin.bias),
+        "input per batch": torch.nn.functional.linear(fake_quant(x, (0, 1, 2), rule), fake_quant(w, -1, rule), lin.bias),
+    }
+    for name, other in others.items():
+        assert not torch.equal(other, expected), name
+    lin.set_format("fp8_e4m3", rule, "tensor")
+    assert torch.equal(lin(x), others["weight per tensor"])
 
 
 # --- the FP8 trunk -----------------------------------------------------------------------------
@@ -388,19 +469,62 @@ def test_an_evaluation_does_not_depend_on_its_batch(rule):
     over the position's tokens: "pow2" 5.2e-7, "absmax" 3.1e-3. Mutants with one scale per tensor
     give, under "absmax", 2.6e-2 (the projections' inputs) and 2.2e-2 (the attention operands) -
     and under "pow2" 2.1e-4 and 5.2e-7: a power-of-two scale moves only the subnormal floor of a
-    floating-point format, so "pow2" barely depends on the granularity. Bound 1e-2."""
+    floating-point format, so "pow2" barely depends on the granularity: the 2.1e-4 is one seed's
+    (seed 4; the others 0-1.2e-6), and the attention operands' mutant moves nothing measurable.
+    Bounds 1e-5 under "pow2" over seeds 0-5 (the projections' per-batch mutant exceeds it 20-fold
+    at seed 4; the granularity itself is checked by ``test_quant_linear_scale_granularity`` and,
+    operand by operand, ``test_the_attention_operands_are_rounded_after_rope``), 1e-2 under
+    "absmax"."""
     cfg = NetConfig(n_layers=2, trunk_dtype="fp32", trunk_quant="fp8_e4m3", trunk_quant_scale=rule)
-    for seed in (0, 1, 2):
+    for seed in range(6):
         model = build_model(cfg, seed=seed).eval()
         s1, s2 = synthetic_state(400 + seed, 5), synthetic_state(500 + seed, 11, n_timelines=3)
         b1, b2 = collate([s1]), collate([s2, s1])
         alone, mixed = model(b1, return_trunk=True), model(b2, return_trunk=True)
         lb1, lb2 = b1.body_len, b2.body_len  # the global registers follow the batch's longest body
         d = torch.cat([alone.trunk[0, :lb1] - mixed.trunk[1, :lb1], alone.trunk[0, lb1:] - mixed.trunk[1, lb2:]])
-        assert float(d.pow(2).mean().sqrt()) < 1e-2, (seed, float(d.pow(2).mean().sqrt()))
+        assert float(d.pow(2).mean().sqrt()) < (1e-5 if rule == "pow2" else 1e-2), (seed, float(d.pow(2).mean().sqrt()))
         valid = alone.move_valid[0]
         assert float((alone.value_logits[0] - mixed.value_logits[1]).abs().max()) < 3e-2
         assert float((alone.policy_logits[0][valid] - mixed.policy_logits[1][: valid.shape[0]][valid]).abs().max()) < 6e-2
+
+
+@pytest.mark.parametrize("quantised", [True, False], ids=["fp8_attention", "projections_only"])
+@pytest.mark.parametrize("impl", ["explicit", "dense", "sdpa", "chunked", "block_sparse", "flex"])
+def test_the_attention_operands_are_rounded_after_rope(impl, quantised, monkeypatch):
+    """Operand by operand, on every attention path: each layer's Q, K and V, and Q and K rotated by
+    FP32 RoPE, are each its unrounded operand through E4M3 with one scale per token and head - the
+    rotated ones rounded after the rotation (G1: RoPE at FP32), which differs from rotating
+    rounded ones; every operand a fixed point of the format. With the attention operands off
+    (``trunk_quant_attention=False``) they are the unrounded operands, bit for bit."""
+    calls = []
+    inner = attention_module.quantised_operands
+
+    def capture(q, k, v, ctx):
+        out = inner(q, k, v, ctx)
+        calls.append(((q, k, v), ctx, out))
+        return out
+
+    monkeypatch.setattr(attention_module, "quantised_operands", capture)
+    monkeypatch.setattr(flex_module, "quantised_operands", capture)
+    cfg = NetConfig(n_layers=2, trunk_dtype="fp32", trunk_quant="fp8_e4m3", trunk_quant_attention=quantised, attn_impl=impl)
+    batch = collate([synthetic_state(60, 6, n_timelines=2), synthetic_state(61, 3)])
+    with torch.no_grad():
+        build_model(cfg, seed=4).eval()(batch)
+    assert len(calls) == cfg.n_layers, "one call per layer, every path"
+    differs = 0
+    for (q, k, v), ctx, (qo, ko, vo, qr, kr) in calls:
+        rq, rk = apply_rope(q, ctx.cos, ctx.sin), apply_rope(k, ctx.cos, ctx.sin)
+        if not quantised:
+            for got, want in ((qo, q), (ko, k), (vo, v), (qr, rq), (kr, rk)):
+                assert torch.equal(got, want)
+            continue
+        for name, got, raw in (("q", qo, q), ("k", ko, k), ("v", vo, v), ("q rotated", qr, rq), ("k rotated", kr, rk)):
+            assert torch.equal(got, fake_quant(raw, -1, "pow2")), name
+            assert torch.equal(fake_quant(got, -1, "pow2"), got), (name, "a fixed point of the format")
+        differs += not torch.equal(qr, apply_rope(fake_quant(q, -1, "pow2"), ctx.cos, ctx.sin))
+        differs += not torch.equal(kr, apply_rope(fake_quant(k, -1, "pow2"), ctx.cos, ctx.sin))
+    assert not quantised or differs == 2 * cfg.n_layers, "rounding after RoPE differs from rotating rounded operands"
 
 
 def test_the_cache_takes_linear_only_fp8_and_refuses_quantised_attention():
@@ -422,6 +546,51 @@ def test_the_cache_takes_linear_only_fp8_and_refuses_quantised_attention():
                 node = tree.child(node, move)
             g = _gaps(tree.evaluate(node), reference_output(model, node.state))
             assert g["trunk_rms"] < 6e-3 and g["value"] < 8e-3 and g["policy"] < 6e-2, g
+
+
+def test_the_cache_with_fp8_frozen_kv_and_fp8_projections():
+    """C15's FP8 frozen K/V under the projections-only FP8 trunk: the cache serves it, equal to the
+    full pass - which rounds the frozen K/V as the cache stores them - up to the same rounding flips
+    (the module docstring). This is the combination G8's QAT can train a block-causal network for
+    and the cache serve; with QAT's default (attention quantised too) the cache refuses
+    (``test_the_cache_refuses_a_network_switched_under_it``; issue 239(a))."""
+    base = build_model(NetConfig(n_layers=2, trunk_dtype="fp32", attn_scope="block_causal", frozen_kv_format="fp8"), seed=0).eval()
+    model = base.with_trunk_quant("fp8_e4m3", trunk_quant_attention=False)
+    for seed in (0, 1):
+        root = _root("standard", seed)
+        tree = SearchTree(CachedEvaluator(model), root)
+        node = tree.root
+        for move in [None, *_random_moves(root, np.random.default_rng(seed), 4)]:
+            if move is not None:
+                node = tree.child(node, move)
+            g = _gaps(tree.evaluate(node), reference_output(model, node.state))
+            assert g["trunk_rms"] < 6e-3 and g["value"] < 8e-3 and g["policy"] < 6e-2, g
+
+
+@pytest.mark.parametrize(
+    "switch",
+    [
+        dict(fmt="fp8_e4m3"),
+        dict(fmt="fp8_e4m3", trunk_quant_attention=False),
+    ],
+    ids=["to_fp8_attention", "to_fp8_projections"],
+)
+def test_the_cache_refuses_a_network_switched_under_it(switch):
+    """The cache checks the network's format at every epoch and evaluation, not only when it is
+    built: a network switched in place afterwards (as G8's QAT hook switches the trainer's) would
+    otherwise get round the FP8-attention refusal, or mix two formats' K/V in one store."""
+    model = build_model(NetConfig(n_layers=1, trunk_dtype="fp32", attn_scope="block_causal"), seed=0).eval()
+    evaluator = CachedEvaluator(model)
+    root = _root("standard", 0).state()
+    epoch = evaluator.root_epoch(root)
+    evaluator.evaluate(root, epoch)
+    settings = dict(switch)
+    model.set_trunk_quant(settings.pop("fmt"), **settings)
+    for call in (lambda: evaluator.evaluate(root, epoch), lambda: evaluator.root_epoch(root), lambda: evaluator.refresh(root, epoch)):
+        with pytest.raises(RuntimeError, match="format changed"):
+            call()
+    model.set_trunk_quant("none")
+    evaluator.evaluate(root, epoch)  # back in its format: served again
 
 
 def test_the_context_carries_the_format():

@@ -17,9 +17,13 @@ code ``S.1111.111`` is NaN - no infinities, so the largest finite value is 448 a
 subnormal 2^-9. It is PyTorch's ``torch.float8_e4m3fn``; ``round_e4m3`` takes a value to it by
 round-to-nearest-even (ties to the even code, subnormals included) with **saturation**: every
 value beyond +-448, infinities included, becomes +-448 (OCP's saturating conversion, clamped here
-before the cast so that nothing depends on how a backend converts out-of-range values); NaN stays
-NaN; zero keeps its sign. ``tests/net/test_quant.py`` checks it against an independent decode of
-all 256 codes, at every midpoint between neighbours and beyond the range.
+before the cast so that nothing depends on how a backend converts out-of-range values - on this
+backend, PyTorch 2.13's CPU cast, the clamp is not observable: the cast saturates by itself, so no
+test here can tell it is there); NaN stays NaN; zero keeps its sign. ``tests/net/test_quant.py``
+checks it against an independent decode of all 256 codes, at every midpoint between neighbours and
+beyond the range. **The input precision is FP32** (BF16 and FP16 widen to it exactly): a float64
+tensor is refused, since narrowing it to FP32 first would round it twice - a value just off an
+E4M3 midpoint could land on it and then tie to even the wrong way.
 
 **Scales.** A tensor is held as E4M3 codes times FP32 scales, one scale per slice of the tensor:
 ``fake_quant(x, dims)`` takes one scale over the dims ``dims`` (kept), ``s = absmax / 448``, so the
@@ -37,7 +41,10 @@ committed-class silence - the spec says only "FP8", spec issue 238) chooses:
   accumulator instead).
 
 A scale is computed from the tensor itself (dynamic; no calibration - a placeholder, issue 238)
-under no gradient, floored at ``SCALE_FLOOR`` (a zero slice gives zeros). Which slices share a
+under no gradient, floored at ``SCALE_FLOOR`` (a zero slice gives zeros). A slice holding an
+infinity or a NaN gets a non-finite scale under either rule, so the whole slice comes out NaN and
+the trainer's non-finite guards fire (rounding such a scale "up to a power of two" would give a
+finite, platform-dependent one: ``frexp`` of inf or NaN is unspecified). Which slices share a
 scale is the caller's: the trunk takes one per token (activations), per token and head (the
 attention operands) and per output channel (weights) - never per tensor or per batch for
 activations, whose scales would then depend on what else is in the batch, breaking C19-C21's
@@ -59,6 +66,8 @@ import torch
 
 #: The trunk's formats (``NetConfig.trunk_quant``): "none" (the network as G1 has it) or FP8 E4M3.
 TRUNK_QUANT_FORMATS: tuple[str, ...] = ("none", "fp8_e4m3")
+#: The ``NetConfig`` fields that make up a network's trunk format (``trunk_format``).
+TRUNK_QUANT_FIELDS: tuple[str, ...] = ("trunk_quant", "trunk_quant_attention", "trunk_quant_scale", "trunk_quant_weight_scale")
 #: How a slice's scale is chosen (the module docstring; a placeholder, spec issue 238).
 SCALE_RULES: tuple[str, ...] = ("pow2", "absmax")
 #: Which slices of a weight share a scale: one per output channel, or one per tensor (both are
@@ -74,14 +83,23 @@ E4M3_MIN_SUBNORMAL = 2.0**-9
 SCALE_FLOOR = 1e-30
 
 
+def _refuse_float64(*xs: torch.Tensor) -> None:
+    """The format's input precision is FP32 (the module docstring): float64 is refused - narrowing
+    it first would round it twice."""
+    if any(x.dtype == torch.float64 for x in xs):
+        raise ValueError("FP8 emulation takes FP32 (or BF16/FP16) input: float64 would be rounded twice (to FP32, then E4M3)")
+
+
 def round_e4m3(x: torch.Tensor) -> torch.Tensor:
     """``x`` rounded to E4M3 - round-to-nearest-even, saturating at +-448 (infinities too), NaN
     kept - as FP32 values (exact: every E4M3 value is an FP32 value)."""
+    _refuse_float64(x)
     return x.float().clamp(-E4M3_MAX, E4M3_MAX).to(E4M3).float()
 
 
 def _pow2_ceil(s: torch.Tensor) -> torch.Tensor:
-    """The least power of two not below each (positive, finite) ``s``."""
+    """The least power of two not below each (positive, finite) ``s`` - for a non-finite one,
+    ``frexp`` is unspecified (a finite exponent here), so ``scale_of`` keeps it out."""
     mantissa, exponent = torch.frexp(s)  # s = mantissa * 2^exponent, mantissa in [0.5, 1)
     return torch.ldexp(torch.ones_like(s), exponent - (mantissa == 0.5).to(exponent.dtype))
 
@@ -91,15 +109,18 @@ def scale_of(x: torch.Tensor, dims: int | tuple[int, ...], rule: str = "pow2") -
     slice's absmax by ``rule`` (``SCALE_RULES``). No gradient."""
     if rule not in SCALE_RULES:
         raise ValueError(f"scale rule must be one of {SCALE_RULES}")
+    _refuse_float64(x)
     with torch.no_grad():
         amax = x.detach().float().abs().amax(dim=dims, keepdim=True)
         s = (amax / E4M3_MAX).clamp(min=SCALE_FLOOR)
-        return _pow2_ceil(s) if rule == "pow2" else s
+        # A slice holding inf or NaN keeps its non-finite scale under either rule (the module docstring).
+        return torch.where(torch.isfinite(s), _pow2_ceil(s), s) if rule == "pow2" else s
 
 
 def quantise(x: torch.Tensor, scale: torch.Tensor) -> torch.Tensor:
     """The E4M3 codes of ``x`` under ``scale`` (broadcastable): ``round_e4m3(x / scale)`` as
     ``torch.float8_e4m3fn``. Storage; no gradient flows through a cast to it usefully."""
+    _refuse_float64(x)
     return (x.float() / scale).clamp(-E4M3_MAX, E4M3_MAX).to(E4M3)
 
 
@@ -108,12 +129,23 @@ def dequantise(codes: torch.Tensor, scale: torch.Tensor, dtype: torch.dtype) -> 
     return (codes.float() * scale).to(dtype)
 
 
+def trunk_format(cfg) -> tuple:
+    """A network configuration's trunk format, as it decides the function computed: ``("none",)``
+    when ``cfg.trunk_quant`` is "none" (the settings then do nothing), else the format and its
+    settings (``TRUNK_QUANT_FIELDS``). What a record's network condition, a network's identity
+    (``train.records.network_id``) and the cache's format check compare."""
+    if cfg.trunk_quant == "none":
+        return ("none",)
+    return tuple(getattr(cfg, f) for f in TRUNK_QUANT_FIELDS)
+
+
 class _StraightThrough(torch.autograd.Function):
     """Forward: ``round_e4m3(x / scale) * scale`` in ``x``'s dtype. Backward: the identity on
     ``x`` (the straight-through estimator); the scale takes no gradient."""
 
     @staticmethod
     def forward(ctx, x: torch.Tensor, scale: torch.Tensor) -> torch.Tensor:
+        _refuse_float64(x)
         return (round_e4m3(x.float() / scale) * scale).to(x.dtype)
 
     @staticmethod
@@ -143,6 +175,7 @@ def quant_linear(
     autocast (BF16 under the BF16 trunk), else the input's."""
     if weight_scale not in WEIGHT_SCALES:
         raise ValueError(f"weight scale must be one of {WEIGHT_SCALES}")
+    _refuse_float64(x, weight)
     device = x.device.type
     out_dtype = torch.get_autocast_dtype(device) if torch.is_autocast_enabled(device) else x.dtype
     with torch.autocast(device_type=device, enabled=False):
@@ -214,6 +247,7 @@ __all__ = [
     "E4M3_MIN_SUBNORMAL",
     "SCALE_FLOOR",
     "SCALE_RULES",
+    "TRUNK_QUANT_FIELDS",
     "TRUNK_QUANT_FORMATS",
     "WEIGHT_SCALES",
     "AttnQuant",
@@ -225,4 +259,5 @@ __all__ = [
     "quantise",
     "round_e4m3",
     "scale_of",
+    "trunk_format",
 ]

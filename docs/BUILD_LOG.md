@@ -1693,9 +1693,9 @@ width (M22)", "The CHECKPOINT 8 figures"). Found on the way: the ruling's premis
 | G7 | not started | SPSA/SPRT tooling (training-time) |
 | F4 | not built (rule) | The NNUE is held open (H6, CHECKPOINT 4) |
 | G1 | built, tested | BF16 trunk under autocast; FP32 heads and RoPE; the cache stores K/V in the live format (§15.2 row (e)) |
-| G2 | built behind its flag (off), tested; FP8 speed deferred (M19) | 8-bit inference, FP8 before INT8 (gate 6w). `lane/net`, the precision component (2026-10-23): `net/quant.py`, the one FP8 E4M3 definition (G2, G8, C15) - round to nearest even, saturating, NaN kept, checked against all 256 codes and every midpoint; `NetConfig.trunk_quant = "fp8_e4m3"` (off; it replaces the old `fp8_attention`, which raised) fake-quantises the trunk's six projections per block (weights per output channel, inputs per token; `quant.QuantLinear`, an `nn.Linear` with the same `state_dict`) and, with `trunk_quant_attention`, attention's Q, K (after FP32 RoPE) and V per token and head, at the entry of every attention path; the heads, RoPE, embeddings and norms never. Off, the network is the one before, bit for bit (outputs and gradients checked against the tree before the change - ten configurations' outputs, two's gradients; pinned by test). Random weights, F1: the FP8 trunk sits at trunk RMS 2.7-3.2e-2 from the same weights unquantised (MEASUREMENTS). The cache takes the projections-only network and refuses FP8 attention (C2 deferred). Placeholders - format, scale rule, granularity, P, the estimator: issue 238; edits 183, 184. Not built: the per-board-range probe and the FP8 twin in match play, whose record would name the format (6w's plumbing); FP8 speed and 6w's equal-wall-clock arm need a GPU (M19) |
+| G2 | built behind its flag (off), tested; FP8 speed deferred (M19) | 8-bit inference, FP8 before INT8 (gate 6w). `lane/net`, the precision component (2026-10-23): `net/quant.py`, the one FP8 E4M3 definition (G2, G8, C15) - round to nearest even, saturating, NaN kept, checked against all 256 codes and every midpoint; `NetConfig.trunk_quant = "fp8_e4m3"` (off; it replaces the old `fp8_attention`, which raised) fake-quantises the trunk's six projections per block (weights per output channel, inputs per token; `quant.QuantLinear`, an `nn.Linear` with the same `state_dict`) and, with `trunk_quant_attention`, attention's Q, K (after FP32 RoPE) and V per token and head, at the entry of every attention path; the heads, RoPE, embeddings and norms never. Off, the network is the one before, bit for bit (outputs and gradients checked against the tree before the change - ten configurations' outputs, two's gradients; pinned by test). Random weights, F1: the FP8 trunk sits at trunk RMS 2.7-3.2e-2 from the same weights unquantised (MEASUREMENTS). The cache takes the projections-only network (FP8 frozen K/V too) and refuses FP8 attention (C2 deferred) - at construction and, since the review fixes, at every epoch and evaluation, so a network switched in place under it is refused too. Since the review fixes (2026-10-23): a slice holding inf or NaN comes out NaN under either scale rule; float64 input refused (FP32 is the input precision); every attention operand checked operand by operand on all six paths (rounded after FP32 RoPE). Placeholders - format, scale rule, granularity, P, the estimator, the GPU's accumulator: issue 238; edits 183, 184. Not built: the per-board-range probe and the FP8 twin in match play, whose record would name the format (6w's plumbing); FP8 speed and 6w's equal-wall-clock arm need a GPU (M19) |
 | G3, G4, G5, G6 | not built (rule) | Deferred / held open / refused |
-| G8 | built behind its flag (off), smoke-tested (`lane/net`, the precision component, 2026-10-23) | QAT prepared, not adopted. `TrainerConfig.qat` (off) and `qat_format = "fp8_e4m3"` (provisional until the inference path pins the format): `train.trainer.apply_qat` switches the trainer's network in place to G2's FP8 trunk (`net/quant.py`, issue 238) - fake quantisation of the six projections per block and attention's operands, straight-through gradients, the heads, RoPE, embeddings and norms untouched, the frozen-K/V format (C15) kept: QAT's forward is the served format's bit for bit, K/V cache included (tested). Smoke-tested: three optimiser steps on synthetic rows, BF16 and FP32, FFN ratios 2 and 12 - losses finite, every quantised weight's gradient dense and within FP8 distance of the unquantised network's. Written from papers; Monroe's `quantize` option (Lc0's training code) is an idea only (AGENTS.md, H29). When it runs - a fine-tuning stage, if 6w says so - is the pilot run's (issue 239; edit 182) |
+| G8 | built behind its flag (off), smoke-tested (`lane/net`, the precision component, 2026-10-23) | QAT prepared, not adopted. `TrainerConfig.qat` (off) and `qat_format = "fp8_e4m3"` (provisional until the inference path pins the format): `train.trainer.apply_qat` switches the trainer's network in place to G2's FP8 trunk (`net/quant.py`, issue 238) - fake quantisation of the six projections per block and attention's operands, straight-through gradients, the heads, RoPE, embeddings and norms untouched, the frozen-K/V format (C15) and the network's quantisation settings kept (tested): QAT's forward is the served format's full pass bit for bit, the frozen K/V rounded as the full pass rounds them (tested). The cache serves the projections-only format with FP8 frozen K/V (tested); with QAT's default, attention quantised, the cache refuses the network (issue 239(a), (i)). The records follow the format (review fixes): the trainer's `net_cfg` is switched with the network, a record's network condition takes the format from the evaluated network and refuses a caller's configuration that contradicts it, and `network_id` folds an 8-bit format in (ids of unquantised networks unchanged) - tested through generate -> steps -> publish -> generate. Smoke-tested: three optimiser steps on synthetic rows, BF16 and FP32, FFN ratios 2 and 12 - losses finite, every quantised weight's gradient dense and within relative L2 distance 0.5 of the unquantised network's (measured at most 0.117, MEASUREMENTS). Written from papers; Monroe's `quantize` option (Lc0's training code) is an idea only (AGENTS.md, H29). When it runs - a fine-tuning stage, if 6w says so - is the pilot run's (issue 239; edit 182) |
 | G9 | built in part | PyTorch drives the C++ search through the C API (N5, eager, on CPU). FlexAttention runs eagerly through B14's score function (`attn_impl="flex"`, `lane/net`: forward only on CPU). Not built: torch.compile and compiled FlexAttention kernels (GPU time, M19); ONNX/TensorRT export - refused for now (M5). The bounded AMD attempt (AMD's PyTorch for Windows on the RX 9070 XT, figures AMD-labelled): any time, in `build/` only |
 | I1 | not started (rule) | Self-play training: no training runs in the untrained build (the brief); the pilot run (M18) comes after §15.5 |
 | I2 | built, tested (engine round 2c; targets M21 commit 2, `lane/net`) | Targets from the pruned visits - the search-value targets too (CHECKPOINT 7). The engine side (engine ABI round 2c, issue 153): per root child its visits, priors with and without the noise, q, value variance, E3's factor, `boost`, `steered_visits`, `forced_visits`, and the root's effective cPUCT; search-side forced playouts not built. The targets (`python/t5d/train/targets.py`): KataGo's forced-playout pruning at target construction against a replica of the root's PUCT, a one-visit remainder dropped; steered visits excluded (`policy_mode="exclusion"`, the placeholder) or kept at a weight (`"provenance"`) - open, 6e; the replica's prior without the boost; the policy, soft-policy, categorical, short-term and deblundering values and the q_ratio blend's root WDL all from the pruned visits; the steering counts 0 until E10 wires the asset map and Hunt (no self-play data with E10's boosts before this - it now exists). Placeholders: issue 235 |
@@ -3574,8 +3574,14 @@ superseded or made moot says so; nothing is deleted.
     element format**: E4M3 (`torch.float8_e4m3fn`, OCP's OFP8 E4M3; the spec says only "FP8" - E4M3
     is the format C15 already uses and the plan's provisional choice); round to nearest even;
     saturating (beyond +-448, infinities included, to +-448 - clamped before the cast so no backend's
-    out-of-range conversion matters); NaN kept. Tested against an independent decode of all 256
-    codes and at every midpoint. (b) **The scale rule** (`trunk_quant_scale`): `"pow2"` (default) -
+    out-of-range conversion matters; on this backend, torch 2.13's CPU cast, the clamp cannot be
+    observed - the cast saturates by itself, and a mutant without the clamp survived every test);
+    NaN kept. Tested against an independent decode of all 256 codes and at every midpoint (on a GPU
+    too, when one is present). Since the review fixes: FP32 is the input precision - float64 is
+    refused, as narrowing it first would round it twice; and a slice holding inf or NaN comes out
+    NaN under either scale rule (the power-of-two rounding of a non-finite scale gave a finite,
+    platform-dependent one, so [1, inf, 2, 3] came back finite and the trainer's non-finite guards
+    could not fire). (b) **The scale rule** (`trunk_quant_scale`): `"pow2"` (default) -
     absmax / 448 rounded up to a power of two, so dividing by it is exact and every dequantised value
     (a code, 4 significant bits, times a power of two) is exact in BF16: the trunk's BF16 kernels
     then compute an FP8 GEMM's products exactly; or `"absmax"` - absmax / 448, C15's rule, whose
@@ -3600,7 +3606,14 @@ superseded or made moot says so; nothing is deleted.
     merge's appended log-sum-exp and marker columns are never quantised. (f) **Accumulation**: an
     FP8 projection multiplies and accumulates in FP32, adds its bias in FP32 and returns the trunk's
     compute dtype (BF16 under the BF16 trunk), as an FP8 GEMM with an FP32 accumulator and a BF16
-    output would. (g) **The estimator**: straight-through (Bengio, Leonard & Courville 2013), the
+    output would. A real accumulator may be narrower: the DeepSeek-V3 technical report (DeepSeek-AI
+    2024, arXiv 2412.19437, §3.3.2 "Improved Precision from Quantization and Multiplication", the
+    paragraph "Increasing Accumulation Precision") reports that "the
+    accumulation precision of FP8 GEMM on NVIDIA H800 GPUs is limited to retaining around 14 bits",
+    a maximum relative error of nearly 2% at K = 4096 in their test, and promotes partial sums to
+    FP32 every 128 elements (verified against the report, 2026-10-23). So this emulation is
+    optimistic for a Hopper FP8 GEMM; a PLACEHOLDER for 6w's GPU arm (M19), which must measure the
+    deployed kernel's accumulation, not assume FP32. (g) **The estimator**: straight-through (Bengio, Leonard & Courville 2013), the
     identity, unclipped (absmax scaling never saturates); learned scales (LSQ) not built. (h) **The
     cache** refuses attention-quantised networks (`CachedEvaluator`): Q and K are rounded after RoPE
     and the cache computes a frozen board in a frame centred on itself, so the cached path cannot
@@ -3613,9 +3626,17 @@ superseded or made moot says so; nothing is deleted.
     trunk RMS 2.1e-3 (max 4.7e-2) under the FP8 trunk, not FP32's 1e-5; the protocol's "numerical
     tolerance for BF16/FP8" covers it (edit 184). (j) **Not built**: the per-board-range numerics
     probe and the FP8 twin in match play (6w's equal-budget arm's plumbing; netplay's record names
-    the network's dimensions and trunk dtype, not its format - the training records' network
-    condition carries the whole configuration, `trunk_quant` included); FP8 speed, the
-    equal-wall-clock arm and any INT8 path wait for a GPU (M19). Proposed edits 183, 184.
+    the network's dimensions and trunk dtype, not its format). The training records' network
+    condition names the format - since the review fixes, from the evaluated network itself (it
+    took the caller's configuration, which after QAT's in-place switch still said "none", and the
+    network id hashed the weights alone; issue 239(h)). FP8 speed, the equal-wall-clock arm and
+    any INT8 path wait for a GPU (M19). (k) **Frozen K/V rounded twice under FP8 attention**: with
+    C15's FP8 frozen K/V and `trunk_quant_attention`, a frozen board's K and V are rounded once in
+    the K/V hook (one absmax scale per board, layer and head - C15's format) and again at the
+    attention entry (one power-of-two scale per token and head, K also after RoPE). Both
+    roundings are in the full pass and in QAT alike, so the matching rule holds; whether a
+    deployed kernel would round twice is the inference path's to pin (a placeholder). Proposed
+    edits 183, 184.
 239. **G8's QAT hook, as built** (§10.2, §15.1, §12.8; register G8, M21, G2, C15, I17; issues 237(c),
     238). The user's brief (2026-10-23): "QAT hooks G8 (FP8 E4M3, flag off, never the heads or RoPE;
     the FFN ratio stays a config parameter)" - edit 182's second reading, the hook built now on a
@@ -3625,12 +3646,26 @@ superseded or made moot says so; nothing is deleted.
     to G2's trunk format before its optimiser is built: fake quantisation with straight-through
     gradients (issue 238), the heads, RoPE, embeddings and norms untouched, and the network's other
     quantisation settings (`trunk_quant_*`) and its frozen-K/V format (C15, the cache's) kept - so
-    QAT's forward is G2's inference forward, bit for bit (tested, the block-causal scope with FP8
-    frozen K/V included: "QAT simulates exactly the deployed format, K/V cache included"). (b) **In
-    place**: the hook switches the network it is given, as the trainer trains that network's weights
-    in place - a copy would carry the optimiser-step count away from the original, and a second
-    trainer could then take three more steps on it (issue 237(a)). (c) **A network already in another
-    8-bit format is refused**: QAT would simulate a format the network is not served in. (d) **When**:
+    QAT's forward is the full pass of G2's served format, bit for bit (tested, the block-causal
+    scope with FP8 frozen K/V and non-default settings included). What that covers of "QAT
+    simulates exactly the deployed format, K/V cache included" (corrected by the review; the first
+    wording claimed the K/V cache, bit for bit): the full pass's emulation of C15's frozen-K/V
+    format, which rounds the frozen K/V as the cache stores them; the cache serves the
+    projections-only FP8 network with FP8 frozen K/V, equal to the full pass within rounding flips
+    (tested: trunk RMS 2.8e-3, MEASUREMENTS); FP8 attention the cache refuses (issue 238(h)). (b)
+    **In place**: the hook switches the network it is given, as the trainer trains that network's
+    weights in place - a copy would carry the optimiser-step count away from the original, and a
+    second trainer could then take three more steps on it (issue 237(a)). The hazard, documented
+    and intended for the trainer's own network: any evaluator already holding the network
+    evaluates it in the new format from then on - a `NetworkEvaluator` built before `apply_qat`
+    evaluates in FP8 afterwards, silently. A `CachedEvaluator` does not: it records the network's
+    format when built and refuses at every epoch and evaluation once it has changed (the review
+    fixes; before them a cache built first served an FP8-attention network it refuses at
+    construction, trunk RMS 1.4e-2 from the full pass, and could mix two formats' K/V in one
+    store). (c) **A network already in another 8-bit format is refused**: QAT would simulate a
+    format the network is not served in. The hook validates its configuration first (since the
+    review fixes), so a format G2 does not build is refused there; the refusal proper is tested
+    with a second format made known to the configuration. (d) **When**:
     section 10.2's "a fine-tuning stage at the end of a training phase, not from the start", and only
     if 6w's arms say so - a schedule, the pilot run's; the hook applies wherever a trainer is built
     with it. (e) **SWA under QAT** (unstated): the trainer's SWA averages the QAT network's weights and
@@ -3640,8 +3675,20 @@ superseded or made moot says so; nothing is deleted.
     only, its code neither read for reuse nor ported (AGENTS.md, H29). (g) **Smoke-tested only**: three
     optimiser steps on synthetic rows (BF16 and FP32 trunks, FFN ratios 2 and 12) - losses finite, a
     dense gradient on every quantised weight, every trunk parameter moved; each projection's QAT
-    gradient within relative L2 distance 0.12 of the unquantised network's (norm ratios 0.97-1.03),
-    where the flushing cast the STE replaced gave zero. Proposed edit 182 (as ruled).
+    gradient within relative L2 distance 0.5 of the unquantised network's, measured at most 0.117
+    (norm ratios 0.97-1.03; MEASUREMENTS - the first wording gave the measurement as the bound),
+    where the flushing cast the STE replaced gave zero. (h) **The records name the format** (the
+    review fixes): `Trainer.net_cfg`, which the trainer hands to self-play, is switched with the
+    network; `selfplay.network_info` takes the `trunk_quant*` fields from the evaluated network's
+    own configuration and refuses a caller's configuration whose format disagrees; `network_id`
+    folds an 8-bit format into the hash (a network in "none" hashes its weights alone, so existing
+    ids are unchanged). Before the fixes a QAT network's records said "none" and carried the
+    unquantised network's id. Tested through generate -> steps -> publish -> generate under QAT.
+    (i) **A block-causal network under QAT's default** (attention quantised) is one the cache
+    refuses. Chosen: the hook neither warns nor refuses - the cached configuration is parked (C2),
+    the full pass serves such a network, and the cache refuses it at construction and at every
+    evaluation; a network meant for the cache is trained with `trunk_quant_attention=False`, which
+    the hook keeps. Revisit if C2 is adopted (issue 238(h)). Proposed edit 182 (as ruled).
 
 <!-- A new list, so that the numbers from 140 render as written. -->
 
@@ -4902,7 +4949,8 @@ struck through, where nothing of it is left to apply); the others stand as writt
     2026-10-23: the hook built now, behind a flag, off): add to §15.1 "the QAT hook behind its flag,
     off, on a provisional FP8 E4M3 format (G2's emulation), re-pinned with the inference path", and to
     G8 "built behind its flag on the provisional E4M3 emulation; QAT's forward is the served format's
-    bit for bit, the frozen-K/V format included". Why: the loop had the seam only (issue 237(c)); the
+    full pass bit for bit, the frozen K/V rounded as the full pass rounds them (the cache serves the
+    projections-only format; FP8 attention it refuses)". Why: the loop had the seam only (issue 237(c)); the
     hook is built and smoke-tested (issue 239).
 183. **§10.2's 8-bit paragraph and register G2**: now - "Quantise the trunk's matrix
     multiplications - weights and activations, attention included - and keep the policy and value
@@ -4912,8 +4960,10 @@ struck through, where nothing of it is left to apply); the others stand as writt
     "Emulated in the untrained build (CPU, numerics only): FP8 E4M3, round to nearest even,
     saturating; scales absmax / 448 rounded up to a power of two, one per output channel for
     weights, per token for activations, per token and head for attention's Q, K (after FP32 RoPE)
-    and V; the probabilities unquantised; FP32 accumulation; straight-through gradients. The cached
-    configuration takes the projections only." Why: every one of these is unstated (issue 238).
+    and V; the probabilities unquantised; FP32 accumulation (a Hopper FP8 GEMM keeps about 14 bits -
+    DeepSeek-V3, §3.3.2 - so 6w measures the deployed kernel's); straight-through gradients. The
+    cached configuration takes the projections only." Why: every one of these is unstated (issue
+    238).
 184. **§15.2's protocol and its G1 row**: now - "tolerance matched to the arithmetic (bit-exact
     for integer paths - Zobrist, NNUE int16 - and numerical tolerance for BF16/FP8)"; "FP8/BF16
     cache precision = live precision | §10.2's matching rule | G1". Proposed - add: "under FP8, paths

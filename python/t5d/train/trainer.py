@@ -32,7 +32,9 @@ this build.
   fake-quantised in FP8 E4M3, straight-through gradients, the heads and RoPE untouched - and its
   frozen-K/V format (C15, the cache's) kept as the network has it. The format is
   ``TrainerConfig.qat_format``, PROVISIONAL until the inference path pins one (issue 239); QAT's
-  forward is G2's inference forward bit for bit, which is the matching rule (section 10.2). When
+  forward is the full pass of G2's served format bit for bit, which is the matching rule (section
+  10.2; the cache serves only the projections-only format - issue 239(a)); the trainer's
+  ``net_cfg`` follows the network's new format, so the records it feeds name it. When
   to switch it on - "a fine-tuning stage at the end of a training phase", only if 6w's arms say so
   - is the pilot run's to schedule, not this build's.
 * **C3's conditioning-offset training is parked** with the deferred cached configuration (C2;
@@ -48,7 +50,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 import torch
@@ -56,7 +58,7 @@ import torch
 from ..engine.capi import MOVE_DTYPE
 from ..net.config import NetConfig
 from ..net.model import T5DNet
-from ..net.quant import TRUNK_QUANT_FORMATS
+from ..net.quant import TRUNK_QUANT_FIELDS, TRUNK_QUANT_FORMATS
 from ..net.state import PositionState
 from .losses import LossConfig, compute_losses
 from .records import Children, DecisionRecord, GameRecord
@@ -107,12 +109,17 @@ def apply_qat(model: T5DNet, cfg: TrainerConfig) -> T5DNet:
     (``T5DNet.set_trunk_quant``) - fake quantisation of the trunk's matrix multiplications with
     straight-through gradients (``net/quant.py``); the heads, RoPE, embeddings and norms untouched;
     the network's frozen-K/V format (C15) and its quantisation settings (``trunk_quant_*``) kept,
-    so that QAT simulates exactly the format the network is served in (section 10.2: "K/V cache
-    included"). In place, as the trainer trains its network's weights in place: the network's
-    optimiser-step count stays with it (issue 237(a)). A network already in another 8-bit format
-    is refused - QAT would then simulate a format it is not served in. Written from the papers
+    so that QAT's forward is the full pass of the format the network is served in (section 10.2:
+    "K/V cache included" - the frozen K/V as the full pass rounds them; the cache itself refuses a
+    network with FP8 attention, issue 239(a)). In place, as the trainer trains its network's
+    weights in place: the network's optimiser-step count stays with it (issue 237(a)) - and so any
+    evaluator already holding the network evaluates it in the new format from then on (a
+    ``NetworkEvaluator`` silently; a ``cache.CachedEvaluator`` refuses at its next evaluation;
+    issue 239(b)). ``cfg`` is validated first. A network already in another 8-bit format is
+    refused - QAT would then simulate a format it is not served in. Written from the papers
     (straight-through fake quantisation: Bengio, Leonard & Courville 2013; Jacob et al. 2018),
     never from Lc0's training code (Monroe's ``quantize`` option is the idea only - AGENTS.md, H29)."""
+    cfg.validate()
     current = model.cfg.trunk_quant
     if current not in ("none", cfg.qat_format):
         raise ValueError(
@@ -135,6 +142,10 @@ class Trainer:
         if tuple(self.target_cfg.short_term_horizons) != tuple(net_cfg.short_term_horizons):
             raise ValueError("the targets' short-term horizons are the network's (D3)")
         self.model = apply_qat(model, self.cfg) if self.cfg.qat else model
+        if self.cfg.qat:
+            # The network's format is now QAT's: the configuration the trainer hands on (the
+            # records' network condition, ``selfplay.network_info``) says so too.
+            self.net_cfg = replace(net_cfg, **{f: getattr(self.model.cfg, f) for f in TRUNK_QUANT_FIELDS})
         params = [p for p in self.model.parameters() if p.requires_grad]
         if self.cfg.optimiser == "adamw":
             self.opt = torch.optim.AdamW(params, lr=self.cfg.lr, weight_decay=self.cfg.weight_decay)
