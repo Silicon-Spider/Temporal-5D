@@ -25,7 +25,9 @@ shift with submit legal, masked and absent, a mid-turn state's turn-state counts
 player's, so the mirror keeps them), no global registers, far-apart boards - and the
 flagged attention structure (B5, B10, B11, B12, B17, B15 off), in the dense scope and the
 block-causal one, and through the cached path (section 15.2's first row must stay green: frozen
-K/V are keyed by perspective, spec issue 303). Tolerance: FP32 1e-5 (the mirror reorders each
+K/V are keyed by perspective, spec issue 303) - and with register A8's board-layout embedding on
+(its layout read in canonical (x, y) order: ``test_the_mirror_with_the_board_layout_embedding``
+and the cached path's). Tolerance: FP32 1e-5 (the mirror reorders each
 board's tokens, so floating-point sums run in another order); the BF16 default no further from
 its mirror than from its own FP32 computation. Real engine positions, the engine's own 5DFEN
 mirror against ``mirror`` of the conversion: ``tests/engine/test_perspective_engine.py``.
@@ -92,6 +94,7 @@ FLAG_SETS = {
     "b17": dict(shaw_key_term=True, shaw_init_std=1.0),
     "no_table_pointer_submit": dict(displacement_bias=False, submit_head="pointer"),
     "d4_reply_d9": dict(opp_reply=True, optimistic_policy=True),
+    "a8_centre": dict(board_layout_embedding=True, layout_padding="centre"),
 }
 
 VALUE_HEADS = ("value_logits", "wdl_logits", "short_term", "value_error", "moves_left_log", "effort_logits", "submit_raw")
@@ -487,3 +490,54 @@ def test_the_other_perspectives_anchor_has_no_moves_or_edges(construction):
             handle.remove()
         _close(cached.evaluate(node, epoch), want)
         _close(cached.evaluate(s, epoch), reference_output(model, s, anchor=s))
+
+
+# --- register A8: the board-layout embedding reads the canonical frame ---------------------------------
+
+
+@pytest.mark.parametrize("construction", list(CONSTRUCTIONS))
+def test_the_mirror_with_the_board_layout_embedding(construction):
+    """Section 15.2's A7 row with A8 on (its flag; both paddings): every board's one-hot layout -
+    read in canonical (x, y) order - is the mirror's, bit for bit; so are each square's layout
+    channels at the mirrored token and, the acting colour equalised, the token embedding before
+    the embedding's FFN (a network without it: the same draws) under either scope - with the FFN
+    within 1e-6, the GEMM's rounding of rows in another order; and the outputs, mapped back, agree
+    (FP32 1e-5), in the dense scope and the block-causal one."""
+    for seed in (0, 1):
+        s, m = _pair(construction, seed)
+        bs, bm = collate([s]), collate([m])
+        perm = torch.from_numpy(mirror_tokens(s.layout))
+        padding = ("a1", "centre")[seed]
+        for scope in ("dense", "block_causal"):
+            model = _model(seed, scope, board_layout_embedding=True, layout_padding=padding, **_config_for(s))
+            layer = model.embed.layout
+            assert torch.equal(layer.layouts(bm), layer.layouts(bs)), scope
+            assert torch.equal(layer.channels(bm)[0][perm], layer.channels(bs)[0]), scope
+            bare = _model(seed, scope, board_layout_embedding=True, layout_padding=padding, layout_ffn_ratio=0, **_config_for(s))
+            assert torch.equal(bare.embed.layout.proj.weight, layer.proj.weight)
+            assert torch.equal(bare.embed_tokens(bm, scope)[0][perm], bare.embed_tokens(bs, scope)[0]), scope
+            assert torch.allclose(model.embed_tokens(bm, scope)[0][perm], model.embed_tokens(bs, scope)[0], rtol=0, atol=1e-6), scope
+            assert_mirrored(_outputs(model, s), _outputs(model, m), perm, _acting(s, m))
+
+
+@pytest.mark.parametrize("refresh", [False, True], ids=["causal", "root-refresh"])
+@pytest.mark.parametrize("construction", ("standard", "deep_travel", "even_start", "size_5"))
+def test_the_cached_path_and_the_mirror_with_the_board_layout_embedding(construction, refresh):
+    """The cached path with A8 on: each perspective's evaluation equals one full pass, and the
+    mirror's equals it mapped back (a frozen board's layout is intrinsic, keyed by perspective)."""
+    s, m = _pair(construction, 0)
+    model = _model(0, "block_causal", board_layout_embedding=True, **_config_for(s))
+    cached = CachedEvaluator(model, CacheConfig(root_refresh=refresh))
+    outs = {}
+    for name, root in (("s", s), ("m", m)):
+        epoch = cached.root_epoch(root)
+        for view in (int(root.acting_player), 1 - int(root.acting_player)):
+            node = viewed_by(root, view)
+            got = cached.evaluate(node, epoch)
+            want = reference_output(model, node, anchor=root) if refresh else reference_output(model, node)
+            _close(got, want)
+            outs[name, view == int(root.acting_player)] = (got, int(node.acting_player))
+    perm = torch.from_numpy(mirror_tokens(s.layout))
+    for own in (True, False):
+        (a, acting_a), (b, acting_b) = outs["s", own], outs["m", own]
+        assert_mirrored(a, b, perm, (acting_a, acting_b), atol=1e-4)

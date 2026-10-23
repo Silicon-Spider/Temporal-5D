@@ -41,6 +41,8 @@ parameter. F2's larger arm, L24-ff12, is 46,894,834 as built: 44,460,082 (sectio
 and B15's 24 x 8 x 12,681 = 2,434,752 (A6's 8,768 among the 44,460,082; D3's rebuild -12,079, D4's +3,598).
 B16's status table (committed with the cached configuration) adds 304 to a block-causal
 network and nothing to the v1, whose scope is dense.
+Register A8's board-layout embedding (a prototype behind its flag, off) adds nothing to the v1;
+on, 2,629,120 - 25,594,546 (``test_layout.py``; its FFN's width a placeholder, spec issue 240).
 """
 
 from __future__ import annotations

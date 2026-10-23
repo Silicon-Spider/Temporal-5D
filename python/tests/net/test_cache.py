@@ -164,6 +164,7 @@ def test_cached_equals_one_full_pass(geometry, reading, supersession):
         dict(shaw_key_term=True, shaw_init_std=1.0, routing_table=True, typed_edge_bias=True, board_pair_smolgen=True),
         dict(shaw_key_term=True, shaw_shared_heads=True, status_bias_per_layer=True, status_bias_init_std=1.0),
         dict(opp_reply=True, submit_head="pointer", optimistic_policy=True),
+        dict(board_layout_embedding=True, layout_padding="centre", routing_table=True, typed_edge_bias=True, board_pair_smolgen=True),
     ],
     ids=[
         "n2-all",
@@ -176,6 +177,7 @@ def test_cached_equals_one_full_pass(geometry, reading, supersession):
         "b17-n2-all",
         "b17-shared-b16-per-layer",
         "d4-reply-d9-pointer-submit",
+        "a8-n2-all",
     ],
 )
 def test_cached_equals_one_full_pass_with_every_switch(flags):
@@ -187,7 +189,8 @@ def test_cached_equals_one_full_pass_with_every_switch(flags):
     board's rows get it from its own queries) and B16's placeholders moved. B15 - the v1 default -
     is on in every other test here: a frozen board's rows carry it, layer by layer
     (``compute_board``). D4's heads - the soft policy (on), the reply prototype (on here) - read
-    the cached trunk as the dense pass's (C2, C17), as does D9's optimistic policy (on here)."""
+    the cached trunk as the dense pass's (C2, C17), as does D9's optimistic policy (on here); A8's
+    board-layout embedding (a prototype) is per board and intrinsic, its FFN per token."""
     model = _model(3, **flags)
     root = _root("standard", 3)
     tree = SearchTree(CachedEvaluator(model), root)
