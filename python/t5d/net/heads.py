@@ -16,6 +16,13 @@ submitting is possible (T5), masked to -inf unless it is legal (C4), and normali
 with the move logits - one distribution over the moves and submit (``NetOutput``). The
 readout's form (linear, or the policy's bilinear form) is not ruled: ``NetConfig.submit_head``.
 
+**D2's flat form - the per-board "leave it" logit (section 8.2).** "Optional boards carry a 'leave
+it' option with its own prior", and the flat form's policy "normalises per board rather than across
+all moves - a head change": one logit per board (``LeaveHead``), read from the board's pooled state
+(``NetConfig.leave_pool``: its squares' mean, the default, or its per-board registers'; spec issue
+241), which the engine softmaxes with that board's move logits (BUILD_LOG issues 164, 165). The
+move logits are the policy's own; trained per board on the visit marginals (``train.targets``).
+
 **Value (D3, section 8.3, as corrected at CHECKPOINT 7).** "Four heads, each pooled by mean
 from the global registers, FP32, from the acting player's perspective" (``ValueHeads``): one
 hidden layer with Mish over the registers' mean (register F6 since CHECKPOINT 8: "Mish ... in
@@ -101,7 +108,7 @@ import torch
 from torch import nn
 
 from .config import NetConfig
-from .state import NO_PROMOTION, Batch
+from .state import NO_PROMOTION, TOKEN_BOARD_REGISTER, Batch
 
 #: Per-board auxiliary logits, in output order.
 BOARD_HEADS: tuple[str, ...] = ("travelled_into", "timeline_active_at_end", "tactical_volatility")
@@ -266,15 +273,26 @@ def global_register_pool(h: torch.Tensor, batch: Batch) -> torch.Tensor:
     return square_pool(h, batch)
 
 
-def board_mean_pool(h: torch.Tensor, batch: Batch) -> torch.Tensor:
-    """Mean of each board's square tokens, ``(B, Nmax, d)`` (registers excluded)."""
+def board_mean_pool(h: torch.Tensor, batch: Batch, tokens: torch.Tensor | None = None) -> torch.Tensor:
+    """Mean of each board's square tokens, ``(B, Nmax, d)`` (registers excluded) - or, given
+    ``tokens`` ``(B, L)`` bool, of each board's tokens among those."""
     bsz, _, d = h.shape
     n_max = batch.board_valid.shape[1]
-    sq = batch.square_mask
+    sq = batch.square_mask if tokens is None else tokens
     index = torch.where(sq, batch.board, torch.full_like(batch.board, n_max))  # dump bucket
     sums = h.new_zeros(bsz, n_max + 1, d).scatter_add_(1, index[..., None].expand(-1, -1, d), h * sq[..., None])
     counts = h.new_zeros(bsz, n_max + 1).scatter_add_(1, index, sq.to(h.dtype))
     return sums[:, :n_max] / counts[:, :n_max, None].clamp(min=1.0)
+
+
+def board_register_pool(h: torch.Tensor, batch: Batch) -> torch.Tensor:
+    """Mean of each board's per-board registers, ``(B, Nmax, d)`` - D2's flat head's ``"registers"``
+    arm (``LeaveHead``). With no per-board registers (an ablation-3 arm), each board's square mean
+    instead (``board_mean_pool``), as ``global_register_pool`` falls back - a placeholder (spec
+    issues 225, 241)."""
+    if batch.regs_per_board <= 0:
+        return board_mean_pool(h, batch)
+    return board_mean_pool(h, batch, batch.valid & (batch.kind == TOKEN_BOARD_REGISTER))
 
 
 # --- heads -------------------------------------------------------------------------------------
@@ -343,6 +361,29 @@ class SubmitHead(nn.Module):
         if self.out is not None:
             return self.out(r).squeeze(-1)
         return (policy.src(r) * policy.dst(r)).sum(dim=-1) / math.sqrt(policy.dim)
+
+
+class LeaveHead(nn.Module):
+    """Register D2's flat form (section 8.2): each board's "leave it" logit, ``(B, Nmax)`` - "optional
+    boards carry a 'leave it' option with its own prior", softmaxed by the engine with the board's
+    own move logits (and the non-branching jumps arriving on it), so the policy "normalises per board
+    rather than across all moves" (BUILD_LOG issues 164, 165). Read from each board's pooled state -
+    its square tokens' mean or its per-board registers' (``NetConfig.leave_pool``; spec issue 241) -
+    by a learned linear readout (d + 1 parameters, D8's ``"linear"`` submit readout's form: a
+    placeholder fixed in code). Every board gets a logit, padding included (the engine reads the
+    acting player's playable boards; the losses mask the rest). Made without drawing from the RNG;
+    drawn from a generator of its own (``model.T5DNet._init_weights``, ``d2_seed``)."""
+
+    def __init__(self, cfg: NetConfig) -> None:
+        super().__init__()
+        self.pool = cfg.leave_pool
+        self.out = nn.utils.skip_init(nn.Linear, cfg.d_model, 1)
+
+    def forward(self, h: torch.Tensor, batch: Batch, boards: torch.Tensor | None = None) -> torch.Tensor:
+        """``boards``: the squares' per-board mean when the caller has it (``board_mean_pool``)."""
+        if self.pool == "registers":
+            return self.out(board_register_pool(h, batch)).squeeze(-1)
+        return self.out(board_mean_pool(h, batch) if boards is None else boards).squeeze(-1)
 
 
 class ActionHead(nn.Module):

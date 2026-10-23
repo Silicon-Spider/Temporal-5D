@@ -10,6 +10,46 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-23 - D2's flat head: one "leave it" logit per board, always built, delivered to the engine
+
+Register D2's flat form "normalises per board rather than across all moves - a head change" (spec
+§8.2), and its "optional boards carry a 'leave it' option with its own prior": until now the engine
+gave every board's leave option its `leave_share` placeholder (0.5) because the network had no such
+head (BUILD_LOG issue 165). In the network lane - no training run.
+
+- **The head** (`heads.LeaveHead`, `T5DNet.leave`, `NetOutput.leave_logits` `(B, Nmax)`): a linear
+  readout of each board's pooled state - its square tokens' mean by default, its per-board
+  registers' mean the arm (`NetConfig.leave_pool`, a placeholder: §8.2 does not say what the logit
+  reads; issue 241). Always built, no flag: D2 is committed-class and Undecided between arms that
+  are all built, not a prototype; only the flat form reads it.
+- **Parameters**: +257 (256 + 1) - the v1 is 22,965,683 (was 22,965,426), F2's arm 46,895,091, A8
+  on 25,594,803. The head draws from a generator of its own (`model.d2_seed`), so every parameter
+  that existed before it is drawn as before, bit for bit - pinned by fingerprints recorded at
+  `9c59cb0` (the small network at seed 7 under the default and the prototype flags, the v1 at seed
+  0) and by the head's own draw (`test_params.py`).
+- **Delivered**: `NetworkEvaluator` and `CachedNetworkEvaluator` give every board's leave logit
+  (`Evaluation.board_logits`, the input's board order), and `check_evaluation` checks them (one per
+  board, never infinite) - so a flat search the network evaluates no longer falls back on
+  `leave_share`.
+- **The loss that trains it** (`train/losses.py`, `flat_policy`; issue 242(e)): at a flat decision
+  (`Targets.flat_*`: each entry an option - a move, or leaving board b - its board and its target
+  probability) each board's cross-entropy against the log-softmax over its options' logits - the
+  policy's move logits and the leave head's - summed over the boards, averaged over the positions,
+  full searches only, weight 1 (`flat_board_reduction` "sum" and the weight placeholders). A flat row
+  has no ply-split policy target: the policy loss, the soft policy and D9's optimistic policy skip
+  it. The smoke test (`smoke_train`) adds one flat position (`synthetic_targets(flat_row=...)`), so
+  every parameter, the leave head's included, still moves in its three steps. The target itself
+  (from records) is the next commit's.
+- **Tests** (`tests/net/test_leave.py`; `test_perspective.py`, `test_params.py`): the logit equal to
+  the readout of a pool computed by hand, under both pools and with 4 and 0 per-board registers;
+  only a board's own pool reaches its logit; its spread at initialisation on the move logits' scale;
+  §15.2's A7 mirror with the head (every existing mirror test now compares the leave logits, and the
+  register pool has its own); the cached path's leave logits the dense pass's; the evaluator's
+  delivery and its checks.
+
+Spec: §8.2 ("Flat form", "What is lost"), §9.2 (the heads, the parameter count), §15.2 (the A7 row);
+register D2, F1, M21 (D7, D8, B8 read). Issues 241, 242(e); proposed edit 187.
+
 ### 2026-10-23 - A8 review fixes: the cost flagged under the 2x rule, the cached node's share counted, the FFN's form pinned, non-square padding and FP32 values tested
 
 A review of register A8 (`lane/net` a1ec09b: spec fidelity, and 24 mutants run at test time, five
