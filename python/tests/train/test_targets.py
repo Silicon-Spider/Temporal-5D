@@ -474,6 +474,12 @@ def test_effort_from_the_change_point():
     assert t.full_search.tolist() == [True, True, True, False] and t.policy[3] is None and np.isnan(t.categorical[3])
 
 
+def test_square_mate_nodes_must_be_positive():
+    TargetConfig(square_mate_nodes=1).validate()
+    with pytest.raises(ValueError, match="square_mate_nodes"):
+        TargetConfig(square_mate_nodes=0).validate()
+
+
 def test_proof_rescoring_is_refused_until_the_sign_off():
     assert PROOF_CHANNEL_SIGNED_OFF is False
     with pytest.raises(ValueError, match="sign-off"):

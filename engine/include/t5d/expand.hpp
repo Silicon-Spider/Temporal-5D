@@ -53,8 +53,8 @@
 //     detection's own scan (t5d/check.hpp for_each_royal_capture): the
 //     opponent's captures of the acting player's royals in its view - at a turn
 //     start exactly what R1's check status asks - and the acting player's of
-//     the opponent's in the state (C4's test from the other side; empty after
-//     any legal submission).
+//     the opponent's in the state (C4's test from the other side; empty in
+//     every position reached by legal play).
 //  f. boards - every board, in the canonical order (ascending timeline, then
 //     half-turn), with the network contract's per-board features
 //     (python/t5d/net/state.py): timeline position, half-turn, head,

@@ -18,8 +18,11 @@
 //    R1's check status exactly; mid-action it is the same pass of the boards
 //    still unplayed (none once the present has shifted: then the state itself,
 //    as C4's submission test reads it). Where the pass is undefined - Q6's
-//    alternative, a deferred timeline of the mover's in the present mid-action
-//    (passed_timelines throws) - the state itself is read.
+//    alternative, a deferred timeline of the mover's in the present mid-action,
+//    which passed_timelines refuses (tested first, as a precondition) - the
+//    state itself is read: no board is passed, the non-deferred ones included
+//    (passing those alone would need a variant of check status's pass; spec
+//    issue 172's alternative).
 //
 // A place on a passed copy - (p, present + 1) - is reported at the board it
 // copies, (p, present): the copy's squares are that board's, one half-turn on.

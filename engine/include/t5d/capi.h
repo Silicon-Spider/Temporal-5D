@@ -449,7 +449,8 @@ T5D_API t5d_status t5d_game_state(const t5d_game* game, t5d_state** out);
  * square of every board (the canonical order, cells rank * width + file), the
  * eight labels of python/t5d/net/heads.py SQUARE_LABELS, in its order, relative
  * to the ACTING player (A7: "ours" its, "theirs" the opponent's). Each is 0 or
- * 1, or T5D_LABEL_UNKNOWN where a mate search stopped on its budget. What each
+ * 1, or T5D_LABEL_UNKNOWN where a mate search stopped on its budget or an
+ * exchange's recaptures could not be read (t5d/labels.hpp, item 0). What each
  * means - each a placeholder reading - is t5d/labels.hpp's and the engine
  * README's ("Per-square labels"). */
 
@@ -466,7 +467,8 @@ T5D_API t5d_status t5d_game_state(const t5d_game* game, t5d_state** out);
 
 typedef struct t5d_label_options {
   uint64_t mate_nodes; /* each mate search's node budget (arrival_gives_mate); UINT64_MAX
-                          (T5D_NO_LIMIT): exact. NULL options: 200000 (a placeholder) */
+                          (T5D_NO_LIMIT): no node limit (the search's memory limit stays).
+                          NULL options: 200000 (a placeholder) */
 } t5d_label_options;
 
 typedef struct t5d_square_labels {

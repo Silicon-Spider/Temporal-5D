@@ -1645,7 +1645,7 @@ width (M22)", "The CHECKPOINT 8 figures"). Found on the way: the ruling's premis
 | B5 | built, tested | Network N1, behind a flag (off); its as-built details are "v1 placeholders" (Provisional, CHECKPOINT 6; M20), tested by ablation 2 - §4.1 does not state them (edit 9) |
 | B6 | superseded; removed | By B15 (CHECKPOINT 6, reversal 25; M20). Removed from the code with B15 (`lane/net`): `binned_bias`, `binned_bias_rope` (issue 9f) and their fields - no arm survives, ablation 2's arm is B15 on or off. Its log buckets live on in `python/t5d/net/buckets.py` for B12's relative cells (`smolgen_time_*`, `smolgen_timeline_*`; smolgen's 152 cells and 47,136 parameters unchanged, issue 212). Under B15's far-bin placeholder B6 is not B15's special case, which §4.1, the register's B6 row and reversal 25 say it is: beyond the exact classes its per-axis buckets are not kept, only Δtime's sign and the clamp (issue 205, edit 159; put to the user) |
 | B10, B12 | built, tested | Network N2, behind flags (B12 as relative board-pair cells, full rank - the register now records it as built; the cells are the log buckets B6 used, re-homed in `buckets.py` when B6 went - issue 212). The register says smolgen "keeps its own normalisation" (F5); the built smolgen has none (`lane/net`'s issue 202) |
-| B11 | built behind a flag, tested | Network N2; five types since `lane/net`'s N-B11 - attack, defence, pin, x-ray, check: travel-threat folded into attack (CHECKPOINT 6, reversal 26) and dropped from the network's type set (`config.TYPED_RELATIONS`, `state.RELATION_TYPES`; the synthetic generator's cross-board attacks are its travel threats). One scalar per head per type, shared across layers: 8 x 5 = 40 (80 directed; 48 and 96 before), only with `typed_edge_bias` on - the v1's count is unchanged. Live query rows only under the cached configuration (built at N3). The relation ids are the C ABI's: id 6 stays reserved (append-only), never emitted, refused by `PositionState`'s validation. **Engine ABI round 3** (`lane/engine`, 2026-10-23): the engine emits all five behind the relation mask (`T5D_RELATIONS_PIN`, `_CHECK`; `relations_for` hands a network with B10 or B11 on all five). Pin and check read each side from its own view - the acting player's pieces in the state, the opponent's in the multiverse check status passes (R1), a passed copy's squares reported at the board it copies (issue 172); **check** is check detection's own royal captures (`for_each_royal_capture`, H36 - its predicates called, never changed: the detector cross-checks and the gate unchanged), the opponent's in its view - at a turn start exactly R1's check status, `in_check` iff such an edge, held on random play - and the acting player's in the state (issue 174); **pin** a slider -> the one enemy non-royal between it and an enemy royal it would capture, the move generator's x-ray walk, across timelines and through time (issue 173). Edit 135. Id 6 is `T5D_RELATION_RESERVED` (refused: "reserved"); the engine lane's documents (`records.h`, `capi.h`, `capi.py`, `engine/README.md`'s (e), `convert.py`, `game.py`, `errors.py`) no longer name travel-threat as a relation, and `net/state.py`'s relations paragraph no longer says pin and check stay empty. The network's suite runs with all five on engine positions (`tests/engine`: the mirror test's edges, B11 and B10 on real positions; issue 229's anchor test now allows opponent-sourced pin and check edges) |
+| B11 | built behind a flag, tested | Network N2; five types since `lane/net`'s N-B11 - attack, defence, pin, x-ray, check: travel-threat folded into attack (CHECKPOINT 6, reversal 26) and dropped from the network's type set (`config.TYPED_RELATIONS`, `state.RELATION_TYPES`; the synthetic generator's cross-board attacks are its travel threats). One scalar per head per type, shared across layers: 8 x 5 = 40 (80 directed; 48 and 96 before), only with `typed_edge_bias` on - the v1's count is unchanged. Live query rows only under the cached configuration (built at N3). The relation ids are the C ABI's: id 6 stays reserved (append-only), never emitted, refused by `PositionState`'s validation. **Engine ABI round 3** (`lane/engine`, 2026-10-23): the engine emits all five behind the relation mask (`T5D_RELATIONS_PIN`, `_CHECK`; `relations_for` hands a network with B10 or B11 on all five). Pin and check read each side from its own view - the acting player's pieces in the state, the opponent's in the multiverse check status passes (R1), a passed copy's squares reported at the board it copies (issue 172); **check** is check detection's own royal captures (`for_each_royal_capture`, H36 - its predicates called, never changed: the detector cross-checks and the gate unchanged), the opponent's in its view - at a turn start exactly R1's check status, `in_check` iff such an edge, held on random play - and the acting player's in the state (issue 174); **pin** a slider -> the one enemy non-royal between it and an enemy royal it would capture, the move generator's x-ray walk, across timelines and through time (issue 173). Edit 135. Id 6 is `T5D_RELATION_RESERVED` (refused: "reserved"); the engine lane's documents (`records.h`, `capi.h`, `capi.py`, `engine/README.md`'s (e), `convert.py`, `game.py`, `errors.py`) no longer name travel-threat as a relation, and `net/state.py`'s relations paragraph no longer says pin and check stay empty. The network's suite runs with all five on engine positions (`tests/engine`: the mirror test's edges, B11 and B10 on real positions; issue 229's anchor test now allows opponent-sourced pin and check edges). **Review fixes** (2026-10-23): a board played mid-action reported where it stands (check, pin and a label tested - a passed copy's mapping is for passed timelines only); the pin's royal half tested; the C API's pin and check bits tested each alone; Q6's undefined pass found by its precondition and tested (issue 172); the acting player's check edges empty in every position reached by legal play (issue 174, reworded) and its pins x-ray-to-royal edges, not binding pins (issue 173). The source break of `T5D_RELATION_TRAVEL_THREAT`'s removal is recorded in the CHANGELOG (no alias kept) |
 | B3 | not built (rule) | Contingency only; no trigger |
 | B7 | not built (rule) | Deferred; its gate now names ablation 2's head-allocation evidence (issue 121's B7 part closed, M20); no §15.2/§15.3 need (d_head is a config value anyway) |
 | B13 | not built (rule) | Refused |
@@ -1672,7 +1672,7 @@ width (M22)", "The CHECKPOINT 8 figures"). Found on the way: the ruling's premis
 | C21 | not built (rule) | Refused; a mutant that snapshots is caught by the tests |
 | D1 | built, tested | Network N1's pointer policy over the moves the engine supplies - in search, legal or unknown, unknowns verified when first selected (E5a, E6a), as §8.1 now says; the game API's expansion stays pseudo-legal until ABI round 2's `legal_moves` option. The promotion offset (CHECKPOINT 6, M20) is the v1 (`lane/net` N-M20): a learned per-piece logit read from the destination token, always on in the policy - `policy_promotion` and its `none` arm removed (+3,341 parameters). The other pointer heads - D4's soft policy and reply prototype (`lane/net` N-D4), D9's optimistic policy - carry one of their own under `pointer_promotion_offset` (on: a placeholder, issue 222) |
 | D3 | built, tested | The search (engine ABI round 2a): WDL is the search's value - W − L backed up, the draw probability D beside it on every node and edge (issue 148) - the categorical optional and read only as an uncertainty signal (6m's switch, issue 149), the error head's output and moves-left per leaf, all through one deliver call (`t5d_search_deliver_evaluations`); each root child's search (q, d) and network WDL, moves-left and error recorded, and the root's own. The network (`lane/net` N-D3, as corrected at CHECKPOINT 7): four heads over the global registers' mean, FP32, the acting player's perspective (`heads.ValueHeads`) - one shared hidden layer with Mish (N1's value MLP), then WDL (the value search uses, `NetOutput.search_value()` = W − L), the 51-bin categorical over the root search value, short-term values at `short_term_horizons` (2, 5, 16 turns: placeholders, issue 305's unit) on [-1, 1], and the error head (`NetOutput.value_error`, softplus, the name the evaluator reads); N1's 51-bin short value head gone. The evaluator delivers all four's search inputs (WDL, categorical, error, moves-left) through the C step API, tested against the search's record of its root (moves-left's unit - turns, `expm1` of the head's `log1p` - shown with a head biased to 37 turns: the random head's outputs clamp to 0), with the 6m signal present at every leaf under either `uncertainty_source`. Losses (`train/losses.py`): WDL on the result with the `q_ratio` blend (0), the categorical on HL-Gauss of the root search value of full searches only, squared error on the short-term values (missing targets skipped, tested on the loss's value and gradient), Huber on the error head's target - the squared gap between the short-term output, without gradient, and its target: register D9's "predicted short-term value" and KataGo's form (review fixes; the W - L reading, first built, is the alternative for the user, issue 231(c)) - every unstated detail a placeholder (issue 231); the record-to-target builder is M21's. Every parameter that existed before is drawn as before (`d3_seed`; the retired head's draws kept) - pinned by a fingerprint of the pre-D3 parameters recorded on 47bc857 (`tests/net/test_params.py`) |
-| D4 | built, tested (the per-square label generator: engine ABI round 3) | Network N1's aux heads: moves-left, effort, per-board, per-square (the label set stands as v1, M20; its colour-specific labels relabelled ours/theirs under A7, `lane/net` N-A7, issue 226). M20 in the code (`lane/net` N-M20): moves-left counts turns - one player's action each (issue 305) - in the head, its helper and the losses' docs (the record-to-target builder is M21's, and so is whether the action in progress counts: issue 224); moves-left and effort read the squares (issue 223); WDL, the short-term value, the value error and the value distribution are D3's value heads (`lane/net` N-D3). CHECKPOINT 7 (`lane/net` N-D4): **the soft policy**, on - its own f and g (width 128) with D1's offset and its own submit logit from the pooled global registers, masked as the policy's (`heads.ActionHead`, `NetOutput.soft_policy_logits`/`soft_submit_logits`), trained on the policy target to the power 1/4 at weight 8 on full searches (`train/losses.py`); **the opponent-reply prototype**, behind `opp_reply` (off), weight 0.15, its move space the opponent's next turn mapped onto the decision point's squares through each new board's lineage with ambiguous mappings masked (`train/reply_map.py`), tested by §15.2's row on constructed turns with travel (a branch, White and Black acting; two branches into one past board, masked at the turn's start and mapped at the decision point between them); the unstated details placeholders (issue 232). Both drawn from generators of their own; N1's always-built reply head gone, its draws kept. The reply map's `ambiguous="turn"` arm is tested on a reply with one masked and one clean played move, and each mapped move's piece checked against the decision board's same cell. The effort loss reads full searches only (§12.4's "full-search moves only"; review fixes). **The per-square label generator** (engine ABI round 3, `lane/engine`, 2026-10-23): exact from the rules engine (`t5d/labels.hpp`; `t5d_game_square_labels`; `Game.square_labels`) - `heads.SQUARE_LABELS`' eight, in its order, for every square of every board, relative to the acting player (A7) - each side read from its own view (issue 172), each reading a placeholder (issues 175, 176; edit 136): the static exchange (the scanner's H6 values, the swap over captures and defences), two-move reach and arrival check under the static reading of a piece's next move, the royal zone, and mate after a move that ends a legal action (E4's hypercuboid detector under a 200,000-node budget, undecided -> NaN). Wired into M21: `replay_positions(square_labels=True)` re-derives them from each decision's replayed state - never stored, so the I15 round trip is untouched - `build_targets` carries them (`GameTargets.square`), `collate_rows` puts them on the square tokens, the trainer asks for them. Tested: every label on hand-built positions (`test_views.cpp`: across timelines, through time, from the opponent's view), A7's mirror on real positions (a position and its colour-swapped mirror give the same labels at the mirrored squares), the wiring on a generated game. Cost: 0.3-38 ms per state on random-play positions of 10-212 boards (a shared machine; most of it the second moves and, where a move ends a legal action in check, the mate searches). The effort label's source is in the search (engine ABI round 2c: `root_best_since`, issue 154) |
+| D4 | built, tested (the per-square label generator: engine ABI round 3) | Network N1's aux heads: moves-left, effort, per-board, per-square (the label set stands as v1, M20; its colour-specific labels relabelled ours/theirs under A7, `lane/net` N-A7, issue 226). M20 in the code (`lane/net` N-M20): moves-left counts turns - one player's action each (issue 305) - in the head, its helper and the losses' docs (the record-to-target builder is M21's, and so is whether the action in progress counts: issue 224); moves-left and effort read the squares (issue 223); WDL, the short-term value, the value error and the value distribution are D3's value heads (`lane/net` N-D3). CHECKPOINT 7 (`lane/net` N-D4): **the soft policy**, on - its own f and g (width 128) with D1's offset and its own submit logit from the pooled global registers, masked as the policy's (`heads.ActionHead`, `NetOutput.soft_policy_logits`/`soft_submit_logits`), trained on the policy target to the power 1/4 at weight 8 on full searches (`train/losses.py`); **the opponent-reply prototype**, behind `opp_reply` (off), weight 0.15, its move space the opponent's next turn mapped onto the decision point's squares through each new board's lineage with ambiguous mappings masked (`train/reply_map.py`), tested by §15.2's row on constructed turns with travel (a branch, White and Black acting; two branches into one past board, masked at the turn's start and mapped at the decision point between them); the unstated details placeholders (issue 232). Both drawn from generators of their own; N1's always-built reply head gone, its draws kept. The reply map's `ambiguous="turn"` arm is tested on a reply with one masked and one clean played move, and each mapped move's piece checked against the decision board's same cell. The effort loss reads full searches only (§12.4's "full-search moves only"; review fixes). **The per-square label generator** (engine ABI round 3, `lane/engine`, 2026-10-23): exact from the rules engine (`t5d/labels.hpp`; `t5d_game_square_labels`; `Game.square_labels`) - `heads.SQUARE_LABELS`' eight, in its order, for every square of every board, relative to the acting player (A7) - each side read from its own view (issue 172), each reading a placeholder (issues 175, 176; edit 136): the static exchange (the scanner's H6 values, the swap over captures and recaptures - read where the recapture is made: on a passed board the side's defences, elsewhere on the board the capture creates, Unknown where that cannot be read; review fixes, issue 176(a)), two-move reach and arrival check under the static reading of a piece's next move, the royal zone, and mate after a move that ends a legal action (E4's hypercuboid detector under a 200,000-node budget, undecided -> NaN). Wired into M21: `replay_positions(square_labels=True)` re-derives them from each decision's replayed state - never stored, so the I15 round trip is untouched - `build_targets` carries them (`GameTargets.square`), `collate_rows` puts them on the square tokens, the trainer asks for them. Tested: every label on hand-built positions (`test_views.cpp`: across timelines, through time, from the opponent's view; since the review fixes also the exchange's order, royal value, no x-ray recapturer and its recaptures on created boards, the arrival check's moved-piece rule, the royal zone's whole-turn step, a board played mid-action), A7's mirror on real positions (a position and its colour-swapped mirror give the same labels at the mirrored squares - every label decided and, the mate's included, seen), the C API's labels and counts (`test_capi_game.cpp`) and the NaN mask (`test_binding.py`), the wiring on a generated game. Cost (`docs/MEASUREMENTS.md`, "The per-square labels and the pin and check relations - cost per state"; indicative, no threshold): 0.1-23 ms per state on random-play positions of 10-212 boards after the review fixes (0.1-26 before; the round's first figure, 0.3-38 ms, was one timing each on a loaded machine) - most of it the second moves and, where a move ends a legal action in check, the mate searches; the exchange's replays add up to about 3 ms at 100-200 boards; pin and check add 0.0-0.2 ms to an expansion. The effort label's source is in the search (engine ABI round 2c: `root_best_since`, issue 154) |
 | D5 | not started (rule) | A training principle |
 | D6 | built (flag) | `board_reduction`, awaiting 6j |
 | D7 | built in part (6p's initialisation not) | 6p's aggregate initialisation (training-side) - parked with 6p's other arms. No register is assigned an auxiliary target: D3's value heads and every submit logit (the policy's, the soft policy's, D9's) read the global registers' mean only - tested invariant to permuting them - and every auxiliary head reads squares (`lane/net` N-M20, N-D3, N-D4). B8/§12.4's "registers stay free" against D3's pooled value heads is read through D8's argument (issue 223) |
@@ -4136,10 +4136,19 @@ superseded or made moot says so; nothing is deleted.
     At a turn start that is R1's check status exactly; mid-action the pass of the boards
     still to play (none once the present has shifted - then the state itself, C4's position);
     where the pass is undefined (Q6's alternative: a deferred timeline of the mover's in the
-    present mid-action, which `passed_timelines` refuses) the state itself. Alternatives, for
+    present mid-action, which `passed_timelines` refuses) the state itself - no board passed,
+    the non-deferred ones included. *Since the review fixes (2026-10-23) that case is tested
+    (a Deferred reactivation reaching it, `views_the_pass_is_undefined_under_q6s_deferral`)
+    and found by its precondition, tested before `passed_timelines` is called, rather than by
+    catching `std::logic_error` (which would also have swallowed any other error of that
+    family). Alternative for that case: pass the non-deferred timelines alone - it needs a
+    variant of check status's pass (`check.cpp`, unchanged here).* Alternatives, for
     6j and ablation 2: the opponent's pieces on its playable boards in the state alone (C4's
     reading - it misses every same-board threat at a turn start, the passed boards being the
     acting player's), or on every board of its colour (pieces that cannot move next turn).
+    The acting player's view is the state: its pins are x-ray-to-royal edges rather than
+    binding pins, the pinned opponent piece standing on a board of the acting player's
+    colour, which its owner cannot move from until the board advances (issue 173).
     Edges and labels both read it: issues 173-176; edits 135, 136.
 173. **What pins in 5D** (§6 names "pin"; register B11; the rulebook has no pins - C3: check
     detection ignores them). Built (a placeholder; `t5d/movegen.hpp`
@@ -4151,6 +4160,11 @@ superseded or made moot says so; nothing is deleted.
     capture that would branch counting (C2). Each side's sliders in its own view (issue 172):
     the acting player's pins of the opponent's pieces in the state, the opponent's pins of the
     acting player's pieces on the passed multiverse (the pin its next turn would hold). The
+    acting player's pins are x-ray-to-royal edges, not binding pins: the pinned opponent
+    piece stands on a board of the acting player's colour, which its owner cannot move from
+    until that board advances (review finding A-L2). The royal half of the rule is tested
+    since the review fixes (no pin in front of an enemy that is not royal: Ra1, na4, ba6,
+    ka8), and so is a pin on a board played mid-action (reported where it stands). The
     target is the pinned piece (the network's synthetic generator's convention); a pinned
     piece on a board its owner cannot move from (a history board) is still reported: it is the
     only piece between. Not built: pins by leapers (none exist), "relative" pins (a valuable
@@ -4168,8 +4182,13 @@ superseded or made moot says so; nothing is deleted.
     reads them (C2: a royal on a history board; R1: a capture that would branch into an
     inactive timeline counts). Mid-action the pass covers the boards still to play, so a
     threat on an unplayed mandatory board stays an edge after a move elsewhere (tested).
-    Alternative: the opponent's checks alone (the acting player's are almost always empty).
-    Edit 135.
+    Alternative: the opponent's checks alone - the acting player's are empty in every
+    position reached by legal play (13,750 decision states of random play in three variants,
+    turn starts and mid-action: none; review probe, 2026-10-23), so the channel carries only
+    positions set up from 5DFEN; kept, the alternative left to the user. A check edge on a
+    board the acting player has played mid-action is reported where it stands (tested since
+    the review fixes: a passed copy's mapping applies to passed timelines only), and the C
+    API's pin and check bits are tested each alone. Edit 135.
 175. **The per-square label generator: its interface and the readings every label shares**
     (§12.4's per-square row; register D4, M20, A7; issues 121, 226). Built (engine ABI round
     3): `square_labels` (`t5d/labels.hpp`), `t5d_game_square_labels` (`t5d/capi.h`:
@@ -4185,20 +4204,44 @@ superseded or made moot says so; nothing is deleted.
     scanner's `BranchThreat::ArrivalCapture` reads arrivals); (c) a move's square is its
     destination's (a branching move's, the history board it targets) and a capture's the
     captured piece's; (d) moves are pseudo-legal; (e) the mate searches' budget, 200,000 nodes
-    each (`T5D_NO_LIMIT` exact), a square left undecided `T5D_LABEL_UNKNOWN` - NaN, no target.
+    each (`T5D_NO_LIMIT`: no node limit - the search's memory limit stays), a square left
+    undecided `T5D_LABEL_UNKNOWN` - NaN, no target (since the review fixes also an exchange
+    whose recaptures cannot be read, 176(a)); `Game.square_labels` refuses a budget below 1,
+    `TargetConfig` a `square_mate_nodes` of 0 (every mate label would be NaN).
     The targets (M21): re-derived from each decision's replayed state
     (`replay_positions(square_labels=True)`; `TargetConfig.square_labels`,
     `square_mate_nodes`), never stored in a record or the targets file, so I15's round trip
     is untouched and an archive is relabelled when the generator changes. Edit 136.
 176. **Each label's own reading** (`heads.SQUARE_LABELS`' one-line comments; M20 "stand as
     v1"). (a) `exchange_loses_occupant`: the swap algorithm on an occupied square, begun by
-    the occupant's enemy, over the enemy's captures of the occupant and the occupant's side's
-    defences of the square (the defence relation's geometry), each in its own view, least
-    valuable first, each side free to stop; 1 when the first capture wins material (above 0).
-    Values: the scanner's H6 v1 table (issue 56: P 100, N 300, B 300, R 500, Q 900, U 250, D
-    200, S 700, W 125, C 300) and 20,000 for a royal (the asset map's `royal_value`); no
-    x-ray recapturer joins; a recapture lands on the board the capture makes, read as the
-    same square. (b) `reachable_in_two_*`: per piece, the squares of its second moves (b of
+    the occupant's enemy, over the enemy's captures of the occupant (its view) and the
+    occupant's side's recapturers, least valuable first, each side free to stop; 1 when the
+    first capture wins material (above 0). Values: the scanner's H6 v1 table (issue 56: P
+    100, N 300, B 300, R 500, Q 900, U 250, D 200, S 700, W 125, C 300) and 20,000 for a royal
+    (the asset map's `royal_value`); no x-ray recapturer joins. *As first built the
+    recapturers were the occupant's side's defences of the square in its own view - but a
+    defence relation targets only a board of the defender's colour, so off the passed
+    boards the list was always empty and the label meant "attacked" (review finding A-H1:
+    3,139 of 3,613 squares labelled 1 over 278 random-play turn starts, 87%, on history or
+    unpassed boards). Since the review fixes (2026-10-23; the main loop's ruling)* the
+    recapturers are read where the recapture is made: on a **passed board** (an acting
+    player's board in the present it has not played, the opponent reading its passed copy)
+    the occupant's side answers on the board itself - its defences of the square, as
+    before; on **every other board** (history boards, boards ahead of the present or on
+    inactive timelines, boards already played) it answers on the board the capture
+    **creates** - the enemy's least valuable capture is played (`GameState::apply`: a copy of
+    the board taken on with the capturer placed, the occupant's side to move, the source
+    board advanced, a branching capture's timeline made; the opponent's captures from its
+    view as a turn start of its own), the enemy passes on the boards it still has to play,
+    and the occupant's side's pieces that can then capture the capturer there are the
+    recapturers; where several of the enemy's least valuable pieces can begin, each is tried
+    and the enemy picks the best (A7's mirror test caught a first version that broke the tie
+    by board order). Where that cannot be read - the pass undefined (Q6's alternative), or
+    an opponent's view that is no turn start - the label is `T5D_LABEL_UNKNOWN` (NaN, no
+    target) rather than a guess. The same probe after the fixes: 1,451 squares labelled 1,
+    977 (67%) on history or unpassed boards; of the 3,139 squares replayed there, 977 (31%)
+    still lose the occupant; none Unknown at a turn start. The enemy's further captures are
+    still its list read before the first (static). (b) `reachable_in_two_*`: per piece, the squares of its second moves (b of
     issue 175) that are not among its first moves' and not its own square, united over the
     side's pieces. (c) `arrival_gives_check_*`: a move onto the square after which the MOVED
     piece, under the static reading, captures an enemy royal - a discovered attack is not
@@ -4209,7 +4252,11 @@ superseded or made moot says so; nothing is deleted.
     at its turn's start, is checkmated (C5: in check, R1, with no legal action - E4's
     hypercuboid detector); the acting player's only; not a mate in one action whose other
     moves follow. Alternatives for 6j: R1's reading of (b) and (c), x-ray recapturers in (a),
-    a mate in one action in (e). Edit 136.
+    every recapture of (a) read on the board the capture creates (the passed boards
+    included), a mate in one action in (e). Each reading is tested on hand-built positions
+    since the review fixes: the exchange's order, a royal recapturer's value and no x-ray
+    recapturer; the arrival check's moved-piece rule (a discovered attack not counted); the
+    royal zone's whole-turn step through time. Edit 136.
 
 ## Proposed spec edits
 
@@ -5367,10 +5414,12 @@ struck through, where nothing of it is left to apply); the others stand as writt
     set a placeholder)". Proposed - the row: "Deep attack facts beyond the §6 input bias - the
     v1 set (M20): static exchange, reach in two moves, arrival check and royal zone, each ours
     and theirs, and arrival mate, from the acting player's side (A7; 6j) | Per square | Rules
-    engine — exact, re-derived from each replayed state, never stored"; D4: "per-square
-    attack facts (the v1 set, M20; the rules engine's generator, its readings placeholders)".
-    Why: issues 175, 176 - the generator is built, its readings named, and the targets are
-    re-derived rather than recorded (I15 keeps no per-square label).
+    engine — exact, re-derived from each replayed state, never stored; a label the engine
+    cannot decide (a mate search's budget spent, an exchange whose recapture cannot be read)
+    no target"; D4: "per-square attack facts (the v1 set, M20; the rules engine's generator,
+    its readings placeholders)". Why: issues 175, 176 - the generator is built, its readings
+    named, and the targets are re-derived rather than recorded (I15 keeps no per-square
+    label).
 
 ## Session log
 
@@ -5450,3 +5499,11 @@ struck through, where nothing of it is left to apply); the others stand as writt
   wired into M21's targets (re-derived at replay, never stored); id 6 `T5D_RELATION_RESERVED`,
   travel-threat gone from the engine lane's documents. Register B11, D4, M21; issues 172-176;
   edits 135, 136.
+- **2026-10-23 - engine ABI round 3 review fixes** (`lane/engine`): the exchange label's
+  recaptures read where the recapture is made - on the board the capture creates off the
+  passed boards, Unknown where unreadable (finding A-H1, the main loop's ruling; issue
+  176(a)); the Q6 fallback found by its precondition and tested; a board played mid-action,
+  the pin's royal half, the C API's pin and check bits and labels, and every label reading
+  the review named tested; A7's mirror test requires every label decided and seen; the
+  labels' and the pin and check relations' cost in `docs/MEASUREMENTS.md`. Register B11, D4;
+  issues 172-176; edit 136.

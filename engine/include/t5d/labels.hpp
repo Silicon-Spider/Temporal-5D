@@ -7,18 +7,34 @@
 // SQUARE_LABELS, in its order). Every square of every board, in the canonical
 // board order (ascending timeline, then half-turn; t5d/expand.hpp), relative to
 // the ACTING player (A7: "ours" is the acting player's, "theirs" the
-// opponent's). Each is 0 or 1; arrival_gives_mate may be kLabelUnknown (its
-// mate search stopped by the budget). The readings - each a PLACEHOLDER of the
-// committed class, named in the engine README ("Per-square labels") and the
-// build log (spec issues 175, 176):
+// opponent's). Each is 0 or 1, or kLabelUnknown where it could not be read:
+// arrival_gives_mate where its mate search stopped on the budget, and
+// exchange_loses_occupant where its recaptures could not be read (item 0). The
+// readings - each a PLACEHOLDER of the committed class, named in the engine
+// README ("Per-square labels") and the build log (spec issues 175, 176):
 //
 //  0. exchange_loses_occupant - the static exchange on an occupied square,
 //     made by the occupant's enemy, wins material: the swap algorithm over the
 //     enemy's captures of the occupant (its view) and the occupant's side's
-//     defences of the square (its view; t5d/movegen.hpp Defence), each side's
-//     least valuable piece first, values the scanner's H6 v1 table
-//     (t5d/scanner.hpp PieceValues) and royal_value for a royal piece; no
-//     x-ray recapturer joins. 1 when it ends above 0.
+//     recapturers, each side's least valuable piece first, values the
+//     scanner's H6 v1 table (t5d/scanner.hpp PieceValues) and royal_value for a
+//     royal piece; no x-ray recapturer joins. 1 when it ends above 0. The
+//     RECAPTURERS are read where the recapture is made. On a passed board (an
+//     acting player's board in the present it has not played, the opponent's
+//     view reading its passed copy) the occupant's side answers on the board
+//     itself: its defences of the square (its view; t5d/movegen.hpp Defence).
+//     On every other board - a history board, a board ahead of the present or
+//     on an inactive timeline, a board already played - its side cannot move
+//     there, and answers on the board the capture creates: the enemy's least
+//     valuable capture is played (from the state, or from the opponent's view
+//     as a turn start of its own; GameState::apply, so a branching capture
+//     makes its new timeline), the enemy passes on the boards it has still to
+//     play, and the occupant's side's pieces that can then capture the
+//     capturer there are the recapturers. Where several of the enemy's least
+//     valuable pieces can begin, each is tried and the enemy picks the best
+//     (1 if one wins material). kLabelUnknown where none wins and one could
+//     not be read: the pass undefined (Q6's alternative, t5d/views.hpp), or an
+//     opponent's view that is no turn start.
 //  1. reachable_in_two_ours  - some piece of the acting player reaches the
 //  2. reachable_in_two_theirs  square in two of its own moves and not in one,
 //     the square not its own: from each of its pseudo-legal moves (its view),
@@ -77,12 +93,14 @@ enum SquareLabel : int {
 };
 inline constexpr int kSquareLabelCount = 8;
 /// A label not decided: arrival_gives_mate where a mate search stopped on its
-/// budget and no other move decided the square.
+/// budget and no other move decided the square; exchange_loses_occupant where
+/// its recaptures could not be read (the header comment, item 0).
 inline constexpr std::uint8_t kLabelUnknown = 255;
 
 struct SquareLabelOptions {
   /// The budget of each mate search (arrival_gives_mate). PLACEHOLDER: 200,000
-  /// nodes; SearchBudget::unlimited() is exact.
+  /// nodes; SearchBudget::unlimited() sets no node limit (the search's memory
+  /// limit stays: a search that meets it is left Unknown).
   SearchBudget mate_budget = SearchBudget::nodes(200'000);
   /// The exchange's piece values: the scanner's H6 v1 table (placeholders,
   /// build-log issue 56) - and a royal piece's, which that table leaves 0.
@@ -100,6 +118,10 @@ struct SquareLabelStats {
   std::uint64_t mate_candidates = 0;
   std::uint64_t mate_searches = 0;
   std::uint64_t mate_unknown = 0;
+  /// exchange_loses_occupant: the squares whose recaptures are read by
+  /// replaying a first capture (item 0), and of them those left Unknown.
+  std::uint64_t exchange_replays = 0;
+  std::uint64_t exchange_unknown = 0;
 };
 
 struct SquareLabels {

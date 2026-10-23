@@ -2,6 +2,7 @@
 // from a variant; replayed, moved, submitted; expanded - every array the C API
 // hands out equal to the C++ expansion of the same state; errors; ownership.
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -13,7 +14,10 @@
 #include "synthetic.hpp"
 #include "t5d/capi.h"
 #include "t5d/expand.hpp"
+#include "t5d/fen.hpp"
 #include "t5d/fingerprint.hpp"
+#include "t5d/labels.hpp"
+#include "t5d/records.h"
 #include "t5d/rules.hpp"
 #include "t5d/state.hpp"
 #include "test_framework.hpp"
@@ -333,6 +337,88 @@ TEST(capi_game_errors) {
   CHECK_EQ(t5d_game_info(nullptr, nullptr), T5D_ERR_ARGUMENT);
   CHECK_EQ(t5d_game_copy(nullptr, nullptr), T5D_ERR_ARGUMENT);
   t5d_game_destroy(nullptr);
+}
+
+namespace {
+
+// A game set up from one 5DFEN board string.
+void from_fen(Game& g, const char* board) {
+  const char* boards[] = {board};
+  REQUIRE_EQ(t5d_game_new_from_fen(boards, 1, 0, 0, T5D_PARITY_INFER, T5D_TO_MOVE_INFER, 0, &g.p,
+                                   nullptr),
+             T5D_OK);
+}
+
+// The expansion's relations as (src cell, dst cell, id) - one board here.
+std::vector<std::array<int32_t, 3>> relations_of(t5d_game* g, uint32_t mask) {
+  t5d_expand_options o{};
+  o.window_k = 8;
+  o.square_features = T5D_FEATURES_NONE;
+  o.relations = mask;
+  t5d_expansion v{};
+  REQUIRE_EQ(t5d_game_expand(g, &o, &v, nullptr), T5D_OK);
+  std::vector<std::array<int32_t, 3>> out;
+  for (size_t i = 0; i < v.relation_count; ++i) {
+    const int32_t* r = v.relations + 5 * i;
+    if (r[4] != T5D_RELATION_MOVE) out.push_back({r[1], r[3], r[4]});
+  }
+  return out;
+}
+
+}  // namespace
+
+TEST(capi_game_pin_and_check_bits_each_ask_for_their_own) {
+  // White to move: the rook on a1 pins the knight on a4 to the king on a8; the
+  // black rook on h8 checks the white king on h1 (R1: once White's board is
+  // passed). Each bit alone gives its own type alone. Cells: a1 0, a4 24, h1 7,
+  // h8 63.
+  Game g;
+  from_fen(g, "[k6r/8/8/8/n7/8/8/R6K:0:1:w]");
+  using R = std::vector<std::array<int32_t, 3>>;
+  CHECK(relations_of(g.p, T5D_RELATIONS_PIN) == R({{0, 24, T5D_RELATION_PIN}}));
+  CHECK(relations_of(g.p, T5D_RELATIONS_CHECK) == R({{63, 7, T5D_RELATION_CHECK}}));
+  CHECK(relations_of(g.p, T5D_RELATIONS_PIN | T5D_RELATIONS_CHECK) ==
+        R({{0, 24, T5D_RELATION_PIN}, {63, 7, T5D_RELATION_CHECK}}));
+}
+
+TEST(capi_game_square_labels) {
+  // The back-rank mate (t5d/labels.hpp): Ra8 mates the king on h8 behind its
+  // pawns. Cells: a8 56.
+  Game g;
+  from_fen(g, "[7k/6pp/8/8/8/8/8/R7:0:1:w]");
+  t5d_square_labels out{};
+  Text error;
+  CHECK_EQ(t5d_game_square_labels(nullptr, nullptr, &out, &error.p), T5D_ERR_ARGUMENT);
+  CHECK_EQ(t5d_game_square_labels(g.p, nullptr, nullptr, nullptr), T5D_ERR_ARGUMENT);
+  // NULL options: the default budget (200,000 nodes) decides it.
+  REQUIRE_EQ(t5d_game_square_labels(g.p, nullptr, &out, nullptr), T5D_OK);
+  REQUIRE_EQ(out.board_count, size_t{1});
+  CHECK_EQ(out.width, 8);
+  CHECK_EQ(out.height, 8);
+  CHECK_EQ(out.label_count, T5D_SQUARE_LABEL_COUNT);
+  CHECK_EQ(out.acting_player, 0);
+  const auto label = [&](int cell, int id) { return out.labels[cell * T5D_SQUARE_LABEL_COUNT + id]; };
+  CHECK_EQ(int{label(56, T5D_LABEL_ARRIVAL_GIVES_MATE)}, 1);
+  CHECK_EQ(out.mate_candidates, uint64_t{1});
+  CHECK_EQ(out.mate_unknown, uint64_t{0});
+  // The C++ generator's own counts, field for field.
+  SquareLabels l;
+  square_labels(game_from_fen(std::vector<std::string>{"[7k/6pp/8/8/8/8/8/R7:0:1:w]"},
+                              BoardSize{8, 8}, Parity::Infer),
+                SquareLabelOptions{}, l);
+  REQUIRE_EQ(l.stats.mate_candidates, uint64_t{1});
+  CHECK_EQ(out.first_moves_ours, l.stats.first_moves[0]);
+  CHECK_EQ(out.first_moves_theirs, l.stats.first_moves[1]);
+  CHECK_EQ(out.second_moves_ours, l.stats.second_moves[0]);
+  CHECK_EQ(out.second_moves_theirs, l.stats.second_moves[1]);
+  CHECK(out.first_moves_ours > 0 && out.first_moves_theirs > 0);
+  CHECK(out.second_moves_ours > 0 && out.second_moves_theirs > 0);
+  // A one-node budget leaves the mate undecided.
+  t5d_label_options one{1};
+  REQUIRE_EQ(t5d_game_square_labels(g.p, &one, &out, nullptr), T5D_OK);
+  CHECK_EQ(int{label(56, T5D_LABEL_ARRIVAL_GIVES_MATE)}, int{T5D_LABEL_UNKNOWN});
+  CHECK_EQ(out.mate_candidates, uint64_t{1});
+  CHECK_EQ(out.mate_unknown, uint64_t{1});
 }
 
 namespace {
