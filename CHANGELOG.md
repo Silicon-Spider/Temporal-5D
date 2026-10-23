@@ -10,6 +10,85 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-23 - Kairos pinned as the fourth oracle (H52): its query surface confirmed at the pin, its toolchain, driver and two sources built - wired, enabled in no tier yet
+
+Register H52 (CHECKPOINT 9): Kairos (FirePlank/5d-chess-engine; Rust, GPL-3.0) is the
+fourth rules oracle and fifth submodule, harness only. This change pins it and records what
+it can answer, before any driver is written.
+
+- **The pin.** `oracles/third_party/kairos`, submodule `oracle-kairos`, at main's head
+  `8bfea4a6e8d1` (2026-10-23): the repository has no tags or releases (issue 524). Its
+  lock-file entry (`[repo.kairos]`, role oracle, tier nightly) carries the tree id, the
+  licence hash (the GPL-3.0 text of GitHub's template; Cargo.toml says GPL-3.0-only) and
+  the notes; `harness.py sync` checks it out; `PROVENANCE.md`'s inventory is regenerated.
+- **Its query surface, confirmed and recorded** (`PROVENANCE.md`, "Kairos, the fourth
+  oracle"): its perft counts the hypercuboid search's actions, which leave out actions
+  that waste a move - not the gate's count (issue 525); its exhaustive enumerator counts
+  every action; its check test passes the active boards in the present (R1's reading, not
+  ftxi's); its mate test is an exhaustive search that terminates; `get_boards` exports
+  every board with its unmoved markers, which the harness fingerprints; its 5dpgn reader
+  is all or nothing and does not test royal safety, its replay does; neither 5DUCI (a
+  playing protocol) nor the JSON interface (a library API of its web build) answers the
+  gate's questions, so the harness will ask through a driver of its own (issue 527).
+- **Found:** its `NOTICE` says parts of its rules and legal-action code derive from
+  ftxi's 5dchess_engine, its core modules follow ftxi's one for one, and its 5dpgn reader
+  is a port of ftxi's. How far it then counts as a second, independent oracle beside ftxi
+  for the two-oracle bar (H47) is put to the user before its tier entries are enabled
+  (issue 526).
+
+- **Its toolchain** (issue 529): Rust 1.99.0, pinned in `[toolchain.rust]` by the SHA-256
+  of each component archive (Windows: the GNU target with its own MinGW linker; Linux).
+  `build --bootstrap` fetches them into `oracles/.cache/` and merges them as rustup's
+  installer would - nothing on the machine changes; `doctor` reports it
+  (`toolchain.find_rust`, `merge_rust_component`, `rust_env`).
+- **Its build and driver** (issue 528): `build --oracle kairos` copies
+  `oracles/drivers/kairos/` - a Rust program of the harness's own, with a lock file that
+  names no dependency - beside an export of the pinned crate and builds it offline, from
+  outside the crate's tree (so its `-C target-cpu=native` does not apply), linked by the
+  toolchain's own linker. The driver reads a record with Kairos's reader, replays the main
+  line through Kairos's referee and prints the protocol's state, position and end events:
+  `--search hypercuboid` (check, mate verdict, no count) or `--search naive` (check, the
+  exhaustive count, the verdict where it finds none). A record Kairos's all-or-nothing
+  reader fails is `unsupported` from position 0.
+- **Its two sources** (`oracle_harness/adapters/kairos.py`): `kairos` (hypercuboid: check,
+  mate verdict, no count) and `kairos:naive` (check, count, verdict where none exists),
+  both saying what Kairos set up at every position; a record ending in a variation is
+  refused before it runs (ftxi's guard - Kairos's reader is a port of ftxi's). An action
+  that leaves a royal capturable is `cannot_submit`, as the other oracles report it. They
+  are **wired and enabled in no tier**: a new `adapters.PENDING_SOURCES` holds them -
+  `observe` and `make_source` know them, no tier may list them, nothing records them and
+  `verify` asks nothing of them - because every source a tier lists is held to golden
+  files (`golden-missing` otherwise, in `verify` and every tier) and the recording tier
+  must run every source; the recording is the quiet-machine block's (issue 530).
+- **CI**: the nightly workflow fetches the pinned Rust when the plan says a stale build
+  needs it. A first draft named the crate in the workflow and the boundary check refused
+  it - "kairos" is its package name (issue 532, which also finds H52's opponent role at
+  odds with the boundary rules: for the user before the pilot run).
+- Tests: `tests/test_toolchain.py` (the pins, the merge, the environment, the recipe);
+  `tests/test_kairos.py` (pending and in no tier, a tier listing it refused, what each
+  search answers, its signature, the variation guard, its driver's output read by the
+  protocol, and - when built - the live driver against ftxi's recorded answers on
+  cwmtt/standard and local/ignores-check); `test_lockfile.py` and `test_notation.py`'s
+  registry count Kairos.
+
+- **Smoke run** (issue 533, figures in `docs/MEASUREMENTS.md`; not a recording, nothing
+  written under `oracles/`): over all 41
+  records, Kairos holds the same boards as every other oracle at every shared position;
+  agrees with Chess in 5D on check at all 814 shared positions and differs from ftxi at
+  131 of 986 (the R1 cluster); agrees with ftxi and cwmtt on every terminal verdict and
+  with Chess in 5D but for its two known false checkmates; its exhaustive count equals
+  cwmtt's at all 680 shared positions and ftxi's at 841 of 843; 9 records are
+  `parse_failed`.
+
+`verify` passes (its 17 `proof-channel-vacuous` notes are H48's, as before); no tier
+changes, so the commit tier is as before.
+
+Spec: §11.0 ("Kairos, the fourth oracle", the reference table, "Third-party code", "Tiered
+CI"), register H23, H26, H27, H47, H52, I7, M18 - proposed edits 362 (the query surface as
+confirmed: the count from the exhaustive enumerator, the driver route, the partial
+independence from ftxi) and 363 (the opponent role and the boundary); issues 524-534 (533:
+the smoke run's results; 534: the instruction files' "three oracles", the user's).
+
 ### 2026-10-23 - CHECKPOINT 9 taken in: the design documents updated upstream, the build's plan for each ruling in the build log
 
 The user updated the design spec, the decision register and the architecture document

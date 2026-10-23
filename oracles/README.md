@@ -125,11 +125,15 @@ The harness needs Python 3.12+ and git. Building the oracles needs:
 | `cwmtt` | GHC 9.10.3 exactly - nothing else; no z3, no stack, no package download. It builds the stock CLI and the harness's state driver (below) |
 | `chessin5d` | Node 18+ and npm (three small MIT packages, installed from its own lockfile with scripts disabled) |
 | `notation` | Node 18+ - nothing is installed: the parser needs no package |
+| `kairos` | Rust 1.99.0 exactly (cargo and rustc) - no crate is fetched: Kairos has no dependencies, and the build runs `--locked --offline`. It builds the harness's driver (`drivers/kairos/`) against the pinned crate, outside its tree, so the crate's `-C target-cpu=native` does not apply; on Windows the GNU target links with the MinGW linker the toolchain ships |
 
 `--bootstrap` fetches what is missing into `oracles/.cache/` - CMake and Ninja as
 pip wheels in a private virtualenv, GHC as a checksum-verified archive (Windows
-only; elsewhere install GHC 9.10.3 yourself, e.g. with ghcup). It changes nothing
-outside that directory. Never run `git submodule update --init --recursive`: the
+only; elsewhere install GHC 9.10.3 yourself, e.g. with ghcup), and Rust as its
+checksum-verified component archives (Windows and Linux, x86-64), merged into one
+prefix as rustup would install them, with cargo's home inside the cache. The
+harness's own Rust in the cache is used first, then a cargo and rustc of exactly
+the pinned release on PATH. It changes nothing outside that directory. Never run `git submodule update --init --recursive`: the
 oracles' own submodules are not needed and one of them is declared with an SSH URL.
 
 Every build starts from `git archive` of the locked commit, so what runs is the

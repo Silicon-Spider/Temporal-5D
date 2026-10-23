@@ -72,6 +72,7 @@ M11).
 | `ftxi` | [ftxi/5dchess_engine](https://github.com/ftxi/5dchess_engine) | `2ea9f1b82880f08faa9400d1ac20b20102604187` (v0.4.10, 2026-09-15) | BSD-2-Clause | oracle | commit |
 | `cwmtt` | [penteract/cwmtt](https://github.com/penteract/cwmtt) | `9632e9969dd455c6e3d6c27c57c1936c251d7e97` (master, 2026-05-18) | GPL-3.0 (LICENSE file); cwmtt.cabal declares BSD3 - treated as GPL-3.0 until upstream resolves the conflict | oracle | nightly |
 | `chessin5d` | [5d-chess/5d-chess-js](https://gitlab.com/5d-chess/5d-chess-js.git) | `ee403c80e8c132fc4d168f5b99ddd9b8fe5cc17b` (master, 2022-06-15) | AGPL-3.0-or-later | oracle | nightly |
+| `kairos` | [FirePlank/5d-chess-engine](https://github.com/FirePlank/5d-chess-engine) | `8bfea4a6e8d1cec2cc27cafa387b1bd78c0c94e0` (main, 2026-10-23) | GPL-3.0-only (LICENSE file: GitHub's GPL-3.0 template text; Cargo.toml: GPL-3.0-only); NOTICE: parts derived from ftxi/5dchess_engine under BSD-2-Clause | oracle | nightly |
 | `notation` | [adri326/5dchess-notation](https://github.com/adri326/5dchess-notation) | `99f6163a9c95a6a9740b20fb5f3c7f6503a166a0` (master (v1.4.3-13), 2021-07-25) | X11 (MIT-style, with a no-advertising clause) | parse-oracle | commit |
 
 #### `ftxi` - ftxi/5dchess_engine
@@ -107,6 +108,19 @@ M11).
 - Defects at the pin, and what the driver does about each without touching rules logic: inCheckmate and inStalemate answer true when their search runs out of time (the driver calls the search itself and reads its timed-out flag); that search can exhaust memory on wide positions (it runs in a worker with its own heap limit); a Board header the library does not know, or that its header reader does not match, is silently replayed on the Standard layout, and 5DFEN boards are ignored unless Board is custom (the driver asks the library which variant it set up and refuses the record when that is not the one declared); a PGN result token at the end of the move text is read as moves (it is dropped); chess.actions() throws in its 'object' and 'json' formats (a ReferenceError) and in '5dpgn' (a TypeError), and in every format passes its promotion pieces where boardFuncs.moves() takes its 'spatial moves only' switch, so it would list no move through time or across timelines (not used: the driver's observe --actions diagnostic calls actionFuncs.actions() itself, with that switch off).
 - Its action enumeration yields ordered move sequences under its own options, so it contributes check and mate verdicts and move legality, not action counts.
 
+#### `kairos` - FirePlank/5d-chess-engine
+
+- **What it is:** Kairos: a Rust 5D chess engine - rules up to 8x8 with the variant pieces, a hypercuboid legal-action search with an exhaustive one beside it, 5dpgn/5DFEN input, an alpha-beta player over 5DUCI (decision H52)
+- **How it is used:** Built from an export of the pinned commit with the pinned Rust toolchain. Queried through oracles/drivers/kairos, a Rust program of the harness's own linked against the pinned crate as a library (it calls its 5dpgn reader, its replay, its check test, its mate test and its two action searches, and copies none of them), in one replay of the record. Its programs ask the same calls another way: the kairos binary plays over 5DUCI (position, go, print - no verdict or count); its developer tool ktools answers per position (perft: the hypercuboid count; naive: both searches' counts; rules: the boards, the check and the mate type) from position files of its own (G lines), which its pgn2g command writes from a 5dpgn file; and its JSON command interface (web::api) is a library API that only the WebAssembly build of its site calls. Those are the stock tools a driver check would hold the driver to (not built yet).
+- **Where:** `oracles/third_party/kairos` (submodule `oracle-kairos`)
+- **Licence file:** `LICENSE`, SHA-256 `589ed823e9a84c56feb95ac58e7cf384626b9cbf4fda2a907bc36e103de1bad2`
+- Pinned at the head of main: the repository has no tags and no releases. It was created on 2026-10-15 and had 354 commits by the pin (2026-10-23), most days several; a pin bump will move answers, and is reviewed as any other.
+- Not independent of ftxi in all it does. Its NOTICE says parts of its rules and legal-action code are derived from ftxi/5dchess_engine (BSD-2-Clause), its src/core and src/misc mirror ftxi's module for module (check_position, hypercuboid, geometry, integer_set, graph, ordering, vec4 - coordinates packed 12/12/4/4 bits, as ftxi's), and its 5dpgn reader says it is 'ported from the C++ engine's pgnparser'. Where it departs from ftxi the departures are its own: its check test advances only the active timelines whose last board is in the present (State::has_phantom_check through CheckPosition::for_present), where ftxi advances every timeline the mover may play on, and its hypercuboid search leaves out actions that waste a move (below). How far it counts as an implementation independent of ftxi for the two-oracle bar (H47) is the user's to rule before its tier entries are enabled (docs/BUILD_LOG.md, issue 526).
+- Its hypercuboid search does not generate an action that both branches and plays a 'wasted' move - a non-branching move whose boards all stay out of the present, other than boards a branch lands on - because dropping that move leaves an equally legal action (hypercuboid.rs, wasted_problem). Its perft therefore counts those actions out: its own test gives 31406 at depth 3 from the Standard start, 'the 1780 actions that waste a move (33186 with them)' left out. That is not the gate's count, so the hypercuboid source answers no count. Its exhaustive enumerator (core/naive.rs, naive_actions) lists every action - its non-branching moves once, in timeline order, and its branching moves in every order - the gate's definition; source kairos:naive counts with it.
+- Its 5dpgn reader is all or nothing: one action of the main line or of any variation that it cannot match, or cannot submit, fails the whole record, with no position read. Such a record is reported unsupported from position 0 (reason parse_failed), never refused at action 0. The reader does not test royal safety; the driver replays the main line through its own referee (web::tree::play_action, which its game loader runs), and an action that leaves a royal capturable is refused there (cannot_submit, as the other oracles report it).
+- A line that ends in variations is replayed with its last variation as the main line (as ftxi's reader does); the adapter refuses such a record, with ftxi's guard. It reads the Board header (else Variant), Size, Timeline and Promotions; it refuses a Board it does not know rather than set up Standard, and 44 named variants, whose set-ups it takes from adri326/5dchess-notation's table. Boards are 8x8 at most.
+- Its .cargo/config.toml builds with -C target-cpu=native. The harness builds the driver outside the exported tree, where that file does not apply, so the build is the same on every x86-64 machine.
+
 #### `notation` - adri326/5dchess-notation
 
 - **What it is:** The 5dpgn / 5dfen notation specification, with sample game records and a parser written beside it
@@ -126,6 +140,7 @@ M11).
 | cmake | 3.20 or newer; `--bootstrap` installs cmake==4.4.3 | Configures ftxi's own CMake project and the harness driver built against it. |
 | ninja | any; `--bootstrap` installs ninja==1.13.2 | CMake generator: required on Windows, used elsewhere when present. |
 | cxx | g++ 13 or newer | ftxi/5dchess_engine is C++23. Its own CI also builds with Apple Clang and MSVC 14.40; the harness looks only for g++ (set CXX to point at one). |
+| rust | exactly 1.99.0; checksum-pinned archive for linux-x86_64, windows-x86_64 | Builds the Kairos oracle's crate (edition 2024: Rust 1.85 or newer) and the harness's driver linked against it; the stable release of 2026-10-01, the newest at the pin. Kairos has no crate dependencies, so nothing is fetched from crates.io (the build runs --locked --offline). On Windows the GNU target, whose self-contained MinGW linker ships with the toolchain (rust-mingw) - no Visual Studio; on Linux rustc links with the system's cc. |
 | node | 18 or newer | Runs the Chess in 5D library, whose three pinned runtime dependencies npm installs from its own lockfile, and the notation repository's parser, which needs none. |
 
 ### Corpus records
@@ -141,6 +156,94 @@ M11).
 
 <!-- END GENERATED INVENTORY -->
 
+## Kairos, the fourth oracle: its query surface at the pin (H52)
+
+Decision H52 (CHECKPOINT 9) adds Kairos (FirePlank/5d-chess-engine, Rust,
+GPL-3.0) as the fourth rules oracle and fifth submodule: pinned, harness only,
+nightly and release tiers, never a rules source. It asks for the query surface to
+be confirmed at the pinned commit and recorded here before the driver is written.
+This is what reading its README, its documents and its source at `8bfea4a`
+(2026-10-23) found - the README's claims checked against the code that makes them.
+
+- **What a perft count counts.** `core::perft::perft(state, depth, cap)` counts
+  legal actions - whole turns, each a set of moves submitted together - at
+  `depth` 1, and leaves at greater depths, from the hypercuboid search
+  (`HcInfo::build_hc` then `search`). That search leaves out every action that
+  both branches and plays a *wasted* move (a non-branching move whose boards all
+  stay out of the present, other than a board a branch lands on), because
+  dropping that move leaves an equally legal action; and it yields one action per
+  promotion piece the record allows. Its own test says so: 31406 actions at depth
+  3 from the Standard start, "the 1780 actions that waste a move (33186 with
+  them)" left out. So its perft is **not** the gate's count (`oracles/README.md`,
+  "What is compared"), which counts every action. Its exhaustive enumerator,
+  `core::naive::naive_actions`, is: it lists every legal action, its
+  non-branching moves once each in timeline order and its branching moves in every
+  order, with one action per promoting move (played with the default promotion
+  piece). Kairos itself uses it to test the hypercuboid search (`ktools naive`).
+- **Check.** `State::has_phantom_check()`: the mover's active timelines whose last
+  board is in the present are advanced by a copy of that board, and the opponent's
+  royal captures are looked for over every board (`CheckPosition::for_present`).
+  That is the rulebook's reading (R1, H36) - active boards in the present - and not
+  ftxi's, which advances every timeline the mover may play on.
+- **Mate and stalemate.** `State::get_mate_type()`: `Checkmate` or `Stalemate`
+  when its hypercuboid search, run to the end with interruption switched off, finds
+  no legal action (checkmate when `has_phantom_check()` holds); otherwise `None`,
+  or `Softmate` - a legal action exists, found only outside the narrower spaces it
+  searches first, while in check. A verdict is therefore an exhaustive search that
+  terminated (H37); `Softmate` and `None` are both "a legal action exists". Its
+  game status adds an exiled-kings verdict to stalemate, which is a result, not a
+  terminal kind the gate compares.
+- **A state to fingerprint.** `Multiverse::get_boards(true)` lists every board -
+  superseded and head, every timeline, both colours - as (timeline, turn,
+  colour, 5DFEN pieces field), with `*` after each king, rook, pawn and brawn that
+  has not moved, the only pieces it tracks (`piece::piece_umove_flag`); its
+  layout's `pretty_l` names a timeline as the notation does (`-0`/`+0` in an even
+  game). That is the harness's state event (decision H30). Its own position hash is
+  a Zobrist key, not the notation's MD5, so it hands no hash over.
+- **Variants, pieces and boards.** 44 named variants (`core::variants`), their
+  set-ups taken from the notation repository's table; the princess, unicorn,
+  dragon, brawn, royal queen and common king; odd and even timeline starts; boards
+  of 8x8 at most; coordinates packed 12/12/4/4 bits, so timelines and turns span
+  -2048..2047.
+- **Its 5dpgn and 5DFEN dialect.** `web::pgn::parse_5dpgn` - "ported from the C++
+  engine's `pgnparser`", ftxi's - reads the Board header (else Variant), Size,
+  Timeline and Promotions headers and 5DFEN board tags `[pieces:L:T:c]`, and
+  refuses a Board name it does not know. It resolves each written move against the
+  legal moves, matches a timeline's sign exactly, takes a missing `x` but refuses
+  an `x` on a move that captures nothing, and reads `O-O` only as a king from the e
+  file. It resolves the whole record, variations included, before it returns: one
+  move it cannot match or submit anywhere fails the record, with no position read.
+  It does not test royal safety; its game loader replays the main line through
+  `web::tree::play_action`, which does. A line that ends in variations takes its
+  last variation as the main line.
+- **Interfaces.** The `kairos` binary speaks 5DUCI - a playing protocol
+  (`position`, `go`, `bestmove`, `print`), with no count or verdict. The JSON
+  command interface (`web::api`) is a library API, called by the WebAssembly build
+  of its web site; no program of the repository serves it. The developer tool
+  `ktools` answers per position from position files of its own (G lines: a 5DUCI
+  position and its moves), which `ktools pgn2g` writes from a 5dpgn file: `perft`
+  (the hypercuboid count), `naive` (both searches' counts) and `rules` (the
+  boards, the check and the mate type).
+- **Build.** Cargo, edition 2024 (Rust 1.85 or newer), no dependencies (its
+  `Cargo.lock` lists only itself); a build script generates slider attack tables;
+  `.cargo/config.toml` adds `-C target-cpu=native`, which applies only to a build
+  run inside its tree.
+- **Its independence.** Its `NOTICE` says parts of its rules and legal-action code
+  are derived from ftxi/5dchess_engine (BSD-2-Clause, notice kept), and its
+  `src/core` and `src/misc` follow ftxi's modules one for one. Its check test and
+  its wasted-move pruning are its own. H52 counts it as an independent
+  implementation of the hypercuboid method family; how far a derived
+  implementation counts as a second oracle beside ftxi is put to the user
+  (`docs/BUILD_LOG.md`, issue 526) before its tier entries are enabled.
+
+So the harness asks it through a driver of its own (`oracles/drivers/kairos/`, a
+Rust program linked against the pinned crate - not 5DUCI, not the JSON
+interface), as two sources, like ftxi and cwmtt: `kairos`, its hypercuboid
+search - the check, and the mate verdict from `get_mate_type()`, and **no count**
+- and `kairos:naive`, its exhaustive enumerator - the check, the count, and the
+verdict where it finds no action. Both say what it set up at every position, and
+how it replayed the record.
+
 ## Programs of ours that run third-party code
 
 Small programs in the harness load an oracle's code into their own process,
@@ -152,6 +255,7 @@ because that oracle offers no other way to ask the question:
 | `oracles/drivers/cwmtt/Driver.hs` (Haskell) | cwmtt's own modules - its parser, its set-up, its replay and its two searches - compiled from the pinned export with the pinned GHC and the CLI's flags | Its stock CLI prints counts, and draws the boards only as a picture of the last position (`print`): never the boards it holds at each position, nor the side to move. The driver reads and replays the record with the cwmtt code the CLI's `count` runs - its parser, its set-up, and the replay step both replays scan - and prints at every position the boards cwmtt holds and the side to move (and, asked by `observe`, its diagnostics); it answers nothing the CLI answers. The adapter holds the two to each other on every run - same layout, same text left unread, same replay failure, same positions - and pairs a count with a state only then. |
 | `oracles/drivers/chessin5d/driver.js` (Node) | the 5d-chess-js library, from the pinned export | The library is an API. It ships a development console (`src/cli.js`), but no command that reports verdicts. |
 | `oracles/drivers/notation/driver.js` (Node) | the parser bundled with the notation specification (`parsers/pgn.js` and `parsers/game.js`), from the pinned export | It is a parse-only oracle (H26). The parser's one entry point reads a whole record and ends the process on an error; its command-line program converts records and reports no position. The driver watches the parser through the module objects it reaches its own helpers through, and reports the boards it holds at every position; it changes nothing in it. |
+| `oracles/drivers/kairos/` (Rust) | the Kairos crate (`kairos`), compiled from the pinned export with the pinned Rust toolchain as a library of the driver | None of its programs answers the gate's questions about a 5dpgn record: its `kairos` binary plays over 5DUCI, its `ktools` answers per position only from position files of its own, and its JSON interface is a library API of its web build (issue 527 in `docs/BUILD_LOG.md`). The driver reads the record with Kairos's own reader, replays the main line through its own referee and prints, at every position, the boards it holds, the side to move, its check verdict and - by the search asked for - its mate verdict, or its exhaustive count and the verdict where it finds no action; it changes nothing in the crate and copies none of it. No stock tool holds it yet, as `5dtools` holds ftxi's driver (issue 531). |
 
 cwmtt's counts, and how far it replays a record, still come from its own stock
 command-line program, unmodified; its state driver adds what cwmtt set up and the
@@ -205,6 +309,7 @@ which git ignores; none of it is committed, and none of it is used by the engine
 |---|---|---|
 | CMake and Ninja | PyPI wheels, into a private virtualenv (no pip cache) | exact versions, from `[toolchain]` in `oracles/oracles.lock.toml` |
 | GHC 9.10.3 (Windows only) | the binary archive on downloads.haskell.org | URL and SHA-256 in the lock file; a mismatch is refused |
+| Rust 1.99.0 (Windows: the GNU target; Linux) | the component archives on static.rust-lang.org - rustc, cargo, rust-std, and on Windows rust-mingw (its MinGW linker) - merged into one prefix as rustup would, without rustup; cargo's home is kept inside `oracles/.cache/` | each archive's URL and SHA-256 in the lock file; a mismatch is refused |
 | 5d-chess-js's three runtime dependencies (MIT) | npm, from the library's own `package-lock.json`, with install scripts disabled and npm's cache inside `oracles/.cache/` | the library's lockfile, at the pinned commit |
 
 ## Where the design spec and the pinned reality differ
@@ -234,6 +339,13 @@ the spec stands on each now (this file is authoritative on oracle internals, §1
 - **"Chess in 5D" means its rules library.** The site's client takes its rules from
   the separate `5d-chess-js` library (AGPL-3.0-or-later); that library is what is
   pinned.
+- **Kairos (H52) is asked through a driver, its perft is not the gate's count, and
+  parts of it derive from ftxi.** The spec expected its verdicts "through its JSON
+  interface or 5DUCI": neither answers them (above, "Kairos, the fourth oracle"). Its
+  hypercuboid search leaves out actions that waste a move, so its count comes from its
+  exhaustive enumerator. Its NOTICE and its module layout make it a partial derivative
+  of ftxi, where H26 counts it as an independent implementation. *Proposed: edit 362;
+  the independence is the user's to rule (issue 526).*
 - **The oracles disagree with each other** in places. Those are listed, not yet
   adjudicated, in `oracles/DISAGREEMENTS.md`.
 - **No oracle answers everything.** The spec asks for a cross-check of move
