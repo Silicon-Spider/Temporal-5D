@@ -10,6 +10,65 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-23 - Precision review fixes: QAT records name the format, the attention operands tested operand by operand, the cache checks the format at every evaluation, non-finite scales kept non-finite
+
+Two reviews of the precision component (G2's FP8 emulation and C15's estimator; G8's QAT hook):
+a numerics review with an independent reference, and a 43-mutant pass that left nine real
+survivors.
+
+- **QAT's records named the wrong network** (HIGH): `apply_qat` switches the network in place, but
+  the trainer's `net_cfg` - what it hands to self-play - kept `trunk_quant = "none"`, the records'
+  network condition took the caller's configuration, and `network_id` hashed the weights alone:
+  a QAT network's records said "none" with the unquantised network's id, so issue 238(j)'s claim
+  was false. Now `Trainer.net_cfg` follows the switch; `selfplay.network_info` takes the
+  `trunk_quant*` fields from the evaluated network and refuses a caller's configuration whose
+  format disagrees (`quant.trunk_format`); `records.network_id` folds an 8-bit format into the hash
+  (a network in "none" hashes as before - existing ids unchanged). Tested through generate ->
+  steps -> publish -> generate under QAT (`test_qat.py`).
+- **The attention operands, operand by operand** (HIGH): nothing checked that attention's Q, K, V
+  and rotated Q, K were each quantised, or that RoPE came before the rounding - mutants leaving V,
+  the unrotated or the rotated operands unrounded, or rotating rounded ones, all survived.
+  `test_the_attention_operands_are_rounded_after_rope` captures `quantised_operands` on all six
+  paths: each operand is its raw operand through E4M3 per token and head, a fixed point of the
+  format, the rotated ones rounded after FP32 RoPE (which differs from rotating rounded ones);
+  with `trunk_quant_attention=False` they are the raw operands bit for bit.
+- **The cache checks the format at every evaluation** (`cache.CachedEvaluator`): it refused FP8
+  attention at construction only, so a network switched in place afterwards (as QAT switches the
+  trainer's) was served - trunk RMS 1.4e-2 from the full pass against the 6e-3 bound - and a store
+  could mix two formats' K/V. It now records the format (trunk format and frozen-K/V format) and
+  refuses at every epoch and evaluation once it changed. The in-place hazard for a
+  `NetworkEvaluator` (it evaluates in FP8 afterwards, silently) is documented (issue 239(b)).
+- **Non-finite slices** (`quant.scale_of`): under "pow2" a slice holding inf or NaN got a finite,
+  platform-dependent scale (`frexp` of inf/NaN is unspecified), so [1, inf, 2, 3] came back finite
+  and the trainer's guards could not fire; the non-finite scale is now kept under both rules (the
+  slice comes out NaN). Tested on inf and NaN rows, through `QuantLinear` too.
+- **What "K/V cache included" covers** (corrected in BUILD_LOG 239(a), the G8 row, edit 182 and
+  the G8 entry below): QAT's forward is the full pass's, which rounds the frozen K/V as the cache
+  stores them; the cache serves the projections-only network with FP8 frozen K/V (now tested:
+  trunk RMS 2.8e-3, MEASUREMENTS) and refuses FP8 attention - QAT's default - so a block-causal
+  network trained with it is one the cache refuses (logged as a choice, 239(i)); the double
+  rounding of frozen K/V under FP8 attention is logged (238(k)).
+- **Tests sharpened**: `apply_qat` keeping the network's `trunk_quant_*` settings (a fourth
+  configuration of the forward test); the scale granularity made visible under "pow2" (weight rows
+  and tokens binades apart, and an "absmax" case: per channel and per token, not per tensor, per
+  input channel or per batch) and the "pow2" batch-independence bound tightened from 1e-2 to 1e-5
+  over model seeds 0-5, not 0-2 (unmutated at most 5.2e-7; the projections' per-batch mutant
+  2.1e-4, at seed 4 only - MEASUREMENTS); a scale already a power of two kept, not
+  doubled; the element format's random-value check parametrised over devices (a GPU when present,
+  M19).
+- **Small fixes**: float64 input refused (FP32 is the input precision - it was rounded twice);
+  `apply_qat` validates its configuration, so its "another 8-bit format" refusal is tested with a
+  validated one; the clamp before the cast documented as unobservable on this backend (torch 2.13's
+  CPU cast saturates by itself); the gradient figure given as bound 0.5, measured at most 0.117
+  (CHANGELOG's G8 entry and the f2007c7 message said "within 0.12"); the DeepSeek-V3 report's
+  finding that Hopper FP8 GEMMs accumulate in about 14 bits - verified against the report - logged
+  as a placeholder for 6w's GPU arm (238(f)).
+
+Spec: §10.2, §12.8, §15.1, §15.2; register G2, G8, C15, C2, I15, M19. Proposed: edit 182 reworded
+(QAT's forward is the served format's full pass; the cache serves the projections-only format),
+edit 183 (the accumulator: a Hopper FP8 GEMM keeps about 14 bits). Spec issues 238(a), (f), (j),
+(k) and 239(a)-(c), (g)-(i).
+
 ### 2026-10-23 - G8's QAT hook behind its flag (off), plugged into M21's trainer
 
 The precision component, step 2 of 2 (`lane/net`). The user's brief: "QAT hooks G8 (FP8 E4M3, flag
@@ -29,6 +88,11 @@ hook.
   every trunk parameter moved, the fourth step refused; each projection's gradient within relative
   distance 0.12 of the unquantised network's (the flushing cast gave zero); FFN ratios 2 and 12.
   `test_trainer.py`'s seam check is gone with the seam.
+- *Corrected by the precision review fixes (above):* "K/V cache included" meant the full pass's
+  rounding of the frozen K/V, not the cache - which refuses QAT's default (FP8 attention); "within
+  relative distance 0.12" was the measurement (at most 0.117), the test's bound is 0.5; the
+  settings kept and the refusal of another format were untested; and the records of a QAT network
+  named it unquantised (issue 238(j) said they named it).
 
 Spec: §10.2, §15.1, §12.8; register G8 (built behind its flag, smoke-tested), M21 (the QAT hook
 built), G2, C15, I17. Proposed: edit 182, rewritten as ruled (§15.1's M21 sentence and G8: the
@@ -53,7 +117,9 @@ The precision component, step 1 of 2 (`lane/net`).
   heads, RoPE, embeddings or norms (tested bit for bit). `T5DNet.set_trunk_quant` /
   `with_trunk_quant` switch a network (or a copy - its FP8 twin) without touching its weights.
   The cache takes the projections-only network and refuses FP8 attention: post-RoPE rounding
-  depends on the frame, and the cache computes a frozen board in its own (measured). With the flag
+  depends on the frame, and the cache computes a frozen board in its own (measured). *Corrected by
+  the precision review fixes (above):* the refusal was checked at construction only, a non-finite
+  slice got a finite scale under "pow2", and the attention operands were not tested one by one. With the flag
   off the network is unchanged: the outputs of ten configurations (F1 in BF16 and FP32, FFN ratios
   2 and 12, the block-causal scope with FP8 frozen K/V, four attention paths) and the gradients of
   two checked bit for bit against the tree before the change (B15's table gradient aside: it
