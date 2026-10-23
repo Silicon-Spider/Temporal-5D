@@ -84,10 +84,13 @@ promotion)                                     promotion)`` - row i is engine mo
   creates). Promotions: one row per promoted-to piece.
 * **Edges.** The move graph - one edge per distinct (source, destination) square pair,
   promotions merged - as relation ``move`` (0); then the typed relations the expansion was
-  asked for (attack 1, defence 2, x-ray 4: the ids are ``RELATION_TYPES``'s). The engine
-  builds them only for the player to move's pieces on the boards its moves start from.
-  **Pin (3), check (5) and travel-threat (6) are absent**: the engine refuses them (pin and
-  check would read check detection; the spec defines no travel-threat edge).
+  asked for - register B11's five, attack 1, defence 2, pin 3, x-ray 4, check 5 (the ids are
+  ``RELATION_TYPES``'s). Attack, defence and x-ray are the acting player's pieces' on the
+  boards its moves start from; pin and check are read from both sides, each from its own
+  view - the opponent's the multiverse check status passes (R1), a passed copy's squares
+  reported at the board it copies (engine README, "Expansion", (e); build-log spec issues
+  172-174). Id 6, reserved (travel-threat was folded into attack at CHECKPOINT 6), is never
+  emitted.
 * **Opponent moves** (``opp_moves``, the D4 reply prototype's move space) are not supplied:
   they are the opponent's next turn mapped onto this position (``train.reply_map``), a training
   target built from records, never needed at inference; empty.
@@ -228,6 +231,9 @@ class Position:
     relations: tuple[str, ...]  # the typed relations ``state.edges`` holds besides the move graph
     scope: EngineScope | None
     present_matches: bool = True  # False only under strict=False (see PresentMismatch)
+    #: The per-square labels' targets (``Game.square_labels().targets()``: boards x cells x 8,
+    #: NaN undecided), when asked for (``train.selfplay.replay_positions``); None otherwise.
+    square_labels: np.ndarray | None = None
 
     @property
     def move_count(self) -> int:

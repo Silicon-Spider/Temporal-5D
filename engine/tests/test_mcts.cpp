@@ -2835,9 +2835,10 @@ TEST(mcts_parameters_are_validated) {
     p.flat_k0_max = cap;
     CHECK_THROWS_WITH(Search(variant("Standard"), p), std::invalid_argument, "flat_k0_max");
   }
+  // B11's pin and check are built (engine ABI round 3): a search's leaves may carry them.
   p = fast();
-  p.expand.pin = true;
-  CHECK_THROWS_AS(Search(variant("Standard"), p), std::invalid_argument);
+  p.expand.pin = p.expand.check = true;
+  CHECK_NOTHROW(Search(variant("Standard"), p));
 }
 
 // ---- MCGS identity: a turn start is never a state during an action ------------------------

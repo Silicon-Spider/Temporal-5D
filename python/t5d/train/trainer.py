@@ -15,7 +15,8 @@ this build.
   **the trainer's** network configuration - its register counts and relations, and
   ``TrainerConfig.window_k`` or the record's window, which sets the rebuilt positions' W/E scope
   - the cached configuration's; a row keeps the state alone (``selfplay.replay_positions``) - its targets
-  built (``train.targets``, the reply prototype's from those inputs when the network has the head),
+  built (``train.targets``, the reply prototype's from those inputs when the network has the head,
+  D4's per-square labels re-derived from the replayed states by the engine's generator),
   its rows weighted by the sampler (I12, 6u's arms) and written into the replay window (I16) as
   frequency copies.
 * ``Trainer.step()`` - a batch drawn uniformly from the window, collated (``targets.collate_rows``),
@@ -43,7 +44,8 @@ this build.
   provenance); its constants are PLACEHOLDERS (spec issue 237).
 
 ``synthetic_record(seed, states)`` builds a well-formed I15 record over synthetic inputs, so the
-whole loop runs without the engine.
+whole loop runs without the engine - with ``flat=True`` one of D2's flat form (each decision's root
+children whole turns over its playable boards), whose rows train the flat head's per-board policy.
 """
 
 from __future__ import annotations
@@ -55,13 +57,13 @@ from dataclasses import dataclass, field, replace
 import numpy as np
 import torch
 
-from ..engine.capi import MOVE_DTYPE
+from ..engine.capi import MOVE_DTYPE, T5D_MOVE_BRANCHING, T5D_MOVE_TRAVEL
 from ..net.config import NetConfig
 from ..net.model import T5DNet
 from ..net.quant import TRUNK_QUANT_FIELDS, TRUNK_QUANT_FORMATS
 from ..net.state import PositionState
 from .losses import LossConfig, compute_losses
-from .records import Children, DecisionRecord, GameRecord
+from .records import CANDIDATE_TURN, RECORD_VERSION, Children, DecisionRecord, GameRecord
 from .sampler import BucketTracker, SamplerConfig, copies, row_weights
 from .selfplay import replay_positions
 from .smoke import MAX_STEPS, check_step, record_step
@@ -165,8 +167,18 @@ class Trainer:
         ``positions``: the inputs, given (a synthetic record's states); None: rebuilt from the
         record under the trainer's network configuration."""
         given = positions is not None
-        positions = list(positions) if given else replay_positions(record, self.net_cfg, window_k=self.cfg.window_k)
-        targets = build_targets(record, self.target_cfg, positions=positions if self.net_cfg.opp_reply else None)
+        positions = (
+            list(positions)
+            if given
+            else replay_positions(
+                record,
+                self.net_cfg,
+                window_k=self.cfg.window_k,
+                square_labels=self.target_cfg.square_labels,
+                mate_nodes=self.target_cfg.square_mate_nodes,
+            )
+        )
+        targets = build_targets(record, self.target_cfg, positions=positions, reply=self.net_cfg.opp_reply)
         weights = row_weights(record, targets, self.cfg.sampler, self.tracker)
         n = copies(weights, int(record.header.get("seed", 0) or 0))
         synthetic = bool(record.header.get("synthetic", False))
@@ -232,17 +244,55 @@ class Trainer:
 # --- synthetic records ---------------------------------------------------------------------------------------
 
 
-def synthetic_record(seed: int, states: Sequence[PositionState], *, full_every: int = 2) -> GameRecord:
+def synthetic_moves(st: PositionState) -> np.ndarray:
+    """A synthetic state's candidate moves as engine move records (``MOVE_DTYPE``; smoke testing
+    only): each move's source and destination boards' (timeline, half-turn) and cells from its
+    tokens, a jump flagged travel - and branching unless it lands on a playable head (a
+    non-branching jump arrives on a playable board: D2's flat form's arrivals)."""
+    lay = st.layout
+    tpb = lay.tokens_per_board
+    playable = st.is_head & (st.side_to_move == st.acting_player)
+    out = np.zeros(st.moves.shape[0], dtype=MOVE_DTYPE)
+    for i, (src, dst, _) in enumerate(st.moves.tolist()):
+        a, b = src // tpb, dst // tpb
+        r = out[i]
+        r["from_timeline"], r["from_half_turn"] = int(st.timeline[a]), int(st.half_turn[a])
+        r["to_timeline"], r["to_half_turn"] = int(st.timeline[b]), int(st.half_turn[b])
+        r["from_board"], r["to_board"] = a, b
+        r["from_square"], r["to_square"] = src % tpb, dst % tpb
+        r["from_cell"], r["to_cell"] = src % tpb, dst % tpb
+        if a != b:
+            r["flags"] = T5D_MOVE_TRAVEL | (0 if playable[b] else T5D_MOVE_BRANCHING)
+    return out
+
+
+def synthetic_record(seed: int, states: Sequence[PositionState], *, full_every: int = 2, flat: bool = False) -> GameRecord:
     """A well-formed I15 record over synthetic inputs (smoke testing only): one decision per state,
     each its own turn, its candidates the state's moves (and submit where legal), random search
-    statistics; every ``full_every``-th decision a cheap search; White wins. Its header says
-    ``synthetic``: its rows are the only ones the untrained build takes optimiser steps on."""
+    statistics; every ``full_every``-th decision a cheap search; White wins. With ``flat`` (D2's flat
+    form), each decision's root children are random whole turns - on each playable board one of its
+    moves or leaving it - and its candidates engine-like move records (``synthetic_moves``) so that
+    the per-board targets find each move's boards; no submit. Its header says ``synthetic``: its rows
+    are the only ones the untrained build takes optimiser steps on."""
     rng = np.random.default_rng(seed)
     decisions = []
     for i, st in enumerate(states):
         m = int(st.moves.shape[0])
-        offered = bool(st.submit_possible and st.submit_legal)
-        cand = list(range(m)) + ([-1] if offered else [])
+        offered = bool(st.submit_possible and st.submit_legal) and not flat
+        turns: list[np.ndarray] = []
+        if flat:
+            records = synthetic_moves(st)
+            playable = st.is_head & (st.side_to_move == st.acting_player)
+            for _ in range(int(rng.integers(2, 7))):
+                turn = []
+                for b in np.flatnonzero(playable).tolist():
+                    own = [k for k in range(m) if int(records[k]["from_timeline"]) == int(st.timeline[b])]
+                    if own and rng.random() < 0.75:
+                        turn.append(records[int(rng.choice(own))])
+                turns.append(np.array(turn, dtype=MOVE_DTYPE))
+            cand = [CANDIDATE_TURN] * len(turns)
+        else:
+            cand = list(range(m)) + ([-1] if offered else [])
         n = len(cand)
         if n == 0:
             raise ValueError(f"state {i} has no action to record")
@@ -272,9 +322,13 @@ def synthetic_record(seed: int, states: Sequence[PositionState], *, full_every: 
             network_error=rng.uniform(0, 0.2, size=n),
             lo=[-1] * n,
             hi=[1] * n,
+            turn_length=[len(t) for t in turns] if flat else None,
         )
-        moves = np.zeros(m, dtype=MOVE_DTYPE)
-        moves["from_square"] = np.arange(m) % 64
+        if flat:
+            moves = records
+        else:
+            moves = np.zeros(m, dtype=MOVE_DTYPE)
+            moves["from_square"] = np.arange(m) % 64
         acting = st.acting_player if st.acting_player is not None else st.player_to_move
         decisions.append(
             DecisionRecord(
@@ -317,10 +371,14 @@ def synthetic_record(seed: int, states: Sequence[PositionState], *, full_every: 
                 candidates=moves,
                 raw_logits=logits,
                 children=children,
+                flat=flat,
+                playable=(st.is_head & (st.side_to_move == st.acting_player)) if flat else None,
+                raw_leave_logits=rng.normal(size=st.n_boards).astype(np.float32) if flat else None,
+                turn_moves=np.concatenate(turns) if flat and turns else None,
             )
         )
     header = {
-        "record_version": 1,
+        "record_version": RECORD_VERSION,
         "synthetic": True,  # the only rows the untrained build steps on (issue 237(a))
         "seed": seed,
         "search": {},
@@ -330,4 +388,4 @@ def synthetic_record(seed: int, states: Sequence[PositionState], *, full_every: 
     return GameRecord(header=header, decisions=decisions)
 
 
-__all__ = ["OPTIMISERS", "Trainer", "TrainerConfig", "apply_qat", "synthetic_record"]
+__all__ = ["OPTIMISERS", "Trainer", "TrainerConfig", "apply_qat", "synthetic_moves", "synthetic_record"]

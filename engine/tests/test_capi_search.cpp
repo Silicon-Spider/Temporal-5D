@@ -379,7 +379,13 @@ TEST(capi_search_leaves_carry_the_network_input) {
   const Game g = variant_game("Standard");
   t5d_search_params p;
   t5d_search_params_default(&p);  // every board's features (the network contract)
-  p.expand.relations = T5D_RELATIONS_ATTACK;
+  // B11's five types (pin and check since engine ABI round 3): the leaf's relations are the
+  // game's own expansion's.
+  p.expand.relations = T5D_RELATIONS_ATTACK | T5D_RELATIONS_DEFENCE | T5D_RELATIONS_PIN |
+                       T5D_RELATIONS_XRAY | T5D_RELATIONS_CHECK;
+  t5d_expansion own{};
+  REQUIRE_EQ(t5d_game_expand(g.get(), &p.expand, &own, nullptr), T5D_OK);
+  const std::vector<int32_t> own_relations(own.relations, own.relations + 5 * own.relation_count);
   const SearchHandle s = new_search(g.get(), p);
   std::size_t n = 0;
   REQUIRE_EQ(t5d_search_gather(s.get(), 8, T5D_NO_LIMIT, &n, nullptr), T5D_OK);
@@ -395,6 +401,9 @@ TEST(capi_search_leaves_carry_the_network_input) {
   CHECK_EQ(leaf.expansion.feature_board_count, std::size_t{1});
   CHECK(leaf.expansion.piece != nullptr);
   CHECK_EQ(static_cast<int>(leaf.expansion.piece[0]), 4);  // a1: a rook (type id 4)
+  CHECK(std::vector<int32_t>(leaf.expansion.relations,
+                             leaf.expansion.relations + 5 * leaf.expansion.relation_count) ==
+        own_relations);
   CHECK(leaf.legality != nullptr);
   for (std::size_t i = 0; i < leaf.expansion.move_count; ++i) CHECK_EQ(leaf.legality[i], T5D_LEGALITY_LEGAL);
   t5d_state* state = nullptr;
@@ -574,7 +583,7 @@ TEST(capi_search_errors_release_the_batch) {
   p.root_policy_temperature = 0;
   CHECK_EQ(t5d_search_new(g.get(), 1, &p, &bad, nullptr), T5D_ERR_ARGUMENT);
   p = quick_params();
-  p.expand.relations = 1u << T5D_RELATION_PIN;
+  p.expand.relations = 1u << T5D_RELATION_RESERVED;  // id 6: reserved, never built
   CHECK_EQ(t5d_search_new(g.get(), 1, &p, &bad, nullptr), T5D_ERR_UNSUPPORTED);
   p = quick_params();
   p.split = T5D_SPLIT_FLAT;

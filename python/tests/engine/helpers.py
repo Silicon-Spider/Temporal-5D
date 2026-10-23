@@ -174,7 +174,7 @@ def corpus_paths() -> list[Path]:
     return out
 
 
-def check_position(game, label: str = "", *, relations=("attack", "defence", "xray")):
+def check_position(game, label: str = "", *, relations=("attack", "defence", "pin", "xray", "check")):
     """Convert ``game``'s current position and check the result against the engine itself:
     coordinates and flags, every board's square features against an independent decoding of
     the engine's canonical 5DFEN board string, the candidate moves against the engine's move
@@ -221,7 +221,7 @@ def check_position(game, label: str = "", *, relations=("attack", "defence", "xr
     pairs = list(dict.fromkeys(map(tuple, s.moves[:, :2].tolist())))
     assert [tuple(e) for e in graph[:, :2].tolist()] == pairs, label
     typed = s.edges[graph.shape[0] :]
-    assert typed.shape[0] == x.relations.shape[0] and set(typed[:, 2].tolist()) <= {1, 2, 4}, label
+    assert typed.shape[0] == x.relations.shape[0] and set(typed[:, 2].tolist()) <= {1, 2, 3, 4, 5}, label
     # lineage: the engine's parent; a branch's first board descends from a superseded board one half-turn back
     assert np.array_equal(s.parent, x.parent), label
     return pos

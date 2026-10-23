@@ -85,7 +85,7 @@ def test_every_switch_on_real_positions(mixed_positions):
     from t5d.engine import relations_for
 
     rel = relations_for(model.cfg)
-    assert rel == ("attack", "defence", "xray")
+    assert rel == ("attack", "defence", "pin", "xray", "check")
     with Game.from_pgn(RECORDS["branching"]) as g:
         g.replay_all()
         pos = g.position(relations=rel)

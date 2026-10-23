@@ -88,11 +88,21 @@ void generate_moves(const GameState& state, MoveList& out);
 ///    and stops at the next piece, of either colour, which is the target -
 ///    recorded when a capture or defence of it would be (its board a
 ///    destination under the ruleset).
+///  * Pin (sliders only; register B11 - a PLACEHOLDER reading, build-log spec
+///    issue 173): the x-ray's walk, when the first piece is an enemy that is
+///    not royal (4.13, C1: a king or a royal queen) and the next piece an enemy
+///    ROYAL piece that the slider would capture - its board a destination under
+///    the ruleset - were the first piece absent. The target is the FIRST
+///    piece's square (the pinned piece), the source the slider's. Whether the
+///    pinned piece may move is not asked: check detection never reads pins
+///    (C3), and what the pin bars is a royal capture along the line - the
+///    capture t5d/check.hpp's scan would find, its lines being the
+///    generator's (held equal by the tests).
 ///
-/// Neither reads what counts as an attack on a royal piece (check and pins:
-/// check detection, stage E4's under the ruling, R1).
+/// None of them reads which captures of a royal are check (check detection,
+/// stage E4's under the ruling, R1; t5d/check.hpp).
 struct GeometricRelation {
-  enum class Kind : std::uint8_t { Defence = 0, XRay = 1 };
+  enum class Kind : std::uint8_t { Defence = 0, XRay = 1, Pin = 2 };
 
   std::int32_t from_timeline = 0;
   std::int32_t from_half_turn = 0;
@@ -112,6 +122,7 @@ using RelationList = std::vector<GeometricRelation>;
 struct RelationKinds {
   bool defence = false;
   bool xray = false;
+  bool pin = false;
 };
 
 /// generate_moves - the same moves, in the same order - and, in the same pass,
@@ -145,6 +156,28 @@ void append_piece_moves(const GameState& state, int timeline, int square, MoveLi
 void append_moves_of(const Multiverse& multiverse, const RuleOptions& rules, Colour colour,
                      int timeline, MoveList& out,
                      std::span<const int> inactive_timelines = {});
+
+/// append_moves_of - the same moves, in the same order - and, in the same pass,
+/// the geometric relations `kinds` asks for of the same pieces, appended to
+/// `relations` (neither list is cleared). What the expansion's pin relation
+/// reads of the opponent, on the multiverse check status passes (t5d/check.hpp
+/// passed_multiverse; build-log spec issue 172).
+void append_moves_of(const Multiverse& multiverse, const RuleOptions& rules, Colour colour,
+                     int timeline, MoveList& out, RelationList& relations, RelationKinds kinds,
+                     std::span<const int> inactive_timelines = {});
+
+/// The pseudo-legal moves of the piece on `square` of `board`, as if `board`
+/// stood at (timeline, half_turn) of `multiverse` with the piece's colour to
+/// move on it - a place the multiverse need not hold, or holds with other
+/// content: every move within the board reads `board`, every move off it the
+/// multiverse's boards (as royal_capture_from, t5d/check.hpp, reads a scan
+/// source). Appended to `out`; nothing for an empty square or a board of
+/// another size. No action: castling's optional-board option is not applied
+/// (as append_moves_of). What the per-square labels' second moves read
+/// (t5d/labels.hpp: a piece standing where its first move took it).
+void append_moves_from(const Multiverse& multiverse, const RuleOptions& rules, int timeline,
+                       int half_turn, const Board& board, int square, MoveList& out,
+                       std::span<const int> inactive_timelines = {});
 
 /// Whether `move` is a pseudo-legal move of the state: one that
 /// generate_moves would produce, field for field. Generates the moving
