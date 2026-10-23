@@ -325,6 +325,18 @@ endif()
 # visits and PV events.
 target_sources(t5d_core PRIVATE src/ladder.cpp)
 target_sources(t5d-tests PRIVATE tests/test_ladder.cpp)
+# Stage E10, its second part: the offline audit lane's tooling (H44) - the
+# decision log, the sampler, the offline proof runner, the per-range report;
+# the curriculum hook an interface only. t5d-play writes the log.
+target_sources(t5d_tools PRIVATE tools/audit.cpp)
+add_executable(t5d-audit tools/t5d_audit.cpp)
+target_link_libraries(t5d-audit PRIVATE t5d_tools Threads::Threads)
+if(MINGW)
+  target_link_options(t5d-audit PRIVATE -static)
+endif()
+target_sources(t5d-tests PRIVATE tests/test_audit.cpp)
+add_dependencies(t5d-tests t5d-audit)
+target_compile_definitions(t5d-tests PRIVATE "T5D_AUDIT_EXE=\"$<TARGET_FILE:t5d-audit>\"")
 
 # D2's tree form against the ply split on recorded games' turn starts:
 # evaluation counts (docs/MEASUREMENTS.md). Not one of the truth's sources.

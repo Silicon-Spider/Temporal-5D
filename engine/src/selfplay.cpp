@@ -77,6 +77,7 @@ double GameRecord::white_score() const noexcept {
 GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayParams& params) {
   const auto t0 = std::chrono::steady_clock::now();
   GameRecord g(start);
+  g.split = params.search.split;
   SearchParams sp = params.search;
   sp.turn_cap = params.turn_cap;
   if (params.match_play) sp.root_noise = false;  // §12.3: noise off at match play
@@ -280,6 +281,30 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
       g.pv_changes += after.pv_changes - before.pv_changes;
       g.asset_boosted_edges += after.asset_boosted_edges - before.asset_boosted_edges;
       g.steered_visits += after.steered_visits - before.steered_visits;
+      if (params.decision_log) {
+        // H44: the decision as the audit lane reads it.
+        DecisionLog d;
+        d.action = static_cast<std::uint32_t>(g.actions.size());
+        d.decision = static_cast<std::uint32_t>(g.decisions);
+        d.prefix = action;
+        d.boards = search->root_state().multiverse().board_count();
+        const NodeView root = search->node(search->root());
+        d.root_visits = root.visits;
+        d.root_q = root.weight > 0 ? root.value / root.weight : 0.0;
+        for (const RootChild& rc : children) {
+          DecisionLog::Child c;
+          c.step.moves = rc.moves;
+          c.step.submit = rc.submit;
+          c.visits = rc.visits;
+          c.q = rc.q;
+          c.was_pv = rc.was_pv;
+          c.peak_share = rc.peak_share;
+          d.children.push_back(std::move(c));
+        }
+        d.pv_changes = search->pv_changes();
+        d.chosen = pick;
+        g.decision_log.push_back(std::move(d));
+      }
       ++g.decisions;
       const RootChild& c = children.at(pick);
       if (sp.split == TurnSplit::Flat) {

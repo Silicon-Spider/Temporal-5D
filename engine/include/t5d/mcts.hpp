@@ -1084,7 +1084,7 @@ struct SearchStats {
   std::uint64_t settling_proven = 0;     ///< ... the scanned position's mover mates
   std::uint64_t settling_disproven = 0;  ///< ... no mate in the class (class-relative, H19)
   std::uint64_t refutations = 0;         ///< PV-change scans that proved the opponent's mate
-  std::uint64_t ladder_cancelled = 0;    ///< jobs a decision's end cancelled
+  std::uint64_t ladder_cancelled = 0;    ///< jobs a decision's end cancelled or dropped (counted at a re-root)
   std::uint64_t proofs_withheld = 0;     ///< proofs offered with the proof channel off (H41)
   std::uint64_t proofs_injected = 0;     ///< ... set in the tree (the channel on)
   std::uint64_t proofs_unplaced = 0;

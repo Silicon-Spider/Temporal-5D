@@ -112,6 +112,32 @@ struct PlayParams {
   GuardOptions guard{};
   std::uint64_t guard_research_playouts = 0;
   std::uint32_t guard_max_rejections = 4;
+  /// Stage E10, H44: record each decision for the offline audit lane
+  /// (GameRecord::decision_log). Off by default (memory).
+  bool decision_log = false;
+};
+
+/// Stage E10, H44: one decision as the offline audit lane reads it - its
+/// root's children (each one's decision, visits, backed-up value, whether it
+/// was the most visited and its largest share of the root's visits), the PV
+/// changes, the child chosen; the moves made in its action before it.
+struct DecisionLog {
+  std::uint32_t action = 0;    ///< the action's index in the game
+  std::uint32_t decision = 0;  ///< the game's decision index
+  std::vector<Move> prefix;    ///< the action's moves before the decision
+  std::size_t boards = 0;      ///< the root's board count
+  std::uint32_t root_visits = 0;
+  double root_q = 0;           ///< the root's backed-up value, its player's view
+  struct Child {
+    PathStep step;
+    std::uint32_t visits = 0;
+    double q = 0;
+    bool was_pv = false;
+    double peak_share = 0;
+  };
+  std::vector<Child> children;
+  std::vector<PvChange> pv_changes;
+  std::size_t chosen = 0;  ///< into children
 };
 
 struct GameRecord {
@@ -121,6 +147,8 @@ struct GameRecord {
   /// Every action, its moves in the order played.
   std::vector<std::vector<Move>> actions;
   GameState final_state;
+  /// D2's arm the game was searched under (the audit lane's log names it).
+  TurnSplit split = TurnSplit::BoardMove;
   GameEnd end = GameEnd::Unknown;
   /// 0 white, 1 black, -1 none (no optional: g++ 13/14 warn on copying one).
   int winner = -1;
@@ -162,6 +190,9 @@ struct GameRecord {
   std::uint64_t guard_runs = 0;
   std::uint64_t guard_refutations = 0;
   std::uint64_t guard_rejections = 0;  ///< refuted actions rejected and searched again
+  /// Stage E10, H44: each decision as the offline audit lane reads it
+  /// (PlayParams::decision_log; empty otherwise) - tools/audit.hpp's events.
+  std::vector<DecisionLog> decision_log;
 
   bool cap_bound() const noexcept { return end == GameEnd::TurnCap; }
   /// The 5dpgn result: "1-0", "0-1", "1/2-1/2" (stalemate), or "*" (not ended
