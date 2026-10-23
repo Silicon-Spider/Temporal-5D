@@ -271,7 +271,7 @@ class CExpansion(ctypes.Structure):
 class LabelOptions(ctypes.Structure):
     """``t5d_label_options``."""
 
-    _fields_ = [("mate_nodes", c_uint64)]  # each mate search's node budget; UINT64_MAX: exact
+    _fields_ = [("mate_nodes", c_uint64)]  # each mate search's node budget; UINT64_MAX: no node limit
 
 
 class CSquareLabels(ctypes.Structure):

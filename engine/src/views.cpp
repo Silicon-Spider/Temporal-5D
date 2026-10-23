@@ -5,7 +5,6 @@
 #include "t5d/views.hpp"
 
 #include <algorithm>
-#include <stdexcept>
 #include <utility>
 #include <vector>
 
@@ -20,15 +19,29 @@ int PassView::state_half_turn(int timeline, int half_turn) const noexcept {
   return half_turn;
 }
 
-PassView pass_view(const GameState& state) {
-  std::vector<int> passed;
-  try {
-    passed = passed_timelines(state);
-  } catch (const std::logic_error&) {
-    // Q6's alternative: a deferred timeline of the mover's in the present -
-    // the pass is check status's at a turn's start only (t5d/check.hpp).
-    return PassView{state.multiverse(), {}, state.present(), false};
+namespace {
+
+// Q6's alternative: a deferred timeline of the mover's, active and in the
+// present - the board check status would pass. passed_timelines refuses such a
+// state (t5d/check.hpp: the pass is check status's at a turn's start, where no
+// deferral of the mover's is left); this is that precondition, tested first, so
+// that nothing else passed_timelines might throw is taken for it.
+bool pass_undefined(const GameState& state) {
+  for (const GameState::Deferral& d : state.deferred_timelines()) {
+    const Timeline* t = state.multiverse().timeline(d.timeline);
+    if (t != nullptr && state.active(d.timeline) && t->last_half_turn() == state.present() &&
+        state.playable_by_mover(d.timeline)) {
+      return true;
+    }
   }
+  return false;
+}
+
+}  // namespace
+
+PassView pass_view(const GameState& state) {
+  if (pass_undefined(state)) return PassView{state.multiverse(), {}, state.present(), false};
+  std::vector<int> passed = passed_timelines(state);
   return PassView{passed_multiverse(state), std::move(passed), state.present(), true};
 }
 

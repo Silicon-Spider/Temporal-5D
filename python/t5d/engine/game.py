@@ -482,10 +482,14 @@ class Game:
     def square_labels(self, *, mate_nodes: int = DEFAULT_MATE_NODES) -> SquareLabels:
         """The per-square labels of the current state (``t5d_game_square_labels``; register D4,
         M20, A7): every square of every board, the eight labels of ``heads.SQUARE_LABELS`` in its
-        order, relative to the acting player. ``mate_nodes``: each mate search's node budget
-        (``T5D_NO_LIMIT``: exact) - a square the budget left undecided is ``T5D_LABEL_UNKNOWN``.
-        Copied out at once."""
-        options = LabelOptions(int(mate_nodes))
+        order, relative to the acting player. ``mate_nodes``: each mate search's node budget, 1 or
+        more (``T5D_NO_LIMIT``: no node limit - the search's memory limit stays) - a square the
+        budget left undecided is ``T5D_LABEL_UNKNOWN``, and so is an exchange whose recaptures
+        could not be read (engine README, "Per-square labels"). Copied out at once."""
+        mate_nodes = int(mate_nodes)
+        if not 1 <= mate_nodes <= T5D_NO_LIMIT:
+            raise ValueError(f"mate_nodes must be 1 to T5D_NO_LIMIT, not {mate_nodes}")
+        options = LabelOptions(mate_nodes)
         out = CSquareLabels()
         with self._lock:
             self._lib.call("t5d_game_square_labels", self._live(), byref(options), byref(out), error=True)

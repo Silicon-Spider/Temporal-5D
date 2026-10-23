@@ -12,6 +12,7 @@
 #include <bit>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <stdexcept>
 #include <tuple>
 #include <utility>
@@ -86,15 +87,21 @@ struct Squares {
 };
 
 // A capture or a defence of a square: who (a square of the state) and what
-// the piece is worth.
+// the piece is worth - for a capture also the move (its view's first moves,
+// `view`, index `move`), which the exchange's recapture reading replays.
+// Ordered and equal by (target, value, source) alone: one contact per piece.
 struct Contact {
   int target = 0;
   int source = 0;
   int value = 0;
+  int view = 0;
+  std::size_t move = 0;
   friend bool operator<(const Contact& a, const Contact& b) noexcept {
     return std::tie(a.target, a.value, a.source) < std::tie(b.target, b.value, b.source);
   }
-  friend bool operator==(const Contact& a, const Contact& b) noexcept = default;
+  friend bool operator==(const Contact& a, const Contact& b) noexcept {
+    return std::tie(a.target, a.value, a.source) == std::tie(b.target, b.value, b.source);
+  }
 };
 
 int value_of(const SquareLabelOptions& o, Piece p) noexcept {
@@ -148,6 +155,55 @@ int static_exchange(int victim, const std::vector<int>& attackers,
     gain[d - 1] = -std::max(-gain[d - 1], gain[d]);
   }
   return gain[0];
+}
+
+// The exchange's recapturers where the occupant's side cannot answer on the
+// board taken on (t5d/labels.hpp, item 0): `base` is the capturing side's
+// state - the decision state itself, or the opponent's view as a turn start of
+// its own - and `m` its first capture of the occupant. The capture is played
+// (GameState::apply: the board it creates - a copy of the board taken on with
+// the capturer placed, the occupant's side to move - and its source board
+// advanced, J4, J5), the capturing side passes on the boards it has still to
+// play (pass_view, as the opponent's view is read), and the occupant's side's
+// pieces that can then capture the capturer on the board created are its
+// recapturers: their values, one per piece, ascending. nullopt where this
+// cannot be read: the pass undefined (Q6's alternative; t5d/views.hpp).
+std::optional<std::vector<int>> recapturers(const GameState& base, const Move& m,
+                                            const SquareLabelOptions& options) {
+  GameState after = base;
+  after.apply(m);
+  const PassView pass = pass_view(after);
+  if (!pass.pass_defined) return std::nullopt;
+  const Colour capturer = base.to_move();
+  const Colour side = opposite(capturer);
+  // Where the capturer now stands: the successor of the board taken on - for a
+  // branching capture the first board of the new timeline, the capturer's
+  // outermost (J5, L7).
+  const Multiverse& now = after.multiverse();
+  const int timeline = !m.branching()             ? m.to_timeline
+                       : capturer == Colour::White ? now.max_timeline()
+                                                   : now.min_timeline();
+  const int half_turn = m.to_half_turn + 1;
+  MoveList moves;
+  for (const TimelineRef& t : pass.multiverse.timelines()) {
+    append_moves_of(pass.multiverse, base.rules(), side, t->position(), moves,
+                    after.inactive_timelines());
+  }
+  std::vector<std::tuple<int, int, int, int>> pieces;  // (value, source place)
+  for (const Move& r : moves) {
+    if (!r.capture() || r.to_timeline != timeline || r.to_half_turn != half_turn ||
+        r.to_square != m.to_square) {
+      continue;
+    }
+    pieces.emplace_back(value_of(options, r.piece), r.from_timeline, r.from_half_turn,
+                        r.from_square);
+  }
+  std::sort(pieces.begin(), pieces.end());
+  pieces.erase(std::unique(pieces.begin(), pieces.end()), pieces.end());
+  std::vector<int> values;
+  values.reserve(pieces.size());
+  for (const auto& piece : pieces) values.push_back(std::get<0>(piece));
+  return values;
 }
 
 }  // namespace
@@ -250,7 +306,7 @@ void square_labels(const GameState& state, const SquareLabelOptions& options, Sq
         if (m.capture()) {
           const int taken = m.en_passant() ? m.aux_square : m.to_square;
           captures.push_back(Contact{squares.of(v, m.to_timeline, m.to_half_turn, taken), own,
-                                     value_of(options, m.piece)});
+                                     value_of(options, m.piece), vi, k});
         }
         const BoardRef landed = landing_board(*v.mv, m);
         if (!landed) continue;
@@ -275,8 +331,9 @@ void square_labels(const GameState& state, const SquareLabelOptions& options, Sq
     }
   }
 
-  // -- the static exchange (0) on every occupied square
-  std::sort(captures.begin(), captures.end());
+  // -- the static exchange (0) on every occupied square. Stable: a piece's
+  //    first capture of a square, in generation order, is the one kept.
+  std::stable_sort(captures.begin(), captures.end());
   captures.erase(std::unique(captures.begin(), captures.end()), captures.end());
   std::sort(defended.begin(), defended.end());
   defended.erase(std::unique(defended.begin(), defended.end()), defended.end());
@@ -284,13 +341,50 @@ void square_labels(const GameState& state, const SquareLabelOptions& options, Sq
   // defence's side the piece's own. So a square's captures are its enemy's
   // and its defences its own side's - whatever the view.
   std::vector<const Board*> boards;
+  std::vector<std::pair<int, int>> places;  // each board's (timeline, half-turn)
   boards.reserve(out.board_count);
-  mv.for_each_board([&](int, int, const Board& board) { boards.push_back(&board); });
+  places.reserve(out.board_count);
+  mv.for_each_board([&](int p, int h, const Board& board) {
+    boards.push_back(&board);
+    places.emplace_back(p, h);
+  });
+  // The occupant's side answers on the board taken on - its recapturers read
+  // as defences of the square - only where that board is passed (an acting
+  // player's board in the present that it has not played, read in the
+  // opponent's view on its passed copy): elsewhere it can answer only on the
+  // board the capture creates, and the capture is replayed (recapturers). The
+  // opponent's captures are replayed from its view as a turn start of its own,
+  // built when first needed; nullopt where that cannot be built (the pass
+  // undefined, or a view that is no turn start).
+  const auto answered_in_place = [&](int board) {
+    const auto [p, h] = places[static_cast<std::size_t>(board)];
+    return pass.pass_defined && h == state.present() &&
+           std::binary_search(pass.passed.begin(), pass.passed.end(), p);
+  };
+  std::optional<GameState> opponent_base;
+  bool opponent_base_built = false;
+  const auto base_of = [&](int view) -> const GameState* {
+    if (view == 0) return &state;
+    if (!opponent_base_built) {
+      opponent_base_built = true;
+      if (pass.pass_defined) {
+        Multiverse turn = pass.multiverse;
+        turn.set_to_move(opponent);
+        try {
+          opponent_base.emplace(std::move(turn), rules);
+        } catch (const std::invalid_argument&) {
+          // No turn start of the opponent's (the present not on its colour).
+        }
+      }
+    }
+    return opponent_base.has_value() ? &*opponent_base : nullptr;
+  };
   std::vector<int> attackers;
   std::vector<int> defenders;
   std::size_t di = 0;
   for (std::size_t ci = 0; ci < captures.size();) {
     const int target = captures[ci].target;
+    const std::size_t group = ci;
     attackers.clear();
     defenders.clear();
     for (; ci < captures.size() && captures[ci].target == target; ++ci) {
@@ -305,6 +399,44 @@ void square_labels(const GameState& state, const SquareLabelOptions& options, Sq
     const int cell = target % squares.cells;
     const Piece occupant = board.at(make_square(cell % size.width, cell / size.width));
     if (occupant.empty()) continue;
+    if (!answered_in_place(target / squares.cells)) {
+      // Each of the enemy's least valuable capturers may begin (they differ
+      // in the board the capture creates and the source board it advances):
+      // the enemy picks the best. 1 if one wins material; else Unknown if one
+      // could not be read; else 0.
+      ++out.stats.exchange_replays;
+      bool wins = false;
+      bool unread = false;
+      for (std::size_t k = group; k < ci && captures[k].value == attackers[0] && !wins; ++k) {
+        const GameState* base = base_of(captures[k].view);
+        const Move& capture = first[static_cast<std::size_t>(captures[k].view)][captures[k].move];
+        std::optional<std::vector<int>> replayed;
+        if (base == &state) {
+          replayed = recapturers(state, capture, options);
+        } else if (base != nullptr) {
+          // A move of the opponent's view that its turn start refuses - under a
+          // ruleset whose activity is history's (Q1, Q3, Q6) the state built
+          // from the view reads activity by the count rule - is not read.
+          try {
+            replayed = recapturers(*base, capture, options);
+          } catch (const std::invalid_argument&) {
+            replayed.reset();
+          }
+        }
+        if (!replayed.has_value()) {
+          unread = true;
+        } else {
+          wins = static_exchange(value_of(options, occupant), attackers, *replayed) > 0;
+        }
+      }
+      if (wins) {
+        set(target, kExchangeLosesOccupant);
+      } else if (unread) {
+        ++out.stats.exchange_unknown;
+        set(target, kExchangeLosesOccupant, kLabelUnknown);
+      }
+      continue;
+    }
     if (static_exchange(value_of(options, occupant), attackers, defenders) > 0) {
       set(target, kExchangeLosesOccupant);
     }

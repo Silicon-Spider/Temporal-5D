@@ -817,7 +817,8 @@ record carries both.
   check status exactly; mid-action the same pass of the boards still to play (none once
   the present has shifted: then the state itself, C4's position); where the pass is
   undefined (Q6's alternative, a deferred timeline of the mover's in the present
-  mid-action) the state itself:
+  mid-action - tested as a precondition before `passed_timelines`, which refuses it) the
+  state itself, no board passed (the non-deferred ones included; tested):
   - **attack**: source square → the square of the enemy piece a capture of (a)
     takes (en passant: the pawn taken, not the square moved to); once per pair;
   - **defence**: source square → a piece of the mover's that the source piece's
@@ -837,7 +838,10 @@ record carries both.
     opponent's on the passed multiverse - so a pin of the acting player's piece is one
     the opponent's next turn would hold, as R1's pass reads it. Across boards and through
     time like any slide (J7, J8): along the timeline axis, back in time onto history
-    boards (a capture that would branch counts, C2). The pinned piece may stand on a
+    boards (a capture that would branch counts, C2). The acting player's pins are
+    x-ray-to-royal edges rather than binding pins: the pinned opponent piece stands on a
+    board of the acting player's colour, which its owner cannot move from until that
+    board advances. The pinned piece may stand on a
     board its owner cannot move from (a history board): it is still the only piece
     between, and the relation says so. Whether a pinned piece may move is not asked -
     the rules have no pins (C3: check detection ignores them);
@@ -846,8 +850,8 @@ record carries both.
     the opponent's captures of the acting player's royals in its view - at a turn start
     exactly what R1 asks (`in_check` holds iff such an edge exists; the tests hold it on
     random play) - then the acting player's captures of the opponent's royals in the
-    state (C4's scan from the other side - empty after any legal submission, kept for
-    positions set up from 5DFEN). Captures through time and across timelines are the
+    state (C4's scan from the other side - empty in every position reached by legal play:
+    13,750 decision states of random play, none; kept for positions set up from 5DFEN). Captures through time and across timelines are the
     scan's (C2: royals on history boards count; a capture that would branch into an
     inactive timeline counts, R1).
 
@@ -965,8 +969,9 @@ the set standing as v1 (M20): `square_labels(state, options, out)` labels every 
 every board (the canonical board order, cells rank × width + file) with the eight labels
 of `python/t5d/net/heads.py` `SQUARE_LABELS`, in its order, **relative to the acting
 player** (A7: "ours" its, "theirs" the opponent's - the network names no colour). Each
-is 0 or 1; `arrival_gives_mate` may be `kLabelUnknown` (255) where a mate search
-stopped on its budget. Every rule is read through the engine's own predicates - the
+is 0 or 1, or `kLabelUnknown` (255): `arrival_gives_mate` where a mate search
+stopped on its budget, `exchange_loses_occupant` where its recaptures could not be read
+(below). Every rule is read through the engine's own predicates - the
 move generator, check status's pass, submission, E4's mate detector - and each side
 from its own **view** (spec issue 172, as the pin and check relations above): the
 acting player's moves are the state's, the opponent's those on the passed multiverse,
@@ -975,11 +980,11 @@ class (spec issues 175, 176; the C API and the targets in issue 175):
 
 | Label | Reading |
 |---|---|
-| `exchange_loses_occupant` | the static exchange on an occupied square, begun by the occupant's enemy, wins material (ends above 0): the swap algorithm over the enemy's **captures** of the occupant (its view) and the occupant's side's **defences** of the square (its view; the defence relation), each side's least valuable piece first, each free to stop; values the scanner's H6 v1 table (`PieceValues`: P 100, N 300, B 300, R 500, Q 900, U 250, D 200, S 700, W 125, C 300) and 20,000 for a royal piece; no x-ray recapturer joins (a recapture lands on the board the capture makes, which the static exchange reads as the square itself) |
+| `exchange_loses_occupant` | the static exchange on an occupied square, begun by the occupant's enemy, wins material (ends above 0): the swap algorithm over the enemy's **captures** of the occupant (its view) and the occupant's side's **recapturers**, each side's least valuable piece first, each free to stop; values the scanner's H6 v1 table (`PieceValues`: P 100, N 300, B 300, R 500, Q 900, U 250, D 200, S 700, W 125, C 300) and 20,000 for a royal piece; no x-ray recapturer joins. The recapturers are read **where the recapture is made**: on a passed board (an acting player's board in the present it has not played, the opponent reading its passed copy) the occupant's side answers on the board itself - its **defences** of the square (its view; the defence relation); on every other board (a history board, a board ahead of the present or on an inactive timeline, a board already played) its side cannot move, and answers on the board the capture **creates** - the enemy's least valuable capture is played (`GameState::apply`, from the state or from the opponent's view as a turn start of its own; a branching capture makes its timeline), the enemy passes on the boards it has still to play, and the occupant's side's pieces that can then capture the capturer there recapture; with several least valuable capturers, each is tried and the enemy picks the best. `kLabelUnknown` where none wins and one could not be read (the pass undefined - Q6's alternative - or an opponent's view that is no turn start) |
 | `reachable_in_two_ours` / `_theirs` | some piece of the side reaches the square in two of its own moves and not in one, the square not its own: its moves from where each of its pseudo-legal moves put it, under the **static reading** - the board it landed on as it stands, with the piece there (moved off its square if the move stayed on its board; the captured piece, en passant's pawn and a castling rook handled; a promotion made; no en-passant square), the rest of the multiverse unchanged, and the piece's colour to move there (`append_moves_from`, `t5d/movegen.hpp`) |
 | `arrival_gives_check_ours` / `_theirs` | some pseudo-legal move of the side onto the square leaves the moved piece able, under the static reading, to capture an enemy royal piece (a king or a royal queen, on any board - C1, C2). The moved piece only ("gives check from it"): a discovered attack is not counted |
 | `royal_zone_ours` / `_theirs` | the square of a royal piece of the side, on any board, or one king step from it (`geometry::all_directions`: -1, 0 or +1 along file, rank, timeline and turn, not all 0), on a board that exists; whatever stands there |
-| `arrival_gives_mate` | some pseudo-legal move of the acting player onto the square after which submitting is legal (T5, C4), and the opponent - at its turn's start - is checkmated (C5: in check, R1, and E4's hypercuboid detector finds no legal action), each search under `SquareLabelOptions::mate_budget` (placeholder 200,000 nodes; `SearchBudget::unlimited()` exact) |
+| `arrival_gives_mate` | some pseudo-legal move of the acting player onto the square after which submitting is legal (T5, C4), and the opponent - at its turn's start - is checkmated (C5: in check, R1, and E4's hypercuboid detector finds no legal action), each search under `SquareLabelOptions::mate_budget` (placeholder 200,000 nodes; `SearchBudget::unlimited()` sets no node limit - the search's memory limit stays, and a search that meets it is Unknown) |
 
 A move's square is its destination's - for a branching move the history board it
 targets (`t5d/records.h`) - and a capture's the captured piece's. Alternatives not
@@ -988,11 +993,15 @@ the move creates, advanced by a pass - the scanner's `BranchThreat::ArrivalCaptu
 reads arrivals so); an exchange with x-ray recapturers; a mate in one **action** (any
 legal action the move begins) rather than one move. Cost: a second move generation per
 first move of each side (and a published board per first move), and per move that ends
-a legal action in check a mate search; it allocates. `stats` counts the moves read and
-the mate searches (`mate_candidates`, `mate_unknown`).
+a legal action in check a mate search, and per square whose exchange is replayed a
+played capture, a pass and one generation of the occupant's side's moves; it allocates.
+`stats` counts the moves read, the mate searches (`mate_candidates`, `mate_unknown`) and
+the exchanges replayed (`exchange_replays`, `exchange_unknown`). Measured (indicative):
+`docs/MEASUREMENTS.md`, "The per-square labels and the pin and check relations - cost
+per state".
 
 The C API: `t5d_game_square_labels(game, options, out, error)` (`t5d_label_options`:
-`mate_nodes`, `UINT64_MAX` exact; NULL for the placeholder's 200,000) fills a
+`mate_nodes`, `UINT64_MAX` no node limit; NULL for the placeholder's 200,000) fills a
 `t5d_square_labels` - `board_count`, `width`, `height`, `label_count` (8),
 `acting_player`, `labels` (board_count × cells × 8 bytes, valid until the handle's next
 `t5d_game_square_labels` or `t5d_game_destroy`) and the counts; the label ids are
@@ -1002,11 +1011,19 @@ from each decision's replayed state (`train.selfplay.replay_positions(square_lab
 `train.targets`) - never stored in a record.
 
 The tests (`test_views.cpp`): every label on hand-built positions - royal zones across
-timelines, two-move reach on a board and through time, arrival checks on a board,
-through time and from the opponent's view, the exchange won and lost by each side, the
-back-rank mate and its refutation, a mate left unknown by a spent budget; A7's mirror
-on real positions in `python/tests/engine/test_perspective_engine.py` (a position and
-its colour-swapped mirror give the same labels at the mirrored squares).
+timelines and through time (whole turns, not half-turns), two-move reach on a board and
+through time, arrival checks on a board, through time, from the opponent's view and on
+a board played mid-action (a discovered attack not counted), the exchange won and lost
+by each side, its order (least valuable first), a royal recapturer's value, no x-ray
+recapturer, its recaptures on the board a capture creates (ahead of the present, on a
+history board, by either side) and left Unknown where the pass is undefined (Q6), the
+back-rank mate and its refutation, a mate left unknown by a spent budget, every label
+0, 1 or Unknown on random play under every ruleset (turn starts and mid-action);
+`test_capi_game.cpp` the C API's labels and counts and the pin and check bits each
+alone; A7's mirror on real positions in
+`python/tests/engine/test_perspective_engine.py` (a position and its colour-swapped
+mirror give the same labels at the mirrored squares, every label decided and every
+label - the mate's included - set somewhere).
 
 ### The C API for games (`t5d/capi.h`)
 

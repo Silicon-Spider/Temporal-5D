@@ -10,6 +10,80 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-23 - Engine ABI round 3 review fixes: the exchange label's recaptures read where they are made; the Q6 fallback, mid-action placement, the pin's royal half, the C API's bits and labels and every label reading tested; the labels' cost measured
+
+Two reviews of engine ABI round 3 (5d8b12b, 0986472): one of the rules (probes on hand-built
+positions and random play), one of 42 mutants, 14 of which survived every test tier - one
+finding HIGH, seven MEDIUM, five LOW. All HIGH and MEDIUM fixed; the LOWs fixed but for the
+deprecated alias (below).
+
+- **The exchange label read "attacked" off the passed boards** (finding A-H1;
+  `engine/src/labels.cpp`, `include/t5d/labels.hpp`): its recapturers were the occupant's
+  side's defences of the square, and a defence relation targets only a board of the defender's
+  colour - so on history boards, boards ahead of the present, inactive timelines and boards
+  already played (87% of the squares labelled 1 on random play) none could exist. Now, by the
+  main loop's ruling, the recapturers are read **where the recapture is made**: on a passed
+  board as before (the side's defences of the square); everywhere else on the board the capture
+  creates - the enemy's least valuable capture played (`GameState::apply`; the opponent's from
+  its view as a turn start of its own), the enemy passing on the boards it has still to play,
+  the occupant's side's pieces that can then take the capturer recapturing; with several least
+  valuable capturers the enemy picks the best (a first version broke the tie by board order,
+  and A7's mirror test caught it). Where that cannot be read (the pass undefined, Q6; an
+  opponent's view that is no turn start) the label is `T5D_LABEL_UNKNOWN` - NaN, no target -
+  not a guess. `SquareLabelStats` counts `exchange_replays` and `exchange_unknown` (C++ only:
+  the C struct is unchanged). The reviewer's probe: 3,613 squares labelled 1 over 278 turn
+  starts (3,139, 87%, on history or unpassed boards) became 1,451 (977, 67%); of the 3,139
+  squares replayed, 977 still lose the occupant; none Unknown.
+- **The Q6 fallback** (finding A-M1; `engine/src/views.cpp`): found by its precondition (a
+  deferred timeline of the mover's, active, in the present) before `passed_timelines` is
+  called, no longer by catching `std::logic_error` (which would have swallowed any error of
+  that family); tested on a Deferred reactivation that reaches it. It still drops the whole
+  pass; passing the non-deferred timelines alone would need a variant of check status's pass
+  (`check.cpp`, untouched) - logged in issue 172 as the alternative.
+- **Tests** (`engine/tests/test_views.cpp`, `test_capi_game.cpp`;
+  `python/tests/engine/test_binding.py`, `test_perspective_engine.py`,
+  `tests/train/test_targets.py`): a board played mid-action reported where it stands - a check,
+  a pin and an arrival check (B-M1); no pin in front of an enemy that is not royal (B-M2); the
+  C API's pin and check bits each alone (B-M3); the exchange's order, a royal recapturer's value
+  and no x-ray recapturer, the arrival check's moved-piece rule, the royal zone's whole-turn step
+  (B-M4); the exchange's recaptures on created boards - ahead of the present, on a history board,
+  by either side - and Unknown under Q6 (A-H1); A7's mirror test now requires every label
+  decided on both sides and every label, the mate's included, set somewhere (B-M5);
+  `t5d_game_square_labels` at the C level (NULL arguments, NULL options' budget, a one-node
+  budget's Unknown, the counts field by field) and `targets()`' NaN exactly at the 255s (B-L7);
+  and every label 0, 1 or Unknown on random play under all 27 rulesets, turn starts and
+  mid-action (1,331 states, no exchange Unknown; none at a default turn start, asserted) - an
+  opponent's capture its turn-start state refuses (activity read by the count rule under a
+  history-dependent ruleset) is left Unknown rather than thrown.
+  The 14 surviving mutants re-run on a scratch copy: all 14 killed.
+- **Refusals** (B-L8; `python/t5d/engine/game.py`, `train/targets.py`):
+  `Game.square_labels(mate_nodes=...)` refuses a budget below 1 (a negative one wrapped to
+  `UINT64_MAX` through ctypes); `TargetConfig.square_mate_nodes` refuses 0 (every mate label
+  NaN, silently).
+- **Wording** (A-L1, A-L2, A-L3): the acting player's check edges are empty in every position
+  reached by legal play (13,750 decision states of random play: none), not "almost always"; its
+  pins are x-ray-to-royal edges, not binding pins; the mate search under `T5D_NO_LIMIT` /
+  `SearchBudget::unlimited()` has no node limit, not "exact" (the memory limit stays) -
+  `labels.hpp`, `capi.h`, `capi.py`, `game.py`, `expand.hpp`, `engine/README.md`.
+- **Not done**: a deprecated `T5D_RELATION_TRAVEL_THREAT` alias (B-L8). Round 3's removal of
+  that macro from `records.h` is a **source break** for a C caller that named it (its value, 6,
+  is `T5D_RELATION_RESERVED`, still refused); no alias is kept, since the type is gone from the
+  register (B11's five) and the engine lane's documents no longer name it.
+- **Cost** (B-M6): measured with the fix in - `docs/MEASUREMENTS.md`, "The per-square labels
+  and the pin and check relations - cost per state" (indicative; no threshold, no verdict). On 12 random-play positions of 10-212 boards
+  (Standard, 4 sizes x 3 seeds, travel_prob 0.5; the minimum of three timings, a shared machine):
+  the labels 0.1-23 ms per state after (0.1-26 before; round 3's figure, 0.3-38 ms, was one
+  timing each), the exchange's replays adding up to about 3 ms at 100-200 boards; pin and check
+  add 0.0-0.2 ms to an expansion of 0.04-0.2 ms.
+- **Docs**: `engine/README.md` (the views, (e)'s pin and check, "Per-square labels"),
+  `docs/BUILD_LOG.md` (the B11 and D4 rows, issues 172-176, edit 136, the session log); the two
+  round-3 entries below corrected where they claimed what was untrue or untested.
+
+Spec: §12.4's per-square row and register D4 - proposed edit 136 amended (a label the engine
+cannot decide is no target); BUILD_LOG issues 172-176 (176(a) the exchange's reading, 172 the
+Q6 fallback's alternative, 173-174 the acting player's pins and checks). §6 and register B11:
+edit 135 unchanged. Register A7 and §15.2's A7 row unchanged (the mirror test is stricter).
+
 ### 2026-10-23 - Engine ABI round 3, part 2: D4's per-square label generator, wired into M21's targets
 
 §12.4's per-square row - "Deep attack facts beyond the §6 input bias (label set a placeholder;
@@ -22,6 +96,9 @@ the training targets re-derive it from each decision's replayed state.
   "ours" its), each side read from its own view (issue 172), every rule through the engine's own
   predicates. The readings, placeholders (issues 175, 176): the static exchange (the swap over
   the enemy's captures and the side's defences, the scanner's H6 values, 20,000 for a royal);
+  *(review correction, 2026-10-23: off the passed boards the side's defences could not exist -
+  a defence targets only a board of the defender's colour - so there the label meant
+  "attacked"; the recaptures are now read on the board the capture creates, above)*
   reach in exactly two moves and arrival check (from the moved piece only) under the static
   reading of a piece's next move (`append_moves_from`, new in `movegen.hpp`); the royal zone
   (the royal's square and one king step, any board); mate after a move that ends a legal action
@@ -42,7 +119,14 @@ the training targets re-derive it from each decision's replayed state.
   `test_perspective_engine.py` - A7's mirror on real positions (the same labels at the mirrored
   squares, every label but the mate's seen); `test_targets.py` - re-derived on every replay, not
   stored, on the square tokens, every loss finite; `test_trainer.py` - record rows carry them.
+  *(Review correction, 2026-10-23: "every label" overstated it - the exchange's order, royal
+  value and x-ray rule, the arrival check's moved-piece rule, the royal zone's turn step, the C
+  API's labels and the NaN mask were untested, and the mirror test compared the mate label only
+  where both searches decided it, so a side whose searches all stopped passed; all tested since,
+  above.)*
 - **Cost**: 0.3-38 ms per state on random-play positions of 10-212 boards (a shared machine).
+  *(Review correction, 2026-10-23: the figure was in no measurements file - now in
+  `docs/MEASUREMENTS.md` with its conditions, re-measured with the exchange fix, above.)*
 - **Docs**: `engine/README.md` ("Per-square labels", the C API, the readings),
   `docs/BUILD_LOG.md` (the D4 and M21 rows, issues 175-176, edit 136, the session log).
 
@@ -63,20 +147,30 @@ called, never changed.
   status passes** (R1: `passed_multiverse`, the acting player's unplayed active boards in the
   present advanced unchanged), a passed copy's squares reported at the board it copies. At a
   turn start that is R1's check status exactly; mid-action the pass of the boards still to play.
+  *(Review correction, 2026-10-23: a board already played mid-action - standing at present + 1
+  too - was untested, and so was the Q6 fallback, found by catching `std::logic_error`; both
+  tested since, the fallback by its precondition, above.)*
 - **Check** (`expand.cpp`; issue 174): a piece -> an enemy royal it can capture, by check
   detection's own scan (`for_each_royal_capture`): the opponent's captures of the acting
   player's royals in its view, then the acting player's of the opponent's in the state. At a
   turn start an opponent check edge exists exactly when `in_check` holds (held on 321 random
-  turn starts of three variants, 9 in check).
+  turn starts of three variants, 9 in check). *(Review correction, 2026-10-23: the acting
+  player's edges are empty in every position reached by legal play - 13,750 decision states,
+  none - and its pins are x-ray-to-royal edges, not binding pins: issues 173-174.)*
 - **Pin** (`movegen.hpp` `GeometricRelation::Kind::Pin`, `RelationKinds::pin`; issue 173): a
   slider -> the piece it pins - the first piece along its ray an enemy that is not royal, the
   next an enemy royal the slider would capture were the first absent - the x-ray's own walk,
   so across timelines and through time; the opponent's pins on the passed multiverse
-  (`append_moves_of` with relations, new). Moves are generated exactly as before.
+  (`append_moves_of` with relations, new). Moves are generated exactly as before. *(Review
+  correction, 2026-10-23: the rule's royal half - no pin in front of an enemy that is not
+  royal - was untested; tested since.)*
 - **The C ABI** (`records.h`, `capi.h`, `capi.cpp`): `T5D_RELATIONS_PIN`, `T5D_RELATIONS_CHECK`;
   id 6 is `T5D_RELATION_RESERVED` - never emitted, refused ("reserved"; it was travel-threat's,
   folded into attack at CHECKPOINT 6); `ExpandOptions::travel_threat` removed; the search
   accepts pin and check for its leaves (`mcts.cpp`). Pin and check make the expansion allocate.
+  *(Review correction, 2026-10-23: removing `T5D_RELATION_TRAVEL_THREAT` is a source break for
+  a C caller that named it - no alias kept; and the two new bits were tested only together,
+  each alone since.)*
 - **Python** (`python/t5d/engine/capi.py`, `game.py`, `convert.py`, `errors.py`):
   `BUILT_RELATIONS` holds all five (so `relations_for` gives a network with B10 or B11 on all
   five), `RESERVED_RELATIONS` names none; the docstrings no longer name travel-threat - the

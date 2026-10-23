@@ -134,8 +134,8 @@ def test_the_per_square_labels_of_a_real_position_and_its_mirror(fens):
     """Register A7 for D4's per-square labels: the engine's labels of a position and of its
     colour-swapped mirror (each relative to its own acting player - "ours") are the same at the
     mirrored square - board for board (``state.mirror``'s order), rank for rank (``y -> H-1-y``).
-    The mate label is compared where both mate searches decided it (each runs under a node budget,
-    and the mirror's search may meet its moves in another order); every other label is exact."""
+    Every label is decided in these positions - the mate searches within the default budget, every
+    exchange's recaptures readable at a turn start - on both sides, and every label is exact."""
     seen = np.zeros(len(SQUARE_LABELS), dtype=np.int64)
     for label, parity, strings in fens:
         with Game.from_fen(strings, parity=parity) as g:
@@ -149,12 +149,12 @@ def test_the_per_square_labels_of_a_real_position_and_its_mirror(fens):
         cell = np.arange(w * h)
         flip = (h - 1 - cell // w) * w + cell % w
         mapped = b.labels[_mirror_order(s, e)][:, flip]
-        assert (a.labels[..., :-1] != T5D_LABEL_UNKNOWN).all() and (mapped[..., :-1] != T5D_LABEL_UNKNOWN).all(), label
-        decided = (a.labels != T5D_LABEL_UNKNOWN) & (mapped != T5D_LABEL_UNKNOWN)
-        assert np.array_equal(a.labels[decided], mapped[decided]), label
+        assert (a.labels != T5D_LABEL_UNKNOWN).all() and (mapped != T5D_LABEL_UNKNOWN).all(), label
+        assert a.mate_unknown == 0 and b.mate_unknown == 0, label
+        assert np.array_equal(a.labels, mapped), label
         seen += (a.labels == 1).reshape(-1, len(SQUARE_LABELS)).sum(axis=0)
-    # Every label but the mate's is set somewhere in these positions.
-    assert (seen[:-1] > 0).all(), dict(zip(SQUARE_LABELS, seen.tolist(), strict=True))
+    # Every label is set somewhere in these positions, the mate's included.
+    assert (seen > 0).all(), dict(zip(SQUARE_LABELS, seen.tolist(), strict=True))
 
 
 def test_the_canonical_view_of_a_real_position(pairs):

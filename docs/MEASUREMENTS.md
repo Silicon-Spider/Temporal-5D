@@ -1076,3 +1076,53 @@ emitted; resumed, all are, at about four nodes a realisation. A flat node holds 
 times a ply node's memory (its generator lives as long as the node can widen); the estimate
 stays within the test's 0.75-1.33 of the heap. For 6x: the memory per node by board-count
 range (proposed edit 131).
+
+### The per-square labels and the pin and check relations - cost per state (indicative; no threshold, no verdict)
+
+**What it is.** The wall time of D4's per-square label generator (`t5d_game_square_labels`
+through `Game.square_labels`, engine ABI round 3) on one state, and what B11's pin and check
+relations add to an expansion - before and after the round's review fixes, which read the
+exchange label's recaptures on the board a capture creates off the passed boards (build-log
+spec issue 176(a)). No threshold applies and none is proposed: §12.4 asks for the labels,
+not for a speed; the figures say what a training replay pays per decision.
+
+**Conditions.** 2026-10-23, machine `dev-r`, Release, MSYS2 g++ 16.2.0 (Rev3), one thread,
+through the Python binding (ctypes; Python 3.14.7). The shared machine was not quiet: other
+sessions' work ran beside it (not controlled); the review's mutation runs had ended. Positions:
+`random_position_game("Standard", seed, boards=n, travel_prob=0.5)` for n = 10, 40, 100, 200
+and seeds 0-2 (the first position of seeded random play with at least n boards; random play
+is the engine's own, identical in both builds). Each call timed three times, the minimum
+reported (the review's first figure, "0.3-38 ms per state", was one timing each). Labels:
+the default options (200,000 mate nodes per search). Relations: `expand(square_features=
+"none")` with attack, defence and x-ray, then with pin and check added. *Before*: the
+review's copy of lane/engine 0986472; *after*: the review fixes (this commit). Probe:
+`probe_cost2.py` (scratch; the review's `probe_cost.py` with repeats and the exchange
+counts).
+
+| boards | first moves (ours, theirs) | mate searches | labels before (ms) | labels after (ms) | exchange = 1 before / after | expand, 3 relations (ms) | pin + check added (ms) |
+|---|---|---|---|---|---|---|---|
+| 11 | 75, 66 | 0 | 0.1 | 0.1 | 1 / 1 | 0.04 | 0.01 |
+| 10 | 95, 26 | 0 | 0.3 | 0.2 | 1 / 0 | 0.04 | 0.01 |
+| 10 | 118, 123 | 0 | 0.2 | 0.2 | 0 / 0 | 0.04 | 0.02 |
+| 41 | 300, 189 | 0 | 0.5 | 0.5 | 6 / 5 | 0.06 | 0.02 |
+| 48 | 460, 301 | 0 | 0.9 | 1.2 | 13 / 3 | 0.12 | 0.00 |
+| 40 | 215, 164 | 0 | 0.7 | 0.8 | 10 / 2 | 0.05 | 0.02 |
+| 109 | 1,124, 111 | 2 | 3.8 | 3.3 | 47 / 22 | 0.10 | 0.05 |
+| 121 | 1,369, 723 | 113 | 25.7 | 22.7 | 35 / 15 | 0.14 | 0.12 |
+| 103 | 1,050, 634 | 2 | 4.1 | 6.2 | 37 / 16 | 0.14 | 0.13 |
+| 212 | 2,118, 536 | 60 | 17.0 | 18.7 | 110 / 49 | 0.20 | 0.21 |
+| 208 | 1,852, 840 | 0 | 4.2 | 7.1 | 69 / 24 | 0.18 | 0.18 |
+| 211 | 2,247, 79 | 2 | 6.9 | 7.4 | 65 / 37 | 0.19 | 0.13 |
+
+(The expansion columns are the *after* run's; the *before* run's agree within the noise, its
+pin and check adding 0.00-0.19 ms. No exchange label was Unknown in either run, and no mate
+search stopped on its budget.)
+
+*Read.* The labels cost 0.1-23 ms per state after the fixes (0.1-26 before): most of it the
+second moves (tens of thousands at 200 boards) and, where many moves end a legal action in
+check (113 mate searches at 121 boards), the mate searches. Replaying each capture off the
+passed boards adds up to about 3 ms at 100-200 boards (a played capture, a pass and one
+generation of the occupant's side's moves per replayed square) and halves the squares labelled
+1 (the label no longer means "attacked" there). Pin and check add 0.0-0.2 ms to an expansion
+of 0.04-0.2 ms - up to about double, small against the labels. A training replay labelling
+every decision pays the labels' cost once per decision.

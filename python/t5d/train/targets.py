@@ -163,8 +163,8 @@ class TargetConfig:
             raise ValueError("provenance_weight in [0, 1], forced_k >= 0, soft_policy_power > 0")
         if self.deblunder_band < 0 or self.travel_horizon < 1 or not 0.0 <= self.effort_stable_fraction <= 1.0:
             raise ValueError("deblunder_band >= 0, travel_horizon >= 1, effort_stable_fraction in [0, 1]")
-        if self.square_mate_nodes < 0:
-            raise ValueError("square_mate_nodes >= 0")
+        if self.square_mate_nodes < 1:
+            raise ValueError("square_mate_nodes >= 1 (0 would leave every mate label undecided)")
         if self.reply_ambiguous not in AMBIGUOUS_MODES:
             raise ValueError(f"reply_ambiguous must be one of {AMBIGUOUS_MODES}")
         if self.proof_rescoring and not PROOF_CHANNEL_SIGNED_OFF:
