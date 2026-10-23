@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "capi_internal.hpp"
+#include "t5d/ladder.hpp"
 #include "t5d/legal.hpp"
 #include "t5d/mcts.hpp"
 #include "t5d/movegen.hpp"
@@ -229,6 +230,44 @@ SearchParams params_from(const t5d_search_params* c) {
     case T5D_PRESENT_REWIND: p.tree_present = t5d::mcts::PresentShift::Rewind; break;
     default: throw std::invalid_argument("tree_present must be T5D_PRESENT_ANY or _REWIND");
   }
+  // Stage E10.
+  p.hunt = boolean(c->hunt, "hunt");
+  p.hunt_max_boards = c->hunt_max_boards;
+  p.hunt_ms = c->hunt_ms;
+  p.hunt_nodes = c->hunt_nodes;
+  p.hunt_depth = c->hunt_depth;
+  p.settling = boolean(c->settling, "settling");
+  p.settling_max_boards = c->settling_max_boards;
+  p.settling_ms = c->settling_ms;
+  p.settling_nodes = c->settling_nodes;
+  p.settling_depth = c->settling_depth;
+  p.settling_root = boolean(c->settling_root, "settling_root");
+  p.settling_max_scans = c->settling_max_scans;
+  p.settling_debounce = c->settling_debounce;
+  p.asset_map = boolean(c->asset_map, "asset_map");
+  switch (c->boost_rule) {
+    case T5D_BOOST_ADDITIVE: p.boost_rule = t5d::mcts::BoostRule::Additive; break;
+    case T5D_BOOST_MULTIPLICATIVE: p.boost_rule = t5d::mcts::BoostRule::Multiplicative; break;
+    default: throw std::invalid_argument("boost_rule must be T5D_BOOST_ADDITIVE or _MULTIPLICATIVE");
+  }
+  p.asset_root_only = boolean(c->asset_root_only, "asset_root_only");
+  p.assets.flag_margin = c->asset_flag_margin;
+  p.assets.boost_scale = c->asset_boost_scale;
+  p.assets.max_boost = c->asset_max_boost;
+  p.assets.qsearch_plies = c->asset_qsearch_plies;
+  p.assets.qsearch_nodes = c->asset_qsearch_nodes;
+  switch (c->steered_rule) {
+    case T5D_STEERED_COUNTERFACTUAL: p.steered_rule = t5d::mcts::SteeredRule::Counterfactual; break;
+    case T5D_STEERED_BOOSTED_CHILD: p.steered_rule = t5d::mcts::SteeredRule::BoostedChild; break;
+    default: throw std::invalid_argument("steered_rule must be T5D_STEERED_COUNTERFACTUAL or _BOOSTED_CHILD");
+  }
+  p.verification_threads = c->verification_threads;
+  p.sync_job_nodes = c->sync_job_nodes;
+  p.hunt_suggest = boolean(c->hunt_suggest, "hunt_suggest");
+  p.hunt_suggest_boost = c->hunt_suggest_boost;
+  p.ladder_certify = boolean(c->ladder_certify, "ladder_certify");
+  p.boost_cap = c->boost_cap;
+  p.hunt_with_settling = boolean(c->hunt_with_settling, "hunt_with_settling");
   return p;
 }
 
@@ -417,6 +456,35 @@ constexpr LayoutEntry kLayout[] = {
     T5D_SEARCH_AT(t5d_search_params, leave_share),
     T5D_SEARCH_AT(t5d_search_params, flat_k0_max),
     T5D_SEARCH_AT(t5d_search_params, flat_fallback),
+    T5D_SEARCH_AT(t5d_search_params, hunt),
+    T5D_SEARCH_AT(t5d_search_params, hunt_max_boards),
+    T5D_SEARCH_AT(t5d_search_params, hunt_ms),
+    T5D_SEARCH_AT(t5d_search_params, hunt_nodes),
+    T5D_SEARCH_AT(t5d_search_params, hunt_depth),
+    T5D_SEARCH_AT(t5d_search_params, settling),
+    T5D_SEARCH_AT(t5d_search_params, settling_max_boards),
+    T5D_SEARCH_AT(t5d_search_params, settling_ms),
+    T5D_SEARCH_AT(t5d_search_params, settling_nodes),
+    T5D_SEARCH_AT(t5d_search_params, settling_depth),
+    T5D_SEARCH_AT(t5d_search_params, settling_root),
+    T5D_SEARCH_AT(t5d_search_params, settling_max_scans),
+    T5D_SEARCH_AT(t5d_search_params, settling_debounce),
+    T5D_SEARCH_AT(t5d_search_params, asset_map),
+    T5D_SEARCH_AT(t5d_search_params, boost_rule),
+    T5D_SEARCH_AT(t5d_search_params, asset_root_only),
+    T5D_SEARCH_AT(t5d_search_params, asset_flag_margin),
+    T5D_SEARCH_AT(t5d_search_params, asset_boost_scale),
+    T5D_SEARCH_AT(t5d_search_params, asset_max_boost),
+    T5D_SEARCH_AT(t5d_search_params, asset_qsearch_plies),
+    T5D_SEARCH_AT(t5d_search_params, asset_qsearch_nodes),
+    T5D_SEARCH_AT(t5d_search_params, steered_rule),
+    T5D_SEARCH_AT(t5d_search_params, verification_threads),
+    T5D_SEARCH_AT(t5d_search_params, sync_job_nodes),
+    T5D_SEARCH_AT(t5d_search_params, hunt_suggest),
+    T5D_SEARCH_AT(t5d_search_params, hunt_suggest_boost),
+    T5D_SEARCH_AT(t5d_search_params, ladder_certify),
+    T5D_SEARCH_AT(t5d_search_params, boost_cap),
+    T5D_SEARCH_AT(t5d_search_params, hunt_with_settling),
     T5D_SEARCH_AT(t5d_search_params, expand),
 
     T5D_SEARCH_SIZE(t5d_leaf),
@@ -473,6 +541,18 @@ constexpr LayoutEntry kLayout[] = {
     T5D_SEARCH_AT(t5d_search_summary, generated_turns),
     T5D_SEARCH_AT(t5d_search_summary, stopped_generators),
     T5D_SEARCH_AT(t5d_search_summary, fallback_listings),
+    T5D_SEARCH_AT(t5d_search_summary, hunt_runs),
+    T5D_SEARCH_AT(t5d_search_summary, hunt_mates),
+    T5D_SEARCH_AT(t5d_search_summary, settling_runs),
+    T5D_SEARCH_AT(t5d_search_summary, settling_proven),
+    T5D_SEARCH_AT(t5d_search_summary, settling_disproven),
+    T5D_SEARCH_AT(t5d_search_summary, refutations),
+    T5D_SEARCH_AT(t5d_search_summary, ladder_cancelled),
+    T5D_SEARCH_AT(t5d_search_summary, proofs_withheld),
+    T5D_SEARCH_AT(t5d_search_summary, proofs_injected),
+    T5D_SEARCH_AT(t5d_search_summary, pv_changes),
+    T5D_SEARCH_AT(t5d_search_summary, asset_boosted_edges),
+    T5D_SEARCH_AT(t5d_search_summary, steered_visits),
 
     T5D_SEARCH_SIZE(t5d_search_limits),
     T5D_SEARCH_AT(t5d_search_limits, playouts),
@@ -502,6 +582,9 @@ constexpr LayoutEntry kLayout[] = {
     T5D_SEARCH_AT(t5d_root_child, exploration_scale),
     T5D_SEARCH_AT(t5d_root_child, forced_visits),
     T5D_SEARCH_AT(t5d_root_child, steered_visits),
+    T5D_SEARCH_AT(t5d_root_child, prior_unsteered),
+    T5D_SEARCH_AT(t5d_root_child, was_pv),
+    T5D_SEARCH_AT(t5d_root_child, peak_share),
 
     T5D_SEARCH_SIZE(t5d_evaluations),
     T5D_SEARCH_AT(t5d_evaluations, logits),
@@ -637,6 +720,36 @@ void t5d_search_params_default(t5d_search_params* out) {
   out->tree_check = p.tree_check == t5d::mcts::CheckChange::Passed ? T5D_CHECK_PASSED : T5D_CHECK_SUBMISSION;
   out->tree_inherit_value = flag(p.tree_inherit_value);
   out->tree_present = p.tree_present == t5d::mcts::PresentShift::Any ? T5D_PRESENT_ANY : T5D_PRESENT_REWIND;
+  out->hunt = flag(p.hunt);
+  out->hunt_max_boards = p.hunt_max_boards;
+  out->hunt_ms = p.hunt_ms;
+  out->hunt_nodes = p.hunt_nodes;
+  out->hunt_depth = p.hunt_depth;
+  out->settling = flag(p.settling);
+  out->settling_max_boards = p.settling_max_boards;
+  out->settling_ms = p.settling_ms;
+  out->settling_nodes = p.settling_nodes;
+  out->settling_depth = p.settling_depth;
+  out->settling_root = flag(p.settling_root);
+  out->settling_max_scans = p.settling_max_scans;
+  out->settling_debounce = p.settling_debounce;
+  out->asset_map = flag(p.asset_map);
+  out->boost_rule = p.boost_rule == t5d::mcts::BoostRule::Additive ? T5D_BOOST_ADDITIVE : T5D_BOOST_MULTIPLICATIVE;
+  out->asset_root_only = flag(p.asset_root_only);
+  out->asset_flag_margin = p.assets.flag_margin;
+  out->asset_boost_scale = p.assets.boost_scale;
+  out->asset_max_boost = p.assets.max_boost;
+  out->asset_qsearch_plies = p.assets.qsearch_plies;
+  out->asset_qsearch_nodes = p.assets.qsearch_nodes;
+  out->steered_rule = p.steered_rule == t5d::mcts::SteeredRule::Counterfactual ? T5D_STEERED_COUNTERFACTUAL
+                                                                                 : T5D_STEERED_BOOSTED_CHILD;
+  out->verification_threads = p.verification_threads;
+  out->sync_job_nodes = p.sync_job_nodes;
+  out->hunt_suggest = flag(p.hunt_suggest);
+  out->hunt_suggest_boost = p.hunt_suggest_boost;
+  out->ladder_certify = flag(p.ladder_certify);
+  out->boost_cap = p.boost_cap;
+  out->hunt_with_settling = flag(p.hunt_with_settling);
 }
 
 t5d_status t5d_search_new(const t5d_game* game, int32_t turn_start, const t5d_search_params* params,
@@ -660,7 +773,11 @@ t5d_status t5d_search_new_sharing(const t5d_search* donor, const t5d_game* game,
     if (donor == nullptr || game == nullptr) throw std::invalid_argument("donor or game is NULL");
     const int moves = root_moves_made(*game, turn_start);
     const SearchParams p = params_from(params);
-    *out = new t5d_search(Search(t5d::capi_internal::game_state(*game), p, moves, donor->search.shared_cache()));
+    // Stage E10: the game's ladder carried too, where these parameters want one.
+    std::shared_ptr<t5d::mcts::VerificationLadder> ladder;
+    if (t5d::mcts::ladder_wanted(p)) ladder = donor->search.shared_ladder();
+    *out = new t5d_search(
+        Search(t5d::capi_internal::game_state(*game), p, moves, donor->search.shared_cache(), std::move(ladder)));
     return T5D_OK;
   });
 }
@@ -879,6 +996,18 @@ t5d_status t5d_search_info(const t5d_search* search, t5d_search_summary* out) {
     out->generated_turns = st.generated_turns;
     out->stopped_generators = st.stopped_generators;
     out->fallback_listings = st.fallback_listings;
+    out->hunt_runs = st.hunt_runs;
+    out->hunt_mates = st.hunt_mates;
+    out->settling_runs = st.settling_runs;
+    out->settling_proven = st.settling_proven;
+    out->settling_disproven = st.settling_disproven;
+    out->refutations = st.refutations;
+    out->ladder_cancelled = st.ladder_cancelled;
+    out->proofs_withheld = st.proofs_withheld;
+    out->proofs_injected = st.proofs_injected;
+    out->pv_changes = st.pv_changes;
+    out->asset_boosted_edges = st.asset_boosted_edges;
+    out->steered_visits = st.steered_visits;
     return T5D_OK;
   });
 }
@@ -917,6 +1046,9 @@ t5d_status t5d_search_child(const t5d_search* search, size_t index, t5d_root_chi
     out->exploration_scale = c.exploration_scale;
     out->forced_visits = c.forced_visits;
     out->steered_visits = c.steered_visits;
+    out->prior_unsteered = c.prior_unsteered;
+    out->was_pv = flag(c.was_pv);
+    out->peak_share = c.peak_share;
     const t5d::Multiverse& mv = s.root_state().multiverse();
     for (std::size_t i = 0; i < c.moves.size() && i < capacity; ++i) moves[i] = record_of(c.moves[i], mv);
     return T5D_OK;

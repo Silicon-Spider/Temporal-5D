@@ -51,6 +51,7 @@ section 15.3 measurement).
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -137,6 +138,19 @@ class PlayConfig:
     #: evaluators must deliver it (``policy="optimistic"``); self-play refuses it, and so does the
     #: flat form (D9's head has no leave logit; issue 242(h)).
     optimistic: bool = False
+    #: Stage E10's verification ladder (the engine's, through ``t5d_search_params``; on by default
+    #: in 6b''s ranges - Hunt under 100 boards, the settling scans under 50 - and the asset map's
+    #: boosts); a game's fresh searches share it as they share the cache. Its proofs never change
+    #: play from Python: the proof channel stays off (H41).
+    hunt: bool = True
+    settling: bool = True
+    asset_map: bool = True
+    hunt_ms: float = 50.0
+    settling_ms: float = 50.0
+    verification_threads: int = 5
+    #: Stage E10, H44: record each decision for the offline audit lane (``GameResult.decision_log``,
+    #: written by ``decision_log_lines`` as the engine's t5d-audit reads it).
+    decision_log: bool = False
 
     def validate(self) -> None:
         if self.split not in SPLITS:
@@ -149,6 +163,8 @@ class PlayConfig:
             raise ValueError(FLAT_OPTIMISTIC)
         if self.playouts < 1 or self.batch_size < 1 or self.max_actions < 1:
             raise ValueError("playouts, batch_size and max_actions must be positive")
+        if not (self.hunt_ms > 0 and self.settling_ms > 0 and 1 <= self.verification_threads <= 256):
+            raise ValueError("the ladder's budgets positive, its threads 1 to 256")
 
 
 @dataclass
@@ -176,6 +192,10 @@ class GameResult:
     reroot_fallbacks: int = 0
     final_boards: int = 0
     final_fingerprint: str = ""
+    #: Stage E10, H44 (``PlayConfig.decision_log``): each decision - its action and index, the
+    #: action's moves before it, the root's board count, visits and value, its children and the
+    #: child chosen (``decision_log_lines``).
+    decision_log: list[dict] = field(default_factory=list)
 
     @property
     def result(self) -> str:
@@ -316,6 +336,12 @@ def _decision_params(game: Game, cfg: PlayConfig, relations: int, *, seed: int, 
         turn_cap_turns=cfg.cap_turns,
         turn_cap_boards=cfg.cap_boards,
         expand=(8, "all", relations),
+        hunt=int(cfg.hunt),
+        settling=int(cfg.settling),
+        asset_map=int(cfg.asset_map),
+        hunt_ms=float(cfg.hunt_ms),
+        settling_ms=float(cfg.settling_ms),
+        verification_threads=int(cfg.verification_threads),
     )
 
 
@@ -386,6 +412,8 @@ def play_game(evaluators: Evaluator | Sequence[Evaluator], cfg: PlayConfig, *, n
                     search, evaluator, playouts=cfg.playouts, batch_size=cfg.batch_size, self_play=cfg.mode != "match", **regs
                 )
                 pick = _choose(search, cfg, res, stats, evaluator, regs, rng)
+                if cfg.decision_log:
+                    res.decision_log.append(_decision_entry(game, search, pick, len(res.actions), res.decisions, action, start.even))
                 after = search.info()
                 res.decisions += 1
                 res.playouts += after.playouts - before.playouts
@@ -449,6 +477,116 @@ def play_game(evaluators: Evaluator | Sequence[Evaluator], cfg: PlayConfig, *, n
         game.close()
     res.seconds = time.perf_counter() - t0
     return res
+
+
+#: The audit lane's log format (the engine's ``tools/audit.hpp``): JSONL "t5d-decisions" version 1.
+DECISIONS_FORMAT, DECISIONS_VERSION = "t5d-decisions", 1
+
+
+def _decision_entry(game: Game, search: Search, pick: int, action: int, decision: int, prefix, even: bool) -> dict:
+    info = search.info()
+    children = []
+    for c in search.children():
+        children.append(
+            {
+                "step": {"moves": [m.text(even) for m in c.moves], "submit": bool(c.submit)},
+                "visits": int(c.visits),
+                "q": float(c.q),
+                "was_pv": bool(c.was_pv),
+                "peak_share": float(c.peak_share),
+            }
+        )
+    return {
+        "action": int(action),
+        "decision": int(decision),
+        "prefix": [m.text(even) for m in prefix],
+        "boards": len(game.snapshot().boards),
+        "root_visits": int(info.root_visits),
+        "root_q": float(info.root_q),
+        "children": children,
+        "chosen": int(pick),
+    }
+
+
+def decision_log_lines(res: GameResult, *, demotion_share: float = 0.3) -> list[str]:
+    """The game's decisions as the engine's offline audit lane reads them (``t5d-audit``; register
+    H44): a "game" line - its start (the variant, or the custom start's 5DFEN boards) and actions -
+    then an "event" line per final move (the action played, at the decision completing it) and per
+    demotion (a child that was the most visited, or held ``demotion_share`` of the root's visits -
+    the placeholder the engine's writer uses - and was not chosen). PV changes are not written: the
+    C API exposes a root's PV-change list to no binding (the engine's own writer, t5d-play's
+    ``--decision-log``, writes them; build-log spec issue 195). The game's id: the record's
+    SHA-256, its first 16 hex digits."""
+    cfg = res.config
+    if not res.record:
+        raise ValueError("the game has no record yet")
+    record = hashlib.sha256(res.record.encode("utf-8")).hexdigest()[:16]
+    game = Game.variant(cfg.variant) if cfg.start_fen is None else Game.from_fen(list(cfg.start_fen))
+    try:
+        start = game.info()
+    finally:
+        game.close()
+    head = {"format": DECISIONS_FORMAT, "version": DECISIONS_VERSION}
+    actions = [[m.text(start.even) for m in a] for a in res.actions]
+    lines = [
+        json.dumps(
+            head
+            | {
+                "kind": "game",
+                "record": record,
+                "variant": cfg.variant if cfg.start_fen is None else "custom",
+                "start": [] if cfg.start_fen is None else list(cfg.start_fen),
+                "width": 0 if cfg.start_fen is None else int(start.width),
+                "height": 0 if cfg.start_fen is None else int(start.height),
+                "rules": int(start.rules),
+                "split": cfg.split,
+                "actions": actions,
+            }
+        )
+    ]
+    none = {"moves": [], "submit": False}
+    for d in res.decision_log:
+        if d["action"] >= len(actions):
+            continue  # the game stopped during the action
+        base = {
+            "kind": "event",
+            "record": record,
+            "action": d["action"],
+            "decision": d["decision"],
+            "prefix": d["prefix"],
+            "from": none,
+            "boards": d["boards"],
+            "from_visits": 0,
+            "from_q": 0.0,
+            "root_visits": d["root_visits"],
+            "root_q": d["root_q"],
+        }
+        for i, c in enumerate(d["children"]):
+            if i == d["chosen"] or not (c["was_pv"] or c["peak_share"] >= demotion_share):
+                continue
+            lines.append(
+                json.dumps(
+                    head
+                    | base
+                    | {"category": "demotion", "step": c["step"], "visits": c["visits"], "q": c["q"], "peak_share": c["peak_share"]}
+                )
+            )
+        chosen = d["children"][d["chosen"]]
+        if cfg.split == "flat" or chosen["step"]["submit"]:
+            lines.append(
+                json.dumps(
+                    head
+                    | base
+                    | {
+                        "category": "final",
+                        "step": {"moves": actions[d["action"]], "submit": False},
+                        "visits": chosen["visits"],
+                        "q": chosen["q"],
+                        "peak_share": chosen["peak_share"],
+                    }
+                )
+            )
+    return lines
 
 
 def _choose(search: Search, cfg: PlayConfig, res: GameResult, stats, evaluator, regs, rng) -> int:
@@ -654,6 +792,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", type=Path, help="write each record here (a directory)")
     parser.add_argument("--no-replay", action="store_true", help="do not replay the records through t5d-gate")
     parser.add_argument("--optimistic", action="store_true", help="match play: both sides search with D9's optimistic policy")
+    parser.add_argument("--no-hunt", action="store_true", help="stage E10: no Hunt at the roots (on under 100 boards)")
+    parser.add_argument("--no-settling", action="store_true", help="stage E10: no settling scans (on under 50 boards)")
+    parser.add_argument("--no-assets", action="store_true", help="stage E10: no asset-map boosts")
+    parser.add_argument("--hunt-ms", type=float, default=50.0, help="Hunt's budget per question (6b'': 50 ms)")
+    parser.add_argument("--settling-ms", type=float, default=50.0, help="each settling scan's budget (50 ms)")
+    parser.add_argument("--verification-threads", type=int, default=5, help="the provers' threads (M13: 5)")
+    parser.add_argument("--decision-log", type=Path, help="stage E10, H44: write every game's decisions here for t5d-audit")
     args = parser.parse_args(argv)
     if args.optimistic and (args.mode or ["self", "match"]) != ["match"]:
         parser.error("--optimistic is match play only (register D9): add --mode match alone")
@@ -685,6 +830,13 @@ def main(argv: list[str] | None = None) -> int:
                         cap_boards=args.cap_boards,
                         seed=args.seed + 101 * g,
                         optimistic=args.optimistic,
+                        hunt=not args.no_hunt,
+                        settling=not args.no_settling,
+                        asset_map=not args.no_assets,
+                        hunt_ms=args.hunt_ms,
+                        settling_ms=args.settling_ms,
+                        verification_threads=args.verification_threads,
+                        decision_log=args.decision_log is not None,
                     )
                     with torch.no_grad():
                         res = play_game(evaluators if mode == "match" else evaluators[0], cfg, net_cfg=net_cfg)
@@ -698,6 +850,9 @@ def main(argv: list[str] | None = None) -> int:
                         (args.out / name).write_text(res.record, encoding="utf-8")
                         s["record"] = name
                     summaries.append(s)
+                    if args.decision_log is not None:
+                        with args.decision_log.open("a", encoding="utf-8", newline="\n") as f:
+                            f.writelines(line + "\n" for line in decision_log_lines(res))
                     print(json.dumps(s), flush=True)
     conditions = {
         "net": args.net,

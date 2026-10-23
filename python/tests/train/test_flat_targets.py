@@ -29,6 +29,7 @@ from t5d.train.targets import (
     prune_counts,
     pruned_visits,
     read_targets,
+    steered_visits,
     target_differences,
     write_targets,
 )
@@ -220,6 +221,38 @@ def test_an_option_is_read_as_the_turns_that_take_it():
     d = replace(d, children=replace(d.children, q=np.zeros(6), prior=prior, prior_noise_free=prior))
     got = _as_dict(build_targets(_game([d]), cfg).flat[0])
     assert [got[(0, k)] for k in (0, 1, 3, LEAVE)] == pytest.approx([40 / 61, 6 / 61, 12 / 61, 3 / 61], abs=1e-15)
+
+
+def test_the_per_board_pruning_unsteers_each_turns_noised_prior():
+    """E10 composed with the flat target (the merge of main 62ff24d into lane/search): steered visits
+    are excluded per turn before marginalising (``steered_visits``), and the per-board replica sums
+    each turn's ``replica_prior`` - the search's prior less (1 - eps) x the turn's boost, eps from the
+    record - so a steered, noised root prunes each board exactly as the same root unsteered with the
+    same noise. Subtracting the whole boost (no noise share) prunes board 0's c1 differently."""
+    eps = 0.25
+    unsteered = np.array([0.5] + [0.1] * 5)
+    boost = np.array([-0.3, 0.3, 0.0, 0.0, 0.0, 0.0])  # signed: the unboosted drained
+    mix = eps * np.full(6, 1.0 / 6)
+    nf = unsteered + boost
+    visits = [40, 12, 4, 3, 2, 1]
+    steered = [0, 5, 0, 0, 0, 0]  # turn 1's boost steered 5 of its visits
+    d = _flat_decision(visits=visits, steered=steered)
+    ch = replace(d.children, q=np.zeros(6), prior=(1 - eps) * nf + mix, prior_noise_free=nf, boost=boost)
+    d = replace(d, children=ch, root_noise=True)
+    plain = _flat_decision(visits=[40, 7, 4, 3, 2, 1])  # the steered visits gone, nothing boosted
+    plain = replace(plain, children=replace(plain.children, q=np.zeros(6), prior=(1 - eps) * unsteered + mix), root_noise=True)
+    cfg = TargetConfig(deblunder=False)
+    game = _game([d])
+    game.header["search"] = {"full": {"dirichlet_epsilon": eps}}
+    got = build_targets(game, cfg).flat[0]
+    assert np.array_equal(got, flat_policy_target(d, steered_visits(d, cfg), True, prune=cfg, noise_keep=1 - eps))
+    np.testing.assert_allclose(got, build_targets(_game([plain]), cfg).flat[0], rtol=0, atol=1e-15)
+    whole = flat_policy_target(d, steered_visits(d, cfg), True, prune=cfg)  # noise_keep 1: the whole boost out
+    assert not np.allclose(whole[:, 2], got[:, 2])
+    # the turn arm reads the same unsteered prior through pruned_visits
+    turn = build_targets(game, replace(cfg, flat_pruning="turn"))
+    assert np.array_equal(turn.pruned[0], pruned_visits(d, cfg, noise_keep=1 - eps))
+    np.testing.assert_allclose(turn.flat[0], build_targets(_game([plain]), replace(cfg, flat_pruning="turn")).flat[0], rtol=0, atol=1e-15)
 
 
 def _spread_decision():
