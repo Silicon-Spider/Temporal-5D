@@ -53,10 +53,12 @@
 #include <cstdint>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "t5d/certificate.hpp"
 #include "t5d/mcts.hpp"
+#include "t5d/move.hpp"
 #include "t5d/prover.hpp"
 #include "t5d/state.hpp"
 
@@ -91,6 +93,35 @@ SolverClaim solver_claim(const mcts::Search& search, mcts::NodeId id);
 /// first such, in edge order); its child is the next node of the proof line.
 /// Throws std::logic_error if `id` is not proven won.
 std::size_t winning_edge(const mcts::Search& search, mcts::NodeId id);
+
+/// One root-to-mate line of a proof tree (MT-02's records).
+struct ProofLine {
+  /// The attacker's proving action, a defence, ..., the attacker's mating
+  /// action; each action's moves in a playable order.
+  std::vector<std::vector<Move>> actions;
+  /// At each defender turn start along the line: its action's index in
+  /// `actions` (the defender plays actions[i]), and the defences the proof
+  /// tree holds there - every legal one, distinct by successor state.
+  std::vector<std::pair<std::size_t, std::size_t>> defences;
+};
+
+/// The proof tree under a root proven won, as root-to-mate lines: at each of
+/// the attacker's turns the winning action (winning_edge's, through the
+/// mid-action nodes of the ply split and the tree form, or the flat form's
+/// whole turn), at each of the defender's every defence the tree holds
+/// (distinct by successor). Checked as it is read, each failure an error:
+/// every defender turn start's defences are E4's - list_legal_actions,
+/// exhaustive, its successors distinct by position: the same set - and every
+/// line, replayed from the root through the state machine (each move
+/// pseudo-legal, each submission legal: T5, C4), ends in E4's checkmate.
+struct ProofTree {
+  std::vector<ProofLine> lines;
+  bool truncated = false;           // stopped at max_lines
+  std::size_t defender_turns = 0;   // defender turn starts checked against E4
+  std::size_t defences = 0;         // ... their defences, summed
+  std::vector<std::string> errors;
+};
+ProofTree proof_tree(const mcts::Search& search, mcts::NodeId root, std::size_t max_lines = 256);
 
 struct DfpnCheckOptions {
   /// df-pn's budget per question (one thread: deterministic, H15).

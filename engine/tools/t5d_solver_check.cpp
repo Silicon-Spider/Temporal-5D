@@ -65,6 +65,9 @@ struct Options {
   std::vector<TurnSplit> splits;
   std::uint64_t playouts = 400;
   std::uint64_t mate_nodes = 2'000'000;
+  /// 0: exact move legality; else exact within this many nodes per
+  /// classification (LegalityOptions::nodes; build-log issue 406).
+  std::uint64_t legality_nodes = 0;
   t5d::tools::DfpnCheckOptions dfpn;
   bool per_position = false;
 };
@@ -88,6 +91,8 @@ struct Options {
       "  --split ply|tree|flat      a D2 arm (repeatable; default all three)\n"
       "  --playouts N (400)         each search's playouts\n"
       "  --mate-nodes N (2000000)   E4's budget at each turn start the search meets\n"
+      "  --legality-nodes N (0)     move legality exact within N nodes per classification (0: no\n"
+      "                             budget); a move left unknown proves nothing\n"
       " df-pn (the literal class, one thread)\n"
       "  --dfpn-nodes N (200000)    each question's node budget\n"
       "  --max-depth D (9)          deeper claims are counted, not asked\n"
@@ -149,6 +154,8 @@ Options parse(int argc, char** argv) {
       o.playouts = std::max<std::uint64_t>(1, number(value()));
     } else if (a == "--mate-nodes") {
       o.mate_nodes = number(value());
+    } else if (a == "--legality-nodes") {
+      o.legality_nodes = number(value());
     } else if (a == "--dfpn-nodes") {
       o.dfpn.nodes = number(value());
     } else if (a == "--max-depth") {
@@ -213,9 +220,11 @@ int main(int argc, char** argv) {
   std::printf("CONDITIONS rules=%s records=%zu roots=%zu (duplicates %zu) every=%d splits=",
               t5d::tools::ruleset_text(o.rules).c_str(), refs.size(), roots.roots.size(), roots.duplicates, o.every);
   for (std::size_t i = 0; i < o.splits.size(); ++i) std::printf("%s%s", i ? "," : "", split_name(o.splits[i]));
-  std::printf(" playouts=%llu mate_nodes=%llu evaluator=uniform legality=exact proof_channel=on(offline, no store) "
+  const std::string legality =
+      o.legality_nodes == 0 ? std::string("exact") : "exact within " + std::to_string(o.legality_nodes) + " nodes";
+  std::printf(" playouts=%llu mate_nodes=%llu evaluator=uniform legality=%s proof_channel=on(offline, no store) "
               "dfpn=literal,1 thread,nodes=%llu,max_depth=%d,draw_depth=%d certify=%s\n",
-              static_cast<unsigned long long>(o.playouts), static_cast<unsigned long long>(o.mate_nodes),
+              static_cast<unsigned long long>(o.playouts), static_cast<unsigned long long>(o.mate_nodes), legality.c_str(),
               static_cast<unsigned long long>(o.dfpn.nodes), o.dfpn.max_depth, o.dfpn.draw_depth,
               o.dfpn.certify ? "E4" : "off");
   for (const std::string& note : roots.notes) std::printf("RECORD %s\n", note.c_str());
@@ -253,7 +262,8 @@ int main(int argc, char** argv) {
       t5d::mcts::SearchParams p;
       p.split = split;
       p.proof_channel = true;  // offline, the tool's own search: no store (H23, H41)
-      p.legality = t5d::LegalityOptions::exact();
+      p.legality = o.legality_nodes == 0 ? t5d::LegalityOptions::exact() : t5d::LegalityOptions::nodes(o.legality_nodes);
+      p.verify_legality = p.legality;
       p.mate_nodes = o.mate_nodes;
       p.expand.square_features = t5d::SquareFeatures::None;  // the uniform evaluator reads none
       t5d::tools::DfpnTally tally;

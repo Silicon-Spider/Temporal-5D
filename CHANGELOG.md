@@ -10,6 +10,52 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-23 - MT-02's engine side: the solver's proof lines as 5dpgn records (t5d-proof-records), replayed through the gate adapter
+
+H41's cross-check against the oracles' mate verdicts can reach the solver only through the
+gate (engine -> records -> harness, never back). The engine side, built:
+
+- **`proof_tree`** (`engine/tools/solver_proofs.{hpp,cpp}`): under a root the search proved
+  won, the winning action at each attacker turn (through the mid-action nodes, or the flat
+  form's whole turn) and every defence at each defender turn - distinct by successor,
+  checked against E4's exhaustive listing (the same set) - as root-to-mate lines, each
+  replayed through the state machine to E4's checkmate; any failure an error.
+- **`t5d-proof-records`** (`engine/tools/t5d_proof_records.cpp`): at the turn starts of the
+  engine's own records (constructed positions as custom set-ups, `t5d-play` games), the
+  search offline with the proof channel on and no store; one record per proof line through
+  `play_record` from the input's start (custom set-up or named variant) and its actions
+  before the root, headers `ProofLine`, `ProofRoot`, `ProofClaim`, `ProofSplit`,
+  `ProofDefences`, `ProofRules`, `ProofFrom` (a content id, never a path); `FILES.tsv` with
+  each record's SHA-256 and size. Reads nothing but its arguments; writes to `--out` only.
+- **`--legality-nodes N`** on it and on `t5d-solver-check`: the search's move legality exact
+  within a node budget (a move left unknown proves nothing) - exact legality alone took
+  minutes a search on a played game's roots (build-log issue 406).
+- **Test** (`engine/tests/test_proof_tools.cpp`,
+  `proof_records_exe_lines_replay_through_the_gate_to_their_mates`): the constructed mates
+  and a random game under all three D2 arms, a `t5d-play` game of Very Small - Open under the
+  ply split: 33 records (15 from the named variant), each in `FILES.tsv` with its size and
+  SHA-256, each replayed by `t5d-gate` to its checkmate with no earlier game end; at the 20
+  defender turn starts, the proof tree's defences are E4's distinct successors and the
+  gate's `legal_actions` E4's count.
+- Not done here, by the brief: adding the records to `oracles/corpus/`, `verify` and
+  re-recording the golden files (the harness side, a separate reviewed change on a quiet
+  machine); whether engine-generated lines may enter the pinned corpus is put to the user
+  (build-log issue 405).
+- `engine/README.md` ("t5d-proof-records"; the targets table); `docs/BUILD_LOG.md` (H41;
+  issues 404, 405; edit 302; the Lazy SMP timing test log).
+- Checks on the final tree (2026-10-24, a shared machine at 94-100% load): `py engine/build.py
+  --werror --test` "t5d-tests: 649 passed, 0 failed, 649 run"; the Lazy SMP timing test x3
+  (1 thread 291/292/292, 5 threads 304/302/310: pass); from `python/` `ruff check .` "All
+  checks passed!", `ruff format --check .` "100 files already formatted",
+  `T5D_REQUIRE_ENGINE=1 python -m pytest -q` "1558 passed, 1 skipped"; `py oracles/harness.py
+  verify` every check ok (17 `proof-channel-vacuous` notes, H48's, unchanged); `gate --tier
+  commit` "engine differential: SMOKE TEST - PASSED" (baseline: 41 records compared, 0
+  declined), "proof channel: DISABLED".
+
+Spec: §11.1 (the cross-check against the oracles' mate verdicts) and register H41 - proposed
+edit 302; H23, H27, H33, H48 (the corpus and the gate) - issue 405, put to the user. The
+proof channel stays off; no proof enters a store (H23, H41).
+
 ### 2026-10-23 - MT-03: the proof-export invariant under TT churn (6f, H19) for the prover, its threads and Hunt
 
 §13.1's 6f asks for H19's invariant - proofs export at once, the TT never holds the sole copy

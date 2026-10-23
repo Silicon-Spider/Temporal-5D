@@ -216,6 +216,177 @@ std::string DfpnTally::summary() const {
   return buf;
 }
 
+namespace {
+
+// The attacker's proving action from a node proven won: winning edges through
+// its own mid-action nodes to the edge that hands the turn over (a submit
+// edge, or the flat form's whole turn). Returns the moves and the node after.
+std::pair<std::vector<Move>, NodeId> proving_action(const Search& s, Deriver& d, NodeId id) {
+  std::vector<Move> moves;
+  NodeId at = id;
+  for (;;) {
+    const NodeView n = s.node(at);
+    const EdgeView e = s.edge(at, d.winning_edge(at));
+    if (!e.action.empty()) {  // the flat form: a whole turn
+      moves.assign(e.action.begin(), e.action.end());
+      return {moves, e.child};
+    }
+    if (e.submit) return {moves, e.child};
+    moves.push_back(*e.move);
+    if (s.node(e.child).mover != n.mover) return {moves, e.child};
+    at = e.child;
+  }
+}
+
+// Every defence the tree holds at a defender's node proven lost: each path of
+// its own moves to an edge that hands the turn over. Errors: a child not
+// made (the proof would rest on a child the search never saw).
+void defence_paths(const Search& s, NodeId id, std::vector<Move>& path,
+                   std::vector<std::pair<std::vector<Move>, NodeId>>& out, std::vector<std::string>& errors) {
+  const NodeView n = s.node(id);
+  for (std::size_t i = 0; i < n.edge_count; ++i) {
+    const EdgeView e = s.edge(id, i);
+    if (e.pruned) continue;
+    if (e.child == kNoNode) {
+      errors.push_back("a defender's node proven lost holds an edge with no child");
+      continue;
+    }
+    const NodeView c = s.node(e.child);
+    if (c.dead_end) continue;
+    if (!e.action.empty()) {
+      out.emplace_back(std::vector<Move>(e.action.begin(), e.action.end()), e.child);
+    } else if (e.submit || c.mover != n.mover) {
+      std::vector<Move> moves = path;
+      if (!e.submit) moves.push_back(*e.move);
+      out.emplace_back(std::move(moves), e.child);
+    } else {
+      path.push_back(*e.move);
+      defence_paths(s, e.child, path, out, errors);
+      path.pop_back();
+    }
+  }
+}
+
+class TreeReader {
+ public:
+  TreeReader(const Search& s, std::size_t max_lines, ProofTree& out) : s_(s), d_(s), max_(max_lines), out_(out) {}
+
+  void attacker(NodeId id) {
+    if (out_.lines.size() >= max_) {
+      out_.truncated = true;
+      return;
+    }
+    auto [moves, next] = proving_action(s_, d_, id);
+    line_.actions.push_back(std::move(moves));
+    const NodeView d = s_.node(next);
+    if (d.terminal == Terminal::Checkmate) {
+      out_.lines.push_back(line_);
+    } else if (d.lo != -1 || d.hi != -1 || !d.turn_start) {
+      out_.errors.push_back("the proving action reaches a node not proven lost");
+    } else {
+      defender(next);
+    }
+    line_.actions.pop_back();
+  }
+
+ private:
+  void defender(NodeId id) {
+    std::vector<Move> path;
+    std::vector<std::pair<std::vector<Move>, NodeId>> paths;
+    defence_paths(s_, id, path, paths, out_.errors);
+    // Distinct by successor state: the first path to each.
+    std::vector<std::pair<std::vector<Move>, NodeId>> distinct;
+    for (auto& p : paths) {
+      const GameState& st = *s_.node(p.second).state;
+      const bool seen = std::any_of(distinct.begin(), distinct.end(), [&](const auto& q) {
+        return same_position(*s_.node(q.second).state, st);
+      });
+      if (!seen) distinct.push_back(std::move(p));
+    }
+    // E4's listing: the same successors.
+    const GameState& here = *s_.node(id).state;
+    ++out_.defender_turns;
+    out_.defences += distinct.size();
+    const ActionList list = list_legal_actions(here, 100000, Detector::Hypercuboid, SearchBudget::nodes(20'000'000));
+    if (!list.stats.exhaustive || list.reached_cap) {
+      out_.errors.push_back("E4 could not list the defences at " + position_text(here));
+      return;
+    }
+    std::vector<const GameState*> e4;
+    for (const LegalAction& a : list.actions) {
+      if (std::none_of(e4.begin(), e4.end(), [&](const GameState* g) { return same_position(*g, a.result); })) {
+        e4.push_back(&a.result);
+      }
+    }
+    bool same = e4.size() == distinct.size();
+    for (const auto& p : distinct) {
+      const GameState& st = *s_.node(p.second).state;
+      same = same && std::any_of(e4.begin(), e4.end(), [&](const GameState* g) { return same_position(*g, st); });
+    }
+    if (!same) {
+      out_.errors.push_back("the proof tree holds " + std::to_string(distinct.size()) + " defences, E4 lists " +
+                            std::to_string(e4.size()) + " successors, at " + position_text(here));
+      return;
+    }
+    line_.defences.emplace_back(line_.actions.size(), distinct.size());
+    for (auto& [moves, child] : distinct) {
+      if (out_.lines.size() >= max_) {
+        out_.truncated = true;
+        break;
+      }
+      const NodeView a = s_.node(child);
+      if (a.lo != 1 || a.hi != 1) {
+        out_.errors.push_back("a defence reaches a node not proven won");
+        continue;
+      }
+      line_.actions.push_back(moves);
+      attacker(child);
+      line_.actions.pop_back();
+    }
+    line_.defences.pop_back();
+  }
+
+  const Search& s_;
+  Deriver d_;
+  std::size_t max_;
+  ProofTree& out_;
+  ProofLine line_;
+};
+
+// A line replayed from `root`: each move pseudo-legal where it is made, each
+// submission legal (T5, C4); the last position E4's checkmate.
+std::string replay_error(const GameState& root, const ProofLine& line) {
+  GameState s = root;
+  for (std::size_t i = 0; i < line.actions.size(); ++i) {
+    for (const Move& m : line.actions[i]) {
+      if (!s.may_move() || !is_pseudo_legal(s, m)) return "action " + std::to_string(i) + " has a move not playable";
+      s.apply(m);
+    }
+    if (!s.obligations_met() || !royals_safe(s)) return "action " + std::to_string(i) + " cannot be submitted";
+    s.submit();
+  }
+  SearchBudget b = SearchBudget::nodes(20'000'000);
+  if (detect_mate(s, Detector::Hypercuboid, b).verdict != Outcome::Checkmate) return "the line does not end in E4's checkmate";
+  return {};
+}
+
+}  // namespace
+
+ProofTree proof_tree(const Search& search, NodeId root, std::size_t max_lines) {
+  ProofTree out;
+  const NodeView r = search.node(root);
+  if (r.lo != 1 || r.hi != 1 || !r.turn_start) {
+    out.errors.push_back("the root is not a turn start proven won");
+    return out;
+  }
+  TreeReader(search, max_lines, out).attacker(root);
+  for (const ProofLine& l : out.lines) {
+    const std::string e = replay_error(*r.state, l);
+    if (!e.empty()) out.errors.push_back(e + " at " + position_text(*r.state));
+  }
+  return out;
+}
+
 DfpnChecker::DfpnChecker(const DfpnCheckOptions& options) : options_(options) {}
 
 DfpnChecker::Answer DfpnChecker::ask(const GameState& state, int depth, DfpnTally& tally) {

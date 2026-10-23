@@ -158,6 +158,7 @@ Targets (all in `build/engine`):
 | `t5d-play` | the engine plays itself and prints the 5dpgn record (see "Stage E6a") |
 | `t5d-tree-count` | D2's tree form against the ply split on recorded games' turn starts: evaluation counts (`tools/t5d_tree_count.cpp`; docs/MEASUREMENTS.md) |
 | `t5d-solver-check` | the search's solver against df-pn at the turn starts of records, per board-count range (register H41; see "Step 2: H41's cross-checks") |
+| `t5d-proof-records` | the solver's proof lines as 5dpgn records, one per root-to-mate line, for the gate (register H41; see "Step 2: H41's cross-checks") |
 
 Release builds use -O2; every target builds with `-Wall -Wextra -Wpedantic -Wshadow
 -Wconversion -Wsign-conversion`, warning-free (`--werror` makes that binding). On
@@ -3977,15 +3978,15 @@ comparisons.
 ```
 t5d-solver-check [--record-list FILE --record-root DIR] [--every K] [--max-roots N]
     [--min-boards N] [--max-boards N] [--rules ENC | --no-moves-after-shift]
-    [--split ply|tree|flat ...] [--playouts N] [--mate-nodes N] [--dfpn-nodes N]
+    [--split ply|tree|flat ...] [--playouts N] [--mate-nodes N] [--legality-nodes N] [--dfpn-nodes N]
     [--max-depth D] [--draw-depth D] [--no-certify] [--check-positions N]
     [--per-position] RECORD ...
 ```
 
 6b's roots construction (`sixb_roots`: the records' turn starts, distinct, read as 6b read
 them) over the records given; at each root not terminal and not breaking C4, a search per
-arm (default all three) with the proof channel on - offline, no store - exact legality and
-the uniform evaluator; every solved turn start compared as above. One `RANGE` line per
+arm (default all three) with the proof channel on - offline, no store - exact legality (or
+exact within `--legality-nodes`, issue 406) and the uniform evaluator; every solved turn start compared as above. One `RANGE` line per
 board-count range (< 50, 50-99, 100-199, 200+), never pooled; `CONTRADICTION` and
 `CERTIFICATE` lines for findings; exit status 0 clean, 3 findings, 1 unreadable records,
 2 a bad command line. `tests/test_proof_tools.cpp` runs it on records of random play it
@@ -3996,6 +3997,49 @@ search's solver"), but those roots' records are the gate corpus's - under
 `oracles/third_party/` through `oracles/corpus/manifest.toml` - and no record list
 outside the oracle tree exists on this machine: that run is not made here (build-log
 issue 401).
+
+### t5d-proof-records (MT-02's engine side)
+
+```
+t5d-proof-records --out DIR [--rules ENC | --no-moves-after-shift] [--every K]
+    [--split ply|tree|flat] [--playouts N] [--mate-nodes N] [--legality-nodes N]
+    [--max-lines N] [--max-records N] RECORD ...
+```
+
+H41's cross-check against the oracles' mate verdicts runs through the gate, one way: the
+engine writes the solver's proof lines as 5dpgn records, the harness compares them - never
+back. At each turn start of the records given (the engine's own: a constructed position as
+a custom set-up with no action, or a game `t5d-play` played from a named variant), a search
+with the proof channel on - offline, no store - exact legality (or within
+`--legality-nodes`, issue 406), the uniform evaluator. Where it proves the root won,
+`proof_tree` (`tools/solver_proofs.hpp`) reads the proof tree: the winning action at each of
+the attacker's turns (through the mid-action nodes of the ply split and the tree form, or
+the flat form's whole turn), every defence at each of the defender's - distinct by
+successor and checked against E4's exhaustive listing, the same set - and replays every line
+to E4's checkmate. One record per root-to-mate line, by `play_record`, from the input's own
+start (its custom 5DFEN set-up or its named variant) through the actions before the root,
+then the line - 5DFEN records no creators or origins, so a mid-game root is never set up
+from its boards. Headers: `ProofLine`, `ProofRoot` (actions before the root), `ProofClaim`,
+`ProofSplit`, `ProofDefences` (`i:n` - after i actions the defender is to move with n
+defences, each E4's), `ProofRules` (non-default rules), `ProofFrom` (the input's content id,
+never its path). `FILES.tsv` lists each record's SHA-256, size and name. Exit status 0
+clean, 3 an error (that root's records not written), 1 unreadable input or unwritable
+output, 2 a bad command line. It reads nothing but its arguments.
+
+The records go to `--out` - a build or scratch directory - never into the gate corpus:
+adding them there (`source = "local"`, licence, notes), `verify` and re-recording the golden
+files on a quiet machine is the harness side, a separate reviewed change, and whether
+engine-generated lines may enter the pinned corpus at all is put to the user (build-log
+issue 405).
+
+`tests/test_proof_tools.cpp`, `proof_records_exe_lines_replay_through_the_gate_to_their_mates`:
+the four constructed mates as custom set-ups and a record of random play under each D2 arm,
+and a `t5d-play` game of Very Small - Open under the ply split (every other turn start): 33
+records (15 from the named variant's game), every one listed in `FILES.tsv` with its size and
+SHA-256, each replayed by `t5d-gate` (full mode, cap 1,000) to its checkmate with no earlier
+position terminal; at each of the 20 defender turn starts the records name, the proof
+tree's defences are E4's distinct successors (`count_legal_successors`) and the gate's
+`legal_actions` E4's count (`count_legal_actions`). About 80 s on a loaded machine.
 
 ### H19 under TT churn (6f; `tests/test_prover.cpp`, `tests/test_hunt.cpp`)
 

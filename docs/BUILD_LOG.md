@@ -847,6 +847,7 @@ threads reach at least one thread's sum (one retry on a shared machine).
 | 2026-10-23 | engine ABI round 3 (B11's pin and check relations, D4's per-square labels; reviewed, 2ed1bc9) | main 9c59cb0 + lane/engine 2ed1bc9, merged tree before the commit | dev-r, 24 logical; the network lane's flat head finishing and the search lane's E10 reviews starting; load 80-88% before, 85-91% after | 32 | 292 / 293 / 293 | 309 / 313 / 307 | none | pass x3; the nightly gate passed in 570 s (Half Reflected and Reversed Royalty gated, as before) |
 | 2026-10-23 | MT-01 (the solver against df-pn; tests and tools only, no scanner or search code changed) | lane/engine 710921a + MT-01, the tree before the commit | dev-r, 24 logical; other lanes and this lane's long twin running; load 99% before, 96% after | 32 | 292 / 292 / 292 | 304 / 303 / 306 | none | pass x3 |
 | 2026-10-23 | MT-03 (H19 under TT churn; prover and Hunt tests only, no scanner, prover or search code changed) | lane/engine 0e8303a + MT-03, the tree before the commit | dev-r, 24 logical; other lanes running; load 94% before, 99% after | 32 | 292 / 293 / 293 | 306 / 305 / 303 | none | pass x3 |
+| 2026-10-23 | MT-02's engine side (t5d-proof-records; tools and tests only, no scanner, prover or search code changed) | lane/engine 7f4096e + MT-02, the tree before the commit | dev-r, 24 logical; other lanes and this lane's pytest running; load 99% before, 94% after | 32 | 291 / 292 / 292 | 304 / 302 / 310 | none | pass x3 |
 
 ## Environment
 
@@ -1600,7 +1601,7 @@ width (M22)", "The CHECKPOINT 8 figures"). Found on the way: the ruling's premis
 | H12 | retired | With the NNUE and the per-node scans |
 | H13 | built (component), not wired | The asset map (E9) as the register now records it: the material estimate, 4 plies and 128 nodes per board, flagged at 300, boost 0.25 × min(1, value/900), every number a placeholder (issue 106). Wiring its boosts into the search's priors was E10's - lost, redone in step 2 (with the steered visits flagged for I2) |
 | H14 | not started (lost with E10) | Restated at CHECKPOINT 6: budgets for the reduced ladder - Hunt, the asset map, the settling scans under 50 boards (Guard offline) - against shared movegen, on M13's five cores. E10's scheduler, redone in step 2 |
-| H41 | built, tested | `SearchParams::proof_channel` (C `proof_channel`, `t5d-play --proof-channel`) - the switch the register now names: propagation of solved status (marking nodes solved, pruning siblings, secure-child selection) and export, off by rule; game ends are scored as results. **The cross-check against df-pn (§15.4, MT-01) - built 2026-10-23 (`lane/engine`)**: `tools/solver_proofs.hpp` derives each solved node's claim (Win(k), Loss(k), Draw) from the solved subtree and holds every solved turn start to df-pn's literal class (1 thread, node budget), every df-pn proof certified by E4 alone; `mcts_solver_agrees_with_df_pn_on_constructed_mates`, `..._under_every_ruleset` and a `long_` twin, under the ply split, the tree form and the flat form (the ply split and flat form as graphs too): no contradiction (issue 400); `t5d-solver-check`, the offline mode, built and tested on engine-written records - not run over 6b's 805 roots, whose records are only under `oracles/` (issue 401). Not yet: the cross-check against the oracles' mate verdicts (MT-02: the engine-side tool, then the harness side) |
+| H41 | built, tested | `SearchParams::proof_channel` (C `proof_channel`, `t5d-play --proof-channel`) - the switch the register now names: propagation of solved status (marking nodes solved, pruning siblings, secure-child selection) and export, off by rule; game ends are scored as results. **The cross-check against df-pn (§15.4, MT-01) - built 2026-10-23 (`lane/engine`)**: `tools/solver_proofs.hpp` derives each solved node's claim (Win(k), Loss(k), Draw) from the solved subtree and holds every solved turn start to df-pn's literal class (1 thread, node budget), every df-pn proof certified by E4 alone; `mcts_solver_agrees_with_df_pn_on_constructed_mates`, `..._under_every_ruleset` and a `long_` twin, under the ply split, the tree form and the flat form (the ply split and flat form as graphs too): no contradiction (issue 400); `t5d-solver-check`, the offline mode, built and tested on engine-written records - not run over 6b's 805 roots, whose records are only under `oracles/` (issue 401). **The oracle cross-check's engine side (MT-02) - built 2026-10-23**: `t5d-proof-records` writes each proof's root-to-mate lines as 5dpgn records (every defence checked against E4's listing, every line replayed to E4's checkmate; custom set-ups or whole games; `FILES.tsv`), tested by replaying its records through `t5d-gate` (issue 404). Not yet: the harness side - the records added to the corpus, `verify`, the golden files re-recorded on a quiet machine - a separate reviewed change after the gate with the engine is redone, and whether engine-written lines may enter the pinned corpus is put to the user (issue 405) |
 | H42 | built, tested; not adopted | Guard (E9): depth 1 completes in 65.1 / 15.8 / 5.2 / 0.0% of roots against 95% (6b″) - adopted in no range; §13: the chosen move goes unguarded. Built and kept (the audit lane's shallow-mate report uses its question offline; the search's re-search hook stays unwired-by-adoption). Its five-thread depth-1 test failed once in CI (run 37146667584): a thread that read the root's proof from a helper's export - its tree empty - was the one reported, so the refutation's line was empty. Fixed in the prover's report (2026-10-17, `lane/engine`): the line of a thread that searched, complete at depth 1; the test pins the race and checks the line's contract at depth 2. What Guard decides is unchanged. Beyond depth 1 the line keeps its contract (it can stop where a node was solved from the store): a certificate holds the attacker's proving actions only, so the line could take the attacker's step past such a node from one but not the defender's longest defence, which needs an enumeration of the defender's actions (the first record of this fix gave another reason - that 6b″ ran Guard without certificates; it ran with them, for its cross-check against E4) |
 | H43 | built, tested; adopted under 100 boards; not wired | (6f, 2026-10-23: Hunt's mates found, lines complete and certified under a 1-entry TT; its prover never writes a disproof - issue 403.) Hunt (E9): 69.0% / 63.6% of the truth's mates under 50 / 50-99 boards (6b″) - adopted there; 35.0% at 100-199 and 0 of 1 at 200+ - not adopted; §13: proofs there come only from the search's solver. Export refused until H41/H23. Not wired into the search on main: E10 was lost; redone in step 2 (Hunt at the root under 100 boards, the measured configuration) |
 | H44 | built in part | The audit lane's tools: the certificate checker (E4 alone) and `t5d-hunt-truth` (E9); the decision sampler, the offline proof runner and the per-range report were E10's - lost, redone in step 2 (curriculum hooks as interfaces only) |
@@ -4528,7 +4529,10 @@ up); its proposed edits take 300-329.**
     minutes for 150 searches (turn-start mate checks and expansions). Exact means no
     budget, so H37 is kept - the cost is the issue. The long twin now classifies within
     2,000,000 nodes per classification (`LegalityOptions::nodes`; a move left unknown proves
-    nothing, the solver's rule (e)); the default tests keep exact legality. For the search
+    nothing, the solver's rule (e)); the default tests keep exact legality. MT-02 met it again
+    under the default rules: `t5d-proof-records` on a `t5d-play` game of Very Small - Open
+    took minutes a search on its mid-game roots (gdb: the same classification), so both tools
+    take `--legality-nodes N` and the proof-records test uses 200,000. For the search
     lane / E5a: whether the flat form needs the per-move classification at all at its
     leaves (its children are whole turns from the generator), and the realisation's cost
     under Q3 - information for §15.3's legality row (measured under the default rules
@@ -4560,6 +4564,37 @@ up); its proposed edits take 300-329.**
     store and in Hunt's result, never only in the TT; the permanent store's export stays
     refused (`HuntOptions::export_proofs`, tested). If the register means more for Hunt
     before the sign-off, the documents do not say what.
+
+404. **MT-02's engine side: the readings its records needed** (§11.1 "against the oracles'
+    mate verdicts where they exist"; register H41, H23; the brief's MT-02). Built
+    (`t5d-proof-records`, 2026-10-23): (a) **a defence** is a distinct successor state - two
+    creation orders reaching one position are one defence, as the search's children are
+    (`TurnUnit::Successors`) - so `ProofDefences` counts successors and the test holds it to
+    E4's `count_legal_successors`, while the gate compares `legal_actions` (E4's
+    `count_legal_actions`, actions in creation order); where the two differ the record says
+    so only through the gate's own count; (b) **the line's defence** at each defender turn is
+    every defence in turn (one record per root-to-mate line, at most `--max-lines` per root):
+    the oracles see each line's positions, not the tree; (c) **the roots** are every K-th
+    turn start of the engine's own records - constructed positions as custom set-ups, and
+    games `t5d-play` played - never third-party record text; (d) a mid-game root's record is
+    the whole game from its start; (e) move legality exact, or exact within a node budget
+    (`--legality-nodes`; issue 406) - a move left unknown proves nothing. What the oracles can
+    check, as the brief says: the leaves (checkmate at each line's end), every position's
+    check status, and through `legal_actions` how complete each defence listing is; the
+    forcing property itself rests on the E4-only replay and listing the tool does.
+405. **May the engine's own proof lines enter the pinned gate corpus? - for the user**
+    (`oracles/corpus/manifest.toml`: "records of our own go under oracles/corpus/records/
+    with source = \"local\""; H27, H33, H48; register H41: the solver's proofs "are
+    cross-checked against ... oracle mate verdicts"). The documents say local records
+    belong in the corpus and that third-party text does not, but not whether lines the
+    engine under test generated may be pinned as corpus records - a corpus the engine itself
+    wrote is checked by the oracles, yet then also shapes what the gate requires of the
+    engine. `t5d-proof-records` writes its records to a build or scratch directory only. The
+    harness side - adding the records with `source = "local"`, licence and notes ("H41
+    cross-check: the search solver's proof line"), `verify`, and `golden --write --repeat 2
+    --jobs 8` on a quiet machine (H48, COST-09) - is a separate reviewed change after the
+    gate with the engine is redone; **the user is asked** whether such records may enter the
+    pinned corpus (and, if so, which tiers require them).
 
 ## Proposed spec edits
 
@@ -5804,6 +5839,15 @@ struck through, where nothing of it is left to apply); the others stand as writt
     with complete, certified lines under the same churn and its prover never writes a
     disproof. Through the settling scans' wrapper: after E10's merge." Why: issues 402, 403.
 
+302. **§11.1 and register H41 (the oracle cross-check's engine side as built)**: now - §11.1:
+    "its proofs are cross-checked ... against the oracles' mate verdicts where they exist".
+    Proposed - add: "The engine writes the solver's proof lines as 5dpgn records - one per
+    root-to-mate line, every defence at each defender turn checked against E4's listing,
+    each line replayed to E4's checkmate (t5d-proof-records) - and the harness compares
+    them: checkmate at each leaf, legal_actions at each defender turn, in_check throughout;
+    the flow is engine -> records -> harness, never back. Whether such records enter the
+    pinned corpus is the user's decision." Why: issues 404, 405.
+
 ## Session log
 
 - **2026-10-01** - Pre-flight passed. Design documents moved into `docs/design/`
@@ -5917,3 +5961,9 @@ struck through, where nothing of it is left to apply); the others stand as writt
   in its store, fresh provers answering from the stores alone, certificates confirmed by E4.
   The settling wrapper's run follows E10's merge (issue 402); Hunt observed through
   `hunt_prover_options` (issue 403). Register H19, H17, H43; edit 301.
+- **2026-10-23 - MT-02's engine side** (`lane/engine`; block 400-449 / 300-329 from the main
+  loop): `t5d-proof-records` - the solver's proof lines as 5dpgn records, defences checked
+  against E4, lines replayed to E4's checkmate - its records replayed through `t5d-gate` in
+  the test; written to build or scratch directories only. The corpus question is put to the
+  user (issue 405); both tools take `--legality-nodes` (issue 406). Register H41; issues
+  404, 405; edit 302.
