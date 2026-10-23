@@ -10,6 +10,140 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-24 - Kairos review fixes: its only reachable refusal stated, the machine's cargo configuration kept out of the build, the toolchain's target checked
+
+The review of the Kairos work (H52) found no rule broken and no check weakened; it found:
+- **The refusals the driver could give were overstated.** Kairos's reader matches written
+  moves only against the moves it can play and submits each action before it returns
+  (`resolve_action`, `can_apply_action`), so a move it cannot play and an action that does
+  not move the present fail the whole record (`parse_failed`); only "leaves a royal piece in
+  check" reaches the driver, as `cannot_submit`. The driver's header and `refusal()`, the
+  adapter's docstring, the lock note, `PROVENANCE.md` and issue 528 now say so; the other
+  mappings stay as a documented, unreachable defence. Its legality answer covers royal
+  safety only, and never backs another oracle's `illegal_move` or present-not-moved refusal
+  (issues 526, 528).
+- **A cargo configuration file on the machine could change the pinned build.** Cargo reads
+  `.cargo/config(.toml)` from where it runs and every parent, and from its home; the build
+  runs inside the repository. `CARGO_ENCODED_RUSTFLAGS` is now always set (empty, or the
+  self-contained-linker flag on Windows), overriding every other source of flags, and the
+  recipe refuses to build while such a file sits above the build root or in cargo's home
+  (`toolchain.cargo_configs`, `refuse_cargo_configs`).
+- `find_rust` takes a cargo and rustc of the pinned release only for the target the lock
+  pins (`rustc -vV`'s host): a rustup MSVC 1.99.0 is not the pin. Bootstrap downloads (Rust's
+  and GHC's) time out after 120 s; Rust's `.asc` signatures are not verified (SHA-256 only,
+  issue 529). The nightly workflow's step is named for what it does - it builds every stale
+  oracle, fetching the pinned Rust.
+- Issue 526 gains the review's facts, with citations at the pin: the NOTICE since Kairos's
+  first commit, the reader ported from ftxi's `pgnparser`, **the mate test a line-by-line
+  translation of ftxi's** (its terminal verdicts agreed with ftxi's at all 986 shared
+  positions), a verbatim string, shared identifiers, the coordinate limits; its own are the
+  R1 check pass set, the wasted-move pruning, the exhaustive enumerator and its engine.
+  Options (b) or (c) are the cautious readings; its tier entries stay disabled until the
+  user rules.
+- Tests: the cargo configuration refusal, the encoded flags, the host check
+  (`test_toolchain.py`); a count at the cap reported as 1000 under `kairos:naive`
+  (notation/1.2 position 9), and a note that the only reachable refusal is the one tested
+  (`test_kairos.py`).
+- `oracle_harness/adapters/__init__.py` (where `PENDING_SOURCES` lives) was edited in the
+  first Kairos commit; no golden file's signature hashes it, and `verify`'s golden check
+  passes unchanged.
+
+Spec: §11.0 ("Kairos, the fourth oracle", "Third-party code"), register H26, H52 - edit 362
+stands (its "partial independence" now includes the mate test); issues 526, 528, 529, 530.
+
+### 2026-10-23 - The harness's manual and CONTRIBUTING.md say that Kairos is wired and not yet in a tier
+
+`oracles/README.md` names Kairos in its opening and in "What is pinned" (no tier yet; what
+its two searches answer), and a new section, "Kairos, wired and not yet enabled (H52)",
+says why its sources wait in `adapters.PENDING_SOURCES` (a source a tier lists is held
+to golden files it does not have yet) and what enabling them takes. `CONTRIBUTING.md`'s
+"The proof channel" says the nightly and release tiers run three rules oracles and that a
+fourth is wired. The instruction files' "three oracles" (`CLAUDE.md`, `AGENTS.md`) are
+the user's to edit, and are still true of what the tiers run (issue 534). No code
+changed.
+
+Spec: §11.0 ("Tiered CI", "Kairos, the fourth oracle"), register H27, H52 - nothing new
+proposed (edit 362 covers the query surface); issues 530, 534.
+
+### 2026-10-23 - Kairos pinned as the fourth oracle (H52): its query surface confirmed at the pin, its toolchain, driver and two sources built - wired, enabled in no tier yet
+
+Register H52 (CHECKPOINT 9): Kairos (FirePlank/5d-chess-engine; Rust, GPL-3.0) is the
+fourth rules oracle and fifth submodule, harness only. This change pins it and records what
+it can answer, before any driver is written.
+
+- **The pin.** `oracles/third_party/kairos`, submodule `oracle-kairos`, at main's head
+  `8bfea4a6e8d1` (2026-10-23): the repository has no tags or releases (issue 524). Its
+  lock-file entry (`[repo.kairos]`, role oracle, tier nightly) carries the tree id, the
+  licence hash (the GPL-3.0 text of GitHub's template; Cargo.toml says GPL-3.0-only) and
+  the notes; `harness.py sync` checks it out; `PROVENANCE.md`'s inventory is regenerated.
+- **Its query surface, confirmed and recorded** (`PROVENANCE.md`, "Kairos, the fourth
+  oracle"): its perft counts the hypercuboid search's actions, which leave out actions
+  that waste a move - not the gate's count (issue 525); its exhaustive enumerator counts
+  every action; its check test passes the active boards in the present (R1's reading, not
+  ftxi's); its mate test is an exhaustive search that terminates; `get_boards` exports
+  every board with its unmoved markers, which the harness fingerprints; its 5dpgn reader
+  is all or nothing and does not test royal safety, its replay does; neither 5DUCI (a
+  playing protocol) nor the JSON interface (a library API of its web build) answers the
+  gate's questions, so the harness will ask through a driver of its own (issue 527).
+- **Found:** its `NOTICE` says parts of its rules and legal-action code derive from
+  ftxi's 5dchess_engine, its core modules follow ftxi's one for one, and its 5dpgn reader
+  is a port of ftxi's. How far it then counts as a second, independent oracle beside ftxi
+  for the two-oracle bar (H47) is put to the user before its tier entries are enabled
+  (issue 526).
+
+- **Its toolchain** (issue 529): Rust 1.99.0, pinned in `[toolchain.rust]` by the SHA-256
+  of each component archive (Windows: the GNU target with its own MinGW linker; Linux).
+  `build --bootstrap` fetches them into `oracles/.cache/` and merges them as rustup's
+  installer would - nothing on the machine changes; `doctor` reports it
+  (`toolchain.find_rust`, `merge_rust_component`, `rust_env`).
+- **Its build and driver** (issue 528): `build --oracle kairos` copies
+  `oracles/drivers/kairos/` - a Rust program of the harness's own, with a lock file that
+  names no dependency - beside an export of the pinned crate and builds it offline, from
+  outside the crate's tree (so its `-C target-cpu=native` does not apply), linked by the
+  toolchain's own linker. The driver reads a record with Kairos's reader, replays the main
+  line through Kairos's referee and prints the protocol's state, position and end events:
+  `--search hypercuboid` (check, mate verdict, no count) or `--search naive` (check, the
+  exhaustive count, the verdict where it finds none). A record Kairos's all-or-nothing
+  reader fails is `unsupported` from position 0.
+- **Its two sources** (`oracle_harness/adapters/kairos.py`): `kairos` (hypercuboid: check,
+  mate verdict, no count) and `kairos:naive` (check, count, verdict where none exists),
+  both saying what Kairos set up at every position; a record ending in a variation is
+  refused before it runs (ftxi's guard - Kairos's reader is a port of ftxi's). An action
+  that leaves a royal capturable is `cannot_submit`, as the other oracles report it. They
+  are **wired and enabled in no tier**: a new `adapters.PENDING_SOURCES` holds them -
+  `observe` and `make_source` know them, no tier may list them, nothing records them and
+  `verify` asks nothing of them - because every source a tier lists is held to golden
+  files (`golden-missing` otherwise, in `verify` and every tier) and the recording tier
+  must run every source; the recording is the quiet-machine block's (issue 530).
+- **CI**: the nightly workflow fetches the pinned Rust when the plan says a stale build
+  needs it. A first draft named the crate in the workflow and the boundary check refused
+  it - "kairos" is its package name (issue 532, which also finds H52's opponent role at
+  odds with the boundary rules: for the user before the pilot run).
+- Tests: `tests/test_toolchain.py` (the pins, the merge, the environment, the recipe);
+  `tests/test_kairos.py` (pending and in no tier, a tier listing it refused, what each
+  search answers, its signature, the variation guard, its driver's output read by the
+  protocol, and - when built - the live driver against ftxi's recorded answers on
+  cwmtt/standard and local/ignores-check); `test_lockfile.py` and `test_notation.py`'s
+  registry count Kairos.
+
+- **Smoke run** (issue 533, figures in `docs/MEASUREMENTS.md`; not a recording, nothing
+  written under `oracles/`): over all 41
+  records, Kairos holds the same boards as every other oracle at every shared position;
+  agrees with Chess in 5D on check at all 814 shared positions and differs from ftxi at
+  131 of 986 (the R1 cluster); agrees with ftxi and cwmtt on every terminal verdict and
+  with Chess in 5D but for its two known false checkmates; its exhaustive count equals
+  cwmtt's at all 680 shared positions and ftxi's at 841 of 843; 9 records are
+  `parse_failed`.
+
+`verify` passes (its 17 `proof-channel-vacuous` notes are H48's, as before); no tier
+changes, so the commit tier is as before.
+
+Spec: §11.0 ("Kairos, the fourth oracle", the reference table, "Third-party code", "Tiered
+CI"), register H23, H26, H27, H47, H52, I7, M18 - proposed edits 362 (the query surface as
+confirmed: the count from the exhaustive enumerator, the driver route, the partial
+independence from ftxi) and 363 (the opponent role and the boundary); issues 524-534 (533:
+the smoke run's results; 534: the instruction files' "three oracles", the user's).
+
 ### 2026-10-23 - main (62ff24d) merged into lane/search: E10's replica prior read by the flat form's per-board pruning
 
 Main since 88d2007 (A8, engine ABI round 3, D2's flat head and the flat form's policy target with

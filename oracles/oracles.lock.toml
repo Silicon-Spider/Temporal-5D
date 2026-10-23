@@ -84,6 +84,32 @@ notes = [
     "Its action enumeration yields ordered move sequences under its own options, so it contributes check and mate verdicts and move legality, not action counts.",
 ]
 
+[repo.kairos]
+role = "oracle"
+tier = "nightly"
+upstream = "FirePlank/5d-chess-engine"
+url = "https://github.com/FirePlank/5d-chess-engine"
+submodule = "oracle-kairos"
+path = "oracles/third_party/kairos"
+commit = "8bfea4a6e8d1cec2cc27cafa387b1bd78c0c94e0"
+tree = "821600fbdf7e6b9228795255b3e722f35c829b11"
+ref = "main"
+committed = "2026-10-23"
+licence = "GPL-3.0-only (LICENSE file: GitHub's GPL-3.0 template text; Cargo.toml: GPL-3.0-only); NOTICE: parts derived from ftxi/5dchess_engine under BSD-2-Clause"
+licence_file = "LICENSE"
+licence_sha256 = "589ed823e9a84c56feb95ac58e7cf384626b9cbf4fda2a907bc36e103de1bad2"
+summary = "Kairos: a Rust 5D chess engine - rules up to 8x8 with the variant pieces, a hypercuboid legal-action search with an exhaustive one beside it, 5dpgn/5DFEN input, an alpha-beta player over 5DUCI (decision H52)"
+used_as = "Built from an export of the pinned commit with the pinned Rust toolchain. Queried through oracles/drivers/kairos, a Rust program of the harness's own linked against the pinned crate as a library (it calls its 5dpgn reader, its replay, its check test, its mate test and its two action searches, and copies none of them), in one replay of the record. Its programs ask the same calls another way: the kairos binary plays over 5DUCI (position, go, print - no verdict or count); its developer tool ktools answers per position (perft: the hypercuboid count; naive: both searches' counts; rules: the boards, the check and the mate type) from position files of its own (G lines), which its pgn2g command writes from a 5dpgn file; and its JSON command interface (web::api) is a library API that only the WebAssembly build of its site calls. Those are the stock tools a driver check would hold the driver to (not built yet)."
+dependency_names = ["kairos"]
+notes = [
+    "Pinned at the head of main: the repository has no tags and no releases. It was created on 2026-10-15 and had 354 commits by the pin (2026-10-23), most days several; a pin bump will move answers, and is reviewed as any other.",
+    "Not independent of ftxi in all it does. Its NOTICE says parts of its rules and legal-action code are derived from ftxi/5dchess_engine (BSD-2-Clause), its src/core and src/misc mirror ftxi's module for module (check_position, hypercuboid, geometry, integer_set, graph, ordering, vec4 - coordinates packed 12/12/4/4 bits, as ftxi's), and its 5dpgn reader says it is 'ported from the C++ engine's pgnparser'. Where it departs from ftxi the departures are its own: its check test advances only the active timelines whose last board is in the present (State::has_phantom_check through CheckPosition::for_present), where ftxi advances every timeline the mover may play on, and its hypercuboid search leaves out actions that waste a move (below). How far it counts as an implementation independent of ftxi for the two-oracle bar (H47) is the user's to rule before its tier entries are enabled (docs/BUILD_LOG.md, issue 526).",
+    "Its hypercuboid search does not generate an action that both branches and plays a 'wasted' move - a non-branching move whose boards all stay out of the present, other than boards a branch lands on - because dropping that move leaves an equally legal action (hypercuboid.rs, wasted_problem). Its perft therefore counts those actions out: its own test gives 31406 at depth 3 from the Standard start, 'the 1780 actions that waste a move (33186 with them)' left out. That is not the gate's count, so the hypercuboid source answers no count. Its exhaustive enumerator (core/naive.rs, naive_actions) lists every action - its non-branching moves once, in timeline order, and its branching moves in every order - the gate's definition; source kairos:naive counts with it.",
+    "Its 5dpgn reader is all or nothing: one action of the main line or of any variation that it cannot match, or cannot submit, fails the whole record, with no position read. Such a record is reported unsupported from position 0 (reason parse_failed), never refused at action 0. The reader does not test royal safety; the driver replays the main line through its own referee (web::tree::play_action, which its game loader runs), and an action that leaves a royal capturable is refused there (cannot_submit, as the other oracles report it). That is the only refusal it can give: a move it cannot play, or an action that does not move the present, fails the record in the reader (parse_failed), so its legality answer covers royal safety alone.",
+    "A line that ends in variations is replayed with its last variation as the main line (as ftxi's reader does); the adapter refuses such a record, with ftxi's guard. It reads the Board header (else Variant), Size, Timeline and Promotions; it refuses a Board it does not know rather than set up Standard, and 44 named variants, whose set-ups it takes from adri326/5dchess-notation's table. Boards are 8x8 at most.",
+    "Its .cargo/config.toml builds with -C target-cpu=native. The harness builds the driver outside the exported tree, where that file does not apply, so the build is the same on every x86-64 machine.",
+]
+
 [repo.notation]
 role = "parse-oracle"
 tier = "commit"
@@ -132,6 +158,29 @@ reason = "CMake generator: required on Windows, used elsewhere when present."
 [toolchain.cxx]
 requires = "g++ 13 or newer"
 reason = "ftxi/5dchess_engine is C++23. Its own CI also builds with Apple Clang and MSVC 14.40; the harness looks only for g++ (set CXX to point at one)."
+
+[toolchain.rust]
+version = "1.99.0"
+reason = "Builds the Kairos oracle's crate (edition 2024: Rust 1.85 or newer) and the harness's driver linked against it; the stable release of 2026-10-01, the newest at the pin. Kairos has no crate dependencies, so nothing is fetched from crates.io (the build runs --locked --offline). On Windows the GNU target, whose self-contained MinGW linker ships with the toolchain (rust-mingw) - no Visual Studio; on Linux rustc links with the system's cc."
+
+# The component archives `build --bootstrap` merges into oracles/.cache/toolchains/rust-<version>
+# (what rustup would install for the target, without rustup), each checked against its SHA-256.
+[toolchain.rust.dist.windows-x86_64]
+target = "x86_64-pc-windows-gnu"
+components = [
+    { url = "https://static.rust-lang.org/dist/rustc-1.99.0-x86_64-pc-windows-gnu.tar.xz", sha256 = "015f770c3ca0b3226a24fe159f30b03782a91679ba16159f7d83550f768fb795" },
+    { url = "https://static.rust-lang.org/dist/cargo-1.99.0-x86_64-pc-windows-gnu.tar.xz", sha256 = "36dc7cba4be341c5a6cb3e10f660c4565b6f87f318d3cb87519b2cfe8c630bca" },
+    { url = "https://static.rust-lang.org/dist/rust-std-1.99.0-x86_64-pc-windows-gnu.tar.xz", sha256 = "a2382bf189d5621e09db647da419a8e1d4c604d60941cb116da00ce34042b1dd" },
+    { url = "https://static.rust-lang.org/dist/rust-mingw-1.99.0-x86_64-pc-windows-gnu.tar.xz", sha256 = "ad2b4b41362a99a86e20a8dbcec4be81b99f2d507f6408a72c7a139bc1919080" },
+]
+
+[toolchain.rust.dist.linux-x86_64]
+target = "x86_64-unknown-linux-gnu"
+components = [
+    { url = "https://static.rust-lang.org/dist/rustc-1.99.0-x86_64-unknown-linux-gnu.tar.xz", sha256 = "77171ba2a0345fdf2abc4fedda55d6de078dae7a68527c28be8c77dcc9604bd5" },
+    { url = "https://static.rust-lang.org/dist/cargo-1.99.0-x86_64-unknown-linux-gnu.tar.xz", sha256 = "d7674918d28093097614cd9728b6ca60db9ea3038f640f0bd1e9a4188c7568ce" },
+    { url = "https://static.rust-lang.org/dist/rust-std-1.99.0-x86_64-unknown-linux-gnu.tar.xz", sha256 = "3e58dff2d0b72196b5ea4e90536e174d400de88564a52694686b81e091169933" },
+]
 
 [toolchain.node]
 min_version = "18"
