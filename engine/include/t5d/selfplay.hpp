@@ -30,14 +30,37 @@
 // game's actions are counted at submissions (GameRecord::actions); the turn
 // cap reads the state at each turn start, after the submission. Under D2's
 // flat form a decision is a whole turn, played and submitted.
+//
+// THE VERIFICATION LADDER (stage E10, t5d/ladder.hpp): one per game, shared by
+// its searches as the evaluation cache is - the asset map's assessments and the
+// settling prover's table have the game's lifetime (8.7, H17), and a mate Hunt
+// proves at an action's turn start is carried through the action's decisions.
+// Its parts are the searches' (SearchParams' E10 block: Hunt under 100 boards,
+// the settling scans under 50, the asset map - all on by default). GUARD (H42)
+// is adopted in no range: its hook at submission is OFF (guard_final); on - for
+// experiments, and only with the proof channel on, since a refutation is a
+// proof - it rejects the chosen action and searches again. No reserve is held
+// for it while Guard is offline (build-log spec issue 306).
+//
+// SELF-PLAY RUNS WITHOUT THE ASSET MAP (the E10 review; build-log spec issues
+// 179, 189): PlayParams' default search has asset_map OFF - a named placeholder
+// - until I2's steered-visit definition is validated (the review measured the
+// counterfactual count biasing the policy target against the boosted moves).
+// The search's own default (SearchParams) and match play (t5d-play, Python's
+// netplay) keep 6b''s table, the map on; a caller of play_game that wants the
+// map in self-play sets search.asset_map itself.
 
 #ifndef T5D_SELFPLAY_HPP
 #define T5D_SELFPLAY_HPP
 
 #include <cstdint>
+#include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 
+#include "t5d/certificate.hpp"
+#include "t5d/guard.hpp"
 #include "t5d/mcts.hpp"
 #include "t5d/move.hpp"
 #include "t5d/state.hpp"
@@ -54,14 +77,15 @@ enum class GameEnd : std::uint8_t {
 };
 const char* game_end_name(GameEnd end) noexcept;
 
+/// Self-play's search parameters: the search's defaults with root Dirichlet
+/// noise ON (E1, §8.4) and the asset map OFF (a named placeholder: I2's steered
+/// visits are unvalidated - issues 179, 189; the header comment).
+SearchParams self_play_search_defaults();
+
 struct PlayParams {
   /// The searches' parameters - root Dirichlet noise ON by default (E1,
   /// §8.4: noise at the root in self-play); match play turns it off (§12.3).
-  SearchParams search = [] {
-    SearchParams p;
-    p.root_noise = true;
-    return p;
-  }();
+  SearchParams search = self_play_search_defaults();
   /// Playouts per decision (the node budget).
   std::uint64_t playouts = 64;
   /// I11 - handed to the search too, so that it scores capped positions as the
@@ -82,6 +106,55 @@ struct PlayParams {
   /// not recorded). 0: none. Not deterministic - for tools, never for
   /// training games.
   double max_seconds = 0;
+  /// Stage E10: GUARD at submission (H42, spec 11.4: "before the chosen move
+  /// is played, can the opponent force mate against it?") - ADOPTED IN NO
+  /// RANGE (6b''): OFF. On (experiments), it needs the proof channel
+  /// (search.proof_channel; play_game refuses it otherwise): the action that
+  /// completes the turn is asked Guard's question under guard_ms (and
+  /// guard_nodes; synchronous: guard_nodes, or the search's sync_job_nodes),
+  /// and a refutation whose certificate E4 confirms is offered to the search as
+  /// a proof - the action proven lost - which then searches again
+  /// (guard_research_playouts; 0: playouts) and chooses again, at most
+  /// guard_max_rejections times. Under the board-move split the rejection
+  /// reaches the submission's decision only: the action's moves are played
+  /// (a reading - build-log spec issue 185). Placeholders.
+  bool guard_final = false;
+  double guard_ms = 50;
+  std::uint64_t guard_nodes = 0;
+  GuardOptions guard{};
+  std::uint64_t guard_research_playouts = 0;
+  std::uint32_t guard_max_rejections = 4;
+  /// Stage E10, H44: record each decision for the offline audit lane
+  /// (GameRecord::decision_log). Off by default (memory).
+  bool decision_log = false;
+  /// TESTS ONLY: applied to each refutation's certificate Guard's hook is about
+  /// to have E4 check (guard_final) - the seam that feeds it a certificate E4
+  /// rejects, so the "only confirmed refutations count" gate is exercised.
+  /// Null (the default): none.
+  std::function<void(std::shared_ptr<const ProofCertificate>&)> guard_certificate_hook_for_tests;
+};
+
+/// Stage E10, H44: one decision as the offline audit lane reads it - its
+/// root's children (each one's decision, visits, backed-up value, whether it
+/// was the most visited and its largest share of the root's visits), the PV
+/// changes, the child chosen; the moves made in its action before it.
+struct DecisionLog {
+  std::uint32_t action = 0;    ///< the action's index in the game
+  std::uint32_t decision = 0;  ///< the game's decision index
+  std::vector<Move> prefix;    ///< the action's moves before the decision
+  std::size_t boards = 0;      ///< the root's board count
+  std::uint32_t root_visits = 0;
+  double root_q = 0;           ///< the root's backed-up value, its player's view
+  struct Child {
+    PathStep step;
+    std::uint32_t visits = 0;
+    double q = 0;
+    bool was_pv = false;
+    double peak_share = 0;
+  };
+  std::vector<Child> children;
+  std::vector<PvChange> pv_changes;
+  std::size_t chosen = 0;  ///< into children
 };
 
 struct GameRecord {
@@ -91,6 +164,8 @@ struct GameRecord {
   /// Every action, its moves in the order played.
   std::vector<std::vector<Move>> actions;
   GameState final_state;
+  /// D2's arm the game was searched under (the audit lane's log names it).
+  TurnSplit split = TurnSplit::BoardMove;
   GameEnd end = GameEnd::Unknown;
   /// 0 white, 1 black, -1 none (no optional: g++ 13/14 warn on copying one).
   int winner = -1;
@@ -116,6 +191,25 @@ struct GameRecord {
   double seconds_search_generate = 0;  ///< D2's flat form: turns generated
   double seconds_search_verify = 0;
   double seconds_verdicts = 0;
+  /// Stage E10: the verification ladder's work over the game (the searches'
+  /// SearchStats, summed) and Guard's at submission (guard_final).
+  std::uint64_t hunt_runs = 0;
+  std::uint64_t hunt_mates = 0;
+  std::uint64_t settling_runs = 0;
+  std::uint64_t settling_proven = 0;
+  std::uint64_t settling_disproven = 0;
+  std::uint64_t refutations = 0;
+  std::uint64_t proofs_withheld = 0;
+  std::uint64_t proofs_injected = 0;
+  std::uint64_t pv_changes = 0;
+  std::uint64_t asset_boosted_edges = 0;
+  std::uint64_t steered_visits = 0;
+  std::uint64_t guard_runs = 0;
+  std::uint64_t guard_refutations = 0;
+  std::uint64_t guard_rejections = 0;  ///< refuted actions rejected and searched again
+  /// Stage E10, H44: each decision as the offline audit lane reads it
+  /// (PlayParams::decision_log; empty otherwise) - tools/audit.hpp's events.
+  std::vector<DecisionLog> decision_log;
 
   bool cap_bound() const noexcept { return end == GameEnd::TurnCap; }
   /// The 5dpgn result: "1-0", "0-1", "1/2-1/2" (stalemate), or "*" (not ended

@@ -82,6 +82,8 @@ rules reference, `docs/rules/README.md`, which the code cites throughout.
 | **E9:** Hunt - do we have a forced mate? df-pn, prove-only | `include/t5d/hunt.hpp` | §11.4, §12.2, H43, H41 |
 | **E9:** the superseded-board asset map | `include/t5d/assets.hpp` | §11.2 rung 4, §11.4, H10 |
 | **E9:** Hunt's ground truth; experiment 6b″'s tool | `tools/t5d_hunt_truth.cpp`, `testdata/hunt-truth/`, `tools/t5d_scan6bpp.cpp` | §15.6 (CHECKPOINT 4), M17 |
+| **E10:** the reduced verification ladder wired into the search - Hunt under 100 boards, the settling scans under 50, the asset map's boosts, the steered visits, the proofs withheld behind the proof channel, PV events; Guard's hook off | `include/t5d/ladder.hpp`, `src/ladder.cpp`, `include/t5d/mcts.hpp`, `include/t5d/selfplay.hpp` | §11.2-11.4, §12.2, §15.4; H1, H10, H13, H14, H17, H19, H41-H43, I2, M13 |
+| **E10:** the offline audit lane's tooling - the decision log, the sampler, the offline proof runner, the per-range shallow-mate report; the curriculum hook an interface | `tools/audit.hpp`, `tools/t5d_audit.cpp` | §11.4, H44, H42, H19, H23 |
 | **M22:** the turn width of an action - mandatory boards at its start, its moves, the optional ones, rewinds - and t5d-measure's `--turns` / `--turn-summary` | `tools/turn_width.hpp`, `tools/t5d_measure.cpp`, `testdata/turn-width/` | §8.2, §15.1; M22 |
 
 The gate runs the engine: `oracles/gate.toml` configures `t5d-gate` in full mode
@@ -97,11 +99,12 @@ sign-off (H41: the in-tree solver's propagation stays off
 until the gate passes, the search's soundness fixes land with tests, and the channel
 is signed off, its proofs cross-checked against df-pn and oracle mate verdicts);
 the network's stage N5 (the acting-player input and the submit logit the search already
-takes); the expansion's pin and check relations; the spec issues the search's
+takes); the spec issues the search's
 placeholders raise (build-log spec issues 28, 46, and the E6a issues listed under
-"Choices the spec leaves open"); and wiring verification v3 (E9) into the search - Guard's re-search from §8.6's
-reserve, Hunt's gated proofs and (behind their flag) priors with §12.2's exclusions,
-the asset map's boosts.
+"Choices the spec leaves open"). Verification v3 is wired into the search (stage E10:
+Hunt under 100 boards, the settling scans under 50, the asset map's boosts and I2's
+steered visits; Guard's hook built and off; every proof withheld while the proof channel
+is off).
 
 **Moves are pseudo-legal; turns are legal.** A move is pseudo-legal when it obeys
 every movement rule and the action's bookkeeping; legality is judged per action, at
@@ -3512,8 +3515,9 @@ our turns as AND nodes decided by one refuting reply: a quick escape search, E4'
 detector only where it finds none. Depth 1 is "for every opponent action that leaves
 us in check, one legal escape exists": existence, never our full listing. Exact at
 every depth that completes ("safe to depth d"); a refutation is a proof (H37) with the
-opponent's forcing line, and rejects the move - the search re-searches from §8.6's
-reserve (`GuardHook`, wired with the search). Where turns do not decompose, the
+opponent's forcing line, and would reject the move - but Guard is adopted in no range
+(6b″, H42): its hook is the driver's, built and off (`PlayParams::guard_final`, stage
+E10), with no reserve held while Guard is offline (build-log spec issue 306). Where turns do not decompose, the
 opponent's actions are E4's listing, up to 65,536. At most 50 depths (99 half-turns,
 inside the prover's limit): every depth Guard reports is the depth searched, and a
 refutation inside a depth already reported safe throws - never both in one result.
@@ -3541,8 +3545,8 @@ it on (`std::invalid_argument`); the export itself is not built.
 Soft priors behind a flag (`suggest`, OFF): without a proof, the root's open actions,
 least proof number first, weighted by 1/pn - §12.2 binds their use: a position where a
 suggestion steered the search is excluded from the policy targets (or its steered
-visits recorded and down-weighted - §12.2's open choice); that bookkeeping lands with
-the search wiring.
+visits recorded and down-weighted - §12.2's open choice); that bookkeeping is stage
+E10's (the steered visits), the flag still off (`SearchParams::hunt_suggest`).
 
 ### The superseded-board asset map (§11.2 rung 4; `t5d/assets.hpp`)
 
@@ -3914,6 +3918,193 @@ old size where it was cut):
   6b″'s counting of unconfirmed proofs and its withholding, the three thresholds and
   range edges off by one, the unreadable label, the provenance's order and record
   checks, Hunt's export refusal) - all 26 caught.
+## Stage E10: verification v3 wired into the search (6b″'s adoption table)
+
+The reduced ladder (H10, H14) runs beside the search (`t5d/ladder.hpp`; SearchParams'
+E10 block, each part **on by default in its range**):
+
+| Part | Where | Budget (placeholders unless 6b″ measured them) |
+|---|---|---|
+| Hunt (H43) - our forced mate | a decision's turn-start root under **100** boards (`hunt_max_boards`) - where the root's settling scan is not asked (below) | 50 ms (`hunt_ms`), depth 5, 5 threads (6b″) |
+| Full settling scan (df-pn, the default class) - our mate, proven or disproven | a turn-start root under **50** boards (`settling_max_boards`) - **in Hunt's place**: the same question in the same class and depth, the full search proving what prove-only proves at the same cost, with the same line, certificate and carried mate (`hunt_with_settling` on: both, the literal reading; `settling_root` off: PV changes only, Hunt at the root) | 50 ms (`settling_ms`), depth 5 (6b′ (A)) |
+| Full settling scan - the refutation question | at each PV change: the opponent's turn start after the root's principal line, if *that* position is under 50 boards | the same; at most `settling_max_scans` (4) per decision, once the root has `settling_debounce` (16) visits |
+| Asset map (H13, rung 4) | every node's travel moves into flagged superseded boards (`asset_root_only`: the root's) | once per board per game, 4 plies / 128 nodes (H13) |
+| Guard (H42) | **nowhere**: its hook at submission is the driver's, off (`PlayParams::guard_final`) | - |
+
+**The scheduler.** One worker thread per ladder runs the jobs one at a time - the root's
+Hunt (or its settling scan), then PV changes' scans (an order the documents leave open:
+issue 182) - each prover on `verification_threads` (M13's 5) threads. The search never
+waits: verdicts reach it between batches (the start of `gather`, the end of `deliver` -
+so `run()` and the C step API alike). A decision's end - the search destroyed or
+re-rooted - cancels its running job (`ProveBudget::cancel`, a budget stop) and drops its
+queue: no job outlives its decision. Each verdict carries its decision's number, and a
+search asks and takes for its own decision only (`ask_for`, `take(decision)`): when a
+game's next search sharing the ladder begins its decision, the one before - a donor still
+searching - gets nothing more (the E10 review found a live donor taking its successor's
+verdicts); and a verdict whose path does not reach its position from the root is refused
+(`ProofUse::Foreign`). A job that throws is a contradiction in the rules code: reported on
+stderr and counted (`Stats::contradictions`) whatever its decision; a job that finishes
+after its decision ended is `discarded`, not answered. Every job is bounded (a whole-search solver is held
+open, H21; `hunt_ms`/`hunt_nodes` both 0 is refused). The ladder has the **game's
+lifetime** and is shared by a game's fresh searches like the evaluation cache
+(`Search(..., cache, ladder)`, `shared_ladder()`; C: `t5d_search_new_sharing`): the
+asset map assesses each board once in the game (§8.7), the settling prover keeps its
+table of estimates across the game's scans (H17) - Hunt stays "a fresh prover each
+time" - and a mate proven at an action's turn start is **carried** through the action's
+decisions (the ply split's and the tree form's fresh searches). A ladder of another
+ruleset, or made for other ladder parameters, is refused. **The synchronous mode**
+(H15) answers each job where it is asked - one thread, `sync_job_nodes` (25,000), no
+clock - so the search stays bit-reproducible with the ladder on.
+
+**Proofs and the proof channel** (H23, H41; AGENTS.md "The proof channel"). A proven
+verdict reaches the tree only through `Search::inject_proof`. With `proof_channel` off -
+the rule - it is **withheld**: counted (`proofs_withheld`), kept in `verdicts()` with its
+use, and the tree is exactly the tree without the ladder (H15's digest, tested). On
+(experiments and tests only; the Python binding refuses it), a proof whose certificate
+E4 confirms (`ladder_certify`; 6b″'s rule) sets bounds: at the path's end, or - where the
+path's chooser wins - at its first node not yet expanded; they propagate MCTS-Solver
+style (a contradiction throws), and a win gets one exact visit so that E9 plays it. Our
+mate solves the root; a PV scan's refutation makes our line proven lost, ineligible.
+A verdict its decision's end took before it could be offered is `Expired` with the
+channel on (`Withheld` off) - never placed. Nothing is exported: the ladder has no store to export to, refuses Hunt's
+`export_proofs`, and `proof_store` stays refused. Disproofs stay class-relative in the
+settling prover's own store (H19), never a bound.
+
+**Steering and I2's steered visits.** The asset map's boost enters the priors in
+`set_priors` - after the softmax (temperatures, the unknown-move scale, the submit
+share), before k0 and the root noise - never the cached evaluation (tested position by
+position against a cache filled without the map). `boost_rule` additive (the E10
+review's rule, issue 178): over the edges that may be taken, the boosts together take at
+most `boost_cap` (0.5, a placeholder) of the unboosted edges' mass, shared in proportion
+to the boosts - a boosted prior gains its (scaled) boost, never falls; every unboosted one
+falls by one common factor. (The first rule, (P + b) / (1 + Σb), lowered a boosted prior
+above b/Σb - 0.377 to 0.279 in the review's probe - and let 0.25 boosts swamp flat priors.)
+Or multiplicative, P (1 + b) renormalised. The flat form's turn takes its moves' largest
+boost, and it steers in another order: its root noise is per board, inside the policy
+whose scores order the turn generator, so a turn's prior is steered after the noise, and
+its k0 is set at the expansion (before any turn exists) from the unsteered turn
+distribution's entropy (tested: the same k0 with the map on and off). At the root the side
+table keeps each edge's unsteered noise-free prior (`RootChild::prior_unsteered`;
+`boost` = `prior_noise_free` - `prior_unsteered`, **signed** - negative for an unboosted
+child at a steered root, the renormalisation's drain) and counts **steered visits**
+(`steered_rule`, issue 179): a root visit is
+steered when PUCT's choice, recomputed with the unsteered priors (the same noise, visits,
+values and virtual loss), would have been another child - or, the cautious arm, every
+visit to a boosted child. A carried root records none (match play emits no targets).
+`asset_boosted_edges` counts the boost's applications (an edge at each node's
+expansion and re-evaluation; a flat turn when generated), not distinct edges. **The
+counterfactual count is unvalidated** (the E10 review measured it biasing the policy
+target against the boosted moves - issue 179): **self-play runs without the asset map**
+(`self_play_search_defaults()`, `PlayParams`' default; Python's
+`GeneratorConfig.asset_map`, off) until a definition is validated; the search's own
+default and match play (`t5d-play`, `netplay`) keep 6b″'s table, the map on.
+Hunt's soft priors (H43) are built behind `hunt_suggest` (off): the root's Hunt then runs
+before the root's expansion and each suggested action's first move (flat: the turn) is
+boosted and counted as steering.
+
+**Events (H44).** The search records the root's PV changes (`pv_changes()`: the root's
+visits, the old and new most visited child with their visits and Q) and per root child
+`was_pv` and `peak_share` - E7's instability signal and the audit lane's decision log
+(below) read them.
+
+**Guard's hook** (`PlayParams::guard_final`, off; experiments need `proof_channel`): at
+the decision that completes the action, Guard's question under `guard_ms`; a refutation
+E4 confirms is injected (the action proven lost), the decision searched again
+(`guard_research_playouts`) and chosen again, at most `guard_max_rejections` times. Under
+the ply split it reaches the submission's decision only (issue 185).
+
+**Drivers.** `play_game` makes one ladder per game; `t5d-play` takes `--no-hunt`,
+`--no-settling`, `--no-assets`, `--hunt-ms`, `--settling-ms`, `--verification-threads`
+and `--guard-final` (with `--proof-channel`), names the ladder in its Engine header and
+prints its counts; Python's `netplay` mirrors the switches through `t5d_search_params`,
+and `train.selfplay` records the steering per root child (I15).
+
+**Found on the way.** A carried root the tree form inherited lost submit's share on its
+re-evaluation (`set_priors` looked for the submit edge last, where the inherited
+expansion had sorted it away); the asset map's steering exposed it, and it is fixed.
+
+**What the tests hold** (`tests/test_ladder.cpp`): the defaults are 6b″'s table; each
+prover runs only below its range (the boundary exclusive; 49/50 and 99/100 boards on
+constructed histories); with the channel off no proof enters (the digest equals the
+search's without the ladder; a direct offer, a solved store, Hunt's export and a
+mismatched ladder all refused or withheld; self-play withholds every proof); with it on
+(tests only) Hunt's mate is played under both splits and through fresh decisions, a PV
+change's refutation is injected and the search moves away, and over many small
+positions every injected proof's certificate is confirmed by E4 with no contradiction;
+the asset map's boosts, unsteered priors and steered visits (both rules, tree and graph);
+each board assessed once across a game's searches; the synchronous mode bit-reproducible
+with the wiring on (channel off and on, both splits); §15.4's invariants with verdicts
+arriving asynchronously; the budgets, and no job outliving its decision (one worker per
+ladder, asked = answered + cancelled + discarded + contradictions); the settling prover's proofs under TT churn (6f);
+Guard's hook off by default, refused without the channel, and rejecting a refuted action
+when on. The C API's layout, defaults and ladder sharing (`test_capi_search.cpp`), and
+the steered visits end to end through Python's generator, records and targets
+(`python/tests/train/test_steering.py`). The E10 review added (reviewer B's verified
+tests adopted, and those the reviews left unwritten): a certificate E4 rejects fed through
+each "only confirmed proofs enter" gate - the search's offer, Guard's hook and the audit
+runner (test-only seams: `VerificationLadder::set_verdict_hook_for_tests`,
+`PlayParams::guard_certificate_hook_for_tests`, `RunOptions::certificate_hook_for_tests`);
+the carried mate injected in the next fresh decision; a decision's end cancelling a
+running job within a generous bound, and a re-root ending it; a donor searching on after
+sharing; the additive rule monotone, capped and summing to 1; the flat form's order;
+`asset_root_only`; the PV scans' debounce, cap and deduplication; `was_pv` and
+`peak_share`; the settling prover's disproofs and its game-long table; self-play without
+the map; the cache against a map-less cache; Hunt subsumed by the root's settling scan.
+
+### The offline audit lane (H44; `tools/audit.hpp`, `t5d-audit`)
+
+"Samples self-play decisions - PV changes, demotions, final moves - and runs exact proof
+search on them with large budgets, off the critical path" (§11.4), and "reports how often
+the network's chosen move allows a shallow forced mate, per board range". The tooling is
+built; the curriculum hooks are interfaces only (H44).
+
+- **The decision log** - JSONL `t5d-decisions` version 1, an interim format until I15's
+  records carry the events. `PlayParams::decision_log` keeps each decision
+  (`GameRecord::decision_log`: its root's children with visits, Q, `was_pv` and
+  `peak_share`, the PV changes, the child chosen, the action's moves before it);
+  `t5d-play --decision-log FILE` writes it, and Python's `netplay --decision-log`
+  (`decision_log_lines`; final moves and demotions - no binding sees a root's PV-change list,
+  issue 195). A **game** line holds the start (a named variant, or 5DFEN boards) and the
+  actions as 5dpgn move texts - every position is rebuilt by replaying, since 5DFEN alone
+  loses the timelines' creators and branch origins; an **event** line names its game, action
+  and decision, the action's moves before it, and its step: `final` (the action played,
+  whole), `pv_change` (the new most visited child, the old beside it) or `demotion` (a child
+  that was the most visited or held `demotion_share` - 0.3, a placeholder for §11.2 rung 2's
+  "heavily visited" - of the root's visits, and was not chosen).
+- **`t5d-audit sample`** - per category a rate (final 1, PV change 0.25, demotion 1) and per
+  (category, board range) a cap (1,000), seeded: an event is kept when a hash of the seed and
+  its identity falls under its rate, then the lowest keys up to the cap; the job list keeps
+  the games it needs (issue 194).
+- **`t5d-audit run`** - per job, exact questions with large budgets (placeholders, issue
+  193): **Guard's question offline** on the job's action where it is complete (a final move;
+  a PV change's promoted turn or submission - a move of the ply split is not an action) -
+  every opponent action, iterative deepening to depth 2 under 2,000,000 nodes, a refutation's
+  certificate checked by E4 alone; and **our forced mate at the action's turn start** - the
+  truth recorder's method (the literal class and the default class, 1,000,000 nodes each, the
+  shorter proof's certificate checked by E4) - once per turn start. A **contradiction** goes
+  to the `CurriculumSink` (the interface; its one implementation writes JSONL
+  `t5d-contradictions`): `allowed_mate` (Guard refuted the action played, or promoted, its
+  certificate confirmed), `missed_mate` (a confirmed mate at the turn start whose first action
+  is not the one played - inexact: the played action may mate too, issue 192),
+  `abandoned_mate` (a demoted child began the confirmed mate's first action). Results:
+  JSONL `t5d-audit-results`. No solved store is reachable: the provers' stores are their own
+  and die with them (H19, H23).
+- **`t5d-audit report`** - per board range (6b's four): the finals sampled, Guard's completed
+  depths, the **shallow-mate rate** - confirmed refutations within `--shallow` (1: the
+  opponent's mate in one) among the finals Guard decided to that depth - the undecided, the
+  withheld (a refuted certificate withholds the verdict) and unconfirmed, and the
+  contradictions; "too few to read" under 10 finals; range 200+ marked "weak at 200+"
+  (§11.4). Text, and `--json FILE`.
+
+The tools read engine-generated self-play logs only - never a path under `oracles/`.
+Tested (`tests/test_audit.cpp`): the log round-trips and rebuilds every position (both
+splits); the sampler is seeded and keeps its rates, strata and caps; the runner refutes an
+action that allows a mate in one with a confirmed certificate, finds a missed mate (one
+contradiction), reports a safe action's completed depth; the report counts at the 49/50,
+99/100 and 199/200 edges as 6b″ counts; nothing is carried from one run to the next; and end
+to end, `t5d-play --decision-log` then `t5d-audit sample`, `run` and `report`. Python's log is
+read by `t5d-audit` (`python/tests/engine/test_decision_log.py`).
+
 ## 5DFEN
 
 `parse_fen_board` reads one board string, `[pieces:timeline:turn:colour]`, for a
