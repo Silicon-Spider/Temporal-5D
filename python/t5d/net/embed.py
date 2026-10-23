@@ -68,6 +68,13 @@ committed-class silence, fixed in code (spec issue 230; ``NetConfig.turn_state_h
 ``turn_state_scale``). Its parameters draw nothing while they are made and are drawn from a
 generator of their own (``model._init_weights``, ``a6_seed``), so no other parameter's draw
 changed when it was added.
+
+**The board-layout embedding (register A8, a prototype behind its flag, off;
+``NetConfig.board_layout_embedding``; ``layout.py``)** comes last: each square token adds the
+projection of its own board's one-hot layout - read in A7's canonical (x, y) order - at its own
+cell, and every valid token then passes the embedding's FFN. It is per board and per token, so a
+frozen board's embedding stays intrinsic under the block-causal scope; it is in FP32 and never
+quantised (G2). Off, the embedding is the one above, bit for bit.
 """
 
 from __future__ import annotations
@@ -76,6 +83,7 @@ import torch
 from torch import nn
 
 from .config import NetConfig
+from .layout import BoardLayoutEmbedding
 from .state import N_OWNERS, N_PIECE_TYPES, TOKEN_BOARD_REGISTER, TOKEN_GLOBAL_REGISTER, TOKEN_SQUARE, TURN_STATE_FIELDS, Batch
 
 #: Features per turn-state count: ``(n / turn_state_scale, log1p n, [n == 0])``.
@@ -108,6 +116,10 @@ class InputEmbedding(nn.Module):
         #: A6's own generator (``model._init_weights``).
         self.turn_in = nn.utils.skip_init(nn.Linear, TURN_FEATURES_PER_COUNT * len(TURN_STATE_FIELDS), cfg.turn_state_hidden)
         self.turn_out = nn.utils.skip_init(nn.Linear, cfg.turn_state_hidden, d)
+        #: Register A8, the board-layout embedding (a prototype behind its flag; ``layout.py``):
+        #: applied last, to the sum above. Made without drawing from the RNG, and drawn from A8's
+        #: own generator (``model._init_weights``).
+        self.layout = BoardLayoutEmbedding(cfg) if cfg.board_layout_embedding else None
 
     def dt_features(self, dt: torch.Tensor) -> torch.Tensor:
         dt = dt.float()
@@ -162,4 +174,6 @@ class InputEmbedding(nn.Module):
             # under the block-causal scope (a placeholder, spec issue 225).
             carry = on_board & (batch.is_head == 1).unsqueeze(-1) if block_causal else on_board
             x = x + torch.where(carry, glob, zero)
+        if self.layout is not None:  # A8: each square's board layout, then the embedding's FFN
+            x = self.layout(batch, x)
         return x

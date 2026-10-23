@@ -39,6 +39,12 @@ The build rules (spec section 15.1) decide what else appears here:
   ``"none"`` is the network bit for bit as before the flag existed. The format's unstated
   details - the scale rule, weight scale granularity, whether attention is included, P's
   precision - are placeholders (spec issue 238).
+* **A8's board-layout embedding** (prototype, gate 6p; section 2.2; ``layout.py``) is behind its
+  flag, off: ``board_layout_embedding`` gives every square its board's flattened one-hot layout
+  (64 cells x 24 owner-and-piece states, in A7's canonical order) projected to
+  ``layout_channels`` (16), added to the token input, then an FFN. Its unstated details - the
+  FFN's width (``layout_ffn_ratio``) and form, where a smaller board sits in the 8 x 8 frame
+  (``layout_padding``) - are placeholders (spec issue 240); it is never quantised (G2).
 * **Stage N3** adds the attention scope (``attn_scope``): ``"dense"`` (C1, the default -
   build dense first) or ``"block_causal"`` (C17 and C19, committed rows of a deferred
   configuration, C2 - built because section 15.2's equivalence suite and section 15.3's
@@ -209,6 +215,9 @@ NORM_PLACEMENTS: tuple[str, ...] = ("pre", "post")
 FFN_ACTIVATIONS: tuple[str, ...] = ("mish", "squared_relu")
 #: B15's entries for pairs with a per-board register (``NetConfig.disp_register_pairs``).
 DISP_REGISTER_PAIRS: tuple[str, ...] = ("by_kind", "shared")
+#: Where A8's layout puts a board smaller than 8 x 8 in its frame (``NetConfig.layout_padding``;
+#: ``layout.py``): its canonical a1 on the frame's, or centred.
+LAYOUT_PADDINGS: tuple[str, ...] = ("a1", "centre")
 
 
 @dataclass(frozen=True)
@@ -348,6 +357,27 @@ class NetConfig:
     #: issue 230).
     turn_state_hidden: int = 32
     turn_state_scale: float = 8.0
+
+    # --- A8: the board-layout embedding (prototype; default off; section 2.2; layout.py) ---
+    #: Register A8 (gate 6p): "each square gets its whole board's flattened piece layout at layer 0,
+    #: projected per square (16 channels, ~1.6M parameters), with an FFN after the embedding". Off:
+    #: the network without it, bit for bit (its parameters draw from a generator of their own,
+    #: ``model.a8_seed``). The layout is read in A7's canonical (x, y) order (``layout.py``).
+    board_layout_embedding: bool = False
+    #: Channels per square (section 2.2: "at 16 channels per square that is about 1.6M parameters").
+    layout_channels: int = 16
+    #: The width of "an FFN after the embedding", ``layout_ffn_ratio * d_model``: COMMITTED-CLASS
+    #: SILENCE (spec issue 240(b)) - placeholder default, not a decision: 8, the trunk's ratio. Its
+    #: form - one pre-norm residual block, RMSNorm (F5), Mish (F6), on every valid token - is fixed in
+    #: code (``layout.py``). 0 drops the FFN: not the register's A8, the "without the FFN" probe of
+    #: section 15.3's cost row.
+    layout_ffn_ratio: int = 8
+    #: Where a board smaller than 8 x 8 sits in the layout's frame (section 2.2: "boards smaller
+    #: than 8 x 8 are padded"; ``LAYOUT_PADDINGS``). COMMITTED-CLASS SILENCE (spec issue 240(d)) -
+    #: placeholder default, not a decision: "a1" - the board's canonical a1 on the frame's a1;
+    #: "centre" centres it. Both in the acting player's frame (A7). Boards larger than 8 x 8 are
+    #: refused (no variant has one).
+    layout_padding: str = "a1"
 
     # --- heads (sections 8.1, 8.3, 12.4) ---
     #: Width of the policy pointer projections f and g (D1). Promotions add a learned
@@ -879,6 +909,8 @@ class NetConfig:
             raise ValueError("attn_chunk and attn_block_boards must be positive")
         if self.dt_hidden < 1 or self.turn_state_hidden < 1 or not self.dt_scale > 0 or not self.turn_state_scale > 0:
             raise ValueError("dt_hidden, turn_state_hidden, dt_scale and turn_state_scale must be positive")
+        if self.layout_channels < 1 or self.layout_ffn_ratio < 0:
+            raise ValueError("layout_channels must be positive and layout_ffn_ratio non-negative (A8; 0: no FFN)")
         if self.value_bins < 2 or self.effort_bins < 2:
             raise ValueError("categorical heads need at least two bins")
         horizons = tuple(self.short_term_horizons)
@@ -967,6 +999,7 @@ class NetConfig:
             ("trunk_quant", TRUNK_QUANT_FORMATS),
             ("trunk_quant_scale", SCALE_RULES),
             ("trunk_quant_weight_scale", WEIGHT_SCALES),
+            ("layout_padding", LAYOUT_PADDINGS),
         ):
             if getattr(self, name) not in options:
                 raise ValueError(f"{name} must be one of {options}")
