@@ -10,6 +10,37 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-23 - G9's bounded AMD attempt: eager works on the RX 9070 XT, torch.compile does not (no Triton on Windows)
+
+Register G9's "one bounded attempt on the AMD RX 9070 XT via AMD's PyTorch for Windows,
+figures AMD-labelled", in one session, with nothing on the machine changed: AMD's ROCm 10.1.0
+build of PyTorch for Windows (torch 2.14.0+rocm10.1.0, Python 3.14.7) in a separate venv under
+the git-ignored `build/`, the driver as found (Adrenalin 26.10.1).
+
+- **Works:** the device (gfx1201, BF16, FP8 E4M3 and `_scaled_mm`); the F1 network's forward
+  on the GPU against the same weights on the CPU - FP32 within 3.3e-6, BF16 inside G1's test
+  bounds - on synthetic and real engine positions, for the block-sparse, SDPA and eager
+  FlexAttention paths; one search through the C API with `NetworkEvaluator(device="cuda")`.
+- **Does not:** `torch.compile` (Inductor) of the network and of a toy `flex_attention` -
+  `TritonMissing` / `No module named 'triton'`: AMD ships Triton for Linux only. So §10.2's
+  compiled path cannot run on this machine through AMD's stack (issue 520).
+- **Figures (AMD-labelled, eager, on a 97-100% loaded CPU; indicative, no verdict):** kernel
+  rates (BF16 GEMM up to 142 TFLOPS, FP8 GEMM 1.0-1.8x BF16), evaluations/s per attention path,
+  batch and board count, and the search's playouts/s - in `docs/MEASUREMENTS.md` ("G9's bounded
+  AMD attempt", machine row `dev-r-amd`). The eager network is overhead-bound; its fused
+  attention calls are 45 and 33 wide, which AMD's fused kernels refuse with a mask (math
+  backend); a probe-local padding arm measured 1.2-2.5x (issue 521) - the network's code is
+  unchanged.
+- **New:** `python/tools/g9_amd_probe.py` (the probe, run from a separate ROCm environment) and
+  `python/tools/README.md`. `docs/BUILD_LOG.md`: the G9 and M19 rows, a session-log entry,
+  issues 520-523, edits 360-361.
+
+Spec: §10.2 and register G9 - the attempt answers §10.2's open question (eager yes, compile no
+on Windows), proposed edit 360; §15.3 "Without a GPU" and register M19 - what the attempt
+supplied and that every GPU-deferred row stays deferred, proposed edit 361; §15.6 and register
+M9 (the Phase-3 re-check) untouched - whether an AMD-labelled figure may settle anything is
+issue 522; B14 and M20 (the widened kernel heads) bear on issue 521, no spec edit.
+
 ### 2026-10-23 - MT-04 review fixes: D4's reply head compared, the claims corrected, one store across games, epochs and searches
 
 A review of `python/tests/engine/test_cached_variants.py` (22 mutants of the cached path and the
