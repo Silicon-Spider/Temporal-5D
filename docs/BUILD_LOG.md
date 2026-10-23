@@ -1710,7 +1710,7 @@ width (M22)", "The CHECKPOINT 8 figures"). Found on the way: the ruling's premis
 | G2 | built behind its flag (off), tested; FP8 speed deferred (M19) | 8-bit inference, FP8 before INT8 (gate 6w). `lane/net`, the precision component (2026-10-23): `net/quant.py`, the one FP8 E4M3 definition (G2, G8, C15) - round to nearest even, saturating, NaN kept, checked against all 256 codes and every midpoint; `NetConfig.trunk_quant = "fp8_e4m3"` (off; it replaces the old `fp8_attention`, which raised) fake-quantises the trunk's six projections per block (weights per output channel, inputs per token; `quant.QuantLinear`, an `nn.Linear` with the same `state_dict`) and, with `trunk_quant_attention`, attention's Q, K (after FP32 RoPE) and V per token and head, at the entry of every attention path; the heads, RoPE, embeddings and norms never. Off, the network is the one before, bit for bit (outputs and gradients checked against the tree before the change - ten configurations' outputs, two's gradients; pinned by test). Random weights, F1: the FP8 trunk sits at trunk RMS 2.7-3.2e-2 from the same weights unquantised (MEASUREMENTS). The cache takes the projections-only network (FP8 frozen K/V too) and refuses FP8 attention (C2 deferred) - at construction and, since the review fixes, at every epoch and evaluation, so a network switched in place under it is refused too. Since the review fixes (2026-10-23): a slice holding inf or NaN comes out NaN under either scale rule; float64 input refused (FP32 is the input precision); every attention operand checked operand by operand on all six paths (rounded after FP32 RoPE). Placeholders - format, scale rule, granularity, P, the estimator, the GPU's accumulator: issue 238; edits 183, 184. Not built: the per-board-range probe and the FP8 twin in match play, whose record would name the format (6w's plumbing); FP8 speed and 6w's equal-wall-clock arm need a GPU (M19) |
 | G3, G4, G5, G6 | not built (rule) | Deferred / held open / refused |
 | G8 | built behind its flag (off), smoke-tested (`lane/net`, the precision component, 2026-10-23) | QAT prepared, not adopted. `TrainerConfig.qat` (off) and `qat_format = "fp8_e4m3"` (provisional until the inference path pins the format): `train.trainer.apply_qat` switches the trainer's network in place to G2's FP8 trunk (`net/quant.py`, issue 238) - fake quantisation of the six projections per block and attention's operands, straight-through gradients, the heads, RoPE, embeddings and norms untouched, the frozen-K/V format (C15) and the network's quantisation settings kept (tested): QAT's forward is the served format's full pass bit for bit, the frozen K/V rounded as the full pass rounds them (tested). The cache serves the projections-only format with FP8 frozen K/V (tested); with QAT's default, attention quantised, the cache refuses the network (issue 239(a), (i)). The records follow the format (review fixes): the trainer's `net_cfg` is switched with the network, a record's network condition takes the format from the evaluated network and refuses a caller's configuration that contradicts it, and `network_id` folds an 8-bit format in (ids of unquantised networks unchanged) - tested through generate -> steps -> publish -> generate. Smoke-tested: three optimiser steps on synthetic rows, BF16 and FP32, FFN ratios 2 and 12 - losses finite, every quantised weight's gradient dense and within relative L2 distance 0.5 of the unquantised network's (measured at most 0.117, MEASUREMENTS). Written from papers; Monroe's `quantize` option (Lc0's training code) is an idea only (AGENTS.md, H29). When it runs - a fine-tuning stage, if 6w says so - is the pilot run's (issue 239; edit 182) |
-| G9 | built in part | PyTorch drives the C++ search through the C API (N5, eager, on CPU). FlexAttention runs eagerly through B14's score function (`attn_impl="flex"`, `lane/net`: forward only on CPU). Not built: torch.compile and compiled FlexAttention kernels (GPU time, M19); ONNX/TensorRT export - refused for now (M5). The bounded AMD attempt (AMD's PyTorch for Windows on the RX 9070 XT, figures AMD-labelled): any time, in `build/` only |
+| G9 | built in part; the AMD attempt done (partly) | PyTorch drives the C++ search through the C API (N5, eager, on CPU). FlexAttention runs eagerly through B14's score function (`attn_impl="flex"`, `lane/net`: forward only on CPU). Not built: torch.compile and compiled FlexAttention kernels (GPU time, M19); ONNX/TensorRT export - refused for now (M5). **The bounded AMD attempt** (`lane/gate`, 2026-10-23; MEASUREMENTS "G9's bounded AMD attempt"): AMD's PyTorch for Windows from ROCm 10.1.0 (torch 2.14.0+rocm10.1.0, Python 3.14.7, a separate venv under `build/`; Adrenalin 26.10.1 as found; no system change) runs the F1 network eagerly on the RX 9070 XT (gfx1201) - FP32 within 3.3e-6 of the CPU, BF16 inside G1's bounds, `attn_impl="flex"` eagerly, FP8 E4M3 and `_scaled_mm` - and one search through the C API (`run_search`, `NetworkEvaluator(device="cuda")`: 11-17 playouts/s from Standard's start). torch.compile and compiled FlexAttention do not run: no Triton on Windows from AMD (`TritonMissing`; issue 520). Eager rates are overhead-bound (0.5-7 evals/s at 44 boards, 0.06-0.23 at 240; issue 522); the kernel's 45/33-wide heads miss AMD's fused attention (issue 521). Figures AMD-labelled, eager, indicative; edits 360, 361; the probe `python/tools/g9_amd_probe.py` |
 | I1 | not started (rule) | Self-play training: no training runs in the untrained build (the brief); the pilot run (M18) comes after §15.5 |
 | I2 | built, tested (engine round 2c; targets M21 commit 2, `lane/net`) | Targets from the pruned visits - the search-value targets too (CHECKPOINT 7). The engine side (engine ABI round 2c, issue 153): per root child its visits, priors with and without the noise, q, value variance, E3's factor, `boost`, `steered_visits`, `forced_visits`, and the root's effective cPUCT; search-side forced playouts not built. The targets (`python/t5d/train/targets.py`): KataGo's forced-playout pruning at target construction against a replica of the root's PUCT, a one-visit remainder dropped; steered visits excluded (`policy_mode="exclusion"`, the placeholder) or kept at a weight (`"provenance"`) - open, 6e; the replica's prior without the boost; the policy, soft-policy, categorical, short-term and deblundering values and the q_ratio blend's root WDL all from the pruned visits; the steering counts 0 until E10 wires the asset map and Hunt (no self-play data with E10's boosts before this - it now exists). Placeholders: issue 235 |
 | I3 | built in part | Match play as I3 configures it: root noise off, the final rule (LCB), the tree carried (`t5d-play --match`, E6a; netplay's `mode="match"`, N5). The mature regime is training-time. In the untrained build: the curriculum hooks as interfaces only (H44, step 2) and I18's resignation rule (built: M21 commit 3, `lane/net` - off until the value head is calibrated); MLH steering and early adjudication parked (issue 300; "Parked", below) |
@@ -1739,7 +1739,7 @@ width (M22)", "The CHECKPOINT 8 figures"). Found on the way: the ruling's premis
 | M15 | measured - STOP | 6b′ on a quiet machine: (A) 77.4% / 40.7% / 23.7% / 0.0%; (B) fits in no range; (C) df-pn 408 against brute force 400 under 50 boards - STOP, a design review |
 | M16 | applied, confirmed | M7's readings (corrected at CHECKPOINT 5): time-share multiplier, human-game weighting, the per-phase rule under 50 boards with the band resolving to off - the window is killed, provisionally |
 | M18 | not started (rule) | A pilot self-play run before serious self-play re-checks the window and the other compute-weighted decisions - after §15.5, not in the untrained build |
-| M19 | applied | No GPU: counted FLOPs and CPU-labelled wall times (`dev-r`) are the untrained build's write-back; the GPU figures - FA4-class evaluations/s, the leaf-batching gain, FP8, the block-sparse and varlen kernels, the Phase-3 movegen re-check - named as deferred, measured on rented NVIDIA time before the pilot run; the bounded AMD attempt is G9's |
+| M19 | applied | No GPU: counted FLOPs and CPU-labelled wall times (`dev-r`) are the untrained build's write-back; the GPU figures - FA4-class evaluations/s, the leaf-batching gain, FP8, the block-sparse and varlen kernels, the Phase-3 movegen re-check - named as deferred, measured on rented NVIDIA time before the pilot run; the bounded AMD attempt is G9's - done 2026-10-23: eager figures only, AMD-labelled (MEASUREMENTS); no compiled kernel runs on Windows, so every deferred row stays deferred (issue 522, edit 361) |
 | M20 | built, tested; the reply prototype parked with the heads (after engine round 2) | The placeholder dispositions (issue 121), each the code's default and its disposed-of arms removed where no named ablation needs them (`lane/net`; A7 is a component of its own). N-M20: the promotion offset in the policy (D1; `policy_promotion` gone); position-free per-board registers and global registers on every pair (B8; `board_register_spatial`, `global_register_pairs` and the learned coordinates gone); aux pooling from squares - moves-left, effort - with D3's value-type heads (WDL and the short value too) pooled from the global registers by mean (`aux_global_pool` gone; issue 223); moves-left in turns (issue 224); the acting player on the global registers (`acting_player_input` and `all_tokens` gone; with no global registers on the board tokens, issue 225; `cache.board_ident`'s `acting` keying kept for A7, issue 303); the submit logit from the pooled registers (D8; `submit_register` gone). Earlier: B6 removed (B15); B16's status biases with intrinsic frozen features (N-B16 - its `frozen_features = "current"` test arm stays, as N-B16 left it: no named ablation needs it, and whether to remove it is the main loop's call - the N-F6heads-M20 review); both supersession readings (C20; docs relabelled). Relabelled, not changed: B5's details (ablation 2), 16a-g (B9's "v1 as built", ablation 6a), the per-square labels (6j) - now v1 values, not placeholders; B7 has no code. Not here: the reply head's reinstatement as a prototype (D4) - the heads' rebuild after engine round 2; until then it is always built, as at N1. Not on M20's list: D8's readout form (`submit_head`, issue 109) |
 | M21 | built, smoke-tested (`lane/net`, commits 1-4 and the review fixes; the QAT hook with the precision component, 2026-10-23; D4's labels from engine ABI round 3) | The training loop, written and smoke-tested, no training (§15.5 does not require it; the pilot run does). Built: I15's records and the generator (commit 1, issue 234); the target builder - I2's pruning with exclusion and provenance, D3's and D4's targets, I13, I14's refused hook, the losses' masks - with §15.2's I15 round trip (commit 2, issue 235); PCR (I5) with I20 behind its flag, I18, I19's schedules, I12's sampler with 6u's and I6's arms, I16's window, I17's SWA (commit 3, issue 236); the loop (`train/trainer.py`, commit 4, issue 237): records -> sampler -> window -> targets -> losses -> at most three optimiser steps -> SWA's published network. Since the review fixes (issue 237(a), the user's rule to the letter): optimiser steps on synthetic rows only, at most three per model whatever the trainer (the count travels with the model and its published copy); self-play records' rows - their inputs rebuilt under the trainer's own register counts, relations and window - go through the loop forward only (losses computed, no step); the miniature generate -> rows -> publish -> generate loop takes its steps on synthetic rows, the published network's SWA snapshot count reaching the next records; the losses falling on a fixed synthetic batch. The QAT hook (G8): built behind its flag, off, on G2's provisional FP8 E4M3 (the user's brief; issue 239, edit 182). D2's flat form (2026-10-23; issues 241-243): its per-board policy target (the turns' visits marginalised, then each board's options pruned - since the review fixes; per turn the arm), its loss (training the flat head's leave logit; a batch with flat rows refused without its weight), its records and self-play; three smoke steps on synthetic flat rows (`synthetic_record(flat=True)`) - the leave head moved, every loss finite. Not built: C3's conditioning-offset training - parked with the cached configuration. D4's per-square labels come from the engine's generator since engine ABI round 3 (`lane/engine`): re-derived from each record's replayed states (`replay_positions(square_labels=True)`, `TargetConfig.square_labels`, `square_mate_nodes`), never stored - only a label a mate search's budget left undecided is masked (issue 175) |
 | M23 | applied | Every working branch is pushed after each commit and takes main by merge, never rebase. The three lanes and their number blocks are the main loop's plan under this rule ("Current state (2026-10-17)") |
@@ -4627,6 +4627,62 @@ superseded or made moot says so; nothing is deleted.
     recapturer; the arrival check's moved-piece rule (a discovered attack not counted); the
     royal zone's whole-turn step through time. Edit 136.
 
+520. **§10.2's inference path cannot run on the development machine; what a partial
+    result means for §10.2** (§10.2, §15.3, §15.5; register G9, M19, B14). G9's bounded
+    AMD attempt (2026-10-23, `docs/MEASUREMENTS.md`, "G9's bounded AMD attempt"): AMD's
+    PyTorch for Windows (ROCm 10.1.0, torch 2.14.0+rocm10.1.0) runs the network eagerly
+    on the RX 9070 XT, correct against the CPU (FP32 to 3.3e-6, BF16 inside G1's bounds),
+    FlexAttention eagerly, FP8 GEMMs, and one search through the C API. **torch.compile
+    does not run**: Inductor needs Triton, which AMD ships for Linux only (its index's
+    every Triton wheel is `linux_x86_64`; the 7.2.1 Windows directory has none) -
+    `TritonMissing` for the network, `No module named 'triton'` for a toy compiled
+    `flex_attention`. So the attempt's answer is **partly**: G9's host-and-drive half
+    (PyTorch drives the C++ search through the C API) works on the AMD GPU; its kernel half
+    (torch.compile + FlexAttention) is not reachable on Windows through AMD's stack without
+    a community or source build of Triton, which the attempt excluded. What §10.2 should
+    say now is proposed (edit 360); nothing in it changes the committed path, which stays
+    NVIDIA-measured (M19). Not settled - for the user: whether the development machine
+    should ever host the compiled path (a Linux install, WSL2 - a technical preview in
+    ROCm 10.1 - or a Triton build), which is a machine change outside this lane's remit.
+    Edit 360.
+
+521. **The eager kernel's widened head width defeats fused attention on ROCm** (§10.2,
+    §6.1; register B14, M20, G9 - an implementation finding, no spec change). The fused
+    SDPA call (`python/t5d/net/attention.py`, `_kernel`) passes queries and keys widened
+    by B14/M20's feature widening - 45 and 33 wide in the v1 network - with a boolean key
+    mask. AMD's precompiled fused kernels take a mask only at a head width that is a
+    multiple of 8, so every call falls back to the math backend (6.5-7.9 ms against
+    0.25-0.49 ms at L = 2,920). Zero-padding the width to a multiple of 8 (exact: a zero
+    feature adds nothing to a score; the scale is explicit) gave 2.0-2.5x on the sdpa path
+    and 1.2-2.2x on block_sparse (MEASUREMENTS), measured through the probe's
+    process-local wrapper (`python/tools/g9_amd_probe.py --pad8`); the network's code was
+    not changed (the attempt allows a device-plumbing fix only, and this is a speed
+    change). PyTorch's CUDA memory-efficient kernel has its own alignment rules, so the same
+    change may matter on NVIDIA; it is the network lane's to take or leave (it would change
+    CPU summation order at the last bits, so the bitwise tests would be re-checked). Not
+    put to the user.
+
+522. **What AMD-labelled figures may settle** (§15.3, §15.6; register M19, M9, G9). M19:
+    "one bounded attempt on the AMD GPU may supply AMD-labelled figures first"; it does not
+    say whether such a figure can stand in for "a GPU evaluation rate" (M9's Phase-3
+    re-check) or a §15.3 row. The attempt's figures are of the eager, uncompiled network on
+    a machine loaded at 97-100% CPU, overhead-bound (about 0.26 TF a forward at 44 boards
+    takes 240-580 ms against 3-5 ms of kernel time at the measured rates), so they are
+    recorded beside the deferred rows and settle nothing; the deferred rows stay deferred
+    (edit 361). Not settled - for the user only if an AMD figure is ever proposed for a
+    verdict.
+
+523. **"One bounded attempt" states no bound, release or driver** (§10.2, §15.3; register
+    G9, M19). Taken here as: one session (the user's ceiling a day; it took about an hour
+    and a half), no system change (driver, Windows security, compilers, admin rights), a
+    separate venv under the git-ignored `build/`, AMD's current release for Windows rather
+    than the 7.2.1 line the release notes the spec cites describe (ROCm 10.1.0, 2026-10-05:
+    torch 2.14.0 for Python 3.11-3.14 against 7.2.1's torch 2.9.1 for Python 3.12 only -
+    nearer the project's torch 2.13 and Python 3.14; neither carries Triton for Windows),
+    and the driver as found (Adrenalin 26.10.1, driver 32.0.32015.7029, newer than the
+    "Adrenalin for ROCm 10.1" package, 26.10.41.05, that AMD's matrix lists; it worked).
+    Recorded so that a re-run knows what "bounded" was; edit 360 names the release.
+
 ## Proposed spec edits
 
 Edits the spec or the register needs, for applying upstream. Each: where, what it
@@ -5879,6 +5935,31 @@ struck through, where nothing of it is left to apply); the others stand as writt
     named, and the targets are re-derived rather than recorded (I15 keeps no per-square
     label).
 
+360. **§10.2's AMD sentence and register G9 (the bounded attempt done)**: now - §10.2:
+    "The development machine's AMD RX 9070 XT is listed in AMD's PyTorch-for-Windows
+    release notes; whether torch.compile — which FlexAttention needs — works there is
+    unstated, so it gets one bounded attempt, with any figures labelled AMD"; G9: "One
+    bounded attempt on the AMD RX 9070 XT via AMD's PyTorch for Windows, figures
+    AMD-labelled". Proposed - §10.2: "... The development machine's AMD RX 9070 XT got its
+    one bounded attempt (2026-10-23; AMD's PyTorch for Windows, ROCm 10.1.0, torch 2.14):
+    the network runs eagerly on it, correct against the CPU, and drives the C++ search
+    through the C API, but torch.compile - and with it compiled FlexAttention - does not
+    run there, because AMD ships Triton for Linux only; its eager figures are recorded,
+    labelled AMD, and the compiled path is measured on NVIDIA time (M19)"; G9: "... One
+    bounded attempt on the AMD RX 9070 XT via AMD's PyTorch for Windows (done 2026-10-23:
+    eager works, torch.compile does not - no Triton on Windows; figures AMD-labelled,
+    eager)". Why: issues 520, 523 - the attempt answered the sentence's open question.
+
+361. **§15.3's "Without a GPU" and register M19 (what the AMD attempt supplied)**: now -
+    M19 and §15.3: "one bounded attempt on the AMD GPU may supply AMD-labelled figures
+    first". Proposed - append: "(done 2026-10-23, G9: eager-only figures, AMD-labelled -
+    correctness against the CPU, kernel rates, FP8 GEMM ratios, eager evals/s and one
+    search's playouts/s; no compiled kernel runs on Windows, so the FA4-class rate, the
+    leaf-batching gain, the block-sparse and varlen kernels and the Phase-3 re-check stay
+    deferred to NVIDIA time; an AMD-labelled figure settles no verdict)". Why: issue 522 -
+    the eager figures are overhead-bound and cannot stand for the deferred rows; the last
+    clause records the reading this lane applied and is the user's to confirm (issue 522).
+
 ## Session log
 
 - **2026-10-01** - Pre-flight passed. Design documents moved into `docs/design/`
@@ -6014,3 +6095,14 @@ struck through, where nothing of it is left to apply); the others stand as writt
   the epoch) by `test_one_store_across_two_games_and_two_epochs` (2) and the same root-follow
   test (2). Random play's diverging games share no board whose past or markers alone differ, so
   M02 and M23 needed hand-built positions (5DFEN starts; Standard's knight shuffles).
+- **2026-10-23 - G9's bounded AMD attempt** (`lane/gate`, fast-forwarded to main 62ff24d first;
+  the same number block - issues 520-523, edits 360-361 used): AMD's PyTorch for Windows from
+  ROCm 10.1.0 (torch 2.14.0+rocm10.1.0; Python 3.14.7) installed into a separate venv under the
+  git-ignored `build/` from AMD's wheel index, downloads in a scratch folder, caches redirected
+  there; the driver (Adrenalin 26.10.1) as found, nothing on the machine changed. Visible and
+  correct (FP32 and BF16 against the CPU, FlexAttention eagerly, FP8), one search through the C
+  API on the GPU; torch.compile and compiled FlexAttention fail for want of Triton on Windows -
+  the answer is "partly". Eager rates overhead-bound on a 97-100% loaded CPU; the widened heads
+  miss AMD's fused attention (a probe-local padding arm measured, the network unchanged).
+  `docs/MEASUREMENTS.md` "G9's bounded AMD attempt" and machine row `dev-r-amd`; the G9 and M19
+  rows; the probe `python/tools/g9_amd_probe.py`. About an hour and a half of the day's budget.
