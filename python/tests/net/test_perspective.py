@@ -95,6 +95,7 @@ FLAG_SETS = {
     "no_table_pointer_submit": dict(displacement_bias=False, submit_head="pointer"),
     "d4_reply_d9": dict(opp_reply=True, optimistic_policy=True),
     "a8_centre": dict(board_layout_embedding=True, layout_padding="centre"),
+    "d2_leave_registers": dict(leave_pool="registers"),  # D2's flat head's other pool (issue 241)
 }
 
 VALUE_HEADS = ("value_logits", "wdl_logits", "short_term", "value_error", "moves_left_log", "effort_logits", "submit_raw")
@@ -268,6 +269,8 @@ def assert_mirrored(a, b, perm: torch.Tensor, acting: tuple[int, int], atol: flo
         close(a.opp_reply_logits[a.opp_move_valid], b.opp_reply_logits[b.opp_move_valid], "reply")
     close(a.action_log_probs()[a.action_valid()], b.action_log_probs()[b.action_valid()], "actions")
     close(a.board_logits, b.board_logits, "board")
+    assert torch.equal(a.board_valid, b.board_valid)
+    close(a.leave_logits[a.board_valid], b.leave_logits[b.board_valid], "leave")  # D2's flat head, board order kept
     mask = a.square_mask[0]
     close(a.square_logits[0][mask], b.square_logits[0][perm][mask], "square")
     colour_a = square_labels_by_colour(a.square_logits, torch.tensor([acting[0]]))[0]
@@ -336,6 +339,7 @@ def test_board_order_does_not_matter_to_the_mirror():
         assert torch.allclose(getattr(a, name), getattr(b, name), atol=ATOL), name
     assert torch.allclose(a.policy_logits[a.move_valid], b.policy_logits[b.move_valid], atol=ATOL)
     assert torch.allclose(a.board_logits[0, torch.from_numpy(order)], b.board_logits[0], atol=ATOL)
+    assert torch.allclose(a.leave_logits[0, torch.from_numpy(order)], b.leave_logits[0], atol=ATOL)  # D2's flat head
 
 
 # --- (c) the acting colour is live ---------------------------------------------------------------------
@@ -388,6 +392,7 @@ def _close(a, b, atol_trunk=2e-5, atol=1e-4):
         assert torch.allclose(getattr(a, name), getattr(b, name), atol=atol), name
     assert torch.allclose(a.policy_logits[a.move_valid], b.policy_logits[b.move_valid], atol=atol)
     assert torch.allclose(a.board_logits, b.board_logits, atol=atol)
+    assert torch.allclose(a.leave_logits[a.board_valid], b.leave_logits[b.board_valid], atol=atol)  # D2's flat head
 
 
 @pytest.mark.parametrize("supersession", [R1, R2])
