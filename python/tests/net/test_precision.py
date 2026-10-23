@@ -63,7 +63,10 @@ def test_bf16_trunk_close_to_fp32(pair, n):
     assert diff.abs().max() < TRUNK_MAX * scale
     assert (a.value_logits - b.value_logits).abs().max() < VALUE_LOGITS_MAX * scale
     assert (a.policy_logits - b.policy_logits)[batch.move_valid].abs().max() < POLICY_LOGITS_MAX * scale
-    assert (a.value_mean() - b.value_mean()).abs().max() < VALUE_MEAN_MAX * scale
+    assert (a.search_value() - b.search_value()).abs().max() < VALUE_MEAN_MAX * scale  # D3: W - L, the value search uses
+    assert (a.categorical_mean() - b.categorical_mean()).abs().max() < VALUE_MEAN_MAX * scale
+    assert (a.short_term - b.short_term).abs().max() < VALUE_MEAN_MAX * scale
+    assert (a.value_error - b.value_error).abs().max() < VALUE_MEAN_MAX * scale
     # And BF16 really is in use: the outputs are not bitwise FP32.
     assert not torch.equal(a.trunk, b.trunk)
 

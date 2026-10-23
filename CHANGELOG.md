@@ -10,6 +10,57 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-23 - M21 review fixes: inputs rebuilt under the trainer's configuration, steps on synthetic rows only and capped per model, I19's cutoff as Lc0's, I13 whole in the tree form, the untested claims tested
+
+Two reviews of M21 (spec fidelity; a 46-mutant pass that left 19 mutants alive).
+
+- **The trainer's inputs** (`train/trainer.py`, `train/selfplay.py`): `Trainer.add_game` rebuilt a
+  record's inputs under the record's register counts and relations, not the trainer's - a trainer
+  of another configuration got inputs its network does not take (a 1/4- and a 3/8-register
+  trainer, a typed-relations one with 20 edges for 47). Now `replay_positions(record, net_cfg,
+  window_k=...)` under the trainer's, with `TrainerConfig.window_k` (None: the record's; it sets
+  the positions' W/E scope, the cached configuration's - a row keeps the state alone). Replay
+  also refuses a record whose ruleset or rules encoding is not the replayed game's (the engine
+  version a logged reading, issue 234(f)).
+- **No training runs, to the letter** (the main loop's reading of the user's rule, issue 237(a)):
+  optimiser steps only on synthetic rows (`synthetic_record`'s header says `synthetic`; `step_on`
+  refuses any other row); record rows go through the loop forward only (`Trainer.losses_on`);
+  `MAX_STEPS` is enforced per model (`smoke.check_step`/`record_step`: a count the model and its
+  copies carry), so a second `Trainer`, a smoke run or the published copy cannot add steps.
+- **I19's cutoff as Lc0 defines it** (the main loop's ruling, issue 236(d)): `TemperatureSchedule`
+  now holds 0.9 before the cutoff turn 60 and a constant endgame temperature 0.45 from it
+  (`endgame`; `temp-endgame` "doesn't decay"), a decay before the cutoff optional (`decay_to`,
+  off). Commit 3 had decayed to 0.45 and cut to temperature 0 at turn 60.
+- **I13 whole in the tree form** (`train/targets.py`, issue 235(g)): a best move-child the search
+  never evaluated (inherited priors) had no network moves-left, so the WDL was blended and
+  moves-left was not. It now takes the decision's own raw moves-left (`best_child_moves_left`);
+  with no estimate at all moves-left is masked from that decision back.
+- **Smaller**: `Trainer.publish` gives the network its SWA snapshot count, which the records'
+  network condition now carries (it said 0); the generator records the prior-to-target divergence
+  under the builder's defaults when given no target configuration (it was NaN), and takes an
+  `on_decision` hook (the live search, the record, the input) for the tests; `synthetic_record`'s
+  float32 fields are float32-exact, so it round-trips through a file.
+- **Tests** - each tied to a finding, each mutant it names now killed: the value targets (search
+  value, categorical, root WDL, short-term) from the pruned visits by hand; the builder's KL as
+  KL(target || raw prior) on an asymmetric case and with the header's submit share; the replica's
+  inputs (E3's factor, the search's and the noise-free prior, the root's recorded visits);
+  short-term targets of a resigned game by hand; the submit child's moves-left offset; the tree
+  form's deblundering (constructed, and a generated tree-form game); I20 running to the cap on a
+  root that keeps moving; I18's sign (a value inside the threshold never resigns) and its 10%
+  (the default, and the disabled share over 4000 seeds); each record held to the live search at
+  generation (the root's cPUCT with E2 off and on, the best child, the place in the action, the
+  pruned and unpruned policy target and root value); forced and steered counts through a file;
+  newer, older and missing versions refused; another ruleset refused; a rebuilt input compared
+  field for field with its W/E scope, under a window other than 8; a resigned record replayed and added to a trainer; a trainer of three other
+  configurations rebuilding the generator's inputs under its own; the step cap per model and the
+  synthetic-rows rule; the miniature loop with its steps on synthetic rows and the snapshot count
+  in the next record.
+- Spec: §12.2, §12.5, §12.8 (I15's records, deblundering, the exploration bullet), §15.1's M21
+  sentence; register I2, I13, I15, I17, I18, I19, I20, M21. Issues 234(f)-(g), 235(a) and (g),
+  236(d), 237(a), (e), (f); proposed edits 175, 176, 178 and 181 extended (181 now quotes Lc0's
+  options). BUILD_LOG's I13, I15, I19 and M21 rows updated (M21 kept qualified: the QAT hook a seam
+  until G8, the user ruling on edit 182).
+
 ### 2026-10-23 - D2's flat form, part 3: the turn generator's successors under Q3's play activation (found by the long run of spec 15.2's row)
 
 `long_turngen_equals_the_brute_force_reference_on_tiny_positions` (3,000 tiny multiverses,
@@ -35,6 +86,59 @@ positions had not met the case.
 
 Spec: §15.2 (the flat generator's row - a defect its long run found, fixed); §8.2; register D2.
 Spec issue 163 (the unit, as built).
+
+### 2026-10-23 - M21 (4/4): the training loop end to end, smoke-tested - records, sampler, window, targets, losses, optimiser steps, SWA
+
+- **`python/t5d/train/trainer.py`** (new): `Trainer` - a game's I15 record in (its inputs rebuilt
+  from the record, its targets built, its rows weighted by I12's sampler and written into I16's window
+  as frequency copies), a batch drawn from the window, collated, every head's loss, one optimiser step,
+  SWA's update (I17); `publish` gives the averaged network self-play receives. At most `MAX_STEPS` (3)
+  optimiser steps - no training runs. AdamW or NAdam, placeholders (issue 237). **G8's QAT hook is a
+  named seam, not built** (`TrainerConfig.qat`, `apply_qat` raises until the precision component's
+  quantiser and the pinned format exist - for the user, edit 182). **C3's conditioning-offset training
+  stays parked** with the cached configuration. `synthetic_record` builds a well-formed record over
+  synthetic inputs.
+- **Tests** (`python/tests/train/test_trainer.py`): two tiny self-play games with a random network ->
+  records written and read back -> three optimiser steps (every loss finite, a fourth refused) -> the
+  published network differs from the raw one and drives self-play, its hash in the record; the same
+  loop on synthetic records (AdamW and NAdam); the total loss falling at each of three steps on a fixed
+  synthetic batch; the step cap and the QAT seam refusing.
+- *Corrected by the review fixes (2026-10-23, above)*: the inputs were rebuilt under the record's
+  network configuration, not the trainer's; the optimiser steps on self-play records broke the
+  user's rule (steps on synthetic data only), and the cap was per `Trainer`, not per model; the
+  published network's records said `swa_snapshots` 0.
+- Spec: §15.1's M21 sentence, §10.2, §12.8; register M21, G8, C3, I17. Issue 237; proposed edit 182.
+  BUILD_LOG's M21 and G8 rows and the C3 park updated.
+
+### 2026-10-23 - M21 (3/4): section 12.8's mechanics - I12's sampler with 6u's arms, I16's window, I17's SWA; PCR, I20, I18 and I19 in the generator
+
+- **`train/selfplay.py`**: playout cap randomisation (I5, `PCRConfig`: each decision full with
+  probability 0.25, re-derivable from the seed; cheap searches at a smaller cap without noise; the
+  difficulty mixture held below 1 and not built above 0 - issue 236); KL-adaptive full searches (I20,
+  `KLAdaptiveConfig`, a prototype, off: chunks until the root's visit distribution stops moving,
+  bounded by the full cap, the stop recorded as `kl`); resignation with the false-resign check (I18,
+  `ResignConfig`: off in 10% of games by the seed, would-resign events recorded, `false_resign_report`
+  per board-count range; the threshold None until the value head is calibrated); I19's schedules
+  (`TemperatureSchedule`: the move temperature 0.9 -> 0.45 over 60 turns, 0 from turn 60; the root
+  policy temperature 1.25 -> 1.1). The full cap's default is now 800 (a placeholder). A resignation
+  ends the game `resign`, the other side winning, with the record's last decision playing nothing.
+- **`train/sampler.py`** (new): I12's surprise weighting - half uniform, half in proportion to KL from
+  the raw prior to the pruned target, a small value-surprise share - per game, written as frequency
+  copies at full weight; 6u's arms: uniform, I6's raw variance and persistent bucket (`BucketTracker`).
+- **`train/window.py`** (new): I16's sublinear replay window, KataGo's shape and constants as
+  placeholders. **`train/swa.py`** (new): I17's capped running weight average and the published network.
+- **Tests** (`python/tests/train/test_mechanics.py`; `test_records.py` and `test_targets.py` updated for
+  PCR): the surprise weights by hand (mean 1, uniform on equal surprise, in proportion to the KL, value
+  surprise, cheap rows), steering kept out of the surprise by the pruned target, the copies seeded and
+  unbiased, 6u's arms; the window's growth (identity below c, monotone, sublinear, KataGo's 22M) and
+  recency; SWA's capped mean and publication; the temperature schedules; PCR's seeded fraction and a
+  game mixing full and cheap searches; I20 stopping on a quiet root; a resignation (record, result,
+  5dpgn replayed by the engine) and the check's events and per-range rates.
+- *Corrected by the review fixes (2026-10-23, above)*: "0 from turn 60" contradicted the Lc0
+  semantics it cited (the endgame temperature 0.45 holds from the cutoff, undecayed); the I20 test
+  could not tell a quiet root from a moving one; I18's sign and its 10% default were untested.
+- Spec: §12.3, §12.5, §12.8, §13.1 6l, 6u, 6z; register I3, I5, I6, I12, I16, I17, I18, I19, I20, M21.
+  Issue 236; proposed edits 179-181. BUILD_LOG's rows for these and M21 updated.
 
 ### 2026-10-23 - D2's flat form, part 2: the search arm; the enumerating whole-turn arm and its 256 cap retired
 
@@ -115,6 +219,84 @@ proposed edit 133), §11.0 item 3, §15.2 (the flat row's arm tested), §15.3 (p
 whole-turn arm retired), D1, D8 (the generator ends turns - built), E1 (the flat form's k0,
 noise and temperature). Spec issues 164-171 (placeholders and the generator's worst case).
 
+### 2026-10-23 - M21 (2/4): the targets from I15's records - I2's pruning, D3's and D4's targets, I13, I14's refusal; section 15.2's round trip
+
+- **`python/t5d/train/targets.py`** (new): every head's targets from a record alone, in float64,
+  deterministically. The policy target from full searches only (I5) with KataGo's forced-playout
+  pruning applied at target construction against a replica of the root's PUCT (§12.5), steered
+  visits excluded or, under the provenance arm, down-weighted (I2, §12.2; the counts are 0 until
+  E10); the soft-policy target; the search-value targets - D3's categorical over the root search
+  value of full searches with 6j's short-term arm as a switch, the short-term values at the heads'
+  horizons, the q_ratio blend's root WDL - from the pruned visits (I2, CHECKPOINT 7); WDL on the
+  result and moves-left in turns (issue 224's placeholder: the turn in progress counts), both
+  deblundered (I13: Lc0's threshold 0.1, the band a placeholder); travelled-into and
+  timeline-active-at-end per board, tactical volatility masked until proofs exist; the effort label
+  from the change point (issue 154); the reply prototype through `reply_map` from the rebuilt
+  inputs; D9's weights stay the loss's. I14's proof rescoring refused while
+  `PROOF_CHANNEL_SIGNED_OFF` is False. `TARGET_SOURCES` names each target's source - none a learned
+  verifier (D5). `collate_rows` turns record rows into the network's batch and the losses' `Targets`.
+- **`train/selfplay.py`**: `generate_game(target_config=...)` builds the targets at generation and
+  records each decision's prior-to-target divergence and the configuration.
+- **`train/losses.py`**: a missing target is masked - a NaN WDL row (an unscored game), moves-left
+  (a censored game), per-board or per-square label; unchanged where every target is present.
+- **Tests** (`python/tests/train/test_targets.py`): pruning against KataGo's amount derived in
+  closed form, the best child untouched, the submit child pruned like a move, a one-visit remainder
+  dropped, exclusion and provenance, the boost taken out; the pruned root value, soft policy, raw
+  prior and KL by hand; WDL, moves-left, short-term targets and deblundering (rewrite, band,
+  perspective, moves-left offset) on constructed games; travelled-into by brute force; effort
+  labels; the I14 refusal; the losses' masks. **Section 15.2's I15 row**: on generated games under
+  three game configurations and three target configurations, the targets re-derived from the stored
+  record (its inputs rebuilt by replay) equal the targets written at generation, bit for bit, the
+  reply maps included; record-derived batches give every loss finite, with and without the reply
+  prototype (forward only).
+- *Corrected by the review fixes (2026-10-23, above)*: no test pinned the search-value targets to
+  the pruned visits, the builder's KL direction, the PUCT replica's inputs (E3's factor, the prior,
+  the root's visits) or the moves-left offset of a submit best child, though this entry claimed
+  them; the I13 blend was half-applied in the tree form (WDL without moves-left); short-term
+  targets of a resigned game were untested.
+- Spec: §8.3, §8.6, §12.2, §12.4, §12.5, §12.8, §15.2's I15 row; register I2, I5, I13, I14, D3, D4,
+  D5, D9, M21. Issue 235; proposed edits 176-178. BUILD_LOG's I2, I13, I14 and M21 rows updated.
+
+### 2026-10-23 - M21 (1/4): I15's training records and the self-play generator that writes them
+
+Register M21's first part, in the net lane: the record format before anything that reads it.
+
+- **`python/t5d/train/records.py`** (new): register I15's record, format version 1 - one
+  compressed `.npz` per game (`allow_pickle=False`), a JSON header with the conditions (engine
+  version, ruleset, variant or 5DFEN start, the network's weight hash and configuration, every
+  `t5d_search_params` field - the legality budget among them - the input's window and relations,
+  the generator's configuration, the result, the 5dpgn, the resignation events, the proof
+  references: none, the proof channel being off), per decision the raw root outputs (WDL and
+  categorical logits, a raw logit per candidate move and for submit, error, moves-left), the root
+  search value (q, d), visits, cPUCT, the effort change point, the best and played children, the
+  move and root temperatures, the PCR flag, cap and playouts, the seed and the prior-to-target
+  divergence's slot, the decision's boards and candidate moves, and every root child's statistics
+  (visits with the forced and steered counts, both priors, (q, d), value variance, E3's factor,
+  E10's boost, its key and own network evaluation, the solver bounds). Another version is refused
+  on reading; `record_differences` compares two records bit for bit.
+- **`python/t5d/train/selfplay.py`** (new): the generator - netplay's self-play loop (turn starts
+  judged first, a fresh search per decision sharing the cache, noise on, a chosen child made known
+  legal) writing a record per game; the board-move split and the tree form (the whole-turn arm
+  writes no policy target and is refused); D9's optimistic evaluator refused (`self_play=True` on
+  every search); `replay_positions` rebuilds each decision's network input from a record alone.
+  The raw root outputs are the network's evaluation of the decision's own input (issue 234's
+  reading, not a memo of the search's). `engine/netplay.py` unchanged.
+- **Tests** (`python/tests/train/test_records.py`): records written and read back bit for bit
+  under four configurations (the ply split, the tree form, Two Timelines, a tight legality budget
+  with unknown moves) and a custom 5DFEN start with branched timelines; each decision's input
+  rebuilt from the stored record, digest for digest; the raw WDL equal to the engine's root WDL
+  and the search's noise-free prior the softmax of the raw logits; the conditions present; another
+  version refused; the weight hash following the weights.
+- Nothing trains: the generator plays tiny games with random weights in the tests.
+- *Corrected by the review fixes (2026-10-23, above)*: the bit-for-bit round trip cannot see a
+  value recorded wrongly at generation (the cPUCT, the best child, the place in the action), the
+  forced and steered counts were 0 in every tested record, "another version refused" was tested
+  one way only, and replay ignored the header's ruleset and rules and the reader's network
+  configuration.
+- Spec: §12.8 "Rich training records", §15.2's I15 row (the targets' half lands with the target
+  builder); register I15, M21, D2, D8, D9, H23/H41. Issue 234; proposed edit 175. BUILD_LOG's I15
+  and M21 rows updated.
+
 ### 2026-10-23 - D2's flat form, part 1: the turn generator - the hypercuboid search best first (spec 15.2's row)
 
 The flat form's generator (§8.2: "A generator assembles complete legal turns best-first by
@@ -162,6 +344,178 @@ Spec: §8.2 ("Flat form"), §11.0 item 3, §15.2 (the flat generator's row - bui
 §15.3 (a new row proposed: proposed edit 131); register D2 (its row in the build log; the
 register's own row unchanged until the flat arm is built). Spec issue 163 (the generator's
 unit, ties and budget - placeholders).
+
+### 2026-10-23 - Network heads review fixes: the error target and D9's z as the register and KataGo have them; the losses' masks, moves-left's unit and the old parameters pinned
+
+Two reviewers of N-D3, N-D4 and N-D9 (spec fidelity; 46 mutants). One high finding, three medium,
+nine low; all fixed.
+
+- **HIGH - the error head's target and D9's z** (`train/losses.py`): both had compared the
+  short-term target with the network's W - L and called that KataGo's; it is not. KataGo's
+  short-term error loss compares the detached short-term value prediction with the short-term
+  target (Huber delta 0.4), and its optimistic z_value is (short-term target - short-term
+  prediction) / sqrt(predicted short-term error + 1e-4) - which is also register D9's literal
+  "how far the mover beat the predicted short-term value". Rebuilt that way:
+  `error_target(predicted, short_term, horizon)` = (short-term output[h], without gradient -
+  target[h])^2, and `optimistic_weights(short_term, predicted, value_error)`'s z over the
+  short-term output at the error head's horizon. The Huber delta stays a named placeholder (1.0;
+  KataGo's 0.4 noted). Section 8.3's "the value and the short-term value" is ambiguous: the W - L
+  reading is recorded as the alternative for the user (issues 231(c), 233(a) and edits 172, 174
+  rewritten); every false "KataGo's" removed (`losses.py`, `heads.py`, the tests' docstrings).
+- **MEDIUM**: the error loss pinned to the Huber loss against the built target over the finite
+  rows, at two horizons; the short-term loss pinned to the mean over the finite entries only, a
+  row with no target getting no gradient (`tests/train/test_value_heads.py`); moves-left's unit
+  across the network -> evaluator -> search boundary shown with a head biased to log1p(37) - the
+  evaluation and the search's record of its root read 37 turns (`tests/engine/test_evaluator.py`;
+  the random head's outputs clamp to 0, so the old checks could not tell turns from log1p).
+- **LOW**: the pre-D3 parameters pinned - a fingerprint of the 64 parameters a small network had
+  at 47bc857 (seed 7), recorded there, under the default flags and with every prototype on
+  (`tests/net/test_params.py`; three float64 sums, not a hash of the bytes, so as not to depend
+  on float32 libm across platforms); D9's submit mask tested on an offered but illegal submit
+  (`tests/net/test_model.py`); the reply map's `ambiguous="turn"` arm on a reply with one masked
+  and one clean played move, and each mapped move's piece checked against the decision board's
+  same cell (`tests/train/test_reply_map.py`); the cache's equivalence test compares the submit
+  readout and the masked submit logits (`tests/net/test_cache.py`); each `Evaluation` names its
+  prior (`policy`), `check_evaluation` refuses an unknown one, and `serve` / `run_search` take
+  `self_play` and refuse an optimistic evaluation there, however the evaluator is wrapped -
+  `play_game` sets it, M21's generator must (`engine/evaluator.py`, `engine/netplay.py`); the
+  match record's Engine header names the optimistic prior; issue 233(e) says "no I15 training
+  record"; the effort loss reads full searches only (§12.4's "full-search moves only"); stale
+  `heads.ValueHead` references (`net/config.py`, `net/trunk.py`).
+- **The mutants re-run** (the reviewer's import-hook set; those whose code the high fix rewrote
+  retargeted at the new code): every one tied to a finding is caught (err_catmean, st_no_nanmask,
+  ev_ml_log, no_retired_draws, d9_submit_possible, reply_turn_arm), as are d3_global_stream by the
+  new pin and two new ones (the `serve` guard, the effort mask). `play_game`'s own optimistic
+  check, disabled, now goes unnoticed: `run_search` refuses the same evaluator with the same
+  message - a second layer, kept because it refuses before the game is opened.
+- F1 unchanged (22,965,426): no parameter added or moved.
+- The three heads' entries below corrected where they said what was not so.
+- Spec: §8.1 (D9's z), §8.3 (the error head), §12.4 (the effort row), §15.2's D4 row; register
+  D3, D4, D9. Issues 231(c), 233(a), 233(e) rewritten; proposed edits 172 and 174 rewritten.
+
+### 2026-10-23 - Network D9: the optimistic policy head behind its flag
+
+Register D9 (§8.1, CHECKPOINT 7) - a prototype, behind its flag, off; match play only.
+
+- **The head** (`net/model.py` `T5DNet.optimistic`, a `heads.ActionHead`;
+  `NetConfig.optimistic_policy`, off; `optimistic_policy_dim` 256): its own f and g, D1's
+  promotion offset and its own submit logit, masked as the policy's (`NetOutput.optimistic_logits`,
+  `optimistic_submit_logits`, `optimistic_action_logits()`); drawn from a generator of its own
+  (`model.d9_seed`) - switching it on changes no other parameter (tested). 135,182 parameters when
+  on (F1 23,100,608); the v1 is unchanged at 22,965,426.
+- **The loss** (`train/losses.py`): its actions against the normal policy target over the full
+  searches, each sample weighted by `optimistic_weights` - clamp(0, 1, sigmoid((z - 1.5) x 3)),
+  z = (short-term target - (W - L)) / sqrt(error head + eps) at the error head's horizon, the
+  network's outputs without gradient (*corrected by the review fixes above: the baseline is the
+  network's short-term output, D9's and KataGo's; W - L is the alternative*); `LossConfig.optimistic_centre`, `_scale`, `_eps`; weight 1.0.
+  Placeholders: spec issue 233.
+- **Match play only** (`engine/evaluator.py`, `engine/netplay.py`): `NetworkEvaluator` and
+  `CachedNetworkEvaluator` take `policy="normal" | "optimistic"` (`POLICY_SOURCES`,
+  `policy_source`) - the optimistic one delivers the optimistic head's logits as the prior with the
+  same value heads, and is refused on a network without the head. `play_game` refuses an
+  optimistic evaluator in self-play; `PlayConfig.optimistic` is match-only and both sides must
+  deliver it; the CLI's `--optimistic` needs `--mode match` alone.
+- **Tests**: the weight (0.5 at z = 1.5, towards 1 and 0, no gradient), the loss only under the
+  flag and reaching only its own head, three optimiser steps reducing it
+  (`tests/train/test_policy_heads.py`); the head, its own draws and endpoints
+  (`tests/net/test_model.py`); cached = dense and the A7 mirror with it on; the optimistic evaluator,
+  dense and cached (`tests/engine/test_evaluator.py`); self-play refusing it and a match with it
+  replaying legal through `t5d-gate` (`tests/engine/test_netplay.py`).
+- Spec: §8.1, §12.4 (the optimistic row), §14.4 (held open in self-play), §13.1 6t; register D9,
+  D1, C14. Spec issue 233; proposed edit 174.
+
+### 2026-10-23 - Network D4: the soft-policy head and the opponent-reply prototype
+
+Register D4 (§12.4, CHECKPOINT 7, reversal 29) in the network.
+
+- **The soft policy** (`net/heads.py` `ActionHead`, `AuxHeads.soft_policy`; `NetConfig.soft_policy`,
+  on - 6j's on/off arm): "a second pointer head - its own source and destination projections and
+  its own submit logit": f and g at width 128 (`soft_policy_dim`, a placeholder), D1's promotion
+  offset, and a submit readout of the pooled global registers in `submit_head`'s form, masked
+  exactly as the policy's (`NetOutput.soft_policy_logits`, `soft_submit_logits`,
+  `soft_action_logits()`). Loss (`train/losses.py`): its own actions against the policy target to
+  the power 1/4, renormalised (`soft_policy_target`, `LossConfig.soft_policy_power`), full searches
+  only, weight 8 (the policy's 1).
+- **The opponent-reply prototype** (`NetConfig.opp_reply`, off): its pointer head scores
+  `PositionState.opp_moves`; loss `distribution_ce` against `Targets.opp_reply`, now the turn's
+  distribution `(B, M2)` (positions without one skipped), weight 0.15. `train/reply_map.py`
+  (`map_reply`) builds the move space: the opponent's next turn mapped onto one of our decision
+  points - each reply board to its nearest ancestor there through the engine's lineage, the same
+  square; every move touching a board two distinct reply boards map onto masked; candidates the
+  mapped moves of every reply decision point; the target uniform over the played moves.
+  `opp_moves` docs updated (`net/state.py`, `engine/convert.py`); inference supplies none.
+- **The other pointer heads' offset**: `NetConfig.pointer_promotion_offset` (on, a placeholder,
+  issue 222).
+- **Draws**: each head from a generator of its own (`model.d4_soft_seed`, `d4_reply_seed`); N1's
+  always-built reply head's draws kept in the global stream - every existing parameter unchanged
+  (checked against the previous commit under three configurations), and switching either flag
+  changes no other parameter (tested).
+- **Parameters**: F1 22,965,426 (+69,390 the soft policy, -65,792 the reply now off; 23,034,559
+  with the reply on), F2's L24-ff12 46,894,834; §9.2's aux budget 76,586. `netplay.SMALL` gives the
+  soft head width 32.
+- **Tests**: `tests/train/test_reply_map.py` - §15.2's D4 row on turns played through the engine
+  from handwritten 5dpgn (a branching jump with White and with Black acting; two branches into one
+  past board in Two Timelines, ambiguous and masked at the turn's start, mapped at the decision
+  point between the jumps), each mapped square checked against the test's own lineage walk (the same algorithm, so not
+  independent: *the review fixes above add a content check*), and the
+  mapped space fed to the reply head; `tests/train/test_policy_heads.py` (the quarter-power target,
+  the soft loss at weight 8 reaching only its own head, full searches only, the reply loss only
+  under its flag at 0.15, a few optimiser steps reducing each); `tests/net/test_model.py` (each
+  pointer head's own endpoints and offset, the soft submit logit masked like the policy's in both
+  readout forms, the flags changing no other parameter); the A7 mirror (a reply arm added), cached =
+  dense (a reply and pointer-submit arm), invariance and smoke tests over the new outputs;
+  `tests/net/test_params.py`.
+- Spec: §8.1 (promotions), §9.2 (Params; Aux heads), §12.4 (soft policy, reply), §12.5, §15.2's D4
+  row; register D1, D4, D7, F1. Spec issue 232 (new) and 222 (built note); proposed edit 173; edit
+  156's running figure updated.
+
+### 2026-10-23 - Network D3: the value heads as corrected at CHECKPOINT 7
+
+Register D3 (§8.3, corrected at CHECKPOINT 7, reversal 28) in the network: the 51 bins had been
+the only value and trained on the outcome; now four heads, as the engine's search (ABI round 2a)
+already consumes them.
+
+- **The heads** (`net/heads.py` `ValueHeads`, `net/model.py`): over the global registers' mean,
+  FP32, the acting player's perspective - one shared hidden layer with Mish (N1's value MLP), then
+  **WDL** (the value search uses: `NetOutput.search_value()` = W - L, `wdl_probs()`), **the
+  categorical** (51 bins, over the root search value; `categorical_mean()` and
+  `categorical_variance()` - the search's default uncertainty signal, 6m - replace
+  `value_mean()`/`value_variance()`), **short-term values** at `NetConfig.short_term_horizons`
+  (2, 5 and 16 turns, placeholders; `NetOutput.short_term`, tanh) and **the error head**
+  (`NetOutput.value_error`, softplus - the name the evaluator reads, `ERROR_HEAD_FIELD`). N1's
+  WDL head moved onto the shared layer; its 51-bin short value head is gone. `heads.hl_gauss`
+  (HL-Gauss targets) and `heads.wdl_value` added.
+- **Draws**: the categorical and WDL readouts are drawn where N1's value output and WDL head
+  were; the short-term and error outputs from a generator of their own (`model.d3_seed`); the
+  retired short value head's draws are kept in the global stream (`T5DNet._retired_draws`, and
+  its construction-time draw), so every parameter that existed before is unchanged, bit for bit
+  (checked against the previous commit's weights under three configurations).
+- **Losses** (`train/losses.py`): `Targets` takes the game result's WDL (class index or
+  distribution), `root_value` (the root search value of full searches, NaN where none),
+  `short_term` (per horizon, NaN where none), `full_search` (section 12.5's mask - the policy and
+  the categorical train on full searches only) and `root_wdl` (for `LossConfig.q_ratio`, 0). The
+  categorical's loss smooths the root value by HL-Gauss (sigma 0.75 bin widths); the error head's
+  target is `(short_term[h] - (W - L))^2` with the network's value taken without gradient
+  (`error_target`, `error_horizon` 0), Huber (*corrected by the review fixes above: the
+  short-term output against its target, register D9's and KataGo's form*). Loss names `categorical`, `short_term`,
+  `value_error` (was `value`, `short_value`). Every unstated detail a placeholder (spec issue
+  231). `train/smoke.py`'s synthetic targets follow (every third position a cheap search).
+- **The evaluator** (`engine/evaluator.py`) now delivers the error head's output with the WDL,
+  the categorical and moves-left; docs updated.
+- **Parameters**: F1 22,961,828 (was 22,973,907: three short-term outputs +771 and the error head
+  +257, the short value head -13,107), F2's L24-ff12 46,891,236.
+- **Tests**: `tests/train/test_value_heads.py` (HL-Gauss, the WDL target and its blend, the
+  categorical on full searches only, no gradient from the error target into the WDL or
+  short-term heads, missing targets skipped (only shown finite: *pinned by the review fixes*),
+  three optimiser steps reducing each loss alone);
+  `tests/net/test_model.py` (shapes, `search_value`, the heads FP32 under a BF16 autocast against
+  an FP64 recomputation, the horizons' validation; the register-pool and permutation tests cover
+  the four); `tests/engine/test_evaluator.py` (the error head read by its pinned name, and the
+  network's heads reaching the search through the C step API - the search's record of its root
+  equals the network's evaluation, the 6m signal at every leaf under either source); the A7
+  mirror, cached = dense, purity and turn-state tests extended to the new outputs.
+- Spec: §8.3, §8.4 (6m's signal), §9.2 (Params), §12.4 (value rows), §12.5; register D3, F1, I10,
+  D7 (pooling unchanged). Spec issue 231; proposed edit 172; edit 156's running figure updated.
 
 ### 2026-10-23 - D2 tree form review fixes: a carried inherited root is evaluated; the inherited value's refusal; the untested readings tested; the counts committed
 
@@ -323,6 +677,82 @@ replaces it).
 - Spec: §8.2 "Evaluating at turn boundaries" (tree form), §15.2's D2 tree-form row,
   §15.4 (turn structure), §8.5/C11 and §14.4/C21 (the refusal), §13.1 6x, §15.3 (a new
   row); register D2, C11, D8, A6 - spec issues 157-162 and 301, proposed edits 129-130.
+
+### 2026-10-23 - N-A6 review fixes: the optional count in the digest pinned; the batch fallback documented
+
+- One reviewer, no high or medium findings (20 of 21 mutants caught; the survivor - a
+  digest without the optional count - is now caught): `tests/net/test_turn_state.py`'s
+  equal-boards cases vary the optional count alone; `Batch.turn_counts`' all-zero fallback
+  documented as invalid before the shift and never reached through `collate`; issue 302's
+  Built note.
+- Spec: §2.3, §15.2's A6 and purity rows; register A6.
+
+### 2026-10-23 - Network A6: the turn-state inputs embedded into the global registers
+
+Register A6's network side (the engine side, ABI round 1, merged at e8de15e): the three exact
+turn-state counts - mandatory boards still to move, optional boards still playable, moves
+already made in the action - reach the network.
+
+- **The state** (`net/state.py`). `PositionState` gains `mandatory_remaining`,
+  `optional_playable` and `moves_made`; `turn_state` gives the counts in effect. A count given
+  as None is derived from the boards under the default rules (`derived_turn_state`:
+  mandatory = the active heads in the present with the acting player to move, optional = its
+  other heads, moves made 0 before the shift and 1 past it) and re-derived whenever the state
+  is rebuilt, so it follows the acting player; a given count is kept - by `permute_boards`,
+  `translate`, `relayout` and `mirror` (the counts are the acting player's, which A7's mirror
+  keeps). Validated: non-negative integers; submitting possible only with nothing owed (T5);
+  mandatory and optional within the playable heads (L5). `collate` puts them in
+  `Batch.turn_state` (`(B, 3)`; `turn_counts()` is 0 for a batch made without them).
+  `TurnState` is exported.
+- **The converter** (`engine/convert.py`) copies the expansion's counts and, unless
+  `strict=False`, refuses (`PresentMismatch`) counts that break what the expansion defines them
+  by: negative; mandatory + optional not the boards it marks playable; more mandatory boards
+  than playable boards of active timelines; nothing owed and submitting not possible, or the
+  reverse. Which playable boards are owed is the ruleset's, which the expansion does not name,
+  so the split is the engine's.
+- **The embedding** (`net/embed.py`, `net/model.py`, `net/config.py`): each count as
+  `(n / 8, log1p n, [n = 0])`, the nine features through Linear(9, 32), GELU, Linear(32, d),
+  one vector added to every global register beside D8's acting colour; with no global
+  registers, issue 225's placeholder (the board tokens, the live boards' alone under the
+  block-causal scope). The form is a placeholder of a committed-class silence, fixed in code
+  (spec issue 230; `NetConfig.turn_state_hidden = 32`, `turn_state_scale = 8.0`). Its 8,768
+  parameters draw nothing while made and are drawn from a generator of their own
+  (`model.a6_seed`): no other parameter changed. F1 22,973,907 (was 22,965,139), F2's
+  L24-ff12 46,903,315 (`tests/net/test_params.py`; the totals quoted in `shaw.py`, `config.py`
+  and `test_displacement.py` updated).
+- **The caches** (`net/cache.py`). `state_digest` - an epoch's anchor, and the Python
+  evaluator's epoch reuse - carries the three counts (a refresh's dense pass lets every board
+  read the global registers); frozen K/V never depend on them. A refresh's other-colour view
+  (`viewed_by`) takes the counts its boards give that colour (the anchor's are its acting
+  player's; issue 230 with 229). `python/t5d/engine/evaluator.py` and `search.py` are
+  unchanged: leaves convert through `to_position`, which now copies the counts.
+- **The fixtures** (`net/synthetic.py`, `net/tree.py`) produce turn starts with the boards'
+  own counts, as documented. The tree fixture does not count moves per path: its moves are no
+  actions (a physical move is made by whoever is to move on that timeline), and a per-path
+  count split its two move orders of one multiverse - which `test_cache.py`'s transposition
+  tests read as one state - into two (tried and reverted). Mid-turn states are its states with
+  the counts given.
+- **Tests.** `tests/engine/test_turn_state_engine.py` (section 15.2's A6 row on the network
+  side): every state of eight seeded random plays under both Q4 readings - 956 states: turn
+  starts, mid-action, past the shift with and without moves; jumps between two present boards,
+  rewinding branches, T12 rises - converts to the expansion's counts, moves made the handle's
+  count, mandatory and optional a recount from the rulebook's definitions; a mid-turn state and
+  its own 5DFEN (a turn start with equal boards and acting player) differ in moves made alone,
+  and in digest and output, full and cached; inconsistent counts refused.
+  `tests/net/test_turn_state.py`: derivation and validation; each count moves exactly the
+  tokens the global inputs enter and nothing else; every output moves with each count under
+  every register arm and both scopes; equal boards with different counts are never confused by
+  the store, an epoch or a refreshed epoch's anchor; cached = full pass along the tree
+  fixture's paths with each node also given mid-turn counts; the parameters' draws.
+  The A7 mirror tests compare the counts (a mid-turn construction added; the engine's 5DFEN
+  mirror's own counts); `test_convert.py`'s relabelled turn start relabels its counts too, so
+  that its moves are what is refused; `test_embed.py`'s global registers are equal given the
+  acting player and the counts.
+- `docs/BUILD_LOG.md`: register rows A6 (now built, tested) and F1; spec issue 225's A6
+  sentence answered and issue 230 new; proposed edit 156's figures moved, edit 171 new.
+- Spec: §2.3 (turn-state inputs), §7.9 (the refresh's other-colour view), §8.5 and §15.2's A6
+  and purity rows, §9.2's Params row; register A6, F1, F2, D8, C3. Proposed edits 171 (the
+  embedding's form, the other colour's counts) and 156 (the parameter count, M4).
 
 ### 2026-10-23 - Build log: issue 156 (a mislabel in CHECKPOINT 8's turn-width figures) and issues 148-155 wait on the user
 

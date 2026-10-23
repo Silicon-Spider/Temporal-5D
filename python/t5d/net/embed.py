@@ -51,7 +51,23 @@ drop a committed input with the registers (A7 keeps the acting colour as an inpu
 added to every board token instead - squares and per-board registers - and under the
 block-causal scope (``block_causal``) to the live (head) boards' tokens only, as with global
 registers, where no frozen board reads it. A PLACEHOLDER of a committed-class silence, fixed in
-code (spec issue 225): A6's turn-state counts, when they are built, meet the same question.
+code (spec issue 225).
+
+**The turn state (register A6, section 2.3: "embedded into the global registers").** The three
+exact counts of ``PositionState.turn_state`` - mandatory boards still to move, optional boards
+still playable, moves already made in the action (``Batch.turn_counts``) - enter beside the
+acting colour, on the same tokens: every global register, and with none (issue 225's
+placeholder, followed here) the board tokens, the live boards' alone under the block-causal
+scope, so no frozen board's input - and no frozen K/V - depends on them. Each count ``n`` is
+fed as ``(n / turn_state_scale, log1p n, [n == 0])`` - Delta-t's features, a count being
+non-negative - and the nine features go through a small MLP (``turn_in``, GELU as Delta-t's,
+``turn_out``) to one ``d``-vector per position: exact counts at any size, the zero (nothing owed,
+nothing optional, a turn start) kept as a flag. The spec says only "embedded into the global
+registers": the features, the scale, the width and the activation are a PLACEHOLDER of a
+committed-class silence, fixed in code (spec issue 230; ``NetConfig.turn_state_hidden``,
+``turn_state_scale``). Its parameters draw nothing while they are made and are drawn from a
+generator of their own (``model._init_weights``, ``a6_seed``), so no other parameter's draw
+changed when it was added.
 """
 
 from __future__ import annotations
@@ -60,7 +76,10 @@ import torch
 from torch import nn
 
 from .config import NetConfig
-from .state import N_OWNERS, N_PIECE_TYPES, TOKEN_BOARD_REGISTER, TOKEN_GLOBAL_REGISTER, TOKEN_SQUARE, Batch
+from .state import N_OWNERS, N_PIECE_TYPES, TOKEN_BOARD_REGISTER, TOKEN_GLOBAL_REGISTER, TOKEN_SQUARE, TURN_STATE_FIELDS, Batch
+
+#: Features per turn-state count: ``(n / turn_state_scale, log1p n, [n == 0])``.
+TURN_FEATURES_PER_COUNT = 3
 
 
 class InputEmbedding(nn.Module):
@@ -84,16 +103,31 @@ class InputEmbedding(nn.Module):
         #: without drawing from the RNG, and drawn from D8's own generator
         #: (``model._init_weights``), never from the global stream.
         self.acting = nn.utils.skip_init(nn.Embedding, 2, d)
+        #: Register A6: the turn-state counts' MLP (the module docstring; spec issue 230), on the
+        #: same tokens as the acting colour. Made without drawing from the RNG, and drawn from
+        #: A6's own generator (``model._init_weights``).
+        self.turn_in = nn.utils.skip_init(nn.Linear, TURN_FEATURES_PER_COUNT * len(TURN_STATE_FIELDS), cfg.turn_state_hidden)
+        self.turn_out = nn.utils.skip_init(nn.Linear, cfg.turn_state_hidden, d)
 
     def dt_features(self, dt: torch.Tensor) -> torch.Tensor:
         dt = dt.float()
         return torch.stack([dt / self.cfg.dt_scale, torch.sign(dt) * torch.log1p(dt.abs()), (dt == 0).float()], dim=-1)
 
+    def turn_features(self, counts: torch.Tensor) -> torch.Tensor:
+        """``(B, 9)``: each of the ``(B, 3)`` turn-state counts as ``(n / turn_state_scale,
+        log1p n, [n == 0])`` (register A6; spec issue 230)."""
+        n = counts.float()
+        return torch.stack([n / self.cfg.turn_state_scale, torch.log1p(n), (n == 0).float()], dim=-1).flatten(1)
+
+    def turn_state(self, batch: Batch) -> torch.Tensor:
+        """``(B, d)``: register A6's turn-state embedding of each position."""
+        return self.turn_out(torch.nn.functional.gelu(self.turn_in(self.turn_features(batch.turn_counts()))))
+
     def forward(self, batch: Batch, frozen_intrinsic: bool = False, block_causal: bool = False) -> torch.Tensor:
         """Token embeddings ``(B, L, d)``. ``frozen_intrinsic``: superseded boards' tokens
         get no Delta-t and no active flag; ``block_causal``: the forward's scope is the
         block-causal one, so with no global registers only the head boards' tokens get the
-        acting player (see the module docstring)."""
+        acting player and the turn state (see the module docstring)."""
         kind = batch.kind
         is_square = (kind == TOKEN_SQUARE).unsqueeze(-1)
         is_breg = (kind == TOKEN_BOARD_REGISTER).unsqueeze(-1)
@@ -116,15 +150,16 @@ class InputEmbedding(nn.Module):
         greg = self.global_register(slots.clamp(max=self.global_register.num_embeddings - 1)) + self.not_square
 
         zero = torch.zeros((), dtype=square.dtype, device=square.device)
-        acting = self.acting(batch.acting())[:, None, :]
+        # The global inputs: register D8's acting colour (A7) and A6's turn state.
+        glob = (self.acting(batch.acting()) + self.turn_state(batch))[:, None, :]
         x = torch.where(is_square, square, zero)
         x = x + torch.where(is_breg, breg, zero)
         x = x + torch.where(on_board, board, zero)
-        # Register D8's acting player: on the global registers (M20).
-        x = x + torch.where(is_greg, greg + acting, zero)
+        # On the global registers (M20; section 2.3).
+        x = x + torch.where(is_greg, greg + glob, zero)
         if batch.global_regs == 0:
-            # None to carry it (an ablation-3 arm): on the board tokens - the live boards' only
+            # None to carry them (an ablation-3 arm): on the board tokens - the live boards' only
             # under the block-causal scope (a placeholder, spec issue 225).
             carry = on_board & (batch.is_head == 1).unsqueeze(-1) if block_causal else on_board
-            x = x + torch.where(carry, acting, zero)
+            x = x + torch.where(carry, glob, zero)
         return x
