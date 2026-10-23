@@ -1,0 +1,33 @@
+# Test-time driver for the pinned Kairos oracle (FirePlank/5d-chess-engine).
+#
+# Part of the oracle harness, never of the engine. `harness.py build --oracle kairos`
+# copies this directory into the harness cache beside an export of the pinned commit,
+# at `../src`, and builds it there with the pinned Rust toolchain: offline, from the
+# lock file below (Kairos has no crate dependencies), with Kairos's own release
+# settings. It is never built here.
+[package]
+name = "kairos_oracle_driver"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-only"
+publish = false
+
+[[bin]]
+name = "kairos_oracle_driver"
+path = "src/main.rs"
+
+[dependencies]
+kairos = { path = "../src" }
+
+# Kairos's own [profile.release], so that the library runs as its author builds it -
+# without its .cargo/config.toml's `-C target-cpu=native`, which a build outside its
+# tree does not read: the same code on every x86-64 machine.
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+debug = false
+
+# Its own workspace: never a member of anything above it in the cache.
+[workspace]
