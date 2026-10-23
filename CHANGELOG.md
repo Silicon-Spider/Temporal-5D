@@ -10,6 +10,56 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-23 - A8 review fixes: the cost flagged under the 2x rule, the cached node's share counted, the FFN's form pinned, non-square padding and FP32 values tested
+
+A review of register A8 (`lane/net` a1ec09b: spec fidelity, and 24 mutants run at test time, five
+of which survived). In the network lane - no training run.
+
+- **The cost was presented as confirmed while more than 2x off section 15.3's estimate.** The row's
+  "~0.1% of attention at 44 boards" is the projection's figure (0.099%), but the row is register
+  A8's, and A8 has "an FFN after the embedding": as built (8x, a placeholder) A8 is 4.50% of
+  attention at 44 boards - 45x the estimate - and any per-token FFN, even one 1·d wide, makes it at
+  least 0.66%, 6.6x. `docs/MEASUREMENTS.md` now flags it under the 2x rule (a "Flags" line in the
+  A8 section; the §15.3 table's ratio column gives the register's A8, 45x and at least 6.6x, beside
+  the projection's 0.99), the build log logs it (issue 240(l), the A8 row) and edit 186 says so.
+  The parameters (2,629,120 against "~1.6M", 1.64x) are inside the rule.
+- **A8's cost in the cached configuration, counted.** `CachedEvaluator.prepare` embeds every token
+  of a node, frozen boards' included, so A8's per-token FFN is paid over the whole position at
+  every node, while the node's trunk work is its live set's. Counted (`FlopCounterMode`, FP32, the
+  cached configuration, `synthetic_state(0, N, n_timelines=8)` and its physical child against the
+  root's store; FLOP counts do not depend on load): A8 adds 6.43 GFLOP to the child node's 63.83
+  at 44 boards (+10.1%) and 34.28 to 238.19 at 240 (+14.4%) - 13% and 21% of section 7.6's analytic
+  cached node - where it adds 2.0% and 0.62% to the dense forward; the live pass and the
+  supersession are unchanged by it. Stated in issue 240(g), `docs/MEASUREMENTS.md` (A8, "In the
+  cached configuration") and edit 186. `cache_bench` counts a node's preparation (`prepare_flops`,
+  the node row's `counted_prepare_tf`) beside its live pass, which was all it counted.
+  Embedding only the live and the missing boards' tokens would remove most of it: not built (the
+  node's embedding is made before its missing boards are known) - logged in 240(g).
+- **The FFN's documented form pinned**: `test_the_ffn_is_one_pre_norm_residual_block_on_every_valid_token`
+  asserts bit for bit that the embedding is `x0 + where(valid, W2 mish(W1 RMSNorm(x0)), 0)`, with
+  `x0` the `layout_ffn_ratio = 0` network's embedding of the same seed (the same projection and
+  merge), and that every square, per-board register and global register row changes while padding
+  does not. Each surviving mutant of the FFN - no residual, squares only, GELU, the FFN before the
+  merge - fails it, and so does no norm (caught only incidentally before).
+- **Smaller fixes.** The canonical-order test takes non-square boards (6 x 4, 3 x 5), so centring
+  with the width and height swapped (the fifth survivor) fails it. The FP32 test compares the
+  layout channels and the embedding with an FP64 reference of the same module, so BF16 rounding of
+  the merge fails it directly (`layouts()` now builds the one-hot in the projection's dtype).
+  `test_both_colours_acting_are_seen` and `test_storage_order_would_break_it_for_black` exercised
+  no implementation: folded into the canonical-order test, which now asserts both acting colours at
+  every size. `cost.layout_flops` returns zeros with the flag off, and its docstring says that
+  `dense_flops` and `pass_flops` (section 9.1's model) leave A8 out as they leave every embedding
+  out.
+- **Mutants re-run** (the reviewer's plugin, no file edited): the five survivors, BF16 rounding of
+  the merge and the FFN without its norm - each fails its own test directly.
+- **The A8 entry below, corrected**: its "Measured" bullet called the projection's 0.099% "the
+  row's ~0.1%" without the flag A8's 4.5% needed, and gave no cost for the cached configuration;
+  its "Tests" bullet did not pin the FFN's form, and its FP32 check was of the dtype alone.
+
+Spec: §2.2 (the board-layout paragraph), §7.6 (the cached node), §15.3 (the A8 row - flagged, more
+than 2x off; its M4 write-back rewritten); register A8, M4. Issue 240(b), (g), (k), (l); proposed
+edits 185 and 186 rewritten.
+
 ### 2026-10-23 - A8's board-layout embedding behind its flag (off), with section 15.3's cost row counted
 
 Register A8 (a prototype, gate 6p; spec section 2.2), in the network lane - no training run.
@@ -39,11 +89,16 @@ Register A8 (a prototype, gate 6p; spec section 2.2), in the network lane - no t
   three smoke optimiser steps on synthetic rows. `test_perspective.py`: section 15.2's A7 row with
   A8 on - every construction, both scopes and paddings, and the cached path from both perspectives;
   `test_cache.py`: A8 under every N2 switch. Mutants (storage order for Black, owners dropped, every
-  square reading board 0) are each caught.
+  square reading board 0) are each caught. *(Corrected by the review fixes above: the FFN's form was
+  not pinned - four mutants of it survived - centring was tested on square boards only, and the FP32
+  test checked the dtype alone.)*
 - **Measured** (`docs/MEASUREMENTS.md`, "A8 - the board-layout embedding"): the projection 0.138
   GFLOP at 44 boards, 0.099% of attention by section 15.3's formula - the row's "~0.1%" - and with the
   register's FFN 6.29 GFLOP, 4.5% (2.0% of the counted forward); CPU wall time indicative only (the
-  machine at 85-100% load): the embedding +18 ms at 44 boards, +103 ms at 240 (BF16).
+  machine at 85-100% load): the embedding +18 ms at 44 boards, +103 ms at 240 (BF16). *(Corrected
+  by the review fixes above: the row is register A8's, and A8 with its FFN is 45x the row's ~0.1% -
+  flagged under the 2x rule, not a confirmation; and in the cached configuration A8 adds 10.1% /
+  14.4% to a node at 44 / 240 boards, which this entry did not state.)*
 
 Spec: §2.2 (the board-layout paragraph), §13.1 6p, §15.1 Phase 2, §15.2 (the A7 row and C2's
 cached = dense, with A8 on), §15.3 (the A8 row - measured; its M4 write-back proposed); register A8,

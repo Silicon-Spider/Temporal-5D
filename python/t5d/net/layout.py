@@ -52,8 +52,13 @@ and its own canonical cell, nothing of other boards and nothing of the board's s
 flags - so under the block-causal scope a frozen board's embedding stays intrinsic (with its
 perspective, as every board input under A7 - ``cache.board_ident(..., acting=True)``, spec issue
 303), and the cached path, which embeds the node's tokens through ``T5DNet.embed_tokens``, computes
-it as the full pass does (C2, C17: cached = dense). In a cache that stored the embedding, a frozen
-board's would be computed once with its K/V.
+it as the full pass does (C2, C17: cached = dense). **Its cost there**: ``CachedEvaluator.prepare``
+embeds every token of a node, frozen boards' included, so the FFN - per token, most of A8's
+FLOPs - is paid over the whole position at every node, while the node's trunk work is its live
+set's: a larger share of a cached node than of the dense pass (``docs/MEASUREMENTS.md``, "A8";
+spec issue 240(g)). A frozen board's embedding feeds only its K/V, which a node finds stored, so
+embedding only the live boards' and the missing frozen boards' tokens would remove most of it -
+not built (the node's embedding is made before its missing boards are known).
 
 **Precision.** The embedding runs before the trunk's autocast: FP32 under either G1 trunk. G2's
 8-bit trunk does not reach it - its layers are plain ``nn.Linear``, never ``quant.QuantLinear``
@@ -145,14 +150,15 @@ class BoardLayoutEmbedding(nn.Module):
 
     def layouts(self, batch: Batch) -> torch.Tensor:
         """``(B, Nmax, 1536)``: every board's flattened one-hot layout (cell-major, 24 states per
-        cell), zero for padding boards."""
+        cell), zero for padding boards; in the projection's dtype (FP32 - or FP64 for a test's
+        reference)."""
         bsz = batch.batch_size
         n_max = batch.board_valid.shape[1]
         cell = self.cells(batch)
         occupied = (cell >= 0) & (batch.piece > 0) & ((batch.owner == OWNER_OURS) | (batch.owner == OWNER_THEIRS))
         state = LAYOUT_PIECES * (batch.owner - OWNER_OURS) + (batch.piece - 1)
         pos, tok = torch.nonzero(occupied, as_tuple=True)
-        out = torch.zeros(bsz, n_max, LAYOUT_FEATURES, device=batch.piece.device)
+        out = torch.zeros(bsz, n_max, LAYOUT_FEATURES, dtype=self.proj.weight.dtype, device=batch.piece.device)
         out[pos, batch.board[pos, tok], cell[pos, tok] * LAYOUT_STATES + state[pos, tok]] = 1.0
         return out
 

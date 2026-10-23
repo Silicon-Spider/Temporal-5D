@@ -13,7 +13,11 @@ built); and the KV memory per state. Each is given four ways:
 * **counted** - the FLOPs the implementation issues (``cost.count_flops``). The dense pass
   runs B14's block-sparse key selection on its two move-graph heads and the live pass does
   not, so the dense count is given both ways: block-sparse, and through the chunked path
-  that scores every key (``dense_flops`` with ``attn_impl="chunked"``);
+  that scores every key (``dense_flops`` with ``attn_impl="chunked"``). A node's counted
+  figure is its live pass; the node's preparation (``CachedEvaluator.prepare`` - its token
+  embedding, which embeds every token of the node, and its context) is counted beside it
+  (``prepare_flops``, the node row's ``counted_prepare_tf``): small for the v1, and the whole
+  of register A8's cost when that prototype is on (``layout.py``; not on in these jobs);
 * **wall** - CPU wall time of this prototype. It includes what a fused GPU implementation
   would not do per node: gathering every cached board's K/V into one tensor, rotating every
   cached key (RoPE) and building the masks - about 58% of a live pass at 240 boards. Wall
@@ -395,8 +399,8 @@ def job_cached(
 
 
 def job_cached_flops(boards: int, timelines: int | None, dtype: str, seed: int = 0, causal_past: str = "lineage") -> dict:
-    """The FLOPs the cached path issues: the live pass, the changed-only probe, each
-    supersession, the refresh."""
+    """The FLOPs the cached path issues: the live pass, the node's preparation (its embedding),
+    the changed-only probe, each supersession, the refresh."""
     from .cache import CacheConfig, CachedEvaluator, KVStore
     from .cost import count_flops
 
@@ -406,11 +410,12 @@ def job_cached_flops(boards: int, timelines: int | None, dtype: str, seed: int =
     work = ev.prepare(state, epoch)
     out = {"job": "cached_flops", **_conditions(model, state), "causal_past": causal_past}
     _, out["live_pass_flops"] = count_flops(lambda: ev.live_pass(work))
+    _, out["prepare_flops"] = count_flops(lambda: ev.prepare(state, epoch))  # the node's embedding (and context)
     root_entries = dict(ev.store.entries)
     for name, (universe, move) in _children(state, seed).items():
         cev = CachedEvaluator(model, store=KVStore(dict(root_entries)))
         child = universe.apply(move).state()
-        cwork = cev.prepare(child, epoch)
+        cwork, prep = count_flops(lambda cev=cev, child=child: cev.prepare(child, epoch))
         flops = []
         for b in cev.missing(cwork):
             _, f = count_flops(lambda b=b, cev=cev, cwork=cwork: cev.compute_board(cwork, b))
@@ -418,7 +423,7 @@ def job_cached_flops(boards: int, timelines: int | None, dtype: str, seed: int =
         changed = [i for i in range(child.n_boards) if child.creation[i] >= universe.next_creation]
         _, probe = count_flops(lambda cev=cev, cwork=cwork, changed=changed: cev.live_pass(cwork, query_boards=changed))
         _, live = count_flops(lambda cev=cev, cwork=cwork: cev.live_pass(cwork))
-        out[f"child_{name}"] = {"supersession_flops": flops, "changed_only_flops": probe, "live_pass_flops": live}
+        out[f"child_{name}"] = {"supersession_flops": flops, "changed_only_flops": probe, "live_pass_flops": live, "prepare_flops": prep}
     refresher = CachedEvaluator(model, CacheConfig(root_refresh=True))
     _, out["refresh_flops"] = count_flops(lambda: refresher.root_epoch(state))
     return out
@@ -560,6 +565,8 @@ def summarise(results: list[dict]) -> dict:
         row["node"] = {
             "analytic_tf": a_node / 1e12,
             "counted_tf": cflops and cflops["live_pass_flops"] / 1e12,
+            # The node's preparation (its embedding), beside the live pass; absent in job files written before it was counted.
+            "counted_prepare_tf": cflops["prepare_flops"] / 1e12 if cflops and "prepare_flops" in cflops else None,
             "wall_s": r["live_pass_s"] if ok else None,
             "evaluate_wall_s": r["node_s"] if ok else None,
             "kernel_s": r["live_pass_kernel_s"] if ok else None,

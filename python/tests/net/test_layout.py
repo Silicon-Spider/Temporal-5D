@@ -13,6 +13,7 @@ compute the same function with it; and section 15.3's row - "~0.1% of attention 
 
 from __future__ import annotations
 
+import copy
 from dataclasses import replace
 
 import numpy as np
@@ -25,7 +26,7 @@ from t5d.net.config import ATTN_IMPLS
 from t5d.net.cost import attention_flops, count_flops, layout_flops
 from t5d.net.layout import LAYOUT_CELLS, LAYOUT_FEATURES, LAYOUT_STATES, BoardLayoutEmbedding, layout_parameters
 from t5d.net.quant import QuantLinear
-from t5d.net.state import OWNER_OURS, TOKEN_SQUARE
+from t5d.net.state import OWNER_OURS, TOKEN_BOARD_REGISTER, TOKEN_GLOBAL_REGISTER, TOKEN_SQUARE
 from t5d.net.tree import SearchTree
 from tests.net.test_cache import _close, _random_moves, _root
 from tests.net.test_cache import _model as _cached_model
@@ -150,45 +151,35 @@ def _expected_layouts(state, padding: str = "a1") -> np.ndarray:
 
 
 @pytest.mark.parametrize("padding", ["a1", "centre"])
-@pytest.mark.parametrize("size", [8, 7, 6, 5, 4, 3, 1])
+@pytest.mark.parametrize("size", [(8, 8), (7, 7), (6, 6), (6, 4), (5, 5), (4, 4), (3, 5), (3, 3), (1, 1)], ids=str)
 def test_the_layout_is_read_in_canonical_order(size, padding):
     """Each board's one-hot layout is its pieces at their canonical cells (A7: ours and theirs,
-    ranks mirrored when Black acts), with White and with Black acting - a position and its
-    mirror - and smaller boards padded into the frame as ``layout_padding`` places them."""
+    ranks mirrored when Black acts), with White and with Black acting - each position and its
+    mirror, so both acting colours are seen at every size (reading the ranks in storage order
+    puts Black's pieces at other cells, A7's warning, and fails here) - and smaller boards
+    padded into the frame as ``layout_padding`` places them. The non-square sizes (6 x 4, 3 x 5)
+    tell the file's offset from the rank's under ``"centre"``."""
+    width, height = size
     layer = BoardLayoutEmbedding(NetConfig(**A8, layout_padding=padding))
     for seed in (0, 1):
         s = (
             far_state(40 + seed, size=1)
-            if size == 1
-            else synthetic_state(40 + seed, 6, n_timelines=3, width=size, height=size, fairy_prob=0.5)
+            if size == (1, 1)
+            else synthetic_state(40 + seed, 6, n_timelines=3, width=width, height=height, fairy_prob=0.5)
         )
+        assert (int(s.width), int(s.height)) == size
+        acting = set()
         for state in (s, mirror(s)):
+            acting.add(int(state.acting_player))
             got = layer.layouts(collate([state]))[0].numpy()
             assert np.array_equal(got, _expected_layouts(state, padding)), (size, int(state.acting_player))
             per_cell = got.reshape(state.n_boards, 8, 8, LAYOUT_STATES)
-            ox, oy = ((8 - size) // 2, (8 - size) // 2) if padding == "centre" else (0, 0)
+            ox, oy = ((8 - width) // 2, (8 - height) // 2) if padding == "centre" else (0, 0)
             inside = np.zeros((8, 8), dtype=bool)
-            inside[oy : oy + size, ox : ox + size] = True
+            inside[oy : oy + height, ox : ox + width] = True
             assert not per_cell[:, ~inside].any(), "the padding cells are empty"
             assert per_cell.sum() == (state.piece > 0).sum()
-
-
-def test_both_colours_acting_are_seen():
-    """The canonical-order test above covers both acting colours (a position and its mirror)."""
-    s = synthetic_state(40, 6, n_timelines=3)
-    assert {int(s.acting_player), int(mirror(s).acting_player)} == {0, 1}
-
-
-def test_storage_order_would_break_it_for_black():
-    """With Black acting, the canonical layout is not the storage-order one (the mutant A7's build
-    log note warns of): reading ranks as stored puts the pieces at other cells."""
-    s = synthetic_state(41, 4, n_timelines=2)
-    black = s if int(s.acting_player) == 1 else mirror(s)
-    batch = collate([black])
-    layer = BoardLayoutEmbedding(NetConfig(**A8))
-    stored = replace(batch, coords=batch.coords.clone())
-    stored.coords[0, :, 1] = torch.from_numpy(np.where(batch.kind[0].numpy() == TOKEN_SQUARE, 7 - batch.coords[0, :, 1].numpy(), 0))
-    assert not torch.equal(layer.layouts(stored), layer.layouts(batch))
+        assert acting == {0, 1}
 
 
 def test_boards_larger_than_the_frame_are_refused():
@@ -260,17 +251,60 @@ def test_the_owner_states():
 
 
 def test_it_is_fp32_and_never_quantised():
-    """Under the BF16 trunk the embedding is FP32 (it runs before the trunk's autocast); under G2's
-    8-bit trunk none of its layers is a quantised projection and the embedding is unchanged, bit
-    for bit (issue 238(d))."""
+    """Under the BF16 trunk the embedding is FP32 (it runs before the trunk's autocast) - in
+    dtype and in value: its layout channels and the embedding agree with an FP64 reference (the
+    same module in double) to FP32's rounding, far inside a BF16 step - and under G2's 8-bit
+    trunk none of its layers is a quantised projection and the embedding is unchanged, bit for
+    bit (issue 238(d))."""
     batch = collate([synthetic_state(70, 6)])
     bf16 = build_model(NetConfig(n_layers=2, **A8), seed=1).eval()
     assert bf16.embed_tokens(batch).dtype == torch.float32
+    layer = bf16.embed.layout
+    ref = copy.deepcopy(layer).double()
+    with torch.no_grad():
+        got_c, ref_c = layer.channels(batch), ref.channels(batch)
+        assert got_c.dtype == torch.float32 and ref_c.dtype == torch.float64
+        assert (got_c.double() - ref_c).abs().max() <= 1e-6 * ref_c.abs().max(), "the channels: FP32 against FP64"
+        bf16.embed.layout = None
+        before = bf16.embed_tokens(batch)  # the token input A8 adds to
+        bf16.embed.layout = layer
+        got, want = bf16.embed_tokens(batch), ref(batch, before.double())
+        assert (got.double() - want).abs().max() <= 1e-5 * want.abs().max(), "the embedding: FP32 against FP64"
     fp8 = bf16.with_trunk_quant("fp8_e4m3")
     assert not any(isinstance(m, QuantLinear) for m in fp8.embed.layout.modules())
     assert sum(isinstance(m, QuantLinear) for m in fp8.modules()) == 6 * 2
     assert torch.equal(fp8.embed_tokens(batch), bf16.embed_tokens(batch))
     assert not torch.equal(fp8(batch).value_logits, bf16(batch).value_logits), "the trunk is quantised"
+
+
+# --- the FFN after the embedding: its form (spec issue 240(b), a placeholder) ----------------------------
+
+
+def test_the_ffn_is_one_pre_norm_residual_block_on_every_valid_token():
+    """Issue 240(b)'s documented form, bit for bit: with ``x0`` the embedding with the layout
+    channels added and no FFN (the ``layout_ffn_ratio=0`` network of the same seed - A8's
+    projection and merge are drawn first from its own generator, so they are the same
+    parameters), the embedding is ``x0 + where(valid, W2 mish(W1 RMSNorm(x0)), 0)`` - after the
+    layout channels, residual, pre-norm, Mish, on every valid token: the per-board and global
+    registers change as the squares do, padding stays zero."""
+    with_ffn = _model(9, **A8)
+    without = _model(9, **A8, layout_ffn_ratio=0)
+    layer = with_ffn.embed.layout
+    for name in ("proj.weight", "proj.bias", "merge.weight"):
+        assert torch.equal(layer.state_dict()[name], without.embed.layout.state_dict()[name]), name
+    states = [synthetic_state(90, 6, n_timelines=3), synthetic_state(91, 4, width=6, height=6)]
+    batch = collate(states)
+    with torch.no_grad():
+        x0 = without.embed_tokens(batch)
+        h = layer.ffn_out(torch.nn.functional.mish(layer.ffn_in(layer.norm(x0))))
+        want = x0 + torch.where(batch.valid[..., None], h, torch.zeros((), dtype=h.dtype))
+        got = with_ffn.embed_tokens(batch)
+    assert torch.equal(got, want)
+    moved = (got - x0).abs().amax(-1) > 0
+    for kind in (TOKEN_SQUARE, TOKEN_BOARD_REGISTER, TOKEN_GLOBAL_REGISTER):
+        rows = batch.valid & (batch.kind == kind)
+        assert rows.any() and bool(moved[rows].all()), f"the FFN reaches every valid token of kind {kind}"
+    assert not bool(moved[~batch.valid].any()) and torch.equal(got[~batch.valid], x0[~batch.valid]), "padding untouched"
 
 
 # --- every attention path, and the cached path ---------------------------------------------------------
@@ -321,6 +355,7 @@ def test_the_cost_row():
     cfg = NetConfig(**A8)
     t = 44 * 66 + 16
     flops = layout_flops(44, t, cfg)
+    assert layout_flops(44, t, NetConfig()) == dict.fromkeys(flops, 0), "off: no A8, no FLOPs"
     assert flops["projection"] == 2 * 44 * 1_536 * 1_024
     attention = attention_flops(t, t, cfg)
     assert abs(flops["projection"] / attention - 0.001) < 0.0001, "section 15.3: ~0.1% of attention at 44 boards"
