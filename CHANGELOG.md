@@ -10,6 +10,86 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-23 - MT-04 review fixes: D4's reply head compared, the claims corrected, one store across games, epochs and searches
+
+A review of `python/tests/engine/test_cached_variants.py` (22 mutants of the cached path and the
+cached evaluator: 18 killed by the file, 4 survived it - each killed by an older suite).
+
+- **D4's reply head was not compared** (MEDIUM): engine positions carry no `opp_moves`
+  (`t5d/engine/convert.py`: a training target's move space, never needed at inference), so
+  `_close` compared `opp_reply_logits` over an empty mask. The main test now gives each state the
+  move space training builds (`train.reply_map.map_reply` over the opponent's next action in the
+  same play, as `train.targets.reply_targets` does) and asserts that the step-1 configuration
+  compares the head on some moves. The largest FP32 head gap, the reply head and the new tests
+  included, is 1.91e-6 (was 1.67e-6; `docs/MEASUREMENTS.md`).
+- **Claims corrected**: Reversed Royalty holds a royal queen beside a common king, not a princess
+  (no variant holds one); the T0 board is Black's turn 0, half-turn 1; the step-API leaves are
+  the root (a turn start), then mostly the states inside its action - mid-action and, where the
+  search gets that far, shifted (Turn Zero's searches reach none) - and a few beyond its submit.
+- **The survivors, now killed by the file itself** (the coordinator's ask - it should stand on its
+  own): `test_one_store_across_two_games_and_two_epochs` (Standard, Timeline Strategos: two
+  diverging games through one store and causal epoch; two root refreshes of one game sharing one
+  store), `test_one_cached_evaluator_follows_its_search_to_a_new_root` (the same two: one
+  `CachedNetworkEvaluator` with the root refresh serving a search at a root, then one after one
+  more action, checked against the new anchor's two-level reference) and
+  `test_boards_alike_but_for_a_marker_or_a_past_keep_their_own_entries` (two 5DFEN starts alike
+  but for a rook's has-moved marker; Standard's third-turn board after two knight shuffles, alike
+  with different pasts - random play's diverging games share no board whose past differs, so
+  the two keys' halves needed hand-built positions). The four survivors re-run against a fresh
+  copy of the fixed tree (the reviewer's `run_mutants.py`): M02 and M23 killed by the marker-or-past
+  test, M19 by the root-follow test, M24 by the two-games-two-epochs test and the root-follow test.
+
+Spec: §15.2 rows 1, 4, 5 and 6; register C2, C3, C14, C17, C20, D4 - tested as built, no decision
+changed; no part of the spec describes the test file, and no edit is proposed.
+
+### 2026-10-23 - MT-04: cached = dense on every named variant the engine sets up
+
+`python/tests/engine/test_cached_variants.py` (new; tests only - no code changed): section
+15.2's protocol names "every variant" among its adversarial constructions, and cached = dense
+had run on real positions of only three games. Now every variant of the engine's table (all 16,
+`engine/src/variants.cpp`) is played at random from its start - two seeds, travel favoured for
+White so that timelines branch and some go inactive, a move after which the action could neither
+go on nor be submitted passed over (Timeline Tactician's first action, T13) - and every state is
+evaluated: turn starts, mid-action, shifted (some with optional moves made after the shift) and
+submitted. Boards 3x3 to 8x8, odd and even starts, the T0 board, the royal queen beside a common
+king, brawns and unicorns (no variant holds a dragon or a princess - corrected by the review
+fixes below); lineage only (C23).
+
+- `test_cached_equals_full_pass_on_every_variant` (16 variants x 2 configurations): the
+  positions of a game evaluated incrementally in one epoch opened at a mid-game root, the store
+  shared, against `reference_output` - under both of C20's readings (`causal_past` over the whole
+  game; `past_and_epoch_history` with the root's frozen boards as the epoch's history). The
+  configurations: the v1's (B15's table, B16's status key biases, A6's turn-state counts and A7's
+  frame - all defaults; A7 cached per perspective, issue 303), and the step-1 one with A8's
+  board-layout embedding, D4's reply head and D9's optimistic policy on (D3's heads and D4's soft
+  policy are on in both). FP32, 2 layers, `test_cache.py`'s `_close` (2e-5 trunk, 1e-4 heads).
+- `test_step_api_cached_equals_dense_on_every_variant` (16): the C step API's own leaves
+  (`run_search`), tree and graph mode (C11), the search's evaluation cache off, through
+  `CachedNetworkEvaluator` against `NetworkEvaluator(scope="block_causal")` - and with C3's root
+  refresh against the two-level reference; every leaf met twice is bitwise identical.
+  `test_two_orders_of_one_action_through_the_step_api` (2): at roots with several boards to move,
+  the tree search reaches states by two orders of moves (each a leaf of its own) and the graph
+  search meets them as transposition hits - bitwise identical, in both epochs (EQ-04's
+  engine-side case).
+- `test_every_n2_switch_with_relations_on_three_variants` (7 flag sets x 3 variants): B5,
+  B9-B12, B15's no-table arm, B17 and A8 with the structure, each network's positions converted
+  with `relations_for` - attack, defence, pin, x-ray and check edges all present (engine ABI
+  round 3).
+- `test_f1_bf16_cached_on_three_variants` (slow, 3): F1 block-causal in BF16 on Turn Zero,
+  Reversed Royalty and Timeline Strategos, at `test_network.py`'s BF16 bounds.
+
+All 60 green: no variant breaks cached = dense. Largest gaps (the module prints them under
+`-s`; in `docs/MEASUREMENTS.md`): FP32 trunk 1.9e-6, heads 1.7e-6, step-API evaluations
+1.4e-6; BF16 trunk RMS 2.0e-3 / max 1.2e-2, policy 7.2e-3, value 1.3e-3 - the gaps
+`test_network.py` and `test_cache.py` record. Wall time of the file: 603 s serial on the shared
+machine at 100% CPU (other lanes' engine tests); the same cases ran 3-6x faster earlier in the
+session on a less loaded machine. Spec issues 520-539 and edits 360-379 (this session's
+block): none used.
+
+Spec: §15.2 rows 1, 4, 5 and 6 and its protocol ("every variant"); register C2, C17, C19, C20,
+C23, C3, C11, B15, B16, A6, A7, A8 - tested as built, no decision changed; no part of the spec
+describes the test file, and no edit is proposed.
+
 ### 2026-10-23 - D2 flat head review fixes: the flat target pruned per board after marginalising, the optimistic prior refused under the flat form, the loss's claim corrected, the survivors killed
 
 Two reviews of D2's flat head (`cd310be`) and the flat form's policy target (`c3f9038`): one of spec

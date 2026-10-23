@@ -259,44 +259,50 @@ the register's own words - its status column wherever a status is given.
 - Nothing enables the proof channel: Hunt's export, I14 and solved bounds stay off
   until the H23/H41 sign-off.
 
-### Current state (2026-10-17)
+### Current state (2026-10-23)
 
-**On main** (2026-10-17, evening): everything "On main" under "State on 2026-10-04"
-below - the rules engine (E1-E5c, E7, H46); the search core (E6a: PUCT/MCGS, the ply
-split and the whole-turn arm, the solver behind H41's `proof_channel` switch, off);
-verification v3's components (E8+E9), none wired into the search; the network N1-N5;
-C24 (off); the oracle harness; t0database - and, merged from the lanes, each reviewed:
+**On main** (2026-10-23, the MT-04 merge after 0e37093): everything on main on
+2026-10-17 (kept below as "On main on 2026-10-17") and, since, each reviewed and merged
+with its battery: engine ABI rounds 1-3 (A6's turn-state counts; D3's values in the
+search, E1/I19, I15/I2's per-child fields; B11's pin and check relations and D4's
+per-square label generator, 710921a); D2's tree form (b624020) and flat form (4ddd5b6),
+the enumerating whole-turn arm and its 256 cap retired; the network's A7, A6's inputs,
+the heads (D3, D4's soft policy and reply prototype, D9 behind its flag; ba129e0), M21's
+training loop (smoke-tested, no training; a937370), the precision component (G2's FP8
+E4M3 emulation, C15's straight-through fix, G8's QAT hook - all behind flags, off;
+88d2007), A8 behind its flag (9c59cb0), D2's flat head and its target (0e37093); MT-04,
+cached = dense on every engine variant (`lane/gate`). The nightly gate gates Standard -
+Half Reflected and Standard - Reversed Royalty (two oracles to gate a ruleset, H47 as
+amended); the proof channel is disabled. F1 is 22,965,683 parameters (A8 on adds
+2,629,120). GitHub Actions still starts no job (the account's billing): every check runs
+locally before each merge, nightly included when a truth source changes.
+
+**Now** - four lanes, each a git worktree under `.claude/worktrees/` on its own branch,
+pushed after every commit, taking main by merge, never rebase (re-check with `git branch
+-a -vv` and `git log main..origin/lane/<lane>`):
+- `lane/gate` - MT-04 merged; next, in the quiet-machine block: H48's re-recording, then
+  the release tier with the engine configured.
+- `lane/engine` - step 2's missing tests: MT-01 (the search solver's proofs against
+  df-pn), MT-03 (the proof-export invariant under TT churn; its settling-scan part after
+  E10's merge), MT-02's engine-side record tool (adding its records to the corpus waits
+  for the user and a quiet machine); then the engine documents the flat head made stale
+  (`capi_search.h`'s flat-form paragraph, `Evaluation::board_logits`).
+- `lane/search` (from main 88d2007, 2026-10-23) - E10 redone (Hunt under 100 boards, the
+  settling scans under 50, the asset map, Guard's hook built and off, H44's audit-lane
+  tooling; issues 177-197, edits 137-146), in its review fixes; next E11 (E7 with 6o's
+  arms, no root-scan reserve while Guard is offline - issue 306) and E8 behind its flag.
+- `lane/net` - A5 last (piece-centric, dense scope only, behind its flag).
+- G9, the bounded AMD attempt (`build/venv-rocm`, at most a day; a driver update needs
+  the user) - not yet attempted.
+
+**On main on 2026-10-17** (the earlier state, for the record): everything "On main" under
+"State on 2026-10-04" below - the rules engine (E1-E5c, E7, H46); the search core (E6a:
+PUCT/MCGS, the ply split and the whole-turn arm, the solver behind H41's `proof_channel`
+switch, off); verification v3's components (E8+E9), none wired into the search; the
+network N1-N5; C24 (off); the oracle harness; t0database - and, merged from the lanes:
 gate step 1, H47 (c55ab40); F5 and F6 (8f71012); M22 measured (3d2e73a); B15 with B14's
 score function (6ae00cd); A6's engine side, with Guard's five-thread line (e8de15e);
-gate steps 2 and 3a - the engine configured in `gate.toml`, 113 known divergences
-triaged again, H51's lenient capture markers with rulebook R11 (39bdf52); B11, B16 and
-B17 (the merge after 39bdf52). The gate compares the engine in every tier: the commit
-tier is a smoke test; nightly gates Standard - Half Reflected, Standard - Reversed
-Royalty and Standard - Turn Zero (under the one-oracle rule gate step 3b replaces).
-F1 is 22,961,802 parameters. GitHub Actions starts no job (the account's billing):
-every check runs locally before each merge, nightly included.
-
-**Now** - three lanes, the main loop's plan under M23's rule: each a git worktree
-under `.claude/worktrees/` on its own branch, pushed after every commit, taking main
-by merge, never rebase (re-check with `git branch -a -vv` and `git log
-main..origin/lane/<lane>`):
-- `lane/gate` - the harness - step 1 done: gate step 3b merged (H47 as amended at
-  CHECKPOINT 8 - two oracles to gate a ruleset, the engine baseline
-  `oracles/engine-baseline.json` written only by `harness.py baseline --write`,
-  restricted runs never a tier verdict; the ftxi check-reading question drafted in
-  `docs/checkpoints/upstream/` for the user to file). Next, in step 2: H48's
-  re-recording on a quiet machine, then the release tier.
-- `lane/engine` - C++ and the Python ABI mirror - the shared proof stores' data race
-  under winpthreads' `std::shared_mutex` (found in A6; "Parked, and why"); next, ABI
-  round 2 (D3's value outputs in the search, 6m's switch, E1/I19's exploration,
-  I15/I2's per-child fields, a `legal_moves` option for `t5d_game_expand`, the
-  draw/moves-left backup or its substitute), M22's further figures (CHECKPOINT 8), the
-  D2 tree form, then the flat form.
-- `lane/net` - the network and the training loop in Python - F6 in the heads (the
-  ruling on issue 204) and M20's dispositions; next, A7 with its mirror test, A6's
-  network inputs, the heads after engine round 2 (D3, D4's soft policy and reply
-  prototype, D9, D7), C15's STE fix with G2's quantiser and G8's hook, A8, the D2 flat
-  head, the training loop (M21), A5.
+gate steps 2 and 3a (39bdf52); B11, B16 and B17.
 
 The main loop reviews each component and merges it into main, running the Lazy SMP
 timing test first for any merge that touches the search or the provers ("The Lazy
@@ -322,8 +328,12 @@ cost of sharing shows in the gate lane's commit-tier run of 2026-10-17: calibrat
 **Number blocks**, so lanes never collide: spec issues - gate 122-139, engine
 140-199, net 200-299, main loop 300 and up; proposed spec edits - gate 98-109,
 engine 110-149, net 150-199, main loop 200 and up. Gaps between blocks are expected.
+Assigned 2026-10-23, the engine block being used up (E10 took issues 177-197 and edits
+137-146): engine lane issues 400-449, edits 300-329; search lane issues 450-499, edits
+330-359; gate lane issues 520-539, edits 360-379; the net lane keeps 200-299 and 150-199.
 
-**Step 1 - CHECKPOINTS 6-7, by lane, in order** (where each lane stands: "Now"):
+**Step 1 - CHECKPOINTS 6-7, by lane, in order** (done by 2026-10-23 but for the net
+lane's A5 and G9; where each lane stands: "Now"):
 - **Gate:** gate step 1, H47; gate step 2 - the engine configured in
   `oracles/gate.toml`, the 113 known divergences triaged again (the 3 notation entries
   only with a notation-spec citation, else reported) - done when, with the engine
@@ -397,10 +407,12 @@ every lane" wait for all three:
 - Engine: E10 redone (Hunt under 100 boards and the settling scans under 50, both on
   by default; the asset map; Guard's hook off; the audit lane's tooling); E11, time
   management (E7 with 6o's arms; no root-scan reserve while Guard is offline - issue
-  306), and E8 behind its flag; D4's per-square label generator; the missing tests -
+  306), and E8 behind its flag; D4's per-square label generator (done, 710921a); the
+  missing tests -
   the solver against df-pn and, through the gate (gate lane) or the audit lane, the
   oracles' mate verdicts (H41); TT churn.
-- Net: G2's FP8 emulation; the missing test cached = dense on every real variant.
+- Net: G2's FP8 emulation (done with the precision component, 88d2007); the missing
+  test cached = dense on every real variant (MT-04, done on `lane/gate`).
 - Then, every lane: §15.2's suite re-run on the finished v1 network; the
   quiet-machine block, alone on the machine (N3's wall timings, FFN 2x and 4x, the
   displacement-bias, Shaw, layout-embedding and normalisation overheads, legality
@@ -501,7 +513,7 @@ hook (off: not adopted); the offline audit lane's tooling (H44).
    a flag** (prototype).
 3. Missing tests: the search solver's proofs against df-pn (and, through the gate
    or the audit lane, the oracles' mate verdicts - H41); TT churn for the prover
-   (6f); cached = dense on more real variants.
+   (6f); cached = dense on more real variants (done: MT-04).
 4. Prototype flags not yet built: G2 (FP8 attention, emulated on CPU); A5
    (piece-centric tokenisation) unless ruled deferred with the window.
 5. Quiet-machine measurements: N3's CPU wall timings (about 3 h; commands in
@@ -1657,7 +1669,7 @@ width (M22)", "The CHECKPOINT 8 figures"). Found on the way: the ruling's premis
 | C1 | built, tested | `attn_scope = "dense"` is the default |
 | C4 | built, tested | Full MHA (N1) |
 | C17, C19, C20 | built, tested | Network N3: the block-causal scope (`attn_scope = "block_causal"`), the live set fully bidirectional, supersession recomputed once under the state-defined mask - both of C20's readings built (`supersession_scope`; 6c decides, now in the register); the causal past is the ruled ancestry (`causal_past = "lineage"`, C23) |
-| C2 | built (for §15.2/§15.3) | Network N3's cached path; the decision itself stays deferred (6c, §7.7), now re-weighed against the pilot run's game sizes (M18). The path absorbs B15, B16, A6 and A7 as they land - A7 is in (`lane/net` N-A7: frozen K/V keyed by the acting player, the root's history built from both sides, a refresh's dense pass run from each - issue 303, tested with §15.2's A7 row through the cached path); B15 is in (`lane/net`: a frozen board's bias rows built per layer, cached = one full pass with it on), and B16 (`lane/net`: the live pass adds the status biases from the node's present; frozen rows and entries never carry them; none at a refreshed epoch's anchor, and below it on every frozen key, history boards included - both halves tested against an oracle of their own); B17 runs through it too (a frozen board's rows get the Shaw term from its own queries; tested through root and node refreshes) |
+| C2 | built (for §15.2/§15.3) | Network N3's cached path; the decision itself stays deferred (6c, §7.7), now re-weighed against the pilot run's game sizes (M18). The path absorbs B15, B16, A6 and A7 as they land - A7 is in (`lane/net` N-A7: frozen K/V keyed by the acting player, the root's history built from both sides, a refresh's dense pass run from each - issue 303, tested with §15.2's A7 row through the cached path); B15 is in (`lane/net`: a frozen board's bias rows built per layer, cached = one full pass with it on), and B16 (`lane/net`: the live pass adds the status biases from the node's present; frozen rows and entries never carry them; none at a refreshed epoch's anchor, and below it on every frozen key, history boards included - both halves tested against an oracle of their own); B17 runs through it too (a frozen board's rows get the Shaw term from its own queries; tested through root and node refreshes). Cached = dense on every variant the engine sets up (MT-04, `lane/gate`, `tests/engine/test_cached_variants.py`): random play on all 16, both C20 readings, the v1 and step-1 configurations (A8 on), the C step API in tree and graph mode with and without the root refresh (transpositions bitwise), the N2 switches with every typed relation, F1 in BF16 - green, gaps in `docs/MEASUREMENTS.md` |
 | C10 | not built (rule) | Lazy K/V for boards entering E: deferred with the window (M16) |
 | C3, C3a (rung 1) | built, tested | Root refresh and the travel-triggered, visit-gated rung-1 fork (copy-on-write epochs), behind flags. C3's conditioning-offset training hook is parked with the deferred cached configuration ("Parked", below) |
 | C3a (rungs 2-3), C18, C22 | not built (rule) | Held open (M5 for rungs 2-3) |
@@ -5975,3 +5987,30 @@ struck through, where nothing of it is left to apply); the others stand as writt
   claim corrected; a missing flat weight and a pre-flat targets file refused; a visited arrival held to
   the live search. The mutation run's 17 survivors each killed by the adopted tests (re-run on a copy
   of the fixed tree). Register D2, D9, I2, I12, I15, M21; issues 241-243; edit 188 rewritten.
+- **2026-10-23 - MT-04, cached = dense on every real variant** (`lane/gate`; number block
+  spec issues 520-539 and proposed edits 360-379, assigned by the main loop - none used):
+  `python/tests/engine/test_cached_variants.py`, 60 tests over the engine's 16 variants -
+  random play's every state (turn start, mid-action, shifted, submitted; branched and inactive
+  timelines) incrementally against `reference_output` under both C20 readings, in the v1
+  configuration (B15, B16, A6, A7) and with A8, D4's reply and D9 on; the C step API's leaves,
+  tree and graph, causal epoch and root refresh, intra-turn transpositions bitwise; seven N2
+  flag sets with attack, defence, pin, x-ray and check edges; F1 in BF16 (slow). No variant
+  fails; the gaps in `docs/MEASUREMENTS.md`. The file took 603 s serial on the loaded machine
+  (100% CPU, other lanes' engine tests; single cases ran 3-6x faster earlier in the session,
+  on a less loaded machine) - the CI network job runs it whole; trim it if CI time matters. This
+  closes the "cached = dense on more real variants" item of "Current state" (left for the main
+  loop to strike). Register C2, C17, C19, C20, C23.
+- **2026-10-23 - MT-04 review fixes** (`lane/gate`; the same number block, none used): D4's
+  reply head is now compared on engine positions (their `opp_moves` built as training builds
+  them, `train.reply_map.map_reply`; the conversion supplies none); the docstrings' and the
+  changelog's claims corrected (no princess in Reversed Royalty - a common king; the T0 board is
+  half-turn 1; the step-API leaves are the root, then mostly its action's mid-action and shifted
+  states). Three tests make the file stand on its own against the review's four survivors,
+  re-run with the reviewer's `run_mutants.py` against a fresh copy of the fixed tree (whole file,
+  not slow): M02 (digest without the boards a board reads) and M23 (identity without the
+  has-moved markers) killed by `test_boards_alike_but_for_a_marker_or_a_past_keep_their_own_entries`;
+  M19 (`start` keeps the open epoch whatever the root) by
+  `test_one_cached_evaluator_follows_its_search_to_a_new_root` (2 of 2); M24 (store keys without
+  the epoch) by `test_one_store_across_two_games_and_two_epochs` (2) and the same root-follow
+  test (2). Random play's diverging games share no board whose past or markers alone differ, so
+  M02 and M23 needed hand-built positions (5DFEN starts; Standard's knight shuffles).
