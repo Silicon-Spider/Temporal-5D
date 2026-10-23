@@ -171,6 +171,21 @@ class SearchInfo:
     generated_turns: int
     stopped_generators: int
     fallback_listings: int  # ... of which before their first turn: E4's listing's turns instead
+    # stage E10: the verification ladder (6b''s table: Hunt under 100 boards, the settling scans
+    # under 50, the asset map) as its verdicts reached the search; the proof channel stays off
+    # from Python (H41), so every proof is withheld - counted, the tree untouched
+    hunt_runs: int
+    hunt_mates: int
+    settling_runs: int
+    settling_proven: int
+    settling_disproven: int  # class-relative (H19): never a bound
+    refutations: int  # PV-change scans that proved the opponent's mate
+    ladder_cancelled: int  # jobs a decision's end cancelled
+    proofs_withheld: int
+    proofs_injected: int  # 0 while the proof channel is off
+    pv_changes: int
+    asset_boosted_edges: int
+    steered_visits: int  # root visits counted steered (I2)
 
     @property
     def root_finished(self) -> bool:
@@ -202,10 +217,13 @@ class RootChild:
     child_key: int  # the child node's key; 0: no child node yet
     prior_noise_free: float  # the prior before the root noise (after the temperatures)
     value_variance: float  # of the values backed up through it
-    boost: float  # E10's asset-map boost: 0 (not wired)
+    boost: float  # stage E10: steering's share of prior_noise_free (prior_noise_free - prior_unsteered)
     exploration_scale: float  # E3's factor (1: off)
     forced_visits: int  # 0: forced playouts not built (pruning is target-side, §12.5)
-    steered_visits: int  # 0: no steering source wired (E10)
+    steered_visits: int  # stage E10: visits a steering source decided (I2: the targets exclude them)
+    prior_unsteered: float = 0.0  # stage E10: the noise-free prior without steering
+    was_pv: bool = False  # ... H44's events: the child was the root's most visited this decision
+    peak_share: float = 0.0  # ... its largest share of the root's visits
 
 
 @dataclass(frozen=True)
@@ -443,6 +461,9 @@ class Search:
             exploration_scale=float(c.exploration_scale),
             forced_visits=int(c.forced_visits),
             steered_visits=int(c.steered_visits),
+            prior_unsteered=float(c.prior_unsteered),
+            was_pv=bool(c.was_pv),
+            peak_share=float(c.peak_share),
         )
 
     def children(self) -> list[RootChild]:

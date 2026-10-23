@@ -10,6 +10,8 @@
 //            [--match] [--final visits|lcb] [--temperature T] [--temperature-decisions N]
 //            [--noise | --no-noise] [--cap-turns N] [--cap-boards N] [--max-actions N]
 //            [--mate-nodes N] [--max-seconds S] [--seed S]
+//            [--no-hunt] [--no-settling] [--no-assets] [--hunt-ms MS]
+//            [--settling-ms MS] [--verification-threads N] [--guard-final]
 //            [--no-moves-after-shift] [--rules ENCODING]
 //
 // Defaults: Standard, the uniform evaluator, 64 playouts per decision, the
@@ -30,6 +32,13 @@
 // --proof-channel turns on the in-tree solver's propagation of proven bounds
 // (H2, E9) - the proof channel's switch, off by rule (H41) until the gate
 // passes and the channel is signed off: for experiments only.
+// Stage E10's verification ladder is on by default in 6b''s ranges: Hunt at
+// turn-start roots under 100 boards (--no-hunt; --hunt-ms its budget, 50), the
+// df-pn settling scans under 50 boards (--no-settling; --settling-ms, 50), the
+// asset map's boosts (--no-assets), the provers on --verification-threads
+// threads (5). Their proofs change play only with --proof-channel. Guard (H42)
+// is adopted in no range: --guard-final switches its hook at submission on,
+// for experiments, and needs --proof-channel. The Engine header names them.
 // --max-seconds stops a long game (a safety stop, "*": checked before every
 // decision, and each search's deadline; the record ends at the last turn
 // start), its record and summary still printed.
@@ -73,6 +82,8 @@ void usage(std::FILE* to) {
       "                [--cap-boards N]\n"
       "                [--max-actions N] [--mate-nodes N]\n"
       "                [--max-seconds S] [--seed S]\n"
+      "                [--no-hunt] [--no-settling] [--no-assets] [--hunt-ms MS]\n"
+      "                [--settling-ms MS] [--verification-threads N] [--guard-final]\n"
       "                [--no-moves-after-shift] [--rules ENCODING]\n",
       to);
 }
@@ -257,6 +268,24 @@ int main(int argc, char** argv) {
       } else if (std::strcmp(a, "--seed") == 0) {
         params.seed = number(a, value());
         params.search.seed = params.seed;
+      } else if (std::strcmp(a, "--no-hunt") == 0) {
+        params.search.hunt = false;
+      } else if (std::strcmp(a, "--no-settling") == 0) {
+        params.search.settling = false;
+      } else if (std::strcmp(a, "--no-assets") == 0) {
+        params.search.asset_map = false;
+      } else if (std::strcmp(a, "--hunt-ms") == 0) {
+        params.search.hunt_ms = real(a, value());
+        if (!(params.search.hunt_ms > 0)) throw std::invalid_argument("--hunt-ms: more than 0 (--no-hunt for none)");
+      } else if (std::strcmp(a, "--settling-ms") == 0) {
+        params.search.settling_ms = real(a, value());
+        if (!(params.search.settling_ms > 0)) {
+          throw std::invalid_argument("--settling-ms: more than 0 (--no-settling for none)");
+        }
+      } else if (std::strcmp(a, "--verification-threads") == 0) {
+        params.search.verification_threads = static_cast<int>(number_in(a, value(), 1, 256));
+      } else if (std::strcmp(a, "--guard-final") == 0) {
+        params.guard_final = true;  // H42: adopted in no range; experiments, with --proof-channel
       } else if (std::strcmp(a, "--help") == 0 || std::strcmp(a, "-h") == 0) {
         usage(stdout);
         return 0;
@@ -268,6 +297,9 @@ int main(int argc, char** argv) {
     // would be read by nothing, and the record would not say so.
     if (tree_gates_given && params.search.split != TurnSplit::Tree) {
       throw std::invalid_argument("--tree-gates: the tree form's interaction gates, read only with --split tree");
+    }
+    if (params.guard_final && !params.search.proof_channel) {
+      throw std::invalid_argument("--guard-final: Guard's refutation is a proof - it needs --proof-channel (H41, H42)");
     }
   } catch (const std::exception& e) {
     std::fprintf(stderr, "t5d-play: %s\n", e.what());
@@ -297,6 +329,16 @@ int main(int argc, char** argv) {
                          (params.search.root_noise && !params.match_play ? ", root noise" : "") +
                          (params.match_play ? ", match play" : ", self-play") + ", seed " +
                          std::to_string(params.seed);
+    // E10: the verification ladder as configured (6b''s ranges).
+    const SearchParams& sp = params.search;
+    std::string ladder;
+    const auto part = [&ladder](const std::string& p) { ladder += (ladder.empty() ? "" : ", ") + p; };
+    if (sp.hunt) part("hunt under " + std::to_string(sp.hunt_max_boards) + " boards");
+    if (sp.settling) part("settling under " + std::to_string(sp.settling_max_boards) + " boards");
+    if (sp.asset_map) part("asset map");
+    part(params.guard_final ? "guard at submission" : "guard off");
+    if (sp.hunt || sp.settling) part(std::to_string(sp.synchronous ? 1 : sp.verification_threads) + " prover threads");
+    engine += ", ladder: " + ladder;
     extra.emplace_back("Engine", engine);
     if (params.turn_cap.enabled()) {
       extra.emplace_back("TurnCap", "turns " + std::to_string(params.turn_cap.turns) + ", boards " +
@@ -322,6 +364,18 @@ int main(int argc, char** argv) {
                  g.seconds_search_mate, g.seconds_search_expand, g.seconds_search_generate,
                  g.seconds_search_verify, g.seconds_verdicts, g.final_state.multiverse().board_count(),
                  g.final_state.multiverse().timeline_count());
+    std::fprintf(stderr,
+                 "t5d-play: the ladder - hunt %llu (mates %llu), settling %llu (proven %llu, disproven %llu, "
+                 "refutations %llu), proofs withheld %llu, injected %llu, asset-boosted edges %llu, steered visits "
+                 "%llu, guard %llu (refuted %llu, rejected %llu)\n",
+                 static_cast<unsigned long long>(g.hunt_runs), static_cast<unsigned long long>(g.hunt_mates),
+                 static_cast<unsigned long long>(g.settling_runs), static_cast<unsigned long long>(g.settling_proven),
+                 static_cast<unsigned long long>(g.settling_disproven), static_cast<unsigned long long>(g.refutations),
+                 static_cast<unsigned long long>(g.proofs_withheld), static_cast<unsigned long long>(g.proofs_injected),
+                 static_cast<unsigned long long>(g.asset_boosted_edges),
+                 static_cast<unsigned long long>(g.steered_visits), static_cast<unsigned long long>(g.guard_runs),
+                 static_cast<unsigned long long>(g.guard_refutations),
+                 static_cast<unsigned long long>(g.guard_rejections));
     return 0;
   } catch (const std::exception& e) {
     std::fprintf(stderr, "t5d-play: error: %s\n", e.what());

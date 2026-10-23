@@ -134,6 +134,16 @@ class PlayConfig:
     #: D9 (a prototype): both sides search with the optimistic policy - match play only, so the
     #: evaluators must deliver it (``policy="optimistic"``); self-play refuses it.
     optimistic: bool = False
+    #: Stage E10's verification ladder (the engine's, through ``t5d_search_params``; on by default
+    #: in 6b''s ranges - Hunt under 100 boards, the settling scans under 50 - and the asset map's
+    #: boosts); a game's fresh searches share it as they share the cache. Its proofs never change
+    #: play from Python: the proof channel stays off (H41).
+    hunt: bool = True
+    settling: bool = True
+    asset_map: bool = True
+    hunt_ms: float = 50.0
+    settling_ms: float = 50.0
+    verification_threads: int = 5
 
     def validate(self) -> None:
         if self.split not in SPLITS:
@@ -144,6 +154,8 @@ class PlayConfig:
             raise ValueError("the optimistic policy is searched with at match play only, never in self-play (register D9)")
         if self.playouts < 1 or self.batch_size < 1 or self.max_actions < 1:
             raise ValueError("playouts, batch_size and max_actions must be positive")
+        if not (self.hunt_ms > 0 and self.settling_ms > 0 and 1 <= self.verification_threads <= 256):
+            raise ValueError("the ladder's budgets positive, its threads 1 to 256")
 
 
 @dataclass
@@ -311,6 +323,12 @@ def _decision_params(game: Game, cfg: PlayConfig, relations: int, *, seed: int, 
         turn_cap_turns=cfg.cap_turns,
         turn_cap_boards=cfg.cap_boards,
         expand=(8, "all", relations),
+        hunt=int(cfg.hunt),
+        settling=int(cfg.settling),
+        asset_map=int(cfg.asset_map),
+        hunt_ms=float(cfg.hunt_ms),
+        settling_ms=float(cfg.settling_ms),
+        verification_threads=int(cfg.verification_threads),
     )
 
 
@@ -647,6 +665,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", type=Path, help="write each record here (a directory)")
     parser.add_argument("--no-replay", action="store_true", help="do not replay the records through t5d-gate")
     parser.add_argument("--optimistic", action="store_true", help="match play: both sides search with D9's optimistic policy")
+    parser.add_argument("--no-hunt", action="store_true", help="stage E10: no Hunt at the roots (on under 100 boards)")
+    parser.add_argument("--no-settling", action="store_true", help="stage E10: no settling scans (on under 50 boards)")
+    parser.add_argument("--no-assets", action="store_true", help="stage E10: no asset-map boosts")
+    parser.add_argument("--hunt-ms", type=float, default=50.0, help="Hunt's budget per question (6b'': 50 ms)")
+    parser.add_argument("--settling-ms", type=float, default=50.0, help="each settling scan's budget (50 ms)")
+    parser.add_argument("--verification-threads", type=int, default=5, help="the provers' threads (M13: 5)")
     args = parser.parse_args(argv)
     if args.optimistic and (args.mode or ["self", "match"]) != ["match"]:
         parser.error("--optimistic is match play only (register D9): add --mode match alone")
@@ -675,6 +699,12 @@ def main(argv: list[str] | None = None) -> int:
                         cap_boards=args.cap_boards,
                         seed=args.seed + 101 * g,
                         optimistic=args.optimistic,
+                        hunt=not args.no_hunt,
+                        settling=not args.no_settling,
+                        asset_map=not args.no_assets,
+                        hunt_ms=args.hunt_ms,
+                        settling_ms=args.settling_ms,
+                        verification_threads=args.verification_threads,
                     )
                     with torch.no_grad():
                         res = play_game(evaluators if mode == "match" else evaluators[0], cfg, net_cfg=net_cfg)

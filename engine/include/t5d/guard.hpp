@@ -27,9 +27,13 @@
 // not claimed, H37) - and, where a depth proved a mate, the REFUTATION: the
 // opponent's forcing line (their action, our longest defence, ..., their
 // mating action), a proof - exact sub-results only, never a budget stop
-// (H37). A refutation rejects the move and triggers a re-search from spec
-// 8.6's reserve: the search does that (wired with the search core, stage E6;
-// GuardHook is the hook).
+// (H37). Spec 11.4: "a refutation rejects the move and triggers a re-search
+// (8.6's reserve)" - but Guard is ADOPTED IN NO RANGE (6b'', H42): the hook is
+// built and OFF (stage E10: PlayParams::guard_final, t5d/selfplay.hpp), and
+// holds no reserve while Guard is offline (build-log spec issue 306). Switched
+// on - experiments only, and only with the proof channel on, since a
+// refutation is a proof - it rejects the chosen action and re-searches on
+// what the decision has left.
 //
 // THE BUDGET. One budget for all the depths - nodes and/or wall clock (6b'':
 // 50 ms) - each depth getting what the earlier ones left. No complexity model
@@ -117,10 +121,11 @@ ProverOptions guard_prover_options(const GuardOptions& options);
 GuardResult guard(const GameState& turn_start, const std::vector<Move>& action, const ProveBudget& budget,
                   const GuardOptions& options = {});
 
-/// The search's hook (wired with the search core, stage E6): called with the
-/// result when Guard refutes the chosen action - the search rejects the move
-/// and re-searches from spec 8.6's reserve, the refutation injected as a
-/// solved bound once the proof channel is enabled (H41).
+/// The driver's hook (stage E10, PlayParams::guard_final - OFF: Guard is
+/// adopted in no range, H42): called with the result when Guard refutes the
+/// chosen action - the driver rejects it, the refutation injected as a solved
+/// bound (only with the proof channel on, H41), and re-searches; no reserve is
+/// held while Guard is offline (build-log spec issue 306).
 struct GuardHook {
   std::function<void(const GuardResult&)> on_refutation;
 };

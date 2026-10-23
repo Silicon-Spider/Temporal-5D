@@ -319,6 +319,13 @@ if(MINGW)
   target_link_options(t5d-play PRIVATE -static)
 endif()
 
+# Stage E10: the reduced verification ladder wired into the search (6b''s
+# adoption table: Hunt under 100 boards, the settling scans under 50, the asset
+# map; Guard's hook off) - its scheduler and the search's proof offers, steered
+# visits and PV events.
+target_sources(t5d_core PRIVATE src/ladder.cpp)
+target_sources(t5d-tests PRIVATE tests/test_ladder.cpp)
+
 # D2's tree form against the ply split on recorded games' turn starts:
 # evaluation counts (docs/MEASUREMENTS.md). Not one of the truth's sources.
 add_executable(t5d-tree-count tools/t5d_tree_count.cpp)
