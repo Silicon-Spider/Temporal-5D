@@ -10,6 +10,40 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-23 - A5's plumbing: the evaluator and the training rows convert at the network's edge; games end to end; purity
+
+Register A5's engine and training plumbing (A5.4), behind the flag - no engine or C API change; no
+training run.
+
+- **The evaluator** (`engine/evaluator.py`): `NetworkEvaluator._fit` converts a square-centric
+  position for a piece-centric network (`to_piece_centric`, strict - engine data drops nothing), after
+  the register relayout. The policy's row `i` stays the engine's move `i`, so the C step API and
+  `check_evaluation` are unchanged. `CachedNetworkEvaluator` refuses an A5 network (BUILD_LOG issue
+  252).
+- **The training rows** (`train/targets.py`): `collate_rows` converts each row's input for a
+  piece-centric network (strict for engine records, not for synthetic ones - the records stay
+  square-centric) and puts the per-square labels on the square tokens there are; a label of a cell
+  with no token is dropped (issue 250). The label placement's code was rewritten for both layouts
+  (A1's tokens unchanged - the same tokens in the same order).
+- **The window's scope** (`engine/convert.py`): `EngineScope.tokens` refuses a piece-centric layout
+  (issue 253).
+- **Netplay and the engine bench** (`engine/netplay.py`, `engine/bench.py`): `--piece-centric`; the
+  bench reports the conversion's time beside `collate`'s.
+- **Tests** (`tests/engine/test_piece_centric_engine.py`; `tests/train/test_targets.py`): on variant
+  starts, the records', en passant, castling, a promotion and random positions with branched timelines,
+  every relation built - strict conversion drops nothing and the token count is the engine's own piece
+  count plus the empty destinations recounted from its move records' flags; the special moves' tokens;
+  branching travel's destination on its history board; the evaluator keeps the contract, batched and
+  alone; the logits equal the masked A1 reference on engine positions (B11 on); two move orders of one
+  multiverse (Two Timelines' two boards in either order) give identical A5 inputs and evaluations, bit
+  for bit; an A5 network plays legal games under the ply split, the flat form and the tree form, every
+  record replayed by `t5d-gate`; the window's scope and the engine's cached evaluator refuse A5; an
+  engine game's rows under A5 carry every label at its token and train to finite losses.
+
+Spec: §8.1, §12.4, §12.8, §15.2 (the purity and I15 rows), §15.5; register A5, D1, D4, I15, C14,
+C19-C21. BUILD_LOG: register row A5; spec issues 245, 253, 250 (amended); proposed edit 196 (I15's
+conditions under A5).
+
 ### 2026-10-23 - A5: piece-centric tokens behind their flag, dense scope only - the tokens, the network path, the refusals
 
 Register A5 (Prototype since CHECKPOINT 6: "build behind its flag") in the network lane, off by

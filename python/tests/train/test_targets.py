@@ -16,7 +16,7 @@ import torch
 from t5d.engine.capi import MOVE_DTYPE, T5D_MOVE_BRANCHING, T5D_MOVE_TRAVEL
 from t5d.engine.evaluator import NetworkEvaluator
 from t5d.engine.netplay import SMALL
-from t5d.net import NetConfig, build_model
+from t5d.net import NetConfig, build_model, synthetic_states
 from t5d.net.heads import effort_bin as torch_effort_bin
 from t5d.train.losses import compute_losses
 from t5d.train.records import Children, DecisionRecord, GameRecord, read_game, write_game
@@ -40,6 +40,7 @@ from t5d.train.targets import (
     target_differences,
     write_targets,
 )
+from t5d.train.trainer import synthetic_record
 from tests.engine.helpers import requires_engine
 
 # --- constructed records ------------------------------------------------------------------------------
@@ -601,6 +602,40 @@ def test_square_labels_are_rederived_from_the_replayed_states(evaluator, tmp_pat
     with torch.no_grad():
         losses = compute_losses(model(batch), tgt)
     assert all(torch.isfinite(v) for v in losses.values()) and float(losses["square"]) > 0
+
+
+@requires_engine
+def test_a5_rows_are_converted_at_the_networks_edge(evaluator):
+    """Register A5 (``NetConfig.piece_centric``): the records stay square-centric and ``collate_rows``
+    converts each input (strict for engine rows: nothing dropped); the per-square labels land on the
+    square tokens A5 has - a label of a cell that is no token is dropped (BUILD_LOG issue 250) - and
+    the policy targets keep the candidates' order. Synthetic rows convert too (not strict)."""
+    from t5d.net.state import square_centric_tokens, to_piece_centric
+
+    net5 = replace(NET, piece_centric=True)
+    with torch.no_grad():
+        g = generate_game(evaluator, GAMES["two_timelines"], net_cfg=NET, keep_positions=True, target_config=TARGET_CONFIGS["default"])
+    a = replay_positions(g.record, square_labels=True)
+    t = build_targets(g.record, TARGET_CONFIGS["default"], positions=a, reply=False)
+    rows = [Row(p.state, t, i) for i, p in enumerate(a)]
+    b1, t1 = collate_rows(rows, NET)
+    b5, t5 = collate_rows(rows, net5)
+    assert b5.piece_centric and not b1.piece_centric and b5.n_tokens < b1.n_tokens
+    assert torch.equal(t5.policy, t1.policy) and torch.equal(t5.submit, t1.submit)
+    for i, p in enumerate(a):
+        x = to_piece_centric(p.state)
+        image = torch.from_numpy(square_centric_tokens(x.layout)[: x.layout.n_body])
+        own = torch.arange(x.layout.n_body)
+        assert np.array_equal(t5.square[i, own].numpy(), t1.square[i, image].numpy(), equal_nan=True)
+        assert torch.isnan(t5.square[i, x.layout.n_body :]).all()
+    model = build_model(net5, seed=1).eval()
+    with torch.no_grad():
+        losses = compute_losses(model(b5), t5)
+    assert all(torch.isfinite(v) for v in losses.values()) and float(losses["square"]) > 0
+    states = synthetic_states(9, [2, 4], n_timelines=3)
+    synthetic = build_targets(synthetic_record(9, states, full_every=1), TargetConfig(short_term_horizons=net5.short_term_horizons))
+    b, _ = collate_rows([Row(st, synthetic, i, synthetic=True) for i, st in enumerate(states)], net5)
+    assert b.piece_centric
 
 
 @requires_engine
