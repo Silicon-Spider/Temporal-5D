@@ -10,6 +10,46 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-23 - E10 redone, commit 2: the offline audit lane's tooling - the decision log, the sampler, the offline proof runner, the per-range shallow-mate report; the curriculum hook an interface
+
+H44's tooling (lost with E10; redone from the documents on `lane/search`):
+
+- **The decision log** (`engine/tools/audit.hpp`; JSONL `t5d-decisions` v1, an interim format
+  until I15's records carry the events - issue 191): `PlayParams::decision_log` keeps each
+  decision (`GameRecord::decision_log`: the root's children with visits, Q, `was_pv` and
+  `peak_share`, its PV changes, the child chosen; `GameRecord::split`); `log_of_game` turns a
+  game into "game" lines (the start and the actions, so every position is rebuilt by replay -
+  5DFEN alone loses the timelines' creators) and "event" lines - final moves, PV changes,
+  demotions (a child that led or held 0.3 of the root's visits and was not chosen: issue
+  197). Written by `t5d-play --decision-log FILE` and Python's `netplay --decision-log`
+  (`decision_log_lines`: final moves and demotions - the C API shows no binding a PV-change
+  list, issue 195).
+- **`t5d-audit`** (`engine/tools/t5d_audit.cpp`): `sample` - seeded, a rate per category and
+  a cap per (category, board range) (issue 194); `run` - Guard's question offline on each
+  job's action where it is one (H42: "kept as the audit lane's offline question"), and our
+  forced mate at its turn start by the truth recorder's method, every certificate checked by
+  E4 alone; contradictions - allowed, missed and abandoned mates (issue 192) - go to the
+  `CurriculumSink` interface, whose only implementation writes JSONL `t5d-contradictions` (no
+  consumer: the curriculum hooks are interfaces only); `report` - per board range the
+  shallow-mate rate (`--shallow`, 1), Guard's completed depths, the undecided, withheld and
+  unconfirmed, the contradictions, counted as 6b″ counts (issue 196). Every budget a
+  placeholder (issue 193). No solved store is reachable (H19, H23); the tools read
+  engine-generated logs only, never `oracles/`.
+- **A counter fixed** (commit 1's): `SearchStats::ladder_cancelled` (C `ladder_cancelled`)
+  counted only cancelled verdicts that reached the search - never any, since the ladder drops
+  them; it now counts the jobs a decision's end (a re-root) cancelled or dropped.
+- **Tests**: `engine/tests/test_audit.cpp` (the log's round trip and replay under both splits;
+  the sampler's seeding, strata, rates and caps; the runner on constructed positions - an
+  action allowing a mate in one refuted at depth 1 with a confirmed certificate, a missed mate
+  as exactly one contradiction, a safe action's completed depth; the report at the range
+  edges; nothing carried between runs; end to end through `t5d-play --decision-log` and
+  `t5d-audit sample`, `run`, `report`) and `python/tests/engine/test_decision_log.py` (Python's
+  log read, sampled, run and reported by `t5d-audit`).
+
+Spec: §11.4 (the audit-lane row; "whether shallow exact checks earn their time"), §11.2 rung 2
+(the demotion), §12.2 (position selection, the safe channel - not built), §13.1 6i; register
+H44 (tooling built), H42, H19, H23, I3, I15. Proposed: edit 146; issues 191-197.
+
 ### 2026-10-23 - E10 redone, commit 1: verification v3 wired into the search per 6b″'s table - Hunt under 100 boards, the settling scans under 50, the asset map's boosts and I2's steered visits, Guard's hook off; every proof withheld while the proof channel is off
 
 E10 was lost with the machine; redone from the documents (`lane/search`, from main 88d2007).

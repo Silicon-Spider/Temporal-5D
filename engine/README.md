@@ -82,6 +82,7 @@ rules reference, `docs/rules/README.md`, which the code cites throughout.
 | **E9:** the superseded-board asset map | `include/t5d/assets.hpp` | §11.2 rung 4, §11.4, H10 |
 | **E9:** Hunt's ground truth; experiment 6b″'s tool | `tools/t5d_hunt_truth.cpp`, `testdata/hunt-truth/`, `tools/t5d_scan6bpp.cpp` | §15.6 (CHECKPOINT 4), M17 |
 | **E10:** the reduced verification ladder wired into the search - Hunt under 100 boards, the settling scans under 50, the asset map's boosts, the steered visits, the proofs withheld behind the proof channel, PV events; Guard's hook off | `include/t5d/ladder.hpp`, `src/ladder.cpp`, `include/t5d/mcts.hpp`, `include/t5d/selfplay.hpp` | §11.2-11.4, §12.2, §15.4; H1, H10, H13, H14, H17, H19, H41-H43, I2, M13 |
+| **E10:** the offline audit lane's tooling - the decision log, the sampler, the offline proof runner, the per-range shallow-mate report; the curriculum hook an interface | `tools/audit.hpp`, `tools/t5d_audit.cpp` | §11.4, H44, H42, H19, H23 |
 | **M22:** the turn width of an action - mandatory boards at its start, its moves, the optional ones, rewinds - and t5d-measure's `--turns` / `--turn-summary` | `tools/turn_width.hpp`, `tools/t5d_measure.cpp`, `testdata/turn-width/` | §8.2, §15.1; M22 |
 
 The gate runs the engine: `oracles/gate.toml` configures `t5d-gate` in full mode
@@ -3871,8 +3872,8 @@ boosted and counted as steering.
 
 **Events (H44).** The search records the root's PV changes (`pv_changes()`: the root's
 visits, the old and new most visited child with their visits and Q) and per root child
-`was_pv` and `peak_share` - E7's instability signal and the audit lane's sampler read
-them.
+`was_pv` and `peak_share` - E7's instability signal and the audit lane's decision log
+(below) read them.
 
 **Guard's hook** (`PlayParams::guard_final`, off; experiments need `proof_channel`): at
 the decision that completes the action, Guard's question under `guard_ms`; a refutation
@@ -3907,6 +3908,60 @@ Guard's hook off by default, refused without the channel, and rejecting a refute
 when on. The C API's layout, defaults and ladder sharing (`test_capi_search.cpp`), and
 the steered visits end to end through Python's generator, records and targets
 (`python/tests/train/test_steering.py`).
+
+### The offline audit lane (H44; `tools/audit.hpp`, `t5d-audit`)
+
+"Samples self-play decisions - PV changes, demotions, final moves - and runs exact proof
+search on them with large budgets, off the critical path" (§11.4), and "reports how often
+the network's chosen move allows a shallow forced mate, per board range". The tooling is
+built; the curriculum hooks are interfaces only (H44).
+
+- **The decision log** - JSONL `t5d-decisions` version 1, an interim format until I15's
+  records carry the events. `PlayParams::decision_log` keeps each decision
+  (`GameRecord::decision_log`: its root's children with visits, Q, `was_pv` and
+  `peak_share`, the PV changes, the child chosen, the action's moves before it);
+  `t5d-play --decision-log FILE` writes it, and Python's `netplay --decision-log`
+  (`decision_log_lines`; final moves and demotions - no binding sees a root's PV-change list,
+  issue 195). A **game** line holds the start (a named variant, or 5DFEN boards) and the
+  actions as 5dpgn move texts - every position is rebuilt by replaying, since 5DFEN alone
+  loses the timelines' creators and branch origins; an **event** line names its game, action
+  and decision, the action's moves before it, and its step: `final` (the action played,
+  whole), `pv_change` (the new most visited child, the old beside it) or `demotion` (a child
+  that was the most visited or held `demotion_share` - 0.3, a placeholder for §11.2 rung 2's
+  "heavily visited" - of the root's visits, and was not chosen).
+- **`t5d-audit sample`** - per category a rate (final 1, PV change 0.25, demotion 1) and per
+  (category, board range) a cap (1,000), seeded: an event is kept when a hash of the seed and
+  its identity falls under its rate, then the lowest keys up to the cap; the job list keeps
+  the games it needs (issue 194).
+- **`t5d-audit run`** - per job, exact questions with large budgets (placeholders, issue
+  193): **Guard's question offline** on the job's action where it is complete (a final move;
+  a PV change's promoted turn or submission - a move of the ply split is not an action) -
+  every opponent action, iterative deepening to depth 2 under 2,000,000 nodes, a refutation's
+  certificate checked by E4 alone; and **our forced mate at the action's turn start** - the
+  truth recorder's method (the literal class and the default class, 1,000,000 nodes each, the
+  shorter proof's certificate checked by E4) - once per turn start. A **contradiction** goes
+  to the `CurriculumSink` (the interface; its one implementation writes JSONL
+  `t5d-contradictions`): `allowed_mate` (Guard refuted the action played, or promoted, its
+  certificate confirmed), `missed_mate` (a confirmed mate at the turn start whose first action
+  is not the one played - inexact: the played action may mate too, issue 192),
+  `abandoned_mate` (a demoted child began the confirmed mate's first action). Results:
+  JSONL `t5d-audit-results`. No solved store is reachable: the provers' stores are their own
+  and die with them (H19, H23).
+- **`t5d-audit report`** - per board range (6b's four): the finals sampled, Guard's completed
+  depths, the **shallow-mate rate** - confirmed refutations within `--shallow` (1: the
+  opponent's mate in one) among the finals Guard decided to that depth - the undecided, the
+  withheld (a refuted certificate withholds the verdict) and unconfirmed, and the
+  contradictions; "too few to read" under 10 finals; range 200+ marked "weak at 200+"
+  (§11.4). Text, and `--json FILE`.
+
+The tools read engine-generated self-play logs only - never a path under `oracles/`.
+Tested (`tests/test_audit.cpp`): the log round-trips and rebuilds every position (both
+splits); the sampler is seeded and keeps its rates, strata and caps; the runner refutes an
+action that allows a mate in one with a confirmed certificate, finds a missed mate (one
+contradiction), reports a safe action's completed depth; the report counts at the 49/50,
+99/100 and 199/200 edges as 6b″ counts; nothing is carried from one run to the next; and end
+to end, `t5d-play --decision-log` then `t5d-audit sample`, `run` and `report`. Python's log is
+read by `t5d-audit` (`python/tests/engine/test_decision_log.py`).
 
 ## 5DFEN
 

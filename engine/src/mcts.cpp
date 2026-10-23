@@ -2796,7 +2796,7 @@ struct Search::Impl {
   // A decision begins: the root's questions (6b''s table), and the mate an
   // action carries (the board-move split and the tree form).
   void begin_decision() {
-    if (decision_open_) ladder_->end_decision(ladder_decision_);
+    if (decision_open_) close_decision();
     ladder_decision_ = ladder_->begin_decision();
     decision_open_ = true;
     decision_generation_ = root_generation_;
@@ -2887,7 +2887,6 @@ struct Search::Impl {
           if (proven && v.job == LadderJob::PvSettling) ++stats_.refutations;
           break;
       }
-      if (v.stats.stopped_by_cancel) ++stats_.ladder_cancelled;
       verdicts_.push_back(std::move(v));
       const std::size_t k = verdicts_.size() - 1;
       if (!proven) continue;
@@ -3103,12 +3102,20 @@ struct Search::Impl {
                  params_.synchronous ? params_.sync_job_nodes : params_.settling_nodes);
   }
 
+  // The ladder's decision ended - its running job cancelled, its queue
+  // dropped - and the jobs that cost counted.
+  void close_decision() {
+    const std::uint64_t before = ladder_->stats().cancelled;
+    ladder_->end_decision(ladder_decision_);
+    stats_.ladder_cancelled += ladder_->stats().cancelled - before;
+  }
+
   // A decision's end (a re-root): its verdicts taken (an action's mate
   // carried), its jobs cancelled.
   void end_decision() {
     if (!ladder_ || !decision_open_) return;
     take_verdicts(false);
-    ladder_->end_decision(ladder_decision_);
+    close_decision();
     decision_open_ = false;
     deferred_.clear();
   }

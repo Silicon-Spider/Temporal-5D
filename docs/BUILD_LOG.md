@@ -845,6 +845,7 @@ threads reach at least one thread's sum (one retry on a shared machine).
 | 2026-10-23 | D2's tree form (reviewed, 2f07079) | main 47bc857 + lane/engine 2f07079, merged tree before the commit | dev-r, 24 logical; the engine and network lanes running; load 51-56% | 32 | 293 / 292 / 293 | 311 / 313 / 310 | none | pass x3 |
 | 2026-10-23 | D2's flat form (reviewed, a05ab6a) | main a937370 + lane/engine a05ab6a, merged tree before the commit | dev-r, 24 logical; the engine and network lanes running; load 10-33% | 32 | 293 / 293 / 293 | 316 / 317 / 315 | none | pass x3; the nightly gate passed on the same tree (480 s; Half Reflected and Reversed Royalty gated) |
 | 2026-10-23 | E10 redone, commit 1 (the search lane: the verification ladder wired; before review) | main 88d2007 + lane/search's commit 1, the tree before the commit | dev-r, 24 logical; another lane's Python job running; load 68% before, 76% after | 32 | 293 / 292 / 293 | 313 / 315 / 311 | none | pass x3 |
+| 2026-10-23 | E10 redone, commit 2 (the audit lane's tooling, and a counter of commit 1's; before review) | lane/search 62d4310 + commit 2, the tree before the commit | dev-r, 24 logical; other lanes' jobs running; load 94% before, 91% after | 32 | 291 / 293 / 293 | 303 / 302 / 308 | none | pass x3 |
 
 ## Environment
 
@@ -1601,7 +1602,7 @@ width (M22)", "The CHECKPOINT 8 figures"). Found on the way: the ruling's premis
 | H41 | built, tested | `SearchParams::proof_channel` (C `proof_channel`, `t5d-play --proof-channel`) - the switch the register now names: propagation of solved status (marking nodes solved, pruning siblings, secure-child selection) and export, off by rule; game ends are scored as results. Not yet: the cross-checks of the solver's proofs against df-pn and the oracles' mate verdicts (§15.4) - step 2's missing tests |
 | H42 | built, tested; not adopted | Guard (E9): depth 1 completes in 65.1 / 15.8 / 5.2 / 0.0% of roots against 95% (6b″) - adopted in no range; §13: the chosen move goes unguarded. Built and kept (the audit lane's shallow-mate report uses its question offline; the search's re-search hook stays unwired-by-adoption). Its five-thread depth-1 test failed once in CI (run 37146667584): a thread that read the root's proof from a helper's export - its tree empty - was the one reported, so the refutation's line was empty. Fixed in the prover's report (2026-10-17, `lane/engine`): the line of a thread that searched, complete at depth 1; the test pins the race and checks the line's contract at depth 2. What Guard decides is unchanged. Beyond depth 1 the line keeps its contract (it can stop where a node was solved from the store): a certificate holds the attacker's proving actions only, so the line could take the attacker's step past such a node from one but not the defender's longest defence, which needs an enumeration of the defender's actions (the first record of this fix gave another reason - that 6b″ ran Guard without certificates; it ran with them, for its cross-check against E4) |
 | H43 | built, tested; adopted under 100 boards; wired (E10) | Hunt (E9): 69.0% / 63.6% of the truth's mates under 50 / 50-99 boards (6b″) - adopted there; 35.0% at 100-199 and 0 of 1 at 200+ - not adopted; §13: proofs there come only from the search's solver. Export refused until H41/H23. Wired (E10, 2026-10-23): asked at turn-start roots under 100 boards at 50 ms on 5 threads; its mate carried through the action's decisions under the ply split; withheld while the proof channel is off (issue 180); the soft priors built behind `hunt_suggest`, off, counted as steering (issue 186) |
-| H44 | built in part | The audit lane's tools: the certificate checker (E4 alone) and `t5d-hunt-truth` (E9); the search's decision events (E10, 2026-10-23: PV changes, each root child's `was_pv` and `peak_share`); the decision sampler, the offline proof runner and the per-range report are E10's second commit (curriculum hooks as interfaces only) |
+| H44 | built (tooling), tested | The audit lane's tools: the certificate checker (E4 alone) and `t5d-hunt-truth` (E9); the search's decision events and **the tooling (E10, 2026-10-23, `lane/search`)**: the decision log (`PlayParams::decision_log`, `t5d-play --decision-log`, Python's `netplay --decision-log`; JSONL `t5d-decisions` v1 - games by start and actions, events final / pv_change / demotion), `t5d-audit sample` (seeded, rates and caps per category and range), `run` (Guard's question offline on the action, our mate at the turn start by the truth recorder's method, certificates checked by E4; contradictions to the `CurriculumSink` interface, its one implementation a JSONL writer) and `report` (per range the shallow-mate rate, Guard's completed depths, the undecided, the contradictions; counted as 6b″ counts). No consumer of the contradictions is built (curriculum hooks as interfaces only). Every budget and threshold a placeholder (issues 191-197) |
 | H45 | not built (rule) | The adversarial league (M5) |
 | H46 | built, tested | Q2 (provisional): initial timelines count as created by neither player - a variant's set-up reads every timeline as initial (rulebook R10) |
 | H47 | built, tested | Tiered CI reading (Q-A at CHECKPOINT 6, amended at CHECKPOINT 8; spec issues 122-124 ruled, built 2026-10-17). **Two oracles to gate a ruleset**: every record of a ruleset followed, as far as the engine went, by at least two independent implementations (`gate.GATING_ORACLES`; two searches of one count once, the notation parser never), in every tier - so the commit tier, with one rules oracle, can gate nothing at all. **The check that some ruleset is gated** (`engine-nothing-gated`, and `GateResult.ok`'s test of it) runs only in a tier that runs every oracle search over the whole corpus (`Tier.full_strength`: nightly, release) - keyed to what a tier runs, never its name; any other tier - commit - is a smoke test, and its summary (`engine differential: SMOKE TEST - ...`) and report (`smoke_test`; nothing under `gated`) say that it gates nothing. **The commit tier's last-green-run rule**: the engine's baseline, `oracles/engine-baseline.json` - written by `harness.py baseline --write` from a green run of the commit tier, pinned in `gate.toml` `[baseline]`, checked by `verify` and before every comparison; recorded 2026-10-17 from the engine as built on `lane/gate`, 35 of the 41 commit records replayed - and every tier fails an engine that declines a record it read then (`engine-declined`) or reads none (`engine-read-nothing`). **Restricted runs** (`--source`/`--record`) never produce a tier verdict: labelled "restricted - not a tier result", findings only, the exit code from them, no check of a tier as a whole - undoing issue 124's first reading. In every tier an unexplained divergence, a telltale or a contract breach fails the engine; `gate.toml` is refused if a tier that is not full strength sets `require_engine`; the release tier's named-variant rule, the proof-channel line and parse mode are unchanged for a complete run - a restricted run's proof channel reads `DISABLED - restricted - not a tier result`, and it makes neither parse mode's `engine-nothing-compared` floor nor the release tier's proof-channel readiness check (`proof-channel-vacuous`; review fix 2026-10-22). The baseline (review fixes 2026-10-22): `baseline --write` reads the baseline it replaces verified against its pin and records nothing over one that is not the one pinned, so that a hand edit cannot empty its `LOSS` list; `verify` fails a baseline that holds no line for a record of its tier; like MANIFEST's, the pin catches an accident, not the file and its pin edited together - review's job (H33). `AGENTS.md` names neither the baseline nor its pin: its "Never make the gate pass by ..." list should add "editing `oracles/engine-baseline.json` or its `gate.toml` `[baseline]` pin by hand, or recording a `LOSS` with `baseline --write`", and "Things you must not touch" the file and its pin, written only by `baseline --write` - the instruction files are the user's to change, so the edit is put to the user (as H38's for `CLAUDE.md`). Run 2026-10-17 with the engine configured: commit SMOKE TEST - PASSED (baseline: 41 records compared, 0 declined); nightly PASSED, gating Standard - Half Reflected (2 oracles behind its record) and Standard - Reversed Royalty (3), and not Standard - Turn Zero (one oracle behind cwmtt/tesseractMageOChicken); a restricted run (`gate --tier nightly --source ftxi --record cwmtt/standard`) labelled "restricted - not a tier result", 0 findings. Spec issues 122-124, 131-133; proposed edits 103-104 |
@@ -4252,7 +4253,7 @@ superseded or made moot says so; nothing is deleted.
     conditions). For 6x: the fallback's share, the budget and the memory per node by
     board-count range.
 
-*Issues 172-176 are the engine lane's (its next round, on `lane/engine`); 177-190 below are
+*Issues 172-176 are the engine lane's (its next round, on `lane/engine`); 177-197 below are
 the search lane's E10 (`lane/search`, 2026-10-23) - a gap here until the engine lane's merge.*
 
 <!-- A new list, so that the numbers from 177 render as written. -->
@@ -4385,6 +4386,52 @@ the search lane's E10 (`lane/search`, 2026-10-23) - a gap here until the engine 
     zero logit's softmax share instead). The asset map's steering changed which child
     `mcts_tree_form_evaluates_a_carried_root_it_inherited` re-rooted on and exposed it. Fixed
     (the submit edge found anywhere). No spec text is involved.
+
+191. **The decision log's format** (H44: "sampled self-play decisions"; I15's records are not
+    fixed for the events; brief: an interim format). Built: JSONL `t5d-decisions` version 1 -
+    "game" lines (the start: a named variant, or 5DFEN boards with the size; the rules'
+    encoding; the split; every action's moves as 5dpgn export texts - every position rebuilt
+    by replay, since 5DFEN loses the timelines' creators and branch origins) and "event" or
+    "job" lines (the game's id - the record's SHA-256, 16 hex digits - the action and
+    decision, the action's moves before it, the category's step, visits, Q, the root's
+    visits and Q, the peak share). Replaced when I15's records carry the events.
+192. **What the audit lane asks, and what a contradiction is** (H44; §11.4: "contradictions
+    with the network"; no value margin, no question per category stated). Built
+    (placeholders): a final move - Guard's question offline on the action played, and our
+    forced mate at its turn start; a PV change - Guard's question on the promoted action
+    where it is one (a flat-form turn, or a submission: the action is the moves before it; a
+    move of the ply split is not an action, not asked); a demotion - our mate at the turn
+    start. Contradictions, each confirmed by E4: `allowed_mate` (the action played or
+    promoted is refuted), `missed_mate` (the turn start's mate is not the action played -
+    inexact: the played action may mate as well; the prover answers only "does the side to
+    move force mate", so whether the played action keeps a forced mate is not asked),
+    `abandoned_mate` (the demoted move and the moves before it all belong to the mate's first
+    action, as a set). The network's own value is not in the interim log - "contradiction
+    with the network" is read as with the search's choice; I15's raw outputs would allow a
+    value margin.
+193. **"Large budgets"** (H44). Placeholders: Guard offline to depth 2 (the opponent's
+    actions) under 2,000,000 nodes, the literal class; our mate - the literal and the default
+    class at 1,000,000 nodes each, a 2,097,152-node tree cap, depth 5 (t5d-hunt-truth used
+    4,000,000 per class); one thread (deterministic), `--threads` for more.
+194. **Sampling** (H44: "sampled"; rates, weights and strata unstated). Placeholders: final 1,
+    PV change 0.25, demotion 1; at most 1,000 per (category, board range); a seeded hash of
+    each event's identity decides, the lowest keys kept up to the cap.
+195. **Python's log has no PV changes.** The C API exposes no root's PV-change list (only
+    each root child's `was_pv` and `peak_share`), so `netplay --decision-log` writes final
+    moves and demotions; the engine's writer (t5d-play) writes all three. A PV-change
+    accessor would be one more C function and its mirror - left until I15's records decide
+    where the events live.
+196. **The shallow-mate report** (§11.4: "how often the network's chosen move allows a shallow
+    forced mate, per board range"; "shallow" has no depth). Built: `--shallow` 1 (Guard's
+    depth 1, the opponent's mate in one) by default, Guard's completed depths reported per
+    depth; the rate is confirmed refutations within the depth over the finals Guard decided to
+    it; counted as 6b″ counts - confirmed only, a refuted certificate withholds the verdict,
+    an unconfirmed one apart, "too few to read" under 10 finals; ranges 6b's four, 200+
+    marked "weak at 200+".
+197. **The demotion threshold** (§11.2 rung 2: "it was the PV, or carried visits above a
+    threshold, and selection walked away"). Placeholder `demotion_share` 0.3 of the root's
+    visits (at one of the child's own visits); a child that was the most visited at any time
+    counts too.
 
 ## Proposed spec edits
 
@@ -5548,7 +5595,7 @@ struck through, where nothing of it is left to apply); the others stand as writt
     a turn start, a move edge to a mid-turn state; a flat node's turn edges are complete only
     when they reach every successor". Why: issues 169, 170.
 
-*Edits 135-136 are the engine lane's (`lane/engine`); 137-145 below are the search lane's E10
+*Edits 135-136 are the engine lane's (`lane/engine`); 137-146 below are the search lane's E10
 (`lane/search`, 2026-10-23) - a gap here until the engine lane's merge.*
 
 <!-- A new list, so that the numbers from 137 render as written. -->
@@ -5596,6 +5643,15 @@ struck through, where nothing of it is left to apply); the others stand as writt
     solved store the moment they are found". Proposed - add "until the sign-off (H23, H41)
     the provers' own in-memory stores - a question's (Hunt) or a game's (the settling
     prover) - hold them; nothing exports". Why: issue 183; H19 and H23 read together.
+
+146. **§11.4's audit-lane row and register H44**: now - "Samples self-play decisions - PV
+    changes, demotions, final moves - and runs exact proof search on them with large budgets";
+    H44 "tooling built in the untrained build, curriculum hooks as interfaces only". Proposed -
+    add "as built: a decision log (games by start and actions; final moves, PV changes,
+    demotions), a seeded sampler, Guard's question offline and the truth recorder's mate
+    question with certificates checked by E4, contradictions (allowed, missed and abandoned
+    mates) to a curriculum interface, and the per-range shallow-mate report counted as 6b″
+    counts; the log interim until I15's records". Why: issues 191-197.
 
 ## Session log
 
@@ -5678,3 +5734,11 @@ struck through, where nothing of it is left to apply); the others stand as writt
   carried by the C API and Python's records into the targets, which exclude them (tested end
   to end); PV events for H44. A latent tree-form defect fixed (issue 190). Register H1, H13,
   H14, H43, H44 (in part), I2, E4, M13; issues 177-190 (190 a defect note); edits 137-145.
+- **2026-10-23 - search lane E10 redone, commit 2: the offline audit lane's tooling** (H44;
+  `lane/search`). The decision log (C++ `PlayParams::decision_log`, `t5d-play
+  --decision-log`, Python `netplay --decision-log`), `t5d-audit sample / run / report`
+  (`tools/audit.hpp`): Guard's question offline and our-mate question with E4-checked
+  certificates, contradictions to the curriculum's interface (a JSONL writer its only
+  implementation), the per-range shallow-mate report. Register H44; issues 191-197; edit 146.
+  Remaining on E10's side for the main loop: the review and merge (the Lazy SMP test again
+  before it), issue 180's question to the user; E11 (time management) next on this lane.

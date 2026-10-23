@@ -12,7 +12,7 @@
 //            [--mate-nodes N] [--max-seconds S] [--seed S]
 //            [--no-hunt] [--no-settling] [--no-assets] [--hunt-ms MS]
 //            [--settling-ms MS] [--verification-threads N] [--guard-final]
-//            [--no-moves-after-shift] [--rules ENCODING]
+//            [--decision-log FILE] [--no-moves-after-shift] [--rules ENCODING]
 //
 // Defaults: Standard, the uniform evaluator, 64 playouts per decision, the
 // board-move split (D2 is undecided: --split flat and --split tree are the
@@ -39,6 +39,10 @@
 // threads (5). Their proofs change play only with --proof-channel. Guard (H42)
 // is adopted in no range: --guard-final switches its hook at submission on,
 // for experiments, and needs --proof-channel. The Engine header names them.
+// --decision-log FILE writes the game's decisions for the offline audit lane
+// (H44; JSONL "t5d-decisions" v1, tools/audit.hpp - t5d-audit reads it): the
+// game, its final moves, PV changes and demotions; the game's id the first
+// 16 hex digits of the record's SHA-256.
 // --max-seconds stops a long game (a safety stop, "*": checked before every
 // decision, and each search's deadline; the record ends at the last turn
 // start), its record and summary still printed.
@@ -52,13 +56,16 @@
 #include <cstdlib>
 #include <cstring>
 #include <exception>
+#include <fstream>
 #include <limits>
 #include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
 
+#include "audit.hpp"
 #include "play_record.hpp"
+#include "sha256.hpp"
 #include "t5d/mcts.hpp"
 #include "t5d/rules.hpp"
 #include "t5d/selfplay.hpp"
@@ -84,7 +91,7 @@ void usage(std::FILE* to) {
       "                [--max-seconds S] [--seed S]\n"
       "                [--no-hunt] [--no-settling] [--no-assets] [--hunt-ms MS]\n"
       "                [--settling-ms MS] [--verification-threads N] [--guard-final]\n"
-      "                [--no-moves-after-shift] [--rules ENCODING]\n",
+      "                [--decision-log FILE] [--no-moves-after-shift] [--rules ENCODING]\n",
       to);
 }
 
@@ -144,6 +151,7 @@ int main(int argc, char** argv) {
   params.turn_cap.boards = 300;
   RuleOptions rules;
   bool tree_gates_given = false;
+  std::string decision_log;
   try {
     for (int i = 1; i < argc; ++i) {
       const char* a = argv[i];
@@ -286,6 +294,9 @@ int main(int argc, char** argv) {
         params.search.verification_threads = static_cast<int>(number_in(a, value(), 1, 256));
       } else if (std::strcmp(a, "--guard-final") == 0) {
         params.guard_final = true;  // H42: adopted in no range; experiments, with --proof-channel
+      } else if (std::strcmp(a, "--decision-log") == 0) {
+        decision_log = value();
+        params.decision_log = true;
       } else if (std::strcmp(a, "--help") == 0 || std::strcmp(a, "-h") == 0) {
         usage(stdout);
         return 0;
@@ -345,8 +356,17 @@ int main(int argc, char** argv) {
                                         std::to_string(params.turn_cap.boards));
     }
     if (rules.encode() != 0) extra.emplace_back("Rules", tools::ruleset_text(rules));
-    std::fputs(tools::play_record(g, v->name, extra).c_str(), stdout);
+    const std::string record = tools::play_record(g, v->name, extra);
+    std::fputs(record.c_str(), stdout);
     std::fflush(stdout);
+    if (!decision_log.empty()) {
+      // H44: the decisions for the offline audit lane.
+      const audit::Log log = audit::log_of_game(g, v->name, tools::sha256_hex(record).substr(0, 16));
+      std::ofstream f(decision_log, std::ios::binary);
+      if (!f) throw std::runtime_error("cannot write " + decision_log);
+      f << audit::log_text(log);
+      std::fprintf(stderr, "t5d-play: decision log %s - %zu events\n", decision_log.c_str(), log.events.size());
+    }
     std::fprintf(stderr,
                  "t5d-play: %zu actions, %s, result %s, %llu decisions, %llu playouts, %llu "
                  "evaluations, %llu nodes, %.2f s, turn cap %s (capped positions met in search: %llu)\n",
