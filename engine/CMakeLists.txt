@@ -316,6 +316,17 @@ endif()
 # Stage E6a: t5d-play, the engine against itself, printing the game's 5dpgn
 # record; test_play_exe.cpp runs it and replays the record with t5d-gate.
 target_sources(t5d_tools PRIVATE tools/play_record.cpp)
+# Register H41's cross-checks (§15.4): the search's solver read back and held
+# to df-pn (the tests, t5d-solver-check), its proof lines as records.
+target_sources(t5d_tools PRIVATE tools/solver_proofs.cpp)
+add_executable(t5d-solver-check tools/t5d_solver_check.cpp)
+target_link_libraries(t5d-solver-check PRIVATE t5d_tools)
+if(MINGW)
+  target_link_options(t5d-solver-check PRIVATE -static)
+endif()
+target_sources(t5d-tests PRIVATE tests/test_proof_tools.cpp)
+add_dependencies(t5d-tests t5d-solver-check)
+target_compile_definitions(t5d-tests PRIVATE "T5D_SOLVER_CHECK_EXE=\"$<TARGET_FILE:t5d-solver-check>\"")
 add_executable(t5d-play tools/t5d_play.cpp)
 target_link_libraries(t5d-play PRIVATE t5d_tools)
 add_dependencies(t5d-tests t5d-play)

@@ -157,6 +157,7 @@ Targets (all in `build/engine`):
 | `t5d-scan6b` | experiment 6b: the scanner's horizon per node budget (see "Stage E5b") |
 | `t5d-play` | the engine plays itself and prints the 5dpgn record (see "Stage E6a") |
 | `t5d-tree-count` | D2's tree form against the ply split on recorded games' turn starts: evaluation counts (`tools/t5d_tree_count.cpp`; docs/MEASUREMENTS.md) |
+| `t5d-solver-check` | the search's solver against df-pn at the turn starts of records, per board-count range (register H41; see "Step 2: H41's cross-checks") |
 
 Release builds use -O2; every target builds with `-Wall -Wextra -Wpedantic -Wshadow
 -Wconversion -Wsign-conversion`, warning-free (`--werror` makes that binding). On
@@ -3914,6 +3915,88 @@ old size where it was cut):
   6b″'s counting of unconfirmed proofs and its withholding, the three thresholds and
   range edges off by one, the unreadable label, the provenance's order and record
   checks, Hunt's export refusal) - all 26 caught.
+## Step 2: H41's cross-checks and 6f's TT churn
+
+Register H41 commits the search's in-tree solver to the proof channel and has its proofs
+"cross-checked against df-pn and oracle mate verdicts" (spec §11.1, §15.4); §13.1's 6f asks
+for the proof-export invariant verified under TT churn (§11.3). The proof channel stays
+off: every search below runs with `proof_channel = true` in a test or an offline tool, and
+no proof enters a store (`proof_store` stays refused).
+
+### The solver's claims, and df-pn (`tools/solver_proofs.hpp`)
+
+The search keeps bounds `[lo, hi]` per node (its mover's view), not a distance. The
+distance is derived from the solved subtree (`solver_claims`, `solver_claim`): a
+checkmate node is Loss(0), a stalemate a Draw; a node proven won is Win(k), k the least
+over its children proven lost for it (a same-mover child - the ply split's and the tree
+form's mid-action nodes - its own Win, an opponent's Loss(j) as j + 1); a node proven lost
+is Loss(k), k the greatest over its children, every one proven lost; a node proven drawn
+is a Draw. Pruned edges, dead ends and edges of unknown legality are read as the search's
+own bound update reads them; a solved node its children do not support throws.
+
+`DfpnChecker` compares each solved TURN START with df-pn in the literal class (seeds All,
+completion Every - exactly "mate within d"), one thread, a node budget, its own stores:
+- Win(k): df-pn at depth k proves Win(j <= k) or answers Unknown, never Disproven;
+- Loss(k): at every successor (E4's exhaustive listing) df-pn at depth k - 1 proves the
+  opponent's mate or answers Unknown, never Disproven; at the node itself it proves
+  nothing (depth k);
+- Draw: df-pn proves nothing at the node, and the opponent's mate is not proven after
+  every action (both at `draw_depth`, 3 - a placeholder, build-log issue 400);
+- every df-pn proof is certified by `check_certificate` (E4 alone).
+Unknown gives no verdict and is counted; answers are memoised by position and depth.
+Game ends (E4's own verdicts, which the search scores) are counted, not asked.
+
+Tests (`tests/test_mcts.cpp`, `tests/test_solver_refs.hpp` for the positions and arms):
+- `mcts_solver_agrees_with_df_pn_on_constructed_mates` - the seven constructed positions
+  (mate in one, cross-board mate, stale checkmate in one, mate in two, history royal mate,
+  forced draw, forced loss) under both Q4 readings and five arms (the ply split and the flat
+  form, each as a tree and as MCGS's graph; the tree form), 20,000 playouts: every root
+  solved; the mate in one Win(1), the forced draw a Draw, the forced loss Loss(2) at the
+  root under every arm; 70 searches, 408 claims at solved nodes (90 win, 100 loss, 218 draw;
+  288 of them game ends), 170 comparisons, all decided and agreeing; 26 df-pn searches (the
+  rest from its memo), 18 proofs, all 18 certified by E4. About a second.
+- `mcts_solver_agrees_with_df_pn_under_every_ruleset` - `two_board_positions` (6 per Q4
+  reading) and `sparse_positions` under all 27 rulesets (1 game, 2 turns), three arms (ply,
+  tree, flat), 250 playouts, df-pn 50,000 nodes: 1,629 searches (640 roots solved), 5,704
+  claims (2,432 win, 2,603 loss, 669 draw; 2,819 game ends), 3,683 comparisons, 3,662
+  decided and agreeing, 21 unknown; 1,707 df-pn searches, 1,477 proofs, every one certified
+  by E4, 209 disproofs. About 75 s on a shared machine.
+- `long_mcts_solver_agrees_with_df_pn` - 12 two-board positions per reading and one game of
+  3 turns under every ruleset, five arms, 800 playouts, df-pn 200,000 nodes (certificate
+  checks at most 20,000 defender positions), the search's legality exact within 2,000,000
+  nodes per classification (a move left unknown proves nothing; build-log issue 406): 4,050
+  searches (1,943 roots solved), 59,249 claims (32,846 game ends), 29,967 comparisons, 29,219
+  decided and agreeing, 748 unknown; 7,980 df-pn searches, 7,234 proofs, every one certified
+  by E4, 377 disproofs. 48 minutes on a loaded machine (it prints a line per ruleset; Q3's
+  play activation took 7 minutes, Q20's alternative 20).
+Each asserts zero contradictions, zero certificate failures and a floor of decided
+comparisons.
+
+### t5d-solver-check (the offline mode)
+
+```
+t5d-solver-check [--record-list FILE --record-root DIR] [--every K] [--max-roots N]
+    [--min-boards N] [--max-boards N] [--rules ENC | --no-moves-after-shift]
+    [--split ply|tree|flat ...] [--playouts N] [--mate-nodes N] [--dfpn-nodes N]
+    [--max-depth D] [--draw-depth D] [--no-certify] [--check-positions N]
+    [--per-position] RECORD ...
+```
+
+6b's roots construction (`sixb_roots`: the records' turn starts, distinct, read as 6b read
+them) over the records given; at each root not terminal and not breaking C4, a search per
+arm (default all three) with the proof channel on - offline, no store - exact legality and
+the uniform evaluator; every solved turn start compared as above. One `RANGE` line per
+board-count range (< 50, 50-99, 100-199, 200+), never pooled; `CONTRADICTION` and
+`CERTIFICATE` lines for findings; exit status 0 clean, 3 findings, 1 unreadable records,
+2 a bad command line. `tests/test_proof_tools.cpp` runs it on records of random play it
+writes itself (four sparse starts, custom set-ups through `play_record`).
+
+It is meant for 6b's 805 roots (§11.4's "above 100 boards, proofs come only from the
+search's solver"), but those roots' records are the gate corpus's - under
+`oracles/third_party/` through `oracles/corpus/manifest.toml` - and no record list
+outside the oracle tree exists on this machine: that run is not made here (build-log
+issue 401).
+
 ## 5DFEN
 
 `parse_fen_board` reads one board string, `[pieces:timeline:turn:colour]`, for a
