@@ -846,6 +846,7 @@ threads reach at least one thread's sum (one retry on a shared machine).
 | 2026-10-23 | D2's flat form (reviewed, a05ab6a) | main a937370 + lane/engine a05ab6a, merged tree before the commit | dev-r, 24 logical; the engine and network lanes running; load 10-33% | 32 | 293 / 293 / 293 | 316 / 317 / 315 | none | pass x3; the nightly gate passed on the same tree (480 s; Half Reflected and Reversed Royalty gated) |
 | 2026-10-23 | E10 redone, commit 1 (the search lane: the verification ladder wired; before review) | main 88d2007 + lane/search's commit 1, the tree before the commit | dev-r, 24 logical; another lane's Python job running; load 68% before, 76% after | 32 | 293 / 292 / 293 | 313 / 315 / 311 | none | pass x3 |
 | 2026-10-23 | E10 redone, commit 2 (the audit lane's tooling, and a counter of commit 1's; before review) | lane/search 62d4310 + commit 2, the tree before the commit | dev-r, 24 logical; other lanes' jobs running; load 94% before, 91% after | 32 | 291 / 293 / 293 | 303 / 302 / 308 | none | pass x3 |
+| 2026-10-23 | E10 review fixes (the search lane: the ladder's decisions, Hunt beside the settling scan, the boost rule; before review) | lane/search 2931ffa + the review fixes, the tree before the commit | dev-r, 24 logical; other lanes' jobs running; load 100% before and after | 32 | 292 / 292 / 292 | 309 / 303 / 308 | none | pass x3 |
 
 ## Environment
 
@@ -1586,7 +1587,7 @@ width (M22)", "The CHECKPOINT 8 figures"). Found on the way: the ruling's premis
 
 | ID | Status | Notes |
 |---|---|---|
-| H1 | built, tested; wired (E10, `lane/search`) | Verification v3 (§11.4): exact rules (E1-E4); the search's solver behind H41's switch (E6a); Guard, Hunt and the asset map (E9, reviewed); df-pn settling (E8's prover, carried into E9); the audit lane's certificate checker and truth recorder. E5b/E5c's brute-force scanner kept as 6b′'s comparison. 6b″ decided (M17): Hunt adopted under 100 boards, Guard in no range. **Wired (E10 redone, 2026-10-23, `t5d/ladder.hpp`)** per 6b″'s table, each part on by default in its range: Hunt at turn-start roots under 100 boards, the full settling scans under 50 (the root's, and the opponent's turn start after the principal line at each PV change), the asset map's boosts; Guard's hook built, off. Their proofs are withheld while the proof channel is off (H41), the tree untouched (tested: the digest equals the search's without the ladder); with it on (tests only) only proofs E4 confirms enter. Issues 177-190, edits 137-145 |
+| H1 | built, tested; wired (E10, `lane/search`) | Verification v3 (§11.4): exact rules (E1-E4); the search's solver behind H41's switch (E6a); Guard, Hunt and the asset map (E9, reviewed); df-pn settling (E8's prover, carried into E9); the audit lane's certificate checker and truth recorder. E5b/E5c's brute-force scanner kept as 6b′'s comparison. 6b″ decided (M17): Hunt adopted under 100 boards, Guard in no range. **Wired (E10 redone, 2026-10-23, `t5d/ladder.hpp`)** per 6b″'s table, each part on by default in its range: Hunt at turn-start roots under 100 boards, the full settling scans under 50 (the root's, and the opponent's turn start after the principal line at each PV change), the asset map's boosts; Guard's hook built, off. Their proofs are withheld while the proof channel is off (H41), the tree untouched (tested: the digest equals the search's without the ladder); with it on (tests only) only proofs E4 confirms enter. Issues 177-190, edits 137-145. **E10 review fixes (2026-10-23):** under 50 boards the root's settling scan asks Hunt's question in Hunt's place (`hunt_with_settling`, off; issue 181); a search sharing the game's ladder asks and takes for its own decision only (a donor searching on took its successor's verdicts; issue 183); every "only E4-confirmed proofs enter" gate - the search's offer, Guard's hook, the audit runner - now tested with a certificate E4 rejects (test-only seams); self-play runs without the asset map (issues 179, 450) |
 | H2 | built, tested | Proofs only from exhaustive verdicts and exhaustive defender enumerations; the per-leaf estimate channel removed (E9); estimates survive only as Hunt's flagged priors and the asset map's boosts; the search consumes in-tree bounds only behind H41's switch |
 | H3 | built, tested | Node cap with iterative deepening in forcing half-turns; horizon per budget measured (6b) |
 | H4 | built | MVV-LVA, killers, history, continuation history |
@@ -1597,12 +1598,12 @@ width (M22)", "The CHECKPOINT 8 figures"). Found on the way: the ruling's premis
 | H10 | reduced, built | Rung 1 dropped (6b); rungs 3 and 5 retired, not built (M5); rung 2's promotion side is Guard, its demotion audit the audit lane; rung 4, the asset map, built (E9). The reduced ladder as H14 restates it: Hunt, the asset map and the settling scans under 50 boards - Guard offline (adopted nowhere, 6b″) |
 | H11 | superseded | By Guard (promotion) and the audit lane (demotion audit) |
 | H12 | retired | With the NNUE and the per-node scans |
-| H13 | built, wired (E10) | The asset map (E9) as the register records it: the material estimate, 4 plies and 128 nodes per board, flagged at 300, boost 0.25 × min(1, value/900), every number a placeholder (issue 106). Wired (E10, 2026-10-23): its boost enters every node's priors after the softmax and before k0 and the root noise, never the cached evaluation - (P + b) / (1 + Σb), a multiplicative arm (issue 178); one map per game, shared by its fresh searches (each board assessed once in the game, tested); the root's unsteered priors and steered visits recorded for I2 (issue 179). With a uniform evaluator it dominates flat priors: self-play then branches heavily (issue 178) |
-| H14 | built (E10; placeholders) | Restated at CHECKPOINT 6: budgets for the reduced ladder - Hunt, the asset map, the settling scans under 50 boards (Guard offline) - against shared movegen, on M13's five cores. Built (E10, 2026-10-23): one worker per game's ladder, the jobs one at a time in the order asked (the root's Hunt, its settling scan, PV changes' scans - issue 182), each prover on `verification_threads` (5) threads under 50 ms (6b″'s configuration) or a node cap; at most 4 PV scans a decision; the asset map on the search's thread (once per board, 128 nodes); the synchronous mode by nodes (25,000) inline. A decision's end cancels its jobs (`ProveBudget::cancel`; issue 187). Where the jobs' time sits in E7's allocation waits for E11 |
+| H13 | built, wired (E10) | The asset map (E9) as the register records it: the material estimate, 4 plies and 128 nodes per board, flagged at 300, boost 0.25 × min(1, value/900), every number a placeholder (issue 106). Wired (E10, 2026-10-23): its boost enters every node's priors after the softmax and before k0 and the root noise, never the cached evaluation - (P + b) / (1 + Σb), a multiplicative arm (issue 178); one map per game, shared by its fresh searches (each board assessed once in the game, tested); the root's unsteered priors and steered visits recorded for I2 (issue 179). With a uniform evaluator it dominates flat priors: self-play then branches heavily (issue 178). **E10 review (2026-10-23):** the additive rule is now monotone and capped (`boost_cap` 0.5 of the unboosted mass, a placeholder; issue 178(a)); the flat form steers after its noise, k0 unsteered (178(b)); **off in self-play** (`self_play_search_defaults()`, Python's `GeneratorConfig.asset_map`) until I2's steered visits are validated - on in the search's default and match play (issues 179, 450) |
+| H14 | built (E10; placeholders) | Restated at CHECKPOINT 6: budgets for the reduced ladder - Hunt, the asset map, the settling scans under 50 boards (Guard offline) - against shared movegen, on M13's five cores. Built (E10, 2026-10-23): one worker per game's ladder, the jobs one at a time in the order asked (the root's Hunt, its settling scan, PV changes' scans - issue 182), each prover on `verification_threads` (5) threads under 50 ms (6b″'s configuration) or a node cap; at most 4 PV scans a decision; the asset map on the search's thread (once per board, 128 nodes); the synchronous mode by nodes (25,000) inline. A decision's end cancels its jobs (`ProveBudget::cancel`; issue 187). Where the jobs' time sits in E7's allocation waits for E11. **E10 review (2026-10-23):** the root's Hunt or its settling scan (not both, issue 181), then PV changes'; verdicts tagged by decision, a search taking its own (issue 183); a decision's end tested to cancel a running job (issue 187); the ladder's counts `answered` (taken), `cancelled`, `discarded`, `contradictions` (a job that throws, reported on stderr); every parallel self-play game's ladder has a worker and five prover threads - oversubscribing M13's five cores (issue 451) |
 | H41 | built, tested | `SearchParams::proof_channel` (C `proof_channel`, `t5d-play --proof-channel`) - the switch the register now names: propagation of solved status (marking nodes solved, pruning siblings, secure-child selection) and export, off by rule; game ends are scored as results. Not yet: the cross-checks of the solver's proofs against df-pn and the oracles' mate verdicts (§15.4) - step 2's missing tests |
 | H42 | built, tested; not adopted | Guard (E9): depth 1 completes in 65.1 / 15.8 / 5.2 / 0.0% of roots against 95% (6b″) - adopted in no range; §13: the chosen move goes unguarded. Built and kept (the audit lane's shallow-mate report uses its question offline; the search's re-search hook stays unwired-by-adoption). Its five-thread depth-1 test failed once in CI (run 37146667584): a thread that read the root's proof from a helper's export - its tree empty - was the one reported, so the refutation's line was empty. Fixed in the prover's report (2026-10-17, `lane/engine`): the line of a thread that searched, complete at depth 1; the test pins the race and checks the line's contract at depth 2. What Guard decides is unchanged. Beyond depth 1 the line keeps its contract (it can stop where a node was solved from the store): a certificate holds the attacker's proving actions only, so the line could take the attacker's step past such a node from one but not the defender's longest defence, which needs an enumeration of the defender's actions (the first record of this fix gave another reason - that 6b″ ran Guard without certificates; it ran with them, for its cross-check against E4) |
-| H43 | built, tested; adopted under 100 boards; wired (E10) | Hunt (E9): 69.0% / 63.6% of the truth's mates under 50 / 50-99 boards (6b″) - adopted there; 35.0% at 100-199 and 0 of 1 at 200+ - not adopted; §13: proofs there come only from the search's solver. Export refused until H41/H23. Wired (E10, 2026-10-23): asked at turn-start roots under 100 boards at 50 ms on 5 threads; its mate carried through the action's decisions under the ply split; withheld while the proof channel is off (issue 180); the soft priors built behind `hunt_suggest`, off, counted as steering (issue 186) |
-| H44 | built (tooling), tested | The audit lane's tools: the certificate checker (E4 alone) and `t5d-hunt-truth` (E9); the search's decision events and **the tooling (E10, 2026-10-23, `lane/search`)**: the decision log (`PlayParams::decision_log`, `t5d-play --decision-log`, Python's `netplay --decision-log`; JSONL `t5d-decisions` v1 - games by start and actions, events final / pv_change / demotion), `t5d-audit sample` (seeded, rates and caps per category and range), `run` (Guard's question offline on the action, our mate at the turn start by the truth recorder's method, certificates checked by E4; contradictions to the `CurriculumSink` interface, its one implementation a JSONL writer) and `report` (per range the shallow-mate rate, Guard's completed depths, the undecided, the contradictions; counted as 6b″ counts). No consumer of the contradictions is built (curriculum hooks as interfaces only). Every budget and threshold a placeholder (issues 191-197) |
+| H43 | built, tested; adopted under 100 boards; wired (E10) | Hunt (E9): 69.0% / 63.6% of the truth's mates under 50 / 50-99 boards (6b″) - adopted there; 35.0% at 100-199 and 0 of 1 at 200+ - not adopted; §13: proofs there come only from the search's solver. Export refused until H41/H23. Wired (E10, 2026-10-23): asked at turn-start roots under 100 boards at 50 ms on 5 threads; its mate carried through the action's decisions under the ply split; withheld while the proof channel is off (issue 180); the soft priors built behind `hunt_suggest`, off, counted as steering (issue 186). **E10 review (2026-10-23):** under 50 boards the root's settling scan asks its question in its place (same class and depth; `hunt_with_settling` off - issue 181), so Hunt itself runs at 50-99 boards (and below 50 with its suggestions on); its silence with suggestions on would leak a mate (issue 186(a)) |
+| H44 | built (tooling), tested | The audit lane's tools: the certificate checker (E4 alone) and `t5d-hunt-truth` (E9); the search's decision events and **the tooling (E10, 2026-10-23, `lane/search`)**: the decision log (`PlayParams::decision_log`, `t5d-play --decision-log`, Python's `netplay --decision-log`; JSONL `t5d-decisions` v1 - games by start and actions, events final / pv_change / demotion), `t5d-audit sample` (seeded, rates and caps per category and range), `run` (Guard's question offline on the action, our mate at the turn start by the truth recorder's method, certificates checked by E4; contradictions to the `CurriculumSink` interface, its one implementation a JSONL writer) and `report` (per range the shallow-mate rate, Guard's completed depths, the undecided, the contradictions; counted as 6b″ counts). No consumer of the contradictions is built (curriculum hooks as interfaces only). Every budget and threshold a placeholder (issues 191-197). **E10 review (2026-10-23):** the runner's E4 gate tested with a certificate E4 rejects (no contradiction), the abandoned mate and the chosen child's exclusion from the demotions tested; `missed_mate`'s known false positives stay documented (issue 192) |
 | H45 | not built (rule) | The adversarial league (M5) |
 | H46 | built, tested | Q2 (provisional): initial timelines count as created by neither player - a variant's set-up reads every timeline as initial (rulebook R10) |
 | H47 | built, tested | Tiered CI reading (Q-A at CHECKPOINT 6, amended at CHECKPOINT 8; spec issues 122-124 ruled, built 2026-10-17). **Two oracles to gate a ruleset**: every record of a ruleset followed, as far as the engine went, by at least two independent implementations (`gate.GATING_ORACLES`; two searches of one count once, the notation parser never), in every tier - so the commit tier, with one rules oracle, can gate nothing at all. **The check that some ruleset is gated** (`engine-nothing-gated`, and `GateResult.ok`'s test of it) runs only in a tier that runs every oracle search over the whole corpus (`Tier.full_strength`: nightly, release) - keyed to what a tier runs, never its name; any other tier - commit - is a smoke test, and its summary (`engine differential: SMOKE TEST - ...`) and report (`smoke_test`; nothing under `gated`) say that it gates nothing. **The commit tier's last-green-run rule**: the engine's baseline, `oracles/engine-baseline.json` - written by `harness.py baseline --write` from a green run of the commit tier, pinned in `gate.toml` `[baseline]`, checked by `verify` and before every comparison; recorded 2026-10-17 from the engine as built on `lane/gate`, 35 of the 41 commit records replayed - and every tier fails an engine that declines a record it read then (`engine-declined`) or reads none (`engine-read-nothing`). **Restricted runs** (`--source`/`--record`) never produce a tier verdict: labelled "restricted - not a tier result", findings only, the exit code from them, no check of a tier as a whole - undoing issue 124's first reading. In every tier an unexplained divergence, a telltale or a contract breach fails the engine; `gate.toml` is refused if a tier that is not full strength sets `require_engine`; the release tier's named-variant rule, the proof-channel line and parse mode are unchanged for a complete run - a restricted run's proof channel reads `DISABLED - restricted - not a tier result`, and it makes neither parse mode's `engine-nothing-compared` floor nor the release tier's proof-channel readiness check (`proof-channel-vacuous`; review fix 2026-10-22). The baseline (review fixes 2026-10-22): `baseline --write` reads the baseline it replaces verified against its pin and records nothing over one that is not the one pinned, so that a hand edit cannot empty its `LOSS` list; `verify` fails a baseline that holds no line for a record of its tier; like MANIFEST's, the pin catches an accident, not the file and its pin edited together - review's job (H33). `AGENTS.md` names neither the baseline nor its pin: its "Never make the gate pass by ..." list should add "editing `oracles/engine-baseline.json` or its `gate.toml` `[baseline]` pin by hand, or recording a `LOSS` with `baseline --write`", and "Things you must not touch" the file and its pin, written only by `baseline --write` - the instruction files are the user's to change, so the edit is put to the user (as H38's for `CLAUDE.md`). Run 2026-10-17 with the engine configured: commit SMOKE TEST - PASSED (baseline: 41 records compared, 0 declined); nightly PASSED, gating Standard - Half Reflected (2 oracles behind its record) and Standard - Reversed Royalty (3), and not Standard - Turn Zero (one oracle behind cwmtt/tesseractMageOChicken); a restricted run (`gate --tier nightly --source ftxi --record cwmtt/standard`) labelled "restricted - not a tier result", 0 findings. Spec issues 122-124, 131-133; proposed edits 103-104 |
@@ -1701,7 +1702,7 @@ width (M22)", "The CHECKPOINT 8 figures"). Found on the way: the ruling's premis
 | G8 | built behind its flag (off), smoke-tested (`lane/net`, the precision component, 2026-10-23) | QAT prepared, not adopted. `TrainerConfig.qat` (off) and `qat_format = "fp8_e4m3"` (provisional until the inference path pins the format): `train.trainer.apply_qat` switches the trainer's network in place to G2's FP8 trunk (`net/quant.py`, issue 238) - fake quantisation of the six projections per block and attention's operands, straight-through gradients, the heads, RoPE, embeddings and norms untouched, the frozen-K/V format (C15) and the network's quantisation settings kept (tested): QAT's forward is the served format's full pass bit for bit, the frozen K/V rounded as the full pass rounds them (tested). The cache serves the projections-only format with FP8 frozen K/V (tested); with QAT's default, attention quantised, the cache refuses the network (issue 239(a), (i)). The records follow the format (review fixes): the trainer's `net_cfg` is switched with the network, a record's network condition takes the format from the evaluated network and refuses a caller's configuration that contradicts it, and `network_id` folds an 8-bit format in (ids of unquantised networks unchanged) - tested through generate -> steps -> publish -> generate. Smoke-tested: three optimiser steps on synthetic rows, BF16 and FP32, FFN ratios 2 and 12 - losses finite, every quantised weight's gradient dense and within relative L2 distance 0.5 of the unquantised network's (measured at most 0.117, MEASUREMENTS). Written from papers; Monroe's `quantize` option (Lc0's training code) is an idea only (AGENTS.md, H29). When it runs - a fine-tuning stage, if 6w says so - is the pilot run's (issue 239; edit 182) |
 | G9 | built in part | PyTorch drives the C++ search through the C API (N5, eager, on CPU). FlexAttention runs eagerly through B14's score function (`attn_impl="flex"`, `lane/net`: forward only on CPU). Not built: torch.compile and compiled FlexAttention kernels (GPU time, M19); ONNX/TensorRT export - refused for now (M5). The bounded AMD attempt (AMD's PyTorch for Windows on the RX 9070 XT, figures AMD-labelled): any time, in `build/` only |
 | I1 | not started (rule) | Self-play training: no training runs in the untrained build (the brief); the pilot run (M18) comes after §15.5 |
-| I2 | built, tested (engine round 2c, E10; targets M21 commit 2) | Targets from the pruned visits - the search-value targets too (CHECKPOINT 7). The engine side (engine ABI round 2c, issue 153): per root child its visits, priors with and without the noise, q, value variance, E3's factor, `boost`, `steered_visits`, `forced_visits`, and the root's effective cPUCT; search-side forced playouts not built. **The steering counts are real since E10 (2026-10-23)**: `boost` = the noise-free prior less the unsteered one (`prior_unsteered`, appended), `steered_visits` the root visits PUCT would have given another child with the unsteered priors (`steered_rule`, issue 179); a self-play game through Python's generator records non-zero steered visits and the targets exclude them (`python/tests/train/test_steering.py`). The targets (`python/t5d/train/targets.py`): KataGo's forced-playout pruning at target construction against a replica of the root's PUCT, a one-visit remainder dropped; steered visits excluded (`policy_mode="exclusion"`, the placeholder) or kept at a weight (`"provenance"`) - open, 6e; the replica's prior without the boost; the policy, soft-policy, categorical, short-term and deblundering values and the q_ratio blend's root WDL all from the pruned visits. Placeholders: issue 235 |
+| I2 | built, tested (engine round 2c, E10; targets M21 commit 2) | Targets from the pruned visits - the search-value targets too (CHECKPOINT 7). The engine side (engine ABI round 2c, issue 153): per root child its visits, priors with and without the noise, q, value variance, E3's factor, `boost`, `steered_visits`, `forced_visits`, and the root's effective cPUCT; search-side forced playouts not built. **The steering counts are real since E10 (2026-10-23)**: `boost` = the noise-free prior less the unsteered one (`prior_unsteered`, appended), `steered_visits` the root visits PUCT would have given another child with the unsteered priors (`steered_rule`, issue 179); a self-play game through Python's generator records non-zero steered visits and the targets exclude them (`python/tests/train/test_steering.py`). **The E10 review measured the counterfactual definition failing** - with exclusion the boosted moves' share of the target fell to 0.032 where the unsteered search gave 0.499 (issue 179(a)): the definition is unvalidated, **self-play runs without the asset map** until one is (issue 450, put to the user), and the targets' replica now unsteers the noised prior by (1 - ε) x the boost (179(c)). The targets (`python/t5d/train/targets.py`): KataGo's forced-playout pruning at target construction against a replica of the root's PUCT, a one-visit remainder dropped; steered visits excluded (`policy_mode="exclusion"`, the placeholder) or kept at a weight (`"provenance"`) - open, 6e; the replica's prior without the boost; the policy, soft-policy, categorical, short-term and deblundering values and the q_ratio blend's root WDL all from the pruned visits. Placeholders: issue 235 |
 | I3 | built in part | Match play as I3 configures it: root noise off, the final rule (LCB), the tree carried (`t5d-play --match`, E6a; netplay's `mode="match"`, N5). The mature regime is training-time. In the untrained build: the curriculum hooks as interfaces only (H44, step 2) and I18's resignation rule (built: M21 commit 3, `lane/net` - off until the value head is calibrated); MLH steering and early adjudication parked (issue 300; "Parked", below) |
 | I4 | principle | Confidence-family mechanisms never scale down the confidence-independent layer - followed: C24 is add-only; E8 (not started) to follow |
 | I5 | built, tested (M21 commit 3, `lane/net`) | PCR in the training generator (`train/selfplay.py`, `PCRConfig`): each decision full with probability 0.25 (KataGo's), drawn from the game's seed and the decision's index, else cheap at the full cap / 8 without root noise (placeholders, issue 236); only full searches emit policy, soft-policy, categorical and effort targets (`train/targets.py`). Difficulty-biasing only as a mixture: `difficulty_mix` < 1 enforced, > 0 not built (the root's effort output is not delivered - issue 236). `engine/netplay.py` and `t5d-play` unchanged (no PCR: they write no training records) |
@@ -4281,6 +4282,27 @@ the search lane's E10 (`lane/search`, 2026-10-23) - a gap here until the engine 
     on 38 timelines in 23 (6 s, checkmate); the self-play mechanics tests now run with the
     map off (indicative, not in MEASUREMENTS). Its strength is SPSA's and 6e's to set; a trained policy's priors are not flat.
     Proposed edit 138.
+    (a) *E10 review (2026-10-23; reviewer A's M1, the main loop's rule).* The first rule was
+    non-monotone - a boosted move with P > b / Σb lost prior (A: (0T2)Kd1(0T1)d1 0.377 -> 0.279,
+    `RootChild::boost` -0.098) - and swamped flat priors. The documents do not fix additive
+    against multiplicative (§11.2 rung 4, H13, H2, §11.1's table; §10's compounding table reads
+    like a floor-like additive boost; §8.4's "never additive" is about PUCT's U term). Kept
+    additive (the literal reading), made monotone and capped: over the open edges (mass T), B the
+    boosted (prior mass S_B, boosts β): β' = min(β, `boost_cap` (T - S_B)), each b scaled by β'/β;
+    boosted P + b'; unboosted P (T - S_B - β') / (T - S_B) (no change where S_B = T).
+    `boost_cap` 0.5 - a named placeholder: the unboosted keep at least half their mass. Tested:
+    no boosted prior falls, the unboosted by one common factor, sums 1 under both rules, the cap
+    binding and not. A's game probe re-run on the new rule (t5d-play, uniform evaluator, 12
+    playouts, Two Timelines, the ply split, seed 18, Hunt and settling off; a shared machine,
+    indicative): with the map 308 boards on 79 timelines in 20 actions (the turn cap, 15 s; 542 steered visits) against the first rule's 315 on 87 in 19 (888 steered visits); without it 195 on 38 in 23, checkmate (reproduced exactly) - the cap at 0.5 still lets a 0.25 boost dominate flat priors (it halves the unboosted mass); its strength is still SPSA's and 6e's to set. `RootChild::boost` is signed (negative for an unboosted child at a
+    steered root - the renormalisation's drain), documented in mcts.hpp and the C header.
+    (b) *The flat form's order* (reviewer B's finding 2): its root noise is per board inside the
+    `FlatPolicy` whose scores order the turn generator, and its k0 is set at the expansion before
+    any turn exists - neither can follow the documented order (steering after the softmax, before
+    k0 and the noise) without boosting the per-board policy itself, another rule. Documented: a
+    flat turn's prior is steered after the noise; k0 from the unsteered turn distribution's
+    entropy (tested: the same with the map on and off, where the ply split's differs); a pruned
+    turn no longer boosted, the renormalisation over the turns that may be taken.
 179. **What a steered visit is** (register I2, I15; §12.2; issue 153: "E10 decides what counts
     as a steered visit"). Built (`steered_rule`, placeholder): a root visit is steered when
     PUCT's choice at the root, its scores recomputed with every edge's unsteered prior (the
@@ -4291,6 +4313,32 @@ the search lane's E10 (`lane/search`, 2026-10-23) - a gap here until the engine 
     steering deeper in the tree shapes values - 6e's residual, §12.2). A carried root (match
     play) records none. `boost` = the noise-free prior less the unsteered one, which
     `train.targets`' replica subtracts. Proposed edit 139.
+    (a) *E10 review (2026-10-23): the definition measured failing* (reviewer A's H1, B's finding
+    1). With the targets' default exclusion the boosted moves' share of the policy target
+    against the unsteered search's (A's probe: the asset position, 800 playouts; boosted share
+    of the steered search's visits / after exclusion / the unsteered search's): uniform,
+    additive 0.806 / 0.032 / 0.499; random, additive 0.934 / 0.069 / 0.748; random,
+    multiplicative - / 0.178 / 0.748; uniform, multiplicative 0.606 / 0.079 / 0.499. B: 233-282
+    of 300 root visits counted steered, unboosted children included. The count is "visits whose
+    choice the steering decided": once the boosted children's counts run ahead, the replica
+    (unsteered priors, the same visits and values) picks another child at nearly every visit to
+    them, so exclusion removes far more than the steering added, biasing the target AGAINST the
+    boosted moves. Re-measured on the review's additive rule (178(a); A's detail probe,
+    the asset position, 800 playouts): uniform 0.781 / 0.028 / 0.499, random 0.927 / 0.067 / 0.748 (200 playouts: 0.749 / 0.098 / 0.497 and 0.889 / 0.133 / 0.588) - no better; the multiplicative arm unchanged; the boosted child with the largest prior now gains (0.377 -> 0.425, +0.048) where it lost. The count is kept as built and recorded (`steered_rule`
+    Counterfactual) but is **unvalidated**: self-play runs without the asset map until a
+    definition is validated (issue 450). Alternatives for the user: a distributional excess -
+    per root child max(0, N (P_steered - P_unsteered)) visits, clipped to its visits; a replica
+    search with unsteered priors whose visit counts are the target; `BoostedChild` (every visit
+    of a boosted child) - cautious, drops the boosted moves' whole share. Edit 139 amended.
+    (b) *The replica's simplifications* (reviewer A's L2, part of (a)'s cause): it scores the
+    children the steered search instantiated, in the steered edge order - progressive widening
+    with the unsteered priors would instantiate others, in another order; and it is the root's
+    alone.
+    (c) *The targets' replica under root noise* (A's L3): the search's prior after the noise is
+    (1 - ε) x the steered noise-free prior plus the noise's part; subtracting the whole boost
+    left (1 - ε) x boost - boost in it. `train.targets.replica_prior` now subtracts (1 - ε) x the
+    boost (ε from the record's search parameters, `noise_keep_of`; a noised, steered decision
+    whose header names none is refused). Tested.
 180. **May the ladder's proofs act before the sign-off?** (register H43: "a found mate is a
     gated proof"; H41: "solved-status propagation and export are off until the gate passes";
     §8.6/E7: "a proof from Hunt or the settling scans that contradicts the net" extends the
@@ -4313,6 +4361,18 @@ the search lane's E10 (`lane/search`, 2026-10-23) - a gap here until the engine 
     yet reaching a turn start is judged again after the next batch; at most
     `settling_max_scans` (4) a decision, each position once. A proven scan is a refutation:
     with the channel on (tests) our line becomes proven lost, ineligible. Proposed edit 137.
+    (a) *E10 review (2026-10-23; reviewer A's L1): Hunt where the root's scan is asked.* Both
+    asked the same question at a turn start under 50 boards - 2 x 50 ms x 5 threads per such
+    decision. The root's scan subsumes Hunt's: the same class (`ladder_options` gives both the
+    prover's default class) and depth; the full search finds every mate prove-only finds at the
+    same cost (`prover_prove_only_finds_the_full_searchs_mates`, E9); its verdict carries the
+    same first action, certificate and carried mate (the carry takes either). Only Hunt's
+    suggestions (`hunt_suggest`) need Hunt. So Hunt is not asked there (`hunt_with_settling`,
+    off - a placeholder; on, both, the literal reading of 6b″'s table): one 50 ms five-thread
+    job (250 thread-ms) saved per turn-start decision under 50 boards; Hunt runs at 50-99
+    boards, and below 50 with its suggestions on or at another depth. What is lost: Hunt's
+    fresh prover (the settling prover's game-long table is warm - its disproofs, class-relative,
+    prune) and the independence of two provers on one question. Edits 137 and 141 amended.
 182. **The reduced ladder's priority order and scheduler** (§11.2's priority table and scan
     budgets still list the five rungs; register H14). Built: one worker thread per game's
     ladder runs the jobs one at a time, in the order asked (the root's Hunt, its settling
@@ -4332,6 +4392,14 @@ the search lane's E10 (`lane/search`, 2026-10-23) - a gap here until the engine 
     analogue), and the mate proven at an action's turn start, carried through the action's
     decisions; Hunt stays "a fresh prover each time". Neither store is the permanent solved
     store (H19, H23): both die with the game; nothing exports. Proposed edit 144.
+    (a) *E10 review (2026-10-23; reviewer A's M2): decisions are a search's own.* A search
+    sharing the ladder that went on searching after the game's next search began its decision
+    took that search's verdicts (A's probe: 2 to the donor, 0 to the new search). Each verdict
+    now carries its decision; a search asks and takes for its own decision only (`ask_for`,
+    `take(decision)`), and finding its decision closed by another asks and takes nothing more;
+    a verdict whose path does not reach its position from the root is refused, counted
+    (`ProofUse::Foreign`). Tested with A's scenario; `t5d_search_new_sharing`'s comment says the
+    donor may search on, safely.
 184. **How an external proof enters the tree** (§11.1: "Proofs propagate as bounds
     (MCTS-Solver ...)"; silent on proofs from outside the search). Built
     (`Search::inject_proof`, behind the channel): the path is followed from the root, an
@@ -4345,6 +4413,11 @@ the search lane's E10 (`lane/search`, 2026-10-23) - a gap here until the engine 
     rule). Over many small positions every injected proof was confirmed and none
     contradicted the solver's bounds (`ladder_injected_proofs_never_contradict_and_match_e4`,
     500+ proofs) - the solver against df-pn, in part (BUILD_LOG's remaining item 3).
+    (a) *E10 review (2026-10-23):* 402 proofs since the review's fixes (Hunt no longer asked
+    beside the root's scan), asserted at 300 or more; no gate had been fed a certificate E4
+    rejects - now each is (test-only seams: the search's offer gives `Unconfirmed`, Guard's hook
+    rejects nothing, the audit runner's check is not Confirmed); a verdict its decision's end
+    took before it could be offered is `Expired` with the channel on (it showed `Withheld`).
 185. **Guard's hook, as built** (§11.4: "a refutation rejects the move and triggers a
     re-search (§8.6's reserve)"; register H42: adopted in no range; issue 306). Built off
     (`PlayParams::guard_final`; refused without the proof channel - a refutation is a
@@ -4361,6 +4434,10 @@ the search lane's E10 (`lane/search`, 2026-10-23) - a gap here until the engine 
     of each suggested action's first move (the flat form: the same turn) by
     `hunt_suggest_boost` (0.25) x its weight, counted as steering; with the flag on, the
     root's Hunt answers before the root's expansion (the search waits for it). Placeholders.
+    (a) *E10 review (2026-10-23; reviewer A's L7):* with the flag on, a Hunt that proves a mate
+    gives no suggestions - so their absence tells the search, through the priors, that Hunt
+    found a mate, a proof acting before the sign-off (issue 180) by another route. Harmless
+    while the flag is off; to be settled with issue 180 before it is turned on.
 187. **"No job outlives its decision", and its cost.** Built: `ProveBudget::cancel` - a stop
     the prover reads where it spends its budget (a budget stop: claims nothing, H37;
     `ProverStats::stopped_by_cancel`). A decision's end (the search destroyed or re-rooted)
@@ -4370,6 +4447,14 @@ the search lane's E10 (`lane/search`, 2026-10-23) - a gap here until the engine 
     self-play mechanics test (12 games, 12 playouts a decision) 300 s with the provers off,
     335 s on. `prover.hpp` and `prover.cpp` are truth sources: the code signature changes,
     no verdict logic (the stop is null by default).
+    (a) *E10 review (2026-10-23; reviewer A's L6, B's L04/L08/P01):* untested before - now a
+    running job with no clock and a 500M-node budget is ended within a generous 10 s
+    (a correctness bound, not a timing), counted cancelled; a re-root ends a 60 s Hunt at once.
+    The ladder's counts: `answered` (taken by its decision), `cancelled` (dropped or stopped by
+    the flag), `discarded` (finished after its decision ended - it was counted answered, or
+    cancelled), `contradictions` (a job that threw - a rules-code contradiction, a prover's
+    `std::logic_error` included: it was counted cancelled for an ended decision; now reported on
+    stderr whatever its decision, and rethrown to the search for the current one).
 188. **The audit lane's events** (H44: "sampled self-play decisions (PV changes, demotions,
     final moves)"; §11.2 rung 2's demotion: "it was the PV, or carried visits above a
     threshold"). Built: the search records each PV change (the root's visits, the old and
@@ -4380,6 +4465,10 @@ the search lane's E10 (`lane/search`, 2026-10-23) - a gap here until the engine 
     rungs 2-5 into self-play without one of them"). Reading: on by default, with I2's
     provenance recorded per root child and the targets' default exclusion applied - so
     self-play ships with one of them (exclusion, the placeholder), as the register allows.
+    (a) *Superseded by the E10 review (2026-10-23):* the exclusion was measured removing far
+    more than the steering added (issue 179(a)) - so self-play no longer ships with the asset
+    map: off in its defaults until a steered-visit definition is validated (issue 450); match
+    play and the search's own default keep it. Edit 330.
 190. **A latent tree-form defect, found by the wiring.** A carried root the tree form inherited
     was re-evaluated with its edges in their inherited order, and `set_priors` looked for the
     submit edge last: a legal submit without a submit logit lost `submit_share` (it took a
@@ -4408,7 +4497,8 @@ the search lane's E10 (`lane/search`, 2026-10-23) - a gap here until the engine 
     `abandoned_mate` (the demoted move and the moves before it all belong to the mate's first
     action, as a set). The network's own value is not in the interim log - "contradiction
     with the network" is read as with the search's choice; I15's raw outputs would allow a
-    value margin.
+    value margin. (The E10 review, A's L7: `missed_mate`'s false positives - a played action
+    that mates as well - stay as documented here.)
 193. **"Large budgets"** (H44). Placeholders: Guard offline to depth 2 (the opponent's
     actions) under 2,000,000 nodes, the literal class; our mate - the literal and the default
     class at 1,000,000 nodes each, a 2,097,152-node tree cap, depth 5 (t5d-hunt-truth used
@@ -4432,6 +4522,29 @@ the search lane's E10 (`lane/search`, 2026-10-23) - a gap here until the engine 
     threshold, and selection walked away"). Placeholder `demotion_share` 0.3 of the root's
     visits (at one of the child's own visits); a child that was the most visited at any time
     counts too.
+
+*Issues 450-499 are the search lane's from the E10 review (2026-10-23; the main loop's block).*
+
+<!-- A new list, so that the numbers from 450 render as written. -->
+
+450. **May self-play steer before a validated steered-visit definition exists?** (§12.2: "What
+    is not open: shipping rungs 2-5 into self-play without one of them" - exclusion or
+    provenance; register I2; issues 179, 189.) The E10 review measured E10's definition biasing
+    the policy target against the boosted moves (issue 179(a)); neither provenance's weight
+    (6e) nor another definition is validated. Built (the main loop's decision): self-play runs
+    without the asset map (`self_play_search_defaults()`, `PlayParams`' default; Python's
+    `GeneratorConfig.asset_map`), a named placeholder; the search's default and match play keep
+    it. **Put to the user:** may self-play steer - the asset map, and Hunt's suggestions behind
+    their flag - before a steered-visit definition is validated (with the cautious
+    `BoostedChild` exclusion, say), or only after? And which candidate definition should be
+    validated first (issue 179(a)'s alternatives)? Edit 330.
+451. **The ladder's threads per parallel self-play game** (register M13: "8 cores per GPU ...
+    its five cores serve Hunt, the settling scans and the audit lane"; H14). Every self-play
+    game makes its own ladder - one worker thread and, per job, `verification_threads` (5)
+    prover threads; a generator playing G games in parallel asks up to 5G prover threads of
+    M13's five cores (reviewer A's L8). No change (the pilot's, M18, and the user's): a pool
+    shared by a process's games, `verification_threads` = 5/G, or a process-wide job queue -
+    to be sized when the pilot's game parallelism is.
 
 ## Proposed spec edits
 
@@ -5604,27 +5717,41 @@ struck through, where nothing of it is left to apply); the others stand as writt
     changes". Proposed - "df-pn at the root (our mate, beside Hunt) and, at each PV change,
     at the opponent's turn start after the principal line (the refutation question), the
     range judged on the scanned position; as built, at most 4 a decision, 50 ms each". Why:
-    issue 181 - the row names neither the position nor the attacker.
+    issue 181 - the row names neither the position nor the attacker. *Amended (the E10 review,
+    2026-10-23):* "df-pn at the root (our mate - in Hunt's place under 50 boards, the same
+    question) ..." (issue 181(a)).
 138. **§11.2 rung 4's "As built (v3)" sentence and register H13**: now - "boost 0.25 ×
     min(1, value/900) - every number a placeholder". Proposed - add "entering every node's
     prior as (P + b) / (1 + Σb) after the softmax and before the root noise, a flat-form
     turn taking its moves' largest boost, never the cached evaluation; with flat priors it
-    dominates (issue 178)". Why: issues 106, 178.
+    dominates (issue 178)". Why: issues 106, 178. *Amended (the E10 review, 2026-10-23):*
+    "... entering every node's prior additively, monotone and capped - the boosts take at most
+    half the unboosted edges' mass (a placeholder), no boosted prior falls - after the softmax
+    and before the root noise (the flat form: after its per-board noise, k0 unsteered) ...; off
+    in self-play until I2's steered visits are validated" (issues 178(a), (b), 450).
 139. **§12.2 and register I2, I15 (steered visits)**: now - "Provenance: scanner-injected
     visits recorded and down-weighted"; I15 "visits with I2's forced and steered flags".
     Proposed - add "a steered visit: a root visit PUCT would have given another child with
     the unsteered priors (the same noise, visits and values); recorded per root child with
-    its unsteered prior (as built, E10)". Why: issue 179.
+    its unsteered prior (as built, E10)". Why: issue 179. *Amended (the E10 review,
+    2026-10-23): not to go upstream as written* - the definition is unvalidated (measured
+    biasing the target against the boosted moves, issue 179(a)). Proposed instead: "as built,
+    E10 records per root child its unsteered prior and a candidate steered count (root visits
+    PUCT would have given another child with the unsteered priors) - UNVALIDATED; self-play
+    does not steer until a definition is validated (edit 330)".
 140. **Register H14 and §11.2's "Scan budgets" and priority tables**: now - the five rungs'
     rows. Proposed - H14: "as built: one worker per game's ladder, jobs in the order asked
     (Hunt, the root's settling scan, PV changes'), 50 ms each on M13's five threads, at most
     4 PV scans a decision; the synchronous mode by nodes"; §11.2's tables marked superseded
-    by §11.4's ladder (the retired rungs' rows struck). Why: issue 182.
+    by §11.4's ladder (the retired rungs' rows struck). Why: issue 182. *Amended (the E10
+    review, 2026-10-23):* "(Hunt or the root's settling scan, then PV changes'; each search
+    its own decision's verdicts)"; and the threads per parallel game to be sized (issue 451).
 141. **Register H43 and §11.4's Hunt row**: now - "a found mate is a gated proof ... export
     refused until the proof channel is signed off". Proposed - add "until then its proofs
     are withheld from the tree as well (H41's switch), counted and recorded; under the ply
     split its mate is carried through the action's decisions". Why: issue 180 (and the
-    user's ruling on it, if it differs).
+    user's ruling on it, if it differs). *Amended (the E10 review, 2026-10-23):* add "under 50
+    boards the root's settling scan asks its question in its place" (issue 181(a)).
 142. **§11.4's Guard row, register H42 and §8.6's Guards bullet**: now - "a refutation rejects
     the move and triggers a re-search (§8.6's reserve)". Proposed - "the hook is built and
     off (adopted in no range); on, for experiments with the proof channel, a refutation E4
@@ -5652,6 +5779,16 @@ struck through, where nothing of it is left to apply); the others stand as writt
     question with certificates checked by E4, contradictions (allowed, missed and abandoned
     mates) to a curriculum interface, and the per-range shallow-mate report counted as 6b″
     counts; the log interim until I15's records". Why: issues 191-197.
+
+*Edits 330-359 are the search lane's from the E10 review (2026-10-23; the main loop's block).*
+
+<!-- A new list, so that the numbers from 330 render as written. -->
+
+330. **§12.2 ("What is not open: shipping rungs 2-5 into self-play without one of them") and
+    register I2, H13**: Proposed - add "as built, self-play does not steer (the asset map off in
+    its defaults) until a steered-visit definition is validated; the search's default and match
+    play keep the map" - or the user's ruling on issue 450, if it differs. Why: issues 179(a),
+    189(a), 450.
 
 ## Session log
 
@@ -5742,3 +5879,4 @@ struck through, where nothing of it is left to apply); the others stand as writt
   implementation), the per-range shallow-mate report. Register H44; issues 191-197; edit 146.
   Remaining on E10's side for the main loop: the review and merge (the Lazy SMP test again
   before it), issue 180's question to the user; E11 (time management) next on this lane.
+- **2026-10-23 - search lane: E10 review fixes** (`lane/search`; the two reviews of 62d4310 and 2931ffa, the main loop's decisions binding). Self-play runs without the asset map until I2's steered visits are validated (A's probe: exclusion left the boosted moves 0.032 of the target where the unsteered search gave 0.499; issue 179(a), put to the user as issue 450); the additive boost monotone and capped (`boost_cap` 0.5; 178(a)); the flat form's order documented and tested (178(b)); a donor search no longer takes its successor's verdicts (decisions per search, `ProofUse::Foreign`; 183(a)); Hunt not asked where the root's settling scan asks its question (`hunt_with_settling`; 181(a)); the ladder's bookkeeping (`discarded`, `contradictions` on stderr, `Expired`; 187(a), 184(a)); the targets' replica unsteers the noised prior by (1 - eps) x boost (179(c)); every E4 gate tested with a rejected certificate through test-only seams; B's 16 tests adopted and the unwritten ones written. B's 25 survivors re-run on a fresh copy of the fixed tree with B's runner (M16 re-anchored: the unboosted priors not scaled): all 25 killed. Checks on the final tree: engine 657 of 657 (`--werror`), long_detectors 2 of 2, the Lazy SMP test x3 (table above), pytest 1490 passed / 1 skipped (`T5D_REQUIRE_ENGINE=1`), ruff clean, verify ok, gate commit ok (proof channel DISABLED). **Numbering: issues 450-451 and edit 330 from the block the main loop assigned this lane for the review (issues 450-499, edits 330-359)**; existing issues 178, 179, 181, 183, 184, 186, 187, 189, 192 and edits 137-141 amended in place. For the user: issue 450 (may self-play steer before a validated definition?), issue 180 (still open), issue 451 (the pilot's thread budget).

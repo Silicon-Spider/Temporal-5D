@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdio>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -28,6 +29,8 @@ const char* proof_use_name(ProofUse use) noexcept {
     case ProofUse::Deferred: return "deferred";
     case ProofUse::Unplaced: return "unplaced";
     case ProofUse::Unconfirmed: return "unconfirmed";
+    case ProofUse::Foreign: return "foreign";
+    case ProofUse::Expired: return "expired";
   }
   return "?";
 }
@@ -104,9 +107,31 @@ void VerificationLadder::end_decision(std::uint64_t decision) {
     idle_cv_.wait(lock, [this] { return !running_; });
     cancel_.store(false, std::memory_order_relaxed);
   }
+  // Finished but never taken (a job may finish while this waits for it).
+  stats_.discarded += done_.size();
   done_.clear();
+  error_ = nullptr;  // reported, and counted, when it was thrown
   ++decision_;
 }
+
+namespace {
+
+// A job that threw: a contradiction in the rules code (a prover's
+// std::logic_error included) - said loudly, whatever its decision.
+void report_contradiction(LadderJob job, std::uint64_t decision, const std::exception_ptr& e) {
+  std::string what = "an exception that is not a std::exception";
+  try {
+    std::rethrow_exception(e);
+  } catch (const std::exception& x) {
+    what = x.what();
+  } catch (...) {
+  }
+  std::fprintf(stderr,
+               "t5d verification ladder: a %s job of decision %llu threw - a contradiction in the rules code: %s\n",
+               ladder_job_name(job), static_cast<unsigned long long>(decision), what.c_str());
+}
+
+}  // namespace
 
 std::uint64_t VerificationLadder::decision() const {
   std::lock_guard<std::mutex> lock(m_);
@@ -115,6 +140,11 @@ std::uint64_t VerificationLadder::decision() const {
 
 void VerificationLadder::ask(LadderJob kind, const GameState& position, std::vector<PathStep> path, int depth,
                              double ms, std::uint64_t nodes, bool suggest) {
+  ask_for(decision(), kind, position, std::move(path), depth, ms, nodes, suggest);
+}
+
+bool VerificationLadder::ask_for(std::uint64_t decision, LadderJob kind, const GameState& position,
+                                 std::vector<PathStep> path, int depth, double ms, std::uint64_t nodes, bool suggest) {
   Job job;
   job.kind = kind;
   job.position = std::make_unique<GameState>(position);
@@ -126,18 +156,29 @@ void VerificationLadder::ask(LadderJob kind, const GameState& position, std::vec
   if (options_.synchronous) {
     {
       std::lock_guard<std::mutex> lock(m_);
+      if (decision != decision_) return false;
       job.decision = decision_;
       ++stats_.asked;
     }
-    LadderVerdict v = run(job);  // inline: the search's thread, no clock (H15)
+    std::optional<LadderVerdict> v;
+    try {
+      v.emplace(run(job));  // inline: the search's thread, no clock (H15)
+    } catch (...) {
+      {
+        std::lock_guard<std::mutex> lock(m_);
+        ++stats_.contradictions;
+      }
+      report_contradiction(job.kind, job.decision, std::current_exception());
+      throw;
+    }
     std::lock_guard<std::mutex> lock(m_);
-    ++stats_.answered;
-    stats_.seconds += v.seconds;
-    done_.push_back(std::move(v));
-    return;
+    stats_.seconds += v->seconds;
+    done_.push_back(std::move(*v));
+    return true;
   }
   {
     std::lock_guard<std::mutex> lock(m_);
+    if (decision != decision_) return false;
     job.decision = decision_;
     ++stats_.asked;
     queue_.push_back(std::move(job));
@@ -147,18 +188,35 @@ void VerificationLadder::ask(LadderJob kind, const GameState& position, std::vec
     }
   }
   work_cv_.notify_one();
+  return true;
 }
 
-std::vector<LadderVerdict> VerificationLadder::take() {
+std::vector<LadderVerdict> VerificationLadder::take() { return take(decision()); }
+
+std::vector<LadderVerdict> VerificationLadder::take(std::uint64_t decision) {
   std::lock_guard<std::mutex> lock(m_);
+  if (decision != decision_) return {};
   if (error_) {
     std::exception_ptr e = error_;
     error_ = nullptr;
     std::rethrow_exception(e);
   }
-  std::vector<LadderVerdict> out = std::move(done_);
-  done_.clear();
+  std::vector<LadderVerdict> out;
+  std::vector<LadderVerdict> others;
+  for (LadderVerdict& v : done_) {
+    (v.decision == decision ? out : others).push_back(std::move(v));
+  }
+  done_ = std::move(others);
+  stats_.answered += out.size();
+  if (hook_) {
+    for (LadderVerdict& v : out) hook_(v);
+  }
   return out;
+}
+
+void VerificationLadder::set_verdict_hook_for_tests(VerdictHook hook) {
+  std::lock_guard<std::mutex> lock(m_);
+  hook_ = std::move(hook);
 }
 
 void VerificationLadder::wait_idle() {
@@ -194,20 +252,20 @@ void VerificationLadder::worker() {
     } catch (...) {
       error = std::current_exception();
     }
+    if (error) report_contradiction(job.kind, job.decision, error);
     lock.lock();
     running_ = false;
-    if (job.decision == decision_ && !quit_) {
-      if (error) {
-        error_ = error;
-      } else if (v->stats.stopped_by_cancel) {
-        ++stats_.cancelled;
-      } else {
-        ++stats_.answered;
-        stats_.seconds += v->seconds;
-        done_.push_back(std::move(*v));
-      }
-    } else {
+    const bool current = job.decision == decision_ && !quit_;
+    if (error) {
+      ++stats_.contradictions;
+      if (current) error_ = error;  // take() rethrows it
+    } else if (v->stats.stopped_by_cancel) {
       ++stats_.cancelled;
+    } else if (current) {
+      stats_.seconds += v->seconds;
+      done_.push_back(std::move(*v));  // answered when taken
+    } else {
+      ++stats_.discarded;
     }
     idle_cv_.notify_all();
   }
@@ -227,6 +285,7 @@ LadderVerdict VerificationLadder::run(const Job& job) {
   }
   LadderVerdict v(*job.position);
   v.job = job.kind;
+  v.decision = job.decision;
   v.path = job.path;
   v.boards = static_cast<int>(job.position->multiverse().board_count());
   v.depth = job.depth;

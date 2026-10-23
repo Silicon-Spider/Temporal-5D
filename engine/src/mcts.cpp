@@ -775,6 +775,9 @@ struct Search::Impl {
   // ---- stage E10: the verification ladder (t5d/ladder.hpp) ------------------------
   std::shared_ptr<VerificationLadder> ladder_;
   bool decision_open_ = false;           // a decision of the ladder's is this search's
+  // Another search sharing the ladder ended this search's decision (the game's
+  // next search began): this search asks and takes nothing more from it.
+  bool ladder_superseded_ = false;
   std::uint64_t ladder_decision_ = 0;    // ... its number
   std::uint64_t decision_generation_ = 0;  // the root generation it began at
   std::vector<LadderVerdict> verdicts_;  // this decision's, as they reached the search
@@ -981,6 +984,7 @@ struct Search::Impl {
     require(p.settling_depth >= 1 && p.settling_depth <= 99, "settling_depth", "1 to 99 half-turns");
     require(p.verification_threads >= 1 && p.verification_threads <= 256, "verification_threads", "1 to 256");
     require(nonneg(p.hunt_suggest_boost), "hunt_suggest_boost", "finite, >= 0");
+    require(std::isfinite(p.boost_cap) && p.boost_cap >= 0 && p.boost_cap < 1, "boost_cap", "in [0, 1)");
     require(p.assets.qsearch_plies >= 0 && p.assets.boost_scale > 0 && std::isfinite(p.assets.max_boost) &&
                 p.assets.max_boost >= 0,
             "assets", "qsearch_plies >= 0, boost_scale > 0, max_boost finite and >= 0");
@@ -1690,10 +1694,20 @@ struct Search::Impl {
     std::vector<double> p;
     priors(f.scores, p);
     const bool root = &n == &nodes_[root_];
-    const bool steered = std::any_of(f.boosts.begin(), f.boosts.end(), [](double b) { return b > 0; });
+    // The flat form's order (issue 178): its noise is per board, inside the
+    // policy whose scores order the generator, so a turn's prior is steered
+    // after the noise; k0 was set at the expansion from the unsteered turn
+    // distribution's entropy (no turn exists then). A pruned turn is not
+    // boosted, and the renormalisation is over the turns that may be taken.
+    std::vector<std::uint8_t> takeable(n.edges.size());
+    bool steered = false;
+    for (std::size_t i = 0; i < n.edges.size(); ++i) {
+      takeable[i] = n.edges[i].pruned ? 0 : 1;
+      steered = steered || (takeable[i] != 0 && f.boosts[i] > 0);
+    }
     std::vector<double> unsteered;
     if (root) unsteered = p;  // with the noise, without steering: the counterfactual replica's
-    if (steered) steer(p, f.boosts, nullptr);
+    if (steered) steer(p, f.boosts, &takeable);
     for (std::size_t i = 0; i < n.edges.size(); ++i) n.edges[i].prior = p[i];
     if (root) {
       std::vector<double> clean;
@@ -1703,7 +1717,7 @@ struct Search::Impl {
         clean = unsteered;
       }
       root_prior_unsteered_ = clean;
-      if (steered) steer(clean, f.boosts, nullptr);
+      if (steered) steer(clean, f.boosts, &takeable);
       root_prior_noise_free_ = std::move(clean);
       root_prior_counterfactual_ = std::move(unsteered);
       root_boost_raw_ = f.boosts;
@@ -1716,18 +1730,35 @@ struct Search::Impl {
   }
 
   // E10: a steering boost applied to priors `p` (`b[i]` edge i's; `open` - may
-  // be null - says which edges may be taken), by SearchParams::boost_rule:
-  // Additive (P + b) / (1 + sum b) over the open edges; Multiplicative P (1 + b)
-  // renormalised to the open edges' mass before.
+  // be null - says which edges may be taken), by SearchParams::boost_rule.
+  // Additive (BoostRule::Additive), over the open edges (their mass T): the
+  // boosted ones (prior mass S_B, boosts summing to beta) gain b x beta'/beta,
+  // beta' = min(beta, boost_cap (T - S_B)); the unboosted ones are scaled by
+  // (T - S_B - beta') / (T - S_B) - monotone, the open mass kept, unchanged
+  // where every open edge is boosted. Multiplicative P (1 + b) renormalised to
+  // the open edges' mass before.
   void steer(std::vector<double>& p, const std::vector<double>& b, const std::vector<std::uint8_t>* open) const {
     const auto is_open = [&](std::size_t i) { return open == nullptr || (*open)[i] != 0; };
     if (params_.boost_rule == BoostRule::Additive) {
       double total = 0;
+      double boosted = 0;
+      double beta = 0;
       for (std::size_t i = 0; i < p.size(); ++i) {
-        if (is_open(i)) total += b[i];
+        if (!is_open(i)) continue;
+        total += p[i];
+        if (b[i] > 0) {
+          boosted += p[i];
+          beta += b[i];
+        }
       }
+      const double rest = total - boosted;  // the unboosted edges' mass: what the boosts draw on
+      if (!(beta > 0) || !(rest > 0)) return;
+      const double taken = std::min(beta, params_.boost_cap * rest);
+      const double share = taken / beta;
+      const double keep = (rest - taken) / rest;
       for (std::size_t i = 0; i < p.size(); ++i) {
-        if (is_open(i)) p[i] = (p[i] + b[i]) / (1.0 + total);
+        if (!is_open(i)) continue;
+        p[i] = b[i] > 0 ? p[i] + b[i] * share : p[i] * keep;
       }
       return;
     }
@@ -2785,7 +2816,7 @@ struct Search::Impl {
   // waiting): a new decision's questions asked, the verdicts that arrived
   // taken, deferred proofs offered again, the principal line judged.
   void between_batches() {
-    if (!ladder_) return;
+    if (!ladder_ || superseded()) return;
     if (!decision_open_ || decision_generation_ != root_generation_) begin_decision();
     take_verdicts(true);
     retry_deferred();
@@ -2809,19 +2840,26 @@ struct Search::Impl {
     if (r.terminal != Terminal::None || r.dead_end) return;
     const int boards = static_cast<int>(r.state.multiverse().board_count());
     if (r.turn_start) {
-      const bool hunt = (params_.hunt || params_.hunt_suggest) && boards < params_.hunt_max_boards;
+      const bool settle = params_.settling && params_.settling_root && boards < params_.settling_max_boards;
+      // Where the root's settling scan is asked, its question subsumes Hunt's
+      // (the same class and depth; the full search proves what prove-only
+      // proves, at the same cost; the same line, certificate and carried
+      // mate) - unless Hunt's suggestions are wanted, or hunt_with_settling.
+      const bool subsumed =
+          settle && !params_.hunt_with_settling && !params_.hunt_suggest && params_.hunt_depth == params_.settling_depth;
+      const bool hunt = (params_.hunt || params_.hunt_suggest) && boards < params_.hunt_max_boards && !subsumed;
       if (hunt) {
-        ladder_->ask(LadderJob::Hunt, r.state, {}, params_.hunt_depth, params_.hunt_ms,
-                     params_.synchronous ? params_.sync_job_nodes : params_.hunt_nodes, params_.hunt_suggest);
+        ladder_->ask_for(ladder_decision_, LadderJob::Hunt, r.state, {}, params_.hunt_depth, params_.hunt_ms,
+                         params_.synchronous ? params_.sync_job_nodes : params_.hunt_nodes, params_.hunt_suggest);
         if (params_.hunt_suggest && !r.expanded) {
           // Its suggestions are priors: Hunt answers before the root's expansion.
           ladder_->wait_idle();
           take_verdicts(true);
         }
       }
-      if (params_.settling && params_.settling_root && boards < params_.settling_max_boards) {
-        ladder_->ask(LadderJob::RootSettling, r.state, {}, params_.settling_depth, params_.settling_ms,
-                     params_.synchronous ? params_.sync_job_nodes : params_.settling_nodes);
+      if (settle) {
+        ladder_->ask_for(ladder_decision_, LadderJob::RootSettling, r.state, {}, params_.settling_depth,
+                         params_.settling_ms, params_.synchronous ? params_.sync_job_nodes : params_.settling_nodes);
       }
       return;
     }
@@ -2854,6 +2892,7 @@ struct Search::Impl {
     const VerificationLadder::Carried& cc = *ladder_->carried();
     LadderVerdict v(r.state);
     v.job = LadderJob::Hunt;
+    v.decision = ladder_decision_;
     v.carried = true;
     v.boards = static_cast<int>(r.state.multiverse().board_count());
     v.status = ProofStatus::Proven;
@@ -2870,7 +2909,7 @@ struct Search::Impl {
   // (`live`: the tree is this decision's - not at its end).
   void take_verdicts(bool live) {
     if (!ladder_ || !decision_open_) return;
-    std::vector<LadderVerdict> got = ladder_->take();
+    std::vector<LadderVerdict> got = ladder_->take(ladder_decision_);
     for (LadderVerdict& v : got) {
       const bool proven = v.status == ProofStatus::Proven;
       switch (v.job) {
@@ -2899,13 +2938,47 @@ struct Search::Impl {
         c.certificate = p.certificate;
         ladder_->carry(std::move(c));
       }
-      if (live) offer(k);
+      if (live) {
+        offer(k);
+      } else if (params_.proof_channel) {
+        verdicts_[k].use = ProofUse::Expired;  // its decision ended first: nothing entered
+        ++stats_.proofs_expired;
+      } else {
+        verdicts_[k].use = ProofUse::Withheld;
+        ++stats_.proofs_withheld;
+      }
     }
+  }
+
+  // Whether `path` from the root reaches `position` - each move pseudo-legal
+  // where it is made, each submission safe (a verdict of another decision's,
+  // or of another root's, does not).
+  bool reaches(const std::vector<PathStep>& path, const GameState& position) const {
+    GameState s = nodes_[root_].state;
+    MoveList scratch;
+    for (const PathStep& step : path) {
+      for (const Move& m : step.moves) {
+        if (!is_pseudo_legal(s, m, scratch)) return false;
+        s.apply(m);
+      }
+      if (step.submit || flat()) {
+        if (s.submission_status() != SubmitStatus::Safe) return false;
+        s.submit();
+      }
+    }
+    return s == position;
   }
 
   // The proof of verdict k offered to the tree (inject_proof's rules).
   void offer(std::size_t k) {
     LadderVerdict& v = verdicts_[k];
+    if (!reaches(v.path, v.position)) {
+      // Not this root's (take(decision) keeps another decision's out; this is
+      // the second guard): refused, counted, never placed.
+      v.use = ProofUse::Foreign;
+      ++stats_.proofs_foreign;
+      return;
+    }
     std::vector<PathStep> path = v.path;
     Proof proof = v.proof;
     if (v.job != LadderJob::PvSettling) {
@@ -3098,8 +3171,8 @@ struct Search::Impl {
     }
     scanned_.push_back(t.state);
     ++pv_scans_;
-    ladder_->ask(LadderJob::PvSettling, t.state, std::move(line), params_.settling_depth, params_.settling_ms,
-                 params_.synchronous ? params_.sync_job_nodes : params_.settling_nodes);
+    ladder_->ask_for(ladder_decision_, LadderJob::PvSettling, t.state, std::move(line), params_.settling_depth,
+                     params_.settling_ms, params_.synchronous ? params_.sync_job_nodes : params_.settling_nodes);
   }
 
   // The ladder's decision ended - its running job cancelled, its queue
@@ -3110,10 +3183,23 @@ struct Search::Impl {
     stats_.ladder_cancelled += ladder_->stats().cancelled - before;
   }
 
+  // Whether another search sharing the ladder has ended this search's
+  // decision (it began its own - the game's next search): if so, this search
+  // asks and takes nothing more from the ladder, for the rest of its life (a
+  // new decision of its own would end that search's).
+  bool superseded() {
+    if (!ladder_superseded_ && decision_open_ && ladder_->decision() != ladder_decision_) {
+      decision_open_ = false;
+      ladder_superseded_ = true;
+      deferred_.clear();
+    }
+    return ladder_superseded_;
+  }
+
   // A decision's end (a re-root): its verdicts taken (an action's mate
   // carried), its jobs cancelled.
   void end_decision() {
-    if (!ladder_ || !decision_open_) return;
+    if (!ladder_ || superseded() || !decision_open_) return;
     take_verdicts(false);
     close_decision();
     decision_open_ = false;

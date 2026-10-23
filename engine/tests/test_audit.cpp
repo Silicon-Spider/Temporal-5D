@@ -404,3 +404,84 @@ TEST(audit_end_to_end_through_t5d_play_and_t5d_audit) {
   // A bad command line: exit 2.
   CHECK_EQ(run_exe(T5D_AUDIT_EXE, {"sideways"}, dir / "x.out", dir / "x.err"), 2);
 }
+
+// ---- The E10 review's tests (2026-10-23) ------------------------------------------------------
+
+TEST(audit_runner_takes_no_refutation_e4_rejects) {
+  // The seam (RunOptions::certificate_hook_for_tests) substitutes a certificate
+  // of another position for Guard's refutation of Rc5-a5: E4 does not confirm
+  // it, so the check is not Confirmed and no allowed_mate goes to the sink
+  // (kills reviewer B's A04: the check skipped).
+  const Log log = custom_log({"[2R2/4k/4n/PP3/KN3:0:1:w]"}, 5, {"(0T1)Rc5(0T1)a5"});
+  ProverOptions po;
+  po.record_certificate = true;
+  Prover prover(po);
+  const GameState one = game({"[k4/4Q/1K3/5/5:0:1:w]"}, BoardSize{5, 5});
+  const ProveResult other = prover.prove(one, ProveBudget::nodes(200'000), 3);
+  REQUIRE(other.status == ProofStatus::Proven && other.certificate != nullptr);
+  RunOptions o = small_budgets();
+  std::size_t substituted = 0;
+  o.certificate_hook_for_tests = [&](std::shared_ptr<const ProofCertificate>& c) {
+    c = other.certificate;
+    ++substituted;
+  };
+  Spy spy;
+  const std::vector<JobResult> r = run(log, o, &spy);
+  REQUIRE_EQ(r.size(), std::size_t{1});
+  CHECK(substituted >= 1);
+  CHECK(r[0].guard.refuted);
+  CHECK(r[0].guard.check != tools::sixbpp::Check::Confirmed);
+  CHECK_EQ(spy.count("allowed_mate"), std::size_t{0});
+  CHECK(spy.kinds.empty());
+}
+
+TEST(audit_demotions_are_never_the_chosen_child_and_a_pv_child_is_logged) {
+  // Reviewer B (kills A03, the chosen child logged as a demotion, and S04 and
+  // M11, was_pv lost in the log).
+  const std::unique_ptr<mcts::Evaluator> random = mcts::make_evaluator(mcts::BuiltinEvaluator::Random, 4);
+  const mcts::GameRecord g =
+      play_game(variant("Standard - Two Timelines"), *random, logged(mcts::TurnSplit::BoardMove, 4));
+  REQUIRE(!g.decision_log.empty());
+  for (const mcts::DecisionLog& d : g.decision_log) {
+    if (d.root_visits > 1) {
+      CHECK(std::any_of(d.children.begin(), d.children.end(),
+                        [](const mcts::DecisionLog::Child& c) { return c.was_pv; }));
+    }
+  }
+  EventOptions eo;
+  eo.demotion_share = 0.0;  // every child a candidate: only the chosen one must be left out
+  const Log log = log_of_game(g, "Standard - Two Timelines", "game-d", eo);
+  for (const mcts::DecisionLog& d : g.decision_log) {
+    if (d.action >= g.actions.size()) continue;
+    std::size_t demotions = 0;
+    for (const Event& e : log.events) {
+      demotions += e.category == Category::Demotion && e.action == d.action && e.decision == d.decision ? 1u : 0u;
+    }
+    CHECK_EQ(demotions, d.children.size() - 1);
+  }
+}
+
+TEST(audit_runner_reports_an_abandoned_mate) {
+  // Reviewer B (kills A06): a demoted child that begins the confirmed mate is
+  // an abandoned mate.
+  const GameState s = game({"[k4/4Q/1K3/5/5:0:1:w]"}, BoardSize{5, 5});
+  std::string mating;
+  MoveList moves;
+  generate_moves(s, moves);
+  for (const Move& m : moves) {
+    GameState t = s;
+    t.apply(m);
+    if (t.submission_status() != SubmitStatus::Safe) continue;
+    t.submit();
+    if (detect_mate(t, Detector::Hypercuboid).verdict == Outcome::Checkmate) {
+      mating = to_string(m, s.multiverse().even());
+      break;
+    }
+  }
+  REQUIRE(!mating.empty());
+  Spy spy;
+  const std::vector<JobResult> r =
+      run(custom_log({"[k4/4Q/1K3/5/5:0:1:w]"}, 5, {mating}, Category::Demotion), small_budgets(), &spy);
+  REQUIRE_EQ(r.size(), std::size_t{1});
+  CHECK_EQ(spy.count("abandoned_mate"), std::size_t{1});
+}

@@ -373,7 +373,7 @@ class CSearchParams(ctypes.Structure):
         ("settling_ms", c_double),
         ("settling_nodes", c_uint64),
         ("settling_depth", c_int32),
-        ("settling_root", c_int32),  # 1: the root's own scan too, beside Hunt; 0: PV changes' only
+        ("settling_root", c_int32),  # 1: the root's own scan too (in Hunt's place unless hunt_with_settling)
         ("settling_max_scans", c_uint32),  # PV-change scans per decision
         ("settling_debounce", c_uint32),  # root visits before a PV change is scanned
         ("asset_map", c_int32),  # the asset map's boosts on travel moves into flagged boards (H13)
@@ -390,6 +390,8 @@ class CSearchParams(ctypes.Structure):
         ("hunt_suggest", c_int32),  # Hunt's soft priors (H43's flag): 0
         ("hunt_suggest_boost", c_double),
         ("ladder_certify", c_int32),  # only proofs E4 confirms enter the tree
+        ("boost_cap", c_double),  # the additive rule's cap: at most this share of the unboosted mass (0.5)
+        ("hunt_with_settling", c_int32),  # 1: Hunt beside the root's settling scan; 0: not where it subsumes Hunt
         ("expand", ExpandOptions),
     ]
 
@@ -513,7 +515,7 @@ class CRootChild(ctypes.Structure):
         ("child_key", c_uint64),  # the child node's key; 0: no child node yet
         ("prior_noise_free", c_double),  # the prior before the root noise
         ("value_variance", c_double),  # of the values backed up through it
-        ("boost", c_double),  # stage E10: steering's share of prior_noise_free (the asset map's boost)
+        ("boost", c_double),  # stage E10: what steering changed in prior_noise_free (signed: < 0 for unboosted children)
         ("exploration_scale", c_double),  # E3's factor on its exploration term (1: off)
         ("forced_visits", c_uint32),  # forced playouts: 0 (not built - pruning is target-side)
         ("steered_visits", c_uint32),  # visits a steering source decided (stage E10; steered_rule, I2)

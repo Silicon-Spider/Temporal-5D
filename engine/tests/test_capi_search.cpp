@@ -1000,7 +1000,7 @@ TEST(capi_search_e10_layout_defaults_and_the_ladder_shared) {
   // ranges, the asset map on, Guard nowhere here - its hook is the driver's).
   size_t v = 0;
   CHECK(offsetof(t5d_search_params, hunt) > offsetof(t5d_search_params, flat_fallback));
-  CHECK(offsetof(t5d_search_params, expand) > offsetof(t5d_search_params, ladder_certify));
+  CHECK(offsetof(t5d_search_params, expand) > offsetof(t5d_search_params, hunt_with_settling));
   CHECK(sizeof(t5d_search_params) - offsetof(t5d_search_params, expand) <
         sizeof(t5d_expand_options) + alignof(t5d_search_params));
   for (const char* field :
@@ -1008,7 +1008,7 @@ TEST(capi_search_e10_layout_defaults_and_the_ladder_shared) {
         "settling_ms", "settling_nodes", "settling_depth", "settling_root", "settling_max_scans", "settling_debounce",
         "asset_map", "boost_rule", "asset_root_only", "asset_flag_margin", "asset_boost_scale", "asset_max_boost",
         "asset_qsearch_plies", "asset_qsearch_nodes", "steered_rule", "verification_threads", "sync_job_nodes",
-        "hunt_suggest", "hunt_suggest_boost", "ladder_certify"}) {
+        "hunt_suggest", "hunt_suggest_boost", "ladder_certify", "boost_cap", "hunt_with_settling"}) {
     CHECK_EQ(t5d_search_layout("t5d_search_params", field, &v), T5D_OK);
   }
   CHECK(offsetof(t5d_search_summary, hunt_runs) > offsetof(t5d_search_summary, fallback_listings));
@@ -1039,6 +1039,9 @@ TEST(capi_search_e10_layout_defaults_and_the_ladder_shared) {
   CHECK_EQ(d.asset_max_boost, cpp.assets.max_boost);
   CHECK_EQ(d.hunt_suggest, 0);
   CHECK_EQ(d.ladder_certify, 1);
+  CHECK_EQ(d.boost_cap, cpp.boost_cap);
+  CHECK_EQ(d.boost_cap, 0.5);
+  CHECK_EQ(d.hunt_with_settling, 0);
   CHECK_EQ(d.proof_channel, 0);
   // A fresh search per decision shares the donor's ladder as it shares its
   // cache; a mate the ladder proves is withheld (the channel off).
@@ -1049,15 +1052,55 @@ TEST(capi_search_e10_layout_defaults_and_the_ladder_shared) {
              T5D_OK);
   d.synchronous = 1;
   d.expand.square_features = T5D_FEATURES_NONE;
+  d.settling_max_scans = 0;  // the root's questions alone
   t5d_search* a = nullptr;
   REQUIRE_EQ(t5d_search_new(g, 1, &d, &a, nullptr), T5D_OK);
   REQUIRE_EQ(t5d_search_run(a, T5D_EVALUATOR_UNIFORM, 0, 40, nullptr), T5D_OK);
   t5d_search_summary info{};
   REQUIRE_EQ(t5d_search_info(a, &info), T5D_OK);
-  CHECK_EQ(info.hunt_mates, std::uint64_t{1});
+  // Under 50 boards the root's settling scan asks Hunt's question in its place
+  // (hunt_with_settling 0): it proves the mate; Hunt is not asked.
+  CHECK_EQ(info.hunt_runs, std::uint64_t{0});
+  CHECK_EQ(info.settling_runs, std::uint64_t{1});
+  CHECK_EQ(info.settling_proven, std::uint64_t{1});
+  CHECK_EQ(info.settling_disproven, std::uint64_t{0});
   CHECK(info.proofs_withheld >= 1);
   CHECK_EQ(info.proofs_injected, std::uint64_t{0});
   CHECK_EQ(info.root_solved, 0);
+  {
+    // With hunt_with_settling both are asked: Hunt proves it too.
+    t5d_search_params both = d;
+    both.hunt_with_settling = 1;
+    t5d_search* h = nullptr;
+    REQUIRE_EQ(t5d_search_new(g, 1, &both, &h, nullptr), T5D_OK);
+    REQUIRE_EQ(t5d_search_run(h, T5D_EVALUATOR_UNIFORM, 0, 40, nullptr), T5D_OK);
+    t5d_search_summary hi{};
+    REQUIRE_EQ(t5d_search_info(h, &hi), T5D_OK);
+    CHECK_EQ(hi.hunt_mates, std::uint64_t{1});
+    CHECK_EQ(hi.settling_proven, std::uint64_t{1});
+    t5d_search_destroy(h);
+  }
+  {
+    // A disproof reaches settling_disproven, not settling_proven: bare kings.
+    const char* bare[] = {"[k4/5/5/5/4K:0:1:w]"};
+    t5d_game* kg = nullptr;
+    REQUIRE_EQ(t5d_game_new_from_fen(bare, 1, 5, 5, T5D_PARITY_INFER, T5D_TO_MOVE_INFER, T5D_RULES_STANDARD, &kg,
+                                     nullptr),
+               T5D_OK);
+    t5d_search_params shallow = d;
+    shallow.settling_depth = 3;
+    shallow.hunt_depth = 3;
+    t5d_search* k = nullptr;
+    REQUIRE_EQ(t5d_search_new(kg, 1, &shallow, &k, nullptr), T5D_OK);
+    REQUIRE_EQ(t5d_search_run(k, T5D_EVALUATOR_UNIFORM, 0, 8, nullptr), T5D_OK);
+    t5d_search_summary ki{};
+    REQUIRE_EQ(t5d_search_info(k, &ki), T5D_OK);
+    CHECK_EQ(ki.settling_runs, std::uint64_t{1});
+    CHECK_EQ(ki.settling_proven, std::uint64_t{0});
+    CHECK_EQ(ki.settling_disproven, std::uint64_t{1});
+    t5d_search_destroy(k);
+    t5d_game_destroy(kg);
+  }
   t5d_search* b = nullptr;
   REQUIRE_EQ(t5d_search_new_sharing(a, g, 1, &d, &b, nullptr), T5D_OK);
   t5d_search_params deeper = d;

@@ -220,9 +220,11 @@
 // H13, H14, H41-H43; 6b''s adoption table), its parts in SearchParams' E10
 // block, each ON by default in its range:
 //  * at a decision's turn-start root, HUNT under 100 boards and the root's
-//    full SETTLING scan under 50; at each PV CHANGE (the root's most visited
-//    child changes, once the root has settling_debounce visits) the settling
-//    scan at the opponent's turn start after the principal line, if THAT
+//    full SETTLING scan under 50 (where the scan is asked it subsumes Hunt's
+//    question, and Hunt is not asked: hunt_with_settling); at each PV CHANGE
+//    (the root's most visited child changes, once the root has
+//    settling_debounce visits) the settling scan at the opponent's turn start
+//    after the principal line, if THAT
 //    position is under 50 boards. They run on the ladder's worker, and their
 //    verdicts reach the search between batches (the start of gather, the end
 //    of deliver) - the synchronous mode answers each where it is asked. A
@@ -238,7 +240,12 @@
 //  * THE ASSET MAP's boosts enter the priors (set_priors: after the softmax,
 //    the temperatures, the unknown-move scale and the submit share; before k0
 //    and the root noise), never the cached evaluation (§15.2's C19-C21 row),
-//    by boost_rule. At the root the side table keeps each edge's unsteered
+//    by boost_rule (additive: monotone, capped at boost_cap of the unboosted
+//    mass). D2's FLAT FORM steers in another order (its noise is per board,
+//    inside the policy that orders the turn generator, and its k0 is set at the
+//    expansion, before any turn exists): a generated turn's prior is steered
+//    after the noise, and k0 comes from the unsteered turn distribution's
+//    entropy (build-log spec issue 178). At the root the side table keeps each edge's unsteered
 //    noise-free prior and what steering added (RootChild::prior_unsteered,
 //    boost), and counts its STEERED VISITS (steered_rule; I2's flag): a root
 //    visit whose child PUCT would not have chosen with the unsteered priors
@@ -456,8 +463,15 @@ enum class UncertaintySource : std::uint8_t {
 /// into flagged boards") and Hunt's suggestions' (H43, behind its flag). The
 /// combination is not stated (build-log spec issues 106, 178).
 enum class BoostRule : std::uint8_t {
-  /// P' = (P + b) / (1 + sum of b) over the edges that may be taken - the
-  /// boost a share of the prior, the whole renormalised (placeholder).
+  /// The boost ADDED to the prior, monotone and capped (placeholder; the E10
+  /// review's rule): over the edges that may be taken (their mass T), B the
+  /// boosted ones (their prior mass S_B, their boosts' sum beta), beta' =
+  /// min(beta, boost_cap (T - S_B)) shared in proportion to the boosts: a
+  /// boosted edge P + b beta'/beta, an unboosted one P (T - S_B - beta') /
+  /// (T - S_B) - no boosted prior falls, every unboosted one falls by one
+  /// common factor, and the unboosted keep at least (1 - boost_cap) of their
+  /// mass. (Built first as (P + b) / (1 + sum b), which lowered a boosted
+  /// prior above b / sum b and let a 0.25 boost swamp flat priors: issue 178.)
   Additive = 0,
   /// P' proportional to P (1 + b): a boost scales the network's own prior.
   Multiplicative = 1,
@@ -726,10 +740,21 @@ struct SearchParams {
   double settling_ms = 50;           ///< 6b' (A)'s 50 ms (placeholder: per scan)
   std::uint64_t settling_nodes = 0;  ///< 0: none
   int settling_depth = 5;
-  /// The root's own scan (under 50 boards it asks Hunt's question, our mate,
-  /// beside Hunt - both run: the literal reading of 6b''s table; off, the PV
-  /// changes' scans alone). Placeholder (issue 181).
+  /// The root's own scan (under 50 boards it asks Hunt's question, our mate -
+  /// in Hunt's place unless hunt_with_settling; off, the PV changes' scans
+  /// alone and Hunt at the root). Placeholder (issue 181).
   bool settling_root = true;
+  /// Hunt beside the root's settling scan. Where the root's scan is asked (a
+  /// turn start under settling_max_boards, settling and settling_root on), its
+  /// question subsumes Hunt's when both ask at the same depth in the prover's
+  /// default class (ladder_options gives both the default class) and Hunt's
+  /// suggestions are off: the full search proves what prove-only proves at the
+  /// same cost (t5d/prover.hpp, prover_prove_only_finds_the_full_searchs_mates),
+  /// and the verdict carries the same line, certificate and carried mate. Off
+  /// (the default, a placeholder): Hunt is not asked there - one 50 ms job on
+  /// five threads saved per such decision (build-log spec issue 181); on: both
+  /// (the literal reading of 6b''s table).
+  bool hunt_with_settling = false;
   /// PV-change scans per decision, at most (placeholder).
   std::uint32_t settling_max_scans = 4;
   /// A PV change is scanned only once the root has this many visits - the
@@ -740,6 +765,10 @@ struct SearchParams {
   /// only). ON by default. Its numbers are H13's placeholders (AssetOptions).
   bool asset_map = true;
   BoostRule boost_rule = BoostRule::Additive;  ///< placeholder (issue 178)
+  /// The additive rule's cap: the boosts together take at most this share of
+  /// the unboosted edges' mass (so those keep at least 1 - boost_cap of it).
+  /// In [0, 1); a named placeholder (issue 178).
+  double boost_cap = 0.5;
   bool asset_root_only = false;                ///< placeholder: "standing" read as every node
   AssetOptions assets{};
   /// Which root visits are steered (I2; placeholder, issue 179).
@@ -1089,9 +1118,16 @@ struct SearchStats {
   std::uint64_t proofs_injected = 0;     ///< ... set in the tree (the channel on)
   std::uint64_t proofs_unplaced = 0;
   std::uint64_t proofs_unconfirmed = 0;  ///< certificates not confirmed (ladder_certify)
+  /// Verdicts whose path from this root does not reach their position
+  /// (another decision's): refused before anything was placed or withheld.
+  std::uint64_t proofs_foreign = 0;
+  std::uint64_t proofs_expired = 0;      ///< the channel on, the decision ended before they were offered
   std::uint64_t pv_changes = 0;          ///< the root's most visited child changed (first included)
   std::uint64_t pv_unscanned = 0;        ///< ... not scanned: the cap, the range, a game end
-  std::uint64_t asset_boosted_edges = 0; ///< edges whose prior the asset map raised
+  /// The asset map's boost APPLICATIONS: an edge counted each time a node's
+  /// priors are set with its boost (every node's expansion and re-evaluation;
+  /// a flat-form turn when it is generated) - not distinct edges.
+  std::uint64_t asset_boosted_edges = 0;
   std::uint64_t suggestion_edges = 0;    ///< root edges Hunt's suggestions raised (its flag)
   std::uint64_t steered_visits = 0;      ///< root visits counted steered (SteeredRule)
   double seconds_assets = 0;             ///< the asset map's assessments and lookups
@@ -1214,9 +1250,11 @@ struct RootChild {
   double noise_alpha = 0;
   /// The variance of the values backed up through the edge (0 before a visit).
   double value_variance = 0;
-  /// Stage E10: what steering added to the child's noise-free prior -
+  /// Stage E10: what steering changed in the child's noise-free prior -
   /// prior_noise_free - prior_unsteered (the asset map's boost, and Hunt's
   /// suggestion behind its flag, by SearchParams::boost_rule); 0 unsteered.
+  /// SIGNED: positive for a boosted child, negative for an unboosted one at a
+  /// steered root (the renormalisation's drain), 0 where nothing was steered.
   double boost = 0;
   /// Stage E10: the noise-free prior without any steering (I2's provenance:
   /// the PUCT replica's prior, 12.2).
@@ -1267,6 +1305,8 @@ enum class ProofUse : std::uint8_t {
   Deferred,      ///< the root is not expanded yet (a ladder's proof is offered again between batches)
   Unplaced,      ///< its path is not in the tree (a pruned edge, a turn not generated)
   Unconfirmed,   ///< its certificate was not confirmed by E4 (ladder_certify)
+  Foreign,       ///< its path from this root does not reach its position (another decision's): refused
+  Expired,       ///< the channel on, its decision ended before it was offered (nothing entered)
 };
 const char* proof_use_name(ProofUse use) noexcept;
 

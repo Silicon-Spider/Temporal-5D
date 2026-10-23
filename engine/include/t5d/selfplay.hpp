@@ -41,14 +41,25 @@
 // experiments, and only with the proof channel on, since a refutation is a
 // proof - it rejects the chosen action and searches again. No reserve is held
 // for it while Guard is offline (build-log spec issue 306).
+//
+// SELF-PLAY RUNS WITHOUT THE ASSET MAP (the E10 review; build-log spec issues
+// 179, 189): PlayParams' default search has asset_map OFF - a named placeholder
+// - until I2's steered-visit definition is validated (the review measured the
+// counterfactual count biasing the policy target against the boosted moves).
+// The search's own default (SearchParams) and match play (t5d-play, Python's
+// netplay) keep 6b''s table, the map on; a caller of play_game that wants the
+// map in self-play sets search.asset_map itself.
 
 #ifndef T5D_SELFPLAY_HPP
 #define T5D_SELFPLAY_HPP
 
 #include <cstdint>
+#include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 
+#include "t5d/certificate.hpp"
 #include "t5d/guard.hpp"
 #include "t5d/mcts.hpp"
 #include "t5d/move.hpp"
@@ -66,14 +77,15 @@ enum class GameEnd : std::uint8_t {
 };
 const char* game_end_name(GameEnd end) noexcept;
 
+/// Self-play's search parameters: the search's defaults with root Dirichlet
+/// noise ON (E1, §8.4) and the asset map OFF (a named placeholder: I2's steered
+/// visits are unvalidated - issues 179, 189; the header comment).
+SearchParams self_play_search_defaults();
+
 struct PlayParams {
   /// The searches' parameters - root Dirichlet noise ON by default (E1,
   /// §8.4: noise at the root in self-play); match play turns it off (§12.3).
-  SearchParams search = [] {
-    SearchParams p;
-    p.root_noise = true;
-    return p;
-  }();
+  SearchParams search = self_play_search_defaults();
   /// Playouts per decision (the node budget).
   std::uint64_t playouts = 64;
   /// I11 - handed to the search too, so that it scores capped positions as the
@@ -115,6 +127,11 @@ struct PlayParams {
   /// Stage E10, H44: record each decision for the offline audit lane
   /// (GameRecord::decision_log). Off by default (memory).
   bool decision_log = false;
+  /// TESTS ONLY: applied to each refutation's certificate Guard's hook is about
+  /// to have E4 check (guard_final) - the seam that feeds it a certificate E4
+  /// rejects, so the "only confirmed refutations count" gate is exercised.
+  /// Null (the default): none.
+  std::function<void(std::shared_ptr<const ProofCertificate>&)> guard_certificate_hook_for_tests;
 };
 
 /// Stage E10, H44: one decision as the offline audit lane reads it - its

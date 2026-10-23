@@ -25,6 +25,9 @@ one's evaluation cache (C14), root noise on, a chosen child made known legal bef
   network and the rebuilt input give it again) and needs no memo spanning a game.
 * **Proofs**: none. The proof channel is off (H23, H41): records carry ``proof_ref`` -1 and an
   empty ``proof_refs``.
+* **The asset map: off** (``GeneratorConfig.asset_map``, a placeholder; the E10 review): I2's
+  steered-visit definition is unvalidated (issue 179), so self-play does not steer - the records'
+  boosts and steered visits are 0. Hunt and the settling scans run (their proofs withheld).
 * **Playout cap randomisation (I5, section 12.5)**: each decision is a full search with probability
   ``PCRConfig.full_fraction`` (KataGo's 0.25), drawn from the game's seed and the decision's index,
   else a cheap one at ``cheap_playouts`` without root noise (placeholders); only full searches emit
@@ -170,6 +173,11 @@ class GeneratorConfig:
     seed: int = 1
     window_k: int = 8
     root_noise: bool = True
+    #: The asset map's boosts (H13) in self-play: OFF - a named placeholder - until I2's
+    #: steered-visit definition is validated (the E10 review measured the counterfactual count
+    #: biasing the policy target against the boosted moves; build-log issues 179, 189). The
+    #: engine's own default and match play (``netplay``) keep it on.
+    asset_map: bool = False
     pcr: PCRConfig = PCRConfig()  # I5
     kl: KLAdaptiveConfig = KLAdaptiveConfig()  # I20
     resign: ResignConfig = ResignConfig()  # I18
@@ -236,6 +244,7 @@ def search_parameters(game: Game, cfg: GeneratorConfig, relations: int, *, seed:
         turn_cap_boards=cfg.cap_boards,
         expand=(cfg.window_k, "all", relations),
         root_policy_temperature=float(root_temperature),
+        asset_map=int(cfg.asset_map),
     )
     params.update(dict(cfg.search_overrides))
     return search_params(game.lib, **params)

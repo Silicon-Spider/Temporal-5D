@@ -317,7 +317,8 @@ typedef struct t5d_search_params {
   /* Stage E10: the reduced verification ladder wired (register H1, H10, H13, H14, H41-H43;
      6b''s adoption table; t5d/ladder.hpp) - each part ON by default in its range, every
      number a placeholder unless 6b'' measured it. Its proofs reach the tree only with the
-     proof channel on (H41) - never through this API, which keeps proof_channel 0 */
+     proof channel on (proof_channel above; H41) - off by rule: this API passes the switch
+     through (t5d-play's --proof-channel, experiments and tests only), Python refuses it */
   int32_t hunt;                   /* Hunt (H43): our forced mate at a turn-start root ... */
   int32_t hunt_max_boards;        /* ... under this many boards (100: 6b'') */
   double hunt_ms;                 /* its budget (50 ms: 6b'') ... */
@@ -329,7 +330,8 @@ typedef struct t5d_search_params {
   double settling_ms;             /* each scan's budget (50 ms) ... */
   uint64_t settling_nodes;        /* ... and node cap (0: none) */
   int32_t settling_depth;         /* half-turns (5) */
-  int32_t settling_root;          /* 1: the root's own scan too, beside Hunt; 0: PV changes' only */
+  int32_t settling_root;          /* 1: the root's own scan too (in Hunt's place unless
+                                     hunt_with_settling); 0: PV changes' only, Hunt at the root */
   uint32_t settling_max_scans;    /* PV-change scans per decision, at most (4) */
   uint32_t settling_debounce;     /* root visits before a PV change is scanned (16) */
   int32_t asset_map;              /* the asset map's boosts (H13), on travel moves into flagged
@@ -347,6 +349,10 @@ typedef struct t5d_search_params {
   int32_t hunt_suggest;           /* Hunt's soft priors (H43's flag): 0 */
   double hunt_suggest_boost;      /* their boost x weight (0.25) */
   int32_t ladder_certify;         /* only proofs E4 confirms enter the tree (1) */
+  double boost_cap;               /* the additive rule's cap: the boosts take at most this share
+                                     of the unboosted edges' mass (0.5; [0, 1)) */
+  int32_t hunt_with_settling;     /* 1: Hunt asked beside the root's settling scan too; 0 (default):
+                                     not where the scan subsumes it (issue 181) */
   t5d_expand_options expand;   /* the leaves' network input (k, features, relations); last */
 } t5d_search_params;
 
@@ -486,8 +492,9 @@ typedef struct t5d_root_child {
   double prior_noise_free;      /* the prior before the root noise (after the temperatures,
                                    the unknown-move scale, the submit share) */
   double value_variance;        /* of the values backed up through it (0 before a visit) */
-  double boost;                 /* stage E10: steering's share of prior_noise_free (the asset
-                                   map's boost; Hunt's suggestions behind their flag) */
+  double boost;                 /* stage E10: what steering changed in prior_noise_free (the
+                                   asset map's boost; Hunt's suggestions behind their flag) -
+                                   signed: negative for an unboosted child at a steered root */
   double exploration_scale;     /* E3's factor on its exploration term (1: off) */
   uint32_t forced_visits;       /* forced playouts: 0 (not built - pruning is target-side) */
   uint32_t steered_visits;      /* visits a steering source decided (stage E10; steered_rule, I2) */
@@ -544,9 +551,13 @@ T5D_API t5d_status t5d_search_new(const t5d_game* game, int32_t turn_start,
  * verification ladder (the game's asset map, settling prover and the mate an
  * action carries), where these parameters ask for one: refused for another
  * ruleset or other ladder parameters (t5d/mcts.hpp). The donor may be
- * destroyed afterwards; the cache lives while a search holds it. The cache has
- * no lock: the searches sharing it must never be used from two threads at once
- * (the caller's duty; nothing checks it). */
+ * destroyed afterwards; the cache lives while a search holds it. The donor may
+ * also go on searching: the new search's first batch begins a decision of the
+ * ladder's, which ends the donor's - the donor then asks and takes nothing more
+ * from the ladder (its jobs cancelled, no verdict of the new search's reaching
+ * it). The cache and the ladder's asset map have no lock: the searches sharing
+ * them must never be used from two threads at once (the caller's duty; nothing
+ * checks it). */
 T5D_API t5d_status t5d_search_new_sharing(const t5d_search* donor, const t5d_game* game,
                                           int32_t turn_start, const t5d_search_params* params,
                                           t5d_search** out, char** error);
