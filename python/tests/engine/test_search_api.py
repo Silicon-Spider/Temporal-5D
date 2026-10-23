@@ -585,7 +585,8 @@ def test_the_submit_logit_reaches_the_submit_child(submit, split):
     submit logit beside its moves' inherited logits (read through a re-root onto it, before the
     search evaluates it)."""
     g = _shifted_game_with_moves(seed=2)
-    flags = {"split": split} | ({"tree_gates": 0} if split == T5D_SPLIT_TREE else {})
+    # The asset map's steering (stage E10) off: the network's logits alone set the priors here.
+    flags = {"split": split, "asset_map": 0} | ({"tree_gates": 0} if split == T5D_SPLIT_TREE else {})
     with g:
         s = Search(g, turn_start=False, params=search_params(seed=1, widening=0, **flags))
         ev = Submitter(submit)
