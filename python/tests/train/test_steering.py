@@ -32,6 +32,9 @@ ASSET_START = ("[k4/5/5/5/Q3K:0:1:w]", "[k4/5/5/5/4K:0:1:b]", "[k4/5/5/5/3K1:0:2
 #: White mates in one (engine/tests/test_v3_support.hpp).
 MATE_IN_ONE = ("[k4/4Q/1K3/5/5:0:1:w]",)
 
+#: Bare kings: no mate for either side (the settling scan disproves it in its class).
+BARE_KINGS = ("[k4/5/5/5/4K:0:1:w]",)
+
 
 @requires_engine
 def test_the_ladder_is_on_by_default_and_its_proofs_withheld():
@@ -41,22 +44,42 @@ def test_the_ladder_is_on_by_default_and_its_proofs_withheld():
     assert (p.hunt_ms, p.settling_ms, p.verification_threads, p.hunt_suggest, p.proof_channel) == (50.0, 50.0, 5, 0, 0)
     with pytest.raises(ValueError, match="H41"):
         search_params(lib, proof_channel=1)
+    assert (p.boost_cap, p.hunt_with_settling) == (0.5, 0)
     game = Game.from_fen(list(MATE_IN_ONE))
     try:
-        with Search(game, params=search_params(lib, synchronous=1, asset_map=0)) as s:
+        # Under 50 boards the root's settling scan asks our mate in Hunt's place (hunt_with_settling
+        # 0); settling_max_scans 0 leaves the root's question alone (the E10 review's C01: proven and
+        # disproven reach their own fields).
+        with Search(game, params=search_params(lib, synchronous=1, asset_map=0, settling_max_scans=0)) as s:
+            s.run(T5D_EVALUATOR_UNIFORM, 100)
+            info = s.info()
+            assert (info.hunt_runs, info.settling_runs) == (0, 1)
+            assert (info.settling_proven, info.settling_disproven) == (1, 0)  # the scan proves the mate ...
+            assert info.proofs_withheld == 1 and info.proofs_injected == 0  # ... which does not enter the tree
+            assert not info.root_solved and (info.root_lo, info.root_hi) == (-1, 1)
+            assert all((c.lo, c.hi) == (-1, 1) for c in s.children())
+        with Search(game, params=search_params(lib, synchronous=1, asset_map=0, hunt_with_settling=1)) as s:
             s.run(T5D_EVALUATOR_UNIFORM, 100)
             info = s.info()
             assert info.hunt_runs == 1 and info.hunt_mates == 1  # Hunt proves the mate ...
             assert info.settling_proven == 1  # ... and so does the root's settling scan
             assert info.proofs_withheld == 2 and info.proofs_injected == 0  # ... and neither enters the tree
-            assert not info.root_solved and (info.root_lo, info.root_hi) == (-1, 1)
-            assert all((c.lo, c.hi) == (-1, 1) for c in s.children())
+            assert not info.root_solved
         with Search(game, params=search_params(lib, synchronous=1, asset_map=0, hunt=0, settling=0)) as s:
             s.run(T5D_EVALUATOR_UNIFORM, 100)
             info = s.info()
             assert (info.hunt_runs, info.settling_runs, info.proofs_withheld) == (0, 0, 0)
     finally:
         game.close()
+    bare = Game.from_fen(list(BARE_KINGS))
+    try:
+        params = search_params(lib, synchronous=1, asset_map=0, settling_max_scans=0, settling_depth=3, hunt_depth=3)
+        with Search(bare, params=params) as s:
+            s.run(T5D_EVALUATOR_UNIFORM, 8)
+            info = s.info()
+            assert (info.settling_runs, info.settling_proven, info.settling_disproven) == (1, 0, 1)
+    finally:
+        bare.close()
 
 
 @requires_engine
@@ -71,6 +94,7 @@ def test_a_steered_self_play_game_records_steered_visits_and_the_targets_exclude
         seed=5,
         window_k=4,
         pcr=PCRConfig(enabled=False),  # every search full: every decision a policy target
+        asset_map=True,  # self-play's default is off since the E10 review (issue 179): on, to test the plumbing
         search_overrides=(("synchronous", 1), ("hunt", 0), ("settling", 0)),
     )
     live: list[tuple[list, object]] = []
@@ -112,3 +136,30 @@ def test_a_steered_self_play_game_records_steered_visits_and_the_targets_exclude
     for a, b in zip(ds, back.decisions, strict=True):
         assert a.children.steered_visits.tolist() == b.children.steered_visits.tolist()
         assert np.array_equal(a.children.boost, b.children.boost)
+
+
+@requires_engine
+def test_self_play_runs_without_the_asset_map_by_default():
+    """The E10 review (issues 179, 189): I2's steered-visit definition is unvalidated, so the
+    generator's default turns the asset map off - on a position the map would steer, the records
+    carry no boost and no steered visit; the engine's own default keeps the map on (match play)."""
+    assert GeneratorConfig().asset_map is False
+    assert search_params(load_library()).asset_map == 1
+    cfg = GeneratorConfig(
+        start_fen=ASSET_START,
+        playouts=48,
+        batch_size=4,
+        cap_turns=3,
+        cap_boards=12,
+        max_actions=2,
+        seed=5,
+        window_k=4,
+        pcr=PCRConfig(enabled=False),
+        search_overrides=(("synchronous", 1), ("hunt", 0), ("settling", 0)),
+    )
+    g = generate_game(UniformEvaluator(), cfg, net_cfg=NET)
+    assert g.record.decisions
+    assert g.record.header["search"]["full"]["asset_map"] == 0
+    for d in g.record.decisions:
+        assert (d.children.steered_visits == 0).all()
+        assert (d.children.boost == 0.0).all()

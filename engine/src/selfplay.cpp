@@ -74,6 +74,13 @@ double GameRecord::white_score() const noexcept {
   return -1.0;
 }
 
+SearchParams self_play_search_defaults() {
+  SearchParams p;
+  p.root_noise = true;
+  p.asset_map = false;  // until I2's steered visits are validated (issues 179, 189)
+  return p;
+}
+
 GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayParams& params) {
   const auto t0 = std::chrono::steady_clock::now();
   GameRecord g(start);
@@ -237,7 +244,10 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
           budget.max_time = std::chrono::nanoseconds(static_cast<std::int64_t>(params.guard_ms * 1e6));
         }
         ++g.guard_runs;
-        const GuardResult gr = guard(action_start, full, budget, go);
+        GuardResult gr = guard(action_start, full, budget, go);
+        if (params.guard_certificate_hook_for_tests && gr.refuted) {
+          params.guard_certificate_hook_for_tests(gr.certificate);
+        }
         if (!gr.refuted) break;
         ++g.guard_refutations;
         // Only a refutation E4 confirms counts (6b'' rule).

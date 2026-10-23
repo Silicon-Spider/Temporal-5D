@@ -19,9 +19,14 @@ parameter of ``TargetConfig`` with a placeholder default (spec issue 235).
   necessarily see throughout: exact under the defaults, where both are off (issue 235(a)); a child
   left with one visit is pruned outright. **Steered visits** (E10's boosts and Hunt's suggestions, section
   12.2) are removed under ``policy_mode="exclusion"`` or kept at ``provenance_weight`` under
-  ``"provenance"`` (which one is open - 6e; the counts are 0 until E10 wires them), and the
-  PUCT replica compares priors without the recorded boost. Recorded forced visits (none: forced
-  playouts are not built, issue 153) are pruned like any other.
+  ``"provenance"`` (which one is open - 6e), and the PUCT replica compares priors without the
+  recorded steering (``replica_prior``): the noise-free prior less the boost, or - the search's
+  prior, after the root noise, which mixes ``1 - epsilon`` of the steered noise-free prior - that
+  prior less ``(1 - epsilon)`` x the boost, epsilon read from the record's search parameters (the
+  E10 review: subtracting the whole boost under-counted the noise's share). Self-play runs without
+  the asset map until I2's steered visits are validated (issue 179), so its records' boosts are 0.
+  Recorded forced visits (none: forced playouts are not built, issue 153) are pruned like any
+  other.
 * **The soft policy (D4)**: the policy target raised to 1/4 and renormalised (``losses``' helper
   computes it in the loss; the builder keeps it for the record comparison).
 * **Search-value targets from the pruned visits (I2, CHECKPOINT 7)**: each root's value
@@ -168,9 +173,44 @@ class TargetConfig:
 # --- I2: the pruned visits ---------------------------------------------------------------------------
 
 
-def pruned_visits(d: DecisionRecord, cfg: TargetConfig) -> np.ndarray:
+def noise_keep_of(header: dict, d: DecisionRecord) -> float:
+    """``1 - epsilon`` of the root noise decision ``d``'s search mixed in (1 where it had none),
+    epsilon from the record header's search parameters (the full or the cheap search's). A
+    decision with noise and a non-zero boost whose epsilon the header does not name is refused:
+    its search prior cannot be unsteered."""
+    if not d.root_noise:
+        return 1.0
+    search = header.get("search") or {}
+    arm = search.get("full" if d.full_search else "cheap") or search.get("full") or {}
+    eps = arm.get("dirichlet_epsilon")
+    if eps is None:
+        if np.any(np.asarray(d.children.boost) != 0.0):
+            raise ValueError("the record names no dirichlet_epsilon: a noised, steered prior cannot be unsteered (I2)")
+        return 1.0
+    return 1.0 - float(eps)
+
+
+def replica_prior(d: DecisionRecord, cfg: TargetConfig, *, noise_keep: float = 1.0) -> np.ndarray:
+    """The prior the pruning's PUCT replica reads, the steering taken out (I2; float64): under
+    ``prune_prior="noise_free"`` the noise-free prior less the boost (the unsteered noise-free
+    prior); under ``"search"`` the search's prior less ``noise_keep`` x the boost - the root noise
+    mixes ``noise_keep`` (``1 - epsilon``, ``noise_keep_of``) of the steered noise-free prior, so
+    that is the unsteered prior with the same noise. Negative values (none, exactly) clipped."""
+    c = d.children
+    boost = c.boost.astype(np.float64)
+    if cfg.prune_prior == "search":
+        keep = noise_keep if d.root_noise else 1.0
+        prior = c.prior.astype(np.float64) - keep * boost
+    else:
+        prior = c.prior_noise_free.astype(np.float64) - boost
+    return np.maximum(prior, 0.0)
+
+
+def pruned_visits(d: DecisionRecord, cfg: TargetConfig, *, noise_keep: float = 1.0) -> np.ndarray:
     """Each root child's visits for the targets (float64): steered visits excluded or weighted
-    (I2), then KataGo's forced-playout pruning against the most visited child (module docstring)."""
+    (I2), then KataGo's forced-playout pruning against the most visited child (module docstring).
+    ``noise_keep``: ``1 - epsilon`` of the decision's root noise (``noise_keep_of``; the builder
+    reads it from the record)."""
     c = d.children
     n = c.visits.astype(np.float64)
     steered = np.minimum(c.steered_visits.astype(np.float64), n)
@@ -178,8 +218,7 @@ def pruned_visits(d: DecisionRecord, cfg: TargetConfig) -> np.ndarray:
     if n.size == 0 or not (n > 0).any():
         return n
     best = int(np.argmax(n))
-    prior = (c.prior if cfg.prune_prior == "search" else c.prior_noise_free).astype(np.float64) - c.boost.astype(np.float64)
-    prior = np.maximum(prior, 0.0)
+    prior = replica_prior(d, cfg, noise_keep=noise_keep)
     sqrt_parent = math.sqrt(max(float(d.root_visits), 1.0))
     cpuct = float(d.root_cpuct)
     scale = c.exploration_scale.astype(np.float64)
@@ -329,7 +368,7 @@ def build_targets(record: GameRecord, cfg: TargetConfig | None = None, *, positi
     search = record.header.get("search", {})
     share = float(search.get("full", {}).get("submit_share", 0.0)) if search else 0.0
 
-    pruned = [pruned_visits(d, cfg) for d in ds]
+    pruned = [pruned_visits(d, cfg, noise_keep=noise_keep_of(record.header, d)) for d in ds]
     policy: list[np.ndarray | None] = []
     soft: list[np.ndarray | None] = []
     full = np.zeros(n, dtype=bool)
@@ -674,11 +713,13 @@ __all__ = [
     "collate_rows",
     "effort_bin",
     "kl_divergence",
+    "noise_keep_of",
     "policy_target",
     "pruned_value",
     "pruned_visits",
     "raw_prior",
     "read_targets",
+    "replica_prior",
     "reply_targets",
     "soft_policy",
     "target_differences",

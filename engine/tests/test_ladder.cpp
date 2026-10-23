@@ -21,9 +21,11 @@
 #include <cstdint>
 #include <cstdio>
 #include <memory>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "t5d/certificate.hpp"
@@ -142,17 +144,23 @@ TEST(ladder_each_prover_runs_only_below_its_range) {
   const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
   for (const int hunt_max : {b, b + 1}) {
     for (const int settle_max : {b, b + 1}) {
-      SearchParams p = sync_params();
-      p.hunt_max_boards = hunt_max;
-      p.settling_max_boards = settle_max;
-      p.settling_debounce = 1;
-      Search search(s, p);
-      run_all(search, *uniform, 64);
-      CHECK_EQ(count_jobs(search, LadderJob::Hunt), std::size_t{hunt_max > b ? 1u : 0u});
-      CHECK_EQ(count_jobs(search, LadderJob::RootSettling), std::size_t{settle_max > b ? 1u : 0u});
-      // After one action the opponent's turn start has b + 1 boards: a PV
-      // scan needs settle_max > b + 1.
-      CHECK_EQ(count_jobs(search, LadderJob::PvSettling), std::size_t{0});
+      for (const bool both : {false, true}) {
+        SearchParams p = sync_params();
+        p.hunt_max_boards = hunt_max;
+        p.settling_max_boards = settle_max;
+        p.settling_debounce = 1;
+        p.hunt_with_settling = both;
+        Search search(s, p);
+        run_all(search, *uniform, 64);
+        // Where the root's scan is asked it subsumes Hunt's question (Hunt not
+        // asked) unless hunt_with_settling.
+        const bool settled = settle_max > b;
+        CHECK_EQ(count_jobs(search, LadderJob::Hunt), std::size_t{hunt_max > b && (both || !settled) ? 1u : 0u});
+        CHECK_EQ(count_jobs(search, LadderJob::RootSettling), std::size_t{settled ? 1u : 0u});
+        // After one action the opponent's turn start has b + 1 boards: a PV
+        // scan needs settle_max > b + 1.
+        CHECK_EQ(count_jobs(search, LadderJob::PvSettling), std::size_t{0});
+      }
     }
   }
   for (const int settle_max : {b + 1, b + 2}) {
@@ -199,11 +207,16 @@ TEST(ladder_ranges_at_49_50_99_100_boards) {
     const GameState s = game(boards, k5x5);
     REQUIRE_EQ(static_cast<int>(s.multiverse().board_count()), n);
     REQUIRE(detect_mate(s, Detector::Hypercuboid).verdict == Outcome::Ongoing);
-    Search search(s, sync_params());
-    search.run(*uniform, Limits{2});
-    search.await_ladder();
-    CHECK_EQ(count_jobs(search, LadderJob::Hunt), std::size_t{n < 100 ? 1u : 0u});
-    CHECK_EQ(count_jobs(search, LadderJob::RootSettling), std::size_t{n < 50 ? 1u : 0u});
+    for (const bool both : {false, true}) {
+      SearchParams p = sync_params();
+      p.hunt_with_settling = both;
+      Search search(s, p);
+      search.run(*uniform, Limits{2});
+      search.await_ladder();
+      // Under 50 the root's scan asks our mate in Hunt's place (unless both).
+      CHECK_EQ(count_jobs(search, LadderJob::Hunt), std::size_t{n < 100 && (both || n >= 50) ? 1u : 0u});
+      CHECK_EQ(count_jobs(search, LadderJob::RootSettling), std::size_t{n < 50 ? 1u : 0u});
+    }
   }
 }
 
@@ -219,6 +232,7 @@ TEST(ladder_no_proof_enters_while_the_proof_channel_is_off) {
   const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
   SearchParams on = sync_params();
   on.asset_map = false;
+  on.hunt_with_settling = true;  // both of the root's questions asked
   SearchParams off = on;
   off.hunt = off.settling = false;
   Search with(s, on);
@@ -412,7 +426,10 @@ TEST(ladder_injected_proofs_never_contradict_and_match_e4) {
     }
   }
   std::printf("  %zu proofs injected and confirmed\n", injected);
-  CHECK(injected > 0);
+  // The count the documents cite (issue 184): 402 since the E10 review (Hunt
+  // no longer asked beside the root's settling scan); synchronous, so exact -
+  // asserted with a margin for changes to the provers' order.
+  CHECK(injected >= 300);
 }
 
 // ---- The asset map and the steered visits ----------------------------------------------------
@@ -494,9 +511,7 @@ TEST(ladder_asset_map_boosts_travel_moves_and_counts_steered_visits) {
 }
 
 TEST(ladder_asset_boosts_are_a_function_of_the_state_and_each_board_is_assessed_once) {
-  // §15.2's C19-C21 row: steering acts on priors after the cached evaluation -
-  // the cache's entries are the evaluator's, the same with the map on and off;
-  // and a game's searches share one ladder, so each superseded board is
+  // A game's searches share one ladder, so each superseded board is
   // assessed once in the game (assessments == boards).
   const std::unique_ptr<Evaluator> random = make_evaluator(BuiltinEvaluator::Random, 5);
   const GameState s = variant("Standard - Two Timelines");
@@ -515,14 +530,8 @@ TEST(ladder_asset_boosts_are_a_function_of_the_state_and_each_board_is_assessed_
     for (const Move& m : *a) t.apply(m);
     t.submit();
   }
-  // The cache's evaluations equal a cache filled without the asset map.
-  SearchParams plain = p;
-  plain.asset_map = false;
-  Search with(s, p);
-  Search without(s, plain);
-  with.run(*random, Limits{200});
-  without.run(*random, Limits{200});
-  CHECK(with.cache()->size() > 0);
+  // The cache's evaluations against a cache filled without the asset map:
+  // ladder_the_cache_holds_the_evaluators_evaluations_with_the_map_on.
 }
 
 // ---- The synchronous mode and §15.4's invariants with the wiring on --------------------------
@@ -613,7 +622,8 @@ TEST(ladder_jobs_keep_their_budgets_and_end_with_their_decision) {
     }
     CHECK_EQ(ladder->pending(), std::size_t{0});
     const VerificationLadder::Stats st = ladder->stats();
-    CHECK_EQ(st.asked, st.answered + st.cancelled);
+    CHECK_EQ(st.asked, st.answered + st.cancelled + st.discarded + st.contradictions);
+    CHECK_EQ(st.contradictions, std::uint64_t{0});
     CHECK_EQ(st.threads_started, std::uint64_t{1});  // one worker for the ladder's life
   }
 }
@@ -693,4 +703,608 @@ TEST(ladder_self_play_with_the_defaults_asks_and_records) {
   std::printf("  %zu actions: hunt %llu, settling %llu, pv changes %llu, steered visits %llu\n", g.actions.size(),
               static_cast<unsigned long long>(g.hunt_runs), static_cast<unsigned long long>(g.settling_runs),
               static_cast<unsigned long long>(g.pv_changes), static_cast<unsigned long long>(g.steered_visits));
+}
+
+// ---- The E10 review's tests (2026-10-23) ------------------------------------------------------
+// Reviewer B's verified tests adopted (adapted to the review's fixes), and the
+// ones the reviews left unwritten: a certificate E4 rejects fed through each
+// "only confirmed proofs enter" gate, the carried mate, a decision's end
+// cancelling its running job, a shared ladder's donor searching on, the
+// additive rule's monotonicity and cap, self-play without the asset map, the
+// flat form's steering order and the cache's evaluations against a cache
+// filled without the map.
+
+namespace {
+
+// A certificate of the wrong position: mate_in_one's proof, which E4 must not
+// confirm against mate_in_two (the seam's premise is checked where it is used).
+std::shared_ptr<const ProofCertificate> foreign_certificate() {
+  ProverOptions po;
+  po.record_certificate = true;
+  Prover prover(po);
+  const ProveResult r = prover.prove(t5d_test::v3::mate_in_one(), ProveBudget::nodes(200'000), 3);
+  if (r.status != ProofStatus::Proven || !r.certificate) throw std::logic_error("mate_in_one: no certificate");
+  return r.certificate;
+}
+
+// A position where the provers run long (20 boards, after eight random
+// actions on Two Timelines): neither Hunt nor the settling scan decides it in
+// 3 s on one thread (measured while writing this test: over 800,000 nodes,
+// undecided) - a job on it outlives any decision that does not cancel it.
+GameState long_position() {
+  GameState s = variant("Standard - Two Timelines");
+  t5d_test::Rng rng(1);
+  for (int a = 0; a < 8; ++a) {
+    const std::optional<std::vector<Move>> act = t5d_test::random_legal_action(s, rng);
+    if (!act) throw std::logic_error("long_position: the game ended");
+    for (const Move& m : *act) s.apply(m);
+    s.submit();
+  }
+  return s;
+}
+
+}  // namespace
+
+TEST(ladder_steered_visits_vanish_with_a_vanishing_boost) {
+  // Reviewer B (kills M22, the counterfactual test inverted, and M25, the
+  // replica without the root noise): with a boost of 1e-6 the steered and the
+  // counterfactual choices agree, so no visit is steered - noise off and on;
+  // with the default boost many are.
+  const GameState s = asset_position();
+  const std::unique_ptr<Evaluator> random = make_evaluator(BuiltinEvaluator::Random, 1);
+  for (const bool noise : {false, true}) {
+    SearchParams p = sync_params();
+    p.hunt = p.settling = false;
+    p.root_noise = noise;
+    p.assets.max_boost = 1e-6;
+    Search tiny(s, p);
+    run_all(tiny, *random, 300);
+    CHECK(tiny.stats().asset_boosted_edges > 0);
+    CHECK_EQ(tiny.stats().steered_visits, std::uint64_t{0});
+    p.assets.max_boost = SearchParams{}.assets.max_boost;
+    Search full(s, p);
+    run_all(full, *random, 300);
+    CHECK(full.stats().steered_visits > 0);
+  }
+}
+
+TEST(ladder_additive_steering_is_monotone_capped_and_sums_to_one) {
+  // The review's rule (issue 178): no boosted prior falls, every unboosted one
+  // falls by one common factor, the priors still sum to 1 (both rules - kills
+  // B's M16); the cap binds where the boosts exceed boost_cap of the unboosted
+  // mass (a uniform evaluator's flat priors and the default 0.25 boosts), and
+  // below it a boosted prior gains exactly its boost. A random evaluator's
+  // peaked priors: the boosted child with the largest prior (which the first
+  // rule lowered, 0.377 -> 0.279 in reviewer A's probe) does not fall.
+  const GameState s = asset_position();
+  for (const BuiltinEvaluator kind : {BuiltinEvaluator::Uniform, BuiltinEvaluator::Random}) {
+    const std::unique_ptr<Evaluator> ev = make_evaluator(kind, 7);
+    for (const BoostRule rule : {BoostRule::Additive, BoostRule::Multiplicative}) {
+      for (const double max_boost : {0.25, 0.01}) {
+        SearchParams p = sync_params();
+        p.hunt = p.settling = false;
+        p.boost_rule = rule;
+        p.assets.max_boost = max_boost;
+        Search search(s, p);
+        run_all(search, *ev, 50);
+        AssetMap& assets = search.shared_ladder()->assets();
+        double nf = 0, unsteered = 0, rest_before = 0, rest_after = 0, beta = 0;
+        double factor = -1;
+        bool factor_common = true;
+        std::size_t boosted = 0;
+        for (const RootChild& c : search.root_children()) {
+          nf += c.prior_noise_free;
+          unsteered += c.prior_unsteered;
+          const double raw = c.submit ? 0.0 : assets.boost(s, c.moves[0]);
+          if (raw > 0) {
+            ++boosted;
+            beta += raw;
+            if (rule == BoostRule::Additive) CHECK(c.prior_noise_free >= c.prior_unsteered);  // monotone
+            CHECK(c.boost > 0);
+          } else {
+            rest_before += c.prior_unsteered;
+            rest_after += c.prior_noise_free;
+            if (rule == BoostRule::Additive && c.prior_unsteered > 0) {
+              CHECK(c.boost <= 0);  // signed: the renormalisation's drain
+              const double f = c.prior_noise_free / c.prior_unsteered;
+              if (factor < 0) factor = f;
+              factor_common = factor_common && std::abs(f - factor) < 1e-9;
+            }
+          }
+        }
+        REQUIRE(boosted > 0);
+        CHECK(std::abs(nf - 1.0) < 1e-9);
+        CHECK(std::abs(unsteered - 1.0) < 1e-9);
+        if (rule != BoostRule::Additive) continue;
+        CHECK(factor_common);
+        const double cap = p.boost_cap * rest_before;
+        if (beta > cap) {
+          // The cap binds: the unboosted keep exactly 1 - boost_cap of their mass.
+          CHECK(std::abs(rest_after - (1.0 - p.boost_cap) * rest_before) < 1e-9);
+        } else {
+          // Below it: each boosted prior gains its boost.
+          for (const RootChild& c : search.root_children()) {
+            const double raw = c.submit ? 0.0 : assets.boost(s, c.moves[0]);
+            if (raw > 0) CHECK(std::abs(c.boost - raw) < 1e-12);
+          }
+        }
+        if (kind == BuiltinEvaluator::Uniform && max_boost == 0.25) CHECK(beta > cap);  // the binding case is met
+        if (max_boost == 0.01) CHECK(!(beta > cap));                                     // ... and the other
+      }
+    }
+  }
+  // boost_cap is validated: [0, 1).
+  SearchParams bad = sync_params();
+  bad.boost_cap = 1.0;
+  CHECK_THROWS_AS(Search(s, bad), std::invalid_argument);
+  bad.boost_cap = -0.1;
+  CHECK_THROWS_AS(Search(s, bad), std::invalid_argument);
+}
+
+TEST(ladder_the_flat_form_steers_after_its_noise_and_takes_k0_unsteered) {
+  // The flat form's documented order (issue 178): its k0 comes from the
+  // unsteered turn distribution's entropy - the same with the map on and off -
+  // where the board-move split's comes from the steered priors (it differs);
+  // a flat root's turn priors still sum to 1 with the map on, and the boosted
+  // turns' priors do not fall.
+  const GameState s = asset_position();
+  const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
+  for (const TurnSplit split : {TurnSplit::Flat, TurnSplit::BoardMove}) {
+    SearchParams p = sync_params();
+    p.hunt = p.settling = false;
+    p.split = split;
+    SearchParams plain = p;
+    plain.asset_map = false;
+    Search steered(s, p);
+    Search unsteered(s, plain);
+    run_all(steered, *uniform, 40);
+    run_all(unsteered, *uniform, 40);
+    const double k0_on = steered.node(steered.root()).k0;
+    const double k0_off = unsteered.node(unsteered.root()).k0;
+    if (split == TurnSplit::Flat) {
+      CHECK_EQ(k0_on, k0_off);
+      double sum = 0;
+      std::size_t boosted = 0;
+      for (const RootChild& c : steered.root_children()) {
+        sum += c.prior_noise_free;
+        if (c.boost > 0) ++boosted;
+        if (c.boost > 0) CHECK(c.prior_noise_free >= c.prior_unsteered);
+      }
+      CHECK(boosted > 0);
+      CHECK(std::abs(sum - 1.0) < 1e-9);
+    } else {
+      CHECK(k0_on != k0_off);
+    }
+  }
+}
+
+TEST(ladder_pv_scans_are_debounced_capped_and_deduplicated) {
+  // Reviewer B (kills M05, no debounce, and M06, no cap); the deduplication
+  // (M07) in the next test.
+  const GameState s = variant("Standard - Two Timelines");
+  const std::unique_ptr<Evaluator> random = make_evaluator(BuiltinEvaluator::Random, 7);
+  SearchParams p = sync_params();
+  p.hunt = false;
+  p.settling_root = false;
+  p.asset_map = false;
+  p.sync_job_nodes = 500;
+  p.settling_debounce = 1;
+  p.settling_max_scans = 1000;
+  {
+    Search search(s, p);
+    run_all(search, *random, 200);
+    REQUIRE(count_jobs(search, LadderJob::PvSettling) > 1);
+    std::vector<GameState> seen;
+    for (const LadderVerdict& v : search.verdicts()) {
+      if (v.job != LadderJob::PvSettling) continue;
+      for (const GameState& t : seen) CHECK(!(t == v.position));  // each asked once per decision
+      seen.push_back(v.position);
+    }
+  }
+  {
+    SearchParams q = p;
+    q.settling_max_scans = 1;
+    Search search(s, q);
+    run_all(search, *random, 200);
+    CHECK_EQ(count_jobs(search, LadderJob::PvSettling), std::size_t{1});
+  }
+  {
+    SearchParams q = p;
+    q.settling_debounce = 1'000'000;
+    Search search(s, q);
+    run_all(search, *random, 200);
+    CHECK(search.stats().pv_changes > 0);
+    CHECK_EQ(count_jobs(search, LadderJob::PvSettling), std::size_t{0});
+  }
+}
+
+TEST(ladder_a_pv_returning_to_an_earlier_line_is_not_scanned_again) {
+  // Kills M07 (PV scans not deduplicated): searches whose most visited child
+  // returns to an earlier one (its line's turn start already scanned this
+  // decision - under the flat form at once, a whole turn being one step) ask
+  // each position once. (Reviewer B's loop over 24 searches, made sure to
+  // meet returns: these seeds' PVs return 3 to 7 times.)
+  std::size_t returns = 0;
+  struct Case {
+    const char* name;
+    TurnSplit split;
+    std::uint64_t seed;
+  };
+  for (const Case& c : {Case{"Very Small - Open", TurnSplit::Flat, 1}, Case{"Very Small - Open", TurnSplit::Flat, 3},
+                        Case{"Standard", TurnSplit::Flat, 1}, Case{"Standard", TurnSplit::BoardMove, 2},
+                        Case{"Standard - Two Timelines", TurnSplit::BoardMove, 2}}) {
+    const GameState s = variant(c.name);
+    const std::unique_ptr<Evaluator> random = make_evaluator(BuiltinEvaluator::Random, c.seed);
+    SearchParams p = sync_params();
+    p.split = c.split;
+    p.hunt = false;
+    p.settling_root = false;
+    p.asset_map = false;
+    p.sync_job_nodes = 200;
+    p.settling_debounce = 1;
+    p.settling_max_scans = 100'000;
+    Search search(s, p);
+    run_all(search, *random, 600);
+    std::vector<std::size_t> led;
+    for (const PvChange& ch : search.pv_changes()) {
+      if (std::find(led.begin(), led.end(), ch.to) != led.end()) ++returns;
+      led.push_back(ch.to);
+    }
+    std::vector<GameState> seen;
+    for (const LadderVerdict& v : search.verdicts()) {
+      if (v.job != LadderJob::PvSettling) continue;
+      for (const GameState& t : seen) CHECK(!(t == v.position));  // each asked once per decision
+      seen.push_back(v.position);
+    }
+    CHECK(seen.size() < search.pv_changes().size());
+  }
+  CHECK(returns >= 10);
+}
+
+TEST(ladder_settling_disproves_and_keeps_its_table_across_the_game) {
+  // Reviewer B (kills L09, a prove-only settling prover, and L10, a fresh
+  // settling prover per job - H17).
+  const GameState s = game({"[k4/5/5/5/4K:0:1:w]"}, k5x5);
+  VerificationLadder ladder(ladder_options(sync_params()), s.rules(), s.multiverse().ruleset());
+  std::uint64_t first = 0;
+  for (int round = 0; round < 2; ++round) {
+    ladder.begin_decision();
+    ladder.ask(LadderJob::RootSettling, s, {}, 3, 0, 200'000);
+    const std::vector<LadderVerdict> got = ladder.take();
+    REQUIRE_EQ(got.size(), std::size_t{1});
+    CHECK(got[0].status == ProofStatus::Disproven);
+    if (round == 0) {
+      first = got[0].stats.nodes;
+    } else {
+      CHECK(got[0].stats.nodes < first);  // the game's prover remembers its disproof
+    }
+  }
+}
+
+TEST(ladder_asset_root_only_steers_the_root_alone) {
+  // Reviewer B (kills M18, asset_root_only ignored).
+  const GameState s = asset_position();
+  const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
+  SearchParams p = sync_params();
+  p.hunt = p.settling = false;
+  p.asset_root_only = true;
+  Search root_only(s, p);
+  run_all(root_only, *uniform, 300);
+  std::size_t boosted_children = 0;
+  for (const RootChild& c : root_only.root_children()) boosted_children += c.boost > 0 ? 1u : 0u;
+  CHECK(boosted_children > 0);
+  CHECK(root_only.stats().asset_boosted_edges <= root_only.root_children().size());
+}
+
+TEST(ladder_was_pv_and_peak_share_follow_the_pv_changes) {
+  // Reviewer B (kills M11, was_pv never set, and M12, peak_share the last
+  // share).
+  const GameState s = variant("Standard - Two Timelines");
+  const std::unique_ptr<Evaluator> random = make_evaluator(BuiltinEvaluator::Random, 3);
+  SearchParams p = sync_params();
+  p.hunt = p.settling = false;
+  p.asset_map = false;
+  Search search(s, p);
+  run_all(search, *random, 400);
+  const std::vector<RootChild> kids = search.root_children();
+  REQUIRE(!search.pv_changes().empty());
+  for (const PvChange& c : search.pv_changes()) {
+    REQUIRE(c.to < kids.size());
+    CHECK(kids[c.to].was_pv);
+    CHECK(kids[c.to].peak_share + 1e-12 >= static_cast<double>(c.to_visits) / c.root_visits);
+  }
+}
+
+TEST(ladder_self_play_runs_without_the_asset_map_by_default) {
+  // The E10 review (issues 179, 189): until I2's steered visits are validated,
+  // self-play's default search has the map off - its records steer nothing -
+  // while the search's own default (and match play's) keeps it on.
+  CHECK(SearchParams{}.asset_map);
+  CHECK(!PlayParams{}.search.asset_map);
+  CHECK(!self_play_search_defaults().asset_map);
+  CHECK(self_play_search_defaults().root_noise);
+  const GameState s = asset_position();  // a position the map would steer
+  const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
+  PlayParams pp;
+  pp.search.expand.square_features = SquareFeatures::None;
+  pp.search.synchronous = true;
+  pp.playouts = 48;
+  pp.max_actions = 3;
+  const GameRecord g = play_game(s, *uniform, pp);
+  REQUIRE(g.actions.size() >= 1);
+  CHECK_EQ(g.asset_boosted_edges, std::uint64_t{0});
+  CHECK_EQ(g.steered_visits, std::uint64_t{0});
+  pp.search.asset_map = true;  // a caller may still turn it on
+  const GameRecord on = play_game(s, *uniform, pp);
+  CHECK(on.asset_boosted_edges > 0);
+}
+
+// ---- A certificate E4 rejects, through each gate ---------------------------------------------
+
+TEST(ladder_a_proof_whose_certificate_e4_rejects_never_enters) {
+  // The seam (VerificationLadder::set_verdict_hook_for_tests) substitutes
+  // mate_in_one's certificate for the proof of mate_in_two's root: with the
+  // channel on, E4 does not confirm it, so it is Unconfirmed - counted, the
+  // tree untouched by it - where the true certificate is Injected (kills B's
+  // M32: the check skipped). Guard's hook likewise: a refutation whose
+  // certificate E4 rejects rejects nothing (kills S02).
+  const GameState two = t5d_test::v3::mate_in_two();
+  const std::shared_ptr<const ProofCertificate> wrong = foreign_certificate();
+  const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
+  for (const bool tamper : {false, true}) {
+    SearchParams p = sync_params();
+    p.proof_channel = true;
+    p.asset_map = false;
+    p.settling_max_scans = 0;  // the root's question alone
+    auto ladder = std::make_shared<VerificationLadder>(ladder_options(p), two.rules(), two.multiverse().ruleset());
+    std::size_t substituted = 0;
+    bool premise = true;
+    if (tamper) {
+      ladder->set_verdict_hook_for_tests([&](LadderVerdict& v) {
+        if (v.status != ProofStatus::Proven) return;
+        premise = premise &&
+                  check_certificate(*wrong, v.position, v.proof.distance).verdict != CertificateVerdict::Confirmed;
+        v.certificate = wrong;
+        ++substituted;
+      });
+    }
+    Search search(two, p, 0, nullptr, ladder);
+    search.run(*uniform, Limits{4});
+    REQUIRE(premise);
+    std::size_t proven = 0;
+    for (const LadderVerdict& v : search.verdicts()) {
+      if (v.status != ProofStatus::Proven) continue;
+      ++proven;
+      CHECK(v.certificate_checked);
+      CHECK(v.use == (tamper ? ProofUse::Unconfirmed : ProofUse::Injected));
+      CHECK((v.certificate_verdict == CertificateVerdict::Confirmed) == !tamper);
+    }
+    REQUIRE_EQ(proven, std::size_t{1});
+    CHECK_EQ(search.stats().proofs_unconfirmed, std::uint64_t{tamper ? 1u : 0u});
+    CHECK_EQ(search.stats().proofs_injected, std::uint64_t{tamper ? 0u : 1u});
+    CHECK_EQ(substituted, std::size_t{tamper ? 1u : 0u});
+    CHECK_NOTHROW(search.check_invariants());
+  }
+  // Guard's hook (experiments only: the channel on).
+  const GameState s = blunder_position();
+  const Move rook_away = blunder(s);
+  Favouring ev(rook_away);
+  PlayParams pp;
+  pp.search = sync_params();
+  pp.search.split = TurnSplit::Flat;
+  pp.search.hunt = pp.search.settling = false;
+  pp.search.asset_map = false;
+  pp.search.proof_channel = true;
+  pp.playouts = 2;
+  pp.guard_research_playouts = 64;
+  pp.max_actions = 1;
+  pp.match_play = true;
+  pp.guard_final = true;
+  std::size_t substituted = 0;
+  pp.guard_certificate_hook_for_tests = [&](std::shared_ptr<const ProofCertificate>& c) {
+    c = wrong;
+    ++substituted;
+  };
+  const GameRecord g = play_game(s, ev, pp);
+  REQUIRE_EQ(g.actions.size(), std::size_t{1});
+  CHECK(substituted >= 1);
+  CHECK(g.guard_refutations >= 1);                 // Guard refuted it ...
+  CHECK_EQ(g.guard_rejections, std::uint64_t{0});  // ... but an unconfirmed refutation rejects nothing
+  CHECK(g.actions[0].size() == 1 && g.actions[0][0] == rook_away);
+}
+
+// ---- The carried mate --------------------------------------------------------------------------
+
+TEST(ladder_a_turn_starts_mate_is_carried_through_the_actions_fresh_decisions) {
+  // Under the ply split a decision is one move: the mate proven at the turn
+  // start (the root's settling scan here) is carried by the game's ladder into
+  // the next fresh search's decision - a verdict with carried set, injected
+  // (the channel on, test only), the fresh root solved (kills B's M38).
+  const GameState s = t5d_test::v3::mate_in_two();
+  const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
+  SearchParams p = sync_params();
+  p.proof_channel = true;
+  p.asset_map = false;
+  p.settling_max_scans = 0;
+  auto ladder = std::make_shared<VerificationLadder>(ladder_options(p), s.rules(), s.multiverse().ruleset());
+  std::vector<Move> mate;
+  Move first{};
+  {
+    Search start(s, p, 0, nullptr, ladder);
+    start.run(*uniform, Limits{8});
+    REQUIRE(start.root_solved());
+    for (const LadderVerdict& v : start.verdicts()) {
+      if (v.status == ProofStatus::Proven) mate = v.first_action;
+    }
+    REQUIRE(!mate.empty());
+    const RootChild c = start.root_children().at(start.choose().index);
+    REQUIRE_EQ(c.moves.size(), std::size_t{1});
+    first = c.moves[0];
+    CHECK(first == mate.front());
+  }
+  REQUIRE(ladder->carried().has_value());
+  GameState mid = s;
+  mid.apply(first);
+  Search next(mid, p, 1, nullptr, ladder);
+  next.run(*uniform, Limits{4});
+  const LadderVerdict* carried = nullptr;
+  for (const LadderVerdict& v : next.verdicts()) {
+    if (v.carried) carried = &v;
+  }
+  REQUIRE(carried != nullptr);
+  CHECK(carried->use == ProofUse::Injected);
+  CHECK(carried->status == ProofStatus::Proven);
+  CHECK(next.root_solved());
+  CHECK_NOTHROW(next.check_invariants());
+}
+
+// ---- A shared ladder's donor searching on ------------------------------------------------------
+
+TEST(ladder_a_donor_searching_on_takes_nothing_of_its_successors) {
+  // Reviewer A's probe: the game's next search shares the donor's ladder and
+  // begins its decision; the donor, used again, used to take the new search's
+  // verdicts (2 of them, the new search none). Now the donor's decision is
+  // closed: it asks and takes nothing more, and the new search gets its root's
+  // scan.
+  const GameState s = variant("Standard - Two Timelines");
+  const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Random, 2);
+  SearchParams p;
+  p.expand.square_features = SquareFeatures::None;
+  p.verification_threads = 2;
+  p.settling_debounce = 2;
+  p.asset_map = false;
+  Search donor(s, p);
+  donor.run(*ev, Limits{40});
+  donor.await_ladder();
+  const std::size_t before = donor.verdicts().size();
+  GameState t = s;
+  t5d_test::Rng rng(5);
+  const std::optional<std::vector<Move>> a = t5d_test::random_legal_action(t, rng);
+  REQUIRE(a.has_value());
+  for (const Move& m : *a) t.apply(m);
+  t.submit();
+  Search fresh(t, p, 0, nullptr, donor.shared_ladder());
+  fresh.run(*ev, Limits{8});
+  donor.run(*ev, Limits{400});  // nothing forbids it (t5d_search_new_sharing's comment)
+  // Nor a re-root: the donor's new root begins no decision (it would end the
+  // new search's, cancelling its jobs).
+  donor.advance(donor.choose().index);
+  donor.run(*ev, Limits{40});
+  fresh.await_ladder();
+  donor.await_ladder();
+  CHECK_EQ(donor.verdicts().size(), before);  // the donor took nothing more
+  for (const LadderVerdict& v : donor.verdicts()) CHECK(!(v.position == fresh.root_state()));
+  CHECK_EQ(count_jobs(fresh, LadderJob::RootSettling), std::size_t{1});
+  for (const LadderVerdict& v : fresh.verdicts()) CHECK(v.use != ProofUse::Foreign);
+  CHECK_EQ(donor.stats().proofs_foreign + fresh.stats().proofs_foreign, std::uint64_t{0});
+  CHECK_NOTHROW(donor.check_invariants());
+  CHECK_NOTHROW(fresh.check_invariants());
+}
+
+// ---- A decision's end cancels its running job ---------------------------------------------------
+
+TEST(ladder_a_decisions_end_cancels_its_running_job) {
+  // Kills B's L04 (end_decision not setting the cancel flag), L08 (async jobs
+  // not given it) and P01 (the prover ignoring it): a settling scan with no
+  // clock and a 500M-node budget on a position the provers do not decide in
+  // seconds - minutes of work - is ended within a generous bound (10 s: a
+  // correctness bound, not a timing measurement), counted cancelled.
+  const GameState s = long_position();
+  SearchParams p;
+  p.verification_threads = 1;
+  VerificationLadder ladder(ladder_options(p), s.rules(), s.multiverse().ruleset());
+  const std::uint64_t d = ladder.begin_decision();
+  ladder.ask(LadderJob::RootSettling, s, {}, 5, 0, 500'000'000);
+  std::this_thread::sleep_for(std::chrono::milliseconds(200));  // the worker takes it up
+  const auto t0 = std::chrono::steady_clock::now();
+  ladder.end_decision(d);
+  const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+  CHECK(seconds < 10.0);
+  CHECK_EQ(ladder.pending(), std::size_t{0});
+  const VerificationLadder::Stats st = ladder.stats();
+  CHECK_EQ(st.cancelled, std::uint64_t{1});
+  CHECK_EQ(st.answered + st.discarded + st.contradictions, std::uint64_t{0});
+  CHECK(ladder.take().empty());
+}
+
+TEST(ladder_a_re_root_ends_the_decision_and_its_jobs) {
+  // Kills B's M35 (a re-root not ending the decision): a long Hunt (60 s) at
+  // the root is cancelled by advance() - nothing pending right after it.
+  // And a verdict that finished but was not yet taken when its decision
+  // ended: Expired with the channel on (Withheld off) - never placed.
+  const GameState s = long_position();
+  const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
+  {
+    SearchParams p;
+    p.expand.square_features = SquareFeatures::None;
+    p.settling = false;  // Hunt alone at the root
+    p.asset_map = false;
+    p.hunt_ms = 60'000;
+    p.verification_threads = 1;
+    Search search(s, p);
+    search.run(*uniform, Limits{8});
+    REQUIRE_EQ(search.shared_ladder()->pending(), std::size_t{1});
+    const auto t0 = std::chrono::steady_clock::now();
+    search.advance(search.choose().index);
+    CHECK(std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count() < 10.0);
+    CHECK_EQ(search.shared_ladder()->pending(), std::size_t{0});
+    CHECK_EQ(search.stats().ladder_cancelled, std::uint64_t{1});
+  }
+  const GameState m1 = t5d_test::v3::mate_in_one();
+  for (const bool channel : {true, false}) {
+    bool seen = false;
+    for (int attempt = 0; attempt < 50 && !seen; ++attempt) {
+      SearchParams p;
+      p.expand.square_features = SquareFeatures::None;
+      p.settling = false;
+      p.asset_map = false;
+      p.proof_channel = channel;
+      p.verification_threads = 1;
+      Search search(m1, p);
+      search.run(*uniform, Limits{1});
+      if (!search.verdicts().empty()) continue;  // Hunt answered within the run: taken live
+      search.shared_ladder()->wait_idle();       // it finished; not yet taken
+      search.advance(0);
+      REQUIRE_EQ(search.verdicts().size(), std::size_t{1});
+      const LadderVerdict& v = search.verdicts().front();
+      REQUIRE(v.status == ProofStatus::Proven);
+      CHECK(v.use == (channel ? ProofUse::Expired : ProofUse::Withheld));
+      CHECK_EQ(search.stats().proofs_expired, std::uint64_t{channel ? 1u : 0u});
+      CHECK_EQ(search.stats().proofs_injected, std::uint64_t{0});
+      seen = true;
+    }
+    CHECK(seen);
+  }
+}
+
+// ---- The evaluation cache holds the network's evaluations, never steered ------------------------
+
+TEST(ladder_the_cache_holds_the_evaluators_evaluations_with_the_map_on) {
+  // §15.2's C19-C21 row (reviewer A's L4: the claim was untested): every
+  // position both searches evaluated has the same cached evaluation with the
+  // map on as with it off - logit for logit, WDL and value.
+  const std::unique_ptr<Evaluator> random = make_evaluator(BuiltinEvaluator::Random, 5);
+  for (const GameState& s : {asset_position(), variant("Standard - Two Timelines")}) {
+    SearchParams p = sync_params();
+    p.hunt = p.settling = false;
+    SearchParams plain = p;
+    plain.asset_map = false;
+    Search with(s, p);
+    Search without(s, plain);
+    with.run(*random, Limits{200});
+    without.run(*random, Limits{200});
+    std::size_t compared = 0;
+    for (NodeId id = 0; id < with.node_count(); ++id) {
+      const NodeView n = with.node(id);
+      if (!n.evaluated || n.inherited) continue;
+      const Evaluation* a = with.cache()->find(n.key, n.moves_made, with.epoch(), *n.state, false);
+      const Evaluation* b = without.cache()->find(n.key, n.moves_made, without.epoch(), *n.state, false);
+      if (a == nullptr || b == nullptr) continue;
+      ++compared;
+      CHECK(a->logits == b->logits);
+      CHECK(a->wdl == b->wdl);
+      CHECK(a->value == b->value);
+    }
+    CHECK(compared > 20);
+  }
 }

@@ -147,6 +147,9 @@ int main(int argc, char** argv) {
   BuiltinEvaluator evaluator = BuiltinEvaluator::Uniform;
   PlayParams params;
   params.search.expand.square_features = SquareFeatures::None;  // the built-ins read none
+  // Match play's table (6b''): the asset map on (--no-assets), though play_game's
+  // self-play default turns it off (I2's steered visits unvalidated, issue 179).
+  params.search.asset_map = true;
   params.turn_cap.turns = 20;
   params.turn_cap.boards = 300;
   RuleOptions rules;

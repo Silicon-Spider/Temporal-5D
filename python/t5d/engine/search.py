@@ -217,7 +217,7 @@ class RootChild:
     child_key: int  # the child node's key; 0: no child node yet
     prior_noise_free: float  # the prior before the root noise (after the temperatures)
     value_variance: float  # of the values backed up through it
-    boost: float  # stage E10: steering's share of prior_noise_free (prior_noise_free - prior_unsteered)
+    boost: float  # stage E10: prior_noise_free - prior_unsteered (signed: < 0 for an unboosted child when steered)
     exploration_scale: float  # E3's factor (1: off)
     forced_visits: int  # 0: forced playouts not built (pruning is target-side, §12.5)
     steered_visits: int  # stage E10: visits a steering source decided (I2: the targets exclude them)

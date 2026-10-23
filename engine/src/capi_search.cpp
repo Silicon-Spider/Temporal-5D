@@ -266,6 +266,8 @@ SearchParams params_from(const t5d_search_params* c) {
   p.hunt_suggest = boolean(c->hunt_suggest, "hunt_suggest");
   p.hunt_suggest_boost = c->hunt_suggest_boost;
   p.ladder_certify = boolean(c->ladder_certify, "ladder_certify");
+  p.boost_cap = c->boost_cap;
+  p.hunt_with_settling = boolean(c->hunt_with_settling, "hunt_with_settling");
   return p;
 }
 
@@ -481,6 +483,8 @@ constexpr LayoutEntry kLayout[] = {
     T5D_SEARCH_AT(t5d_search_params, hunt_suggest),
     T5D_SEARCH_AT(t5d_search_params, hunt_suggest_boost),
     T5D_SEARCH_AT(t5d_search_params, ladder_certify),
+    T5D_SEARCH_AT(t5d_search_params, boost_cap),
+    T5D_SEARCH_AT(t5d_search_params, hunt_with_settling),
     T5D_SEARCH_AT(t5d_search_params, expand),
 
     T5D_SEARCH_SIZE(t5d_leaf),
@@ -744,6 +748,8 @@ void t5d_search_params_default(t5d_search_params* out) {
   out->hunt_suggest = flag(p.hunt_suggest);
   out->hunt_suggest_boost = p.hunt_suggest_boost;
   out->ladder_certify = flag(p.ladder_certify);
+  out->boost_cap = p.boost_cap;
+  out->hunt_with_settling = flag(p.hunt_with_settling);
 }
 
 t5d_status t5d_search_new(const t5d_game* game, int32_t turn_start, const t5d_search_params* params,

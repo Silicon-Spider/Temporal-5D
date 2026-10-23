@@ -663,7 +663,8 @@ GuardOutcome ask_guard(const GameState& turn_start, const std::vector<std::strin
   go.threads = o.threads;
   go.prover.max_tree_nodes = o.tree_cap;
   go.prover.record_certificate = true;
-  const GuardResult r = guard(turn_start, moves, ProveBudget::nodes(o.guard_nodes), go);
+  GuardResult r = guard(turn_start, moves, ProveBudget::nodes(o.guard_nodes), go);
+  if (o.certificate_hook_for_tests && r.refuted) o.certificate_hook_for_tests(r.certificate);
   out.asked = true;
   out.completed_depth = r.completed_depth;
   out.refuted = r.refuted;
@@ -702,9 +703,13 @@ MateOutcome ask_mate(const GameState& turn_start, const RunOptions& o) {
     return p;
   };
   Prover lit(options(true));
-  const ProveResult a = lit.prove(turn_start, ProveBudget::nodes(o.mate_nodes));
+  ProveResult a = lit.prove(turn_start, ProveBudget::nodes(o.mate_nodes));
   Prover def(options(false));
-  const ProveResult b = def.prove(turn_start, ProveBudget::nodes(o.mate_nodes));
+  ProveResult b = def.prove(turn_start, ProveBudget::nodes(o.mate_nodes));
+  if (o.certificate_hook_for_tests) {
+    if (a.status == ProofStatus::Proven) o.certificate_hook_for_tests(a.certificate);
+    if (b.status == ProofStatus::Proven) o.certificate_hook_for_tests(b.certificate);
+  }
   out.nodes = a.stats.nodes + b.stats.nodes;
   const ProveResult* m = nullptr;
   if (a.status == ProofStatus::Proven) m = &a;

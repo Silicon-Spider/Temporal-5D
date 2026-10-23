@@ -62,7 +62,9 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <iosfwd>
+#include <memory>
 #include <map>
 #include <optional>
 #include <string>
@@ -205,6 +207,10 @@ struct RunOptions {
   std::size_t tree_cap = std::size_t{2} << 20;
   int threads = 1;  ///< the provers' (1: deterministic)
   CertificateCheckOptions check;
+  /// TESTS ONLY: applied to each certificate before E4 checks it (Guard's
+  /// refutation, our mate's proof) - the seam that feeds the runner a
+  /// certificate E4 rejects. Null (the default): none.
+  std::function<void(std::shared_ptr<const ProofCertificate>&)> certificate_hook_for_tests;
 };
 
 struct GuardOutcome {

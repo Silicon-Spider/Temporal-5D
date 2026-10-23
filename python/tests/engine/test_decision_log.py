@@ -12,9 +12,11 @@ from pathlib import Path
 
 import pytest
 
-from t5d.engine.capi import load_library
+from t5d.engine.capi import T5D_EVALUATOR_RANDOM, load_library
 from t5d.engine.evaluator import UniformEvaluator
+from t5d.engine.game import Game
 from t5d.engine.netplay import DECISIONS_FORMAT, SMALL, PlayConfig, decision_log_lines, play_game
+from t5d.engine.search import Search, search_params
 from t5d.net import NetConfig
 from tests.engine.helpers import requires_engine
 
@@ -69,3 +71,49 @@ def test_netplays_decision_log_is_read_by_t5d_audit(tmp_path):
     assert len([line for line in results.read_text(encoding="utf-8").splitlines() if line]) == len(rows) - 1
     out = subprocess.run([str(exe), "report", str(results)], capture_output=True, text=True, check=False)
     assert out.returncode == 0 and "finals" in out.stdout, out.stderr
+
+
+@requires_engine
+def test_was_pv_and_peak_share_reach_python():
+    # The E10 review (reviewer B's Y01): was_pv mirrored from the C field (the most visited child led
+    # at its end), peak_share at least each child's final share.
+    lib = load_library()
+    game = Game.variant("Standard - Two Timelines")
+    try:
+        with Search(game, params=search_params(lib, synchronous=1, hunt=0, settling=0, asset_map=0)) as s:
+            s.run(T5D_EVALUATOR_RANDOM, 300, seed=3)
+            kids = s.children()
+            best = max(kids, key=lambda c: c.visits)
+            assert best.was_pv
+            assert all(not c.was_pv for c in kids if c.visits == 0)
+            root = s.info().root_visits
+            assert all(c.peak_share + 1e-12 >= c.visits / root for c in kids)
+    finally:
+        game.close()
+
+
+@requires_engine
+def test_decision_log_lines_never_demote_the_chosen_child():
+    # The E10 review (reviewer B's Y06): with demotion_share 0 every child but the chosen one is a
+    # demotion.
+    cfg = PlayConfig(
+        variant="Very Small - Open",
+        split="ply",
+        playouts=12,
+        cap_turns=4,
+        cap_boards=40,
+        max_actions=3,
+        decision_log=True,
+        hunt=False,
+        settling=False,
+        asset_map=False,
+    )
+    res = play_game(UniformEvaluator(), cfg, net_cfg=NetConfig(**SMALL))
+    rows = [json.loads(line) for line in decision_log_lines(res, demotion_share=0.0)]
+    for d in res.decision_log:
+        if d["action"] >= len(res.actions):
+            continue
+        demoted = [r for r in rows if r.get("category") == "demotion" and r["action"] == d["action"] and r["decision"] == d["decision"]]
+        assert len(demoted) == len(d["children"]) - 1
+        chosen = d["children"][d["chosen"]]["step"]
+        assert all(r["step"] != chosen for r in demoted) or sum(c["step"] == chosen for c in d["children"]) > 1

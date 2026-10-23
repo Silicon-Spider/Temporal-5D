@@ -7,7 +7,10 @@
 // default in its range):
 //  * HUNT (H43, t5d/hunt.hpp) at a decision's root - a turn start - under 100
 //    boards: do WE have a forced mate within 5 half-turns? Prove-only: a stop
-//    claims nothing. A fresh prover each question.
+//    claims nothing. A fresh prover each question. Where the root's settling
+//    scan is asked (under 50 boards) that scan asks the same question in the
+//    same class and depth, and Hunt is not asked (SearchParams::
+//    hunt_with_settling; the E10 review - build-log spec issue 181).
 //  * THE FULL SETTLING SCANS (6b' (A): df-pn, the prover's default class,
 //    depth 5) under 50 boards: at a turn-start root (our mate - proven,
 //    disproven or unknown), and at each PV change, at the opponent's turn
@@ -18,7 +21,9 @@
 //    its own stores - never the permanent solved store, H19).
 //  * THE ASSET MAP (H13, t5d/assets.hpp): each superseded board assessed once
 //    per game, on the search's thread (deterministic), its boosts on travel
-//    moves' priors (the search's set_priors; SearchParams::boost_rule).
+//    moves' priors (the search's set_priors; SearchParams::boost_rule). Off in
+//    self-play by default until I2's steered visits are validated
+//    (t5d/selfplay.hpp; issue 179).
 //  * GUARD (H42) is adopted in no range: its hook is the driver's, OFF
 //    (PlayParams::guard_final, t5d/selfplay.hpp).
 // Not built: rungs 1, 3 and 5, the NNUE (M5); a lazily expanded Hunt root
@@ -28,13 +33,18 @@
 //
 // THE SCHEDULER (H14, M13: "its five cores serve Hunt, the settling scans and
 // the audit lane"). One worker thread per ladder runs the jobs one at a time,
-// in the order asked - the root's Hunt, then its settling scan, then the PV
+// in the order asked - the root's Hunt or its settling scan, then the PV
 // changes' scans (a priority order the documents leave unstated: issue 182) -
 // each prover on SearchParams::verification_threads threads (5) under its
 // budget (50 ms: 6b''s measured configuration). The search never waits for a
 // job: verdicts reach it between batches. A decision's end - the search
 // destroyed or re-rooted - cancels its running job (ProveBudget::cancel) and
-// drops its queued ones: NO JOB OUTLIVES ITS DECISION. The asset map runs on
+// drops its queued ones: NO JOB OUTLIVES ITS DECISION. Every verdict carries
+// its decision's number; a search asks and takes only for its own decision
+// (ask_for, take(decision)) - so a search whose decision another search sharing
+// the ladder has ended (the game's next search began) gets nothing more from it
+// (the review of E10 found a still-live donor taking its successor's verdicts).
+// The asset map runs on
 // the search's thread, on the movegen the search uses (its assessments are
 // once per board, 128 nodes each - H13's "small, fixed").
 //
@@ -60,6 +70,7 @@
 #include <cstdint>
 #include <deque>
 #include <exception>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -88,6 +99,9 @@ struct LadderVerdict {
   explicit LadderVerdict(GameState state) : position(std::move(state)) {}
 
   LadderJob job = LadderJob::Hunt;
+  /// The decision it was asked for (VerificationLadder::begin_decision's
+  /// number; a carried mate's: the decision it was offered in).
+  std::uint64_t decision = 0;
   /// Not asked in this decision: the mate its action carries from the turn
   /// start (VerificationLadder::Carried) - `position` the root during the
   /// action, `first_action` the rest of the mating action.
@@ -109,7 +123,8 @@ struct LadderVerdict {
   ProverStats stats;
   double seconds = 0;
   /// What became of the proof (Proven verdicts; Withheld while the proof
-  /// channel is off), and the certificate's check where one was made.
+  /// channel is off; Expired with it on, where the decision ended before the
+  /// verdict reached the tree), and the certificate's check where one was made.
   ProofUse use = ProofUse::Withheld;
   bool certificate_checked = false;
   CertificateVerdict certificate_verdict = CertificateVerdict::Undecided;
@@ -165,9 +180,16 @@ class VerificationLadder {
   /// sync budget is the caller's to give). `suggest`: Hunt's soft priors.
   void ask(LadderJob job, const GameState& position, std::vector<PathStep> path, int depth, double ms,
            std::uint64_t nodes, bool suggest = false);
+  /// The same for decision `decision` - asked only if it is the current one
+  /// (returns whether it was): a search asks for its own decision only.
+  bool ask_for(std::uint64_t decision, LadderJob job, const GameState& position, std::vector<PathStep> path,
+               int depth, double ms, std::uint64_t nodes, bool suggest = false);
   /// The current decision's verdicts finished since the last take. Rethrows a
   /// job's exception (a contradiction in the rules code: std::logic_error).
   std::vector<LadderVerdict> take();
+  /// The same for decision `decision`: nothing (and no exception) unless it is
+  /// the current one - a search takes its own decision's verdicts only.
+  std::vector<LadderVerdict> take(std::uint64_t decision);
   /// Blocks until no job is queued or running.
   void wait_idle();
   /// Jobs queued or running now.
@@ -190,15 +212,30 @@ class VerificationLadder {
   void carry(Carried c);
   const std::optional<Carried>& carried() const noexcept { return carried_; }
 
-  /// Over the ladder's life.
+  /// Over the ladder's life. Once nothing is pending, asked = answered +
+  /// cancelled + discarded + contradictions + the verdicts not yet taken.
   struct Stats {
     std::uint64_t asked = 0;
-    std::uint64_t answered = 0;   ///< verdicts delivered to their decision
-    std::uint64_t cancelled = 0;  ///< dropped from the queue, or cancelled running
+    std::uint64_t answered = 0;   ///< verdicts taken by their decision
+    std::uint64_t cancelled = 0;  ///< dropped from the queue, or stopped by the cancel flag
+    /// Finished, but their decision ended before it took them (a job finishing
+    /// while end_decision waits for it, or after the decision moved on).
+    std::uint64_t discarded = 0;
+    /// Jobs that threw - a contradiction in the rules code (a prover's
+    /// std::logic_error included): reported on stderr whatever their decision,
+    /// and rethrown by take() where their decision is the current one.
+    std::uint64_t contradictions = 0;
     std::uint64_t threads_started = 0;  ///< worker threads made (one per ladder, lazily)
     double seconds = 0;           ///< in the provers
   };
   Stats stats() const;
+
+  /// TESTS ONLY: a hook each verdict passes through as it is taken (before the
+  /// search sees it) - the seam that feeds the search a certificate E4 rejects,
+  /// so that the "only E4-confirmed proofs enter" gate is exercised. Null: none
+  /// (the default; nothing outside the tests sets one).
+  using VerdictHook = std::function<void(LadderVerdict&)>;
+  void set_verdict_hook_for_tests(VerdictHook hook);
 
  private:
   struct Job {
@@ -227,6 +264,7 @@ class VerificationLadder {
   std::deque<Job> queue_;
   std::vector<LadderVerdict> done_;
   std::exception_ptr error_;
+  VerdictHook hook_;
   bool running_ = false;
   bool quit_ = false;
   std::atomic<bool> cancel_{false};
