@@ -53,8 +53,14 @@ parameter of ``TargetConfig`` with a placeholder default (spec issue 235).
 * **Per-board targets (D4)**: travelled-into - a played move within ``travel_horizon`` turns from
   the decision (its own included) lands on the board by travel (its destination, for a branching
   move the history board it targets) - and timeline-active-at-end; tactical volatility needs proofs
-  and is NaN (masked) until the proof channel is signed off. Per-square labels: no generator yet
-  (NaN, masked - BUILD_LOG's D4 row).
+  and is NaN (masked) until the proof channel is signed off.
+* **Per-square labels (D4, M20, A7)**: ``heads.SQUARE_LABELS``, exact from the rules engine's
+  generator (``Game.square_labels``; engine README, "Per-square labels") on each decision's
+  replayed state - relative to the acting player, as the network reads them - carried by the
+  positions (``selfplay.replay_positions(square_labels=True)``: ``Position.square_labels``),
+  never stored in the record or the targets file: re-derived like the reply prototype's. A label
+  a mate search's budget left undecided is NaN (no target); a decision whose position carries
+  none - a synthetic record's, or targets built without positions - has every label NaN.
 * **Effort (D4, section 8.6)**: full searches only - ``effort_bin(root_best_since, converged)``,
   converged when the most visited child led for at least ``effort_stable_fraction`` of the root's
   visits (issue 154), or when I20's KL rule stopped the search.
@@ -103,6 +109,7 @@ TARGET_SOURCES: dict[str, str] = {
     "effort": "search record (full searches)",
     "opp_reply": "game record",
     "tactical_volatility": "proofs (gated: H23, H41)",
+    "square": "game record (each decision's replayed state, labelled by the rules engine's exact generator)",
 }
 
 #: Game ends with a result (scored): the rest have no WDL or short-term target.
@@ -131,6 +138,8 @@ class TargetConfig:
     effort_stable_fraction: float = 0.5
     effort_bins: int = 16
     reply_ambiguous: str = "move"  # train.reply_map
+    square_labels: bool = True  # D4's per-square labels re-derived at replay (the trainer's replay_positions)
+    square_mate_nodes: int = 200_000  # each arrival_gives_mate search's node budget (the engine's placeholder)
     # I13 (section 12.8): Lc0's threshold; the band a placeholder; cheap searches' choices included.
     deblunder: bool = True
     deblunder_threshold: float = 0.1
@@ -154,6 +163,8 @@ class TargetConfig:
             raise ValueError("provenance_weight in [0, 1], forced_k >= 0, soft_policy_power > 0")
         if self.deblunder_band < 0 or self.travel_horizon < 1 or not 0.0 <= self.effort_stable_fraction <= 1.0:
             raise ValueError("deblunder_band >= 0, travel_horizon >= 1, effort_stable_fraction in [0, 1]")
+        if self.square_mate_nodes < 1:
+            raise ValueError("square_mate_nodes >= 1 (0 would leave every mate label undecided)")
         if self.reply_ambiguous not in AMBIGUOUS_MODES:
             raise ValueError(f"reply_ambiguous must be one of {AMBIGUOUS_MODES}")
         if self.proof_rescoring and not PROOF_CHANNEL_SIGNED_OFF:
@@ -302,6 +313,9 @@ class GameTargets:
     effort: np.ndarray  # (D,) int64; -1: none
     kl: np.ndarray  # (D,) KL(policy target || raw prior); NaN: no target
     reply: list[ReplyMap | None] = field(default_factory=list)  # empty: not computed
+    #: (boards, cells, len(SQUARE_LABELS)) per decision, NaN undecided; empty: not computed (no
+    #: position carried labels). Re-derived from the replayed states, never stored.
+    square: list[np.ndarray] = field(default_factory=list)
 
     def __len__(self) -> int:
         return int(self.full_search.shape[0])
@@ -312,11 +326,19 @@ def _abs_wdl(view: np.ndarray, acting: int) -> np.ndarray:
     return view if acting == 0 else view[::-1].copy()
 
 
-def build_targets(record: GameRecord, cfg: TargetConfig | None = None, *, positions: Sequence | None = None, proofs=None) -> GameTargets:
+def build_targets(
+    record: GameRecord,
+    cfg: TargetConfig | None = None,
+    *,
+    positions: Sequence | None = None,
+    proofs=None,
+    reply: bool | None = None,
+) -> GameTargets:
     """Every target of one game from its record (module docstring). ``positions``: each decision's
     network input (``selfplay.replay_positions``, or kept at generation) - given, the reply
-    prototype's targets are computed too. ``proofs``: I14's source - refused (the proof channel is
-    off)."""
+    prototype's targets are computed too (unless ``reply`` is False), and the per-square labels the
+    positions carry (``Position.square_labels``) are taken. ``proofs``: I14's source - refused (the
+    proof channel is off)."""
     cfg = TargetConfig() if cfg is None else cfg
     cfg.validate()
     if proofs is not None:
@@ -440,9 +462,10 @@ def build_targets(record: GameRecord, cfg: TargetConfig | None = None, *, positi
         lab[:, 2] = math.nan  # tactical volatility: proofs (gated)
         board.append(lab)
 
-    reply: list[ReplyMap | None] = []
-    if positions is not None:
-        reply = reply_targets(record, positions, cfg)
+    replies: list[ReplyMap | None] = []
+    if positions is not None and reply is not False:
+        replies = reply_targets(record, positions, cfg)
+    square = square_targets(record, positions) if positions is not None else []
     return GameTargets(
         policy=policy,
         soft_policy=soft,
@@ -458,7 +481,8 @@ def build_targets(record: GameRecord, cfg: TargetConfig | None = None, *, positi
         board=board,
         effort=effort,
         kl=kl,
-        reply=reply,
+        reply=replies,
+        square=square,
     )
 
 
@@ -512,6 +536,23 @@ def reply_targets(record: GameRecord, positions: Sequence, cfg: TargetConfig) ->
             played.append(k)
         state = _state(positions[i])
         out.append(map_reply(state, [_state(positions[s]) for s in nxt], played, ambiguous=cfg.reply_ambiguous))
+    return out
+
+
+def square_targets(record: GameRecord, positions: Sequence) -> list[np.ndarray]:
+    """D4's per-square targets per decision, from the labels the positions carry
+    (``Position.square_labels``); empty unless every position carries them."""
+    if len(positions) != len(record.decisions):
+        raise ValueError(f"{len(positions)} positions for {len(record.decisions)} decisions")
+    labels = [getattr(p, "square_labels", None) for p in positions]
+    if not labels or any(lab is None for lab in labels):
+        return []
+    out = []
+    for i, (d, given) in enumerate(zip(record.decisions, labels, strict=True)):
+        lab = np.asarray(given, dtype=np.float64)
+        if lab.ndim != 3 or lab.shape[0] != d.n_boards:
+            raise ValueError(f"decision {i}: per-square labels of shape {lab.shape} for {d.n_boards} boards")
+        out.append(lab)
     return out
 
 
@@ -642,6 +683,21 @@ def collate_rows(rows: Sequence[Row], net_cfg) -> tuple:
         if replies[i] is not None:
             opp[i, : replies[i].target.shape[0]] = torch.from_numpy(replies[i].target).float()
 
+    # D4's per-square labels onto the square tokens (board-major: board b's cell c is token
+    # b * (W*H + R) + c, the tokens' storage order - A7 moves none); NaN elsewhere and where a row
+    # has none.
+    square = torch.full((bsz, length, net_cfg.n_square_labels), math.nan)
+    for i, (r, st) in enumerate(zip(rows, states, strict=True)):
+        if not r.targets.square:
+            continue
+        lab = r.targets.square[r.index]
+        cells = int(st.width) * int(st.height)
+        if lab.shape != (st.n_boards, cells, net_cfg.n_square_labels):
+            raise ValueError(f"row {i}: per-square labels of shape {lab.shape} for {st.n_boards} boards of {cells} cells")
+        tpb = st.layout.tokens_per_board
+        tokens = (np.arange(st.n_boards)[:, None] * tpb + np.arange(cells)[None, :]).reshape(-1)
+        square[i, torch.from_numpy(tokens)] = torch.from_numpy(lab.reshape(-1, net_cfg.n_square_labels)).float()
+
     def col(name, dtype=torch.float32):
         return torch.from_numpy(np.stack([np.asarray(getattr(r.targets, name)[r.index]) for r in rows])).to(dtype)
 
@@ -652,7 +708,7 @@ def collate_rows(rows: Sequence[Row], net_cfg) -> tuple:
         short_term=col("short_term"),
         moves_left=col("moves_left"),
         board=board,
-        square=torch.full((bsz, length, net_cfg.n_square_labels), math.nan),
+        square=square,
         effort=col("effort", torch.long),
         submit=submit,
         full_search=col("full_search", torch.bool),
@@ -681,6 +737,7 @@ __all__ = [
     "read_targets",
     "reply_targets",
     "soft_policy",
+    "square_targets",
     "target_differences",
     "wdl_of",
     "write_targets",

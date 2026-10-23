@@ -38,13 +38,23 @@
 //     boards of src_extra(k) outside E(k): what W(k) + E(k) misses of the
 //     policy pointer's source squares.
 //  e. relations - the typed relations of §6 (B11, PROVISIONAL, each off by
-//     default): attack, defence, x-ray. Reserved, not built: pin and check
-//     (they would read check detection, t5d/check.hpp - stage E4 built that,
-//     not these relations), and travel-threat (§6 and
-//     B11 name the relation; §11.1 uses "travel threats" as a class of
-//     forcing moves, "branching moves that create a timeline with an
-//     immediate threat", but no edge - source and target squares - is
-//     defined). Asking for any of the three throws.
+//     default): attack, defence, pin, x-ray, check - B11's five (CHECKPOINT
+//     6 folded travel-threat into attack: a travel threat is a cross-board
+//     attack; its id, 6, stays reserved and is never emitted). Attack, defence
+//     and x-ray are the acting player's (its pieces on the boards its moves
+//     start from); pin and check are read from both sides, each from its own
+//     VIEW (t5d/views.hpp; build-log spec issue 172): the acting player's -
+//     the state - and the opponent's - the multiverse check status passes
+//     (R1), a passed copy's places reported at the board it copies. Pin (spec
+//     issue 173): a slider -> the piece it pins, an enemy that is not royal
+//     standing alone between it and an enemy royal piece the slider would
+//     capture were that piece absent (t5d/movegen.hpp, Kind::Pin). Check (spec
+//     issue 174): a piece -> an enemy royal piece it can capture, by check
+//     detection's own scan (t5d/check.hpp for_each_royal_capture): the
+//     opponent's captures of the acting player's royals in its view - at a turn
+//     start exactly what R1's check status asks - and the acting player's of
+//     the opponent's in the state (C4's test from the other side; empty in
+//     every position reached by legal play).
 //  f. boards - every board, in the canonical order (ascending timeline, then
 //     half-turn), with the network contract's per-board features
 //     (python/t5d/net/state.py): timeline position, half-turn, head,
@@ -104,7 +114,8 @@
 // board alone: board_info()), so a caller that reads only the scope never pays
 // for them. Square features are O(boards x squares) under SquareFeatures::All
 // - the network's full-history input itself - and O(scope x squares) under
-// SquareFeatures::Scope.
+// SquareFeatures::Scope. The pin and check relations allocate (the opponent's
+// view is a multiverse of its own; check detection's scans).
 
 #ifndef T5D_EXPAND_HPP
 #define T5D_EXPAND_HPP
@@ -134,7 +145,9 @@ inline constexpr int kRelationDefence = T5D_RELATION_DEFENCE;
 inline constexpr int kRelationPin = T5D_RELATION_PIN;
 inline constexpr int kRelationXRay = T5D_RELATION_XRAY;
 inline constexpr int kRelationCheck = T5D_RELATION_CHECK;
-inline constexpr int kRelationTravelThreat = T5D_RELATION_TRAVEL_THREAT;
+/// Id 6: reserved, never emitted (once travel-threat - folded into attack at
+/// CHECKPOINT 6, register B11).
+inline constexpr int kRelationReserved = T5D_RELATION_RESERVED;
 
 /// Which boards get per-square features.
 enum class SquareFeatures : std::uint8_t {
@@ -177,9 +190,8 @@ struct ExpandOptions {
   /// budgeted(checks, nodes) bounds its cost (the moves it leaves Unknown).
   LegalityOptions legality{};
 
-  // The typed relations (§6, B11) - PROVISIONAL, each off by default. Only the
-  // subset that check detection cannot change, for the player to move's
-  // pieces on the boards its moves start from:
+  // The typed relations (§6, B11) - PROVISIONAL, each off by default (see the
+  // header comment, e):
 
   /// attack: source square -> the square of the enemy piece a pseudo-legal
   /// capture of (a) takes (en passant: the pawn taken, not the square moved to).
@@ -190,17 +202,14 @@ struct ExpandOptions {
   /// x-ray: a slider's source square -> the second piece along one of its rays
   /// (t5d/movegen.hpp).
   bool xray = false;
-
-  // Reserved: expand() throws std::invalid_argument if one is set.
-
-  /// Would read check detection - what attacks a royal piece; pins follow
-  /// from it (t5d/check.hpp, stage E4; R1, H36). Not built.
+  /// pin: a slider's square -> the enemy piece it pins, each side's sliders in
+  /// its own view (spec issues 172, 173). The expansion then allocates (the
+  /// opponent's view is a multiverse of its own).
   bool pin = false;
-  /// Would read check detection (t5d/check.hpp; R1, H36). Not built.
+  /// check: a piece's square -> an enemy royal piece it can capture, by check
+  /// detection's scan, each side in its own view (spec issues 172, 174). The
+  /// expansion then allocates.
   bool check = false;
-  /// Named by §6 and B11; §11.1's "travel threats" are a class of forcing
-  /// moves, and no edge (source and target squares) is defined.
-  bool travel_threat = false;
 };
 
 /// window_depth() and band_depth() of a board in W(k) for no k: a board of an
@@ -409,7 +418,10 @@ class Expansion {
   std::size_t relation_count() const noexcept { return relation_ints_ / 5; }
   /// Five int32 per relation: source board, source cell, target board, target
   /// cell, relation id (t5d/records.h). Attacks first (in move order, each pair
-  /// once), then defences and x-rays (in generation order).
+  /// once), then the generator's relations of the acting player - defences,
+  /// x-rays and its pins - in generation order, then the opponent's pins (in its
+  /// view's generation order), then checks: the opponent's (in the scan's
+  /// order), then the acting player's.
   std::span<const std::int32_t> relations() const noexcept {
     return {relations_.data(), relation_ints_};
   }
@@ -444,6 +456,10 @@ class Expansion {
   friend void expand(const GameState& state, const ExpandOptions& options, Expansion& out, int moves_made);
 
   void materialize() const;
+  // (e): one relation appended, growing the buffer; and the pins and checks
+  // read from the two views (t5d/views.hpp).
+  void push_relation(int from_board, int from_cell, int to_board, int to_cell, int id);
+  void append_view_relations(const GameState& state, const ExpandOptions& options);
   // The index of the timeline holding a board (0 <= board < board_count()).
   std::size_t timeline_of_board(int board) const noexcept;
   // A board's least k in W(k) or in its band.
@@ -528,8 +544,7 @@ class Expansion {
 /// Expands `state` into `out` (see the header comment), reusing out's storage.
 /// `moves_made`: the moves already made in the action in progress (h; 0 at a
 /// turn start) - the caller's, since no state records it. Throws
-/// std::invalid_argument for a negative window_k, a reserved relation or a
-/// negative moves_made. (Any k >= kNoWindow - 1 is taken as kNoWindow - 1: every
+/// std::invalid_argument for a negative window_k or a negative moves_made. (Any k >= kNoWindow - 1 is taken as kNoWindow - 1: every
 /// band whole.)
 void expand(const GameState& state, const ExpandOptions& options, Expansion& out, int moves_made);
 

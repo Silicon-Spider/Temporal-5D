@@ -453,7 +453,7 @@ it is fixed nothing is confirmed on Linux, and the main loop runs every check
 locally, the nightly tier included, before each merge. **CLAUDE.md's table still says
 "the user's rulings R1-R10"** - the rulebook now has R11 (H51); the instruction files
 are the user's to edit. **Spec issue 156 corrects text the user wrote from our report:** the 5.8 / 27.1 / 64.0% that §8.2's "Measured (CHECKPOINT 8)" paragraph and register M22 call shares of turns with more than one *playable* board are the shares with more than one *mandatory* board (the main loop mislabelled them in the M22 merge, 3d2e73a); the playable shares are 15.1 / 65.2 / 99.4%, so "these bound the mandatory share from above" does not hold - proposed edits 127 and 128 give the corrected text; the ruled build order does not depend on it. Ruled at CHECKPOINT 8: spec issues 122-126, 142 and 204
-("CHECKPOINT 8", above). Put to the user, none blocking: 240 (merged with A8 - the FFN after the embedding (8x, a placeholder) puts A8 at 45x its 15.3 estimate, flagged under the 2x rule; +10-14% per cached node; the concatenation built as a sum; edits 185-186), 238-239 (merged with the precision component - G2's FP8 E4M3 emulation: the pow2 scale rule, granularity, which matmuls, the plain STE, the cache refusing FP8 attention, H800's ~14-bit FP8 accumulation (DeepSeek-V3 3.3.2) for 6w's GPU arm; G8's QAT hook switched in place), 163-171 (merged with D2's flat form - what a turn is and its tie order, what summed logits sum, the leave option and its 0.5 fallback, the prior of a generated turn, E1 under the flat form, generator cost and budget; edits 131-134), 234-237 (merged with M21 - the record's raw root outputs and replay checks, the targets' placeholders, the generator's PCR/I18/I19/I20 parameters, the trainer; 237(a): optimiser steps on synthetic rows only, the main loop's reading of the smoke-step rule; edit 182: G8's QAT hook a seam until the precision component), 231-233 (merged with the heads - D3's shared hidden layer, short-term horizons (2, 5, 16 turns), the error target and HL-Gauss sigma; D4's soft-head width and the reply map's ambiguity and target readings; D9's z, built as register D9 words it - the predicted short-term value, as KataGo does - with W - L the alternative), 157-162 and 301 (merged with D2's tree form - the gates' readings, the present gate deciding most of the saving (160: read literally it fires at every turn's last mandatory move), the inheritance details, the fixed board order not built; the tree form under MCGS refused until ruled, 301), 230 (merged with A6's network side - the turn-state counts' encoding, an MLP over scaled counts beside alternatives; the other colour's refresh view takes derived counts; proposed edit 171), 148-155 (engine ABI round 2's readings: D backed up and moves-left recorded; 6m's consumers and default; the noise's edge set; the shaping form; the root temperature's default; forced playouts not built; the effort label; the legality budget as a recorded condition), 129 (the measurements
+("CHECKPOINT 8", above). Put to the user, none blocking: 172-176 (merged with engine ABI round 3 - B11's pin and check relations: the acting player's check edges empty in every position reached by legal play, its pins x-ray edges onto the royal rather than binding pins, the opponent's checks alone as the alternative, the Q6 fallback dropping the whole pass; D4's labels: the mate label's budget (Unknown masked), the exchange label read on the board the capture creates off the passed boards (67% of its 1s there, was 87% "attacked"); edits 135-136), 240 (merged with A8 - the FFN after the embedding (8x, a placeholder) puts A8 at 45x its 15.3 estimate, flagged under the 2x rule; +10-14% per cached node; the concatenation built as a sum; edits 185-186), 238-239 (merged with the precision component - G2's FP8 E4M3 emulation: the pow2 scale rule, granularity, which matmuls, the plain STE, the cache refusing FP8 attention, H800's ~14-bit FP8 accumulation (DeepSeek-V3 3.3.2) for 6w's GPU arm; G8's QAT hook switched in place), 163-171 (merged with D2's flat form - what a turn is and its tie order, what summed logits sum, the leave option and its 0.5 fallback, the prior of a generated turn, E1 under the flat form, generator cost and budget; edits 131-134), 234-237 (merged with M21 - the record's raw root outputs and replay checks, the targets' placeholders, the generator's PCR/I18/I19/I20 parameters, the trainer; 237(a): optimiser steps on synthetic rows only, the main loop's reading of the smoke-step rule; edit 182: G8's QAT hook a seam until the precision component), 231-233 (merged with the heads - D3's shared hidden layer, short-term horizons (2, 5, 16 turns), the error target and HL-Gauss sigma; D4's soft-head width and the reply map's ambiguity and target readings; D9's z, built as register D9 words it - the predicted short-term value, as KataGo does - with W - L the alternative), 157-162 and 301 (merged with D2's tree form - the gates' readings, the present gate deciding most of the saving (160: read literally it fires at every turn's last mandatory move), the inheritance details, the fixed board order not built; the tree form under MCGS refused until ruled, 301), 230 (merged with A6's network side - the turn-state counts' encoding, an MLP over scaled counts beside alternatives; the other colour's refresh view takes derived counts; proposed edit 171), 148-155 (engine ABI round 2's readings: D backed up and moves-left recorded; 6m's consumers and default; the noise's edge set; the shaping form; the root temperature's default; forced playouts not built; the effort label; the legality budget as a recorded condition), 129 (the measurements
 pinned before H51 - 6b, 6b′, 6b″, Hunt's truth - keep the reading they were made
 under, a written x must capture, so they reproduce; proposed edit 101), 130 (how a
 divergence settled by a project decision is recorded upstream - KD-0170 is neither
@@ -844,6 +844,7 @@ threads reach at least one thread's sum (one retry on a shared machine).
 | 2026-10-23 | engine ABI round 2 (D3's values in the search, E1/I19, I15; reviewed, d30b6eb) | main 1ca8af7 + lane/engine d30b6eb, merged tree before the commit | dev-r, 24 logical; the network lane running; load 51-53% before and after | 32 | 293 / 292 / 293 | 309 / 303 / 302 | none | pass x3 |
 | 2026-10-23 | D2's tree form (reviewed, 2f07079) | main 47bc857 + lane/engine 2f07079, merged tree before the commit | dev-r, 24 logical; the engine and network lanes running; load 51-56% | 32 | 293 / 292 / 293 | 311 / 313 / 310 | none | pass x3 |
 | 2026-10-23 | D2's flat form (reviewed, a05ab6a) | main a937370 + lane/engine a05ab6a, merged tree before the commit | dev-r, 24 logical; the engine and network lanes running; load 10-33% | 32 | 293 / 293 / 293 | 316 / 317 / 315 | none | pass x3; the nightly gate passed on the same tree (480 s; Half Reflected and Reversed Royalty gated) |
+| 2026-10-23 | engine ABI round 3 (B11's pin and check relations, D4's per-square labels; reviewed, 2ed1bc9) | main 9c59cb0 + lane/engine 2ed1bc9, merged tree before the commit | dev-r, 24 logical; the network lane's flat head finishing and the search lane's E10 reviews starting; load 80-88% before, 85-91% after | 32 | 292 / 293 / 293 | 309 / 313 / 307 | none | pass x3; the nightly gate passed in 570 s (Half Reflected and Reversed Royalty gated, as before) |
 
 ## Environment
 
@@ -1646,7 +1647,7 @@ width (M22)", "The CHECKPOINT 8 figures"). Found on the way: the ruling's premis
 | B5 | built, tested | Network N1, behind a flag (off); its as-built details are "v1 placeholders" (Provisional, CHECKPOINT 6; M20), tested by ablation 2 - §4.1 does not state them (edit 9) |
 | B6 | superseded; removed | By B15 (CHECKPOINT 6, reversal 25; M20). Removed from the code with B15 (`lane/net`): `binned_bias`, `binned_bias_rope` (issue 9f) and their fields - no arm survives, ablation 2's arm is B15 on or off. Its log buckets live on in `python/t5d/net/buckets.py` for B12's relative cells (`smolgen_time_*`, `smolgen_timeline_*`; smolgen's 152 cells and 47,136 parameters unchanged, issue 212). Under B15's far-bin placeholder B6 is not B15's special case, which §4.1, the register's B6 row and reversal 25 say it is: beyond the exact classes its per-axis buckets are not kept, only Δtime's sign and the clamp (issue 205, edit 159; put to the user) |
 | B10, B12 | built, tested | Network N2, behind flags (B12 as relative board-pair cells, full rank - the register now records it as built; the cells are the log buckets B6 used, re-homed in `buckets.py` when B6 went - issue 212). The register says smolgen "keeps its own normalisation" (F5); the built smolgen has none (`lane/net`'s issue 202) |
-| B11 | built behind a flag, tested | Network N2; five types since `lane/net`'s N-B11 - attack, defence, pin, x-ray, check: travel-threat folded into attack (CHECKPOINT 6, reversal 26) and dropped from the network's type set (`config.TYPED_RELATIONS`, `state.RELATION_TYPES`; the synthetic generator's cross-board attacks are its travel threats). One scalar per head per type, shared across layers: 8 x 5 = 40 (80 directed; 48 and 96 before), only with `typed_edge_bias` on - the v1's count is unchanged. Live query rows only under the cached configuration (built at N3). The relation ids are the C ABI's: id 6 stays reserved (append-only), never emitted, refused by `PositionState`'s validation. The engine emits attack, defence and x-ray; pin and check - in the type set as the register lists them - stay empty until engine ABI round 1 builds them behind the relation mask. The engine lane's documents still name travel-threat among the network's relation ids (the relation-id comments of `records.h` and `capi.py`, `engine/README.md`'s (e), `convert.py`'s docstring, and `game.py`'s `relation_bits` docstring - "names the network's contract has but the engine does not build (pin, check, travel_threat)"): theirs to bring in line with ABI round 1 |
+| B11 | built behind a flag, tested | Network N2; five types since `lane/net`'s N-B11 - attack, defence, pin, x-ray, check: travel-threat folded into attack (CHECKPOINT 6, reversal 26) and dropped from the network's type set (`config.TYPED_RELATIONS`, `state.RELATION_TYPES`; the synthetic generator's cross-board attacks are its travel threats). One scalar per head per type, shared across layers: 8 x 5 = 40 (80 directed; 48 and 96 before), only with `typed_edge_bias` on - the v1's count is unchanged. Live query rows only under the cached configuration (built at N3). The relation ids are the C ABI's: id 6 stays reserved (append-only), never emitted, refused by `PositionState`'s validation. **Engine ABI round 3** (`lane/engine`, 2026-10-23): the engine emits all five behind the relation mask (`T5D_RELATIONS_PIN`, `_CHECK`; `relations_for` hands a network with B10 or B11 on all five). Pin and check read each side from its own view - the acting player's pieces in the state, the opponent's in the multiverse check status passes (R1), a passed copy's squares reported at the board it copies (issue 172); **check** is check detection's own royal captures (`for_each_royal_capture`, H36 - its predicates called, never changed: the detector cross-checks and the gate unchanged), the opponent's in its view - at a turn start exactly R1's check status, `in_check` iff such an edge, held on random play - and the acting player's in the state (issue 174); **pin** a slider -> the one enemy non-royal between it and an enemy royal it would capture, the move generator's x-ray walk, across timelines and through time (issue 173). Edit 135. Id 6 is `T5D_RELATION_RESERVED` (refused: "reserved"); the engine lane's documents (`records.h`, `capi.h`, `capi.py`, `engine/README.md`'s (e), `convert.py`, `game.py`, `errors.py`) no longer name travel-threat as a relation, and `net/state.py`'s relations paragraph no longer says pin and check stay empty. The network's suite runs with all five on engine positions (`tests/engine`: the mirror test's edges, B11 and B10 on real positions; issue 229's anchor test now allows opponent-sourced pin and check edges). **Review fixes** (2026-10-23): a board played mid-action reported where it stands (check, pin and a label tested - a passed copy's mapping is for passed timelines only); the pin's royal half tested; the C API's pin and check bits tested each alone; Q6's undefined pass found by its precondition and tested (issue 172); the acting player's check edges empty in every position reached by legal play (issue 174, reworded) and its pins x-ray-to-royal edges, not binding pins (issue 173). The source break of `T5D_RELATION_TRAVEL_THREAT`'s removal is recorded in the CHANGELOG (no alias kept) |
 | B3 | not built (rule) | Contingency only; no trigger |
 | B7 | not built (rule) | Deferred; its gate now names ablation 2's head-allocation evidence (issue 121's B7 part closed, M20); no §15.2/§15.3 need (d_head is a config value anyway) |
 | B13 | not built (rule) | Refused |
@@ -1673,7 +1674,7 @@ width (M22)", "The CHECKPOINT 8 figures"). Found on the way: the ruling's premis
 | C21 | not built (rule) | Refused; a mutant that snapshots is caught by the tests |
 | D1 | built, tested | Network N1's pointer policy over the moves the engine supplies - in search, legal or unknown, unknowns verified when first selected (E5a, E6a), as §8.1 now says; the game API's expansion stays pseudo-legal until ABI round 2's `legal_moves` option. The promotion offset (CHECKPOINT 6, M20) is the v1 (`lane/net` N-M20): a learned per-piece logit read from the destination token, always on in the policy - `policy_promotion` and its `none` arm removed (+3,341 parameters). The other pointer heads - D4's soft policy and reply prototype (`lane/net` N-D4), D9's optimistic policy - carry one of their own under `pointer_promotion_offset` (on: a placeholder, issue 222) |
 | D3 | built, tested | The search (engine ABI round 2a): WDL is the search's value - W − L backed up, the draw probability D beside it on every node and edge (issue 148) - the categorical optional and read only as an uncertainty signal (6m's switch, issue 149), the error head's output and moves-left per leaf, all through one deliver call (`t5d_search_deliver_evaluations`); each root child's search (q, d) and network WDL, moves-left and error recorded, and the root's own. The network (`lane/net` N-D3, as corrected at CHECKPOINT 7): four heads over the global registers' mean, FP32, the acting player's perspective (`heads.ValueHeads`) - one shared hidden layer with Mish (N1's value MLP), then WDL (the value search uses, `NetOutput.search_value()` = W − L), the 51-bin categorical over the root search value, short-term values at `short_term_horizons` (2, 5, 16 turns: placeholders, issue 305's unit) on [-1, 1], and the error head (`NetOutput.value_error`, softplus, the name the evaluator reads); N1's 51-bin short value head gone. The evaluator delivers all four's search inputs (WDL, categorical, error, moves-left) through the C step API, tested against the search's record of its root (moves-left's unit - turns, `expm1` of the head's `log1p` - shown with a head biased to 37 turns: the random head's outputs clamp to 0), with the 6m signal present at every leaf under either `uncertainty_source`. Losses (`train/losses.py`): WDL on the result with the `q_ratio` blend (0), the categorical on HL-Gauss of the root search value of full searches only, squared error on the short-term values (missing targets skipped, tested on the loss's value and gradient), Huber on the error head's target - the squared gap between the short-term output, without gradient, and its target: register D9's "predicted short-term value" and KataGo's form (review fixes; the W - L reading, first built, is the alternative for the user, issue 231(c)) - every unstated detail a placeholder (issue 231); the record-to-target builder is M21's. Every parameter that existed before is drawn as before (`d3_seed`; the retired head's draws kept) - pinned by a fingerprint of the pre-D3 parameters recorded on 47bc857 (`tests/net/test_params.py`) |
-| D4 | built, tested (the label generators are step 2's) | Network N1's aux heads: moves-left, effort, per-board, per-square (the label set stands as v1, M20; its colour-specific labels relabelled ours/theirs under A7, `lane/net` N-A7, issue 226). M20 in the code (`lane/net` N-M20): moves-left counts turns - one player's action each (issue 305) - in the head, its helper and the losses' docs (the record-to-target builder is M21's, and so is whether the action in progress counts: issue 224); moves-left and effort read the squares (issue 223); WDL, the short-term value, the value error and the value distribution are D3's value heads (`lane/net` N-D3). CHECKPOINT 7 (`lane/net` N-D4): **the soft policy**, on - its own f and g (width 128) with D1's offset and its own submit logit from the pooled global registers, masked as the policy's (`heads.ActionHead`, `NetOutput.soft_policy_logits`/`soft_submit_logits`), trained on the policy target to the power 1/4 at weight 8 on full searches (`train/losses.py`); **the opponent-reply prototype**, behind `opp_reply` (off), weight 0.15, its move space the opponent's next turn mapped onto the decision point's squares through each new board's lineage with ambiguous mappings masked (`train/reply_map.py`), tested by §15.2's row on constructed turns with travel (a branch, White and Black acting; two branches into one past board, masked at the turn's start and mapped at the decision point between them); the unstated details placeholders (issue 232). Both drawn from generators of their own; N1's always-built reply head gone, its draws kept. The reply map's `ambiguous="turn"` arm is tested on a reply with one masked and one clean played move, and each mapped move's piece checked against the decision board's same cell. The effort loss reads full searches only (§12.4's "full-search moves only"; review fixes). The per-square label generator is step 2's. The effort label's source is in the search (engine ABI round 2c: `root_best_since`, issue 154) |
+| D4 | built, tested (the per-square label generator: engine ABI round 3) | Network N1's aux heads: moves-left, effort, per-board, per-square (the label set stands as v1, M20; its colour-specific labels relabelled ours/theirs under A7, `lane/net` N-A7, issue 226). M20 in the code (`lane/net` N-M20): moves-left counts turns - one player's action each (issue 305) - in the head, its helper and the losses' docs (the record-to-target builder is M21's, and so is whether the action in progress counts: issue 224); moves-left and effort read the squares (issue 223); WDL, the short-term value, the value error and the value distribution are D3's value heads (`lane/net` N-D3). CHECKPOINT 7 (`lane/net` N-D4): **the soft policy**, on - its own f and g (width 128) with D1's offset and its own submit logit from the pooled global registers, masked as the policy's (`heads.ActionHead`, `NetOutput.soft_policy_logits`/`soft_submit_logits`), trained on the policy target to the power 1/4 at weight 8 on full searches (`train/losses.py`); **the opponent-reply prototype**, behind `opp_reply` (off), weight 0.15, its move space the opponent's next turn mapped onto the decision point's squares through each new board's lineage with ambiguous mappings masked (`train/reply_map.py`), tested by §15.2's row on constructed turns with travel (a branch, White and Black acting; two branches into one past board, masked at the turn's start and mapped at the decision point between them); the unstated details placeholders (issue 232). Both drawn from generators of their own; N1's always-built reply head gone, its draws kept. The reply map's `ambiguous="turn"` arm is tested on a reply with one masked and one clean played move, and each mapped move's piece checked against the decision board's same cell. The effort loss reads full searches only (§12.4's "full-search moves only"; review fixes). **The per-square label generator** (engine ABI round 3, `lane/engine`, 2026-10-23): exact from the rules engine (`t5d/labels.hpp`; `t5d_game_square_labels`; `Game.square_labels`) - `heads.SQUARE_LABELS`' eight, in its order, for every square of every board, relative to the acting player (A7) - each side read from its own view (issue 172), each reading a placeholder (issues 175, 176; edit 136): the static exchange (the scanner's H6 values, the swap over captures and recaptures - read where the recapture is made: on a passed board the side's defences, elsewhere on the board the capture creates, Unknown where that cannot be read; review fixes, issue 176(a)), two-move reach and arrival check under the static reading of a piece's next move, the royal zone, and mate after a move that ends a legal action (E4's hypercuboid detector under a 200,000-node budget, undecided -> NaN). Wired into M21: `replay_positions(square_labels=True)` re-derives them from each decision's replayed state - never stored, so the I15 round trip is untouched - `build_targets` carries them (`GameTargets.square`), `collate_rows` puts them on the square tokens, the trainer asks for them. Tested: every label on hand-built positions (`test_views.cpp`: across timelines, through time, from the opponent's view; since the review fixes also the exchange's order, royal value, no x-ray recapturer and its recaptures on created boards, the arrival check's moved-piece rule, the royal zone's whole-turn step, a board played mid-action), A7's mirror on real positions (a position and its colour-swapped mirror give the same labels at the mirrored squares - every label decided and, the mate's included, seen), the C API's labels and counts (`test_capi_game.cpp`) and the NaN mask (`test_binding.py`), the wiring on a generated game. Cost (`docs/MEASUREMENTS.md`, "The per-square labels and the pin and check relations - cost per state"; indicative, no threshold): 0.1-23 ms per state on random-play positions of 10-212 boards after the review fixes (0.1-26 before; the round's first figure, 0.3-38 ms, was one timing each on a loaded machine) - most of it the second moves and, where a move ends a legal action in check, the mate searches; the exchange's replays add up to about 3 ms at 100-200 boards; pin and check add 0.0-0.2 ms to an expansion. The effort label's source is in the search (engine ABI round 2c: `root_best_since`, issue 154) |
 | D5 | not started (rule) | A training principle |
 | D6 | built (flag) | `board_reduction`, awaiting 6j |
 | D7 | built in part (6p's initialisation not) | 6p's aggregate initialisation (training-side) - parked with 6p's other arms. No register is assigned an auxiliary target: D3's value heads and every submit logit (the policy's, the soft policy's, D9's) read the global registers' mean only - tested invariant to permuting them - and every auxiliary head reads squares (`lane/net` N-M20, N-D3, N-D4). B8/§12.4's "registers stay free" against D3's pooled value heads is read through D8's argument (issue 223) |
@@ -1728,7 +1729,7 @@ width (M22)", "The CHECKPOINT 8 figures"). Found on the way: the ruling's premis
 | M18 | not started (rule) | A pilot self-play run before serious self-play re-checks the window and the other compute-weighted decisions - after §15.5, not in the untrained build |
 | M19 | applied | No GPU: counted FLOPs and CPU-labelled wall times (`dev-r`) are the untrained build's write-back; the GPU figures - FA4-class evaluations/s, the leaf-batching gain, FP8, the block-sparse and varlen kernels, the Phase-3 movegen re-check - named as deferred, measured on rented NVIDIA time before the pilot run; the bounded AMD attempt is G9's |
 | M20 | built, tested; the reply prototype parked with the heads (after engine round 2) | The placeholder dispositions (issue 121), each the code's default and its disposed-of arms removed where no named ablation needs them (`lane/net`; A7 is a component of its own). N-M20: the promotion offset in the policy (D1; `policy_promotion` gone); position-free per-board registers and global registers on every pair (B8; `board_register_spatial`, `global_register_pairs` and the learned coordinates gone); aux pooling from squares - moves-left, effort - with D3's value-type heads (WDL and the short value too) pooled from the global registers by mean (`aux_global_pool` gone; issue 223); moves-left in turns (issue 224); the acting player on the global registers (`acting_player_input` and `all_tokens` gone; with no global registers on the board tokens, issue 225; `cache.board_ident`'s `acting` keying kept for A7, issue 303); the submit logit from the pooled registers (D8; `submit_register` gone). Earlier: B6 removed (B15); B16's status biases with intrinsic frozen features (N-B16 - its `frozen_features = "current"` test arm stays, as N-B16 left it: no named ablation needs it, and whether to remove it is the main loop's call - the N-F6heads-M20 review); both supersession readings (C20; docs relabelled). Relabelled, not changed: B5's details (ablation 2), 16a-g (B9's "v1 as built", ablation 6a), the per-square labels (6j) - now v1 values, not placeholders; B7 has no code. Not here: the reply head's reinstatement as a prototype (D4) - the heads' rebuild after engine round 2; until then it is always built, as at N1. Not on M20's list: D8's readout form (`submit_head`, issue 109) |
-| M21 | built, smoke-tested (`lane/net`, commits 1-4 and the review fixes; the QAT hook with the precision component, 2026-10-23) | The training loop, written and smoke-tested, no training (§15.5 does not require it; the pilot run does). Built: I15's records and the generator (commit 1, issue 234); the target builder - I2's pruning with exclusion and provenance, D3's and D4's targets, I13, I14's refused hook, the losses' masks - with §15.2's I15 round trip (commit 2, issue 235); PCR (I5) with I20 behind its flag, I18, I19's schedules, I12's sampler with 6u's and I6's arms, I16's window, I17's SWA (commit 3, issue 236); the loop (`train/trainer.py`, commit 4, issue 237): records -> sampler -> window -> targets -> losses -> at most three optimiser steps -> SWA's published network. Since the review fixes (issue 237(a), the user's rule to the letter): optimiser steps on synthetic rows only, at most three per model whatever the trainer (the count travels with the model and its published copy); self-play records' rows - their inputs rebuilt under the trainer's own register counts, relations and window - go through the loop forward only (losses computed, no step); the miniature generate -> rows -> publish -> generate loop takes its steps on synthetic rows, the published network's SWA snapshot count reaching the next records; the losses falling on a fixed synthetic batch. The QAT hook (G8): built behind its flag, off, on G2's provisional FP8 E4M3 (the user's brief; issue 239, edit 182). Not built: C3's conditioning-offset training - parked with the cached configuration; the per-square label generator (D4, step 2) - its labels masked |
+| M21 | built, smoke-tested (`lane/net`, commits 1-4 and the review fixes; the QAT hook with the precision component, 2026-10-23; D4's labels from engine ABI round 3) | The training loop, written and smoke-tested, no training (§15.5 does not require it; the pilot run does). Built: I15's records and the generator (commit 1, issue 234); the target builder - I2's pruning with exclusion and provenance, D3's and D4's targets, I13, I14's refused hook, the losses' masks - with §15.2's I15 round trip (commit 2, issue 235); PCR (I5) with I20 behind its flag, I18, I19's schedules, I12's sampler with 6u's and I6's arms, I16's window, I17's SWA (commit 3, issue 236); the loop (`train/trainer.py`, commit 4, issue 237): records -> sampler -> window -> targets -> losses -> at most three optimiser steps -> SWA's published network. Since the review fixes (issue 237(a), the user's rule to the letter): optimiser steps on synthetic rows only, at most three per model whatever the trainer (the count travels with the model and its published copy); self-play records' rows - their inputs rebuilt under the trainer's own register counts, relations and window - go through the loop forward only (losses computed, no step); the miniature generate -> rows -> publish -> generate loop takes its steps on synthetic rows, the published network's SWA snapshot count reaching the next records; the losses falling on a fixed synthetic batch. The QAT hook (G8): built behind its flag, off, on G2's provisional FP8 E4M3 (the user's brief; issue 239, edit 182). Not built: C3's conditioning-offset training - parked with the cached configuration. D4's per-square labels come from the engine's generator since engine ABI round 3 (`lane/engine`): re-derived from each record's replayed states (`replay_positions(square_labels=True)`, `TargetConfig.square_labels`, `square_mate_nodes`), never stored - only a label a mate search's budget left undecided is masked (issue 175) |
 | M23 | applied | Every working branch is pushed after each commit and takes main by merge, never rebase. The three lanes and their number blocks are the main loop's plan under this rule ("Current state (2026-10-17)") |
 | M24 | not started (rule) | Ablations on a shared dataset - after the pilot run; what the untrained build owes it is I15's record completeness |
 | M1-M6, M10 | applied | The plan's process rows: the build follows them (this log) |
@@ -4332,6 +4333,140 @@ superseded or made moot says so; nothing is deleted.
     the estimate x1.23), against the ply split's ~3.8 KB (docs/MEASUREMENTS.md, with its
     conditions). For 6x: the fallback's share, the budget and the memory per node by
     board-count range.
+172. **The two views a decision state is read from** (§6 "Typed edge biases", §12.4's
+    per-square row; register B11, D4, A7; rulebook R1, C3, C6). §6 hands the network "the
+    generator's existing output" and §12.4 asks for "deep attack facts", but at a decision
+    state only the acting player's pieces can move (L4, L5): the opponent's captures exist
+    only once the acting player's boards have advanced, and no text says on which multiverse
+    they are read. Read (a placeholder of the committed class, `t5d/views.hpp` `pass_view`):
+    the acting player's pieces on the state itself; the opponent's on **the multiverse check
+    status passes** (R1, C6: `passed_multiverse` - the acting player's active boards in the
+    present that it has not played advanced unchanged; the opponent's pieces on all its
+    playable boards), a passed copy's places reported at the board it copies, (p, present).
+    At a turn start that is R1's check status exactly; mid-action the pass of the boards
+    still to play (none once the present has shifted - then the state itself, C4's position);
+    where the pass is undefined (Q6's alternative: a deferred timeline of the mover's in the
+    present mid-action, which `passed_timelines` refuses) the state itself - no board passed,
+    the non-deferred ones included. *Since the review fixes (2026-10-23) that case is tested
+    (a Deferred reactivation reaching it, `views_the_pass_is_undefined_under_q6s_deferral`)
+    and found by its precondition, tested before `passed_timelines` is called, rather than by
+    catching `std::logic_error` (which would also have swallowed any other error of that
+    family). Alternative for that case: pass the non-deferred timelines alone - it needs a
+    variant of check status's pass (`check.cpp`, unchanged here).* Alternatives, for
+    6j and ablation 2: the opponent's pieces on its playable boards in the state alone (C4's
+    reading - it misses every same-board threat at a turn start, the passed boards being the
+    acting player's), or on every board of its colour (pieces that cannot move next turn).
+    The acting player's view is the state: its pins are x-ray-to-royal edges rather than
+    binding pins, the pinned opponent piece standing on a board of the acting player's
+    colour, which its owner cannot move from until the board advances (issue 173).
+    Edges and labels both read it: issues 173-176; edits 135, 136.
+173. **What pins in 5D** (§6 names "pin"; register B11; the rulebook has no pins - C3: check
+    detection ignores them). Built (a placeholder; `t5d/movegen.hpp`
+    `GeometricRelation::Kind::Pin`): a slider's square -> the piece it pins - along one of its
+    rays, the first piece an enemy that is not royal (4.13, C1: a king or a royal queen,
+    never a common king) and the next an enemy royal piece the slider would capture were the
+    first absent (its board a destination under the ruleset, J2/L4, Q8/Q20) - the x-ray's
+    walk, so across timelines and back through time like any slide (J7, J8; Q18, Q19), a
+    capture that would branch counting (C2). Each side's sliders in its own view (issue 172):
+    the acting player's pins of the opponent's pieces in the state, the opponent's pins of the
+    acting player's pieces on the passed multiverse (the pin its next turn would hold). The
+    acting player's pins are x-ray-to-royal edges, not binding pins: the pinned opponent
+    piece stands on a board of the acting player's colour, which its owner cannot move from
+    until that board advances (review finding A-L2). The royal half of the rule is tested
+    since the review fixes (no pin in front of an enemy that is not royal: Ra1, na4, ba6,
+    ka8), and so is a pin on a board played mid-action (reported where it stands). The
+    target is the pinned piece (the network's synthetic generator's convention); a pinned
+    piece on a board its owner cannot move from (a history board) is still reported: it is the
+    only piece between. Not built: pins by leapers (none exist), "relative" pins (a valuable
+    non-royal behind), a pin of a royal behind another royal (that is a check of the first).
+    Edit 135.
+174. **What checks, and in which direction** (§6: "A check arrives at layer 0 as a typed
+    edge"; register B11; R1, H36). Built: a piece -> an enemy royal piece it can capture, by
+    **check detection's own scan** (`for_each_royal_capture`, `t5d/check.hpp` - called, its
+    behaviour unchanged): the opponent's captures of the acting player's royals in the
+    opponent's view (issue 172) - at a turn start exactly R1's check status: `in_check` holds
+    iff such an edge exists (`views_check_edges_are_check_status_on_random_turn_starts`: 321
+    turn starts of random play in three variants, 9 in check, and the hand-built checks) - then the acting player's captures of the opponent's
+    royals in the state (C4's scan from the other side; empty after any legal submission,
+    kept for positions set up from 5DFEN). Through time and across timelines as the scan
+    reads them (C2: a royal on a history board; R1: a capture that would branch into an
+    inactive timeline counts). Mid-action the pass covers the boards still to play, so a
+    threat on an unplayed mandatory board stays an edge after a move elsewhere (tested).
+    Alternative: the opponent's checks alone - the acting player's are empty in every
+    position reached by legal play (13,750 decision states of random play in three variants,
+    turn starts and mid-action: none; review probe, 2026-10-23), so the channel carries only
+    positions set up from 5DFEN; kept, the alternative left to the user. A check edge on a
+    board the acting player has played mid-action is reported where it stands (tested since
+    the review fixes: a passed copy's mapping applies to passed timelines only), and the C
+    API's pin and check bits are tested each alone. Edit 135.
+175. **The per-square label generator: its interface and the readings every label shares**
+    (§12.4's per-square row; register D4, M20, A7; issues 121, 226). Built (engine ABI round
+    3): `square_labels` (`t5d/labels.hpp`), `t5d_game_square_labels` (`t5d/capi.h`:
+    `t5d_label_options`, `t5d_square_labels`, `T5D_LABEL_*`), `Game.square_labels` - every
+    square of every board in the canonical order, the labels of `heads.SQUARE_LABELS` in its
+    order, relative to the acting player (A7: issue 226's relabelling, "ours" its). Shared
+    readings, each a placeholder: (a) the two views (issue 172); (b) **the static reading** of
+    a piece's next move - from the board its move landed on as it stands, the piece placed
+    there (moved off its square if the move stayed on its board; the captured piece, en
+    passant's pawn and a castling rook handled; a promotion made; no en-passant square), the
+    rest of the multiverse unchanged (`append_moves_from`, `t5d/movegen.hpp`) - rather than
+    R1's (each continuation from the board the move creates, advanced by a pass, as the
+    scanner's `BranchThreat::ArrivalCapture` reads arrivals); (c) a move's square is its
+    destination's (a branching move's, the history board it targets) and a capture's the
+    captured piece's; (d) moves are pseudo-legal; (e) the mate searches' budget, 200,000 nodes
+    each (`T5D_NO_LIMIT`: no node limit - the search's memory limit stays), a square left
+    undecided `T5D_LABEL_UNKNOWN` - NaN, no target (since the review fixes also an exchange
+    whose recaptures cannot be read, 176(a)); `Game.square_labels` refuses a budget below 1,
+    `TargetConfig` a `square_mate_nodes` of 0 (every mate label would be NaN).
+    The targets (M21): re-derived from each decision's replayed state
+    (`replay_positions(square_labels=True)`; `TargetConfig.square_labels`,
+    `square_mate_nodes`), never stored in a record or the targets file, so I15's round trip
+    is untouched and an archive is relabelled when the generator changes. Edit 136.
+176. **Each label's own reading** (`heads.SQUARE_LABELS`' one-line comments; M20 "stand as
+    v1"). (a) `exchange_loses_occupant`: the swap algorithm on an occupied square, begun by
+    the occupant's enemy, over the enemy's captures of the occupant (its view) and the
+    occupant's side's recapturers, least valuable first, each side free to stop; 1 when the
+    first capture wins material (above 0). Values: the scanner's H6 v1 table (issue 56: P
+    100, N 300, B 300, R 500, Q 900, U 250, D 200, S 700, W 125, C 300) and 20,000 for a royal
+    (the asset map's `royal_value`); no x-ray recapturer joins. *As first built the
+    recapturers were the occupant's side's defences of the square in its own view - but a
+    defence relation targets only a board of the defender's colour, so off the passed
+    boards the list was always empty and the label meant "attacked" (review finding A-H1:
+    3,139 of 3,613 squares labelled 1 over 278 random-play turn starts, 87%, on history or
+    unpassed boards). Since the review fixes (2026-10-23; the main loop's ruling)* the
+    recapturers are read where the recapture is made: on a **passed board** (an acting
+    player's board in the present it has not played, the opponent reading its passed copy)
+    the occupant's side answers on the board itself - its defences of the square, as
+    before; on **every other board** (history boards, boards ahead of the present or on
+    inactive timelines, boards already played) it answers on the board the capture
+    **creates** - the enemy's least valuable capture is played (`GameState::apply`: a copy of
+    the board taken on with the capturer placed, the occupant's side to move, the source
+    board advanced, a branching capture's timeline made; the opponent's captures from its
+    view as a turn start of its own), the enemy passes on the boards it still has to play,
+    and the occupant's side's pieces that can then capture the capturer there are the
+    recapturers; where several of the enemy's least valuable pieces can begin, each is tried
+    and the enemy picks the best (A7's mirror test caught a first version that broke the tie
+    by board order). Where that cannot be read - the pass undefined (Q6's alternative), or
+    an opponent's view that is no turn start - the label is `T5D_LABEL_UNKNOWN` (NaN, no
+    target) rather than a guess. The same probe after the fixes: 1,451 squares labelled 1,
+    977 (67%) on history or unpassed boards; of the 3,139 squares replayed there, 977 (31%)
+    still lose the occupant; none Unknown at a turn start. The enemy's further captures are
+    still its list read before the first (static). (b) `reachable_in_two_*`: per piece, the squares of its second moves (b of
+    issue 175) that are not among its first moves' and not its own square, united over the
+    side's pieces. (c) `arrival_gives_check_*`: a move onto the square after which the MOVED
+    piece, under the static reading, captures an enemy royal - a discovered attack is not
+    counted ("from it"). (d) `royal_zone_*`: a royal's own square and every square one king
+    step from it (`geometry::all_directions`: -1, 0, +1 along file, rank, timeline, turn) on
+    a board that exists; the royal's own square included ("within one"). (e)
+    `arrival_gives_mate`: a move after which submitting is legal (T5, C4) and the opponent,
+    at its turn's start, is checkmated (C5: in check, R1, with no legal action - E4's
+    hypercuboid detector); the acting player's only; not a mate in one action whose other
+    moves follow. Alternatives for 6j: R1's reading of (b) and (c), x-ray recapturers in (a),
+    every recapture of (a) read on the board the capture creates (the passed boards
+    included), a mate in one action in (e). Each reading is tested on hand-built positions
+    since the review fixes: the exchange's order, a royal recapturer's value and no x-ray
+    recapturer; the arrival check's moved-piece rule (a discovered attack not counted); the
+    royal zone's whole-turn step through time. Edit 136.
 
 ## Proposed spec edits
 
@@ -5530,6 +5665,30 @@ struck through, where nothing of it is left to apply); the others stand as writt
     to a mid-turn state". Proposed - "a submit edge or a turn edge (the flat form) leads to
     a turn start, a move edge to a mid-turn state; a flat node's turn edges are complete only
     when they reach every successor". Why: issues 169, 170.
+135. **§6 "Typed edge biases" and register B11 (engine ABI round 3)**: now - §6: "the edge
+    list is the generator's existing output; exact-source" and "A check arrives at layer 0 as
+    a typed edge rather than being inferred over several layers"; B11: "Typed edge biases
+    (attack, defence, pin, x-ray, check - travel-threat folded into attack at CHECKPOINT 6),
+    cross-board included". Proposed - §6, after "exact-source": "Pin and check are read from
+    both sides, each from its own view: the acting player's pieces in the state, the
+    opponent's in the multiverse check status passes (R1). A check is check detection's own
+    royal capture (at a turn start exactly R1's check status); a pin is a slider's line
+    through one enemy that is not royal onto an enemy royal piece, the pinned piece the
+    edge's target"; B11 adds "as built: pin and check from both sides' views, check from check
+    detection". Why: issues 172-174 - the spec does not say whose pieces or which multiverse,
+    nor what a pin is in 5D (the rules have none, C3).
+136. **§12.4's per-square row and register D4 (with M20, beside the network lane's edit
+    168)**: now - the row: "Deep attack facts beyond the §6 input bias (label set a
+    placeholder; 6j) | Per square | Generator — exact"; D4: "per-square attack facts (label
+    set a placeholder)". Proposed - the row: "Deep attack facts beyond the §6 input bias - the
+    v1 set (M20): static exchange, reach in two moves, arrival check and royal zone, each ours
+    and theirs, and arrival mate, from the acting player's side (A7; 6j) | Per square | Rules
+    engine — exact, re-derived from each replayed state, never stored; a label the engine
+    cannot decide (a mate search's budget spent, an exchange whose recapture cannot be read)
+    no target"; D4: "per-square attack facts (the v1 set, M20; the rules engine's generator,
+    its readings placeholders)". Why: issues 175, 176 - the generator is built, its readings
+    named, and the targets are re-derived rather than recorded (I15 keeps no per-square
+    label).
 
 ## Session log
 
@@ -5615,3 +5774,19 @@ struck through, where nothing of it is left to apply); the others stand as writt
   preparation; the FFN's form pinned bit for bit; non-square padding, FP32 values and
   `layout_flops` with the flag off tested. The reviewer's survivors each caught. Register A8, M4;
   issue 240(b), (g), (k), (l); edits 185, 186.
+- **2026-10-23 - engine ABI round 3** (`lane/engine`): B11's pin and check relations behind
+  the relation mask - each side read from its own view, the opponent's on the multiverse
+  check status passes; check from check detection's own scan (unchanged: the detectors'
+  cross-checks and the gate as before), pin from the move generator's x-ray walk - and D4's
+  per-square label generator (`t5d/labels.hpp`, `t5d_game_square_labels`, `Game.square_labels`),
+  wired into M21's targets (re-derived at replay, never stored); id 6 `T5D_RELATION_RESERVED`,
+  travel-threat gone from the engine lane's documents. Register B11, D4, M21; issues 172-176;
+  edits 135, 136.
+- **2026-10-23 - engine ABI round 3 review fixes** (`lane/engine`): the exchange label's
+  recaptures read where the recapture is made - on the board the capture creates off the
+  passed boards, Unknown where unreadable (finding A-H1, the main loop's ruling; issue
+  176(a)); the Q6 fallback found by its precondition and tested; a board played mid-action,
+  the pin's royal half, the C API's pin and check bits and labels, and every label reading
+  the review named tested; A7's mirror test requires every label decided and seen; the
+  labels' and the pin and check relations' cost in `docs/MEASUREMENTS.md`. Register B11, D4;
+  issues 172-176; edit 136.
