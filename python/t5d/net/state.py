@@ -48,8 +48,8 @@ Representation (design spec section 2; register A1-A4):
   Travel-threat, once a sixth, is folded into attack (CHECKPOINT 6, reversal 26: a travel
   threat is a cross-board attack); the C ABI keeps its id, 6, reserved and never emitted,
   and validation refuses it here. Cross-board edges are ordinary edges. What each relation
-  means is the rules engine's to define (it builds attack, defence and x-ray; pin and check
-  are engine ABI round 1's, so their lists stay empty until then); the network only
+  means is the rules engine's to define (it builds all five since engine ABI round 3 - pin and
+  check from both sides, each from its own view); the network only
   consumes the lists (``structure.py``). Candidate moves
   ``(src_square_token, dst_square_token, promotion)`` feed the policy pointer head (D1,
   section 8.1). Registers are never edge or move endpoints (section 5.3); validation

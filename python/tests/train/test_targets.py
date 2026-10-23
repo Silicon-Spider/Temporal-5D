@@ -474,6 +474,12 @@ def test_effort_from_the_change_point():
     assert t.full_search.tolist() == [True, True, True, False] and t.policy[3] is None and np.isnan(t.categorical[3])
 
 
+def test_square_mate_nodes_must_be_positive():
+    TargetConfig(square_mate_nodes=1).validate()
+    with pytest.raises(ValueError, match="square_mate_nodes"):
+        TargetConfig(square_mate_nodes=0).validate()
+
+
 def test_proof_rescoring_is_refused_until_the_sign_off():
     assert PROOF_CHANNEL_SIGNED_OFF is False
     with pytest.raises(ValueError, match="sign-off"):
@@ -541,6 +547,56 @@ def test_targets_rederived_from_stored_records_equal_those_written_at_generation
     assert target_differences(g.targets, rederived) == []  # the reply maps too (not stored: rebuilt)
     assert [d.prior_to_target_kl for d in record.decisions] == pytest.approx(rederived.kl.tolist(), nan_ok=True)
     assert all(r is None or r.target.sum() in (0.0, pytest.approx(1.0)) for r in rederived.reply)
+
+
+@requires_engine
+def test_square_labels_are_rederived_from_the_replayed_states(evaluator, tmp_path):
+    """D4's per-square labels come from the engine's generator on each decision's replayed state
+    (``replay_positions(square_labels=True)``) - the same on every replay, never stored (the
+    targets file and the generation-time targets carry none, so the I15 round trip above is
+    untouched) - and reach the losses on the square tokens, relative to the acting player (A7)."""
+    from t5d.engine.capi import SQUARE_LABEL_IDS
+    from t5d.net.heads import SQUARE_LABELS
+
+    assert tuple(SQUARE_LABEL_IDS) == SQUARE_LABELS and list(SQUARE_LABEL_IDS.values()) == list(range(len(SQUARE_LABELS)))
+    cfg = TARGET_CONFIGS["default"]
+    with torch.no_grad():
+        g = generate_game(evaluator, GAMES["two_timelines"], net_cfg=NET, keep_positions=True, target_config=cfg)
+    record = read_game(write_game(tmp_path / "record.npz", g.record))
+    a = replay_positions(record, square_labels=True)
+    b = replay_positions(record, square_labels=True)
+    t = build_targets(record, cfg, positions=a, reply=False)
+    assert t.reply == [] and len(t.square) == len(record.decisions)
+    for p, q, lab, d in zip(a, b, t.square, record.decisions, strict=True):
+        assert lab.shape == (d.n_boards, p.state.width * p.state.height, NET.n_square_labels)
+        assert np.array_equal(p.square_labels, q.square_labels, equal_nan=True)
+        assert np.array_equal(lab, p.square_labels, equal_nan=True)
+        assert np.isfinite(lab[..., :7]).all()  # only a mate search's budget leaves a label undecided
+    assert read_targets(write_targets(tmp_path / "t.npz", t)).square == [] and g.targets.square == []
+    assert target_differences(replace(g.targets, reply=[]), replace(t, square=[])) == []  # the rest: the generation's
+    # The start (Two Timelines, White acting): the royal zones are the kings' squares and their neighbours,
+    # White's "ours" and Black's "theirs" - on both boards, each one timeline step from the other.
+    first = t.square[0]
+    e1, e2, e8, e7 = 4, 12, 60, 52
+    ours, theirs = SQUARE_LABELS.index("royal_zone_ours"), SQUARE_LABELS.index("royal_zone_theirs")
+    assert record.decisions[0].acting_player == 0
+    assert (first[:, [e1, e2], ours] == 1).all() and (first[:, [e1, e2], theirs] == 0).all()
+    assert (first[:, [e8, e7], theirs] == 1).all() and (first[:, [e8, e7], ours] == 0).all()
+    # On the losses' square tokens (board b's cell c is token b * (W*H + R) + c); NaN on registers.
+    rows = [Row(p.state, t, i) for i, p in enumerate(a)]
+    batch, tgt = collate_rows(rows, NET)
+    for i, p in enumerate(a):
+        st = p.state
+        tpb, cells = st.layout.tokens_per_board, st.width * st.height
+        tokens = (np.arange(st.n_boards)[:, None] * tpb + np.arange(cells)[None, :]).reshape(-1)
+        got = tgt.square[i, torch.from_numpy(tokens)].numpy()
+        assert np.array_equal(got, t.square[i].reshape(-1, NET.n_square_labels).astype(np.float32), equal_nan=True)
+        others = np.setdiff1d(np.arange(tgt.square.shape[1]), tokens)
+        assert torch.isnan(tgt.square[i, torch.from_numpy(others)]).all()
+    model = build_model(NET, seed=1).eval()
+    with torch.no_grad():
+        losses = compute_losses(model(batch), tgt)
+    assert all(torch.isfinite(v) for v in losses.values()) and float(losses["square"]) > 0
 
 
 @requires_engine

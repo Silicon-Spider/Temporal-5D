@@ -30,6 +30,7 @@ from t5d.engine import (
 from t5d.engine.capi import (
     MIRRORED_STRUCTS,
     MOVE_DTYPE,
+    T5D_LABEL_UNKNOWN,
     T5D_RULES_MOVES_AFTER_SHIFT,
     T5D_RULES_NO_MOVES_AFTER_SHIFT,
     CExpansion,
@@ -140,7 +141,10 @@ def test_timeline_labels_invert_the_index_mapping(p, even, label):
 
 def test_relation_names_and_ids():
     assert relation_bits(["attack", "defence", "xray"]) == (1 << 1) | (1 << 2) | (1 << 4)
-    assert relation_bits([3]) == 1 << 3
+    assert relation_bits(["pin", "check"]) == (1 << 3) | (1 << 5)  # B11's five, since engine ABI round 3
+    assert relation_bits([3]) == 1 << 3 and relation_bits([6]) == 1 << 6  # the reserved id passes, for the engine to refuse
+    with pytest.raises(ValueError, match="unknown relation"):
+        relation_bits(["travel_threat"])  # folded into attack (B11, CHECKPOINT 6): no name
     with pytest.raises(ValueError, match="unknown relation"):
         relation_bits(["threat"])
 
@@ -201,8 +205,8 @@ def test_errors_carry_the_engines_messages():
             g.replay_next()
         assert g.record_actions().played == 2  # a failed action leaves the game where it was
     with Game.variant("Standard") as g:
-        with pytest.raises(UnsupportedError, match="pin and check are not built"):
-            g.expand(relations=["pin"])
+        with pytest.raises(UnsupportedError, match="reserved"):
+            g.expand(relations=[6])
         with pytest.raises(IllegalError):
             g.submit()  # the present has not shifted (T5)
         with pytest.raises(EngineArgumentError):
@@ -387,6 +391,27 @@ def test_legality_switch():
     with Game.variant("Standard") as g:
         g.set_legality(False)
         g.set_legality(True)
+
+
+@requires_engine
+def test_square_labels_targets_mask_exactly_the_undecided():
+    """``SquareLabels.targets``: NaN exactly where a label is ``T5D_LABEL_UNKNOWN`` (no target),
+    the labels' 0 and 1 elsewhere - here the back-rank mate (``t5d/labels.hpp``) under a one-node
+    budget, its mate on a8 undecided."""
+    with Game.from_fen(["[7k/6pp/8/8/8/8/8/R7:0:1:w]"]) as g:
+        decided = g.square_labels()
+        undecided = g.square_labels(mate_nodes=1)
+        with pytest.raises(ValueError, match="mate_nodes"):
+            g.square_labels(mate_nodes=-1)
+        with pytest.raises(ValueError, match="mate_nodes"):
+            g.square_labels(mate_nodes=0)
+    a8 = 7 * 8 + 0
+    assert decided.labels[0, a8, 7] == 1 and decided.mate_unknown == 0
+    assert undecided.labels[0, a8, 7] == T5D_LABEL_UNKNOWN and undecided.mate_unknown == 1
+    t = undecided.targets()
+    unknown = undecided.labels == T5D_LABEL_UNKNOWN
+    assert unknown.sum() == 1 and np.array_equal(np.isnan(t), unknown)
+    assert np.array_equal(t[~unknown], undecided.labels[~unknown].astype(np.float64))
 
 
 @requires_engine

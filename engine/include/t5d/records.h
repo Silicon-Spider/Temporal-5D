@@ -37,16 +37,18 @@
 
 /* ---- relation ids -----------------------------------------------------------
  * python/t5d/net/state.py RELATION_TYPES, in its order: "move" is the move
- * graph (register B9), the rest are the typed relations of design spec §6
- * (register B11, provisional). */
+ * graph (register B9), the rest are the typed relations of design spec §6 -
+ * register B11's five (provisional): attack, defence, pin, x-ray, check. Id 6
+ * is reserved: never emitted, refused if asked for (append-only ids). */
 
 #define T5D_RELATION_MOVE 0
 #define T5D_RELATION_ATTACK 1
 #define T5D_RELATION_DEFENCE 2
-#define T5D_RELATION_PIN 3   /* reserved, not built: needs check detection (stage E4; R1) */
+#define T5D_RELATION_PIN 3
 #define T5D_RELATION_XRAY 4
-#define T5D_RELATION_CHECK 5 /* reserved, not built: needs check detection (stage E4; R1) */
-#define T5D_RELATION_TRAVEL_THREAT 6 /* reserved, not built: the spec defines no edge for it */
+#define T5D_RELATION_CHECK 5
+#define T5D_RELATION_RESERVED 6 /* never emitted (once travel-threat: folded into attack at
+                                   CHECKPOINT 6, B11) */
 
 /* ---- one pseudo-legal move ---------------------------------------------------
  * 32 bytes, no padding. Boards are indices into the expansion's boards (its

@@ -68,7 +68,7 @@ class EngineInternalError(EngineError, RuntimeError):
 
 class UnsupportedError(EngineError, NotImplementedError):
     """T5D_ERR_UNSUPPORTED: a game or a feature the engine does not implement - a variant it
-    does not set up, a relation it does not build (pin, check, travel-threat)."""
+    does not set up, a relation it does not build (the reserved id 6)."""
 
     status = T5D_ERR_UNSUPPORTED
 
