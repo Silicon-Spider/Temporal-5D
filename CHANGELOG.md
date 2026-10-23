@@ -10,6 +10,44 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-23 - D2's flat form's policy target: per-board visit marginals, records version 2, flat self-play
+
+The flat form's policy target - "per-board visit marginals" (spec §8.2) - so self-play and the
+training loop can use the flat form, which the generator refused until it existed (BUILD_LOG issue
+234(b)). In the network lane - no training run: optimiser steps only on synthetic rows.
+
+- **The target** (`train/targets.py`; issue 242): at a flat decision the root's turn visits - pruned,
+  and with steered visits excluded or weighted, exactly as at the ply split (I2) - marginalised onto
+  each of the acting player's playable boards, over that board's options as the engine's per-board
+  policy defines them (issues 164, 165): its moves, the non-branching jumps arriving on it (under
+  `flat_jumps` BothBoards), leaving it. A turn's option on a board is the one the engine scores it
+  by; moves are matched by coordinates (a J6 branch is the jump it was); mass outside a board's
+  distribution (an arrival under SourceOnly, a move no candidate holds) is left out of that board.
+  Full searches only (I5). I12's divergence at a flat decision is the boards' KLs summed.
+- **Into the loss**: `collate_rows` turns a flat row's target into `Targets.flat_*`, which the
+  previous commit's `flat_policy` loss reads (per board, summed; it trains D2's leave head). The
+  soft policy, D9's optimistic policy and the reply prototype have no flat target and skip flat
+  rows (issue 242(h), for the user).
+- **Records, format version 2** (`train/records.py`; issue 243): every decision records the acting
+  player's playable boards and the network's raw per-board leave logits; a flat decision its root
+  children as whole turns (candidate -2) with their moves. Version 1 is refused, not read.
+- **Self-play** (`train/selfplay.py`): `GeneratorConfig.split="flat"` - a decision is a whole turn,
+  applied move by move and submitted; replay rebuilds flat games from their records. The retired
+  arm's name, `"turn"`, is still refused. `synthetic_record(flat=True)` gives synthetic flat rows.
+- **Tests** (`tests/train/test_flat_targets.py`, `tests/engine/test_flat_head.py`,
+  `tests/train/test_records.py`, `tests/train/test_targets.py`): the marginals by hand on a
+  constructed root (two playable boards, an arrival, a J6 twin, an unmatched move, both
+  `flat_jumps`), steered visits, the pruning, the divergence and the loss by hand; a flat search
+  with the network reads its leave logits - every delivered evaluation finite at every board and the
+  root's turn priors the softmax of the scores from the network's logits (to 2e-6), not the
+  fallback's; a flat self-play game held to its live search (raw leave logits, playable boards,
+  priors, the record-derived marginals); §15.2's I15 round trip on flat games (the record bit for
+  bit, targets re-derived under three configurations, inputs rebuilt); three smoke steps on
+  synthetic flat rows (the leave head moved), record rows forward only.
+
+Spec: §8.2 ("Flat form"), §12.2, §12.4, §12.5, §12.8 ("Rich training records"), §15.2 (the I15 row);
+register D2, I2, I5, I12, I15, D4, D9, M21. Issues 234(b) (lifted), 242, 243; proposed edits 188, 189.
+
 ### 2026-10-23 - D2's flat head: one "leave it" logit per board, always built, delivered to the engine
 
 Register D2's flat form "normalises per board rather than across all moves - a head change" (spec
