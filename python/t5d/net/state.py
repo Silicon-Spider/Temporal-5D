@@ -114,6 +114,23 @@ Representation (design spec section 2; register A1-A4):
   only when no mandatory board is left (T5: the obligations met); mandatory and optional
   together no more than the heads with the acting player to move (L5's playable boards).
 
+* **Piece-centric tokens (register A5, a prototype behind ``NetConfig.piece_centric``, off;
+  section 14.4).** "Tokens for pieces + generator-supplied destination squares": a
+  ``PositionState`` may carry ``token_cells``, an ``(N, W*H)`` mask of the cells that are
+  tokens - None (the default) is A1's layout, every cell a token. ``to_piece_centric`` builds
+  A5's: the occupied cells and the destination cells of the candidate moves (``moves``), so
+  A5's token set is A1's minus the empty squares no candidate move lands on. Each board's
+  tokens are still contiguous (B14's board-major order): its kept cells in cell order (the
+  storage order above - A7 moves no token, as under A1), then its registers; global registers
+  last. ``T = sum of kept cells + N * R + G``; boards differ in length, so the layout's
+  ``board_offsets`` replace ``tokens_per_board`` (which refuses a piece-centric layout, so that
+  every caller assuming uniform boards surfaces). A capture's destination is the captured
+  piece's own token; a destination token is an empty-square token (piece 0, no owner) with its
+  board's flags - no new token kind and no new parameter, so every per-token consumer reads it
+  unchanged. Those readings are placeholders (BUILD_LOG issues 244-247). The engine's contract
+  stays square-centric: the conversion runs at the network's edge (``engine.evaluator``,
+  ``train.targets``).
+
 Board storage order is free: the network has no absolute positions (section 4), so a
 reordering of boards permutes the per-board outputs and changes nothing else. Synthetic
 states store boards sorted by ``(p, h)``.
@@ -123,6 +140,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
+from functools import cached_property
 from typing import NamedTuple
 
 import numpy as np
@@ -227,31 +245,124 @@ def canonical_rank(y, height: int, acting: int):
 
 @dataclass(frozen=True)
 class TokenLayout:
-    """Board-major token layout of one position (A1, B14)."""
+    """Board-major token layout of one position (A1, B14) - or, given ``cells``, register A5's
+    piece-centric one (the module docstring): ``cells`` ``(N, W*H)`` bool marks the cells that
+    are tokens (None: every cell, A1). Each board's tokens are contiguous - its kept cells in
+    cell order, then its registers - and boards differ in length, so ``board_offsets`` gives
+    where each starts; ``tokens_per_board`` exists for the uniform layout only."""
 
     n_boards: int
     width: int
     height: int
     regs_per_board: int = 2
     global_regs: int = 16
+    cells: np.ndarray | None = field(default=None, compare=False, repr=False)
+
+    def __post_init__(self) -> None:
+        if self.cells is not None:
+            cells = np.array(self.cells, dtype=bool).reshape(self.n_boards, self.width * self.height)
+            cells.setflags(write=False)
+            object.__setattr__(self, "cells", cells)
+
+    def _geometry(self) -> tuple[int, int, int, int, int]:
+        return (int(self.n_boards), int(self.width), int(self.height), int(self.regs_per_board), int(self.global_regs))
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, TokenLayout):
+            return NotImplemented
+        if self._geometry() != other._geometry() or (self.cells is None) != (other.cells is None):
+            return False
+        return self.cells is None or bool(np.array_equal(self.cells, other.cells))
+
+    def __hash__(self) -> int:
+        return hash(self._geometry() + (None if self.cells is None else self.cells.tobytes(),))
+
+    @property
+    def piece_centric(self) -> bool:
+        """Register A5's layout (some cells are not tokens)."""
+        return self.cells is not None
 
     @property
     def squares_per_board(self) -> int:
+        """The board's cells, ``W*H`` - a board's square tokens under A1, at most that under A5."""
         return self.width * self.height
 
     @property
     def tokens_per_board(self) -> int:
+        """``W*H + R``, every board's length - A1's uniform layout only: a piece-centric layout's
+        boards differ in length (``board_offsets``, ``max_tokens_per_board``), and asking it raises,
+        so that every caller assuming uniform boards surfaces."""
+        if self.cells is not None:
+            raise ValueError(
+                "a piece-centric layout (register A5) has boards of different lengths: use board_offsets / "
+                "max_tokens_per_board / square_tokens, not tokens_per_board"
+            )
         return self.width * self.height + self.regs_per_board
+
+    @cached_property
+    def cell_counts(self) -> np.ndarray:
+        """``(N,)``: each board's square tokens (``W*H`` each under A1)."""
+        if self.cells is None:
+            return np.full(self.n_boards, self.squares_per_board, dtype=np.int64)
+        return self.cells.sum(axis=1).astype(np.int64)
+
+    @cached_property
+    def board_offsets(self) -> np.ndarray:
+        """``(N + 1,)``: where each board's tokens start; the last entry is ``n_body``."""
+        return np.concatenate([[0], np.cumsum(self.cell_counts + self.regs_per_board)]).astype(np.int64)
+
+    @property
+    def max_tokens_per_board(self) -> int:
+        """The longest board's tokens (``tokens_per_board`` under A1)."""
+        if self.cells is None:
+            return self.tokens_per_board
+        return int(self.cell_counts.max(initial=0)) + self.regs_per_board
 
     @property
     def n_body(self) -> int:
         """Tokens that belong to a board (squares and per-board registers)."""
-        return self.n_boards * self.tokens_per_board
+        if self.cells is None:
+            return self.n_boards * self.tokens_per_board
+        return int(self.board_offsets[-1])
 
     @property
     def n_tokens(self) -> int:
-        """``T = N * (W*H + R) + G``."""
+        """``T = N * (W*H + R) + G`` (A1); under A5 the kept cells, ``N * R`` and ``G``."""
         return self.n_body + self.global_regs
+
+    @cached_property
+    def _cell_token(self) -> np.ndarray:
+        """``(N, W*H)``: each cell's token, -1 where the cell is not one (A5's layout only)."""
+        assert self.cells is not None
+        out = np.full(self.cells.shape, -1, dtype=np.int64)
+        board, cell = np.nonzero(self.cells)  # board-major, cells ascending: the token order
+        rank = np.arange(board.shape[0]) - (np.cumsum(self.cell_counts) - self.cell_counts)[board]
+        out[board, cell] = self.board_offsets[board] + rank
+        return out
+
+    @cached_property
+    def _body_maps(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """``(board, cell, slot)`` of every body token, each ``(n_body,)``: the token's board, its
+        cell (-1 for a register) and its register slot (-1 for a square)."""
+        if self.cells is None:
+            tpb, wh = self.tokens_per_board, self.squares_per_board
+            t = np.arange(self.n_body)
+            local = t % tpb
+            square = local < wh
+            return t // tpb, np.where(square, local, -1), np.where(square, -1, local - wh)
+        r = self.regs_per_board
+        length = self.cell_counts + r
+        board = np.repeat(np.arange(self.n_boards), length)
+        local = np.arange(self.n_body) - self.board_offsets[board]
+        square = local < self.cell_counts[board]
+        cell = np.full(self.n_body, -1, dtype=np.int64)
+        b, c = np.nonzero(self.cells)
+        cell[self._cell_token[b, c]] = c
+        return board, cell, np.where(square, -1, local - self.cell_counts[board])
+
+    def body_maps(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """``(board, cell, slot)`` of every body token (``_body_maps``; copies)."""
+        return tuple(a.copy() for a in self._body_maps)  # type: ignore[return-value]
 
     def square_token(self, board: int, x: int, y: int) -> int:
         if not (0 <= x < self.width and 0 <= y < self.height):
@@ -263,11 +374,29 @@ class TokenLayout:
             raise ValueError(f"board {board} out of range (N = {self.n_boards})")
         if not 0 <= square < self.squares_per_board:
             raise ValueError(f"square index {square} out of range")
+        if self.cells is not None:
+            token = int(self._cell_token[board, square])
+            if token < 0:
+                raise ValueError(f"cell {square} of board {board} is not a token of this piece-centric layout (A5)")
+            return token
         return board * self.tokens_per_board + square
+
+    def square_tokens(self, boards: np.ndarray, squares: np.ndarray) -> np.ndarray:
+        """The tokens of cells ``(boards, squares)`` (arrays); under A5 ``ValueError`` if one is not
+        a token."""
+        boards, squares = np.asarray(boards, dtype=np.int64), np.asarray(squares, dtype=np.int64)
+        if self.cells is None:
+            return boards * self.tokens_per_board + squares
+        tokens = self._cell_token[boards, squares]
+        if np.any(tokens < 0):
+            raise ValueError("a cell is not a token of this piece-centric layout (A5)")
+        return tokens
 
     def board_register_token(self, board: int, slot: int) -> int:
         if not 0 <= slot < self.regs_per_board:
             raise ValueError(f"register slot {slot} out of range")
+        if self.cells is not None:
+            return int(self.board_offsets[board] + self.cell_counts[board]) + slot
         return board * self.tokens_per_board + self.squares_per_board + slot
 
     def global_register_token(self, index: int) -> int:
@@ -277,18 +406,28 @@ class TokenLayout:
 
     def kinds(self) -> np.ndarray:
         """Token kind of every token, shape ``(T,)``."""
+        tail = np.full(self.global_regs, TOKEN_GLOBAL_REGISTER, dtype=np.int64)
+        if self.cells is not None:
+            body = np.where(self._body_maps[1] >= 0, TOKEN_SQUARE, TOKEN_BOARD_REGISTER).astype(np.int64)
+            return np.concatenate([body, tail])
         per_board = np.full(self.tokens_per_board, TOKEN_BOARD_REGISTER, dtype=np.int64)
         per_board[: self.squares_per_board] = TOKEN_SQUARE
-        return np.concatenate([np.tile(per_board, self.n_boards), np.full(self.global_regs, TOKEN_GLOBAL_REGISTER, dtype=np.int64)])
+        return np.concatenate([np.tile(per_board, self.n_boards), tail])
 
     def is_square_token(self, tokens: np.ndarray) -> np.ndarray:
         tokens = np.asarray(tokens)
         inside = (tokens >= 0) & (tokens < self.n_body)
+        if self.cells is not None:
+            return inside & (self._body_maps[1][np.where(inside, tokens, 0)] >= 0)
         return inside & ((tokens % self.tokens_per_board) < self.squares_per_board)
 
     def split_square_tokens(self, tokens: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """``(board, square index)`` of square tokens (no check: use ``is_square_token``)."""
         tokens = np.asarray(tokens)
+        if self.cells is not None:
+            board, cell, _ = self._body_maps
+            at = np.clip(tokens, 0, max(self.n_body - 1, 0))
+            return board[at], cell[at]
         return tokens // self.tokens_per_board, tokens % self.tokens_per_board
 
 
@@ -376,6 +515,11 @@ class PositionState:
     mandatory_remaining: int | None = None
     optional_playable: int | None = None
     moves_made: int | None = None
+    #: Register A5 (a prototype behind ``NetConfig.piece_centric``; the module docstring): the
+    #: cells that are tokens, ``(N, W*H)`` bool - None, A1's layout: every cell. ``to_piece_centric``
+    #: builds it (the occupied cells and the candidate moves' destinations); ``edges``, ``moves`` and
+    #: ``opp_moves`` are then token indices of that layout.
+    token_cells: np.ndarray | None = None
 
     def __post_init__(self) -> None:
         self.timeline = _as_int(self.timeline, "timeline").reshape(-1)
@@ -391,6 +535,12 @@ class PositionState:
         self.edges = _triples(self.edges, "edges")
         self.moves = _triples(self.moves, "moves")
         self.opp_moves = _triples(self.opp_moves, "opp_moves")
+        if self.token_cells is not None:
+            cells = np.array(self.token_cells, dtype=bool)  # a copy: the layout keeps it
+            if cells.shape != (n, wh):
+                raise ValueError(f"token_cells: expected shape ({n}, {wh})")
+            cells.setflags(write=False)
+            self.token_cells = cells
         if self.parent is None:
             self.parent = self.previous_boards()
         else:
@@ -429,7 +579,21 @@ class PositionState:
 
     @property
     def layout(self) -> TokenLayout:
-        return TokenLayout(self.n_boards, int(self.width), int(self.height), int(self.regs_per_board), int(self.global_regs))
+        if self.token_cells is None:
+            return TokenLayout(self.n_boards, int(self.width), int(self.height), int(self.regs_per_board), int(self.global_regs))
+        # A5's layout builds its token maps lazily: kept while its inputs are the same objects
+        # (the cache holds the mask itself, so its id cannot be reused while cached).
+        key = (self.n_boards, int(self.width), int(self.height), int(self.regs_per_board), int(self.global_regs), id(self.token_cells))
+        cached = self.__dict__.get("_a5_layout")
+        if cached is None or cached[0] != key:
+            cached = (key, TokenLayout(*key[:5], cells=self.token_cells), self.token_cells)
+            self.__dict__["_a5_layout"] = cached
+        return cached[1]
+
+    @property
+    def piece_centric(self) -> bool:
+        """Register A5's tokenisation (``token_cells`` given; the module docstring)."""
+        return self.token_cells is not None
 
     @property
     def n_tokens(self) -> int:
@@ -561,6 +725,8 @@ class PositionState:
         self._validate_action()
         self._validate_turn_state()
         self._validate_lineage()
+        if self.token_cells is not None and np.any((self.piece != 0) & ~self.token_cells):
+            raise ValueError("token_cells must cover every occupied cell (register A5: every piece is a token)")
         layout = self.layout
         for name in ("edges", "moves", "opp_moves"):
             arr = getattr(self, name)
@@ -656,21 +822,20 @@ class PositionState:
         """Per-token arrays in this position's own layout (storage order), length ``T``, in the
         acting player's view (register A7; the module docstring): ``owner`` (``OWNER_*``),
         ``stm`` (0 us, 1 them), and the rank ``y`` and timeline ``p`` canonical; the file
-        ``x``, the time ``h`` and ``dt`` as stored."""
+        ``x``, the time ``h`` and ``dt`` as stored. Under register A5 (``token_cells``) the body
+        tokens are each board's kept cells, then its registers (the module docstring)."""
         lay = self.layout
-        n, wh, tpb, nb = self.n_boards, lay.squares_per_board, lay.tokens_per_board, lay.n_body
-        t = np.arange(nb)
-        board = t // tpb
-        local = t % tpb
-        is_sq = local < wh
-        sq = np.where(is_sq, local, 0)
+        n = self.n_boards
+        board, cell, slot = lay.body_maps()
+        is_sq = cell >= 0
+        sq = np.where(is_sq, cell, 0)
         kind = np.where(is_sq, TOKEN_SQUARE, TOKEN_BOARD_REGISTER)
         owner = self.owner
         rank = canonical_rank(sq // self.width, self.height, int(self.acting_player))
         out = {
             "kind": np.concatenate([kind, np.full(lay.global_regs, TOKEN_GLOBAL_REGISTER)]),
             "board": np.concatenate([board, np.full(lay.global_regs, -1)]),
-            "reg_index": np.concatenate([np.where(is_sq, 0, local - wh), np.arange(lay.global_regs)]),
+            "reg_index": np.concatenate([np.where(is_sq, 0, slot), np.arange(lay.global_regs)]),
             "piece": np.concatenate([np.where(is_sq, self.piece[board, sq], 0), np.zeros(lay.global_regs, np.int64)]),
             "owner": np.concatenate([np.where(is_sq, owner[board, sq], 0), np.zeros(lay.global_regs, np.int64)]),
             "moved": np.concatenate([np.where(is_sq, self.moved[board, sq], False), np.zeros(lay.global_regs, bool)]),
@@ -694,13 +859,17 @@ class PositionState:
 # --- transforms used by tests and by the data pipeline -------------------------------------
 
 
-def _remap_tokens(arr: np.ndarray, old: TokenLayout, new: TokenLayout, board_map: np.ndarray) -> np.ndarray:
+def _remap_tokens(
+    arr: np.ndarray, old: TokenLayout, new: TokenLayout, board_map: np.ndarray, cell_map: np.ndarray | None = None
+) -> np.ndarray:
+    """Square-token endpoints of ``old`` as tokens of ``new``: each through its (board, cell) -
+    the board through ``board_map``, the cell through ``cell_map`` (None: kept)."""
     if arr.size == 0:
         return arr.copy()
     out = arr.copy()
     for col in (0, 1):
         board, sq = old.split_square_tokens(arr[:, col])
-        out[:, col] = board_map[board] * new.tokens_per_board + sq
+        out[:, col] = new.square_tokens(board_map[board], sq if cell_map is None else cell_map[sq])
     return out
 
 
@@ -718,6 +887,8 @@ def permute_boards(state: PositionState, order: Sequence[int]) -> PositionState:
     new_index = np.empty(n, dtype=np.int64)
     new_index[order] = np.arange(n)
     lay = state.layout
+    cells = None if state.token_cells is None else state.token_cells[order]
+    new = replace(lay, cells=cells) if cells is not None else lay
     old_parent = state.parent[order]
     parent = np.where(old_parent >= 0, new_index[np.maximum(old_parent, 0)], -1)
     old_source = state.source[order]
@@ -733,9 +904,9 @@ def permute_boards(state: PositionState, order: Sequence[int]) -> PositionState:
         piece=state.piece[order],
         colour=state.colour[order],
         moved=state.moved[order],
-        edges=_remap_tokens(state.edges, lay, lay, new_index),
-        moves=_remap_tokens(state.moves, lay, lay, new_index),
-        opp_moves=_remap_tokens(state.opp_moves, lay, lay, new_index),
+        edges=_remap_tokens(state.edges, lay, new, new_index),
+        moves=_remap_tokens(state.moves, lay, new, new_index),
+        opp_moves=_remap_tokens(state.opp_moves, lay, new, new_index),
         regs_per_board=state.regs_per_board,
         global_regs=state.global_regs,
         parent=parent,
@@ -748,6 +919,7 @@ def permute_boards(state: PositionState, order: Sequence[int]) -> PositionState:
         mandatory_remaining=state.mandatory_remaining,
         optional_playable=state.optional_playable,
         moves_made=state.moves_made,
+        token_cells=cells,
     )
 
 
@@ -760,13 +932,32 @@ def square_mirror(width: int, height: int) -> np.ndarray:
 
 def mirror_tokens(layout: TokenLayout) -> np.ndarray:
     """``(T,)``: each token's counterpart in the colour-swapped mirror (``mirror``) - a square
-    token goes to its rank mirror on the same board; registers stay. An involution."""
-    out = np.arange(layout.n_tokens)
+    token goes to its rank mirror on the same board; registers stay. An involution under A1;
+    under register A5 the mirror's layout keeps the mirrored cells (``mirror_layout``), each
+    board's tokens in its own cell order, so the map is into that layout (a register keeps its
+    board and slot)."""
     flip = square_mirror(layout.width, layout.height)
+    if layout.cells is not None:
+        new = mirror_layout(layout)
+        board, cell, slot = layout.body_maps()
+        square = cell >= 0
+        body = np.empty(layout.n_body, dtype=np.int64)
+        body[square] = new.square_tokens(board[square], flip[cell[square]])
+        body[~square] = new.board_offsets[board[~square]] + new.cell_counts[board[~square]] + slot[~square]
+        return np.concatenate([body, layout.n_body + np.arange(layout.global_regs)])
+    out = np.arange(layout.n_tokens)
     for b in range(layout.n_boards):
         start = b * layout.tokens_per_board
         out[start : start + layout.squares_per_board] = start + flip
     return out
+
+
+def mirror_layout(layout: TokenLayout) -> TokenLayout:
+    """The layout of a position's colour-swapped mirror (``mirror``): every board's kept cells
+    rank-mirrored (A1's is unchanged)."""
+    if layout.cells is None:
+        return layout
+    return replace(layout, cells=layout.cells[:, square_mirror(layout.width, layout.height)])
 
 
 def mirror(state: PositionState) -> PositionState:
@@ -813,6 +1004,7 @@ def mirror(state: PositionState) -> PositionState:
         moves=remap(state.moves),
         opp_moves=remap(state.opp_moves),
         acting_player=1 - int(state.acting_player),
+        token_cells=None if state.token_cells is None else state.token_cells[:, flip],
     )
 
 
@@ -833,7 +1025,7 @@ def relayout(state: PositionState, regs_per_board: int, global_regs: int) -> Pos
     """The same position for a different register count (ablation 3: registers on/off,
     2 vs 4 per board), with edge and move token indices remapped."""
     old = state.layout
-    new = TokenLayout(old.n_boards, old.width, old.height, int(regs_per_board), int(global_regs))
+    new = TokenLayout(old.n_boards, old.width, old.height, int(regs_per_board), int(global_regs), cells=old.cells)
     ident = np.arange(old.n_boards)
     return replace(
         state,
@@ -843,6 +1035,110 @@ def relayout(state: PositionState, regs_per_board: int, global_regs: int) -> Pos
         regs_per_board=int(regs_per_board),
         global_regs=int(global_regs),
     )
+
+
+# --- register A5: piece-centric tokens ------------------------------------------------------
+
+
+class PieceCentric(NamedTuple):
+    """``to_piece_centric``'s result with what it dropped (``return_dropped=True``)."""
+
+    state: PositionState
+    dropped_edges: int  # edges with an endpoint that is no token (synthetic move edges onto empty cells)
+    dropped_opp_moves: int  # opponent moves with an endpoint that is no token (D4's reply - issue 251)
+
+
+def piece_centric_cells(state: PositionState) -> np.ndarray:
+    """``(N, W*H)`` bool: register A5's tokens of ``state`` - its occupied cells and the
+    destination cells of its candidate moves (``moves``; a capture's destination is the captured
+    piece's own cell, already a token). The candidate moves are the policy's: what the expansion
+    offers (BUILD_LOG issue 245)."""
+    cells = state.piece != 0
+    if state.moves.size:
+        board, cell = state.layout.split_square_tokens(state.moves[:, 1])
+        cells = cells.copy()
+        cells[board, cell] = True
+    return cells
+
+
+def to_piece_centric(state: PositionState, *, strict: bool = True, return_dropped: bool = False) -> PositionState | PieceCentric:
+    """Register A5's tokenisation of ``state`` (the module docstring): its tokens are the
+    occupied cells and the candidate moves' destination cells (``piece_centric_cells``), each
+    board's in cell order, then its registers; the global registers last. ``moves`` and ``edges``
+    are remapped through (board, cell) with their row order kept - policy row ``i`` is still move
+    ``i``. Idempotent: a piece-centric state converts to itself.
+
+    ``strict`` (engine data): refuse any edge or opponent move with an endpoint that is no token.
+    The engine's edges are its moves' own pairs and its relations end on pieces, so none can be.
+    Not strict (synthetic data, whose move graph reaches every empty cell): drop exactly those
+    edges, and those opponent moves (D4's reply has no piece-centric reading - BUILD_LOG issue
+    251), and count them (``return_dropped``)."""
+    old = state.layout
+    cells = piece_centric_cells(state)
+    if state.token_cells is not None:
+        cells |= state.token_cells  # idempotent: an A5 state's tokens are already these
+    new = TokenLayout(old.n_boards, old.width, old.height, old.regs_per_board, old.global_regs, cells=cells)
+
+    def kept(arr: np.ndarray) -> np.ndarray:
+        """Rows whose endpoints are both tokens of the new layout."""
+        if arr.size == 0:
+            return np.zeros(0, dtype=bool)
+        ok = np.ones(arr.shape[0], dtype=bool)
+        for col in (0, 1):
+            board, cell = old.split_square_tokens(arr[:, col])
+            ok &= cells[board, cell]
+        return ok
+
+    ident = np.arange(old.n_boards)
+    out = {}
+    dropped = {}
+    for name in ("edges", "opp_moves"):
+        arr = getattr(state, name)
+        ok = kept(arr)
+        dropped[name] = int((~ok).sum())
+        if dropped[name] and strict:
+            what = "edges" if name == "edges" else "opponent moves (D4's reply prototype - BUILD_LOG issue 251)"
+            raise ValueError(
+                f"to_piece_centric(strict=True): {dropped[name]} {what} end on a cell that is neither occupied nor a candidate "
+                "move's destination - engine data never has one (strict=False drops them: synthetic data)"
+            )
+        out[name] = _remap_tokens(arr[ok] if arr.size else arr, old, new, ident)
+    out["moves"] = _remap_tokens(state.moves, old, new, ident)  # every destination is a token by construction
+    result = replace(state, token_cells=cells, **out)
+    if return_dropped:
+        return PieceCentric(result, dropped["edges"], dropped["opp_moves"])
+    return result
+
+
+def square_centric_tokens(layout: TokenLayout) -> np.ndarray:
+    """``(T,)``: each token of ``layout`` as a token of A1's layout of the same position (the
+    identity under A1): a square at its (board, cell), a register at its (board, slot), a global
+    register at its index."""
+    if layout.cells is None:
+        return np.arange(layout.n_tokens)
+    a1 = replace(layout, cells=None)
+    board, cell, slot = layout.body_maps()
+    square = cell >= 0
+    body = np.where(square, board * a1.tokens_per_board + np.maximum(cell, 0), board * a1.tokens_per_board + a1.squares_per_board + slot)
+    return np.concatenate([body, a1.n_body + np.arange(layout.global_regs)]).astype(np.int64)
+
+
+def to_square_centric(state: PositionState) -> PositionState:
+    """A piece-centric state back in A1's layout (every cell a token), its edges and moves
+    remapped through (board, cell), their order kept - the inverse of ``to_piece_centric`` on what
+    it kept (tests; the equivalence reference)."""
+    if state.token_cells is None:
+        return state
+    tokens = square_centric_tokens(state.layout)
+
+    def remap(arr: np.ndarray) -> np.ndarray:
+        if arr.size == 0:
+            return arr.copy()
+        out = arr.copy()
+        out[:, :2] = tokens[arr[:, :2]]
+        return out
+
+    return replace(state, token_cells=None, edges=remap(state.edges), moves=remap(state.moves), opp_moves=remap(state.opp_moves))
 
 
 # --- batching ---------------------------------------------------------------------------
@@ -861,7 +1157,8 @@ class Batch:
     body_len)``, and the global registers occupy ``[body_len, body_len + G)`` for every
     position. For a single position there is no padding and the batch layout *is* the
     position's own layout. Square-token indices coincide in both layouts, so edges and moves
-    are passed through unchanged. (Token order carries no meaning to the network, so
+    are passed through unchanged. Under register A5 (``piece_centric``) a position's body is
+    its boards of different lengths, the same way (``TokenLayout.board_offsets``). (Token order carries no meaning to the network, so
     where padding sits changes nothing; padded keys are masked.)
     """
 
@@ -903,6 +1200,9 @@ class Batch:
     submit_legal: torch.Tensor | None = None  # bool: ... and legal (C4); the submit logit is masked otherwise
     # Per position (register A6): (B, 3) long - TURN_STATE_FIELDS, PositionState.turn_state.
     turn_state: torch.Tensor | None = None
+    # Register A5 (a prototype): the positions' tokenisation - piece-centric (True) or A1's
+    # (False); ``collate`` refuses a batch that mixes them, and the network one that is not its own.
+    piece_centric: bool = False
 
     def acting(self) -> torch.Tensor:
         """``(B,)`` long: each position's acting player (the present's colour for a batch made
@@ -966,13 +1266,17 @@ def collate(states: Sequence[PositionState]) -> Batch:
     """Pad and stack positions into a ``Batch`` (see its docstring for the layout).
 
     Positions may differ in board count and board size; they must share the register
-    counts (use ``relayout`` first otherwise).
+    counts (use ``relayout`` first otherwise) and the tokenisation (register A5's piece-centric
+    layout or A1's - ``to_piece_centric`` first otherwise).
     """
     if not states:
         raise ValueError("collate needs at least one position")
     regs = {(s.regs_per_board, s.global_regs) for s in states}
     if len(regs) != 1:
         raise ValueError(f"positions disagree about register counts: {sorted(regs)}")
+    tokenisations = {s.piece_centric for s in states}
+    if len(tokenisations) != 1:
+        raise ValueError("positions disagree about the tokenisation: piece-centric (register A5) and square-centric (A1) mixed")
     r, g = regs.pop()
     layouts = tuple(s.layout for s in states)
     body_len = max(lay.n_body for lay in layouts)
@@ -1056,4 +1360,5 @@ def collate(states: Sequence[PositionState]) -> Batch:
         submit_possible=torch.tensor([bool(s.submit_possible) for s in states], dtype=torch.bool),
         submit_legal=torch.tensor([bool(s.submit_legal) for s in states], dtype=torch.bool),
         turn_state=torch.tensor([list(s.turn_state) for s in states], dtype=torch.long).reshape(bsz, len(TURN_STATE_FIELDS)),
+        piece_centric=tokenisations.pop(),
     )

@@ -116,6 +116,15 @@ embedding (``embed.py``, ``layout.py``) and so before the trunk on every attenti
 cached path's node embedding. Its parameters draw nothing while they are made and are drawn last,
 from a generator of their own (``a8_seed``): switched on, every other parameter is as drawn without
 it; off, the network is the one without it, bit for bit.
+
+Register A5 (a prototype behind its flag, off; ``NetConfig.piece_centric``): piece-centric tokens
+- the pieces and the candidate moves' destination squares (``state.to_piece_centric``). A pure
+input change: no parameter and no draw changes, and every module reads per-token arrays, so the
+network is A1's on a smaller token set - its forward equals A1's with the dropped squares removed
+as keys (section 15.2's proposed A5 row; ``tests/net/test_piece_centric.py``). The per-board and
+global square pools and the per-square head cover the square tokens there are (pieces and
+destinations; BUILD_LOG issue 250). A forward refuses a batch of the other tokenisation, and a
+piece-centric network refuses the block-causal scope (issue 252).
 """
 
 from __future__ import annotations
@@ -465,11 +474,29 @@ class T5DNet(nn.Module):
         return torch.where(is_global, torch.zeros_like(coords), coords)
 
     def scope_of(self, scope: str | None) -> str:
-        """The attention scope of a forward: ``scope``, or the config's when None."""
+        """The attention scope of a forward: ``scope``, or the config's when None. A piece-centric
+        network (A5) refuses the block-causal scope (BUILD_LOG issue 252: its destination tokens on
+        frozen boards have no reading under C17)."""
         scope = self.cfg.attn_scope if scope is None else scope
         if scope not in ("dense", "block_causal"):
             raise ValueError(f"unknown attention scope {scope!r}")
+        if scope == "block_causal" and self.cfg.piece_centric:
+            raise NotImplementedError(
+                "a piece-centric network (A5) runs in the dense scope only: a block-causal forward is refused (a destination "
+                "token on a frozen board breaks C17's within-board bidirectionality - BUILD_LOG issue 252)"
+            )
         return scope
+
+    def check_tokenisation(self, batch: Batch) -> None:
+        """Refuse a batch whose tokenisation is not this network's (register A5: piece-centric
+        positions to a piece-centric network, square-centric ones to every other) - each would
+        run, on the wrong token set."""
+        if bool(batch.piece_centric) != bool(self.cfg.piece_centric):
+            want, got = ("piece-centric", "square-centric") if self.cfg.piece_centric else ("square-centric", "piece-centric")
+            raise ValueError(
+                f"this network reads {want} positions (NetConfig.piece_centric={self.cfg.piece_centric}); the batch is {got} "
+                "(state.to_piece_centric converts; the engine's evaluator does it at the network's edge)"
+            )
 
     def embed_tokens(self, batch: Batch, scope: str | None = None) -> torch.Tensor:
         """Token embeddings under a scope: under the block-causal scope with
@@ -505,6 +532,7 @@ class T5DNet(nn.Module):
         B16 table to give it back - a function no configuration defines (the table exists only
         in a network of the cached configuration, ``NetConfig.status_bias_built``)."""
         cfg = self.cfg
+        self.check_tokenisation(batch)
         if (
             self.scope_of(scope) == "block_causal"
             and status_bias
@@ -532,7 +560,13 @@ class T5DNet(nn.Module):
         structure = build_structure(
             batch, cfg, coords, self.typed_edges, self.displacement, self.smolgen, live=live, live_boards=live_boards, status=status
         )
-        tokens_per_board = max(lay.tokens_per_board for lay in batch.layouts)
+        # Query blocks of ``attn_block_boards`` whole boards under A1. Under A5 boards differ in
+        # length: blocks of that many boards of the batch's mean length (the largest position mean,
+        # rounded up) - not board-aligned, which changes no result (every row's structure is its
+        # own) and keeps about as many boards per block as A1's, so the block-sparse selection
+        # skips as many key boards (a block of the longest board's length spans more boards and
+        # reads more of them; BUILD_LOG issue 249). A placeholder; A1's blocks are unchanged.
+        tokens_per_board = max(-(-lay.n_body // max(1, lay.n_boards)) for lay in batch.layouts)
         shaw = None if self.shaw is None else ShawRows(self.shaw, structure.disp_index)
         return AttnContext(
             cos=cos,
@@ -618,6 +652,7 @@ class T5DNet(nn.Module):
 
     def heads(self, h: torch.Tensor, batch: Batch, return_trunk: bool = False) -> NetOutput:
         """Every head over a final-normed trunk output ``h`` ``(B, L, d)``, in FP32 (G1)."""
+        self.check_tokenisation(batch)
         with torch.autocast(device_type=h.device.type, enabled=False):
             h = h.float()
             sq = batch.square_mask
