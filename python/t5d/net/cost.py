@@ -103,7 +103,14 @@ def layout_flops(n_boards: int, n_tokens: int, cfg: NetConfig) -> dict[str, int]
     board (the dense one-hot product - section 15.3's "~0.1% of attention at 44 boards" is this
     term), the merge ``2 C d`` per token (every token: registers' are masked after) and the FFN
     ``4 d^2 r`` per token (``layout_ffn_ratio`` r; 0 without it). Norms, the one-hot and the gather
-    are no multiply-adds."""
+    are no multiply-adds. Every term is zero when ``cfg``'s flag (``board_layout_embedding``) is
+    off: the network then has no A8.
+
+    The FFN is per token, so it is paid wherever a position's tokens are embedded: in the dense
+    pass over every token, and in the cached configuration at every node - ``CachedEvaluator.
+    prepare`` embeds all of the node's tokens, frozen boards' included - where it is a larger share
+    of the node than of the dense pass (``docs/MEASUREMENTS.md``, "A8"). ``dense_flops`` and
+    ``pass_flops`` are section 9.1's model and leave A8 out, as they leave out every embedding."""
     from .layout import LAYOUT_CELLS, LAYOUT_FEATURES
 
     c, d, r = cfg.layout_channels, cfg.d_model, cfg.layout_ffn_ratio
@@ -112,5 +119,7 @@ def layout_flops(n_boards: int, n_tokens: int, cfg: NetConfig) -> dict[str, int]
         "merge": 2 * n_tokens * c * d,
         "ffn": 4 * n_tokens * d * (r * d),
     }
+    if not cfg.board_layout_embedding:
+        out = dict.fromkeys(out, 0)
     out["total"] = sum(out.values())
     return out

@@ -51,7 +51,7 @@ quiet-machine block).
 | One refresh | ≈ 10 node-evaluations | not measured: the estimate is windowed and the window is not built (spec issue 39) | | | |
 | KV memory per state | ~260 MB (240) / ~649 MB (600); ~113 MB windowed | BF16 250.9 MB (240, 8 TL), 635.8 MB (600, 12 TL) - frozen boards only, exact; FP8 50.1% | N3 table below; one perspective - under A7 every store holds two entries per root frozen board from the moment its epoch is made (note below) | 0.97 / 0.98 | 2026-10-02, N3 |
 | Local/global interleave | 0.067 TF per node | - | | | |
-| Board-layout embedding (A8) | ~0.1% of attention at 44 boards; ~1.6M parameters at 16 channels | projection 1,573,888 parameters (1,572,864 without its bias), 0.138 GFLOP at 44 boards - **0.099%** of attention by §15.3's formula (0.072% of the counted kernel attention); with the register's FFN (8x, a placeholder) 2,629,120 parameters and 6.29 GFLOP - **4.5%** of attention, 2.0% of the counted forward (0.83% / 0.62% at 240 boards); CPU wall indicative only: the embedding +18 ms at 44 boards, +103 ms at 240 (BF16), the forward's change inside the noise | A8 section below; machine loaded (85-100% CPU) | 0.99 (projection, FLOPs); 0.98 (parameters) - the FFN, which the row leaves out, is 45x the projection's compute | 2026-10-23, N-A8 |
+| Board-layout embedding (A8) | ~0.1% of attention at 44 boards; ~1.6M parameters at 16 channels | projection 1,573,888 parameters (1,572,864 without its bias), 0.138 GFLOP at 44 boards - **0.099%** of attention by §15.3's formula (0.072% of the counted kernel attention); with the register's FFN (8x, a placeholder) 2,629,120 parameters and 6.29 GFLOP - **4.5%** of attention, 2.0% of the counted forward (0.83% / 0.62% at 240 boards); in the cached configuration A8 adds **10.1%** / **14.4%** to a node (44 / 240 boards: every token embedded at every node); CPU wall indicative only: the embedding +18 ms at 44 boards, +103 ms at 240 (BF16), the forward's change inside the noise | A8 section below; FLOPs counted (load-independent); wall time on a loaded machine (85-100% CPU) | **45x - flagged** (A8 as the register defines it, its FFN at the placeholder's 8x; at least 6.6x with any per-token FFN); the projection alone 0.99 (FLOPs); parameters 1.64x (the projection's 0.98) | 2026-10-23, N-A8 (review fixes the same day) |
 | Leaf-batching gain | 1.2-1.5× | - | | | |
 | NNUE eval | ~10k MACs, sub-µs | - | | | |
 | Movegen throughput | ≥ 20,000/s at 240; ≥ 10,000/s at 600 (§15.6) | pseudo-legal expansion, 1 thread: 44,047/s at 240 boards, 24,951/s at 600 (scope + relations); with the legal-moves filter: milliseconds to minutes per expansion | M9 section below | 2.2x / 2.5x the target (pseudo-legal); far below it with the filter | 2026-10-02, 2740e66 |
@@ -151,8 +151,41 @@ rows widen it, as N3's table notes).
 | 240 | 0.755 | 0.130 | 33.25 | 34.14 | 4,119 / 4,872 | 5,538 | 0.018% / 0.016% | 0.83% / 0.70% | 0.62% |
 
 Without the FFN A8 is 0.162 GFLOP at 44 boards (0.116% of analytic attention) and 0.885 at 240
-(0.021%). Section 15.3's "~0.1%" is the projection's figure, confirmed (ratio 0.99); the FFN the
-register adds is 45 times the projection at 44 boards and is not in the row (issue 240(b)).
+(0.021%). Section 15.3's "~0.1%" is the projection's figure (ratio 0.99), but the row is register
+A8's, and A8 has an FFN after the embedding: as built (8x, a placeholder) A8 is 4.50% of attention
+at 44 boards, 45 times the row, and any per-token FFN - even one 1·d wide (0.765 GFLOP at 44
+boards) - makes it at least 0.66%, 6.6 times (issue 240(b)). *(Corrected 2026-10-23, the review
+fixes: this paragraph first called the projection's figure "confirmed" and left A8 unflagged.)*
+
+**Flags (more than 2x off, logged in the build log):** §15.3's A8 row - "~0.1% of attention at 44
+boards" - is 45x off for A8 as the register defines it (4.50% with its FFN at 8x), and at least
+6.6x off with any per-token FFN; the projection alone (0.099%) is within it. The parameters
+(2,629,120 against "~1.6M", 1.64x) are inside the 2x rule. Logged as spec issue 240(l); edit 186.
+
+**In the cached configuration (counted, 2026-10-23, the review fixes).** `CachedEvaluator.prepare`
+embeds every token of a node, frozen boards' included, so A8's per-token FFN is paid over the whole
+position at every node while the node's trunk work is its live set's. Machine `dev-r`; PyTorch
+2.13.0+cpu, 12 threads; FP32 trunk; the F1 network in the cached configuration (`attn_scope =
+"block_causal"`, the placeholder defaults), random weights (model seed 0), A8 off and on;
+`synthetic_state(0, N, n_timelines=8)` - 8 live heads, section 7.1's assumption - its store built
+(`root_epoch`), then its physical child (`cache_bench._children`: one board superseded, one
+created) evaluated against the root's store; window none; FLOPs by `FlopCounterMode` (counts do not
+depend on load). The node = its preparation (the embedding) + the supersession of its missing
+boards + the live pass + the heads; *analytic node* = section 7.6's `pass_flops` of the 544 live
+tokens against all.
+
+| Boards (child) | Child tokens | Preparation off / A8 | Supersession | Live pass | Heads | Node off / A8 | A8 / node: counted / analytic node | Dense forward off / A8 |
+|---|---|---|---|---|---|---|---|---|
+| 44 (45) | 2,986 | 0.050 / 6.478 GF | 3.069 | 60.68 | 0.032 | 63.83 / 70.26 GF | **+10.1%** / 13.0% (of 49.4 GF) | 312.7 / 319.0 GF (+2.0%) |
+| 240 (241) | 15,922 | 0.264 / 34.54 | 12.90 | 224.94 | 0.085 | 238.19 / 272.47 | **+14.4%** / 20.8% (of 164.7 GF) | 5,501 / 5,535 (+0.62%) |
+
+What A8 adds to the node is exactly `cost.layout_flops` at the child (6,428,114,944 and
+34,279,407,616 FLOPs); the supersession, live pass and heads are the same FLOPs with it on or off.
+(The dense forward here is the cached configuration's network run dense, 312.7 GF at 44 boards
+where the dense-scope network above counts 316.1.) A frozen board's embedding feeds only its K/V,
+which the node finds stored: embedding only the live and the missing boards' tokens would remove
+most of A8's share - not built (issue 240(g)). `cache_bench` now counts a node's preparation beside
+its live pass (`prepare_flops`).
 
 **CPU wall time - indicative only.** Same build and positions; each arm built once, warmed on a
 2-board position, then five repetitions interleaved (the arms' order reversed every other
