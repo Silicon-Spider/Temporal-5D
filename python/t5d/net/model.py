@@ -106,6 +106,16 @@ playable, moves made in the action) are inputs beside the acting colour, on the 
 (``embed.py``; their MLP a placeholder, spec issue 230). Its parameters (``embed.turn_in``,
 ``embed.turn_out``) likewise draw nothing while they are made and are drawn from a generator of
 their own (``a6_seed``): adding them changed no other parameter's draw.
+
+Register D2's flat form (section 8.2): each board's "leave it" logit (``heads.LeaveHead``, always
+built - D2 is committed-class), read from the board's pooled state (``NetConfig.leave_pool``) and
+drawn from a generator of its own (``d2_seed``): adding it changed no other parameter's draw.
+
+Register A8 (a prototype behind its flag, off): the board-layout embedding, last in the
+embedding (``embed.py``, ``layout.py``) and so before the trunk on every attention path and in the
+cached path's node embedding. Its parameters draw nothing while they are made and are drawn last,
+from a generator of their own (``a8_seed``): switched on, every other parameter is as drawn without
+it; off, the network is the one without it, bit for bit.
 """
 
 from __future__ import annotations
@@ -124,6 +134,7 @@ from .embed import InputEmbedding
 from .heads import (
     ActionHead,
     AuxHeads,
+    LeaveHead,
     PointerHead,
     SubmitHead,
     ValueHeads,
@@ -181,6 +192,9 @@ class NetOutput:
     # its own submit logit (B,), masked as ``submit_logits`` is - match play's prior (section 8.1).
     optimistic_logits: torch.Tensor | None = None
     optimistic_submit_logits: torch.Tensor | None = None
+    # D2's flat form (section 8.2): each board's "leave it" logit (B, Nmax) - the engine softmaxes it
+    # with the board's move logits; every board gets one (padding included: mask with board_valid).
+    leave_logits: torch.Tensor | None = None
     trunk: torch.Tensor | None = None  # (B, L, d) final-normed trunk output, if requested
 
     def wdl_probs(self) -> torch.Tensor:
@@ -273,6 +287,9 @@ class T5DNet(nn.Module):
         # D9 (a prototype, behind its flag): the optimistic policy - its own projections, offset and
         # submit logit; made without drawing and drawn from a generator of its own (``d9_seed``).
         self.optimistic = ActionHead(cfg, cfg.optimistic_policy_dim, cfg.pointer_promotion_offset) if cfg.optimistic_policy else None
+        # D2's flat form: each board's "leave it" logit (always built - D2 is committed-class); made
+        # without drawing and drawn from a generator of its own (``d2_seed``).
+        self.leave = LeaveHead(cfg)
         self._init_weights()
 
     # -- initialisation --
@@ -290,6 +307,12 @@ class T5DNet(nn.Module):
     _D4_MODULES = ("aux.soft_policy", "aux.opp_reply")
     #: Register D9's optimistic policy (a prototype), drawn from its own generator (``d9_seed``).
     _D9_MODULES = ("optimistic",)
+    #: Register A8's board-layout embedding (a prototype), drawn last, from its own generator
+    #: (``a8_seed``).
+    _A8_MODULES = ("embed.layout",)
+    #: Register D2's flat head (the per-board "leave it" logit), drawn from its own generator
+    #: (``d2_seed``).
+    _D2_MODULES = ("leave",)
 
     def _retired_draws(self, name: str) -> tuple[tuple[int, int], ...]:
         """The ``(out, in)`` shapes of retired Linear modules whose initialisation draws follow
@@ -335,7 +358,13 @@ class T5DNet(nn.Module):
                     continue  # drawn last (reset_parameters)
                 if any(
                     name == own or name.startswith(own + ".")
-                    for own in self._D8_MODULES + self._A6_MODULES + self._D3_MODULES + self._D4_MODULES + self._D9_MODULES
+                    for own in self._D8_MODULES
+                    + self._A6_MODULES
+                    + self._D3_MODULES
+                    + self._D4_MODULES
+                    + self._D9_MODULES
+                    + self._A8_MODULES
+                    + self._D2_MODULES
                 ):
                     continue  # drawn after the rest (below)
                 if isinstance(module, nn.Linear):
@@ -380,6 +409,10 @@ class T5DNet(nn.Module):
                     for lin in head.modules():
                         if isinstance(lin, nn.Linear):
                             _draw_linear(lin, gen, cfg.init_bias_std)
+            # D2's flat head (the leave logit): from a generator of its own in the same way - adding
+            # it changed no other parameter (LeCun normal weight, its bias at init_bias_std).
+            d2 = torch.Generator(device="cpu").manual_seed(d2_seed(torch.initial_seed()))
+            _draw_linear(self.leave.out, d2, cfg.init_bias_std)
             if self.typed_edges is not None:
                 nn.init.normal_(self.typed_edges.table, 0.0, cfg.init_table_std)
             if self.smolgen is not None:
@@ -400,6 +433,18 @@ class T5DNet(nn.Module):
                 b17 = torch.Generator(device="cpu").manual_seed(b17_seed(torch.initial_seed()))
                 vectors = self.shaw.vectors
                 vectors.copy_(torch.empty(vectors.shape).normal_(0.0, cfg.shaw_init_std, generator=b17))
+            # A8 (prototype, behind its flag): last, from a generator of its own - switching it on
+            # changes no other parameter. LeCun normal weights, biases at init_bias_std, the FFN's
+            # norm gain 1 + N(0, init_norm_std), in the module's order.
+            layout = self.embed.layout
+            if layout is not None:
+                a8 = torch.Generator(device="cpu").manual_seed(a8_seed(torch.initial_seed()))
+                _draw_linear(layout.proj, a8, cfg.init_bias_std)
+                _draw_linear(layout.merge, a8, cfg.init_bias_std)
+                if layout.norm is not None:
+                    layout.norm.weight.copy_(torch.empty(layout.norm.weight.shape).normal_(1.0, cfg.init_norm_std, generator=a8))
+                    _draw_linear(layout.ffn_in, a8, cfg.init_bias_std)
+                    _draw_linear(layout.ffn_out, a8, cfg.init_bias_std)
 
     # -- positional context --
 
@@ -617,6 +662,7 @@ class T5DNet(nn.Module):
                 opp_reply_logits=reply,
                 optimistic_logits=optimistic_moves,
                 optimistic_submit_logits=optimistic_submit,
+                leave_logits=self.leave(h, batch, boards),
                 trunk=h if return_trunk else None,
             )
 
@@ -711,6 +757,12 @@ def d9_seed(seed: int) -> int:
     return (int(seed) * 0x9E3779B97F4A7C15 + 0xD9) & 0xFFFFFFFFFFFFFFFF
 
 
+def d2_seed(seed: int) -> int:
+    """The seed of D2's flat head's own generator (the per-board leave logit,
+    ``T5DNet._init_weights``), from the model's."""
+    return (int(seed) * 0x9E3779B97F4A7C15 + 0xD2) & 0xFFFFFFFFFFFFFFFF
+
+
 def b15_seed(seed: int) -> int:
     """The seed of B15's own generator (its displacement table, ``T5DNet._init_weights``),
     from the model's."""
@@ -728,6 +780,12 @@ def b16_seed(seed: int) -> int:
     return (int(seed) * 0x9E3779B97F4A7C15 + 0xB16) & 0xFFFFFFFFFFFFFFFF
 
 
+def a8_seed(seed: int) -> int:
+    """The seed of register A8's own generator (the board-layout embedding,
+    ``T5DNet._init_weights``), from the model's."""
+    return (int(seed) * 0x9E3779B97F4A7C15 + 0xA8) & 0xFFFFFFFFFFFFFFFF
+
+
 def build_model(cfg: NetConfig | None = None, seed: int = 0) -> T5DNet:
     """A randomly initialised network, deterministic in ``seed`` (global RNG untouched)."""
     with torch.random.fork_rng(devices=[]):
@@ -743,7 +801,8 @@ def parameter_breakdown(model: T5DNet) -> dict[str, int]:
 
     blocks = model.trunk.blocks
     out = {
-        "embeddings": count(model.embed),
+        "embeddings": count(model.embed) - count(model.embed.layout),
+        "embed.layout": count(model.embed.layout),  # A8 (a prototype behind its flag)
         "trunk.attention": sum(count(b.attn) for b in blocks),
         "trunk.ffn": sum(count(b.ffn) for b in blocks),
         "trunk.norms": sum(count(b.norm_attn) + count(b.norm_ffn) for b in blocks) + count(model.trunk.final_norm),
@@ -756,6 +815,7 @@ def parameter_breakdown(model: T5DNet) -> dict[str, int]:
         "head.value": count(model.value),
         "head.submit": count(model.submit),
         "head.optimistic": count(model.optimistic),
+        "head.leave": count(model.leave),  # D2's flat head
     }
     for name, mod in model.aux.named_children():
         out[f"aux.{name}"] = count(mod)

@@ -711,19 +711,10 @@ TEST(expand_en_passant_attacks_the_pawn_taken) {
   CHECK(relation_set(x) == std::set<Relation>({{0, sq("e5"), 0, sq("d5"), kRelationAttack}}));
 }
 
-TEST(expand_refuses_reserved_relations_and_a_negative_k) {
+TEST(expand_refuses_a_negative_k) {
   const GameState s = state_of({timeline(0, 2, {board({"Ra1"})})});
   Expansion x;
   ExpandOptions o;
-  o.pin = true;
-  CHECK_THROWS_WITH(expand(s, o, x), std::invalid_argument, "check detection");
-  o = ExpandOptions{};
-  o.check = true;
-  CHECK_THROWS_WITH(expand(s, o, x), std::invalid_argument, "check detection");
-  o = ExpandOptions{};
-  o.travel_threat = true;
-  CHECK_THROWS_WITH(expand(s, o, x), std::invalid_argument, "no edge");
-  o = ExpandOptions{};
   o.window_k = -1;
   CHECK_THROWS_AS(expand(s, o, x), std::invalid_argument);
 }

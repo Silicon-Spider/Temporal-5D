@@ -27,6 +27,36 @@ parameter of ``TargetConfig`` with a placeholder default (spec issue 235).
   the asset map until I2's steered visits are validated (issue 179), so its records' boosts are 0.
   Recorded forced visits (none: forced playouts are not built, issue 153) are pruned like any
   other.
+* **D2's flat form - the per-board policy marginals (section 8.2; spec issue 242)**: "the flat
+  form's policy targets are per-board visit marginals, so its policy normalises per board rather than
+  across all moves". At a flat decision the root children are whole turns; their visits - with
+  steered visits excluded or weighted exactly as at the ply split (I2, per turn) - are marginalised
+  onto each of the acting player's playable boards (``DecisionRecord.playable``) and each board's
+  option counts are then pruned as the ply split prunes root children (``flat_pruning`` "board", a
+  PLACEHOLDER: an option read as the turns taking it - its prior their priors summed, each turn's
+  ``replica_prior`` (its steering taken out per turn, before summing), its value and exploration
+  scale their visit-weighted means - against the board's most visited option; KataGo's
+  single-visit rule included). Pruning each turn first (``"turn"``, the arm: ``pruned_visits`` over
+  the turn children) wipes out an option whose visits are spread over many one-visit turns, which
+  the flat form's widening makes common (issue 242(b)). The marginals are over that board's options
+  as the engine's per-board policy defines them (BUILD_LOG issues 164, 165): its candidate moves
+  leaving it, the non-branching jumps arriving on it (under ``flat_jumps`` BothBoards, the default),
+  and leaving it. A turn takes, on each board, the option the engine scores it by: the move leaving
+  the board, else a non-branching jump arriving on it, else leaving it; the move is matched to the
+  candidates by its coordinates, its flags left out (a J6 branch scores as the jump it was). Turn mass
+  whose option is no option of the board's distribution - an arrival under SourceOnly (log 1 outside
+  it) or a move the candidates do not hold (the engine scores it the board's lowest option; issue
+  168) - is left out of that board's marginal, which is renormalised over the rest; a board with no
+  mass left has no target. The target is a list of ``(board, candidate, probability)`` - candidate
+  -1 for leaving - over every option of every board with a target (``GameTargets.flat``), full
+  searches only; the ply split's ``policy`` is None there. The root's search value, I13's best child
+  and ``GameTargets.pruned`` read the turns' own pruned visits (``pruned_visits``) under either arm.
+  The prior-to-target divergence (I12) is the sum over those boards of KL(marginal || the raw
+  per-board prior) - the joint's KL between the product of the marginals and the network's product
+  distribution (not the engine's turn prior, which is normalised over the generated turns only) -
+  the raw prior the softmax at temperature 1 of the board's raw move logits and its raw leave logit (none given: ``leave_share``,
+  the moves sharing the rest, as the engine). The soft policy, D9's optimistic policy and the reply
+  prototype have no flat target (their heads have no leave logit; issue 242): masked on flat rows.
 * **The soft policy (D4)**: the policy target raised to 1/4 and renormalised (``losses``' helper
   computes it in the loss; the builder keeps it for the record comparison).
 * **Search-value targets from the pruned visits (I2, CHECKPOINT 7)**: each root's value
@@ -58,8 +88,14 @@ parameter of ``TargetConfig`` with a placeholder default (spec issue 235).
 * **Per-board targets (D4)**: travelled-into - a played move within ``travel_horizon`` turns from
   the decision (its own included) lands on the board by travel (its destination, for a branching
   move the history board it targets) - and timeline-active-at-end; tactical volatility needs proofs
-  and is NaN (masked) until the proof channel is signed off. Per-square labels: no generator yet
-  (NaN, masked - BUILD_LOG's D4 row).
+  and is NaN (masked) until the proof channel is signed off.
+* **Per-square labels (D4, M20, A7)**: ``heads.SQUARE_LABELS``, exact from the rules engine's
+  generator (``Game.square_labels``; engine README, "Per-square labels") on each decision's
+  replayed state - relative to the acting player, as the network reads them - carried by the
+  positions (``selfplay.replay_positions(square_labels=True)``: ``Position.square_labels``),
+  never stored in the record or the targets file: re-derived like the reply prototype's. A label
+  a mate search's budget left undecided is NaN (no target); a decision whose position carries
+  none - a synthetic record's, or targets built without positions - has every label NaN.
 * **Effort (D4, section 8.6)**: full searches only - ``effort_bin(root_best_since, converged)``,
   converged when the most visited child led for at least ``effort_stable_fraction`` of the root's
   visits (issue 154), or when I20's KL rule stopped the search.
@@ -85,7 +121,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from ..engine.capi import T5D_MOVE_TRAVEL
+from ..engine.capi import T5D_FLAT_JUMPS_BOTH, T5D_MOVE_BRANCHING, T5D_MOVE_PROMOTION, T5D_MOVE_TRAVEL
 from ..net.state import collate
 from .losses import Targets
 from .records import DecisionRecord, GameRecord
@@ -98,6 +134,7 @@ PROOF_CHANNEL_SIGNED_OFF = False
 #: Each target's source (section 12.4's source rule, register D5: never a learned verifier).
 TARGET_SOURCES: dict[str, str] = {
     "policy": "search record (full searches; pruned visits)",
+    "flat_policy": "search record (full searches; pruned visits marginalised per board)",
     "soft_policy": "search record (full searches; pruned visits)",
     "categorical": "search record (full searches; pruned visits)",
     "root_wdl": "search record (pruned visits)",
@@ -108,7 +145,12 @@ TARGET_SOURCES: dict[str, str] = {
     "effort": "search record (full searches)",
     "opp_reply": "game record",
     "tactical_volatility": "proofs (gated: H23, H41)",
+    "square": "game record (each decision's replayed state, labelled by the rules engine's exact generator)",
 }
+
+#: D2's flat form: where KataGo's pruning applies (``TargetConfig.flat_pruning``; issue 242(b)) - to
+#: each board's option counts, the turns' visits marginalised first (the default), or to the turns.
+FLAT_PRUNING: tuple[str, ...] = ("board", "turn")
 
 #: Game ends with a result (scored): the rest have no WDL or short-term target.
 SCORED_ENDS: tuple[str, ...] = ("checkmate", "stalemate", "turn_cap", "resign")
@@ -124,6 +166,9 @@ class TargetConfig:
     forced_k: float = 2.0  # KataGo's k in n_forced = sqrt(k P sum N)
     prune_prior: str = "search"  # the prior the pruning's PUCT replica reads: "search" (noised, KataGo's) or "noise_free"
     prune_single_visit: bool = True  # KataGo: a child reduced to one visit is pruned outright
+    #: D2's flat form (issue 242(b)): where the pruning applies - to each board's option counts, after
+    #: the turns' visits are marginalised ("board"), or to the turns before it ("turn", the arm).
+    flat_pruning: str = "board"
     # D3
     categorical_source: str = "root_value"  # 6j: "root_value" or "short_term"
     categorical_horizon: int = 0  # the short-term arm's horizon (an index into short_term_horizons)
@@ -136,6 +181,8 @@ class TargetConfig:
     effort_stable_fraction: float = 0.5
     effort_bins: int = 16
     reply_ambiguous: str = "move"  # train.reply_map
+    square_labels: bool = True  # D4's per-square labels re-derived at replay (the trainer's replay_positions)
+    square_mate_nodes: int = 200_000  # each arrival_gives_mate search's node budget (the engine's placeholder)
     # I13 (section 12.8): Lc0's threshold; the band a placeholder; cheap searches' choices included.
     deblunder: bool = True
     deblunder_threshold: float = 0.1
@@ -149,6 +196,8 @@ class TargetConfig:
             raise ValueError("policy_mode must be 'exclusion' or 'provenance' (I2, section 12.2)")
         if self.prune_prior not in ("search", "noise_free"):
             raise ValueError("prune_prior must be 'search' or 'noise_free'")
+        if self.flat_pruning not in FLAT_PRUNING:
+            raise ValueError(f"flat_pruning must be one of {FLAT_PRUNING} (D2's flat form, issue 242(b))")
         if self.categorical_source not in ("root_value", "short_term"):
             raise ValueError("categorical_source must be 'root_value' or 'short_term' (6j)")
         if not 0 <= self.categorical_horizon < len(self.short_term_horizons):
@@ -159,6 +208,8 @@ class TargetConfig:
             raise ValueError("provenance_weight in [0, 1], forced_k >= 0, soft_policy_power > 0")
         if self.deblunder_band < 0 or self.travel_horizon < 1 or not 0.0 <= self.effort_stable_fraction <= 1.0:
             raise ValueError("deblunder_band >= 0, travel_horizon >= 1, effort_stable_fraction in [0, 1]")
+        if self.square_mate_nodes < 1:
+            raise ValueError("square_mate_nodes >= 1 (0 would leave every mate label undecided)")
         if self.reply_ambiguous not in AMBIGUOUS_MODES:
             raise ValueError(f"reply_ambiguous must be one of {AMBIGUOUS_MODES}")
         if self.proof_rescoring and not PROOF_CHANNEL_SIGNED_OFF:
@@ -171,6 +222,15 @@ class TargetConfig:
 
 
 # --- I2: the pruned visits ---------------------------------------------------------------------------
+
+
+def steered_visits(d: DecisionRecord, cfg: TargetConfig) -> np.ndarray:
+    """Each root child's visits with I2's steered visits excluded or weighted (float64; before any
+    pruning) - per root child, at a flat decision per turn."""
+    c = d.children
+    n = c.visits.astype(np.float64)
+    steered = np.minimum(c.steered_visits.astype(np.float64), n)
+    return n - (steered if cfg.policy_mode == "exclusion" else (1.0 - cfg.provenance_weight) * steered)
 
 
 def noise_keep_of(header: dict, d: DecisionRecord) -> float:
@@ -191,11 +251,12 @@ def noise_keep_of(header: dict, d: DecisionRecord) -> float:
 
 
 def replica_prior(d: DecisionRecord, cfg: TargetConfig, *, noise_keep: float = 1.0) -> np.ndarray:
-    """The prior the pruning's PUCT replica reads, the steering taken out (I2; float64): under
-    ``prune_prior="noise_free"`` the noise-free prior less the boost (the unsteered noise-free
-    prior); under ``"search"`` the search's prior less ``noise_keep`` x the boost - the root noise
-    mixes ``noise_keep`` (``1 - epsilon``, ``noise_keep_of``) of the steered noise-free prior, so
-    that is the unsteered prior with the same noise. Negative values (none, exactly) clipped."""
+    """The prior the pruning's PUCT replica reads, per root child (at a flat decision per turn), the
+    steering taken out (I2; float64): under ``prune_prior="noise_free"`` the noise-free prior less the
+    boost (the unsteered noise-free prior); under ``"search"`` the search's prior less ``noise_keep`` x
+    the boost - the root noise mixes ``noise_keep`` (``1 - epsilon``, ``noise_keep_of``) of the steered
+    noise-free prior, so that is the unsteered prior with the same noise. Negative values (none,
+    exactly) clipped."""
     c = d.children
     boost = c.boost.astype(np.float64)
     if cfg.prune_prior == "search":
@@ -206,23 +267,16 @@ def replica_prior(d: DecisionRecord, cfg: TargetConfig, *, noise_keep: float = 1
     return np.maximum(prior, 0.0)
 
 
-def pruned_visits(d: DecisionRecord, cfg: TargetConfig, *, noise_keep: float = 1.0) -> np.ndarray:
-    """Each root child's visits for the targets (float64): steered visits excluded or weighted
-    (I2), then KataGo's forced-playout pruning against the most visited child (module docstring).
-    ``noise_keep``: ``1 - epsilon`` of the decision's root noise (``noise_keep_of``; the builder
-    reads it from the record)."""
-    c = d.children
-    n = c.visits.astype(np.float64)
-    steered = np.minimum(c.steered_visits.astype(np.float64), n)
-    n = n - (steered if cfg.policy_mode == "exclusion" else (1.0 - cfg.provenance_weight) * steered)
+def prune_counts(
+    n: np.ndarray, prior: np.ndarray, q: np.ndarray, scale: np.ndarray, sqrt_parent: float, cpuct: float, cfg: TargetConfig
+) -> np.ndarray:
+    """KataGo's forced-playout pruning of the counts ``n`` against the most counted entry (module
+    docstring): each other entry loses up to ``floor(sqrt(forced_k P sum n))`` while its PUCT score
+    ``q + cpuct P sqrt_parent / (1 + n) scale`` stays below the best's; one left with a single count
+    is pruned outright (``prune_single_visit``)."""
     if n.size == 0 or not (n > 0).any():
-        return n
+        return n.copy()
     best = int(np.argmax(n))
-    prior = replica_prior(d, cfg, noise_keep=noise_keep)
-    sqrt_parent = math.sqrt(max(float(d.root_visits), 1.0))
-    cpuct = float(d.root_cpuct)
-    scale = c.exploration_scale.astype(np.float64)
-    q = c.q.astype(np.float64)
     total = float(n.sum())
 
     def puct(i: int, visits: float) -> float:
@@ -242,6 +296,18 @@ def pruned_visits(d: DecisionRecord, cfg: TargetConfig, *, noise_keep: float = 1
             v = 0.0
         out[i] = v
     return out
+
+
+def pruned_visits(d: DecisionRecord, cfg: TargetConfig, *, noise_keep: float = 1.0) -> np.ndarray:
+    """Each root child's visits for the targets (float64): steered visits excluded or weighted
+    (I2), then KataGo's forced-playout pruning against the most visited child (module docstring),
+    its replica reading ``replica_prior``. ``noise_keep``: ``1 - epsilon`` of the decision's root
+    noise (``noise_keep_of``; the builder reads it from the record)."""
+    c = d.children
+    n = steered_visits(d, cfg)
+    sqrt_parent = math.sqrt(max(float(d.root_visits), 1.0))
+    prior = replica_prior(d, cfg, noise_keep=noise_keep)
+    return prune_counts(n, prior, c.q.astype(np.float64), c.exploration_scale.astype(np.float64), sqrt_parent, float(d.root_cpuct), cfg)
 
 
 def policy_target(d: DecisionRecord, pruned: np.ndarray) -> np.ndarray | None:
@@ -311,6 +377,181 @@ def kl_divergence(target: np.ndarray, prior: np.ndarray) -> float:
     return float((target[t] * (np.log(target[t]) - np.log(p))).sum())
 
 
+# --- D2's flat form: the per-board marginals (issue 242) ----------------------------------------------
+
+#: The flat target's option for leaving a board (``GameTargets.flat``'s candidate column).
+LEAVE = -1
+#: A turn's option on a board that is no option of its distribution (an arrival under SourceOnly), and
+#: one the candidates do not hold - both left out of the board's marginal.
+_OUTSIDE, _UNMATCHED = -2, -3
+
+
+def move_coord(m) -> tuple[int, ...]:
+    """A move's coordinates - source, destination, promotion - its flags left out, so a J6 branch has
+    the coordinates of the non-branching jump it was (the engine's ``coord_of``, issue 164)."""
+    promo = int(m["promotion"]) + 1 if int(m["flags"]) & T5D_MOVE_PROMOTION else 0
+    return (
+        int(m["from_timeline"]),
+        int(m["from_half_turn"]),
+        int(m["from_square"]),
+        int(m["to_timeline"]),
+        int(m["to_half_turn"]),
+        int(m["to_square"]),
+        promo,
+    )
+
+
+def is_arrival(m) -> bool:
+    """A non-branching jump - an option of the board it arrives on too (``flat_jumps`` BothBoards)."""
+    jump = int(m["from_timeline"]) != int(m["to_timeline"]) or int(m["from_half_turn"]) != int(m["to_half_turn"])
+    return jump and not int(m["flags"]) & T5D_MOVE_BRANCHING
+
+
+@dataclass(frozen=True)
+class FlatBoard:
+    """One playable board's distribution at a flat decision (issues 164, 165): its index among the
+    decision's boards, its timeline, the candidates leaving it and those arriving on it (non-branching
+    jumps, with ``flat_jumps`` BothBoards) - then leaving it."""
+
+    board: int
+    timeline: int
+    own: tuple[int, ...]
+    arrivals: tuple[int, ...]
+
+    @property
+    def options(self) -> tuple[int, ...]:
+        """Its options in order: the moves leaving it, the arrivals, leaving it (``LEAVE``)."""
+        return (*self.own, *self.arrivals, LEAVE)
+
+
+def flat_settings(record: GameRecord) -> tuple[bool, float]:
+    """The flat form's readings the targets follow, from the record's full-search parameters: whether a
+    non-branching jump is an option of its destination too (``flat_jumps`` BothBoards) and the leave
+    share where the network gave no leave logit - the engine's defaults where none are recorded."""
+    full = record.header.get("search", {}).get("full", {}) if record.header.get("search") else {}
+    return int(full.get("flat_jumps", T5D_FLAT_JUMPS_BOTH)) == T5D_FLAT_JUMPS_BOTH, float(full.get("leave_share", 0.5))
+
+
+def flat_boards(d: DecisionRecord, arrivals: bool = True) -> list[FlatBoard]:
+    """The acting player's playable boards at ``d``, ascending by timeline, each with its options."""
+    cand = d.candidates
+    out = []
+    order = sorted((int(d.boards[b, 0]), b) for b in np.flatnonzero(d.playable).tolist())
+    for tl, b in order:
+        own = tuple(i for i in range(cand.shape[0]) if int(cand[i]["from_timeline"]) == tl)
+        arr = tuple(i for i in range(cand.shape[0]) if arrivals and is_arrival(cand[i]) and int(cand[i]["to_timeline"]) == tl)
+        out.append(FlatBoard(b, tl, own, arr))
+    return out
+
+
+def turn_option(turn: np.ndarray, fb: FlatBoard, candidates: np.ndarray, arrivals: bool = True) -> int:
+    """The option a turn takes on board ``fb`` (the engine's ``score_of``): the candidate index of the
+    move leaving the board, else of a non-branching jump arriving on it, else ``LEAVE``; an arrival
+    under SourceOnly is outside the distribution, and a move no candidate matches is unmatched."""
+    option, arrival = None, False
+    for m in turn:
+        if int(m["from_timeline"]) == fb.timeline:
+            option = m
+    if option is None:
+        for m in turn:
+            if is_arrival(m) and int(m["to_timeline"]) == fb.timeline:
+                option, arrival = m, True
+    if option is None:
+        return LEAVE
+    if arrival and not arrivals:
+        return _OUTSIDE
+    key = move_coord(option)
+    for i in fb.arrivals if arrival else fb.own:
+        if move_coord(candidates[i]) == key:
+            return i
+    return _UNMATCHED
+
+
+def flat_policy_target(
+    d: DecisionRecord,
+    visits: np.ndarray,
+    arrivals: bool = True,
+    prune: TargetConfig | None = None,
+    *,
+    noise_keep: float = 1.0,
+) -> np.ndarray | None:
+    """D2's flat form's policy target at ``d`` (module docstring): ``(K, 3)`` float64 rows ``(board,
+    candidate, probability)`` - candidate ``LEAVE`` for leaving - over every option of every playable
+    board that keeps visit mass; None where none does. ``visits``: each turn child's visits, I2's
+    steered visits already excluded or weighted. ``prune`` given (``flat_pruning`` "board", the
+    default): each board's option counts - the turns' visits marginalised - are then pruned as
+    ``pruned_visits`` prunes root children (``prune_counts`` under ``prune``'s settings), each option
+    read as the turns taking it - its prior their priors summed, its value and exploration scale their
+    visit-weighted means, a turn's prior ``replica_prior``'s (the steering taken out per turn before
+    summing; ``noise_keep`` as there); None (the "turn" arm): ``visits`` are the turns' already pruned
+    (``pruned_visits``) and are marginalised as they are."""
+    if float(visits.sum()) <= 0:
+        return None
+    c = d.children
+    if prune is not None:
+        prior = replica_prior(d, prune, noise_keep=noise_keep)
+        q, scale = c.q.astype(np.float64), c.exploration_scale.astype(np.float64)
+        sqrt_parent, cpuct = math.sqrt(max(float(d.root_visits), 1.0)), float(d.root_cpuct)
+    rows = []
+    for fb in flat_boards(d, arrivals):
+        index = {k: j for j, k in enumerate(fb.options)}
+        n = np.zeros(len(index), dtype=np.float64)
+        p, qn, sn = np.zeros_like(n), np.zeros_like(n), np.zeros_like(n)
+        for child, v in enumerate(visits.tolist()):
+            if v <= 0 and prune is None:
+                continue
+            j = index.get(turn_option(d.turn(child), fb, d.candidates, arrivals))
+            if j is None:  # outside the board's distribution, or unmatched: left out
+                continue
+            if prune is not None:
+                p[j] += prior[child]
+            if v <= 0:
+                continue
+            n[j] += v
+            if prune is not None:
+                qn[j] += v * q[child]
+                sn[j] += v * scale[child]
+        if prune is not None and (n > 0).any():
+            seen = np.where(n > 0, n, 1.0)
+            n = prune_counts(n, p, qn / seen, sn / seen, sqrt_parent, cpuct, prune)
+        kept = float(n.sum())
+        if kept <= 0:
+            continue
+        rows += [(fb.board, k, x / kept) for k, x in zip(fb.options, n.tolist(), strict=True)]
+    return np.array(rows, dtype=np.float64).reshape(-1, 3) if rows else None
+
+
+def flat_raw_prior(d: DecisionRecord, fb: FlatBoard, leave_share: float = 0.5) -> np.ndarray:
+    """The network's raw distribution over ``fb.options`` (temperature 1, no noise): the softmax of the
+    raw move logits and the raw leave logit; with no leave logit, leaving takes ``leave_share`` and the
+    moves share the rest in their softmax's proportions (the engine's reading, issue 165)."""
+    z = d.raw_logits.astype(np.float64)[list(fb.own) + list(fb.arrivals)]
+    leave = float(d.raw_leave_logits[fb.board])
+    if math.isfinite(leave):
+        z = np.append(z, leave)
+        e = np.exp(z - z.max())
+        return e / e.sum()
+    if z.size == 0:
+        return np.ones(1)
+    e = np.exp(z - z.max())
+    return np.append((1.0 - leave_share) * e / e.sum(), leave_share)
+
+
+def flat_kl(d: DecisionRecord, target: np.ndarray, arrivals: bool = True, leave_share: float = 0.5) -> float:
+    """I12's divergence at a flat decision: the sum over the boards with a target of KL(the board's
+    marginal || its raw prior) (``kl_divergence``; inf where the prior misses a target entry)."""
+    out = 0.0
+    for fb in flat_boards(d, arrivals):
+        rows = target[target[:, 0] == fb.board]
+        if rows.shape[0] == 0:
+            continue
+        kl = kl_divergence(rows[:, 2], flat_raw_prior(d, fb, leave_share))
+        if math.isnan(kl):
+            continue
+        out += kl
+    return out
+
+
 def effort_bin(visits: int, converged: bool, n_bins: int = 16) -> int:
     """``heads.effort_bin`` for one decision: ``floor(log2 visits)`` capped at ``n_bins - 2``
     when converged, the censored top bin ``n_bins - 1`` otherwise."""
@@ -341,6 +582,13 @@ class GameTargets:
     effort: np.ndarray  # (D,) int64; -1: none
     kl: np.ndarray  # (D,) KL(policy target || raw prior); NaN: no target
     reply: list[ReplyMap | None] = field(default_factory=list)  # empty: not computed
+    #: (boards, cells, len(SQUARE_LABELS)) per decision, NaN undecided; empty: not computed (no
+    #: position carried labels). Re-derived from the replayed states, never stored.
+    square: list[np.ndarray] = field(default_factory=list)
+    #: D2's flat form (issue 242): per decision ``(K, 3)`` rows (board, candidate - -1 leaving -,
+    #: probability), every option of every playable board with a target; None: no flat target (not
+    #: a flat decision, a cheap search, or no visit). Empty: built before the flat form's target.
+    flat: list[np.ndarray | None] = field(default_factory=list)
 
     def __len__(self) -> int:
         return int(self.full_search.shape[0])
@@ -351,11 +599,19 @@ def _abs_wdl(view: np.ndarray, acting: int) -> np.ndarray:
     return view if acting == 0 else view[::-1].copy()
 
 
-def build_targets(record: GameRecord, cfg: TargetConfig | None = None, *, positions: Sequence | None = None, proofs=None) -> GameTargets:
+def build_targets(
+    record: GameRecord,
+    cfg: TargetConfig | None = None,
+    *,
+    positions: Sequence | None = None,
+    proofs=None,
+    reply: bool | None = None,
+) -> GameTargets:
     """Every target of one game from its record (module docstring). ``positions``: each decision's
     network input (``selfplay.replay_positions``, or kept at generation) - given, the reply
-    prototype's targets are computed too. ``proofs``: I14's source - refused (the proof channel is
-    off)."""
+    prototype's targets are computed too (unless ``reply`` is False), and the per-square labels the
+    positions carry (``Position.square_labels``) are taken. ``proofs``: I14's source - refused (the
+    proof channel is off)."""
     cfg = TargetConfig() if cfg is None else cfg
     cfg.validate()
     if proofs is not None:
@@ -367,8 +623,10 @@ def build_targets(record: GameRecord, cfg: TargetConfig | None = None, *, positi
     k_h = len(cfg.short_term_horizons)
     search = record.header.get("search", {})
     share = float(search.get("full", {}).get("submit_share", 0.0)) if search else 0.0
+    arrivals, leave_share = flat_settings(record)
 
-    pruned = [pruned_visits(d, cfg, noise_keep=noise_keep_of(record.header, d)) for d in ds]
+    keeps = [noise_keep_of(record.header, d) for d in ds]
+    pruned = [pruned_visits(d, cfg, noise_keep=keeps[i]) for i, d in enumerate(ds)]
     policy: list[np.ndarray | None] = []
     soft: list[np.ndarray | None] = []
     full = np.zeros(n, dtype=bool)
@@ -376,16 +634,26 @@ def build_targets(record: GameRecord, cfg: TargetConfig | None = None, *, positi
     root_wdl = np.zeros((n, 3), dtype=np.float64)
     kl = np.full(n, math.nan, dtype=np.float64)
     effort = np.full(n, -1, dtype=np.int64)
+    flat: list[np.ndarray | None] = []
     for i, d in enumerate(ds):
         q, dd = pruned_value(d, pruned[i])
         value[i] = q
         root_wdl[i] = wdl_of(q, dd)
-        pt = policy_target(d, pruned[i]) if d.full_search else None
+        ft = None
+        if d.flat and d.full_search:  # issue 242(b): pruned per board (the default) or per turn (the arm)
+            if cfg.flat_pruning == "turn":
+                ft = flat_policy_target(d, pruned[i], arrivals)
+            else:
+                ft = flat_policy_target(d, steered_visits(d, cfg), arrivals, prune=cfg, noise_keep=keeps[i])
+        pt = policy_target(d, pruned[i]) if d.full_search and not d.flat else None
         policy.append(pt)
+        flat.append(ft)
         soft.append(None if pt is None else soft_policy(pt, cfg.soft_policy_power))
-        full[i] = pt is not None
+        full[i] = pt is not None or ft is not None
         if pt is not None:
             kl[i] = kl_divergence(pt, raw_prior(d, share))
+        elif ft is not None:
+            kl[i] = flat_kl(d, ft, arrivals, leave_share)
         if d.full_search:
             converged = d.stop == "kl" or (d.root_visits - d.root_best_since) >= cfg.effort_stable_fraction * d.root_visits
             effort[i] = effort_bin(d.root_best_since, converged, cfg.effort_bins)
@@ -440,7 +708,7 @@ def build_targets(record: GameRecord, cfg: TargetConfig | None = None, *, positi
                 active = best_abs
             m_b = best_child_moves_left(d, b)
             if math.isfinite(m_b):
-                offset = 1.0 if d.children.candidate[b] < 0 else 0.0  # a submit ends the turn in progress
+                offset = 1.0 if d.children.candidate[b] < 0 else 0.0  # a submit, or a whole turn (the flat form), ends the turn in progress
                 end_b = d.action + lead + m_b + offset
                 if math.isfinite(active_end):
                     active_end = (1 - w) * active_end + w * end_b
@@ -465,9 +733,9 @@ def build_targets(record: GameRecord, cfg: TargetConfig | None = None, *, positi
     final_active = set(int(t) for t in record.header["result"].get("final_active_timelines", []))
     landings: list[tuple[int, int, int, int]] = []  # (decision, turn, to_timeline, to_half_turn) of every travel played
     for i, d in enumerate(ds):
-        m = d.played_move()
-        if m is not None and int(m["flags"]) & T5D_MOVE_TRAVEL:
-            landings.append((i, d.action, int(m["to_timeline"]), int(m["to_half_turn"])))
+        for m in d.played_moves():  # a flat decision's whole turn
+            if int(m["flags"]) & T5D_MOVE_TRAVEL:
+                landings.append((i, d.action, int(m["to_timeline"]), int(m["to_half_turn"])))
     board = []
     for i, d in enumerate(ds):
         horizon = d.action + cfg.travel_horizon
@@ -479,9 +747,10 @@ def build_targets(record: GameRecord, cfg: TargetConfig | None = None, *, positi
         lab[:, 2] = math.nan  # tactical volatility: proofs (gated)
         board.append(lab)
 
-    reply: list[ReplyMap | None] = []
-    if positions is not None:
-        reply = reply_targets(record, positions, cfg)
+    replies: list[ReplyMap | None] = []
+    if positions is not None and reply is not False:
+        replies = reply_targets(record, positions, cfg)
+    square = square_targets(record, positions) if positions is not None else []
     return GameTargets(
         policy=policy,
         soft_policy=soft,
@@ -497,7 +766,9 @@ def build_targets(record: GameRecord, cfg: TargetConfig | None = None, *, positi
         board=board,
         effort=effort,
         kl=kl,
-        reply=reply,
+        reply=replies,
+        square=square,
+        flat=flat,
     )
 
 
@@ -531,7 +802,9 @@ def _blunder_weight(d: DecisionRecord, pruned: np.ndarray, cfg: TargetConfig) ->
 
 def reply_targets(record: GameRecord, positions: Sequence, cfg: TargetConfig) -> list[ReplyMap | None]:
     """D4's reply prototype per decision: the opponent's next turn (its decisions and played moves)
-    mapped onto the decision's input (``train.reply_map``); None where the game has no next turn."""
+    mapped onto the decision's input (``train.reply_map``); None where the game has no next turn, and
+    under D2's flat form (a turn is one decision of several moves: the map reads one candidate per
+    decision - not built, issue 242)."""
     ds = record.decisions
     if len(positions) != len(ds):
         raise ValueError(f"{len(positions)} positions for {len(ds)} decisions")
@@ -541,7 +814,7 @@ def reply_targets(record: GameRecord, positions: Sequence, cfg: TargetConfig) ->
     out: list[ReplyMap | None] = []
     for i, d in enumerate(ds):
         nxt = by_turn.get(d.action + 1)
-        if not nxt:
+        if not nxt or d.flat or any(ds[s].flat for s in nxt):
             out.append(None)
             continue
         played = []
@@ -551,6 +824,23 @@ def reply_targets(record: GameRecord, positions: Sequence, cfg: TargetConfig) ->
             played.append(k)
         state = _state(positions[i])
         out.append(map_reply(state, [_state(positions[s]) for s in nxt], played, ambiguous=cfg.reply_ambiguous))
+    return out
+
+
+def square_targets(record: GameRecord, positions: Sequence) -> list[np.ndarray]:
+    """D4's per-square targets per decision, from the labels the positions carry
+    (``Position.square_labels``); empty unless every position carries them."""
+    if len(positions) != len(record.decisions):
+        raise ValueError(f"{len(positions)} positions for {len(record.decisions)} decisions")
+    labels = [getattr(p, "square_labels", None) for p in positions]
+    if not labels or any(lab is None for lab in labels):
+        return []
+    out = []
+    for i, (d, given) in enumerate(zip(record.decisions, labels, strict=True)):
+        lab = np.asarray(given, dtype=np.float64)
+        if lab.ndim != 3 or lab.shape[0] != d.n_boards:
+            raise ValueError(f"decision {i}: per-square labels of shape {lab.shape} for {d.n_boards} boards")
+        out.append(lab)
     return out
 
 
@@ -607,8 +897,8 @@ def write_targets(path: str | Path, t: GameTargets) -> Path:
     """The targets written at generation (one ``.npz`` beside the record; the reply maps are not
     stored - they are rebuilt from the inputs)."""
     arrays: dict[str, np.ndarray] = {}
-    for name in ("policy", "soft_policy", "pruned", "board"):
-        width = 3 if name == "board" else None
+    for name in ("policy", "soft_policy", "pruned", "board", "flat"):
+        width = 3 if name in ("board", "flat") else None
         arrays[f"{name}_data"], arrays[f"{name}_offset"], arrays[f"{name}_present"] = _ragged(getattr(t, name), width)
     for name in _COLUMNS:
         arrays[name] = getattr(t, name)
@@ -619,10 +909,15 @@ def write_targets(path: str | Path, t: GameTargets) -> Path:
 
 
 def read_targets(path: str | Path) -> GameTargets:
+    """The targets ``write_targets`` wrote. A file written before the flat form's target (no
+    ``flat_*`` arrays - beside a version 1 record, which is refused too) is refused: rebuild the
+    targets from the record (``build_targets``)."""
     with np.load(Path(path), allow_pickle=False) as z:
         a = {k: z[k] for k in z.files}
+    if "flat_data" not in a:
+        raise ValueError(f"{path}: targets written before D2's flat form's target (no flat_* arrays): rebuild them from the record")
     kw = {name: a[name] for name in _COLUMNS}
-    for name in ("policy", "soft_policy", "pruned", "board"):
+    for name in ("policy", "soft_policy", "pruned", "board", "flat"):
         kw[name] = _unragged(a[f"{name}_data"], a[f"{name}_offset"], a[f"{name}_present"])
     return GameTargets(**kw)
 
@@ -665,6 +960,13 @@ def collate_rows(rows: Sequence[Row], net_cfg) -> tuple:
     submit = torch.zeros(bsz, dtype=torch.float32)
     board = torch.zeros(bsz, n_max, 3, dtype=torch.float32)
     opp = torch.zeros(bsz, batch.opp_move_valid.shape[1], dtype=torch.float32)
+    # D2's flat form (issue 242): each flat row's per-board target entries (``losses.Targets.flat_*``).
+    flat_entries = [r.targets.flat[r.index] if r.targets.flat else None for r in rows]
+    k_max = max([e.shape[0] for e in flat_entries if e is not None], default=0)
+    flat_rows = torch.zeros(bsz, dtype=torch.bool)
+    flat_option = torch.full((bsz, k_max), -1, dtype=torch.long)
+    flat_group = torch.full((bsz, k_max), -1, dtype=torch.long)
+    flat_target = torch.zeros(bsz, k_max, dtype=torch.float32)
     for i, (r, st) in enumerate(zip(rows, states, strict=True)):
         t, j = r.targets, r.index
         pt = t.policy[j]
@@ -680,6 +982,31 @@ def collate_rows(rows: Sequence[Row], net_cfg) -> tuple:
         board[i, : lab.shape[0]] = torch.from_numpy(lab).float()
         if replies[i] is not None:
             opp[i, : replies[i].target.shape[0]] = torch.from_numpy(replies[i].target).float()
+        e = flat_entries[i]
+        flat_rows[i] = e is not None  # a full flat decision with visits (else no policy-type target at all)
+        if e is not None:
+            group, cand = e[:, 0].astype(np.int64), e[:, 1].astype(np.int64)
+            if (group < 0).any() or (group >= st.n_boards).any() or (cand >= m).any() or (cand < -1).any():
+                raise ValueError(f"row {i}: a flat target entry outside the input's boards or candidate moves")
+            k = e.shape[0]
+            flat_option[i, :k] = torch.from_numpy(np.where(cand >= 0, cand, m_max + group))
+            flat_group[i, :k] = torch.from_numpy(group)
+            flat_target[i, :k] = torch.from_numpy(e[:, 2]).float()
+
+    # D4's per-square labels onto the square tokens (board-major: board b's cell c is token
+    # b * (W*H + R) + c, the tokens' storage order - A7 moves none); NaN elsewhere and where a row
+    # has none.
+    square = torch.full((bsz, length, net_cfg.n_square_labels), math.nan)
+    for i, (r, st) in enumerate(zip(rows, states, strict=True)):
+        if not r.targets.square:
+            continue
+        lab = r.targets.square[r.index]
+        cells = int(st.width) * int(st.height)
+        if lab.shape != (st.n_boards, cells, net_cfg.n_square_labels):
+            raise ValueError(f"row {i}: per-square labels of shape {lab.shape} for {st.n_boards} boards of {cells} cells")
+        tpb = st.layout.tokens_per_board
+        tokens = (np.arange(st.n_boards)[:, None] * tpb + np.arange(cells)[None, :]).reshape(-1)
+        square[i, torch.from_numpy(tokens)] = torch.from_numpy(lab.reshape(-1, net_cfg.n_square_labels)).float()
 
     def col(name, dtype=torch.float32):
         return torch.from_numpy(np.stack([np.asarray(getattr(r.targets, name)[r.index]) for r in rows])).to(dtype)
@@ -691,18 +1018,25 @@ def collate_rows(rows: Sequence[Row], net_cfg) -> tuple:
         short_term=col("short_term"),
         moves_left=col("moves_left"),
         board=board,
-        square=torch.full((bsz, length, net_cfg.n_square_labels), math.nan),
+        square=square,
         effort=col("effort", torch.long),
         submit=submit,
         full_search=col("full_search", torch.bool),
         root_wdl=col("root_wdl"),
         opp_reply=opp if net_cfg.opp_reply else None,
+        flat_rows=flat_rows if bool(flat_rows.any()) else None,
+        flat_option=flat_option if bool(flat_rows.any()) else None,
+        flat_group=flat_group if bool(flat_rows.any()) else None,
+        flat_target=flat_target if bool(flat_rows.any()) else None,
     )
     return batch, targets
 
 
 __all__ = [
+    "LEAVE",
     "PROOF_CHANNEL_SIGNED_OFF",
+    "FLAT_PRUNING",
+    "FlatBoard",
     "Row",
     "SCORED_ENDS",
     "TARGET_SOURCES",
@@ -712,17 +1046,28 @@ __all__ = [
     "build_targets",
     "collate_rows",
     "effort_bin",
+    "flat_boards",
+    "flat_kl",
+    "flat_policy_target",
+    "flat_raw_prior",
+    "flat_settings",
+    "is_arrival",
     "kl_divergence",
+    "move_coord",
     "noise_keep_of",
     "policy_target",
     "pruned_value",
+    "prune_counts",
     "pruned_visits",
     "raw_prior",
     "read_targets",
     "replica_prior",
     "reply_targets",
     "soft_policy",
+    "square_targets",
+    "steered_visits",
     "target_differences",
+    "turn_option",
     "wdl_of",
     "write_targets",
 ]

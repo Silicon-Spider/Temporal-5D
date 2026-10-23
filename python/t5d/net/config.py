@@ -39,6 +39,12 @@ The build rules (spec section 15.1) decide what else appears here:
   ``"none"`` is the network bit for bit as before the flag existed. The format's unstated
   details - the scale rule, weight scale granularity, whether attention is included, P's
   precision - are placeholders (spec issue 238).
+* **A8's board-layout embedding** (prototype, gate 6p; section 2.2; ``layout.py``) is behind its
+  flag, off: ``board_layout_embedding`` gives every square its board's flattened one-hot layout
+  (64 cells x 24 owner-and-piece states, in A7's canonical order) projected to
+  ``layout_channels`` (16), added to the token input, then an FFN. Its unstated details - the
+  FFN's width (``layout_ffn_ratio``) and form, where a smaller board sits in the 8 x 8 frame
+  (``layout_padding``) - are placeholders (spec issue 240); it is never quantised (G2).
 * **Stage N3** adds the attention scope (``attn_scope``): ``"dense"`` (C1, the default -
   build dense first) or ``"block_causal"`` (C17 and C19, committed rows of a deferred
   configuration, C2 - built because section 15.2's equivalence suite and section 15.3's
@@ -84,6 +90,8 @@ The build rules (spec section 15.1) decide what else appears here:
   232).
 * **D9's optimistic policy** (prototype, CHECKPOINT 7, section 8.1) is behind its flag, off
   (``optimistic_policy``); match play only (spec issue 233).
+* **D2's flat head** (committed-class, section 8.2): one "leave it" logit per board, always built,
+  what it reads a placeholder (``leave_pool``; spec issue 241).
 * **F5** (committed, CHECKPOINT 6, section 9.3): every trunk norm RMSNorm-style - no
   mean-centring, no bias (``trunk.RMSNorm``) - no biases in the Q, K and V projections
   (``qkv_bias``), the attention-output and FFN biases kept (``out_ffn_bias``), pre-norm;
@@ -201,6 +209,9 @@ SUPERSESSION_SCOPES: tuple[str, ...] = ("causal_past", "past_and_epoch_history")
 #: How D8's submit logit is read from the pooled global registers (stage N5, M20;
 #: ``heads.SubmitHead``).
 SUBMIT_HEADS: tuple[str, ...] = ("linear", "pointer")
+#: What D2's per-board "leave it" logit is read from (the flat form's head; ``heads.LeaveHead``,
+#: ``NetConfig.leave_pool``): each board's square tokens' mean, or its per-board registers' mean.
+LEAVE_POOLS: tuple[str, ...] = ("squares", "registers")
 #: Where each sublayer's norm sits (F5; ``trunk.py``): "pre" (the v1) or "post" (ablation
 #: 6y's arm: Lc0's post-norm with DeepNet initialisation).
 NORM_PLACEMENTS: tuple[str, ...] = ("pre", "post")
@@ -209,6 +220,9 @@ NORM_PLACEMENTS: tuple[str, ...] = ("pre", "post")
 FFN_ACTIVATIONS: tuple[str, ...] = ("mish", "squared_relu")
 #: B15's entries for pairs with a per-board register (``NetConfig.disp_register_pairs``).
 DISP_REGISTER_PAIRS: tuple[str, ...] = ("by_kind", "shared")
+#: Where A8's layout puts a board smaller than 8 x 8 in its frame (``NetConfig.layout_padding``;
+#: ``layout.py``): its canonical a1 on the frame's, or centred.
+LAYOUT_PADDINGS: tuple[str, ...] = ("a1", "centre")
 
 
 @dataclass(frozen=True)
@@ -349,6 +363,27 @@ class NetConfig:
     turn_state_hidden: int = 32
     turn_state_scale: float = 8.0
 
+    # --- A8: the board-layout embedding (prototype; default off; section 2.2; layout.py) ---
+    #: Register A8 (gate 6p): "each square gets its whole board's flattened piece layout at layer 0,
+    #: projected per square (16 channels, ~1.6M parameters), with an FFN after the embedding". Off:
+    #: the network without it, bit for bit (its parameters draw from a generator of their own,
+    #: ``model.a8_seed``). The layout is read in A7's canonical (x, y) order (``layout.py``).
+    board_layout_embedding: bool = False
+    #: Channels per square (section 2.2: "at 16 channels per square that is about 1.6M parameters").
+    layout_channels: int = 16
+    #: The width of "an FFN after the embedding", ``layout_ffn_ratio * d_model``: COMMITTED-CLASS
+    #: SILENCE (spec issue 240(b)) - placeholder default, not a decision: 8, the trunk's ratio. Its
+    #: form - one pre-norm residual block, RMSNorm (F5), Mish (F6), on every valid token - is fixed in
+    #: code (``layout.py``). 0 drops the FFN: not the register's A8, the "without the FFN" probe of
+    #: section 15.3's cost row.
+    layout_ffn_ratio: int = 8
+    #: Where a board smaller than 8 x 8 sits in the layout's frame (section 2.2: "boards smaller
+    #: than 8 x 8 are padded"; ``LAYOUT_PADDINGS``). COMMITTED-CLASS SILENCE (spec issue 240(d)) -
+    #: placeholder default, not a decision: "a1" - the board's canonical a1 on the frame's a1;
+    #: "centre" centres it. Both in the acting player's frame (A7). Boards larger than 8 x 8 are
+    #: refused (no variant has one).
+    layout_padding: str = "a1"
+
     # --- heads (sections 8.1, 8.3, 12.4) ---
     #: Width of the policy pointer projections f and g (D1). Promotions add a learned
     #: per-piece logit offset read from the destination token (D1, section 8.1, M20:
@@ -434,6 +469,29 @@ class NetConfig:
     #: ``PositionState.submit_possible``) and masked to -inf unless it is legal (C4:
     #: ``submit_legal``); the policy distribution is then over the moves and submit together.
     submit_head: str = "linear"
+
+    # --- D2's flat form: the per-board "leave it" logit (section 8.2; spec issue 241) ---
+    #: Register D2's flat form generates whole turns "best-first by summed logits", and "optional
+    #: boards carry a 'leave it' option with its own prior"; its policy targets are "per-board visit
+    #: marginals, so its policy normalises per board rather than across all moves - a head change"
+    #: (section 8.2). The head is one logit per board (``heads.LeaveHead``), softmaxed by the engine
+    #: with that board's move logits (BUILD_LOG issues 164, 165) and trained per board on the
+    #: marginals (``train.targets``, ``train.losses``; issue 242). Always built - no on/off flag:
+    #: D2 is committed-class and Undecided between built arms, not a prototype (section 8.2: "Both
+    #: are built either way, since D2 is committed-class"); the ply split and the tree form never
+    #: read it. Drawn from a generator of its own (``model.d2_seed``), so it changed no other
+    #: parameter. What it reads is not stated anywhere - COMMITTED-CLASS SILENCE (D2; issue 241) -
+    #: placeholder default, not a decision. ``leave_pool``:
+    #:   "squares"   - the mean of the board's square tokens, as the per-board auxiliary heads read
+    #:                 (section 9.2: "Mean-pool board squares, per-board"; B8: "registers stay free
+    #:                 scratch");
+    #:   "registers" - the mean of the board's per-board registers - D8's submit logit's form
+    #:                 ("read from the pooled global registers") carried to the board; with no
+    #:                 per-board registers (an ablation-3 arm) the squares' mean, as the global
+    #:                 pool falls back (spec issue 225).
+    #: Its readout - a linear map of the pooled state, d + 1 parameters, as D8's ``"linear"`` submit
+    #: readout - is a placeholder fixed in code (issue 241).
+    leave_pool: str = "squares"
 
     # --- initialisation (section 15.2: realistic scale, never zeros) ---
     #: Linear weights: normal with std 1/sqrt(fan_in) (LeCun). Under pre-norm the attention
@@ -879,6 +937,8 @@ class NetConfig:
             raise ValueError("attn_chunk and attn_block_boards must be positive")
         if self.dt_hidden < 1 or self.turn_state_hidden < 1 or not self.dt_scale > 0 or not self.turn_state_scale > 0:
             raise ValueError("dt_hidden, turn_state_hidden, dt_scale and turn_state_scale must be positive")
+        if self.layout_channels < 1 or self.layout_ffn_ratio < 0:
+            raise ValueError("layout_channels must be positive and layout_ffn_ratio non-negative (A8; 0: no FFN)")
         if self.value_bins < 2 or self.effort_bins < 2:
             raise ValueError("categorical heads need at least two bins")
         horizons = tuple(self.short_term_horizons)
@@ -889,6 +949,8 @@ class NetConfig:
             raise ValueError("soft_policy_dim, opp_policy_dim and optimistic_policy_dim must be positive")
         if self.submit_head not in SUBMIT_HEADS:
             raise ValueError(f"submit_head must be one of {SUBMIT_HEADS}")
+        if self.leave_pool not in LEAVE_POOLS:
+            raise ValueError(f"leave_pool must be one of {LEAVE_POOLS} (D2's flat head)")
         if self.regs_per_board < 0 or self.global_regs < 0:
             raise ValueError("register counts must be non-negative")
         if self.rope_per_head or self.routing_table:
@@ -967,6 +1029,7 @@ class NetConfig:
             ("trunk_quant", TRUNK_QUANT_FORMATS),
             ("trunk_quant_scale", SCALE_RULES),
             ("trunk_quant_weight_scale", WEIGHT_SCALES),
+            ("layout_padding", LAYOUT_PADDINGS),
         ):
             if getattr(self, name) not in options:
                 raise ValueError(f"{name} must be one of {options}")

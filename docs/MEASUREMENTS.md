@@ -51,6 +51,7 @@ quiet-machine block).
 | One refresh | ≈ 10 node-evaluations | not measured: the estimate is windowed and the window is not built (spec issue 39) | | | |
 | KV memory per state | ~260 MB (240) / ~649 MB (600); ~113 MB windowed | BF16 250.9 MB (240, 8 TL), 635.8 MB (600, 12 TL) - frozen boards only, exact; FP8 50.1% | N3 table below; one perspective - under A7 every store holds two entries per root frozen board from the moment its epoch is made (note below) | 0.97 / 0.98 | 2026-10-02, N3 |
 | Local/global interleave | 0.067 TF per node | - | | | |
+| Board-layout embedding (A8) | ~0.1% of attention at 44 boards; ~1.6M parameters at 16 channels | projection 1,573,888 parameters (1,572,864 without its bias), 0.138 GFLOP at 44 boards - **0.099%** of attention by §15.3's formula (0.072% of the counted kernel attention); with the register's FFN (8x, a placeholder) 2,629,120 parameters and 6.29 GFLOP - **4.5%** of attention, 2.0% of the counted forward (0.83% / 0.62% at 240 boards); in the cached configuration A8 adds **10.1%** / **14.4%** to a node (44 / 240 boards: every token embedded at every node); CPU wall indicative only: the embedding +18 ms at 44 boards, +103 ms at 240 (BF16), the forward's change inside the noise | A8 section below; FLOPs counted (load-independent); wall time on a loaded machine (85-100% CPU) | **45x - flagged** (A8 as the register defines it, its FFN at the placeholder's 8x; at least 6.6x with any per-token FFN); the projection alone 0.99 (FLOPs); parameters 1.64x (the projection's 0.98) | 2026-10-23, N-A8 (review fixes the same day) |
 | Leaf-batching gain | 1.2-1.5× | - | | | |
 | NNUE eval | ~10k MACs, sub-µs | - | | | |
 | Movegen throughput | ≥ 20,000/s at 240; ≥ 10,000/s at 600 (§15.6) | pseudo-legal expansion, 1 thread: 44,047/s at 240 boards, 24,951/s at 600 (scope + relations); with the legal-moves filter: milliseconds to minutes per expansion | M9 section below | 2.2x / 2.5x the target (pseudo-legal); far below it with the filter | 2026-10-02, 2740e66 |
@@ -119,6 +120,90 @@ gather and rotation of every cached key; kernel-only ratios measured by a review
 were 3.64x (live set) and 14x (cached vs dense) at 240 boards, 8 timelines. The
 quiet-machine re-run (commands in the build log) records wall and kernel time
 with load samples per job.
+
+### A8 - the board-layout embedding, counted and timed (2026-10-23)
+
+**What it is.** Section 15.3's row "Board-layout embedding (A8) | ~0.1% of attention at 44
+boards; ~1.6M parameters at 16 channels" for register A8 as built behind its flag
+(`python/t5d/net/layout.py`, spec issue 240): the per-board projection of the one-hot layout
+(1,536 -> 64 x 16, with a bias), the 16 -> 256 merge into the token input, and the register's
+"FFN after the embedding" - one pre-norm residual block at 8x, a placeholder. Machine `dev-r`;
+PyTorch 2.13.0+cpu, 12 threads; the F1 network (d 256, L 16, B9's two move-graph heads, B15, the
+block-sparse path, dense scope); one position, `synthetic_state(0, N)` - T = 2,920 tokens at 44
+boards, 15,856 at 240; random weights (model seed 0); window none. Arms: "off" (the v1), "A8" (the
+flag on, its placeholders), "A8 without FFN" (`layout_ffn_ratio = 0`: the row's projection alone -
+not the register's A8).
+
+**Parameters (exact).** Projection 1,573,888 (the weight 1,572,864 - the spec's "~1.6M" - and a
+bias of 1,024); merge 4,096; FFN 1,051,136 (gain 256; 256 -> 2,048 -> 256 with F5's biases): A8
+2,629,120 - the v1's 22,965,426 becomes 25,594,546 (+11.4%); 1,577,984 without the FFN.
+
+**FLOPs, counted** (PyTorch's `FlopCounterMode` over one forward, FP32 trunk - counts do not
+depend on the precision or on load). The counted difference between the arms is exactly
+`cost.layout_flops` at both sizes (also pinned by `test_layout.py`). *Attention, analytic* =
+section 9.1's `4 T^2 d L`; *attention, counted* = the fused CPU kernel's and the global merge's
+products (every key a kernel is handed - B15's per-row biases and the position-free register
+rows widen it, as N3's table notes).
+
+| Boards | A8 projection | merge | FFN | A8 total | Attention: analytic / counted | Forward counted (off) | Projection / attention: analytic / counted | A8 / attention: analytic / counted | A8 / forward |
+|---|---|---|---|---|---|---|---|---|---|
+| 44 | 0.138 GF | 0.024 | 6.124 | 6.286 | 139.7 / 193.6 GF | 316.1 GF | **0.099%** / 0.072% | **4.50%** / 3.25% | 1.99% |
+| 240 | 0.755 | 0.130 | 33.25 | 34.14 | 4,119 / 4,872 | 5,538 | 0.018% / 0.016% | 0.83% / 0.70% | 0.62% |
+
+Without the FFN A8 is 0.162 GFLOP at 44 boards (0.116% of analytic attention) and 0.885 at 240
+(0.021%). Section 15.3's "~0.1%" is the projection's figure (ratio 0.99), but the row is register
+A8's, and A8 has an FFN after the embedding: as built (8x, a placeholder) A8 is 4.50% of attention
+at 44 boards, 45 times the row, and any per-token FFN - even one 1·d wide (0.765 GFLOP at 44
+boards) - makes it at least 0.66%, 6.6 times (issue 240(b)). *(Corrected 2026-10-23, the review
+fixes: this paragraph first called the projection's figure "confirmed" and left A8 unflagged.)*
+
+**Flags (more than 2x off, logged in the build log):** §15.3's A8 row - "~0.1% of attention at 44
+boards" - is 45x off for A8 as the register defines it (4.50% with its FFN at 8x), and at least
+6.6x off with any per-token FFN; the projection alone (0.099%) is within it. The parameters
+(2,629,120 against "~1.6M", 1.64x) are inside the 2x rule. Logged as spec issue 240(l); edit 186.
+
+**In the cached configuration (counted, 2026-10-23, the review fixes).** `CachedEvaluator.prepare`
+embeds every token of a node, frozen boards' included, so A8's per-token FFN is paid over the whole
+position at every node while the node's trunk work is its live set's. Machine `dev-r`; PyTorch
+2.13.0+cpu, 12 threads; FP32 trunk; the F1 network in the cached configuration (`attn_scope =
+"block_causal"`, the placeholder defaults), random weights (model seed 0), A8 off and on;
+`synthetic_state(0, N, n_timelines=8)` - 8 live heads, section 7.1's assumption - its store built
+(`root_epoch`), then its physical child (`cache_bench._children`: one board superseded, one
+created) evaluated against the root's store; window none; FLOPs by `FlopCounterMode` (counts do not
+depend on load). The node = its preparation (the embedding) + the supersession of its missing
+boards + the live pass + the heads; *analytic node* = section 7.6's `pass_flops` of the 544 live
+tokens against all.
+
+| Boards (child) | Child tokens | Preparation off / A8 | Supersession | Live pass | Heads | Node off / A8 | A8 / node: counted / analytic node | Dense forward off / A8 |
+|---|---|---|---|---|---|---|---|---|
+| 44 (45) | 2,986 | 0.050 / 6.478 GF | 3.069 | 60.68 | 0.032 | 63.83 / 70.26 GF | **+10.1%** / 13.0% (of 49.4 GF) | 312.7 / 319.0 GF (+2.0%) |
+| 240 (241) | 15,922 | 0.264 / 34.54 | 12.90 | 224.94 | 0.085 | 238.19 / 272.47 | **+14.4%** / 20.8% (of 164.7 GF) | 5,501 / 5,535 (+0.62%) |
+
+What A8 adds to the node is exactly `cost.layout_flops` at the child (6,428,114,944 and
+34,279,407,616 FLOPs); the supersession, live pass and heads are the same FLOPs with it on or off.
+(The dense forward here is the cached configuration's network run dense, 312.7 GF at 44 boards
+where the dense-scope network above counts 316.1.) A frozen board's embedding feeds only its K/V,
+which the node finds stored: embedding only the live and the missing boards' tokens would remove
+most of A8's share - not built (issue 240(g)). `cache_bench` now counts a node's preparation beside
+its live pass (`prepare_flops`).
+
+**CPU wall time - indicative only.** Same build and positions; each arm built once, warmed on a
+2-board position, then five repetitions interleaved (the arms' order reversed every other
+repetition); medians, minima in brackets. **The machine was loaded**: other lanes' jobs held the
+CPU at 85-100% (Windows' processor load, sampled before and after each block: 97/85, 94/100,
+100/100), so forward times vary by more than A8's share and say nothing about it; the
+embedding's own time (`T5DNet.embed_tokens`, milliseconds) is the usable figure. The 240-board
+FP32 block was stopped unfinished (the machine at 100%). For the quiet-machine block.
+
+| Boards, trunk | Embedding off / A8 / A8 without FFN (ms) | Forward off / A8 / A8 without FFN (s) | A8's embedding time / forward (off) |
+|---|---|---|---|
+| 44, BF16 | 1.69 (1.46) / 19.76 (14.65) / 3.55 (2.73) | 4.28 (3.50) / 4.48 (4.10) / 3.89 (3.69) | +18.1 ms, 0.42% |
+| 44, FP32 | 2.51 (1.90) / 16.00 (13.73) / 4.23 (2.72) | 3.24 (2.92) / 3.27 (2.76) / 3.33 (2.81) | +13.5 ms, 0.42% |
+| 240, BF16 | 15.6 (9.5) / 118.3 (102.1) / 22.9 (16.2) | 75.4 (71.3) / 73.9 (69.8) / 74.2 (68.5) | +102.8 ms, 0.14% |
+
+The embedding runs in FP32 under either trunk (it precedes the trunk's autocast), so its time does
+not follow the trunk's precision. Lc0's "5% latency" is a GPU figure for a different network and is
+not compared.
 
 ### Engine E4 - the gate's full mode on the corpus (2026-10-02)
 
@@ -1128,3 +1213,89 @@ Mutants (the review's plugin): one input scale per batch in the projections - "p
 "pow2" as unmutated, "absmax" 1.9-2.2e-2. So under "pow2" the granularity shows at one seed in
 six; the test's bounds are 1e-5 ("pow2", over all six seeds) and 1e-2 ("absmax"), and the
 granularity is checked directly elsewhere (issue 238(b)).
+
+### The per-square labels and the pin and check relations - cost per state (indicative; no threshold, no verdict)
+
+**What it is.** The wall time of D4's per-square label generator (`t5d_game_square_labels`
+through `Game.square_labels`, engine ABI round 3) on one state, and what B11's pin and check
+relations add to an expansion - before and after the round's review fixes, which read the
+exchange label's recaptures on the board a capture creates off the passed boards (build-log
+spec issue 176(a)). No threshold applies and none is proposed: §12.4 asks for the labels,
+not for a speed; the figures say what a training replay pays per decision.
+
+**Conditions.** 2026-10-23, machine `dev-r`, Release, MSYS2 g++ 16.2.0 (Rev3), one thread,
+through the Python binding (ctypes; Python 3.14.7). The shared machine was not quiet: other
+sessions' work ran beside it (not controlled); the review's mutation runs had ended. Positions:
+`random_position_game("Standard", seed, boards=n, travel_prob=0.5)` for n = 10, 40, 100, 200
+and seeds 0-2 (the first position of seeded random play with at least n boards; random play
+is the engine's own, identical in both builds). Each call timed three times, the minimum
+reported (the review's first figure, "0.3-38 ms per state", was one timing each). Labels:
+the default options (200,000 mate nodes per search). Relations: `expand(square_features=
+"none")` with attack, defence and x-ray, then with pin and check added. *Before*: the
+review's copy of lane/engine 0986472; *after*: the review fixes (this commit). Probe:
+`probe_cost2.py` (scratch; the review's `probe_cost.py` with repeats and the exchange
+counts).
+
+| boards | first moves (ours, theirs) | mate searches | labels before (ms) | labels after (ms) | exchange = 1 before / after | expand, 3 relations (ms) | pin + check added (ms) |
+|---|---|---|---|---|---|---|---|
+| 11 | 75, 66 | 0 | 0.1 | 0.1 | 1 / 1 | 0.04 | 0.01 |
+| 10 | 95, 26 | 0 | 0.3 | 0.2 | 1 / 0 | 0.04 | 0.01 |
+| 10 | 118, 123 | 0 | 0.2 | 0.2 | 0 / 0 | 0.04 | 0.02 |
+| 41 | 300, 189 | 0 | 0.5 | 0.5 | 6 / 5 | 0.06 | 0.02 |
+| 48 | 460, 301 | 0 | 0.9 | 1.2 | 13 / 3 | 0.12 | 0.00 |
+| 40 | 215, 164 | 0 | 0.7 | 0.8 | 10 / 2 | 0.05 | 0.02 |
+| 109 | 1,124, 111 | 2 | 3.8 | 3.3 | 47 / 22 | 0.10 | 0.05 |
+| 121 | 1,369, 723 | 113 | 25.7 | 22.7 | 35 / 15 | 0.14 | 0.12 |
+| 103 | 1,050, 634 | 2 | 4.1 | 6.2 | 37 / 16 | 0.14 | 0.13 |
+| 212 | 2,118, 536 | 60 | 17.0 | 18.7 | 110 / 49 | 0.20 | 0.21 |
+| 208 | 1,852, 840 | 0 | 4.2 | 7.1 | 69 / 24 | 0.18 | 0.18 |
+| 211 | 2,247, 79 | 2 | 6.9 | 7.4 | 65 / 37 | 0.19 | 0.13 |
+
+(The expansion columns are the *after* run's; the *before* run's agree within the noise, its
+pin and check adding 0.00-0.19 ms. No exchange label was Unknown in either run, and no mate
+search stopped on its budget.)
+
+*Read.* The labels cost 0.1-23 ms per state after the fixes (0.1-26 before): most of it the
+second moves (tens of thousands at 200 boards) and, where many moves end a legal action in
+check (113 mate searches at 121 boards), the mate searches. Replaying each capture off the
+passed boards adds up to about 3 ms at 100-200 boards (a played capture, a pass and one
+generation of the occupant's side's moves per replayed square) and halves the squares labelled
+1 (the label no longer means "attacked" there). Pin and check add 0.0-0.2 ms to an expansion
+of 0.04-0.2 ms - up to about double, small against the labels. A training replay labelling
+every decision pays the labels' cost once per decision.
+
+### Cached = dense on every engine variant (MT-04) - the gaps met (numerics; no threshold, no verdict)
+
+**What it is.** The largest differences between the cached path (`python/t5d/net/cache.py`) and
+the dense block-causal pass it must equal (`reference_output`; through the C step API,
+`NetworkEvaluator(scope="block_causal")`, or with a root refresh the two-level reference) on real
+engine positions of every named variant - what `python/tests/engine/test_cached_variants.py`
+asserts against, recorded so that the next re-measurement of §15.2's tolerances (EQ-01) has the
+real-variant figures beside the synthetic ones. No threshold applies: the bounds are
+`tests/net/test_cache.py`'s and `tests/engine/test_network.py`'s.
+
+**Conditions.** 2026-10-23, machine `dev-r`, PyTorch 2.13.0+cpu, Python 3.14.7, the engine library
+built Release in `lane/gate` (main 710921a); one position per evaluation; random weights at
+initialisation scale; window none; lineage reading (C23). Positions: seeded pseudo-legal random
+play from each of the engine's 16 variants (`_walk`: seeds 0 and 1, to the first turn start with
+16 boards, every state of every action), the store shared along each game in one epoch opened a
+third of the way in; the step API's leaves from a random-play root with 8 or more boards, 16
+playouts per search (64 in the transposition test), tree and graph mode, evaluation cache off.
+FP32: 2 layers; the v1 configuration and the step-1 one (A8, D4's reply head, D9 on), both C20
+readings; seven N2 flag sets with `relations_for`'s relations on three variants. BF16: F1 (16
+layers, block-causal), model seed 0, every second state of seed 3's play on Turn Zero, Reversed
+Royalty and Timeline Strategos.
+
+| Class | Cases | Largest gap | Bound |
+|---|---|---|---|
+| FP32 trunk, cached vs one full pass | 32 variant-configurations x 2 seeds x 2 readings; 7 N2 sets x 3 variants | 1.91e-6 (max abs) | 2e-5 |
+| FP32 heads (value, WDL, submit readout, policy, per-board; D4's reply from the review fixes on) | the same | 1.67e-6 (the N2 sets alone 1.37e-6); 1.91e-6 with the reply head and the review fixes' store tests | 1e-4 |
+| FP32 evaluations through the step API (policy, WDL, categorical logits) | 16 variants + 2, x causal / root refresh x tree / graph | 1.43e-6 | 1e-4 |
+| Leaves met twice (transpositions; the second search's shared leaves) | the same | 0 (bitwise) | bitwise |
+| BF16 trunk, cached vs the BF16 full pass | 3 variants | RMS 1.97e-3, max 1.15e-2 | RMS 8e-3, max 5e-2 |
+| BF16 policy logits / value logits | 3 variants | 7.18e-3 / 1.32e-3 | 3e-2 / 5e-3 |
+
+*Read.* The real variants' FP32 gaps are the summation-order flips `test_cache.py` records on
+synthetic trees (under 2.4e-6 after 16 layers); the BF16 gaps match `test_network.py`'s on the
+'cross_timeline' record (RMS 2.0e-3 / max 1.4e-2, policy 8.0e-3, value 1.1e-3) - the value's
+1.32e-3 a little above that figure, 3.8x under its bound.

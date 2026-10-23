@@ -23,7 +23,7 @@ from tests.engine.helpers import RECORDS, VARIANTS, check_position, requires_eng
 
 pytestmark = requires_engine
 
-ALL_RELATIONS = ("attack", "defence", "xray")
+ALL_RELATIONS = ("attack", "defence", "pin", "xray", "check")
 K_VALUES = (0, 1, 2, 8, 64, T5D_NO_WINDOW)
 
 

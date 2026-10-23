@@ -216,12 +216,17 @@ typedef struct t5d_game t5d_game;
 #define T5D_FEATURES_SCOPE 1 /* W(k), E(k) and src_extra(k): the windowed input */
 #define T5D_FEATURES_NONE 2
 
-/* Bits of t5d_expand_options.relations: 1 << relation id (t5d/records.h). The
- * move graph is always made; T5D_RELATION_PIN, _CHECK and _TRAVEL_THREAT are
- * reserved and refused (T5D_ERR_UNSUPPORTED). */
+/* Bits of t5d_expand_options.relations: 1 << relation id (t5d/records.h) -
+ * register B11's five types (t5d/expand.hpp, (e)). The move graph is always
+ * made; T5D_RELATION_RESERVED (6) is refused (T5D_ERR_UNSUPPORTED). Pin and
+ * check (engine ABI round 3) read both sides, each from its own view - the
+ * opponent's the multiverse check status passes (R1) - and make the expansion
+ * allocate. */
 #define T5D_RELATIONS_ATTACK (1u << T5D_RELATION_ATTACK)
 #define T5D_RELATIONS_DEFENCE (1u << T5D_RELATION_DEFENCE)
+#define T5D_RELATIONS_PIN (1u << T5D_RELATION_PIN)
 #define T5D_RELATIONS_XRAY (1u << T5D_RELATION_XRAY)
+#define T5D_RELATIONS_CHECK (1u << T5D_RELATION_CHECK)
 
 /* window_depth and band_depth of a board in no window. */
 #define T5D_NO_WINDOW INT32_MAX
@@ -437,6 +442,55 @@ T5D_API t5d_status t5d_game_expand(t5d_game* game, const t5d_expand_options* opt
 
 /* The game's multiverse as a t5d_state (fingerprint, canonical string, boards). */
 T5D_API t5d_status t5d_game_state(const t5d_game* game, t5d_state** out);
+
+/* ---- the per-square labels (engine ABI round 3; register D4, M20, A7) ----------
+ * The auxiliary targets of section 12.4's per-square row ("deep attack facts
+ * beyond the section 6 input bias"), exact from the rules engine: for every
+ * square of every board (the canonical order, cells rank * width + file), the
+ * eight labels of python/t5d/net/heads.py SQUARE_LABELS, in its order, relative
+ * to the ACTING player (A7: "ours" its, "theirs" the opponent's). Each is 0 or
+ * 1, or T5D_LABEL_UNKNOWN where a mate search stopped on its budget or an
+ * exchange's recaptures could not be read (t5d/labels.hpp, item 0). What each
+ * means - each a placeholder reading - is t5d/labels.hpp's and the engine
+ * README's ("Per-square labels"). */
+
+#define T5D_SQUARE_LABEL_COUNT 8
+#define T5D_LABEL_EXCHANGE_LOSES_OCCUPANT 0
+#define T5D_LABEL_REACHABLE_IN_TWO_OURS 1
+#define T5D_LABEL_REACHABLE_IN_TWO_THEIRS 2
+#define T5D_LABEL_ARRIVAL_GIVES_CHECK_OURS 3
+#define T5D_LABEL_ARRIVAL_GIVES_CHECK_THEIRS 4
+#define T5D_LABEL_ROYAL_ZONE_OURS 5
+#define T5D_LABEL_ROYAL_ZONE_THEIRS 6
+#define T5D_LABEL_ARRIVAL_GIVES_MATE 7
+#define T5D_LABEL_UNKNOWN 255
+
+typedef struct t5d_label_options {
+  uint64_t mate_nodes; /* each mate search's node budget (arrival_gives_mate); UINT64_MAX
+                          (T5D_NO_LIMIT): no node limit (the search's memory limit stays).
+                          NULL options: 200000 (a placeholder) */
+} t5d_label_options;
+
+typedef struct t5d_square_labels {
+  size_t board_count;
+  int32_t width;
+  int32_t height;
+  int32_t label_count;   /* T5D_SQUARE_LABEL_COUNT */
+  int32_t acting_player; /* 0 white, 1 black: whose "ours" */
+  const uint8_t* labels; /* board_count x (width * height) x label_count */
+  uint64_t mate_candidates;     /* the moves whose mate was searched (submission legal, check) */
+  uint64_t mate_unknown;        /* ... and those the budget left undecided */
+  uint64_t first_moves_ours;    /* the moves each view read (see t5d/labels.hpp) */
+  uint64_t first_moves_theirs;
+  uint64_t second_moves_ours;
+  uint64_t second_moves_theirs;
+} t5d_square_labels;
+
+/* The per-square labels of the game's current state into the handle's buffer:
+ * `out->labels` stays valid until the next t5d_game_square_labels or
+ * t5d_game_destroy on the same handle. `options` may be NULL. */
+T5D_API t5d_status t5d_game_square_labels(t5d_game* game, const t5d_label_options* options,
+                                          t5d_square_labels* out, char** error);
 
 #ifdef __cplusplus
 } /* extern "C" */

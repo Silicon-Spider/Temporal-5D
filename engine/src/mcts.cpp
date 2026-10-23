@@ -971,9 +971,6 @@ struct Search::Impl {
           "which E2, E3 or E5's term reads (variance_scaled_cpuct, uncertainty_weighted_backup, variance_bonus, "
           "or the LCB rule with lcb_categorical_weight > 0) - a signal that is read must be given (6m)");
     }
-    if (p.expand.pin || p.expand.check || p.expand.travel_threat) {
-      throw std::invalid_argument("SearchParams::expand: pin, check and travel-threat are not built");
-    }
     // E10: the ladder's parameters. Every job is bounded (a whole-search
     // background solver is held open, H21).
     require(p.hunt_max_boards >= 0, "hunt_max_boards", "0 (never) or more");
