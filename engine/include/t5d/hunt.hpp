@@ -34,8 +34,13 @@
 // suggestion steered the search is EXCLUDED from the policy targets (or its
 // steered visits are recorded and down-weighted - the open choice of 12.2),
 // so Hunt's material-greedy bias never trains the network. The bookkeeping
-// lands with the search wiring (stage E6's successor); until then the flag
+// is built (stage E10: t5d/ladder.hpp and the search's steered visits,
+// RootChild::steered_visits); the search's flag (SearchParams::hunt_suggest)
 // stays off.
+//
+// WIRED (stage E10, t5d/ladder.hpp): the verification ladder asks Hunt at a
+// decision's root, a turn start under 100 boards (6b''), with 6b''s budget;
+// a found mate reaches the search only behind the proof channel (H41).
 
 #ifndef T5D_HUNT_HPP
 #define T5D_HUNT_HPP
@@ -78,6 +83,9 @@ struct HuntResult {
   /// A forced mate was proven: Win(k), k <= depth.
   bool mate = false;
   Proof proof;
+  /// The proof's first action, in a playable order (ProveResult::first_action)
+  /// - what the search plays (stage E10, behind the proof channel).
+  std::vector<Move> first_action;
   /// The proof's line (t5d/prover.hpp ProveResult::line).
   std::vector<std::vector<Move>> line;
   bool line_complete = false;

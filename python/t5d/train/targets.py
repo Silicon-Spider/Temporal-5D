@@ -19,17 +19,23 @@ parameter of ``TargetConfig`` with a placeholder default (spec issue 235).
   necessarily see throughout: exact under the defaults, where both are off (issue 235(a)); a child
   left with one visit is pruned outright. **Steered visits** (E10's boosts and Hunt's suggestions, section
   12.2) are removed under ``policy_mode="exclusion"`` or kept at ``provenance_weight`` under
-  ``"provenance"`` (which one is open - 6e; the counts are 0 until E10 wires them), and the
-  PUCT replica compares priors without the recorded boost. Recorded forced visits (none: forced
-  playouts are not built, issue 153) are pruned like any other.
+  ``"provenance"`` (which one is open - 6e), and the PUCT replica compares priors without the
+  recorded steering (``replica_prior``): the noise-free prior less the boost, or - the search's
+  prior, after the root noise, which mixes ``1 - epsilon`` of the steered noise-free prior - that
+  prior less ``(1 - epsilon)`` x the boost, epsilon read from the record's search parameters (the
+  E10 review: subtracting the whole boost under-counted the noise's share). Self-play runs without
+  the asset map until I2's steered visits are validated (issue 179), so its records' boosts are 0.
+  Recorded forced visits (none: forced playouts are not built, issue 153) are pruned like any
+  other.
 * **D2's flat form - the per-board policy marginals (section 8.2; spec issue 242)**: "the flat
   form's policy targets are per-board visit marginals, so its policy normalises per board rather than
   across all moves". At a flat decision the root children are whole turns; their visits - with
   steered visits excluded or weighted exactly as at the ply split (I2, per turn) - are marginalised
   onto each of the acting player's playable boards (``DecisionRecord.playable``) and each board's
   option counts are then pruned as the ply split prunes root children (``flat_pruning`` "board", a
-  PLACEHOLDER: an option read as the turns taking it - its prior their priors summed, its value and
-  exploration scale their visit-weighted means - against the board's most visited option; KataGo's
+  PLACEHOLDER: an option read as the turns taking it - its prior their priors summed, each turn's
+  ``replica_prior`` (its steering taken out per turn, before summing), its value and exploration
+  scale their visit-weighted means - against the board's most visited option; KataGo's
   single-visit rule included). Pruning each turn first (``"turn"``, the arm: ``pruned_visits`` over
   the turn children) wipes out an option whose visits are spread over many one-visit turns, which
   the flat form's widening makes common (issue 242(b)). The marginals are over that board's options
@@ -227,11 +233,37 @@ def steered_visits(d: DecisionRecord, cfg: TargetConfig) -> np.ndarray:
     return n - (steered if cfg.policy_mode == "exclusion" else (1.0 - cfg.provenance_weight) * steered)
 
 
-def _pruning_prior(d: DecisionRecord, cfg: TargetConfig) -> np.ndarray:
-    """The prior the pruning's PUCT replica reads, per root child: the search's (or the noise-free)
-    prior without the recorded boost, floored at 0."""
+def noise_keep_of(header: dict, d: DecisionRecord) -> float:
+    """``1 - epsilon`` of the root noise decision ``d``'s search mixed in (1 where it had none),
+    epsilon from the record header's search parameters (the full or the cheap search's). A
+    decision with noise and a non-zero boost whose epsilon the header does not name is refused:
+    its search prior cannot be unsteered."""
+    if not d.root_noise:
+        return 1.0
+    search = header.get("search") or {}
+    arm = search.get("full" if d.full_search else "cheap") or search.get("full") or {}
+    eps = arm.get("dirichlet_epsilon")
+    if eps is None:
+        if np.any(np.asarray(d.children.boost) != 0.0):
+            raise ValueError("the record names no dirichlet_epsilon: a noised, steered prior cannot be unsteered (I2)")
+        return 1.0
+    return 1.0 - float(eps)
+
+
+def replica_prior(d: DecisionRecord, cfg: TargetConfig, *, noise_keep: float = 1.0) -> np.ndarray:
+    """The prior the pruning's PUCT replica reads, per root child (at a flat decision per turn), the
+    steering taken out (I2; float64): under ``prune_prior="noise_free"`` the noise-free prior less the
+    boost (the unsteered noise-free prior); under ``"search"`` the search's prior less ``noise_keep`` x
+    the boost - the root noise mixes ``noise_keep`` (``1 - epsilon``, ``noise_keep_of``) of the steered
+    noise-free prior, so that is the unsteered prior with the same noise. Negative values (none,
+    exactly) clipped."""
     c = d.children
-    prior = (c.prior if cfg.prune_prior == "search" else c.prior_noise_free).astype(np.float64) - c.boost.astype(np.float64)
+    boost = c.boost.astype(np.float64)
+    if cfg.prune_prior == "search":
+        keep = noise_keep if d.root_noise else 1.0
+        prior = c.prior.astype(np.float64) - keep * boost
+    else:
+        prior = c.prior_noise_free.astype(np.float64) - boost
     return np.maximum(prior, 0.0)
 
 
@@ -266,15 +298,16 @@ def prune_counts(
     return out
 
 
-def pruned_visits(d: DecisionRecord, cfg: TargetConfig) -> np.ndarray:
+def pruned_visits(d: DecisionRecord, cfg: TargetConfig, *, noise_keep: float = 1.0) -> np.ndarray:
     """Each root child's visits for the targets (float64): steered visits excluded or weighted
-    (I2), then KataGo's forced-playout pruning against the most visited child (module docstring)."""
+    (I2), then KataGo's forced-playout pruning against the most visited child (module docstring),
+    its replica reading ``replica_prior``. ``noise_keep``: ``1 - epsilon`` of the decision's root
+    noise (``noise_keep_of``; the builder reads it from the record)."""
     c = d.children
     n = steered_visits(d, cfg)
     sqrt_parent = math.sqrt(max(float(d.root_visits), 1.0))
-    return prune_counts(
-        n, _pruning_prior(d, cfg), c.q.astype(np.float64), c.exploration_scale.astype(np.float64), sqrt_parent, float(d.root_cpuct), cfg
-    )
+    prior = replica_prior(d, cfg, noise_keep=noise_keep)
+    return prune_counts(n, prior, c.q.astype(np.float64), c.exploration_scale.astype(np.float64), sqrt_parent, float(d.root_cpuct), cfg)
 
 
 def policy_target(d: DecisionRecord, pruned: np.ndarray) -> np.ndarray | None:
@@ -435,7 +468,12 @@ def turn_option(turn: np.ndarray, fb: FlatBoard, candidates: np.ndarray, arrival
 
 
 def flat_policy_target(
-    d: DecisionRecord, visits: np.ndarray, arrivals: bool = True, prune: TargetConfig | None = None
+    d: DecisionRecord,
+    visits: np.ndarray,
+    arrivals: bool = True,
+    prune: TargetConfig | None = None,
+    *,
+    noise_keep: float = 1.0,
 ) -> np.ndarray | None:
     """D2's flat form's policy target at ``d`` (module docstring): ``(K, 3)`` float64 rows ``(board,
     candidate, probability)`` - candidate ``LEAVE`` for leaving - over every option of every playable
@@ -444,13 +482,14 @@ def flat_policy_target(
     default): each board's option counts - the turns' visits marginalised - are then pruned as
     ``pruned_visits`` prunes root children (``prune_counts`` under ``prune``'s settings), each option
     read as the turns taking it - its prior their priors summed, its value and exploration scale their
-    visit-weighted means; None (the "turn" arm): ``visits`` are the turns' already pruned
+    visit-weighted means, a turn's prior ``replica_prior``'s (the steering taken out per turn before
+    summing; ``noise_keep`` as there); None (the "turn" arm): ``visits`` are the turns' already pruned
     (``pruned_visits``) and are marginalised as they are."""
     if float(visits.sum()) <= 0:
         return None
     c = d.children
     if prune is not None:
-        prior = _pruning_prior(d, prune)
+        prior = replica_prior(d, prune, noise_keep=noise_keep)
         q, scale = c.q.astype(np.float64), c.exploration_scale.astype(np.float64)
         sqrt_parent, cpuct = math.sqrt(max(float(d.root_visits), 1.0)), float(d.root_cpuct)
     rows = []
@@ -586,7 +625,8 @@ def build_targets(
     share = float(search.get("full", {}).get("submit_share", 0.0)) if search else 0.0
     arrivals, leave_share = flat_settings(record)
 
-    pruned = [pruned_visits(d, cfg) for d in ds]
+    keeps = [noise_keep_of(record.header, d) for d in ds]
+    pruned = [pruned_visits(d, cfg, noise_keep=keeps[i]) for i, d in enumerate(ds)]
     policy: list[np.ndarray | None] = []
     soft: list[np.ndarray | None] = []
     full = np.zeros(n, dtype=bool)
@@ -604,7 +644,7 @@ def build_targets(
             if cfg.flat_pruning == "turn":
                 ft = flat_policy_target(d, pruned[i], arrivals)
             else:
-                ft = flat_policy_target(d, steered_visits(d, cfg), arrivals, prune=cfg)
+                ft = flat_policy_target(d, steered_visits(d, cfg), arrivals, prune=cfg, noise_keep=keeps[i])
         pt = policy_target(d, pruned[i]) if d.full_search and not d.flat else None
         policy.append(pt)
         flat.append(ft)
@@ -1021,12 +1061,14 @@ __all__ = [
     "is_arrival",
     "kl_divergence",
     "move_coord",
+    "noise_keep_of",
     "policy_target",
     "pruned_value",
     "prune_counts",
     "pruned_visits",
     "raw_prior",
     "read_targets",
+    "replica_prior",
     "reply_targets",
     "soft_policy",
     "square_targets",

@@ -26,6 +26,7 @@ the run for the user.
 |---|---|---|
 | dev | AMD Ryzen 9 9900X (12 cores / 24 threads, AVX-512 with BF16), 32 GB RAM; AMD Radeon RX 9070 XT, unused (no CUDA) | Windows 11; MSYS2 ucrt64 g++ 16.2; Python 3.14; PyTorch 2.13.0+cpu - every figure up to 2026-10-04 |
 | dev-r | The same machine, rebuilt after its loss (2026-10-17); GPU driver 32.0.31041.1004, the GPU still unused by the CPU figures | Windows 11 Pro 10.0.26300 (a fresh install); MSYS2 ucrt64 g++ 16.2.0 (Rev3); CMake 4.4.3 and Ninja 1.13.2 from the project `.venv`; Python 3.14.7; PyTorch 2.13.0+cpu; NumPy 2.5.2; Node 24.20.0; GHC 9.10.3 (harness cache) - every figure from 2026-10-17 |
+| dev-r-amd | `dev-r`'s AMD Radeon RX 9070 XT (gfx1201, 16 GB, 32 CUs), AMD Software: Adrenalin Edition 26.10.1, Windows driver 32.0.32015.7029 (2026-10-18) | `dev-r`'s Windows; AMD's PyTorch for Windows from ROCm 10.1.0: torch 2.14.0+rocm10.1.0 (HIP 7.16.26385, MIOpen 3.6.1), no Triton; Python 3.14.7 in a separate venv under `build/`; NumPy 2.5.3 - G9's bounded attempt only (2026-10-23), every figure AMD-labelled |
 
 `dev` and `dev-r` are different conditions: the operating system was reinstalled and
 the Python patch level and CMake changed, so a figure from one is never compared with
@@ -318,6 +319,131 @@ random-play positions, 4 games x 5 positions per class, machine loaded):
 | 600, 12 | 0.056 ms | 0.8 ms | 36.3 s | 522 s | 7% |
 
 Not an M9 figure: M9 measures the expansion without this filter (spec issue 46).
+
+### G9's bounded AMD attempt - AMD-labelled, eager, indicative (2026-10-23; no threshold, no verdict)
+
+**What it is.** Register G9's "one bounded attempt on the AMD RX 9070 XT via AMD's PyTorch
+for Windows, figures AMD-labelled" (§10.2, M19), run in one session of about an hour and a
+half. Every figure here is **AMD-labelled** (machine `dev-r-amd`), of the **eager, uncompiled**
+network, on a machine **loaded at 97-100% CPU** throughout by other lanes' jobs (pytest and
+`t5d-tests` processes; read with `Win32_Processor.LoadPercentage` before and after each run):
+indicative only. None is an FA4-class figure, none is written over a §15.3 estimate, and none
+decides a verdict (issue 522). The tool: `python/tools/g9_amd_probe.py`.
+
+**Conditions.** `dev-r-amd` (Machines above): the RX 9070 XT, `gcnArchName` gfx1201, 15.92
+GiB visible, 32 compute units (the Ryzen's integrated GPU, gfx1036, enumerates as device 1 and
+was not used); AMD Software: Adrenalin Edition 26.10.1 (internal 26.20.15.07-261015a; Windows
+driver 32.0.32015.7029 of 2026-10-18) - the mainstream package, newer than the "Adrenalin
+Edition for ROCm 10.1" (26.10.41.05, driver 32.0.31041.5005) that AMD's ROCm 10.1.0
+compatibility matrix lists; it worked, so nothing was changed. AMD's PyTorch for Windows
+from AMD's ROCm 10.1.0 release (2026-10-05; PyTorch 2.14.0 on Windows for Python 3.11-3.14):
+`torch[device-gfx1201]==2.14.0+rocm10.1.0` from `https://stable.repo.amd.com/rocm/whl-next/`
+(HIP 7.16.26385, MIOpen 3.6.1, rocm-sdk 10.1.0, NumPy 2.5.3), in a separate venv on Python
+3.14.7 under the git-ignored `build/` (the project `.venv`, torch 2.13.0+cpu, untouched); no
+Triton (below). Smart App Control read as off; nothing on the machine changed. The network:
+lane/gate at 62ff24d (F1, the v1 defaults, random weights, `build_model(seed=0)`); the engine
+library `build/engine/t5d.dll` built from the same engine sources. Inputs `synthetic_state(N,
+N)` (one position per batch element, distinct seeds); window none; medians of 3-5 synchronised
+runs after a warm-up. "pad8" marks the padded-width arm (below): a probe-local wrapper, not the
+network's code.
+
+**1. Visible and correct - works.** `torch.cuda.is_available()` True; BF16 supported. A 2048^3
+matmul against FP64: relative error 2.1e-6 FP32 (the CPU 2.8e-7), 3.5e-3 BF16 (the CPU's
+equal). FP8 E4M3: the dtype exists, the GPU's cast equals the CPU's bit for bit, and
+`torch._scaled_mm` (tensorwise scales) runs, exact against the dequantised matmul - G2's
+emulation needs only the dtype. **The F1 forward on the GPU against the same weights and inputs
+on the CPU** (synthetic 2, 17 and 44 boards; three engine positions of 3, 6 and 12 boards from
+seeded random play from Standard; worst over the inputs; max absolute difference):
+
+| Attention path | Precision | Value logits | WDL logits | Policy logits |
+|---|---|---|---|---|
+| block_sparse (the default), sdpa, flex (eager) | FP32 GPU vs FP32 CPU | 1.1e-6 | 1.1e-6 | 3.3e-6 |
+| the same | BF16 GPU vs BF16 CPU | 1.6e-3 | 7.9e-4 | 7.5e-3 |
+| the same | BF16 GPU vs FP32 CPU | 3.2e-3 | 2.1e-3 | 1.2e-2 |
+
+The last row sits inside `tests/net/test_precision.py`'s BF16-vs-FP32 bounds (0.02 value, 0.03
+policy logits) - the GPU's BF16 is G1's BF16. Submit logits were not compared (no submit is
+legal at those positions). `attn_impl="flex"` runs eagerly on the GPU (every score
+materialised, as on CPU).
+
+**2. torch.compile and compiled FlexAttention - do not run.** `torch.compile(model)` (Inductor)
+of the v1 network fails on every attention path with `torch._inductor.exc.TritonMissing: Cannot
+find a working triton installation`; a toy `torch.compile(flex_attention)` (B=1, H=8, L=2,920,
+D=32, a bias `score_mod`, a board-block `BlockMask` - `create_block_mask` itself runs, 75.6%
+sparse) fails with `InductorError: LoweringException: ModuleNotFoundError: No module named
+'triton'`. AMD's wheel index carries Triton for Linux only (every `triton-3.8.0+...rocm10.x`
+wheel is `linux_x86_64`), and AMD's 7.2.1 Windows directory carries none. `backend="aot_eager"`
+runs (it generates no kernel). Getting Triton on Windows would mean a community build or a
+source build, which the attempt excludes. So §10.2's inference path - torch.compile plus
+FlexAttention - cannot run on this machine through AMD's stack (issue 520).
+
+**3. Kernel rates (AMD-labelled, the GPU alone).** BF16 GEMM 4096^3: 118-142 TFLOPS; FP32 15.
+The trunk's shapes, BF16 / FP8 E4M3 (`_scaled_mm`, tensorwise) at T tokens: T = 2,920 - 256x2048
+0.185 / 0.114 ms, 2048x256 0.079 / 0.070 ms, 256x256 0.040 / 0.041 ms; T = 15,856 - 0.228 /
+0.169, 0.178 / 0.131, 0.082 / 0.070 ms; so FP8 is 1.0-1.6x BF16 at these shapes and 1.7x at
+4096^3 (GEMM level only; noisy on the loaded machine). SDPA, BF16, 8 heads of 32: L = 2,920
+0.20 ms unmasked, 0.32 ms with a full float mask; L = 15,856 3.3 / 3.5 ms. **AMD's fused
+attention kernels (AOTriton, precompiled) take a mask only at a head width that is a multiple
+of 8**: at 32/64/96/128 with a mask 0.25-0.49 ms; at 65/97/129 with a mask "no fused" - the math
+backend, 6.5-7.9 ms (L = 2,920). Flash refuses any mask; the memory-efficient kernel takes one.
+The network's fused kernel calls (`attention.py`'s `_kernel`, B14/M20's widened features) are
+45 and 33 wide with a boolean key mask, so every one of them falls back to the math backend.
+`torch.profiler` records no device kernels on this stack, so the kernel names were read from
+these probes, not from a trace.
+
+**4. The dense evaluator, evaluations/s** (F1, BF16 unless stated; eager):
+
+| Path | 44 boards (2,920 tokens) | 112 boards (7,408) | 240 boards (15,856) |
+|---|---|---|---|
+| block_sparse (default), batch 1 / 8 | 0.47-0.58 / 1.7-1.9 | 0.16-0.20 / 0.34-0.48 | 0.07 / 0.16 |
+| block_sparse, pad8, batch 1 / 8 | 0.68 / 2.6 | 0.35 / 0.70 | 0.12 / 0.23 |
+| sdpa, batch 1 / 8 | 1.8 / 2.8 | - | - |
+| sdpa, pad8, batch 1 / 4 / 8 / 16 | 4.2 / 6.6 / 7.1 / 1.6 | 1.2 / 0.25 (batch 4) | 0.06 (batch 1) |
+| sdpa, pad8, FP32, batch 1 / 8 | 2.5 / 4.8 | - | 0.04 (batch 1) |
+| chunked, explicit, dense; batch 1 / 8 | 0.34 / 2.1; 1.9 / 2.9; 2.4 / 2.9 | - | - |
+| flex (eager), batch 1 / 8 | 0.19 / 0.20 | - | - |
+
+Peak allocated memory: block_sparse 0.26 GB (44, batch 1) to 5.4 GB (240, batch 8); sdpa's
+materialised (B, H, L, L) masks 0.8 GB (44, batch 1), 10.0 GB (44, batch 16), 15.3 GB (112,
+batch 4), 17.3 GB / 24.8 GB (240, batch 1, BF16 / FP32) - past the card's 15.9 GiB, so those
+rows spill into shared system memory, which is why they collapse. **Read.** The GPU works and
+the kernels are fast (above), but the eager network is not kernel-bound: at 44 boards the
+forward needs about 0.26 TF (0.12 TF of projections and FFN, 0.14 TF of every-key attention,
+counted as N3 counts), 3-5 ms of GEMM and attention at these rates, against 240-580 ms
+measured. With launches made blocking, the time spreads over
+about 10,000 small operations a forward - the per-layer displacement bias, masks and role rows
+built at (B, H, L, L) or by gathers (`displacement.lookup`, `structure.role_rows`/`disp_rows`),
+host synchronisations (`nonzero`, `.item()`) and the math-backend attention; under N1's dense
+baseline (no masks, no table) each block still took 16-27 ms, 13-16 ms of it attention. That is
+the work torch.compile and FlexAttention's in-kernel score function are meant to fuse, and they
+are what does not run here. The CPU on the same network (`net/bench.py`, `dev`, before F5/F6,
+B15 and M20) took 8.5-19.5 s at 240 boards; the GPU's 8.6-13.7 s is no gain worth recording as
+one.
+
+**5. One search through the C API with the GPU evaluator - works.** `run_search` with
+`NetworkEvaluator(model, max_batch=8, device="cuda")` from Standard's start
+(`search_params(seed=1, batch_size=8)`, so positions of one or two boards), 200 playouts, leaves
+in batches of up to 8 (26 rounds), stopped on playouts:
+
+| Evaluator | Playouts/s | Wall (s) | Of which evaluating (s) |
+|---|---|---|---|
+| GPU, BF16, block_sparse | 11.1 | 18.0 | 17.9 |
+| GPU, BF16, sdpa, pad8 | 16.9 | 11.9 | 11.8 |
+| GPU, FP32, block_sparse | 12.6 | 15.9 | - |
+| CPU (the same venv's torch 2.14, 12 threads), BF16 | 6.4 | 31.4 | 31.3 |
+| CPU, FP32 | 2.1 | 95.5 | - |
+
+The CPU rows ran on a CPU that other jobs held at 100%; they show the load, not the CPU's rate.
+Collecting and delivering leaves took 0.1 s of each run: the search waits on the network.
+
+**The attempt's answer: partly.** AMD's PyTorch for Windows runs the network on the RX 9070
+XT, correct against the CPU in FP32 and BF16, and drives the C++ search through the C API; FP8
+GEMMs run. torch.compile and compiled FlexAttention - the committed inference path (§10.2) -
+do not, for want of Triton on Windows; the eager network is overhead- and memory-bound, so its
+rates say nothing about the §15.3 rows (FA4-class evals/s, leaf batching, the block-sparse and
+varlen kernels), which stay deferred to NVIDIA time (M19). The head-width finding (pad8: 2.0-2.5x
+on the sdpa path at 44 boards, 1.2-2.2x on block_sparse) is device-neutral in form and is the
+network lane's to take or leave (issue 521).
 
 ## §15.6 verdicts
 
@@ -1352,3 +1478,39 @@ generation of the occupant's side's moves per replayed square) and halves the sq
 1 (the label no longer means "attacked" there). Pin and check add 0.0-0.2 ms to an expansion
 of 0.04-0.2 ms - up to about double, small against the labels. A training replay labelling
 every decision pays the labels' cost once per decision.
+
+### Cached = dense on every engine variant (MT-04) - the gaps met (numerics; no threshold, no verdict)
+
+**What it is.** The largest differences between the cached path (`python/t5d/net/cache.py`) and
+the dense block-causal pass it must equal (`reference_output`; through the C step API,
+`NetworkEvaluator(scope="block_causal")`, or with a root refresh the two-level reference) on real
+engine positions of every named variant - what `python/tests/engine/test_cached_variants.py`
+asserts against, recorded so that the next re-measurement of §15.2's tolerances (EQ-01) has the
+real-variant figures beside the synthetic ones. No threshold applies: the bounds are
+`tests/net/test_cache.py`'s and `tests/engine/test_network.py`'s.
+
+**Conditions.** 2026-10-23, machine `dev-r`, PyTorch 2.13.0+cpu, Python 3.14.7, the engine library
+built Release in `lane/gate` (main 710921a); one position per evaluation; random weights at
+initialisation scale; window none; lineage reading (C23). Positions: seeded pseudo-legal random
+play from each of the engine's 16 variants (`_walk`: seeds 0 and 1, to the first turn start with
+16 boards, every state of every action), the store shared along each game in one epoch opened a
+third of the way in; the step API's leaves from a random-play root with 8 or more boards, 16
+playouts per search (64 in the transposition test), tree and graph mode, evaluation cache off.
+FP32: 2 layers; the v1 configuration and the step-1 one (A8, D4's reply head, D9 on), both C20
+readings; seven N2 flag sets with `relations_for`'s relations on three variants. BF16: F1 (16
+layers, block-causal), model seed 0, every second state of seed 3's play on Turn Zero, Reversed
+Royalty and Timeline Strategos.
+
+| Class | Cases | Largest gap | Bound |
+|---|---|---|---|
+| FP32 trunk, cached vs one full pass | 32 variant-configurations x 2 seeds x 2 readings; 7 N2 sets x 3 variants | 1.91e-6 (max abs) | 2e-5 |
+| FP32 heads (value, WDL, submit readout, policy, per-board; D4's reply from the review fixes on) | the same | 1.67e-6 (the N2 sets alone 1.37e-6); 1.91e-6 with the reply head and the review fixes' store tests | 1e-4 |
+| FP32 evaluations through the step API (policy, WDL, categorical logits) | 16 variants + 2, x causal / root refresh x tree / graph | 1.43e-6 | 1e-4 |
+| Leaves met twice (transpositions; the second search's shared leaves) | the same | 0 (bitwise) | bitwise |
+| BF16 trunk, cached vs the BF16 full pass | 3 variants | RMS 1.97e-3, max 1.15e-2 | RMS 8e-3, max 5e-2 |
+| BF16 policy logits / value logits | 3 variants | 7.18e-3 / 1.32e-3 | 3e-2 / 5e-3 |
+
+*Read.* The real variants' FP32 gaps are the summation-order flips `test_cache.py` records on
+synthetic trees (under 2.4e-6 after 16 layers); the BF16 gaps match `test_network.py`'s on the
+'cross_timeline' record (RMS 2.0e-3 / max 1.4e-2, policy 8.0e-3, value 1.1e-3) - the value's
+1.32e-3 a little above that figure, 3.8x under its bound.

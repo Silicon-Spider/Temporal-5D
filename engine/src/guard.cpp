@@ -34,6 +34,7 @@ void add(ProverStats& into, const ProverStats& x) {
   into.attacker_tests += x.attacker_tests;
   into.stopped_by_nodes = into.stopped_by_nodes || x.stopped_by_nodes;
   into.stopped_by_time = into.stopped_by_time || x.stopped_by_time;
+  into.stopped_by_cancel = into.stopped_by_cancel || x.stopped_by_cancel;
   into.stopped_by_memory = into.stopped_by_memory || x.stopped_by_memory;
   into.seconds += x.seconds;
 }
