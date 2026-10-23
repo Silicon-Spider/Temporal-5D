@@ -10,6 +10,53 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-23 - Engine ABI round 3, part 1: B11's pin and check relations, each side read from its own view; id 6 reserved, travel-threat gone
+
+Register B11 lists five typed relations - attack, defence, pin, x-ray, check - and the engine
+built three; pin and check waited on check detection (H36), which E4 built. They are built now,
+behind the relation mask, written from the rulebook; check detection's predicates are only
+called, never changed.
+
+- **The two views** (`engine/include/t5d/views.hpp`, `src/views.cpp`; spec issue 172): at a
+  decision state only the acting player's pieces can move, so each side is read from its own
+  view - the acting player's pieces in the state, the opponent's on the multiverse **check
+  status passes** (R1: `passed_multiverse`, the acting player's unplayed active boards in the
+  present advanced unchanged), a passed copy's squares reported at the board it copies. At a
+  turn start that is R1's check status exactly; mid-action the pass of the boards still to play.
+- **Check** (`expand.cpp`; issue 174): a piece -> an enemy royal it can capture, by check
+  detection's own scan (`for_each_royal_capture`): the opponent's captures of the acting
+  player's royals in its view, then the acting player's of the opponent's in the state. At a
+  turn start an opponent check edge exists exactly when `in_check` holds (held on 321 random
+  turn starts of three variants, 9 in check).
+- **Pin** (`movegen.hpp` `GeometricRelation::Kind::Pin`, `RelationKinds::pin`; issue 173): a
+  slider -> the piece it pins - the first piece along its ray an enemy that is not royal, the
+  next an enemy royal the slider would capture were the first absent - the x-ray's own walk,
+  so across timelines and through time; the opponent's pins on the passed multiverse
+  (`append_moves_of` with relations, new). Moves are generated exactly as before.
+- **The C ABI** (`records.h`, `capi.h`, `capi.cpp`): `T5D_RELATIONS_PIN`, `T5D_RELATIONS_CHECK`;
+  id 6 is `T5D_RELATION_RESERVED` - never emitted, refused ("reserved"; it was travel-threat's,
+  folded into attack at CHECKPOINT 6); `ExpandOptions::travel_threat` removed; the search
+  accepts pin and check for its leaves (`mcts.cpp`). Pin and check make the expansion allocate.
+- **Python** (`python/t5d/engine/capi.py`, `game.py`, `convert.py`, `errors.py`):
+  `BUILT_RELATIONS` holds all five (so `relations_for` gives a network with B10 or B11 on all
+  five), `RESERVED_RELATIONS` names none; the docstrings no longer name travel-threat - the
+  engine lane's documents the B11 row listed - and `net/state.py`'s relations paragraph no
+  longer says pin and check stay empty.
+- **Tests**: `engine/tests/test_views.cpp` (pins on a board, across timelines, through time,
+  from both views; checks on a board, across timelines, through time, mid-action, by the acting
+  player; check edges against `in_check` on random play); the reserved id refused
+  (`test_capi_game`, `test_capi_search`), a search's leaves carrying all five as the game's own
+  expansion (`capi_search_leaves_carry_the_network_input`). `python/tests/engine`: every
+  conversion, the B11/B10 network test and A7's mirror test run with the five, each type seen
+  on real positions; issue 229's anchor test now allows pin and check edges from the
+  opponent's pieces.
+- **Docs**: `engine/README.md` ((e), the status table, the readings), `docs/BUILD_LOG.md`
+  (the B11 row, issues 172-174, edit 135, the session log).
+
+Spec: §6 "Typed edge biases" and register B11 - proposed edit 135 (whose pieces and which
+multiverse pin and check read; what a pin is in 5D; check as check detection's own capture);
+BUILD_LOG issues 172-174. §15.2's A7 row is unchanged (the mirror test now covers pin and check).
+
 ### 2026-10-23 - D2 flat form review fixes: children complete only when every successor is there; a point's realisations walked once; the per-board scores, widening, fallback and cost tested
 
 Two reviews of D2's flat form (42f3590, 3251857, 95d23cc): one of soundness (probes against

@@ -15,6 +15,7 @@
 
 #include "t5d/board.hpp"
 #include "t5d/check.hpp"
+#include "t5d/views.hpp"
 #include "t5d/multiverse.hpp"
 #include "t5d/search.hpp"
 
@@ -150,14 +151,15 @@ constexpr int window_k_of(int k) noexcept { return k < kNoWindow ? k : kNoWindow
 // the legal ones, and under a budget the undecided ones too (t5d/legal.hpp;
 // C4, R1; build-log spec issue 28), with their status. Everything below - the
 // move graph, attacks, E(k), src_extra(k) and the playable boards' roles - is
-// derived from this list. The geometric relations (defence, x-ray) come from
-// the same pass; they depend on no rule about royal safety, so the filter
-// leaves them whole.
+// derived from this list. The geometric relations (defence, x-ray, the acting
+// player's pins) come from the same pass; they depend on no rule about royal
+// safety, so the filter leaves them whole.
 void expansion_moves(const GameState& state, const ExpandOptions& options, MoveList& moves,
                      RelationList& geometric, std::vector<MoveLegality>& legality,
                      LegalityStats& stats) {
-  if (options.defence || options.xray) {
-    generate_moves(state, moves, geometric, RelationKinds{options.defence, options.xray});
+  if (options.defence || options.xray || options.pin) {
+    generate_moves(state, moves, geometric,
+                   RelationKinds{options.defence, options.xray, options.pin});
   } else {
     generate_moves(state, moves);
     geometric.clear();
@@ -359,6 +361,79 @@ inline void set_bit(std::vector<std::uint64_t>& bits, std::int32_t board) noexce
 
 }  // namespace
 
+// One relation, appended to the list (the buffer grows as needed); a relation
+// already last in the list is not repeated. Places name boards of the state (a
+// passed copy's already reported at the board it copies).
+void Expansion::push_relation(int from_board, int from_cell, int to_board, int to_cell, int id) {
+  if (from_board < 0 || to_board < 0) return;
+  if (relation_ints_ >= 5) {
+    const std::int32_t* last = relations_.data() + relation_ints_ - 5;
+    if (last[0] == from_board && last[1] == from_cell && last[2] == to_board &&
+        last[3] == to_cell && last[4] == id) {
+      return;
+    }
+  }
+  if (relations_.size() < relation_ints_ + 5) {
+    relations_.resize(std::max<std::size_t>(2 * relations_.size(), relation_ints_ + 5));
+  }
+  std::int32_t* r = relations_.data() + relation_ints_;
+  r[0] = from_board;
+  r[1] = from_cell;
+  r[2] = to_board;
+  r[3] = to_cell;
+  r[4] = id;
+  relation_ints_ += 5;
+}
+
+// The opponent's pins and both sides' checks (the header comment, e): the
+// opponent's view is check status's pass (t5d/views.hpp, pass_view).
+void Expansion::append_view_relations(const GameState& state, const ExpandOptions& options) {
+  const int width = size_.width;
+  const Colour acting = state.to_move();
+  const Colour opponent = opposite(acting);
+  const std::span<const int> inactive = state.inactive_timelines();
+  const PassView pass = pass_view(state);
+  const auto board_of = [&](int timeline, int half_turn) {
+    return board_index(timeline, pass.state_half_turn(timeline, half_turn));
+  };
+  if (options.pin) {
+    MoveList moves;
+    RelationList pins;
+    for (const TimelineRef& t : pass.multiverse.timelines()) {
+      append_moves_of(pass.multiverse, state.rules(), opponent, t->position(), moves, pins,
+                      RelationKinds{false, false, true}, inactive);
+      moves.clear();
+    }
+    for (const GeometricRelation& g : pins) {
+      push_relation(board_of(g.from_timeline, g.from_half_turn), cell_of(g.from_square, width),
+                    board_of(g.to_timeline, g.to_half_turn), cell_of(g.to_square, width),
+                    kRelationPin);
+    }
+  }
+  if (options.check) {
+    // The opponent's captures of the acting player's royals, in its view - at a
+    // turn start R1's check status itself (t5d/check.hpp in_check).
+    for_each_royal_capture(pass.multiverse, state.rules(), opponent, inactive,
+                           [&](const RoyalCapture& c) {
+                             push_relation(board_of(c.from_timeline, c.from_half_turn),
+                                           cell_of(c.from_square, width),
+                                           board_of(c.to_timeline, c.to_half_turn),
+                                           cell_of(c.to_square, width), kRelationCheck);
+                             return false;
+                           });
+    // The acting player's of the opponent's, in the state (C4's scan from the
+    // other side).
+    for_each_royal_capture(state.multiverse(), state.rules(), acting, inactive,
+                           [&](const RoyalCapture& c) {
+                             push_relation(board_index(c.from_timeline, c.from_half_turn),
+                                           cell_of(c.from_square, width),
+                                           board_index(c.to_timeline, c.to_half_turn),
+                                           cell_of(c.to_square, width), kRelationCheck);
+                             return false;
+                           });
+  }
+}
+
 void expand(const GameState& state, const ExpandOptions& options, Expansion& out, int moves_made) {
   if (options.window_k < 0) {
     throw std::invalid_argument("expand: window_k must be 0 or more, not " +
@@ -368,18 +443,6 @@ void expand(const GameState& state, const ExpandOptions& options, Expansion& out
     throw std::invalid_argument("expand: moves_made (the moves made in the action, A6) must be 0 or more, not " +
                                 std::to_string(moves_made));
   }
-  if (options.pin || options.check) {
-    throw std::invalid_argument(
-        "expand: the pin and check relations are not built (they would read check "
-        "detection, t5d/check.hpp: rules reference R1, register H36)");
-  }
-  if (options.travel_threat) {
-    throw std::invalid_argument(
-        "expand: the travel-threat relation is not built - the design spec names it (§6, "
-        "B11) but defines no edge for it (§11.1 uses travel threats only as a class of "
-        "forcing moves)");
-  }
-
   const Multiverse& mv = state.multiverse();
   const BoardSize size = mv.board_size();
   const int width = size.width;
@@ -552,11 +615,16 @@ void expand(const GameState& state, const ExpandOptions& options, Expansion& out
     rel[rel_ints + 1] = cell_of(g.from_square, width);
     rel[rel_ints + 2] = index_of_board(g.to_timeline, g.to_half_turn);
     rel[rel_ints + 3] = cell_of(g.to_square, width);
-    rel[rel_ints + 4] =
-        g.kind == GeometricRelation::Kind::Defence ? kRelationDefence : kRelationXRay;
+    rel[rel_ints + 4] = g.kind == GeometricRelation::Kind::Defence ? kRelationDefence
+                        : g.kind == GeometricRelation::Kind::XRay  ? kRelationXRay
+                                                                    : kRelationPin;
     rel_ints += 5;
   }
   out.relation_ints_ = rel_ints;
+
+  // (e) pin and check from the opponent's view, and the acting player's checks
+  // (spec issues 172-174): appended, growing the buffer as they come.
+  if (options.pin || options.check) out.append_view_relations(state, options);
 
   // -- W(k), E(k), src_extra(k) (c, d): per timeline, per origin, per listed
   //    board

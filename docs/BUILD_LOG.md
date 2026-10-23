@@ -1645,7 +1645,7 @@ width (M22)", "The CHECKPOINT 8 figures"). Found on the way: the ruling's premis
 | B5 | built, tested | Network N1, behind a flag (off); its as-built details are "v1 placeholders" (Provisional, CHECKPOINT 6; M20), tested by ablation 2 - §4.1 does not state them (edit 9) |
 | B6 | superseded; removed | By B15 (CHECKPOINT 6, reversal 25; M20). Removed from the code with B15 (`lane/net`): `binned_bias`, `binned_bias_rope` (issue 9f) and their fields - no arm survives, ablation 2's arm is B15 on or off. Its log buckets live on in `python/t5d/net/buckets.py` for B12's relative cells (`smolgen_time_*`, `smolgen_timeline_*`; smolgen's 152 cells and 47,136 parameters unchanged, issue 212). Under B15's far-bin placeholder B6 is not B15's special case, which §4.1, the register's B6 row and reversal 25 say it is: beyond the exact classes its per-axis buckets are not kept, only Δtime's sign and the clamp (issue 205, edit 159; put to the user) |
 | B10, B12 | built, tested | Network N2, behind flags (B12 as relative board-pair cells, full rank - the register now records it as built; the cells are the log buckets B6 used, re-homed in `buckets.py` when B6 went - issue 212). The register says smolgen "keeps its own normalisation" (F5); the built smolgen has none (`lane/net`'s issue 202) |
-| B11 | built behind a flag, tested | Network N2; five types since `lane/net`'s N-B11 - attack, defence, pin, x-ray, check: travel-threat folded into attack (CHECKPOINT 6, reversal 26) and dropped from the network's type set (`config.TYPED_RELATIONS`, `state.RELATION_TYPES`; the synthetic generator's cross-board attacks are its travel threats). One scalar per head per type, shared across layers: 8 x 5 = 40 (80 directed; 48 and 96 before), only with `typed_edge_bias` on - the v1's count is unchanged. Live query rows only under the cached configuration (built at N3). The relation ids are the C ABI's: id 6 stays reserved (append-only), never emitted, refused by `PositionState`'s validation. The engine emits attack, defence and x-ray; pin and check - in the type set as the register lists them - stay empty until engine ABI round 1 builds them behind the relation mask. The engine lane's documents still name travel-threat among the network's relation ids (the relation-id comments of `records.h` and `capi.py`, `engine/README.md`'s (e), `convert.py`'s docstring, and `game.py`'s `relation_bits` docstring - "names the network's contract has but the engine does not build (pin, check, travel_threat)"): theirs to bring in line with ABI round 1 |
+| B11 | built behind a flag, tested | Network N2; five types since `lane/net`'s N-B11 - attack, defence, pin, x-ray, check: travel-threat folded into attack (CHECKPOINT 6, reversal 26) and dropped from the network's type set (`config.TYPED_RELATIONS`, `state.RELATION_TYPES`; the synthetic generator's cross-board attacks are its travel threats). One scalar per head per type, shared across layers: 8 x 5 = 40 (80 directed; 48 and 96 before), only with `typed_edge_bias` on - the v1's count is unchanged. Live query rows only under the cached configuration (built at N3). The relation ids are the C ABI's: id 6 stays reserved (append-only), never emitted, refused by `PositionState`'s validation. **Engine ABI round 3** (`lane/engine`, 2026-10-23): the engine emits all five behind the relation mask (`T5D_RELATIONS_PIN`, `_CHECK`; `relations_for` hands a network with B10 or B11 on all five). Pin and check read each side from its own view - the acting player's pieces in the state, the opponent's in the multiverse check status passes (R1), a passed copy's squares reported at the board it copies (issue 172); **check** is check detection's own royal captures (`for_each_royal_capture`, H36 - its predicates called, never changed: the detector cross-checks and the gate unchanged), the opponent's in its view - at a turn start exactly R1's check status, `in_check` iff such an edge, held on random play - and the acting player's in the state (issue 174); **pin** a slider -> the one enemy non-royal between it and an enemy royal it would capture, the move generator's x-ray walk, across timelines and through time (issue 173). Edit 135. Id 6 is `T5D_RELATION_RESERVED` (refused: "reserved"); the engine lane's documents (`records.h`, `capi.h`, `capi.py`, `engine/README.md`'s (e), `convert.py`, `game.py`, `errors.py`) no longer name travel-threat as a relation, and `net/state.py`'s relations paragraph no longer says pin and check stay empty. The network's suite runs with all five on engine positions (`tests/engine`: the mirror test's edges, B11 and B10 on real positions; issue 229's anchor test now allows opponent-sourced pin and check edges) |
 | B3 | not built (rule) | Contingency only; no trigger |
 | B7 | not built (rule) | Deferred; its gate now names ablation 2's head-allocation evidence (issue 121's B7 part closed, M20); no §15.2/§15.3 need (d_head is a config value anyway) |
 | B13 | not built (rule) | Refused |
@@ -4123,6 +4123,53 @@ superseded or made moot says so; nothing is deleted.
     the estimate x1.23), against the ply split's ~3.8 KB (docs/MEASUREMENTS.md, with its
     conditions). For 6x: the fallback's share, the budget and the memory per node by
     board-count range.
+172. **The two views a decision state is read from** (§6 "Typed edge biases", §12.4's
+    per-square row; register B11, D4, A7; rulebook R1, C3, C6). §6 hands the network "the
+    generator's existing output" and §12.4 asks for "deep attack facts", but at a decision
+    state only the acting player's pieces can move (L4, L5): the opponent's captures exist
+    only once the acting player's boards have advanced, and no text says on which multiverse
+    they are read. Read (a placeholder of the committed class, `t5d/views.hpp` `pass_view`):
+    the acting player's pieces on the state itself; the opponent's on **the multiverse check
+    status passes** (R1, C6: `passed_multiverse` - the acting player's active boards in the
+    present that it has not played advanced unchanged; the opponent's pieces on all its
+    playable boards), a passed copy's places reported at the board it copies, (p, present).
+    At a turn start that is R1's check status exactly; mid-action the pass of the boards
+    still to play (none once the present has shifted - then the state itself, C4's position);
+    where the pass is undefined (Q6's alternative: a deferred timeline of the mover's in the
+    present mid-action, which `passed_timelines` refuses) the state itself. Alternatives, for
+    6j and ablation 2: the opponent's pieces on its playable boards in the state alone (C4's
+    reading - it misses every same-board threat at a turn start, the passed boards being the
+    acting player's), or on every board of its colour (pieces that cannot move next turn).
+    The edges read it (issues 173, 174; edit 135); D4's per-square labels will.
+173. **What pins in 5D** (§6 names "pin"; register B11; the rulebook has no pins - C3: check
+    detection ignores them). Built (a placeholder; `t5d/movegen.hpp`
+    `GeometricRelation::Kind::Pin`): a slider's square -> the piece it pins - along one of its
+    rays, the first piece an enemy that is not royal (4.13, C1: a king or a royal queen,
+    never a common king) and the next an enemy royal piece the slider would capture were the
+    first absent (its board a destination under the ruleset, J2/L4, Q8/Q20) - the x-ray's
+    walk, so across timelines and back through time like any slide (J7, J8; Q18, Q19), a
+    capture that would branch counting (C2). Each side's sliders in its own view (issue 172):
+    the acting player's pins of the opponent's pieces in the state, the opponent's pins of the
+    acting player's pieces on the passed multiverse (the pin its next turn would hold). The
+    target is the pinned piece (the network's synthetic generator's convention); a pinned
+    piece on a board its owner cannot move from (a history board) is still reported: it is the
+    only piece between. Not built: pins by leapers (none exist), "relative" pins (a valuable
+    non-royal behind), a pin of a royal behind another royal (that is a check of the first).
+    Edit 135.
+174. **What checks, and in which direction** (§6: "A check arrives at layer 0 as a typed
+    edge"; register B11; R1, H36). Built: a piece -> an enemy royal piece it can capture, by
+    **check detection's own scan** (`for_each_royal_capture`, `t5d/check.hpp` - called, its
+    behaviour unchanged): the opponent's captures of the acting player's royals in the
+    opponent's view (issue 172) - at a turn start exactly R1's check status: `in_check` holds
+    iff such an edge exists (`views_check_edges_are_check_status_on_random_turn_starts`: 321
+    turn starts of random play in three variants, 9 in check, and the hand-built checks) - then the acting player's captures of the opponent's
+    royals in the state (C4's scan from the other side; empty after any legal submission,
+    kept for positions set up from 5DFEN). Through time and across timelines as the scan
+    reads them (C2: a royal on a history board; R1: a capture that would branch into an
+    inactive timeline counts). Mid-action the pass covers the boards still to play, so a
+    threat on an unplayed mandatory board stays an edge after a move elsewhere (tested).
+    Alternative: the opponent's checks alone (the acting player's are almost always empty).
+    Edit 135.
 
 ## Proposed spec edits
 
@@ -5262,6 +5309,18 @@ struck through, where nothing of it is left to apply); the others stand as writt
     to a mid-turn state". Proposed - "a submit edge or a turn edge (the flat form) leads to
     a turn start, a move edge to a mid-turn state; a flat node's turn edges are complete only
     when they reach every successor". Why: issues 169, 170.
+135. **§6 "Typed edge biases" and register B11 (engine ABI round 3)**: now - §6: "the edge
+    list is the generator's existing output; exact-source" and "A check arrives at layer 0 as
+    a typed edge rather than being inferred over several layers"; B11: "Typed edge biases
+    (attack, defence, pin, x-ray, check - travel-threat folded into attack at CHECKPOINT 6),
+    cross-board included". Proposed - §6, after "exact-source": "Pin and check are read from
+    both sides, each from its own view: the acting player's pieces in the state, the
+    opponent's in the multiverse check status passes (R1). A check is check detection's own
+    royal capture (at a turn start exactly R1's check status); a pin is a slider's line
+    through one enemy that is not royal onto an enemy royal piece, the pinned piece the
+    edge's target"; B11 adds "as built: pin and check from both sides' views, check from check
+    detection". Why: issues 172-174 - the spec does not say whose pieces or which multiverse,
+    nor what a pin is in 5D (the rules have none, C3).
 
 ## Session log
 
@@ -5333,3 +5392,9 @@ struck through, where nothing of it is left to apply); the others stand as writt
   across the search boundary shown, the pre-D3 parameters pinned, each evaluation carrying its
   prior (self-play refuses an optimistic one in `serve`), the effort loss on full searches only.
   F1 unchanged. Register D3, D4, D9; issues 231-233; edits 172, 174.
+- **2026-10-23 - engine ABI round 3** (`lane/engine`): B11's pin and check relations behind
+  the relation mask - each side read from its own view, the opponent's on the multiverse
+  check status passes; check from check detection's own scan (unchanged: the detectors'
+  cross-checks and the gate as before), pin from the move generator's x-ray walk; id 6
+  `T5D_RELATION_RESERVED`, travel-threat gone from the engine lane's documents. Register B11;
+  issues 172-174; edit 135.

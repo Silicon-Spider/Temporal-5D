@@ -97,6 +97,7 @@ struct Gen {
   RelationList* relations = nullptr;
   bool want_defence = false;
   bool want_xray = false;
+  bool want_pin = false;
 };
 
 inline Place place_at(const Gen& g, int timeline, int half_turn) noexcept {
@@ -180,6 +181,15 @@ inline void push_relation(Gen& g, int from, const Place& place, int timeline, in
   g.relations->push_back(r);
 }
 
+// The first piece a slide stopped on, when it is a pin's candidate (an enemy
+// that is not royal - t5d/movegen.hpp, GeometricRelation::Kind::Pin): where it
+// stands.
+struct PinFirst {
+  int timeline = 0;
+  int half_turn = 0;
+  int square = kNoSquare;
+};
+
 // A pawn's or brawn's move: one per promotion piece when it promotes (S8),
 // else one.
 inline void push_pawnlike(Gen& g, Move m, bool promotes) {
@@ -200,8 +210,11 @@ inline void push_pawnlike(Gen& g, Move m, bool promotes) {
 // X-ray (t5d/movegen.hpp, GeometricRelation): a slide along `d` from the
 // source square `from` has stopped on a piece at (x, y, l, ht); the ray goes on
 // past it as if it were empty, under the slide's own rules, to the next piece.
+// With `pin` (the first piece a pin's candidate) the next piece also decides
+// the pin: an enemy royal piece there, landable, pins the first.
 template <bool kPlain>
-void xray(Gen& g, int from, Piece piece, Vec4 d, int x, int y, int l, int ht) {
+void xray(Gen& g, int from, Piece piece, Vec4 d, int x, int y, int l, int ht,
+          const PinFirst* pin) {
   const bool physical = d.physical();
   const bool past_self_passes = !g.rules.past_self_blocks && d.x == 0 && d.y == 0 && d.l == 0;
   for (;;) {
@@ -229,7 +242,11 @@ void xray(Gen& g, int from, Piece piece, Vec4 d, int x, int y, int l, int ht) {
       continue;  // Q19's alternative: a past self is never in the way
     }
     if (landable<kPlain>(g, place, l)) {
-      push_relation(g, from, place, l, to, GeometricRelation::Kind::XRay);
+      if (g.want_xray) push_relation(g, from, place, l, to, GeometricRelation::Kind::XRay);
+      if (pin != nullptr && occupant.colour() != g.mover && occupant.royal()) {
+        push_relation(g, from, Place{nullptr, false, pin->half_turn}, pin->timeline, pin->square,
+                      GeometricRelation::Kind::Pin);
+      }
     }
     return;
   }
@@ -277,7 +294,7 @@ void slide(Gen& g, int from, Piece piece, Vec4 d) {
         if (g.want_defence && landable<kPlain>(g, place, l)) {
           push_relation(g, from, place, l, to, GeometricRelation::Kind::Defence);
         }
-        if (g.want_xray) xray<kPlain>(g, from, piece, d, x, y, l, ht);
+        if (g.want_xray) xray<kPlain>(g, from, piece, d, x, y, l, ht, nullptr);
       }
       return;
     }
@@ -285,7 +302,12 @@ void slide(Gen& g, int from, Piece piece, Vec4 d) {
       g.out.push_back(make_move<kPlain>(g, from, piece, place, l, to, occupant));
     }
     if constexpr (kRel) {
-      if (g.want_xray) xray<kPlain>(g, from, piece, d, x, y, l, ht);
+      // An enemy that is not royal may be pinned: the ray goes on to decide it.
+      const bool pin = g.want_pin && !occupant.royal();
+      if (g.want_xray || pin) {
+        const PinFirst first{l, place.half_turn, to};
+        xray<kPlain>(g, from, piece, d, x, y, l, ht, pin ? &first : nullptr);
+      }
     }
     return;
   }
@@ -588,6 +610,7 @@ Gen make_gen(const GameState* state, const Multiverse& mv, const RuleOptions& ru
              nullptr,
              nullptr,
              false,
+             false,
              false};
 }
 
@@ -615,10 +638,11 @@ void generate_moves(const GameState& state, MoveList& out, RelationList& relatio
   relations.clear();
   if (!state.may_move()) return;
   Gen g = make_gen(state, out);
-  if (kinds.defence || kinds.xray) {
+  if (kinds.defence || kinds.xray || kinds.pin) {
     g.relations = &relations;
     g.want_defence = kinds.defence;
     g.want_xray = kinds.xray;
+    g.want_pin = kinds.pin;
   }
   for (const TimelineRef& t : g.mv.timelines()) {
     if (set_source(g, t.get())) board_moves(g);
@@ -644,6 +668,20 @@ void append_moves_of(const Multiverse& multiverse, const RuleOptions& rules, Col
                      int timeline, MoveList& out, std::span<const int> inactive_timelines) {
   if (multiverse.empty()) return;
   Gen g = make_gen(nullptr, multiverse, rules, colour, inactive_timelines, out);
+  if (set_source(g, multiverse.timeline(timeline))) board_moves(g);
+}
+
+void append_moves_of(const Multiverse& multiverse, const RuleOptions& rules, Colour colour,
+                     int timeline, MoveList& out, RelationList& relations, RelationKinds kinds,
+                     std::span<const int> inactive_timelines) {
+  if (multiverse.empty()) return;
+  Gen g = make_gen(nullptr, multiverse, rules, colour, inactive_timelines, out);
+  if (kinds.defence || kinds.xray || kinds.pin) {
+    g.relations = &relations;
+    g.want_defence = kinds.defence;
+    g.want_xray = kinds.xray;
+    g.want_pin = kinds.pin;
+  }
   if (set_source(g, multiverse.timeline(timeline))) board_moves(g);
 }
 

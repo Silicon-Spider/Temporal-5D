@@ -307,11 +307,13 @@ TEST(capi_game_errors) {
   t5d_expansion v{};
   t5d_expand_options o{};
   o.window_k = 8;
-  o.relations = 1u << T5D_RELATION_PIN;
+  // Engine ABI round 3: B11's five types are built; id 6 stays reserved.
+  o.relations = T5D_RELATIONS_ATTACK | T5D_RELATIONS_DEFENCE | T5D_RELATIONS_PIN |
+                T5D_RELATIONS_XRAY | T5D_RELATIONS_CHECK;
+  CHECK_EQ(t5d_game_expand(g.p, &o, &v, &error.p), T5D_OK);
+  o.relations = 1u << T5D_RELATION_RESERVED;
   CHECK_EQ(t5d_game_expand(g.p, &o, &v, &error.p), T5D_ERR_UNSUPPORTED);
-  CHECK(error.has("check detection"));
-  o.relations = 1u << T5D_RELATION_TRAVEL_THREAT;
-  CHECK_EQ(t5d_game_expand(g.p, &o, &v, &error.p), T5D_ERR_UNSUPPORTED);
+  CHECK(error.has("reserved"));
   o.relations = 1u << 9;
   CHECK_EQ(t5d_game_expand(g.p, &o, &v, &error.p), T5D_ERR_ARGUMENT);
   o.relations = 0;

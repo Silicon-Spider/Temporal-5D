@@ -63,9 +63,10 @@ _TO_MOVE = {"infer": T5D_TO_MOVE_INFER, "white": T5D_TO_MOVE_WHITE, "black": T5D
 
 
 def relation_bits(relations: Iterable[str | int]) -> int:
-    """``t5d_expand_options.relations`` from relation names or ids. Names the network's
-    contract has but the engine does not build (pin, check, travel_threat) are passed on,
-    for the engine to refuse with its own message (``UnsupportedError``)."""
+    """``t5d_expand_options.relations`` from relation names or ids: register B11's five types by
+    the network's names (``BUILT_RELATIONS``: attack, defence, pin, xray, check), or ids - the
+    reserved id 6 is passed on, for the engine to refuse with its own message
+    (``UnsupportedError``)."""
     known = {**BUILT_RELATIONS, **RESERVED_RELATIONS}
     bits = 0
     for r in relations:
@@ -418,8 +419,8 @@ class Game:
         """Expand the current state and copy the result out (``Expansion``). ``window_k``: k
         of W(k), E(k) and src_extra(k), in half-turns. ``square_features``: "all" (every
         board - what a ``PositionState`` needs), "scope" (W + E + src_extra) or "none".
-        ``relations``: typed relations to build - "attack", "defence", "xray" (provisional,
-        B11); "pin", "check" and "travel_threat" are refused by the engine. ``legal_moves``:
+        ``relations``: typed relations to build - "attack", "defence", "pin", "xray", "check"
+        (provisional, B11; the engine README's "Expansion", (e)). ``legal_moves``:
         the moves a search leaf has - the legal ones, those proved illegal under the budget
         (``legality_checks``, ``legality_nodes``: a search's ``legality_checks`` and
         ``legality_nodes``; ``T5D_NO_LIMIT`` both, the default here: exact - the search's own
