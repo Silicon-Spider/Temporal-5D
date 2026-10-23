@@ -10,6 +10,47 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-23 - A8's board-layout embedding behind its flag (off), with section 15.3's cost row counted
+
+Register A8 (a prototype, gate 6p; spec section 2.2), in the network lane - no training run.
+
+- **`python/t5d/net/layout.py`** (new): `BoardLayoutEmbedding`. Per board, the one-hot layout - 64
+  cells x 24 owner-and-piece states (12 piece types x ours/theirs, register A7), flattened to 1,536 -
+  with each square at its **canonical** cell (ranks mirrored when Black acts; the build log's note
+  under A7), projected by `Linear(1536, 64 x 16)` (1,573,888 parameters - section 2.2's "~1.6M"); each
+  square token takes its own cell's 16 channels, added to the token input through a learned
+  `Linear(16, d)` (the concatenation built as a sum, 4,096); then the "FFN after the embedding" - one
+  pre-norm residual block, RMSNorm and Mish, 8x (1,051,136), on every valid token. 2,629,120 in all.
+- **`NetConfig`**: `board_layout_embedding` (off), `layout_channels` (16, the spec's),
+  `layout_ffn_ratio` (8, a placeholder; 0 drops the FFN - a cost probe) and `layout_padding` ("a1",
+  a placeholder; "centre" the other arm): boards smaller than 8 x 8 padded in the canonical frame,
+  larger ones refused. `cost.layout_flops`; `parameter_breakdown`'s `embed.layout`; `model.a8_seed`.
+- **Off, bit for bit**: A8 draws nothing while made and is drawn last, from its own generator - every
+  other parameter as before, with any flags; with its module removed the outputs are the flag-off
+  network's. F1 unchanged (22,965,426; 25,594,546 with A8 on).
+- **Every path**: the embedding precedes the trunk, so the six attention implementations agree with
+  it on; the cached path needs no change (the layout is per board and intrinsic, keyed by the
+  perspective already - issue 303 - and the FFN per token): cached = one full pass with A8 on. FP32,
+  outside the trunk's autocast; never quantised under G2 (issue 238(d)).
+- **Tests**: `tests/net/test_layout.py` (new) - off/on parameters and outputs, the count, the layout
+  against one written from the position's absolute facts (both acting colours, sizes 8 to 1, both
+  paddings), layer 0 depends only on the token's own board, the 24 states, precision, every
+  attention path, cached = full (five geometries, three seeds), the cost row counted exactly, and
+  three smoke optimiser steps on synthetic rows. `test_perspective.py`: section 15.2's A7 row with
+  A8 on - every construction, both scopes and paddings, and the cached path from both perspectives;
+  `test_cache.py`: A8 under every N2 switch. Mutants (storage order for Black, owners dropped, every
+  square reading board 0) are each caught.
+- **Measured** (`docs/MEASUREMENTS.md`, "A8 - the board-layout embedding"): the projection 0.138
+  GFLOP at 44 boards, 0.099% of attention by section 15.3's formula - the row's "~0.1%" - and with the
+  register's FFN 6.29 GFLOP, 4.5% (2.0% of the counted forward); CPU wall time indicative only (the
+  machine at 85-100% load): the embedding +18 ms at 44 boards, +103 ms at 240 (BF16).
+
+Spec: §2.2 (the board-layout paragraph), §13.1 6p, §15.1 Phase 2, §15.2 (the A7 row and C2's
+cached = dense, with A8 on), §15.3 (the A8 row - measured; its M4 write-back proposed); register A8,
+A7, F5, F6, G2, M4. Issue 240 (A8's placeholders: the FFN's width, form and tokens, the concatenation
+as a sum, the padding, larger boards, the 24 states, precision, initialisation); proposed edits 185
+(§2.2 and register A8, as built) and 186 (§15.3's row, M4).
+
 ### 2026-10-23 - Precision review fixes: QAT records name the format, the attention operands tested operand by operand, the cache checks the format at every evaluation, non-finite scales kept non-finite
 
 Two reviews of the precision component (G2's FP8 emulation and C15's estimator; G8's QAT hook):

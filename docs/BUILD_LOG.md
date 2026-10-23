@@ -1637,7 +1637,7 @@ width (M22)", "The CHECKPOINT 8 figures"). Found on the way: the ruling's premis
 | A5 | not started | Piece-centric tokenisation - ruled at CHECKPOINT 6: build behind its flag; the window's provisional kill does not decide it, and the joint test with the window waits for the pilot run (M18). Last in the net lane, dense scope only (`piece_centric` raises today) |
 | A6 | built, tested | Global turn-state inputs on the global registers. The acting player is in (D8, N5); the acting colour is that same embedding since A7 (`lane/net` N-A7: under A7 the acting player is always "us", so the colour is what the input carries - one input, issue 228). Engine ABI round 1 (2026-10-17, `lane/engine`): the counts are in the expansion (`mandatory_remaining`, `optional_playable`, `moves_made`; the state's own mandatory count - A6's commit changed no truth source, while the component's first commit, H42's fix, changed the prover's report, so the truth's code signature differs from main's) and the C API (`t5d_expansion`'s three appended fields; `t5d_game_summary.moves_made`; the game handle counts the moves of its action - 0 at a set-up, +1 per move, 0 after a submission or a replayed action), with the Python mirror (`Expansion`, `GameInfo.moves_made`; `Search`'s `turn_start` from the handle). The count is in the evaluation identity (issue 302): `EvalRequest`, the evaluation cache's key, the batch's de-duplication and MCGS identity, where it subsumes the turn-start flag; `t5d_search_new` takes the handle's count and checks `turn_start` against it (tested two moves into an action, from C++ and Python, where a flag's 0 or 1 cannot pass); `advance_moves` and `advance_action` carry the tree at each count (tested, tree and graph). §15.2's A6 row: `test_turn_state.cpp` recounts the three from the rulebook at every state of random play under every ruleset (both Q4 readings), through the expansion and a `t5d_game`, and checks the spec's arithmetic move by move where no activity changes (issues 143-145). Network (`lane/net`, N-A6, 2026-10-23): `PositionState` carries the three counts (`mandatory_remaining`, `optional_playable`, `moves_made`; `turn_state`), `collate` puts them in `Batch.turn_state`, and `engine/convert.py` copies the expansion's, checking only what the expansion defines them by (non-negative; mandatory + optional = the boards it marks playable; mandatory no more than those of active timelines; none owed exactly when submitting is possible) - the split is the ruleset's, which the expansion does not name. A state built without the engine (synthetic, the tree fixture, a refresh's other-colour view) derives them from its boards under the default rules (`derived_turn_state`; moves made 0 before the shift, 1 past it), re-derived whenever it is rebuilt; given ones are kept, so the A7 mirror keeps them. Embedded into the global registers (issue 230, placeholder fixed in code): each count as `(n / 8, log1p n, [n = 0])`, the nine features through Linear(9, 32), GELU, Linear(32, d), one vector added to every global register beside D8's acting colour - with none, issue 225's placeholder (the board tokens, the live boards' alone under the block-causal scope); 8,768 parameters from a generator of their own (`a6_seed`: no other parameter's draw changed). `cache.state_digest` (an epoch's anchor, and the Python evaluator's epoch reuse) carries the counts; frozen K/V never depend on them. The fixtures' positions are turn starts with the boards' own counts: the tree fixture's moves are no actions, and a per-path count of them split its two move orders of one multiverse into two states (tried, reverted); mid-turn states are its states with counts given. Tests: `tests/engine/test_turn_state_engine.py` - section 15.2's row on the network side: at every state of seeded random play in eight plays under both Q4 readings (956 states: 239 turn starts, 461 mid-action, 138 past the shift with moves, 118 without; 87 jumps between two present boards, 33 rewinding branches releasing a board, 8 T12 rises) the converted counts are the expansion's, moves made the handle's count, mandatory and optional a recount from the rulebook's definitions on the converted boards (and, under the default rules, the state's own derivation); a mid-turn state and its own 5DFEN (a turn start, equal boards and acting player) differ in moves made alone, and in digest and every output, full and cached; inconsistent counts refused. `tests/net/test_turn_state.py` - derivation and validation; each count alone moves exactly the global registers (one vector on each), or with none the board tokens (the live boards' under the block-causal scope), and nothing else; every output moves with each count under every register arm and both scopes; equal boards with different counts have different digests and outputs and, from one store in one epoch, each equals its own full pass with no frozen board recomputed; a refreshed epoch's anchor is the state with its counts (another count is a node below it; a root with other counts a new epoch, other history K/V); the other colour's view derives its counts; cached = full pass along the tree fixture's paths, each node also with mid-turn counts, under both supersession readings and both register arms; the parameters and their draws. The A7 mirror test compares `Batch.turn_state` (a mid-turn construction with given counts added) and the engine's mirror test the engine's own counts on the 5DFEN mirror |
 | A7 | built, tested | Perspective canonicalisation (`lane/net`, N-A7). The network reads every input from the acting player's side (`net/state.py`: `token_arrays` and `collate`; `PositionState` keeps the engine's absolute facts): owners ours/theirs (A2's colour table renamed `embed.owner` - no parameter changes, F1 as it was), each board's side to move us/them, ranks mirrored (`y -> H-1-y`) and timelines negated when Black acts (`p -> -p`, or `-1 - p` in a ±0 variant - §12.6's index mapping, so the state carries `even_start`, the engine's `Expansion.even`); file, time and Δt unchanged. Only features and coordinates change: the tokens keep their order, so every token-indexed output - policy and reply moves, per-board, per-square - maps back by the identity, the per-square labels by swapping ours and theirs (`heads.square_labels_by_colour`; the labels relabelled ours/theirs, issue 226); values are the acting player's (D8). The acting colour stays an input: D8's embedding on the global registers (issue 228). Cached path (C2): frozen K/V keyed by the acting player (`board_ident(..., acting=True)`), the search root's history built from both sides and a refresh's dense pass run from each (`cache.viewed_by`) - issue 303's cost, logged for C2. §15.2's row as issue 304 reads it: `state.mirror` (each board one half-turn later, issue 227); `tests/net/test_perspective.py` - canonical inputs bit-identical at the mirrored token but for the acting colour, outputs equal mapped back with the colour's rows tied (FP32 1e-5; BF16 no further than its own FP32 distance), different untied; 18 constructions (many timelines, deep travel, duplicated boards, ±0, fairy pieces, past the shift with submit legal/masked/absent, 7x7 to 1x1, far apart, no global registers), 3 seeds, both scopes, B5/B10/B11/B12/B17 and B15 off, the cached path under both supersession readings with and without a root refresh; `tests/engine/test_perspective_engine.py` - the engine's own 5DFEN mirror converts to `state.mirror` of the conversion, moves and relations included, both acting colours, each of the 16 named variants the engine sets up (its whole table, `helpers.ENGINE_VARIANTS`), and the network agrees on the two. Review fixes: a refresh's other-colour view (`viewed_by`) carries no moves and no edges (issue 229; a placeholder fixed in code), tested on synthetic and engine positions; `state.mirror` negates timelines by its own arithmetic, not through `canonical_timeline` (a wrong self-inverse map would cancel), so the identity and `-p`-for-`-1 - p` mutants of `canonical_timeline` are caught. **For A8 (not built):** the board-layout embedding must flatten each board in canonical (x, y) order - ranks mirrored when Black acts - not storage order, or A7 breaks for Black. Mutants run at test time (no file edited): no rank mirror, no timeline negation, absolute owners, absolute side to move, frozen keys without the perspective - each caught; `-p` for `-1 - p` in a ±0 variant is invisible to the outputs (recentring) and caught by the canonical-input test |
-| A8 | not started | The board-layout embedding - a prototype (6p): net lane, behind its flag, with §15.3's cost row |
+| A8 | built, tested | The board-layout embedding - a prototype (6p), behind its flag, off (`lane/net`, N-A8; `net/layout.py`): each board's one-hot layout (64 cells x 24 owner-and-piece states, read in A7's canonical (x, y) order) projected to 16 channels per square (1,573,888 parameters), added to the token input by a learned 16 -> d map (4,096), then an FFN (one pre-norm residual block, RMSNorm, Mish, 8x - 1,051,136; every valid token): 2,629,120 parameters; F1 unchanged with it off (bit for bit: its own generator, drawn last). Placeholders (issue 240): the FFN's width, form and tokens; the concatenation built as a sum; smaller boards padded a1-anchored or centred (`layout_padding`), larger refused; has-moved not among the 24 states. FP32, never quantised (G2, 238(d)). Every attention path and the cached path (no cache change: per board, intrinsic, keyed by perspective - 303) compute the same function; §15.2's A7 row green with it on. §15.3's row measured (MEASUREMENTS): the projection 0.099% of attention at 44 boards by §15.3's formula, with the register's FFN 4.5%. Smoke-tested only (three optimiser steps on synthetic rows). Edits 185, 186 |
 | B1, B2, B4 | built, tested | Network N1: one weight set, unified attention, 4D RoPE (whose positional term factorises per axis - joint-axis geometry is B15's, register B4) |
 | B8 | built, tested | Network N1's 2 + 16 registers, at the ruled positions (CHECKPOINT 6, M20; `lane/net` N-M20): per-board registers rotated on timeline and time only, global registers position-free on every pair - no switch. The arms M20 disposed of are gone: `board_register_spatial` (`learned_angle`, the old default, with its 2 x 2 learned coordinates, and `zero_angle`), `global_register_pairs` (`anchored`) and the attention context's `global_free`. Aux heads pool the squares; the value-type heads and the submit logit pool the global registers by mean (D3, D8; issue 223). Cost: the CPU kernel path widens Q/K/V to 44 for every row and recomputes the register rows (indicatively +20% / +55% per attention call at 240 boards, BF16 / FP32, against one plain call - `attention.py`; not a measurement); N3's counted dense FLOPs (MEASUREMENTS, 2026-10-02) were taken with the old `learned_angle` registers - to re-count, with the wall times, in step 2's quiet-machine block |
 | B9 | built, tested | Network N2: move-graph mask on 2 heads; the built direction, register reads and head counting are now the v1 values (§6 "As built", M20; issue 16) |
@@ -3689,6 +3689,66 @@ superseded or made moot says so; nothing is deleted.
     the full pass serves such a network, and the cache refuses it at construction and at every
     evaluation; a network meant for the cache is trained with `trunk_quant_attention=False`, which
     the hook keeps. Revisit if C2 is adopted (issue 238(h)). Proposed edit 182 (as ruled).
+240. **A8's board-layout embedding, as built** (§2.2, §13.1 6p, §15.1, §15.3; register A8, A7,
+    F5, F6, G2; issues 221, 238(d), 303). `lane/net`, `python/t5d/net/layout.py`. §2.2 and the
+    register give the idea, the 64 x 24 one-hot, 16 channels and "~1.6M parameters", "padded" for
+    smaller boards and "an FFN after the embedding"; everything else is unstated, and each point
+    below is a COMMITTED-CLASS PLACEHOLDER (an input encoding), named and logged here. (a) **The
+    switch**: `NetConfig.board_layout_embedding` (off - the register does not make it the v1
+    default). Off, the network is the network without it, bit for bit: its modules draw nothing
+    while they are made and are drawn last, from a generator of their own (`model.a8_seed`), so
+    switched on every other parameter is as drawn without it - tested with the attention flags, the
+    heads' prototypes and the cached configuration on - and with its module removed the outputs
+    are the flag-off network's, bit for bit. F1 unchanged (22,965,426; 25,594,546 with it on).
+    (b) **"With an FFN after the embedding"**: its width, form and tokens are unstated. Built: one
+    pre-norm residual block `x + W2 mish(W1 RMSNorm(x))` - F5's gain-only RMSNorm, F6's Mish (fixed:
+    6y's squared-ReLU switch is "trunk-only" and does not reach it; it is one of issue 221's
+    input-side activations, edit 162), F5's kept FFN biases - of width `layout_ffn_ratio * d`,
+    8x (the trunk's ratio; `layout_ffn_ratio`, 0 drops it - a cost probe, not A8), on every valid
+    token (squares, per-board and global registers; Lc0's tokens are all squares, so "after the
+    embedding" is every token), padding left zero. It is most of A8's cost: 1,051,136 parameters
+    and 6.12 GFLOP at 44 boards - 4.4% of attention by §15.3's formula where the projection is
+    0.1% - which neither §2.2 nor §15.3's row counts. (c) **"Concatenated to the token input"**:
+    the token input is a sum of learned embeddings - a linear map of a concatenated one-hot - so
+    concatenating the 16 channels and projecting the result to `d` is the sum with a learned
+    `Linear(16, d)` without a bias (4,096 parameters): built as the sum. (d) **Other board sizes**:
+    a board smaller than 8 x 8 is padded into the frame - placement unstated: `layout_padding`,
+    `"a1"` (default: the board's canonical a1 on the frame's) or `"centre"`, both in the acting
+    player's frame, so the mirror gets the same layout; padding cells are empty, indistinguishable
+    from empty squares (the 24 states have no "off the board"), and one projection serves every
+    size. A board larger than 8 x 8 is refused (`ValueError`; no variant the engine sets up has
+    one) - fixed in code. (e) **The 24 states** are 12 piece types x ours/theirs (A7's owners),
+    ours first, in `PIECE_LETTERS` order; has-moved is not among them (read literally) and an empty
+    cell is all zero. The projection `Linear(1536, 64 x 16)` keeps a bias: 1,573,888 parameters
+    (the spec's "~1.6M" is the weight, 1,572,864). (f) **A7's canonical order**: each square's cell
+    is its canonical `(y_c + oy) * 8 + (x + ox)` from the batch's canonical coordinates - ranks
+    mirrored when Black acts - never the storage order (the build log's note under A7). Tested
+    against a layout written independently from the position's absolute facts, both acting
+    colours, sizes 8 to 1 and both paddings; §15.2's A7 row with A8 on - every construction of
+    `test_perspective.py`, both scopes, both paddings: layouts and layout channels bit for bit at
+    the mirrored token, the embedding before its FFN bit for bit and after it within 1e-6 (the
+    FFN's GEMM rounds rows in another order differently - the only step not bit-exact), outputs
+    within 1e-5 mapped back - and through the cached path from both perspectives, with and without
+    a root refresh. Mutants run at test time (no file edited) - ranks read as stored when Black
+    acts, owners dropped, every square reading board 0's layout - are each caught. (g) **The
+    cached configuration**: the layout is per board and intrinsic - contents, colours, size and
+    the perspective, all in `cache.board_ident(..., acting=True)` (issue 303) - and the FFN per
+    token, so `cache.py` needs no change: a node embeds its tokens through `T5DNet.embed_tokens`,
+    as the full pass does; cached = one full pass with A8 on (five geometries, three seeds, both
+    paddings; and under every N2 switch). In a cache that stored embeddings a frozen board's would
+    be computed once with its K/V; this prototype re-embeds every token at every node, as it
+    already did. (h) **Precision**: the embedding runs before the trunk's autocast, FP32 under
+    either G1 trunk; its layers are plain `nn.Linear`, never G2's `QuantLinear` (issue 238(d):
+    "A8 when built" among the unquantised - a placeholder); tested under `fp8_e4m3`. (i)
+    **Initialisation** (an implementation choice): LeCun normal weights, biases N(0, 0.02), the
+    norm's gain 1 + N(0, 0.1). A one-hot with ~28 active inputs of 1,536 under LeCun's
+    1/sqrt(1,536) gives layout channels of about 10% of the token embedding's RMS at
+    initialisation (0.135 against 1.30 on a synthetic 12-board position), the FFN's residual about
+    0.68 - realistic scale, not zero (§15.2). (j) **Smoke only** (the user's rule: no training
+    runs): three optimiser steps on synthetic rows, the small network with A8 on - losses finite,
+    a gradient on every A8 parameter, every one moved. (k) **Cost** (MEASUREMENTS, "A8 - the
+    board-layout embedding"): parameters exact; the FLOPs `FlopCounterMode` counts equal
+    `cost.layout_flops` exactly; CPU wall times on a loaded machine. Proposed edits 185, 186.
 
 <!-- A new list, so that the numbers from 140 render as written. -->
 
@@ -4971,6 +5031,32 @@ struck through, where nothing of it is left to apply); the others stand as writt
     across an FP8 midpoint is a whole FP8 step), so their tolerance is measured on the flips"; and
     to the G1 row: "with the projections in FP8; FP8 attention is refused by the cache while C2 is
     deferred - its post-RoPE rounding depends on the frame". Why: measured (issue 238(h), (i)).
+185. **§2.2's board-layout paragraph and register A8**: now - "the board's one-hot piece map,
+    flattened and projected per square to a few channels, concatenated to the token input, with an
+    FFN after the embedding ... one projection from the board's flattened piece map (64 squares x 24
+    owner-and-piece states) to each of its squares ... Boards smaller than 8 x 8 are padded"; A8
+    "each square gets its whole board's flattened piece layout at layer 0, projected per square (16
+    channels, ~1.6M parameters), with an FFN after the embedding | Prototype". Proposed - add, as
+    built and placeholders until 6p rules: "the layout read in the acting player's canonical (x, y)
+    order (A7); the 24 states 12 piece types x ours/theirs, has-moved not among them; smaller boards
+    padded with their canonical a1 on the frame's (or centred - an arm), larger boards refused; the
+    16 channels added through a learned 16 -> d map (concatenation then projection, as a sum); the
+    FFN one pre-norm residual block - RMSNorm, Mish, width 8d - on every token; FP32, not quantised
+    (G2); ~1.6M parameters for the projection, 2.63M with the FFN" - and say which of these 6p's arm
+    fixes, or name the FFN's width if it is meant to be smaller. Why: each is a committed-class input
+    detail the documents leave unstated (issue 240); the FFN's form decides most of A8's cost.
+186. **§15.3's row "Board-layout embedding (A8) | ~0.1% of attention at 44 boards; ~1.6M parameters
+    at 16 channels | 2.2 | estimated -> to measure" (M4 write-back)**: proposed - "measured (CPU
+    counts, MEASUREMENTS 'A8 - the board-layout embedding'): the projection 1,573,888 parameters
+    (1,572,864 without its bias) and 0.138 GFLOP at 44 boards - 0.099% of attention by this
+    section's formula (139.7 GFLOP), 0.072% of the attention the CPU kernels count; the register's
+    FFN (8x, a placeholder) adds 1,051,136 parameters and 6.12 GFLOP - A8 in all 2,629,120
+    parameters and 6.29 GFLOP, 4.5% of attention and 2.0% of the counted forward at 44 boards
+    (0.83% and 0.62% at 240); CPU wall time indicative only (the embedding +18 ms at 44 boards and +103 ms at 240 on a loaded 12-thread CPU, the forward's
+    change inside the noise)" - and status "measured
+    (counts); wall time for the quiet-machine block". Why: M4 - the estimate's 0.1% is confirmed for
+    the projection it counts, and the row omits the FFN the register includes, about 45 times the
+    projection's compute (issue 240(b)).
 
 <!-- A new list, so that the numbers from 110 render as written. -->
 
@@ -5278,3 +5364,10 @@ struck through, where nothing of it is left to apply); the others stand as writt
   across the search boundary shown, the pre-D3 parameters pinned, each evaluation carrying its
   prior (self-play refuses an optimistic one in `serve`), the effort loss on full searches only.
   F1 unchanged. Register D3, D4, D9; issues 231-233; edits 172, 174.
+- **2026-10-23 - network A8** (`lane/net`): the board-layout embedding behind its flag (off) -
+  each board's one-hot layout (64 x 24, A7's canonical order) projected to 16 channels per square,
+  added to the token input, then an FFN; its unstated details placeholders (issue 240); FP32, never
+  quantised; every attention path and the cached path unchanged in function; §15.2's A7 row green
+  with it on; §15.3's row counted (the projection 0.099% of attention at 44 boards, 4.5% with the
+  FFN), wall time indicative (a loaded machine). F1 unchanged (22,965,426; 25,594,546 with it on).
+  Register A8; issue 240; edits 185, 186.

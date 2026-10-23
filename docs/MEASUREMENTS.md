@@ -51,6 +51,7 @@ quiet-machine block).
 | One refresh | ≈ 10 node-evaluations | not measured: the estimate is windowed and the window is not built (spec issue 39) | | | |
 | KV memory per state | ~260 MB (240) / ~649 MB (600); ~113 MB windowed | BF16 250.9 MB (240, 8 TL), 635.8 MB (600, 12 TL) - frozen boards only, exact; FP8 50.1% | N3 table below; one perspective - under A7 every store holds two entries per root frozen board from the moment its epoch is made (note below) | 0.97 / 0.98 | 2026-10-02, N3 |
 | Local/global interleave | 0.067 TF per node | - | | | |
+| Board-layout embedding (A8) | ~0.1% of attention at 44 boards; ~1.6M parameters at 16 channels | projection 1,573,888 parameters (1,572,864 without its bias), 0.138 GFLOP at 44 boards - **0.099%** of attention by §15.3's formula (0.072% of the counted kernel attention); with the register's FFN (8x, a placeholder) 2,629,120 parameters and 6.29 GFLOP - **4.5%** of attention, 2.0% of the counted forward (0.83% / 0.62% at 240 boards); CPU wall indicative only: the embedding +18 ms at 44 boards, +103 ms at 240 (BF16), the forward's change inside the noise | A8 section below; machine loaded (85-100% CPU) | 0.99 (projection, FLOPs); 0.98 (parameters) - the FFN, which the row leaves out, is 45x the projection's compute | 2026-10-23, N-A8 |
 | Leaf-batching gain | 1.2-1.5× | - | | | |
 | NNUE eval | ~10k MACs, sub-µs | - | | | |
 | Movegen throughput | ≥ 20,000/s at 240; ≥ 10,000/s at 600 (§15.6) | pseudo-legal expansion, 1 thread: 44,047/s at 240 boards, 24,951/s at 600 (scope + relations); with the legal-moves filter: milliseconds to minutes per expansion | M9 section below | 2.2x / 2.5x the target (pseudo-legal); far below it with the filter | 2026-10-02, 2740e66 |
@@ -119,6 +120,57 @@ gather and rotation of every cached key; kernel-only ratios measured by a review
 were 3.64x (live set) and 14x (cached vs dense) at 240 boards, 8 timelines. The
 quiet-machine re-run (commands in the build log) records wall and kernel time
 with load samples per job.
+
+### A8 - the board-layout embedding, counted and timed (2026-10-23)
+
+**What it is.** Section 15.3's row "Board-layout embedding (A8) | ~0.1% of attention at 44
+boards; ~1.6M parameters at 16 channels" for register A8 as built behind its flag
+(`python/t5d/net/layout.py`, spec issue 240): the per-board projection of the one-hot layout
+(1,536 -> 64 x 16, with a bias), the 16 -> 256 merge into the token input, and the register's
+"FFN after the embedding" - one pre-norm residual block at 8x, a placeholder. Machine `dev-r`;
+PyTorch 2.13.0+cpu, 12 threads; the F1 network (d 256, L 16, B9's two move-graph heads, B15, the
+block-sparse path, dense scope); one position, `synthetic_state(0, N)` - T = 2,920 tokens at 44
+boards, 15,856 at 240; random weights (model seed 0); window none. Arms: "off" (the v1), "A8" (the
+flag on, its placeholders), "A8 without FFN" (`layout_ffn_ratio = 0`: the row's projection alone -
+not the register's A8).
+
+**Parameters (exact).** Projection 1,573,888 (the weight 1,572,864 - the spec's "~1.6M" - and a
+bias of 1,024); merge 4,096; FFN 1,051,136 (gain 256; 256 -> 2,048 -> 256 with F5's biases): A8
+2,629,120 - the v1's 22,965,426 becomes 25,594,546 (+11.4%); 1,577,984 without the FFN.
+
+**FLOPs, counted** (PyTorch's `FlopCounterMode` over one forward, FP32 trunk - counts do not
+depend on the precision or on load). The counted difference between the arms is exactly
+`cost.layout_flops` at both sizes (also pinned by `test_layout.py`). *Attention, analytic* =
+section 9.1's `4 T^2 d L`; *attention, counted* = the fused CPU kernel's and the global merge's
+products (every key a kernel is handed - B15's per-row biases and the position-free register
+rows widen it, as N3's table notes).
+
+| Boards | A8 projection | merge | FFN | A8 total | Attention: analytic / counted | Forward counted (off) | Projection / attention: analytic / counted | A8 / attention: analytic / counted | A8 / forward |
+|---|---|---|---|---|---|---|---|---|---|
+| 44 | 0.138 GF | 0.024 | 6.124 | 6.286 | 139.7 / 193.6 GF | 316.1 GF | **0.099%** / 0.072% | **4.50%** / 3.25% | 1.99% |
+| 240 | 0.755 | 0.130 | 33.25 | 34.14 | 4,119 / 4,872 | 5,538 | 0.018% / 0.016% | 0.83% / 0.70% | 0.62% |
+
+Without the FFN A8 is 0.162 GFLOP at 44 boards (0.116% of analytic attention) and 0.885 at 240
+(0.021%). Section 15.3's "~0.1%" is the projection's figure, confirmed (ratio 0.99); the FFN the
+register adds is 45 times the projection at 44 boards and is not in the row (issue 240(b)).
+
+**CPU wall time - indicative only.** Same build and positions; each arm built once, warmed on a
+2-board position, then five repetitions interleaved (the arms' order reversed every other
+repetition); medians, minima in brackets. **The machine was loaded**: other lanes' jobs held the
+CPU at 85-100% (Windows' processor load, sampled before and after each block: 97/85, 94/100,
+100/100), so forward times vary by more than A8's share and say nothing about it; the
+embedding's own time (`T5DNet.embed_tokens`, milliseconds) is the usable figure. The 240-board
+FP32 block was stopped unfinished (the machine at 100%). For the quiet-machine block.
+
+| Boards, trunk | Embedding off / A8 / A8 without FFN (ms) | Forward off / A8 / A8 without FFN (s) | A8's embedding time / forward (off) |
+|---|---|---|---|
+| 44, BF16 | 1.69 (1.46) / 19.76 (14.65) / 3.55 (2.73) | 4.28 (3.50) / 4.48 (4.10) / 3.89 (3.69) | +18.1 ms, 0.42% |
+| 44, FP32 | 2.51 (1.90) / 16.00 (13.73) / 4.23 (2.72) | 3.24 (2.92) / 3.27 (2.76) / 3.33 (2.81) | +13.5 ms, 0.42% |
+| 240, BF16 | 15.6 (9.5) / 118.3 (102.1) / 22.9 (16.2) | 75.4 (71.3) / 73.9 (69.8) / 74.2 (68.5) | +102.8 ms, 0.14% |
+
+The embedding runs in FP32 under either trunk (it precedes the trunk's autocast), so its time does
+not follow the trunk's precision. Lc0's "5% latency" is a GPU figure for a different network and is
+not compared.
 
 ### Engine E4 - the gate's full mode on the corpus (2026-10-02)
 
