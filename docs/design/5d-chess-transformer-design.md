@@ -629,6 +629,9 @@ plus the conditioned history of its **refresh epoch** (the root's, unless a node
 above it forked a new one, §7.9) — and share it down the subtree via prefix sharing
 (§7.2). Recomputing against the root epoch inside a refreshed subtree would silently undo
 the refresh for exactly the boards that subtree creates.
+Under the tree form (§8.2) the recompute waits for the next node the network evaluates —
+inner submove nodes make no network call — and is done once per board and epoch (§7.9,
+CHECKPOINT 9).
 Upper-bound cost: +12–24% per node at 240 boards, +8–16% at 600; counted under the
 ancestry reading, 0.3–12% (the creation reading would cascade — 280 boards recomputed for
 one jump at 600 boards — one more reason it was rejected; BUILD_LOG issue 35). The refresh
@@ -916,6 +919,16 @@ effort signal is the parent's predicted difficulty at a quantile; rung 1 is deci
 and unchanged, and every signal only adds. Every number is a placeholder, tuned in 6c if
 rung 1 shows a signal (BUILD_LOG issues 75–79).
 
+**Inside a turn, refresh only where the network runs** (CHECKPOINT 9). Under the tree form
+(§8.2) a simulation passes through inner submove nodes that make no network call, so there
+is nothing at them to condition. The ladder's triggers — rung 1 and the complexity
+trigger — are checked only at nodes the network evaluates: complete turns and the tree
+form's interaction points. A travel move made at an inner node counts toward the next
+evaluated node, as "travel since the last refresh" already does. Boards our own submoves
+supersede mid-turn are recomputed (§7.3) when the network next runs, once per board and
+epoch, and shared from there down. Under the ply split every node is evaluated, so the
+ladder runs per node as designed; below N\* (§7.10) there is no cache to refresh.
+
 #### A cost not in the table: subtree reuse across moves
 
 Lc0-style engines reuse the subtree under the played move as the next search's starting
@@ -938,6 +951,47 @@ to the root, causal with respect to leaf-specific moves. It must be trained that
 something much narrower for ~4%. Combined with §12.1's self-play compute argument, this
 makes the cached configuration **more attractive than §7.4 prices it** — the recommendation
 to build dense first stands on sequencing grounds (§13.1), not on cached being wrong.
+
+### 7.10 Phase form — dense below N\*, cached above (CHECKPOINT 9)
+
+If the cached configuration is ever adopted (C2), it is adopted in **phase form**: a search
+whose root has fewer than N\* boards runs dense; one whose root has N\* or more runs cached,
+with the root refresh. One network serves both.
+
+**Why.** The cache trades a quality cost (§7.3) for speed, and the speed matters most where
+dense is slowest. Dense cost grows with the square of the board count: at the human games'
+median of 44 boards an evaluation costs ~0.26 TF, about an eighteenth of the 240-board
+figure, and at that rate the search's CPU side — movegen and legality classification
+(§13) — may bind before the network does. And 88% of human-game moves are played there,
+under 50 boards (§13). Which side of the trade wins at each size is measured, not assumed;
+the phase form takes the winner per size range, so it is never worse than either pure form
+by more than the switch. §12.1's self-play argument then counts only the compute above N\*.
+
+**Training applies the same rule.** The mask is chosen by the board count of the
+conditioning root — the position k plies back in conditioning-offset training (§7.9), the
+search root in deployment. A training position whose root has fewer than N\* boards is
+trained dense; otherwise cached, against the refreshed root, as before. No new regime: a
+dense pass is what the root refresh already is, and k = 0 is already in every cached
+training batch. Committed-class with the cached decision itself (§7.7).
+
+**The root decides, once per search.** The mode belongs to the refresh epoch: every node in
+a search is evaluated the same way, so transpositions (§8.5) never mix a dense and a cached
+evaluation of one state — which a per-node switch would do whenever a line crossed N\*.
+Board count never falls (every move creates a board), so a game crosses N\* once; the first
+cached search starts with its root refresh like any other, and carried nodes keep their
+statistics (§8.7) with no K/V to invalidate.
+
+**N\* is measured.** Placeholder 50 — that 88% mark, and where exact settling stops
+(§11.4). It is set where the cached arm starts to beat dense at equal
+wall-clock, read per board-count range in 6c and weighted by the pilot run's compute
+distribution (M18). If the pilot run's compute sits mostly below N\*, the cache's case
+shrinks to the large-position tail — which is why C2 waits for it.
+
+**Refused: dense lower layers under a cached top.** The other reading of "dense below n" —
+the first n layers bidirectional, the rest cached — fails §7.6's placement rule: a
+bidirectional layer lets present information into frozen tokens, so every layer above it is
+recomputed per node and the cache survives only below the first bidirectional layer (C16).
+Dense layers can sit only on top: the hybrid, ablation 8.
 
 ---
 
@@ -1354,10 +1408,10 @@ construction; this section specifies the rest, and resolves an either/or §7.9 l
 | Solved store (proofs) | Whole game | Game-theoretic position facts — §11.3 exports them from the lossy TT for exactly this |
 | Asset map | Whole game | Superseded boards are immutable (§11.2 rung 4) |
 | Scanner TT | Across moves | State-keyed; standard practice |
-| NNUE accumulators | Frozen (superseded) / incremental (heads) — held open with the NNUE | §11.1, §11.4 |
+| ~~NNUE accumulators~~ | Retired with the NNUE (CHECKPOINT 9) | §14.4 |
 | KV cache, frozen boards | Across moves in the cached configuration | §2.4 |
 | Evaluation cache | Across self-play's fresh searches and across match-play moves, purged by board count | State-keyed (with ruleset and refresh epoch) — §8.5, C14 |
-| Scanner history tables (killers, history, continuation — and correction, when v2 lands) | Across moves within a game, decayed; cleared between games | Per-thread — §11.3 |
+| Scanner history tables (killers, history, continuation; correction history retired with the NNUE) | Across moves within a game, decayed; cleared between games | Per-thread — §11.3 |
 
 #### The main tree: reuse specified, and §7.9's dilemma dissolved
 
@@ -1596,6 +1650,8 @@ search are stored — 1.08 MB each in BF16, one or two per node (BUILD_LOG issue
 uptraining at ~5% of original pretraining compute. So unlike the causal mask (§7.7), this
 decision does not have to be made before spending self-play compute — which removes any
 reason to hedge toward it now.
+The same now holds for MLA, which an earlier revision called a pre-training commitment:
+trained MHA networks convert to it (MHA2MLA, §14.3). Neither is a reason to hedge now.
 
 **FlashAttention is mandatory for memory, not just speed.** At 15k tokens the materialised
 score matrix is ~503 MB per head per layer in bf16. Eight heads and one layer's
@@ -1692,8 +1748,8 @@ serve MCTS leaves as if they were chat completions.
 | Ragged / varlen attention kernels | Adopt | Variable per-position scope (§10.4.3) makes padded batches waste work; varlen FlashAttention avoids it |
 | Speculative decoding | Mostly already present | Its structure is virtual-loss batched descent. The residual analogue — speculative leaf prefetch to fill under-filled match-play batches — is quality-neutral (state-keyed cache) and useless in self-play, where cross-game batching fills batches. Low priority |
 | Early exit / adaptive depth | Prototype tier — confidence family | Easy positions exiting at layer 8 save ~50% on those evals; "easy" is self-rated, so it inherits §12.3's limit and the add-only rule: the scanner baseline never scales down with it. Needs trained exit heads; calibration monitoring (§14.4) applies |
-| Within-system distillation (big net → smaller net) | Legitimate capacity-ladder tool | Does not cross the verifier boundary — the refused distillation is *between* systems. Ablation 5 gains a distilled-small arm |
-| Latent-KV compression (MLA-style) | Refuse for now | Compresses keys through a low-rank bottleneck — thins the key space on the axis §4.1 and §10.2 flag as marginal; the GQA reasoning applies unchanged. Revisit only if cache memory binds |
+| Within-system distillation (big net → smaller net) | Legitimate capacity-ladder tool | Does not cross the verifier boundary — the refused distillation is *between* systems. Ablation 5 gains a distilled-small arm — a smaller main net, never a second evaluator beside it (§14.4) |
+| Latent-KV compression (MLA-style) | Refuse for now | Compresses keys through a low-rank bottleneck — thins the key space on the axis §4.1 and §10.2 flag as marginal; the GQA reasoning applies unchanged. At 32-wide heads it also costs compute — the absorbed form attends in the latent width, ~4× the attention arithmetic — and its rotary key, shared across heads, conflicts with per-head positional specialisation (§14.3). Revisit only if cache memory binds, and then convert the trained MHA network (MHA2MLA) rather than pre-commit (CHECKPOINT 9) |
 | Mixture of experts | Low priority | Capacity at constant per-token cost — but the ladder's FFN rung is nearly free already (ff12 costs 5%), so MoE's advantage is small and its routing overhead is not, at 21M params |
 
 The pattern: compute-reducing tricks transfer or are neutral; capacity-reducing tricks
@@ -1964,7 +2020,8 @@ manufactures false proofs that persist.
    client's false mate claims and Chess in 5D's (CHECKPOINT 1). The two detectors are
    cross-checked against each other in the gate. The hypercuboid
    method originates in penteract's cwmtt and is adapted, with improvements, in ftxi's
-   5dchess_engine.
+   5dchess_engine. Kairos, the fourth oracle, describes its legal-turn enumeration as a
+   hypercuboid search too (CHECKPOINT 9).
 4. **Ordinary chess rules** — castling, en passant, promotion — apply board by board, and
    so do their attack tests: castling is blocked only if the king or the square it
    passes through is attacked by a piece *on the castling board*, and en passant is
@@ -1991,11 +2048,25 @@ against independent implementations**:
 | ftxi/5dchess_engine (github.com/ftxi/5dchess_engine) | BSD-2; C++, Python and WASM bindings; reads arbitrary variants from 5dfen; ships `diff` (compares two algorithms) and `perftest` tools; bitboard movegen, check detection, both mate detectors |
 | penteract/cwmtt (github.com/penteract/cwmtt) | Independent checkmate detection; the source of the hypercuboid method |
 | Chess in 5D (chessin5d.net) | A third independent open-source implementation of the rules |
+| Kairos (github.com/FirePlank/5d-chess-engine) | A fourth (CHECKPOINT 9): Rust, GPL-3.0. By its README: full rules on boards up to 8×8 with the variant pieces (princess, unicorn, dragon, brawn, royal queen, common king) and odd or even timeline starts, a perft tool, 5dpgn and 5DFEN input, a JSON command interface and the 5DUCI protocol; legal turns enumerated lazily by a hypercuboid search |
 
 Cross-check move counts (perft-style), check verdicts and mate/stalemate verdicts over
 corpora of real games in 5dpgn notation, and investigate every disagreement before the
 proof channel is enabled. The gate re-runs on every generator change and per variant
 (§12.6); once running, the adversarial league (§12.7) is the ongoing fuzzer.
+
+**Kairos, the fourth oracle** (CHECKPOINT 9). Added to the nightly and release tiers,
+pinned, harness only, never a rules source. What it can answer is confirmed at the pinned commit before its
+driver is written — perft counts and what they count, check and mate verdicts through its
+JSON interface or 5DUCI, a state export to fingerprint — and recorded in PROVENANCE.md: the
+README facts above describe a moment (reversal 20). It changes three things. It adds an
+independent *implementation*, not an independent *method* (below). It may bring variant
+rulesets to the two-oracle bar (H47): where it reads a variant only one oracle reads now,
+that variant's generator can be gated (§12.6). And it is the first external engine to play
+against — a strength yardstick for the pilot run and a differently built league opponent
+(§12.7). The cost: a new triage round by cluster, nightly CI time, and its own bugs — a
+small project, so expect some; they become known divergences with citations, reported
+upstream like any other.
 
 **The official game client is never an oracle** — it is believed to incorrectly claim
 some positions are checkmate (penteract's documentation). Agreement with it proves
@@ -2020,6 +2091,7 @@ checks:
 | ftxi/5dchess_engine | Pinned test-time oracle; reference for understanding the hypercuboid algorithm | BSD-2, so reuse is legally easy — but reuse forfeits it as an oracle |
 | penteract/cwmtt | Test-time oracle (independent checkmate detection); the original description of the hypercuboid method | Check its licence before copying anything |
 | Chess in 5D | Third oracle; possible source of game records | Check its licence and terms |
+| FirePlank/5d-chess-engine (Kairos), the fifth submodule | Fourth oracle, nightly (CHECKPOINT 9); external opponent over 5DUCI for the pilot run and the league (§12.7) | GPL-3.0, as the project is: running it in the harness and playing against it are unaffected; its code enters the engine as ideas only, as Stockfish's and Lc0's do |
 | adri326/5dchess-notation — 5dpgn ("Shad's notation"), the fourth submodule | The pinned notation specification: our own parser is written from its text, the game corpus is in its format, and it settles parse divergences (below) | A parser shared by the engine and an oracle corrupts both sides of a comparison identically — the gate never sees it. If the repository ships parser code, that code counts as a parse-only oracle under the same harness rules — never a basis for ours |
 | Stockfish, Lc0 (both GPLv3) | Ideas only, reimplemented from papers and the Chess Programming Wiki | The project is GPL-3.0 too, so copying would be licence-compatible — but it would end sole copyright, the one thing that keeps relicensing or dual-licensing possible, and other projects' code enters as ideas only |
 
@@ -2027,13 +2099,17 @@ The hypercuboid algorithm is reimplemented in-house. Its in-house cross-check is
 depth-first detector this section already runs beside it — two different algorithms that
 must agree on every mate verdict. ftxi's detector and cwmtt are the external checks; ftxi's
 adapts cwmtt's method, so a flaw in the method itself would not surface as disagreement
-between those two, which makes Chess in 5D the most independent of the three. **The oracles are the only third-party 5D code in the repository**, and they live only
+between those two, which makes Chess in 5D the most independent of the four. Kairos
+enumerates turns with a hypercuboid search by its own account, so it is a third
+implementation of the same method: it catches implementation bugs — ours and the other
+oracles' — while a flaw in the method itself stays as invisible to it as to ftxi and
+cwmtt. **The oracles are the only third-party 5D code in the repository**, and they live only
 in the test harness: nothing from another 5D project is vendored into the engine for any
 purpose, gated or not — everything else from other projects enters as ideas,
 reimplemented. General-purpose libraries (PyTorch, FlexAttention, PyO3, test
 frameworks) are ordinary package dependencies, not vendored source, and their bugs cannot
 make the oracles agree falsely. The fourth submodule is the notation specification, not a
-rules oracle; any parser code it ships is treated as a parse-only oracle, which keeps that
+rules oracle (Kairos, the fifth, is one); any parser code it ships is treated as a parse-only oracle, which keeps that
 sentence true. On licences: algorithms and
 ideas are free to reimplement, code carries its licence, and GPL obligations attach on
 distribution; read each licence properly before copying anything. **The project's own
@@ -2056,8 +2132,8 @@ first commit:
   that imports from it. Left to discretion, the path of least resistance when stuck is
   copying an oracle's code into the core — exactly the reuse that destroys it.
 - **Tiered CI.** ftxi's engine (fast; a C++ driver over its core library, held to its stock
-  CLI) on every commit; cwmtt (Haskell toolchain, heavier) and Chess in 5D nightly and
-  before any generator release or proof-channel enablement. The game-record corpus is
+  CLI) on every commit; cwmtt (Haskell toolchain, heavier), Chess in 5D and Kairos (Rust toolchain, from
+  CHECKPOINT 9) nightly and before any generator release or proof-channel enablement. The game-record corpus is
   pinned too. The commit tier is a smoke test: a ruleset is gated only when two or more
   oracles answer for it, so the check that *some* ruleset is gated runs only in the tiers
   that run every oracle — nightly and release (CHECKPOINT 6). The commit tier still fails if
@@ -2106,7 +2182,7 @@ first commit:
   attacking board, active or inactive timeline, head or earlier board, ordinary or
   cross-board move — and each cluster is settled once from the rulebook and recorded in
   the known-divergences file with its citation. Two oracles agreeing is not evidence on
-  its own (ftxi adapts cwmtt's method). **Check disagreements first** — check decides
+  its own (ftxi adapts cwmtt's method, and Kairos uses the same method family). **Check disagreements first** — check decides
   checkmate versus stalemate — and the engine's check detection is not written until they
   are settled. The expectation — that they would concentrate in which boards count as
   sources of attack — was confirmed at CHECKPOINT 1: all seven clusters did. **The
@@ -2151,6 +2227,11 @@ first commit:
 > their pre-registered tests from 50 boards up (§15.6). The verification layer in force is
 > **§11.4**. This section and §11.2–§11.3 remain as the design history; their mechanisms
 > apply only where §11.4 keeps them.
+>
+> **CHECKPOINT 9:** the scanner NNUE is retired, and with it everything below that depends
+> on it — the NNUE leaf eval, its training rule, threat features, attention over head-board
+> accumulators, within-scanner correction history, the quiet screen and the
+> NNUE-vs-value-head disagreement check (§14.4). The material estimate stays.
 
 Lc0 deliberately omits quiescence search, on the theory that MCTS extends along forcing
 lines by itself. **That theory is weakest exactly where 5D chess sits**: enormous branching
@@ -2728,7 +2809,8 @@ and Hunt each need only the cheap half for their purpose.
 **Retired:** the per-leaf estimate channel (rung 1 — it fits its budget nowhere), rung 3's
 refutation sweep and rung 5's scouting (both relied on cheap per-node scans), and the
 NNUE's place in the build plan — its main job was evaluating the scanner's leaves, so it
-returns to held open (§14.4). The asset map stays: it runs once per superseded board and
+returned to held open; at CHECKPOINT 9 it was retired outright, with its dependents
+(§14.4). The asset map stays: it runs once per superseded board and
 costs little, on a material-based estimate.
 
 **Knock-ons.** Time management loses the scanner as a second volatility source above 50
@@ -3073,13 +3155,15 @@ standard game — nearly-free training diversity.
 - **Exactness is inherited per variant.** The verification layer's guarantees come from
   the generator, so a subtly wrong Reversed Royalty generator does not just misplay — it
   manufactures **false proofs** that enter the solved store as permanent facts. Variant
-  support means a generator correctness suite per variant; this is the one place where
+  support means a generator correctness suite per variant, gated only where two oracles
+  answer for it (H47) — Kairos reads the variant pieces (§11.0), which may bring more
+  variants to that bar; this is the one place where
   "adapt" costs engineering rather than configuration.
 - **Weights do not transfer where values invert.** Reversed Royalty flips the protection
   economy — shield the queen, spend the king — close to an adversarial distribution
   shift for a standard-trained net.
-- **Accumulating small items:** material values per new piece (H50); NNUE
-  feature-table extension and retrain if the NNUE returns; per-variant repetition terminal values — none needed,
+- **Accumulating small items:** material values per new piece (H50); no NNUE
+  feature tables (the NNUE is retired, CHECKPOINT 9); per-variant repetition terminal values — none needed,
   since no variant adds a repetition rule and the full state cannot recur (§11.0
   item 5).
 
@@ -3137,7 +3221,7 @@ target; the net trains on its own search outcomes in those games, as always.
 | Population play | PFSP: n cheap test games (PCR-style caps) against the league, then training weighted by loss rate — variance-shaped, below | No compute spent beating opponents already beaten; the test games *are* the forgetting check |
 | League pruning | Retire adversaries beaten decisively across several checkpoints; keep a representative set | Test cost is linear in league size |
 | **Held-out adversaries** | A fraction of exploiters never trained against | The train/test split over adversaries — beating every adversary you trained on measures memorised exploits, not robustness |
-| Heterogeneous attackers | Warm-started copies with varied search settings, a full-scope (unwindowed) net, a prover-heavy configuration (Hunt and the settling scans at large budgets) | Differently-wrong applied to attackers: diverse exploiters find diverse holes |
+| Heterogeneous attackers | Warm-started copies with varied search settings, a full-scope (unwindowed) net, a prover-heavy configuration (Hunt and the settling scans at large budgets), and an external engine of another paradigm — Kairos over 5DUCI, alpha-beta with a linear evaluation fitted to game results (CHECKPOINT 9) — never trained against us, so it finds what an outside player would; positions only, like every attacker | Differently-wrong applied to attackers: diverse exploiters find diverse holes |
 | Size classes | Tiny to large, reusing the §9.2 ladder architectures; small full-scope and small from-scratch variants | Exploit-class coverage and the robustness curve — not cheapness (below) |
 
 **The weighting is variance-shaped, not monotone in loss.** An opponent winning 95%+
@@ -3386,9 +3470,17 @@ positions: the window and the cache matter less, and exact verification, which w
 50 boards, covers most of the game. Every decision weighted by where compute goes — M7,
 the cached decision (C2), piece-centric tokenisation — uses measured game-length
 distributions: the human games now, the pilot self-play run before serious self-play.
+If the cache is adopted, it is in phase form, so its case rests only on the compute above
+its threshold (§7.10).
 Human games are a proxy, not a forecast: stronger defence could make engine games longer,
 and sharper attack could make them shorter. Large positions still matter for robustness,
 because games can grow, but they are the stress case, not the typical one.
+
+**Self-play Elo is the only strength measure so far.** Elo against one's own predecessors
+overstates progress, and until CHECKPOINT 9 the design named no external engine to play.
+Kairos (§11.0), a classical alpha-beta engine, is the first: the pilot run plays it
+as a yardstick, and the league keeps it as a differently built opponent (§12.7). One engine
+is a thin yardstick — it measures distance from one style of play, not strength in general.
 
 **Legality classification may dominate self-play in big games.** Measured on random-weight
 self-play: 41 of 43 seconds at 336 boards went to classifying move legality (BUILD_LOG
@@ -3453,7 +3545,8 @@ committed-class choice is adopted.
 3. Registers on/off, 2 vs 4 per board
 4. Move-graph heads: 0 / 2 / 4
 5. 21M vs the 60M-class L24-ff12 arm (44M — §9.2 ladder) at equal wall-clock; the prior
-   now leans larger (§9.2); distilled-small vs from-scratch-small as a third arm (§10.3);
+   now leans larger (§9.2); distilled-small vs from-scratch-small as a third arm (§10.3) —
+   a smaller main net, never a second evaluator beside it (§14.4);
    FFN 2× vs 8× at matched compute, the saved compute spent on simulations (§9.2)
 6. Block-sparse vs dense mask (requires board-major ordering — §6)
 6a. Fixed multi-head routing (§6) — speculative; may recover axial's inductive bias for free.
@@ -3464,12 +3557,14 @@ committed-class choice is adopted.
     pass/fail thresholds pre-registered in §15.6 — measured: failed above 50 boards
     (CHECKPOINT 3); superseded by 6b′ and 6b″ (§15.6)
 6c. Root-conditioned refresh (§7.9) vs plain causal — only under the cached configuration;
+    read per board-count range against the dense baseline, which sets the phase form's
+    threshold N\* (§7.10);
     sub-arm: root-only vs root + travel-triggered visit-gated refresh (the existence test
     for within-search drift) — rung 3's attention-weighted partial refresh only if the
     sub-arm shows a signal. The refresh arms must be conditioning-offset-trained (§7.9);
     arm: offset training on vs off, which measures the train/deploy gap directly. Ladder
     variant: the conditioning audit on value-surprise promotions
-6d. ~~Scanner eval: material count vs 5D-NNUE~~ — void while the NNUE is held open (§11.4)
+6d. ~~Scanner eval: material count vs 5D-NNUE~~ — void: the NNUE is retired (§14.4)
 6e. ~~Async ladder: rung-1-only vs full ladder~~ — void, rung 1 retired (6b). Live
     remainder: exclusion vs provenance for policy targets, and the residual steering in
     search-value targets (§12.2)
@@ -3511,7 +3606,7 @@ committed-class choice is adopted.
     risk with heads 1 and 4 (§6), which inject the same relations structurally — but at
     zero cost, worth the arm. Initialisation does not conscript the registers (§12.4):
     they may overwrite it. Also Lc0's board-layout embedding (§2.2)
-6q. ~~NNUE same-board threat features~~ — void while the NNUE is held open (§11.4)
+6q. ~~NNUE same-board threat features~~ — void: the NNUE is retired (§14.4)
 6r. Variant models (§12.6): Princess in the conditioned main net vs warm-started
     specialist — the generalist tax, measured; Reversed Royalty warm-start vs
     from-scratch — the inherited-king-bias control
@@ -3612,25 +3707,48 @@ at 15k.
 
 ### 14.3 Held open
 
-**Mixture-of-Depths.** Routes only a subset of tokens through each layer. Empty squares and
-frozen boards are exactly the tokens that don't need 16 layers. No precedent in board-game
-engines — a research bet, not a shipping decision, but the domain fit is unusually good.
+**Mixture-of-depths — held open, not yet** (CHECKPOINT 9, G10). It routes only some tokens
+through each layer; tokens on superseded boards that nothing rules-relevant touches are the
+plausible ones to skip. *Trigger:* piece-centric tokenisation's verdict (A5), which would
+remove the empty squares — MoD's main target — so MoD is weighed after it. *Rule floor:*
+head boards, every legal travel destination (E's membership rule, §10.4.1) and the
+registers run every layer; the router chooses only among the other superseded boards'
+tokens — §10.4.3's floor-and-budgeted-queue shape, never subtraction below the floor
+(§14.2). *Test:* a supervised arm on the shared dataset (M24) at matched compute, with
+A-MoD's router — the previous layer's attention map, no new parameters — as the first arm,
+since attention mass from live tokens is the signal §7.9's rung 3 ranks by too. *Scope:*
+dense only — under the cache, frozen tokens are computed once, so there is nothing per node
+to skip. The evidence is thin and points both ways: in a BERT-base encoder, MoD on half the
+layers at 50% capacity was 1.20× faster and lost 4.4 points (PubMedQA, 83.24 against
+87.62); in vision transformers, attention-routed MoD beat isoFLOP baselines by up to 2% and
+adapts from pretrained weights. No board-game precedent. A compute–quality trade, not a
+free saving.
 
-**MLA instead of GQA.** Better compression (~93% vs MHA) but a genuine pre-training
-commitment, unlike GQA. Triply conditional: only relevant if you adopt the cached
-configuration (§7.1), *and* run sim counts high enough for tree memory to bind (§10.2's
-10k-sim row), *and* find GQA insufficient. Do not pre-commit to it.
+**MLA instead of GQA — neither** (CHECKPOINT 9, G6). Full MHA stays (C4). MLA's gain is
+cache memory, and the dense build keeps no cache; the cached build would store ~1.08 MB per
+superseded board, one or two per node (§10.2), so memory binds, if ever, only at high sim
+counts. Against it at our width: the absorbed form that makes MLA cheap in memory-bound LLM
+decoding attends in the latent width — about 4× the attention arithmetic of 32-wide heads
+at DeepSeek's proportions, ~2.5–3× slower overall at 44 boards, where attention is about
+half the cost — while the form that decompresses keys and values first keeps MHA's
+arithmetic and saves storage only; its low-rank keys thin the key space on the axis §4.1
+and §10.2 flag as marginal; and its rotary key, shared across heads, conflicts with
+per-head positional specialisation (B5). **Corrected at CHECKPOINT 9:** this entry called
+MLA "a genuine pre-training commitment, unlike GQA". It no longer is — MHA2MLA (2025)
+converts a trained MHA network with 0.3–0.6% of its training data (in LLMs; untested with
+4D RoPE). So it is decided late, like GQA: only if the cache is adopted *and* tree memory
+binds.
 
 **The cached configuration itself (§7).** Not rejected — deferred, with a specific
 condition for revisiting it: after the window is measured, and weighed against §12.1's
-self-play compute argument.
+self-play compute argument. If adopted, it takes the phase form (§7.10).
 
 ### 14.4 From the 2026 engine survey and subsequent review
 
 A systematic comparison against Lc0, Stockfish, KataGo, dlshogi and YaneuraOu/Suisho —
 independently re-analysed — produced the adoptions recorded in their home sections
 (node-capped scanning, secure-child selection, the categorical value head, variance-cPUCT,
-MCGS, time management, PCR, continuation-history ordering, quiet-only NNUE training). A
+MCGS, time management, PCR, continuation-history ordering, quiet-only NNUE training — since retired with the NNUE). A
 second pass at CHECKPOINT 7 added Lc0's and KataGo's training methods — soft policy,
 short-term value and error heads, surprise-weighted sampling, deblundering, proof
 rescoring, perspective canonicalisation and the rest of §12.8 — and corrected the
@@ -3663,9 +3781,6 @@ learned-verifier estimates entering any loss.
   signal as a persistent correction. The error head (KataGo's solution, legitimate
   under §12.4's own-search rule) is now trained from the start (§8.3); 6m decides which
   signal search consumes.
-- **Within-scanner correction history** — Stockfish's own pattern (own-search residuals
-  correcting own static eval) transplanted whole into the scanner; held open with the
-  NNUE (§11.4). Within-system, legitimate.
 - **Board-pair smolgen** (§6) — full-rank biases over 240² board pairs generated from the
   global registers, negligible cost; the only level at which Lc0's construction survives
   our scale. Within-board generation costs 8× its block attention and, made low-rank,
@@ -3680,9 +3795,6 @@ learned-verifier estimates entering any loss.
   costs ~1.8× a whole cached node evaluation at 240 boards; committed-class, since training
   would have to randomise the number of dense top layers; and it builds on the deferred
   hybrid. Held unless 6c shows fresh conditioning is worth a lot.
-- **The scanner NNUE** (§11.1) — moved from the build plan to held open at CHECKPOINT 4. Its
-  main job, evaluating the scanner's leaves, went with the leaf scans, and quiet-leaf reach
-  failed every range. Revisit only if a leaf-level role returns.
 - **Our own next move as an auxiliary head** (Lc0's `policy_next`) — Lc0 found its future-move
   heads unstable; only the opponent reply is reinstated, as a prototype with a defined move
   space (§12.4, CHECKPOINT 7).
@@ -3697,15 +3809,29 @@ learned-verifier estimates entering any loss.
 - **Late move reductions** — moot while no alpha-beta search exists. MCTS's priors and
   widening are its analogue, giving late, low-prior moves few or no visits; df-pn (Hunt,
   the settling scans) is best-first by proof numbers, with no depth to reduce, and its
-  ordering stays net-free (H4). If an estimate search returns with the NNUE, LMR applies to
-  estimate lines only — never to proof lines or evasions (H5).
+  ordering stays net-free (H4). If an estimate search ever returns (its NNUE is retired), LMR
+  applies to estimate lines only — never to proof lines or evasions (H5).
 - **Dedicated df-pn long-mate thread** (dlshogi's root solver) — v2. Its repetition gate
   is gone (§11.0 item 5); it still needs a 5D dominance definition for the df-pn+
   accelerations.
-- **Same-board NNUE threat features** (§11.1) — held open with the NNUE (6q void meanwhile); the head-only cross-board overlay is v3-speculative at most.
 - **Early exit / adaptive depth** (§10.3) — confidence-family inference saving; allowable
   because the verification layer never scales down with self-rated ease; needs exit heads
   and calibration monitoring.
+
+**Retired (CHECKPOINT 9):**
+
+- **The scanner NNUE** (§11.1, H6) — held open since CHECKPOINT 4, when its main job,
+  evaluating the scanner's leaves, went with the leaf scans and quiet-leaf reach failed
+  every range. Now retired. Stockfish 19 retired its own secondary network, the small net
+  it had run beside the main one since 16.1, "enhancing strength in positions where the
+  small net previously underperformed"; this design refused the dual-net fallback from the
+  start (below), so nothing here depended on a second evaluator. One network: ablation 5's
+  distilled-small arm is a smaller *main* net, not a second one. The asset map stays, on
+  its material estimate.
+- **Its dependents** — within-scanner correction history (H20), same-board threat
+  features (H8; 6q void), attention over head-board accumulators (H9), the quiet-only
+  training rule (H7) and the v1 spec (F4; 6d void). Cross-board threat features stay
+  refused (below).
 
 **Refused, with the violated principle:**
 
@@ -3744,7 +3870,9 @@ learned-verifier estimates entering any loss.
   cost, so the ceiling is ~1.5%, and cache memory was not binding either. Recorded so it
   does not get re-proposed looking clever.
 - **Latent-KV compression (MLA-style)** — a low-rank key bottleneck; the GQA refusal's
-  reasoning applies unchanged (§10.3). Revisit only if cache memory binds.
+  reasoning applies unchanged (§10.3), plus a compute penalty at 32-wide heads and a
+  conflict with per-head rotary specialisation (§14.3). Revisit only if cache memory
+  binds — by converting the trained MHA network (MHA2MLA), not by pre-committing.
 - **A raw depth or node-count factor in final selection** — node count under a child
   *is* its visit count (double-counted), and depth-as-quality favours narrow forced
   continuations over flexible moves with many good replies. The exact version of what
@@ -3837,7 +3965,7 @@ idea improves play), needs training: that is the ablation programme (§13.1).
 | Phase | Build | Settles |
 |---|---|---|
 | 0 | Rules engine (§11.0): bitboard multiverse with immutable boards; physical and cross-board move generation; royal-capture check detection; turn legality at submission; naive mate detection; 5dpgn/5dfen parser | — |
-| 0 | Differential-testing harness over pre-included, pinned oracles in a separate test harness (§11.0) — ftxi's engine on every commit, cwmtt and Chess in 5D nightly; pinned corpus; known-divergences file | H23, the proof-channel gate |
+| 0 | Differential-testing harness over pre-included, pinned oracles in a separate test harness (§11.0) — ftxi's engine on every commit, cwmtt, Chess in 5D and Kairos nightly; pinned corpus; known-divergences file | H23, the proof-channel gate |
 | 0 | Present-line rules, pinned against the rulebook while writing the generator; no repetition rule (H39) | Closed at CHECKPOINT 1 |
 | 1 | \|E\| phase curve over game records | Window cascade step 1 (§10.4.2) |
 | 1 | Scanner with the material-count eval: horizon per node budget, stand-pat/zugzwang | 6b — failed above 50 boards; verification v3 (§11.4) |
@@ -3871,8 +3999,8 @@ writing.
 
 Not built in the untrained phase: the adversarial league (training infrastructure,
 trigger-gated, §12.7), the variant specialists (§12.6), refresh-ladder rungs 2–3 (gated on
-rung 1 showing a trained signal, §7.9), the retired scanner rungs and the NNUE, now held
-open (§11.4). No ONNX/TensorRT export (§10.2).
+rung 1 showing a trained signal, §7.9), the retired scanner rungs, and the NNUE — retired at
+CHECKPOINT 9 (§14.4). No ONNX/TensorRT export (§10.2).
 The window is killed, provisionally (§15.6); the pilot self-play run re-checks it.
 
 **The training loop is written and smoke-tested** (CHECKPOINT 6) — targets with §12.2's
@@ -3891,9 +4019,11 @@ Two computation paths that must agree, compared directly:
 | Lazy K/V recompute = eager recompute — deferred with the window | §10.4.1's lazy K/V for boards entering E | C10 |
 | Supersession recompute = from-scratch under the state-defined mask | No path dependence | C20 |
 | A refresh fork leaves sibling subtrees unchanged | Copy-on-write isolation | C3a |
+| Phase form: with the cached configuration on, a search rooted under N\* equals the dense search node for node; one rooted at or above it evaluates every node cached | The mode is the root's, never a node's | C26 |
+| Tree form with the cached configuration on: supersession recompute at the next evaluated node = recompute at supersession | The deferral is exact — the mask is state-defined | C27 |
 | Same state + epoch → same evaluation; MCGS transposition hits return identical evaluations | Evaluation purity | C19–C21 |
 | Incremental Zobrist = from-scratch, especially on duplicated boards | The XOR trap | H18 |
-| NNUE incremental accumulator = full recompute (random NNUE weights) — held open with the NNUE | O(1) updates are exact | F4 |
+| ~~NNUE incremental accumulator = full recompute~~ — retired with the NNUE (CHECKPOINT 9) | — | F4 |
 | FP8/BF16 cache precision = live precision | §10.2's matching rule | G1 |
 | Displacement bias through the score function = the same bias materialised, on small positions | The score-function implementation is exact | B15 |
 | Key-side Shaw term via precomputed query–class products = direct per-pair computation, on small positions | The gather implementation is exact | B17 |
@@ -3906,7 +4036,7 @@ Two computation paths that must agree, compared directly:
 
 Protocol: random weights at realistic initialisation scale — never zeros or near-zeros,
 which make distinct paths agree trivially; several seeds; tolerance matched to the
-arithmetic (bit-exact for integer paths — Zobrist, NNUE int16 — and numerical tolerance
+arithmetic (bit-exact for integer paths — Zobrist — and numerical tolerance
 for BF16/FP8); and adversarial constructions: duplicated boards, deep travel, many
 timelines, supersession inside a refreshed subtree, every variant.
 
@@ -3931,7 +4061,7 @@ Every economic argument in this document rests on these, and today they are arit
 | Displacement bias and normalisation changes | Negligible: a table lookup per pair; fewer operations | 4.1, 9.3 | estimated → to measure |
 | Key-side Shaw term (B17) | ~0.5× the QK^T product at 44 boards, ~9% at 240, with ~1,400 classes | 4.1 | estimated → to measure |
 | Board-layout embedding (A8) | ~0.1% of attention at 44 boards; ~1.6M parameters at 16 channels | 2.2 | estimated → to measure |
-| NNUE eval | ~10k MACs, sub-microsecond | 11.1 | void while held open |
+| NNUE eval | ~10k MACs, sub-microsecond | 11.1 | void: retired (CHECKPOINT 9) |
 | Movegen throughput | Pseudo-legal: 44,047 actions/s at 240 boards and 24,951 at 600 on one thread. With fast legality: 20,249/s at 240 boards on one thread (1.01× the target), 37,316/s on M13's two expansion cores (1.87×), 12,133/s at 600 | 11, 15.6 | **measured (CPU)** — passes M9 on two cores |
 | Prover nodes/s | Brute-force scanner 787k nodes/s on one thread, 566k per thread at five; df-pn 239k; Guard ~18–24k and Hunt 0.7–61k nodes per root at 50 ms. Rung 1 retired, so its latency row is void | 11, 15.6 | **measured (CPU)** |
 
@@ -4171,9 +4301,10 @@ and exact verification reaches depth only in small positions (§13, §15.6).
 
 Then: single weight set, **dense bidirectional attention** over all square tokens, 4D RoPE
 plus a learned 4D displacement bias (§4.1), RMSNorm-style normalisation without biases
-(§9.3), 2 registers per board plus 16 global, move-graph mask on 2 heads, full MHA,
-bilinear pointer policy head, ~21M parameters at d=256 × 16 layers with 8× FFN (2× under
-test, §9.2).
+(§9.3), 2 registers per board plus 16 global, move-graph mask on 2 heads, full MHA
+(neither GQA nor MLA, §14.3), bilinear pointer policy head, ~21M parameters at d=256 × 16
+layers with 8× FFN (2× under test, §9.2). One network: no second evaluator beside it
+(§14.4).
 
 Run it in PyTorch with FlexAttention — BF16 trunk, FP32 heads; later, FP8 for the trunk's
 matrix multiplications, with QAT prepared behind a flag, and no ONNX/TensorRT export
@@ -4185,6 +4316,8 @@ commit to caching until you have a dense baseline to price it against.
 Revisit §7 once, after the pilot self-play run measures the engine's own game sizes (M18).
 If its games are as small as human ones, dense is the destination; cached with
 root-conditioned refresh (§7.9) earns its place only if large positions carry the compute.
+If it does, it takes the phase form: dense below a board-count threshold, cached above
+(§7.10).
 (This summary previously named the cache as the expected destination; that was priced at
 the 240-board premise the data overturned.)
 
