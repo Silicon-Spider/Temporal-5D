@@ -1289,7 +1289,7 @@ Royalty and Timeline Strategos.
 | Class | Cases | Largest gap | Bound |
 |---|---|---|---|
 | FP32 trunk, cached vs one full pass | 32 variant-configurations x 2 seeds x 2 readings; 7 N2 sets x 3 variants | 1.91e-6 (max abs) | 2e-5 |
-| FP32 heads (value, WDL, submit readout, policy, per-board) | the same | 1.67e-6 (the N2 sets alone 1.37e-6) | 1e-4 |
+| FP32 heads (value, WDL, submit readout, policy, per-board; D4's reply from the review fixes on) | the same | 1.67e-6 (the N2 sets alone 1.37e-6); 1.91e-6 with the reply head and the review fixes' store tests | 1e-4 |
 | FP32 evaluations through the step API (policy, WDL, categorical logits) | 16 variants + 2, x causal / root refresh x tree / graph | 1.43e-6 | 1e-4 |
 | Leaves met twice (transpositions; the second search's shared leaves) | the same | 0 (bitwise) | bitwise |
 | BF16 trunk, cached vs the BF16 full pass | 3 variants | RMS 1.97e-3, max 1.15e-2 | RMS 8e-3, max 5e-2 |

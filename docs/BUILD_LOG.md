@@ -5803,3 +5803,17 @@ struck through, where nothing of it is left to apply); the others stand as writt
   on a less loaded machine) - the CI network job runs it whole; trim it if CI time matters. This
   closes the "cached = dense on more real variants" item of "Current state" (left for the main
   loop to strike). Register C2, C17, C19, C20, C23.
+- **2026-10-23 - MT-04 review fixes** (`lane/gate`; the same number block, none used): D4's
+  reply head is now compared on engine positions (their `opp_moves` built as training builds
+  them, `train.reply_map.map_reply`; the conversion supplies none); the docstrings' and the
+  changelog's claims corrected (no princess in Reversed Royalty - a common king; the T0 board is
+  half-turn 1; the step-API leaves are the root, then mostly its action's mid-action and shifted
+  states). Three tests make the file stand on its own against the review's four survivors,
+  re-run with the reviewer's `run_mutants.py` against a fresh copy of the fixed tree (whole file,
+  not slow): M02 (digest without the boards a board reads) and M23 (identity without the
+  has-moved markers) killed by `test_boards_alike_but_for_a_marker_or_a_past_keep_their_own_entries`;
+  M19 (`start` keeps the open epoch whatever the root) by
+  `test_one_cached_evaluator_follows_its_search_to_a_new_root` (2 of 2); M24 (store keys without
+  the epoch) by `test_one_store_across_two_games_and_two_epochs` (2) and the same root-follow
+  test (2). Random play's diverging games share no board whose past or markers alone differ, so
+  M02 and M23 needed hand-built positions (5DFEN starts; Standard's knight shuffles).
