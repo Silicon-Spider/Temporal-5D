@@ -1657,7 +1657,7 @@ width (M22)", "The CHECKPOINT 8 figures"). Found on the way: the ruling's premis
 | C1 | built, tested | `attn_scope = "dense"` is the default |
 | C4 | built, tested | Full MHA (N1) |
 | C17, C19, C20 | built, tested | Network N3: the block-causal scope (`attn_scope = "block_causal"`), the live set fully bidirectional, supersession recomputed once under the state-defined mask - both of C20's readings built (`supersession_scope`; 6c decides, now in the register); the causal past is the ruled ancestry (`causal_past = "lineage"`, C23) |
-| C2 | built (for §15.2/§15.3) | Network N3's cached path; the decision itself stays deferred (6c, §7.7), now re-weighed against the pilot run's game sizes (M18). The path absorbs B15, B16, A6 and A7 as they land - A7 is in (`lane/net` N-A7: frozen K/V keyed by the acting player, the root's history built from both sides, a refresh's dense pass run from each - issue 303, tested with §15.2's A7 row through the cached path); B15 is in (`lane/net`: a frozen board's bias rows built per layer, cached = one full pass with it on), and B16 (`lane/net`: the live pass adds the status biases from the node's present; frozen rows and entries never carry them; none at a refreshed epoch's anchor, and below it on every frozen key, history boards included - both halves tested against an oracle of their own); B17 runs through it too (a frozen board's rows get the Shaw term from its own queries; tested through root and node refreshes) |
+| C2 | built (for §15.2/§15.3) | Network N3's cached path; the decision itself stays deferred (6c, §7.7), now re-weighed against the pilot run's game sizes (M18). The path absorbs B15, B16, A6 and A7 as they land - A7 is in (`lane/net` N-A7: frozen K/V keyed by the acting player, the root's history built from both sides, a refresh's dense pass run from each - issue 303, tested with §15.2's A7 row through the cached path); B15 is in (`lane/net`: a frozen board's bias rows built per layer, cached = one full pass with it on), and B16 (`lane/net`: the live pass adds the status biases from the node's present; frozen rows and entries never carry them; none at a refreshed epoch's anchor, and below it on every frozen key, history boards included - both halves tested against an oracle of their own); B17 runs through it too (a frozen board's rows get the Shaw term from its own queries; tested through root and node refreshes). Cached = dense on every variant the engine sets up (MT-04, `lane/gate`, `tests/engine/test_cached_variants.py`): random play on all 16, both C20 readings, the v1 and step-1 configurations (A8 on), the C step API in tree and graph mode with and without the root refresh (transpositions bitwise), the N2 switches with every typed relation, F1 in BF16 - green, gaps in `docs/MEASUREMENTS.md` |
 | C10 | not built (rule) | Lazy K/V for boards entering E: deferred with the window (M16) |
 | C3, C3a (rung 1) | built, tested | Root refresh and the travel-triggered, visit-gated rung-1 fork (copy-on-write epochs), behind flags. C3's conditioning-offset training hook is parked with the deferred cached configuration ("Parked", below) |
 | C3a (rungs 2-3), C18, C22 | not built (rule) | Held open (M5 for rungs 2-3) |
@@ -5790,3 +5790,16 @@ struck through, where nothing of it is left to apply); the others stand as writt
   the review named tested; A7's mirror test requires every label decided and seen; the
   labels' and the pin and check relations' cost in `docs/MEASUREMENTS.md`. Register B11, D4;
   issues 172-176; edit 136.
+- **2026-10-23 - MT-04, cached = dense on every real variant** (`lane/gate`; number block
+  spec issues 520-539 and proposed edits 360-379, assigned by the main loop - none used):
+  `python/tests/engine/test_cached_variants.py`, 60 tests over the engine's 16 variants -
+  random play's every state (turn start, mid-action, shifted, submitted; branched and inactive
+  timelines) incrementally against `reference_output` under both C20 readings, in the v1
+  configuration (B15, B16, A6, A7) and with A8, D4's reply and D9 on; the C step API's leaves,
+  tree and graph, causal epoch and root refresh, intra-turn transpositions bitwise; seven N2
+  flag sets with attack, defence, pin, x-ray and check edges; F1 in BF16 (slow). No variant
+  fails; the gaps in `docs/MEASUREMENTS.md`. The file took 603 s serial on the loaded machine
+  (100% CPU, other lanes' engine tests; single cases ran 3-6x faster earlier in the session,
+  on a less loaded machine) - the CI network job runs it whole; trim it if CI time matters. This
+  closes the "cached = dense on more real variants" item of "Current state" (left for the main
+  loop to strike). Register C2, C17, C19, C20, C23.
