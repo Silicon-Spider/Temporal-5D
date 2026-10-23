@@ -647,6 +647,39 @@ def test_the_flat_form_reads_board_logits_through_the_step_api():
     assert _leave_digest(T5D_SPLIT_BOARD_MOVE, 3.0) == ply
 
 
+@pytest.mark.parametrize("what", ["moves", "boards"])
+def test_deliver_refuses_a_leaf_whose_logits_miscount_even_when_the_batch_total_matches(what):
+    """``CStepDriver.deliver`` checks each leaf's move and board logits against that leaf's
+    candidate moves and boards (review B-L8, 2026-10-23): leaf 0 one too many and leaf 1 one too
+    few leave the concatenated totals right and every later leaf's logits shifted - refused, the
+    batch abandoned, and the search goes on."""
+    with Game.variant("Standard - Two Timelines") as g:
+        s = Search(g, params=search_params(split=T5D_SPLIT_FLAT, seed=4))
+        driver = CStepDriver(s, playouts=40)
+
+        def right(leaves):
+            return [(leaf.id, Evaluation(np.zeros(leaf.position.move_count, np.float32), np.zeros(3, np.float32))) for leaf in leaves]
+
+        leaves = driver.collect(8)
+        while len(leaves) < 2:  # the root's batch is the root alone: evaluated, then a batch of several
+            driver.deliver(right(leaves))
+            leaves = driver.collect(8)
+        assert all(leaf.position.move_count > 0 for leaf in leaves)
+        out = []
+        for i, (v, leaf) in enumerate(zip(driver.batch, leaves, strict=True)):
+            shift = {0: 1, 1: -1}.get(i, 0)
+            moves = leaf.position.move_count + (shift if what == "moves" else 0)
+            boards = v.expansion.board_count + (shift if what == "boards" else 0)
+            ev = Evaluation(np.zeros(moves, np.float32), np.zeros(3, np.float32), board_logits=np.zeros(boards, np.float32))
+            out.append((leaf.id, ev))
+        with pytest.raises(ValueError, match=f"leaf 0 has .* {'candidate moves' if what == 'moves' else 'boards'}"):
+            driver.deliver(out)
+        assert driver.batch == ()
+        assert driver.collect(8)  # the batch was abandoned: the search gathers again
+        driver.abandon()
+        s.close()
+
+
 def test_flat_leaves_offer_no_submit():
     """Under D2's flat form every node is a turn start and the submit action is not a decision
     of its own: the generator ends turns itself (D8)."""

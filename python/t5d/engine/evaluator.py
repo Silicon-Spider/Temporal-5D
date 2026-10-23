@@ -498,11 +498,15 @@ class CStepDriver:
     in leaf order, one submit logit per leaf - the evaluation's where the leaf offers a legal
     submit, NaN elsewhere (not offered; or illegal, which the search prunes) - and D3's heads,
     from the leaf's acting player: the 3 WDL logits, the 51 categorical logits (given for every
-    leaf of the batch or for none), the error head's output and moves-left (NaN: none). No
-    per-board "leave it" logits: the network has no per-board head yet (D2's flat form's head
-    change, the net lane's), so under the flat form the search gives leaving a board its
-    placeholder share (``leave_share``). A refused delivery raises the engine's error; the engine
-    has abandoned the batch.
+    leaf of the batch or for none), the error head's output and moves-left (NaN: none); and
+    D2's flat form's per-board "leave it" logits where an evaluation gives them
+    (``Evaluation.board_logits``: each leaf's ``expansion.board_count``, in its order; NaN for
+    a leaf that gives none - the search's ``leave_share`` there). The network gives none yet
+    (its per-board head is the net lane's, D2's head change), so under the flat form the search
+    gives leaving a board its placeholder share. Each leaf's move logits must number its
+    candidate moves and its board logits its boards: a leaf whose do not is refused here, before
+    the engine sees the batch (``ValueError``; the batch abandoned). A refused delivery raises
+    the engine's error; the engine has abandoned the batch.
 
     The search's ``expand`` options must give every board's features (``"all"``): the
     network's input is the full history. Errors from the engine raise as exceptions
@@ -592,6 +596,18 @@ class CStepDriver:
             self.abandon()
             raise RuntimeError(f"deliver: evaluations for leaves {sorted(by_id)}, the batch is leaves 0..{len(views) - 1}")
         evs = [by_id[i] for i in range(len(views))]
+        # Each leaf's own counts, checked leaf by leaf: concatenated, two leaves' errors could
+        # cancel (one too many, the next one too few) and shift every later leaf's logits.
+        for v, ev in zip(views, evs, strict=True):
+            moves = np.asarray(ev.policy_logits).size
+            if moves != len(v.expansion.moves):
+                self.abandon()
+                raise ValueError(f"deliver: leaf {v.index} has {moves} move logits for its {len(v.expansion.moves)} candidate moves")
+            if ev.board_logits is not None and np.asarray(ev.board_logits).size != v.expansion.board_count:
+                self.abandon()
+                raise ValueError(
+                    f"deliver: leaf {v.index} has {np.asarray(ev.board_logits).size} board logits for its {v.expansion.board_count} boards"
+                )
         logits = np.concatenate([np.asarray(ev.policy_logits, dtype=np.float32).reshape(-1) for ev in evs] + [np.zeros(0, np.float32)])
         wdl = np.stack([np.asarray(ev.wdl_logits, dtype=np.float32) for ev in evs])
         given = [ev.value_logits is not None for ev in evs]

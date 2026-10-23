@@ -115,6 +115,7 @@ struct Drained {
   std::vector<GeneratedTurn> turns;
   bool exhausted = false;
   bool stopped = false;
+  double bound = 0;  // the generator's bound() at the end
 };
 
 Drained drain(const GameState& s, const TurnScorer& scorer, TurnUnit unit,
@@ -132,6 +133,7 @@ Drained drain(const GameState& s, const TurnScorer& scorer, TurnUnit unit,
   CHECK_EQ(g.generated(), out.turns.size());
   out.exhausted = g.exhausted();
   out.stopped = g.stopped();
+  out.bound = g.bound();
   CHECK(out.exhausted != out.stopped);
   if (out.exhausted) CHECK(g.bound() == -std::numeric_limits<double>::infinity());
   return out;
@@ -258,6 +260,9 @@ void check_position(const GameState& s, const std::set<std::string>& expected_ke
       for (std::size_t i = 0; i < std::min(cut.turns.size(), d.turns.size()); ++i) {
         CHECK(cut.turns[i].moves == d.turns[i].moves);
       }
+      // A stopped generator's bound still holds every turn it did not emit
+      // (the box it was judging is queued again).
+      if (cut.turns.size() < d.turns.size()) CHECK(cut.bound >= d.turns[cut.turns.size()].score);
       ++tally.stopped;
     }
   }
@@ -485,4 +490,289 @@ TEST(turngen_a_checkmate_has_no_turn) {
   CHECK(g.exhausted());
   CHECK(!g.stopped());
   CHECK(g.stats().nodes < 2000);
+}
+
+// ---- the realisation cursor (review fixes, 2026-10-23) -------------------------------------
+
+namespace {
+
+// Sets how many realisations a step records (t5d/turngen.hpp's test seam) for
+// a scope.
+struct StepCap {
+  explicit StepCap(std::size_t n) { detail::set_realisations_per_step(n); }
+  ~StepCap() { detail::set_realisations_per_step(32); }
+  StepCap(const StepCap&) = delete;
+  StepCap& operator=(const StepCap&) = delete;
+};
+
+struct Emitted {
+  std::vector<std::vector<Move>> moves;
+  std::vector<double> scores;
+  std::vector<std::uint64_t> results;  // the successors' keys
+  std::uint64_t resumed = 0;
+  bool exhausted = false;
+};
+
+Emitted emit_all(const GameState& s, const TurnScorer& scorer, TurnUnit unit) {
+  TurnGenerator g(s, scorer, unit);
+  Emitted out;
+  while (std::optional<GeneratedTurn> t = g.next()) {
+    out.moves.push_back(t->moves);
+    out.scores.push_back(t->score);
+    out.results.push_back(t->result.zobrist());
+  }
+  out.resumed = g.stats().resumed;
+  out.exhausted = g.exhausted();
+  return out;
+}
+
+// Each board's king can step back one turn on its own timeline (a branch):
+// that move scores 0, every other option -10. The turn making all k of them is
+// one point whose k! creation orders are k! legal turns (J9), the top score.
+struct BackInTime : TurnScorer {
+  double leave(int) const override { return -10; }
+  double move(const Move& m, int timeline) const override {
+    const bool back = timeline == m.from_timeline && m.to_timeline == m.from_timeline &&
+                      m.to_half_turn < m.from_half_turn && m.to_square == m.from_square;
+    return back ? 0 : -10;
+  }
+};
+
+GameState kings_back(int half, const RuleOptions& rules) {
+  static const char* const kKings[8] = {"k3/4", "1k2/4", "2k1/4", "3k/4", "4/k3", "4/1k2", "4/2k1", "4/3k"};
+  std::vector<std::string> boards;
+  for (int p = -half; p <= half; ++p) {
+    const std::string label = p == 0 ? "0" : (p > 0 ? "+" : "") + std::to_string(p);
+    const std::string black = kKings[(p + 12) % 8];
+    boards.push_back("[" + black + "/4/K3:" + label + ":1:w]");
+    boards.push_back("[" + black + "/4/K3:" + label + ":1:b]");
+    boards.push_back("[" + black + "/4/KR2:" + label + ":2:w]");
+  }
+  return t5d_test::game(boards, BoardSize{4, 4}, rules);
+}
+
+}  // namespace
+
+TEST(turngen_the_realisation_cursor_resumes_exactly) {
+  // A point whose realisations reach a step's cap (32) is resumed where it
+  // stopped (the realisation cursor), not judged again from its first. With
+  // the cap lowered to 1 and 2, every point of two realisations or more is
+  // stopped and resumed - under every regime: the default rules (FreeOrder),
+  // Q4's Guide-literal reading (Ordered: both shapes) and Q3's play
+  // activation (General: its tables kept across the resume) - and the turns
+  // emitted must be the shipped cap's, in the same order, scores and
+  // successors alike.
+  t5d_test::Rng rng(7303);
+  std::vector<std::string> boards;
+  int positions = 0;
+  int resumed = 0;
+  int resumed_guide_literal = 0;
+  int resumed_play_activates = 0;
+  int resumed_default = 0;
+  for (int attempt = 0; positions < 400 && attempt < 8000; ++attempt) {
+    const int width = attempt % 3 == 1 ? 2 : 1;
+    const std::optional<GameState> s =
+        t5d_test::tiny_position(rng, width == 1 ? 6 : 4, attempt % 3 == 2, width, boards);
+    if (!s) continue;
+    const ActionCount count = count_legal_actions(*s, 4000, Detector::Hypercuboid, SearchBudget::nodes(400000));
+    if (!count.stats.exhaustive) continue;
+    ++positions;
+    const HashScorer scorer(mix(0x5EED + static_cast<std::uint64_t>(attempt)), attempt % 2 == 0 ? 0 : 2);
+    bool any = false;
+    for (const TurnUnit unit : {TurnUnit::Actions, TurnUnit::Successors}) {
+      const Emitted want = emit_all(*s, scorer, unit);
+      CHECK(want.exhausted);
+      for (const std::size_t cap : {std::size_t{1}, std::size_t{2}}) {
+        const StepCap guard(cap);
+        const Emitted got = emit_all(*s, scorer, unit);
+        CHECK(got.exhausted);
+        CHECK(got.scores == want.scores);
+        CHECK(got.results == want.results);
+        // As actions, the very moves. As successors the states and scores
+        // are the same, but which of a state's actions (two realisations of one
+        // point can reach one state: equal scores) stands for it depends on
+        // when the step collects it - the cap - as before the cursor.
+        if (unit == TurnUnit::Actions) CHECK(got.moves == want.moves);
+        any = any || got.resumed > 0;
+      }
+    }
+    if (any) {
+      ++resumed;
+      const RuleOptions& r = s->rules();
+      if (r.play_activates) {
+        ++resumed_play_activates;
+      } else if (!r.moves_after_shift) {
+        ++resumed_guide_literal;
+      } else {
+        ++resumed_default;
+      }
+    }
+  }
+  std::printf("  [cursor] %d positions, %d resumed (%d Q3, %d Q4 Guide-literal, %d other)\n", positions, resumed,
+              resumed_play_activates, resumed_guide_literal, resumed_default);
+  CHECK_EQ(positions, 400);
+  CHECK(resumed_play_activates >= 5);
+  CHECK(resumed_guide_literal >= 5);
+  CHECK(resumed_default >= 20);
+}
+
+TEST(turngen_a_point_of_many_realisations_walks_each_once) {
+  // A-M1 (review, 2026-10-23): k kings each stepping back on their own
+  // timeline - one point of k! legal turns, the top score. Each realisation is
+  // tested once (the cursor; judging the point again from its first
+  // realisation tested 401,936 for 5,040 at k = 7 and spent 1,495,064 nodes),
+  // at most 32 recorded per step (what a step holds: tested - emitted <= 31
+  // throughout), and the nodes grow linearly - so the search arm's default
+  // generator budget (200,000 nodes) reaches every top turn (1,824 of 5,040
+  // before).
+  struct Case {
+    int half;
+    bool play_activates;  // Q3: the general regime's walk
+  };
+  for (const Case c : {Case{3, false}, Case{2, true}}) {
+    RuleOptions rules;
+    rules.play_activates = c.play_activates;
+    const GameState s = kings_back(c.half, rules);
+    const std::size_t k = static_cast<std::size_t>(2 * c.half + 1);
+    std::size_t n = 1;
+    for (std::size_t i = 2; i <= k; ++i) n *= i;
+    for (const TurnUnit unit : {TurnUnit::Actions, TurnUnit::Successors}) {
+      TurnGenerator g(s, BackInTime{}, unit);
+      std::size_t top = 0;
+      std::uint64_t tested = 0;
+      std::uint64_t nodes = 0;
+      bool held = true;
+      std::set<std::uint64_t> results;
+      while (std::optional<GeneratedTurn> t = g.next()) {
+        if (t->score != 0) break;
+        ++top;
+        results.insert(t->result.zobrist());
+        tested = g.stats().actions_tested;
+        nodes = g.stats().nodes;
+        if (tested < g.generated() || tested > g.generated() + 31) held = false;
+      }
+      std::printf("  [k = %zu%s, %s] %zu top turns; tested %llu, nodes %llu, resumed %llu\n", k,
+                  c.play_activates ? ", Q3" : "", unit == TurnUnit::Actions ? "actions" : "successors", top,
+                  static_cast<unsigned long long>(tested), static_cast<unsigned long long>(nodes),
+                  static_cast<unsigned long long>(g.stats().resumed));
+      CHECK_EQ(top, n);
+      CHECK_EQ(results.size(), n);
+      CHECK(held);
+      CHECK_EQ(tested, static_cast<std::uint64_t>(n));
+      CHECK(nodes <= static_cast<std::uint64_t>(8 * n + 2000));
+      CHECK(g.stats().resumed >= n / 32 - 1);
+    }
+    if (!c.play_activates) {
+      SearchBudget budget;
+      budget.max_nodes = 200'000;  // the search arm's generator_nodes
+      TurnGenerator g(s, BackInTime{}, TurnUnit::Successors, budget);
+      std::size_t top = 0;
+      while (std::optional<GeneratedTurn> t = g.next()) {
+        if (t->score != 0) break;
+        ++top;
+      }
+      CHECK_EQ(top, n);
+    }
+  }
+}
+
+TEST(turngen_a_generator_stopped_in_its_set_up_bounds_nothing) {
+  // A budget that stops the generator before its boxes are queued: nothing is
+  // known about the turns, so bound() is +infinity (it read -infinity, an
+  // exhausted generator's, before the review fixes).
+  const GameState s = variant_start(*find_variant("Very Small"));
+  TurnGenerator g(s, HashScorer(1, 0), TurnUnit::Successors, SearchBudget::nodes(1));
+  CHECK(!g.next());
+  CHECK(g.stopped());
+  CHECK(!g.exhausted());
+  CHECK(g.bound() == std::numeric_limits<double>::infinity());
+}
+
+TEST(turngen_equals_the_exhaustive_listing_with_castling_and_en_passant) {
+  // A-L4 (review, 2026-10-23): castling and en passant through the generator.
+  // Two present boards, the timeline +1 a turn ahead of timeline 0's present:
+  // castling on both (on +1, an optional board: Q21), and an en passant
+  // capture on timeline 0 (the pawn's double step - from its unmoved square,
+  // marked - just played). Under the
+  // default rules, Q21's alternative (no castling on an optional board) and
+  // Q3's play activation, as actions and as successors, against E4's
+  // exhaustive listing.
+  const std::string base = "R*3K*2R*";
+  // Black to move on timeline 0 (its present); 5DFEN cannot record an en
+  // passant right, so Black's d7-d5 is played (S7: the board it creates
+  // carries the right) and submitted.
+  const std::vector<std::string> boards = {
+      "[4k3/3p*4/8/8/4P3/8/8/" + base + ":0:1:w]", "[4k3/3p*4/8/4P3/8/8/8/" + base + ":0:1:b]",
+      "[4k3/8/8/8/8/8/8/" + base + ":+1:2:w]", "[4k3/8/8/8/8/8/8/" + base + ":+1:2:b]",
+      "[4k3/8/8/8/8/8/8/" + base + ":+1:3:w]"};
+  struct Ruling {
+    const char* name;
+    RuleOptions rules;
+  };
+  RuleOptions q21;
+  q21.castling_on_optional_boards = false;
+  RuleOptions q3;
+  q3.play_activates = true;
+  Tally t;
+  std::vector<std::size_t> castlings;
+  for (const Ruling& r : {Ruling{"default", RuleOptions{}}, Ruling{"Q21 alternative", q21}, Ruling{"Q3", q3}}) {
+    GameState s = t5d_test::game(boards, BoardSize{8, 8}, r.rules);
+    const std::optional<Move> two = t5d_test::find_move(s, "(0T1)Pd7(0T1)d5");
+    REQUIRE(two.has_value() && two->double_step());
+    s.apply(*two);
+    s.submit();
+    REQUIRE(s.playable_timelines().size() == 2);
+    const ActionList list = list_legal_actions(s, 100000, Detector::Naive);
+    REQUIRE(list.stats.exhaustive);
+    std::size_t castling = 0;
+    std::size_t en_passant = 0;
+    for (const LegalAction& a : list.actions) {
+      castling += std::any_of(a.moves.begin(), a.moves.end(), [](const Move& m) { return m.castle(); }) ? 1u : 0u;
+      en_passant += std::any_of(a.moves.begin(), a.moves.end(), [](const Move& m) { return m.en_passant(); }) ? 1u : 0u;
+    }
+    std::printf("  [%s] %zu actions, %zu castling, %zu en passant\n", r.name, list.actions.size(), castling,
+                en_passant);
+    CHECK(castling > 0);
+    CHECK(en_passant > 0);
+    castlings.push_back(castling);
+    for (const int levels : {0, 2}) {
+      CHECK(check_against_listing(s, HashScorer(41 + static_cast<std::uint64_t>(levels), levels), t, 100000, r.name));
+    }
+  }
+  report("castling, en passant", t);
+  // Q21's alternative: no castling on the optional board (+1), only on the
+  // mandatory one.
+  CHECK(castlings.size() == 3 && castlings[1] < castlings[0] && castlings[2] == castlings[0]);
+}
+
+TEST(turngen_ties_cost_little) {
+  // B-M5 (review, 2026-10-23): with every option scoring alike (ties on every
+  // board), the first turns cost a bounded number of nodes - ties searched
+  // depth-first (the newest of equal boxes first; each axis's lowest equal
+  // value first). Taken breadth-first, or the highest equal value first, the
+  // cost grows several-fold with the boards (measured at the review fixes, 11
+  // boards, first 16 turns: 1,568 nodes; oldest box first 9,828; highest value
+  // first 15,717). The budgets below are the ceilings: a generator they stop
+  // fails here at once, instead of a test tier timing out.
+  struct Zero : TurnScorer {
+    double leave(int) const override { return 0; }
+    double move(const Move&, int) const override { return 0; }
+  };
+  struct Case {
+    int half;
+    std::uint64_t ceiling;  // nodes for the first 16 turns
+  };
+  for (const Case c : {Case{3, 600}, Case{4, 1000}, Case{5, 2000}}) {
+    const GameState s = kings_back(c.half, RuleOptions{});
+    for (const TurnUnit unit : {TurnUnit::Actions, TurnUnit::Successors}) {
+      TurnGenerator g(s, Zero{}, unit, SearchBudget::nodes(c.ceiling));
+      std::size_t n = 0;
+      while (n < 16 && g.next()) ++n;
+      std::printf("  [%zu boards, %s] first %zu turns: %llu nodes (ceiling %llu)\n", s.playable_timelines().size(),
+                  unit == TurnUnit::Actions ? "actions" : "successors", n,
+                  static_cast<unsigned long long>(g.stats().nodes), static_cast<unsigned long long>(c.ceiling));
+      CHECK_EQ(n, std::size_t{16});
+      CHECK(!g.stopped());
+    }
+  }
 }
