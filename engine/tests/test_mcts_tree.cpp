@@ -161,6 +161,12 @@ bool same_children(const Search& a, const Search& b) {
 // The ply split's search and the tree form's with every gate firing: one and
 // the same, bit for bit. Returns the mid-turn leaves the tree form gated.
 std::uint64_t compare(const Root& r, SearchParams p, Evaluator& ev, std::uint64_t playouts, const std::string& what) {
+  // With the proof channel on, the ladder's proofs (stage E10) enter each tree
+  // when they arrive - asynchronous, so the two searches would differ by
+  // timing alone (11.2's determinism debt); the synchronous mode's equality
+  // with the ladder on is test_ladder.cpp's. The asset map stays on (it is a
+  // function of the state).
+  if (p.proof_channel) p.hunt = p.settling = false;
   p.split = TurnSplit::BoardMove;
   Search ply(r.state, p, r.moves_made);
   p.split = TurnSplit::Tree;
@@ -606,6 +612,7 @@ TEST(mcts_tree_form_inherits_its_parents_logits) {
     SearchParams p = tree();
     p.tree_gates = 0;
     p.widening = false;
+    p.asset_map = false;  // the inherited logits' softmax alone (steering: test_ladder.cpp)
     Search s(s0, p);
     s.run(*ev, Limits{500});
     CHECK_NOTHROW(s.check_invariants());
@@ -934,6 +941,7 @@ TEST(mcts_tree_form_keeps_the_turn_structure_and_prunes_dead_ends_unscored) {
       p.tree_gates = gates;
       p.legal_moves_only = false;
       p.proof_channel = true;
+      p.hunt = p.settling = false;  // the ladder's proofs (E10) are test_ladder.cpp's
       Search s(r.state, p, r.moves_made);
       s.run(*ev, Limits{400});
       CHECK_NOTHROW(s.check_invariants());
