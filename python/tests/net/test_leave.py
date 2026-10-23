@@ -101,6 +101,26 @@ def test_the_cached_path_gives_the_dense_leave_logits(pool):
         assert torch.allclose(got.leave_logits[got.board_valid], want.leave_logits[want.board_valid], atol=1e-4)
 
 
+def test_the_cached_evaluator_delivers_the_dense_leave_logits():
+    """``CachedNetworkEvaluator`` hands the engine the leave logits as ``NetworkEvaluator`` does
+    (``Evaluation.board_logits``, one per board, the input's order): the dense evaluator's, to the
+    cached path's tolerance."""
+    import numpy as np
+
+    from t5d.engine.evaluator import CachedNetworkEvaluator, Leaf, NetworkEvaluator, check_evaluation
+    from t5d.net.cache import CacheConfig, CachedEvaluator
+
+    model = build_model(_small(attn_scope="block_causal"), seed=5).eval()
+    ev = CachedNetworkEvaluator(CachedEvaluator(model, CacheConfig(root_refresh=False)))
+    for i, st in enumerate((synthetic_state(13, 6, n_timelines=3), mirror(synthetic_state(14, 5, n_timelines=2)))):
+        ev.start(st)
+        got = ev([st])[0]
+        want = NetworkEvaluator(model)([st])[0]
+        assert got.board_logits is not None and got.board_logits.shape == (st.n_boards,)
+        assert np.isfinite(got.board_logits).all() and np.allclose(got.board_logits, want.board_logits, atol=1e-4)
+        check_evaluation(Leaf(i, st), got, 51)
+
+
 def test_the_evaluator_delivers_every_boards_leave_logit():
     """``NetworkEvaluator`` hands the engine each position's leave logits (``Evaluation.board_logits``,
     one per board in the input's order - the expansion's), so the flat form never falls back on
@@ -128,3 +148,13 @@ def test_the_evaluator_delivers_every_boards_leave_logit():
     nan = evs[1].board_logits.copy()
     nan[0] = np.nan
     check_evaluation(Leaf(1, states[1]), replace(evs[1], board_logits=nan), 51)  # NaN: none for that board
+
+
+def test_an_unknown_leave_pool_is_refused():
+    """``NetConfig.leave_pool`` is one of ``LEAVE_POOLS`` (issue 241(b)): anything else is refused."""
+    from t5d.net.config import LEAVE_POOLS
+
+    for pool in LEAVE_POOLS:
+        NetConfig(leave_pool=pool).validate()
+    with pytest.raises(ValueError, match="leave_pool"):
+        NetConfig(leave_pool="globals").validate()

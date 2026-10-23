@@ -24,10 +24,15 @@ parameter of ``TargetConfig`` with a placeholder default (spec issue 235).
   playouts are not built, issue 153) are pruned like any other.
 * **D2's flat form - the per-board policy marginals (section 8.2; spec issue 242)**: "the flat
   form's policy targets are per-board visit marginals, so its policy normalises per board rather than
-  across all moves". At a flat decision the root children are whole turns; their visits - pruned and
-  with steered visits excluded or weighted exactly as at the ply split (I2: ``pruned_visits`` reads
-  the turn children's priors, values and visits as it reads move children's) - are marginalised onto
-  each of the acting player's playable boards (``DecisionRecord.playable``), over that board's options
+  across all moves". At a flat decision the root children are whole turns; their visits - with
+  steered visits excluded or weighted exactly as at the ply split (I2, per turn) - are marginalised
+  onto each of the acting player's playable boards (``DecisionRecord.playable``) and each board's
+  option counts are then pruned as the ply split prunes root children (``flat_pruning`` "board", a
+  PLACEHOLDER: an option read as the turns taking it - its prior their priors summed, its value and
+  exploration scale their visit-weighted means - against the board's most visited option; KataGo's
+  single-visit rule included). Pruning each turn first (``"turn"``, the arm: ``pruned_visits`` over
+  the turn children) wipes out an option whose visits are spread over many one-visit turns, which
+  the flat form's widening makes common (issue 242(b)). The marginals are over that board's options
   as the engine's per-board policy defines them (BUILD_LOG issues 164, 165): its candidate moves
   leaving it, the non-branching jumps arriving on it (under ``flat_jumps`` BothBoards, the default),
   and leaving it. A turn takes, on each board, the option the engine scores it by: the move leaving
@@ -38,10 +43,12 @@ parameter of ``TargetConfig`` with a placeholder default (spec issue 235).
   168) - is left out of that board's marginal, which is renormalised over the rest; a board with no
   mass left has no target. The target is a list of ``(board, candidate, probability)`` - candidate
   -1 for leaving - over every option of every board with a target (``GameTargets.flat``), full
-  searches only; the ply split's ``policy`` is None there. The prior-to-target divergence (I12) is the
-  sum over those boards of KL(marginal || the raw per-board prior) - the joint's KL between the
-  product of the marginals and the network's product distribution - the raw prior the softmax at
-  temperature 1 of the board's raw move logits and its raw leave logit (none given: ``leave_share``,
+  searches only; the ply split's ``policy`` is None there. The root's search value, I13's best child
+  and ``GameTargets.pruned`` read the turns' own pruned visits (``pruned_visits``) under either arm.
+  The prior-to-target divergence (I12) is the sum over those boards of KL(marginal || the raw
+  per-board prior) - the joint's KL between the product of the marginals and the network's product
+  distribution (not the engine's turn prior, which is normalised over the generated turns only) -
+  the raw prior the softmax at temperature 1 of the board's raw move logits and its raw leave logit (none given: ``leave_share``,
   the moves sharing the rest, as the engine). The soft policy, D9's optimistic policy and the reply
   prototype have no flat target (their heads have no leave logit; issue 242): masked on flat rows.
 * **The soft policy (D4)**: the policy target raised to 1/4 and renormalised (``losses``' helper
@@ -128,6 +135,10 @@ TARGET_SOURCES: dict[str, str] = {
     "tactical_volatility": "proofs (gated: H23, H41)",
 }
 
+#: D2's flat form: where KataGo's pruning applies (``TargetConfig.flat_pruning``; issue 242(b)) - to
+#: each board's option counts, the turns' visits marginalised first (the default), or to the turns.
+FLAT_PRUNING: tuple[str, ...] = ("board", "turn")
+
 #: Game ends with a result (scored): the rest have no WDL or short-term target.
 SCORED_ENDS: tuple[str, ...] = ("checkmate", "stalemate", "turn_cap", "resign")
 
@@ -142,6 +153,9 @@ class TargetConfig:
     forced_k: float = 2.0  # KataGo's k in n_forced = sqrt(k P sum N)
     prune_prior: str = "search"  # the prior the pruning's PUCT replica reads: "search" (noised, KataGo's) or "noise_free"
     prune_single_visit: bool = True  # KataGo: a child reduced to one visit is pruned outright
+    #: D2's flat form (issue 242(b)): where the pruning applies - to each board's option counts, after
+    #: the turns' visits are marginalised ("board"), or to the turns before it ("turn", the arm).
+    flat_pruning: str = "board"
     # D3
     categorical_source: str = "root_value"  # 6j: "root_value" or "short_term"
     categorical_horizon: int = 0  # the short-term arm's horizon (an index into short_term_horizons)
@@ -167,6 +181,8 @@ class TargetConfig:
             raise ValueError("policy_mode must be 'exclusion' or 'provenance' (I2, section 12.2)")
         if self.prune_prior not in ("search", "noise_free"):
             raise ValueError("prune_prior must be 'search' or 'noise_free'")
+        if self.flat_pruning not in FLAT_PRUNING:
+            raise ValueError(f"flat_pruning must be one of {FLAT_PRUNING} (D2's flat form, issue 242(b))")
         if self.categorical_source not in ("root_value", "short_term"):
             raise ValueError("categorical_source must be 'root_value' or 'short_term' (6j)")
         if not 0 <= self.categorical_horizon < len(self.short_term_horizons):
@@ -191,22 +207,33 @@ class TargetConfig:
 # --- I2: the pruned visits ---------------------------------------------------------------------------
 
 
-def pruned_visits(d: DecisionRecord, cfg: TargetConfig) -> np.ndarray:
-    """Each root child's visits for the targets (float64): steered visits excluded or weighted
-    (I2), then KataGo's forced-playout pruning against the most visited child (module docstring)."""
+def steered_visits(d: DecisionRecord, cfg: TargetConfig) -> np.ndarray:
+    """Each root child's visits with I2's steered visits excluded or weighted (float64; before any
+    pruning) - per root child, at a flat decision per turn."""
     c = d.children
     n = c.visits.astype(np.float64)
     steered = np.minimum(c.steered_visits.astype(np.float64), n)
-    n = n - (steered if cfg.policy_mode == "exclusion" else (1.0 - cfg.provenance_weight) * steered)
-    if n.size == 0 or not (n > 0).any():
-        return n
-    best = int(np.argmax(n))
+    return n - (steered if cfg.policy_mode == "exclusion" else (1.0 - cfg.provenance_weight) * steered)
+
+
+def _pruning_prior(d: DecisionRecord, cfg: TargetConfig) -> np.ndarray:
+    """The prior the pruning's PUCT replica reads, per root child: the search's (or the noise-free)
+    prior without the recorded boost, floored at 0."""
+    c = d.children
     prior = (c.prior if cfg.prune_prior == "search" else c.prior_noise_free).astype(np.float64) - c.boost.astype(np.float64)
-    prior = np.maximum(prior, 0.0)
-    sqrt_parent = math.sqrt(max(float(d.root_visits), 1.0))
-    cpuct = float(d.root_cpuct)
-    scale = c.exploration_scale.astype(np.float64)
-    q = c.q.astype(np.float64)
+    return np.maximum(prior, 0.0)
+
+
+def prune_counts(
+    n: np.ndarray, prior: np.ndarray, q: np.ndarray, scale: np.ndarray, sqrt_parent: float, cpuct: float, cfg: TargetConfig
+) -> np.ndarray:
+    """KataGo's forced-playout pruning of the counts ``n`` against the most counted entry (module
+    docstring): each other entry loses up to ``floor(sqrt(forced_k P sum n))`` while its PUCT score
+    ``q + cpuct P sqrt_parent / (1 + n) scale`` stays below the best's; one left with a single count
+    is pruned outright (``prune_single_visit``)."""
+    if n.size == 0 or not (n > 0).any():
+        return n.copy()
+    best = int(np.argmax(n))
     total = float(n.sum())
 
     def puct(i: int, visits: float) -> float:
@@ -226,6 +253,17 @@ def pruned_visits(d: DecisionRecord, cfg: TargetConfig) -> np.ndarray:
             v = 0.0
         out[i] = v
     return out
+
+
+def pruned_visits(d: DecisionRecord, cfg: TargetConfig) -> np.ndarray:
+    """Each root child's visits for the targets (float64): steered visits excluded or weighted
+    (I2), then KataGo's forced-playout pruning against the most visited child (module docstring)."""
+    c = d.children
+    n = steered_visits(d, cfg)
+    sqrt_parent = math.sqrt(max(float(d.root_visits), 1.0))
+    return prune_counts(
+        n, _pruning_prior(d, cfg), c.q.astype(np.float64), c.exploration_scale.astype(np.float64), sqrt_parent, float(d.root_cpuct), cfg
+    )
 
 
 def policy_target(d: DecisionRecord, pruned: np.ndarray) -> np.ndarray | None:
@@ -385,26 +423,51 @@ def turn_option(turn: np.ndarray, fb: FlatBoard, candidates: np.ndarray, arrival
     return _UNMATCHED
 
 
-def flat_policy_target(d: DecisionRecord, pruned: np.ndarray, arrivals: bool = True) -> np.ndarray | None:
+def flat_policy_target(
+    d: DecisionRecord, visits: np.ndarray, arrivals: bool = True, prune: TargetConfig | None = None
+) -> np.ndarray | None:
     """D2's flat form's policy target at ``d`` (module docstring): ``(K, 3)`` float64 rows ``(board,
     candidate, probability)`` - candidate ``LEAVE`` for leaving - over every option of every playable
-    board that keeps visit mass; None where none does."""
-    total = float(pruned.sum())
-    if total <= 0:
+    board that keeps visit mass; None where none does. ``visits``: each turn child's visits, I2's
+    steered visits already excluded or weighted. ``prune`` given (``flat_pruning`` "board", the
+    default): each board's option counts - the turns' visits marginalised - are then pruned as
+    ``pruned_visits`` prunes root children (``prune_counts`` under ``prune``'s settings), each option
+    read as the turns taking it - its prior their priors summed, its value and exploration scale their
+    visit-weighted means; None (the "turn" arm): ``visits`` are the turns' already pruned
+    (``pruned_visits``) and are marginalised as they are."""
+    if float(visits.sum()) <= 0:
         return None
+    c = d.children
+    if prune is not None:
+        prior = _pruning_prior(d, prune)
+        q, scale = c.q.astype(np.float64), c.exploration_scale.astype(np.float64)
+        sqrt_parent, cpuct = math.sqrt(max(float(d.root_visits), 1.0)), float(d.root_cpuct)
     rows = []
     for fb in flat_boards(d, arrivals):
-        mass = dict.fromkeys(fb.options, 0.0)
-        for child, v in enumerate(pruned.tolist()):
+        index = {k: j for j, k in enumerate(fb.options)}
+        n = np.zeros(len(index), dtype=np.float64)
+        p, qn, sn = np.zeros_like(n), np.zeros_like(n), np.zeros_like(n)
+        for child, v in enumerate(visits.tolist()):
+            if v <= 0 and prune is None:
+                continue
+            j = index.get(turn_option(d.turn(child), fb, d.candidates, arrivals))
+            if j is None:  # outside the board's distribution, or unmatched: left out
+                continue
+            if prune is not None:
+                p[j] += prior[child]
             if v <= 0:
                 continue
-            k = turn_option(d.turn(child), fb, d.candidates, arrivals)
-            if k in mass:
-                mass[k] += v
-        kept = sum(mass.values())
+            n[j] += v
+            if prune is not None:
+                qn[j] += v * q[child]
+                sn[j] += v * scale[child]
+        if prune is not None and (n > 0).any():
+            seen = np.where(n > 0, n, 1.0)
+            n = prune_counts(n, p, qn / seen, sn / seen, sqrt_parent, cpuct, prune)
+        kept = float(n.sum())
         if kept <= 0:
             continue
-        rows += [(fb.board, k, x / kept) for k, x in mass.items()]
+        rows += [(fb.board, k, x / kept) for k, x in zip(fb.options, n.tolist(), strict=True)]
     return np.array(rows, dtype=np.float64).reshape(-1, 3) if rows else None
 
 
@@ -514,7 +577,12 @@ def build_targets(record: GameRecord, cfg: TargetConfig | None = None, *, positi
         q, dd = pruned_value(d, pruned[i])
         value[i] = q
         root_wdl[i] = wdl_of(q, dd)
-        ft = flat_policy_target(d, pruned[i], arrivals) if d.flat and d.full_search else None
+        ft = None
+        if d.flat and d.full_search:  # issue 242(b): pruned per board (the default) or per turn (the arm)
+            if cfg.flat_pruning == "turn":
+                ft = flat_policy_target(d, pruned[i], arrivals)
+            else:
+                ft = flat_policy_target(d, steered_visits(d, cfg), arrivals, prune=cfg)
         pt = policy_target(d, pruned[i]) if d.full_search and not d.flat else None
         policy.append(pt)
         flat.append(ft)
@@ -578,7 +646,7 @@ def build_targets(record: GameRecord, cfg: TargetConfig | None = None, *, positi
                 active = best_abs
             m_b = best_child_moves_left(d, b)
             if math.isfinite(m_b):
-                offset = 1.0 if d.children.candidate[b] < 0 else 0.0  # a submit ends the turn in progress
+                offset = 1.0 if d.children.candidate[b] < 0 else 0.0  # a submit, or a whole turn (the flat form), ends the turn in progress
                 end_b = d.action + lead + m_b + offset
                 if math.isfinite(active_end):
                     active_end = (1 - w) * active_end + w * end_b
@@ -760,8 +828,13 @@ def write_targets(path: str | Path, t: GameTargets) -> Path:
 
 
 def read_targets(path: str | Path) -> GameTargets:
+    """The targets ``write_targets`` wrote. A file written before the flat form's target (no
+    ``flat_*`` arrays - beside a version 1 record, which is refused too) is refused: rebuild the
+    targets from the record (``build_targets``)."""
     with np.load(Path(path), allow_pickle=False) as z:
         a = {k: z[k] for k in z.files}
+    if "flat_data" not in a:
+        raise ValueError(f"{path}: targets written before D2's flat form's target (no flat_* arrays): rebuild them from the record")
     kw = {name: a[name] for name in _COLUMNS}
     for name in ("policy", "soft_policy", "pruned", "board", "flat"):
         kw[name] = _unragged(a[f"{name}_data"], a[f"{name}_offset"], a[f"{name}_present"])
@@ -866,6 +939,7 @@ def collate_rows(rows: Sequence[Row], net_cfg) -> tuple:
 __all__ = [
     "LEAVE",
     "PROOF_CHANNEL_SIGNED_OFF",
+    "FLAT_PRUNING",
     "FlatBoard",
     "Row",
     "SCORED_ENDS",
@@ -886,11 +960,13 @@ __all__ = [
     "move_coord",
     "policy_target",
     "pruned_value",
+    "prune_counts",
     "pruned_visits",
     "raw_prior",
     "read_targets",
     "reply_targets",
     "soft_policy",
+    "steered_visits",
     "target_differences",
     "turn_option",
     "wdl_of",

@@ -61,7 +61,7 @@ import torch
 from ..net.cache import CachedEvaluator, Epoch, state_digest
 from ..net.model import NetOutput, T5DNet
 from ..net.state import PositionState, collate, relayout
-from .capi import T5D_VALUE_LOGITS, T5D_VALUE_PROBABILITIES
+from .capi import T5D_SPLIT_FLAT, T5D_VALUE_LOGITS, T5D_VALUE_PROBABILITIES
 from .convert import Position, to_position
 from .errors import EngineInternalError
 from .search import LeafView, Search
@@ -80,8 +80,15 @@ ERROR_HEAD_FIELD = "value_error"
 #: Which policy head an evaluator delivers as the prior (register D9): the policy (``"normal"``), or
 #: the optimistic policy (``"optimistic"``) - match play only, "kept out of self-play" (section
 #: 8.1): ``netplay.play_game`` refuses an optimistic evaluator in self-play. The values are the
-#: same heads' either way.
+#: same heads' either way. D2's flat form refuses the optimistic prior (``run_search`` and
+#: ``CStepDriver.deliver``; ``netplay.PlayConfig``): D9's head has no leave logit, so its move logits
+#: would be scored beside the normal head's leave logits, whose offset against them is arbitrary
+#: (issue 242(h) - NaN board logits, the engine's ``leave_share``, the alternative for the user).
 POLICY_SOURCES: tuple[str, ...] = ("normal", "optimistic")
+FLAT_OPTIMISTIC = (
+    "D9's optimistic prior is refused under D2's flat form: its head has no leave logit, so its move logits "
+    "would be scored beside the normal head's leave logits (issue 242(h))"
+)
 
 
 def state_of(position: PositionLike) -> PositionState:
@@ -619,6 +626,9 @@ class CStepDriver:
                 raise ValueError(
                     f"deliver: leaf {v.index} has {np.asarray(ev.board_logits).size} board logits for its {v.expansion.board_count} boards"
                 )
+        if int(self.search.params.split) == T5D_SPLIT_FLAT and any(ev.policy != "normal" for ev in evs):
+            self.abandon()
+            raise ValueError(FLAT_OPTIMISTIC)
         logits = np.concatenate([np.asarray(ev.policy_logits, dtype=np.float32).reshape(-1) for ev in evs] + [np.zeros(0, np.float32)])
         wdl = np.stack([np.asarray(ev.wdl_logits, dtype=np.float32) for ev in evs])
         given = [ev.value_logits is not None for ev in evs]
@@ -711,6 +721,8 @@ def run_search(
     D9's optimistic prior (``serve``) - a self-play search, including M21's generator, sets it."""
     if self_play and policy_source(evaluator) != "normal":
         raise ValueError("an optimistic evaluator searches at match play only, never in self-play (register D9, section 8.1)")
+    if int(search.params.split) == T5D_SPLIT_FLAT and policy_source(evaluator) != "normal":
+        raise ValueError(FLAT_OPTIMISTIC)
     start_epoch(search, evaluator, regs_per_board=regs_per_board, global_regs=global_regs)
     driver = CStepDriver(search, playouts=playouts, regs_per_board=regs_per_board, global_regs=global_regs, value_kind=value_kind)
     stats = serve(driver, evaluator, batch_size=batch_size, self_play=self_play)
@@ -746,6 +758,7 @@ __all__ = [
     "ERROR_HEAD_FIELD",
     "Evaluation",
     "Evaluator",
+    "FLAT_OPTIMISTIC",
     "Leaf",
     "NetworkEvaluator",
     "POLICY_SOURCES",

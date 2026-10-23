@@ -38,12 +38,17 @@ I15), not this module's.
   moves"; spec issue 242): at a flat decision the target is each playable board's visit marginal over
   its options - its moves (the policy's logits), the non-branching jumps arriving on it, and leaving it
   (D2's leave head, ``NetOutput.leave_logits``) - ``Targets.flat_*``; the loss is each board's
-  cross-entropy against the log-softmax over that board's options, summed over the boards (the
-  cross-entropy of the turn distribution the engine searches with - the boards' product; a
+  cross-entropy against the log-softmax over that board's options, summed over the boards (a
   placeholder, ``LossConfig.flat_board_reduction``, the mean the alternative), averaged over the
   positions, full searches only, at weight 1 (``weights["flat_policy"]``, the policy's - a
-  placeholder). It is what trains the leave head. A flat row carries no ply-split policy target, and
-  the soft policy, D9's optimistic policy and the reply prototype skip it (issue 242).
+  placeholder). It fits each board's marginal - the factorised target, the product of the per-board
+  distributions; it is not the cross-entropy of the engine's turn prior, which (under
+  ``T5D_FLAT_PRIOR_GENERATED``, the default) normalises the boards' product over the generated turns
+  only (the two differ by that normaliser's log, issue 242(e)). It is what trains the leave head; a
+  batch with flat rows needs ``weights["flat_policy"]`` (refused without it, so a caller's weights
+  cannot drop it silently). Under ``"sum"`` a flat row weighs about its number of playable boards
+  times a ply-split row. A flat row carries no ply-split policy target, and the soft policy, D9's
+  optimistic policy and the reply prototype skip it (issue 242).
 * **D4's soft policy** (section 12.4, CHECKPOINT 7): its own head's actions
   (``NetOutput.soft_action_logits``) against the policy target "raised to the power 1/4 and
   renormalised" (``soft_policy_target``; the power ``LossConfig.soft_policy_power``), "at eight
@@ -156,8 +161,9 @@ class LossConfig:
         }
     )
     board_reduction: str = "mean"  # D6: "mean" or "sum" over a position's boards
-    #: D2's flat form: the per-board cross-entropies "sum"med (the turn distribution's) or averaged
-    #: ("mean") over a position's boards - PLACEHOLDER (issue 242).
+    #: D2's flat form: the per-board cross-entropies "sum"med (the factorised target's cross-entropy,
+    #: not the engine's turn prior's) or averaged ("mean") over a position's boards - PLACEHOLDER
+    #: (issue 242(e)).
     flat_board_reduction: str = "sum"
     huber_delta: float = 1.0  # moves-left's Huber loss
     #: D3: the WDL target's blend towards the search's own WDL at the root (Lc0's ``q_ratio``):
@@ -398,5 +404,7 @@ def compute_losses(out: NetOutput, tgt: Targets, cfg: LossConfig | None = None) 
     losses["effort"] = (
         F.cross_entropy(out.effort_logits[keep].float(), tgt.effort[keep]) if bool(keep.any()) else out.effort_logits.new_zeros(())
     )
+    if "flat_policy" in losses and "flat_policy" not in cfg.weights:
+        raise ValueError("a batch with flat rows needs LossConfig.weights['flat_policy'] (D2's flat form; 0 to switch it off)")
     losses["total"] = sum(cfg.weights.get(name, 0.0) * value for name, value in losses.items())
     return losses
