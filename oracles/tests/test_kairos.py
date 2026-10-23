@@ -157,6 +157,17 @@ class LiveDriverTests(unittest.TestCase):
         hypercuboid = self.observe("kairos", "cwmtt/standard")
         self.assertTrue(all(p.legal_actions is None for p in hypercuboid.positions))
 
+    def test_a_count_at_or_above_the_cap_is_reported_as_the_cap(self):
+        # notation/1.2 position 9 has more than 1000 actions (ftxi and cwmtt record the cap there).
+        self.assertEqual(golden.load("ftxi").observations["notation/1.2"].positions[9].legal_actions, 1000)
+        observation = self.observe("kairos:naive", "notation/1.2")
+        self.assertEqual(observation.positions[9].legal_actions, 1000)
+        self.assertEqual(observation.cap, 1000)
+        self.assertTrue(all(p.legal_actions is None or p.legal_actions <= 1000 for p in observation.positions))
+
+    # Of the driver's refusals only "leaves a royal piece in check" (cannot_submit) can be met: a move
+    # Kairos cannot play, or an action that does not move the present, fails its reader first and the
+    # record is parse_failed (BUILD_LOG issue 528). The test below meets the reachable one.
     def test_an_action_that_ignores_a_check_cannot_be_submitted(self):
         recorded = golden.load("ftxi").observations["local/ignores-check"]
         self.assertEqual((recorded.status, recorded.reason), ("rejected", "cannot_submit"))

@@ -47,6 +47,10 @@ def _first_line(argv: list) -> str | None:
     return text.splitlines()[0] if text else None
 
 
+# How long a bootstrap download may wait on the server (per connection and per read) before it fails.
+DOWNLOAD_TIMEOUT_S = 120
+
+
 def _tools_venv() -> Path:
     return paths.cache_dir() / "tools" / "venv"
 
@@ -133,7 +137,7 @@ def _bootstrap_ghc(lock: Lock, version: str) -> None:
     archive = downloads / dist["url"].rsplit("/", 1)[-1]
     if not archive.exists() or sha256_file(archive) != dist["sha256"]:
         partial = archive.with_suffix(archive.suffix + ".part")
-        with urllib.request.urlopen(dist["url"]) as response, open(partial, "wb") as out:
+        with urllib.request.urlopen(dist["url"], timeout=DOWNLOAD_TIMEOUT_S) as response, open(partial, "wb") as out:
             shutil.copyfileobj(response, out, 1 << 20)
         partial.replace(archive)
     digest = sha256_file(archive)
@@ -191,7 +195,7 @@ def _fetch(url: str, sha256: str) -> Path:
     archive = downloads / url.rsplit("/", 1)[-1]
     if not archive.exists() or sha256_file(archive) != sha256:
         partial = archive.with_suffix(archive.suffix + ".part")
-        with urllib.request.urlopen(url) as response, open(partial, "wb") as out:
+        with urllib.request.urlopen(url, timeout=DOWNLOAD_TIMEOUT_S) as response, open(partial, "wb") as out:
             shutil.copyfileobj(response, out, 1 << 20)
         partial.replace(archive)
     digest = sha256_file(archive)
@@ -255,6 +259,18 @@ def _rust_version(rustc: str | os.PathLike) -> str | None:
     return match.group(1) if match else None
 
 
+def rust_host(rustc: str | os.PathLike) -> str | None:
+    """The target a rustc builds for by default ("host: x86_64-pc-windows-gnu" in `rustc -vV`)."""
+    try:
+        done = run([rustc, "-vV"], timeout=60)
+    except OSError:
+        return None
+    if done.timed_out or done.returncode != 0:
+        return None
+    match = re.search(r"^host: (\S+)\s*$", done.out_text(), re.M)
+    return match.group(1) if match else None
+
+
 def find_rust(lock: Lock, bootstrap: bool = False) -> tuple[Tool, Tool]:
     """(cargo, rustc) of exactly the pinned Rust release, for the Kairos oracle.
 
@@ -266,6 +282,9 @@ def find_rust(lock: Lock, bootstrap: bool = False) -> tuple[Tool, Tool]:
     if not version:
         raise HarnessError("the lock file pins no Rust version ([toolchain.rust] version)")
     cached = _rust_home(version) / "bin"
+    # The target the lock file pins for this platform (Windows: the GNU one, whose linker ships with the
+    # toolchain); a rustc of the right release built for another host - a rustup MSVC toolchain - is not it.
+    target = lock.toolchains.get("rust", {}).get("dist", {}).get(platform_key(), {}).get("target")
     seen: list[str] = []
     for attempt in range(2):
         on_path = (shutil.which("cargo"), shutil.which("rustc"))
@@ -274,17 +293,19 @@ def find_rust(lock: Lock, bootstrap: bool = False) -> tuple[Tool, Tool]:
                 continue
             found = _rust_version(rustc)
             cargo_line = _first_line([cargo, "--version"]) or ""
-            if found == version and cargo_line.startswith(f"cargo {version}"):
+            host = rust_host(rustc) if found == version else None
+            if found == version and cargo_line.startswith(f"cargo {version}") and (target is None or host == target):
                 return Tool("cargo", Path(cargo), version), Tool("rustc", Path(rustc), version)
-            seen.append(f"{rustc} is {found or 'unreadable'}")
+            seen.append(f"{rustc} is {found or 'unreadable'}" + (f" for {host}, not {target}" if host and host != target else ""))
         if attempt == 0 and bootstrap and not (cached / exe("rustc")).exists():
             _bootstrap_rust(lock, version)
         else:
             break
     detail = f" (found: {'; '.join(seen)})" if seen else ""
     raise HarnessError(
-        f"Rust {version} not found{detail}. Put cargo and rustc of exactly that release on PATH "
-        f"(rustup toolchain install {version}), or rerun with --bootstrap to fetch the pinned archives into the harness cache."
+        f"Rust {version}{' for ' + target if target else ''} not found{detail}. Put cargo and rustc of exactly that "
+        f"release and target on PATH (rustup toolchain install {version}{'-' + target if target else ''}), "
+        "or rerun with --bootstrap to fetch the pinned archives into the harness cache."
     )
 
 
@@ -302,10 +323,38 @@ def rust_env(cargo: Tool, rustc: Tool, *, ceiling: Path) -> dict[str, str]:
                 or upper.startswith("CARGO_"):
             del env[name]
     env["CARGO_HOME"] = os.fspath(paths.cache_dir() / "toolchains" / "cargo-home")
+    # Always set, empty or not: it takes precedence over every other source of compiler flags - RUSTFLAGS, and
+    # [build] and [target.*] rustflags in any cargo configuration file - so none of them reaches the build.
+    env["CARGO_ENCODED_RUSTFLAGS"] = ""
     env["RUSTC"] = os.fspath(rustc.path)
     env["CARGO_INCREMENTAL"] = "0"
     env["CARGO_NET_OFFLINE"] = "true"
     return env
+
+
+def cargo_configs(start: Path, cargo_home: Path) -> list[Path]:
+    """The cargo configuration files a cargo run from ``start`` would read, beside the command line and environment.
+
+    Cargo reads `.cargo/config.toml` (and the older `.cargo/config`) in the directory it runs in and in
+    every parent, and in its home. Such a file can name another target, a compiler wrapper, a linker or
+    flags - none of which the pinned build may take from the machine it runs on.
+    """
+    found: list[Path] = []
+    for folder in [start, *start.parents]:
+        found += [folder / ".cargo" / name for name in ("config.toml", "config") if (folder / ".cargo" / name).is_file()]
+    found += [cargo_home / name for name in ("config.toml", "config") if (cargo_home / name).is_file()]
+    return list(dict.fromkeys(found))
+
+
+def refuse_cargo_configs(start: Path, cargo_home: Path) -> None:
+    """Stop a build that a cargo configuration file on this machine would change (cargo_configs)."""
+    found = cargo_configs(start, cargo_home)
+    if found:
+        raise HarnessError(
+            "a cargo configuration file would change the pinned Kairos build: " + ", ".join(map(os.fspath, found))
+            + " - cargo reads it from the build directory's parents and its home; move it aside (or set "
+            "ORACLE_HARNESS_CACHE to a directory with no such file above it) and rebuild"
+        )
 
 
 def find_node(lock: Lock) -> Tool:

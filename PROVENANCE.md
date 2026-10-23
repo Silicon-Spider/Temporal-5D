@@ -117,7 +117,7 @@ M11).
 - Pinned at the head of main: the repository has no tags and no releases. It was created on 2026-10-15 and had 354 commits by the pin (2026-10-23), most days several; a pin bump will move answers, and is reviewed as any other.
 - Not independent of ftxi in all it does. Its NOTICE says parts of its rules and legal-action code are derived from ftxi/5dchess_engine (BSD-2-Clause), its src/core and src/misc mirror ftxi's module for module (check_position, hypercuboid, geometry, integer_set, graph, ordering, vec4 - coordinates packed 12/12/4/4 bits, as ftxi's), and its 5dpgn reader says it is 'ported from the C++ engine's pgnparser'. Where it departs from ftxi the departures are its own: its check test advances only the active timelines whose last board is in the present (State::has_phantom_check through CheckPosition::for_present), where ftxi advances every timeline the mover may play on, and its hypercuboid search leaves out actions that waste a move (below). How far it counts as an implementation independent of ftxi for the two-oracle bar (H47) is the user's to rule before its tier entries are enabled (docs/BUILD_LOG.md, issue 526).
 - Its hypercuboid search does not generate an action that both branches and plays a 'wasted' move - a non-branching move whose boards all stay out of the present, other than boards a branch lands on - because dropping that move leaves an equally legal action (hypercuboid.rs, wasted_problem). Its perft therefore counts those actions out: its own test gives 31406 at depth 3 from the Standard start, 'the 1780 actions that waste a move (33186 with them)' left out. That is not the gate's count, so the hypercuboid source answers no count. Its exhaustive enumerator (core/naive.rs, naive_actions) lists every action - its non-branching moves once, in timeline order, and its branching moves in every order - the gate's definition; source kairos:naive counts with it.
-- Its 5dpgn reader is all or nothing: one action of the main line or of any variation that it cannot match, or cannot submit, fails the whole record, with no position read. Such a record is reported unsupported from position 0 (reason parse_failed), never refused at action 0. The reader does not test royal safety; the driver replays the main line through its own referee (web::tree::play_action, which its game loader runs), and an action that leaves a royal capturable is refused there (cannot_submit, as the other oracles report it).
+- Its 5dpgn reader is all or nothing: one action of the main line or of any variation that it cannot match, or cannot submit, fails the whole record, with no position read. Such a record is reported unsupported from position 0 (reason parse_failed), never refused at action 0. The reader does not test royal safety; the driver replays the main line through its own referee (web::tree::play_action, which its game loader runs), and an action that leaves a royal capturable is refused there (cannot_submit, as the other oracles report it). That is the only refusal it can give: a move it cannot play, or an action that does not move the present, fails the record in the reader (parse_failed), so its legality answer covers royal safety alone.
 - A line that ends in variations is replayed with its last variation as the main line (as ftxi's reader does); the adapter refuses such a record, with ftxi's guard. It reads the Board header (else Variant), Size, Timeline and Promotions; it refuses a Board it does not know rather than set up Standard, and 44 named variants, whose set-ups it takes from adri326/5dchess-notation's table. Boards are 8x8 at most.
 - Its .cargo/config.toml builds with -C target-cpu=native. The harness builds the driver outside the exported tree, where that file does not apply, so the build is the same on every x86-64 machine.
 
@@ -214,7 +214,9 @@ This is what reading its README, its documents and its source at `8bfea4a`
   file. It resolves the whole record, variations included, before it returns: one
   move it cannot match or submit anywhere fails the record, with no position read.
   It does not test royal safety; its game loader replays the main line through
-  `web::tree::play_action`, which does. A line that ends in variations takes its
+  `web::tree::play_action`, which does. So the one refusal it can give of a record it
+  read is an action that leaves a royal capturable: a move it cannot play, or an action
+  that does not move the present, fails the record in the reader. A line that ends in variations takes its
   last variation as the main line.
 - **Interfaces.** The `kairos` binary speaks 5DUCI - a playing protocol
   (`position`, `go`, `bestmove`, `print`), with no count or verdict. The JSON
@@ -230,8 +232,11 @@ This is what reading its README, its documents and its source at `8bfea4a`
   run inside its tree.
 - **Its independence.** Its `NOTICE` says parts of its rules and legal-action code
   are derived from ftxi/5dchess_engine (BSD-2-Clause, notice kept), and its
-  `src/core` and `src/misc` follow ftxi's modules one for one. Its check test and
-  its wasted-move pruning are its own. H52 counts it as an independent
+  `src/core` and `src/misc` follow ftxi's modules one for one; its mate test
+  (`State::get_mate_type_impl`) is a line-by-line translation of ftxi's
+  (`state.cpp`, `state::get_mate_type_impl`), so its mate verdicts are not independent
+  of ftxi's. Its check test, its wasted-move pruning and its exhaustive enumerator are
+  its own. H52 counts it as an independent
   implementation of the hypercuboid method family; how far a derived
   implementation counts as a second oracle beside ftxi is put to the user
   (`docs/BUILD_LOG.md`, issue 526) before its tier entries are enabled.

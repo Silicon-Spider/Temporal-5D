@@ -10,6 +10,47 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-24 - Kairos review fixes: its only reachable refusal stated, the machine's cargo configuration kept out of the build, the toolchain's target checked
+
+The review of the Kairos work (H52) found no rule broken and no check weakened; it found:
+- **The refusals the driver could give were overstated.** Kairos's reader matches written
+  moves only against the moves it can play and submits each action before it returns
+  (`resolve_action`, `can_apply_action`), so a move it cannot play and an action that does
+  not move the present fail the whole record (`parse_failed`); only "leaves a royal piece in
+  check" reaches the driver, as `cannot_submit`. The driver's header and `refusal()`, the
+  adapter's docstring, the lock note, `PROVENANCE.md` and issue 528 now say so; the other
+  mappings stay as a documented, unreachable defence. Its legality answer covers royal
+  safety only, and never backs another oracle's `illegal_move` or present-not-moved refusal
+  (issues 526, 528).
+- **A cargo configuration file on the machine could change the pinned build.** Cargo reads
+  `.cargo/config(.toml)` from where it runs and every parent, and from its home; the build
+  runs inside the repository. `CARGO_ENCODED_RUSTFLAGS` is now always set (empty, or the
+  self-contained-linker flag on Windows), overriding every other source of flags, and the
+  recipe refuses to build while such a file sits above the build root or in cargo's home
+  (`toolchain.cargo_configs`, `refuse_cargo_configs`).
+- `find_rust` takes a cargo and rustc of the pinned release only for the target the lock
+  pins (`rustc -vV`'s host): a rustup MSVC 1.99.0 is not the pin. Bootstrap downloads (Rust's
+  and GHC's) time out after 120 s; Rust's `.asc` signatures are not verified (SHA-256 only,
+  issue 529). The nightly workflow's step is named for what it does - it builds every stale
+  oracle, fetching the pinned Rust.
+- Issue 526 gains the review's facts, with citations at the pin: the NOTICE since Kairos's
+  first commit, the reader ported from ftxi's `pgnparser`, **the mate test a line-by-line
+  translation of ftxi's** (its terminal verdicts agreed with ftxi's at all 986 shared
+  positions), a verbatim string, shared identifiers, the coordinate limits; its own are the
+  R1 check pass set, the wasted-move pruning, the exhaustive enumerator and its engine.
+  Options (b) or (c) are the cautious readings; its tier entries stay disabled until the
+  user rules.
+- Tests: the cargo configuration refusal, the encoded flags, the host check
+  (`test_toolchain.py`); a count at the cap reported as 1000 under `kairos:naive`
+  (notation/1.2 position 9), and a note that the only reachable refusal is the one tested
+  (`test_kairos.py`).
+- `oracle_harness/adapters/__init__.py` (where `PENDING_SOURCES` lives) was edited in the
+  first Kairos commit; no golden file's signature hashes it, and `verify`'s golden check
+  passes unchanged.
+
+Spec: §11.0 ("Kairos, the fourth oracle", "Third-party code"), register H26, H52 - edit 362
+stands (its "partial independence" now includes the mate test); issues 526, 528, 529, 530.
+
 ### 2026-10-23 - The harness's manual and CONTRIBUTING.md say that Kairos is wired and not yet in a tier
 
 `oracles/README.md` names Kairos in its opening and in "What is pinned" (no tier yet; what

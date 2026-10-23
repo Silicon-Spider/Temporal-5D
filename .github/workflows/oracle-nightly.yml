@@ -88,8 +88,9 @@ jobs:
       # Exactly the release pinned in oracles/oracles.lock.toml ([toolchain.rust]),
       # which the harness fetches into its cache from checksum-pinned archives: the
       # runner's own Rust is another release, and the harness refuses it.
-      # (`--bootstrap` fetches only what a stale build lacks; GHC is installed above.)
-      - name: Fetch the pinned Rust toolchain (only when a stale build needs it)
+      # `build --bootstrap` builds every stale oracle, fetching only the pinned tools a
+      # stale build lacks (GHC is installed above); the next step finds them up to date.
+      - name: Build the stale oracles, fetching the pinned Rust (only when a stale build needs Rust)
         if: contains(format(',{0},', steps.plan.outputs.tools), ',rust,')
         run: python oracles/harness.py build --bootstrap
 
