@@ -120,7 +120,9 @@ in ``reference_output`` alike. That is one rule in both, which comparing them ca
 ``test_cache.py`` checks it against an oracle of its own (B16's table changed, the anchor's
 evaluation stays bit for bit and every node below it moves).
 
-**Not supported** (``CachedEvaluator`` refuses them): B12's ``board_bilinear`` form, which
+**Not supported** (``CachedEvaluator`` refuses them): register A5's piece-centric tokens (its
+destination tokens on frozen boards have no reading under C17 - BUILD_LOG issue 252); B12's
+``board_bilinear`` form, which
 reads every board's per-board register states at every layer - frozen boards' hidden
 states are not cached; and B12 with no global registers (its context is then the mean of
 every square, frozen ones included). The ``relative_cells`` default reads only the global
@@ -405,6 +407,11 @@ class CachedEvaluator:
 
     def __init__(self, model: T5DNet, config: CacheConfig | None = None, store: KVStore | None = None) -> None:
         cfg = model.cfg
+        if cfg.piece_centric:
+            raise NotImplementedError(
+                "the cached path refuses a piece-centric network (A5): a destination token on a frozen board appears and "
+                "vanishes from node to node, so the board's stored K/V would go stale (C17; BUILD_LOG issue 252)"
+            )
         if cfg.attn_scope != "block_causal":
             raise ValueError("the cached path evaluates a network of the block-causal scope (NetConfig.attn_scope)")
         if model.smolgen is not None and (cfg.smolgen_form != "relative_cells" or cfg.global_regs == 0):

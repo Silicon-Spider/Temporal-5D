@@ -10,6 +10,61 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-10-23 - A5: piece-centric tokens behind their flag, dense scope only - the tokens, the network path, the refusals
+
+Register A5 (Prototype since CHECKPOINT 6: "build behind its flag") in the network lane, off by
+default (`NetConfig.piece_centric`) - no training run: optimiser steps only the smoke steps on
+synthetic rows.
+
+- **The tokens** (`net/state.py`). A `PositionState` may carry `token_cells`, the cells that are
+  tokens (None: A1's layout, every cell). `to_piece_centric` builds A5's: the occupied cells and the
+  candidate moves' destination cells - A1's tokens minus the empty squares no candidate move lands
+  on; a capture points at the captured piece's token; each board's tokens in cell order, then its
+  registers, the global registers last; moves and edges remapped through (board, cell) with their
+  row order kept (policy row `i` is still move `i`). Strict conversion (engine data) refuses any
+  dropped edge; not strict (synthetic data) drops exactly the move edges onto cells that are no
+  token, counted. Idempotent; `to_square_centric` and `square_centric_tokens` map back.
+  `TokenLayout` takes the kept cells: boards of different lengths (`board_offsets`,
+  `max_tokens_per_board`, `square_tokens`, `body_maps`), and `tokens_per_board` now raises on a
+  piece-centric layout so that every caller assuming uniform boards surfaces. `permute_boards`,
+  `translate`, `relayout` and `mirror` (A7's colour swap - `mirror_tokens` maps into the mirror's
+  layout) carry the cells; `collate` refuses a batch mixing the two tokenisations and marks
+  `Batch.piece_centric`. `synthetic_state(..., piece_centric=True)`.
+- **The network** (`net/model.py`). No new parameter and no new draw: the network is A1's, bit for bit,
+  on a smaller token set - every module already reads per-token arrays. A forward refuses a batch of
+  the other tokenisation, both ways. The block-sparse and chunked paths' query blocks are 4 boards of
+  the batch's mean board length (A1's 4 x 66 unchanged): a block of the longest board spans more
+  boards and read 0.86 of the key boards at 40 synthetic boards against A1's 0.77 (the mean: 0.77).
+  `train/smoke.py` trains on the A5 view of its synthetic positions when the flag is on.
+- **The refusals** (A5.3; BUILD_LOG issues 251, 252): `NetConfig.validate` refuses A5 with the
+  block-causal scope and with D4's reply prototype; a forward overriding the scope to block-causal,
+  `CachedEvaluator` and the cache bench refuse an A5 network - each `NotImplementedError` naming its
+  issue. `piece_centric` is off `validate`'s not-built list.
+- **Tests** (`tests/net/test_piece_centric.py`, 179): the token count, the board-major layout, the
+  endpoints and the dropped edges, the round trip with every per-token feature at its cell, the
+  transforms commuting, the adversarial constructions (promotions sharing a destination, captures,
+  travel onto a frozen board, duplicated boards, deep travel, many timelines, ±0, 3x3 and 5x5, the
+  register arms, submit only, an empty board with and without registers) and mutants of the
+  conversion; **section 15.2's proposed A5 row** - A5's forward equals the same-seed A1 network's with
+  the dropped squares removed as keys (a caller's mask; the heads over the kept tokens) on every
+  attention path (dense, explicit, sdpa, chunked, block-sparse at 1.0 and 0.3, flex), 1 to 40 boards
+  beside smaller ones, stage N2's 16 switch combinations, the invariance suite's flags, B12's bilinear
+  form, A8 (both paddings), G2's FP8 trunk, D9, D2's register pool, D4's soft policy off, F5/F6's
+  arms, every construction, FP32 at 1e-5, BF16 within its own precision, every parameter's gradient;
+  mutants of the A5 batch (a stale coordinate, a wrong board flag, a dropped piece) caught; the policy
+  one logit per move, promotions through one token apart by D1's offset alone; the parameter count and
+  draws identical; board order, translation (bit-exact recentred) and batch composition; A7's mirror
+  under A5 (18 constructions, 3 seeds); block-sparse lossless, sparse, one block at a time, no
+  quadratic tensor for backward; the refusals. `test_model.py`'s later-stage flags test drops A5 and
+  gains its two refusals; the smoke test trains A5 (and A5 with B11, A8 and D9), every tensor moving.
+- **The default path is unchanged**: the parameter fingerprints and the existing suites pass; the
+  digest evidence is in the A5.5 entry above (the lane's last commit).
+
+Spec: §2.1, §6.1, §7.3, §8.1, §12.4, §14.4, §15.2; register A1, A5, A8, B14, C17, D1, D4, M20.
+BUILD_LOG: register row A5; spec issues 244, 246-252, 254; proposed edits 190 (a §15.2 row),
+191 (A5 as built), 192 (§6.1's blocks), 193 (§12.4/D4 under A5), 194 (§7.3/C17 and the cache),
+195 (the lossy-abstraction refusal's stale clause).
+
 ### 2026-10-23 - D2 flat head review fixes: the flat target pruned per board after marginalising, the optimistic prior refused under the flat form, the loss's claim corrected, the survivors killed
 
 Two reviews of D2's flat head (`cd310be`) and the flat form's policy target (`c3f9038`): one of spec

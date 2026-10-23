@@ -152,8 +152,10 @@ def smoke_train(
     cfg = NetConfig() if cfg is None else cfg
     model = build_model(cfg, seed=seed) if model is None else model
     model.train()
-    # One more position, a decision of D2's flat form: the leave head's loss (issue 242).
-    batch = collate(with_actions(synthetic_states(seed, [*board_counts, 3])))
+    # One more position, a decision of D2's flat form: the leave head's loss (issue 242). A
+    # piece-centric network (A5) reads the same positions' piece-centric tokens; the losses are
+    # unchanged (the per-square targets are drawn per token of the batch).
+    batch = collate(with_actions(synthetic_states(seed, [*board_counts, 3], piece_centric=cfg.piece_centric)))
     gen = torch.Generator().manual_seed(seed)
     targets = synthetic_targets(batch, cfg, gen, flat_row=len(board_counts))
     names = [name for name, _ in model.named_parameters()]

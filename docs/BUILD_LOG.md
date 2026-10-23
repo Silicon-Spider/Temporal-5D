@@ -1636,7 +1636,7 @@ width (M22)", "The CHECKPOINT 8 figures"). Found on the way: the ruling's premis
 |---|---|---|
 | A1-A3 | built, tested | Network N1: tokens, features, per-board flags, Δt-to-present. A3 on frozen boards under the cached configuration: intrinsic features (N3's default, ruled by M20), their status as B16's score-time key biases (`lane/net`, N-B16); live boards keep A3's features as inputs. A3's side to move is us/them, relative to the acting player (A7, `lane/net` N-A7) |
 | A4 | built, tested | Engine: every board immutable once published; persistent multiverse sharing history in chunks |
-| A5 | not started | Piece-centric tokenisation - ruled at CHECKPOINT 6: build behind its flag; the window's provisional kill does not decide it, and the joint test with the window waits for the pilot run (M18). Last in the net lane, dense scope only (`piece_centric` raises today) |
+| A5 | built behind its flag (dense scope only), tested | Piece-centric tokenisation - a prototype (CHECKPOINT 6: "build behind its flag"), off (`NetConfig.piece_centric`; `lane/net`, N-A5): A5's tokens are A1's minus the empty squares no candidate move lands on - the pieces and the candidate moves' destination squares (a capture points at the captured piece's token), each board's in cell order, then its registers (`state.to_piece_centric`; `TokenLayout`'s boards of different lengths). A pure input change: no parameter, the same draws, so the network is A1's on a smaller token set and its forward equals A1's with the dropped squares removed as keys (§15.2's proposed A5 row, edit 190 - every attention path, N2's switches, the attention and input flags that compose, BF16, gradients; A7's mirror holds under A5). Dense scope only: the block-causal scope, the cached path and D4's reply prototype refused (issues 251, 252). Placeholders: issues 244, 246-250, 254 (captures, T and the registers, cell order and the destination embedding, objections (2) and (3), B14's blocks, the auxiliary heads, A8 with it). The joint test with the window waits for the pilot run (M18); the window's scope refuses A5 (issue 253). Edits 190-195 |
 | A6 | built, tested | Global turn-state inputs on the global registers. The acting player is in (D8, N5); the acting colour is that same embedding since A7 (`lane/net` N-A7: under A7 the acting player is always "us", so the colour is what the input carries - one input, issue 228). Engine ABI round 1 (2026-10-17, `lane/engine`): the counts are in the expansion (`mandatory_remaining`, `optional_playable`, `moves_made`; the state's own mandatory count - A6's commit changed no truth source, while the component's first commit, H42's fix, changed the prover's report, so the truth's code signature differs from main's) and the C API (`t5d_expansion`'s three appended fields; `t5d_game_summary.moves_made`; the game handle counts the moves of its action - 0 at a set-up, +1 per move, 0 after a submission or a replayed action), with the Python mirror (`Expansion`, `GameInfo.moves_made`; `Search`'s `turn_start` from the handle). The count is in the evaluation identity (issue 302): `EvalRequest`, the evaluation cache's key, the batch's de-duplication and MCGS identity, where it subsumes the turn-start flag; `t5d_search_new` takes the handle's count and checks `turn_start` against it (tested two moves into an action, from C++ and Python, where a flag's 0 or 1 cannot pass); `advance_moves` and `advance_action` carry the tree at each count (tested, tree and graph). §15.2's A6 row: `test_turn_state.cpp` recounts the three from the rulebook at every state of random play under every ruleset (both Q4 readings), through the expansion and a `t5d_game`, and checks the spec's arithmetic move by move where no activity changes (issues 143-145). Network (`lane/net`, N-A6, 2026-10-23): `PositionState` carries the three counts (`mandatory_remaining`, `optional_playable`, `moves_made`; `turn_state`), `collate` puts them in `Batch.turn_state`, and `engine/convert.py` copies the expansion's, checking only what the expansion defines them by (non-negative; mandatory + optional = the boards it marks playable; mandatory no more than those of active timelines; none owed exactly when submitting is possible) - the split is the ruleset's, which the expansion does not name. A state built without the engine (synthetic, the tree fixture, a refresh's other-colour view) derives them from its boards under the default rules (`derived_turn_state`; moves made 0 before the shift, 1 past it), re-derived whenever it is rebuilt; given ones are kept, so the A7 mirror keeps them. Embedded into the global registers (issue 230, placeholder fixed in code): each count as `(n / 8, log1p n, [n = 0])`, the nine features through Linear(9, 32), GELU, Linear(32, d), one vector added to every global register beside D8's acting colour - with none, issue 225's placeholder (the board tokens, the live boards' alone under the block-causal scope); 8,768 parameters from a generator of their own (`a6_seed`: no other parameter's draw changed). `cache.state_digest` (an epoch's anchor, and the Python evaluator's epoch reuse) carries the counts; frozen K/V never depend on them. The fixtures' positions are turn starts with the boards' own counts: the tree fixture's moves are no actions, and a per-path count of them split its two move orders of one multiverse into two states (tried, reverted); mid-turn states are its states with counts given. Tests: `tests/engine/test_turn_state_engine.py` - section 15.2's row on the network side: at every state of seeded random play in eight plays under both Q4 readings (956 states: 239 turn starts, 461 mid-action, 138 past the shift with moves, 118 without; 87 jumps between two present boards, 33 rewinding branches releasing a board, 8 T12 rises) the converted counts are the expansion's, moves made the handle's count, mandatory and optional a recount from the rulebook's definitions on the converted boards (and, under the default rules, the state's own derivation); a mid-turn state and its own 5DFEN (a turn start, equal boards and acting player) differ in moves made alone, and in digest and every output, full and cached; inconsistent counts refused. `tests/net/test_turn_state.py` - derivation and validation; each count alone moves exactly the global registers (one vector on each), or with none the board tokens (the live boards' under the block-causal scope), and nothing else; every output moves with each count under every register arm and both scopes; equal boards with different counts have different digests and outputs and, from one store in one epoch, each equals its own full pass with no frozen board recomputed; a refreshed epoch's anchor is the state with its counts (another count is a node below it; a root with other counts a new epoch, other history K/V); the other colour's view derives its counts; cached = full pass along the tree fixture's paths, each node also with mid-turn counts, under both supersession readings and both register arms; the parameters and their draws. The A7 mirror test compares `Batch.turn_state` (a mid-turn construction with given counts added) and the engine's mirror test the engine's own counts on the 5DFEN mirror |
 | A7 | built, tested | Perspective canonicalisation (`lane/net`, N-A7). The network reads every input from the acting player's side (`net/state.py`: `token_arrays` and `collate`; `PositionState` keeps the engine's absolute facts): owners ours/theirs (A2's colour table renamed `embed.owner` - no parameter changes, F1 as it was), each board's side to move us/them, ranks mirrored (`y -> H-1-y`) and timelines negated when Black acts (`p -> -p`, or `-1 - p` in a ±0 variant - §12.6's index mapping, so the state carries `even_start`, the engine's `Expansion.even`); file, time and Δt unchanged. Only features and coordinates change: the tokens keep their order, so every token-indexed output - policy and reply moves, per-board, per-square - maps back by the identity, the per-square labels by swapping ours and theirs (`heads.square_labels_by_colour`; the labels relabelled ours/theirs, issue 226); values are the acting player's (D8). The acting colour stays an input: D8's embedding on the global registers (issue 228). Cached path (C2): frozen K/V keyed by the acting player (`board_ident(..., acting=True)`), the search root's history built from both sides and a refresh's dense pass run from each (`cache.viewed_by`) - issue 303's cost, logged for C2. §15.2's row as issue 304 reads it: `state.mirror` (each board one half-turn later, issue 227); `tests/net/test_perspective.py` - canonical inputs bit-identical at the mirrored token but for the acting colour, outputs equal mapped back with the colour's rows tied (FP32 1e-5; BF16 no further than its own FP32 distance), different untied; 18 constructions (many timelines, deep travel, duplicated boards, ±0, fairy pieces, past the shift with submit legal/masked/absent, 7x7 to 1x1, far apart, no global registers), 3 seeds, both scopes, B5/B10/B11/B12/B17 and B15 off, the cached path under both supersession readings with and without a root refresh; `tests/engine/test_perspective_engine.py` - the engine's own 5DFEN mirror converts to `state.mirror` of the conversion, moves and relations included, both acting colours, each of the 16 named variants the engine sets up (its whole table, `helpers.ENGINE_VARIANTS`), and the network agrees on the two. Review fixes: a refresh's other-colour view (`viewed_by`) carries no moves and no edges (issue 229; a placeholder fixed in code), tested on synthetic and engine positions; `state.mirror` negates timelines by its own arithmetic, not through `canonical_timeline` (a wrong self-inverse map would cancel), so the identity and `-p`-for-`-1 - p` mutants of `canonical_timeline` are caught. **For A8 (not built):** the board-layout embedding must flatten each board in canonical (x, y) order - ranks mirrored when Black acts - not storage order, or A7 breaks for Black. Mutants run at test time (no file edited): no rank mirror, no timeline negation, absolute owners, absolute side to move, frozen keys without the perspective - each caught; `-p` for `-1 - p` in a ±0 variant is invisible to the outputs (recentring) and caught by the canonical-input test |
 | A8 | built, tested | The board-layout embedding - a prototype (6p), behind its flag, off (`lane/net`, N-A8; `net/layout.py`): each board's one-hot layout (64 cells x 24 owner-and-piece states, read in A7's canonical (x, y) order) projected to 16 channels per square (1,573,888 parameters), added to the token input by a learned 16 -> d map (4,096), then an FFN (one pre-norm residual block, RMSNorm, Mish, 8x - 1,051,136; every valid token): 2,629,120 parameters; F1 unchanged with it off (bit for bit: its own generator, drawn last). Placeholders (issue 240): the FFN's width, form and tokens; the concatenation built as a sum; smaller boards padded a1-anchored or centred (`layout_padding`), larger refused; has-moved not among the 24 states. FP32, never quantised (G2, 238(d)). Every attention path and the cached path (no cache change: per board, intrinsic, keyed by perspective - 303) compute the same function; §15.2's A7 row green with it on. §15.3's row measured (MEASUREMENTS): the projection 0.099% of attention at 44 boards by §15.3's formula, A8 with its FFN 4.5% - **flagged under the 2x rule**: 45x the row's ~0.1% (at least 6.6x with any per-token FFN; issue 240(l)); in the cached configuration A8 adds 10.1% / 14.4% to a node at 44 / 240 boards (every token embedded at every node; 240(g)), 2.0% / 0.62% to the dense forward. Review fixes (same day): the FFN's form pinned bit for bit, the layout on non-square boards, the FP32 values against FP64, `layout_flops` zero when off, the cache bench counting a node's preparation; the reviewer's 24 mutants each caught. Smoke-tested only (three optimiser steps on synthetic rows). Edits 185, 186 |
@@ -3927,6 +3927,114 @@ superseded or made moot says so; nothing is deleted.
     (since the review fixes; it raised a bare `KeyError`) - rebuilt from its record instead. The record
     checks a flat decision's children are all turns and its turn lengths sum to its turn moves (both
     tested since the review fixes). Proposed edit 189.
+244. **A5's token set, as built: what section 14.4 and the register pin, and the capture reading**
+    (§2.1, §8.1, §14.4; register A1, A5, D1; CHECKPOINT 6's reversal 15). `lane/net`, the A5 commit.
+    Pinned: "tokens for pieces + generator-supplied destination squares" (register A5), board-major
+    order (B14), registers unchanged (A1, B8), the pointer over generator-supplied moves (D1), no
+    relation tokens and no token-level smolgen (§14.4's refusals). Built (`state.to_piece_centric`,
+    behind `NetConfig.piece_centric`, off): A5's tokens are A1's minus the empty squares no candidate
+    move lands on - the occupied cells and the moves' destination cells, each board's in cell order,
+    then its registers, the global registers last; `moves` and `edges` remapped through (board, cell),
+    row order kept (policy row `i` is still engine move `i`). Each a PLACEHOLDER: (a) **A capture's
+    destination is the captured piece's own token** (en passant: the empty landing square's token, the
+    pawn taken keeps its own) - literal D1, no second token at one 4D position; the alternative, a
+    destination token on every destination square, captures included, needs a new token kind and a
+    learned "destination" embedding co-located with the piece, which RoPE and B15 cannot tell apart.
+    (b) **No new parameter**: the network is A1's, bit for bit (`parameter_breakdown` and every draw
+    identical with A5 on and off - tested), on a smaller token set; its forward equals A1's with the
+    dropped squares removed as keys (section 15.2's proposed A5 row, edit 190 - tested on every
+    attention path, stage N2's switches, the attention and input flags, BF16, gradients, the
+    adversarial constructions, and engine positions). (c) Engine data drops nothing (strict: its edges
+    are its moves' own pairs and its relations end on pieces - checked on every real position tested,
+    all five relations built); synthetic data drops exactly the move edges onto empty cells that are no
+    destination (`strict=False`, counted). (d) The conversion runs at the network's edge (the engine's
+    contract and the C API stay square-centric). Edits 190, 191.
+246. **A1's token formula under A5, and the registers** (§2.1, §5.2; register A1, A5, B8). A1's
+    "T = 66N + 16" is not restated for A5. Built: `T = pieces + D + 2N + 16` - the 2 per-board and 16
+    global registers kept (B8's positions, never move endpoints - §5.3). Reconstructing §14.4's "2.3x"
+    at 240 boards needs about 25.6 pieces per board with the per-board registers kept, 27.6 without;
+    "2.7x" 21.4 or 23.4 - the spec does not say which. A PLACEHOLDER (the registers kept: A5 is then
+    an input change alone). A board with no piece and no destination keeps its registers - or has no
+    token at all under ablation 3's no-register arm (tested). Edit 191.
+247. **Within-board order and the destination token's embedding** (§2.2, §6.1; register A2, A5,
+    A7, B14). Board-major order is pinned; the order within a board is not. Built (PLACEHOLDERS): (a)
+    **cell order** (a1..h8, the storage order - A7 moves no token under A5 either: a colour-swapped
+    mirror's tokens of a board are in its own cell order, so the mirror test maps tokens through
+    `mirror_tokens` into the mirror's layout - section 15.2's A7 row holds under A5, tested on 18
+    constructions, 3 seeds); the network has no absolute positions, so the order changes no output but
+    the order of floating-point sums. (b) **A destination token is an empty-square token** - piece 0,
+    no owner, not moved, with its board's flags, (p, h) and Delta-t and its landing (x, y): no new
+    embedding and no new kind (a learned "destination" flag would be a new parameter; none is stated).
+    Edit 191.
+248. **Section 14.4's objection (2), "empty squares carry geometry", rests on what is not built - and
+    a stale clause** (§6, §14.4; register B11, A5). §14.4 says the objection is "dissolved by §6's
+    typed edges, which deliver clear-ray, x-ray and pin facts exactly". As built: (a) B11 is
+    provisional and off by default (`typed_edge_bias=False`); (b) the engine builds attack, defence and
+    x-ray for the acting player's pieces on the boards its moves start from only (engine README,
+    "Expansion" (e); pin and check from both sides since engine ABI round 3), so a frozen board's
+    pieces and the opponent's carry no clear-ray or x-ray geometry under A5 - only RoPE and B15's
+    displacement bias, and pin and check where they hold. Unstated: whether
+    ablation 1's A5 arm runs with B11 on. (c) §14.4's refusal of "lossy duplicate-abstraction" gives
+    "breaks uniform tokenisation" as one reason; after A5's reversal that clause is stale (the refusal
+    stands on lossiness). For the user with ablation 1; edits 198 (written with the measurements), 195.
+249. **Objection (3), "uniform board shapes", against §10.3 - and B14's blocks** (§6.1, §10.3, §14.4;
+    register B14, A5; issue 42). §14.4: "dissolved by §10.3's varlen kernels"; §10.3 is "deferred
+    configuration only ... Nothing in this subsection is needed for the dense build", and no varlen
+    kernel exists on CPU (issue 42), so the CPU build pads positions to the batch's longest (as A1's
+    mixed batches already are). §6.1's economics rest on "a 66-token board is roughly a block"; under
+    A5 a board holds from 2 tokens to about 60. Built (PLACEHOLDER): the block-sparse and chunked paths'
+    query blocks are `attn_block_boards` (4) boards of the batch's mean board length (the largest
+    position mean, rounded up) - not board-aligned, which changes no result (every row's structure is
+    its own; tested equal on every path, block-sparse at `attn_sparse_max_fraction` 1.0 and 0.3). A
+    block of the longest board's length (the first build) spans more boards and reads more of them:
+    at 40 synthetic boards the move-graph rows' selection read 0.86 of the key boards on average,
+    against A1's 0.77 - with the mean, 0.77 again (tested); the key selection stays lossless and of
+    whole boards, every row set within one block, no O(L^2) tensor kept for backward (tested). A1's
+    blocks are unchanged (66 x 4). B12's no-register arm sizes its per-board descriptors by the cells
+    (W x H), an upper bound of the present squares - unchanged. Edit 192.
+250. **The per-board and per-square auxiliary heads under A5** (§8.6, §9.2, §12.4; register D4, D2,
+    M20). D4's per-square facts include facts about empty squares (`heads.SQUARE_LABELS`:
+    `reachable_in_two_*`, `royal_zone_*`, `arrival_gives_check_*`), which no A5 token carries unless a
+    candidate move lands there; §12.4's "Per-square | proportional to T" scaling changes with T; M20's
+    "aux pooling -> squares" becomes the present square tokens. Built (PLACEHOLDERS): the global
+    auxiliary pool (moves-left, search effort), the per-board pools (the per-board heads, D2's leave
+    logit under `leave_pool="squares"`) and the per-square head cover the square tokens there are -
+    pieces and destinations; D3's value heads and D8's submit logit read the global registers, as under
+    A1. Under the equivalence test the reference pools the same kept tokens. For the user with ablation
+    1 (the per-square label set is 6j's). Edit 193.
+251. **D4's opponent-reply prototype has no A5 reading - refused** (§12.4; register D4, A5; issue
+    9(g)). "Each square of a reply maps to the same square on that board": under A5 a quiet reply's
+    destination has no token. Adding the opponent's destinations changes the input - and the engine
+    supplies no opponent moves at inference, so training and inference inputs would differ; masking
+    those replies loses most of them. Built: `NetConfig.validate` refuses `piece_centric` with
+    `opp_reply` (`NotImplementedError` naming this issue); `to_piece_centric` refuses an opponent move
+    with an endpoint off the tokens under `strict` and drops it, counted, otherwise (synthetic states).
+    It reopens issue 9(g). For the user; edit 193.
+252. **Destination tokens on frozen boards under C17 - the block-causal scope and the cached path
+    refused** (§7.3, §14.4; register C17, C19, C2, C3, C15, B16, A5). §14.4: A5 "composes with the
+    window (boards) and the cache"; §7.3/C17: "all of a board's tokens are created together, so full
+    within-board attention is compatible with freezing". A branching or travel move's landing square on
+    a history board is a destination token that appears and vanishes from node to node: (a) C17's
+    premise fails for it; (b) if its board's tokens read it (within-board bidirectional) their K/V
+    change per node and the cache breaks, and if it is present information like the move graph
+    (`scope.py`'s forced reading) frozen tokens must never read it - unstated; (c) what it reads itself
+    is unstated (everything, as a live token; or its board's causal past); (d) its features under
+    `frozen_features="intrinsic"` and B16's status biases on it are unstated; (e) §14.4 calls only the
+    head boards' destination tokens transient; (f) "the same on KV memory" holds only if destination
+    tokens are never cached. Built (refuse, do not improvise): `NetConfig.validate` refuses
+    `piece_centric` with `attn_scope="block_causal"`, a forward overriding the scope to block-causal
+    is refused (`T5DNet.scope_of`), and `CachedEvaluator` and the cache bench refuse an A5 network -
+    each `NotImplementedError` naming this issue. Section 15.2's cached rows (C2/C17, C20, C3a, G1's
+    FP8 row) are not run for A5; its cached-node and KV figures are analytic only (A5.5), under reading
+    (f) - destination tokens live, never cached. The extension (a transient slot class; per-board token
+    lists in the cache; live-pass destination tokens) waits on a ruling. For the user; edit 194.
+254. **A8 under A5** (§2.2, §14.4; register A8, A5). A8 hands every square token its board's whole
+    layout, which is §14.4's surviving objection to A5 ("absence-concepts (an open file) must be learned
+    from piece tokens") answered at the input; the composition is not addressed. As built it composes
+    exactly: A8's layout is a one-hot of the occupied cells, all of which are A5 tokens, so every A5
+    token gets A1's layout channels at its cell and the forward equals the masked A1 reference with A8
+    on (tested, both paddings). Destination tokens get their cell's channels (the cell is empty). For
+    ablation 1 and 6p: whether A5 is tested with A8 on.
 
 <!-- A new list, so that the numbers from 140 render as written. -->
 
@@ -5568,6 +5676,44 @@ struck through, where nothing of it is left to apply); the others stand as writt
     acting player's playable boards, and the network's per-board leave logits among the raw outputs
     (record format version 2)". Why: the flat form's targets cannot be re-derived from records without
     them (issue 243; §15.2's I15 row, now tested on flat-form games).
+190. **§15.2, a new row (A5)**: now - no row names A5. Proposed - add: "Piece-centric forward =
+    square-centric forward with the non-token squares removed as keys | The piece-centric token
+    construction, its coordinates, flags and remapped edges and moves are exact | A5". Why: A5 is a pure
+    input change as built (issue 244(b)), so this equivalence proves the construction exact, and it is
+    the regression check A5 needs for every later network change (it runs on every attention path, the
+    flags, BF16 and gradients - `tests/net/test_piece_centric.py`; on engine positions -
+    `tests/engine/test_piece_centric_engine.py`).
+191. **§2.1 and register A1, A5 (A5 as built)**: now - A1: "One token per square; 2 registers per
+    board; 16 global registers; T = 66N + 16"; A5: "Piece-centric tokenisation (tokens for pieces +
+    generator-supplied destination squares; ~2.3-2.7x fewer tokens)", Prototype. Proposed - add to A5,
+    as built and placeholders until ablation 1 and M24 decide: "A5's tokens are A1's minus the empty
+    squares no candidate move lands on: the pieces, the candidate moves' empty destination squares (a
+    capture points at the captured piece's token), the registers unchanged - T = pieces + D + 2N + 16;
+    each board's tokens in cell order, then its registers; a destination token an empty-square token
+    (no new parameter); built behind its flag for the dense scope only". Why: none of it is stated
+    (issues 244, 246, 247); A1's formula does not carry over.
+192. **§6.1 and register B14 (blocks under A5)**: now - "Order tokens board-major - all 66 tokens of
+    board 1 ... a 66-token board is roughly a block". Proposed - add: "Under piece-centric tokens (A5)
+    boards differ in length (2 to about 60 tokens); query blocks hold a fixed number of boards of the
+    batch's mean length, not board-aligned, so the block-sparse selection skips as many key boards as
+    A1's; varlen kernels (§10.3) are deferred, so the CPU build pads positions." Why: §6.1's economics
+    assume uniform 66-token boards (issue 249).
+193. **§12.4, register D4 and M20 (the auxiliary heads under A5)**: now - "Per-square | proportional to
+    T"; M20: "aux pooling -> squares"; the reply head "mapped onto current squares". Proposed - add:
+    "Under A5 the square pools and the per-square head cover the square tokens there are (pieces and
+    destinations); a per-square label of a cell with no token is dropped; the reply prototype has no A5
+    reading and is refused with it." Why: D4's per-square facts include empty squares A5 does not carry,
+    and a quiet reply's destination has no A5 token (issues 250, 251).
+194. **§7.3, register C17, and §14.4's "composes with ... the cache" (A5 on frozen boards)**: now -
+    "All of a board's tokens are created together, so full within-board attention is compatible with
+    freezing in every configuration"; §14.4: A5 "composes with the window (boards) and the cache". Proposed
+    - qualify both: "except A5's destination tokens on history boards, which appear and vanish from node
+    to node: until a ruling says what they read and are read by, A5 is built for the dense scope only,
+    and its cached-node and KV figures are analytic, destination tokens live and never cached." Why: the
+    six open points of issue 252; C17's premise fails for transient tokens on frozen boards.
+195. **§14.4, the refusal of "lossy duplicate-abstraction"**: now - gives "breaks uniform tokenisation"
+    among its reasons. Proposed - drop that clause (the refusal stands on lossiness). Why: A5's reversal
+    makes non-uniform tokenisation a built prototype (issue 248(c)).
 
 <!-- A new list, so that the numbers from 110 render as written. -->
 
@@ -5975,3 +6121,10 @@ struck through, where nothing of it is left to apply); the others stand as writt
   claim corrected; a missing flat weight and a pre-flat targets file refused; a visited arrival held to
   the live search. The mutation run's 17 survivors each killed by the adopted tests (re-run on a copy
   of the fixed tree). Register D2, D9, I2, I12, I15, M21; issues 241-243; edit 188 rewritten.
+- **2026-10-23 - network A5, piece-centric tokens behind their flag** (`lane/net`): the token set
+  (`to_piece_centric`: the pieces and the candidate moves' destination squares, captures on the
+  captured piece's token), `TokenLayout`'s boards of different lengths, the transforms, `collate`'s
+  tokenisation check; the network unchanged - no parameter, the same draws - with its forward equal to
+  A1's with the dropped squares masked as keys (section 15.2's proposed row, every path and flag); the
+  block-causal scope, the cached path and D4's reply refused. Register A5; issues 244, 246-252, 254;
+  edits 190-195 (the lane's block 190-199).
