@@ -116,8 +116,9 @@ BOARD_HEADS: tuple[str, ...] = ("travelled_into", "timeline_active_at_end", "tac
 #: excluded. Each candidate below is a fact no input relation states: multi-step (an
 #: exchange sequence, two-move reach, the position after a move) or a geometric
 #: neighbourhood that is no relation type (the royal zone; for the side to move it partly
-#: overlaps the king's legal moves). The labels' generator (exact, from the rules engine) is
-#: not built (step 2, the engine lane). Facts are about the whole multiverse, cross-board
+#: overlaps the king's legal moves). The labels' generator is the rules engine's (exact; engine
+#: ABI round 3, ``Game.square_labels`` - its readings BUILD_LOG issues 175-176). Facts are
+#: about the whole multiverse, cross-board
 #: lines included. Register A7: the network reads every input from the acting player's side,
 #: so the colour-specific labels are the acting player's ("ours") and the opponent's
 #: ("theirs") - a relabelling of the set's white/black facts, not a new set (spec issue 226) -

@@ -67,8 +67,11 @@ def test_self_play_records_forward_only_then_synthetic_steps_then_the_published_
     raw_id = network_id(model)
     losses = trainer.losses_on(trainer.window.rows())  # the record -> batch path, forward only
     assert all(math.isfinite(v) for v in losses.values())
-    for head in ("policy", "wdl", "categorical", "short_term", "value_error", "soft_policy", "moves_left", "board", "effort"):
+    for head in ("policy", "wdl", "categorical", "short_term", "value_error", "soft_policy", "moves_left", "board", "square", "effort"):
         assert head in losses
+    # D4's per-square labels: re-derived from each record's replayed states by the engine's generator.
+    assert all(r.targets.square and r.targets.square[r.index].shape[0] == r.state.n_boards for r in trainer.window.rows())
+    assert losses["square"] > 0
     assert network_id(model) == raw_id and optimiser_steps(model) == 0
     with pytest.raises(RuntimeError, match="synthetic rows only"):
         trainer.step()

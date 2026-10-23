@@ -15,7 +15,8 @@ this build.
   **the trainer's** network configuration - its register counts and relations, and
   ``TrainerConfig.window_k`` or the record's window, which sets the rebuilt positions' W/E scope
   - the cached configuration's; a row keeps the state alone (``selfplay.replay_positions``) - its targets
-  built (``train.targets``, the reply prototype's from those inputs when the network has the head),
+  built (``train.targets``, the reply prototype's from those inputs when the network has the head,
+  D4's per-square labels re-derived from the replayed states by the engine's generator),
   its rows weighted by the sampler (I12, 6u's arms) and written into the replay window (I16) as
   frequency copies.
 * ``Trainer.step()`` - a batch drawn uniformly from the window, collated (``targets.collate_rows``),
@@ -134,8 +135,18 @@ class Trainer:
         ``positions``: the inputs, given (a synthetic record's states); None: rebuilt from the
         record under the trainer's network configuration."""
         given = positions is not None
-        positions = list(positions) if given else replay_positions(record, self.net_cfg, window_k=self.cfg.window_k)
-        targets = build_targets(record, self.target_cfg, positions=positions if self.net_cfg.opp_reply else None)
+        positions = (
+            list(positions)
+            if given
+            else replay_positions(
+                record,
+                self.net_cfg,
+                window_k=self.cfg.window_k,
+                square_labels=self.target_cfg.square_labels,
+                mate_nodes=self.target_cfg.square_mate_nodes,
+            )
+        )
+        targets = build_targets(record, self.target_cfg, positions=positions, reply=self.net_cfg.opp_reply)
         weights = row_weights(record, targets, self.cfg.sampler, self.tracker)
         n = copies(weights, int(record.header.get("seed", 0) or 0))
         synthetic = bool(record.header.get("synthetic", False))

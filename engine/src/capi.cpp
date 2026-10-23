@@ -20,6 +20,7 @@
 #include "t5d/expand.hpp"
 #include "t5d/fen.hpp"
 #include "t5d/fingerprint.hpp"
+#include "t5d/labels.hpp"
 #include "t5d/movegen.hpp"
 #include "t5d/multiverse.hpp"
 #include "t5d/pgn.hpp"
@@ -62,6 +63,8 @@ struct t5d_game {
   // The last expansion, and whether it is of the current state.
   t5d::Expansion expansion;
   bool expansion_current = false;
+  // The last per-square labels (t5d_game_square_labels).
+  t5d::SquareLabels labels;
 };
 
 namespace {
@@ -430,6 +433,23 @@ constexpr LayoutEntry kLayout[] = {
     T5D_AT(t5d_expansion, mandatory_remaining),
     T5D_AT(t5d_expansion, optional_playable),
     T5D_AT(t5d_expansion, moves_made),
+
+    T5D_SIZE(t5d_label_options),
+    T5D_AT(t5d_label_options, mate_nodes),
+
+    T5D_SIZE(t5d_square_labels),
+    T5D_AT(t5d_square_labels, board_count),
+    T5D_AT(t5d_square_labels, width),
+    T5D_AT(t5d_square_labels, height),
+    T5D_AT(t5d_square_labels, label_count),
+    T5D_AT(t5d_square_labels, acting_player),
+    T5D_AT(t5d_square_labels, labels),
+    T5D_AT(t5d_square_labels, mate_candidates),
+    T5D_AT(t5d_square_labels, mate_unknown),
+    T5D_AT(t5d_square_labels, first_moves_ours),
+    T5D_AT(t5d_square_labels, first_moves_theirs),
+    T5D_AT(t5d_square_labels, second_moves_ours),
+    T5D_AT(t5d_square_labels, second_moves_theirs),
 };
 
 #undef T5D_AT
@@ -807,6 +827,30 @@ t5d_status t5d_game_expand(t5d_game* game, const t5d_expand_options* options, t5
     t5d::expand(game->state, o, game->expansion, game->moves_in_action);
     game->expansion_current = true;
     describe(game->expansion, *out);
+    return T5D_OK;
+  });
+}
+
+t5d_status t5d_game_square_labels(t5d_game* game, const t5d_label_options* options,
+                                  t5d_square_labels* out, char** error) {
+  return guarded(error, [&]() -> t5d_status {
+    if (game == nullptr || out == nullptr) throw std::invalid_argument("game or out is NULL");
+    t5d::SquareLabelOptions o;
+    if (options != nullptr) o.mate_budget = t5d::SearchBudget::nodes(options->mate_nodes);
+    t5d::square_labels(game->state, o, game->labels);
+    const t5d::SquareLabels& l = game->labels;
+    out->board_count = l.board_count;
+    out->width = l.size.width;
+    out->height = l.size.height;
+    out->label_count = t5d::kSquareLabelCount;
+    out->acting_player = t5d::index_of(l.acting_player);
+    out->labels = l.labels.data();
+    out->mate_candidates = l.stats.mate_candidates;
+    out->mate_unknown = l.stats.mate_unknown;
+    out->first_moves_ours = l.stats.first_moves[0];
+    out->first_moves_theirs = l.stats.first_moves[1];
+    out->second_moves_ours = l.stats.second_moves[0];
+    out->second_moves_theirs = l.stats.second_moves[1];
     return T5D_OK;
   });
 }

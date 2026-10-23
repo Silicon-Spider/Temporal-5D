@@ -94,6 +94,23 @@ BUILT_RELATIONS: dict[str, int] = {
 #: id 6 is reserved (append-only ids) and passed only as a number.
 RESERVED_RELATIONS: dict[str, int] = {}
 
+# The per-square labels (t5d_game_square_labels; engine ABI round 3): python/t5d/net/heads.py
+# SQUARE_LABELS, in its order (tests/engine checks the two agree).
+T5D_SQUARE_LABEL_COUNT = 8
+T5D_LABEL_UNKNOWN = 255
+SQUARE_LABEL_IDS: dict[str, int] = {
+    "exchange_loses_occupant": 0,
+    "reachable_in_two_ours": 1,
+    "reachable_in_two_theirs": 2,
+    "arrival_gives_check_ours": 3,
+    "arrival_gives_check_theirs": 4,
+    "royal_zone_ours": 5,
+    "royal_zone_theirs": 6,
+    "arrival_gives_mate": 7,
+}
+#: The mate search's node budget per candidate when none is given (a placeholder: t5d/labels.hpp).
+DEFAULT_MATE_NODES = 200_000
+
 
 # ---- structures -----------------------------------------------------------------------------
 
@@ -248,6 +265,32 @@ class CExpansion(ctypes.Structure):
         ("mandatory_remaining", c_int32),  # boards the acting player must still play (T5, T6): 0 iff submit_possible
         ("optional_playable", c_int32),  # its other playable boards (L5); 0 when no move may be made (Q4)
         ("moves_made", c_int32),  # moves made in the action in progress (the handle's, a leaf's path's): 0 at a turn start
+    ]
+
+
+class LabelOptions(ctypes.Structure):
+    """``t5d_label_options``."""
+
+    _fields_ = [("mate_nodes", c_uint64)]  # each mate search's node budget; UINT64_MAX: exact
+
+
+class CSquareLabels(ctypes.Structure):
+    """``t5d_square_labels``: ``labels`` points into the game handle's buffer, valid until its
+    next ``t5d_game_square_labels`` (``Game.square_labels`` copies it out at once)."""
+
+    _fields_ = [
+        ("board_count", c_size_t),
+        ("width", c_int32),
+        ("height", c_int32),
+        ("label_count", c_int32),
+        ("acting_player", c_int32),
+        ("labels", POINTER(c_uint8)),
+        ("mate_candidates", c_uint64),
+        ("mate_unknown", c_uint64),
+        ("first_moves_ours", c_uint64),
+        ("first_moves_theirs", c_uint64),
+        ("second_moves_ours", c_uint64),
+        ("second_moves_theirs", c_uint64),
     ]
 
 
@@ -529,6 +572,8 @@ MIRRORED_STRUCTS: dict[str, type[ctypes.Structure]] = {
     "t5d_expand_options": ExpandOptions,
     "t5d_game_summary": GameSummary,
     "t5d_expansion": CExpansion,
+    "t5d_label_options": LabelOptions,
+    "t5d_square_labels": CSquareLabels,
 }
 
 #: Every struct of ``t5d/capi_search.h`` this module mirrors (``t5d_search_layout``'s ``type``).
@@ -612,6 +657,7 @@ _SIGNATURES: dict[str, tuple[object, list[object]]] = {
     "t5d_game_set_legality": (c_int32, [_GAME, c_int32, _ERR]),
     "t5d_game_expand": (c_int32, [_GAME, POINTER(ExpandOptions), POINTER(CExpansion), _ERR]),
     "t5d_game_state": (c_int32, [_GAME, POINTER(_STATE)]),
+    "t5d_game_square_labels": (c_int32, [_GAME, POINTER(LabelOptions), POINTER(CSquareLabels), _ERR]),
     # t5d/capi_search.h (engine stage E6a): every function
     "t5d_search_params_default": (None, [POINTER(CSearchParams)]),
     "t5d_search_new": (c_int32, [_GAME, c_int32, POINTER(CSearchParams), POINTER(_SEARCH), _ERR]),
@@ -812,16 +858,20 @@ __all__ = [
     "CSearchLimits",
     "CSearchParams",
     "CSearchSummary",
+    "CSquareLabels",
+    "DEFAULT_MATE_NODES",
     "ENV_VAR",
     "MIRRORED_SEARCH_STRUCTS",
     "MIRRORED_STRUCTS",
     "ExpandOptions",
     "Fingerprint",
     "GameSummary",
+    "LabelOptions",
     "Library",
     "MOVE_DTYPE",
     "MoveRecord",
     "RESERVED_RELATIONS",
+    "SQUARE_LABEL_IDS",
     "StateInfo",
     "char_array",
     "default_build_dir",

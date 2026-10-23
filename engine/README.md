@@ -68,7 +68,7 @@ rules reference, `docs/rules/README.md`, which the code cites throughout.
 | **E5c:** the scanner's in-check stage (M12's optimisation pass), Lazy SMP and the shared solved store; 6b per board-count range at the design thread budget | `include/t5d/scanner.hpp`, `tools/t5d_scan6b.cpp` | §11.3, §15.6, H17, H19, M12, M13 |
 | **E7:** Q4 as ruled (R8) by default; the acting player and the submit action in the expansion and the C API | `include/t5d/rules.hpp`, `include/t5d/expand.hpp`, `include/t5d/capi.h` | §8.2, §11.0 item 2, D8 |
 | **ABI round 1:** the turn state in the expansion and the C API - mandatory and optional boards, moves made in the action (the game handle's count); the count in the search's identity, evaluation requests, evaluation cache and batches | `include/t5d/expand.hpp`, `include/t5d/capi.h`, `include/t5d/mcts.hpp` | §2.3, §8.5, §15.2; A6, C11, C14 |
-| **ABI round 3:** B11's pin and check relations in the expansion, each side read from its own view (the opponent's: check status's pass) | `include/t5d/views.hpp`, `include/t5d/expand.hpp`, `include/t5d/capi.h` | §6; B11 |
+| **ABI round 3:** B11's pin and check relations in the expansion, each side read from its own view (the opponent's: check status's pass); D4's per-square label generator and its C API | `include/t5d/views.hpp`, `include/t5d/labels.hpp`, `include/t5d/expand.hpp`, `include/t5d/capi.h` | §6, §12.4; B11, D4, M20, A7 |
 | **E6a:** the main search: PUCT, widening, D2's arms (ply split, tree form, flat form), MCGS, the solver, final selection, persistence; built-in evaluators | `include/t5d/mcts.hpp`, `src/mcts.cpp`, `src/mcts_evaluators.cpp` | §8.1-8.7, §11.1, §15.4; D2, E1-E9, C11-C14, H2, H15 |
 | **E6a:** self-play and match play; the turn cap | `include/t5d/selfplay.hpp`, `src/selfplay.cpp` | §8.7, §12.3; C12-C14, I11 |
 | **E6a:** the search's C API: the step API for an external evaluator | `include/t5d/capi_search.h`, `src/capi_search.cpp` | §8.1, §8.3; D1, D3 |
@@ -957,6 +957,57 @@ extension; scalar elsewhere). Under `Scope` the features are O(scope). The pin a
 check relations (engine ABI round 3) allocate: they read the opponent's view, a
 multiverse of its own, and check detection's scans; the other three relations do not.
 
+### Per-square labels (`t5d/labels.hpp`; engine ABI round 3)
+
+The auxiliary targets of §12.4's per-square row - "Deep attack facts beyond the §6 input
+bias (label set a placeholder; 6j) | Per square | Generator - exact" - for register D4,
+the set standing as v1 (M20): `square_labels(state, options, out)` labels every square of
+every board (the canonical board order, cells rank × width + file) with the eight labels
+of `python/t5d/net/heads.py` `SQUARE_LABELS`, in its order, **relative to the acting
+player** (A7: "ours" its, "theirs" the opponent's - the network names no colour). Each
+is 0 or 1; `arrival_gives_mate` may be `kLabelUnknown` (255) where a mate search
+stopped on its budget. Every rule is read through the engine's own predicates - the
+move generator, check status's pass, submission, E4's mate detector - and each side
+from its own **view** (spec issue 172, as the pin and check relations above): the
+acting player's moves are the state's, the opponent's those on the passed multiverse,
+reported at the boards passed. The readings, each a **placeholder** of the committed
+class (spec issues 175, 176; the C API and the targets in issue 175):
+
+| Label | Reading |
+|---|---|
+| `exchange_loses_occupant` | the static exchange on an occupied square, begun by the occupant's enemy, wins material (ends above 0): the swap algorithm over the enemy's **captures** of the occupant (its view) and the occupant's side's **defences** of the square (its view; the defence relation), each side's least valuable piece first, each free to stop; values the scanner's H6 v1 table (`PieceValues`: P 100, N 300, B 300, R 500, Q 900, U 250, D 200, S 700, W 125, C 300) and 20,000 for a royal piece; no x-ray recapturer joins (a recapture lands on the board the capture makes, which the static exchange reads as the square itself) |
+| `reachable_in_two_ours` / `_theirs` | some piece of the side reaches the square in two of its own moves and not in one, the square not its own: its moves from where each of its pseudo-legal moves put it, under the **static reading** - the board it landed on as it stands, with the piece there (moved off its square if the move stayed on its board; the captured piece, en passant's pawn and a castling rook handled; a promotion made; no en-passant square), the rest of the multiverse unchanged, and the piece's colour to move there (`append_moves_from`, `t5d/movegen.hpp`) |
+| `arrival_gives_check_ours` / `_theirs` | some pseudo-legal move of the side onto the square leaves the moved piece able, under the static reading, to capture an enemy royal piece (a king or a royal queen, on any board - C1, C2). The moved piece only ("gives check from it"): a discovered attack is not counted |
+| `royal_zone_ours` / `_theirs` | the square of a royal piece of the side, on any board, or one king step from it (`geometry::all_directions`: -1, 0 or +1 along file, rank, timeline and turn, not all 0), on a board that exists; whatever stands there |
+| `arrival_gives_mate` | some pseudo-legal move of the acting player onto the square after which submitting is legal (T5, C4), and the opponent - at its turn's start - is checkmated (C5: in check, R1, and E4's hypercuboid detector finds no legal action), each search under `SquareLabelOptions::mate_budget` (placeholder 200,000 nodes; `SearchBudget::unlimited()` exact) |
+
+A move's square is its destination's - for a branching move the history board it
+targets (`t5d/records.h`) - and a capture's the captured piece's. Alternatives not
+built, for 6j: the static reading against **R1's** (each continuation from the board
+the move creates, advanced by a pass - the scanner's `BranchThreat::ArrivalCapture`
+reads arrivals so); an exchange with x-ray recapturers; a mate in one **action** (any
+legal action the move begins) rather than one move. Cost: a second move generation per
+first move of each side (and a published board per first move), and per move that ends
+a legal action in check a mate search; it allocates. `stats` counts the moves read and
+the mate searches (`mate_candidates`, `mate_unknown`).
+
+The C API: `t5d_game_square_labels(game, options, out, error)` (`t5d_label_options`:
+`mate_nodes`, `UINT64_MAX` exact; NULL for the placeholder's 200,000) fills a
+`t5d_square_labels` - `board_count`, `width`, `height`, `label_count` (8),
+`acting_player`, `labels` (board_count × cells × 8 bytes, valid until the handle's next
+`t5d_game_square_labels` or `t5d_game_destroy`) and the counts; the label ids are
+`T5D_LABEL_*`, `T5D_LABEL_UNKNOWN` 255. The Python binding: `Game.square_labels()`
+(`SquareLabels.targets()`: float, NaN undecided). The training targets re-derive them
+from each decision's replayed state (`train.selfplay.replay_positions(square_labels=True)`,
+`train.targets`) - never stored in a record.
+
+The tests (`test_views.cpp`): every label on hand-built positions - royal zones across
+timelines, two-move reach on a board and through time, arrival checks on a board,
+through time and from the opponent's view, the exchange won and lost by each side, the
+back-rank mate and its refutation, a mate left unknown by a spent budget; A7's mirror
+on real positions in `python/tests/engine/test_perspective_engine.py` (a position and
+its colour-swapped mirror give the same labels at the mirrored squares).
+
 ### The C API for games (`t5d/capi.h`)
 
 A `t5d_game` is a state under the rules with its expansion buffers:
@@ -981,7 +1032,8 @@ changed - and, appended at its end by stage E7 (every older field keeps its offs
 `submit_legal` (1 or 0); then, appended by engine ABI round 1 (register A6), (h)'s
 three: `mandatory_remaining`, `optional_playable` and `moves_made`; `t5d_game_info`,
 `t5d_game_state` (a `t5d_state` copy, for the fingerprint and the boards),
-`t5d_game_copy`, `t5d_game_destroy`. A game handle counts the moves made in its action
+`t5d_game_copy`, `t5d_game_destroy`; `t5d_game_square_labels` (engine ABI round 3; the
+section above). A game handle counts the moves made in its action
 itself (no state records them, and a `t5d_state` holds none): 0 at every set-up (a
 turn start, T5), one more per `t5d_game_apply` or `_apply_expanded`, 0 again after
 `t5d_game_submit` or `t5d_game_replay_next` (a whole action), carried by
@@ -4082,13 +4134,18 @@ Each is recorded where it is made (the header comments) and listed here:
   (Q4); "moves already made" counts moves since the action's turn start, a jump between
   two boards being one; and §15.4's turn structure holds the count (0 below a submit,
   the parent's + 1 below a move).
-- **Engine ABI round 3's readings** (build-log spec issues 172-174): the two views a
+- **Engine ABI round 3's readings** (build-log spec issues 172-176): the two views a
   decision state is read from - the acting player's (the state) and the opponent's (the
   multiverse check status passes, R1; mid-action the pass of the boards still to play)
   (issue 172); the pin relation - a slider through one enemy that is not royal onto an
   enemy royal it would capture, the pinned piece the target, each side's sliders in its
   own view (issue 173); the check relation - check detection's own royal captures, the
-  opponent's in its view and the acting player's in the state (issue 174).
+  opponent's in its view and the acting player's in the state (issue 174); the per-square
+  labels' C API, their targets and the readings shared by every label (issue 175: the
+  static reading of a piece's next move, the views, a move's square, the mate budget);
+  each label's own reading (issue 176: the exchange's swap and values, two-move reach,
+  arrival check from the moved piece only, the royal zone with the royal's own square,
+  mate after a move that ends a legal action). "Per-square labels" above has the table.
 - **Engine ABI round 2's readings** (build-log spec issues 148 and up):
   - the draw probability D backed up beside the value on every node and edge (a mate D
     0, a stalemate and the turn cap D 1); moves-left recorded per node, never backed up

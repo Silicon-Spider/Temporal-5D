@@ -166,6 +166,19 @@ void append_moves_of(const Multiverse& multiverse, const RuleOptions& rules, Col
                      int timeline, MoveList& out, RelationList& relations, RelationKinds kinds,
                      std::span<const int> inactive_timelines = {});
 
+/// The pseudo-legal moves of the piece on `square` of `board`, as if `board`
+/// stood at (timeline, half_turn) of `multiverse` with the piece's colour to
+/// move on it - a place the multiverse need not hold, or holds with other
+/// content: every move within the board reads `board`, every move off it the
+/// multiverse's boards (as royal_capture_from, t5d/check.hpp, reads a scan
+/// source). Appended to `out`; nothing for an empty square or a board of
+/// another size. No action: castling's optional-board option is not applied
+/// (as append_moves_of). What the per-square labels' second moves read
+/// (t5d/labels.hpp: a piece standing where its first move took it).
+void append_moves_from(const Multiverse& multiverse, const RuleOptions& rules, int timeline,
+                       int half_turn, const Board& board, int square, MoveList& out,
+                       std::span<const int> inactive_timelines = {});
+
 /// Whether `move` is a pseudo-legal move of the state: one that
 /// generate_moves would produce, field for field. Generates the moving
 /// piece's moves only; the overload with `scratch` reuses a caller's list (no

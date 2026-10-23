@@ -85,9 +85,9 @@ target_sources(t5d_core PRIVATE
   src/search.cpp)
 # Stage E5a: the legal moves, in tiers.
 target_sources(t5d_core PRIVATE src/legal.cpp)
-# Engine ABI round 3 (register B11): the two views a decision state is read
-# from - the pin and check relations read them.
-target_sources(t5d_core PRIVATE src/views.cpp)
+# Engine ABI round 3 (register B11, D4): the two views a decision state is read
+# from - the pin and check relations read them - and the per-square labels.
+target_sources(t5d_core PRIVATE src/views.cpp src/labels.cpp)
 # Stage E6a: the main search (MCTS / MCGS), its built-in evaluators, self-play.
 target_sources(t5d_core PRIVATE
   src/mcts.cpp
@@ -151,7 +151,7 @@ target_sources(t5d-tests PRIVATE
   tests/test_search.cpp)
 # D2's flat form: the turn generator (spec 15.2's row).
 target_sources(t5d-tests PRIVATE tests/test_turngen.cpp)
-# Engine ABI round 3: the pin and check relations.
+# Engine ABI round 3: the pin and check relations and the per-square labels.
 target_sources(t5d-tests PRIVATE tests/test_views.cpp)
 
 # Stage E6a's tests: the search's invariants (§15.4), self-play end to end,

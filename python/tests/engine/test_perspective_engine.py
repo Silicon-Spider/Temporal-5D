@@ -26,9 +26,11 @@ import pytest
 import torch
 
 from t5d.engine import Game, to_position_state
+from t5d.engine.capi import T5D_LABEL_UNKNOWN
 from t5d.engine.play import random_game
 from t5d.net import NetConfig, build_model, collate, mirror, permute_boards
 from t5d.net.cache import CacheConfig, CachedEvaluator, reference_output, viewed_by
+from t5d.net.heads import SQUARE_LABELS
 from t5d.net.state import OWNER_OURS, RELATION_IDS, mirror_tokens
 from tests.engine.helpers import ENGINE_VARIANTS, RECORDS, requires_engine
 from tests.net.test_perspective import (
@@ -126,6 +128,33 @@ def test_the_engines_mirror_is_the_mirror(pairs):
     # B11's five types are all exercised (pin and check since engine ABI round 3), the mirror's included.
     for rel in RELATIONS:
         assert any((s.edges[:, 2] == RELATION_IDS[rel]).any() for _, s, _, _ in pairs), rel
+
+
+def test_the_per_square_labels_of_a_real_position_and_its_mirror(fens):
+    """Register A7 for D4's per-square labels: the engine's labels of a position and of its
+    colour-swapped mirror (each relative to its own acting player - "ours") are the same at the
+    mirrored square - board for board (``state.mirror``'s order), rank for rank (``y -> H-1-y``).
+    The mate label is compared where both mate searches decided it (each runs under a node budget,
+    and the mirror's search may meet its moves in another order); every other label is exact."""
+    seen = np.zeros(len(SQUARE_LABELS), dtype=np.int64)
+    for label, parity, strings in fens:
+        with Game.from_fen(strings, parity=parity) as g:
+            s = to_position_state(g.expand(square_features="all"))
+            a = g.square_labels()
+        with Game.from_fen([mirror_board_string(t) for t in strings], parity=parity) as g:
+            e = to_position_state(g.expand(square_features="all"))
+            b = g.square_labels()
+        assert a.acting_player == s.acting_player and b.acting_player == 1 - a.acting_player, label
+        w, h = s.width, s.height
+        cell = np.arange(w * h)
+        flip = (h - 1 - cell // w) * w + cell % w
+        mapped = b.labels[_mirror_order(s, e)][:, flip]
+        assert (a.labels[..., :-1] != T5D_LABEL_UNKNOWN).all() and (mapped[..., :-1] != T5D_LABEL_UNKNOWN).all(), label
+        decided = (a.labels != T5D_LABEL_UNKNOWN) & (mapped != T5D_LABEL_UNKNOWN)
+        assert np.array_equal(a.labels[decided], mapped[decided]), label
+        seen += (a.labels == 1).reshape(-1, len(SQUARE_LABELS)).sum(axis=0)
+    # Every label but the mate's is set somewhere in these positions.
+    assert (seen[:-1] > 0).all(), dict(zip(SQUARE_LABELS, seen.tolist(), strict=True))
 
 
 def test_the_canonical_view_of_a_real_position(pairs):

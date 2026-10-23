@@ -685,6 +685,22 @@ void append_moves_of(const Multiverse& multiverse, const RuleOptions& rules, Col
   if (set_source(g, multiverse.timeline(timeline))) board_moves(g);
 }
 
+void append_moves_from(const Multiverse& multiverse, const RuleOptions& rules, int timeline,
+                       int half_turn, const Board& board, int square, MoveList& out,
+                       std::span<const int> inactive_timelines) {
+  if (multiverse.empty() || board.size() != multiverse.board_size() ||
+      !board.size().contains_square(square)) {
+    return;
+  }
+  const Piece piece = board.at(square);
+  if (piece.empty()) return;
+  Gen g = make_gen(nullptr, multiverse, rules, piece.colour(), inactive_timelines, out);
+  g.p = timeline;
+  g.h = half_turn;
+  g.board = &board;
+  any_piece_moves(g, square, piece);
+}
+
 bool is_pseudo_legal(const GameState& state, const Move& move, MoveList& scratch) {
   scratch.clear();
   append_piece_moves(state, move.from_timeline, move.from_square, scratch);

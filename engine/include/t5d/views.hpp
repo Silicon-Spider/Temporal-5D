@@ -1,6 +1,7 @@
 // t5d/views.hpp - the two views a decision state is read from (design spec
-// §6; register B11; build-log spec issue 172): what the expansion's pin and
-// check relations (t5d/expand.hpp) read of each side.
+// §6, §12.4; register B11, D4; build-log spec issue 172): what the expansion's
+// pin and check relations (t5d/expand.hpp) and the per-square labels
+// (t5d/labels.hpp) read of each side.
 //
 // THE TWO VIEWS (spec issue 172). Pieces move only on boards of their own
 // colour (L4, L5), so at a decision state only the acting player's pieces can
