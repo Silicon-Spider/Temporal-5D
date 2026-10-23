@@ -414,3 +414,58 @@ def playable_boards_of(position) -> np.ndarray:
     to move) - the expansion's flag at a turn start."""
     s = position.state
     return s.is_head & (s.side_to_move == s.acting_player)
+
+
+class _ArrivalBoost:
+    """The network, with every non-branching jump's move logit raised by ``boost``: turns that take an
+    arrival (the jump's option on the board it lands on, under ``flat_jumps`` BothBoards) lead the
+    turn generator, so the search visits them."""
+
+    def __init__(self, inner, boost: float = 6.0):
+        self.inner, self.boost = inner, boost
+
+    def __call__(self, positions):
+        from dataclasses import replace as dc_replace
+
+        from t5d.train.targets import is_arrival
+
+        out = []
+        for p, e in zip(positions, self.inner(positions), strict=True):
+            up = np.array([self.boost if is_arrival(m) else 0.0 for m in p.moves], dtype=np.float32)
+            out.append(dc_replace(e, policy_logits=(e.policy_logits + up).astype(np.float32)))
+        return out
+
+
+@requires_engine
+def test_a_visited_arrival_is_marginalised_as_the_live_search_took_it():
+    """Issue 242(a): a non-branching jump landing on a playable board is an option of that board too
+    (BothBoards). With arrivals favoured, flat searches from Two Timelines' start (whose knights jump
+    between the two present boards without branching) visit turns that take one; at each decision the
+    record-derived target is the live children's visits marginalised - the arrival's included - under
+    the unpruned configuration, and the default's per-board pruning keeps the visited arrival."""
+    ev = _ArrivalBoost(NetworkEvaluator(build_model(NET, seed=0).eval(), max_batch=8))
+    cfg = GeneratorConfig(
+        variant="Standard - Two Timelines", split="flat", playouts=24, batch_size=4, cap_turns=2, cap_boards=30, seed=23, root_noise=False
+    )
+    exact = TargetConfig(forced_k=0.0, prune_single_visit=False, deblunder=False, short_term_horizons=NET.short_term_horizons)
+    seen = {"arrival_visits": 0, "kept": 0}
+
+    def check(search, d, position):
+        if not d.full_search:
+            return
+        live = search.children()
+        total = sum(c.visits for c in live)
+        rec = GameRecord(header={"result": {"end": "unknown", "winner": None, "actions": 1}, "search": {}}, decisions=[d])
+        got = {(int(b), int(k)): p for b, k, p in build_targets(rec, exact).flat[0]}
+        dflt = {(int(b), int(k)): p for b, k, p in build_targets(rec, replace(exact, forced_k=2.0, prune_single_visit=True)).flat[0]}
+        for fb in flat_boards(d):
+            for opt in fb.options:
+                takes = [c for c in live if turn_option(turn_moves([c]), fb, d.candidates) == opt]
+                assert got[(fb.board, opt)] == pytest.approx(sum(c.visits for c in takes) / total, abs=1e-12)
+                if opt in fb.arrivals and sum(c.visits for c in takes) > 0:
+                    seen["arrival_visits"] += sum(c.visits for c in takes)
+                    seen["kept"] += int(dflt[(fb.board, opt)] > 0)
+
+    with torch.no_grad():
+        generate_game(ev, cfg, net_cfg=NET, keep_positions=False, on_decision=check)
+    assert seen["arrival_visits"] > 0 and seen["kept"] > 0, seen

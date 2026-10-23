@@ -148,3 +148,49 @@ def test_some_case_leaves_a_board():
     if not MIXED:
         pytest.skip("run with the flat search cases")
     assert any(MIXED)
+
+
+class _Hidden:
+    """A wrapper that names no prior of its own (``policy_source`` reads "normal"): its evaluations
+    still carry theirs."""
+
+    def __init__(self, inner):
+        self.inner = inner
+
+    def __call__(self, positions):
+        return self.inner(positions)
+
+
+@requires_engine
+def test_the_flat_form_refuses_the_optimistic_prior():
+    """D9's optimistic head has no leave logit: under the flat form its move logits would be scored
+    beside the normal head's leave logits, whose offset against them is arbitrary (issue 242(h)) - so
+    ``run_search`` refuses an optimistic evaluator on a flat search, the step driver refuses every
+    optimistic evaluation it is handed (whatever wraps the evaluator, the batch released), and
+    netplay refuses the combination; the ply split still searches with it."""
+    from t5d.engine.evaluator import FLAT_OPTIMISTIC, CStepDriver, serve
+    from t5d.engine.netplay import PlayConfig, main
+
+    cfg = NetConfig(**{**SMALL, "optimistic_policy": True})
+    ev = NetworkEvaluator(build_model(cfg, seed=0).eval(), max_batch=4, policy="optimistic")
+    relations = relation_bits(relations_for(cfg))
+    with Game.variant("Standard - Two Timelines") as game:
+        params = search_params(game.lib, split=T5D_SPLIT_FLAT, seed=5, root_noise=0, expand=(8, "all", relations))
+        with Search(game, params=params) as search, torch.no_grad():
+            with pytest.raises(ValueError, match="flat form"):
+                run_search(search, ev, playouts=8, batch_size=4)
+            driver = CStepDriver(search, playouts=8)
+            with pytest.raises(ValueError, match="flat form") as err:
+                serve(driver, _Hidden(ev), batch_size=4)
+            assert str(err.value) == FLAT_OPTIMISTIC and driver.batch == ()
+            stats, _ = run_search(search, NetworkEvaluator(ev.model, max_batch=4), playouts=8, batch_size=4)
+            assert stats.leaves > 0
+        ply = search_params(game.lib, seed=5, root_noise=0, expand=(8, "all", relations))
+        with Search(game, params=ply) as search, torch.no_grad():
+            run_search(search, ev, playouts=8, batch_size=4)
+            assert sum(c.visits for c in search.children()) > 0
+    PlayConfig(split="ply", mode="match", optimistic=True).validate()
+    with pytest.raises(ValueError, match="flat form"):
+        PlayConfig(split="flat", mode="match", optimistic=True).validate()
+    with pytest.raises(SystemExit):
+        main(["--optimistic", "--mode", "match", "--split", "flat", "--no-replay"])
