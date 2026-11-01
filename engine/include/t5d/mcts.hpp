@@ -55,10 +55,12 @@
 //    - its moves, the non-branching jumps arriving on it (FlatJumps), and
 //    leaving it - at the policy temperature (the root's I19 temperature too);
 //    a turn's score is the sum over the boards of its options'
-//    log-probabilities, and its prior follows from the scores (FlatPrior). A
-//    board with no leave logit (none given, or NaN) gives leaving it
-//    SearchParams::leave_share. Root noise is drawn per board, over its
-//    options, before generation. The generator ends turns itself (D8): the
+//    log-probabilities, and its prior follows from the scores (FlatPrior). The
+//    network gives every board's leave logit (D2's flat head; Python's
+//    NetworkEvaluator, the cached path alike), and so do the built-in
+//    evaluators when asked; a board an evaluator gives none (none given, or
+//    NaN) leaves at SearchParams::leave_share. Root noise is drawn per board,
+//    over its options, before generation. The generator ends turns itself (D8): the
 //    evaluator's submit logit is not read and the C API reports
 //    submit_possible 0. A node whose generator a budget stopped
 //    (generator_nodes, the memory ceiling) has incomplete children and is
@@ -573,7 +575,9 @@ struct SearchParams {
   /// A playable board's "leave it" probability where the evaluator gives no
   /// leave logit for it (Evaluation::board_logits empty, or NaN there): its
   /// moves share the rest in their own proportions (as submit_share stands in
-  /// for D8's submit logit). In (0, 1). Placeholder 0.5.
+  /// for D8's submit logit). A fallback: the network gives every board's (D2's
+  /// flat head), so a flat search it evaluates never reads this. In (0, 1).
+  /// Placeholder 0.5.
   double leave_share = 0.5;
   /// The flat form's k0 is E1's, from the entropy of the turn distribution -
   /// the boards' entropies summed (the boards are independent) - capped here:
@@ -886,10 +890,13 @@ struct Evaluation {
   float moves_left = std::numeric_limits<float>::quiet_NaN();
   /// D2's flat form (register D2's head change): one logit per expansion board
   /// (expansion->board_count(), in its order) - the board's "leave it" logit,
-  /// read at the mover's playable boards beside its moves' logits (NaN there:
-  /// none given for that board - SearchParams::leave_share); empty: none at
-  /// all. Read under the flat form only; checked (its size, no infinity)
-  /// under every arm.
+  /// read at the mover's playable boards beside its moves' logits. The network
+  /// gives every board's (D2's flat head: Python's NetworkEvaluator delivers
+  /// them, the cached path alike), as do the built-in evaluators when the
+  /// request asks (EvalRequest::board_logits); an evaluator with no such head
+  /// gives NaN there - none for that board - or leaves it empty - none at all -
+  /// and those boards leave at SearchParams::leave_share. Read under the flat
+  /// form only; checked (its size, no infinity) under every arm.
   std::vector<float> board_logits;
 };
 
