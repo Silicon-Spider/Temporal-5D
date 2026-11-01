@@ -20,7 +20,13 @@ promotion under `-Wsign-conversion`, an error under `--werror`; MinGW's `std::ui
 `unsigned long long`, so the local builds never saw it. The line came in with A6
 (7bccea6, 2026-10-17), while CI was down. The constant is now a `std::uint64_t`, so the sum
 stays in one type; the identity's value is unchanged bit for bit (the same sum modulo
-2^64), so no MCGS table, cache key or test moves.
+2^64), so no MCGS table, cache key or test moves. With the library building, CI's test build
+showed the same promotion twice more - `engine/tests/test_capi_search.cpp:148` and
+`engine/tests/test_mcts.cpp:2387`, each a `std::uint64_t` cast from a signed value combined
+with an `unsigned long long` literal - and one structured binding taken by value over pairs
+(`test_capi_search.cpp:461`, `-Wrange-loop-construct`, an error in g++ 13 and 14 that MinGW's
+g++ 16 does not raise); each literal is now a `std::uint64_t` and the binding a reference.
+The values the tests compute are unchanged.
 
 Spec: none - a portability fix; no part of the spec describes it.
 
