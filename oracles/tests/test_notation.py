@@ -156,7 +156,13 @@ class RegistryTests(unittest.TestCase):
         # One source, so its replay - how many actions it read - is compared as an implementation's.
         self.assertIn("notation", ORACLE_SOURCES)
         self.assertIn("notation", PRIMARY_SOURCES)
-        self.assertEqual(set(PARSE_ONLY_SOURCES), {pin.id for pin in self.lock.pins.values() if pin.parse_only})
+        # Every parse-only pin is a parse-only source; the other parse-only sources are rules oracles asked in parse
+        # mode (kairos:parse, decision H52), which judge nothing either.
+        parse_pins = {pin.id for pin in self.lock.pins.values() if pin.parse_only}
+        self.assertEqual({name for name in PARSE_ONLY_SOURCES if name in parse_pins}, parse_pins)
+        for name in set(PARSE_ONLY_SOURCES) - parse_pins:
+            self.assertTrue(name.endswith(":parse"), name)
+            self.assertEqual(self.lock.pin(oracle_of(name)).role, "oracle")
 
     def test_every_pin_the_harness_runs_has_a_recipe_and_a_source(self):
         run_by_harness = {pin.id for pin in self.lock.oracles()}

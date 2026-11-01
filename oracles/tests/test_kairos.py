@@ -22,6 +22,8 @@ START = "r*nbqk*bnr*/p*p*p*p*p*p*p*p*/8/8/8/8/P*P*P*P*P*P*P*P*/R*NBQK*BNR*"
 # A record whose move text ends in a parenthesised variation: Kairos's reader, a port of
 # ftxi's, would replay the variation as the main line.
 ENDS_IN_A_VARIATION = b'[Board "Standard"]\n1. (0T1)e2e3 / (0T1)e7e6\n(2. (0T2)d2d3)\n'
+# Kairos's two searches (full mode); its parse mode, kairos:parse, is pending beside them (test_kairos_parse.py).
+SEARCHES = ("kairos", "kairos:naive")
 
 
 def _lines(*events) -> bytes:
@@ -31,8 +33,8 @@ def _lines(*events) -> bytes:
 class PendingTests(unittest.TestCase):
     """Wired - built, observed, tested - and enabled in no tier until its golden files are recorded."""
 
-    def test_its_two_searches_are_pending_sources_of_one_implementation(self):
-        self.assertEqual(PENDING_SOURCES, ("kairos", "kairos:naive"))
+    def test_its_sources_are_pending_sources_of_one_implementation(self):
+        self.assertEqual(PENDING_SOURCES, ("kairos:parse", *SEARCHES))
         self.assertFalse(set(PENDING_SOURCES) & set(ORACLE_SOURCES))
         self.assertFalse(set(PENDING_SOURCES) & set(PRIMARY_SOURCES))
         lock = lockfile.load()
@@ -70,7 +72,7 @@ class AnswersTests(unittest.TestCase):
         self.lock = lockfile.load()
 
     def test_the_hypercuboid_search_gives_no_count_and_the_exhaustive_one_does(self):
-        hypercuboid, naive = (make_source(name, self.lock) for name in PENDING_SOURCES)
+        hypercuboid, naive = (make_source(name, self.lock) for name in SEARCHES)
         self.assertNotIn("legal_actions", hypercuboid.answers)
         self.assertIn("legal_actions", naive.answers)
         for source in (hypercuboid, naive):
@@ -79,7 +81,7 @@ class AnswersTests(unittest.TestCase):
 
     def test_the_signature_names_the_pin_the_search_and_the_code(self):
         options = RunOptions(cap=1000)
-        hypercuboid, naive = (make_source(name, self.lock).signature(options) for name in PENDING_SOURCES)
+        hypercuboid, naive = (make_source(name, self.lock).signature(options) for name in SEARCHES)
         self.assertEqual((hypercuboid["search"], naive["search"]), ("hypercuboid", "naive"))
         # The cap bounds the count, which only the exhaustive search gives.
         self.assertNotIn("cap", hypercuboid)
@@ -178,7 +180,7 @@ class LiveDriverTests(unittest.TestCase):
 
     def test_it_sets_up_and_replays_what_ftxi_recorded_and_ends_in_checkmate(self):
         recorded = golden.load("ftxi").observations["cwmtt/standard"]
-        for source in PENDING_SOURCES:
+        for source in SEARCHES:
             observation = self.observe(source, "cwmtt/standard")
             self.assertEqual((observation.status, observation.actions_accepted), (recorded.status, recorded.actions_accepted))
             self.assertEqual([p.fingerprint for p in observation.positions], [p.fingerprint for p in recorded.positions])
@@ -204,7 +206,7 @@ class LiveDriverTests(unittest.TestCase):
     def test_an_action_that_ignores_a_check_cannot_be_submitted(self):
         recorded = golden.load("ftxi").observations["local/ignores-check"]
         self.assertEqual((recorded.status, recorded.reason), ("rejected", "cannot_submit"))
-        for source in PENDING_SOURCES:
+        for source in SEARCHES:
             observation = self.observe(source, "local/ignores-check")
             self.assertEqual((observation.status, observation.reason, observation.actions_accepted),
                              ("rejected", "cannot_submit", recorded.actions_accepted))
@@ -215,7 +217,7 @@ class LiveDriverTests(unittest.TestCase):
         for record_id in ("local/checkmate", "local/stalemate", "local/stalemate-with-a-past"):
             expected = recorded[record_id].positions[-1].terminal
             self.assertIn(expected, ("checkmate", "stalemate"), record_id)
-            for source in PENDING_SOURCES:
+            for source in SEARCHES:
                 observation = self.observe(source, record_id)
                 self.assertEqual(observation.status, "ok", (source, record_id))
                 self.assertEqual(observation.positions[-1].terminal, expected, (source, record_id))

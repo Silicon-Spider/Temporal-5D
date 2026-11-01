@@ -10,6 +10,28 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-02 - Kairos's parse mode built and pending; how the sign-off run leaves Kairos out, reported before building
+
+H52's "parse mode first", reordered by CHECKPOINT 10: parse mode is prepared for the
+quiet-machine block, and the release tier's sign-off run leaves Kairos out. Built: source
+`kairos:parse` - the driver's `--search parse` replays the record as Kairos's searches do (its
+reader, then its referee, which refuses an action that leaves a royal capturable) and prints what
+Kairos set up and the side to move, with a null for every question. It is a parse-only source
+(`adapters.PARSE_ONLY_SOURCES`; `observations.judges_actions` now recognises one by its source
+name, so Kairos's searches still judge), it vouches for no ruleset, and it is pending
+(`PENDING_SOURCES`) in no tier. Tests: `oracles/tests/test_kairos_parse.py`; `test_kairos.py` and
+`test_notation.py` follow the lists. Not built, and reported before building: as built a source
+can be recorded only once it is in `ORACLE_SOURCES`, and every source there must be in the
+release tier for it to stay full strength - so recording parse mode now would put Kairos in the
+sign-off run. Two designs (issue 574): (P) record a pending source, the tiers untouched until after
+the sign-off - recommended; (D) deferred sources a full-strength tier need not run. Also reported
+first, as CHECKPOINT 10 asks: three rulesets Kairos reads and ftxi does not (Misc - Timeline
+Battleground, Focused - Just Kings, Focused - Just Pawns). The budget lever is documented: Kairos's
+mate comparisons go first if nightly time binds. Documents: `oracles/README.md`, `CONTRIBUTING.md`.
+
+Spec: register H52, H47, H23, H32; §11.0 ("Kairos, the fourth oracle", "Tiered CI") - nothing
+proposed now; issue 574.
+
 ### 2026-11-02 - The two-oracle bar counted by lineage (CHECKPOINT 10), and every oracle's lineage read and declared
 
 The user's ruling on issue 526 (CHECKPOINT 10): ftxi and Kairos are one lineage, and "a

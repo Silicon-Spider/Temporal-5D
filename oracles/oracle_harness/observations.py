@@ -328,10 +328,12 @@ def judges_actions(source: str) -> bool:
     place, legal or not: that it played on says only that it read the move. So
     it contradicts a refusal only where the refusal was a failure to read the
     move text (a soft one), never where another source held the action illegal.
+    The same holds for an oracle asked in parse mode ("kairos:parse"), which is
+    named by its source, not its implementation: Kairos's searches judge.
     """
     from .adapters import PARSE_ONLY_SOURCES, oracle_of  # the adapters import this module: not at the top
 
-    return oracle_of(source) not in PARSE_ONLY_SOURCES
+    return source not in PARSE_ONLY_SOURCES and oracle_of(source) not in PARSE_ONLY_SOURCES
 
 
 def first_placement_divergence(a: Observation, b: Observation) -> int | None:

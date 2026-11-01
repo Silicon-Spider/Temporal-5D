@@ -406,7 +406,11 @@ pushed after every commit, taking main by merge, never rebase (re-check with `gi
   `kairos:naive`) built and smoke-tested - wired, enabled in no tier (issues 524-533,
   edits 362-363). Since CHECKPOINT 10 (issue 526 ruled: one lineage with ftxi): the gate's
   two-oracle count by lineage and every oracle's lineage in PROVENANCE.md - built
-  2026-11-02 (issue 573; the nightly gates what it gated); Kairos's
+  2026-11-02 (issue 573; the nightly gates what it gated); Kairos's parse mode built and
+  pending (`kairos:parse`, issue 574) - recording it before the sign-off needs a reviewed change
+  ((P) record a pending source, recommended; or (D) deferred sources), reported, not built; three
+  rulesets Kairos reads and ftxi does not (Timeline Battleground, Just Kings, Just Pawns) reported
+  first; Kairos's
   parse mode in the quiet-machine block (issue 530), reported first if it answers a ruleset
   ftxi does not; H48's re-recording; the release tier with the engine configured, Kairos
   left out; after it, Kairos's full mode and triage, and the report CHECKPOINT 10 asks for.
@@ -5503,6 +5507,66 @@ superseded or made moot says so; nothing is deleted.
     exactly Standard - Half Reflected (2 lineages) and Standard - Reversed Royalty (3) - the same
     as before. Proposed edit 400 (§11.0's and H26's record of the two links the reading found).
 
+574. **Kairos's parse mode, built and pending; how the release tier's sign-off run leaves
+    Kairos out; the ruleset question CHECKPOINT 10 asks first** (CHECKPOINT 10, points 2-3;
+    register H52, H47, H23, H32; the open item "Rulesets Kairos answers and ftxi does not").
+    **Parse mode, built:** source `kairos:parse` (`--search parse` in the driver): the same
+    replay as Kairos's searches - its reader, then `web::tree::play_action`, so an action
+    that leaves a royal capturable is refused (`cannot_submit`) - what it set up at every
+    position and the side to move, and a null for every question; nothing searched. A
+    parse-only source beside the notation parser (`PARSE_ONLY_SOURCES`): its playing an
+    action is no verdict (`observations.judges_actions` now names a parse-only source by its
+    source name as well as its implementation, so Kairos's searches still judge), and it
+    vouches for no ruleset. Pending (`PENDING_SOURCES = ("kairos:parse", "kairos",
+    "kairos:naive")`), in no tier; its budget when recorded is the release tier's own
+    (600 s; it searches nothing - each record under a second). Tests:
+    `oracles/tests/test_kairos_parse.py`. A source of its own rather than a mode switch on
+    `kairos`, so that each golden file records one thing: parse mode's states and replay,
+    and full mode's answers later in their own files. **The sign-off run cannot leave Kairos
+    out as built, once Kairos is enabled**: a tier is full strength - the only kind that can
+    enable the proof channel - only when it runs every source in `ORACLE_SOURCES`
+    (`Tier.full_strength`), and `gate.toml` is refused unless the recording tier (release)
+    runs every one of them; so a Kairos source in `ORACLE_SOURCES` is in the sign-off run.
+    And as built a source can be recorded only once it is in `ORACLE_SOURCES` (`golden
+    --write --source` takes only those). Two designs, **reported before building** (the
+    coordinator's instruction): **(P), recommended - record a pending source.** `golden --write
+    --source` accepts a pending source; its files go into `oracles/golden/` and `MANIFEST` like
+    any other; `verify` holds a pending source's files, where they exist, to the same static
+    checks (integrity, signature, recordings, every corpus record) so a stale recording fails;
+    `DISAGREEMENTS.md`, the tiers and every gate run go on reading `ORACLE_SOURCES` only. The
+    sign-off release tier is then exactly today's - ftxi, cwmtt, Chess in 5D, their naive
+    searches and the notation parser - nothing for the four changes, and Kairos is enabled
+    after it (moved into `ORACLE_SOURCES`, its recording kept if its signature still holds) with
+    its triage. About 40 lines and their tests. **(D) - deferred sources.** A declared
+    `DEFERRED_SOURCES` (Kairos's, by name) inside `ORACLE_SOURCES`, which `Tier.full_strength`
+    and the recording-tier rule do not require, so the release tier leaves them out and still
+    enables the proof channel while the nightly lists them. Nothing for the four is weakened
+    either, but Kairos would be compared with the engine every night from its enabling, so its
+    parse-mode triage would come before the release tier - which CHECKPOINT 10 puts after it.
+    Either is a reviewed change to what a tier must run; neither is built. **Ready to record
+    once (P) is built:** in the gate worktree, `ORACLE_HARNESS_CACHE` set to the main checkout's
+    cache, Kairos built: `py oracles/harness.py golden --write --repeat 2 --jobs 8 --source
+    kairos:parse` - under a minute (one parse-mode pass over all 41 records took 2.1 s on
+    `dev-r`, three at a time; two recordings, plus the calibration probe's 12-14 s); it writes `kairos-parse.json` and `.cost.json`,
+    `calibration.json` and `MANIFEST`, and leaves `DISAGREEMENTS.md` as it is. **The ruleset
+    question - reported first, as CHECKPOINT 10 asks:** the smoke run (issue 533) already shows
+    three rulesets Kairos reads and ftxi does not: **Misc - Timeline Battleground**
+    (cwmtt/ctp2, 19 positions), **Focused - Just Kings** (cwmtt/JustKings, 4) and **Focused -
+    Just Pawns** (cwmtt/smallTest, 4) - each one record, which ftxi does not read (unsupported:
+    a variant it does not know) and Chess in 5D does not either. The nightly gates none of them
+    today: "only one oracle followed ... (cwmtt)". With Kairos in full mode as ftxi's lineage's
+    vouch beside cwmtt, each record would have two lineages behind it, and Kairos's check
+    verdicts would settle the check that cwmtt cannot give - so each could be gated if the
+    engine agrees with both. In parse mode Kairos vouches for nothing, so the parse-mode
+    recording only confirms the reading (the states it set up, how far it read). This is the
+    register's open item, "whether its full mode precedes the release tier" - for the main
+    loop and the user before going further. **The budget lever** (CHECKPOINT 10, point 4): if
+    nightly time binds, Kairos's mate comparisons go first - they carry no vouch beside ftxi's:
+    the `kairos` source's mate test (`get_mate_type`) is the first cut (a check-only option for
+    the hypercuboid source, built with full mode), before anything else of Kairos's or of any
+    other oracle's. For the main loop: (P) or (D), and whether Kairos's full mode precedes the
+    release tier for the three rulesets.
+
 ## Proposed spec edits
 
 Edits the spec or the register needs, for applying upstream. Each: where, what it
@@ -7123,3 +7187,11 @@ struck through, where nothing of it is left to apply); the others stand as writt
   search a step-for-step adaptation of cwmtt's literate method, and Chess in 5D's 5DFEN reader the
   notation author's, shared with the notation parser. The nightly, Kairos absent: Half Reflected
   and Reversed Royalty, as before.
+- **2026-11-02 - Kairos's parse mode built and pending; the sign-off exclusion reported before
+  building** (`lane/gate`; issue 574). `kairos:parse` - the same replay as Kairos's searches, what it
+  set up and the side to move, no rules answer; parse-only, vouching for nothing; one pass over the
+  corpus in 2.1 s. As built, recording it would put Kairos in the release tier's sign-off run (a
+  recorded source must be in ORACLE_SOURCES, every one of which a full-strength tier runs): (P) record
+  a pending source, recommended, or (D) deferred sources - for the main loop. Reported first, as
+  CHECKPOINT 10 asks: three rulesets Kairos reads and ftxi does not, each one record (cwmtt/ctp2,
+  cwmtt/JustKings, cwmtt/smallTest), today followed by cwmtt alone.
