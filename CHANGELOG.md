@@ -10,6 +10,26 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-01 - Kairos: the brief's questions answered plainly in PROVENANCE.md, and no mate verdict from an exhausted budget, tested
+
+CHECKPOINT 9's brief (received 2026-11-01) lists what PROVENANCE.md must say of Kairos at
+the pinned commit. Its Kairos section now opens with that list, each item answered in a
+sentence: what a perft node is (an action - non-branching moves as a set, branching moves
+in creation order; its hypercuboid perft without the actions that waste a move, its
+exhaustive enumerator in full, as their own lists at cwmtt/JustKings position 3 show); the
+check, mate and stalemate verdicts and **the brief's route, "its JSON command interface or
+5DUCI", stated as not available at the pin** (a library API of its web build; a playing
+protocol), so the driver links the crate; **whether a mate verdict can come from an
+exhausted budget - no, from neither source**; the 5DFEN state export; its 44 variants and
+which of the corpus's it reads; its licence (GPL-3.0, with BSD-2 parts from ftxi). The
+budget answer is tested in `oracles/tests/test_kairos.py`: the driver calls nothing
+budgeted and gives the exhaustive search an unbounded node budget; the pinned
+`get_mate_type_impl` switches interruption off; both sources give ftxi's recorded verdict
+on the corpus's checkmate and stalemates; runs cut short give no verdict where they were cut.
+
+Spec: §11.0 ("Kairos, the fourth oracle"), register H52, H37 - nothing new proposed (edit
+362 covers the route); issue 570.
+
 ### 2026-11-01 - CHECKPOINT 9's brief read in: the NNUE's rows retired, the phase form and refresh inside a turn planned, Kairos's remaining steps, the downloads listed
 
 The user's CHECKPOINT 9 brief reached the main loop on 2026-11-01, after the build had

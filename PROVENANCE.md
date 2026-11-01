@@ -165,9 +165,71 @@ be confirmed at the pinned commit and recorded here before the driver is written
 This is what reading its README, its documents and its source at `8bfea4a`
 (2026-10-23) found - the README's claims checked against the code that makes them.
 
+**The brief's questions, answered at the pin** (CHECKPOINT 9's brief, received
+2026-11-01; the detail follows the list):
+
+- *What a perft node is.* An **action**: the moves of one turn, submitted together -
+  its non-branching moves as a set, its branching moves in the order they create
+  their timelines, so one set with two branching moves is two actions (the gate's
+  definition, `oracles/README.md` "What is compared"). Its **hypercuboid perft**
+  (`core::perft`) counts the actions its hypercuboid search yields - at depth 1;
+  leaves at greater depths - and that search leaves out the actions that waste a
+  move and yields one action per allowed promotion piece: **not** the gate's count.
+  Its **exhaustive enumerator** (`core::naive`) yields every action, one per
+  promoting move: the gate's count. Seen on their own lists at cwmtt/JustKings
+  position 3 (`observe --actions 3`, 2026-11-01): the enumerator lists 27 actions -
+  25 sets of moves, two of them in both orders of their branching moves, exactly
+  cwmtt's list; the hypercuboid search lists 25 - 23 sets, two in both orders - two
+  sets left out as wasting a move.
+- *Check, mate and stalemate verdicts, and the route.* Check:
+  `State::has_phantom_check()`; checkmate and stalemate: `State::get_mate_type()`.
+  **The brief's route - "through its JSON command interface or 5DUCI" - is not
+  available at the pin.** The JSON command interface (`web::api`) is a library API
+  that only the WebAssembly build of its web site calls; no program of the
+  repository serves it. 5DUCI (the `kairos` binary) is a playing protocol -
+  `position`, `go`, `bestmove`, `print` - with no count, check or mate command. So the
+  harness's driver links the pinned crate as a library and calls those functions
+  itself (`docs/BUILD_LOG.md`, issue 527).
+- *Can a mate verdict come from an exhausted budget?* **No, from neither source.**
+  `kairos`: `get_mate_type()` switches interruption off (`interrupt_off()`) and runs
+  its hypercuboid search to the end; the driver passes it no budget and calls nothing
+  budgeted (`has_legal_action`, `interrupt_on`); a run cut at the gate's deadline
+  gives no verdict at the position it was searching - the protocol's horizon, an
+  unknown. `kairos:naive`: a verdict only when its enumeration
+  (`naive_actions_budget`, called with an unbounded node budget) completes with zero
+  actions - it stops early only at the cap, which needs actions found, so zero is a
+  complete enumeration; checkmate when in check, else stalemate. Tested in
+  `oracles/tests/test_kairos.py` (the driver's calls, the pinned `interrupt_off()`,
+  verdicts on the corpus's mates and stalemates, and no verdict from runs cut short).
+- *A state export to fingerprint.* Yes - **5DFEN**: `Multiverse::get_boards(true)`,
+  every board with its timeline, turn, colour and 5DFEN pieces field, unmoved markers
+  included; the harness fingerprints it (decision H30), so no fallback to board and
+  piece counts is needed.
+- *The variants it reads.* Its 44 named variants (`core::variants::VARIANT_NAMES`):
+  Standard; Standard - Turn Zero, Reversed Royalty, Half Reflected, Defended Pawn,
+  Princess, Two Timelines; Simple - No Bishops, No Knights, No Rooks, No Queens,
+  Knights vs. Bishops, Simple Set; Small, Small - Flipped, Centered, Open; Very
+  Small, Very Small - Open; Misc - Timeline Invasion, Timeline Formations, Timeline
+  Tactician, Timeline Strategos, Timeline Battleground, Timeline Skirmish, Timeline
+  Fragments, Timeline Marauders, Excessive, King of Kings, Royal Queen Showdown;
+  Focused - Just Knights, Just Bishops, Just Rooks, Just Queens, Just Pawns, Just
+  Kings, Just Unicorns, Just Dragons, Just Brawns; Checkmate Practice - Knight,
+  Bishop, Rook, Queen, Pawns - and custom 5DFEN set-ups, odd or even, up to 8x8. Of the
+  corpus's variants it refuses only "Misc - Small" (no oracle knows it); it fails to
+  read the records of four more on their move text, not their variant (`docs/BUILD_LOG.md`,
+  issue 533).
+- *Its licence at that commit.* **GPL-3.0**: its `LICENSE` is the GPL version 3 text
+  (GitHub's template wording) and its `Cargo.toml` says `GPL-3.0-only`; its `NOTICE`
+  says parts of its rules and legal-action code are derived from ftxi/5dchess_engine
+  under the BSD 2-Clause licence, whose notice it keeps - GPL-compatible, so the whole
+  is GPL-3.0. Not the brief's stop.
+
+The detail, item by item:
+
 - **What a perft count counts.** `core::perft::perft(state, depth, cap)` counts
-  legal actions - whole turns, each a set of moves submitted together - at
-  `depth` 1, and leaves at greater depths, from the hypercuboid search
+  legal actions - whole turns, the moves submitted together, branching moves in
+  each order counted apart - at `depth` 1, and leaves at greater depths, from the
+  hypercuboid search
   (`HcInfo::build_hc` then `search`). That search leaves out every action that
   both branches and plays a *wasted* move (a non-branching move whose boards all
   stay out of the present, other than a board a branch lands on), because
