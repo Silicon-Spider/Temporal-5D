@@ -11,8 +11,10 @@ variant the engine sets up (``helpers.ENGINE_VARIANTS``), with no change to the 
 * **D4** - "Each mapped reply square's descendant is the reply's square, on constructed turns
   with travel; ambiguous mappings masked | The reply head's move space is exact".
   ``tests/train/test_reply_map.py`` holds the row on constructed turns (a branching jump, two
-  branches into one board) with its independent checker ``_check``: every mapped square's
-  descendant is the reply square it came from (same cell, lineage from the mapped board), the
+  branches into one board) with its checker ``_check`` - written apart from ``reply_map.py``
+  but for its one-line ``board_keys``; the moves compared exactly, the target to a tolerance:
+  every mapped square's descendant is the reply square it came from (same cell, lineage from
+  the mapped board), the
   moving piece stands on that cell of the mapped board, every candidate and played move appears
   mapped exactly when it touches no ambiguous board, and the target is uniform over the played
   moves that survive. Here ``_check`` runs at every decision point of every action of seeded,

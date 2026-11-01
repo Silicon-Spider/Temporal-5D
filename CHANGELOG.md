@@ -10,6 +10,60 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-02 - Done-means audit corrections: REG-C narrowed to C25, rows 5 and 15 short, two section 15.4 verdicts, issue 535's account, the ungated rulesets' barriers
+
+An adversarial verification of the done-means audit ran five checks: REG-C derived again
+independently and then refuted; every green row spot-checked; issue 535 reproduced and
+traced; every ungated ruleset triaged. It found errors. `docs/BUILD_LOG.md`'s audit section,
+issues 533, 535 and 538, and edits 206 and 366 are corrected to it:
+
+- **REG-C: the final list is C25 alone.**
+  - B3 is decided. B2 is the committed row, and the spec's opening withdrew axial as an
+    option. Its trigger 1 has not fired; the audit had said it arguably had.
+  - C18 awaits 6a (section 13.1's 6a arm, section 14.4).
+  - C16 meets the clause. Its build question is answered by the user's standing brief.
+  - C5 and C7 move to awaiting: the pilot run's re-check, then ablation 1.
+  - Issue 538 is rewritten in three parts: (a) C25; (b) wording only - B3, C18, and edit 206,
+    refreshed (eight vocabulary words; B3, B6, C5, C7 and D2 are the class-C rows outside
+    it); (c) C16's undefined trigger, a spec gap. Its M5 citation is replaced by the brief
+    and CHECKPOINT 4's ruling 7.
+  - Edit 366 is rewritten.
+- **Section 15.2:**
+  - rows 5 (C3a) and 15 (I15) are green but short;
+  - row 8 is not all bitwise;
+  - row 11's details are corrected: three F1 positions, not marked slow, with a duplicated
+    pair; seeds 0-1 in three tests;
+  - row 16's checker uses `reply_map.board_keys`, and compares the target to a tolerance;
+  - the short rows are 1, 5, 11, 15 and 16 once the audit's tests merge (on main today: 1,
+    5, 9, 11, 15, 16, 17 and 19);
+  - caveats added.
+- **Section 15.4:**
+  - "Virtual loss always released" is not green while issue 535 is open. Its
+    consistency-under-failure contract also fails for the ply split in a graph.
+  - "Solved bounds never contradict" stays green as tested. Issue 535's false completeness
+    makes a wrong bound possible.
+- **Issue 535 is rewritten:**
+  - the loop dies first at graph = false, k = 312;
+  - graph k = 468 crashes in 3 of 3 runs with the ladder off, and in 2 of 3 with it on;
+  - the cause is an out-of-bounds read, after `SearchRun::record` grows its four tables in
+    separate steps;
+  - further defects: false exhaustion; a partial append in `pull_turns`; a node stranded
+    unreachable by `ensure_child`, in every split's graph;
+  - it is latent but reachable in production, through `T5D_ERR_MEMORY` or `EngineMemoryError`,
+    if a search is reused after the error;
+  - the fix goes to `lane/fix535`.
+- **Clause 1:**
+  - each ungated ruleset's barriers are named: unread, alone, single, and check coverage;
+  - `notation/aivsai` and `notation/1.4` are named;
+  - the three rulesets Kairos answers and ftxi does not - Just Kings, Just Pawns and Timeline
+    Battleground - are reported to the user, as CHECKPOINT 10's point 2 asks.
+- Issue 533 now says four moves, not five.
+- The D4 test's docstring no longer calls its checker independent.
+
+Spec: §15.2, §15.4, §15.5; register B3, B6, C5, C7, C16, C18, C25, D2 and the status
+vocabulary - edits 206 (refreshed) and 366 (rewritten); issues 533, 535, 538. Documents and a
+test docstring only.
+
 ### 2026-11-02 - The done-means audit: section 15.2 row by row, section 15.4 invariant by invariant, the committed-class rows, section 15.5 clause by clause
 
 `docs/BUILD_LOG.md` gains a new section, "Done-means audit (2026-10-24; finished
