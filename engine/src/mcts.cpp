@@ -1038,7 +1038,7 @@ struct Search::Impl {
   // count, so the merges inside an action are kept.
   static std::uint64_t identity(std::uint64_t key, int moves_made) noexcept {
     if (moves_made == 0) return detail::combine(key, 0x7475726E5F737461ull);
-    return detail::combine(key, detail::mix64(0x6D6F7665735F6D61ull + static_cast<std::uint64_t>(moves_made)));
+    return detail::combine(key, detail::mix64(std::uint64_t{0x6D6F7665735F6D61} + static_cast<std::uint64_t>(moves_made)));
   }
 
   void register_node(NodeId id) {
