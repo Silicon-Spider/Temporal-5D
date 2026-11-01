@@ -2558,7 +2558,7 @@ std::vector<std::vector<double>> noise_samples(const GameState& root, double con
     p.root_noise = true;
     p.dirichlet_epsilon = 1.0;
     p.dirichlet_concentration = concentration;
-    p.seed = static_cast<std::uint64_t>(seed) * 0x9E3779B97F4A7C15ull;
+    p.seed = static_cast<std::uint64_t>(seed) * std::uint64_t{0x9E3779B97F4A7C15};
     const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Uniform);
     Search search(root, p);
     search.run(*ev, Limits{1});
