@@ -219,6 +219,26 @@ Spec: §15.4 (the solver's cross-check against df-pn), §11.1 item 2 and registe
 proposed edit 300 (the cross-check's terms as built); §11.4 (above 100 boards) - issue 401
 (the offline run over 6b's roots not made). The proof channel stays off (H23, H41).
 
+### 2026-11-02 - The engine builds on Linux again: one sign-conversion error in the evaluation identity
+
+GitHub Actions runs again (it started no job from 2026-10-17 until the account's billing was
+fixed), and every run on main failed at one line: `engine/src/mcts.cpp:1041`, where the
+evaluation identity added an `unsigned long long` literal to a `std::uint64_t` cast from the
+signed move count. On Linux `std::uint64_t` is `unsigned long`, and g++ 13 and 14 report the
+promotion under `-Wsign-conversion`, an error under `--werror`; MinGW's `std::uint64_t` is
+`unsigned long long`, so the local builds never saw it. The line came in with A6
+(7bccea6, 2026-10-17), while CI was down. The constant is now a `std::uint64_t`, so the sum
+stays in one type; the identity's value is unchanged bit for bit (the same sum modulo
+2^64), so no MCGS table, cache key or test moves. With the library building, CI's test build
+showed the same promotion twice more - `engine/tests/test_capi_search.cpp:148` and
+`engine/tests/test_mcts.cpp:2387`, each a `std::uint64_t` cast from a signed value combined
+with an `unsigned long long` literal - and one structured binding taken by value over pairs
+(`test_capi_search.cpp:461`, `-Wrange-loop-construct`, an error in g++ 13 and 14 that MinGW's
+g++ 16 does not raise); each literal is now a `std::uint64_t` and the binding a reference.
+The values the tests compute are unchanged.
+
+Spec: none - a portability fix; no part of the spec describes it.
+
 ### 2026-11-01 - CHECKPOINT 10 taken in: the build log's plan for the lineage ruling and Kairos's new order
 
 `docs/BUILD_LOG.md` gains a "CHECKPOINT 10" section with the user's ruling on issue 526 and

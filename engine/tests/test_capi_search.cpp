@@ -145,7 +145,7 @@ void value_of(std::uint64_t key, float* out) {
 }
 void wdl_of_key(std::uint64_t key, float* out) {
   for (int k = 0; k < T5D_WDL; ++k) {
-    out[k] = static_cast<float>(1 + mix_key(key ^ (0xC3ull + static_cast<std::uint64_t>(k))) % 8) * 0.125f;
+    out[k] = static_cast<float>(1 + mix_key(key ^ (std::uint64_t{0xC3} + static_cast<std::uint64_t>(k))) % 8) * 0.125f;
   }
 }
 float error_of(std::uint64_t key) { return static_cast<float>(mix_key(key ^ 0xE5ull) % 5) * 0.25f; }
@@ -458,7 +458,7 @@ TEST(capi_search_errors_release_the_batch) {
   // A kind that does not exist; a categorical that is no distribution, or the wrong count.
   refused(T5D_ERR_ARGUMENT, [&] { return deliver(s.get(), l, {}, wdl, values, 7); });
   // Each kind is checked whatever is given: value_kind with no categorical, wdl_kind beside a good one.
-  for (const auto [wdl_kind, value_kind] : {std::pair{T5D_VALUE_PROBABILITIES, 7}, std::pair{-1, T5D_VALUE_LOGITS}}) {
+  for (const auto& [wdl_kind, value_kind] : {std::pair{T5D_VALUE_PROBABILITIES, 7}, std::pair{-1, T5D_VALUE_LOGITS}}) {
     refused(T5D_ERR_ARGUMENT, [&] {
       t5d_evaluations b{};
       b.logits = l.data();
