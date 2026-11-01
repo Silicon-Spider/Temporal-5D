@@ -10,6 +10,29 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-01 - CHECKPOINT 9's brief read in: the NNUE's rows retired, the phase form and refresh inside a turn planned, Kairos's remaining steps, the downloads listed
+
+The user's CHECKPOINT 9 brief reached the main loop on 2026-11-01, after the build had
+stopped at the account's usage limit on 2026-10-24. `docs/BUILD_LOG.md`'s "CHECKPOINT 9"
+section now carries the brief's rulings and what the build does with each: the design
+documents had already reached main as the user's own commits (7ed03a8..74c1ab9, merged in
+765c5b6, identical to the working tree), so no separate commit was made; the register-status
+rows of the retired NNUE (H6-H9, H20, F4; 6d and 6q void) relabelled; rows for G10 and for
+C26/C27 (low priority, in the cached path behind its flag, after each lane's current order;
+the conditioning-offset hook parked with C3, applying C26's rule when built); I7's and M18's
+rows note the harness-side match runner the brief defers, which answers issue 532; Kairos's
+remaining steps in the brief's order (parse mode first, then full mode, triage by cluster,
+upstream drafts, the two-oracle report) with issue 526's interim reading - ftxi and Kairos
+counted as one implementation until the user rules, which can only gate fewer rulesets; and
+the list of what was downloaded under the brief's one approval (Kairos's repository at
+8bfea4a6, Rust 1.99.0's four Windows archives, no crates) and what went beyond it (the
+review's re-fetch of the five pinned submodules into a scratch clone and of Rust's checksum
+files, on 2026-10-24, before the brief arrived). No code changed.
+
+Spec: none edited here. CHECKPOINT 9's rulings as written upstream - register C2, C3a, C20,
+C26, C27, F4, G5, G6, G10, H6-H9, H13, H20, H23, H26, H27, H52, I7, M5, M18; reversals
+30-32 - are the plan's; nothing is proposed.
+
 ### 2026-10-24 - Kairos review fixes: its only reachable refusal stated, the machine's cargo configuration kept out of the build, the toolchain's target checked
 
 The review of the Kairos work (H52) found no rule broken and no check weakened; it found:

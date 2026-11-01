@@ -67,31 +67,94 @@ deciding thread's tree holds no continuation"), yet the five-thread test asserts
 Queued for the engine lane (make the line complete from the certificate, or test
 the documented contract).
 
-### CHECKPOINT 9 - ruled upstream 2026-10-23 (design documents 74c1ab9)
+### CHECKPOINT 9 - design documents updated, not a stop (ruled 2026-10-23; the brief received 2026-11-01)
 
-The user updated the design spec, the register and the architecture document upstream on
-2026-10-23; main took them by merge (765c5b6). The rulings, and what the build does with each:
-- **H52 - Kairos (FirePlank/5d-chess-engine; Rust, GPL-3.0), the fourth oracle and fifth
-  submodule** (Committed; H23, H26, H27 amended): built in `lane/gate` - pinned under
-  `oracles/third_party/`, harness only, nightly and release tiers; its query surface (perft
-  and what it counts, check and mate verdicts, a state export to fingerprint) confirmed at
-  the pinned commit and recorded in PROVENANCE.md before its driver is written; its Rust
-  toolchain fetched by `build --bootstrap` into `oracles/.cache/` like GHC. Its golden files
-  are recorded, and its divergences triaged by cluster, in the quiet-machine block (a
-  recording on a loaded machine is refused, AGENTS.md). The instruction files (CLAUDE.md,
-  AGENTS.md, CONTRIBUTING.md) still speak of three oracles - the user's to edit. Kairos as
-  an external opponent over 5DUCI (I7, M18) belongs to the pilot run and the league, after
-  section 15.5: not built now.
-- **C26 - the phase form** (dense below N\*, cached at or above it, the root deciding for
-  the whole search; N\* a placeholder, 50) and **C27 - refresh and supersession inside a
-  turn** (the ladder's triggers checked only at evaluated nodes; boards superseded mid-turn
-  recomputed when the network next runs) - Committed if C2 adopts the cache, and each a new
-  section 15.2 row: built in the cached path behind the cached configuration, with the rows'
-  tests (`lane/net` after A5, the engine side if the tree form needs it).
-- **H6-H9, H20, F4 - the NNUE retired**: nothing was built; section 15.2's F4 row and section
-  15.3's NNUE row are void; the register rows here relabelled.
-- **G6 - neither GQA nor MLA; full MHA stays. G10 - mixture-of-depths held open**, its
-  trigger A5's verdict (a trained ablation): nothing to build.
+**The documents.** The user's brief asked for the three files in `docs/design/` to be committed
+exactly as they were, in one commit on main ("Design documents: CHECKPOINT 9"), pushed, and
+main merged into each lane (M23). By the time the brief reached the main loop (2026-11-01;
+the build had stopped at the account's usage limit on 2026-10-24), the user had pushed the
+same files to main from GitHub (7ed03a8..74c1ab9, with a progress note in `README.md`); main
+took them by merge (765c5b6), and the working tree's copies were byte for byte those files -
+so no separate "Design documents: CHECKPOINT 9" commit was made: there was nothing left to
+commit. Main has since been merged into `lane/gate` (2e8be67), `lane/net` (3a87fb0) and
+`lane/search` (fast-forwarded to 2e8be67); `lane/engine`'s merge was in progress at the stop
+and is completed with its current task.
+
+**The user's rulings** (the brief, condensed):
+1. MLA: no. GQA stays rejected; full MHA (C4, G6). Nothing to build.
+2. The phase form (C26) and refresh inside a turn (C27) apply only if C2 ever adopts the
+   cache. Low priority, after each lane's current order: in the cached path behind its flag,
+   a mode switch chosen by the search root's board count (N\*, default 50), with section
+   15.2's two new rows; C27 goes into the tree form's work for the cached flag - refresh
+   triggers only at nodes the network evaluates, and a board our submoves supersede mid-turn
+   is recomputed when the network next runs, once per board and epoch. The
+   conditioning-offset hook stays parked with C3; when built, it applies C26's rule to the
+   conditioning root. Plan: `lane/net`, after A5's review fixes (the engine side if the tree
+   form needs it).
+3. The NNUE retired (H6-H9, H20, F4; 6d and 6q void) - never built, so nothing to remove; the
+   register-status rows below relabelled. The material evaluator and the asset map stay.
+4. Mixture-of-depths held open (G10), triggered by A5's verdict. Nothing to build.
+5. Kairos (FirePlank/5d-chess-engine), the fourth oracle (H52) - the gate lane, next, before
+   the release tier, so the sign-off evidence includes it:
+   - **One download approved**: cloning the repository and pinning it as the fifth submodule
+     under the oracle harness, plus the Rust toolchain and the crates its build needs -
+     listed below. Nothing else downloads without asking.
+   - The other oracles' boundary: harness only, never a dependency of the engine's build, CI
+     failing any core import. GPL-3.0: its code enters the engine as ideas only; never cited
+     as a rules source.
+   - Before the driver, what it can answer, confirmed at the pinned commit and recorded in
+     PROVENANCE.md: perft counts and what a node is; check, mate and stalemate verdicts
+     (through its JSON command interface or 5DUCI), and whether a mate verdict can come from
+     an exhausted budget; a state export (5DFEN) to fingerprint - else per-ply board and
+     piece counts, the minimum (section 11.0); the variants it reads; its licence at that
+     commit.
+   - Nightly and release tiers only. Parse mode first, then full mode.
+   - Triage by cluster from the rulebook, check first (H31); known divergences with
+     citations; upstream reports drafted in `docs/checkpoints/upstream/` for the user to
+     file - not filed.
+   - Report: which rulesets now have two oracles (H47) - Standard and each variant in the
+     corpus, Half Reflected, Reversed Royalty and Turn Zero included; the cluster list; the
+     nightly time added.
+   - Stop and report if its licence at the pinned commit is not GPL-3.0, or a disagreement
+     falls in a cluster the rulebook does not settle.
+   - Not now: a harness-side 5DUCI match runner for the pilot run's yardstick and the league
+     (section 12.7) - its design proposed here when the pilot run is scheduled. This answers
+     issue 532.
+
+**Where Kairos stands** (merged, 2e8be67): pinned at 8bfea4a6, GPL-3.0 at the pin (not a
+stop); its query surface recorded in PROVENANCE.md before its driver was written - its JSON
+interface is a library API of its web build and 5DUCI a playing protocol, and neither answers
+the gate's questions, so the harness asks it through a driver of its own linked against the
+pinned crate (issue 527, edit 362); wired as two pending sources, `kairos` and
+`kairos:naive`, in no tier. Still to do, in order: parse mode in the nightly and release
+tiers, recorded on a quiet machine and triaged; then full mode, recorded with H48's
+re-recording; the triage by cluster, check first; the report. **Issue 526, for the user:**
+Kairos is derived in part from ftxi (its NOTICE; its 5dpgn reader ported; its mate test
+translated line for line), where H52 counts it an independent implementation. Until the user
+rules, the gate counts ftxi and Kairos as one implementation for H47's two-oracle bar - the
+strictest of issue 526's readings, which can only gate fewer rulesets, never more - and the
+report gives the rulesets gated under each reading.
+
+**Downloads under the brief's approval, and one beyond it:**
+- Kairos's repository: `git submodule add` from github.com/FirePlank/5d-chess-engine, pinned
+  at 8bfea4a6e8d1cec2cc27cafa387b1bd78c0c94e0 (a 19 MB checkout, 2026-10-23, `lane/gate`),
+  and the same pinned commit fetched again into the main checkout by `harness.py sync` after
+  the merge (2026-10-24).
+- Rust 1.99.0 for x86_64-pc-windows-gnu, from static.rust-lang.org, by `build --bootstrap`
+  into `oracles/.cache/downloads/` (2026-10-23): rustc (103 MB), rust-std (28 MB), cargo
+  (12.5 MB), rust-mingw (5.5 MB), each SHA-256-pinned in `[toolchain.rust]`. The Linux
+  archives' checksums are pinned for CI; nothing for Linux was fetched here.
+- Crates: none - Kairos has no dependencies, and the build runs `--locked --offline`.
+- **Beyond the approval** (2026-10-24, before the brief reached the main loop): the Kairos
+  review fetched Rust 1.99.0's `.sha256` files from static.rust-lang.org to check the pins,
+  and ran `harness.py sync` in a scratch clone of the repository, which fetched all five
+  pinned submodules again from their upstreams (ftxi, cwmtt and the notation specification
+  from GitHub, Chess in 5D from GitLab, Kairos) - 97 MB into the session's scratch
+  directory, nothing into the repository. Since the brief, no agent downloads anything
+  without asking.
+- Separately approved earlier: G9's AMD PyTorch wheels (1.5 GB, ROCm 10.1.0, into
+  `build/venv-rocm` - the user's "Yes, separate venv").
+
 Which of the proposed spec edits the update applied is checked with the write-backs (M4).
 
 ### CHECKPOINT 8 - ruled 2026-10-17 (design documents d5cc8d1)
@@ -1643,9 +1706,10 @@ width (M22)", "The CHECKPOINT 8 figures"). Found on the way: the ruling's premis
 | H3 | built, tested | Node cap with iterative deepening in forcing half-turns; horizon per budget measured (6b) |
 | H4 | built | MVV-LVA, killers, history, continuation history |
 | H5 | built | Nothing speculative; null move and LMR not built |
-| H6 | built (v1 material); NNUE held open | Material count with placeholder 5D piece values (spec issue 56; now register H50), used by the asset map and the material evaluator; the scanner NNUE is held open (CHECKPOINT 4) |
-| H7 | not built (rule) | NNUE training: held open with the NNUE (H6); no training runs |
-| H8, H9, H20, H21 | not built (rule) | Held open / refused |
+| H6 | built (v1 material); the NNUE retired (CHECKPOINT 9) | Material count with placeholder 5D piece values (spec issue 56; now register H50), used by the asset map and the material evaluator - both stay; the scanner NNUE, held open since CHECKPOINT 4, retired at CHECKPOINT 9 - never built, so nothing removed; with it H7-H9, H20 and F4 retired and ablations 6d and 6q void |
+| H7 | retired (CHECKPOINT 9) | NNUE training: retired with the NNUE (H6); never built |
+| H8, H9, H20 | retired (CHECKPOINT 9) | With the NNUE (H6): its threat features (H8 - cross-board stays refused), attention over head-board accumulators (H9), within-scanner correction history (H20); never built |
+| H21 | not built (rule) | Held open / refused |
 | H10 | reduced, built | Rung 1 dropped (6b); rungs 3 and 5 retired, not built (M5); rung 2's promotion side is Guard, its demotion audit the audit lane; rung 4, the asset map, built (E9). The reduced ladder as H14 restates it: Hunt, the asset map and the settling scans under 50 boards - Guard offline (adopted nowhere, 6b″) |
 | H11 | superseded | By Guard (promotion) and the audit lane (demotion audit) |
 | H12 | retired | With the NNUE and the per-node scans |
@@ -1715,6 +1779,7 @@ width (M22)", "The CHECKPOINT 8 figures"). Found on the way: the ruling's premis
 | C10 | not built (rule) | Lazy K/V for boards entering E: deferred with the window (M16) |
 | C3, C3a (rung 1) | built, tested | Root refresh and the travel-triggered, visit-gated rung-1 fork (copy-on-write epochs), behind flags. C3's conditioning-offset training hook is parked with the deferred cached configuration ("Parked", below) |
 | C3a (rungs 2-3), C18, C22 | not built (rule) | Held open (M5 for rungs 2-3) |
+| C26, C27 | not built (planned, low priority) | CHECKPOINT 9 - Committed if C2 adopts the cache: the phase form (C26: dense below N\*, cached with the root refresh at or above it, the search root's board count choosing for the whole search; N\* default 50) and refresh inside a turn (C27: the ladder's triggers only at nodes the network evaluates; a board our submoves supersede mid-turn recomputed when the network next runs, once per board and epoch), each with its new section 15.2 row - in the cached path behind its flag, after each lane's current order (`lane/net`, after A5). The conditioning-offset hook stays parked with C3; when built, it applies C26's rule to the conditioning root |
 | C5, C7 | not built (rule) | The window: killed, provisionally (M16, CHECKPOINT 5); re-checked by the pilot self-play run (M18) |
 | C6 | step 1 done | The \|E\| curve measured (M7); the head-to-head is Ablation 1, halted with the window until the pilot run (M18) |
 | C8 | honoured | C24's add-only rule (and rung 1's) - refreshes are only ever added |
@@ -1747,10 +1812,11 @@ width (M22)", "The CHECKPOINT 8 figures"). Found on the way: the ruling's premis
 | F6 | built, tested | Network: Mish in the trunk FFN (`ffn_activation="mish"`) and in every head's hidden layers - the value head's MLP, the only head with one (CHECKPOINT 8's ruling on issue 204, `lane/net` N-F6heads: no switch - `head_activation` and its GELU removed); 6y's arm, squared ReLU (`"squared_relu"`), in the trunk only, through the dense trunk and the cached path - tested: no head follows it. Outside F6's words, kept as built: the embedding's Δt MLP (GELU) and B12's smolgen (SiLU) - spec issue 221 |
 | F3 | not built (rule) | Refused |
 | G7 | not started | SPSA/SPRT tooling (training-time) |
-| F4 | not built (rule) | The NNUE is held open (H6, CHECKPOINT 4) |
+| F4 | retired (CHECKPOINT 9) | The NNUE v1 spec, retired with the NNUE (H6); never built; section 15.2's NNUE-accumulator row and section 15.3's NNUE-eval row void |
 | G1 | built, tested | BF16 trunk under autocast; FP32 heads and RoPE; the cache stores K/V in the live format (§15.2 row (e)) |
 | G2 | built behind its flag (off), tested; FP8 speed deferred (M19) | 8-bit inference, FP8 before INT8 (gate 6w). `lane/net`, the precision component (2026-10-23): `net/quant.py`, the one FP8 E4M3 definition (G2, G8, C15) - round to nearest even, saturating, NaN kept, checked against all 256 codes and every midpoint; `NetConfig.trunk_quant = "fp8_e4m3"` (off; it replaces the old `fp8_attention`, which raised) fake-quantises the trunk's six projections per block (weights per output channel, inputs per token; `quant.QuantLinear`, an `nn.Linear` with the same `state_dict`) and, with `trunk_quant_attention`, attention's Q, K (after FP32 RoPE) and V per token and head, at the entry of every attention path; the heads, RoPE, embeddings and norms never. Off, the network is the one before, bit for bit (outputs and gradients checked against the tree before the change - ten configurations' outputs, two's gradients; pinned by test). Random weights, F1: the FP8 trunk sits at trunk RMS 2.7-3.2e-2 from the same weights unquantised (MEASUREMENTS). The cache takes the projections-only network (FP8 frozen K/V too) and refuses FP8 attention (C2 deferred) - at construction and, since the review fixes, at every epoch and evaluation, so a network switched in place under it is refused too. Since the review fixes (2026-10-23): a slice holding inf or NaN comes out NaN under either scale rule; float64 input refused (FP32 is the input precision); every attention operand checked operand by operand on all six paths (rounded after FP32 RoPE). Placeholders - format, scale rule, granularity, P, the estimator, the GPU's accumulator: issue 238; edits 183, 184. Not built: the per-board-range probe and the FP8 twin in match play, whose record would name the format (6w's plumbing); FP8 speed and 6w's equal-wall-clock arm need a GPU (M19) |
-| G3, G4, G5, G6 | not built (rule) | Deferred / held open / refused |
+| G3, G4, G5, G6 | not built (rule) | Deferred / held open / refused. CHECKPOINT 9: G5's distilled arm is a smaller main net, never a second evaluator; G6 - neither GQA nor MLA, full MHA stays (C4) |
+| G10 | not built (rule) | Mixture-of-depths, held open (CHECKPOINT 9), its trigger A5's verdict (ablation 1); a rule floor (head boards, legal travel destinations and the registers every layer); dense only |
 | G8 | built behind its flag (off), smoke-tested (`lane/net`, the precision component, 2026-10-23) | QAT prepared, not adopted. `TrainerConfig.qat` (off) and `qat_format = "fp8_e4m3"` (provisional until the inference path pins the format): `train.trainer.apply_qat` switches the trainer's network in place to G2's FP8 trunk (`net/quant.py`, issue 238) - fake quantisation of the six projections per block and attention's operands, straight-through gradients, the heads, RoPE, embeddings and norms untouched, the frozen-K/V format (C15) and the network's quantisation settings kept (tested): QAT's forward is the served format's full pass bit for bit, the frozen K/V rounded as the full pass rounds them (tested). The cache serves the projections-only format with FP8 frozen K/V (tested); with QAT's default, attention quantised, the cache refuses the network (issue 239(a), (i)). The records follow the format (review fixes): the trainer's `net_cfg` is switched with the network, a record's network condition takes the format from the evaluated network and refuses a caller's configuration that contradicts it, and `network_id` folds an 8-bit format in (ids of unquantised networks unchanged) - tested through generate -> steps -> publish -> generate. Smoke-tested: three optimiser steps on synthetic rows, BF16 and FP32, FFN ratios 2 and 12 - losses finite, every quantised weight's gradient dense and within relative L2 distance 0.5 of the unquantised network's (measured at most 0.117, MEASUREMENTS). Written from papers; Monroe's `quantize` option (Lc0's training code) is an idea only (AGENTS.md, H29). When it runs - a fine-tuning stage, if 6w says so - is the pilot run's (issue 239; edit 182) |
 | G9 | built in part; the AMD attempt done (partly) | PyTorch drives the C++ search through the C API (N5, eager, on CPU). FlexAttention runs eagerly through B14's score function (`attn_impl="flex"`, `lane/net`: forward only on CPU). Not built: torch.compile and compiled FlexAttention kernels (GPU time, M19); ONNX/TensorRT export - refused for now (M5). **The bounded AMD attempt** (`lane/gate`, 2026-10-23; MEASUREMENTS "G9's bounded AMD attempt"): AMD's PyTorch for Windows from ROCm 10.1.0 (torch 2.14.0+rocm10.1.0, Python 3.14.7, a separate venv under `build/`; Adrenalin 26.10.1 as found; no system change) runs the F1 network eagerly on the RX 9070 XT (gfx1201) - FP32 within 3.3e-6 of the CPU, BF16 inside G1's bounds, `attn_impl="flex"` eagerly, FP8 E4M3 and `_scaled_mm` - and one search through the C API (`run_search`, `NetworkEvaluator(device="cuda")`: 11-17 playouts/s from Standard's start). torch.compile and compiled FlexAttention do not run: no Triton on Windows from AMD (`TritonMissing`; issue 520). Eager rates are overhead-bound (0.5-7 evals/s at 44 boards, 0.06-0.23 at 240; issue 522); the kernel's 45/33-wide heads miss AMD's fused attention (issue 521). Figures AMD-labelled, eager, indicative; edits 360, 361; the probe `python/tools/g9_amd_probe.py` |
 | I1 | not started (rule) | Self-play training: no training runs in the untrained build (the brief); the pilot run (M18) comes after §15.5 |
@@ -1759,7 +1825,7 @@ width (M22)", "The CHECKPOINT 8 figures"). Found on the way: the ruling's premis
 | I4 | principle | Confidence-family mechanisms never scale down the confidence-independent layer - followed: C24 is add-only; E8 (not started) to follow |
 | I5 | built, tested (M21 commit 3, `lane/net`) | PCR in the training generator (`train/selfplay.py`, `PCRConfig`): each decision full with probability 0.25 (KataGo's), drawn from the game's seed and the decision's index, else cheap at the full cap / 8 without root noise (placeholders, issue 236); only full searches emit policy, soft-policy, categorical and effort targets (`train/targets.py`). Difficulty-biasing only as a mixture: `difficulty_mix` < 1 enforced, > 0 not built (the root's effort output is not delivered - issue 236). `engine/netplay.py` and `t5d-play` unchanged (no PCR: they write no training records) |
 | I6 | built behind its arm, tested (M21 commit 3, `lane/net`) | A prototype: its epistemic triggers as 6u's sampler arms (`train/sampler.py`): the persistent bucket (`BucketTracker`: a (board-count range, phase) bucket's realised error above a threshold at each of the last checkpoints boosts its rows) and raw variance; its realised-error arm superseded by I12 (not an arm). Constants placeholders (issue 236) |
-| I7, I8 | not built (rule) | M5 |
+| I7, I8 | not built (rule) | M5. CHECKPOINT 9: Kairos over 5DUCI among I7's heterogeneous attackers, positions only - through a harness-side match runner, not now; its design proposed when the pilot run is scheduled (issue 532) |
 | I10 | parked (monitoring); 6m's switch built, tested | Calibration monitoring measures nothing on random weights - the pilot run. The error head it watches is D3's (net lane). 6m's switch (`SearchParams::uncertainty_source`, categorical by default) built in engine ABI round 2a (issue 149); since the round's review fixes a delivery without the chosen signal is refused while E2, E3 or E5's term reads it (no arm runs silently on variance 0), counted where nothing does |
 | I9 | built, tested | The ruleset ID in every state and store key (H18): the Zobrist key, the solved and disproof stores, the evaluation cache |
 | I11 | built, tested | Self-play's turn cap from the state (and t5d-play's 300-board cap), scored as a draw, its frequency logged (issue 88) |
@@ -1780,7 +1846,7 @@ width (M22)", "The CHECKPOINT 8 figures"). Found on the way: the ruling's premis
 | M14 | superseded | By v3 (H1): its df-pn and incremental attack maps carried into Guard and Hunt (E9); the per-leaf estimate channel removed |
 | M15 | measured - STOP | 6b′ on a quiet machine: (A) 77.4% / 40.7% / 23.7% / 0.0%; (B) fits in no range; (C) df-pn 408 against brute force 400 under 50 boards - STOP, a design review |
 | M16 | applied, confirmed | M7's readings (corrected at CHECKPOINT 5): time-share multiplier, human-game weighting, the per-phase rule under 50 boards with the band resolving to off - the window is killed, provisionally |
-| M18 | not started (rule) | A pilot self-play run before serious self-play re-checks the window and the other compute-weighted decisions - after §15.5, not in the untrained build |
+| M18 | not started (rule) | A pilot self-play run before serious self-play re-checks the window and the other compute-weighted decisions - after §15.5, not in the untrained build. CHECKPOINT 9: it also plays Kairos as an external yardstick (H52, through the harness-side match runner, issue 532), and its compute distribution by board count sets N\* if the cache is adopted (C26) |
 | M19 | applied | No GPU: counted FLOPs and CPU-labelled wall times (`dev-r`) are the untrained build's write-back; the GPU figures - FA4-class evaluations/s, the leaf-batching gain, FP8, the block-sparse and varlen kernels, the Phase-3 movegen re-check - named as deferred, measured on rented NVIDIA time before the pilot run; the bounded AMD attempt is G9's - done 2026-10-23: eager figures only, AMD-labelled (MEASUREMENTS); no compiled kernel runs on Windows, so every deferred row stays deferred (issue 522, edit 361) |
 | M20 | built, tested; the reply prototype parked with the heads (after engine round 2) | The placeholder dispositions (issue 121), each the code's default and its disposed-of arms removed where no named ablation needs them (`lane/net`; A7 is a component of its own). N-M20: the promotion offset in the policy (D1; `policy_promotion` gone); position-free per-board registers and global registers on every pair (B8; `board_register_spatial`, `global_register_pairs` and the learned coordinates gone); aux pooling from squares - moves-left, effort - with D3's value-type heads (WDL and the short value too) pooled from the global registers by mean (`aux_global_pool` gone; issue 223); moves-left in turns (issue 224); the acting player on the global registers (`acting_player_input` and `all_tokens` gone; with no global registers on the board tokens, issue 225; `cache.board_ident`'s `acting` keying kept for A7, issue 303); the submit logit from the pooled registers (D8; `submit_register` gone). Earlier: B6 removed (B15); B16's status biases with intrinsic frozen features (N-B16 - its `frozen_features = "current"` test arm stays, as N-B16 left it: no named ablation needs it, and whether to remove it is the main loop's call - the N-F6heads-M20 review); both supersession readings (C20; docs relabelled). Relabelled, not changed: B5's details (ablation 2), 16a-g (B9's "v1 as built", ablation 6a), the per-square labels (6j) - now v1 values, not placeholders; B7 has no code. Not here: the reply head's reinstatement as a prototype (D4) - the heads' rebuild after engine round 2; until then it is always built, as at N1. Not on M20's list: D8's readout form (`submit_head`, issue 109) |
 | M21 | built, smoke-tested (`lane/net`, commits 1-4 and the review fixes; the QAT hook with the precision component, 2026-10-23; D4's labels from engine ABI round 3) | The training loop, written and smoke-tested, no training (§15.5 does not require it; the pilot run does). Built: I15's records and the generator (commit 1, issue 234); the target builder - I2's pruning with exclusion and provenance, D3's and D4's targets, I13, I14's refused hook, the losses' masks - with §15.2's I15 round trip (commit 2, issue 235); PCR (I5) with I20 behind its flag, I18, I19's schedules, I12's sampler with 6u's and I6's arms, I16's window, I17's SWA (commit 3, issue 236); the loop (`train/trainer.py`, commit 4, issue 237): records -> sampler -> window -> targets -> losses -> at most three optimiser steps -> SWA's published network. Since the review fixes (issue 237(a), the user's rule to the letter): optimiser steps on synthetic rows only, at most three per model whatever the trainer (the count travels with the model and its published copy); self-play records' rows - their inputs rebuilt under the trainer's own register counts, relations and window - go through the loop forward only (losses computed, no step); the miniature generate -> rows -> publish -> generate loop takes its steps on synthetic rows, the published network's SWA snapshot count reaching the next records; the losses falling on a fixed synthetic batch. The QAT hook (G8): built behind its flag, off, on G2's provisional FP8 E4M3 (the user's brief; issue 239, edit 182). D2's flat form (2026-10-23; issues 241-243): its per-board policy target (the turns' visits marginalised, then each board's options pruned - since the review fixes; per turn the arm), its loss (training the flat head's leave logit; a batch with flat rows refused without its weight), its records and self-play; three smoke steps on synthetic flat rows (`synthetic_record(flat=True)`) - the leave head moved, every loss finite. Not built: C3's conditioning-offset training - parked with the cached configuration. D4's per-square labels come from the engine's generator since engine ABI round 3 (`lane/engine`): re-derived from each record's replayed states (`replay_positions(square_labels=True)`, `TargetConfig.square_labels`, `square_mate_nodes`), never stored - only a label a mate search's budget left undecided is masked (issue 175) |
@@ -5237,6 +5303,11 @@ superseded or made moot says so; nothing is deleted.
     run the engine; or a ruled exception for a playing opponent, which reads no rules from
     it), and whether its answers as a player may ever reach training data (H52 says
     "positions only, never targets"). Edit 363.
+    *Answered by the user's CHECKPOINT 9 brief (received 2026-11-01): "Not now: a
+    harness-side 5DUCI match runner for the pilot run's yardstick and the league (§12.7).
+    Propose its design in the build log when the pilot run is scheduled." The opponent role
+    lives in the harness - a match runner under `oracles/` that runs both players - and the
+    engine never calls Kairos; edit 363 is read against that.*
 
 533. **What Kairos answers on the corpus, at a glance - a smoke run, not a recording**
     (register H52; no spec section). 2026-10-23, `dev-r`, loaded by the other lanes; both
