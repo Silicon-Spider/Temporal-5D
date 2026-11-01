@@ -371,6 +371,7 @@ TEST(mcts_solver_proves_a_mate_in_one_and_plays_it) {
         const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Uniform);
         SearchParams p = fast();
         p.proof_channel = true;  // the in-tree solver under test (off by rule, H41)
+        p.hunt = p.settling = false;  // the ladder's proofs (E10) are test_ladder.cpp's
         p.split = split;
         p.graph = graph;
         Search search(start, p);
@@ -422,6 +423,7 @@ TEST(mcts_solver_proves_a_draw_when_every_child_is_drawn) {
     const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Random, 5);
     SearchParams p = fast();
     p.proof_channel = true;  // the in-tree solver under test (off by rule, H41)
+    p.hunt = p.settling = false;  // the ladder's proofs (E10) are test_ladder.cpp's
     p.split = split;
     Search search(s, p);
     search.run(*ev, Limits{200});
@@ -442,6 +444,7 @@ TEST(mcts_solver_proves_a_loss_when_every_child_is_lost) {
       const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Uniform);
       SearchParams p = fast();
       p.proof_channel = true;  // the in-tree solver under test (off by rule, H41)
+      p.hunt = p.settling = false;  // the ladder's proofs (E10) are test_ladder.cpp's
       p.split = split;
       p.graph = graph;
       Search search(s, p);
@@ -588,6 +591,7 @@ TEST(mcts_solver_agrees_with_the_brute_force_game_tree_under_both_q4_readings) {
       for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::Flat}) {
         SearchParams p = fast();
         p.proof_channel = true;  // the in-tree solver under test (off by rule, H41)
+        p.hunt = p.settling = false;  // the ladder's proofs (E10) are test_ladder.cpp's
         p.split = split;
         p.legality = LegalityOptions::exact();
         const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Uniform);
@@ -630,6 +634,7 @@ TEST(mcts_solver_bounds_never_contradict_in_play) {
         const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Material);
         SearchParams sp = params_of(c);
         sp.proof_channel = true;
+        sp.hunt = sp.settling = false;  // the ladder's proofs (E10) are test_ladder.cpp's
         Search search(s, sp);
         search.run(*ev, Limits{60});
         CHECK_NOTHROW(search.check_invariants());
@@ -679,6 +684,8 @@ std::optional<SolverClaim> solver_against_dfpn(const GameState& s, const t5d_tes
                                                const LegalityOptions& legality = LegalityOptions::exact()) {
   SearchParams p = fast();
   p.proof_channel = true;  // the in-tree solver under test (off by rule, H41)
+  p.hunt = p.settling = false;  // the ladder's proofs (E10) are test_ladder.cpp's
+  p.asset_map = false;          // ... and the search MT-01 measured (E10's boosts off)
   p.split = arm.split;
   p.graph = arm.graph;
   p.legality = legality;
@@ -1442,6 +1449,7 @@ TEST(mcts_unknown_moves_are_kept_flagged_verified_and_pruned) {
     SearchParams p = fast();
     p.graph = graph;
     p.widening = false;  // every child selectable at once: the unknown ones get picked
+    p.asset_map = false;  // the priors the evaluator's (steering would starve the unknown edges)
     p.legality = LegalityOptions::budgeted(0, 0);
     p.verify_legality = LegalityOptions::exact();
     const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Uniform);
@@ -1489,6 +1497,7 @@ TEST(mcts_an_unknown_edge_proves_nothing_until_verified) {
     const bool verify = mode != 0;
     SearchParams p = fast();
     p.proof_channel = true;  // the in-tree solver under test (off by rule, H41)
+    p.hunt = p.settling = false;  // the ladder's proofs (E10) are test_ladder.cpp's
     p.widening = false;
     p.legality = LegalityOptions::budgeted(0, 0);
     p.verify_unknown = verify;
@@ -1628,6 +1637,7 @@ TEST(mcts_flat_a_stopped_generator_is_never_proven_lost) {
   SearchParams p = fast();
   p.split = TurnSplit::Flat;
   p.proof_channel = true;  // the in-tree solver under test (off by rule, H41)
+  p.hunt = p.settling = false;  // the ladder's proofs (E10) are test_ladder.cpp's
   p.flat_fallback = 0;     // the generator alone (the fallback's listing is tested below)
   {
     struct Flat : TurnScorer {
@@ -2125,6 +2135,7 @@ TEST(mcts_flat_under_q3_children_are_complete_only_when_every_successor_is_there
     p.flat_unit = arm.unit;
     p.widening = false;
     p.proof_channel = true;
+    p.hunt = p.settling = false;  // the ladder's proofs (E10) are test_ladder.cpp's
     if (arm.fallback) p.generator_nodes = 3;
     const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Uniform);
     Search search(s, p);
@@ -2252,6 +2263,7 @@ TEST(mcts_board_move_dead_ends_are_pruned_not_scored) {
   // a dead end, pruned (§8.2), never backed up as a loss.
   SearchParams p = fast();
   p.proof_channel = true;  // the in-tree solver under test (off by rule, H41)
+  p.hunt = p.settling = false;  // the ladder's proofs (E10) are test_ladder.cpp's
   p.legal_moves_only = false;
   p.widening = false;
   const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Uniform);
@@ -3201,6 +3213,7 @@ TEST(mcts_graph_never_prunes_a_mating_submission_for_a_dead_end_elsewhere) {
         SearchParams p = fast();
         p.graph = graph;
         p.proof_channel = true;
+        p.hunt = p.settling = false;  // the ladder's proofs (E10) are test_ladder.cpp's
         p.legal_moves_only = false;  // the pseudo-legal seam: B's move is offered, its child a dead end
         Search search(m.root, p);
         Steer steer(kMeetingLines, kLate, order);
@@ -3556,6 +3569,7 @@ TEST(mcts_graph_dead_ends_have_no_legal_completion) {
       SearchParams p = fast();
       p.graph = graph;
       p.proof_channel = true;
+      p.hunt = p.settling = false;  // the ladder's proofs (E10) are test_ladder.cpp's
       p.legality = LegalityOptions::budgeted(0, 0);
       p.verify_legality = LegalityOptions::budgeted(0, 0);
       const std::unique_ptr<Evaluator> ev = make_evaluator(kind, 3);
@@ -3603,6 +3617,7 @@ TEST(mcts_graph_invariants_hold_in_random_searches) {
         SearchParams p = fast();
         p.graph = true;
         p.proof_channel = true;
+        p.hunt = p.settling = false;  // the ladder's proofs (E10) are test_ladder.cpp's
         p.legal_moves_only = !seam;
         p.legality = i % 2 == 0 ? LegalityOptions::budgeted(0, 0) : LegalityOptions::exact();
         p.turn_cap.boards = static_cast<int>(positions[i].multiverse().board_count()) + 3;
@@ -4365,6 +4380,7 @@ TEST(mcts_a_solved_child_is_visited_only_up_to_the_threshold) {
   REQUIRE(verdict_of(t) == Outcome::Stalemate);
   SearchParams p = fast();
   p.proof_channel = true;
+  p.hunt = p.settling = false;  // the ladder's proofs (E10) are test_ladder.cpp's
   p.synchronous = true;
   p.widening = false;
   p.turn_cap.turns = 1;  // nothing past Black's reply proven: the root stays open
@@ -4393,6 +4409,7 @@ TEST(mcts_d3_proven_stuck_and_dead_end_visits_back_up_their_draw) {
   for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::Flat}) {
     SearchParams p = fast();
     p.proof_channel = true;  // the in-tree solver under test (off by rule, H41)
+    p.hunt = p.settling = false;  // the ladder's proofs (E10) are test_ladder.cpp's
     p.split = split;
     const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
     Search won(mate_in_one(), p);
@@ -4425,10 +4442,11 @@ TEST(mcts_d3_proven_stuck_and_dead_end_visits_back_up_their_draw) {
     const Move qb3 = t5d_test::play(t, "(0T1)Qd1(0T1)b3");
     SearchParams p = fast();
     p.proof_channel = true;
+    p.hunt = p.settling = false;  // the ladder's proofs (E10) are test_ladder.cpp's
     p.synchronous = true;
     p.widening = false;
     p.turn_cap.turns = 1;
-    const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
+      const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
     Search search(s, p);
     search.run(*uniform, Limits{3000});
     bool found = false;

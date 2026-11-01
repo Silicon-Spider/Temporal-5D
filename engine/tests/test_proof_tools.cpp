@@ -188,10 +188,12 @@ TEST(proof_records_exe_lines_replay_through_the_gate_to_their_mates) {
   const fs::path err = dir / "stderr.txt";
   // A game the engine played from a named variant's start (t5d-play): its
   // mid-game roots' records are the whole game from the start, then the line.
+  // E10's ladder off (its asynchronous jobs would make the game depend on
+  // timing): the game this test's counts were taken on, move for move.
   const fs::path played = dir / "played.5dpgn";
   REQUIRE(run(T5D_PLAY_EXE,
               {"--variant", "Very Small - Open", "--evaluator", "material", "--playouts", "32", "--cap-turns", "14",
-               "--seed", "2"},
+               "--seed", "2", "--no-hunt", "--no-settling", "--no-assets"},
               {}, played, err) == 0);
   std::size_t named = 0;
   std::size_t records = 0;

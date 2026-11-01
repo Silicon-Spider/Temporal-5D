@@ -15,7 +15,9 @@
 // AT EACH ROOT, for each D2 arm asked (--split, default all three: the ply
 // split, the tree form, the flat form), the search runs with its proof
 // channel ON - offline: nothing is exported, no store exists (H23, H41) -
-// under exact legality, the uniform evaluator, a playout budget; then every
+// under exact legality, the uniform evaluator, a playout budget, E10's ladder
+// off (Hunt, the settling scans and the asset map: their proofs are not the
+// solver's); then every
 // solved turn start's claim (Win(k), Loss(k), Draw, derived from the solved
 // subtree) is compared with df-pn in its literal class (one thread, a node
 // budget: deterministic), and every df-pn proof certified by E4 alone
@@ -87,7 +89,7 @@ struct Options {
       "  --rules ENCODING           the ruleset (RuleOptions::encode; default 0, the engine's)\n"
       "  --no-moves-after-shift     a diagnostic: Q4's Guide-literal reading\n"
       "  --every K (1)  --max-roots N  --min-boards N  --max-boards N\n"
-      " the search (the proof channel on, exact legality, the uniform evaluator)\n"
+      " the search (the proof channel on, exact legality, the uniform evaluator, the ladder off)\n"
       "  --split ply|tree|flat      a D2 arm (repeatable; default all three)\n"
       "  --playouts N (400)         each search's playouts\n"
       "  --mate-nodes N (2000000)   E4's budget at each turn start the search meets\n"
@@ -223,7 +225,7 @@ int main(int argc, char** argv) {
   const std::string legality =
       o.legality_nodes == 0 ? std::string("exact") : "exact within " + std::to_string(o.legality_nodes) + " nodes";
   std::printf(" playouts=%llu mate_nodes=%llu evaluator=uniform legality=%s proof_channel=on(offline, no store) "
-              "dfpn=literal,1 thread,nodes=%llu,max_depth=%d,draw_depth=%d certify=%s\n",
+              "ladder=off dfpn=literal,1 thread,nodes=%llu,max_depth=%d,draw_depth=%d certify=%s\n",
               static_cast<unsigned long long>(o.playouts), static_cast<unsigned long long>(o.mate_nodes), legality.c_str(),
               static_cast<unsigned long long>(o.dfpn.nodes), o.dfpn.max_depth, o.dfpn.draw_depth,
               o.dfpn.certify ? "E4" : "off");
@@ -262,6 +264,13 @@ int main(int argc, char** argv) {
       t5d::mcts::SearchParams p;
       p.split = split;
       p.proof_channel = true;  // offline, the tool's own search: no store (H23, H41)
+      // E10's ladder off. The solver's own proofs are what is checked: the
+      // ladder's (Hunt's mates, the settling scans' verdicts) would enter the
+      // tree as injected proofs, which no solved subtree supports; and the
+      // asset map's boosts would change the searches (the search as built
+      // before E10, which the tool's figures were taken with).
+      p.hunt = p.settling = false;
+      p.asset_map = false;
       p.legality = o.legality_nodes == 0 ? t5d::LegalityOptions::exact() : t5d::LegalityOptions::nodes(o.legality_nodes);
       p.verify_legality = p.legality;
       p.mate_nodes = o.mate_nodes;
