@@ -509,12 +509,31 @@ def pending_golden_findings(lock: Lock, cfg: config.GateConfig, records: list[Re
     into the snapshot a tier compares with or DISAGREEMENTS.md is rendered from. A stale or incomplete one is a finding,
     as an enabled source's would be: re-record it (golden --write --source <it>).
     """
-    pending = snapshot.recorded_pending(frozen.manifest)
+    pending = snapshot.recorded_pending(frozen.manifest, frozen.calibration)
     names = list(pending.golden) + [name for name in pending.problems if name not in pending.golden]
     if not names:
         return []
     sources = [make_source(name, lock) for name in names]
-    return golden.verify_static(sources, lambda source: recording_options(cfg, source), records, pending)
+    findings = golden.verify_static(sources, lambda source: recording_options(cfg, source), records, pending)
+    # Its costs are read against the probe timed with it (golden.Costs.on_reference): that probe must be there, and be
+    # the one gate.toml [calibration] names, timed with the current code - as calibration.json is held to.
+    spec = cfg.calibration
+    current = make_source(spec.source, lock).signature(RunOptions(cap=cfg.cap))
+    for name in names:
+        costs = pending.costs.get(name)
+        if costs is None:
+            continue  # verify_static has said why
+        probe = costs.calibration
+        if probe is None:
+            findings.append(Finding("golden-stale", f"{golden.cost_path(name).name}: a pending source's recording "
+                                                    "carries the calibration probe timed with it, and this one carries "
+                                                    f"none - re-record it: golden --write --source {name}"))
+        elif (probe.source, probe.record, probe.positions) != (spec.source, spec.record, spec.positions) \
+                or probe.signature != current:
+            findings.append(Finding("golden-stale", f"{golden.cost_path(name).name}: its calibration probe was timed "
+                                                    "with another probe, or other code, than gate.toml [calibration] "
+                                                    f"names - re-record it: golden --write --source {name}"))
+    return findings
 
 
 PROOF_SECTION = "required sets of a tier that can enable the proof channel"
@@ -1318,8 +1337,17 @@ def write_golden(*, only_sources: list[str] | None = None, jobs: int | None = No
         return [Finding("golden-integrity", str(error))]
     probe_source = make_source(cfg.calibration.source, lock)
     rewritten = {path.name for source in sources for path in (golden.golden_path(source.name), golden.cost_path(source.name))}
+    # calibration.json is the enabled sources' reference: re-timed only by a recording of one of them. A recording that
+    # names only pending sources leaves it - and every enabled source's file - untouched, and carries the probe timed
+    # with it in each pending cost file instead (golden.Costs.calibration).
+    enabled = [source for source in sources if source.name in ORACLE_SOURCES]
+    pending = [source for source in sources if source.name not in ORACLE_SOURCES]
     if probe_source.available() is None:
-        rewritten.add(golden.CALIBRATION_FILE)
+        if enabled:
+            rewritten.add(golden.CALIBRATION_FILE)
+    elif pending:
+        return [Finding("source-unavailable", f"{probe_source.name}: {probe_source.available()} - a pending source's "
+                                              "recording carries the calibration probe timed with it")]
     kept = [path for path in integrity.recorded_files() if path.name not in rewritten]
     if kept:
         if manifest is None:
@@ -1338,7 +1366,7 @@ def write_golden(*, only_sources: list[str] | None = None, jobs: int | None = No
     previous = {source.name: golden.read_previous(source.name) for source in sources}
     before = {source.name: golden.signature(source, options_for(source)) for source in sources}
     calibration = None
-    if golden.CALIBRATION_FILE in rewritten:
+    if golden.CALIBRATION_FILE in rewritten or pending:
         log("timing the calibration probe on this machine")
         calibration = _measure_probe(lock, cfg, records, log)
         if calibration is None:
@@ -1373,13 +1401,15 @@ def write_golden(*, only_sources: list[str] | None = None, jobs: int | None = No
     paths.GOLDEN_DIR.mkdir(parents=True, exist_ok=True)
     hashes = {path.name: manifest[path.name] for path in kept} if kept else {}
     written: dict[Path, str] = {}
+    timed = dataclasses.replace(calibration, measured=time.strftime("%Y-%m-%dT%H:%M:%S%z")) if calibration else None
     for source in sources:
         recorded = {record.id: merged[(source.name, record.id)] for record in records}
         signed = before[source.name]
         written[golden.golden_path(source.name)] = golden.dump(source.name, signed, records, recorded, recordings=repeat)
-        written[golden.cost_path(source.name)] = golden.dump_costs(source.name, signed, records, recorded,
-                                                                    recordings=repeat)
-    if calibration is not None:
+        written[golden.cost_path(source.name)] = golden.dump_costs(
+            source.name, signed, records, recorded, recordings=repeat,
+            calibration=timed if source.name not in ORACLE_SOURCES else None)
+    if calibration is not None and golden.CALIBRATION_FILE in rewritten:
         written[golden.calibration_path()] = golden.dump_calibration(calibration)
     # The answers first, then the hashes that vouch for them: an interrupted write
     # leaves files MANIFEST does not match, which verify reports.
@@ -1389,7 +1419,9 @@ def write_golden(*, only_sources: list[str] | None = None, jobs: int | None = No
         log(f"wrote {_shown(path)}")
     integrity.write_manifest(hashes)
     log(f"wrote {_shown(integrity.manifest_path())}")
-    render_disagreements(log=log)
+    if enabled:
+        # DISAGREEMENTS.md is rendered from the enabled sources' files alone: a pending recording does not touch it.
+        render_disagreements(log=log)
     lost = [line for source in sources if previous[source.name] is not None
             for line in stability.losses(source.name, previous[source.name],
                                          {record.id: merged[(source.name, record.id)] for record in records})]

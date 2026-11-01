@@ -552,7 +552,11 @@ tier's sign-off run) may be recorded too, but only when named (`golden --write
 --source <it>`): its golden and cost files sit beside the others under `MANIFEST`, and
 `verify` holds them to the same checks, apart from the enabled sources' - nothing
 else reads them until the source is enabled ("Kairos, wired and not yet enabled",
-above).
+above). A recording that names only pending sources leaves `calibration.json` - the
+enabled sources' reference, re-timed only by a recording of one of them - and every
+enabled source's files untouched: it carries the calibration probe timed with it,
+the machine and the time, in its own cost file, and its costs are read on
+`calibration.json`'s time base (scaled by the two probes' ratio).
 
 ### What the disagreements are, at the current pins
 

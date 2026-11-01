@@ -1762,7 +1762,7 @@ width (M22)", "The CHECKPOINT 8 figures"). Found on the way: the ruling's premis
 | H45 | not built (rule) | The adversarial league (M5) |
 | H46 | built, tested | Q2 (provisional): initial timelines count as created by neither player - a variant's set-up reads every timeline as initial (rulebook R10) |
 | H47 | built, tested | Tiered CI reading (Q-A at CHECKPOINT 6, amended at CHECKPOINT 8; spec issues 122-124 ruled, built 2026-10-17). **Two oracles to gate a ruleset**: every record of a ruleset followed, as far as the engine went, by at least two independent implementations (`gate.GATING_ORACLES`; two searches of one count once, the notation parser never), in every tier - so the commit tier, with one rules oracle, can gate nothing at all. **The check that some ruleset is gated** (`engine-nothing-gated`, and `GateResult.ok`'s test of it) runs only in a tier that runs every oracle search over the whole corpus (`Tier.full_strength`: nightly, release) - keyed to what a tier runs, never its name; any other tier - commit - is a smoke test, and its summary (`engine differential: SMOKE TEST - ...`) and report (`smoke_test`; nothing under `gated`) say that it gates nothing. **The commit tier's last-green-run rule**: the engine's baseline, `oracles/engine-baseline.json` - written by `harness.py baseline --write` from a green run of the commit tier, pinned in `gate.toml` `[baseline]`, checked by `verify` and before every comparison; recorded 2026-10-17 from the engine as built on `lane/gate`, 35 of the 41 commit records replayed - and every tier fails an engine that declines a record it read then (`engine-declined`) or reads none (`engine-read-nothing`). **Restricted runs** (`--source`/`--record`) never produce a tier verdict: labelled "restricted - not a tier result", findings only, the exit code from them, no check of a tier as a whole - undoing issue 124's first reading. In every tier an unexplained divergence, a telltale or a contract breach fails the engine; `gate.toml` is refused if a tier that is not full strength sets `require_engine`; the release tier's named-variant rule, the proof-channel line and parse mode are unchanged for a complete run - a restricted run's proof channel reads `DISABLED - restricted - not a tier result`, and it makes neither parse mode's `engine-nothing-compared` floor nor the release tier's proof-channel readiness check (`proof-channel-vacuous`; review fix 2026-10-22). The baseline (review fixes 2026-10-22): `baseline --write` reads the baseline it replaces verified against its pin and records nothing over one that is not the one pinned, so that a hand edit cannot empty its `LOSS` list; `verify` fails a baseline that holds no line for a record of its tier; like MANIFEST's, the pin catches an accident, not the file and its pin edited together - review's job (H33). `AGENTS.md` names neither the baseline nor its pin: its "Never make the gate pass by ..." list should add "editing `oracles/engine-baseline.json` or its `gate.toml` `[baseline]` pin by hand, or recording a `LOSS` with `baseline --write`", and "Things you must not touch" the file and its pin, written only by `baseline --write` - the instruction files are the user's to change, so the edit is put to the user (as H38's for `CLAUDE.md`). Run 2026-10-17 with the engine configured: commit SMOKE TEST - PASSED (baseline: 41 records compared, 0 declined); nightly PASSED, gating Standard - Half Reflected (2 oracles behind its record) and Standard - Reversed Royalty (3), and not Standard - Turn Zero (one oracle behind cwmtt/tesseractMageOChicken); a restricted run (`gate --tier nightly --source ftxi --record cwmtt/standard`) labelled "restricted - not a tier result", 0 findings. Spec issues 122-124, 131-133; proposed edits 103-104. CHECKPOINT 10 (issue 526 ruled): the two oracles are counted as lineages - an oracle derived from another's code counts with it, and a lineage vouches through any member that agrees and is not a recorded divergence, at most once (Kairos with ftxi); to build in `lane/gate`. **Built 2026-11-01 (`lane/gate`, issue 573):** each oracle pin declares `lineage` and `lineage_note` in the lock file, rendered in PROVENANCE.md's inventory (so `verify` holds the two together) and read by the gate (`Lock.lineages()`); the bar counts lineages, one vouch per lineage through any member that followed; the four existing oracles are each their own lineage - the nightly gates what it gated |
-| H48 | not started | Before the proof-channel sign-off: the naive searches' release budgets raised and the golden files re-recorded twice, on a quiet machine, so that no proof-channel check is vacuous (`verify`'s 17 `proof-channel-vacuous` notes) |
+| H48 | not started | Before the proof-channel sign-off: the naive searches' release budgets raised and the golden files re-recorded twice, on a quiet machine, so that no proof-channel check is vacuous (`verify`'s 17 `proof-channel-vacuous` notes). Prepared 2026-11-02 (`lane/gate`, issue 576): **the lane stop condition is met** - the naive searches stall for over 300 s on single positions before terminal verdicts at 28-375 boards; no budget a 240-minute CI job allows makes every proof-channel check non-vacuous; for the user (options in issue 576) |
 | H15 | built, tested | The scanner's deterministic single-thread mode; the search's synchronous mode and digest (E6a; the digest in the C API) |
 | H16, H25, H29 | not built (rule) | Refused |
 | H17 | built in part | Lazy SMP in the scanner (E5c): same-root threads, a shared TT and a concurrent solved store; in-game decay and rung helpers wait for the search; no help for exhaustive refutations (measured on Guard, now in the register). **The shared stores' data race on Windows - fixed 2026-10-22** (`lane/engine`; found at E-A6's review, where `scanner_lazy_smp_store_refuses_contradictions` segfaulted in 11 of 600 runs on the development machine - MSYS2 ucrt64 g++ 16.2, Release; gdb: `same_position` under `ConcurrentSolvedStore::put`). The cause, confirmed in winpthreads' source and by experiment: libstdc++'s `std::shared_mutex` is a `pthread_rwlock_t` with the static initialiser; winpthreads initialises it on its first call and returns `EINVAL` to the threads that lose that race (8 threads on 64 fresh locks: 149,878 and 156,542 of 1,024,000 `pthread_rwlock_wrlock` calls, in two runs; `pthread_mutex_lock` never failed); libstdc++ ignores the error - so a losing thread ran its critical section without the lock, then unlocked a lock it did not hold. Every store the scanner's and the prover's threads share is first taken by all of them at once (a scanner's own; Guard's and Hunt's, built per call; the disproof stores). Fixed by construction: both stores' shards are behind `ShardLock` (`t5d/scanner.hpp`), a `std::mutex` - libstdc++'s `lock()` throws on any error the platform reports, never returning without the lock. A warm-up (each shard's lock taken once at construction; 0 crashes in 600 runs at E-A6's review) was not chosen: it rests on winpthreads' internals, not on the lock's contract, and keeps the slow lock. The audit: no other `std::shared_mutex`, `shared_lock` or `shared_timed_mutex` in `engine/`; the TTs are lockless; MCGS and the evaluation cache have no lock and are single-threaded (H15) - `t5d_search_new_sharing`, `EvalCache` and the Python `Search` now say that searches sharing a cache are used one at a time. Tests (`test_shared_stores.cpp`): `shared_store_lock_excludes_at_first_concurrent_use` and `shared_stores_hold_at_first_concurrent_use` - built with the old lock (`e8de15e` with the new test file, in a scratch copy) each failed in every run - 120 of 120 on 2026-10-17, 50 of 50 on 2026-10-22 (the lock test with 136-1,003 overlaps a run over 2026-10-17 and 2026-10-22, the store test by crashing) - and with `ShardLock` neither failed in 500 (2026-10-17) or 300 (2026-10-22) runs; `scanner_lazy_smp_store_refuses_contradictions` failed with the old stores in 14 of 600 runs on 2026-10-17 (10 crashes, 3 stores holding a position twice, 1 lost distance) and 85 of 600 on 2026-10-22 (58 crashes), and with the new in 0 of 1,000 each day. The cost, indicative (a shared machine; not in MEASUREMENTS): winpthreads' reader-writer lock takes about 1.4 µs a call and a process-wide spinlock, so the mutex is far faster here - store operations about 25× as many at 1 thread and 450-1,000× as many at 5 and 12; at 5 threads Hunt 1.45-1.69×, Guard 2.71-2.90× and the scanner 1.22-1.34× the nodes per second (two days; at 1 thread 0.94-1.07×, noise, and the same nodes and proofs as the old build). `scanner.hpp`, `scanner.cpp`, `prover.hpp` and `prover.cpp` are truth sources: the code signature changes, no verdict logic (M17's row; issue 147). Linux (glibc) not yet run: the engine job (ubuntu-24.04, g++ 13/14) runs the tests on every push, but no GitHub Actions job has started on any branch since 2026-10-17 09:56 UTC, the nightly of 2026-10-22 included ("recent account payments have failed or your spending limit needs to be increased") - re-run the engine workflow once billing is fixed. Issue 146, edit 120; the old lock also leaked Windows handles (about 2.75 per lock used; review of 0e4b6c5) |
@@ -5603,12 +5603,81 @@ superseded or made moot says so; nothing is deleted.
     every oracle refuses it), 8 `unsupported` (`parse_failed`: cwmtt/brawnsPuzzles-another,
     cwmtt/futures, cwmtt/tesseractMageOChicken, cwmtt/test1, notation/aivsai, notation/game,
     notation/invasion, notation/marauders), no instability, no self-contradiction. It writes
-    `oracles/golden/kairos-parse.json` and `kairos-parse.cost.json`, re-times `calibration.json`,
-    rewrites `MANIFEST`, and re-renders `DISAGREEMENTS.md` unchanged; every other golden file is
-    kept, its hash re-checked. Afterwards `verify` should pass with its 17 notes, and `git diff`
-    should show the two new files, `calibration.json` and `MANIFEST` only. (The smoke run's count of
+    `oracles/golden/kairos-parse.json` and `kairos-parse.cost.json` and two new lines of `MANIFEST`,
+    and nothing else (as corrected below); every other golden file is kept, its hash re-checked.
+    Afterwards `verify` should pass with its 17 notes. **Corrected the same day (the main
+    loop's review): a recording that names only pending sources no longer re-times
+    `calibration.json`.** The four oracles' costs were recorded on 2026-10-17 on a quiet machine
+    against that calibration; re-timing it without re-recording them would leave their costs against
+    another machine's reference - on a loaded machine, AGENTS.md's forbidden case. Now `golden
+    --write` re-times `calibration.json` only when it records an enabled source; it times the probe
+    for every recording that names a pending source and writes it, with the machine and the time
+    (`measured`), into each pending cost file (`golden.Costs.calibration`); a pending-only recording
+    leaves `calibration.json`, every enabled source's files and their `MANIFEST` lines byte for byte as
+    they were, and does not render `DISAGREEMENTS.md`. A pending recording's costs are read on
+    `calibration.json`'s time base - scaled by reference / own probe, where the two probes were timed
+    with the same code (`Costs.on_reference`; an enabled source's cost file carries no probe and is
+    read as written) - and verify requires the probe, timed with the probe code gate.toml names
+    (`golden-stale` otherwise). Tests (`test_pending_recording.py`): `golden --write --source
+    kairos:parse` end to end, with the real driver and the probe's timing stood in for, leaves
+    `calibration.json`, the four's golden and cost files and their `MANIFEST` lines unchanged and
+    `DISAGREEMENTS.md` unwritten; a probe twice as slow halves the costs as read; a missing probe, or
+    one timed with other code, is a finding. **The expected diff is now** `kairos-parse.json`,
+    `kairos-parse.cost.json` (its probe inside) and two new lines of `MANIFEST` - nothing else. (The smoke run's count of
     `parse_failed` records in issue 533 and MEASUREMENTS read 9 - a miscount, corrected there: 8.)
     Not put to the user.
+
+576. **H48 prepared: the lane stop condition is met - no practicable naive budget makes every
+    proof-channel check non-vacuous** (register H48, H32, H23, H41, H37; "Lane stop conditions":
+    "no practicable naive budget makes every proof-channel check non-vacuous within a CI job's 240
+    minutes (several positions alone take over 300 s) - the documents do not say what follows") -
+    **for the user.** The 17 `proof-channel-vacuous` notes are of the two naive searches: per search,
+    one share below `proof_share` (`ftxi:naive` 82.1%, `cwmtt:naive` 77.4%, of 90%), one verdict
+    recorded too late for the budget (`cwmtt:naive`'s "no action" at cwmtt/ctp2 position 18, recorded
+    at 110 s: it needs 440 s under the margin of 4), and fourteen terminal verdicts another source
+    recorded where a naive recording was cut. From the cost files (two quiet recordings, 2026-10-17),
+    where each cut run stalled - the position it was searching for the rest of its 300 s, after a
+    prefix that took seconds:
+
+    | Search | Record | Stalled at | Boards there | Prefix | Final position (verdict, boards) |
+    |---|---|---|---|---|---|
+    | ftxi:naive | cwmtt/100_timelines | 19 | 216 | 0.74 s | 21 (checkmate, 375) |
+    | ftxi:naive | cwmtt/ctp1 | 16 (final) | 31 | 0.55 s | 16 (checkmate, 31) |
+    | ftxi:naive | cwmtt/many2 | 16 | 112 | 12 s | 62 (checkmate, 256) |
+    | ftxi:naive | cwmtt/manyChecks | 43 | 114 | 20 s | 52 (checkmate, 133) |
+    | ftxi:naive | cwmtt/wide | 11 | 40 | 0.16 s | 47 (checkmate, 124) |
+    | ftxi:naive | ftxi/futures | 19 (final) | 28 | 0.084 s | 19 (checkmate, 28) |
+    | cwmtt:naive | cwmtt/100_timelines | 16 | 78 | 1.8 s | 21 (checkmate, 375) |
+    | cwmtt:naive | cwmtt/ctp1 | 16 (final) | 31 | 1.7 s | 16 (checkmate, 31) |
+    | cwmtt:naive | cwmtt/many2 | 8 | 31 | 5.5 s | 62 (checkmate, 256) |
+    | cwmtt:naive | cwmtt/manyChecks | 43 | 114 | 200 s | 52 (checkmate, 133) |
+    | cwmtt:naive | cwmtt/silly | 27 | 64 | 95 s | 38 (checkmate, 75) |
+    | cwmtt:naive | cwmtt/wide | 11 | 40 | 86 s | 47 (checkmate, 124) |
+    | cwmtt:naive | cwmtt/futures, ftxi/futures | 19 (final) | 28 | 0.49 s | 19 (checkmate, 28) |
+
+    (The exiledKings and niceAndrey cuts end in no verdict and only bear on the share.) A naive search
+    is exhaustive, and a checkmate is proved only by exhausting the action space - exponential in the
+    playable boards: both naive searches spend more than 300 s on the 28- and 31-board final
+    checkmates of ftxi/futures and cwmtt/ctp1 alone, and the other verdicts sit at 124-375 boards, after
+    stalls of 100-300 s and with up to 46 positions still to search. **What a budget can buy:** the
+    proof-channel tier needs each verdict's cost x 4 within the budget. From the cost files, one
+    recording of the release tier costs 6,559 run-seconds at today's budgets (two recordings over 8
+    jobs: about 27 minutes - `golden --write`'s "about half an hour"), 19 of its (search, record) runs
+    cut at 300 s; at a naive budget B each of those runs up to B, so the tier costs 6,559 + 19 (B - 300)
+    run-seconds. On a 4-core CI runner the 240-minute job allows B of at most about 2,990 s, so every
+    verdict would have to arrive within about 750 s - against single positions known to take over
+    300 s before 46 more of up to 256 boards (many2), or a 375-board checkmate (100_timelines). No
+    such budget exists; B = 1,200 s (98 minutes a CI run; a two-recording session of about 100 minutes
+    on `dev-r`) would at best turn the ctp2 note and part of the shares, not the fourteen verdicts.
+    **Not done:** no budget changed, nothing recorded; the documents do not say what follows. Options
+    for the user: (a) hold the naive searches in the proof-channel tier to positions they can finish -
+    their required set on terminal verdicts limited to positions under a board count, as the proofs
+    themselves are (Hunt under 100 boards, the settling scans under 50; H43, H14) - a change to H32's
+    rule for that tier; (b) run the naive searches in the nightly tier only, the proof-channel tier
+    keeping the hypercuboid searches and Chess in 5D's mate search - a change to what that tier must
+    run; (c) a sign-off run outside CI, a release tier with hours-long naive budgets on a quiet machine,
+    whose length is then measured, not assumed. Until then the parse-mode recording (issue 575) stands
+    alone: it re-times nothing, and needs no H48.
 
 ## Proposed spec edits
 
@@ -7243,3 +7312,9 @@ struck through, where nothing of it is left to apply); the others stand as writt
   apart from the snapshot the tiers, the enabled sources' checks and DISAGREEMENTS.md use - proved
   unchanged for the four by `test_pending_recording.py` on a copy of the golden files. A dry run of
   the parse-mode recording, nothing written: 3.4 s, 32 read, 8 parse_failed, stable. Ready to record.
+- **2026-11-02 - (P) corrected; H48 prepared and stopped** (`lane/gate`; issues 575-576). A recording
+  that names only pending sources no longer re-times calibration.json: it carries its own probe in its
+  cost file, read on calibration.json's time base; the four's files are untouched, tested end to end.
+  H48: from the cost files, the naive searches stall for over 300 s on single positions before the
+  terminal verdicts the proof channel needs (28-375 boards, up to 46 positions on); no budget within a
+  240-minute CI job reaches them - the lane stop condition, for the user.
