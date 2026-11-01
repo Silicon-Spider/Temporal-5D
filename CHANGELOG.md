@@ -10,6 +10,38 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-01 - The done-means audit's tests: section 15.2's protocol on more variants, seeds and readings, three section 15.4 invariants, and a flat-form defect found
+
+The gate lane's done-means audit (`lane/audit`, step 2) read each section 15.2 row and each
+section 15.4 invariant against the tests on main. Where a row's tests fell short of section
+15.2's protocol, and a test of existing behaviour could close the gap, the audit wrote that
+test. No code changed.
+
+- **H18**, `engine/tests/test_zobrist.cpp::zobrist_incremental_equals_from_scratch_on_every_named_variant_under_every_ruleset`:
+  random pseudo-legal play from all 16 named variants under all 27 rulesets - 4,443 states,
+  655 of them with duplicated boards. The key and every board's content hash are checked
+  against their values from scratch.
+- **D2**, `engine/tests/test_mcts_tree.cpp::mcts_tree_form_with_every_gate_firing_equals_the_ply_split_under_q4s_guide_literal_reading`:
+  the row's bit-for-bit comparison under Q4's other reading, which the tree-form tests never
+  met - 8 roots x every variation.
+- **Section 15.4**, `engine/tests/test_mcts.cpp`:
+  - `mcts_virtual_loss_is_released_by_delivery_and_abandon_in_every_configuration`: before
+    this, under the default ply split only;
+  - `mcts_flat_form_no_node_with_turns_still_to_generate_is_proven_lost`: every node of 78
+    flat searches, issue 170's clause;
+  - `mcts_tree_form_dead_ends_have_no_legal_completion_in_random_searches`: the tree form's
+    dead ends against the brute-force reference, under both Q4 readings.
+- **C3a**, `python/tests/net/test_fork_protocol.py`: the refresh fork's assertions over 5
+  adversarial geometries x 3 seeds x both C20 readings. Before this, one root and one seed.
+- **A6 and D4**, `python/tests/engine/test_protocol_every_variant.py`: A6's recount and D4's
+  reply-map checker (`test_reply_map._check`) on random play from every engine variant.
+- **Found: D2's flat form crashes after an allocation failure inside `gather`.** The next
+  run faults in the turn generator (issue 535, for the engine lane). The test that found it
+  is not committed, because it crashes.
+
+Spec: §15.2 (rows C3a, H18, D2's tree form, A6, D4), §15.4; register H18, C3a, C20, D2, D4, A6 -
+nothing proposed; issue 535.
+
 ### 2026-11-01 - CHECKPOINT 10 taken in: the build log's plan for the lineage ruling and Kairos's new order
 
 `docs/BUILD_LOG.md` gains a "CHECKPOINT 10" section with the user's ruling on issue 526 and
