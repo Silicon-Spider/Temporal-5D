@@ -276,3 +276,189 @@ def test_the_token_tool_reads_files(tmp_path):
     bad = tmp_path / "bad.5dpgn"
     bad.write_text('[Mode "5D"]\n[Board "Standard"]\n\n1. e5 / e4\n', encoding="utf-8")
     assert record_positions(bad)[1].startswith("refused")
+
+
+# --- the review's gaps (A5 review fixes, 2026-10-24) --------------------------------------------------------------
+
+
+def _strict_ok(seed: int, boards: int):
+    """A synthetic square-centric state with no edges and no opponent moves (synthetic move edges
+    reach empty cells; engine data's never do), so that a strict conversion takes it."""
+    from t5d.net import synthetic_state
+
+    none = np.zeros((0, 3), dtype=np.int64)
+    return replace(synthetic_state(seed, boards), edges=none, opp_moves=none)
+
+
+def test_the_evaluator_converts_strictly():
+    """``NetworkEvaluator._fit`` converts strictly: an edge onto a cell that is no token is refused,
+    never silently dropped."""
+    from t5d.net import synthetic_state
+
+    ev = NetworkEvaluator(build_model(NetConfig(trunk_dtype="fp32", n_layers=1, piece_centric=True), seed=0).eval())
+    s = synthetic_state(11, 4)
+    assert to_piece_centric(s, strict=False, return_dropped=True).dropped_edges > 0
+    with pytest.raises(ValueError, match="strict"):
+        ev([s])
+
+
+def test_the_evaluator_converts_after_a_relayout():
+    """A position of other register counts than an A5 network's is relaid out and then converted: the
+    evaluation equals the network's on ``to_piece_centric(relayout(s, 4, 8))``."""
+    from t5d.net.state import relayout
+
+    cfg = NetConfig(trunk_dtype="fp32", n_layers=1, piece_centric=True, regs_per_board=4, global_regs=8)
+    model = build_model(cfg, seed=0).eval()
+    s = _strict_ok(12, 5)
+    assert (s.regs_per_board, s.global_regs) == (2, 16)
+    with torch.no_grad():
+        e = NetworkEvaluator(model)([s])[0]
+        ref = model(collate([to_piece_centric(relayout(s, 4, 8))]))
+    assert e.policy_logits.shape == (s.moves.shape[0],) and np.isfinite(e.policy_logits).all()
+    assert np.allclose(e.policy_logits, ref.policy_logits[0, : s.moves.shape[0]].numpy(), atol=1e-6)
+
+
+def test_netplay_takes_piece_centric(monkeypatch):
+    """``netplay --piece-centric`` builds piece-centric networks (and without the flag, not)."""
+    from t5d.engine import netplay
+
+    built = []
+
+    class Stop(Exception):
+        pass
+
+    def fake_build(cfg, seed=0):
+        built.append(cfg)
+        raise Stop
+
+    monkeypatch.setattr(netplay, "build_model", fake_build)
+    threads = torch.get_num_threads()
+    for flag, want in ((["--piece-centric"], True), ([], False)):
+        with pytest.raises(Stop):
+            netplay.main(["--net", "small", "--threads", str(threads), "--no-replay", *flag])
+        assert built[-1].piece_centric is want
+
+
+def test_the_bench_counts_a5s_tokens():
+    """The engine bench under ``--piece-centric``: the tokens column is A5's and the conversion's own
+    time is reported; under A1 the tokens are ``66 N + 16`` and no conversion time."""
+    from t5d.engine.bench import forward
+
+    with Game.variant("Standard") as g:
+        games = {1: [g]}
+        for pc in (True, False):
+            cfg = replace(network_config("small"), piece_centric=pc, n_layers=1)
+            (row,) = forward(games, [2], 1, cfg)
+            state = g.position(regs_per_board=cfg.regs_per_board, global_regs=cfg.global_regs).state
+            want = to_piece_centric(state).n_tokens if pc else state.n_tokens
+            assert row["tokens"] == 2 * want and ("A5 convert ms" in row) is pc
+            assert row["tokens"] == (2 * (32 + 16 + 2 + 16) if pc else 2 * (66 + 16))
+
+
+def _counts(seed: int, boards: int) -> dict:
+    """A ``position_counts``-shaped entry of a synthetic position (both move sets alike)."""
+    from t5d.net import synthetic_state
+    from t5d.net.cost import token_counts
+
+    c = token_counts(synthetic_state(seed, boards, n_timelines=3))
+    return {"key": f"{seed}-{boards}", "boards": boards, "legal": c, "pseudo": c}
+
+
+def test_the_summary_pools_by_decisions_and_takes_the_phase_form():
+    """``token_counts.summarise`` on hand-built positions (10 and 20 boards, weights 1 and 3; 60
+    boards, weight 2): the median per-position ratio A1 / A5, every pooled figure weighted by the
+    decisions, M16's blend (the pre-CHECKPOINT-9 reading) and C26's phase form - dense below N*,
+    the cached node at or above it, each half apart."""
+    from t5d.engine.token_counts import CACHED_SHARE, summarise
+    from t5d.net.cost import piece_centric_costs
+
+    cfg = NetConfig()
+    entries = [_counts(1, 10), _counts(2, 20), _counts(3, 60)]
+    weights = {entries[0]["key"]: 1, entries[1]["key"]: 3, entries[2]["key"]: 2}
+    out = summarise({e["key"]: e for e in entries}, weights, n_stars=(50, 100))
+    low = out["buckets"]["legal"]["1-49"]
+    ratios = [e["legal"]["a1"] / e["legal"]["a5"] for e in entries[:2]]
+    assert low["token_ratio_median"] == pytest.approx(sum(ratios) / 2) and low["token_ratio_median"] > 1
+    assert low["positions"] == 2 and low["action_starts"] == 4
+    k = [piece_centric_costs(e["legal"], cfg) for e in entries]
+    w = [1, 3, 2]
+
+    def pooled(what: str, arm: str, which=(0, 1, 2)) -> float:
+        return sum(w[i] * k[i][f"{what}_{arm}"] for i in which)
+
+    p = out["pooled"]["legal"]
+    assert p["action_starts"] == 6
+    assert p["dense_ratio"] == pytest.approx(pooled("dense", "a1") / pooled("dense", "a5"))
+    assert p["node_ratio"] == pytest.approx(pooled("node", "a1") / pooled("node", "a5"))
+    blend = {a: CACHED_SHARE * pooled("node", a) + (1 - CACHED_SHARE) * pooled("dense", a) for a in ("a1", "a5")}
+    assert p["blend_ratio"] == pytest.approx(blend["a1"] / blend["a5"])
+    at50, at100 = p["phase"]["50"], p["phase"]["100"]
+    phase = {a: pooled("dense", a, (0, 1)) + pooled("node", a, (2,)) for a in ("a1", "a5")}
+    assert at50["ratio"] == pytest.approx(phase["a1"] / phase["a5"])
+    assert at50["dense_below_ratio"] == pytest.approx(pooled("dense", "a1", (0, 1)) / pooled("dense", "a5", (0, 1)))
+    assert at50["cached_above_ratio"] == pytest.approx(k[2]["node_a1"] / k[2]["node_a5"])
+    assert (at50["action_starts_below"], at50["action_starts_above"]) == (4, 2)
+    assert at50["share_above_a1"] == pytest.approx(pooled("node", "a1", (2,)) / phase["a1"])
+    assert at100["ratio"] == pytest.approx(p["dense_ratio"]) and np.isnan(at100["cached_above_ratio"])
+
+
+def test_the_tool_weighs_repeats_and_leaves_a_refused_record_out(tmp_path):
+    """``token_counts.measure``: a position reached in two records counts twice in the pooled
+    figures (the decisions spent there) and once among the distinct positions; a record that does
+    not replay to the end counts none of its positions; the JSON lines carry each position's
+    decisions, which add up to the pooled count."""
+    import json
+
+    from t5d.engine.token_counts import measure, record_positions
+
+    good = tmp_path / "a.5dpgn"
+    good.write_text(RECORDS["branching"], encoding="utf-8")
+    other = tmp_path / "b.5dpgn"
+    other.write_text('[Board "Standard"]\n[Mode "5D"]\n\n1. Nf3 / Nf6\n2. Nc3 / Nc6\n', encoding="utf-8")
+    bad = tmp_path / "c.5dpgn"
+    bad.write_text('[Mode "5D"]\n[Board "Standard"]\n\n1. e4 / e5\n2. e5 / d6\n', encoding="utf-8")
+    found = {p.name: record_positions(p) for p in (good, other, bad)}
+    assert found["c.5dpgn"][1].startswith("refused") and len(found["c.5dpgn"][0]) >= 1
+    starts = len(found["a.5dpgn"][0]) + len(found["b.5dpgn"][0])
+    distinct = len({p["key"] for name in ("a.5dpgn", "b.5dpgn") for p in found[name][0]})
+    assert distinct < starts, "the two records share their first positions"
+    lines = tmp_path / "positions.jsonl"
+    out = measure([good, other, bad], jsonl=lines)
+    assert out["records"] == {"ok": 2, "refused": 1} and out["distinct_positions"] == distinct
+    for move_set in ("legal", "pseudo"):
+        assert out["pooled"][move_set]["action_starts"] == starts
+    rows = [json.loads(line) for line in lines.read_text(encoding="utf-8").splitlines()]
+    assert len(rows) == distinct and sum(r["action_starts"] for r in rows) == starts
+    assert max(r["action_starts"] for r in rows) == 2
+
+
+def test_the_counted_forward_extrapolates_exactly():
+    """``token_counts.flops_table``: the 16-layer count extrapolated from 1 and 2 layers equals the
+    full-depth count (``check``), A1 and A5 - the claim the MEASUREMENTS figures rest on."""
+    from t5d.engine.token_counts import flops_table
+    from t5d.net import synthetic_state
+
+    (first, second) = flops_table({"two boards": synthetic_state(0, 2)}, check=True)
+    for arm in ("a1", "a5"):
+        assert first[f"counted_full_{arm}"] == first[f"counted_{arm}"] > first[f"per_layer_{arm}"] > 0
+    assert first["path"] == "block_sparse" and second["path"] == "chunked" and "counted_full_a1" not in second
+
+
+def test_the_bench_takes_piece_centric(monkeypatch, capsys):
+    """``bench --piece-centric`` builds the forward's network piece-centric and says so in its
+    conditions (and without the flag, not)."""
+    from t5d.engine import bench
+
+    seen = []
+    monkeypatch.setattr(bench, "_positions", lambda sizes, seeds, travel: {n: [] for n in sizes})
+    monkeypatch.setattr(bench, "conversion", lambda games, repeat: [])
+    monkeypatch.setattr(bench, "forward", lambda games, batches, repeat, cfg: seen.append(cfg) or [])
+    monkeypatch.setattr(bench, "_table", lambda rows: "")
+    grad = torch.is_grad_enabled()
+    try:
+        for flag, want in ((["--piece-centric"], True), ([], False)):
+            assert bench.main(["--layers", "1", *flag]) == 0
+            assert seen[-1].piece_centric is want
+            assert ("tokens piece-centric (A5)" in capsys.readouterr().out) is want
+    finally:
+        torch.set_grad_enabled(grad)  # the bench switches autograd off for the process

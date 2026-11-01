@@ -373,7 +373,10 @@ def _mutants(s: PositionState, p: PositionState) -> dict[str, PositionState]:
         out["misplace_cell"] = SimpleNamespace(token_cells=cells, moves=p.moves, edges=p.edges, layout=replace(p.layout, cells=cells))
     moves = p.moves.copy()
     moves[0, 1] = moves[0, 1] + 1 if moves[0, 1] + 1 < p.layout.n_body else moves[0, 1] - 1
-    out["off_by_one"] = replace(p, moves=moves) if p.layout.is_square_token(moves[:, :2]).all() else None
+    try:  # refused by validation when it lands on a cell that is no token, or leaves a stale one
+        out["off_by_one"] = replace(p, moves=moves) if p.layout.is_square_token(moves[:, :2]).all() else None
+    except ValueError:
+        out["off_by_one"] = None
     return out
 
 
@@ -384,7 +387,7 @@ def test_mutants_of_the_conversion_are_caught():
     caught = 0
     for name, m in _mutants(s, p).items():
         if m is None:
-            caught += 1  # refused by validation: a move onto a cell that is no token
+            caught += 1  # refused by validation: a move onto a cell that is no token, or a stale token
             continue
         with pytest.raises((AssertionError, ValueError, IndexError)):
             if isinstance(m, SimpleNamespace):
@@ -924,3 +927,171 @@ def test_the_analytic_costs_and_the_counted_forward():
     with torch.no_grad():
         _, flops = count_flops(lambda: model(collate([a5(s)])))
     assert flops > 0
+
+
+# --- the review's gaps (A5 review fixes, 2026-10-24) --------------------------------------------------------------
+
+
+def test_the_pools_average_over_the_tokens_there_are():
+    """The pools read A5's own square tokens - the masked-A1 reference cannot see a pool that
+    depends on the layout's geometry rather than the mask (both sides share A1's W x H), so each is
+    checked against the mean over ``square_mask`` directly: the global square pool and the
+    moves-left head that reads it, each board's square mean, and smolgen's square weights and its
+    per-board square tokens (the no-per-board-registers arm)."""
+    from t5d.net.heads import board_mean_pool, square_pool
+    from t5d.net.smolgen import smolgen_inputs
+
+    cfg = NetConfig(trunk_dtype="fp32", n_layers=1, piece_centric=True)
+    model = build_model(cfg, seed=0).eval()
+    batch = collate([a5(synthetic_state(3, 6)), a5(synthetic_state(4, 2))])
+    with torch.no_grad():
+        out = model(batch, return_trunk=True)
+        pooled, boards = square_pool(out.trunk, batch), board_mean_pool(out.trunk, batch)
+        for i in range(batch.batch_size):
+            sq = batch.square_mask[i]
+            assert int(sq.sum()) < batch.layouts[i].n_boards * batch.layouts[i].squares_per_board, "A5 drops squares"
+            mean = out.trunk[i, sq].mean(dim=0)
+            assert torch.allclose(pooled[i], mean, atol=1e-6)
+            assert torch.allclose(out.moves_left_log[i], model.aux.moves_left(mean[None]).squeeze(), atol=1e-5)
+            for b in range(batch.layouts[i].n_boards):
+                on = sq & (batch.board[i] == b)
+                assert torch.allclose(boards[i, b], out.trunk[i, on].mean(dim=0), atol=1e-6), (i, b)
+    inputs = smolgen_inputs(batch, cfg, torch.zeros(batch.batch_size, batch.board_valid.shape[1], 2))
+    sq = batch.square_mask.float()
+    assert torch.allclose(inputs.square_weight, sq / sq.sum(dim=1, keepdim=True))
+    b0 = collate([a5(synthetic_state(5, 4, regs_per_board=0))])
+    inputs0 = smolgen_inputs(b0, replace(cfg, regs_per_board=0), torch.zeros(1, 4, 2))
+    for b in range(4):
+        real = inputs0.board_weight[0, b] > 0
+        want = torch.nonzero(b0.square_mask[0] & (b0.board[0] == b)).flatten()
+        assert torch.equal(torch.sort(inputs0.board_tokens[0, b][real]).values, want)
+        assert torch.allclose(inputs0.board_weight[0, b][real], torch.full((want.numel(),), 1.0 / want.numel()))
+
+
+def test_a_register_is_never_an_endpoint_under_a5():
+    """``is_square_token`` says no to every register of an A5 layout, and a move onto one is refused."""
+    p = a5(synthetic_state(5, 4))
+    lay = p.layout
+    regs = [lay.board_register_token(b, r) for b in range(p.n_boards) for r in range(p.regs_per_board)]
+    regs += [lay.global_register_token(g) for g in range(p.global_regs)]
+    assert not lay.is_square_token(np.array(regs)).any()
+    bad = p.moves.copy()
+    bad[0, 1] = regs[0]
+    with pytest.raises(ValueError, match="square token"):
+        replace(p, moves=bad)
+
+
+def test_square_tokens_refuses_a_cell_that_is_no_token():
+    p = a5(synthetic_state(6, 3))
+    b, c = np.argwhere(~p.token_cells)[0]
+    with pytest.raises(ValueError, match="not a token"):
+        p.layout.square_tokens(np.array([b]), np.array([c]))
+    with pytest.raises(ValueError, match="not a token"):
+        p.layout.square_token_from_index(int(b), int(c))
+
+
+def test_a_mask_of_the_wrong_shape_is_refused():
+    """A transposed mask of the right size is refused, never reshaped - by the state and by the layout."""
+    p = a5(synthetic_state(7, 3))
+    with pytest.raises(ValueError, match="expected shape"):
+        replace(p, token_cells=p.token_cells.T.copy())
+    with pytest.raises(ValueError, match="expected shape"):
+        TokenLayout(p.n_boards, p.width, p.height, cells=p.token_cells.T.copy())
+    with pytest.raises(ValueError, match="expected shape"):
+        TokenLayout(p.n_boards, p.width, p.height, cells=p.token_cells.reshape(-1))
+
+
+def test_layout_equality_reads_the_cells():
+    p = a5(synthetic_state(8, 3))
+    lay = p.layout
+    other = lay.cells.copy()
+    b, c = np.argwhere(~other)[0]
+    other[b, c] = True
+    assert lay != replace(lay, cells=None) and lay != TokenLayout(lay.n_boards, lay.width, lay.height, cells=other)
+    same = TokenLayout(lay.n_boards, lay.width, lay.height, lay.regs_per_board, lay.global_regs, cells=lay.cells.copy())
+    assert lay == same and hash(lay) == hash(same)
+
+
+def test_a_stale_token_set_is_refused_and_the_conversion_rebuilds_it():
+    """The review's probe: an A5 state whose candidate moves were cut kept its old destination
+    tokens (224 against a fresh 197). Validation now holds the mask to exactly the occupied cells
+    and the moves' destinations - a token too many is refused as well as one too few - and
+    ``to_piece_centric`` rebuilds the set from scratch."""
+    s = synthetic_state(1, 6)
+    p = a5(s)
+    with pytest.raises(ValueError, match="stale token"):
+        replace(p, moves=p.moves[:1], edges=p.edges[:0])
+    fields = ("width", "height", "timeline", "half_turn", "is_head", "active", "side_to_move", "piece", "colour", "moved")
+    bare = {f: getattr(s, f) for f in fields}
+    occupied = s.piece != 0
+    assert PositionState(**bare, token_cells=occupied).n_tokens == int(occupied.sum()) + s.n_boards * 2 + 16
+    extra = occupied.copy()
+    b, c = np.argwhere(~extra)[0]
+    extra[b, c] = True
+    with pytest.raises(ValueError, match="stale token"):
+        PositionState(**bare, token_cells=extra)
+    cut = replace(s, moves=s.moves[:1], edges=s.edges[:0])
+    fresh = a5(cut)  # synthetic: its opponent moves dropped
+    assert np.array_equal(fresh.token_cells, piece_centric_cells(cut)) and fresh.n_tokens < p.n_tokens
+    for x in (p, fresh):
+        again = to_piece_centric(x, strict=True)
+        assert np.array_equal(again.token_cells, piece_centric_cells(x)) and np.array_equal(again.moves, x.moves)
+
+
+def test_the_cached_sets_put_every_destination_live():
+    """``cost.token_counts``' cached sets, recounted by hand on a position with destinations on
+    frozen (history) boards: the live set is the heads' pieces, their registers, every destination
+    token (BUILD_LOG issue 252's reading (f): transient, never cached) and the global registers; the
+    frozen set the other boards' pieces and registers."""
+    from t5d.net.cost import token_counts
+
+    s = synthetic_state(21, 16, n_timelines=6, deep_travel_prob=1.0)
+    occupied = s.piece != 0
+    dest = np.zeros_like(occupied)
+    for b, c in _empty_destinations(s):
+        dest[b, c] = True
+    head = s.is_head
+    assert dest[~head].any(), "the construction must land a destination on a frozen board"
+    r, g = s.regs_per_board, s.global_regs
+    for c in (token_counts(s), token_counts(a5(s))):
+        assert c["cached_live_a5"] == int(occupied[head].sum()) + int(head.sum()) * r + int(dest.sum()) + g
+        assert c["cached_frozen_a5"] == int(occupied[~head].sum()) + int((~head).sum()) * r
+        assert c["cached_live_a1"] == int(head.sum()) * (64 + r) + g and c["cached_frozen_a1"] == int((~head).sum()) * (64 + r)
+
+
+def test_the_cached_node_attends_each_arms_own_tokens():
+    """``piece_centric_costs``' cached node: each arm's live queries against that arm's whole token
+    set (section 9.1's ``pass_flops``); the frozen K/V that arm's frozen tokens."""
+    from t5d.net.cost import kv_bytes, pass_flops, piece_centric_costs, token_counts
+
+    cfg = NetConfig()
+    c = token_counts(synthetic_state(22, 12, n_timelines=4, deep_travel_prob=1.0))
+    costs = piece_centric_costs(c, cfg)
+    for arm in ("a1", "a5"):
+        assert costs[f"node_{arm}"] == pass_flops(c[f"cached_live_{arm}"], c[arm], cfg)["total"]
+        assert costs[f"kv_{arm}"] == kv_bytes(c[f"cached_frozen_{arm}"], cfg, 2.0)
+    assert costs["node_ratio"] == costs["node_a1"] / costs["node_a5"] and costs["node_a1"] != costs["node_a5"]
+
+
+def test_every_register_keeps_its_slot_under_a5():
+    """Each board's registers carry slots 0..R-1 and the global registers 0..G-1 in A5's layout, as
+    in A1's - the register embedding reads the slot (``token_arrays``' ``reg_index``)."""
+    for regs, glob in ((2, 16), (4, 0)):
+        p = a5(synthetic_state(23, 5, regs_per_board=regs, global_regs=glob))
+        arrays, lay = p.token_arrays(), p.layout
+        for b in range(p.n_boards):
+            tokens = [lay.board_register_token(b, r) for r in range(regs)]
+            assert arrays["reg_index"][tokens].tolist() == list(range(regs))
+            assert (arrays["kind"][tokens] == TOKEN_BOARD_REGISTER).all()
+        tail = [lay.global_register_token(g) for g in range(glob)]
+        assert arrays["reg_index"][tail].tolist() == list(range(glob))
+
+
+def test_the_layout_follows_the_mask():
+    """``PositionState.layout`` is cached per mask: a state given another mask object builds its
+    layout anew (from that mask), never the old one's."""
+    p = a5(synthetic_state(24, 4))
+    first = p.layout
+    assert p.layout is first
+    p.token_cells = np.ones_like(p.token_cells)  # every cell a token: A1's set in A5's form
+    assert p.layout is not first and p.layout.n_body == p.n_boards * (p.width * p.height + p.regs_per_board)

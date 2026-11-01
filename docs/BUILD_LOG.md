@@ -1789,7 +1789,7 @@ width (M22)", "The CHECKPOINT 8 figures"). Found on the way: the ruling's premis
 |---|---|---|
 | A1-A3 | built, tested | Network N1: tokens, features, per-board flags, Δt-to-present. A3 on frozen boards under the cached configuration: intrinsic features (N3's default, ruled by M20), their status as B16's score-time key biases (`lane/net`, N-B16); live boards keep A3's features as inputs. A3's side to move is us/them, relative to the acting player (A7, `lane/net` N-A7) |
 | A4 | built, tested | Engine: every board immutable once published; persistent multiverse sharing history in chunks |
-| A5 | built behind its flag (dense scope only), tested | Piece-centric tokenisation - a prototype (CHECKPOINT 6: "build behind its flag"), off (`NetConfig.piece_centric`; `lane/net`, N-A5): A5's tokens are A1's minus the empty squares no candidate move lands on - the pieces and the candidate moves' destination squares (a capture points at the captured piece's token), each board's in cell order, then its registers (`state.to_piece_centric`; `TokenLayout`'s boards of different lengths). A pure input change: no parameter, the same draws, so the network is A1's on a smaller token set and its forward equals A1's with the dropped squares removed as keys (§15.2's proposed A5 row, edit 190 - every attention path, N2's switches, the attention and input flags that compose, BF16, gradients, engine positions; A7's mirror holds under A5); the default path bit for bit unchanged (436 of 437 digests; the 437th, a smoke run, is nondeterministic at main too). The engine's contract stays square-centric: the evaluator converts at the network's edge (strict), as do the training rows; netplay and the engine bench take `--piece-centric`; short games under the ply split, the tree and the flat form replay legal through the gate; two move orders of one multiverse give one input and one evaluation (issue 245). Dense scope only: the block-causal scope, the cached path and D4's reply prototype refused (issues 251, 252); the window's scope refuses A5 (issue 253) - the joint test with the window waits for the pilot run (M18). Measured on the human games (MEASUREMENTS, "A5"): tokens 1.9-2.4x fewer, the dense evaluation 2.5x cheaper under 50 boards and 2.8x pooled, the cached node 1.4x (analytic) - **flagged under the 2x rule** against §14.4's ~2.7x with pseudo-legal moves (issue 256). Placeholders: issues 244-250, 254; no decision rule (issue 257). Edits 190-198 |
+| A5 | built behind its flag (dense scope only), tested | Piece-centric tokenisation - a prototype (CHECKPOINT 6: "build behind its flag"), off (`NetConfig.piece_centric`; `lane/net`, N-A5): A5's tokens are A1's minus the empty squares no candidate move lands on - the pieces and the candidate moves' destination squares (a capture points at the captured piece's token), each board's in cell order, then its registers (`state.to_piece_centric`; `TokenLayout`'s boards of different lengths). A pure input change: no parameter, the same draws, so the network is A1's on a smaller token set and its forward equals A1's with the dropped squares removed as keys (§15.2's proposed A5 row, edit 190 - every attention path, N2's switches, the attention and input flags that compose, BF16, gradients, engine positions; A7's mirror holds under A5); the default path bit for bit unchanged (436 of 437 digests; the 437th, a smoke run, is nondeterministic at main too). The engine's contract stays square-centric: the evaluator converts at the network's edge (strict), as do the training rows; netplay and the engine bench take `--piece-centric`; short games under the ply split, the tree and the flat form replay legal through the gate; two move orders of one multiverse give one input and one evaluation (issue 245). Dense scope only: the block-causal scope, the cached path and D4's reply prototype refused (issues 251, 252); the window's scope refuses A5 (issue 253) - the joint test with the window waits for the pilot run (M18). Measured on the human games (MEASUREMENTS, "A5"; action starts only): tokens 1.9-2.4x fewer; under CHECKPOINT 9's phase form (C26, N\* = 50, a placeholder) 2.45x pooled by decisions - the dense evaluation 2.46x cheaper below N\*, the cached node (analytic) 2.11x at or above it (N\* = 100: 2.73x; 2.62x); the pre-CHECKPOINT-9 reading (dense 2.8x, cached 1.6x, M16's blend 2.2x at every size) kept beside it. Re-stated under C26 on the legal-destination set, **no figure is flagged under the 2x rule** - the first reading's two flags compared across conditions and are withdrawn (issue 256). The token set is held to exactly the pieces and the candidate moves' destinations by validation, and rebuilt from scratch by the conversion (issue 244(e), the review). The evaluation depends on the legality options, so a shared evaluation cache must match them (issue 245(e)). G10 (mixture-of-depths, held open) has A5's verdict as its trigger, and A5 has no decision rule (issue 257); A5 and C26's N\* couple (issue 258). Placeholders: issues 244-250, 254. Edits 190-199 |
 | A6 | built, tested | Global turn-state inputs on the global registers. The acting player is in (D8, N5); the acting colour is that same embedding since A7 (`lane/net` N-A7: under A7 the acting player is always "us", so the colour is what the input carries - one input, issue 228). Engine ABI round 1 (2026-10-17, `lane/engine`): the counts are in the expansion (`mandatory_remaining`, `optional_playable`, `moves_made`; the state's own mandatory count - A6's commit changed no truth source, while the component's first commit, H42's fix, changed the prover's report, so the truth's code signature differs from main's) and the C API (`t5d_expansion`'s three appended fields; `t5d_game_summary.moves_made`; the game handle counts the moves of its action - 0 at a set-up, +1 per move, 0 after a submission or a replayed action), with the Python mirror (`Expansion`, `GameInfo.moves_made`; `Search`'s `turn_start` from the handle). The count is in the evaluation identity (issue 302): `EvalRequest`, the evaluation cache's key, the batch's de-duplication and MCGS identity, where it subsumes the turn-start flag; `t5d_search_new` takes the handle's count and checks `turn_start` against it (tested two moves into an action, from C++ and Python, where a flag's 0 or 1 cannot pass); `advance_moves` and `advance_action` carry the tree at each count (tested, tree and graph). §15.2's A6 row: `test_turn_state.cpp` recounts the three from the rulebook at every state of random play under every ruleset (both Q4 readings), through the expansion and a `t5d_game`, and checks the spec's arithmetic move by move where no activity changes (issues 143-145). Network (`lane/net`, N-A6, 2026-10-23): `PositionState` carries the three counts (`mandatory_remaining`, `optional_playable`, `moves_made`; `turn_state`), `collate` puts them in `Batch.turn_state`, and `engine/convert.py` copies the expansion's, checking only what the expansion defines them by (non-negative; mandatory + optional = the boards it marks playable; mandatory no more than those of active timelines; none owed exactly when submitting is possible) - the split is the ruleset's, which the expansion does not name. A state built without the engine (synthetic, the tree fixture, a refresh's other-colour view) derives them from its boards under the default rules (`derived_turn_state`; moves made 0 before the shift, 1 past it), re-derived whenever it is rebuilt; given ones are kept, so the A7 mirror keeps them. Embedded into the global registers (issue 230, placeholder fixed in code): each count as `(n / 8, log1p n, [n = 0])`, the nine features through Linear(9, 32), GELU, Linear(32, d), one vector added to every global register beside D8's acting colour - with none, issue 225's placeholder (the board tokens, the live boards' alone under the block-causal scope); 8,768 parameters from a generator of their own (`a6_seed`: no other parameter's draw changed). `cache.state_digest` (an epoch's anchor, and the Python evaluator's epoch reuse) carries the counts; frozen K/V never depend on them. The fixtures' positions are turn starts with the boards' own counts: the tree fixture's moves are no actions, and a per-path count of them split its two move orders of one multiverse into two states (tried, reverted); mid-turn states are its states with counts given. Tests: `tests/engine/test_turn_state_engine.py` - section 15.2's row on the network side: at every state of seeded random play in eight plays under both Q4 readings (956 states: 239 turn starts, 461 mid-action, 138 past the shift with moves, 118 without; 87 jumps between two present boards, 33 rewinding branches releasing a board, 8 T12 rises) the converted counts are the expansion's, moves made the handle's count, mandatory and optional a recount from the rulebook's definitions on the converted boards (and, under the default rules, the state's own derivation); a mid-turn state and its own 5DFEN (a turn start, equal boards and acting player) differ in moves made alone, and in digest and every output, full and cached; inconsistent counts refused. `tests/net/test_turn_state.py` - derivation and validation; each count alone moves exactly the global registers (one vector on each), or with none the board tokens (the live boards' under the block-causal scope), and nothing else; every output moves with each count under every register arm and both scopes; equal boards with different counts have different digests and outputs and, from one store in one epoch, each equals its own full pass with no frozen board recomputed; a refreshed epoch's anchor is the state with its counts (another count is a node below it; a root with other counts a new epoch, other history K/V); the other colour's view derives its counts; cached = full pass along the tree fixture's paths, each node also with mid-turn counts, under both supersession readings and both register arms; the parameters and their draws. The A7 mirror test compares `Batch.turn_state` (a mid-turn construction with given counts added) and the engine's mirror test the engine's own counts on the 5DFEN mirror |
 | A7 | built, tested | Perspective canonicalisation (`lane/net`, N-A7). The network reads every input from the acting player's side (`net/state.py`: `token_arrays` and `collate`; `PositionState` keeps the engine's absolute facts): owners ours/theirs (A2's colour table renamed `embed.owner` - no parameter changes, F1 as it was), each board's side to move us/them, ranks mirrored (`y -> H-1-y`) and timelines negated when Black acts (`p -> -p`, or `-1 - p` in a ±0 variant - §12.6's index mapping, so the state carries `even_start`, the engine's `Expansion.even`); file, time and Δt unchanged. Only features and coordinates change: the tokens keep their order, so every token-indexed output - policy and reply moves, per-board, per-square - maps back by the identity, the per-square labels by swapping ours and theirs (`heads.square_labels_by_colour`; the labels relabelled ours/theirs, issue 226); values are the acting player's (D8). The acting colour stays an input: D8's embedding on the global registers (issue 228). Cached path (C2): frozen K/V keyed by the acting player (`board_ident(..., acting=True)`), the search root's history built from both sides and a refresh's dense pass run from each (`cache.viewed_by`) - issue 303's cost, logged for C2. §15.2's row as issue 304 reads it: `state.mirror` (each board one half-turn later, issue 227); `tests/net/test_perspective.py` - canonical inputs bit-identical at the mirrored token but for the acting colour, outputs equal mapped back with the colour's rows tied (FP32 1e-5; BF16 no further than its own FP32 distance), different untied; 18 constructions (many timelines, deep travel, duplicated boards, ±0, fairy pieces, past the shift with submit legal/masked/absent, 7x7 to 1x1, far apart, no global registers), 3 seeds, both scopes, B5/B10/B11/B12/B17 and B15 off, the cached path under both supersession readings with and without a root refresh; `tests/engine/test_perspective_engine.py` - the engine's own 5DFEN mirror converts to `state.mirror` of the conversion, moves and relations included, both acting colours, each of the 16 named variants the engine sets up (its whole table, `helpers.ENGINE_VARIANTS`), and the network agrees on the two. Review fixes: a refresh's other-colour view (`viewed_by`) carries no moves and no edges (issue 229; a placeholder fixed in code), tested on synthetic and engine positions; `state.mirror` negates timelines by its own arithmetic, not through `canonical_timeline` (a wrong self-inverse map would cancel), so the identity and `-p`-for-`-1 - p` mutants of `canonical_timeline` are caught. **For A8 (not built):** the board-layout embedding must flatten each board in canonical (x, y) order - ranks mirrored when Black acts - not storage order, or A7 breaks for Black. Mutants run at test time (no file edited): no rank mirror, no timeline negation, absolute owners, absolute side to move, frozen keys without the perspective - each caught; `-p` for `-1 - p` in a ±0 variant is invisible to the outputs (recentring) and caught by the canonical-input test |
 | A8 | built, tested | The board-layout embedding - a prototype (6p), behind its flag, off (`lane/net`, N-A8; `net/layout.py`): each board's one-hot layout (64 cells x 24 owner-and-piece states, read in A7's canonical (x, y) order) projected to 16 channels per square (1,573,888 parameters), added to the token input by a learned 16 -> d map (4,096), then an FFN (one pre-norm residual block, RMSNorm, Mish, 8x - 1,051,136; every valid token): 2,629,120 parameters; F1 unchanged with it off (bit for bit: its own generator, drawn last). Placeholders (issue 240): the FFN's width, form and tokens; the concatenation built as a sum; smaller boards padded a1-anchored or centred (`layout_padding`), larger refused; has-moved not among the 24 states. FP32, never quantised (G2, 238(d)). Every attention path and the cached path (no cache change: per board, intrinsic, keyed by perspective - 303) compute the same function; §15.2's A7 row green with it on. §15.3's row measured (MEASUREMENTS): the projection 0.099% of attention at 44 boards by §15.3's formula, A8 with its FFN 4.5% - **flagged under the 2x rule**: 45x the row's ~0.1% (at least 6.6x with any per-token FFN; issue 240(l)); in the cached configuration A8 adds 10.1% / 14.4% to a node at 44 / 240 boards (every token embedded at every node; 240(g)), 2.0% / 0.62% to the dense forward. Review fixes (same day): the FFN's form pinned bit for bit, the layout on non-square boards, the FP32 values against FP64, `layout_flops` zero when off, the cache bench counting a node's preparation; the reviewer's 24 mutants each caught. Smoke-tested only (three optimiser steps on synthetic rows). Edits 185, 186 |
@@ -4103,7 +4103,14 @@ superseded or made moot says so; nothing is deleted.
     are its moves' own pairs and its relations end on pieces - checked on every real position tested,
     all five relations built); synthetic data drops exactly the move edges onto empty cells that are no
     destination (`strict=False`, counted). (d) The conversion runs at the network's edge (the engine's
-    contract and the C API stay square-centric). Edits 190, 191.
+    contract and the C API stay square-centric). (e) *The A5 review (2026-10-24)*: validation held
+    the mask to cover the occupied cells only, and the conversion kept a piece-centric input's cells
+    by union, so an A5 state whose moves were cut kept its old destinations as stale tokens (the
+    review's probe: 224 tokens against a fresh 197). Now `PositionState.validate` holds `token_cells`
+    to exactly the occupied cells and the candidate moves' destinations (a token too many or too few
+    is refused), `to_piece_centric` rebuilds the set from scratch, and `TokenLayout` refuses a mask of
+    the wrong shape instead of reshaping it (a transposed mask of the right size included) - tested.
+    Edits 190, 191.
 245. **Where A5's destinations come from - the candidate moves, so the input depends on the
     expansion's legality options** (§8.1, §12.8, §15.2's purity and I15 rows; register A5, D1, I15,
     C19-C21; issues 46, 90, 115). Register A5: "generator-supplied destination squares"; §8.1's scored
@@ -4126,8 +4133,19 @@ superseded or made moot says so; nothing is deleted.
     masked A1 reference there too). `train.targets.collate_rows` converts each row the same way
     (strict for engine records, not for synthetic ones); netplay and the engine bench take
     `--piece-centric`. Section 15.5 with A5: short self-play and match games under the ply split, the
-    tree form and the flat form, every record replayed by the gate adapter (tested). For the user with
-    edit 196.
+    tree form and the flat form, every record replayed by the gate adapter (tested). (e) *The A5
+    review (2026-10-24)*: **a shared evaluation cache must match the legality options under A5.** The
+    review measured it: with B9's move graph off, A1's evaluation does not depend on the move set at
+    all (exactly 0 difference), while A5's moves by up to 2.1e-2 in a WDL logit when the legality
+    filter changes the candidate moves - under A5 the dependence holds in every configuration, not
+    only through the move graph. Purity across move orders holds (24 pairs bit for bit). The engine's
+    evaluation cache key (`mcts.hpp`'s `EvalCache`) holds no legality options, and
+    `t5d_search_new_sharing` does not check them (issue 115, the engine lane's); the Python binding
+    already refuses to share a cache between searches whose split, expansion options or legality
+    classification differ (`search.cache_mismatches`: `legal_moves_only`, `legality_checks`,
+    `legality_nodes`), which is where the binding can see the mismatch - its test now covers
+    `legality_nodes` too. Nothing more is built on the engine side here: issue 115's check is the
+    engine's to add, and A5 makes it necessary in every configuration. For the user with edit 196.
 246. **A1's token formula under A5, and the registers** (§2.1, §5.2; register A1, A5, B8). A1's
     "T = 66N + 16" is not restated for A5. Built: `T = pieces + D + 2N + 16` - the 2 per-board and 16
     global registers kept (B8's positions, never move endpoints - §5.3). Reconstructing §14.4's "2.3x"
@@ -4209,7 +4227,16 @@ superseded or made moot says so; nothing is deleted.
     each `NotImplementedError` naming this issue. Section 15.2's cached rows (C2/C17, C20, C3a, G1's
     FP8 row) are not run for A5; its cached-node and KV figures are analytic only (A5.5), under reading
     (f) - destination tokens live, never cached. The extension (a transient slot class; per-board token
-    lists in the cache; live-pass destination tokens) waits on a ruling. For the user; edit 194.
+    lists in the cache; live-pass destination tokens) waits on a ruling. *The A5 review
+    (2026-10-24)*: (b) and (c) are less open than "unstated" says. C17 ("being read by frozen tokens
+    = present-to-frozen flow, allowed only at refreshes") with §14.4 ("head boards' destination
+    tokens are transient per node") implies the likely reading: frozen tokens never read destination
+    tokens (a destination token is present information, like the move graph), and destination tokens
+    are live queries - read by nothing frozen, reading as live tokens do. Under it A5 composes with
+    the cache exactly as the analytic figures assume (reading (f): destination tokens live, never
+    cached). The refusal stays - the reading is not stated, and C17's premise still fails for a
+    transient token on a frozen board - but this is the reading to put to the user. For the user;
+    edit 194.
 253. **The window under A5** (§10.4, §14.4; register A5, C5, C7, M5, M16, M18). §14.4: A5 "composes
     with the window (boards)"; the joint test waits for the pilot run (M18) and the window stays
     unbuilt (M5, M16). Built: `EngineScope.tokens` - the window's token subset, the only code that
@@ -4231,30 +4258,60 @@ superseded or made moot says so; nothing is deleted.
     node" and "KV memory per state" - are measured there analytically and counted for the dense pass;
     "Displacement bias and normalisation changes", "Key-side Shaw term (B17)" (which grows with T) and
     "Board-layout embedding (A8)" scale with T and were not re-measured under A5. Edits 190, 197.
-256. **Section 14.4's A5 figures: their conditions, and their scale** (§14.4, §15.3; register A5, M4,
-    M18, M19; process note 2). The figures do not state their conditions - pieces per board for
-    "midgame" and "sparse endgame", whether registers count, legal or pseudo-legal destinations, the
-    live heads assumed - and were derived at the 240-board reference that reversal 24 retired. Measured
-    (MEASUREMENTS, "A5"; `t5d.engine.token_counts` over the human games, legal moves, registers
-    counted): tokens 1.94-2.43x fewer by bucket; D median 35-140; dense evaluation 2.49x under 50 boards
-    and 2.79x pooled by decisions (M18) - "~4.4-6.5x on dense attention" is the dense evaluation's total
-    at 240-600 boards (attention alone would be 5.3-7.3x), 2.6x above what A5 buys where 88% of the
-    decisions are; counted 2.66x at 44 boards (block-sparse); the cached node 1.42x under 50 boards and
-    1.56x pooled against "~2.7x" - **flagged under the 2x rule with pseudo-legal moves (1.30x, 2.1x
-    off)**, and 1.9x off with legal ones: A5's live set carries every destination token (about 35
-    under 50 boards, 40% of them on history boards), beside a head board's 66 tokens under A1, so with
-    one or two live heads the cached node barely shrinks (and A5 is refused under the cached path as
-    built - issue 252). The figures above 186 boards stay synthetic and provisional until the pilot
-    run (no human game passes 186). GPU figures, varlen kernels among them, are deferred (M19). The
-    write-back is proposed edit 198. For the user with ablation 1.
+256. **Section 14.4's A5 figures: their conditions, and their scale** (§7.10, §14.4, §15.3; register
+    A5, C26, M4, M18, M19; process note 2). The figures do not state their conditions - pieces per
+    board for "midgame" and "sparse endgame", whether registers count, the live heads assumed - beyond
+    "the full legal-destination set" on head boards, and were derived at the 240-board reference that
+    reversal 24 retired. Measured (MEASUREMENTS, "A5"; `t5d.engine.token_counts` over the human games,
+    legal moves, registers counted, action starts only - the ply split's mid-action leaves and a
+    search's deeper nodes not measured): tokens 1.94-2.43x fewer by bucket; D median 35-140.
+    *Rewritten at the A5 review (2026-10-24), against CHECKPOINT 9*: under C26's phase form (dense
+    below N\*, cached at or above, N\* a placeholder, 50), pooled by decisions (M18), A5 makes the
+    phase form's compute **2.45x** cheaper - the dense evaluation 2.46x below N\*, the cached node
+    (analytic) **2.11x** at or above it; at N\* = 100 2.73x (2.73x; 2.62x). A cached node costs a small
+    fraction of a dense evaluation, so on the human games 97% of the phase form's compute is dense
+    below N\*. The 2x rule, re-stated under C26 on the legal set §14.4 speaks of: the cached per-node
+    term 1.28x below "~2.7x" (N\* = 100: 1.03x) - inside; tokens and KV inside; the dense "~4.4-6.5x" is
+    the dense evaluation's total at 240-600 boards (attention alone would be 5.3-7.3x), sizes no human
+    game reaches (186 at most) - the estimate's conditions were not measured on games (synthetic
+    positions there count 4.8-9.9x, the generator's D); where C26 runs dense A5 buys 2.46x, a size
+    §14.4 gives no estimate for. **No figure is flagged.** The first reading's two flags are withdrawn,
+    each a comparison across conditions: the cached node at every size with pseudo-legal moves (1.30x,
+    "2.1x off" - under 50 boards, where C26 never caches, and on a set §14.4 does not speak of;
+    pseudo-legal at or above 50 boards is 1.79x, inside, a sensitivity), and "dense 2.6x below the
+    range's top" (the 600-board 6.5x against the under-50 figure). The pre-CHECKPOINT-9 reading stays
+    in MEASUREMENTS, labelled: dense 2.79x and the cached node 1.56x at every size, M16's blend 2.19x.
+    What stays true: A5's live set carries every destination token (about 35 under 50 boards, 40% of
+    them on history boards) beside a head board's 66 tokens under A1, so at one or two live heads a
+    cached node barely shrinks under 50 boards - moot under C26; and A5 is refused under the cached
+    path as built (issue 252), so every cached figure is analytic. The figures above 186 boards stay
+    synthetic and provisional until the pilot run (no human game passes 186); N\* is set by the pilot
+    run's compute distribution (C26, M18) - the N\* = 100 figures show the sensitivity. GPU figures,
+    varlen kernels among them, are deferred (M19). The write-back is proposed edit 198 (and 197's row).
+    For the user with ablation 1.
 257. **A5 has no stated decision rule** (§13.1, §14.4; register A5, M24, part K). §13.1 ranks
     network-only ablations supervised "by policy and value loss and accuracy, then searchless and
     search Elo for the finalists"; A5's case is compute, so a loss ranking alone cannot decide it, and
     no tie rule or equal-wall-clock criterion is stated for A5 (the window's "ties go to the cheapest
     configuration" is stated for k = 0 only). Measured, for the rule to weigh: at human-game sizes A5
-    makes a dense evaluation 2.5-4.4x cheaper (2.8x pooled) and a cached node 1.4-2.6x. For the user
-    before ablation 1 (M24): the criterion - equal loss at lower cost, equal cost at higher strength,
-    or another.
+    makes a dense evaluation 2.5-4.4x cheaper (2.8x pooled) and a cached node 1.4-2.6x; under C26's
+    phase form 2.45x pooled (dense 2.46x below N\* = 50, the cached node 2.11x at or above - issue
+    256). For the user before ablation 1 (M24): the criterion - equal loss at lower cost, equal cost
+    at higher strength, or another. *The A5 review (2026-10-24)*: **G10 waits on this too.**
+    CHECKPOINT 9 holds mixture-of-depths open with "A5's verdict" as its trigger (register G10:
+    piece-centric tokens remove the empty squares, its main target; dense only - moot under the
+    cache), so with no decision rule for A5, G10's trigger is undefined as well; and under C26 dense
+    is the mode below N\*, where 88% of the decisions are, so G10's "dense only" covers most of the
+    compute. The rule asked for should say what A5's verdict means for G10 (adopted: G10 loses its
+    main target; refused: G10's first test runs on A1's tokens).
+258. **A5 and C26's N\* couple** (§7.10, §14.4; register A5, C26, M18). *The A5 review (2026-10-24).*
+    C26 sets N\* "where the cached arm starts to beat dense at equal wall-clock", read per board-count
+    range. A5 cheapens the two arms unequally - on the human games the dense evaluation 2.5-4.4x by
+    bucket, the analytic cached node 1.4-2.6x (MEASUREMENTS, "A5") - so with A5 adopted dense stays
+    competitive to larger positions and N\* moves up; measured with A1's tokens, N\* would be set too
+    low for an A5 network. Built: nothing (C26 is not built here; A5 refuses the cached path, issue
+    252). For the user: N\* is read under the tokenisation adopted, so 6c's per-range reading and
+    the pilot run's N\* wait on A5's verdict or are read for both arms. Edit 199.
 
 <!-- A new list, so that the numbers from 140 render as written. -->
 
@@ -6581,30 +6638,48 @@ struck through, where nothing of it is left to apply); the others stand as writt
     conditions; proposed edit 126 adds the search's legality budget among them. Proposed - add: "under
     piece-centric tokens (A5) the candidate moves' destinations are network inputs, so the legality
     filter and its budget (node budgets, never time) fix the input's token set: they are conditions of
-    the input, not of the search alone, and the same in training and inference". Why: purity
-    (C19-C21) and the I15 rebuild both need the destination set to be a deterministic function of the
-    state and the recorded options (issue 245).
+    the input, not of the search alone, and the same in training and inference; an evaluation cache
+    shared between searches is shared only between searches with the same legality options"
+    (*amended at the A5 review, 2026-10-24*: the sharing clause). Why: purity (C19-C21) and the I15
+    rebuild both need the destination set to be a deterministic function of the state and the
+    recorded options, and under A5 the evaluation depends on the move set in every configuration, so
+    a shared cache keyed without the legality options serves one input's evaluation for another
+    (issue 245(e); the engine's check is issue 115).
 197. **§15.3, a new row (A5)**: now - no row names A5. Proposed - add: "Piece-centric tokens (A5) |
     2.3x fewer tokens midgame, 2.7x in sparse endgames; ~250 destination tokens at 240 boards;
-    ~4.4-6.5x on the dense evaluation; ~2.7x on the cached per-node term and KV | 14.4 | measured on
-    the human games (2026-10-23): tokens 1.9-2.4x fewer, dense 2.5x under 50 boards and 2.8x pooled by
-    decisions, cached node 1.4x under 50 boards (analytic) - 600-board figures synthetic". Why: M4's
-    write-back of §14.4's figures needs a row (issue 255); the measurement is MEASUREMENTS' "A5".
+    ~4.4-6.5x on the dense evaluation (240-600 boards); ~2.7x on the cached per-node term and KV |
+    14.4 | measured on the human games (2026-10-23, re-weighed under C26 2026-10-24; action starts,
+    legal destinations): tokens 1.9-2.4x fewer; under the phase form (N\* = 50) 2.45x pooled by
+    decisions - dense 2.46x below N\*, the cached node 2.11x at or above (analytic); the dense range's
+    sizes not reached by the games (synthetic 240-600 boards: 4.8-9.9x)" (*rewritten at the A5
+    review, 2026-10-24*: C26's phase form in place of the every-size pooling and the under-50 cached
+    figure). Why: M4's write-back of §14.4's figures needs a row (issue 255); the measurement is
+    MEASUREMENTS' "A5".
 198. **§14.4's A5 paragraph (M4 write-back; objections (2) and (3))**: now - "(1) ... the real saving
     is 2.3x tokens midgame, 2.7x in sparse endgames - ~4.4-6.5x on dense attention, ~2.7x on the
     cached per-node term, the same on KV memory. (2) 'Empty squares carry geometry' - dissolved by §6's
     typed edges, which deliver clear-ray, x-ray and pin facts exactly ... (3) Uniform board shapes for
     batching - dissolved by §10.3's varlen kernels." Proposed - (1) say "on the dense evaluation" for
     "on dense attention", state the conditions (legal destinations, registers counted, 240-600
-    boards), and add the measured human-game figures: "on the human games (M18) 1.9-2.4x fewer tokens,
-    2.5x cheaper dense evaluations under 50 boards and 2.8x pooled, a 1.4x cheaper cached node under
-    50 boards - its live set carries every destination token, 40% of them on history boards"; (2) add
+    boards), and add the measured human-game figures under the phase form (§7.10): "on the human
+    games (M18; action starts) 1.9-2.4x fewer tokens; with N\* = 50, dense evaluations 2.5x cheaper
+    below N\* and the cached node 2.1x at or above it, 2.45x pooled - the cached node barely shrinks
+    under 50 boards, where its live set carries every destination token (40% of them on history
+    boards), but the phase form caches nothing there" (*rewritten at the A5 review, 2026-10-24*,
+    against CHECKPOINT 9); (2) add
     "where B11 is on (provisional, off by default) and only for the acting player's moving boards
     (attack, defence, x-ray; pin and check from both sides) - elsewhere only RoPE and the displacement
     bias"; (3) add "deferred with the GPU configuration; the CPU build pads, with query blocks of a
-    fixed number of boards of the batch's mean length (§6.1)". Why: M4 and the 2x rule - the cached
-    figure is 1.9-2.1x off at the sizes the games run at (flagged with pseudo-legal moves), the dense
-    range's top 2.6x; objections (2) and (3) rest on what is not built (issues 248, 249, 256).
+    fixed number of boards of the batch's mean length (§6.1)". Why: M4 - the figures' conditions
+    were unstated, and the dense range's sizes are not reached by the games; under C26 no figure is
+    off by 2x on the legal set (the first reading's flags compared across conditions and are
+    withdrawn); objections (2) and (3) rest on what is not built (issues 248, 249, 256).
+199. **§7.10 "N\* is measured" and register C26 (A5 moves N\*)**: now - "It is set where the cached
+    arm starts to beat dense at equal wall-clock, read per board-count range in 6c and weighted by the
+    pilot run's compute distribution (M18)". Proposed - add: "under the tokenisation adopted: A5
+    cheapens dense evaluations more than cached nodes (2.5-4.4x against 1.4-2.6x on the human games),
+    so N\* is read for the arm A5's verdict leaves, or for both". Why: the two decisions couple, and
+    an N\* read with A1's tokens is too low for an A5 network (issue 258).
 
 <!-- A new list, so that the numbers from 110 render as written. -->
 
@@ -7279,3 +7354,20 @@ struck through, where nothing of it is left to apply); the others stand as writt
   and the build log's plan for the lineage ruling, before A5's review fixes are committed).
   Documents only - no code, nothing touching A5; CHANGELOG by heading; BUILD_LOG both sides
   ("Current state" main's).
+- **2026-11-02 - network A5 review fixes** (`lane/net`; written 2026-10-24, committed after the
+  merges above; the two reviews of fd83390, f89c79f and 72e5f96, the main loop's decisions
+  binding; numbers assigned by the main loop - issue sub-items under 244-257, new issue 258,
+  proposed edit 199 used; 259-299 and 380-399 unused). The A5 figures re-weighed under CHECKPOINT
+  9's C26 (`token_counts`' phase form, N\* a parameter): 2.45x pooled, dense 2.46x below N\* = 50,
+  the cached node 2.11x at or above (N\* = 100: 2.73x; 2.62x) - no 2x flag stands on the legal set,
+  the first reading's two withdrawn (cross-condition); the pre-CHECKPOINT-9 reading kept, labelled.
+  The token set held exact by validation and rebuilt from scratch (the stale-token probe now
+  refused); `TokenLayout` refuses a wrong-shaped mask; a shared cache must match the legality
+  options under A5 (245(e); the binding's refusal tested for `legality_nodes`); 252's likely
+  reading for the user; G10's dependence (257); A5 and N\* couple (258). The reviewer's 15
+  survivors re-run on a fresh copy of the fixed tree: 14 killed by the tests written for them, C05
+  retired (its code removed; the re-anchored inverse equivalent); its 19 extra mutants once: 16
+  killed, the 3 LOW survivors killed by added tests. Checks: pytest 344 passed / 1 skipped
+  (`tests/engine`) and 1589 passed (`tests/net`, `tests/train`; `T5D_REQUIRE_ENGINE=1`, two
+  workers); ruff clean; `verify` ok but the unsynced Kairos submodule (not synced: no downloads
+  without asking). Register A5, C26, G10, M18; issues 244, 245, 252, 256-258; edits 196-199.
