@@ -231,6 +231,25 @@ random-play positions, 4 games x 5 positions per class, machine loaded):
 
 Not an M9 figure: M9 measures the expansion without this filter (spec issue 46).
 
+### Kairos (H52) against the recorded answers - a smoke run, not a recording (2026-10-23; no threshold, no verdict)
+
+`dev-r`, loaded by the other lanes; Kairos at `8bfea4a6e8d1`, its driver built with Rust
+1.99.0 (x86_64-pc-windows-gnu, self-contained linker; fat LTO, 26 s). Both sources through
+the harness's `runner.observe` over all 41 corpus records, 3 at a time - `kairos` 120 s a
+record, `kairos:naive` 60 s - compared position by position with the committed golden files
+of ftxi, cwmtt and Chess in 5D, up to the first placement divergence (there was none).
+Nothing was written under `oracles/`. Detail and reading: `docs/BUILD_LOG.md`, issue 533.
+
+| Against | Same boards and pieces | Same unmoved markers | Check agrees | Terminal agrees | Count agrees (`kairos:naive`) |
+|---|---|---|---|---|---|
+| ftxi | 987 / 987 | 987 / 987 | 855 / 986 | 986 / 986 | 841 / 843 |
+| cwmtt | 803 / 803 | 780 / 803 (Very Small - Open) | - (no check verdict) | 802 / 802 ("no action") | 680 / 680 |
+| Chess in 5D | 815 / 815 | 815 / 815 | 814 / 814 | 791 / 793 | - (no count) |
+
+Records read: 31 to their end or refusal; 9 `parse_failed` (Kairos's reader fails the whole
+record); the hypercuboid search cut at 120 s on 1 record (cwmtt/100_timelines, position 21
+of 22), the exhaustive one at 60 s on 10.
+
 ### G9's bounded AMD attempt - AMD-labelled, eager, indicative (2026-10-23; no threshold, no verdict)
 
 **What it is.** Register G9's "one bounded attempt on the AMD RX 9070 XT via AMD's PyTorch

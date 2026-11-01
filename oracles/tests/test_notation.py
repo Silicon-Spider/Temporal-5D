@@ -13,6 +13,7 @@ from oracle_harness import build, corpus, lockfile, paths
 from oracle_harness.adapters import (
     ORACLE_SOURCES,
     PARSE_ONLY_SOURCES,
+    PENDING_SOURCES,
     PRIMARY_SOURCES,
     RunOptions,
     make_source,
@@ -155,7 +156,8 @@ class RegistryTests(unittest.TestCase):
 
     def test_every_pin_the_harness_runs_has_a_recipe_and_a_source(self):
         run_by_harness = {pin.id for pin in self.lock.oracles()}
-        self.assertEqual(run_by_harness, {oracle_of(name) for name in ORACLE_SOURCES})
+        # A pin the harness runs has a source the gate compares - or one wired and not yet enabled (Kairos, H52).
+        self.assertEqual(run_by_harness, {oracle_of(name) for name in ORACLE_SOURCES + PENDING_SOURCES})
         self.assertEqual(set(build.buildable(self.lock)), run_by_harness)
         self.assertEqual(build.recipe_tools("notation"), ("node",))
 

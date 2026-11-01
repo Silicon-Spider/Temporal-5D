@@ -116,9 +116,10 @@ class VerifyTests(unittest.TestCase):
 class LoadTests(unittest.TestCase):
     def test_the_repository_lock_file_loads(self):
         lock = lockfile.load()
-        self.assertEqual({pin.id for pin in lock.oracles()}, {"ftxi", "cwmtt", "chessin5d", "notation"})
+        self.assertEqual({pin.id for pin in lock.oracles()}, {"ftxi", "cwmtt", "chessin5d", "kairos", "notation"})
         self.assertEqual({lock.pin(name).tier for name in ("ftxi", "notation")}, {"commit"})
-        self.assertEqual({lock.pin(name).tier for name in ("cwmtt", "chessin5d")}, {"nightly"})
+        # Kairos (H52) is a nightly oracle like cwmtt and Chess in 5D.
+        self.assertEqual({lock.pin(name).tier for name in ("cwmtt", "chessin5d", "kairos")}, {"nightly"})
         # The notation repository's parser reads the notation and judges nothing (H26).
         self.assertEqual([pin.id for pin in lock.oracles() if pin.parse_only], ["notation"])
         self.assertEqual(lock.pin("notation").role, "parse-oracle")
