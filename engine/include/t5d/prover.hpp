@@ -111,6 +111,7 @@
 #ifndef T5D_PROVER_HPP
 #define T5D_PROVER_HPP
 
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -272,6 +273,12 @@ bool decomposes(const RuleOptions& rules) noexcept;
 struct ProveBudget {
   std::uint64_t max_nodes = std::numeric_limits<std::uint64_t>::max();
   std::optional<std::chrono::nanoseconds> max_time;
+  /// Stage E10: the caller's stop - a budget stop like the clock's
+  /// (ProverStats::stopped_by_cancel), read where the budget is spent; the
+  /// search stops at its next node, claiming nothing (H37). The verification
+  /// ladder (t5d/ladder.hpp) sets it when the decision a job serves ends: no
+  /// job outlives its decision. Null: none.
+  const std::atomic<bool>* cancel = nullptr;
   static ProveBudget nodes(std::uint64_t n) noexcept {
     ProveBudget b;
     b.max_nodes = n;
@@ -365,6 +372,7 @@ struct ProverStats {
   std::uint64_t attacker_tests = 0;   // attacker turns asked for one legal action first
   bool stopped_by_nodes = false;
   bool stopped_by_time = false;
+  bool stopped_by_cancel = false;     // ProveBudget::cancel (stage E10)
   bool stopped_by_memory = false;     // E4's ceiling or the tree's
   double seconds = 0;
 };

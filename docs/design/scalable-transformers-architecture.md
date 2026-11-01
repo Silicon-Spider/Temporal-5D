@@ -708,6 +708,31 @@ are unchanged. Without it, every refreshed configuration is evaluated off-distri
 and any comparison against a plain causal baseline, which needs no offsets, is biased
 against the refresh.
 
+### 8.3.2 Cache only where it pays — the phase form
+
+The cache's speed and its quality cost need not be taken together everywhere. Dense cost
+grows with the square of the state's size, so small states are cheap to evaluate fully and
+the cache's speedup is least needed there — other parts of the system may bind first —
+while the causal constraint's quality cost is paid on every evaluation. So cache only above
+a size threshold and run dense below it, in one network. Measure the threshold rather than
+choose it: where the cached arm starts to beat dense at equal wall-clock, read per size
+range and weighted by where the compute actually goes. If it never does, the answer is
+dense; if it always does, plain caching.
+
+Two rules keep it honest. **Choose the mode by a rule training applies too** — the size of
+the state the refresh is conditioned on — so the network never meets a mask it was not
+trained on; dense passes are no new regime for a refreshed network, whose refresh pass is
+one. **Choose it once per decision, from the root**, so every evaluation in a search is
+made the same way and state-keyed reuse never mixes the two; in a state that only grows, a
+sequence of decisions crosses the threshold once. The other reading — dense *lower* layers
+under a cached top — is refused by §8.3's placement rule: the cache survives only below
+the first bidirectional layer.
+
+One scheduling rule for composite actions: when a search assembles an action from one
+evaluation's priors, without calling the network at its inner steps, refresh triggers and
+recomputes belong only where the network runs. A substructure frozen at an inner step is
+recomputed when the network next runs, once per conditioning epoch.
+
 ### 8.4 Composition with scope reduction
 
 **Scope reduction and caching are complements, not substitutes.** Scope shrinks `T_total`;
@@ -927,7 +952,12 @@ territory; cached frontier evaluation sits near the knee.
 - **KV-head reduction (GQA/MQA)** — see §12.2. Usually not worth it, and retrofittable.
 - **FP8** — see §10.
 - **Mixture-of-Depths** — routing low-information tokens through fewer layers fits this
-  problem class unusually well. Speculative; no established precedent here.
+  problem class, but it trades quality for compute rather than saving it free: in a
+  BERT-base encoder it bought 1.20× for 4.4 accuracy points, while attention-routed MoD
+  beat isoFLOP baselines in vision transformers. Route only above an exact floor — never a
+  token a domain rule makes relevant — weigh it after any tokenisation decision that would
+  remove its targets, and expect nothing from it under caching, where frozen tokens are
+  computed once.
 
 ### 11.3 Actively dangerous
 
@@ -954,19 +984,27 @@ meaningless.
 
 Sorted by the principles above rather than case by case. **KV-cache quantisation** and
 **varlen/ragged kernels** transfer — memory and padding are real costs in variable-`N`
-batching. **Early exit / adaptive depth** is conditional: a self-assessment mechanism,
-so it joins the confidence family (§13.2.4), allowable only while the exact checker's
+batching. **Early exit / adaptive depth** is conditional: a self-assessment mechanism, so
+it joins the confidence family (§13.2.4), allowable only while the exact checker's
 baseline never scales down with the model's self-rated ease. **Within-system
 distillation** — a large model into a smaller one of the *same* role — is a legitimate
-capacity tool; the refused distillation is *between* differently-wrong systems, not
-within one. **Latent-KV compression** (MLA-style) fails for the reason KV-head reduction
-fails: a low-rank bottleneck on a key axis already marginal under high-dimensional
-positional encoding. **Mixture of experts** offers capacity at constant per-token cost,
-but here the FFN ratio is already the nearly-free capacity rung, so the gain is small and
-routing overhead is not. And speculative decoding, meaningless as stated, has a
-structural cousin — speculative prefetch of evaluations to fill under-filled batches —
-that is quality-neutral under state-keyed caching and matters only where batches are
-latency-bound.
+capacity tool; the refused distillation is *between* differently-wrong systems, not within
+one. **A second, smaller network for the easy cases** is within-system too, and
+legitimate, but the evidence runs against keeping one: Stockfish retired the small network
+it had run beside its main one since 16.1, and gained strength where the small net had
+underperformed. One network, with speed bought from its own knobs. **Latent-KV
+compression** (MLA-style) fails for the reason KV-head reduction fails: a low-rank
+bottleneck on a key axis already marginal under high-dimensional positional encoding. At
+small head widths it also costs compute — the absorbed form that makes it cheap in
+memory-bound decoding attends in the latent width — and its rotary key, shared across
+heads, cannot carry per-head positional specialisation. Like KV-head reduction it now
+retrofits (trained MHA networks convert with a fraction of a percent of their training
+data), so it is decided late, under measured memory pressure. **Mixture of experts**
+offers capacity at constant per-token cost, but here the FFN ratio is already the
+nearly-free capacity rung, so the gain is small and routing overhead is not. And
+speculative decoding, meaningless as stated, has a structural cousin — speculative
+prefetch of evaluations to fill under-filled batches — that is quality-neutral under
+state-keyed caching and matters only where batches are latency-bound.
 
 The pattern: compute-reducing tricks transfer or are neutral; capacity-reducing tricks on
 the key axis hit the same wall; self-assessment tricks join the confidence family. No new
@@ -987,11 +1025,13 @@ The most useful planning distinction, and one that is rarely made explicit.
 
 | Decision | Type | Why |
 |---|---|---|
-| Causal masking (§8) | **Committed** | Train/inference mask mismatch causes distribution shift. Cannot be added after training |
+| Causal masking (§8) | **Committed** | Train/inference mask mismatch causes distribution shift. Cannot be added after training — nor can a phase form's size threshold, which training must apply too (§8.3.2) |
 | Positional scheme (§4) | **Committed** | Baked into learned representations |
 | Tokenisation and scope (§3) | **Committed** | Determines what the model has ever seen |
 | Width, depth | **Committed** | Retraining required |
 | KV-head reduction (§12.2) | **Retrofittable** | Uptrains at ~5% of original compute |
+| Latent-KV compression (§11.4) | **Retrofittable** | Converts from a trained network with a fraction of a percent of its data |
+| Mixture-of-depths routing (§11.2) | **Retrofittable** | Adapts from pretrained weights by fine-tuning |
 | Normalisation type and placement | **Committed** | Baked into learned representations. Drop mean-centring and biases (RMSNorm-style, no Q/K/V biases) where evidence says it is free |
 | Kernel choice, precision | **Free** | Inference-time |
 | Serving stack (§11.1) | **Free** | Inference-time |
@@ -1031,6 +1071,9 @@ already stretched thin (§4.4).
 **And it retrofits.** So the correct treatment is: do not adopt it now, revisit only if a
 cached deployment demonstrates memory pressure.
 
+Latent-KV compression (MLA) now retrofits too, by converting a trained network, so it gets
+the same treatment — with a compute penalty at small head widths on top (§11.4).
+
 ### 12.3 General ordering
 
 1. **Measure `|Far|`** — the relevant-but-outside-cheap-scope set (§3.3.1) — on real
@@ -1041,7 +1084,8 @@ cached deployment demonstrates memory pressure.
 4. **Build the dense, uncached baseline.** It is the only thing you can price other options
    against.
 5. **Ablate** registers, oracle-bias head count, width/depth at matched wall-clock.
-6. **Only then** consider caching (§8), and only if throughput demonstrably binds.
+6. **Only then** consider caching (§8), and only if throughput demonstrably binds — then
+   only where it binds (§8.3.2).
 
 Step 4 is the one most often skipped, and skipping it means never learning what the
 optimisations cost.
@@ -1300,6 +1344,12 @@ victim's capacity may win by general strength — score every attacker for **spe
 (win rate against the victim minus win rate against a reference pool) before counting
 its wins as exploits.
 
+**Include an attacker from another paradigm.** An external engine built differently — a
+hand-tuned alpha-beta engine against a learned search, say — was never trained against the
+victim, so what it finds is what an outside player would find, and it costs nothing to
+train. Like every attacker it supplies positions, never targets; and it doubles as the
+first strength yardstick that is not self-play Elo.
+
 ### 13.2.6 The checker is only as exact as its rules implementation
 
 Every guarantee the exact layer provides — proofs, permanent solved facts, structural
@@ -1336,6 +1386,12 @@ excluding nondeterministic ones rather than tolerating a percentage; and **keep 
 answers immutable**, hash-verified, outside the reach of the code under test. A bonus: a
 recorded oracle error doubles as a copy detector — an implementation that reproduces it
 probably borrowed that oracle's logic.
+
+**Count independence by method, not by implementation.** Implementations of one algorithm
+share its flaws: a further oracle on the same method catches implementation bugs — yours
+and the other oracles' — but not a flaw in the method itself, so the most valuable oracle
+is the one that decides by a different algorithm. Record each oracle's method beside its
+code, read from the pinned source rather than its documentation.
 
 
 ### 13.2.7 Pay exactness only where a proof can result
@@ -1446,7 +1502,8 @@ importance. And quoting attention-term ratios as total throughput, which flatter
 optimisation by 20-30%.
 
 **The three things most likely to be over-engineered.** Caching before establishing that
-throughput binds. KV-head reduction, which is retrofittable and usually not worth it.
+throughput binds, or everywhere when only large states need it. KV-head reduction and
+latent-KV compression, both retrofittable and usually not worth it.
 Separate weight sets for masked passes that would work tied.
 
 **The one thing most often mistaken for a kernel detail.** Token ordering (§5.3). It decides

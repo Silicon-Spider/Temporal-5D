@@ -33,6 +33,7 @@ HuntResult Hunt::hunt(const GameState& root, const ProveBudget& budget) {
   if (r.status == ProofStatus::Proven) {
     out.mate = true;
     out.proof = r.proof;
+    out.first_action = r.first_action;
     out.line = r.line;
     out.line_complete = r.line_complete;
     out.certificate = r.certificate;

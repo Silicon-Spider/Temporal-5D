@@ -61,7 +61,7 @@ import torch
 from ..net.cache import CachedEvaluator, Epoch, state_digest
 from ..net.model import NetOutput, T5DNet
 from ..net.state import PositionState, collate, relayout
-from .capi import T5D_VALUE_LOGITS, T5D_VALUE_PROBABILITIES
+from .capi import T5D_SPLIT_FLAT, T5D_VALUE_LOGITS, T5D_VALUE_PROBABILITIES
 from .convert import Position, to_position
 from .errors import EngineInternalError
 from .search import LeafView, Search
@@ -80,8 +80,15 @@ ERROR_HEAD_FIELD = "value_error"
 #: Which policy head an evaluator delivers as the prior (register D9): the policy (``"normal"``), or
 #: the optimistic policy (``"optimistic"``) - match play only, "kept out of self-play" (section
 #: 8.1): ``netplay.play_game`` refuses an optimistic evaluator in self-play. The values are the
-#: same heads' either way.
+#: same heads' either way. D2's flat form refuses the optimistic prior (``run_search`` and
+#: ``CStepDriver.deliver``; ``netplay.PlayConfig``): D9's head has no leave logit, so its move logits
+#: would be scored beside the normal head's leave logits, whose offset against them is arbitrary
+#: (issue 242(h) - NaN board logits, the engine's ``leave_share``, the alternative for the user).
 POLICY_SOURCES: tuple[str, ...] = ("normal", "optimistic")
+FLAT_OPTIMISTIC = (
+    "D9's optimistic prior is refused under D2's flat form: its head has no leave logit, so its move logits "
+    "would be scored beside the normal head's leave logits (issue 242(h))"
+)
 
 
 def state_of(position: PositionLike) -> PositionState:
@@ -118,8 +125,8 @@ class Evaluation:
     moves_left: float = math.nan
     #: D2's flat form: one "leave it" logit per board of the leaf's expansion (``board_count``,
     #: its order; NaN: none for that board - the search's ``leave_share``), read at the acting
-    #: player's playable boards by the flat form only - or None: none given. The network has no
-    #: per-board head yet (the net lane's head change), so it gives None.
+    #: player's playable boards by the flat form only - or None: none given. The network gives
+    #: its flat head's (``NetOutput.leave_logits``, every board; spec issue 241).
     board_logits: np.ndarray | None = None
     #: The prior the policy logits are (``POLICY_SOURCES``): the normal policy's, or D9's optimistic
     #: policy's - carried by the evaluation itself, so that a wrapper around an evaluator cannot hide
@@ -194,8 +201,10 @@ def _split(out: NetOutput, states: Sequence[PositionState], policy: str = "norma
     (``policy``: the normal policy's logits and submit logit, or D9's optimistic policy's),
     the submit logit and D3's value heads - the WDL, the categorical, the error head's output
     (``ERROR_HEAD_FIELD``; NaN for an output without one) and moves-left in turns (``expm1`` of
-    the head's ``log1p``, floored at 0). The short-term values are training targets' heads the
-    search does not read (section 8.3: the error head and D9 learn from them)."""
+    the head's ``log1p``, floored at 0) and D2's per-board "leave it" logits (``NetOutput.
+    leave_logits``, one per board in the state's order - the expansion's; None for an output without
+    them). The short-term values are training targets' heads the search does not read (section 8.3:
+    the error head and D9 learn from them)."""
     if policy not in POLICY_SOURCES:
         raise ValueError(f"policy must be one of {POLICY_SOURCES}")
     moves_out, submit_out = out.policy_logits, out.submit_logits
@@ -212,6 +221,8 @@ def _split(out: NetOutput, states: Sequence[PositionState], policy: str = "norma
     moves_left = torch.expm1(out.moves_left_log.detach().double().cpu().clamp(min=0.0))
     submit = submit_out.detach().float().cpu()
     submit_valid = out.submit_valid.detach().cpu()
+    leave_out = getattr(out, "leave_logits", None)
+    leave = None if leave_out is None else leave_out.detach().float().cpu()
     results = []
     for i, state in enumerate(states):
         m = int(state.moves.shape[0])
@@ -231,6 +242,7 @@ def _split(out: NetOutput, states: Sequence[PositionState], policy: str = "norma
                 submit_logit=s if legal else math.nan,  # masked (-inf) or absent: no logit
                 error=math.nan if errors is None else float(errors[i]),
                 moves_left=float(moves_left[i]),
+                board_logits=None if leave is None else leave[i, : state.n_boards].numpy().copy(),
                 policy=policy,
             )
         )
@@ -403,6 +415,12 @@ def check_evaluation(leaf: Leaf, evaluation: Evaluation, value_bins: int | None 
     state = state_of(leaf.position)
     if not math.isnan(s) and not (state.submit_possible and state.submit_legal):
         raise ValueError(f"leaf {leaf.id}: a submit logit for a leaf that offers no legal submit")
+    if evaluation.board_logits is not None:
+        bl = np.asarray(evaluation.board_logits)
+        if bl.shape != (state.n_boards,):
+            raise ValueError(f"leaf {leaf.id}: board logits of shape {bl.shape}, expected ({state.n_boards},) - one per board")
+        if np.isinf(bl).any():
+            raise ValueError(f"leaf {leaf.id}: a board logit is infinite (NaN is none given)")
 
 
 @dataclass
@@ -501,9 +519,9 @@ class CStepDriver:
     leaf of the batch or for none), the error head's output and moves-left (NaN: none); and
     D2's flat form's per-board "leave it" logits where an evaluation gives them
     (``Evaluation.board_logits``: each leaf's ``expansion.board_count``, in its order; NaN for
-    a leaf that gives none - the search's ``leave_share`` there). The network gives none yet
-    (its per-board head is the net lane's, D2's head change), so under the flat form the search
-    gives leaving a board its placeholder share. Each leaf's move logits must number its
+    a leaf that gives none - the search's ``leave_share`` there). The network gives its flat
+    head's logit for every board (``NetOutput.leave_logits``; spec issue 241), so a flat search
+    it evaluates never falls back on ``leave_share``. Each leaf's move logits must number its
     candidate moves and its board logits its boards: a leaf whose do not is refused here, before
     the engine sees the batch (``ValueError``; the batch abandoned). A refused delivery raises
     the engine's error; the engine has abandoned the batch.
@@ -608,6 +626,9 @@ class CStepDriver:
                 raise ValueError(
                     f"deliver: leaf {v.index} has {np.asarray(ev.board_logits).size} board logits for its {v.expansion.board_count} boards"
                 )
+        if int(self.search.params.split) == T5D_SPLIT_FLAT and any(ev.policy != "normal" for ev in evs):
+            self.abandon()
+            raise ValueError(FLAT_OPTIMISTIC)
         logits = np.concatenate([np.asarray(ev.policy_logits, dtype=np.float32).reshape(-1) for ev in evs] + [np.zeros(0, np.float32)])
         wdl = np.stack([np.asarray(ev.wdl_logits, dtype=np.float32) for ev in evs])
         given = [ev.value_logits is not None for ev in evs]
@@ -700,6 +721,8 @@ def run_search(
     D9's optimistic prior (``serve``) - a self-play search, including M21's generator, sets it."""
     if self_play and policy_source(evaluator) != "normal":
         raise ValueError("an optimistic evaluator searches at match play only, never in self-play (register D9, section 8.1)")
+    if int(search.params.split) == T5D_SPLIT_FLAT and policy_source(evaluator) != "normal":
+        raise ValueError(FLAT_OPTIMISTIC)
     start_epoch(search, evaluator, regs_per_board=regs_per_board, global_regs=global_regs)
     driver = CStepDriver(search, playouts=playouts, regs_per_board=regs_per_board, global_regs=global_regs, value_kind=value_kind)
     stats = serve(driver, evaluator, batch_size=batch_size, self_play=self_play)
@@ -735,6 +758,7 @@ __all__ = [
     "ERROR_HEAD_FIELD",
     "Evaluation",
     "Evaluator",
+    "FLAT_OPTIMISTIC",
     "Leaf",
     "NetworkEvaluator",
     "POLICY_SOURCES",

@@ -10,8 +10,9 @@ writes them; the target builder (``train.targets``) reads them - the same interf
 record came from a live game or from disk, so that section 15.2's row "targets re-derived from
 stored records = the targets written at generation" compares the two.
 
-**The format, version 1** (``RECORD_VERSION``): one ``.npz`` per game, written with
-``allow_pickle=False`` and read the same way (nothing executable in an archive):
+**The format, version 2** (``RECORD_VERSION``; version 2 since D2's flat form writes records -
+spec issue 243): one ``.npz`` per game, written with ``allow_pickle=False`` and read the same way
+(nothing executable in an archive):
 
 * ``header`` - a JSON object as UTF-8 bytes (``uint8``): the game's conditions and result
   (``GameRecord.header``; the keys below).
@@ -20,7 +21,10 @@ stored records = the targets written at generation" compares the two.
   ``(D, value_bins)``, ``d_root_wdl`` ``(D, 3)``.
 * ``b_boards`` ``(sum N, 2)`` int32 with ``b_offset`` ``(D + 1,)``: each decision's boards as
   ``(timeline, half_turn)`` in the expansion's (the network input's) order - what the per-board
-  targets index.
+  targets index. Beside them, with the same offsets, ``b_playable`` (bool: the acting player's
+  playable boards - the expansion's ``playable``, L5 - the boards D2's flat form gives a
+  distribution) and ``b_leave_logit`` (float32: the network's raw "leave it" logit for each board,
+  D2's flat head - NaN where the evaluator gave none).
 * ``c_moves`` (``MOVE_DTYPE``) and ``c_logit`` (float32), with ``c_offset``: each decision's **candidate moves** - the root leaf's, in the
   engine's order (the network's input rebuilt with ``Game.expand(legal_moves=...)`` and the
   search's legality budget has exactly these, issue 155) - and the network's **raw** policy
@@ -32,7 +36,13 @@ stored records = the targets written at generation" compares the two.
   backed-up (q, d), the variance of its backed-up values, E3's factor, E10's boost and the
   forced and steered visit counts (I2's flags: 0 until forced playouts and E10's steering exist -
   issue 153), the child's key and its own network evaluation (WDL, moves-left, error; NaN where
-  not evaluated), the solver bounds (search state, never a proof - H19, H23).
+  not evaluated), the solver bounds (search state, never a proof - H19, H23). Under D2's **flat
+  form** (``d_flat``) a root child is a whole turn: its candidate is ``CANDIDATE_TURN`` (-2) and
+  ``e_turn_length`` its moves' count (0 for every other child).
+* ``t_moves`` (``MOVE_DTYPE``) with ``t_offset`` (``(D + 1,)``): each decision's flat root
+  children's turns, their moves in the order played, child after child (``e_turn_length`` each) -
+  the engine's moves as the search returned them (a J6 branch keeps its branching flag), not
+  indices into the candidates: a turn's later moves are made in the states the earlier ones leave.
 
 Header keys: ``record_version``, ``engine_version``, ``generator``, ``variant``, ``start_fen``
 (None or the 5DFEN boards), ``ruleset``, ``rules``, ``width``, ``height``, ``even``,
@@ -51,7 +61,9 @@ generator was given none). A synthetic record (``trainer.synthetic_record``, nev
 generator's) also says ``synthetic``: the only rows the untrained build steps on.
 
 Decision ``d_proof_ref`` is -1 throughout for the same reason. Another version is refused on
-reading (``RecordVersionError``); a field is never removed or reinterpreted within a version.
+reading (``RecordVersionError``) - version 1 (before the flat form's fields) among them: no
+archive of it exists outside tests, and reading it would need every flat field defaulted (spec
+issue 243); a field is never removed or reinterpreted within a version.
 """
 
 from __future__ import annotations
@@ -71,7 +83,12 @@ from ..engine.capi import MOVE_DTYPE, CSearchParams, ExpandOptions
 from ..net.quant import trunk_format
 
 #: The record format's version: bumped on any change to a field's presence or meaning.
-RECORD_VERSION = 1
+RECORD_VERSION = 2
+
+#: A root child's ``candidate`` when it is the submit action (D8), and when it is a whole turn (D2's
+#: flat form: its moves in ``DecisionRecord.turn_moves``).
+CANDIDATE_SUBMIT = -1
+CANDIDATE_TURN = -2
 
 #: Why a search stopped (``DecisionRecord.stop``): its playouts spent, the root needing none
 #: (terminal or solved), no simulation possible, or I20's KL-adaptive rule.
@@ -115,6 +132,7 @@ DECISION_FIELDS: dict[str, str] = {
     "played_child": "<i4",  # the child played (-1: none - resigned)
     "choice": "<i1",  # CHOICE_CODES
     "verified_illegal": "<i4",  # chosen children classified illegal and removed before the choice stood
+    "flat": "?",  # D2's flat form: the root children are whole turns (record version 2)
     "prior_to_target_kl": "<f8",  # KL(policy target || raw prior) under header["target_config"]; NaN: none
     "proof_ref": "<i8",  # -1: no proof (none may be stored before the sign-off)
 }
@@ -126,7 +144,7 @@ DECISION_VECTORS: dict[str, tuple[str, int | None]] = {
 }
 #: Each root child's fields: name -> dtype (``e_<name>``); ``network_wdl`` is ``(n, 3)``.
 CHILD_FIELDS: dict[str, str] = {
-    "candidate": "<i4",  # index into the decision's candidates; -1: the submit action
+    "candidate": "<i4",  # index into the decision's candidates; -1: the submit action; -2: a whole turn (flat form)
     "legality": "<i1",
     "visits": "<i8",
     "prior": "<f8",  # the search's (after the root noise)
@@ -145,6 +163,7 @@ CHILD_FIELDS: dict[str, str] = {
     "network_error": "<f8",
     "lo": "<i1",
     "hi": "<i1",
+    "turn_length": "<i4",  # a flat child's turn's moves (in ``turn_moves``); 0 for every other child
 }
 
 
@@ -175,8 +194,11 @@ class Children:
     network_error: np.ndarray
     lo: np.ndarray
     hi: np.ndarray
+    turn_length: np.ndarray | None = None  # None: no turn children (zeros)
 
     def __post_init__(self) -> None:
+        if self.turn_length is None:
+            self.turn_length = np.zeros(np.asarray(self.visits).reshape(-1).shape[0], dtype="<i4")
         for name, dtype in CHILD_FIELDS.items():
             a = np.asarray(getattr(self, name), dtype=dtype)
             setattr(self, name, a.reshape(-1, 3) if name == "network_wdl" else a.reshape(-1))
@@ -186,7 +208,16 @@ class Children:
 
     @property
     def submit(self) -> np.ndarray:
-        return self.candidate < 0
+        return self.candidate == CANDIDATE_SUBMIT
+
+    @property
+    def turn(self) -> np.ndarray:
+        """Whole-turn children (D2's flat form)."""
+        return self.candidate == CANDIDATE_TURN
+
+    def turn_offsets(self) -> np.ndarray:
+        """``(n + 1,)``: where each child's turn starts in ``DecisionRecord.turn_moves``."""
+        return np.concatenate([[0], np.cumsum(self.turn_length.astype(np.int64))])
 
 
 @dataclass
@@ -234,6 +265,12 @@ class DecisionRecord:
     children: Children
     prior_to_target_kl: float = math.nan
     proof_ref: int = -1
+    #: D2's flat form (record version 2): the root children are whole turns (their moves in
+    #: ``turn_moves``, ``Children.turn_length`` each, in child order).
+    flat: bool = False
+    playable: np.ndarray | None = None  # (N,) bool: the acting player's playable boards (None: none)
+    raw_leave_logits: np.ndarray | None = None  # (N,) float32: the network's raw leave logits (None: NaN, none given)
+    turn_moves: np.ndarray | None = None  # MOVE_DTYPE: the flat children's turns, concatenated (None: none)
 
     def __post_init__(self) -> None:
         if self.stop not in STOP_CODES:
@@ -246,14 +283,32 @@ class DecisionRecord:
         self.boards = np.asarray(self.boards, dtype="<i4").reshape(-1, 2)
         self.candidates = np.asarray(self.candidates, dtype=MOVE_DTYPE).reshape(-1)
         self.raw_logits = np.asarray(self.raw_logits, dtype="<f4").reshape(-1)
+        n = self.boards.shape[0]
+        self.flat = bool(self.flat)
+        self.playable = np.zeros(n, dtype=bool) if self.playable is None else np.asarray(self.playable, dtype=bool).reshape(-1)
+        leave = np.full(n, np.nan, dtype="<f4") if self.raw_leave_logits is None else self.raw_leave_logits
+        self.raw_leave_logits = np.asarray(leave, dtype="<f4").reshape(-1)
+        self.turn_moves = (
+            np.zeros(0, dtype=MOVE_DTYPE) if self.turn_moves is None else np.asarray(self.turn_moves, dtype=MOVE_DTYPE).reshape(-1)
+        )
+        if self.playable.shape[0] != n or self.raw_leave_logits.shape[0] != n:
+            raise ValueError("one playable flag and one leave logit per board")
         m = self.candidates.shape[0]
         if self.raw_logits.shape[0] != m:
             raise ValueError("one raw logit per candidate move")
         if self.boards.shape[0] != self.n_boards:
             raise ValueError(f"{self.boards.shape[0]} board keys for {self.n_boards} boards")
         c = self.children.candidate
-        if c.size and (c.max() >= m or c.min() < -1):
+        if c.size and (c.max() >= m or c.min() < CANDIDATE_TURN):
             raise ValueError("a child's candidate index is outside the candidate list")
+        turns = c == CANDIDATE_TURN
+        if c.size and bool(turns.any()) and not (self.flat and bool(turns.all())):
+            raise ValueError("whole-turn children are the flat form's, and a flat decision's children are all turns")
+        if self.flat and c.size and not bool(turns.all()):
+            raise ValueError("a flat decision's root children are whole turns")
+        length = self.children.turn_length
+        if bool((length < 0).any()) or bool((length[~turns] != 0).any()) or int(length.sum()) != self.turn_moves.shape[0]:
+            raise ValueError("the turns' lengths are the flat children's and sum to the recorded turn moves")
         if not -1 <= self.played_child < len(self.children) or not -1 <= self.best_child < len(self.children):
             raise ValueError("the best and played children are root children (or -1)")
 
@@ -267,14 +322,29 @@ class DecisionRecord:
 
     @property
     def played_submit(self) -> bool:
-        return self.played_child >= 0 and bool(self.children.candidate[self.played_child] < 0)
+        return self.played_child >= 0 and bool(self.children.candidate[self.played_child] == CANDIDATE_SUBMIT)
 
     def played_move(self) -> np.void | None:
-        """The candidate move played (None: a submit, or nothing played)."""
+        """The candidate move played (None: a submit, a whole turn, or nothing played)."""
         if self.played_child < 0:
             return None
         k = int(self.children.candidate[self.played_child])
         return None if k < 0 else self.candidates[k]
+
+    def turn(self, child: int) -> np.ndarray:
+        """Root child ``child``'s turn's moves (``MOVE_DTYPE``; empty unless it is a flat child)."""
+        off = self.children.turn_offsets()
+        return self.turn_moves[int(off[child]) : int(off[child + 1])]
+
+    def played_moves(self) -> np.ndarray:
+        """Every move the decision played (``MOVE_DTYPE``): a flat child's turn, a move child's move,
+        or none (a submit, or nothing played)."""
+        if self.played_child < 0:
+            return np.zeros(0, dtype=MOVE_DTYPE)
+        if self.flat:
+            return self.turn(self.played_child).copy()
+        m = self.played_move()
+        return np.zeros(0, dtype=MOVE_DTYPE) if m is None else np.array([m], dtype=MOVE_DTYPE)
 
 
 @dataclass
@@ -386,6 +456,9 @@ def to_arrays(record: GameRecord) -> dict[str, np.ndarray]:
         w = width if width is not None else (rows[0].shape[0] if rows else 0)
         out[f"d_{name}"] = np.stack(rows).astype(dtype) if rows else np.zeros((0, w), dtype=dtype)
     out["b_boards"], out["b_offset"] = _concat([d.boards for d in ds], "<i4", 2)
+    out["b_playable"], _ = _concat([d.playable for d in ds], "?")
+    out["b_leave_logit"], _ = _concat([d.raw_leave_logits for d in ds], "<f4")
+    out["t_moves"], out["t_offset"] = _concat([d.turn_moves for d in ds], MOVE_DTYPE)
     out["c_moves"], out["c_offset"] = _concat([d.candidates for d in ds], MOVE_DTYPE)
     out["c_logit"], _ = _concat([d.raw_logits for d in ds], "<f4")
     for name, dtype in CHILD_FIELDS.items():
@@ -402,7 +475,7 @@ def from_arrays(arrays: dict[str, np.ndarray]) -> GameRecord:
     if version != RECORD_VERSION:
         raise RecordVersionError(f"a record of version {version!r}; this reader reads version {RECORD_VERSION}")
     n = int(arrays["d_decision"].shape[0])
-    b_off, c_off, e_off = arrays["b_offset"], arrays["c_offset"], arrays["e_offset"]
+    b_off, c_off, e_off, t_off = arrays["b_offset"], arrays["c_offset"], arrays["e_offset"], arrays["t_offset"]
     decisions = []
     for i in range(n):
         kw = {}
@@ -423,7 +496,11 @@ def from_arrays(arrays: dict[str, np.ndarray]) -> GameRecord:
         b0, b1 = int(b_off[i]), int(b_off[i + 1])
         c0, c1 = int(c_off[i]), int(c_off[i + 1])
         e0, e1 = int(e_off[i]), int(e_off[i + 1])
+        t0, t1 = int(t_off[i]), int(t_off[i + 1])
         kw["boards"] = arrays["b_boards"][b0:b1].copy()
+        kw["playable"] = arrays["b_playable"][b0:b1].copy()
+        kw["raw_leave_logits"] = arrays["b_leave_logit"][b0:b1].copy()
+        kw["turn_moves"] = arrays["t_moves"][t0:t1].copy()
         kw["candidates"] = arrays["c_moves"][c0:c1].copy()
         kw["raw_logits"] = arrays["c_logit"][c0:c1].copy()
         kw["children"] = Children(**{name: arrays[f"e_{name}"][e0:e1].copy() for name in CHILD_FIELDS})
@@ -484,6 +561,8 @@ def record_differences(a: GameRecord, b: GameRecord) -> list[str]:
 
 
 __all__ = [
+    "CANDIDATE_SUBMIT",
+    "CANDIDATE_TURN",
     "CHILD_FIELDS",
     "CHOICE_CODES",
     "DECISION_FIELDS",

@@ -55,10 +55,12 @@ class SmokeReport:
     unchanged: list[str] = field(default_factory=list)  # names of the tensors that did not
 
 
-def synthetic_targets(batch: Batch, cfg: NetConfig, generator: torch.Generator) -> Targets:
+def synthetic_targets(batch: Batch, cfg: NetConfig, generator: torch.Generator, *, flat_row: int | None = None) -> Targets:
     """Random but well-formed targets for a batch (smoke testing only). Every third position is a
     cheap search (no policy or categorical target, section 12.5); one short-term horizon of the
-    last position has no target (NaN)."""
+    last position has no target (NaN). With ``flat_row``, that position is a decision of D2's flat
+    form (issue 242): a random distribution over each of its head boards' options - the moves leaving
+    it, leaving it - so that the flat policy loss reaches D2's leave head (``smoke_train`` adds one)."""
     bsz, length = batch.piece.shape
     g = generator
 
@@ -95,7 +97,34 @@ def synthetic_targets(batch: Batch, cfg: NetConfig, generator: torch.Generator) 
         full_search=full,
         root_wdl=torch.stack([(1 - d + q) / 2, d, (1 - d - q) / 2], dim=-1),  # the search's (q, d) as a WDL
         opp_reply=opp,
+        **({} if flat_row is None else _synthetic_flat(batch, rand, flat_row)),
     )
+
+
+def _synthetic_flat(batch: Batch, rand, row: int) -> dict:
+    """``Targets``' flat fields with position ``row`` a flat decision (``synthetic_targets``)."""
+    bsz, m_max = batch.moves.shape[0], batch.moves.shape[1]
+    if row >= bsz:
+        return {}
+    src_board = batch.board[row].gather(0, batch.moves[row, :, 0].clamp(min=0))
+    entries: list[tuple[int, int]] = []
+    for b in torch.nonzero(batch.board_valid[row] & batch.board_head[row]).flatten().tolist():
+        own = [i for i in range(m_max) if bool(batch.move_valid[row, i]) and int(src_board[i]) == b]
+        entries += [(i, b) for i in own] + [(m_max + b, b)]
+    k = len(entries)
+    option = torch.full((bsz, k), -1, dtype=torch.long)
+    group = torch.full((bsz, k), -1, dtype=torch.long)
+    target = torch.zeros(bsz, k)
+    if k:
+        option[row] = torch.tensor([o for o, _ in entries])
+        group[row] = torch.tensor([g for _, g in entries])
+        w = rand(k) + 0.05
+        for g in set(group[row].tolist()):
+            on = group[row] == g
+            target[row, on] = w[on] / w[on].sum()
+    rows = torch.zeros(bsz, dtype=torch.bool)
+    rows[row] = k > 0
+    return dict(flat_rows=rows, flat_option=option, flat_group=group, flat_target=target)
 
 
 def with_actions(states: list[PositionState]) -> list[PositionState]:
@@ -123,9 +152,10 @@ def smoke_train(
     cfg = NetConfig() if cfg is None else cfg
     model = build_model(cfg, seed=seed) if model is None else model
     model.train()
-    batch = collate(with_actions(synthetic_states(seed, list(board_counts))))
+    # One more position, a decision of D2's flat form: the leave head's loss (issue 242).
+    batch = collate(with_actions(synthetic_states(seed, [*board_counts, 3])))
     gen = torch.Generator().manual_seed(seed)
-    targets = synthetic_targets(batch, cfg, gen)
+    targets = synthetic_targets(batch, cfg, gen, flat_row=len(board_counts))
     names = [name for name, _ in model.named_parameters()]
     before = [p.detach().clone() for p in model.parameters()]
     opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=0.0)

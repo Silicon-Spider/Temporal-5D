@@ -156,7 +156,9 @@ def test_a_few_optimiser_steps_reduce_each_value_loss():
     network's own value, so its loss is stepped on the error head's parameters alone (its target
     then fixed)."""
     for name in ("wdl", "categorical", "short_term"):
-        report = smoke_train(NetConfig(trunk_dtype="fp32", n_layers=2), steps=3, seed=6, loss_cfg=LossConfig(weights={name: 1.0}))
+        report = smoke_train(
+            NetConfig(trunk_dtype="fp32", n_layers=2), steps=3, seed=6, loss_cfg=LossConfig(weights={name: 1.0, "flat_policy": 0.0})
+        )
         first, last = report.losses[0][name], report.losses[-1][name]
         assert last < first, (name, first, last)
     cfg, model, batch, tgt = _setup(6)

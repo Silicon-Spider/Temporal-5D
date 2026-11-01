@@ -14,7 +14,9 @@
 //
 // AT EACH ROOT the search runs offline with its proof channel ON and no store
 // (the tool's own search: nothing is exported; H23, H41), exact legality, the
-// uniform evaluator. Where it proves the root won, the proof tree is read
+// uniform evaluator, E10's ladder off (Hunt, the settling scans and the asset
+// map: their proofs are not the solver's). Where it proves the root won, the
+// proof tree is read
 // (tools/solver_proofs.hpp, proof_tree): the attacker's winning action at
 // each of its turns, every legal defence at each of the defender's - the
 // defences checked against E4's exhaustive listing (the same successors) -
@@ -233,7 +235,7 @@ int main(int argc, char** argv) {
   const std::string legality =
       o.legality_nodes == 0 ? std::string("exact") : "exact within " + std::to_string(o.legality_nodes) + " nodes";
   std::printf("CONDITIONS rules=%s split=%s playouts=%llu mate_nodes=%llu evaluator=uniform legality=%s "
-              "proof_channel=on(offline, no store) every=%d max_lines=%zu\n",
+              "proof_channel=on(offline, no store) ladder=off every=%d max_lines=%zu\n",
               t5d::tools::ruleset_text(o.rules).c_str(), split_name(o.split),
               static_cast<unsigned long long>(o.playouts), static_cast<unsigned long long>(o.mate_nodes),
               legality.c_str(), o.every, o.max_lines);
@@ -267,6 +269,13 @@ int main(int argc, char** argv) {
       t5d::mcts::SearchParams p;
       p.split = o.split;
       p.proof_channel = true;  // offline, the tool's own search: no store (H23, H41)
+      // E10's ladder off. The solver's own proofs are what is checked: the
+      // ladder's (Hunt's mates, the settling scans' verdicts) would enter the
+      // tree as injected proofs, which no solved subtree supports; and the
+      // asset map's boosts would change the searches (the search as built
+      // before E10, which the tool's figures were taken with).
+      p.hunt = p.settling = false;
+      p.asset_map = false;
       p.legality = o.legality_nodes == 0 ? t5d::LegalityOptions::exact() : t5d::LegalityOptions::nodes(o.legality_nodes);
       p.verify_legality = p.legality;
       p.mate_nodes = o.mate_nodes;

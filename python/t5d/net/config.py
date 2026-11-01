@@ -90,6 +90,8 @@ The build rules (spec section 15.1) decide what else appears here:
   232).
 * **D9's optimistic policy** (prototype, CHECKPOINT 7, section 8.1) is behind its flag, off
   (``optimistic_policy``); match play only (spec issue 233).
+* **D2's flat head** (committed-class, section 8.2): one "leave it" logit per board, always built,
+  what it reads a placeholder (``leave_pool``; spec issue 241).
 * **F5** (committed, CHECKPOINT 6, section 9.3): every trunk norm RMSNorm-style - no
   mean-centring, no bias (``trunk.RMSNorm``) - no biases in the Q, K and V projections
   (``qkv_bias``), the attention-output and FFN biases kept (``out_ffn_bias``), pre-norm;
@@ -207,6 +209,9 @@ SUPERSESSION_SCOPES: tuple[str, ...] = ("causal_past", "past_and_epoch_history")
 #: How D8's submit logit is read from the pooled global registers (stage N5, M20;
 #: ``heads.SubmitHead``).
 SUBMIT_HEADS: tuple[str, ...] = ("linear", "pointer")
+#: What D2's per-board "leave it" logit is read from (the flat form's head; ``heads.LeaveHead``,
+#: ``NetConfig.leave_pool``): each board's square tokens' mean, or its per-board registers' mean.
+LEAVE_POOLS: tuple[str, ...] = ("squares", "registers")
 #: Where each sublayer's norm sits (F5; ``trunk.py``): "pre" (the v1) or "post" (ablation
 #: 6y's arm: Lc0's post-norm with DeepNet initialisation).
 NORM_PLACEMENTS: tuple[str, ...] = ("pre", "post")
@@ -464,6 +469,29 @@ class NetConfig:
     #: ``PositionState.submit_possible``) and masked to -inf unless it is legal (C4:
     #: ``submit_legal``); the policy distribution is then over the moves and submit together.
     submit_head: str = "linear"
+
+    # --- D2's flat form: the per-board "leave it" logit (section 8.2; spec issue 241) ---
+    #: Register D2's flat form generates whole turns "best-first by summed logits", and "optional
+    #: boards carry a 'leave it' option with its own prior"; its policy targets are "per-board visit
+    #: marginals, so its policy normalises per board rather than across all moves - a head change"
+    #: (section 8.2). The head is one logit per board (``heads.LeaveHead``), softmaxed by the engine
+    #: with that board's move logits (BUILD_LOG issues 164, 165) and trained per board on the
+    #: marginals (``train.targets``, ``train.losses``; issue 242). Always built - no on/off flag:
+    #: D2 is committed-class and Undecided between built arms, not a prototype (section 8.2: "Both
+    #: are built either way, since D2 is committed-class"); the ply split and the tree form never
+    #: read it. Drawn from a generator of its own (``model.d2_seed``), so it changed no other
+    #: parameter. What it reads is not stated anywhere - COMMITTED-CLASS SILENCE (D2; issue 241) -
+    #: placeholder default, not a decision. ``leave_pool``:
+    #:   "squares"   - the mean of the board's square tokens, as the per-board auxiliary heads read
+    #:                 (section 9.2: "Mean-pool board squares, per-board"; B8: "registers stay free
+    #:                 scratch");
+    #:   "registers" - the mean of the board's per-board registers - D8's submit logit's form
+    #:                 ("read from the pooled global registers") carried to the board; with no
+    #:                 per-board registers (an ablation-3 arm) the squares' mean, as the global
+    #:                 pool falls back (spec issue 225).
+    #: Its readout - a linear map of the pooled state, d + 1 parameters, as D8's ``"linear"`` submit
+    #: readout - is a placeholder fixed in code (issue 241).
+    leave_pool: str = "squares"
 
     # --- initialisation (section 15.2: realistic scale, never zeros) ---
     #: Linear weights: normal with std 1/sqrt(fan_in) (LeCun). Under pre-norm the attention
@@ -921,6 +949,8 @@ class NetConfig:
             raise ValueError("soft_policy_dim, opp_policy_dim and optimistic_policy_dim must be positive")
         if self.submit_head not in SUBMIT_HEADS:
             raise ValueError(f"submit_head must be one of {SUBMIT_HEADS}")
+        if self.leave_pool not in LEAVE_POOLS:
+            raise ValueError(f"leave_pool must be one of {LEAVE_POOLS} (D2's flat head)")
         if self.regs_per_board < 0 or self.global_regs < 0:
             raise ValueError("register counts must be non-negative")
         if self.rope_per_head or self.routing_table:

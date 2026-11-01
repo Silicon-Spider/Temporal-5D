@@ -100,13 +100,13 @@ def test_the_parameter_count():
     """At the v1's dimensions: the projection 1,536 -> 64 x 16 with its bias, 1,573,888 - section
     2.2's "about 1.6M" (the weight alone 1,572,864); the merge 16 -> 256, 4,096; the FFN at the
     placeholder's 8x, 1,051,136 (gain 256, 256 -> 2,048 -> 256 with F5's biases): 2,629,120, on
-    the v1's 22,965,426 - 25,594,546. Without the FFN 1,577,984."""
+    the v1's 22,965,683 - 25,594,803. Without the FFN 1,577,984."""
     v1 = parameter_breakdown(build_model(NetConfig()))
     counts = parameter_breakdown(build_model(NetConfig(**A8)))
     assert counts["embed.layout"] == 1_573_888 + 4_096 + 1_051_136 == 2_629_120
     assert layout_parameters(NetConfig(**A8)) == {"projection": 1_573_888, "merge": 4_096, "ffn": 1_051_136, "total": 2_629_120}
     assert abs(LAYOUT_FEATURES * LAYOUT_CELLS * 16 - 1.6e6) / 1.6e6 < 0.02, "section 2.2: about 1.6M at 16 channels"
-    assert counts["total"] == v1["total"] + 2_629_120 == 25_594_546
+    assert counts["total"] == v1["total"] + 2_629_120 == 25_594_803
     assert {k: v for k, v in counts.items() if k not in ("embed.layout", "total")} == {
         k: v for k, v in v1.items() if k not in ("embed.layout", "total")
     }

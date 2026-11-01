@@ -108,6 +108,8 @@ def _close(a, b, atol_trunk=2e-5, atol=1e-4, what=""):
         assert torch.allclose(getattr(a, name)[valid], getattr(b, name)[valid], atol=atol), (what, name)
     sq = a.square_mask
     assert torch.allclose(a.square_logits[sq], b.square_logits[sq], atol=atol), what
+    bv = a.board_valid  # D2's flat head: every real board's leave logit
+    assert torch.allclose(a.leave_logits[bv], b.leave_logits[bv], atol=atol), (what, "leave_logits")
 
 
 def _identical(a, b) -> bool:
