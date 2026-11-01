@@ -10,6 +10,36 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-02 - The two-oracle bar counted by lineage (CHECKPOINT 10), and every oracle's lineage read and declared
+
+The user's ruling on issue 526 (CHECKPOINT 10): ftxi and Kairos are one lineage, and "a
+lineage vouches at most once per answer, through any member that agrees and is not a recorded
+divergence". Built in the gate, for every oracle - superseding the interim "one implementation"
+reading, which was never committed:
+- **One declared table.** Each oracle pin in `oracles/oracles.lock.toml` declares `lineage` (the
+  pin whose code its own derives from, or itself) and `lineage_note` (what reading its NOTICE,
+  credits, licence files and pinned code found); `lockfile.load` requires both and refuses a
+  stranger or a chain. `PROVENANCE.md`'s generated inventory renders them, so `verify` holds the
+  document to the lock file; the gate reads the same table (`Lock.lineages()`).
+- **The counting.** `gate.engine_differential` counts the oracles that followed a record by
+  lineage - one vouch per lineage, through whichever member followed, a member whose replay
+  differs (a recorded divergence included) vouching for nothing; per answer, any member's agreeing
+  answer settles a position and an answer the engine contradicts never does, so at R1's positions
+  Kairos is ftxi's lineage's vouch. Summaries say "oracle lineages"; an ungated reason names a
+  lineage of several members. `oracles/tests/test_lineage.py`.
+- **What the reading found** (`PROVENANCE.md`, "Lineages"; issue 573): Kairos in ftxi's lineage;
+  cwmtt and Chess in 5D crediting no one; ftxi's hypercuboid search a step-for-step C++ adaptation
+  of cwmtt's literate method (its own lineage as ruled, the stricter reading put to the user); and
+  Chess in 5D's 5DFEN reader shared with the notation parser (one author; the parser is parse-only).
+- **The four existing oracles gate as before:** each is its own lineage; the tests give every
+  verdict and message as before, and the nightly tier with the table on and Kairos absent gates
+  exactly Standard - Half Reflected and Standard - Reversed Royalty.
+- `CONTRIBUTING.md`'s "Changing a pin" adds reading the NOTICE, credits and code and updating the
+  lineage; `oracles/README.md`'s gating conditions say lineages.
+
+Spec: register H47, H26, H52, H34, reversal 33; §11.0 ("Tiered CI", "Third-party code") -
+proposed edit 400 (the two links the reading found); issues 526 (ruled), 573.
+
 ### 2026-11-01 - CHECKPOINT 10 taken in: the build log's plan for the lineage ruling and Kairos's new order
 
 `docs/BUILD_LOG.md` gains a "CHECKPOINT 10" section with the user's ruling on issue 526 and

@@ -405,7 +405,8 @@ pushed after every commit, taking main by merge, never rebase (re-check with `gi
   toolchain (1.99.0) fetched by `build --bootstrap`, its driver and two sources (`kairos`,
   `kairos:naive`) built and smoke-tested - wired, enabled in no tier (issues 524-533,
   edits 362-363). Since CHECKPOINT 10 (issue 526 ruled: one lineage with ftxi): the gate's
-  two-oracle count by lineage and every oracle's lineage in PROVENANCE.md, now; Kairos's
+  two-oracle count by lineage and every oracle's lineage in PROVENANCE.md - built
+  2026-11-02 (issue 573; the nightly gates what it gated); Kairos's
   parse mode in the quiet-machine block (issue 530), reported first if it answers a ruleset
   ftxi does not; H48's re-recording; the release tier with the engine configured, Kairos
   left out; after it, Kairos's full mode and triage, and the report CHECKPOINT 10 asks for.
@@ -1756,7 +1757,7 @@ width (M22)", "The CHECKPOINT 8 figures"). Found on the way: the ruling's premis
 | H44 | built (tooling), tested | The audit lane's tools: the certificate checker (E4 alone) and `t5d-hunt-truth` (E9); the search's decision events and **the tooling (E10, 2026-10-23, `lane/search`)**: the decision log (`PlayParams::decision_log`, `t5d-play --decision-log`, Python's `netplay --decision-log`; JSONL `t5d-decisions` v1 - games by start and actions, events final / pv_change / demotion), `t5d-audit sample` (seeded, rates and caps per category and range), `run` (Guard's question offline on the action, our mate at the turn start by the truth recorder's method, certificates checked by E4; contradictions to the `CurriculumSink` interface, its one implementation a JSONL writer) and `report` (per range the shallow-mate rate, Guard's completed depths, the undecided, the contradictions; counted as 6b″ counts). No consumer of the contradictions is built (curriculum hooks as interfaces only). Every budget and threshold a placeholder (issues 191-197). **E10 review (2026-10-23):** the runner's E4 gate tested with a certificate E4 rejects (no contradiction), the abandoned mate and the chosen child's exclusion from the demotions tested; `missed_mate`'s known false positives stay documented (issue 192) |
 | H45 | not built (rule) | The adversarial league (M5) |
 | H46 | built, tested | Q2 (provisional): initial timelines count as created by neither player - a variant's set-up reads every timeline as initial (rulebook R10) |
-| H47 | built, tested | Tiered CI reading (Q-A at CHECKPOINT 6, amended at CHECKPOINT 8; spec issues 122-124 ruled, built 2026-10-17). **Two oracles to gate a ruleset**: every record of a ruleset followed, as far as the engine went, by at least two independent implementations (`gate.GATING_ORACLES`; two searches of one count once, the notation parser never), in every tier - so the commit tier, with one rules oracle, can gate nothing at all. **The check that some ruleset is gated** (`engine-nothing-gated`, and `GateResult.ok`'s test of it) runs only in a tier that runs every oracle search over the whole corpus (`Tier.full_strength`: nightly, release) - keyed to what a tier runs, never its name; any other tier - commit - is a smoke test, and its summary (`engine differential: SMOKE TEST - ...`) and report (`smoke_test`; nothing under `gated`) say that it gates nothing. **The commit tier's last-green-run rule**: the engine's baseline, `oracles/engine-baseline.json` - written by `harness.py baseline --write` from a green run of the commit tier, pinned in `gate.toml` `[baseline]`, checked by `verify` and before every comparison; recorded 2026-10-17 from the engine as built on `lane/gate`, 35 of the 41 commit records replayed - and every tier fails an engine that declines a record it read then (`engine-declined`) or reads none (`engine-read-nothing`). **Restricted runs** (`--source`/`--record`) never produce a tier verdict: labelled "restricted - not a tier result", findings only, the exit code from them, no check of a tier as a whole - undoing issue 124's first reading. In every tier an unexplained divergence, a telltale or a contract breach fails the engine; `gate.toml` is refused if a tier that is not full strength sets `require_engine`; the release tier's named-variant rule, the proof-channel line and parse mode are unchanged for a complete run - a restricted run's proof channel reads `DISABLED - restricted - not a tier result`, and it makes neither parse mode's `engine-nothing-compared` floor nor the release tier's proof-channel readiness check (`proof-channel-vacuous`; review fix 2026-10-22). The baseline (review fixes 2026-10-22): `baseline --write` reads the baseline it replaces verified against its pin and records nothing over one that is not the one pinned, so that a hand edit cannot empty its `LOSS` list; `verify` fails a baseline that holds no line for a record of its tier; like MANIFEST's, the pin catches an accident, not the file and its pin edited together - review's job (H33). `AGENTS.md` names neither the baseline nor its pin: its "Never make the gate pass by ..." list should add "editing `oracles/engine-baseline.json` or its `gate.toml` `[baseline]` pin by hand, or recording a `LOSS` with `baseline --write`", and "Things you must not touch" the file and its pin, written only by `baseline --write` - the instruction files are the user's to change, so the edit is put to the user (as H38's for `CLAUDE.md`). Run 2026-10-17 with the engine configured: commit SMOKE TEST - PASSED (baseline: 41 records compared, 0 declined); nightly PASSED, gating Standard - Half Reflected (2 oracles behind its record) and Standard - Reversed Royalty (3), and not Standard - Turn Zero (one oracle behind cwmtt/tesseractMageOChicken); a restricted run (`gate --tier nightly --source ftxi --record cwmtt/standard`) labelled "restricted - not a tier result", 0 findings. Spec issues 122-124, 131-133; proposed edits 103-104. CHECKPOINT 10 (issue 526 ruled): the two oracles are counted as lineages - an oracle derived from another's code counts with it, and a lineage vouches through any member that agrees and is not a recorded divergence, at most once (Kairos with ftxi); to build in `lane/gate` |
+| H47 | built, tested | Tiered CI reading (Q-A at CHECKPOINT 6, amended at CHECKPOINT 8; spec issues 122-124 ruled, built 2026-10-17). **Two oracles to gate a ruleset**: every record of a ruleset followed, as far as the engine went, by at least two independent implementations (`gate.GATING_ORACLES`; two searches of one count once, the notation parser never), in every tier - so the commit tier, with one rules oracle, can gate nothing at all. **The check that some ruleset is gated** (`engine-nothing-gated`, and `GateResult.ok`'s test of it) runs only in a tier that runs every oracle search over the whole corpus (`Tier.full_strength`: nightly, release) - keyed to what a tier runs, never its name; any other tier - commit - is a smoke test, and its summary (`engine differential: SMOKE TEST - ...`) and report (`smoke_test`; nothing under `gated`) say that it gates nothing. **The commit tier's last-green-run rule**: the engine's baseline, `oracles/engine-baseline.json` - written by `harness.py baseline --write` from a green run of the commit tier, pinned in `gate.toml` `[baseline]`, checked by `verify` and before every comparison; recorded 2026-10-17 from the engine as built on `lane/gate`, 35 of the 41 commit records replayed - and every tier fails an engine that declines a record it read then (`engine-declined`) or reads none (`engine-read-nothing`). **Restricted runs** (`--source`/`--record`) never produce a tier verdict: labelled "restricted - not a tier result", findings only, the exit code from them, no check of a tier as a whole - undoing issue 124's first reading. In every tier an unexplained divergence, a telltale or a contract breach fails the engine; `gate.toml` is refused if a tier that is not full strength sets `require_engine`; the release tier's named-variant rule, the proof-channel line and parse mode are unchanged for a complete run - a restricted run's proof channel reads `DISABLED - restricted - not a tier result`, and it makes neither parse mode's `engine-nothing-compared` floor nor the release tier's proof-channel readiness check (`proof-channel-vacuous`; review fix 2026-10-22). The baseline (review fixes 2026-10-22): `baseline --write` reads the baseline it replaces verified against its pin and records nothing over one that is not the one pinned, so that a hand edit cannot empty its `LOSS` list; `verify` fails a baseline that holds no line for a record of its tier; like MANIFEST's, the pin catches an accident, not the file and its pin edited together - review's job (H33). `AGENTS.md` names neither the baseline nor its pin: its "Never make the gate pass by ..." list should add "editing `oracles/engine-baseline.json` or its `gate.toml` `[baseline]` pin by hand, or recording a `LOSS` with `baseline --write`", and "Things you must not touch" the file and its pin, written only by `baseline --write` - the instruction files are the user's to change, so the edit is put to the user (as H38's for `CLAUDE.md`). Run 2026-10-17 with the engine configured: commit SMOKE TEST - PASSED (baseline: 41 records compared, 0 declined); nightly PASSED, gating Standard - Half Reflected (2 oracles behind its record) and Standard - Reversed Royalty (3), and not Standard - Turn Zero (one oracle behind cwmtt/tesseractMageOChicken); a restricted run (`gate --tier nightly --source ftxi --record cwmtt/standard`) labelled "restricted - not a tier result", 0 findings. Spec issues 122-124, 131-133; proposed edits 103-104. CHECKPOINT 10 (issue 526 ruled): the two oracles are counted as lineages - an oracle derived from another's code counts with it, and a lineage vouches through any member that agrees and is not a recorded divergence, at most once (Kairos with ftxi); to build in `lane/gate`. **Built 2026-11-01 (`lane/gate`, issue 573):** each oracle pin declares `lineage` and `lineage_note` in the lock file, rendered in PROVENANCE.md's inventory (so `verify` holds the two together) and read by the gate (`Lock.lineages()`); the bar counts lineages, one vouch per lineage through any member that followed; the four existing oracles are each their own lineage - the nightly gates what it gated |
 | H48 | not started | Before the proof-channel sign-off: the naive searches' release budgets raised and the golden files re-recorded twice, on a quiet machine, so that no proof-channel check is vacuous (`verify`'s 17 `proof-channel-vacuous` notes) |
 | H15 | built, tested | The scanner's deterministic single-thread mode; the search's synchronous mode and digest (E6a; the digest in the C API) |
 | H16, H25, H29 | not built (rule) | Refused |
@@ -1781,7 +1782,7 @@ width (M22)", "The CHECKPOINT 8 figures"). Found on the way: the ruling's premis
 | H49 | not built (rule) | Held open: Hunt with a lazily expanded root, the likely remedy above 100 boards - adopted only through a fresh pre-registered test (§11.4, §14.4) |
 | H50 | built (placeholders) | The asset map's material values (`PieceValues`): P N B R Q at 100 / 300 / 300 / 500 / 900, unicorn 250, dragon 200, princess 700, brawn 125, common king 300, royals 0 - the register's provisional values exactly (issue 56) |
 | H51 | built, tested | Capture markers read leniently (CHECKPOINT 8; rulebook R11, a project decision). The reader: `PgnOptions::capture_marks`, `Lenient` by default - a move read as its squares and boards define it, the mark selecting no move, a mismatch either way (`x` on a move that takes nothing, a capture without `x`) a warning (`PgnReplay::warnings()`; `t5d-gate` prints it on stderr, outside the protocol - the engine contract unchanged); `MarkedMustCapture` (the reading before H51) and `Strict` (the letter both ways) only by option (`--pgn capture_marks=...`). The writers - the engine's `synthetic::pgn_move` (t5d-play's and the synthetic records) and N5's `netplay.pgn_move` (the network's self-play and match records) - write `x` exactly on captures: the first tested on every move offered at every position of 53 random games - 9 variants under the default rules, every alternative rule option in Two Timelines - judged from the boards (14,081 physical captures, 24 of them en passant, 6,293 by non-branching jumps, 12,192 by branches, and quiet moves of each kind), the records replaying with no warning and under the strict reading; the second the same way in Python (`test_the_writer_marks_exactly_the_captures`: 10 random games under 5 variants and two en passant positions), and N5's replay check (`check_replay`) reports any warning of the gate's reader (a review fix: H51 had taken away its only guard, the gate's refusal of a superfluous `x`). ftxi's refusal of cwmtt/futures action 17 is KD-0170 (citing R11 and H51); KD-0167 to KD-0169 withdrawn. Gate: commit tier SMOKE TEST - PASSED; nightly PASSED, no finding, gating **Standard - Turn Zero** for the first time (7 records, 144 positions) beside Half Reflected and Reversed Royalty - its weakest record, cwmtt/tesseractMageOChicken, has one oracle behind it (cwmtt), cwmtt/futures two (cwmtt, Chess in 5D), so under the two-oracle rule of issue 122 (the next component) Turn Zero would not be gated - H23's row (nightly gating two rulesets) and spec issue 127's measurement (a two-oracle rule ungating nothing nightly gates) predate this: issue 127 now says so, H23's row is left to the issue-122 component. 6b's tools keep the reading before H51 (`sixb_pgn_options`; spec issue 129), so 6b's, 6b′'s and 6b″'s roots and Hunt's truth rebuild exactly (the engine's tests run `t5d-scan6b` and `t5d-scan6bp` themselves to hold them to it); t0database: no record or action changes (M7's and M22's commands byte-identical). Not yet confirmed in CI: no run has started on `lane/gate` from a5e61d9 on (account billing; step 2). Spec issues 125 (settled), 129, 130; proposed edits 101, 102 |
-| H52 | built in part (`lane/gate`) | Kairos, the fourth oracle and fifth submodule (CHECKPOINT 9). Pinned at main's head, `8bfea4a6e8d1` (2026-10-23; no tags or releases - issue 524); its query surface confirmed at the pin and recorded in `PROVENANCE.md` ("Kairos, the fourth oracle") before the driver: its perft leaves out actions that waste a move, so it is not the gate's count (issue 525); its check test is R1's reading; its mate test is exhaustive; `get_boards` exports a state to fingerprint; neither 5DUCI nor the JSON interface answers the gate's questions, so a driver of the harness's own asks (issue 527); its NOTICE says parts derive from ftxi - ruled at CHECKPOINT 10: in ftxi's lineage, a checker whose disagreements still fail the gate, adding a vouch only where it answers and ftxi does not; the driver as built ruled right (issue 527). Order (CHECKPOINT 10): parse mode in the quiet-machine block, full mode and triage after the release tier, which leaves it out. Kairos as an external opponent (I7, M18) is the pilot run's, through a match runner in the test harness (issue 532), not built |
+| H52 | built in part (`lane/gate`) | Kairos, the fourth oracle and fifth submodule (CHECKPOINT 9). Pinned at main's head, `8bfea4a6e8d1` (2026-10-23; no tags or releases - issue 524); its query surface confirmed at the pin and recorded in `PROVENANCE.md` ("Kairos, the fourth oracle") before the driver: its perft leaves out actions that waste a move, so it is not the gate's count (issue 525); its check test is R1's reading; its mate test is exhaustive; `get_boards` exports a state to fingerprint; neither 5DUCI nor the JSON interface answers the gate's questions, so a driver of the harness's own asks (issue 527); its NOTICE says parts derive from ftxi - ruled at CHECKPOINT 10: in ftxi's lineage, a checker whose disagreements still fail the gate, adding a vouch only where it answers and ftxi does not; the driver as built ruled right (issue 527). Order (CHECKPOINT 10): parse mode in the quiet-machine block, full mode and triage after the release tier, which leaves it out. Kairos as an external opponent (I7, M18) is the pilot run's, through a match runner in the test harness (issue 532), not built. CHECKPOINT 10: its lineage, `ftxi`, declared in the lock file and counted by the gate (issue 573) |
 
 ### A-G, I - representation, network, search, training
 
@@ -5433,6 +5434,75 @@ superseded or made moot says so; nothing is deleted.
     position being searched when cut has no answers. Edit 362 covers the spec's route
     sentence. Not put to the user.
 
+571. **The interim "one implementation" reading - built, checked, superseded before it was
+    committed** (CHECKPOINT 9's main-loop decision, 2026-11-01; register H47). Built first as a
+    `gate.toml` setting, `[gating] counted_as_one = [["ftxi", "kairos"]]`, that counted the members
+    of a group following a record once; its tests passed (698 selftests), and the nightly with it on
+    and Kairos absent gated Standard - Half Reflected and Standard - Reversed Royalty, as before. The
+    user's ruling at CHECKPOINT 10 arrived before it was committed and replaced it: lineages, read
+    from every oracle's code and declared per pin in the lock file, counted per answer (issue 573).
+    Nothing of it was committed; recorded so that the number is accounted for.
+
+572. **(not used)** - reserved on 2026-11-01 for a parse-mode design that CHECKPOINT 10 reordered;
+    the parse mode as built is issue 574.
+
+573. **The two-oracle bar counted by lineage, and every oracle's lineage read and declared**
+    (CHECKPOINT 10, issue 526 ruled; register H47, H26, H52, H34, reversal 33; §11.0 "Tiered
+    CI", the reuse rule). The ruling: "A lineage vouches at most once per answer, through any
+    member that agrees and is not a recorded divergence." **The table.** Each oracle pin in
+    `oracles/oracles.lock.toml` declares `lineage` - the pin whose code its own derives from,
+    or itself - and `lineage_note`, what was read and found (NOTICE, credits, licence files,
+    pinned code); `lockfile.load` requires both for every pin the harness runs and refuses a
+    lineage that names no pin of the same role or a pin that is itself in another's lineage
+    (no chains). `PROVENANCE.md`'s generated inventory renders both (a Lineage column and a
+    line per pin), so `verify`'s provenance check holds the document to the lock file; the gate
+    reads the same table (`Lock.lineages()`) - one declared place. **The counting**
+    (`gate.engine_differential`, `lineages`): the implementations that followed a record as
+    far as the engine went are counted by lineage - one vouch per lineage, through whichever of
+    its members followed; a member whose replay differs from the engine's (a recorded
+    divergence included) vouches for nothing, and another member may vouch in its place. Per
+    answer (check, count, mate - condition 3) any member's answer that agrees with the engine
+    settles the position, and one the engine contradicts never does, a recorded divergence
+    included - so at R1's positions, where ftxi's check answers are recorded divergences,
+    Kairos's agreeing answer is the lineage's vouch; and since condition 3 asks for one
+    settling answer per position, a second member's adds nothing. The ungated reason names a
+    lineage that followed with more than one member ("ftxi's lineage (ftxi, kairos)") and says
+    why it counts once; a gated ruleset's summary now says "oracle lineages". With every one of
+    the four its own lineage, nothing changes for them: tests over eight combinations
+    (`oracles/tests/test_lineage.py`) give every verdict and message as before, and the nightly
+    tier (below) gates what it gated. Tests also: ftxi and Kairos agreeing count once (with or
+    without their second searches); Kairos beside cwmtt or Chess in 5D gates; Kairos is its
+    lineage's vouch where ftxi reads nothing; the R1 case - ftxi's check a recorded divergence,
+    Kairos agreeing, cwmtt counting - settles the check through Kairos and counts two lineages,
+    and without Kairos the check is settled at one position of two; a member that misread the
+    record leaves the vouch to another; the lock file's validation. **What reading the five pins
+    found** (`PROVENANCE.md`, "Lineages"): Kairos in ftxi's lineage (its NOTICE); cwmtt and Chess
+    in 5D crediting no other implementation; and two findings for the user. (a) **ftxi adapts
+    cwmtt's method**: its docs say so ("using method from [penteract/cwmtt], adapted to c++ with
+    improvements. Some improvements are suggested by the original author"), and its hypercuboid
+    search follows cwmtt's literate `FastCheckmate.lhs` step for step - the same decomposition and
+    names (`build_HC`/`buildHC`, `take_point`/`takePoint`, `find_problem`/`findProblems`,
+    `jump_order_consistent`, `test_present`, `find_checks`) - in C++ over its own bitboards and
+    integer sets; none of cwmtt's (Haskell) code is in its tree, and everything else of ftxi's -
+    its boards, move generation, check test, reader, naive search, engine - is its own. Recorded
+    as two lineages, as the ruling reads ("ftxi adapts cwmtt's method"); but a step-for-step
+    translation of a literate program sits close to the reuse rule's "porting is reuse". Under
+    the stricter reading the two would count once for counts and mate verdicts from their
+    hypercuboid searches (not for their replays or their naive searches). It changes no gated
+    ruleset today: both gated rulesets have Chess in 5D behind them (Half Reflected: cwmtt and
+    Chess in 5D; Reversed Royalty: all three). **For the user**: is a method adapted from a
+    literate program, step for step, in another language, derived code? (b) **Chess in 5D and
+    the notation parser share their 5DFEN board-string reader**: 5d-chess-js's `src/fen.js` was
+    written by Adrien Burgun - the notation specification's author, a listed contributor - and is
+    the same code as the notation parser's `parse_5dfen` (`parsers/game.js`; the same loop and
+    error messages; one six-line window identical). On records set up from 5DFEN boards, a bug in
+    that reader would show in neither. The notation parser is parse-only and never counts toward
+    the bar, so the counting is unaffected; recorded, and the two are separate lineages of two
+    roles. **The nightly with the table on and Kairos absent** (2026-11-02, `dev-r` loaded,
+    calibration 1.52x, 10 min): every source's required set reproduced, the engine PASSED, gating
+    exactly Standard - Half Reflected (2 lineages) and Standard - Reversed Royalty (3) - the same
+    as before. Proposed edit 400 (§11.0's and H26's record of the two links the reading found).
+
 ## Proposed spec edits
 
 Edits the spec or the register needs, for applying upstream. Each: where, what it
@@ -6831,6 +6901,21 @@ struck through, where nothing of it is left to apply); the others stand as writt
     (the user's file). Why: issue 532 - as written, the opponent role and the boundary
     rules cannot both hold.
 
+400. **§11.0 "Third-party code" and register H26 (what reading every oracle's code found)**:
+    now - §11.0: "ftxi's detector and cwmtt are the external checks; ftxi's adapts cwmtt's
+    method, so a flaw in the method itself would not surface as disagreement between those
+    two, which makes Chess in 5D the most independent of the four"; H26: "ftxi and cwmtt
+    external, Kairos in ftxi's lineage and counted with it". Proposed - after "ftxi's adapts
+    cwmtt's method": "(its hypercuboid search follows cwmtt's literate program step for step,
+    in C++ over its own data structures; its boards, move generation, check test and reader
+    are its own - two lineages, unless the user reads a step-for-step translation as derived
+    code: issue 573)"; and, beside "Chess in 5D the most independent": "(its 5DFEN
+    board-string reader is the notation specification author's, shared with the notation
+    parser - a parse-only oracle, so the bar is unaffected)". H26 the same in brief. Why:
+    issue 573 - CHECKPOINT 10's rule ("each oracle's NOTICE, credits and pinned code are read at
+    every pin bump") applied to all five pins found these two links, which the spec does not
+    record.
+
 ## Session log
 
 - **2026-10-01** - Pre-flight passed. Design documents moved into `docs/design/`
@@ -7029,3 +7114,12 @@ struck through, where nothing of it is left to apply); the others stand as writt
   pytest 1700 passed / 3 failed / 1 skipped (`T5D_REQUIRE_ENGINE=1`, serial, 3817 s) before the
   test fix, `test_flat_head.py` 8 of 8 after it; ruff clean; verify ok; gate commit ok; gate
   nightly ok in 525 s (Half Reflected and Reversed Royalty gated; proof channel DISABLED).
+- **2026-11-02 - CHECKPOINT 10's lineage counting built** (`lane/gate`; issues 570-573, edit 400
+  so far). The brief's Kairos questions answered plainly in PROVENANCE.md, with tests that no mate
+  verdict comes from an exhausted budget (570); the interim "one implementation" grouping built and
+  checked on 2026-11-01 (571) was superseded by the ruling before it was committed; the two-oracle
+  bar counts lineages from one table, each oracle pin's `lineage` in the lock file, rendered in
+  PROVENANCE.md (573). Reading the five pins found two links for the user: ftxi's hypercuboid
+  search a step-for-step adaptation of cwmtt's literate method, and Chess in 5D's 5DFEN reader the
+  notation author's, shared with the notation parser. The nightly, Kairos absent: Half Reflected
+  and Reversed Royalty, as before.

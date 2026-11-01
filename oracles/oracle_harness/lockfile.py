@@ -50,6 +50,11 @@ class Pin:
     tier: str = ""  # oracles (rules and parse-only) only: the cheapest CI tier that runs it
     notes: tuple[str, ...] = ()
     dependency_names: tuple[str, ...] = ()  # package-manager names the core must never depend on
+    # Oracles (rules and parse-only) only - decision H47, CHECKPOINT 10. The pin whose code this one's derives from, or
+    # its own id: an oracle derived from another's code counts with it as one lineage for the two-oracle bar. Read from
+    # the oracle's NOTICE, credits, licence files and pinned code at every pin bump, and said in ``lineage_note``.
+    lineage: str = ""
+    lineage_note: str = ""
 
     @property
     def checkout(self) -> Path:
@@ -75,6 +80,11 @@ class Lock:
     def oracles(self) -> list[Pin]:
         """Every pin the harness builds and runs: the rules oracles and the parse-only ones."""
         return [pin for pin in self.pins.values() if pin.role in RUN_ROLES]
+
+    def lineages(self) -> dict[str, str]:
+        """Implementation -> the lineage it counts in for H47's two-oracle bar (CHECKPOINT 10): the pin whose code it
+        derives from, or itself. The gate's one input for counting lineages; PROVENANCE.md renders it."""
+        return {pin.id: pin.lineage for pin in self.oracles()}
 
 
 def _require(table: dict, key: str, where: str) -> str:
@@ -126,10 +136,36 @@ def load(path: Path | None = None) -> Lock:
             tier=tier,
             notes=tuple(table.get("notes", ())),
             dependency_names=tuple(table.get("dependency_names", ())),
+            **_lineage(table, role, where),
         )
     if not pins:
         raise HarnessError(f"{path.name}: no [repo.*] entries")
+    _check_lineages(pins, path.name)
     return Lock(pins=pins, toolchains=dict(data.get("toolchain") or {}))
+
+
+def _lineage(table: dict, role: str, where: str) -> dict[str, str]:
+    """A run pin's lineage and the note that says how it was read (H47, CHECKPOINT 10); nothing for any other."""
+    if role not in RUN_ROLES:
+        if "lineage" in table or "lineage_note" in table:
+            raise HarnessError(f"{where}: a {role} is never run, so it has no lineage to count")
+        return {}
+    return {"lineage": _require(table, "lineage", where), "lineage_note": _require(table, "lineage_note", where)}
+
+
+def _check_lineages(pins: dict[str, Pin], name: str) -> None:
+    """Every lineage names a pin of the same role that is its own lineage's root: no chains, no strangers."""
+    for pin in pins.values():
+        if pin.role not in RUN_ROLES:
+            continue
+        root = pins.get(pin.lineage)
+        where = f"{name} [repo.{pin.id}]"
+        if root is None or root.role != pin.role:
+            raise HarnessError(f"{where}: lineage '{pin.lineage}' must name a pinned {pin.role} (its own id when its code "
+                               "derives from no other oracle's)")
+        if root.lineage != root.id:
+            raise HarnessError(f"{where}: lineage '{pin.lineage}' is itself in {root.lineage}'s lineage - name the root, "
+                               f"'{root.lineage}'")
 
 
 def normalise_url(url: str) -> str:

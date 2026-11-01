@@ -150,7 +150,11 @@ A pin is not updated routinely. When one has to move:
 3. `python oracles/harness.py verify`. It prints the new commit's full `tree` id
    (`tree-mismatch`) and, if the licence file changed, its new `licence_sha256`
    (`licence-changed`). Copy the tree id into the lock file; read the new licence
-   before you copy its hash, and update `PROVENANCE.md` if the terms moved.
+   before you copy its hash, and update `PROVENANCE.md` if the terms moved. Read the
+   oracle's NOTICE, credits and pinned code too, and bring its `lineage` and
+   `lineage_note` in the lock file in line with them: an oracle derived from another's
+   code counts with it as one lineage for the two-oracle bar (H47, CHECKPOINT 10 -
+   `PROVENANCE.md`, "Lineages"), and no README says so.
 4. Update `oracles/corpus/manifest.toml` for every record of that source whose
    blob changed (`verify` names them), and look at `corpus --unlisted` for new ones.
 5. `python oracles/harness.py build`.
