@@ -804,8 +804,14 @@ struct Limits {
   /// and under D2's tree form the nodes each of their paths expanded on
   /// inherited priors, up to one per move of a turn).
   std::uint64_t bytes = std::numeric_limits<std::uint64_t>::max();
-  /// A deadline in wall-clock seconds from the call, checked between batches;
-  /// 0: none. Not deterministic - for tools and match play, never training.
+  /// A deadline in wall-clock seconds from the call, checked between batches
+  /// and handed to the rules engine's calls inside a batch - the leaves'
+  /// legality classifications (LegalityOptions::deadline), the turn-start
+  /// checks, the flat form's fallback listing and the lazy verifications (c) -
+  /// so that it reaches the detector (build-log issue 406; what it stops is
+  /// Unknown, never a verdict). Not the flat form's turn generator: a
+  /// generator lives across decisions, and its node budget bounds it. 0: none.
+  /// Not deterministic - for tools and match play, never training.
   double seconds = 0;
 };
 

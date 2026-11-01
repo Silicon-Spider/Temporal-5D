@@ -770,6 +770,11 @@ struct Search::Impl {
   std::size_t best_edge_ = kNoEdge;
   std::uint32_t best_since_ = 0;
   std::vector<Step> path_;
+  // run()'s deadline (Limits::seconds) while it runs: handed to the rules
+  // engine's calls inside a batch - the legality classifications and the
+  // turn-start checks - so that it reaches the detector, not only the next
+  // batch (build-log issue 406). None outside run() and without a deadline.
+  std::optional<std::chrono::steady_clock::time_point> deadline_;
   std::size_t tree_bytes_ = 0;  // the nodes' counts (Node::bytes), summed
 
   // ---- stage E10: the verification ladder (t5d/ladder.hpp) ------------------------
@@ -1054,6 +1059,20 @@ struct Search::Impl {
     return n.moves_made == moves_made && detail::same_state(n.state, s, compare_origins()) ? it->second : kNoNode;
   }
 
+  // A legality budget, or a detector's, with run()'s deadline if it has one
+  // (build-log issue 406). What the deadline stops is Unknown: a move left
+  // unknown, a turn start never terminal - and, in a tree carried to the next
+  // decision, so it stays (a node is checked and expanded once).
+  LegalityOptions timed(LegalityOptions o) const {
+    if (deadline_) o.deadline = deadline_;
+    return o;
+  }
+  void timed(SearchBudget& b) const {
+    if (!deadline_) return;
+    const auto left = std::chrono::duration_cast<std::chrono::nanoseconds>(*deadline_ - std::chrono::steady_clock::now());
+    b.max_time = std::max(left, std::chrono::nanoseconds{0});
+  }
+
   // A turn start: the game's end, by E4's exhaustive detector only (H37), or
   // the turn cap's convention (I11).
   void classify(Node& n) {
@@ -1061,6 +1080,7 @@ struct Search::Impl {
     SearchBudget budget;
     budget.max_nodes = params_.mate_nodes;
     budget.max_bytes = params_.mate_bytes;
+    timed(budget);  // stopped by the deadline: Unknown, never a terminal
     const auto t0 = std::chrono::steady_clock::now();
     const MateResult r = detect_mate(n.state, params_.detector, budget);
     stats_.seconds_mate += detail::seconds_since(t0);
@@ -1207,7 +1227,7 @@ struct Search::Impl {
     const auto t0 = std::chrono::steady_clock::now();
     ExpandOptions o = params_.expand;
     o.legal_moves = params_.legal_moves_only;
-    o.legality = params_.legality;
+    o.legality = timed(params_.legality);
     expand(n.state, o, out, n.moves_made);  // A6: the node's count, from its path
     stats_.seconds_expand += detail::seconds_since(t0);
   }
@@ -1634,6 +1654,7 @@ struct Search::Impl {
     SearchBudget budget;
     budget.max_nodes = params_.mate_nodes;
     budget.max_bytes = params_.mate_bytes;
+    timed(budget);
     const ActionList list = list_legal_actions(n.state, params_.flat_fallback, params_.detector, budget);
     std::vector<std::pair<double, std::size_t>> order;
     for (std::size_t i = 0; i < list.actions.size(); ++i) order.emplace_back(f.policy->score_of(list.actions[i].moves), i);
@@ -2173,7 +2194,7 @@ struct Search::Impl {
       o.window_k = 0;
       o.square_features = SquareFeatures::None;
       o.legal_moves = params_.legal_moves_only;
-      o.legality = params_.legality;
+      o.legality = timed(params_.legality);
       expand(nodes_[id].state, o, inherit_x_, nodes_[id].moves_made);
       stats_.seconds_expand += detail::seconds_since(t0);
     }
@@ -2618,7 +2639,7 @@ struct Search::Impl {
       if (params_.verify_unknown) {
         const Edge& e = nodes_[cur].edges[ei];
         if (e.unknown && !e.verified &&
-            verify_edge(cur, ei, params_.verify_legality) == MoveLegality::Illegal) {
+            verify_edge(cur, ei, timed(params_.verify_legality)) == MoveLegality::Illegal) {
           continue;
         }
       }
@@ -3565,6 +3586,16 @@ StopReason Search::run(Evaluator& evaluator, const Limits& limits) {
     return r;
   };
   if (std::isnan(limits.seconds) || limits.seconds < 0) throw std::invalid_argument("Limits::seconds: 0 (none) or more");
+  // The deadline reaches the rules engine's calls inside each batch, for this
+  // call only (build-log issue 406).
+  struct DeadlineScope {
+    Impl& s;
+    ~DeadlineScope() { s.deadline_.reset(); }
+  } scope{s};
+  if (limits.seconds > 0) {
+    s.deadline_ = t0 + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                           std::chrono::duration<double>(limits.seconds));
+  }
   if (s.notified_generation_ != s.root_generation_) {
     evaluator.on_new_root(s.nodes_[s.root_].state, s.epoch_);
     s.notified_generation_ = s.root_generation_;

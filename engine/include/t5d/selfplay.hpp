@@ -101,9 +101,13 @@ struct PlayParams {
   /// A safety stop: the most actions played (ActionLimit).
   std::uint32_t max_actions = 400;
   /// A safety stop: wall-clock seconds, checked before every decision and
-  /// given to each search as its deadline (Limits::seconds); when it passes
-  /// the game ends TimeLimit at the last turn start (an action under way is
-  /// not recorded). 0: none. Not deterministic - for tools, never for
+  /// given to each search as its deadline (Limits::seconds), and to the
+  /// game's own rules-engine calls as theirs - each turn start's verdict and
+  /// the exact verification of a chosen move (build-log issue 406); when it
+  /// passes the game ends TimeLimit at the last turn start (an action under
+  /// way is not recorded; a verdict it stopped ends the game at that turn
+  /// start). 0: none - and then the verdicts and verifications have no time
+  /// limit, as no node limit (H37). Not deterministic - for tools, never for
   /// training games.
   double max_seconds = 0;
   /// Stage E10: GUARD at submission (H42, spec 11.4: "before the chosen move

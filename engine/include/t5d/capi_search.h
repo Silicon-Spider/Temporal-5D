@@ -458,13 +458,15 @@ typedef struct t5d_search_summary {
 
 /* A run's budgets (t5d/mcts.hpp, Limits): T5D_NO_LIMIT for none (seconds: 0). playouts and
  * evaluations count from the call; nodes and bytes are the graph's. A run
- * stops between batches once one is reached. */
+ * stops between batches once one is reached; the deadline (seconds) also
+ * reaches the rules engine's calls inside a batch - legality classifications,
+ * turn-start checks, verifications - which it leaves Unknown (Limits). */
 typedef struct t5d_search_limits {
   uint64_t playouts;
   uint64_t evaluations;
   uint64_t nodes;
   uint64_t bytes;   /* t5d_search_summary.memory_bytes */
-  double seconds;   /* a wall-clock deadline from the call; 0: none (not deterministic) */
+  double seconds;   /* a wall-clock deadline from the call, inside batches too; 0: none (not deterministic) */
 } t5d_search_limits;
 
 /* One child of the root (t5d_search_child), from the root player's view. */

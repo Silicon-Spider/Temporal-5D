@@ -10,6 +10,61 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-01 - Issue 406: exact legality's cost characterised (t5d-legality-cost, four fixtures); deadlines now reach the detector
+
+Issue 406 (the search's exact move legality running for many minutes) characterised, and the
+one defect found fixed. **The defect: no deadline reached the rules engine's calls.** A
+search's `Limits::seconds` was read between batches only, and a game's
+`PlayParams::max_seconds` never reached its turn-start verdict or the exact verification of a
+chosen move - `t5d-play --max-seconds 900` on a default-rules Very Small - Open game ran 40
+minutes and was killed, inside one verdict. Now:
+
+- **`LegalityOptions::deadline`** (none by default; `t5d/legal.hpp`): each of tier 3's
+  searches is given the time left (`SearchBudget::max_time`), and none starts once it has
+  passed - the moves they would have settled are Unknown, never misclassified.
+- **The search**: `Limits::seconds` also reaches, inside a batch, the leaves' legality
+  classifications, the turn-start checks, the flat form's fallback listing and the lazy
+  verifications (c); not the flat form's turn generator (it lives across decisions; its node
+  budget bounds it). What it stops is Unknown, never a verdict - and so it stays in a tree
+  carried to the next decision.
+- **The play loop**: `max_seconds` is the deadline of each turn start's verdict (stopped:
+  `TimeLimit` at that turn start, not `Unknown`) and of a chosen move's exact verification
+  (stopped with no root child known legal: `TimeLimit`, the action under way not recorded).
+  Without a deadline - training self-play - both stay exact with no limit but memory (H37),
+  as documented (issue 408).
+- Measured after the fix: the same game with `--max-seconds 120` ends at 120.0 s
+  (`TimeLimit`, 26 actions; verifications 63 s, terminal checks 46 s, expansions 11 s).
+
+**The characterisation** (docs/MEASUREMENTS.md, "Exact move legality's cost"; issue 407):
+`t5d-legality-cost` - the classification and E4's detector under ascending budgets (and a
+`--time-limit`), and one search's time split, at a record's last position, at the position a
+`LegalityPath` header reaches inside an action, or at every K-th turn start - and four
+fixtures in `engine/testdata/legality-cost/`: issue 406's Q3 root and the costliest turn start
+below it (18 boards: 11.9 million nodes, 19 s exact, 43 moves proved illegal one exhaustive
+search each), and two positions of the default-rules game (192 boards: one move's exact
+verification past 600 s; 191 boards: E4's verdict unknown at 200 million nodes, 346 s, nearly
+every judged point unrealisable and nearly every abstract check given up). Every budget is
+honoured (1.5-3.5 µs a node throughout); what remains is algorithmic (issue 407) or a
+decision the documents have made exact (issue 408).
+
+- `engine/include/t5d/legal.hpp`, `engine/src/legal.cpp`, `engine/src/mcts.cpp`,
+  `engine/src/selfplay.cpp`, `engine/include/t5d/mcts.hpp` (`Limits::seconds`),
+  `engine/include/t5d/selfplay.hpp` (`max_seconds`), `engine/include/t5d/capi_search.h`
+  (`t5d_search_limits`); `engine/tools/t5d_legality_cost.cpp`, `engine/CMakeLists.txt`;
+  `engine/tests/test_legality_cost.cpp` (the deadline leaves moves unknown and never
+  misclassifies; issue 406's root stops at a 0.5 s search deadline; a game with exact legality
+  and a 1 s stop ends on time with legal actions; the 191-board verdict ends a game with a 2 s
+  stop in about 2 s; the tool on every fixture); `engine/testdata/legality-cost/` (4 records);
+  `engine/README.md` (Stage E5a's cost and deadlines, Stage E6a's `run` and `t5d-play`, the
+  targets table); `docs/MEASUREMENTS.md`; `docs/BUILD_LOG.md` (issue 406 closed out, issues
+  407-408, edits 303-304, the Lazy SMP log, the session log).
+
+Spec: §13 ("Legality classification may dominate self-play in big games") and §15.3's
+legality row - edits 303-304 (exact's measured tail, M4); §8.1 and H37 (unknown moves verified
+lazily; a verdict only from an exhaustive search) - unchanged, the deadline yields Unknown;
+§15.5 ("an engine that plays legal 5D chess end to end") - issue 408 for the user. No register
+row changes.
+
 ### 2026-11-01 - main (7483103) merged into lane/engine: the step-2 solver searches with E10's ladder off
 
 Main since 710921a (D2's flat head and the flat form's policy target, MT-04, G9's AMD attempt,

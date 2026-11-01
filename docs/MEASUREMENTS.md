@@ -1444,3 +1444,41 @@ Royalty and Timeline Strategos.
 synthetic trees (under 2.4e-6 after 16 layers); the BF16 gaps match `test_network.py`'s on the
 'cross_timeline' record (RMS 2.0e-3 / max 1.4e-2, policy 8.0e-3, value 1.1e-3) - the value's
 1.32e-3 a little above that figure, 3.8x under its bound.
+
+### Exact move legality's cost - issue 406's positions (indicative; no threshold, no verdict)
+
+Build-log issues 406-408. `t5d-legality-cost` (engine 0.1.0, `lane/engine`, the tree of issue
+406's commit), single-threaded, on `dev-r` with other lanes' jobs running - load 99-100%
+throughout (shared machine: wall-clock seconds are indicative). Fixtures in
+`engine/testdata/legality-cost/`; each record's `LegalityCost` header says where it comes from.
+"Budget" is search nodes for the classification's tier 3 (checks unlimited unless stated) and
+for E4's detector (hypercuboid). 2026-11-01.
+
+| Fixture (rules) | Position | Classification | E4's detector |
+|---|---|---|---|
+| `q3-root` (Q3, play activation) | 5 boards, 3 playable timelines, 35 moves | settled at 2,000 nodes (240 spent, 0.001 s): 17 legal, 18 illegal | ongoing, 39 nodes |
+| `q3-flat-node` (Q3) | 18 boards, 7 playable timelines, 141 moves | tiers 0-2 settle 75 (illegal); unknown 66 / 57 / 50 at 2,000 / 200,000 / 2 million nodes (0.004 / 0.43 / 3.4 s); **exact: 11,910,238 nodes, 19.0 s** - tier 3 proves 18 legal and 43 illegal (one exhaustive search each, 0.2-0.53 million nodes), 5 learned. The search's default budget (64 checks, 2,000 nodes): 78 unknown in 0.004 s | unknown at 2,000 nodes; ongoing at 43,424 nodes (0.09 s) |
+| `vso-seed4-verify` (standard) | 192 boards, 48 playable timelines, 940 moves; one named (the move a lazy verification asked about) | unknown at 2,000 / 200,000 / 2 million nodes (0.06 / 0.75 / 6.6 s, checks 4,096); **exact: unknown when cut at 600 s (290 million nodes)**; a scratch probe on the same code, uncut, was stopped at 30 minutes | - |
+| `vso-seed4-verdict` (standard) | 191 boards, 49 playable timelines, 982 moves (the turn start after 26 actions) | tiers 0-2 settle 617 (illegal); 365 unknown at 2 / 20 / 200 million nodes (4.0 / 38 / 352 s) | **unknown at 2 / 20 / 200 million nodes (3.8 / 37 / 346 s)**: 68 / 532 / 3,939 points judged, 63 / 518 / 3,857 of them unrealised, 64 / 528 / 3,935 abstract checks given up, 272 / 2,222 / 16,602 unrealisable boxes; the game's own verdict (no node limit) ran past 20 minutes |
+
+Searches from `q3-root`, the flat form, 800 playouts, the uniform evaluator, E10's ladder off:
+the search's default legality (64 checks, 2,000 nodes) 55.2 s (terminal checks 22.9 s, turn
+generation 30.8 s, expansions 1.5 s); legality within 2 million nodes (MT-01's long twin) 131 s
+(expansions 78 s); exact legality with a 60 s deadline - stopped at 60.1 s after 329 playouts
+(expansions 41 s). Before the deadline reached the classification, the exact search ran past 17
+minutes (issue 406). From `vso-seed4-verify`'s node, 4 playouts of the ply split at the search's
+defaults: 2.4 s, 2.2 s of it in the lazy verifications (200,000 nodes each).
+
+The game: `t5d-play --variant "Very Small - Open" --evaluator material --playouts 32
+--cap-turns 14 --seed 4` (E10's ladder and the asset map on). Before the fix, with
+`--max-seconds 900`: killed by an outer timeout at 40 minutes, inside the turn-start verdict
+after 26 actions. After it, with `--max-seconds 120`: ended at 120.0 s, `time_limit`, 26 actions
+(150 decisions, 4,800 playouts); search's terminal checks 46.2 s, leaf expansions 10.8 s,
+verifications 62.8 s.
+
+*Read.* Every budget is honoured - a node costs 1.5-3.5 µs at every position measured, the
+time limit is read every 64 nodes - so the minutes come from the work the exact questions
+require: illegality proofs one exhaustive search per move (Q3's position), and at ~190 boards
+points that no creation order realises, judged one by one because the abstract check gives up
+at its step limit (4,096) on nearly every box. What would change them is algorithmic (issue
+407); whether the play loop's exact steps should carry a node budget is a decision (issue 408).
