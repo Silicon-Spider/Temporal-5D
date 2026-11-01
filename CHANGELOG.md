@@ -10,6 +10,18 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-02 - main (28a102b) merged into lane/net: the CHECKPOINT 10 design documents and their plan
+
+Main since `1c085ac` (the CHECKPOINT 10 design documents from upstream - the user's ruling that ftxi
+and Kairos are one lineage for H47's two-oracle bar - and the build log's plan for it) merged into
+`lane/net` (M23: merged, never rebased) before A5's review fixes are committed. Documents only:
+nothing under `python/`, `engine/` or `oracles/` changed, and nothing in it touches A5, C26 or G10.
+CHANGELOG by heading (this entry, the lane's five, then main's); BUILD_LOG both sides ("Current
+state" main's).
+
+Spec: no part of the spec describes the merge itself; the merged change's entries name theirs. No
+edit proposed.
+
 ### 2026-11-01 - main (1c085ac) merged into lane/net: A5's lane beside Kairos and CHECKPOINT 9's brief
 
 Main since `7483103` (Kairos pinned and wired as two pending sources, H52, with its review fixes;
@@ -183,6 +195,42 @@ Spec: §2.1, §6.1, §7.3, §8.1, §12.4, §14.4, §15.2; register A1, A5, A8, B
 BUILD_LOG: register row A5; spec issues 244, 246-252, 254; proposed edits 190 (a §15.2 row),
 191 (A5 as built), 192 (§6.1's blocks), 193 (§12.4/D4 under A5), 194 (§7.3/C17 and the cache),
 195 (the lossy-abstraction refusal's stale clause).
+
+### 2026-11-01 - CHECKPOINT 10 taken in: the build log's plan for the lineage ruling and Kairos's new order
+
+`docs/BUILD_LOG.md` gains a "CHECKPOINT 10" section with the user's ruling on issue 526 and
+what the build does with each point: the two-oracle bar counted by lineage (a lineage vouches
+at most once per answer, through any member that agrees and is not a recorded divergence),
+built in the gate lane for every oracle, with each oracle's lineage read from its NOTICE,
+credits and pinned code and recorded in PROVENANCE.md; Kairos's parse mode kept in the
+quiet-machine block, its full mode and triage moved after the release tier, whose sign-off
+run leaves it out; the report the ruling asks for; Kairos's mate comparisons the first to drop
+if nightly time binds. Issues 526 (ruled), 527 (the driver ruled right), 531 (after the
+enabling) and 532 (the match runner in the test harness; the AGENTS.md sentence the user's)
+annotated; the waiting list, "Current state", step 2's order and the H23, H26, H34, H47 and H52
+rows brought in line; CHECKPOINT 9's interim "one implementation" reading marked superseded.
+No code changed.
+
+Spec: none edited here. The ruling as written upstream (b5a33e4) - §11.0, §12.6; register
+H23, H26, H34, H47, H52, reversal 33 - is the plan's; nothing is proposed.
+
+### 2026-11-01 - Design documents: the CHECKPOINT 10 ruling, from upstream - ftxi and Kairos one lineage for the two-oracle bar
+
+The copies maintained upstream, committed unedited. The user's ruling on spec issue 526:
+Kairos is in ftxi's lineage (its NOTICE credits ftxi; its core modules follow ftxi's one for
+one, its 5dpgn reader is ported and its mate test translated line by line), so H47's
+two-oracle bar counts lineages - an oracle derived from another's code counts with it, and a
+lineage vouches through any member that agrees and is not a recorded divergence, at most once;
+every oracle's NOTICE, credits and pinned code are read at each pin bump. Kairos stays a
+checker whose disagreements still fail the gate, adding a vouch only where it answers and ftxi
+does not; it is the telltale detector's known positive (H34) - it should reproduce ftxi's
+recorded errors where its paths are ftxi's, and not the R1 check entries. The match runner for
+the opponent role lives in the test harness when it is built (issue 532).
+
+Spec: §11.0 (the hypercuboid item, the Kairos table row and paragraph, the reuse rule, the
+licence table row, "Tiered CI", the triage and telltale bullets), §12.6; register H23, H26,
+H34, H47, H52, reversal 33, two open items (Kairos's query surface recorded; the rulesets
+Kairos answers and ftxi does not). Edited upstream; nothing proposed here.
 
 ### 2026-11-01 - CHECKPOINT 9's brief read in: the NNUE's rows retired, the phase form and refresh inside a turn planned, Kairos's remaining steps, the downloads listed
 
