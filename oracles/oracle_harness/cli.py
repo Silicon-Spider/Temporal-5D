@@ -27,7 +27,7 @@ from . import (
     stability,
     toolchain,
 )
-from .adapters import ORACLE_SOURCES, RunOptions, make_source
+from .adapters import ORACLE_SOURCES, PENDING_SOURCES, RunOptions, make_source
 from .util import Finding, HarnessError, format_findings, kill_running
 
 
@@ -296,13 +296,15 @@ def parser() -> argparse.ArgumentParser:
     sub = add("build", cmd_build, "Build oracles from their locked commits into the harness cache.")
     sub.add_argument("--oracle", action="append", help="oracle to build (default: all)")
     sub.add_argument("--bootstrap", action="store_true",
-                     help="fetch missing pinned tools (CMake/Ninja wheels, GHC archive) into the harness cache")
+                     help="fetch missing pinned tools (CMake/Ninja wheels, GHC and Rust archives) into the harness cache")
     sub.add_argument("--force", action="store_true", help="rebuild even if an up-to-date build exists")
     sub.add_argument("--plan", action="store_true",
                      help="build nothing; print the build tools still needed, as one line `tools=<names>`")
 
     sub = add("observe", cmd_observe, "Print what one source says about one corpus record.")
-    sub.add_argument("--source", required=True, help=f"the source to ask ({', '.join(ORACLE_SOURCES)}, ...)")
+    sub.add_argument("--source", required=True,
+                     help=f"the source to ask ({', '.join(ORACLE_SOURCES)}; not yet in any tier: "
+                          f"{', '.join(PENDING_SOURCES)}; ...)")
     sub.add_argument("--record", required=True)
     sub.add_argument("--timeout", type=float, default=600.0)
     sub.add_argument("--mate-budget-ms", type=int, default=20000)
