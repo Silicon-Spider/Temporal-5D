@@ -3978,7 +3978,12 @@ superseded or made moot says so; nothing is deleted.
     them too, since the review fixes). An unknown `leave_pool` is refused (tested since the review
     fixes). The engine's own documentation (`capi_search.h`'s FLAT FORM paragraph,
     `Evaluation::board_logits`) still says the network gives none - the engine lane's to update after
-    this merge (the review's A-L5; nothing to change here). Proposed edit 187.
+    this merge (the review's A-L5; nothing to change here). Proposed edit 187. **Done (2026-11-02,
+    `lane/engine`):** `capi_search.h` (the FLAT FORM paragraph, `t5d_evaluations.board_logits`,
+    `leave_share`), `mcts.hpp` (the flat form's header paragraph, `leave_share`,
+    `Evaluation::board_logits`), the built-in evaluators' header and the README's flat-form
+    paragraph now say the network gives every board's leave logit and `leave_share` is the
+    fallback for an evaluator that gives none (comments and documents only).
 242. **The flat form's policy target - the per-board visit marginals, as built** (§8.2, §12.2, §12.4,
     §12.5, §12.8; register D2, I2, I5, I12, D4, D9; issues 164, 165, 168, 234(b), 235). `lane/net`: the
     loss with the flat head (`cd310be`), the target with the flat-target commit. Section 8.2: "the flat form's policy
@@ -7311,3 +7316,10 @@ struck through, where nothing of it is left to apply); the others stand as writt
   the library alone; the two files re-run with them there: 24 passed, verify ok (exit 0), gate commit
   ok (oracle layer ok; engine differential smoke test passed; proof channel DISABLED); no truth
   source touched (check.cpp, hypercuboid.cpp, movegen.cpp unchanged), so no nightly gate.
+- **2026-11-02 - main 2cb107d merged; the flat-form docs** (`lane/engine`). Main's two Linux build
+  fixes (a std::uint64_t constant in mcts.cpp, two in the tests) merged first (M23; one conflict,
+  CHANGELOG; engine 695 of 695, verify ok, gate commit ok). Then issue 241(g): `capi_search.h`,
+  `mcts.hpp`, the built-in evaluators' header and the README no longer say the network gives no
+  per-board leave logit - D2's flat head gives every board's, `leave_share` is the fallback for an
+  evaluator that gives none. Comments and documents only. Checks: engine 695 of 695 (`--werror`),
+  verify ok (exit 0), gate commit ok (oracle layer ok; engine differential smoke test passed; proof channel DISABLED); no Lazy SMP run and no pytest (no code changed).

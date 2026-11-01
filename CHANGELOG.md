@@ -10,6 +10,26 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-02 - The engine's flat-form docs brought in line with D2's flat head: the network gives every board's leave logit
+
+Since D2's flat head (main, issue 241) the network's evaluators deliver a "leave it" logit for
+every board, but the engine's documentation still read as if the network gave none (issue
+241(g), the net review's A-L5). Comments and documents only, no code:
+
+- `engine/include/t5d/capi_search.h`: the FLAT FORM paragraph, `t5d_evaluations.board_logits`
+  and `t5d_search_params.leave_share` - the network's flat head gives every board's (Python's
+  `NetworkEvaluator`, the cached path alike), so a flat search it evaluates never falls back;
+  NaN or NULL, and `leave_share`, serve an evaluator that gives none.
+- `engine/include/t5d/mcts.hpp`: the flat form's header paragraph, `SearchParams::leave_share`
+  and `Evaluation::board_logits` the same; `engine/src/mcts_evaluators.cpp`'s header (the
+  built-in evaluators give them as the network's head does, no longer "until the network's
+  per-board head exists").
+- `engine/README.md` (the flat form); `docs/BUILD_LOG.md` (issue 241(g) closed out; the session
+  log).
+
+Spec: §8.2 ("Flat form") and register D2 describe the head; nothing in them changes (edit 187,
+the head's terms, already proposed with issue 241).
+
 ### 2026-11-01 - Issue 406: exact legality's cost characterised (t5d-legality-cost, four fixtures); deadlines now reach the detector
 
 Issue 406 (the search's exact move legality running for many minutes) characterised, and the

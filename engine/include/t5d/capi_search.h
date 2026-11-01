@@ -32,13 +32,16 @@
  *    Under D2's FLAT FORM (T5D_SPLIT_FLAT) every leaf is a turn start, its
  *    candidates classified as the ply split's are (D1), and the search derives
  *    each board's distribution over its options from them and from the leaf's
- *    BOARD LOGITS - optional: one float32 per expansion board
- *    (leaf.expansion.board_count, in its order), the board's "leave it" logit,
- *    read at the acting player's playable boards (NaN: none given for that
- *    board - t5d_search_params.leave_share; NULL: none at all) - then generates
- *    whole legal turns best first by their summed log-probabilities (register
- *    D2; t5d/turngen.hpp). It replaced the enumerating whole-turn arm and its
- *    256-action listing cap (retired).
+ *    BOARD LOGITS: one float32 per expansion board (leaf.expansion.board_count,
+ *    in its order), the board's "leave it" logit, read at the acting player's
+ *    playable boards - then generates whole legal turns best first by their
+ *    summed log-probabilities (register D2; t5d/turngen.hpp). The network gives
+ *    every board's (D2's flat head: Python's NetworkEvaluator delivers them,
+ *    the cached path alike), so a flat search it evaluates never falls back;
+ *    the channel stays optional for evaluators that give none - NaN for a
+ *    board, NULL for all - whose boards leave at t5d_search_params.leave_share.
+ *    It replaced the enumerating whole-turn arm and its 256-action listing cap
+ *    (retired).
  *  - SUBMIT (register D8; rulebook R8): turns have variable length, so under
  *    the board-move split submitting is an action of its own wherever it is
  *    possible (leaf.submit_possible: the obligations met, T5), legal only where
@@ -310,7 +313,8 @@ typedef struct t5d_search_params {
   int32_t flat_unit;              /* T5D_FLAT_UNIT_*: a child a distinct successor or an action */
   int32_t flat_jumps;             /* T5D_FLAT_JUMPS_* */
   double leave_share;             /* a board's "leave it" probability where no board logit is given
-                                     for it (in (0, 1); 0.5) */
+                                     for it (in (0, 1); 0.5) - a fallback: the network gives every
+                                     board's (D2's flat head) */
   double flat_k0_max;             /* the cap on k0 from the turn distribution's entropy (>= 1; 16) */
   uint64_t flat_fallback;         /* a node whose generator stopped before its first turn: up to this
                                      many turns from E4's listing instead (0: none - stuck; 64) */
@@ -527,9 +531,10 @@ typedef struct t5d_evaluations {
   const float* moves_left;      /* one per leaf (>= 0; NaN: none given), or NULL */
   size_t moves_left_count;      /* the leaf count, or 0 */
   /* D2's flat form: each leaf's board logits - leaf.expansion.board_count float32 per leaf,
-     concatenated in the batch's order: each board's "leave it" logit, read at the acting
-     player's playable boards under the flat form (NaN: none for that board - leave_share),
-     checked (no infinity) and not read under the other splits - or NULL with count 0: none */
+     concatenated in the batch's order: each board's "leave it" logit (the network's flat
+     head gives every board's), read at the acting player's playable boards under the flat
+     form (NaN: none for that board - leave_share), checked (no infinity) and not read under
+     the other splits - or NULL with count 0: none (an evaluator with no such head) */
   const float* board_logits;
   size_t board_logit_count;    /* = the leaves' board counts summed, or 0 */
 } t5d_evaluations;

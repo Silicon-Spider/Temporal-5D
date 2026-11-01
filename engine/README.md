@@ -2482,8 +2482,11 @@ the flat form was built, 2026-10-23, the flat form taking its slot, 1):
   the C API's `t5d_evaluations.board_logits`) give each playable board of the mover's a
   distribution - a log-softmax at the policy temperature (the root's I19 temperature too)
   over its own moves, the non-branching jumps arriving on it (`flat_jumps`: both boards, or
-  the source's only) and leaving it; a board given no leave logit (none, or NaN) leaves at
-  `leave_share` (0.5) and shares the rest among its moves. A turn's **score** is its options'
+  the source's only) and leaving it. The network gives every board's leave logit (D2's flat
+  head - Python's `NetworkEvaluator` delivers them, the cached path alike - so a flat search
+  it evaluates never falls back), and so do the built-in evaluators when asked; a board an
+  evaluator gives none (none, or NaN) leaves at `leave_share` (0.5) and shares the rest among
+  its moves. A turn's **score** is its options'
   log-probabilities summed over the boards (a move the expansion did not offer scores its
   board's lowest option); its **prior** the softmax of the generated turns' scores,
   renormalised as more are generated (`flat_prior` Generated), or exp(score) (Product).

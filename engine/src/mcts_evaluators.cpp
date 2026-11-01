@@ -3,8 +3,9 @@
 // each is a pure function of the state it is asked about (and, for the random
 // one, its seed and the refresh epoch), as the network's evaluations must be
 // (§8.5, C19-C21). Where the request asks for them (D2's flat form), each also
-// gives every board a "leave it" logit (Evaluation::board_logits): until the
-// network's per-board head exists (the net lane), these stand in for it.
+// gives every board a "leave it" logit (Evaluation::board_logits), as the
+// network's flat head does (D2's head change, built on the net lane: Python's
+// NetworkEvaluator delivers one for every board).
 
 #include <algorithm>
 #include <array>
