@@ -17,10 +17,18 @@ goes" - the decisions spent there).
 Per N bucket (M7's: 1-49, 50-99, 100-159, 160-239) and per move set: the distinct positions, the
 median N, the mean pieces per board, D (median, p95, max), the mean T_A1 and T_A5 and their ratio
 (of the means, and the median of the per-position ratios), and the mean analytic costs' ratios -
-then every bucket pooled under M18's weighting, dense alone and M16's blend (0.9 cached, 0.1 dense).
+then every bucket pooled under M18's weighting: dense alone; the cached node alone; **C26's phase
+form** (CHECKPOINT 9, spec section 7.10: a search whose root has fewer than N* boards runs dense,
+one at or above N* cached - each position here is a decision's root, so it is costed dense below
+N* and as a cached node at or above it; N* a placeholder, 50, with 100 beside it as a sensitivity,
+``--n-star``), with the dense figure below N* and the cached node's at or above it apart (section
+7.10 and M18 weigh the cache by the compute above N*); and M16's blend (0.9 cached, 0.1 dense at
+every size) - the pre-CHECKPOINT-9 reading, kept for comparison. The positions are action starts
+only: the ply split's mid-action leaves and a search's deeper nodes are not measured.
 
 Run from ``python/``: ``py -m t5d.engine.token_counts RECORD ... [--jsonl FILE]`` (``--jsonl``:
-one line per distinct position, for re-computation). Indicative CPU wall times are not reported:
+one line per distinct position with its ``action_starts``, written once every record is read, so
+that every pooled figure can be re-computed from it). Indicative CPU wall times are not reported:
 the counts do not depend on the machine.
 
 **Counted FLOPs** (``--flops``): one dense forward of the F1 network (FP32 trunk, random weights),
@@ -56,8 +64,12 @@ from .game import Game
 BUCKETS: tuple[tuple[int, int], ...] = ((1, 49), (50, 99), (100, 159), (160, 239), (240, 10**9))
 #: The move sets measured: the legal moves (exact) and the pseudo-legal ones.
 MOVE_SETS = ("legal", "pseudo")
-#: M16's blend of the cached and dense configurations' per-node costs.
+#: M16's blend of the cached and dense configurations' per-node costs - the pre-CHECKPOINT-9 reading.
 CACHED_SHARE = 0.9
+#: C26's N* (CHECKPOINT 9, spec section 7.10): dense below it, cached at or above - a placeholder.
+N_STAR = 50
+#: The N* values the phase form is pooled at by default: the placeholder and a sensitivity.
+N_STARS = (N_STAR, 100)
 
 
 def bucket_of(n: int) -> str:
@@ -97,9 +109,38 @@ def _quantile(values: Sequence[float], q: float) -> float:
     return float(np.quantile(np.asarray(values, dtype=np.float64), q)) if len(values) else math.nan
 
 
-def summarise(positions: dict[str, dict], weights: dict[str, int], cfg: NetConfig | None = None) -> dict:
+def _ratio(a1: float, a5: float) -> float:
+    return a1 / a5 if a5 else math.nan
+
+
+def phase_form(items: Sequence[tuple[int, int, dict]], n_star: int) -> dict:
+    """C26's phase form pooled over ``items`` (``(boards, weight, piece_centric_costs)`` of each
+    position, a decision's root): dense below ``n_star`` boards, the cached node at or above it -
+    the ratio A1 / A5 of the weighted totals, and the two halves apart: ``dense_below_ratio`` and
+    ``cached_above_ratio`` (NaN where a half is empty), each half's decisions, and the share of each
+    arm's phase-form compute that falls at or above ``n_star``."""
+    below = [(w, k) for n, w, k in items if n < n_star]
+    above = [(w, k) for n, w, k in items if n >= n_star]
+
+    def total(part, what: str, arm: str) -> float:
+        return float(sum(w * k[f"{what}_{arm}"] for w, k in part))
+
+    out: dict = {"n_star": int(n_star)}
+    phase = {arm: total(below, "dense", arm) + total(above, "node", arm) for arm in ("a1", "a5")}
+    out["ratio"] = _ratio(phase["a1"], phase["a5"])
+    out["dense_below_ratio"] = _ratio(total(below, "dense", "a1"), total(below, "dense", "a5"))
+    out["cached_above_ratio"] = _ratio(total(above, "node", "a1"), total(above, "node", "a5"))
+    out["action_starts_below"] = int(sum(w for w, _ in below))
+    out["action_starts_above"] = int(sum(w for w, _ in above))
+    for arm in ("a1", "a5"):
+        out[f"share_above_{arm}"] = total(above, "node", arm) / phase[arm] if phase[arm] else math.nan
+    return out
+
+
+def summarise(positions: dict[str, dict], weights: dict[str, int], cfg: NetConfig | None = None, n_stars: Sequence[int] = N_STARS) -> dict:
     """The per-bucket summary of distinct positions (``positions``: key -> ``position_counts``),
-    weighted by ``weights`` (key -> action starts) for the pooled figures (the module docstring)."""
+    weighted by ``weights`` (key -> action starts) for the pooled figures, C26's phase form at each
+    of ``n_stars`` among them (the module docstring)."""
     cfg = NetConfig() if cfg is None else cfg
     out: dict = {"buckets": {}, "pooled": {}}
     for move_set in MOVE_SETS:
@@ -108,6 +149,7 @@ def summarise(positions: dict[str, dict], weights: dict[str, int], cfg: NetConfi
             c = p[move_set]
             rows.setdefault(bucket_of(p["boards"]), []).append((c, piece_centric_costs(c, cfg), weights.get(key, 1)))
         pooled = {"dense_a1": 0.0, "dense_a5": 0.0, "node_a1": 0.0, "node_a5": 0.0, "action_starts": 0}
+        roots: list[tuple[int, int, dict]] = []
         for bucket, items in sorted(rows.items(), key=lambda kv: int(kv[0].split("-")[0].rstrip("+"))):
             counts = [c for c, _, _ in items]
             costs = [k for _, k, _ in items]
@@ -136,18 +178,19 @@ def summarise(positions: dict[str, dict], weights: dict[str, int], cfg: NetConfi
                     np.mean([k[f"{what}_a1"] for k in costs]) / np.mean([k[f"{what}_a5"] for k in costs])
                 )
             out["buckets"].setdefault(move_set, {})[bucket] = summary
-            for k, (_, cost, w) in zip(counts, items, strict=True):
-                del k
+            for c, cost, w in items:
                 for what in ("dense", "node"):
                     for arm in ("a1", "a5"):
                         pooled[f"{what}_{arm}"] += w * cost[f"{what}_{arm}"]
                 pooled["action_starts"] += w
+                roots.append((c["boards"], w, cost))
         blend = {arm: CACHED_SHARE * pooled[f"node_{arm}"] + (1 - CACHED_SHARE) * pooled[f"dense_{arm}"] for arm in ("a1", "a5")}
         out["pooled"][move_set] = {
             "action_starts": pooled["action_starts"],
             "dense_ratio": pooled["dense_a1"] / pooled["dense_a5"],
             "node_ratio": pooled["node_a1"] / pooled["node_a5"],
-            "blend_ratio": blend["a1"] / blend["a5"],
+            "blend_ratio": blend["a1"] / blend["a5"],  # M16's blend: the pre-CHECKPOINT-9 reading
+            "phase": {str(n): phase_form(roots, n) for n in n_stars},
             "dense_share_by_bucket_a1": {
                 b: float(sum(w * k["dense_a1"] for _, k, w in rows[b]) / pooled["dense_a1"])
                 for b in sorted(rows, key=lambda x: int(x.split("-")[0].rstrip("+")))
@@ -156,33 +199,33 @@ def summarise(positions: dict[str, dict], weights: dict[str, int], cfg: NetConfi
     return out
 
 
-def measure(paths: Iterable[str | Path], *, jsonl: Path | None = None, progress: bool = False) -> dict:
-    """The summary over ``paths`` (``summarise``), with the records' fates."""
+def measure(paths: Iterable[str | Path], *, jsonl: Path | None = None, progress: bool = False, n_stars: Sequence[int] = N_STARS) -> dict:
+    """The summary over ``paths`` (``summarise``), with the records' fates. A record that does not
+    replay to the end counts none of its positions."""
     positions: dict[str, dict] = {}
+    first_seen: dict[str, str] = {}
     weights: dict[str, int] = {}
     fates: dict[str, int] = {}
     refused: list[str] = []
-    sink = jsonl.open("w", encoding="utf-8") if jsonl else None
-    try:
-        paths = list(paths)
-        for i, path in enumerate(paths):
-            found, fate = record_positions(path)
-            fates[fate.split(":")[0]] = fates.get(fate.split(":")[0], 0) + 1
-            if fate != "ok":
-                refused.append(f"{Path(path).name}: {fate}")
-                continue
-            for p in found:
-                weights[p["key"]] = weights.get(p["key"], 0) + 1
-                if p["key"] not in positions:
-                    positions[p["key"]] = p
-                    if sink:
-                        sink.write(json.dumps({"record": Path(path).name} | p) + "\n")
-            if progress and (i + 1) % 50 == 0:
-                print(f"{i + 1}/{len(paths)} records, {len(positions)} distinct positions", file=sys.stderr, flush=True)
-    finally:
-        if sink:
-            sink.close()
-    summary = summarise(positions, weights)
+    paths = list(paths)
+    for i, path in enumerate(paths):
+        found, fate = record_positions(path)
+        fates[fate.split(":")[0]] = fates.get(fate.split(":")[0], 0) + 1
+        if fate != "ok":
+            refused.append(f"{Path(path).name}: {fate}")
+            continue
+        for p in found:
+            weights[p["key"]] = weights.get(p["key"], 0) + 1
+            if p["key"] not in positions:
+                positions[p["key"]] = p
+                first_seen[p["key"]] = Path(path).name
+        if progress and (i + 1) % 50 == 0:
+            print(f"{i + 1}/{len(paths)} records, {len(positions)} distinct positions", file=sys.stderr, flush=True)
+    if jsonl:
+        with jsonl.open("w", encoding="utf-8") as sink:
+            for key, p in positions.items():
+                sink.write(json.dumps({"record": first_seen[key], "action_starts": weights[key]} | p) + "\n")
+    summary = summarise(positions, weights, n_stars=n_stars)
     summary["records"] = fates
     summary["refused"] = refused
     summary["distinct_positions"] = len(positions)
@@ -255,6 +298,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--flops-check", action="store_true", help="count the full depth too, on the first position")
     ap.add_argument("--no-synthetic", action="store_true", help="--flops: the record's position alone")
     ap.add_argument("--threads", type=int, default=4, help="torch CPU threads (the machine is shared)")
+    ap.add_argument(
+        "--n-star", type=int, action="append", help=f"C26's N* for the phase form (repeatable; default {', '.join(map(str, N_STARS))})"
+    )
     args = ap.parse_args(argv)
     if args.flops:
         import torch
@@ -280,7 +326,7 @@ def main(argv: list[str] | None = None) -> int:
     for r in args.records:
         p = Path(r)
         paths.extend(sorted(p.glob("*.5dpgn")) if p.is_dir() else [p])
-    summary = measure(paths, jsonl=args.jsonl, progress=True)
+    summary = measure(paths, jsonl=args.jsonl, progress=True, n_stars=tuple(args.n_star or N_STARS))
     text = json.dumps(summary, indent=1, sort_keys=True)
     if args.out:
         args.out.write_text(text + "\n", encoding="utf-8")

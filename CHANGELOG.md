@@ -10,6 +10,99 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-02 - A5 review fixes: the figures re-weighed under CHECKPOINT 9's phase form, no 2x flag left standing; the token set held exact; the survivors killed
+
+Two reviews of A5 (`fd83390`, `f89c79f`, `72e5f96`: one of spec and correctness with probes, one a
+mutation pass - 48 mutants, 32 killed, 1 equivalent, 15 survivors, no behavioural bug), the main
+loop's decisions binding. Written on 2026-10-24 after main `7483103` was merged in, stopped there by
+the account's usage limit, and committed on 2026-11-02 after main `1c085ac` and `28a102b` were
+merged in too (the three entries below).
+
+- **The measurements against CHECKPOINT 9** (`engine/token_counts.py`; `docs/MEASUREMENTS.md`, "A5"
+  and its section 15.3 row). The pooled figures were read against M16's blend (0.9 cached at every
+  size), which C26 replaced: a search whose root has fewer than N\* boards runs dense, one at or
+  above N\* cached (spec section 7.10; N\* a placeholder, 50). The tool now pools C26's phase form
+  (`phase_form`; `--n-star`, default 50 and 100 as a sensitivity) - each position a decision's root,
+  dense below N\* and a cached node at or above, with the two halves apart - beside the old reading,
+  kept and labelled pre-CHECKPOINT-9. Re-run over the same 716 games (52 s; the same 22,761
+  positions, line for line): legal moves, N\* = 50, **2.45x** pooled by decisions - dense 2.46x below
+  N\*, the cached node (analytic) **2.11x** at or above; N\* = 100 2.73x (2.73x; 2.62x); pseudo-legal
+  (a sensitivity) 2.40x (2.43x; 1.79x) and 2.69x (2.69x; 2.22x). Re-stated under C26 on the
+  legal-destination set section 14.4 speaks of, **no figure is flagged under the 2x rule**: the
+  cached per-node term is 1.28x below "~2.7x" (1.03x at N\* = 100); the dense "~4.4-6.5x" is a
+  240-600-board figure the games never reach (its conditions not measured on games; synthetic
+  positions there 4.8-9.9x). The first reading's two flags compared across conditions and are
+  withdrawn. The measured figures' conditions now say action starts only (the ply split's
+  mid-action leaves and deeper nodes not measured); the JSON lines carry each position's decisions
+  (written once every record is read), so every pooled figure can be re-computed from them; the
+  tool's commit corrected (`72e5f96`, where `token_counts.py` first exists).
+- **The token set held exact** (`net/state.py`). Validation required the mask to cover the occupied
+  cells only, and the conversion kept a piece-centric input's cells by union, so an A5 state whose
+  moves were cut kept stale destination tokens (the review's probe: 224 tokens against a fresh 197).
+  `PositionState.validate` now holds `token_cells` to exactly the occupied cells and the candidate
+  moves' destinations, and `to_piece_centric` rebuilds the set from scratch; `TokenLayout` refuses a
+  mask of the wrong shape instead of reshaping it (a transposed mask of the right size included).
+- **The shared evaluation cache under A5** (BUILD_LOG issue 245(e), edit 196). The review measured
+  A5's evaluation moving with the legality options in every configuration (up to 2.1e-2 in a WDL
+  logit; A1 with the move graph off: exactly 0); the engine's cache key and
+  `t5d_search_new_sharing` do not check them (issue 115, the engine's to add). The binding already
+  refuses to share a cache between searches whose legality options differ; its test now covers
+  `legality_nodes` too (`tests/engine/test_search_api.py`).
+- **The build log**: issue 252 gains the likely reading for the user (C17 with section 14.4: frozen
+  tokens never read destination tokens; destination tokens are live queries) - the refusal stays;
+  issue 257 gains G10's dependence (mixture-of-depths is held open with A5's verdict as its trigger,
+  and A5 has no decision rule); new issue 258 - A5 and C26's N\* couple (A5 cheapens dense more than
+  a cached node, so N\* moves up under A5) - with proposed edit 199.
+- **Tests** (`tests/net/test_piece_centric.py`, `tests/engine/test_piece_centric_engine.py`; the
+  mutation pass's proposed tests adopted and adapted, the rest written): the pools read A5's own
+  square tokens (the global pool and moves-left, each board's mean, smolgen's square weights and
+  per-board square tokens - a pool depending on the layout's geometry rather than the mask is
+  invisible to the masked-A1 equivalence); a register never an endpoint; `square_tokens` refuses a
+  cell that is no token; a wrong-shaped mask refused; layout equality reads the cells; a stale token
+  set refused and rebuilt; the cost model's cached sets recounted by hand on a position with
+  destinations on frozen boards, and the cached node against each arm's own token count; the
+  evaluator converts strictly, and after a relayout; netplay's `--piece-centric`; the engine bench's
+  tokens column and conversion time under A5; `summarise`'s median ratio, its pooling by decisions,
+  M16's blend and the phase form on hand-built positions; `measure` weighing repeats, leaving a
+  refused record out and writing each position's decisions; the counted forward's extrapolation
+  equal to the full-depth count. The mutation pass's 15 survivors re-run with its runner against a
+  fresh copy of the fixed tree: 14 killed, each by the test written for it - L06
+  `test_square_tokens_refuses_a_cell_that_is_no_token`, L09
+  `test_a_register_is_never_an_endpoint_under_a5`, L12 `test_a_mask_of_the_wrong_shape_is_refused`,
+  L13 `test_layout_equality_reads_the_cells`, N07 `test_the_pools_average_over_the_tokens_there_are`,
+  E01 `test_the_evaluator_converts_strictly`, E02 `test_the_evaluator_converts_after_a_relayout`, E06
+  `test_netplay_takes_piece_centric`, E08 `test_the_bench_counts_a5s_tokens`, K02
+  `test_the_cached_sets_put_every_destination_live`, K03
+  `test_the_cached_node_attends_each_arms_own_tokens`, K05
+  `test_the_summary_pools_by_decisions_and_takes_the_phase_form`, K06
+  `test_the_tool_weighs_repeats_and_leaves_a_refused_record_out`, K08
+  `test_the_counted_forward_extrapolates_exactly`; C05 retired - the union it removed is gone (the
+  conversion rebuilds the set), and its re-anchored inverse (the union re-added) survives as an
+  equivalent mutant, since validation now refuses every stale set before the conversion sees it.
+  Its 19 further mutants, run once: 16 of 19 killed by the existing and new tests (K07 re-anchored:
+  `measure` lost its try/finally, so the block moved left - killed by
+  `test_the_tool_weighs_repeats_and_leaves_a_refused_record_out`); the three survivors, all LOW (a
+  register's slot under A5, the layout cache's key, the bench's `--piece-centric` in `main`), each
+  killed on a fresh copy by a test added for it (`test_every_register_keeps_its_slot_under_a5`,
+  `test_the_layout_follows_the_mask`, `test_the_bench_takes_piece_centric`).
+- **Checks** (the engine DLL built: "ninja: no work to do."): ruff "All checks passed!" and "111
+  files already formatted"; the whole pytest suite with `T5D_REQUIRE_ENGINE=1` in two workers on the
+  fixed tree after main `1c085ac` was merged (`28a102b` brought documents only) - `tests/engine`
+  "344 passed, 1 skipped in 791.24s (0:13:11)", `tests/net` and `tests/train` "1589 passed in
+  5445.70s (1:30:45)" (a loaded machine); `verify` every check ok but `pins` and the boundary's copy
+  check, both "kairos is not checked out" in this worktree - not synced, since `harness.py sync`
+  would fetch Kairos from its upstream and nothing downloads without asking. The review's probes on
+  the fixed code: the phase-form re-pooling (`probe_phase.py`, one per distinct position) 2.48x /
+  2.12x, 2.76x / 2.62x, pseudo-legal 2.43x / 1.80x and 2.72x / 2.22x, as before - the weighted
+  figures above are the tool's; the stale-token probe (`probe_stale.py`) now stops at its
+  `replace` with the validation error, and the cut state converted afresh has 197 tokens.
+
+Spec: §7.10, §13.1, §14.4, §15.3; register A5, C26, G10, M4, M16, M18, I15, C17. BUILD_LOG: register
+row A5; spec issues 244(e), 245(e), 252 (the likely reading), 256 (rewritten), 257 (G10), 258 (new);
+proposed edits 196 (amended), 197 and 198 (rewritten), 199 (new: §7.10's N\* under A5). MEASUREMENTS:
+the "A5" section and its section 15.3 row (the phase form; the 2x verdicts re-stated; the conditions;
+the commit).
+
 ### 2026-11-02 - main (28a102b) merged into lane/net: the CHECKPOINT 10 design documents and their plan
 
 Main since `1c085ac` (the CHECKPOINT 10 design documents from upstream - the user's ruling that ftxi
@@ -71,7 +164,9 @@ binding only; no training run.
 - **The token-count tool** (`engine/token_counts.py`, `py -m t5d.engine.token_counts`): every action
   start of 5dpgn records replayed as the gate's parse mode replays, the legal (exact) and pseudo-legal
   moves' counts through the network's own construction, positions distinct by fingerprint and side to
-  move, per M7's board-count buckets and pooled by decisions (dense, cached, M16's blend); `--flops`
+  move, per M7's board-count buckets and pooled by decisions (dense, cached, M16's blend) (Review
+  correction, 2026-10-24: M16's blend is the pre-CHECKPOINT-9 reading; the tool now pools C26's phase
+  form beside it - the entry above); `--flops`
   counts one dense forward, A1 against A5, on the block-sparse and every-key paths (at 1 and 2 layers,
   extrapolated to 16 - exact: checked at the full depth). The brief's `t5d-measure --tokens` was not
   needed: the binding's expansion takes the legal-moves filter since engine ABI round 2, so no engine
@@ -84,7 +179,9 @@ binding only; no training run.
   and 600-board positions 4.8-9.9x; CPU wall at 44 boards 3.0x (indicative: a loaded machine).
   **Flagged under the 2x rule**: the cached per-node term with pseudo-legal moves (1.30x against
   "~2.7x", 2.1x off; 1.9x with legal moves), and the dense range's top (6.5x, a 600-board figure) 2.6x
-  above the saving under 50 boards.
+  above the saving under 50 boards. (Review correction, 2026-10-24: both flags withdrawn - each
+  compared across conditions, and under CHECKPOINT 9's C26 the cache runs only at or above N\*, where
+  the node is 2.11x cheaper with legal moves, inside the rule; the entry above.)
 - **Tests**: `cost.token_counts` equals the layouts on every construction and the engine's own recount
   on real positions; the analytic figures section 14.4 rests on (4.78 TF at 240 boards; the brief's
   4.5x and 6.6x; about 3.3x at 44 boards); a piece-centric forward counted; the tool on records (one
@@ -105,7 +202,8 @@ binding only; no training run.
 
 Spec: §9.1, §13.1, §14.4, §15.3; register A5, M4, M16, M18, M19, M24. BUILD_LOG: register row A5;
 spec issues 255-257; proposed edits 197 (a §15.3 row), 198 (§14.4's figures written back, objections
-(2) and (3)). MEASUREMENTS: the §15.3 table's A5 row and the "A5" section.
+(2) and (3)). MEASUREMENTS: the §15.3 table's A5 row and the "A5" section (Review correction,
+2026-10-24: the engine there is main `0e37093` with this commit's tool, `72e5f96` - not `f89c79f`).
 
 ### 2026-10-23 - A5's plumbing: the evaluator and the training rows convert at the network's edge; games end to end; purity
 
@@ -154,7 +252,10 @@ synthetic rows.
   registers, the global registers last; moves and edges remapped through (board, cell) with their
   row order kept (policy row `i` is still move `i`). Strict conversion (engine data) refuses any
   dropped edge; not strict (synthetic data) drops exactly the move edges onto cells that are no
-  token, counted. Idempotent; `to_square_centric` and `square_centric_tokens` map back.
+  token, counted. Idempotent; `to_square_centric` and `square_centric_tokens` map back. (Review
+  correction, 2026-10-24: idempotence came from a union with the input's own cells, which kept stale
+  destination tokens when a piece-centric state's moves were cut; validation now holds the set
+  exact and the conversion rebuilds it from scratch - the entry above.)
   `TokenLayout` takes the kept cells: boards of different lengths (`board_offsets`,
   `max_tokens_per_board`, `square_tokens`, `body_maps`), and `tokens_per_board` now raises on a
   piece-centric layout so that every caller assuming uniform boards surfaces. `permute_boards`,

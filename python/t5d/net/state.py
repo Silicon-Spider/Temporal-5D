@@ -127,8 +127,11 @@ Representation (design spec section 2; register A1-A4):
   every caller assuming uniform boards surfaces). A capture's destination is the captured
   piece's own token; a destination token is an empty-square token (piece 0, no owner) with its
   board's flags - no new token kind and no new parameter, so every per-token consumer reads it
-  unchanged. Those readings are placeholders (BUILD_LOG issues 244-247). The engine's contract
-  stays square-centric: the conversion runs at the network's edge (``engine.evaluator``,
+  unchanged. Those readings are placeholders (BUILD_LOG issues 244-247). Validation holds the
+  mask to exactly that set - the occupied cells and the candidate moves' destinations, no more -
+  so a piece-centric state whose moves were cut keeps no stale destination token: it is refused,
+  and ``to_piece_centric`` rebuilds the set from scratch. The engine's contract stays
+  square-centric: the conversion runs at the network's edge (``engine.evaluator``,
   ``train.targets``).
 
 Board storage order is free: the network has no absolute positions (section 4), so a
@@ -260,7 +263,9 @@ class TokenLayout:
 
     def __post_init__(self) -> None:
         if self.cells is not None:
-            cells = np.array(self.cells, dtype=bool).reshape(self.n_boards, self.width * self.height)
+            cells = np.array(self.cells, dtype=bool)
+            if cells.shape != (self.n_boards, self.width * self.height):  # never reshaped: a transposed mask is refused
+                raise ValueError(f"cells: expected shape ({self.n_boards}, {self.width * self.height}), got {cells.shape}")
             cells.setflags(write=False)
             object.__setattr__(self, "cells", cells)
 
@@ -735,6 +740,11 @@ class PositionState:
             ends = arr[:, :2]
             if not layout.is_square_token(ends).all():
                 raise ValueError(f"{name}: every endpoint must be a square token (registers are never endpoints)")
+        if self.token_cells is not None and not np.array_equal(self.token_cells, piece_centric_cells(self)):
+            raise ValueError(
+                "token_cells must be exactly the occupied cells and the candidate moves' destinations (register A5): "
+                "a cell that is neither is a stale token - rebuild with to_piece_centric"
+            )
         if self.edges.size and np.any((self.edges[:, 2] < 0) | (self.edges[:, 2] >= len(RELATION_TYPES))):
             raise ValueError(f"edges: relation ids must be in 0..{len(RELATION_TYPES) - 1}")
         for name in ("moves", "opp_moves"):
@@ -1066,7 +1076,8 @@ def to_piece_centric(state: PositionState, *, strict: bool = True, return_droppe
     occupied cells and the candidate moves' destination cells (``piece_centric_cells``), each
     board's in cell order, then its registers; the global registers last. ``moves`` and ``edges``
     are remapped through (board, cell) with their row order kept - policy row ``i`` is still move
-    ``i``. Idempotent: a piece-centric state converts to itself.
+    ``i``. The set is rebuilt from scratch, never kept from a piece-centric input (which validation
+    already holds to exactly this set), so a piece-centric state converts to itself.
 
     ``strict`` (engine data): refuse any edge or opponent move with an endpoint that is no token.
     The engine's edges are its moves' own pairs and its relations end on pieces, so none can be.
@@ -1074,9 +1085,7 @@ def to_piece_centric(state: PositionState, *, strict: bool = True, return_droppe
     edges, and those opponent moves (D4's reply has no piece-centric reading - BUILD_LOG issue
     251), and count them (``return_dropped``)."""
     old = state.layout
-    cells = piece_centric_cells(state)
-    if state.token_cells is not None:
-        cells |= state.token_cells  # idempotent: an A5 state's tokens are already these
+    cells = piece_centric_cells(state)  # from scratch: an A5 input's own set is this one (validate)
     new = TokenLayout(old.n_boards, old.width, old.height, old.regs_per_board, old.global_regs, cells=cells)
 
     def kept(arr: np.ndarray) -> np.ndarray:

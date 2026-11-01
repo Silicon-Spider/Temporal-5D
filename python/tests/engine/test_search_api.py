@@ -876,6 +876,7 @@ def test_fresh_searches_share_the_evaluation_cache():
         ({"expand": (8, "all", 1 << 1)}, "expand.relations"),
         ({"legal_moves_only": 0}, "legal_moves_only"),
         ({"legality_checks": 7}, "legality_checks"),
+        ({"legality_nodes": 7}, "legality_nodes"),
     ],
 )
 def test_a_cache_is_shared_only_between_searches_with_one_input(change, named):
