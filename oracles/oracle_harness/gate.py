@@ -471,6 +471,15 @@ def static_checks(lock: Lock, cfg: config.GateConfig, records: list[Record], fro
         # What the engine read on the last green run (H47): what the commit tier holds it to.
         sections.append((BASELINE_SECTION, baseline.static_findings(cfg, records, frozen.baseline,
                                                                     frozen.baseline_problems)))
+    golden_findings = golden_section(lock, cfg, records, frozen)
+    sections.append(("golden observations", golden_findings))
+    return sections
+
+
+def golden_section(lock: Lock, cfg: config.GateConfig, records: list[Record], frozen: Snapshot) -> list[Finding]:
+    """The static checks of the recorded answers: those of the enabled sources (ORACLE_SOURCES) - their golden and cost
+    files, the calibration reference and DISAGREEMENTS.md, from the snapshot - and then, apart, the recordings of the
+    pending sources that have one, held to the same file checks (pending_golden_findings)."""
     sources = [make_source(name, lock) for name in ORACLE_SOURCES]
     golden_findings = golden.verify_static(sources, lambda source: recording_options(cfg, source), records, frozen)
     golden_findings += _calibration_findings(cfg, lock, records, frozen)
@@ -487,8 +496,25 @@ def static_checks(lock: Lock, cfg: config.GateConfig, records: list[Record], fro
                 f"{paths.DISAGREEMENTS_FILE.name} does not match the golden files, their costs and gate.toml's budgets "
                 f"(run: python {paths.HARNESS_REL}/harness.py golden --render, and review the diff - a changed line in "
                 "'What each tier requires' is a change in what the gate checks)"))
-    sections.append(("golden observations", golden_findings))
-    return sections
+    # Last, and apart: nothing about a pending source's recording reaches the checks above.
+    return golden_findings + pending_golden_findings(lock, cfg, records, frozen)
+
+
+def pending_golden_findings(lock: Lock, cfg: config.GateConfig, records: list[Record], frozen: Snapshot) -> list[Finding]:
+    """A pending source's recording, where one is on file, held to the static checks of an enabled source's files.
+
+    `golden --write --source <pending>` records a source that is wired but in no tier (adapters.PENDING_SOURCES) -
+    Kairos's parse mode before the release tier's sign-off run, which leaves Kairos out (CHECKPOINT 10). Its files sit
+    in oracles/golden/ under MANIFEST like any other; they are read here on their own (snapshot.recorded_pending), never
+    into the snapshot a tier compares with or DISAGREEMENTS.md is rendered from. A stale or incomplete one is a finding,
+    as an enabled source's would be: re-record it (golden --write --source <it>).
+    """
+    pending = snapshot.recorded_pending(frozen.manifest)
+    names = list(pending.golden) + [name for name in pending.problems if name not in pending.golden]
+    if not names:
+        return []
+    sources = [make_source(name, lock) for name in names]
+    return golden.verify_static(sources, lambda source: recording_options(cfg, source), records, pending)
 
 
 PROOF_SECTION = "required sets of a tier that can enable the proof channel"

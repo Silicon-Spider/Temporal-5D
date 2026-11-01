@@ -10,6 +10,28 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-02 - A pending source may be recorded before it is enabled ((P), the main loop's decision) - ready to record Kairos's parse mode
+
+CHECKPOINT 10 records Kairos's parse mode in the quiet-machine block and leaves Kairos out of the
+release tier's sign-off run. As built, a source could be recorded only once it was enabled, and an
+enabled source must be in the release tier. Now `golden --write --source` accepts a pending source
+(`adapters.PENDING_SOURCES`; never recorded unless named): its files go into `oracles/golden/`
+under `MANIFEST`, recorded under the recording tier's own budget, and `verify` - with every tier's
+static checks - holds them to the static checks an enabled source's files get
+(`gate.pending_golden_findings`), read apart (`snapshot.recorded_pending`) and after the enabled
+sources' checks (`gate.golden_section`), never into the snapshot that the tiers compare with, the
+proof-channel readiness reads, or `DISAGREEMENTS.md` is rendered from. The sign-off release tier is
+exactly today's. `oracles/tests/test_pending_recording.py` proves, on a copy of the golden files,
+that a pending recording changes nothing any tier, verify's checks of the enabled sources or
+`DISAGREEMENTS.md` reads, and that a stale or incomplete one fails verify on its own;
+`test_kairos.py` now accepts a pending recording that passes those checks. A dry run of the
+recording through the harness's own path, nothing written: two recordings in 3.4 s, 32 records
+read, 8 `parse_failed`, nothing unstable. The smoke run's earlier "9 parse_failed" was a miscount,
+corrected in `docs/BUILD_LOG.md` (issue 533), `docs/MEASUREMENTS.md` and this file: 8.
+`oracles/README.md` says how a pending source is recorded.
+
+Spec: register H52, H32, H33; §11.0 ("Tiered CI") - nothing proposed; issues 574 (decided), 575.
+
 ### 2026-11-02 - Kairos's parse mode built and pending; how the sign-off run leaves Kairos out, reported before building
 
 H52's "parse mode first", reordered by CHECKPOINT 10: parse mode is prepared for the
@@ -263,7 +285,7 @@ it can answer, before any driver is written.
   agrees with Chess in 5D on check at all 814 shared positions and differs from ftxi at
   131 of 986 (the R1 cluster); agrees with ftxi and cwmtt on every terminal verdict and
   with Chess in 5D but for its two known false checkmates; its exhaustive count equals
-  cwmtt's at all 680 shared positions and ftxi's at 841 of 843; 9 records are
+  cwmtt's at all 680 shared positions and ftxi's at 841 of 843; 8 records (first written 9) are
   `parse_failed`.
 
 `verify` passes (its 17 `proof-channel-vacuous` notes are H48's, as before); no tier

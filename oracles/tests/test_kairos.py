@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from oracle_harness import build, config, corpus, golden, lockfile, paths
+from oracle_harness import build, config, corpus, gate, golden, lockfile, paths, snapshot
 from oracle_harness.adapters import (
     ORACLE_SOURCES,
     PENDING_SOURCES,
@@ -58,13 +58,15 @@ class PendingTests(unittest.TestCase):
             with self.assertRaises(HarnessError):
                 config.load(path)
 
-    def test_a_recorded_source_has_golden_files_and_a_pending_one_has_none(self):
-        # Moving Kairos into ORACLE_SOURCES and recording it on a quiet machine go together (BUILD_LOG issue 530).
+    def test_an_enabled_source_has_golden_files_and_a_pending_ones_pass_their_checks_where_recorded(self):
+        # A pending source may be recorded before it is enabled (golden --write --source <it>; BUILD_LOG issue 575):
+        # its files, where present, pass the static checks an enabled source's do; nothing else reads them.
         for name in ORACLE_SOURCES:
             self.assertTrue(golden.golden_path(name).exists(), name)
+        frozen = snapshot.take()
+        self.assertEqual(gate.pending_golden_findings(lockfile.load(), config.load(), corpus.load(), frozen), [])
         for name in PENDING_SOURCES:
-            self.assertFalse(golden.golden_path(name).exists(), name)
-            self.assertFalse(golden.cost_path(name).exists(), name)
+            self.assertNotIn(name, frozen.golden)
 
 
 class AnswersTests(unittest.TestCase):

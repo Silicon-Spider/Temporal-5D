@@ -97,17 +97,20 @@ comparisons are the first thing to drop - they carry no vouch beside ftxi's
 5dpgn reader fails a whole record on one move it cannot read, so such a record is
 `unsupported` (`parse_failed`) from position 0. What it answers, and why, is in
 `PROVENANCE.md` ("Kairos, the fourth oracle"); parts of it derive from ftxi's
-code, which bears on how far it counts as a second oracle (`docs/BUILD_LOG.md`,
-issue 526).
+code, which is why it counts with ftxi as one lineage (CHECKPOINT 10, issue 526).
 
 It is in no tier yet: CHECKPOINT 10 puts its enabling after the release tier,
 whose sign-off run leaves Kairos out. Every source a tier lists is held to its
 golden files - `verify` and every tier fail with `golden-missing` for a source with
-none - and the recording tier must run every source the gate compares, so as built
-a source cannot be recorded without being in the release tier. So its three
-sources wait in `adapters.PENDING_SOURCES`, which no tier may list, nothing records,
-and `verify` asks nothing of (`docs/BUILD_LOG.md`, issue 574, has how its parse mode
-is to be recorded before the sign-off without entering it).
+none - and the recording tier must run every source the gate compares. So its three
+sources wait in `adapters.PENDING_SOURCES`, which no tier may list. A pending source
+may still be **recorded** before it is enabled (`golden --write --source
+kairos:parse`, the quiet-machine block's): its files go into `golden/` under
+`MANIFEST` like any other, and `verify` holds them to the same static checks - a
+stale or incomplete one fails it - but they are read apart (`snapshot.recorded_pending`),
+never into the snapshot a tier compares with or `DISAGREEMENTS.md` is rendered from,
+so recording one changes nothing any tier, `verify`'s checks of the enabled sources
+or `DISAGREEMENTS.md` reads (`tests/test_pending_recording.py`).
 Enabling them is one reviewed commit: move them into `ORACLE_SOURCES` (and
 `kairos` into `PRIMARY_SOURCES`), list them in `gate.toml`'s nightly and release
 tiers with their budgets, record them (`golden --write --repeat 2 --source kairos
@@ -543,6 +546,13 @@ those sets come to, per tier and source, is the table in `DISAGREEMENTS.md`, so
 that a cost that moved far enough to change what a tier requires shows there.
 `calibration.json` holds the time the calibration probe took on the recording
 machine.
+
+A **pending** source (wired, in no tier: Kairos's sources until after the release
+tier's sign-off run) may be recorded too, but only when named (`golden --write
+--source <it>`): its golden and cost files sit beside the others under `MANIFEST`, and
+`verify` holds them to the same checks, apart from the enabled sources' - nothing
+else reads them until the source is enabled ("Kairos, wired and not yet enabled",
+above).
 
 ### What the disagreements are, at the current pins
 

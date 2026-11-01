@@ -246,8 +246,9 @@ Nothing was written under `oracles/`. Detail and reading: `docs/BUILD_LOG.md`, i
 | cwmtt | 803 / 803 | 780 / 803 (Very Small - Open) | - (no check verdict) | 802 / 802 ("no action") | 680 / 680 |
 | Chess in 5D | 815 / 815 | 815 / 815 | 814 / 814 | 791 / 793 | - (no count) |
 
-Records read: 31 to their end or refusal; 9 `parse_failed` (Kairos's reader fails the whole
-record); the hypercuboid search cut at 120 s on 1 record (cwmtt/100_timelines, position 21
+Records read: 32 to their end or refusal (31 to the end, local/ignores-check to its refusal);
+8 `parse_failed` (Kairos's reader fails the whole record; first written as "31 ... 9", a
+miscount corrected 2026-11-02 from the parse-mode dry run); the hypercuboid search cut at 120 s on 1 record (cwmtt/100_timelines, position 21
 of 22), the exhaustive one at 60 s on 10.
 
 ### G9's bounded AMD attempt - AMD-labelled, eager, indicative (2026-10-23; no threshold, no verdict)
