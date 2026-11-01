@@ -407,10 +407,10 @@ pushed after every commit, taking main by merge, never rebase (re-check with `gi
   edits 362-363). Since CHECKPOINT 10 (issue 526 ruled: one lineage with ftxi): the gate's
   two-oracle count by lineage and every oracle's lineage in PROVENANCE.md - built
   2026-11-02 (issue 573; the nightly gates what it gated); Kairos's parse mode built and
-  pending (`kairos:parse`, issue 574) - recording it before the sign-off needs a reviewed change
-  ((P) record a pending source, recommended; or (D) deferred sources), reported, not built; three
-  rulesets Kairos reads and ftxi does not (Timeline Battleground, Just Kings, Just Pawns) reported
-  first; Kairos's
+  pending (`kairos:parse`, issue 574); (P), a pending source recorded before it is enabled, built
+  (issue 575) - **ready to record** `golden --write --repeat 2 --jobs 8 --source kairos:parse` on a
+  quiet machine; the three rulesets Kairos reads and ftxi does not (Timeline Battleground, Just
+  Kings, Just Pawns) and the ftxi/cwmtt lineage question with the user; Kairos's
   parse mode in the quiet-machine block (issue 530), reported first if it answers a ruleset
   ftxi does not; H48's re-recording; the release tier with the engine configured, Kairos
   left out; after it, Kairos's full mode and triage, and the report CHECKPOINT 10 asks for.
@@ -5366,8 +5366,9 @@ superseded or made moot says so; nothing is deleted.
     committed golden files of ftxi, cwmtt and Chess in 5D; nothing written under `oracles/`
     (the script and its output stayed in the session's scratch directory). No triage -
     that is the enabling's (issue 530).
-    - **Read:** 31 records to their end or refusal, 9 `unsupported` (`parse_failed`, the
-      whole record - issue 528): five moves its reader matches no legal move to
+    - **Read:** 32 records to their end or refusal (31 to the end, local/ignores-check to its
+      refusal), 8 `unsupported` (`parse_failed`, the whole record - issue 528; corrected
+      2026-11-02 from "31 ... 9", a miscount): four moves its reader matches no legal move to
       (cwmtt/futures `(L1T5)Qf4>>x(L0T5)e4~`, cwmtt/tesseractMageOChicken
       `(-1T10)Nf6>x(+1T10)g6`, cwmtt/test1 `(0T5)Qd1>>(0T3)f3~`, notation/invasion `(1T1)a2`
       - ftxi refuses or stops at the first three too), notation text it does not read
@@ -5565,7 +5566,49 @@ superseded or made moot says so; nothing is deleted.
     the `kairos` source's mate test (`get_mate_type`) is the first cut (a check-only option for
     the hypercuboid source, built with full mode), before anything else of Kairos's or of any
     other oracle's. For the main loop: (P) or (D), and whether Kairos's full mode precedes the
-    release tier for the three rulesets.
+    release tier for the three rulesets. **Decided 2026-11-02 by the main loop:** (P), built (issue
+    575); (D) declined - it would compare Kairos nightly and pull its triage before the release
+    tier. The three rulesets and the ftxi/cwmtt lineage question (issue 573 (a)) go to the user, as
+    CHECKPOINT 10 says; full mode is not started.
+
+575. **(P) built: a pending source may be recorded; ready to record Kairos's parse mode**
+    (CHECKPOINT 10; register H52, H32, H33; the main loop's decision on issue 574). `golden
+    --write --source` accepts a pending source (`cli.py`: `ORACLE_SOURCES + PENDING_SOURCES`;
+    without `--source` nothing pending is recorded). Its golden and cost files go into
+    `oracles/golden/` under `MANIFEST` like any other, recorded under the recording tier's own
+    budget (no tier lists it, so no budget of its own applies: release's 600 s). `verify` - and
+    every tier's static checks, which share the section (`gate.golden_section`) - holds a pending
+    recording, where one is on file, to the static checks of an enabled source's files: integrity
+    against `MANIFEST`, schema, signature (pin, driver, adapter, budget), the number of recordings,
+    the cost file beside it, every corpus record and its hash (`gate.pending_golden_findings`); a
+    stale or incomplete one is a finding, as an enabled source's would be. It is read apart
+    (`snapshot.recorded_pending`), after and separately from the enabled sources' checks, never
+    into the snapshot every tier compares with, the proof-channel readiness reads, or
+    `DISAGREEMENTS.md` is rendered from - so nothing about it reaches what the four oracles are held
+    to. Proved by `oracles/tests/test_pending_recording.py` on a copy of the repository's golden
+    files: after a pending recording is written (with `MANIFEST` rewritten, as golden --write
+    does), the snapshot holds the same sources with the same file digests, problems and `MANIFEST`
+    findings; verify's golden section finds nothing; `DISAGREEMENTS.md` renders byte for byte the
+    same; what each tier requires and the release tier's readiness are unchanged; no tier lists a
+    pending source and the nightly and release tiers stay full strength; a stale signature or a
+    missing record fails verify on the pending recording alone; a cost file without its golden file
+    is `golden-missing`. The sign-off release tier is exactly today's. **Ready to record:** on a
+    quiet machine, in the gate worktree (`lane/gate`), with `ORACLE_HARNESS_CACHE` set to the main
+    checkout's `oracles/.cache` and Kairos built (`py oracles/harness.py build --oracle kairos`; the
+    build in the shared cache is current): `py oracles/harness.py golden --write --repeat 2 --jobs 8
+    --source kairos:parse`. Expected duration under a minute - a dry run of the same two recordings
+    through the harness's own recording path, nothing written (`runner.record_sources`,
+    `stability.merge`), took 3.4 s, plus the calibration probe's 12-14 s. Expected content: 32
+    records read (31 to their end; local/ignores-check refused, `cannot_submit`, after 3 actions, as
+    every oracle refuses it), 8 `unsupported` (`parse_failed`: cwmtt/brawnsPuzzles-another,
+    cwmtt/futures, cwmtt/tesseractMageOChicken, cwmtt/test1, notation/aivsai, notation/game,
+    notation/invasion, notation/marauders), no instability, no self-contradiction. It writes
+    `oracles/golden/kairos-parse.json` and `kairos-parse.cost.json`, re-times `calibration.json`,
+    rewrites `MANIFEST`, and re-renders `DISAGREEMENTS.md` unchanged; every other golden file is
+    kept, its hash re-checked. Afterwards `verify` should pass with its 17 notes, and `git diff`
+    should show the two new files, `calibration.json` and `MANIFEST` only. (The smoke run's count of
+    `parse_failed` records in issue 533 and MEASUREMENTS read 9 - a miscount, corrected there: 8.)
+    Not put to the user.
 
 ## Proposed spec edits
 
@@ -7159,7 +7202,7 @@ struck through, where nothing of it is left to apply); the others stand as writt
   `kairos:naive`, in `adapters.PENDING_SOURCES`: wired, enabled in no tier until the
   quiet-machine block records them (issue 530). The smoke run over the corpus (issue 533): the
   same boards as every oracle everywhere; check with Chess in 5D, terminal with ftxi and cwmtt,
-  the count with cwmtt; 9 records its reader cannot read. No golden file written (the machine is
+  the count with cwmtt; 8 records its reader cannot read (first written as 9, a miscount). No golden file written (the machine is
   loaded). Checks on the final state: `verify` ok (the 17 notes of H48), `selftest` 684 tests OK
   (1 skipped), `gate --tier commit` - oracle layer ok, ftxi 8256 of 8256 and notation 3012 of
   3012 required values reproduced, calibration 1.45x, engine SMOKE TEST - PASSED, 0 declined:
@@ -7195,3 +7238,8 @@ struck through, where nothing of it is left to apply); the others stand as writt
   a pending source, recommended, or (D) deferred sources - for the main loop. Reported first, as
   CHECKPOINT 10 asks: three rulesets Kairos reads and ftxi does not, each one record (cwmtt/ctp2,
   cwmtt/JustKings, cwmtt/smallTest), today followed by cwmtt alone.
+- **2026-11-02 - (P) built: a pending source may be recorded** (`lane/gate`; issue 575). `golden
+  --write --source` takes a pending source; verify holds its files to the same static checks, read
+  apart from the snapshot the tiers, the enabled sources' checks and DISAGREEMENTS.md use - proved
+  unchanged for the four by `test_pending_recording.py` on a copy of the golden files. A dry run of
+  the parse-mode recording, nothing written: 3.4 s, 32 read, 8 parse_failed, stable. Ready to record.
