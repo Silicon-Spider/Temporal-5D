@@ -368,6 +368,17 @@ if(MINGW)
   target_link_options(t5d-tree-count PRIVATE -static)
 endif()
 
+# Build-log issue 406: what exact move legality costs, position by position
+# (engine/testdata/legality-cost), and the deadlines that reach it.
+add_executable(t5d-legality-cost tools/t5d_legality_cost.cpp)
+target_link_libraries(t5d-legality-cost PRIVATE t5d_tools)
+if(MINGW)
+  target_link_options(t5d-legality-cost PRIVATE -static)
+endif()
+target_sources(t5d-tests PRIVATE tests/test_legality_cost.cpp)
+add_dependencies(t5d-tests t5d-legality-cost)
+target_compile_definitions(t5d-tests PRIVATE "T5D_LEGALITY_COST_EXE=\"$<TARGET_FILE:t5d-legality-cost>\"")
+
 # ---- MinGW: no dependence on the toolchain's runtime DLLs --------------------------
 #
 # With MSYS2's MinGW-w64 g++, the C++ runtime (libstdc++, libgcc) and winpthreads

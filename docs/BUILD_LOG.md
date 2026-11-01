@@ -1000,6 +1000,7 @@ threads reach at least one thread's sum (one retry on a shared machine).
 | 2026-10-23 | main 62ff24d into lane/search | lane/search 97ec57d + main 62ff24d, merged tree before the commit | dev-r, 24 logical; this merge's whole pytest suite (serial) and other lanes' jobs running; load 99% before and after | 32 | 291 / 289 / 291 | 311 / 301 / 311 | none | pass x3 |
 | 2026-10-24 | E10 (the search wiring and H44's audit lane; reviewed, 97ec57d; main 62ff24d merged in, 666cfa4) | main f1603e5 + lane/search 666cfa4, merged tree before the commit | dev-r, 24 logical; the engine, network and gate lanes running; load 90-99% before, 84-99% after | 32 | 292 / 292 / 291 | 309 / 308 / 310 | none | pass x3; the lane's merge of main ran the nightly gate (525 s, Half Reflected and Reversed Royalty gated) on the same engine code |
 | 2026-11-01 | main 7483103 into lane/engine (E10 and the rest of main; the step-2 solver searches with the ladder off) | lane/engine ee9456e + main 7483103, merged tree before the commit | dev-r, 24 logical; other lanes' jobs and this lane's measurements running; load 100% before and after | 32 | 288 / 289 / 289 | 300 / 299 / 301 | none | pass x3 |
+| 2026-11-02 | issue 406 (deadlines reach the rules engine's calls: legality, the search's in-batch calls, the play loop; t5d-legality-cost) | lane/engine 0e39099 + issue 406, the tree before the commit | dev-r, 24 logical; other lanes' jobs and this lane's pytest running; load 100% before and after | 32 | 290 / 292 / 292 | 303 / 309 / 312 | none | pass x3 |
 
 ## Environment
 
@@ -4777,7 +4778,8 @@ superseded or made moot says so; nothing is deleted.
 
 **Issues 400-449 are the engine lane's block for the step-2 test work (MT-01 to MT-03),
 assigned by the main loop on 2026-10-23 (the engine lane's earlier block, 140-199, is used
-up); its proposed edits take 300-329.**
+up); its proposed edits take 300-329. Issue 406's follow-up (2026-11-01) uses 407-408 and
+edits 303-304.**
 
 400. **The solver-against-df-pn cross-check: the readings it needed** (§15.4 "the solver's
     against df-pn and the oracles' mate verdicts (H41)"; §11.1 "cross-checked against df-pn
@@ -4840,6 +4842,72 @@ up); its proposed edits take 300-329.**
     leaves (its children are whole turns from the generator), and the realisation's cost
     under Q3 - information for §15.3's legality row (measured under the default rules
     only).
+    **Characterised, and the defect in it fixed (2026-11-01, `lane/engine`):** the tool
+    `t5d-legality-cost` and four fixtures (`engine/testdata/legality-cost/`; docs/MEASUREMENTS.md,
+    "Exact move legality's cost"). The search's default paths are budgeted everywhere - the
+    leaves' classification (64 checks, 2,000 nodes), the lazy verification (4,096 / 200,000),
+    the turn-start checks (2 million nodes), the flat form's generator (200,000) - and every
+    budget is honoured; the minutes came from exact legality, which only tests and tools
+    choose (the flat form's leaf classification under the default budget costs 0.004 s at the
+    costliest Q3 node, 78 of its 141 moves left unknown, so the flat form keeps it: D1). **The
+    defect: no deadline reached the rules engine's calls** - a search's `Limits::seconds` was
+    read between batches only, and a game's `max_seconds` never reached its turn-start verdict
+    or a chosen move's exact verification: `t5d-play --max-seconds 900` on a default-rules
+    Very Small - Open game (seed 4) ran 40 minutes inside one verdict and was killed. Fixed:
+    `LegalityOptions::deadline`, the search's deadline handed to its in-batch calls, the play
+    loop's to its verdicts and verifications (Unknown, never a verdict; the game then ends
+    `TimeLimit`); the same game with `--max-seconds 120` ends at 120.0 s. What remains is
+    algorithmic (issue 407) or a decision the documents made exact (issue 408).
+407. **Exact legality's cost is algorithmic - where it lies, measured** (register E5a, H37, M9;
+    §8.1, §13 "Legality classification may dominate self-play in big games", §15.3's legality
+    row; issue 406). No budget is left unhonoured: every move a search applies is a node, the
+    abstract check's steps are charged in bulk after it, a time limit is read every 64 nodes -
+    1.5-3.5 µs a node at every position measured (docs/MEASUREMENTS.md). The time goes to:
+    (a) **tier 3's illegality proofs** - `q3-flat-node` (18 boards, 7 playable timelines, Q3:
+    the hypercuboid's General regime): of 141 moves tiers 0-2 settle 75; tier 3 proves 18 legal
+    and 43 illegal, each illegal move by one exhaustive search of the rest of the action (0.2-0.53
+    million nodes - the kings' jumps into the past), 5 learned: exact 11.9 million nodes, 19 s,
+    while E4's own question there (any legal action?) takes 43,424 nodes; under the flat form
+    with exact legality every turn start of the tree pays it (issue 406's 17 minutes);
+    (b) **points no creation order realises** - `vso-seed4-verdict` (default rules, 191 boards,
+    49 playable timelines): E4's verdict unknown at 2 / 20 / 200 million nodes (3.8 / 37 /
+    346 s; the game's own, exact, past 20 minutes); of the points judged nearly all are
+    unrealised (3,857 of 3,939 at 200 million nodes, about 51,000 nodes each) and nearly every
+    box's abstract check gives up at its step limit (3,935; `kAbstractSteps`, 4,096), so no box
+    is eliminated in bulk and each point's creation orders are walked (`realise_free`, sampled
+    11 levels deep: k! orders for k branches); its classification settles 617 of 982 moves in
+    tiers 0-2 and leaves 365 unknown at 200 million nodes (352 s);
+    (c) **one move's verification at a large node** - `vso-seed4-verify` (192 boards, 48
+    playable timelines, 940 moves; a node of that game's search): the move a lazy verification
+    asked about stays unknown at 2,000 / 200,000 / 2 million nodes (0.06 / 0.75 / 6.6 s), and
+    exact ran past 600 s (290 million nodes; past 30 minutes in a probe); at 200,000 nodes each
+    verification costs ~0.6 s, and in that game's first 120 s verifications took 63 s, the
+    turn-start checks 46 s, the expansions 11 s.
+    What would change them is algorithmic, and the documents do not settle it: a refutation
+    reused across the moves it covers (a); the abstract check's step limit, or a cheaper proof
+    that a point is unrealisable (b - the hypercuboid is a truth source: any change goes through
+    the detectors' cross-checks and the nightly gate); a verification budget or policy that
+    scales with the node (c). For the search lane / the user; nothing changed here. The MT
+    tools' exact default (`t5d-solver-check`, `t5d-proof-records`: `--legality-nodes`) stays,
+    documented.
+408. **The play loop's two exact steps have no node limit, as the documents say - and can run
+    for many minutes; for the user** (H37; §8.1; §15.5 "an engine that plays legal 5D chess
+    end to end"; register E5a, I11; `t5d/selfplay.hpp`). Each turn start's verdict (detect_mate
+    with the memory ceiling alone - an Unknown verdict ends the game unjudged) and the exact
+    verification of a chosen move the expansion's budget left unknown (the C++ play loop; the C
+    API's `t5d_search_verify`, so Python's self-play and netplay) - "a move is never played
+    unverified". Measured: the seed-4 game (t5d-play's defaults but the material evaluator and
+    32 playouts) reaches after 26 actions a turn start whose verdict ran past 20 minutes (issue
+    407 (b)); a chosen move's exact verification at issue 407 (c)'s node would run past 30
+    minutes. Since issue 406's fix a deadline reaches both - in tools and match play - but
+    training self-play sets none (it is not deterministic), so there both stay unbounded. Not a
+    defect by the documents (H37: a verdict needs an exhaustive search; the loop's contract:
+    verified before played), so nothing changed. The question: should either carry a node
+    budget, and what then happens on Unknown - for the verdict, today the game stops unjudged
+    (`GameEnd::Unknown`); the alternative is to play on (an Unknown verdict is never terminal)
+    and let the search's budgets carry the position; for the chosen move, the most visited
+    child known legal (the memory ceiling's fallback, already built). Either changes training
+    games, so it is a decision, not a fix.
 
 402. **6f's settling scans: their wrapper is not on main** (§13.1 6f "verify the proof-export
     invariant under TT churn for Hunt and the settling scans (§11.3)"; §11.4 "df-pn at the
@@ -6828,6 +6896,23 @@ struck through, where nothing of it is left to apply); the others stand as writt
     them: checkmate at each leaf, legal_actions at each defender turn, in_check throughout;
     the flow is engine -> records -> harness, never back. Whether such records enter the
     pinned corpus is the user's decision." Why: issues 404, 405.
+303. **§15.3's legality row: exact's tail on real positions (M4 write-back)**: now - "Median at
+    240 boards: 26 µs pseudo-legal, 102 µs fast, 2.5 ms budgeted, 7.3 ms exact; 41 of 43 s of
+    random-weight self-play at 336 boards". Proposed - append: "; exact's tail on real positions
+    (issue 406): an 18-board position under Q3 takes 11.9 million nodes, 19 s, 43 of its moves
+    proved illegal one exhaustive search each; at ~190 boards under the default rules one move's
+    exact classification ran past 30 minutes and E4's exhaustive verdict past 20 (points no
+    creation order realises, walked one by one)". Why: issues 406, 407; docs/MEASUREMENTS.md
+    ("Exact move legality's cost").
+304. **§13's "Legality classification may dominate self-play in big games": exactness is the
+    other cost**: now - "... Search verifies unknown moves lazily (§8.1), but expansion still
+    classifies every move under a budget, and the flat turn generator (§8.2) adds a submission
+    check per generated turn. Cheap legality matters as much as the network's speed in large
+    positions; its throughput is a §15.3 figure." Proposed - append: "Exactness is the other
+    cost: the game's turn-start verdict and the verification of a chosen move before it is
+    played are exact with no node limit (H37), and at ~190 boards each has been measured past
+    20-30 minutes; a deadline reaches them in tools and match play, training self-play has none
+    - whether they get a node budget is open (BUILD_LOG issue 408)." Why: issues 406-408.
 
 <!-- A new list, so that the numbers from 137 render as written. -->
 
@@ -7208,3 +7293,21 @@ struck through, where nothing of it is left to apply); the others stand as writt
   downloaded, CHECKPOINT 9's rule). Checks: verify ok (exit 0; before the checkout, pins and boundary
   each named Kairos not checked out), gate commit ok (oracle layer ok; engine differential smoke test
   passed; proof channel DISABLED).
+- **2026-11-01/02 - issue 406, exact legality's cost** (`lane/engine`; issues 407-408, edits
+  303-304 from the block 400-449 / 300-329). Main 28a102b (the CHECKPOINT 10 design documents) merged
+  first (M23; one conflict, CHANGELOG; nothing under `engine/` or `oracles/`; verify ok).
+  Characterised with `t5d-legality-cost` and four fixtures (`engine/testdata/legality-cost/`;
+  docs/MEASUREMENTS.md): every budget honoured, the minutes from exact questions - tier 3's
+  illegality proofs, unrealisable points walked one by one, one move's exact verification at a large
+  node (issue 407). The defect fixed: no deadline reached the rules engine's calls (`t5d-play
+  --max-seconds 900` ran 40 minutes inside a verdict) - `LegalityOptions::deadline`, the search's
+  in-batch calls, the play loop's verdicts and verifications; the same game with `--max-seconds 120`
+  ends at 120.0 s. Issue 408 for the user: the play loop's verdict and chosen-move verification stay
+  exact with no node limit, as documented, and can run past 20-30 minutes. Checks: engine 695 of 695
+  (`--werror`), long_detectors 2 of 2, the Lazy SMP test x3 (table above; load 100%), ruff clean
+  (check, format), pytest (the whole suite, `T5D_REQUIRE_ENGINE=1`, serial, 8,745 s on a loaded
+  machine) 1,690 passed, 1 skipped, 1 failed and 12 errors - all 13 in `test_decision_log.py` and
+  `test_netplay.py`, which look for the engine's executables beside the library and found a copy of
+  the library alone; the two files re-run with them there: 24 passed, verify ok (exit 0), gate commit
+  ok (oracle layer ok; engine differential smoke test passed; proof channel DISABLED); no truth
+  source touched (check.cpp, hypercuboid.cpp, movegen.cpp unchanged), so no nightly gate.

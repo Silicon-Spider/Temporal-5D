@@ -162,6 +162,7 @@ Targets (all in `build/engine`):
 | `t5d-tree-count` | D2's tree form against the ply split on recorded games' turn starts: evaluation counts (`tools/t5d_tree_count.cpp`; docs/MEASUREMENTS.md) |
 | `t5d-solver-check` | the search's solver against df-pn at the turn starts of records, per board-count range (register H41; see "Step 2: H41's cross-checks") |
 | `t5d-proof-records` | the solver's proof lines as 5dpgn records, one per root-to-mate line, for the gate (register H41; see "Step 2: H41's cross-checks") |
+| `t5d-legality-cost` | the legality classification's and E4's cost position by position, and a search's time split (build-log issues 406-408; see "Stage E5a") |
 
 Release builds use -O2; every target builds with `-Wall -Wextra -Wpedantic -Wshadow
 -Wconversion -Wsign-conversion`, warning-free (`--werror` makes that binding). On
@@ -1940,6 +1941,50 @@ fast mode (35-49% in the others), and its branches another 9-17% when they may b
 scanned. `t5d-bench
 --legal-profile` prints every tier's share.
 
+### What exact legality costs, and the deadlines that reach it (build-log issues 406-408)
+
+`LegalityOptions::exact()` sets no node budget, so an exact classification can be slow.
+`t5d-legality-cost` measures it position by position:
+
+```
+t5d-legality-cost [--rules ENCODING] [--budget NODES|exact ...] [--checks N] [--time-limit S]
+                  [--mate] [--search PLAYOUTS [--split ply|tree|flat]
+                  [--search-legality NODES|exact] [--search-seconds S]] [--every K] RECORD ...
+```
+
+At each record's last position - or the position its `LegalityPath` header's moves reach
+(the export notation, `|` for a submission), with `LegalityMoves` naming the moves to
+classify there - or every K-th turn start: the classification under each budget (ascending,
+stopping at the first that leaves nothing unknown; the seconds, the search nodes and how the
+moves were settled), E4's detector under the same budgets (`--mate`), and one search from
+the position with where its time went (`--search`; E10's ladder off). `--time-limit` cuts
+each run at a deadline (Unknown, never a verdict). Single-threaded and indicative. The
+fixtures in `testdata/legality-cost/` are issue 406's positions - each record's
+`LegalityCost` header says where it comes from - and docs/MEASUREMENTS.md has their figures:
+an 18-board position under Q3 that takes 11.9 million nodes (some 19 s) to classify exactly,
+43 of its moves proved illegal by one exhaustive search each; a 192-board position of a
+default-rules game where one move's exact classification ran past 30 minutes; the game's
+next turn start, where its exhaustive verdict ran past 20 minutes. None of it is a budget
+left unhonoured - every move a search applies is a node, the abstract check's steps are
+charged in bulk, a time limit is read every 64 nodes (about 1.5-3.5 µs a node throughout) -
+so what would make it cheaper is algorithmic (build-log issue 407).
+
+**Deadlines.** `LegalityOptions::deadline` (none by default): each of tier 3's searches gets
+the time left, and none starts once it has passed - the moves they would have settled are
+Unknown. A search's `Limits::seconds` reaches the rules engine's calls inside a batch (see
+"Stage E6a"), and a game's `PlayParams::max_seconds` its turn-start verdicts (stopped: the
+game ends `TimeLimit` at that turn start) and the exact verification of a chosen move
+(stopped with no root child known legal: `TimeLimit`, the action under way not recorded).
+What a deadline stops is Unknown, never a verdict (H37). Self-play for training sets no
+deadline (it is not deterministic): there the turn-start verdict and the chosen move's
+verification stay exact with no node limit, as the documents have them (build-log issue
+408). Tested (`tests/test_legality_cost.cpp`): a deadline leaves moves unknown and never
+misclassifies one; issue 406's root under the flat form with exact legality stops at a
+0.5-second deadline (it ran past 17 minutes for 800 playouts); played with exact legality
+and a 1-second safety stop, its game ends on time with its actions legal; the default-rules
+turn start whose verdict ran past 20 minutes ends a game with a 2-second stop in about 2 s
+(`TimeLimit`, no action); and the tool on every fixture.
+
 ## Stage E5b: the tactical scanner and t5d-scan6b
 
 The verification layer's brute-force auditor (spec §11.1-§11.3; register H1-H6, H15,
@@ -2693,7 +2738,12 @@ actions, states' own heap, the MCGS table; within 0.75-1.33 of the heap in the t
 and `Limits` carries a node budget and a memory budget besides playouts and evaluations:
 `run` stops between batches when one is reached - or when a wall-clock deadline
 (`Limits::seconds`, for tools and match play, never training) passes - and returns why (`StopReason`, also
-`stats().last_stop`).
+`stats().last_stop`). The deadline also reaches the rules engine's calls inside a batch
+(build-log issue 406): the leaves' legality classifications (`LegalityOptions::deadline`),
+the turn-start checks, the flat form's fallback listing and the lazy verifications, which it
+leaves Unknown - never a verdict, and so it stays in a tree carried to the next decision (a
+node is checked and expanded once). The flat form's turn generator keeps its node budget
+alone: a generator lives across decisions.
 
 **Determinism** (H15). One thread; with a deterministic evaluator a search is
 bit-reproducible (`digest()` hashes every node's and edge's statistics in a canonical
@@ -2850,9 +2900,11 @@ hold 300 boards on 50 timelines, and with root noise time travel can hold the pr
 back for good - a Standard game reached 509 boards on 110 timelines in 39 actions
 without passing turn 20). `--mate-nodes N` sets the search's terminal-check
 budget; `--max-actions` (checked at turn starts) and `--max-seconds` (checked before
-every decision, and each search's deadline: an action under way when it passes is not
-recorded) are safety stops - the record ends `*`, its Termination header naming the
-stop. Every number is range-checked (never wrapped into a narrower type; reals finite):
+every decision, each search's deadline, and the deadline of the game's turn-start verdicts
+and of a chosen move's exact verification - build-log issue 406: an action under way when
+it passes is not recorded) are safety stops - the record ends `*`, its Termination header
+naming the stop. Without `--max-seconds` a turn-start verdict has no limit but memory (H37):
+on large positions it can take many minutes (build-log issue 408). Every number is range-checked (never wrapped into a narrower type; reals finite):
 a bad one exits 2. The rules come through
 the tools' shared option reader (`tools::ruleset_option`), so the default is the
 engine's - Q4 as ruled, R8 - and `--no-moves-after-shift` (Q4's Guide-literal reading)

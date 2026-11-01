@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <chrono>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -113,13 +114,31 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
     return std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
   };
   const auto out_of_time = [&] { return params.max_seconds > 0 && elapsed() >= params.max_seconds; };
-  SearchBudget verdict_budget;  // no node or time limit: a verdict is a proof (H37)
+  // The safety stop's deadline (max_seconds), handed to the rules engine's
+  // own calls - the turn-start verdicts and the chosen moves' verifications -
+  // so that it reaches the detector (build-log issue 406). A verdict or a
+  // verification it stops is Unknown, never a verdict.
+  std::optional<std::chrono::steady_clock::time_point> deadline;
+  if (params.max_seconds > 0) {
+    deadline = t0 + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                        std::chrono::duration<double>(params.max_seconds));
+  }
+  const auto deadline_passed = [&] { return deadline && std::chrono::steady_clock::now() >= *deadline; };
+  SearchBudget verdict_budget;  // no node limit: a verdict is a proof (H37)
   verdict_budget.max_bytes = sp.mate_bytes;
   for (;;) {
     // A turn start: the rules first, then the cap's convention.
     const auto v0 = std::chrono::steady_clock::now();
+    if (deadline) {
+      verdict_budget.max_time = std::max(std::chrono::duration_cast<std::chrono::nanoseconds>(*deadline - v0),
+                                         std::chrono::nanoseconds{0});
+    }
     const MateResult r = detect_mate(s, sp.detector, verdict_budget);
     g.seconds_verdicts += std::chrono::duration<double>(std::chrono::steady_clock::now() - v0).count();
+    if (r.verdict == Outcome::Unknown && !r.stats.stopped_by_memory && deadline_passed()) {
+      g.end = GameEnd::TimeLimit;  // the safety stop, at this turn start
+      break;
+    }
     if (r.verdict == Outcome::Checkmate) {
       g.end = GameEnd::Checkmate;
       g.winner = index_of(opposite(s.to_move()));
@@ -196,12 +215,15 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
       std::size_t pick = choose_now();
       // A move is played only once known legal: one the expansion's budget left
       // unknown is classified exactly first - illegal, it is removed and the
-      // choice made again; still unknown (the memory ceiling), the most visited
-      // child known legal is played instead.
+      // choice made again; still unknown (the memory ceiling, or max_seconds'
+      // deadline), the most visited child known legal is played instead - or,
+      // with none and the deadline passed, the game stops there (TimeLimit).
       LegalityOptions exact = LegalityOptions::exact();
       exact.max_bytes = sp.mate_bytes;
+      exact.deadline = deadline;
       std::vector<RootChild> children = search->root_children();
-      const auto make_legal = [&] {
+      // False: the deadline passed with no child known legal.
+      const auto make_legal = [&]() -> bool {
         while (children.at(pick).legality != MoveLegality::Legal) {
           const MoveLegality v = search->verify(pick, exact);
           ++g.verified_choices;
@@ -220,12 +242,17 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
             }
           }
           if (best == children.size()) {
+            if (deadline_passed()) return false;
             throw std::logic_error("play: no root child could be shown legal (the memory ceiling)");
           }
           pick = best;
         }
+        return true;
       };
-      make_legal();
+      if (!make_legal()) {
+        timed_out = true;
+        break;
+      }
       // E10: Guard at submission (H42 - adopted in no range: guard_final off).
       for (std::uint32_t tries = 0; params.guard_final && tries < params.guard_max_rejections; ++tries) {
         const RootChild& cc = children.at(pick);
@@ -269,7 +296,10 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
         search->run(evaluator, again);
         pick = choose_now();
         children = search->root_children();
-        make_legal();
+        if (!make_legal()) {
+          timed_out = true;
+          break;
+        }
       }
       const SearchStats& after = search->stats();
       g.playouts += after.playouts - before.playouts;
@@ -291,6 +321,7 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
       g.pv_changes += after.pv_changes - before.pv_changes;
       g.asset_boosted_edges += after.asset_boosted_edges - before.asset_boosted_edges;
       g.steered_visits += after.steered_visits - before.steered_visits;
+      if (timed_out) break;  // Guard's search again found no child known legal in time
       if (params.decision_log) {
         // H44: the decision as the audit lane reads it.
         DecisionLog d;

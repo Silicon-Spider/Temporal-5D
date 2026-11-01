@@ -1,0 +1,19 @@
+[Mode "5D"]
+[Board "Very Small - Open"]
+[Result "*"]
+[Rules "standard"]
+[LegalityCost "build-log issue 406: t5d-play --variant 'Very Small - Open' --evaluator material --playouts 32 --cap-turns 14 --seed 4 (E10's ladder on, the asset map on) - its first 26 actions; at the turn start they reach, the game's own turn-start verdict (detect_mate, hypercuboid, no node limit: H37) ran past 20 minutes - sampled in the free-order realisation, every creation order of a point's branches"]
+
+1. (0T1)Bc1d2 / (0T1)Bb4xd2
+2. (0T2)Pa2a3 / (0T2)Bd2c3
+3. (0T3)Nd1xc3 / (0T3)Na4b2
+4. (0T4)Pa3a4=Q / (0T4)Rc4xa4
+5. (0T5)Nc3xa4 / (0T5)Nb2>>x(0T3)b1
+6. (-1T4)Ka1xb1 / (-1T4)Kd4>>x(0T3)c3
+7. (-1T5)Nc3xa4 / (-1T5)Rc4xa4
+8. (0T6)Ka1>>(-1T5)a2 (-1T6)Kb1>>(0T6)a2 (-2T4)Rb1d1 / (-2T4)Kd4>>x(-1T4)c3
+9. (-2T5)Rd1xd3 (-3T5)Kb1c1 / (-1T6)Ra4>>x(-1T5)a4 (-2T5)Kc3>>x(-1T4)c3 (-3T5)Kd4>>x(-2T5)d3 (0T6)Kd4>>(-1T6)c4 (+1T5)Na4>>x(-1T5)a3 (+2T6)Kd4>>x(+1T5)c3
+10. (+1T6)Nc3>>(0T6)c1 (0T7)Na4>>(0T6)a2 (+2T7)Na4>>(0T7)b4 (-5T5)Kb1a2 / (-5T5)Na4>>(-3T5)b4
+11. (-1T7)Pa3a4=Q (-10T6)Pa3xb4=Q (-7T7)Pa3>x(-8T6)a3 (-9T6)Ka2>>x(-8T6)a3 (-5T6)Ka2>(-4T6)a1 (-2T6)Rd3d2 (-6T6)Ka1b1 (-3T6)Kc1>>(-2T5)c1 / (-10T6)Rc4xb4 (-9T6)Kc3>>x(-10T6)b4 (-3T6)Na4>x(-1T7)a4 (-2T6)Na4>>(-3T6)a2 (-6T6)Kc3>>(-5T5)d2 (-5T6)Kc3>>(-5T5)c2 (+1T6)Rc4>>(-1T6)c4 (-7T7)Kc4>>(-6T6)b3 (-4T6)Ra4>>(-5T6)a4 (+6T6)Rc4xa4 (-8T6)Rc4xa4 (+7T5)Kc3>>(+6T6)d4
+12. (-8T7)Kb1c1 (+1T7)Ka2>>(0T7)b2 (-2T7)Rd2>>(+2T7)d2 (-18T7)Na4>x(-17T7)c4 (+6T7)Ka3xa4 (-4T7)Kb1>>(-3T6)b1 (-13T6)Ka2>(-12T7)b1 (-11T7)Kc1>(-10T7)d1 (-14T6)Ka2>(-15T7)a1 (-6T7)Kb1a2 (-9T7)Kb1>>(-8T7)a2 (-3T7)Pa3a4=Q (-5T7)Pa3a4=Q (+7T6)Kc1b1 / (-11T7)Kc3>>x(-10T6)b4 (-10T7)Rb4>>x(-10T6)b4 (-3T7)Rc4xa4 (-5T7)Rc4xa4 (-8T7)Ra4>>x(-8T6)a4 (-6T7)Na4>>x(-8T6)a4 (-12T7)Rc4b4 (-13T6)Kc3>>(-12T7)b3 (-14T6)Kc2>(-15T7)d1 (-9T7)Rc4>>(-10T7)c4 (+7T6)Na4>>(+6T6)a2 (-17T7)Kc3xc4 (+10T6)Na4>x(+8T7)a4 (-2T7)Rc4b4 (+11T7)Ra4xa3 (+5T7)Pd3d2 (-4T7)Rc4c3 (+4T6)Kd4>>(+5T7)c4 (+3T6)Kd4>(+2T7)d4
+13. (+4T7)Na2>>(+2T7)b2 (+3T7)Na4>>(+4T7)c4 (+2T8)Ka2>>(+3T7)b2 (-26T8)Nb4c2 (-8T8)Kc1d2 (-12T8)Kb1>(-13T7)a1 (-21T7)Kb1a1 (+7T7)Pa3a4=Q (-2T8)Ka1>(-3T8)b1 (-6T8)Ka2a1 (+11T8)Ka2xa3 (-10T8)Kc1>(-9T8)b1 (+5T8)Rb1b3 (+10T7)Pa3a4=Q (-4T8)Ka1b1 (-15T8)Ka1>(-14T7)a1 / (-10T8)Na4>>x(-10T6)b4 (-3T8)Ra4>>x(-3T7)a4 (+7T7)Rc4xa4 (-13T7)Kd2>>(-12T7)d2 (-9T8)Na4>>x(-8T6)a4 (-14T7)Na4>>x(-12T7)a3 (-12T8)Na2>>(-14T7)a2 (-15T8)Kd1>>(-15T7)c1 (+10T7)Kc3>(+9T7)c4 (-6T8)Kd3>>(-7T7)c3 (-4T8)Rc3>>(-4T6)c3 (-2T8)Rb4>>(-4T8)b4 (+1T7)Pd3d1=Q (+12T7)Pd3d1=Q (-21T7)Ra4xa3 (+2T8)Kd4>>(+1T7)d4 (0T7)Pd3d2 (+11T8)Pd3d2 (+3T7)Pd3d2 (+13T7)Pd3d1=Q (+5T8)Pd2d1=Q (+4T7)Pd3d2 (+14T7)Pd3d2 (+6T7)Pd3d1=Q *
