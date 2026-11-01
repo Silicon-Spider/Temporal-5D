@@ -5407,6 +5407,35 @@ superseded or made moot says so; nothing is deleted.
     harness's oracles and tiers, are updated here to say that a fourth is wired and not
     yet enabled. **For the user**, at the enabling: CLAUDE.md's two sentences (and
     AGENTS.md, if it should name the count).
+535. **D2's flat form is not exception-safe: after a `std::bad_alloc` inside `gather`, the
+    next run crashes in the turn generator.** (Section 15.4's "virtual loss always released"
+    and the search's consistency under failure; register D2. This is the contract
+    `test_mcts_memory.cpp` holds the ply split and the tree form to: review findings MEDIUM
+    7, 8 and 10.)
+    - **How it was found** (the done-means audit, 2026-11-01).
+      `test_mcts_memory.cpp::mcts_an_allocation_failure_in_gather_or_deliver_leaves_the_search_consistent`
+      covers the ply split in a tree and a graph, and the tree form. The audit ran the same
+      loop with `p.split = TurnSplit::Flat`, in a tree and in a graph, from Standard - Two
+      Timelines after `run(Limits{40})`. It crashes with SIGSEGV (exit 139, sometimes 1),
+      with the verification ladder on or off.
+    - **Deterministic at graph = true, k = 468**, where the 468th allocation of the gather
+      throws:
+      - the gather throws, and `check_invariants` passes;
+      - the next `run(Limits{20})` faults in `t5d::TurnGenerator::Impl::collect()`;
+      - gdb backtrace on the Release build: `collect` <- `TurnGenerator::next()` <-
+        `Search::Impl::pull_turns` <- `select_child` <- `select_once` <- `gather` <-
+        `Search::run`.
+    - Swept from k = 0, other points fault as well (26, 78, 312, 403, 520, 611, 767 and
+      more), and not on every run. That points to memory used after the throw.
+    - **Reading.** A throw inside `TurnGenerator::next()` leaves the generator half-updated,
+      and the flat node keeps it. `check_invariants` cannot see a generator's inner state.
+    - **Engine lane:**
+      - make `next()` strongly exception-safe, or drop or stop the node's generator when a
+        pull throws (children incomplete, as after a budget stop);
+      - then add the test: the existing test's loop with the flat form in a tree and a
+        graph. The audit did not commit it, because it crashes.
+    - Until then, section 15.4's consistency under failure holds for the ply split and the
+      tree form only. Nothing is parked on it.
 
 ## Proposed spec edits
 
