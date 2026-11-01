@@ -113,14 +113,18 @@ licence_file = "LICENSE"
 licence_sha256 = "{sha256}"
 summary = "s"
 used_as = "u"
+{lineage}
 """
+# A pin the harness runs declares its lineage (H47, CHECKPOINT 10); a corpus source has none.
+_LINEAGE = 'lineage = "x"\nlineage_note = "Read at the pin: no other implementation credited."'
 
 
 class RoleTests(unittest.TestCase):
     """The lock file's roles: which pins the harness runs."""
 
     def load(self, role: str, tier: str) -> lockfile.Lock:
-        text = _LOCK.format(role=role, tier=f'tier = "{tier}"' if tier else "", sha1="0" * 40, sha256="0" * 64)
+        text = _LOCK.format(role=role, tier=f'tier = "{tier}"' if tier else "", sha1="0" * 40, sha256="0" * 64,
+                            lineage="" if role == "corpus-source" else _LINEAGE)
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "oracles.lock.toml"
             path.write_text(text, encoding="utf-8")

@@ -901,10 +901,13 @@ over all of its records:
 
 1. the engine replayed each one - to its end, or to an action it holds illegal
    (not one it could not read) - and none holds an unexplained divergence;
-2. each one was followed as far as the engine went by at least **two** oracles
-   (H47, CHECKPOINT 8: a single oracle cannot tell its own bug from the engine's) -
-   two independent implementations, so two searches of one count once, and the
-   notation parser, which judges nothing, never counts - and where the engine
+2. each one was followed as far as the engine went by at least **two** oracle
+   lineages (H47, CHECKPOINT 8: a single oracle cannot tell its own bug from the
+   engine's) - two independent implementations, so two searches of one count once;
+   an oracle derived from another's code counts with it as one lineage, vouching
+   through any member that followed and at most once (CHECKPOINT 10: Kairos with
+   ftxi - each pin's `lineage` in `oracles.lock.toml`, rendered in `PROVENANCE.md`,
+   "Lineages"); and the notation parser, which judges nothing, never counts - and where the engine
    refuses an action, by oracles that refuse the same action as illegal (one that
    could not match the move's text confirms nothing). An oracle that replayed the
    record differently - accepting an action the engine refuses, or the other way
@@ -912,7 +915,8 @@ over all of its records:
    count, even where a known divergence excuses the difference;
 3. for each of check, count and mate, the oracles give a verdict that settles it,
    and agrees with the engine, at no less than `min_checked` (75%) of the
-   positions the engine reports. An answer the engine contradicts confirms
+   positions the engine reports - any member of any lineage: where ftxi's check is
+   on record as its error (R1), Kairos's agreeing answer is the lineage's vouch. An answer the engine contradicts confirms
    nothing, even one on record as the oracle's error, and neither does an answer
    about another position than the engine's: after the oracle parted from the
    engine, or where its unmoved markers differ from the engine's.

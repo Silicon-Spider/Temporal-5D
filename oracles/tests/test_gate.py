@@ -308,7 +308,7 @@ class EngineDifferentialTests(DifferentialCase):
         findings, gated, ungated = self.run_differential()
         self.assertEqual((findings, ungated), ([], {}))
         self.assertEqual(gated[TZ].oracles, gate.GATING_ORACLES)
-        self.assertIn("each record followed as far as the engine went by at least 2 oracles", gated[TZ].describe())
+        self.assertIn("each record followed as far as the engine went by at least 2 oracle lineages", gated[TZ].describe())
         # Every record needs its two: one record that only one oracle follows ungates its ruleset, naming that oracle.
         self.records = [record("r/tz", TZ), record("r/tz2", TZ), record("r/tz3", TZ)]
         reports = self.silence("chessin5d", record_id="r/tz2", reason="notation")
@@ -1095,7 +1095,7 @@ class ResultTests(unittest.TestCase):
             "may be enabled for: Standard (4 records, 90 positions; an oracle held the engine's boards and pieces "
             "at 88 of them, and its exact state (markers included) at 70; "), channel)
         self.assertIn("independently answered: check 80, count 85, mate 90", channel)
-        self.assertIn("at least 3 oracles", channel)
+        self.assertIn("at least 3 oracle lineages", channel)
         self.assertIn("Very Small - Open (1 record, 2 positions; an oracle held the engine's boards and pieces at 2 "
                       "of them, and its exact state (markers included) at 2; ", channel)
         # A tier is judged by what it runs, not by what it is called.
@@ -1190,7 +1190,7 @@ class ResultTests(unittest.TestCase):
         self.assertIn("gated:     Standard (4 records, 90 positions; an oracle held the engine's boards and pieces at "
                       "88 of them, and its exact state (markers included) at 70; "
                       "independently answered: check 80, count 85, mate 90; "
-                      "each record followed as far as the engine went by at least 3 oracles)", text)
+                      "each record followed as far as the engine went by at least 3 oracle lineages)", text)
         self.assertIn("NOT gated: Misc - Small - no oracle followed notation/game as far as the engine went", text)
 
 

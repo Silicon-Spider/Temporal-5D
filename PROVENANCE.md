@@ -67,13 +67,13 @@ M11).
 
 ### Pinned repositories
 
-| Id | Upstream | Pinned commit | Licence | Role | CI tier |
-|---|---|---|---|---|---|
-| `ftxi` | [ftxi/5dchess_engine](https://github.com/ftxi/5dchess_engine) | `2ea9f1b82880f08faa9400d1ac20b20102604187` (v0.4.10, 2026-09-15) | BSD-2-Clause | oracle | commit |
-| `cwmtt` | [penteract/cwmtt](https://github.com/penteract/cwmtt) | `9632e9969dd455c6e3d6c27c57c1936c251d7e97` (master, 2026-05-18) | GPL-3.0 (LICENSE file); cwmtt.cabal declares BSD3 - treated as GPL-3.0 until upstream resolves the conflict | oracle | nightly |
-| `chessin5d` | [5d-chess/5d-chess-js](https://gitlab.com/5d-chess/5d-chess-js.git) | `ee403c80e8c132fc4d168f5b99ddd9b8fe5cc17b` (master, 2022-06-15) | AGPL-3.0-or-later | oracle | nightly |
-| `kairos` | [FirePlank/5d-chess-engine](https://github.com/FirePlank/5d-chess-engine) | `8bfea4a6e8d1cec2cc27cafa387b1bd78c0c94e0` (main, 2026-10-23) | GPL-3.0-only (LICENSE file: GitHub's GPL-3.0 template text; Cargo.toml: GPL-3.0-only); NOTICE: parts derived from ftxi/5dchess_engine under BSD-2-Clause | oracle | nightly |
-| `notation` | [adri326/5dchess-notation](https://github.com/adri326/5dchess-notation) | `99f6163a9c95a6a9740b20fb5f3c7f6503a166a0` (master (v1.4.3-13), 2021-07-25) | X11 (MIT-style, with a no-advertising clause) | parse-oracle | commit |
+| Id | Upstream | Pinned commit | Licence | Role | CI tier | Lineage |
+|---|---|---|---|---|---|---|
+| `ftxi` | [ftxi/5dchess_engine](https://github.com/ftxi/5dchess_engine) | `2ea9f1b82880f08faa9400d1ac20b20102604187` (v0.4.10, 2026-09-15) | BSD-2-Clause | oracle | commit | `ftxi` |
+| `cwmtt` | [penteract/cwmtt](https://github.com/penteract/cwmtt) | `9632e9969dd455c6e3d6c27c57c1936c251d7e97` (master, 2026-05-18) | GPL-3.0 (LICENSE file); cwmtt.cabal declares BSD3 - treated as GPL-3.0 until upstream resolves the conflict | oracle | nightly | `cwmtt` |
+| `chessin5d` | [5d-chess/5d-chess-js](https://gitlab.com/5d-chess/5d-chess-js.git) | `ee403c80e8c132fc4d168f5b99ddd9b8fe5cc17b` (master, 2022-06-15) | AGPL-3.0-or-later | oracle | nightly | `chessin5d` |
+| `kairos` | [FirePlank/5d-chess-engine](https://github.com/FirePlank/5d-chess-engine) | `8bfea4a6e8d1cec2cc27cafa387b1bd78c0c94e0` (main, 2026-10-23) | GPL-3.0-only (LICENSE file: GitHub's GPL-3.0 template text; Cargo.toml: GPL-3.0-only); NOTICE: parts derived from ftxi/5dchess_engine under BSD-2-Clause | oracle | nightly | `ftxi` |
+| `notation` | [adri326/5dchess-notation](https://github.com/adri326/5dchess-notation) | `99f6163a9c95a6a9740b20fb5f3c7f6503a166a0` (master (v1.4.3-13), 2021-07-25) | X11 (MIT-style, with a no-advertising clause) | parse-oracle | commit | `notation` |
 
 #### `ftxi` - ftxi/5dchess_engine
 
@@ -81,6 +81,7 @@ M11).
 - **How it is used:** Built from an export of the pinned commit. Queried through oracles/drivers/ftxi (links its core library; part of that driver is adapted from its tools/position_tools.cpp and carries its licence notice) and cross-checked against its stock 5dtools CLI.
 - **Where:** `oracles/third_party/ftxi` (submodule `oracle-ftxi`)
 - **Licence file:** `LICENSE`, SHA-256 `c36ba7d9587abbf62264a9e096f35b9c9c57805e6a4ae169cfe6e03de5b79e5f`
+- **Lineage:** `ftxi` - Read at the pin (2026-11-01): its LICENSE (BSD-2-Clause, 'Copyright (c) 2024-2026, ftxi'), README and docs (it has no NOTICE or credits file), and its code. Its docs credit cwmtt for the hypercuboid method - 'using method from [penteract/cwmtt], adapted to c++ with improvements. Some improvements are suggested by the original author' (docs/index.md) - and its HC_info follows cwmtt's literate FastCheckmate.lhs step for step (build_HC, take_point, find_problem, jump_order_consistent, test_present, find_checks: cwmtt's buildHC, takePoint, findProblems, jumpOrderConsistent, testPresent, findChecks), written in C++ over its own bitboards and integer sets. No code of cwmtt's (Haskell) is in its tree, and its board representation, move generation, check test, 5dpgn reader, naive search and engine are its own. A method adapted in another language, by its author's account - not code carried over: its own lineage (the method shared with cwmtt is what the naive searches and Chess in 5D are run for; docs/BUILD_LOG.md issue 573). Its test records taken from cwmtt are data, not code.
 - Pinned at the latest release tag rather than main: the eight commits after v0.4.10 rework the hypercuboid hot path and have not been released.
 - Its own submodules (extern/pybind11, extern/client) are not needed and are never initialised; extern/client is declared with an SSH URL, so never update submodules recursively.
 - Its test/pgn/README.txt lists twelve of its sixteen test records as taken from cwmtt, under the GPL-3.0. A thirteenth (100timelines) is cwmtt's 100_timelines again under another name, and is left out of the corpus; the other three are its own. All are read in place through the corpus manifest, never copied.
@@ -92,6 +93,7 @@ M11).
 - **How it is used:** Built from an export of the pinned commit with the pinned GHC. Its counts, and how far it replays a record, come from its stock CLI (`cwmtt count`), unmodified. Beside it runs oracles/drivers/cwmtt, a state driver of the harness's own compiled against the same modules with the same flags (it calls them and copies nothing), which replays the record and reports, at every position, the boards cwmtt holds and the side to move - the CLI has no command for either; the adapter pairs the two only where they read and replayed the record alike.
 - **Where:** `oracles/third_party/cwmtt` (submodule `oracle-cwmtt`)
 - **Licence file:** `LICENSE`, SHA-256 `3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986`
+- **Lineage:** `cwmtt` - Read at the pin (2026-11-01): its LICENSE (GPL-3.0; cwmtt.cabal says BSD3, author Toby Cathcart Burn), README and code; no NOTICE or credits naming another implementation. The hypercuboid method originates here (Game/Chess/TimeTravel/FastCheckmate.lhs); its 5dpgn reader follows the notation specification (PGNParser.hs: 'notation described by https://github.com/adri326/5dchess-notation'), written in Haskell. Its own lineage.
 - No z3 in the program at this commit. Upstream removed the z3-based search in 65e1bf9 (2023-03-26) because it was slower than the plain hypercuboid search; the design spec's 'Haskell and z3' describes the older tree. Its README still mentions z3 and its stack.yaml still lists the z3 package, but cwmtt.cabal depends only on base and containers, so GHC alone builds it.
 - Its CLI reports whether a legal action exists, not why none does: it cannot tell checkmate from stalemate, and it has no check verdict.
 - A Board header it does not know - or that its parser does not reach - is silently replayed on the Standard layout, 5DFEN boards are skipped and a Promotions header is never read; the adapter refuses such records instead of trusting the answer.
@@ -103,6 +105,7 @@ M11).
 - **How it is used:** Exported at the pinned commit; its three runtime npm dependencies are installed from its own package-lock.json. Queried through oracles/drivers/chessin5d, in a separate Node process per record.
 - **Where:** `oracles/third_party/chessin5d` (submodule `oracle-chessin5d`)
 - **Licence file:** `LICENSE`, SHA-256 `6f551a3f45c2c2235ec9b9e2d93c5896babab36caed027781b3e90df90876097`
+- **Lineage:** `chessin5d` - Read at the pin (2026-11-01): its LICENSE (AGPL-3.0), README and package.json (author Shaun Wu, alexbay218; contributors Shad Amethyst - adri326, the notation specification's author - SnowmanFactory and Neathp: 'in the style of Chess.js'), and its code; no credit to or code from another rules implementation - its move generation, check test and mate search are its own JavaScript. Its own lineage. One shared part: its 5DFEN board-string reader, src/fen.js, was written by Adrien Burgun (adri326) and is the same code as the notation parser's parse_5dfen (parsers/game.js: the same loop and error messages) - so on records set up from 5DFEN boards those two readers can share a bug; the notation parser is parse-only and never counts towards the bar.
 - Chess in 5D's client (gitlab.com/5d-chess/chess-in-5d, AGPL-3.0) takes its rules from this library (dependency 5d-chess-js ^1.2.1). Only the rules library is pinned; the client adds no rules.
 - Runtime npm dependencies, all MIT: module-alias 2.2.2, blueimp-md5 2.18.0, present 1.0.0.
 - Defects at the pin, and what the driver does about each without touching rules logic: inCheckmate and inStalemate answer true when their search runs out of time (the driver calls the search itself and reads its timed-out flag); that search can exhaust memory on wide positions (it runs in a worker with its own heap limit); a Board header the library does not know, or that its header reader does not match, is silently replayed on the Standard layout, and 5DFEN boards are ignored unless Board is custom (the driver asks the library which variant it set up and refuses the record when that is not the one declared); a PGN result token at the end of the move text is read as moves (it is dropped); chess.actions() throws in its 'object' and 'json' formats (a ReferenceError) and in '5dpgn' (a TypeError), and in every format passes its promotion pieces where boardFuncs.moves() takes its 'spatial moves only' switch, so it would list no move through time or across timelines (not used: the driver's observe --actions diagnostic calls actionFuncs.actions() itself, with that switch off).
@@ -114,6 +117,7 @@ M11).
 - **How it is used:** Built from an export of the pinned commit with the pinned Rust toolchain. Queried through oracles/drivers/kairos, a Rust program of the harness's own linked against the pinned crate as a library (it calls its 5dpgn reader, its replay, its check test, its mate test and its two action searches, and copies none of them), in one replay of the record. Its programs ask the same calls another way: the kairos binary plays over 5DUCI (position, go, print - no verdict or count); its developer tool ktools answers per position (perft: the hypercuboid count; naive: both searches' counts; rules: the boards, the check and the mate type) from position files of its own (G lines), which its pgn2g command writes from a 5dpgn file; and its JSON command interface (web::api) is a library API that only the WebAssembly build of its site calls. Those are the stock tools a driver check would hold the driver to (not built yet).
 - **Where:** `oracles/third_party/kairos` (submodule `oracle-kairos`)
 - **Licence file:** `LICENSE`, SHA-256 `589ed823e9a84c56feb95ac58e7cf384626b9cbf4fda2a907bc36e103de1bad2`
+- **Lineage:** `ftxi` - Read at the pin (2026-11-01): its NOTICE - 'Parts of the rules and legal-action code are derived from 5dchess_engine, Copyright (c) 2024-2026, ftxi, used under the BSD 2-Clause License', present since its first commit (ca828ce, 2026-10-15) - its LICENSE (GPL-3.0) and its code: its src/core and src/misc follow ftxi's modules one for one, its 5dpgn reader is 'ported from the C++ engine's pgnparser', its mate test (State::get_mate_type_impl) is ftxi's (state.cpp) translated line by line, and the variant layouts ftxi has are ftxi's (Very Small - Open drawn as ftxi draws it), the rest taken from the notation repository's table. Its own: the check test's pass set (R1's reading), the exhaustive enumerator, wasted-move pruning and its playing engine. In ftxi's lineage (issue 526, ruled at CHECKPOINT 10): it counts with ftxi for the two-oracle bar.
 - Pinned at the head of main: the repository has no tags and no releases. It was created on 2026-10-15 and had 354 commits by the pin (2026-10-23), most days several; a pin bump will move answers, and is reviewed as any other.
 - Not independent of ftxi in all it does. Its NOTICE says parts of its rules and legal-action code are derived from ftxi/5dchess_engine (BSD-2-Clause), its src/core and src/misc mirror ftxi's module for module (check_position, hypercuboid, geometry, integer_set, graph, ordering, vec4 - coordinates packed 12/12/4/4 bits, as ftxi's), and its 5dpgn reader says it is 'ported from the C++ engine's pgnparser'. Where it departs from ftxi the departures are its own: its check test advances only the active timelines whose last board is in the present (State::has_phantom_check through CheckPosition::for_present), where ftxi advances every timeline the mover may play on, and its hypercuboid search leaves out actions that waste a move (below). How far it counts as an implementation independent of ftxi for the two-oracle bar (H47) is the user's to rule before its tier entries are enabled (docs/BUILD_LOG.md, issue 526).
 - Its hypercuboid search does not generate an action that both branches and plays a 'wasted' move - a non-branching move whose boards all stay out of the present, other than boards a branch lands on - because dropping that move leaves an equally legal action (hypercuboid.rs, wasted_problem). Its perft therefore counts those actions out: its own test gives 31406 at depth 3 from the Standard start, 'the 1780 actions that waste a move (33186 with them)' left out. That is not the gate's count, so the hypercuboid source answers no count. Its exhaustive enumerator (core/naive.rs, naive_actions) lists every action - its non-branching moves once, in timeline order, and its branching moves in every order - the gate's definition; source kairos:naive counts with it.
@@ -127,6 +131,7 @@ M11).
 - **How it is used:** The pinned text of the notation the corpus is written in, and a source of corpus records (test/*.5dpgn). Its bundled parser (parsers/pgn.js and parsers/game.js, which need no package) is exported at the pinned commit and run as a parse-only oracle through oracles/drivers/notation, in a separate Node process per record: at every position, the boards it holds and the side it reads as moving next, and how many actions it read - never a rules verdict.
 - **Where:** `oracles/third_party/notation` (submodule `corpus-notation`)
 - **Licence file:** `LICENSE`, SHA-256 `8d4c0ecb12b11ec195afed72693869a24cea48e8b160d2cc4b8f03d08f42a0ae`
+- **Lineage:** `notation` - Read at the pin (2026-11-01): its LICENSE (X11, 'Copyright 2020, Adrien Burgun'), README, USAGE and its parser (parsers/pgn.js, parsers/game.js); no credit to or code from another implementation (its README lists 5d-chess-js's older notation as another notation, and parsers/alexbay.js reads that format). Its author also wrote Chess in 5D's 5DFEN reader, which shares its parse_5dfen code (see chessin5d). Parse-only (H26): its own lineage, which never counts towards the bar.
 - Not in the design spec's table of rules oracles: pinned so the corpus has real game records that do not come from an oracle's own test suite, and so that the engine's parser is written from the specification (decision H28). Its bundled parser is a parse-only oracle (H26), and as off limits to the engine as everything else under third_party.
 - The parser applies each move as written. It has no check, legality or end-of-game logic, and finds the moving piece with a movement test of its own only where the move text leaves the origin square out. So its acceptance of an action is no verdict - it accepts an action that leaves a king in check - and a move it cannot apply is a soft rejection.
 - Defects at the pin, and what the harness does about each without touching the parser: it reports an error by printing it to stdout and calling process.exit(1) (the driver captures what it prints and turns the exit into an exception); a Board name it does not know gives one silently empty board, and a named layout is set up on boards of the Size header's size, or 8x8, never its own (both refused, by the adapter and again by the driver); it reads 5DFEN board strings only under Board "custom" (refused under any other); its tokeniser loops forever on a comment that is never closed (refused before it runs); it stores a 5DFEN "-0" board as a signed zero, which it writes back as "0" (left alone: a set-up that mixes it with "+0" is refused under a reason of its own, signed_zero, so that the recorded outcome names the defect; any other shows in the fingerprints); it drops the unmoved marker "*" (its state events say markers false); it splits a long-algebraic pawn move such as e2e4 into two moves (it then finds no pawn for the first, a soft rejection).
@@ -298,10 +303,10 @@ The detail, item by item:
   (`State::get_mate_type_impl`) is a line-by-line translation of ftxi's
   (`state.cpp`, `state::get_mate_type_impl`), so its mate verdicts are not independent
   of ftxi's. Its check test, its wasted-move pruning and its exhaustive enumerator are
-  its own. H52 counts it as an independent
-  implementation of the hypercuboid method family; how far a derived
-  implementation counts as a second oracle beside ftxi is put to the user
-  (`docs/BUILD_LOG.md`, issue 526) before its tier entries are enabled.
+  its own. **Ruled at CHECKPOINT 10** (issue 526): Kairos is in ftxi's lineage, and
+  counts with it for the two-oracle bar (H47, H52, reversal 33) - its lineage is
+  declared in the lock file and rendered in the inventory above; see "Lineages",
+  below.
 
 So the harness asks it through a driver of its own (`oracles/drivers/kairos/`, a
 Rust program linked against the pinned crate - not 5DUCI, not the JSON
@@ -310,6 +315,38 @@ search - the check, and the mate verdict from `get_mate_type()`, and **no count*
 - and `kairos:naive`, its exhaustive enumerator - the check, the count, and the
 verdict where it finds no action. Both say what it set up at every position, and
 how it replayed the record.
+
+## Lineages (H47, CHECKPOINT 10)
+
+"An oracle derived from another's code counts with it, and a lineage vouches through
+any member that agrees and is not a recorded divergence, at most once" (H47, as ruled
+at CHECKPOINT 10). Each oracle's lineage is read from its NOTICE, credits, licence
+files and pinned code at every pin bump (`CONTRIBUTING.md`, "Changing a pin") and
+declared in one place, its pin in `oracles/oracles.lock.toml` (`lineage`, with the
+note of what was read in `lineage_note`); the inventory above renders both, so
+`verify` holds this file to the lock file, and the gate counts its two-oracle bar from
+the same table (`Lock.lineages()`). What reading the five pins found (2026-11-01, the
+local checkouts at their pins):
+
+- **Kairos is in ftxi's lineage** - its NOTICE credits ftxi, its core modules follow
+  ftxi's one for one, its reader is ported and its mate test translated (above).
+- **ftxi adapts cwmtt's method, not its code.** Its docs credit cwmtt ("using method
+  from [penteract/cwmtt], adapted to c++ with improvements"), and its hypercuboid search
+  follows cwmtt's literate `FastCheckmate.lhs` step for step - the same decomposition
+  and names (`build_HC`, `take_point`, `find_problem`, `jump_order_consistent`,
+  `test_present`, `find_checks`) - in C++ over its own data structures; everything else
+  of ftxi's is its own, and no code of cwmtt's is in its tree. Counted as two lineages;
+  the method they share is why the naive searches and Chess in 5D run beside them. Put
+  to the user as a finding, since a step-for-step translation sits near the reuse
+  rule's "porting" (`docs/BUILD_LOG.md`, issue 573).
+- **Chess in 5D and the notation parser share their 5DFEN board-string reader.** Chess
+  in 5D's `src/fen.js` was written by the notation specification's author (Adrien
+  Burgun, a listed contributor of 5d-chess-js) and is the same code as the notation
+  parser's `parse_5dfen` (`parsers/game.js`). So on records set up from 5DFEN boards a
+  bug in that reader would show in neither. The notation parser is parse-only and never
+  counts towards the bar; they stay two lineages of two roles.
+- **cwmtt and Chess in 5D** credit no other implementation, and share no code with the
+  others.
 
 ## Programs of ours that run third-party code
 
@@ -411,8 +448,9 @@ the spec stands on each now (this file is authoritative on oracle internals, §1
   interface or 5DUCI": neither answers them (above, "Kairos, the fourth oracle"). Its
   hypercuboid search leaves out actions that waste a move, so its count comes from its
   exhaustive enumerator. Its NOTICE and its module layout make it a partial derivative
-  of ftxi, where H26 counts it as an independent implementation. *Proposed: edit 362;
-  the independence is the user's to rule (issue 526).*
+  of ftxi, where H26 counted it as an independent implementation. *Ruled at
+  CHECKPOINT 10: in ftxi's lineage (H26, H47, H52, reversal 33); edit 362 for the
+  rest.*
 - **The oracles disagree with each other** in places. Those are listed, not yet
   adjudicated, in `oracles/DISAGREEMENTS.md`.
 - **No oracle answers everything.** The spec asks for a cross-check of move
