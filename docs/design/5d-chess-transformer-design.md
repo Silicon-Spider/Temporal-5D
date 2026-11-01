@@ -2020,8 +2020,8 @@ manufactures false proofs that persist.
    client's false mate claims and Chess in 5D's (CHECKPOINT 1). The two detectors are
    cross-checked against each other in the gate. The hypercuboid
    method originates in penteract's cwmtt and is adapted, with improvements, in ftxi's
-   5dchess_engine. Kairos, the fourth oracle, describes its legal-turn enumeration as a
-   hypercuboid search too (CHECKPOINT 9).
+   5dchess_engine; Kairos, the fourth oracle, carries ftxi's detector over, translated
+   line by line (CHECKPOINT 10).
 4. **Ordinary chess rules** — castling, en passant, promotion — apply board by board, and
    so do their attack tests: castling is blocked only if the king or the square it
    passes through is attacked by a piece *on the castling board*, and en passant is
@@ -2048,25 +2048,33 @@ against independent implementations**:
 | ftxi/5dchess_engine (github.com/ftxi/5dchess_engine) | BSD-2; C++, Python and WASM bindings; reads arbitrary variants from 5dfen; ships `diff` (compares two algorithms) and `perftest` tools; bitboard movegen, check detection, both mate detectors |
 | penteract/cwmtt (github.com/penteract/cwmtt) | Independent checkmate detection; the source of the hypercuboid method |
 | Chess in 5D (chessin5d.net) | A third independent open-source implementation of the rules |
-| Kairos (github.com/FirePlank/5d-chess-engine) | A fourth (CHECKPOINT 9): Rust, GPL-3.0. By its README: full rules on boards up to 8×8 with the variant pieces (princess, unicorn, dragon, brawn, royal queen, common king) and odd or even timeline starts, a perft tool, 5dpgn and 5DFEN input, a JSON command interface and the 5DUCI protocol; legal turns enumerated lazily by a hypercuboid search |
+| Kairos (github.com/FirePlank/5d-chess-engine) | A fourth (CHECKPOINT 9), but in ftxi's lineage (CHECKPOINT 10): Rust, GPL-3.0; its NOTICE credits ftxi, its core modules follow ftxi's one for one, its 5dpgn reader is ported and its mate test translated. Its own: the check test's pass set (R1's reading), an exhaustive enumerator, wasted-move pruning and its playing engine. By its README, full rules on boards up to 8×8 with the variant pieces (princess, unicorn, dragon, brawn, royal queen, common king) and odd or even timeline starts |
 
 Cross-check move counts (perft-style), check verdicts and mate/stalemate verdicts over
 corpora of real games in 5dpgn notation, and investigate every disagreement before the
 proof channel is enabled. The gate re-runs on every generator change and per variant
 (§12.6); once running, the adversarial league (§12.7) is the ongoing fuzzer.
 
-**Kairos, the fourth oracle** (CHECKPOINT 9). Added to the nightly and release tiers,
-pinned, harness only, never a rules source. What it can answer is confirmed at the pinned commit before its
-driver is written — perft counts and what they count, check and mate verdicts through its
-JSON interface or 5DUCI, a state export to fingerprint — and recorded in PROVENANCE.md: the
-README facts above describe a moment (reversal 20). It changes three things. It adds an
-independent *implementation*, not an independent *method* (below). It may bring variant
-rulesets to the two-oracle bar (H47): where it reads a variant only one oracle reads now,
-that variant's generator can be gated (§12.6). And it is the first external engine to play
-against — a strength yardstick for the pilot run and a differently built league opponent
-(§12.7). The cost: a new triage round by cluster, nightly CI time, and its own bugs — a
-small project, so expect some; they become known divergences with citations, reported
-upstream like any other.
+**Kairos, the fourth oracle** (CHECKPOINT 9; corrected at CHECKPOINT 10). Pinned, harness
+only, never a rules source. Its README described an independent engine; its NOTICE and the
+pinned code say otherwise (issue 526). Its 5dpgn reader is ported from ftxi's, its mate test
+is ftxi's translated line by line, and its core modules follow ftxi's one for one; its own
+parts — the check test's pass set (R1's reading, where ftxi's passes more boards), the
+exhaustive enumerator and wasted-move pruning — run on that ported code. In the first smoke
+run its terminal verdicts matched ftxi's at all 986 positions both read, as a shared mate
+test would. So for the two-oracle bar **ftxi and Kairos are one lineage** (below): Kairos
+stays as a checker — its disagreements still fail the gate — but it adds a vouch only where
+it answers and ftxi does not. What it answers was confirmed at the pin and recorded in
+PROVENANCE.md (issues 525, 527, 528): its perft omits actions that waste a move, so the gate
+counts with its exhaustive enumerator; neither its JSON interface (a library API of its web
+build) nor 5DUCI (a playing protocol) answers the gate's questions, so a harness driver
+linked against the pinned crate calls its reader, replay, check test, mate test and
+searches, copying none of them, to be held to its stock `ktools` as ftxi's driver is held to
+its tools (issue 531); and its reader rejects a whole record at the first move it cannot
+play, so its legality answer covers royal safety alone. Its larger value is as an opponent:
+its search and evaluation are its own — the strength yardstick for the pilot run and a
+differently built league opponent (§12.7). When that role is built, the match runner lives
+in the test harness and may run the engine; the engine never calls it (issue 532).
 
 **The official game client is never an oracle** — it is believed to incorrectly claim
 some positions are checkmate (penteract's documentation). Agreement with it proves
@@ -2083,15 +2091,17 @@ them.
 
 **Every component reused from another implementation costs one independent oracle for
 what it covers.** A mate detector ported from ftxi's code cannot be differential-tested
-against ftxi's detector — both would share the same bugs. So, for anything the gate
-checks:
+against ftxi's detector — both would share the same bugs. Kairos turned out to be that case
+exactly (CHECKPOINT 10): the rule binds between oracles as it does between an oracle and the
+engine, and no README says so — each oracle's NOTICE, credits and pinned code are read at
+every pin bump. So, for anything the gate checks:
 
 | Project | Role | Why |
 |---|---|---|
 | ftxi/5dchess_engine | Pinned test-time oracle; reference for understanding the hypercuboid algorithm | BSD-2, so reuse is legally easy — but reuse forfeits it as an oracle |
 | penteract/cwmtt | Test-time oracle (independent checkmate detection); the original description of the hypercuboid method | Check its licence before copying anything |
 | Chess in 5D | Third oracle; possible source of game records | Check its licence and terms |
-| FirePlank/5d-chess-engine (Kairos), the fifth submodule | Fourth oracle, nightly (CHECKPOINT 9); external opponent over 5DUCI for the pilot run and the league (§12.7) | GPL-3.0, as the project is: running it in the harness and playing against it are unaffected; its code enters the engine as ideas only, as Stockfish's and Lc0's do |
+| FirePlank/5d-chess-engine (Kairos), the fifth submodule | Fourth oracle, in ftxi's lineage — a checker, not a second vouch (CHECKPOINT 10); external opponent over 5DUCI for the pilot run and the league (§12.7) | GPL-3.0, as the project is, with ftxi's BSD-2 notice for the derived parts: running it in the harness and playing against it are unaffected; its code enters the engine as ideas only, as Stockfish's and Lc0's do |
 | adri326/5dchess-notation — 5dpgn ("Shad's notation"), the fourth submodule | The pinned notation specification: our own parser is written from its text, the game corpus is in its format, and it settles parse divergences (below) | A parser shared by the engine and an oracle corrupts both sides of a comparison identically — the gate never sees it. If the repository ships parser code, that code counts as a parse-only oracle under the same harness rules — never a basis for ours |
 | Stockfish, Lc0 (both GPLv3) | Ideas only, reimplemented from papers and the Chess Programming Wiki | The project is GPL-3.0 too, so copying would be licence-compatible — but it would end sole copyright, the one thing that keeps relicensing or dual-licensing possible, and other projects' code enters as ideas only |
 
@@ -2099,11 +2109,9 @@ The hypercuboid algorithm is reimplemented in-house. Its in-house cross-check is
 depth-first detector this section already runs beside it — two different algorithms that
 must agree on every mate verdict. ftxi's detector and cwmtt are the external checks; ftxi's
 adapts cwmtt's method, so a flaw in the method itself would not surface as disagreement
-between those two, which makes Chess in 5D the most independent of the four. Kairos
-enumerates turns with a hypercuboid search by its own account, so it is a third
-implementation of the same method: it catches implementation bugs — ours and the other
-oracles' — while a flaw in the method itself stays as invisible to it as to ftxi and
-cwmtt. **The oracles are the only third-party 5D code in the repository**, and they live only
+between those two, which makes Chess in 5D the most independent of the four. Kairos is no
+third implementation: it is largely ftxi's code, so a bug carried over with the code would
+show in neither, and it counts with ftxi as one lineage (CHECKPOINT 10). **The oracles are the only third-party 5D code in the repository**, and they live only
 in the test harness: nothing from another 5D project is vendored into the engine for any
 purpose, gated or not — everything else from other projects enters as ideas,
 reimplemented. General-purpose libraries (PyTorch, FlexAttention, PyO3, test
@@ -2131,15 +2139,17 @@ first commit:
   harness that is never a dependency of the engine's own build; CI fails any core module
   that imports from it. Left to discretion, the path of least resistance when stuck is
   copying an oracle's code into the core — exactly the reuse that destroys it.
-- **Tiered CI.** ftxi's engine (fast; a C++ driver over its core library, held to its stock
-  CLI) on every commit; cwmtt (Haskell toolchain, heavier), Chess in 5D and Kairos (Rust toolchain, from
-  CHECKPOINT 9) nightly and before any generator release or proof-channel enablement. The game-record corpus is
-  pinned too. The commit tier is a smoke test: a ruleset is gated only when two or more
-  oracles answer for it, so the check that *some* ruleset is gated runs only in the tiers
-  that run every oracle — nightly and release (CHECKPOINT 6). The commit tier still fails if
-  the engine declines a record it read on the last green run, or reads none; a run
-  restricted to chosen sources or records is a developer convenience and never produces a
-  tier verdict (CHECKPOINT 8).
+- **Tiered CI.** ftxi's engine (fast; a C++ driver over its core library, held to its
+  stock CLI) on every commit; cwmtt (Haskell toolchain, heavier), Chess in 5D and Kairos
+  (Rust toolchain, from CHECKPOINT 9) nightly and before any generator release or
+  proof-channel enablement. The game-record corpus is pinned too. The commit tier is a
+  smoke test: a ruleset is gated only when two or more independent lineages answer for it
+  — an oracle derived from another's code counts with it, and a lineage vouches through
+  any member that agrees and is not a recorded divergence, at most once (CHECKPOINT 10) —
+  so the check that *some* ruleset is gated runs only in the tiers that run every oracle —
+  nightly and release (CHECKPOINT 6). The commit tier still fails if the engine declines a
+  record it read on the last green run, or reads none; a run restricted to chosen sources
+  or records is a developer convenience and never produces a tier verdict (CHECKPOINT 8).
 - **A known-divergences file.** When the engine and an oracle disagree, the rulebook
   decides; if the oracle is wrong, the divergence is recorded with its rulebook citation
   (and reported upstream — defects as bug reports, disagreements with a documented rule as
@@ -2182,7 +2192,7 @@ first commit:
   attacking board, active or inactive timeline, head or earlier board, ordinary or
   cross-board move — and each cluster is settled once from the rulebook and recorded in
   the known-divergences file with its citation. Two oracles agreeing is not evidence on
-  its own (ftxi adapts cwmtt's method, and Kairos uses the same method family). **Check disagreements first** — check decides
+  its own (ftxi adapts cwmtt's method, and Kairos is largely ftxi's code). **Check disagreements first** — check decides
   checkmate versus stalemate — and the engine's check detection is not written until they
   are settled. The expectation — that they would concentrate in which boards count as
   sources of attack — was confirmed at CHECKPOINT 1: all seven clusters did. **The
@@ -2211,6 +2221,9 @@ first commit:
   error is a telltale: if the engine ever reproduces one, its logic probably came from
   that oracle. The boundary check is syntactic and cannot catch translated or renamed
   code; telltales catch it behaviourally, for the buggy paths — review covers the rest.
+  Kairos is the detector's known positive (CHECKPOINT 10): carrying ftxi's code, it should
+  reproduce ftxi's recorded errors wherever its paths are ftxi's, and not where they are
+  its own — the R1 check entries among them.
 - **Parse mode before full mode.** The engine runs first in parse mode — states, replay
   length and acceptance compared, never verdicts — then in full mode. `legal_actions`
   counts an action as its set of moves, with its timeline-creating moves in creation
@@ -3155,10 +3168,11 @@ standard game — nearly-free training diversity.
 - **Exactness is inherited per variant.** The verification layer's guarantees come from
   the generator, so a subtly wrong Reversed Royalty generator does not just misplay — it
   manufactures **false proofs** that enter the solved store as permanent facts. Variant
-  support means a generator correctness suite per variant, gated only where two oracles
-  answer for it (H47) — Kairos reads the variant pieces (§11.0), which may bring more
-  variants to that bar; this is the one place where
-  "adapt" costs engineering rather than configuration.
+  support means a generator correctness suite per variant, gated only where two
+  independent lineages answer for it (H47) — Kairos reads the variant pieces but counts
+  with ftxi (§11.0), so it brings a variant to that bar only where it answers and ftxi
+  does not; this is the one place where "adapt" costs engineering rather than
+  configuration.
 - **Weights do not transfer where values invert.** Reversed Royalty flips the protection
   economy — shield the queen, spend the king — close to an adversarial distribution
   shift for a standard-trained net.
