@@ -1387,11 +1387,14 @@ answers immutable**, hash-verified, outside the reach of the code under test. A 
 recorded oracle error doubles as a copy detector — an implementation that reproduces it
 probably borrowed that oracle's logic.
 
-**Count independence by method, not by implementation.** Implementations of one algorithm
-share its flaws: a further oracle on the same method catches implementation bugs — yours
-and the other oracles' — but not a flaw in the method itself, so the most valuable oracle
-is the one that decides by a different algorithm. Record each oracle's method beside its
-code, read from the pinned source rather than its documentation.
+**Count independence by method and by lineage, not by project.** Implementations of one
+algorithm share its flaws: a further oracle on the same method catches implementation bugs —
+yours and the other oracles' — but not a flaw in the method itself, so the most valuable
+oracle is the one that decides by a different algorithm. And an oracle ported from another's
+code *is* that oracle for whatever it ported: count the two as one lineage, which vouches
+once. Neither fact is in a README — read NOTICE files, credits and the pinned code, at every
+pin bump. A derived oracle is also a free test of the copy detector: it should reproduce its
+source's recorded errors wherever it carries the source's code.
 
 
 ### 13.2.7 Pay exactness only where a proof can result

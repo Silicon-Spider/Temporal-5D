@@ -10,6 +10,24 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-01 - Design documents: the CHECKPOINT 10 ruling, from upstream - ftxi and Kairos one lineage for the two-oracle bar
+
+The copies maintained upstream, committed unedited. The user's ruling on spec issue 526:
+Kairos is in ftxi's lineage (its NOTICE credits ftxi; its core modules follow ftxi's one for
+one, its 5dpgn reader is ported and its mate test translated line by line), so H47's
+two-oracle bar counts lineages - an oracle derived from another's code counts with it, and a
+lineage vouches through any member that agrees and is not a recorded divergence, at most once;
+every oracle's NOTICE, credits and pinned code are read at each pin bump. Kairos stays a
+checker whose disagreements still fail the gate, adding a vouch only where it answers and ftxi
+does not; it is the telltale detector's known positive (H34) - it should reproduce ftxi's
+recorded errors where its paths are ftxi's, and not the R1 check entries. The match runner for
+the opponent role lives in the test harness when it is built (issue 532).
+
+Spec: §11.0 (the hypercuboid item, the Kairos table row and paragraph, the reuse rule, the
+licence table row, "Tiered CI", the triage and telltale bullets), §12.6; register H23, H26,
+H34, H47, H52, reversal 33, two open items (Kairos's query surface recorded; the rulesets
+Kairos answers and ftxi does not). Edited upstream; nothing proposed here.
+
 ### 2026-11-01 - CHECKPOINT 9's brief read in: the NNUE's rows retired, the phase form and refresh inside a turn planned, Kairos's remaining steps, the downloads listed
 
 The user's CHECKPOINT 9 brief reached the main loop on 2026-11-01, after the build had
