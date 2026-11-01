@@ -10,8 +10,8 @@ from pathlib import Path
 from unittest import mock
 
 import support
-from oracle_harness import cli, config, corpus, gate, golden, lockfile, paths, snapshot, stability
-from oracle_harness.adapters import ORACLE_SOURCES, PENDING_SOURCES, make_source
+from oracle_harness import build, cli, config, corpus, gate, golden, lockfile, paths, snapshot, stability
+from oracle_harness.adapters import ORACLE_SOURCES, PENDING_SOURCES, RunOptions, make_source
 from oracle_harness.observations import Observation
 from oracle_harness.util import HarnessError
 
@@ -35,15 +35,29 @@ class PendingRecordingTests(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def record_pending(self, *, signature_change: dict | None = None, leave_out: str | None = None) -> None:
-        """A recording of kairos:parse as golden --write would leave it - MANIFEST rewritten over the directory."""
+    def probe(self, seconds: float = 12.5) -> golden.Calibration:
+        """The calibration probe gate.toml names, as timed with the current code on some machine."""
+        spec = self.cfg.calibration
+        signature = make_source(spec.source, self.lock).signature(RunOptions(cap=self.cfg.cap))
+        return golden.Calibration(source=spec.source, record=spec.record, positions=spec.positions, signature=signature,
+                                  seconds=seconds, platform="test-machine", cpu_count=4, measured="2026-11-02T10:00:00")
+
+    def record_pending(self, *, signature_change: dict | None = None, leave_out: str | None = None,
+                       probe: golden.Calibration | None | bool = True) -> None:
+        """A recording of kairos:parse as golden --write would leave it - its probe in its cost file, MANIFEST rewritten
+        over the directory. ``probe``: True for a current probe, None for none, or the probe to carry."""
         source = make_source(PARSE, self.lock)
         signature = {**golden.signature(source, gate.recording_options(self.cfg, source)), **(signature_change or {})}
-        answers = {record.id: Observation(source=PARSE, record=record.id, status="unsupported", reason="parse_failed",
-                                          actions_accepted=0)
-                   for record in self.records if record.id != leave_out}
         records = [record for record in self.records if record.id != leave_out]
-        support.write_recorded(PARSE, signature, records, answers)
+        answers = {record.id: support.recorded(Observation(source=PARSE, record=record.id, status="unsupported",
+                                                           reason="parse_failed", actions_accepted=0), end=0.02)
+                   for record in records}
+        carried = self.probe() if probe is True else probe
+        golden.golden_path(PARSE).write_text(golden.dump(PARSE, signature, records, answers, recordings=2),
+                                             encoding="utf-8", newline="\n")
+        golden.cost_path(PARSE).write_text(golden.dump_costs(PARSE, signature, records, answers, recordings=2,
+                                                             calibration=carried), encoding="utf-8", newline="\n")
+        support.vouch()
 
     def read_back(self):
         """What verify and a tier read: the snapshot, the golden section, DISAGREEMENTS.md as rendered, readiness."""
@@ -99,6 +113,60 @@ class PendingRecordingTests(unittest.TestCase):
                 four = golden.verify_static([make_source(name, self.lock) for name in ORACLE_SOURCES],
                                             lambda source: gate.recording_options(self.cfg, source), self.records, frozen)
                 self.assertEqual(four, [])
+
+    def test_a_pending_recording_carries_its_own_probe_and_is_read_on_the_references_time(self):
+        reference = snapshot.take().calibration
+        self.record_pending(probe=self.probe(seconds=reference.seconds * 2))  # timed on a machine twice as slow
+        frozen = snapshot.take()
+        pending = snapshot.recorded_pending(frozen.manifest, frozen.calibration)
+        costs = pending.costs[PARSE]
+        self.assertEqual(costs.calibration.seconds, reference.seconds * 2)
+        self.assertEqual(costs.calibration.measured, "2026-11-02T10:00:00")
+        written = golden.load_costs(PARSE, frozen.manifest)  # as written: 0.02 s an outcome
+        for record_id, cost in costs.records.items():
+            self.assertAlmostEqual(cost.end, written.records[record_id].end / 2)
+        # No probe of its own: a finding, and its costs are read as they are.
+        self.record_pending(probe=None)
+        frozen = snapshot.take()
+        found = gate.pending_golden_findings(self.lock, self.cfg, self.records, frozen)
+        self.assertEqual([finding.code for finding in found], ["golden-stale"])
+        self.assertIn("carries none", found[0].message)
+        # A probe timed with other code: a finding too.
+        self.record_pending(probe=dataclasses.replace(self.probe(), signature={"pin": "other"}))
+        found = gate.pending_golden_findings(self.lock, self.cfg, self.records, snapshot.take())
+        self.assertEqual([finding.code for finding in found], ["golden-stale"])
+        self.assertIn("other code", found[0].message)
+
+    def test_an_enabled_sources_cost_file_has_no_probe_and_is_read_as_written(self):
+        frozen = snapshot.take()
+        for name in ORACLE_SOURCES:
+            self.assertIsNone(frozen.costs[name].calibration, name)
+            self.assertEqual(frozen.costs[name].records, golden.load_costs(name, frozen.manifest).records, name)
+
+    @unittest.skipUnless(build.load(lockfile.load().pin("kairos")) is not None, "the kairos oracle is not built")
+    def test_recording_only_a_pending_source_leaves_the_calibration_and_the_enabled_sources_untouched(self):
+        # golden --write --source kairos:parse, end to end (the real driver; the probe's timing stood in for).
+        manifest_before = (self.golden_dir / "MANIFEST").read_text(encoding="utf-8").splitlines()
+        files = [golden.CALIBRATION_FILE] + [golden.golden_path(name).name for name in ORACLE_SOURCES] \
+            + [golden.cost_path(name).name for name in ORACLE_SOURCES]
+        before = {name: (self.golden_dir / name).read_bytes() for name in files}
+        disagreements = Path(self.folder.name) / "DISAGREEMENTS.md"
+        probe = self.probe(seconds=13.0)
+        with mock.patch.object(paths, "DISAGREEMENTS_FILE", disagreements), \
+                mock.patch.object(gate, "_measure_probe", return_value=probe):
+            findings = gate.write_golden(only_sources=[PARSE], jobs=4, repeat=2, log=lambda message: None)
+        self.assertEqual(findings, [])
+        for name in files:
+            self.assertEqual((self.golden_dir / name).read_bytes(), before[name], name)
+        manifest_after = (self.golden_dir / "MANIFEST").read_text(encoding="utf-8").splitlines()
+        self.assertEqual([line for line in manifest_after if "kairos-parse" not in line], manifest_before)
+        self.assertEqual(sum("kairos-parse" in line for line in manifest_after), 2)
+        self.assertFalse(disagreements.exists())  # DISAGREEMENTS.md not rendered: a pending recording does not touch it
+        costs = golden.load_costs(PARSE)
+        self.assertEqual((costs.calibration.seconds, costs.calibration.platform), (13.0, "test-machine"))
+        self.assertTrue(costs.calibration.measured)  # stamped when written
+        frozen = snapshot.take()
+        self.assertEqual(gate.golden_section(self.lock, self.cfg, self.records, frozen), [])
 
     def test_a_pending_source_without_a_recording_asks_nothing(self):
         frozen = snapshot.take()

@@ -80,7 +80,8 @@ def _read_sources(snapshot: Snapshot, sources, read: dict[str, str]) -> None:
         if source in snapshot.golden:
             try:
                 costs = golden.load_costs(source, snapshot.manifest)
-                snapshot.costs[source] = costs
+                # On calibration.json's time base (a no-op for an enabled source's cost file, which has no probe).
+                snapshot.costs[source] = costs.on_reference(snapshot.calibration)
                 read[_relative(golden.cost_path(source))] = costs.digest
             except golden.StaleSchema as error:
                 problems.append(Finding("golden-stale", str(error)))
@@ -92,13 +93,14 @@ def _read_sources(snapshot: Snapshot, sources, read: dict[str, str]) -> None:
             snapshot.problems[source] = problems
 
 
-def recorded_pending(manifest: dict[str, str] | None) -> Snapshot:
+def recorded_pending(manifest: dict[str, str] | None, calibration: golden.Calibration | None = None) -> Snapshot:
     """The recordings of the pending sources that have one (adapters.PENDING_SOURCES: wired, in no tier), read on their
     own - never into the snapshot ``take`` gives every tier, verify's checks of the enabled sources and
     DISAGREEMENTS.md, which holds ORACLE_SOURCES only. A pending source's recording is checked (verify) and kept, and
-    compared with nothing until the source is enabled. ``manifest`` is the snapshot's: one MANIFEST vouches for all."""
+    compared with nothing until the source is enabled. ``manifest`` is the snapshot's: one MANIFEST vouches for all;
+    ``calibration`` the snapshot's reference, which a pending recording's costs are read against (Costs.on_reference)."""
     names = [name for name in PENDING_SOURCES if golden.golden_path(name).exists() or golden.cost_path(name).exists()]
-    pending = Snapshot(manifest=manifest)
+    pending = Snapshot(manifest=manifest, calibration=calibration)
     _read_sources(pending, names, {})
     return pending
 
@@ -117,12 +119,13 @@ def take(sources: tuple[str, ...] | list[str] = ORACLE_SOURCES, *, baseline_pin:
     except integrity.IntegrityError:
         snapshot.manifest = None  # verify_manifest has said why
     read: dict[str, str] = {}  # file -> hash of the bytes the snapshot was made from
-    _read_sources(snapshot, sources, read)
+    # The calibration reference first: a cost file that carries a probe of its own is read on its time base.
     try:
         snapshot.calibration = golden.load_calibration(snapshot.manifest)
         read[_relative(golden.calibration_path())] = snapshot.calibration.digest
     except HarnessError as error:
         snapshot.calibration_problem = str(error)
+    _read_sources(snapshot, sources, read)
     try:
         data = paths.DIVERGENCES_FILE.read_bytes()
     except FileNotFoundError:

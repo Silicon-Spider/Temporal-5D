@@ -10,6 +10,32 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-02 - A pending-only recording leaves calibration.json untouched; H48 prepared - its stop condition is met
+
+The main loop found a flaw in the pending recording built that morning: recording a pending source
+alone re-timed `calibration.json`, the reference the four oracles' costs were recorded against on a
+quiet machine (2026-10-17) - re-timed without them it would leave their costs against another
+machine, and on a loaded machine it is AGENTS.md's forbidden case. Now `golden --write` re-times
+`calibration.json` only when it records an enabled source; a recording that names a pending source
+carries the probe timed with it, its machine and its time, in that source's cost file
+(`golden.Costs.calibration`, written by `dump_costs`, read by `load_costs`), and a pending-only
+recording leaves `calibration.json`, every enabled source's files and their `MANIFEST` lines byte for
+byte as they were, and does not render `DISAGREEMENTS.md`. A pending recording's costs are read on
+`calibration.json`'s time base (`Costs.on_reference`, applied wherever costs are read; a no-op for an
+enabled source's cost file, which carries no probe), and verify requires its probe, timed with the
+probe code `gate.toml` names. `oracles/tests/test_pending_recording.py`: `golden --write --source
+kairos:parse` end to end leaves the four's files, `calibration.json` and their `MANIFEST` lines
+unchanged; costs are scaled by the probes' ratio; a missing or foreign probe is a finding.
+
+H48 prepared, and stopped: from the cost files, the naive searches stall for over 300 s on single
+positions before the terminal verdicts the proof channel needs (28 to 375 boards, up to 46 positions
+further on), and no naive budget a 240-minute CI job allows (at most about 2,990 s on a 4-core
+runner) makes every proof-channel check non-vacuous - the lane stop condition; options for the user in
+`docs/BUILD_LOG.md`, issue 576. No budget was changed.
+
+Spec: register H48, H32, H33, H52; §11.0 ("Tiered CI", stable answers) - nothing proposed now;
+issues 575 (amended), 576.
+
 ### 2026-11-02 - A pending source may be recorded before it is enabled ((P), the main loop's decision) - ready to record Kairos's parse mode
 
 CHECKPOINT 10 records Kairos's parse mode in the quiet-machine block and leaves Kairos out of the
