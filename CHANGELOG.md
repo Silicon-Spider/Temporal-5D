@@ -10,6 +10,42 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-02 - The done-means audit: section 15.2 row by row, section 15.4 invariant by invariant, the committed-class rows, section 15.5 clause by clause
+
+`docs/BUILD_LOG.md` gains a new section, "Done-means audit (2026-10-24; finished
+2026-11-02)", after "Parked, and why". It is the gate lane's step-2 audit, checked against
+main 28a102b's code and design documents (CHECKPOINT 9's rows and CHECKPOINT 10's ruling
+included). It holds:
+
+- **Section 15.2, row by row:** the tests that establish each row, what they assert, at what
+  tolerance, on which seeds and constructions, and a verdict.
+  - 14 of 19 rows are green; rows 1, 11 and 16 are short of the protocol in named ways.
+  - 2 are deferred with the window (C5, C10), and 1 is void (F4, the NNUE retired).
+  - 2 are waiting on a component not yet built: C26 and C27, low priority by the user's
+    CHECKPOINT 9 brief.
+- **Section 15.4, invariant by invariant.** Green with the audit's tests, except:
+  - the solver against df-pn and the oracles' mate verdicts, and the proof-export invariant
+    under TT churn - MT-01 to MT-03, on `lane/engine`, not merged;
+  - the flat form under allocation failure (issue 535).
+- **The committed-class rows.** B3, C18 and C25 are neither decided nor awaiting a named
+  trained ablation (issue 538). C16's arm, and the as-built placeholders of rows otherwise
+  decided, go to the user by reference.
+- **Section 15.5, clause by clause:**
+  - legal play end to end: met by the engine's replay; the release tier with the engine
+    configured has not run, and nightly gates two rulesets;
+  - the equivalence suite: as above;
+  - the cost figures: not met - the quiet-machine block, then the write-backs;
+  - the register: B3, C18 and C25.
+- **Work items, by lane.**
+
+Issues 536 (section 15.5 and the rows section 15.2 defers, voids or conditions), 537 (section
+15.5 does not name section 15.4) and 538 (B3, C18, C25). Proposed edits 364-366. Documents
+only.
+
+Spec: §15.1 (Phase 3's row), §15.2, §15.3, §15.4, §15.5; register B3, C16, C18, C25, C26, C27 -
+edits 364 (§15.5's equivalence clause), 365 (§15.4 in §15.5 and in Phase 3's row) and 366
+(register B3, C18, C25, C16); issues 536-538.
+
 ### 2026-11-01 - The done-means audit's tests: section 15.2's protocol on more variants, seeds and readings, three section 15.4 invariants, and a flat-form defect found
 
 The gate lane's done-means audit (`lane/audit`, step 2) read each section 15.2 row and each

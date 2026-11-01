@@ -1944,6 +1944,476 @@ expanded root (H49), value-side Shaw vectors, LMR (moot); refused: ONNX/TensorRT
 export (for now; G9, M5), KataGo's convolution-era methods, symmetry augmentation
 beyond colour.
 
+## Done-means audit (2026-10-24; finished 2026-11-02) - section 15.5 clause by clause
+
+`lane/audit`, from main 28a102b: the gate lane's step-2 audit, moved to a worktree of its
+own when `lane/gate` went back to Kairos. Every claim below was checked against main's code
+and main's `docs/design/` (CHECKPOINT 9's rows and CHECKPOINT 10's ruling included), not
+against the earlier step-2 brief.
+Unmerged lane work is named where it bears on a row: `lane/engine` ee9456e (MT-01, MT-03 and
+MT-02's engine side) and `lane/net` 3a87fb0 (A5). Verdicts:
+- **green**: the row's tests on main pass and meet section 15.2's protocol;
+- **green, short**: they pass, and the part of the protocol they leave out is named;
+- **waiting**: the component is not built yet;
+- **deferred** or **void**: section 15.2 itself defers or voids the row.
+
+None of the audit's tests needed a code change; they are listed under "The audit's tests".
+One of them found a defect, which is not committed as a test (issue 535).
+
+### Section 15.2, row by row
+
+The protocol (section 15.2) asks for:
+- random weights at realistic initialisation scale;
+- several seeds;
+- a tolerance matched to the arithmetic, bit-exact for integer paths;
+- adversarial constructions: duplicated boards, deep travel, many timelines, supersession
+  inside a refreshed subtree, every variant.
+
+| # | Row | Register | Verdict | What remains |
+|---|---|---|---|---|
+| 1 | Cached attention = dense under the same mask | C2, C17 | green, short | Re-measure the FP32 and BF16 bounds on the finished v1 network (net lane, step 2's re-run) |
+| 2 | Windowed = full restricted to W ∪ E | C5 | deferred with the window (M18) | - |
+| 3 | Lazy K/V = eager recompute | C10 | deferred with the window | - |
+| 4 | Supersession recompute = from scratch | C20 | green | - |
+| 5 | A refresh fork leaves sibling subtrees unchanged | C3a | green (short before the audit's test) | - |
+| 6 | Phase form: under N\* node for node dense; at or above it every node cached | C26 | waiting (low priority, CHECKPOINT 9) | Build C26 in the cached path behind its flag, with the row (`lane/net`, after A5) |
+| 7 | Tree form, cached: supersession recompute at the next evaluated node = recompute at supersession | C27 | waiting (low priority) | The same, with the tree form's cached work |
+| 8 | Same state + epoch -> same evaluation; MCGS transposition hits identical | C19-C21 | green | - |
+| 9 | Incremental Zobrist = from scratch, duplicated boards | H18 | green (short of every variant before the audit's test) | - |
+| 10 | ~~NNUE accumulator = recompute~~ | F4 | void: the NNUE is retired (CHECKPOINT 9) | - |
+| 11 | FP8/BF16 cache precision = live precision | G1 | green, short | Adversarial geometries in BF16 and FP8, and bounds re-measured on v1 (net lane) |
+| 12 | Displacement bias through the score function = materialised | B15 | green | - |
+| 13 | Key-side Shaw term, gather = direct per pair | B17 | green | - |
+| 14 | Colour-swapped mirror: identical canonical inputs and outputs | A7 | green (read as issue 304 says) | - |
+| 15 | Targets re-derived from stored records = written at generation | I15 | green | - |
+| 16 | Reply mapping onto current squares, ambiguous mappings masked | D4 | green, short | Constructed turns for a move between two present boards, a rewinding branch and J6 twins (optional; net lane) |
+| 17 | Tree form, every gate firing = the ply split | D2 | green (R8 only before the audit's test) | - |
+| 18 | Flat form's generator = an exhaustive ordered listing | D2 | green | - |
+| 19 | Turn-state counts = a brute-force recount | A6 | green (short of every variant before the audit's test) | - |
+
+**Count.** 19 rows:
+- green: 14 rows (1, 4, 5, 8, 9 and 11-19). Rows 1, 11 and 16 are short, as named.
+- deferred: 2 rows (2, 3).
+- void: 1 row (10).
+- waiting: 2 rows (6, 7). Both are low priority by the user's CHECKPOINT 9 brief, and both
+  committed only if C2 adopts the cache (issue 536).
+
+**Row by row:**
+
+1. **Cached = dense (C2, C17).**
+   - Synthetic positions, `python/tests/net/test_cache.py`:
+     - `test_cached_equals_one_full_pass`: 7 geometries (standard, duplicated, deep travel,
+       many timelines, 5x5, even start, a 4/0 register arm) x the lineage and creation
+       readings x both C20 readings. Random 6-move paths. 2 seeds for the defaults, 1 for each
+       other case.
+     - `test_cached_equals_one_full_pass_with_every_switch`: 11 flag sets (section 6's switches;
+       6y's arms; B15's no-table arm and placeholders; B17; B16 per layer; D4's reply and D9;
+       A8), seed 3 only.
+     - `test_the_6y_arms_through_the_cached_path`, `test_cached_equals_one_full_pass_two_parent`
+       and `test_status_biases_keep_frozen_boards_intrinsic`.
+     - `test_cached_equals_one_full_pass_at_full_depth` (slow): F1, 16 layers, 40 boards.
+   - Real engine positions:
+     - MT-04, `python/tests/engine/test_cached_variants.py`: every engine variant x 2 seeds x
+       both C20 readings, under v1 and with the step-1 heads and A8. The step API's leaves,
+       cached against dense at FP32 tolerance, on every variant, in tree and graph mode; a
+       leaf met twice is evaluated bit for bit alike. F1 in BF16 on three variants (slow).
+     - `test_network.py`'s three cached tests and `test_evaluator.py::test_real_leaves_through_both_evaluators`.
+   - Through the other rows: `test_perspective.py::test_the_cached_path_and_the_mirror`,
+     `test_shaw.py::test_the_cached_path_equals_the_full_pass` and
+     `test_turn_state.py::test_cached_equals_one_full_pass_on_a_tree_with_counts`.
+   - Tolerances:
+     - FP32: 2e-5 on the trunk and 1e-4 on the heads; bitwise where both paths compute in the
+       same order.
+     - BF16: bounds 2.7-8x the largest gaps measured at 2 layers, seeds 0-2.
+   - **Short:** `test_cache.py`'s docstring says the gaps were last measured after F5 and F6
+     (2026-10-17), not since B15's table, F6's Mish in the heads and M20's defaults changed
+     the network. This is step 2's "section 15.2 re-run on the finished v1 network". The
+     every-switch sets also run on one seed.
+2. **Windowed (C5)** and 3. **lazy K/V (C10)**: deferred with the window. Section 15.2 marks
+   them so (M16, M18). `test_model.py::test_later_stage_flags_raise` pins `history_window` as
+   not built.
+4. **Supersession recompute (C20).**
+   - `test_cache.py`:
+     - `test_supersession_recompute_is_path_independent`: standard (2 seeds), duplicated and
+       even start (1 seed each), x both C20 readings. Bitwise across move orders, and equal to
+       the reference.
+     - `test_creation_order_reading_is_path_dependent` pins the creation reading's path
+       dependence (C23).
+     - `test_supersession_inside_a_refreshed_subtree`: deep travel, seeds 7 and 8.
+     - `test_prefix_sharing_computes_each_board_once` and `test_the_store_is_a_radix_structure`.
+   - MT-04: `test_two_orders_of_one_action_through_the_step_api` (Two Timelines and
+     Battleground, bitwise), and every variant under both readings.
+   - Green: the row's tests together meet every construction.
+5. **Refresh fork (C3a).**
+   - `test_cache.py`:
+     - `test_refresh_fork_leaves_siblings_unchanged`: one root (standard, seed 6), causal and
+       root-refreshed parent.
+     - `test_root_refresh_reduces_to_dense_at_the_root`, `test_rung_1_is_travel_triggered_and_visit_gated`,
+       `test_current_features_keep_the_epoch_history` and `test_status_biases_below_a_refreshed_anchor`.
+   - `test_complexity.py::test_a_complexity_refresh_is_rung_1s_fork` (C24) and
+     `test_tree.py::test_nodes_carry_epochs_and_forks_reach_only_the_old_epoch`.
+   - Siblings and the parent epoch's store entries are compared bitwise; the forked subtree
+     against the two-level reference at FP32 tolerances.
+   - It was short: one root, one seed. The audit's
+     `test_fork_protocol.py::test_refresh_fork_leaves_siblings_unchanged_under_the_protocol`
+     runs the same assertions on 5 adversarial geometries x 3 seeds x both C20 readings, with
+     causal and root-refreshed parents.
+6. **Phase form (C26)** and 7. **refresh inside a turn (C27)**: not built anywhere (main and
+   every lane, 2026-11-01). Plan (CHECKPOINT 9 brief): low priority, in the cached path behind
+   its flag, `lane/net` after A5's review fixes; the engine side if the tree form needs it.
+   C27 is class R in the register; C26 is class C.
+8. **Evaluation purity (C19-C21).**
+   - Python, `test_cache.py`: `test_same_state_and_epoch_same_evaluation` (causal and
+     root-refresh), `test_different_epochs_evaluate_differently`,
+     `test_a_store_rooted_elsewhere_gives_the_same_bits` (FP32 and BF16),
+     `test_two_states_differing_only_in_an_origin_get_their_own_entries` and
+     `test_boards_differing_only_in_has_moved_markers_get_their_own_entries`.
+   - Python, `test_search_api.py`'s three shared-cache tests, and MT-04's one-store tests.
+   - Engine, `test_mcts.cpp`: `mcts_graph_transpositions_are_shared_and_evaluated_once`,
+     `mcts_tree_duplicates_get_bit_identical_evaluations_from_the_cache`,
+     `mcts_the_evaluation_cache_is_per_epoch_and_exact`,
+     `mcts_graph_keys_that_collide_are_compared_exactly`,
+     `mcts_graph_keeps_a_turn_start_apart_from_the_same_state_during_an_action` and
+     `mcts_the_evaluation_cache_keeps_a_turn_start_apart_from_the_same_state_during_an_action`
+     (A6 in the cache key, issue 302).
+   - All bitwise. Green.
+9. **Zobrist (H18).**
+   - `engine/tests/test_zobrist.cpp`: 13 tests (incremental against from scratch over 60
+     random multiverses built from a 4-board pool; the XOR trap's aliases; places, ruleset,
+     player, parity, creators, size).
+   - `test_random_play.cpp`: the key checked at every state of random play from 8 starts under
+     4 rulesets.
+   - `test_mcts.cpp::mcts_h18_the_acting_player_is_in_every_key`.
+   - All bit-exact.
+   - It was short of "every variant". The audit's
+     `zobrist_incremental_equals_from_scratch_on_every_named_variant_under_every_ruleset` plays
+     all 16 named variants x all 27 rulesets: 4,443 states, 655 with duplicated boards, 714
+     branching moves. It checks the key and every board's content hash against from scratch.
+10. **NNUE (F4)**: void. The NNUE was retired at CHECKPOINT 9, never built.
+11. **Cache precision (G1).**
+    - `test_cache.py`: `test_bf16_cache_is_the_live_precision`, `test_fp8_cache_equals_the_fp8_network`,
+      `test_fp8_cache_equals_the_fp8_network_at_fp32_resolution`,
+      `test_the_fp8_network_is_a_bounded_approximation_of_match` and `test_kv_memory_accounting`.
+    - `test_quant.py`: `test_the_cache_with_fp8_frozen_kv_and_fp8_projections` and
+      `test_the_cache_takes_linear_only_fp8_and_refuses_quantised_attention`.
+    - `test_qat.py::test_qat_forward_is_the_inference_format` (G8: QAT's forward is the served
+      format's, frozen K/V included).
+    - F1 in BF16: one real position (`test_network.py`) and three variants (MT-04, slow).
+    - Seeds 0-2, 2 layers, BF16 bounds as in row 1.
+    - **Short:**
+      - The synthetic BF16 and FP8 tests use one geometry ("standard"); the adversarial
+        constructions reach BF16 only through the slow F1 tests, and FP8 not at all.
+      - The bounds have not been re-measured on v1 (as row 1).
+    - By design, not missing: the cache refuses a network whose attention is quantised (G2's
+      `trunk_quant_attention`; issues 238 and 239, C2 deferred). So the matching rule with an
+      FP8 attention trunk waits with C2.
+12. **B15.**
+    - `test_displacement.py::test_score_function_equals_the_bias_materialised`: every
+      construction, including every variant's board size. Three seeds, with the table at its
+      initial scale (0.1) and at unit scale. The term is compared bit for bit; attention at
+      1e-5 (measured below 1e-6).
+    - `test_cpu_paths_equal_the_bias_materialised`: outputs and gradients, 2 seeds.
+    - `test_every_pair_of_the_constructions`: integers, exact.
+    - `test_the_network_through_the_score_function` and `test_the_block_mask_is_lossless`.
+    - Green. The far bins, line classes and register entries are placeholders (issues 205-208).
+13. **B17.**
+    - `test_shaw.py::test_gather_equals_direct`: FP64 to 1e-12, FP32 to roundoff; vectors at
+      initial and unit scale; per-head and shared vectors.
+    - `test_cpu_paths_equal_the_direct_term` (outputs and gradients, 2 seeds),
+      `test_the_score_function_reads_the_products` and `test_every_implementation_is_one_function`.
+    - The cached path, causal and refreshed.
+    - Green. The class set is a placeholder (issue 217).
+14. **A7.**
+    - `test_perspective.py`, 13 tests: canonical inputs identical but for the acting colour;
+      outputs mapped back equal at FP32 1e-5 with the acting-colour rows tied; dense and
+      block-causal; under every attention flag; BF16 within twice its own precision gap; the
+      cached path under both readings; A8 on; the colour input shown live.
+    - `test_perspective_engine.py`: random play in every engine variant.
+    - Green, read with the acting colour equalised (issue 304; proposed edit 202).
+15. **I15.**
+    - `python/tests/train/test_targets.py::test_targets_rederived_from_stored_records_equal_those_written_at_generation`:
+      4 generated games (ply split, tree form, Two Timelines, flat form) x 3 target
+      configurations. Every target array bit for bit, the reply prototype's included.
+    - `test_flat_targets.py::test_a_flat_record_and_its_targets_round_trip`.
+    - Green.
+16. **D4.**
+    - `python/tests/train/test_reply_map.py`, 4 tests. Constructed turns: a branching jump
+      (White and Black acting), and two branches into one board (masked at the turn start,
+      mapped at the decision point between them). The turn arm, and the head. Its checker
+      (`_check`) is written independently of `reply_map.py`; integer-exact.
+    - The audit's `test_protocol_every_variant.py::test_reply_map_holds_on_random_play_from_every_variant`
+      runs `_check` at every decision point of travel-heavy random play: 16 variants x 2 seeds.
+      It met 20-34 decision points per variant, and ambiguous boards in 12 variants (up to 533
+      moves masked). Its play made 131 physical moves, 81 jumps onto another timeline's head
+      and 162 branching jumps (a scratch count, not asserted).
+    - **Short (optional):** the spec's other travel cases are met only by random play, never
+      as constructed turns of their own: a move between two present boards, a rewinding
+      branch, J6 twins.
+17. **D2, tree form = ply split.**
+    - `engine/tests/test_mcts_tree.cpp::mcts_tree_form_with_every_gate_firing_equals_the_ply_split`:
+      at least 30 roots (every variant's start, random play from the multi-timeline variants,
+      roots one move into an action). Random and material evaluators; at least 60
+      comparisons. Digest, statistics and root children bit for bit, then again after a
+      re-root.
+    - `..._in_every_configuration`: 6 variations x 2 evaluators.
+    - `python/tests/engine/test_search_api.py::test_d2_the_tree_form_with_every_gate_firing_is_the_ply_split_with_the_network`.
+    - It was R8 only. The audit's `..._under_q4s_guide_literal_reading` runs 8 roots under Q4's
+      other reading, every variation.
+    - The fixed board order is outside the row (issue 162).
+18. **D2, flat form's generator.**
+    - `engine/tests/test_turngen.cpp`:
+      `turngen_equals_the_brute_force_reference_on_tiny_positions` (and its `long_` twin),
+      `..._the_exhaustive_listing_on_constructed_presents`, `..._on_every_variant` (and
+      `long_`) and `..._with_castling_and_en_passant`.
+    - Each asserts: the legal turns exactly once; non-increasing score; each score recomputed
+      bit for bit from its moves; the sorted scores of every legal turn; the same on a second
+      run; a budget-stopped generator's output a prefix of the full run.
+    - Several score assignments, ties included. Green.
+19. **A6.**
+    - `engine/tests/test_turn_state.cpp::turn_state_counts_equal_a_recount_under_every_ruleset`
+      (and `long_`): 4 starts x 27 rulesets, the C API's handle included.
+    - `turn_state_the_specs_cases_by_construction`.
+    - `python/tests/engine/test_turn_state_engine.py` (8 plays from 5 starts, both Q4
+      readings) and `python/tests/net/test_turn_state.py` (13 tests).
+    - It was short of "every variant". The audit's
+      `test_protocol_every_variant.py::test_turn_state_counts_equal_a_recount_on_every_variant`
+      covers 16 variants x both readings x 2 plays. Over all variants it met 775 turn starts,
+      1,098 mid-action states, 242 jumps between present boards, 103 rewinding branches and 16
+      rises (T12).
+
+### Section 15.4, invariant by invariant
+
+`check_invariants` (`engine/src/mcts.cpp`, `Impl::check_invariants`) runs after nearly every
+search in the search tests. `kConfigs` (`test_mcts.cpp`) holds 8 configurations: the ply split
+x {tree with solver, graph, graph with origins and solver, tree without widening with E2+E3},
+the flat form x {tree with solver, graph with E2+E3}, and the tree form x {tree with solver,
+without widening with E2+E3}. All 8 use the default rules (R8).
+
+| Clause | On main | Verdict |
+|---|---|---|
+| Visit counts consistent through backup | `mcts_visit_counts_are_consistent_through_backup` (every `kConfig`, 2 roots), `mcts_values_are_backed_up_from_the_acting_players_view`; the checker's visits = ends + edges and the w, wq, wd sums | green |
+| Virtual loss always released | `mcts_virtual_loss_is_released_when_the_evaluator_fails` (every `kConfig`), `..._by_delivery_and_abandon` (ply split), `mcts_a_malformed_evaluation_is_refused_and_released`, `test_mcts_memory.cpp`'s allocation failures (ply split and tree form), `test_ladder.cpp::ladder_invariants_hold_with_verdicts_arriving_asynchronously`, `capi_search_errors_release_the_batch`, `test_search_api.py::test_a_failed_evaluation_releases_the_batch`. Audit: `..._by_delivery_and_abandon_in_every_configuration` | green, with a defect found: the flat form under allocation failure (issue 535) |
+| Solved bounds propagate, never contradict | `mcts_solver_proves_a_mate_in_one_and_plays_it` (both Q4 readings x ply/flat x tree/graph), `..._a_draw_...`, `..._a_loss_...` (ply/flat), `mcts_solver_bounds_never_contradict_in_play`, the turn-cap and unknown-verdict tests, `ladder_injected_proofs_never_contradict_and_match_e4`; the checker's lo <= hi and terminal clauses | green; the constructed positions never under the tree form on main - MT-01 adds it (`lane/engine`) |
+| LCB and secure child among eligible children only | `mcts_final_selection_on_constructed_statistics`, `..._chooses_only_eligible_children_at_random` (3,000 sets), `..._in_searches_is_among_eligible_children` (every `kConfig`) | green |
+| Re-rooting keeps reachable nodes; state-keyed facts survive | `mcts_rerooting_keeps_only_reachable_nodes_and_cached_evaluations` (every `kConfig`), pondering, `mcts_advance_action_is_atomic`, `mcts_the_cache_is_purged_of_states_behind_the_root`, the ladder's carried-mate and settling-table tests | green |
+| Synchronous mode (H15) bit-reproducible | `mcts_synchronous_mode_is_bit_reproducible` (every `kConfig`), `ladder_synchronous_mode_is_bit_reproducible_with_the_wiring_on` (ply/flat), `capi_search_step_api_reproduces_the_cpp_search` (ply/flat/tree), the provers' one-thread tests (prover, Guard, Hunt), the Python step-loop tests | green |
+| Provers' proofs on constructed mates against the gate's references | Hunt: `hunt_proves_the_constructed_mates_and_exports_only_through_the_gate` (lines replayed to E4's checkmate), `hunt_claims_nothing_but_proofs_h37`. The settling scans' prover: `prover_constructed_mates_are_proven` (5 mates x both Q4 readings x both classes, E4's naive detector). The settling scans as wired: `ladder_hunts_mate_is_played_with_the_proof_channel_on`, `ladder_a_proof_whose_certificate_e4_rejects_never_enters`. The solver: `mcts_solver_agrees_with_the_brute_force_game_tree_under_both_q4_readings` (ply/flat). Certificates: `prover_lines_and_certificates_are_confirmed_by_e4_alone` | green, reading "the gate's references" as E4's gated detectors and the brute-force references; the solver's game-tree comparison leaves out the tree form (MT-01 adds it) |
+| The solver against df-pn and the oracles' mate verdicts (H41) | nothing on main | **waiting**: MT-01 (`mcts_solver_agrees_with_df_pn_*`, `t5d-solver-check`) and MT-02's engine side (`t5d-proof-records`) on `lane/engine`, not merged; MT-02's harness side - the records in the corpus, a quiet `golden --write` - waits for the user (issue 405 on that branch) and the quiet machine |
+| Proof export under TT churn (6f) | `ladder_settling_proofs_survive_tt_churn_6f` (the wired settling path, a 16-entry TT, mate in two); the retired scanner's churn test | **waiting**: MT-03 (`prover_proofs_survive_tt_churn_h19`, `prover_threads_survive_tt_churn`, `hunt_finds_its_mates_under_tt_churn`, with `long_` twins) on `lane/engine`; no Hunt churn test on main |
+| Turn structure | The checker: a submit edge into a turn start, a move edge into a mid-action node (ply split and tree form); every flat edge into a turn start; moves made by edge kind; no game end during an action; no turn start a dead end; inherited nodes only under the tree form, never evaluated. `mcts_graph_dead_ends_have_no_legal_completion`, `mcts_graph_invariants_hold_in_random_searches` (the brute-force reference; ply split), `mcts_tree_form_keeps_the_turn_structure_and_prunes_dead_ends_unscored`, `mcts_tree_form_evaluates_exactly_where_a_gate_fires`, `mcts_flat_a_stopped_generator_is_never_proven_lost` (one root). Audit: `mcts_tree_form_dead_ends_have_no_legal_completion_in_random_searches` (both Q4 readings, the reference: 1,451 dead ends checked) and `mcts_flat_form_no_node_with_turns_still_to_generate_is_proven_lost` (every node of 78 flat searches) | green with the audit's tests |
+| The provers fully untrained, on the material estimate | by construction: the prover, Guard and Hunt take no evaluator; their only static input is `ProverOptions::values` (H50). `test_assets.cpp`, the ladder's asset-map test, `test_steering.py::test_the_ladder_is_on_by_default_and_its_proofs_withheld` | green (no test asserts it directly; none is needed while they take no evaluator) |
+
+### REG-C: committed-class rows neither decided nor awaiting a named trained ablation
+
+The register's class-C rows on main are A1, A2, A5-A8, B1-B8, B10, B15-B17, C1-C3, C5, C7,
+C16-C20, C23, C25, C26, D1-D4, D8, D9, F1, F2, F5, F6, I1 and M16. C27 is class R. Each was
+read against section 15.5's last clause.
+
+**Decided** - Committed, Superseded or killed provisionally with a named re-check:
+- A1, A2, A6, A7, B1, B2, B4, B6 (superseded by B15), B8, C1, C17, C19, C23, D1, D3, D4, D8,
+  F5, F6, I1 and M16;
+- C20 (both readings built; 6c decides between them);
+- B16 and C26 (Committed with, or if, C2 adopts the cache);
+- F1 (its FFN ratio goes to ablation 5);
+- C5 and C7 (killed provisionally; the pilot run re-checks them, M18).
+
+**Awaiting a named trained ablation:**
+
+| Row | Awaits | Arm built? |
+|---|---|---|
+| A5 | Ablation 1 (the joint test with the window: the pilot run) | `lane/net`, not merged |
+| A8 | 6p | yes, behind its flag |
+| B5 | ablation 2 | yes |
+| B7 | ablation 2's head-allocation evidence | a config value, no code |
+| B10 | 6a | yes |
+| B15 | ablation 2 | the no-table arm: yes |
+| B17 | ablation 2 | yes |
+| C2 | 6c, and the pilot run's game sizes (M18) | yes, for section 15.2 and 15.3 |
+| C3 | 6c | yes |
+| C16 | ablation 8 - only if the dense engine is node-starved | **no** |
+| D2 | 6x, with 6g and 6k | every arm |
+| D9 | 6t | yes |
+| F2 | ablation 5 | a config ladder |
+
+**Neither (for the user's sign-off; issue 538):**
+- **B3**, factorised (axial) attention. "Contingency only - three named triggers", gate
+  "-". Section 3.3 has three triggers, all three to hold:
+  1. the window measurement comes back badly. It has arguably fired: the window was killed
+     provisionally, M16.
+  2. the causal constraint costs Elo even with the refresh. That is 6c, a trained ablation.
+  3. 337 evaluations/s is too slow. That is a GPU figure (M19).
+
+  So B3 waits on 6c and a GPU rate, but its gate column names neither. Settled by naming them
+  as its gate ("6c, with the GPU evaluation rate"), or by wording it as decided ("refused for
+  v1, reopened only by section 3.3's triggers").
+- **C18**, the local/global layer interleave. "Held open", gate "6a arm". Held open means not
+  scheduled and not built, so there is no arm for 6a to run. Settled by Prototype status (the
+  arm built behind its flag) or by "not a v1 option" (decided).
+- **C25**, complexity-adaptive dense top layers. "Held open", gate 6c, and it "builds on the
+  deferred hybrid" (C16). The same.
+
+**Questions beside the list:**
+- **C16** awaits ablation 8, conditionally ("last, only if the dense engine is node-starved"),
+  and its arm (the 14+2 hybrid) is not built. Section 15.1 builds committed-class
+  alternatives behind flags. Must C16's arm be built before section 15.5, or does its
+  condition defer the arm with the ablation?
+- **D2**'s status, "Undecided", is not in the register's vocabulary (the main loop's edit
+  206).
+
+**The committed-class placeholders** - as-built values that no ruling and no named ablation
+covers, inside rows otherwise decided or awaiting:
+- A6: the counts' encoding (issue 230);
+- A7: the readings of issues 226, 227, 229 and 303-304;
+- A8: the FFN after the embedding - 45x its section 15.3 estimate (issue 240);
+- B15: the far bins, the line classes, the register entries and the initialisation (205-208);
+- B16: its bins, sharing and initialisation (213-216);
+- B17: its class set, query and scale, initialisation (217-220);
+- D1: the promotion offset (222);
+- D3: the shared hidden layer, the short-term horizons, the error target and HL-Gauss sigma (231);
+- D4: the soft head, the reply map's readings, moves-left inside a turn, the aux pooling and
+  the per-square labels (223, 224, 232, 175, 176);
+- D8: the submit readout (109);
+- D9: z (233);
+- D2: the tree form's gates and inheritance (157-162), the flat form's generator, prior and
+  head (163-171, 241-243), and the tree form under MCGS (301);
+- F5: as built (200-202);
+- F6: the activations outside its words (221).
+
+These go to the user by reference, with the main loop's issues 300-306 and the step-1 issues
+on "Put to the user, none blocking" (in "Current state"). They are step 2's "committed-class
+placeholders consolidated for the user".
+
+### Section 15.5, clause by clause
+
+1. **"An engine that plays legal 5D chess end to end with random weights"** - met by the
+   engine's own replay; partly certified by the oracles.
+   - Evidence:
+     - `test_selfplay.cpp::selfplay_games_are_legal_end_to_end_under_both_splits`: 12 games,
+       the ply split, the flat form and the tree form, from Standard, Two Timelines, Very
+       Small - Open and Tactician. Each record is replayed by the engine's reader, strictly.
+     - `test_netplay.py::test_a_game_replays_legal`: the network with random weights, self
+       and match play, the ply split, the flat form and the tree form. Every record is
+       replayed through `t5d-gate`.
+     - N5's 20 games (CHANGELOG).
+     - The gate has the engine configured (`oracles/gate.toml`), with the commit and nightly
+       tiers green on their last runs.
+   - What remains:
+     - **The release tier with the engine configured** has not run. It comes after H48's
+       re-recording and Kairos's parse mode, both in the quiet-machine block. The sign-off
+       run leaves Kairos out; Kairos's full mode and triage come after it (CHECKPOINT 10).
+     - Nightly gates two rulesets, Standard - Half Reflected and Standard - Reversed Royalty
+       (issues 122 and 131). Standard and the other variants are compared but ungated: a
+       record the engine declines with a notation citation, or one oracle behind a record.
+       Under CHECKPOINT 10's ruling on issue 526, ftxi and Kairos are one lineage, counted
+       once per answer. Kairos can therefore vouch for the lineage where ftxi's answer is a
+       recorded divergence, and never as a second vouch beside ftxi. A ruleset Kairos answers
+       and ftxi does not is reported before its full mode.
+     - E11, time management, and E8 behind its flag (`lane/search`) are section 15.1 Phase 2
+       items, not legality.
+2. **"Every equivalence test green"** - 14 of 19 rows green; 2 deferred, 1 void, 2 waiting
+   (above).
+   - What remains:
+     - the C26 and C27 rows (low priority, `lane/net`) - unless the user rules, on issue 536,
+       that they wait with C2's adoption;
+     - step 2's re-run of every row on the finished v1 network, with the bounds re-measured;
+     - section 15.4's missing clauses, MT-01 to MT-03, merged from `lane/engine`;
+     - issue 535's fix.
+   - Section 15.5 does not name section 15.4. The brief and this audit read it as required
+     (issue 537).
+3. **"Every cost figure measured and written back over its estimate - CPU-labelled where it
+   needs a GPU the build does not have, and named as deferred (section 15.3)"** - not met.
+   Of section 15.3's 18 rows:
+   - **measured on the CPU** (3): movegen (passes M9 on two cores, a quiet run); legality
+     classification (profiled on a shared machine - "not a verdict", MEASUREMENTS); prover
+     nodes/s (the scanner's 787k and 566k, df-pn's 239k);
+   - **counted, CPU wall time pending** (5): dense per evaluation, cached per node, live-set
+     recompute and supersession recompute (N3, counted on the network before M20's register
+     positions - re-count pending), and KV memory per state (exact; under A7 two entries per
+     root frozen board);
+   - **analytic or not measured** (2): root refresh overhead (analytic only); one refresh
+     (its full-history figure not measured);
+   - **to measure** (3): FFN 2x and 4x; displacement bias and normalisation (its baseline
+     unsettled, COST-03); the key-side Shaw term (counted in `test_shaw.py`'s docstring - 0.51
+     at 44 boards, 0.094 at 240 - but not in MEASUREMENTS);
+   - **counted, timed on a loaded machine** (1): A8 (MEASUREMENTS; flagged 45x, issue 240);
+   - **GPU-deferred** (1): leaf batching, plus the evaluations/s halves of the dense and
+     cached rows (M19);
+   - **void or deferred** (3): windowed throughput and the window's halves of three rows
+     (M18); the local/global interleave (C18 held open); the NNUE eval (retired).
+   - What remains, **the quiet-machine block**, alone on the machine, one job at a time:
+     - N3's wall timings with `cache_bench` (240, then 600 in FP32 and BF16; about 3 hours),
+       after a re-count on the v1 network;
+     - FFN 2x and 4x;
+     - the displacement-bias, Shaw, layout-embedding and normalisation overheads;
+     - legality throughput: the legality profile re-run quiet - its table was taken on a
+       shared machine - after the engine lane's issue 406 (exact legality cost);
+     - Guard's and Hunt's nodes/s (6b″ gave nodes per root, not nodes/s);
+     - the F1 CPU evaluation rate that section 15.6 cites (6.9/s, only in CHANGELOG's N5
+       entry);
+     - H48's re-recording and Kairos's parse mode (issue 530) - never beside a timing;
+     - then the release tier, without Kairos (CHECKPOINT 10).
+   - After the block: MEASUREMENTS' section 15.3 summary table is rebuilt (it predates
+     CHECKPOINTS 6-9: it has no legality, FFN, bias, Shaw or prover rows; its scanner
+     1,036,000/s and movegen lines are stale; the NNUE and interleave rows are unlabelled),
+     and the write-backs (M4) are proposed (the main loop).
+4. **"Each committed-class row in the register either decided or explicitly awaiting a named
+   trained ablation"** - not met for B3, C18 and C25 (above; issue 538). C16's arm, and the
+   placeholders, also go to the user.
+
+### The audit's tests
+
+- `engine/tests/test_zobrist.cpp::zobrist_incremental_equals_from_scratch_on_every_named_variant_under_every_ruleset`
+  (H18, row 9).
+- `engine/tests/test_mcts.cpp`:
+  - `mcts_virtual_loss_is_released_by_delivery_and_abandon_in_every_configuration` - section
+    15.4, every `kConfig` x 2 roots;
+  - `mcts_flat_form_no_node_with_turns_still_to_generate_is_proven_lost` - section 15.4's
+    flat-form clause at every node (issue 170);
+  - `mcts_tree_form_dead_ends_have_no_legal_completion_in_random_searches` - section 15.4's
+    tree form against the brute-force reference, both Q4 readings.
+- `engine/tests/test_mcts_tree.cpp::mcts_tree_form_with_every_gate_firing_equals_the_ply_split_under_q4s_guide_literal_reading`
+  (D2, row 17).
+- `python/tests/net/test_fork_protocol.py::test_refresh_fork_leaves_siblings_unchanged_under_the_protocol`
+  (C3a, row 5).
+- `python/tests/engine/test_protocol_every_variant.py`:
+  `test_turn_state_counts_equal_a_recount_on_every_variant` (A6, row 19) and
+  `test_reply_map_holds_on_random_play_from_every_variant` (D4, row 16).
+- Not committed: the flat form under allocation failure (issue 535). It segfaults.
+
+### Work items, by lane
+
+- **Engine** (`lane/engine`):
+  - merge MT-01, MT-03 and MT-02's engine side. The branch predates E10's merge: MT-03's note,
+    and its issue 402, say no settling-scan wrapper is on main - out of date since E10 (the
+    ladder's settling path, `engine/src/ladder.cpp`);
+  - fix issue 535 (the flat form's turn generator under allocation failure), then add its
+    test - the existing allocation-failure test with `TurnSplit::Flat` in a tree and a graph;
+  - issue 406 (exact legality cost) before the quiet legality profile;
+  - optional: the constructed solver positions under the tree form on main (MT-01 brings
+    them).
+- **Net** (`lane/net`):
+  - A5's review and merge;
+  - C26 and C27 with their section 15.2 rows (low priority);
+  - step 2's re-run of every row on the finished v1 network: re-measure the FP32, BF16 and
+    FP8 bounds (rows 1 and 11), BF16 and FP8 on the adversarial geometries, and more seeds
+    for the every-switch sets;
+  - optional: D4's constructed travel turns (row 16).
+- **Search** (`lane/search`): E11 and E8; then MT-03's settling-scan part, through the
+  ladder (main has only `ladder_settling_proofs_survive_tt_churn_6f`: a 16-entry TT, one
+  position).
+- **Gate** (`lane/gate`):
+  - CHECKPOINT 10's lineage counting;
+  - in the quiet-machine block, Kairos's parse mode and H48's re-recording;
+  - then the release tier with the engine configured - the sign-off run, without Kairos;
+  - Kairos's full mode and triage after it;
+  - MT-02's harness side, when the user allows engine-generated records into the corpus.
+- **Main loop**:
+  - the quiet-machine block's timings;
+  - MEASUREMENTS' section 15.3 table rebuilt;
+  - the write-backs (M4);
+  - issues 536-538 and the placeholders to the user, with 300-306;
+  - the F1 CPU rate (6.9 evaluations/s) recorded in MEASUREMENTS with its conditions.
+
 ## Spec issues (wrong, ambiguous, contradictory, silent)
 
 Each: where, the evidence, what was done (never an improvised committed-class
@@ -5436,6 +5906,47 @@ superseded or made moot says so; nothing is deleted.
         graph. The audit did not commit it, because it crashes.
     - Until then, section 15.4's consistency under failure holds for the ply split and the
       tree form only. Nothing is parked on it.
+536. **Section 15.5's "every equivalence test green" against the rows section 15.2 itself
+    defers, voids or conditions.** (Section 15.5, section 15.2; register C5, C10, F4, C2,
+    C26, C27.)
+    - Section 15.5 allows "named as deferred" for cost figures only. Section 15.2 marks
+      C5's and C10's rows "deferred with the window", and strikes F4's (the NNUE, retired at
+      CHECKPOINT 9).
+    - C26 and C27 are "Committed (if C2 adopts the cache)", and C2 is deferred to 6c and the
+      pilot run (M18). The user's CHECKPOINT 9 brief makes them low priority, after each
+      lane's current order.
+    - **The audit's reading:** a deferred or void row is satisfied by being named so.
+    - **For the user, on C26 and C27:** (a) their rows are required before section 15.5
+      (the plan builds them, behind the cached flag), or (b) they wait with C2: required
+      only if C2 adopts the cache. Until ruled, the plan's (a) stands.
+    - Proposed edit 364.
+537. **Section 15.5 does not name section 15.4.** (Section 15.5, section 15.1's Phase 3 row,
+    section 15.4; register H41, H17, H23.)
+    - "Done means" names the equivalence suite (section 15.2) and the cost figures (section
+      15.3); so does Phase 3's row.
+    - Section 15.4's invariants are not named. They include the solver's cross-checks against
+      df-pn and the oracles' mate verdicts (H41) and the proof-export invariant under TT
+      churn (6f).
+    - The step-2 brief, and this audit, read section 15.4 as required: its cross-checks are
+      the proof channel's evidence (H23, H41), and the sign-off follows section 15.5.
+    - Wording only. Proposed edit 365.
+538. **Three committed-class rows are neither decided nor awaiting a named trained ablation:
+    B3, C18 and C25.** (Section 15.5's last clause; register B3, C18, C25, C16; "Done-means
+    audit", REG-C.)
+    - **B3**, factorised (axial) attention: "Contingency only - three named triggers", gate
+      "-". Its triggers (section 3.3) are the window measurement, which has arguably fired
+      (M16); 6c, a trained ablation; and the GPU evaluation rate.
+    - **C18**, the local/global layer interleave: "Held open", gate "6a arm".
+    - **C25**, complexity-adaptive dense top layers: "Held open", gate 6c. It builds on the
+      deferred hybrid, C16.
+    - "Held open" means not scheduled and not built, so there is no arm for the named
+      ablation to run.
+    - **C16** names ablation 8, but conditionally ("last, only if the dense engine is
+      node-starved"), and its 14+2 arm is not built. Section 15.1 builds committed-class
+      alternatives behind flags.
+    - **For the user:** for each row, a gate or a decided wording; and whether C16's arm is
+      built before section 15.5. Nothing is built meanwhile (M5).
+    - Proposed edit 366.
 
 ## Proposed spec edits
 
@@ -6834,6 +7345,31 @@ struck through, where nothing of it is left to apply); the others stand as writt
     and the same sentence in `AGENTS.md`'s boundary section, which today forbids it
     (the user's file). Why: issue 532 - as written, the opponent role and the boundary
     rules cannot both hold.
+364. **Section 15.5's equivalence clause** (issue 536):
+    - Now: "every equivalence test green".
+    - Proposed: "every equivalence test green - a row section 15.2 defers with the window, or
+      voids with a retired component, named as such". Per the user's ruling on issue 536,
+      add: "and C26's and C27's rows built behind the cached configuration" (a), or "and
+      C26's and C27's rows waiting with C2's adoption" (b).
+    - Why: as written, the clause has no room for the rows section 15.2 itself defers (C5,
+      C10) or strikes (F4), and is silent on rows committed only if C2 adopts the cache.
+365. **Section 15.5 and section 15.1's Phase 3 row** (issue 537):
+    - Now: section 15.5 names section 15.2 and section 15.3. Phase 3: "Equivalence suite
+      green (§15.2); every cost figure measured and written back (§15.3)".
+    - Proposed: add "section 15.4's invariants holding" to both. For example, section 15.5:
+      "every equivalence test green and every section 15.4 invariant holding".
+    - Why: the solver's cross-checks (H41) and 6f's TT churn are section 15.4's, and the
+      proof channel's sign-off (H23) reads them.
+366. **Register B3, C18, C25 and C16** (issue 538), one of each pair per the user's ruling:
+    - **B3**, gate "-": name its gate - "6c, with the GPU evaluation rate (section 3.3's
+      triggers 2 and 3)" - or word it as decided: "Refused for v1 - reopened only by section
+      3.3's three triggers".
+    - **C18**, "Held open", gate "6a arm": "Prototype - built behind a flag for 6a", or "Not a
+      v1 option - reopened by 6a's evidence".
+    - **C25**, "Held open", gate 6c: the same choice, with 6c.
+    - **C16**: whether its arm is built before section 15.5.
+    - Why: section 15.5's last clause - each committed-class row "either decided or
+      explicitly awaiting a named trained ablation".
 
 ## Session log
 
