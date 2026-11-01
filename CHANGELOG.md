@@ -10,6 +10,24 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-01 - CHECKPOINT 10 taken in: the build log's plan for the lineage ruling and Kairos's new order
+
+`docs/BUILD_LOG.md` gains a "CHECKPOINT 10" section with the user's ruling on issue 526 and
+what the build does with each point: the two-oracle bar counted by lineage (a lineage vouches
+at most once per answer, through any member that agrees and is not a recorded divergence),
+built in the gate lane for every oracle, with each oracle's lineage read from its NOTICE,
+credits and pinned code and recorded in PROVENANCE.md; Kairos's parse mode kept in the
+quiet-machine block, its full mode and triage moved after the release tier, whose sign-off
+run leaves it out; the report the ruling asks for; Kairos's mate comparisons the first to drop
+if nightly time binds. Issues 526 (ruled), 527 (the driver ruled right), 531 (after the
+enabling) and 532 (the match runner in the test harness; the AGENTS.md sentence the user's)
+annotated; the waiting list, "Current state", step 2's order and the H23, H26, H34, H47 and H52
+rows brought in line; CHECKPOINT 9's interim "one implementation" reading marked superseded.
+No code changed.
+
+Spec: none edited here. The ruling as written upstream (b5a33e4) - §11.0, §12.6; register
+H23, H26, H34, H47, H52, reversal 33 - is the plan's; nothing is proposed.
+
 ### 2026-11-01 - Design documents: the CHECKPOINT 10 ruling, from upstream - ftxi and Kairos one lineage for the two-oracle bar
 
 The copies maintained upstream, committed unedited. The user's ruling on spec issue 526:
