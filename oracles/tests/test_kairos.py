@@ -122,6 +122,39 @@ class DriverOutputTests(unittest.TestCase):
         self.assertEqual((observation.status, observation.reason, observation.positions), ("unsupported", "parse_failed", []))
 
 
+def _code_lines(text: str) -> str:
+    """Rust source with its line comments taken out, so that what it says about a call is not taken for the call."""
+    return "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("//"))
+
+
+class NoVerdictFromAnExhaustedBudgetTests(unittest.TestCase):
+    """A mate verdict is a proof (H37): neither Kairos source may give one from a search that ran out of budget."""
+
+    def test_the_driver_calls_nothing_budgeted(self):
+        code = _code_lines((paths.DRIVERS / "kairos" / "src" / "main.rs").read_text(encoding="utf-8"))
+        # The hypercuboid source's verdict: Kairos's own mate test, which no budget reaches.
+        self.assertIn("state.get_mate_type()", code)
+        # The exhaustive source: an unbounded node budget, so it stops only at the cap or at the end.
+        self.assertIn("naive_actions_budget(state, options.cap, u64::MAX)", code)
+        for budgeted in ("interrupt_on", "has_legal_action", "status_of", "STATUS_BUDGET", "Instant::now() +"):
+            self.assertNotIn(budgeted, code, budgeted)
+        # The naive verdict needs a complete enumeration that found nothing.
+        self.assertRegex(code, r"\(0, true\) => \"checkmate\"")
+        self.assertRegex(code, r"\(0, false\) => \"stalemate\"")
+
+    def test_the_pinned_mate_test_cannot_be_interrupted(self):
+        pin = lockfile.load().pin("kairos")
+        from oracle_harness import gitutil
+
+        if not gitutil.is_checkout(pin.checkout) or not gitutil.has_commit(pin.checkout, pin.commit):
+            self.skipTest("the kairos submodule is not checked out (python oracles/harness.py sync)")
+        source = gitutil.read_path(pin.checkout, pin.commit, "src/core/state.rs").decode("utf-8")
+        self.assertIn("pub fn get_mate_type(&self) -> MateType {\n        self.get_mate_type_impl(false)", source)
+        start = source.index("fn get_mate_type_impl(")
+        body = source[start:source.index("\n    }\n", start)]
+        self.assertIn("interrupt_off()", body)
+
+
 def _kairos_built() -> bool:
     pin = lockfile.load().pin("kairos")
     return build.load(pin) is not None
@@ -176,6 +209,29 @@ class LiveDriverTests(unittest.TestCase):
             self.assertEqual((observation.status, observation.reason, observation.actions_accepted),
                              ("rejected", "cannot_submit", recorded.actions_accepted))
             self.assertEqual(len(observation.positions), recorded.actions_accepted + 1)
+
+    def test_an_exhaustive_search_that_finds_no_action_gives_the_verdict_ftxi_recorded(self):
+        recorded = golden.load("ftxi").observations
+        for record_id in ("local/checkmate", "local/stalemate", "local/stalemate-with-a-past"):
+            expected = recorded[record_id].positions[-1].terminal
+            self.assertIn(expected, ("checkmate", "stalemate"), record_id)
+            for source in PENDING_SOURCES:
+                observation = self.observe(source, record_id)
+                self.assertEqual(observation.status, "ok", (source, record_id))
+                self.assertEqual(observation.positions[-1].terminal, expected, (source, record_id))
+
+    def test_a_run_cut_at_its_deadline_gives_no_verdict_where_it_was_cut(self):
+        # Each record ends in a position ftxi records as checkmate; cut long before, neither search may claim it, and
+        # the position it was searching when the deadline came is reported without answers (the protocol's horizon).
+        for source, record_id, budget in (("kairos:naive", "cwmtt/wide", 3.0), ("kairos", "cwmtt/100_timelines", 2.0)):
+            record = self.records[record_id]
+            observation = make_source(source, self.lock).observe(record_id, corpus.feed(record, self.lock).data,
+                                                                 RunOptions(cap=1000, timeout_s=budget))
+            self.assertEqual(observation.status, "timeout", (source, record_id))
+            self.assertFalse(any(p.terminal in ("checkmate", "stalemate") for p in observation.positions),
+                             (source, record_id))
+            last = observation.positions[-1]
+            self.assertEqual((last.terminal, last.in_check, last.legal_actions), (None, None, None), (source, record_id))
 
     def test_the_actions_diagnostic_lists_the_exhaustive_count(self):
         record = self.records["cwmtt/standard"]

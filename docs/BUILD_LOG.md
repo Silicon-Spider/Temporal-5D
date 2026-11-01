@@ -5363,6 +5363,31 @@ superseded or made moot says so; nothing is deleted.
     yet enabled. **For the user**, at the enabling: CLAUDE.md's two sentences (and
     AGENTS.md, if it should name the count).
 
+570. **The brief's Kairos questions, each answered plainly at the pin** (CHECKPOINT 9's
+    brief, received 2026-11-01; §11.0 "Kairos, the fourth oracle"; register H52, H37).
+    `PROVENANCE.md` ("Kairos, the fourth oracle") now opens with the brief's list, each
+    item answered in a sentence before the detail: a perft node is an action (non-branching
+    moves as a set, branching moves in creation order), counted by its hypercuboid perft
+    without the actions that waste a move and by its exhaustive enumerator in full - seen
+    on their own lists at cwmtt/JustKings position 3 (27 actions, 25 sets, cwmtt's list
+    exactly; the hypercuboid search 25 actions, 23 sets); check from `has_phantom_check`,
+    mate and stalemate from `get_mate_type`; **the brief's route ("through its JSON command
+    interface or 5DUCI") is not available at the pin** - the JSON interface is a library API
+    of its web build, 5DUCI a playing protocol with no verdict - so the driver links the crate
+    (issue 527); **no mate verdict from an exhausted budget, from either source** -
+    `get_mate_type` runs uninterruptibly to the end (`interrupt_off()`), the exhaustive
+    source gives a verdict only when its unbounded enumeration completes with no action, and
+    a run cut at the deadline answers nothing where it was cut; the state export is 5DFEN
+    (`get_boards`), fingerprinted, so no fallback to board and piece counts; its 44 named
+    variants listed, and which of the corpus's it reads; its licence at the pin GPL-3.0, with
+    parts derived from ftxi under BSD-2 (NOTICE) - not the brief's stop. The budget answer is
+    now tested (`oracles/tests/test_kairos.py`): the driver calls nothing budgeted and passes
+    the exhaustive search an unbounded node budget; the pinned `get_mate_type_impl` switches
+    interruption off; both sources give ftxi's recorded verdict on the corpus's checkmate and
+    two stalemates; runs cut at 2-3 s on records ending in mate give no verdict, and the
+    position being searched when cut has no answers. Edit 362 covers the spec's route
+    sentence. Not put to the user.
+
 ## Proposed spec edits
 
 Edits the spec or the register needs, for applying upstream. Each: where, what it
