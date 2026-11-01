@@ -231,8 +231,11 @@ the rest of the machine.
 ## The proof channel
 
 The gate has three tiers: `commit` (ftxi, on every push - a smoke test that gates
-no ruleset, H47), `nightly` (all three oracles), and `release` (all three, and it
+no ruleset, H47), `nightly` (all three rules oracles), and `release` (all three, and it
 fails unless an engine was compared and came through at least one named variant).
+A fourth rules oracle, Kairos (H52), is pinned, built and wired, but listed in no tier
+until its answers are recorded on a quiet machine (`oracles/README.md`, "Kairos, wired
+and not yet enabled"); enabling it adds it to `nightly` and `release`.
 Only a complete run of a tier that
 requires an engine and runs every oracle over the whole corpus - with every oracle
 search reproducing 100% of that tier's required set of recorded answers, a set

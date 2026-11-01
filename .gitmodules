@@ -10,3 +10,6 @@
 [submodule "corpus-notation"]
 	path = oracles/third_party/notation
 	url = https://github.com/adri326/5dchess-notation
+[submodule "oracle-kairos"]
+	path = oracles/third_party/kairos
+	url = https://github.com/FirePlank/5d-chess-engine
