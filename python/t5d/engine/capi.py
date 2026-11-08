@@ -333,6 +333,9 @@ T5D_ALLOCATOR_INTEGRAL, T5D_ALLOCATOR_FLAT_EVALS, T5D_ALLOCATOR_FLAT_WALL_CLOCK 
 T5D_TIME_STOP_NONE, T5D_TIME_STOP_SOFT_BUDGET, T5D_TIME_STOP_SMART_PRUNING, T5D_TIME_STOP_KLD_GAIN = 0, 1, 2, 3
 T5D_TIME_STOP_SOLVED, T5D_TIME_STOP_HARD_BOUND, T5D_TIME_STOP_SEARCH = 4, 5, 6
 T5D_EXTEND_OVERLAP, T5D_EXTEND_VOLATILITY, T5D_EXTEND_DISAGREEMENT, T5D_EXTEND_FALL, T5D_EXTEND_INSTABILITY = 1, 2, 4, 8, 16
+# E8 (a prototype, off): won't-resolve's readings; D4's effort head's bins.
+T5D_WONT_RESOLVE_HARD_BOUND, T5D_WONT_RESOLVE_CAP_AT_PLAN = 0, 1
+T5D_EFFORT_BINS = 16
 #: Stage E10: a steering boost's rule, and what counts as a steered root visit (I2).
 T5D_BOOST_ADDITIVE, T5D_BOOST_MULTIPLICATIVE = 0, 1
 T5D_STEERED_COUNTERFACTUAL, T5D_STEERED_BOOSTED_CHILD = 0, 1
@@ -654,13 +657,29 @@ class CTimeParams(ctypes.Structure):
         ("instability_window", c_double),
         ("instability_min_visits", c_uint32),
         ("extend_instability", c_double),
+        # E8 (a prototype, off): difficulty-weighted allocation
+        ("difficulty_weighting", c_int32),
+        ("effort_quantile", c_double),
+        ("wont_resolve_mass", c_double),
+        ("wont_resolve_policy", c_int32),
+        ("difficulty_floor_evaluations", c_double),
+        ("difficulty_min_factor", c_double),
+        ("difficulty_max_factor", c_double),
+        ("difficulty_reference_visits", c_double),
+        ("difficulty_reference_weight", c_double),
     ]
 
 
 class CTimeContext(ctypes.Structure):
     """``t5d_time_context``: one decision's clock."""
 
-    _fields_ = [("remaining_seconds", c_double), ("increment_seconds", c_double), ("moves_left_turns", c_double)]
+    _fields_ = [
+        ("remaining_seconds", c_double),
+        ("increment_seconds", c_double),
+        ("moves_left_turns", c_double),
+        ("effort", POINTER(c_float)),  # E8: T5D_EFFORT_BINS probabilities, or NULL with count 0
+        ("effort_count", c_size_t),
+    ]
 
 
 class CTimePlan(ctypes.Structure):
@@ -679,6 +698,13 @@ class CTimePlan(ctypes.Structure):
         ("soft_evaluations", c_double),
         ("soft_seconds", c_double),
         ("hard_seconds", c_double),
+        ("e7_soft_evaluations", c_double),
+        ("difficulty_applied", c_int32),
+        ("effort_bin", c_int32),
+        ("censored_mass", c_double),
+        ("wont_resolve", c_int32),
+        ("difficulty_factor", c_double),
+        ("reference_bin", c_double),
     ]
 
 

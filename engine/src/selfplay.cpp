@@ -131,7 +131,9 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
   };
   const auto out_of_time = [&] { return params.max_seconds > 0 && elapsed() >= params.max_seconds; };
   // E11: each side's clock and time manager.
-  std::array<TimeManager, 2> tms{TimeManager(mc.time), TimeManager(mc.time)};
+  // (Made from the clock's parameters only when it is on: off, they are not read.)
+  const TimeParams tp = mc.enabled ? mc.time : TimeParams{};
+  std::array<TimeManager, 2> tms{TimeManager(tp), TimeManager(tp)};
   if (mc.enabled) g.clock_remaining = {mc.base_seconds, mc.base_seconds};
   WallClock wall;
   Clock* const clock = mc.model_clock ? nullptr : &wall;

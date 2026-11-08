@@ -66,6 +66,9 @@ static_assert(t5d::mcts::kExtendVolatility == T5D_EXTEND_VOLATILITY);
 static_assert(t5d::mcts::kExtendDisagreement == T5D_EXTEND_DISAGREEMENT);
 static_assert(t5d::mcts::kExtendFall == T5D_EXTEND_FALL);
 static_assert(t5d::mcts::kExtendInstability == T5D_EXTEND_INSTABILITY);
+static_assert(static_cast<int>(t5d::mcts::WontResolve::HardBound) == T5D_WONT_RESOLVE_HARD_BOUND);
+static_assert(static_cast<int>(t5d::mcts::WontResolve::CapAtPlan) == T5D_WONT_RESOLVE_CAP_AT_PLAN);
+static_assert(t5d::mcts::kEffortBins == T5D_EFFORT_BINS);
 
 struct t5d_search {
   explicit t5d_search(t5d::mcts::Search s) : search(std::move(s)) {}
@@ -670,10 +673,21 @@ constexpr LayoutEntry kLayout[] = {
     T5D_SEARCH_AT(t5d_time_params, instability_window),
     T5D_SEARCH_AT(t5d_time_params, instability_min_visits),
     T5D_SEARCH_AT(t5d_time_params, extend_instability),
+    T5D_SEARCH_AT(t5d_time_params, difficulty_weighting),
+    T5D_SEARCH_AT(t5d_time_params, effort_quantile),
+    T5D_SEARCH_AT(t5d_time_params, wont_resolve_mass),
+    T5D_SEARCH_AT(t5d_time_params, wont_resolve_policy),
+    T5D_SEARCH_AT(t5d_time_params, difficulty_floor_evaluations),
+    T5D_SEARCH_AT(t5d_time_params, difficulty_min_factor),
+    T5D_SEARCH_AT(t5d_time_params, difficulty_max_factor),
+    T5D_SEARCH_AT(t5d_time_params, difficulty_reference_visits),
+    T5D_SEARCH_AT(t5d_time_params, difficulty_reference_weight),
     T5D_SEARCH_SIZE(t5d_time_context),
     T5D_SEARCH_AT(t5d_time_context, remaining_seconds),
     T5D_SEARCH_AT(t5d_time_context, increment_seconds),
     T5D_SEARCH_AT(t5d_time_context, moves_left_turns),
+    T5D_SEARCH_AT(t5d_time_context, effort),
+    T5D_SEARCH_AT(t5d_time_context, effort_count),
     T5D_SEARCH_SIZE(t5d_time_plan),
     T5D_SEARCH_AT(t5d_time_plan, boards),
     T5D_SEARCH_AT(t5d_time_plan, moves_left_given),
@@ -687,6 +701,13 @@ constexpr LayoutEntry kLayout[] = {
     T5D_SEARCH_AT(t5d_time_plan, soft_evaluations),
     T5D_SEARCH_AT(t5d_time_plan, soft_seconds),
     T5D_SEARCH_AT(t5d_time_plan, hard_seconds),
+    T5D_SEARCH_AT(t5d_time_plan, e7_soft_evaluations),
+    T5D_SEARCH_AT(t5d_time_plan, difficulty_applied),
+    T5D_SEARCH_AT(t5d_time_plan, effort_bin),
+    T5D_SEARCH_AT(t5d_time_plan, censored_mass),
+    T5D_SEARCH_AT(t5d_time_plan, wont_resolve),
+    T5D_SEARCH_AT(t5d_time_plan, difficulty_factor),
+    T5D_SEARCH_AT(t5d_time_plan, reference_bin),
     T5D_SEARCH_SIZE(t5d_time_verdict),
     T5D_SEARCH_AT(t5d_time_verdict, stop),
     T5D_SEARCH_AT(t5d_time_verdict, extensions),
@@ -767,6 +788,19 @@ t5d::mcts::TimeParams time_params_from(const t5d_time_params* c) {
   p.instability_window = c->instability_window;
   p.instability_min_visits = c->instability_min_visits;
   p.extend_instability = c->extend_instability;
+  p.difficulty_weighting = boolean(c->difficulty_weighting, "difficulty_weighting");
+  p.effort_quantile = c->effort_quantile;
+  p.wont_resolve_mass = c->wont_resolve_mass;
+  switch (c->wont_resolve_policy) {
+    case T5D_WONT_RESOLVE_HARD_BOUND: p.wont_resolve_policy = t5d::mcts::WontResolve::HardBound; break;
+    case T5D_WONT_RESOLVE_CAP_AT_PLAN: p.wont_resolve_policy = t5d::mcts::WontResolve::CapAtPlan; break;
+    default: throw std::invalid_argument("wont_resolve_policy must be T5D_WONT_RESOLVE_HARD_BOUND or _CAP_AT_PLAN");
+  }
+  p.difficulty_floor_evaluations = c->difficulty_floor_evaluations;
+  p.difficulty_min_factor = c->difficulty_min_factor;
+  p.difficulty_max_factor = c->difficulty_max_factor;
+  p.difficulty_reference_visits = c->difficulty_reference_visits;
+  p.difficulty_reference_weight = c->difficulty_reference_weight;
   t5d::mcts::validate(p);
   return p;
 }
@@ -777,6 +811,17 @@ t5d::mcts::TimeContext time_context_from(const t5d_time_context* c) {
   ctx.remaining_seconds = c->remaining_seconds;
   ctx.increment_seconds = c->increment_seconds;
   ctx.moves_left_turns = c->moves_left_turns;
+  if (c->effort_count != 0) {
+    // E8's input: the root's effort distribution, the head's bins exactly.
+    if (c->effort == nullptr || c->effort_count != T5D_EFFORT_BINS) {
+      throw std::invalid_argument("effort: T5D_EFFORT_BINS (16) probabilities, or NULL with count 0");
+    }
+    std::array<float, t5d::mcts::kEffortBins> e{};
+    std::copy(c->effort, c->effort + t5d::mcts::kEffortBins, e.begin());
+    ctx.effort = e;
+  } else if (c->effort != nullptr) {
+    throw std::invalid_argument("effort given with effort_count 0");
+  }
   return ctx;
 }
 
@@ -795,6 +840,13 @@ void plan_out(const t5d::mcts::TimePlan& p, t5d_time_plan* out) {
   out->soft_evaluations = p.soft_evaluations;
   out->soft_seconds = p.soft_seconds;
   out->hard_seconds = p.hard_seconds;
+  out->e7_soft_evaluations = p.e7_soft_evaluations;
+  out->difficulty_applied = flag(p.difficulty_applied);
+  out->effort_bin = p.effort_bin;
+  out->censored_mass = p.censored_mass;
+  out->wont_resolve = flag(p.wont_resolve);
+  out->difficulty_factor = p.difficulty_factor;
+  out->reference_bin = p.reference_bin;
 }
 
 void verdict_out(const t5d::mcts::TimeVerdict& v, double scale, t5d_time_verdict* out) {
@@ -861,6 +913,15 @@ void t5d_time_params_default(t5d_time_params* out) {
   out->instability_window = p.instability_window;
   out->instability_min_visits = p.instability_min_visits;
   out->extend_instability = p.extend_instability;
+  out->difficulty_weighting = flag(p.difficulty_weighting);
+  out->effort_quantile = p.effort_quantile;
+  out->wont_resolve_mass = p.wont_resolve_mass;
+  out->wont_resolve_policy = static_cast<int32_t>(p.wont_resolve_policy);
+  out->difficulty_floor_evaluations = p.difficulty_floor_evaluations;
+  out->difficulty_min_factor = p.difficulty_min_factor;
+  out->difficulty_max_factor = p.difficulty_max_factor;
+  out->difficulty_reference_visits = p.difficulty_reference_visits;
+  out->difficulty_reference_weight = p.difficulty_reference_weight;
 }
 
 t5d_status t5d_timeman_new(const t5d_time_params* params, t5d_timeman** out, char** error) {
