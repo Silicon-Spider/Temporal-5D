@@ -792,6 +792,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", type=Path, help="write each record here (a directory)")
     parser.add_argument("--no-replay", action="store_true", help="do not replay the records through t5d-gate")
     parser.add_argument("--optimistic", action="store_true", help="match play: both sides search with D9's optimistic policy")
+    parser.add_argument(
+        "--piece-centric", action="store_true", help="register A5's piece-centric tokens (a prototype; the evaluator converts each leaf)"
+    )
     parser.add_argument("--no-hunt", action="store_true", help="stage E10: no Hunt at the roots (on under 100 boards)")
     parser.add_argument("--no-settling", action="store_true", help="stage E10: no settling scans (on under 50 boards)")
     parser.add_argument("--no-assets", action="store_true", help="stage E10: no asset-map boosts")
@@ -809,6 +812,8 @@ def main(argv: list[str] | None = None) -> int:
     net_cfg = network_config(args.net)
     if args.optimistic:
         net_cfg = replace(net_cfg, optimistic_policy=True)
+    if args.piece_centric:
+        net_cfg = replace(net_cfg, piece_centric=True)
     nets = [build_model(net_cfg, seed=args.seed + k).eval() for k in (0, 1)]
     policy = "optimistic" if args.optimistic else "normal"
     evaluators = [NetworkEvaluator(n, max_batch=args.batch, policy=policy) for n in nets]

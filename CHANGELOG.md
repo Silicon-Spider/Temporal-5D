@@ -239,6 +239,19 @@ Spec: §15.4 (the solver's cross-check against df-pn), §11.1 item 2 and registe
 proposed edit 300 (the cross-check's terms as built); §11.4 (above 100 boards) - issue 401
 (the offline run over 6b's roots not made). The proof channel stays off (H23, H41).
 
+### 2026-11-08 - The network job runs in four shards: the Python suite outgrew one hour
+
+Since CI came back every run of the `network` workflow was cancelled at its 60-minute limit:
+the Python suite reached 54% in 58 minutes on a runner (2026-11-01, 1,716 tests), so it needs
+about two hours whole, and A5 added some 200 tests since. The job now runs as a four-way
+matrix, each shard taking the tests whose id hashes to it (`T5D_TEST_SHARD=i/n`, a hook in
+`python/tests/conftest.py`: crc32 of the test id modulo n, so the shards are disjoint, their
+union is the whole suite, and a test keeps its shard whatever else is collected); lint runs in
+shard 0 alone. Checked on the suite at 91b2c7c: 1,934 tests split 475 / 462 / 491 / 506, union
+equal to the whole, no test twice. Unset, every test runs, as before.
+
+Spec: none - CI's test plumbing; no part of the spec describes it.
+
 ### 2026-11-02 - The engine builds on Linux again: one sign-conversion error in the evaluation identity
 
 GitHub Actions runs again (it started no job from 2026-10-17 until the account's billing was
@@ -258,6 +271,293 @@ g++ 16 does not raise); each literal is now a `std::uint64_t` and the binding a 
 The values the tests compute are unchanged.
 
 Spec: none - a portability fix; no part of the spec describes it.
+
+### 2026-11-02 - A5 review fixes: the figures re-weighed under CHECKPOINT 9's phase form, no 2x flag left standing; the token set held exact; the survivors killed
+
+Two reviews of A5 (`fd83390`, `f89c79f`, `72e5f96`: one of spec and correctness with probes, one a
+mutation pass - 48 mutants, 32 killed, 1 equivalent, 15 survivors, no behavioural bug), the main
+loop's decisions binding. Written on 2026-10-24 after main `7483103` was merged in, stopped there by
+the account's usage limit, and committed on 2026-11-02 after main `1c085ac` and `28a102b` were
+merged in too (the three entries below).
+
+- **The measurements against CHECKPOINT 9** (`engine/token_counts.py`; `docs/MEASUREMENTS.md`, "A5"
+  and its section 15.3 row). The pooled figures were read against M16's blend (0.9 cached at every
+  size), which C26 replaced: a search whose root has fewer than N\* boards runs dense, one at or
+  above N\* cached (spec section 7.10; N\* a placeholder, 50). The tool now pools C26's phase form
+  (`phase_form`; `--n-star`, default 50 and 100 as a sensitivity) - each position a decision's root,
+  dense below N\* and a cached node at or above, with the two halves apart - beside the old reading,
+  kept and labelled pre-CHECKPOINT-9. Re-run over the same 716 games (52 s; the same 22,761
+  positions, line for line): legal moves, N\* = 50, **2.45x** pooled by decisions - dense 2.46x below
+  N\*, the cached node (analytic) **2.11x** at or above; N\* = 100 2.73x (2.73x; 2.62x); pseudo-legal
+  (a sensitivity) 2.40x (2.43x; 1.79x) and 2.69x (2.69x; 2.22x). Re-stated under C26 on the
+  legal-destination set section 14.4 speaks of, **no figure is flagged under the 2x rule**: the
+  cached per-node term is 1.28x below "~2.7x" (1.03x at N\* = 100); the dense "~4.4-6.5x" is a
+  240-600-board figure the games never reach (its conditions not measured on games; synthetic
+  positions there 4.8-9.9x). The first reading's two flags compared across conditions and are
+  withdrawn. The measured figures' conditions now say action starts only (the ply split's
+  mid-action leaves and deeper nodes not measured); the JSON lines carry each position's decisions
+  (written once every record is read), so every pooled figure can be re-computed from them; the
+  tool's commit corrected (`72e5f96`, where `token_counts.py` first exists).
+- **The token set held exact** (`net/state.py`). Validation required the mask to cover the occupied
+  cells only, and the conversion kept a piece-centric input's cells by union, so an A5 state whose
+  moves were cut kept stale destination tokens (the review's probe: 224 tokens against a fresh 197).
+  `PositionState.validate` now holds `token_cells` to exactly the occupied cells and the candidate
+  moves' destinations, and `to_piece_centric` rebuilds the set from scratch; `TokenLayout` refuses a
+  mask of the wrong shape instead of reshaping it (a transposed mask of the right size included).
+- **The shared evaluation cache under A5** (BUILD_LOG issue 245(e), edit 196). The review measured
+  A5's evaluation moving with the legality options in every configuration (up to 2.1e-2 in a WDL
+  logit; A1 with the move graph off: exactly 0); the engine's cache key and
+  `t5d_search_new_sharing` do not check them (issue 115, the engine's to add). The binding already
+  refuses to share a cache between searches whose legality options differ; its test now covers
+  `legality_nodes` too (`tests/engine/test_search_api.py`).
+- **The build log**: issue 252 gains the likely reading for the user (C17 with section 14.4: frozen
+  tokens never read destination tokens; destination tokens are live queries) - the refusal stays;
+  issue 257 gains G10's dependence (mixture-of-depths is held open with A5's verdict as its trigger,
+  and A5 has no decision rule); new issue 258 - A5 and C26's N\* couple (A5 cheapens dense more than
+  a cached node, so N\* moves up under A5) - with proposed edit 199.
+- **Tests** (`tests/net/test_piece_centric.py`, `tests/engine/test_piece_centric_engine.py`; the
+  mutation pass's proposed tests adopted and adapted, the rest written): the pools read A5's own
+  square tokens (the global pool and moves-left, each board's mean, smolgen's square weights and
+  per-board square tokens - a pool depending on the layout's geometry rather than the mask is
+  invisible to the masked-A1 equivalence); a register never an endpoint; `square_tokens` refuses a
+  cell that is no token; a wrong-shaped mask refused; layout equality reads the cells; a stale token
+  set refused and rebuilt; the cost model's cached sets recounted by hand on a position with
+  destinations on frozen boards, and the cached node against each arm's own token count; the
+  evaluator converts strictly, and after a relayout; netplay's `--piece-centric`; the engine bench's
+  tokens column and conversion time under A5; `summarise`'s median ratio, its pooling by decisions,
+  M16's blend and the phase form on hand-built positions; `measure` weighing repeats, leaving a
+  refused record out and writing each position's decisions; the counted forward's extrapolation
+  equal to the full-depth count. The mutation pass's 15 survivors re-run with its runner against a
+  fresh copy of the fixed tree: 14 killed, each by the test written for it - L06
+  `test_square_tokens_refuses_a_cell_that_is_no_token`, L09
+  `test_a_register_is_never_an_endpoint_under_a5`, L12 `test_a_mask_of_the_wrong_shape_is_refused`,
+  L13 `test_layout_equality_reads_the_cells`, N07 `test_the_pools_average_over_the_tokens_there_are`,
+  E01 `test_the_evaluator_converts_strictly`, E02 `test_the_evaluator_converts_after_a_relayout`, E06
+  `test_netplay_takes_piece_centric`, E08 `test_the_bench_counts_a5s_tokens`, K02
+  `test_the_cached_sets_put_every_destination_live`, K03
+  `test_the_cached_node_attends_each_arms_own_tokens`, K05
+  `test_the_summary_pools_by_decisions_and_takes_the_phase_form`, K06
+  `test_the_tool_weighs_repeats_and_leaves_a_refused_record_out`, K08
+  `test_the_counted_forward_extrapolates_exactly`; C05 retired - the union it removed is gone (the
+  conversion rebuilds the set), and its re-anchored inverse (the union re-added) survives as an
+  equivalent mutant, since validation now refuses every stale set before the conversion sees it.
+  Its 19 further mutants, run once: 16 of 19 killed by the existing and new tests (K07 re-anchored:
+  `measure` lost its try/finally, so the block moved left - killed by
+  `test_the_tool_weighs_repeats_and_leaves_a_refused_record_out`); the three survivors, all LOW (a
+  register's slot under A5, the layout cache's key, the bench's `--piece-centric` in `main`), each
+  killed on a fresh copy by a test added for it (`test_every_register_keeps_its_slot_under_a5`,
+  `test_the_layout_follows_the_mask`, `test_the_bench_takes_piece_centric`).
+- **Checks** (the engine DLL built: "ninja: no work to do."): ruff "All checks passed!" and "111
+  files already formatted"; the whole pytest suite with `T5D_REQUIRE_ENGINE=1` in two workers on the
+  fixed tree after main `1c085ac` was merged (`28a102b` brought documents only) - `tests/engine`
+  "344 passed, 1 skipped in 791.24s (0:13:11)", `tests/net` and `tests/train` "1589 passed in
+  5445.70s (1:30:45)" (a loaded machine); `verify` every check ok but `pins` and the boundary's copy
+  check, both "kairos is not checked out" in this worktree - not synced, since `harness.py sync`
+  would fetch Kairos from its upstream and nothing downloads without asking. The review's probes on
+  the fixed code: the phase-form re-pooling (`probe_phase.py`, one per distinct position) 2.48x /
+  2.12x, 2.76x / 2.62x, pseudo-legal 2.43x / 1.80x and 2.72x / 2.22x, as before - the weighted
+  figures above are the tool's; the stale-token probe (`probe_stale.py`) now stops at its
+  `replace` with the validation error, and the cut state converted afresh has 197 tokens.
+
+Spec: §7.10, §13.1, §14.4, §15.3; register A5, C26, G10, M4, M16, M18, I15, C17. BUILD_LOG: register
+row A5; spec issues 244(e), 245(e), 252 (the likely reading), 256 (rewritten), 257 (G10), 258 (new);
+proposed edits 196 (amended), 197 and 198 (rewritten), 199 (new: §7.10's N\* under A5). MEASUREMENTS:
+the "A5" section and its section 15.3 row (the phase form; the 2x verdicts re-stated; the conditions;
+the commit).
+
+### 2026-11-02 - main (28a102b) merged into lane/net: the CHECKPOINT 10 design documents and their plan
+
+Main since `1c085ac` (the CHECKPOINT 10 design documents from upstream - the user's ruling that ftxi
+and Kairos are one lineage for H47's two-oracle bar - and the build log's plan for it) merged into
+`lane/net` (M23: merged, never rebased) before A5's review fixes are committed. Documents only:
+nothing under `python/`, `engine/` or `oracles/` changed, and nothing in it touches A5, C26 or G10.
+CHANGELOG by heading (this entry, the lane's five, then main's); BUILD_LOG both sides ("Current
+state" main's).
+
+Spec: no part of the spec describes the merge itself; the merged change's entries name theirs. No
+edit proposed.
+
+### 2026-11-01 - main (1c085ac) merged into lane/net: A5's lane beside Kairos and CHECKPOINT 9's brief
+
+Main since `7483103` (Kairos pinned and wired as two pending sources, H52, with its review fixes;
+CHECKPOINT 9's brief read into the build log) merged into `lane/net` (M23: merged, never rebased)
+before A5's review fixes are committed. No code conflict: main changed nothing under `python/` or
+`engine/`. CHANGELOG: main's entries, the lane's four entries (the first merge and A5's three) on
+top of them, this entry on top; BUILD_LOG and MEASUREMENTS merged without conflict (both sides kept;
+"Current state" main's; the brief names C26/C27 as this lane's next item after A5's review fixes).
+The worktree's Kairos submodule is not checked out: `harness.py sync` would fetch it from its
+upstream, and since the brief nothing downloads without asking - so `verify` reports only that
+(`pins` and the boundary's copy check, both "kairos is not checked out"; every other check ok),
+and the harness's selftest 677 tests with one error from the same cause (`test_gate_live`'s
+stand-in engine run finds the two). Python suite not re-run for the merge: no Python or engine file
+changed (the review fixes' commit runs it whole).
+
+Spec: no part of the spec describes the merge itself; the merged changes' entries name theirs. No
+edit proposed.
+
+### 2026-10-24 - main (7483103) merged into lane/net: A5 beside G9, CHECKPOINT 9 and E10
+
+Main since `0e37093` (G9's bounded AMD attempt, the upstream design documents with CHECKPOINT 9,
+the build log's CHECKPOINT 9 plan, E10's verification v3 in the search and H44's audit-lane
+tooling) merged into `lane/net` (M23: merged, never rebased) before A5's review fixes. One code
+conflict, `python/t5d/engine/netplay.py`'s arguments: the lane's `--piece-centric` and E10's
+`--no-hunt`, `--no-settling`, `--no-assets`, `--hunt-ms`, `--settling-ms`,
+`--verification-threads` and `--decision-log` all kept (`--piece-centric` still sets the network's
+flag before the networks are built). CHANGELOG: main's entries, the lane's three A5 entries on top
+of them, this entry on top; BUILD_LOG: both sides' session-log lines ("Current state" main's; the
+A5 row, issues 244-257 and edits 190-198 merged cleanly beside main's). No records or C-struct
+change on either side. The A5 figures are re-read against CHECKPOINT 9's C26 in the review fixes
+that follow. Checks on the merged tree (`T5D_REQUIRE_ENGINE=1`, serial, the engine DLL rebuilt):
+the A5, netplay, targets, flat-target, steering, flat-head and smoke files 335 passed; the
+perspective, decision-log, search-API, evaluator and model files 330 passed.
+
+Spec: no part of the spec describes the merge itself; the sections and register rows of the merged
+changes are named in their own entries below. No edit proposed.
+
+### 2026-10-23 - A5.5: piece-centric token counts on the human games, counted FLOPs, the missing §15.3 row
+
+Section 14.4's A5 figures measured where M18 says compute goes - the human games - through the engine
+binding only; no training run.
+
+- **The cost model** (`net/cost.py`): `token_counts` - one position's tokens under A1 and A5 (pieces,
+  D, the cached configuration's live and frozen sets, A5's destination tokens live) from a
+  square-centric or a piece-centric state - and `piece_centric_costs`, section 9.1's model at them
+  (the dense pass, the analytic cached node, the frozen K/V; A1 against A5).
+- **The token-count tool** (`engine/token_counts.py`, `py -m t5d.engine.token_counts`): every action
+  start of 5dpgn records replayed as the gate's parse mode replays, the legal (exact) and pseudo-legal
+  moves' counts through the network's own construction, positions distinct by fingerprint and side to
+  move, per M7's board-count buckets and pooled by decisions (dense, cached, M16's blend) (Review
+  correction, 2026-10-24: M16's blend is the pre-CHECKPOINT-9 reading; the tool now pools C26's phase
+  form beside it - the entry above); `--flops`
+  counts one dense forward, A1 against A5, on the block-sparse and every-key paths (at 1 and 2 layers,
+  extrapolated to 16 - exact: checked at the full depth). The brief's `t5d-measure --tokens` was not
+  needed: the binding's expansion takes the legal-moves filter since engine ABI round 2, so no engine
+  code changed.
+- **The measurements** (`docs/MEASUREMENTS.md`, "A5" and a §15.3 row): over t0database's 716
+  replaying games (22,761 distinct positions, M7's per-bucket counts), legal moves: tokens 1.94 / 2.19
+  / 2.43 / 2.35x fewer at 1-49 / 50-99 / 100-159 / 160-186 boards; the dense evaluation 2.49 / 3.34 /
+  4.35 / 4.37x cheaper, 2.79x pooled by decisions; the cached node (analytic) 1.42 / 2.05 / 2.63 /
+  2.55x, 1.56x pooled; counted at 44 boards 2.66x (block-sparse) and 2.79x (every key); synthetic 240-
+  and 600-board positions 4.8-9.9x; CPU wall at 44 boards 3.0x (indicative: a loaded machine).
+  **Flagged under the 2x rule**: the cached per-node term with pseudo-legal moves (1.30x against
+  "~2.7x", 2.1x off; 1.9x with legal moves), and the dense range's top (6.5x, a 600-board figure) 2.6x
+  above the saving under 50 boards. (Review correction, 2026-10-24: both flags withdrawn - each
+  compared across conditions, and under CHECKPOINT 9's C26 the cache runs only at or above N\*, where
+  the node is 2.11x cheaper with legal moves, inside the rule; the entry above.)
+- **Tests**: `cost.token_counts` equals the layouts on every construction and the engine's own recount
+  on real positions; the analytic figures section 14.4 rests on (4.78 TF at 240 boards; the brief's
+  4.5x and 6.6x; about 3.3x at 44 boards); a piece-centric forward counted; the tool on records (one
+  entry per action start, legal within pseudo-legal, a refused record reported); the engine tests'
+  positions gain two search leaves' candidate moves (the legal-moves filter, exact). A fix to the A5
+  commit's tests: A7's canonical-input census (`test_perspective.py`) enumerates every `Batch` field
+  and now compares the new `piece_centric` too (the first A5 commit left its 19 cases failing - the
+  whole suite was first run here).
+- **The default path is unchanged, bit for bit** (the lane's evidence for A5 as a whole): 436 of 437
+  digests of A1's inputs and outputs - every `token_arrays` and `Batch` field, every `NetOutput` tensor
+  (trunk included) under eight configurations (F1 as shipped; FP32; chunked; dense; B10/B11/B12/B17
+  together; A8; the block-causal scope; no registers) on synthetic and engine positions, the training
+  rows' batch and targets (an engine game's, square labels included, and synthetic ones), the board
+  permutation, mirror and relayout outputs, `mirror_tokens`, the engine scope's tokens and the
+  evaluator's evaluations - identical between `0e37093` (main) and this commit; the 437th, the smoke
+  run's losses, differs between two runs at `0e37093` too (autograd's CPU
+  reductions are not deterministic). The parameter fingerprints (`tests/net/test_params.py`) pass.
+
+Spec: §9.1, §13.1, §14.4, §15.3; register A5, M4, M16, M18, M19, M24. BUILD_LOG: register row A5;
+spec issues 255-257; proposed edits 197 (a §15.3 row), 198 (§14.4's figures written back, objections
+(2) and (3)). MEASUREMENTS: the §15.3 table's A5 row and the "A5" section (Review correction,
+2026-10-24: the engine there is main `0e37093` with this commit's tool, `72e5f96` - not `f89c79f`).
+
+### 2026-10-23 - A5's plumbing: the evaluator and the training rows convert at the network's edge; games end to end; purity
+
+Register A5's engine and training plumbing (A5.4), behind the flag - no engine or C API change; no
+training run.
+
+- **The evaluator** (`engine/evaluator.py`): `NetworkEvaluator._fit` converts a square-centric
+  position for a piece-centric network (`to_piece_centric`, strict - engine data drops nothing), after
+  the register relayout. The policy's row `i` stays the engine's move `i`, so the C step API and
+  `check_evaluation` are unchanged. `CachedNetworkEvaluator` refuses an A5 network (BUILD_LOG issue
+  252).
+- **The training rows** (`train/targets.py`): `collate_rows` converts each row's input for a
+  piece-centric network (strict for engine records, not for synthetic ones - the records stay
+  square-centric) and puts the per-square labels on the square tokens there are; a label of a cell
+  with no token is dropped (issue 250). The label placement's code was rewritten for both layouts
+  (A1's tokens unchanged - the same tokens in the same order).
+- **The window's scope** (`engine/convert.py`): `EngineScope.tokens` refuses a piece-centric layout
+  (issue 253).
+- **Netplay and the engine bench** (`engine/netplay.py`, `engine/bench.py`): `--piece-centric`; the
+  bench reports the conversion's time beside `collate`'s.
+- **Tests** (`tests/engine/test_piece_centric_engine.py`; `tests/train/test_targets.py`): on variant
+  starts, the records', en passant, castling, a promotion and random positions with branched timelines,
+  every relation built - strict conversion drops nothing and the token count is the engine's own piece
+  count plus the empty destinations recounted from its move records' flags; the special moves' tokens;
+  branching travel's destination on its history board; the evaluator keeps the contract, batched and
+  alone; the logits equal the masked A1 reference on engine positions (B11 on); two move orders of one
+  multiverse (Two Timelines' two boards in either order) give identical A5 inputs and evaluations, bit
+  for bit; an A5 network plays legal games under the ply split, the flat form and the tree form, every
+  record replayed by `t5d-gate`; the window's scope and the engine's cached evaluator refuse A5; an
+  engine game's rows under A5 carry every label at its token and train to finite losses.
+
+Spec: §8.1, §12.4, §12.8, §15.2 (the purity and I15 rows), §15.5; register A5, D1, D4, I15, C14,
+C19-C21. BUILD_LOG: register row A5; spec issues 245, 253, 250 (amended); proposed edit 196 (I15's
+conditions under A5).
+
+### 2026-10-23 - A5: piece-centric tokens behind their flag, dense scope only - the tokens, the network path, the refusals
+
+Register A5 (Prototype since CHECKPOINT 6: "build behind its flag") in the network lane, off by
+default (`NetConfig.piece_centric`) - no training run: optimiser steps only the smoke steps on
+synthetic rows.
+
+- **The tokens** (`net/state.py`). A `PositionState` may carry `token_cells`, the cells that are
+  tokens (None: A1's layout, every cell). `to_piece_centric` builds A5's: the occupied cells and the
+  candidate moves' destination cells - A1's tokens minus the empty squares no candidate move lands
+  on; a capture points at the captured piece's token; each board's tokens in cell order, then its
+  registers, the global registers last; moves and edges remapped through (board, cell) with their
+  row order kept (policy row `i` is still move `i`). Strict conversion (engine data) refuses any
+  dropped edge; not strict (synthetic data) drops exactly the move edges onto cells that are no
+  token, counted. Idempotent; `to_square_centric` and `square_centric_tokens` map back. (Review
+  correction, 2026-10-24: idempotence came from a union with the input's own cells, which kept stale
+  destination tokens when a piece-centric state's moves were cut; validation now holds the set
+  exact and the conversion rebuilds it from scratch - the entry above.)
+  `TokenLayout` takes the kept cells: boards of different lengths (`board_offsets`,
+  `max_tokens_per_board`, `square_tokens`, `body_maps`), and `tokens_per_board` now raises on a
+  piece-centric layout so that every caller assuming uniform boards surfaces. `permute_boards`,
+  `translate`, `relayout` and `mirror` (A7's colour swap - `mirror_tokens` maps into the mirror's
+  layout) carry the cells; `collate` refuses a batch mixing the two tokenisations and marks
+  `Batch.piece_centric`. `synthetic_state(..., piece_centric=True)`.
+- **The network** (`net/model.py`). No new parameter and no new draw: the network is A1's, bit for bit,
+  on a smaller token set - every module already reads per-token arrays. A forward refuses a batch of
+  the other tokenisation, both ways. The block-sparse and chunked paths' query blocks are 4 boards of
+  the batch's mean board length (A1's 4 x 66 unchanged): a block of the longest board spans more
+  boards and read 0.86 of the key boards at 40 synthetic boards against A1's 0.77 (the mean: 0.77).
+  `train/smoke.py` trains on the A5 view of its synthetic positions when the flag is on.
+- **The refusals** (A5.3; BUILD_LOG issues 251, 252): `NetConfig.validate` refuses A5 with the
+  block-causal scope and with D4's reply prototype; a forward overriding the scope to block-causal,
+  `CachedEvaluator` and the cache bench refuse an A5 network - each `NotImplementedError` naming its
+  issue. `piece_centric` is off `validate`'s not-built list.
+- **Tests** (`tests/net/test_piece_centric.py`, 179): the token count, the board-major layout, the
+  endpoints and the dropped edges, the round trip with every per-token feature at its cell, the
+  transforms commuting, the adversarial constructions (promotions sharing a destination, captures,
+  travel onto a frozen board, duplicated boards, deep travel, many timelines, ±0, 3x3 and 5x5, the
+  register arms, submit only, an empty board with and without registers) and mutants of the
+  conversion; **section 15.2's proposed A5 row** - A5's forward equals the same-seed A1 network's with
+  the dropped squares removed as keys (a caller's mask; the heads over the kept tokens) on every
+  attention path (dense, explicit, sdpa, chunked, block-sparse at 1.0 and 0.3, flex), 1 to 40 boards
+  beside smaller ones, stage N2's 16 switch combinations, the invariance suite's flags, B12's bilinear
+  form, A8 (both paddings), G2's FP8 trunk, D9, D2's register pool, D4's soft policy off, F5/F6's
+  arms, every construction, FP32 at 1e-5, BF16 within its own precision, every parameter's gradient;
+  mutants of the A5 batch (a stale coordinate, a wrong board flag, a dropped piece) caught; the policy
+  one logit per move, promotions through one token apart by D1's offset alone; the parameter count and
+  draws identical; board order, translation (bit-exact recentred) and batch composition; A7's mirror
+  under A5 (18 constructions, 3 seeds); block-sparse lossless, sparse, one block at a time, no
+  quadratic tensor for backward; the refusals. `test_model.py`'s later-stage flags test drops A5 and
+  gains its two refusals; the smoke test trains A5 (and A5 with B11, A8 and D9), every tensor moving.
+- **The default path is unchanged**: the parameter fingerprints and the existing suites pass; the
+  digest evidence is in the A5.5 entry above (the lane's last commit).
+
+Spec: §2.1, §6.1, §7.3, §8.1, §12.4, §14.4, §15.2; register A1, A5, A8, B14, C17, D1, D4, M20.
+BUILD_LOG: register row A5; spec issues 244, 246-252, 254; proposed edits 190 (a §15.2 row),
+191 (A5 as built), 192 (§6.1's blocks), 193 (§12.4/D4 under A5), 194 (§7.3/C17 and the cache),
+195 (the lossy-abstraction refusal's stale clause).
 
 ### 2026-11-01 - CHECKPOINT 10 taken in: the build log's plan for the lineage ruling and Kairos's new order
 

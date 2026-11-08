@@ -63,6 +63,7 @@ from .state import (
     RELATION_IDS,
     PositionState,
     TokenLayout,
+    to_piece_centric,
 )
 
 _PAWN = PIECE_IDS["P"]
@@ -156,8 +157,14 @@ def synthetic_state(
     n_opp_moves: int | None = None,
     regs_per_board: int = 2,
     global_regs: int = 16,
+    piece_centric: bool = False,
 ) -> PositionState:
-    """A seeded synthetic position with exactly ``n_boards`` boards (see module docstring)."""
+    """A seeded synthetic position with exactly ``n_boards`` boards (see module docstring). With
+    ``piece_centric``, register A5's tokenisation of it (``state.to_piece_centric``, not strict:
+    the synthetic move graph reaches every empty cell its pieces see, and the move edges onto
+    cells that are no candidate move's destination are dropped, as are the opponent moves whose
+    destination has no token); the same draws, so it is A5's view of the square-centric state
+    of the same arguments."""
     if n_boards < 1:
         raise ValueError("n_boards must be at least 1")
     rng = np.random.default_rng(seed)
@@ -277,7 +284,8 @@ def synthetic_state(
     moves = _candidate_moves(rng, probe, layout, graph, player, n_moves)
     opp = _candidate_moves(rng, probe, layout, graph, 1 - player, n_opp_moves)
     edges = graph if relations else graph[graph[:, 2] == RELATION_IDS["move"]]
-    return PositionState(**state_kwargs, edges=edges, moves=moves, opp_moves=opp)
+    state = PositionState(**state_kwargs, edges=edges, moves=moves, opp_moves=opp)
+    return to_piece_centric(state, strict=False) if piece_centric else state
 
 
 # --- the move graph: simplified 4D movement geometry -------------------------------------------
