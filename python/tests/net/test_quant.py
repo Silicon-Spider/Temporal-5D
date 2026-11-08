@@ -465,16 +465,21 @@ def test_the_attention_paths_agree_under_fp8(flags):
 def test_an_evaluation_does_not_depend_on_its_batch(rule):
     """C19-C21's purity under the FP8 trunk: per-token (per token and head in attention) scales
     make a position's evaluation the same alone and in a padded batch with another, up to the
-    flips of a different FP32 summation order. Measured (FP32, 2 layers, seeds 0-5), trunk RMS
-    over the position's tokens: "pow2" 5.2e-7, "absmax" 3.1e-3. Mutants with one scale per tensor
-    give, under "absmax", 2.6e-2 (the projections' inputs) and 2.2e-2 (the attention operands) -
-    and under "pow2" 2.1e-4 and 5.2e-7: a power-of-two scale moves only the subnormal floor of a
-    floating-point format, so "pow2" barely depends on the granularity: the 2.1e-4 is one seed's
-    (seed 4; the others 0-1.2e-6), and the attention operands' mutant moves nothing measurable.
-    Bounds 1e-5 under "pow2" over seeds 0-5 (the projections' per-batch mutant exceeds it 20-fold
-    at seed 4; the granularity itself is checked by ``test_quant_linear_scale_granularity`` and,
-    operand by operand, ``test_the_attention_operands_are_rounded_after_rope``), 1e-2 under
-    "absmax"."""
+    flips of a different FP32 summation order. The two batches' FP32 arithmetic differs - the FP32
+    trunk differs between them at about 81% of the position's 88,576 trunk elements, RMS 1.8e-7
+    (2 layers, seeds 0-5) - and the format absorbs most of it, but a value within that difference
+    of a rounding boundary flips, and a flip early in the trunk spreads through every later
+    rounding. Where the flips fall is the CPU's to decide: on the development machine "pow2"
+    differed at 0 elements at seeds 1-4 and at 211 and 255 at seeds 0 and 5 (trunk RMS at most
+    5.2e-7), while a GitHub runner measured 2.1e-3 at seed 0 (and passed it in another run of the
+    same network); "absmax", whose scale moves with every last bit of a token's largest value,
+    flips at every seed (at most 3.1e-3 here). So one bound for both, 1e-2, three times the
+    largest spread measured. Mutants with one scale per tensor give, under "absmax", 2.6e-2 (the
+    projections' inputs) and 2.2e-2 (the attention operands). Under "pow2" a scale's binade moves
+    only the subnormal floor of a floating-point format, so the same mutants move this measure by
+    2.1e-4 at most (one seed's) - inside the flips' spread: the granularity itself is checked
+    exactly by ``test_quant_linear_scale_granularity`` and, operand by operand,
+    ``test_the_attention_operands_are_rounded_after_rope``."""
     cfg = NetConfig(n_layers=2, trunk_dtype="fp32", trunk_quant="fp8_e4m3", trunk_quant_scale=rule)
     for seed in range(6):
         model = build_model(cfg, seed=seed).eval()
@@ -483,7 +488,7 @@ def test_an_evaluation_does_not_depend_on_its_batch(rule):
         alone, mixed = model(b1, return_trunk=True), model(b2, return_trunk=True)
         lb1, lb2 = b1.body_len, b2.body_len  # the global registers follow the batch's longest body
         d = torch.cat([alone.trunk[0, :lb1] - mixed.trunk[1, :lb1], alone.trunk[0, lb1:] - mixed.trunk[1, lb2:]])
-        assert float(d.pow(2).mean().sqrt()) < (1e-5 if rule == "pow2" else 1e-2), (seed, float(d.pow(2).mean().sqrt()))
+        assert float(d.pow(2).mean().sqrt()) < 1e-2, (seed, float(d.pow(2).mean().sqrt()))
         valid = alone.move_valid[0]
         assert float((alone.value_logits[0] - mixed.value_logits[1]).abs().max()) < 3e-2
         assert float((alone.policy_logits[0][valid] - mixed.policy_logits[1][: valid.shape[0]][valid]).abs().max()) < 6e-2
