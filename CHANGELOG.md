@@ -10,6 +10,54 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-08 - Kairos round 2 review fixes: the lineage table fails closed and its wiring is tested; what of Kairos is ftxi's, corrected
+
+The review of 28a102b..203fabd (2026-11-02: no HIGH, 1 MEDIUM, 12 LOW, 5 refuted), every finding
+fixed or, for L12, put to the user (`docs/BUILD_LOG.md`, issues 577 and 578):
+- **The lineage table fails closed (M1, as the main loop decided).** `gate.engine_differential`
+  requires `lineages` - no default that would count every implementation apart - and refuses a table
+  that does not name every implementation it compares; `run_tier` reads it once and hands it to the
+  differential and to the report, which now records the table the verdicts used rather than the lock
+  file read again (L7). New `run_tier` tests with a patched table: every rules oracle in ftxi's
+  lineage, and the nightly gates nothing; cwmtt standing in as a derived oracle, and Turn Zero is not
+  gated. The tests that count each implementation apart pass an explicit identity table.
+- **The counting's text and edges.** The one-lineage note only where a record the reason names was
+  followed by a lineage named with its members (L1); a parse-only source's printed answers settle
+  nothing, while its boards still count and its recorded divergences are still looked at (L11). New
+  tests: the members a label names (L6), the lock file's three untested lineage checks (L8), the
+  eight combinations against frozen values from 28a102b's gate (L9), one primary source per
+  implementation (L5).
+- **What reading the pins found, corrected (L2, L3).** Kairos's exhaustive enumerator and its check
+  test's pass set are ftxi's code translated - the pass set from ftxi's later commit f66c4ee - so its
+  own parts are its wasted-move pruning and its playing engine; most, not all, of its modules mirror
+  ftxi's; its seven hand-coded variant layouts are ftxi's, and its Half Reflected, white's king and
+  queen swapped, is why it fails cwmtt/test1 - not the move text; the two 5DFEN readers share an
+  origin and have diverged; ftxi's credits file is for image assets; Kairos's note now gives the
+  CHECKPOINT 10 ruling. In the lock file's notes (re-rendered into `PROVENANCE.md`), PROVENANCE.md's
+  prose, `oracles/README.md`, issues 526, 533 and 573; edit 400's clause aligned, edit 401 proposed.
+- **No verdict from an exhausted budget, restated (L4).** Both Kairos searches are capped - 2^32-1
+  hypercuboids a sub-search, 2^64-1 nodes - and a spent cap would read as "no action"; no gate deadline
+  comes near either (the review's rates). This corrects "no, from neither source" and "an unbounded
+  node budget" in the entry of 2026-11-01 below (and issue 570); `test_kairos.py` now holds the pin's
+  cursor cap.
+- **Which Kairos source is primary, when (L5).** Exactly one at each stage, never two: `kairos:parse`
+  while parse mode is enabled alone; at full mode's enabling `kairos` (leaving a budget-cut gap) or
+  `kairos:parse` kept (once `judges_actions` and the divergence rule are changed) - in
+  `adapters/__init__.py`, `oracles/README.md` and issue 530. The comments that grouped its replay with
+  "any move it can place" corrected, and its two stages attributed to CHECKPOINT 9's brief, not H52 (in
+  the adapter, the driver, a test's docstring and this file's entry for 203fabd).
+- **Wording (L9, L10).** "Lineages" in `Gated.oracles`' comment, the gate's docstring and the README's
+  gated summary; "every verdict and ungated reason" in issue 573 and this file's entry for 0435199; the
+  H47 row's built date (2026-11-02).
+- The Kairos driver's header comments changed with them, so Kairos was rebuilt (no golden file hashes
+  its driver). The review's mutation survivors re-run on the fixed tree with its runner: G03, G16,
+  G18, G19, L01, L02 and L08 killed; R06 survives, equivalent as the review judged it (no test added);
+  six more mutants of the fixed lines, all killed. Main merged first (73a048f).
+
+Spec: register H47, H52, H26, H37, H32; §11.0 ("Tiered CI", "Kairos, the fourth oracle", its table
+row) - proposed edit 401 (what of Kairos is its own), edit 400's Chess in 5D clause aligned; issues
+526, 530, 533, 570 and 573 annotated; issues 577, 578 (for the user).
+
 ### 2026-11-08 - The network job runs in four shards: the Python suite outgrew one hour
 
 Since CI came back every run of the `network` workflow was cancelled at its 60-minute limit:
@@ -73,7 +121,7 @@ Spec: register H52, H32, H33; §11.0 ("Tiered CI") - nothing proposed; issues 57
 
 ### 2026-11-02 - Kairos's parse mode built and pending; how the sign-off run leaves Kairos out, reported before building
 
-H52's "parse mode first", reordered by CHECKPOINT 10: parse mode is prepared for the
+CHECKPOINT 9's brief's "parse mode first" (H52's two stages), reordered by CHECKPOINT 10: parse mode is prepared for the
 quiet-machine block, and the release tier's sign-off run leaves Kairos out. Built: source
 `kairos:parse` - the driver's `--search parse` replays the record as Kairos's searches do (its
 reader, then its referee, which refuses an action that leaves a royal capturable) and prints what
@@ -115,8 +163,10 @@ reading, which was never committed:
   of cwmtt's literate method (its own lineage as ruled, the stricter reading put to the user); and
   Chess in 5D's 5DFEN reader shared with the notation parser (one author; the parser is parse-only).
 - **The four existing oracles gate as before:** each is its own lineage; the tests give every
-  verdict and message as before, and the nightly tier with the table on and Kairos absent gates
-  exactly Standard - Half Reflected and Standard - Reversed Royalty.
+  verdict and ungated reason as before - the gated summary says "oracle lineages" (reworded after
+  the review of 2026-11-02: this said "every verdict and message", and its test compared the gate
+  with itself; it now holds the values 28a102b gave) - and the nightly tier with the table on and
+  Kairos absent gates exactly Standard - Half Reflected and Standard - Reversed Royalty.
 - `CONTRIBUTING.md`'s "Changing a pin" adds reading the NOTICE, credits and code and updating the
   lineage; `oracles/README.md`'s gating conditions say lineages.
 

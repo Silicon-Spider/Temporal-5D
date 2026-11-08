@@ -324,12 +324,15 @@ def _state_text(position: Position, name: str) -> str:
 def judges_actions(source: str) -> bool:
     """Is this source's playing an action a statement that the action is legal?
 
-    A parse-only source (adapters.PARSE_ONLY_SOURCES) applies any move it can
+    A parse-only oracle (lock file role "parse-oracle") applies any move it can
     place, legal or not: that it played on says only that it read the move. So
     it contradicts a refusal only where the refusal was a failure to read the
     move text (a soft one), never where another source held the action illegal.
-    The same holds for an oracle asked in parse mode ("kairos:parse"), which is
-    named by its source, not its implementation: Kairos's searches judge.
+    An oracle asked in parse mode ("kairos:parse") is treated the same way, by its
+    source name, not its implementation - Kairos's searches judge. It reads
+    otherwise (only moves Kairos generates, and it refuses an action that leaves a
+    royal capturable), but it answers no rules question, so its acceptance is left
+    uncompared by choice (adapters.PARSE_ONLY_SOURCES).
     """
     from .adapters import PARSE_ONLY_SOURCES, oracle_of  # the adapters import this module: not at the top
 

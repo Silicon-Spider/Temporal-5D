@@ -1,12 +1,16 @@
 """Kairos (FirePlank/5d-chess-engine): the fourth rules oracle (decision H52).
 
-It is enabled in two stages, as H52 orders: "parse mode first, then full mode".
+It is enabled in two stages - CHECKPOINT 9's brief's "parse mode first, then full mode", which
+CHECKPOINT 10 reordered: parse mode recorded in the quiet-machine block, both stages enabled
+after the release tier's sign-off run.
 
 - "kairos:parse", parse mode: what Kairos set up at every position (decision H30),
   the side to move and how it replayed the record - the same replay as the two
   searches below, its refusals included - and a null for every question. Like the
   notation parser it is a parse-only source (adapters.PARSE_ONLY_SOURCES): its
-  playing an action is no verdict, and it stands behind no ruleset (H47). Pending,
+  playing an action is no verdict, and it stands behind no ruleset (H47). Its refusals,
+  and where its reading ends, are compared only through Kairos's one primary source
+  (adapters.PRIMARY_SOURCES) - not at all while it is pending. Pending,
   like the searches: recorded in the quiet-machine block, enabled after the release
   tier's sign-off run, which leaves Kairos out (CHECKPOINT 10; docs/BUILD_LOG.md,
   issue 574).
@@ -16,7 +20,8 @@ cwmtt's are: its hypercuboid search ("kairos") and its exhaustive enumerator
 ("kairos:naive"). What each answers was confirmed at the pin before the driver was
 written (PROVENANCE.md, "Kairos, the fourth oracle"):
 
-- both: the check (its own test, which passes the active boards in the present),
+- both: the check (its test, which passes the active boards in the present - ftxi's later
+  code, translated, not ftxi's test at ftxi's pin),
   what it set up at every position (decision H30) and how it replayed the record;
 - "kairos": the mate verdict of its own mate test, an exhaustive hypercuboid
   search - and **no count**. That search leaves out the actions that waste a move

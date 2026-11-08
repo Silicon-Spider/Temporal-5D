@@ -111,12 +111,20 @@ stale or incomplete one fails it - but they are read apart (`snapshot.recorded_p
 never into the snapshot a tier compares with or `DISAGREEMENTS.md` is rendered from,
 so recording one changes nothing any tier, `verify`'s checks of the enabled sources
 or `DISAGREEMENTS.md` reads (`tests/test_pending_recording.py`).
-Enabling them is one reviewed commit: move them into `ORACLE_SOURCES` (and
-`kairos` into `PRIMARY_SOURCES`), list them in `gate.toml`'s nightly and release
-tiers with their budgets, record them (`golden --write --repeat 2 --source kairos
---source kairos:naive`), read the new lines of `DISAGREEMENTS.md`, and run the
-nightly tier with the engine to triage what Kairos finds (`docs/BUILD_LOG.md`,
-issue 530, has the steps).
+Enabling them is a reviewed change: move them into `ORACLE_SOURCES`, list them in
+`gate.toml`'s nightly and release tiers with their budgets, record them (`golden
+--write --repeat 2 --source <each>`), read the new lines of `DISAGREEMENTS.md`, and
+run the nightly tier with the engine to triage what Kairos finds
+(`docs/BUILD_LOG.md`, issue 530, has the steps). At every stage exactly one Kairos
+source is in `PRIMARY_SOURCES` - the one Kairos's replay (its refusals, where its
+reading ends) is compared through - never two, which would report each difference
+twice: `kairos:parse` while parse mode is enabled alone; at full mode's enabling,
+either `kairos` in its place (then a refusal past where `kairos` was cut by its
+budget is compared through no source) or `kairos:parse` kept for good (which needs
+`observations.judges_actions` and the divergence file's rule for replay entries
+changed first). `oracle_harness/adapters/__init__.py` says why, and
+`tests/test_repository.py` fails an enabling that leaves an implementation with
+none or two.
 
 ## Layout
 
@@ -955,7 +963,7 @@ oracle follows is `NOT gated`, the reason naming the record and its oracle. For
 each gated ruleset the gate prints how many positions had an independent
 answer for each observable; at how many of the engine's positions an oracle held
 the engine's boards and pieces, and at how many its exact state, unmoved markers
-included; and the fewest oracles that stood behind any record - two at the least.
+included; and the fewest oracle lineages that stood behind any record - two at the least.
 Where a ruleset falls short of the floor and answers were set aside because the
 oracle's markers differed from the engine's, the reason says how many.
 

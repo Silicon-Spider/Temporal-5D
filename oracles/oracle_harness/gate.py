@@ -9,11 +9,13 @@ Tiers (design spec 11.0):
            through at least one named variant
 
 A ruleset is gated only when two or more oracles answer for it - each of its
-records followed, as far as the engine went, by at least two independent
-implementations (H47, CHECKPOINT 8): a single oracle cannot tell its own bug from
-the engine's. Only a tier that runs every oracle search over the whole corpus
-(nightly, release) gates a ruleset, and there an engine with no finding against it
-that came through no ruleset fails (engine-nothing-gated). Any other tier - commit,
+records followed, as far as the engine went, by at least two independent lineages
+(H47, CHECKPOINT 8): a single oracle cannot tell its own bug from the engine's,
+and an oracle derived from another's code counts with it as one lineage
+(CHECKPOINT 10; each pin's `lineage` in the lock file). Only a tier that runs
+every oracle search over the whole corpus (nightly, release) gates a ruleset, and
+there an engine with no finding against it that came through no ruleset fails
+(engine-nothing-gated). Any other tier - commit,
 whose one rules oracle could gate nothing anyway - is a smoke test (H47): the
 summary and report say that the tier gates nothing. In every tier the engine fails
 on an unexplained divergence (one known-divergences.toml does not record), a
@@ -124,7 +126,8 @@ class Gated:
     records: int
     positions: int  # positions the engine reported, over all the ruleset's records
     checked: dict[str, int]  # observable -> positions at which some oracle's answer settles it and agrees with the engine
-    oracles: int  # the fewest independent implementations that followed any one record as far as the engine
+    # The fewest independent lineages (the lock file's `lineage`) that followed any one record as far as the engine went.
+    oracles: int
     # Positions at which some oracle held the engine's boards and pieces (equal
     # placement hashes): the record's moves read alike, markers not compared.
     aligned: int = 0
@@ -635,7 +638,8 @@ def engine_differential(
     entries: list[divergences.Divergence],
     min_checked: float = 1.0,
     recorded: divergences.Recorded | None = None,
-    lineages: dict[str, str] | None = None,
+    *,
+    lineages: dict[str, str],
 ) -> tuple[list[Finding], dict[str, Gated], dict[str, str]]:
     """Compare the engine with every oracle report; returns (findings, gated, ungated).
 
@@ -665,10 +669,13 @@ def engine_differential(
       * each one was followed as far as the engine went by at least
         ``GATING_ORACLES`` (two) independent lineages - two searches of one
         implementation count once, an oracle derived from another's code counts
-        with it (``lineages``: implementation -> lineage, the lock file's; by
-        default every implementation its own), and a parse-only source never
-        counts (H47, CHECKPOINT 8: a single oracle cannot tell its own bug from
-        the engine's; CHECKPOINT 10). A lineage vouches through any member that
+        with it (``lineages``: implementation -> lineage, the lock file's
+        ``Lock.lineages()``), and a parse-only source never counts (H47,
+        CHECKPOINT 8: a single oracle cannot tell its own bug from the engine's;
+        CHECKPOINT 10). The table fails closed: it is a required argument, with
+        no default that would count every implementation apart, and an
+        implementation compared that it does not name is a HarnessError, never a
+        lineage of its own. A lineage vouches through any member that
         followed the record as the engine did, and at most once: a member whose
         replay differs from the engine's - a recorded divergence included - vouches
         for nothing, and another member may vouch in its place;
@@ -677,14 +684,20 @@ def engine_differential(
         per answer, any member of any lineage whose answer agrees with the
         engine's - never one the engine contradicts, a recorded divergence
         included - so where ftxi's check answers are R1's recorded divergences,
-        Kairos's agreeing answer is its lineage's vouch (CHECKPOINT 10).
+        Kairos's agreeing answer is its lineage's vouch (CHECKPOINT 10); and
+        never a parse-only source's, whatever it prints - it answers no rules
+        question (what it held still counts towards the boards and states
+        compared, and its recorded divergences are still looked at).
 
     Without the last two an engine could "pass" a ruleset nothing independent had
     looked at, or that one oracle alone vouched for: several variants are read
     by a single oracle, and one of those has no check verdict to give.
     """
-    def lineage_of(implementation: str) -> str:
-        return (lineages or {}).get(implementation, implementation)
+    unnamed = sorted({oracle_of(source.name) for source in oracle_sources} - set(lineages))
+    if unnamed:
+        raise HarnessError(f"no lineage declared for {', '.join(unnamed)}: the two-oracle bar is counted by lineage "
+                           f"(each oracle pin's `lineage` in {paths.LOCK_FILE.name}; H47, CHECKPOINT 10), and an "
+                           "implementation the table does not name is never taken for a lineage of its own")
 
     findings: list[Finding] = []
     found: list[observations.Disagreement] = []
@@ -728,7 +741,7 @@ def engine_differential(
                     and oracle_of(name) not in misread and _vouches(answer, observed)}
         members: dict[str, set[str]] = {}
         for implementation in followed:
-            members.setdefault(lineage_of(implementation), set()).add(implementation)
+            members.setdefault(lineages[implementation], set()).add(implementation)
         vouched[record.id] = {_lineage_label(root, found) for root, found in members.items()}
         # A position's question counts as independently answered only where an
         # oracle's answer settles it and agrees with the engine's. An answer the
@@ -749,6 +762,10 @@ def engine_differential(
                 boards_held[mine.index] = boards_held[mine.index] or bool(observations.aligned(mine, theirs))
                 exact = observations.same_state(mine, theirs)
                 state_held[mine.index] = state_held[mine.index] or bool(exact)
+                if name in PARSE_ONLY_SOURCES:
+                    # It answers no rules question: an answer it printed all the same settles nothing - excluded by
+                    # name, as from following a record above, not left to what its driver prints.
+                    continue
                 for observable in OBSERVABLES:
                     agrees = (observable, theirs.index) not in clashes
                     confirms = agrees and observations.decisive(observable, getattr(theirs, observable))
@@ -787,8 +804,8 @@ def engine_differential(
         unread = [item.id for item in items if _unread(engine_results[(engine.name, item.id)])]
         alone = [item.id for item in items if not vouched[item.id]]
         # Followed by some oracle, but by fewer than a ruleset needs: each named with the oracles that did.
-        single = [f"{item.id} ({', '.join(sorted(vouched[item.id]))})" for item in items
-                  if 0 < len(vouched[item.id]) < GATING_ORACLES]
+        short = [item.id for item in items if 0 < len(vouched[item.id]) < GATING_ORACLES]
+        single = [f"{record_id} ({', '.join(sorted(vouched[record_id]))})" for record_id in short]
         positions = sum(reported[item.id] for item in items)
         checked = {name: sum(settled[item.id][name] for item in items) for name in OBSERVABLES}
         thin = [name for name in OBSERVABLES if checked[name] < min_checked * positions]
@@ -805,7 +822,9 @@ def engine_differential(
         elif single:
             ungated[ruleset] = (f"only one oracle followed {_some(single)} as far as the engine went - a ruleset is "
                                 f"gated only when at least {GATING_ORACLES} answer for each of its records (H47)")
-            if any("'s lineage (" in name for item in items for name in vouched[item.id]):
+            # Why a lineage the reason names counts once - said only where one of the records it names was followed by
+            # a lineage named with its members (another record's lineages explain nothing the reason says).
+            if any("'s lineage (" in name for record_id in short for name in vouched[record_id]):
                 ungated[ruleset] += ("; an oracle derived from another's code counts with it as one lineage "
                                      "(PROVENANCE.md, H47, CHECKPOINT 10)")
         elif thin:
@@ -982,6 +1001,9 @@ def run_tier(
     `baseline --write`, which records it anew from this run.
     """
     lock = lockfile.load()
+    # The lineage each implementation counts in for the two-oracle bar (H47, CHECKPOINT 10): read once, the table the
+    # differential counts with and the report records.
+    lineages = lock.lineages()
     cfg = config.load()
     tier = cfg.tier(tier_name)
     all_records = corpus.load()
@@ -1112,7 +1134,7 @@ def run_tier(
         else:
             differential, result.gated, result.ungated = engine_differential(
                 engine, sources, records, answers, engine_results, frozen.divergences, tier.min_checked,
-                frozen.recorded, lock.lineages())
+                frozen.recorded, lineages=lineages)
             engine_findings += differential
             result.engine_reads = {record.id: engine_results[(engine.name, record.id)] for record in records}
             if frozen.baseline is not None:
@@ -1140,13 +1162,14 @@ def run_tier(
         results.update(engine_results)
     # Nothing the run compared against or executed may have changed while it ran (H33).
     result.sections.append(("harness unchanged while the gate ran", integrity.changes(frozen.harness, integrity.hash_harness())))
-    _write_report(result, results, cfg, tier, sources, jobs, frozen)
+    _write_report(result, results, cfg, tier, sources, jobs, frozen, lineages=lineages)
     return result
 
 
 def _write_report(result: GateResult, results: runner.Results, cfg: config.GateConfig | None = None,
                   tier: config.Tier | None = None, sources: list[Source] | None = None, jobs: int | None = None,
-                  frozen: Snapshot | None = None) -> Path:
+                  frozen: Snapshot | None = None, *, lineages: dict[str, str]) -> Path:
+    """Write the run's report; ``lineages`` is the table the run counted the two-oracle bar with (run_tier's)."""
     reports = paths.cache_dir() / "reports"
     reports.mkdir(parents=True, exist_ok=True)
     budgets, signatures = {}, {}
@@ -1175,8 +1198,9 @@ def _write_report(result: GateResult, results: runner.Results, cfg: config.GateC
         "smoke_test": SMOKE_TEST if result.smoke_test else None,
         "gated": {ruleset: asdict(item) for ruleset, item in gated.items()},
         "ungated": ungated,
-        # The lineage each implementation counts in for the two-oracle bar (the lock file's, CHECKPOINT 10).
-        "lineages": lockfile.load().lineages(),
+        # The lineage each implementation counted in for the two-oracle bar (CHECKPOINT 10): the table the verdicts
+        # above were counted with, not the lock file read again.
+        "lineages": lineages,
         # What the comparison with the engine's baseline - what it read on the last green run - found (H47).
         "baseline": result.baseline_note,
         "parse_agreement": asdict(result.parse) if result.parse is not None else None,
