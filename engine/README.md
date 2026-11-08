@@ -4242,14 +4242,24 @@ decisions charged more than their hard bound.
 
 Tested (`tests/test_timeman.cpp`, `tests/test_capi_search.cpp`, `tests/test_play_exe.cpp`,
 `python/tests/engine/test_time_management.py`): §8.6's table and the plans by hand (the
-floor, the default, increments, the per-decision split, the hard bound's cap); 6o's arms and
-the hard bound tightening with N; each stop and extension on constructed statistics (overlap
-without churn does not extend, with churn does; disagreement extends more than either source
-alone; a rising eval does not extend; a solved root stops only with the proof channel); the
-spiral guard at 500 boards; the hard bound on a virtual clock against an evaluator three
-times dearer than the prior (never past the bound by more than one batch), on the wall clock
-under four spinning threads (within half a second), and inside a batch at 400 boards past
-the deadline (Unknown, never terminal); the model clock's runs bit-identical; the choice
+floor, the default, increments, the per-decision split, the hard bound's cap); our actions
+rounded up from an odd or a fractional moves-left, a context's moves-left read before the
+root's, the integral reading the board range at every step (a trajectory across both
+boundaries); 6o's arms and the hard bound tightening with N; each stop and extension on
+constructed statistics (smart pruning counting only what the hard bound leaves, a single
+child stopping at once; overlap without churn does not extend on a measured KLD, with churn
+does; each kind taken once a decision; FlatWallClock extending by the clock; disagreement
+extends more than either source alone; a rising eval does not extend, and a new game forgets
+the previous value; a solved root stops only with the proof channel); the snapshot's root
+value (the backed-up mean) and a root child's categorical in the root player's view; the
+spiral guard at 500 boards (all the extensions together within `max_extension`, never past
+the hard bound); the hard bound on a virtual clock against an evaluator three times dearer
+than the prior (never past the bound by more than one batch) and twenty times dearer (on a
+30 s clock, once the scale is measured, strictly inside it), on the wall clock under four
+spinning threads (within half a second), and inside a batch at 400 boards past the deadline
+(Unknown, never terminal); the model clock's runs bit-identical, its work counted as
+playouts / 4 where the playouts outrun the evaluations (a mate-in-one root); E8's floor and
+its cap at E7's hard bound, each where it binds, and the floor binding on the model clock; the choice
 after any stop among the eligible children (§15.4); the step API driven from C and from
 Python building `run_timed`'s tree; the cost shape equal to `net/cost.py`'s `dense_flops` at
 three board counts (Python); match play on a clock under each arm (legal, replayed by

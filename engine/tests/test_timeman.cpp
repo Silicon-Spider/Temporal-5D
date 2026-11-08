@@ -500,8 +500,11 @@ TEST(timeman_extends_on_the_table_and_only_there) {
 TEST(timeman_the_spiral_guard_holds_at_high_n) {
   // 6o: "verify the extension-spiral guard at high N". At 500 boards, every
   // extension signal active at every check, the work advancing a batch at a
-  // time on the model clock: each kind is taken once, all of them together at
-  // most max_extension of the plan, and the hard bound is never crossed.
+  // time on the model clock: all the extensions together stay within
+  // max_extension of the plan, and the hard bound is never crossed. (A second
+  // take of one kind never comes up here - the cap or the hard bound ends the
+  // decision first; once-per-kind is timeman_each_extension_kind_is_taken_once_
+  // a_decision's.)
   for (const double max_extension : {1.0, 0.25, 5.0}) {
     TimeParams p;
     p.proof_volatility = true;
@@ -871,7 +874,9 @@ TEST(timeman_e8_on_moves_the_plan_as_its_rule_says) {
   const TimePlan e7 = plan_decision(p, 0.01, 100, 0, true, ctx, std::nan(""));
   // The reference: the prior's 256 visits, bin 8. A harder prediction (bin 10)
   // funds 2^2 = 4x E7's plan, an easier one (bin 6) a quarter - each clamped to
-  // [0.25, 4], to the floor and to the hard bound.
+  // [0.25, 4]. (The floor and the hard bound's cap bind on smaller plans than
+  // this one - 903.9 evaluations, a hard bound of 4132: they are timeman_e8_
+  // never_plans_below_its_floor_nor_past_e7s_hard_bound's.)
   const TimePlan hard = apply_difficulty(p, e7, effort_at(10), 8.0);
   const TimePlan easy = apply_difficulty(p, e7, effort_at(6), 8.0);
   const TimePlan same = apply_difficulty(p, e7, effort_at(8), 8.0);
@@ -886,7 +891,8 @@ TEST(timeman_e8_on_moves_the_plan_as_its_rule_says) {
   // Guard 3: the hard bound is E7's, whatever the prediction.
   CHECK_EQ(hard.hard_seconds, e7.hard_seconds);
   CHECK_EQ(easy.hard_seconds, e7.hard_seconds);
-  // Clamped: never past the factor caps, below the floor or above the hard bound.
+  // Clamped to the factor caps. (The floor and hard-bound checks hold here without
+  // those clamps too - x0.25 is 226 evaluations, x4 is 3615: see above.)
   for (int bin = 0; bin < kEffortBins - 1; ++bin) {
     for (const double reference : {0.0, 8.0, 14.0}) {
       const TimePlan w = apply_difficulty(p, e7, effort_at(bin), reference);
@@ -976,7 +982,8 @@ TEST(timeman_e8_guards_an_easy_call_still_extends_and_the_bounds_stay) {
   CHECK((v.extensions & kExtendInstability) != 0);
   CHECK((v.extensions & kExtendOverlap) != 0);
   CHECK(v.stop == TimeStop::None);
-  // Guard 3: the hard bound, and the ladder's budgets, are the same flag on and off.
+  // Guard 3: the hard bound is the same flag on and off. (The ladder's budgets are
+  // out of E8's reach by construction: TimeManager::begin takes the search const.)
   TimeParams off = p;
   off.difficulty_weighting = false;
   for (const int bin : {0, 7, 14}) {
@@ -992,10 +999,6 @@ TEST(timeman_e8_guards_an_easy_call_still_extends_and_the_bounds_stay) {
     const TimePlan a = on_tm.begin(on_search, ctx);
     const TimePlan b = off_tm.begin(off_search, ctx);
     CHECK_EQ(a.hard_seconds, b.hard_seconds);
-    CHECK_EQ(on_search.params().hunt_ms, off_search.params().hunt_ms);
-    CHECK_EQ(on_search.params().settling_ms, off_search.params().settling_ms);
-    CHECK_EQ(on_search.params().sync_job_nodes, off_search.params().sync_job_nodes);
-    CHECK_EQ(on_search.params().hunt_nodes, off_search.params().hunt_nodes);
   }
 }
 
@@ -1022,4 +1025,221 @@ TEST(timeman_e8_on_the_model_clock_is_reproducible) {
   CHECK_EQ(digests[0], digests[1]);
   CHECK(std::equal(plans.begin(), plans.begin() + 3, plans.begin() + 3));
   CHECK(plans[2] != plans[0]);  // the predictions moved the plans
+  // Guard 2 binds here: the first two decisions' easy calls (5.05 and 24.16 evaluations
+  // weighted) are lifted to the floor's 32.
+  CHECK_EQ(plans[0], 32.0);
+  CHECK_EQ(plans[1], 32.0);
+  CHECK(plans[2] > 32.0);
+}
+
+// ---- review round 1 (E11/E8): the rules pinned one by one ----------------------------------
+// Each test below is a probe of the review of 05afde5..644801c (findings M5, M6, L7, L8), named
+// by the mutant it kills; every one passed on 644801c and fails on its mutant.
+
+TEST(timeman_smart_pruning_counts_only_what_the_hard_bound_leaves) {
+  // T18: 50 of a 1000-evaluation plan spent (0.5 s at 0.01 s each), the hard bound 0.9 s - 40
+  // more evaluations at most, so a lead of 50 is unbridgeable (the plan alone would leave 950).
+  TimeManager tm;
+  tm.begin(plan_of(1000, 0.9));
+  CHECK(tm.check(snap(50, {70, 20}), std::nan("")).stop == TimeStop::SmartPruning);
+  TimeManager wide;
+  wide.begin(plan_of(1000));
+  CHECK(wide.check(snap(50, {70, 20}), std::nan("")).stop == TimeStop::None);
+}
+
+TEST(timeman_a_single_child_stops_at_once) {
+  // T20: one child - nothing to decide - from stop_min_evaluations on.
+  CHECK(smart_pruning_stop(std::vector<std::uint32_t>{5}, 1e6, 1.0));
+  TimeManager tm;
+  tm.begin(plan_of(1000));
+  CHECK(tm.check(snap(40, {40}), std::nan("")).stop == TimeStop::SmartPruning);
+}
+
+TEST(timeman_overlap_without_churn_does_not_extend_on_a_measured_kld) {
+  // T22: the KLD MEASURED (not unmeasured, as the extension test's first case is), below the
+  // churn threshold (2e-4 per visit) - 0, and 7.25e-5: KL((.5, .5) || (.56, .44)) over 100
+  // visits - with identical categoricals: no extension, the soft bound stops.
+  for (const std::vector<std::uint32_t>& now : {std::vector<std::uint32_t>{100, 100}, std::vector<std::uint32_t>{112, 88}}) {
+    TimeManager tm;
+    tm.begin(plan_of(100), {50, 50}, 100);
+    RootSnapshot r = snap(100, now);
+    r.top_value[0] = peaked(25);
+    r.top_value[1] = peaked(25);
+    const TimeVerdict v = tm.check(r, std::nan(""));
+    CHECK(std::isfinite(v.kld_gain));
+    CHECK(v.kld_gain < 2e-4);
+    CHECK_EQ(v.extensions, 0u);
+    CHECK(v.stop == TimeStop::SoftBudget);
+  }
+  // ... and at a churn above the threshold the same root extends.
+  TimeManager tm;
+  tm.begin(plan_of(100), {50, 50}, 100);
+  RootSnapshot r = snap(100, {150, 50});
+  r.top_value[0] = peaked(25);
+  r.top_value[1] = peaked(25);
+  CHECK_EQ(tm.check(r, std::nan("")).extensions, kExtendOverlap);
+}
+
+TEST(timeman_each_extension_kind_is_taken_once_a_decision) {
+  // T23: volatility at the soft bound extends it once (100 -> 150); still volatile at 150, it is
+  // not taken again - the soft bound stops.
+  TimeManager tm;
+  tm.begin(plan_of(100));
+  RootSnapshot r = snap(100, {60, 40});
+  r.root_evaluated = true;
+  r.root_variance = 0.5;
+  const TimeVerdict first = tm.check(r, std::nan(""));
+  CHECK_EQ(first.target_evaluations, 150.0);
+  CHECK(first.stop == TimeStop::None);
+  RootSnapshot later = snap(150, {90, 60});
+  later.root_evaluated = true;
+  later.root_variance = 0.5;
+  const TimeVerdict v = tm.check(later, std::nan(""));
+  CHECK_EQ(v.target_evaluations, 150.0);
+  CHECK_EQ(v.extensions, kExtendVolatility);
+  CHECK(v.stop == TimeStop::SoftBudget);
+}
+
+TEST(timeman_flat_wall_clock_extends_by_time) {
+  // T25: the FlatWallClock arm executes by the clock - its soft second spent, a volatile root
+  // extends it to 1.5 s (the extension scales the soft time, not only the work).
+  TimeParams p;
+  p.allocator = Allocator::FlatWallClock;
+  TimeManager tm(p);
+  tm.begin(plan_of(100));  // 1 s of soft time
+  RootSnapshot r = snap(60, {60, 40});
+  r.root_evaluated = true;
+  r.root_variance = 0.25;
+  const TimeVerdict v = tm.check(r, 1.0);
+  CHECK_EQ(v.extensions, kExtendVolatility);
+  CHECK(v.stop == TimeStop::None);
+  CHECK(tm.check(snap(70, {55, 55}), 1.4).stop == TimeStop::None);  // level: no lead to prune on
+  CHECK(tm.check(snap(80, {60, 60}), 1.5).stop == TimeStop::SoftBudget);
+}
+
+TEST(timeman_a_new_game_forgets_the_falling_eval_reference) {
+  // T26: the previous game's last root value is not this game's reference.
+  TimeManager tm;
+  tm.end(0.5);
+  tm.new_game();
+  tm.begin(plan_of(100));
+  RootSnapshot r = snap(100, {60, 40});
+  r.root_q = 0.3;  // 0.2 below the forgotten reference: a fall, were it remembered
+  CHECK_EQ(tm.check(r, std::nan("")).extensions, 0u);
+}
+
+TEST(timeman_the_model_clock_prices_the_work_not_the_evaluations) {
+  // T28: a mate-in-one root - most playouts end at the terminal child without an evaluation, so
+  // the work is playouts / 4 (playouts_per_evaluation_cap), and run_timed's seconds on the model
+  // clock are that work's price.
+  Search search(game({"[3k4/8/3K4/8/8/8/8/7Q:0:1:w]"}, BoardSize{8, 8}), quiet_params());
+  const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
+  TimeManager tm;
+  TimeContext ctx;
+  ctx.remaining_seconds = 30;
+  const TimedRun r = run_timed(search, *uniform, tm, ctx);
+  CHECK(static_cast<double>(r.playouts) / 4.0 > static_cast<double>(r.evaluations));  // the premise
+  const double work = std::max(static_cast<double>(r.evaluations), static_cast<double>(r.playouts) / 4.0);
+  CHECK(near(r.seconds, work * tm.seconds_per_evaluation(r.plan.boards), 1e-12));
+}
+
+TEST(timeman_the_snapshots_root_value_is_the_backed_up_mean) {
+  // T40: the falling-eval signal reads the root's mean backed-up value, not its sum.
+  Search search(variant("Standard"), quiet_params());
+  const std::unique_ptr<Evaluator> random = make_evaluator(BuiltinEvaluator::Random, 5);
+  search.run(*random, Limits{64});
+  const NodeView root = search.node(search.root());
+  CHECK(root.weight > 1);
+  CHECK(near(snapshot(search, 0, 0, TimeParams{}).root_q, root.value / root.weight, 1e-12));
+}
+
+TEST(timeman_a_root_childs_categorical_is_read_in_the_root_players_view) {
+  // M05 (Search::root_child_value): flat form, every root child the opponent's turn start. After
+  // Qxd8+ Black is a queen down: the material evaluator's categorical (the mover's view) is low
+  // for Black, so in White's view - the root player's - its mean is high.
+  SearchParams p = quiet_params();
+  p.split = TurnSplit::Flat;
+  Search search(game({"[3q3k/8/8/8/8/8/8/3Q3K:0:1:w]"}, BoardSize{8, 8}), p);
+  const std::unique_ptr<Evaluator> material = make_evaluator(BuiltinEvaluator::Material);
+  search.run(*material, Limits{64});
+  const std::vector<RootChild> children = search.root_children();
+  bool found = false;
+  for (std::size_t i = 0; i < children.size(); ++i) {
+    const RootChild& c = children[i];
+    if (c.moves.size() != 1 || c.moves[0].captured.empty() || c.child == kNoNode) continue;
+    const std::optional<std::array<float, kValueBins>> v = search.root_child_value(i);
+    if (!v) continue;
+    double mean = 0;
+    for (int k = 0; k < kValueBins; ++k) mean += (*v)[static_cast<std::size_t>(k)] * value_bin_centre(k);
+    CHECK(mean > 0.5);
+    found = true;
+  }
+  CHECK(found);
+}
+
+TEST(timeman_our_actions_round_up) {
+  // T11 (issue 454: A = ceil(M / 2)): odd and fractional moves-left - every earlier hand check
+  // used an even M.
+  TimeParams p;
+  TimeContext ctx;
+  ctx.remaining_seconds = 100;
+  for (const auto& [turns, actions] : {std::pair{41.0, 21.0}, std::pair{37.3, 19.0}, std::pair{20.5, 11.0}}) {
+    ctx.moves_left_turns = turns;
+    CHECK_EQ(plan_decision(p, 0.01, 100, 0, true, ctx, std::nan("")).our_actions, actions);
+  }
+}
+
+TEST(timeman_the_contexts_moves_left_comes_before_the_roots) {
+  // T12: a context's prediction is read before the root's network output.
+  TimeParams p;
+  TimeContext ctx;
+  ctx.remaining_seconds = 100;
+  ctx.moves_left_turns = 40;
+  const TimePlan plan = plan_decision(p, 0.01, 100, 0, true, ctx, 60.0);
+  CHECK_EQ(plan.moves_left_turns, 40.0);
+  CHECK_EQ(plan.our_actions, 20.0);
+}
+
+TEST(timeman_the_integral_reads_the_board_range_at_every_step) {
+  // T14: from 40 boards over 30 actions the trajectory crosses the 50- and the 100-board ranges
+  // of boards_per_action; the sum by hand, the range read at each step.
+  TimeParams p;
+  double by_hand = 0;
+  double n = 40;
+  const double c0 = cost_relative(p, 40);
+  for (int k = 0; k < 30; ++k) {
+    by_hand += cost_relative(p, n) / c0;
+    n += 2 * (n < 50 ? 1.05 : n < 100 ? 1.25 : 1.77);
+  }
+  CHECK(n > 100);  // the premise: both boundaries crossed
+  CHECK(near(integral_cost_sum(p, 40, 30, 2), by_hand, 1e-9 * by_hand));
+}
+
+TEST(timeman_e8_never_plans_below_its_floor_nor_past_e7s_hard_bound) {
+  // T30 (guard 2): an easy call at factor 0.25 on a 40-evaluation plan gives 10, lifted to the
+  // floor's 32. T31 (guard 3): a hard call at factor 4 on a 100-evaluation plan gives 400, cut to
+  // the hard bound's 150 (1.5 s at 0.01 s each).
+  TimeParams p;
+  p.difficulty_weighting = true;
+  CHECK(near(apply_difficulty(p, plan_of(40), effort_at(0), 8.0).soft_evaluations, 32.0, 1e-9));
+  CHECK(near(apply_difficulty(p, plan_of(100, 1.5), effort_at(10), 8.0).soft_evaluations, 150.0, 1e-9));
+}
+
+TEST(timeman_no_batch_starts_that_would_end_past_the_hard_bound) {
+  // L8(c): an evaluator twenty times dearer than the prior, a 30 s clock - the plan, made at the
+  // prior, is far from its soft bound when the hard bound is reached; once the scale is measured
+  // (after the first batch) each check predicts the next batch, so the decision ends INSIDE its
+  // hard bound, strictly - the batch margin's work (a mutant without it, or predicting one
+  // evaluation a batch, ends at 1.2079 s against 1.1732 s; 644801c at 1.1130 s). A virtual clock:
+  // no wall-clock timing.
+  TimeParams p;
+  TimeManager tm(p);
+  ManualClock clock;
+  ChargingEvaluator ev(clock, 20 * p.cost_seconds_per_evaluation);
+  Search search(variant("Standard"), quiet_params());
+  TimeContext ctx;
+  ctx.remaining_seconds = 30.0;
+  const TimedRun run = run_timed(search, ev, tm, ctx, &clock);
+  CHECK(run.verdict.stop == TimeStop::HardBound);  // the premise
+  CHECK(clock.t <= run.plan.hard_seconds);
 }

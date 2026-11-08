@@ -10,6 +10,42 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-09 - E11/E8 review fixes 1: E7's stop/extend rules and allocator inputs pinned, E8's floor and cap tested, the strict hard bound
+
+The review of 05afde5..644801c (E11 and E8 on `lane/search`: 1 HIGH, 8 MEDIUM, 13 LOW) is fixed in
+two phases as the main loop decided - phase 1 now; phase 2 (H1, M1-M4, L2, L3 and the deadline's
+reconciliation, M2) after `lane/engine`'s issue 406 reaches main. This entry: M5, M6, L7 and L8(c,
+d). Every new test kills the reviewers' mutant it is named for (re-run on this tree: 16 of 16
+KILLED); none changes what the code does.
+- **E7's stop/extend rules (M5)**, each a test in `engine/tests/test_timeman.cpp`: smart pruning
+  counts only the evaluations the hard bound leaves (T18); a single child stops at once (T20);
+  overlap without churn does not extend on a MEASURED KLD of 0 or 7.25e-5 per visit (T22 - the old
+  case had no earlier visits, so its KLD was NaN and the churn threshold was never read); each
+  extension kind is taken once a decision (T23 - the spiral test never reaches a second take: the
+  cap or the hard bound ends it first, so it pins the cap alone, and says so now); FlatWallClock
+  extends by the clock (T25); a new game forgets the previous game's value (T26); the model clock
+  charges `max(evaluations, playouts / 4)` at a mate-in-one root (T28); the snapshot's root value is
+  the backed-up mean (T40); `Search::root_child_value` gives the root player's view (M05).
+- **E7's allocator inputs (M6)**: our actions are `ceil(M / 2)` at 41, 37.3 and 20.5 turns (21,
+  19, 11 - every earlier M was even); a context's moves-left is read before the root's (40 over 60:
+  20 actions); `integral_cost_sum` from 40 boards over 30 actions equals the sum by hand, the board
+  range read at each step across both of `boards_per_action`'s boundaries.
+- **E8's guards 2 and 3 (L7)**: the floor (a 40-evaluation plan at x0.25 gives 32, not 10) and the
+  soft plan's cap at E7's hard bound (a 100-evaluation plan at x4 gives 150, not 400); the
+  model-clock test now asserts the floor it binds at its first two decisions (5.05 and 24.16
+  lifted to 32). The test comments that claimed the 100-board fixture exercised them corrected.
+- **The hard bound's tests (L8(c), (d))**: a new virtual-clock test - an evaluator twenty times
+  dearer than the prior, a 30 s clock - ends on the hard bound strictly inside it (1.1130 s of
+  1.1732 s; dropping the batch margin or predicting one evaluation a batch ends at 1.2079 s); the
+  guard-3 block's four `SearchParams` checks dropped (they could not fail: `TimeManager::begin`
+  takes the search const), its hard-bound check kept.
+- **Claims corrected**: the engine README's "Tested" paragraph and the register E7 row in
+  `docs/BUILD_LOG.md` now say what the tests pin (the spiral guard pins the cap; once-per-kind is
+  its own test), and the two entries below carry review corrections.
+
+Spec: none of the spec changes - the tests pin rules §8.6 and register E7/E8 already state
+(issues 454, 457, 459-464, 471-472). No proposed edit; no measured figure.
+
 ### 2026-11-09 - E8: difficulty-weighted allocation behind its flag (a prototype, off)
 
 Register E8 (prototype, class R, 6v; spec §8.6's effort-head paragraph) built on E11's time
@@ -34,10 +70,12 @@ manager, OFF by default (`TimeParams::difficulty_weighting`); every number a nam
   (with `--time`; inert with the built-in evaluators, which give no effort).
 - **Tests**: `engine/tests/test_timeman.cpp` (off = E7 on a sweep of contexts and a timed run's
   digest; on - a harder prediction plans more, an easier one less, within the floor, the caps
-  and the hard bound; the upper quantile funds more than the median; the running reference;
+  and the hard bound (Review correction, 2026-11-09: no case there binds the floor or the cap at the
+  hard bound; each is tested since where it binds - review fixes 1, above); the upper quantile funds more than the median; the running reference;
   won't-resolve under both readings and the overlap extension suppressed only there; guard 1 -
   an easy call still extends on instability and overlap; guard 3 - the hard bound and the
-  ladder's budgets the same on and off; reproducible on the model clock),
+  ladder's budgets the same on and off (Review correction, 2026-11-09: the budgets' checks could not
+  fail - `begin` takes the search const - and are dropped); reproducible on the model clock),
   `test_capi_search.cpp` (the fields through the C API, the effort's count refused; the tests'
   brace initialisers name the two new context members), `test_play_exe.cpp` (the flag needs
   `--time`; the record names it), and `python/tests/engine/test_time_management.py` (the
@@ -95,7 +133,9 @@ unstated number a named placeholder with a build-log spec issue (452-470).
   `--time` on the command line).
 - **Tests**: `engine/tests/test_timeman.cpp` (new: §8.6's table by hand - 3.4x, 0.48% against
   1.00%, 3.1x - the plans by hand, the arms, the hard bound tightening with N, every stop and
-  extension case, the spiral guard at 500 boards, the hard bound on a virtual clock, on the wall
+  extension case (Review correction, 2026-11-09: not every rule of each - eight of the table's
+  readings and `root_child_value`'s view could change unseen; pinned since, review fixes 1 above),
+  the spiral guard at 500 boards, the hard bound on a virtual clock, on the wall
   clock under load and inside a batch at 400 boards, the model clock's reproducibility, the final
   choice among the eligible children, match play's clock end to end); `test_capi_search.cpp`
   (the C step loop builds `run_timed`'s tree; parameters, refusals, layouts);
