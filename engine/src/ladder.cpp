@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <utility>
 
 namespace t5d::mcts {
@@ -201,8 +202,16 @@ std::vector<LadderVerdict> VerificationLadder::take(std::uint64_t decision) {
     error_ = nullptr;
     std::rethrow_exception(e);
   }
+  // Room first (review finding L3 of lane fix535): the moves below then cannot
+  // throw, so an allocation failure leaves done_ as it was - no verdict lost,
+  // no moved-from husk left behind for a later take to hand out.
+  static_assert(std::is_nothrow_move_constructible_v<LadderVerdict>);
+  std::size_t mine = 0;
+  for (const LadderVerdict& v : done_) mine += v.decision == decision ? 1u : 0u;
   std::vector<LadderVerdict> out;
   std::vector<LadderVerdict> others;
+  out.reserve(mine);
+  others.reserve(done_.size() - mine);
   for (LadderVerdict& v : done_) {
     (v.decision == decision ? out : others).push_back(std::move(v));
   }

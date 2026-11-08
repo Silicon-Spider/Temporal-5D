@@ -1476,7 +1476,11 @@ class Search {
   /// leaves the tree, the graph's table and the root's side tables and effort
   /// label as they were - a child node made for it stays, linked under the old
   /// root; a node made for a state the tree did not hold is taken back - and
-  /// only the root hook's own exception comes after a re-root done.
+  /// only the root hook's own exception comes after a re-root done. The one
+  /// loss (review finding L3): the verification ladder's verdicts for the old
+  /// decision that its ending had taken over and not yet recorded, when the
+  /// failure comes there - never a proof (nothing is offered at a decision's
+  /// end, and the proof channel is off, H41).
   /// advance_action under the board-move split re-roots once per decision: a
   /// failure part-way leaves the search on the last decision it re-rooted on.
   void advance(std::size_t index);

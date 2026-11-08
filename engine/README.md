@@ -2693,9 +2693,12 @@ action is checked (each move pseudo-legal where it is made, the submission legal
 the first re-root, and a failure changes nothing; from a turn start an action has at
 least one move. Each re-root happens whole or not at all: what it allocates - the order
 kept, the renumbering, the graph's table of the kept nodes - and the ladder's decision
-ending come before anything changes, so one that throws leaves the search as it was, and
+ending come before anything changes, so one that throws leaves the tree, the graph's
+table and the root's side tables and effort label as they were, and
 a node `advance_to` made for a state the tree did not hold is taken back (build-log
-issue 600). Evaluations are
+issue 600). What it cannot keep is the verification ladder's verdicts for the old
+decision that its ending had taken over and not yet recorded, if the failure comes there
+- never a proof (review finding L3). Evaluations are
 cached per (state, moves made in its action, refresh epoch) (A6; `set_epoch`; 0 in the
 dense configuration).
 
