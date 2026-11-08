@@ -10,6 +10,41 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-09 - The network job's three Linux-only failures: t5d-audit built, two tolerances fitted to what they measure
+
+Once sharded (issue 601), the network job ran its whole suite on Linux. It failed the same three
+tests on every run (42469920087 on c8a9c49, 42473372690 on 9bc10fc, 42476803590 on e15f173), and
+none of them fails on the development machine (issue 602):
+
+- **`tests/engine/test_decision_log.py`** needs `t5d-audit` beside the library, and the job built
+  only the library and `t5d-gate`. The job now builds `t5d-audit` too (`.github/workflows/network.yml`).
+- **`tests/net/test_params.py`'s parameter fingerprint.** Its three float64 sums are meant to need
+  no bit-exact float32 libm across platforms. Its rank-weighted sum was still held to 1e-5, though a
+  tensor's last-bit difference enters that sum up to n times (n tensors; 230 in the v1). The runner
+  draws the v1's parameters about 1e-8 relative away from the development machine's: the plain sum
+  differs by 1.3e-6, the weighted sum by 7.7e-5 and the absolute sum by 1.8e-11 relative. `_same`
+  now allows 1e-5 x n on the weighted sum, and every fingerprint check goes through it. A moved draw
+  or two swapped tensors still move the sums far beyond.
+- **`tests/net/test_quant.py::test_an_evaluation_does_not_depend_on_its_batch`.**
+  - **The old bound.** It held "pow2" to 1e-5. That held on the development machine only because no
+    FP8 rounding flip fell early in the trunk at seeds 0-5.
+  - **Measured here (2026-11-09).** The two batches' FP32 arithmetic differs at about 81% of the
+    position's 88,576 trunk elements (RMS 1.8e-7). The format absorbs most of that. A value within
+    the difference of a rounding boundary flips, though, and an early flip spreads through every
+    later rounding.
+  - **On the runner.** It measured 2.1e-3 at seed 0 in two runs and passed in the third, with the
+    network code unchanged in between.
+  - **The new bound.** One bound for both rules, 1e-2, three times the largest spread measured
+    (3.1e-3, "absmax"). Under "absmax", the per-tensor mutants (2.6e-2 and 2.2e-2) still fail it.
+    Under "pow2", those mutants move this measure by at most 2.1e-4, which no end-to-end bound can
+    separate from an early flip on such a CPU. `test_quant_linear_scale_granularity` and
+    `test_the_attention_operands_are_rounded_after_rope` catch them exactly, as the docstring
+    already said.
+
+Spec: no part of the spec describes the CI job or these tests' tolerances. The purity test serves
+C19-C21 and G2 (register), whose text is unchanged. BUILD_LOG issues 601 (the shard design, recorded
+now) and 602.
+
 ### 2026-11-08 - Upstream drafts: three oracle notation-reader gaps (two bug reports, one question)
 
 The done-means audit's verification (2026-11-02, its section 4) found, among the barriers of the
