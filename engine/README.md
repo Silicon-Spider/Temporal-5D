@@ -4011,14 +4011,29 @@ Unknown gives no verdict and is counted; answers are memoised by position and de
 Game ends (E4's own verdicts, which the search scores) are counted, not asked.
 
 Tests (`tests/test_mcts.cpp`, `tests/test_solver_refs.hpp` for the positions and arms):
-- `mcts_solver_agrees_with_df_pn_on_constructed_mates` - the seven constructed positions
+- `mcts_df_pn_checker_flags_each_false_claim` and `mcts_df_pn_checker_memo_keys_on_depth`
+  (since MT-01's review, 2026-11-01: the checker had no seeded-fault test) - the checker fed
+  one false claim per rule (a Win(1) at the mate in two and a Win(3) at the forced draw, both
+  disproven; a Loss(2) and a Draw at the mate in one, where df-pn proves the mover's mate; a
+  Loss(2) at the forced draw, whose successors escape; a Draw at the forced loss, after every
+  action of which the opponent mates), each a contradiction, and three true claims, none; the
+  mate in two asked within 1 (disproven) and within 3 (proven): two searches, then a memo hit.
+- `mcts_solver_agrees_with_df_pn_on_constructed_mates` - the fourteen constructed positions
   (mate in one, cross-board mate, stale checkmate in one, mate in two, history royal mate,
-  forced draw, forced loss) under both Q4 readings and five arms (the ply split and the flat
-  form, each as a tree and as MCGS's graph; the tree form), 20,000 playouts: every root
-  solved; the mate in one Win(1), the forced draw a Draw, the forced loss Loss(2) at the
-  root under every arm; 70 searches, 408 claims at solved nodes (90 win, 100 loss, 218 draw;
-  288 of them game ends), 170 comparisons, all decided and agreeing; 26 df-pn searches (the
-  rest from its memo), 18 proofs, all 18 certified by E4. About a second.
+  forced draw, forced loss; since the review four losses whose defences lose at different
+  speeds - two Loss(4), two Loss(6) - and three more draws, found by a seeded search over 4x4
+  set-ups and held by df-pn) under both Q4 readings and five arms (the ply split and the flat
+  form, each as a tree and as MCGS's graph; the tree form), 20,000 playouts: every root solved
+  and held to its claim under every arm (Win(1) four times, Win(3), Loss(2), Loss(4) twice,
+  Loss(6) twice, Draw four times); 140 searches, 1,846 claims at solved nodes (604 win, 654
+  loss, 588 draw; 1,022 game ends), 1,224 comparisons, 1,214 decided and agreeing, 10
+  unknown - per rule 599 win, 140 and 315 loss (at the node, at the successors), 80 and 80
+  draw; 684 claims inside the proofs (beyond the roots); 214 df-pn searches (the rest from
+  its memo), 159 proofs, all certified by E4; 50 solved losses whose children are at more
+  than one distance - Loss(k) the longest defence's, which the derivation's greatest decides.
+  No Win node ever holds two winning children (the solver solves a node at its first, and
+  selection never enters a solved node), so its least is never a choice (build-log issue
+  409). About 8 s.
 - `mcts_solver_agrees_with_df_pn_under_every_ruleset` - `two_board_positions` (6 per Q4
   reading) and `sparse_positions` under all 27 rulesets (1 game, 2 turns), three arms (ply,
   tree, flat), 250 playouts, df-pn 50,000 nodes: 1,629 searches (640 roots solved), 5,704
@@ -4033,8 +4048,10 @@ Tests (`tests/test_mcts.cpp`, `tests/test_solver_refs.hpp` for the positions and
   decided and agreeing, 748 unknown; 7,980 df-pn searches, 7,234 proofs, every one certified
   by E4, 377 disproofs. 48 minutes on a loaded machine (it prints a line per ruleset; Q3's
   play activation took 7 minutes, Q20's alternative 20).
-Each asserts zero contradictions, zero certificate failures and a floor of decided
-comparisons.
+Each asserts zero contradictions and zero certificate failures; since the review the two
+default tests also floor the decided comparisons of each rule, the distinct df-pn searches
+and the claims inside the proofs, and ceil the undecided (from the baseline, with margin:
+`DfpnTally`'s per-rule counts, `rules_summary`).
 
 ### t5d-solver-check (the offline mode)
 
@@ -4067,7 +4084,7 @@ issue 401).
 ```
 t5d-proof-records --out DIR [--rules ENC | --no-moves-after-shift] [--every K]
     [--split ply|tree|flat] [--playouts N] [--mate-nodes N] [--legality-nodes N]
-    [--max-lines N] [--max-records N] RECORD ...
+    [--max-lines N] [--max-records N] [--ladder] RECORD ...
 ```
 
 H41's cross-check against the oracles' mate verdicts runs through the gate, one way: the
@@ -4087,9 +4104,14 @@ then the line - 5DFEN records no creators or origins, so a mid-game root is neve
 from its boards. Headers: `ProofLine`, `ProofRoot` (actions before the root), `ProofClaim`,
 `ProofSplit`, `ProofDefences` (`i:n` - after i actions the defender is to move with n
 defences, each E4's), `ProofRules` (non-default rules), `ProofFrom` (the input's content id,
-never its path). `FILES.tsv` lists each record's SHA-256, size and name. Exit status 0
-clean, 3 an error (that root's records not written), 1 unreadable input or unwritable
-output, 2 a bad command line. It reads nothing but its arguments.
+never its path). `FILES.tsv` lists each record's SHA-256, size and name. A root whose
+search, claim or proof tree fails - the derivation refusing a solved node its children do
+not support, an invariant - is that root's ERROR, and the run goes on (since MT-02's review,
+2026-11-01; it used to abort without `FILES.tsv`). `--ladder`, a diagnostic, leaves E10's
+ladder on (synchronous, so deterministic): its injected proofs are not the solver's, and the
+roots they reach fail that way. Exit status 0 clean, 3 an error (that root's records not
+written; the others' are, and `FILES.tsv`), 1 unreadable input or unwritable output, 2 a bad
+command line. It reads nothing but its arguments.
 
 The records go to `--out` - a build or scratch directory - never into the gate corpus:
 adding them there (`source = "local"`, licence, notes), `verify` and re-recording the golden
@@ -4105,13 +4127,24 @@ records (15 from the named variant's game), every one listed in `FILES.tsv` with
 SHA-256, each replayed by `t5d-gate` (full mode, cap 1,000) to its checkmate with no earlier
 position terminal; at each of the 20 defender turn starts the records name, the proof
 tree's defences are E4's distinct successors (`count_legal_successors`) and the gate's
-`legal_actions` E4's count (`count_legal_actions`). About 80 s on a loaded machine.
+`legal_actions` E4's count (`count_legal_actions`); each record's line as long as its claim -
+"win k" counts half-turns, so k actions after `ProofRoot`'s (since the review: the line was
+never compared with the claim); and with `--ladder` on the played game every fourth turn
+start, status 3, the roots that fail reported ("the search or its claims failed"), the run
+finished and `FILES.tsv` written. About 100 s on a loaded machine.
 
 ### H19 under TT churn (6f; `tests/test_prover.cpp`, `tests/test_hunt.cpp`)
 
 §13.1 6f: "verify the proof-export invariant under TT churn for Hunt and the settling scans
-(§11.3)". With `tt_entries` 1 or 2 the transposition table keeps nothing, so every fact a
-search relies on must be in the stores.
+(§11.3)". The structural half holds by construction: the prover's transposition table keeps
+estimates only - it refuses a proven (pn 0) or disproven (dn 0) entry, and the prover never
+offers it one (a solved node goes to the stores at once) - so no fact can live only in it,
+whatever its size (`prover_tt_keeps_estimates_never_facts`, through `detail::
+estimate_tt_read_back`; since MT-03's review, 2026-11-01). The tests below check the
+consequence: with `tt_entries` 1 or 2 every fact a search relies on must be in the stores.
+(The review found the churn of the first three tests barely moves their searches - a 1-entry
+TT changed the expansions at 66 of 2,034 random roots, never a status - hence the workloads
+where it carries weight, below.)
 - `prover_proofs_survive_tt_churn_h19` - settling as the scans run it (full df-pn,
   `prove_only` off, external `MemorySolvedStore` and `DisproofStore`, one thread, by nodes):
   the constructed mates (both Q4 readings, both classes, depth 3) and `sparse_positions`
@@ -4119,20 +4152,30 @@ search relies on must be in the stores.
   depth 1), each at `tt_entries` 1 and 2 against the default TT: the same answer wherever
   both decide (3,966 roots, no difference); every result held to the references
   (`Tally`: 4,907 confirmed, 10 beyond them); every proven root's Win in the solved store at
-  return; every disproven root's disproof in the disproof store with its class and depth -
-  or, where the search found the side to move lost or stalemated outright (7 roots, each a
-  Loss(2) the game tree confirms), that game fact in the solved store - and never a Win for
-  it; stored entries against the game tree (Win, Loss, and Draw - a stalemate now: 4,278 of
-  4,290 confirmed, 12 beyond its budget); a fresh prover over the same stores answers each
-  decided root with `store_hits >= 1` and `expansions == 0` (3,966); a proof's continuation
-  - the attacker to move again after its action and the longest defence - answered from the
-  stores alone (424, "on PV changes"); and a sequence of related roots (consecutive turn
-  starts of random games) sharing one pair of stores under a 1-entry TT, every root it
-  decided re-asked and answered with no expansion (951). About 50 s.
+  return; every disproven root's disproof in the disproof store at the search's class and
+  depth - or, where the search found the side to move lost or stalemated outright, that game
+  fact in the solved store, checked: a Loss the game tree confirms after each of E4's listed actions, a stalemate by E4's verdict
+  (7 roots) - and never a Win for it (since the review: any entry but a Win used to stand in
+  unchecked); stored entries checked - a Win or Loss against the game tree, a Draw as E4's
+  stalemate (since the review: the game tree at depth 0 answered Unknown wherever a legal
+  action exists, so a false Draw counted "beyond") - 4,278 of 4,290 confirmed, 12 beyond the
+  game tree's budget, at most 1% asserted; a fresh prover over the same stores answers each
+  decided root with `store_hits >= 1` and `expansions == 0` (3,966); every proof re-asked two
+  half-turns shallower gives no proof beyond that depth (424); a proof's continuation - the
+  attacker to move again after its action and the longest defence - answered from the stores
+  alone (424, "on PV changes"); and a sequence of related roots (consecutive turn starts of
+  random games) sharing one pair of stores under a 1-entry TT, every root it decided re-asked
+  and answered with no expansion (951). About 90 s.
+- `prover_churn_takes_effect_where_the_tt_carries_weight` (since the review) - three-turn
+  games' positions under both Q4 readings and the constructed mates, depth 5, both classes,
+  20,000 nodes, a 1-entry TT over external stores against the default: the default TT hits
+  at 74 of 248 roots and the 1-entry TT's expansions differ at 63 (at least 40 asserted),
+  statuses never (174 decided both ways); every export as above; store entries 466, 438
+  confirmed, 28 beyond the game tree (at most 10% asserted).
 - `prover_threads_survive_tt_churn` - M13's 5 threads sharing a 1-entry TT, by nodes and by
   the clock (20 ms), both classes, depth 3, fresh stores per search: no proof or disproof
-  the references deny (74 confirmed), the stores as above, and every proof's certificate
-  confirmed by E4 alone (36 of 36).
+  the references deny (73-74 confirmed, clock-budgeted), the stores as above, and every
+  proof's certificate confirmed by E4 alone (35-36, all of them).
 - `hunt_finds_its_mates_under_tt_churn` - Hunt with `prover.tt_entries = 1`, at 1 and 5
   threads: the constructed mates found at their distances, lines complete and replaying to
   E4's checkmate, certificates confirmed; Hunt exposes no store, so its prover is driven
@@ -4140,13 +4183,21 @@ search relies on must be in the stores.
   solved store, the disproof store untouched (prove-only, H43); random play at depth 3
   (Hunt and its prover agree, deterministic at one thread; no disproof; every mate verified
   and its certificate confirmed or undecided); the export switch still refused (H23). 34
-  hunts, 15 mates, 15 certificates confirmed.
-- `long_` twins of all three (5 turns at 60,000 nodes; 4 turns at 100,000; 6 turns at
-  400,000): 9,228 roots compared, no difference, 8,952 stored entries confirmed, 610
-  continuations and 2,296 sequence roots answered from the stores; 68 certificates at 5
-  threads; 22 Hunt mates, all certified. About 12 minutes on a loaded machine.
-Not yet: the same through E10's settling wrapper (the brief's part 5) - E10 is on
-`lane/search`, not on main; it follows E10's merge (issue 402).
+  hunts, 15 mates, 15 certificates confirmed. `hunt_churn_takes_effect_where_the_tt_carries_
+  weight` (since the review): Hunt at depth 5 on three-turn games' positions, a 1-entry TT
+  against the default - its expansions differ at 13 of 54 (at least 8 asserted), every mate
+  certified or undecided by E4.
+- `long_` twins of the first, third and fourth (5 turns at 60,000 nodes; 4 turns at
+  100,000; 6 turns at 400,000): 9,228 roots compared, no difference; 8,952 of 10,478 stored
+  entries confirmed, 1,526 beyond the game tree (at most 20% asserted: the wider positions
+  leave its budget more often); 19 disproven roots stood for by a confirmed fact, each Loss
+  checked after every one of E4's listed actions (a whole-root tree could not decide two of
+  them, 4-5 boards under Q6 and Q17: every successor Win(1)); 610 proofs re-asked
+  shallower, 610 continuations and 2,296 sequence roots answered from the stores; 68
+  certificates at 5 threads, all confirmed; 22 Hunt mates, all certified (the Hunt twin
+  unchanged by the review, not re-run).
+Not yet: the same through E10's settling wrapper (the brief's part 5) - E10 is merged
+(2026-11-01), the test not yet written (issue 402).
 
 ## Stage E10: verification v3 wired into the search (6b″'s adoption table)
 

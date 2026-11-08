@@ -120,6 +120,7 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "t5d/move.hpp"
@@ -475,6 +476,20 @@ class Prover {
   struct Impl;
   std::unique_ptr<Impl> impl_;
 };
+
+namespace detail {
+
+/// TESTS ONLY - H19's structural half (spec 11.3: "the TT never holds the sole
+/// copy"; MT-03's review, 2026-11-01): the prover's transposition table keeps
+/// estimates, never facts. Saves (pn, dn) under `key` in a table like the
+/// prover's and returns what the prover would read back from it: nothing for
+/// a proven (pn 0) or disproven (dn 0) node - the table refuses to keep one,
+/// and the prover never offers it one (a solved node goes to the stores at
+/// once) - else the pair, each number capped as the table packs it.
+std::optional<std::pair<std::uint64_t, std::uint64_t>> estimate_tt_read_back(std::uint64_t key, std::uint64_t pn,
+                                                                             std::uint64_t dn);
+
+}  // namespace detail
 
 }  // namespace t5d
 

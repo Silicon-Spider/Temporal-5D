@@ -661,11 +661,19 @@ TEST(long_prover_threads_agree_with_the_references) {
 
 namespace {
 
-// Every entry of a solved store against the brute-force game tree: a Win(k)
-// mates within k, a Loss(k) is mated within k, a Draw is a stalemate now (at
-// most `most` entries; the
-// game tree's budgets small, so an entry it cannot reach is counted, not
-// failed).
+// E4's verdict at a position: the stalemate a Draw entry must be.
+bool stalemate_now(const GameState& s) {
+  SearchBudget b = SearchBudget::nodes(2'000'000);
+  return detect_mate(s, Detector::Hypercuboid, b).verdict == Outcome::Stalemate;
+}
+
+// Every entry of a solved store: a Win(k) mates within k and a Loss(k) is
+// mated within k by the brute-force game tree, a Draw is a stalemate now by
+// E4's verdict (at most `most` entries; the game tree's budgets are small, so
+// a Win or Loss it cannot reach is counted, not failed - and the tests bound
+// that count). (MT-03's review, 2026-11-01: a Draw was judged by the game
+// tree at depth 0, which answers Unknown wherever a legal action exists, so a
+// false Draw counted "beyond", never failed.)
 struct StoreCheck {
   int entries = 0;
   int confirmed = 0;
@@ -684,15 +692,22 @@ void check_store(const MemorySolvedStore& proofs, std::size_t most, StoreCheck& 
       CHECK(false);
       continue;
     }
+    if (e.proof.kind == Proof::Kind::Draw) {
+      if (stalemate_now(e.position)) {
+        ++c.confirmed;
+      } else {
+        std::fprintf(stderr, "  stored draw, E4 finds no stalemate at %s\n", describe_position(e.position).c_str());
+        CHECK(false);
+      }
+      continue;
+    }
     GameTree tree(5000, 20000, 40000);
     const GameValue v = tree.solve(e.position, e.proof.distance);
     if (v.kind == GameValue::Kind::Unknown) {
       ++c.beyond;
       continue;
     }
-    const GameValue::Kind want = e.proof.kind == Proof::Kind::Win    ? GameValue::Kind::Win
-                                 : e.proof.kind == Proof::Kind::Loss ? GameValue::Kind::Loss
-                                                                     : GameValue::Kind::Draw;
+    const GameValue::Kind want = e.proof.kind == Proof::Kind::Win ? GameValue::Kind::Win : GameValue::Kind::Loss;
     if (v.kind == want && v.distance <= e.proof.distance) {
       ++c.confirmed;
     } else {
@@ -703,6 +718,28 @@ void check_store(const MemorySolvedStore& proofs, std::size_t most, StoreCheck& 
   }
 }
 
+// A stored Loss(k) of the side to move, checked: a checkmate now for k 0
+// (E4's verdict); else the side to move has legal actions - E4's exhaustive
+// listing - and after each the opponent mates within k - 1 by the game tree,
+// asked successor by successor with a tree of its own, so that a wide root
+// does not exhaust one tree's budget (a Q6 root of 4 boards and 8 actions did,
+// in the long twin: every successor Win(1), the whole root Unknown).
+bool loss_confirmed(const GameState& s, int k) {
+  if (k == 0) {
+    SearchBudget b = SearchBudget::nodes(2'000'000);
+    return detect_mate(s, Detector::Hypercuboid, b).verdict == Outcome::Checkmate;
+  }
+  if (k < 2) return false;  // the opponent needs an action of its own
+  const ActionList acts = list_legal_actions(s, 100'000, Detector::Hypercuboid, SearchBudget::nodes(20'000'000));
+  if (!acts.stats.exhaustive || acts.reached_cap || acts.actions.empty()) return false;
+  for (const LegalAction& a : acts.actions) {
+    GameTree tree(200'000, 2'000'000, 20'000'000);
+    const GameValue v = tree.solve(a.result, k - 1);
+    if (v.kind != GameValue::Kind::Win || v.distance > k - 1) return false;
+  }
+  return true;
+}
+
 DisproofClass root_class(const ProverOptions& o) {
   return DisproofClass{true, o.seeds, o.completion, disproof_shape(o)};
 }
@@ -710,9 +747,13 @@ DisproofClass root_class(const ProverOptions& o) {
 // H19 at the root after a search over external stores: a proof is in the
 // solved store, a disproof in the disproof store with its class and depth -
 // or, where the root was found lost or stalemated outright, that fact in the
-// solved store - and never a Win for a disproven root.
+// solved store, checked: a Loss the game tree confirms after each of E4's
+// listed actions (loss_confirmed), a stalemate by E4's verdict - and never a
+// Win for a disproven root. (MT-03's review, 2026-11-01: any solved-store
+// entry other than a Win used to stand in for the disproof unchecked.)
+// `facts` counts the roots that relied on a fact.
 void exports_hold(const ProveResult& r, const GameState& s, const ProverOptions& o, const MemorySolvedStore& proofs,
-                  const DisproofStore& disproofs) {
+                  const DisproofStore& disproofs, int* facts = nullptr) {
   if (r.status == ProofStatus::Proven) {
     CHECK(r.stats.proofs_exported >= 1 || r.stats.store_hits >= 1);
     const std::optional<Proof> p = proofs.find(s);
@@ -722,15 +763,24 @@ void exports_hold(const ProveResult& r, const GameState& s, const ProverOptions&
   } else if (r.status == ProofStatus::Disproven) {
     const std::optional<Proof> p = proofs.find(s);
     CHECK(!p.has_value() || p->kind != Proof::Kind::Win);
-    // Either the class-relative disproof, or a game fact that implies it: the
-    // side to move proven lost (or stalemated) in the solved store - found
-    // when the search met the root as the defender's and read back at the
-    // root (make_turn's "the other side wins: no mate for A").
-    if (disproofs.find(s, root_class(o)) < o.depth && !p.has_value()) {
-      std::fprintf(stderr, "  disproven, no disproof recorded; the solved store holds %s at %s\n",
-                   p ? to_string(*p).c_str() : "nothing", describe_position(s).c_str());
-      CHECK(false);
+    // Either the class-relative disproof at the search's depth, or a game fact
+    // that implies it: the side to move proven lost (or stalemated) in the
+    // solved store - found when the search met the root as the defender's and
+    // read back at the root (make_turn's "the other side wins: no mate for A").
+    if (disproofs.find(s, root_class(o)) >= o.depth) return;
+    bool fact = false;
+    if (p && p->kind == Proof::Kind::Loss) {
+      fact = loss_confirmed(s, p->distance);
+    } else if (p && p->kind == Proof::Kind::Draw) {
+      fact = stalemate_now(s);
     }
+    if (fact) {
+      if (facts != nullptr) ++*facts;
+      return;
+    }
+    std::fprintf(stderr, "  disproven, no disproof recorded and no confirmed fact; the solved store holds %s at %s\n",
+                 p ? to_string(*p).c_str() : "nothing", describe_position(s).c_str());
+    CHECK(false);
   }
 }
 
@@ -742,6 +792,8 @@ struct Churn {
   int answered = 0;   // re-asked of a fresh prover over the stores
   int related = 0;    // a proof's continuation, answered from the stores
   int sequences = 0;  // positions re-asked after a sequence shared the stores
+  int shallow = 0;    // proven roots re-asked two half-turns shallower
+  int facts = 0;      // disproven roots whose stored game fact stood in for the disproof
 };
 
 // One position under the TT's churn: tt_entries 1 and 2 against the default.
@@ -767,7 +819,7 @@ void churn_position(const GameState& s, const ProverOptions& base, std::uint64_t
         CHECK(false);
       }
     }
-    exports_hold(r, s, o, proofs, disproofs);
+    exports_hold(r, s, o, proofs, disproofs, &c.facts);
     check_store(proofs, 6, c.store);
     if (r.status == ProofStatus::Unknown) continue;
     // A fresh prover over the same stores (its TT empty) answers at once.
@@ -778,6 +830,20 @@ void churn_position(const GameState& s, const ProverOptions& base, std::uint64_t
     CHECK(again.stats.store_hits >= 1);
     CHECK_EQ(again.stats.expansions, std::uint64_t{0});
     if (r.status == ProofStatus::Proven) CHECK(again.proof.distance <= r.proof.distance);
+    // A stored proof is read only where its distance fits the depth: asked
+    // again two half-turns shallower, the stores give no proof longer than
+    // that depth (MT-03's review, 2026-11-01).
+    if (r.status == ProofStatus::Proven && r.proof.distance >= 3) {
+      Prover shallow(o, &proofs, &disproofs);
+      const int depth = r.proof.distance - 2;
+      const ProveResult rs = shallow.prove(s, ProveBudget::nodes(nodes), depth);
+      ++c.shallow;
+      if (rs.status == ProofStatus::Proven && rs.proof.distance > depth) {
+        std::fprintf(stderr, "  a stored %s read at depth %d at %s\n", to_string(rs.proof).c_str(), depth,
+                     describe_position(s).c_str());
+        CHECK(false);
+      }
+    }
     // A related root ("on PV changes"): the proof's continuation - the
     // attacker to move again after its action and the longest defence - is
     // answered from the stores too.
@@ -814,7 +880,7 @@ void churn_sequence(const std::vector<GameState>& positions, const ProverOptions
     Prover p(o, &proofs, &disproofs);
     const ProveResult r = p.prove(s, ProveBudget::nodes(nodes));
     if (!c.tally.add(r, s, o)) CHECK(false);
-    exports_hold(r, s, o, proofs, disproofs);
+    exports_hold(r, s, o, proofs, disproofs, &c.facts);
     if (r.status != ProofStatus::Unknown) decided.emplace_back(&s, r);
   }
   for (const auto& [s, r] : decided) {
@@ -864,10 +930,11 @@ void churn_print(const Churn& c) {
   c.tally.print("TT churn");
   std::fprintf(stderr,
                "  %d roots under churn; %d decided both ways and compared; %d re-asked from the stores, %d "
-               "continuations and %d sequence roots answered from them; store entries %d (%d confirmed by the "
-               "game tree, %d beyond it)\n",
-               c.roots, c.compared, c.answered, c.related, c.sequences, c.store.entries, c.store.confirmed,
-               c.store.beyond);
+               "continuations and %d sequence roots answered from them, %d proofs re-asked shallower; %d "
+               "disproven roots stood for by a confirmed game fact; store entries %d (%d confirmed, %d beyond the "
+               "game tree)\n",
+               c.roots, c.compared, c.answered, c.related, c.sequences, c.shallow, c.facts, c.store.entries,
+               c.store.confirmed, c.store.beyond);
 }
 
 }  // namespace
@@ -882,6 +949,8 @@ TEST(prover_proofs_survive_tt_churn_h19) {
   CHECK(c.related > 2);
   CHECK(c.sequences > 20);
   CHECK(c.store.confirmed > 50);
+  CHECK(c.shallow > 100);
+  CHECK(c.store.beyond * 100 <= c.store.entries);  // at most 1% beyond the game tree (12 of 4,290 measured)
 }
 
 TEST(long_prover_proofs_survive_tt_churn_h19) {
@@ -894,6 +963,84 @@ TEST(long_prover_proofs_survive_tt_churn_h19) {
   CHECK(c.related > 4);
   CHECK(c.sequences > 60);
   CHECK(c.store.confirmed > 200);
+  CHECK(c.shallow > 200);
+  CHECK(c.store.beyond * 5 <= c.store.entries);  // at most 20% beyond the game tree (1,526 of 10,478 measured)
+}
+
+TEST(prover_tt_keeps_estimates_never_facts) {
+  // H19's structural half (spec 11.3, "the TT never holds the sole copy";
+  // MT-03's review, 2026-11-01): the prover's transposition table refuses a
+  // proven (pn 0) or disproven (dn 0) entry and gives back estimates only -
+  // and the prover never offers it a solved node (export_solved puts those in
+  // the stores at once). So no fact can live only in the TT, whatever its
+  // size: the churn tests check the consequence, this the cause.
+  using t5d::detail::estimate_tt_read_back;
+  const std::uint64_t key{0x5D5D'1234'ABCD'0001};
+  CHECK(!estimate_tt_read_back(key, 0, 7).has_value());  // proven
+  CHECK(!estimate_tt_read_back(key, 7, 0).has_value());  // disproven
+  CHECK(!estimate_tt_read_back(key, 0, std::uint64_t{1} << 40).has_value());
+  CHECK(!estimate_tt_read_back(key, std::uint64_t{1} << 40, 0).has_value());
+  const auto open = estimate_tt_read_back(key, 3, 9);
+  REQUIRE(open.has_value());
+  CHECK_EQ(open->first, std::uint64_t{3});
+  CHECK_EQ(open->second, std::uint64_t{9});
+  const auto capped = estimate_tt_read_back(key, std::uint64_t{1} << 40, std::uint64_t{1} << 40);
+  REQUIRE(capped.has_value());
+  CHECK_EQ(capped->first, std::uint64_t{0x7FFFFFFF});
+  CHECK_EQ(capped->second, std::uint64_t{0x7FFFFFFF});
+}
+
+TEST(prover_churn_takes_effect_where_the_tt_carries_weight) {
+  // The churn tests above barely move the searches they churn (MT-03's
+  // review, 2026-11-01: a 1-entry TT changed the expansions at 66 of 2,034
+  // random roots and never a status). Here a workload where the default TT
+  // carries weight - three-turn games' positions, depth 5 - the 1-entry TT
+  // over external stores against the default: the searches differ, the
+  // statuses never, every export holds and the store's entries check.
+  ProverOptions dflt;
+  dflt.depth = 5;
+  ProverOptions lit = literal();
+  lit.depth = 5;
+  int roots = 0;
+  int differ = 0;
+  int hits = 0;
+  int decided = 0;
+  int facts = 0;
+  StoreCheck store;
+  std::uint64_t seed = 9100;
+  for (const RuleOptions& rules : {shift_rules(), guide_literal_q4()}) {
+    std::vector<GameState> positions{mate_in_two(rules), cross_board_mate(rules), history_royal_mate(rules)};
+    for (const GameState& s : playable(t5d_test::sparse_positions(rules, 2, 3, seed++))) positions.push_back(s);
+    for (const GameState& s : positions) {
+      for (const ProverOptions& o : {dflt, lit}) {
+        Prover reference(o);
+        const ProveResult r0 = reference.prove(s, ProveBudget::nodes(20'000));
+        ProverOptions one = o;
+        one.tt_entries = 1;
+        MemorySolvedStore proofs;
+        DisproofStore disproofs;
+        Prover churned(one, &proofs, &disproofs);
+        const ProveResult r = churned.prove(s, ProveBudget::nodes(20'000));
+        ++roots;
+        if (r0.stats.tt_hits > 0) ++hits;
+        if (r0.stats.expansions != r.stats.expansions) ++differ;
+        if (r0.status != ProofStatus::Unknown && r.status != ProofStatus::Unknown) {
+          ++decided;
+          CHECK(r.status == r0.status);
+        }
+        exports_hold(r, s, one, proofs, disproofs, &facts);
+        check_store(proofs, 6, store);
+      }
+    }
+  }
+  std::fprintf(stderr,
+               "  %d roots: the default TT hit at %d, the 1-entry TT's expansions differ at %d; %d decided both "
+               "ways, statuses equal; %d disproven roots stood for by a confirmed fact; store entries %d (%d "
+               "confirmed, %d beyond the game tree)\n",
+               roots, hits, differ, decided, facts, store.entries, store.confirmed, store.beyond);
+  CHECK(differ >= 40);
+  CHECK(decided >= 120);
+  CHECK(store.beyond * 10 <= store.entries);  // at most 10% beyond the game tree's reach (6% measured)
 }
 
 namespace {

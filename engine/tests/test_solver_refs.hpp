@@ -6,8 +6,8 @@
 //
 // Every position is written here from the rulebook (the derivations are in
 // test_scanner.cpp and test_mcts.cpp, where the positions were first
-// written) - never taken from a game corpus or another implementation's test
-// data.
+// written), or found by the engine's own search and held by df-pn (below) -
+// never taken from a game corpus or another implementation's test data.
 
 #ifndef T5D_TEST_SOLVER_REFS_HPP
 #define T5D_TEST_SOLVER_REFS_HPP
@@ -49,20 +49,45 @@ inline GameState history_royal_mate(const RuleOptions& r) {
 inline GameState forced_draw(const RuleOptions& r) { return game({"[3k/4/B1qK/4:0:1:w]"}, k4x4, r); }
 inline GameState forced_loss(const RuleOptions& r) { return game({"[4/K2b/3n/1k2:0:1:w]"}, k4x4, r); }
 
+// MT-01's review (2026-11-01, M4): positions whose proofs exercise the
+// derivation - losses whose defences lose at different speeds (the root's
+// Loss(k) the longest defence's, its children at more than one distance) and
+// draws other than the forced draw. Found by a seeded random search over 4x4
+// set-ups with the search's solver (2026-11-01, issue 409), each claim the
+// same under every D2 arm and both Q4 readings, and each held by df-pn in the
+// literal class with its proofs certified by E4 - the test re-checks all of it.
+inline GameState slow_loss_in_4(const RuleOptions& r) { return game({"[qk2/2K1/p3/4:0:1:w]"}, k4x4, r); }
+inline GameState minor_loss_in_4(const RuleOptions& r) { return game({"[4/2N1/2k1/B2K:0:1:b]"}, k4x4, r); }
+inline GameState bishop_loss_in_6(const RuleOptions& r) { return game({"[B3/4/k1K1/4:0:1:b]"}, k4x4, r); }
+inline GameState knight_loss_in_6(const RuleOptions& r) { return game({"[4/N3/4/1k1K:0:1:b]"}, k4x4, r); }
+inline GameState queen_rook_draw(const RuleOptions& r) { return game({"[1q2/2kK/r1B1/4:0:1:b]"}, k4x4, r); }
+inline GameState rook_draw(const RuleOptions& r) { return game({"[2k1/1KR1/1r2/4:0:1:b]"}, k4x4, r); }
+inline GameState bishop_rook_draw(const RuleOptions& r) { return game({"[4/1B2/KR2/qk2:0:1:b]"}, k4x4, r); }
+
 struct Named {
   const char* name;
   GameState state;
+  /// The root's claim the solver must derive: "win 1", "loss 4", "draw" -
+  /// or empty: not asserted.
+  const char* claim = "";
 };
 
-/// The seven constructed positions under `rules`.
+/// The fourteen constructed positions under `rules`.
 inline std::vector<Named> constructed(const RuleOptions& rules) {
-  return {{"mate_in_one", mate_in_one(rules)},
-          {"cross_board_mate", cross_board_mate(rules)},
-          {"stale_checkmate_in_one", stale_checkmate_in_one(rules)},
-          {"mate_in_two", mate_in_two(rules)},
-          {"history_royal_mate", history_royal_mate(rules)},
-          {"forced_draw", forced_draw(rules)},
-          {"forced_loss", forced_loss(rules)}};
+  return {{"mate_in_one", mate_in_one(rules), "win 1"},
+          {"cross_board_mate", cross_board_mate(rules), "win 1"},
+          {"stale_checkmate_in_one", stale_checkmate_in_one(rules), "win 1"},
+          {"mate_in_two", mate_in_two(rules), "win 3"},
+          {"history_royal_mate", history_royal_mate(rules), "win 1"},
+          {"forced_draw", forced_draw(rules), "draw"},
+          {"forced_loss", forced_loss(rules), "loss 2"},
+          {"slow_loss_in_4", slow_loss_in_4(rules), "loss 4"},
+          {"minor_loss_in_4", minor_loss_in_4(rules), "loss 4"},
+          {"bishop_loss_in_6", bishop_loss_in_6(rules), "loss 6"},
+          {"knight_loss_in_6", knight_loss_in_6(rules), "loss 6"},
+          {"queen_rook_draw", queen_rook_draw(rules), "draw"},
+          {"rook_draw", rook_draw(rules), "draw"},
+          {"bishop_rook_draw", bishop_rook_draw(rules), "draw"}};
 }
 
 /// The search's D2 arms the solver is checked under (SearchParams::split):
