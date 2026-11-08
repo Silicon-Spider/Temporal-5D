@@ -118,6 +118,11 @@ review round, issues 603 and 604, the session log.
   dense at both ends). `t5d/mcts.hpp` says `submit_edges`, `illegal_submits`,
   `unknown_edges` and `uncertainty_missing` count events (a redone expansion counts them
   again), and the rollback's comment says what it puts back.
+- **L7 - memory accounting and leftover flat state.** `check_invariants` checks each node's
+  memory count, their sum against the search's, and that no unexpanded node holds a flat
+  generator. The ply split's stale count (the edges' room made before the node was counted,
+  so a failure between left it stale) is fixed by counting right after the room is made, and
+  the per-node check holds under every split.
 
 Spec: none edited or proposed. No part of the spec describes exception safety, these tests,
 or the ladder's and the asset map's bookkeeping. The round brings the build further in line
