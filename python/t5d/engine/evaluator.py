@@ -51,7 +51,7 @@ from __future__ import annotations
 import hashlib
 import math
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Protocol, runtime_checkable
 
@@ -761,6 +761,7 @@ def run_timed_search(
     moves_left: float = math.nan,
     effort: Sequence[float] | None = None,
     model_clock: bool = False,
+    clock: Callable[[], float] | None = None,
     regs_per_board: int = 2,
     global_regs: int = 16,
     value_kind: int = T5D_VALUE_LOGITS,
@@ -772,24 +773,31 @@ def run_timed_search(
     stop; then ``tm.end``. On the wall clock the search's deadline is the hard bound for the run
     (the rules engine's calls inside a batch stop at it), cleared after; ``model_clock``: the
     cost model's clock (elapsed NaN), deterministic. ``effort``: the root's effort distribution
-    for E8 (off unless the time manager's ``difficulty_weighting``). Match play's: self-play takes no clock (its
+    for E8 (off unless the time manager's ``difficulty_weighting``). ``clock``: a clock of the
+    driver's in seconds (a test's virtual clock) in place of the wall clock - the engine's
+    ``run_timed`` with a ``Clock``: the checks and the decision's seconds read it, and the search
+    is given no deadline (that is the steady clock's). Match play's: self-play takes no clock (its
     budgets are PCR's), so no self-play guard is needed here - and none of D9's flat-form refusal
     is relaxed."""
+    if model_clock and clock is not None:
+        raise ValueError("run_timed_search: model_clock or a clock, not both")
     if int(search.params.split) == T5D_SPLIT_FLAT and policy_source(evaluator) != "normal":
         raise ValueError(FLAT_OPTIMISTIC)
     start_epoch(search, evaluator, regs_per_board=regs_per_board, global_regs=global_regs)
     batch = 1 if search.params.synchronous else max(int(search.params.batch_size), 1)  # the engine's slice
     before = search.info()
     plan = tm.begin(search, remaining=remaining, increment=increment, moves_left=moves_left, effort=effort)
-    t0 = time.perf_counter()
+    now = time.perf_counter if clock is None else clock
+    steady = clock is None and not model_clock  # the wall clock: the search's deadline is its own
+    t0 = now()
     stats = ServeStats()
     out_stop: str | None = None
     slices = 0
-    if not model_clock:
+    if steady:
         search.set_deadline(plan.hard_seconds)
     try:
         while True:
-            verdict = tm.check(search, math.nan if model_clock else time.perf_counter() - t0)
+            verdict = tm.check(search, math.nan if model_clock else now() - t0)
             if verdict.stop != T5D_TIME_STOP_NONE:
                 break
             driver = CStepDriver(search, playouts=batch, regs_per_board=regs_per_board, global_regs=global_regs, value_kind=value_kind)
@@ -807,7 +815,7 @@ def run_timed_search(
                 verdict = replace(verdict, stop=T5D_TIME_STOP_SEARCH)
                 break
     finally:
-        if not model_clock:
+        if steady:
             search.set_deadline(0.0)
     tm.end(search)
     if model_clock:
@@ -815,7 +823,7 @@ def run_timed_search(
         work = max(after.evaluations - before.evaluations, (after.playouts - before.playouts) / tm.params.playouts_per_evaluation_cap)
         seconds = work * plan.seconds_per_evaluation
     else:
-        seconds = time.perf_counter() - t0
+        seconds = now() - t0
     return TimedSearch(plan=plan, verdict=verdict, seconds=seconds, stats=stats, search_stop=out_stop, slices=slices)
 
 

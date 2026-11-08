@@ -4130,7 +4130,8 @@ next decision's falling-eval signal. `run_timed(search, evaluator, tm, context, 
 drives a `Search` with them, in slices of `batch_size` playouts (`Search::run`'s own loop:
 a step-API driver that runs the same slices builds the same tree). The C API gives the
 same calls (`t5d_timeman_*`, `t5d_search_run_timed`, `t5d_search_set_deadline`) and Python
-mirrors them (`search.TimeManager`, `evaluator.run_timed_search`).
+mirrors them (`search.TimeManager`, `evaluator.run_timed_search` - whose `clock`, like
+`run_timed`'s `Clock`, puts a driver's clock in place of the wall clock).
 
 **Allocation: the moves-left integral (§8.6).** An evaluation at N boards costs
 `s(N) = scale x (f + (1 - f) x shape(N) / shape(100))`: `shape` is the dense FLOP model,
@@ -4261,7 +4262,11 @@ spinning threads (within half a second), and inside a batch at 400 boards past t
 playouts / 4 where the playouts outrun the evaluations (a mate-in-one root); E8's floor and
 its cap at E7's hard bound, each where it binds, and the floor binding on the model clock; the choice
 after any stop among the eligible children (§15.4); the step API driven from C and from
-Python building `run_timed`'s tree; the cost shape equal to `net/cost.py`'s `dense_flops` at
+Python building `run_timed`'s tree, on the model clock and on an elapsed time the driver
+supplies under each of 6o's switches (the integral arm with the signals on and off, both flat
+arms - which that clock tells apart); the C API's switches, its flags (`wont_resolve`,
+`converged`) and its wall clock (the scale measured); Python's `ALLOCATORS` the header's
+constants, and `TimeManager`'s own refusal of the proof hook; the cost shape equal to `net/cost.py`'s `dense_flops` at
 three board counts (Python); match play on a clock under each arm (legal, replayed by
 the reader and the gate), a flag, self-play refused; the proof hook refused without the
 proof channel, in C++, C and Python.

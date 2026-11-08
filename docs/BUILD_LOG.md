@@ -9167,3 +9167,6 @@ struck through, where nothing of it is left to apply); the others stand as writt
   - Fixes 1 - M5, M6, L7, L8(c, d): E7's stop/extend rules and allocator inputs, E8's floor and
     cap and the strict hard bound, each as a test that kills its mutant (16 of 16 re-run on this
     tree); the claims in the engine README, the E7 row and two CHANGELOG entries corrected.
+  - Fixes 2 - M7: the C API's step-API test under each of 6o's switches on a driver-supplied
+    clock, the C API's flags and wall clock, Python's driver-clock parity (`run_timed_search`'s new
+    `clock`), `ALLOCATORS` against the header, `TimeManager`'s own refusal (7 of 7 mutants killed).
