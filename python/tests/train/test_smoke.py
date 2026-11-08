@@ -35,14 +35,27 @@ def test_smoke_three_steps(trunk_dtype):
         dict(displacement_bias=False),
         dict(opp_reply=True, submit_head="pointer"),
         dict(soft_policy=False, pointer_promotion_offset=False),
+        dict(piece_centric=True),
+        dict(piece_centric=True, typed_edge_bias=True, board_layout_embedding=True, optimistic_policy=True),
     ],
-    ids=["b5_b15_shared", "routing_typed_pointer_submit", "post_norm", "squared_relu", "no_table", "d4_reply", "d4_soft_off"],
+    ids=[
+        "b5_b15_shared",
+        "routing_typed_pointer_submit",
+        "post_norm",
+        "squared_relu",
+        "no_table",
+        "d4_reply",
+        "d4_soft_off",
+        "a5",
+        "a5_b11_a8_d9",
+    ],
 )
 def test_smoke_with_the_options_on(flags):
     """Every option's parameters receive gradient and move: B15's table, B11's scalars or the
     policy's promotion offset (D1, the v1's since M20) that the forward pass ignored would stay
     put. Ablation 6y's arms - F5's post-norm, F6's squared ReLU (in the trunk only: the heads
-    keep Mish) - train finite, every tensor moving."""
+    keep Mish) - train finite, every tensor moving. Register A5's piece-centric tokens (a prototype)
+    train the same way on the same positions' A5 view."""
     report = smoke_train(NetConfig(trunk_dtype="fp32", **flags), steps=1, seed=0, board_counts=(1, 3, 6, 9))
     assert all(math.isfinite(v) for v in report.losses[0].values())
     assert report.changed_fraction == 1.0
