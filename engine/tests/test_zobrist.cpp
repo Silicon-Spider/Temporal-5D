@@ -6,6 +6,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <map>
 #include <optional>
 #include <set>
@@ -13,11 +14,16 @@
 #include <utility>
 #include <vector>
 
+#include "t5d/board.hpp"
 #include "t5d/fen.hpp"
 #include "t5d/fingerprint.hpp"
+#include "t5d/movegen.hpp"
 #include "t5d/multiverse.hpp"
+#include "t5d/state.hpp"
+#include "t5d/variants.hpp"
 #include "t5d/zobrist.hpp"
 #include "test_framework.hpp"
+#include "test_rulesets.hpp"
 #include "test_support.hpp"
 
 using namespace t5d;
@@ -404,4 +410,81 @@ TEST(zobrist_content_hash_is_coordinate_free) {
   CHECK_EQ(mv.head(-1)->content_hash(), content_hash_from_scratch(*standard_board()));
   CHECK_NE(zobrist::board_term(mv.head(-1)->content_hash(), -1, 2),
            zobrist::board_term(mv.head(0)->content_hash(), 0, 2));
+}
+
+TEST(zobrist_incremental_equals_from_scratch_on_every_named_variant_under_every_ruleset) {
+  // Section 15.2's protocol names "every variant" among the adversarial
+  // constructions: seeded pseudo-legal play from every named variant's start
+  // (t5d/variants.hpp) under every ruleset (the defaults and each alternative),
+  // the key read incrementally after every move and submission against the key
+  // from scratch, and each board's content hash against its own from scratch.
+  // Travel is preferred half the time, so that timelines branch; the duplicated
+  // starts (Two Timelines, Half Reflected, Battleground's outer boards) and the
+  // copies a jump leaves behind keep boards repeating - the XOR trap's condition.
+  std::size_t states = 0;
+  std::size_t with_duplicates = 0;
+  std::size_t branches = 0;
+  std::size_t variants_played = 0;
+  std::uint64_t seed = 18000;
+  MoveList moves;
+  const auto check_state = [&](const GameState& s) {
+    const Multiverse& mv = s.multiverse();
+    CHECK_EQ(mv.zobrist(), zobrist::key_from_scratch(mv));
+    std::set<std::uint64_t> hashes;
+    mv.for_each_board([&](int, int, const Board& b) {
+      CHECK_EQ(b.content_hash(), content_hash_from_scratch(b));
+      hashes.insert(b.content_hash());
+    });
+    if (hashes.size() < mv.board_count()) ++with_duplicates;
+    ++states;
+  };
+  for (const Variant& v : variants()) {
+    ++variants_played;
+    for (const RuleOptions& rules : t5d_test::every_ruleset()) {
+      t5d_test::Rng rng(seed++);
+      GameState s = variant_start(v, rules);
+      check_state(s);
+      for (int action = 0; action < 4; ++action) {
+        const GameState turn_start = s;
+        bool done = false;
+        for (int attempt = 0; attempt < 4 && !done; ++attempt) {
+          s = turn_start;
+          for (int step = 0; step < 12; ++step) {
+            if (s.obligations_met() && (!s.may_move() || rng.chance(40))) {
+              done = true;
+              break;
+            }
+            generate_moves(s, moves);
+            if (moves.empty()) {
+              done = s.obligations_met();
+              break;
+            }
+            std::vector<std::size_t> travel;
+            for (std::size_t i = 0; i < moves.size(); ++i) {
+              if (!moves[i].physical()) travel.push_back(i);
+            }
+            const std::size_t pick =
+                !travel.empty() && rng.chance(50)
+                    ? travel[static_cast<std::size_t>(rng.below(static_cast<int>(travel.size())))]
+                    : static_cast<std::size_t>(rng.below(static_cast<int>(moves.size())));
+            if (moves[pick].branching()) ++branches;
+            s.apply(moves[pick]);
+            check_state(s);
+          }
+        }
+        if (!done) break;
+        s.submit(CheckRuling::none());  // pseudo-legal play
+        check_state(s);
+      }
+    }
+  }
+  CHECK_EQ(variants_played, variants().size());
+  CHECK(variants_played >= 16);
+  // What the play met (deterministic; the floors about a third of what it met
+  // when written).
+  std::printf("  every variant: %zu states, %zu with duplicated boards, %zu branching moves\n", states,
+              with_duplicates, branches);
+  CHECK(states > 1400);
+  CHECK(with_duplicates > 200);
+  CHECK(branches > 230);
 }

@@ -10,6 +10,128 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-02 - Done-means audit corrections: REG-C narrowed to C25, rows 5 and 15 short, two section 15.4 verdicts, issue 535's account, the ungated rulesets' barriers
+
+An adversarial verification of the done-means audit ran five checks: REG-C derived again
+independently and then refuted; every green row spot-checked; issue 535 reproduced and
+traced; every ungated ruleset triaged. It found errors. `docs/BUILD_LOG.md`'s audit section,
+issues 533, 535 and 538, and edits 206 and 366 are corrected to it:
+
+- **REG-C: the final list is C25 alone.**
+  - B3 is decided. B2 is the committed row, and the spec's opening withdrew axial as an
+    option. Its trigger 1 has not fired; the audit had said it arguably had.
+  - C18 awaits 6a (section 13.1's 6a arm, section 14.4).
+  - C16 meets the clause. Its build question is answered by the user's standing brief.
+  - C5 and C7 move to awaiting: the pilot run's re-check, then ablation 1.
+  - Issue 538 is rewritten in three parts: (a) C25; (b) wording only - B3, C18, and edit 206,
+    refreshed (eight vocabulary words; B3, B6, C5, C7 and D2 are the class-C rows outside
+    it); (c) C16's undefined trigger, a spec gap. Its M5 citation is replaced by the brief
+    and CHECKPOINT 4's ruling 7.
+  - Edit 366 is rewritten.
+- **Section 15.2:**
+  - rows 5 (C3a) and 15 (I15) are green but short;
+  - row 8 is not all bitwise;
+  - row 11's details are corrected: three F1 positions, not marked slow, with a duplicated
+    pair; seeds 0-1 in three tests;
+  - row 16's checker uses `reply_map.board_keys`, and compares the target to a tolerance;
+  - the short rows are 1, 5, 11, 15 and 16 once the audit's tests merge (on main today: 1,
+    5, 9, 11, 15, 16, 17 and 19);
+  - caveats added.
+- **Section 15.4:**
+  - "Virtual loss always released" is not green while issue 535 is open. Its
+    consistency-under-failure contract also fails for the ply split in a graph.
+  - "Solved bounds never contradict" stays green as tested. Issue 535's false completeness
+    makes a wrong bound possible.
+- **Issue 535 is rewritten:**
+  - the loop dies first at graph = false, k = 312;
+  - graph k = 468 crashes in 3 of 3 runs with the ladder off, and in 2 of 3 with it on;
+  - the cause is an out-of-bounds read, after `SearchRun::record` grows its four tables in
+    separate steps;
+  - further defects: false exhaustion; a partial append in `pull_turns`; a node stranded
+    unreachable by `ensure_child`, in every split's graph;
+  - it is latent but reachable in production, through `T5D_ERR_MEMORY` or `EngineMemoryError`,
+    if a search is reused after the error;
+  - the fix goes to `lane/fix535`.
+- **Clause 1:**
+  - each ungated ruleset's barriers are named: unread, alone, single, and check coverage;
+  - `notation/aivsai` and `notation/1.4` are named;
+  - the three rulesets Kairos answers and ftxi does not - Just Kings, Just Pawns and Timeline
+    Battleground - are reported to the user, as CHECKPOINT 10's point 2 asks.
+- Issue 533 now says four moves, not five.
+- The D4 test's docstring no longer calls its checker independent.
+
+Spec: §15.2, §15.4, §15.5; register B3, B6, C5, C7, C16, C18, C25, D2 and the status
+vocabulary - edits 206 (refreshed) and 366 (rewritten); issues 533, 535, 538. Documents and a
+test docstring only.
+
+### 2026-11-02 - The done-means audit: section 15.2 row by row, section 15.4 invariant by invariant, the committed-class rows, section 15.5 clause by clause
+
+`docs/BUILD_LOG.md` gains a new section, "Done-means audit (2026-10-24; finished
+2026-11-02)", after "Parked, and why". It is the gate lane's step-2 audit, checked against
+main 28a102b's code and design documents (CHECKPOINT 9's rows and CHECKPOINT 10's ruling
+included). It holds:
+
+- **Section 15.2, row by row:** the tests that establish each row, what they assert, at what
+  tolerance, on which seeds and constructions, and a verdict.
+  - 14 of 19 rows are green; rows 1, 11 and 16 are short of the protocol in named ways.
+  - 2 are deferred with the window (C5, C10), and 1 is void (F4, the NNUE retired).
+  - 2 are waiting on a component not yet built: C26 and C27, low priority by the user's
+    CHECKPOINT 9 brief.
+- **Section 15.4, invariant by invariant.** Green with the audit's tests, except:
+  - the solver against df-pn and the oracles' mate verdicts, and the proof-export invariant
+    under TT churn - MT-01 to MT-03, on `lane/engine`, not merged;
+  - the flat form under allocation failure (issue 535).
+- **The committed-class rows.** B3, C18 and C25 are neither decided nor awaiting a named
+  trained ablation (issue 538). C16's arm, and the as-built placeholders of rows otherwise
+  decided, go to the user by reference.
+- **Section 15.5, clause by clause:**
+  - legal play end to end: met by the engine's replay; the release tier with the engine
+    configured has not run, and nightly gates two rulesets;
+  - the equivalence suite: as above;
+  - the cost figures: not met - the quiet-machine block, then the write-backs;
+  - the register: B3, C18 and C25.
+- **Work items, by lane.**
+
+Issues 536 (section 15.5 and the rows section 15.2 defers, voids or conditions), 537 (section
+15.5 does not name section 15.4) and 538 (B3, C18, C25). Proposed edits 364-366. Documents
+only.
+
+Spec: §15.1 (Phase 3's row), §15.2, §15.3, §15.4, §15.5; register B3, C16, C18, C25, C26, C27 -
+edits 364 (§15.5's equivalence clause), 365 (§15.4 in §15.5 and in Phase 3's row) and 366
+(register B3, C18, C25, C16); issues 536-538.
+
+### 2026-11-01 - The done-means audit's tests: section 15.2's protocol on more variants, seeds and readings, three section 15.4 invariants, and a flat-form defect found
+
+The gate lane's done-means audit (`lane/audit`, step 2) read each section 15.2 row and each
+section 15.4 invariant against the tests on main. Where a row's tests fell short of section
+15.2's protocol, and a test of existing behaviour could close the gap, the audit wrote that
+test. No code changed.
+
+- **H18**, `engine/tests/test_zobrist.cpp::zobrist_incremental_equals_from_scratch_on_every_named_variant_under_every_ruleset`:
+  random pseudo-legal play from all 16 named variants under all 27 rulesets - 4,443 states,
+  655 of them with duplicated boards. The key and every board's content hash are checked
+  against their values from scratch.
+- **D2**, `engine/tests/test_mcts_tree.cpp::mcts_tree_form_with_every_gate_firing_equals_the_ply_split_under_q4s_guide_literal_reading`:
+  the row's bit-for-bit comparison under Q4's other reading, which the tree-form tests never
+  met - 8 roots x every variation.
+- **Section 15.4**, `engine/tests/test_mcts.cpp`:
+  - `mcts_virtual_loss_is_released_by_delivery_and_abandon_in_every_configuration`: before
+    this, under the default ply split only;
+  - `mcts_flat_form_no_node_with_turns_still_to_generate_is_proven_lost`: every node of 78
+    flat searches, issue 170's clause;
+  - `mcts_tree_form_dead_ends_have_no_legal_completion_in_random_searches`: the tree form's
+    dead ends against the brute-force reference, under both Q4 readings.
+- **C3a**, `python/tests/net/test_fork_protocol.py`: the refresh fork's assertions over 5
+  adversarial geometries x 3 seeds x both C20 readings. Before this, one root and one seed.
+- **A6 and D4**, `python/tests/engine/test_protocol_every_variant.py`: A6's recount and D4's
+  reply-map checker (`test_reply_map._check`) on random play from every engine variant.
+- **Found: D2's flat form crashes after an allocation failure inside `gather`.** The next
+  run faults in the turn generator (issue 535, for the engine lane). The test that found it
+  is not committed, because it crashes.
+
+Spec: §15.2 (rows C3a, H18, D2's tree form, A6, D4), §15.4; register H18, C3a, C20, D2, D4, A6 -
+nothing proposed; issue 535.
+
 ### 2026-11-08 - The network job runs in four shards: the Python suite outgrew one hour
 
 Since CI came back every run of the `network` workflow was cancelled at its 60-minute limit:

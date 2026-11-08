@@ -333,6 +333,41 @@ TEST(mcts_tree_form_with_every_gate_firing_equals_the_ply_split_in_every_configu
   }
 }
 
+TEST(mcts_tree_form_with_every_gate_firing_equals_the_ply_split_under_q4s_guide_literal_reading) {
+  // The row under Q4's other reading (moves_after_shift = false: no move once
+  // the present has shifted), which the tests above never meet - they run the
+  // default rules (R8) only (the gate lane's done-means audit, 2026-10-24).
+  // Multi-board roots from random play and one move into an action, every
+  // variation, both evaluators.
+  RuleOptions rules;
+  rules.moves_after_shift = false;
+  const auto start = [&](const char* name) { return variant_start(*find_variant(name), rules); };
+  std::vector<Root> rs;
+  std::uint64_t seed = 40;
+  for (const char* name : {"Standard - Two Timelines", "Misc - Timeline Battleground", "Misc - Timeline Strategos",
+                           "Very Small - Open"}) {
+    const GameState s = random_play(start(name), 3, seed++);
+    REQUIRE(!s.rules().moves_after_shift);
+    rs.push_back(Root{std::string(name) + " after 3, Guide-literal", s, 0});
+    rs.push_back(mid_turn(rs.back().name, s, seed++));
+  }
+  std::uint64_t gated = 0;
+  std::size_t compared = 0;
+  for (std::size_t i = 0; i < rs.size(); ++i) {
+    for (std::size_t k = 0; k < kVariations.size(); ++k) {
+      const Variation& v = kVariations[k];
+      const BuiltinEvaluator kind = (i + k) % 2 == 0 ? BuiltinEvaluator::Random : BuiltinEvaluator::Material;
+      const std::unique_ptr<Evaluator> ev = make_evaluator(kind, 13 + i);
+      SearchParams p = fast();
+      v.apply(p);
+      gated += compare(rs[i], p, *ev, 48, rs[i].name + ", " + v.name + ", " + evaluator_name(kind));
+      ++compared;
+    }
+  }
+  CHECK_EQ(compared, rs.size() * kVariations.size());
+  CHECK(gated > 0);  // the comparison met mid-turn evaluations
+}
+
 // ---- Inheritance: the network at the root, turn starts and gates only -----------------------
 
 namespace {
