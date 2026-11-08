@@ -93,6 +93,24 @@ bool faulted(long long k, F&& f) {
   return threw;
 }
 
+// The ladder tests' asset position (test_ladder.cpp): the White queen's board
+// in turn 1 flagged, the king's travel move onto it boosted.
+GameState asset_position() {
+  return t5d_test::game({"[k4/5/5/5/Q3K:0:1:w]", "[k4/5/5/5/4K:0:1:b]", "[k4/5/5/5/3K1:0:2:w]"}, BoardSize{5, 5});
+}
+
+// The synchronous ladder with its asset map and no job (test_ladder.cpp's
+// sync_params with Hunt and the settling scans off), under the flat form.
+SearchParams flat_steered() {
+  SearchParams p;
+  p.expand.square_features = SquareFeatures::None;
+  p.synchronous = true;
+  p.hunt = false;
+  p.settling = false;
+  p.split = TurnSplit::Flat;
+  return p;
+}
+
 }  // namespace
 
 // ---- L8: every fault that fires comes out of the call -------------------------------------------
@@ -103,7 +121,10 @@ TEST(mcts_fault_every_injected_fault_surfaces) {
   // T5D_ERR_MEMORY). A call that returns after the injected fault fired
   // swallowed it (review finding L8; the review's P7). Every allocation of a
   // gather, a deliver, advance and advance_to (strided past 1,500 points),
-  // each on a fresh search, under every split, the ladder off.
+  // each on a fresh search, under every split - the ladder off, and on with
+  // its asset map and its asynchronous jobs (their own threads' allocations
+  // take no part in this thread's countdown; the asset map, on this thread,
+  // rethrows since review finding L12).
   const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
   const GameState far = after("Standard - Two Timelines", 3);
   struct Arm {
@@ -113,7 +134,8 @@ TEST(mcts_fault_every_injected_fault_surfaces) {
   };
   for (const Arm& arm : {Arm{TurnSplit::BoardMove, true, false}, Arm{TurnSplit::BoardMove, false, false},
                          Arm{TurnSplit::Tree, false, false}, Arm{TurnSplit::Flat, true, false},
-                         Arm{TurnSplit::Flat, false, false}}) {
+                         Arm{TurnSplit::Flat, false, false}, Arm{TurnSplit::BoardMove, false, true},
+                         Arm{TurnSplit::Flat, false, true}}) {
     SearchParams p = base(arm.split, arm.graph);
     if (arm.ladder) {
       p.hunt = true;
@@ -167,4 +189,46 @@ TEST(mcts_fault_every_injected_fault_surfaces) {
                 arm.ladder ? "on" : "off", faults);
     CHECK(faults > 0);
   }
+}
+
+// ---- L12: the asset map's allocation failures, through the search -------------------------------
+
+TEST(mcts_fault_the_asset_maps_failures_reach_the_caller) {
+  // assess_board caught every std::exception - std::bad_alloc included - so a
+  // failure inside the asset map's assessment never reached the search's
+  // caller, and the map kept the material-only fallback for the ladder's life
+  // (review finding L12; the map's own test is in test_assets.cpp). Through
+  // the search - the asset map on, the flat form steering every expansion -
+  // every allocation of a delivery after 0 to 8 playouts, each on a fresh
+  // search: each fault that fires is thrown (faulted's check), and the search
+  // keeps every invariant.
+  const GameState s0 = asset_position();
+  const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
+  const SearchParams p = flat_steered();
+  std::size_t faults = 0;
+  for (const std::uint64_t n : {0u, 1u, 2u, 3u, 5u, 8u}) {
+    const auto prepared = [&] {
+      Search s(s0, p);
+      if (n > 0) s.run(*uniform, Limits{n});
+      (void)s.gather(1);
+      return s;
+    };
+    long long total = 0;
+    {
+      Search s = prepared();
+      std::vector<Evaluation> ev(s.requests().size());
+      if (ev.empty()) continue;
+      uniform->evaluate(s.requests(), ev);
+      total = allocations_of([&] { s.deliver(ev); });
+    }
+    for (long long k = 0; k < total; ++k) {
+      Search s = prepared();
+      std::vector<Evaluation> ev(s.requests().size());
+      uniform->evaluate(s.requests(), ev);
+      faults += faulted(k, [&] { s.deliver(ev); }) ? 1u : 0u;  // each fault thrown
+      CHECK_NOTHROW(s.check_invariants());
+    }
+  }
+  std::printf("  the asset map in the search: %zu delivery faults, each thrown\n", faults);
+  CHECK(faults > 0);
 }

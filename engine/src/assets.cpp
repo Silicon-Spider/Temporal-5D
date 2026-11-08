@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <exception>
+#include <new>
 #include <utility>
 
 #include "t5d/check.hpp"
@@ -99,6 +100,11 @@ BoardAsset assess_board(const BoardRef& board, int half_turn, BoardSize size, bo
     generate_moves(s, moves);
     a.royal_capture = std::any_of(moves.begin(), moves.end(),
                                   [](const Move& m) { return m.capture() && m.captured.royal(); });
+  } catch (const std::bad_alloc&) {
+    // An allocation failure is not a board the position cannot hold: the
+    // caller sees it (review finding L12 of lane fix535 - swallowed, it was
+    // memoized as a material-only assessment for the map's life).
+    throw;
   } catch (const std::exception&) {
     // A board the one-board position cannot hold: its material alone.
   }
@@ -120,11 +126,19 @@ const BoardAsset& AssetMap::lookup(const GameState& state, const BoardRef& board
     const Entry& e = entries_[it->second];
     if (e.traveller == traveller && (e.board == board || *e.board == *board)) return e.asset;
   }
+  // All or nothing (review finding L12 of lane fix535): the assessment made,
+  // then entered and indexed - an entry whose index fails is taken back - and
+  // counted only once both hold, so assessments() stays boards().
   const Multiverse& mv = state.multiverse();
-  ++assessments_;
   entries_.push_back(Entry{board, traveller,
                            assess_board(board, half_turn, mv.board_size(), mv.even(), mv.ruleset(), rules_, options_)});
-  index_.emplace(key, entries_.size() - 1);
+  try {
+    index_.emplace(key, entries_.size() - 1);
+  } catch (...) {
+    entries_.pop_back();
+    throw;
+  }
+  ++assessments_;
   return entries_.back().asset;
 }
 

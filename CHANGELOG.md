@@ -26,6 +26,18 @@ review round, issues 603 and 604, the session log.
   stride where there are more than 3,000), each on a fresh search, under the ply split (graph
   and tree), the tree form and the flat form (graph and tree) - 613, 598, 1,135, 5,535 and
   5,527 faults, each thrown.
+- **L12 - the asset map's allocation failures** (pre-existing; `engine/src/assets.cpp`, its
+  own commit). `assess_board` caught every `std::exception`, `std::bad_alloc` included: the
+  map kept a material-only assessment for the ladder's life and the failure never reached
+  the caller. It rethrows `std::bad_alloc` now, and `lookup` enters the assessment, indexes
+  it (taking the entry back if the index throws) and only then counts it, so
+  `assessments()` stays `boards()`. Tests: every allocation of a refresh of 11 positions'
+  superseded boards, each on a fresh map (`test_assets.cpp`; 1,146 faults, each thrown):
+  `assessments() == boards()` after each, and refreshed again, all 4,826 boards' assets the
+  fault-free map's; P7 with the ladder on as well - Hunt, the settling scans and the asset
+  map, under the ply split and the flat form (614 and 5,535 faults); and every allocation of
+  a delivery after 0 to 8 playouts with the asset map steering the flat form (5,801 faults),
+  each thrown. (H2: the asset map is a prior; no verdict logic changes.)
 
 Spec: none edited or proposed. No part of the spec describes exception safety, these tests,
 or the ladder's and the asset map's bookkeeping. The round brings the build further in line

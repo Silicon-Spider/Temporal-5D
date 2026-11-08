@@ -7070,6 +7070,12 @@ superseded or made moot says so; nothing is deleted.
       - L8: every fault loop checks that a fault that fired came out of the call;
         `test_alloc`'s nothrow `operator new` skips the countdown. P7 in five configurations,
         the ladder off: every fault thrown.
+      - L12 (pre-existing; `src/assets.cpp`, its own commit): `assess_board` swallowed
+        `std::bad_alloc` with every `std::exception`, memoizing a material-only assessment for
+        the ladder's life, and `lookup` counted an assessment before entering it. It rethrows
+        now; `lookup` enters, indexes (taking the entry back if the index throws), then counts.
+        Tested on 11 positions' refreshes at every allocation (1,146 faults), P7 with the
+        ladder on, and deliveries with the asset map on (5,801 faults).
 
 ## Proposed spec edits
 
