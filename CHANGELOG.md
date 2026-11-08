@@ -10,6 +10,29 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-09 - The engine path refuses node refreshes it cannot make (issue 271)
+
+The engine's search opens one epoch per search and never refreshes a node, and
+`CachedNetworkEvaluator` read neither `CacheConfig.node_refresh` (C3a's rung 1) nor
+`complexity_refresh` (C24): through the step API a cached evaluator configured for either was
+silently the root-refresh-only path. It now refuses both (`NotImplementedError`, naming issue 271),
+after A5's and the prior's checks; the root refresh and C26's phase form are accepted as before. No
+caller set the flags, so nothing else changes. The refresh ladder - rung 1, C24, and C27's triggers
+at evaluated nodes - runs in the search-tree fixture only; issue 271 lists what the engine would
+need for 6c's rung-1 sub-arm to run through the real search (an ABI change, the user's call after
+6c). The done-means audit's row 5 note "its 16 playouts never reach the node refresh's visit gate"
+is corrected: the engine path has no node refresh at all. Register-status rows C3/C3a and C24 say
+where the ladder runs. Test: `tests/engine/test_phase_form.py::test_the_engine_path_refuses_node_refreshes`
+(both flags refused, alone and beside the root refresh; the root refresh and the phase form accepted).
+
+Checks: ruff "All checks passed!"; with `T5D_REQUIRE_ENGINE=1`, `test_evaluator`, `test_leave`, the
+shared-cache epoch test and `test_piece_centric_engine` (its games aside) "57 passed, 3 deselected in
+20.25s"; the phase form's units and boundary "7 passed, 55 deselected in 14.30s" (the whole suite
+before the next entry); `harness.py verify` as before.
+
+Spec: §7.9 (the ladder; "Inside a turn"); register C3a, C24, C27; issue 271. No spec edit: the spec
+does not say where the ladder runs before 6c.
+
 ### 2026-11-09 - C27: refresh and supersession inside a turn (section 15.2's C27 row)
 
 CHECKPOINT 9's ruling 2, C27's half: "C27 goes into the tree form's work for the cached flag -

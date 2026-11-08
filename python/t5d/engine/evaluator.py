@@ -332,12 +332,23 @@ class CachedNetworkEvaluator:
     ``max_batch``: the dense path itself, so a search rooted under N* is the dense search node
     for node, bit for bit (the dense pass's last bits depend on grad mode and on how the
     positions are batched - BUILD_LOG issue 262). ``positions_by_mode`` counts the positions
-    evaluated in each mode."""
+    evaluated in each mode.
+
+    The engine's search opens one epoch per search and never refreshes a node, so a cached
+    evaluator configured for C3a's node refreshes (``CacheConfig.node_refresh``) or C24's
+    (``complexity_refresh``) is refused here: the refresh ladder runs in the search-tree fixture
+    (``net/tree.py``) only (BUILD_LOG issue 271)."""
 
     def __init__(self, cached: CachedEvaluator, *, policy: str = "normal", max_batch: int = 32) -> None:
         if cached.model.cfg.piece_centric:
             raise NotImplementedError("the cached path refuses a piece-centric network (A5; BUILD_LOG issue 252)")
         _check_policy(cached.model, policy)
+        if cached.config.node_refresh or cached.config.complexity_refresh:
+            raise NotImplementedError(
+                "the engine's search has no refresh ladder: it opens one epoch per search and refreshes no node, so "
+                "CacheConfig.node_refresh (C3a rung 1) and complexity_refresh (C24) would be ignored on this path - they run "
+                "in the search-tree fixture (net/tree.py) only (BUILD_LOG issue 271)"
+            )
         self.policy = policy
         self.cached = cached
         self.epoch: Epoch | None = None
