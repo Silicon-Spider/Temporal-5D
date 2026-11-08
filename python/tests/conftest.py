@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import zlib
 
 import pytest
 import torch
@@ -63,10 +62,13 @@ def pytest_configure(config):
 
 
 def pytest_collection_modifyitems(config, items):
-    """``T5D_TEST_SHARD=i/n`` keeps the tests whose id hashes to shard ``i`` of ``n`` (CI runs
-    the suite as ``n`` parallel jobs, ``i`` from 0). A test's shard depends on its id alone,
-    so the shards are disjoint, their union is the whole suite, and a test stays in its shard
-    whatever else is collected. Unset, every test runs."""
+    """``T5D_TEST_SHARD=i/n`` keeps shard ``i`` of ``n`` of the collected test files (CI runs the
+    suite as ``n`` parallel jobs, ``i`` from 0). The unit is the file, never the test: some
+    modules' tests share module-level state in order (a case that checks what its siblings
+    recorded), so a module is never split. Files go to shards greedily by test count, largest
+    first (ties by path), each to the shard with the fewest tests so far - so the shards are
+    disjoint, their union is the whole collection, and every job that collects the same files
+    (CI's jobs check out one commit) computes the same split. Unset, every test runs."""
     spec = os.environ.get("T5D_TEST_SHARD", "").strip()
     if not spec:
         return
@@ -74,9 +76,19 @@ def pytest_collection_modifyitems(config, items):
     i, n = int(index), int(count)
     if not 0 <= i < n:
         raise pytest.UsageError(f"T5D_TEST_SHARD={spec!r}: want i/n with 0 <= i < n")
+    sizes: dict[str, int] = {}
+    for item in items:
+        module = item.nodeid.split("::", 1)[0]
+        sizes[module] = sizes.get(module, 0) + 1
+    loads = [0] * n
+    shard_of: dict[str, int] = {}
+    for module, size in sorted(sizes.items(), key=lambda kv: (-kv[1], kv[0])):
+        target = min(range(n), key=lambda k: (loads[k], k))
+        shard_of[module] = target
+        loads[target] += size
     kept, dropped = [], []
     for item in items:
-        (kept if zlib.crc32(item.nodeid.encode("utf-8")) % n == i else dropped).append(item)
+        (kept if shard_of[item.nodeid.split("::", 1)[0]] == i else dropped).append(item)
     if dropped:
         config.hook.pytest_deselected(items=dropped)
     items[:] = kept

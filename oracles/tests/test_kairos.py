@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from oracle_harness import build, config, corpus, golden, lockfile, paths
+from oracle_harness import build, config, corpus, gate, golden, lockfile, paths, snapshot
 from oracle_harness.adapters import (
     ORACLE_SOURCES,
     PENDING_SOURCES,
@@ -22,6 +22,8 @@ START = "r*nbqk*bnr*/p*p*p*p*p*p*p*p*/8/8/8/8/P*P*P*P*P*P*P*P*/R*NBQK*BNR*"
 # A record whose move text ends in a parenthesised variation: Kairos's reader, a port of
 # ftxi's, would replay the variation as the main line.
 ENDS_IN_A_VARIATION = b'[Board "Standard"]\n1. (0T1)e2e3 / (0T1)e7e6\n(2. (0T2)d2d3)\n'
+# Kairos's two searches (full mode); its parse mode, kairos:parse, is pending beside them (test_kairos_parse.py).
+SEARCHES = ("kairos", "kairos:naive")
 
 
 def _lines(*events) -> bytes:
@@ -31,8 +33,8 @@ def _lines(*events) -> bytes:
 class PendingTests(unittest.TestCase):
     """Wired - built, observed, tested - and enabled in no tier until its golden files are recorded."""
 
-    def test_its_two_searches_are_pending_sources_of_one_implementation(self):
-        self.assertEqual(PENDING_SOURCES, ("kairos", "kairos:naive"))
+    def test_its_sources_are_pending_sources_of_one_implementation(self):
+        self.assertEqual(PENDING_SOURCES, ("kairos:parse", *SEARCHES))
         self.assertFalse(set(PENDING_SOURCES) & set(ORACLE_SOURCES))
         self.assertFalse(set(PENDING_SOURCES) & set(PRIMARY_SOURCES))
         lock = lockfile.load()
@@ -56,13 +58,15 @@ class PendingTests(unittest.TestCase):
             with self.assertRaises(HarnessError):
                 config.load(path)
 
-    def test_a_recorded_source_has_golden_files_and_a_pending_one_has_none(self):
-        # Moving Kairos into ORACLE_SOURCES and recording it on a quiet machine go together (BUILD_LOG issue 530).
+    def test_an_enabled_source_has_golden_files_and_a_pending_ones_pass_their_checks_where_recorded(self):
+        # A pending source may be recorded before it is enabled (golden --write --source <it>; BUILD_LOG issue 575):
+        # its files, where present, pass the static checks an enabled source's do; nothing else reads them.
         for name in ORACLE_SOURCES:
             self.assertTrue(golden.golden_path(name).exists(), name)
+        frozen = snapshot.take()
+        self.assertEqual(gate.pending_golden_findings(lockfile.load(), config.load(), corpus.load(), frozen), [])
         for name in PENDING_SOURCES:
-            self.assertFalse(golden.golden_path(name).exists(), name)
-            self.assertFalse(golden.cost_path(name).exists(), name)
+            self.assertNotIn(name, frozen.golden)
 
 
 class AnswersTests(unittest.TestCase):
@@ -70,7 +74,7 @@ class AnswersTests(unittest.TestCase):
         self.lock = lockfile.load()
 
     def test_the_hypercuboid_search_gives_no_count_and_the_exhaustive_one_does(self):
-        hypercuboid, naive = (make_source(name, self.lock) for name in PENDING_SOURCES)
+        hypercuboid, naive = (make_source(name, self.lock) for name in SEARCHES)
         self.assertNotIn("legal_actions", hypercuboid.answers)
         self.assertIn("legal_actions", naive.answers)
         for source in (hypercuboid, naive):
@@ -79,7 +83,7 @@ class AnswersTests(unittest.TestCase):
 
     def test_the_signature_names_the_pin_the_search_and_the_code(self):
         options = RunOptions(cap=1000)
-        hypercuboid, naive = (make_source(name, self.lock).signature(options) for name in PENDING_SOURCES)
+        hypercuboid, naive = (make_source(name, self.lock).signature(options) for name in SEARCHES)
         self.assertEqual((hypercuboid["search"], naive["search"]), ("hypercuboid", "naive"))
         # The cap bounds the count, which only the exhaustive search gives.
         self.assertNotIn("cap", hypercuboid)
@@ -122,6 +126,59 @@ class DriverOutputTests(unittest.TestCase):
         self.assertEqual((observation.status, observation.reason, observation.positions), ("unsupported", "parse_failed", []))
 
 
+def _code_lines(text: str) -> str:
+    """Rust source with its line comments taken out, so that what it says about a call is not taken for the call."""
+    return "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("//"))
+
+
+class NoVerdictFromAnExhaustedBudgetTests(unittest.TestCase):
+    """A mate verdict is a proof (H37): neither Kairos source may give one from a search that ran out of budget.
+
+    Neither search is unbounded. Each of the mate test's three sub-searches is a cursor with a built-in cap of
+    2^32-1 hypercuboids, and the exhaustive source's enumeration a node budget of 2^64-1; a spent cap reads as "no
+    action" in both, which would be a verdict. No gate deadline lets either be reached (PROVENANCE.md, "Kairos, the
+    fourth oracle"): what these tests hold is that the driver adds no smaller budget, and that the pin's caps are those.
+    """
+
+    def test_the_driver_calls_nothing_budgeted(self):
+        code = _code_lines((paths.DRIVERS / "kairos" / "src" / "main.rs").read_text(encoding="utf-8"))
+        # The hypercuboid source's verdict: Kairos's own mate test, run to its built-in caps (below), out of reach.
+        self.assertIn("state.get_mate_type()", code)
+        # The exhaustive source: a node budget of 2^64-1 - out of reach - so it stops at the cap or at the end.
+        self.assertIn("naive_actions_budget(state, options.cap, u64::MAX)", code)
+        for budgeted in ("interrupt_on", "has_legal_action", "status_of", "STATUS_BUDGET", "Instant::now() +"):
+            self.assertNotIn(budgeted, code, budgeted)
+        # The naive verdict needs a complete enumeration that found nothing.
+        self.assertRegex(code, r"\(0, true\) => \"checkmate\"")
+        self.assertRegex(code, r"\(0, false\) => \"stalemate\"")
+
+    def test_the_pinned_mate_test_cannot_be_interrupted(self):
+        pin = lockfile.load().pin("kairos")
+        from oracle_harness import gitutil
+
+        if not gitutil.is_checkout(pin.checkout) or not gitutil.has_commit(pin.checkout, pin.commit):
+            self.skipTest("the kairos submodule is not checked out (python oracles/harness.py sync)")
+        source = gitutil.read_path(pin.checkout, pin.commit, "src/core/state.rs").decode("utf-8")
+        self.assertIn("pub fn get_mate_type(&self) -> MateType {\n        self.get_mate_type_impl(false)", source)
+        start = source.index("fn get_mate_type_impl(")
+        body = source[start:source.index("\n    }\n", start)]
+        self.assertIn("interrupt_off()", body)
+
+    def test_the_pinned_hypercuboid_cursor_starts_with_its_full_cap(self):
+        # Each of get_mate_type_impl's sub-searches is a fresh cursor (HcCursor::new) whose budget starts at u32::MAX
+        # hypercuboids; spent, the cursor finds "no further action" - which the mate test would read as a verdict. Out
+        # of reach of every deadline at the pin; a pin bump that lowers it must fail here and be read again.
+        pin = lockfile.load().pin("kairos")
+        from oracle_harness import gitutil
+
+        if not gitutil.is_checkout(pin.checkout) or not gitutil.has_commit(pin.checkout, pin.commit):
+            self.skipTest("the kairos submodule is not checked out (python oracles/harness.py sync)")
+        source = gitutil.read_path(pin.checkout, pin.commit, "src/core/hypercuboid.rs").decode("utf-8")
+        start = source.index("    pub fn new(ss: SearchSpace, order: HcOrdering) -> Self {\n        HcCursor {")
+        body = source[start:source.index("\n    }\n", start)]
+        self.assertIn("budget: u32::MAX,", body)
+
+
 def _kairos_built() -> bool:
     pin = lockfile.load().pin("kairos")
     return build.load(pin) is not None
@@ -145,7 +202,7 @@ class LiveDriverTests(unittest.TestCase):
 
     def test_it_sets_up_and_replays_what_ftxi_recorded_and_ends_in_checkmate(self):
         recorded = golden.load("ftxi").observations["cwmtt/standard"]
-        for source in PENDING_SOURCES:
+        for source in SEARCHES:
             observation = self.observe(source, "cwmtt/standard")
             self.assertEqual((observation.status, observation.actions_accepted), (recorded.status, recorded.actions_accepted))
             self.assertEqual([p.fingerprint for p in observation.positions], [p.fingerprint for p in recorded.positions])
@@ -171,11 +228,34 @@ class LiveDriverTests(unittest.TestCase):
     def test_an_action_that_ignores_a_check_cannot_be_submitted(self):
         recorded = golden.load("ftxi").observations["local/ignores-check"]
         self.assertEqual((recorded.status, recorded.reason), ("rejected", "cannot_submit"))
-        for source in PENDING_SOURCES:
+        for source in SEARCHES:
             observation = self.observe(source, "local/ignores-check")
             self.assertEqual((observation.status, observation.reason, observation.actions_accepted),
                              ("rejected", "cannot_submit", recorded.actions_accepted))
             self.assertEqual(len(observation.positions), recorded.actions_accepted + 1)
+
+    def test_an_exhaustive_search_that_finds_no_action_gives_the_verdict_ftxi_recorded(self):
+        recorded = golden.load("ftxi").observations
+        for record_id in ("local/checkmate", "local/stalemate", "local/stalemate-with-a-past"):
+            expected = recorded[record_id].positions[-1].terminal
+            self.assertIn(expected, ("checkmate", "stalemate"), record_id)
+            for source in SEARCHES:
+                observation = self.observe(source, record_id)
+                self.assertEqual(observation.status, "ok", (source, record_id))
+                self.assertEqual(observation.positions[-1].terminal, expected, (source, record_id))
+
+    def test_a_run_cut_at_its_deadline_gives_no_verdict_where_it_was_cut(self):
+        # Each record ends in a position ftxi records as checkmate; cut long before, neither search may claim it, and
+        # the position it was searching when the deadline came is reported without answers (the protocol's horizon).
+        for source, record_id, budget in (("kairos:naive", "cwmtt/wide", 3.0), ("kairos", "cwmtt/100_timelines", 2.0)):
+            record = self.records[record_id]
+            observation = make_source(source, self.lock).observe(record_id, corpus.feed(record, self.lock).data,
+                                                                 RunOptions(cap=1000, timeout_s=budget))
+            self.assertEqual(observation.status, "timeout", (source, record_id))
+            self.assertFalse(any(p.terminal in ("checkmate", "stalemate") for p in observation.positions),
+                             (source, record_id))
+            last = observation.positions[-1]
+            self.assertEqual((last.terminal, last.in_check, last.legal_actions), (None, None, None), (source, record_id))
 
     def test_the_actions_diagnostic_lists_the_exhaustive_count(self):
         record = self.records["cwmtt/standard"]

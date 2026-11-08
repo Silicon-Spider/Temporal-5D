@@ -28,6 +28,9 @@ W_VERDICT = ("white", False, None, "none")
 B_VERDICT = ("black", False, None, "none")
 TZ = "Standard - Turn Zero"
 FULL = {"in_check": 2, "legal_actions": 2, "terminal": 2}
+# Every implementation its own lineage (H47, CHECKPOINT 10). engine_differential takes its table explicitly - it fails
+# closed - so the tests that count each implementation apart say so.
+IDENTITY = {name: name for name in ("ftxi", "cwmtt", "chessin5d", "kairos", "notation")}
 
 
 class Named(Source):
@@ -90,7 +93,7 @@ class DifferentialCase(unittest.TestCase):
     def run_differential(self, engine_rows=None, oracle_reports=None, entries=(), min_checked=1.0, recorded=None):
         results, engine_results = self.reports(engine_rows, oracle_reports)
         return gate.engine_differential(self.engine, self.oracles, self.records, results, engine_results,
-                                        list(entries), min_checked, recorded)
+                                        list(entries), min_checked, recorded, lineages=IDENTITY)
 
     def silence(self, *names, record_id="r/tz", reason="variant"):
         """Oracle reports saying these sources do not read that record."""
@@ -308,7 +311,7 @@ class EngineDifferentialTests(DifferentialCase):
         findings, gated, ungated = self.run_differential()
         self.assertEqual((findings, ungated), ([], {}))
         self.assertEqual(gated[TZ].oracles, gate.GATING_ORACLES)
-        self.assertIn("each record followed as far as the engine went by at least 2 oracles", gated[TZ].describe())
+        self.assertIn("each record followed as far as the engine went by at least 2 oracle lineages", gated[TZ].describe())
         # Every record needs its two: one record that only one oracle follows ungates its ruleset, naming that oracle.
         self.records = [record("r/tz", TZ), record("r/tz2", TZ), record("r/tz3", TZ)]
         reports = self.silence("chessin5d", record_id="r/tz2", reason="notation")
@@ -1024,15 +1027,26 @@ class ResultTests(unittest.TestCase):
 
     def test_the_report_of_a_smoke_test_holds_no_gated_ruleset_and_says_why(self):
         with tempfile.TemporaryDirectory() as folder, mock.patch.object(paths, "cache_dir", return_value=Path(folder)):
-            smoke = json.loads(gate._write_report(self.result(engine="passed", gated={"Standard": self.THREE}), {})
+            smoke = json.loads(gate._write_report(self.result(engine="passed", gated={"Standard": self.THREE}), {}, lineages=IDENTITY)
                                .read_text(encoding="utf-8"))
             self.assertEqual((smoke["tier"], smoke["ok"], smoke["smoke_test"], smoke["gated"]),
                              ("commit", True, gate.SMOKE_TEST, {}))
             self.assertEqual(smoke["ungated"], {"Standard": f"{gate.SMOKE_REASON} ({self.THREE.describe()})"})
-            full = json.loads(gate._write_report(self.nightly(engine="passed", gated={"Standard": self.THREE}), {})
+            full = json.loads(gate._write_report(self.nightly(engine="passed", gated={"Standard": self.THREE}), {}, lineages=IDENTITY)
                               .read_text(encoding="utf-8"))
             self.assertEqual((full["tier"], full["smoke_test"], full["gated"], full["ungated"]),
                              ("nightly", None, {"Standard": dataclasses.asdict(self.THREE)}, {}))
+
+    def test_the_report_records_the_lineage_table_the_verdicts_were_counted_with(self):
+        # The table run_tier counted the two-oracle bar with (CHECKPOINT 10), as given - not the lock file read again.
+        # One unlike the lock file's, so that a report that re-read the lock, or wrote nothing, would show.
+        counted = {"ftxi": "ftxi", "cwmtt": "ftxi", "chessin5d": "chessin5d", "kairos": "ftxi", "notation": "notation"}
+        self.assertNotEqual(counted, lockfile.load().lineages())
+        with tempfile.TemporaryDirectory() as folder, mock.patch.object(paths, "cache_dir", return_value=Path(folder)):
+            path = gate._write_report(self.nightly(engine="passed", gated={"Standard": self.THREE}), {}, lineages=counted)
+            report = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(report["lineages"], counted)
+        self.assertEqual(report["lineages"]["kairos"], "ftxi")
 
     def test_a_restricted_run_never_produces_a_tier_verdict(self):
         # H47 (CHECKPOINT 8): a run restricted with --source or --record "never produces a tier verdict; label its output
@@ -1068,7 +1082,7 @@ class ResultTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder, mock.patch.object(paths, "cache_dir", return_value=Path(folder)):
             restricted = self.release(engine="passed", gated={"Standard": self.THREE}, restricted_to=self.ONLY_FTXI)
             self.assertTrue(restricted.ok)  # its exit code: it found nothing
-            path = gate._write_report(restricted, {})
+            path = gate._write_report(restricted, {}, lineages=IDENTITY)
             report = json.loads(path.read_text(encoding="utf-8"))
             self.assertEqual(path.name, "gate-release-restricted.json")
             self.assertEqual((report["restricted"], report["restricted_to"], report["ok"], report["oracle_layer_ok"],
@@ -1077,9 +1091,9 @@ class ResultTests(unittest.TestCase):
                              (gate.RESTRICTED, self.ONLY_FTXI, None, None, "compared", {}, {}, None, []))
             self.assertEqual(report["proof_channel"], f"DISABLED - {gate.RESTRICTED}")
             dirty = self.result(restricted_to=self.ONLY_FTXI, findings=[Finding("golden-unreproduced", "ftxi on r/1")])
-            found = json.loads(gate._write_report(dirty, {}).read_text(encoding="utf-8"))
+            found = json.loads(gate._write_report(dirty, {}, lineages=IDENTITY).read_text(encoding="utf-8"))
             self.assertEqual((found["ok"], [item["code"] for item in found["findings"]]), (None, ["golden-unreproduced"]))
-            complete = json.loads(gate._write_report(self.release(engine="passed", gated={"Standard": self.THREE}), {})
+            complete = json.loads(gate._write_report(self.release(engine="passed", gated={"Standard": self.THREE}), {}, lineages=IDENTITY)
                                   .read_text(encoding="utf-8"))
             self.assertEqual((complete["restricted"], complete["restricted_to"], complete["engine"], complete["ok"]),
                              (None, None, "passed", True))
@@ -1095,7 +1109,7 @@ class ResultTests(unittest.TestCase):
             "may be enabled for: Standard (4 records, 90 positions; an oracle held the engine's boards and pieces "
             "at 88 of them, and its exact state (markers included) at 70; "), channel)
         self.assertIn("independently answered: check 80, count 85, mate 90", channel)
-        self.assertIn("at least 3 oracles", channel)
+        self.assertIn("at least 3 oracle lineages", channel)
         self.assertIn("Very Small - Open (1 record, 2 positions; an oracle held the engine's boards and pieces at 2 "
                       "of them, and its exact state (markers included) at 2; ", channel)
         # A tier is judged by what it runs, not by what it is called.
@@ -1190,7 +1204,7 @@ class ResultTests(unittest.TestCase):
         self.assertIn("gated:     Standard (4 records, 90 positions; an oracle held the engine's boards and pieces at "
                       "88 of them, and its exact state (markers included) at 70; "
                       "independently answered: check 80, count 85, mate 90; "
-                      "each record followed as far as the engine went by at least 3 oracles)", text)
+                      "each record followed as far as the engine went by at least 3 oracle lineages)", text)
         self.assertIn("NOT gated: Misc - Small - no oracle followed notation/game as far as the engine went", text)
 
 
@@ -1510,6 +1524,43 @@ class GateRunTests(unittest.TestCase):
             self.assertEqual((result.engine, result.ok, result.smoke_test), ("failed", False, False), tier)
             self.assertEqual(result.proof_channel, "DISABLED - the gate failed", tier)
             self.assertIn("engine differential: FAILED", gate.summarise(result), tier)
+
+    def test_run_tier_counts_the_two_oracle_bar_by_the_lock_files_lineages(self):
+        # CHECKPOINT 10, wired end to end: the table run_tier counts with is the lock file's (Lock.lineages()). With
+        # every rules oracle declared in ftxi's lineage, the full-strength nightly - which gates both rulesets with the
+        # repository's table - gates nothing, and every reason says why the three count once. (The repository's table
+        # makes every oracle a tier runs its own lineage, so it alone cannot tell a run that ignored the table.)
+        self.engine()
+        self.assertEqual(sorted(self.run_gate("nightly").gated), sorted(["Standard", TZ]))
+        merged = {"ftxi": "ftxi", "cwmtt": "ftxi", "chessin5d": "ftxi", "kairos": "ftxi", "notation": "notation"}
+        with mock.patch.object(lockfile.Lock, "lineages", return_value=merged):
+            result = self.run_gate("nightly")
+        self.assertEqual(result.gated, {})
+        self.assertEqual(self.codes(result), ["engine-nothing-gated"])
+        self.assertEqual(sorted(result.ungated), sorted(["Standard", TZ]))
+        for ruleset, reason in result.ungated.items():
+            self.assertIn("ftxi's lineage (chessin5d, cwmtt, ftxi)", reason, ruleset)
+            self.assertIn("counts with it as one lineage", reason, ruleset)
+        # And the report records the table the verdicts were counted with.
+        self.assertEqual(self.report.call_args.kwargs["lineages"], merged)
+
+    def test_a_derived_oracle_is_no_second_vouch_in_a_run(self):
+        # cwmtt standing in for an oracle derived from ftxi's code (Kairos's place, CHECKPOINT 10), and Chess in 5D not
+        # reading r/tz: only ftxi and the "derived" cwmtt follow it - one lineage, so Turn Zero is not gated - while
+        # Standard keeps two lineages (ftxi's and Chess in 5D) and is gated by two.
+        self.table[("chessin5d", "r/tz")] = Observation(source="chessin5d", record="r/tz", status="unsupported",
+                                                        reason="variant", positions=[], actions_accepted=0, cap=1000,
+                                                        arrival_s=[], ended_s=0.01, elapsed_s=0.01)
+        self.record_golden()
+        self.engine()
+        derived = {"ftxi": "ftxi", "cwmtt": "ftxi", "chessin5d": "chessin5d", "kairos": "ftxi", "notation": "notation"}
+        with mock.patch.object(lockfile.Lock, "lineages", return_value=derived):
+            result = self.run_gate("nightly")
+        self.assertEqual(self.codes(result), [])
+        self.assertEqual(sorted(result.gated), ["Standard"])
+        self.assertEqual(result.gated["Standard"].oracles, 2)
+        self.assertIn("only one oracle followed r/tz (ftxi's lineage (cwmtt, ftxi))", result.ungated[TZ])
+        self.assertIn("counts with it as one lineage", result.ungated[TZ])
 
     def test_an_engine_that_declines_a_record_it_read_on_the_last_green_run_fails_every_tier(self):
         # H47 (CHECKPOINT 8): "the commit tier fails if the engine declines a record it read on the last green run". It
