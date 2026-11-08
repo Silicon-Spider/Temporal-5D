@@ -10,6 +10,79 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-09 - The review of 0e7d2ed..d86f363, the deadline's path: a cut candidate list kept apart by the cache and the batch, a cut fallback listing re-listable, 1e9 s or more no deadline
+
+The review of `lane/engine` 0e7d2ed..d86f363 (2026-11-09; build-log issue 410) found the
+deadlines issue 406 sent into the rules engine's calls could crash timed searches and games.
+Fixed as the main loop decided - H1, M1, M2 and the play loop's L2, L5 and L7:
+
+- **H1 - the evaluation cache and the batch match the candidate list.** A deadline made a
+  leaf's candidate list depend on the clock (a classification it cut keeps moves an uncut one
+  proves illegal), while `EvalCache::find` and the batch's de-duplication matched on the state,
+  the moves made and the epoch alone: a cached evaluation, or a duplicate's shared request, met
+  an expansion with another number of candidates and `check_evaluation` threw "an evaluation
+  has N logits for M candidate moves" (15 of 520 timed games, 6 of 120 `t5d-play --max-seconds`
+  runs, in the review). Now `candidate_digest` (the expansion's moves in order and each one's
+  legality, 64 bits, the count mixed in) is stored with every cache entry and every batch
+  request and compared - a mismatch is a miss, or a request of its own. The deadline stays in
+  the in-batch calls. `EvalCache::find`/`insert` take the digest (`t5d/mcts.hpp`).
+- **M1 - a fallback listing the deadline cut leaves its node re-listable.** A flat node whose
+  generator stopped before its first turn and whose fallback listing the deadline then cut was
+  marked stuck; a stuck root made `run()` stop Finished for good and the play loop threw "the
+  root has no visited child to choose". Now such a node is not stuck (`FlatNode::relist`): the
+  next widening outside a deadline lists it again. And the play loop ends `TimeLimit` when no
+  child has a visit and the deadline has passed, and runs no search and makes no choice after
+  the deadline (`choose_now`).
+- **M2 - one place for the deadline, and 1e9 s or more is none.** A limit of about 9.22e9 s or
+  more, +infinity included, overflowed the conversion to the clock's ticks into a deadline 292
+  years past: every classification and verification cut. Now every limit goes through
+  `deadline_after` ("THE DEADLINE" in `t5d/mcts.hpp`): none for 0 and for `kNoDeadlineSeconds`
+  (1e9) or more, NaN and negatives refused; `time_left` for every subtraction. `t5d-play
+  --max-seconds`, `t5d_search_limits.seconds` and Python's `run_limits` document it.
+- **L2 - the play loop's deadline, everywhere it applies.** Each search's `Limits::seconds` is
+  the time left, recomputed before every run - choose_now's re-run included (it got the first
+  run's); a fresh search's constructor-time root check counts in the game's totals; what the
+  deadline does not reach is documented (`selfplay.hpp`, the README): the flat generator - its
+  overshoot measured by the review at about 1.3 s past a 0.5 s stop at the 18-board Q3 node and
+  1.5-1.9 s at 155 boards - the proof channel's paths, `t5d_search_verify` and the step calls.
+  Issue 408 and edit 304 scoped to the C++ play loop.
+- **L5 - a timed-out decision's work counts.** The decision's search totals are added before
+  every timeout break, as Guard's path did.
+- **L7 - citations and `t5d-play`'s header** (below; the issue-406 entry carries a correction
+  note).
+- Tests (`engine/tests/test_legality_cost.cpp`): `search_cache_keeps_a_cut_candidate_list_apart`
+  (the premise deterministic; untimed then timed, and timed then untimed, on one cache),
+  `cache_shared_across_a_deadline` and `play_cache_across_decisions_with_a_stop` (adopted from
+  the review; the second at stops it reaches mid-game), `search_batch_keeps_a_cut_candidate_
+  list_apart` (cache off, batch 512, 144 runs), `play_with_a_stop_from_sparse_starts_and_small_
+  variants_never_throws`, `flat_play_fallback_cut_by_the_deadline` (adopted),
+  `flat_play_at_issue_406s_node_ends_time_limit_when_the_fallback_is_cut`,
+  `flat_root_emptied_by_a_cut_listing_is_listed_by_a_later_run`, `deadline_from_1e9_seconds_or_
+  infinite_is_none`, `play_from_1e9_seconds_or_infinite_plays_as_with_no_limit`,
+  `play_totals_count_a_timed_out_decision`; `test_play_exe.cpp`: `play_exe_max_seconds_ends_with_
+  its_record` (exit 0 with the record; 1e10 the same record as none); `test_capi_search.cpp`
+  (NaN refused, 1e10 and infinity the same search as 0); `test_mcts.cpp` (another candidate list
+  is a miss, stored beside the first). The comment that "a later run without one is exact again"
+  made accurate.
+- `engine/include/t5d/mcts.hpp`, `engine/src/mcts.cpp`, `engine/include/t5d/selfplay.hpp`,
+  `engine/src/selfplay.cpp`, `engine/include/t5d/capi_search.h`, `engine/tools/t5d_play.cpp`,
+  `python/t5d/engine/search.py` (docstrings); the tests above and `test_ladder.cpp`'s cache
+  lookups; `engine/README.md` (Stage E5a's deadlines, Stage E6a's cache and `run`, `t5d-play`);
+  `docs/BUILD_LOG.md` (issue 410; issue 408 scoped; edits 304, 305; the session log).
+- Checks: engine 718 of 718 (`--werror`, 17 minutes); the Lazy SMP test x3 (mcts.cpp changed:
+  1 thread 293 / 293 / 293, 5 threads 316 / 314 / 315, load 12-14%); ruff clean on the Python
+  docstrings (check, format); verify ok (exit 0); gate commit ok (engine differential smoke
+  test passed, baseline 41 compared, 0 declined; proof channel DISABLED). The long twins, the
+  nightly gate and the engine-driving pytest files run at the end of the round, as the main
+  loop's checks list them.
+
+Spec: §8.5, §8.7, §15.2's purity row and register C14 - proposed edit 305 (the cache matches the
+network's whole input, the candidate list included; "one network input" made exact). §8.6 ("the
+hard bound is inviolable") and register E7 bear on the deadline, unchanged: it is a safety stop,
+not E7's tight hard bound, and the flat generator stands outside it. §13 and issue 408 - edit
+304 scoped to the C++ play loop. H37 unchanged: what a deadline stops is Unknown, never a
+verdict. The proof channel stays off (H41).
+
 ### 2026-11-02 - MT-01/02/03 review fixes: the checker held to seeded faults, MT-03's export checks made strict, churn that carries weight, the derivation exercised, coverage floors, each line as long as its claim
 
 The mutation review of MT-01/02/03 (2026-11-01; 47 mutants and 3 combinations on a copy)
@@ -122,7 +195,12 @@ minutes and was killed, inside one verdict. Now:
   `TimeLimit` at that turn start, not `Unknown`) and of a chosen move's exact verification
   (stopped with no root child known legal: `TimeLimit`, the action under way not recorded).
   Without a deadline - training self-play - both stay exact with no limit but memory (H37),
-  as documented (issue 408).
+  as documented (issue 408). (Review correction, 2026-11-09: the deadline also made a leaf's
+  candidate list depend on the clock while the evaluation cache and the batch matched the
+  state alone - timed searches and games threw, H1; a cut fallback listing left a flat root
+  stuck and the loop threw, M1; 9.22e9 s or more overflowed into a passed deadline, M2; a
+  choose_now re-run got a later deadline than the game's, L2 - all fixed, issue 410. It
+  reaches the C++ play loop's steps, not Python's: `t5d_search_verify` takes none.)
 - Measured after the fix: the same game with `--max-seconds 120` ends at 120.0 s
   (`TimeLimit`, 26 actions; verifications 63 s, terminal checks 46 s, expansions 11 s).
 
@@ -154,7 +232,10 @@ Spec: §13 ("Legality classification may dominate self-play in big games") and �
 legality row - edits 303-304 (exact's measured tail, M4); §8.1 and H37 (unknown moves verified
 lazily; a verdict only from an exhaustive search) - unchanged, the deadline yields Unknown;
 §15.5 ("an engine that plays legal 5D chess end to end") - issue 408 for the user. No register
-row changes.
+row changes. (Review correction, 2026-11-09, L7: the deadline also bears on §8.6 ("the hard
+bound is inviolable", "held tight at high N") and register E7, unchanged - it is a safety
+stop, not E7's hard bound, and the flat generator stands outside it; and, through the cache,
+on §8.5, §8.7 and C14 - edit 305, issue 410.)
 
 ### 2026-11-01 - main (7483103) merged into lane/engine: the step-2 solver searches with E10's ladder off
 

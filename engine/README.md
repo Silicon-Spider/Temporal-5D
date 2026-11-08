@@ -1969,21 +1969,48 @@ left unhonoured - every move a search applies is a node, the abstract check's st
 charged in bulk, a time limit is read every 64 nodes (about 1.5-3.5 µs a node throughout) -
 so what would make it cheaper is algorithmic (build-log issue 407).
 
-**Deadlines.** `LegalityOptions::deadline` (none by default): each of tier 3's searches gets
-the time left, and none starts once it has passed - the moves they would have settled are
-Unknown. A search's `Limits::seconds` reaches the rules engine's calls inside a batch (see
-"Stage E6a"), and a game's `PlayParams::max_seconds` its turn-start verdicts (stopped: the
-game ends `TimeLimit` at that turn start) and the exact verification of a chosen move
-(stopped with no root child known legal: `TimeLimit`, the action under way not recorded).
-What a deadline stops is Unknown, never a verdict (H37). Self-play for training sets no
-deadline (it is not deterministic): there the turn-start verdict and the chosen move's
-verification stay exact with no node limit, as the documents have them (build-log issue
-408). Tested (`tests/test_legality_cost.cpp`): a deadline leaves moves unknown and never
-misclassifies one; issue 406's root under the flat form with exact legality stops at a
-0.5-second deadline (it ran past 17 minutes for 800 playouts); played with exact legality
-and a 1-second safety stop, its game ends on time with its actions legal; the default-rules
-turn start whose verdict ran past 20 minutes ends a game with a 2-second stop in about 2 s
-(`TimeLimit`, no action); and the tool on every fixture.
+**Deadlines.** One mechanism (`t5d/mcts.hpp`, "THE DEADLINE"): a limit in seconds -
+`Limits::seconds`, `PlayParams::max_seconds`, the C API's `t5d_search_limits.seconds` -
+becomes a steady-clock time point once (`deadline_after`: none for 0, and none for 1e9 s or
+more, +infinity included - a double that large overflowed the conversion to the clock's
+ticks into a deadline long past, the review of 2026-11-09's M2; NaN and negatives refused),
+and that time point is what reaches the rules engine. `LegalityOptions::deadline` (none by
+default): each of tier 3's searches gets the time left, and none starts once it has passed -
+the moves they would have settled are Unknown. A search's `Limits::seconds` reaches the rules
+engine's calls inside a batch (see "Stage E6a"), and a game's `PlayParams::max_seconds` - each
+search's `Limits::seconds` being the time left, recomputed before every run - its turn-start
+verdicts (stopped: the game ends `TimeLimit` at that turn start) and the exact verification of
+a chosen move (stopped with no root child known legal: `TimeLimit`, the action under way not
+recorded). After the deadline the play loop runs no search and makes no choice: a decision
+whose search it stopped, or with no child left to choose, ends the game there (M1: a flat
+root whose fallback listing the deadline cut is not stuck - the next run outside a deadline
+lists it - and the loop ends `TimeLimit` instead of throwing "no visited child"); a timed-out
+decision's search work still counts in the game's totals (L5), and so does a fresh search's
+root check in its constructor (L2). What a deadline stops is Unknown, never a verdict (H37). A
+classification it cut keeps moves an uncut one proves illegal: another candidate list, which
+the evaluation cache and the batch keep apart (H1; see "Stage E6a"). What it does not reach
+bounds its overshoot: the flat form's turn generator, under its node budget (about 1.3 s past a
+0.5 s stop at issue 406's 18-board Q3 node; 1.5-1.9 s at a 155-board turn start - the review's
+measurements); a fresh search's root check (the turn-start detector under `mate_nodes`,
+0.02-0.05 s at that node); the proof channel's paths (`place()`'s verification,
+`check_certificate` in `offer` and in Guard - off, H41); the ladder's synchronous jobs
+(node-bounded). It is the C++ play loop's (`t5d-play --max-seconds`): the C API's
+`t5d_search_verify` and its step calls take no deadline, and Python's play loops set none.
+Self-play for training sets no deadline (it is not deterministic): there the turn-start
+verdict and the chosen move's verification stay exact with no node limit, as the documents
+have them (build-log issue 408). Tested (`tests/test_legality_cost.cpp`): a deadline leaves
+moves unknown and never misclassifies one; issue 406's root under the flat form with exact
+legality stops at a 0.5-second deadline (it ran past 17 minutes for 800 playouts); played with
+exact legality and a 1-second safety stop, its game ends with its actions legal - its
+`TimeLimit` coming from the next turn start's verdict (the flat form's root children are
+never unknown, so no verification runs there); the default-rules turn start whose verdict ran
+past 20 minutes ends a game with a 2-second stop in about 2 s (`TimeLimit`, no action); the
+cache and the batch never serve a cut list another list's evaluation, either way round and
+through `play_game`; a cut fallback listing leaves its root re-listable and the game ends
+`TimeLimit` (issue 406's Q3 node, the flat form's defaults, self-play and match play); 1e9 s
+or more, +infinity included, change nothing - the same search, the same game, the same
+`t5d-play` record; a timed-out decision's playouts and verification counted; and the tool on
+every fixture.
 
 ## Stage E5b: the tactical scanner and t5d-scan6b
 
@@ -2674,8 +2701,16 @@ search's root takes it from its caller (`Search(root, params, moves_made)`; the 
 API reads the game handle's). Before A6 the identity held only the turn-start flag,
 and the evaluator was told nothing of it - "a path property the network must not see";
 now `EvalRequest::moves_made` carries the count with the leaf's expansion, and an
-evaluation is a function of the state, the count and the epoch: the evaluation cache
-and a batch's de-duplication match all three (§15.2's purity row). An exact comparison
+evaluation is a function of the state, the count, the epoch and the candidate list the
+network scores: the evaluation cache and a batch's de-duplication match all four (§15.2's
+purity row). The list is the classification's (legal and unknown moves kept, the proved
+illegal dropped), and one state can have two: `run()`'s deadline can cut a classification,
+which then keeps moves an uncut one drops - so each entry and each request carries
+`candidate_digest` (the moves in order and each one's legality; 64 bits, the count mixed in)
+and is served only to the same list. Matched on the state alone, a cached evaluation met an
+expansion with another number of candidates and the search threw "an evaluation has N logits
+for M candidate moves" (the review of 2026-11-09, H1: 15 of 520 timed games, 6 of 120
+`t5d-play --max-seconds` runs). An exact comparison
 follows every key match (a collision gets an unshared node; `key_bits`, a test seam not
 in the C API, cuts the keys short so that the tests meet collisions). Statistics
 live on the edges (path statistics; in a tree they equal the child's). Reaching an
@@ -2745,8 +2780,12 @@ and `Limits` carries a node budget and a memory budget besides playouts and eval
 (build-log issue 406): the leaves' legality classifications (`LegalityOptions::deadline`),
 the turn-start checks, the flat form's fallback listing and the lazy verifications, which it
 leaves Unknown - never a verdict, and so it stays in a tree carried to the next decision (a
-node is checked and expanded once). The flat form's turn generator keeps its node budget
-alone: a generator lives across decisions.
+node is checked and expanded once); a cut classification is another candidate list, which the
+cache and the batch keep apart (above), and a flat node whose fallback listing it cut before a
+turn was found is not stuck but listed again by the next run outside a deadline. The flat
+form's turn generator keeps its node budget alone: a generator lives across decisions (a run
+can overshoot by a generation). 0, or 1e9 s or more (+infinity included), is no deadline; NaN
+and negatives are refused ("THE DEADLINE" in `t5d/mcts.hpp`).
 
 **Determinism** (H15). One thread; with a deterministic evaluator a search is
 bit-reproducible (`digest()` hashes every node's and edge's statistics in a canonical
@@ -2905,8 +2944,9 @@ without passing turn 20). `--mate-nodes N` sets the search's terminal-check
 budget; `--max-actions` (checked at turn starts) and `--max-seconds` (checked before
 every decision, each search's deadline, and the deadline of the game's turn-start verdicts
 and of a chosen move's exact verification - build-log issue 406: an action under way when
-it passes is not recorded) are safety stops - the record ends `*`, its Termination header
-naming the stop. Without `--max-seconds` a turn-start verdict has no limit but memory (H37):
+it passes is not recorded; 1e9 or more is no stop) are safety stops - the record ends `*`,
+its Termination header naming the stop, and is printed (the review of 2026-11-09's H1 and M1
+made a stopped game throw at times, exit 1 with no record). Without `--max-seconds` a turn-start verdict has no limit but memory (H37):
 on large positions it can take many minutes (build-log issue 408). Every number is range-checked (never wrapped into a narrower type; reals finite):
 a bad one exits 2. The rules come through
 the tools' shared option reader (`tools::ruleset_option`), so the default is the

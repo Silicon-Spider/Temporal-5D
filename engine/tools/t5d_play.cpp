@@ -44,8 +44,13 @@
 // game, its final moves, PV changes and demotions; the game's id the first
 // 16 hex digits of the record's SHA-256.
 // --max-seconds stops a long game (a safety stop, "*": checked before every
-// decision, and each search's deadline; the record ends at the last turn
-// start), its record and summary still printed.
+// decision; each search's deadline, and the deadline of each turn start's
+// verdict and of a chosen move's exact verification - what it stops is
+// Unknown, never a verdict; the record ends at the last turn start), its
+// record and summary still printed. 1e9 or more: none (t5d/mcts.hpp's THE
+// DEADLINE). Its overshoot is bounded by what it does not reach: the flat
+// form's turn generator (about 1.3 s past a 0.5 s stop at issue 406's
+// 18-board Q3 node) and a fresh search's root check (mate_nodes).
 // Exit status: 0 for a game played, 2 for a bad command line (a number out of
 // range included), 1 for an error.
 

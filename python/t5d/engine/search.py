@@ -104,6 +104,8 @@ def search_params(lib: Library | None = None, **overrides) -> CSearchParams:
 #: The parameters that decide what a leaf's evaluation is of - the network's input (the
 #: expansion's options, the split: D8's submit flags) and the leaf's candidate moves (the legality
 #: classification drops proved-illegal moves, so its budget changes the list the logits score).
+#: The engine's cache also compares each entry's candidate list itself, since a run's deadline
+#: (``run_limits(seconds=...)``) can cut a classification and leave a longer list for one state.
 CACHE_KEYS: tuple[str, ...] = ("split", "legal_moves_only", "legality_checks", "legality_nodes")
 
 
@@ -410,7 +412,10 @@ class Search:
         bytes: int = T5D_NO_LIMIT,  # noqa: A002 - the C field's name
         seconds: float = 0.0,
     ) -> int:
-        """The same within budgets; why it stopped (``T5D_STOP_*``)."""
+        """The same within budgets; why it stopped (``T5D_STOP_*``). ``seconds``: a wall-clock
+        deadline from the call, reaching the rules engine's calls inside a batch too; 0, or 1e9 or
+        more (``math.inf`` included), sets none; NaN or a negative value is refused by the engine
+        (t5d/mcts.hpp's THE DEADLINE)."""
         limits = CSearchLimits(int(playouts), int(evaluations), int(nodes), int(bytes), float(seconds))
         stop = c_int32()
         self._lib.call("t5d_search_run_limits", self._live(), int(evaluator), c_uint64(int(seed)), byref(limits), byref(stop), error=True)

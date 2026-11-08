@@ -217,3 +217,41 @@ TEST(play_exe_command_line) {
   CHECK_EQ(run(T5D_PLAY_EXE, {"--help"}, {}, dir / "o.txt", dir / "e.txt"), 0);
   CHECK(read_all(dir / "o.txt").find("usage") != std::string::npos);
 }
+
+TEST(play_exe_max_seconds_ends_with_its_record) {
+  // The review of 2026-11-09. H1: with --max-seconds the tool exited 1 with no record in 6 of 120
+  // runs ("an evaluation has N logits for M candidate moves": a cut classification served
+  // another list's evaluation). A stop the game reaches ends it with its record printed, exit 0
+  // (time_limit: "*"). M2: --max-seconds of 1e9 or more is no stop at all - the same record as
+  // without it (the ladder off: one thread, deterministic).
+  namespace fs = std::filesystem;
+  const fs::path dir = fs::path(T5D_TEST_SCRATCH) / "play-exe";
+  fs::create_directories(dir);
+  const char* const variants[] = {"Very Small", "Focused - Just Kings", "Very Small - Open"};
+  int time_limits = 0;
+  for (int i = 0; i < 6; ++i) {
+    const std::vector<std::string> args{"--variant", variants[i % 3], "--seed", std::to_string(30 + i),
+                                        "--max-seconds", i % 2 == 0 ? "0.12" : "0.2"};
+    const int status = run(T5D_PLAY_EXE, args, {}, dir / "timed.5dpgn", dir / "timed-stderr.txt");
+    CHECK_EQ(status, 0);
+    if (status != 0) {
+      std::fprintf(stderr, "  %s seed %d: %s", variants[i % 3], 30 + i, read_all(dir / "timed-stderr.txt").c_str());
+      continue;
+    }
+    const t5d::PgnRecord rec = t5d::read_pgn(read_all(dir / "timed.5dpgn"));
+    REQUIRE(rec.header("Termination") != nullptr);
+    if (*rec.header("Termination") == "time_limit") {
+      ++time_limits;
+      CHECK(*rec.header("Result") == "*");
+    }
+  }
+  std::fprintf(stderr, "  6 timed games, %d ended time_limit\n", time_limits);
+  const std::vector<std::string> base{"--variant", "Standard", "--seed", "5", "--max-actions", "2", "--playouts", "16",
+                                      "--no-hunt", "--no-settling", "--no-assets"};
+  std::vector<std::string> far = base;
+  far.insert(far.end(), {"--max-seconds", "1e10"});
+  REQUIRE_EQ(run(T5D_PLAY_EXE, base, {}, dir / "none.5dpgn", dir / "none-stderr.txt"), 0);
+  REQUIRE_EQ(run(T5D_PLAY_EXE, far, {}, dir / "far.5dpgn", dir / "far-stderr.txt"), 0);
+  CHECK(read_all(dir / "far.5dpgn") == read_all(dir / "none.5dpgn"));
+  CHECK(read_all(dir / "far.5dpgn").find("action_limit") != std::string::npos);
+}

@@ -1204,6 +1204,30 @@ TEST(capi_search_shares_its_cache_and_runs_within_budgets) {
   CHECK_EQ(stop, T5D_STOP_DEADLINE);
   limits.seconds = -1;
   CHECK_EQ(t5d_search_run_limits(timed.get(), T5D_EVALUATOR_RANDOM, 3, &limits, &stop, nullptr), T5D_ERR_ARGUMENT);
+  limits.seconds = std::nan("");
+  CHECK_EQ(t5d_search_run_limits(timed.get(), T5D_EVALUATOR_RANDOM, 3, &limits, &stop, nullptr), T5D_ERR_ARGUMENT);
+  // 1e9 seconds or more, +infinity included, set no deadline (the review of 2026-11-09, M2: they
+  // overflowed the conversion to the clock's ticks into a deadline long passed). The same search
+  // as with 0: deterministic, the random evaluator seeded.
+  for (const double far : {1e10, std::numeric_limits<double>::infinity()}) {
+    const SearchHandle none = new_search(g.get(), p);
+    const SearchHandle beyond = new_search(g.get(), p);
+    t5d_search_limits l0{300, T5D_NO_LIMIT, T5D_NO_LIMIT, T5D_NO_LIMIT, 0.0};
+    t5d_search_limits l1{300, T5D_NO_LIMIT, T5D_NO_LIMIT, T5D_NO_LIMIT, far};
+    int32_t s0 = -1;
+    int32_t s1 = -1;
+    REQUIRE_EQ(t5d_search_run_limits(none.get(), T5D_EVALUATOR_RANDOM, 3, &l0, &s0, nullptr), T5D_OK);
+    REQUIRE_EQ(t5d_search_run_limits(beyond.get(), T5D_EVALUATOR_RANDOM, 3, &l1, &s1, nullptr), T5D_OK);
+    CHECK_EQ(s1, T5D_STOP_PLAYOUTS);
+    CHECK_EQ(s1, s0);
+    t5d_search_summary i0;
+    t5d_search_summary i1;
+    REQUIRE_EQ(t5d_search_info(none.get(), &i0), T5D_OK);
+    REQUIRE_EQ(t5d_search_info(beyond.get(), &i1), T5D_OK);
+    CHECK_EQ(i1.nodes, i0.nodes);
+    CHECK_EQ(i1.unknown_edges, i0.unknown_edges);
+    CHECK_EQ(i1.unknown_verdicts, i0.unknown_verdicts);
+  }
   size_t v = 0;
   REQUIRE_EQ(t5d_search_layout("t5d_search_limits", nullptr, &v), T5D_OK);
   CHECK_EQ(v, sizeof(t5d_search_limits));

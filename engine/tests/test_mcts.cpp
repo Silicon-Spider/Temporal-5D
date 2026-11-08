@@ -69,6 +69,18 @@ SearchParams fast(SearchParams p = {}) {
   return p;
 }
 
+// The candidate list a search under `p` scores at `state` with `moves_made`
+// made (EvalCache's candidates): the leaf's expansion made again, outside any
+// deadline - the search's own options.
+std::uint64_t candidates_of(const GameState& state, const SearchParams& p, int moves_made) {
+  ExpandOptions o = p.expand;
+  o.legal_moves = p.legal_moves_only;
+  o.legality = p.legality;
+  Expansion x;
+  expand(state, o, x, moves_made);
+  return candidate_digest(x);
+}
+
 // An evaluator that forwards to another and records what it was asked.
 class Recording final : public Evaluator {
  public:
@@ -1239,7 +1251,8 @@ TEST(mcts_rerooting_keeps_only_reachable_nodes_and_cached_evaluations) {
     CHECK_NOTHROW(search.check_invariants());
     CHECK(search.stats().nodes_collected == before - search.node_count());
     REQUIRE(search.cache() != nullptr);
-    CHECK(search.cache()->find(sibling_key, sibling_moves, 0, sibling_state, true) != nullptr);
+    CHECK(search.cache()->find(sibling_key, sibling_moves, 0, sibling_state,
+                               candidates_of(sibling_state, params_of(c), sibling_moves), true) != nullptr);
     // Searching on: the evaluator is told of the new root, and never asked
     // about a state the cache holds.
     const std::size_t roots = ev.new_roots;
@@ -3587,8 +3600,8 @@ TEST(mcts_the_evaluation_cache_keeps_a_turn_start_apart_from_the_same_state_duri
       const EvalCache* cache = search.cache();
       REQUIRE(cache != nullptr);
       const std::uint64_t key = search.node(h.start).key;
-      const Evaluation* a = cache->find(key, 0, 0, m.at_turn_start, true);
-      const Evaluation* b = cache->find(key, 1, 0, m.during_action, true);
+      const Evaluation* a = cache->find(key, 0, 0, m.at_turn_start, candidates_of(m.at_turn_start, p, 0), true);
+      const Evaluation* b = cache->find(key, 1, 0, m.during_action, candidates_of(m.during_action, p, 1), true);
       REQUIRE(a != nullptr);
       REQUIRE(b != nullptr);
       CHECK(std::abs(wdl_value(a->wdl).q - CountAware::value_of(0)) < 1e-6);
@@ -3649,8 +3662,8 @@ TEST(mcts_graph_keeps_equal_states_with_different_move_counts_apart) {
       const EvalCache* cache = search.cache();
       REQUIRE(cache != nullptr);
       const std::uint64_t key = search.node(by_count.at(1).front()).key;
-      const Evaluation* one = cache->find(key, 1, 0, c.one, true);
-      const Evaluation* two = cache->find(key, 2, 0, c.two, true);
+      const Evaluation* one = cache->find(key, 1, 0, c.one, candidates_of(c.one, p, 1), true);
+      const Evaluation* two = cache->find(key, 2, 0, c.two, candidates_of(c.two, p, 2), true);
       REQUIRE(one != nullptr);
       REQUIRE(two != nullptr);
       CHECK(std::abs(wdl_value(one->wdl).q - CountAware::value_of(1)) < 1e-6);
@@ -4439,8 +4452,8 @@ TEST(mcts_d3_the_evaluation_cache_returns_every_head) {
   ev.error = 0.0625f;
   ev.moves_left = 31.5f;
   EvalCache cache(16, std::size_t{1} << 20);
-  cache.insert(7, 0, 0, a, ev);
-  const Evaluation* hit = cache.find(7, 0, 0, a, true);
+  cache.insert(7, 0, 0, a, 99, ev);
+  const Evaluation* hit = cache.find(7, 0, 0, a, 99, true);
   REQUIRE(hit != nullptr);
   CHECK(hit->wdl == ev.wdl);
   CHECK(hit->value.has_value() && *hit->value == *ev.value);
@@ -4554,12 +4567,23 @@ TEST(mcts_the_evaluation_cache_is_per_epoch_and_exact) {
   ev.logits.assign(20, 0.25f);
   ev.value = two_hot(0.5);
   EvalCache cache(16, std::size_t{1} << 20);
-  cache.insert(7, 0, 0, a, ev);
-  CHECK(cache.find(7, 0, 0, a, true) != nullptr);
-  CHECK(cache.find(7, 0, 1, a, true) == nullptr);  // another epoch: a miss (§7.9)
-  CHECK(cache.find(7, 0, 0, b, true) == nullptr);  // the same key, another state: a miss
-  CHECK(cache.find(8, 0, 0, a, true) == nullptr);
-  CHECK(cache.find(7, 1, 0, a, true) == nullptr);  // another count of moves made (A6): a miss
+  cache.insert(7, 0, 0, a, 99, ev);
+  CHECK(cache.find(7, 0, 0, a, 99, true) != nullptr);
+  CHECK(cache.find(7, 0, 1, a, 99, true) == nullptr);  // another epoch: a miss (§7.9)
+  CHECK(cache.find(7, 0, 0, b, 99, true) == nullptr);  // the same key, another state: a miss
+  CHECK(cache.find(8, 0, 0, a, 99, true) == nullptr);
+  CHECK(cache.find(7, 1, 0, a, 99, true) == nullptr);  // another count of moves made (A6): a miss
+  // Another candidate list for the same state - a classification run()'s
+  // deadline cut keeps more moves - is another input: a miss, and stored
+  // beside the first (the review of 2026-11-09, H1).
+  CHECK(cache.find(7, 0, 0, a, 98, true) == nullptr);
+  Evaluation longer = ev;
+  longer.logits.assign(24, 0.5f);
+  cache.insert(7, 0, 0, a, 98, longer);
+  REQUIRE(cache.find(7, 0, 0, a, 98, true) != nullptr);
+  CHECK_EQ(cache.find(7, 0, 0, a, 98, true)->logits.size(), std::size_t{24});
+  CHECK_EQ(cache.find(7, 0, 0, a, 99, true)->logits.size(), std::size_t{20});
+  CHECK_EQ(cache.size(), std::size_t{2});
   // In searches sharing a cache: the root evaluated once per epoch.
   const SearchParams p = fast();
   const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
@@ -4859,8 +4883,9 @@ TEST(mcts_the_epoch_does_not_change_under_a_waiting_batch) {
   const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
   uniform->evaluate(search.requests(), ev);
   search.deliver(ev);
-  CHECK(cache->find(search.node(search.root()).key, 0, 0, variant("Standard"), true) != nullptr);
-  CHECK(cache->find(search.node(search.root()).key, 0, 5, variant("Standard"), true) == nullptr);
+  const std::uint64_t candidates = candidates_of(variant("Standard"), fast(), 0);
+  CHECK(cache->find(search.node(search.root()).key, 0, 0, variant("Standard"), candidates, true) != nullptr);
+  CHECK(cache->find(search.node(search.root()).key, 0, 5, variant("Standard"), candidates, true) == nullptr);
   search.set_epoch(5);
   CHECK_EQ(search.epoch(), std::uint64_t{5});
 }
@@ -5069,11 +5094,11 @@ TEST(mcts_h18_the_acting_player_is_in_every_key) {
       ev.value = two_hot(0.5);
       EvalCache cache;
       const int made = static_cast<int>(acts.actions.front().moves.size());  // A6
-      cache.insert(42, made, 0, shifted, ev);
-      CHECK(cache.find(42, made, 0, shifted, true) != nullptr);
-      CHECK(cache.find(42, made, 0, opponent, true) == nullptr);  // the count equal, the state not
-      CHECK(cache.find(42, made, 0, opponent, false) == nullptr);
-      CHECK(cache.find(42, 0, 0, opponent, true) == nullptr);
+      cache.insert(42, made, 0, shifted, 5, ev);
+      CHECK(cache.find(42, made, 0, shifted, 5, true) != nullptr);
+      CHECK(cache.find(42, made, 0, opponent, 5, true) == nullptr);  // the count equal, the state not
+      CHECK(cache.find(42, made, 0, opponent, 5, false) == nullptr);
+      CHECK(cache.find(42, 0, 0, opponent, 5, true) == nullptr);
       // MCGS with keys cut to one bit (every key collides): the shifted root's
       // submit edge leads to a node of its own holding the opponent's turn
       // start, never back to the root, and every node's player is its state's.
