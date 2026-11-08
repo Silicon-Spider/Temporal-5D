@@ -7076,6 +7076,10 @@ superseded or made moot says so; nothing is deleted.
         now; `lookup` enters, indexes (taking the entry back if the index throws), then counts.
         Tested on 11 positions' refreshes at every allocation (1,146 faults), P7 with the
         ladder on, and deliveries with the asset map on (5,801 faults).
+      - M1: `gather`'s request list and `run`'s evaluation buffers moved inside their `try`s (a
+        failure there left the batch waiting, every later call refused until `abandon`). Swept
+        at every allocation of a fresh search's first and second gather and of `run(16)`, five
+        configurations in C++ and three through the C API beside a twin.
 
 ## Proposed spec edits
 
