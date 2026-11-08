@@ -10,6 +10,62 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-08 - Upstream drafts: three oracle notation-reader gaps (two bug reports, one question)
+
+The done-means audit's verification (2026-11-02, its section 4) found, among the barriers of the
+ungated rulesets, three places where an oracle cannot read move text that the notation specification
+allows. Each is drafted in `docs/checkpoints/upstream/` for the user to file (register H27, CHECKPOINT 8).
+Each was verified at the pins on 2026-11-08: the oracle's reader read at its pinned commit; the
+refusal reproduced with the harness's `observe` (no golden file written) and with the stock tool or
+library, on scratch copies of the records; and the specification's text cited by line.
+
+- **`ftxi-signed-timeline-labels.md` (new), a bug report.** ftxi's `match_absolute_board` compares a
+  timeline's sign as written with ftxi's own rendering of each candidate move: `1` in odd games, `+1`
+  in even ones.
+  - On cwmtt/tesseractMageOChicken, ftxi refuses `(+1T10)` at action 28 (KD-0054).
+  - On four hand-built records, the stock `5dtools` refuses `(+1T1)` in an odd game and `(1T1)` in an
+    even one, and plays the other two spellings.
+  - The notation allows both forms (README lines 548-549, 405), and so do ftxi's own grammar and its
+    5DFEN reader.
+  - With the sign removed from the board coordinates, 5dtools plays all 33 actions, at the counts the
+    record lists for itself.
+- **`5d-chess-js-signed-timeline-token.md` (new), a bug report.** The library's reader removes
+  `(>Lx)` with `/\(>L\-?\d*\)/g`, so `(>L+1)` - the form the notation's own example game writes,
+  both in the version the library's documentation names (92c68f0) and at the pin - is read as a
+  move, and the whole import fails. `new Chess(text)` quietly holds no action at all. With the fix
+  applied to a scratch copy, the library imports all 33 actions of cwmtt/tesseractMageOChicken.
+  No known divergence records it, and none is needed: the library's outcome is `unsupported`, not a
+  refusal.
+- **`ftxi-empty-last-sub-turn.md` (new), a question.** ftxi refuses a last sub-turn with no moves:
+  the trailing `4. We3 /` of cwmtt/brawnsPuzzles-another, and the `/ 1-0` with which the
+  notation's example game ends. It is a question, not a bug, because ftxi's own grammar requires a
+  move after every `/`, and the specification shows the form by example, not by rule.
+- `docs/checkpoints/upstream/README.md`: the three drafts indexed, and what to check before filing
+  them. Nothing was checked against the issue trackers, and ftxi's `main` was read at `d765d3d`,
+  the newest commit in the submodule's history.
+- `oracles/known-divergences.toml`: KD-0054's `upstream` names its draft. No binding (oracle, pin,
+  record, kind, index, values) and no citation changed.
+- `docs/BUILD_LOG.md`: issue 579, with two corrections to the brief.
+  - **Turn Zero:** either reader fix - ftxi's or Chess in 5D's - would give
+    cwmtt/tesseractMageOChicken a second lineage, not only ftxi's.
+  - **Just Brawns:** a fix in ftxi alone brings nothing, because ftxi does not know the variant,
+    at its pin or on `main`.
+  - **Kairos:** it shares two of the gaps (its reader is ported from ftxi's). It is not drafted, as
+    its report waits for its triage after the release tier (CHECKPOINT 10).
+  - Elsewhere in the log: the H27 row, the lane's state, and the standing items for the user.
+- Checks (2026-11-08):
+  - `harness.py verify`: every section ok, with H48's 17 `proof-channel-vacuous` notes as before.
+  - `gate --tier commit`: the oracle layer ok (ftxi 8256 of 8256 and notation 3012 of 3012 required
+    values reproduced; calibration 1.25x); `SMOKE TEST - PASSED`, the baseline's 41 records compared
+    and 0 declined; the proof channel disabled.
+  - `selftest` was not run, as no harness code changed.
+
+Spec: §11.0 "A known-divergences file" ("reported upstream - defects as bug reports, disagreements
+with a documented rule as questions citing the source, which also tests our own reading; the owner
+files them") and register H27 describe the process this follows; no edit proposed - issue 579 says
+why (two of the three gaps are not recorded divergences, which the clause neither requires nor
+forbids reporting).
+
 ### 2026-11-08 - Kairos round 2 review fixes: the lineage table fails closed and its wiring is tested; what of Kairos is ftxi's, corrected
 
 The review of 28a102b..203fabd (2026-11-02: no HIGH, 1 MEDIUM, 12 LOW, 5 refuted), every finding
