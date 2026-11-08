@@ -1068,3 +1068,134 @@ TEST(mcts_a_reroot_under_key_collisions_keeps_the_first_node_in_the_table) {
     CHECK(s.stats().key_collisions > 0);
   }
 }
+
+// ---- L1: D2's tree form - inherited expansions and a carried root's re-evaluation ---------------
+
+TEST(mcts_fault_a_tree_form_reevaluation_is_whole_or_not_at_all) {
+  // A carried root the tree form inherited is evaluated by the first batch
+  // after the re-root (reevaluate). A fault there left it expanded, evaluated
+  // and no longer inherited - never re-evaluated for the rest of the decision,
+  // its priors the inherited ones or in the wrong order (review finding L1).
+  // Every allocation of that batch's deliver, each on a fresh search: either
+  // the root is still inherited, and its next batch makes the search the
+  // fault-free twin's (H15's digest), or the fault came after a complete
+  // re-evaluation and the search is the twin's already.
+  const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
+  const SearchParams p = base(TurnSplit::Tree, false);
+  const auto prepared = [&] {
+    Search s(start("Standard - Two Timelines"), p);
+    s.run(*uniform, Limits{60});
+    s.advance(s.choose().index);
+    return s;
+  };
+  const auto deliver_next = [&](Search& s) {
+    const std::size_t n = s.gather(8);
+    if (n == 0) return;
+    std::vector<Evaluation> ev(n);
+    uniform->evaluate(s.requests(), ev);
+    s.deliver(ev);
+  };
+  {
+    const Search s = prepared();
+    REQUIRE(s.node(s.root()).inherited);
+    REQUIRE(s.node(s.root()).expanded);
+  }
+  Search twin = prepared();
+  deliver_next(twin);
+  const std::uint64_t want = twin.digest();
+  REQUIRE(!twin.node(twin.root()).inherited);
+  long long total = 0;
+  {
+    Search s = prepared();
+    (void)s.gather(8);
+    std::vector<Evaluation> ev(s.requests().size());
+    uniform->evaluate(s.requests(), ev);
+    total = allocations_of([&] { s.deliver(ev); });
+  }
+  std::size_t faults = 0;
+  std::size_t inherited = 0;
+  std::size_t unlike = 0;
+  for (long long k = 0; k < total; ++k) {
+    Search s = prepared();
+    (void)s.gather(8);
+    std::vector<Evaluation> ev(s.requests().size());
+    uniform->evaluate(s.requests(), ev);
+    if (!faulted(k, [&] { s.deliver(ev); })) continue;
+    ++faults;
+    CHECK_NOTHROW(s.check_invariants());
+    if (s.node(s.root()).inherited) {
+      ++inherited;
+      deliver_next(s);  // re-evaluated now
+    }
+    if (s.digest() != want) ++unlike;
+    CHECK_NOTHROW(s.check_invariants());
+    s.run(*uniform, Limits{10});
+    CHECK_NOTHROW(s.check_invariants());
+  }
+  std::printf("  tree form, a carried root's re-evaluation: %lld allocations, %zu faults (%zu left it inherited), %zu "
+              "unlike the twin\n",
+              total, faults, inherited, unlike);
+  CHECK(inherited > 0);
+  CHECK_EQ(unlike, std::size_t{0});
+}
+
+TEST(mcts_fault_a_tree_form_inherited_expansion_is_whole_or_not_at_all) {
+  // inherit set a node's edges and inherited flag before set_priors, which
+  // allocates (the asset map's steering included): a fault left the node
+  // inherited with edges but not expanded, and a re-root onto it then had it
+  // evaluated while still inherited ("an inherited node evaluated") (review
+  // finding L1). With the ladder's asset map on, every allocation of a gather
+  // after 1 to 3 playouts, each on a fresh search: no node is left inherited
+  // and not expanded, and a re-root onto the root child that gather made, then
+  // a batch, keeps every invariant.
+  const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
+  SearchParams p = base(TurnSplit::Tree, false);
+  p.asset_map = true;
+  std::size_t faults = 0;
+  std::size_t half = 0;
+  std::size_t rerooted = 0;
+  for (const std::uint64_t warm : {1u, 2u, 3u}) {
+    const auto prepared = [&] {
+      Search s(start("Standard - Two Timelines"), p);
+      s.run(*uniform, Limits{warm});
+      return s;
+    };
+    long long total = 0;
+    {
+      Search s = prepared();
+      total = allocations_of([&] { (void)s.gather(8); });
+    }
+    for (long long k = 0; k < total; ++k) {
+      Search s = prepared();
+      const std::size_t nodes0 = s.node_count();
+      if (!faulted(k, [&] { (void)s.gather(8); })) continue;
+      ++faults;
+      CHECK_NOTHROW(s.check_invariants());
+      for (NodeId id = 0; id < s.node_count(); ++id) {
+        if (s.node(id).inherited && !s.node(id).expanded) ++half;
+      }
+      // The root child this gather made (the one whose expansion failed, if any).
+      const std::vector<RootChild> ch = s.root_children();
+      std::size_t index = ch.size();
+      for (std::size_t i = 0; i < ch.size(); ++i) {
+        if (ch[i].child != kNoNode && ch[i].child >= nodes0 && !s.node(ch[i].child).expanded) index = i;
+      }
+      if (index == ch.size()) continue;
+      ++rerooted;
+      s.advance(index);
+      const std::size_t n = s.gather(8);
+      if (n > 0) {
+        std::vector<Evaluation> ev(n);
+        uniform->evaluate(s.requests(), ev);
+        s.deliver(ev);
+      }
+      CHECK_NOTHROW(s.check_invariants());
+    }
+  }
+  std::printf("  tree form, asset map on: %zu faults, %zu nodes left inherited and not expanded, %zu re-roots onto "
+              "the child the gather made\n",
+              faults, half, rerooted);
+  CHECK(faults > 0);
+  CHECK(rerooted > 0);
+  CHECK_EQ(half, std::size_t{0});
+}

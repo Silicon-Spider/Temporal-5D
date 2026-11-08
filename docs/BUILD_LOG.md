@@ -7087,6 +7087,11 @@ superseded or made moot says so; nothing is deleted.
       - M3: P8, P10; `check_invariants` checks the graph's table (range, identity, the lowest
         id, every node entered, none in a tree); the re-root test's sweep ends on the re-root
         that goes through and checks the search that re-rooted.
+      - L1: `inherit` puts the node back on a throw, `expand_node` clears `inherited`, and
+        `reevaluate` keeps the node aside and puts it back (still inherited) if its priors
+        throw. Tested at every allocation of a carried root's re-evaluation (59) and of
+        ladder-on gathers followed by a re-root onto the child made (2,575 faults, 1,691
+        re-roots).
 603. **This machine's g++ 16.2 breaks `std::deque`'s exception safety under its default
     `-fassume-sane-operators-new-delete`** (found by `lane/fix535`, 2026-11-09, in issue 600's
     review round; not a defect in the engine's source). With `operator new` assumed free of
