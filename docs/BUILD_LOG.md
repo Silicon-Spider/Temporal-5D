@@ -6919,6 +6919,50 @@ superseded or made moot says so; nothing is deleted.
     edit is proposed: §11.0 and H27 describe the process followed. Two of the gaps are not recorded
     divergences, and the clause, written of recorded divergences, neither requires nor forbids
     reporting them. **For the user: file the three drafts** (the README's "Before filing" list).
+601. **The network job's shards must be whole test files** (CI: `.github/workflows/network.yml`,
+    `python/tests/conftest.py`; the main loop, 2026-11-08, found by `lane/fix535`). The Python suite
+    outgrew the job's hour (about two hours on a runner), so the job became four parallel shards
+    (`T5D_TEST_SHARD=i/n`, c8a9c49). That first version split by a hash of each test's id, and a
+    module whose last case checks what its siblings recorded
+    (`tests/engine/test_flat_head.py::test_some_case_leaves_a_board`) failed, or was skipped and
+    checked nothing, when split. Fixed in e15f173: files go to shards greedily by test count,
+    largest first, ties by path, so every job computes the same split and no module is split.
+    Checked at dbf9be8: 1,976 tests as 494 / 494 / 495 / 493 in 13 / 13 / 14 / 14 files, their
+    union the whole. No spec text describes the CI job.
+602. **Three tests failed only on GitHub's Linux runner** (the network job's runs 42469920087,
+    42473372690 and 42476803590, on c8a9c49, 9bc10fc and e15f173 - the first runs to reach the end
+    of the suite once it was sharded; the main loop, 2026-11-09). None fails on the development
+    machine. All three are fixed on main, and none was made to pass by giving up what it checks:
+    - **`tests/engine/test_decision_log.py`** needs `t5d-audit` beside the library, and the job built
+      only the library and `t5d-gate`. The job now builds `t5d-audit` too.
+    - **`tests/net/test_params.py`'s parameter fingerprint.** The fingerprint's three float64 sums are
+      meant to need no bit-exact float32 libm across platforms. Its rank-weighted sum was still held
+      to 1e-5, though a tensor's last-bit difference enters that sum up to n times (n tensors; 230
+      in the v1). The runner draws the v1's parameters about 1e-8 relative away from the development
+      machine's: the plain sum differs by 1.3e-6, the weighted sum by 7.7e-5 and the absolute sum by
+      1.8e-11 relative. `_same` now allows 1e-5 x n on the weighted sum, and every fingerprint check
+      goes through it. A moved draw or two swapped tensors still move the sums far beyond.
+    - **`tests/net/test_quant.py::test_an_evaluation_does_not_depend_on_its_batch["pow2"]`** (G2's
+      FP8 trunk; C19-C21's purity).
+      - **The old bound held by chance.** It required 1e-5, which held on the development machine
+        only because no FP8 rounding flip fell early in the trunk at seeds 0-5.
+      - **Measured here (2026-11-09, main 0e7d2ed).** The FP32 trunk differs between the lone
+        position and the padded batch at about 81% of the position's 88,576 trunk elements (RMS
+        1.8e-7) at every seed. Under "pow2" the format absorbs it: 0 elements differ at seeds 1-4,
+        and 211 and 255 at seeds 0 and 5. A value within the FP32 difference of a rounding boundary
+        flips, though, and a flip early in the trunk spreads through every later rounding.
+      - **On the runner.** Seed 0 flipped early: RMS 2.1e-3, in two runs. The third run passed with
+        the network code unchanged in between (9bc10fc added only two test files), so the runner's
+        CPU decides.
+      - **The new bound.** One bound for both rules, 1e-2, three times the largest spread measured
+        ("absmax", 3.1e-3). Under "absmax", the per-tensor mutants (2.6e-2 and 2.2e-2) still fail it.
+        Under "pow2", those mutants move this measure by at most 2.1e-4 - less than an early flip,
+        so no end-to-end bound separates them on such a CPU. They are caught exactly by
+        `test_quant_linear_scale_granularity` and
+        `test_the_attention_operands_are_rounded_after_rope`, as the test's docstring already said.
+
+    No spec edit: no part of the spec describes the CI job or these tolerances, and G2's and
+    C19-C21's text stands.
 
 ## Proposed spec edits
 
