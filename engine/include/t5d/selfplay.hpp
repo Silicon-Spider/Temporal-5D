@@ -101,14 +101,31 @@ struct PlayParams {
   /// A safety stop: the most actions played (ActionLimit).
   std::uint32_t max_actions = 400;
   /// A safety stop: wall-clock seconds, checked before every decision and
-  /// given to each search as its deadline (Limits::seconds), and to the
-  /// game's own rules-engine calls as theirs - each turn start's verdict and
-  /// the exact verification of a chosen move (build-log issue 406); when it
-  /// passes the game ends TimeLimit at the last turn start (an action under
-  /// way is not recorded; a verdict it stopped ends the game at that turn
-  /// start). 0: none - and then the verdicts and verifications have no time
-  /// limit, as no node limit (H37). Not deterministic - for tools, never for
+  /// given to each search as its deadline (Limits::seconds: the time left,
+  /// recomputed before every run), and to the game's own rules-engine calls
+  /// as theirs - each turn start's verdict and the exact verification of a
+  /// chosen move (build-log issue 406); when it passes the game ends
+  /// TimeLimit at the last turn start (an action under way is not recorded; a
+  /// verdict it stopped ends the game at that turn start). After it no search
+  /// is run and no choice made: a decision whose search it stopped, or with no
+  /// child left to choose, ends the game there; a choice made before it whose
+  /// exact verification it stops gives way to the most visited child known
+  /// legal - or, with none, ends the game there. 0, or 1e9 or more (+infinity
+  /// included; t5d/mcts.hpp's THE DEADLINE): none - and then the verdicts and
+  /// verifications have no time limit, as no node limit (H37). NaN or a
+  /// negative value: refused. Not deterministic - for tools, never for
   /// training games.
+  /// What it does not reach bounds its overshoot: the flat form's turn
+  /// generator (its node budget, generator_nodes - about 1.3 s past a 0.5 s
+  /// stop at issue 406's 18-board Q3 node, and 1.5-1.9 s at a 155-board turn
+  /// start, as measured in the review of 2026-11-09); a fresh search's root
+  /// check in its constructor (the turn-start detector under mate_nodes,
+  /// repeating the verdict the loop has just made - 0.02-0.05 s at that Q3
+  /// node; counted in the game's totals); the proof channel's paths (place()'s
+  /// verification, check_certificate in offer and in Guard - off, H41); and
+  /// the ladder's synchronous jobs (node-bounded, H15). It is the C++ play
+  /// loop's alone: the C API's t5d_search_verify and its step calls take no
+  /// deadline, and Python's play loops (netplay, self-play) set none.
   double max_seconds = 0;
   /// Stage E10: GUARD at submission (H42, spec 11.4: "before the chosen move
   /// is played, can the opponent force mate against it?") - ADOPTED IN NO

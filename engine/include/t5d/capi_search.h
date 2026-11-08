@@ -464,7 +464,10 @@ typedef struct t5d_search_summary {
  * evaluations count from the call; nodes and bytes are the graph's. A run
  * stops between batches once one is reached; the deadline (seconds) also
  * reaches the rules engine's calls inside a batch - legality classifications,
- * turn-start checks, verifications - which it leaves Unknown (Limits). */
+ * turn-start checks, verifications - which it leaves Unknown (Limits).
+ * seconds: 0, or 1e9 or more (+infinity included), sets no deadline; NaN or
+ * a negative value is refused (t5d/mcts.hpp's THE DEADLINE). t5d_search_verify
+ * and the step calls (gather, deliver) take no deadline. */
 typedef struct t5d_search_limits {
   uint64_t playouts;
   uint64_t evaluations;

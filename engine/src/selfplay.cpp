@@ -110,29 +110,28 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
   std::unique_ptr<Search> carried;
   GameState s = start;
   MoveList scratch;
-  const auto elapsed = [&t0] {
-    return std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
-  };
-  const auto out_of_time = [&] { return params.max_seconds > 0 && elapsed() >= params.max_seconds; };
-  // The safety stop's deadline (max_seconds), handed to the rules engine's
-  // own calls - the turn-start verdicts and the chosen moves' verifications -
-  // so that it reaches the detector (build-log issue 406). A verdict or a
-  // verification it stops is Unknown, never a verdict.
-  std::optional<std::chrono::steady_clock::time_point> deadline;
-  if (params.max_seconds > 0) {
-    deadline = t0 + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
-                        std::chrono::duration<double>(params.max_seconds));
-  }
+  // The safety stop's deadline (max_seconds; THE DEADLINE in t5d/mcts.hpp:
+  // none for 0 or from kNoDeadlineSeconds, NaN and negatives refused), handed
+  // to every search as its Limits::seconds - the time left, recomputed before
+  // each run - and to the rules engine's own calls, the turn-start verdicts
+  // and the chosen moves' verifications, so that it reaches the detector
+  // (build-log issue 406). A verdict or a verification it stops is Unknown,
+  // never a verdict.
+  const std::optional<std::chrono::steady_clock::time_point> deadline =
+      deadline_after(t0, params.max_seconds, "PlayParams::max_seconds");
   const auto deadline_passed = [&] { return deadline && std::chrono::steady_clock::now() >= *deadline; };
+  // A search's Limits::seconds: the time left before the game's deadline (at
+  // least 1e-6, so that a run given it has one), or 0 - none.
+  const auto seconds_left = [&]() -> double {
+    if (!deadline) return 0;
+    return std::max(std::chrono::duration<double>(time_left(*deadline)).count(), 1e-6);
+  };
   SearchBudget verdict_budget;  // no node limit: a verdict is a proof (H37)
   verdict_budget.max_bytes = sp.mate_bytes;
   for (;;) {
     // A turn start: the rules first, then the cap's convention.
     const auto v0 = std::chrono::steady_clock::now();
-    if (deadline) {
-      verdict_budget.max_time = std::max(std::chrono::duration_cast<std::chrono::nanoseconds>(*deadline - v0),
-                                         std::chrono::nanoseconds{0});
-    }
+    if (deadline) verdict_budget.max_time = time_left(*deadline);
     const MateResult r = detect_mate(s, sp.detector, verdict_budget);
     g.seconds_verdicts += std::chrono::duration<double>(std::chrono::steady_clock::now() - v0).count();
     if (r.verdict == Outcome::Unknown && !r.stats.stopped_by_memory && deadline_passed()) {
@@ -160,7 +159,7 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
       g.end = GameEnd::ActionLimit;
       break;
     }
-    if (out_of_time()) {
+    if (deadline_passed()) {
       g.end = GameEnd::TimeLimit;
       break;
     }
@@ -173,14 +172,18 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
     for (bool submitted = false; !submitted;) {
       // The safety stop before every decision, not only at turn starts; a
       // partial action is not recorded (the record ends at the turn start).
-      if (moves_made > 0 && out_of_time()) {
+      if (moves_made > 0 && deadline_passed()) {
         timed_out = true;
         break;
       }
       std::unique_ptr<Search> fresh;
       Search* search = nullptr;
+      bool built = false;  // the search was made for this decision
       if (params.match_play) {
-        if (!carried) carried = std::make_unique<Search>(s, sp, moves_made, cache, ladder);
+        if (!carried) {
+          carried = std::make_unique<Search>(s, sp, moves_made, cache, ladder);
+          built = true;
+        }
         search = carried.get();
         if (!(search->root_state() == s) || search->root_moves_made() != moves_made) {
           throw std::logic_error("play: the carried search's root is not the game's position (with its moves made, A6)");
@@ -190,11 +193,42 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
         dp.seed = mix(sp.seed + 0x9E3779B97F4A7C15ull * (g.decisions + 1));
         fresh = std::make_unique<Search>(s, dp, moves_made, cache, ladder);  // C14: fresh per move
         search = fresh.get();
+        built = true;
       }
-      const SearchStats before = search->stats();
+      // The counts before the search was built, for one built now: its
+      // constructor's root check (the turn-start detector, under mate_nodes -
+      // untimed; the review of 2026-11-09, L2) counts in the game's totals.
+      const SearchStats before = built ? SearchStats{} : search->stats();
       g.reused_visits += search->node(search->root()).visits;
+      // The decision's search work, added to the game's totals once - before
+      // any break, a timed-out decision's included (L5).
+      bool totalled = false;
+      const auto add_totals = [&] {
+        if (totalled) return;
+        totalled = true;
+        const SearchStats& after = search->stats();
+        g.playouts += after.playouts - before.playouts;
+        g.evaluations += after.evaluations - before.evaluations;
+        g.nodes += after.nodes_created - before.nodes_created;
+        g.search_turn_caps += after.turn_caps - before.turn_caps;
+        g.seconds_search_mate += after.seconds_mate - before.seconds_mate;
+        g.seconds_search_expand += after.seconds_expand - before.seconds_expand;
+        g.seconds_search_generate += after.seconds_generate - before.seconds_generate;
+        g.seconds_search_verify += after.seconds_verify - before.seconds_verify;
+        g.hunt_runs += after.hunt_runs - before.hunt_runs;
+        g.hunt_mates += after.hunt_mates - before.hunt_mates;
+        g.settling_runs += after.settling_runs - before.settling_runs;
+        g.settling_proven += after.settling_proven - before.settling_proven;
+        g.settling_disproven += after.settling_disproven - before.settling_disproven;
+        g.refutations += after.refutations - before.refutations;
+        g.proofs_withheld += after.proofs_withheld - before.proofs_withheld;
+        g.proofs_injected += after.proofs_injected - before.proofs_injected;
+        g.pv_changes += after.pv_changes - before.pv_changes;
+        g.asset_boosted_edges += after.asset_boosted_edges - before.asset_boosted_edges;
+        g.steered_visits += after.steered_visits - before.steered_visits;
+      };
       Limits limits{params.playouts};
-      if (params.max_seconds > 0) limits.seconds = std::max(params.max_seconds - elapsed(), 1e-6);
+      limits.seconds = seconds_left();
       search->run(evaluator, limits);
       const auto visited = [&] {
         for (const RootChild& c : search->root_children()) {
@@ -202,17 +236,34 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
         }
         return false;
       };
-      if (!visited() && search->stats().last_stop == StopReason::Deadline) {
+      // No child to choose and the deadline passed: TimeLimit (the run may
+      // have stopped Deadline, or Playouts or Finished first - M1).
+      if (!visited() && (search->stats().last_stop == StopReason::Deadline || deadline_passed())) {
         timed_out = true;
+        add_totals();
         break;
       }
-      const auto choose_now = [&]() -> std::size_t {
-        if (!visited()) search->run(evaluator, limits);  // children were removed
+      // The choice, or none once the deadline has passed: never a run, and
+      // never a choice, after it (M1). A run is made again first when no child
+      // has a visit (children were removed), given the time left (L2).
+      const auto choose_now = [&]() -> std::optional<std::size_t> {
+        if (deadline_passed()) return std::nullopt;
+        if (!visited()) {
+          limits.seconds = seconds_left();
+          search->run(evaluator, limits);
+          if (!visited() && deadline_passed()) return std::nullopt;
+        }
         if (params.match_play) return search->choose().index;
         const double t = g.decisions < params.temperature_decisions ? params.temperature : 0.0;
         return search->choose_by_visits(t, uniform());
       };
-      std::size_t pick = choose_now();
+      const std::optional<std::size_t> chosen = choose_now();
+      if (!chosen) {
+        timed_out = true;
+        add_totals();
+        break;
+      }
+      std::size_t pick = *chosen;
       // A move is played only once known legal: one the expansion's budget left
       // unknown is classified exactly first - illegal, it is removed and the
       // choice made again; still unknown (the memory ceiling, or max_seconds'
@@ -230,7 +281,9 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
           children = search->root_children();
           if (v == MoveLegality::Legal) break;
           if (v == MoveLegality::Illegal) {
-            pick = choose_now();
+            const std::optional<std::size_t> again = choose_now();
+            if (!again) return false;  // the deadline passed: no choice after it
+            pick = *again;
             children = search->root_children();
             continue;
           }
@@ -251,6 +304,7 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
       };
       if (!make_legal()) {
         timed_out = true;
+        add_totals();
         break;
       }
       // E10: Guard at submission (H42 - adopted in no range: guard_final off).
@@ -292,35 +346,21 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
         }
         ++g.guard_rejections;
         Limits again{params.guard_research_playouts > 0 ? params.guard_research_playouts : params.playouts};
-        if (params.max_seconds > 0) again.seconds = std::max(params.max_seconds - elapsed(), 1e-6);
+        again.seconds = seconds_left();
         search->run(evaluator, again);
-        pick = choose_now();
+        const std::optional<std::size_t> rechosen = choose_now();
+        if (!rechosen) {
+          timed_out = true;
+          break;
+        }
+        pick = *rechosen;
         children = search->root_children();
         if (!make_legal()) {
           timed_out = true;
           break;
         }
       }
-      const SearchStats& after = search->stats();
-      g.playouts += after.playouts - before.playouts;
-      g.evaluations += after.evaluations - before.evaluations;
-      g.nodes += after.nodes_created - before.nodes_created;
-      g.search_turn_caps += after.turn_caps - before.turn_caps;
-      g.seconds_search_mate += after.seconds_mate - before.seconds_mate;
-      g.seconds_search_expand += after.seconds_expand - before.seconds_expand;
-      g.seconds_search_generate += after.seconds_generate - before.seconds_generate;
-      g.seconds_search_verify += after.seconds_verify - before.seconds_verify;
-      g.hunt_runs += after.hunt_runs - before.hunt_runs;
-      g.hunt_mates += after.hunt_mates - before.hunt_mates;
-      g.settling_runs += after.settling_runs - before.settling_runs;
-      g.settling_proven += after.settling_proven - before.settling_proven;
-      g.settling_disproven += after.settling_disproven - before.settling_disproven;
-      g.refutations += after.refutations - before.refutations;
-      g.proofs_withheld += after.proofs_withheld - before.proofs_withheld;
-      g.proofs_injected += after.proofs_injected - before.proofs_injected;
-      g.pv_changes += after.pv_changes - before.pv_changes;
-      g.asset_boosted_edges += after.asset_boosted_edges - before.asset_boosted_edges;
-      g.steered_visits += after.steered_visits - before.steered_visits;
+      add_totals();
       if (timed_out) break;  // Guard's search again found no child known legal in time
       if (params.decision_log) {
         // H44: the decision as the audit lane reads it.

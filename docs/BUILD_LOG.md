@@ -1018,6 +1018,7 @@ threads reach at least one thread's sum (one retry on a shared machine).
 | 2026-11-01 | main 7483103 into lane/engine (E10 and the rest of main; the step-2 solver searches with the ladder off) | lane/engine ee9456e + main 7483103, merged tree before the commit | dev-r, 24 logical; other lanes' jobs and this lane's measurements running; load 100% before and after | 32 | 288 / 289 / 289 | 300 / 299 / 301 | none | pass x3 |
 | 2026-11-02 | issue 406 (deadlines reach the rules engine's calls: legality, the search's in-batch calls, the play loop; t5d-legality-cost) | lane/engine 0e39099 + issue 406, the tree before the commit | dev-r, 24 logical; other lanes' jobs and this lane's pytest running; load 100% before and after | 32 | 290 / 292 / 292 | 303 / 309 / 312 | none | pass x3 |
 | 2026-11-08 | MT-01/02/03 review fixes (the prover's TT refuses solved entries, behaviour-preserving; tests and tools) | lane/engine 573dc88 + the review fixes, the tree before the commit | dev-r, 24 logical; other lanes' jobs and this lane's long twins running; load 100% before and after | 32 | 292 / 291 / 289 | 301 / 299 / 304 | none | pass x3 |
+| 2026-11-09 | The review round's deadline path (H1, M1, M2: the cache's candidate digest, the flat form's re-listing, run()'s deadline through deadline_after) | lane/engine 2c12be8 + group 1, the tree before the commit | dev-r, 24 logical; load 12% before, 14% after | 32 | 293 / 293 / 293 | 316 / 314 / 315 | none | pass x3 |
 
 ## Environment
 
@@ -5749,8 +5750,11 @@ edits 303-304; the MT-01/02/03 review fixes (2026-11-02) issue 409 (edit 301 cor
     unverified". Measured: the seed-4 game (t5d-play's defaults but the material evaluator and
     32 playouts) reaches after 26 actions a turn start whose verdict ran past 20 minutes (issue
     407 (b)); a chosen move's exact verification at issue 407 (c)'s node would run past 30
-    minutes. Since issue 406's fix a deadline reaches both - in tools and match play - but
-    training self-play sets none (it is not deterministic), so there both stay unbounded. Not a
+    minutes. Since issue 406's fix a deadline reaches both in the C++ play loop with
+    `PlayParams::max_seconds` (`t5d-play --max-seconds`) - not in Python's play loops, whose
+    verdict probe (`mate_nodes` unlimited) and `t5d_search_verify` take none (scoped after the
+    review of 2026-11-09, L2: "in tools and match play" overstated) - and training self-play sets
+    none (it is not deterministic), so everywhere else both stay unbounded. Not a
     defect by the documents (H37: a verdict needs an exhaustive search; the loop's contract:
     verified before played), so nothing changed. The question: should either carry a node
     budget, and what then happens on Unknown - for the verdict, today the game stops unjudged
@@ -5812,6 +5816,36 @@ edits 303-304; the MT-01/02/03 review fixes (2026-11-02) issue 409 (edit 301 cor
     comparison guards only a collision between two (position, depth) keys - the memo test pins
     the depth-keyed answer. Docs corrected: edit 301, the H19 and H17 rows, engine/README.md
     (step 2), the MT entries in CHANGELOG.md (inline review corrections).
+410. **The review of `lane/engine` 0e7d2ed..d86f363 (issue 406's deadlines, the flat-form docs,
+    the MT-01/02/03 review fixes): what it found and what changed** (§8.5, §8.6, §8.7, §15.2's
+    purity row, §13.1 6f, §11.3, §15.4; register C14, E7, H19, H37, H41; issues 406-409; edits
+    301, 304, 305). The review (2026-11-09; three passes, every finding checked twice) kept 2 HIGH,
+    5 MEDIUM and 8 LOW; each fixed as the main loop decided, in its order:
+    - **The deadline's path (H1, M1, M2, L2, L5, L7)**, one commit. (H1) A deadline makes a leaf's
+      candidate list depend on the clock - a cut classification keeps moves an uncut one proves
+      illegal - while the evaluation cache and the batch's de-duplication matched on the state
+      alone: a cached evaluation, or a duplicate's shared request, met an expansion with another
+      number of candidates and the search threw (15 of 520 timed games, 6 of 120 `t5d-play
+      --max-seconds` runs, in the review). Fixed with a digest of the candidate list (the moves in
+      order and each one's legality) stored with each entry and request and compared - §8.7's
+      "one network input" made exact (edit 305). (M1) A flat root whose fallback listing the
+      deadline cut was marked stuck, `run()` stopped Finished, and the play loop threw "no visited
+      child": a cut listing now leaves its node re-listable (the next run outside a deadline
+      lists it), and the loop ends `TimeLimit` when no child has a visit and the deadline has
+      passed - after it no search is run and no choice made. (M2) A limit of about 9.22e9 s or
+      more, +infinity included, overflowed the conversion to the clock's ticks into a deadline
+      long past: 1e9 s or more now means none, NaN and negatives refused - one place,
+      `deadline_after` in `t5d/mcts.hpp` ("THE DEADLINE"), which every limit goes through. (L2)
+      Each search's `Limits::seconds` is the time left, recomputed before every run (choose_now's
+      re-run gave the first run's); a fresh search's constructor-time root check counts in the
+      game's totals; what the deadline does not reach - the flat generator (overshoot to about
+      1.3 s at the 18-board Q3 node, 1.9 s at 155 boards), the proof channel's paths,
+      `t5d_search_verify` and the step calls - documented; issue 408 and edit 304 scoped to the
+      C++ play loop. (L5) A timed-out decision's search work is added to the game's totals before
+      every break. (L7) Spec citations: §8.6 and E7 bear on the deadline, unchanged - it is a
+      safety stop, not E7's tight hard bound, and the flat generator stands outside it, which E7
+      (or the search lane's E11, when it lands on this mechanism) must bring under any bound it
+      holds tight; `t5d-play`'s header brought in line.
 
 402. **6f's settling scans: their wrapper is not on main** (§13.1 6f "verify the proof-export
     invariant under TT churn for Hunt and the settling scans (§11.3)"; §11.4 "df-pn at the
@@ -8625,8 +8659,26 @@ struck through, where nothing of it is left to apply); the others stand as writt
     positions; its throughput is a §15.3 figure." Proposed - append: "Exactness is the other
     cost: the game's turn-start verdict and the verification of a chosen move before it is
     played are exact with no node limit (H37), and at ~190 boards each has been measured past
-    20-30 minutes; a deadline reaches them in tools and match play, training self-play has none
-    - whether they get a node budget is open (BUILD_LOG issue 408)." Why: issues 406-408.
+    20-30 minutes; a deadline reaches them in the C++ play loop with a safety stop
+    (`PlayParams::max_seconds`, `t5d-play --max-seconds`); Python's play loops and training
+    self-play have none - whether they get a node budget is open (BUILD_LOG issue 408)." Why:
+    issues 406-408 (scoped after the review of 2026-11-09, L2: it said "in tools and match
+    play").
+305. **§8.7 and register C14 (the evaluation cache matches the network's whole input, the
+    candidate list included)**: now - §8.7: "Fresh searches still share the state-keyed
+    evaluation cache - a cache is not a tree, and an evaluation is a function of the state and
+    refresh epoch - purged by board count as the game grows. ... a cache is shared only between
+    searches with one evaluator and one network input"; C14: "the state-keyed evaluation cache
+    is shared across them, purged by board count". Proposed - §8.7: "... and an evaluation is a
+    function of the network's input: the state, the moves made in its action (A6), the refresh
+    epoch and the candidate list the policy scores - the legality classification's, which a
+    wall-clock deadline can cut, leaving a longer list for the same state - so the cache, keyed
+    by the state, matches the whole input (BUILD_LOG issue 410) ..."; C14: "the evaluation
+    cache, keyed by the state and matched on the network's whole input (moves made, epoch,
+    candidate list), is shared across them, purged by board count". Why: issue 410 (H1) - matched
+    on the state alone, a classification a deadline cut met another list's evaluation and the
+    search threw; "one network input" made exact, not a new rule (§8.5's search purity and
+    §15.2's purity row unchanged).
 
 <!-- A new list, so that the numbers from 137 render as written. -->
 
@@ -9287,3 +9339,18 @@ struck through, where nothing of it is left to apply); the others stand as writt
   lane's entries above main's); nothing under `engine/` changed, so the engine was not rebuilt.
   Checks: verify ok (exit 0); gate commit ok (oracle layer ok; engine differential smoke test
   passed, baseline 41 compared, 0 declined; proof channel DISABLED).
+- **2026-11-09 - The review of 0e7d2ed..d86f363, the deadline's path** (`lane/engine`; issue 410,
+  edits 304 (scoped) and 305; the block 410-449 / 305-329). H1: the evaluation cache and the batch
+  match the candidate list (`candidate_digest`) - a classification the deadline cut is another
+  network input, and served another list's evaluation it threw. M1: a fallback listing the deadline
+  cut leaves its flat node re-listable, not stuck; the play loop ends `TimeLimit` with no visited
+  child after the deadline, and runs and chooses nothing after it. M2: every limit goes through
+  `deadline_after` (1e9 s or more, +inf included, is none; NaN and negatives refused). L2: the time
+  left recomputed before every run; the constructor's root check counted; what the deadline does not
+  reach documented; issue 408 and edit 304 scoped. L5: a timed-out decision's totals added. L7:
+  citations, `t5d-play`'s header. Checks: engine 718 of 718 (`--werror`, 17 minutes); the Lazy SMP
+  test x3 (mcts.cpp changed: 1 thread 293 / 293 / 293, 5 threads 316 / 314 / 315, load 12-14%); ruff
+  clean on the Python docstrings (check, format); verify ok (exit 0); gate commit ok (engine
+  differential smoke test passed, baseline 41 compared, 0 declined; proof channel DISABLED). The
+  long twins, the nightly gate and the engine-driving pytest files run at the end of the round, as
+  the main loop's checks list them.

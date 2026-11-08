@@ -1297,8 +1297,16 @@ TEST(ladder_the_cache_holds_the_evaluators_evaluations_with_the_map_on) {
     for (NodeId id = 0; id < with.node_count(); ++id) {
       const NodeView n = with.node(id);
       if (!n.evaluated || n.inherited) continue;
-      const Evaluation* a = with.cache()->find(n.key, n.moves_made, with.epoch(), *n.state, false);
-      const Evaluation* b = without.cache()->find(n.key, n.moves_made, without.epoch(), *n.state, false);
+      // The candidate list the leaf's expansion scored (EvalCache's candidates):
+      // the same options in both searches - the asset map changes no expansion.
+      ExpandOptions o = p.expand;
+      o.legal_moves = p.legal_moves_only;
+      o.legality = p.legality;
+      Expansion x;
+      expand(*n.state, o, x, n.moves_made);
+      const std::uint64_t candidates = candidate_digest(x);
+      const Evaluation* a = with.cache()->find(n.key, n.moves_made, with.epoch(), *n.state, candidates, false);
+      const Evaluation* b = without.cache()->find(n.key, n.moves_made, without.epoch(), *n.state, candidates, false);
       if (a == nullptr || b == nullptr) continue;
       ++compared;
       CHECK(a->logits == b->logits);
