@@ -3182,24 +3182,42 @@ struct Search::Impl {
   void take_verdicts(bool live) {
     if (!ladder_ || !decision_open_) return;
     std::vector<LadderVerdict> got = ladder_->take(ladder_decision_);
+    // Each verdict is recorded first, then counted and marked, then copied
+    // where a copy is needed (review finding L3): a failure part-way - the
+    // record's growth, the suggestions' or the carried mate's copy - leaves
+    // every verdict before it recorded, counted and marked, and loses those
+    // still in `got`, which the ladder has handed over. (Never a proof: at a
+    // decision's end nothing is offered, and with the proof channel off nothing
+    // ever enters - H41.)
     for (LadderVerdict& v : got) {
-      const bool proven = v.status == ProofStatus::Proven;
-      switch (v.job) {
+      verdicts_.push_back(std::move(v));
+      const std::size_t k = verdicts_.size() - 1;
+      const bool proven = verdicts_[k].status == ProofStatus::Proven;
+      switch (verdicts_[k].job) {
         case LadderJob::Hunt:
           ++stats_.hunt_runs;
           if (proven) ++stats_.hunt_mates;
-          if (!v.suggestions.empty()) root_suggestions_ = v.suggestions;
           break;
         case LadderJob::RootSettling:
         case LadderJob::PvSettling:
           ++stats_.settling_runs;
           if (proven) ++stats_.settling_proven;
-          if (v.status == ProofStatus::Disproven) ++stats_.settling_disproven;
-          if (proven && v.job == LadderJob::PvSettling) ++stats_.refutations;
+          if (verdicts_[k].status == ProofStatus::Disproven) ++stats_.settling_disproven;
+          if (proven && verdicts_[k].job == LadderJob::PvSettling) ++stats_.refutations;
           break;
       }
-      verdicts_.push_back(std::move(v));
-      const std::size_t k = verdicts_.size() - 1;
+      if (proven && !live) {
+        if (params_.proof_channel) {
+          verdicts_[k].use = ProofUse::Expired;  // its decision ended first: nothing entered
+          ++stats_.proofs_expired;
+        } else {
+          verdicts_[k].use = ProofUse::Withheld;
+          ++stats_.proofs_withheld;
+        }
+      }
+      if (verdicts_[k].job == LadderJob::Hunt && !verdicts_[k].suggestions.empty()) {
+        root_suggestions_ = verdicts_[k].suggestions;
+      }
       if (!proven) continue;
       const LadderVerdict& p = verdicts_[k];
       // Our mate at a turn start: carried through the action's decisions.
@@ -3210,15 +3228,7 @@ struct Search::Impl {
         c.certificate = p.certificate;
         ladder_->carry(std::move(c));
       }
-      if (live) {
-        offer(k);
-      } else if (params_.proof_channel) {
-        verdicts_[k].use = ProofUse::Expired;  // its decision ended first: nothing entered
-        ++stats_.proofs_expired;
-      } else {
-        verdicts_[k].use = ProofUse::Withheld;
-        ++stats_.proofs_withheld;
-      }
+      if (live) offer(k);
     }
   }
 
@@ -3538,9 +3548,14 @@ struct Search::Impl {
   // Exception-safe (build-log issue 600): what can fail - the order kept, the
   // renumbering, the kept nodes' room, the graph's table of them, the ladder's
   // decision ending - comes before anything changes, so a re-root that throws
-  // leaves the search as it was. Once the tree is swapped nothing throws but
-  // the root hook (notify_root), and stats_.reroots is counted before it: a
-  // caller tells a re-root done from one not begun by that count.
+  // leaves the tree, the graph's table and the root's side tables and effort
+  // label as they were, and the ladder's decision open. One thing it cannot
+  // keep (review finding L3): if the failure comes while the old decision
+  // ends, after the ladder handed over that decision's verdicts, the ones not
+  // yet recorded are lost (take_verdicts; never a proof). Once the tree is
+  // swapped nothing throws but the root hook (notify_root), and stats_.reroots
+  // is counted before it: a caller tells a re-root done from one not begun by
+  // that count.
   void reroot(NodeId new_root) {
     if (!pending_.empty() || !collided_.empty()) {
       throw std::invalid_argument("search: cannot re-root while a batch is waiting");
@@ -4123,7 +4138,7 @@ void Search::advance_to(const GameState& target, int moves_made) {
   try {
     s.reroot(fresh);
   } catch (...) {
-    // A re-root that throws changed nothing (unless the root hook threw, the
+    // A re-root that throws changed no node (unless the root hook threw, the
     // re-root done): the node made for it, which nothing refers to, goes
     // (build-log issue 600).
     if (s.stats_.reroots == reroots) s.unmake_last_node(before);

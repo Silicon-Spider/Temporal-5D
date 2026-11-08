@@ -1199,3 +1199,87 @@ TEST(mcts_fault_a_tree_form_inherited_expansion_is_whole_or_not_at_all) {
   CHECK(rerooted > 0);
   CHECK_EQ(half, std::size_t{0});
 }
+
+// ---- L3: a re-root with the ladder's verdicts waiting -------------------------------------------
+
+TEST(mcts_fault_a_reroot_with_verdicts_waiting_loses_none_it_has_not_taken) {
+  // At a re-root the old decision ends: its waiting verdicts are taken from
+  // the ladder and recorded (review finding L3). VerificationLadder::take moved
+  // them out one at a time, so a fault there destroyed some and left husks the
+  // search later recorded as proven Hunt verdicts with no first action; now it
+  // makes room first and cannot fail part-way. After the take, a fault loses
+  // the verdicts not yet recorded (documented), but each verdict recorded is
+  // counted, the tree is as it was, and no proof enters (the channel off).
+  // The synchronous ladder, two verdicts of the decision asked and not taken
+  // (White mates in one on a 5 x 5 board); every allocation of a re-root onto
+  // a root child whose node exists (so that the re-root alone allocates: a
+  // node made for it stays, linked under the old root, as t5d/mcts.hpp says).
+  const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
+  SearchParams p;
+  p.expand.square_features = SquareFeatures::None;
+  p.asset_map = false;
+  p.hunt = true;
+  p.settling = true;
+  p.hunt_with_settling = true;
+  p.synchronous = true;
+  const GameState mate_in_one = t5d_test::game({"[k4/4Q/1K3/5/5:0:1:w]"}, BoardSize{5, 5});
+  const auto prepared = [&] {
+    Search s(mate_in_one, p);
+    s.run(*uniform, Limits{8});
+    const std::shared_ptr<VerificationLadder> l = s.shared_ladder();
+    l->ask(LadderJob::Hunt, s.root_state(), {}, 5, 0, 25'000);
+    l->ask(LadderJob::RootSettling, s.root_state(), {}, 5, 0, 25'000);
+    return s;
+  };
+  const auto husks = [](const Search& s) {
+    std::size_t h = 0;
+    for (const LadderVerdict& v : s.verdicts()) {
+      if (v.status == ProofStatus::Proven && v.first_action.empty()) ++h;
+    }
+    return h;
+  };
+  const auto counted = [](const Search& s) {
+    return s.stats().hunt_runs + s.stats().settling_runs == s.verdicts().size();
+  };
+  std::size_t index = 0;
+  {
+    const Search s = prepared();
+    const std::vector<RootChild> ch = s.root_children();
+    while (index < ch.size() && ch[index].child == kNoNode) ++index;
+    REQUIRE(index < ch.size());
+  }
+  long long total = 0;
+  std::size_t want = 0;
+  {
+    Search s = prepared();
+    REQUIRE(counted(s));
+    const std::size_t before = s.verdicts().size();
+    total = allocations_of([&] { s.advance(index); });
+    want = s.verdicts().size() - before;
+    REQUIRE_EQ(want, std::size_t{2});
+  }
+  std::size_t faults = 0;
+  std::size_t lost = 0;
+  for (long long k = 0; k < total; ++k) {
+    Search s = prepared();
+    const std::uint64_t digest = s.digest();
+    const std::size_t before = s.verdicts().size();
+    if (!faulted(k, [&] { s.advance(index); })) continue;
+    ++faults;
+    CHECK_NOTHROW(s.check_invariants());
+    CHECK_EQ(s.digest(), digest);  // the tree as it was
+    CHECK_EQ(husks(s), std::size_t{0});
+    CHECK(counted(s));
+    CHECK_EQ(s.stats().proofs_injected, std::uint64_t{0});
+    s.advance(index);  // the retry goes through
+    CHECK_NOTHROW(s.check_invariants());
+    CHECK_EQ(husks(s), std::size_t{0});
+    CHECK(counted(s));
+    CHECK_EQ(s.stats().proofs_injected, std::uint64_t{0});
+    if (s.verdicts().size() - before < want) ++lost;
+  }
+  std::printf("  a re-root with 2 verdicts waiting: %lld allocations, %zu faults, %zu lost a verdict taken and not yet "
+              "recorded\n",
+              total, faults, lost);
+  CHECK(faults > 0);
+}

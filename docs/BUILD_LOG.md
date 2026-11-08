@@ -7096,6 +7096,11 @@ superseded or made moot says so; nothing is deleted.
         `note_root_visit`, which enters its record before setting anything. C API sweep of a
         delivery that sets the root's most visited child (93 and 2,851 allocations):
         `root_visits` and `playouts` never apart.
+      - L3: `VerificationLadder::take` makes room before it moves (no verdict destroyed, no
+        husk); `take_verdicts` records each verdict before its counts and copies. The steps
+        after the take still allocate (not local), so the re-root's claim is narrowed: a
+        failure there loses the verdicts taken and not yet recorded, never a proof (H41).
+        Tested with two verdicts waiting (16 faults; 3 lose a verdict, as documented).
 603. **This machine's g++ 16.2 breaks `std::deque`'s exception safety under its default
     `-fassume-sane-operators-new-delete`** (found by `lane/fix535`, 2026-11-09, in issue 600's
     review round; not a defect in the engine's source). With `operator new` assumed free of

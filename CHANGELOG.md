@@ -92,6 +92,19 @@ review round, issues 603 and 604, the session log.
   search; the ply split's 93, the flat form's 2,851): `root_visits` and `playouts` never
   apart, before and after the next run. (§15.4: visit counts consistent through
   backup; register D4.)
+- **L3 - a decision's verdicts at a re-root.** `VerificationLadder::take` moved the verdicts
+  out one at a time: an allocation failure destroyed some and left moved-from husks in the
+  ladder, which the search later recorded as proven Hunt verdicts with no first action
+  (pre-existing). It makes room first now (the verdict's move is `noexcept`, asserted).
+  `take_verdicts` records each verdict before its counts and copies; the steps after the take
+  still allocate, and making them non-throwing is not local (it needs the ladder's
+  interface), so the claim is narrowed instead: a failure there loses the verdicts taken and
+  not yet recorded - never a proof, since nothing is offered at a decision's end and the
+  proof channel is off (H41). `t5d/mcts.hpp`, `engine/README.md` and the comments in
+  `reroot` and `advance_to` say so. Test: the synchronous ladder with two verdicts waiting,
+  every allocation of the re-root (16 faults): no husk, every verdict recorded counted, the
+  tree as it was, no proof entered, and the retry goes through (3 of the 16 lose a verdict,
+  as documented). (H23, H41.)
 
 Spec: none edited or proposed. No part of the spec describes exception safety, these tests,
 or the ladder's and the asset map's bookkeeping. The round brings the build further in line
