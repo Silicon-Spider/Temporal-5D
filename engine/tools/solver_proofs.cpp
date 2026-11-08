@@ -199,6 +199,13 @@ void DfpnTally::add(const DfpnTally& o) {
   disproofs += o.disproofs;
   certified += o.certified;
   certificate_undecided += o.certificate_undecided;
+  inner_claims += o.inner_claims;
+  for (const auto& [mine, theirs] : {std::pair<Rule*, const Rule*>{&win, &o.win}, {&loss_here, &o.loss_here},
+                                     {&loss_successors, &o.loss_successors}, {&draw_here, &o.draw_here},
+                                     {&draw_successors, &o.draw_successors}}) {
+    mine->decided += theirs->decided;
+    mine->unknown += theirs->unknown;
+  }
   contradictions.insert(contradictions.end(), o.contradictions.begin(), o.contradictions.end());
   certificate_failures.insert(certificate_failures.end(), o.certificate_failures.begin(), o.certificate_failures.end());
 }
@@ -213,6 +220,17 @@ std::string DfpnTally::summary() const {
                 claims, wins, losses, draws, terminals, too_deep, comparisons, decided, agreed, unknown,
                 listing_undecided, contradictions.size(), questions, searched, proofs, certified,
                 certificate_undecided, disproofs, certificate_failures.size());
+  return buf;
+}
+
+std::string DfpnTally::rules_summary() const {
+  char buf[512];
+  std::snprintf(buf, sizeof buf,
+                "decided/unknown per rule: win %zu/%zu, loss here %zu/%zu, loss successors %zu/%zu, draw here %zu/%zu, "
+                "draw successors %zu/%zu; %zu inner claims (turn starts beyond the searches' roots)",
+                win.decided, win.unknown, loss_here.decided, loss_here.unknown, loss_successors.decided,
+                loss_successors.unknown, draw_here.decided, draw_here.unknown, draw_successors.decided,
+                draw_successors.unknown, inner_claims);
   return buf;
 }
 
@@ -391,7 +409,9 @@ DfpnChecker::DfpnChecker(const DfpnCheckOptions& options) : options_(options) {}
 
 DfpnChecker::Answer DfpnChecker::ask(const GameState& state, int depth, DfpnTally& tally) {
   ++tally.questions;
-  const std::uint64_t key = state.zobrist() * 1315423911ULL + static_cast<std::uint64_t>(depth);
+  // The literal a std::uint64_t: beside a cast from a signed value an unsigned long long one
+  // trips Linux g++'s -Wsign-conversion (std::uint64_t is unsigned long there).
+  const std::uint64_t key = state.zobrist() * std::uint64_t{1315423911} + static_cast<std::uint64_t>(depth);
   std::vector<Memo>& slot = memo_[key];
   for (const Memo& m : slot) {
     if (m.depth == depth && same_position(m.state, state)) return m.answer;
@@ -461,14 +481,17 @@ void DfpnChecker::check(const GameState& state, const SolverClaim& claim, DfpnTa
     tally.contradictions.push_back("the solver says " + to_string(claim) + ", df-pn " + what + " at " +
                                    position_text(state));
   };
-  // One comparison: `decided` and `agrees` as df-pn's answer settles it.
-  const auto compare = [&](bool decided, bool agrees, const std::string& what) {
+  // One comparison under `rule`: `decided` and `agrees` as df-pn's answer
+  // settles it.
+  const auto compare = [&](DfpnTally::Rule& rule, bool decided, bool agrees, const std::string& what) {
     ++tally.comparisons;
     if (!decided) {
       ++tally.unknown;
+      ++rule.unknown;
       return;
     }
     ++tally.decided;
+    ++rule.decided;
     if (agrees) {
       ++tally.agreed;
     } else {
@@ -477,14 +500,16 @@ void DfpnChecker::check(const GameState& state, const SolverClaim& claim, DfpnTa
   };
   if (claim.kind == SolverClaim::Kind::Win) {
     const Answer a = ask(state, claim.distance, tally);
-    compare(a.status != ProofStatus::Unknown, a.status == ProofStatus::Proven && a.distance <= claim.distance,
+    compare(tally.win, a.status != ProofStatus::Unknown,
+            a.status == ProofStatus::Proven && a.distance <= claim.distance,
             a.status == ProofStatus::Disproven ? "disproves a mate within " + std::to_string(claim.distance)
                                                : "proves win " + std::to_string(a.distance));
     return;
   }
   // Loss and Draw: no df-pn proof for the side to move at the node.
   const Answer here = ask(state, depth, tally);
-  compare(here.status != ProofStatus::Unknown, here.status == ProofStatus::Disproven,
+  compare(claim.kind == SolverClaim::Kind::Loss ? tally.loss_here : tally.draw_here,
+          here.status != ProofStatus::Unknown, here.status == ProofStatus::Disproven,
           "proves the side to move's mate (win " + std::to_string(here.distance) + ")");
   // The successors: E4's exhaustive listing.
   SearchBudget b = SearchBudget::nodes(options_.listing_nodes);
@@ -502,7 +527,7 @@ void DfpnChecker::check(const GameState& state, const SolverClaim& claim, DfpnTa
   if (claim.kind == SolverClaim::Kind::Loss) {
     for (const LegalAction& act : list.actions) {
       const Answer a = ask(act.result, claim.distance - 1, tally);
-      compare(a.status != ProofStatus::Unknown, a.status == ProofStatus::Proven,
+      compare(tally.loss_successors, a.status != ProofStatus::Unknown, a.status == ProofStatus::Proven,
               "disproves the opponent's mate within " + std::to_string(claim.distance - 1) + " after an action");
     }
     return;
@@ -519,12 +544,13 @@ void DfpnChecker::check(const GameState& state, const SolverClaim& claim, DfpnTa
     if (a.status == ProofStatus::Unknown) unknown = true;
   }
   const bool all_proven = !disproof && !unknown;
-  compare(disproof || all_proven, disproof, "proves the opponent's mate after every action");
+  compare(tally.draw_successors, disproof || all_proven, disproof, "proves the opponent's mate after every action");
 }
 
 void DfpnChecker::check_search(const Search& search, DfpnTally& tally) {
   for (const SolverClaim& c : solver_claims(search)) {
     if (!c.turn_start) continue;
+    if (c.node != search.root() && !c.terminal) ++tally.inner_claims;
     check(*search.node(c.node).state, c, tally);
   }
 }

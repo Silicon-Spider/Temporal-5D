@@ -38,8 +38,9 @@
 // harness side - a separate reviewed change (build-log issue 405).
 //
 // Exit status: 0 every proof tree read and checked; 3 an error (a defence set
-// that is not E4's, a line that does not replay to E4's checkmate; printed,
-// and that root's records not written); 1 a record could not be read or the
+// that is not E4's, a line that does not replay to E4's checkmate, a search
+// or its claims failing; printed, and that root's records not written - the
+// other roots' are, and FILES.tsv); 1 a record could not be read or the
 // output not written; 2 a bad command line.
 
 #include <algorithm>
@@ -85,6 +86,7 @@ struct Options {
   int every = 1;
   std::size_t max_lines = 64;
   std::size_t max_records = 10000;
+  bool ladder = false;  // a diagnostic: E10's ladder on (synchronous)
 };
 
 [[noreturn]] void usage(int status) {
@@ -106,6 +108,8 @@ struct Options {
       "                             budget); a move left unknown proves nothing\n"
       "  --max-lines N (64)         lines per root at most\n"
       "  --max-records N (10000)    records in all at most\n"
+      "  --ladder                   a diagnostic: E10's ladder on, synchronous - its proofs are not the\n"
+      "                             solver's, and a root whose claims cannot be derived is an ERROR (status 3)\n"
       "  --help  --version\n",
       out);
   std::exit(status);
@@ -157,6 +161,8 @@ Options parse(int argc, char** argv) {
       o.max_lines = static_cast<std::size_t>(std::max<std::uint64_t>(1, number(value())));
     } else if (a == "--max-records") {
       o.max_records = static_cast<std::size_t>(number(value()));
+    } else if (a == "--ladder") {
+      o.ladder = true;
     } else if (!a.empty() && a[0] == '-') {
       throw std::invalid_argument("unknown option " + a);
     } else {
@@ -235,10 +241,10 @@ int main(int argc, char** argv) {
   const std::string legality =
       o.legality_nodes == 0 ? std::string("exact") : "exact within " + std::to_string(o.legality_nodes) + " nodes";
   std::printf("CONDITIONS rules=%s split=%s playouts=%llu mate_nodes=%llu evaluator=uniform legality=%s "
-              "proof_channel=on(offline, no store) ladder=off every=%d max_lines=%zu\n",
+              "proof_channel=on(offline, no store) ladder=%s every=%d max_lines=%zu\n",
               t5d::tools::ruleset_text(o.rules).c_str(), split_name(o.split),
               static_cast<unsigned long long>(o.playouts), static_cast<unsigned long long>(o.mate_nodes),
-              legality.c_str(), o.every, o.max_lines);
+              legality.c_str(), o.ladder ? "on(synchronous; a diagnostic)" : "off", o.every, o.max_lines);
   struct Written {
     std::string name;
     std::string sha;
@@ -273,22 +279,36 @@ int main(int argc, char** argv) {
       // ladder's (Hunt's mates, the settling scans' verdicts) would enter the
       // tree as injected proofs, which no solved subtree supports; and the
       // asset map's boosts would change the searches (the search as built
-      // before E10, which the tool's figures were taken with).
-      p.hunt = p.settling = false;
-      p.asset_map = false;
+      // before E10, which the tool's figures were taken with). --ladder, a
+      // diagnostic, leaves it on, synchronous (deterministic).
+      p.hunt = p.settling = o.ladder;
+      p.asset_map = o.ladder;
+      p.synchronous = o.ladder;
       p.legality = o.legality_nodes == 0 ? t5d::LegalityOptions::exact() : t5d::LegalityOptions::nodes(o.legality_nodes);
       p.verify_legality = p.legality;
       p.mate_nodes = o.mate_nodes;
       p.expand.square_features = t5d::SquareFeatures::None;  // the uniform evaluator reads none
-      const std::unique_ptr<t5d::mcts::Evaluator> ev = t5d::mcts::make_evaluator(t5d::mcts::BuiltinEvaluator::Uniform);
-      t5d::mcts::Search search(s, p);
-      search.run(*ev, t5d::mcts::Limits{o.playouts});
-      search.check_invariants();
-      if (!search.root_solved()) continue;
-      const t5d::tools::SolverClaim claim = t5d::tools::solver_claim(search, search.root());
-      if (claim.kind != t5d::tools::SolverClaim::Kind::Win) continue;
+      // The search, the root's claim and the proof tree: a failure of any -
+      // the derivation refusing a solved node its children do not support, an
+      // invariant - is that root's error, reported, and the run goes on (as
+      // t5d-solver-check does; MT-02's review, 2026-11-01).
+      t5d::tools::SolverClaim claim;
+      t5d::tools::ProofTree tree;
+      try {
+        const std::unique_ptr<t5d::mcts::Evaluator> ev = t5d::mcts::make_evaluator(t5d::mcts::BuiltinEvaluator::Uniform);
+        t5d::mcts::Search search(s, p);
+        search.run(*ev, t5d::mcts::Limits{o.playouts});
+        search.check_invariants();
+        if (!search.root_solved()) continue;
+        claim = t5d::tools::solver_claim(search, search.root());
+        if (claim.kind != t5d::tools::SolverClaim::Kind::Win) continue;
+        tree = t5d::tools::proof_tree(search, search.root(), o.max_lines);
+      } catch (const std::exception& e) {
+        ++errors;
+        std::printf("ERROR %zu #%zu: the search or its claims failed: %s\n", r, i, e.what());
+        continue;
+      }
       ++proven;
-      const t5d::tools::ProofTree tree = t5d::tools::proof_tree(search, search.root(), o.max_lines);
       std::printf("ROOT %zu #%zu: %s, %zu lines%s, %zu defender turns (%zu defences)\n", r, i,
                   t5d::tools::to_string(claim).c_str(), tree.lines.size(), tree.truncated ? " (truncated)" : "",
                   tree.defender_turns, tree.defences);

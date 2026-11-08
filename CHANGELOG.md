@@ -10,6 +10,77 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-02 - MT-01/02/03 review fixes: the checker held to seeded faults, MT-03's export checks made strict, churn that carries weight, the derivation exercised, coverage floors, each line as long as its claim
+
+The mutation review of MT-01/02/03 (2026-11-01; 47 mutants and 3 combinations on a copy)
+found no bug in the engine code under test and real power, but no seeded-fault test of the
+checking code and one helper vacuous. Every finding fixed, as the main loop decided (build-log
+issue 409):
+
+- **H1** - `mcts_df_pn_checker_flags_each_false_claim`: the checker fed one false claim per
+  rule (a Win(k) df-pn disproves; a df-pn proof at a node called Loss or Draw; a Loss whose
+  successor escapes the opponent's mate; a Draw after every action of which the opponent mates)
+  - each a contradiction - and three true claims, none; `mcts_df_pn_checker_memo_keys_on_depth`.
+- **H2** - MT-03's helpers made strict (`engine/tests/test_prover.cpp`): a disproven root's
+  disproof must be in the disproof store at the search's class and depth, or its stored game
+  fact checked - a Loss the game tree confirms after each of E4's listed actions (successor by
+  successor: the long twin met two wide roots, under Q6 and Q17, that one tree over the root
+  could not decide), a stalemate by E4's verdict (any entry but a Win used to stand in); a
+  stored Draw must be E4's stalemate (it was judged by the game tree at depth 0, which answers
+  Unknown wherever a legal action exists - so a false Draw counted "beyond"); "beyond" bounded
+  (1% here; 20% in the long twin, 1,526 of 10,478 measured; 10% in the new workload).
+- **M3** - the TT's structural half stated and tested: `EstimateTT` refuses a proven or
+  disproven entry (behaviour-preserving: the prover never offered one) and
+  `t5d::detail::estimate_tt_read_back` (`t5d/prover.hpp`, tests only) lets
+  `prover_tt_keeps_estimates_never_facts` read it; workloads where churn carries weight:
+  `prover_churn_takes_effect_where_the_tt_carries_weight` (depth 5, three-turn games: the
+  1-entry TT's expansions differ at 63 of 248 roots, statuses never; exports and stores
+  checked) and `hunt_churn_takes_effect_where_the_tt_carries_weight` (13 of 54).
+- **M4** - seven constructed positions (`engine/tests/test_solver_refs.hpp`): four losses whose
+  defences lose at different speeds (two Loss(4), two Loss(6)) and three draws, found by a
+  seeded random search over 4x4 set-ups with the search's solver, each claim the same under
+  five arms and both Q4 readings and held by df-pn; all fourteen roots now solved and held to
+  their claims; 50 solved losses with children at more than one distance (0 before).
+- **M5** - `DfpnTally` counts each rule's decided and undecided comparisons and the claims
+  inside the proofs (`rules_summary`); both MT-01 tests floor them and the distinct df-pn
+  searches, and ceil the undecided (from the baseline, with margin).
+- **M6** - every proof record's line as long as its claim ("win k": k actions after
+  `ProofRoot`'s).
+- **L1** - every proof re-asked two half-turns shallower gives no proof beyond that depth (424).
+- **L2** - `mcts_verify_prunes_a_root_edge_whose_child_was_searched`: Search::verify pruning a
+  root edge whose child was searched (verify_unknown off) is not a defect - the edge keeps the
+  statistics already backed up through it, every reader skips it.
+- **L3** - `t5d-proof-records` reports a root whose search or claims fail (ERROR, status 3) and
+  goes on, `FILES.tsv` written; `--ladder` (a diagnostic: E10's ladder on, synchronous)
+  exercises it in the test.
+- **The survivors re-run against the fixed tree** (the reviewer's runner; C03-C06 re-anchored,
+  C14 and P09 built without `-Werror`): KILLED - C02, C03, C04, C05, C06, C13, P05, P07, P09,
+  H02; EQUIVALENT - C01 and C14 (no solved Win node holds more than one winning child: none in
+  5,819 searches - the default tests' 1,769 and the long twin's 4,050 - MCGS arms included)
+  and C07 (the memo's slot key already hashes the depth).
+- Docs corrected - edit 301, the H19 and H17 rows, `engine/README.md` (step 2), and the
+  MT entries below ("Review correction" notes where their claims change).
+- Linux: `DfpnChecker::ask`'s memo key multiplied by an unsigned long long literal beside a
+  `std::uint64_t` cast from the signed depth - the pattern Linux g++ 13/14 report under
+  `-Wsign-conversion` (main's b5ab406, 2cb107d) - now a `std::uint64_t{...}` literal, its value
+  unchanged; the new test's key the same form.
+- `engine/include/t5d/prover.hpp`, `engine/src/prover.cpp`, `engine/tools/solver_proofs.{hpp,cpp}`,
+  `engine/tools/t5d_proof_records.cpp`, `engine/tests/test_mcts.cpp`, `test_solver_refs.hpp`,
+  `test_prover.cpp`, `test_hunt.cpp`, `test_proof_tools.cpp`; `engine/README.md`;
+  `docs/BUILD_LOG.md` (issue 409; H17, H19; edit 301; the Lazy SMP log; the session log).
+- Checks: engine 701 of 701 (`--werror`, the final tree); the long twins touched, once -
+  `long_prover_proofs_survive_tt_churn_h19`, `long_prover_threads_survive_tt_churn`,
+  `long_mcts_solver_agrees_with_df_pn` - 3 of 3 in 79 minutes; the Lazy SMP test x3
+  (prover.cpp changed: 1 thread 292 / 291 / 289, 5 threads 301 / 299 / 304, load 100%); verify
+  ok; gate commit ok (engine differential smoke test passed, proof channel DISABLED); no
+  pytest - nothing Python-visible changed (no C API change).
+
+Spec: §13.1 6f, §11.3 and register H19, H17 - edit 301 corrected (the structural half by
+construction and test; churn that carries weight; the fact behind a disproof checked);
+§15.4, §11.1 and register H41 - edits 300 and 302 unchanged (the cross-checks' terms as
+built), their tests' coverage now asserted. The proof channel stays off; no proof enters a
+store (H23, H41).
+
 ### 2026-11-02 - The engine's flat-form docs brought in line with D2's flat head: the network gives every board's leave logit
 
 Since D2's flat head (main, issue 241) the network's evaluators deliver a "leave it" logit for
@@ -147,7 +218,9 @@ gate (engine -> records -> harness, never back). The engine side, built:
   ply split: 33 records (15 from the named variant), each in `FILES.tsv` with its size and
   SHA-256, each replayed by `t5d-gate` to its checkmate with no earlier game end; at the 20
   defender turn starts, the proof tree's defences are E4's distinct successors and the
-  gate's `legal_actions` E4's count.
+  gate's `legal_actions` E4's count. (Review correction, 2026-11-01: a line's length was never
+  compared with its claim, and a failure inside a root's search aborted the tool without
+  `FILES.tsv`; both fixed.)
 - Not done here, by the brief: adding the records to `oracles/corpus/`, `verify` and
   re-recording the golden files (the harness side, a separate reviewed change on a quiet
   machine); whether engine-generated lines may enter the pinned corpus is put to the user
@@ -179,11 +252,21 @@ such a test. New tests, each with a `long_` twin:
   readings, both classes): 3,966 roots decided both ways, no difference; every proven root's
   Win in the solved store, every disproof in the disproof store with class and depth (or the
   root's loss or stalemate in the solved store - 7 roots, each a Loss(2) the game tree
-  confirms); 4,278 stored entries confirmed by the game tree (12 beyond its budget); a fresh
-  prover over the stores answers 3,966 roots with no expansion; 424 proof continuations and
-  951 roots of shared-store sequences answered from the stores alone.
+  confirms); 4,278 stored entries confirmed by the game tree (12 beyond its budget). (Review
+  correction, 2026-11-01: the test did not hold the disproof - any solved-store entry but a
+  Win stood in for it unchecked, and the 7 Loss(2) roots were observed, not asserted; a stored
+  Draw was judged by the game tree at depth 0, which counts it "beyond", so a false Draw could
+  not fail. Since the review fixes the fact is checked - a Loss the game tree confirms after
+  each of E4's listed actions, a stalemate by E4 - and "beyond" bounded. And the churn barely
+  moved these searches: a 1-entry TT changed the expansions at 66 of 2,034 random roots, never
+  a status; the TT keeps estimates only by construction - now tested - and workloads where
+  churn carries weight were added.) A fresh prover over the stores answers 3,966 roots with no
+  expansion; 424 proof continuations and 951 roots of shared-store sequences answered from the
+  stores alone.
 - `prover_threads_survive_tt_churn`: five threads sharing a 1-entry TT, by nodes and by the
-  clock: no false proof (74 confirmed), 36 certificates confirmed by E4 alone.
+  clock: no false proof (74 confirmed), 36 certificates confirmed by E4 alone. (Review
+  correction, 2026-11-01: clock-budgeted - 73 and 35 to 74 and 36 between runs; every
+  certificate found is confirmed.)
 - `hunt_finds_its_mates_under_tt_churn` (`engine/tests/test_hunt.cpp`): Hunt with a 1-entry
   TT at 1 and 5 threads finds the constructed mates at their distances, lines complete and
   certified; driven through `hunt_prover_options` over test stores its prover exports the
@@ -220,7 +303,10 @@ Register H41 has the search's solver "cross-checked against df-pn and oracle mat
   `engine/tests/test_solver_refs.hpp`), the proof channel on in the tests only, no store:
   `mcts_solver_agrees_with_df_pn_on_constructed_mates` (the seven constructed positions,
   both Q4 readings, five arms: 170 comparisons decided, all agreeing; 18 df-pn proofs, all
-  certified), `mcts_solver_agrees_with_df_pn_under_every_ruleset` (two-board positions under
+  certified - review correction, 2026-11-01: three of the seven roots were held to their
+  claims, no solved node had children at more than one distance, so the derivation's least
+  and greatest were never exercised, and the checker's rules had no seeded-fault test;
+  fourteen positions now, every root held, each rule fed false claims), `mcts_solver_agrees_with_df_pn_under_every_ruleset` (two-board positions under
   both Q4 readings and sparse positions under all 27 rulesets, the ply split, the tree form
   and the flat form: 3,662 comparisons decided, all agreeing, 21 unknown; 1,477 df-pn
   proofs, all certified; about 75 s) and `long_mcts_solver_agrees_with_df_pn`

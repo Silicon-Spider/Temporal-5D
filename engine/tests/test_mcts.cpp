@@ -674,7 +674,36 @@ using t5d::tools::SolverClaim;
 struct SolverRuns {
   std::size_t searches = 0;
   std::size_t roots_solved = 0;
+  // Solved non-terminal nodes whose children (those the bound rests on) are
+  // at more than one distance - the cases where the derivation's least (Win)
+  // or greatest (Loss) decides k (MT-01's review, 2026-11-01, M4).
+  std::size_t loss_spread = 0;
+  std::size_t win_spread = 0;
 };
+
+// Counts the solved nodes of `search` whose supporting children are at more
+// than one distance (as tools/solver_proofs.hpp derives them).
+void count_spreads(const Search& search, SolverRuns& runs) {
+  const std::vector<SolverClaim> claims = t5d::tools::solver_claims(search);
+  std::map<NodeId, int> distance;
+  for (const SolverClaim& c : claims) distance[c.node] = c.distance;
+  for (const SolverClaim& c : claims) {
+    if (c.terminal || c.kind == SolverClaim::Kind::Draw) continue;
+    const NodeView n = search.node(c.node);
+    std::set<int> seen;
+    for (std::size_t i = 0; i < n.edge_count; ++i) {
+      const EdgeView e = search.edge(c.node, i);
+      if (e.pruned || e.unknown || e.child == kNoNode) continue;
+      const NodeView ch = search.node(e.child);
+      if (ch.dead_end || ch.lo != ch.hi) continue;
+      const bool same = ch.mover == n.mover;
+      if (c.kind == SolverClaim::Kind::Win && (same ? ch.lo : -ch.hi) != 1) continue;  // a winning child only
+      const auto it = distance.find(e.child);
+      if (it != distance.end()) seen.insert(same ? it->second : it->second + 1);
+    }
+    if (seen.size() > 1) ++(c.kind == SolverClaim::Kind::Win ? runs.win_spread : runs.loss_spread);
+  }
+}
 
 // Searches `s` under `arm` and compares every solved turn start with df-pn;
 // returns the root's claim when the root is solved.
@@ -700,14 +729,18 @@ std::optional<SolverClaim> solver_against_dfpn(const GameState& s, const t5d_tes
   if (tally.contradictions.size() + tally.certificate_failures.size() != before) {
     std::fprintf(stderr, "  (under the %s)\n", arm.name);
   }
+  count_spreads(search, runs);
   if (!search.root_solved()) return std::nullopt;
   ++runs.roots_solved;
   return t5d::tools::solver_claim(search, search.root());
 }
 
 void report(const char* what, const DfpnTally& t, const SolverRuns& runs) {
-  std::fprintf(stderr, "  %s: %zu searches, %zu roots solved; %s\n", what, runs.searches, runs.roots_solved,
-               t.summary().c_str());
+  std::fprintf(stderr,
+               "  %s: %zu searches, %zu roots solved; %s\n  %s; solved nodes with children at more than one "
+               "distance: %zu losses, %zu wins\n",
+               what, runs.searches, runs.roots_solved, t.summary().c_str(), t.rules_summary().c_str(),
+               runs.loss_spread, runs.win_spread);
   for (const std::string& c : t.contradictions) std::fprintf(stderr, "  CONTRADICTION: %s\n", c.c_str());
   for (const std::string& c : t.certificate_failures) std::fprintf(stderr, "  CERTIFICATE: %s\n", c.c_str());
 }
@@ -748,11 +781,14 @@ void every_ruleset_against_dfpn(int two_board, int turns, int games, std::uint64
 }  // namespace
 
 TEST(mcts_solver_agrees_with_df_pn_on_constructed_mates) {
-  // The seven constructed positions under both Q4 readings, under every arm
-  // (the ply split and the flat form as MCGS graphs too). The roots of the
-  // three positions the search's own solver tests solve are held to their
-  // claims as well: the mate in one Win(1), the forced draw a Draw, the
-  // forced loss Loss(2).
+  // The fourteen constructed positions under both Q4 readings, under every
+  // arm (the ply split and the flat form as MCGS graphs too). Every root is
+  // solved and held to its claim (test_solver_refs.hpp): the mates Win(1) and
+  // Win(3), the four draws, the forced loss Loss(2), and the four losses whose
+  // defences lose at different speeds - Loss(4) and Loss(6), the longest
+  // defence's, which the derivation's greatest decides (M4 of MT-01's review,
+  // 2026-11-01; before it three roots were held, and every solved node's
+  // children were at one distance).
   DfpnTally tally;
   SolverRuns runs;
   DfpnCheckOptions options;
@@ -764,19 +800,12 @@ TEST(mcts_solver_agrees_with_df_pn_on_constructed_mates) {
     for (const t5d_test::solver::Named& n : t5d_test::solver::constructed(rules)) {
       for (const t5d_test::solver::Arm& arm : t5d_test::solver::arms(true)) {
         const std::optional<SolverClaim> root = solver_against_dfpn(n.state, arm, 20000, checker, tally, runs);
-        const std::string name = n.name;
-        if (name == "mate_in_one" || name == "forced_draw" || name == "forced_loss") {
-          REQUIRE(root.has_value());
-          SolverClaim want;
-          want.kind = name == "mate_in_one"   ? SolverClaim::Kind::Win
-                      : name == "forced_draw" ? SolverClaim::Kind::Draw
-                                              : SolverClaim::Kind::Loss;
-          want.distance = name == "mate_in_one" ? 1 : name == "forced_draw" ? 0 : 2;
-          if (root->kind != want.kind || root->distance != want.distance) {
-            std::fprintf(stderr, "  %s under the %s: the root's claim %s, not %s\n", n.name, arm.name,
-                         t5d::tools::to_string(*root).c_str(), t5d::tools::to_string(want).c_str());
-            CHECK(false);
-          }
+        if (std::string(n.claim).empty()) continue;
+        REQUIRE(root.has_value());
+        if (t5d::tools::to_string(*root) != n.claim) {
+          std::fprintf(stderr, "  %s under the %s: the root's claim %s, not %s\n", n.name, arm.name,
+                       t5d::tools::to_string(*root).c_str(), n.claim);
+          CHECK(false);
         }
       }
     }
@@ -784,9 +813,26 @@ TEST(mcts_solver_agrees_with_df_pn_on_constructed_mates) {
   report("constructed", tally, runs);
   CHECK(tally.contradictions.empty());
   CHECK(tally.certificate_failures.empty());
-  CHECK(tally.decided >= 100);
   CHECK(tally.wins > 0 && tally.losses > 0 && tally.draws > 0);
   CHECK(tally.certified > 10);
+  // Coverage (M5): each rule decided, distinct df-pn searches (memo hits not
+  // counted), claims inside the proofs, the losses whose children are at more
+  // than one distance - and a ceiling on what df-pn leaves undecided. From the
+  // baseline (2026-11-01: 1,214 decided, 10 unknown, 214 searches, 684 inner
+  // claims; per rule 599 / 140 / 315 / 80 / 80; 50 such losses), with margin.
+  // (Every Win node holds one winning child - the solver solves a node at its
+  // first, and selection never enters a solved node - so no Win node's k is a
+  // least over several: win_spread is 0, reported.)
+  CHECK(tally.decided >= 900u);
+  CHECK(tally.unknown <= 40u);
+  CHECK(tally.searched >= 160u);
+  CHECK(tally.inner_claims >= 500u);
+  CHECK(tally.win.decided >= 450u);
+  CHECK(tally.loss_here.decided >= 100u);
+  CHECK(tally.loss_successors.decided >= 230u);
+  CHECK(tally.draw_here.decided >= 60u);
+  CHECK(tally.draw_successors.decided >= 60u);
+  CHECK(runs.loss_spread >= 30u);
 }
 
 TEST(mcts_solver_agrees_with_df_pn_under_every_ruleset) {
@@ -798,8 +844,81 @@ TEST(mcts_solver_agrees_with_df_pn_under_every_ruleset) {
   report("every ruleset", tally, runs);
   CHECK(tally.contradictions.empty());
   CHECK(tally.certificate_failures.empty());
-  CHECK(tally.decided >= 200);
   CHECK(tally.certified > 10);
+  // Coverage (M5 of MT-01's review): from the baseline (2026-11-01: 3,662
+  // decided, 21 unknown, 1,707 searches, 2,245 inner claims; per rule 2,411 /
+  // 453 / 798; no non-terminal draw among these roots), with margin.
+  CHECK(tally.decided >= 2700u);
+  CHECK(tally.unknown <= 60u);
+  CHECK(tally.searched >= 1250u);
+  CHECK(tally.inner_claims >= 1650u);
+  CHECK(tally.win.decided >= 1800u);
+  CHECK(tally.loss_here.decided >= 330u);
+  CHECK(tally.loss_successors.decided >= 580u);
+}
+
+TEST(mcts_df_pn_checker_flags_each_false_claim) {
+  // The checker itself, fed false claims (MT-01's review, 2026-11-01): each
+  // rule must report a contradiction where it is broken - a Win(k) df-pn
+  // disproves; a df-pn proof at a node called Loss or Draw; a Loss whose
+  // successor escapes the opponent's mate; a Draw after every action of which
+  // the opponent mates - and none on the true claims beside them.
+  using t5d_test::solver::forced_draw;
+  using t5d_test::solver::forced_loss;
+  using t5d_test::solver::mate_in_one;
+  using t5d_test::solver::mate_in_two;
+  const RuleOptions rules;
+  struct Case {
+    const char* what;
+    GameState state;
+    SolverClaim::Kind kind;
+    int distance;
+    bool contradiction;
+  };
+  using K = SolverClaim::Kind;
+  const std::vector<Case> cases{
+      {"Win(1) at the mate in two (the Win rule: df-pn disproves)", mate_in_two(rules), K::Win, 1, true},
+      {"Win(3) at the forced draw (the Win rule)", forced_draw(rules), K::Win, 3, true},
+      {"Loss(2) at the mate in one (no proof at a Loss: df-pn proves the mover's mate)", mate_in_one(rules), K::Loss,
+       2, true},
+      {"Loss(2) at the forced draw (the successors: the opponent has no mate)", forced_draw(rules), K::Loss, 2, true},
+      {"Draw at the mate in one (no proof at a Draw)", mate_in_one(rules), K::Draw, 0, true},
+      {"Draw at the forced loss (the successors: the opponent mates after every action)", forced_loss(rules), K::Draw,
+       0, true},
+      {"Win(3) at the mate in two (true)", mate_in_two(rules), K::Win, 3, false},
+      {"Loss(2) at the forced loss (true)", forced_loss(rules), K::Loss, 2, false},
+      {"Draw at the forced draw (true)", forced_draw(rules), K::Draw, 0, false},
+  };
+  DfpnChecker checker;  // one memo for all: a depth-blind memo would be caught here too
+  for (const Case& c : cases) {
+    SolverClaim claim;
+    claim.kind = c.kind;
+    claim.distance = c.distance;
+    DfpnTally t;
+    checker.check(c.state, claim, t);
+    std::fprintf(stderr, "  %s: %zu contradictions (%zu decided, %zu unknown)\n", c.what, t.contradictions.size(),
+                 t.decided, t.unknown);
+    CHECK(t.decided >= 1);
+    CHECK_EQ(t.contradictions.empty(), !c.contradiction);
+    CHECK(t.certificate_failures.empty());
+  }
+}
+
+TEST(mcts_df_pn_checker_memo_keys_on_depth) {
+  // A position asked at two depths is two questions: the mate in two is
+  // disproven within 1 and proven within 3, never read back across depths.
+  DfpnChecker checker;
+  DfpnTally t;
+  const GameState s = t5d_test::solver::mate_in_two(RuleOptions{});
+  CHECK(checker.ask(s, 1, t).status == ProofStatus::Disproven);
+  CHECK_EQ(t.searched, std::size_t{1});
+  const DfpnChecker::Answer a = checker.ask(s, 3, t);
+  CHECK(a.status == ProofStatus::Proven);
+  CHECK_EQ(a.distance, 3);
+  CHECK_EQ(t.searched, std::size_t{2});
+  CHECK(checker.ask(s, 3, t).status == ProofStatus::Proven);  // now a memo hit
+  CHECK_EQ(t.searched, std::size_t{2});
+  CHECK_EQ(t.questions, std::size_t{3});
 }
 
 TEST(long_mcts_solver_agrees_with_df_pn) {
@@ -1574,6 +1693,45 @@ TEST(mcts_verify_settles_a_root_child_before_it_is_played) {
   CHECK_EQ(legal, std::size_t{1});  // Kxc2
   CHECK_EQ(search.root_children().size(), std::size_t{1});
   CHECK_NOTHROW(search.check_invariants());
+}
+
+TEST(mcts_verify_prunes_a_root_edge_whose_child_was_searched) {
+  // With verify_unknown off, selection walks through unknown edges and makes
+  // their children; Search::verify then proves some of them illegal and prunes
+  // them, a child below (MT-01's review, L2, 2026-11-01). Not a defect: such
+  // an edge keeps the statistics already backed up through it (no backup is
+  // ever retracted - as for any pruned edge), and every reader skips it:
+  // root_children(), selection (no visit more), the bounds (a pruned edge
+  // supports nothing: the forced draw is proven from its one live child) and
+  // the final choice.
+  const GameState s = forced_draw();
+  SearchParams p = fast();
+  p.widening = false;
+  p.legality = LegalityOptions::budgeted(0, 0);
+  p.verify_unknown = false;
+  p.proof_channel = true;  // the solver's bounds read the edges too (H41: test-only)
+  p.hunt = p.settling = false;
+  const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Uniform);
+  Search search(s, p);
+  search.run(*ev, Limits{60});
+  const NodeId root = search.root();
+  for (std::size_t i = 0; i < search.root_children().size();) {
+    if (search.verify(i) == MoveLegality::Legal) ++i;
+  }
+  REQUIRE_EQ(search.root_children().size(), std::size_t{1});  // Kxc2
+  std::vector<std::pair<std::size_t, std::uint32_t>> pruned;  // pruned with a child: (edge, visits)
+  for (std::size_t i = 0; i < search.node(root).edge_count; ++i) {
+    const EdgeView e = search.edge(root, i);
+    if (e.pruned && e.child != kNoNode) pruned.emplace_back(i, e.visits);
+  }
+  REQUIRE(!pruned.empty());
+  CHECK_NOTHROW(search.check_invariants());
+  search.run(*ev, Limits{200});
+  for (const auto& [i, visits] : pruned) CHECK_EQ(search.edge(root, i).visits, visits);
+  CHECK_NOTHROW(search.check_invariants());
+  REQUIRE(search.root_solved());
+  CHECK_EQ(t5d::tools::to_string(t5d::tools::solver_claim(search, root)), std::string("draw"));
+  CHECK_EQ(search.choose().index, std::size_t{0});
 }
 
 TEST(mcts_flat_children_are_the_legal_turns_best_first) {

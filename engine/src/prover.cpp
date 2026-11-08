@@ -316,6 +316,8 @@ class EstimateTT {
       slots_[i].data.store(0, std::memory_order_relaxed);
     }
   }
+  // An open node's estimate, or false: a miss - and never a proven (pn 0) or
+  // disproven (dn 0) entry, which save() refuses to keep (H19).
   bool probe(std::uint64_t key, std::uint64_t& pn, std::uint64_t& dn) const {
     const Slot& s = slots_[static_cast<std::size_t>(key) & mask_];
     const std::uint64_t data = s.data.load(std::memory_order_relaxed);
@@ -323,9 +325,10 @@ class EstimateTT {
     if (data == 0 || (check ^ data) != key) return false;
     pn = data & 0x7FFFFFFFu;
     dn = (data >> 31) & 0x7FFFFFFFu;
-    return true;
+    return pn > 0 && dn > 0;
   }
   void save(std::uint64_t key, std::uint64_t pn, std::uint64_t dn) {
+    if (pn == 0 || dn == 0) return;  // a solved node: a fact, which lives in the stores (H19)
     const std::uint64_t cap = 0x7FFFFFFFu;
     const std::uint64_t data =
         std::min(pn, cap) | (std::min(dn, cap) << 31) | (std::uint64_t{1} << 62);
@@ -2246,5 +2249,20 @@ std::optional<BuiltAction> Prover::canonical_completion(const GameState& turn_st
   next.submit(CheckRuling::none());
   return BuiltAction{f->moves, next};
 }
+
+namespace detail {
+
+std::optional<std::pair<std::uint64_t, std::uint64_t>> estimate_tt_read_back(std::uint64_t key, std::uint64_t pn,
+                                                                             std::uint64_t dn) {
+  EstimateTT tt;
+  tt.resize(1);
+  tt.save(key, pn, dn);
+  std::uint64_t p = 0;
+  std::uint64_t d = 0;
+  if (!tt.probe(key, p, d)) return std::nullopt;
+  return std::make_pair(p, d);
+}
+
+}  // namespace detail
 
 }  // namespace t5d

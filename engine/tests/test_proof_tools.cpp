@@ -250,6 +250,14 @@ TEST(proof_records_exe_lines_replay_through_the_gate_to_their_mates) {
     REQUIRE(rec.header("ProofDefences") != nullptr);
     CHECK(*rec.header("Termination") == "checkmate");
     if (*rec.header("ProofClaim") == "win 3") ++mates_in_two;
+    // The line is as long as the claim (MT-02's review, 2026-11-01): "win k"
+    // counts half-turns - actions - so after the ProofRoot actions that lead
+    // to the root, the record holds k more, the last one mating.
+    REQUIRE(rec.header("ProofRoot") != nullptr);
+    const std::string& claim_text = *rec.header("ProofClaim");
+    REQUIRE(claim_text.rfind("win ", 0) == 0);
+    const std::size_t claimed = std::stoul(claim_text.substr(4));
+    CHECK_EQ(rec.actions.size(), std::stoul(*rec.header("ProofRoot")) + claimed);
     if (*rec.header("Board") == "Very Small - Open") ++named;
     // The gate adapter's replay.
     const fs::path gate_out = dir / "gate-stdout.txt";
@@ -297,6 +305,24 @@ TEST(proof_records_exe_lines_replay_through_the_gate_to_their_mates) {
   CHECK(defender_turns >= 6);
   CHECK(mates_in_two >= 3);
   CHECK(named >= 3);
+  // A root whose search or claims fail is that root's ERROR, and the run goes
+  // on (MT-02's review, L3, 2026-11-01): with --ladder, a diagnostic, E10's
+  // ladder injects proofs the derivation cannot rest on any child - status 3,
+  // the other roots searched, FILES.tsv still written.
+  {
+    const fs::path ladder_dir = dir / "out-ladder";
+    const int status = run(T5D_PROOF_RECORDS_EXE,
+                           {"--out", ladder_dir.string(), "--ladder", "--split", "ply", "--playouts", "1000",
+                            "--legality-nodes", "200000", "--every", "4", played.string()},
+                           {}, out, err);
+    const std::string text = read_all(out);
+    std::fprintf(stderr, "%s", text.c_str());
+    CHECK_EQ(status, 3);
+    CHECK(text.find("ladder=on(synchronous; a diagnostic)") != std::string::npos);
+    CHECK(text.find("the search or its claims failed: solver claims:") != std::string::npos);
+    CHECK(text.find(" errors - FINDINGS (above)") != std::string::npos);
+    CHECK(fs::exists(ladder_dir / "FILES.tsv"));
+  }
   // A bad command line: status 2; no --out: status 2.
   CHECK_EQ(run(T5D_PROOF_RECORDS_EXE, {"--out", (dir / "bad").string(), "--split", "sideways", "x.5dpgn"}, {}, out, err),
            2);

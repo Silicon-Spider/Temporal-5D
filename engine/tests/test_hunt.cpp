@@ -276,6 +276,40 @@ TEST(hunt_finds_its_mates_under_tt_churn) {
   CHECK(certified > 8);
 }
 
+TEST(hunt_churn_takes_effect_where_the_tt_carries_weight) {
+  // Hunt's own churn (MT-03's review, 2026-11-01: the test above churns
+  // searches the TT barely touches): three-turn games' positions at depth 5,
+  // Hunt with a 1-entry TT against the default - its searches differ (the
+  // option reaches Hunt's prover), and every mate either finds is certified
+  // by E4 alone, or left undecided by the check's budget.
+  int positions = 0;
+  int differ = 0;
+  int mates = 0;
+  for (const GameState& s : playable(t5d_test::sparse_positions(RuleOptions{}, 2, 3, 7650))) {
+    HuntOptions dflt;
+    dflt.prover.depth = 5;
+    dflt.prover.record_certificate = true;
+    HuntOptions one = dflt;
+    one.prover.tt_entries = 1;
+    Hunt a(dflt);
+    Hunt b(one);
+    const HuntResult ra = a.hunt(s, ProveBudget::nodes(20'000));
+    const HuntResult rb = b.hunt(s, ProveBudget::nodes(20'000));
+    ++positions;
+    if (ra.stats.expansions != rb.stats.expansions) ++differ;
+    for (const HuntResult* r : {&ra, &rb}) {
+      if (!r->mate) continue;
+      ++mates;
+      REQUIRE(r->certificate != nullptr);
+      const CertificateCheck c = check_certificate(*r->certificate, s, r->proof.distance);
+      CHECK(c.verdict == CertificateVerdict::Confirmed || c.verdict == CertificateVerdict::Undecided);
+    }
+  }
+  std::fprintf(stderr, "  %d positions: Hunt's expansions differ under a 1-entry TT at %d; %d mates certified\n",
+               positions, differ, mates);
+  CHECK(differ >= 8);  // 13 of 54 measured (2026-11-01)
+}
+
 TEST(long_hunt_finds_its_mates_under_tt_churn) {
   int mates = 0;
   int searched = 0;

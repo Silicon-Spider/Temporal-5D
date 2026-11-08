@@ -163,11 +163,26 @@ struct DfpnTally {
   std::size_t disproofs = 0;
   std::size_t certified = 0;       // proofs whose certificate E4 confirmed
   std::size_t certificate_undecided = 0;
+  /// Solved turn starts compared that are not their search's root
+  /// (check_search): the claims inside the proof, beyond the root's.
+  std::size_t inner_claims = 0;
+  /// Per rule (the comparisons above, split): decided and undecided.
+  struct Rule {
+    std::size_t decided = 0;
+    std::size_t unknown = 0;
+  };
+  Rule win;              // a Win(k) at depth k
+  Rule loss_here;        // a Loss(k): no df-pn proof at the node itself
+  Rule loss_successors;  // a Loss(k): the opponent's mate within k - 1 after each action
+  Rule draw_here;        // a Draw: no df-pn proof at the node itself
+  Rule draw_successors;  // a Draw: the opponent's mate not proven after every action
   std::vector<std::string> contradictions;        // the solver against df-pn
   std::vector<std::string> certificate_failures;  // df-pn's proof against E4
   void add(const DfpnTally& other);
   /// One line: the counts.
   std::string summary() const;
+  /// One line: the per-rule counts and the inner claims.
+  std::string rules_summary() const;
 };
 
 /// df-pn's answers, memoised by position and depth (a position the search's
