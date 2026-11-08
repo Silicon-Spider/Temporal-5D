@@ -209,6 +209,11 @@ class EngineScope:
         with ``registers``, every per-board register) of its boards, then the global
         registers. A board set, not a position: it can hold a history board of a timeline
         without the timeline's head (an E board of an inactive timeline)."""
+        if layout.piece_centric:
+            raise NotImplementedError(
+                "the window's scope over a piece-centric layout (A5): the window is unbuilt (M5, M16) and its joint test with "
+                "A5 waits for the pilot run (M18; BUILD_LOG issue 253)"
+            )
         boards = self.boards(src_extra=src_extra)
         per_board = layout.tokens_per_board if registers else layout.squares_per_board
         body = (boards[:, None] * layout.tokens_per_board + np.arange(per_board)[None, :]).reshape(-1)
