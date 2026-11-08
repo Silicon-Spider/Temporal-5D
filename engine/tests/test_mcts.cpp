@@ -5128,3 +5128,87 @@ TEST(mcts_h18_the_acting_player_is_in_every_key) {
     }
   }
 }
+
+// ---- The review of 2026-11-09, H2: MT-01's checker under Q3 ---------------------------------
+
+TEST(mcts_df_pn_checker_under_q3_holds_the_listing_to_every_successor) {
+  // Under Q3's play activation E4's listing keeps one state per action key: the checker's Loss
+  // and Draw successor rules decide nothing where its distinct results fall short of
+  // count_legal_successors (listing_undecided). Before the fix a false Loss(2) agreed and the true
+  // Draw was contradicted at the review's position R; at probe J df-pn's literal class disproved
+  // a mate in one the search's solver had proved, and the checker reported the solver.
+  RuleOptions q3;
+  q3.play_activates = true;
+  // A-H1's position: 6 of its 7 successors in E4's listing.
+  {
+    const GameState s = q3_two_states_one_key();
+    for (const SolverClaim::Kind kind : {SolverClaim::Kind::Loss, SolverClaim::Kind::Draw}) {
+      DfpnChecker checker;
+      DfpnTally tally;
+      SolverClaim c;
+      c.kind = kind;
+      c.distance = kind == SolverClaim::Kind::Loss ? 2 : 0;
+      checker.check(s, c, tally);
+      CHECK_EQ(tally.listing_undecided, std::size_t{1});
+      CHECK_EQ(tally.loss_successors.decided + tally.draw_successors.decided, std::size_t{0});
+    }
+  }
+  // R (White to move): two successors, the listing one; the game tree: neither a Loss within 2.
+  {
+    const GameState r = game_from_fen({"[1N:0:1:w]", "[2:0:1:b]", "[B1:0:2:w]", "[2:-1:2:w]", "[2:-1:2:b]",
+                                       "[2:-2:2:b]", "[K1:-3:2:w]", "[r1:-4:1:b]", "[2:+1:1:b]", "[1N:+1:2:w]",
+                                       "[2:+1:2:b]"},
+                                      BoardSize{2, 1}, Parity::Odd, q3);
+    for (const SolverClaim::Kind kind : {SolverClaim::Kind::Loss, SolverClaim::Kind::Draw}) {
+      DfpnChecker checker;
+      DfpnTally tally;
+      SolverClaim c;
+      c.kind = kind;
+      c.distance = kind == SolverClaim::Kind::Loss ? 2 : 0;
+      checker.check(r, c, tally);
+      std::fprintf(stderr, "  R, %s: %zu contradictions, %zu listings undecided, successors decided %zu\n",
+                   t5d::tools::claim_kind_name(kind), tally.contradictions.size(), tally.listing_undecided,
+                   tally.loss_successors.decided + tally.draw_successors.decided);
+      CHECK(tally.contradictions.empty());
+      CHECK_EQ(tally.listing_undecided, std::size_t{1});
+      CHECK_EQ(tally.loss_successors.decided + tally.draw_successors.decided, std::size_t{0});
+    }
+  }
+  // Probe J: the search's solver proves the mate in one (ply split and flat form; the proof
+  // channel on, offline - H41), and the checker finds no contradiction in its claims.
+  {
+    RuleOptions r;
+    r.activation = ActivationRule::Consecutive;
+    r.play_activates = true;
+    r.mandatory = MandatoryBoards::AllActive;
+    r.inactive_history_is_destination = false;
+    const GameState j = game_from_fen({"[Q:-0:1:w]", "[1:-0:1:b]", "[R:-0:2:w]", "[q:-0:2:b]", "[K:+0:1:w]",
+                                       "[1:+0:1:b]", "[1:+0:2:w]", "[1:+0:2:b]", "[k:+0:3:w]", "[b:+1:1:b]",
+                                       "[B:+1:2:w]", "[k:+1:2:b]", "[1:+2:1:w]", "[k:+2:1:b]", "[1:+2:2:w]",
+                                       "[k:+2:2:b]", "[1:+3:2:w]", "[1:+3:2:b]", "[1:+4:2:w]", "[K:+4:2:b]",
+                                       "[B:+4:3:w]"},
+                                      BoardSize{1, 1}, Parity::Even, r);
+    const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
+    for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::Flat}) {
+      SearchParams p = fast();
+      p.split = split;
+      p.proof_channel = true;
+      p.hunt = p.settling = false;
+      p.asset_map = false;
+      Search search(j, p);
+      search.run(*uniform, Limits{3000});
+      REQUIRE(search.root_solved());
+      const SolverClaim claim = t5d::tools::solver_claim(search, search.root());
+      std::fprintf(stderr, "  probe J, %s: the solver says %s\n", split == TurnSplit::Flat ? "flat" : "ply",
+                   t5d::tools::to_string(claim).c_str());
+      CHECK(claim.kind == SolverClaim::Kind::Win);
+      CHECK_EQ(claim.distance, 1);
+      DfpnChecker checker;
+      DfpnTally tally;
+      checker.check_search(search, tally);
+      for (const std::string& x : tally.contradictions) std::fprintf(stderr, "    %s\n", x.c_str());
+      CHECK(tally.contradictions.empty());
+      CHECK(tally.certificate_failures.empty());
+    }
+  }
+}

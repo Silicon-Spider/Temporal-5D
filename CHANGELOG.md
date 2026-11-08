@@ -10,6 +10,60 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-09 - The review of 0e7d2ed..d86f363, H2: under Q3 no verdict from E4's listing of action keys - the prover, check_certificate, loss_confirmed and MT-01's checker
+
+Under Q3's play activation two orders of one set of moves can reach two states under one action
+key, and E4's listing keeps one. The review of 2026-11-09 (H2; build-log issue 411, crediting
+A-H1, issue 169, for the search's half) found the verification layer taking it for every
+successor: at its position P0 a literal-class prover proved a false Win(3), stored a false
+Loss(2) at R'' and `check_certificate` CONFIRMED the Win(3); at probe J df-pn disproved a true
+mate in one and exported the disproof; MT-03's `loss_confirmed` and MT-01's checker trusted the
+listing too. Fixed in this lane, truth sources included, as the main loop decided - soundness
+first, by the route the search already takes:
+
+- **The prover** (`engine/src/prover.cpp`, `list_children`): its listed children are not
+  complete under play activation, for the attacker and the defender alike - no proof (AND) and
+  no disproof (OR) drawn from a listing that may miss a successor. Under Q3 the prover now proves
+  only what needs no listed defender (a mate in one) and disproves no attacker turn it listed.
+- **The certificate check** (`engine/src/certificate.cpp`): under play activation a defender's
+  listing whose distinct results fall short of `count_legal_successors`, or that cannot be
+  counted within its budget, is Undecided - never a pass.
+- **MT-03's `loss_confirmed`** (`engine/tests/test_prover.cpp`): the root's successors from the
+  brute-force reference (every move order), not E4's listing.
+- **MT-01's checker** (`engine/tools/solver_proofs.cpp`): under play activation a Loss or Draw
+  node's listing short of `count_legal_successors` decides nothing (`listing_undecided`); its
+  literal-class contradiction rule kept - with the prover fixed, a contradiction there is a
+  real defect.
+- **No result changes at a default ruleset** (play activation is Q3's alone):
+  `prover_every_ruleset_proves_only_mates`'s census per ruleset (52 rows, its own seeds) differs
+  in its two Q3 rows only - 9/27/3 and 9/29/2 proven/disproven/unknown before, 5/12/22 and
+  5/13/22 after, the whole change in its totals; of the verification layer's 60 default tests
+  the 54 that do not sum over Q3 print the same figures. Not done, as decided: successors
+  (`Unit::Successors`) for full proving power under Q3.
+- Tests: `prover_under_q3_draws_no_verdict_from_a_listing_of_action_keys` (probe J at depths 1-3,
+  never disproven, nothing exported; P0 at the default TT and a 1-entry one, no Win(3), no Loss
+  at R''), `certificate_under_q3_holds_every_defence_or_is_undecided` (P0's false Win(3), its
+  certificate built by hand: Undecided; a Q3 mate in one still confirmed),
+  `loss_confirmed_takes_every_successor_under_q3` (R'' at 2 and 4, the review's mutation-F7
+  position) - `test_prover.cpp`; `mcts_df_pn_checker_under_q3_holds_the_listing_to_every_successor`
+  (A-H1's position, R's false Loss and true Draw, probe J's solved root under the ply split and
+  the flat form) - `test_mcts.cpp`.
+- Docs: edit 301 corrected to what holds; `engine/README.md` (the prover's undecomposed turns;
+  MT-03's checks and figures; MT-01's every-ruleset figures); the MT review-fixes entry below
+  (a correction note); `docs/BUILD_LOG.md` (issue 411, edit 301, the session log).
+- Checks: engine 722 of 722 (`--werror`, 17 minutes); the Lazy SMP test x3 (prover.cpp
+  changed: 1 thread 293 / 292 / 291, 5 threads 311 / 311 / 312, load 53-87%); verify ok (exit
+  0); gate commit ok (engine differential smoke test passed, baseline 41 compared, 0 declined;
+  proof channel DISABLED). The nightly gate is owed (truth sources changed) and runs at the
+  end of the round.
+
+Spec: §11.1, §11.3, §13.1 6f and register H19, H37, H41 - edit 301 corrected (under Q3 the prover
+draws no verdict from E4's listing; a certificate whose defender listing cannot be shown
+complete is undecided); no spec text describes E4's listing under Q3, which t5d/search.hpp's
+COUNTING does. prover.cpp and certificate.cpp are truth sources (engine/CMakeLists.txt): the
+code signature moves and the nightly gate is owed at the merge into main. The proof channel
+stays off (H41).
+
 ### 2026-11-09 - The review of 0e7d2ed..d86f363, the deadline's path: a cut candidate list kept apart by the cache and the batch, a cut fallback listing re-listable, 1e9 s or more no deadline
 
 The review of `lane/engine` 0e7d2ed..d86f363 (2026-11-09; build-log issue 410) found the
@@ -101,7 +155,10 @@ issue 409):
   could not decide), a stalemate by E4's verdict (any entry but a Win used to stand in); a
   stored Draw must be E4's stalemate (it was judged by the game tree at depth 0, which answers
   Unknown wherever a legal action exists - so a false Draw counted "beyond"); "beyond" bounded
-  (1% here; 20% in the long twin, 1,526 of 10,478 measured; 10% in the new workload).
+  (1% here; 20% in the long twin, 1,526 of 10,478 measured; 10% in the new workload). (Review
+  correction, 2026-11-09: under Q3's play activation E4's listing keeps one state per action
+  key, so "after each of E4's listed actions" could miss the escape - a false Loss(2) passed;
+  the helper now takes every successor from the brute-force reference, H2, issue 411.)
 - **M3** - the TT's structural half stated and tested: `EstimateTT` refuses a proven or
   disproven entry (behaviour-preserving: the prover never offered one) and
   `t5d::detail::estimate_tt_read_back` (`t5d/prover.hpp`, tests only) lets

@@ -1019,6 +1019,7 @@ threads reach at least one thread's sum (one retry on a shared machine).
 | 2026-11-02 | issue 406 (deadlines reach the rules engine's calls: legality, the search's in-batch calls, the play loop; t5d-legality-cost) | lane/engine 0e39099 + issue 406, the tree before the commit | dev-r, 24 logical; other lanes' jobs and this lane's pytest running; load 100% before and after | 32 | 290 / 292 / 292 | 303 / 309 / 312 | none | pass x3 |
 | 2026-11-08 | MT-01/02/03 review fixes (the prover's TT refuses solved entries, behaviour-preserving; tests and tools) | lane/engine 573dc88 + the review fixes, the tree before the commit | dev-r, 24 logical; other lanes' jobs and this lane's long twins running; load 100% before and after | 32 | 292 / 291 / 289 | 301 / 299 / 304 | none | pass x3 |
 | 2026-11-09 | The review round's deadline path (H1, M1, M2: the cache's candidate digest, the flat form's re-listing, run()'s deadline through deadline_after) | lane/engine 2c12be8 + group 1, the tree before the commit | dev-r, 24 logical; load 12% before, 14% after | 32 | 293 / 293 / 293 | 316 / 314 / 315 | none | pass x3 |
+| 2026-11-09 | The review's H2 (prover.cpp's list_children not complete under Q3; certificate.cpp's Q3 defender check) | lane/engine 46a121a + H2, the tree before the commit | dev-r, 24 logical; other lanes' jobs starting; load 53% before, 87% after | 32 | 293 / 292 / 291 | 311 / 311 / 312 | none | pass x3 |
 
 ## Environment
 
@@ -5846,6 +5847,42 @@ edits 303-304; the MT-01/02/03 review fixes (2026-11-02) issue 409 (edit 301 cor
       safety stop, not E7's tight hard bound, and the flat generator stands outside it, which E7
       (or the search lane's E11, when it lands on this mechanism) must bring under any bound it
       holds tight; `t5d-play`'s header brought in line.
+411. **Under Q3's play activation E4's listing keeps one successor state per action key, and the
+    verification layer took it for every successor - a false proof that check_certificate
+    confirmed** (§11.1, §11.3, §13.1 6f; register H19, H37, H41; issues 169 - the search's half,
+    review finding A-H1, credited - 409, 410; edit 301). Found by the review of 2026-11-09 (H2):
+    the prover's list_children called a listing complete when exhaustive and uncapped, with no
+    play-activation test, and drew proofs and disproofs from it - at the review's P0 (Q3 alone, 2x1
+    boards) a literal-class prover proved a false Win(3) and stored a false Loss(2) at R'', and
+    check_certificate CONFIRMED the Win(3), its defender listing missing the omitted order (a
+    stalemate); at probe J (Q1 Consecutive, Q3, Q5 AllActive, Q20 off) df-pn's literal class
+    disproved a true mate in one and exported the disproof (H19), and MT-01's checker then reported
+    the search's correct solver; MT-03's loss_confirmed and MT-01's checker took the listing as
+    every successor too. Rare (36 gaps in 2,790 tiny Q3 positions; at least 2 false disproofs in
+    about 21,000), Q3 a non-default reading of an open question (rules.hpp), the proof channel off
+    (H41): nothing entered the solved store in play. Fixed as the main loop decided - soundness
+    first, by the conservative route the search already takes (mcts.cpp's fallback listing): (1)
+    list_children's children are not complete under play activation, for the attacker and the
+    defender alike - no proof (AND) or disproof (OR) is drawn from a listing that may miss a
+    successor; (2) check_certificate: under play activation a defender listing whose distinct
+    results fall short of count_legal_successors, or that cannot be counted within its budget, is
+    Undecided, never a pass; (3) loss_confirmed takes the root's successors from the brute-force
+    reference (every move order); (4) MT-01's checker: under play activation a Loss or Draw node's
+    listing short of count_legal_successors decides nothing (listing_undecided) - its literal-class
+    contradiction rule kept, a contradiction there now a real defect. Not done, as decided: listing
+    successors (Unit::Successors) for full proving power under Q3 - the prover there now proves
+    only what needs no listed defender (a mate in one, the defender mated at once by E4's verdict)
+    and disproves no attacker turn it listed. At the default rulesets nothing changes (play
+    activation is Q3's alone): prover_every_ruleset_proves_only_mates's census per ruleset (52
+    rows, its own seeds) differs in its two Q3 rows only - proven/disproven/unknown 9/27/3 and
+    9/29/2 before, 5/12/22 and 5/13/22 after, which is the whole change in its totals - and of the
+    verification layer's 60 default tests the 54 that do not sum over Q3 print the same figures.
+    Related and unchanged: MT-02's proof-record defence check (t5d-proof-records lists defences
+    with E4 - under Q3 a missing one would be a loud false error, never a pass); the prover tests'
+    RestrictedGame, whose E4 fallback beyond its cap could miss a state under Q3 (a reference for
+    tests); Guard's reading of a literal-class disproof (none is now drawn from a listed attacker
+    turn under Q3). prover.cpp and certificate.cpp are truth sources: the code signature moves and
+    the nightly gate is owed at the merge (M5).
 
 402. **6f's settling scans: their wrapper is not on main** (§13.1 6f "verify the proof-export
     invariant under TT churn for Hunt and the settling scans (§11.3)"; §11.4 "df-pn at the
@@ -8628,13 +8665,18 @@ struck through, where nothing of it is left to apply); the others stand as writt
     TT, at one thread and at five, on the constructed and random roots and on a workload where
     the TT carries weight (a quarter of the roots' searches change, no status), every proof
     reaches the solved store and every disproof the disproof store at its class and depth - or
-    the root's stored game fact, checked (a Loss the game tree confirms after each of E4's listed actions, a stalemate by E4) -
-    at once; a stored proof is read only where its distance fits the depth; a fresh search
-    over the stores answers with no expansion; Hunt's mates are found with complete, certified
-    lines under the same churn, which changes its searches, and its prover never writes a
-    disproof. Through the settling scans' wrapper: not yet (E10 merged 2026-11-01; issue
-    402)." Why: issues 402, 403, 409 (the review: the first wording claimed more than the
-    test held - the fact behind a disproof unchecked, the churn nearly without effect).
+    the root's stored game fact, checked (a Loss the game tree confirms after every successor,
+    the brute-force reference's; a stalemate by E4) - at once; a stored proof is read only
+    where its distance fits the depth; a fresh search over the stores answers with no
+    expansion; Hunt's mates are found with complete, certified lines under the same churn,
+    which changes its searches, and its prover never writes a disproof. Under Q3's play
+    activation, where E4's listing of actions can miss a successor state, the prover draws
+    neither a proof nor a disproof from it, and a certificate whose defender listing it cannot
+    show complete is undecided (corrected after the review of 2026-11-09, H2). Through the
+    settling scans' wrapper: not yet (E10 merged 2026-11-01; issue 402)." Why: issues 402, 403,
+    409 (the review: the first wording claimed more than the test held - the fact behind a
+    disproof unchecked, the churn nearly without effect) and 411 (Q3's listing taken for every
+    successor).
 
 302. **§11.1 and register H41 (the oracle cross-check's engine side as built)**: now - §11.1:
     "its proofs are cross-checked ... against the oracles' mate verdicts where they exist".
@@ -9354,3 +9396,14 @@ struck through, where nothing of it is left to apply); the others stand as writt
   differential smoke test passed, baseline 41 compared, 0 declined; proof channel DISABLED). The
   long twins, the nightly gate and the engine-driving pytest files run at the end of the round, as
   the main loop's checks list them.
+- **2026-11-09 - The review's H2: under Q3 no verdict from E4's listing of action keys**
+  (`lane/engine`; issue 411, edit 301 corrected). The prover's `list_children` not complete under
+  play activation; `check_certificate` Undecided where a Q3 defender listing falls short of
+  `count_legal_successors`; `loss_confirmed` from the brute-force reference; MT-01's checker
+  `listing_undecided` on a short Q3 listing. Truth sources: prover.cpp, certificate.cpp - the
+  nightly is owed. At the default rulesets nothing changes (the per-ruleset census differs in its
+  two Q3 rows only). Checks: engine 722 of 722 (`--werror`, 17 minutes); the Lazy SMP test x3
+  (prover.cpp changed: 1 thread 293 / 292 / 291, 5 threads 311 / 311 / 312, load 53-87%); verify ok
+  (exit 0); gate commit ok (engine differential smoke test passed, baseline 41 compared, 0 declined;
+  proof channel DISABLED). The nightly gate is owed (truth sources changed) and runs at the end of
+  the round.

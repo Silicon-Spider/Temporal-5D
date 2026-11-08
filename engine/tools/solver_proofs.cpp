@@ -524,6 +524,30 @@ void DfpnChecker::check(const GameState& state, const SolverClaim& claim, DfpnTa
     contradict("finds no legal action (E4)");
     return;
   }
+  // Under Q3's play activation the listing keeps one successor state per
+  // action key - two orders of one set of moves can reach two (t5d/search.hpp's
+  // COUNTING) - so its results are every successor only where their distinct
+  // count reaches count_legal_successors; short, or uncounted, the successor
+  // rules decide nothing (listing_undecided). Elsewhere an exhaustive listing
+  // of action keys reaches every successor, one per key. Without it a false
+  // Loss(2) agreed and a true Draw was contradicted (the review of 2026-11-09,
+  // H2; build-log issue 411).
+  if (state.rules().play_activates) {
+    std::vector<const GameState*> distinct;
+    for (const LegalAction& act : list.actions) {
+      if (std::none_of(distinct.begin(), distinct.end(), [&](const GameState* x) {
+            return x->zobrist() == act.result.zobrist() && same_position(*x, act.result);
+          })) {
+        distinct.push_back(&act.result);
+      }
+    }
+    SearchBudget cb = SearchBudget::nodes(options_.listing_nodes);
+    const ActionCount c = count_legal_successors(state, distinct.size() + 1, Detector::Hypercuboid, cb);
+    if (!c.known() || c.count != distinct.size()) {
+      ++tally.listing_undecided;
+      return;
+    }
+  }
   if (claim.kind == SolverClaim::Kind::Loss) {
     for (const LegalAction& act : list.actions) {
       const Answer a = ask(act.result, claim.distance - 1, tally);
