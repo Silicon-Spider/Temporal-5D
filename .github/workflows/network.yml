@@ -56,16 +56,17 @@ jobs:
       # The engine's shared library, for the binding's tests (python/tests/engine/).
       # They require it here (T5D_REQUIRE_ENGINE below): a library that is missing, or
       # that the binding refuses (a layout it does not mirror), fails the job instead of
-      # skipping the tests. The library and the gate adapter only, to keep the job
+      # skipping the tests. The library and two executables only, to keep the job
       # short: t5d-gate replays the records of the end-to-end games
-      # (tests/engine/test_netplay.py), which skip without it.
-      - name: Build the engine library and the gate adapter
+      # (tests/engine/test_netplay.py), which skip without it, and t5d-audit reads a
+      # game's decision log (tests/engine/test_decision_log.py), which fails without it.
+      - name: Build the engine library, the gate adapter and the decision-log reader
         working-directory: .
         env:
           CXX: g++-13
         run: |
           cmake -S engine -B build/engine -G Ninja -DCMAKE_BUILD_TYPE=Release
-          cmake --build build/engine --target t5d t5d-gate --parallel
+          cmake --build build/engine --target t5d t5d-gate t5d-audit --parallel
 
       - name: Lint
         if: matrix.shard == 0
