@@ -140,6 +140,57 @@ review round, issues 603 and 604, the session log.
   children a boost raised. Every allocation of the delivery that expands a fresh search's
   root, tree and graph (501 each): count and recount agree after each fault and after
   searching on (604 disagreements in each under M28).
+- **Found in the round** (`docs/BUILD_LOG.md`): **issue 603** - this machine's compiler,
+  MSYS2's g++ 16.2, assumes by default that `operator new` has no side effects
+  (`-fassume-sane-operators-new-delete`) and merges `std::deque::emplace_back`'s two updates
+  of its end across the chunk allocation that follows a map reallocation: if that allocation
+  throws, the deque's end is left in the freed map (a 40-line reproducer; correct with
+  `-fno-assume-sane-operators-new-delete`; CI's g++ 13 and 14 are unaffected). Found as a heap
+  corruption in the Hunt prover's tree (`~Prover`) when P13's fault fell inside Hunt; the
+  test leaves Hunt's own allocations out, and the build flag is the main loop's to decide.
+  **Issue 604** - a `std::bad_alloc` inside a synchronous ladder job is counted and reported
+  as "a contradiction in the rules code" (`ladder.cpp`); recorded, not changed, since a test
+  of it needs faults inside a job's prover, which risk issue 603's corruption on this machine.
+- **The review's 24 surviving mutants, re-run** on a fresh copy of the fixed tree with the
+  review's runner (its first tier now the round's tests, the expected killer first, stopping
+  at the first kill): all 24 killed, none equivalent. M03 and M04 by P1
+  (`mcts_fault_counts_describe_the_nodes_made`); M05 and M08 by P9
+  (`mcts_fault_key_collisions_count_the_nodes_made` - M05 through `check_invariants`' memory
+  sum, L7); M09 by P7 (`mcts_fault_every_injected_fault_surfaces`); M11, M14, M15 and M16 by P6
+  (`mcts_fault_an_undone_expansion_leaves_a_fresh_leaf` - M11 and M14 through the flat-state and
+  per-node memory checks, L7); M25 by P3c (`..._a_failed_exhausting_pull_leaves_the_node_incomplete`);
+  M26 by P2 (`mcts_fault_flat_turns_counted_and_drops_reported`); M27 by P2b
+  (`mcts_fault_fallback_listings_and_stops_count_the_expansions_kept`); M30 and M31 by P3
+  (`mcts_fault_a_failed_pull_leaves_its_node_as_it_found_it`, through the per-node memory
+  check); M36 and M38 by P12 (`mcts_the_flat_roots_steering_tables`); M41 by P5
+  (`mcts_fault_a_failed_reroot_with_the_ladder_on`); M43, M44 and M47 by P8
+  (`mcts_the_graph_after_a_reroot_finds_its_nodes`, through the table check, M3); M45 by P10
+  (`mcts_a_reroot_under_key_collisions_keeps_the_first_node_in_the_table`); M46 and M50 by P4
+  (`mcts_fault_a_root_hook_that_throws_after_the_reroot`). M28 survived every test of the round
+  as first committed, the groups included (160 of 160), and is killed by the recount test
+  added for it (`mcts_fault_boosted_turns_recounted_at_the_root`). The round's own fixes, each
+  against the lane's pre-round code (`mcts.cpp`, `ladder.cpp` and `assets.cpp` at 334660d): the
+  M1 tests (C++ and C API: "checked while a batch is waiting"), both L1 tests (6 searches
+  unlike the twin; "an inherited node evaluated"), the L2 test (4 deliveries with visits and
+  playouts apart), the L3 test (a husk), P2b (2,223 stops off) and the L12 tests (an asset
+  900 where 20,000 is right; faults swallowed) fail there; P8 and P10, regression tests of
+  c61ed3a's re-root, pass there as they should.
+- **The normal path** is bit-identical to c8a9c49's on the review's three twins, run on the
+  fixed tree: the spec pass's probe (1,850 lines), the correctness pass's trace (9,048 lines,
+  `check_invariants` with its new checks included) and the mutation pass's twin (2,137 lines).
+- *Correction to the entry below:* "each part of the fix, taken out alone, fails one" did not
+  hold - 24 of the review's 50 mutants of c61ed3a survived the lane's tests (all are killed
+  now, above). Also corrected: the re-root's "whole or not at all" did not cover the ladder's
+  verdicts taken and not recorded (L3), `advance_action` was not atomic past its first re-root
+  (L4), and the tree form was not exception-safe (L1).
+- `engine/README.md`: a line of L3's new text reflowed (it began with "- ", which Markdown
+  reads as a list item).
+- Checks: the engine at `--werror` (MinGW g++ 16.2, no warning), `t5d-tests` 718 of 718; each commit
+  of the round built at `--werror` on a copy and its tests run there before it was committed
+  (M3's and L7's with every round test present); ruff clean (CI's invocation, in `python/`);
+  verify ok; gate --tier commit: oracle layer ok, SMOKE TEST - PASSED (41 records compared, 0
+  declined; ftxi 8256 of 8256 and notation 3012 of 3012 reproduced; calibration 1.23x), proof
+  channel DISABLED. `prover.cpp` and `scanner.cpp` are unchanged: no Lazy SMP run is owed.
 
 Spec: none edited or proposed. No part of the spec describes exception safety, these tests,
 or the ladder's and the asset map's bookkeeping. The round brings the build further in line
@@ -203,7 +254,10 @@ searching on after faults in delivery. `t5d/mcts.hpp`, `t5d/capi_search.h` and
 Python test's aggregate split by main's test-shard hook, found running the suite in two
 shards); the Lazy SMP timing rows; the session log. *(Review correction, 2026-11-09: at the
 merge of main 05afde5 the lane's issue 601 gave way to main's own issue 601, which records it
-and its fix, e15f173; issue 535, now on main, is marked resolved by issue 600.)*
+and its fix, e15f173; issue 535, now on main, is marked resolved by issue 600.)* *(Review
+round, 2026-11-09, the entry above: "each part of the fix, taken out alone, fails one" did
+not hold - 24 of the review's 50 mutants survived; and the re-root's "whole or not at all",
+`advance_action`'s atomicity and "under every split" were narrowed or made true there.)*
 
 Spec: none edited or proposed. The change brings the build in line with §15.4's invariants
 (visit counts consistent through backup, virtual loss released, re-rooting keeping only

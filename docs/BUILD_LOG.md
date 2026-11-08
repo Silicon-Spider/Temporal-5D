@@ -7116,6 +7116,21 @@ superseded or made moot says so; nothing is deleted.
         white-box recount); a new test recounts `asset_boosted_edges` through the public
         interface (the root steered alone, widening off: the root children a boost raised) at
         every allocation of the root's expansion (501).
+      - L14: done at the merge of main 05afde5 (334660d).
+      - **Correction** to "Each part of the fix taken out alone ... its test failing" above: 24 of
+        the review's 50 mutants of c61ed3a's code survived the lane's tests. Re-run on a fresh
+        copy of the fixed tree with the review's runner (first tier the round's tests, the
+        expected killer first): all 24 killed, none equivalent - by P1 (M03, M04), P9 (M05, M08),
+        P7 (M09), P6 (M11, M14, M15, M16), P3c (M25), P2 (M26), P2b (M27), P3 (M30, M31), P12
+        (M36, M38), P5 (M41), P8 (M43, M44, M47), P10 (M45), P4 (M46, M50), and M28 - which
+        survived the round's tests as first committed, the groups included - by the recount
+        test added for it. The round's own fixes fail their tests on the pre-round code (M1, L1,
+        L2, L3, L5's P2b, L12); the normal path is bit-identical to c8a9c49's on the review's
+        three twins (1,850, 9,048 and 2,137 lines).
+      - Checks: engine `--werror` (no warning), t5d-tests 718 of 718; every commit built and its tests run
+        on a copy first; ruff clean; verify ok; gate commit ok (SMOKE TEST - PASSED, 41
+        compared, 0 declined; ftxi 8256/8256, notation 3012/3012; calibration 1.23x; proof
+        channel DISABLED); no Lazy SMP run owed (`prover.cpp`, `scanner.cpp` unchanged).
 603. **This machine's g++ 16.2 breaks `std::deque`'s exception safety under its default
     `-fassume-sane-operators-new-delete`** (found by `lane/fix535`, 2026-11-09, in issue 600's
     review round; not a defect in the engine's source). With `operator new` assumed free of
@@ -9074,4 +9089,24 @@ struck through, where nothing of it is left to apply); the others stand as writt
   reaches main; `dropped_generators` is not in the C summary; issue 601.
   *At the merge of main 05afde5 (2026-11-09): the lane's issue 601 is main's issue 601, fixed by
   e15f173 (shards of whole test files), its entry kept and the lane's facts folded in; issue 535
-  (now on main) marked resolved by issue 600.*
+  (now on main) marked resolved by issue 600.* *In the review round (next entry): "each part of
+  the fix taken out alone fails one" did not hold - 24 of the review's 50 mutants survived;
+  all are killed now.*
+- **2026-11-09 - issue 535's review round** (`lane/fix535`; main 05afde5 merged first, 334660d;
+  issues 600, 603 and 604; no spec edit). The review of c61ed3a (no HIGH, three MEDIUM, fourteen
+  LOW) and the main loop's decisions on it: every finding fixed as decided, a commit per group -
+  L8, L12, M1, M2 with L6/L9/L10's tests, M3, L1, L2, L3, L4 with L5, L7, L11, L13, and L6
+  again (the recount the survivors' re-run asked for); L14 at the merge. Code:
+  `src/mcts.cpp` (M1, M3's and L7's checks, L1, L2, L3, L5, L7), `src/ladder.cpp` (L3),
+  `src/assets.cpp` (L12); documents: `t5d/mcts.hpp`, `t5d/capi_search.h`, `engine/README.md`,
+  the Python docstring; tests: new `test_mcts_faults.cpp` (the review's probes P1-P13 and the
+  findings' tests), `test_mcts_memory.cpp`, `test_capi_search.cpp`, `test_assets.cpp`,
+  `test_alloc.cpp`. The 24 surviving mutants all killed on the fixed tree (issue 600's review
+  round has the table); the normal path bit-identical to c8a9c49's on the review's three twins.
+  Found: issue 603 (g++ 16.2's default `-fassume-sane-operators-new-delete` breaks
+  `std::deque`'s exception safety; for the main loop: the build flag) and issue 604. Checks:
+  engine `--werror` (no warning), t5d-tests 718 of 718; every commit built and its tests run
+  on a copy first; ruff clean; verify ok; gate commit ok (SMOKE TEST - PASSED, 41
+  compared, 0 declined; ftxi 8256/8256, notation 3012/3012; calibration 1.23x; proof
+  channel DISABLED); no Lazy SMP run owed (`prover.cpp`, `scanner.cpp` unchanged).
+  For the main loop: issue 603's build flag; issue 604's fix once 603 is settled.
