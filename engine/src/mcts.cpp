@@ -769,6 +769,9 @@ struct Search::Impl {
   // visits when it became so ("visits until the decision stabilises", §8.6).
   std::size_t best_edge_ = kNoEdge;
   std::uint32_t best_since_ = 0;
+  // Stage E11: the hard bound inside a batch (Search::set_deadline) - the
+  // rules engine's calls below stop at it, answering Unknown (H37).
+  std::optional<std::chrono::steady_clock::time_point> deadline_;
   std::vector<Step> path_;
   std::size_t tree_bytes_ = 0;  // the nodes' counts (Node::bytes), summed
 
@@ -1054,6 +1057,19 @@ struct Search::Impl {
     return n.moves_made == moves_made && detail::same_state(n.state, s, compare_origins()) ? it->second : kNoNode;
   }
 
+  // Stage E11: a budget, or legality options, with the deadline's time left
+  // (none set: unchanged).
+  void timed(SearchBudget& budget) const {
+    if (!deadline_) return;
+    budget.max_time = std::max(std::chrono::nanoseconds{0}, std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                                                *deadline_ - std::chrono::steady_clock::now()));
+  }
+  LegalityOptions timed(const LegalityOptions& options) const {
+    LegalityOptions o = options;
+    if (deadline_) o.deadline = deadline_;
+    return o;
+  }
+
   // A turn start: the game's end, by E4's exhaustive detector only (H37), or
   // the turn cap's convention (I11).
   void classify(Node& n) {
@@ -1061,6 +1077,7 @@ struct Search::Impl {
     SearchBudget budget;
     budget.max_nodes = params_.mate_nodes;
     budget.max_bytes = params_.mate_bytes;
+    timed(budget);
     const auto t0 = std::chrono::steady_clock::now();
     const MateResult r = detect_mate(n.state, params_.detector, budget);
     stats_.seconds_mate += detail::seconds_since(t0);
@@ -1207,7 +1224,7 @@ struct Search::Impl {
     const auto t0 = std::chrono::steady_clock::now();
     ExpandOptions o = params_.expand;
     o.legal_moves = params_.legal_moves_only;
-    o.legality = params_.legality;
+    o.legality = timed(params_.legality);
     expand(n.state, o, out, n.moves_made);  // A6: the node's count, from its path
     stats_.seconds_expand += detail::seconds_since(t0);
   }
@@ -1634,6 +1651,7 @@ struct Search::Impl {
     SearchBudget budget;
     budget.max_nodes = params_.mate_nodes;
     budget.max_bytes = params_.mate_bytes;
+    timed(budget);
     const ActionList list = list_legal_actions(n.state, params_.flat_fallback, params_.detector, budget);
     std::vector<std::pair<double, std::size_t>> order;
     for (std::size_t i = 0; i < list.actions.size(); ++i) order.emplace_back(f.policy->score_of(list.actions[i].moves), i);
@@ -2173,7 +2191,7 @@ struct Search::Impl {
       o.window_k = 0;
       o.square_features = SquareFeatures::None;
       o.legal_moves = params_.legal_moves_only;
-      o.legality = params_.legality;
+      o.legality = timed(params_.legality);
       expand(nodes_[id].state, o, inherit_x_, nodes_[id].moves_made);
       stats_.seconds_expand += detail::seconds_since(t0);
     }
@@ -2618,7 +2636,7 @@ struct Search::Impl {
       if (params_.verify_unknown) {
         const Edge& e = nodes_[cur].edges[ei];
         if (e.unknown && !e.verified &&
-            verify_edge(cur, ei, params_.verify_legality) == MoveLegality::Illegal) {
+            verify_edge(cur, ei, timed(params_.verify_legality)) == MoveLegality::Illegal) {
           continue;
         }
       }
@@ -3953,6 +3971,31 @@ double Search::root_cpuct() const noexcept {
 }
 
 std::uint32_t Search::root_best_since() const noexcept { return impl_->best_since_; }
+
+void Search::set_deadline(std::optional<std::chrono::steady_clock::time_point> deadline) noexcept {
+  impl_->deadline_ = deadline;
+}
+std::optional<std::chrono::steady_clock::time_point> Search::deadline() const noexcept { return impl_->deadline_; }
+
+std::optional<std::array<float, kValueBins>> Search::root_child_value(std::size_t index) const {
+  const Impl& s = *impl_;
+  const std::vector<std::size_t> edges = s.root_edges();
+  if (index >= edges.size()) {
+    throw std::invalid_argument("root_child_value: root child " + std::to_string(index) + " of " +
+                                std::to_string(edges.size()));
+  }
+  const Node& r = s.nodes_[s.root_];
+  const Edge& e = r.edges[edges[index]];
+  if (!s.cache_ || e.child == kNoNode) return std::nullopt;
+  const Node& n = s.nodes_[e.child];
+  if (!n.has_eval || n.inherited) return std::nullopt;
+  const Evaluation* ev = s.cache_->find(n.key, n.moves_made, s.epoch_, n.state, s.compare_origins(), false);
+  if (ev == nullptr || !ev->value) return std::nullopt;
+  std::array<float, kValueBins> out = *ev->value;
+  // The child's acting player's view, turned to the root player's.
+  if (detail::sign_between(r, n) < 0) std::reverse(out.begin(), out.end());
+  return out;
+}
 
 std::uint64_t Search::digest() const { return impl_->digest(); }
 void Search::check_invariants() const { impl_->check_invariants(); }

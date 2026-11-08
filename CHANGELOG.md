@@ -10,6 +10,67 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-09 - E11: time management - the moves-left integral, 6o's arms as switches, the stop/extend table, the hard bound; no root-scan reserve
+
+Register E7 (committed, class R; spec §8.6) built as step 2's E11 on `lane/search`, every
+unstated number a named placeholder with a build-log spec issue (452-470).
+
+- **`engine/include/t5d/timeman.hpp`, `engine/src/timeman.cpp`** (new): a `TimeManager` per
+  clock - `begin` plans a decision (the soft bound in evaluations, the hard bound in wall-clock
+  seconds), `check` between batches stops, goes on or extends, `end` records the root's value -
+  and `run_timed`, which drives a `Search` with it in slices of `batch_size` playouts.
+  Allocation: §8.6's moves-left integral on a cost model - the dense FLOP shape of
+  `python/t5d/net/cost.py`, written in-house, plus a fixed share (0.05) that does not grow with
+  N, its scale measured online (the first observation replaces the prior); our actions half the
+  turns moves-left predicts (floored at 20, 40 when none is given), N advanced by M22's moves per
+  turn; under the ply split and the tree form the action's plan split over its decisions (A6).
+  6o's arms as switches: `allocator` (`Integral`, `FlatEvals`, `FlatWallClock`) and `signals`
+  (the table on/off). The table: smart pruning, KLDGain, a solved root (only with the proof
+  channel - H41), overlap with churn (the top two children's own categoricals from the evaluation
+  cache, `Search::root_child_value`), volatility (6m's signal), falling eval (rising never
+  extends), instability; the spiral guard - each extension kind once a decision, a share of the
+  original plan, all capped - never past the hard bound. The hard bound: a multiple of the plan
+  falling from 5 at 50 boards to 2 at 400, capped at a quarter of the clock; no batch starts that
+  would end past it. The model clock (no clock given): a decision's work at the model's price - a
+  node-limited timed search, bit-reproducible (H15). Not built: a root-scan reserve (its consumer,
+  Guard, is adopted nowhere - issue 306); the proof source of volatility is a hook, off, refused
+  unless the search's proof channel is on (issue 180 is open: time management reads no proof).
+- **`Search::set_deadline`** (`t5d/mcts.hpp`) and **`LegalityOptions::deadline`**
+  (`t5d/legal.hpp`, new): the hard bound inside a batch - the turn starts' mate checks, the flat
+  form's fallback listing, the legality classification and the verification of unknown edges
+  stop at it, Unknown, never a verdict (H37). Unset (the default) nothing changes.
+- **Match play's clock** (`PlayParams::clock`, off; `GameEnd::Flag`; `GameRecord`'s clock
+  counts): a per-side clock (base plus an increment per action - a reading, issue 456), each
+  side's decisions run by its own time manager; a decision charged its whole wall time (or its
+  model time); a flag loses on time, result `*`. Refused in self-play. t5d-play: `--time BASE
+  --increment INC --allocator ARM --no-signals --model-clock` (match play only).
+- **C API** (`t5d/capi_search.h`): `t5d_time_params` (+ `t5d_time_params_default`),
+  `t5d_time_context`, `t5d_time_plan`, `t5d_time_verdict`, `t5d_timeman_new/destroy/begin/check/
+  end/new_game`, `t5d_search_set_deadline`, `t5d_search_run_timed`; the four structs in
+  `t5d_search_layout`; `t5d_search_params` unchanged (`expand` still last). **Python**
+  (`python/t5d/engine/`): the ctypes mirror (`capi.py`), `search.TimeManager`, `time_params`
+  (`proof_volatility` refused) and `Search.set_deadline` / `run_timed`, `evaluator.
+  run_timed_search` (Python's loop builds `run_timed`'s tree), netplay's match clock
+  (`PlayConfig.time`, `increment`, `allocator`, `signals`, `model_clock`, `time_overrides`;
+  `--time` on the command line).
+- **Tests**: `engine/tests/test_timeman.cpp` (new: §8.6's table by hand - 3.4x, 0.48% against
+  1.00%, 3.1x - the plans by hand, the arms, the hard bound tightening with N, every stop and
+  extension case, the spiral guard at 500 boards, the hard bound on a virtual clock, on the wall
+  clock under load and inside a batch at 400 boards, the model clock's reproducibility, the final
+  choice among the eligible children, match play's clock end to end); `test_capi_search.cpp`
+  (the C step loop builds `run_timed`'s tree; parameters, refusals, layouts);
+  `test_play_exe.cpp` (`--time` games replay through the gate); `test_selfplay.cpp` (the new end);
+  `python/tests/engine/test_time_management.py` (new; the cost shape checked against
+  `net/cost.py`'s `dense_flops`, the brief's item 10).
+- **Docs**: the engine README's "Stage E11: time management"; `docs/BUILD_LOG.md` - register E7
+  built, H14's note, issue 180's note, issues 452-470, edits 331-338, the session log, the Lazy
+  SMP test's runs.
+
+Spec: §8.6 (allocation, the stop/extend table, Guards), §11.4 (knock-ons), §12.3 (the match
+configuration), §13.1 (6o), §15.4 (invariants); register E7, H14, H41, H42, I3, M13, M22. Proposed
+edits 331-338 (and edits 203, 204, already proposed); issues 452-470, 180 and 306 (readings
+built). No measured figure.
+
 ### 2026-11-09 - The network job's three Linux-only failures: t5d-audit built, two tolerances fitted to what they measure
 
 Once sharded (issue 601), the network job ran its whole suite on Linux. It failed the same three

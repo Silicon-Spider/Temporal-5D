@@ -343,6 +343,12 @@ target_sources(t5d-tests PRIVATE tests/test_audit.cpp)
 add_dependencies(t5d-tests t5d-audit)
 target_compile_definitions(t5d-tests PRIVATE "T5D_AUDIT_EXE=\"$<TARGET_FILE:t5d-audit>\"")
 
+# Stage E11: time management (register E7 with 6o's arms as switches; no
+# root-scan reserve while Guard is offline) - the allocator, the stop/extend
+# table, the hard bound, run_timed; match play's clock.
+target_sources(t5d_core PRIVATE src/timeman.cpp)
+target_sources(t5d-tests PRIVATE tests/test_timeman.cpp)
+
 # D2's tree form against the ply split on recorded games' turn starts:
 # evaluation counts (docs/MEASUREMENTS.md). Not one of the truth's sources.
 add_executable(t5d-tree-count tools/t5d_tree_count.cpp)

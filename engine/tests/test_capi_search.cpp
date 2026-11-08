@@ -21,6 +21,7 @@
 #include "t5d/capi.h"
 #include "t5d/capi_search.h"
 #include "t5d/mcts.hpp"
+#include "t5d/timeman.hpp"
 #include "t5d/variants.hpp"
 #include "test_framework.hpp"
 
@@ -1209,4 +1210,174 @@ TEST(capi_search_shares_its_cache_and_runs_within_budgets) {
   CHECK_EQ(v, sizeof(t5d_search_limits));
   REQUIRE_EQ(t5d_search_layout("t5d_search_summary", "last_stop", &v), T5D_OK);
   CHECK_EQ(v, offsetof(t5d_search_summary, last_stop));
+}
+
+// ---- stage E11: time management through the C API ------------------------------------
+
+namespace {
+
+struct TimeDeleter {
+  void operator()(t5d_timeman* tm) const noexcept { t5d_timeman_destroy(tm); }
+};
+using TimeHandle = std::unique_ptr<t5d_timeman, TimeDeleter>;
+
+TimeHandle new_timeman(const t5d_time_params* p = nullptr) {
+  t5d_timeman* tm = nullptr;
+  REQUIRE_EQ(t5d_timeman_new(p, &tm, nullptr), T5D_OK);
+  return TimeHandle(tm);
+}
+
+}  // namespace
+
+TEST(capi_search_time_management_drives_the_step_api_as_run_timed_does) {
+  // A step-API driver - check between slices of batch_size playouts, the model
+  // clock (elapsed NaN) - builds the tree run_timed builds with the same
+  // answers, decision after decision (H15's digest), with the same plans and
+  // stops; Hashed's moves-left and categoricals reach the plan and the signals.
+  for (const int32_t split : {T5D_SPLIT_BOARD_MOVE, T5D_SPLIT_FLAT}) {
+    const Game g = variant_game("Standard - Two Timelines");
+    t5d_search_params p = quick_params();
+    p.split = split;
+    p.batch_size = 4;
+    p.hunt = 0;
+    p.settling = 0;
+    p.asset_map = 0;
+    const SearchHandle s = new_search(g.get(), p);
+    const TimeHandle tm = new_timeman();
+
+    t5d::mcts::SearchParams q;
+    q.split = split == T5D_SPLIT_FLAT ? t5d::mcts::TurnSplit::Flat : t5d::mcts::TurnSplit::BoardMove;
+    q.batch_size = 4;
+    q.hunt = false;
+    q.settling = false;
+    q.asset_map = false;
+    q.expand.square_features = t5d::SquareFeatures::None;
+    t5d::mcts::Search reference(t5d::variant_start(*t5d::find_variant("Standard - Two Timelines")), q);
+    t5d::mcts::TimeManager ref_tm;
+    Hashed ev;
+    t5d_time_context ctx{2.0, 0.05, std::nan("")};
+    for (int decision = 0; decision < 3; ++decision) {
+      t5d_time_plan plan;
+      REQUIRE_EQ(t5d_timeman_begin(tm.get(), s.get(), &ctx, &plan, nullptr), T5D_OK);
+      t5d_time_verdict v{};
+      for (int slice = 0; slice < 100000; ++slice) {
+        REQUIRE_EQ(t5d_timeman_check(tm.get(), s.get(), std::nan(""), &v, nullptr), T5D_OK);
+        if (v.stop != T5D_TIME_STOP_NONE) break;
+        t5d_search_summary info;
+        REQUIRE_EQ(t5d_search_info(s.get(), &info), T5D_OK);
+        drive_hashed(s.get(), info.playouts + p.batch_size, p.batch_size);
+      }
+      REQUIRE_EQ(t5d_timeman_end(tm.get(), s.get(), nullptr), T5D_OK);
+      const t5d::mcts::TimeContext rctx{ctx.remaining_seconds, ctx.increment_seconds, ctx.moves_left_turns};
+      const t5d::mcts::TimedRun r = t5d::mcts::run_timed(reference, ev, ref_tm, rctx);
+      CHECK_EQ(plan.soft_evaluations, r.plan.soft_evaluations);
+      CHECK_EQ(plan.hard_seconds, r.plan.hard_seconds);
+      CHECK_EQ(plan.moves_left_given, decision == 0 ? 0 : 1);  // the carried root's network moves-left
+      CHECK_EQ(v.stop, static_cast<int32_t>(r.verdict.stop));
+      CHECK_EQ(v.target_evaluations, r.verdict.target_evaluations);
+      CHECK_EQ(v.extensions, r.verdict.extensions);
+      std::uint64_t digest = 0;
+      REQUIRE_EQ(t5d_search_digest(s.get(), &digest), T5D_OK);
+      CHECK_EQ(digest, reference.digest());
+      size_t index = 0;
+      int32_t reason = 0;
+      REQUIRE_EQ(t5d_search_choose(s.get(), &index, &reason, nullptr), T5D_OK);
+      CHECK_EQ(index, reference.choose().index);
+      REQUIRE_EQ(t5d_search_advance(s.get(), index, nullptr), T5D_OK);
+      reference.advance(index);
+      ctx.remaining_seconds -= r.seconds;
+    }
+    // t5d_search_run_timed: the same with a built-in evaluator.
+    const SearchHandle t = new_search(g.get(), p);
+    const TimeHandle tm2 = new_timeman();
+    t5d_time_plan plan;
+    t5d_time_verdict verdict;
+    REQUIRE_EQ(t5d_search_run_timed(t.get(), T5D_EVALUATOR_RANDOM, 3, tm2.get(), &ctx, 0, &plan, &verdict, nullptr),
+               T5D_OK);
+    CHECK(verdict.stop != T5D_TIME_STOP_NONE);
+    t5d::mcts::Search same(t5d::variant_start(*t5d::find_variant("Standard - Two Timelines")), q);
+    t5d::mcts::TimeManager tm3;
+    const std::unique_ptr<t5d::mcts::Evaluator> random =
+        t5d::mcts::make_evaluator(t5d::mcts::BuiltinEvaluator::Random, 3);
+    const t5d::mcts::TimedRun r = t5d::mcts::run_timed(
+        same, *random, tm3, t5d::mcts::TimeContext{ctx.remaining_seconds, ctx.increment_seconds, ctx.moves_left_turns});
+    std::uint64_t digest = 0;
+    REQUIRE_EQ(t5d_search_digest(t.get(), &digest), T5D_OK);
+    CHECK_EQ(digest, same.digest());
+    CHECK_EQ(verdict.stop, static_cast<int32_t>(r.verdict.stop));
+    CHECK_EQ(plan.soft_evaluations, r.plan.soft_evaluations);
+    CHECK_EQ(verdict.scale, tm3.scale());
+  }
+}
+
+TEST(capi_search_time_management_parameters_and_refusals) {
+  t5d_time_params d;
+  t5d_time_params_default(&d);
+  const t5d::mcts::TimeParams cpp;
+  CHECK_EQ(d.allocator, T5D_ALLOCATOR_INTEGRAL);
+  CHECK_EQ(d.signals, 1);
+  CHECK_EQ(d.proof_volatility, 0);  // the proof hook: off
+  CHECK_EQ(d.hard_fraction, cpp.hard_fraction);
+  CHECK_EQ(d.boards_per_action[2], cpp.boards_per_action[2]);
+  CHECK_EQ(d.boards_per_action_ranges[1], cpp.boards_per_action_ranges[1]);
+  CHECK_EQ(d.instability_min_visits, cpp.instability_min_visits);
+  t5d_timeman* bad = nullptr;
+  t5d_time_params p = d;
+  p.allocator = 7;
+  CHECK_EQ(t5d_timeman_new(&p, &bad, nullptr), T5D_ERR_ARGUMENT);
+  p = d;
+  p.hard_fraction = 1.5;
+  CHECK_EQ(t5d_timeman_new(&p, &bad, nullptr), T5D_ERR_ARGUMENT);
+  p = d;
+  p.signals = 2;
+  CHECK_EQ(t5d_timeman_new(&p, &bad, nullptr), T5D_ERR_ARGUMENT);
+  CHECK(bad == nullptr);
+  CHECK_EQ(t5d_timeman_new(nullptr, nullptr, nullptr), T5D_ERR_ARGUMENT);
+  // The proof hook: refused at a search without the proof channel (issue 180).
+  p = d;
+  p.proof_volatility = 1;
+  const TimeHandle hook = new_timeman(&p);
+  const Game g = variant_game("Standard");
+  const SearchHandle s = new_search(g.get(), quick_params());
+  const t5d_time_context ctx{10.0, 0.0, std::nan("")};
+  t5d_time_plan plan;
+  char* message = nullptr;
+  CHECK_EQ(t5d_timeman_begin(hook.get(), s.get(), &ctx, &plan, &message), T5D_ERR_ARGUMENT);
+  REQUIRE(message != nullptr);
+  CHECK(std::string(message).find("issue 180") != std::string::npos);
+  t5d_free(message);
+  // A check outside a decision, a context out of range, a deadline.
+  const TimeHandle tm = new_timeman();
+  t5d_time_verdict v;
+  CHECK_EQ(t5d_timeman_check(tm.get(), s.get(), 0.0, &v, nullptr), T5D_ERR_ARGUMENT);
+  const t5d_time_context none{0.0, 0.0, std::nan("")};
+  CHECK_EQ(t5d_timeman_begin(tm.get(), s.get(), &none, &plan, nullptr), T5D_ERR_ARGUMENT);
+  CHECK_EQ(t5d_timeman_begin(tm.get(), s.get(), nullptr, &plan, nullptr), T5D_ERR_ARGUMENT);
+  REQUIRE_EQ(t5d_timeman_begin(tm.get(), s.get(), &ctx, &plan, nullptr), T5D_OK);
+  CHECK(plan.hard_seconds > plan.soft_seconds);
+  CHECK_EQ(t5d_timeman_check(tm.get(), s.get(), -1.0, &v, nullptr), T5D_ERR_ARGUMENT);
+  REQUIRE_EQ(t5d_timeman_check(tm.get(), s.get(), 0.0, &v, nullptr), T5D_OK);
+  CHECK_EQ(v.stop, T5D_TIME_STOP_NONE);  // no visit yet: one batch must run
+  CHECK_EQ(t5d_timeman_new_game(tm.get()), T5D_OK);
+  CHECK_EQ(t5d_timeman_new_game(nullptr), T5D_ERR_ARGUMENT);
+  CHECK_EQ(t5d_search_set_deadline(s.get(), -1.0, nullptr), T5D_ERR_ARGUMENT);
+  CHECK_EQ(t5d_search_set_deadline(s.get(), std::nan(""), nullptr), T5D_ERR_ARGUMENT);
+  CHECK_EQ(t5d_search_set_deadline(s.get(), 5.0, nullptr), T5D_OK);
+  CHECK_EQ(t5d_search_set_deadline(s.get(), 0.0, nullptr), T5D_OK);
+  // The layouts, reported; the search parameters' embedded struct still last.
+  size_t at = 0;
+  REQUIRE_EQ(t5d_search_layout("t5d_time_params", nullptr, &at), T5D_OK);
+  CHECK_EQ(at, sizeof(t5d_time_params));
+  REQUIRE_EQ(t5d_search_layout("t5d_time_params", "extend_instability", &at), T5D_OK);
+  CHECK_EQ(at, offsetof(t5d_time_params, extend_instability));
+  REQUIRE_EQ(t5d_search_layout("t5d_time_params", "boards_per_action_ranges", &at), T5D_OK);
+  CHECK_EQ(at, offsetof(t5d_time_params, boards_per_action_ranges));
+  REQUIRE_EQ(t5d_search_layout("t5d_time_context", "moves_left_turns", &at), T5D_OK);
+  CHECK_EQ(at, offsetof(t5d_time_context, moves_left_turns));
+  REQUIRE_EQ(t5d_search_layout("t5d_time_plan", nullptr, &at), T5D_OK);
+  CHECK_EQ(at, sizeof(t5d_time_plan));
+  REQUIRE_EQ(t5d_search_layout("t5d_time_verdict", "scale", &at), T5D_OK);
+  CHECK_EQ(at, offsetof(t5d_time_verdict, scale));
+  CHECK(sizeof(t5d_search_params) - offsetof(t5d_search_params, expand) <
+        sizeof(t5d_expand_options) + alignof(t5d_search_params));
 }

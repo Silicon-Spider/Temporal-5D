@@ -283,6 +283,7 @@
 #define T5D_MCTS_HPP
 
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -1406,6 +1407,31 @@ class Search {
   /// decision stabilises", §8.6). For a root carried by advance, counted from
   /// the re-root. 0 before any child is visited.
   std::uint32_t root_best_since() const noexcept;
+  /// Stage E11 (§8.6's overlap signal): root child `index`'s own network
+  /// categorical (Evaluation::value), from the root player's view (its bins
+  /// reversed where the child's acting player is the other) - read from the
+  /// evaluation cache, so none where the cache does not hold it (no cache, an
+  /// entry evicted or purged, an evaluation without the categorical, a child
+  /// not yet evaluated or one the tree form expanded on inherited priors).
+  /// Throws std::invalid_argument for an index out of range.
+  std::optional<std::array<float, kValueBins>> root_child_value(std::size_t index) const;
+
+  // -- stage E11: the hard bound inside a batch ------------------------------------------
+
+  /// A wall-clock deadline for the rules engine's calls the search makes inside
+  /// a batch (t5d/timeman.hpp's hard bound): the turn starts' mate checks
+  /// (detect_mate) and the flat form's fallback listing (SearchBudget::
+  /// max_time), the leaves' legality classification and the verification of
+  /// unknown edges (LegalityOptions::deadline). Past it they stop and answer
+  /// Unknown - never a verdict (H37): a turn start whose check stopped is not
+  /// terminal, a move left unknown is flagged (verified once: a verification
+  /// the deadline stopped leaves the edge unknown). The flat form's turn
+  /// generator is node-budgeted only (generator_nodes; build-log spec issue
+  /// 467). nullopt (the default): none - the search's calls are budgeted by
+  /// nodes alone, as before; a set deadline makes the search depend on the
+  /// clock (never in the synchronous mode's reproducible runs).
+  void set_deadline(std::optional<std::chrono::steady_clock::time_point> deadline) noexcept;
+  std::optional<std::chrono::steady_clock::time_point> deadline() const noexcept;
   /// E5/E9: the child to play, by index into root_children(). Throws
   /// std::invalid_argument if the root has no visited child.
   Choice choose() const;

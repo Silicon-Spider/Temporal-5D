@@ -665,10 +665,157 @@ T5D_API t5d_status t5d_search_digest(const t5d_search* search, uint64_t* out);
 
 /* The layouts of this header's structs, as this library was built (t5d_layout's
  * contract, for "t5d_search_params", "t5d_leaf", "t5d_search_summary",
- * "t5d_search_limits", "t5d_root_child" and "t5d_evaluations"): with `field`
- * NULL, sizeof(`type`); otherwise the offset of `field`. T5D_ERR_ARGUMENT for a
- * NULL `type` or `out`, an unknown type or field. */
+ * "t5d_search_limits", "t5d_root_child", "t5d_evaluations" and - stage E11 -
+ * "t5d_time_params", "t5d_time_context", "t5d_time_plan" and
+ * "t5d_time_verdict"): with `field` NULL, sizeof(`type`); otherwise the offset
+ * of `field`. T5D_ERR_ARGUMENT for a NULL `type` or `out`, an unknown type or
+ * field. */
 T5D_API t5d_status t5d_search_layout(const char* type, const char* field, size_t* out);
+
+/* ---- stage E11: time management (t5d/timeman.hpp) ------------------------------
+ *
+ * One TIME MANAGER serves one player's clock through a game (match play: one per
+ * side). A driver of the step API calls, per decision: t5d_timeman_begin (the
+ * plan: a soft bound in evaluations, a hard bound in wall-clock seconds), then
+ * between every two batches t5d_timeman_check with the seconds spent since begin
+ * (NaN: the MODEL CLOCK - the decision's work priced by the cost model,
+ * deterministic) until its verdict's stop is not T5D_TIME_STOP_NONE, then
+ * t5d_timeman_end. A driver on the wall clock gives the search the hard bound as
+ * its deadline (t5d_search_set_deadline) so that the rules engine's calls inside
+ * a batch stop at it, and clears it after. t5d_search_run_timed is the same loop
+ * with a built-in evaluator. Every number of t5d_time_params is a named
+ * placeholder (the engine README's "Time management"). Self-play takes no clock:
+ * its budgets are PCR's. NO PROOF DRIVES TIME while the proof channel is off: the
+ * proof hook (proof_volatility) is refused unless the search's proof_channel is
+ * on (build-log spec issue 180, open). */
+
+/* 6o's arms (t5d_time_params.allocator). */
+#define T5D_ALLOCATOR_INTEGRAL 0         /* the moves-left integral (8.6) */
+#define T5D_ALLOCATOR_FLAT_EVALS 1       /* equal evaluations per action at today's cost */
+#define T5D_ALLOCATOR_FLAT_WALL_CLOCK 2  /* equal time per action, executed by the clock */
+/* Why a timed decision stopped (t5d_time_verdict.stop). */
+#define T5D_TIME_STOP_NONE 0           /* go on: run another batch */
+#define T5D_TIME_STOP_SOFT_BUDGET 1    /* the soft bound and its extensions spent */
+#define T5D_TIME_STOP_SMART_PRUNING 2  /* the visit gap unbridgeable */
+#define T5D_TIME_STOP_KLD_GAIN 3       /* the root's visit distribution stopped changing */
+#define T5D_TIME_STOP_SOLVED 4         /* the root solved, the proof channel on (H41) */
+#define T5D_TIME_STOP_HARD_BOUND 5     /* the wall-clock maximum */
+#define T5D_TIME_STOP_SEARCH 6         /* the search stopped itself (t5d_search_run_timed) */
+/* The extension kinds (t5d_time_verdict.extensions, a bit mask). */
+#define T5D_EXTEND_OVERLAP 1
+#define T5D_EXTEND_VOLATILITY 2
+#define T5D_EXTEND_DISAGREEMENT 4
+#define T5D_EXTEND_FALL 8
+#define T5D_EXTEND_INSTABILITY 16
+
+typedef struct t5d_timeman t5d_timeman;
+
+/* t5d/timeman.hpp, TimeParams, field for field (appended to, never reordered). */
+typedef struct t5d_time_params {
+  int32_t allocator;                    /* T5D_ALLOCATOR_* (6o) */
+  int32_t signals;                      /* 1: the stop/extend table on (6o: on/off) */
+  int32_t cost_tokens_per_board;        /* the dense cost model's shape: T = this x N + ... */
+  int32_t cost_global_tokens;
+  int32_t cost_d_model;
+  double cost_ffn_ratio;
+  int32_t cost_reference_boards;        /* the scale is quoted at this many boards ... */
+  double cost_seconds_per_evaluation;   /* ... before any observation */
+  double cost_ema;                      /* the online scale's weight on each later observation */
+  double cost_fixed_fraction;           /* the share of the reference cost that does not grow with N */
+  double moves_left_floor_turns;        /* the conservative floor on moves-left (turns) */
+  double moves_left_default_turns;      /* turns left assumed with no prediction */
+  double boards_per_action[3];          /* boards an action adds, by range ... */
+  int32_t boards_per_action_ranges[2];  /* ... split at these board counts */
+  double expected_optional_moves;       /* ply split, tree form: optional moves an action makes */
+  double overhead_seconds;              /* per action */
+  double min_evaluations;               /* no decision planned below this */
+  double playouts_per_evaluation_cap;   /* work = max(evaluations, playouts / this) */
+  double hard_multiple_low;             /* hard = multiple x soft: at hard_low_boards or fewer ... */
+  double hard_multiple_high;            /* ... at hard_high_boards or more, linear between */
+  int32_t hard_low_boards;
+  int32_t hard_high_boards;
+  double hard_fraction;                 /* the hard bound's cap: this share of the clock left */
+  double batch_margin;                  /* stop when spent + this x the next batch's time reaches it */
+  double max_extension;                 /* all extensions together, as a share of the plan */
+  double stop_min_evaluations;
+  double smart_pruning_factor;
+  uint32_t kld_interval;
+  double kld_threshold;
+  double overlap_threshold;
+  double churn_kld_threshold;
+  double extend_overlap;
+  double variance_threshold;
+  double extend_volatility;
+  int32_t proof_volatility;             /* the proof hook: 0 (refused without the proof channel) */
+  double disagreement_margin;
+  double extend_disagreement;
+  double fall_margin;
+  double extend_fall;
+  double instability_window;
+  uint32_t instability_min_visits;
+  double extend_instability;
+} t5d_time_params;
+
+/* One decision's clock (t5d/timeman.hpp, TimeContext). */
+typedef struct t5d_time_context {
+  double remaining_seconds;  /* the side's clock now (> 0) */
+  double increment_seconds;  /* added after each of its actions */
+  double moves_left_turns;   /* NaN: the root's own network output, else the default */
+} t5d_time_context;
+
+/* A decision's plan (TimePlan). */
+typedef struct t5d_time_plan {
+  int32_t boards;
+  int32_t moves_left_given;
+  double moves_left_turns;
+  double our_actions;
+  double decisions_left;
+  double seconds_per_evaluation;
+  double usable_seconds;
+  double share;
+  double action_evaluations;
+  double soft_evaluations;
+  double soft_seconds;
+  double hard_seconds;
+} t5d_time_plan;
+
+/* What a check decided (TimeVerdict), with the time manager's cost scale. */
+typedef struct t5d_time_verdict {
+  int32_t stop;                    /* T5D_TIME_STOP_* */
+  uint32_t extensions;             /* T5D_EXTEND_* taken this decision */
+  double work;
+  double target_evaluations;       /* the soft bound now (the plan and its extensions) */
+  double elapsed_seconds;
+  double predicted_batch_seconds;
+  double kld_gain;                 /* NaN: none yet */
+  int32_t converged;               /* stopped on smart pruning, the KLD or a solved root */
+  double scale;                    /* seconds per evaluation at cost_reference_boards */
+} t5d_time_verdict;
+
+/* The defaults (t5d/timeman.hpp). NULL is ignored. */
+T5D_API void t5d_time_params_default(t5d_time_params* out);
+/* A time manager (`params` NULL: the defaults); refused for a parameter out of range. */
+T5D_API t5d_status t5d_timeman_new(const t5d_time_params* params, t5d_timeman** out, char** error);
+T5D_API void t5d_timeman_destroy(t5d_timeman* tm);
+/* Plans and begins a decision at the search's root. */
+T5D_API t5d_status t5d_timeman_begin(t5d_timeman* tm, const t5d_search* search, const t5d_time_context* context,
+                                     t5d_time_plan* out, char** error);
+/* Between batches: `elapsed` seconds since begin by the driver's clock (NaN: the model clock). */
+T5D_API t5d_status t5d_timeman_check(t5d_timeman* tm, const t5d_search* search, double elapsed,
+                                     t5d_time_verdict* out, char** error);
+/* Ends the decision (its root's value: the next one's falling-eval reference). */
+T5D_API t5d_status t5d_timeman_end(t5d_timeman* tm, const t5d_search* search, char** error);
+/* A new game: the falling-eval reference forgotten, the scale kept. */
+T5D_API t5d_status t5d_timeman_new_game(t5d_timeman* tm);
+/* The search's deadline for the rules engine's calls inside a batch, `seconds`
+ * from now (> 0); 0: none. */
+T5D_API t5d_status t5d_search_set_deadline(t5d_search* search, double seconds, char** error);
+/* One timed decision with a built-in evaluator (T5D_EVALUATOR_*): begin, batches
+ * until a stop, end. wall_clock 1: the steady clock (the search's deadline set
+ * for the run); 0: the model clock. `plan` and `verdict` may be NULL. */
+T5D_API t5d_status t5d_search_run_timed(t5d_search* search, int32_t evaluator, uint64_t evaluator_seed,
+                                        t5d_timeman* tm, const t5d_time_context* context, int32_t wall_clock,
+                                        t5d_time_plan* plan, t5d_time_verdict* verdict, char** error);
 
 #ifdef __cplusplus
 } /* extern "C" */

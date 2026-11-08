@@ -84,6 +84,7 @@ rules reference, `docs/rules/README.md`, which the code cites throughout.
 | **E9:** Hunt's ground truth; experiment 6b″'s tool | `tools/t5d_hunt_truth.cpp`, `testdata/hunt-truth/`, `tools/t5d_scan6bpp.cpp` | §15.6 (CHECKPOINT 4), M17 |
 | **E10:** the reduced verification ladder wired into the search - Hunt under 100 boards, the settling scans under 50, the asset map's boosts, the steered visits, the proofs withheld behind the proof channel, PV events; Guard's hook off | `include/t5d/ladder.hpp`, `src/ladder.cpp`, `include/t5d/mcts.hpp`, `include/t5d/selfplay.hpp` | §11.2-11.4, §12.2, §15.4; H1, H10, H13, H14, H17, H19, H41-H43, I2, M13 |
 | **E10:** the offline audit lane's tooling - the decision log, the sampler, the offline proof runner, the per-range shallow-mate report; the curriculum hook an interface | `tools/audit.hpp`, `tools/t5d_audit.cpp` | §11.4, H44, H42, H19, H23 |
+| **E11:** time management - the moves-left integral allocator and 6o's arms, the stop/extend table, the spiral guard, the wall-clock hard bound (the search's deadline inside a batch), the model clock; match play's clock; their C API | `include/t5d/timeman.hpp`, `src/timeman.cpp`, `include/t5d/selfplay.hpp`, `include/t5d/capi_search.h` | §8.6, §13.1 (6o), §15.4; E7, H41, H42, M22 |
 | **M22:** the turn width of an action - mandatory boards at its start, its moves, the optional ones, rewinds - and t5d-measure's `--turns` / `--turn-summary` | `tools/turn_width.hpp`, `tools/t5d_measure.cpp`, `testdata/turn-width/` | §8.2, §15.1; M22 |
 
 The gate runs the engine: `oracles/gate.toml` configures `t5d-gate` in full mode
@@ -2355,7 +2356,8 @@ cites - AlphaZero's PUCT, progressive widening, MCTS-Solver (Winands et al. 2008
 Cazenave and Saffidine's score bounds for draws, Monte-Carlo graph search with residual
 backups (Czech, Korus and Kersting 2021), KataGo's variance-scaled cPUCT, uncertainty
 weighting and LCB selection - and the Chess Programming Wiki; no engine's code (H29).
-Single-threaded; no time management (E7, E8), scanner (rung 1) or Lazy SMP yet.
+Single-threaded; no scanner (rung 1) or Lazy SMP. Time management (register E7) is stage
+E11's (`t5d/timeman.hpp`, below): it drives this search between batches.
 
 **Nodes and values.** A node holds a `GameState` and its acting player (register D8)
 - the player whose action is in progress, until it submits; after the present has
@@ -2834,8 +2836,15 @@ t5d-play [--variant NAME] [--evaluator uniform|random|material] [--playouts N]
          [--final visits|lcb]
          [--temperature T] [--temperature-decisions N] [--noise | --no-noise] [--cap-turns N]
          [--cap-boards N] [--max-actions N] [--mate-nodes N]
-         [--max-seconds S] [--seed S] [--no-moves-after-shift] [--rules ENCODING]
+         [--max-seconds S] [--seed S] [--time BASE [--increment INC]
+         [--allocator integral|flat-evals|flat-wall-clock] [--no-signals] [--model-clock]]
+         [--no-moves-after-shift] [--rules ENCODING]
 ```
+
+`--time` (with `--match`) plays on match play's clock (stage E11, "Stage E11: time
+management" below): each side BASE seconds plus INC after each of its actions, the
+decisions run by each side's time manager instead of `--playouts`; the Engine header names
+the clock, the summary each side's time left and the stops.
 
 Defaults: Standard, uniform, 64 playouts per decision, the board-move split (the tree
 form's gates, under `--split tree`, §8.2's four - a comma-separated list of between,
@@ -4104,6 +4113,133 @@ contradiction), reports a safe action's completed depth; the report counts at th
 99/100 and 199/200 edges as 6b″ counts; nothing is carried from one run to the next; and end
 to end, `t5d-play --decision-log` then `t5d-audit sample`, `run` and `report`. Python's log is
 read by `t5d-audit` (`python/tests/engine/test_decision_log.py`).
+
+## Stage E11: time management (`t5d/timeman.hpp`; register E7)
+
+Design spec §8.6 ("Time management - when the move commits"), §13.1's 6o, §15.4; register
+E7 (committed, class R), H41, H42, I4, M13, M22. Written from §8.6, Lc0's smart pruning and
+KLDGain patterns and the Stockfish instability pattern as the Chess Programming Wiki
+describes them - no engine's code (H29). Every number below is a named placeholder
+(build-log spec issues 452-470); 6o's arms are switches.
+
+**One time manager per clock.** A `TimeManager` serves one player's clock through a game
+(match play: one per side), decision by decision: `begin` plans (a soft bound in
+evaluations, with its seconds, and a hard bound in wall-clock seconds), `check` - between
+batches - stops, goes on or extends the soft bound, `end` records the root's value for the
+next decision's falling-eval signal. `run_timed(search, evaluator, tm, context, clock)`
+drives a `Search` with them, in slices of `batch_size` playouts (`Search::run`'s own loop:
+a step-API driver that runs the same slices builds the same tree). The C API gives the
+same calls (`t5d_timeman_*`, `t5d_search_run_timed`, `t5d_search_set_deadline`) and Python
+mirrors them (`search.TimeManager`, `evaluator.run_timed_search`).
+
+**Allocation: the moves-left integral (§8.6).** An evaluation at N boards costs
+`s(N) = scale x (f + (1 - f) x shape(N) / shape(100))`: `shape` is the dense FLOP model,
+`T (4T + (8 + 4r) d)` with `T = 66 N + 16`, `d = 256`, `r = 8` (python/t5d/net/cost.py's
+model, written here in-house - §8.6's table reproduces from it exactly: 3.4x from 100 to
+199 boards, the integral's share 0.48% against the naive 1.00%, flat wall-clock leaving the
+last 20 moves 3.1x under-simmed); `f` (`cost_fixed_fraction`, 0.05) is the share of the cost
+at 100 boards that does not grow with N - without it a scale measured at a few boards prices
+a 100-board evaluation hundreds of times too high; `scale` is measured online - the first
+observation replaces the prior (`cost_seconds_per_evaluation`, 0.01 s, CPU-labelled), then
+an exponential average (`cost_ema`, 0.2) of the seconds per unit of work between checks,
+the model's growth taken out. Our remaining actions: `A = ceil(M / 2)` for `M` turns left
+(D4's moves-left, in turns - each one player's action, issue 305 - floored at
+`moves_left_floor_turns`, 20; none given: the root's own network output, else
+`moves_left_default_turns`, 40, about a human game by M22's data). N advances between two
+of our actions by both players' boards per action (`boards_per_action`: M22's moves per
+turn - 1.05, 1.25 and 1.77 under 50, 50-99 and 100+ boards; a travel move's second board
+left out). The usable time `T_eff = remaining + increment (A - 1) - overhead A`
+(`overhead_seconds`, 0.05 per action). 6o's arms (`allocator`):
+
+| Arm | This action's time | Executed by |
+|---|---|---|
+| `Integral` (default) | `T_eff x s(N_0) / sum_k s(N_k)` - equal evaluations per action, each at its predicted N | evaluations |
+| `FlatEvals` | `T_eff / A` at today's `s(N)` - nps assumed to persist | evaluations |
+| `FlatWallClock` | `T_eff / A` | the clock |
+
+Under the ply split and the tree form an action is several decisions: its mandatory boards
+still to move (A6, exact), the submit decision and `expected_optional_moves` (0.25); the
+action's plan is split evenly over those left, re-planned at every decision. The flat
+form's decision is the whole action. No decision is planned below `min_evaluations` (8),
+inside the hard bound. A decision's WORK is `max(evaluations, playouts / 4)`
+(`playouts_per_evaluation_cap`): simulations the network does not see (cache hits,
+terminals) still cost.
+
+**The hard bound (§8.6: "held tight at high N").** `hard_multiple(N)` times the soft bound
+- 5 at 50 boards or fewer, falling linearly to 2 at 400 or more - and never more than
+`hard_fraction` (0.25) of the clock left. `check` stops when the time spent plus
+`batch_margin` (1.5) times the next batch's predicted time reaches it, so no batch starts
+that would end past it; inside a batch, `run_timed` on the steady clock gives the search the
+bound as its deadline (`Search::set_deadline`): the turn starts' mate checks and the flat
+form's fallback listing (`SearchBudget::max_time`), the legality classification and the
+verification of unknown edges (`LegalityOptions::deadline`, new) stop at it and answer
+Unknown - never a verdict (H37). The flat form's turn generator is node-budgeted only
+(issue 467). The one exception: a root with no visited child runs one batch whatever the
+clock says (a move needs a visit) - so a decision ends past its bound by at most one batch.
+
+**The stop/extend table (§8.6; `signals`, on - 6o's on/off switch).** Each signal is a pure
+function (`smart_pruning_stop`, `visit_kld`, `value_overlap`, `unstable`), judged on a
+`RootSnapshot` of the root:
+
+| Signal | Reading (placeholders) |
+|---|---|
+| Smart pruning - stop | the most visited child's lead over the second exceeds the remaining evaluations (to the soft bound, within the hard) x the playouts per evaluation so far x `smart_pruning_factor` (1.0) |
+| KLDGain - stop | KL(earlier visit distribution \|\| now) per root visit over `kld_interval` (100) visits below `kld_threshold` (5e-5); a fresh root is not compared with nothing |
+| Root solved - play at once | ONLY with the proof channel on (H41); off, nothing is solved and the stop is void |
+| Overlap and churn - extend | the top two children's own network categoricals (read from the evaluation cache, the root player's view: `Search::root_child_value`) intersect by `overlap_threshold` (0.5) or more AND the last KLD per visit is at least `churn_kld_threshold` (2e-4) |
+| Volatility - extend | the root's uncertainty signal (6m's: the categorical's variance by default) at least `variance_threshold` (0.2) |
+| Disagreement - extend hardest | a HOOK, OFF (`proof_volatility`): a Hunt or settling-scan proof whose value lies `disagreement_margin` (0.5) from the network's, with a calm net; refused unless the search's proof channel is on - whether those proofs may drive time before the sign-off is open (issue 180). Python refuses it, as it refuses the channel |
+| Falling eval - extend | the root's backed-up value below the previous decision's by `fall_margin` (0.1); a rising eval never extends |
+| Instability - extend | the most visited child changed within the last `instability_window` (0.25) of the root's visits, from `instability_min_visits` (32) |
+
+Stops are judged at every check from `stop_min_evaluations` (32) on; extensions when the
+soft bound is reached - each kind AT MOST ONCE a decision, by its share of the ORIGINAL plan
+(`extend_*`: 0.5 each, disagreement 1.0), all of them together at most `max_extension`
+(1.0) of it - the spiral guard ("the extension mechanism must never be able to flag
+itself"); none can cross the hard bound. `TimeVerdict::converged()` (a stop on smart
+pruning, the KLD or a solved root) and `TimedRun::best_since` (`Search::root_best_since`)
+are the effort label's sources for the records (I15).
+
+**No root-scan reserve.** §8.6's "reserve held for one re-search if that scan refutes" has
+one named consumer, Guard's re-search (§11.4), and Guard runs in no range (H42): none is
+held (issue 306). Guard's hook, if an experiment switches it on, re-searches with what the
+hard bound leaves. The verification ladder's jobs (stage E10) run on their own worker and
+threads (M13's five cores) beside the search: their wall time overlaps the decision's and
+the decision's end cancels them, so they sit inside the hard bound; the allocation deducts
+nothing for them (issue 466).
+
+**Clocks.** `WallClock` is the steady clock. With none (`nullptr`; Python's
+`model_clock=True`; C's `elapsed` NaN) the MODEL CLOCK stands in: a decision's time is its
+work at the cost model's price, the scale never updated - a node-limited search,
+bit-reproducible (H15; tested, the synchronous mode too). Self-play takes no clock: its
+budgets are PCR's (§12.5).
+
+**Match play's clock** (`PlayParams::clock`, `MatchClock`, off; t5d-play's `--time BASE
+--increment INC --allocator ARM --no-signals --model-clock`, match play only; Python's
+`PlayConfig.time`). Each side `base_seconds` plus `increment_seconds` after each of its
+actions (Fischer's - a reading: the 5D match clock is unspecified, issue 456), its own
+`TimeManager`. A decision is charged its whole wall time - search, choice, the exact
+verification of a chosen move - or on the model clock its work at the model's price. A side
+whose clock runs out loses on time: `GameEnd::Flag`, the action under way not recorded,
+result `*` (the clock is the match's convention, not a rule), scored for the other side.
+`GameRecord` counts each side's time left, the stops by kind, the extensions and the
+decisions charged more than their hard bound.
+
+Tested (`tests/test_timeman.cpp`, `tests/test_capi_search.cpp`, `tests/test_play_exe.cpp`,
+`python/tests/engine/test_time_management.py`): §8.6's table and the plans by hand (the
+floor, the default, increments, the per-decision split, the hard bound's cap); 6o's arms and
+the hard bound tightening with N; each stop and extension on constructed statistics (overlap
+without churn does not extend, with churn does; disagreement extends more than either source
+alone; a rising eval does not extend; a solved root stops only with the proof channel); the
+spiral guard at 500 boards; the hard bound on a virtual clock against an evaluator three
+times dearer than the prior (never past the bound by more than one batch), on the wall clock
+under four spinning threads (within half a second), and inside a batch at 400 boards past
+the deadline (Unknown, never terminal); the model clock's runs bit-identical; the choice
+after any stop among the eligible children (§15.4); the step API driven from C and from
+Python building `run_timed`'s tree; the cost shape equal to `net/cost.py`'s `dense_flops` at
+three board counts (Python); match play on a clock under each arm (legal, replayed by
+the reader and the gate), a flag, self-play refused; the proof hook refused without the
+proof channel, in C++, C and Python.
 
 ## 5DFEN
 

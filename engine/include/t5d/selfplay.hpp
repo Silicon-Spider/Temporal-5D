@@ -42,6 +42,16 @@
 // proof - it rejects the chosen action and searches again. No reserve is held
 // for it while Guard is offline (build-log spec issue 306).
 //
+// MATCH PLAY'S CLOCK (stage E11, t5d/timeman.hpp; PlayParams::clock, off): each
+// side a clock of base seconds plus an increment after each of its actions
+// (Fischer's, a reading - the 5D match clock is unspecified: build-log spec
+// issue 456), each side's decisions run by its own TimeManager (run_timed)
+// instead of fixed playouts. A decision is charged its whole wall time - the
+// search, the choice and the exact verification of a chosen move - or, on the
+// model clock, its work at the cost model's price (deterministic). A side whose
+// clock runs out has lost on time (GameEnd::Flag: scored, not a rule - "*" in
+// the record). Self-play never runs a clock: its budgets are PCR's (§12.5).
+//
 // SELF-PLAY RUNS WITHOUT THE ASSET MAP (the E10 review; build-log spec issues
 // 179, 189): PlayParams' default search has asset_map OFF - a named placeholder
 // - until I2's steered-visit definition is validated (the review measured the
@@ -53,8 +63,10 @@
 #ifndef T5D_SELFPLAY_HPP
 #define T5D_SELFPLAY_HPP
 
+#include <array>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <string>
 #include <vector>
@@ -64,6 +76,7 @@
 #include "t5d/mcts.hpp"
 #include "t5d/move.hpp"
 #include "t5d/state.hpp"
+#include "t5d/timeman.hpp"
 
 namespace t5d::mcts {
 
@@ -74,6 +87,7 @@ enum class GameEnd : std::uint8_t {
   Unknown,        ///< the detector could not decide (H37): the game stops unjudged
   ActionLimit,    ///< PlayParams::max_actions: a safety stop, not a rule
   TimeLimit,      ///< PlayParams::max_seconds: a safety stop, not a rule
+  Flag,           ///< stage E11: the side to move's clock ran out (PlayParams::clock) - a loss, not a rule
 };
 const char* game_end_name(GameEnd end) noexcept;
 
@@ -81,6 +95,18 @@ const char* game_end_name(GameEnd end) noexcept;
 /// noise ON (E1, §8.4) and the asset map OFF (a named placeholder: I2's steered
 /// visits are unvalidated - issues 179, 189; the header comment).
 SearchParams self_play_search_defaults();
+
+/// Stage E11: match play's clock (the header comment). Every number a named
+/// placeholder.
+struct MatchClock {
+  bool enabled = false;
+  double base_seconds = 60;      ///< each side's time at the start
+  double increment_seconds = 0;  ///< added after each of a side's actions
+  TimeParams time{};             ///< each side's time manager (6o's arms: allocator, signals)
+  /// The model clock (run_timed with no clock): deterministic - for tests and
+  /// reproducible runs; the wall clock otherwise.
+  bool model_clock = false;
+};
 
 struct PlayParams {
   /// The searches' parameters - root Dirichlet noise ON by default (E1,
@@ -127,6 +153,9 @@ struct PlayParams {
   /// Stage E10, H44: record each decision for the offline audit lane
   /// (GameRecord::decision_log). Off by default (memory).
   bool decision_log = false;
+  /// Stage E11: match play's clock - off (fixed playouts per decision). On,
+  /// match play only (refused in self-play); `playouts` is then unread.
+  MatchClock clock{};
   /// TESTS ONLY: applied to each refutation's certificate Guard's hook is about
   /// to have E4 check (guard_final) - the seam that feeds it a certificate E4
   /// rejects, so the "only confirmed refutations count" gate is exercised.
@@ -207,13 +236,25 @@ struct GameRecord {
   std::uint64_t guard_runs = 0;
   std::uint64_t guard_refutations = 0;
   std::uint64_t guard_rejections = 0;  ///< refuted actions rejected and searched again
+  /// Stage E11, match play's clock (PlayParams::clock): each side's time left
+  /// at the end (White, Black; NaN: no clock), the timed decisions and why
+  /// each stopped (by TimeStop), the extensions they took, and the decisions
+  /// charged more than their hard bound, with the largest excess (seconds).
+  std::array<double, 2> clock_remaining{std::numeric_limits<double>::quiet_NaN(),
+                                        std::numeric_limits<double>::quiet_NaN()};
+  std::uint64_t timed_decisions = 0;
+  std::array<std::uint64_t, kTimeStops> time_stops{};
+  std::uint64_t extensions = 0;
+  std::uint64_t hard_overruns = 0;
+  double max_overrun_seconds = 0;
   /// Stage E10, H44: each decision as the offline audit lane reads it
   /// (PlayParams::decision_log; empty otherwise) - tools/audit.hpp's events.
   std::vector<DecisionLog> decision_log;
 
   bool cap_bound() const noexcept { return end == GameEnd::TurnCap; }
   /// The 5dpgn result: "1-0", "0-1", "1/2-1/2" (stalemate), or "*" (not ended
-  /// by the rules - the turn cap included, which self-play SCORES as a draw).
+  /// by the rules - the turn cap included, which self-play SCORES as a draw,
+  /// and a flag, scored as the other side's win).
   std::string result() const;
   /// Self-play's score from White's view: 1, 0.5 or 0 (the cap a draw); -1 if unscored.
   double white_score() const noexcept;

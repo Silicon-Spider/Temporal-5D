@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdlib>
@@ -26,6 +27,7 @@
 #include "t5d/mcts.hpp"
 #include "t5d/movegen.hpp"
 #include "t5d/multiverse.hpp"
+#include "t5d/timeman.hpp"
 #include "t5d/types.hpp"
 
 static_assert(static_cast<int>(t5d::MoveLegality::Legal) == T5D_LEGALITY_LEGAL);
@@ -49,9 +51,30 @@ static_assert(static_cast<int>(t5d::mcts::StopReason::Nodes) == T5D_STOP_NODES);
 static_assert(static_cast<int>(t5d::mcts::StopReason::Memory) == T5D_STOP_MEMORY);
 static_assert(static_cast<int>(t5d::mcts::StopReason::Deadline) == T5D_STOP_DEADLINE);
 
+static_assert(static_cast<int>(t5d::mcts::Allocator::Integral) == T5D_ALLOCATOR_INTEGRAL);
+static_assert(static_cast<int>(t5d::mcts::Allocator::FlatEvals) == T5D_ALLOCATOR_FLAT_EVALS);
+static_assert(static_cast<int>(t5d::mcts::Allocator::FlatWallClock) == T5D_ALLOCATOR_FLAT_WALL_CLOCK);
+static_assert(static_cast<int>(t5d::mcts::TimeStop::None) == T5D_TIME_STOP_NONE);
+static_assert(static_cast<int>(t5d::mcts::TimeStop::SoftBudget) == T5D_TIME_STOP_SOFT_BUDGET);
+static_assert(static_cast<int>(t5d::mcts::TimeStop::SmartPruning) == T5D_TIME_STOP_SMART_PRUNING);
+static_assert(static_cast<int>(t5d::mcts::TimeStop::KldGain) == T5D_TIME_STOP_KLD_GAIN);
+static_assert(static_cast<int>(t5d::mcts::TimeStop::Solved) == T5D_TIME_STOP_SOLVED);
+static_assert(static_cast<int>(t5d::mcts::TimeStop::HardBound) == T5D_TIME_STOP_HARD_BOUND);
+static_assert(static_cast<int>(t5d::mcts::TimeStop::Search) == T5D_TIME_STOP_SEARCH);
+static_assert(t5d::mcts::kExtendOverlap == T5D_EXTEND_OVERLAP);
+static_assert(t5d::mcts::kExtendVolatility == T5D_EXTEND_VOLATILITY);
+static_assert(t5d::mcts::kExtendDisagreement == T5D_EXTEND_DISAGREEMENT);
+static_assert(t5d::mcts::kExtendFall == T5D_EXTEND_FALL);
+static_assert(t5d::mcts::kExtendInstability == T5D_EXTEND_INSTABILITY);
+
 struct t5d_search {
   explicit t5d_search(t5d::mcts::Search s) : search(std::move(s)) {}
   t5d::mcts::Search search;
+};
+
+struct t5d_timeman {
+  explicit t5d_timeman(t5d::mcts::TimeParams p) : tm(p) {}
+  t5d::mcts::TimeManager tm;
 };
 
 namespace {
@@ -603,6 +626,77 @@ constexpr LayoutEntry kLayout[] = {
     T5D_SEARCH_AT(t5d_evaluations, moves_left_count),
     T5D_SEARCH_AT(t5d_evaluations, board_logits),
     T5D_SEARCH_AT(t5d_evaluations, board_logit_count),
+    // Stage E11: time management.
+    T5D_SEARCH_SIZE(t5d_time_params),
+    T5D_SEARCH_AT(t5d_time_params, allocator),
+    T5D_SEARCH_AT(t5d_time_params, signals),
+    T5D_SEARCH_AT(t5d_time_params, cost_tokens_per_board),
+    T5D_SEARCH_AT(t5d_time_params, cost_global_tokens),
+    T5D_SEARCH_AT(t5d_time_params, cost_d_model),
+    T5D_SEARCH_AT(t5d_time_params, cost_ffn_ratio),
+    T5D_SEARCH_AT(t5d_time_params, cost_reference_boards),
+    T5D_SEARCH_AT(t5d_time_params, cost_seconds_per_evaluation),
+    T5D_SEARCH_AT(t5d_time_params, cost_ema),
+    T5D_SEARCH_AT(t5d_time_params, cost_fixed_fraction),
+    T5D_SEARCH_AT(t5d_time_params, moves_left_floor_turns),
+    T5D_SEARCH_AT(t5d_time_params, moves_left_default_turns),
+    T5D_SEARCH_AT(t5d_time_params, boards_per_action),
+    T5D_SEARCH_AT(t5d_time_params, boards_per_action_ranges),
+    T5D_SEARCH_AT(t5d_time_params, expected_optional_moves),
+    T5D_SEARCH_AT(t5d_time_params, overhead_seconds),
+    T5D_SEARCH_AT(t5d_time_params, min_evaluations),
+    T5D_SEARCH_AT(t5d_time_params, playouts_per_evaluation_cap),
+    T5D_SEARCH_AT(t5d_time_params, hard_multiple_low),
+    T5D_SEARCH_AT(t5d_time_params, hard_multiple_high),
+    T5D_SEARCH_AT(t5d_time_params, hard_low_boards),
+    T5D_SEARCH_AT(t5d_time_params, hard_high_boards),
+    T5D_SEARCH_AT(t5d_time_params, hard_fraction),
+    T5D_SEARCH_AT(t5d_time_params, batch_margin),
+    T5D_SEARCH_AT(t5d_time_params, max_extension),
+    T5D_SEARCH_AT(t5d_time_params, stop_min_evaluations),
+    T5D_SEARCH_AT(t5d_time_params, smart_pruning_factor),
+    T5D_SEARCH_AT(t5d_time_params, kld_interval),
+    T5D_SEARCH_AT(t5d_time_params, kld_threshold),
+    T5D_SEARCH_AT(t5d_time_params, overlap_threshold),
+    T5D_SEARCH_AT(t5d_time_params, churn_kld_threshold),
+    T5D_SEARCH_AT(t5d_time_params, extend_overlap),
+    T5D_SEARCH_AT(t5d_time_params, variance_threshold),
+    T5D_SEARCH_AT(t5d_time_params, extend_volatility),
+    T5D_SEARCH_AT(t5d_time_params, proof_volatility),
+    T5D_SEARCH_AT(t5d_time_params, disagreement_margin),
+    T5D_SEARCH_AT(t5d_time_params, extend_disagreement),
+    T5D_SEARCH_AT(t5d_time_params, fall_margin),
+    T5D_SEARCH_AT(t5d_time_params, extend_fall),
+    T5D_SEARCH_AT(t5d_time_params, instability_window),
+    T5D_SEARCH_AT(t5d_time_params, instability_min_visits),
+    T5D_SEARCH_AT(t5d_time_params, extend_instability),
+    T5D_SEARCH_SIZE(t5d_time_context),
+    T5D_SEARCH_AT(t5d_time_context, remaining_seconds),
+    T5D_SEARCH_AT(t5d_time_context, increment_seconds),
+    T5D_SEARCH_AT(t5d_time_context, moves_left_turns),
+    T5D_SEARCH_SIZE(t5d_time_plan),
+    T5D_SEARCH_AT(t5d_time_plan, boards),
+    T5D_SEARCH_AT(t5d_time_plan, moves_left_given),
+    T5D_SEARCH_AT(t5d_time_plan, moves_left_turns),
+    T5D_SEARCH_AT(t5d_time_plan, our_actions),
+    T5D_SEARCH_AT(t5d_time_plan, decisions_left),
+    T5D_SEARCH_AT(t5d_time_plan, seconds_per_evaluation),
+    T5D_SEARCH_AT(t5d_time_plan, usable_seconds),
+    T5D_SEARCH_AT(t5d_time_plan, share),
+    T5D_SEARCH_AT(t5d_time_plan, action_evaluations),
+    T5D_SEARCH_AT(t5d_time_plan, soft_evaluations),
+    T5D_SEARCH_AT(t5d_time_plan, soft_seconds),
+    T5D_SEARCH_AT(t5d_time_plan, hard_seconds),
+    T5D_SEARCH_SIZE(t5d_time_verdict),
+    T5D_SEARCH_AT(t5d_time_verdict, stop),
+    T5D_SEARCH_AT(t5d_time_verdict, extensions),
+    T5D_SEARCH_AT(t5d_time_verdict, work),
+    T5D_SEARCH_AT(t5d_time_verdict, target_evaluations),
+    T5D_SEARCH_AT(t5d_time_verdict, elapsed_seconds),
+    T5D_SEARCH_AT(t5d_time_verdict, predicted_batch_seconds),
+    T5D_SEARCH_AT(t5d_time_verdict, kld_gain),
+    T5D_SEARCH_AT(t5d_time_verdict, converged),
+    T5D_SEARCH_AT(t5d_time_verdict, scale),
 };
 
 #undef T5D_SEARCH_SIZE
@@ -622,9 +716,228 @@ int root_moves_made(const t5d_game& game, int32_t turn_start) {
   return moves;
 }
 
+// Stage E11: TimeParams from the C struct (field for field), and back.
+t5d::mcts::TimeParams time_params_from(const t5d_time_params* c) {
+  t5d::mcts::TimeParams p;
+  if (c == nullptr) return p;
+  switch (c->allocator) {
+    case T5D_ALLOCATOR_INTEGRAL: p.allocator = t5d::mcts::Allocator::Integral; break;
+    case T5D_ALLOCATOR_FLAT_EVALS: p.allocator = t5d::mcts::Allocator::FlatEvals; break;
+    case T5D_ALLOCATOR_FLAT_WALL_CLOCK: p.allocator = t5d::mcts::Allocator::FlatWallClock; break;
+    default: throw std::invalid_argument("allocator must be T5D_ALLOCATOR_INTEGRAL, _FLAT_EVALS or _FLAT_WALL_CLOCK");
+  }
+  p.signals = boolean(c->signals, "signals");
+  p.cost_tokens_per_board = c->cost_tokens_per_board;
+  p.cost_global_tokens = c->cost_global_tokens;
+  p.cost_d_model = c->cost_d_model;
+  p.cost_ffn_ratio = c->cost_ffn_ratio;
+  p.cost_reference_boards = c->cost_reference_boards;
+  p.cost_seconds_per_evaluation = c->cost_seconds_per_evaluation;
+  p.cost_ema = c->cost_ema;
+  p.cost_fixed_fraction = c->cost_fixed_fraction;
+  p.moves_left_floor_turns = c->moves_left_floor_turns;
+  p.moves_left_default_turns = c->moves_left_default_turns;
+  for (std::size_t i = 0; i < 3; ++i) p.boards_per_action[i] = c->boards_per_action[i];
+  for (std::size_t i = 0; i < 2; ++i) p.boards_per_action_ranges[i] = c->boards_per_action_ranges[i];
+  p.expected_optional_moves = c->expected_optional_moves;
+  p.overhead_seconds = c->overhead_seconds;
+  p.min_evaluations = c->min_evaluations;
+  p.playouts_per_evaluation_cap = c->playouts_per_evaluation_cap;
+  p.hard_multiple_low = c->hard_multiple_low;
+  p.hard_multiple_high = c->hard_multiple_high;
+  p.hard_low_boards = c->hard_low_boards;
+  p.hard_high_boards = c->hard_high_boards;
+  p.hard_fraction = c->hard_fraction;
+  p.batch_margin = c->batch_margin;
+  p.max_extension = c->max_extension;
+  p.stop_min_evaluations = c->stop_min_evaluations;
+  p.smart_pruning_factor = c->smart_pruning_factor;
+  p.kld_interval = c->kld_interval;
+  p.kld_threshold = c->kld_threshold;
+  p.overlap_threshold = c->overlap_threshold;
+  p.churn_kld_threshold = c->churn_kld_threshold;
+  p.extend_overlap = c->extend_overlap;
+  p.variance_threshold = c->variance_threshold;
+  p.extend_volatility = c->extend_volatility;
+  p.proof_volatility = boolean(c->proof_volatility, "proof_volatility");
+  p.disagreement_margin = c->disagreement_margin;
+  p.extend_disagreement = c->extend_disagreement;
+  p.fall_margin = c->fall_margin;
+  p.extend_fall = c->extend_fall;
+  p.instability_window = c->instability_window;
+  p.instability_min_visits = c->instability_min_visits;
+  p.extend_instability = c->extend_instability;
+  t5d::mcts::validate(p);
+  return p;
+}
+
+t5d::mcts::TimeContext time_context_from(const t5d_time_context* c) {
+  if (c == nullptr) throw std::invalid_argument("context is NULL");
+  t5d::mcts::TimeContext ctx;
+  ctx.remaining_seconds = c->remaining_seconds;
+  ctx.increment_seconds = c->increment_seconds;
+  ctx.moves_left_turns = c->moves_left_turns;
+  return ctx;
+}
+
+void plan_out(const t5d::mcts::TimePlan& p, t5d_time_plan* out) {
+  if (out == nullptr) return;
+  *out = t5d_time_plan{};
+  out->boards = p.boards;
+  out->moves_left_given = flag(p.moves_left_given);
+  out->moves_left_turns = p.moves_left_turns;
+  out->our_actions = p.our_actions;
+  out->decisions_left = p.decisions_left;
+  out->seconds_per_evaluation = p.seconds_per_evaluation;
+  out->usable_seconds = p.usable_seconds;
+  out->share = p.share;
+  out->action_evaluations = p.action_evaluations;
+  out->soft_evaluations = p.soft_evaluations;
+  out->soft_seconds = p.soft_seconds;
+  out->hard_seconds = p.hard_seconds;
+}
+
+void verdict_out(const t5d::mcts::TimeVerdict& v, double scale, t5d_time_verdict* out) {
+  if (out == nullptr) return;
+  *out = t5d_time_verdict{};
+  out->stop = static_cast<int32_t>(v.stop);
+  out->extensions = v.extensions;
+  out->work = v.work;
+  out->target_evaluations = v.target_evaluations;
+  out->elapsed_seconds = v.elapsed_seconds;
+  out->predicted_batch_seconds = v.predicted_batch_seconds;
+  out->kld_gain = v.kld_gain;
+  out->converged = flag(v.converged());
+  out->scale = scale;
+}
+
 }  // namespace
 
 extern "C" {
+
+void t5d_time_params_default(t5d_time_params* out) {
+  if (out == nullptr) return;
+  const t5d::mcts::TimeParams p;
+  *out = t5d_time_params{};
+  out->allocator = static_cast<int32_t>(p.allocator);
+  out->signals = flag(p.signals);
+  out->cost_tokens_per_board = p.cost_tokens_per_board;
+  out->cost_global_tokens = p.cost_global_tokens;
+  out->cost_d_model = p.cost_d_model;
+  out->cost_ffn_ratio = p.cost_ffn_ratio;
+  out->cost_reference_boards = p.cost_reference_boards;
+  out->cost_seconds_per_evaluation = p.cost_seconds_per_evaluation;
+  out->cost_ema = p.cost_ema;
+  out->cost_fixed_fraction = p.cost_fixed_fraction;
+  out->moves_left_floor_turns = p.moves_left_floor_turns;
+  out->moves_left_default_turns = p.moves_left_default_turns;
+  for (std::size_t i = 0; i < 3; ++i) out->boards_per_action[i] = p.boards_per_action[i];
+  for (std::size_t i = 0; i < 2; ++i) out->boards_per_action_ranges[i] = p.boards_per_action_ranges[i];
+  out->expected_optional_moves = p.expected_optional_moves;
+  out->overhead_seconds = p.overhead_seconds;
+  out->min_evaluations = p.min_evaluations;
+  out->playouts_per_evaluation_cap = p.playouts_per_evaluation_cap;
+  out->hard_multiple_low = p.hard_multiple_low;
+  out->hard_multiple_high = p.hard_multiple_high;
+  out->hard_low_boards = p.hard_low_boards;
+  out->hard_high_boards = p.hard_high_boards;
+  out->hard_fraction = p.hard_fraction;
+  out->batch_margin = p.batch_margin;
+  out->max_extension = p.max_extension;
+  out->stop_min_evaluations = p.stop_min_evaluations;
+  out->smart_pruning_factor = p.smart_pruning_factor;
+  out->kld_interval = p.kld_interval;
+  out->kld_threshold = p.kld_threshold;
+  out->overlap_threshold = p.overlap_threshold;
+  out->churn_kld_threshold = p.churn_kld_threshold;
+  out->extend_overlap = p.extend_overlap;
+  out->variance_threshold = p.variance_threshold;
+  out->extend_volatility = p.extend_volatility;
+  out->proof_volatility = flag(p.proof_volatility);
+  out->disagreement_margin = p.disagreement_margin;
+  out->extend_disagreement = p.extend_disagreement;
+  out->fall_margin = p.fall_margin;
+  out->extend_fall = p.extend_fall;
+  out->instability_window = p.instability_window;
+  out->instability_min_visits = p.instability_min_visits;
+  out->extend_instability = p.extend_instability;
+}
+
+t5d_status t5d_timeman_new(const t5d_time_params* params, t5d_timeman** out, char** error) {
+  return guarded(error, [&]() -> t5d_status {
+    if (out == nullptr) throw std::invalid_argument("out is NULL");
+    *out = nullptr;
+    *out = new t5d_timeman(time_params_from(params));
+    return T5D_OK;
+  });
+}
+
+void t5d_timeman_destroy(t5d_timeman* tm) { delete tm; }
+
+t5d_status t5d_timeman_begin(t5d_timeman* tm, const t5d_search* search, const t5d_time_context* context,
+                             t5d_time_plan* out, char** error) {
+  return guarded(error, [&]() -> t5d_status {
+    if (tm == nullptr || search == nullptr) throw std::invalid_argument("tm or search is NULL");
+    plan_out(tm->tm.begin(search->search, time_context_from(context)), out);
+    return T5D_OK;
+  });
+}
+
+t5d_status t5d_timeman_check(t5d_timeman* tm, const t5d_search* search, double elapsed, t5d_time_verdict* out,
+                             char** error) {
+  return guarded(error, [&]() -> t5d_status {
+    if (tm == nullptr || search == nullptr) throw std::invalid_argument("tm or search is NULL");
+    if (!tm->tm.in_decision()) throw std::invalid_argument("t5d_timeman_check: no decision begun");
+    const t5d::mcts::TimeVerdict v = tm->tm.check(search->search, elapsed);
+    verdict_out(v, tm->tm.scale(), out);
+    return T5D_OK;
+  });
+}
+
+t5d_status t5d_timeman_end(t5d_timeman* tm, const t5d_search* search, char** error) {
+  return guarded(error, [&]() -> t5d_status {
+    if (tm == nullptr || search == nullptr) throw std::invalid_argument("tm or search is NULL");
+    tm->tm.end(search->search);
+    return T5D_OK;
+  });
+}
+
+t5d_status t5d_timeman_new_game(t5d_timeman* tm) {
+  if (tm == nullptr) return T5D_ERR_ARGUMENT;
+  tm->tm.new_game();
+  return T5D_OK;
+}
+
+t5d_status t5d_search_set_deadline(t5d_search* search, double seconds, char** error) {
+  return guarded(error, [&]() -> t5d_status {
+    if (search == nullptr) throw std::invalid_argument("search is NULL");
+    if (!(std::isfinite(seconds) && seconds >= 0)) throw std::invalid_argument("seconds: finite, 0 (none) or more");
+    if (seconds == 0) {
+      search->search.set_deadline(std::nullopt);
+    } else {
+      search->search.set_deadline(std::chrono::steady_clock::now() +
+                                  std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                                      std::chrono::duration<double>(seconds)));
+    }
+    return T5D_OK;
+  });
+}
+
+t5d_status t5d_search_run_timed(t5d_search* search, int32_t evaluator, uint64_t evaluator_seed, t5d_timeman* tm,
+                                const t5d_time_context* context, int32_t wall_clock, t5d_time_plan* plan,
+                                t5d_time_verdict* verdict, char** error) {
+  return guarded(error, [&]() -> t5d_status {
+    if (search == nullptr || tm == nullptr) throw std::invalid_argument("search or tm is NULL");
+    const bool wall = boolean(wall_clock, "wall_clock");
+    const std::unique_ptr<t5d::mcts::Evaluator> ev = t5d::mcts::make_evaluator(builtin_of(evaluator), evaluator_seed);
+    t5d::mcts::WallClock clock;
+    const t5d::mcts::TimedRun r =
+        t5d::mcts::run_timed(search->search, *ev, tm->tm, time_context_from(context), wall ? &clock : nullptr);
+    plan_out(r.plan, plan);
+    verdict_out(r.verdict, tm->tm.scale(), verdict);
+    return T5D_OK;
+  });
+}
 
 t5d_status t5d_search_layout(const char* type, const char* field, size_t* out) {
   if (type == nullptr || out == nullptr) return T5D_ERR_ARGUMENT;
