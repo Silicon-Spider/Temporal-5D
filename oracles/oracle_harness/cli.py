@@ -320,7 +320,10 @@ def parser() -> argparse.ArgumentParser:
     mode = sub.add_mutually_exclusive_group(required=True)
     mode.add_argument("--write", action="store_true", help="re-run the oracles over the whole corpus and rewrite the golden files")
     mode.add_argument("--render", action="store_true", help="only re-render DISAGREEMENTS.md from the golden files")
-    sub.add_argument("--source", action="append", choices=ORACLE_SOURCES, help="limit --write to these sources")
+    sub.add_argument("--source", action="append", choices=ORACLE_SOURCES + PENDING_SOURCES,
+                     help="limit --write to these sources; a pending source (wired, in no tier: "
+                          f"{', '.join(PENDING_SOURCES)}) is recorded only when named here, and nothing but verify "
+                          "reads its recording until it is enabled")
     sub.add_argument("--repeat", type=_at_least_one, default=golden.MIN_RECORDINGS, metavar="N",
                      help="record each source N times, in independent processes; a value that differs between them "
                           f"is recorded as unstable (default {golden.MIN_RECORDINGS}, the fewest verify accepts)")

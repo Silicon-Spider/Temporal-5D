@@ -64,7 +64,7 @@ another language. Those are the same offence, and `CONTRIBUTING.md` and
 | `cwmtt` | penteract/cwmtt (Haskell) | nightly, release | action counts, "no action exists", legality |
 | `chessin5d` | 5d-chess-js, the rules library of Chess in 5D (JavaScript) | nightly, release | check, mate / stalemate, legality |
 | `notation` | adri326/5dchess-notation: the notation spec, sample records, and the parser written beside it (JavaScript) | every commit | parse-only: the position it read at every ply, the side it reads as moving next, how many actions it read - no rules verdict |
-| `kairos` | FirePlank/5d-chess-engine, Kairos (Rust; decision H52) | no tier yet - nightly and release once recorded | check, mate / stalemate, counts (its exhaustive search only), legality |
+| `kairos` | FirePlank/5d-chess-engine, Kairos (Rust; decision H52) - in ftxi's lineage (CHECKPOINT 10) | no tier yet - after the release tier's sign-off run | parse mode (`kairos:parse`): the position it read at every ply, the side to move, its replay - no rules verdict; full mode: check, mate / stalemate, counts (its exhaustive search only), legality |
 
 Exact commits, licences and caveats are in `oracles.lock.toml` and `PROVENANCE.md`.
 ftxi and cwmtt each have two action searches, a hypercuboid one and an exhaustive
@@ -80,29 +80,51 @@ checked is tabulated, per variant, at the top of `DISAGREEMENTS.md`.
 ### Kairos, wired and not yet enabled (H52)
 
 Kairos (`kairos`, FirePlank/5d-chess-engine, Rust) is the fourth rules oracle
-(decision H52, CHECKPOINT 9): pinned, built by `build --oracle kairos`, and asked
-by `observe` as two sources - `kairos`, its hypercuboid search (the check and the
-mate verdict, and no count: that search leaves out actions that waste a move), and
-`kairos:naive`, its exhaustive enumerator (the check, the count, and the verdict
-where it finds no action). Both say what Kairos set up at every position. Its
+(decision H52, CHECKPOINT 9), in ftxi's lineage (CHECKPOINT 10: it counts with ftxi
+for the two-oracle bar, adding a vouch only where it answers and ftxi does not):
+pinned, built by `build --oracle kairos`, and asked by `observe` as three sources.
+In **parse mode**, `kairos:parse`: what it set up at every position, the side to
+move and how it replayed the record - the same replay as its searches, so an
+action that leaves a royal capturable is refused (`cannot_submit`) - and a null
+for every question; like the notation parser it is a parse-only source
+(`adapters.PARSE_ONLY_SOURCES`), whose playing an action is no verdict and which
+vouches for no ruleset. In **full mode**, two: `kairos`, its hypercuboid search (the
+check and the mate verdict, and no count: that search leaves out actions that waste
+a move), and `kairos:naive`, its exhaustive enumerator (the check, the count, and
+the verdict where it finds no action). If nightly time binds, Kairos's mate
+comparisons are the first thing to drop - they carry no vouch beside ftxi's
+(CHECKPOINT 10). Both say what Kairos set up at every position. Its
 5dpgn reader fails a whole record on one move it cannot read, so such a record is
 `unsupported` (`parse_failed`) from position 0. What it answers, and why, is in
 `PROVENANCE.md` ("Kairos, the fourth oracle"); parts of it derive from ftxi's
-code, which bears on how far it counts as a second oracle (`docs/BUILD_LOG.md`,
-issue 526).
+code, which is why it counts with ftxi as one lineage (CHECKPOINT 10, issue 526).
 
-It is in no tier yet. Every source a tier lists is held to its golden files -
-`verify` and every tier fail with `golden-missing` for a source with none - and
-the recording tier must run every source the gate compares. So its two sources
-wait in `adapters.PENDING_SOURCES`, which no tier may list, nothing records, and
-`verify` asks nothing of, until they are recorded on a quiet machine, whose costs
-decide what each tier requires of them (H32), and the user has ruled issue 526.
-Enabling them is one reviewed commit: move them into `ORACLE_SOURCES` (and
-`kairos` into `PRIMARY_SOURCES`), list them in `gate.toml`'s nightly and release
-tiers with their budgets, record them (`golden --write --repeat 2 --source kairos
---source kairos:naive`), read the new lines of `DISAGREEMENTS.md`, and run the
-nightly tier with the engine to triage what Kairos finds (`docs/BUILD_LOG.md`,
-issue 530, has the steps).
+It is in no tier yet: CHECKPOINT 10 puts its enabling after the release tier,
+whose sign-off run leaves Kairos out. Every source a tier lists is held to its
+golden files - `verify` and every tier fail with `golden-missing` for a source with
+none - and the recording tier must run every source the gate compares. So its three
+sources wait in `adapters.PENDING_SOURCES`, which no tier may list. A pending source
+may still be **recorded** before it is enabled (`golden --write --source
+kairos:parse`, the quiet-machine block's): its files go into `golden/` under
+`MANIFEST` like any other, and `verify` holds them to the same static checks - a
+stale or incomplete one fails it - but they are read apart (`snapshot.recorded_pending`),
+never into the snapshot a tier compares with or `DISAGREEMENTS.md` is rendered from,
+so recording one changes nothing any tier, `verify`'s checks of the enabled sources
+or `DISAGREEMENTS.md` reads (`tests/test_pending_recording.py`).
+Enabling them is a reviewed change: move them into `ORACLE_SOURCES`, list them in
+`gate.toml`'s nightly and release tiers with their budgets, record them (`golden
+--write --repeat 2 --source <each>`), read the new lines of `DISAGREEMENTS.md`, and
+run the nightly tier with the engine to triage what Kairos finds
+(`docs/BUILD_LOG.md`, issue 530, has the steps). At every stage exactly one Kairos
+source is in `PRIMARY_SOURCES` - the one Kairos's replay (its refusals, where its
+reading ends) is compared through - never two, which would report each difference
+twice: `kairos:parse` while parse mode is enabled alone; at full mode's enabling,
+either `kairos` in its place (then a refusal past where `kairos` was cut by its
+budget is compared through no source) or `kairos:parse` kept for good (which needs
+`observations.judges_actions` and the divergence file's rule for replay entries
+changed first). `oracle_harness/adapters/__init__.py` says why, and
+`tests/test_repository.py` fails an enabling that leaves an implementation with
+none or two.
 
 ## Layout
 
@@ -533,6 +555,17 @@ that a cost that moved far enough to change what a tier requires shows there.
 `calibration.json` holds the time the calibration probe took on the recording
 machine.
 
+A **pending** source (wired, in no tier: Kairos's sources until after the release
+tier's sign-off run) may be recorded too, but only when named (`golden --write
+--source <it>`): its golden and cost files sit beside the others under `MANIFEST`, and
+`verify` holds them to the same checks, apart from the enabled sources' - nothing
+else reads them until the source is enabled ("Kairos, wired and not yet enabled",
+above). A recording that names only pending sources leaves `calibration.json` - the
+enabled sources' reference, re-timed only by a recording of one of them - and every
+enabled source's files untouched: it carries the calibration probe timed with it,
+the machine and the time, in its own cost file, and its costs are read on
+`calibration.json`'s time base (scaled by the two probes' ratio).
+
 ### What the disagreements are, at the current pins
 
 Read this with `DISAGREEMENTS.md` open; revisit it when a pin or the corpus moves.
@@ -901,10 +934,13 @@ over all of its records:
 
 1. the engine replayed each one - to its end, or to an action it holds illegal
    (not one it could not read) - and none holds an unexplained divergence;
-2. each one was followed as far as the engine went by at least **two** oracles
-   (H47, CHECKPOINT 8: a single oracle cannot tell its own bug from the engine's) -
-   two independent implementations, so two searches of one count once, and the
-   notation parser, which judges nothing, never counts - and where the engine
+2. each one was followed as far as the engine went by at least **two** oracle
+   lineages (H47, CHECKPOINT 8: a single oracle cannot tell its own bug from the
+   engine's) - two independent implementations, so two searches of one count once;
+   an oracle derived from another's code counts with it as one lineage, vouching
+   through any member that followed and at most once (CHECKPOINT 10: Kairos with
+   ftxi - each pin's `lineage` in `oracles.lock.toml`, rendered in `PROVENANCE.md`,
+   "Lineages"); and the notation parser, which judges nothing, never counts - and where the engine
    refuses an action, by oracles that refuse the same action as illegal (one that
    could not match the move's text confirms nothing). An oracle that replayed the
    record differently - accepting an action the engine refuses, or the other way
@@ -912,7 +948,8 @@ over all of its records:
    count, even where a known divergence excuses the difference;
 3. for each of check, count and mate, the oracles give a verdict that settles it,
    and agrees with the engine, at no less than `min_checked` (75%) of the
-   positions the engine reports. An answer the engine contradicts confirms
+   positions the engine reports - any member of any lineage: where ftxi's check is
+   on record as its error (R1), Kairos's agreeing answer is the lineage's vouch. An answer the engine contradicts confirms
    nothing, even one on record as the oracle's error, and neither does an answer
    about another position than the engine's: after the oracle parted from the
    engine, or where its unmoved markers differ from the engine's.
@@ -926,7 +963,7 @@ oracle follows is `NOT gated`, the reason naming the record and its oracle. For
 each gated ruleset the gate prints how many positions had an independent
 answer for each observable; at how many of the engine's positions an oracle held
 the engine's boards and pieces, and at how many its exact state, unmoved markers
-included; and the fewest oracles that stood behind any record - two at the least.
+included; and the fewest oracle lineages that stood behind any record - two at the least.
 Where a ruleset falls short of the floor and answers were set aside because the
 oracle's markers differed from the engine's, the reason says how many.
 
