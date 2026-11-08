@@ -1497,6 +1497,11 @@ struct Search::Impl {
     std::vector<double> logits;
     n.submit_logit = ev.submit_logit;
     n.edges.reserve(moves.size() + (n.submit_possible ? std::size_t{1} : std::size_t{0}));
+    // The edges' memory counted at once (review finding L7): set_priors counts
+    // it only at its end, so a failure before then - here or there - would
+    // leave the grown edges uncounted. (The node stays a leaf; its next
+    // expansion remakes the edges within this room.)
+    account(n);
     const std::span<const MoveLegality> legality = x.move_legality();
     for (std::size_t i = 0; i < moves.size(); ++i) {
       Edge e;
@@ -3659,6 +3664,17 @@ struct Search::Impl {
       if (!seen[id]) fail("a node the root does not reach", id);
       if (!params_.graph && id != root_ && parents[id] != 1) fail("a tree node with " + std::to_string(parents[id]) + " parents", id);
     }
+    // Memory (review finding L7): each node's count is node_bytes of it as it
+    // is, and memory_bytes' sum is theirs - after a failure as after anything.
+    std::size_t bytes = 0;
+    for (NodeId id = 0; id < nodes_.size(); ++id) {
+      if (nodes_[id].bytes != node_bytes(nodes_[id])) fail("a node's memory count is stale", id);
+      bytes += nodes_[id].bytes;
+    }
+    if (bytes != tree_bytes_) {
+      throw std::logic_error("search invariant: the nodes' memory counts sum to " + std::to_string(bytes) +
+                             ", the search's to " + std::to_string(tree_bytes_));
+    }
     // MCGS's table (review finding M3): every node's identity in it, each entry
     // a node of its own identity - the lowest id holding it (the first made, or
     // after a re-root the first in the new order, as register_node enters them;
@@ -3686,6 +3702,7 @@ struct Search::Impl {
       const Node& n = nodes_[id];
       if (n.vl != 0) fail("virtual loss not released on a node", id);
       if (n.pending) fail("a node still marked pending", id);
+      if (n.flat && !n.expanded) fail("a flat-form generator on a node not expanded", id);
       std::uint64_t through = 0;
       double through_wq = 0;
       double through_w = 0;
