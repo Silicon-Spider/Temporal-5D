@@ -405,7 +405,16 @@ pushed after every commit, taking main by merge, never rebase (re-check with `gi
   toolchain (1.99.0) fetched by `build --bootstrap`, its driver and two sources (`kairos`,
   `kairos:naive`) built and smoke-tested - wired, enabled in no tier (issues 524-533,
   edits 362-363). Since CHECKPOINT 10 (issue 526 ruled: one lineage with ftxi): the gate's
-  two-oracle count by lineage and every oracle's lineage in PROVENANCE.md, now; Kairos's
+  two-oracle count by lineage and every oracle's lineage in PROVENANCE.md - built
+  2026-11-02 (issue 573; the nightly gates what it gated); Kairos's parse mode built and
+  pending (`kairos:parse`, issue 574); (P), a pending source recorded before it is enabled, built
+  (issue 575) - **ready to record** `golden --write --repeat 2 --jobs 8 --source kairos:parse` on a
+  quiet machine; the round-2 review's fixes made (2026-11-08, issue 577: the lineage table fails
+  closed and its wiring is tested; the lineage notes corrected - Kairos's own parts are its
+  wasted-move pruning and its playing engine, edit 401) and its one question for the user (issue
+  578); the oracle notation-reader gaps of the audit's verification drafted for upstream (issue 579:
+  two bug reports, one question - the user's to file); H48's stop (issue 576) with the user; the three rulesets Kairos reads and ftxi does not (Timeline Battleground, Just
+  Kings, Just Pawns) and the ftxi/cwmtt lineage question with the user; Kairos's
   parse mode in the quiet-machine block (issue 530), reported first if it answers a ruleset
   ftxi does not; H48's re-recording; the release tier with the engine configured, Kairos
   left out; after it, Kairos's full mode and triage, and the report CHECKPOINT 10 asks for.
@@ -420,6 +429,8 @@ pushed after every commit, taking main by merge, never rebase (re-check with `gi
   issues 177-197, 450-451, edits 137-146, 330); next E11 (E7 with 6o's arms, no root-scan
   reserve while Guard is offline - issue 306) and E8 behind its flag, then MT-03's
   settling-scan part.
+- `lane/audit` (from main 28a102b, 2026-11-01) - the done-means audit merged (2026-11-08): section 15.2 row by row, section 15.4 invariant by invariant, the committed-class rows and section 15.5 clause by clause, checked adversarially by a five-agent workflow and corrected (section "Done-means audit"; issues 535-538, edits 364-366).
+- `lane/fix535` (from main 2cb107d, 2026-11-02) - issue 535: the flat form and the graph's node creation made exception-safe under an allocation failure (false exhaustion, a partial append, a stranded node), in progress.
 - `lane/net` - A5 (piece-centric tokens, dense scope only, behind its flag, off) merged with
   its review fixes (2026-11-02; issues 244-258, edits 190-199): no 2x flag stands under
   CHECKPOINT 9's phase form. Next: C26/C27 (low priority, the cached path behind its flag),
@@ -441,6 +452,8 @@ gate steps 2 and 3a (39bdf52); B11, B16 and B17.
 The main loop reviews each component and merges it into main, running the Lazy SMP
 timing test first for any merge that touches the search or the provers ("The Lazy
 SMP timing test log", below).
+
+**No stash in any lane** (2026-11-08): git keeps one stash list for every worktree of the repository, so a `git stash pop` or a bare `git stash drop` in one lane can take another lane's entry - it happened three times between 2026-10-24 and 2026-11-08; each lane's work was checked present and every dropped entry is recoverable by its commit id. A lane keeps work in progress as a temporary commit on its own branch instead.
 
 **The lanes' worktrees, and the one machine.** To recreate a lane on a fresh clone:
 `git fetch origin`, then `git worktree add .claude/worktrees/<lane> lane/<lane>` (git
@@ -592,9 +605,9 @@ main and issue 300 is ruled. Early adjudication (§12.3) has no specification (i
 
 **Waiting on the user:** nothing that blocks (the `gh` login is done and the CI
 comparison recorded in "Recovery", above); the standing items - branch protection with
-the workflows as required checks; filing the two oracle bug drafts in
-`docs/checkpoints/upstream/` (and, after gate step 3b, the ftxi question of issue
-126); applying the proposed spec edits upstream. **GitHub Actions has started no job
+the workflows as required checks; filing the oracle drafts in
+`docs/checkpoints/upstream/` - the two bug drafts of R7, the ftxi question of issue
+126, and issue 579's three (two bug reports, one question); applying the proposed spec edits upstream. **GitHub Actions has started no job
 since about 09:56 UTC on 2026-10-17** - every run, on main and on every lane, fails at
 once with "The job was not started because recent account payments have failed or
 your spending limit needs to be increased" (the account's 'Billing & plans'): until
@@ -602,7 +615,7 @@ it is fixed nothing is confirmed on Linux, and the main loop runs every check
 locally, the nightly tier included, before each merge. **CLAUDE.md's table still says
 "the user's rulings R1-R10"** - the rulebook now has R11 (H51); the instruction files
 are the user's to edit. **Spec issue 156 corrects text the user wrote from our report:** the 5.8 / 27.1 / 64.0% that §8.2's "Measured (CHECKPOINT 8)" paragraph and register M22 call shares of turns with more than one *playable* board are the shares with more than one *mandatory* board (the main loop mislabelled them in the M22 merge, 3d2e73a); the playable shares are 15.1 / 65.2 / 99.4%, so "these bound the mandatory share from above" does not hold - proposed edits 127 and 128 give the corrected text; the ruled build order does not depend on it. Ruled at CHECKPOINT 8: spec issues 122-126, 142 and 204
-("CHECKPOINT 8", above). Put to the user, none blocking: 244-258 (merged with A5 - piece-centric tokens behind their flag, dense scope only: the block-causal scope and the cached path refused until the user reads what frozen boards' destination tokens read (252; the likely reading - frozen tokens never read destination tokens, which are live queries - given), the reply head refused (251), the window's tokens refused (253); no decision rule for A5 before ablation 1, which also leaves G10's trigger undefined (257); A5 cheapens dense more than cached, so N* moves up under A5 (258, edit 199); whether ablation 1's A5 arm runs with B11 on (248); under C26 the figures pool to 2.45x at N*=50, the cached node 2.11x - inside 2x of section 14.4's ~2.7x, no flag; edits 190-199), 524-534 (merged with Kairos, H52 - pinned at 8bfea4a6 (no tags or releases, 524), wired as two pending sources, `kairos` and `kairos:naive`, in no tier until the quiet-machine recording (530); 526 ruled at CHECKPOINT 10 (one lineage with ftxi), 527 ruled (the driver as built is right) and 532 answered (the match runner in the test harness, when built); its legality answer covers royal safety only (528); 534: CLAUDE.md and AGENTS.md still say three oracles; edits 362-363), 177-197 and 450-451 (merged with E10 - the search wiring per 6b″'s table and H44's audit-lane tooling: may self-play steer (the asset map, Hunt's suggestions) before I2's steered-visit definition is validated - the per-visit counterfactual count measured to over-correct (boosted share 0.03-0.07 after exclusion against 0.50-0.75 unsteered), so self-play runs without the map meanwhile (450); the additive boost made monotone and capped at half the unboosted mass, still dominating flat priors (308 boards against 195 on uniform priors; its strength a placeholder, 178); may Hunt's and the settling scans' proofs drive time management before the sign-off (180); Hunt not asked where the root's settling scan asks the same question (181); the flat form's steering order (178(b)); the ladder's threads per parallel self-play game (451); edits 137-146, 330 - 139 not to go upstream as written), 520-523 (merged with G9's bounded AMD attempt - it partly works: the network runs on the RX 9070 XT matching the CPU, torch.compile and so compiled FlexAttention do not (no Triton for Windows; a Linux install, WSL2 or a source-built Triton would be system changes, 520); padding attention's head width to a multiple of 8 (1.2-2.5x on AMD), the network lane's call (521); AMD-labelled figures recorded but settling no verdict, M9's Phase-3 re-check included (522); edits 360-361), 241-243 (merged with D2's flat head - the head always built, no flag (section 8.2's "built either way"; a flag defaulted on the alternative); the soft policy, D9's optimistic policy and the reply prototype without a flat target (masked on flat rows); the optimistic prior refused under the flat form; the flat target pruned per board after marginalising (per turn the arm), each option read as the turns that take it; a missing flat_policy weight refused; version-1 records refused, not read; edits 187-189), 172-176 (merged with engine ABI round 3 - B11's pin and check relations: the acting player's check edges empty in every position reached by legal play, its pins x-ray edges onto the royal rather than binding pins, the opponent's checks alone as the alternative, the Q6 fallback dropping the whole pass; D4's labels: the mate label's budget (Unknown masked), the exchange label read on the board the capture creates off the passed boards (67% of its 1s there, was 87% "attacked"); edits 135-136), 240 (merged with A8 - the FFN after the embedding (8x, a placeholder) puts A8 at 45x its 15.3 estimate, flagged under the 2x rule; +10-14% per cached node; the concatenation built as a sum; edits 185-186), 238-239 (merged with the precision component - G2's FP8 E4M3 emulation: the pow2 scale rule, granularity, which matmuls, the plain STE, the cache refusing FP8 attention, H800's ~14-bit FP8 accumulation (DeepSeek-V3 3.3.2) for 6w's GPU arm; G8's QAT hook switched in place), 163-171 (merged with D2's flat form - what a turn is and its tie order, what summed logits sum, the leave option and its 0.5 fallback, the prior of a generated turn, E1 under the flat form, generator cost and budget; edits 131-134), 234-237 (merged with M21 - the record's raw root outputs and replay checks, the targets' placeholders, the generator's PCR/I18/I19/I20 parameters, the trainer; 237(a): optimiser steps on synthetic rows only, the main loop's reading of the smoke-step rule; edit 182: G8's QAT hook a seam until the precision component), 231-233 (merged with the heads - D3's shared hidden layer, short-term horizons (2, 5, 16 turns), the error target and HL-Gauss sigma; D4's soft-head width and the reply map's ambiguity and target readings; D9's z, built as register D9 words it - the predicted short-term value, as KataGo does - with W - L the alternative), 157-162 and 301 (merged with D2's tree form - the gates' readings, the present gate deciding most of the saving (160: read literally it fires at every turn's last mandatory move), the inheritance details, the fixed board order not built; the tree form under MCGS refused until ruled, 301), 230 (merged with A6's network side - the turn-state counts' encoding, an MLP over scaled counts beside alternatives; the other colour's refresh view takes derived counts; proposed edit 171), 148-155 (engine ABI round 2's readings: D backed up and moves-left recorded; 6m's consumers and default; the noise's edge set; the shaping form; the root temperature's default; forced playouts not built; the effort label; the legality budget as a recorded condition), 129 (the measurements
+("CHECKPOINT 8", above). Put to the user, none blocking: 570-578 (merged with Kairos round 2 - the two-oracle bar counted by lineage for every oracle, each lineage declared in the lock file and PROVENANCE.md; **576: H48's lane stop condition is met** - no practicable naive budget makes every proof-channel check non-vacuous within a CI job's 240 minutes; options (a) naive terminal verdicts required only below a board count in the proof-channel tier, (b) the naive searches nightly only, (c) the sign-off run outside CI with hours-long naive budgets - this blocks the release tier; 573(a): is ftxi's step-for-step adaptation of cwmtt's literate method derived code (recorded as two lineages)? 574: the three rulesets Kairos reads and ftxi does not (Misc - Timeline Battleground, Focused - Just Kings, Focused - Just Pawns) - does Kairos's full mode precede the release tier for them? 578: nothing ties a lineage reading to the pinned commit; Kairos's enumerator and check pass set are ftxi's too (ftxi's naive search, and its check pass set from a commit after ftxi's pin), so section 11.0's "its own: the check test's pass set" is corrected by edit 401; edits 400-401), 535-538 (merged with the done-means audit, section "Done-means audit" - 538: C25 is the one committed-class row neither decided nor awaiting a named trained ablation (a decided wording, "Not a v1 option - reopened by 6c's evidence", or a new arm); wording only for B3's status word, C18's status against sections 7.6/13.1/14.4/15.3, and edit 206's vocabulary; C16's undefined trigger a spec gap; 536: whether section 15.5 needs C26/C27 while C2 is deferred; 537: section 15.4 read as required (edit 365); 535, the flat form's exception safety under an allocation failure, being fixed on `lane/fix535`; edits 364-366), 244-258 (merged with A5 - piece-centric tokens behind their flag, dense scope only: the block-causal scope and the cached path refused until the user reads what frozen boards' destination tokens read (252; the likely reading - frozen tokens never read destination tokens, which are live queries - given), the reply head refused (251), the window's tokens refused (253); no decision rule for A5 before ablation 1, which also leaves G10's trigger undefined (257); A5 cheapens dense more than cached, so N* moves up under A5 (258, edit 199); whether ablation 1's A5 arm runs with B11 on (248); under C26 the figures pool to 2.45x at N*=50, the cached node 2.11x - inside 2x of section 14.4's ~2.7x, no flag; edits 190-199), 524-534 (merged with Kairos, H52 - pinned at 8bfea4a6 (no tags or releases, 524), wired as two pending sources, `kairos` and `kairos:naive`, in no tier until the quiet-machine recording (530); 526 ruled at CHECKPOINT 10 (one lineage with ftxi), 527 ruled (the driver as built is right) and 532 answered (the match runner in the test harness, when built); its legality answer covers royal safety only (528); 534: CLAUDE.md and AGENTS.md still say three oracles; edits 362-363), 177-197 and 450-451 (merged with E10 - the search wiring per 6b″'s table and H44's audit-lane tooling: may self-play steer (the asset map, Hunt's suggestions) before I2's steered-visit definition is validated - the per-visit counterfactual count measured to over-correct (boosted share 0.03-0.07 after exclusion against 0.50-0.75 unsteered), so self-play runs without the map meanwhile (450); the additive boost made monotone and capped at half the unboosted mass, still dominating flat priors (308 boards against 195 on uniform priors; its strength a placeholder, 178); may Hunt's and the settling scans' proofs drive time management before the sign-off (180); Hunt not asked where the root's settling scan asks the same question (181); the flat form's steering order (178(b)); the ladder's threads per parallel self-play game (451); edits 137-146, 330 - 139 not to go upstream as written), 520-523 (merged with G9's bounded AMD attempt - it partly works: the network runs on the RX 9070 XT matching the CPU, torch.compile and so compiled FlexAttention do not (no Triton for Windows; a Linux install, WSL2 or a source-built Triton would be system changes, 520); padding attention's head width to a multiple of 8 (1.2-2.5x on AMD), the network lane's call (521); AMD-labelled figures recorded but settling no verdict, M9's Phase-3 re-check included (522); edits 360-361), 241-243 (merged with D2's flat head - the head always built, no flag (section 8.2's "built either way"; a flag defaulted on the alternative); the soft policy, D9's optimistic policy and the reply prototype without a flat target (masked on flat rows); the optimistic prior refused under the flat form; the flat target pruned per board after marginalising (per turn the arm), each option read as the turns that take it; a missing flat_policy weight refused; version-1 records refused, not read; edits 187-189), 172-176 (merged with engine ABI round 3 - B11's pin and check relations: the acting player's check edges empty in every position reached by legal play, its pins x-ray edges onto the royal rather than binding pins, the opponent's checks alone as the alternative, the Q6 fallback dropping the whole pass; D4's labels: the mate label's budget (Unknown masked), the exchange label read on the board the capture creates off the passed boards (67% of its 1s there, was 87% "attacked"); edits 135-136), 240 (merged with A8 - the FFN after the embedding (8x, a placeholder) puts A8 at 45x its 15.3 estimate, flagged under the 2x rule; +10-14% per cached node; the concatenation built as a sum; edits 185-186), 238-239 (merged with the precision component - G2's FP8 E4M3 emulation: the pow2 scale rule, granularity, which matmuls, the plain STE, the cache refusing FP8 attention, H800's ~14-bit FP8 accumulation (DeepSeek-V3 3.3.2) for 6w's GPU arm; G8's QAT hook switched in place), 163-171 (merged with D2's flat form - what a turn is and its tie order, what summed logits sum, the leave option and its 0.5 fallback, the prior of a generated turn, E1 under the flat form, generator cost and budget; edits 131-134), 234-237 (merged with M21 - the record's raw root outputs and replay checks, the targets' placeholders, the generator's PCR/I18/I19/I20 parameters, the trainer; 237(a): optimiser steps on synthetic rows only, the main loop's reading of the smoke-step rule; edit 182: G8's QAT hook a seam until the precision component), 231-233 (merged with the heads - D3's shared hidden layer, short-term horizons (2, 5, 16 turns), the error target and HL-Gauss sigma; D4's soft-head width and the reply map's ambiguity and target readings; D9's z, built as register D9 words it - the predicted short-term value, as KataGo does - with W - L the alternative), 157-162 and 301 (merged with D2's tree form - the gates' readings, the present gate deciding most of the saving (160: read literally it fires at every turn's last mandatory move), the inheritance details, the fixed board order not built; the tree form under MCGS refused until ruled, 301), 230 (merged with A6's network side - the turn-state counts' encoding, an MLP over scaled counts beside alternatives; the other colour's refresh view takes derived counts; proposed edit 171), 148-155 (engine ABI round 2's readings: D backed up and moves-left recorded; 6m's consumers and default; the noise's edge set; the shaping form; the root temperature's default; forced playouts not built; the effort label; the legality budget as a recorded condition), 129 (the measurements
 pinned before H51 - 6b, 6b′, 6b″, Hunt's truth - keep the reading they were made
 under, a written x must capture, so they reproduce; proposed edit 101), 130 (how a
 divergence settled by a project decision is recorded upstream - KD-0170 is neither
@@ -1763,8 +1776,8 @@ width (M22)", "The CHECKPOINT 8 figures"). Found on the way: the ruling's premis
 | H44 | built (tooling), tested | The audit lane's tools: the certificate checker (E4 alone) and `t5d-hunt-truth` (E9); the search's decision events and **the tooling (E10, 2026-10-23, `lane/search`)**: the decision log (`PlayParams::decision_log`, `t5d-play --decision-log`, Python's `netplay --decision-log`; JSONL `t5d-decisions` v1 - games by start and actions, events final / pv_change / demotion), `t5d-audit sample` (seeded, rates and caps per category and range), `run` (Guard's question offline on the action, our mate at the turn start by the truth recorder's method, certificates checked by E4; contradictions to the `CurriculumSink` interface, its one implementation a JSONL writer) and `report` (per range the shallow-mate rate, Guard's completed depths, the undecided, the contradictions; counted as 6b″ counts). No consumer of the contradictions is built (curriculum hooks as interfaces only). Every budget and threshold a placeholder (issues 191-197). **E10 review (2026-10-23):** the runner's E4 gate tested with a certificate E4 rejects (no contradiction), the abandoned mate and the chosen child's exclusion from the demotions tested; `missed_mate`'s known false positives stay documented (issue 192) |
 | H45 | not built (rule) | The adversarial league (M5) |
 | H46 | built, tested | Q2 (provisional): initial timelines count as created by neither player - a variant's set-up reads every timeline as initial (rulebook R10) |
-| H47 | built, tested | Tiered CI reading (Q-A at CHECKPOINT 6, amended at CHECKPOINT 8; spec issues 122-124 ruled, built 2026-10-17). **Two oracles to gate a ruleset**: every record of a ruleset followed, as far as the engine went, by at least two independent implementations (`gate.GATING_ORACLES`; two searches of one count once, the notation parser never), in every tier - so the commit tier, with one rules oracle, can gate nothing at all. **The check that some ruleset is gated** (`engine-nothing-gated`, and `GateResult.ok`'s test of it) runs only in a tier that runs every oracle search over the whole corpus (`Tier.full_strength`: nightly, release) - keyed to what a tier runs, never its name; any other tier - commit - is a smoke test, and its summary (`engine differential: SMOKE TEST - ...`) and report (`smoke_test`; nothing under `gated`) say that it gates nothing. **The commit tier's last-green-run rule**: the engine's baseline, `oracles/engine-baseline.json` - written by `harness.py baseline --write` from a green run of the commit tier, pinned in `gate.toml` `[baseline]`, checked by `verify` and before every comparison; recorded 2026-10-17 from the engine as built on `lane/gate`, 35 of the 41 commit records replayed - and every tier fails an engine that declines a record it read then (`engine-declined`) or reads none (`engine-read-nothing`). **Restricted runs** (`--source`/`--record`) never produce a tier verdict: labelled "restricted - not a tier result", findings only, the exit code from them, no check of a tier as a whole - undoing issue 124's first reading. In every tier an unexplained divergence, a telltale or a contract breach fails the engine; `gate.toml` is refused if a tier that is not full strength sets `require_engine`; the release tier's named-variant rule, the proof-channel line and parse mode are unchanged for a complete run - a restricted run's proof channel reads `DISABLED - restricted - not a tier result`, and it makes neither parse mode's `engine-nothing-compared` floor nor the release tier's proof-channel readiness check (`proof-channel-vacuous`; review fix 2026-10-22). The baseline (review fixes 2026-10-22): `baseline --write` reads the baseline it replaces verified against its pin and records nothing over one that is not the one pinned, so that a hand edit cannot empty its `LOSS` list; `verify` fails a baseline that holds no line for a record of its tier; like MANIFEST's, the pin catches an accident, not the file and its pin edited together - review's job (H33). `AGENTS.md` names neither the baseline nor its pin: its "Never make the gate pass by ..." list should add "editing `oracles/engine-baseline.json` or its `gate.toml` `[baseline]` pin by hand, or recording a `LOSS` with `baseline --write`", and "Things you must not touch" the file and its pin, written only by `baseline --write` - the instruction files are the user's to change, so the edit is put to the user (as H38's for `CLAUDE.md`). Run 2026-10-17 with the engine configured: commit SMOKE TEST - PASSED (baseline: 41 records compared, 0 declined); nightly PASSED, gating Standard - Half Reflected (2 oracles behind its record) and Standard - Reversed Royalty (3), and not Standard - Turn Zero (one oracle behind cwmtt/tesseractMageOChicken); a restricted run (`gate --tier nightly --source ftxi --record cwmtt/standard`) labelled "restricted - not a tier result", 0 findings. Spec issues 122-124, 131-133; proposed edits 103-104. CHECKPOINT 10 (issue 526 ruled): the two oracles are counted as lineages - an oracle derived from another's code counts with it, and a lineage vouches through any member that agrees and is not a recorded divergence, at most once (Kairos with ftxi); to build in `lane/gate` |
-| H48 | not started | Before the proof-channel sign-off: the naive searches' release budgets raised and the golden files re-recorded twice, on a quiet machine, so that no proof-channel check is vacuous (`verify`'s 17 `proof-channel-vacuous` notes) |
+| H47 | built, tested | Tiered CI reading (Q-A at CHECKPOINT 6, amended at CHECKPOINT 8; spec issues 122-124 ruled, built 2026-10-17). **Two oracles to gate a ruleset**: every record of a ruleset followed, as far as the engine went, by at least two independent implementations (`gate.GATING_ORACLES`; two searches of one count once, the notation parser never), in every tier - so the commit tier, with one rules oracle, can gate nothing at all. **The check that some ruleset is gated** (`engine-nothing-gated`, and `GateResult.ok`'s test of it) runs only in a tier that runs every oracle search over the whole corpus (`Tier.full_strength`: nightly, release) - keyed to what a tier runs, never its name; any other tier - commit - is a smoke test, and its summary (`engine differential: SMOKE TEST - ...`) and report (`smoke_test`; nothing under `gated`) say that it gates nothing. **The commit tier's last-green-run rule**: the engine's baseline, `oracles/engine-baseline.json` - written by `harness.py baseline --write` from a green run of the commit tier, pinned in `gate.toml` `[baseline]`, checked by `verify` and before every comparison; recorded 2026-10-17 from the engine as built on `lane/gate`, 35 of the 41 commit records replayed - and every tier fails an engine that declines a record it read then (`engine-declined`) or reads none (`engine-read-nothing`). **Restricted runs** (`--source`/`--record`) never produce a tier verdict: labelled "restricted - not a tier result", findings only, the exit code from them, no check of a tier as a whole - undoing issue 124's first reading. In every tier an unexplained divergence, a telltale or a contract breach fails the engine; `gate.toml` is refused if a tier that is not full strength sets `require_engine`; the release tier's named-variant rule, the proof-channel line and parse mode are unchanged for a complete run - a restricted run's proof channel reads `DISABLED - restricted - not a tier result`, and it makes neither parse mode's `engine-nothing-compared` floor nor the release tier's proof-channel readiness check (`proof-channel-vacuous`; review fix 2026-10-22). The baseline (review fixes 2026-10-22): `baseline --write` reads the baseline it replaces verified against its pin and records nothing over one that is not the one pinned, so that a hand edit cannot empty its `LOSS` list; `verify` fails a baseline that holds no line for a record of its tier; like MANIFEST's, the pin catches an accident, not the file and its pin edited together - review's job (H33). `AGENTS.md` names neither the baseline nor its pin: its "Never make the gate pass by ..." list should add "editing `oracles/engine-baseline.json` or its `gate.toml` `[baseline]` pin by hand, or recording a `LOSS` with `baseline --write`", and "Things you must not touch" the file and its pin, written only by `baseline --write` - the instruction files are the user's to change, so the edit is put to the user (as H38's for `CLAUDE.md`). Run 2026-10-17 with the engine configured: commit SMOKE TEST - PASSED (baseline: 41 records compared, 0 declined); nightly PASSED, gating Standard - Half Reflected (2 oracles behind its record) and Standard - Reversed Royalty (3), and not Standard - Turn Zero (one oracle behind cwmtt/tesseractMageOChicken); a restricted run (`gate --tier nightly --source ftxi --record cwmtt/standard`) labelled "restricted - not a tier result", 0 findings. Spec issues 122-124, 131-133; proposed edits 103-104. CHECKPOINT 10 (issue 526 ruled): the two oracles are counted as lineages - an oracle derived from another's code counts with it, and a lineage vouches through any member that agrees and is not a recorded divergence, at most once (Kairos with ftxi); to build in `lane/gate`. **Built 2026-11-02 (`lane/gate`, issue 573; the date corrected from 2026-11-01, issue 577):** each oracle pin declares `lineage` and `lineage_note` in the lock file, rendered in PROVENANCE.md's inventory (so `verify` holds the two together) and read by the gate (`Lock.lineages()`); the bar counts lineages, one vouch per lineage through any member that followed; the four existing oracles are each their own lineage - the nightly gates what it gated. Round-2 review fixes (2026-11-08, issue 577): the table fails closed - `engine_differential` requires it, with no default, and refuses an implementation it does not name - and `run_tier`'s use of the lock file's table is tested end to end; the report records the table the verdicts used |
+| H48 | not started | Before the proof-channel sign-off: the naive searches' release budgets raised and the golden files re-recorded twice, on a quiet machine, so that no proof-channel check is vacuous (`verify`'s 17 `proof-channel-vacuous` notes). Prepared 2026-11-02 (`lane/gate`, issue 576): **the lane stop condition is met** - the naive searches stall for over 300 s on single positions before terminal verdicts at 28-375 boards; no budget a 240-minute CI job allows makes every proof-channel check non-vacuous; for the user (options in issue 576) |
 | H15 | built, tested | The scanner's deterministic single-thread mode; the search's synchronous mode and digest (E6a; the digest in the C API) |
 | H16, H25, H29 | not built (rule) | Refused |
 | H17 | built in part | Lazy SMP in the scanner (E5c): same-root threads, a shared TT and a concurrent solved store; in-game decay and rung helpers wait for the search; no help for exhaustive refutations (measured on Guard, now in the register). **The shared stores' data race on Windows - fixed 2026-10-22** (`lane/engine`; found at E-A6's review, where `scanner_lazy_smp_store_refuses_contradictions` segfaulted in 11 of 600 runs on the development machine - MSYS2 ucrt64 g++ 16.2, Release; gdb: `same_position` under `ConcurrentSolvedStore::put`). The cause, confirmed in winpthreads' source and by experiment: libstdc++'s `std::shared_mutex` is a `pthread_rwlock_t` with the static initialiser; winpthreads initialises it on its first call and returns `EINVAL` to the threads that lose that race (8 threads on 64 fresh locks: 149,878 and 156,542 of 1,024,000 `pthread_rwlock_wrlock` calls, in two runs; `pthread_mutex_lock` never failed); libstdc++ ignores the error - so a losing thread ran its critical section without the lock, then unlocked a lock it did not hold. Every store the scanner's and the prover's threads share is first taken by all of them at once (a scanner's own; Guard's and Hunt's, built per call; the disproof stores). Fixed by construction: both stores' shards are behind `ShardLock` (`t5d/scanner.hpp`), a `std::mutex` - libstdc++'s `lock()` throws on any error the platform reports, never returning without the lock. A warm-up (each shard's lock taken once at construction; 0 crashes in 600 runs at E-A6's review) was not chosen: it rests on winpthreads' internals, not on the lock's contract, and keeps the slow lock. The audit: no other `std::shared_mutex`, `shared_lock` or `shared_timed_mutex` in `engine/`; the TTs are lockless; MCGS and the evaluation cache have no lock and are single-threaded (H15) - `t5d_search_new_sharing`, `EvalCache` and the Python `Search` now say that searches sharing a cache are used one at a time. Tests (`test_shared_stores.cpp`): `shared_store_lock_excludes_at_first_concurrent_use` and `shared_stores_hold_at_first_concurrent_use` - built with the old lock (`e8de15e` with the new test file, in a scratch copy) each failed in every run - 120 of 120 on 2026-10-17, 50 of 50 on 2026-10-22 (the lock test with 136-1,003 overlaps a run over 2026-10-17 and 2026-10-22, the store test by crashing) - and with `ShardLock` neither failed in 500 (2026-10-17) or 300 (2026-10-22) runs; `scanner_lazy_smp_store_refuses_contradictions` failed with the old stores in 14 of 600 runs on 2026-10-17 (10 crashes, 3 stores holding a position twice, 1 lost distance) and 85 of 600 on 2026-10-22 (58 crashes), and with the new in 0 of 1,000 each day. The cost, indicative (a shared machine; not in MEASUREMENTS): winpthreads' reader-writer lock takes about 1.4 µs a call and a process-wide spinlock, so the mutex is far faster here - store operations about 25× as many at 1 thread and 450-1,000× as many at 5 and 12; at 5 threads Hunt 1.45-1.69×, Guard 2.71-2.90× and the scanner 1.22-1.34× the nodes per second (two days; at 1 thread 0.94-1.07×, noise, and the same nodes and proofs as the old build). `scanner.hpp`, `scanner.cpp`, `prover.hpp` and `prover.cpp` are truth sources: the code signature changes, no verdict logic (M17's row; issue 147). Linux (glibc) not yet run: the engine job (ubuntu-24.04, g++ 13/14) runs the tests on every push, but no GitHub Actions job has started on any branch since 2026-10-17 09:56 UTC, the nightly of 2026-10-22 included ("recent account payments have failed or your spending limit needs to be increased") - re-run the engine workflow once billing is fixed. Issue 146, edit 120; the old lock also leaked Windows handles (about 2.75 per lock used; review of 0e4b6c5) |
@@ -1773,7 +1786,7 @@ width (M22)", "The CHECKPOINT 8 figures"). Found on the way: the ruling's premis
 | H22 | built, tested | All five items of §11.0 (E1, E2, E4); the register's wording now matches what is built (proposed edit 40, applied upstream) |
 | H23 | built, tested | The gate, oracle and engine sides. The engine is configured in `gate.toml` (`./build/engine/t5d-gate`, full mode, 2026-10-17; the root's build on every platform, with a time limit of its own, `[engine] timeout_s`) and compared in every tier: commit, a smoke test (H47), PASSED, locally and in CI (run 39009070712); nightly PASSED locally (2026-10-17, under the two-oracle rule), gating Standard - Half Reflected and Standard - Reversed Royalty; Standard - Turn Zero, gated since H51, has one oracle behind cwmtt/tesseractMageOChicken and is not - not yet run in CI with the engine (step 2). Since CHECKPOINT 8 (H47, built 2026-10-17) a ruleset is gated only when two oracles stand behind each of its records, and the commit tier holds the engine to its baseline (spec issues 131-133). The release tier, the one that can enable the proof channel, is not yet run with it: its oracle layer fails on H48's 17 notes until the re-recording. The proof channel stays disabled (H23, H41). Kairos (H52, CHECKPOINT 9) is pinned and its query surface confirmed (`lane/gate`, 2026-10-23); its two sources join the nightly and release tiers once the quiet-machine block records their golden files. CHECKPOINT 10: Kairos is in ftxi's lineage - the two-oracle bar counts lineages (H47) - and the sign-off run leaves it out |
 | H24, H26, H28 | built, tested | The generator and the 5dpgn/5DFEN parser are in-house (`engine/`), written from `docs/rules/README.md` and the notation spec's text (551 engine tests on `lane/gate` after H51's review); boundary clean. H28's one exception - the export-form record converted by the harness (CHECKPOINT 3) - is now in the register. Where the specification says when to write a token and not how to read one that disagrees, the reader reads leniently: the capture mark since H51 (2026-10-17, rulebook R11; `PgnOptions::capture_marks`), as the annotations (T15) and turn numbers before it - the move read as its squares define it, the mismatch a warning (`PgnReplay::warnings()`). H26 since CHECKPOINT 9: Kairos is the fifth submodule (pinned 2026-10-23, `lane/gate`), harness only; its NOTICE says parts of it derive from ftxi - ruled at CHECKPOINT 10: one lineage with ftxi; the reuse rule binds between oracles too, and every oracle's NOTICE, credits and pinned code are read at each pin bump |
-| H27 | built, tested | The oracle harness, committed 2026-10-01. Tiered CI as H47 reads it since CHECKPOINT 8 (built 2026-10-17): ftxi per commit as a smoke test that gates nothing - two oracles are needed to gate a ruleset - and fails an engine that declines a record it read on the last green run, or reads none; cwmtt and Chess in 5D nightly and before releases; a run restricted to chosen sources or records is never a tier result. Upstream reports (CHECKPOINT 8: defects as bug reports, disagreements with a documented rule as questions citing the source; drafted by the agent, filed by the owner), in `docs/checkpoints/upstream/`: the two defects of R7 as bug reports (2026-10-01), and ftxi's reading of the check test as a question (2026-10-17, spec issue 126: five representative positions, one per rule question RQ1-RQ4; the 147 R1 entries' `upstream` names it) - none filed yet. CHECKPOINT 9: Kairos pinned under `oracles/third_party/kairos` (lock tier nightly) - wired as sources `kairos` and `kairos:naive`, enabled in no tier until its golden files are recorded (issue 530) |
+| H27 | built, tested | The oracle harness, committed 2026-10-01. Tiered CI as H47 reads it since CHECKPOINT 8 (built 2026-10-17): ftxi per commit as a smoke test that gates nothing - two oracles are needed to gate a ruleset - and fails an engine that declines a record it read on the last green run, or reads none; cwmtt and Chess in 5D nightly and before releases; a run restricted to chosen sources or records is never a tier result. Upstream reports (CHECKPOINT 8: defects as bug reports, disagreements with a documented rule as questions citing the source; drafted by the agent, filed by the owner), in `docs/checkpoints/upstream/`: the two defects of R7 as bug reports (2026-10-01), ftxi's reading of the check test as a question (2026-10-17, spec issue 126: five representative positions, one per rule question RQ1-RQ4; the 147 R1 entries' `upstream` names it), and three notation-reader gaps (2026-11-08, issue 579: ftxi's signed timeline labels, KD-0054, and 5d-chess-js's signed `(>Lx)` token as bug reports; ftxi's refusal of an empty last sub-turn as a question) - none filed yet. CHECKPOINT 9: Kairos pinned under `oracles/third_party/kairos` (lock tier nightly) - wired as sources `kairos` and `kairos:naive`, enabled in no tier until its golden files are recorded (issue 530) |
 | H30 | built, tested | Step 2A (a04678c): every oracle reports its boards per ply; no placement divergence across the corpus |
 | H31 | done | CHECKPOINT 1: seven clusters triaged (903f4ae), settled by the user's rulings (H36-H40). Re-run 2026-10-17 with the engine configured: the 110 new check findings (72 positions) filed by cluster and settled by R1 (and R2 at five positions); the 58 positions of CHECKPOINT 1's table re-derive exactly, cwmtt/many2's 14 file as CHK-A1 (step 2). The notation finding (cwmtt/futures action 17, an `x` on a jump that takes nothing) settled by the user's ruling, never by vote (H51, R11): ftxi's refusal on record citing R11 (KD-0170), KD-0167 to KD-0169 withdrawn; the record's positions the engine now reads past it, 17 to 19, agree with cwmtt and Chess in 5D wherever each answers - the mate at 19 is Chess in 5D's call and the engine's (cwmtt reports no legal action there, `no_action`, which does not say checkmate or stalemate, and gives no check verdict; nightly, 2026-10-17: no finding) |
 | H32 | built, tested | Required sets at 100%, two recordings, cost files, calibration (2B) |
@@ -1788,7 +1801,7 @@ width (M22)", "The CHECKPOINT 8 figures"). Found on the way: the ruling's premis
 | H49 | not built (rule) | Held open: Hunt with a lazily expanded root, the likely remedy above 100 boards - adopted only through a fresh pre-registered test (§11.4, §14.4) |
 | H50 | built (placeholders) | The asset map's material values (`PieceValues`): P N B R Q at 100 / 300 / 300 / 500 / 900, unicorn 250, dragon 200, princess 700, brawn 125, common king 300, royals 0 - the register's provisional values exactly (issue 56) |
 | H51 | built, tested | Capture markers read leniently (CHECKPOINT 8; rulebook R11, a project decision). The reader: `PgnOptions::capture_marks`, `Lenient` by default - a move read as its squares and boards define it, the mark selecting no move, a mismatch either way (`x` on a move that takes nothing, a capture without `x`) a warning (`PgnReplay::warnings()`; `t5d-gate` prints it on stderr, outside the protocol - the engine contract unchanged); `MarkedMustCapture` (the reading before H51) and `Strict` (the letter both ways) only by option (`--pgn capture_marks=...`). The writers - the engine's `synthetic::pgn_move` (t5d-play's and the synthetic records) and N5's `netplay.pgn_move` (the network's self-play and match records) - write `x` exactly on captures: the first tested on every move offered at every position of 53 random games - 9 variants under the default rules, every alternative rule option in Two Timelines - judged from the boards (14,081 physical captures, 24 of them en passant, 6,293 by non-branching jumps, 12,192 by branches, and quiet moves of each kind), the records replaying with no warning and under the strict reading; the second the same way in Python (`test_the_writer_marks_exactly_the_captures`: 10 random games under 5 variants and two en passant positions), and N5's replay check (`check_replay`) reports any warning of the gate's reader (a review fix: H51 had taken away its only guard, the gate's refusal of a superfluous `x`). ftxi's refusal of cwmtt/futures action 17 is KD-0170 (citing R11 and H51); KD-0167 to KD-0169 withdrawn. Gate: commit tier SMOKE TEST - PASSED; nightly PASSED, no finding, gating **Standard - Turn Zero** for the first time (7 records, 144 positions) beside Half Reflected and Reversed Royalty - its weakest record, cwmtt/tesseractMageOChicken, has one oracle behind it (cwmtt), cwmtt/futures two (cwmtt, Chess in 5D), so under the two-oracle rule of issue 122 (the next component) Turn Zero would not be gated - H23's row (nightly gating two rulesets) and spec issue 127's measurement (a two-oracle rule ungating nothing nightly gates) predate this: issue 127 now says so, H23's row is left to the issue-122 component. 6b's tools keep the reading before H51 (`sixb_pgn_options`; spec issue 129), so 6b's, 6b′'s and 6b″'s roots and Hunt's truth rebuild exactly (the engine's tests run `t5d-scan6b` and `t5d-scan6bp` themselves to hold them to it); t0database: no record or action changes (M7's and M22's commands byte-identical). Not yet confirmed in CI: no run has started on `lane/gate` from a5e61d9 on (account billing; step 2). Spec issues 125 (settled), 129, 130; proposed edits 101, 102 |
-| H52 | built in part (`lane/gate`) | Kairos, the fourth oracle and fifth submodule (CHECKPOINT 9). Pinned at main's head, `8bfea4a6e8d1` (2026-10-23; no tags or releases - issue 524); its query surface confirmed at the pin and recorded in `PROVENANCE.md` ("Kairos, the fourth oracle") before the driver: its perft leaves out actions that waste a move, so it is not the gate's count (issue 525); its check test is R1's reading; its mate test is exhaustive; `get_boards` exports a state to fingerprint; neither 5DUCI nor the JSON interface answers the gate's questions, so a driver of the harness's own asks (issue 527); its NOTICE says parts derive from ftxi - ruled at CHECKPOINT 10: in ftxi's lineage, a checker whose disagreements still fail the gate, adding a vouch only where it answers and ftxi does not; the driver as built ruled right (issue 527). Order (CHECKPOINT 10): parse mode in the quiet-machine block, full mode and triage after the release tier, which leaves it out. Kairos as an external opponent (I7, M18) is the pilot run's, through a match runner in the test harness (issue 532), not built |
+| H52 | built in part (`lane/gate`) | Kairos, the fourth oracle and fifth submodule (CHECKPOINT 9). Pinned at main's head, `8bfea4a6e8d1` (2026-10-23; no tags or releases - issue 524); its query surface confirmed at the pin and recorded in `PROVENANCE.md` ("Kairos, the fourth oracle") before the driver: its perft leaves out actions that waste a move, so it is not the gate's count (issue 525); its check test is R1's reading; its mate test is exhaustive; `get_boards` exports a state to fingerprint; neither 5DUCI nor the JSON interface answers the gate's questions, so a driver of the harness's own asks (issue 527); its NOTICE says parts derive from ftxi - ruled at CHECKPOINT 10: in ftxi's lineage, a checker whose disagreements still fail the gate, adding a vouch only where it answers and ftxi does not; the driver as built ruled right (issue 527). Order (CHECKPOINT 10): parse mode in the quiet-machine block, full mode and triage after the release tier, which leaves it out. Kairos as an external opponent (I7, M18) is the pilot run's, through a match runner in the test harness (issue 532), not built. CHECKPOINT 10: its lineage, `ftxi`, declared in the lock file and counted by the gate (issue 573) |
 
 ### A-G, I - representation, network, search, training
 
@@ -1950,6 +1963,604 @@ optimistic policy in self-play (D9 is match play only), contempt, Hunt with a la
 expanded root (H49), value-side Shaw vectors, LMR (moot); refused: ONNX/TensorRT
 export (for now; G9, M5), KataGo's convolution-era methods, symmetry augmentation
 beyond colour.
+
+## Done-means audit (2026-10-24; finished 2026-11-02) - section 15.5 clause by clause
+
+`lane/audit`, from main 28a102b: the gate lane's step-2 audit, moved to a worktree of its
+own when `lane/gate` went back to Kairos. Every claim below was checked against main's code
+and main's `docs/design/` (CHECKPOINT 9's rows and CHECKPOINT 10's ruling included), not
+against the earlier step-2 brief.
+Unmerged lane work is named where it bears on a row: `lane/engine` ee9456e (MT-01, MT-03 and
+MT-02's engine side) and `lane/net` 3a87fb0 (A5). Verdicts:
+- **green**: the row's tests on main pass and meet section 15.2's protocol;
+- **green, short**: they pass, and the part of the protocol they leave out is named;
+- **waiting**: the component is not built yet;
+- **deferred** or **void**: section 15.2 itself defers or voids the row.
+
+None of the audit's tests needed a code change; they are listed under "The audit's tests".
+One of them found a defect, which is not committed as a test (issue 535).
+
+**Corrected 2026-11-02** after an adversarial verification by five checks: REG-C derived again
+independently and then refuted; every green row spot-checked; issue 535 reproduced and its
+cause traced; every ungated ruleset triaged. What changed:
+- REG-C narrows to C25;
+- rows 5 and 15 are short, and the details of rows 8, 11 and 16 are corrected;
+- two section 15.4 verdicts change;
+- issue 535's account is rewritten;
+- clause 1 names each ungated ruleset's barriers.
+
+### Section 15.2, row by row
+
+The protocol (section 15.2) asks for:
+- random weights at realistic initialisation scale;
+- several seeds;
+- a tolerance matched to the arithmetic, bit-exact for integer paths;
+- adversarial constructions: duplicated boards, deep travel, many timelines, supersession
+  inside a refreshed subtree, every variant.
+
+| # | Row | Register | Verdict | What remains |
+|---|---|---|---|---|
+| 1 | Cached attention = dense under the same mask | C2, C17 | green, short | Re-measure the FP32 and BF16 bounds on the finished v1 network (net lane, step 2's re-run) |
+| 2 | Windowed = full restricted to W ∪ E | C5 | deferred with the window (M18) | - |
+| 3 | Lazy K/V = eager recompute | C10 | deferred with the window | - |
+| 4 | Supersession recompute = from scratch | C20 | green | - |
+| 5 | A refresh fork leaves sibling subtrees unchanged | C3a | green, short | No refresh fork on an engine variant, a 3x3, 4x4, 6x6 or 7x7 board, or a T0 board; a root-refreshed parent on one seed only |
+| 6 | Phase form: under N\* node for node dense; at or above it every node cached | C26 | waiting (low priority, CHECKPOINT 9) | Build C26 in the cached path behind its flag, with the row (`lane/net`, after A5) |
+| 7 | Tree form, cached: supersession recompute at the next evaluated node = recompute at supersession | C27 | waiting (low priority) | The same, with the tree form's cached work |
+| 8 | Same state + epoch -> same evaluation; MCGS transposition hits identical | C19-C21 | green | - |
+| 9 | Incremental Zobrist = from scratch, duplicated boards | H18 | green (short of every variant before the audit's test) | - |
+| 10 | ~~NNUE accumulator = recompute~~ | F4 | void: the NNUE is retired (CHECKPOINT 9) | - |
+| 11 | FP8/BF16 cache precision = live precision | G1 | green, short | Adversarial geometries in BF16 and FP8, and bounds re-measured on v1 (net lane) |
+| 12 | Displacement bias through the score function = materialised | B15 | green | - |
+| 13 | Key-side Shaw term, gather = direct per pair | B17 | green | - |
+| 14 | Colour-swapped mirror: identical canonical inputs and outputs | A7 | green (read as issue 304 says) | - |
+| 15 | Targets re-derived from stored records = written at generation | I15 | green, short | Two variants, one game seed per arm, one network seed, games of 2-3 turns |
+| 16 | Reply mapping onto current squares, ambiguous mappings masked | D4 | green, short | Constructed turns for a move between two present boards, a rewinding branch and J6 twins (optional; net lane) |
+| 17 | Tree form, every gate firing = the ply split | D2 | green (R8 only before the audit's test) | - |
+| 18 | Flat form's generator = an exhaustive ordered listing | D2 | green | - |
+| 19 | Turn-state counts = a brute-force recount | A6 | green (short of every variant before the audit's test) | - |
+
+**Count.** 19 rows:
+- green: 14 rows (1, 4, 5, 8, 9 and 11-19). Of these, five are short of the protocol as named:
+  1, 5, 11, 15 and 16. That count holds once `lane/audit`'s tests (4a1c753) are merged; on main
+  today rows 9, 17 and 19 are short as well, giving 1, 5, 9, 11, 15, 16, 17 and 19.
+- deferred: 2 rows (2, 3).
+- void: 1 row (10).
+- waiting: 2 rows (6, 7). Both are low priority by the user's CHECKPOINT 9 brief, and both
+  committed only if C2 adopts the cache (issue 536).
+
+**Row by row:**
+
+1. **Cached = dense (C2, C17).**
+   - Synthetic positions, `python/tests/net/test_cache.py`:
+     - `test_cached_equals_one_full_pass`: 7 geometries (standard, duplicated, deep travel,
+       many timelines, 5x5, even start, a 4/0 register arm) x the lineage and creation
+       readings x both C20 readings. Random 6-move paths. 2 seeds for the defaults, 1 for each
+       other case.
+     - `test_cached_equals_one_full_pass_with_every_switch`: 11 flag sets (section 6's switches;
+       6y's arms; B15's no-table arm and placeholders; B17; B16 per layer; D4's reply and D9;
+       A8), seed 3 only.
+     - `test_the_6y_arms_through_the_cached_path`, `test_cached_equals_one_full_pass_two_parent`
+       and `test_status_biases_keep_frozen_boards_intrinsic`.
+     - `test_cached_equals_one_full_pass_at_full_depth` (slow): F1, 16 layers, 40 boards.
+   - Real engine positions:
+     - MT-04, `python/tests/engine/test_cached_variants.py`: every engine variant x 2 seeds x
+       both C20 readings, under v1 and with the step-1 heads and A8. The step API's leaves,
+       cached against dense at FP32 tolerance, on every variant, in tree and graph mode; a
+       leaf met twice is evaluated bit for bit alike. F1 in BF16 on three variants (slow).
+     - `test_network.py`'s three cached tests and `test_evaluator.py::test_real_leaves_through_both_evaluators`.
+   - Through the other rows: `test_perspective.py::test_the_cached_path_and_the_mirror`,
+     `test_shaw.py::test_the_cached_path_equals_the_full_pass` and
+     `test_turn_state.py::test_cached_equals_one_full_pass_on_a_tree_with_counts`.
+   - Tolerances:
+     - FP32: 2e-5 on the trunk and 1e-4 on the heads; bitwise where both paths compute in the
+       same order.
+     - BF16: bounds 2.7-8x the largest gaps measured at 2 layers, seeds 0-2.
+   - **Short:** `test_cache.py`'s docstring says the gaps were last measured after F5 and F6
+     (2026-10-17), not since B15's table, F6's Mish in the heads and M20's defaults changed
+     the network. This is step 2's "section 15.2 re-run on the finished v1 network". The
+     every-switch sets also run on one seed.
+2. **Windowed (C5)** and 3. **lazy K/V (C10)**: deferred with the window. Section 15.2 marks
+   them so (M16, M18). `test_model.py::test_later_stage_flags_raise` pins `history_window` as
+   not built.
+4. **Supersession recompute (C20).**
+   - `test_cache.py`:
+     - `test_supersession_recompute_is_path_independent`: standard (2 seeds), duplicated and
+       even start (1 seed each), x both C20 readings. Bitwise across move orders, and equal to
+       the reference.
+     - `test_creation_order_reading_is_path_dependent` pins the creation reading's path
+       dependence (C23).
+     - `test_supersession_inside_a_refreshed_subtree`: deep travel, seeds 7 and 8.
+     - `test_prefix_sharing_computes_each_board_once` and `test_the_store_is_a_radix_structure`.
+   - MT-04: `test_two_orders_of_one_action_through_the_step_api` (Two Timelines and
+     Battleground, bitwise), and every variant under both readings.
+   - Green: the row's tests together meet every construction.
+5. **Refresh fork (C3a).**
+   - `test_cache.py`:
+     - `test_refresh_fork_leaves_siblings_unchanged`: one root (standard, seed 6), causal and
+       root-refreshed parent.
+     - `test_root_refresh_reduces_to_dense_at_the_root`, `test_rung_1_is_travel_triggered_and_visit_gated`,
+       `test_current_features_keep_the_epoch_history` and `test_status_biases_below_a_refreshed_anchor`.
+   - `test_complexity.py::test_a_complexity_refresh_is_rung_1s_fork` (C24) and
+     `test_tree.py::test_nodes_carry_epochs_and_forks_reach_only_the_old_epoch`.
+   - Siblings and the parent epoch's store entries are compared bitwise; the forked subtree
+     against the two-level reference at FP32 tolerances.
+   - It was short: one root, one seed. The audit's
+     `test_fork_protocol.py::test_refresh_fork_leaves_siblings_unchanged_under_the_protocol`
+     runs the same assertions on 5 adversarial geometries x 3 seeds x both C20 readings.
+   - **Still short** (corrected 2026-11-02):
+     - no refresh-fork test runs on an engine variant. The geometries are 8x8, plus a 5x5
+       small board and an even start - no 3x3, 4x4, 6x6 or 7x7 board, and no T0 board;
+     - MT-04's step-API test uses the root refresh only, and its 16 playouts never reach the
+       node refresh's visit gate;
+     - the audit's test root-refreshes the parent epoch for seed 1 only
+       (`root_refresh = bool(seed % 2)`).
+6. **Phase form (C26)** and 7. **refresh inside a turn (C27)**: not built anywhere (main and
+   every lane, 2026-11-01). Plan (CHECKPOINT 9 brief): low priority, in the cached path behind
+   its flag, `lane/net` after A5's review fixes; the engine side if the tree form needs it.
+   C27 is class R in the register; C26 is class C.
+8. **Evaluation purity (C19-C21).**
+   - Python, `test_cache.py`: `test_same_state_and_epoch_same_evaluation` (causal and
+     root-refresh), `test_different_epochs_evaluate_differently`,
+     `test_a_store_rooted_elsewhere_gives_the_same_bits` (FP32 and BF16),
+     `test_two_states_differing_only_in_an_origin_get_their_own_entries` and
+     `test_boards_differing_only_in_has_moved_markers_get_their_own_entries`.
+   - Python, `test_search_api.py`'s three shared-cache tests, and MT-04's one-store tests.
+   - Engine, `test_mcts.cpp`: `mcts_graph_transpositions_are_shared_and_evaluated_once`,
+     `mcts_tree_duplicates_get_bit_identical_evaluations_from_the_cache`,
+     `mcts_the_evaluation_cache_is_per_epoch_and_exact`,
+     `mcts_graph_keys_that_collide_are_compared_exactly`,
+     `mcts_graph_keeps_a_turn_start_apart_from_the_same_state_during_an_action` and
+     `mcts_the_evaluation_cache_keeps_a_turn_start_apart_from_the_same_state_during_an_action`
+     (A6 in the cache key, issue 302).
+   - Green. Not all bitwise (corrected 2026-11-02):
+     - bitwise: the same-state, store-rooted-elsewhere and transposition comparisons
+       (`_identical`, and the engine tests);
+     - FP32 tolerance (`_close`, 2e-5 on the trunk, 1e-4 on the heads): the origin and
+       has-moved tests, and MT-04's one-store tests;
+     - `test_different_epochs_evaluate_differently` asserts a difference.
+9. **Zobrist (H18).**
+   - `engine/tests/test_zobrist.cpp`: 13 tests (incremental against from scratch over 60
+     random multiverses built from a 4-board pool; the XOR trap's aliases; places, ruleset,
+     player, parity, creators, size).
+   - `test_random_play.cpp`: the key checked at every state of random play from 8 starts under
+     4 rulesets.
+   - `test_mcts.cpp::mcts_h18_the_acting_player_is_in_every_key`.
+   - All bit-exact.
+   - It was short of "every variant". The audit's
+     `zobrist_incremental_equals_from_scratch_on_every_named_variant_under_every_ruleset` plays
+     all 16 named variants x all 27 rulesets: 4,443 states, 655 with duplicated boards, 714
+     branching moves. It checks the key and every board's content hash against from scratch.
+10. **NNUE (F4)**: void. The NNUE was retired at CHECKPOINT 9, never built.
+11. **Cache precision (G1).**
+    - `test_cache.py`: `test_bf16_cache_is_the_live_precision`, `test_fp8_cache_equals_the_fp8_network`,
+      `test_fp8_cache_equals_the_fp8_network_at_fp32_resolution`,
+      `test_the_fp8_network_is_a_bounded_approximation_of_match` and `test_kv_memory_accounting`.
+    - `test_quant.py`: `test_the_cache_with_fp8_frozen_kv_and_fp8_projections` and
+      `test_the_cache_takes_linear_only_fp8_and_refuses_quantised_attention`.
+    - `test_qat.py::test_qat_forward_is_the_inference_format` (G8: QAT's forward is the served
+      format's, frozen K/V included).
+    - F1 in BF16:
+      - `test_network.py::test_f1_cached_on_a_real_position` covers three positions (the
+        "cross_timeline" game's `positions[2:]`). It is not marked slow, and its frozen boards
+        include a duplicated pair.
+      - MT-04 covers three variants (slow).
+    - Mostly seeds 0-2 and 2 layers, BF16 bounds as in row 1. The exceptions:
+      `test_the_fp8_network_is_a_bounded_approximation_of_match` and both `test_quant.py`
+      cache tests use seeds 0-1, and `test_kv_memory_accounting` runs 3 layers.
+    - **Short** (details corrected 2026-11-02):
+      - Duplicated boards reach BF16, cached against live, through the F1 test above.
+      - Deep travel and many timelines never reach it: the BF16 store test compares cached
+        with cached.
+      - FP8 runs on the "standard" geometry only.
+      - The bounds have not been re-measured on v1 (as row 1).
+    - By design, not missing: the cache refuses a network whose attention is quantised (G2's
+      `trunk_quant_attention`; issues 238 and 239, C2 deferred). So the matching rule with an
+      FP8 attention trunk waits with C2.
+12. **B15.**
+    - `test_displacement.py::test_score_function_equals_the_bias_materialised`: every
+      construction, including every variant's board size. Three seeds, with the table at its
+      initial scale (0.1) and at unit scale. The term is compared bit for bit; attention at
+      1e-5 (measured below 1e-6).
+    - `test_cpu_paths_equal_the_bias_materialised`: outputs and gradients, 2 seeds.
+    - `test_every_pair_of_the_constructions`: integers, exact.
+    - `test_the_network_through_the_score_function` and `test_the_block_mask_is_lossless`.
+    - Green. The far bins, line classes and register entries are placeholders (issues 205-208).
+13. **B17.**
+    - `test_shaw.py::test_gather_equals_direct`: FP64 to 1e-12, FP32 to roundoff; vectors at
+      initial and unit scale; per-head and shared vectors.
+    - `test_cpu_paths_equal_the_direct_term` (outputs and gradients, 2 seeds),
+      `test_the_score_function_reads_the_products` and `test_every_implementation_is_one_function`.
+    - The cached path, causal and refreshed.
+    - Green. The class set is a placeholder (issue 217).
+14. **A7.**
+    - `test_perspective.py`, 13 tests: canonical inputs identical but for the acting colour;
+      outputs mapped back equal at FP32 1e-5 with the acting-colour rows tied; dense and
+      block-causal; under every attention flag; BF16 within twice its own precision gap; the
+      cached path under both readings; A8 on; the colour input shown live.
+    - `test_perspective_engine.py`: random play in every engine variant.
+    - Green, read with the acting colour equalised (issue 304; proposed edit 202).
+15. **I15.**
+    - `python/tests/train/test_targets.py::test_targets_rederived_from_stored_records_equal_those_written_at_generation`:
+      4 generated games (ply split, tree form, Two Timelines, flat form) x 3 target
+      configurations. Every target array bit for bit, the reply prototype's included.
+    - `test_flat_targets.py::test_a_flat_record_and_its_targets_round_trip`: one hand-built
+      decision.
+    - **Green, short** (corrected 2026-11-02): the games are Standard (the ply split and the
+      tree form) and Standard - Two Timelines (the ply split and the flat form). Each arm has
+      one game seed (11-14) and there is one network seed, with caps of 2-3 turns and 20-24
+      boards. No deep travel, many timelines or other variant is met.
+16. **D4.**
+    - `python/tests/train/test_reply_map.py`, 4 tests. Constructed turns: a branching jump
+      (White and Black acting), and two branches into one board (masked at the turn start,
+      mapped at the decision point between them). The turn arm, and the head.
+    - Its checker, `_check`, is written apart from `reply_map.py` except that it uses
+      `reply_map.board_keys`, a one-line key map. The moves are compared exactly; the target
+      with `np.testing.assert_allclose` (corrected 2026-11-02).
+    - The audit's `test_protocol_every_variant.py::test_reply_map_holds_on_random_play_from_every_variant`
+      runs `_check` at every decision point of travel-heavy random play: 16 variants x 2 seeds.
+      It met 20-34 decision points per variant, and ambiguous boards in 12 variants (up to 533
+      moves masked). Its play made 131 physical moves, 81 jumps onto another timeline's head
+      and 162 branching jumps (a scratch count, not asserted).
+    - **Short (optional):** the spec's other travel cases are met only by random play, never
+      as constructed turns of their own: a move between two present boards, a rewinding
+      branch, J6 twins.
+17. **D2, tree form = ply split.**
+    - `engine/tests/test_mcts_tree.cpp::mcts_tree_form_with_every_gate_firing_equals_the_ply_split`:
+      at least 30 roots (every variant's start, random play from the multi-timeline variants,
+      roots one move into an action). Random and material evaluators; at least 60
+      comparisons. Digest, statistics and root children bit for bit, then again after a
+      re-root.
+    - `..._in_every_configuration`: 6 variations x 2 evaluators.
+    - `python/tests/engine/test_search_api.py::test_d2_the_tree_form_with_every_gate_firing_is_the_ply_split_with_the_network`.
+    - It was R8 only. The audit's `..._under_q4s_guide_literal_reading` runs 8 roots under Q4's
+      other reading, every variation.
+    - The fixed board order is outside the row (issue 162).
+18. **D2, flat form's generator.**
+    - `engine/tests/test_turngen.cpp`:
+      `turngen_equals_the_brute_force_reference_on_tiny_positions` (and its `long_` twin),
+      `..._the_exhaustive_listing_on_constructed_presents`, `..._on_every_variant` (and
+      `long_`) and `..._with_castling_and_en_passant`.
+    - Each asserts: the legal turns exactly once; non-increasing score; each score recomputed
+      bit for bit from its moves; the sorted scores of every legal turn; the same on a second
+      run; a budget-stopped generator's output a prefix of the full run.
+    - Several score assignments, ties included. Green.
+19. **A6.**
+    - `engine/tests/test_turn_state.cpp::turn_state_counts_equal_a_recount_under_every_ruleset`
+      (and `long_`): 4 starts x 27 rulesets, the C API's handle included.
+    - `turn_state_the_specs_cases_by_construction`.
+    - `python/tests/engine/test_turn_state_engine.py` (8 plays from 5 starts, both Q4
+      readings) and `python/tests/net/test_turn_state.py` (13 tests).
+    - It was short of "every variant". The audit's
+      `test_protocol_every_variant.py::test_turn_state_counts_equal_a_recount_on_every_variant`
+      covers 16 variants x both readings x 2 plays. Over all variants it met 775 turn starts,
+      1,098 mid-action states, 242 jumps between present boards, 103 rewinding branches and 16
+      rises (T12).
+
+**Caveats (the verdicts stand):**
+- **Row 9**: "every ruleset" means the defaults plus 26 single-parameter alternatives.
+- **Row 17**: after a re-root, only the digest and the statistics are compared again.
+- **Row 18**: only the tiny positions use the independent brute force. Elsewhere the
+  reference is E4's own listing, and positions too large for it are skipped silently.
+- **Row 19** and the audit's A6 test:
+  - the per-variant assertions are weak;
+  - Focused - Just Kings met no jumps, rewinds or rises;
+  - the recount takes the present and `may_move` from the expansion.
+- The audit's **D4** test does not assert ambiguity; 4 variants met none.
+- The audit's **flat-form** test counts the converse (nodes proven lost) but does not assert
+  it per node.
+
+### Section 15.4, invariant by invariant
+
+`check_invariants` (`engine/src/mcts.cpp`, `Impl::check_invariants`) runs after nearly every
+search in the search tests. `kConfigs` (`test_mcts.cpp`) holds 8 configurations: the ply split
+x {tree with solver, graph, graph with origins and solver, tree without widening with E2+E3},
+the flat form x {tree with solver, graph with E2+E3}, and the tree form x {tree with solver,
+without widening with E2+E3}. All 8 use the default rules (R8).
+
+| Clause | On main | Verdict |
+|---|---|---|
+| Visit counts consistent through backup | `mcts_visit_counts_are_consistent_through_backup` (every `kConfig`, 2 roots), `mcts_values_are_backed_up_from_the_acting_players_view`; the checker's visits = ends + edges and the w, wq, wd sums | green |
+| Virtual loss always released | `mcts_virtual_loss_is_released_when_the_evaluator_fails` (every `kConfig`), `..._by_delivery_and_abandon` (ply split), `mcts_a_malformed_evaluation_is_refused_and_released`, `test_mcts_memory.cpp`'s allocation failures (ply split and tree form), `test_ladder.cpp::ladder_invariants_hold_with_verdicts_arriving_asynchronously`, `capi_search_errors_release_the_batch`, `test_search_api.py::test_a_failed_evaluation_releases_the_batch`. Audit: `..._by_delivery_and_abandon_in_every_configuration` | **not green while issue 535 is open** (corrected 2026-11-02). Gather's and deliver's catch blocks do release the virtual loss. But the consistency-under-failure contract filed with it fails for the flat form - an out-of-bounds read, false exhaustion, a partial append - and for the ply split in a graph, where a node is stranded unreachable (issue 535) |
+| Solved bounds propagate, never contradict | `mcts_solver_proves_a_mate_in_one_and_plays_it` (both Q4 readings x ply/flat x tree/graph), `..._a_draw_...`, `..._a_loss_...` (ply/flat), `mcts_solver_bounds_never_contradict_in_play`, the turn-cap and unknown-verdict tests, `ladder_injected_proofs_never_contradict_and_match_e4`; the checker's lo <= hi and terminal clauses | green as tested. The constructed positions never run under the tree form on main (MT-01 adds them, `lane/engine`). Issue 535's false completeness makes a wrong bound possible, because `update_bounds` trusts `children_complete`; none was observed |
+| LCB and secure child among eligible children only | `mcts_final_selection_on_constructed_statistics`, `..._chooses_only_eligible_children_at_random` (3,000 sets), `..._in_searches_is_among_eligible_children` (every `kConfig`) | green. Caveat: the random-set and in-search tests check `select_final` against `final_eligible`, the predicate it calls - they test consistency. The rule itself is pinned by the constructed-statistics test |
+| Re-rooting keeps reachable nodes; state-keyed facts survive | `mcts_rerooting_keeps_only_reachable_nodes_and_cached_evaluations` (every `kConfig`), pondering, `mcts_advance_action_is_atomic`, `mcts_the_cache_is_purged_of_states_behind_the_root`, the ladder's carried-mate and settling-table tests | green |
+| Synchronous mode (H15) bit-reproducible | `mcts_synchronous_mode_is_bit_reproducible` (every `kConfig`), `ladder_synchronous_mode_is_bit_reproducible_with_the_wiring_on` (ply/flat), `capi_search_step_api_reproduces_the_cpp_search` (ply/flat/tree), the provers' one-thread tests (prover, Guard, Hunt), the Python step-loop tests | green |
+| Provers' proofs on constructed mates against the gate's references (caveat: E4's naive detector checks only the distance-1 mates) | Hunt: `hunt_proves_the_constructed_mates_and_exports_only_through_the_gate` (lines replayed to E4's checkmate), `hunt_claims_nothing_but_proofs_h37`. The settling scans' prover: `prover_constructed_mates_are_proven` (5 mates x both Q4 readings x both classes, E4's naive detector). The settling scans as wired: `ladder_hunts_mate_is_played_with_the_proof_channel_on`, `ladder_a_proof_whose_certificate_e4_rejects_never_enters`. The solver: `mcts_solver_agrees_with_the_brute_force_game_tree_under_both_q4_readings` (ply/flat). Certificates: `prover_lines_and_certificates_are_confirmed_by_e4_alone` | green, reading "the gate's references" as E4's gated detectors and the brute-force references; the solver's game-tree comparison leaves out the tree form (MT-01 adds it) |
+| The solver against df-pn and the oracles' mate verdicts (H41) | nothing on main | **waiting**: MT-01 (`mcts_solver_agrees_with_df_pn_*`, `t5d-solver-check`) and MT-02's engine side (`t5d-proof-records`) on `lane/engine`, not merged; MT-02's harness side - the records in the corpus, a quiet `golden --write` - waits for the user (issue 405 on that branch) and the quiet machine |
+| Proof export under TT churn (6f) | `ladder_settling_proofs_survive_tt_churn_6f` (the wired settling path, a 16-entry TT, mate in two); the retired scanner's churn test | **waiting**: MT-03 (`prover_proofs_survive_tt_churn_h19`, `prover_threads_survive_tt_churn`, `hunt_finds_its_mates_under_tt_churn`, with `long_` twins) on `lane/engine`; no Hunt churn test on main |
+| Turn structure | The checker: a submit edge into a turn start, a move edge into a mid-action node (ply split and tree form); every flat edge into a turn start; moves made by edge kind; no game end during an action; no turn start a dead end; inherited nodes only under the tree form, never evaluated. `mcts_graph_dead_ends_have_no_legal_completion`, `mcts_graph_invariants_hold_in_random_searches` (the brute-force reference; ply split), `mcts_tree_form_keeps_the_turn_structure_and_prunes_dead_ends_unscored`, `mcts_tree_form_evaluates_exactly_where_a_gate_fires`, `mcts_flat_a_stopped_generator_is_never_proven_lost` (one root). Audit: `mcts_tree_form_dead_ends_have_no_legal_completion_in_random_searches` (both Q4 readings, the reference: 1,451 dead ends checked) and `mcts_flat_form_no_node_with_turns_still_to_generate_is_proven_lost` (every node of 78 flat searches) | green with the audit's tests |
+| The provers fully untrained, on the material estimate | by construction: the prover, Guard and Hunt take no evaluator; their only static input is `ProverOptions::values` (H50). `test_assets.cpp`, the ladder's asset-map test, `test_steering.py::test_the_ladder_is_on_by_default_and_its_proofs_withheld` | green (no test asserts it directly; none is needed while they take no evaluator) |
+
+### REG-C: committed-class rows neither decided nor awaiting a named trained ablation
+
+*Corrected 2026-11-02 after the verification: B3 is decided, C18 and C16 await their
+ablations, and C5 and C7 move from decided to awaiting.* The register's class-C rows on main
+are A1, A2, A5-A8, B1-B8, B10, B15-B17, C1-C3, C5, C7, C16-C20, C23, C25, C26, D1-D4, D8, D9,
+F1, F2, F5, F6, I1 and M16. C27 is class R. Each was read against section 15.5's last clause.
+
+**The final list: C25 only** (issue 538(a)).
+
+**Decided:**
+- Committed: A1, A2, A6, A7, B1, B2, B4, B8, C1, C17, C19, C23, D1, D3, D4, D8, F6, I1 and M16.
+- B6, superseded by B15. "Superseded" is outside the register's vocabulary, and its gate,
+  ablation 2, is stale.
+- C20: both readings are built. Its gate is "-", though the row says "6c decides", and 6c has
+  no arm for the two readings.
+- B16 and C26: Committed with, or if, C2 adopts the cache.
+- F1 (its FFN ratio goes to ablation 5) and F5 (its "placement provisional" goes to 6y,
+  unannotated).
+- **B3**, axial attention, is decided for v1:
+  - B2 is the committed row for the choice B3 is the alternative to: "Unified attention over
+    all tokens as the architecture | Committed | C".
+  - The spec's opening withdrew axial as an option: "That framing is withdrawn: axial is
+    dominated by both the window and the cache (§3.3) ... It is retained as a single
+    documented contingency with a stated trigger condition". Reversal 5 records the same.
+  - Its triggers have not fired. Section 3.3 requires all three, and trigger 1 - "most
+    history is genuinely reachable" - is the opposite of what was measured (MEASUREMENTS,
+    M7). The window was killed on compute share: it was on at k = 8 from 50 to 186 boards,
+    phases carrying 18.4% of the cached and 38.0% of the dense compute. The median legal
+    |E(8)| is 0, 0, 2 and 2 at median N of 24, 60, 112 and 169.5 boards.
+  - Only 187+ boards remain open, which is the pilot run's job (M18).
+  - The first version of this audit said trigger 1 "has arguably fired". It has not.
+  - The row's wording is still loose (issue 538(b)).
+
+**Awaiting a named trained ablation:**
+
+| Row | Awaits | Arm built? |
+|---|---|---|
+| A5 | Ablation 1 (the joint test with the window: the pilot run); else M24's supervised ablation | `lane/net`, not merged |
+| A8 | 6p | yes, behind its flag |
+| B5 | ablation 2 | yes |
+| B7 | ablation 2's head-allocation evidence | a config value, no code |
+| B10 | 6a | yes |
+| B15 | ablation 2 | the no-table arm: yes |
+| B17 | ablation 2 | yes |
+| C2 | 6c, and the pilot run's game sizes (M18) | yes, for section 15.2 and 15.3 |
+| C3 | 6c | yes |
+| C5, C7 | the pilot run's re-check (M18), then ablation 1's cascade (C7: its k ∈ {0, 4, 8, 16} arm) | no - killed provisionally (M16) |
+| C16 | ablation 8 - "last, and only if the dense engine is node-starved" | no - by the user's standing brief, deferred items are built "only where §15.2 or §15.3 needs them", and neither has a hybrid row |
+| C18 | 6a: §13.1's 6a names its "Arm: the layer-level alternative - local/global interleave"; §14.4 says "a 6a arm" | no - held open: the brief builds "held-open items not at all" |
+| D2 | 6x, with 6g and 6k | every arm |
+| D9 | 6t | yes |
+| F2 | ablation 5 | a config ladder |
+
+Notes on the table:
+- C5 and C7 were counted as decided in the first version. They are awaiting:
+  - part K lists the window as an open item, "Committed-class - decided before serious
+    self-play";
+  - the spec calls it "an uncommitted decision of the committed class" (§10.4);
+  - the re-check comes after section 15.5 (MEASUREMENTS).
+- C18's status contradicts its gate (issue 538(b)).
+- C16's trigger is undefined (issue 538(c)).
+
+**Neither: C25** (for the user's sign-off; issue 538(a)), complexity-adaptive dense top layers.
+"Held open", gate 6c.
+- "Held open" is "a candidate with a reason to exist, not scheduled". A candidate is not a
+  decision, and an unscheduled row awaits nothing.
+- 6c has no C25 arm (§13.1). Section 14.4 makes 6c a precondition, not a test: "Held unless
+  6c shows fresh conditioning is worth a lot". Adoption would need training "to randomise the
+  number of dense top layers" on C16's hybrid, and no arm does that.
+- It is unbuilt by ruling (CHECKPOINT 4's ruling 7: "Not built: C25").
+- Its § column, 7.6, points to no C25 text.
+- What settles it:
+  - a decided wording, "Not a v1 option - reopened by 6c's evidence", with §14.4's entry moved
+    out of "Held open (prototype tier)";
+  - or a new trained arm in §13.1 - randomised dense depth on C16's hybrid - which would
+    inherit C16's undefined trigger.
+
+**Rows the first version missed** - none changes the verdict:
+- C3a (class R, "conditional on C3's offset training"). If 6c's offset-training arm rejects
+  C3, C3a turns committed-class, and its rungs 2-3 ("Held open", no arm) would be neither.
+  That outcome would reopen the cached configuration itself.
+- M2 and M24 are process rows, decided.
+- Part K's window row awaits M18.
+
+**The committed-class placeholders** - as-built values that no ruling and no named ablation
+covers, inside rows otherwise decided or awaiting:
+- A6: the counts' encoding (issue 230);
+- A7: the readings of issues 226, 227, 229 and 303-304;
+- A8: the FFN after the embedding - 45x its section 15.3 estimate (issue 240);
+- B15: the far bins, the line classes, the register entries and the initialisation (205-208);
+- B16: its bins, sharing and initialisation (213-216);
+- B17: its class set, query and scale, initialisation (217-220);
+- D1: the promotion offset (222);
+- D3: the shared hidden layer, the short-term horizons, the error target and HL-Gauss sigma (231);
+- D4: the soft head, the reply map's readings, moves-left inside a turn, the aux pooling and
+  the per-square labels (223, 224, 232, 175, 176);
+- D8: the submit readout (109);
+- D9: z (233);
+- D2: the tree form's gates and inheritance (157-162), the flat form's generator, prior and
+  head (163-171, 241-243), and the tree form under MCGS (301);
+- F5: as built (200-202);
+- F6: the activations outside its words (221).
+
+These go to the user by reference, with the main loop's issues 300-306 and the step-1 issues
+on "Put to the user, none blocking" (in "Current state"). They are step 2's "committed-class
+placeholders consolidated for the user".
+
+### Section 15.5, clause by clause
+
+1. **"An engine that plays legal 5D chess end to end with random weights"** - met by the
+   engine's own replay; partly certified by the oracles.
+   - Evidence:
+     - `test_selfplay.cpp::selfplay_games_are_legal_end_to_end_under_both_splits`: 12 games,
+       the ply split, the flat form and the tree form, from Standard, Two Timelines, Very
+       Small - Open and Tactician. Each record is replayed by the engine's reader, strictly.
+     - `test_netplay.py::test_a_game_replays_legal`: the network with random weights, self
+       and match play, the ply split, the flat form and the tree form. Every record is
+       replayed through `t5d-gate`.
+     - N5's 20 games (CHANGELOG).
+     - The gate has the engine configured (`oracles/gate.toml`), with the commit and nightly
+       tiers green on their last runs.
+   - What remains:
+     - **The release tier with the engine configured** has not run. It comes after H48's
+       re-recording and Kairos's parse mode, both in the quiet-machine block. The sign-off
+       run leaves Kairos out; Kairos's full mode and triage come after it (CHECKPOINT 10).
+     - Nightly gates two rulesets, Standard - Half Reflected and Standard - Reversed Royalty
+       (issues 122 and 131). The other 11 are compared but ungated. Every barrier for each,
+       not only the first the gate prints, triaged 2026-11-02 against the 2026-11-02 nightly
+       report:
+       - Kinds of barrier:
+         - **UNREAD**: the engine declines a record as unreadable (UNPLAYED: it cannot set
+           the record up);
+         - **ALONE**: no oracle follows the record as far as the engine went;
+         - **SINGLE**: only one oracle does;
+         - **check coverage**: an observable settled at under 75% of the positions (most
+           often `in_check`, where no oracle answers).
+       - **Standard**:
+         - UNREAD and ALONE `ftxi/softmate`: a parenthesised variation the notation does not
+           support, KD-0047/48. Even when read, only ftxi's lineage follows it.
+         - SINGLE `notation/aivsai`: Chess in 5D alone. ftxi and Kairos refuse its
+           non-consecutive turn number ("25b followed by 25w"), and cwmtt stops on a `?` at
+           action 9.
+       - **Very Small - Open**:
+         - UNREAD and ALONE `cwmtt/ctp1` and `ftxi/verysmall`: jumps without the coordinates
+           the notation requires, KD-0044/45 and KD-0049/50.
+         - Check coverage 0/13: ftxi's and Kairos's unmoved markers differ from the engine's,
+           cwmtt has no check verdict, and Chess in 5D refuses the variant.
+       - **(custom positions)**:
+         - UNREAD and ALONE `ftxi/niceAndrey`: 5DFEN boards without `[Board "custom"]`,
+           KD-0046.
+         - SINGLE `notation/1.4`: ftxi alone; Kairos, in ftxi's lineage, adds no second
+           vouch.
+       - **Focused - Just Kings, Focused - Just Pawns, Misc - Timeline Battleground**: SINGLE
+         (cwmtt) on `cwmtt/JustKings`, `cwmtt/smallTest` and `cwmtt/ctp2`; check coverage
+         0/4, 0/4 and 0/19.
+       - **Focused - Just Brawns**: SINGLE `cwmtt/brawnsPuzzles-another`; check coverage 0/8.
+       - **Standard - Turn Zero**: SINGLE `cwmtt/tesseractMageOChicken`.
+       - **Misc - Small**: ALONE `notation/game`; every observable 0/16.
+       - **Misc - Timeline Invasion, Misc - Timeline Marauders**: UNPLAYED and ALONE (no
+         set-up in the rulebook, Q22).
+       - Every refusal by the engine is either a record outside the notation specification
+         or a set-up the rulebook does not give (Q22). None is a reader gap, a rules
+         disagreement or a replay defect.
+       - Where an oracle refuses a record the engine reads (Turn Zero, Just Brawns), the gap is
+         the oracle's - drafted for upstream in issue 579, which also finds that a fix in ftxi
+         alone would not reach Just Brawns (ftxi does not know the variant).
+       - So no engine work gates any of these rulesets. Making the reader lenient gates
+         nothing: it fires telltales, and turns nightly red.
+       - Under CHECKPOINT 10's ruling on issue 526, ftxi and Kairos are one lineage, counted
+         once per answer. **Three rulesets are already known to be ones Kairos answers and
+         ftxi does not**: Just Kings, Just Pawns and Timeline Battleground. Kairos follows
+         each to the end, agreeing with the engine at 4/4, 4/4 and 19/19 positions, and
+         would gate all three.
+       - CHECKPOINT 10's point 2 says a ruleset like that "is reported before going
+         further", so they go to the user now. The verdicts come from full-mode observe runs,
+         ahead of the ordered parse mode, on few positions; Just Kings and Just Pawns have no
+         position in check.
+     - E11, time management, and E8 behind its flag (`lane/search`) are section 15.1 Phase 2
+       items, not legality.
+2. **"Every equivalence test green"** - 14 of 19 rows green (1, 5, 11, 15 and 16 short, once
+   `lane/audit`'s tests are merged); 2 deferred, 1 void, 2 waiting (above).
+   - What remains:
+     - the C26 and C27 rows (low priority, `lane/net`) - unless the user rules, on issue 536,
+       that they wait with C2's adoption;
+     - step 2's re-run of every row on the finished v1 network, with the bounds re-measured;
+     - section 15.4's missing clauses, MT-01 to MT-03, merged from `lane/engine`;
+     - issue 535's fix (section 15.4's virtual-loss invariant is not green while it is open).
+   - Section 15.5 does not name section 15.4. The brief and this audit read it as required
+     (issue 537).
+3. **"Every cost figure measured and written back over its estimate - CPU-labelled where it
+   needs a GPU the build does not have, and named as deferred (section 15.3)"** - not met.
+   Of section 15.3's 18 rows:
+   - **measured on the CPU** (3): movegen (passes M9 on two cores, a quiet run); legality
+     classification (profiled on a shared machine - "not a verdict", MEASUREMENTS); prover
+     nodes/s (the scanner's 787k and 566k, df-pn's 239k);
+   - **counted, CPU wall time pending** (5): dense per evaluation, cached per node, live-set
+     recompute and supersession recompute (N3, counted on the network before M20's register
+     positions - re-count pending), and KV memory per state (exact; under A7 two entries per
+     root frozen board);
+   - **analytic or not measured** (2): root refresh overhead (analytic only); one refresh
+     (its full-history figure not measured);
+   - **to measure** (3): FFN 2x and 4x; displacement bias and normalisation (its baseline
+     unsettled, COST-03); the key-side Shaw term (counted in `test_shaw.py`'s docstring - 0.51
+     at 44 boards, 0.094 at 240 - but not in MEASUREMENTS);
+   - **counted, timed on a loaded machine** (1): A8 (MEASUREMENTS; flagged 45x, issue 240);
+   - **GPU-deferred** (1): leaf batching, plus the evaluations/s halves of the dense and
+     cached rows (M19);
+   - **void or deferred** (3): windowed throughput and the window's halves of three rows
+     (M18); the local/global interleave (C18 held open); the NNUE eval (retired).
+   - What remains, **the quiet-machine block**, alone on the machine, one job at a time:
+     - N3's wall timings with `cache_bench` (240, then 600 in FP32 and BF16; about 3 hours),
+       after a re-count on the v1 network;
+     - FFN 2x and 4x;
+     - the displacement-bias, Shaw, layout-embedding and normalisation overheads;
+     - legality throughput: the legality profile re-run quiet - its table was taken on a
+       shared machine - after the engine lane's issue 406 (exact legality cost);
+     - Guard's and Hunt's nodes/s (6b″ gave nodes per root, not nodes/s);
+     - the F1 CPU evaluation rate that section 15.6 cites (6.9/s, only in CHANGELOG's N5
+       entry);
+     - H48's re-recording and Kairos's parse mode (issue 530) - never beside a timing;
+     - then the release tier, without Kairos (CHECKPOINT 10).
+   - After the block: MEASUREMENTS' section 15.3 summary table is rebuilt (it predates
+     CHECKPOINTS 6-9: it has no legality, FFN, bias, Shaw or prover rows; its scanner
+     1,036,000/s and movegen lines are stale; the NNUE and interleave rows are unlabelled),
+     and the write-backs (M4) are proposed (the main loop).
+4. **"Each committed-class row in the register either decided or explicitly awaiting a named
+   trained ablation"** - not met for one row, C25 (issue 538(a); corrected 2026-11-02 from "B3,
+   C18 and C25"). The wording points for B3, C18 and edit 206, C16's undefined trigger, and the
+   placeholders also go to the user (issue 538(b), (c)).
+
+### The audit's tests
+
+- `engine/tests/test_zobrist.cpp::zobrist_incremental_equals_from_scratch_on_every_named_variant_under_every_ruleset`
+  (H18, row 9).
+- `engine/tests/test_mcts.cpp`:
+  - `mcts_virtual_loss_is_released_by_delivery_and_abandon_in_every_configuration` - section
+    15.4, every `kConfig` x 2 roots;
+  - `mcts_flat_form_no_node_with_turns_still_to_generate_is_proven_lost` - section 15.4's
+    flat-form clause at every node (issue 170);
+  - `mcts_tree_form_dead_ends_have_no_legal_completion_in_random_searches` - section 15.4's
+    tree form against the brute-force reference, both Q4 readings.
+- `engine/tests/test_mcts_tree.cpp::mcts_tree_form_with_every_gate_firing_equals_the_ply_split_under_q4s_guide_literal_reading`
+  (D2, row 17).
+- `python/tests/net/test_fork_protocol.py::test_refresh_fork_leaves_siblings_unchanged_under_the_protocol`
+  (C3a, row 5).
+- `python/tests/engine/test_protocol_every_variant.py`:
+  `test_turn_state_counts_equal_a_recount_on_every_variant` (A6, row 19) and
+  `test_reply_map_holds_on_random_play_from_every_variant` (D4, row 16).
+- Not committed: the flat form under allocation failure (issue 535). It segfaults. The
+  verification's fix, and the wider range the test needs, go to a separate engine-side lane,
+  `lane/fix535`.
+
+### Work items, by lane
+
+- **Engine** (`lane/engine`):
+  - merge MT-01, MT-03 and MT-02's engine side. The branch predates E10's merge: MT-03's note,
+    and its issue 402, say no settling-scan wrapper is on main - out of date since E10 (the
+    ladder's settling path, `engine/src/ladder.cpp`);
+  - issue 535 - in `lane/fix535`, from the verification's fix (`mcts.cpp` only: roll
+    `pull_turns` back on a throw, undo `expand_flat`, pop the node `ensure_child` made), with
+    the flat-form test and the wider fault range;
+  - issue 406 (exact legality cost) before the quiet legality profile;
+  - optional: the constructed solver positions under the tree form on main (MT-01 brings
+    them).
+- **Net** (`lane/net`):
+  - A5's review and merge;
+  - C26 and C27 with their section 15.2 rows (low priority);
+  - step 2's re-run of every row on the finished v1 network: re-measure the FP32, BF16 and
+    FP8 bounds (rows 1 and 11), BF16 and FP8 on the adversarial geometries, and more seeds
+    for the every-switch sets;
+  - optional: D4's constructed travel turns (row 16).
+- **Search** (`lane/search`): E11 and E8; then MT-03's settling-scan part, through the
+  ladder (main has only `ladder_settling_proofs_survive_tt_churn_6f`: a 16-entry TT, one
+  position).
+- **Gate** (`lane/gate`):
+  - CHECKPOINT 10's lineage counting;
+  - report to the user the three rulesets Kairos answers and ftxi does not (Just Kings, Just
+    Pawns, Timeline Battleground), as CHECKPOINT 10's point 2 asks;
+  - in the quiet-machine block, Kairos's parse mode and H48's re-recording;
+  - then the release tier with the engine configured - the sign-off run, without Kairos;
+  - Kairos's full mode and triage after it;
+  - MT-02's harness side, when the user allows engine-generated records into the corpus.
+- **Main loop**:
+  - the quiet-machine block's timings;
+  - MEASUREMENTS' section 15.3 table rebuilt;
+  - the write-backs (M4);
+  - issues 536-538 (538: C25, then the wording points) and the placeholders to the user,
+    with 300-306;
+  - the F1 CPU rate (6.9 evaluations/s) recorded in MEASUREMENTS with its conditions.
 
 ## Spec issues (wrong, ambiguous, contradictory, silent)
 
@@ -5437,6 +6048,14 @@ superseded or made moot says so; nothing is deleted.
     would give - so its mate verdicts are not independent evidence beside ftxi's; its check
     verdicts (R1's pass set, not ftxi's) and its exhaustive counts are its own. Options (b)
     or (c) are the cautious readings. Its tier entries stay disabled until the user rules.
+    *Corrected after the review of 2026-11-02 (issue 577): of the parts called its own here,
+    only the wasted-move pruning and the playing engine are. `core/naive.rs` is ftxi's naive
+    search (`naive_search_impl`, `tools/search_tools.cpp`) translated line by line, and the R1
+    pass set is ftxi's later code translated - ftxi's commit f66c4ee ("check semantics
+    revisited", 2026-10-15, after ftxi's pin) changed ftxi's own pass set to it; its seven
+    hand-coded variant layouts are ftxi's too. The ruling (CHECKPOINT 10) stands: each
+    correction puts Kairos further inside ftxi's lineage. Proposed edit 401 carries it to the
+    spec and the register.*
 
 527. **How Kairos is asked: neither 5DUCI nor the JSON interface** (§11.0 Kairos paragraph:
     "check and mate verdicts through its JSON interface or 5DUCI"; register H52). At the pin
@@ -5529,7 +6148,18 @@ superseded or made moot says so; nothing is deleted.
     reviewed commit, on a quiet machine, after the user rules issue 526 (if the ruling is
     (b) or (c), the gate's counting of implementations, `gate.GATING_ORACLES`, changes
     first): (1) move both names into `ORACLE_SOURCES`, and `kairos` into
-    `PRIMARY_SOURCES` (it carries the replay comparison); (2) list both in `gate.toml`'s
+    `PRIMARY_SOURCES` (it carries the replay comparison) - *amended after the review of
+    2026-11-02 (issue 577), now that parse mode exists as a source of its own: exactly one
+    Kairos source is primary at each stage, never two (two would report each replay
+    difference twice, each needing its own divergence entry; `tests/test_repository.py`
+    fails either mistake): `kairos:parse` while parse mode is enabled alone - otherwise no
+    Kairos refusal or length is compared - and at full mode's enabling one of two, for the
+    enabling to choose: `kairos` in its place (a gap: a refusal of `kairos:parse`'s past where
+    `kairos` was cut by its budget is compared through no source - a timeout is neither a
+    refusal nor a length - and the ruleset may still gate on the others), or `kairos:parse`
+    kept for good (closes the gap, but `observations.judges_actions` must then let an
+    engine's hard refusal of an action `kairos:parse` plays be compared, and `divergences.py`'s
+    rule that a replay entry names the implementation be changed first)*; (2) list both in `gate.toml`'s
     `[tier.nightly]` and `[tier.release]` sources, with budgets - to start, as the other
     naive searches: `"kairos:naive" = 120` nightly and `300` release in
     `source_timeout_s`, the hypercuboid search on the tier's own `timeout_s` (300, 600;
@@ -5598,11 +6228,17 @@ superseded or made moot says so; nothing is deleted.
     committed golden files of ftxi, cwmtt and Chess in 5D; nothing written under `oracles/`
     (the script and its output stayed in the session's scratch directory). No triage -
     that is the enabling's (issue 530).
-    - **Read:** 31 records to their end or refusal, 9 `unsupported` (`parse_failed`, the
-      whole record - issue 528): five moves its reader matches no legal move to
+    - **Read:** 32 records to their end or refusal (31 to the end, local/ignores-check to its
+      refusal), 8 `unsupported` (`parse_failed`, the whole record - issue 528; corrected
+      2026-11-02 from "31 ... 9", a miscount): three moves its reader matches no legal move to
       (cwmtt/futures `(L1T5)Qf4>>x(L0T5)e4~`, cwmtt/tesseractMageOChicken
-      `(-1T10)Nf6>x(+1T10)g6`, cwmtt/test1 `(0T5)Qd1>>(0T3)f3~`, notation/invasion `(1T1)a2`
-      - ftxi refuses or stops at the first three too), notation text it does not read
+      `(-1T10)Nf6>x(+1T10)g6`, notation/invasion `(1T1)a2` - ftxi refuses the first two too),
+      one set-up it lays out otherwise (cwmtt/test1, Standard - Half Reflected, at
+      `(0T5)Qd1>>(0T3)f3~`: its layout - ftxi's later one - swaps white's king and queen, where
+      the notation's table, Chess in 5D and cwmtt swap black's, so it finds no queen on d1;
+      given the notation's layout as a custom board it reads all 20 actions, and ftxi at its
+      pin does not set the variant up at all - corrected after the review of 2026-11-02, issue
+      577: this called test1's a move its reader cannot match), notation text it does not read
       (cwmtt/brawnsPuzzles-another, notation/marauders: "Unexpected trailing input";
       notation/aivsai: "non-consecutive turn number: 25b followed by 25w"), and one variant
       it does not know (notation/game, "Misc - Small" - nor does any oracle). One record cut
@@ -5644,6 +6280,703 @@ superseded or made moot says so; nothing is deleted.
     harness's oracles and tiers, are updated here to say that a fourth is wired and not
     yet enabled. **For the user**, at the enabling: CLAUDE.md's two sentences (and
     AGENTS.md, if it should name the count).
+535. **D2's flat form, and the ply split in a graph, are not exception-safe: an allocation
+    failure inside a search leaves it inconsistent.** (Section 15.4's "virtual loss always
+    released", and the search's consistency under failure; register D2, H37. This is the
+    contract `test_mcts_memory.cpp` holds the searches to: review findings MEDIUM 7, 8 and 10.)
+    Found by the done-means audit (2026-11-01). This account was corrected 2026-11-02, after a
+    verification reproduced the crash and traced its cause.
+    - **How it was found.**
+      `test_mcts_memory.cpp::mcts_an_allocation_failure_in_gather_or_deliver_leaves_the_search_consistent`
+      covers the ply split in a tree and a graph, and the tree form, on a 13-step grid of
+      fault points. The same loop with `p.split = TurnSplit::Flat`, in a tree then a graph,
+      crashes with SIGSEGV - exit 139, and exit 1 in some runs of the generator sweep (MSYS2
+      ucrt64 g++ 16.2.0, Release).
+      - The loop runs graph = false first and dies there at k = 312, so it never reaches
+        graph = true. Started at graph = true, k = 468 crashes in 3 of 3 runs with the
+        verification ladder off, and in 2 of 3 with it on. The first account said
+        "deterministic at graph = true, k = 468".
+      - Crash points on the grid:
+        - in a tree: k = 78, 312, 403, 520, 611, 767, 1313, 1469, 1521;
+        - in a graph: k = 26, 78, 403, 468, 520, 611, 1222, 1521, 2210, 2275.
+      - gdb: `TurnGenerator::Impl::collect()` <- `TurnGenerator::next()` <-
+        `Search::Impl::pull_turns` <- `select_child` <- `select_once` <- `gather` <-
+        `Search::run`.
+    - **The mechanism is an out-of-bounds read, not a use-after-free.**
+      - `SearchRun::record` (`engine/src/search.cpp`) grows its four tables in separate
+        steps: `successors.insert`, `actions.push_back`, `texts.push_back`,
+        `results.push_back`.
+      - The `bad_alloc` comes from the visit lambda of `Hyper::judge` (`hypercuboid.cpp`).
+        It unwinds through `step_best_first` and `next`, and leaves `results` shorter than
+        `actions` for good: at graph k = 468 the table sizes are 17/17/16/16; at tree k = 312,
+        101/101/100/100.
+      - The search's catch blocks never touch the node, and its generator
+        (`FlatNode::generator`) survives.
+      - The next pull goes `widen` -> `pull_turns` -> `next()`. There `collect()` loops to
+        `run.actions.size()` and reads `run.results` past its end. The garbage it reads is
+        used as an index into the unchecked `PositionSet::operator[]`, which
+        `successor_cost` dereferences.
+      - Every crash on the grid is a throw at `texts.push_back`. A throw at
+        `actions.push_back` puts `record()`'s duplicate branch off by one.
+      - `check_invariants` sees only the node's own arrays, so it passes.
+    - **Further defects found with it:**
+      - **False exhaustion**, silent and more common than the crash:
+        - `step_best_first` takes a box out of its queue before judging it. A throw destroys
+          the box, and the generator later reports `exhausted()`.
+        - `pull_turns` then sets `children_complete`, and `update_bounds` trusts it: a bound
+          that is not a proof (H37).
+        - Generator level: of 801 single-fault runs, 577 ended "exhausted" with successors
+          missing, 88 crashed and 108 completed.
+        - Search level: node 32 was marked complete holding 24-25 of its 484 successors (k =
+          1144, 1157, 1183 in a tree; 1144, 1157, 1170, 1183 in a graph).
+        - No wrong bound was observed.
+      - **A partial append**:
+        - `pull_turns` adds a turn in six separate steps, so a throw there loses the emitted
+          turn.
+        - `check_invariants` then fails ("turns, scores and edges disagree") at k = 484-486,
+          1392-1394, 1423, 1994-1996 and 2234-2236. k = 2236 is on the audit's grid.
+        - `expand_flat` marks the node expanded before its first pull.
+      - **A node the root cannot reach, in every split's graph**:
+        - `ensure_child` makes the node before linking it, so a throw from the table's
+          `emplace` strands it.
+        - The ply split in a graph: k = 7, 12, 45, 50, 55, 88, 93, 126. None is on the
+          13-step grid, so the committed test misses them.
+        - The flat form in a graph: k = 1040, 1896.
+      - The tree form, and the ply split in a tree, are clean at all 2,400 fault points.
+    - **Production reachability: latent, but reachable.**
+      - Nothing in the engine throws `bad_alloc` on purpose, and every budget stops
+        gracefully. The trigger is a real allocation failure: the Windows commit limit; on
+        Linux `RLIMIT_AS`, `overcommit_memory = 2`, or one huge request.
+      - The error surfaces in three places: as a rethrow; as `T5D_ERR_MEMORY` in the C API,
+        whose header promises "the search stays consistent: no batch left half-made"; and
+        as `EngineMemoryError` in Python.
+      - The fault needs the same search to be reused after the error; destroying it is safe.
+        No in-tree Python caller reuses one: netplay closes it, and the evaluator abandons it
+        and re-raises.
+    - **The fix goes to a separate engine-side lane, `lane/fix535`, not to `lane/audit`.** It
+      is the verification's `issue535_fix.diff`, held outside the repository and touching
+      `mcts.cpp` only:
+      - roll `pull_turns` back on any exception, dropping the generator and leaving the
+        node's children incomplete;
+      - undo `expand_flat`'s expansion on a throw;
+      - pop the node `ensure_child` made when registering it throws.
+
+      It comes with the test's wider fault range (`issue535_test_range.diff`): with the fix
+      and the old range, the test cannot pass its own deliver-fault floor. In the
+      verification's scratch build it passes both allocation-failure tests, and every k from 0
+      to 2,399 in five configurations. The engine lane has not reviewed it, and it has not
+      been built on Linux or under a sanitizer.
+    - Until it lands, section 15.4's consistency under failure holds for the tree form and the
+      ply split in a tree only. Nothing is parked on it.
+    *Resolved by issue 600 (`lane/fix535`, c61ed3a, with its review round of 2026-11-09): the
+    diff re-made - the root's noise flag set only with the expansion, the restores and counts the
+    verification's review listed, `flat_priors` inside the rollback - with the test's wider range
+    and tests of the false exhaustion and of a node the root does not reach in every split's
+    graph; two defects of the kind found beside it fixed with it (a re-root; the ply split's root
+    noise). The account there.*
+536. **Section 15.5's "every equivalence test green" against the rows section 15.2 itself
+    defers, voids or conditions.** (Section 15.5, section 15.2; register C5, C10, F4, C2,
+    C26, C27.)
+    - Section 15.5 allows "named as deferred" for cost figures only. Section 15.2 marks
+      C5's and C10's rows "deferred with the window", and strikes F4's (the NNUE, retired at
+      CHECKPOINT 9).
+    - C26 and C27 are "Committed (if C2 adopts the cache)", and C2 is deferred to 6c and the
+      pilot run (M18). The user's CHECKPOINT 9 brief makes them low priority, after each
+      lane's current order.
+    - **The audit's reading:** a deferred or void row is satisfied by being named so.
+    - **For the user, on C26 and C27:** (a) their rows are required before section 15.5
+      (the plan builds them, behind the cached flag), or (b) they wait with C2: required
+      only if C2 adopts the cache. Until ruled, the plan's (a) stands.
+    - Proposed edit 364.
+537. **Section 15.5 does not name section 15.4.** (Section 15.5, section 15.1's Phase 3 row,
+    section 15.4; register H41, H17, H23.)
+    - "Done means" names the equivalence suite (section 15.2) and the cost figures (section
+      15.3); so does Phase 3's row.
+    - Section 15.4's invariants are not named. They include the solver's cross-checks against
+      df-pn and the oracles' mate verdicts (H41) and the proof-export invariant under TT
+      churn (6f).
+    - The step-2 brief, and this audit, read section 15.4 as required: its cross-checks are
+      the proof channel's evidence (H23, H41), and the sign-off follows section 15.5.
+    - Wording only. Proposed edit 365.
+538. **Committed-class rows against section 15.5's last clause: one row, C25, is neither
+    decided nor awaiting a named trained ablation.** (Section 15.5; register C25, B3, C18, C16,
+    C5, C7, D2, B6; "Done-means audit", REG-C.) Corrected 2026-11-02 after the verification;
+    the first version listed B3, C18 and C25.
+    - **(a) C25**, complexity-adaptive dense top layers: "Held open", gate 6c.
+      - "Held open" is "a candidate with a reason to exist, not scheduled".
+      - 6c has no C25 arm (section 13.1), and section 14.4 makes 6c a precondition, not a
+        test: "Held unless 6c shows fresh conditioning is worth a lot".
+      - **For the user:** either a decided wording - "Not a v1 option - reopened by 6c's
+        evidence", with section 14.4's entry moved out of "Held open (prototype tier)" - or
+        a new trained arm in section 13.1 (randomised dense depth on C16's hybrid). The arm
+        would inherit C16's trigger question, (c) below.
+    - **(b) Wording only** - rows that meet the clause, but whose words do not say so:
+      - **B3** is decided for v1: B2 is the committed row, and the spec's opening withdrew
+        axial as an option. But "Contingency only" is outside the vocabulary; trigger 3
+        ("337 evals/sec is too slow") has no threshold; and trigger 2, 6c's measurement, is
+        not named as a gate. B3 needs a vocabulary word, and either testable triggers or a
+        decided wording.
+      - **C18** awaits 6a: section 13.1's 6a says "Arm: the layer-level alternative", and
+        section 14.4 says "a 6a arm". "Held open" ("not scheduled") contradicts both.
+        Section 7.6 also makes it a fallback after routing fails 6a, where section 13.1 makes
+        it an arm inside 6a. C18 needs one status across section 7.6, section 13.1, section
+        14.4 and section 15.3's interleave row.
+      - **Edit 206** (the main loop's, on the vocabulary) is stale:
+        - "Retired" is now in the register's header, so the header defines eight words, not
+          seven;
+        - the class-C rows outside the vocabulary are B3 (Contingency only), B6 (Superseded),
+          C5 and C7 (Killed, provisionally) and D2 (Undecided), and the clause reads exactly
+          these statuses.
+
+        Refreshed below edit 206.
+    - **(c) C16's trigger** is a spec gap, not a section 15.5 failure:
+      - "node-starved" is defined nowhere. Section 7.6 ("If node count proves to bind
+        strength more than net quality does"), section 10.1 ("Deferred - only if the dense
+        engine proves node-starved", which also gates the cache, where C2's row gates it on
+        6c and M18) and section 13.1's ablation 8 all use it without a measure.
+      - Ablation 8 is "last", with no pre-registered trigger, while a class-C row must be
+        decided before serious self-play.
+      - Section 9.2 frames ablation 5 as the nodes-versus-quality trade; given a threshold,
+        it could supply the measure.
+      - C16's arm is rightly unbuilt: the user's standing brief builds deferred items "only
+        where §15.2 or §15.3 needs them", and neither has a hybrid row.
+    - **Nothing is built meanwhile:** the brief builds "held-open items not at all", and
+      CHECKPOINT 4's ruling 7 says "Not built: C25". The first version cited M5, which names
+      none of these rows.
+    - Proposed edit 366.
+
+570. **The brief's Kairos questions, each answered plainly at the pin** (CHECKPOINT 9's
+    brief, received 2026-11-01; §11.0 "Kairos, the fourth oracle"; register H52, H37).
+    `PROVENANCE.md` ("Kairos, the fourth oracle") now opens with the brief's list, each
+    item answered in a sentence before the detail: a perft node is an action (non-branching
+    moves as a set, branching moves in creation order), counted by its hypercuboid perft
+    without the actions that waste a move and by its exhaustive enumerator in full - seen
+    on their own lists at cwmtt/JustKings position 3 (27 actions, 25 sets, cwmtt's list
+    exactly; the hypercuboid search 25 actions, 23 sets); check from `has_phantom_check`,
+    mate and stalemate from `get_mate_type`; **the brief's route ("through its JSON command
+    interface or 5DUCI") is not available at the pin** - the JSON interface is a library API
+    of its web build, 5DUCI a playing protocol with no verdict - so the driver links the crate
+    (issue 527); **no mate verdict from an exhausted budget within any deadline the gate
+    sets, from either source** - `get_mate_type` runs uninterruptibly (`interrupt_off()`),
+    the exhaustive source gives a verdict when its enumeration returns no action, and a run
+    cut at the deadline answers nothing where it was cut (corrected after the review of
+    2026-11-02, issue 577: neither search is unbounded, as this said - each of the mate
+    test's three sub-searches is a cursor capped at 2^32-1 hypercuboids, the enumeration has
+    a node budget of 2^64-1, and either cap spent would read as "no action", a verdict; but
+    the corpus's longest sub-searches run at about 1,100-6,600 hypercuboids a second, 180 to
+    over 1,000 hours to the cap, and even the fastest rate measured, about 2.5 million a
+    second, would need about 1,700 s against per-record deadlines of at most 1,200 s - out of
+    reach; `test_kairos.py` now also holds the pin's cursor cap); the state export is 5DFEN
+    (`get_boards`), fingerprinted, so no fallback to board and piece counts; its 44 named
+    variants listed, and which of the corpus's it reads; its licence at the pin GPL-3.0, with
+    parts derived from ftxi under BSD-2 (NOTICE) - not the brief's stop. The budget answer is
+    now tested (`oracles/tests/test_kairos.py`): the driver calls nothing budgeted and passes
+    the exhaustive search a node budget of 2^64-1; the pinned `get_mate_type_impl` switches
+    interruption off; both sources give ftxi's recorded verdict on the corpus's checkmate and
+    two stalemates; runs cut at 2-3 s on records ending in mate give no verdict, and the
+    position being searched when cut has no answers. Edit 362 covers the spec's route
+    sentence. Not put to the user.
+
+571. **The interim "one implementation" reading - built, checked, superseded before it was
+    committed** (CHECKPOINT 9's main-loop decision, 2026-11-01; register H47). Built first as a
+    `gate.toml` setting, `[gating] counted_as_one = [["ftxi", "kairos"]]`, that counted the members
+    of a group following a record once; its tests passed (698 selftests), and the nightly with it on
+    and Kairos absent gated Standard - Half Reflected and Standard - Reversed Royalty, as before. The
+    user's ruling at CHECKPOINT 10 arrived before it was committed and replaced it: lineages, read
+    from every oracle's code and declared per pin in the lock file, counted per answer (issue 573).
+    Nothing of it was committed; recorded so that the number is accounted for.
+
+572. **(not used)** - reserved on 2026-11-01 for a parse-mode design that CHECKPOINT 10 reordered;
+    the parse mode as built is issue 574.
+
+573. **The two-oracle bar counted by lineage, and every oracle's lineage read and declared**
+    (CHECKPOINT 10, issue 526 ruled; register H47, H26, H52, H34, reversal 33; §11.0 "Tiered
+    CI", the reuse rule). The ruling: "A lineage vouches at most once per answer, through any
+    member that agrees and is not a recorded divergence." **The table.** Each oracle pin in
+    `oracles/oracles.lock.toml` declares `lineage` - the pin whose code its own derives from,
+    or itself - and `lineage_note`, what was read and found (NOTICE, credits, licence files,
+    pinned code); `lockfile.load` requires both for every pin the harness runs and refuses a
+    lineage that names no pin of the same role or a pin that is itself in another's lineage
+    (no chains). `PROVENANCE.md`'s generated inventory renders both (a Lineage column and a
+    line per pin), so `verify`'s provenance check holds the document to the lock file; the gate
+    reads the same table (`Lock.lineages()`) - one declared place. **The counting**
+    (`gate.engine_differential`, `lineages`): the implementations that followed a record as
+    far as the engine went are counted by lineage - one vouch per lineage, through whichever of
+    its members followed; a member whose replay differs from the engine's (a recorded
+    divergence included) vouches for nothing, and another member may vouch in its place. Per
+    answer (check, count, mate - condition 3) any member's answer that agrees with the engine
+    settles the position, and one the engine contradicts never does, a recorded divergence
+    included - so at R1's positions, where ftxi's check answers are recorded divergences,
+    Kairos's agreeing answer is the lineage's vouch; and since condition 3 asks for one
+    settling answer per position, a second member's adds nothing. The ungated reason names a
+    lineage that followed with more than one member ("ftxi's lineage (ftxi, kairos)") and says
+    why it counts once; a gated ruleset's summary now says "oracle lineages". With every one of
+    the four its own lineage, nothing changes for them: tests over eight combinations
+    (`oracles/tests/test_lineage.py`) give every verdict and ungated reason as before - the gated
+    summary says "oracle lineages" (reworded after the review of 2026-11-02, issue 577: this said
+    "every verdict and message", and the test compared the gate with and without the table, which
+    for the four is the same; it now holds the values 28a102b gave) - and the nightly
+    tier (below) gates what it gated. Tests also: ftxi and Kairos agreeing count once (with or
+    without their second searches); Kairos beside cwmtt or Chess in 5D gates; Kairos is its
+    lineage's vouch where ftxi reads nothing; the R1 case - ftxi's check a recorded divergence,
+    Kairos agreeing, cwmtt counting - settles the check through Kairos and counts two lineages,
+    and without Kairos the check is settled at one position of two; a member that misread the
+    record leaves the vouch to another; the lock file's validation. **What reading the five pins
+    found** (`PROVENANCE.md`, "Lineages"): Kairos in ftxi's lineage (its NOTICE); cwmtt and Chess
+    in 5D crediting no other implementation; and two findings for the user. (a) **ftxi adapts
+    cwmtt's method**: its docs say so ("using method from [penteract/cwmtt], adapted to c++ with
+    improvements. Some improvements are suggested by the original author"), and its hypercuboid
+    search follows cwmtt's literate `FastCheckmate.lhs` step for step - the same decomposition and
+    names (`build_HC`/`buildHC`, `take_point`/`takePoint`, `find_problem`/`findProblems`,
+    `jump_order_consistent`, `test_present`, `find_checks`) - in C++ over its own bitboards and
+    integer sets; none of cwmtt's (Haskell) code is in its tree, and everything else of ftxi's -
+    its boards, move generation, check test, reader, naive search, engine - is its own. Recorded
+    as two lineages, as the ruling reads ("ftxi adapts cwmtt's method"); but a step-for-step
+    translation of a literate program sits close to the reuse rule's "porting is reuse". Under
+    the stricter reading the two would count once for counts and mate verdicts from their
+    hypercuboid searches (not for their replays or their naive searches). It changes no gated
+    ruleset today: both gated rulesets have Chess in 5D behind them (Half Reflected: cwmtt and
+    Chess in 5D; Reversed Royalty: all three). **For the user**: is a method adapted from a
+    literate program, step for step, in another language, derived code? (b) **Chess in 5D and
+    the notation parser share their 5DFEN board-string reader**: 5d-chess-js's `src/fen.js` was
+    written by Adrien Burgun - the notation specification's author, a listed contributor - and is
+    the same code as the notation parser's `parse_5dfen` (`parsers/game.js`; the same loop and
+    error messages; one six-line window identical). On records set up from 5DFEN boards, a bug in
+    that reader would show in neither. *Corrected after the review of 2026-11-02 (issue 577):
+    they share an origin - both written the same day, 2021-01-11 - and their loop and error
+    messages, but have diverged since (Chess in 5D keeps the unmoved marker and maps even
+    timelines its own way; the notation parser drops the marker and reads "-0" as a signed zero),
+    so a bug in what they share could show in neither, not every bug of either.* The notation parser is parse-only and never counts toward
+    the bar, so the counting is unaffected; recorded, and the two are separate lineages of two
+    roles. **The nightly with the table on and Kairos absent** (2026-11-02, `dev-r` loaded,
+    calibration 1.52x, 10 min): every source's required set reproduced, the engine PASSED, gating
+    exactly Standard - Half Reflected (2 lineages) and Standard - Reversed Royalty (3) - the same
+    as before. Proposed edit 400 (§11.0's and H26's record of the two links the reading found).
+
+574. **Kairos's parse mode, built and pending; how the release tier's sign-off run leaves
+    Kairos out; the ruleset question CHECKPOINT 10 asks first** (CHECKPOINT 10, points 2-3;
+    register H52, H47, H23, H32; the open item "Rulesets Kairos answers and ftxi does not").
+    **Parse mode, built:** source `kairos:parse` (`--search parse` in the driver): the same
+    replay as Kairos's searches - its reader, then `web::tree::play_action`, so an action
+    that leaves a royal capturable is refused (`cannot_submit`) - what it set up at every
+    position and the side to move, and a null for every question; nothing searched. A
+    parse-only source beside the notation parser (`PARSE_ONLY_SOURCES`): its playing an
+    action is no verdict (`observations.judges_actions` now names a parse-only source by its
+    source name as well as its implementation, so Kairos's searches still judge), and it
+    vouches for no ruleset. Pending (`PENDING_SOURCES = ("kairos:parse", "kairos",
+    "kairos:naive")`), in no tier; its budget when recorded is the release tier's own
+    (600 s; it searches nothing - each record under a second). Tests:
+    `oracles/tests/test_kairos_parse.py`. A source of its own rather than a mode switch on
+    `kairos`, so that each golden file records one thing: parse mode's states and replay,
+    and full mode's answers later in their own files. **The sign-off run cannot leave Kairos
+    out as built, once Kairos is enabled**: a tier is full strength - the only kind that can
+    enable the proof channel - only when it runs every source in `ORACLE_SOURCES`
+    (`Tier.full_strength`), and `gate.toml` is refused unless the recording tier (release)
+    runs every one of them; so a Kairos source in `ORACLE_SOURCES` is in the sign-off run.
+    And as built a source can be recorded only once it is in `ORACLE_SOURCES` (`golden
+    --write --source` takes only those). Two designs, **reported before building** (the
+    coordinator's instruction): **(P), recommended - record a pending source.** `golden --write
+    --source` accepts a pending source; its files go into `oracles/golden/` and `MANIFEST` like
+    any other; `verify` holds a pending source's files, where they exist, to the same static
+    checks (integrity, signature, recordings, every corpus record) so a stale recording fails;
+    `DISAGREEMENTS.md`, the tiers and every gate run go on reading `ORACLE_SOURCES` only. The
+    sign-off release tier is then exactly today's - ftxi, cwmtt, Chess in 5D, their naive
+    searches and the notation parser - nothing for the four changes, and Kairos is enabled
+    after it (moved into `ORACLE_SOURCES`, its recording kept if its signature still holds) with
+    its triage. About 40 lines and their tests. **(D) - deferred sources.** A declared
+    `DEFERRED_SOURCES` (Kairos's, by name) inside `ORACLE_SOURCES`, which `Tier.full_strength`
+    and the recording-tier rule do not require, so the release tier leaves them out and still
+    enables the proof channel while the nightly lists them. Nothing for the four is weakened
+    either, but Kairos would be compared with the engine every night from its enabling, so its
+    parse-mode triage would come before the release tier - which CHECKPOINT 10 puts after it.
+    Either is a reviewed change to what a tier must run; neither is built. **Ready to record
+    once (P) is built:** in the gate worktree, `ORACLE_HARNESS_CACHE` set to the main checkout's
+    cache, Kairos built: `py oracles/harness.py golden --write --repeat 2 --jobs 8 --source
+    kairos:parse` - under a minute (one parse-mode pass over all 41 records took 2.1 s on
+    `dev-r`, three at a time; two recordings, plus the calibration probe's 12-14 s); it writes `kairos-parse.json` and `.cost.json`,
+    `calibration.json` and `MANIFEST`, and leaves `DISAGREEMENTS.md` as it is. **The ruleset
+    question - reported first, as CHECKPOINT 10 asks:** the smoke run (issue 533) already shows
+    three rulesets Kairos reads and ftxi does not: **Misc - Timeline Battleground**
+    (cwmtt/ctp2, 19 positions), **Focused - Just Kings** (cwmtt/JustKings, 4) and **Focused -
+    Just Pawns** (cwmtt/smallTest, 4) - each one record, which ftxi does not read (unsupported:
+    a variant it does not know) and Chess in 5D does not either. The nightly gates none of them
+    today: "only one oracle followed ... (cwmtt)". With Kairos in full mode as ftxi's lineage's
+    vouch beside cwmtt, each record would have two lineages behind it, and Kairos's check
+    verdicts would settle the check that cwmtt cannot give - so each could be gated if the
+    engine agrees with both. In parse mode Kairos vouches for nothing, so the parse-mode
+    recording only confirms the reading (the states it set up, how far it read). This is the
+    register's open item, "whether its full mode precedes the release tier" - for the main
+    loop and the user before going further. **The budget lever** (CHECKPOINT 10, point 4): if
+    nightly time binds, Kairos's mate comparisons go first - they carry no vouch beside ftxi's:
+    the `kairos` source's mate test (`get_mate_type`) is the first cut (a check-only option for
+    the hypercuboid source, built with full mode), before anything else of Kairos's or of any
+    other oracle's. For the main loop: (P) or (D), and whether Kairos's full mode precedes the
+    release tier for the three rulesets. **Decided 2026-11-02 by the main loop:** (P), built (issue
+    575); (D) declined - it would compare Kairos nightly and pull its triage before the release
+    tier. The three rulesets and the ftxi/cwmtt lineage question (issue 573 (a)) go to the user, as
+    CHECKPOINT 10 says; full mode is not started.
+
+575. **(P) built: a pending source may be recorded; ready to record Kairos's parse mode**
+    (CHECKPOINT 10; register H52, H32, H33; the main loop's decision on issue 574). `golden
+    --write --source` accepts a pending source (`cli.py`: `ORACLE_SOURCES + PENDING_SOURCES`;
+    without `--source` nothing pending is recorded). Its golden and cost files go into
+    `oracles/golden/` under `MANIFEST` like any other, recorded under the recording tier's own
+    budget (no tier lists it, so no budget of its own applies: release's 600 s). `verify` - and
+    every tier's static checks, which share the section (`gate.golden_section`) - holds a pending
+    recording, where one is on file, to the static checks of an enabled source's files: integrity
+    against `MANIFEST`, schema, signature (pin, driver, adapter, budget), the number of recordings,
+    the cost file beside it, every corpus record and its hash (`gate.pending_golden_findings`); a
+    stale or incomplete one is a finding, as an enabled source's would be. It is read apart
+    (`snapshot.recorded_pending`), after and separately from the enabled sources' checks, never
+    into the snapshot every tier compares with, the proof-channel readiness reads, or
+    `DISAGREEMENTS.md` is rendered from - so nothing about it reaches what the four oracles are held
+    to. Proved by `oracles/tests/test_pending_recording.py` on a copy of the repository's golden
+    files: after a pending recording is written (with `MANIFEST` rewritten, as golden --write
+    does), the snapshot holds the same sources with the same file digests, problems and `MANIFEST`
+    findings; verify's golden section finds nothing; `DISAGREEMENTS.md` renders byte for byte the
+    same; what each tier requires and the release tier's readiness are unchanged; no tier lists a
+    pending source and the nightly and release tiers stay full strength; a stale signature or a
+    missing record fails verify on the pending recording alone; a cost file without its golden file
+    is `golden-missing`. The sign-off release tier is exactly today's. **Ready to record:** on a
+    quiet machine, in the gate worktree (`lane/gate`), with `ORACLE_HARNESS_CACHE` set to the main
+    checkout's `oracles/.cache` and Kairos built (`py oracles/harness.py build --oracle kairos`; the
+    build in the shared cache is current): `py oracles/harness.py golden --write --repeat 2 --jobs 8
+    --source kairos:parse`. Expected duration under a minute - a dry run of the same two recordings
+    through the harness's own recording path, nothing written (`runner.record_sources`,
+    `stability.merge`), took 3.4 s, plus the calibration probe's 12-14 s. Expected content: 32
+    records read (31 to their end; local/ignores-check refused, `cannot_submit`, after 3 actions, as
+    every oracle refuses it), 8 `unsupported` (`parse_failed`: cwmtt/brawnsPuzzles-another,
+    cwmtt/futures, cwmtt/tesseractMageOChicken, cwmtt/test1, notation/aivsai, notation/game,
+    notation/invasion, notation/marauders), no instability, no self-contradiction. It writes
+    `oracles/golden/kairos-parse.json` and `kairos-parse.cost.json` and two new lines of `MANIFEST`,
+    and nothing else (as corrected below); every other golden file is kept, its hash re-checked.
+    Afterwards `verify` should pass with its 17 notes. **Corrected the same day (the main
+    loop's review): a recording that names only pending sources no longer re-times
+    `calibration.json`.** The four oracles' costs were recorded on 2026-10-17 on a quiet machine
+    against that calibration; re-timing it without re-recording them would leave their costs against
+    another machine's reference - on a loaded machine, AGENTS.md's forbidden case. Now `golden
+    --write` re-times `calibration.json` only when it records an enabled source; it times the probe
+    for every recording that names a pending source and writes it, with the machine and the time
+    (`measured`), into each pending cost file (`golden.Costs.calibration`); a pending-only recording
+    leaves `calibration.json`, every enabled source's files and their `MANIFEST` lines byte for byte as
+    they were, and does not render `DISAGREEMENTS.md`. A pending recording's costs are read on
+    `calibration.json`'s time base - scaled by reference / own probe, where the two probes were timed
+    with the same code (`Costs.on_reference`; an enabled source's cost file carries no probe and is
+    read as written) - and verify requires the probe, timed with the probe code gate.toml names
+    (`golden-stale` otherwise). Tests (`test_pending_recording.py`): `golden --write --source
+    kairos:parse` end to end, with the real driver and the probe's timing stood in for, leaves
+    `calibration.json`, the four's golden and cost files and their `MANIFEST` lines unchanged and
+    `DISAGREEMENTS.md` unwritten; a probe twice as slow halves the costs as read; a missing probe, or
+    one timed with other code, is a finding. **The expected diff is now** `kairos-parse.json`,
+    `kairos-parse.cost.json` (its probe inside) and two new lines of `MANIFEST` - nothing else. (The smoke run's count of
+    `parse_failed` records in issue 533 and MEASUREMENTS read 9 - a miscount, corrected there: 8.)
+    Not put to the user.
+
+576. **H48 prepared: the lane stop condition is met - no practicable naive budget makes every
+    proof-channel check non-vacuous** (register H48, H32, H23, H41, H37; "Lane stop conditions":
+    "no practicable naive budget makes every proof-channel check non-vacuous within a CI job's 240
+    minutes (several positions alone take over 300 s) - the documents do not say what follows") -
+    **for the user.** The 17 `proof-channel-vacuous` notes are of the two naive searches: per search,
+    one share below `proof_share` (`ftxi:naive` 82.1%, `cwmtt:naive` 77.4%, of 90%), one verdict
+    recorded too late for the budget (`cwmtt:naive`'s "no action" at cwmtt/ctp2 position 18, recorded
+    at 110 s: it needs 440 s under the margin of 4), and fourteen terminal verdicts another source
+    recorded where a naive recording was cut. From the cost files (two quiet recordings, 2026-10-17),
+    where each cut run stalled - the position it was searching for the rest of its 300 s, after a
+    prefix that took seconds:
+
+    | Search | Record | Stalled at | Boards there | Prefix | Final position (verdict, boards) |
+    |---|---|---|---|---|---|
+    | ftxi:naive | cwmtt/100_timelines | 19 | 216 | 0.74 s | 21 (checkmate, 375) |
+    | ftxi:naive | cwmtt/ctp1 | 16 (final) | 31 | 0.55 s | 16 (checkmate, 31) |
+    | ftxi:naive | cwmtt/many2 | 16 | 112 | 12 s | 62 (checkmate, 256) |
+    | ftxi:naive | cwmtt/manyChecks | 43 | 114 | 20 s | 52 (checkmate, 133) |
+    | ftxi:naive | cwmtt/wide | 11 | 40 | 0.16 s | 47 (checkmate, 124) |
+    | ftxi:naive | ftxi/futures | 19 (final) | 28 | 0.084 s | 19 (checkmate, 28) |
+    | cwmtt:naive | cwmtt/100_timelines | 16 | 78 | 1.8 s | 21 (checkmate, 375) |
+    | cwmtt:naive | cwmtt/ctp1 | 16 (final) | 31 | 1.7 s | 16 (checkmate, 31) |
+    | cwmtt:naive | cwmtt/many2 | 8 | 31 | 5.5 s | 62 (checkmate, 256) |
+    | cwmtt:naive | cwmtt/manyChecks | 43 | 114 | 200 s | 52 (checkmate, 133) |
+    | cwmtt:naive | cwmtt/silly | 27 | 64 | 95 s | 38 (checkmate, 75) |
+    | cwmtt:naive | cwmtt/wide | 11 | 40 | 86 s | 47 (checkmate, 124) |
+    | cwmtt:naive | cwmtt/futures, ftxi/futures | 19 (final) | 28 | 0.49 s | 19 (checkmate, 28) |
+
+    (The exiledKings and niceAndrey cuts end in no verdict and only bear on the share.) A naive search
+    is exhaustive, and a checkmate is proved only by exhausting the action space - exponential in the
+    playable boards: both naive searches spend more than 300 s on the 28- and 31-board final
+    checkmates of ftxi/futures and cwmtt/ctp1 alone, and the other verdicts sit at 124-375 boards, after
+    stalls of 100-300 s and with up to 46 positions still to search. **What a budget can buy:** the
+    proof-channel tier needs each verdict's cost x 4 within the budget. From the cost files, one
+    recording of the release tier costs 6,559 run-seconds at today's budgets (two recordings over 8
+    jobs: about 27 minutes - `golden --write`'s "about half an hour"), 19 of its (search, record) runs
+    cut at 300 s; at a naive budget B each of those runs up to B, so the tier costs 6,559 + 19 (B - 300)
+    run-seconds. On a 4-core CI runner the 240-minute job allows B of at most about 2,990 s, so every
+    verdict would have to arrive within about 750 s - against single positions known to take over
+    300 s before 46 more of up to 256 boards (many2), or a 375-board checkmate (100_timelines). No
+    such budget exists; B = 1,200 s (98 minutes a CI run; a two-recording session of about 100 minutes
+    on `dev-r`) would at best turn the ctp2 note and part of the shares, not the fourteen verdicts.
+    **Not done:** no budget changed, nothing recorded; the documents do not say what follows. Options
+    for the user: (a) hold the naive searches in the proof-channel tier to positions they can finish -
+    their required set on terminal verdicts limited to positions under a board count, as the proofs
+    themselves are (Hunt under 100 boards, the settling scans under 50; H43, H14) - a change to H32's
+    rule for that tier; (b) run the naive searches in the nightly tier only, the proof-channel tier
+    keeping the hypercuboid searches and Chess in 5D's mate search - a change to what that tier must
+    run; (c) a sign-off run outside CI, a release tier with hours-long naive budgets on a quiet machine,
+    whose length is then measured, not assumed. Until then the parse-mode recording (issue 575) stands
+    alone: it re-times nothing, and needs no H48.
+
+577. **Kairos round 2 review fixes** (the review of 28a102b..203fabd, 2026-11-02: three passes,
+    every finding checked by two skeptics - no HIGH, 1 MEDIUM, 12 LOW, 5 refuted - with the main
+    loop's decision on M1; written 2026-11-02, stopped by the account's usage limit, finished
+    2026-11-08 after main's merge; register H47, H52, H26, H37, H32; §11.0 "Tiered CI", "Kairos,
+    the fourth oracle"). What each finding got:
+    - **M1** - nothing tested that `run_tier` counts by the lock file's lineage table, and
+      dropping it went unnoticed (mutant G18; no verdict differed, since every oracle a tier runs
+      is its own lineage). Fixed both ways, as the main loop decided. **The table fails closed:**
+      `gate.engine_differential` takes `lineages` as a required keyword, with no default that
+      would count every implementation apart, and refuses (`HarnessError`) a table that does not
+      name every implementation it compares; `run_tier` reads it once and hands it to the
+      differential and to the report; the tests that count each implementation apart pass an
+      explicit identity table (`test_gate.IDENTITY`). **The wiring is tested end to end**
+      (`test_gate.GateRunTests`): with every rules oracle declared in ftxi's lineage, the nightly -
+      which gates both rulesets with the repository's table - gates nothing, every reason saying
+      why the three count once; and with cwmtt standing in as an oracle derived from ftxi's code,
+      Turn Zero, followed by those two alone, is not gated while Standard is, by two lineages.
+    - **L1** - the one-lineage note looked at every record of the ruleset: now only at the records
+      the reason names; tested both ways (the merged label on the second of two named records; on
+      a record two lineages followed, which the reason does not name).
+    - **L2** - the lineage notes and PROVENANCE.md misstated what reading the pins found; the spec
+      and register repeat two of the errors. Re-read at the pins (Kairos 8bfea4a6, ftxi 2ea9f1b8
+      and its later commits f66c4ee and 95751dc in the local store, Chess in 5D, the notation
+      repository) and corrected in the lock file's notes (rendered by `provenance --write`) and
+      PROVENANCE.md's prose: Kairos's exhaustive enumerator (`core/naive.rs`) is ftxi's
+      `naive_search_impl` translated line by line, and its check test's pass set ftxi's later code
+      (f66c4ee, "check semantics revisited", 2026-10-15, after ftxi's pin; at the pin ftxi's
+      `for_phantom` passes every timeline whose end is the mover's) - its own parts are its
+      wasted-move pruning and its playing engine; most, not all, of its core modules mirror ftxi's;
+      its seven hand-coded variant layouts are ftxi's (three as in 95751dc), the other 37 the
+      notation table's; its Half Reflected swaps white's king and queen where the notation's table,
+      Chess in 5D and cwmtt swap black's, which - not the move text - is why it fails cwmtt/test1
+      (re-run here: `parse_failed` at `(0T5)Qd1>>(0T3)f3~` with its layout, all 20 actions with the
+      notation's as a custom board; issue 533 corrected); Chess in 5D's and the notation parser's
+      5DFEN readers share an origin, their loop and their error messages, and have diverged; ftxi's
+      one credits file credits image assets; "share no code" is said of the other rules oracles;
+      Kairos's script that diffs its moves, checks and mate status against 5d-chess-js recorded, as
+      no lineage. Issue 526's reading annotated, edit 400's clause aligned, **edit 401** proposed
+      (§11.0's Kairos row and paragraph, H52, reversal 33). Context, from the review: Kairos should
+      still reproduce ftxi's recorded errors where its code is ftxi's "and not the R1 check
+      entries" (CHECKPOINT 10) - but because ftxi's own later commit changed the pass set, so a
+      bump of ftxi's pin past f66c4ee re-opens the R1 entries.
+    - **L3** - Kairos's pin note still said its lineage was the user's to rule: now the CHECKPOINT
+      10 ruling.
+    - **L4** - "no mate verdict from an exhausted budget" left out the hypercuboid cursor's built-in
+      cap: each of the mate test's three sub-searches stops at 2^32-1 hypercuboids, and the
+      enumeration has a node budget of 2^64-1; spent, either reads as "no action", a verdict. Stated
+      in PROVENANCE.md, issue 570 and the driver's header, with why no deadline reaches either (the
+      review's rates: about 1,100-6,600 hypercuboids a second on the corpus's longest sub-searches,
+      180 to over 1,000 hours to the cap; about 1,700 s even at the fastest measured, 2.5 million a
+      second, against deadlines of at most 1,200 s); `test_kairos.py` now holds the pin's `budget:
+      u32::MAX` in `HcCursor::new`, so a pin bump that lowers it fails; the test's docstring and
+      comments corrected. The old claim stays in its changelog entry, corrected in this one's.
+    - **L5** - `kairos:parse`'s refusals and length are compared only through a primary source, and
+      nothing said which Kairos source is primary when. The comments corrected (`adapters/__init__.py`,
+      `observations.judges_actions`, `adapters/kairos.py`: it reads only moves Kairos generates and
+      refuses an action that leaves a royal capturable - its acceptance left uncompared by choice;
+      its refusals compared only through Kairos's primary source, none while pending; the two
+      stages are CHECKPOINT 9's brief's, reordered by CHECKPOINT 10, not H52's words - the driver's
+      header and `test_kairos_parse.py`'s docstring had the same attribution, and so did this
+      file's changelog entry for 203fabd). The enabling recipe (`adapters/__init__.py`,
+      `oracles/README.md`, issue 530) says exactly one Kairos source is primary at each stage,
+      records the budget-cut gap and the two options for the enabling; `test_repository.py` holds
+      every implementation a tier may run to exactly one primary source.
+    - **L6** - the members named in a lineage's label were untested: Kairos alone is named
+      "ftxi's lineage (kairos)", and a member that misread (ftxi reading one action further than the
+      engine, excused) is left out of the label.
+    - **L7** - the report re-read the lock file instead of recording the table the verdicts used:
+      `_write_report` takes it (a required keyword) and writes it; tested with a table unlike the
+      lock file's, and `run_tier`'s call with it.
+    - **L8** - three of `lockfile.load`'s lineage checks had no test: a corpus-source pin declares
+      neither key (each alone, and both), `lineage_note` must be there and not blank, and the
+      notation parser's lineage must name a pinned parse-oracle.
+    - **L9** - "every verdict and message as before" rested on a test that compared the gate with
+      itself: reworded (issue 573, the changelog) to every verdict and ungated reason, the gated
+      summary saying "oracle lineages"; the test now holds frozen values from 28a102b's gate (its
+      harness exported read-only and run over the eight combinations: findings, every `Gated` field,
+      every ungated reason - the same); the H47 row's date corrected (2026-11-02).
+    - **L10** - `Gated.oracles`' comment, the gate's module docstring and `oracles/README.md` say
+      lineages.
+    - **L11** (optional hardening, done) - condition 3 trusted any answer a parse-only source
+      printed: now only the settling is skipped for one, so what it held still counts towards the
+      boards compared and its recorded divergences are still looked at (tests: a stray check answer
+      from `kairos:parse` or the notation parser leaves R1's shape ungated; its boards counted; a
+      stale entry of its own reported).
+    - **L12** - for the user: issue 578, nothing built.
+    - **Refuted** (spec-F5, spec-F7(b), spec-F4(a) with correct-F8(a), mutation-F8, mutation-F9):
+      nothing done; mutation-F9's optional exact quotation of ftxi's credit taken with L2's edit.
+    - **The mutation pass's survivors re-run** with the review's runner (`run_mutants.py`, the same
+      tiers) on a fresh copy of the fixed tree - its one difference from the commit a docstring
+      reflowed after the copy was taken. Of the eight survivors, **G03, G16, G18, G19, L01, L02 and
+      L08 are KILLED** - G16, G18 and G19 re-expressed on the lines the fixes moved, with the
+      originals' meaning (G18 as `lineages=None`, which the fail-closed table refuses) - and **R06
+      survives**, as the review judged it: equivalent in effect (mutation-F8, refuted - the driver's
+      start event is informational and dropped by the reader), so no test was added for it. Six more
+      mutants of the fixed lines, all KILLED: L1's pre-fix condition (G16b); the original G18's
+      meaning, every implementation its own lineage (G18b - by the two new `run_tier` tests); L7's
+      pre-fix report (G19b); M1's refusal dropped (X01); L11's guard dropped (X02) and over-reaching,
+      skipping a parse-only source whole (X03). 13 of 14 killed; the one survivor equivalent.
+    The Kairos driver's header comments changed (the stages' attribution, the caps), so Kairos was
+    rebuilt (`build --oracle kairos`, 44 s, the cached toolchain; no golden file hashes its driver).
+
+578. **Nothing ties an oracle's lineage reading to the pinned commit - for the user** (the round-2
+    review's L12; register H47, H27; `CONTRIBUTING.md` "Changing a pin", steps 3 and 9). Each pin's
+    `lineage_note` records the date it was read, not the commit. At a pin bump `lockfile.verify`
+    forces attention to the tree and the licence (`licence_sha256`) but to nothing of the lineage
+    or the NOTICE it rests on: the review simulated a Kairos pin bump to a real later commit
+    (39304ff6, the same licence hash), lineage and note untouched - it passed `verify` (after
+    `provenance --write`) and every lineage test, the note still saying "Read at the pin". The
+    ruling's "at every pin bump" (CHECKPOINT 10) is built as a process step only. Nothing requires
+    more - H47 is committed as a process, pin bumps are reviewed changes - and adding a field to
+    the lock file's pin entries is a change nobody has asked for (AGENTS.md), so nothing is built.
+    **For the user:** (a) a `lineage_read_at = "<commit>"` field on each run pin, which `verify`
+    fails when it differs from `commit` - as `licence_sha256` forces the licence to be re-read; or
+    (b) leave it to "Changing a pin" step 3 and review, as now.
+
+579. **Three oracle notation-reader gaps drafted for upstream - for the user to file** (the
+    done-means audit's verification, 2026-11-02, section 4: "Standard - Turn Zero" and "Focused -
+    Just Brawns", the oracle reader gaps among the ungated rulesets' barriers; register H27,
+    CHECKPOINT 8 - defects as bug reports, disagreements with a documented rule as questions citing
+    the source, drafted by the agent and filed by the owner; §11.0 "A known-divergences file").
+    Each claim was checked at the pins on 2026-11-08:
+    - the oracle's reader read at its pinned commit (read only);
+    - the refusal reproduced with `observe` (no golden file written) and with the stock tool or
+      library at the pin, in scratch copies of the records;
+    - the notation found in the specification's text (N = `oracles/third_party/notation/README.md`
+      at the pin).
+
+    The drafts, in `docs/checkpoints/upstream/` (indexed in its README; none filed):
+    - **`ftxi-signed-timeline-labels.md` - a bug report.** ftxi refuses
+      `(-1T10)Nf6>x(+1T10)g6`, action 28 of cwmtt/tesseractMageOChicken (KD-0054). `observe`:
+      `rejected/no_matching_move`, 27 actions accepted, "Invalid move:
+      mv:sm{fb:ab{s:-,l:1,t:10},pn:N,ff:f,fr:6,ji:>,cp:yes,tb:ab{s:+,l:1,t:10},tf:g,tr:6,pt:?}".
+      - The cause: `state::parse_move` renders every candidate move and parses it back, and
+        `match_absolute_board` (`src/core/pgnparser.cpp` 1006-1011) compares the sign token as
+        written. ftxi renders `1` in odd games and `+1` in even ones, so the defect cuts both ways:
+        on four hand-built custom records, stock `5dtools` refuses `(+1T1)Ka2` in an odd game and
+        `(1T1)Ka2` in an even one, and plays the other spellings.
+      - The notation allows both (N:548-549, "The `+` sign can be omitted for other integers"; N:405).
+        So does ftxi's own grammar (`docs/pgn-bnf.txt` 32, `docs/branched-5dpgn.md` 428: `<line> ::=
+        ['+' | '-'] <natural-number>`), and its 5DFEN reader already takes a missing sign as `+`. A
+        defect, not a reading: ftxi's matcher breaks its own grammar.
+      - With the `+` taken out of the record's board coordinates, 5dtools plays all 33 actions. Its
+        counts at positions 28-33 - 179681, 34, 128714, 126, 74692, 0 - are the ones the record
+        lists in its closing comment, and agree with cwmtt's recorded answers within the count cap of
+        1000. KD-0054's `upstream` now names the draft (no binding or citation changed).
+    - **`5d-chess-js-signed-timeline-token.md` - a bug report.** Chess in 5D refuses `(>L+1)` in the
+      same record, at White's 13th turn (line 22). `observe`: `unsupported/notation`, 24 actions
+      accepted, "Source super-physical coordinates missing or incorrect! | action text:
+      (0T13)Qg3>>(0T10)g6*  (>L+1)".
+      - The cause: the token is removed with `/\(>L\-?\d*\)/g` (`src/pgn.js` 256, 528), which leaves
+        `(>L+1)`, and the leftover is then read as a move.
+      - The notation gives the token (N:187-194) and the optional sign (N:548-549), and its own
+        example game writes `(>L+3)` (N:348). All three are already in notation 92c68f0, the version
+        the library's documentation says it follows (that README's lines 165-174, 503-504 and 302).
+      - Through the public API, `new Chess(text)` swallows the error and holds no action. With the
+        suggested fix (`[+-]?`) applied to a scratch copy, the library imports all 33 actions.
+      - **No known divergence covers the refusal, and none is needed.** An `unsupported` outcome is
+        no refusal: the comparison counts only a `rejected` run's refused action
+        (`observations.refused_action`), so the library simply answers nothing after position 24.
+    - **`ftxi-empty-last-sub-turn.md` - a question.** ftxi refuses the trailing `4. We3 /` of
+      cwmtt/brawnsPuzzles-another (line 7). `observe`: `unsupported/parse_error`, 0 actions,
+      "parse_game(): Unexpected trailing input: ..." (the message quotes the text read, not the
+      trailing part). Like Chess in 5D's refusal, it is `unsupported`, so it needs no entry.
+      - **The claim holds, with a nuance.** The specification shows an empty last sub-turn only
+        before a result - `23. (-4T10)Bxd2 / 1-0` (N:350) - and ends its puzzles without a result
+        (N:259, N:271). A record ending in `/` is the two put together, not a form the text itself
+        shows. ftxi refuses `/ 1-0` as well (a Standard record, stock 5dtools), so it refuses the
+        specification's own example.
+      - **A question, not a bug.** ftxi's own grammar requires a move after every `/`
+        (`docs/pgn-bnf.txt` 10-11; `docs/branched-5dpgn.md` 409-410, and line 197: a sub-turn "has
+        one or more moves inside"). So its reader does what its documentation says, and the
+        specification shows the form by example, not by rule. That is a disagreement with a
+        documented rule, and the answer also tests our own reading (the engine drops an empty last
+        action, `engine/README.md` "Turns").
+
+    **What a fix would bring - two corrections to the brief.**
+    - **In the nightly, Standard - Turn Zero is held back only by cwmtt/tesseractMageOChicken
+      (SINGLE: cwmtt; the 2026-11-02 report).** **Either** reader fix would give that record a second
+      lineage - ftxi's or Chess in 5D's - not only ftxi's. (Kairos, in ftxi's lineage, has the same
+      gap and adds nothing until it is fixed too.) Both oracles read the record to its end once the
+      sign is read (above). Whether Turn Zero is then gated depends on their answers
+      there agreeing with the engine. ftxi's counts at 28-33 do: they are cwmtt's, and cwmtt vouches
+      for the record. Its check answers at those positions, and Chess in 5D's verdicts after
+      position 24, were not compared. Either fix reaches the gate only through a reviewed pin bump,
+      and 5d-chess-js's master had not moved since 2022-06-15 when it was pinned.
+    - **Focused - Just Brawns: a fix in ftxi alone brings nothing.** ftxi does not know the variant,
+      at its pin or on `main` at `d765d3d` (2026-10-15, the newest commit in the submodule's
+      history): with the `/` removed, 5dtools stops at "derive_variant_setup(): Unknown variant:
+      Focused - Just Brawns". Its pin knows four named variants, and `main` seven. Only Kairos, in
+      ftxi's lineage, knows the variant (`src/core/variants.rs` 120, 163). If its reader read the
+      `/`, Kairos would bring that lineage beside cwmtt, and its check test would lift the ruleset's
+      check coverage (0/8) - provided its answers agree with the engine's.
+
+    **Kairos shares two of the gaps**, because its reader is ported from ftxi's (`src/web/pgn.rs`
+    line 1: "ported from the C++ engine's `pgnparser`"). `observe --source kairos`: "Invalid move
+    (-1T10)Nf6>x(+1T10)g6 at T10 black: no legal move matches" - its matcher keeps ftxi's comparison
+    (`pgn.rs` line 783) - and "line 7: Unexpected trailing input: /". It is not drafted. Under
+    CHECKPOINT 10's order, Kairos's full mode and triage come after the release tier, and a report
+    to it waits for that triage.
+
+    Nothing else changed: no adapter, driver, golden file, corpus record, budget or pin. No spec
+    edit is proposed: §11.0 and H27 describe the process followed. Two of the gaps are not recorded
+    divergences, and the clause, written of recorded divergences, neither requires nor forbids
+    reporting them. **For the user: file the three drafts** (the README's "Before filing" list).
+601. **The network job's shards must be whole test files** (CI: `.github/workflows/network.yml`,
+    `python/tests/conftest.py`; the main loop, 2026-11-08, found by `lane/fix535`). The Python suite
+    outgrew the job's hour (about two hours on a runner), so the job became four parallel shards
+    (`T5D_TEST_SHARD=i/n`, c8a9c49). That first version split by a hash of each test's id, and a
+    module whose last case checks what its siblings recorded
+    (`tests/engine/test_flat_head.py::test_some_case_leaves_a_board`) failed, or was skipped and
+    checked nothing, when split. Fixed in e15f173: files go to shards greedily by test count,
+    largest first, ties by path, so every job computes the same split and no module is split.
+    Checked at dbf9be8: 1,976 tests as 494 / 494 / 495 / 493 in 13 / 13 / 14 / 14 files, their
+    union the whole. No spec text describes the CI job.
+    *The lane's run that found it (`lane/fix535`, 2026-11-08, two shards at c8a9c49): at `1/2`
+    the check saw `any([False, False, False, False])` - none of its shard's four cases had a board
+    some turns leave - and at `3/4`, CI's split then, it was skipped; whole, the module passed 8
+    of 8.*
+602. **Three tests failed only on GitHub's Linux runner** (the network job's runs 42469920087,
+    42473372690 and 42476803590, on c8a9c49, 9bc10fc and e15f173 - the first runs to reach the end
+    of the suite once it was sharded; the main loop, 2026-11-09). None fails on the development
+    machine. All three are fixed on main, and none was made to pass by giving up what it checks:
+    - **`tests/engine/test_decision_log.py`** needs `t5d-audit` beside the library, and the job built
+      only the library and `t5d-gate`. The job now builds `t5d-audit` too.
+    - **`tests/net/test_params.py`'s parameter fingerprint.** The fingerprint's three float64 sums are
+      meant to need no bit-exact float32 libm across platforms. Its rank-weighted sum was still held
+      to 1e-5, though a tensor's last-bit difference enters that sum up to n times (n tensors; 230
+      in the v1). The runner draws the v1's parameters about 1e-8 relative away from the development
+      machine's: the plain sum differs by 1.3e-6, the weighted sum by 7.7e-5 and the absolute sum by
+      1.8e-11 relative. `_same` now allows 1e-5 x n on the weighted sum, and every fingerprint check
+      goes through it. A moved draw or two swapped tensors still move the sums far beyond.
+    - **`tests/net/test_quant.py::test_an_evaluation_does_not_depend_on_its_batch["pow2"]`** (G2's
+      FP8 trunk; C19-C21's purity).
+      - **The old bound held by chance.** It required 1e-5, which held on the development machine
+        only because no FP8 rounding flip fell early in the trunk at seeds 0-5.
+      - **Measured here (2026-11-09, main 0e7d2ed).** The FP32 trunk differs between the lone
+        position and the padded batch at about 81% of the position's 88,576 trunk elements (RMS
+        1.8e-7) at every seed. Under "pow2" the format absorbs it: 0 elements differ at seeds 1-4,
+        and 211 and 255 at seeds 0 and 5. A value within the FP32 difference of a rounding boundary
+        flips, though, and a flip early in the trunk spreads through every later rounding.
+      - **On the runner.** Seed 0 flipped early: RMS 2.1e-3, in two runs. The third run passed with
+        the network code unchanged in between (9bc10fc added only two test files), so the runner's
+        CPU decides.
+      - **The new bound.** One bound for both rules, 1e-2, three times the largest spread measured
+        ("absmax", 3.1e-3). Under "absmax", the per-tensor mutants (2.6e-2 and 2.2e-2) still fail it.
+        Under "pow2", those mutants move this measure by at most 2.1e-4 - less than an early flip,
+        so no end-to-end bound separates them on such a CPU. They are caught exactly by
+        `test_quant_linear_scale_granularity` and
+        `test_the_attention_operands_are_rounded_after_rope`, as the test's docstring already said.
+
+    No spec edit: no part of the spec describes the CI job or these tolerances, and G2's and
+    C19-C21's text stands.
 
 600. **Issue 535 resolved - D2's flat form, a node's creation and a re-root made
     exception-safe under an allocation failure - and two defects of its kind found beside
@@ -5731,18 +7064,6 @@ superseded or made moot says so; nothing is deleted.
       resolved by this entry; (2) `dropped_generators` is not in the C API's
       `t5d_search_summary` (appending it changes the ABI and the Python binding's mirror) -
       if wanted, a change of its own.
-
-601. **`test_flat_head.py::test_some_case_leaves_a_board` under the test-shard hook** (no spec
-    section; register D2's flat head; found 2026-11-08 running the Python suite in two shards for
-    issue 600). The test asserts over a module-level list (`MIXED`) that the module's
-    parametrized flat search cases fill, and skips when it is empty ("run with the flat search
-    cases"). `T5D_TEST_SHARD` (c8a9c49) deals a module's tests to shards one by one, so the
-    aggregate sees a subset of the cases or none: at `1/2` it fails (`assert any(MIXED)`, line
-    154: `any([False, False, False, False])` - none of its shard's four cases has a board some
-    turns leave), and at `3/4` - CI's split - it is skipped, so CI checks nothing there; whole,
-    the module passes (8 of 8). Not this fix's (no Python file changed). **For the main loop /
-    the network lane:** compute the aggregate inside one test over the cases, or keep the module
-    in one shard.
 
 ## Proposed spec edits
 
@@ -6319,6 +7640,13 @@ struck through, where nothing of it is left to apply); the others stand as writt
     recorded, its verdict in the row; Adopted under / Not adopted in: shipped as
     measured, per range. Why: the vocabulary is how a reader tells how firm a row is,
     and these words are outside it.
+    *Refreshed 2026-11-02 (the done-means audit, issue 538(b)):*
+    - The register's header now defines eight words: "Retired" was added upstream (c60d9d1,
+      2026-10-23). So Retired leaves the list above, and "one of the seven" reads "one of the
+      eight".
+    - Four of the words still outside the vocabulary stand on committed-class rows, where
+      section 15.5's last clause reads the status: B3 (Contingency only), B6 (Superseded), C5
+      and C7 (Killed, provisionally) and D2 (Undecided).
 
 <!-- A new list, so that the numbers from 150 render as written. -->
 
@@ -7225,6 +8553,106 @@ struck through, where nothing of it is left to apply); the others stand as writt
     and the same sentence in `AGENTS.md`'s boundary section, which today forbids it
     (the user's file). Why: issue 532 - as written, the opponent role and the boundary
     rules cannot both hold.
+364. **Section 15.5's equivalence clause** (issue 536):
+    - Now: "every equivalence test green".
+    - Proposed: "every equivalence test green - a row section 15.2 defers with the window, or
+      voids with a retired component, named as such". Per the user's ruling on issue 536,
+      add: "and C26's and C27's rows built behind the cached configuration" (a), or "and
+      C26's and C27's rows waiting with C2's adoption" (b).
+    - Why: as written, the clause has no room for the rows section 15.2 itself defers (C5,
+      C10) or strikes (F4), and is silent on rows committed only if C2 adopts the cache.
+365. **Section 15.5 and section 15.1's Phase 3 row** (issue 537):
+    - Now: section 15.5 names section 15.2 and section 15.3. Phase 3: "Equivalence suite
+      green (§15.2); every cost figure measured and written back (§15.3)".
+    - Proposed: add "section 15.4's invariants holding" to both. For example, section 15.5:
+      "every equivalence test green and every section 15.4 invariant holding".
+    - Why: the solver's cross-checks (H41) and 6f's TT churn are section 15.4's, and the
+      proof channel's sign-off (H23) reads them.
+366. **Register C25, B3, C18 and C16, with section 14.4 and section 13.1** (issue 538). Rewritten
+    2026-11-02: the first version's options for B3, C18 and C25 were flawed.
+    - **C25** (issue 538(a)), one of:
+      - "Not a v1 option - reopened by 6c's evidence", with section 14.4's entry moved out of
+        "Held open (prototype tier)". Section 14.4 already says "Held unless 6c shows fresh
+        conditioning is worth a lot", so this is the only remedy that needs no change to
+        section 13.1.
+      - A new trained arm in section 13.1, in 6c or ablation 8: randomised dense depth on
+        C16's hybrid. It inherits C16's trigger (538(c)).
+      - Not "Prototype - built behind a flag for 6c": no arm tests it, and it contradicts
+        CHECKPOINT 4's ruling 7 and section 14.4.
+    - **B3** (538(b)), one of:
+      - define "Contingency only" in the register's vocabulary as a decided status (with
+        edit 206), and give trigger 3 a threshold or drop it;
+      - "Deferred", with gate "M18's window re-check, 6c, the GPU evaluation rate (M19) with
+        a threshold".
+      - Not "Refused": section 14 has no axial entry, and "Refused" means "see §14 for the
+        principle each violates". Not "Held open" either, which would make it a live
+        candidate.
+    - **C18** (538(b)): one status, in one edit across section 7.6, section 13.1's 6a,
+      section 14.4 and section 15.3's interleave row. The choices:
+      - "Prototype for 6a" - build the arm now, and edit section 15.3's "void while held
+        open" and section 7.6's fallback sentence;
+      - "Not a v1 option" - edit section 13.1's 6a arm, section 14.4's entry and section 7.6;
+      - "Deferred - 6a's layer-level arm, built if routing (B10) fails 6a or cache memory
+        binds" - no build, though section 13.1 and section 14.4 still need rewording.
+    - **C16** (538(c)):
+      - name its trigger: ablation 5's nodes-versus-quality reading (section 9.2), with a
+        threshold;
+      - reconcile section 10.1's "node-starved" gate on the cache with C2's row (6c, M18);
+      - give it a deadline before serious self-play.
+    - Why: section 15.5's last clause - each committed-class row "either decided or
+      explicitly awaiting a named trained ablation" - and the register's vocabulary, which is
+      how a reader tells how firm a row is.
+
+400. **§11.0 "Third-party code" and register H26 (what reading every oracle's code found)**:
+    now - §11.0: "ftxi's detector and cwmtt are the external checks; ftxi's adapts cwmtt's
+    method, so a flaw in the method itself would not surface as disagreement between those
+    two, which makes Chess in 5D the most independent of the four"; H26: "ftxi and cwmtt
+    external, Kairos in ftxi's lineage and counted with it". Proposed - after "ftxi's adapts
+    cwmtt's method": "(its hypercuboid search follows cwmtt's literate program step for step,
+    in C++ over its own data structures; its boards, move generation, check test and reader
+    are its own - two lineages, unless the user reads a step-for-step translation as derived
+    code: issue 573)"; and, beside "Chess in 5D the most independent": "(its 5DFEN
+    board-string reader was written by the notation specification's author the day he wrote
+    the notation parser's, and shares its loop and error messages - the notation parser is a
+    parse-only oracle, so the bar is unaffected)" (this clause aligned after the review of
+    2026-11-02, issue 577: it said "shared with the notation parser" - the two share an
+    origin and have diverged since). H26 the same in brief. Why:
+    issue 573 - CHECKPOINT 10's rule ("each oracle's NOTICE, credits and pinned code are read at
+    every pin bump") applied to all five pins found these two links, which the spec does not
+    record.
+
+401. **§11.0's Kairos table row and paragraph, register H52 and reversal 33 (what of Kairos is
+    its own)**: now - §11.0's table row: "its NOTICE credits ftxi, its core modules follow
+    ftxi's one for one, its 5dpgn reader is ported and its mate test translated. Its own: the
+    check test's pass set (R1's reading), an exhaustive enumerator, wasted-move pruning and its
+    playing engine"; §11.0's paragraph: "Its 5dpgn reader is ported from ftxi's, its mate test
+    is ftxi's translated line by line, and its core modules follow ftxi's one for one; its own
+    parts — the check test's pass set (R1's reading, where ftxi's passes more boards), the
+    exhaustive enumerator and wasted-move pruning — run on that ported code"; H52: "its core
+    modules follow ftxi's one for one, its 5dpgn reader is ported and its mate test translated
+    line by line; its own parts — the check test's pass set (R1's reading), the exhaustive
+    enumerator, wasted-move pruning and its playing engine — run on that code"; reversal 33:
+    "reader ported, mate test translated, core modules one for one". Proposed - the row: "its
+    NOTICE credits ftxi; most of its core modules mirror ftxi's; its 5dpgn reader is ported,
+    and its mate test, exhaustive enumerator and check test's pass set are translated from
+    ftxi's code - the pass set (R1's reading) from ftxi's later code, after ftxi's pin. Its
+    own: wasted-move pruning and its playing engine"; the paragraph: "Its 5dpgn reader is
+    ported from ftxi's; its mate test is ftxi's translated line by line, its exhaustive
+    enumerator ftxi's naive search translated, and its check test's pass set ftxi's later code
+    translated (R1's reading, which ftxi adopted after the pinned commit - at the pin ftxi's
+    passes more boards); most of its core modules mirror ftxi's, and its seven hand-coded
+    variant layouts are ftxi's. Its own parts — wasted-move pruning and its playing engine —
+    run on that code"; H52 the same in brief; reversal 33: "reader ported; mate test,
+    enumerator and check pass set translated; most core modules mirrored". Why: issue 577 - the
+    review of 2026-11-02 re-read the pins: Kairos's `core/naive.rs` is ftxi's
+    `naive_search_impl` (`tools/search_tools.cpp`) line by line, and its `for_present` /
+    `for_phantom_in` / `for_check_symbols` are ftxi's commit f66c4ee (2026-10-15, "check
+    semantics revisited"; ftxi's pin is 2ea9f1b8, whose `for_phantom` passes every timeline
+    whose end is the mover's); `perft.rs`, `prof.rs` and `tactics.rs` have no ftxi
+    counterpart. The ruling is unaffected - every correction puts Kairos further inside ftxi's
+    lineage. It bears on the CHECKPOINT 10 expectation that Kairos reproduces ftxi's errors
+    where its code is ftxi's "and not the R1 check entries": that holds because ftxi's own later
+    commit changed the pass set, so a bump of ftxi's pin past f66c4ee re-opens the R1 entries.
 
 ## Session log
 
@@ -7405,7 +8833,7 @@ struck through, where nothing of it is left to apply); the others stand as writt
   `kairos:naive`, in `adapters.PENDING_SOURCES`: wired, enabled in no tier until the
   quiet-machine block records them (issue 530). The smoke run over the corpus (issue 533): the
   same boards as every oracle everywhere; check with Chess in 5D, terminal with ftxi and cwmtt,
-  the count with cwmtt; 9 records its reader cannot read. No golden file written (the machine is
+  the count with cwmtt; 8 records its reader cannot read (first written as 9, a miscount). No golden file written (the machine is
   loaded). Checks on the final state: `verify` ok (the 17 notes of H48), `selftest` 684 tests OK
   (1 skipped), `gate --tier commit` - oracle layer ok, ftxi 8256 of 8256 and notation 3012 of
   3012 required values reproduced, calibration 1.45x, engine SMOKE TEST - PASSED, 0 declined:
@@ -7477,6 +8905,67 @@ struck through, where nothing of it is left to apply); the others stand as writt
   (`tests/engine`) and 1589 passed (`tests/net`, `tests/train`; `T5D_REQUIRE_ENGINE=1`, two
   workers); ruff clean; `verify` ok but the unsynced Kairos submodule (not synced: no downloads
   without asking). Register A5, C26, G10, M18; issues 244, 245, 252, 256-258; edits 196-199.
+- **2026-11-02 - CHECKPOINT 10's lineage counting built** (`lane/gate`; issues 570-573, edit 400
+  so far). The brief's Kairos questions answered plainly in PROVENANCE.md, with tests that no mate
+  verdict comes from an exhausted budget (570); the interim "one implementation" grouping built and
+  checked on 2026-11-01 (571) was superseded by the ruling before it was committed; the two-oracle
+  bar counts lineages from one table, each oracle pin's `lineage` in the lock file, rendered in
+  PROVENANCE.md (573). Reading the five pins found two links for the user: ftxi's hypercuboid
+  search a step-for-step adaptation of cwmtt's literate method, and Chess in 5D's 5DFEN reader the
+  notation author's, shared with the notation parser. The nightly, Kairos absent: Half Reflected
+  and Reversed Royalty, as before.
+- **2026-11-02 - Kairos's parse mode built and pending; the sign-off exclusion reported before
+  building** (`lane/gate`; issue 574). `kairos:parse` - the same replay as Kairos's searches, what it
+  set up and the side to move, no rules answer; parse-only, vouching for nothing; one pass over the
+  corpus in 2.1 s. As built, recording it would put Kairos in the release tier's sign-off run (a
+  recorded source must be in ORACLE_SOURCES, every one of which a full-strength tier runs): (P) record
+  a pending source, recommended, or (D) deferred sources - for the main loop. Reported first, as
+  CHECKPOINT 10 asks: three rulesets Kairos reads and ftxi does not, each one record (cwmtt/ctp2,
+  cwmtt/JustKings, cwmtt/smallTest), today followed by cwmtt alone.
+- **2026-11-02 - (P) built: a pending source may be recorded** (`lane/gate`; issue 575). `golden
+  --write --source` takes a pending source; verify holds its files to the same static checks, read
+  apart from the snapshot the tiers, the enabled sources' checks and DISAGREEMENTS.md use - proved
+  unchanged for the four by `test_pending_recording.py` on a copy of the golden files. A dry run of
+  the parse-mode recording, nothing written: 3.4 s, 32 read, 8 parse_failed, stable. Ready to record.
+- **2026-11-02 - (P) corrected; H48 prepared and stopped** (`lane/gate`; issues 575-576). A recording
+  that names only pending sources no longer re-times calibration.json: it carries its own probe in its
+  cost file, read on calibration.json's time base; the four's files are untouched, tested end to end.
+  H48: from the cost files, the naive searches stall for over 300 s on single positions before the
+  terminal verdicts the proof channel needs (28-375 boards, up to 46 positions on); no budget within a
+  240-minute CI job reaches them - the lane stop condition, for the user.
+- **2026-11-08 - Kairos round 2 review fixes** (`lane/gate`; issues 577-578, edit 401; written
+  2026-11-02, stopped by the account's usage limit, finished after main was merged, 73a048f). The
+  lineage table fails closed - required by the differential and the report, an unnamed
+  implementation refused - and `run_tier`'s use of it is tested end to end; the one-lineage note,
+  parse-only answers, labels, lock checks and the eight combinations tested; the lineage notes
+  corrected (Kairos's own parts are its wasted-move pruning and its playing engine; its Half
+  Reflected layout is why it fails cwmtt/test1); the budget answer restated with the caps; which
+  Kairos source is primary when, for the enabling. L12 for the user (578). A process note: git's
+  stash is one list for every worktree - this lane's `git stash pop` took lane/search's newer entry
+  ("E11 work (4)") and half-applied it here; undone at once (`reset --hard` to the merge), the entry
+  left as it was at stash@{0}, this lane's own applied by its commit id and dropped by id. Apply a
+  stash by its id, never `pop`, in a shared repository. Checks: verify ok (its 17 notes, unchanged);
+  selftest 732 tests OK (1 skipped, 972 s); ruff clean; gate --tier commit, the engine rebuilt after the merge:
+  oracle layer ok, SMOKE TEST - PASSED (calibration 1.55x).
+- **2026-11-08 - Upstream drafts for the oracle notation-reader gaps** (`lane/gate`; issue 579). Three
+  drafts in `docs/checkpoints/upstream/`, the user's to file:
+  - ftxi's signed timeline labels (KD-0054: `match_absolute_board` compares the sign as written),
+    a bug report; KD-0054's `upstream` now names it;
+  - 5d-chess-js's signed `(>Lx)` token, a bug report;
+  - ftxi's refusal of an empty last sub-turn, a question, since its own grammar requires a move
+    after `/`.
+
+  Each claim was verified at the pins: the readers read, the refusals reproduced with `observe`,
+  the stock 5dtools and the library, and the fixes checked on scratch copies. Two corrections to
+  the brief:
+  - either reader fix would give Turn Zero's last single-oracle record a second lineage, not
+    only ftxi's;
+  - ftxi's fix alone brings nothing to Just Brawns, whose variant ftxi does not know; only Kairos
+    knows it.
+
+  Kairos shares two of the gaps; its report waits for its triage (CHECKPOINT 10). Checks: verify ok
+  (its 17 notes, unchanged); gate --tier commit: oracle layer ok, SMOKE TEST - PASSED (baseline 41
+  compared, 0 declined; calibration 1.25x). No harness code changed, so selftest was not run.
 - **2026-11-08 - issue 535 fixed** (`lane/fix535`, from main 2cb107d, main c8a9c49 taken in by a
   fast-forward before the commit; **numbering: the block the main loop assigned this fix, issues
   600-619 and edits 420-429 - issues 600 and 601 used, no edit**). Begun 2026-11-02; the account's
@@ -7500,3 +8989,6 @@ struck through, where nothing of it is left to apply); the others stand as writt
   of 8256 and notation 3012 of 3012 reproduced; SMOKE TEST - PASSED, 0 declined; proof channel
   DISABLED). For the main loop: issue 535 to be marked resolved by issue 600 when `lane/audit`
   reaches main; `dropped_generators` is not in the C summary; issue 601.
+  *At the merge of main 05afde5 (2026-11-09): the lane's issue 601 is main's issue 601, fixed by
+  e15f173 (shards of whole test files), its entry kept and the lane's facts folded in; issue 535
+  (now on main) marked resolved by issue 600.*

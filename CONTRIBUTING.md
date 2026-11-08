@@ -150,7 +150,11 @@ A pin is not updated routinely. When one has to move:
 3. `python oracles/harness.py verify`. It prints the new commit's full `tree` id
    (`tree-mismatch`) and, if the licence file changed, its new `licence_sha256`
    (`licence-changed`). Copy the tree id into the lock file; read the new licence
-   before you copy its hash, and update `PROVENANCE.md` if the terms moved.
+   before you copy its hash, and update `PROVENANCE.md` if the terms moved. Read the
+   oracle's NOTICE, credits and pinned code too, and bring its `lineage` and
+   `lineage_note` in the lock file in line with them: an oracle derived from another's
+   code counts with it as one lineage for the two-oracle bar (H47, CHECKPOINT 10 -
+   `PROVENANCE.md`, "Lineages"), and no README says so.
 4. Update `oracles/corpus/manifest.toml` for every record of that source whose
    blob changed (`verify` names them), and look at `corpus --unlisted` for new ones.
 5. `python oracles/harness.py build`.
@@ -233,9 +237,10 @@ the rest of the machine.
 The gate has three tiers: `commit` (ftxi, on every push - a smoke test that gates
 no ruleset, H47), `nightly` (all three rules oracles), and `release` (all three, and it
 fails unless an engine was compared and came through at least one named variant).
-A fourth rules oracle, Kairos (H52), is pinned, built and wired, but listed in no tier
-until its answers are recorded on a quiet machine (`oracles/README.md`, "Kairos, wired
-and not yet enabled"); enabling it adds it to `nightly` and `release`.
+A fourth rules oracle, Kairos (H52, in ftxi's lineage - CHECKPOINT 10), is pinned,
+built and wired, but listed in no tier; its enabling comes after the release tier's
+sign-off run, which leaves it out (`oracles/README.md`, "Kairos, wired and not yet
+enabled").
 Only a complete run of a tier that
 requires an engine and runs every oracle over the whole corpus - with every oracle
 search reproducing 100% of that tier's required set of recorded answers, a set

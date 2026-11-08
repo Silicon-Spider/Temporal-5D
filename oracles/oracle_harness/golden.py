@@ -48,6 +48,7 @@ of every one of these files (integrity.py, H33), and every load verifies it.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import math
 from dataclasses import dataclass, field
@@ -121,6 +122,27 @@ class Costs:
     recordings: int
     records: dict[str, RecordCost]
     digest: str = ""
+    # A pending source's recording (adapters.PENDING_SOURCES) carries the calibration probe timed with it, because a
+    # recording that names only pending sources leaves calibration.json - the enabled sources' reference - untouched.
+    # None for every other cost file: its reference is calibration.json.
+    calibration: Calibration | None = None
+
+    def on_reference(self, reference: Calibration | None) -> Costs:
+        """These costs in the reference machine's time: scaled by reference / own probe where they carry a probe of
+        their own measured with the reference's probe code; as they are otherwise (and always for an enabled source's
+        cost file, which has none). So every source's costs share calibration.json's time base when read."""
+        own = self.calibration
+        if own is None or reference is None or own.signature != reference.signature or not own.seconds > 0:
+            return self
+        factor = reference.seconds / own.seconds
+
+        def scaled(value: float | None) -> float | None:
+            return None if value is None else value * factor
+
+        records = {record_id: RecordCost(positions=tuple(scaled(value) for value in cost.positions), end=scaled(cost.end),
+                                         mate=tuple(scaled(value) for value in cost.mate))
+                   for record_id, cost in self.records.items()}
+        return dataclasses.replace(self, records=records)
 
 
 @dataclass(frozen=True)
@@ -135,6 +157,7 @@ class Calibration:
     platform: str
     cpu_count: int | None
     digest: str = ""
+    measured: str = ""  # when it was timed - written only where a pending recording's cost file carries it
 
 
 @dataclass
@@ -230,10 +253,16 @@ def dump(source: str, signature: dict, records: list[Record], recorded: dict[str
 
 
 def dump_costs(source: str, signature: dict, records: list[Record], recorded: dict[str, Recorded], *,
-               recordings: int) -> str:
-    """One record per line: its cost, when its outcome arrived, and when each position's answers did."""
+               recordings: int, calibration: Calibration | None = None) -> str:
+    """One record per line: its cost, when its outcome arrived, and when each position's answers did.
+
+    ``calibration``: a pending source's recording carries the probe timed with it (Costs.calibration).
+    """
     lines = ["{", f'  "schema": {COST_SCHEMA},', f'  "source": {json.dumps(source)},',
-             f'  "signature": {json.dumps(signature, sort_keys=True)},', f'  "recordings": {recordings},',
+             f'  "signature": {json.dumps(signature, sort_keys=True)},', f'  "recordings": {recordings},']
+    if calibration is not None:
+        lines.append(f'  "calibration": {json.dumps(_probe_body(calibration), sort_keys=True)},')
+    lines += [
              '  "unit": "seconds from the start of the run until it had arrived, rounded up to 2 significant figures; '
              'the most over the recordings",',
              '  "records": {']
@@ -246,6 +275,26 @@ def dump_costs(source: str, signature: dict, records: list[Record], recorded: di
         lines.append(f"    {json.dumps(record.id)}: {json.dumps(entry)}" + ("," if number + 1 < len(ordered) else ""))
     lines += ["  }", "}"]
     return "\n".join(lines) + "\n"
+
+
+def _probe_body(calibration: Calibration) -> dict:
+    """A calibration probe as a cost file carries it: what was timed, with which code, how long, where and when."""
+    return {"source": calibration.source, "record": calibration.record, "positions": calibration.positions,
+            "signature": calibration.signature, "seconds": calibration.seconds, "platform": calibration.platform,
+            "cpu_count": calibration.cpu_count, "measured": calibration.measured}
+
+
+def _read_probe(data: object, where: str) -> Calibration:
+    """A calibration probe as written by _probe_body (or dump_calibration), checked."""
+    try:
+        seconds = data["seconds"]
+        if isinstance(seconds, bool) or not isinstance(seconds, (int, float)) or seconds <= 0:
+            raise ValueError("seconds must be a positive number")
+        return Calibration(source=str(data["source"]), record=str(data["record"]), positions=int(data["positions"]),
+                           signature=dict(data["signature"]), seconds=float(seconds), platform=str(data["platform"]),
+                           cpu_count=data.get("cpu_count"), measured=str(data.get("measured", "")))
+    except (KeyError, TypeError, ValueError) as error:
+        raise HarnessError(f"{where}: its calibration probe is malformed ({error!r})") from None
 
 
 def dump_calibration(calibration: Calibration) -> str:
@@ -360,8 +409,10 @@ def load_costs(source: str, manifest: dict[str, str] | None = None) -> Costs:
         except (AttributeError, KeyError, TypeError, ValueError) as error:
             raise HarnessError(f"{path.name}: the entry for {record_id} is malformed ({error!r})") from None
     recordings = data.get("recordings", 1)
+    probe = _read_probe(data["calibration"], path.name) if "calibration" in data else None
     return Costs(source=source, signature=data.get("signature", {}), records=records, digest=digest,
-                 recordings=recordings if isinstance(recordings, int) and not isinstance(recordings, bool) else 0)
+                 recordings=recordings if isinstance(recordings, int) and not isinstance(recordings, bool) else 0,
+                 calibration=probe)
 
 
 def load_calibration(manifest: dict[str, str] | None = None) -> Calibration:

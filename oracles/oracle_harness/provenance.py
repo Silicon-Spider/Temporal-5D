@@ -28,18 +28,20 @@ def render_block(lock: Lock, records: list[Record]) -> str:
         "",
         "### Pinned repositories",
         "",
-        "| Id | Upstream | Pinned commit | Licence | Role | CI tier |",
-        "|---|---|---|---|---|---|",
+        "| Id | Upstream | Pinned commit | Licence | Role | CI tier | Lineage |",
+        "|---|---|---|---|---|---|---|",
     ]
     for pin in lock.pins.values():
         lines.append(
             f"| `{pin.id}` | [{_cell(pin.upstream)}]({pin.url}) | `{pin.commit}` ({_cell(pin.ref)}, {pin.committed}) "
-            f"| {_cell(pin.licence)} | {pin.role} | {pin.tier or '-'} |"
+            f"| {_cell(pin.licence)} | {pin.role} | {pin.tier or '-'} | {f'`{pin.lineage}`' if pin.lineage else '-'} |"
         )
     for pin in lock.pins.values():
         lines += ["", f"#### `{pin.id}` - {pin.upstream}", "", f"- **What it is:** {pin.summary}",
                   f"- **How it is used:** {pin.used_as}", f"- **Where:** `{pin.path}` (submodule `{pin.submodule}`)",
                   f"- **Licence file:** `{pin.licence_file}`, SHA-256 `{pin.licence_sha256}`"]
+        if pin.lineage:
+            lines.append(f"- **Lineage:** `{pin.lineage}` - {pin.lineage_note}")
         lines += [f"- {note}" for note in pin.notes]
 
     lines += ["", "### Toolchains", "", "| Tool | Required | Why |", "|---|---|---|"]
