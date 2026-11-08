@@ -11,6 +11,9 @@ the cached node is 0.164 TFLOPs - section 7.6's "pure cached 0.16" (section 7.9'
 uses 0.159, hence its +3.8% where section 15.3 says +3.6%). Embeddings, norms, softmax and
 the output heads are left out, as the spec leaves them out. These are not measurements.
 
+**Register A5** (``token_counts``, ``piece_centric_costs``): the same model at piece-centric token
+counts - the dense pass, the analytic cached node and the frozen K/V, A1 against A5.
+
 **Counted** - ``count_flops`` runs a callable under ``torch.utils.flop_counter``'s
 ``FlopCounterMode``, which counts every matmul the implementation actually issues. PyTorch
 2.13 has no formula for the CPU fused attention op (``_scaled_dot_product_flash_attention_
@@ -122,4 +125,69 @@ def layout_flops(n_boards: int, n_tokens: int, cfg: NetConfig) -> dict[str, int]
     if not cfg.board_layout_embedding:
         out = dict.fromkeys(out, 0)
     out["total"] = sum(out.values())
+    return out
+
+
+# --- register A5: piece-centric tokens (section 14.4; state.to_piece_centric) -----------------------------
+
+
+def token_counts(state, regs_per_board: int | None = None, global_regs: int | None = None) -> dict[str, int]:
+    """One position's tokens under A1 (one per square) and under register A5 (its pieces and the
+    distinct empty cells its candidate moves land on - ``state.to_piece_centric``'s set), from a
+    square-centric or a piece-centric ``PositionState``; the register counts its own unless given.
+    Keys: ``boards``, ``heads`` (the live set's boards under the block-causal scope), ``pieces``,
+    ``destinations`` (D: the empty destination cells - a capture lands on a piece's token),
+    ``head_pieces``, ``head_destinations`` (D on head boards), ``a1``, ``a5`` (``T``), and the
+    analytic cached configuration's sets (``cached_*``): the live queries - A1 the heads' tokens and
+    the global registers, A5 the heads' pieces and registers, every destination token (transient,
+    never cached - BUILD_LOG issue 252's reading (f)) and the global registers - and the frozen
+    boards' cached tokens."""
+    r = state.regs_per_board if regs_per_board is None else int(regs_per_board)
+    g = state.global_regs if global_regs is None else int(global_regs)
+    occupied = state.piece != 0
+    if state.token_cells is not None:
+        cells = state.token_cells
+    else:
+        cells = occupied.copy()
+        if state.moves.size:
+            board, cell = state.layout.split_square_tokens(state.moves[:, 1])
+            cells[board, cell] = True
+    dest = cells & ~occupied
+    head = state.is_head
+    n, wh = state.n_boards, int(state.width) * int(state.height)
+    heads = int(head.sum())
+    pieces, d = int(occupied.sum()), int(dest.sum())
+    head_pieces, head_d = int(occupied[head].sum()), int(dest[head].sum())
+    return {
+        "boards": n,
+        "heads": heads,
+        "pieces": pieces,
+        "destinations": d,
+        "head_pieces": head_pieces,
+        "head_destinations": head_d,
+        "a1": n * (wh + r) + g,
+        "a5": pieces + d + n * r + g,
+        "cached_live_a1": heads * (wh + r) + g,
+        "cached_live_a5": head_pieces + heads * r + d + g,
+        "cached_frozen_a1": (n - heads) * (wh + r),
+        "cached_frozen_a5": (pieces - head_pieces) + (n - heads) * r,
+    }
+
+
+def piece_centric_costs(counts: dict[str, int], cfg: NetConfig, bytes_per_value: float = 2.0) -> dict[str, float]:
+    """Section 9.1's model at ``token_counts``' figures, A1 against A5: the dense evaluation
+    (``dense_flops``), the analytic cached node (the live queries against every token -
+    ``pass_flops``; A5's destination tokens live, BUILD_LOG issue 252) and the frozen boards' K/V
+    bytes per state (``kv_bytes``), with each ratio A1 / A5. Analytic: A5 under the block-causal
+    scope is refused as built (issue 252), so its cached figures are this model's only."""
+    out: dict[str, float] = {}
+    for arm in ("a1", "a5"):
+        t = counts[arm]
+        out[f"dense_{arm}"] = dense_flops(t, cfg)["total"]
+        out[f"dense_attention_{arm}"] = dense_flops(t, cfg)["attention"]
+        out[f"node_{arm}"] = pass_flops(counts[f"cached_live_{arm}"], t, cfg)["total"]
+        out[f"kv_{arm}"] = kv_bytes(counts[f"cached_frozen_{arm}"], cfg, bytes_per_value)
+    for what in ("dense", "dense_attention", "node", "kv"):
+        out[f"{what}_ratio"] = out[f"{what}_a1"] / out[f"{what}_a5"] if out[f"{what}_a5"] else float("inf")
+    out["token_ratio"] = counts["a1"] / counts["a5"]
     return out

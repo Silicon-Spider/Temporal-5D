@@ -200,13 +200,13 @@ def test_mirror_has_identical_canonical_inputs(construction):
         perm = torch.from_numpy(mirror_tokens(s.layout))  # token t of S is token perm[t] of the mirror
         names = {f.name for f in dataclasses.fields(bs)}
         checked = set(TOKEN_FIELDS) | set(DIRECT_FIELDS) | {"coords", "coord_ref", "acting_player", "moves", "opp_moves", "edges"}
-        checked |= {"body_len", "regs_per_board", "global_regs", "layouts"}
+        checked |= {"body_len", "regs_per_board", "global_regs", "layouts", "piece_centric"}
         assert names == checked, names ^ checked  # every field of the input is compared below
         for name in TOKEN_FIELDS:
             assert torch.equal(getattr(bm, name)[0][perm], getattr(bs, name)[0]), name
         for name in DIRECT_FIELDS:
             assert torch.equal(getattr(bm, name), getattr(bs, name)), name
-        for name in ("body_len", "regs_per_board", "global_regs", "layouts"):
+        for name in ("body_len", "regs_per_board", "global_regs", "layouts", "piece_centric"):
             assert getattr(bm, name) == getattr(bs, name), name
         for name in ("moves", "opp_moves", "edges"):
             a, b = getattr(bs, name), getattr(bm, name)

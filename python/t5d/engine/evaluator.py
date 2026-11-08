@@ -60,7 +60,7 @@ import torch
 
 from ..net.cache import CachedEvaluator, Epoch, state_digest
 from ..net.model import NetOutput, T5DNet
-from ..net.state import PositionState, collate, relayout
+from ..net.state import PositionState, collate, relayout, to_piece_centric
 from .capi import T5D_SPLIT_FLAT, T5D_VALUE_LOGITS, T5D_VALUE_PROBABILITIES
 from .convert import Position, to_position
 from .errors import EngineInternalError
@@ -268,7 +268,10 @@ class NetworkEvaluator:
     block-causal override of a dense-scope network while its B16 is switched on
     (``T5DNet.make_context``: its frozen boards would lose their status with no B16 table to
     give it back). The model is used as given (put it in ``eval()`` mode); positions converted
-    with other register counts than the network's are re-laid out (``state.relayout``, exact).
+    with other register counts than the network's are re-laid out (``state.relayout``, exact),
+    and for a piece-centric network (register A5) converted to its tokens at the network's edge
+    (``state.to_piece_centric``, strict: engine data drops no edge) - the policy's row ``i`` stays
+    the engine's move ``i``, so the C step API's contract is unchanged.
     ``policy``: the prior delivered (``POLICY_SOURCES``) - ``"optimistic"`` (D9) for match play
     only, on a network with the optimistic head."""
 
@@ -295,7 +298,9 @@ class NetworkEvaluator:
     def _fit(self, state: PositionState) -> PositionState:
         cfg = self.model.cfg
         if (state.regs_per_board, state.global_regs) != (cfg.regs_per_board, cfg.global_regs):
-            return relayout(state, cfg.regs_per_board, cfg.global_regs)
+            state = relayout(state, cfg.regs_per_board, cfg.global_regs)
+        if cfg.piece_centric and not state.piece_centric:
+            state = to_piece_centric(state, strict=True)  # A5: at the network's edge
         return state
 
     def __call__(self, positions: Sequence[PositionLike]) -> list[Evaluation]:
@@ -319,6 +324,8 @@ class CachedNetworkEvaluator:
     ``NetworkEvaluator``'s."""
 
     def __init__(self, cached: CachedEvaluator, *, policy: str = "normal") -> None:
+        if cached.model.cfg.piece_centric:
+            raise NotImplementedError("the cached path refuses a piece-centric network (A5; BUILD_LOG issue 252)")
         _check_policy(cached.model, policy)
         self.policy = policy
         self.cached = cached
