@@ -232,3 +232,79 @@ TEST(mcts_fault_the_asset_maps_failures_reach_the_caller) {
   std::printf("  the asset map in the search: %zu delivery faults, each thrown\n", faults);
   CHECK(faults > 0);
 }
+
+// ---- M1: a batch whose request list or buffers fail ---------------------------------------------
+
+TEST(mcts_fault_a_batch_whose_requests_or_buffers_fail_is_abandoned) {
+  // gather filled its request list after its try, and run sized its evaluation
+  // buffers before its own: a failure there left the batch waiting - the
+  // leaves pending, virtual loss on their paths, the requests cut short - and
+  // every later gather and run refused ("a batch is waiting") until abandon
+  // (review finding M1; the list grows whenever a gather asks more than any
+  // before it). Every allocation of a fresh search's first gather, of its
+  // second, and of run(16), each on a fresh search: the search keeps every
+  // invariant and the next gather or run goes through, with no abandon.
+  const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
+  struct Arm {
+    TurnSplit split;
+    bool graph;
+    const char* variant;
+  };
+  for (const Arm& arm : {Arm{TurnSplit::BoardMove, false, "Standard - Two Timelines"},
+                         Arm{TurnSplit::BoardMove, true, "Standard - Two Timelines"},
+                         Arm{TurnSplit::Tree, false, "Standard - Two Timelines"},
+                         Arm{TurnSplit::Flat, false, "Standard"}, Arm{TurnSplit::Flat, true, "Standard"}}) {
+    const SearchParams p = base(arm.split, arm.graph);
+    const GameState root = start(arm.variant);
+    const auto deliver_all = [&](Search& s) {
+      std::vector<Evaluation> ev(s.requests().size());
+      if (ev.empty()) return;
+      uniform->evaluate(s.requests(), ev);
+      s.deliver(ev);
+    };
+    std::size_t faults[3] = {0, 0, 0};
+    long long totals[3] = {0, 0, 0};
+    for (int phase = 0; phase < 3; ++phase) {
+      // phase 0: the first gather; 1: the second (after the first's batch); 2: run(16).
+      const auto prepared = [&] {
+        Search s(root, p);
+        if (phase == 1) {
+          (void)s.gather(8);
+          deliver_all(s);
+        }
+        return s;
+      };
+      const auto act = [&](Search& s) {
+        if (phase == 2) {
+          s.run(*uniform, Limits{16});
+        } else {
+          (void)s.gather(8);
+        }
+      };
+      {
+        Search s = prepared();
+        totals[phase] = allocations_of([&] { act(s); });
+      }
+      for (long long k = 0; k < totals[phase]; ++k) {
+        Search s = prepared();
+        const bool threw = faulted(k, [&] { act(s); });
+        if (!threw) continue;
+        ++faults[phase];
+        CHECK_NOTHROW(s.check_invariants());  // no batch waiting
+        if (phase == 2) {
+          CHECK_NOTHROW(s.run(*uniform, Limits{16}));  // no abandon first
+        } else {
+          CHECK_NOTHROW((void)s.gather(8));
+          deliver_all(s);
+        }
+        CHECK_NOTHROW(s.check_invariants());
+      }
+    }
+    std::printf("  %s %s: first gather %lld allocations (%zu faults), second %lld (%zu), run(16) %lld (%zu)\n",
+                split_name(arm.split), arm.graph ? "graph" : "tree", totals[0], faults[0], totals[1], faults[1],
+                totals[2], faults[2]);
+    CHECK(faults[0] > 0);
+    CHECK(faults[1] > 0);
+    CHECK(faults[2] > 0);
+  }
+}

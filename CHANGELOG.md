@@ -38,6 +38,17 @@ review round, issues 603 and 604, the session log.
   map, under the ply split and the flat form (614 and 5,535 faults); and every allocation of
   a delivery after 0 to 8 playouts with the asset map steering the flat form (5,801 faults),
   each thrown. (H2: the asset map is a prior; no verdict logic changes.)
+- **M1 - a batch whose request list or buffers fail is abandoned.** `gather` filled its
+  request list after its `try`, and `run` sized its evaluation buffers before its own: a
+  failure there (the list grows whenever a gather asks for more leaves than any before it)
+  left the batch waiting - its leaves pending, virtual loss on their paths - and every later
+  `gather` and `run` refused ("a batch is waiting") until `abandon`. Both are inside now.
+  Tests: every allocation of a fresh search's first gather, of its second and of `run(16)`,
+  each on a fresh search - in C++ under the ply split (tree and graph), the tree form and the
+  flat form (tree and graph), 66 to 12,321 allocations a sweep, the search keeping every
+  invariant and the next gather or run going through with no abandon; and through the C API
+  beside a C++ twin given the same fault: `T5D_ERR_MEMORY` exactly where the twin throws, the
+  two bit-identical, then `T5D_OK`. (§15.4: virtual loss released.)
 
 Spec: none edited or proposed. No part of the spec describes exception safety, these tests,
 or the ladder's and the asset map's bookkeeping. The round brings the build further in line

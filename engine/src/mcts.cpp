@@ -2905,17 +2905,19 @@ struct Search::Impl {
           if (++collisions >= max_leaves) break;
         }
       }
+      // The requests too (review finding M1: their list grows here, so a
+      // failure can come after the batch is gathered - it is abandoned alike).
+      for (const Pending& pd : pending_) {
+        if (pd.request != requests_.size()) continue;  // a duplicate: its first leaf asks
+        const Node& n = nodes_[pd.leaf];
+        requests_.push_back(EvalRequest{&n.state, slots_[pd.slot].get(), n.key, epoch_, n.moves_made, flat()});
+      }
     } catch (...) {
       // The batch is abandoned and the path being selected released: outside
       // a batch no virtual loss exists, so every count is cleared.
       abandon();
       clear_virtual_loss();
       throw;
-    }
-    for (const Pending& pd : pending_) {
-      if (pd.request != requests_.size()) continue;  // a duplicate: its first leaf asks
-      const Node& n = nodes_[pd.leaf];
-      requests_.push_back(EvalRequest{&n.state, slots_[pd.slot].get(), n.key, epoch_, n.moves_made, flat()});
     }
     return requests_.size();
   }
@@ -3785,17 +3787,19 @@ StopReason Search::run(Evaluator& evaluator, const Limits& limits) {
       if (s.stats_.playouts == before) return stop(StopReason::Exhausted);  // nothing more can be done
       continue;
     }
-    out.resize(n);
-    for (Evaluation& e : out) {  // reused buffers: every field reset
-      e.logits.clear();
-      e.submit_logit = std::numeric_limits<float>::quiet_NaN();
-      e.wdl.fill(0.0f);
-      e.value.reset();
-      e.error = std::numeric_limits<float>::quiet_NaN();
-      e.moves_left = std::numeric_limits<float>::quiet_NaN();
-      e.board_logits.clear();
-    }
     try {
+      // Sizing the buffers allocates (review finding M1): inside the try, so a
+      // failure abandons the batch as the evaluator's own does.
+      out.resize(n);
+      for (Evaluation& e : out) {  // reused buffers: every field reset
+        e.logits.clear();
+        e.submit_logit = std::numeric_limits<float>::quiet_NaN();
+        e.wdl.fill(0.0f);
+        e.value.reset();
+        e.error = std::numeric_limits<float>::quiet_NaN();
+        e.moves_left = std::numeric_limits<float>::quiet_NaN();
+        e.board_logits.clear();
+      }
       evaluator.evaluate(s.requests_, out);
     } catch (...) {
       s.abandon();
