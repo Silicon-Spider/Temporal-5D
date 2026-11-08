@@ -645,9 +645,14 @@ T5D_API t5d_status t5d_search_advance(t5d_search* search, size_t index, char** e
 
 /* Re-roots on the turn start an action reaches - its moves, in a playable
  * order (each matched as t5d_game_apply matches one): the opponent's reply.
- * Atomic: the whole action is checked first, and on any error nothing has
- * changed. From a turn start the action has at least one move (count 0 is an
- * error there); from a state during an action, count 0 submits it. */
+ * The whole action is checked first: an action that cannot be played (an
+ * error of the caller's) changes nothing. Under the board-move split and the
+ * tree form the re-roots then go one decision at a time - each whole or not
+ * at all - so an error after the first (T5D_ERR_MEMORY) leaves the root on
+ * the last decision re-rooted on: read it back (t5d_search_root_game) and
+ * play the rest of the action from there. The flat form re-roots once. From
+ * a turn start the action has at least one move (count 0 is an error there);
+ * from a state during an action, count 0 submits it. */
 T5D_API t5d_status t5d_search_advance_action(t5d_search* search, const t5d_move* moves,
                                              size_t count, char** error);
 

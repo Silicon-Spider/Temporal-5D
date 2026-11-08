@@ -7101,6 +7101,11 @@ superseded or made moot says so; nothing is deleted.
         after the take still allocate (not local), so the re-root's claim is narrowed: a
         failure there loses the verdicts taken and not yet recorded, never a proof (H41).
         Tested with two verdicts waiting (16 faults; 3 lose a verdict, as documented).
+      - L4: `advance_action`'s per-decision caveat and recovery (`t5d_search_root_game`,
+        `root_game()`) in `capi_search.h`, the Python docstring and the README. L5:
+        `stopped_generators` put back with an undone first pull; `fallback_listings <=
+        stopped_generators` asserted after every flat-form fault, and P2b (every generator
+        stopped before its first turn) dense at both ends; the event counters documented.
 603. **This machine's g++ 16.2 breaks `std::deque`'s exception safety under its default
     `-fassume-sane-operators-new-delete`** (found by `lane/fix535`, 2026-11-09, in issue 600's
     review round; not a defect in the engine's source). With `operator new` assumed free of

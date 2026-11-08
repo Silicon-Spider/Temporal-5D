@@ -1753,9 +1753,13 @@ struct Search::Impl {
   // never asked again: it is dropped, as after a budget stop, and the node's
   // children are incomplete, never a proof (H37). A throw anywhere else here
   // (taking a turn in, the fallback's listing, the priors) is treated alike.
-  // Either way the node's turns, priors and counts are put back as this call
-  // found them - the turns it made have no child yet and no prior was set
-  // from them - and the exception goes on.
+  // Either way the node's turns and priors are put back as this call found
+  // them - the turns it made have no child yet and no prior was set from them
+  // - with the counts of the turns it made (generated_turns, fallback_listings,
+  // the boost counts); a budget stop in a first pull (edges0 0: expand_flat
+  // undoes the expansion, and its redo counts its own) is uncounted too, while
+  // a later pull's stop stays counted (the node keeps that generator's earlier
+  // turns). The drop is counted, and the exception goes on.
   std::size_t pull_turns(Node& n, std::size_t want) {
     detail::FlatNode& f = *n.flat;
     if (!f.generator || n.edges.size() >= want) return 0;
@@ -1773,6 +1777,7 @@ struct Search::Impl {
     const std::uint64_t listings0 = stats_.fallback_listings;
     const std::uint64_t boosted0 = stats_.asset_boosted_edges;
     const std::uint64_t suggested0 = stats_.suggestion_edges;
+    const std::uint64_t stopped0 = stats_.stopped_generators;
     std::size_t added = 0;
     try {
       while (n.edges.size() < want) {
@@ -1816,6 +1821,7 @@ struct Search::Impl {
       stats_.fallback_listings = listings0;
       stats_.asset_boosted_edges = boosted0;
       stats_.suggestion_edges = suggested0;
+      if (edges0 == 0) stats_.stopped_generators = stopped0;  // review finding L5
       ++stats_.dropped_generators;
       account(n);
       throw;
