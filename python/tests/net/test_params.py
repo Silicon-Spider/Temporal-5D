@@ -165,6 +165,16 @@ def _fingerprint(params: dict) -> tuple[float, float, float]:
     return f[0], f[1], f[2]
 
 
+def _same(got, expected, n: int):
+    """``got`` is the fingerprint ``expected`` up to the last-bit differences a platform's float32
+    libm leaves in the draws themselves (a GitHub runner's differ from the development machine's at
+    about 1e-8 relative): 1e-5 on the plain sum, ``n`` times that on the sum weighted by rank - a
+    tensor's difference enters it up to ``n`` times over, ``n`` the number of tensors - and 1e-9
+    relative on the absolute sum. A moved draw or two tensors swapped moves the sums far beyond."""
+    assert got[0] == pytest.approx(expected[0], abs=1e-5) and got[1] == pytest.approx(expected[1], abs=1e-5 * n), got
+    assert got[2] == pytest.approx(expected[2], rel=1e-9), got
+
+
 @pytest.mark.parametrize("flags", [{}, dict(opp_reply=True, optimistic_policy=True, soft_policy=False)], ids=["default", "prototypes"])
 def test_the_parameters_before_d3_are_drawn_as_before(flags):
     """Every parameter that existed before D3 is drawn as before: D3's rebuild, D4's heads and
@@ -173,9 +183,7 @@ def test_the_parameters_before_d3_are_drawn_as_before(flags):
     kept = {n: p for n, p in model.named_parameters() if not n.startswith(_NEW)}
     count, expected = _PRE_D3
     assert len(kept) == count
-    got = _fingerprint(kept)
-    assert got[0] == pytest.approx(expected[0], abs=1e-5) and got[1] == pytest.approx(expected[1], abs=1e-5), got
-    assert got[2] == pytest.approx(expected[2], rel=1e-9), got
+    _same(_fingerprint(kept), expected, count)
 
 
 #: Every parameter the network had before D2's flat head (``9c59cb0``, the merge before it), drawn
@@ -190,11 +198,6 @@ _PRE_D2_V1 = (230, (-94.90331727564617, -5889.620489603242, 770983.941444666))
 _LEAVE_SEED_7 = (-0.16617493222981167, -0.3285210357709124, 5.933879833610263)
 
 
-def _same(got, expected):
-    assert got[0] == pytest.approx(expected[0], abs=1e-5) and got[1] == pytest.approx(expected[1], abs=1e-5), got
-    assert got[2] == pytest.approx(expected[2], rel=1e-9), got
-
-
 @pytest.mark.parametrize("pool", ["squares", "registers"])
 @pytest.mark.parametrize("flags", ["default", "prototypes"])
 def test_the_parameters_before_d2s_flat_head_are_drawn_as_before(flags, pool):
@@ -206,8 +209,9 @@ def test_the_parameters_before_d2s_flat_head_are_drawn_as_before(flags, pool):
     kept = {n: p for n, p in model.named_parameters() if not n.startswith("leave.")}
     count, expected = _PRE_D2[flags]
     assert len(kept) == count
-    _same(_fingerprint(kept), expected)
-    _same(_fingerprint({n: p for n, p in model.named_parameters() if n.startswith("leave.")}), _LEAVE_SEED_7)
+    _same(_fingerprint(kept), expected, count)
+    leave = {n: p for n, p in model.named_parameters() if n.startswith("leave.")}
+    _same(_fingerprint(leave), _LEAVE_SEED_7, len(leave))
 
 
 @pytest.mark.slow
@@ -216,4 +220,4 @@ def test_the_v1s_parameters_before_d2s_flat_head_are_drawn_as_before():
     kept = {n: p for n, p in model.named_parameters() if not n.startswith("leave.")}
     count, expected = _PRE_D2_V1
     assert len(kept) == count
-    _same(_fingerprint(kept), expected)
+    _same(_fingerprint(kept), expected, count)

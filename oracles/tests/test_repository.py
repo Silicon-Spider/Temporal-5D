@@ -5,7 +5,7 @@ import json
 import unittest
 
 from oracle_harness import baseline, build, config, corpus, gate, gitutil, lockfile, paths, snapshot
-from oracle_harness.adapters import ORACLE_SOURCES, PARSE_ONLY_SOURCES, RunOptions, make_source
+from oracle_harness.adapters import ORACLE_SOURCES, PARSE_ONLY_SOURCES, PRIMARY_SOURCES, RunOptions, make_source, oracle_of
 from oracle_harness.util import run
 from support import golden_files_predate_this_schema
 
@@ -30,6 +30,15 @@ class ConfigurationTests(unittest.TestCase):
     def test_every_source_is_run_by_some_tier(self):
         run = {source for tier in self.cfg.tiers.values() for source in tier.sources}
         self.assertEqual(run, set(ORACLE_SOURCES))
+
+    def test_each_implementation_the_gate_compares_has_exactly_one_primary_source(self):
+        # How an implementation replays a record is compared once, through its primary source: none would leave its
+        # refusals and lengths uncompared, two would report each difference twice (each needing its own divergence
+        # entry). An enabling that forgets - Kairos's, whichever of its sources is primary at the time - fails here.
+        for implementation in sorted({oracle_of(name) for name in ORACLE_SOURCES}):
+            primary = [name for name in PRIMARY_SOURCES if oracle_of(name) == implementation]
+            self.assertEqual(len(primary), 1, (implementation, primary))
+        self.assertLessEqual(set(PRIMARY_SOURCES), set(ORACLE_SOURCES))
 
     def test_each_oracle_runs_no_earlier_than_its_pinned_tier(self):
         for source in self.cfg.tier("commit").sources:

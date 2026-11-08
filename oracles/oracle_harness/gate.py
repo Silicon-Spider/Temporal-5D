@@ -9,11 +9,13 @@ Tiers (design spec 11.0):
            through at least one named variant
 
 A ruleset is gated only when two or more oracles answer for it - each of its
-records followed, as far as the engine went, by at least two independent
-implementations (H47, CHECKPOINT 8): a single oracle cannot tell its own bug from
-the engine's. Only a tier that runs every oracle search over the whole corpus
-(nightly, release) gates a ruleset, and there an engine with no finding against it
-that came through no ruleset fails (engine-nothing-gated). Any other tier - commit,
+records followed, as far as the engine went, by at least two independent lineages
+(H47, CHECKPOINT 8): a single oracle cannot tell its own bug from the engine's,
+and an oracle derived from another's code counts with it as one lineage
+(CHECKPOINT 10; each pin's `lineage` in the lock file). Only a tier that runs
+every oracle search over the whole corpus (nightly, release) gates a ruleset, and
+there an engine with no finding against it that came through no ruleset fails
+(engine-nothing-gated). Any other tier - commit,
 whose one rules oracle could gate nothing anyway - is a smoke test (H47): the
 summary and report say that the tier gates nothing. In every tier the engine fails
 on an unexplained divergence (one known-divergences.toml does not record), a
@@ -106,9 +108,15 @@ SMOKE_TEST = ("this tier gates nothing - only a tier that runs every oracle sear
 SMOKE_REASON = "a smoke test: it met the gating conditions with this tier's oracles alone"
 # What a run restricted with --source or --record is, in its summary and its report (H47, CHECKPOINT 8).
 RESTRICTED = "restricted - not a tier result"
-# A ruleset is gated only when at least this many independent implementations followed each of its records as far as
-# the engine went (H47, CHECKPOINT 8: "a single oracle cannot tell its own bug from ours").
+# A ruleset is gated only when at least this many independent lineages followed each of its records as far as the
+# engine went (H47, CHECKPOINT 8: "a single oracle cannot tell its own bug from ours"; CHECKPOINT 10: an oracle derived
+# from another's code counts with it as one lineage - the lock file's `lineage`, PROVENANCE.md).
 GATING_ORACLES = 2
+
+
+def _lineage_label(root: str, members: set[str]) -> str:
+    """How a lineage that followed a record is named: its root, or the root with the members that followed it."""
+    return root if members == {root} else f"{root}'s lineage ({', '.join(sorted(members))})"
 
 
 @dataclass(frozen=True)
@@ -118,7 +126,8 @@ class Gated:
     records: int
     positions: int  # positions the engine reported, over all the ruleset's records
     checked: dict[str, int]  # observable -> positions at which some oracle's answer settles it and agrees with the engine
-    oracles: int  # the fewest independent implementations that followed any one record as far as the engine
+    # The fewest independent lineages (the lock file's `lineage`) that followed any one record as far as the engine went.
+    oracles: int
     # Positions at which some oracle held the engine's boards and pieces (equal
     # placement hashes): the record's moves read alike, markers not compared.
     aligned: int = 0
@@ -132,7 +141,7 @@ class Gated:
                 f"an oracle held the engine's boards and pieces at {self.aligned} of them, and its exact state "
                 f"(markers included) at {self.matched}; "
                 f"independently answered: {checked}; each record followed as far as the engine went by at least "
-                f"{self.oracles} oracle{'s' if self.oracles != 1 else ''}")
+                f"{self.oracles} oracle lineage{'s' if self.oracles != 1 else ''}")
 
 
 @dataclass(frozen=True)
@@ -465,6 +474,15 @@ def static_checks(lock: Lock, cfg: config.GateConfig, records: list[Record], fro
         # What the engine read on the last green run (H47): what the commit tier holds it to.
         sections.append((BASELINE_SECTION, baseline.static_findings(cfg, records, frozen.baseline,
                                                                     frozen.baseline_problems)))
+    golden_findings = golden_section(lock, cfg, records, frozen)
+    sections.append(("golden observations", golden_findings))
+    return sections
+
+
+def golden_section(lock: Lock, cfg: config.GateConfig, records: list[Record], frozen: Snapshot) -> list[Finding]:
+    """The static checks of the recorded answers: those of the enabled sources (ORACLE_SOURCES) - their golden and cost
+    files, the calibration reference and DISAGREEMENTS.md, from the snapshot - and then, apart, the recordings of the
+    pending sources that have one, held to the same file checks (pending_golden_findings)."""
     sources = [make_source(name, lock) for name in ORACLE_SOURCES]
     golden_findings = golden.verify_static(sources, lambda source: recording_options(cfg, source), records, frozen)
     golden_findings += _calibration_findings(cfg, lock, records, frozen)
@@ -481,8 +499,44 @@ def static_checks(lock: Lock, cfg: config.GateConfig, records: list[Record], fro
                 f"{paths.DISAGREEMENTS_FILE.name} does not match the golden files, their costs and gate.toml's budgets "
                 f"(run: python {paths.HARNESS_REL}/harness.py golden --render, and review the diff - a changed line in "
                 "'What each tier requires' is a change in what the gate checks)"))
-    sections.append(("golden observations", golden_findings))
-    return sections
+    # Last, and apart: nothing about a pending source's recording reaches the checks above.
+    return golden_findings + pending_golden_findings(lock, cfg, records, frozen)
+
+
+def pending_golden_findings(lock: Lock, cfg: config.GateConfig, records: list[Record], frozen: Snapshot) -> list[Finding]:
+    """A pending source's recording, where one is on file, held to the static checks of an enabled source's files.
+
+    `golden --write --source <pending>` records a source that is wired but in no tier (adapters.PENDING_SOURCES) -
+    Kairos's parse mode before the release tier's sign-off run, which leaves Kairos out (CHECKPOINT 10). Its files sit
+    in oracles/golden/ under MANIFEST like any other; they are read here on their own (snapshot.recorded_pending), never
+    into the snapshot a tier compares with or DISAGREEMENTS.md is rendered from. A stale or incomplete one is a finding,
+    as an enabled source's would be: re-record it (golden --write --source <it>).
+    """
+    pending = snapshot.recorded_pending(frozen.manifest, frozen.calibration)
+    names = list(pending.golden) + [name for name in pending.problems if name not in pending.golden]
+    if not names:
+        return []
+    sources = [make_source(name, lock) for name in names]
+    findings = golden.verify_static(sources, lambda source: recording_options(cfg, source), records, pending)
+    # Its costs are read against the probe timed with it (golden.Costs.on_reference): that probe must be there, and be
+    # the one gate.toml [calibration] names, timed with the current code - as calibration.json is held to.
+    spec = cfg.calibration
+    current = make_source(spec.source, lock).signature(RunOptions(cap=cfg.cap))
+    for name in names:
+        costs = pending.costs.get(name)
+        if costs is None:
+            continue  # verify_static has said why
+        probe = costs.calibration
+        if probe is None:
+            findings.append(Finding("golden-stale", f"{golden.cost_path(name).name}: a pending source's recording "
+                                                    "carries the calibration probe timed with it, and this one carries "
+                                                    f"none - re-record it: golden --write --source {name}"))
+        elif (probe.source, probe.record, probe.positions) != (spec.source, spec.record, spec.positions) \
+                or probe.signature != current:
+            findings.append(Finding("golden-stale", f"{golden.cost_path(name).name}: its calibration probe was timed "
+                                                    "with another probe, or other code, than gate.toml [calibration] "
+                                                    f"names - re-record it: golden --write --source {name}"))
+    return findings
 
 
 PROOF_SECTION = "required sets of a tier that can enable the proof channel"
@@ -584,6 +638,8 @@ def engine_differential(
     entries: list[divergences.Divergence],
     min_checked: float = 1.0,
     recorded: divergences.Recorded | None = None,
+    *,
+    lineages: dict[str, str],
 ) -> tuple[list[Finding], dict[str, Gated], dict[str, str]]:
     """Compare the engine with every oracle report; returns (findings, gated, ungated).
 
@@ -611,16 +667,38 @@ def engine_differential(
         holds illegal (a refusal as unreadable is no verdict) - and no
         unexplained divergence or telltale remains;
       * each one was followed as far as the engine went by at least
-        ``GATING_ORACLES`` (two) oracles - independent implementations, so two
-        searches of one count once, and a parse-only source never counts (H47,
-        CHECKPOINT 8: a single oracle cannot tell its own bug from the engine's);
+        ``GATING_ORACLES`` (two) independent lineages - two searches of one
+        implementation count once, an oracle derived from another's code counts
+        with it (``lineages``: implementation -> lineage, the lock file's
+        ``Lock.lineages()``), and a parse-only source never counts (H47,
+        CHECKPOINT 8: a single oracle cannot tell its own bug from the engine's;
+        CHECKPOINT 10). The table fails closed: it is a required argument, with
+        no default that would count every implementation apart, and an
+        implementation compared that it does not name is a HarnessError, never a
+        lineage of its own. A lineage vouches through any member that
+        followed the record as the engine did, and at most once: a member whose
+        replay differs from the engine's - a recorded divergence included - vouches
+        for nothing, and another member may vouch in its place;
       * for each observable - check, count, mate - some oracle gave an answer
-        that settles it at no less than ``min_checked`` of the engine's positions.
+        that settles it at no less than ``min_checked`` of the engine's positions:
+        per answer, any member of any lineage whose answer agrees with the
+        engine's - never one the engine contradicts, a recorded divergence
+        included - so where ftxi's check answers are R1's recorded divergences,
+        Kairos's agreeing answer is its lineage's vouch (CHECKPOINT 10); and
+        never a parse-only source's, whatever it prints - it answers no rules
+        question (what it held still counts towards the boards and states
+        compared, and its recorded divergences are still looked at).
 
     Without the last two an engine could "pass" a ruleset nothing independent had
     looked at, or that one oracle alone vouched for: several variants are read
     by a single oracle, and one of those has no check verdict to give.
     """
+    unnamed = sorted({oracle_of(source.name) for source in oracle_sources} - set(lineages))
+    if unnamed:
+        raise HarnessError(f"no lineage declared for {', '.join(unnamed)}: the two-oracle bar is counted by lineage "
+                           f"(each oracle pin's `lineage` in {paths.LOCK_FILE.name}; H47, CHECKPOINT 10), and an "
+                           "implementation the table does not name is never taken for a lineage of its own")
+
     findings: list[Finding] = []
     found: list[observations.Disagreement] = []
     looked: set[str] = set()
@@ -655,10 +733,16 @@ def engine_differential(
         misread = {oracle_of(name) for name, items in compared.items()
                    if any(item.kind in divergences.REPLAY_KINDS for item in items)} | set(parted)
         # A parse-only source plays any move it can place, legal or not: it says
-        # what it read, and stands behind no replay as a rules oracle does.
-        vouched[record.id] = {oracle_of(name) for name, answer in answers.items()
-                              if answer is not None and name not in PARSE_ONLY_SOURCES
-                              and oracle_of(name) not in misread and _vouches(answer, observed)}
+        # what it read, and stands behind no replay as a rules oracle does. The
+        # implementations that followed are counted by lineage (CHECKPOINT 10):
+        # one vouch per lineage, through whichever of its members followed.
+        followed = {oracle_of(name) for name, answer in answers.items()
+                    if answer is not None and name not in PARSE_ONLY_SOURCES
+                    and oracle_of(name) not in misread and _vouches(answer, observed)}
+        members: dict[str, set[str]] = {}
+        for implementation in followed:
+            members.setdefault(lineages[implementation], set()).add(implementation)
+        vouched[record.id] = {_lineage_label(root, found) for root, found in members.items()}
         # A position's question counts as independently answered only where an
         # oracle's answer settles it and agrees with the engine's. An answer the
         # engine contradicts confirms nothing - also when the contradiction is on
@@ -678,6 +762,10 @@ def engine_differential(
                 boards_held[mine.index] = boards_held[mine.index] or bool(observations.aligned(mine, theirs))
                 exact = observations.same_state(mine, theirs)
                 state_held[mine.index] = state_held[mine.index] or bool(exact)
+                if name in PARSE_ONLY_SOURCES:
+                    # It answers no rules question: an answer it printed all the same settles nothing - excluded by
+                    # name, as from following a record above, not left to what its driver prints.
+                    continue
                 for observable in OBSERVABLES:
                     agrees = (observable, theirs.index) not in clashes
                     confirms = agrees and observations.decisive(observable, getattr(theirs, observable))
@@ -716,8 +804,8 @@ def engine_differential(
         unread = [item.id for item in items if _unread(engine_results[(engine.name, item.id)])]
         alone = [item.id for item in items if not vouched[item.id]]
         # Followed by some oracle, but by fewer than a ruleset needs: each named with the oracles that did.
-        single = [f"{item.id} ({', '.join(sorted(vouched[item.id]))})" for item in items
-                  if 0 < len(vouched[item.id]) < GATING_ORACLES]
+        short = [item.id for item in items if 0 < len(vouched[item.id]) < GATING_ORACLES]
+        single = [f"{record_id} ({', '.join(sorted(vouched[record_id]))})" for record_id in short]
         positions = sum(reported[item.id] for item in items)
         checked = {name: sum(settled[item.id][name] for item in items) for name in OBSERVABLES}
         thin = [name for name in OBSERVABLES if checked[name] < min_checked * positions]
@@ -734,6 +822,11 @@ def engine_differential(
         elif single:
             ungated[ruleset] = (f"only one oracle followed {_some(single)} as far as the engine went - a ruleset is "
                                 f"gated only when at least {GATING_ORACLES} answer for each of its records (H47)")
+            # Why a lineage the reason names counts once - said only where one of the records it names was followed by
+            # a lineage named with its members (another record's lineages explain nothing the reason says).
+            if any("'s lineage (" in name for record_id in short for name in vouched[record_id]):
+                ungated[ruleset] += ("; an oracle derived from another's code counts with it as one lineage "
+                                     "(PROVENANCE.md, H47, CHECKPOINT 10)")
         elif thin:
             name = thin[0]
             ungated[ruleset] = (f"the oracles give a {_LABELS[name]} verdict at only {checked[name]} of the engine's "
@@ -908,6 +1001,9 @@ def run_tier(
     `baseline --write`, which records it anew from this run.
     """
     lock = lockfile.load()
+    # The lineage each implementation counts in for the two-oracle bar (H47, CHECKPOINT 10): read once, the table the
+    # differential counts with and the report records.
+    lineages = lock.lineages()
     cfg = config.load()
     tier = cfg.tier(tier_name)
     all_records = corpus.load()
@@ -1038,7 +1134,7 @@ def run_tier(
         else:
             differential, result.gated, result.ungated = engine_differential(
                 engine, sources, records, answers, engine_results, frozen.divergences, tier.min_checked,
-                frozen.recorded)
+                frozen.recorded, lineages=lineages)
             engine_findings += differential
             result.engine_reads = {record.id: engine_results[(engine.name, record.id)] for record in records}
             if frozen.baseline is not None:
@@ -1066,13 +1162,14 @@ def run_tier(
         results.update(engine_results)
     # Nothing the run compared against or executed may have changed while it ran (H33).
     result.sections.append(("harness unchanged while the gate ran", integrity.changes(frozen.harness, integrity.hash_harness())))
-    _write_report(result, results, cfg, tier, sources, jobs, frozen)
+    _write_report(result, results, cfg, tier, sources, jobs, frozen, lineages=lineages)
     return result
 
 
 def _write_report(result: GateResult, results: runner.Results, cfg: config.GateConfig | None = None,
                   tier: config.Tier | None = None, sources: list[Source] | None = None, jobs: int | None = None,
-                  frozen: Snapshot | None = None) -> Path:
+                  frozen: Snapshot | None = None, *, lineages: dict[str, str]) -> Path:
+    """Write the run's report; ``lineages`` is the table the run counted the two-oracle bar with (run_tier's)."""
     reports = paths.cache_dir() / "reports"
     reports.mkdir(parents=True, exist_ok=True)
     budgets, signatures = {}, {}
@@ -1101,6 +1198,9 @@ def _write_report(result: GateResult, results: runner.Results, cfg: config.GateC
         "smoke_test": SMOKE_TEST if result.smoke_test else None,
         "gated": {ruleset: asdict(item) for ruleset, item in gated.items()},
         "ungated": ungated,
+        # The lineage each implementation counted in for the two-oracle bar (CHECKPOINT 10): the table the verdicts
+        # above were counted with, not the lock file read again.
+        "lineages": lineages,
         # What the comparison with the engine's baseline - what it read on the last green run - found (H47).
         "baseline": result.baseline_note,
         "parse_agreement": asdict(result.parse) if result.parse is not None else None,
@@ -1261,8 +1361,17 @@ def write_golden(*, only_sources: list[str] | None = None, jobs: int | None = No
         return [Finding("golden-integrity", str(error))]
     probe_source = make_source(cfg.calibration.source, lock)
     rewritten = {path.name for source in sources for path in (golden.golden_path(source.name), golden.cost_path(source.name))}
+    # calibration.json is the enabled sources' reference: re-timed only by a recording of one of them. A recording that
+    # names only pending sources leaves it - and every enabled source's file - untouched, and carries the probe timed
+    # with it in each pending cost file instead (golden.Costs.calibration).
+    enabled = [source for source in sources if source.name in ORACLE_SOURCES]
+    pending = [source for source in sources if source.name not in ORACLE_SOURCES]
     if probe_source.available() is None:
-        rewritten.add(golden.CALIBRATION_FILE)
+        if enabled:
+            rewritten.add(golden.CALIBRATION_FILE)
+    elif pending:
+        return [Finding("source-unavailable", f"{probe_source.name}: {probe_source.available()} - a pending source's "
+                                              "recording carries the calibration probe timed with it")]
     kept = [path for path in integrity.recorded_files() if path.name not in rewritten]
     if kept:
         if manifest is None:
@@ -1281,7 +1390,7 @@ def write_golden(*, only_sources: list[str] | None = None, jobs: int | None = No
     previous = {source.name: golden.read_previous(source.name) for source in sources}
     before = {source.name: golden.signature(source, options_for(source)) for source in sources}
     calibration = None
-    if golden.CALIBRATION_FILE in rewritten:
+    if golden.CALIBRATION_FILE in rewritten or pending:
         log("timing the calibration probe on this machine")
         calibration = _measure_probe(lock, cfg, records, log)
         if calibration is None:
@@ -1316,13 +1425,15 @@ def write_golden(*, only_sources: list[str] | None = None, jobs: int | None = No
     paths.GOLDEN_DIR.mkdir(parents=True, exist_ok=True)
     hashes = {path.name: manifest[path.name] for path in kept} if kept else {}
     written: dict[Path, str] = {}
+    timed = dataclasses.replace(calibration, measured=time.strftime("%Y-%m-%dT%H:%M:%S%z")) if calibration else None
     for source in sources:
         recorded = {record.id: merged[(source.name, record.id)] for record in records}
         signed = before[source.name]
         written[golden.golden_path(source.name)] = golden.dump(source.name, signed, records, recorded, recordings=repeat)
-        written[golden.cost_path(source.name)] = golden.dump_costs(source.name, signed, records, recorded,
-                                                                    recordings=repeat)
-    if calibration is not None:
+        written[golden.cost_path(source.name)] = golden.dump_costs(
+            source.name, signed, records, recorded, recordings=repeat,
+            calibration=timed if source.name not in ORACLE_SOURCES else None)
+    if calibration is not None and golden.CALIBRATION_FILE in rewritten:
         written[golden.calibration_path()] = golden.dump_calibration(calibration)
     # The answers first, then the hashes that vouch for them: an interrupted write
     # leaves files MANIFEST does not match, which verify reports.
@@ -1332,7 +1443,9 @@ def write_golden(*, only_sources: list[str] | None = None, jobs: int | None = No
         log(f"wrote {_shown(path)}")
     integrity.write_manifest(hashes)
     log(f"wrote {_shown(integrity.manifest_path())}")
-    render_disagreements(log=log)
+    if enabled:
+        # DISAGREEMENTS.md is rendered from the enabled sources' files alone: a pending recording does not touch it.
+        render_disagreements(log=log)
     lost = [line for source in sources if previous[source.name] is not None
             for line in stability.losses(source.name, previous[source.name],
                                          {record.id: merged[(source.name, record.id)] for record in records})]

@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 
 from . import baseline as engine_baseline
 from . import config, divergences, golden, integrity, paths
-from .adapters import ORACLE_SOURCES
+from .adapters import ORACLE_SOURCES, PENDING_SOURCES
 from .divergences import Divergence
 from .observations import Observation
 from .util import Finding, HarnessError, sha256_text
@@ -62,20 +62,9 @@ def _relative(path) -> str:
         return path.resolve().as_posix()
 
 
-def take(sources: tuple[str, ...] | list[str] = ORACLE_SOURCES, *, baseline_pin: config.Baseline | None = None
-         ) -> Snapshot:
-    """Hash the harness, then read and verify every recorded-answer file and the known divergences, once.
-
-    ``baseline_pin`` (gate.toml [baseline]): read the engine's baseline as well, verified against its pin - where it
-    pins one.
-    """
-    snapshot = Snapshot(harness=integrity.hash_harness())
-    snapshot.manifest_problems = integrity.verify_manifest()
-    try:
-        snapshot.manifest = integrity.read_manifest()
-    except integrity.IntegrityError:
-        snapshot.manifest = None  # verify_manifest has said why
-    read: dict[str, str] = {}  # file -> hash of the bytes the snapshot was made from
+def _read_sources(snapshot: Snapshot, sources, read: dict[str, str]) -> None:
+    """Read each source's golden and cost files into the snapshot, each verified against its MANIFEST; why one could
+    not be read goes into snapshot.problems. ``read`` gets each file read and the hash of its bytes."""
     for source in sources:
         problems: list[Finding] = []
         try:
@@ -91,7 +80,8 @@ def take(sources: tuple[str, ...] | list[str] = ORACLE_SOURCES, *, baseline_pin:
         if source in snapshot.golden:
             try:
                 costs = golden.load_costs(source, snapshot.manifest)
-                snapshot.costs[source] = costs
+                # On calibration.json's time base (a no-op for an enabled source's cost file, which has no probe).
+                snapshot.costs[source] = costs.on_reference(snapshot.calibration)
                 read[_relative(golden.cost_path(source))] = costs.digest
             except golden.StaleSchema as error:
                 problems.append(Finding("golden-stale", str(error)))
@@ -101,11 +91,41 @@ def take(sources: tuple[str, ...] | list[str] = ORACLE_SOURCES, *, baseline_pin:
                 problems.append(Finding("golden-missing", str(error)))
         if problems:
             snapshot.problems[source] = problems
+
+
+def recorded_pending(manifest: dict[str, str] | None, calibration: golden.Calibration | None = None) -> Snapshot:
+    """The recordings of the pending sources that have one (adapters.PENDING_SOURCES: wired, in no tier), read on their
+    own - never into the snapshot ``take`` gives every tier, verify's checks of the enabled sources and
+    DISAGREEMENTS.md, which holds ORACLE_SOURCES only. A pending source's recording is checked (verify) and kept, and
+    compared with nothing until the source is enabled. ``manifest`` is the snapshot's: one MANIFEST vouches for all;
+    ``calibration`` the snapshot's reference, which a pending recording's costs are read against (Costs.on_reference)."""
+    names = [name for name in PENDING_SOURCES if golden.golden_path(name).exists() or golden.cost_path(name).exists()]
+    pending = Snapshot(manifest=manifest, calibration=calibration)
+    _read_sources(pending, names, {})
+    return pending
+
+
+def take(sources: tuple[str, ...] | list[str] = ORACLE_SOURCES, *, baseline_pin: config.Baseline | None = None
+         ) -> Snapshot:
+    """Hash the harness, then read and verify every recorded-answer file and the known divergences, once.
+
+    ``baseline_pin`` (gate.toml [baseline]): read the engine's baseline as well, verified against its pin - where it
+    pins one.
+    """
+    snapshot = Snapshot(harness=integrity.hash_harness())
+    snapshot.manifest_problems = integrity.verify_manifest()
+    try:
+        snapshot.manifest = integrity.read_manifest()
+    except integrity.IntegrityError:
+        snapshot.manifest = None  # verify_manifest has said why
+    read: dict[str, str] = {}  # file -> hash of the bytes the snapshot was made from
+    # The calibration reference first: a cost file that carries a probe of its own is read on its time base.
     try:
         snapshot.calibration = golden.load_calibration(snapshot.manifest)
         read[_relative(golden.calibration_path())] = snapshot.calibration.digest
     except HarnessError as error:
         snapshot.calibration_problem = str(error)
+    _read_sources(snapshot, sources, read)
     try:
         data = paths.DIVERGENCES_FILE.read_bytes()
     except FileNotFoundError:

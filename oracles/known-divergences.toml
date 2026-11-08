@@ -917,7 +917,7 @@ index = 28
 engine_value = "accepted"
 oracle_value = "rejected:no_matching_move"
 notation = "README of adri326/5dchess-notation (oracles/third_party/notation/README.md). 'Notes, Even-numbered starting boards': 'If -0 and +0 are used, the + sign is mandatory (just like how it's always displayed in such cases in the game). The + sign can be omitted for other integers.' - it may be omitted, so it may be written; '5DFEN and custom variants' gives the timeline field as 'may be -1, -0, 0, +0, +1, etc.'. The record's '(-1T10)Nf6>x(+1T10)g6' (action 28) writes timeline +1 with its sign, and ftxi matches no move to it."
-upstream = "unreported: ftxi's move reader matches a timeline's sign exactly; not yet drafted for upstream"
+upstream = "unreported: ftxi's move reader matches a timeline's sign exactly (match_absolute_board); drafted as a bug report in docs/checkpoints/upstream/ftxi-signed-timeline-labels.md, to be filed by the project owner (register H27)"
 added = "2026-10-02"
 notes = "Triage 2026-10-02, class (f): a notation ftxi does not read, not a rule. Verified with ftxi's stock 5dtools: on the record it stops with 'Invalid move: ... tb:ab{s:+,l:1,t:10}'; with every '+' dropped from the timeline labels it replays the record to its end. A legality entry names the implementation: ftxi:naive replays with the same reader and has no entry of its own."
 
