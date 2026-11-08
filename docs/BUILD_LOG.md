@@ -7109,6 +7109,7 @@ superseded or made moot says so; nothing is deleted.
       - L7: `check_invariants` checks each node's memory count, their sum, and no flat
         generator on an unexpanded node; the ply split's stale count fixed (counted right after
         the edges' room is made), so the per-node check runs under every split.
+      - L11: P12, `test_ladder.cpp`'s asset-map checks under the flat form.
 603. **This machine's g++ 16.2 breaks `std::deque`'s exception safety under its default
     `-fassume-sane-operators-new-delete`** (found by `lane/fix535`, 2026-11-09, in issue 600's
     review round; not a defect in the engine's source). With `operator new` assumed free of

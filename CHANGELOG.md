@@ -123,6 +123,12 @@ review round, issues 603 and 604, the session log.
   generator. The ply split's stale count (the edges' room made before the node was counted,
   so a failure between left it stale) is fixed by counting right after the room is made, and
   the per-node check holds under every split.
+- **L11 - the flat root's steering tables.** `test_ladder.cpp`'s asset-map checks ported to
+  the flat form (P12): each root child's unsteered prior the plain search's noise-free one,
+  its boost what steering added, only a turn travelling into a board's past boosted, the
+  steered visits the search counts, every visit of a boosted child steered under
+  `SteeredRule::BoostedChild`, none without steering (5 of 10 root children boosted, 169
+  steered visits). (Register I2, I15.)
 
 Spec: none edited or proposed. No part of the spec describes exception safety, these tests,
 or the ladder's and the asset map's bookkeeping. The round brings the build further in line
