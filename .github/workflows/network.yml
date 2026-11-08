@@ -26,11 +26,11 @@ concurrency:
 jobs:
   test:
     # The suite outgrew one hour-long job (about two hours on a runner by 2026-11): it runs
-    # as four shards in parallel, each test in exactly one, chosen by a hash of its id
-    # (T5D_TEST_SHARD, tests/conftest.py).
+    # as four shards in parallel, each test file in exactly one, balanced by test count
+    # (T5D_TEST_SHARD, tests/conftest.py); 90 minutes each, since a count is not a time.
     name: test (shard ${{ matrix.shard }} of 4)
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
