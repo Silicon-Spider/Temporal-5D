@@ -719,22 +719,25 @@ void check_store(const MemorySolvedStore& proofs, std::size_t most, StoreCheck& 
 }
 
 // A stored Loss(k) of the side to move, checked: a checkmate now for k 0
-// (E4's verdict); else the side to move has legal actions - E4's exhaustive
-// listing - and after each the opponent mates within k - 1 by the game tree,
-// asked successor by successor with a tree of its own, so that a wide root
-// does not exhaust one tree's budget (a Q6 root of 4 boards and 8 actions did,
-// in the long twin: every successor Win(1), the whole root Unknown).
+// (E4's verdict); else the side to move has legal successors - every one, by
+// the brute-force reference (every move order: under Q3's play activation E4's
+// listing keeps one state per action key and could miss the escape - the
+// review of 2026-11-09, H2) - and after each the opponent mates within k - 1
+// by the game tree, asked successor by successor with a tree of its own, so
+// that a wide root does not exhaust one tree's budget (a Q6 root of 4 boards
+// and 8 actions did, in the long twin: every successor Win(1), the whole root
+// Unknown). Too many sequences to enumerate: unconfirmed.
 bool loss_confirmed(const GameState& s, int k) {
   if (k == 0) {
     SearchBudget b = SearchBudget::nodes(2'000'000);
     return detect_mate(s, Detector::Hypercuboid, b).verdict == Outcome::Checkmate;
   }
   if (k < 2) return false;  // the opponent needs an action of its own
-  const ActionList acts = list_legal_actions(s, 100'000, Detector::Hypercuboid, SearchBudget::nodes(20'000'000));
-  if (!acts.stats.exhaustive || acts.reached_cap || acts.actions.empty()) return false;
-  for (const LegalAction& a : acts.actions) {
+  const t5d_test::Reference ref = t5d_test::reference_actions(s, 2'000'000);
+  if (ref.overflow || ref.successors.empty()) return false;
+  for (const GameState& next : ref.successors) {
     GameTree tree(200'000, 2'000'000, 20'000'000);
-    const GameValue v = tree.solve(a.result, k - 1);
+    const GameValue v = tree.solve(next, k - 1);
     if (v.kind != GameValue::Kind::Win || v.distance > k - 1) return false;
   }
   return true;
@@ -1107,4 +1110,176 @@ TEST(long_prover_threads_survive_tt_churn) {
   std::fprintf(stderr, "  %d certificates confirmed by E4\n", certified);
   CHECK(tally.proven > 12);
   CHECK(certified > 12);
+}
+
+// ---- The review of 2026-11-09, H2: Q3's listing of action keys -----------------------------
+// Under Q3's play activation two orders of one set of moves can reach two states under one
+// action key, and E4's listing keeps one: the prover's listed children, check_certificate's
+// defender listing, loss_confirmed and MT-01's checker treated it as every successor (build-log
+// issue 411; the search's half was A-H1, issue 169).
+
+namespace {
+
+RuleOptions q3_rules() {
+  RuleOptions r;
+  r.play_activates = true;
+  return r;
+}
+
+// The review's P0 (Black to move, Q3, 2x1 boards): Black's (0T1)Bb1(+1T1)a1 reaches R'' - White
+// to move with one action key whose two orders reach two states: E4's listing keeps the one
+// after which Black mates in one; the other stalemates Black at once. No mate within 3 for Black
+// at P0 by the game tree; a literal-class prover proved Win(3) and stored Loss(2) at R''.
+GameState review_p0() {
+  return game_from_fen({"[1N:0:1:w]", "[Bb:0:1:b]", "[2:-1:2:w]", "[2:-1:2:b]", "[2:-2:2:b]", "[K1:-3:2:w]",
+                        "[r1:-4:1:b]", "[2:+1:1:b]", "[1N:+1:2:w]", "[2:+1:2:b]"},
+                       BoardSize{2, 1}, Parity::Odd, q3_rules());
+}
+
+LegalAction review_bb1(const GameState& p0) {
+  for (const LegalAction& a : list_legal_actions(p0, 1000, Detector::Hypercuboid).actions) {
+    if (action_text(a.moves, p0.multiverse().even()) == "(0T1)Bb1(+1T1)a1") return a;
+  }
+  throw std::logic_error("P0: no action (0T1)Bb1(+1T1)a1");
+}
+
+// The review's probe J (21 1x1 boards; Q1 Consecutive, Q3, Q5 AllActive, Q20 off; Black to move):
+// a mate in one by the game tree whose four checkmating successors E4's listing drops - their
+// action keys listed with stalemate states.
+GameState review_probe_j() {
+  RuleOptions r;
+  r.activation = ActivationRule::Consecutive;
+  r.play_activates = true;
+  r.mandatory = MandatoryBoards::AllActive;
+  r.inactive_history_is_destination = false;
+  return game_from_fen({"[Q:-0:1:w]", "[1:-0:1:b]", "[R:-0:2:w]", "[q:-0:2:b]", "[K:+0:1:w]", "[1:+0:1:b]",
+                        "[1:+0:2:w]", "[1:+0:2:b]", "[k:+0:3:w]", "[b:+1:1:b]", "[B:+1:2:w]", "[k:+1:2:b]",
+                        "[1:+2:1:w]", "[k:+2:1:b]", "[1:+2:2:w]", "[k:+2:2:b]", "[1:+3:2:w]", "[1:+3:2:b]",
+                        "[1:+4:2:w]", "[K:+4:2:b]", "[B:+4:3:w]"},
+                       BoardSize{1, 1}, Parity::Even, r);
+}
+
+// The review's mutation-F7 position (Q3, R8, 2x1 boards, Black to move): 3 actions listed, 4
+// successors - no Loss(2) by the game tree over every successor.
+GameState review_f7() {
+  return game_from_fen({"[K1:0:1:w]", "[2:0:1:b]", "[2:0:2:w]", "[2:0:2:b]", "[k1:+1:2:w]", "[2:+1:2:b]",
+                        "[2:+1:3:w]", "[Br:+1:3:b]", "[1K:+2:1:w]", "[1r:+2:1:b]", "[K1:+3:1:w]"},
+                       BoardSize{2, 1}, Parity::Odd, q3_rules());
+}
+
+std::size_t distinct_results(const ActionList& l) {
+  std::vector<const GameState*> d;
+  for (const LegalAction& a : l.actions) {
+    if (std::none_of(d.begin(), d.end(), [&](const GameState* x) { return same_position(*x, a.result); })) {
+      d.push_back(&a.result);
+    }
+  }
+  return d.size();
+}
+
+}  // namespace
+
+TEST(prover_under_q3_draws_no_verdict_from_a_listing_of_action_keys) {
+  // The premises: at probe J E4's listing misses successors and the game tree finds a mate in
+  // one; at R'' it reaches 1 of 2.
+  const GameState j = review_probe_j();
+  const ActionList jl = list_legal_actions(j, 100'000, Detector::Hypercuboid, SearchBudget::nodes(5'000'000));
+  REQUIRE(jl.stats.exhaustive);
+  const ActionCount jc = count_legal_successors(j, SIZE_MAX, Detector::Naive);
+  std::fprintf(stderr, "  probe J: %zu actions, %zu distinct results, %zu successors\n", jl.actions.size(),
+               distinct_results(jl), jc.count);
+  REQUIRE(distinct_results(jl) < jc.count);
+  {
+    GameTree tree(200'000, 2'000'000, 20'000'000);
+    const GameValue v = tree.solve(j, 1);
+    REQUIRE(v.kind == GameValue::Kind::Win);
+  }
+  // The literal class answers "mate within depth" exactly (prover.hpp): never a disproof here -
+  // and none exported to an external disproof store (H19). Before the fix: disproven at 1, 2, 3.
+  ProverOptions lit;
+  lit.seeds = SeedClass::All;
+  lit.completion = CompletionClass::Every;
+  for (int depth = 1; depth <= 3; ++depth) {
+    ProverOptions o = lit;
+    o.depth = depth;
+    MemorySolvedStore proofs;
+    DisproofStore disproofs;
+    Prover prover(o, &proofs, &disproofs);
+    const ProveResult r = prover.prove(j, ProveBudget::nodes(1'000'000));
+    std::fprintf(stderr, "  probe J, literal class, depth %d: %s\n", depth, proof_status_name(r.status));
+    CHECK(r.status != ProofStatus::Disproven);
+    CHECK(disproofs.find(j, root_class(o)) < 1);
+    exports_hold(r, j, o, proofs, disproofs);
+  }
+  // P0: no Win(3), no Loss stored at R'' - at the default TT and a 1-entry one. Before the fix:
+  // Win(3), certified by check_certificate, and Loss(2) stored at R''.
+  const GameState p0 = review_p0();
+  const LegalAction bb1 = review_bb1(p0);
+  const GameState& rpp = bb1.result;
+  const ActionList rl = list_legal_actions(rpp, 1000, Detector::Hypercuboid);
+  REQUIRE_EQ(distinct_results(rl), std::size_t{1});
+  REQUIRE_EQ(count_legal_successors(rpp, SIZE_MAX, Detector::Naive).count, std::size_t{2});
+  for (const std::size_t tt : {std::size_t{0}, std::size_t{1}}) {
+    ProverOptions o = lit;
+    o.depth = 3;
+    o.record_certificate = true;
+    if (tt != 0) o.tt_entries = tt;
+    MemorySolvedStore proofs;
+    DisproofStore disproofs;
+    Prover prover(o, &proofs, &disproofs);
+    const ProveResult r = prover.prove(p0, ProveBudget::nodes(2'000'000));
+    std::fprintf(stderr, "  P0, literal class, depth 3, tt %zu: %s %s\n", tt, proof_status_name(r.status),
+                 to_string(r.proof).c_str());
+    CHECK(r.status != ProofStatus::Proven);
+    const std::optional<Proof> at = proofs.find(rpp);
+    CHECK(!at.has_value() || at->kind != Proof::Kind::Loss);
+    exports_hold(r, p0, o, proofs, disproofs);
+  }
+}
+
+TEST(certificate_under_q3_holds_every_defence_or_is_undecided) {
+  // P0's false Win(3), its certificate built by hand: Black's (0T1)Bb1(+1T1)a1, then at R'' a
+  // mating reply after each of White's listed actions. E4's listing at R'' holds 1 of its 2
+  // successors - the omitted order stalemates Black - so the certificate is Undecided. Before the
+  // fix check_certificate confirmed it.
+  const GameState p0 = review_p0();
+  const LegalAction bb1 = review_bb1(p0);
+  ProofCertificate cert;
+  cert.add(p0, bb1.moves, 3);
+  std::size_t replies = 0;
+  for (const LegalAction& w : list_legal_actions(bb1.result, 1000, Detector::Hypercuboid).actions) {
+    for (const LegalAction& b : list_legal_actions(w.result, 1000, Detector::Hypercuboid).actions) {
+      if (detect_mate(b.result, Detector::Hypercuboid, SearchBudget::nodes(2'000'000)).verdict ==
+          Outcome::Checkmate) {
+        cert.add(w.result, b.moves, 1);
+        ++replies;
+        break;
+      }
+    }
+  }
+  REQUIRE_EQ(replies, std::size_t{1});
+  const CertificateCheck c = check_certificate(cert, p0, 3);
+  std::fprintf(stderr, "  P0's certificate: %s (%s)\n", certificate_verdict_name(c.verdict), c.why.c_str());
+  CHECK(c.verdict == CertificateVerdict::Undecided);
+  // Under Q3 a certificate is still confirmed where no defender is listed: a mate in one (the
+  // defender mated at once, E4's verdict).
+  const GameState after = list_legal_actions(bb1.result, 1000, Detector::Hypercuboid).actions.front().result;
+  const CertificateStep* mate = cert.find(after);
+  REQUIRE(mate != nullptr);
+  CHECK(check_certificate(cert, after, 1).verdict == CertificateVerdict::Confirmed);
+}
+
+TEST(loss_confirmed_takes_every_successor_under_q3) {
+  // R'' and the review's mutation-F7 position: a Loss the listing's successors suggest and the
+  // game tree over every successor refutes. Before the fix loss_confirmed took E4's listing and
+  // confirmed both.
+  const GameState p0 = review_p0();
+  const GameState rpp = review_bb1(p0).result;
+  CHECK(!loss_confirmed(rpp, 2));
+  CHECK(!loss_confirmed(rpp, 4));
+  const GameState f7 = review_f7();
+  const ActionList fl = list_legal_actions(f7, 1000, Detector::Hypercuboid);
+  std::fprintf(stderr, "  mutation-F7: %zu actions listed, %zu successors\n", fl.actions.size(),
+               count_legal_successors(f7, SIZE_MAX, Detector::Naive).count);
+  CHECK(!loss_confirmed(f7, 2));
 }

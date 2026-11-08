@@ -1242,12 +1242,21 @@ struct Worker {
   };
 
   // E4's listing as a node's children (a turn that does not decompose).
+  // Complete only where it is exhaustive, uncapped - and play does not
+  // activate: under Q3's play activation two orders of one set of moves can
+  // reach two states under one action key, of which the listing keeps one
+  // (t5d/search.hpp's COUNTING), so a successor state may be missing, and
+  // neither a proof (an AND node's) nor a disproof (an OR node's) may be
+  // drawn from it - the route the search takes (mcts.cpp's fallback listing).
+  // Without it a literal-class prover under Q3 proved a false Win(3) that
+  // check_certificate confirmed, and disproved a true mate in one (the review
+  // of 2026-11-09, H2; build-log issue 411, after A-H1's issue 169).
   void list_children(std::uint32_t n, const GameState& s, bool attacker_turn) {
     ++st.listings;
     SearchBudget b = detector_budget();
     const ActionList l = list_legal_actions(s, opt.listing_cap + 1, Detector::Hypercuboid, b);
     if (!account(l.stats)) return;
-    const bool complete = l.stats.exhaustive && !l.reached_cap;
+    const bool complete = l.stats.exhaustive && !l.reached_cap && !s.rules().play_activates;
     const int remaining = tree[n].remaining;
     Seen seen;
     for (const LegalAction& a : l.actions) {

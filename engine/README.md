@@ -3151,7 +3151,14 @@ tree. Under any other ruleset (Q4's Guide-literal reading among them, which puts
 shifts the present last; Q1's consecutive rule, Q3, Q6, Q21's alternative) the turn
 is not decomposed: the node's children are E4's listing of the legal actions
 (`list_legal_actions`, exhaustive, capped), and a capped listing makes the node
-unprovable (AND) or undisprovable (OR) - never a false verdict.
+unprovable (AND) or undisprovable (OR) - never a false verdict. So does Q3's play
+activation, whatever the listing: two orders of one set of moves can reach two states under
+one action key, of which the listing keeps one, so a successor may be missing (build-log
+issue 411: before the review of 2026-11-09 a literal-class prover under Q3 proved a false
+Win(3), which `check_certificate` confirmed, and disproved a true mate in one). Under Q3 the
+prover proves only what needs no listed defender - a mate in one, the defender mated at once
+by E4's verdict - and disproves no attacker turn it listed; `check_certificate` passes a
+defender's listing under Q3 only where its distinct results reach `count_legal_successors`.
 
 **How a turn is completed incrementally, not re-solved per line.** A partial action
 is a node of the tree, so its completions are searched once and shared by every line
@@ -4077,9 +4084,11 @@ Tests (`tests/test_mcts.cpp`, `tests/test_solver_refs.hpp` for the positions and
 - `mcts_solver_agrees_with_df_pn_under_every_ruleset` - `two_board_positions` (6 per Q4
   reading) and `sparse_positions` under all 27 rulesets (1 game, 2 turns), three arms (ply,
   tree, flat), 250 playouts, df-pn 50,000 nodes: 1,629 searches (640 roots solved), 5,704
-  claims (2,432 win, 2,603 loss, 669 draw; 2,819 game ends), 3,683 comparisons, 3,662
-  decided and agreeing, 21 unknown; 1,707 df-pn searches, 1,477 proofs, every one certified
-  by E4, 209 disproofs. About 75 s on a shared machine.
+  claims (2,432 win, 2,603 loss, 669 draw; 2,819 game ends), 3,683 comparisons, 3,638
+  decided and agreeing, 45 unknown; 1,707 df-pn searches, 1,473 proofs, every one certified
+  by E4, 203 disproofs (before build-log issue 411 - under Q3 df-pn now draws no verdict from
+  E4's listing - 3,662 decided, 21 unknown, 1,477 proofs, 209 disproofs). About 75 s on a
+  shared machine.
 - `long_mcts_solver_agrees_with_df_pn` - 12 two-board positions per reading and one game of
   3 turns under every ruleset, five arms, 800 playouts, df-pn 200,000 nodes (certificate
   checks at most 20,000 defender positions), the search's legality exact within 2,000,000
@@ -4190,22 +4199,25 @@ where it carries weight, below.)
   the constructed mates (both Q4 readings, both classes, depth 3) and `sparse_positions`
   under every ruleset with both Q4 readings (the default class at depth 3, the literal at
   depth 1), each at `tt_entries` 1 and 2 against the default TT: the same answer wherever
-  both decide (3,966 roots, no difference); every result held to the references
-  (`Tally`: 4,907 confirmed, 10 beyond them); every proven root's Win in the solved store at
+  both decide (3,884 roots, no difference); every result held to the references
+  (`Tally`: 4,817 confirmed, 10 beyond them); every proven root's Win in the solved store at
   return; every disproven root's disproof in the disproof store at the search's class and
   depth - or, where the search found the side to move lost or stalemated outright, that game
-  fact in the solved store, checked: a Loss the game tree confirms after each of E4's listed actions, a stalemate by E4's verdict
-  (7 roots) - and never a Win for it (since the review: any entry but a Win used to stand in
+  fact in the solved store, checked: a Loss the game tree confirms after every successor (the
+  brute-force reference's - under Q3 E4's listing can miss one, issue 411), a stalemate by E4's verdict
+  (6 roots) - and never a Win for it (since the review: any entry but a Win used to stand in
   unchecked); stored entries checked - a Win or Loss against the game tree, a Draw as E4's
   stalemate (since the review: the game tree at depth 0 answered Unknown wherever a legal
-  action exists, so a false Draw counted "beyond") - 4,278 of 4,290 confirmed, 12 beyond the
+  action exists, so a false Draw counted "beyond") - 4,262 of 4,290 confirmed, 28 beyond the
   game tree's budget, at most 1% asserted; a fresh prover over the same stores answers each
-  decided root with `store_hits >= 1` and `expansions == 0` (3,966); every proof re-asked two
-  half-turns shallower gives no proof beyond that depth (424); a proof's continuation - the
+  decided root with `store_hits >= 1` and `expansions == 0` (3,884); every proof re-asked two
+  half-turns shallower gives no proof beyond that depth (408); a proof's continuation - the
   attacker to move again after its action and the longest defence - answered from the stores
-  alone (424, "on PV changes"); and a sequence of related roots (consecutive turn starts of
+  alone (408, "on PV changes"); and a sequence of related roots (consecutive turn starts of
   random games) sharing one pair of stores under a 1-entry TT, every root it decided re-asked
-  and answered with no expansion (951). About 90 s.
+  and answered with no expansion (943). The figures since issue 411 (Q3's verdicts no longer
+  drawn from E4's listing; before it 3,966 roots, 4,907 confirmed, 7 facts, 4,278 of 4,290
+  entries, 424 and 951). About 90 s.
 - `prover_churn_takes_effect_where_the_tt_carries_weight` (since the review) - three-turn
   games' positions under both Q4 readings and the constructed mates, depth 5, both classes,
   20,000 nodes, a 1-entry TT over external stores against the default: the default TT hits
@@ -4232,7 +4244,9 @@ where it carries weight, below.)
   entries confirmed, 1,526 beyond the game tree (at most 20% asserted: the wider positions
   leave its budget more often); 19 disproven roots stood for by a confirmed fact, each Loss
   checked after every one of E4's listed actions (a whole-root tree could not decide two of
-  them, 4-5 boards under Q6 and Q17: every successor Win(1)); 610 proofs re-asked
+  them, 4-5 boards under Q6 and Q17: every successor Win(1); measured before issue 411, which
+  takes the successors from the brute-force reference and stops the prover drawing verdicts
+  from E4's listing under Q3); 610 proofs re-asked
   shallower, 610 continuations and 2,296 sequence roots answered from the stores; 68
   certificates at 5 threads, all confirmed; 22 Hunt mates, all certified (the Hunt twin
   unchanged by the review, not re-run).
