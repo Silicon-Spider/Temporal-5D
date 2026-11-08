@@ -61,6 +61,29 @@ void* operator new[](std::size_t size) { return operator new(size); }
 void operator delete[](void* p) noexcept { operator delete(p); }
 void operator delete[](void* p, std::size_t) noexcept { operator delete(p); }
 
+// The nothrow forms (std::stable_sort's temporary buffer among them) take no
+// part in the fault countdown: a failure there is absorbed by design (the sort
+// falls back to sorting in place), so a fault injected there would read as one
+// swallowed - and the fault tests check that every fault that fires comes out
+// of the call (review finding L8 of lane fix535). Counted otherwise as the
+// throwing forms are, in the same blocks.
+namespace {
+void* allocate_nothrow(std::size_t size) noexcept {
+  g_allocations.fetch_add(1, std::memory_order_relaxed);
+  namespace a = t5d_test::alloc;
+  void* raw = std::malloc(sizeof(Header) + (size == 0 ? 1 : size));
+  if (raw == nullptr) return nullptr;
+  const Header h{size, a::counting ? std::size_t{1} : std::size_t{0}};
+  std::memcpy(raw, &h, sizeof h);
+  if (a::counting) a::live_bytes += static_cast<long long>(size);
+  return static_cast<char*>(raw) + sizeof(Header);
+}
+}  // namespace
+void* operator new(std::size_t size, const std::nothrow_t&) noexcept { return allocate_nothrow(size); }
+void* operator new[](std::size_t size, const std::nothrow_t&) noexcept { return allocate_nothrow(size); }
+void operator delete(void* p, const std::nothrow_t&) noexcept { operator delete(p); }
+void operator delete[](void* p, const std::nothrow_t&) noexcept { operator delete(p); }
+
 using namespace t5d;
 
 TEST(expand_allocates_nothing_in_steady_state) {
