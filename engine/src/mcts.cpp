@@ -1012,18 +1012,59 @@ struct Search::Impl {
     return params_.key_bits >= 64 ? k : k & ((std::uint64_t{1} << params_.key_bits) - 1);
   }
 
+  // What make_node counts for a node - itself, and classify()'s check and
+  // verdict - so that a node not made, or taken back before anything refers
+  // to it (unmake_last_node), is not counted: the counts describe the nodes
+  // made (build-log issue 535). The detector's time stays spent.
+  struct NodeCounts {
+    std::uint64_t nodes_created;
+    std::uint64_t mate_checks;
+    std::uint64_t unknown_verdicts;
+    std::uint64_t checkmates;
+    std::uint64_t stalemates;
+    std::uint64_t turn_caps;
+  };
+  NodeCounts node_counts() const noexcept {
+    return {stats_.nodes_created, stats_.mate_checks, stats_.unknown_verdicts,
+            stats_.checkmates,    stats_.stalemates,  stats_.turn_caps};
+  }
+  void restore_node_counts(const NodeCounts& c) noexcept {
+    stats_.nodes_created = c.nodes_created;
+    stats_.mate_checks = c.mate_checks;
+    stats_.unknown_verdicts = c.unknown_verdicts;
+    stats_.checkmates = c.checkmates;
+    stats_.stalemates = c.stalemates;
+    stats_.turn_caps = c.turn_caps;
+  }
+
   NodeId make_node(GameState state, int moves_made, std::size_t new_boards = 1) {
-    Node n(std::move(state));
-    n.new_boards = new_boards;
-    n.key = key_of(n.state);
-    n.mover = n.state.to_move();
-    n.moves_made = moves_made;
-    n.turn_start = moves_made == 0;
-    if (n.turn_start) classify(n);
-    nodes_.push_back(std::move(n));
+    const NodeCounts counts = node_counts();
+    try {
+      Node n(std::move(state));
+      n.new_boards = new_boards;
+      n.key = key_of(n.state);
+      n.mover = n.state.to_move();
+      n.moves_made = moves_made;
+      n.turn_start = moves_made == 0;
+      if (n.turn_start) classify(n);
+      nodes_.push_back(std::move(n));
+    } catch (...) {
+      restore_node_counts(counts);  // nothing was made (push_back adds nothing if it throws)
+      throw;
+    }
     ++stats_.nodes_created;
     account(nodes_.back());
     return static_cast<NodeId>(nodes_.size() - 1);
+  }
+
+  // The node made last, taken back before anything refers to it - no edge,
+  // no entry in the graph's table, not the root (issue 535: so that a failure
+  // between making a node and linking it leaves none the root does not reach).
+  // Its memory and the counts make_node made for it go with it.
+  void unmake_last_node(const NodeCounts& before) noexcept {
+    tree_bytes_ -= nodes_.back().bytes;
+    nodes_.pop_back();
+    restore_node_counts(before);
   }
 
   // MCGS identity: the state key AND the moves made in the action in progress
@@ -1176,16 +1217,22 @@ struct Search::Impl {
         id = found;
         ++stats_.transposition_hits;
       } else if (table_.count(identity(key, moves_made)) != 0) {
+        id = make_node(std::move(s), moves_made, made);
         ++stats_.key_collisions;  // kept apart: an unshared node
-        id = make_node(std::move(s), moves_made, made);
       } else {
+        const NodeCounts before = node_counts();
         id = make_node(std::move(s), moves_made, made);
-        register_node(id);
+        try {
+          register_node(id);  // the table unchanged if it throws (a single emplace)
+        } catch (...) {
+          unmake_last_node(before);  // nothing refers to it yet (issue 535)
+          throw;
+        }
       }
     } else {
       id = make_node(std::move(s), moves_made, made);
     }
-    nodes_[pid].edges[ei].child = id;
+    nodes_[pid].edges[ei].child = id;  // nothing below throws: the node made is linked
     if (nodes_[id].dead_end) {
       prune(pid, ei);
       return kNoNode;
@@ -1523,12 +1570,53 @@ struct Search::Impl {
     if (id == root_) reset_best();  // the effort label's edge, in the new order
   }
 
+  // The root's side tables (I15's and E10's) and its effort label, held apart
+  // while an expansion that starts them afresh may still be undone
+  // (expand_flat).
+  struct RootTables {
+    std::vector<double> prior_noise_free;
+    std::vector<double> noise_alpha;
+    std::vector<double> prior_unsteered;
+    std::vector<double> prior_counterfactual;
+    std::vector<double> boost_raw;
+    std::vector<std::uint32_t> steered;
+    std::vector<std::uint8_t> was_pv;
+    std::vector<double> peak_share;
+    bool steering = false;
+    std::size_t best_edge = kNoEdge;
+    std::uint32_t best_since = 0;
+  };
+
+  // Swaps the root's side tables and effort label with `t`'s: taken (`t`
+  // empty: they are left empty - no edge, no effort label - as a root's own
+  // expansion starts them), or given back.
+  void swap_root_tables(RootTables& t) noexcept {
+    root_prior_noise_free_.swap(t.prior_noise_free);
+    root_noise_alpha_.swap(t.noise_alpha);
+    root_prior_unsteered_.swap(t.prior_unsteered);
+    root_prior_counterfactual_.swap(t.prior_counterfactual);
+    root_boost_raw_.swap(t.boost_raw);
+    root_steered_.swap(t.steered);
+    root_was_pv_.swap(t.was_pv);
+    root_peak_share_.swap(t.peak_share);
+    std::swap(root_steering_, t.steering);
+    std::swap(best_edge_, t.best_edge);
+    std::swap(best_since_, t.best_since);
+  }
+
   // D2's flat form: a turn start expanded with its evaluation - the per-board
   // policy (FlatPolicy: the moves' logits and the boards' leave logits at the
   // policy temperature, the root's I19 temperature too; at a fresh root in
   // self-play, E1's noise per board), its generator (t5d/turngen.hpp) built
   // over it, k0 from the turn distribution's entropy (E1's form, capped:
   // flat_k0_max), and the first turns generated by widening.
+  //
+  // Exception-safe (build-log issue 535): what can fail is built before the
+  // node or the search is touched, and if generating the first turns throws
+  // the expansion is undone - the node a leaf again, as it came (a later
+  // visit evaluates and expands it afresh, as the ply split's expansion is
+  // marked done only once its priors are set), the root's side tables and
+  // effort label as they were, and the root's noise still to be drawn.
   void expand_flat(NodeId id, const Evaluation& ev, const Expansion& x) {
     const auto t0 = std::chrono::steady_clock::now();
     Node& n = nodes_[id];
@@ -1537,34 +1625,58 @@ struct Search::Impl {
     detail::FlatPolicy policy(n.state, x, ev, t, params_);
     const double entropy = policy.entropy();
     auto f = std::make_unique<detail::FlatNode>();
-    if (root && params_.root_noise && !noise_applied_) {
+    const bool noise = root && params_.root_noise && !noise_applied_;
+    if (noise) {
       f->clean = std::make_unique<detail::FlatPolicy>(policy);
       policy.add_noise(params_, n.key);
-      noise_applied_ = true;
     }
     SearchBudget budget;
     budget.max_nodes = params_.generator_nodes;
     budget.max_bytes = params_.mate_bytes;
     f->generator = std::make_unique<TurnGenerator>(n.state, policy, params_.flat_unit, budget);
     f->policy = std::make_unique<detail::FlatPolicy>(std::move(policy));
+    std::vector<std::uint32_t> offsets(1, 0);  // no turn yet
     stats_.seconds_generate += detail::seconds_since(t0);
+    // The expansion; what it replaces is kept until its first turns are made.
+    const bool noise_before = noise_applied_;
+    const bool pending_before = n.pending;
+    const bool complete_before = n.children_complete;
+    const float submit_logit_before = n.submit_logit;
+    const double k0_before = n.k0;
+    const std::size_t instantiated_before = n.instantiated;
+    std::vector<Move> moves_before;
+    moves_before.swap(n.action_moves);
+    n.action_offsets.swap(offsets);  // `offsets` holds the node's old ones now
+    RootTables tables_before;
+    if (root) swap_root_tables(tables_before);  // the noise is per board, not per edge: no alpha
+    noise_applied_ = noise_applied_ || noise;
     n.flat = std::move(f);
     n.submit_logit = std::numeric_limits<float>::quiet_NaN();  // D8: the generator ends turns itself
-    n.action_moves.clear();
-    n.action_offsets.assign(1, 0);
     n.children_complete = false;  // until the generator is exhausted
     n.k0 = std::max(params_.widening_min, std::min(params_.flat_k0_max, params_.widening_scale * std::exp(entropy)));
-    if (root) {
-      root_prior_noise_free_.clear();
-      root_noise_alpha_.clear();  // the noise is per board, not per edge
-      clear_root_steering();
-      best_edge_ = kNoEdge;
-      best_since_ = 0;
-    }
     n.expanded = true;
     n.pending = false;
     n.instantiated = 0;
-    widen(n);  // the first turns: generated, their priors set
+    try {
+      widen(n);  // the first turns: generated, their priors set
+    } catch (...) {
+      // pull_turns took back the turns it made (none is left) and dropped the
+      // generator: everything above is put back. Nothing here allocates.
+      n.expanded = false;
+      n.pending = pending_before;
+      n.instantiated = instantiated_before;
+      n.k0 = k0_before;
+      n.children_complete = complete_before;
+      n.submit_logit = submit_logit_before;
+      n.flat.reset();
+      n.edges.clear();
+      n.action_moves.swap(moves_before);
+      n.action_offsets.swap(offsets);
+      if (root) swap_root_tables(tables_before);
+      noise_applied_ = noise_before;
+      account(n);
+      throw;
+    }
     account(n);
     if (n.edges.empty()) {
       n.stuck = true;
@@ -1572,41 +1684,90 @@ struct Search::Impl {
     }
   }
 
+  // Truncates `v` to its first `k` elements: nothing is allocated, so nothing
+  // throws.
+  template <class T>
+  static void truncate(std::vector<T>& v, std::size_t k) noexcept {
+    v.erase(v.begin() + static_cast<std::ptrdiff_t>(k), v.end());
+  }
+
   // Generates turns until node `n` has `want` (or its generator is done): each
   // a new edge, in the generator's order (non-increasing score), its prior
   // from the scores (flat_priors). Returns how many were added.
+  //
+  // Exception-safe (build-log issue 535). A throw from the generator leaves it
+  // half-updated - the box it was judging lost, its run's actions and results
+  // out of step: t5d/turngen.hpp promises nothing after a throw - so it is
+  // never asked again: it is dropped, as after a budget stop, and the node's
+  // children are incomplete, never a proof (H37). A throw anywhere else here
+  // (taking a turn in, the fallback's listing, the priors) is treated alike.
+  // Either way the node's turns, priors and counts are put back as this call
+  // found them - the turns it made have no child yet and no prior was set
+  // from them - and the exception goes on.
   std::size_t pull_turns(Node& n, std::size_t want) {
     detail::FlatNode& f = *n.flat;
     if (!f.generator || n.edges.size() >= want) return 0;
     const auto t0 = std::chrono::steady_clock::now();
+    const std::size_t edges0 = n.edges.size();
+    const std::size_t moves0 = n.action_moves.size();
+    const std::size_t offsets0 = n.action_offsets.size();
+    const std::size_t scores0 = f.scores.size();
+    const std::size_t clean0 = f.clean_scores.size();
+    const std::size_t boosts0 = f.boosts.size();
+    const bool listed0 = f.listed;
+    // What this call counts for the turns it makes (turn_boost counts the
+    // boosts their priors take), taken back with them.
+    const std::uint64_t generated0 = stats_.generated_turns;
+    const std::uint64_t listings0 = stats_.fallback_listings;
+    const std::uint64_t boosted0 = stats_.asset_boosted_edges;
+    const std::uint64_t suggested0 = stats_.suggestion_edges;
     std::size_t added = 0;
-    while (n.edges.size() < want) {
-      std::optional<GeneratedTurn> turn = f.generator->next();
-      if (!turn) {
-        // Done: every turn generated (the children complete, if the turns
-        // cover every successor), or a budget stopped it - incomplete, never a
-        // proof (H37).
-        n.children_complete = f.generator->exhausted() && turns_cover_successors(n.state);
-        const bool stopped = f.generator->stopped();
-        if (stopped) ++stats_.stopped_generators;
-        f.generator.reset();
-        if (stopped && n.edges.empty()) added += fallback_turns(n);
-        break;
+    try {
+      while (n.edges.size() < want) {
+        std::optional<GeneratedTurn> turn = f.generator->next();
+        if (!turn) {
+          // Done: every turn generated (the children complete, if the turns
+          // cover every successor), or a budget stopped it - incomplete, never a
+          // proof (H37).
+          n.children_complete = f.generator->exhausted() && turns_cover_successors(n.state);
+          const bool stopped = f.generator->stopped();
+          if (stopped) ++stats_.stopped_generators;
+          f.generator.reset();
+          if (stopped && n.edges.empty()) added += fallback_turns(n);
+          break;
+        }
+        Edge e;
+        e.action = static_cast<std::uint32_t>(n.action_count());
+        e.logit = static_cast<float>(turn->score);
+        n.action_moves.insert(n.action_moves.end(), turn->moves.begin(), turn->moves.end());
+        n.action_offsets.push_back(static_cast<std::uint32_t>(n.action_moves.size()));
+        f.scores.push_back(turn->score);
+        if (f.clean) f.clean_scores.push_back(f.clean->score_of(turn->moves));
+        f.boosts.push_back(turn_boost(n, turn->moves));
+        n.edges.push_back(e);
+        ++added;
+        ++stats_.generated_turns;
       }
-      Edge e;
-      e.action = static_cast<std::uint32_t>(n.action_count());
-      e.logit = static_cast<float>(turn->score);
-      n.action_moves.insert(n.action_moves.end(), turn->moves.begin(), turn->moves.end());
-      n.action_offsets.push_back(static_cast<std::uint32_t>(n.action_moves.size()));
-      f.scores.push_back(turn->score);
-      if (f.clean) f.clean_scores.push_back(f.clean->score_of(turn->moves));
-      f.boosts.push_back(turn_boost(n, turn->moves));
-      n.edges.push_back(e);
-      ++added;
-      ++stats_.generated_turns;
+      stats_.seconds_generate += detail::seconds_since(t0);
+      if (added > 0) flat_priors(n);  // sets nothing unless it succeeds
+    } catch (...) {
+      truncate(n.edges, edges0);
+      truncate(n.action_moves, moves0);
+      truncate(n.action_offsets, offsets0);
+      truncate(f.scores, scores0);
+      truncate(f.clean_scores, clean0);
+      truncate(f.boosts, boosts0);
+      f.listed = listed0;
+      f.generator.reset();
+      n.children_complete = false;
+      stats_.generated_turns = generated0;
+      stats_.fallback_listings = listings0;
+      stats_.asset_boosted_edges = boosted0;
+      stats_.suggestion_edges = suggested0;
+      ++stats_.dropped_generators;
+      account(n);
+      throw;
     }
-    stats_.seconds_generate += detail::seconds_since(t0);
-    if (added > 0) flat_priors(n);
     account(n);
     return added;
   }
@@ -1671,6 +1832,10 @@ struct Search::Impl {
   // The flat form's priors from the turns' scores (FlatPrior): the softmax over
   // the turns generated (renormalised as more are), or exp(score). At the
   // root, I15's side table too: the priors from the noise-free scores.
+  // Strongly exception-safe (build-log issue 535): everything is computed, and
+  // the root's per-edge counts given room, before anything is set - so a
+  // pull_turns that throws here finds the priors and the side tables as they
+  // were.
   void flat_priors(Node& n) {
     const detail::FlatNode& f = *n.flat;
     const auto priors = [this](const std::vector<double>& scores, std::vector<double>& out) {
@@ -1705,21 +1870,31 @@ struct Search::Impl {
     std::vector<double> unsteered;
     if (root) unsteered = p;  // with the noise, without steering: the counterfactual replica's
     if (steered) steer(p, f.boosts, &takeable);
-    for (std::size_t i = 0; i < n.edges.size(); ++i) n.edges[i].prior = p[i];
+    const std::size_t m = n.edges.size();
+    std::vector<double> clean;            // the root's noise-free priors, steered ...
+    std::vector<double> clean_unsteered;  // ... and not
+    std::vector<double> boost_raw;
     if (root) {
-      std::vector<double> clean;
       if (f.clean) {
         priors(f.clean_scores, clean);
       } else {
         clean = unsteered;
       }
-      root_prior_unsteered_ = clean;
+      clean_unsteered = clean;
       if (steered) steer(clean, f.boosts, &takeable);
+      boost_raw = f.boosts;
+      root_steered_.reserve(m);  // so that growing them below cannot throw
+      root_was_pv_.reserve(m);
+      root_peak_share_.reserve(m);
+    }
+    // Set - nothing below allocates.
+    for (std::size_t i = 0; i < m; ++i) n.edges[i].prior = p[i];
+    if (root) {
+      root_prior_unsteered_ = std::move(clean_unsteered);
       root_prior_noise_free_ = std::move(clean);
       root_prior_counterfactual_ = std::move(unsteered);
-      root_boost_raw_ = f.boosts;
+      root_boost_raw_ = std::move(boost_raw);
       root_steering_ = steered;
-      const std::size_t m = n.edges.size();
       root_steered_.resize(m, 0);
       root_was_pv_.resize(m, 0);
       root_peak_share_.resize(m, 0.0);
@@ -1899,10 +2074,11 @@ struct Search::Impl {
       for (const Edge& e : n.edges) before.push_back(e.prior);
       root_noise_alpha_.clear();
       std::vector<double> mix;  // the noise's own part of each edge's prior (none drawn: empty)
-      if (params_.root_noise && !noise_applied_ && n.edges.size() > 1) {
-        mix = apply_noise(n);
-        noise_applied_ = true;
-      }
+      // Drawn here, and marked drawn only with the expansion (below): if
+      // anything in between throws, the node is not expanded and its next
+      // expansion draws the noise again (build-log issue 600).
+      const bool noise = params_.root_noise && !noise_applied_ && n.edges.size() > 1;
+      if (noise) mix = apply_noise(n);
       // The counterfactual replica's priors (SteeredRule): the same noise on
       // the unsteered priors.
       std::vector<double> counterfactual = unsteered;
@@ -1939,6 +2115,7 @@ struct Search::Impl {
       n.edges = std::move(sorted);
       best_edge_ = kNoEdge;
       best_since_ = 0;
+      noise_applied_ = noise_applied_ || noise;  // nothing from here to the expansion's end throws
     } else {
       std::stable_sort(n.edges.begin(), n.edges.end(),
                        [](const Edge& a, const Edge& b) { return a.prior > b.prior; });
@@ -3259,11 +3436,17 @@ struct Search::Impl {
 
   // Keeps the nodes the new root reaches (breadth-first, renumbered), deletes
   // the rest: garbage collection of path-dependent structure (§8.7).
+  //
+  // Exception-safe (build-log issue 600): what can fail - the order kept, the
+  // renumbering, the kept nodes' room, the graph's table of them, the ladder's
+  // decision ending - comes before anything changes, so a re-root that throws
+  // leaves the search as it was. Once the tree is swapped nothing throws but
+  // the root hook (notify_root), and stats_.reroots is counted before it: a
+  // caller tells a re-root done from one not begun by that count.
   void reroot(NodeId new_root) {
     if (!pending_.empty() || !collided_.empty()) {
       throw std::invalid_argument("search: cannot re-root while a batch is waiting");
     }
-    end_decision();  // E10: the old root's decision ends - its jobs cancelled
     std::vector<NodeId> order;
     std::vector<NodeId> remap(nodes_.size(), kNoNode);
     order.push_back(new_root);
@@ -3278,6 +3461,20 @@ struct Search::Impl {
     }
     std::vector<Node> kept;
     kept.reserve(order.size());
+    // The graph's table of the kept nodes, entered in their new order as
+    // register_node enters them (of two with one identity - a key collision -
+    // the first keeps the entry).
+    std::unordered_map<std::uint64_t, NodeId> table;
+    if (params_.graph) {
+      table.reserve(order.size());
+      for (std::size_t i = 0; i < order.size(); ++i) {
+        const Node& n = nodes_[order[i]];
+        table.emplace(identity(n.key, n.moves_made), static_cast<NodeId>(i));
+      }
+    }
+    end_decision();  // E10: the old root's decision ends - its jobs cancelled
+    // The re-root itself: nothing below allocates (`kept` has its room), and
+    // nothing throws but the root hook.
     for (const NodeId id : order) kept.push_back(std::move(nodes_[id]));
     for (Node& n : kept) {
       for (Edge& e : n.edges) {
@@ -3290,8 +3487,7 @@ struct Search::Impl {
     tree_bytes_ = 0;
     for (const Node& n : nodes_) tree_bytes_ += n.bytes;
     purge_cache();
-    table_.clear();
-    for (NodeId id = 0; id < nodes_.size(); ++id) register_node(id);
+    table_ = std::move(table);
     // Root noise belongs to a fresh root's expansion (self-play); a carried
     // root (match play, where noise is off) gets none - nor a side table
     // (until the tree form re-evaluates an inherited one: reevaluate), and
@@ -3798,8 +3994,18 @@ void Search::advance_to(const GameState& target, int moves_made) {
       return;
     }
   }
+  const auto before = s.node_counts();
+  const std::uint64_t reroots = s.stats_.reroots;
   const NodeId fresh = s.make_node(target, moves_made);
-  s.reroot(fresh);
+  try {
+    s.reroot(fresh);
+  } catch (...) {
+    // A re-root that throws changed nothing (unless the root hook threw, the
+    // re-root done): the node made for it, which nothing refers to, goes
+    // (build-log issue 600).
+    if (s.stats_.reroots == reroots) s.unmake_last_node(before);
+    throw;
+  }
 }
 
 void Search::advance_moves(std::span<const Move> moves) {

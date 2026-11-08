@@ -64,6 +64,9 @@
 // exhausted(): turns may remain that it did not emit - never a proof that
 // none does (H37).
 //
+// EXCEPTIONS. Anything in a step can fail to allocate (std::bad_alloc); a
+// generator whose next() threw may only be destroyed (see next()).
+//
 // Written from the spec, the rulebook and the engine's own design note - no
 // oracle's code (AGENTS.md; §11.0, "Third-party code": ftxi's fine tree and
 // cwmtt are prior art to read about, never to port).
@@ -135,6 +138,22 @@ class TurnGenerator {
   /// The next turn: its score is at most every earlier one's and at least
   /// every later one's. nullopt once none is left (exhausted()) or the budget
   /// stopped the search (stopped()).
+  ///
+  /// AFTER A THROW (std::bad_alloc from inside a step - judging a point,
+  /// recording its actions, queueing boxes - or anything else) the generator
+  /// promises nothing but its destruction, which is safe and leaks nothing.
+  /// The step may have lost the box it was judging (taken from the queue
+  /// before it was judged) and left the actions it recorded out of step with
+  /// their texts and successors (build-log issue 535), so a later next() may
+  /// skip turns, emit a wrong one or read past its tables, and exhausted()
+  /// may report a search that never finished - never to be read as a proof
+  /// (H37); stopped(), bound() and stats() describe nothing to rely on
+  /// either. A caller destroys a generator that threw and treats the turns
+  /// it emitted as incomplete, as after a budget stop (the main search's flat
+  /// form does: t5d/mcts.hpp). The generator is not made strongly
+  /// exception-safe: its search is the hypercuboid detector's
+  /// (src/hypercuboid.cpp, src/search.cpp), shared with the gated mate
+  /// detectors.
   std::optional<GeneratedTurn> next();
   /// Every legal turn has been emitted (the search terminated without a
   /// budget stopping it).

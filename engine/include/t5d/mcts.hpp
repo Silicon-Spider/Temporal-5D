@@ -62,7 +62,10 @@
 //    evaluator's submit logit is not read and the C API reports
 //    submit_possible 0. A node whose generator a budget stopped
 //    (generator_nodes, the memory ceiling) has incomplete children and is
-//    never proven lost (H37); one with no turn generated and no verdict is
+//    never proven lost (H37), and so has one whose generator threw (an
+//    allocation failure inside it: the generator is dropped, the turns that
+//    pull made taken back - t5d/turngen.hpp promises nothing after a throw;
+//    build-log issue 535); one with no turn generated and no verdict is
 //    stuck. Terminal verdicts stay E4's detector's (detect_mate), as below.
 //  * TurnSplit::Tree, D2's TREE FORM (§8.2, "Evaluating at turn boundaries";
 //    CHECKPOINT 6, built first at CHECKPOINT 8): the ply split's nodes, edges,
@@ -1090,6 +1093,12 @@ struct SearchStats {
   /// ... of which stopped before their first turn, their nodes' turns E4's
   /// listing's instead (SearchParams::flat_fallback).
   std::uint64_t fallback_listings = 0;
+  /// ... and pulls that threw (an allocation failure inside the generator, or
+  /// while its turns were taken in; build-log issue 535): each drops its
+  /// node's generator - the node keeps the turns it had before the pull, its
+  /// children incomplete, as after a budget stop - or, at the node's first
+  /// pull, undoes its expansion (a leaf again, its generator made afresh).
+  std::uint64_t dropped_generators = 0;
   std::uint64_t nodes_created = 0;
   std::uint64_t nodes_collected = 0;   ///< deleted by re-rooting
   std::uint64_t reroots = 0;
@@ -1372,7 +1381,12 @@ class Search {
   /// hold one in two nodes; one state with two counts is two inputs, A6, and
   /// asked twice). Precondition: none is waiting. Exception-safe: if anything throws
   /// (std::bad_alloc included), the batch is abandoned and no virtual loss is
-  /// left before the exception leaves.
+  /// left before the exception leaves - and the search stays consistent and
+  /// searches on (build-log issue 535): no node is left that the root does not
+  /// reach, a node whose expansion threw is a leaf again, and a flat-form
+  /// node whose turn generator threw keeps the turns it had and loses the
+  /// generator (its children incomplete, as after a budget stop;
+  /// SearchStats::dropped_generators).
   std::size_t gather(std::size_t max_leaves,
                      std::uint64_t max_playouts = std::numeric_limits<std::uint64_t>::max());
   /// The evaluations wanted, in order.
@@ -1381,7 +1395,9 @@ class Search {
   /// up, releases the virtual loss. Throws std::invalid_argument (releasing
   /// the virtual loss, nothing backed up) for a malformed evaluation. If
   /// anything else throws part-way (std::bad_alloc), the leaves already
-  /// delivered stay delivered and the rest of the batch is abandoned.
+  /// delivered stay delivered and the rest of the batch is abandoned - the
+  /// leaf whose expansion threw a leaf again, the search consistent as after
+  /// gather.
   void deliver(std::span<const Evaluation> evaluations);
   /// Releases the waiting leaves' virtual loss without backing anything up.
   void abandon() noexcept;
@@ -1455,6 +1471,14 @@ class Search {
   /// Re-roots on root child `index` (of root_children()): carries its subtree's
   /// statistics, deletes every node the new root cannot reach; the evaluation
   /// cache survives; the evaluator hook is told. Precondition: nothing waiting.
+  /// Every re-root (here and in the advance calls below) happens whole or not
+  /// at all (build-log issue 600): one that throws (std::bad_alloc included)
+  /// leaves the tree, the graph's table and the root's side tables and effort
+  /// label as they were - a child node made for it stays, linked under the old
+  /// root; a node made for a state the tree did not hold is taken back - and
+  /// only the root hook's own exception comes after a re-root done.
+  /// advance_action under the board-move split re-roots once per decision: a
+  /// failure part-way leaves the search on the last decision it re-rooted on.
   void advance(std::size_t index);
   /// Re-roots on the state reached by `moves` - one decision: under the
   /// board-move split one move (never submitted with it, D8) or none (submit),

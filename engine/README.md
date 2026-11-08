@@ -1715,6 +1715,14 @@ are prior art to read about, not code to port (AGENTS.md).
 - **Budget.** One `SearchBudget` over the generator's life (nodes, positions, the
   memory ceiling). A stopped generator is `stopped()`, never `exhausted()`: never a
   proof that no further turn exists (H37).
+- **Exceptions.** Anything in a step can fail to allocate. After a throw from `next()`
+  the generator promises nothing but its destruction: the step may have lost the box it
+  was judging (taken from the queue before it is judged) and left the actions it
+  recorded out of step with their texts and successors, so a later `next()` may skip
+  turns, emit a wrong one or read past its tables, and `exhausted()` may report a search
+  that never finished - never a proof (H37). Its caller drops it (the flat form does,
+  below; build-log issue 535). It is not made strongly exception-safe: that would touch
+  the search it shares with the gated detectors.
 - **Not a detector.** `detect_mate`, the counts, the listings and the legal-move tiers
   run the depth-first search exactly as before: `detectors_the_hypercuboid_search_is_pinned`
   hashes every answer and statistic of theirs (nodes, points, regions, boxes removed,
@@ -2447,7 +2455,10 @@ the flat form was built, 2026-10-23, the flat form taking its slot, 1):
   generator ends turns itself (D8): the submit logit is not read, `t5d_leaf.submit_possible`
   is 0. Each node's generator spends `generator_nodes` (200,000) over its life and the
   memory ceiling `mate_bytes`; a stopped generator leaves the node's children incomplete -
-  never proven lost (H37) - and one stopped before its first turn takes up to
+  never proven lost (H37) - and so does one that threw: a pull that throws (an allocation
+  failure) drops the generator and takes back the turns it made, the node keeping the ones
+  it had (stats `dropped_generators`), and a node's first pull that throws undoes its
+  expansion, the node a leaf again (build-log issue 535). One stopped before its first turn takes up to
   `flat_fallback` (64) turns from E4's listing instead (scored and ordered alike; stats
   `fallback_listings`): in a position of many boards whose best-scoring turns are illegal
   en masse - every optional board played - best first can spend its whole budget without a
@@ -2592,7 +2603,14 @@ inputs, asked twice - below). The virtual loss is always released: by `deliver`,
 evaluator throws, when an evaluation is malformed - and when anything fails inside
 `gather` or `deliver`, an allocation included: `gather` abandons its batch before the
 exception leaves, `deliver` keeps what it delivered and abandons the rest (the tests
-inject a `bad_alloc` at every allocation of both). `run` resets every field of the
+inject a `bad_alloc` at every allocation of both). The search stays consistent and
+searches on, under every split (build-log issue 535): a node whose expansion threw is a
+leaf again (the ply split marks a node expanded only once its priors are set; the flat
+form undoes an expansion whose first turns could not be made, the root's side tables
+and noise included), a flat-form node whose generator threw keeps the turns it had and
+loses the generator (above), and a node made but not yet linked is taken back, so none
+is left that the root does not reach. Root noise is marked drawn only with the
+expansion that draws it, so an expansion undone draws it again (issue 600). `run` resets every field of the
 evaluation buffers it reuses, the submit logit and D3's heads included. The epoch cannot change while a
 batch waits (its evaluations belong to the epoch they were asked under).
 
@@ -2673,7 +2691,11 @@ keyed by the state, its count and the epoch, not by a path - survives; the root 
 is `run` on the post-move root, then `advance_action` on the reply - atomic: the whole
 action is checked (each move pseudo-legal where it is made, the submission legal) before
 the first re-root, and a failure changes nothing; from a turn start an action has at
-least one move. Evaluations are
+least one move. Each re-root happens whole or not at all: what it allocates - the order
+kept, the renumbering, the graph's table of the kept nodes - and the ladder's decision
+ending come before anything changes, so one that throws leaves the search as it was, and
+a node `advance_to` made for a state the tree did not hold is taken back (build-log
+issue 600). Evaluations are
 cached per (state, moves made in its action, refresh epoch) (A6; `set_epoch`; 0 in the
 dense configuration).
 
@@ -2896,7 +2918,12 @@ threshold, E2's weight, E3's floor, FPU, the submit share, the turn cap's bounda
 the cache's epoch, MCGS's exact comparison under colliding keys, self-play's
 verification and fresh trees); the call sequences (atomic `advance_action`, the epoch
 under a waiting batch, stale submit logits); a `bad_alloc` injected at every
-allocation of `gather` and `deliver`; the cache's and the graph's byte counts against
+allocation of `gather` and `deliver` - the flat form's too, with every node marked
+complete checked against a full listing of its turns and every allocation of a gather
+swept for a node the root does not reach (issue 535), and through the C API, a search
+reused after `T5D_ERR_MEMORY` staying bit-identical to a C++ twin that keeps every
+invariant - and at every allocation of a re-root and of the root's expansion, whose
+noise survives (issue 600); the cache's and the graph's byte counts against
 the heap; the purge; the budgets and the deadline; validation; the C ABI's embedded
 structs last; self-play's noise and time limit. After A6 (engine ABI round 1): a turn
 start and the same state during an action two cache entries and two evaluations, equal
