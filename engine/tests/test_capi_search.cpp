@@ -1255,7 +1255,7 @@ TEST(capi_search_time_management_drives_the_step_api_as_run_timed_does) {
     t5d::mcts::Search reference(t5d::variant_start(*t5d::find_variant("Standard - Two Timelines")), q);
     t5d::mcts::TimeManager ref_tm;
     Hashed ev;
-    t5d_time_context ctx{2.0, 0.05, std::nan("")};
+    t5d_time_context ctx{2.0, 0.05, std::nan(""), nullptr, 0};
     for (int decision = 0; decision < 3; ++decision) {
       t5d_time_plan plan;
       REQUIRE_EQ(t5d_timeman_begin(tm.get(), s.get(), &ctx, &plan, nullptr), T5D_OK);
@@ -1268,7 +1268,7 @@ TEST(capi_search_time_management_drives_the_step_api_as_run_timed_does) {
         drive_hashed(s.get(), info.playouts + p.batch_size, p.batch_size);
       }
       REQUIRE_EQ(t5d_timeman_end(tm.get(), s.get(), nullptr), T5D_OK);
-      const t5d::mcts::TimeContext rctx{ctx.remaining_seconds, ctx.increment_seconds, ctx.moves_left_turns};
+      const t5d::mcts::TimeContext rctx{ctx.remaining_seconds, ctx.increment_seconds, ctx.moves_left_turns, std::nullopt};
       const t5d::mcts::TimedRun r = t5d::mcts::run_timed(reference, ev, ref_tm, rctx);
       CHECK_EQ(plan.soft_evaluations, r.plan.soft_evaluations);
       CHECK_EQ(plan.hard_seconds, r.plan.hard_seconds);
@@ -1300,7 +1300,8 @@ TEST(capi_search_time_management_drives_the_step_api_as_run_timed_does) {
     const std::unique_ptr<t5d::mcts::Evaluator> random =
         t5d::mcts::make_evaluator(t5d::mcts::BuiltinEvaluator::Random, 3);
     const t5d::mcts::TimedRun r = t5d::mcts::run_timed(
-        same, *random, tm3, t5d::mcts::TimeContext{ctx.remaining_seconds, ctx.increment_seconds, ctx.moves_left_turns});
+        same, *random, tm3,
+        t5d::mcts::TimeContext{ctx.remaining_seconds, ctx.increment_seconds, ctx.moves_left_turns, std::nullopt});
     std::uint64_t digest = 0;
     REQUIRE_EQ(t5d_search_digest(t.get(), &digest), T5D_OK);
     CHECK_EQ(digest, same.digest());
@@ -1339,7 +1340,7 @@ TEST(capi_search_time_management_parameters_and_refusals) {
   const TimeHandle hook = new_timeman(&p);
   const Game g = variant_game("Standard");
   const SearchHandle s = new_search(g.get(), quick_params());
-  const t5d_time_context ctx{10.0, 0.0, std::nan("")};
+  const t5d_time_context ctx{10.0, 0.0, std::nan(""), nullptr, 0};
   t5d_time_plan plan;
   char* message = nullptr;
   CHECK_EQ(t5d_timeman_begin(hook.get(), s.get(), &ctx, &plan, &message), T5D_ERR_ARGUMENT);
@@ -1350,7 +1351,7 @@ TEST(capi_search_time_management_parameters_and_refusals) {
   const TimeHandle tm = new_timeman();
   t5d_time_verdict v;
   CHECK_EQ(t5d_timeman_check(tm.get(), s.get(), 0.0, &v, nullptr), T5D_ERR_ARGUMENT);
-  const t5d_time_context none{0.0, 0.0, std::nan("")};
+  const t5d_time_context none{0.0, 0.0, std::nan(""), nullptr, 0};
   CHECK_EQ(t5d_timeman_begin(tm.get(), s.get(), &none, &plan, nullptr), T5D_ERR_ARGUMENT);
   CHECK_EQ(t5d_timeman_begin(tm.get(), s.get(), nullptr, &plan, nullptr), T5D_ERR_ARGUMENT);
   REQUIRE_EQ(t5d_timeman_begin(tm.get(), s.get(), &ctx, &plan, nullptr), T5D_OK);
@@ -1380,4 +1381,50 @@ TEST(capi_search_time_management_parameters_and_refusals) {
   CHECK_EQ(at, offsetof(t5d_time_verdict, scale));
   CHECK(sizeof(t5d_search_params) - offsetof(t5d_search_params, expand) <
         sizeof(t5d_expand_options) + alignof(t5d_search_params));
+}
+
+TEST(capi_search_time_management_e8_through_the_c_api) {
+  // E8 (off by default): the effort distribution through the context, the
+  // plan's E8 fields, the count refused unless 16 or 0, the layouts appended.
+  t5d_time_params p;
+  t5d_time_params_default(&p);
+  CHECK_EQ(p.difficulty_weighting, 0);
+  CHECK_EQ(p.wont_resolve_policy, T5D_WONT_RESOLVE_HARD_BOUND);
+  const Game g = variant_game("Standard");
+  const SearchHandle s = new_search(g.get(), quick_params());
+  std::array<float, T5D_EFFORT_BINS> effort{};
+  effort[11] = 0.9f;
+  effort[2] = 0.1f;
+  t5d_time_context ctx{60.0, 0.0, std::nan(""), effort.data(), effort.size()};
+  t5d_time_plan off_plan;
+  t5d_time_plan on_plan;
+  const TimeHandle off = new_timeman(&p);
+  REQUIRE_EQ(t5d_timeman_begin(off.get(), s.get(), &ctx, &off_plan, nullptr), T5D_OK);
+  CHECK_EQ(off_plan.difficulty_applied, 0);
+  CHECK_EQ(off_plan.soft_evaluations, off_plan.e7_soft_evaluations);
+  p.difficulty_weighting = 1;
+  const TimeHandle on = new_timeman(&p);
+  REQUIRE_EQ(t5d_timeman_begin(on.get(), s.get(), &ctx, &on_plan, nullptr), T5D_OK);
+  CHECK_EQ(on_plan.difficulty_applied, 1);
+  CHECK_EQ(on_plan.effort_bin, 11);
+  CHECK_EQ(on_plan.reference_bin, 8.0);
+  CHECK_EQ(on_plan.e7_soft_evaluations, off_plan.soft_evaluations);
+  CHECK_EQ(on_plan.hard_seconds, off_plan.hard_seconds);
+  CHECK(on_plan.soft_evaluations > off_plan.soft_evaluations);
+  // The count: 16 or 0, a pointer with 0 refused.
+  t5d_time_context bad{60.0, 0.0, std::nan(""), effort.data(), 3};
+  CHECK_EQ(t5d_timeman_begin(on.get(), s.get(), &bad, &on_plan, nullptr), T5D_ERR_ARGUMENT);
+  bad.effort_count = 0;
+  CHECK_EQ(t5d_timeman_begin(on.get(), s.get(), &bad, &on_plan, nullptr), T5D_ERR_ARGUMENT);
+  p.wont_resolve_policy = 5;
+  t5d_timeman* refused = nullptr;
+  CHECK_EQ(t5d_timeman_new(&p, &refused, nullptr), T5D_ERR_ARGUMENT);
+  size_t at = 0;
+  REQUIRE_EQ(t5d_search_layout("t5d_time_params", "difficulty_reference_weight", &at), T5D_OK);
+  CHECK_EQ(at, offsetof(t5d_time_params, difficulty_reference_weight));
+  REQUIRE_EQ(t5d_search_layout("t5d_time_context", "effort_count", &at), T5D_OK);
+  CHECK_EQ(at, offsetof(t5d_time_context, effort_count));
+  REQUIRE_EQ(t5d_search_layout("t5d_time_plan", "reference_bin", &at), T5D_OK);
+  CHECK_EQ(at, offsetof(t5d_time_plan, reference_bin));
+  CHECK(offsetof(t5d_time_params, difficulty_weighting) > offsetof(t5d_time_params, extend_instability));
 }

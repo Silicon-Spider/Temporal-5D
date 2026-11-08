@@ -759,6 +759,7 @@ def run_timed_search(
     remaining: float,
     increment: float = 0.0,
     moves_left: float = math.nan,
+    effort: Sequence[float] | None = None,
     model_clock: bool = False,
     regs_per_board: int = 2,
     global_regs: int = 16,
@@ -770,7 +771,8 @@ def run_timed_search(
     builds the tree the engine's ``run_timed`` builds - with ``tm.check`` before each, until a
     stop; then ``tm.end``. On the wall clock the search's deadline is the hard bound for the run
     (the rules engine's calls inside a batch stop at it), cleared after; ``model_clock``: the
-    cost model's clock (elapsed NaN), deterministic. Match play's: self-play takes no clock (its
+    cost model's clock (elapsed NaN), deterministic. ``effort``: the root's effort distribution
+    for E8 (off unless the time manager's ``difficulty_weighting``). Match play's: self-play takes no clock (its
     budgets are PCR's), so no self-play guard is needed here - and none of D9's flat-form refusal
     is relaxed."""
     if int(search.params.split) == T5D_SPLIT_FLAT and policy_source(evaluator) != "normal":
@@ -778,7 +780,7 @@ def run_timed_search(
     start_epoch(search, evaluator, regs_per_board=regs_per_board, global_regs=global_regs)
     batch = 1 if search.params.synchronous else max(int(search.params.batch_size), 1)  # the engine's slice
     before = search.info()
-    plan = tm.begin(search, remaining=remaining, increment=increment, moves_left=moves_left)
+    plan = tm.begin(search, remaining=remaining, increment=increment, moves_left=moves_left, effort=effort)
     t0 = time.perf_counter()
     stats = ServeStats()
     out_stop: str | None = None

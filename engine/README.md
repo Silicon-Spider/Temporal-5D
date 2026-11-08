@@ -4208,6 +4208,21 @@ threads (M13's five cores) beside the search: their wall time overlaps the decis
 the decision's end cancels them, so they sit inside the hard bound; the allocation deducts
 nothing for them (issue 466).
 
+**E8 - difficulty-weighted allocation, behind its flag** (register E8, a prototype;
+`difficulty_weighting`, OFF; 6v). The root's predicted search effort - D4's effort head, 16
+log2-visit bins, the last censored - reaches the plan through `TimeContext::effort` (none
+given: inert; the built-in evaluators give none, nor does netplay yet - issue 473). The plan
+funds the upper quantile (`effort_quantile`, 0.8; the bin by `heads.effort_quantile`'s
+convention, the censored bin the largest): E7's soft bound times `2^(bin - r)`, `r` this
+game's running mean of quantile bins seeded at 256 visits (`difficulty_reference_visits`,
+weight 4 decisions), clamped to [0.25, 4], floored at 32 evaluations
+(`difficulty_floor_evaluations`) and capped at E7's hard bound. A censored mass of 0.5 or more
+(`wont_resolve_mass`) is the won't-resolve flag: the plan becomes the hard bound (reading A,
+the default) or stays E7's (`WontResolve::CapAtPlan`), and the overlap-with-churn extension -
+which chases convergence - is not taken. The guards are code paths: the ex-post extensions
+still correct an "easy" plan; the floor; the hard bound and the ladder's budgets are never read
+or changed (I4). Off, the plan is E7's bit for bit (tested). Issues 471-475.
+
 **Clocks.** `WallClock` is the steady clock. With none (`nullptr`; Python's
 `model_clock=True`; C's `elapsed` NaN) the MODEL CLOCK stands in: a decision's time is its
 work at the cost model's price, the scale never updated - a node-limited search,

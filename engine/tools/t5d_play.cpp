@@ -14,7 +14,8 @@
 //            [--settling-ms MS] [--verification-threads N] [--guard-final]
 //            [--decision-log FILE] [--time BASE [--increment INC]
 //            [--allocator integral|flat-evals|flat-wall-clock] [--no-signals]
-//            [--model-clock]] [--no-moves-after-shift] [--rules ENCODING]
+//            [--model-clock] [--difficulty-weighting]] [--no-moves-after-shift]
+//            [--rules ENCODING]
 //
 // Defaults: Standard, the uniform evaluator, 64 playouts per decision, the
 // board-move split (D2 is undecided: --split flat and --split tree are the
@@ -52,6 +53,9 @@
 // stop/extend table off); --model-clock prices each decision's work by the
 // cost model instead of the wall clock (deterministic). A side whose clock runs
 // out loses on time ("flag", result "*"). Self-play takes no clock.
+// --difficulty-weighting switches E8 on (a prototype, off): the plan weighted by
+// the root's predicted effort - inert here, as the built-in evaluators predict
+// none (only a driver with the network's effort head gives one).
 // --max-seconds stops a long game (a safety stop, "*": checked before every
 // decision, and each search's deadline; the record ends at the last turn
 // start), its record and summary still printed.
@@ -103,7 +107,8 @@ void usage(std::FILE* to) {
       "                [--settling-ms MS] [--verification-threads N] [--guard-final]\n"
       "                [--decision-log FILE] [--time BASE [--increment INC]\n"
       "                [--allocator integral|flat-evals|flat-wall-clock] [--no-signals]\n"
-      "                [--model-clock]] [--no-moves-after-shift] [--rules ENCODING]\n",
+      "                [--model-clock] [--difficulty-weighting]] [--no-moves-after-shift]\n"
+      "                [--rules ENCODING]\n",
       to);
 }
 
@@ -335,6 +340,9 @@ int main(int argc, char** argv) {
       } else if (std::strcmp(a, "--model-clock") == 0) {
         params.clock.model_clock = true;
         clock_options = true;
+      } else if (std::strcmp(a, "--difficulty-weighting") == 0) {
+        params.clock.time.difficulty_weighting = true;  // E8: a prototype; inert without an effort head
+        clock_options = true;
       } else if (std::strcmp(a, "--decision-log") == 0) {
         decision_log = value();
         params.decision_log = true;
@@ -354,7 +362,8 @@ int main(int argc, char** argv) {
       throw std::invalid_argument("--guard-final: Guard's refutation is a proof - it needs --proof-channel (H41, H42)");
     }
     if (clock_options && !params.clock.enabled) {
-      throw std::invalid_argument("--increment, --allocator, --no-signals and --model-clock: the clock's - they need --time");
+      throw std::invalid_argument(
+          "--increment, --allocator, --no-signals, --model-clock and --difficulty-weighting: the clock's - they need --time");
     }
     if (params.clock.enabled && !params.match_play) {
       throw std::invalid_argument("--time: match play's clock - it needs --match (self-play's budgets are PCR's)");
@@ -377,10 +386,11 @@ int main(int argc, char** argv) {
     extra.emplace_back("White", "t5d-play");
     extra.emplace_back("Black", "t5d-play");
     char clock_text[160];
-    std::snprintf(clock_text, sizeof clock_text, "clock %g s + %g s per action (%s allocator, signals %s, %s clock)",
+    std::snprintf(clock_text, sizeof clock_text, "clock %g s + %g s per action (%s allocator, signals %s, %s clock%s)",
                   params.clock.base_seconds, params.clock.increment_seconds,
                   allocator_name(params.clock.time.allocator), params.clock.time.signals ? "on" : "off",
-                  params.clock.model_clock ? "model" : "wall");
+                  params.clock.model_clock ? "model" : "wall",
+                  params.clock.time.difficulty_weighting ? ", difficulty weighting" : "");
     std::string engine = std::string("t5d search: ") + evaluator_name(evaluator) + " evaluator, " +
                          (params.clock.enabled ? std::string(clock_text)
                                                : std::to_string(params.playouts) + " playouts per decision") +

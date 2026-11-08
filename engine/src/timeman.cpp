@@ -91,6 +91,19 @@ void validate(const TimeParams& p) {
                          p.extend_instability}) {
     need(finite_at_least(e, 0), "extend_*: finite, 0 or more");
   }
+  need(std::isfinite(p.effort_quantile) && p.effort_quantile > 0 && p.effort_quantile <= 1,
+       "effort_quantile: in (0, 1]");
+  need(std::isfinite(p.wont_resolve_mass) && p.wont_resolve_mass >= 0 && p.wont_resolve_mass <= 1,
+       "wont_resolve_mass: in [0, 1]");
+  need(static_cast<int>(p.wont_resolve_policy) <= static_cast<int>(WontResolve::CapAtPlan),
+       "wont_resolve_policy: HardBound or CapAtPlan");
+  need(finite_at_least(p.difficulty_floor_evaluations, 0), "difficulty_floor_evaluations: finite, 0 or more");
+  need(std::isfinite(p.difficulty_min_factor) && p.difficulty_min_factor > 0 &&
+           std::isfinite(p.difficulty_max_factor) && p.difficulty_max_factor >= p.difficulty_min_factor,
+       "difficulty_min_factor and difficulty_max_factor: positive, finite, min <= max");
+  need(std::isfinite(p.difficulty_reference_visits) && p.difficulty_reference_visits >= 1,
+       "difficulty_reference_visits: finite, 1 or more");
+  need(finite_at_least(p.difficulty_reference_weight, 0), "difficulty_reference_weight: finite, 0 or more");
 }
 
 // ---- the pure functions -------------------------------------------------------------
@@ -222,6 +235,62 @@ TimePlan plan_decision(const TimeParams& p, double scale, int boards, int mandat
   }
   out.soft_seconds = soft_seconds;
   out.soft_evaluations = soft_evaluations;
+  out.e7_soft_evaluations = soft_evaluations;
+  return out;
+}
+
+// ---- E8 -----------------------------------------------------------------------------------
+
+int effort_quantile_bin(const std::array<float, kEffortBins>& probs, double q) noexcept {
+  // heads.effort_quantile: (cumsum(probs) < q).sum(), capped at the last bin -
+  // the cumulative sum in float32, as torch's, over the distribution normalised.
+  float total = 0;
+  for (const float x : probs) total += std::max(0.0f, x);
+  int below = 0;
+  float cdf = 0;
+  for (const float x : probs) {
+    cdf += total > 0 ? std::max(0.0f, x) / total : 0.0f;
+    if (static_cast<double>(cdf) < q) ++below;
+  }
+  return std::min(below, kEffortBins - 1);
+}
+
+TimePlan apply_difficulty(const TimeParams& p, const TimePlan& e7, const std::array<float, kEffortBins>& effort,
+                          double reference_bin) {
+  for (const float x : effort) {
+    if (!std::isfinite(x) || x < 0) {
+      throw std::invalid_argument("TimeContext::effort: probabilities, finite and 0 or more");
+    }
+  }
+  double total = 0;
+  for (const float x : effort) total += x;
+  if (!(total > 0)) throw std::invalid_argument("TimeContext::effort: not all zero");
+  TimePlan out = e7;
+  out.e7_soft_evaluations = e7.soft_evaluations;
+  out.difficulty_applied = true;
+  out.effort_bin = effort_quantile_bin(effort, p.effort_quantile);
+  out.censored_mass = effort[kEffortBins - 1] / total;
+  out.reference_bin = reference_bin;
+  const double s = e7.seconds_per_evaluation;
+  const double hard_evaluations = e7.hard_seconds / s;
+  out.wont_resolve = out.censored_mass >= p.wont_resolve_mass;
+  double plan = e7.soft_evaluations;
+  if (out.wont_resolve) {
+    // §8.6: "plan for the hard bound and lean on LCB ... rather than chase convergence".
+    plan = p.wont_resolve_policy == WontResolve::HardBound ? hard_evaluations : e7.soft_evaluations;
+    out.difficulty_factor = plan / std::max(e7.soft_evaluations, 1e-300);
+  } else {
+    // The quantile's visits against the reference's - the censored bin the largest.
+    const double factor = out.effort_bin >= kEffortBins - 1
+                              ? p.difficulty_max_factor
+                              : std::clamp(std::exp2(out.effort_bin - reference_bin), p.difficulty_min_factor,
+                                           p.difficulty_max_factor);
+    out.difficulty_factor = factor;
+    plan = std::max(e7.soft_evaluations * factor, p.difficulty_floor_evaluations);  // guard 2
+  }
+  plan = std::min(plan, hard_evaluations);  // guard 3: the hard bound is E7's
+  out.soft_evaluations = plan;
+  out.soft_seconds = plan * s;
   return out;
 }
 
@@ -301,7 +370,16 @@ double TimeManager::model_seconds() const noexcept { return work_ * seconds_per_
 
 void TimeManager::new_game() noexcept {
   last_value_.reset();
+  effort_bins_sum_ = 0;
+  effort_decisions_ = 0;
   active_ = false;
+}
+
+double TimeManager::reference_bin() const noexcept {
+  const double w = params_.difficulty_reference_weight;
+  const double prior = std::log2(params_.difficulty_reference_visits);
+  const double n = w + effort_decisions_;
+  return n > 0 ? (w * prior + effort_bins_sum_) / n : prior;
 }
 
 TimePlan TimeManager::begin(const Search& search, const TimeContext& ctx) {
@@ -324,6 +402,14 @@ TimePlan TimeManager::begin(const Search& search, const TimeContext& ctx) {
   plan_ = plan_decision(params_, scale_, static_cast<int>(root.multiverse().board_count()), root.mandatory_count(),
                         search.params().split == TurnSplit::Flat, ctx,
                         rv.evaluated ? static_cast<double>(rv.eval_moves_left) : kNaN);
+  if (params_.difficulty_weighting && ctx.effort) {
+    // E8 (off by default): the plan weighted by the predicted difficulty; the
+    // game's reference updated after - this decision is judged against the
+    // ones before it.
+    plan_ = apply_difficulty(params_, plan_, *ctx.effort, reference_bin());
+    effort_bins_sum_ += plan_.effort_bin;
+    effort_decisions_ += 1;
+  }
   std::vector<std::uint32_t> visits;
   for (const RootChild& c : search.root_children()) visits.push_back(c.visits);
   begin(plan_, std::move(visits), rv.visits);
@@ -439,7 +525,9 @@ TimeVerdict TimeManager::check(const RootSnapshot& root, double elapsed) {
       take(kExtendInstability, p.extend_instability);
     }
     if (last_value_ && root.root_q < *last_value_ - p.fall_margin) take(kExtendFall, p.extend_fall);
-    if (root.top_value[0] && root.top_value[1] && std::isfinite(kld_gain_) && kld_gain_ >= p.churn_kld_threshold &&
+    // E8: a won't-resolve decision does not chase convergence.
+    if (!plan_.wont_resolve && root.top_value[0] && root.top_value[1] && std::isfinite(kld_gain_) &&
+        kld_gain_ >= p.churn_kld_threshold &&
         value_overlap(*root.top_value[0], *root.top_value[1]) >= p.overlap_threshold) {
       take(kExtendOverlap, p.extend_overlap);
     }

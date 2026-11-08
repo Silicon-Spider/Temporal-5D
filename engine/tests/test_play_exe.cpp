@@ -173,6 +173,13 @@ TEST(play_exe_plays_match_play_on_a_clock) {
   const t5d::PgnRecord off = play_and_gate(
       {"--variant", "Very Small - Open", "--match", "--time", "3", "--no-signals", "--model-clock", "--cap-turns", "4"},
       {});
+  // E8 behind its flag: the built-in evaluators predict no effort, so it is inert - the record
+  // says it was on.
+  const t5d::PgnRecord e8 = play_and_gate({"--variant", "Very Small - Open", "--match", "--time", "3",
+                                           "--difficulty-weighting", "--model-clock", "--cap-turns", "3"},
+                                          {});
+  REQUIRE(e8.header("Engine") != nullptr);
+  CHECK(e8.header("Engine")->find("model clock, difficulty weighting)") != std::string::npos);
   REQUIRE(off.header("Engine") != nullptr);
   CHECK(off.header("Engine")->find("signals off, model clock") != std::string::npos);
   namespace fs = std::filesystem;
@@ -182,6 +189,7 @@ TEST(play_exe_plays_match_play_on_a_clock) {
   CHECK_EQ(run(T5D_PLAY_EXE, {"--time", "5"}, {}, dir / "o.txt", dir / "e.txt"), 2);
   CHECK(read_all(dir / "e.txt").find("--match") != std::string::npos);
   CHECK_EQ(run(T5D_PLAY_EXE, {"--match", "--no-signals"}, {}, dir / "o.txt", dir / "e.txt"), 2);
+  CHECK_EQ(run(T5D_PLAY_EXE, {"--match", "--difficulty-weighting"}, {}, dir / "o.txt", dir / "e.txt"), 2);
   CHECK_EQ(run(T5D_PLAY_EXE, {"--match", "--time", "0"}, {}, dir / "o.txt", dir / "e.txt"), 2);
   CHECK_EQ(run(T5D_PLAY_EXE, {"--match", "--time", "5", "--allocator", "sideways"}, {}, dir / "o.txt", dir / "e.txt"),
            2);

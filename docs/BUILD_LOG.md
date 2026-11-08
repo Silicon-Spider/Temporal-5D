@@ -1017,6 +1017,7 @@ threads reach at least one thread's sum (one retry on a shared machine).
 | 2026-11-02 | E11, time management (the search lane, step 2; before review), main 2cb107d merged in | main 2cb107d + E11, the tree before the commit | dev-r, 24 logical; other lanes' jobs running; load 99-100% before and after | 32 | 292 / 291 / 289 | 303 / 305 / 303 | none | pass x3 |
 | 2026-11-08 | E11, time management (the search lane, step 2; before review), main c8a9c49 merged in | main c8a9c49 + E11, the tree before the commit | dev-r, 24 logical; other lanes' jobs running; load 100% before and after | 32 | 289 / 291 / 289 | 302 / 304 / 305 | none | pass x3 |
 | 2026-11-08 | E11, time management (the search lane, step 2; before review), main e15f173 merged in | main e15f173 + E11, the tree before the commit | dev-r, 24 logical; quiet - load 25% / 13% / 5% before, 30% / 18% / 2% after | 32 | 293 / 293 / 293 | 315 / 314 / 314 | none | pass x3 |
+| 2026-11-09 | E8 behind its flag (the search lane, step 2; before review) | lane/search 861c8f0 (E11, main 05afde5 in) + E8, the tree before the commit | dev-r, 24 logical; other lanes' jobs running; load 30-54% before, 39-62% after | 32 | 292 / 293 / 293 | 316 / 314 / 315 | none | pass x3 |
 
 ## Environment
 
@@ -1861,7 +1862,7 @@ width (M22)", "The CHECKPOINT 8 figures"). Found on the way: the ruling's premis
 | E5, E9 | built, tested | LCB with a visit floor (E5); the solver behind H41's switch, the secure child, a visit cap on solved children (E9) - constants named as placeholders in §8.4 (issues 84-85). E5's optional term (weight 0) reads the child's uncertainty signal - 6m's switch, since engine ABI round 2a (issue 149) |
 | E7 | built (E11, `lane/search`, 2026-11-08; placeholders) | Time management, `t5d/timeman.hpp`: the moves-left integral allocator on a cost model (the dense FLOP shape with a fixed share, its scale measured online; moves-left in turns, our actions half of them, N advanced by M22's boards per action - issues 305, 452-457); 6o's arms as switches (`allocator`: Integral, FlatEvals, FlatWallClock; `signals` on/off); the stop/extend table (smart pruning, KLDGain, a solved root only with the proof channel, overlap with churn, volatility, falling eval, instability - issues 459-463) with the spiral guard (each kind once, a cap on the plan, never past the hard bound - issue 464, tested at 500 boards); the wall-clock hard bound held tight at high N and given to the rules engine's calls inside a batch (`Search::set_deadline`, `LegalityOptions::deadline` - issues 458, 467); the model clock (deterministic); match play's per-side clock (`PlayParams::clock`; t5d-play `--time`; netplay `PlayConfig.time`; issue 456); the C API and its Python mirror. NO root-scan reserve (issue 306). The second volatility source - Hunt's and the settling scans' proofs - is a hook, off, refused without the proof channel (issues 180, 470); the ladder's jobs sit inside the hard bound, nothing deducted for them (issue 466). Not built: pondering (C13), MLH steering (I3; issue 469) |
 | E2, E3 | built behind flags, tested | Off; awaiting 6m and 6t. They read a node's uncertainty signal: the categorical's variance by default, the error head's output under 6m's switch (`uncertainty_source`, engine ABI round 2a; issue 149); their constants placeholders twice over (issues 81, 149) |
-| E8 | not started | Behind its flag (6v), with E11 in step 2 |
+| E8 | built behind its flag (off; `lane/search`, 2026-11-09; placeholders) | Difficulty-weighted allocation (`TimeParams::difficulty_weighting`, `t5d/timeman.hpp`): the root's effort distribution (D4's 16 bins, the top one censored) through the time context; the plan E7's soft bound x 2^(the bin at the 0.8 quantile - this game's running mean bin, seeded at 256 visits), clamped to [0.25, 4], to a floor of 32 evaluations and to E7's hard bound; won't-resolve (censored mass >= 0.5) plans for the hard bound (reading A) or E7's plan (B: `CapAtPlan`), and takes no overlap-with-churn extension; the guards code paths (the ex-post extensions still apply; the floor; the hard bound and the ladder's budgets untouched - I4). Off = E7 bit for bit (tested). The quantile is heads.effort_quantile's (tested across languages). Inert without an effort distribution - the built-in evaluators and netplay give none (issue 473). Issues 471-475, edits 339-341 |
 | E6 | not built (rule) | Refused |
 | F1, F2 | built, tested | 22,965,426 parameters (F1 after F5, B15, M20, A6, D3 and D4: 21,338,634 after F5 - 20,736 fewer than N5's 21,359,370, gain-only norms, no Q/K/V biases, spec issue 203 - plus B15's 1,623,168, spec issue 210, plus M20's 3,337: the policy's promotion offset, 3,341, less the learned register coordinates, 4 - plus A6's 8,768: the turn-state counts' MLP, spec issue 230 - less D3's 12,079: three short-term outputs, 771, and the error head, 257, on the value MLP's shared layer, and N1's 51-bin short value head, 13,107, gone, issue 231 - plus D4's 3,598: the soft policy, 69,390, and N1's always-built reply head, 65,792, now a prototype off - 69,133 with its offset when on, issue 232); the L24-ff12 preset, 46,894,834 (F2: 44,460,082 and B15's 2,434,752 over 24 layers). Unchanged by F6's Mish in the heads, by B11's fold (its flag is off; with it on, 40 scalars where there were 48) and by B16 (its 304 are in a network of the cached configuration only: 22,965,730 with `attn_scope = "block_causal"`) and B17 (off; with it on, 6,115,328 more - 29,080,754, or 23,729,842 with the vectors shared by the heads; spec issue 218) |
 | F5 | built, tested | Network: RMSNorm-style norms (a learned gain, no centring, no bias; FP32) everywhere in the trunk, no Q/K/V biases, the attention-output and FFN biases kept (spec issue 200), pre-norm. 6y's arm - post-norm with DeepNet's initialisation, `norm_placement="post"` - through the dense trunk and the cached path, its unstated details placeholders (issue 201); smolgen has no norm to keep (issue 202) |
@@ -7104,6 +7105,37 @@ superseded or made moot says so; nothing is deleted.
     child's; refused by `TimeManager::begin` unless the search's proof channel is on, refused
     by the Python binding (`time_params`), tested in C++ only with the channel switched on.
     Until the user rules on issue 180, time management reads no proof.
+471. **E8's numbers** (§8.6: "an upper quantile (tunable, 6v)"; register E8, a prototype).
+    Built (placeholders): `effort_quantile` 0.8; the bin's visits its lower edge 2^k (heads'
+    `effort_bin_lower_edges`), so the factor is `2^(k - r)`; `r` this game's running mean of
+    quantile bins (log2 visits), seeded by `difficulty_reference_visits` 256 (bin 8) with weight
+    `difficulty_reference_weight` 4 decisions - §8.6's "fund it from the moves that will not be"
+    needs a reference for unpredicted future moves; the factor clamped to
+    [`difficulty_min_factor` 0.25, `difficulty_max_factor` 4]; a quantile on the censored bin
+    takes the largest factor; the floor `difficulty_floor_evaluations` 32 (guard 2); every plan
+    within E7's hard bound. Edit 339.
+472. **"Plan for the hard bound ... rather than chase convergence"** (§8.6's won't-resolve flag)
+    reads two ways: spend up to the hard bound (A), or keep the plan and let LCB decide (B).
+    Built: both, `wont_resolve_policy` (A by default, the literal text); the flag at a censored
+    mass of `wont_resolve_mass` 0.5 or more; under it the overlap-with-churn extension (the
+    convergence-chasing one) is not taken, every other signal is. Edit 339.
+473. **E8's input.** The engine's evaluations carry no effort head (the search keeps none per
+    node), so the root's distribution reaches the plan through the time context
+    (`TimeContext::effort`, `t5d_time_context.effort`, Python's `effort=`): a driver with the
+    root's network output gives it; the built-in evaluators cannot, and netplay does not yet (its
+    evaluator's outputs carry no effort logits) - so E8 is inert in every driver today, behind
+    its flag twice. Wiring it: the network's `effort_logits` at the root, softmaxed, into
+    `run_timed_search(effort=...)` - left until 6v is run.
+474. **E8 and the effort label** (§8.6: "visits until the decision stabilises"; D4; I15).
+    The label's definition is the training side's; the search exposes its sources -
+    `Search::root_best_since` (the root's visits when its most visited child last changed) and
+    `TimeVerdict::converged()` (a stop on smart pruning, the KLD or a solved root; a budget stop
+    is not convergence, so a decision the soft bound ended is never labelled converged - issue
+    464) - and records nothing (I15's records are the training lane's).
+475. **E8 at match play only** (§12.5: "biasing which moves get full searches by predicted
+    difficulty ... if used at all, a mixture with a random component"). Built: E8 lives in the
+    time manager, which self-play never runs (issue 469) - no self-play effect, no PCR cap
+    resized. Edit 341.
 
 ## Proposed spec edits
 
@@ -8742,6 +8774,20 @@ struck through, where nothing of it is left to apply); the others stand as writt
 338. **§12.3's match configuration and register I3**: Proposed - add "a clock: base plus an
     increment per action, per side; a flag is a loss by the match's convention; time
     management at match play only (self-play's budgets are PCR's)". Why: issues 456, 469.
+339. **§8.6's E8 paragraph** (the effort head): now - "plans to an upper quantile ... and treats
+    high censored-bin mass as a won't-resolve flag: plan for the hard bound and lean on LCB and
+    the root-rule scan rather than chase convergence". Proposed - add "as built (a prototype):
+    the plan E7's soft bound times 2 to the quantile bin's distance from this game's running
+    reference, clamped; won't-resolve either plans for the hard bound or keeps E7's plan (two
+    readings, 6v to choose), taking no overlap-with-churn extension; 'the root-rule scan' under
+    v3 is Hunt under 100 boards and the settling scans under 50". Why: issues 471, 472 (and 466).
+340. **Register E8**: now - "Difficulty-weighted allocation from the effort head's upper quantile;
+    censored mass = won't-resolve flag; three guards". Proposed - add "reference: this game's
+    running mean of predicted quantiles; won't-resolve's two readings parameterised; inert until
+    a driver supplies the root's effort distribution". Why: issues 471-473.
+341. **§13.1 6v**: Proposed - add "E8 at match play only (§12.5)", and that the effort label's
+    convergence is the search's smart-pruning or KLD stop, not a budget stop. Why: issues 474,
+    475.
 
 ## Session log
 
@@ -9096,3 +9142,17 @@ struck through, where nothing of it is left to apply); the others stand as writt
   github.com/FirePlank/5d-chess-engine into the worktree's own module store
   (`.git/worktrees/search/modules/oracle-kairos`, 90 MB) - not on the CHECKPOINT 9 section's
   list. Nothing has been downloaded since; the store is kept (deleting it is the user's call).
+- **2026-11-09 - E8 behind its flag** (`lane/search`, step 2; register E8, a prototype, 6v;
+  issues 471-475, edits 339-341). `TimeParams::difficulty_weighting` (off): the root's effort
+  distribution through the time context, the plan weighted by the quantile bin against this
+  game's running reference, clamped, floored and capped at E7's hard bound; won't-resolve's two
+  readings (`wont_resolve_policy`); the overlap-with-churn extension suppressed under it.
+  Off: E7's plan and tree bit for bit (tested on a sweep and a timed run). The C API's time
+  structs appended to (`t5d_time_params`, `t5d_time_context.effort`, `t5d_time_plan`) with the
+  Python mirror; `t5d-play --difficulty-weighting` (inert: the built-in evaluators give no
+  effort). The quantile is `heads.effort_quantile`'s, checked through the C API. Also: match
+  play's time managers are made from the clock's parameters only when the clock is on. Checks on
+  the tree before the commit (lane/search 861c8f0 + E8): engine 711 of 711 (`--werror`),
+  long_detectors 2 of 2, the Lazy SMP test x3 (table above; load 30-62%), ruff clean, pytest 1989
+  passed / 1 skipped (`T5D_REQUIRE_ENGINE=1`, three disjoint shards: 665, 662, 662 + 1 skipped),
+  verify ok, gate commit ok (smoke test passed, 0 declined; proof channel DISABLED).

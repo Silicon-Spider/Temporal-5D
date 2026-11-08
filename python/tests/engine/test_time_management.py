@@ -14,6 +14,7 @@ from __future__ import annotations
 import math
 import time
 
+import numpy as np
 import pytest
 import torch
 
@@ -35,6 +36,7 @@ from t5d.engine.search import ALLOCATORS, Search, TimeManager, search_params, ti
 from t5d.net import build_model
 from t5d.net.config import NetConfig
 from t5d.net.cost import dense_flops
+from t5d.net.heads import effort_censored_prob, effort_quantile
 from tests.engine.helpers import RECORDS, requires_engine
 from tests.engine.test_netplay import GATE, gate_required, requires_gate  # noqa: F401 - gate_required: the fixture requires_gate names
 
@@ -45,7 +47,10 @@ def test_the_time_structs_are_mirrored_as_the_library_lays_them_out():
     for name in ("t5d_time_params", "t5d_time_context", "t5d_time_plan", "t5d_time_verdict"):
         assert name in MIRRORED_SEARCH_STRUCTS
     assert layout_mismatches(load_library()) == []
-    assert CTimeParams._fields_[-1][0] == "extend_instability"
+    names = [name for name, _ in CTimeParams._fields_]
+    # E8's fields appended after E11's (appended to, never reordered)
+    assert names.index("difficulty_weighting") == names.index("extend_instability") + 1
+    assert names[-1] == "difficulty_reference_weight"
 
 
 def test_the_cost_model_is_cost_pys_dense_flops():
@@ -189,3 +194,27 @@ def test_self_play_takes_no_clock():
     with pytest.raises(ValueError, match="allocator"):
         PlayConfig(mode="match", time=5.0, allocator="sideways").validate()
     assert math.isfinite(PlayConfig(mode="match", time=5.0).time)
+
+
+def test_e8_the_effort_quantile_is_heads_through_the_c_api():
+    """E8's bin (``t5d_time_plan.effort_bin``) is ``heads.effort_quantile``'s at every quantile, on
+    random distributions; its censored mass is the last bin's share."""
+    rng = np.random.default_rng(7)
+    with Game.variant("Standard") as g, Search(g, params=search_params(hunt=0, settling=0)) as s:
+        for q in (0.5, 0.8, 0.95):
+            with TimeManager(time_params(difficulty_weighting=1, effort_quantile=q)) as tm:
+                for _ in range(25):
+                    probs = rng.dirichlet(np.full(16, 0.3)).astype(np.float32)
+                    plan = tm.begin(s, remaining=60.0, effort=probs)
+                    assert plan.difficulty_applied
+                    assert plan.effort_bin == int(effort_quantile(torch.from_numpy(probs), q))
+                    assert abs(plan.censored_mass - float(effort_censored_prob(torch.from_numpy(probs))) / float(probs.sum())) < 1e-6
+
+
+def test_e8_off_leaves_the_plan_alone():
+    with Game.variant("Standard") as g, Search(g, params=search_params(hunt=0, settling=0)) as s, TimeManager() as a, TimeManager() as b:
+        given = a.begin(s, remaining=30.0, effort=[1 / 16] * 16)
+        none = b.begin(s, remaining=30.0)
+        assert given == none and not given.difficulty_applied and given.effort_bin == -1
+        with pytest.raises(ValueError, match="16"):
+            a.begin(s, remaining=30.0, effort=[1.0] * 3)

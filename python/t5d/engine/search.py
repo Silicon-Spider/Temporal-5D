@@ -45,7 +45,9 @@ rule or a search decision.
   the network. ``time_params(**overrides)`` fills a ``t5d_time_params``: 6o's arms are its
   ``allocator`` (``"integral"``, ``"flat_evals"``, ``"flat_wall_clock"`` or the constant) and
   ``signals``; **no proof drives time** - ``proof_volatility`` must stay 0, as the proof channel
-  does (build-log spec issue 180). ``Search.set_deadline`` gives the rules engine's calls inside
+  does (build-log spec issue 180). E8 (a prototype, off: ``difficulty_weighting``) weights the
+  plan by the root's predicted effort, given to ``begin`` as the effort head's 16 probabilities
+  (``effort``; none: inert). ``Search.set_deadline`` gives the rules engine's calls inside
   a batch the hard bound; ``Search.run_timed`` is a timed decision with a built-in evaluator.
 * **Lifetimes.** A leaf's pointers live until the next ``gather``, ``deliver``, ``abandon``
   or ``close``: ``leaf_expansion`` copies at once (``Expansion.from_c``). ``close`` (or the
@@ -72,6 +74,7 @@ from .capi import (
     T5D_ALLOCATOR_FLAT_EVALS,
     T5D_ALLOCATOR_FLAT_WALL_CLOCK,
     T5D_ALLOCATOR_INTEGRAL,
+    T5D_EFFORT_BINS,
     T5D_LEGALITY_LEGAL,
     T5D_NO_LIMIT,
     T5D_VALUE_LOGITS,
@@ -549,12 +552,13 @@ class Search:
         remaining: float,
         increment: float = 0.0,
         moves_left: float = math.nan,
+        effort: Sequence[float] | None = None,
         wall_clock: bool = False,
         seed: int = 0,
     ) -> tuple[TimePlan, TimeVerdict]:
         """One timed decision with a built-in evaluator (``T5D_EVALUATOR_*``): its plan and its last
         verdict. ``wall_clock`` False: the model clock (deterministic)."""
-        ctx = CTimeContext(float(remaining), float(increment), float(moves_left))
+        ctx, _keep = time_context(remaining, increment, moves_left, effort)
         plan, verdict = CTimePlan(), CTimeVerdict()
         self._lib.call(
             "t5d_search_run_timed",
@@ -609,6 +613,20 @@ def time_params(lib: Library | None = None, **overrides) -> CTimeParams:
     return p
 
 
+def time_context(remaining: float, increment: float, moves_left: float, effort: Sequence[float] | None):
+    """A ``t5d_time_context`` and the float32 array its ``effort`` points into (keep it alive for
+    the call). ``effort``: the effort head's ``T5D_EFFORT_BINS`` probabilities (E8), or None."""
+    ctx = CTimeContext(float(remaining), float(increment), float(moves_left))
+    if effort is None:
+        return ctx, None
+    array = np.ascontiguousarray(np.asarray(effort, dtype=np.float32).reshape(-1))
+    if array.size != T5D_EFFORT_BINS:
+        raise ValueError(f"effort: {T5D_EFFORT_BINS} probabilities (D4's effort head), not {array.size}")
+    ctx.effort = array.ctypes.data_as(ctypes.POINTER(c_float))
+    ctx.effort_count = array.size
+    return ctx, array
+
+
 @dataclass(frozen=True)
 class TimePlan:
     """``t5d_time_plan``: a decision's plan."""
@@ -625,10 +643,18 @@ class TimePlan:
     soft_evaluations: float
     soft_seconds: float
     hard_seconds: float
+    e7_soft_evaluations: float = 0.0  # E8: the plan before it
+    difficulty_applied: bool = False
+    effort_bin: int = -1
+    censored_mass: float = 0.0
+    wont_resolve: bool = False
+    difficulty_factor: float = 1.0
+    reference_bin: float = 0.0
 
     @classmethod
     def of(cls, c: CTimePlan) -> TimePlan:
-        return cls(**{name: (bool(getattr(c, name)) if name == "moves_left_given" else getattr(c, name)) for name, _ in CTimePlan._fields_})
+        flags = ("moves_left_given", "difficulty_applied", "wont_resolve")
+        return cls(**{name: (bool(getattr(c, name)) if name in flags else getattr(c, name)) for name, _ in CTimePlan._fields_})
 
 
 @dataclass(frozen=True)
@@ -683,11 +709,19 @@ class TimeManager:
         with contextlib.suppress(Exception):
             self.close()
 
-    def begin(self, search: Search, *, remaining: float, increment: float = 0.0, moves_left: float = math.nan) -> TimePlan:
+    def begin(
+        self,
+        search: Search,
+        *,
+        remaining: float,
+        increment: float = 0.0,
+        moves_left: float = math.nan,
+        effort: Sequence[float] | None = None,
+    ) -> TimePlan:
         """Plan and begin a decision at ``search``'s root: ``remaining`` seconds on the clock,
         ``increment`` after each action, ``moves_left`` turns (NaN: the root's own network output,
-        else the default)."""
-        ctx = CTimeContext(float(remaining), float(increment), float(moves_left))
+        else the default), ``effort`` the root's effort distribution (E8; None: none)."""
+        ctx, _keep = time_context(remaining, increment, moves_left, effort)
         out = CTimePlan()
         self._lib.call("t5d_timeman_begin", self._live(), search._live(), byref(ctx), byref(out), error=True)
         return TimePlan.of(out)
@@ -722,5 +756,6 @@ __all__ = [
     "cache_mismatches",
     "is_legal",
     "search_params",
+    "time_context",
     "time_params",
 ]

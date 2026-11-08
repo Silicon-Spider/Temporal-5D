@@ -95,6 +95,28 @@
 // loses the scanner as a second volatility source above 50 boards") is moot
 // while the proof source is off.
 //
+// E8 - DIFFICULTY-WEIGHTED ALLOCATION (§8.6's effort head; register E8, a
+// PROTOTYPE behind its flag, OFF: TimeParams::difficulty_weighting; 6v). The
+// root's predicted search effort - the effort head's 16 log2-visit bins, the
+// top one censored ("did not converge within budget"; D4) - reaches the plan
+// through TimeContext::effort (none given: E8 is inert - the built-in
+// evaluators give none). The plan funds an UPPER QUANTILE of it
+// (effort_quantile; the bin by heads.effort_quantile's convention, the censored
+// bin counting as the largest): E7's soft bound times 2^(k - r), r the running
+// mean of this game's quantile bins (seeded by a prior), clamped to
+// [difficulty_min_factor, difficulty_max_factor] and to [the floor, the hard
+// bound]. A censored mass of wont_resolve_mass or more is the WON'T-RESOLVE
+// flag: the plan becomes the hard bound (reading A, the default) or stays
+// E7's (reading B: WontResolve::CapAtPlan), and the overlap-with-churn
+// extension - which chases convergence - is not taken. The three guards are
+// code paths: the ex-post extensions still correct an "easy" plan; no plan
+// below difficulty_floor_evaluations; the hard bound - computed from E7's
+// plan - and the ladder's budgets (Hunt's, the settling scans': the v3 form of
+// "the root-rule scan") are never read or changed (I4: it redistributes the
+// soft budget, never the confidence-independent layer). Off, the plan is E7's
+// bit for bit. Match play only, as E7 (§12.5: no difficulty-biasing of which
+// self-play moves get full searches). Readings: build-log spec issues 471-475.
+//
 // CLOCKS AND DETERMINISM (H15). A Clock gives the time; WallClock is the
 // steady clock. With no clock (nullptr) the MODEL CLOCK stands in: the time a
 // decision has spent is its work times the cost model's seconds per
@@ -146,6 +168,15 @@ enum class TimeStop : std::uint8_t {
 };
 const char* time_stop_name(TimeStop s) noexcept;
 inline constexpr int kTimeStops = 7;
+
+/// E8: what a won't-resolve flag does to the plan (build-log spec issue 472).
+enum class WontResolve : std::uint8_t {
+  HardBound = 0,  ///< (A) "plan for the hard bound": the soft bound becomes the hard bound
+  CapAtPlan = 1,  ///< (B) E7's plan, unweighted; LCB decides at its end
+};
+
+/// D4's effort head: log2-visit bins, the last one censored (python/t5d/net/heads.py).
+inline constexpr int kEffortBins = 16;
 
 /// The extension kinds, bits of TimeVerdict::extensions.
 inline constexpr std::uint32_t kExtendOverlap = 1;        ///< top-two overlap with churn
@@ -265,6 +296,23 @@ struct TimeParams {
   double instability_window = 0.25;
   std::uint32_t instability_min_visits = 32;
   double extend_instability = 0.5;
+
+  // ---- E8: difficulty-weighted allocation - a PROTOTYPE, OFF (6v) -------------
+  bool difficulty_weighting = false;
+  /// The upper quantile the plan funds (§8.6: "funding the mean under-funds half the time").
+  double effort_quantile = 0.8;
+  /// The censored bin's mass at or above which a decision is flagged won't-resolve.
+  double wont_resolve_mass = 0.5;
+  WontResolve wont_resolve_policy = WontResolve::HardBound;
+  /// No plan below this many evaluations, however easy the prediction (guard 2).
+  double difficulty_floor_evaluations = 32;
+  /// The factor's clamp.
+  double difficulty_min_factor = 0.25;
+  double difficulty_max_factor = 4.0;
+  /// The reference difficulty's prior - visits at the quantile - and its weight,
+  /// in decisions, in the running mean of this game's quantile bins.
+  double difficulty_reference_visits = 256;
+  double difficulty_reference_weight = 4;
 };
 
 /// Throws std::invalid_argument for a parameter out of its range.
@@ -277,6 +325,9 @@ struct TimeContext {
   /// D4's moves-left, in turns (both players'); NaN: the root's own network
   /// output if it has one, else moves_left_default_turns.
   double moves_left_turns = std::numeric_limits<double>::quiet_NaN();
+  /// E8: the root's effort distribution (kEffortBins probabilities, the last
+  /// the censored bin; normalised here); none: E8 is inert.
+  std::optional<std::array<float, kEffortBins>> effort;
 };
 
 /// A decision's plan.
@@ -293,6 +344,14 @@ struct TimePlan {
   double soft_evaluations = 0;       ///< this decision's soft bound ...
   double soft_seconds = 0;           ///< ... and its time (the arm FlatWallClock executes by it)
   double hard_seconds = 0;           ///< the hard bound
+  // E8 (difficulty_weighting; defaults where it did not apply):
+  double e7_soft_evaluations = 0;    ///< E7's soft bound, before E8
+  bool difficulty_applied = false;   ///< E8 on and an effort distribution given
+  int effort_bin = -1;               ///< the bin at effort_quantile (-1: none)
+  double censored_mass = 0;          ///< the censored bin's probability
+  bool wont_resolve = false;         ///< the flag (censored_mass >= wont_resolve_mass)
+  double difficulty_factor = 1;      ///< the factor applied to E7's soft bound (clamped)
+  double reference_bin = 0;          ///< the running mean's bin (log2 visits) it was taken against
 };
 
 /// What check() decided.
@@ -377,6 +436,17 @@ bool unstable(std::uint32_t root_visits, std::uint32_t best_since, double window
 TimePlan plan_decision(const TimeParams& p, double scale, int boards, int mandatory_remaining, bool whole_action,
                        const TimeContext& ctx, double root_moves_left);
 
+/// E8: the bin at quantile q of an effort distribution - heads.effort_quantile's
+/// convention: the count of bins whose float32 cumulative probability (the
+/// distribution normalised first) lies below q, capped at the censored bin.
+int effort_quantile_bin(const std::array<float, kEffortBins>& probs, double q) noexcept;
+/// E8, pure: `e7` weighted by the root's effort distribution against a
+/// reference bin (log2 visits) - the factor 2^(bin - reference), clamped, the
+/// censored bin the largest; won't-resolve as the policy says. The hard bound
+/// is E7's, untouched.
+TimePlan apply_difficulty(const TimeParams& p, const TimePlan& e7, const std::array<float, kEffortBins>& effort,
+                          double reference_bin);
+
 /// One player's time manager over a game (see the header comment).
 class TimeManager {
  public:
@@ -402,8 +472,12 @@ class TimeManager {
   /// eval reference.
   void end(const Search& search);
   void end(double root_q);
-  /// A new game: the falling-eval reference forgotten (the scale kept).
+  /// A new game: the falling-eval reference and E8's running reference
+  /// forgotten (the scale kept).
   void new_game() noexcept;
+  /// E8's reference bin now: the running mean of this game's quantile bins,
+  /// seeded by the prior.
+  double reference_bin() const noexcept;
 
   bool in_decision() const noexcept { return active_; }
   const TimePlan& plan() const noexcept { return plan_; }
@@ -432,6 +506,8 @@ class TimeManager {
   std::uint32_t kld_prev_visits_ = 0;
   double kld_gain_ = std::numeric_limits<double>::quiet_NaN();
   std::optional<double> last_value_;   // the previous decision's root value
+  double effort_bins_sum_ = 0;         // E8: this game's quantile bins, summed ...
+  double effort_decisions_ = 0;        // ... over this many decisions
 };
 
 /// A clock for run_timed (seconds; any origin).

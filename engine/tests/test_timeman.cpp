@@ -790,3 +790,236 @@ TEST(timeman_match_play_on_the_clock_end_to_end) {
   self.match_play = false;
   CHECK_THROWS_AS(play_game(variant("Standard"), *uniform, self), std::invalid_argument);
 }
+
+// ---- E8: difficulty-weighted allocation, behind its flag (a prototype) -------------------------
+
+namespace {
+
+// An effort distribution with 0.9 of its uncensored mass on bin `k`, the rest spread evenly
+// over bins 0-14 (none censored) - plus `censored` on the censored bin.
+std::array<float, kEffortBins> effort_at(int k, float censored = 0.0f) {
+  std::array<float, kEffortBins> e{};
+  const float rest = (1.0f - censored) * 0.1f / 15.0f;
+  for (int b = 0; b < kEffortBins - 1; ++b) e[static_cast<std::size_t>(b)] = rest;
+  e[static_cast<std::size_t>(k)] += (1.0f - censored) * 0.9f;
+  e[kEffortBins - 1] = censored;
+  return e;
+}
+
+bool same_plan(const TimePlan& a, const TimePlan& b) {
+  return a.boards == b.boards && a.moves_left_turns == b.moves_left_turns && a.moves_left_given == b.moves_left_given &&
+         a.our_actions == b.our_actions && a.decisions_left == b.decisions_left &&
+         a.seconds_per_evaluation == b.seconds_per_evaluation && a.usable_seconds == b.usable_seconds &&
+         a.share == b.share && a.action_evaluations == b.action_evaluations &&
+         a.soft_evaluations == b.soft_evaluations && a.soft_seconds == b.soft_seconds &&
+         a.hard_seconds == b.hard_seconds && a.e7_soft_evaluations == b.e7_soft_evaluations &&
+         a.difficulty_applied == b.difficulty_applied && a.effort_bin == b.effort_bin &&
+         a.wont_resolve == b.wont_resolve && a.difficulty_factor == b.difficulty_factor;
+}
+
+}  // namespace
+
+TEST(timeman_e8_off_is_e7_bit_for_bit) {
+  // With the flag off, an effort distribution given or not, every plan is E7's;
+  // and a timed run's tree is the run's without the distribution (H15).
+  const TimeParams off;
+  CHECK(!off.difficulty_weighting);
+  for (const double remaining : {0.3, 5.0, 120.0}) {
+    for (const int boards : {1, 40, 150, 500}) {
+      for (const int bin : {0, 8, 14}) {
+        TimeContext with;
+        with.remaining_seconds = remaining;
+        with.increment_seconds = 0.1;
+        with.effort = effort_at(bin, 0.3f);
+        TimeContext without = with;
+        without.effort.reset();
+        TimeManager a(off);
+        TimeManager b(off);
+        const Search search(variant("Standard"), quiet_params());
+        const TimePlan pa = a.begin(search, with);
+        const TimePlan pb = b.begin(search, without);
+        CHECK(same_plan(pa, pb));
+        CHECK(!pa.difficulty_applied);
+        CHECK(same_plan(plan_decision(off, 0.01, boards, 1, false, with, std::nan("")),
+                        plan_decision(off, 0.01, boards, 1, false, without, std::nan(""))));
+      }
+    }
+  }
+  std::vector<std::uint64_t> digests;
+  for (const bool given : {false, true}) {
+    Search search(variant("Standard - Two Timelines"), quiet_params());
+    const std::unique_ptr<Evaluator> random = make_evaluator(BuiltinEvaluator::Random, 4);
+    TimeManager tm;
+    TimeContext ctx;
+    ctx.remaining_seconds = 2.0;
+    if (given) ctx.effort = effort_at(14, 0.9f);  // as hard and unresolved as it gets: read by nothing
+    for (int decision = 0; decision < 2; ++decision) {
+      run_timed(search, *random, tm, ctx);
+      search.advance(search.choose().index);
+    }
+    digests.push_back(search.digest());
+  }
+  CHECK_EQ(digests[0], digests[1]);
+}
+
+TEST(timeman_e8_on_moves_the_plan_as_its_rule_says) {
+  TimeParams p;
+  p.difficulty_weighting = true;
+  TimeContext ctx;
+  ctx.remaining_seconds = 300;
+  ctx.moves_left_turns = 40;
+  const TimePlan e7 = plan_decision(p, 0.01, 100, 0, true, ctx, std::nan(""));
+  // The reference: the prior's 256 visits, bin 8. A harder prediction (bin 10)
+  // funds 2^2 = 4x E7's plan, an easier one (bin 6) a quarter - each clamped to
+  // [0.25, 4], to the floor and to the hard bound.
+  const TimePlan hard = apply_difficulty(p, e7, effort_at(10), 8.0);
+  const TimePlan easy = apply_difficulty(p, e7, effort_at(6), 8.0);
+  const TimePlan same = apply_difficulty(p, e7, effort_at(8), 8.0);
+  CHECK_EQ(hard.effort_bin, 10);
+  CHECK_EQ(easy.effort_bin, 6);
+  CHECK(hard.difficulty_applied && !hard.wont_resolve);
+  CHECK(near(same.soft_evaluations, e7.soft_evaluations, 1e-9));
+  CHECK(near(hard.soft_evaluations, std::min(4 * e7.soft_evaluations, e7.hard_seconds / e7.seconds_per_evaluation), 1e-9));
+  CHECK(near(easy.soft_evaluations, std::max(0.25 * e7.soft_evaluations, p.difficulty_floor_evaluations), 1e-9));
+  CHECK(hard.soft_evaluations > e7.soft_evaluations);
+  CHECK(easy.soft_evaluations < e7.soft_evaluations);
+  // Guard 3: the hard bound is E7's, whatever the prediction.
+  CHECK_EQ(hard.hard_seconds, e7.hard_seconds);
+  CHECK_EQ(easy.hard_seconds, e7.hard_seconds);
+  // Clamped: never past the factor caps, below the floor or above the hard bound.
+  for (int bin = 0; bin < kEffortBins - 1; ++bin) {
+    for (const double reference : {0.0, 8.0, 14.0}) {
+      const TimePlan w = apply_difficulty(p, e7, effort_at(bin), reference);
+      CHECK(w.soft_evaluations >= p.difficulty_floor_evaluations - 1e-9);
+      CHECK(w.soft_evaluations <= e7.hard_seconds / e7.seconds_per_evaluation + 1e-9);
+      CHECK(w.difficulty_factor >= p.difficulty_min_factor && w.difficulty_factor <= p.difficulty_max_factor);
+    }
+  }
+  // The quantile is an UPPER one: the same distribution funded at 0.8 more than at 0.5.
+  std::array<float, kEffortBins> spread{};
+  for (int b = 4; b < 12; ++b) spread[static_cast<std::size_t>(b)] = 0.125f;
+  TimeParams median = p;
+  median.effort_quantile = 0.5;
+  CHECK(effort_quantile_bin(spread, 0.8) > effort_quantile_bin(spread, 0.5));
+  CHECK(apply_difficulty(p, e7, spread, 8.0).soft_evaluations > apply_difficulty(median, e7, spread, 8.0).soft_evaluations);
+  // The reference is this game's running mean of quantile bins, seeded by the prior.
+  TimeManager tm(p);
+  CHECK_EQ(tm.reference_bin(), 8.0);
+  const Search search(variant("Standard"), quiet_params());
+  ctx.effort = effort_at(12);
+  tm.begin(search, ctx);
+  CHECK(near(tm.reference_bin(), (4 * 8.0 + 12) / 5, 1e-12));
+  tm.new_game();
+  CHECK_EQ(tm.reference_bin(), 8.0);
+  // Malformed distributions are refused.
+  std::array<float, kEffortBins> bad{};
+  CHECK_THROWS_AS(apply_difficulty(p, e7, bad, 8.0), std::invalid_argument);
+  bad[3] = -1.0f;
+  CHECK_THROWS_AS(apply_difficulty(p, e7, bad, 8.0), std::invalid_argument);
+}
+
+TEST(timeman_e8_wont_resolve_under_both_readings) {
+  TimeParams p;
+  p.difficulty_weighting = true;
+  TimeContext ctx;
+  ctx.remaining_seconds = 300;
+  ctx.moves_left_turns = 40;
+  const TimePlan e7 = plan_decision(p, 0.01, 100, 0, true, ctx, std::nan(""));
+  const TimePlan a = apply_difficulty(p, e7, effort_at(3, 0.6f), 8.0);  // censored mass 0.6 >= 0.5
+  CHECK(a.wont_resolve);
+  CHECK(near(a.censored_mass, 0.6, 1e-6));
+  CHECK(near(a.soft_evaluations, e7.hard_seconds / e7.seconds_per_evaluation, 1e-9));  // (A): the hard bound
+  TimeParams b = p;
+  b.wont_resolve_policy = WontResolve::CapAtPlan;
+  const TimePlan cap = apply_difficulty(b, e7, effort_at(3, 0.6f), 8.0);
+  CHECK(cap.wont_resolve);
+  CHECK_EQ(cap.soft_evaluations, e7.soft_evaluations);  // (B): E7's plan, unweighted
+  CHECK(!apply_difficulty(p, e7, effort_at(3, 0.4f), 8.0).wont_resolve);
+  // Overlap with churn - the convergence-chasing extension - is not taken
+  // under won't-resolve, and is otherwise; volatility still is.
+  for (const bool wont : {false, true}) {
+    TimeManager tm(p);
+    TimePlan plan = plan_of(100);
+    plan.wont_resolve = wont;
+    tm.begin(plan, {50, 50, 0}, 100);
+    RootSnapshot r = snap(100, {100, 90, 10});
+    r.top_value[0] = peaked(25);
+    r.top_value[1] = peaked(25);
+    const TimeVerdict v = tm.check(r, std::nan(""));
+    CHECK_EQ(v.extensions, wont ? 0u : kExtendOverlap);
+    TimeManager vol(p);
+    vol.begin(plan, {50, 50, 0}, 100);
+    r.root_evaluated = true;
+    r.root_variance = 0.5;
+    CHECK((vol.check(r, std::nan("")).extensions & kExtendVolatility) != 0);
+  }
+}
+
+TEST(timeman_e8_guards_an_easy_call_still_extends_and_the_bounds_stay) {
+  // Guard 1: a wrong "easy" call still extends on instability and overlap.
+  TimeParams p;
+  p.difficulty_weighting = true;
+  TimeContext ctx;
+  ctx.remaining_seconds = 300;
+  ctx.moves_left_turns = 40;
+  const TimePlan e7 = plan_decision(p, 0.01, 100, 0, true, ctx, std::nan(""));
+  const TimePlan easy = apply_difficulty(p, e7, effort_at(0), 8.0);
+  CHECK(easy.soft_evaluations < e7.soft_evaluations);
+  TimeManager tm(p);
+  tm.begin(easy, {50, 50, 0}, 100);
+  const auto target = static_cast<std::uint64_t>(std::ceil(easy.soft_evaluations));
+  RootSnapshot r = snap(target, {100, 90, 10});
+  r.best_since = 195;  // changed in the last visits
+  r.top_value[0] = peaked(25);
+  r.top_value[1] = peaked(25);
+  const TimeVerdict v = tm.check(r, std::nan(""));
+  CHECK((v.extensions & kExtendInstability) != 0);
+  CHECK((v.extensions & kExtendOverlap) != 0);
+  CHECK(v.stop == TimeStop::None);
+  // Guard 3: the hard bound, and the ladder's budgets, are the same flag on and off.
+  TimeParams off = p;
+  off.difficulty_weighting = false;
+  for (const int bin : {0, 7, 14}) {
+    SearchParams sp = quiet_params();
+    sp.hunt = true;
+    sp.settling = true;
+    sp.synchronous = true;
+    Search on_search(variant("Standard"), sp);
+    Search off_search(variant("Standard"), sp);
+    TimeManager on_tm(p);
+    TimeManager off_tm(off);
+    ctx.effort = effort_at(bin, bin == 14 ? 0.7f : 0.0f);
+    const TimePlan a = on_tm.begin(on_search, ctx);
+    const TimePlan b = off_tm.begin(off_search, ctx);
+    CHECK_EQ(a.hard_seconds, b.hard_seconds);
+    CHECK_EQ(on_search.params().hunt_ms, off_search.params().hunt_ms);
+    CHECK_EQ(on_search.params().settling_ms, off_search.params().settling_ms);
+    CHECK_EQ(on_search.params().sync_job_nodes, off_search.params().sync_job_nodes);
+    CHECK_EQ(on_search.params().hunt_nodes, off_search.params().hunt_nodes);
+  }
+}
+
+TEST(timeman_e8_on_the_model_clock_is_reproducible) {
+  std::vector<std::uint64_t> digests;
+  std::vector<double> plans;
+  for (int run = 0; run < 2; ++run) {
+    TimeParams p;
+    p.difficulty_weighting = true;
+    Search search(variant("Standard - Two Timelines"), quiet_params());
+    const std::unique_ptr<Evaluator> random = make_evaluator(BuiltinEvaluator::Random, 9);
+    TimeManager tm(p);
+    TimeContext ctx;
+    ctx.remaining_seconds = 3.0;
+    for (int decision = 0; decision < 3; ++decision) {
+      ctx.effort = effort_at(4 + 3 * decision);
+      const TimedRun r = run_timed(search, *random, tm, ctx);
+      plans.push_back(r.plan.soft_evaluations);
+      ctx.remaining_seconds -= r.seconds;
+      search.advance(search.choose().index);
+    }
+    digests.push_back(search.digest());
+  }
+  CHECK_EQ(digests[0], digests[1]);
+  CHECK(std::equal(plans.begin(), plans.begin() + 3, plans.begin() + 3));
+  CHECK(plans[2] != plans[0]);  // the predictions moved the plans
+}

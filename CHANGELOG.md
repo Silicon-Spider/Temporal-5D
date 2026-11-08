@@ -10,6 +10,46 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-09 - E8: difficulty-weighted allocation behind its flag (a prototype, off)
+
+Register E8 (prototype, class R, 6v; spec §8.6's effort-head paragraph) built on E11's time
+manager, OFF by default (`TimeParams::difficulty_weighting`); every number a named placeholder
+(build-log spec issues 471-475).
+
+- **`engine/include/t5d/timeman.hpp`, `engine/src/timeman.cpp`**: `TimeContext::effort` (the
+  root's 16 effort probabilities, the last bin censored - D4); `effort_quantile_bin` (the bin at
+  quantile q by `python/t5d/net/heads.py`'s `effort_quantile` convention, float32 cumulative sum);
+  `apply_difficulty` (pure): E7's soft bound times `2^(bin - reference)`, the reference this
+  game's running mean of quantile bins seeded at 256 visits (`TimeManager::reference_bin`),
+  clamped to [0.25, 4], floored at 32 evaluations, capped at E7's hard bound (never moved);
+  won't-resolve (censored mass >= 0.5) plans for the hard bound (reading A) or keeps E7's plan
+  (`WontResolve::CapAtPlan`), and the overlap-with-churn extension is not taken under it.
+  `TimePlan` reports the E7 plan, the bin, the censored mass, the flag, the factor and the
+  reference. Off - or with no distribution given - the plan is E7's bit for bit.
+- **C API** (`t5d/capi_search.h`): appended to `t5d_time_params` (the E8 fields),
+  `t5d_time_context` (`effort`, `effort_count` - 16 or 0) and `t5d_time_plan`;
+  `T5D_WONT_RESOLVE_*`, `T5D_EFFORT_BINS`; the layouts reported; `t5d_search_params` unchanged.
+  **Python**: the mirror (`capi.py`), `TimeManager.begin(effort=...)`, `Search.run_timed(effort=)`,
+  `run_timed_search(effort=)`, `search.time_context`. **t5d-play**: `--difficulty-weighting`
+  (with `--time`; inert with the built-in evaluators, which give no effort).
+- **Tests**: `engine/tests/test_timeman.cpp` (off = E7 on a sweep of contexts and a timed run's
+  digest; on - a harder prediction plans more, an easier one less, within the floor, the caps
+  and the hard bound; the upper quantile funds more than the median; the running reference;
+  won't-resolve under both readings and the overlap extension suppressed only there; guard 1 -
+  an easy call still extends on instability and overlap; guard 3 - the hard bound and the
+  ladder's budgets the same on and off; reproducible on the model clock),
+  `test_capi_search.cpp` (the fields through the C API, the effort's count refused; the tests'
+  brace initialisers name the two new context members), `test_play_exe.cpp` (the flag needs
+  `--time`; the record names it), and `python/tests/engine/test_time_management.py` (the
+  quantile through the C API equals `heads.effort_quantile`; E8 off leaves the plan alone).
+- **Also**: match play's two time managers are made from the clock's parameters only when the
+  clock is on (off, an out-of-range `MatchClock::time` no longer throws from an unused manager).
+- **Docs**: the engine README's E8 paragraph (in "Stage E11"); `docs/BUILD_LOG.md` - register E8
+  built behind its flag, issues 471-475, edits 339-341, the session log, the Lazy SMP test's runs.
+
+Spec: §8.6 (the effort head's paragraph), §12.5 (match play only), §13.1 (6v); register E8, D4,
+I4, I15. Proposed edits 339-341; issues 471-475. No measured figure.
+
 ### 2026-11-09 - E11: time management - the moves-left integral, 6o's arms as switches, the stop/extend table, the hard bound; no root-scan reserve
 
 Register E7 (committed, class R; spec §8.6) built as step 2's E11 on `lane/search`, every

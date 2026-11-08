@@ -707,6 +707,11 @@ T5D_API t5d_status t5d_search_layout(const char* type, const char* field, size_t
 #define T5D_EXTEND_DISAGREEMENT 4
 #define T5D_EXTEND_FALL 8
 #define T5D_EXTEND_INSTABILITY 16
+/* E8's won't-resolve readings (t5d_time_params.wont_resolve_policy). */
+#define T5D_WONT_RESOLVE_HARD_BOUND 0  /* (A) the soft bound becomes the hard bound */
+#define T5D_WONT_RESOLVE_CAP_AT_PLAN 1 /* (B) E7's plan, unweighted */
+/* D4's effort head: its bins (t5d_time_context.effort_count: this or 0). */
+#define T5D_EFFORT_BINS 16
 
 typedef struct t5d_timeman t5d_timeman;
 
@@ -754,6 +759,16 @@ typedef struct t5d_time_params {
   double instability_window;
   uint32_t instability_min_visits;
   double extend_instability;
+  /* E8 (a prototype, OFF): difficulty-weighted allocation from the effort head's upper quantile */
+  int32_t difficulty_weighting;         /* 0 */
+  double effort_quantile;               /* the quantile the plan funds (0.8) */
+  double wont_resolve_mass;             /* the censored mass that flags won't-resolve (0.5) */
+  int32_t wont_resolve_policy;          /* T5D_WONT_RESOLVE_* */
+  double difficulty_floor_evaluations;  /* no plan below this (32) */
+  double difficulty_min_factor;         /* the factor's clamp (0.25 ... */
+  double difficulty_max_factor;         /* ... 4) */
+  double difficulty_reference_visits;   /* the reference's prior (256) ... */
+  double difficulty_reference_weight;   /* ... and its weight, in decisions (4) */
 } t5d_time_params;
 
 /* One decision's clock (t5d/timeman.hpp, TimeContext). */
@@ -761,6 +776,10 @@ typedef struct t5d_time_context {
   double remaining_seconds;  /* the side's clock now (> 0) */
   double increment_seconds;  /* added after each of its actions */
   double moves_left_turns;   /* NaN: the root's own network output, else the default */
+  /* E8: the root's effort distribution - T5D_EFFORT_BINS probabilities, the last the censored
+     bin - or NULL with count 0 (none: E8 is inert) */
+  const float* effort;
+  size_t effort_count;
 } t5d_time_context;
 
 /* A decision's plan (TimePlan). */
@@ -777,6 +796,14 @@ typedef struct t5d_time_plan {
   double soft_evaluations;
   double soft_seconds;
   double hard_seconds;
+  /* E8 (defaults where it did not apply) */
+  double e7_soft_evaluations;  /* E7's soft bound, before E8 */
+  int32_t difficulty_applied;
+  int32_t effort_bin;          /* the bin at effort_quantile (-1: none) */
+  double censored_mass;
+  int32_t wont_resolve;
+  double difficulty_factor;
+  double reference_bin;        /* the running mean's bin (log2 visits) */
 } t5d_time_plan;
 
 /* What a check decided (TimeVerdict), with the time manager's cost scale. */
