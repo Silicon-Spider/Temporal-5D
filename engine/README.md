@@ -2700,8 +2700,8 @@ and the ladder's decision ending come before anything changes, so one that throw
 the tree, the graph's table and the root's side tables and effort label as they were, and
 a node `advance_to` made for a state the tree did not hold is taken back (build-log
 issue 600). What it cannot keep is the verification ladder's verdicts for the old
-decision that its ending had taken over and not yet recorded, if the failure comes there
-- never a proof (review finding L3). Evaluations are
+decision that its ending had taken over and not yet recorded, if the failure comes there -
+never a proof (review finding L3). Evaluations are
 cached per (state, moves made in its action, refresh epoch) (A6; `set_epoch`; 0 in the
 dense configuration).
 
