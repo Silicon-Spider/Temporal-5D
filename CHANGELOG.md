@@ -49,6 +49,21 @@ review round, issues 603 and 604, the session log.
   invariant and the next gather or run going through with no abandon; and through the C API
   beside a C++ twin given the same fault: `T5D_ERR_MEMORY` exactly where the twin throws, the
   two bit-identical, then `T5D_OK`. (§15.4: virtual loss released.)
+- **M2, L6, L9, L10 - the review's probes as tests** (no code changes). The review's
+  mutation pass left 24 of its 50 mutants of c61ed3a's code alive under the lane's tests.
+  Now tested: a failed pull leaves its node as it found it - every node's priors and logits
+  bit for bit against an untouched twin (P3; 2,738 faults, 84,521 node comparisons), the
+  root's side tables too (P3b), the pull that runs out of turns while adding some (P3c: tree
+  and graph, the default widening, 3-9 playouts, every complete node against a full
+  listing; 6,185 faults) - and an undone expansion leaves a fresh leaf (P6); the counts the
+  rollbacks restore (P1: classify's counts recounted from the nodes held; P2:
+  `generated_turns` the sum of the nodes' turns, a dropped generator always a pull that
+  threw; P9: key collisions; P13: `asset_boosted_edges`, and `suggestion_edges` with
+  `hunt_suggest` on, raised by no more than the turns a failed pull kept); a root hook that
+  throws after the re-root (P4); a failed re-root with the synchronous ladder on, against a
+  search that never re-rooted (P5). `check_flat_nodes` checks what its comment says - each
+  node's priors the softmax of its turn scores (a sum alone let new turns keep a prior of 0).
+  Found writing P13: issues 603 and 604 (below). (§15.4; H37 for P3c.)
 
 Spec: none edited or proposed. No part of the spec describes exception safety, these tests,
 or the ladder's and the asset map's bookkeeping. The round brings the build further in line
