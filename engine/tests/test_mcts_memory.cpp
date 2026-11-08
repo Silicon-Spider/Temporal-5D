@@ -364,7 +364,9 @@ TEST(mcts_an_allocation_failure_in_a_reroot_leaves_the_search_consistent) {
   // unreachable). Checked against two searches run alike: one that never
   // re-rooted and one whose re-root went through - a failed re-root leaves
   // the first's graph (H15's digest, after both search on), a successful one
-  // the second's.
+  // the second's; the sweep ends on the point past the last allocation, a
+  // re-root that goes through, and check_invariants reads the graph's table
+  // (review finding M3: the sweep never saw a successful re-root before).
   const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
   const GameState root = start("Standard - Two Timelines");
   const GameState far = after("Standard - Two Timelines", 3);  // no search here reaches it: advance_to makes its node
@@ -390,19 +392,23 @@ TEST(mcts_an_allocation_failure_in_a_reroot_leaves_the_search_consistent) {
         stayed.run(*uniform, Limits{10});
         Search went = prepared();
         reroot(went);
+        CHECK_NOTHROW(went.check_invariants());
         went.run(*uniform, Limits{10});
+        CHECK_NOTHROW(went.check_invariants());
         long long total = 0;
         {
           Search s = prepared();
           total = allocations_of([&] { reroot(s); });
         }
         std::size_t faults = 0;
+        std::size_t through = 0;
         // advance_to tries the root's untaken edges and judges its node
         // (detect_mate) before the re-root: its last allocations are the re-root's.
-        for (long long k = 0; k < total; k += !to_far || k + 64 >= total ? 1 : 53) {
+        for (long long k = 0; k <= total; k += !to_far || k + 64 >= total ? 1 : 53) {
           Search s = prepared();
           const bool threw = faulted(k, [&] { reroot(s); });
           faults += threw ? 1u : 0u;
+          through += threw ? 0u : 1u;
           CHECK_NOTHROW(s.check_invariants());
           s.run(*uniform, Limits{10});
           CHECK_NOTHROW(s.check_invariants());
@@ -413,6 +419,7 @@ TEST(mcts_an_allocation_failure_in_a_reroot_leaves_the_search_consistent) {
           CHECK_EQ(s.root_best_since(), like.root_best_since());
         }
         CHECK(faults > 0);
+        CHECK(through > 0);  // the successful re-root, compared with `went`
       }
     }
   }

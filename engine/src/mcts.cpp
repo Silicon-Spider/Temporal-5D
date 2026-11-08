@@ -3542,6 +3542,29 @@ struct Search::Impl {
       if (!seen[id]) fail("a node the root does not reach", id);
       if (!params_.graph && id != root_ && parents[id] != 1) fail("a tree node with " + std::to_string(parents[id]) + " parents", id);
     }
+    // MCGS's table (review finding M3): every node's identity in it, each entry
+    // a node of its own identity - the lowest id holding it (the first made, or
+    // after a re-root the first in the new order, as register_node enters them;
+    // a later node with that identity is an unshared one, a key collision).
+    if (params_.graph) {
+      std::unordered_map<std::uint64_t, NodeId> lowest;
+      for (NodeId id = 0; id < nodes_.size(); ++id) {
+        lowest.emplace(identity(nodes_[id].key, nodes_[id].moves_made), id);  // ids ascend: the first stays
+      }
+      for (const auto& [key, id] : table_) {
+        if (id >= nodes_.size()) {
+          throw std::logic_error("search invariant: the graph's table names node " + std::to_string(id) + " of " +
+                                 std::to_string(nodes_.size()));
+        }
+        if (identity(nodes_[id].key, nodes_[id].moves_made) != key) fail("a table entry of another identity", id);
+        if (lowest.at(key) != id) fail("a table entry not the lowest id of its identity", id);
+      }
+      for (const auto& [key, id] : lowest) {
+        if (table_.count(key) == 0) fail("a node whose identity the graph's table lacks", id);
+      }
+    } else if (!table_.empty()) {
+      throw std::logic_error("search invariant: a tree with a graph's table");
+    }
     for (NodeId id = 0; id < nodes_.size(); ++id) {
       const Node& n = nodes_[id];
       if (n.vl != 0) fail("virtual loss not released on a node", id);

@@ -7084,6 +7084,9 @@ superseded or made moot says so; nothing is deleted.
         3-9 playouts), P6; P1, P2, P9, P13 (the asset map's and Hunt's boost counts); P4; P5.
         `check_flat_nodes` checks the softmax its comment promised. Found writing P13: issues
         603 and 604.
+      - M3: P8, P10; `check_invariants` checks the graph's table (range, identity, the lowest
+        id, every node entered, none in a tree); the re-root test's sweep ends on the re-root
+        that goes through and checks the search that re-rooted.
 603. **This machine's g++ 16.2 breaks `std::deque`'s exception safety under its default
     `-fassume-sane-operators-new-delete`** (found by `lane/fix535`, 2026-11-09, in issue 600's
     review round; not a defect in the engine's source). With `operator new` assumed free of

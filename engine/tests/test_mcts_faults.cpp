@@ -1001,3 +1001,70 @@ TEST(mcts_fault_a_failed_reroot_with_the_ladder_on) {
     CHECK_EQ(differ, std::size_t{0});
   }
 }
+
+// ---- M3: the graph's table after a re-root ------------------------------------------------------
+
+TEST(mcts_the_graph_after_a_reroot_finds_its_nodes) {
+  // reroot builds the graph's table itself (review finding M3; the review's
+  // P8). With full keys there is no collision, so a graph holds each (state,
+  // moves made) once: a transposition into a carried node must find it. After
+  // two re-roots and runs after each, no two nodes hold one state with one
+  // count - under the ply split, where transpositions inside an action are
+  // common, and the flat form - and check_invariants reads the table itself.
+  const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
+  for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::Flat}) {
+    for (const char* variant : {"Standard - Two Timelines", "Standard"}) {
+      const SearchParams p = base(split, true);
+      Search s(start(variant), p);
+      s.run(*uniform, Limits{300});
+      s.advance(s.choose().index);
+      CHECK_NOTHROW(s.check_invariants());
+      s.run(*uniform, Limits{300});
+      s.advance(s.choose().index);
+      CHECK_NOTHROW(s.check_invariants());
+      s.run(*uniform, Limits{300});
+      CHECK_NOTHROW(s.check_invariants());
+      REQUIRE_EQ(s.stats().key_collisions, std::uint64_t{0});
+      std::size_t duplicates = 0;
+      std::vector<std::pair<std::uint64_t, NodeId>> keys;
+      for (NodeId id = 0; id < s.node_count(); ++id) keys.emplace_back(s.node(id).key, id);
+      std::sort(keys.begin(), keys.end());
+      for (std::size_t i = 1; i < keys.size(); ++i) {
+        for (std::size_t j = i; j-- > 0 && keys[j].first == keys[i].first;) {
+          const NodeView a = s.node(keys[i].second);
+          const NodeView b = s.node(keys[j].second);
+          if (a.moves_made == b.moves_made && *a.state == *b.state) ++duplicates;
+        }
+      }
+      std::printf("  %s %s: %zu nodes after two re-roots, %llu transpositions, %zu duplicated\n", split_name(split),
+                  variant, s.node_count(), static_cast<unsigned long long>(s.stats().transposition_hits), duplicates);
+      CHECK_EQ(duplicates, std::size_t{0});
+    }
+  }
+}
+
+TEST(mcts_a_reroot_under_key_collisions_keeps_the_first_node_in_the_table) {
+  // reroot enters the kept nodes in their new order, as register_node entered
+  // them: of two with one identity - a key collision - the first keeps the
+  // entry (review finding M3; the review's P10). Keys cut to 3 bits, a run,
+  // two re-roots and runs after each, check_invariants (which reads the table:
+  // every entry the lowest id of its identity) after every step.
+  const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
+  for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::Flat}) {
+    SearchParams p = base(split, true);
+    p.key_bits = 3;
+    Search s(after("Standard - Two Timelines", 1), p);
+    s.run(*uniform, Limits{150});
+    CHECK_NOTHROW(s.check_invariants());
+    for (int r = 0; r < 2; ++r) {
+      s.advance(s.choose().index);
+      CHECK_NOTHROW(s.check_invariants());
+      s.run(*uniform, Limits{100});
+      CHECK_NOTHROW(s.check_invariants());
+    }
+    std::printf("  %s graph, 3-bit keys: %zu nodes, %llu collisions, %llu transpositions\n", split_name(split),
+                s.node_count(), static_cast<unsigned long long>(s.stats().key_collisions),
+                static_cast<unsigned long long>(s.stats().transposition_hits));
+    CHECK(s.stats().key_collisions > 0);
+  }
+}
