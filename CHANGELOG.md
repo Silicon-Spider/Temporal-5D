@@ -301,16 +301,20 @@ test. No code changed.
 Spec: §15.2 (rows C3a, H18, D2's tree form, A6, D4), §15.4; register H18, C3a, C20, D2, D4, A6 -
 nothing proposed; issue 535.
 
-### 2026-11-08 - The network job runs in four shards: the Python suite outgrew one hour
+### 2026-11-08 - The network job runs in four shards of whole test files: the Python suite outgrew one hour
 
 Since CI came back every run of the `network` workflow was cancelled at its 60-minute limit:
 the Python suite reached 54% in 58 minutes on a runner (2026-11-01, 1,716 tests), so it needs
 about two hours whole, and A5 added some 200 tests since. The job now runs as a four-way
-matrix, each shard taking the tests whose id hashes to it (`T5D_TEST_SHARD=i/n`, a hook in
-`python/tests/conftest.py`: crc32 of the test id modulo n, so the shards are disjoint, their
-union is the whole suite, and a test keeps its shard whatever else is collected); lint runs in
-shard 0 alone. Checked on the suite at 91b2c7c: 1,934 tests split 475 / 462 / 491 / 506, union
-equal to the whole, no test twice. Unset, every test runs, as before.
+matrix, 90 minutes each (`T5D_TEST_SHARD=i/n`, a hook in `python/tests/conftest.py`); lint runs
+in shard 0 alone. The unit is the test file, never the test: the first version split by a hash
+of each test's id, and `lane/fix535` found a module whose last case checks what its siblings
+recorded (`tests/engine/test_flat_head.py::test_some_case_leaves_a_board`, issue 601) - split
+across shards it failed, or was skipped and checked nothing. Files now go to shards greedily by
+test count, largest first, ties by path, so every job that collects the same files computes the
+same split. Checked on the suite at main dbf9be8: 1,976 tests as 494 / 494 / 495 / 493 in 13 /
+13 / 14 / 14 files, no file in two shards, union equal to the whole. Unset, every test runs, as
+before.
 
 Spec: none - CI's test plumbing; no part of the spec describes it.
 
