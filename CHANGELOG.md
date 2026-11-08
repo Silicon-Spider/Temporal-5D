@@ -64,6 +64,12 @@ review round, issues 603 and 604, the session log.
   search that never re-rooted (P5). `check_flat_nodes` checks what its comment says - each
   node's priors the softmax of its turn scores (a sum alone let new turns keep a prior of 0).
   Found writing P13: issues 603 and 604 (below). (§15.4; H37 for P3c.)
+- **M3 - the graph's table after a re-root.** P8 and P10 as tests: the graph after two
+  re-roots finds its nodes again (no node duplicated), and under 3-bit keys a re-root keeps
+  the first node of an identity in the table. `check_invariants` checks the table - every
+  entry in range, its node's identity, the lowest id of that identity, every node's identity
+  entered, none in a tree - and the re-root test ends its sweep on the re-root that goes
+  through, checking the search that re-rooted. (Register C11, C12.)
 
 Spec: none edited or proposed. No part of the spec describes exception safety, these tests,
 or the ladder's and the asset map's bookkeeping. The round brings the build further in line
