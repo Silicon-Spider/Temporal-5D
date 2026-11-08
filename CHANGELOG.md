@@ -10,6 +10,110 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-09 - Merge main (05afde5) into lane/net, after the C26/C27 work
+
+Main's three commits since the lane took it (e15f173): the network job's Linux-only failures (issue
+602: t5d-audit built, two tolerances fitted - `test_params.py`, `test_quant.py`) and the upstream
+drafts for three oracle notation-reader gaps (issue 579). Two conflicts, both sides kept: CHANGELOG
+by heading, main's entries first, then the lane's; BUILD_LOG's session log, main's entry first. No
+issue or edit number collides (the lane's issues 259-275 and edits 380-384). Checks on the merged
+tree: ruff "All checks passed!", "117 files already formatted"; main's two changed test files "61
+passed in 55.43s"; the lane's own files are those its commits tested (no file of either side
+touched the other's).
+
+Spec: no part of the spec describes a merge (the merged entries carry their own Spec lines).
+
+### 2026-11-09 - The network job's three Linux-only failures: t5d-audit built, two tolerances fitted to what they measure
+
+Once sharded (issue 601), the network job ran its whole suite on Linux. It failed the same three
+tests on every run (42469920087 on c8a9c49, 42473372690 on 9bc10fc, 42476803590 on e15f173), and
+none of them fails on the development machine (issue 602):
+
+- **`tests/engine/test_decision_log.py`** needs `t5d-audit` beside the library, and the job built
+  only the library and `t5d-gate`. The job now builds `t5d-audit` too (`.github/workflows/network.yml`).
+- **`tests/net/test_params.py`'s parameter fingerprint.** Its three float64 sums are meant to need
+  no bit-exact float32 libm across platforms. Its rank-weighted sum was still held to 1e-5, though a
+  tensor's last-bit difference enters that sum up to n times (n tensors; 230 in the v1). The runner
+  draws the v1's parameters about 1e-8 relative away from the development machine's: the plain sum
+  differs by 1.3e-6, the weighted sum by 7.7e-5 and the absolute sum by 1.8e-11 relative. `_same`
+  now allows 1e-5 x n on the weighted sum, and every fingerprint check goes through it. A moved draw
+  or two swapped tensors still move the sums far beyond.
+- **`tests/net/test_quant.py::test_an_evaluation_does_not_depend_on_its_batch`.**
+  - **The old bound.** It held "pow2" to 1e-5. That held on the development machine only because no
+    FP8 rounding flip fell early in the trunk at seeds 0-5.
+  - **Measured here (2026-11-09).** The two batches' FP32 arithmetic differs at about 81% of the
+    position's 88,576 trunk elements (RMS 1.8e-7). The format absorbs most of that. A value within
+    the difference of a rounding boundary flips, though, and an early flip spreads through every
+    later rounding.
+  - **On the runner.** It measured 2.1e-3 at seed 0 in two runs and passed in the third, with the
+    network code unchanged in between.
+  - **The new bound.** One bound for both rules, 1e-2, three times the largest spread measured
+    (3.1e-3, "absmax"). Under "absmax", the per-tensor mutants (2.6e-2 and 2.2e-2) still fail it.
+    Under "pow2", those mutants move this measure by at most 2.1e-4, which no end-to-end bound can
+    separate from an early flip on such a CPU. `test_quant_linear_scale_granularity` and
+    `test_the_attention_operands_are_rounded_after_rope` catch them exactly, as the docstring
+    already said.
+
+Spec: no part of the spec describes the CI job or these tests' tolerances. The purity test serves
+C19-C21 and G2 (register), whose text is unchanged. BUILD_LOG issues 601 (the shard design, recorded
+now) and 602.
+
+### 2026-11-08 - Upstream drafts: three oracle notation-reader gaps (two bug reports, one question)
+
+The done-means audit's verification (2026-11-02, its section 4) found, among the barriers of the
+ungated rulesets, three places where an oracle cannot read move text that the notation specification
+allows. Each is drafted in `docs/checkpoints/upstream/` for the user to file (register H27, CHECKPOINT 8).
+Each was verified at the pins on 2026-11-08: the oracle's reader read at its pinned commit; the
+refusal reproduced with the harness's `observe` (no golden file written) and with the stock tool or
+library, on scratch copies of the records; and the specification's text cited by line.
+
+- **`ftxi-signed-timeline-labels.md` (new), a bug report.** ftxi's `match_absolute_board` compares a
+  timeline's sign as written with ftxi's own rendering of each candidate move: `1` in odd games, `+1`
+  in even ones.
+  - On cwmtt/tesseractMageOChicken, ftxi refuses `(+1T10)` at action 28 (KD-0054).
+  - On four hand-built records, the stock `5dtools` refuses `(+1T1)` in an odd game and `(1T1)` in an
+    even one, and plays the other two spellings.
+  - The notation allows both forms (README lines 548-549, 405), and so do ftxi's own grammar and its
+    5DFEN reader.
+  - With the sign removed from the board coordinates, 5dtools plays all 33 actions, at the counts the
+    record lists for itself.
+- **`5d-chess-js-signed-timeline-token.md` (new), a bug report.** The library's reader removes
+  `(>Lx)` with `/\(>L\-?\d*\)/g`, so `(>L+1)` - the form the notation's own example game writes,
+  both in the version the library's documentation names (92c68f0) and at the pin - is read as a
+  move, and the whole import fails. `new Chess(text)` quietly holds no action at all. With the fix
+  applied to a scratch copy, the library imports all 33 actions of cwmtt/tesseractMageOChicken.
+  No known divergence records it, and none is needed: the library's outcome is `unsupported`, not a
+  refusal.
+- **`ftxi-empty-last-sub-turn.md` (new), a question.** ftxi refuses a last sub-turn with no moves:
+  the trailing `4. We3 /` of cwmtt/brawnsPuzzles-another, and the `/ 1-0` with which the
+  notation's example game ends. It is a question, not a bug, because ftxi's own grammar requires a
+  move after every `/`, and the specification shows the form by example, not by rule.
+- `docs/checkpoints/upstream/README.md`: the three drafts indexed, and what to check before filing
+  them. Nothing was checked against the issue trackers, and ftxi's `main` was read at `d765d3d`,
+  the newest commit in the submodule's history.
+- `oracles/known-divergences.toml`: KD-0054's `upstream` names its draft. No binding (oracle, pin,
+  record, kind, index, values) and no citation changed.
+- `docs/BUILD_LOG.md`: issue 579, with two corrections to the brief.
+  - **Turn Zero:** either reader fix - ftxi's or Chess in 5D's - would give
+    cwmtt/tesseractMageOChicken a second lineage, not only ftxi's.
+  - **Just Brawns:** a fix in ftxi alone brings nothing, because ftxi does not know the variant,
+    at its pin or on `main`.
+  - **Kairos:** it shares two of the gaps (its reader is ported from ftxi's). It is not drafted, as
+    its report waits for its triage after the release tier (CHECKPOINT 10).
+  - Elsewhere in the log: the H27 row, the lane's state, and the standing items for the user.
+- Checks (2026-11-08):
+  - `harness.py verify`: every section ok, with H48's 17 `proof-channel-vacuous` notes as before.
+  - `gate --tier commit`: the oracle layer ok (ftxi 8256 of 8256 and notation 3012 of 3012 required
+    values reproduced; calibration 1.25x); `SMOKE TEST - PASSED`, the baseline's 41 records compared
+    and 0 declined; the proof channel disabled.
+  - `selftest` was not run, as no harness code changed.
+
+Spec: §11.0 "A known-divergences file" ("reported upstream - defects as bug reports, disagreements
+with a documented rule as questions citing the source, which also tests our own reading; the owner
+files them") and register H27 describe the process this follows; no edit proposed - issue 579 says
+why (two of the three gaps are not recorded divergences, which the clause neither requires nor
+forbids reporting).
+
 ### 2026-11-09 - C26/C27: the default path, bit for bit - evidence (no code)
 
 Commit 4 of the C26/C27 work (`lane/net`): no file of code changes. A scratch probe (not committed)
