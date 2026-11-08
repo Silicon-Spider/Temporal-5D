@@ -1341,3 +1341,62 @@ TEST(mcts_fault_fallback_listings_and_stops_count_the_expansions_kept) {
   CHECK_EQ(stopped_off, std::size_t{0});
   CHECK(faults > 0);
 }
+
+// ---- L11: the flat root's steering tables -------------------------------------------------------
+
+TEST(mcts_the_flat_roots_steering_tables) {
+  // test_ladder.cpp's asset-map checks, under the flat form (review finding
+  // L11; the review's P12): with every turn generated (widening off, so both
+  // searches normalise over one set), each root child's unsteered prior is the
+  // plain search's noise-free prior and its boost what steering added, only a
+  // turn that travels into a board's past boosted, and the steered visits the
+  // search counts; under SteeredRule::BoostedChild every visit of a boosted
+  // child counts steered, and without steering none does.
+  const GameState s = asset_position();
+  const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
+  const auto travels_in = [&s](const RootChild& c) {
+    return std::any_of(c.moves.begin(), c.moves.end(), [&s](const Move& m) {
+      return !m.physical() && m.to_half_turn < s.multiverse().timeline(m.to_timeline)->last_half_turn();
+    });
+  };
+  for (const SteeredRule rule : {SteeredRule::BoostedChild, SteeredRule::Counterfactual}) {
+    SearchParams p = flat_steered();
+    p.widening = false;
+    p.steered_rule = rule;
+    SearchParams plain = p;
+    plain.asset_map = false;
+    Search steered(s, p);
+    Search unsteered(s, plain);
+    steered.run(*uniform, Limits{200});
+    unsteered.run(*uniform, Limits{200});
+    const std::vector<RootChild> a = steered.root_children();
+    const std::vector<RootChild> b = unsteered.root_children();
+    REQUIRE_EQ(a.size(), b.size());
+    std::size_t boosted = 0;
+    std::size_t off = 0;
+    std::size_t visits_off = 0;
+    std::uint64_t steered_visits = 0;
+    for (std::size_t i = 0; i < a.size(); ++i) {
+      REQUIRE(a[i].moves == b[i].moves);
+      if (a[i].boost > 0) {
+        ++boosted;
+        if (!travels_in(a[i])) ++off;
+      }
+      if (std::abs(a[i].prior_unsteered - b[i].prior_noise_free) > 1e-12) ++off;
+      if (std::abs(a[i].boost - (a[i].prior_noise_free - a[i].prior_unsteered)) > 1e-15) ++off;
+      if (a[i].steered_visits > a[i].visits) ++visits_off;
+      if (rule == SteeredRule::BoostedChild && a[i].steered_visits != (a[i].boost > 0 ? a[i].visits : 0u)) ++visits_off;
+      if (b[i].steered_visits != 0) ++visits_off;  // no steering, no steered visit
+      steered_visits += a[i].steered_visits;
+    }
+    std::printf("  flat, %s rule: %zu root children, %zu boosted, %llu steered visits\n",
+                rule == SteeredRule::BoostedChild ? "boosted-child" : "counterfactual", a.size(), boosted,
+                static_cast<unsigned long long>(steered_visits));
+    CHECK(boosted > 0);
+    CHECK(steered_visits > 0);
+    CHECK_EQ(steered_visits, steered.stats().steered_visits);
+    CHECK_EQ(off, std::size_t{0});
+    CHECK_EQ(visits_off, std::size_t{0});
+    CHECK_NOTHROW(steered.check_invariants());
+  }
+}
