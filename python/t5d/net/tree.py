@@ -48,6 +48,20 @@ not legal: no rules engine stands behind the moves.
   refresh, ``travel_since_refresh``) and its parent's outputs (``Node.effort_logits``,
   which ``evaluate`` records when the flag is on; a search that evaluates elsewhere sets
   it itself). The node's own outputs are never read.
+* **Inside a turn (C27, CHECKPOINT 9; section 7.9).** Under D2's tree form (section 8.2) a
+  simulation passes through inner submove nodes that make no network call. ``SearchTree(...,
+  evaluates=f)`` takes the gate decision for each new node - ``f(parent, move, universe)``, on
+  the edge into it (``universe``: the node's multiverse) - and a node it declines is ``inner``
+  (the root never is; ``evaluates`` None: every node evaluated, the ply split's and the
+  fixture's as before). An inner node is never evaluated, never refreshed, and no trigger is
+  checked at it - there is nothing at it to condition. Rung 1 at an evaluated node reads a move
+  that created a timeline anywhere on its segment - the move into it or into an inner node
+  between it and its nearest evaluated ancestor (``segment_branched``; per path, BUILD_LOG issue
+  268); C24's travel already counts inner travel (``travel_since_refresh``: inner nodes never
+  refresh), and its effort signal is the nearest evaluated ancestor's (``evaluated_ancestor``;
+  issue 269). A board an inner move supersedes is computed when the network next runs - the
+  next evaluated node's ``CachedEvaluator.evaluate`` computes every frozen board without an
+  entry - once per board (with its past and perspective) and epoch, and shared below.
 """
 
 from __future__ import annotations
@@ -328,6 +342,9 @@ class Node:
     refreshed_by: str | None = None
     #: C24: this node's last evaluation's effort logits ``(bins,)`` - its children's signal.
     effort_logits: torch.Tensor | None = None
+    #: C27: an inner submove node of the tree form - expanded on inherited priors, never evaluated
+    #: by the network (``SearchTree``'s ``evaluates``); the root never is.
+    inner: bool = False
 
     @property
     def state(self) -> PositionState:
@@ -343,7 +360,9 @@ def travel_since_refresh(node: Node) -> int:
     """C24's travel signal: the travel moves on the path from ``node``'s last refresh down
     to ``node`` itself - the moves into every node below the anchor of the node's epoch (its
     nearest refreshed ancestor, the node included; else the search root, whose position the
-    root epoch was made from, refreshed or not). Branching or not, a travel move counts once."""
+    root epoch was made from, refreshed or not). Branching or not, a travel move counts once.
+    Under C27 a travel made at an inner node counts toward the next evaluated node: inner nodes
+    never refresh, so the walk passes through them."""
     count, n = 0, node
     while n.parent is not None and not n.refreshed:
         count += n.move[0] == "jump"
@@ -351,21 +370,51 @@ def travel_since_refresh(node: Node) -> int:
     return count
 
 
-class SearchTree:
-    """Nodes over multiverses, with epochs, C3a rung 1 and C24 (see the module docstring)."""
+def evaluated_ancestor(node: Node) -> Node | None:
+    """C27: ``node``'s nearest proper ancestor the network evaluates (not inner) - the search root
+    at the latest; None for the root. Without inner nodes, the parent."""
+    n = node.parent
+    while n is not None and n.inner:
+        n = n.parent
+    return n
 
-    def __init__(self, evaluator: CachedEvaluator, root: Multiverse) -> None:
+
+def segment_branched(node: Node) -> bool:
+    """C3a rung 1's trigger under C27: a move that created a timeline on ``node``'s segment - the
+    move into ``node`` or into an inner node between it and its nearest evaluated ancestor (a
+    travel made inside a turn counts toward the next evaluated node; per path, BUILD_LOG issue
+    268). Without inner nodes, ``node.branched``."""
+    n = node
+    while True:
+        if n.branched:
+            return True
+        n = n.parent
+        if n is None or not n.inner:
+            return False
+
+
+class SearchTree:
+    """Nodes over multiverses, with epochs, C3a rung 1 and C24, and C27's inner nodes (see the
+    module docstring)."""
+
+    def __init__(self, evaluator: CachedEvaluator, root: Multiverse, *, evaluates=None) -> None:
         self.evaluator = evaluator
+        #: C27: ``evaluates(parent, move, universe) -> bool``, the gate decision on the edge into a
+        #: new node (``universe`` its multiverse): False makes the node inner. None: every node.
+        self.evaluates = evaluates
         self.root = Node(root)
         self.root.epoch = evaluator.root_epoch(root.state())
         self.refreshes = 0
         self.complexity_refreshes = 0  # C24's, counted against its budget
 
     def child(self, node: Node, move: Move) -> Node:
-        """The child of ``node`` by ``move`` (created once), in its parent's epoch."""
+        """The child of ``node`` by ``move`` (created once), in its parent's epoch - inner when
+        ``evaluates`` declines it (C27), decided once, when the node is made."""
         key = (move[0], *move[1:2], *(tuple(move[2]) if len(move) > 2 else ()))
         if key not in node.children:
-            node.children[key] = Node(node.universe.apply(move), node, move, node.epoch, branched=node.universe.branches(move))
+            universe = node.universe.apply(move)
+            inner = self.evaluates is not None and not self.evaluates(node, move, universe)
+            node.children[key] = Node(universe, node, move, node.epoch, branched=node.universe.branches(move), inner=inner)
         return node.children[key]
 
     def path(self, moves: Sequence[Move], start: Node | None = None) -> Node:
@@ -375,6 +424,8 @@ class SearchTree:
         return node
 
     def evaluate(self, node: Node) -> NetOutput:
+        if node.inner:
+            raise ValueError("an inner node makes no network call (C27: the tree form expands it on inherited priors)")
         out = self.evaluator.evaluate(node.state, node.epoch)
         if self.evaluator.config.complexity_refresh:
             node.effort_logits = out.effort_logits[0].detach().clone()  # C24: the children's parent output
@@ -384,12 +435,14 @@ class SearchTree:
         """Count a visit; C3a rung 1: refresh a node reached by a branching travel move once
         its visits reach V; C24, where rung 1 did not: refresh a complex node (add-only - rung
         1's rule is decided first and reads nothing C24 changes). Returns whether it refreshed.
-        In a dense epoch (C26: a search rooted under N*) nothing refreshes - there is no cache."""
+        In a dense epoch (C26: a search rooted under N*) nothing refreshes - there is no cache -
+        and nothing does at an inner node (C27: triggers only where the network runs); rung 1 at an
+        evaluated node reads its whole segment (``segment_branched``)."""
         node.visits += 1
-        if node.epoch is not None and node.epoch.kind == "dense":
+        if node.inner or (node.epoch is not None and node.epoch.kind == "dense"):
             return False
         cfg = self.evaluator.config
-        if cfg.node_refresh and node.branched and not node.refreshed and node.visits >= cfg.refresh_visit_threshold:
+        if cfg.node_refresh and segment_branched(node) and not node.refreshed and node.visits >= cfg.refresh_visit_threshold:
             self.refresh(node)
             node.refreshed_by = "rung1"
             return True
@@ -403,18 +456,20 @@ class SearchTree:
     def complexity_signals(self, node: Node) -> ComplexitySignals:
         """C24's signals for ``node``: its position's structure, its path's travel since its
         last refresh, and its parent's predicted difficulty (None until the parent has been
-        evaluated). Nothing of the node's own evaluation."""
-        parent = node.parent
+        evaluated) - under C27 the nearest evaluated ancestor's, an inner parent having no
+        outputs (BUILD_LOG issue 269). Nothing of the node's own evaluation."""
+        source = evaluated_ancestor(node)
         effort = None
-        if parent is not None and parent.effort_logits is not None:
-            effort = effort_difficulty(parent.effort_logits, self.evaluator.config.complexity_effort_quantile)
+        if source is not None and source.effort_logits is not None:
+            effort = effort_difficulty(source.effort_logits, self.evaluator.config.complexity_effort_quantile)
         return structural_signals(node.state, travel_since_refresh(node), effort)
 
     def complexity_due(self, node: Node) -> bool:
-        """Whether C24 refreshes ``node`` now: a non-root node, not yet refreshed, at its visit
-        gate, within the search's budget, whose score reaches the threshold."""
+        """Whether C24 refreshes ``node`` now: a non-root node the network evaluates (C27), not yet
+        refreshed, at its visit gate, within the search's budget, whose score reaches the
+        threshold."""
         cfg = self.evaluator.config
-        if node.parent is None or node.refreshed or node.visits < cfg.complexity_visit_threshold:
+        if node.inner or node.parent is None or node.refreshed or node.visits < cfg.complexity_visit_threshold:
             return False
         if self.complexity_refreshes >= cfg.complexity_refresh_budget:
             return False
@@ -422,7 +477,10 @@ class SearchTree:
 
     def refresh(self, node: Node) -> Epoch:
         """Fork a new epoch at ``node`` (copy-on-write): the node and every descendant still
-        in its old epoch move to the new one; everything else keeps its epoch."""
+        in its old epoch move to the new one - inner ones included (C27) - and everything else
+        keeps its epoch. An inner node is refused: nothing at it is conditioned."""
+        if node.inner:
+            raise ValueError("an inner node is refreshed nowhere: it makes no network call, so nothing at it is conditioned (C27)")
         old = node.epoch
         new = self.evaluator.refresh(node.state, old)
         node.epoch = new
