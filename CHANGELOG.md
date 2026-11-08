@@ -70,6 +70,18 @@ review round, issues 603 and 604, the session log.
   entry in range, its node's identity, the lowest id of that identity, every node's identity
   entered, none in a tree - and the re-root test ends its sweep on the re-root that goes
   through, checking the search that re-rooted. (Register C11, C12.)
+- **L1 - D2's tree form: inherited expansions and a carried root's re-evaluation.**
+  `inherit` set a node's edges and inherited flag before `set_priors`, which allocates; it
+  now puts the node back on a throw, and `expand_node` clears `inherited`. `reevaluate`
+  keeps the node aside (its edges, evaluation, flags and counts, and a root's side tables)
+  and puts it back if setting the priors throws - still inherited, so its next visit
+  evaluates it again; before, it was left evaluated on the inherited priors, never
+  re-evaluated. Tests: every allocation of a carried root's re-evaluation (59 faults: 56
+  leave it inherited, and the next batch makes the search the fault-free twin's; the rest
+  come after a whole re-evaluation, the twin's already); and with the asset map on, every
+  allocation of a gather after one to three playouts, then a re-root onto the child that
+  gather made (2,575 faults, 1,691 re-roots; no node left inherited and not expanded).
+  (Register D2.)
 
 Spec: none edited or proposed. No part of the spec describes exception safety, these tests,
 or the ladder's and the asset map's bookkeeping. The round brings the build further in line

@@ -1482,6 +1482,7 @@ struct Search::Impl {
     const MoveList& moves = x.moves();
     check_evaluation(ev, moves.size(), x.board_count());
     take_value(n, ev);
+    n.inherited = false;  // expanded from its own evaluation (review finding L1)
     n.edges.clear();
     if (flat()) {
       expand_flat(id, ev, x);
@@ -1547,22 +1548,67 @@ struct Search::Impl {
       lowest = i == 0 ? ev.logits[i] : std::min(lowest, ev.logits[i]);
     }
     Node& n = nodes_[id];
-    take_value(n, ev);
-    n.inherited = false;
-    n.submit_logit = ev.submit_logit;
+    // Review finding L1: the node as it was, kept aside (every allocation here
+    // comes before anything changes), and put back if setting the priors
+    // throws - the node still inherited, so the next visit evaluates it again.
+    std::vector<Edge> edges_before = n.edges;
     std::vector<double> logits;
     logits.reserve(n.edges.size());
-    for (Edge& e : n.edges) {
-      if (e.submit) {
-        e.logit = ev.submit_logit;
-        logits.push_back(std::isnan(ev.submit_logit) ? 0.0 : static_cast<double>(ev.submit_logit));
-        continue;
+    const bool has_eval_before = n.has_eval;
+    const bool inherited_before = n.inherited;
+    const double eval_mean_before = n.eval_mean;
+    const double eval_draw_before = n.eval_draw;
+    const double eval_var_before = n.eval_var;
+    const float eval_error_before = n.eval_error;
+    const float eval_moves_left_before = n.eval_moves_left;
+    const float submit_logit_before = n.submit_logit;
+    const double k0_before = n.k0;
+    const std::size_t instantiated_before = n.instantiated;
+    const bool expanded_before = n.expanded;
+    const bool pending_before = n.pending;
+    const bool noise_before = noise_applied_;
+    const std::uint64_t boosted_before = stats_.asset_boosted_edges;
+    const std::uint64_t suggested_before = stats_.suggestion_edges;
+    RootTables tables_before;
+    if (id == root_) swap_root_tables(tables_before);  // set_priors remakes them whole
+    try {
+      take_value(n, ev);
+      n.inherited = false;
+      n.submit_logit = ev.submit_logit;
+      for (Edge& e : n.edges) {
+        if (e.submit) {
+          e.logit = ev.submit_logit;
+          logits.push_back(std::isnan(ev.submit_logit) ? 0.0 : static_cast<double>(ev.submit_logit));
+          continue;
+        }
+        const auto it = index.find(coord(e.move));
+        e.logit = it != index.end() ? it->second : lowest;
+        logits.push_back(static_cast<double>(e.logit));
       }
-      const auto it = index.find(coord(e.move));
-      e.logit = it != index.end() ? it->second : lowest;
-      logits.push_back(static_cast<double>(e.logit));
+      set_priors(id, logits, std::isnan(ev.submit_logit));
+    } catch (...) {
+      // Nothing here allocates. (uncertainty_missing counts events: a redone
+      // evaluation counts it again, as t5d/mcts.hpp says.)
+      n.edges = std::move(edges_before);
+      n.has_eval = has_eval_before;
+      n.eval_mean = eval_mean_before;
+      n.eval_draw = eval_draw_before;
+      n.eval_var = eval_var_before;
+      n.eval_error = eval_error_before;
+      n.eval_moves_left = eval_moves_left_before;
+      n.inherited = inherited_before;
+      n.submit_logit = submit_logit_before;
+      n.k0 = k0_before;
+      n.instantiated = instantiated_before;
+      n.expanded = expanded_before;
+      n.pending = pending_before;
+      noise_applied_ = noise_before;
+      stats_.asset_boosted_edges = boosted_before;
+      stats_.suggestion_edges = suggested_before;
+      if (id == root_) swap_root_tables(tables_before);
+      account(n);
+      throw;
     }
-    set_priors(id, logits, std::isnan(ev.submit_logit));
     Node& r = nodes_[id];
     for (std::size_t i = r.instantiated; i < r.edges.size(); ++i) {
       if (r.edges[i].child != kNoNode || r.edges[i].visits > 0) r.instantiated = i + 1;
@@ -2403,6 +2449,23 @@ struct Search::Impl {
     const double eval_draw = p.eval_draw;
     const double eval_var = p.eval_var;
     Node& n = nodes_[id];
+    // Review finding L1: what follows is put back if setting the priors throws
+    // (set_priors allocates, the asset map's steering included) - the node a
+    // leaf again, as it came, never inherited, with the counts it made.
+    const bool submit_possible_before = n.submit_possible;
+    const bool submit_legal_before = n.submit_legal;
+    const float submit_logit_before = n.submit_logit;
+    const bool inherited_before = n.inherited;
+    const double eval_mean_before = n.eval_mean;
+    const double eval_draw_before = n.eval_draw;
+    const double eval_var_before = n.eval_var;
+    const double k0_before = n.k0;
+    const std::uint64_t unknown_before = stats_.unknown_edges;
+    const std::uint64_t submit_edges_before = stats_.submit_edges;
+    const std::uint64_t illegal_before = stats_.illegal_submits;
+    const std::uint64_t inherited_nodes_before = stats_.inherited_nodes;
+    const std::uint64_t boosted_before = stats_.asset_boosted_edges;
+    const std::uint64_t suggested_before = stats_.suggestion_edges;
     n.submit_possible = x.submit_possible();
     n.submit_legal = x.submit_legal();
     if (n.submit_possible) {
@@ -2410,10 +2473,10 @@ struct Search::Impl {
       e.submit = true;
       e.pruned = !n.submit_legal;
       e.logit = submit_logit;
-      edges.push_back(e);
+      edges.push_back(e);  // room reserved above: no allocation
       logits.push_back(std::isnan(submit_logit) ? 0.0 : static_cast<double>(submit_logit));
     }
-    n.edges = std::move(edges);
+    n.edges.swap(edges);  // `edges` holds the node's old ones now
     n.submit_logit = submit_logit;
     n.inherited = true;
     if (params_.tree_inherit_value) {
@@ -2427,7 +2490,29 @@ struct Search::Impl {
       if (!n.submit_legal) ++stats_.illegal_submits;
     }
     ++stats_.inherited_nodes;
-    set_priors(id, logits, std::isnan(submit_logit));
+    try {
+      set_priors(id, logits, std::isnan(submit_logit));
+    } catch (...) {
+      // Nothing here allocates. (set_priors marks a node expanded last, after
+      // its last allocation; for a non-root it touches no side table.)
+      n.edges.swap(edges);
+      n.submit_possible = submit_possible_before;
+      n.submit_legal = submit_legal_before;
+      n.submit_logit = submit_logit_before;
+      n.inherited = inherited_before;
+      n.eval_mean = eval_mean_before;
+      n.eval_draw = eval_draw_before;
+      n.eval_var = eval_var_before;
+      n.k0 = k0_before;
+      stats_.unknown_edges = unknown_before;
+      stats_.submit_edges = submit_edges_before;
+      stats_.illegal_submits = illegal_before;
+      stats_.inherited_nodes = inherited_nodes_before;
+      stats_.asset_boosted_edges = boosted_before;
+      stats_.suggestion_edges = suggested_before;
+      account(n);
+      throw;
+    }
     return true;
   }
 
