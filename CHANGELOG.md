@@ -129,6 +129,9 @@ review round, issues 603 and 604, the session log.
   steered visits the search counts, every visit of a boosted child steered under
   `SteeredRule::BoostedChild`, none without steering (5 of 10 root children boosted, 169
   steered visits). (Register I2, I15.)
+- **L13** - the root-noise test sweeps every allocation of the root's first expansion: the
+  flat form's 517, not 528 at a stride past 400 (the 11 the count lost are the nothrow
+  allocations L8 took out of the countdown).
 
 Spec: none edited or proposed. No part of the spec describes exception safety, these tests,
 or the ladder's and the asset map's bookkeeping. The round brings the build further in line
