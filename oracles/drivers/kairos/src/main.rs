@@ -54,18 +54,21 @@
 // The answers, by search (`--search`):
 //   parse      none: parse mode - the state event, the side to move and the replay
 //              (the same replay, refusals included, as the two searches), and a null
-//              for every question; nothing is searched (decision H52: "parse mode
-//              first, then full mode").
+//              for every question; nothing is searched (H52; CHECKPOINT 9's brief:
+//              "parse mode first, then full mode", reordered by CHECKPOINT 10).
 //   in_check  hypercuboid and naive: `State::has_phantom_check()`.
 //   hypercuboid
-//     terminal       `State::get_mate_type()`: its hypercuboid search, uninterruptible -
-//                    checkmate, stalemate, or none (a legal action exists: None or Softmate).
+//     terminal       `State::get_mate_type()`: its hypercuboid search, uninterruptible, each
+//                    sub-search capped at 2^32-1 hypercuboids (out of every deadline's
+//                    reach: PROVENANCE.md) - checkmate, stalemate, or none (a legal action
+//                    exists: None or Softmate).
 //     legal_actions  null. Its hypercuboid search leaves out the actions that waste a
 //                    move, so what it yields is not the gate's count (PROVENANCE.md).
 //   naive
-//     legal_actions  `core::naive::naive_actions_budget(state, cap, unbounded)`: its
+//     legal_actions  `core::naive::naive_actions_budget(state, cap, u64::MAX)`: its
 //                    exhaustive enumerator, stopped at the cap (a count equal to the cap
-//                    means "at least that many").
+//                    means "at least that many"); its node budget of 2^64-1 is out of
+//                    reach (PROVENANCE.md).
 //     terminal       none when it finds an action; when it finds none - an exhaustive
 //                    search that terminated - checkmate if `has_phantom_check()`, else
 //                    stalemate: the rule `get_mate_type()` applies to its own search.

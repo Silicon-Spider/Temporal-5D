@@ -132,13 +132,19 @@ def _code_lines(text: str) -> str:
 
 
 class NoVerdictFromAnExhaustedBudgetTests(unittest.TestCase):
-    """A mate verdict is a proof (H37): neither Kairos source may give one from a search that ran out of budget."""
+    """A mate verdict is a proof (H37): neither Kairos source may give one from a search that ran out of budget.
+
+    Neither search is unbounded. Each of the mate test's three sub-searches is a cursor with a built-in cap of
+    2^32-1 hypercuboids, and the exhaustive source's enumeration a node budget of 2^64-1; a spent cap reads as "no
+    action" in both, which would be a verdict. No gate deadline lets either be reached (PROVENANCE.md, "Kairos, the
+    fourth oracle"): what these tests hold is that the driver adds no smaller budget, and that the pin's caps are those.
+    """
 
     def test_the_driver_calls_nothing_budgeted(self):
         code = _code_lines((paths.DRIVERS / "kairos" / "src" / "main.rs").read_text(encoding="utf-8"))
-        # The hypercuboid source's verdict: Kairos's own mate test, which no budget reaches.
+        # The hypercuboid source's verdict: Kairos's own mate test, run to its built-in caps (below), out of reach.
         self.assertIn("state.get_mate_type()", code)
-        # The exhaustive source: an unbounded node budget, so it stops only at the cap or at the end.
+        # The exhaustive source: a node budget of 2^64-1 - out of reach - so it stops at the cap or at the end.
         self.assertIn("naive_actions_budget(state, options.cap, u64::MAX)", code)
         for budgeted in ("interrupt_on", "has_legal_action", "status_of", "STATUS_BUDGET", "Instant::now() +"):
             self.assertNotIn(budgeted, code, budgeted)
@@ -157,6 +163,20 @@ class NoVerdictFromAnExhaustedBudgetTests(unittest.TestCase):
         start = source.index("fn get_mate_type_impl(")
         body = source[start:source.index("\n    }\n", start)]
         self.assertIn("interrupt_off()", body)
+
+    def test_the_pinned_hypercuboid_cursor_starts_with_its_full_cap(self):
+        # Each of get_mate_type_impl's sub-searches is a fresh cursor (HcCursor::new) whose budget starts at u32::MAX
+        # hypercuboids; spent, the cursor finds "no further action" - which the mate test would read as a verdict. Out
+        # of reach of every deadline at the pin; a pin bump that lowers it must fail here and be read again.
+        pin = lockfile.load().pin("kairos")
+        from oracle_harness import gitutil
+
+        if not gitutil.is_checkout(pin.checkout) or not gitutil.has_commit(pin.checkout, pin.commit):
+            self.skipTest("the kairos submodule is not checked out (python oracles/harness.py sync)")
+        source = gitutil.read_path(pin.checkout, pin.commit, "src/core/hypercuboid.rs").decode("utf-8")
+        start = source.index("    pub fn new(ss: SearchSpace, order: HcOrdering) -> Self {\n        HcCursor {")
+        body = source[start:source.index("\n    }\n", start)]
+        self.assertIn("budget: u32::MAX,", body)
 
 
 def _kairos_built() -> bool:
