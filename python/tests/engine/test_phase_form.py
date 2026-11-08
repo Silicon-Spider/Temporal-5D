@@ -700,6 +700,18 @@ def test_the_dense_dispatch_is_the_dense_evaluator(policy):
         assert ev.positions_by_mode == {"dense": len(states), "cached": 0} and _empty(ev.cached.store)
 
 
+def test_the_engine_path_refuses_node_refreshes():
+    """The engine's search opens one epoch per search and refreshes no node (BUILD_LOG issue 271), so
+    its evaluator refuses a cached evaluator configured for node refreshes - C3a's rung 1 or C24's -
+    rather than ignore them; the root refresh and the phase form are its own and accepted."""
+    model = _model(9)
+    for cfg in (CacheConfig(node_refresh=True), CacheConfig(complexity_refresh=True), CacheConfig(root_refresh=True, node_refresh=True)):
+        with pytest.raises(NotImplementedError, match="issue 271"):
+            CachedNetworkEvaluator(CachedEvaluator(model, cfg))
+    for cfg in (CacheConfig(), CacheConfig(root_refresh=True), CacheConfig(root_refresh=True, phase_form=True)):
+        CachedNetworkEvaluator(CachedEvaluator(model, cfg))
+
+
 def test_a5_is_refused_first_under_the_phase_form():
     """The engine's wrapper keeps A5's refusal first (BUILD_LOG issue 252), the phase form on: an
     object with only ``.model`` is refused before anything reads its configuration."""
