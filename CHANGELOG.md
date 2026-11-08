@@ -10,6 +10,39 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-09 - C26/C27: the default path, bit for bit - evidence (no code)
+
+Commit 4 of the C26/C27 work (`lane/net`): no file of code changes. A scratch probe (not committed)
+recorded per-case hashes of 93 cases at three trees - main e15f173, issue 259's commit 46f94ad and the
+lane's head f852ef3 (C26, C27, issue 271) - with the engine library unchanged between them:
+- the cached path's every output (every `NetOutput` field, bit for bit) along `test_cache.py`'s random
+  paths on its seven geometries x both C20 readings x the causal, root-refresh and node-refresh epochs
+  (42 cases);
+- C24's simulation (`test_complexity._simulate`, nodes evaluated on first reach: its refresh events and
+  every node's epoch; 3 seeds);
+- step-API searches of 24 playouts - H15's digest, the search's epoch and every evaluation's bytes -
+  with `NetworkEvaluator` (dense and block-causal scope) and `CachedNetworkEvaluator` (causal and root
+  refresh), under the ply split, the tree form and the flat form, at two random-play roots whose
+  pseudo-legal and legal moves agree and two where they differ (issue 259's roots; 48 cases).
+
+Issue 259's commit against the lane's head: **all 93 identical** - C26 (behind `phase_form`), C27
+(behind `evaluates`) and issue 271's refusal leave the default path bit for bit as it was. Main against
+issue 259's commit: exactly 6 differ - the root-refresh searches, under each split, at the two roots
+whose pseudo-legal and legal moves differ (issue 259's fix: the refreshed history now conditioned on
+the root leaf's own moves); every other case identical, root-refresh searches at roots whose two lists
+agree included. The whole suite with `T5D_REQUIRE_ENGINE=1` on the lane's head, as CI shards it
+(`T5D_TEST_SHARD=i/4`, slow tests included, 2 torch threads each, a loaded machine): shard 0/4 "539
+passed, 1617 deselected in 2619.41s", 1/4 "539 passed, 1617 deselected in 1373.92s", 2/4 "539
+passed, 1 skipped, 1616 deselected in 2950.43s" (the skip: `T5D_RECORDS` unset, opt-in), 3/4 "538
+passed, 1618 deselected in 830.40s" - 2155 passed. `harness.py gate --tier commit` (the engine
+unchanged): every check ok but `pins` and `boundary` (the two "kairos is not checked out" of
+`verify`), so "oracle layer [commit]: FAILED"; "engine differential: SMOKE TEST - PASSED" (41
+records compared with the last green run, 0 declined; calibration 1.24x); "proof channel: DISABLED -
+the gate failed".
+
+Spec: no part of the spec describes this entry (evidence for C26/C27's entries below; register C26,
+C27; issues 259-275).
+
 ### 2026-11-09 - The engine path refuses node refreshes it cannot make (issue 271)
 
 The engine's search opens one epoch per search and never refreshes a node, and
