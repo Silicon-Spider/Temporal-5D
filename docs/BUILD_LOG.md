@@ -7112,6 +7112,10 @@ superseded or made moot says so; nothing is deleted.
       - L11: P12, `test_ladder.cpp`'s asset-map checks under the flat form.
       - L13: the root-noise test sweeps all 517 allocations of the flat form's first expansion
         (528 counted the nothrow allocations L8 took out of the countdown).
+      - L6, again: P13's bound let the review's mutant M28 through (its own P13 had needed a
+        white-box recount); a new test recounts `asset_boosted_edges` through the public
+        interface (the root steered alone, widening off: the root children a boost raised) at
+        every allocation of the root's expansion (501).
 603. **This machine's g++ 16.2 breaks `std::deque`'s exception safety under its default
     `-fassume-sane-operators-new-delete`** (found by `lane/fix535`, 2026-11-09, in issue 600's
     review round; not a defect in the engine's source). With `operator new` assumed free of

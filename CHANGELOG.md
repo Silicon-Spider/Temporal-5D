@@ -132,6 +132,14 @@ review round, issues 603 and 604, the session log.
 - **L13** - the root-noise test sweeps every allocation of the root's first expansion: the
   flat form's 517, not 528 at a stride past 400 (the 11 the count lost are the nothrow
   allocations L8 took out of the countdown).
+- **L6, again - the boosted turns recounted.** The survivors' re-run (below) found P13's
+  bound too weak: the review's mutant M28 - the rollback forgetting `asset_boosted_edges` -
+  survived it (the review's own P13 had needed a white-box recount to kill it). A new test
+  recounts through the public interface: with the asset map steering the root alone and
+  every turn generated at once (widening off), the count is exactly the number of root
+  children a boost raised. Every allocation of the delivery that expands a fresh search's
+  root, tree and graph (501 each): count and recount agree after each fault and after
+  searching on (604 disagreements in each under M28).
 
 Spec: none edited or proposed. No part of the spec describes exception safety, these tests,
 or the ladder's and the asset map's bookkeeping. The round brings the build further in line
