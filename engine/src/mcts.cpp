@@ -19,6 +19,7 @@
 #include <stdexcept>
 #include <string>
 #include <tuple>
+#include <type_traits>
 #include <utility>
 
 #include "t5d/board.hpp"
@@ -1304,7 +1305,11 @@ struct Search::Impl {
   }
 
   // D4's effort label: a root edge's visit counted - it becomes the most
-  // visited when it has strictly more visits than the incumbent.
+  // visited when it has strictly more visits than the incumbent. All or
+  // nothing (review finding L2): the change's record is built and entered
+  // before anything is set - push_back's strong guarantee (the record moves
+  // without throwing) - so an allocation failure leaves no part of it, and the
+  // next root visit to the new leader records it.
   void note_root_visit(std::size_t ei) {
     const Node& r = nodes_[root_];
     if (best_edge_ == kNoEdge || (ei != best_edge_ && r.edges[ei].visits > r.edges[best_edge_].visits)) {
@@ -1322,7 +1327,8 @@ struct Search::Impl {
       c.to_step = step_of(root_, ei);
       c.to_visits = r.edges[ei].visits;
       c.to_q = edge_q(r, r.edges[ei]);
-      pv_changes_.push_back(std::move(c));
+      static_assert(std::is_nothrow_move_constructible_v<PvChange>);
+      pv_changes_.push_back(std::move(c));  // first: what can throw, before anything is set
       ++stats_.pv_changes;
       pv_dirty_ = true;
       best_edge_ = ei;
@@ -2727,8 +2733,11 @@ struct Search::Impl {
     if (params_.proof_channel) {
       for (std::size_t i = path.size(); i-- > 0;) update_bounds(path[i].node);
     }
-    if (path.size() >= 2 && path[0].node == root_) note_root_visit(path[1].edge);
+    // The playout is counted with the path (review finding L2): note_root_visit
+    // allocates, and a failure there must not leave the root's visits ahead of
+    // the playouts.
     ++stats_.playouts;
+    if (path.size() >= 2 && path[0].node == root_) note_root_visit(path[1].edge);
   }
 
   void complete_residual(const std::vector<Step>& path, std::size_t ei, NodeId cid) {
@@ -2746,11 +2755,13 @@ struct Search::Impl {
     ++stats_.residual_backups;
     backup(path, r, rd, 1.0, false, path_steered_);
     if (pid == root_) {
-      note_root_visit(ei);  // the edge crossed is the root's own
-      if (path_steered_ && ei < root_steered_.size()) {  // E10: and so is the steered choice
+      // The edge crossed is the root's own, and so is the steered choice (E10)
+      // - counted before note_root_visit, which allocates (review finding L2).
+      if (path_steered_ && ei < root_steered_.size()) {
         ++root_steered_[ei];
         ++stats_.steered_visits;
       }
+      note_root_visit(ei);
     }
   }
 
