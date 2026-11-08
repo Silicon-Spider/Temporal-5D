@@ -10,6 +10,31 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-09 - Issue 535's review round: c61ed3a's findings fixed (M1-M3, L1-L13), two issues found beside them
+
+The review of c61ed3a (no HIGH; three MEDIUM, fourteen LOW) and the main loop's decisions
+on it: each finding fixed as decided, one commit per group, each adding its paragraph here
+(L14 was done at the merge of main 05afde5). Most tests are the review's own probes,
+adopted, in the new `engine/tests/test_mcts_faults.cpp`. `docs/BUILD_LOG.md`: issue 600's
+review round, issues 603 and 604, the session log.
+
+- **L8 - a swallowed fault seen.** Every fault loop - the new tests', `test_mcts_memory.cpp`'s
+  and the C API tests' - checks that a fault that fired came out of the call, and
+  `test_alloc.cpp`'s nothrow `operator new` (`std::stable_sort`'s buffer, a failure there
+  absorbed by design) takes no part in the countdown. The review's P7 as a test: every
+  allocation of a gather, a delivery, `advance` and `advance_to` (about 1,500 points at a
+  stride where there are more than 3,000), each on a fresh search, under the ply split (graph
+  and tree), the tree form and the flat form (graph and tree) - 613, 598, 1,135, 5,535 and
+  5,527 faults, each thrown.
+
+Spec: none edited or proposed. No part of the spec describes exception safety, these tests,
+or the ladder's and the asset map's bookkeeping. The round brings the build further in line
+with §15.4's invariants under an allocation failure - visit counts consistent through
+backup (L2), virtual loss released (M1), re-rooting (M3, L3) - for D2's flat and tree forms
+(register D2) and the graph (C11, C12); with H37 for the pull that runs out of turns (P3c);
+and with H23/H41: no proof enters the tree or a record while the proof channel is off (L3).
+The asset map stays a prior (H2): no verdict logic changes.
+
 ### 2026-11-08 - Issue 535 fixed: D2's flat form, a node's creation and a re-root exception-safe under an allocation failure
 
 The done-means audit found (build-log issue 535, on `lane/audit`) and the verification

@@ -96,6 +96,26 @@ void check_flat_nodes(const Search& s) {
   }
 }
 
+// `f` with its allocation `k` failing: whether it threw std::bad_alloc - and a
+// fault that fired must come out of the call (review finding L8: a failure
+// swallowed would never reach the caller as T5D_ERR_MEMORY).
+template <class F>
+bool faulted(long long k, F&& f) {
+  bool threw = false;
+  bool fired = false;
+  {
+    const t5d_test::alloc::FailAfter fault(k);
+    try {
+      f();
+    } catch (const std::bad_alloc&) {
+      threw = true;
+    }
+    fired = t5d_test::alloc::fail_countdown < 0;
+  }
+  CHECK(threw || !fired);
+  return threw;
+}
+
 // The counts describe the nodes made (a search never re-rooted): one each, and
 // one mate check per turn start (classify) - none for a node not made, or
 // taken back.
@@ -149,25 +169,12 @@ TEST(mcts_an_allocation_failure_in_gather_or_deliver_leaves_the_search_consisten
       if (arm == 2) p.split = TurnSplit::Tree;
       Search s(start("Standard - Two Timelines"), p);
       s.run(*uniform, Limits{40});
-      bool threw = false;
       std::size_t n = 0;
-      {
-        const t5d_test::alloc::FailAfter fault(k);
-        try {
-          n = s.gather(8);
-        } catch (const std::bad_alloc&) {
-          threw = true;
-        }
-      }
+      const bool threw = faulted(k, [&] { n = s.gather(8); });
       if (!threw && n > 0) {
         std::vector<Evaluation> ev(n);
         uniform->evaluate(s.requests(), ev);
-        const t5d_test::alloc::FailAfter fault(k / 4);
-        try {
-          s.deliver(ev);
-        } catch (const std::bad_alloc&) {
-          ++deliver_faults;
-        }
+        if (faulted(k / 4, [&] { s.deliver(ev); })) ++deliver_faults;
       } else if (threw) {
         ++gather_faults;
       }
@@ -203,25 +210,12 @@ TEST(mcts_an_allocation_failure_in_the_flat_form_leaves_the_search_consistent) {
       p.graph = graph;
       Search s(start("Standard - Two Timelines"), p);
       s.run(*uniform, Limits{40});
-      bool threw = false;
       std::size_t n = 0;
-      {
-        const t5d_test::alloc::FailAfter fault(k);
-        try {
-          n = s.gather(8);
-        } catch (const std::bad_alloc&) {
-          threw = true;
-        }
-      }
+      const bool threw = faulted(k, [&] { n = s.gather(8); });
       if (!threw && n > 0) {
         std::vector<Evaluation> ev(n);
         uniform->evaluate(s.requests(), ev);
-        const t5d_test::alloc::FailAfter fault(k / 4);
-        try {
-          s.deliver(ev);
-        } catch (const std::bad_alloc&) {
-          ++deliver_faults;
-        }
+        if (faulted(k / 4, [&] { s.deliver(ev); })) ++deliver_faults;
       } else if (threw) {
         ++gather_faults;
       }
@@ -265,25 +259,12 @@ TEST(mcts_an_allocation_failure_never_marks_a_flat_node_complete_with_a_turn_mis
         p.widening = widening;
         Search s(start("Standard"), p);
         s.run(*uniform, Limits{16});
-        bool threw = false;
         std::size_t n = 0;
-        {
-          const t5d_test::alloc::FailAfter fault(k);
-          try {
-            n = s.gather(8);
-          } catch (const std::bad_alloc&) {
-            threw = true;
-          }
-        }
+        bool threw = faulted(k, [&] { n = s.gather(8); });
         if (!threw && n > 0) {
           std::vector<Evaluation> ev(n);
           uniform->evaluate(s.requests(), ev);
-          const t5d_test::alloc::FailAfter fault(k / 2);
-          try {
-            s.deliver(ev);
-          } catch (const std::bad_alloc&) {
-            threw = true;
-          }
+          threw = faulted(k / 2, [&] { s.deliver(ev); });
         }
         faults += threw ? 1u : 0u;
         CHECK_NOTHROW(s.check_invariants());
@@ -342,15 +323,7 @@ TEST(mcts_an_allocation_failure_never_leaves_a_node_the_root_does_not_reach) {
     std::size_t faults = 0;
     for (long long k = 0; k < total; ++k) {
       Search s = prepared();
-      bool threw = false;
-      {
-        const t5d_test::alloc::FailAfter fault(k);
-        try {
-          (void)s.gather(arm.leaves);
-        } catch (const std::bad_alloc&) {
-          threw = true;
-        }
-      }
+      const bool threw = faulted(k, [&] { (void)s.gather(arm.leaves); });
       if (threw) {
         ++faults;
       } else {
@@ -417,15 +390,7 @@ TEST(mcts_an_allocation_failure_in_a_reroot_leaves_the_search_consistent) {
         // (detect_mate) before the re-root: its last allocations are the re-root's.
         for (long long k = 0; k < total; k += !to_far || k + 64 >= total ? 1 : 53) {
           Search s = prepared();
-          bool threw = false;
-          {
-            const t5d_test::alloc::FailAfter fault(k);
-            try {
-              reroot(s);
-            } catch (const std::bad_alloc&) {
-              threw = true;
-            }
-          }
+          const bool threw = faulted(k, [&] { reroot(s); });
           faults += threw ? 1u : 0u;
           CHECK_NOTHROW(s.check_invariants());
           s.run(*uniform, Limits{10});
@@ -474,16 +439,7 @@ TEST(mcts_root_noise_survives_an_allocation_failure_in_the_roots_expansion) {
     for (long long k = 0; k < total; k += k < 400 ? 1 : 17) {
       Search s(root, p);
       const std::vector<Evaluation> ev = first_batch(s);
-      bool threw = false;
-      {
-        const t5d_test::alloc::FailAfter fault(k);
-        try {
-          s.deliver(ev);
-        } catch (const std::bad_alloc&) {
-          threw = true;
-        }
-      }
-      faults += threw ? 1u : 0u;
+      faults += faulted(k, [&] { s.deliver(ev); }) ? 1u : 0u;
       CHECK_NOTHROW(s.check_invariants());
       s.run(*uniform, Limits{8});
       CHECK_NOTHROW(s.check_invariants());

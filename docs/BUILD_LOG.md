@@ -7064,6 +7064,12 @@ superseded or made moot says so; nothing is deleted.
       resolved by this entry; (2) `dropped_generators` is not in the C API's
       `t5d_search_summary` (appending it changes the ABI and the Python binding's mirror) -
       if wanted, a change of its own.
+    - **The review round** (2026-11-09; the review of c61ed3a - no HIGH, three MEDIUM, fourteen
+      LOW - and the main loop's decisions on it). Each finding fixed as decided, a commit per
+      group; most tests are the review's probes, adopted (`test_mcts_faults.cpp`):
+      - L8: every fault loop checks that a fault that fired came out of the call;
+        `test_alloc`'s nothrow `operator new` skips the countdown. P7 in five configurations,
+        the ladder off: every fault thrown.
 
 ## Proposed spec edits
 

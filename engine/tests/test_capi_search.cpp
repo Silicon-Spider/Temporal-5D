@@ -746,6 +746,7 @@ TEST(capi_search_a_search_reused_after_out_of_memory_stays_consistent) {
           {
             const t5d_test::alloc::FailAfter fault(k);
             st = t5d_search_gather(s.get(), 8, T5D_NO_LIMIT, &n, &error);
+            CHECK(st != T5D_OK || t5d_test::alloc::fail_countdown >= 0);  // a fault that fired is reported (review finding L8)
           }
           bool threw = false;
           std::size_t m = 0;
@@ -756,6 +757,7 @@ TEST(capi_search_a_search_reused_after_out_of_memory_stays_consistent) {
             } catch (const std::bad_alloc&) {
               threw = true;
             }
+            CHECK(threw || t5d_test::alloc::fail_countdown >= 0);
           }
           REQUIRE_EQ(st, threw ? T5D_ERR_MEMORY : T5D_OK);
           if (threw) {
@@ -798,6 +800,7 @@ TEST(capi_search_a_search_reused_after_out_of_memory_stays_consistent) {
           {
             const t5d_test::alloc::FailAfter fault(k);
             st = t5d_search_advance(s.get(), index, &error);
+            CHECK(st != T5D_OK || t5d_test::alloc::fail_countdown >= 0);
           }
           bool threw = false;
           {
@@ -807,6 +810,7 @@ TEST(capi_search_a_search_reused_after_out_of_memory_stays_consistent) {
             } catch (const std::bad_alloc&) {
               threw = true;
             }
+            CHECK(threw || t5d_test::alloc::fail_countdown >= 0);
           }
           REQUIRE_EQ(st, threw ? T5D_ERR_MEMORY : T5D_OK);
           t5d_free(error);
@@ -847,6 +851,7 @@ TEST(capi_search_a_search_reused_after_out_of_memory_stays_consistent) {
           {
             const t5d_test::alloc::FailAfter fault(k);
             st = t5d_search_deliver_evaluations(s.get(), &b, &error);
+            CHECK(st != T5D_OK || t5d_test::alloc::fail_countdown >= 0);
           }
           if (st != T5D_OK) {
             ++faults;
