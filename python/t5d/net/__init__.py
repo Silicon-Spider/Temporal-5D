@@ -17,7 +17,9 @@ recompute, prefix sharing, refresh epochs and FP8 storage (C2, C3, C3a rung 1, C
 a search-tree fixture (``tree.py``), and section 15.3's cost model and
 benchmark (``cost.py``, ``cache_bench.py``). See ``config.py`` for which register rows are
 built here and which are flags for later stages. Register A7: the input is read from the acting
-player's side (``state.py``; ``mirror`` is a position's colour-swapped mirror).
+player's side (``state.py``; ``mirror`` is a position's colour-swapped mirror). Register A5, a
+prototype behind its flag (``NetConfig.piece_centric``, off; dense scope only): piece-centric
+tokens - the pieces and the candidate moves' destination squares (``to_piece_centric``).
 """
 
 from .cache import CacheConfig, CachedEvaluator, Epoch, KVStore, reference_output
@@ -39,6 +41,8 @@ from .state import (
     permute_boards,
     relayout,
     timeline_index,
+    to_piece_centric,
+    to_square_centric,
     translate,
 )
 from .synthetic import synthetic_state, synthetic_states
@@ -77,6 +81,8 @@ __all__ = [
     "permute_boards",
     "relayout",
     "timeline_index",
+    "to_piece_centric",
+    "to_square_centric",
     "translate",
     "synthetic_state",
     "synthetic_states",
