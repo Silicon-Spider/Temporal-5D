@@ -412,7 +412,8 @@ pushed after every commit, taking main by merge, never rebase (re-check with `gi
   quiet machine; the round-2 review's fixes made (2026-11-08, issue 577: the lineage table fails
   closed and its wiring is tested; the lineage notes corrected - Kairos's own parts are its
   wasted-move pruning and its playing engine, edit 401) and its one question for the user (issue
-  578); H48's stop (issue 576) with the user; the three rulesets Kairos reads and ftxi does not (Timeline Battleground, Just
+  578); the oracle notation-reader gaps of the audit's verification drafted for upstream (issue 579:
+  two bug reports, one question - the user's to file); H48's stop (issue 576) with the user; the three rulesets Kairos reads and ftxi does not (Timeline Battleground, Just
   Kings, Just Pawns) and the ftxi/cwmtt lineage question with the user; Kairos's
   parse mode in the quiet-machine block (issue 530), reported first if it answers a ruleset
   ftxi does not; H48's re-recording; the release tier with the engine configured, Kairos
@@ -604,9 +605,9 @@ main and issue 300 is ruled. Early adjudication (§12.3) has no specification (i
 
 **Waiting on the user:** nothing that blocks (the `gh` login is done and the CI
 comparison recorded in "Recovery", above); the standing items - branch protection with
-the workflows as required checks; filing the two oracle bug drafts in
-`docs/checkpoints/upstream/` (and, after gate step 3b, the ftxi question of issue
-126); applying the proposed spec edits upstream. **GitHub Actions has started no job
+the workflows as required checks; filing the oracle drafts in
+`docs/checkpoints/upstream/` - the two bug drafts of R7, the ftxi question of issue
+126, and issue 579's three (two bug reports, one question); applying the proposed spec edits upstream. **GitHub Actions has started no job
 since about 09:56 UTC on 2026-10-17** - every run, on main and on every lane, fails at
 once with "The job was not started because recent account payments have failed or
 your spending limit needs to be increased" (the account's 'Billing & plans'): until
@@ -1781,7 +1782,7 @@ width (M22)", "The CHECKPOINT 8 figures"). Found on the way: the ruling's premis
 | H22 | built, tested | All five items of §11.0 (E1, E2, E4); the register's wording now matches what is built (proposed edit 40, applied upstream) |
 | H23 | built, tested | The gate, oracle and engine sides. The engine is configured in `gate.toml` (`./build/engine/t5d-gate`, full mode, 2026-10-17; the root's build on every platform, with a time limit of its own, `[engine] timeout_s`) and compared in every tier: commit, a smoke test (H47), PASSED, locally and in CI (run 39009070712); nightly PASSED locally (2026-10-17, under the two-oracle rule), gating Standard - Half Reflected and Standard - Reversed Royalty; Standard - Turn Zero, gated since H51, has one oracle behind cwmtt/tesseractMageOChicken and is not - not yet run in CI with the engine (step 2). Since CHECKPOINT 8 (H47, built 2026-10-17) a ruleset is gated only when two oracles stand behind each of its records, and the commit tier holds the engine to its baseline (spec issues 131-133). The release tier, the one that can enable the proof channel, is not yet run with it: its oracle layer fails on H48's 17 notes until the re-recording. The proof channel stays disabled (H23, H41). Kairos (H52, CHECKPOINT 9) is pinned and its query surface confirmed (`lane/gate`, 2026-10-23); its two sources join the nightly and release tiers once the quiet-machine block records their golden files. CHECKPOINT 10: Kairos is in ftxi's lineage - the two-oracle bar counts lineages (H47) - and the sign-off run leaves it out |
 | H24, H26, H28 | built, tested | The generator and the 5dpgn/5DFEN parser are in-house (`engine/`), written from `docs/rules/README.md` and the notation spec's text (551 engine tests on `lane/gate` after H51's review); boundary clean. H28's one exception - the export-form record converted by the harness (CHECKPOINT 3) - is now in the register. Where the specification says when to write a token and not how to read one that disagrees, the reader reads leniently: the capture mark since H51 (2026-10-17, rulebook R11; `PgnOptions::capture_marks`), as the annotations (T15) and turn numbers before it - the move read as its squares define it, the mismatch a warning (`PgnReplay::warnings()`). H26 since CHECKPOINT 9: Kairos is the fifth submodule (pinned 2026-10-23, `lane/gate`), harness only; its NOTICE says parts of it derive from ftxi - ruled at CHECKPOINT 10: one lineage with ftxi; the reuse rule binds between oracles too, and every oracle's NOTICE, credits and pinned code are read at each pin bump |
-| H27 | built, tested | The oracle harness, committed 2026-10-01. Tiered CI as H47 reads it since CHECKPOINT 8 (built 2026-10-17): ftxi per commit as a smoke test that gates nothing - two oracles are needed to gate a ruleset - and fails an engine that declines a record it read on the last green run, or reads none; cwmtt and Chess in 5D nightly and before releases; a run restricted to chosen sources or records is never a tier result. Upstream reports (CHECKPOINT 8: defects as bug reports, disagreements with a documented rule as questions citing the source; drafted by the agent, filed by the owner), in `docs/checkpoints/upstream/`: the two defects of R7 as bug reports (2026-10-01), and ftxi's reading of the check test as a question (2026-10-17, spec issue 126: five representative positions, one per rule question RQ1-RQ4; the 147 R1 entries' `upstream` names it) - none filed yet. CHECKPOINT 9: Kairos pinned under `oracles/third_party/kairos` (lock tier nightly) - wired as sources `kairos` and `kairos:naive`, enabled in no tier until its golden files are recorded (issue 530) |
+| H27 | built, tested | The oracle harness, committed 2026-10-01. Tiered CI as H47 reads it since CHECKPOINT 8 (built 2026-10-17): ftxi per commit as a smoke test that gates nothing - two oracles are needed to gate a ruleset - and fails an engine that declines a record it read on the last green run, or reads none; cwmtt and Chess in 5D nightly and before releases; a run restricted to chosen sources or records is never a tier result. Upstream reports (CHECKPOINT 8: defects as bug reports, disagreements with a documented rule as questions citing the source; drafted by the agent, filed by the owner), in `docs/checkpoints/upstream/`: the two defects of R7 as bug reports (2026-10-01), ftxi's reading of the check test as a question (2026-10-17, spec issue 126: five representative positions, one per rule question RQ1-RQ4; the 147 R1 entries' `upstream` names it), and three notation-reader gaps (2026-11-08, issue 579: ftxi's signed timeline labels, KD-0054, and 5d-chess-js's signed `(>Lx)` token as bug reports; ftxi's refusal of an empty last sub-turn as a question) - none filed yet. CHECKPOINT 9: Kairos pinned under `oracles/third_party/kairos` (lock tier nightly) - wired as sources `kairos` and `kairos:naive`, enabled in no tier until its golden files are recorded (issue 530) |
 | H30 | built, tested | Step 2A (a04678c): every oracle reports its boards per ply; no placement divergence across the corpus |
 | H31 | done | CHECKPOINT 1: seven clusters triaged (903f4ae), settled by the user's rulings (H36-H40). Re-run 2026-10-17 with the engine configured: the 110 new check findings (72 positions) filed by cluster and settled by R1 (and R2 at five positions); the 58 positions of CHECKPOINT 1's table re-derive exactly, cwmtt/many2's 14 file as CHK-A1 (step 2). The notation finding (cwmtt/futures action 17, an `x` on a jump that takes nothing) settled by the user's ruling, never by vote (H51, R11): ftxi's refusal on record citing R11 (KD-0170), KD-0167 to KD-0169 withdrawn; the record's positions the engine now reads past it, 17 to 19, agree with cwmtt and Chess in 5D wherever each answers - the mate at 19 is Chess in 5D's call and the engine's (cwmtt reports no legal action there, `no_action`, which does not say checkmate or stalemate, and gives no check verdict; nightly, 2026-10-17: no finding) |
 | H32 | built, tested | Required sets at 100%, two recordings, cost files, calibration (2B) |
@@ -2465,7 +2466,8 @@ placeholders consolidated for the user".
          or a set-up the rulebook does not give (Q22). None is a reader gap, a rules
          disagreement or a replay defect.
        - Where an oracle refuses a record the engine reads (Turn Zero, Just Brawns), the gap is
-         the oracle's.
+         the oracle's - drafted for upstream in issue 579, which also finds that a fix in ftxi
+         alone would not reach Just Brawns (ftxi does not know the variant).
        - So no engine work gates any of these rulesets. Making the reader lenient gates
          nothing: it fires telltales, and turns nightly red.
        - Under CHECKPOINT 10's ruling on issue 526, ftxi and Kairos are one lineage, counted
@@ -7015,6 +7017,140 @@ superseded or made moot says so; nothing is deleted.
     fails when it differs from `commit` - as `licence_sha256` forces the licence to be re-read; or
     (b) leave it to "Changing a pin" step 3 and review, as now.
 
+579. **Three oracle notation-reader gaps drafted for upstream - for the user to file** (the
+    done-means audit's verification, 2026-11-02, section 4: "Standard - Turn Zero" and "Focused -
+    Just Brawns", the oracle reader gaps among the ungated rulesets' barriers; register H27,
+    CHECKPOINT 8 - defects as bug reports, disagreements with a documented rule as questions citing
+    the source, drafted by the agent and filed by the owner; §11.0 "A known-divergences file").
+    Each claim was checked at the pins on 2026-11-08:
+    - the oracle's reader read at its pinned commit (read only);
+    - the refusal reproduced with `observe` (no golden file written) and with the stock tool or
+      library at the pin, in scratch copies of the records;
+    - the notation found in the specification's text (N = `oracles/third_party/notation/README.md`
+      at the pin).
+
+    The drafts, in `docs/checkpoints/upstream/` (indexed in its README; none filed):
+    - **`ftxi-signed-timeline-labels.md` - a bug report.** ftxi refuses
+      `(-1T10)Nf6>x(+1T10)g6`, action 28 of cwmtt/tesseractMageOChicken (KD-0054). `observe`:
+      `rejected/no_matching_move`, 27 actions accepted, "Invalid move:
+      mv:sm{fb:ab{s:-,l:1,t:10},pn:N,ff:f,fr:6,ji:>,cp:yes,tb:ab{s:+,l:1,t:10},tf:g,tr:6,pt:?}".
+      - The cause: `state::parse_move` renders every candidate move and parses it back, and
+        `match_absolute_board` (`src/core/pgnparser.cpp` 1006-1011) compares the sign token as
+        written. ftxi renders `1` in odd games and `+1` in even ones, so the defect cuts both ways:
+        on four hand-built custom records, stock `5dtools` refuses `(+1T1)Ka2` in an odd game and
+        `(1T1)Ka2` in an even one, and plays the other spellings.
+      - The notation allows both (N:548-549, "The `+` sign can be omitted for other integers"; N:405).
+        So does ftxi's own grammar (`docs/pgn-bnf.txt` 32, `docs/branched-5dpgn.md` 428: `<line> ::=
+        ['+' | '-'] <natural-number>`), and its 5DFEN reader already takes a missing sign as `+`. A
+        defect, not a reading: ftxi's matcher breaks its own grammar.
+      - With the `+` taken out of the record's board coordinates, 5dtools plays all 33 actions. Its
+        counts at positions 28-33 - 179681, 34, 128714, 126, 74692, 0 - are the ones the record
+        lists in its closing comment, and agree with cwmtt's recorded answers within the count cap of
+        1000. KD-0054's `upstream` now names the draft (no binding or citation changed).
+    - **`5d-chess-js-signed-timeline-token.md` - a bug report.** Chess in 5D refuses `(>L+1)` in the
+      same record, at White's 13th turn (line 22). `observe`: `unsupported/notation`, 24 actions
+      accepted, "Source super-physical coordinates missing or incorrect! | action text:
+      (0T13)Qg3>>(0T10)g6*  (>L+1)".
+      - The cause: the token is removed with `/\(>L\-?\d*\)/g` (`src/pgn.js` 256, 528), which leaves
+        `(>L+1)`, and the leftover is then read as a move.
+      - The notation gives the token (N:187-194) and the optional sign (N:548-549), and its own
+        example game writes `(>L+3)` (N:348). All three are already in notation 92c68f0, the version
+        the library's documentation says it follows (that README's lines 165-174, 503-504 and 302).
+      - Through the public API, `new Chess(text)` swallows the error and holds no action. With the
+        suggested fix (`[+-]?`) applied to a scratch copy, the library imports all 33 actions.
+      - **No known divergence covers the refusal, and none is needed.** An `unsupported` outcome is
+        no refusal: the comparison counts only a `rejected` run's refused action
+        (`observations.refused_action`), so the library simply answers nothing after position 24.
+    - **`ftxi-empty-last-sub-turn.md` - a question.** ftxi refuses the trailing `4. We3 /` of
+      cwmtt/brawnsPuzzles-another (line 7). `observe`: `unsupported/parse_error`, 0 actions,
+      "parse_game(): Unexpected trailing input: ..." (the message quotes the text read, not the
+      trailing part). Like Chess in 5D's refusal, it is `unsupported`, so it needs no entry.
+      - **The claim holds, with a nuance.** The specification shows an empty last sub-turn only
+        before a result - `23. (-4T10)Bxd2 / 1-0` (N:350) - and ends its puzzles without a result
+        (N:259, N:271). A record ending in `/` is the two put together, not a form the text itself
+        shows. ftxi refuses `/ 1-0` as well (a Standard record, stock 5dtools), so it refuses the
+        specification's own example.
+      - **A question, not a bug.** ftxi's own grammar requires a move after every `/`
+        (`docs/pgn-bnf.txt` 10-11; `docs/branched-5dpgn.md` 409-410, and line 197: a sub-turn "has
+        one or more moves inside"). So its reader does what its documentation says, and the
+        specification shows the form by example, not by rule. That is a disagreement with a
+        documented rule, and the answer also tests our own reading (the engine drops an empty last
+        action, `engine/README.md` "Turns").
+
+    **What a fix would bring - two corrections to the brief.**
+    - **In the nightly, Standard - Turn Zero is held back only by cwmtt/tesseractMageOChicken
+      (SINGLE: cwmtt; the 2026-11-02 report).** **Either** reader fix would give that record a second
+      lineage - ftxi's or Chess in 5D's - not only ftxi's. (Kairos, in ftxi's lineage, has the same
+      gap and adds nothing until it is fixed too.) Both oracles read the record to its end once the
+      sign is read (above). Whether Turn Zero is then gated depends on their answers
+      there agreeing with the engine. ftxi's counts at 28-33 do: they are cwmtt's, and cwmtt vouches
+      for the record. Its check answers at those positions, and Chess in 5D's verdicts after
+      position 24, were not compared. Either fix reaches the gate only through a reviewed pin bump,
+      and 5d-chess-js's master had not moved since 2022-06-15 when it was pinned.
+    - **Focused - Just Brawns: a fix in ftxi alone brings nothing.** ftxi does not know the variant,
+      at its pin or on `main` at `d765d3d` (2026-10-15, the newest commit in the submodule's
+      history): with the `/` removed, 5dtools stops at "derive_variant_setup(): Unknown variant:
+      Focused - Just Brawns". Its pin knows four named variants, and `main` seven. Only Kairos, in
+      ftxi's lineage, knows the variant (`src/core/variants.rs` 120, 163). If its reader read the
+      `/`, Kairos would bring that lineage beside cwmtt, and its check test would lift the ruleset's
+      check coverage (0/8) - provided its answers agree with the engine's.
+
+    **Kairos shares two of the gaps**, because its reader is ported from ftxi's (`src/web/pgn.rs`
+    line 1: "ported from the C++ engine's `pgnparser`"). `observe --source kairos`: "Invalid move
+    (-1T10)Nf6>x(+1T10)g6 at T10 black: no legal move matches" - its matcher keeps ftxi's comparison
+    (`pgn.rs` line 783) - and "line 7: Unexpected trailing input: /". It is not drafted. Under
+    CHECKPOINT 10's order, Kairos's full mode and triage come after the release tier, and a report
+    to it waits for that triage.
+
+    Nothing else changed: no adapter, driver, golden file, corpus record, budget or pin. No spec
+    edit is proposed: §11.0 and H27 describe the process followed. Two of the gaps are not recorded
+    divergences, and the clause, written of recorded divergences, neither requires nor forbids
+    reporting them. **For the user: file the three drafts** (the README's "Before filing" list).
+601. **The network job's shards must be whole test files** (CI: `.github/workflows/network.yml`,
+    `python/tests/conftest.py`; the main loop, 2026-11-08, found by `lane/fix535`). The Python suite
+    outgrew the job's hour (about two hours on a runner), so the job became four parallel shards
+    (`T5D_TEST_SHARD=i/n`, c8a9c49). That first version split by a hash of each test's id, and a
+    module whose last case checks what its siblings recorded
+    (`tests/engine/test_flat_head.py::test_some_case_leaves_a_board`) failed, or was skipped and
+    checked nothing, when split. Fixed in e15f173: files go to shards greedily by test count,
+    largest first, ties by path, so every job computes the same split and no module is split.
+    Checked at dbf9be8: 1,976 tests as 494 / 494 / 495 / 493 in 13 / 13 / 14 / 14 files, their
+    union the whole. No spec text describes the CI job.
+602. **Three tests failed only on GitHub's Linux runner** (the network job's runs 42469920087,
+    42473372690 and 42476803590, on c8a9c49, 9bc10fc and e15f173 - the first runs to reach the end
+    of the suite once it was sharded; the main loop, 2026-11-09). None fails on the development
+    machine. All three are fixed on main, and none was made to pass by giving up what it checks:
+    - **`tests/engine/test_decision_log.py`** needs `t5d-audit` beside the library, and the job built
+      only the library and `t5d-gate`. The job now builds `t5d-audit` too.
+    - **`tests/net/test_params.py`'s parameter fingerprint.** The fingerprint's three float64 sums are
+      meant to need no bit-exact float32 libm across platforms. Its rank-weighted sum was still held
+      to 1e-5, though a tensor's last-bit difference enters that sum up to n times (n tensors; 230
+      in the v1). The runner draws the v1's parameters about 1e-8 relative away from the development
+      machine's: the plain sum differs by 1.3e-6, the weighted sum by 7.7e-5 and the absolute sum by
+      1.8e-11 relative. `_same` now allows 1e-5 x n on the weighted sum, and every fingerprint check
+      goes through it. A moved draw or two swapped tensors still move the sums far beyond.
+    - **`tests/net/test_quant.py::test_an_evaluation_does_not_depend_on_its_batch["pow2"]`** (G2's
+      FP8 trunk; C19-C21's purity).
+      - **The old bound held by chance.** It required 1e-5, which held on the development machine
+        only because no FP8 rounding flip fell early in the trunk at seeds 0-5.
+      - **Measured here (2026-11-09, main 0e7d2ed).** The FP32 trunk differs between the lone
+        position and the padded batch at about 81% of the position's 88,576 trunk elements (RMS
+        1.8e-7) at every seed. Under "pow2" the format absorbs it: 0 elements differ at seeds 1-4,
+        and 211 and 255 at seeds 0 and 5. A value within the FP32 difference of a rounding boundary
+        flips, though, and a flip early in the trunk spreads through every later rounding.
+      - **On the runner.** Seed 0 flipped early: RMS 2.1e-3, in two runs. The third run passed with
+        the network code unchanged in between (9bc10fc added only two test files), so the runner's
+        CPU decides.
+      - **The new bound.** One bound for both rules, 1e-2, three times the largest spread measured
+        ("absmax", 3.1e-3). Under "absmax", the per-tensor mutants (2.6e-2 and 2.2e-2) still fail it.
+        Under "pow2", those mutants move this measure by at most 2.1e-4 - less than an early flip,
+        so no end-to-end bound separates them on such a CPU. They are caught exactly by
+        `test_quant_linear_scale_granularity` and
+        `test_the_attention_operands_are_rounded_after_rope`, as the test's docstring already said.
+
+    No spec edit: no part of the spec describes the CI job or these tolerances, and G2's and
+    C19-C21's text stands.
+
 ## Proposed spec edits
 
 Edits the spec or the register needs, for applying upstream. Each: where, what it
@@ -8943,6 +9079,25 @@ struck through, where nothing of it is left to apply); the others stand as writt
   stash by its id, never `pop`, in a shared repository. Checks: verify ok (its 17 notes, unchanged);
   selftest 732 tests OK (1 skipped, 972 s); ruff clean; gate --tier commit, the engine rebuilt after the merge:
   oracle layer ok, SMOKE TEST - PASSED (calibration 1.55x).
+- **2026-11-08 - Upstream drafts for the oracle notation-reader gaps** (`lane/gate`; issue 579). Three
+  drafts in `docs/checkpoints/upstream/`, the user's to file:
+  - ftxi's signed timeline labels (KD-0054: `match_absolute_board` compares the sign as written),
+    a bug report; KD-0054's `upstream` now names it;
+  - 5d-chess-js's signed `(>Lx)` token, a bug report;
+  - ftxi's refusal of an empty last sub-turn, a question, since its own grammar requires a move
+    after `/`.
+
+  Each claim was verified at the pins: the readers read, the refusals reproduced with `observe`,
+  the stock 5dtools and the library, and the fixes checked on scratch copies. Two corrections to
+  the brief:
+  - either reader fix would give Turn Zero's last single-oracle record a second lineage, not
+    only ftxi's;
+  - ftxi's fix alone brings nothing to Just Brawns, whose variant ftxi does not know; only Kairos
+    knows it.
+
+  Kairos shares two of the gaps; its report waits for its triage (CHECKPOINT 10). Checks: verify ok
+  (its 17 notes, unchanged); gate --tier commit: oracle layer ok, SMOKE TEST - PASSED (baseline 41
+  compared, 0 declined; calibration 1.25x). No harness code changed, so selftest was not run.
 - **2026-11-08/09 - C26 and C27 behind their flags, with section 15.2's two rows** (`lane/net`;
   issues 259-275, edits 380-384). CHECKPOINT 9's ruling 2, built to the design a three-way panel and a
   judge chose. Five commits: issue 259 first - C3's root refresh was anchored on the pseudo-legal
