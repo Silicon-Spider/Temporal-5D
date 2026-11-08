@@ -82,16 +82,27 @@ std::size_t check_complete_turns(const Search& s) {
 // D2's flat form's nodes after a fault: no node stuck - every turn start here
 // has legal turns, so a stuck one would be an expansion a fault cut short (its
 // first pull threw and the node was left expanded with no turn) - and each
-// node's priors a softmax over its turns (FlatPrior::Generated, the default),
-// summing to 1, also after a pull that threw had its turns taken back
-// (flat_priors sets nothing unless it succeeds).
+// node's priors the softmax of its turns' scores (FlatPrior::Generated, the
+// default; no turn steered in these positions: each turn's logit is its
+// score, as a float), summing to 1, also after a pull that threw had its turns
+// taken back (flat_priors sets nothing unless it succeeds; review finding M2:
+// a sum alone let new turns keep a prior of 0).
 void check_flat_nodes(const Search& s) {
   for (NodeId id = 0; id < s.node_count(); ++id) {
     const NodeView v = s.node(id);
     CHECK(!v.stuck);
     if (!v.expanded || v.edge_count == 0) continue;
     double sum = 0;
-    for (std::size_t i = 0; i < v.edge_count; ++i) sum += s.edge(id, i).prior;
+    double top = -std::numeric_limits<double>::infinity();
+    for (std::size_t i = 0; i < v.edge_count; ++i) top = std::max(top, s.edge(id, i).logit);
+    double z = 0;
+    for (std::size_t i = 0; i < v.edge_count; ++i) z += std::exp(s.edge(id, i).logit - top);
+    for (std::size_t i = 0; i < v.edge_count; ++i) {
+      const EdgeView e = s.edge(id, i);
+      sum += e.prior;
+      const double want = std::exp(e.logit - top) / z;
+      CHECK(e.prior > 0 && std::abs(e.prior - want) <= 1e-5 * want + 1e-12);
+    }
     CHECK(std::abs(sum - 1.0) < 1e-9);
   }
 }

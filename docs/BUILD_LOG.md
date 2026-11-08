@@ -7080,6 +7080,41 @@ superseded or made moot says so; nothing is deleted.
         failure there left the batch waiting, every later call refused until `abandon`). Swept
         at every allocation of a fresh search's first and second gather and of `run(16)`, five
         configurations in C++ and three through the C API beside a twin.
+      - M2, L6, L9, L10 (tests only): P3, P3b, P3c (the exhausting later pull, tree and graph,
+        3-9 playouts), P6; P1, P2, P9, P13 (the asset map's and Hunt's boost counts); P4; P5.
+        `check_flat_nodes` checks the softmax its comment promised. Found writing P13: issues
+        603 and 604.
+603. **This machine's g++ 16.2 breaks `std::deque`'s exception safety under its default
+    `-fassume-sane-operators-new-delete`** (found by `lane/fix535`, 2026-11-09, in issue 600's
+    review round; not a defect in the engine's source). With `operator new` assumed free of
+    side effects, the compiler merges `std::deque::emplace_back`'s two updates of the deque's
+    end - `_M_reallocate_map`'s and the one after the new chunk's allocation - into one store
+    after that allocation. When the chunk's allocation throws right after a map reallocation,
+    the deque's end is left pointing into the map just freed, and its destructor walks freed
+    memory. Seen as a heap corruption (`0xC0000374`; an access violation in `~Prover` with
+    freed blocks poisoned) when P13's injected fault fell in the Hunt prover's tree
+    (`Worker::make_node`), through the synchronous ladder. A 40-line reproducer (a deque, and a
+    replaced `operator new` in its own translation unit throwing at a chosen call) shows the
+    deque's `size()` at 18446744073709551399 when built at `-O2`, and correct with
+    `-fno-assume-sane-operators-new-delete`. CI's g++ 13 and 14 make no such assumption. Every
+    `std::deque` in the engine is exposed (the prover's tree, `search.cpp`'s move lists) -
+    only under a real allocation failure, and only in builds by this compiler.
+    - P13 leaves Hunt's own allocations out (a fresh search's first gather); nothing else in
+      the lane's tests reaches a deque under a fault.
+    - **For the main loop:** whether the engine's CMake adds
+      `-fno-assume-sane-operators-new-delete` where the compiler accepts it (the engine's
+      allocation-failure guarantees depend on it under g++ 16; its speed effect measured first,
+      since `docs/MEASUREMENTS.md` was measured with this compiler), and whether to report it
+      to GCC. No spec text describes the toolchain's flags.
+604. **A `std::bad_alloc` in a synchronous ladder job is reported as a contradiction in the
+    rules code** (`src/ladder.cpp`: `VerificationLadder::ask_for`'s catch, and the worker
+    thread's alike; found by `lane/fix535`, 2026-11-09, beside issue 603). The job's exception
+    is counted in `stats().contradictions` and printed as "a contradiction in the rules code"
+    before it is rethrown - for an allocation failure, which is not one. Recorded, not
+    changed: on this machine no test can reach it until issue 603 is settled (any fault inside
+    a job's prover risks the deque corruption). The fix, when it can be tested: let
+    `std::bad_alloc` through uncounted and unreported. No spec text describes the ladder's
+    counters.
 
 ## Proposed spec edits
 
