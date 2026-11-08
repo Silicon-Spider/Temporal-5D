@@ -10,6 +10,76 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-09 - C26: the phase form in the cached path, behind its flag (section 15.2's C26 row)
+
+CHECKPOINT 9's ruling 2 (low priority, `lane/net` after A5): "in the cached path behind its flag, a
+mode switch chosen by the search root's board count (N\*, default 50), with section 15.2's two new
+rows" - C26's half, built behind `CacheConfig.phase_form` (off: the cached path at every size, bit
+for bit as before):
+- **One predicate.** `CacheConfig.mode(n_boards)`: "dense" when the flag is on and the root's board
+  count is under N\* (`CacheConfig.phase_boards`, placeholder 50 - `token_counts.N_STAR`, pinned by a
+  test), else "cached". `CachedEvaluator.root_epoch` applies it to the search root; the parked
+  conditioning-offset hook will apply it to the conditioning root (`trainer.py`'s docstring, the
+  ruling's last sentence). The phase form requires C3's root refresh - §7.10 runs the cached half
+  "with the root refresh" - and is refused without it (issue 260).
+- **The dense epoch** (`net/cache.py`). Under N\* `root_epoch` returns the evaluator's one dense
+  epoch (`Epoch("dense", "dense")`, `CachedEvaluator.dense_epoch`): no anchor, history or store
+  entry. `evaluate` runs the network's dense pass over the position in the caller's grad mode (no
+  B16 - the refresh pass's function); `prepare` and `refresh` refuse it ("below N\* there is no cache
+  to refresh"); the fixture's `visit` never refreshes in it. `Epoch.mode` names each epoch's mode.
+  At or above N\* the root refresh, unchanged.
+- **The engine path** (`engine/evaluator.py`). `CachedNetworkEvaluator` hands a dense epoch's batches
+  to `dense`, a `NetworkEvaluator(scope="dense")` with its prior and a new `max_batch` (default 32):
+  the dense pass's last bits move with the batch and the grad mode (about 1e-6, measured), so a
+  search rooted under N\* is the dense search bit for bit only through the dense evaluator itself
+  (issue 262; edit 380). `positions_by_mode` counts each mode. The dense epoch's engine number is
+  its key's hash - the same for every search below N\*, so the shared evaluation cache serves dense
+  evaluations across self-play's searches (C14), never 0 and never a cached epoch's (issue 261). A5
+  stays refused first.
+- **Section 15.2's row**, through the C step API (`python/tests/engine/test_phase_form.py`): rooted
+  under N\* the search is the dense search node for node - H15's digest, the counts, every evaluation
+  bit for bit - on three variants x two seeds x the ply split (tree and graph), the tree form
+  (natural gates, none) and the flat form, the evaluation cache on and off, batched and synchronous,
+  and on all 16 variants under the ply split and the tree form; a per-node switch (the mode by each
+  leaf's own board count, N\* one above the root) builds another search on every arm; rooted at or
+  above N\* every node is the cached path's, the two-level reference's (largest gap 1.31e-6), the root
+  leaf the dense pass (9.54e-7), the other leaves at least 1.3e-1 from it. Beside it: the boundary at
+  the root's board count (a random-play root, a mid-action root past the shift, Turn Zero's T0 board
+  counted, the PGN of boards alike but for their past), a branching jump's child exactly at N\*, one
+  evaluator across two crossings, one shared evaluation cache across the crossing (the epoch changes,
+  nothing served across it) and below it (cache hits), a carried search crossing it (C12: its visits
+  kept, its inherited root evaluated once, cached), and whole games crossing it (never back to dense;
+  every dense batch the dense path's; replayed by the gate). Slow: the other games, F1 in BF16.
+  Without the engine (`python/tests/net/test_phase_form.py`): the predicate at its boundary and its
+  validation, the dense epoch, the fixture tree rooted under N\* (every node the dense pass bit for
+  bit, nodes at N\* or more included; no refresh with every trigger at its most eager; the store
+  empty) and at N\* (the cached path's bit for bit; rung 1 as before).
+- **Not built**: the conditioning-offset hook (the predicate only), C16's dense lower layers (refused
+  by §7.10), the window; the engine is unchanged.
+
+Checks: ruff "All checks passed!", "115 files already formatted"; with `T5D_REQUIRE_ENGINE=1`, the
+new modules - `tests/engine/test_phase_form.py` "54 passed, 7 deselected in 423.66s" (its slow seven
+"7 passed, 54 deselected in 447.35s") and `tests/net/test_phase_form.py` "19 passed in 376.24s" - and the suites the cached path
+sits in: `test_cache`, `test_tree`, `test_complexity`, `test_fork_protocol`, `test_quant`, `test_d8`,
+`test_perspective`, `test_turn_state`, `test_leave`, `test_piece_centric` and the new module "654
+passed, 1 deselected in 1341.47s"; `test_cached_variants`, `test_evaluator`, `test_search_api`,
+`test_piece_centric_engine`, `test_network`, `test_perspective_engine`, `test_turn_state_engine` "251
+passed, 3 deselected in 914.82s" (a loaded machine). The default path bit for bit: a scratch probe's
+69 cases - the cached path's outputs along `test_cache`'s paths on every geometry, both C20 readings,
+causal, root and node epochs; C24's simulation; step-API searches' H15 digests, epochs and every
+evaluation, dense and cached, under the ply split, the tree and the flat form - identical at issue
+259's commit and here. Mutants killed: the dense mode batched otherwise (one position at a time, or
+through the cached evaluator's own dense pass - equivalent only on the synchronous arm, where every
+batch is one leaf), the dense epoch numbered 0, one dense epoch per root, `<=` for `<`, the cached half
+without the root refresh, the mode fixed at the evaluator's first root, the dense mode writing the
+store, a stale epoch across the crossing. `harness.py verify` as for issue 259 (every check ok but the
+two "kairos is not checked out").
+
+Spec: §7.10, §7.9, §8.5, §8.7 and §15.2's C26 row; register C2, C3, C14, C26, M18, A5 (its refusal
+unchanged); issues 260-266 and 272-275 (264 and 265 for the user); proposed edits 380 (§15.2's row:
+the dense search batched alike, bit for bit), 381 (§7.10: the shared dense epoch, C3 presumed) and
+382 (register C26: N\* the evaluator's until offset training, then the network's).
+
 ### 2026-11-08 - The cached path's root refresh anchors at the root leaf's input (C3; issue 259)
 
 `start_epoch` (`python/t5d/engine/evaluator.py`) built the position it hands an evaluator's

@@ -1829,7 +1829,8 @@ width (M22)", "The CHECKPOINT 8 figures"). Found on the way: the ruling's premis
 | C10 | not built (rule) | Lazy K/V for boards entering E: deferred with the window (M16) |
 | C3, C3a (rung 1) | built, tested | Root refresh and the travel-triggered, visit-gated rung-1 fork (copy-on-write epochs), behind flags. C3's conditioning-offset training hook is parked with the deferred cached configuration ("Parked", below) |
 | C3a (rungs 2-3), C18, C22 | not built (rule) | Held open (M5 for rungs 2-3) |
-| C26, C27 | not built (planned, low priority) | CHECKPOINT 9 - Committed if C2 adopts the cache: the phase form (C26: dense below N\*, cached with the root refresh at or above it, the search root's board count choosing for the whole search; N\* default 50) and refresh inside a turn (C27: the ladder's triggers only at nodes the network evaluates; a board our submoves supersede mid-turn recomputed when the network next runs, once per board and epoch), each with its new section 15.2 row - in the cached path behind its flag, after each lane's current order (`lane/net`, after A5). The conditioning-offset hook stays parked with C3; when built, it applies C26's rule to the conditioning root |
+| C26 | built behind its flag (the cached path), tested; not adopted | CHECKPOINT 9 - Committed if C2 adopts the cache: the phase form, built in the cached path behind `CacheConfig.phase_form` (off; `lane/net`, 2026-11-08): `CacheConfig.mode` is the one predicate (dense when the root's board count is under N\* = `phase_boards`, placeholder 50 = `token_counts.N_STAR`); `root_epoch` applies it to the search root - under N\* the evaluator's one dense epoch (no anchor, history or store; its engine number hash("dense"), shared below N\*, never 0), at or above it the root refresh, which the phase form requires (issue 260); `CachedNetworkEvaluator` hands a dense epoch's batches to the dense evaluator itself, so a search rooted under N\* is the dense search bit for bit (issue 262). Section 15.2's row green through the C step API (`tests/engine/test_phase_form.py`, `tests/net/test_phase_form.py`): every split, the cache on and off, a per-node-switch mutant killed, the boundary, one evaluator and one shared cache across the crossing, a carried search and whole games crossing it. Issue 259's anchor fix first. The conditioning-offset hook stays parked with C3; when built, it applies `CacheConfig.mode` to the conditioning root. Issues 259-266, 272-275; edits 380-382 |
+| C27 | not built (planned, low priority) | CHECKPOINT 9 - Committed if C2 adopts the cache: refresh inside a turn (the ladder's triggers only at nodes the network evaluates; a board our submoves supersede mid-turn recomputed when the network next runs, once per board and epoch), with its new section 15.2 row - in the cached path behind its flag (`lane/net`, after C26) |
 | C5, C7 | not built (rule) | The window: killed, provisionally (M16, CHECKPOINT 5); re-checked by the pilot self-play run (M18) |
 | C6 | step 1 done | The \|E\| curve measured (M7); the head-to-head is Ablation 1, halted with the window until the pilot run (M18) |
 | C8 | honoured | C24's add-only rule (and rung 1's) - refreshes are only ever added |
@@ -2000,7 +2001,7 @@ The protocol (section 15.2) asks for:
 | 3 | Lazy K/V = eager recompute | C10 | deferred with the window | - |
 | 4 | Supersession recompute = from scratch | C20 | green | - |
 | 5 | A refresh fork leaves sibling subtrees unchanged | C3a | green, short | No refresh fork on an engine variant, a 3x3, 4x4, 6x6 or 7x7 board, or a T0 board; a root-refreshed parent on one seed only |
-| 6 | Phase form: under N\* node for node dense; at or above it every node cached | C26 | waiting (low priority, CHECKPOINT 9) | Build C26 in the cached path behind its flag, with the row (`lane/net`, after A5) |
+| 6 | Phase form: under N\* node for node dense; at or above it every node cached | C26 | green on `lane/net` (2026-11-08; C26 behind its flag) | - (on main once merged) |
 | 7 | Tree form, cached: supersession recompute at the next evaluated node = recompute at supersession | C27 | waiting (low priority) | The same, with the tree form's cached work |
 | 8 | Same state + epoch -> same evaluation; MCGS transposition hits identical | C19-C21 | green | - |
 | 9 | Incremental Zobrist = from scratch, duplicated boards | H18 | green (short of every variant before the audit's test) | - |
@@ -2016,12 +2017,14 @@ The protocol (section 15.2) asks for:
 | 19 | Turn-state counts = a brute-force recount | A6 | green (short of every variant before the audit's test) | - |
 
 **Count.** 19 rows:
-- green: 14 rows (1, 4, 5, 8, 9 and 11-19). Of these, five are short of the protocol as named:
+- green: 14 rows (1, 4, 5, 8, 9 and 11-19), and row 6 on `lane/net` (2026-11-08). Of these, five
+  are short of the protocol as named:
   1, 5, 11, 15 and 16. That count holds once `lane/audit`'s tests (4a1c753) are merged; on main
   today rows 9, 17 and 19 are short as well, giving 1, 5, 9, 11, 15, 16, 17 and 19.
 - deferred: 2 rows (2, 3).
 - void: 1 row (10).
-- waiting: 2 rows (6, 7). Both are low priority by the user's CHECKPOINT 9 brief, and both
+- waiting: 2 rows (6, 7) - row 6 built on `lane/net` since. Both are low priority by the user's
+  CHECKPOINT 9 brief, and both
   committed only if C2 adopts the cache (issue 536).
 
 **Row by row:**
@@ -2090,10 +2093,26 @@ The protocol (section 15.2) asks for:
        node refresh's visit gate;
      - the audit's test root-refreshes the parent epoch for seed 1 only
        (`root_refresh = bool(seed % 2)`).
-6. **Phase form (C26)** and 7. **refresh inside a turn (C27)**: not built anywhere (main and
-   every lane, 2026-11-01). Plan (CHECKPOINT 9 brief): low priority, in the cached path behind
-   its flag, `lane/net` after A5's review fixes; the engine side if the tree form needs it.
-   C27 is class R in the register; C26 is class C.
+6. **Phase form (C26).** Built on `lane/net` (2026-11-08) in the cached path behind
+   `CacheConfig.phase_form`, with the row's tests (the 2026-11-01 note "not built anywhere" is
+   superseded):
+   - through the C step API, `python/tests/engine/test_phase_form.py`: rooted under N\* the search is
+     the dense search node for node - H15's digest, its counts and every evaluation bit for bit - on
+     three variants x two seeds x the ply split (tree and graph), the tree form (natural gates, none)
+     and the flat form, the evaluation cache on and off, batched and synchronous, and on all 16
+     variants under the ply split and the tree form; a per-node-switch mutant builds another search
+     on every arm; rooted at or above N\* every node is the cached path's (the two-level reference,
+     the root leaf the dense pass); the boundary at the root's board count (a mid-action root, Turn
+     Zero's T0 board counted), one evaluator and one shared evaluation cache across the crossing
+     (C14), a carried search crossing it (C12), whole games crossing it, replayed by the gate;
+   - without the engine, `python/tests/net/test_phase_form.py`: the predicate at its boundary, the
+     dense epoch, the fixture tree under a dense root (every node the dense pass bit for bit,
+     nodes at N\* or above included; nothing refreshes) and at N\* (the cached path's, rung 1 as
+     before).
+   C26 is class C in the register. Issues 259-266, 272-275.
+7. **Refresh inside a turn (C27)**: not built (main and every lane, 2026-11-08). Plan (CHECKPOINT 9
+   brief): low priority, in the cached path behind its flag, `lane/net` after C26; the engine side
+   if the tree form needs it. C27 is class R in the register.
 8. **Evaluation purity (C19-C21).**
    - Python, `test_cache.py`: `test_same_state_and_epoch_same_evaluation` (causal and
      root-refresh), `test_different_epochs_evaluate_differently`,
@@ -4948,6 +4967,92 @@ superseded or made moot says so; nothing is deleted.
     within 1e-5 (in the test, the stale anchor misses by more). C26 rests on it: the first cached
     search's root evaluation is the dense pass (§7.10's crossing). No spec edit: the spec does not
     name the anchor's expansion.
+260. **C26 presumes C3** (§7.9, §7.10; register C3, C26). *C26 built behind its flag
+    (2026-11-08).* §7.10 runs a root at or above N\* "cached, with the root refresh", and C3 is
+    provisional (6c's refresh arm). Built: `CacheConfig.phase_form` is refused without
+    `root_refresh` - the phase form never runs the causal epoch at or above N\*. If 6c drops C3,
+    C26 must be restated: its cached half would be the causal epoch, which under C20's first
+    reading carries across searches, so §7.10's "the first cached search starts with its root
+    refresh like any other" would no longer describe the crossing. For the user only if 6c drops
+    C3. Edit 381.
+261. **The dense epoch: one for every search below N\*, numbered by its key** (§7.10, §8.5, §8.7;
+    register C14, C26). "The mode belongs to the refresh epoch" (§7.10), and below N\* nothing is
+    refreshed. Built: one dense epoch per evaluator, `Epoch("dense", "dense")`, independent of the
+    root - a dense evaluation is a function of the state alone - so every search below N\* carries
+    it, and the engine's evaluation cache, keyed by (state, moves made, epoch), serves dense
+    evaluations across self-play's fresh searches (C14) as the dense configuration's does. Its
+    engine number is `engine_epoch`'s hash of its key: never 0 - the epoch of a search whose
+    evaluator has no `start`, so a cache shared with such a search never mixes the two - never a
+    cached epoch's (their keys differ), and the same for every evaluator. The alternative, a dense
+    epoch per root, would lose C14's reuse below N\*, where 88% of the human games' moves are.
+    Edit 381.
+262. **"The dense search" read as the same network's dense pass, batched alike** (§15.2's C26 row;
+    register C26, C19-C21). The row: "a search rooted under N\* equals the dense search node for
+    node". The dense pass's last bits are no function of the position alone: grad mode moves them,
+    and so does the batch a position is padded into (measured: up to 1.1e-6 on the logits between
+    a position alone and in a batch of four, 1.4e-6 between grad and no-grad, FP32, 2 layers; the
+    same batch twice is bit for bit - MEASUREMENTS, "The phase form"). So node for node holds bit
+    for bit only if the dense mode is the dense evaluator itself, batch for batch. Built so:
+    `CachedNetworkEvaluator.dense`, a `NetworkEvaluator(scope="dense")` with the evaluator's prior
+    and `max_batch`, takes every batch of a search rooted under N\*; the row's test compares H15's
+    digests and every evaluation bitwise, with the dense search's evaluator built alike.
+    Consequence: purity below N\* is the dense path's - exact through the engine's evaluation
+    cache and MCGS transpositions (a hit returns the stored evaluation), but a state evaluated
+    twice with the cache off may differ in its last bits with the batch it shares; at or above N\*
+    the cached path's one-position purity (C19) holds. Edit 380 words the row so.
+263. **N\* lives in the evaluator's configuration until offset training exists** (§7.10; register
+    C26, M18; issue 258). Built: `CacheConfig.phase_boards`, placeholder 50, equal to
+    `token_counts.N_STAR` (a test pins the two). §7.10 chooses the training mask by the
+    conditioning root's board count, so N\* is a training-time constant: a network trained with one
+    N\* and deployed with another meets a regime it never trained (§7.7's rule). Until the
+    conditioning-offset hook exists nothing trains either way, so N\* is the evaluator's; once it
+    does, N\* is pinned with the network (a `NetConfig` field or the trainer's record) and the
+    evaluator refuses a mismatch. Couples with issue 258 (A5 moves N\*). Edit 382.
+264. **A carried tree across the crossing keeps dense-made statistics** (§7.10, §8.7; register C12,
+    C26). §7.10 forbids transpositions that "mix a dense and a cached evaluation of one state" and
+    says carried nodes keep their statistics "with no K/V to invalidate". In match play a search
+    carried across N\* (C12) keeps the visits, values and priors dense evaluations made, while every
+    new leaf is evaluated cached; a state the carried tree holds is not evaluated again, and in the
+    tree search (not MCGS) a new node for a state another carried node holds is evaluated cached.
+    Read as §8.7's carry - statistics "mildly stale" that "self-correct under fresh backups" - not
+    as C26's forbidden mix: no evaluation of one mode is ever served for the other (the engine
+    cache's epoch keeps them apart; tested). For the user to confirm.
+265. **The root refresh runs once per search root - per decision - not once per game move** (§7.9,
+    §7.10; register C3). Pre-existing: §7.9's "once per actual game move" is built as once per
+    search, and under the ply split and the tree form an action is several decisions, each a search
+    with its own root and refresh (`start_epoch` before every search). So C26's crossing can fall
+    mid-action: a search rooted at a mid-action state with N\* boards or more is cached while the
+    action's first decision was dense - consistent with "the root decides, once per search". For
+    the user: is a refresh per decision intended - §7.9 would then read "once per search root" (an
+    edit drafted for if so, not proposed) - or should one refresh serve an action's decisions?
+266. **A5 under C26** (§7.10, §14.4; register A5, C26; issues 252, 258). The phase form's dense half
+    could run a piece-centric network (A5 is built for the dense scope), but the cached path
+    refuses A5 before anything else (issue 252), the phase form on or off, so A5 and C26 cannot run
+    together; MEASUREMENTS' A5-under-C26 figures (the cached node 2.11x at or above N\*) assume an
+    A5 cached network that issue 252 refuses. Unchanged; for the user with issue 252.
+272. **Dead epochs' entries in the engine's evaluation cache** (§8.7; register C14, C26). When a game
+    crosses N\* - and at every root refresh - the previous epoch's entries are never served again,
+    but they are purged only by board count (`EvalCache::purge_fewer_boards`, at a search's start
+    and re-root) and a full cache drops new entries (`EvalCache::insert`): after the crossing, dense
+    entries with as many boards as the root or more hold capacity until the board count passes
+    them. Bounded by the cache's limits, harmless to correctness. An option, not taken: purge the
+    other epochs' entries on `set_epoch` (an engine change, ABI-neutral).
+273. **The KVStore never drops an epoch** (§7.9: epochs "die with §8.7's garbage collection";
+    register C3, C3a). `KVStore.drop_epoch` exists and nothing calls it, so a cached game's store
+    grows by each search's root refresh (both perspectives' history) and its supersession entries.
+    Pre-existing (C3's), noted because C26 makes the cached half's memory per game the store's. Not
+    built: dropping the previous search's epochs at `start`.
+274. **Epoch keys are unique per evaluator, not per store; `state_digest` omits the moves** (§7.9;
+    register C3, C19). Pre-existing: a refresh epoch's key is `kind:<counter>:<anchor>` with the
+    evaluator's counter, so two evaluators sharing one store at one root would write under one key
+    (`put` refuses the second); and since `state_digest` holds no moves or edges, one evaluator used
+    under two expansion configurations at one root reuses the first epoch (`start`'s shortcut),
+    conditioned on the first input. Neither arises in the build's callers; not changed.
+275. **A search driven without `start_epoch` keeps the evaluator's last epoch - now its mode too**
+    (register C26). `run_search` opens the epoch; a caller that drives `CStepDriver` and `serve`
+    itself must call `start_epoch` first, or the evaluator answers in whichever epoch it opened
+    last - since C26 possibly in the other mode. Pre-existing for the cached path; the tests assert
+    every leaf's epoch. No guard in `serve`, which does not know the search's root.
 
 <!-- A new list, so that the numbers from 140 render as written. -->
 
@@ -8389,6 +8494,34 @@ struck through, where nothing of it is left to apply); the others stand as writt
     - Why: section 15.5's last clause - each committed-class row "either decided or
       explicitly awaiting a named trained ablation" - and the register's vocabulary, which is
       how a reader tells how firm a row is.
+
+<!-- A new list, so that the numbers from 380 render as written. -->
+
+380. **§15.2's C26 row (what "the dense search" is)**: now - "Phase form: with the cached
+    configuration on, a search rooted under N\* equals the dense search node for node; one rooted at
+    or above it evaluates every node cached". Proposed - "... a search rooted under N\* equals the
+    dense search - the same network's dense-scope pass, its positions batched alike - node for node:
+    the same search graph (H15) and bit-identical evaluations; one rooted at or above it evaluates
+    every node cached". Why: issue 262 - the dense pass's last bits move with the batch and the grad
+    mode, so node-for-node equality is bitwise only against the dense path batched alike; a
+    tolerance would let a search whose PUCT ties break otherwise pass as equal.
+
+381. **§7.10 "The root decides, once per search" (the dense epoch, and C3)**: now - "The mode belongs
+    to the refresh epoch: every node in a search is evaluated the same way, so transpositions (§8.5)
+    never mix a dense and a cached evaluation of one state ... the first cached search starts with its
+    root refresh like any other". Proposed - add: "Below N\* every search shares one dense epoch - a
+    dense evaluation is a function of the state alone - so the shared evaluation cache (C14) serves
+    dense evaluations across searches, and never to a cached one; its identity is never that of an
+    evaluator that conditions on no root. The phase form presumes C3: at or above N\* a search starts
+    with its root refresh." Why: issues 260 and 261 - both are choices the build had to make that
+    §7.10 leaves open.
+
+382. **Register C26 (whose N\* it is)**: now - "N\* is where the cached arm starts to beat dense at
+    equal wall-clock ... placeholder 50". Proposed - add: "N\* belongs to the evaluator until
+    conditioning-offset training exists; from then it is pinned with the network - the training
+    mask's N\* is the deployment's (§7.7)". Why: issue 263.
+
+<!-- A new list, so that the numbers from 400 render as written. -->
 
 400. **§11.0 "Third-party code" and register H26 (what reading every oracle's code found)**:
     now - §11.0: "ftxi's detector and cwmtt are the external checks; ftxi's adapts cwmtt's
