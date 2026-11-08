@@ -113,14 +113,18 @@ licence_file = "LICENSE"
 licence_sha256 = "{sha256}"
 summary = "s"
 used_as = "u"
+{lineage}
 """
+# A pin the harness runs declares its lineage (H47, CHECKPOINT 10); a corpus source has none.
+_LINEAGE = 'lineage = "x"\nlineage_note = "Read at the pin: no other implementation credited."'
 
 
 class RoleTests(unittest.TestCase):
     """The lock file's roles: which pins the harness runs."""
 
     def load(self, role: str, tier: str) -> lockfile.Lock:
-        text = _LOCK.format(role=role, tier=f'tier = "{tier}"' if tier else "", sha1="0" * 40, sha256="0" * 64)
+        text = _LOCK.format(role=role, tier=f'tier = "{tier}"' if tier else "", sha1="0" * 40, sha256="0" * 64,
+                            lineage="" if role == "corpus-source" else _LINEAGE)
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "oracles.lock.toml"
             path.write_text(text, encoding="utf-8")
@@ -152,7 +156,13 @@ class RegistryTests(unittest.TestCase):
         # One source, so its replay - how many actions it read - is compared as an implementation's.
         self.assertIn("notation", ORACLE_SOURCES)
         self.assertIn("notation", PRIMARY_SOURCES)
-        self.assertEqual(set(PARSE_ONLY_SOURCES), {pin.id for pin in self.lock.pins.values() if pin.parse_only})
+        # Every parse-only pin is a parse-only source; the other parse-only sources are rules oracles asked in parse
+        # mode (kairos:parse, decision H52), which judge nothing either.
+        parse_pins = {pin.id for pin in self.lock.pins.values() if pin.parse_only}
+        self.assertEqual({name for name in PARSE_ONLY_SOURCES if name in parse_pins}, parse_pins)
+        for name in set(PARSE_ONLY_SOURCES) - parse_pins:
+            self.assertTrue(name.endswith(":parse"), name)
+            self.assertEqual(self.lock.pin(oracle_of(name)).role, "oracle")
 
     def test_every_pin_the_harness_runs_has_a_recipe_and_a_source(self):
         run_by_harness = {pin.id for pin in self.lock.oracles()}

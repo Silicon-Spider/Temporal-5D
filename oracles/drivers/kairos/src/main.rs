@@ -9,14 +9,14 @@
 // only walks the main line it read and prints what it says. Nothing here is copied
 // from the oracle.
 //
-// usage: kairos_oracle_driver --cap N --search hypercuboid|naive [--actions K]
+// usage: kairos_oracle_driver --cap N --search hypercuboid|naive|parse [--actions K]
 // stdin : one 5dpgn record, exact bytes (UTF-8).
 // stdout: JSON Lines (oracles/oracle_harness/adapters/base.py):
 //   {"event":"start", ...}
 //   then, for each position k:
 //   {"event":"state","index":k,"size":"WxH","markers":true,"boards":["<L>:<T>:<c>:<placement>", ...]}
-//   {"event":"position","index":k,"side":"white|black","in_check":bool,
-//    "legal_actions":n|null,"terminal":"none|checkmate|stalemate","ms":float}
+//   {"event":"position","index":k,"side":"white|black","in_check":bool|null,
+//    "legal_actions":n|null,"terminal":"none|checkmate|stalemate"|null,"ms":float}
 //   {"event":"actions","index":k,"count":n,"truncated":bool,"actions":[...]}   (--actions k only)
 //   and last:
 //   {"event":"end","status":"ok|rejected|unsupported|error", ...}
@@ -52,16 +52,23 @@
 // notation's MD5, so no "hash" is handed over.
 //
 // The answers, by search (`--search`):
-//   in_check  both: `State::has_phantom_check()`.
+//   parse      none: parse mode - the state event, the side to move and the replay
+//              (the same replay, refusals included, as the two searches), and a null
+//              for every question; nothing is searched (H52; CHECKPOINT 9's brief:
+//              "parse mode first, then full mode", reordered by CHECKPOINT 10).
+//   in_check  hypercuboid and naive: `State::has_phantom_check()`.
 //   hypercuboid
-//     terminal       `State::get_mate_type()`: its hypercuboid search, uninterruptible -
-//                    checkmate, stalemate, or none (a legal action exists: None or Softmate).
+//     terminal       `State::get_mate_type()`: its hypercuboid search, uninterruptible, each
+//                    sub-search capped at 2^32-1 hypercuboids (out of every deadline's
+//                    reach: PROVENANCE.md) - checkmate, stalemate, or none (a legal action
+//                    exists: None or Softmate).
 //     legal_actions  null. Its hypercuboid search leaves out the actions that waste a
 //                    move, so what it yields is not the gate's count (PROVENANCE.md).
 //   naive
-//     legal_actions  `core::naive::naive_actions_budget(state, cap, unbounded)`: its
+//     legal_actions  `core::naive::naive_actions_budget(state, cap, u64::MAX)`: its
 //                    exhaustive enumerator, stopped at the cap (a count equal to the cap
-//                    means "at least that many").
+//                    means "at least that many"); its node budget of 2^64-1 is out of
+//                    reach (PROVENANCE.md).
 //     terminal       none when it finds an action; when it finds none - an exhaustive
 //                    search that terminated - checkmate if `has_phantom_check()`, else
 //                    stalemate: the rule `get_mate_type()` applies to its own search.
@@ -93,6 +100,7 @@ const ACTIONS_LIMIT: usize = 5000;
 enum Search {
     Hypercuboid,
     Naive,
+    Parse,
 }
 
 struct Options {
@@ -103,7 +111,7 @@ struct Options {
 
 fn usage(message: &str) -> ! {
     eprintln!("kairos_oracle_driver: {message}");
-    eprintln!("usage: kairos_oracle_driver --cap N --search hypercuboid|naive [--actions K]");
+    eprintln!("usage: kairos_oracle_driver --cap N --search hypercuboid|naive|parse [--actions K]");
     std::process::exit(2);
 }
 
@@ -124,6 +132,7 @@ fn parse_options() -> Options {
                 search = Some(match value().as_str() {
                     "hypercuboid" => Search::Hypercuboid,
                     "naive" => Search::Naive,
+                    "parse" => Search::Parse,
                     other => usage(&format!("unknown search '{other}'")),
                 })
             }
@@ -212,6 +221,8 @@ fn list_actions(state: &State, search: Search, limit: usize) -> (Vec<MoveSeq>, b
             found.truncate(limit);
             (found, more)
         }
+        // Parse mode searches nothing, so it lists no action.
+        Search::Parse => (Vec::new(), false),
         Search::Naive => {
             let mut found = naive_actions_budget(state, limit + 1, u64::MAX).unwrap_or_default();
             let more = found.len() > limit;
@@ -262,7 +273,7 @@ fn emit_actions(state: &State, index: usize, search: Search) {
     let listed: Vec<String> = found.iter().map(|action| action_json(state, action)).collect();
     let caveat = match search {
         Search::Hypercuboid => ",\"caveat\":\"the hypercuboid search leaves out actions that waste a move\"",
-        Search::Naive => "",
+        Search::Naive | Search::Parse => "",
     };
     emit(&format!(
         "{{\"event\":\"actions\",\"index\":{index},\"count\":{},\"truncated\":{more}{caveat},\"actions\":[{}]}}",
@@ -274,31 +285,33 @@ fn emit_actions(state: &State, index: usize, search: Search) {
 fn report(state: &State, index: usize, options: &Options) {
     emit_state(state, index);
     let started = Instant::now();
-    let in_check = state.has_phantom_check();
-    let (count, terminal) = match options.search {
+    // Each answer as its JSON value: a null where this search does not answer.
+    let (in_check, count, terminal) = match options.search {
+        Search::Parse => ("null".to_string(), "null".to_string(), "null".to_string()),
         Search::Hypercuboid => {
             let terminal = match state.get_mate_type() {
                 MateType::Checkmate => "checkmate",
                 MateType::Stalemate => "stalemate",
                 MateType::None | MateType::Softmate => "none",
             };
-            ("null".to_string(), terminal)
+            (state.has_phantom_check().to_string(), "null".to_string(), quote(terminal))
         }
         Search::Naive => {
+            let in_check = state.has_phantom_check();
             let found = naive_actions_budget(state, options.cap, u64::MAX).unwrap_or_default().len();
             let terminal = match (found, in_check) {
                 (0, true) => "checkmate",
                 (0, false) => "stalemate",
                 _ => "none",
             };
-            (found.to_string(), terminal)
+            (in_check.to_string(), found.to_string(), quote(terminal))
         }
     };
     let ms = started.elapsed().as_secs_f64() * 1000.0;
     let side = if state.get_present().1 { "black" } else { "white" };
     emit(&format!(
         "{{\"event\":\"position\",\"index\":{index},\"side\":\"{side}\",\"in_check\":{in_check},\
-         \"legal_actions\":{count},\"terminal\":\"{terminal}\",\"ms\":{ms:.3}}}"
+         \"legal_actions\":{count},\"terminal\":{terminal},\"ms\":{ms:.3}}}"
     ));
     if options.actions_at == Some(index) {
         emit_actions(state, index, options.search);
@@ -357,6 +370,7 @@ fn main() {
     let search = match options.search {
         Search::Hypercuboid => "hypercuboid",
         Search::Naive => "naive",
+        Search::Parse => "parse",
     };
     emit(&format!(
         "{{\"event\":\"start\",\"driver\":\"kairos\",\"schema\":{SCHEMA},\"cap\":{},\"search\":\"{search}\",\"actions_total\":{}}}",

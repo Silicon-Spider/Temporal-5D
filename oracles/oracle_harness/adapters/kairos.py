@@ -1,11 +1,27 @@
 """Kairos (FirePlank/5d-chess-engine): the fourth rules oracle (decision H52).
 
-Two of its action searches are exposed as separate sources, as ftxi's and cwmtt's
-are: its hypercuboid search ("kairos") and its exhaustive enumerator
+It is enabled in two stages - CHECKPOINT 9's brief's "parse mode first, then full mode", which
+CHECKPOINT 10 reordered: parse mode recorded in the quiet-machine block, both stages enabled
+after the release tier's sign-off run.
+
+- "kairos:parse", parse mode: what Kairos set up at every position (decision H30),
+  the side to move and how it replayed the record - the same replay as the two
+  searches below, its refusals included - and a null for every question. Like the
+  notation parser it is a parse-only source (adapters.PARSE_ONLY_SOURCES): its
+  playing an action is no verdict, and it stands behind no ruleset (H47). Its refusals,
+  and where its reading ends, are compared only through Kairos's one primary source
+  (adapters.PRIMARY_SOURCES) - not at all while it is pending. Pending,
+  like the searches: recorded in the quiet-machine block, enabled after the release
+  tier's sign-off run, which leaves Kairos out (CHECKPOINT 10; docs/BUILD_LOG.md,
+  issue 574).
+
+Full mode exposes two of its action searches as separate sources, as ftxi's and
+cwmtt's are: its hypercuboid search ("kairos") and its exhaustive enumerator
 ("kairos:naive"). What each answers was confirmed at the pin before the driver was
 written (PROVENANCE.md, "Kairos, the fourth oracle"):
 
-- both: the check (its own test, which passes the active boards in the present),
+- both: the check (its test, which passes the active boards in the present - ftxi's later
+  code, translated, not ftxi's test at ftxi's pin),
   what it set up at every position (decision H30) and how it replayed the record;
 - "kairos": the mate verdict of its own mate test, an exhaustive hypercuboid
   search - and **no count**. That search leaves out the actions that waste a move
@@ -31,10 +47,9 @@ A line that ends in variations is replayed with its last variation as the main
 line - its reader is a port of ftxi's - so ftxi's guard refuses such a record here
 too, before it runs.
 
-These sources are wired - built, observed, tested - but enabled in no tier
-(adapters.PENDING_SOURCES) until their golden files are recorded on a quiet
-machine and the user has ruled how far Kairos, derived in part from ftxi, counts
-as a second oracle (docs/BUILD_LOG.md, issues 526 and 530).
+All three are wired - built, observed, tested - and pending (adapters.PENDING_SOURCES).
+Kairos is in ftxi's lineage (CHECKPOINT 10): the gate counts the two as one lineage
+for H47's two-oracle bar (the lock file's `lineage`, PROVENANCE.md "Lineages").
 """
 
 from __future__ import annotations
@@ -47,21 +62,28 @@ from ..observations import Observation
 from . import base, ftxi
 from .base import RunOptions, Source, code_sha256, run_protocol
 
-_SEARCHES = {"kairos": "hypercuboid", "kairos:naive": "naive"}
+_SEARCHES = {"kairos": "hypercuboid", "kairos:naive": "naive", "kairos:parse": "parse"}
 _DRIVER = paths.DRIVERS / "kairos"
 
 
 class KairosSource(Source):
     oracle = "kairos"
-    # The driver speaks the common --actions K flag; it has no --explain.
-    diagnostics = ("actions",)
 
     def __init__(self, name: str, lock: Lock):
         self.name = name
         self.search = _SEARCHES[name]
         self.pin = lock.pin("kairos")
-        counts = self.search == "naive"
-        self.answers = ("state", "side", "in_check", *(("legal_actions",) if counts else ()), "terminal", "legality")
+        if self.search == "parse":
+            # Parse mode answers no question: what it set up, whose move, how it replayed the record. Its refusals
+            # are statements (a royal left capturable); its playing an action is none (PARSE_ONLY_SOURCES).
+            self.answers = ("state", "side", "legality", "length")
+            self.diagnostics = ()
+        else:
+            counts = self.search == "naive"
+            self.answers = ("state", "side", "in_check", *(("legal_actions",) if counts else ()), "terminal",
+                            "legality")
+            # The driver speaks the common --actions K flag; it has no --explain.
+            self.diagnostics = ("actions",)
 
     @property
     def counts(self) -> bool:

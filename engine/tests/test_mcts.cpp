@@ -229,6 +229,46 @@ TEST(mcts_virtual_loss_is_released_by_delivery_and_abandon) {
   CHECK(search.stats().playouts >= before + m);
 }
 
+TEST(mcts_virtual_loss_is_released_by_delivery_and_abandon_in_every_configuration) {
+  // The test above under every configuration the invariants are checked in -
+  // D2's flat and tree forms, graphs, E2+E3 and the solver among them (the
+  // gate lane's done-means audit, 2026-10-24: delivery and abandon were tested
+  // under the default ply split only), from two roots: the Standard start and
+  // Two Timelines a few actions in (two boards to play each turn).
+  std::size_t batches = 0;
+  for (const Config& c : kConfigs) {
+    for (const bool two : {false, true}) {
+      const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Random, 5 + batches);
+      SearchParams p = params_of(c);
+      p.batch_size = 8;
+      p.hunt = p.settling = false;  // the ladder's asynchronous verdicts are test_ladder.cpp's
+      Search search(two ? two_timelines_after(2) : variant("Standard"), p);
+      search.run(*ev, Limits{40});
+      const std::size_t n = search.gather(8);
+      REQUIRE(n > 0);
+      CHECK(search.node(search.root()).virtual_loss > 0);
+      CHECK_THROWS_AS(search.check_invariants(), std::logic_error);  // a batch is waiting
+      search.abandon();
+      CHECK_EQ(search.node(search.root()).virtual_loss, 0u);
+      CHECK_NOTHROW(search.check_invariants());
+      const std::uint64_t before = search.stats().playouts;
+      const std::size_t m = search.gather(8);
+      REQUIRE(m > 0);
+      std::vector<Evaluation> out(m);
+      ev->evaluate(search.requests(), out);
+      search.deliver(out);
+      CHECK_EQ(search.node(search.root()).virtual_loss, 0u);
+      CHECK_NOTHROW(search.check_invariants());
+      CHECK(search.stats().playouts >= before + m);
+      // ... and the search runs on.
+      search.run(*ev, Limits{20});
+      CHECK_NOTHROW(search.check_invariants());
+      ++batches;
+    }
+  }
+  CHECK_EQ(batches, 2 * kConfigs.size());
+}
+
 TEST(mcts_a_batch_is_bounded_in_visits_of_every_kind) {
   // A batch of 8 is 8 visits: the leaves sent for evaluation plus the visits
   // completed without the evaluator (here the mate and the turn cap's
@@ -3799,6 +3839,123 @@ TEST(mcts_graph_invariants_hold_in_random_searches) {
   CHECK(searches >= 20);
   CHECK(checked > 0);
   CHECK(transpositions > 0);
+}
+
+TEST(mcts_flat_form_no_node_with_turns_still_to_generate_is_proven_lost) {
+  // §15.4's turn structure under D2's flat form (spec issue 170; the gate
+  // lane's done-means audit, 2026-10-24): a node whose turns are not all known
+  // - its generator stopped by its budget, or not yet exhausted - is never
+  // proven lost, at every node of random flat searches (tree and graph, the
+  // in-tree solver on - test-only, H41 - with generator budgets from a few
+  // dozen nodes to the default, the fallback listing on and off), on random
+  // two-board positions under both Q4 readings and on the constructed forced
+  // loss, mate in one and forced draw. The converse is exercised too: nodes
+  // whose turns are all known are proven lost. mcts_flat_a_stopped_generator_
+  // is_never_proven_lost checks the root of one search; this checks every node.
+  std::size_t searches = 0;
+  std::size_t open_nodes = 0;
+  std::size_t proven_lost = 0;
+  std::uint64_t stopped = 0;
+  for (const bool after_shift : {true, false}) {
+    RuleOptions rules;
+    rules.moves_after_shift = after_shift;
+    std::vector<GameState> positions = two_board_positions(rules, 5, after_shift ? 171 : 173);
+    if (after_shift) {  // the constructed positions are set up under the default rules (R8)
+      positions.push_back(forced_loss());
+      positions.push_back(mate_in_one());
+      positions.push_back(forced_draw());
+    }
+    for (std::size_t i = 0; i < positions.size(); ++i) {
+      for (const bool graph : {false, true}) {
+        for (const std::uint64_t budget : {std::uint64_t{48}, std::uint64_t{400}, SearchParams{}.generator_nodes}) {
+          SearchParams p = fast();
+          p.split = TurnSplit::Flat;
+          p.graph = graph;
+          p.proof_channel = true;       // the in-tree solver under test (off by rule, H41)
+          p.hunt = p.settling = false;  // the ladder's proofs (E10) are test_ladder.cpp's
+          p.generator_nodes = budget;
+          if (i % 2 == 1) p.flat_fallback = 0;  // the generator alone
+          p.turn_cap.boards = static_cast<int>(positions[i].multiverse().board_count()) + 3;
+          const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Random, 300 + i);
+          Search search(positions[i], p);
+          search.run(*ev, Limits{300});
+          CHECK_NOTHROW(search.check_invariants());
+          ++searches;
+          stopped += search.stats().stopped_generators;
+          for (NodeId id = 0; id < search.node_count(); ++id) {
+            const NodeView n = search.node(id);
+            if (!n.expanded || n.terminal != Terminal::None) continue;
+            if (!n.children_complete) {
+              ++open_nodes;
+              CHECK(n.hi > -1);
+            } else if (n.hi == -1) {
+              ++proven_lost;
+            }
+          }
+        }
+      }
+    }
+  }
+  std::printf("  flat searches: %zu, nodes with turns still to generate: %zu, proven lost: %zu, generators stopped: %llu\n",
+              searches, open_nodes, proven_lost, static_cast<unsigned long long>(stopped));
+  // What the searches met when written (deterministic): 78 searches, 100 nodes
+  // with turns still to generate, 42 generators stopped, 6 nodes proven lost;
+  // the floors about a third of that.
+  CHECK(searches >= 60);
+  CHECK(open_nodes > 30);
+  CHECK(stopped > 12);
+  CHECK(proven_lost > 1);
+}
+
+TEST(mcts_tree_form_dead_ends_have_no_legal_completion_in_random_searches) {
+  // mcts_graph_invariants_hold_in_random_searches for D2's tree form (a tree
+  // only, issue 301): random two-board positions under both Q4 readings, the
+  // pseudo-legal seam on and off, the interaction gates as built and none, the
+  // solver on (test-only, H41) - check_invariants holds, and no node marked a
+  // dead end has a legal completion (the brute-force reference). The tree
+  // form's own dead-end test checks the structure, not against the reference
+  // (the gate lane's done-means audit, 2026-10-24).
+  std::size_t searches = 0;
+  std::size_t checked = 0;
+  std::size_t inherited = 0;
+  for (const bool after_shift : {true, false}) {
+    RuleOptions rules;
+    rules.moves_after_shift = after_shift;
+    const std::vector<GameState> positions = two_board_positions(rules, 6, after_shift ? 271 : 273);
+    for (std::size_t i = 0; i < positions.size(); ++i) {
+      for (const bool seam : {false, true}) {
+        SearchParams p = fast();
+        p.split = TurnSplit::Tree;
+        if (i % 3 == 2) p.tree_gates = 0;  // inheritance throughout the turn
+        p.proof_channel = true;
+        p.hunt = p.settling = false;  // the ladder's proofs (E10) are test_ladder.cpp's
+        p.legal_moves_only = !seam;
+        p.legality = i % 2 == 0 ? LegalityOptions::budgeted(0, 0) : LegalityOptions::exact();
+        p.turn_cap.boards = static_cast<int>(positions[i].multiverse().board_count()) + 3;
+        const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Random, 200 + i);
+        Search search(positions[i], p);
+        search.run(*ev, Limits{400});
+        CHECK_NOTHROW(search.check_invariants());
+        ++searches;
+        for (NodeId id = 0; id < search.node_count(); ++id) {
+          const NodeView n = search.node(id);
+          inherited += n.inherited ? 1 : 0;
+          if (!n.dead_end) continue;
+          const t5d_test::Reference ref = t5d_test::reference_actions(*n.state, 200000);
+          if (ref.overflow) continue;
+          ++checked;
+          CHECK(ref.successors.empty());
+        }
+      }
+    }
+  }
+  std::printf("  tree-form searches: %zu, dead ends checked: %zu, inherited nodes: %zu\n", searches, checked, inherited);
+  // What the searches met when written (deterministic): 24 searches, 1,451 dead
+  // ends checked against the reference, 312 inherited nodes; the floors about a
+  // third of that.
+  CHECK(searches >= 20);
+  CHECK(checked > 400);
+  CHECK(inherited > 100);
 }
 
 // ---- What the mutation runs found unchecked (review C) ------------------------------------
