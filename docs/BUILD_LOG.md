@@ -8943,3 +8943,20 @@ struck through, where nothing of it is left to apply); the others stand as writt
   stash by its id, never `pop`, in a shared repository. Checks: verify ok (its 17 notes, unchanged);
   selftest 732 tests OK (1 skipped, 972 s); ruff clean; gate --tier commit, the engine rebuilt after the merge:
   oracle layer ok, SMOKE TEST - PASSED (calibration 1.55x).
+- **2026-11-08/09 - C26 and C27 behind their flags, with section 15.2's two rows** (`lane/net`;
+  issues 259-275, edits 380-384). CHECKPOINT 9's ruling 2, built to the design a three-way panel and a
+  judge chose. Five commits: issue 259 first - C3's root refresh was anchored on the pseudo-legal
+  expansion while every search leaf is legality-filtered, so at a root whose two move lists differ
+  the root leaf missed the dense pass (fixed: the anchor is the root leaf's input); C26, the phase
+  form (`CacheConfig.phase_form`, N\* = `phase_boards` 50, `CacheConfig.mode` the one predicate; the
+  dense epoch shared below N\*; the dense mode the dense evaluator itself, batch for batch); C27 in the
+  search-tree fixture (`SearchTree(evaluates=...)`, inner nodes, the triggers only at evaluated nodes,
+  the deferred recompute exact by construction); the engine path refusing node refreshes it cannot
+  make (issue 271); the default path's evidence (93 cases bit for bit). Both rows green: the phase
+  form's search is the dense search node for node through the C step API on every split, a per-node
+  switch killed; the deferred recompute bitwise against recompute at supersession on the fixture,
+  real actions and the step API's tree form. For the user: issues 264, 265, 268, 269 (and 260 if 6c
+  drops C3; 266 with 252); for the main loop: the lane's line under "Current state" (not edited here),
+  edits 380-384 upstream, and the engine ladder only if 6c needs it (271). The whole suite on the
+  lane's head, in CI's four shards: 2155 passed, 1 skipped (opt-in); `gate --tier commit`: the smoke
+  test passed, the oracle layer failing only on Kairos not checked out in this worktree (CHANGELOG).
