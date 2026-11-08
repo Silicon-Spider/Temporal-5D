@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import os
+import zlib
+
 import pytest
 import torch
 
@@ -57,3 +60,23 @@ def _no_grad_by_default(request):
 def pytest_configure(config):
     config.addinivalue_line("markers", "grad: the test needs autograd")
     config.addinivalue_line("markers", "slow: a long test (the full 16-layer network); deselect with -m 'not slow'")
+
+
+def pytest_collection_modifyitems(config, items):
+    """``T5D_TEST_SHARD=i/n`` keeps the tests whose id hashes to shard ``i`` of ``n`` (CI runs
+    the suite as ``n`` parallel jobs, ``i`` from 0). A test's shard depends on its id alone,
+    so the shards are disjoint, their union is the whole suite, and a test stays in its shard
+    whatever else is collected. Unset, every test runs."""
+    spec = os.environ.get("T5D_TEST_SHARD", "").strip()
+    if not spec:
+        return
+    index, _, count = spec.partition("/")
+    i, n = int(index), int(count)
+    if not 0 <= i < n:
+        raise pytest.UsageError(f"T5D_TEST_SHARD={spec!r}: want i/n with 0 <= i < n")
+    kept, dropped = [], []
+    for item in items:
+        (kept if zlib.crc32(item.nodeid.encode("utf-8")) % n == i else dropped).append(item)
+    if dropped:
+        config.hook.pytest_deselected(items=dropped)
+    items[:] = kept

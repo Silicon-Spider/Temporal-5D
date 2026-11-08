@@ -10,6 +10,19 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-08 - The network job runs in four shards: the Python suite outgrew one hour
+
+Since CI came back every run of the `network` workflow was cancelled at its 60-minute limit:
+the Python suite reached 54% in 58 minutes on a runner (2026-11-01, 1,716 tests), so it needs
+about two hours whole, and A5 added some 200 tests since. The job now runs as a four-way
+matrix, each shard taking the tests whose id hashes to it (`T5D_TEST_SHARD=i/n`, a hook in
+`python/tests/conftest.py`: crc32 of the test id modulo n, so the shards are disjoint, their
+union is the whole suite, and a test keeps its shard whatever else is collected); lint runs in
+shard 0 alone. Checked on the suite at 91b2c7c: 1,934 tests split 475 / 462 / 491 / 506, union
+equal to the whole, no test twice. Unset, every test runs, as before.
+
+Spec: none - CI's test plumbing; no part of the spec describes it.
+
 ### 2026-11-02 - The engine builds on Linux again: one sign-conversion error in the evaluation identity
 
 GitHub Actions runs again (it started no job from 2026-10-17 until the account's billing was
