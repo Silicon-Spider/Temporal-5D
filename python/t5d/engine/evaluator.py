@@ -695,15 +695,31 @@ def start_epoch(search: Search, evaluator: Evaluator, *, regs_per_board: int = 2
     refresh; ``CachedNetworkEvaluator``), so that a search sharing another's evaluation cache
     (C14) never reuses evaluations made under another refresh. The engine epoch set, or None
     for an evaluator without ``start`` (its evaluations are a function of the leaf's input alone:
-    the epoch stays as it is). The root's position is the root state's own expansion with the
-    search's expansion options."""
+    the epoch stays as it is). The root's position is the root leaf's input: the root state
+    expanded as the search expands its leaves - the search's expansion options, and its candidate
+    moves under the search's legality policy (``legal_moves_only`` with the budget
+    ``legality_checks``, ``legality_nodes``) - so that C3's root refresh, a dense pass over this
+    position, reads what the root leaf's own evaluation reads (section 7.9: at the root the
+    two-level mask reduces to the dense pass). The moves decide the move graph and the typed
+    relations, which the dense pass reads; anchored on the pseudo-legal expansion, a root whose
+    pseudo-legal and legal moves differ would have refreshed history the root leaf's dense pass
+    never computes (BUILD_LOG issue 259)."""
     start = getattr(evaluator, "start", None)
     if not callable(start):
         return None
-    opts = search.params.expand
+    params = search.params
+    opts = params.expand
     relations = [rid for rid in range(32) if (int(opts.relations) >> rid) & 1]
     with search.root_game() as root:
-        position = root.position(regs_per_board=regs_per_board, global_regs=global_regs, relations=relations, window_k=int(opts.window_k))
+        position = root.position(
+            regs_per_board=regs_per_board,
+            global_regs=global_regs,
+            relations=relations,
+            window_k=int(opts.window_k),
+            legal_moves=bool(params.legal_moves_only),
+            legality_checks=int(params.legality_checks),
+            legality_nodes=int(params.legality_nodes),
+        )
     number = engine_epoch(start(position))
     if search.info().epoch != number:
         search.set_epoch(number)

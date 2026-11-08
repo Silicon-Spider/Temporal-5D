@@ -1567,3 +1567,37 @@ Royalty and Timeline Strategos.
 synthetic trees (under 2.4e-6 after 16 layers); the BF16 gaps match `test_network.py`'s on the
 'cross_timeline' record (RMS 2.0e-3 / max 1.4e-2, policy 8.0e-3, value 1.1e-3) - the value's
 1.32e-3 a little above that figure, 3.8x under its bound.
+
+### The cached path at engine roots - C3's anchor (issue 259) (numerics; no threshold, no verdict)
+
+**What it is.** How often a search root's pseudo-legal and legal move lists differ - where C3's root
+refresh, anchored on `Game.position`'s default (pseudo-legal) expansion before issue 259, read
+another move graph than the root leaf - and what it cost the root leaf's evaluation, which section
+7.9 makes the dense pass. Recorded so that issue 259's fix has its evidence beside it.
+
+**Conditions.** 2026-11-08, machine `dev-r`, PyTorch 2.13.0+cpu, Python 3.14.7, NumPy 2.5.2, 2 torch
+threads, the engine library built Release in `lane/net` (main e15f173); FP32, 2 layers, the v1
+configuration under the block-causal scope, random weights at initialisation scale. Roots: the
+first live turn start with 8 boards or more of seeded pseudo-legal random play
+(`test_cached_variants._walk`, seeds 5-24), the search's default legality budget (64 checks, 2,000
+nodes - here the same lists as exact). Gaps: the largest absolute difference over the root leaf's
+move, WDL and categorical logits between the cached path with C3's root refresh (one playout
+through the C step API, ply / tree / flat alike) and `NetworkEvaluator(scope="dense")` on the same
+leaf, at the first root of `_differing_root` (Two Timelines seed 23, 8 boards; Timeline Battleground
+seed 8, 11 boards), model seed 5 (C20's `causal_past`) and 6 (`past_and_epoch_history`).
+
+| Variant | Roots whose two lists differ | Moves, pseudo-legal / legal, where they differ |
+|---|---|---|
+| Standard - Two Timelines | 1 of 20 | 52 / 50 |
+| Misc - Timeline Battleground | 9 of 20 | 114/112, 89/78, 89/54, 86/59, 87/79, 72/71, 94/91, 152/150, 87/86 |
+
+| Root leaf against the dense pass | Two Timelines (R2 / R1) | Timeline Battleground (R2 / R1) |
+|---|---|---|
+| Anchored on the pseudo-legal expansion (main before issue 259) | 1.09e-4 / 2.37e-5 | 3.57e-4 / 4.47e-5 |
+| Anchored at the root leaf's input (the fix) | 4.77e-7 / 4.47e-7 | 8.34e-7 / 7.75e-7 |
+
+*Read.* With the anchor right, the root leaf is the dense pass to its summation order (under 1e-6);
+anchored wrong it misses by 24-460x that, sometimes under the 1e-4 FP32 tolerance the step-API tests
+used - which is why MT-04 did not see it, and why the new test bounds the root leaf at 1e-5. The
+two lists differ where a pseudo-legal move would leave a royal capturable, far more often on
+Timeline Battleground's crowded 5x5 boards (three timelines from the start) than on Two Timelines.

@@ -4924,6 +4924,30 @@ superseded or made moot says so; nothing is deleted.
     low for an A5 network. Built: nothing (C26 is not built here; A5 refuses the cached path, issue
     252). For the user: N\* is read under the tokenisation adopted, so 6c's per-range reading and
     the pilot run's N\* wait on A5's verdict or are read for both arms. Edit 199.
+259. **C3's root refresh was anchored on the pseudo-legal expansion; the search's leaves are the
+    legal one** (§7.9; register C3, D1, I15). *The C26/C27 design panel (2026-11-08).*
+    `start_epoch` built the position it hands `start` - the anchor of the root refresh - with
+    `Game.position`'s defaults, the pseudo-legal moves, while the search expands every leaf, the
+    root included, with `legal_moves_only` under its legality budget (`mcts.cpp`,
+    `leaf_expansion`: the one call site of the legal-moves filter). The moves decide the move
+    graph and the typed relations, which the refresh's dense pass reads (B9's move-graph heads,
+    B11); so at a root whose pseudo-legal and legal moves differ, the epoch's history was
+    conditioned on another input than the root leaf's, and the root leaf's cached evaluation -
+    "at the root the two-level mask reduces to full dense attention" (§7.9) - missed the dense
+    pass over it: by 2.4e-5 to 3.6e-4 on its logits at two such roots (FP32, 2 layers), against
+    under 1e-6 anchored right (MEASUREMENTS, "The cached path at engine roots"). How often: of the
+    first live turn starts with 8 boards or more of random play (`_walk`, seeds 5-24), 1 in 20
+    on Two Timelines and 9 in 20 on Timeline Battleground (the panel's judge: 6 of 20 on its
+    own sample). **Fixed**: the anchor is the root leaf's input - the root expanded with the
+    search's expansion options and legality policy (`legal_moves_only`, `legality_checks`,
+    `legality_nodes`). Only the root refresh's values change: the causal epoch's frozen entries
+    read no move or edge, and `state_digest` holds neither, so epoch keys, the engine's epoch
+    numbers and `start`'s shortcut are unchanged. MT-04's step-API test anchored its reference at
+    `start`'s argument, so it held either way; the new tests pin the anchor to the first leaf's
+    moves and edges under every split and legality setting, and the root leaf to the dense pass
+    within 1e-5 (in the test, the stale anchor misses by more). C26 rests on it: the first cached
+    search's root evaluation is the dense pass (§7.10's crossing). No spec edit: the spec does not
+    name the anchor's expansion.
 
 <!-- A new list, so that the numbers from 140 render as written. -->
 

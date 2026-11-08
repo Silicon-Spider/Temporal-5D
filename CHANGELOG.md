@@ -10,6 +10,40 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-08 - The cached path's root refresh anchors at the root leaf's input (C3; issue 259)
+
+`start_epoch` (`python/t5d/engine/evaluator.py`) built the position it hands an evaluator's
+`start` - the anchor of C3's root refresh - with `Game.position`'s defaults: the pseudo-legal
+moves. The search expands every leaf, the root included, with `legal_moves_only` under its
+legality budget, and the moves decide the move graph and the typed relations the refresh's dense
+pass reads. So at a root whose pseudo-legal and legal moves differ, the refreshed history was
+conditioned on another input than the root leaf's, and the root leaf's cached evaluation missed
+the dense pass over it - by 2.4e-5 to 3.6e-4 on its logits at two such roots (FP32, 2 layers),
+against under 1e-6 once anchored right. The anchor is now the root expanded as the search expands
+its leaves: the search's expansion options and its legality policy (`legal_moves_only`,
+`legality_checks`, `legality_nodes`). Only the root refresh's values move: the causal epoch's
+frozen entries read no move or edge, and `state_digest` holds neither, so the epoch keys, the
+engine's epoch numbers and `start`'s shortcut are unchanged. Found by the C26/C27 design panel;
+C26 rests on it (section 7.9: at the root the two-level mask is the dense pass - the first cached
+search's root evaluation, C26's crossing).
+
+Tests (`python/tests/engine/test_cached_variants.py`): the position `start` gets has the first
+leaf's moves and edges under the ply split, the tree form and the flat form, at the default
+budget, exactly and on the pseudo-legal seam (non-vacuous: `Game.position()`'s default differs at
+those roots); the root leaf is the dense pass within 1e-5 under each split and both C20 readings,
+and in the test an epoch anchored on the pseudo-legal expansion misses by more. Both fail at main.
+MEASUREMENTS records how often the two move lists differ and the gaps.
+
+Checks: ruff "All checks passed!", "113 files already formatted"; with `T5D_REQUIRE_ENGINE=1`,
+`test_cached_variants.py`, `test_evaluator.py`, `test_leave.py` and the shared-cache epoch test
+"106 passed, 3 deselected in 2625.02s" (a loaded machine; the 3 slow); the engine built (main's merge
+brought engine tests only); `harness.py verify` every check ok but `pins` and the boundary's copy
+check, both "kairos is not checked out" in this worktree (not synced: `sync` would fetch Kairos from
+its upstream).
+
+Spec: §7.9 (the root refresh is the dense pass at the root - unchanged, now held on engine roots);
+register C3; issue 259. No part of the spec names the anchor's expansion: no edit proposed.
+
 ### 2026-11-08 - Kairos round 2 review fixes: the lineage table fails closed and its wiring is tested; what of Kairos is ftxi's, corrected
 
 The review of 28a102b..203fabd (2026-11-02: no HIGH, 1 MEDIUM, 12 LOW, 5 refuted), every finding
