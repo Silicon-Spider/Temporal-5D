@@ -61,10 +61,10 @@ import torch
 from ..net.cache import CachedEvaluator, Epoch, state_digest
 from ..net.model import NetOutput, T5DNet
 from ..net.state import PositionState, collate, relayout, to_piece_centric
-from .capi import T5D_SPLIT_FLAT, T5D_VALUE_LOGITS, T5D_VALUE_PROBABILITIES
+from .capi import T5D_SPLIT_FLAT, T5D_TIME_STOP_NONE, T5D_TIME_STOP_SEARCH, T5D_VALUE_LOGITS, T5D_VALUE_PROBABILITIES
 from .convert import Position, to_position
 from .errors import EngineInternalError
-from .search import LeafView, Search
+from .search import LeafView, Search, TimeManager, TimePlan, TimeVerdict
 
 PositionLike = Position | PositionState
 
@@ -736,6 +736,87 @@ def run_search(
     return stats, driver
 
 
+@dataclass
+class TimedSearch:
+    """One timed decision (``run_timed_search``): its plan, its last verdict (``stop``: why it
+    ended - ``T5D_TIME_STOP_SEARCH`` where the search stopped itself, ``search_stop`` then saying
+    how: ``"finished"`` or ``"exhausted"``), the seconds it took by its clock, and the serve
+    loop's statistics over its slices."""
+
+    plan: TimePlan
+    verdict: TimeVerdict
+    seconds: float
+    stats: ServeStats
+    search_stop: str | None = None
+    slices: int = 0
+
+
+def run_timed_search(
+    search: Search,
+    evaluator: Evaluator,
+    tm: TimeManager,
+    *,
+    remaining: float,
+    increment: float = 0.0,
+    moves_left: float = math.nan,
+    model_clock: bool = False,
+    regs_per_board: int = 2,
+    global_regs: int = 16,
+    value_kind: int = T5D_VALUE_LOGITS,
+) -> TimedSearch:
+    """One decision of ``search`` on a clock (stage E11; ``t5d/timeman.hpp``'s ``run_timed`` with
+    Python as the evaluator): ``tm.begin``, then slices - each ``serve`` over a ``CStepDriver`` of
+    ``batch_size`` playouts, the engine's own ``Search::run`` slice, so a deterministic evaluator
+    builds the tree the engine's ``run_timed`` builds - with ``tm.check`` before each, until a
+    stop; then ``tm.end``. On the wall clock the search's deadline is the hard bound for the run
+    (the rules engine's calls inside a batch stop at it), cleared after; ``model_clock``: the
+    cost model's clock (elapsed NaN), deterministic. Match play's: self-play takes no clock (its
+    budgets are PCR's), so no self-play guard is needed here - and none of D9's flat-form refusal
+    is relaxed."""
+    if int(search.params.split) == T5D_SPLIT_FLAT and policy_source(evaluator) != "normal":
+        raise ValueError(FLAT_OPTIMISTIC)
+    start_epoch(search, evaluator, regs_per_board=regs_per_board, global_regs=global_regs)
+    batch = 1 if search.params.synchronous else max(int(search.params.batch_size), 1)  # the engine's slice
+    before = search.info()
+    plan = tm.begin(search, remaining=remaining, increment=increment, moves_left=moves_left)
+    t0 = time.perf_counter()
+    stats = ServeStats()
+    out_stop: str | None = None
+    slices = 0
+    if not model_clock:
+        search.set_deadline(plan.hard_seconds)
+    try:
+        while True:
+            verdict = tm.check(search, math.nan if model_clock else time.perf_counter() - t0)
+            if verdict.stop != T5D_TIME_STOP_NONE:
+                break
+            driver = CStepDriver(search, playouts=batch, regs_per_board=regs_per_board, global_regs=global_regs, value_kind=value_kind)
+            st = serve(driver, evaluator, batch_size=batch)
+            slices += 1
+            stats.rounds += st.rounds
+            stats.leaves += st.leaves
+            stats.largest_batch = max(stats.largest_batch, st.largest_batch)
+            stats.batch_sizes.extend(st.batch_sizes)
+            stats.collect_seconds += st.collect_seconds
+            stats.evaluate_seconds += st.evaluate_seconds
+            stats.deliver_seconds += st.deliver_seconds
+            if driver.stop in ("finished", "exhausted"):
+                out_stop = driver.stop
+                verdict = replace(verdict, stop=T5D_TIME_STOP_SEARCH)
+                break
+    finally:
+        if not model_clock:
+            search.set_deadline(0.0)
+    tm.end(search)
+    if model_clock:
+        after = search.info()
+        work = max(after.evaluations - before.evaluations, (after.playouts - before.playouts) / tm.params.playouts_per_evaluation_cap)
+        seconds = work * plan.seconds_per_evaluation
+    else:
+        seconds = time.perf_counter() - t0
+    return TimedSearch(plan=plan, verdict=verdict, seconds=seconds, stats=stats, search_stop=out_stop, slices=slices)
+
+
 class UniformEvaluator:
     """Logits 0 for every move, no submit logit (the search's placeholder share), WDL logits
     (0, 0, 0) - the value exactly 0, the draw probability 1/3 - and the categorical's mass on
@@ -771,11 +852,13 @@ __all__ = [
     "POLICY_SOURCES",
     "SearchDriver",
     "ServeStats",
+    "TimedSearch",
     "UniformEvaluator",
     "check_evaluation",
     "engine_epoch",
     "policy_source",
     "run_search",
+    "run_timed_search",
     "start_epoch",
     "serve",
     "state_of",

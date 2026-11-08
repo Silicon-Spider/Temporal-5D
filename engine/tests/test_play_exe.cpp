@@ -155,6 +155,38 @@ TEST(play_exe_records_replay_through_the_gate_adapter) {
   }
 }
 
+TEST(play_exe_plays_match_play_on_a_clock) {
+  // Stage E11: --match --time, on the wall clock and on the model clock, under
+  // each of 6o's arms and with the signals off; the records replay through the
+  // gate, and the Engine header names the clock.
+  const t5d::PgnRecord wall = play_and_gate({"--variant", "Standard - Two Timelines", "--match", "--time", "4",
+                                             "--increment", "0.05", "--cap-turns", "4", "--no-hunt", "--no-settling"},
+                                            {});
+  REQUIRE(wall.header("Engine") != nullptr);
+  CHECK(wall.header("Engine")->find("clock 4 s + 0.05 s per action (integral allocator, signals on, wall clock)") !=
+        std::string::npos);
+  for (const char* arm : {"flat-evals", "flat-wall-clock"}) {
+    play_and_gate({"--match", "--time", "3", "--allocator", arm, "--model-clock", "--cap-turns", "3", "--split",
+                   "flat"},
+                  {});
+  }
+  const t5d::PgnRecord off = play_and_gate(
+      {"--variant", "Very Small - Open", "--match", "--time", "3", "--no-signals", "--model-clock", "--cap-turns", "4"},
+      {});
+  REQUIRE(off.header("Engine") != nullptr);
+  CHECK(off.header("Engine")->find("signals off, model clock") != std::string::npos);
+  namespace fs = std::filesystem;
+  const fs::path dir = fs::path(T5D_TEST_SCRATCH) / "play-exe";
+  fs::create_directories(dir);
+  // The clock is match play's, and its options need it.
+  CHECK_EQ(run(T5D_PLAY_EXE, {"--time", "5"}, {}, dir / "o.txt", dir / "e.txt"), 2);
+  CHECK(read_all(dir / "e.txt").find("--match") != std::string::npos);
+  CHECK_EQ(run(T5D_PLAY_EXE, {"--match", "--no-signals"}, {}, dir / "o.txt", dir / "e.txt"), 2);
+  CHECK_EQ(run(T5D_PLAY_EXE, {"--match", "--time", "0"}, {}, dir / "o.txt", dir / "e.txt"), 2);
+  CHECK_EQ(run(T5D_PLAY_EXE, {"--match", "--time", "5", "--allocator", "sideways"}, {}, dir / "o.txt", dir / "e.txt"),
+           2);
+}
+
 TEST(play_exe_takes_its_rules_through_the_shared_option_reader) {
   // The default is the engine's (Q4 as ruled, R8): no Rules header, and the
   // gate replays the record under its own default.

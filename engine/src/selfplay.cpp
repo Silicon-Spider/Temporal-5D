@@ -3,8 +3,11 @@
 #include "t5d/selfplay.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <chrono>
+#include <cmath>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -52,6 +55,7 @@ const char* game_end_name(GameEnd end) noexcept {
     case GameEnd::Unknown: return "unknown";
     case GameEnd::ActionLimit: return "action_limit";
     case GameEnd::TimeLimit: return "time_limit";
+    case GameEnd::Flag: return "flag";
   }
   return "?";
 }
@@ -65,6 +69,7 @@ std::string GameRecord::result() const {
 double GameRecord::white_score() const noexcept {
   switch (end) {
     case GameEnd::Checkmate: return winner == 0 ? 1.0 : 0.0;
+    case GameEnd::Flag: return winner == 0 ? 1.0 : 0.0;
     case GameEnd::Stalemate:
     case GameEnd::TurnCap: return 0.5;
     case GameEnd::Unknown:
@@ -88,6 +93,18 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
   SearchParams sp = params.search;
   sp.turn_cap = params.turn_cap;
   if (params.match_play) sp.root_noise = false;  // §12.3: noise off at match play
+  const MatchClock& mc = params.clock;
+  if (mc.enabled) {
+    if (!params.match_play) {
+      throw std::invalid_argument(
+          "PlayParams::clock: match play only - self-play's budgets are PCR's (12.5), never a clock's");
+    }
+    if (!(std::isfinite(mc.base_seconds) && mc.base_seconds > 0) ||
+        !(std::isfinite(mc.increment_seconds) && mc.increment_seconds >= 0)) {
+      throw std::invalid_argument("PlayParams::clock: base_seconds positive, increment_seconds 0 or more");
+    }
+    validate(mc.time);
+  }
   if (params.guard_final && !sp.proof_channel) {
     throw std::invalid_argument(
         "PlayParams::guard_final: Guard's refutation is a proof, and no proof may change play until the proof "
@@ -113,6 +130,11 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
     return std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
   };
   const auto out_of_time = [&] { return params.max_seconds > 0 && elapsed() >= params.max_seconds; };
+  // E11: each side's clock and time manager.
+  std::array<TimeManager, 2> tms{TimeManager(mc.time), TimeManager(mc.time)};
+  if (mc.enabled) g.clock_remaining = {mc.base_seconds, mc.base_seconds};
+  WallClock wall;
+  Clock* const clock = mc.model_clock ? nullptr : &wall;
   SearchBudget verdict_budget;  // no node or time limit: a verdict is a proof (H37)
   verdict_budget.max_bytes = sp.mate_bytes;
   for (;;) {
@@ -150,7 +172,9 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
     // count (the network sees it; equal states with other counts are other nodes).
     int moves_made = 0;
     const GameState action_start = s;
+    const int side = index_of(action_start.to_move());
     bool timed_out = false;
+    bool flagged = false;
     for (bool submitted = false; !submitted;) {
       // The safety stop before every decision, not only at turn starts; a
       // partial action is not recorded (the record ends at the turn start).
@@ -176,7 +200,21 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
       g.reused_visits += search->node(search->root()).visits;
       Limits limits{params.playouts};
       if (params.max_seconds > 0) limits.seconds = std::max(params.max_seconds - elapsed(), 1e-6);
-      search->run(evaluator, limits);
+      const auto d0 = std::chrono::steady_clock::now();
+      std::optional<TimedRun> timed;
+      if (mc.enabled) {
+        // E11: the side's time manager runs the decision on its clock.
+        TimeContext ctx;
+        ctx.remaining_seconds = g.clock_remaining[static_cast<std::size_t>(side)];
+        ctx.increment_seconds = mc.increment_seconds;
+        timed = run_timed(*search, evaluator, tms[static_cast<std::size_t>(side)], ctx, clock);
+        ++g.timed_decisions;
+        ++g.time_stops[static_cast<std::size_t>(timed->verdict.stop)];
+        g.extensions += static_cast<std::uint64_t>(std::popcount(timed->verdict.extensions));
+        limits = Limits{std::max<std::uint64_t>(sp.batch_size, 1)};  // a re-run below: one batch
+      } else {
+        search->run(evaluator, limits);
+      }
       const auto visited = [&] {
         for (const RootChild& c : search->root_children()) {
           if (c.visits > 0) return true;
@@ -266,6 +304,13 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
         ++g.guard_rejections;
         Limits again{params.guard_research_playouts > 0 ? params.guard_research_playouts : params.playouts};
         if (params.max_seconds > 0) again.seconds = std::max(params.max_seconds - elapsed(), 1e-6);
+        if (timed && clock != nullptr) {
+          // E11: no reserve is held for Guard (offline, H42; issue 306) - its
+          // re-search draws on what the hard bound leaves.
+          const double left = timed->plan.hard_seconds -
+                              std::chrono::duration<double>(std::chrono::steady_clock::now() - d0).count();
+          again.seconds = again.seconds > 0 ? std::min(again.seconds, std::max(left, 1e-6)) : std::max(left, 1e-6);
+        }
         search->run(evaluator, again);
         pick = choose_now();
         children = search->root_children();
@@ -316,6 +361,23 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
         g.decision_log.push_back(std::move(d));
       }
       ++g.decisions;
+      if (timed) {
+        // E11: the decision charged to the side's clock - its whole wall time
+        // (search, choice, verification), or on the model clock its work.
+        const double spent =
+            clock != nullptr ? std::chrono::duration<double>(std::chrono::steady_clock::now() - d0).count()
+                             : timed->seconds;
+        if (spent > timed->plan.hard_seconds) {
+          ++g.hard_overruns;
+          g.max_overrun_seconds = std::max(g.max_overrun_seconds, spent - timed->plan.hard_seconds);
+        }
+        double& left = g.clock_remaining[static_cast<std::size_t>(side)];
+        left -= spent;
+        if (left <= 0) {
+          flagged = true;
+          break;
+        }
+      }
       const RootChild& c = children.at(pick);
       if (sp.split == TurnSplit::Flat) {
         for (const Move& m : c.moves) {
@@ -337,11 +399,19 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
       if (params.match_play) search->advance(pick);
       if (!submitted) ++moves_made;
     }
+    if (flagged) {
+      // The side's flag fell during its action: the action is not recorded.
+      s = action_start;
+      g.end = GameEnd::Flag;
+      g.winner = 1 - side;
+      break;
+    }
     if (timed_out) {
       s = action_start;
       g.end = GameEnd::TimeLimit;
       break;
     }
+    if (mc.enabled) g.clock_remaining[static_cast<std::size_t>(side)] += mc.increment_seconds;
     g.actions.push_back(std::move(action));
   }
   g.final_state = s;

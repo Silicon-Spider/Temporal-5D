@@ -66,9 +66,11 @@
 #ifndef T5D_LEGAL_HPP
 #define T5D_LEGAL_HPP
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -96,6 +98,11 @@ struct LegalityOptions {
   std::size_t max_bytes = kDefaultSearchBytes;
   /// The detector tier 3 searches with.
   Detector detector = Detector::Hypercuboid;
+  /// Stage E11: a wall-clock deadline (the search's hard bound inside a batch,
+  /// t5d/timeman.hpp). Past it no further check is taken and no search
+  /// started, and a search running stops (SearchBudget::max_time): the moves
+  /// not yet settled are Unknown. nullopt (the default): none.
+  std::optional<std::chrono::steady_clock::time_point> deadline;
 
   static LegalityOptions exact() noexcept { return LegalityOptions{}; }
   static LegalityOptions nodes(std::uint64_t n) noexcept {

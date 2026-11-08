@@ -37,6 +37,16 @@ rule or a search decision.
   epoch, so that the cache keeps them apart (``evaluator.start_epoch``). The cache has no lock:
   the searches sharing it must never be used from two threads at once - the caller's duty, as
   the C calls release the GIL and nothing here checks it.
+* **Time management (stage E11, ``t5d/timeman.hpp``).** ``TimeManager`` wraps one
+  ``t5d_timeman`` - one player's clock through a game, match play only: ``begin`` plans a
+  decision at a search's root (a soft bound in evaluations, a hard bound in wall-clock seconds),
+  ``check`` between batches says whether to stop (elapsed seconds, or NaN for the cost model's
+  deterministic clock), ``end`` closes it; ``evaluator.run_timed_search`` runs that loop with
+  the network. ``time_params(**overrides)`` fills a ``t5d_time_params``: 6o's arms are its
+  ``allocator`` (``"integral"``, ``"flat_evals"``, ``"flat_wall_clock"`` or the constant) and
+  ``signals``; **no proof drives time** - ``proof_volatility`` must stay 0, as the proof channel
+  does (build-log spec issue 180). ``Search.set_deadline`` gives the rules engine's calls inside
+  a batch the hard bound; ``Search.run_timed`` is a timed decision with a built-in evaluator.
 * **Lifetimes.** A leaf's pointers live until the next ``gather``, ``deliver``, ``abandon``
   or ``close``: ``leaf_expansion`` copies at once (``Expansion.from_c``). ``close`` (or the
   context manager, or garbage collection) releases the handle.
@@ -59,6 +69,9 @@ from dataclasses import dataclass
 import numpy as np
 
 from .capi import (
+    T5D_ALLOCATOR_FLAT_EVALS,
+    T5D_ALLOCATOR_FLAT_WALL_CLOCK,
+    T5D_ALLOCATOR_INTEGRAL,
     T5D_LEGALITY_LEGAL,
     T5D_NO_LIMIT,
     T5D_VALUE_LOGITS,
@@ -69,6 +82,10 @@ from .capi import (
     CSearchLimits,
     CSearchParams,
     CSearchSummary,
+    CTimeContext,
+    CTimeParams,
+    CTimePlan,
+    CTimeVerdict,
     ExpandOptions,
     Library,
     MoveRecord,
@@ -517,9 +534,193 @@ class Search:
         self._lib.call("t5d_search_digest", self._live(), byref(out))
         return int(out.value)
 
+    # -- stage E11: time management --
+
+    def set_deadline(self, seconds: float) -> None:
+        """The deadline, ``seconds`` from now, at which the rules engine's calls inside a batch stop
+        (answering Unknown, never a verdict - H37); 0: none."""
+        self._lib.call("t5d_search_set_deadline", self._live(), c_double(float(seconds)), error=True)
+
+    def run_timed(
+        self,
+        evaluator: int,
+        tm: TimeManager,
+        *,
+        remaining: float,
+        increment: float = 0.0,
+        moves_left: float = math.nan,
+        wall_clock: bool = False,
+        seed: int = 0,
+    ) -> tuple[TimePlan, TimeVerdict]:
+        """One timed decision with a built-in evaluator (``T5D_EVALUATOR_*``): its plan and its last
+        verdict. ``wall_clock`` False: the model clock (deterministic)."""
+        ctx = CTimeContext(float(remaining), float(increment), float(moves_left))
+        plan, verdict = CTimePlan(), CTimeVerdict()
+        self._lib.call(
+            "t5d_search_run_timed",
+            self._live(),
+            int(evaluator),
+            c_uint64(int(seed)),
+            tm._live(),
+            byref(ctx),
+            int(bool(wall_clock)),
+            byref(plan),
+            byref(verdict),
+            error=True,
+        )
+        return TimePlan.of(plan), TimeVerdict.of(verdict)
+
+
+#: 6o's arms by name (``t5d_time_params.allocator``).
+ALLOCATORS: dict[str, int] = {
+    "integral": T5D_ALLOCATOR_INTEGRAL,
+    "flat_evals": T5D_ALLOCATOR_FLAT_EVALS,
+    "flat_wall_clock": T5D_ALLOCATOR_FLAT_WALL_CLOCK,
+}
+
+
+def time_params(lib: Library | None = None, **overrides) -> CTimeParams:
+    """A ``t5d_time_params`` with the library's defaults and ``overrides`` by field name;
+    ``allocator`` by name (``ALLOCATORS``) or constant, ``boards_per_action`` and
+    ``boards_per_action_ranges`` as sequences. ``proof_volatility`` must stay 0: no proof drives
+    time from Python (the proof channel stays off; build-log spec issue 180)."""
+    lib = load_library() if lib is None else lib
+    p = CTimeParams()
+    lib.fn.t5d_time_params_default(byref(p))
+    names = {name for name, _ in CTimeParams._fields_}
+    for name, given in overrides.items():
+        if name not in names:
+            raise ValueError(f"t5d_time_params has no field {name!r}")
+        value = given
+        if name == "allocator" and isinstance(given, str):
+            if given not in ALLOCATORS:
+                raise ValueError(f"allocator must be one of {sorted(ALLOCATORS)}")
+            value = ALLOCATORS[given]
+        if name in ("boards_per_action", "boards_per_action_ranges"):
+            array = getattr(p, name)
+            if len(value) != len(array):
+                raise ValueError(f"{name}: {len(array)} values")
+            for i, v in enumerate(value):
+                array[i] = v
+            continue
+        setattr(p, name, value)
+    if p.proof_volatility != 0:
+        raise ValueError("proof_volatility stays 0: no proof drives time management while the proof channel is off (issue 180)")
+    return p
+
+
+@dataclass(frozen=True)
+class TimePlan:
+    """``t5d_time_plan``: a decision's plan."""
+
+    boards: int
+    moves_left_given: bool
+    moves_left_turns: float
+    our_actions: float
+    decisions_left: float
+    seconds_per_evaluation: float
+    usable_seconds: float
+    share: float
+    action_evaluations: float
+    soft_evaluations: float
+    soft_seconds: float
+    hard_seconds: float
+
+    @classmethod
+    def of(cls, c: CTimePlan) -> TimePlan:
+        return cls(**{name: (bool(getattr(c, name)) if name == "moves_left_given" else getattr(c, name)) for name, _ in CTimePlan._fields_})
+
+
+@dataclass(frozen=True)
+class TimeVerdict:
+    """``t5d_time_verdict``: what a check decided (``stop``: ``T5D_TIME_STOP_*``; ``extensions``:
+    ``T5D_EXTEND_*`` taken), and the time manager's cost scale."""
+
+    stop: int
+    extensions: int
+    work: float
+    target_evaluations: float
+    elapsed_seconds: float
+    predicted_batch_seconds: float
+    kld_gain: float
+    converged: bool
+    scale: float
+
+    @classmethod
+    def of(cls, c: CTimeVerdict) -> TimeVerdict:
+        return cls(**{name: (bool(getattr(c, name)) if name == "converged" else getattr(c, name)) for name, _ in CTimeVerdict._fields_})
+
+
+class TimeManager:
+    """One ``t5d_timeman``: one player's clock through a game (see the module docstring)."""
+
+    def __init__(self, params: CTimeParams | None = None, *, lib: Library | None = None) -> None:
+        self._lib = load_library() if lib is None else lib
+        self.params = time_params(self._lib) if params is None else params
+        if self.params.proof_volatility != 0:
+            raise ValueError("proof_volatility stays 0 (build-log spec issue 180)")
+        out = c_void_p()
+        self._lib.call("t5d_timeman_new", byref(self.params), byref(out), error=True)
+        self._handle = out
+
+    def _live(self) -> c_void_p:
+        if self._handle is None:
+            raise EngineArgumentError("the time manager has been closed")
+        return self._handle
+
+    def close(self) -> None:
+        handle, self._handle = self._handle, None
+        if handle is not None:
+            self._lib.fn.t5d_timeman_destroy(handle)
+
+    def __enter__(self) -> TimeManager:
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.close()
+
+    def __del__(self) -> None:
+        with contextlib.suppress(Exception):
+            self.close()
+
+    def begin(self, search: Search, *, remaining: float, increment: float = 0.0, moves_left: float = math.nan) -> TimePlan:
+        """Plan and begin a decision at ``search``'s root: ``remaining`` seconds on the clock,
+        ``increment`` after each action, ``moves_left`` turns (NaN: the root's own network output,
+        else the default)."""
+        ctx = CTimeContext(float(remaining), float(increment), float(moves_left))
+        out = CTimePlan()
+        self._lib.call("t5d_timeman_begin", self._live(), search._live(), byref(ctx), byref(out), error=True)
+        return TimePlan.of(out)
+
+    def check(self, search: Search, elapsed: float = math.nan) -> TimeVerdict:
+        """Between batches: ``elapsed`` seconds since ``begin`` (NaN: the model clock)."""
+        out = CTimeVerdict()
+        self._lib.call("t5d_timeman_check", self._live(), search._live(), c_double(float(elapsed)), byref(out), error=True)
+        return TimeVerdict.of(out)
+
+    def end(self, search: Search) -> None:
+        self._lib.call("t5d_timeman_end", self._live(), search._live(), error=True)
+
+    def new_game(self) -> None:
+        self._lib.call("t5d_timeman_new_game", self._live())
+
 
 def is_legal(child: RootChild) -> bool:
     return child.legality == T5D_LEGALITY_LEGAL
 
 
-__all__ = ["CACHE_KEYS", "LeafView", "RootChild", "Search", "SearchInfo", "cache_mismatches", "is_legal", "search_params"]
+__all__ = [
+    "ALLOCATORS",
+    "CACHE_KEYS",
+    "LeafView",
+    "RootChild",
+    "Search",
+    "SearchInfo",
+    "TimeManager",
+    "TimePlan",
+    "TimeVerdict",
+    "cache_mismatches",
+    "is_legal",
+    "search_params",
+    "time_params",
+]

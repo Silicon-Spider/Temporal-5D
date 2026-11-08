@@ -12,7 +12,9 @@
 //            [--mate-nodes N] [--max-seconds S] [--seed S]
 //            [--no-hunt] [--no-settling] [--no-assets] [--hunt-ms MS]
 //            [--settling-ms MS] [--verification-threads N] [--guard-final]
-//            [--decision-log FILE] [--no-moves-after-shift] [--rules ENCODING]
+//            [--decision-log FILE] [--time BASE [--increment INC]
+//            [--allocator integral|flat-evals|flat-wall-clock] [--no-signals]
+//            [--model-clock]] [--no-moves-after-shift] [--rules ENCODING]
 //
 // Defaults: Standard, the uniform evaluator, 64 playouts per decision, the
 // board-move split (D2 is undecided: --split flat and --split tree are the
@@ -43,6 +45,13 @@
 // (H44; JSONL "t5d-decisions" v1, tools/audit.hpp - t5d-audit reads it): the
 // game, its final moves, PV changes and demotions; the game's id the first
 // 16 hex digits of the record's SHA-256.
+// --time BASE (with --match) plays on a clock (stage E11, t5d/timeman.hpp):
+// each side BASE seconds plus --increment INC after each of its actions, every
+// decision run by the side's time manager instead of --playouts - 6o's arms:
+// --allocator (the moves-left integral by default), --no-signals (the
+// stop/extend table off); --model-clock prices each decision's work by the
+// cost model instead of the wall clock (deterministic). A side whose clock runs
+// out loses on time ("flag", result "*"). Self-play takes no clock.
 // --max-seconds stops a long game (a safety stop, "*": checked before every
 // decision, and each search's deadline; the record ends at the last turn
 // start), its record and summary still printed.
@@ -69,6 +78,7 @@
 #include "t5d/mcts.hpp"
 #include "t5d/rules.hpp"
 #include "t5d/selfplay.hpp"
+#include "t5d/timeman.hpp"
 #include "t5d/variants.hpp"
 #include "tool_support.hpp"
 
@@ -91,7 +101,9 @@ void usage(std::FILE* to) {
       "                [--max-seconds S] [--seed S]\n"
       "                [--no-hunt] [--no-settling] [--no-assets] [--hunt-ms MS]\n"
       "                [--settling-ms MS] [--verification-threads N] [--guard-final]\n"
-      "                [--decision-log FILE] [--no-moves-after-shift] [--rules ENCODING]\n",
+      "                [--decision-log FILE] [--time BASE [--increment INC]\n"
+      "                [--allocator integral|flat-evals|flat-wall-clock] [--no-signals]\n"
+      "                [--model-clock]] [--no-moves-after-shift] [--rules ENCODING]\n",
       to);
 }
 
@@ -154,6 +166,7 @@ int main(int argc, char** argv) {
   params.turn_cap.boards = 300;
   RuleOptions rules;
   bool tree_gates_given = false;
+  bool clock_options = false;  // --increment, --allocator, --no-signals or --model-clock given
   std::string decision_log;
   try {
     for (int i = 1; i < argc; ++i) {
@@ -297,6 +310,31 @@ int main(int argc, char** argv) {
         params.search.verification_threads = static_cast<int>(number_in(a, value(), 1, 256));
       } else if (std::strcmp(a, "--guard-final") == 0) {
         params.guard_final = true;  // H42: adopted in no range; experiments, with --proof-channel
+      } else if (std::strcmp(a, "--time") == 0) {
+        params.clock.base_seconds = real(a, value());
+        if (!(params.clock.base_seconds > 0)) throw std::invalid_argument("--time: more than 0 seconds");
+        params.clock.enabled = true;
+      } else if (std::strcmp(a, "--increment") == 0) {
+        params.clock.increment_seconds = real(a, value());
+        clock_options = true;
+      } else if (std::strcmp(a, "--allocator") == 0) {
+        const std::string v = value();
+        if (v == "integral") {
+          params.clock.time.allocator = Allocator::Integral;
+        } else if (v == "flat-evals") {
+          params.clock.time.allocator = Allocator::FlatEvals;
+        } else if (v == "flat-wall-clock") {
+          params.clock.time.allocator = Allocator::FlatWallClock;
+        } else {
+          throw std::invalid_argument("--allocator: integral, flat-evals or flat-wall-clock, not " + v);
+        }
+        clock_options = true;
+      } else if (std::strcmp(a, "--no-signals") == 0) {
+        params.clock.time.signals = false;
+        clock_options = true;
+      } else if (std::strcmp(a, "--model-clock") == 0) {
+        params.clock.model_clock = true;
+        clock_options = true;
       } else if (std::strcmp(a, "--decision-log") == 0) {
         decision_log = value();
         params.decision_log = true;
@@ -315,6 +353,12 @@ int main(int argc, char** argv) {
     if (params.guard_final && !params.search.proof_channel) {
       throw std::invalid_argument("--guard-final: Guard's refutation is a proof - it needs --proof-channel (H41, H42)");
     }
+    if (clock_options && !params.clock.enabled) {
+      throw std::invalid_argument("--increment, --allocator, --no-signals and --model-clock: the clock's - they need --time");
+    }
+    if (params.clock.enabled && !params.match_play) {
+      throw std::invalid_argument("--time: match play's clock - it needs --match (self-play's budgets are PCR's)");
+    }
   } catch (const std::exception& e) {
     std::fprintf(stderr, "t5d-play: %s\n", e.what());
     usage(stderr);
@@ -332,8 +376,15 @@ int main(int argc, char** argv) {
     tools::Headers extra;
     extra.emplace_back("White", "t5d-play");
     extra.emplace_back("Black", "t5d-play");
+    char clock_text[160];
+    std::snprintf(clock_text, sizeof clock_text, "clock %g s + %g s per action (%s allocator, signals %s, %s clock)",
+                  params.clock.base_seconds, params.clock.increment_seconds,
+                  allocator_name(params.clock.time.allocator), params.clock.time.signals ? "on" : "off",
+                  params.clock.model_clock ? "model" : "wall");
     std::string engine = std::string("t5d search: ") + evaluator_name(evaluator) + " evaluator, " +
-                         std::to_string(params.playouts) + " playouts per decision, " +
+                         (params.clock.enabled ? std::string(clock_text)
+                                               : std::to_string(params.playouts) + " playouts per decision") +
+                         ", " +
                          (params.search.split == TurnSplit::BoardMove ? "board-move split"
                           : params.search.split == TurnSplit::Flat    ? "flat form"
                                                                        : "tree form, gates " +
@@ -399,6 +450,19 @@ int main(int argc, char** argv) {
                  static_cast<unsigned long long>(g.steered_visits), static_cast<unsigned long long>(g.guard_runs),
                  static_cast<unsigned long long>(g.guard_refutations),
                  static_cast<unsigned long long>(g.guard_rejections));
+    if (params.clock.enabled) {
+      std::string stops;
+      for (int k = 1; k < kTimeStops; ++k) {
+        stops += std::string(stops.empty() ? "" : ", ") + time_stop_name(static_cast<TimeStop>(k)) + " " +
+                 std::to_string(g.time_stops[static_cast<std::size_t>(k)]);
+      }
+      std::fprintf(stderr,
+                   "t5d-play: the clock - white %.3f s left, black %.3f s left; %llu timed decisions (%s), %llu "
+                   "extensions, %llu over their hard bound (by at most %.3f s)\n",
+                   g.clock_remaining[0], g.clock_remaining[1], static_cast<unsigned long long>(g.timed_decisions),
+                   stops.c_str(), static_cast<unsigned long long>(g.extensions),
+                   static_cast<unsigned long long>(g.hard_overruns), g.max_overrun_seconds);
+    }
     return 0;
   } catch (const std::exception& e) {
     std::fprintf(stderr, "t5d-play: error: %s\n", e.what());

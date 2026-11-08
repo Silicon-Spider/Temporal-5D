@@ -34,6 +34,14 @@ mirrors the engine's ``play_game`` (``src/selfplay.cpp``; ``t5d-play``) step for
   the network again only where an interaction gate fires (the engine's default gates); or
   the flat form (``"flat"``) - a decision is a whole turn, generated best first by the engine and
   submitted with its last move (it replaced the enumerating whole-turn arm, ``"turn"``, retired).
+* **Match play's clock** (stage E11; ``PlayConfig.time``, off): each side a clock of ``time``
+  seconds plus ``increment`` after each of its actions (Fischer's, a reading - build-log spec
+  issue 456), each side's decisions run by its own ``TimeManager`` (``run_timed_search``) instead
+  of fixed playouts - 6o's arms by ``allocator`` and ``signals``; a decision charged its whole wall
+  time (search, choice, verification), or on ``model_clock`` its work at the cost model's price
+  (deterministic). A side whose clock runs out loses on time (``end`` "flag", result ``*``: the
+  clock is the match's convention, not a rule), as the engine's ``play_game`` does. Self-play
+  takes no clock.
 * **A move is played only once known legal**: a chosen child the legality budget left
   unknown is classified exactly first (``Search.verify``) - illegal, it is removed and the
   choice made again; still unknown, the most visited child known legal is played. Every
@@ -82,10 +90,10 @@ from .capi import (
     find_library,
 )
 from .convert import relations_for
-from .evaluator import FLAT_OPTIMISTIC, Evaluator, NetworkEvaluator, policy_source, run_search
+from .evaluator import FLAT_OPTIMISTIC, Evaluator, NetworkEvaluator, policy_source, run_search, run_timed_search
 from .expansion import Move, board_label, square_name
 from .game import Game, relation_bits
-from .search import Search, search_params
+from .search import ALLOCATORS, Search, TimeManager, search_params, time_params
 
 SPLITS = {"ply": T5D_SPLIT_BOARD_MOVE, "flat": T5D_SPLIT_FLAT, "tree": T5D_SPLIT_TREE}
 SPLIT_NAMES = {"ply": "board-move split", "flat": "flat form", "tree": "tree form"}
@@ -151,6 +159,18 @@ class PlayConfig:
     #: Stage E10, H44: record each decision for the offline audit lane (``GameResult.decision_log``,
     #: written by ``decision_log_lines`` as the engine's t5d-audit reads it).
     decision_log: bool = False
+    #: Stage E11: match play's clock - each side ``time`` seconds (0: no clock - fixed ``playouts``
+    #: per decision) plus ``increment`` after each of its actions; 6o's arms (``allocator``:
+    #: ``"integral"``, ``"flat_evals"`` or ``"flat_wall_clock"``; ``signals``: the stop/extend table);
+    #: ``model_clock``: the cost model's deterministic clock instead of the wall clock.
+    time: float = 0.0
+    increment: float = 0.0
+    allocator: str = "integral"
+    signals: bool = True
+    model_clock: bool = False
+    #: Any other ``t5d_time_params`` field by name (``search.time_params``): e.g. the model clock's
+    #: price, ``cost_seconds_per_evaluation``.
+    time_overrides: tuple[tuple[str, float], ...] = ()
 
     def validate(self) -> None:
         if self.split not in SPLITS:
@@ -165,6 +185,12 @@ class PlayConfig:
             raise ValueError("playouts, batch_size and max_actions must be positive")
         if not (self.hunt_ms > 0 and self.settling_ms > 0 and 1 <= self.verification_threads <= 256):
             raise ValueError("the ladder's budgets positive, its threads 1 to 256")
+        if not (math.isfinite(self.time) and self.time >= 0 and math.isfinite(self.increment) and self.increment >= 0):
+            raise ValueError("the clock's time and increment: finite, 0 or more")
+        if self.time > 0 and self.mode != "match":
+            raise ValueError("the clock is match play's: self-play's budgets are PCR's (section 12.5), never a clock's")
+        if self.allocator not in ALLOCATORS:
+            raise ValueError(f"allocator must be one of {sorted(ALLOCATORS)}")
 
 
 @dataclass
@@ -196,6 +222,14 @@ class GameResult:
     #: action's moves before it, the root's board count, visits and value, its children and the
     #: child chosen (``decision_log_lines``).
     decision_log: list[dict] = field(default_factory=list)
+    #: Stage E11 (``PlayConfig.time``): each side's clock at the end (White, Black; None: no clock),
+    #: the timed decisions, why each stopped (by ``T5D_TIME_STOP_*``), the extensions they took, and
+    #: the decisions charged more than their hard bound.
+    clock_remaining: list[float] | None = None
+    timed_decisions: int = 0
+    time_stops: dict[int, int] = field(default_factory=dict)
+    extensions: int = 0
+    hard_overruns: int = 0
 
     @property
     def result(self) -> str:
@@ -235,6 +269,17 @@ class GameResult:
             "batches": len(self.batch_sizes),
             "mean_batch": round(float(np.mean(batches)), 2),
             "max_batch": int(max(batches)),
+            **(
+                {}
+                if self.clock_remaining is None
+                else {
+                    "clock_remaining": [round(x, 4) for x in self.clock_remaining],
+                    "timed_decisions": self.timed_decisions,
+                    "time_stops": {str(k): v for k, v in sorted(self.time_stops.items())},
+                    "extensions": self.extensions,
+                    "hard_overruns": self.hard_overruns,
+                }
+            ),
         }
 
 
@@ -376,6 +421,11 @@ def play_game(evaluators: Evaluator | Sequence[Evaluator], cfg: PlayConfig, *, n
     res = GameResult(config=cfg, record="", actions=[], end="", winner=None)
     shared: Search | None = None  # self-play: the previous decision's search, the cache's donor (C14)
     carried: list[Search | None] = [None, None]  # match play: each side's search
+    clocks: list[TimeManager] = []
+    if cfg.time > 0:  # E11: each side's clock and time manager
+        tp = time_params(allocator=cfg.allocator, signals=int(cfg.signals), **dict(cfg.time_overrides))
+        clocks = [TimeManager(tp), TimeManager(tp)]
+        res.clock_remaining = [float(cfg.time), float(cfg.time)]
     try:
         while True:
             v0 = time.perf_counter()
@@ -391,6 +441,8 @@ def play_game(evaluators: Evaluator | Sequence[Evaluator], cfg: PlayConfig, *, n
                 break
             mover = game.info().to_move
             action: list[Move] = []
+            flagged = False
+            action_start = game.copy() if clocks else None  # E11: where a flag leaves the game
             if cfg.mode == "match" and carried[mover] is not None and res.actions and not _reroot(carried, mover, res.actions[-1], game):
                 res.reroot_fallbacks += 1
             while True:
@@ -408,14 +460,41 @@ def play_game(evaluators: Evaluator | Sequence[Evaluator], cfg: PlayConfig, *, n
                     search = carried[mover]
                 before = search.info()
                 evaluator = evs[mover] if cfg.mode == "match" else evs[0]
-                stats, _ = run_search(
-                    search, evaluator, playouts=cfg.playouts, batch_size=cfg.batch_size, self_play=cfg.mode != "match", **regs
-                )
+                d0 = time.perf_counter()
+                timed = None
+                if clocks:
+                    # E11: the side's time manager runs the decision on its clock.
+                    timed = run_timed_search(
+                        search,
+                        evaluator,
+                        clocks[mover],
+                        remaining=res.clock_remaining[mover],
+                        increment=cfg.increment,
+                        model_clock=cfg.model_clock,
+                        **regs,
+                    )
+                    stats = timed.stats
+                    res.timed_decisions += 1
+                    res.time_stops[timed.verdict.stop] = res.time_stops.get(timed.verdict.stop, 0) + 1
+                    res.extensions += bin(timed.verdict.extensions).count("1")
+                else:
+                    stats, _ = run_search(
+                        search, evaluator, playouts=cfg.playouts, batch_size=cfg.batch_size, self_play=cfg.mode != "match", **regs
+                    )
                 pick = _choose(search, cfg, res, stats, evaluator, regs, rng)
                 if cfg.decision_log:
                     res.decision_log.append(_decision_entry(game, search, pick, len(res.actions), res.decisions, action, start.even))
                 after = search.info()
                 res.decisions += 1
+                if timed is not None:
+                    # The decision charged to the side's clock: its whole wall time, or its model time.
+                    spent = timed.seconds if cfg.model_clock else time.perf_counter() - d0
+                    if spent > timed.plan.hard_seconds:
+                        res.hard_overruns += 1
+                    res.clock_remaining[mover] -= spent
+                    if res.clock_remaining[mover] <= 0:
+                        flagged = True  # the side's flag fell during its action: not recorded
+                        break
                 res.playouts += after.playouts - before.playouts
                 res.evaluations += after.evaluations - before.evaluations
                 res.cache_hits += after.cache_hits - before.cache_hits
@@ -441,17 +520,34 @@ def play_game(evaluators: Evaluator | Sequence[Evaluator], cfg: PlayConfig, *, n
                     search.advance(pick)
                 if submitted:
                     break
+            if flagged:
+                # The record ends at the action's start: the game handle goes back there.
+                game.close()
+                game = action_start
+                res.end = "flag"
+                res.winner = 1 - mover
+                break
+            if action_start is not None:
+                action_start.close()
+            if clocks:
+                res.clock_remaining[mover] += cfg.increment
             res.actions.append(action)
         snap = game.snapshot()
         res.final_boards = len(snap.boards)
         res.final_fingerprint = snap.fingerprint
+        budget = (
+            f"clock {cfg.time:g} s + {cfg.increment:g} s per action ({cfg.allocator} allocator, "
+            f"signals {'on' if cfg.signals else 'off'}, {'model' if cfg.model_clock else 'wall'} clock)"
+            if cfg.time > 0
+            else f"{cfg.playouts} playouts per decision"
+        )
         termination = res.end + (" (self-play's convention, I11: scored as a draw; not a game rule)" if res.end == "turn_cap" else "")
         extra = [
             ("White", "t5d netplay"),
             ("Black", "t5d netplay"),
             (
                 "Engine",
-                f"t5d search through the C step API: network evaluator (random weights), {cfg.playouts} playouts per decision, "
+                f"t5d search through the C step API: network evaluator (random weights), {budget}, "
                 f"{SPLIT_NAMES[cfg.split]}, "
                 f"{'self-play, root noise' if cfg.mode == 'self' else 'match play, two networks'}"
                 f"{', both sides with the optimistic prior (D9)' if cfg.optimistic else ''}, seed {cfg.seed}",
@@ -474,6 +570,8 @@ def play_game(evaluators: Evaluator | Sequence[Evaluator], cfg: PlayConfig, *, n
         for s in [shared, *carried]:
             if s is not None:
                 s.close()
+        for tm in clocks:
+            tm.close()
         game.close()
     res.seconds = time.perf_counter() - t0
     return res
@@ -747,7 +845,7 @@ def check_replay(res: GameResult, replay: Replay) -> list[str]:
     if replay.positions != len(res.actions) + 1:
         problems.append(f"{replay.positions} positions for {len(res.actions)} actions")
     expected = {"checkmate": "checkmate", "stalemate": "stalemate"}.get(res.end, "none")
-    if res.end in ("checkmate", "stalemate", "turn_cap", "action_limit") and replay.last_terminal != expected:
+    if res.end in ("checkmate", "stalemate", "turn_cap", "action_limit", "flag") and replay.last_terminal != expected:
         problems.append(f"the last position is {replay.last_terminal!r}, the game ended {res.end}")
     with Game.from_pgn(res.record) as g:
         g.replay_all()
@@ -802,7 +900,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--settling-ms", type=float, default=50.0, help="each settling scan's budget (50 ms)")
     parser.add_argument("--verification-threads", type=int, default=5, help="the provers' threads (M13: 5)")
     parser.add_argument("--decision-log", type=Path, help="stage E10, H44: write every game's decisions here for t5d-audit")
+    parser.add_argument("--time", type=float, default=0.0, help="stage E11, match play only: each side's clock in seconds (0: none)")
+    parser.add_argument("--increment", type=float, default=0.0, help="... and seconds added after each of its actions")
+    parser.add_argument("--allocator", choices=sorted(ALLOCATORS), default="integral", help="6o's arm (with --time)")
+    parser.add_argument("--no-signals", action="store_true", help="6o: the stop/extend table off (with --time)")
+    parser.add_argument("--model-clock", action="store_true", help="the cost model's deterministic clock (with --time)")
     args = parser.parse_args(argv)
+    if args.time > 0 and (args.mode or ["self", "match"]) != ["match"]:
+        parser.error("--time is match play's clock: add --mode match alone (self-play's budgets are PCR's)")
     if args.optimistic and (args.mode or ["self", "match"]) != ["match"]:
         parser.error("--optimistic is match play only (register D9): add --mode match alone")
     splits = args.split or (["ply"] if args.optimistic else ["ply", "flat"])
@@ -842,6 +947,11 @@ def main(argv: list[str] | None = None) -> int:
                         settling_ms=args.settling_ms,
                         verification_threads=args.verification_threads,
                         decision_log=args.decision_log is not None,
+                        time=args.time,
+                        increment=args.increment,
+                        allocator=args.allocator,
+                        signals=not args.no_signals,
+                        model_clock=args.model_clock,
                     )
                     with torch.no_grad():
                         res = play_game(evaluators if mode == "match" else evaluators[0], cfg, net_cfg=net_cfg)

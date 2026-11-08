@@ -4,6 +4,7 @@
 #include "t5d/legal.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <limits>
 #include <map>
@@ -64,7 +65,8 @@ struct Finish {
 };
 
 Finish search_finish(const GameState& s, std::uint64_t nodes, std::size_t max_bytes,
-                     Detector detector) {
+                     Detector detector,
+                     std::optional<std::chrono::steady_clock::time_point> deadline = std::nullopt) {
   Finish f;
   if (s.obligations_met()) {
     if (royals_safe(s)) {
@@ -78,6 +80,11 @@ Finish search_finish(const GameState& s, std::uint64_t nodes, std::size_t max_by
   }
   SearchBudget b = SearchBudget::nodes(nodes);
   b.max_bytes = max_bytes;
+  if (deadline) {
+    // Stage E11: the time left to the deadline (0 past it: the first check stops).
+    b.max_time = std::max(std::chrono::nanoseconds{0}, std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                                           *deadline - std::chrono::steady_clock::now()));
+  }
   detail::SearchRun r(s, b, 1, detail::Unit::Successors, false);
   if (detector == Detector::Naive) {
     detail::run_naive(r);
@@ -876,14 +883,19 @@ class Classifier {
 
   bool take_check() {
     if (checks_ >= budget_.checks) return false;
+    if (past_deadline()) return false;  // stage E11: the rest Unknown
     ++checks_;
     return true;
   }
 
+  bool past_deadline() const {
+    return budget_.deadline && std::chrono::steady_clock::now() >= *budget_.deadline;
+  }
+
   Finish search(const GameState& s) {
-    if (spent_ >= budget_.search_nodes) return Finish{};
-    const Finish f =
-        search_finish(s, budget_.search_nodes - spent_, budget_.max_bytes, budget_.detector);
+    if (spent_ >= budget_.search_nodes || past_deadline()) return Finish{};
+    const Finish f = search_finish(s, budget_.search_nodes - spent_, budget_.max_bytes, budget_.detector,
+                                   budget_.deadline);
     spent_ += f.nodes;
     stats_.search_nodes += f.nodes;
     return f;

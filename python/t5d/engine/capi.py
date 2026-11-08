@@ -327,6 +327,12 @@ T5D_LEGALITY_LEGAL, T5D_LEGALITY_ILLEGAL, T5D_LEGALITY_UNKNOWN = 0, 1, 2
 T5D_CHOICE_PROVEN_WIN, T5D_CHOICE_SECURE_CHILD, T5D_CHOICE_LCB, T5D_CHOICE_VISITS, T5D_CHOICE_ALL_LOST = 0, 1, 2, 3, 4
 T5D_STOP_PLAYOUTS, T5D_STOP_EVALUATIONS, T5D_STOP_FINISHED, T5D_STOP_EXHAUSTED = 0, 1, 2, 3
 T5D_STOP_NODES, T5D_STOP_MEMORY, T5D_STOP_DEADLINE = 4, 5, 6
+# Stage E11: time management (t5d/timeman.hpp) - 6o's arms, why a timed decision stopped, the
+# extension kinds (a bit mask).
+T5D_ALLOCATOR_INTEGRAL, T5D_ALLOCATOR_FLAT_EVALS, T5D_ALLOCATOR_FLAT_WALL_CLOCK = 0, 1, 2
+T5D_TIME_STOP_NONE, T5D_TIME_STOP_SOFT_BUDGET, T5D_TIME_STOP_SMART_PRUNING, T5D_TIME_STOP_KLD_GAIN = 0, 1, 2, 3
+T5D_TIME_STOP_SOLVED, T5D_TIME_STOP_HARD_BOUND, T5D_TIME_STOP_SEARCH = 4, 5, 6
+T5D_EXTEND_OVERLAP, T5D_EXTEND_VOLATILITY, T5D_EXTEND_DISAGREEMENT, T5D_EXTEND_FALL, T5D_EXTEND_INSTABILITY = 1, 2, 4, 8, 16
 #: Stage E10: a steering boost's rule, and what counts as a steered root visit (I2).
 T5D_BOOST_ADDITIVE, T5D_BOOST_MULTIPLICATIVE = 0, 1
 T5D_STEERED_COUNTERFACTUAL, T5D_STEERED_BOOSTED_CHILD = 0, 1
@@ -601,6 +607,97 @@ class CEvaluations(ctypes.Structure):
     ]
 
 
+class CTimeParams(ctypes.Structure):
+    """``t5d_time_params`` (stage E11; ``t5d/timeman.hpp``'s ``TimeParams``): every number a named
+    placeholder. Appended to, never reordered."""
+
+    _fields_ = [
+        ("allocator", c_int32),  # T5D_ALLOCATOR_* (6o)
+        ("signals", c_int32),  # 1: the stop/extend table on (6o: on/off)
+        ("cost_tokens_per_board", c_int32),
+        ("cost_global_tokens", c_int32),
+        ("cost_d_model", c_int32),
+        ("cost_ffn_ratio", c_double),
+        ("cost_reference_boards", c_int32),
+        ("cost_seconds_per_evaluation", c_double),
+        ("cost_ema", c_double),
+        ("cost_fixed_fraction", c_double),
+        ("moves_left_floor_turns", c_double),
+        ("moves_left_default_turns", c_double),
+        ("boards_per_action", c_double * 3),
+        ("boards_per_action_ranges", c_int32 * 2),
+        ("expected_optional_moves", c_double),
+        ("overhead_seconds", c_double),
+        ("min_evaluations", c_double),
+        ("playouts_per_evaluation_cap", c_double),
+        ("hard_multiple_low", c_double),
+        ("hard_multiple_high", c_double),
+        ("hard_low_boards", c_int32),
+        ("hard_high_boards", c_int32),
+        ("hard_fraction", c_double),
+        ("batch_margin", c_double),
+        ("max_extension", c_double),
+        ("stop_min_evaluations", c_double),
+        ("smart_pruning_factor", c_double),
+        ("kld_interval", c_uint32),
+        ("kld_threshold", c_double),
+        ("overlap_threshold", c_double),
+        ("churn_kld_threshold", c_double),
+        ("extend_overlap", c_double),
+        ("variance_threshold", c_double),
+        ("extend_volatility", c_double),
+        ("proof_volatility", c_int32),  # the proof hook: 0 (this binding refuses anything else: issue 180)
+        ("disagreement_margin", c_double),
+        ("extend_disagreement", c_double),
+        ("fall_margin", c_double),
+        ("extend_fall", c_double),
+        ("instability_window", c_double),
+        ("instability_min_visits", c_uint32),
+        ("extend_instability", c_double),
+    ]
+
+
+class CTimeContext(ctypes.Structure):
+    """``t5d_time_context``: one decision's clock."""
+
+    _fields_ = [("remaining_seconds", c_double), ("increment_seconds", c_double), ("moves_left_turns", c_double)]
+
+
+class CTimePlan(ctypes.Structure):
+    """``t5d_time_plan``: a decision's plan."""
+
+    _fields_ = [
+        ("boards", c_int32),
+        ("moves_left_given", c_int32),
+        ("moves_left_turns", c_double),
+        ("our_actions", c_double),
+        ("decisions_left", c_double),
+        ("seconds_per_evaluation", c_double),
+        ("usable_seconds", c_double),
+        ("share", c_double),
+        ("action_evaluations", c_double),
+        ("soft_evaluations", c_double),
+        ("soft_seconds", c_double),
+        ("hard_seconds", c_double),
+    ]
+
+
+class CTimeVerdict(ctypes.Structure):
+    """``t5d_time_verdict``: what a check decided, with the time manager's cost scale."""
+
+    _fields_ = [
+        ("stop", c_int32),
+        ("extensions", c_uint32),
+        ("work", c_double),
+        ("target_evaluations", c_double),
+        ("elapsed_seconds", c_double),
+        ("predicted_batch_seconds", c_double),
+        ("kld_gain", c_double),
+        ("converged", c_int32),
+        ("scale", c_double),
+    ]
+
+
 def _check_layouts() -> None:
     if ctypes.sizeof(MoveRecord) != 32 or MOVE_DTYPE.itemsize != 32:
         raise ImportError("t5d_move must be 32 bytes (t5d/records.h)")
@@ -636,6 +733,10 @@ MIRRORED_SEARCH_STRUCTS: dict[str, type[ctypes.Structure]] = {
     "t5d_search_limits": CSearchLimits,
     "t5d_root_child": CRootChild,
     "t5d_evaluations": CEvaluations,
+    "t5d_time_params": CTimeParams,
+    "t5d_time_context": CTimeContext,
+    "t5d_time_plan": CTimePlan,
+    "t5d_time_verdict": CTimeVerdict,
 }
 
 
@@ -671,6 +772,7 @@ def layout_mismatches(lib: Library) -> list[str]:
 _STATE = c_void_p  # t5d_state*
 _GAME = c_void_p  # t5d_game*
 _SEARCH = c_void_p  # t5d_search*
+_TIMEMAN = c_void_p  # t5d_timeman*
 _ERR = POINTER(c_void_p)  # char** error (a library string, freed with t5d_free)
 
 #: name -> (restype, argtypes). Every function of capi.h.
@@ -733,6 +835,19 @@ _SIGNATURES: dict[str, tuple[object, list[object]]] = {
     "t5d_search_set_epoch": (c_int32, [_SEARCH, c_uint64, _ERR]),
     "t5d_search_digest": (c_int32, [_SEARCH, POINTER(c_uint64)]),
     "t5d_search_layout": (c_int32, [c_char_p, c_char_p, POINTER(c_size_t)]),
+    # stage E11: time management
+    "t5d_time_params_default": (None, [POINTER(CTimeParams)]),
+    "t5d_timeman_new": (c_int32, [POINTER(CTimeParams), POINTER(_TIMEMAN), _ERR]),
+    "t5d_timeman_destroy": (None, [_TIMEMAN]),
+    "t5d_timeman_begin": (c_int32, [_TIMEMAN, _SEARCH, POINTER(CTimeContext), POINTER(CTimePlan), _ERR]),
+    "t5d_timeman_check": (c_int32, [_TIMEMAN, _SEARCH, c_double, POINTER(CTimeVerdict), _ERR]),
+    "t5d_timeman_end": (c_int32, [_TIMEMAN, _SEARCH, _ERR]),
+    "t5d_timeman_new_game": (c_int32, [_TIMEMAN]),
+    "t5d_search_set_deadline": (c_int32, [_SEARCH, c_double, _ERR]),
+    "t5d_search_run_timed": (
+        c_int32,
+        [_SEARCH, c_int32, c_uint64, _TIMEMAN, POINTER(CTimeContext), c_int32, POINTER(CTimePlan), POINTER(CTimeVerdict), _ERR],
+    ),
 }
 
 
@@ -911,6 +1026,10 @@ __all__ = [
     "CSearchParams",
     "CSearchSummary",
     "CSquareLabels",
+    "CTimeContext",
+    "CTimeParams",
+    "CTimePlan",
+    "CTimeVerdict",
     "DEFAULT_MATE_NODES",
     "ENV_VAR",
     "MIRRORED_SEARCH_STRUCTS",

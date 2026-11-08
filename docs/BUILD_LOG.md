@@ -1012,6 +1012,11 @@ threads reach at least one thread's sum (one retry on a shared machine).
 | 2026-10-23 | engine ABI round 3 (B11's pin and check relations, D4's per-square labels; reviewed, 2ed1bc9) | main 9c59cb0 + lane/engine 2ed1bc9, merged tree before the commit | dev-r, 24 logical; the network lane's flat head finishing and the search lane's E10 reviews starting; load 80-88% before, 85-91% after | 32 | 292 / 293 / 293 | 309 / 313 / 307 | none | pass x3; the nightly gate passed in 570 s (Half Reflected and Reversed Royalty gated, as before) |
 | 2026-10-23 | main 62ff24d into lane/search | lane/search 97ec57d + main 62ff24d, merged tree before the commit | dev-r, 24 logical; this merge's whole pytest suite (serial) and other lanes' jobs running; load 99% before and after | 32 | 291 / 289 / 291 | 311 / 301 / 311 | none | pass x3 |
 | 2026-10-24 | E10 (the search wiring and H44's audit lane; reviewed, 97ec57d; main 62ff24d merged in, 666cfa4) | main f1603e5 + lane/search 666cfa4, merged tree before the commit | dev-r, 24 logical; the engine, network and gate lanes running; load 90-99% before, 84-99% after | 32 | 292 / 292 / 291 | 309 / 308 / 310 | none | pass x3; the lane's merge of main ran the nightly gate (525 s, Half Reflected and Reversed Royalty gated) on the same engine code |
+| 2026-10-24 | E11, time management (the search lane, step 2; before review) | lane/search 666cfa4 + E11, the tree before the commit (it touches no scanner or search.* file; run as the brief asks; main 2e8be67, merged in after, changed no engine file) | dev-r, 24 logical; other lanes' jobs running; load 91-99% before, 91-94% after | 32 | 292 / 291 / 292 | 304 / 310 / 310 | none | pass x3 |
+| 2026-11-01 | E11, time management (the search lane, step 2; before review), resumed | main 1c085ac + E11, the tree before the commit | dev-r, 24 logical; other lanes' jobs running; load 96-100% before, 96-100% after | 32 | 291 / 292 / 293 | 303 / 311 / 310 | none | pass x3 |
+| 2026-11-02 | E11, time management (the search lane, step 2; before review), main 2cb107d merged in | main 2cb107d + E11, the tree before the commit | dev-r, 24 logical; other lanes' jobs running; load 99-100% before and after | 32 | 292 / 291 / 289 | 303 / 305 / 303 | none | pass x3 |
+| 2026-11-08 | E11, time management (the search lane, step 2; before review), main c8a9c49 merged in | main c8a9c49 + E11, the tree before the commit | dev-r, 24 logical; other lanes' jobs running; load 100% before and after | 32 | 289 / 291 / 289 | 302 / 304 / 305 | none | pass x3 |
+| 2026-11-08 | E11, time management (the search lane, step 2; before review), main e15f173 merged in | main e15f173 + E11, the tree before the commit | dev-r, 24 logical; quiet - load 25% / 13% / 5% before, 30% / 18% / 2% after | 32 | 293 / 293 / 293 | 315 / 314 / 314 | none | pass x3 |
 
 ## Environment
 
@@ -1765,7 +1770,7 @@ width (M22)", "The CHECKPOINT 8 figures"). Found on the way: the ruling's premis
 | H11 | superseded | By Guard (promotion) and the audit lane (demotion audit) |
 | H12 | retired | With the NNUE and the per-node scans |
 | H13 | built, wired (E10) | The asset map (E9) as the register records it: the material estimate, 4 plies and 128 nodes per board, flagged at 300, boost 0.25 × min(1, value/900), every number a placeholder (issue 106). Wired (E10, 2026-10-23): its boost enters every node's priors after the softmax and before k0 and the root noise, never the cached evaluation - (P + b) / (1 + Σb), a multiplicative arm (issue 178); one map per game, shared by its fresh searches (each board assessed once in the game, tested); the root's unsteered priors and steered visits recorded for I2 (issue 179). With a uniform evaluator it dominates flat priors: self-play then branches heavily (issue 178). **E10 review (2026-10-23):** the additive rule is now monotone and capped (`boost_cap` 0.5 of the unboosted mass, a placeholder; issue 178(a)); the flat form steers after its noise, k0 unsteered (178(b)); **off in self-play** (`self_play_search_defaults()`, Python's `GeneratorConfig.asset_map`) until I2's steered visits are validated - on in the search's default and match play (issues 179, 450) |
-| H14 | built (E10; placeholders) | Restated at CHECKPOINT 6: budgets for the reduced ladder - Hunt, the asset map, the settling scans under 50 boards (Guard offline) - against shared movegen, on M13's five cores. Built (E10, 2026-10-23): one worker per game's ladder, the jobs one at a time in the order asked (the root's Hunt, its settling scan, PV changes' scans - issue 182), each prover on `verification_threads` (5) threads under 50 ms (6b″'s configuration) or a node cap; at most 4 PV scans a decision; the asset map on the search's thread (once per board, 128 nodes); the synchronous mode by nodes (25,000) inline. A decision's end cancels its jobs (`ProveBudget::cancel`; issue 187). Where the jobs' time sits in E7's allocation waits for E11. **E10 review (2026-10-23):** the root's Hunt or its settling scan (not both, issue 181), then PV changes'; verdicts tagged by decision, a search taking its own (issue 183); a decision's end tested to cancel a running job (issue 187); the ladder's counts `answered` (taken), `cancelled`, `discarded`, `contradictions` (a job that throws, reported on stderr); every parallel self-play game's ladder has a worker and five prover threads - oversubscribing M13's five cores (issue 451) |
+| H14 | built (E10; placeholders) | Restated at CHECKPOINT 6: budgets for the reduced ladder - Hunt, the asset map, the settling scans under 50 boards (Guard offline) - against shared movegen, on M13's five cores. Built (E10, 2026-10-23): one worker per game's ladder, the jobs one at a time in the order asked (the root's Hunt, its settling scan, PV changes' scans - issue 182), each prover on `verification_threads` (5) threads under 50 ms (6b″'s configuration) or a node cap; at most 4 PV scans a decision; the asset map on the search's thread (once per board, 128 nodes); the synchronous mode by nodes (25,000) inline. A decision's end cancels its jobs (`ProveBudget::cancel`; issue 187). Where the jobs' time sits in E7's allocation: inside the hard bound by cancellation, nothing deducted (E11; issue 466). **E10 review (2026-10-23):** the root's Hunt or its settling scan (not both, issue 181), then PV changes'; verdicts tagged by decision, a search taking its own (issue 183); a decision's end tested to cancel a running job (issue 187); the ladder's counts `answered` (taken), `cancelled`, `discarded`, `contradictions` (a job that throws, reported on stderr); every parallel self-play game's ladder has a worker and five prover threads - oversubscribing M13's five cores (issue 451) |
 | H41 | built, tested | `SearchParams::proof_channel` (C `proof_channel`, `t5d-play --proof-channel`) - the switch the register now names: propagation of solved status (marking nodes solved, pruning siblings, secure-child selection) and export, off by rule; game ends are scored as results. Not yet: the cross-checks of the solver's proofs against df-pn and the oracles' mate verdicts (§15.4) - step 2's missing tests |
 | H42 | built, tested; not adopted | Guard (E9): depth 1 completes in 65.1 / 15.8 / 5.2 / 0.0% of roots against 95% (6b″) - adopted in no range; §13: the chosen move goes unguarded. Built and kept (the audit lane's shallow-mate report uses its question offline; the search's re-search hook stays unwired-by-adoption). Its five-thread depth-1 test failed once in CI (run 37146667584): a thread that read the root's proof from a helper's export - its tree empty - was the one reported, so the refutation's line was empty. Fixed in the prover's report (2026-10-17, `lane/engine`): the line of a thread that searched, complete at depth 1; the test pins the race and checks the line's contract at depth 2. What Guard decides is unchanged. Beyond depth 1 the line keeps its contract (it can stop where a node was solved from the store): a certificate holds the attacker's proving actions only, so the line could take the attacker's step past such a node from one but not the defender's longest defence, which needs an enumeration of the defender's actions (the first record of this fix gave another reason - that 6b″ ran Guard without certificates; it ran with them, for its cross-check against E4) |
 | H43 | built, tested; adopted under 100 boards; wired (E10) | Hunt (E9): 69.0% / 63.6% of the truth's mates under 50 / 50-99 boards (6b″) - adopted there; 35.0% at 100-199 and 0 of 1 at 200+ - not adopted; §13: proofs there come only from the search's solver. Export refused until H41/H23. Wired (E10, 2026-10-23): asked at turn-start roots under 100 boards at 50 ms on 5 threads; its mate carried through the action's decisions under the ply split; withheld while the proof channel is off (issue 180); the soft priors built behind `hunt_suggest`, off, counted as steering (issue 186). **E10 review (2026-10-23):** under 50 boards the root's settling scan asks its question in its place (same class and depth; `hunt_with_settling` off - issue 181), so Hunt itself runs at 50-99 boards (and below 50 with its suggestions on); its silence with suggestions on would leak a mate (issue 186(a)) |
@@ -1854,7 +1859,7 @@ width (M22)", "The CHECKPOINT 8 figures"). Found on the way: the ruling's premis
 | E4 | principle (weakened) | "Narrow hard, because the auditor is watching" - the register says weakened: it holds where the settling scans (< 50 boards) and Hunt (< 100) run - wired since E10 (2026-10-23), their proofs withheld until the sign-off; above that, narrowing is a bet on the audit lane and the league |
 | E1 | built, tested (the mandatory-count widening option not built) | PUCT with entropy-adaptive top-k widening and FPU; the policy temperature at every node. CHECKPOINT 7 (with I19), engine ABI round 2b: root noise in self-play with its total concentration (`dirichlet_concentration`, placeholder 0.03 x 361, appended beside the per-child `dirichlet_alpha`, which stays as its arm at 0) split across the root's open edges, per decision (issue 150); KataGo-style shaping a prototype behind `dirichlet_shaping`, off (its form a reading, issue 151); the root policy temperature (I19; issue 152), before the noise. "The widening schedule may depend on the mandatory-board count" - an option for 6g, not built (A6's count is in the expansion). Under D2's flat form (2026-10-23): k0 from the turn distribution's entropy (the boards' entropies summed) capped at `flat_k0_max` 16, widening generating the turns it instantiates, the root noise's total concentration split per board across its options and drawn before generation, both temperatures per board (issue 167). Every constant a placeholder, named in §8.4's "Constants as built" (issue 82; edit 123) |
 | E5, E9 | built, tested | LCB with a visit floor (E5); the solver behind H41's switch, the secure child, a visit cap on solved children (E9) - constants named as placeholders in §8.4 (issues 84-85). E5's optional term (weight 0) reads the child's uncertainty signal - 6m's switch, since engine ABI round 2a (issue 149) |
-| E7 | not started | Time management, E11 in step 2 (engine lane): the moves-left integral allocator - moves-left counted in turns, converted to board-moves (issue 305) - and the stop/extend table, with 6o's arms (flat-evals and flat-wall-clock allocators, the signals on/off, the spiral guard at high N); the second volatility source is Hunt's and the settling scans' proofs (the register). The register keeps a "root-scan reserve" (§8.6); its one named consumer, Guard's re-search, is offline (adopted nowhere), so E11 holds none - a reading (issue 306) |
+| E7 | built (E11, `lane/search`, 2026-11-08; placeholders) | Time management, `t5d/timeman.hpp`: the moves-left integral allocator on a cost model (the dense FLOP shape with a fixed share, its scale measured online; moves-left in turns, our actions half of them, N advanced by M22's boards per action - issues 305, 452-457); 6o's arms as switches (`allocator`: Integral, FlatEvals, FlatWallClock; `signals` on/off); the stop/extend table (smart pruning, KLDGain, a solved root only with the proof channel, overlap with churn, volatility, falling eval, instability - issues 459-463) with the spiral guard (each kind once, a cap on the plan, never past the hard bound - issue 464, tested at 500 boards); the wall-clock hard bound held tight at high N and given to the rules engine's calls inside a batch (`Search::set_deadline`, `LegalityOptions::deadline` - issues 458, 467); the model clock (deterministic); match play's per-side clock (`PlayParams::clock`; t5d-play `--time`; netplay `PlayConfig.time`; issue 456); the C API and its Python mirror. NO root-scan reserve (issue 306). The second volatility source - Hunt's and the settling scans' proofs - is a hook, off, refused without the proof channel (issues 180, 470); the ladder's jobs sit inside the hard bound, nothing deducted for them (issue 466). Not built: pondering (C13), MLH steering (I3; issue 469) |
 | E2, E3 | built behind flags, tested | Off; awaiting 6m and 6t. They read a node's uncertainty signal: the categorical's variance by default, the error head's output under 6m's switch (`uncertainty_source`, engine ABI round 2a; issue 149); their constants placeholders twice over (issues 81, 149) |
 | E8 | not started | Behind its flag (6v), with E11 in step 2 |
 | E6 | not built (rule) | Refused |
@@ -5705,6 +5710,10 @@ superseded or made moot says so; nothing is deleted.
     target) could read the verdicts with the channel off; E7 is not built. **Put to the
     user:** may Hunt's and the settling scans' proofs drive time management (E7) before the
     sign-off, or only after it?
+    *E11 (2026-10-24) takes the safe reading until the ruling: the proof source is a hook,
+    `TimeParams::proof_volatility`, off, refused by `TimeManager::begin` unless the search's
+    proof channel is on, and refused by the Python binding - so time management reads no proof
+    (issue 470).*
 181. **"Full settling scans: df-pn at the root and on PV changes"** (§11.4; register H1; §8.4:
     "the settling scans cover the root and PV changes"). Unstated: what a PV change is, which
     position is scanned, who attacks, and how often. Built (placeholders): at a turn-start
@@ -6963,6 +6972,138 @@ superseded or made moot says so; nothing is deleted.
 
     No spec edit: no part of the spec describes the CI job or these tolerances, and G2's and
     C19-C21's text stands.
+
+*Issues 452-499: the search lane's step-2 block (E11 and E8; 2026-10-24).*
+
+452. **E7's "predictive nps(N)" has no source** (§8.6: "cost is a known function of N
+    (§9)"; §15.3's cost rows; register E7, M19). Unstated: the model, which costs it covers
+    (network, expansion and legality, batching), and how it is corrected. Built (placeholders):
+    `s(N) = scale x (f + (1 - f) x shape(N) / shape(100))` - `shape` the dense FLOP model of
+    `python/t5d/net/cost.py` (`T (4T + 40 d)`, `T = 66 N + 16`), §8.6's table reproduced from
+    it exactly with `f` = 0; `f = cost_fixed_fraction` 0.05, the share of a 100-board
+    evaluation's cost that does not grow with N (found needed in the build: a scale measured on
+    a few boards priced a 100-board evaluation ~280x too high without it); `scale` the prior
+    `cost_seconds_per_evaluation` (0.01 s, CPU-labelled) until the first observation, which
+    replaces it, then an average (`cost_ema` 0.2) of the seconds per unit of work between
+    checks, the model's growth removed - so the scale absorbs every cost of the decision's
+    batches (network, expansion, legality, the driver), the shape only their growth with N.
+    Not modelled: the cached configuration's cost per node (§7.9; its shape is not the dense
+    one), measured GPU figures (M19). Edit 331.
+453. **6o's three arms are named, not defined** (§13.1 6o: "integral allocator vs flat-evals vs
+    flat-wall-clock"; §8.6's table names "naive equal-time" and "equal-sims"). Built:
+    `Integral` - equal evaluations for each of our remaining actions, each costed at its
+    predicted N (this action's share `s(N_0) / sum_k s(N_k)`); `FlatEvals` - `T_eff / A` of
+    the time at today's `s(N)`, executed by evaluations (§8.6: "engines that estimate nps
+    empirically must assume it persists"); `FlatWallClock` - `T_eff / A`, executed by the
+    clock (§8.6's naive equal-time share). The flat arms coincide at the plan and differ in
+    execution when the price per evaluation moves. Edit 332.
+454. **Our remaining actions from moves-left** (§8.6; D4/M20: moves-left in turns; issue 305).
+    Built (placeholders): `A = ceil(M / 2)`, `M` the turns left (each one player's action,
+    issue 305's reading) floored at `moves_left_floor_turns` 20 (§8.6's "conservative floor":
+    a floor on turns left keeps the allocator from spending as if the game were ending);
+    none given - the built-in evaluators give none - the root's own network output, else
+    `moves_left_default_turns` 40 (M22's data: 29,292 actions in 692 human games, 42 a game);
+    `T_eff = remaining + increment (A - 1) - overhead_seconds (0.05) x A` (the last increment
+    is never usable). Edit 331.
+455. **The allocation unit under the ply split** (§8.2, §8.6, A6, D8). A turn is several
+    decisions under the board-move split and the tree form. Built: the action's plan split
+    evenly over its decisions left - the mandatory boards still to move (A6, exact), the
+    submit decision and `expected_optional_moves` (0.25, placeholder; M22 measures optional
+    moves on human games, not the engine's) - re-planned at every decision; the flat form's
+    decision is the whole action. Edit 331.
+456. **The 5D match clock is unspecified** (§12.3, register I3: the match configuration names
+    no clock). Built (a reading): base seconds plus an increment after each of a side's
+    actions (Fischer), one clock and one time manager per side; a decision charged its whole
+    wall time - the search, the choice, the exact verification of the chosen move - or its
+    model time on the model clock; a side whose clock runs out loses on time
+    (`GameEnd::Flag`, "flag"): the action under way not recorded, the record's result `*`
+    (the clock is the match's convention, not a rule, as I11's cap is), scored for the other
+    side. Edit 338.
+457. **"Every board-move adds a board"** (§8.6's trajectory). A branching jump adds two boards
+    (its destination's successor and the new timeline's), and an action's moves number one or
+    more. Built: N advances between two of our actions by both players' boards per action,
+    `boards_per_action` = M22's mean moves per turn on the human games (1.05 / 1.25 / 1.77
+    under 50 / 50-99 / 100+ boards), the travel moves' second board left out - a lower bound,
+    until the pilot run measures the engine's own (M18). Edit 331.
+458. **"The hard maximum is wall-clock and held tight at high N"** (§8.6 "Guards") has no
+    formula. Built (placeholders): `hard = min(hard_multiple(N) x soft, hard_fraction (0.25) x
+    (remaining - overhead))`, `hard_multiple` 5 at 50 boards or fewer falling linearly to 2 at
+    400 or more; a check stops when spent + `batch_margin` (1.5) x the next batch's predicted
+    time reaches it; one exception: a root with no visited child runs one batch (choosing
+    needs a visit), so a decision can end past the bound by one batch (tested: never more).
+    Edit 333.
+459. **The stop signals' definitions** (§8.6's "visit gap unbridgeable", "root visit
+    distribution stops changing"). Built (placeholders): smart pruning - the lead of the most
+    visited child (path visits, MCGS) over the second exceeds the remaining evaluations (to
+    the soft bound, within the hard) x the playouts per evaluation so far x
+    `smart_pruning_factor` 1.0 (1: exactly unbridgeable; a single child stops at once);
+    KLDGain - `KL(earlier || now)` of the root's visit distributions per root visit, compared
+    every `kld_interval` (100) visits, below `kld_threshold` (5e-5) stops (Lc0's pattern; the
+    numbers ours); neither before `stop_min_evaluations` (32). Edit 334.
+460. **"Top-two distributional overlap (categorical head)"** (§8.6). Unstated: whose
+    categoricals, which overlap, what churn is. Built (placeholders): the two most visited
+    root children's own network categoricals (D3's 51 bins, the root player's view) read from
+    the evaluation cache (`Search::root_child_value`; none where the cache does not hold them -
+    no cache, an evicted entry, a tree-form inherited node: the signal is then not read); their
+    histogram intersection at least `overlap_threshold` 0.5; churn - the last KLD per visit at
+    least `churn_kld_threshold` 2e-4. Edit 334.
+461. **The volatility threshold** (§8.6 "net variance / §12.4 volatility prediction"; 6m). Built:
+    the root's uncertainty signal - the categorical's variance, or the error head's output
+    (`uncertainty_source`) - at least `variance_threshold` 0.2, one threshold for both readings
+    though they are different quantities (a variance of values in [-1, 1]; a predicted squared
+    gap); 0 where no signal is given (never extends). Edit 334.
+462. **"Falling eval trajectory"** (§8.6): against what? Built: the root's backed-up value
+    below the previous decision's final root value (the same side's time manager, so the same
+    player's view) by `fall_margin` 0.1; a rising eval never extends; a new game forgets the
+    reference. Edit 334.
+463. **Best-move instability** (§8.6, Stockfish's pattern): built - the most visited child
+    changed (`Search::root_best_since`) within the last `instability_window` (0.25) of the
+    root's visits, from `instability_min_visits` (32). Edit 334.
+464. **"The extension mechanism must never be able to flag itself"** (§8.6 "Guards") has no
+    operational definition. Built: extensions are judged only when the soft bound is reached;
+    each kind is taken at most once a decision, by its share of the ORIGINAL plan
+    (`extend_*` 0.5, disagreement 1.0), all together at most `max_extension` (1.0) of it, in
+    the order disagreement, volatility, instability, falling eval, overlap; none crosses the
+    hard bound. A soft bound reached with nothing to take stops as `SoftBudget` before the stop
+    signals are read (so a decision the budget ended is never labelled converged). Edit 333.
+465. **What a decision's budget counts.** The spec denominates extensions "in evaluations";
+    simulations the network does not see (cache hits, terminal and solved nodes) cost engine
+    time and can be unbounded in number (a tree of terminals). Built: the decision's work is
+    `max(evaluations, playouts / playouts_per_evaluation_cap (4))` - the soft bound and the
+    model clock count it. Edit 334.
+466. **The ladder's jobs inside the allocation** (§8.6 "the root-rule final scan sits inside
+    the hard bound ... its escalated budget is part of the move's allocation"; under v3 Hunt and
+    the settling scans; M13, H14). Built (a reading): the jobs run on their own worker and
+    threads (M13's five cores) beside the search, so their wall time overlaps the decision's;
+    a decision's end cancels them (E10), so they sit inside the hard bound by construction;
+    the allocation deducts nothing for them. In the synchronous mode they run inline by
+    nodes, uncharged by the model clock. Edit 336.
+467. **The hard bound inside a batch.** The search's calls inside a batch were node-budgeted
+    only. Built: `Search::set_deadline` (run_timed sets it on the steady clock): the turn
+    starts' mate checks and the flat form's fallback listing (`SearchBudget::max_time`), the
+    legality classification and the verification of unknown edges (a new
+    `LegalityOptions::deadline`) stop at it, Unknown, never a verdict (H37). Consequences: a
+    verification the deadline stopped leaves its edge unknown for good (verified once); a turn
+    start whose check stopped stays non-terminal in a carried tree. Not covered: the flat
+    form's turn generator (node-budgeted, `generator_nodes`), a root's own check at the
+    search's construction, an evaluator's call (predicted, not interrupted).
+468. **§11.4's knock-on against §8.6 and register E7** (§11.4: "Time management loses the
+    scanner as a second volatility source above 50 boards"; §8.6: "a proof from Hunt or the
+    settling scans ... (under 100 and 50 boards)"). Hunt answers under 100 boards, so the second
+    source is lost above 100, not 50 - and while issue 180 is open no proof is read at all.
+    Edit 335.
+469. **Time management outside match play.** Built: match play only (`PlayParams::clock`,
+    refused in self-play; netplay likewise): self-play's budgets are PCR's (§12.5),
+    `Limits::seconds` is "never training", and I20 is self-play's adaptive analogue (a
+    prototype, not built; it may reuse `visit_kld`). Not built and assigned to no item:
+    pondering (C13: "time spent pondering is optional"), MLH steering at match play (I3,
+    §12.3). Edit 338.
+470. **The proof source of volatility, built as a hook** (issue 180; H41). `TimeParams::
+    proof_volatility` (off) reads the decision's ladder verdicts: a proven mate at the root
+    (+1) against the root's network value, a PV scan's refutation (-1) against the line's first
+    child's; refused by `TimeManager::begin` unless the search's proof channel is on, refused
+    by the Python binding (`time_params`), tested in C++ only with the channel switched on.
+    Until the user rules on issue 180, time management reads no proof.
 
 ## Proposed spec edits
 
@@ -8553,6 +8694,55 @@ struck through, where nothing of it is left to apply); the others stand as writt
     where its code is ftxi's "and not the R1 check entries": that holds because ftxi's own later
     commit changed the pass set, so a bump of ftxi's pin past f66c4ee re-opens the R1 entries.
 
+*Edits 331-359: the search lane's step-2 block (E11 and E8; 2026-10-24).*
+
+331. **§8.6 "Allocation: the moves-left integral"** (register E7): now - "every board-move adds
+    a board ... Allocate this move's share as its cost over the summed cost of all remaining
+    moves". Proposed - add: "Our remaining actions are half the turns moves-left predicts (D4),
+    floored; N advances between two of ours by both players' boards per action (a branching
+    jump adds two boards - M22's measured moves per turn, then the pilot run's); the cost of an
+    evaluation is the dense model's shape with a fixed share that does not grow with N, its
+    scale measured online; under the ply split an action's plan is split over its decisions
+    (mandatory boards still to move, the submit, expected optional moves)." Why: issues 452,
+    454, 455, 457 (edit 203 gives "turn" its unit).
+332. **§13.1 6o and register E7**: now - "integral allocator vs flat-evals vs
+    flat-wall-clock". Proposed - define the arms: "flat-evals: equal evaluations per action at
+    the current cost, executed by evaluations; flat-wall-clock: equal time per action, executed
+    by the clock". Why: issue 453.
+333. **§8.6 "Guards"**: now - "the hard maximum is wall-clock and held tight at high N ... the
+    extension mechanism must never be able to flag itself". Proposed - add the operational
+    form: "the hard bound a multiple of the plan falling with N, capped at a share of the clock;
+    no batch starts that would end past it, and the rules engine's calls inside a batch stop at
+    it (Unknown, never a verdict); extensions judged at the soft bound, each kind at most once a
+    decision, by a share of the original plan, together capped". Why: issues 458, 464, 467.
+334. **§8.6's stop/extend table**: Proposed - a note under it: "Every threshold is a 6o
+    placeholder; as built - the visit gap against the remaining playouts; the KLD per root
+    visit over an interval; overlap the histogram intersection of the top two children's own
+    categoricals, churn the KLD per visit; the falling eval against the previous decision's
+    root value; instability the best child changing within a recent share of the root's
+    visits; the budget counted in work, max(evaluations, playouts / cap)". Why: issues 459-463,
+    465.
+335. **§11.4 "Knock-ons"**: now - "Time management loses the scanner as a second volatility
+    source above 50 boards; the network's own variance stands alone there (§8.6)". Proposed -
+    "... above 100 boards (Hunt answers under 100, the settling scans under 50); and while the
+    proofs may not drive time before the sign-off (issue 180's ruling), the network's variance
+    stands alone everywhere". Why: issues 468, 180.
+336. **§8.6's closing paragraph and its "Guards"' second bullet** (v3's stale text, brief note
+    9b): now - "the chosen line is scanned exactly beyond tree depth"; "The §11.1 root-rule final
+    scan sits inside the hard bound ... its escalated budget is part of the move's allocation".
+    Proposed - "under v3 the line is scanned by Hunt (under 100 boards) and the settling scans
+    (under 50); above them it is not; their jobs run beside the search on their own cores and end
+    with the decision, inside the hard bound, nothing deducted from the allocation". Why: issue
+    466 (edit 204 covers the reserve).
+337. **Register E7's text**: now - "... dual-source volatility with disagreement-extends-hardest
+    (the second source is now Hunt's and the settling scans' proofs) ... root-scan reserve".
+    Proposed - "... (the second source Hunt's and the settling scans' proofs - read only once
+    issue 180 is ruled; a hook, off) ... no root-scan reserve while Guard is adopted nowhere".
+    Why: issues 180, 306, 470 (with edit 204).
+338. **§12.3's match configuration and register I3**: Proposed - add "a clock: base plus an
+    increment per action, per side; a flag is a loss by the match's convention; time
+    management at match play only (self-play's budgets are PCR's)". Why: issues 456, 469.
+
 ## Session log
 
 - **2026-10-01** - Pre-flight passed. Design documents moved into `docs/design/`
@@ -8865,3 +9055,44 @@ struck through, where nothing of it is left to apply); the others stand as writt
   Kairos shares two of the gaps; its report waits for its triage (CHECKPOINT 10). Checks: verify ok
   (its 17 notes, unchanged); gate --tier commit: oracle layer ok, SMOKE TEST - PASSED (baseline 41
   compared, 0 declined; calibration 1.25x). No harness code changed, so selftest was not run.
+
+- **2026-11-08 - E11, time management** (`lane/search`, step 2; register E7 with 6o's arms;
+  issues 452-470, edits 331-338). `t5d/timeman.hpp`: the moves-left integral allocator on a cost
+  model (dense shape plus a fixed share, its scale measured online), 6o's arms as switches
+  (`allocator`, `signals`), the stop/extend table and its spiral guard, the wall-clock hard
+  bound held tight at high N and given to the rules engine's calls inside a batch
+  (`Search::set_deadline`; `LegalityOptions::deadline`, new), the model clock (a node-limited,
+  bit-reproducible timed search), `run_timed`; match play's per-side clock (`PlayParams::clock`,
+  `GameEnd::Flag`; t5d-play `--time`); the C API (`t5d_time_params`, `t5d_timeman_*`,
+  `t5d_search_set_deadline`, `t5d_search_run_timed`; `t5d_search_params` unchanged) and its Python
+  mirror (`search.TimeManager`, `evaluator.run_timed_search`, netplay's `PlayConfig.time`). No
+  root-scan reserve (issue 306); the proof source a hook, off, refused without the proof channel
+  (issue 180 open). The brief's "E7's existing time management on main (stage E7, merged
+  2026-10-03)" was stage E7 of the rules engine (Q4 and the submit action); no time management
+  existed - E11 is the first. Written 2026-10-24 and checked then on 666cfa4 + E11 (engine 700
+  of 700, long_detectors, the Lazy SMP test x3, pytest 1714 passed / 1 skipped, verify, gate
+  commit - all green); the session stopped at the account's usage limit before the commit, and
+  resumed: main taken by merge five times as it moved (M23: both sides of CHANGELOG,
+  BUILD_LOG and `evaluator.py`'s imports kept) - 1c085ac (CHECKPOINT 9's brief), 2cb107d
+  (CHECKPOINT 10's documents, the Linux build fixes), c8a9c49 (A5, the sharded network job),
+  e15f173 (the done-means audit, Kairos round 2, the network job's shards by file) and 05afde5
+  (the upstream drafts, issue 602's two test tolerances) - and every
+  check re-run each time, all green: on 1c085ac + E11 (2026-11-01: engine 700 of 700,
+  long_detectors, the Lazy SMP test x3, pytest 1714 passed / 1 skipped, verify, gate commit), on
+  2cb107d + E11 (2026-11-02: the same, pytest 1715 passed / 1 skipped with the cost-model test
+  added), on c8a9c49 + E11 (2026-11-08: the same, pytest 1944 passed / 2 skipped in three
+  disjoint shards, `T5D_TEST_SHARD`); on e15f173 + E11 (2026-11-09): engine 705 of 705
+  (`--werror`), long_detectors 2 of 2, the Lazy SMP test x3 (table above; a quiet machine), ruff
+  clean, pytest 1987 passed / 1 skipped (three disjoint shards: 662 + 1 skipped, 664, 661), verify
+  ok, gate commit ok (smoke test passed, 0 declined; proof channel DISABLED). Main's 05afde5 came
+  after and changed no engine or library code (CI, documents, one known-divergence line, two
+  network tests' tolerances): the engine build is unchanged (ninja: no work), and its changed
+  tests (`tests/net/test_params.py`, `test_quant.py`) with `test_time_management.py`, ruff,
+  verify and gate commit were re-run on the merged tree - all green. One literal of a test
+  rewritten as `std::uint64_t{...}` for CI's Linux g++ (-Wsign-conversion, as main's b5ab406).
+  **A download to report** (CHECKPOINT 9's rule, "nothing downloads without asking", arrived
+  after it): on 2026-10-24, after merging main 2e8be67 (which added Kairos as the fifth
+  submodule), `harness.py sync` in this worktree cloned Kairos's pinned commit from
+  github.com/FirePlank/5d-chess-engine into the worktree's own module store
+  (`.git/worktrees/search/modules/oracle-kairos`, 90 MB) - not on the CHECKPOINT 9 section's
+  list. Nothing has been downloaded since; the store is kept (deleting it is the user's call).
