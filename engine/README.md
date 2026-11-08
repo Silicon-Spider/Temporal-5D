@@ -2688,13 +2688,16 @@ opponent's reply) and `advance_to(state)` re-root: the new root's subtree is car
 every node it cannot reach deleted (renumbered breadth-first); the evaluation cache -
 keyed by the state, its count and the epoch, not by a path - survives; the root hook (`set_root_hook`) and the evaluator's
 `on_new_root` are told, for an evaluator holding K/V of the old conditioning. Pondering
-is `run` on the post-move root, then `advance_action` on the reply - atomic: the whole
-action is checked (each move pseudo-legal where it is made, the submission legal) before
-the first re-root, and a failure changes nothing; from a turn start an action has at
-least one move. Each re-root happens whole or not at all: what it allocates - the order
-kept, the renumbering, the graph's table of the kept nodes - and the ladder's decision
-ending come before anything changes, so one that throws leaves the tree, the graph's
-table and the root's side tables and effort label as they were, and
+is `run` on the post-move root, then `advance_action` on the reply. The whole action is
+checked (each move pseudo-legal where it is made, the submission legal) before the first
+re-root, and an action that cannot be played changes nothing; from a turn start an action
+has at least one move. Under the board-move split and the tree form the re-roots then go
+one decision at a time, so a failure after the first (an allocation's) leaves the root on
+the last decision re-rooted on: read it back (`root_state`, `t5d_search_root_game`) and
+play the rest from there (review finding L4). Each re-root happens whole or not at all:
+what it allocates - the order kept, the renumbering, the graph's table of the kept nodes -
+and the ladder's decision ending come before anything changes, so one that throws leaves
+the tree, the graph's table and the root's side tables and effort label as they were, and
 a node `advance_to` made for a state the tree did not hold is taken back (build-log
 issue 600). What it cannot keep is the verification ladder's verdicts for the old
 decision that its ending had taken over and not yet recorded, if the failure comes there

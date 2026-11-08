@@ -1074,6 +1074,9 @@ struct SearchStats {
   std::uint64_t transposition_hits = 0;  ///< MCGS: an edge linked to an existing node
   std::uint64_t key_collisions = 0;    ///< equal keys, different states
   std::uint64_t dead_ends = 0;         ///< partial turns with no legal completion, pruned
+  /// Counted as expansions make them - events: an expansion that throws and is
+  /// made again (the ply split's leaf a leaf again) counts its edges again (the
+  /// tree form's inherited expansions put theirs back - review finding L5).
   std::uint64_t submit_edges = 0;      ///< D8: submit edges made (submitting possible)
   std::uint64_t illegal_submits = 0;   ///< ... of which illegal (C4), kept pruned
   std::uint64_t unknown_edges = 0;     ///< (a) edges whose move the expansion left unknown
@@ -1087,7 +1090,12 @@ struct SearchStats {
   std::uint64_t turn_caps = 0;         ///< nodes the turn cap ended (I11)
   std::uint64_t stuck = 0;             ///< turn starts with no child and no verdict
   /// D2's flat form: turns generated (the children made), and generators a
-  /// budget stopped (their nodes' children incomplete).
+  /// budget stopped (their nodes' children incomplete) - in the expansions
+  /// kept: a first pull that throws after its generator stopped is undone with
+  /// its expansion and uncounted (the redo counts its own), a later pull's stop
+  /// stays counted even if that pull then throws (the node keeps the turns the
+  /// generator gave). So fallback_listings (below) <= stopped_generators, with
+  /// the difference the later pulls' stops (review finding L5).
   std::uint64_t generated_turns = 0;
   std::uint64_t stopped_generators = 0;
   /// ... of which stopped before their first turn, their nodes' turns E4's
@@ -1105,7 +1113,9 @@ struct SearchStats {
   std::uint64_t cache_purged = 0;      ///< cache entries behind the root, purged (EvalCache)
   /// 6m: nodes expanded from an evaluation without the uncertainty signal
   /// uncertainty_source selects (their variance 0) - only where nothing reads
-  /// it: with E2, E3 or E5's term on, such an evaluation is refused.
+  /// it: with E2, E3 or E5's term on, such an evaluation is refused. Counted
+  /// as evaluations are taken - an event: an expansion or re-evaluation that
+  /// throws and is made again counts it again (review finding L5).
   std::uint64_t uncertainty_missing = 0;
   /// D2's tree form: mid-turn nodes expanded on inherited priors - no evaluation.
   std::uint64_t inherited_nodes = 0;

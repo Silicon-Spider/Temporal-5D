@@ -105,6 +105,19 @@ review round, issues 603 and 604, the session log.
   every allocation of the re-root (16 faults): no husk, every verdict recorded counted, the
   tree as it was, no proof entered, and the retry goes through (3 of the 16 lose a verdict,
   as documented). (H23, H41.)
+- **L4, L5 - `advance_action`'s documents, and the counters after an undone expansion.**
+  `advance_action` was documented atomic; under the board-move split and the tree form its
+  re-roots go one decision at a time, so `t5d/capi_search.h`, the Python docstring and
+  `engine/README.md` now give the per-decision caveat and the recovery (read the root back
+  with `t5d_search_root_game` or `root_game()`, and play the rest). `stopped_generators` is
+  put back where the expansion is undone (a first pull); a later pull's stop stays counted
+  (its node keeps the generator's turns), so `fallback_listings <= stopped_generators`, the
+  difference the later pulls' stops - asserted after every fault of the flat form's counting
+  test - and with every generator stopped before its first turn (P2b) both equal the nodes
+  expanded after every fault in the root's first expansion (3,760 allocations; 2,302 faults,
+  dense at both ends). `t5d/mcts.hpp` says `submit_edges`, `illegal_submits`,
+  `unknown_edges` and `uncertainty_missing` count events (a redone expansion counts them
+  again), and the rollback's comment says what it puts back.
 
 Spec: none edited or proposed. No part of the spec describes exception safety, these tests,
 or the ladder's and the asset map's bookkeeping. The round brings the build further in line

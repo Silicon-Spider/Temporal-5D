@@ -99,6 +99,12 @@ std::uint64_t sum_edges(const Search& s) {
   return e;
 }
 
+std::uint64_t expanded_nodes(const Search& s) {
+  std::uint64_t e = 0;
+  for (NodeId id = 0; id < s.node_count(); ++id) e += s.node(id).expanded ? 1u : 0u;
+  return e;
+}
+
 // D2's flat form, after a fault: what is wrong with the nodes - one count per
 // stuck node (every turn start here has turns), per node whose priors are not
 // the softmax of its turn scores (FlatPrior::Generated, no steering: each
@@ -739,6 +745,7 @@ TEST(mcts_fault_flat_turns_counted_and_drops_reported) {
           s.run(*uniform, Limits{4});
           CHECK_NOTHROW(s.check_invariants());
           if (s.stats().generated_turns != sum_edges(s)) ++miscounted;
+          CHECK(s.stats().fallback_listings <= s.stats().stopped_generators);
         }
       }
       std::printf("  flat %s widening %s: %lld + %lld allocations, %zu faults, %zu drops unreported, %zu miscounted\n",
@@ -1281,5 +1288,56 @@ TEST(mcts_fault_a_reroot_with_verdicts_waiting_loses_none_it_has_not_taken) {
   std::printf("  a re-root with 2 verdicts waiting: %lld allocations, %zu faults, %zu lost a verdict taken and not yet "
               "recorded\n",
               total, faults, lost);
+  CHECK(faults > 0);
+}
+
+// ---- L5: the counts with every generator stopped before its first turn --------------------------
+
+TEST(mcts_fault_fallback_listings_and_stops_count_the_expansions_kept) {
+  // A generator budget too small for any first turn: every expansion's
+  // generator stops before its first turn and E4's listing stands in, so
+  // fallback_listings and stopped_generators both count the expanded nodes
+  // (test_mcts.cpp asserts it fault-free). A fault in the root's first
+  // expansion - in its listing, or in the priors after it - undoes the
+  // expansion, which is made again later: the counts still describe one stop
+  // and one listing per node expanded (review findings L5 and L6; the review's
+  // P2b - a first pull's stop is uncounted with its undone expansion). Dense
+  // at the start and over the last 64 allocations, where the priors are.
+  const std::unique_ptr<Evaluator> random = make_evaluator(BuiltinEvaluator::Random, 6);
+  SearchParams p = base(TurnSplit::Flat, false);
+  p.generator_nodes = 3;
+  const GameState root = after("Standard - Two Timelines", 2);
+  const auto first_batch = [&](Search& s) {
+    const std::size_t n = s.gather(8);
+    REQUIRE_EQ(n, std::size_t{1});
+    std::vector<Evaluation> ev(n);
+    random->evaluate(s.requests(), ev);
+    return ev;
+  };
+  long long total = 0;
+  {
+    Search s(root, p);
+    const std::vector<Evaluation> ev = first_batch(s);
+    total = allocations_of([&] { s.deliver(ev); });
+    REQUIRE_EQ(s.stats().fallback_listings, expanded_nodes(s));
+    REQUIRE_EQ(s.stats().stopped_generators, expanded_nodes(s));
+  }
+  std::size_t faults = 0;
+  std::size_t listed_off = 0;
+  std::size_t stopped_off = 0;
+  for (long long k = 0; k < total; k += k < 2000 || k + 64 >= total ? 1 : 7) {
+    Search s(root, p);
+    const std::vector<Evaluation> ev = first_batch(s);
+    faults += faulted(k, [&] { s.deliver(ev); }) ? 1u : 0u;
+    CHECK_NOTHROW(s.check_invariants());
+    s.run(*random, Limits{12});
+    CHECK_NOTHROW(s.check_invariants());
+    if (s.stats().fallback_listings != expanded_nodes(s)) ++listed_off;
+    if (s.stats().stopped_generators != expanded_nodes(s)) ++stopped_off;
+  }
+  std::printf("  fallback: %lld allocations in the root's first expansion, %zu faults; listings off %zu, stops off %zu\n",
+              total, faults, listed_off, stopped_off);
+  CHECK_EQ(listed_off, std::size_t{0});
+  CHECK_EQ(stopped_off, std::size_t{0});
   CHECK(faults > 0);
 }
