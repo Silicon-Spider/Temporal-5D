@@ -82,6 +82,16 @@ review round, issues 603 and 604, the session log.
   allocation of a gather after one to three playouts, then a re-root onto the child that
   gather made (2,575 faults, 1,691 re-roots; no node left inherited and not expanded).
   (Register D2.)
+- **L2 - the principal line's change under a failure.** `backup` counted a simulation's
+  path, then recorded the root's change of most visited child (`note_root_visit`, which
+  allocates) before counting the playout: a failure left `root_visits` ahead of `playouts`
+  for good, the change unrecorded. The playout - and `complete_residual`'s steered count - is
+  counted first now, and `note_root_visit` enters its record (`push_back`, strongly
+  exception-safe) before it sets anything. Test, through the C API: every allocation of a
+  delivery that sets the root's most visited child (Hashed's varied answers on a fresh
+  search; the ply split's 93, the flat form's 2,851): `root_visits` and `playouts` never
+  apart, before and after the next run. (§15.4: visit counts consistent through
+  backup; register D4.)
 
 Spec: none edited or proposed. No part of the spec describes exception safety, these tests,
 or the ladder's and the asset map's bookkeeping. The round brings the build further in line

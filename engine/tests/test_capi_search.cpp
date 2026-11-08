@@ -1017,6 +1017,102 @@ TEST(capi_search_a_batch_whose_requests_or_buffers_fail_is_abandoned) {
   }
 }
 
+TEST(capi_search_a_delivery_that_moves_the_principal_line_keeps_its_counts) {
+  // Review finding L2: backup counted a simulation's path and then recorded the
+  // principal line's change (note_root_visit, which allocates) before counting
+  // the playout, so a failure there left root_visits one ahead of playouts for
+  // good, the change unrecorded. A fresh search through the C API (its root
+  // expanded by one playout), its next batch of root children answered with
+  // Hashed's varied values, so that the root's most visited child is set; every
+  // allocation of that delivery, each on a fresh search: after T5D_ERR_MEMORY
+  // root_visits == playouts, the next run goes through, and they agree after
+  // it.
+  struct Arm {
+    int32_t split;
+    const char* variant;
+  };
+  for (const Arm& arm : {Arm{T5D_SPLIT_BOARD_MOVE, "Standard - Two Timelines"}, Arm{T5D_SPLIT_FLAT, "Standard"}}) {
+    const Game g = variant_game(arm.variant);
+    t5d_search_params p = quick_params();
+    p.split = arm.split;
+    p.batch_size = 8;
+    p.hunt = 0;
+    p.settling = 0;
+    p.asset_map = 0;
+    // The next batch, gathered, and its answers (Hashed's, by leaf key) in the C layout.
+    struct Batch {
+      std::vector<float> logits, submits, wdl, values, boards;
+      t5d_evaluations b{};
+    };
+    const auto prepared = [&](Batch& out) {
+      SearchHandle s = new_search(g.get(), p);
+      REQUIRE_EQ(t5d_search_run(s.get(), T5D_EVALUATOR_UNIFORM, 0, 1, nullptr), T5D_OK);
+      std::size_t n = 0;
+      REQUIRE_EQ(t5d_search_gather(s.get(), 8, T5D_NO_LIMIT, &n, nullptr), T5D_OK);
+      REQUIRE(n > 1);
+      out = Batch{};
+      out.wdl.resize(n * T5D_WDL);
+      out.values.resize(n * T5D_VALUE_BINS);
+      for (std::size_t i = 0; i < n; ++i) {
+        t5d_leaf leaf;
+        REQUIRE_EQ(t5d_search_leaf(s.get(), i, &leaf, nullptr), T5D_OK);
+        for (std::size_t m = 0; m < leaf.expansion.move_count; ++m) out.logits.push_back(logit_of(leaf.key, m));
+        out.submits.push_back(leaf.submit_possible ? submit_of(leaf.key) : std::nanf(""));
+        wdl_of_key(leaf.key, out.wdl.data() + i * T5D_WDL);
+        value_of(leaf.key, out.values.data() + i * T5D_VALUE_BINS);
+        for (std::size_t b = 0; b < leaf.expansion.board_count; ++b) out.boards.push_back(board_of(leaf.key, b));
+      }
+      out.b.logits = out.logits.empty() ? nullptr : out.logits.data();
+      out.b.logit_count = out.logits.size();
+      out.b.submit_logits = out.submits.data();
+      out.b.submit_count = out.submits.size();
+      out.b.wdl = out.wdl.data();
+      out.b.wdl_count = out.wdl.size();
+      out.b.wdl_kind = T5D_VALUE_PROBABILITIES;
+      out.b.values = out.values.data();
+      out.b.value_count = out.values.size();
+      out.b.value_kind = T5D_VALUE_PROBABILITIES;
+      out.b.board_logits = out.boards.data();
+      out.b.board_logit_count = out.boards.size();
+      return s;
+    };
+    long long total = 0;
+    {
+      Batch batch;
+      const SearchHandle s = prepared(batch);
+      constexpr long long kFar = std::numeric_limits<long long>::max();
+      const t5d_test::alloc::FailAfter far(kFar);
+      REQUIRE_EQ(t5d_search_deliver_evaluations(s.get(), &batch.b, nullptr), T5D_OK);
+      total = kFar - t5d_test::alloc::fail_countdown;
+    }
+    std::size_t faults = 0;
+    std::size_t off = 0;
+    for (long long k = 0; k < total; ++k) {
+      Batch batch;
+      const SearchHandle s = prepared(batch);
+      t5d_status st = T5D_OK;
+      {
+        const t5d_test::alloc::FailAfter fault(k);
+        st = t5d_search_deliver_evaluations(s.get(), &batch.b, nullptr);
+        CHECK(st != T5D_OK || t5d_test::alloc::fail_countdown >= 0);
+      }
+      if (st == T5D_OK) continue;
+      REQUIRE_EQ(st, T5D_ERR_MEMORY);
+      ++faults;
+      t5d_search_summary info;
+      REQUIRE_EQ(t5d_search_info(s.get(), &info), T5D_OK);
+      if (std::uint64_t{info.root_visits} != info.playouts) ++off;
+      REQUIRE_EQ(t5d_search_run(s.get(), T5D_EVALUATOR_UNIFORM, 0, 8, nullptr), T5D_OK);
+      REQUIRE_EQ(t5d_search_info(s.get(), &info), T5D_OK);
+      if (std::uint64_t{info.root_visits} != info.playouts) ++off;
+    }
+    std::printf("  %s: a delivery of %lld allocations, %zu faults, %zu with root visits and playouts apart\n",
+                arm.split == T5D_SPLIT_FLAT ? "flat" : "ply", total, faults, off);
+    CHECK(faults > 0);
+    CHECK_EQ(off, std::size_t{0});
+  }
+}
+
 TEST(capi_search_choose_advance_and_reply) {
   // Match play through the C API: run, choose, advance on our action, then on
   // the opponent's reply by its moves.
