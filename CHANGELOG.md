@@ -10,6 +10,67 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-08 - Issue 535 fixed: D2's flat form, a node's creation and a re-root exception-safe under an allocation failure
+
+The done-means audit found (build-log issue 535, on `lane/audit`) and the verification
+workflow diagnosed it: after a `std::bad_alloc` inside `gather`, a flat-form search used on
+crashed in its turn generator - an out-of-bounds read: `SearchRun::record` grows four tables
+in separate steps, a throw from `Hyper::judge` left the run's results shorter than its
+actions, and the node kept the generator, whose next `collect()` read past the end. Beside
+the crash: the generator had lost the box it was judging, ran on and reported `exhausted()`,
+so its node was marked complete with successors missing (a bound no proof backs, H37); a
+turn was taken in by six separate steps; the flat expansion was marked done before its
+first pull; and `ensure_child` made a node before it linked it, so a fault in the graph's
+table left a node the root does not reach, in every split's graph.
+
+The fix is `engine/src/mcts.cpp`'s alone - the generator (`src/hypercuboid.cpp`), shared
+with the gated mate detectors, is untouched, and `t5d/turngen.hpp` now says what it promises
+after a throw: only its destruction. Made from the workflow's validated diff, re-read and
+re-made. `pull_turns`, on any exception, truncates every per-node array to its size at entry,
+drops the generator (never asked again: the node keeps the turns it had, its children
+incomplete, as after a budget stop), puts back the counts of what it made and counts the
+drop (new `SearchStats::dropped_generators`); `flat_priors` computes everything before it
+sets anything, so it sits inside that rollback. `expand_flat` builds what can fail before
+it touches the node, and undoes the expansion if the first pull throws - the node's flags,
+`k0`, submit logit and turn arrays, the root's side tables and effort label, and the noise
+flag, now set only with the expansion (the validated diff restored it around the first pull
+only, so a throw while the generator was built still lost the root's noise). `ensure_child`
+takes back a node whose table entry threw, with its memory and the counts `make_node` made
+for it (classify's included); `make_node` uncounts a node it failed to make. Found beside
+it and fixed with it (build-log issue 600): a re-root was not exception-safe - a fault
+re-registering the graph's nodes left the table part-filled and the old root's side tables
+and effort label in place (the effort label then indexing the new root's edges out of
+bounds), and one before the swap left `advance_to`'s fresh node unreachable - so `reroot` now
+builds everything, the graph's new table included, before it changes anything, and
+`advance_to` takes its node back if the re-root did not happen; and the ply split's
+`set_priors` marked the root's noise drawn before the expansion was done, so a throw after
+the draw left the root noise-free for the rest of the search - now marked with the
+expansion.
+
+Tests (`test_mcts_memory.cpp`, `test_capi_search.cpp`; each fails or crashes on 2cb107d's
+search, and each part of the fix, taken out alone, fails one): the audit's flat-form test
+with the widened range (443 gather and 619 deliver faults, 804 generators dropped), after
+every fault no node stuck and every node's priors summing to 1; no node marked complete
+with a turn missing, every complete node checked against a full listing of its turns
+(widening off and on, 20,972 nodes checked); every allocation of a gather swept for a node
+the root does not reach, the counts against the nodes held (the ply split and the flat
+form in a tree and a graph, the tree form in a tree); every allocation of a re-root
+(`advance`, and `advance_to` onto a fresh node), against a search that never re-rooted and
+one whose re-root went through; root noise surviving every fault in the root's first
+expansion (both splits); and through the C API, a search reused after `T5D_ERR_MEMORY`
+(gather, advance) staying bit-identical to a C++ twin that keeps every invariant, and
+searching on after faults in delivery. `t5d/mcts.hpp`, `t5d/capi_search.h` and
+`engine/README.md` say the guarantees. `docs/BUILD_LOG.md`: issue 600, and issue 601 (a
+Python test's aggregate split by main's test-shard hook, found running the suite in two
+shards); the Lazy SMP timing rows; the session log.
+
+Spec: none edited or proposed. The change brings the build in line with §15.4's invariants
+(visit counts consistent through backup, virtual loss released, re-rooting keeping only
+reachable nodes) under an allocation failure - for D2's flat form (register D2), every
+split's graph (C11) and the re-root (C12) - and with H37 (a node's children complete only
+on an exhausted search), which a generator that threw broke; E1's root noise is drawn again
+after a failed expansion. No part of the spec describes exception safety.
+
 ### 2026-11-08 - The network job runs in four shards: the Python suite outgrew one hour
 
 Since CI came back every run of the `network` workflow was cancelled at its 60-minute limit:

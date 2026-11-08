@@ -999,6 +999,10 @@ threads reach at least one thread's sum (one retry on a shared machine).
 | 2026-10-23 | engine ABI round 3 (B11's pin and check relations, D4's per-square labels; reviewed, 2ed1bc9) | main 9c59cb0 + lane/engine 2ed1bc9, merged tree before the commit | dev-r, 24 logical; the network lane's flat head finishing and the search lane's E10 reviews starting; load 80-88% before, 85-91% after | 32 | 292 / 293 / 293 | 309 / 313 / 307 | none | pass x3; the nightly gate passed in 570 s (Half Reflected and Reversed Royalty gated, as before) |
 | 2026-10-23 | main 62ff24d into lane/search | lane/search 97ec57d + main 62ff24d, merged tree before the commit | dev-r, 24 logical; this merge's whole pytest suite (serial) and other lanes' jobs running; load 99% before and after | 32 | 291 / 289 / 291 | 311 / 301 / 311 | none | pass x3 |
 | 2026-10-24 | E10 (the search wiring and H44's audit lane; reviewed, 97ec57d; main 62ff24d merged in, 666cfa4) | main f1603e5 + lane/search 666cfa4, merged tree before the commit | dev-r, 24 logical; the engine, network and gate lanes running; load 90-99% before, 84-99% after | 32 | 292 / 292 / 291 | 309 / 308 / 310 | none | pass x3; the lane's merge of main ran the nightly gate (525 s, Half Reflected and Reversed Royalty gated) on the same engine code |
+| 2026-11-02 | issue 535's fix (the search's exception safety, issue 600; the scanner untouched; before review) | lane/fix535 on main 2cb107d, the tree before the commit (its final `--werror` build) | dev-r, 24 logical; other lanes' jobs (a node process on about 11 cores, two pytest runs) and this branch's serial pytest; load 100% before and after | 32 | 289 / 288 / 289 | 211 / 210 / 297 | runs 1 and 2 (5 threads 198 < 287, 225 < 288) | fail, fail, pass - the 5 threads starved: see the next two rows |
+| 2026-11-02 | issue 535's fix, again, run alternately with the control below | the same tree | dev-r, 24 logical; the same jobs; load 100% before and after | 32 | 290 / 290 / 290 | 311 / 305 / 298 | none | pass x3 |
+| 2026-11-02 | control for the two rows above: the base, main 2cb107d (the scanner identical), run alternately with the fix | main's own build of 2cb107d | dev-r, 24 logical; the same jobs; load 100% before and after | 32 | 292 / 288 / 289 | 304 / 211 / 307 | run 2 (5 threads 196 < 288) | pass, fail, pass - the base fails the same way under this load: the failures above are the machine's, not the change's |
+| 2026-11-08 | issue 535's fix with main c8a9c49 taken in (a fast-forward; before review) | lane/fix535: main c8a9c49 + the fix, the tree before the commit (its final `--werror` build) | dev-r, 24 logical; this branch's Python suite in two shards, another lane's pytest, two other lanes' engine runs, mutation runs; load 100% before and after | 32 | 290 / 289 / 290 | 305 / 311 / 304 | none | pass x3 |
 
 ## Environment
 
@@ -5641,6 +5645,105 @@ superseded or made moot says so; nothing is deleted.
     yet enabled. **For the user**, at the enabling: CLAUDE.md's two sentences (and
     AGENTS.md, if it should name the count).
 
+600. **Issue 535 resolved - D2's flat form, a node's creation and a re-root made
+    exception-safe under an allocation failure - and two defects of its kind found beside
+    it, fixed with it** (section 15.4's invariants under failure: visit counts consistent,
+    virtual loss released, re-rooting keeping only reachable nodes; register D2, H37, C11,
+    C12, E1; `lane/fix535`, 2026-11-08). Issue 535's own text is on `lane/audit` (a
+    correction of it in progress there): this entry records its fix, to be read with it
+    once both are on main. Numbering: the block 600-619 and edits 420-429 the main loop
+    assigned this fix; 600 and 601 used.
+    - **The fix** (`engine/src/mcts.cpp` only; the generator - `src/hypercuboid.cpp`,
+      `src/search.cpp`, shared with the gated mate detectors - untouched). Made from the
+      verification workflow's validated diff, re-read and re-made:
+      - `pull_turns`: on any exception - from the generator, or from taking a turn in, the
+        fallback's listing or the priors - every per-node array is truncated to its size at
+        entry, the generator dropped (never asked again: `t5d/turngen.hpp` now says it
+        promises nothing after a throw but its destruction), the node's children marked
+        incomplete, the counts of what the call made put back (`generated_turns`,
+        `fallback_listings`, the boost counts) and the drop counted (new
+        `SearchStats::dropped_generators`); then the exception goes on. `flat_priors`
+        computes everything before it sets anything, so it sits inside the rollback (it sat
+        outside it in the validated diff).
+      - `expand_flat`: what can fail is built before the node or the search is touched; if
+        the first pull throws the expansion is undone - `expanded`, `pending`,
+        `instantiated`, `k0`, `children_complete`, `submit_logit`, the turn arrays, the
+        root's side tables and effort label (swapped out, then back) and the noise flag. The
+        validated diff restored the flag around `widen` only, so a throw while the generator
+        was built still left the root noise-free: here it is set only with the expansion
+        (the noise test fails 93 times on the validated diff's handling).
+      - `ensure_child`: a node whose entry in the graph's table threw is taken back
+        (`unmake_last_node`: its memory, and the counts `make_node` made for it, classify's
+        check and verdict included - the detector's time stays spent), and `make_node`
+        uncounts a node it failed to make: the counts describe the nodes made.
+    - **Found beside it, fixed with it:**
+      - (a) A re-root was not exception-safe. A fault while the graph's nodes were entered
+        in the new table left it part-filled, the root's side tables and effort label still
+        the old root's - `best_edge_` then indexing the new root's edges out of bounds in
+        `note_root_visit` - and the evaluator not told; a fault before the swap left
+        `advance_to`'s fresh node unreachable. `reroot` now builds its order, renumbering,
+        room and the graph's new table, and ends the ladder's decision, before anything
+        changes; `advance_to` takes its node back if the re-root did not happen.
+      - (b) The ply split's `set_priors` marked the root's noise drawn at the draw, before
+        the expansion was done: a throw after the draw left the root noise-free for the rest
+        of the search (E1's exploration silently off in self-play). Now marked with the
+        expansion.
+    - **Tests** (`test_mcts_memory.cpp`, `test_capi_search.cpp`; each fails or crashes on
+      main's search - 2cb107d's, unchanged at c8a9c49):
+      - the audit's flat-form test with the widened range (`k < 40000; k += k < 2400 ? 13 :
+        97`), in a tree and a graph: 443 gather and 619 deliver faults, 804 generators
+        dropped; after each fault no node marked complete with a turn missing, none stuck,
+        every node's priors summing to 1 (on 2cb107d: SIGSEGV);
+      - false exhaustion, from Standard with widening off and on: every node marked complete
+        checked against a full listing of its turns by an unbudgeted generator - 728 faults,
+        510 generators dropped, 20,972 complete nodes checked (on 2cb107d: nodes complete
+        with 1 of 20 turns, 22 of 23, ...; then SIGSEGV);
+      - every allocation of a gather swept, each on a fresh search, for a node the root does
+        not reach, and the counts against the nodes held: the ply split in a graph and a tree
+        and the tree form (a gather of 8: 124, 116 and 560 allocations), the flat form in a
+        graph and a tree (a gather of 2: 568 and 566);
+      - every allocation of a re-root (`advance`; `advance_to` onto a fresh node, its last
+        64 densely), both splits, tree and graph, against a search that never re-rooted and
+        one whose re-root went through (H15's digest, node count and effort label after both
+        search on);
+      - root noise surviving every fault in the root's first expansion, both splits (the ply
+        split's 60 allocations, the flat form's 528 at a stride past 400);
+      - through the C API, a flat-form search reused after `T5D_ERR_MEMORY` from
+        `t5d_search_gather` and `t5d_search_advance` staying bit-identical to a C++ twin
+        that keeps every invariant, and after faults in `t5d_search_deliver_evaluations`
+        searching on with every playout backed up once.
+      - Each part of the fix taken out alone (an isolated copy of the tree), its test
+        failing: `pull_turns` not truncating - turns, scores and edges disagreeing; keeping
+        the generator - a crash (access violation) and a node complete with 11 of 20 turns;
+        `flat_priors` setting in place - priors summing below 1; `expand_flat` not undone -
+        stuck nodes (484 and 504 failures); the noise flag at the draw - 369 failures, and
+        the validated diff's handling 93; `set_priors`' flag at the draw - 36; the
+        `ensure_child` rollback - 8 stranded nodes in the ply split's graph and 2 in the flat
+        form's; the counts not put back - the count check; `advance_to`'s node kept - 51
+        nodes where 50 are held; the old re-root order - a crash (access violation) and
+        another graph than the reference's.
+    - **Left as it is:** the optional generator hardening (the workflow's
+      `issue535_generator_hardening.diff`): its code is in the detector's file, and the
+      search never asks a generator that threw. Python's `EngineMemoryError` is the binding's
+      name for `T5D_ERR_MEMORY`, covered by the C API test - no Python test can inject an
+      allocation failure into the library.
+    - **For the main loop:** (1) when `lane/audit` reaches main, issue 535 to be marked
+      resolved by this entry; (2) `dropped_generators` is not in the C API's
+      `t5d_search_summary` (appending it changes the ABI and the Python binding's mirror) -
+      if wanted, a change of its own.
+
+601. **`test_flat_head.py::test_some_case_leaves_a_board` under the test-shard hook** (no spec
+    section; register D2's flat head; found 2026-11-08 running the Python suite in two shards for
+    issue 600). The test asserts over a module-level list (`MIXED`) that the module's
+    parametrized flat search cases fill, and skips when it is empty ("run with the flat search
+    cases"). `T5D_TEST_SHARD` (c8a9c49) deals a module's tests to shards one by one, so the
+    aggregate sees a subset of the cases or none: at `1/2` it fails (`assert any(MIXED)`, line
+    154: `any([False, False, False, False])` - none of its shard's four cases has a board some
+    turns leave), and at `3/4` - CI's split - it is skipped, so CI checks nothing there; whole,
+    the module passes (8 of 8). Not this fix's (no Python file changed). **For the main loop /
+    the network lane:** compute the aggregate inside one test over the cases, or keep the module
+    in one shard.
+
 ## Proposed spec edits
 
 Edits the spec or the register needs, for applying upstream. Each: where, what it
@@ -7374,3 +7477,26 @@ struck through, where nothing of it is left to apply); the others stand as writt
   (`tests/engine`) and 1589 passed (`tests/net`, `tests/train`; `T5D_REQUIRE_ENGINE=1`, two
   workers); ruff clean; `verify` ok but the unsynced Kairos submodule (not synced: no downloads
   without asking). Register A5, C26, G10, M18; issues 244, 245, 252, 256-258; edits 196-199.
+- **2026-11-08 - issue 535 fixed** (`lane/fix535`, from main 2cb107d, main c8a9c49 taken in by a
+  fast-forward before the commit; **numbering: the block the main loop assigned this fix, issues
+  600-619 and edits 420-429 - issues 600 and 601 used, no edit**). Begun 2026-11-02; the account's
+  usage limit stopped the first session in its last check, and the checks were run again on the
+  merged tree. D2's flat form, a node's creation and a re-root exception-safe under an allocation
+  failure (`engine/src/mcts.cpp` alone; issue 600): the verification workflow's validated diff
+  re-made - the root's noise flag set only with the expansion (the diff's handling still lost the
+  noise when building the generator threw), the node's fields and the root's side tables restored
+  on an undone expansion, `flat_priors` strongly exception-safe inside the rollback, the counts of
+  what a failed pull or an unmade node made put back, `SearchStats::dropped_generators` - and two
+  defects of the kind found beside it and fixed with it: a re-root that was not exception-safe (a
+  part-filled graph table, the old effort label read out of bounds, `advance_to`'s node left
+  unreachable) and the ply split's root noise lost after a failed expansion. `t5d/turngen.hpp`
+  says what a generator promises after a throw. Six tests, each failing or crashing on main's
+  search; each part of the fix taken out alone fails one (issue 600). Checks on the merged tree:
+  engine 689 of 689 (`--werror`), long_detectors 2 of 2, the Lazy SMP test x3 (table above; load
+  100%; on 2026-11-02, under the same load, two failures that 2cb107d's own binary reproduced),
+  ruff clean (CI's invocation, in `python/`), pytest 1932 passed / 1 failed / 1 skipped
+  (`T5D_REQUIRE_ENGINE=1`, two shards in parallel, 87 min; the failure is issue 601's, a test the
+  shard hook split - its module whole passes 8 of 8), verify ok, gate commit ok (ftxi 8256
+  of 8256 and notation 3012 of 3012 reproduced; SMOKE TEST - PASSED, 0 declined; proof channel
+  DISABLED). For the main loop: issue 535 to be marked resolved by issue 600 when `lane/audit`
+  reaches main; `dropped_generators` is not in the C summary; issue 601.

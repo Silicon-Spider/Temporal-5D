@@ -80,7 +80,9 @@
  * ERRORS: T5D_ERR_ARGUMENT for the caller's error - an argument, or a call the
  * search's state does not allow (gather while a batch waits, deliver with none
  * waiting, max_leaves 0, set_epoch under a waiting batch); T5D_ERR_MEMORY when
- * an allocation fails (the search stays consistent: no batch left half-made);
+ * an allocation fails (the search stays consistent and may be used on: no batch
+ * left half-made, no re-root half-done; a flat-form node whose turn generator
+ * failed keeps the turns it had, its children incomplete - t5d/mcts.hpp);
  * T5D_ERR_UNSUPPORTED for a feature not built; T5D_ERR_INTERNAL for the
  * search's own failure (a broken invariant, a contradiction) - a bug to report.
  *
