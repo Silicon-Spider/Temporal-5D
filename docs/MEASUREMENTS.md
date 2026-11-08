@@ -1601,3 +1601,38 @@ anchored wrong it misses by 24-460x that, sometimes under the 1e-4 FP32 toleranc
 used - which is why MT-04 did not see it, and why the new test bounds the root leaf at 1e-5. The
 two lists differ where a pseudo-legal move would leave a royal capturable, far more often on
 Timeline Battleground's crowded 5x5 boards (three timelines from the start) than on Two Timelines.
+
+### The phase form (C26) through the C step API - the gaps met, and the dense pass's last bits (numerics; no threshold, no verdict)
+
+**What it is.** The figures behind section 15.2's C26 row as built (`python/tests/engine/test_phase_form.py`,
+`python/tests/net/test_phase_form.py`; BUILD_LOG issues 260-266): how far the phase form's cached
+half is from its references, how far the two modes are apart, and why the dense half must be the
+dense evaluator itself (issue 262).
+
+**Conditions.** 2026-11-08/09, machine `dev-r` (loaded: another lane's test suite ran beside these),
+PyTorch 2.13.0+cpu, Python 3.14.7, NumPy 2.5.2, 2-3 torch threads, the engine library built Release in
+`lane/net` (main e15f173 + issue 259's fix); FP32, 2 layers, the v1 configuration under the
+block-causal scope, random weights at initialisation scale, model seeds 0-6; the verification ladder
+off in every search. Roots: `test_cached_variants._search_root` (random play's first live turn start
+with 8 boards or more) on Two Timelines, Timeline Battleground and Very Small - Open, and every engine
+variant for the dense half; N\* the root's boards + 1 or + 3 (dense) and the root's boards or - 2
+(cached); 12-24 playouts a search, batches of 8 leaves. Games: `netplay`'s small network made
+block-causal, N\* = the start's boards + 3.
+
+| Quantity | Largest (or smallest, where marked) | Bound |
+|---|---|---|
+| Rooted under N\*: the phase form's search against the dense search (digest, counts, every evaluation) | bitwise equal, every arm | bitwise |
+| Rooted at or above N\*: a cached leaf against the two-level reference anchored at the root (logits) | 1.31e-6 | 1e-4 |
+| ... the root leaf against the dense pass (issue 259's anchor) | 9.54e-7 | 1e-4 |
+| ... a search's non-root leaves against the dense pass (the smallest search maximum) | 1.33e-1 (smallest) | above 1e-3 |
+| The dense pass: a position alone against in a batch of four (logits; 3 seeds x 4 synthetic positions of 9-17 boards) | 1.13e-6 | - |
+| The dense pass: grad against no-grad, alone | 1.37e-6 | - |
+| The dense pass: the same batch twice | 0 (bitwise) | - |
+
+*Read.* Under N\* the phase form is the dense search itself, so its figure is equality, not a gap.
+At or above N\* the cached leaves sit on their references at the summation-order level, as MT-04's
+do, while they differ from the dense pass by a tenth or more - the modes are far apart, so a search
+that mixed them per node would be a different search (the per-node-switch mutant always is). The
+dense pass is not a function of the position alone in its last bits (about 1e-6 here, with the batch
+or the grad mode), which is why the phase form's dense mode is the dense evaluator itself, batch for
+batch, and why §15.2's row is proposed reworded (edit 380).

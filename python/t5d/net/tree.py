@@ -383,8 +383,11 @@ class SearchTree:
     def visit(self, node: Node) -> bool:
         """Count a visit; C3a rung 1: refresh a node reached by a branching travel move once
         its visits reach V; C24, where rung 1 did not: refresh a complex node (add-only - rung
-        1's rule is decided first and reads nothing C24 changes). Returns whether it refreshed."""
+        1's rule is decided first and reads nothing C24 changes). Returns whether it refreshed.
+        In a dense epoch (C26: a search rooted under N*) nothing refreshes - there is no cache."""
         node.visits += 1
+        if node.epoch is not None and node.epoch.kind == "dense":
+            return False
         cfg = self.evaluator.config
         if cfg.node_refresh and node.branched and not node.refreshed and node.visits >= cfg.refresh_visit_threshold:
             self.refresh(node)

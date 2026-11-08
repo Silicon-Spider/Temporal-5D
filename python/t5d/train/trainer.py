@@ -39,7 +39,10 @@ this build.
   to switch it on - "a fine-tuning stage at the end of a training phase", only if 6w's arms say so
   - is the pilot run's to schedule, not this build's.
 * **C3's conditioning-offset training is parked** with the deferred cached configuration (C2;
-  BUILD_LOG "Parked"): no hook here - the dense configuration trains no refresh offsets.
+  BUILD_LOG "Parked"): no hook here - the dense configuration trains no refresh offsets. When it is
+  built, it picks each training sample's mask by C26's rule (CHECKPOINT 9, section 7.10) on the
+  conditioning root - the position k plies back - with ``net.cache.CacheConfig.mode``: dense under
+  N*, cached against the refreshed root at or above it.
 * The optimiser is AdamW (the smoke test's) or NAdam (Chessformer's, beside SWA in I17's
   provenance); its constants are PLACEHOLDERS (spec issue 237).
 

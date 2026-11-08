@@ -15,7 +15,9 @@ the 51-bin categorical over the root search value, the error head's output and m
   model's forward, ``max_batch`` at a time; positions of different board counts and sizes
   share a batch (padding is masked).
 * ``CachedNetworkEvaluator`` - the cached path (C2, ``net/cache.py``): one position at a time
-  against the per-board K/V store, in the epoch of the current search (``start(root)``).
+  against the per-board K/V store, in the epoch of the current search (``start(root)``) - or,
+  under C26's phase form (``CacheConfig.phase_form``, off) in a search rooted under N* boards, the
+  dense path itself (``NetworkEvaluator`` with the dense scope), batch for batch.
 * ``SearchDriver`` - what the search side provides: ``collect`` a batch of leaves,
   ``deliver`` their evaluations, ``finished``. ``serve`` runs the loop and checks every
   evaluation against its leaf.
@@ -321,15 +323,28 @@ class CachedNetworkEvaluator:
     frozen boards' K/V from the store, computed once per digest - in the epoch of the
     current search. ``start(root)`` opens a search (``CachedEvaluator.root_epoch``: a root
     refresh under ``CacheConfig.root_refresh``, else the causal epoch). ``policy``: as
-    ``NetworkEvaluator``'s."""
+    ``NetworkEvaluator``'s.
 
-    def __init__(self, cached: CachedEvaluator, *, policy: str = "normal") -> None:
+    **C26's phase form** (``CacheConfig.phase_form``, off; section 7.10): ``start`` picks the
+    search's mode by its root's board count - at or above N* the root refresh, as above; under
+    it the cached evaluator's one dense epoch, and every batch of the search goes to ``dense``,
+    a ``NetworkEvaluator`` over the same network with the dense scope, this prior and
+    ``max_batch``: the dense path itself, so a search rooted under N* is the dense search node
+    for node, bit for bit (the dense pass's last bits depend on grad mode and on how the
+    positions are batched - BUILD_LOG issue 262). ``positions_by_mode`` counts the positions
+    evaluated in each mode."""
+
+    def __init__(self, cached: CachedEvaluator, *, policy: str = "normal", max_batch: int = 32) -> None:
         if cached.model.cfg.piece_centric:
             raise NotImplementedError("the cached path refuses a piece-centric network (A5; BUILD_LOG issue 252)")
         _check_policy(cached.model, policy)
         self.policy = policy
         self.cached = cached
         self.epoch: Epoch | None = None
+        #: C26's dense mode: the dense path itself (see the class docstring).
+        self.dense = NetworkEvaluator(cached.model, max_batch=max_batch, scope="dense", policy=policy)
+        #: Positions evaluated in each mode (C26): "dense" (a search rooted under N*) and "cached".
+        self.positions_by_mode = {"dense": 0, "cached": 0}
 
     @property
     def model(self) -> T5DNet:
@@ -343,7 +358,9 @@ class CachedNetworkEvaluator:
 
     def start(self, root: PositionLike) -> Epoch:
         """Open a search at ``root``: its epoch (the current one again when ``root`` is the
-        current epoch's anchor - the same search continuing)."""
+        current epoch's anchor - the same search continuing). Under C26's phase form a root under
+        N* boards gets the dense epoch - one object, with no anchor, so this asks the cached
+        evaluator again, at no cost."""
         state = self._fit(state_of(root))
         if self.epoch is not None and self.epoch.anchor == state_digest(state):
             return self.epoch
@@ -354,12 +371,17 @@ class CachedNetworkEvaluator:
     def __call__(self, positions: Sequence[PositionLike]) -> list[Evaluation]:
         if self.epoch is None:
             raise RuntimeError("no search is open: call start(root) first")
+        if self.epoch.mode == "dense":  # C26: a search rooted under N* is the dense search
+            results = self.dense(positions)
+            self.positions_by_mode["dense"] += len(positions)
+            return results
         results = []
         with torch.no_grad():
             for p in positions:
                 state = self._fit(state_of(p))
                 out = self.cached.evaluate(state, self.epoch)
                 results.extend(_split(out, [state], self.policy))
+        self.positions_by_mode["cached"] += len(positions)
         return results
 
 
@@ -685,7 +707,11 @@ def engine_epoch(epoch: Epoch) -> int:
     """The engine's 64-bit epoch number for a cached-path epoch (its key, hashed): the search
     caches evaluations per (state, moves made in its action, epoch) (register A6), so
     evaluations made under different refresh conditioning are never served for one another;
-    the shared causal epoch maps to one number."""
+    the shared causal epoch maps to one number. So does C26's dense epoch (its key "dense"):
+    every search rooted under N* carries it, so the engine's shared evaluation cache (C14) serves
+    dense evaluations across those searches and never to a cached search, or the reverse; it is
+    never 0 - the epoch of a search whose evaluator has no ``start`` - nor a cached epoch's
+    number (BUILD_LOG issue 261)."""
     return int.from_bytes(hashlib.blake2b(epoch.key.encode("utf-8"), digest_size=8).digest(), "little")
 
 
